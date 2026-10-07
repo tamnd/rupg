@@ -56,6 +56,9 @@ jobs:
       # The SQL grammar and the PL/pgSQL grammar must have the conflict counts of their %expect. See spec/22-crate-layout.md section 22.8.
       - name: grammar conflicts
         run: cargo xtask grammar
+      # The Unicode and SASLprep tables must be the tables that the vendored files give.
+      - name: unicode tables
+        run: cargo xtask unicode --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
       - name: spelling

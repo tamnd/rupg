@@ -16,7 +16,7 @@
 //!
 //! [`Handshake`], the start of a connection up to authentication: the answers to `SSLRequest` and `GSSENCRequest`, the check for unencrypted bytes after them, the version check, the parameters of the `StartupMessage` and `NegotiateProtocolVersion`. It gives a [`StartupRequest`] with the user, the database and the settings.
 //!
-//! The password methods: [`password_message`] for `password` and `md5`, [`verify_md5`] and [`verify_password`] for the checks, and [`Scram`] for the server side of SCRAM-SHA-256 and SCRAM-SHA-256-PLUS. The hash functions come from the server through the [`Crypto`] trait, so this crate has no hash code of its own and no dependencies.
+//! The password methods: [`password_message`] for `password` and `md5`, [`verify_md5`] and [`verify_password`] for the checks, and [`Scram`] for the server side of SCRAM-SHA-256 and SCRAM-SHA-256-PLUS. The hash functions come from the server through the [`Crypto`] trait, so this crate has no hash code of its own. [`saslprep`] and [`prepare_password`] apply SASLprep to a clear text password, as PostgreSQL does before it makes or checks a SCRAM secret. The normalization comes from `rupg-types`, the only dependency.
 //!
 //! [`Session`], the state of the main loop of a session: when the server sends `ReadyForQuery`, which messages it drops until `Sync` after an error, and which messages it ignores. The server gets from it only the messages that PostgreSQL acts on. [`verify_utf8`] checks a string from the client with the error of PostgreSQL.
 //!
@@ -25,10 +25,6 @@
 //! [`Statements`] and [`Portals`], the prepared statements and the portals of a session by name, with the errors of PostgreSQL. [`Bind::params`] and [`FunctionCall::args`] give the values one by one, so the server can convert each value before it reads the next, as PostgreSQL does.
 //!
 //! [`CancelKey`], the key of `BackendKeyData` with the length of the protocol version, and [`cancel_target`], which checks a `CancelRequest` in constant time and gives the log line of PostgreSQL when it cancels nothing.
-//!
-//! # Known differences
-//!
-//! [`verify_password`] does not apply SASLprep to a clear text password before it checks a SCRAM secret. Only a password that is valid UTF-8 with characters outside ASCII can pass in PostgreSQL and fail in rupg.
 //!
 //! Lifted from `crates/rudb-pgwire/src/lib.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
@@ -46,6 +42,7 @@ mod frontend;
 mod generated;
 mod names;
 mod reader;
+mod saslprep;
 mod session;
 mod startup;
 
@@ -71,5 +68,6 @@ pub use frontend::{
 };
 pub use names::{Portals, Statements};
 pub use reader::verify_utf8;
+pub use saslprep::{SaslprepError, prepare_password, saslprep};
 pub use session::{Read, Session};
 pub use startup::{Encryption, Handshake, NAME_LIMIT, Replication, StartupRequest, Step};

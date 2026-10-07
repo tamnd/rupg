@@ -6,8 +6,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `rupg-wire`, the message codec of protocols 3.0 and 3.2 (spec/06 section 6.1). It is a copy of `rudb-pgwire` from tamnd/rudb at f5f7065a, and each file names its source. It has the startup packets, the frontend and backend messages, the SCRAM-SHA-256 messages and keys, the cancel keys, and the table of command tags. A test checks the table against the vendored `cmdtaglist.h`. SASLprep is not in this release.
+- `rupg-wire`, the message codec of protocols 3.0 and 3.2 (spec/06 section 6.1). It is a copy of `rudb-pgwire` from tamnd/rudb at f5f7065a, and each file names its source. It has the startup packets, the frontend and backend messages, the SCRAM-SHA-256 messages and keys, the cancel keys, and the table of command tags. A test checks the table against the vendored `cmdtaglist.h`.
 - The fuzz targets `wire_startup` and `wire_frontend` (spec/21 section 21.7). They run the small test server of `rupg-wire` on the codec, and the nightly workflow runs them with the storage targets. `wire_startup` starts from the seeds in `fuzz/seeds/wire_startup`.
+- SASLprep in `rupg-wire`: `saslprep` and `prepare_password`, as `pg_saslprep` does it. `verify_password` applies it before it checks a SCRAM secret, so a password with characters outside ASCII gives the same result as in PostgreSQL.
+- `rupg_types::unicode`, the four Unicode normalization forms from the vendored Unicode 17.0.0 data. It passes every line of `NormalizationTest.txt`.
+- `cargo xtask unicode` makes the normalization tables and the SASLprep tables from the vendored files, and `--check` fails if they differ. CI runs the check.
 
 ## 0.0.11 (2026-10-08)
 

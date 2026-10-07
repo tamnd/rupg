@@ -5,7 +5,9 @@
 #![forbid(unsafe_code)]
 
 mod datum;
+mod generated;
 mod typeid;
+pub mod unicode;
 
 pub use datum::Datum;
 pub use typeid::TypeId;
