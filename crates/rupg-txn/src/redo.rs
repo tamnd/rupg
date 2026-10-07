@@ -606,8 +606,10 @@ mod tests {
                                 done += 1;
                             }
                             Err(e) => {
-                                let retry =
-                                    [SqlState::SERIALIZATION_FAILURE, SqlState::DEADLOCK_DETECTED];
+                                let retry = [
+                                    SqlState::T_R_SERIALIZATION_FAILURE,
+                                    SqlState::T_R_DEADLOCK_DETECTED,
+                                ];
                                 assert!(retry.contains(&e.state()), "{e}");
                                 t.rollback().unwrap();
                             }

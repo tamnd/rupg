@@ -5,10 +5,13 @@
 #![forbid(unsafe_code)]
 
 mod error;
+mod generated;
 mod ids;
+mod sqlstate;
 
-pub use error::{Error, Result, SqlState};
+pub use error::{Error, Result};
 pub use ids::{Hlc, Lsn, Oid, RowId, ShardId, Xid};
+pub use sqlstate::{Category, SqlState};
 
 use std::fmt;
 use std::str::FromStr;

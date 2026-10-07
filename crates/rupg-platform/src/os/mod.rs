@@ -326,7 +326,10 @@ mod tests {
         c.shutdown().unwrap();
         server.join().unwrap();
         // Port 1 is privileged and has no listener on a test host.
-        assert_eq!(OsNet.connect("127.0.0.1:1").unwrap_err().state(), SqlState::UNABLE_TO_CONNECT);
+        assert_eq!(
+            OsNet.connect("127.0.0.1:1").unwrap_err().state(),
+            SqlState::SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION
+        );
     }
 
     #[test]

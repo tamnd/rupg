@@ -22,7 +22,7 @@ impl Net for OsNet {
     fn connect(&self, addr: &str) -> Result<Box<dyn Stream>> {
         let stream = TcpStream::connect(addr).map_err(|e| {
             Error::new(
-                SqlState::UNABLE_TO_CONNECT,
+                SqlState::SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
                 format!("could not connect to the address \"{addr}\": {e}"),
             )
         })?;
