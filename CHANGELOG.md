@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.1 (2026-10-07)
+
+The first patch release on the M0 line. M0 is not closed, so this release has no measured number. It has the workspace, the vendored files of the pin, the LALR(1) check of the grammar and the CI. No crate is published.
+
 ### Added
 
 - The workspace with the 41 crates of `spec/22-crate-layout.md`. Most crates are stubs until their milestone.
