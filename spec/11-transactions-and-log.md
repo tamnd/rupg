@@ -298,7 +298,7 @@ With `off`, each ring is flushed at least once in each `wal_writer_delay`, defau
 
 **Two stamps decide replay.** The page timestamp is the value of `visible` that the writer read before the copy. Every commit at or below it was installed before the copy, so its changes are in the page, and recovery skips the page for those records. The `stamp` of a written row is the timestamp of the newest committed version in the copy. For a record above the page timestamp, recovery applies it only if its commit timestamp is above the row's `stamp`. The row lock orders writes to one row, so the test is exact.
 
-**A checkpoint** is incremental, as document 08 section 8.6 specifies. It notes the safe position of every ring as its redo position, lets the writer write the dirty pages older than those positions at a steady rate, writes the page table root, the ring directory with the noted positions, the prepared transactions, the sequences, the HLC high-water mark, the next transaction id and the commit map, syncs, and points a header slot at the result (document 08 section 8.6). Ring space before the noted positions and pages that only the previous checkpoint referenced are then free.
+**A checkpoint** is incremental, as document 08 section 8.6 specifies. It notes the safe position of every ring as its redo position, lets the writer write the dirty pages older than those positions at a steady rate, writes the page table root, the ring directory with the noted positions, the prepared transactions, the sequences, the HLC high-water mark, the next transaction id and the commit map, syncs, and points a header slot at the result (document 08 section 8.6). Ring space before the noted positions and pages that only the previous checkpoint referenced are then free. A redo position must not pass the first part block of a running transaction, because recovery reads no block before the redo position and the commit block needs its part blocks.
 
 **When.** At `checkpoint_timeout`, default 5 min, when any one ring holds more than `max_wal_size`, default 1 GB, or at `CHECKPOINT`. LeanStore reports incremental checkpoints writing about 1 percent of the buffer pool for each GB of log (PVLDB 17, 2024). We expect the same order, and document 19 counts the bytes.
 
@@ -309,13 +309,14 @@ With `off`, each ring is flushed at least once in each `wal_writer_delay`, defau
 On open after a crash:
 
 1. Read the newest valid header slot and its checkpoint.
-2. Read each ring from its redo position until a block fails its checksum or holds an unexpected position. That is the ring's durable end.
-3. Cut each ring at its first commit block with a dependency `(r, p)` beyond the end of ring `r`. Repeat until no cut moves. What is left is the safe prefix, and it holds every acknowledged commit.
+2. Read each ring from its redo position until a block fails its checksum or holds an unexpected position. That is the ring's durable end. An end before the durable position of the checkpoint gives `XX001`.
+3. Cut each ring at its first block with a dependency `(r, p)` beyond the end or the cut of ring `r`, or on a ring that the checkpoint does not hold. Repeat until no cut moves. What is left is the safe prefix, and it holds every acknowledged commit.
 4. Apply the records of the safe prefixes with the two stamps of section 11.15, on every worker in parallel, partitioned by page.
-5. Drop part blocks with no commit in a safe prefix. No page holds their changes.
+5. Drop part blocks that no block of a safe prefix names as a dependency. No page holds their changes.
 6. Rebuild prepared transactions, sequences and the commit map, and set the HLC above the highest timestamp seen.
+7. Write a checkpoint that starts each ring one ring size after its end, rounded up to a 4 KiB unit, before any new block. A flush that the crash stopped can leave valid blocks after a hole at the end. Their positions are one ring size below the positions that a later read expects in the same places, so no later recovery reads them again.
 
-A block beyond a cut was never acknowledged, so dropping it is correct.
+A block beyond a cut was never acknowledged, so dropping it is correct. The scan, the cut and step 7 are in `crates/rupg-log/src/recovery.rs`. The crash test there cuts the power at random points and checks that no acknowledged commit is lost, that no aborted or unknown block comes back, and that a kept commit keeps its part blocks and its dependencies.
 
 **Budget.** Recovery must apply at least 1 GB of log per second with 16 cores. This is a budget, tested by the crash tests of document 21. Because the trigger is per ring, the worst case is every ring full: 16 rings of 1 GB cost about 16 s of replay plus page reads. Document 24 asks whether the trigger should be the sum over rings.
 
