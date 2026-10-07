@@ -26,6 +26,8 @@
 mod catalog;
 mod check;
 mod database;
+#[cfg(feature = "server")]
+pub mod server;
 
 pub use check::{Report, check, check_on};
 pub use database::{Database, Options, Platform, Table, Transaction};

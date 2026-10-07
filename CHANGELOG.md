@@ -8,6 +8,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `rupg-pgcatalog` has the schema of the 64 system catalogs and their static rows (spec/07 section 7.13). `cargo xtask pgcatalog` reads the vendored catalog headers and `.dat` files with the rules of `genbki.pl` and of the bootstrap mode: the defaults, the array types, the OID lookups, the OIDs from 10000, the row types of the catalogs, the `aclitem` values, the `Const` nodes of `proargdefaults`, and the descriptions. It also makes the `pg_class`, `pg_attribute` and `pg_index` rows of the catalogs, their 35 toast tables and their 124 indexes, and the 192 `pg_constraint` rows of `system_constraints.sql`. The rows are column batches in the binary. `--check` fails if the files differ, and CI runs it. A test compares the 13,770 rows with the catalogs of the oracle after `initdb`, and each difference that a later step of `initdb` makes is named in the test.
 - `vendor/postgres-19` has the 64 catalog headers, `transam.h`, `pg_wchar.h` and `system_functions.sql`.
+- `rupg serve [--listen ADDR] [-c name=value]...` runs the PostgreSQL server. `psql` and other clients connect with the method `trust` as the role `postgres` to the database `postgres` or `template1`. The server runs `SET`, `RESET`, `SHOW`, `DISCARD`, `BEGIN`, `START TRANSACTION`, `COMMIT`, `ROLLBACK` and `SET TRANSACTION` with the rules of PostgreSQL, and gives `0A000` for any other statement and for the messages of the extended query protocol. Each connection has its own task at this step.
+- `rupg-session` has the main loop of a session after the startup (spec/06 section 6.1): the startup settings, the `ParameterStatus` reports, the simple query protocol of `exec_simple_query`, the transaction block states of `xact.c` without savepoints, and the transaction characteristics that `AND CHAIN` keeps.
+- `rupg-server` has the listener, the startup packet, the refusals of an unknown role and database, the process IDs and the cancel keys.
+- The facade crate `rupg` has the feature `server`, with `rupg::server::serve`.
+
+### Changed
+
+- A thread of `OsTasks` has a stack of 8 MiB, the stack of the main thread on Linux. The parser of a debug build needs more than the 2 MiB that Rust gives a new thread.
 
 ## 0.0.12 (2026-10-08)
 

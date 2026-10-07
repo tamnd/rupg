@@ -189,6 +189,17 @@ fn owned<'a>(
     slots.get_mut(key)
 }
 
+/// The parameters of a transaction and the parameters of their defaults. The options of each pair are the same, so a value of one is a value of the other.
+const CHARACTERISTICS: [(&str, &str); 3] = [
+    ("transaction_isolation", "default_transaction_isolation"),
+    ("transaction_read_only", "default_transaction_read_only"),
+    ("transaction_deferrable", "default_transaction_deferrable"),
+];
+
+/// The values of the parameters of a transaction, from [`Settings::characteristics`].
+#[derive(Clone, Debug, PartialEq)]
+pub struct Characteristics([Setting; 3]);
+
 /// The prefix that rupg keeps for its own parameters.
 const RESERVED_PREFIX: &str = "rupg";
 
@@ -539,6 +550,28 @@ impl Settings {
         }
     }
 
+    /// The isolation level, the read only mode and the deferrable mode of the current transaction, which `AND CHAIN` gives to the next transaction as `SaveTransactionCharacteristics` does.
+    #[must_use]
+    pub fn characteristics(&self) -> Characteristics {
+        Characteristics(CHARACTERISTICS.map(|(name, _)| {
+            find(name).map_or(Setting::Bool(false), |parameter| self.setting(parameter))
+        }))
+    }
+
+    /// `StartTransaction`: a new transaction takes `transaction_isolation`, `transaction_read_only` and `transaction_deferrable` from their defaults, or from the transaction before it after `AND CHAIN`. PostgreSQL sets the variables of these parameters directly, so the change is not in the stack of the transaction and the end of the transaction does not restore it.
+    pub fn start_transaction(&mut self, chained: Option<Characteristics>) {
+        for (i, (name, default)) in CHARACTERISTICS.into_iter().enumerate() {
+            let (Some(parameter), Some(default)) = (find(name), find(default)) else { continue };
+            let setting = match &chained {
+                Some(Characteristics(values)) => values[i].clone(),
+                None => self.setting(default),
+            };
+            if self.setting(parameter) != setting {
+                self.store_reset(parameter, Value { setting, source: Source::Default });
+            }
+        }
+    }
+
     /// `RESET ALL`: the reset value for each parameter that a statement set, other than the ones that `RESET ALL` does not change.
     pub fn reset_all(&mut self) {
         let mut keys: Vec<(usize, String)> = self
@@ -720,6 +753,37 @@ mod tests {
         settings.set("application_name", Some("probe"), Action::Set, Origin::Startup).unwrap();
         settings.startup_reports();
         settings
+    }
+
+    #[test]
+    fn a_transaction_takes_its_characteristics_from_the_defaults() {
+        use super::super::{EnumOption, Kind};
+        let options = |o: &[EnumOption]| o.iter().map(|o| (o.name, o.value)).collect::<Vec<_>>();
+        for (name, default) in CHARACTERISTICS {
+            let (parameter, default) = (find(name).unwrap(), find(default).unwrap());
+            match (parameter.kind, default.kind) {
+                (Kind::Enum { options: a, .. }, Kind::Enum { options: b, .. }) => {
+                    assert_eq!(options(a), options(b), "{name}");
+                }
+                (Kind::Bool { .. }, Kind::Bool { .. }) => {}
+                _ => panic!("{name} and {} have different types", default.name),
+            }
+        }
+        let mut s = startup();
+        set(&mut s, "default_transaction_isolation", "serializable").unwrap();
+        s.end(true);
+        assert_eq!(s.get("transaction_isolation").unwrap(), "read committed");
+        s.start_transaction(None);
+        assert_eq!(s.get("transaction_isolation").unwrap(), "serializable");
+        // BEGIN ISOLATION LEVEL sets the value for the transaction only, and AND CHAIN keeps it.
+        local(&mut s, "transaction_isolation", "repeatable read");
+        let kept = s.characteristics();
+        s.end(true);
+        assert_eq!(s.get("transaction_isolation").unwrap(), "serializable");
+        s.start_transaction(Some(kept));
+        assert_eq!(s.get("transaction_isolation").unwrap(), "repeatable read");
+        s.end(false);
+        assert_eq!(s.get("transaction_isolation").unwrap(), "repeatable read");
     }
 
     #[test]

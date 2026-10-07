@@ -10,7 +10,7 @@ mod check;
 mod settings;
 
 pub use check::{Zone, encoding, split_identifiers, zone};
-pub use settings::{Action, Arg, Origin, Settings, Source, flatten};
+pub use settings::{Action, Arg, Characteristics, Origin, Settings, Source, flatten};
 
 use crate::generated::guc::PARAMETERS;
 use rupg_common::Error;

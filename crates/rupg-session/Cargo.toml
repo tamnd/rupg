@@ -15,7 +15,9 @@ publish = false
 
 [dependencies]
 rupg-common.workspace = true
+rupg-sql.workspace = true
 rupg-types.workspace = true
+rupg-wire.workspace = true
 
 [lints]
 workspace = true

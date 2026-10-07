@@ -19,9 +19,14 @@ rupg-common.workspace = true
 rupg-file.workspace = true
 rupg-log.workspace = true
 rupg-platform.workspace = true
+rupg-server = { workspace = true, optional = true }
 rupg-table.workspace = true
 rupg-txn.workspace = true
 rupg-types.workspace = true
+
+[features]
+# The PostgreSQL server: `rupg::server`.
+server = ["dep:rupg-server"]
 
 [lints]
 workspace = true

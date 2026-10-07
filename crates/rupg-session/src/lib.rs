@@ -6,5 +6,8 @@
 
 #![forbid(unsafe_code)]
 
+pub mod block;
+pub mod connection;
 mod generated;
 pub mod guc;
+pub mod utility;

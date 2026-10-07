@@ -7,7 +7,7 @@ mod net;
 mod tasks;
 
 pub use net::OsNet;
-pub use tasks::OsTasks;
+pub use tasks::{OsTasks, STACK_SIZE};
 
 use std::fs;
 use std::io;
