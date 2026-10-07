@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.9 (2026-10-07)
+
+The ninth patch release on the 0.0 line. It adds the `rupg` facade with the M1 Rust API and `rupg check`. No crate is published.
+
 ### Added
 
 - The `rupg` facade with the M1 Rust API. `Database::open` opens or makes a `.rupg` file and replays the log when the file was not closed cleanly. `create_table` makes a table with typed columns, and `table` and `table_names` find the tables. A `Transaction` does `insert`, `update`, `delete`, `get`, `scan` and `scan_with` over a range of row ids, and rolls back when it is dropped. `checkpoint` and `close` write a checkpoint, and a transaction that starts when the log is large writes one first. The catalog is one page that holds the tables, the next transaction id and the next OID, and each checkpoint writes it. A missing file with `create` off gives `58P01`, a table name that is in use gives `42P07`, and a name with no table gives `42P01`. Spec/17 section 17.3 has the M1 note.
