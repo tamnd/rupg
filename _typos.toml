@@ -1,6 +1,12 @@
 # PostgreSQL names that are not in the dictionary of typos.
 [default.extend-words]
 brin = "brin"
+RESERV = "RESERV"
+IST = "IST"
+
+# Test inputs that are wrong on purpose.
+[default]
+extend-ignore-re = ['"infinit"', '"onn"']
 
 [files]
-extend-exclude = ["vendor/", "*.expected"]
+extend-exclude = ["vendor/", "*.expected", "crates/rupg-types/tests/oracle.sql", "crates/rupg-types/tests/oracle.tsv"]
