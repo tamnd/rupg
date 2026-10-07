@@ -180,6 +180,12 @@ version = "0.0.5"
 [[package]]
 name = "rupg-tree"
 version = "0.0.5"
+dependencies = [
+ "rupg-buffer",
+ "rupg-common",
+ "rupg-file",
+ "rupg-platform",
+]
 
 [[package]]
 name = "rupg-txn"

@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - The hybrid logical clock and the `visible` word in `rupg-txn`. `HlcClock` gives each commit a timestamp above every value that the node gave or saw, also when the wall clock goes back. `Commits` takes the commit timestamps and keeps `visible` below each commit that is not installed, so a snapshot is one load and misses no commit.
+- The B+ tree of `rupg-tree`. `Tree` goes down with optimistic latch coupling over `PageAccess`, latches only the leaf, splits full leaves and inner nodes, and keeps its root page when the root splits. Each user gives its own leaf format through the `Leaf` trait. `scan` reads the leaves in key order, and `check` checks the kinds, the levels and the key bounds. `MemPages` is a `PageAccess` in memory for the tests of this crate and of the crates above it. Spec/12 now gives the inner node format.
 
 ## 0.0.5 (2026-10-07)
 
