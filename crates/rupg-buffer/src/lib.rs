@@ -6,9 +6,14 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+/// The atomics of the latch. The loom tests include `latch.rs` again in a module that gives it the atomics of loom here.
+use std::sync::atomic;
+
 mod file_store;
 mod frames;
 mod latch;
+#[cfg(all(test, loom))]
+mod loom_tests;
 mod pool;
 mod resident;
 mod store;

@@ -21,5 +21,8 @@ rupg-file.workspace = true
 [dev-dependencies]
 rupg-platform.workspace = true
 
+[target.'cfg(loom)'.dev-dependencies]
+loom.workspace = true
+
 [lints]
 workspace = true

@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `Options::window_pages` in the facade sets the size of the window of the buffer pool. A test that opens many databases sets a small window, because the default reservation of address space takes milliseconds to make and to free.
 - `SimIo::read_pieces` in `rupg-platform` gives the bytes of a simulated file in pieces with no copy.
 - The M1 fuzz targets `file_open`, `page_decode` and `log_replay` in the separate `fuzz/` workspace (spec/21 section 21.7). See `fuzz/README.md`. The nightly workflow runs each target for 20 minutes.
+- loom tests of the latch in `rupg-buffer` and of the reservation of space and group commit in a log ring in `rupg-log` (spec/21 section 21.11). They build with `--cfg loom`, and a CI job runs them on each change: `RUSTFLAGS="--cfg loom" cargo test --release -p rupg-buffer -p rupg-log --lib loom`.
 
 ### Changed
 

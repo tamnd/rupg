@@ -65,12 +65,16 @@ rupg-wire = { version = "=0.0.9", path = "crates/rupg-wire" }
 # Outside crates. Each one is in the table of spec/22-crate-layout.md section 22.5.
 # libc: the system calls of rupg-platform on Unix, for example F_FULLFSYNC and getentropy.
 libc = "0.2"
+# loom: the tests of the latches and the log rings under every interleaving, a development dependency only. See spec/21-testing.md section 21.11.
+loom = "0.7"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
 rust_2018_idioms = "warn"
 unreachable_pub = "warn"
 unused_qualifications = "warn"
+# The loom tests build with `--cfg loom`. See spec/21-testing.md section 21.11.
+unexpected_cfgs = { level = "warn", check-cfg = ["cfg(loom)"] }
 
 [workspace.lints.clippy]
 # Every unsafe block needs a SAFETY comment. Only six crates may contain unsafe. See spec/22-crate-layout.md section 22.4.

@@ -2,7 +2,8 @@
 //!
 //! The high 8 bits hold the state and the low 56 bits hold the version. State 0 is evicted, 1 is unlocked, 2 to 253 is locked shared with 1 to 252 readers, and 254 is locked exclusive. A word of zero bytes is therefore an evicted unit with version 0, so the state words of the window need no setup. The release of an exclusive latch and an eviction increase the version. An optimistic reader keeps the version that it saw and compares it at the end.
 
-use std::sync::atomic::{AtomicU64, Ordering, fence};
+// The atomics come from the parent module, so that the loom tests can include this file with the atomics of loom.
+use super::atomic::{AtomicU64, Ordering, fence};
 
 const VERSION_BITS: u32 = 56;
 const VERSION_MASK: u64 = (1 << VERSION_BITS) - 1;
@@ -132,7 +133,7 @@ impl Backoff {
     }
 }
 
-#[cfg(test)]
+#[cfg(all(test, not(loom)))]
 mod tests {
     use super::*;
 

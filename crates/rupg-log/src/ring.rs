@@ -2,13 +2,14 @@
 //!
 //! A ring position is a byte offset that only increases. The physical place of a position is the position modulo the ring size, mapped through the list of extents. A block never spans two extents. A flush pads the last 4 KiB unit, so the next flush starts on a new unit and never writes a unit that is already durable.
 
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::{Arc, PoisonError};
 
 use rupg_buffer::{FileStore, RingState};
 use rupg_common::{Error, Hlc, Result, SqlState};
 use rupg_file::RING_EXTENT_BYTES;
 
 use crate::block::{BLOCK_HEADER, Block, BlockHeader, UNIT};
+use crate::sync::{Condvar, IoMark, Mutex, MutexGuard};
 
 /// The place of a block in its ring.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -49,6 +50,7 @@ pub struct Ring {
     extents: Vec<u64>,
     state: Mutex<State>,
     flushed: Condvar,
+    io: IoMark,
 }
 
 fn ring_number(n: u32) -> Result<u16> {
@@ -110,6 +112,7 @@ impl Ring {
                 failed: None,
             }),
             flushed: Condvar::new(),
+            io: IoMark::new(),
         }
     }
 
@@ -245,7 +248,10 @@ impl Ring {
             let (upto, newest) = (s.end, s.newest);
             s.flushing = true;
             drop(s);
-            let result = self.write(&pieces).and_then(|()| self.store.sync_rings());
+            let result = self.write(&pieces).and_then(|()| {
+                self.io.touch();
+                self.store.sync_rings()
+            });
             s = self.lock();
             s.flushing = false;
             match result {
@@ -266,6 +272,7 @@ impl Ring {
             while done < p.bytes.len() {
                 let (extent, offset) = self.place(p.at + done as u64);
                 let n = ((RING_EXTENT_BYTES - offset) as usize).min(p.bytes.len() - done);
+                self.io.touch();
                 self.store.write_ring(extent, offset, &p.bytes[done..done + n])?;
                 done += n;
             }
@@ -580,5 +587,72 @@ pub(crate) mod tests {
         ] {
             assert!(Ring::open(store.clone(), &bad).is_err());
         }
+    }
+}
+
+/// The loom test of the reservation of space in a ring and of group commit (spec/21 section 21.11). The ring takes the lock and the condition variable of loom, and the store on the simulated disk has no loom operation, so loom sees each write and each sync as one step. Run it with:
+///
+/// ```sh
+/// RUSTFLAGS="--cfg loom" cargo test --release -p rupg-log --lib loom
+/// ```
+#[cfg(all(test, loom))]
+mod loom_tests {
+    use loom::sync::Arc;
+    use loom::thread;
+    use rupg_platform::sim::SimIo;
+
+    use super::tests::{commit, read_all, store};
+    use super::*;
+
+    /// Each thread places one block and flushes to its end. One thread can flush the block of another, or wait while another flushes. The blocks must not overlap, each flush must give a durable position at or after its block with the block in the store, and the ring must then hold every block at its place. `bound` is the most preemptions that loom tries in one run.
+    fn run(threads: u64, body: usize, bound: Option<usize>) {
+        let mut model = loom::model::Builder::new();
+        model.preemption_bound = bound;
+        model.check(move || {
+            let io = SimIo::new(1);
+            let store = store(&io);
+            let ring = Arc::new(Ring::create(store.clone(), 0, 0, 1).unwrap());
+            let handles: Vec<_> = (1..=threads)
+                .map(|xid| {
+                    let ring = ring.clone();
+                    thread::spawn(move || {
+                        let placed = ring.append(&mut commit(xid, body)).unwrap();
+                        assert!(ring.flush_to(placed.end).unwrap() >= placed.end);
+                        // When the flush returns, every block before the durable position is in the store, also the blocks of the other threads and also when another thread did the flush.
+                        ring.io.touch();
+                        let (read, _) = read_all(ring.store(), &ring.state(), 0);
+                        assert!(read.iter().any(|b| (b.position, b.xid) == (placed.position, xid)));
+                        (placed.position, xid, placed.end)
+                    })
+                })
+                .collect();
+            let mut placed: Vec<_> = handles.into_iter().map(|h| h.join().unwrap()).collect();
+            placed.sort_unstable();
+            for w in placed.windows(2) {
+                assert!(w[0].2 <= w[1].0, "{placed:?}");
+            }
+            ring.io.touch();
+            let (read, _) = read_all(&store, &ring.state(), 0);
+            let read: Vec<_> = read.iter().map(|b| (b.position, b.xid)).collect();
+            let want: Vec<_> = placed.iter().map(|&(p, x, _)| (p, x)).collect();
+            assert_eq!(read, want);
+        });
+    }
+
+    #[test]
+    fn two_threads_commit_together() {
+        run(2, 100, None);
+    }
+
+    /// Blocks of more than one unit, so that a flush pads a unit that a later block does not use.
+    #[test]
+    fn two_threads_commit_large_blocks() {
+        run(2, 5000, None);
+    }
+
+    /// With 3 threads, every interleaving takes minutes, so this test tries the runs with up to 2 preemptions.
+    #[test]
+    fn three_threads_commit_together() {
+        run(3, 100, Some(2));
     }
 }

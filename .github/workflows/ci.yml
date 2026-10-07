@@ -112,6 +112,25 @@ jobs:
           "./target/$PROFILE_DIR/rupg" --version
           "./target/$PROFILE_DIR/rupg" --print-config
 
+  loom:
+    name: loom
+    needs: quick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    # The flag replaces the RUSTFLAGS of the workflow. The loom tests are only in the test builds of the two crates. See spec/21-testing.md section 21.11.
+    env:
+      RUSTFLAGS: -D warnings --cfg loom
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: loom
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo test, the latches and the log ring
+        run: cargo test --release -p rupg-buffer -p rupg-log --lib loom
+
   docs:
     name: documentation
     needs: quick
@@ -183,7 +202,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [quick, test, docs, msrv, audit]
+    needs: [quick, test, loom, docs, msrv, audit]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
