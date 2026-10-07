@@ -98,6 +98,13 @@ version = "0.0.5"
 [[package]]
 name = "rupg-hot"
 version = "0.0.5"
+dependencies = [
+ "rupg-buffer",
+ "rupg-common",
+ "rupg-file",
+ "rupg-platform",
+ "rupg-tree",
+]
 
 [[package]]
 name = "rupg-import"

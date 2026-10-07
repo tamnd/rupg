@@ -31,7 +31,7 @@ pub trait Leaf {
     /// Writes an empty leaf with the page header for `id`.
     fn init(page: &mut Page, id: PageId);
 
-    /// Moves the upper keys of `left` to `right`, which is an empty leaf from [`Leaf::init`]. `key` is the key that did not fit. The result is the separator: each key in `left` is below it, and each key in `right` is at or above it. `left` must keep at least one key. The separator must not be longer than [`MAX_KEY`].
+    /// Moves the upper keys of `left` to `right`, which is an empty leaf from [`Leaf::init`]. `key` is the key that did not fit. The result is the separator: each key in `left` is below it, and each key in `right` is at or above it. `left` must keep at least one key, or else each key that moves must be above `key`, so that the separator is above the lower bound of the leaf. The separator must not be longer than [`MAX_KEY`].
     fn split(left: &mut Page, right: &mut Page, key: &[u8]) -> Result<Vec<u8>>;
 
     /// The lowest and the highest key in the leaf, or `None` for an empty leaf. [`Tree::check`] uses it.
@@ -259,7 +259,7 @@ impl<L: Leaf> Tree<L> {
         Err(Error::internal("a tree split reached a node that it does not hold"))
     }
 
-    /// Calls `f` on each leaf from the leaf for `from`, in key order, with a shared latch on one leaf at a time. The second argument of `f` is the lowest key of the scan in that leaf: `from` for the first leaf and the lower bound of the leaf after it. The scan stops when `f` gives false.
+    /// Calls `f` on a copy of each leaf from the leaf for `from`, in key order. The scan copies the leaf under a shared latch and releases the latch before it calls `f`, so `f` can read and change the tree. The second argument of `f` is the lowest key of the scan in that leaf: `from` for the first leaf and the lower bound of the leaf after it. The scan stops when `f` gives false.
     ///
     /// A scan sees each key that was in the tree for the whole scan. It can see a key that a writer adds during the scan, or not.
     pub fn scan<P: PageAccess>(
@@ -269,12 +269,14 @@ impl<L: Leaf> Tree<L> {
         mut f: impl FnMut(&Page, &[u8]) -> Result<bool>,
     ) -> Result<()> {
         let mut lower = from.to_vec();
+        let mut copy: Box<Page> = Box::new([0; rupg_file::PAGE_SIZE]);
         loop {
             let (leaf, fence) = self.find(pages, &lower, P::shared)?;
-            if !f(&leaf, &lower)? {
+            copy.copy_from_slice(&leaf[..]);
+            drop(leaf);
+            if !f(&copy, &lower)? {
                 return Ok(());
             }
-            drop(leaf);
             match fence {
                 Some(fence) => lower = fence,
                 None => return Ok(()),

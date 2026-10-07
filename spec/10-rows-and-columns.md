@@ -66,25 +66,29 @@ The hot store of a table and shard is a B+tree keyed by row id. Inner nodes hold
 
 ### 10.3.1 The PAX leaf
 
-A leaf is a 16 KiB page with the 64-byte page header of document 08 section 8.3.1. Its body has these parts in order.
+A leaf is a 16 KiB page of kind `hot_leaf` with the 64-byte page header of document 08 section 8.3.1. The leaf header is in the 24 bytes of kind data of the page header: the row count (2 bytes), the column count (2 bytes), the schema version (4 bytes), the offset of the `xmax` minipage (2 bytes, 0 when the leaf has none) and the offset of the column directory (2 bytes). All fields are little endian. The body has these parts in order.
 
 | Part | Content |
 |---|---|
-| leaf header | row count, first row id, high key, right sibling, schema version |
 | row id array | the row ids, sorted, 8 bytes each |
 | version headers | one 16-byte header for each row |
 | xmin minipage | hidden, the 32-bit `xmin` of each row, 4 bytes each (document 11 section 11.9) |
 | xmax minipage | hidden, present only when a row in the leaf has a deleter or a locker (document 11) |
-| null bitmaps | one bitmap for each nullable column |
-| column directory | for each column, the offset of its minipage, 4 bytes each |
-| fixed minipages | for each fixed-width column, its values as an array |
-| variable heap | the bytes of variable-width values, with offsets in their minipages |
+| column directory | for each column, 4 bytes: the offset of its minipage (2 bytes), the fixed width (1 byte, 0 for a variable-width column) and flags (1 byte, bit 0 set for a nullable column) |
+| minipages | for each column in order: a null bitmap if the column is nullable, one bit for each row and set for NULL, then the values |
+| variable heap | the bytes of variable-width values, at the end of the page |
+
+A fixed-width minipage holds its values as an array, with zero bytes for a NULL. A variable-width minipage holds the row count plus one offsets of 2 bytes into the page, and the value of row `i` is the bytes from offset `i` to offset `i + 1`. The `lower` field of the page header is the end of the last minipage, and `upper` is the start of the variable heap. The key of the B+tree is the row id as 8 bytes in big endian order, so that keys sort as row ids.
+
+The leaf header of M1 has no high key and no right sibling. A scan goes to the next leaf through the separators of the inner nodes, as document 12 section 12.3.3 gives. A sibling link comes when a measurement shows that the scan needs it.
 
 A scan of the hot store reads one minipage for each column it needs, so the hot part of a table is scanned with the same vector kernels as the cold part. A point lookup finds the row by binary search on the row id array and then reads one value from each minipage.
 
 **The version header is 16 bytes.** It holds a timestamp word, a reference to the newest undo record of the row, and flags. The timestamp word is the commit timestamp of the version, or the transaction id of a writer that has not committed. Document 11 gives the exact encoding and the undo records, which follow the scalable snapshot isolation design of Alhomssi and Leis (PVLDB 16, 2023). The flags of this document are these: deleted, moved to cold, prior version in cold, and has TOAST values. PostgreSQL spends 23 bytes on the tuple header and 4 bytes on the line pointer for each row (PostgreSQL 19 documentation, database page layout), 27 bytes in total, against 28 here with the row id and the hidden `xmin` included.
 
-**An update changes the row in place.** The old values go to undo, and the new values are written into the minipages. A fixed-width value is overwritten. A variable-width value that grows takes new space in the variable heap. If the page has no room, it is compacted. If it still has no room, it splits at a row id boundary. The row id never changes, so no index changes for an update that does not change indexed columns.
+**An update changes the row in place.** The old values go to undo, and the new values are written into the minipages. A fixed-width value is overwritten. A variable-width value that grows takes new space in the variable heap. If the page has no room, it is compacted. If it still has no room, it splits at a row id boundary. At M1 each change other than a change of the version header or of `xmax` writes the whole leaf again, which is a compaction. A change of the version header, and a change of `xmax` in a leaf with an `xmax` minipage, writes only those bytes.
+
+**A split at the end of the leaf keeps the leaf full.** When the new row id is above every row id in the leaf, the leaf keeps all of its rows and the new row starts the new leaf. Rows that come in row id order, which is the normal case because row ids come from a counter, so fill each leaf. Otherwise the split cuts at the middle of the bytes, and each half keeps at least one row. The row id never changes, so no index changes for an update that does not change indexed columns.
 
 **A schema change does not rewrite pages.** `ALTER TABLE ... ADD COLUMN` with a constant default records the default in the catalog with a new schema version, as PostgreSQL does since version 11. A leaf with an older schema version reads the default for the missing column. The page is converted when it is next changed.
 
