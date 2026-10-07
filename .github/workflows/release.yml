@@ -55,6 +55,8 @@ jobs:
           cargo xtask unicode --check
           cargo xtask errcodes --check
           cargo xtask pgtype --check
+          cargo xtask guc --check
+          cargo xtask tzdata --check
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           cargo test --workspace --all-features
 
