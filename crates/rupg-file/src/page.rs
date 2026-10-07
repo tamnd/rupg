@@ -255,11 +255,16 @@ impl PageHeader {
         })
     }
 
-    /// Adds the header fields to a text form. The text form of a kind adds its own fields after them.
+    /// Adds the header fields to a text form, with the kind data as hexadecimal bytes.
     pub fn put(&self, out: &mut TextOut) {
+        self.put_common(out);
+        out.bytes("kind_data", &self.kind_data);
+    }
+
+    /// Adds the header fields to a text form, without the kind data. A kind that gives a meaning to the kind data uses this and adds its own fields.
+    pub fn put_common(&self, out: &mut TextOut) {
         out.field("flags", self.flags)
             .field("kind", self.kind)
-            .bytes("kind_data", &self.kind_data)
             .field("kind_version", self.kind_version)
             .field("lower", self.lower)
             .field("page", self.page)
@@ -269,8 +274,15 @@ impl PageHeader {
             .field("upper", self.upper);
     }
 
-    /// Takes the header fields from a text form.
+    /// Takes the header fields that [`PageHeader::put`] wrote.
     pub fn take(input: &mut TextIn<'_>) -> Result<PageHeader> {
+        let mut header = PageHeader::take_common(input)?;
+        header.kind_data = input.take_bytes("kind_data")?;
+        Ok(header)
+    }
+
+    /// Takes the header fields that [`PageHeader::put_common`] wrote. The kind data is zero.
+    pub fn take_common(input: &mut TextIn<'_>) -> Result<PageHeader> {
         Ok(PageHeader {
             timestamp: input.take("timestamp")?,
             page: input.take("page")?,
@@ -281,7 +293,7 @@ impl PageHeader {
             flags: input.take("flags")?,
             lower: input.take("lower")?,
             upper: input.take("upper")?,
-            kind_data: input.take_bytes("kind_data")?,
+            kind_data: [0; 24],
         })
     }
 
