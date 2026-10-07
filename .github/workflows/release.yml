@@ -58,6 +58,7 @@ jobs:
           cargo xtask guc --check
           cargo xtask tzdata --check
           cargo xtask sql --check
+          cargo xtask pgcatalog --check
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           cargo test --workspace --all-features
 

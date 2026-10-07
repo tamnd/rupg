@@ -14,6 +14,7 @@ mod errcodes;
 mod grammar;
 mod guc;
 mod layers;
+mod pgcatalog;
 mod pgtype;
 mod sha256;
 mod sql;
@@ -23,7 +24,7 @@ mod unicode;
 mod vendor;
 mod version;
 
-const USAGE: &str = "usage: cargo xtask <errcodes [--check] | grammar [file.y...] | guc [--check] | layers | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
+const USAGE: &str = "usage: cargo xtask <errcodes [--check] | grammar [file.y...] | guc [--check] | layers | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -32,6 +33,7 @@ fn main() -> ExitCode {
     let result = match task {
         Some("errcodes") => errcodes::run(&root, &args[1..]),
         Some("grammar") => grammar::run(&root, &args[1..]),
+        Some("pgcatalog") => pgcatalog::run(&root, &args[1..]),
         Some("pgtype") => pgtype::run(&root, &args[1..]),
         Some("guc") => guc::run(&root, &args[1..]),
         Some("layers") => layers::check(&root),
