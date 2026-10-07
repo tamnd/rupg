@@ -11,22 +11,15 @@ use rupg_pgcatalog::{catalog, catalogs, copy_line};
 const ORACLE: &str = include_str!("oracle.tsv");
 
 /// Columns that a later step of `initdb` sets. The test does not compare them.
-const INITDB_COLUMNS: [(&str, &[&str]); 5] = [
+const INITDB_COLUMNS: [(&str, &[&str]); 6] = [
+    // setup_privileges grants the privileges on some columns of pg_subscription.
+    ("pg_attribute", &["attacl"]),
     // initdb sets the password of the bootstrap superuser from --pwfile.
     ("pg_authid", &["rolpassword"]),
-    // The bootstrap commands `declare index` and `declare toast` set relhasindex and reltoastrelid. VACUUM sets the statistics and relfrozenxid, and setup_privileges sets relacl.
+    // VACUUM sets the statistics and relfrozenxid, and setup_privileges sets relacl.
     (
         "pg_class",
-        &[
-            "relpages",
-            "reltuples",
-            "relallvisible",
-            "relallfrozen",
-            "reltoastrelid",
-            "relhasindex",
-            "relfrozenxid",
-            "relacl",
-        ],
+        &["relpages", "reltuples", "relallvisible", "relallfrozen", "relfrozenxid", "relacl"],
     ),
     // setup_collation sets the version of an ICU collation from the ICU library.
     ("pg_collation", &["collversion"]),
@@ -40,13 +33,9 @@ const INITDB_COLUMNS: [(&str, &[&str]); 5] = [
 const SQL_BODY: &str = "see system_functions.sql";
 const SQL_BODY_COLUMNS: [&str; 3] = ["prosrc", "prosqlbody", "procost"];
 
-/// True for an oracle row that is not a static row. The bootstrap commands `create`, `declare index` and `declare toast` add the `pg_class` rows of the other catalogs, the indexes and the toast tables. make_template0 and make_postgres of `initdb` add the databases 4 and 5 and their descriptions.
+/// True for an oracle row that is not a static row. make_template0 and make_postgres of `initdb` add the databases 4 and 5 and their descriptions.
 fn made_by_initdb(name: &str, row: &[String]) -> bool {
-    match name {
-        "pg_class" => true,
-        "pg_database" | "pg_shdescription" => row[0] == "4" || row[0] == "5",
-        _ => false,
-    }
+    matches!(name, "pg_database" | "pg_shdescription") && (row[0] == "4" || row[0] == "5")
 }
 
 /// The rows of each catalog, as lists of fields.
@@ -147,9 +136,10 @@ fn the_rules_keep_the_rows() {
     let count = |rows: &Rows, name: &str| rows.get(name).map_or(0, Vec::len);
     for name in ours.keys() {
         let added = theirs[name].iter().filter(|row| made_by_initdb(name, row)).count();
-        let bootstrap = if *name == "pg_class" { count(&ours, name) } else { 0 };
-        assert_eq!(count(&ours, name), count(&theirs, name) - added + bootstrap, "{name}");
+        assert_eq!(count(&ours, name), count(&theirs, name) - added, "{name}");
     }
-    assert_eq!(count(&ours, "pg_class"), 4);
+    assert_eq!(count(&ours, "pg_class"), 258);
+    assert_eq!(count(&ours, "pg_attribute"), 1588);
+    assert_eq!(count(&ours, "pg_constraint"), 192);
     assert_eq!(count(&ours, "pg_proc"), 3414);
 }

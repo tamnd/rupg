@@ -123,8 +123,8 @@ pub(crate) static CATALOGS: [Catalog; 64] = [
             Column { name: "attfdwoptions", type_oid: 1009, len: -1, by_val: false, align: b'i', storage: b'x', ndims: 1, collation: 950, not_null: false },
             Column { name: "attmissingval", type_oid: 2277, len: -1, by_val: false, align: b'd', storage: b'x', ndims: 0, collation: 0, not_null: false },
         ],
-        rows: &[],
-        len: 0,
+        rows: &super::pg_attribute::COLUMNS,
+        len: 1588,
     },
     Catalog {
         name: "pg_class",
@@ -169,7 +169,7 @@ pub(crate) static CATALOGS: [Catalog; 64] = [
             Column { name: "relpartbound", type_oid: 194, len: -1, by_val: false, align: b'i', storage: b'x', ndims: 0, collation: 950, not_null: false },
         ],
         rows: &super::pg_class::COLUMNS,
-        len: 4,
+        len: 258,
     },
     Catalog {
         name: "pg_attrdef",
@@ -222,8 +222,8 @@ pub(crate) static CATALOGS: [Catalog; 64] = [
             Column { name: "conexclop", type_oid: 1028, len: -1, by_val: false, align: b'i', storage: b'x', ndims: 1, collation: 0, not_null: false },
             Column { name: "conbin", type_oid: 194, len: -1, by_val: false, align: b'i', storage: b'x', ndims: 0, collation: 950, not_null: false },
         ],
-        rows: &[],
-        len: 0,
+        rows: &super::pg_constraint::COLUMNS,
+        len: 192,
     },
     Catalog {
         name: "pg_inherits",
@@ -269,8 +269,8 @@ pub(crate) static CATALOGS: [Catalog; 64] = [
             Column { name: "indexprs", type_oid: 194, len: -1, by_val: false, align: b'i', storage: b'x', ndims: 0, collation: 950, not_null: false },
             Column { name: "indpred", type_oid: 194, len: -1, by_val: false, align: b'i', storage: b'x', ndims: 0, collation: 950, not_null: false },
         ],
-        rows: &[],
-        len: 0,
+        rows: &super::pg_index::COLUMNS,
+        len: 159,
     },
     Catalog {
         name: "pg_operator",

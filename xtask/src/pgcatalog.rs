@@ -1,6 +1,6 @@
 //! The schemas and the static rows of the system catalogs.
 //!
-//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds.
+//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`.
 //!
 //! `cargo xtask pgcatalog --check` writes nothing. It fails if a file is not the same as the file that the task makes. See `spec/07-sql-types-and-catalog.md` section 7.13.2.
 
@@ -122,6 +122,22 @@ struct Catalog {
     shared: bool,
     bootstrap: bool,
     columns: Vec<Column>,
+    /// The OIDs of the toast table and its index, from `DECLARE_TOAST`.
+    toast: Option<(u32, u32)>,
+    /// The indexes, from `DECLARE_INDEX` and its variants, in the order of the header.
+    indexes: Vec<Index>,
+}
+
+/// One index of a catalog.
+#[derive(Debug)]
+struct Index {
+    name: String,
+    oid: u32,
+    unique: bool,
+    /// True for `DECLARE_UNIQUE_INDEX_PKEY`. `system_constraints.sql` makes the index the primary key.
+    pkey: bool,
+    /// The column and the operator class of each key, such as `oid` and `oid_ops`.
+    keys: Vec<(String, String)>,
 }
 
 /// One row: the value of each column as `genbki.pl` writes it, with `_null_` for a null.
@@ -277,7 +293,17 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
         }
         rows_out.insert(catalog.name.clone(), out);
     }
-    catalog_rowtypes(&catalogs, &lookups, first_genbki, &mut rows_out, &mut types)?;
+    let next_oid = catalog_rowtypes(&catalogs, &lookups, first_genbki, &mut rows_out, &mut types)?;
+    // The OID and the key type of each operator class, by method and name. The OIDs are known only after the OID counter gave them.
+    let opclasses: BTreeMap<String, (String, String)> = data["pg_opclass"]
+        .iter()
+        .zip(&rows_out["pg_opclass"])
+        .map(|(r, out)| {
+            let key = format!("{}/{}", r["opcmethod"], r["opcname"]);
+            (key, (out[0].clone().unwrap_or_default(), r["opckeytype"].clone()))
+        })
+        .collect();
+    relation_rows(&catalogs, &lookups, &types, &opclasses, &c_collation, next_oid, &mut rows_out)?;
     proc_arg_defaults(&catalogs, &mut rows_out)?;
     operator_descriptions(&catalogs, &mut rows_out)?;
 
@@ -332,6 +358,15 @@ fn parse_header(name: &str, text: &str) -> Result<Catalog, String> {
             declaring = true;
             continue;
         }
+        if let Some(rest) = line.strip_prefix("DECLARE_") {
+            // Catalog.pm reads one line for each DECLARE_ macro.
+            let (macro_name, args) = rest
+                .strip_suffix(')')
+                .and_then(|r| r.split_once('('))
+                .ok_or_else(|| format!("{file}: bad line {line:?}"))?;
+            parse_declare(&mut catalog, &file, macro_name, args)?;
+            continue;
+        }
         if !declaring || line.is_empty() || line.starts_with('{') {
             continue;
         }
@@ -345,6 +380,51 @@ fn parse_header(name: &str, text: &str) -> Result<Catalog, String> {
         return Err(format!("{file}: no CATALOG line"));
     }
     Ok(catalog)
+}
+
+/// Reads the arguments of a `DECLARE_TOAST` or `DECLARE_INDEX` line of `Catalog.pm`. The other `DECLARE_` lines give foreign keys and OID macros, and the bootstrap mode does not use them.
+fn parse_declare(
+    catalog: &mut Catalog,
+    file: &str,
+    macro_name: &str,
+    args: &str,
+) -> Result<(), String> {
+    let bad = || format!("{file}: bad DECLARE_{macro_name} line");
+    let oid = |s: &str| s.trim().parse::<u32>().map_err(|_| bad());
+    match macro_name {
+        "TOAST" | "TOAST_WITH_MACRO" => {
+            let args: Vec<&str> = args.split(',').map(str::trim).collect();
+            if args.len() < 3 || args[0] != catalog.name {
+                return Err(bad());
+            }
+            catalog.toast = Some((oid(args[1])?, oid(args[2])?));
+        }
+        "INDEX" | "UNIQUE_INDEX" | "UNIQUE_INDEX_PKEY" => {
+            let (head, keys) = args.split_once("btree(").ok_or_else(bad)?;
+            let head: Vec<&str> = head.split(',').map(str::trim).collect();
+            if head.len() != 5 || head[3] != catalog.name {
+                return Err(bad());
+            }
+            let keys = keys
+                .strip_suffix(')')
+                .ok_or_else(bad)?
+                .split(',')
+                .map(|k| {
+                    let (column, opclass) = k.trim().split_once(' ').ok_or_else(bad)?;
+                    Ok((column.to_string(), opclass.to_string()))
+                })
+                .collect::<Result<_, String>>()?;
+            catalog.indexes.push(Index {
+                name: head[0].to_string(),
+                oid: oid(head[1])?,
+                unique: macro_name != "INDEX",
+                pkey: macro_name == "UNIQUE_INDEX_PKEY",
+                keys,
+            });
+        }
+        _ => {}
+    }
+    Ok(())
 }
 
 /// Removes the C comments. A comment can span lines, so it can join two lines, as in `Catalog.pm`.
@@ -764,14 +844,14 @@ fn deescape(value: &str) -> String {
     String::from_utf8_lossy(&out).into_owned()
 }
 
-/// The row types of the catalogs that the bootstrap mode makes. For each catalog that is not a bootstrap catalog, in the order of the headers, `heap_create_with_catalog` takes an OID for the array type and then an OID for the row type if the header gives none. In the bootstrap mode the OID counter starts at `FirstGenbkiObjectId` and checks no index.
+/// The row types of the catalogs that the bootstrap mode makes, and the next value of the OID counter. For each catalog that is not a bootstrap catalog, in the order of the headers, `heap_create_with_catalog` takes an OID for the array type and then an OID for the row type if the header gives none. In the bootstrap mode the OID counter starts at `FirstGenbkiObjectId` and checks no index.
 fn catalog_rowtypes(
     catalogs: &[Catalog],
     lookups: &Lookups,
     first_genbki: u32,
     rows: &mut BTreeMap<String, Vec<Vec<Option<String>>>>,
     types: &mut BTreeMap<String, Row>,
-) -> Result<(), String> {
+) -> Result<u32, String> {
     let pg_type = catalogs.iter().find(|c| c.name == "pg_type").ok_or("no pg_type header")?;
     let proc = |name: &str| -> Result<String, String> {
         lookups["pg_proc"]
@@ -852,7 +932,421 @@ fn catalog_rowtypes(
         }
     }
     rows.get_mut("pg_type").ok_or("no pg_type rows")?.extend(out);
+    Ok(next)
+}
+
+/// The properties of a column that `pg_attribute` stores.
+#[derive(Clone)]
+struct Attr {
+    type_oid: String,
+    len: i16,
+    by_val: bool,
+    align: String,
+    storage: String,
+    ndims: i16,
+    collation: String,
+    not_null: bool,
+}
+
+/// The properties that a column gets from its type, as `morph_row_for_pgattr` of `genbki.pl` sets them. The column can be null.
+fn type_attr(
+    types: &BTreeMap<String, Row>,
+    typname: &str,
+    c_collation: &str,
+) -> Result<Attr, String> {
+    let ty = types.get(typname).ok_or_else(|| format!("no pg_type row for {typname}"))?;
+    let len = match ty["typlen"].as_str() {
+        "NAMEDATALEN" => 64,
+        n => n.parse().map_err(|_| format!("pg_type: bad typlen {n}"))?,
+    };
+    let by_val = match ty["typbyval"].as_str() {
+        "t" | "FLOAT8PASSBYVAL" => true,
+        "f" => false,
+        v => return Err(format!("pg_type: bad typbyval {v}")),
+    };
+    let align = match ty["typalign"].as_str() {
+        "ALIGNOF_POINTER" => "d",
+        a => a,
+    };
+    Ok(Attr {
+        type_oid: ty["oid"].clone(),
+        len,
+        by_val,
+        align: align.to_string(),
+        storage: ty["typstorage"].clone(),
+        ndims: i16::from(ty["typcategory"] == "A"),
+        collation: if ty["typcollation"] == "0" { "0" } else { c_collation }.to_string(),
+        not_null: false,
+    })
+}
+
+/// The properties of the columns of a catalog. A column is not null if the header forces it, or if it and all the columns before it have a fixed length.
+fn catalog_attrs(
+    catalog: &Catalog,
+    types: &BTreeMap<String, Row>,
+    c_collation: &str,
+) -> Result<Vec<Attr>, String> {
+    let mut out = Vec::with_capacity(catalog.columns.len());
+    let mut prior_fixed = true;
+    for column in &catalog.columns {
+        let mut a = type_attr(types, &column.ty, c_collation)
+            .map_err(|e| format!("{}.{}: {e}", catalog.name, column.name))?;
+        a.not_null = if column.force_not_null {
+            true
+        } else if column.force_null {
+            false
+        } else {
+            prior_fixed && a.len > 0
+        };
+        prior_fixed &= a.not_null && a.len > 0;
+        out.push(a);
+    }
+    Ok(out)
+}
+
+/// One row of a catalog, from the given values and the defaults of the header. A value is the text that the bootstrap mode reads. A column with no value and no default is null.
+fn make_row(
+    catalog: &Catalog,
+    lookups: &Lookups,
+    values: &[(&str, String)],
+) -> Result<Vec<Option<String>>, String> {
+    let file = format!("{}.h", catalog.name);
+    let mut out = Vec::with_capacity(catalog.columns.len());
+    for column in &catalog.columns {
+        let value = match (values.iter().find(|(k, _)| *k == column.name), &column.default) {
+            (Some((_, v)), _) => v.clone(),
+            (None, Some(d)) => match &column.lookup {
+                Some(kind) if d != "_null_" => lookup(lookups, kind, column, d, &file)?,
+                _ => d.clone(),
+            },
+            (None, None) => "_null_".to_string(),
+        };
+        out.push(bootstrap_value(&value));
+    }
+    Ok(out)
+}
+
+/// The system columns of a table, with the type of each. The attribute number of column `i` is `-(i + 1)`.
+const SYSTEM_COLUMNS: [(&str, &str); 6] = [
+    ("ctid", "tid"),
+    ("xmin", "xid"),
+    ("cmin", "cid"),
+    ("xmax", "xid"),
+    ("cmax", "cid"),
+    ("tableoid", "oid"),
+];
+
+/// The rows that the bootstrap commands `create`, `declare toast` and `declare index` add to `pg_class`, `pg_attribute` and `pg_index`, and the rows that `system_constraints.sql` adds to `pg_constraint`.
+///
+/// The relation of a shared catalog or of a bootstrap catalog is mapped, so its `relfilenode` is 0. Its toast table and its indexes are mapped too. Any other relation has the file node of its OID. The constraints take their OIDs from the OID counter after the row types.
+#[allow(clippy::too_many_lines)]
+fn relation_rows(
+    catalogs: &[Catalog],
+    lookups: &Lookups,
+    types: &BTreeMap<String, Row>,
+    opclasses: &BTreeMap<String, (String, String)>,
+    c_collation: &str,
+    mut next_oid: u32,
+    rows: &mut BTreeMap<String, Vec<Vec<Option<String>>>>,
+) -> Result<(), String> {
+    let header = |name: &str| {
+        catalogs.iter().find(|c| c.name == name).ok_or_else(|| format!("no {name} header"))
+    };
+    let (pg_class, pg_attribute, pg_index, pg_constraint) = (
+        header("pg_class")?,
+        header("pg_attribute")?,
+        header("pg_index")?,
+        header("pg_constraint")?,
+    );
+    let oid_of = |kind: &str, name: &str| -> Result<String, String> {
+        lookups[kind].get(name).cloned().flatten().ok_or_else(|| format!("no {kind} row {name}"))
+    };
+    let opclass = |key: &str| opclasses.get(key).ok_or_else(|| format!("no operator class {key}"));
+    let pg_toast = oid_of("pg_namespace", "pg_toast")?;
+    let btree = oid_of("pg_am", "btree")?;
+    let pg_global = oid_of("pg_tablespace", "pg_global")?;
+    let flag = |b: bool| if b { "t" } else { "f" }.to_string();
+
+    let mut classes = Vec::new();
+    let mut attributes = Vec::new();
+    let mut indexes = Vec::new();
+    let mut constraints = Vec::new();
+    let mut attribute = |relid: u32, name: &str, num: i16, a: &Attr| -> Result<(), String> {
+        attributes.push(make_row(
+            pg_attribute,
+            lookups,
+            &[
+                ("attrelid", relid.to_string()),
+                ("attname", name.to_string()),
+                ("atttypid", a.type_oid.clone()),
+                ("attlen", a.len.to_string()),
+                ("attnum", num.to_string()),
+                ("attndims", a.ndims.to_string()),
+                ("attbyval", flag(a.by_val)),
+                ("attalign", a.align.clone()),
+                ("attstorage", a.storage.clone()),
+                ("attnotnull", flag(a.not_null)),
+                ("attcollation", a.collation.clone()),
+            ],
+        )?);
+        Ok(())
+    };
+    let system_attrs = SYSTEM_COLUMNS
+        .iter()
+        .map(|(_, ty)| {
+            let mut a = type_attr(types, ty, c_collation)?;
+            a.not_null = true;
+            Ok(a)
+        })
+        .collect::<Result<Vec<_>, String>>()?;
+
+    for catalog in catalogs {
+        let mapped = catalog.shared || catalog.bootstrap;
+        let filenode = |oid: u32| if mapped { "0".to_string() } else { oid.to_string() };
+        let tablespace = if catalog.shared { pg_global.clone() } else { "0".to_string() };
+        let common = |oid: u32, kind: &str, natts: usize| {
+            vec![
+                ("oid", oid.to_string()),
+                ("relfilenode", filenode(oid)),
+                ("reltablespace", tablespace.clone()),
+                ("relisshared", flag(catalog.shared)),
+                ("relkind", kind.to_string()),
+                ("relnatts", natts.to_string()),
+            ]
+        };
+        let toast_oid = catalog.toast.map_or(0, |t| t.0);
+        let has_index = !catalog.indexes.is_empty();
+        if catalog.bootstrap {
+            // The pg_class row of a bootstrap catalog is in pg_class.dat.
+            let column = |name: &str| pg_class.columns.iter().position(|c| c.name == name).unwrap();
+            let row = rows
+                .get_mut("pg_class")
+                .and_then(|r| {
+                    r.iter_mut().find(|r| r[0].as_deref() == Some(&catalog.oid.to_string()))
+                })
+                .ok_or_else(|| format!("pg_class.dat has no row for {}", catalog.name))?;
+            row[column("reltoastrelid")] = Some(toast_oid.to_string());
+            row[column("relhasindex")] = Some(flag(has_index));
+        } else {
+            let mut values = common(catalog.oid, "r", catalog.columns.len());
+            values.extend([
+                ("relname", catalog.name.clone()),
+                ("reltype", types[&catalog.name]["oid"].clone()),
+                ("reltoastrelid", toast_oid.to_string()),
+                ("relhasindex", flag(has_index)),
+            ]);
+            classes.push(make_row(pg_class, lookups, &values)?);
+        }
+        let attrs = catalog_attrs(catalog, types, c_collation)?;
+        for (i, (column, a)) in catalog.columns.iter().zip(&attrs).enumerate() {
+            attribute(catalog.oid, &column.name, i16::try_from(i + 1).unwrap(), a)?;
+        }
+        for (i, ((name, _), a)) in SYSTEM_COLUMNS.iter().zip(&system_attrs).enumerate() {
+            attribute(catalog.oid, name, -i16::try_from(i + 1).unwrap(), a)?;
+        }
+
+        if let Some((toast, toast_index)) = catalog.toast {
+            let mut values = common(toast, "t", 3);
+            values.extend([
+                ("relname", format!("pg_toast_{}", catalog.oid)),
+                ("relnamespace", pg_toast.clone()),
+                ("reltype", "0".into()),
+                ("relhasindex", "t".into()),
+            ]);
+            classes.push(make_row(pg_class, lookups, &values)?);
+            let mut chunk = Vec::new();
+            for (name, ty) in [("chunk_id", "oid"), ("chunk_seq", "int4"), ("chunk_data", "bytea")]
+            {
+                let mut a = type_attr(types, ty, c_collation)?;
+                // create_toast_table stores chunk_data in line, with no compression.
+                a.storage = "p".into();
+                chunk.push((name, a));
+            }
+            for (i, (name, a)) in chunk.iter().enumerate() {
+                attribute(toast, name, i16::try_from(i + 1).unwrap(), a)?;
+            }
+            for (i, ((name, _), a)) in SYSTEM_COLUMNS.iter().zip(&system_attrs).enumerate() {
+                attribute(toast, name, -i16::try_from(i + 1).unwrap(), a)?;
+            }
+
+            let mut values = common(toast_index, "i", 2);
+            values.extend([
+                ("relname", format!("pg_toast_{}_index", catalog.oid)),
+                ("relnamespace", pg_toast.clone()),
+                ("reltype", "0".into()),
+                ("relam", btree.clone()),
+                ("relfrozenxid", "0".into()),
+                ("relminmxid", "0".into()),
+            ]);
+            classes.push(make_row(pg_class, lookups, &values)?);
+            for (i, (name, a)) in chunk.iter().take(2).enumerate() {
+                attribute(toast_index, name, i16::try_from(i + 1).unwrap(), a)?;
+            }
+            let opclasses =
+                [opclass("btree/oid_ops")?.0.clone(), opclass("btree/int4_ops")?.0.clone()];
+            indexes.push(index_row(
+                pg_index,
+                lookups,
+                toast_index,
+                toast,
+                true,
+                true,
+                &["1".into(), "2".into()],
+                &["0".into(), "0".into()],
+                &opclasses,
+            )?);
+        }
+
+        for index in &catalog.indexes {
+            let mut values = common(index.oid, "i", index.keys.len());
+            values.extend([
+                ("relname", index.name.clone()),
+                ("reltype", "0".into()),
+                ("relam", btree.clone()),
+                ("relfrozenxid", "0".into()),
+                ("relminmxid", "0".into()),
+            ]);
+            classes.push(make_row(pg_class, lookups, &values)?);
+            let (mut keys, mut collations, mut opclasses) = (Vec::new(), Vec::new(), Vec::new());
+            for (i, (column, opclass_name)) in index.keys.iter().enumerate() {
+                let at = format!("{}: {column}", index.name);
+                let num = catalog
+                    .columns
+                    .iter()
+                    .position(|c| c.name == *column)
+                    .ok_or_else(|| format!("{at}: no such column"))?;
+                let (opclass_oid, key_type) = opclass(&format!("btree/{opclass_name}"))?;
+                let mut a = Attr { not_null: false, ..attrs[num].clone() };
+                // ConstructTupleDescriptor of index.c gives the column the key type of the operator class, if it has one.
+                if key_type != "0" {
+                    let k = type_attr(types, key_type, c_collation)?;
+                    (a.type_oid, a.len, a.by_val, a.align, a.storage) =
+                        (k.type_oid, k.len, k.by_val, k.align, k.storage);
+                }
+                attribute(index.oid, column, i16::try_from(i + 1).unwrap(), &a)?;
+                keys.push((num + 1).to_string());
+                collations.push(attrs[num].collation.clone());
+                opclasses.push(opclass_oid.clone());
+            }
+            indexes.push(index_row(
+                pg_index,
+                lookups,
+                index.oid,
+                catalog.oid,
+                index.unique,
+                index.pkey,
+                &keys,
+                &collations,
+                &opclasses,
+            )?);
+        }
+    }
+
+    // system_constraints.sql: for each primary key, a not-null constraint on each key column and then the primary key, and for each other unique index a unique constraint.
+    for catalog in catalogs {
+        for index in catalog.indexes.iter().filter(|i| i.unique) {
+            let keys: Vec<String> = index
+                .keys
+                .iter()
+                .map(|(column, _)| {
+                    catalog.columns.iter().position(|c| c.name == *column).unwrap() + 1
+                })
+                .map(|n| n.to_string())
+                .collect();
+            let mut add =
+                |name: String, kind: &str, index_oid: u32, keys: &[String]| -> Result<(), String> {
+                    constraints.push(make_row(
+                        pg_constraint,
+                        lookups,
+                        &[
+                            ("oid", next_oid.to_string()),
+                            ("conname", name),
+                            ("connamespace", "11".into()),
+                            ("contype", kind.into()),
+                            ("condeferrable", "f".into()),
+                            ("condeferred", "f".into()),
+                            ("conenforced", "t".into()),
+                            ("convalidated", "t".into()),
+                            ("conrelid", catalog.oid.to_string()),
+                            ("contypid", "0".into()),
+                            ("conindid", index_oid.to_string()),
+                            ("conparentid", "0".into()),
+                            ("confrelid", "0".into()),
+                            ("confupdtype", " ".into()),
+                            ("confdeltype", " ".into()),
+                            ("confmatchtype", " ".into()),
+                            ("conislocal", "t".into()),
+                            ("coninhcount", "0".into()),
+                            ("connoinherit", flag(kind != "n")),
+                            ("conperiod", "f".into()),
+                            ("conkey", format!("{{{}}}", keys.join(","))),
+                        ],
+                    )?);
+                    next_oid += 1;
+                    Ok(())
+                };
+            if index.pkey {
+                for ((column, _), key) in index.keys.iter().zip(&keys) {
+                    add(
+                        format!("{}_{column}_not_null", catalog.name),
+                        "n",
+                        0,
+                        std::slice::from_ref(key),
+                    )?;
+                }
+                add(index.name.clone(), "p", index.oid, &keys)?;
+            } else {
+                add(index.name.clone(), "u", index.oid, &keys)?;
+            }
+        }
+    }
+
+    rows.get_mut("pg_class").ok_or("no pg_class rows")?.extend(classes);
+    rows.insert("pg_attribute".into(), attributes);
+    rows.insert("pg_index".into(), indexes);
+    rows.insert("pg_constraint".into(), constraints);
     Ok(())
+}
+
+/// One `pg_index` row of an index that the bootstrap mode builds. The index is valid, ready and live, with no expressions and no predicate.
+#[allow(clippy::too_many_arguments)]
+fn index_row(
+    pg_index: &Catalog,
+    lookups: &Lookups,
+    index: u32,
+    table: u32,
+    unique: bool,
+    primary: bool,
+    keys: &[String],
+    collations: &[String],
+    opclasses: &[String],
+) -> Result<Vec<Option<String>>, String> {
+    let flag = |b: bool| if b { "t" } else { "f" }.to_string();
+    make_row(
+        pg_index,
+        lookups,
+        &[
+            ("indexrelid", index.to_string()),
+            ("indrelid", table.to_string()),
+            ("indnatts", keys.len().to_string()),
+            ("indnkeyatts", keys.len().to_string()),
+            ("indisunique", flag(unique)),
+            ("indnullsnotdistinct", "f".into()),
+            ("indisprimary", flag(primary)),
+            ("indisexclusion", "f".into()),
+            ("indimmediate", "t".into()),
+            ("indisclustered", "f".into()),
+            ("indisvalid", "t".into()),
+            ("indcheckxmin", "f".into()),
+            ("indisready", "t".into()),
+            ("indislive", "t".into()),
+            ("indisreplident", "f".into()),
+            ("indkey", keys.join(" ")),
+            ("indcollation", collations.join(" ")),
+            ("indclass", opclasses.join(" ")),
+            ("indoption", vec!["0"; keys.len()].join(" ")),
+        ],
+    )
 }
 
 /// `setup_description` of `initdb` gives each function that implements an operator the description `implementation of X operator`, if the function has no description and the description of the operator does not start with `deprecated`.
@@ -1105,7 +1599,7 @@ fn array_items(text: &str) -> Option<Vec<Option<String>>> {
 
 const HEAD: &str = "`cargo xtask pgcatalog` makes this file from the catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog`. Do not edit it.";
 
-/// The file with the schema of each catalog. The column properties follow `morph_row_for_pgattr` of `genbki.pl`.
+/// The file with the schema of each catalog.
 fn catalogs_file(
     catalogs: &[Catalog],
     types: &BTreeMap<String, Row>,
@@ -1130,39 +1624,11 @@ fn catalogs_file(
         writeln!(out, "        shared: {},", catalog.shared).unwrap();
         writeln!(out, "        bootstrap: {},", catalog.bootstrap).unwrap();
         writeln!(out, "        columns: &[").unwrap();
-        let mut prior_fixed = true;
-        for column in &catalog.columns {
-            let ty = types
-                .get(&column.ty)
-                .ok_or_else(|| format!("{name}: no pg_type row for {}", column.ty))?;
-            let len: i16 = match ty["typlen"].as_str() {
-                "NAMEDATALEN" => 64,
-                n => n.parse().map_err(|_| format!("pg_type: bad typlen {n}"))?,
-            };
-            let not_null = if column.force_not_null {
-                true
-            } else if column.force_null {
-                false
-            } else {
-                prior_fixed && len > 0
-            };
-            prior_fixed &= not_null && len > 0;
-            let collation = if ty["typcollation"] == "0" { "0" } else { c_collation };
-            let ndims = i16::from(ty["typcategory"] == "A");
-            let type_oid = &ty["oid"];
-            let by_val = match ty["typbyval"].as_str() {
-                "t" | "FLOAT8PASSBYVAL" => true,
-                "f" => false,
-                v => return Err(format!("pg_type: bad typbyval {v}")),
-            };
-            let align = match ty["typalign"].as_str() {
-                "ALIGNOF_POINTER" => "d",
-                a => a,
-            };
+        for (column, a) in catalog.columns.iter().zip(catalog_attrs(catalog, types, c_collation)?) {
             writeln!(
                 out,
-                "            Column {{ name: {:?}, type_oid: {type_oid}, len: {len}, by_val: {by_val}, align: b'{align}', storage: b'{}', ndims: {ndims}, collation: {collation}, not_null: {not_null} }},",
-                column.name, ty["typstorage"]
+                "            Column {{ name: {:?}, type_oid: {}, len: {}, by_val: {}, align: b'{}', storage: b'{}', ndims: {}, collation: {}, not_null: {} }},",
+                column.name, a.type_oid, a.len, a.by_val, a.align, a.storage, a.ndims, a.collation, a.not_null
             )
             .unwrap();
         }
@@ -1314,5 +1780,24 @@ mod tests {
         );
         assert_eq!(c.columns[2].default.as_deref(), Some("-1"));
         assert!(c.columns[3].force_null);
+    }
+
+    #[test]
+    fn header_indexes() {
+        let text = "CATALOG(pg_x,9,XId)\n{\n\tOid oid;\n\tNameData x_name;\n} FormData_pg_x;\nDECLARE_TOAST_WITH_MACRO(pg_x, 20, 21, XToast, XToastIndex);\nDECLARE_UNIQUE_INDEX_PKEY(pg_x_oid_index, 22, XOidIndexId, pg_x, btree(oid oid_ops));\nDECLARE_INDEX(pg_x_name_index, 23, XNameIndexId, pg_x, btree(x_name name_ops, oid oid_ops));\nDECLARE_FOREIGN_KEY((x_name), pg_y, (y_name));\n";
+        let c = parse_header("pg_x", text).unwrap();
+        assert_eq!(c.toast, Some((20, 21)));
+        let i: Vec<(&str, u32, bool, bool, usize)> = c
+            .indexes
+            .iter()
+            .map(|i| (i.name.as_str(), i.oid, i.unique, i.pkey, i.keys.len()))
+            .collect();
+        assert_eq!(
+            i,
+            [("pg_x_oid_index", 22, true, true, 1), ("pg_x_name_index", 23, false, false, 2)]
+        );
+        assert_eq!(c.indexes[1].keys[0], ("x_name".to_string(), "name_ops".to_string()));
+        let split = text.replace("pg_x, btree(x_name", "pg_x,\n\tbtree(x_name");
+        assert!(parse_header("pg_x", &split).is_err());
     }
 }

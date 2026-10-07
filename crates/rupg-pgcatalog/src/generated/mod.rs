@@ -16,6 +16,8 @@ pub(crate) mod pg_amop;
 #[rustfmt::skip]
 pub(crate) mod pg_amproc;
 #[rustfmt::skip]
+pub(crate) mod pg_attribute;
+#[rustfmt::skip]
 pub(crate) mod pg_auth_members;
 #[rustfmt::skip]
 pub(crate) mod pg_authid;
@@ -26,11 +28,15 @@ pub(crate) mod pg_class;
 #[rustfmt::skip]
 pub(crate) mod pg_collation;
 #[rustfmt::skip]
+pub(crate) mod pg_constraint;
+#[rustfmt::skip]
 pub(crate) mod pg_conversion;
 #[rustfmt::skip]
 pub(crate) mod pg_database;
 #[rustfmt::skip]
 pub(crate) mod pg_description;
+#[rustfmt::skip]
+pub(crate) mod pg_index;
 #[rustfmt::skip]
 pub(crate) mod pg_language;
 #[rustfmt::skip]

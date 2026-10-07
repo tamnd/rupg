@@ -9,7 +9,7 @@ FROM pg_class c
 JOIN pg_attribute a ON a.attrelid = c.oid AND a.attnum > 0 AND NOT a.attisdropped
 JOIN pg_type t ON t.oid = a.atttypid
 WHERE c.relnamespace = 'pg_catalog'::regnamespace
-  AND c.relname IN ('pg_proc', 'pg_type', 'pg_class', 'pg_operator', 'pg_opfamily', 'pg_opclass', 'pg_am', 'pg_amop', 'pg_amproc', 'pg_language', 'pg_aggregate', 'pg_description', 'pg_cast', 'pg_namespace', 'pg_conversion', 'pg_database', 'pg_tablespace', 'pg_authid', 'pg_auth_members', 'pg_shdescription', 'pg_ts_config', 'pg_ts_config_map', 'pg_ts_dict', 'pg_ts_parser', 'pg_ts_template', 'pg_collation', 'pg_range')
+  AND c.relname IN ('pg_proc', 'pg_type', 'pg_attribute', 'pg_class', 'pg_constraint', 'pg_index', 'pg_operator', 'pg_opfamily', 'pg_opclass', 'pg_am', 'pg_amop', 'pg_amproc', 'pg_language', 'pg_aggregate', 'pg_description', 'pg_cast', 'pg_namespace', 'pg_conversion', 'pg_database', 'pg_tablespace', 'pg_authid', 'pg_auth_members', 'pg_shdescription', 'pg_ts_config', 'pg_ts_config_map', 'pg_ts_dict', 'pg_ts_parser', 'pg_ts_template', 'pg_collation', 'pg_range')
 GROUP BY c.relname
 ORDER BY c.relname
 \gexec
