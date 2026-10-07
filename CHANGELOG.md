@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.12 (2026-10-08)
+
+The twelfth patch release on the 0.0 line. It starts milestone M2: the wire codec, SASLprep, the full SQLSTATE list, the text and binary forms of the types, the configuration parameters, the time zone names and the PostgreSQL parser. Each part is lifted from tamnd/rudb at f5f7065a and checked against PostgreSQL 19 at the pin. No crate is published.
+
 ### Added
 
 - `rupg-wire`, the message codec of protocols 3.0 and 3.2 (spec/06 section 6.1). It is a copy of `rudb-pgwire` from tamnd/rudb at f5f7065a, and each file names its source. It has the startup packets, the frontend and backend messages, the SCRAM-SHA-256 messages and keys, the cancel keys, and the table of command tags. A test checks the table against the vendored `cmdtaglist.h`.
