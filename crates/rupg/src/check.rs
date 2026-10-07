@@ -89,8 +89,7 @@ pub fn check_on(platform: &Platform, path: &Path) -> Result<Report> {
     report.pages = allocated.len() as u64;
 
     let rec = Recovery::scan(&store)?;
-    for found in rec.safe() {
-        let block = rec.read(&store, found)?;
+    rec.for_each_safe(&store, |found, block| {
         for record in RecordReader::new(&block.body) {
             let record = record?;
             if !oids.contains_key(&record.table) {
@@ -102,7 +101,8 @@ pub fn check_on(platform: &Platform, path: &Path) -> Result<Report> {
         }
         report.log_blocks += 1;
         report.log_bytes += found.placed.end - found.placed.position;
-    }
+        Ok(())
+    })?;
     Ok(report)
 }
 

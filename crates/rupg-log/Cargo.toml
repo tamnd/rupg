@@ -17,6 +17,7 @@ publish = false
 rupg-buffer.workspace = true
 rupg-common.workspace = true
 rupg-file.workspace = true
+rupg-kernels.workspace = true
 
 [dev-dependencies]
 rupg-platform.workspace = true

@@ -206,6 +206,12 @@ impl<'p> View<'p> {
     }
 }
 
+/// Puts `bytes` into `v` at `at`. `Vec::splice` with a byte iterator copies one byte at a time, and this moves the tail with one copy.
+fn insert_bytes(v: &mut Vec<u8>, at: usize, bytes: &[u8]) {
+    v.extend_from_slice(bytes);
+    v[at..].rotate_right(bytes.len());
+}
+
 /// The values of one column, in row order.
 #[derive(Clone, Debug, Default)]
 struct Data {
@@ -235,12 +241,12 @@ impl Data {
             Width::Fixed(w) => {
                 let w = usize::from(w);
                 let zero = vec![0; w];
-                self.bytes.splice(w * i..w * i, value.unwrap_or(&zero).iter().copied());
+                insert_bytes(&mut self.bytes, w * i, value.unwrap_or(&zero));
             }
             Width::Variable => {
                 let start = if i == 0 { 0 } else { self.ends[i - 1] };
                 let value = value.unwrap_or(&[]);
-                self.bytes.splice(start..start, value.iter().copied());
+                insert_bytes(&mut self.bytes, start, value);
                 self.ends.insert(i, start);
                 for end in &mut self.ends[i..] {
                     *end += value.len();

@@ -195,3 +195,5 @@ These questions came up while the documents were written. They are closed, and t
 **Q71. Dates.** The documents give no dates. A forecast is possible after M2, when the time per milestone and the lines against the budgets of document 22 are measured. Raised by document 23. Closes at M2.
 
 **Q72. Facts not verified.** The numbers in "Moving on From Group Commit" (SIGMOD 2025) are not verified against the paper. The release that added self-join elimination to PostgreSQL is not confirmed. Raised by documents 01 and 15. Closes at M3.
+
+**Q73. The replay budget at M1.** Document 11 asks for 1 GB of log per second with 16 cores. At M1 every commit goes to ring 0 and replay is on one thread, at about 0.1 GiB per second, and most of the time is the decode and encode of a PAX page for each record. The options are to batch the records of one page before an encode, or to replay the rings in parallel when commits use more than one ring. Raised by document 11. Closes at M2.
