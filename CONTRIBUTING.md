@@ -17,11 +17,14 @@ cargo fmt --all --check
 cargo xtask layers
 cargo xtask style
 cargo xtask vendor --check
+cargo xtask grammar
 cargo clippy --workspace --all-targets --all-features
 cargo test --workspace --all-features
 ```
 
-`cargo xtask layers` checks the layer rule. `cargo xtask style` checks the `unsafe` rules and the writing rules. `cargo xtask vendor --check` checks the vendored files against their hashes.
+`cargo xtask layers` checks the layer rule. `cargo xtask style` checks the `unsafe` rules and the writing rules. `cargo xtask vendor --check` checks the vendored files against their hashes. `cargo xtask grammar` builds the LALR(1) tables of `gram.y` and `pl_gram.y` and fails if a grammar has more conflicts than its `%expect` allows.
+
+To compare the tables with bison, make a report with `bison -Dlr.default-reduction=accepting -v file.y` and run `cargo xtask grammar --compare file.y file.output`. The command matches the states by their kernel items and compares each shift, reduction, error action and goto.
 
 ## What a change must include
 
