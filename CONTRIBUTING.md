@@ -70,6 +70,14 @@ The spec, the README files, the issues and the comments use ASD-STE100 technical
 - We merge with squash. The pull request title becomes the commit subject.
 - The `ci` check must pass before a merge.
 
+## Making a release
+
+The version is `0.M.patch` (spec/23 section 23.17). The release at the close of milestone M is `0.M.0`. The releases between two closes are patch releases.
+
+1. In a pull request, run `cargo xtask version <x.y.z>`. It sets the version in `[workspace.package]`, each exact internal pin in `[workspace.dependencies]`, and `Cargo.lock`.
+2. In the same pull request, rename the "Unreleased" section of `CHANGELOG.md` to `## <x.y.z> (<date>)` and add a new empty "Unreleased" section above it.
+3. After the merge, tag the merge commit with `v<x.y.z>` and push the tag. The release workflow checks that the tag matches the workspace version and that the changelog has the section. Then it builds the binaries and publishes the GitHub release.
+
 ## Reporting a wrong answer
 
 Use the "Wrong answer" issue template. Give the schema, the data, the query, the rupg result and the PostgreSQL 19 result. A wrong answer has priority over all other work.
