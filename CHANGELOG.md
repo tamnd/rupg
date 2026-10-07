@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The status of each parameter (spec/06 section 6.13.2). rupg honors 29 parameters, accepts 392, and refuses some values of 4. A refused value fails with `0A000` and `rupg does not support parameter "%s" set to "%s"`, from `SET`, `BEGIN`, the startup packet, the command line or the configuration file. The refused values are `serializable` for `transaction_isolation` and `default_transaction_isolation`, `replica` for `session_replication_role`, and `on` for `ssl_sni`. `crates/rupg-session/tests/status.tsv` is the report.
+
 ### Fixed
 
 - The parameter table follows an oracle build with lz4 and zstd, as spec/05 and spec/09 say. `default_toast_compression` is `lz4` by default and also takes `lz4`, and `wal_compression` also takes `lz4` and `zstd`. `data_checksums` shows `on`, as spec/08 section 8.3 says.

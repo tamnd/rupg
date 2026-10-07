@@ -249,12 +249,6 @@ impl Server {
                 }
             }
         };
-        if base.get("ssl_sni").as_deref() == Some("on") {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "ssl_sni is not supported by this version of rupg",
-            ));
-        }
         let tls = tls::load(&base, &*io)?;
         let (hba, ident) = load_rules(config, &base, &*io, &write)?;
         let mut listeners = vec![listener];
