@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.2 (2026-10-07)
+
+The second patch release on the 0.0 line. It has the error type and the identifiers of `rupg-common`, the platform traits with their simulation, and the first part of the file format. No crate is published.
+
 ### Added
 
 - `Error` and `SqlState` in `rupg-common`. Each error has the SQLSTATE that PostgreSQL sends for the same cause. A test checks each constant against the `errcodes.txt` of the pin.
@@ -19,6 +23,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The text form of spec/08 section 8.14 for each of these blocks. It has one field on each line, sorted, and it parses back.
 - The SQLSTATE `22P02` for a text form that does not parse.
 - `clippy.toml` now rejects `std::fs`, `std::net`, `std::thread` and `RandomState::new` outside `rupg-platform`, as spec/22 section 22.1 requires. `xtask` allows them.
+
+### Fixed
+
+- The release workflow ran the Windows build in PowerShell, where `$TARGET` is not the environment variable, so the build had no target and failed. The step now runs in bash. Release 0.0.1 has no binaries for this reason.
+- `clippy.toml` named two Unix socket types that do not exist on Windows, and clippy warned on a Windows build. The two entries now allow this.
 
 ## 0.0.1 (2026-10-07)
 

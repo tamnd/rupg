@@ -73,6 +73,7 @@ jobs:
         with:
           persist-credentials: false
       - name: cargo build
+        shell: bash
         env:
           TARGET: ${{ matrix.target }}
         run: cargo build --release --locked --bin rupg --target "$TARGET"
