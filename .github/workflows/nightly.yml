@@ -83,6 +83,21 @@ jobs:
       - name: rupg --print-config
         run: cargo run --bin rupg -- --print-config
 
+  # T8 of spec/21 section 21.9: crash files from the M1 workload on the simulated disk. The per-change subset runs in cargo test. The 1 million file count of the M1 exit runs on request with a larger --files.
+  crash:
+    name: crash files
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # Each run starts at a new seed, so each night tries new crash files. The log gives the seed of a failure.
+      - name: cargo run rupg-crash
+        env:
+          RUN: ${{ github.run_number }}
+        run: cargo run --release -p rupg-crash -- --files 100000 --first-seed "$((RUN * 100000))"
+
   miri:
     name: miri
     runs-on: ubuntu-24.04

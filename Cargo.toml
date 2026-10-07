@@ -1,6 +1,6 @@
 [workspace]
 resolver = "3"
-members = ["crates/*", "xtask"]
+members = ["crates/*", "tests/crash", "xtask"]
 # The fuzz crate is a separate workspace. It needs the nightly toolchain. See spec/22-crate-layout.md section 22.2.
 exclude = ["fuzz"]
 
