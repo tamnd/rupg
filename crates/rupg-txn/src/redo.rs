@@ -2,7 +2,7 @@
 //!
 //! A commit writes one commit block with one record for each row that it changed. An insert holds every column, an update holds the columns that the transaction changed, and a delete holds no column. A row that the transaction added and then deleted has no record.
 //!
-//! Replay applies the records of the safe blocks in ring order. A record applies only if its commit timestamp is above the `stamp` of the row, so a block that is already in the pages changes nothing. An update or a delete of a row that is not there changes nothing too, because a delete removes the row and its stamp, and row ids are not used again. At M1 the pages of the hot store are not in the file yet, so replay starts from empty tables. The page timestamp test of section 11.15 comes with the checkpoint of the hot pages.
+//! Replay applies the records of the safe blocks in ring order. A record applies only if its commit timestamp is above the `stamp` of the row, so a block that is already in the pages changes nothing. An update or a delete of a row that is not there changes nothing too, because a delete removes the row and its stamp, and row ids are not used again. Replay starts from the pages of the last checkpoint. They hold the rows of each commit at or below the snapshot of the checkpoint and no other version (see `checkpoint.rs`), and the blocks after the redo position are all above that snapshot.
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
@@ -217,14 +217,16 @@ mod tests {
     use std::path::Path;
     use std::sync::atomic::{AtomicI64, Ordering};
 
-    use rupg_buffer::Checkpoint;
+    use std::sync::atomic::AtomicBool;
+
+    use rupg_buffer::{BufferPool, Checkpoint, PoolConfig, PoolMode};
     use rupg_common::{ShardId, SqlState};
+    use rupg_file::{PAGE_SIZE, PageId};
     use rupg_log::{Log, Ring};
     use rupg_platform::os::OsTasks;
     use rupg_platform::sim::{SimClock, SimIo, SimRng};
-    use rupg_platform::{File, Io, OpenMode, TaskHandle, Tasks};
+    use rupg_platform::{File, Io, MemoryPool, OpenMode, TaskHandle, Tasks};
     use rupg_table::{ColumnDef, TableDef};
-    use rupg_tree::MemPages;
     use rupg_types::{Datum, TypeId};
 
     use super::*;
@@ -269,13 +271,21 @@ mod tests {
         }
     }
 
-    /// A node: the file with its log, and one table in pages in memory. At M1 the hot pages are not in the file, so `base` keeps the rows that the last recovery made, as a checkpoint of the pages would.
+    /// A node: the file with its log and its pages, and one table. The root of the table stands in for the catalog, which comes later.
     struct Node {
         io: SimIo,
         file: Arc<Cut>,
+        store: Arc<FileStore>,
+        frames: u64,
+        root: PageId,
         table: Arc<Table>,
-        txns: Arc<Transactions<MemPages>>,
-        base: Vec<Row>,
+        txns: Arc<Transactions<BufferPool>>,
+    }
+
+    impl Node {
+        fn checkpoint(&self) -> Result<Hlc> {
+            self.txns.checkpoint(&self.store, &Checkpoint::default())
+        }
     }
 
     fn def() -> TableDef {
@@ -290,87 +300,94 @@ mod tests {
         Arc::new(Cut { inner, left: AtomicI64::new(i64::MAX) })
     }
 
+    /// A pool of `frames` pages over `store`.
+    fn pool(store: &Arc<FileStore>, frames: u64) -> Arc<BufferPool> {
+        let memory = MemoryPool::new(64 << 20);
+        let config = PoolConfig {
+            shared_buffers: frames * PAGE_SIZE as u64,
+            mode: Some(PoolMode::Table),
+            window_pages: None,
+        };
+        BufferPool::new(store.clone(), &memory, config).unwrap()
+    }
+
+    #[allow(clippy::too_many_arguments)]
     fn start(
         io: SimIo,
         file: Arc<Cut>,
+        store: Arc<FileStore>,
         log: Log,
-        pages: Arc<MemPages>,
+        frames: u64,
         table: Arc<Table>,
         floor: Hlc,
         xid: Xid,
     ) -> Node {
-        let mut base = Vec::new();
-        table
-            .hot()
-            .scan(&*pages, RowId::from_bits(0), |row| {
-                base.push(row);
-                Ok(true)
-            })
-            .unwrap();
+        let pool = pool(&store, frames);
         let wall = Arc::new(SimClock::new(Hlc::EPOCH_UNIX_MS + 1_000));
-        let txns = Transactions::new(pages, HlcClock::new(wall, floor), xid);
-        Node { io, file, table, txns: Arc::new(txns.with_log(Arc::new(log))), base }
+        let txns = Transactions::new(pool, HlcClock::new(wall, floor), xid);
+        let txns = Arc::new(txns.with_log(Arc::new(log)));
+        txns.filter_writes().unwrap();
+        Node { io, file, store, frames, root: table.root(), table, txns }
     }
 
-    /// Empty pages with the rows of `base`.
-    fn pages(base: &[Row]) -> (Arc<MemPages>, Arc<Table>) {
-        let pages = Arc::new(MemPages::new(20_000));
-        let table = Arc::new(Table::create(&*pages, def(), ShardId(0)).unwrap());
-        for row in base {
-            table.hot().insert(&*pages, table.def().schema(), row).unwrap();
-            table.saw(row.id);
-        }
-        (pages, table)
-    }
-
-    fn create(seed: u64) -> Node {
+    /// A new file with an empty table in a pool of `frames` pages.
+    fn create(seed: u64, frames: u64) -> Node {
         let io = SimIo::new(seed);
         let file = file(&io, OpenMode::CreateNew);
         let store = Arc::new(FileStore::create(file.clone(), [5; 16], Hlc::ZERO).unwrap());
         let ring = Ring::create(store.clone(), 0, 0, 1).unwrap();
-        store
-            .checkpoint(&Checkpoint { rings: vec![ring.state()], ..Checkpoint::default() })
-            .unwrap();
-        let (pages, table) = pages(&[]);
-        start(io, file, Log::new(vec![ring]).unwrap(), pages, table, Hlc::ZERO, Xid::FIRST)
+        let log = Log::new(vec![ring]).unwrap();
+        // The table is made in its own pool, which is written before the node starts.
+        let pages = pool(&store, frames);
+        let table = Arc::new(Table::create(&*pages, def(), ShardId(0)).unwrap());
+        pages.flush_all().unwrap();
+        drop(pages);
+        let node = start(io, file, store, log, frames, table, Hlc::ZERO, Xid::FIRST);
+        node.checkpoint().unwrap();
+        node
     }
 
-    /// Cuts the power, opens the file again and replays the log into the pages of the last recovery. A second replay finds each change in the pages and changes nothing.
-    fn recover(node: Node) -> (Node, Replayed) {
-        let Node { io, base, .. } = node;
-        io.crash_random().unwrap();
-        let file = file(&io, OpenMode::ReadWrite);
-        let store = Arc::new(FileStore::open(file.clone()).unwrap());
-        let rec = Recovery::scan(&store).unwrap();
-        let (pages, table) = pages(&base);
-        let tables = |oid| (oid == table.def().oid()).then(|| table.clone());
-        let done = replay(&*pages, &store, &rec, &tables).unwrap();
-        let mut after = Vec::new();
+    fn stored(table: &Table, pages: &BufferPool) -> Vec<Row> {
+        let mut out = Vec::new();
         table
             .hot()
-            .scan(&*pages, RowId::from_bits(0), |row| {
-                after.push(row);
+            .scan(pages, RowId::from_bits(0), |row| {
+                out.push(row);
                 Ok(true)
             })
             .unwrap();
+        out
+    }
+
+    /// Cuts the power, opens the file again and replays the log into the pages of the last checkpoint. A second replay finds each change in the pages and changes nothing.
+    fn recover(node: Node) -> (Node, Replayed) {
+        let Node { io, frames, root, .. } = node;
+        io.crash_random().unwrap();
+        let file = file(&io, OpenMode::ReadWrite);
+        let store = Arc::new(FileStore::open(file.clone()).unwrap());
+        let pages = pool(&store, frames);
+        let table = Arc::new(Table::open(def(), ShardId(0), root, 0));
+        let before = stored(&table, &pages);
+        assert!(before.iter().all(|row| row.header.owner().is_none()));
+        if let Some(last) = before.last() {
+            table.saw(last.id);
+        }
+        let rec = Recovery::scan(&store).unwrap();
+        let tables = |oid| (oid == table.def().oid()).then(|| table.clone());
+        let done = replay(&*pages, &store, &rec, &tables).unwrap();
+        let after = stored(&table, &pages);
         let again = replay(&*pages, &store, &rec, &tables).unwrap();
         assert_eq!(
             (again.commits, again.applied + again.skipped),
             (done.commits, done.applied + done.skipped)
         );
-        let mut twice = Vec::new();
-        table
-            .hot()
-            .scan(&*pages, RowId::from_bits(0), |row| {
-                twice.push(row);
-                Ok(true)
-            })
-            .unwrap();
-        assert_eq!(twice, after);
+        assert_eq!(stored(&table, &pages), after);
+        pages.flush_all().unwrap();
+        drop(pages);
         let c = Checkpoint { timestamp: done.newest, ..Checkpoint::default() };
-        let log = rec.finish(store, &c).unwrap();
+        let log = rec.finish(store.clone(), &c).unwrap();
         let xid = done.next_xid.unwrap_or(Xid::FIRST);
-        (start(io, file, log, pages, table, done.newest, xid), done)
+        (start(io, file, store, log, frames, table, done.newest, xid), done)
     }
 
     fn rows(node: &Node) -> Rows {
@@ -392,12 +409,12 @@ mod tests {
         vec![Datum::Int8(7), value(), value()]
     }
 
-    /// One random transaction on `node`. A commit moves `model` on. A commit that fails gives the rows that it would have made.
+    /// One random transaction on `node`. A commit moves `model` on. Some transactions take a checkpoint before they end. A commit that fails gives the rows that it would have made. A checkpoint that fails gives `None`.
     fn transaction(
         node: &Node,
         rng: &mut SimRng,
         model: &mut Rows,
-    ) -> std::result::Result<(), Rows> {
+    ) -> std::result::Result<(), Option<Rows>> {
         let table = &node.table;
         let mut next = model.clone();
         let mut t = node.txns.begin(Isolation::ReadCommitted);
@@ -422,6 +439,9 @@ mod tests {
             }
             t.next_command().unwrap();
         }
+        if rng.below(12) == 0 && node.checkpoint().is_err() {
+            return Err(None);
+        }
         if rng.below(7) == 0 {
             t.rollback().unwrap();
             return Ok(());
@@ -433,16 +453,17 @@ mod tests {
             }
             Err(e) => {
                 assert_eq!(e.state(), SqlState::IO_ERROR, "{e}");
-                Err(next)
+                Err(Some(next))
             }
         }
     }
 
+    /// Random transactions with checkpoints, and a cut of the file at a random write or sync. The checkpoints come between transactions and while a transaction has rows that are not committed.
     #[test]
     fn a_crash_keeps_each_acknowledged_commit() {
-        let (mut lost, mut kept, mut commits) = (0, 0, 0);
+        let (mut lost, mut kept, mut commits, mut checkpoints) = (0, 0, 0, 0);
         for seed in 0..10u64 {
-            let mut node = create(seed);
+            let mut node = create(seed, 64);
             let mut rng = SimRng::new(seed + 50);
             let mut model = Rows::new();
             for round in 0..6 {
@@ -450,8 +471,14 @@ mod tests {
                 let mut unknown = None;
                 for _ in 0..60 {
                     if let Err(next) = transaction(&node, &mut rng, &mut model) {
-                        unknown = Some(next);
+                        unknown = next;
                         break;
+                    }
+                    if rng.below(10) == 0 {
+                        if node.checkpoint().is_err() {
+                            break;
+                        }
+                        checkpoints += 1;
                     }
                 }
                 let (back, done) = recover(node);
@@ -472,13 +499,76 @@ mod tests {
                 t.rollback().unwrap();
             }
         }
-        assert!(lost > 0 && kept > 0 && commits > 1_000, "{lost} {kept} {commits}");
+        assert!(
+            lost > 0 && kept > 0 && commits > 100 && checkpoints > 100,
+            "{lost} {kept} {commits} {checkpoints}"
+        );
     }
 
-    /// Writers on 4 threads commit at the same time. The blocks are in timestamp order in the ring, and replay gives the same rows.
+    /// A pool of 16 pages holds a table of more pages, so the clock writes pages while transactions are open. Each open transaction changes rows in a few leaves only, because the clock cannot evict a leaf with rows that are not committed. A checkpoint while a transaction is open writes no row of it, and recovery gives the rows of the commits.
+    #[test]
+    fn the_file_holds_no_row_that_is_not_committed() {
+        let node = create(5, 16);
+        let table = &node.table;
+        let mut rng = SimRng::new(5);
+        let mut model = Rows::new();
+        for _ in 0..8 {
+            let mut t = node.txns.begin(Isolation::ReadCommitted);
+            for _ in 0..1_000 {
+                let v = values(&mut rng);
+                model.insert(t.insert(table, &v).unwrap(), v);
+            }
+            t.commit().unwrap();
+        }
+        let ids: Vec<RowId> = model.keys().copied().collect();
+        // The open transaction changes the rows of the first leaves and adds rows to the last leaf.
+        let mut open = node.txns.begin(Isolation::ReadCommitted);
+        let mut later = model.clone();
+        for &id in ids.iter().take(300).step_by(3) {
+            if rng.below(2) == 0 {
+                let v = values(&mut rng);
+                assert!(open.update(table, id, &v).unwrap());
+                later.insert(id, v);
+            } else {
+                assert!(open.delete(table, id).unwrap());
+                later.remove(&id);
+            }
+        }
+        for _ in 0..50 {
+            let v = values(&mut rng);
+            later.insert(open.insert(table, &v).unwrap(), v);
+        }
+        let mut t = node.txns.begin(Isolation::ReadCommitted);
+        for &id in ids.iter().skip(4_000).step_by(31).take(20) {
+            let v = values(&mut rng);
+            assert!(t.update(table, id, &v).unwrap());
+            model.insert(id, v.clone());
+            later.insert(id, v);
+        }
+        t.commit().unwrap();
+        assert_eq!(rows(&node), model);
+        assert!(node.txns.pages().stats().evictions > 20);
+        node.checkpoint().unwrap();
+
+        // After the checkpoint, one transaction commits and the open one commits too.
+        let mut t = node.txns.begin(Isolation::ReadCommitted);
+        for &id in ids.iter().skip(6_000).step_by(31).take(20) {
+            let v = values(&mut rng);
+            assert!(t.update(table, id, &v).unwrap());
+            later.insert(id, v);
+        }
+        t.commit().unwrap();
+        open.commit().unwrap();
+        assert_eq!(rows(&node), later);
+        let (node, done) = recover(node);
+        assert_eq!(rows(&node), later);
+        assert_eq!((done.commits, done.skipped), (2, 0));
+    }
+
+    /// Writers on 4 threads commit at the same time, and a fifth thread takes checkpoints. The blocks are in timestamp order in the ring, and the pages of the last checkpoint with the blocks after it give the same rows.
     #[test]
     fn replay_gives_the_rows_of_concurrent_commits() {
-        let node = create(77);
+        let node = create(77, 64);
         let mut t = node.txns.begin(Isolation::ReadCommitted);
         let ids: Arc<Vec<RowId>> = Arc::new(
             (0..30)
@@ -530,12 +620,28 @@ mod tests {
                 OsTasks.spawn(&format!("writer {n}"), task).unwrap()
             })
             .collect();
+        let stop = Arc::new(AtomicBool::new(false));
+        let checkpoints = Arc::new(AtomicI64::new(0));
+        let checkpointer = {
+            let (txns, store) = (node.txns.clone(), node.store.clone());
+            let (stop, checkpoints) = (stop.clone(), checkpoints.clone());
+            let task = Box::new(move || {
+                while !stop.load(Ordering::Acquire) {
+                    txns.checkpoint(&store, &Checkpoint::default()).unwrap();
+                    checkpoints.fetch_add(1, Ordering::Relaxed);
+                }
+            });
+            OsTasks.spawn("checkpoints", task).unwrap()
+        };
         for h in handles {
             h.join().unwrap();
         }
+        stop.store(true, Ordering::Release);
+        checkpointer.join().unwrap();
         let before = rows(&node);
         let (node, done) = recover(node);
         assert_eq!(rows(&node), before);
-        assert_eq!((done.commits, done.skipped), (601, 0));
+        assert!(checkpoints.load(Ordering::Relaxed) > 0);
+        assert!(done.commits < 601 && done.skipped == 0, "{done:?}");
     }
 }

@@ -4,9 +4,10 @@
 //!
 //! This is the first MVCC of M1. The slot of an owner is its transaction id, which the node does not use again. `READ COMMITTED` and `REPEATABLE READ` are here. `SERIALIZABLE`, savepoints, row locks with `FOR UPDATE` and the precise cleanup rule come later. With a log, each commit writes one commit block (see `redo.rs`). At M1, cleanup removes the undo of a commit when every snapshot sees that commit (section 11.4.3 has the M1 note).
 
-use std::collections::{BTreeMap, BTreeSet};
+use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use std::fmt;
-use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
+use std::sync::atomic::AtomicU64;
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError, RwLock, RwLockReadGuard};
 
 use rupg_common::{Error, Hlc, Oid, Result, RowId, SqlState, Xid};
 use rupg_file::PageAccess;
@@ -33,7 +34,7 @@ pub enum Isolation {
 const STRIPES: usize = 64;
 
 /// The log ring of each commit. At M1 every commit goes to ring 0. A ring for each worker comes with the workers.
-const RING: u16 = 0;
+pub(crate) const RING: u16 = 0;
 
 /// The most times that a reader reads a row again because a rollback removed an undo record under it.
 const RETRIES: usize = 1_000;
@@ -48,7 +49,13 @@ pub struct Transactions<P> {
     stripes: Vec<Mutex<()>>,
     log: Option<Arc<Log>>,
     /// A commit holds it while it takes its timestamp and places its block, so the blocks in a ring are in timestamp order (spec/11 section 11.14.2).
-    gate: Mutex<()>,
+    pub(crate) gate: Mutex<()>,
+    /// The commit timestamp and the end of each block in the ring that is after the redo position, in ring order. A commit adds to it under the gate.
+    pub(crate) placed: Mutex<VecDeque<(Hlc, u64)>>,
+    /// Each change to the pages holds it shared. A checkpoint holds it exclusive, so the pages do not change while it writes them.
+    pub(crate) quiet: RwLock<()>,
+    /// The snapshot of the checkpoint that runs now, or 0. The page filter writes the versions of this snapshot.
+    pub(crate) filter_at: AtomicU64,
 }
 
 impl<P> fmt::Debug for Transactions<P> {
@@ -112,6 +119,9 @@ impl<P: PageAccess> Transactions<P> {
             stripes: (0..STRIPES).map(|_| Mutex::new(())).collect(),
             log: None,
             gate: Mutex::new(()),
+            placed: Mutex::new(VecDeque::new()),
+            quiet: RwLock::new(()),
+            filter_at: AtomicU64::new(0),
         }
     }
 
@@ -155,6 +165,38 @@ impl<P: PageAccess> Transactions<P> {
 
     fn lock(&self) -> MutexGuard<'_, State> {
         self.state.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Takes the gate that a checkpoint closes. A thread that holds a row latch takes the row latch first, and a commit takes this before the commit gate.
+    fn quiet(&self) -> RwLockReadGuard<'_, ()> {
+        self.quiet.read().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// Takes a snapshot that cleanup respects until [`Transactions::release`].
+    pub(crate) fn hold(&self) -> Hlc {
+        self.lock().take_snapshot(&self.commits)
+    }
+
+    /// Drops a snapshot from [`Transactions::hold`].
+    pub(crate) fn release(&self, s: Hlc) {
+        self.lock().drop_snapshot(s);
+    }
+
+    /// The version of `row` that a snapshot at `s` sees, as stored in a page, or `None` if no version is visible at `s`. The undo records that it needs must stay, so `s` must be a snapshot that cleanup respects. A deleted version stays, so that cleanup removes the row later.
+    pub(crate) fn version_at(&self, mut row: Row, s: Hlc) -> Result<Option<Row>> {
+        while row.header.owner().is_some() || Hlc::from_bits(row.header.stamp) > s {
+            let record = self.undo.get(row.header.undo).ok_or_else(|| {
+                Error::internal(format!(
+                    "the undo record {} of the row {} is missing",
+                    row.header.undo, row.id
+                ))
+            })?;
+            match record.undo(row) {
+                Some(older) => row = older,
+                None => return Ok(None),
+            }
+        }
+        Ok(Some(row))
     }
 
     fn latch(&self, table: &Table, id: RowId) -> MutexGuard<'_, ()> {
@@ -227,6 +269,7 @@ impl<P: PageAccess> Transactions<P> {
         for (ts, kept) in gone {
             for (table, id) in kept.deleted {
                 let _latch = self.latch(&table, id);
+                let _quiet = self.quiet();
                 let Some(row) = table.hot().get(&*self.pages, id)? else { continue };
                 if row.header.stamp == ts.bits() && row.header.flags & VersionHeader::DELETED != 0 {
                     table.hot().remove(&*self.pages, id)?;
@@ -421,7 +464,10 @@ impl<P: PageAccess> Transaction<P> {
         };
         let undo = self.owner.undo.add(Record::of(xid, self.cid, &row, Change::Insert))?;
         row.header.undo = undo;
-        if let Err(e) = table.hot().insert(&*self.owner.pages, table.def().schema(), &row) {
+        let quiet = self.owner.quiet();
+        let inserted = table.hot().insert(&*self.owner.pages, table.def().schema(), &row);
+        drop(quiet);
+        if let Err(e) = inserted {
             self.owner.undo.remove(&[undo]);
             return Err(e);
         }
@@ -453,6 +499,7 @@ impl<P: PageAccess> Transaction<P> {
         let pages = &*owner.pages;
         loop {
             let latch = owner.latch(table, id);
+            let quiet = owner.quiet();
             let Some(row) = table.hot().get(pages, id)? else { return Ok(false) };
             match row.header.owner() {
                 Some(o) if o == xid.bits() => {
@@ -464,6 +511,7 @@ impl<P: PageAccess> Transaction<P> {
                     }
                 }
                 Some(o) => {
+                    drop(quiet);
                     drop(latch);
                     let other = Xid::from_bits(o).ok_or_else(|| {
                         Error::corrupted(format!("the row {id} has the owner {o}"))
@@ -536,11 +584,13 @@ impl<P: PageAccess> Transaction<P> {
         };
         let owner = self.owner.clone();
         let body = owner.log.as_ref().map(|_| self.body()).transpose();
+        let quiet = owner.quiet();
         let gate = owner.gate.lock().unwrap_or_else(PoisonError::into_inner);
         let (ts, body) = match body.and_then(|body| Ok((owner.commits.begin()?, body))) {
             Ok(begun) => begun,
             Err(e) => {
                 drop(gate);
+                drop(quiet);
                 return self.fail(xid, None, e);
             }
         };
@@ -555,11 +605,14 @@ impl<P: PageAccess> Transaction<P> {
                     deps: Vec::new(),
                     body,
                 };
-                log.append(RING, &mut block).map(|p| Some(p.end))
+                let end = log.append(RING, &mut block)?.end;
+                owner.placed.lock().unwrap_or_else(PoisonError::into_inner).push_back((ts, end));
+                Ok(Some(end))
             }
             _ => Ok(None),
         });
         drop(gate);
+        drop(quiet);
         let placed = match placed {
             Ok(placed) => placed,
             Err(e) => return self.fail(xid, Some(ts), e),
@@ -643,6 +696,7 @@ impl<P: PageAccess> Transaction<P> {
     fn undo_all(&mut self) -> Result<()> {
         let pages = &*self.owner.pages;
         let writes = std::mem::take(&mut self.writes);
+        let _quiet = self.owner.quiet();
         for w in writes.iter().rev() {
             let record = self.owner.undo.get(w.undo).ok_or_else(|| {
                 Error::internal(format!("the undo record of the row {} is missing", w.id))

@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - Each commit with a change now writes one commit block to the log and returns when the block is safe. `Transactions::with_log` sets the log. The block holds one record for each row that the transaction changed: every column for an insert, the changed columns for an update, and no column for a delete. `replay` applies the safe blocks of a `Recovery` to the tables and gives the newest timestamp and the next transaction id. A record applies only if its commit timestamp is above the `stamp` of its row, so a second replay changes nothing. Spec/11 section 11.16 has the M1 note.
+- The hot pages are now in the file. `BufferPool::set_filter` sets a `PageFilter` that changes the copy of each page before the pool writes it, and `BufferPool::flush_all` writes every dirty page and waits for pages that a writer holds. `Transactions::filter_writes` sets the filter that writes only the versions that `visible` sees, so no version that is not committed or not safe goes to the file. `Transactions::checkpoint` stops the changes to the pages, writes them with the versions of one snapshot, moves the redo position of the ring past each block at or below that snapshot and writes the checkpoint. Recovery replays the log into the pages of the last checkpoint. `rewrite_leaf` in `rupg-hot` rewrites the rows of a hot leaf. Spec/11 section 11.15 has the M1 note.
 
 ## 0.0.7 (2026-10-07)
 

@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod checkpoint;
 mod clock;
 mod redo;
 mod txn;
