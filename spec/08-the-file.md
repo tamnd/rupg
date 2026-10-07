@@ -362,6 +362,8 @@ A physical page or extent goes through three states: allocated, pending free, an
 
 **The pending free list is a chain of pages of kind 17.** The header slot names the first page. Each page holds its physical page number in the logical page field, as a page table node does. The kind data holds the count of numbers at bytes 8 and 9 and the next page at bytes 16 to 23, in the format of a page table entry. After the header, the page holds up to 2,040 physical page numbers of 8 bytes in increasing order. A read checks that each number is in an arena and that the numbers increase, so a damaged page gives `XX001` and not a wrong free page. Open reads the list of the slot that it chooses, and these pages stay in use until the next checkpoint.
 
+**The file does not store the free logical page numbers.** Open finds them as the numbers below the next logical page number of the slot that have an empty page table entry. The checkpoint runs after the buffer pool writes its dirty pages, so a number with an empty entry at a checkpoint was released, or it was allocated and never written. Both are free after open.
+
 ### 8.9.3 Growth and shrink
 
 **The file grows by whole arenas.** When no arena of the needed kind has space, the file grows by the larger of one arena and one eighth of its size, rounded to arenas. On Linux the growth uses `fallocate`. On macOS it uses `fcntl` with `F_PREALLOCATE`. Growth by a fraction of the size keeps the number of growth calls logarithmic in the final size. The new length is recorded at the next checkpoint. If the disk is full, the statement that needed the space fails with SQLSTATE `53100`, as document 04 section 4.8 requires.
