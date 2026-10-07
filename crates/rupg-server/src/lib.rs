@@ -1,6 +1,6 @@
 //! The listener, TLS, authentication, `pg_hba.conf`, the task per connection, cancel.
 //!
-//! The server accepts connections, reads the startup packet, checks the user and the database, and gives the rest of the connection to [`rupg_session::connection::Connection`]. It owns the process IDs and the cancel keys of the sessions. The main loop of a session is in `rupg-session` (spec/06 section 6.1).
+//! The server accepts connections, reads the startup packet, checks the user and the database, and gives the rest of the connection to [`rupg_session::connection::Connection`]. It owns the process IDs and the cancel keys of the sessions. A `CancelRequest` with a good key sets the cancel flag of the session, and the session checks the flag where PostgreSQL calls `CHECK_FOR_INTERRUPTS`. The main loop of a session is in `rupg-session` (spec/06 section 6.1).
 //!
 //! At this step each connection has its own task. The server checks each connection with the rules of `pg_hba.conf` and the methods of spec/06 section 6.7. With the feature `tls` and the setting `ssl`, a TCP connection can start TLS with an `SSLRequest` or with direct TLS (spec/06 sections 6.5 and 6.6). The workers of spec/06 section 6.2 come later in M2.
 //!
@@ -123,8 +123,8 @@ struct Shared {
     iterations: i32,
     log: Option<Arc<dyn Log>>,
     entropy: Arc<dyn Entropy>,
-    /// The cancel key of each session, by process ID.
-    keys: Mutex<BTreeMap<i32, CancelKey>>,
+    /// The cancel key and the cancel flag of each session, by process ID.
+    keys: Mutex<BTreeMap<i32, Live>>,
     stopping: AtomicBool,
 }
 
@@ -569,8 +569,17 @@ fn startup(shared: &Shared, wire: &mut Wire) -> Option<(Start, u32)> {
             }
             Ok(Step::Cancel(cancel)) => {
                 let keys = lock(&shared.keys);
-                // A session runs a statement only for a short time and checks for no cancel yet, so a good request has nothing to stop.
-                let _ = cancel_target(&cancel, |pid| keys.get(&pid).copied());
+                match cancel_target(&cancel, |pid| keys.get(&pid).map(|live| live.key)) {
+                    Ok(pid) => {
+                        if let Some(live) = keys.get(&pid) {
+                            live.cancel.store(true, Ordering::Relaxed);
+                        }
+                    }
+                    Err(text) => {
+                        drop(keys);
+                        shared.log("LOG", &text);
+                    }
+                }
                 Err(None)
             }
             Ok(Step::Start(request)) => Ok((
@@ -671,6 +680,14 @@ fn admit(shared: &Shared, start: &Start) -> std::result::Result<(), Error> {
     }
 }
 
+/// A session in the cancel registry.
+#[derive(Debug)]
+struct Live {
+    key: CancelKey,
+    /// The flag of [`Connection::cancel_flag`]. A `CancelRequest` with the key sets it, and the session checks it as `CHECK_FOR_INTERRUPTS` does.
+    cancel: Arc<AtomicBool>,
+}
+
 /// Removes the cancel key of a session when the session ends.
 struct Registered<'a> {
     shared: &'a Shared,
@@ -683,8 +700,12 @@ impl Drop for Registered<'_> {
     }
 }
 
-/// Gives the session a process ID that no other session has, and a random cancel key.
-fn register(shared: &Shared, protocol: u32) -> (Registered<'_>, CancelKey) {
+/// Gives the session a process ID that no other session has, and a random cancel key. A `CancelRequest` with the key sets `cancel`.
+fn register(
+    shared: &Shared,
+    protocol: u32,
+    cancel: Arc<AtomicBool>,
+) -> (Registered<'_>, CancelKey) {
     let mut keys = lock(&shared.keys);
     let span = u64::try_from(i32::MAX - FIRST_PID).unwrap_or(1);
     loop {
@@ -695,7 +716,7 @@ fn register(shared: &Shared, protocol: u32) -> (Registered<'_>, CancelKey) {
         let mut random = [0; CANCEL_KEY_LEN];
         shared.entropy.fill(&mut random);
         let key = CancelKey::new(pid, protocol, random);
-        keys.insert(pid, key);
+        keys.insert(pid, Live { key, cancel });
         return (Registered { shared, pid }, key);
     }
 }
@@ -725,8 +746,8 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         let warning = Error::new(SqlState::WARNING, notice.message).with_detail(notice.detail);
         connection::write_error(&mut wire.out, "WARNING", &warning, None, true);
     }
-    let (_registered, key) = register(shared, protocol);
     let mut connection = Connection::new(start, settings, protocol);
+    let (_registered, key) = register(shared, protocol, connection.cancel_flag());
     connection.greet(&key, &mut wire.out);
     loop {
         let step = connection.step(&wire.input[wire.at..], &mut wire.out);
