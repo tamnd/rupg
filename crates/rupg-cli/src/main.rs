@@ -5,8 +5,19 @@
 #![forbid(unsafe_code)]
 
 use std::process::ExitCode;
+use std::sync::Arc;
 
-const USAGE: &str = "usage: rupg [--version | --print-config | --help | check FILE | serve [--listen ADDR] [-c name=value]...]";
+const USAGE: &str = "usage: rupg [--version | --print-config | --help | check FILE | serve [--listen ADDR] [--pwfile FILE] [-c name=value]...]";
+
+/// The server log on the standard error, one message after the other, as PostgreSQL writes it with `log_destination = stderr`.
+#[derive(Debug)]
+struct Stderr;
+
+impl rupg::server::Log for Stderr {
+    fn write(&self, severity: &str, text: &str) {
+        eprintln!("{severity}:  {text}");
+    }
+}
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -69,14 +80,21 @@ fn check(file: &str) -> ExitCode {
     }
 }
 
-/// The options of `rupg serve`: `--listen ADDR`, and `-c name=value` for each setting, as `postgres -c` takes them.
+/// The options of `rupg serve`: `--listen ADDR`, `--pwfile FILE` with the password of the superuser, and `-c name=value` for each setting, as `postgres -c` takes them.
 fn serve_config(args: &[String]) -> Result<rupg::server::Config, String> {
-    let mut config = rupg::server::Config::default();
+    let mut config = rupg::server::Config { log: Some(Arc::new(Stderr)), ..Default::default() };
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let setting = match arg.as_str() {
             "--listen" => {
                 config.listen = args.next().ok_or("--listen requires an address")?.clone();
+                continue;
+            }
+            "--pwfile" => {
+                let file = args.next().ok_or("--pwfile requires a file")?;
+                let password =
+                    rupg::server::read_password(file).map_err(|e| e.message().to_owned())?;
+                config.password = Some(password);
                 continue;
             }
             "-c" => args.next().ok_or("-c requires a value")?.as_str(),
@@ -91,7 +109,16 @@ fn serve_config(args: &[String]) -> Result<rupg::server::Config, String> {
         };
         let (name, value) =
             setting.split_once('=').ok_or(format!("-c {setting} requires a value"))?;
-        config.settings.push((name.replace('-', "_"), value.to_owned()));
+        let name = name.replace('-', "_");
+        // PostgreSQL reads a relative path of a file setting from its data directory. rupg has no data directory yet, so the path is relative to the current directory.
+        let value = match name.as_str() {
+            "hba_file" | "ident_file" if !value.is_empty() => std::path::absolute(value)
+                .map_err(|e| format!("could not find the absolute path of \"{value}\": {e}"))?
+                .to_string_lossy()
+                .into_owned(),
+            _ => value.to_owned(),
+        };
+        config.settings.push((name, value));
     }
     Ok(config)
 }

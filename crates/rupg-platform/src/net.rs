@@ -2,8 +2,9 @@
 
 use std::fmt;
 use std::io::{Read, Write};
+use std::net::IpAddr;
 
-use rupg_common::Result;
+use rupg_common::{Error, Result, SqlState};
 
 /// The network.
 ///
@@ -16,6 +17,35 @@ pub trait Net: Send + Sync + fmt::Debug {
 
     /// Connects to an address. It is an error with SQLSTATE `08001` if no one listens there.
     fn connect(&self, addr: &str) -> Result<Box<dyn Stream>>;
+
+    /// The address of each network interface of this machine, with its mask. `samehost` and `samenet` of `pg_hba.conf` use them. A network without interfaces gives none.
+    ///
+    /// # Errors
+    ///
+    /// The system cannot list them. The message is the text of the system.
+    fn interfaces(&self) -> Result<Vec<(IpAddr, IpAddr)>> {
+        Ok(Vec::new())
+    }
+
+    /// The host name of an address, from a reverse lookup that requires a name.
+    ///
+    /// # Errors
+    ///
+    /// The lookup fails. The message is the text of `gai_strerror`.
+    fn host_name(&self, ip: IpAddr) -> Result<String> {
+        let _ = ip;
+        Err(Error::new(SqlState::CONNECTION_EXCEPTION, "Name or service not known"))
+    }
+
+    /// The addresses of a host name, from a forward lookup.
+    ///
+    /// # Errors
+    ///
+    /// The lookup fails. The message is the text of `gai_strerror`.
+    fn host_addresses(&self, name: &str) -> Result<Vec<IpAddr>> {
+        let _ = name;
+        Err(Error::new(SqlState::CONNECTION_EXCEPTION, "Name or service not known"))
+    }
 }
 
 /// A socket that accepts connections.
@@ -46,6 +76,6 @@ pub trait Stream: Read + Write + Send + fmt::Debug {
     ///
     /// The connection is not a Unix socket, or the system cannot give the user.
     fn peer_user(&self) -> Result<String> {
-        Err(rupg_common::Error::internal("the connection is not a Unix socket"))
+        Err(Error::internal("the connection is not a Unix socket"))
     }
 }

@@ -77,8 +77,12 @@ impl Net for SimNet {
         let listener = state.listeners.get(addr).ok_or_else(refused)?.clone();
         state.next_client += 1;
         let local = addr.starts_with('/');
-        let client =
-            if local { "[local]".to_string() } else { format!("sim-client:{}", state.next_client) };
+        // A TCP client has a loopback address with a port for each connection, so the host rules of the server can match it.
+        let client = if local {
+            "[local]".to_string()
+        } else {
+            format!("127.0.0.1:{}", 1024 + state.next_client % 64_000)
+        };
         let (to_server, from_client) = channel();
         let (to_client, from_server) = channel();
         let mut server_end = SimStream::new(to_client, from_client, client);
@@ -206,7 +210,7 @@ mod tests {
         assert!(net.listen(&addr).is_err());
         let mut client = net.connect(&addr).unwrap();
         let mut server = listener.accept().unwrap();
-        assert_eq!(server.peer_addr(), "sim-client:1");
+        assert_eq!(server.peer_addr(), "127.0.0.1:1025");
         assert_eq!(client.peer_addr(), "db:40000");
 
         client.write_all(b"hello").unwrap();

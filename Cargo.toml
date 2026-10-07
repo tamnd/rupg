@@ -65,6 +65,11 @@ rupg-wire = { version = "=0.0.12", path = "crates/rupg-wire" }
 # Outside crates. Each one is in the table of spec/22-crate-layout.md section 22.5.
 # libc: the system calls of rupg-platform on Unix, for example F_FULLFSYNC and getentropy.
 libc = "0.2"
+# sha2, hmac, pbkdf2, md-5: SCRAM-SHA-256 and MD5 passwords in rupg-wire. See spec/22-crate-layout.md section 22.5.
+hmac = "0.13"
+md-5 = "0.11"
+pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
+sha2 = { version = "0.11", default-features = false }
 # loom: the tests of the latches and the log rings under every interleaving, a development dependency only. See spec/21-testing.md section 21.11.
 loom = "0.7"
 
