@@ -61,7 +61,10 @@ mod tests {
 
     #[test]
     fn round_trip() {
-        for data in [&b""[..], b"f", b"fo", b"foo", b"foob", b"fooba", b"foobar"] {
+        // The prefixes of "foobar" are the test vectors of RFC 4648 section 10.
+        let all = b"foobar";
+        for n in 0..=all.len() {
+            let data = &all[..n];
             assert_eq!(decode(encode(data).as_bytes()).as_deref(), Some(data));
         }
         assert_eq!(encode(b"n,,"), "biws");

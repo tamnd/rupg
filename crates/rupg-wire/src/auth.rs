@@ -878,8 +878,8 @@ mod tests {
              channel binding data."
         );
         assert_eq!(
-            tls(b"p=tls-unique-and-a-very-long-name\x01,,n=,r=a", SCRAM_SHA_256_PLUS).message,
-            "unsupported SCRAM channel-binding type \"tls-unique-and-a-very-long-nam\"",
+            tls(b"p=tls-unique-and-a-very-long-one-more\x01,,n=,r=a", SCRAM_SHA_256_PLUS).message,
+            "unsupported SCRAM channel-binding type \"tls-unique-and-a-very-long-one\"",
         );
         assert_eq!(
             detail(tls(b"p", SCRAM_SHA_256_PLUS)),

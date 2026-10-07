@@ -161,7 +161,7 @@ mod tests {
             message(b"\xed\xa0\x80"),
             "invalid byte sequence for encoding \"UTF8\": 0xed 0xa0 0x80"
         );
-        assert_eq!(verify_utf8("caf\u{e9}".as_bytes()), Ok("caf\u{e9}"));
+        assert_eq!(verify_utf8("\u{e9}t\u{e9}".as_bytes()), Ok("\u{e9}t\u{e9}"));
     }
 
     #[test]
