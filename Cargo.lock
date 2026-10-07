@@ -118,6 +118,9 @@ version = "0.0.4"
 [[package]]
 name = "rupg-log"
 version = "0.0.4"
+dependencies = [
+ "rupg-common",
+]
 
 [[package]]
 name = "rupg-opt"

@@ -233,27 +233,32 @@ The log is inside the `.rupg` file. Each worker has one ring. Document 08 owns t
 
 ### 11.13.2 Blocks
 
-A ring holds packed blocks. A flush writes the new blocks and pads the last 4 KiB unit with a fill record, so a flush never writes a unit that is already durable.
+A ring holds packed blocks. A flush writes the new blocks and pads the last 4 KiB unit with a fill block, so a flush never writes a unit that is already durable. The format is in `rupg-log/src/block.rs`. All numbers are little endian.
 
-| Field | Bytes | Meaning |
-|---|---|---|
-| `length` | 4 | block length |
-| `kind` | 1 | commit, part, abort, prepare, commit prepared, abort prepared, sequence |
-| `flags` | 1 | compressed, has dependencies |
-| `ring` | 2 | ring number |
-| `checksum` | 4 | CRC32C of the block, seeded with the ring number |
-| `position` | 8 | the ring position of the block |
-| `deps` | 2 | number of dependencies |
-| `commit_ts` | 8 | HLC commit timestamp |
-| `xid` | 8 | full transaction id |
-| dependencies | 10 each | ring (2) and position (8) |
-| records | rest | the records |
+| Offset | Field | Bytes | Meaning |
+|---|---|---|---|
+| 0 | `length` | 4 | block length, a multiple of 8, at most 16 MiB |
+| 4 | `kind` | 1 | 1 commit, 2 part, 3 abort, 4 prepare, 5 commit prepared, 6 abort prepared, 7 sequence, 8 fill |
+| 5 | `flags` | 1 | bit 0 compressed, bit 1 has dependencies |
+| 6 | `ring` | 2 | ring number |
+| 8 | `checksum` | 4 | CRC32C of the block with this field at zero, seeded with the ring number |
+| 12 | `deps` | 2 | number of dependencies |
+| 14 | reserved | 2 | zero |
+| 16 | `position` | 8 | the ring position of the block |
+| 24 | `commit_ts` | 8 | HLC commit timestamp |
+| 32 | `xid` | 8 | full transaction id |
+| 40 | dependencies | 10 each | ring (2) and position (8) |
+| after | records | rest | the records, padded with zero bytes to a multiple of 8 |
 
-A block left from an earlier use of an extent holds a lower position than replay expects, or fails its checksum, so replay stops at the first such block. rudb's lanes find the end of the log in a similar way (`rudb-txn/src/log/lane.rs`). A block never spans two extents. When it does not fit, the rest of the extent gets a fill record.
+A fill block has only the header and zero bytes. Replay skips it. When fewer than 40 bytes are left in a 4 KiB unit, the writer leaves them and starts the next block at the next unit, and replay does the same. No version writes the compressed flag yet, and a block with it set gives `XX001`.
+
+A block left from an earlier use of an extent holds a lower position than replay expects, or fails its checksum, so replay stops at the first such block. A length that is not a multiple of 8 or is out of range also ends the ring. A block that passes its checksum and its position and still is not valid, for example with an unknown kind, is damage and gives `XX001`. rudb's lanes find the end of the log in a similar way (`rudb-txn/src/log/lane.rs`). A block never spans two extents. When it does not fit, the rest of the extent gets a fill block.
 
 ### 11.13.3 Records
 
-A record changes one row: kind, table OID, row id, a bitmap of changed columns and the new values in storage encoding. Row ids and OIDs are delta encoded within a block. The shard is in the row id. The kinds are insert, update, delete, catalog change (which also invalidates caches), truncate, and segment. A segment record names a new cold segment's extents and row id range. A bulk load writes and syncs its segments before the commit block, so it logs only segment records and does not write its data twice.
+A record changes one row: kind, table OID, row id, a bitmap of changed columns and the new values in storage encoding. The shard is in the row id. The kinds are 1 insert, 2 update, 3 delete, 4 catalog change (which also invalidates caches), 5 truncate, and 6 segment. The format is in `rupg-log/src/record.rs`.
+
+A record is the kind byte, the table OID as a zigzag varint delta from the OID of the record before it, the row id as a zigzag varint delta from the row id before it, the bitmap width as a varint, the bitmap, and one value for each set bit. The first record of a block takes its deltas from zero. The width is the last changed column plus 1, so the last bit of the bitmap is always set and a record has one form only. A value is a varint of its length plus 1 and then its bytes, or the varint 0 for NULL. No record starts with a zero byte, so the zero padding of a block ends its records. A segment record names a new cold segment's extents and row id range. A bulk load writes and syncs its segments before the commit block, so it logs only segment records and does not write its data twice.
 
 A transaction keeps its records in a private buffer for its commit block. Past 1 MiB, a budget, it writes a part block to its ring and goes on, and its commit block lists its part blocks as dependencies. A rollback of such a transaction writes an abort block.
 
