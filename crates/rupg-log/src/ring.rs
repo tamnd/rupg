@@ -69,17 +69,20 @@ impl Ring {
         Ok(Ring::new(store, number, worker, list, 0, 0, Hlc::ZERO))
     }
 
-    /// The ring of a checkpoint after recovery read it up to `end`. The next block starts on the unit after `end`.
-    pub fn open(store: Arc<FileStore>, state: &RingState, end: u64, newest: Hlc) -> Result<Ring> {
-        if end < state.durable || state.extents.is_empty() || end - state.redo > state.size() {
+    /// The ring of a checkpoint. The next block goes at the durable position, on a new unit. Recovery gives the state, see [`crate::Recovery::finish`].
+    pub fn open(store: Arc<FileStore>, state: &RingState) -> Result<Ring> {
+        let number = ring_number(state.ring)?;
+        if state.extents.is_empty()
+            || state.durable < state.redo
+            || state.durable - state.redo > state.size()
+        {
             return Err(Error::internal(format!(
-                "ring {} cannot end at {end} after the checkpoint position {}",
-                state.ring, state.durable
+                "ring {} cannot open with the redo position {} and the durable position {}",
+                state.ring, state.redo, state.durable
             )));
         }
-        let number = ring_number(state.ring)?;
-        let newest = newest.max(state.newest);
-        Ok(Ring::new(store, number, state.worker, state.extents.clone(), state.redo, end, newest))
+        let (redo, end, newest) = (state.redo, state.durable, state.newest);
+        Ok(Ring::new(store, number, state.worker, state.extents.clone(), redo, end, newest))
     }
 
     fn new(
@@ -557,12 +560,25 @@ pub(crate) mod tests {
         let state = store.rings()[0].clone();
         let (read, end) = read_all(&store, &state, state.redo);
         assert_eq!(read.iter().map(|b| b.xid).collect::<Vec<_>>(), [1, 2]);
-        let ring = Ring::open(store.clone(), &state, end, ts(2)).unwrap();
-        assert_eq!((ring.durable(), ring.end()), (end, end));
+        // Recovery opens the ring one ring size after its end.
+        let start = end + state.size();
+        let next = RingState { redo: start, durable: start, newest: ts(2), ..state.clone() };
+        let ring = Ring::open(store.clone(), &next).unwrap();
+        assert_eq!((ring.durable(), ring.end(), ring.state()), (start, start, next.clone()));
         let c = ring.append(&mut commit(3, 10)).unwrap();
-        assert_eq!(c.position, end);
+        assert_eq!(c.position, start);
         ring.flush_to(c.end).unwrap();
-        assert_eq!(read_all(&store, &ring.state(), 0).0.len(), 3);
-        assert!(Ring::open(store.clone(), &state, state.durable - 8, ts(0)).is_err());
+        assert_eq!(read_all(&store, &ring.state(), start).0.len(), 1);
+        // The new block is in the physical place after the old blocks, but a read from the old redo position does not take it.
+        let (old, old_end) = read_all(&store, &state, state.redo);
+        assert_eq!((old.len(), old_end), (2, end));
+        for bad in [
+            RingState { redo: 16, durable: 8, ..state.clone() },
+            RingState { redo: 0, durable: state.size() + 8, ..state.clone() },
+            RingState { extents: Vec::new(), ..state.clone() },
+            RingState { ring: 70_000, ..state.clone() },
+        ] {
+            assert!(Ring::open(store.clone(), &bad).is_err());
+        }
     }
 }

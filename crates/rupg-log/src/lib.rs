@@ -7,6 +7,7 @@
 mod block;
 mod crc;
 mod record;
+mod recovery;
 mod ring;
 mod rings;
 mod varint;
@@ -16,5 +17,6 @@ pub use block::{
     MAX_BLOCK, UNIT, block_len,
 };
 pub use record::{Record, RecordKind, RecordReader, RecordWriter};
+pub use recovery::{Found, Recovery};
 pub use ring::{Placed, Ring, RingReader};
 pub use rings::Log;
