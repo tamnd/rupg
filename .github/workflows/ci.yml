@@ -70,6 +70,9 @@ jobs:
       # The parse tables, the keywords, the nodes and the action glue must be the files that the vendored grammar and headers give. See spec/07-sql-types-and-catalog.md section 7.2.
       - name: sql parser tables
         run: cargo xtask sql --check
+      # The catalog schemas and the static rows must be the files that the vendored catalog headers and .dat files give. See spec/07-sql-types-and-catalog.md section 7.13.2.
+      - name: catalog rows
+        run: cargo xtask pgcatalog --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
       - name: spelling

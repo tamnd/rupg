@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `rupg-pgcatalog` has the schema of the 64 system catalogs and their static rows (spec/07 section 7.13). `cargo xtask pgcatalog` reads the vendored catalog headers and `.dat` files with the rules of `genbki.pl` and of the bootstrap mode: the defaults, the array types, the OID lookups, the OIDs from 10000, the row types of the catalogs, the `aclitem` values, the `Const` nodes of `proargdefaults`, and the descriptions. The rows are column batches in the binary. `--check` fails if the files differ, and CI runs it. A test compares the 11,835 rows with the catalogs of the oracle after `initdb`, and each difference that a later step of `initdb` makes is named in the test.
+- `vendor/postgres-19` has the 64 catalog headers, `transam.h`, `pg_wchar.h` and `system_functions.sql`.
+
 ## 0.0.12 (2026-10-08)
 
 The twelfth patch release on the 0.0 line. It starts milestone M2: the wire codec, SASLprep, the full SQLSTATE list, the text and binary forms of the types, the configuration parameters, the time zone names and the PostgreSQL parser. Each part is lifted from tamnd/rudb at f5f7065a and checked against PostgreSQL 19 at the pin. No crate is published.
