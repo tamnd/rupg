@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The crash tests on real kernels in `tests/realdisk` (spec/21 section 21.9.3). `logwrites.py` runs the M1 workload on ext4 or XFS over dm-log-writes, replays the log and checks the file at flush, FUA and mark entries and between them. `kill.py` kills the workload with `SIGKILL` at random points, and with `--lazyfs` it also drops the data that was not synced. See `tests/realdisk/README.md`. The nightly workflow runs them in the `realdisk` job.
+- `rupg-crash workload` and `rupg-crash verify` run the T8 workload on a file of the operating system and check a file after a crash against the digests that the workload printed.
+
 ## 0.0.10 (2026-10-07)
 
 The tenth patch release on the 0.0 line. It adds the T8 crash test, the M1 fuzz targets and the loom tests, and fixes the two bugs that the fuzz targets found. No crate is published.

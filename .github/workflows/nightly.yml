@@ -98,6 +98,50 @@ jobs:
           RUN: ${{ github.run_number }}
         run: cargo run --release -p rupg-crash -- --files 100000 --first-seed "$((RUN * 100000))"
 
+  # The crash tests of spec/21 section 21.9.3 on real kernels: dm-log-writes on ext4 and XFS, SIGKILL, and LazyFS. See tests/realdisk/README.md.
+  realdisk:
+    name: real disk crash tests
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The runner kernel can have dm-log-writes in the extra modules package.
+      - name: install the tools and load the modules
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -yq libfuse3-dev fuse3 xfsprogs cmake g++
+          sudo modprobe dm-log-writes || { sudo apt-get install -yq "linux-modules-extra-$(uname -r)" && sudo modprobe dm-log-writes; }
+          sudo modprobe dm-snapshot
+      - name: build LazyFS 0.3.1
+        run: |
+          set -euo pipefail
+          git clone -q --depth 1 --branch 0.3.1 https://github.com/dsrhaslab/lazyfs "$RUNNER_TEMP/lazyfs"
+          test "$(git -C "$RUNNER_TEMP/lazyfs" rev-parse HEAD)" = 045a0b3a1126725e693934e29d3ba15e08cc39ec
+          (cd "$RUNNER_TEMP/lazyfs/libs/libpcache" && ./build.sh)
+          (cd "$RUNNER_TEMP/lazyfs/lazyfs" && ./build.sh)
+      - name: cargo build rupg-crash
+        run: cargo build --release -p rupg-crash
+      # Each run starts at a new seed, so each night tries new workloads.
+      - name: dm-log-writes on ext4 and XFS
+        env:
+          RUN: ${{ github.run_number }}
+        run: |
+          set -euo pipefail
+          for fs in ext4 xfs; do
+            sudo python3 tests/realdisk/logwrites.py --bin target/release/rupg-crash --fs "$fs" --work "$RUNNER_TEMP/lw-$fs" --seed "$RUN" --points 500
+          done
+      - name: SIGKILL
+        env:
+          RUN: ${{ github.run_number }}
+        run: python3 tests/realdisk/kill.py --bin target/release/rupg-crash --work "$RUNNER_TEMP/kill" --first-seed "$((RUN * 1000))" --rounds 200
+      - name: LazyFS
+        env:
+          RUN: ${{ github.run_number }}
+        run: python3 tests/realdisk/kill.py --bin target/release/rupg-crash --work "$RUNNER_TEMP/lazyfs-run" --lazyfs "$RUNNER_TEMP/lazyfs/lazyfs/build/lazyfs" --first-seed "$((RUN * 1000))" --rounds 200
+
   fuzz:
     name: fuzz ${{ matrix.target }}
     runs-on: ubuntu-24.04

@@ -278,7 +278,7 @@ fn sync_point(
     for plan in plans(&base.unsynced(), &mut rng, config.sample) {
         let file = base.fork();
         file.crash(&plan).map_err(|e| e.to_string())?;
-        let digest = digest(&file);
+        let digest = file_digest(&file);
         let new = lock(shared).seen.insert(digest);
         if !new {
             lock(shared).counts.same += 1;
@@ -292,7 +292,7 @@ fn sync_point(
 }
 
 /// A checksum of the bytes of the database file. Two files with the same bytes have the same result.
-fn digest(io: &SimIo) -> u64 {
+fn file_digest(io: &SimIo) -> u64 {
     let mut h = 0u64;
     io.read_pieces(Path::new(PATH), |piece| {
         h = h.rotate_left(17) ^ rupg_file::checksum(piece).wrapping_mul(0x9e37_79b9_7f4a_7c15);
@@ -320,35 +320,39 @@ fn try_file(io: &SimIo, expect: &Expect, seed: u64) -> std::result::Result<(), S
     Ok(())
 }
 
-/// Runs the workload of one seed and checks the crash files of each sync point.
-pub fn run(config: Config) -> std::result::Result<Counts, String> {
-    let io = SimIo::new(config.seed);
-    let shared = Arc::new(Mutex::new(Shared::default()));
-    let hook: Arc<dyn Fn() + Send + Sync> = {
-        let (io, shared) = (io.clone(), shared.clone());
-        Arc::new(move || {
-            let off = {
-                let s = lock(&shared);
-                !s.armed || s.failure.is_some()
-            };
-            if off {
-                return;
-            }
-            if let Err(e) = sync_point(&io, &shared, &config) {
-                lock(&shared).failure = Some(e);
-            }
-        })
-    };
-    let hooked: Arc<dyn Io> = Arc::new(Hooked { io: io.clone(), hook: hook.clone() });
-    let platform = platform(hooked, config.seed);
+/// A point of the workload that the caller sees.
+#[derive(Debug)]
+pub enum Event<'a> {
+    /// A change starts: a commit or a new table. Until the next `Acked`, the file can hold this model or the last acknowledged model.
+    Pending(&'a Model),
+    /// The change was acknowledged. `commit` is false for a new table.
+    Acked {
+        /// The tables and rows after the change.
+        model: &'a Model,
+        /// True for a commit.
+        commit: bool,
+    },
+    /// A step ended.
+    Step,
+    /// The last step ended. The held transaction, if there is one, is still open.
+    End,
+}
+
+/// Opens or makes the database at `path` on `platform` and runs `steps` seeded steps on it. The workload calls `see` at each event and stops at the first error that `see` gives.
+pub fn workload(
+    platform: &Platform,
+    path: &Path,
+    seed: u64,
+    steps: u32,
+    mut see: impl FnMut(Event<'_>) -> std::result::Result<(), String>,
+) -> std::result::Result<(), String> {
     let err = |e: Error| e.to_string();
-    let mut db = Database::open_on(&platform, Path::new(PATH), &options()).map_err(err)?;
-    lock(&shared).armed = true;
-    let mut rng = SimRng::new(config.seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
+    let mut db = Database::open_on(platform, path, &options()).map_err(err)?;
+    let mut acked = Model::new();
+    see(Event::Acked { model: &acked, commit: false })?;
+    let mut rng = SimRng::new(seed.wrapping_mul(0x9e37_79b9_7f4a_7c15));
     let mut held = None;
-    for _ in 0..config.steps {
-        let acked = lock(&shared).expect.acked.clone();
-        let set_pending = |m: Option<Model>| lock(&shared).expect.pending = m;
+    for _ in 0..steps {
         // The first step makes a table.
         let step = if acked.is_empty() { 0 } else { rng.below(40) };
         match step {
@@ -356,9 +360,10 @@ pub fn run(config: Config) -> std::result::Result<Counts, String> {
                 let name = format!("t{}", acked.len());
                 let mut next = acked.clone();
                 next.insert(name.clone(), BTreeMap::new());
-                set_pending(Some(next.clone()));
+                see(Event::Pending(&next))?;
                 db.create_table(&name, columns()).map_err(err)?;
-                lock(&shared).expect = Expect { acked: next, pending: None };
+                acked = next;
+                see(Event::Acked { model: &acked, commit: false })?;
             }
             1 => db.checkpoint().map_err(err)?,
             2 => {
@@ -366,7 +371,7 @@ pub fn run(config: Config) -> std::result::Result<Counts, String> {
                 drop(held.take());
                 db.clone().close().map_err(err)?;
                 drop(db);
-                db = Database::open_on(&platform, Path::new(PATH), &options()).map_err(err)?;
+                db = Database::open_on(platform, path, &options()).map_err(err)?;
             }
             3 if held.is_none() && !acked.is_empty() => {
                 // A transaction that stays open over the next steps and does not commit.
@@ -409,24 +414,75 @@ pub fn run(config: Config) -> std::result::Result<Counts, String> {
                 if rng.below(10) == 0 {
                     tx.rollback().map_err(err)?;
                 } else {
-                    set_pending(Some(next.clone()));
+                    see(Event::Pending(&next))?;
                     tx.commit().map_err(err)?;
-                    let mut s = lock(&shared);
-                    s.expect = Expect { acked: next, pending: None };
-                    s.counts.commits += 1;
+                    acked = next;
+                    see(Event::Acked { model: &acked, commit: true })?;
                 }
             }
             _ => {}
         }
-        if let Some(f) = lock(&shared).failure.take() {
-            return Err(f);
-        }
+        see(Event::Step)?;
     }
-    // The power goes after the last step, with the held transaction open.
-    sync_point(&io, &shared, &config)?;
+    see(Event::End)?;
     drop(held);
+    Ok(())
+}
+
+/// Runs the workload of one seed and checks the crash files of each sync point.
+pub fn run(config: Config) -> std::result::Result<Counts, String> {
+    let io = SimIo::new(config.seed);
+    let shared = Arc::new(Mutex::new(Shared::default()));
+    let hook: Arc<dyn Fn() + Send + Sync> = {
+        let (io, shared) = (io.clone(), shared.clone());
+        Arc::new(move || {
+            let off = {
+                let s = lock(&shared);
+                !s.armed || s.failure.is_some()
+            };
+            if off {
+                return;
+            }
+            if let Err(e) = sync_point(&io, &shared, &config) {
+                lock(&shared).failure = Some(e);
+            }
+        })
+    };
+    let hooked: Arc<dyn Io> = Arc::new(Hooked { io: io.clone(), hook: hook.clone() });
+    let platform = platform(hooked, config.seed);
+    workload(&platform, Path::new(PATH), config.seed, config.steps, |event| {
+        match event {
+            // The workload starts after the open that makes the file returns.
+            Event::Acked { model, commit } => {
+                let mut s = lock(&shared);
+                s.armed = true;
+                s.expect = Expect { acked: model.clone(), pending: None };
+                s.counts.commits += u64::from(commit);
+            }
+            Event::Pending(model) => lock(&shared).expect.pending = Some(model.clone()),
+            Event::Step => {}
+            // The power goes after the last step, with the held transaction open.
+            Event::End => sync_point(&io, &shared, &config)?,
+        }
+        lock(&shared).failure.take().map_or(Ok(()), Err)
+    })?;
     let counts = lock(&shared).counts;
     Ok(counts)
+}
+
+/// A checksum of a model. Two models with the same tables and rows have the same result in the same build.
+pub fn digest(model: &Model) -> u64 {
+    rupg_file::checksum(format!("{model:?}").as_bytes())
+}
+
+/// Opens the database at `path` on `platform`, which runs recovery, runs `rupg check` on it, and gives the digest of its tables and rows.
+pub fn verify(platform: &Platform, path: &Path) -> std::result::Result<u64, String> {
+    let options = Options { create: false, ..options() };
+    let db = Database::open_on(platform, path, &options).map_err(|e| e.to_string())?;
+    let model = read(&db).map_err(|e| e.to_string())?;
+    drop(db);
+    rupg::check_on(platform, path).map_err(|e| format!("rupg check: {e}"))?;
+    Ok(digest(&model))
 }
 
 #[cfg(test)]
