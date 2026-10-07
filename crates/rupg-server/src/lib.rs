@@ -2,7 +2,7 @@
 //!
 //! The server accepts connections, reads the startup packet, checks the user and the database, and gives the rest of the connection to [`rupg_session::connection::Connection`]. It owns the process IDs and the cancel keys of the sessions. The main loop of a session is in `rupg-session` (spec/06 section 6.1).
 //!
-//! At this step each connection has its own task. The server checks each connection with the rules of `pg_hba.conf` and the methods of spec/06 section 6.7, except the methods that need TLS. TLS and the workers of spec/06 section 6.2 come later in M2.
+//! At this step each connection has its own task. The server checks each connection with the rules of `pg_hba.conf` and the methods of spec/06 section 6.7. With the feature `tls` and the setting `ssl`, a TCP connection can start TLS with an `SSLRequest` or with direct TLS (spec/06 sections 6.5 and 6.6). The workers of spec/06 section 6.2 come later in M2.
 //!
 //! The rules come from the file of the setting `hba_file` when it is set, else from [`Config::hba`], else from the defaults of spec/06 section 6.8. The tables `rupg_hba` and `rupg_ident` of the spec do not exist yet, so [`Config::hba`] and [`Config::ident`] stand in for them.
 //!
@@ -14,6 +14,13 @@
 
 mod auth;
 mod hba;
+#[cfg(not(feature = "tls"))]
+#[path = "no_tls.rs"]
+mod tls;
+#[cfg(feature = "tls")]
+mod tls;
+#[cfg_attr(not(feature = "tls"), allow(dead_code))]
+mod x509;
 
 use std::collections::BTreeMap;
 use std::fmt;
@@ -32,7 +39,11 @@ use rupg_wire::{
 };
 
 use crate::hba::{Hba, Ident, Roles, Source};
+use crate::tls::Tls;
+use crate::x509::Subject;
 
+/// The first byte of a TLS handshake record. No startup packet starts with it, because its length would be hundreds of megabytes.
+const HANDSHAKE_BYTE: u8 = 0x16;
 /// The size of the first read of a connection, which holds the startup packet.
 const FIRST_READ: usize = 1024;
 /// The size of each later read.
@@ -105,6 +116,7 @@ struct Shared {
     hba: Hba,
     ident: Ident,
     net: Arc<dyn Net>,
+    tls: Option<Tls>,
     /// The random bytes of the mock salt of a role that does not exist. They are new at each start of the server.
     mock_nonce: [u8; MOCK_NONCE_LEN],
     /// The iterations of the mock secret, `scram_iterations`.
@@ -237,6 +249,13 @@ impl Server {
                 }
             }
         };
+        if base.get("ssl_sni").as_deref() == Some("on") {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "ssl_sni is not supported by this version of rupg",
+            ));
+        }
+        let tls = tls::load(&base, &*io)?;
         let (hba, ident) = load_rules(config, &base, &*io, &write)?;
         let mut listeners = vec![listener];
         for path in &sockets {
@@ -257,6 +276,7 @@ impl Server {
             hba,
             ident,
             net: net.clone(),
+            tls,
             mock_nonce,
             iterations,
             log: config.log.clone(),
@@ -440,12 +460,23 @@ fn accept(
     }
 }
 
+/// What the authentication needs to know of a TLS connection.
+#[derive(Debug)]
+struct Secured {
+    /// The hash of the certificate of the server for SCRAM with channel binding.
+    hash: Vec<u8>,
+    /// The subject of the client certificate, which the TLS library checked against `ssl_ca_file`.
+    peer: Option<Subject>,
+}
+
 /// The bytes that a connection read and did not use yet, and the output that waits.
 struct Wire {
     stream: Box<dyn Stream>,
     input: Vec<u8>,
     at: usize,
     out: OutBuf,
+    /// `Some` after the TLS handshake.
+    secured: Option<Secured>,
 }
 
 impl Wire {
@@ -488,7 +519,7 @@ impl Wire {
 
 /// The task of one connection.
 fn serve(shared: &Shared, stream: Box<dyn Stream>) {
-    let mut wire = Wire { stream, input: Vec::new(), at: 0, out: OutBuf::new() };
+    let mut wire = Wire { stream, input: Vec::new(), at: 0, out: OutBuf::new(), secured: None };
     if let Some((start, protocol)) = startup(shared, &mut wire) {
         session(shared, &mut wire, &start, protocol);
     }
@@ -497,7 +528,21 @@ fn serve(shared: &Shared, stream: Box<dyn Stream>) {
 
 /// Reads the packets before the startup message, and the startup message. It gives the startup request and the version of the protocol, or `None` when the connection ends here.
 fn startup(shared: &Shared, wire: &mut Wire) -> Option<(Start, u32)> {
-    let mut handshake = Handshake::new(false);
+    if !wire.fill(FIRST_READ) {
+        return None;
+    }
+    let tls = shared.tls.as_ref().filter(|_| !wire.stream.is_local());
+    // `ProcessSSLStartup`: direct TLS, which PostgreSQL closes with no message when it has no TLS for the connection. After it, the server answers `N` to an `SSLRequest`.
+    let mut handshake = if wire.pending()[0] == HANDSHAKE_BYTE {
+        let early = wire.pending().to_vec();
+        wire.consume(early.len());
+        if !start_tls(shared, tls?, wire, &early, true) {
+            return None;
+        }
+        Handshake::new(false)
+    } else {
+        Handshake::new(tls.is_some())
+    };
     loop {
         let (packet, size) = match split_startup(wire.pending()) {
             Ok(Some(found)) => found,
@@ -518,9 +563,9 @@ fn startup(shared: &Shared, wire: &mut Wire) -> Option<(Start, u32)> {
         let mut out = OutBuf::new();
         let step = handshake.packet(packet, &mut out);
         let found = match step {
-            Ok(Step::Answer { request, .. }) => {
+            Ok(Step::Answer { request, tls }) => {
                 let buffered = wire.pending().len() - size;
-                Err(Some(request.check_buffered(buffered)))
+                Err(Some((request, buffered, tls)))
             }
             Ok(Step::Cancel(cancel)) => {
                 let keys = lock(&shared.keys);
@@ -567,21 +612,40 @@ fn startup(shared: &Shared, wire: &mut Wire) -> Option<(Start, u32)> {
                 }
                 return Some((start, protocol));
             }
-            // The answer to an encryption request, then the next packet.
-            Err(Some(Ok(()))) => {
+            // The answer to an encryption request and the TLS handshake, then the next packet. The bytes after the request must wait for the handshake.
+            Err(Some((request, buffered, start))) => {
                 if !wire.flush() {
                     return None;
                 }
-            }
-            Err(Some(Err(error))) => {
-                wire.out.protocol_error(&error, handshake.protocol());
-                wire.flush();
-                return None;
+                if start && !tls.is_some_and(|tls| start_tls(shared, tls, wire, &[], false)) {
+                    return None;
+                }
+                if let Err(error) = request.check_buffered(buffered) {
+                    wire.out.protocol_error(&error, handshake.protocol());
+                    wire.flush();
+                    return None;
+                }
             }
             Err(None) => {
                 wire.flush();
                 return None;
             }
+        }
+    }
+}
+
+/// Runs the TLS handshake of a connection. It gives false when the connection ends, and writes the reason to the log.
+fn start_tls(shared: &Shared, tls: &Tls, wire: &mut Wire, early: &[u8], direct: bool) -> bool {
+    match tls::accept(tls, &mut wire.stream, early, direct) {
+        Ok(secured) => {
+            wire.secured = Some(secured);
+            true
+        }
+        Err(text) => {
+            if let Some(text) = text {
+                shared.log("LOG", &text);
+            }
+            false
         }
     }
 }

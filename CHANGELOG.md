@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- TLS on the server with rustls and its `ring` provider (spec/06 sections 6.5 and 6.6). With `ssl = on`, the server loads `ssl_cert_file` and `ssl_key_file` at start and checks the owner and the mode of the key as PostgreSQL does. A TCP connection starts TLS with an `SSLRequest`, or with direct TLS and the ALPN protocol `postgresql`. The Unix socket has no TLS. The rules `hostssl` and `hostnossl` match. A TLS connection offers `SCRAM-SHA-256-PLUS` with the channel binding `tls-server-end-point`. With `ssl_ca_file`, the server asks for a client certificate, and the method `cert` and the option `clientcert` check it. `ssl_crl_file` gives the revoked certificates. `ssl_min_protocol_version` and `ssl_max_protocol_version` set the versions, and rustls has TLS 1.2 and 1.3 only. `ssl_ciphers`, `ssl_tls13_ciphers`, `ssl_groups`, `ssl_dh_params_file` and `ssl_crl_dir` are accepted and not used yet, and `ssl_sni = on` stops the start. `rupg serve` reads a relative path of a TLS file from the current directory. The feature `tls` of `rupg-server` and `rupg` adds TLS, and the feature `server` turns it on. Without it, `ssl = on` stops the start with the text of PostgreSQL.
+- `rupg-platform` gives the owner and the permission bits of a file with `Io::mode`.
+
 ## 0.0.13 (2026-10-08)
 
 The thirteenth patch release on the 0.0 line. It adds the system catalogs and their static rows, and the first part of the server of milestone M2: `rupg serve` with the simple query flow and the transaction block, the Unix socket with its lock file, and client authentication with `pg_hba.conf`. `psql` can log in with SCRAM, change settings and run transaction blocks. No crate is published.

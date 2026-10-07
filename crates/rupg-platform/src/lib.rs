@@ -22,7 +22,7 @@ mod tasks;
 pub use clock::Clock;
 pub use cpu::{CpuFeatures, CpuLevel, physical_memory};
 pub use entropy::Entropy;
-pub use io::{File, Io, OpenMode};
+pub use io::{File, FileMode, Io, OpenMode};
 pub use memory::{MemoryPool, Reclaimer, Reservation};
 pub use net::{Listener, Net, Stream};
 pub use region::Region;

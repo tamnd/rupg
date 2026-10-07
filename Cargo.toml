@@ -70,6 +70,9 @@ hmac = "0.13"
 md-5 = "0.11"
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 sha2 = { version = "0.11", default-features = false }
+# rustls, ring: TLS for rupg-server with the feature tls, so rupg does not link OpenSSL. ring also gives the hash of the certificate for SCRAM with channel binding. See spec/22-crate-layout.md section 22.5.
+ring = "0.17"
+rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
 # loom: the tests of the latches and the log rings under every interleaving, a development dependency only. See spec/21-testing.md section 21.11.
 loom = "0.7"
 
