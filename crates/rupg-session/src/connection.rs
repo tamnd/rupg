@@ -68,6 +68,8 @@ pub fn base_settings(args: &[(String, String)]) -> Result<Settings, Error> {
         ("timezone_abbreviations", "Default"),
         ("default_text_search_config", "pg_catalog.english"),
         ("huge_pages_status", "off"),
+        // rupg checks each page and has no way to turn it off (spec/08 section 8.3).
+        ("data_checksums", "on"),
         ("io_max_concurrency", "64"),
         ("wal_buffers", "4MB"),
         ("commit_timestamp_buffers", "256kB"),
@@ -1082,6 +1084,16 @@ mod tests {
         let ascii =
             session_settings(&base, &start(None, &[("client_encoding", "sql_ascii")])).unwrap();
         assert_eq!(ascii.get("client_encoding").as_deref(), Some("SQL_ASCII"));
+    }
+
+    #[test]
+    fn values_of_the_oracle_build() {
+        let settings = base_settings(&[]).unwrap();
+        assert_eq!(settings.get("data_checksums").as_deref(), Some("on"));
+        assert_eq!(settings.get("default_toast_compression").as_deref(), Some("lz4"));
+        assert_eq!(settings.get("wal_compression").as_deref(), Some("off"));
+        let wal_compression = crate::guc::find("wal_compression").unwrap();
+        assert!(wal_compression.parse("zstd").is_ok());
     }
 
     #[test]

@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Fixed
+
+- The parameter table follows an oracle build with lz4 and zstd, as spec/05 and spec/09 say. `default_toast_compression` is `lz4` by default and also takes `lz4`, and `wal_compression` also takes `lz4` and `zstd`. `data_checksums` shows `on`, as spec/08 section 8.3 says.
+
 ## 0.0.14 (2026-10-08)
 
 The fourteenth patch release on the 0.0 line. It adds TLS to the server, the extended query protocol and cancel. `psql` 19 can connect with `sslmode=verify-full` and channel binding, run prepared statements and pipelines, and cancel a statement. No crate is published.

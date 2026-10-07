@@ -35,8 +35,8 @@ pub(crate) fn run(root: &Path, args: &[String]) -> Result<(), String> {
     Ok(())
 }
 
-/// The macros of the oracle build that the `#if` lines of the options arrays test. The oracle is a Linux build on x86-64 with OpenSSL and ICU, and without lz4, zstd and liburing.
-const DEFINED: [&str; 10] = [
+/// The macros of the oracle build that the `#if` lines of the options arrays test. The oracle is a Linux build on x86-64 with OpenSSL, ICU, lz4 and zstd, and without liburing.
+const DEFINED: [&str; 12] = [
     "HAVE_SYSLOG",
     "HAVE_SYNCFS",
     "HAVE_COPY_FILE_RANGE",
@@ -47,6 +47,8 @@ const DEFINED: [&str; 10] = [
     "USE_DSM_POSIX",
     "USE_DSM_SYSV",
     "USE_DSM_MMAP",
+    "USE_LZ4",
+    "USE_ZSTD",
 ];
 
 /// The macros in the boot values and the limits, with their values in the oracle build. A value can use other macros.
@@ -88,7 +90,7 @@ const MACROS: [(&str, &str); 80] = [
     ("DEFAULT_SSL_GROUPS", "\"X25519:prime256v1\""),
     ("DEFAULT_SYSLOG_FACILITY", "LOG_LOCAL0"),
     ("DEFAULT_TABLE_ACCESS_METHOD", "\"heap\""),
-    ("DEFAULT_TOAST_COMPRESSION", "TOAST_PGLZ_COMPRESSION"),
+    ("DEFAULT_TOAST_COMPRESSION", "TOAST_LZ4_COMPRESSION"),
     ("DEFAULT_UPDATE_PROCESS_TITLE", "true"),
     ("DEFAULT_WAL_SYNC_METHOD", "WAL_SYNC_METHOD_FDATASYNC"),
     ("DEFAULT_WAL_WRITER_FLUSH_AFTER", "((1024 * 1024) / XLOG_BLCKSZ)"),
@@ -745,7 +747,7 @@ mod tests {
 
     #[test]
     fn the_preprocessor_keeps_the_lines_of_the_oracle_build() {
-        let text = "a\n#ifdef USE_LZ4\nb\n#else\nc\n#endif\n#if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE) || defined(HAVE_COPY_FILE_RANGE)\nd\n#endif\n#if defined(HAVE_COPYFILE) || defined(X)\ne\n#endif\n";
+        let text = "a\n#ifdef USE_LIBURING\nb\n#else\nc\n#endif\n#if defined(HAVE_COPYFILE) && defined(COPYFILE_CLONE_FORCE) || defined(HAVE_COPY_FILE_RANGE)\nd\n#endif\n#if defined(HAVE_COPYFILE) || defined(X)\ne\n#endif\n";
         assert_eq!(preprocess(text).unwrap(), "a\nc\nd\n");
         assert!(preprocess("#ifdef A\n").is_err());
     }

@@ -83,7 +83,7 @@ default_statistics_target	integer	user	Query Tuning / Other Planner Options	Sets
 default_table_access_method	string	user	Client Connection Defaults / Statement Behavior	Sets the default table access method for new tables.	\N	\N	heap	\N	\N	\N
 default_tablespace	string	user	Client Connection Defaults / Statement Behavior	Sets the default tablespace to create tables and indexes in.	An empty string means use the database's default tablespace.	\N		\N	\N	\N
 default_text_search_config	string	user	Client Connection Defaults / Locale and Formatting	Sets default text search configuration.	\N	\N	pg_catalog.simple	\N	\N	\N
-default_toast_compression	enum	user	Client Connection Defaults / Statement Behavior	Sets the default compression method for compressible values.	\N	\N	pglz	\N	\N	{pglz}
+default_toast_compression	enum	user	Client Connection Defaults / Statement Behavior	Sets the default compression method for compressible values.	\N	\N	lz4	\N	\N	{pglz,lz4}
 default_transaction_deferrable	bool	user	Client Connection Defaults / Statement Behavior	Sets the default deferrable status of new transactions.	\N	\N	off	\N	\N	\N
 default_transaction_isolation	enum	user	Client Connection Defaults / Statement Behavior	Sets the transaction isolation level of each new transaction.	\N	\N	read committed	\N	\N	{serializable,"repeatable read","read committed","read uncommitted"}
 default_transaction_read_only	bool	user	Client Connection Defaults / Statement Behavior	Sets the default read-only status of new transactions.	\N	\N	off	\N	\N	\N
@@ -393,7 +393,7 @@ vacuum_multixact_freeze_table_age	integer	user	Vacuuming / Freezing	Multixact ag
 vacuum_truncate	bool	user	Vacuuming / Default Behavior	Enables vacuum to truncate empty pages at the end of the table.	\N	\N	on	\N	\N	\N
 wal_block_size	integer	internal	Preset Options	Shows the block size in the write ahead log.	\N	\N	8192	8192	8192	\N
 wal_buffers	integer	postmaster	Write-Ahead Log / Settings	Sets the number of disk-page buffers in shared memory for WAL.	-1 means use a fraction of "shared_buffers".	8kB	-1	-1	262143	\N
-wal_compression	enum	superuser	Write-Ahead Log / Settings	Compresses full-page writes written in WAL file with specified method.	\N	\N	off	\N	\N	{pglz,on,off}
+wal_compression	enum	superuser	Write-Ahead Log / Settings	Compresses full-page writes written in WAL file with specified method.	\N	\N	off	\N	\N	{pglz,lz4,zstd,on,off}
 wal_consistency_checking	string	superuser	Developer Options	Sets the WAL resource managers for which WAL consistency checks are done.	Full-page images will be logged for all data blocks and cross-checked against the results of WAL replay.	\N		\N	\N	\N
 wal_decode_buffer_size	integer	postmaster	Write-Ahead Log / Recovery	Buffer size for reading ahead in the WAL during recovery.	Maximum distance to read ahead in the WAL to prefetch referenced data blocks.	B	524288	65536	1073741823	\N
 wal_init_zero	bool	superuser	Write-Ahead Log / Settings	Writes zeroes to new WAL files before first use.	\N	\N	on	\N	\N	\N
