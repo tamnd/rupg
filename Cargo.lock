@@ -134,7 +134,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 
 [[package]]
 name = "rupg"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -148,15 +148,15 @@ dependencies = [
 
 [[package]]
 name = "rupg-analyze"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-ann"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-buffer"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "loom",
  "rupg-common",
@@ -166,38 +166,38 @@ dependencies = [
 
 [[package]]
 name = "rupg-capi"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-catalog"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-cli"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg",
 ]
 
 [[package]]
 name = "rupg-cluster"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-column"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-common"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-contrib"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-crash"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg",
  "rupg-common",
@@ -207,23 +207,23 @@ dependencies = [
 
 [[package]]
 name = "rupg-encode"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-exchange"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-exec"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-ext"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-file"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
  "rupg-platform",
@@ -231,15 +231,15 @@ dependencies = [
 
 [[package]]
 name = "rupg-func"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-graph"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-hot"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -250,23 +250,23 @@ dependencies = [
 
 [[package]]
 name = "rupg-import"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-index"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-jit"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-kernels"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-log"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "loom",
  "rupg-buffer",
@@ -278,19 +278,19 @@ dependencies = [
 
 [[package]]
 name = "rupg-opt"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-pgcatalog"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-plan"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-platform"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "libc",
  "rupg-common",
@@ -298,35 +298,35 @@ dependencies = [
 
 [[package]]
 name = "rupg-plpgsql"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-raft"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-server"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-session"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-shim"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-sql"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-summary"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-table"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
  "rupg-file",
@@ -337,7 +337,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-tree"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -347,7 +347,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-txn"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -362,18 +362,18 @@ dependencies = [
 
 [[package]]
 name = "rupg-types"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
 ]
 
 [[package]]
 name = "rupg-wasm"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-wire"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rustversion"
@@ -498,4 +498,4 @@ dependencies = [
 
 [[package]]
 name = "xtask"
-version = "0.0.10"
+version = "0.0.11"
