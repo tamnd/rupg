@@ -116,6 +116,8 @@ Every 16 KiB page starts with a 64-byte header.
 
 **The logical page number detects a misdirected write.** The page is read from a physical location that the page table gives. If the page there names a different logical page, the read fails with `XX001`. A checksum alone does not detect this case, because the misdirected page has a correct checksum for its own content.
 
+**A page that has no logical number holds its physical number.** The page table cannot map its own nodes, and the free space map is named by physical numbers. A page table node and a free space map page therefore hold their physical page number in the logical page number field, and the same check applies.
+
 The page kinds are these.
 
 | Kind | Name | Owner crate |
@@ -161,7 +163,7 @@ The classes follow rudb `05-storage`, which used block size classes from 64 KiB 
 
 **The unit of checksum and of read is 64 KiB.** The segment directory stores one checksum for each 64 KiB block of each extent. A reader that needs one vector reads only the 64 KiB blocks that hold it, checks them, and decodes. rudb found that striping column data into 1,024-row chunks gave about 981 page reads for one million rows (`storage-v3/09`), so the read unit must be larger than one vector of one column. A 64 KiB block holds 1024 values at up to 512 bits each, which covers every fixed-width encoding of document 09. The unit also stays below the 256 KiB that AWS counts as one I/O on a gp2 volume (AWS EBS documentation, I/O characteristics), so a scan of a whole extent costs one I/O per 256 KiB and a probe costs one I/O.
 
-**Extents are aligned to their size.** An extent of class E2 starts at a page number that is a multiple of 64. The allocator is a buddy allocator inside 16 MiB arenas (section 8.9). Alignment lets the allocator merge free neighbours with one bit test, and it keeps every extent inside one arena.
+**Extents are aligned to their size.** An extent of class E2 starts at a page whose offset from the start of its arena is a multiple of 64. The first arena starts at page 3, so the alignment is to the arena and not to page 0. The allocator is a buddy allocator inside 16 MiB arenas (section 8.9). Alignment lets the allocator merge free neighbours with one bit test, and it keeps every extent inside one arena.
 
 DuckDB uses one block size of 256 KB with an 8-byte checksum for each block (DuckDB storage documentation). One size wastes space for small columns and splits large columns into many blocks. Size classes avoid both costs at the price of a buddy allocator.
 
@@ -325,6 +327,15 @@ The file after page 2 is a sequence of arenas of 16 MiB, which is 1024 pages. Ea
 | spill arena | sequential, not durable | temporary spill and temporary tables |
 
 **The free space map has one entry for each arena.** An entry is 8 bytes: the kind, the count of free pages, and the largest free buddy class. Each arena also has a bitmap of 1024 bits, 128 bytes, with one bit for each page. For a 10 GiB file this is 640 arenas and 85 KiB of map. The map pages are written out of place at each checkpoint.
+
+| Bytes of the entry | Field |
+|---|---|
+| 0 | arena kind: 0 free, 1 write, 2 extent, 3 summary, 4 ring, 5 spill |
+| 1 | largest free class, 0 for E0 to 4 for E4, 255 when no aligned 64 KiB run is free |
+| 2 to 3 | count of free pages, 0 to 1024 |
+| 4 to 7 | reserved, zero |
+
+**A map page holds 120 arenas.** After the 64-byte page header, each arena has 136 bytes: the entry, then the bitmap. 120 records fill the page exactly. The kind data of the header holds the first arena at bytes 0 to 7, the count of records in use at bytes 8 and 9, and the next map page at bytes 16 to 23, in the format of a page table entry. The header slot names the first map page. A read checks that each entry matches its bitmap, so a damaged entry gives `XX001` and not a wrong allocation.
 
 **Summaries are kept together.** Document 02 section 2.4.7 requires that the summaries of a table sit in contiguous extents, so that a cold query loads them with one sequential read. The allocator gives each table a summary arena, or a share of one for small tables, and allocates its summary extents in order inside it. When the summary arena of a table is full, compaction (document 10) rewrites the table's summaries into a new arena in column order. A cold query then reads the summaries of the columns it needs in one read per column.
 

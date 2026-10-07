@@ -124,6 +124,16 @@ impl<'a> TextIn<'a> {
         Ok(out)
     }
 
+    /// Takes each field whose name starts with `prefix`, in the order of the name. The result has the rest of each name after the prefix.
+    pub fn take_prefixed(&mut self, prefix: &str) -> Vec<(&'a str, &'a str)> {
+        let names: Vec<&'a str> =
+            self.fields.keys().copied().filter(|n| n.starts_with(prefix)).collect();
+        names
+            .into_iter()
+            .filter_map(|n| Some((&n[prefix.len()..], self.fields.remove(n)?)))
+            .collect()
+    }
+
     /// Ends the read. It is an error if a field was not taken.
     pub fn finish(self) -> Result<()> {
         match self.fields.keys().next() {
@@ -161,6 +171,9 @@ mod tests {
         assert_eq!(back.take_bytes::<2>("d").unwrap(), [0, 0]);
         assert_eq!(back.take_str("e").unwrap(), "two words");
         back.finish().unwrap();
+        let mut list = TextIn::parse("test", "x_2 b\nx_1 a\ny 3\n").unwrap();
+        assert_eq!(list.take_prefixed("x_"), [("1", "a"), ("2", "b")]);
+        assert!(list.finish().is_err());
     }
 
     #[test]

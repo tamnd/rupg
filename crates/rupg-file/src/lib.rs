@@ -4,22 +4,33 @@
 
 #![forbid(unsafe_code)]
 
+mod arena;
 mod checksum;
+mod extent;
 mod identity;
 mod le;
 mod owner;
 mod page;
+mod pagetable;
 mod slot;
 pub mod text;
 
 use std::fmt;
 use std::str::FromStr;
 
+pub use arena::{
+    ARENA_PAGES, ArenaKind, ArenaMap, FSM_ARENAS_PER_PAGE, FsmEntry, FsmPage, arena_of, arena_start,
+};
 pub use checksum::{CHECKSUM_ALGORITHM, checksum};
+pub use extent::{EXTENT_BLOCK, EXTENT_BLOCK_PAGES, Extent, ExtentClass};
 pub use identity::{FORMAT_MAJOR, FORMAT_MINOR, Identity, MAGIC};
 pub use owner::{OWNER_MAGIC, OWNER_OFFSET, Owner, SOCKET_MAX};
 pub use page::{
     PAGE_HEADER_SIZE, PageFlags, PageHeader, PageKind, seal, stored_checksum, verify, write_tag,
+};
+pub use pagetable::{
+    MAX_PHYSICAL, PT_FANOUT, PT_MAX_LEVELS, PT_MIN_LEVELS, PtEntry, PtNode, PtPath, pt_capacity,
+    pt_levels,
 };
 pub use slot::{Root, SLOT_MAGIC, Slot, SlotChoice, SlotName, choose_slot};
 
