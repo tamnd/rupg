@@ -98,6 +98,8 @@ A deleted row that an older snapshot can still see moves from its page to a grav
 
 An analytic query reads mostly cold segments, which are immutable and carry their own timestamps and delete marks. So it holds hot undo only for rows updated after its snapshot.
 
+**At M1.** The first MVCC is in `crates/rupg-txn/src/txn.rs` and `crates/rupg-txn/src/undo.rs`. It keeps the undo records in one map in memory, and the slot of an owner is its transaction id, which the node does not use again. A record of an update keeps the old values of the changed columns only. Cleanup uses the usual rule: it removes the undo of a commit when every active snapshot and the `visible` word are at or above its commit timestamp, and then it removes the rows that the commit deleted. Under this rule no reader follows a removed record, because each reader stops at a version that its snapshot sees. A writer waits for the owner of a row on a condition variable, and a wait that closes a cycle gives `40P01` at once. The precise rule, the graveyard, the undo budget and the spill to the file come at M3.
+
 **Budget.** The undo that long snapshots hold must stay below 10 percent of `rupg.memory_limit`. Above that, the oldest undo spills to the file. No transaction fails because of the age of its snapshot. PostgreSQL 17 removed `old_snapshot_threshold`. The 10 percent is a budget.
 
 ## 11.5 Isolation levels

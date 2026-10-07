@@ -206,7 +206,12 @@ name = "rupg-txn"
 version = "0.0.6"
 dependencies = [
  "rupg-common",
+ "rupg-file",
+ "rupg-hot",
  "rupg-platform",
+ "rupg-table",
+ "rupg-tree",
+ "rupg-types",
 ]
 
 [[package]]
