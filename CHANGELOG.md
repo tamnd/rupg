@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Page kind 17 for the pending free list in `rupg-file`, with `FreeListPage` and its text form. Spec/08 now says that a superseded page waits for two checkpoints, because the old slot still uses it after the first one.
+
 ## 0.0.3 (2026-10-07)
 
 The third patch release on the 0.0 line. It completes the file format of spec/08 with the page table, the extents and the free space map, and adds the buffer manager with the virtual memory window and the memory budget. No crate is published.
