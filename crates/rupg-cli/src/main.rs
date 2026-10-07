@@ -106,6 +106,9 @@ fn serve(config: &rupg::server::Config) -> ExitCode {
         }
     };
     eprintln!("rupg serve: listening on {}", server.address());
+    for socket in server.sockets() {
+        eprintln!("rupg serve: listening on Unix socket \"{socket}\"");
+    }
     match server.wait() {
         Ok(()) => ExitCode::SUCCESS,
         Err(e) => {

@@ -1,6 +1,6 @@
 //! A network in memory.
 //!
-//! A connection is two channels of byte chunks. Each listener has an address of the form `host:port`, and port 0 gets a free port from 40000. The fault injection of spec/21 section 21.10 (delay, drop, duplicate, partition) comes with the cluster at M10.
+//! A connection is two channels of byte chunks. Each listener has an address of the form `host:port`, and port 0 gets a free port from 40000. An address that starts with `/` stands for a Unix socket: the server side of its connections is local, and its peer is `[local]`. The fault injection of spec/21 section 21.10 (delay, drop, duplicate, partition) comes with the cluster at M10.
 
 use std::collections::HashMap;
 use std::io::{self, Read, Write};
@@ -37,8 +37,11 @@ impl Net for SimNet {
     fn listen(&self, addr: &str) -> Result<Box<dyn Listener>> {
         let bad =
             || Error::new(SqlState::IO_ERROR, format!("could not bind to the address \"{addr}\""));
-        let (host, port) = addr.rsplit_once(':').ok_or_else(bad)?;
-        let port: u16 = port.parse().map_err(|_| bad())?;
+        let (host, port) = match addr.rsplit_once(':') {
+            _ if addr.starts_with('/') => (addr, 1),
+            Some((host, port)) => (host, port.parse::<u16>().map_err(|_| bad())?),
+            None => return Err(bad()),
+        };
         let mut state = lock(&self.state);
         let addr = if port == 0 {
             loop {
@@ -73,10 +76,13 @@ impl Net for SimNet {
         };
         let listener = state.listeners.get(addr).ok_or_else(refused)?.clone();
         state.next_client += 1;
-        let client = format!("sim-client:{}", state.next_client);
+        let local = addr.starts_with('/');
+        let client =
+            if local { "[local]".to_string() } else { format!("sim-client:{}", state.next_client) };
         let (to_server, from_client) = channel();
         let (to_client, from_server) = channel();
-        let server_end = SimStream::new(to_client, from_client, client);
+        let mut server_end = SimStream::new(to_client, from_client, client);
+        server_end.local = local;
         listener.send(server_end).map_err(|_| refused())?;
         Ok(Box::new(SimStream::new(to_server, from_server, addr.to_string())))
     }
@@ -116,6 +122,7 @@ struct SimStream {
     pos: usize,
     closed: AtomicBool,
     peer: String,
+    local: bool,
 }
 
 impl SimStream {
@@ -127,6 +134,7 @@ impl SimStream {
             pos: 0,
             closed: AtomicBool::new(false),
             peer,
+            local: false,
         }
     }
 }
@@ -179,6 +187,10 @@ impl Stream for SimStream {
     fn peer_addr(&self) -> String {
         self.peer.clone()
     }
+
+    fn is_local(&self) -> bool {
+        self.local
+    }
 }
 
 #[cfg(test)]
@@ -223,5 +235,18 @@ mod tests {
         drop(listener);
         assert!(net.connect("db:5432").is_err());
         assert!(net.listen("no-port").is_err());
+    }
+
+    #[test]
+    fn a_socket_path() {
+        let net = SimNet::new();
+        let listener = net.listen("/tmp/.s.PGSQL.5432").unwrap();
+        assert_eq!(listener.local_addr(), "/tmp/.s.PGSQL.5432");
+        let client = net.connect("/tmp/.s.PGSQL.5432").unwrap();
+        assert!(!client.is_local());
+        let server = listener.accept().unwrap();
+        assert!(server.is_local());
+        assert_eq!(server.peer_addr(), "[local]");
+        assert!(server.peer_user().is_err());
     }
 }

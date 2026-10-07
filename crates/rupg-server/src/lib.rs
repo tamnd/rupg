@@ -4,6 +4,8 @@
 //!
 //! At this step each connection has its own task and the only method of authentication is `trust`. TLS, SCRAM, `pg_hba.conf` and the workers of spec/06 section 6.2 come later in M2.
 //!
+//! The server listens on the TCP address of [`Config::listen`] and on the Unix socket `<dir>/.s.PGSQL.<port>` for each directory of `unix_socket_directories`, with the port of the TCP address (spec/06 section 6.15).
+//!
 //! This crate first ships in milestone M2. See `spec/22-crate-layout.md` section 22.4 and `spec/23-milestones.md`.
 
 #![forbid(unsafe_code)]
@@ -69,8 +71,88 @@ pub struct Server {
     shared: Arc<Shared>,
     net: Arc<dyn Net>,
     address: String,
-    accept: Option<TaskHandle>,
+    sockets: Vec<String>,
+    accept: Vec<TaskHandle>,
     connections: Arc<Mutex<Vec<TaskHandle>>>,
+}
+
+/// The name of the socket file of a port, as `UNIXSOCK_PATH` in `pqcomm.h` gives it.
+fn socket_name(port: &str) -> String {
+    format!(".s.PGSQL.{port}")
+}
+
+/// `SplitDirectoriesString` in `varlena.c`: the directories of a list separated by commas. A directory can be in double quotes, and a pair of double quotes in it stands for one. The spaces around each item and the slashes at the end of a path are not part of it.
+///
+/// # Errors
+///
+/// A list with a quote that does not end, or with an empty item.
+fn split_directories(list: &str) -> std::result::Result<Vec<String>, ()> {
+    let mut dirs = Vec::new();
+    let mut rest = list.trim_start();
+    if rest.is_empty() {
+        return Ok(dirs);
+    }
+    loop {
+        let mut dir = String::new();
+        if let Some(quoted) = rest.strip_prefix('"') {
+            let mut chars = quoted.char_indices();
+            loop {
+                match chars.next() {
+                    Some((i, '"')) if quoted[i + 1..].starts_with('"') => {
+                        dir.push('"');
+                        chars.next();
+                    }
+                    Some((i, '"')) => {
+                        rest = quoted[i + 1..].trim_start();
+                        break;
+                    }
+                    Some((_, c)) => dir.push(c),
+                    None => return Err(()),
+                }
+            }
+        } else {
+            let end = rest.find(',').unwrap_or(rest.len());
+            dir = rest[..end].trim_end().to_string();
+            rest = &rest[end..];
+        }
+        while dir.len() > 1 && dir.ends_with('/') {
+            dir.pop();
+        }
+        if dir.is_empty() {
+            return Err(());
+        }
+        dirs.push(dir);
+        match rest.strip_prefix(',') {
+            Some(next) => rest = next.trim_start(),
+            None if rest.is_empty() => return Ok(dirs),
+            None => return Err(()),
+        }
+    }
+}
+
+/// The paths of the Unix sockets for the TCP address `address`.
+fn socket_paths(settings: &Settings, address: &str) -> Result<Vec<String>> {
+    let list = settings.get("unix_socket_directories").unwrap_or_default();
+    let dirs = split_directories(&list).map_err(|()| {
+        Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "invalid list syntax in parameter \"unix_socket_directories\"",
+        )
+    })?;
+    let port = address.rsplit_once(':').map_or("5432", |(_, port)| port);
+    let name = socket_name(port);
+    dirs.iter()
+        .map(|dir| {
+            if !dir.starts_with('/') {
+                return Err(Error::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    "invalid value for parameter \"unix_socket_directories\"",
+                )
+                .with_detail(format!("The directory \"{dir}\" is not an absolute path.")));
+            }
+            Ok(if dir == "/" { format!("/{name}") } else { format!("{dir}/{name}") })
+        })
+        .collect()
 }
 
 impl Server {
@@ -85,9 +167,21 @@ impl Server {
         tasks: Arc<dyn Tasks>,
         entropy: Arc<dyn Entropy>,
     ) -> Result<Server> {
-        let base = connection::base_settings(&config.settings)?;
         let listener = net.listen(&config.listen)?;
         let address = listener.local_addr();
+        // `listen_addresses` and `port` show the TCP address that the server got.
+        let mut args = config.settings.clone();
+        if let Some((host, port)) = address.rsplit_once(':') {
+            let host = host.trim_start_matches('[').trim_end_matches(']');
+            args.push(("listen_addresses".into(), host.into()));
+            args.push(("port".into(), port.into()));
+        }
+        let base = connection::base_settings(&args)?;
+        let sockets = socket_paths(&base, &address)?;
+        let mut listeners = vec![listener];
+        for path in &sockets {
+            listeners.push(net.listen(path)?);
+        }
         let shared = Arc::new(Shared {
             base,
             superuser: config.superuser.clone(),
@@ -96,21 +190,34 @@ impl Server {
             stopping: AtomicBool::new(false),
         });
         let connections = Arc::new(Mutex::new(Vec::new()));
-        let accept = {
-            let shared = shared.clone();
-            let connections = connections.clone();
+        let mut server = Server { shared, net, address, sockets, accept: Vec::new(), connections };
+        for listener in listeners {
+            let shared = server.shared.clone();
+            let connections = server.connections.clone();
             let spawner = tasks.clone();
-            tasks.spawn(
+            let task = tasks.spawn(
                 "rupg-accept",
                 Box::new(move || accept(&shared, &*listener, &*spawner, &connections)),
-            )?
-        };
-        Ok(Server { shared, net, address, accept: Some(accept), connections })
+            );
+            match task {
+                Ok(task) => server.accept.push(task),
+                Err(error) => {
+                    let _ = server.stop();
+                    return Err(error);
+                }
+            }
+        }
+        Ok(server)
     }
 
-    /// The address of the listener, with the port that it got.
+    /// The TCP address of the server, with the port that it got.
     pub fn address(&self) -> &str {
         &self.address
+    }
+
+    /// The paths of the Unix sockets of the server.
+    pub fn sockets(&self) -> &[String] {
+        &self.sockets
     }
 
     /// The smart shutdown: the server accepts no more connections, and waits until each client closes its connection.
@@ -120,11 +227,14 @@ impl Server {
     /// A task of the server that panicked.
     pub fn stop(mut self) -> Result<()> {
         self.shared.stopping.store(true, Ordering::SeqCst);
-        // A connection to the listener wakes the task that waits in accept.
-        if let Ok(stream) = self.net.connect(&self.address) {
-            let _ = stream.shutdown();
+        // A connection to each listener wakes the task that waits in accept.
+        let addresses = std::iter::once(&self.address).chain(&self.sockets);
+        for address in addresses.take(self.accept.len()) {
+            if let Ok(stream) = self.net.connect(address) {
+                let _ = stream.shutdown();
+            }
         }
-        if let Some(accept) = self.accept.take() {
+        for accept in std::mem::take(&mut self.accept) {
             accept.join()?;
         }
         let tasks = std::mem::take(&mut *lock(&self.connections));
@@ -134,16 +244,16 @@ impl Server {
         Ok(())
     }
 
-    /// Waits until the task that accepts connections ends, which is never before [`Server::stop`].
+    /// Waits until the tasks that accept connections end, which is never before [`Server::stop`].
     ///
     /// # Errors
     ///
-    /// The task panicked.
+    /// A task panicked.
     pub fn wait(mut self) -> Result<()> {
-        match self.accept.take() {
-            Some(accept) => accept.join(),
-            None => Ok(()),
+        for accept in std::mem::take(&mut self.accept) {
+            accept.join()?;
         }
+        Ok(())
     }
 }
 
@@ -399,5 +509,29 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         if !going {
             return;
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::split_directories;
+
+    #[test]
+    fn directory_lists() {
+        let split = |list: &str| split_directories(list);
+        assert_eq!(split(""), Ok(vec![]));
+        assert_eq!(split(" /tmp "), Ok(vec!["/tmp".to_string()]));
+        assert_eq!(
+            split("/tmp/, /run/rupg"),
+            Ok(vec!["/tmp".to_string(), "/run/rupg".to_string()])
+        );
+        assert_eq!(
+            split(r#""/a,b" , "/c""d""#),
+            Ok(vec!["/a,b".to_string(), r#"/c"d"#.to_string()])
+        );
+        assert_eq!(split("/"), Ok(vec!["/".to_string()]));
+        assert_eq!(split("/tmp,"), Err(()));
+        assert_eq!(split(r#""/tmp"#), Err(()));
+        assert_eq!(split(r#""/a" b"#), Err(()));
     }
 }

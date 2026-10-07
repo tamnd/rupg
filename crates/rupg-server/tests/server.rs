@@ -147,3 +147,56 @@ fn an_ssl_request() {
     drop(stream);
     server.stop().unwrap();
 }
+
+#[cfg(unix)]
+#[test]
+fn a_unix_socket() {
+    let server = server();
+    let port = server.address().rsplit_once(':').unwrap().1.to_owned();
+    let path = format!("/tmp/.s.PGSQL.{port}");
+    assert_eq!(server.sockets(), std::slice::from_ref(&path));
+    let mut stream = OsNet.connect(&path).unwrap();
+    stream.write_all(&startup(&[("user", "postgres")])).unwrap();
+    assert_eq!(read(&mut *stream).last().unwrap(), "ready I");
+    stream
+        .write_all(&query("SHOW unix_socket_directories; SHOW port; SHOW listen_addresses"))
+        .unwrap();
+    let port_row = format!("row {port}");
+    assert_eq!(
+        read(&mut *stream),
+        [
+            "columns 1",
+            "row /tmp",
+            "SHOW",
+            "columns 1",
+            &port_row,
+            "SHOW",
+            "columns 1",
+            "row 127.0.0.1",
+            "SHOW",
+            "ready I"
+        ]
+    );
+    drop(stream);
+    server.stop().unwrap();
+    assert!(OsNet.connect(&path).is_err());
+}
+
+#[test]
+fn socket_directories() {
+    let start = |dirs: &str| {
+        let config = Config {
+            listen: "127.0.0.1:0".into(),
+            settings: vec![("unix_socket_directories".into(), dirs.into())],
+            ..Config::default()
+        };
+        Server::start(&config, Arc::new(OsNet), Arc::new(OsTasks), Arc::new(OsEntropy))
+    };
+    let server = start("").unwrap();
+    assert!(server.sockets().is_empty());
+    server.stop().unwrap();
+    let error = start("/tmp,").unwrap_err();
+    assert_eq!(error.message(), "invalid list syntax in parameter \"unix_socket_directories\"");
+    let error = start("tmp").unwrap_err();
+    assert_eq!(error.detail(), Some("The directory \"tmp\" is not an absolute path."));
+}
