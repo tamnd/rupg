@@ -5,3 +5,5 @@
 //! This crate first ships in milestone M1. See `spec/22-crate-layout.md` section 22.4 and `spec/23-milestones.md`.
 
 #![deny(unsafe_op_in_unsafe_fn)]
+
+pub mod crc32c;

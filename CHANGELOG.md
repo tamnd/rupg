@@ -10,6 +10,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `rupg-crash workload` and `rupg-crash verify` run the T8 workload on a file of the operating system and check a file after a crash against the digests that the workload printed.
 - `rupg::check` reports `log_bytes`, the bytes of the log blocks that an open replays, and `rupg check` prints it. The M1 benchmark uses it to show the size of the log before a recovery.
 
+### Changed
+
+- The log checksum uses the CRC32C instruction when the CPU has it: SSE 4.2 on x86-64 and the CRC extension on AArch64. Other CPUs use the table code. The code moved from `rupg-log` to `rupg_kernels::crc32c`.
+- Recovery reads each ring one time. The scan finds the safe prefixes and does not copy the block bodies, and the new `Recovery::for_each_safe` gives the safe blocks in ring order to replay and to `rupg check`. An insert into a PAX page moves the bytes with one copy. On an Apple M-series laptop, the open of a file with 0.5 GiB of log takes 6.9 s, and it took 9.1 s before. The open of a file with 2294 small blocks takes 80 ms, and it took 194 ms before. Spec/11 section 11.16 has the numbers, and spec/24 Q73 tracks the gap to the replay budget.
+
 ## 0.0.10 (2026-10-07)
 
 The tenth patch release on the 0.0 line. It adds the T8 crash test, the M1 fuzz targets and the loom tests, and fixes the two bugs that the fuzz targets found. No crate is published.

@@ -48,7 +48,8 @@ impl Recovery {
     pub fn scan(store: &FileStore) -> Result<Recovery> {
         let mut rings = Vec::new();
         for state in store.rings() {
-            let mut reader = RingReader::new(store, &state, state.redo)?;
+            // The scan needs only the headers. The checksum still covers the whole block.
+            let mut reader = RingReader::new(store, &state, state.redo)?.without_bodies();
             let mut blocks = Vec::new();
             while let Some((placed, b)) = reader.next_block()? {
                 blocks.push(Found {
@@ -142,7 +143,44 @@ impl Recovery {
             .collect()
     }
 
-    /// Reads the whole block of `found`, with its body.
+    /// Reads the blocks of [`Recovery::safe`] again, with their bodies, and calls `f` with each one in the same order. Each ring is read once, from its first safe block to its last, so the cost is one more read of the log. A block that does not read again as the scan found it gives SQLSTATE `XX001`.
+    pub fn for_each_safe(
+        &self,
+        store: &FileStore,
+        mut f: impl FnMut(&Found, Block) -> Result<()>,
+    ) -> Result<()> {
+        let safe = self.safe();
+        let mut i = 0;
+        while let Some(first) = safe.get(i) {
+            let ring = first.ring;
+            let s = self
+                .ring(ring)
+                .ok_or_else(|| Error::internal(format!("recovery has no ring {ring}")))?;
+            let mut reader = RingReader::new(store, &s.state, first.placed.position)?;
+            while let Some(&found) = safe.get(i).filter(|b| b.ring == ring) {
+                // A part block that no commit names lies between two safe blocks. The reader reads it and drops it.
+                loop {
+                    match reader.next_block()? {
+                        Some((placed, block)) if placed == found.placed => {
+                            f(found, block)?;
+                            break;
+                        }
+                        Some((placed, _)) if placed.end <= found.placed.position => {}
+                        _ => {
+                            return Err(Error::corrupted(format!(
+                                "the log block of ring {ring} at position {} cannot be read again",
+                                found.placed.position
+                            )));
+                        }
+                    }
+                }
+                i += 1;
+            }
+        }
+        Ok(())
+    }
+
+    /// Reads the whole block of `found`, with its body. To read every safe block, [`Recovery::for_each_safe`] reads each ring once.
     pub fn read(&self, store: &FileStore, found: &Found) -> Result<Block> {
         let s = self
             .ring(found.ring)

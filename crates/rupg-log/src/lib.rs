@@ -5,7 +5,6 @@
 #![forbid(unsafe_code)]
 
 mod block;
-mod crc;
 mod record;
 mod recovery;
 mod ring;

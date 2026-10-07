@@ -6,7 +6,7 @@ use std::fmt;
 
 use rupg_common::{Error, Hlc, Result};
 
-use crate::crc;
+use rupg_kernels::crc32c as crc;
 
 /// The size of the block header.
 pub const BLOCK_HEADER: usize = 40;
@@ -217,6 +217,16 @@ impl Block {
 
     /// Reads the block in `bytes`. For a fill block `bytes` is the header, and for other blocks it is exactly the length that [`BlockHeader::read`] gave. It gives `Ok(None)` when the checksum fails or the block is not the block of `ring` at `position`. That is the end of the ring. A block that passes those checks and is not valid gives SQLSTATE `XX001`. A fill block comes back with an empty body.
     pub fn decode(bytes: &[u8], ring: u16, position: u64) -> Result<Option<Block>> {
+        Block::decode_with(bytes, ring, position, true)
+    }
+
+    /// [`Block::decode`], with an empty body when `body` is false. The checksum covers the body in both cases.
+    pub fn decode_with(
+        bytes: &[u8],
+        ring: u16,
+        position: u64,
+        body: bool,
+    ) -> Result<Option<Block>> {
         let Some(h) = (bytes.len() >= BLOCK_HEADER).then(|| BlockHeader::read(bytes)).flatten()
         else {
             return Ok(None);
@@ -267,7 +277,7 @@ impl Block {
             )),
             xid: u64::from_le_bytes(bytes[32..40].try_into().unwrap_or_default()),
             deps,
-            body: bytes[start..].to_vec(),
+            body: if body { bytes[start..].to_vec() } else { Vec::new() },
         };
         Ok(Some(block))
     }

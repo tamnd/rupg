@@ -321,7 +321,10 @@ pub struct RingReader<'a> {
     at: u64,
     limit: u64,
     chunk_at: u64,
+    /// The bytes of `chunk` that hold the file from `chunk_at`. The buffer keeps its size, so a later read does not zero it again.
+    chunk_len: usize,
     chunk: Vec<u8>,
+    bodies: bool,
     done: bool,
 }
 
@@ -338,9 +341,17 @@ impl<'a> RingReader<'a> {
             at: from,
             limit: from + state.size(),
             chunk_at: 0,
+            chunk_len: 0,
             chunk: Vec::new(),
+            bodies: true,
             done: state.extents.is_empty(),
         })
+    }
+
+    /// The same reader, but each block that it gives has an empty body. It still reads each block and checks its checksum. Recovery uses it for the scan, which keeps only the headers.
+    pub fn without_bodies(mut self) -> RingReader<'a> {
+        self.bodies = false;
+        self
     }
 
     /// The position after the last block that the reader gave. When the reader is at the end, it is the end of the ring.
@@ -351,12 +362,17 @@ impl<'a> RingReader<'a> {
     /// `len` bytes at ring position `at`, which do not cross an extent.
     fn bytes(&mut self, at: u64, len: usize) -> Result<&[u8]> {
         let end = at + len as u64;
-        if at < self.chunk_at || end > self.chunk_at + self.chunk.len() as u64 {
+        if at < self.chunk_at || end > self.chunk_at + self.chunk_len as u64 {
             let (extent, offset) = place(self.extents, at);
             let start = offset - offset % UNIT;
-            let want = (offset - start + len as u64).max(CHUNK).min(RING_EXTENT_BYTES - start);
-            self.chunk.resize(want as usize, 0);
-            self.store.read_ring(extent, start, &mut self.chunk)?;
+            let want =
+                (offset - start + len as u64).max(CHUNK).min(RING_EXTENT_BYTES - start) as usize;
+            if self.chunk.len() < want {
+                self.chunk.resize(want, 0);
+            }
+            self.chunk_len = 0;
+            self.store.read_ring(extent, start, &mut self.chunk[..want])?;
+            self.chunk_len = want;
             self.chunk_at = at - (offset - start);
         }
         let from = (at - self.chunk_at) as usize;
@@ -379,10 +395,11 @@ impl<'a> RingReader<'a> {
                 _ => break,
             };
             let ring = self.ring;
+            let bodies = self.bodies;
             let block = if h.fill {
                 Block::decode(&header, ring, at)?
             } else {
-                Block::decode(self.bytes(at, h.length)?, ring, at)?
+                Block::decode_with(self.bytes(at, h.length)?, ring, at, bodies)?
             };
             let Some(block) = block else { break };
             self.at = at + h.length as u64;

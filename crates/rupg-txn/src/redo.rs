@@ -105,10 +105,7 @@ pub fn replay<P: PageAccess>(
     tables: &dyn Fn(Oid) -> Option<Arc<Table>>,
 ) -> Result<Replayed> {
     let mut done = Replayed { newest: recovery.newest(), ..Replayed::default() };
-    for found in recovery.safe() {
-        let block = recovery.read(store, found)?;
-        apply(pages, &block, tables, &mut done)?;
-    }
+    recovery.for_each_safe(store, |_, block| apply(pages, &block, tables, &mut done))?;
     Ok(done)
 }
 
