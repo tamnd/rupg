@@ -27,6 +27,11 @@ impl RowIds {
         self.next.load(Ordering::Acquire)
     }
 
+    /// Moves the counter past `local`, if it is not past it already.
+    pub fn saw(&self, local: u64) {
+        self.next.fetch_max(local.saturating_add(1), Ordering::AcqRel);
+    }
+
     /// Takes the next block. The last block can have fewer ids. When no ids are left, the result is SQLSTATE `54000`.
     pub fn take(&self) -> Result<RowIdBlock> {
         let mut start = self.next.load(Ordering::Acquire);
@@ -81,6 +86,10 @@ mod tests {
     #[test]
     fn blocks() {
         let ids = RowIds::new(ShardId(3), 5);
+        ids.saw(2);
+        assert_eq!(ids.next_local(), 5);
+        ids.saw(4);
+        assert_eq!(ids.next_local(), 5);
         let mut a = ids.take().unwrap();
         let b = ids.take().unwrap();
         assert_eq!((a.remaining(), ids.next_local()), (1024, 5 + 2048));
@@ -92,6 +101,7 @@ mod tests {
         let last = ids.take().unwrap();
         assert_eq!(last.remaining(), 10);
         assert_eq!(last.last().map(RowId::local), Some(RowId::MAX_LOCAL));
+        ids.saw(3);
         let err = ids.take().unwrap_err();
         assert_eq!(err.state(), SqlState::PROGRAM_LIMIT_EXCEEDED);
     }

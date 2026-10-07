@@ -21,6 +21,8 @@ impl SqlState {
     pub const INVALID_PARAMETER_VALUE: SqlState = SqlState(*b"22023");
     /// `22P02` invalid_text_representation.
     pub const INVALID_TEXT_REPRESENTATION: SqlState = SqlState(*b"22P02");
+    /// `23502` not_null_violation.
+    pub const NOT_NULL_VIOLATION: SqlState = SqlState(*b"23502");
     /// `23505` unique_violation.
     pub const UNIQUE_VIOLATION: SqlState = SqlState(*b"23505");
     /// `25006` read_only_sql_transaction.
@@ -31,6 +33,14 @@ impl SqlState {
     pub const DEADLOCK_DETECTED: SqlState = SqlState(*b"40P01");
     /// `42P01` undefined_table.
     pub const UNDEFINED_TABLE: SqlState = SqlState(*b"42P01");
+    /// `42601` syntax_error.
+    pub const SYNTAX_ERROR: SqlState = SqlState(*b"42601");
+    /// `42701` duplicate_column.
+    pub const DUPLICATE_COLUMN: SqlState = SqlState(*b"42701");
+    /// `42804` datatype_mismatch.
+    pub const DATATYPE_MISMATCH: SqlState = SqlState(*b"42804");
+    /// `42P07` duplicate_table.
+    pub const DUPLICATE_TABLE: SqlState = SqlState(*b"42P07");
     /// `53000` insufficient_resources.
     pub const INSUFFICIENT_RESOURCES: SqlState = SqlState(*b"53000");
     /// `53100` disk_full.
@@ -39,6 +49,8 @@ impl SqlState {
     pub const OUT_OF_MEMORY: SqlState = SqlState(*b"53200");
     /// `54000` program_limit_exceeded.
     pub const PROGRAM_LIMIT_EXCEEDED: SqlState = SqlState(*b"54000");
+    /// `54011` too_many_columns.
+    pub const TOO_MANY_COLUMNS: SqlState = SqlState(*b"54011");
     /// `55000` object_not_in_prerequisite_state.
     pub const OBJECT_NOT_IN_PREREQUISITE_STATE: SqlState = SqlState(*b"55000");
     /// `55006` object_in_use.
@@ -185,13 +197,19 @@ mod tests {
             (SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "numeric_value_out_of_range"),
             (SqlState::INVALID_PARAMETER_VALUE, "invalid_parameter_value"),
             (SqlState::INVALID_TEXT_REPRESENTATION, "invalid_text_representation"),
+            (SqlState::NOT_NULL_VIOLATION, "not_null_violation"),
             (SqlState::UNIQUE_VIOLATION, "unique_violation"),
             (SqlState::READ_ONLY_SQL_TRANSACTION, "read_only_sql_transaction"),
             (SqlState::SERIALIZATION_FAILURE, "serialization_failure"),
             (SqlState::DEADLOCK_DETECTED, "deadlock_detected"),
             (SqlState::UNDEFINED_TABLE, "undefined_table"),
+            (SqlState::SYNTAX_ERROR, "syntax_error"),
+            (SqlState::DUPLICATE_COLUMN, "duplicate_column"),
+            (SqlState::DATATYPE_MISMATCH, "datatype_mismatch"),
+            (SqlState::DUPLICATE_TABLE, "duplicate_table"),
             (SqlState::INSUFFICIENT_RESOURCES, "insufficient_resources"),
             (SqlState::PROGRAM_LIMIT_EXCEEDED, "program_limit_exceeded"),
+            (SqlState::TOO_MANY_COLUMNS, "too_many_columns"),
             (SqlState::DISK_FULL, "disk_full"),
             (SqlState::OUT_OF_MEMORY, "out_of_memory"),
             (SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, "object_not_in_prerequisite_state"),

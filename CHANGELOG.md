@@ -7,6 +7,12 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - The M1 types in `rupg-types`. `TypeId` names a type by its OID in `pg_type`, with its name and the width of its storage form. `Datum` holds one value of `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `oid`, `text`, `bytea`, `uuid`, `date`, `timestamp` or `timestamptz`, and `encode` and `decode` give its storage form. A bad storage form gives `XX001`.
+- The M1 table in `rupg-table`. `TableDef` checks the columns of a table and maps each typed column to the storage form of the hot store. `encode` checks a row against the columns with the errors of PostgreSQL for an `INSERT`: `42601` for a wrong value count, `42804` for a wrong type and `23502` for a NULL in a column that is not nullable. `Table` holds the definition, the hot store and the row id counter of one shard.
+- SQLSTATEs `23502`, `42601`, `42701`, `42804`, `42P07` and `54011` in `rupg-common`, and `RowIds::saw` in `rupg-hot`, which recovery uses to move the row id counter past each row that it finds.
+
+### Changed
+
+- More than 1,600 columns give `54011`, as in PostgreSQL, in place of `54000`.
 
 ## 0.0.6 (2026-10-07)
 

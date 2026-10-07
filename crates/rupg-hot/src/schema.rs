@@ -49,11 +49,11 @@ impl Schema {
     /// The most columns in a table, as in PostgreSQL.
     pub const MAX_COLUMNS: usize = 1600;
 
-    /// A schema. More than 1,600 columns give SQLSTATE `54000`. A fixed width of 0 gives `XX000`.
+    /// A schema. More than 1,600 columns give SQLSTATE `54011`. A fixed width of 0 gives `XX000`.
     pub fn new(version: u32, columns: Vec<Column>) -> Result<Schema> {
         if columns.len() > Schema::MAX_COLUMNS {
             return Err(Error::new(
-                SqlState::PROGRAM_LIMIT_EXCEEDED,
+                SqlState::TOO_MANY_COLUMNS,
                 format!("tables can have at most {} columns", Schema::MAX_COLUMNS),
             ));
         }
@@ -118,7 +118,7 @@ mod tests {
         assert!(schema.check(&row(vec![Some(vec![1; 3]), None])).is_err());
         assert!(schema.check(&row(vec![Some(vec![1; 4])])).is_err());
         let many = vec![fixed; Schema::MAX_COLUMNS + 1];
-        assert_eq!(Schema::new(1, many).unwrap_err().state(), SqlState::PROGRAM_LIMIT_EXCEEDED);
+        assert_eq!(Schema::new(1, many).unwrap_err().state(), SqlState::TOO_MANY_COLUMNS);
         assert!(Schema::new(1, vec![Column { width: Width::Fixed(0), nullable: false }]).is_err());
     }
 }
