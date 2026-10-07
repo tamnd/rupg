@@ -6,7 +6,9 @@ use std::sync::{Arc, Mutex};
 use rupg_platform::os::{OsEntropy, OsIo, OsNet, OsTasks};
 use rupg_platform::{Net, Stream};
 use rupg_server::{Config, Log, Server};
-use rupg_wire::{Authentication, Backend, Crypto, Hashes, PROTOCOL_3_0, md5_encrypt};
+use rupg_wire::{
+    Authentication, Backend, CANCEL_REQUEST_CODE, Crypto, Hashes, PROTOCOL_3_0, md5_encrypt,
+};
 
 fn start(config: &Config) -> rupg_common::Result<Server> {
     Server::start(config, Arc::new(OsNet), Arc::new(OsIo), Arc::new(OsTasks), Arc::new(OsEntropy))
@@ -561,4 +563,68 @@ fn the_log_of_refused_roles() {
     assert_eq!(lines, ["ok", "FATAL 28000 role \"bob\" does not exist"]);
     server.stop().unwrap();
     assert_eq!(log.take(), ["FATAL:  role \"bob\" does not exist"]);
+}
+
+/// Sends a `CancelRequest` on a new connection and waits until the server closes it.
+fn cancel(server: &Server, pid: i32, key: &[u8]) {
+    let mut packet = u32::try_from(12 + key.len()).unwrap().to_be_bytes().to_vec();
+    packet.extend(CANCEL_REQUEST_CODE.to_be_bytes());
+    packet.extend(pid.to_be_bytes());
+    packet.extend(key);
+    let mut stream = OsNet.connect(server.address()).unwrap();
+    stream.write_all(&packet).unwrap();
+    let mut buf = [0; 16];
+    assert_eq!(stream.read(&mut buf).unwrap(), 0);
+}
+
+#[test]
+fn cancel_requests() {
+    let (server, log) = password_server("host all all 127.0.0.1/32 trust\n", &[]);
+    let mut stream = OsNet.connect(server.address()).unwrap();
+    stream.write_all(&startup(&[("user", "postgres"), ("database", "postgres")])).unwrap();
+    let mut input = Vec::new();
+    let (pid, key) = loop {
+        let mut buf = [0; 4096];
+        let n = stream.read(&mut buf).unwrap();
+        assert!(n > 0);
+        input.extend_from_slice(&buf[..n]);
+        let mut at = 0;
+        let mut found = None;
+        while let Some((message, size)) = Backend::decode(&input[at..]).unwrap() {
+            if let Backend::BackendKeyData { pid, key } = message {
+                found = Some((pid, key.to_vec()));
+            }
+            at += size;
+            if matches!(message, Backend::ReadyForQuery(_)) {
+                break;
+            }
+        }
+        if let Some(found) = found {
+            break found;
+        }
+    };
+    // A good key while the session waits for a query cancels nothing, and the server logs nothing.
+    cancel(&server, pid, &key);
+    let mut wrong = key.clone();
+    wrong[0] ^= 1;
+    cancel(&server, pid, &wrong);
+    cancel(&server, 0, &key);
+    cancel(&server, pid ^ 1, &key);
+    stream.write_all(&query("SHOW work_mem")).unwrap();
+    let lines = read(&mut *stream);
+    assert!(
+        lines.ends_with(&["row 4MB".to_owned(), "SHOW".to_owned(), "ready I".to_owned()]),
+        "{lines:?}"
+    );
+    stream.write_all(&message(b'X', b"")).unwrap();
+    assert!(read(&mut *stream).is_empty());
+    server.stop().unwrap();
+    assert_eq!(
+        log.take(),
+        [
+            format!("LOG:  wrong key in cancel request for process {pid}"),
+            "LOG:  invalid cancel request with PID 0".to_owned(),
+            format!("LOG:  PID {} in cancel request did not match any process", pid ^ 1),
+        ]
+    );
 }

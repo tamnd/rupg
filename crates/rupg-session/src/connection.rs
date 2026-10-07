@@ -2,6 +2,9 @@
 //!
 //! The connection does no I/O. The server gives it the bytes that the client sent and an output buffer, and [`Connection::step`] tells the server what to do next. See `spec/06-server-and-wire.md` section 6.1.
 
+use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
+
 use rupg_common::{Error, SqlState};
 use rupg_sql::Severity;
 use rupg_sql::nodes::Node;
@@ -218,12 +221,14 @@ pub struct Connection {
     session: Session,
     user: String,
     protocol: u32,
-    statements: Statements<std::sync::Arc<Prepared>>,
+    statements: Statements<Arc<Prepared>>,
     portals: Portals<Portal>,
     /// `xact_started` of `postgres.c`: a statement runs in the transaction, so `finish_xact_command` must end it.
     xact_started: bool,
     /// `XACT_FLAGS_PIPELINING`: an `Execute` completed in the transaction, so the next message starts an implicit block.
     pipelining: bool,
+    /// `QueryCancelPending`. The server sets it when a `CancelRequest` with the key of this session arrives.
+    cancel: Arc<AtomicBool>,
 }
 
 impl Connection {
@@ -239,9 +244,26 @@ impl Connection {
             portals: Portals::new(),
             xact_started: false,
             pipelining: false,
+            cancel: Arc::new(AtomicBool::new(false)),
         };
         connection.session.set_utf8(connection.utf8());
         connection
+    }
+
+    /// The flag that a `CancelRequest` sets. The server keeps a clone of it with the cancel key of the session.
+    pub fn cancel_flag(&self) -> Arc<AtomicBool> {
+        Arc::clone(&self.cancel)
+    }
+
+    /// `CHECK_FOR_INTERRUPTS` for a cancel. It clears the flag and gives `57014` when the flag was set.
+    fn interrupted(&self) -> Result<(), Error> {
+        if self.cancel.swap(false, Ordering::Relaxed) {
+            return Err(Error::new(
+                SqlState::QUERY_CANCELED,
+                "canceling statement due to user request",
+            ));
+        }
+        Ok(())
     }
 
     /// The settings of the session.
@@ -271,6 +293,10 @@ impl Connection {
         }
         let read = self.session.read(input);
         let used = read.used;
+        if read.message.is_some() {
+            // A cancel does nothing when no statement runs, so the main loop of `postgres.c` drops a cancel that came while it read the message.
+            self.cancel.store(false, Ordering::Relaxed);
+        }
         let next = match read.message {
             None => Next::Read,
             Some(Err(error)) => {
@@ -434,7 +460,9 @@ impl Connection {
             if many {
                 self.transaction.begin_implicit();
             }
-            let result = if self.transaction.failed() && !utility::exits_transaction(node) {
+            let result = if let Err(error) = self.interrupted() {
+                Err(error)
+            } else if self.transaction.failed() && !utility::exits_transaction(node) {
                 Err(Error::new(
                     SqlState::IN_FAILED_SQL_TRANSACTION,
                     "current transaction is aborted, commands ignored until end of transaction block",
@@ -1054,5 +1082,42 @@ mod tests {
         let ascii =
             session_settings(&base, &start(None, &[("client_encoding", "sql_ascii")])).unwrap();
         assert_eq!(ascii.get("client_encoding").as_deref(), Some("SQL_ASCII"));
+    }
+
+    #[test]
+    fn cancel() {
+        big_stack(cancel_cases);
+    }
+
+    fn cancel_cases() {
+        let (mut c, _) = connect();
+        let flag = c.cancel_flag();
+        // A cancel that comes while the session waits for a message does nothing.
+        flag.store(true, Ordering::Relaxed);
+        assert_eq!(
+            send(&mut c, &query("SHOW work_mem")),
+            ["columns work_mem", "row 4MB", "SHOW", "ready I"]
+        );
+        assert!(!flag.load(Ordering::Relaxed));
+        // A cancel that comes after the session read the message stops the statement at the next check.
+        let mut out = OutBuf::new();
+        flag.store(true, Ordering::Relaxed);
+        assert!(c.simple_query("SET work_mem = '8MB'; SHOW work_mem", &mut out));
+        c.recover(&mut out);
+        assert_eq!(render(&out), ["ERROR 57014 canceling statement due to user request"]);
+        assert_eq!(
+            send(&mut c, &query("SHOW work_mem")),
+            ["ready I", "columns work_mem", "row 4MB", "SHOW", "ready I"]
+        );
+        // Execute checks after the portal is found and before it runs, and the error drops the messages up to Sync.
+        let input = [parse("s", "SHOW work_mem", &[]), bind("p", "s", &[], &[], &[])].concat();
+        assert_eq!(send(&mut c, &input), ["ParseComplete", "BindComplete"]);
+        let mut out = OutBuf::new();
+        flag.store(true, Ordering::Relaxed);
+        let result = c.execute(b"p", 0, &mut out);
+        c.after(result, &mut out);
+        assert_eq!(render(&out), ["ERROR 57014 canceling statement due to user request"]);
+        assert_eq!(send(&mut c, &[execute("p", 0), sync()].concat()), ["ready I"]);
+        assert!(!flag.load(Ordering::Relaxed));
     }
 }

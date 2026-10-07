@@ -157,6 +157,7 @@ impl Connection {
             )
             .into());
         }
+        self.interrupted()?;
         let prepared = Prepared { text, stmt, params, columns };
         self.statements.insert(name, Arc::new(prepared))?;
         out.parse_complete();
@@ -249,6 +250,7 @@ impl Connection {
         if self.transaction.failed() && !utility::exits_transaction(node) {
             return Err(aborted().into());
         }
+        self.interrupted()?;
         let portal = self.portals.get_mut(name)?;
         if portal.failed || matches!(portal.run, Run::Done) {
             return Err(Error::new(
