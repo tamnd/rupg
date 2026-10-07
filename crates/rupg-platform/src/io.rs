@@ -26,6 +26,19 @@ impl OpenMode {
     }
 }
 
+/// The owner and the permission bits of a file, as `stat` gives them. The server checks them for the key of its certificate.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct FileMode {
+    /// True for a regular file.
+    pub regular: bool,
+    /// True when the effective user of this process owns the file.
+    pub mine: bool,
+    /// True when root owns the file.
+    pub root: bool,
+    /// The permission bits, such as `0o600`.
+    pub mode: u32,
+}
+
 /// The file system.
 pub trait Io: Send + Sync + fmt::Debug {
     /// Opens a file.
@@ -50,6 +63,19 @@ pub trait Io: Send + Sync + fmt::Debug {
             SqlState::FEATURE_NOT_SUPPORTED,
             format!("could not open directory \"{}\": not supported", path.display()),
         ))
+    }
+
+    /// The owner and the permission bits of a file. An implementation without owners gives a regular file of this process with the mode `0o600` when the file exists.
+    ///
+    /// # Errors
+    ///
+    /// The file does not exist or cannot be read with `stat`. The message is only the text of the system, such as `No such file or directory`, because the caller puts it in its own message.
+    fn mode(&self, path: &Path) -> Result<FileMode> {
+        if self.exists(path)? {
+            Ok(FileMode { regular: true, mine: true, root: false, mode: 0o600 })
+        } else {
+            Err(Error::new(SqlState::UNDEFINED_FILE, "No such file or directory"))
+        }
     }
 
     /// The whole contents of a file, for a small file such as a configuration file.

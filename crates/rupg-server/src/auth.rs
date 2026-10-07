@@ -2,7 +2,7 @@
 //!
 //! A failure sends the `FATAL` error of PostgreSQL to the client and writes the same error to the log, with the reason and the line of `pg_hba.conf` in its `DETAIL`. The client never sees the reason, so it cannot tell a bad password from a role that does not exist.
 //!
-//! The server has no TLS yet, so `hostssl` lines never match and `cert` never runs. `ident` on TCP, which asks the Ident server of the client (RFC 1413), is not done yet and fails with a line in the log.
+//! A TLS connection offers SCRAM with channel binding, and `cert` and `clientcert=verify-full` compare the common name or the distinguished name of the client certificate with the user, through the map of the line. `ident` on TCP, which asks the Ident server of the client (RFC 1413), is not done yet and fails with a line in the log.
 //!
 //! Lifted from `crates/rudb-server/src/session/auth.rs` of tamnd/rudb at f5f7065a.
 
@@ -15,7 +15,7 @@ use rupg_wire::{
     SCRAM_NONCE_LEN, Scram, password_message, split, verify_md5, verify_password,
 };
 
-use crate::hba::{Client, HbaLine, Method};
+use crate::hba::{Client, ClientCert, ClientName, HbaLine, Method};
 use crate::{READ_SIZE, Shared, Wire};
 
 /// A warning that goes to the client at the end of the startup, `StoreConnectionWarning`.
@@ -56,7 +56,7 @@ pub(crate) fn authenticate(
         let ip = peer.parse::<SocketAddr>().map_or(IpAddr::V4(Ipv4Addr::UNSPECIFIED), |a| a.ip());
         Some(ip.to_canonical())
     };
-    let ssl = false;
+    let ssl = wire.secured.is_some();
     let client = Client::new(address, ssl, &start.user, &start.database);
     let encryption = if ssl { "SSL encryption" } else { "no encryption" };
     let mut lines = Vec::new();
@@ -73,6 +73,20 @@ pub(crate) fn authenticate(
         fatal(shared, wire, &error, client.lookup_detail());
         return None;
     };
+    if line.clientcert != ClientCert::Off {
+        if !shared.tls.as_ref().is_some_and(|tls| tls.ca()) {
+            let message =
+                "client certificates can only be checked if a root certificate store is available";
+            fatal(shared, wire, &Error::new(SqlState::CONFIG_FILE_ERROR, message), None);
+            return None;
+        }
+        if !wire.secured.as_ref().is_some_and(|secured| secured.peer.is_some()) {
+            let message = "connection requires a valid client certificate";
+            let error = Error::new(SqlState::INVALID_AUTHORIZATION_SPECIFICATION, message);
+            fatal(shared, wire, &error, None);
+            return None;
+        }
+    }
     if line.method == Method::Reject {
         let message = format!(
             "pg_hba.conf rejects connection for host \"{}\", user \"{}\", database \"{}\", {encryption}",
@@ -87,11 +101,12 @@ pub(crate) fn authenticate(
     let mut notices = Vec::new();
     let mut run = Run { shared, start, protocol, wire };
     let step = match line.method {
-        Method::Trust => Step::Ok,
+        // `cert` is `trust` with the check of the certificate below.
+        Method::Trust | Method::Cert => Step::Ok,
         Method::Peer => run.peer(line),
         Method::Password => run.password(&mut notices),
         Method::Md5 | Method::Scram => run.challenge(line.method, &mut notices),
-        Method::Ident | Method::Cert | Method::OAuth => {
+        Method::Ident | Method::OAuth => {
             shared.log(
                 "LOG",
                 &format!(
@@ -102,6 +117,12 @@ pub(crate) fn authenticate(
             Step::Failed(None)
         }
         Method::Reject => Step::Failed(None),
+    };
+    let step = match step {
+        Step::Ok if line.clientcert == ClientCert::VerifyFull || line.method == Method::Cert => {
+            run.cert(line)
+        }
+        step => step,
     };
     match step {
         Step::Ok => Some(notices),
@@ -263,7 +284,8 @@ impl Run<'_> {
         if secret.is_some() && kind != PasswordType::ScramSha256 {
             detail = Some(format!("User \"{user}\" does not have a valid SCRAM secret."));
         }
-        self.wire.out.authentication_sasl(Scram::mechanisms(false));
+        let hash = self.wire.secured.as_ref().map(|secured| secured.hash.clone());
+        self.wire.out.authentication_sasl(Scram::mechanisms(hash.is_some()));
         let Some(body) = self.read(Mode::Sasl) else {
             return Step::Ended;
         };
@@ -276,14 +298,20 @@ impl Run<'_> {
         );
         let mut nonce = [0; SCRAM_NONCE_LEN];
         shared.entropy.fill(&mut nonce);
-        let (mut scram, mut exchange) =
-            match Scram::start(&Hashes, &body, None, secret, nonce, &mut self.wire.out) {
-                Ok(started) => started,
-                Err(error) => {
-                    self.error(&error);
-                    return Step::Ended;
-                }
-            };
+        let (mut scram, mut exchange) = match Scram::start(
+            &Hashes,
+            &body,
+            hash.as_deref(),
+            secret,
+            nonce,
+            &mut self.wire.out,
+        ) {
+            Ok(started) => started,
+            Err(error) => {
+                self.error(&error);
+                return Step::Ended;
+            }
+        };
         loop {
             match exchange {
                 // `AuthenticationSASLFinal` goes out with `AuthenticationOk`.
@@ -302,6 +330,40 @@ impl Run<'_> {
                 }
             };
         }
+    }
+
+    /// `CheckCertAuth`: the common name or the distinguished name of the client certificate, through the map of the line.
+    fn cert(&mut self, line: &HbaLine) -> Step {
+        let user = &self.start.user;
+        let peer = self.wire.secured.as_ref().and_then(|secured| secured.peer.as_ref());
+        let name = peer.and_then(|peer| match line.clientname {
+            ClientName::Cn => peer.cn.as_deref(),
+            ClientName::Dn => Some(peer.dn.as_str()),
+        });
+        let Some(name) = name.filter(|name| !name.is_empty()) else {
+            self.shared.log("LOG", &format!("certificate authentication failed for user \"{user}\": client certificate contains no user name"));
+            return Step::Failed(None);
+        };
+        let mut lines = Vec::new();
+        let ok = self.shared.ident.check(
+            line.map.as_deref(),
+            user,
+            name,
+            &self.shared.roles,
+            &mut lines,
+        );
+        self.shared.log_all("LOG", &lines);
+        if ok {
+            return Step::Ok;
+        }
+        if line.clientcert == ClientCert::VerifyFull && line.method != Method::Cert {
+            let field = match line.clientname {
+                ClientName::Cn => "CN",
+                ClientName::Dn => "DN",
+            };
+            self.shared.log("LOG", &format!("certificate validation (clientcert=verify-full) failed for user \"{user}\": {field} mismatch"));
+        }
+        Step::Failed(None)
     }
 
     /// `auth_peer`: the user that owns the other end of the Unix socket, through the map of the line.

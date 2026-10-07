@@ -21,7 +21,7 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 
 use rupg_common::{Error, Result, SqlState};
 
-use crate::{Clock, Entropy, File, Io, OpenMode};
+use crate::{Clock, Entropy, File, FileMode, Io, OpenMode};
 #[cfg(test)]
 use crate::{Net, Tasks};
 
@@ -103,6 +103,27 @@ impl Io for OsIo {
             out.push((entry.file_name().to_string_lossy().into_owned(), meta.is_dir()));
         }
         Ok(out)
+    }
+
+    #[cfg(unix)]
+    fn mode(&self, path: &Path) -> Result<FileMode> {
+        use std::os::unix::fs::MetadataExt;
+        let meta = fs::metadata(path).map_err(|e| {
+            let state = if e.kind() == io::ErrorKind::NotFound {
+                SqlState::UNDEFINED_FILE
+            } else {
+                SqlState::IO_ERROR
+            };
+            Error::new(state, os_text(&e))
+        })?;
+        // SAFETY: `geteuid` has no preconditions and cannot fail.
+        let me = unsafe { libc::geteuid() };
+        Ok(FileMode {
+            regular: meta.is_file(),
+            mine: meta.uid() == me,
+            root: meta.uid() == 0,
+            mode: meta.mode() & 0o7777,
+        })
     }
 }
 
@@ -304,6 +325,24 @@ mod tests {
             format!("could not open file \"{}\": No such file or directory", missing.display())
         );
         assert!(io.read_dir(&missing).is_err());
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn owners_and_modes() {
+        use std::os::unix::fs::PermissionsExt;
+        let dir = TempDir::new();
+        let io = OsIo;
+        let key = dir.0.join("server.key");
+        fs::write(&key, "key").unwrap();
+        fs::set_permissions(&key, fs::Permissions::from_mode(0o640)).unwrap();
+        let mode = io.mode(&key).unwrap();
+        assert!(mode.regular && mode.mine);
+        assert_eq!(mode.mode, 0o640);
+        assert!(!io.mode(&dir.0).unwrap().regular);
+        let e = io.mode(&dir.0.join("none")).unwrap_err();
+        assert_eq!(e.state(), SqlState::UNDEFINED_FILE);
+        assert_eq!(e.message(), "No such file or directory");
     }
 
     #[test]

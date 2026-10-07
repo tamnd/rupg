@@ -112,10 +112,15 @@ fn serve_config(args: &[String]) -> Result<rupg::server::Config, String> {
         let name = name.replace('-', "_");
         // PostgreSQL reads a relative path of a file setting from its data directory. rupg has no data directory yet, so the path is relative to the current directory.
         let value = match name.as_str() {
-            "hba_file" | "ident_file" if !value.is_empty() => std::path::absolute(value)
-                .map_err(|e| format!("could not find the absolute path of \"{value}\": {e}"))?
-                .to_string_lossy()
-                .into_owned(),
+            "hba_file" | "ident_file" | "ssl_cert_file" | "ssl_key_file" | "ssl_ca_file"
+            | "ssl_crl_file"
+                if !value.is_empty() =>
+            {
+                std::path::absolute(value)
+                    .map_err(|e| format!("could not find the absolute path of \"{value}\": {e}"))?
+                    .to_string_lossy()
+                    .into_owned()
+            }
             _ => value.to_owned(),
         };
         config.settings.push((name, value));

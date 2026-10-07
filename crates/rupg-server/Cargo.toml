@@ -13,11 +13,20 @@ categories.workspace = true
 readme.workspace = true
 publish = false
 
+# tls: TLS with rustls and ring, spec/22-crate-layout.md section 22.9. Without it, the setting `ssl` cannot be on.
+[features]
+tls = ["dep:ring", "dep:rustls"]
+
 [dependencies]
+ring = { workspace = true, optional = true }
 rupg-common.workspace = true
 rupg-platform.workspace = true
 rupg-session.workspace = true
 rupg-wire.workspace = true
+rustls = { workspace = true, optional = true }
+
+[dev-dependencies]
+rustls.workspace = true
 
 [lints]
 workspace = true
