@@ -1,0 +1,19 @@
+[package]
+name = "rupg-encode"
+description = "The encodings of document 09, the chooser, and the codecs: zstd, lz4, pglz and snappy."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

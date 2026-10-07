@@ -1,0 +1,7 @@
+# Disallowed methods and types. See spec/22-crate-layout.md section 22.2.
+# The engine reads the time and the randomness through the platform traits, so the simulation can control them. See spec/21-testing.md.
+disallowed-methods = [
+  { path = "std::time::Instant::now", reason = "use the Clock trait of rupg-platform" },
+  { path = "std::time::SystemTime::now", reason = "use the Clock trait of rupg-platform" },
+  { path = "std::thread::sleep", reason = "use the Tasks trait of rupg-platform" },
+]

@@ -1,0 +1,6 @@
+# PostgreSQL names that are not in the dictionary of typos.
+[default.extend-words]
+brin = "brin"
+
+[files]
+extend-exclude = ["vendor/", "*.expected"]

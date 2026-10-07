@@ -1,0 +1,12 @@
+# The crates that may contain unsafe code. Every other crate has #![forbid(unsafe_code)].
+# See spec/22-crate-layout.md section 22.4.
+
+[unsafe]
+crates = [
+    "rupg-buffer",
+    "rupg-capi",
+    "rupg-jit",
+    "rupg-kernels",
+    "rupg-platform",
+    "rupg-wasm",
+]

@@ -1,0 +1,218 @@
+# The check for each change. The aggregate job "ci" is the one required check on main.
+#
+# Each action is pinned to a full commit SHA, with the version in a comment. A tag can move. A SHA cannot. Dependabot updates the SHA and the comment together.
+#
+# A job on a shared runner does not measure performance. The numbers are in tamnd/rupg-bench.
+
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  merge_group:
+
+# A new push cancels the old run on the same branch. Runs on main are never cancelled, because the badge and bisect read them.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+  # A RUSTFLAGS value replaces the rustflags of .cargo/config.toml. So each x86-64 job sets the CPU flag again here.
+  RUSTFLAGS: -D warnings -C target-cpu=x86-64-v3
+  RUSTDOCFLAGS: -D warnings
+
+jobs:
+  # The fast checks run first. A format error then costs seconds, not a full matrix.
+  quick:
+    name: format, lints and house rules
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: step-security/harden-runner@351661ca32ac09a36dc5ee2d536e3128f2a3c8ed # v2.22.0
+        with:
+          egress-policy: audit
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo fmt
+        run: cargo fmt --all --check
+      # A crate may depend only on a crate of a lower rank. See spec/22-crate-layout.md section 22.3.
+      - name: layer rule
+        run: cargo xtask layers
+      - name: unsafe rules and writing rules
+        run: cargo xtask style
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features
+      - name: spelling
+        uses: crate-ci/typos@7f9d0819ca1c008ade73f4b41fa9d258d48f605b # v1.51.1
+
+  test:
+    name: test on ${{ matrix.name }}
+    needs: quick
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
+    # The runner images have explicit names. An image change is then a commit, not a surprise.
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: linux x86-64, debug
+            os: ubuntu-24.04
+            profile: dev
+            cpu: -C target-cpu=x86-64-v3
+          - name: linux x86-64, release
+            os: ubuntu-24.04
+            profile: release
+            cpu: -C target-cpu=x86-64-v3
+          - name: linux arm64
+            os: ubuntu-24.04-arm
+            profile: dev
+            cpu: ""
+          - name: macos arm64
+            os: macos-26
+            profile: dev
+            cpu: ""
+          - name: windows x86-64
+            os: windows-2025
+            profile: dev
+            cpu: -C target-cpu=x86-64-v3
+    # The CPU flag is set for each row, because target-cpu=x86-64-v3 is not valid on arm64.
+    env:
+      RUSTFLAGS: -D warnings ${{ matrix.cpu }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: ${{ matrix.profile }}
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo build
+        run: cargo build --workspace --all-features --profile ${{ matrix.profile }}
+      - name: cargo test
+        run: cargo test --workspace --all-features --profile ${{ matrix.profile }}
+      # The binary must build and run on each host. The file format must be the same on all of them.
+      - name: rupg --print-config
+        shell: bash
+        env:
+          PROFILE_DIR: ${{ matrix.profile == 'dev' && 'debug' || 'release' }}
+        run: |
+          set -euo pipefail
+          exe=""
+          if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
+          "./target/$PROFILE_DIR/rupg$exe" --version
+          "./target/$PROFILE_DIR/rupg$exe" --print-config
+
+  docs:
+    name: documentation
+    needs: quick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      - name: cargo doc
+        run: cargo doc --workspace --all-features --no-deps
+
+  msrv:
+    name: minimum supported Rust version
+    needs: quick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: read the MSRV from Cargo.toml
+        id: msrv
+        run: |
+          set -euo pipefail
+          v=$(grep -m1 '^rust-version' Cargo.toml | cut -d'"' -f2)
+          echo "version=$v" >> "$GITHUB_OUTPUT"
+      - name: install the MSRV toolchain
+        env:
+          MSRV: ${{ steps.msrv.outputs.version }}
+        run: rustup toolchain install "$MSRV" --profile minimal
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          key: msrv
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # An embedded database must build on an older stable Rust. We raise the MSRV in a commit, not by accident in a dependency update.
+      - name: cargo check
+        env:
+          MSRV: ${{ steps.msrv.outputs.version }}
+        run: cargo "+$MSRV" check --workspace --all-features
+
+  determinism:
+    name: reproducible build
+    needs: quick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+        with:
+          save-if: ${{ github.ref == 'refs/heads/main' }}
+      # The same source must give the same binary. See .cargo/config.toml for SOURCE_DATE_EPOCH.
+      - name: build two times and compare
+        run: |
+          set -euo pipefail
+          cargo build --release --bin rupg
+          sha256sum target/release/rupg > first.sha256
+          rm -rf target/release/rupg target/release/.fingerprint
+          cargo build --release --bin rupg
+          sha256sum target/release/rupg > second.sha256
+          diff <(cut -d' ' -f1 first.sha256) <(cut -d' ' -f1 second.sha256)
+          echo "the two builds are identical"
+
+  audit:
+    name: supply chain
+    needs: quick
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-deny
+      # Licenses, advisories, bans and sources. See deny.toml and spec/22-crate-layout.md section 22.6.
+      - name: cargo deny
+        run: cargo deny --all-features check
+      - name: count the dependencies
+        run: |
+          set -euo pipefail
+          count() {
+            cargo tree "$@" --edges normal --prefix none --all-features | sed 's/ (\*)$//' | sort -u | grep -c . || true
+          }
+          echo "the rupg crate: $(count -p rupg) crates, with transitive dependencies"
+          echo "the workspace: $(count --workspace) crates"
+
+  ci:
+    name: ci
+    if: always()
+    needs: [quick, test, docs, msrv, determinism, audit]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: fail if a required job did not pass
+        if: contains(needs.*.result, 'failure') || contains(needs.*.result, 'cancelled') || contains(needs.*.result, 'skipped')
+        run: exit 1
+      - name: pass
+        run: echo "all required jobs passed"

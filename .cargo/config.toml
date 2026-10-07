@@ -1,0 +1,12 @@
+# Run the tasks with `cargo xtask <task>`. See spec/22-crate-layout.md section 22.8.
+[alias]
+xtask = "run --quiet --package xtask --"
+
+# The x86-64 builds target x86-64-v3 (AVX2, BMI2 and FMA). The kernels also use runtime dispatch for wider paths. See spec/14-execution.md.
+# A RUSTFLAGS value in the environment replaces this value. A CI job that sets RUSTFLAGS must also set this flag.
+[target.'cfg(target_arch = "x86_64")']
+rustflags = ["-C", "target-cpu=x86-64-v3"]
+
+# The same input must give the same bytes. CI builds the binary two times and compares the hashes. C code that uses __DATE__ or __TIME__ reads this value.
+[env]
+SOURCE_DATE_EPOCH = "1"

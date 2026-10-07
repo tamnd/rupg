@@ -1,0 +1,30 @@
+# Dependabot opens one pull request each week for each group. Actions are pinned by SHA, and Dependabot updates the SHA and the version comment together.
+version: 2
+updates:
+  - package-ecosystem: cargo
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    open-pull-requests-limit: 10
+    labels: [dependencies, rust]
+    groups:
+      cargo-patch-and-minor:
+        update-types: [patch, minor]
+    # Wait one week after a release, so a bad release can be yanked first.
+    cooldown:
+      default-days: 7
+
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: weekly
+      day: monday
+      time: "06:00"
+    labels: [dependencies, github_actions]
+    groups:
+      actions:
+        patterns: ["*"]
+    cooldown:
+      default-days: 7

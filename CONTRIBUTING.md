@@ -1,0 +1,79 @@
+# Contributing
+
+Thank you for your help. This file tells you how to make a change that we can merge.
+
+## Before you start
+
+Read the part of [`spec/`](spec/) that your change touches. The design is written before it is built. If your change does not agree with the spec, change the spec first, in the same pull request or in an earlier one. A decision in [`spec/00-README.md`](spec/00-README.md) under "Settled decisions" changes only after you write the measurement that shows it is wrong in [`spec/24-open-questions.md`](spec/24-open-questions.md).
+
+For a large change, open an issue first. Use the milestone issues (label `kind/milestone`) to find the current work.
+
+## Running the checks
+
+CI runs these checks. Run them before you push.
+
+```sh
+cargo fmt --all --check
+cargo xtask layers
+cargo xtask style
+cargo clippy --workspace --all-targets --all-features
+cargo test --workspace --all-features
+```
+
+`cargo xtask layers` checks the layer rule. `cargo xtask style` checks the `unsafe` rules and the writing rules.
+
+## What a change must include
+
+1. A test for each behavior that the change adds or fixes. A fix for a wrong answer includes the query that showed it.
+2. A spec change if the change differs from the spec.
+3. A line in [`CHANGELOG.md`](CHANGELOG.md) under "Unreleased" if a user can see the change.
+4. For a performance change, the numbers before and after, the machine and the command. Use `rupg-bench`. A timing from a shared CI runner is not a number.
+
+## Compatibility work
+
+PostgreSQL 19 is the reference. The pin is `REL_19_STABLE` at `7d3d2db7`. When rupg and PostgreSQL disagree, PostgreSQL is right unless [`spec/05-compatibility.md`](spec/05-compatibility.md) lists the difference. A difference that the spec does not list is a bug with the label `kind/compat`.
+
+The oracles and the suites are in [rupg-compat](https://github.com/tamnd/rupg-compat). Run the differential there to compare rupg with a real PostgreSQL server on the same input.
+
+## Clean room
+
+rupg is a clean room implementation under Apache-2.0. Do not read or copy code under the AGPL, the GPL or another copyleft license into this repository. You may read the PostgreSQL source, which is under the PostgreSQL License. A file that is vendored from PostgreSQL goes in `vendor/` with a `PIN` file that gives the commit and the SHA-256.
+
+## The layer rule
+
+Each crate has a rank in `xtask/layers.toml`. A crate may depend only on a crate of a lower rank. A new crate needs a new line in that file, and the reviewer of that line reviews the design. See [`spec/22-crate-layout.md`](spec/22-crate-layout.md) section 22.3.
+
+## Unsafe code
+
+Only six crates may contain `unsafe`: `rupg-platform`, `rupg-buffer`, `rupg-kernels`, `rupg-jit`, `rupg-capi` and `rupg-wasm`. Each other crate has `#![forbid(unsafe_code)]`. Each `unsafe` block must have a `// SAFETY:` comment directly above it that states the invariant.
+
+## Writing style
+
+The spec, the README files, the issues and the comments use ASD-STE100 technical English.
+
+- Write short sentences in the active voice.
+- Use one line for each paragraph. Do not break a sentence over two lines.
+- Do not use the em dash or the en dash.
+- Do not use a horizontal rule as a page break.
+- Give the source of each number.
+
+`cargo xtask style` checks the dashes, the rules and the line breaks in Markdown.
+
+## Commits and pull requests
+
+- Use one topic for each pull request.
+- Write the commit subject in the imperative mood, for example "Add the header slot reader".
+- We merge with squash. The pull request title becomes the commit subject.
+- The `ci` check must pass before a merge.
+
+## Reporting a wrong answer
+
+Use the "Wrong answer" issue template. Give the schema, the data, the query, the rupg result and the PostgreSQL 19 result. A wrong answer has priority over all other work.
+
+## Security
+
+Do not open a public issue for a security problem. Read [SECURITY.md](SECURITY.md).
+
+## License
+
+By contributing, you agree that your contribution is licensed under Apache-2.0.

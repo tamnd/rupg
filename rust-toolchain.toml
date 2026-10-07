@@ -1,0 +1,5 @@
+# The toolchain is pinned. A new clippy or rustfmt release cannot make CI red without a commit. See spec/22-crate-layout.md section 22.11.
+[toolchain]
+channel = "1.98.0"
+components = ["rustfmt", "clippy", "rust-src"]
+profile = "minimal"

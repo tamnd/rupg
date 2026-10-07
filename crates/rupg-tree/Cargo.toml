@@ -1,0 +1,19 @@
+[package]
+name = "rupg-tree"
+description = "A B+ tree over PageAccess with optimistic latch coupling, used by the hot store, the catalog, TOAST and the B-tree index."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

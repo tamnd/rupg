@@ -1,0 +1,82 @@
+# The slow checks. They run each night on main and on request. They are not required for a merge.
+#
+# The sanitizers and Miri need the nightly toolchain. The main workspace stays on the pinned stable toolchain.
+
+name: nightly
+
+on:
+  schedule:
+    - cron: "17 3 * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: ${{ github.workflow }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  sanitizers:
+    name: ${{ matrix.sanitizer }} sanitizer
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    strategy:
+      fail-fast: false
+      matrix:
+        sanitizer: [address, thread]
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install nightly
+        run: rustup toolchain install nightly --profile minimal --component rust-src
+      # The sanitizers need the standard library built with the same flags, so this uses -Zbuild-std.
+      - name: cargo test
+        env:
+          SANITIZER: ${{ matrix.sanitizer }}
+        run: |
+          set -euo pipefail
+          export RUSTFLAGS="-Zsanitizer=$SANITIZER -C target-cpu=x86-64-v3"
+          export RUSTDOCFLAGS="-Zsanitizer=$SANITIZER"
+          cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --workspace --lib --tests
+
+  miri:
+    name: miri
+    runs-on: ubuntu-24.04
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install nightly with miri
+        run: rustup toolchain install nightly --profile minimal --component miri,rust-src
+      # Miri runs the library tests of the crates that may contain unsafe code. See xtask/unsafe.toml.
+      - name: cargo miri test
+        run: |
+          set -euo pipefail
+          crates=$(grep '^ *"' xtask/unsafe.toml | tr -d ' ",' | sed 's/^/-p /' | tr '\n' ' ')
+          cargo +nightly miri setup
+          # shellcheck disable=SC2086
+          cargo +nightly miri test $crates --lib
+
+  minimal-versions:
+    name: minimal dependency versions
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install nightly
+        run: rustup toolchain install nightly --profile minimal
+      # The lower bounds in each Cargo.toml must build. A library user can get the oldest versions that the bounds allow.
+      - name: cargo check with the oldest allowed versions
+        run: |
+          set -euo pipefail
+          cargo +nightly update -Zdirect-minimal-versions
+          cargo check --workspace --all-features --locked

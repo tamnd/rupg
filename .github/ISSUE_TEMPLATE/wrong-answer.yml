@@ -1,0 +1,54 @@
+name: Wrong answer
+description: A query returned a result that is not the PostgreSQL 19 result.
+title: "wrong answer: "
+labels: ["kind/wrong-answer", "priority/p0"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A wrong answer is the most serious kind of bug. A fast database that gives a wrong answer has no value. A small reproduction helps most: a `CREATE TABLE`, some `INSERT` statements and one `SELECT`. If you cannot make it small, send it anyway. We will make it small.
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The full SQL, with the schema and the data. Paste it here. Do not link to it.
+      render: sql
+    validations:
+      required: true
+  - type: textarea
+    id: results
+    attributes:
+      label: The PostgreSQL 19 result and the rupg result
+      description: Paste both results. If you have a different PostgreSQL version, give the version.
+    validations:
+      required: true
+  - type: dropdown
+    id: mode
+    attributes:
+      label: How you connected
+      options:
+        - Server, through a client or a driver
+        - Embedded, Rust API
+        - Embedded, C API or libpq exports
+        - WebAssembly
+        - Cluster
+    validations:
+      required: true
+  - type: input
+    id: compat
+    attributes:
+      label: rupg.compat_version
+      description: The value of `SHOW rupg.compat_version`. The default is 19.
+      placeholder: "19"
+  - type: textarea
+    id: narrowing
+    attributes:
+      label: What you tried
+      description: For example, does it still occur with `SET max_parallel_workers_per_gather = 0`, with a smaller table, or after `VACUUM`?
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `rupg --version`, or the commit.
+    validations:
+      required: true

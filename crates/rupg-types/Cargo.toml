@@ -1,0 +1,20 @@
+[package]
+name = "rupg-types"
+description = "The value model, Datum, Vector of 1024 values, TypeId, the text and binary forms of the 197 types, numeric, date and time, JSON, arrays, ranges."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+rupg-common.workspace = true
+
+[lints]
+workspace = true

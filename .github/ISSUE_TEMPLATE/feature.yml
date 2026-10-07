@@ -1,0 +1,33 @@
+name: Feature
+description: Something rupg must do and does not do yet.
+title: "feature: "
+labels: ["kind/feature"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        If the feature is a PostgreSQL 19 feature, it is in scope, and the milestone issues may already track it. Search first. A feature that PostgreSQL does not have needs a section in spec/ before code.
+  - type: textarea
+    id: what
+    attributes:
+      label: What you need
+      description: The SQL, the API or the behavior that you need.
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why
+      description: The workload or the tool that needs it.
+    validations:
+      required: true
+  - type: dropdown
+    id: postgres
+    attributes:
+      label: Does PostgreSQL 19 have it?
+      options:
+        - "Yes"
+        - "No, it is a rupg addition"
+        - I do not know
+    validations:
+      required: true

@@ -1,0 +1,14 @@
+[package]
+name = "xtask"
+description = "Build and check tasks for the rupg workspace."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+publish = false
+
+# No dependencies. The checks read files and run commands. A task runner that does not build cannot tell you why the build failed.
+[dependencies]
+
+[lints]
+workspace = true

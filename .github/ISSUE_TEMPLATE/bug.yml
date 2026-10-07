@@ -1,0 +1,38 @@
+name: Bug
+description: A crash, a hang, an error that should not occur, or wrong behavior that is not a wrong query result.
+title: "bug: "
+labels: ["kind/bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a wrong query result, use the "Wrong answer" template. For a security problem, do not open an issue. Read SECURITY.md.
+  - type: textarea
+    id: what
+    attributes:
+      label: What occurred
+      description: What you did, what you expected, and what occurred. Paste the full error message with its SQLSTATE.
+    validations:
+      required: true
+  - type: textarea
+    id: repro
+    attributes:
+      label: Reproduction
+      description: The commands or the SQL that cause the problem.
+      render: sql
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `rupg --version`, or the commit.
+    validations:
+      required: true
+  - type: input
+    id: platform
+    attributes:
+      label: Platform
+      description: Operating system, CPU and memory.
+    validations:
+      required: true

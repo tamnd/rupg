@@ -1,0 +1,46 @@
+# The rank of each crate. A crate may depend only on crates of a lower rank.
+# The rank is the group number times ten, plus the order of the crate in its group.
+# See spec/22-crate-layout.md section 22.3. A new line here is a design decision.
+
+[ranks]
+"rupg-common" = 0
+"rupg-types" = 1
+"rupg-platform" = 10
+"rupg-file" = 11
+"rupg-wire" = 12
+"rupg-kernels" = 20
+"rupg-encode" = 21
+"rupg-buffer" = 22
+"rupg-tree" = 23
+"rupg-log" = 30
+"rupg-raft" = 31
+"rupg-summary" = 40
+"rupg-hot" = 41
+"rupg-column" = 42
+"rupg-table" = 43
+"rupg-txn" = 50
+"rupg-index" = 60
+"rupg-graph" = 61
+"rupg-ann" = 62
+"rupg-catalog" = 70
+"rupg-pgcatalog" = 71
+"rupg-shim" = 72
+"rupg-sql" = 80
+"rupg-analyze" = 90
+"rupg-plan" = 91
+"rupg-opt" = 92
+"rupg-func" = 100
+"rupg-jit" = 101
+"rupg-exec" = 102
+"rupg-exchange" = 103
+"rupg-plpgsql" = 110
+"rupg-ext" = 111
+"rupg-contrib" = 112
+"rupg-cluster" = 115
+"rupg-session" = 120
+"rupg-server" = 130
+"rupg" = 131
+"rupg-capi" = 132
+"rupg-wasm" = 133
+"rupg-import" = 134
+"rupg-cli" = 135

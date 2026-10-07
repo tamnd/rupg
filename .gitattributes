@@ -1,0 +1,14 @@
+* text=auto eol=lf
+
+# Expected output and fixtures are compared byte for byte. Git must not change them.
+tests/**/*.expected -text
+tests/**/*.out -text
+tests/**/*.slt -text
+tests/**/*.plan -text
+
+# The vendored PostgreSQL, tzdata and Unicode files keep their bytes. Their hashes are in each PIN file.
+vendor/** -text linguist-vendored
+
+*.rupg binary
+*.bin binary
+*.parquet binary

@@ -1,0 +1,20 @@
+[package]
+name = "rupg"
+description = "The Rust API, the facade crate that a user adds to Cargo.toml."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+rupg-common.workspace = true
+
+[lints]
+workspace = true

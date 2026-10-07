@@ -1,0 +1,49 @@
+name: Performance
+description: A query or a workload is slower, or uses more memory, CPU or disk, than the spec allows.
+title: "perf: "
+labels: ["kind/perf"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        A performance claim needs five parts: the machine, the metric, a baseline on the same machine, the same transport for both systems, and the ratio. See spec/02-the-goal.md section 2.2. A timing from a laptop with other programs open is a hint. It is not a measurement.
+  - type: textarea
+    id: workload
+    attributes:
+      label: Workload
+      description: The query or the benchmark, the data size and the schema.
+      render: sql
+    validations:
+      required: true
+  - type: textarea
+    id: numbers
+    attributes:
+      label: Numbers
+      description: The rupg number and the baseline number. Give the baseline system and its version, and the number of runs.
+    validations:
+      required: true
+  - type: dropdown
+    id: transport
+    attributes:
+      label: Transport
+      options:
+        - Same for both, in process
+        - Same for both, Unix socket
+        - Same for both, TCP
+        - Different for each system
+    validations:
+      required: true
+  - type: input
+    id: machine
+    attributes:
+      label: Machine
+      description: Instance type or CPU, core count, memory, disk and operating system.
+    validations:
+      required: true
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: The output of `rupg --version`, or the commit.
+    validations:
+      required: true

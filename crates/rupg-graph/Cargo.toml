@@ -1,0 +1,19 @@
+[package]
+name = "rupg-graph"
+description = "The link index and the CSR adjacency of document 13, lifted from rudb."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

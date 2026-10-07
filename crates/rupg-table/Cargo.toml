@@ -1,0 +1,19 @@
+[package]
+name = "rupg-table"
+description = "A table as one object over both stores, TOAST, the system columns, the row id allocator per shard, the scan that merges the stores."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

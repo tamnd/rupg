@@ -1,0 +1,19 @@
+[package]
+name = "rupg-catalog"
+description = "The rupg catalog of user objects: schemas, tables, columns, constraints, indexes, roles, privileges."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

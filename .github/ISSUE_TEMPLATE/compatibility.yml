@@ -1,0 +1,48 @@
+name: Compatibility difference
+description: rupg behaves differently from PostgreSQL 19 (or from the version that rupg.compat_version names).
+title: "compat: "
+labels: ["kind/compat"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        PostgreSQL 19 is the reference. A difference that `spec/05-compatibility.md` does not list is a bug. Tell us the level where the difference occurs, so we can sort it.
+  - type: dropdown
+    id: level
+    attributes:
+      label: Level
+      description: The levels are in spec/05-compatibility.md.
+      options:
+        - L1, the protocol, authentication, a client connects
+        - L2, introspection, the catalog, a tool shows the schema
+        - L3, SQL results and errors
+        - L4, transaction and isolation behavior
+        - L5, operations, settings, administration, extensions
+        - I do not know
+    validations:
+      required: true
+  - type: input
+    id: client
+    attributes:
+      label: Client or tool
+      description: The driver, ORM or tool and its version, if one is involved.
+      placeholder: psycopg 3.2.10
+  - type: textarea
+    id: difference
+    attributes:
+      label: The difference
+      description: The input, the PostgreSQL result and the rupg result. For a protocol difference, a trace from the proxy of rupg-compat helps most.
+    validations:
+      required: true
+  - type: input
+    id: compat
+    attributes:
+      label: rupg.compat_version
+      placeholder: "19"
+  - type: input
+    id: version
+    attributes:
+      label: rupg version
+      description: The output of `rupg --version`, or the commit.
+    validations:
+      required: true

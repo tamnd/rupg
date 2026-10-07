@@ -1,0 +1,19 @@
+[package]
+name = "rupg-column"
+description = "The cold segments, the global dictionaries of document 09 section 9.5, the sorted projections, decoding into vectors."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+license.workspace = true
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme.workspace = true
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true
