@@ -1,34 +1,50 @@
-//! The buffer pool: a fixed table of frames, a map from logical page number to frame, the latches and the clock.
+//! The buffer pool of spec/08 section 8.8: the units, the latches, the clock and the memory budget.
 //!
-//! This is the form of spec/08 section 8.8.4. The frames are one fixed allocation, reserved from the memory budget at open, and a hash map finds the frame of a page. The state word and the guards are the same as in the virtual memory window of section 8.8.1.
+//! The pool has two forms with the same state word and the same guards.
+//!
+//! The window of section 8.8.1 reserves address space for every logical page. The bytes of page `n` are at the base plus `n * 16384`, and its state word is at index `n` of a second region, so a hit is an addition and no lookup. The pool takes memory from the budget as it reads pages, and the reclaimer gives clean pages back when another consumer needs the memory.
+//!
+//! The table of section 8.8.4 is one fixed allocation of frames, and a hash map finds the frame of a page. A host that cannot reserve address space uses it.
 
 use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_file::{OptimisticRead, PAGE_SIZE, Page, PageAccess, PageId, in_page};
-use rupg_platform::{MemoryPool, Reservation};
+use rupg_platform::{MemoryPool, Region, Reservation};
 
 use crate::frames::{FrameMemory, read_racy};
 use crate::latch::{Backoff, Latch, State, Word};
+use crate::resident::ResidentSet;
 use crate::store::Store;
 
-/// The smallest number of frames in a pool.
+/// The smallest pool, in pages.
 pub const MIN_FRAMES: usize = 16;
 
-/// The number of parts of the map from page to frame. Each part has its own lock.
+/// The number of parts of the map from page to frame in the table. Each part has its own lock.
 const SHARDS: usize = 64;
 
-/// One frame: the state word and the bookkeeping of the page that it holds. The bytes of the page are in [`FrameMemory`].
+/// The window takes memory from the budget this many pages at a time, so that a miss does not lock the budget each time.
+const GROW_PAGES: usize = 64;
+
+/// The largest window, 2^31 pages or 32 TiB. This is one quarter of the user address space of x86-64 with 4-level page tables.
+const MAX_WINDOW_PAGES: u64 = 1 << 31;
+
+/// The smallest window that the pool tries before it uses the table, 2^22 pages or 64 GiB.
+const MIN_WINDOW_PAGES: u64 = 1 << 22;
+
+/// The bookkeeping of one unit: the state word and the flags. The bytes of the page are in other memory.
+///
+/// Zero bytes are a valid `Frame`: an evicted unit with version 0 and no flags. The window depends on this, because its frames are in a region that the operating system gives as zero bytes.
 #[derive(Debug)]
 struct Frame {
     latch: Latch,
-    /// The logical page number. It changes only under the exclusive latch.
+    /// The logical page number in the table. The window does not use it, because the index of the unit is the page number.
     page: AtomicU64,
-    /// Set at each access. The clock clears it and evicts the frame on the next sweep if it is still clear.
+    /// Set at each access. The clock clears it and evicts the unit on the next sweep if it is still clear.
     referenced: AtomicBool,
     /// Set when an exclusive guard is dropped. The page writer clears it when the page did not change during the write.
     dirty: AtomicBool,
@@ -36,23 +52,78 @@ struct Frame {
     writing: AtomicBool,
 }
 
-/// The bytes that each frame takes from the memory budget.
+impl Frame {
+    fn new() -> Frame {
+        Frame {
+            latch: Latch::evicted(),
+            page: AtomicU64::new(0),
+            referenced: AtomicBool::new(false),
+            dirty: AtomicBool::new(false),
+            writing: AtomicBool::new(false),
+        }
+    }
+}
+
+/// The bytes that each frame of the table takes from the memory budget.
 const FRAME_BYTES: u64 = (PAGE_SIZE + size_of::<Frame>()) as u64;
+
+/// The form of a [`BufferPool`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PoolMode {
+    /// The virtual memory window of spec/08 section 8.8.1.
+    Window,
+    /// The fixed table of frames of spec/08 section 8.8.4.
+    Table,
+}
+
+impl fmt::Display for PoolMode {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.write_str(match self {
+            PoolMode::Window => "window",
+            PoolMode::Table => "table",
+        })
+    }
+}
+
+/// The settings of a [`BufferPool`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PoolConfig {
+    /// `shared_buffers` in bytes. The window does not shrink below it. The table has this size.
+    pub shared_buffers: u64,
+    /// The form. `None` takes the window if the host can reserve it, and the table if it cannot.
+    pub mode: Option<PoolMode>,
+    /// The number of logical pages that the window holds. `None` takes the largest reservation that the host gives, from 2^31 pages down to 2^22 pages.
+    pub window_pages: Option<u64>,
+}
+
+impl PoolConfig {
+    /// The settings with `shared_buffers` and the defaults for the rest.
+    pub fn new(shared_buffers: u64) -> PoolConfig {
+        PoolConfig { shared_buffers, mode: None, window_pages: None }
+    }
+}
+
+impl Default for PoolConfig {
+    /// The default of `shared_buffers` in PostgreSQL, 128 MiB.
+    fn default() -> PoolConfig {
+        PoolConfig::new(128 << 20)
+    }
+}
 
 /// Counters of a [`BufferPool`].
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
 pub struct BufferStats {
-    /// The number of frames.
-    pub frames: u64,
-    /// The frames that hold a page.
+    /// The bytes that the pool holds from the memory budget.
+    pub reserved: u64,
+    /// The units that hold a page.
     pub resident: u64,
-    /// The frames that hold a page that is not written yet.
+    /// The units that hold a page that is not written yet.
     pub dirty: u64,
-    /// Accesses that found the page in a frame.
+    /// Accesses that found the page in memory.
     pub hits: u64,
     /// Accesses that read the page from the store.
     pub misses: u64,
-    /// Pages that the clock removed from a frame.
+    /// Pages that the clock or the reclaimer removed from memory.
     pub evictions: u64,
     /// Pages written to the store.
     pub writes: u64,
@@ -66,90 +137,74 @@ struct Counters {
     writes: AtomicU64,
 }
 
-/// The buffer pool. It implements [`PageAccess`] over a [`Store`].
-///
-/// A page that is dirty when the pool is dropped is lost. Call [`BufferPool::flush`] first.
-pub struct BufferPool {
-    store: Arc<dyn Store>,
+#[derive(Debug)]
+enum Units {
+    Window(Window),
+    Table(Table),
+}
+
+#[derive(Debug)]
+struct Window {
+    data: Region,
+    frames: Region,
+    pages: usize,
+    set: ResidentSet,
+}
+
+impl Window {
+    fn reserve(pages: Option<u64>, max: usize) -> Result<Window> {
+        if Region::os_page_size() > PAGE_SIZE {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "the window needs pages of the operating system of at most 16384 bytes",
+            ));
+        }
+        let mut n = pages.unwrap_or(MAX_WINDOW_PAGES);
+        loop {
+            match Window::try_reserve(n) {
+                Ok((data, frames, size)) => {
+                    let set = ResidentSet::new(max.min(size));
+                    return Ok(Window { data, frames, pages: size, set });
+                }
+                Err(_) if pages.is_none() && n > MIN_WINDOW_PAGES => n /= 2,
+                Err(e) => return Err(e),
+            }
+        }
+    }
+
+    fn try_reserve(n: u64) -> Result<(Region, Region, usize)> {
+        let too_large = || Error::internal(format!("a window of {n} pages is too large"));
+        let pages = usize::try_from(n).map_err(|_| too_large())?;
+        let data = Region::reserve(pages.checked_mul(PAGE_SIZE).ok_or_else(too_large)?)?;
+        let frames = Region::reserve(pages.checked_mul(size_of::<Frame>()).ok_or_else(too_large)?)?;
+        Ok((data, frames, pages))
+    }
+
+    fn index(&self, page: PageId) -> Result<usize> {
+        usize::try_from(page.0).ok().filter(|&i| i < self.pages).ok_or_else(|| {
+            Error::new(SqlState::INSUFFICIENT_RESOURCES, "the page is outside the buffer window")
+                .with_detail(format!("Logical page {page}. The window holds {} pages.", self.pages))
+        })
+    }
+}
+
+#[derive(Debug)]
+struct Table {
     memory: FrameMemory,
     frames: Box<[Frame]>,
     map: Box<[RwLock<HashMap<u64, usize>>]>,
     free: Mutex<Vec<usize>>,
-    hand: AtomicUsize,
-    counters: Counters,
-    _reservation: Reservation,
 }
 
-impl fmt::Debug for BufferPool {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("BufferPool")
-            .field("store", &self.store)
-            .field("stats", &self.stats())
-            .finish_non_exhaustive()
-    }
-}
-
-impl BufferPool {
-    /// A pool of `bytes / 16384` frames over `store`. The pool reserves the frames and their bookkeeping from `memory` and keeps the reservation until it is dropped.
-    ///
-    /// Fewer than [`MIN_FRAMES`] frames gives SQLSTATE `22023`. A budget that does not have the bytes gives `53200`.
-    pub fn new(store: Arc<dyn Store>, memory: &Arc<MemoryPool>, bytes: u64) -> Result<BufferPool> {
-        let count = usize::try_from(bytes / PAGE_SIZE as u64).unwrap_or(usize::MAX);
-        if count < MIN_FRAMES {
-            return Err(Error::new(SqlState::INVALID_PARAMETER_VALUE, "the buffer pool is too small")
-                .with_detail(format!(
-                    "{bytes} bytes give {count} frames of {PAGE_SIZE} bytes. The minimum is {MIN_FRAMES} frames."
-                )));
-        }
-        let reserve = (count as u64).saturating_mul(FRAME_BYTES);
-        let reservation = memory.reserve(reserve)?;
-        let memory = FrameMemory::new(count)?;
-        let frames = (0..count)
-            .map(|_| Frame {
-                latch: Latch::evicted(),
-                page: AtomicU64::new(0),
-                referenced: AtomicBool::new(false),
-                dirty: AtomicBool::new(false),
-                writing: AtomicBool::new(false),
-            })
-            .collect();
-        Ok(BufferPool {
-            store,
-            memory,
-            frames,
+impl Table {
+    fn new(count: usize) -> Result<Table> {
+        Ok(Table {
+            memory: FrameMemory::new(count)?,
+            frames: (0..count).map(|_| Frame::new()).collect(),
             map: (0..SHARDS).map(|_| RwLock::default()).collect(),
             // The frames are taken from the end, so frame 0 is used first.
             free: Mutex::new((0..count).rev().collect()),
-            hand: AtomicUsize::new(0),
-            counters: Counters::default(),
-            _reservation: reservation,
         })
-    }
-
-    /// The counters.
-    pub fn stats(&self) -> BufferStats {
-        let resident = self.frames.iter().filter(|f| f.latch.load().state() != State::Evicted);
-        let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
-        BufferStats {
-            frames: self.frames.len() as u64,
-            resident: resident.count() as u64,
-            dirty: self.frames.iter().filter(|f| f.dirty.load(Ordering::Relaxed)).count() as u64,
-            hits: get(&self.counters.hits),
-            misses: get(&self.counters.misses),
-            evictions: get(&self.counters.evictions),
-            writes: get(&self.counters.writes),
-        }
-    }
-
-    /// Writes every dirty page to the store and gives the number of pages written. A page that a writer holds at the time, or that another thread writes at the time, stays dirty.
-    pub fn flush(&self) -> Result<usize> {
-        let mut written = 0;
-        for index in 0..self.frames.len() {
-            if self.write_back(index)? {
-                written += 1;
-            }
-        }
-        Ok(written)
     }
 
     fn shard(&self, page: u64) -> &RwLock<HashMap<u64, usize>> {
@@ -165,41 +220,406 @@ impl BufferPool {
         self.shard(page).write().unwrap_or_else(PoisonError::into_inner).remove(&page);
     }
 
-    /// The frame that holds `page`. It reads the page on a miss. The caller must latch the frame and check that it still holds the page.
-    fn frame_of(&self, page: PageId) -> Result<usize> {
-        match self.lookup(page) {
-            Some(index) => {
-                self.counters.hits.fetch_add(1, Ordering::Relaxed);
-                Ok(index)
+    /// Releases the exclusive latch of a frame that holds no page and puts the frame on the free list.
+    fn put_free(&self, index: usize) {
+        self.frames[index].latch.release_evicted();
+        self.free.lock().unwrap_or_else(PoisonError::into_inner).push(index);
+    }
+}
+
+/// The part of the memory budget that the pool holds.
+#[derive(Debug)]
+struct Budget {
+    reservation: Mutex<Reservation>,
+    /// The number of pages that the reservation pays for.
+    allowed: AtomicUsize,
+    /// `shared_buffers` in pages.
+    min: usize,
+    /// The most pages that the window holds: the budget limit at open, or the size of the window if it is smaller.
+    max: usize,
+}
+
+impl Budget {
+    fn lock(&self) -> MutexGuard<'_, Reservation> {
+        self.reservation.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+}
+
+/// The buffer pool. It implements [`PageAccess`] over a [`Store`].
+///
+/// A page that is dirty when the pool is dropped is lost. Call [`BufferPool::flush`] first.
+pub struct BufferPool {
+    store: Arc<dyn Store>,
+    units: Units,
+    budget: Budget,
+    /// The pages in memory in the window, and the pages that a miss is reading.
+    resident: AtomicUsize,
+    hand: AtomicUsize,
+    counters: Counters,
+}
+
+impl fmt::Debug for BufferPool {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("BufferPool")
+            .field("mode", &self.mode())
+            .field("store", &self.store)
+            .field("stats", &self.stats())
+            .finish_non_exhaustive()
+    }
+}
+
+impl BufferPool {
+    /// A pool over `store` that takes its memory from `memory`.
+    ///
+    /// `shared_buffers` below 16 pages gives SQLSTATE `22023`. A budget that does not have `shared_buffers` gives `53200`. In the window form, the pool sets the reclaimer of `memory`, so that other consumers can take memory from clean pages. This replaces the reclaimer that `memory` had.
+    pub fn new(
+        store: Arc<dyn Store>,
+        memory: &Arc<MemoryPool>,
+        config: PoolConfig,
+    ) -> Result<Arc<BufferPool>> {
+        let min = usize::try_from(config.shared_buffers / PAGE_SIZE as u64).unwrap_or(usize::MAX);
+        if min < MIN_FRAMES {
+            return Err(Error::new(SqlState::INVALID_PARAMETER_VALUE, "shared_buffers is too small")
+                .with_detail(format!(
+                    "{} bytes give {min} pages of {PAGE_SIZE} bytes. The minimum is {MIN_FRAMES} pages.",
+                    config.shared_buffers
+                )));
+        }
+        let max = usize::try_from(memory.limit() / PAGE_SIZE as u64).unwrap_or(usize::MAX).max(min);
+        let window = match config.mode {
+            Some(PoolMode::Table) => None,
+            Some(PoolMode::Window) => Some(Window::reserve(config.window_pages, max)?),
+            None => Window::reserve(config.window_pages, max).ok(),
+        };
+        let (units, reservation, max) = match window {
+            Some(w) => {
+                let reservation = memory.reserve(min as u64 * PAGE_SIZE as u64)?;
+                let max = max.min(w.pages);
+                (Units::Window(w), reservation, max)
             }
-            None => self.load(page),
+            None => {
+                let reservation = memory.reserve((min as u64).saturating_mul(FRAME_BYTES))?;
+                (Units::Table(Table::new(min)?), reservation, min)
+            }
+        };
+        let pool = Arc::new(BufferPool {
+            store,
+            units,
+            budget: Budget {
+                reservation: Mutex::new(reservation),
+                allowed: AtomicUsize::new(min),
+                min,
+                max,
+            },
+            resident: AtomicUsize::new(0),
+            hand: AtomicUsize::new(0),
+            counters: Counters::default(),
+        });
+        if pool.mode() == PoolMode::Window {
+            let weak = Arc::downgrade(&pool);
+            memory.set_reclaimer(Box::new(move |need| {
+                weak.upgrade().map_or(0, |pool| pool.reclaim(need))
+            }));
+        }
+        Ok(pool)
+    }
+
+    /// The form of the pool.
+    pub fn mode(&self) -> PoolMode {
+        match self.units {
+            Units::Window(_) => PoolMode::Window,
+            Units::Table(_) => PoolMode::Table,
+        }
+    }
+
+    /// The counters.
+    pub fn stats(&self) -> BufferStats {
+        let mut resident = 0;
+        let mut dirty = 0;
+        let _ = self.each_unit(|index| {
+            resident += 1;
+            if self.frame(index).dirty.load(Ordering::Relaxed) {
+                dirty += 1;
+            }
+            Ok(())
+        });
+        let get = |c: &AtomicU64| c.load(Ordering::Relaxed);
+        BufferStats {
+            reserved: self.budget.lock().bytes(),
+            resident,
+            dirty,
+            hits: get(&self.counters.hits),
+            misses: get(&self.counters.misses),
+            evictions: get(&self.counters.evictions),
+            writes: get(&self.counters.writes),
+        }
+    }
+
+    /// Writes every dirty page to the store and gives the number of pages written. A page that a writer holds at the time, or that another thread writes at the time, stays dirty.
+    pub fn flush(&self) -> Result<usize> {
+        let mut written = 0;
+        self.each_unit(|index| {
+            if self.write_back(index)? {
+                written += 1;
+            }
+            Ok(())
+        })?;
+        Ok(written)
+    }
+
+    /// Calls `f` with each unit that holds a page.
+    fn each_unit(&self, mut f: impl FnMut(usize) -> Result<()>) -> Result<()> {
+        match &self.units {
+            Units::Window(w) => {
+                for slot in 0..w.set.slots() {
+                    if let Some(page) = w.set.get(slot) {
+                        f(page as usize)?;
+                    }
+                }
+            }
+            Units::Table(t) => {
+                for (index, frame) in t.frames.iter().enumerate() {
+                    if frame.latch.load().state() != State::Evicted {
+                        f(index)?;
+                    }
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn frame(&self, index: usize) -> &Frame {
+        match &self.units {
+            Units::Window(w) => {
+                assert!(index < w.pages, "unit {index} of {}", w.pages);
+                // SAFETY: the region has room for `pages` frames. It is aligned to a page of the operating system, which is more than the alignment of `Frame`. Zero bytes are a valid `Frame`, and every change to a frame is through its atomic fields. The region lives as long as the pool.
+                unsafe { &*w.frames.as_ptr().cast::<Frame>().add(index) }
+            }
+            Units::Table(t) => &t.frames[index],
+        }
+    }
+
+    /// A pointer to the bytes of a unit. The caller must hold the latch that allows the access that it makes through the pointer.
+    fn bytes(&self, index: usize) -> *mut Page {
+        match &self.units {
+            Units::Window(w) => {
+                assert!(index < w.pages, "unit {index} of {}", w.pages);
+                // SAFETY: `index` is less than `pages`, so the offset is inside the region.
+                unsafe { w.data.as_ptr().add(index * PAGE_SIZE).cast::<Page>() }
+            }
+            Units::Table(t) => t.memory.page(index),
+        }
+    }
+
+    /// True if the unit holds `page`. The caller holds a latch on the unit or checks the version later.
+    fn holds(&self, index: usize, page: PageId) -> bool {
+        match self.units {
+            Units::Window(_) => index as u64 == page.0,
+            Units::Table(_) => self.frame(index).page.load(Ordering::Relaxed) == page.0,
+        }
+    }
+
+    fn page_of(&self, index: usize) -> PageId {
+        match self.units {
+            Units::Window(_) => PageId(index as u64),
+            Units::Table(_) => PageId(self.frame(index).page.load(Ordering::Relaxed)),
+        }
+    }
+
+    /// The unit of `page` if the page is in memory.
+    fn resident_index(&self, page: PageId) -> Option<usize> {
+        match &self.units {
+            Units::Window(w) => {
+                w.index(page).ok().filter(|&i| self.frame(i).latch.load().state() != State::Evicted)
+            }
+            Units::Table(t) => t.lookup(page),
         }
     }
 
     fn touch(&self, index: usize) {
-        let r = &self.frames[index].referenced;
+        let r = &self.frame(index).referenced;
         if !r.load(Ordering::Relaxed) {
             r.store(true, Ordering::Relaxed);
         }
     }
 
-    /// Reads `page` into a frame. The frame is in the map and locked exclusive during the read, so other threads that want the page wait for it.
-    fn load(&self, page: PageId) -> Result<usize> {
-        let index = self.take_frame()?;
-        let frame = &self.frames[index];
+    fn no_room(&self, units: usize) -> Error {
+        Error::new(SqlState::OUT_OF_MEMORY, "no free buffer frame")
+            .with_detail(format!("All {units} pages in the buffer pool are latched or dirty."))
+            .with_hint("Increase shared_buffers or rupg.memory_limit.")
+    }
+
+    /// The unit that holds `page`. It reads the page on a miss. The caller must latch the unit and check that it still holds the page.
+    fn unit_of(&self, page: PageId) -> Result<usize> {
+        match &self.units {
+            Units::Window(w) => {
+                let index = w.index(page)?;
+                let frame = self.frame(index);
+                loop {
+                    let seen = frame.latch.load();
+                    if seen.state() != State::Evicted {
+                        self.counters.hits.fetch_add(1, Ordering::Relaxed);
+                        return Ok(index);
+                    }
+                    if frame.latch.try_exclusive(seen) {
+                        self.load_window(w, index)?;
+                        return Ok(index);
+                    }
+                }
+            }
+            Units::Table(t) => match t.lookup(page) {
+                Some(index) => {
+                    self.counters.hits.fetch_add(1, Ordering::Relaxed);
+                    Ok(index)
+                }
+                None => self.load_table(t, page),
+            },
+        }
+    }
+
+    /// Reads a page into its unit of the window. The caller holds the exclusive latch of the evicted unit. Other threads that want the page wait for the latch.
+    fn load_window(&self, w: &Window, index: usize) -> Result<()> {
+        let frame = self.frame(index);
+        if let Err(e) = self.make_room(w) {
+            frame.latch.release_evicted();
+            return Err(e);
+        }
+        w.set.insert(index as u64);
+        // SAFETY: this thread holds the exclusive latch of the unit, so no other reference to its bytes exists.
+        let bytes = unsafe { &mut *self.bytes(index) };
+        match self.store.read(PageId(index as u64), bytes) {
+            Ok(()) => {
+                self.counters.misses.fetch_add(1, Ordering::Relaxed);
+                frame.dirty.store(false, Ordering::Relaxed);
+                frame.referenced.store(true, Ordering::Relaxed);
+                frame.latch.release_exclusive();
+                Ok(())
+            }
+            Err(e) => {
+                self.drop_window_unit(w, index);
+                Err(e)
+            }
+        }
+    }
+
+    /// Counts one more resident page in the window. It takes more of the budget if it can, and it evicts a page if it cannot.
+    fn make_room(&self, w: &Window) -> Result<()> {
+        loop {
+            let resident = self.resident.load(Ordering::Acquire);
+            if resident < self.budget.allowed.load(Ordering::Acquire) {
+                if self
+                    .resident
+                    .compare_exchange(resident, resident + 1, Ordering::AcqRel, Ordering::Relaxed)
+                    .is_ok()
+                {
+                    return Ok(());
+                }
+                continue;
+            }
+            if self.grow() {
+                continue;
+            }
+            if !self.evict_window(w, true)? {
+                return Err(self.no_room(resident));
+            }
+        }
+    }
+
+    /// Takes up to [`GROW_PAGES`] more pages from the budget. Gives false if the budget or the window has no more room.
+    fn grow(&self) -> bool {
+        let mut reservation = self.budget.lock();
+        let allowed = self.budget.allowed.load(Ordering::Acquire);
+        if allowed > self.resident.load(Ordering::Acquire) {
+            // Another thread took more, or an eviction made room, while this one waited for the lock.
+            return true;
+        }
+        let more = GROW_PAGES.min(self.budget.max.saturating_sub(allowed));
+        // The budget can ask the reclaimer of this pool for memory. The reclaimer does not wait for the lock that this thread holds, so it frees nothing here.
+        if more == 0 || reservation.grow((more * PAGE_SIZE) as u64).is_err() {
+            return false;
+        }
+        self.budget.allowed.fetch_add(more, Ordering::AcqRel);
+        true
+    }
+
+    /// Gives memory back to the budget for another consumer, and gives the number of bytes. It evicts clean pages only and does not go below `shared_buffers`.
+    fn reclaim(&self, need: u64) -> u64 {
+        let Units::Window(w) = &self.units else {
+            return 0;
+        };
+        // The pool itself can be the consumer that asks, in `grow`. It holds the lock then, and has nothing to give.
+        let Ok(mut reservation) = self.budget.reservation.try_lock() else {
+            return 0;
+        };
+        let want = usize::try_from(need.div_ceil(PAGE_SIZE as u64)).unwrap_or(usize::MAX);
+        let allowed = self.budget.allowed.load(Ordering::Acquire);
+        let cut = want.min(allowed.saturating_sub(self.budget.min));
+        if cut == 0 {
+            return 0;
+        }
+        // Lower the limit first, so that a miss evicts instead of taking the pages that this call frees.
+        let target = allowed - cut;
+        self.budget.allowed.store(target, Ordering::Release);
+        while self.resident.load(Ordering::Acquire) > target {
+            if !matches!(self.evict_window(w, false), Ok(true)) {
+                break;
+            }
+        }
+        // The pages that stay because they are dirty or latched keep their memory.
+        let short = self.resident.load(Ordering::Acquire).saturating_sub(target).min(cut);
+        self.budget.allowed.fetch_add(short, Ordering::AcqRel);
+        let freed = ((cut - short) * PAGE_SIZE) as u64;
+        reservation.shrink(freed);
+        freed
+    }
+
+    /// Runs the clock over the resident set until it evicts a page. With `write`, a dirty page is written first. Without it, dirty pages stay. Gives false if no page can be evicted.
+    fn evict_window(&self, w: &Window, write: bool) -> Result<bool> {
+        let n = w.set.slots();
+        // Two sweeps clear every referenced bit, so a third finds a page if one is not latched.
+        for _ in 0..3 * n {
+            let slot = self.hand.fetch_add(1, Ordering::Relaxed) % n;
+            let Some(page) = w.set.get(slot) else {
+                continue;
+            };
+            let index = page as usize;
+            if self.claim(index, write)? {
+                self.drop_window_unit(w, index);
+                self.counters.evictions.fetch_add(1, Ordering::Relaxed);
+                return Ok(true);
+            }
+        }
+        Ok(false)
+    }
+
+    /// Removes a page from the window and gives its memory back to the operating system. The caller holds the exclusive latch of the unit.
+    fn drop_window_unit(&self, w: &Window, index: usize) {
+        w.set.remove(index as u64);
+        // SAFETY: the caller holds the exclusive latch, so no reference to the bytes of the unit exists. An optimistic reader can read them during the call, and it finds the new version after.
+        let discarded = unsafe { w.data.discard(index * PAGE_SIZE, PAGE_SIZE) };
+        // A failed discard keeps the memory. The next read of the page writes over all of it, so the result stays correct.
+        debug_assert!(discarded.is_ok(), "{discarded:?}");
+        self.resident.fetch_sub(1, Ordering::AcqRel);
+        self.frame(index).latch.release_evicted();
+    }
+
+    /// Reads `page` into a frame of the table. The frame is in the map and locked exclusive during the read, so other threads that want the page wait for it.
+    fn load_table(&self, t: &Table, page: PageId) -> Result<usize> {
+        let index = self.take_frame(t)?;
+        let frame = &t.frames[index];
         {
-            let mut shard = self.shard(page.0).write().unwrap_or_else(PoisonError::into_inner);
+            let mut shard = t.shard(page.0).write().unwrap_or_else(PoisonError::into_inner);
             if let Some(&other) = shard.get(&page.0) {
                 // Another thread read the page first.
                 drop(shard);
-                self.put_free(index);
+                t.put_free(index);
                 return Ok(other);
             }
             frame.page.store(page.0, Ordering::Relaxed);
             shard.insert(page.0, index);
         }
         // SAFETY: this thread holds the exclusive latch of the frame, so no other reference to its bytes exists.
-        let bytes = unsafe { &mut *self.memory.page(index) };
+        let bytes = unsafe { &mut *t.memory.page(index) };
         match self.store.read(page, bytes) {
             Ok(()) => {
                 self.counters.misses.fetch_add(1, Ordering::Relaxed);
@@ -209,70 +629,65 @@ impl BufferPool {
                 Ok(index)
             }
             Err(e) => {
-                self.unmap(page.0);
-                self.put_free(index);
+                t.unmap(page.0);
+                t.put_free(index);
                 Err(e)
             }
         }
     }
 
-    /// Releases the exclusive latch of a frame that holds no page and puts the frame on the free list.
-    fn put_free(&self, index: usize) {
-        self.frames[index].latch.release_evicted();
-        self.free.lock().unwrap_or_else(PoisonError::into_inner).push(index);
-    }
-
-    /// A frame that holds no page and is not in the map, locked exclusive.
-    fn take_frame(&self) -> Result<usize> {
-        let free = self.free.lock().unwrap_or_else(PoisonError::into_inner).pop();
-        match free {
-            Some(index) => {
-                // Only the owner of a free frame locks it, because the other paths do not lock an evicted frame.
-                if self.frames[index].latch.try_exclusive(self.frames[index].latch.load()) {
-                    Ok(index)
-                } else {
-                    Err(Error::internal(format!("free buffer frame {index} is latched")))
-                }
-            }
-            None => self.evict_one(),
+    /// A frame of the table that holds no page and is not in the map, locked exclusive. It runs the clock if no frame is free.
+    fn take_frame(&self, t: &Table) -> Result<usize> {
+        let free = t.free.lock().unwrap_or_else(PoisonError::into_inner).pop();
+        if let Some(index) = free {
+            // Only the owner of a free frame locks it, because the other paths do not lock an evicted frame.
+            let latch = &t.frames[index].latch;
+            return if latch.try_exclusive(latch.load()) {
+                Ok(index)
+            } else {
+                Err(Error::internal(format!("free buffer frame {index} is latched")))
+            };
         }
-    }
-
-    /// Runs the clock until it evicts a frame, and gives the frame locked exclusive. A dirty frame is written to the store first.
-    fn evict_one(&self) -> Result<usize> {
-        let n = self.frames.len();
-        // Two sweeps clear every referenced bit, so a third finds a frame if one is not latched.
+        let n = t.frames.len();
         for _ in 0..3 * n {
             let index = self.hand.fetch_add(1, Ordering::Relaxed) % n;
-            let frame = &self.frames[index];
-            if frame.latch.load().state() != State::Unlocked
-                || frame.referenced.swap(false, Ordering::Relaxed)
-            {
-                continue;
+            if self.claim(index, true)? {
+                t.unmap(t.frames[index].page.load(Ordering::Relaxed));
+                self.counters.evictions.fetch_add(1, Ordering::Relaxed);
+                return Ok(index);
             }
-            if frame.dirty.load(Ordering::Acquire) {
-                self.write_back(index)?;
-            }
-            let seen = frame.latch.load();
-            if seen.state() != State::Unlocked || !frame.latch.try_exclusive(seen) {
-                continue;
-            }
-            if frame.dirty.load(Ordering::Acquire) {
-                frame.latch.release_exclusive();
-                continue;
-            }
-            self.unmap(frame.page.load(Ordering::Relaxed));
-            self.counters.evictions.fetch_add(1, Ordering::Relaxed);
-            return Ok(index);
         }
-        Err(Error::new(SqlState::OUT_OF_MEMORY, "no free buffer frame")
-            .with_detail(format!("All {n} frames of the buffer pool are latched or dirty."))
-            .with_hint("Increase shared_buffers."))
+        Err(self.no_room(n))
     }
 
-    /// Writes the page of a dirty frame to the store, as in steps 1 and 7 of spec/08 section 8.6.1. Gives false if the frame is not dirty, a writer holds it, or another thread writes it.
+    /// Takes the exclusive latch of a unit that the clock can evict. Gives false if the unit is latched, was used since the last sweep, or stays dirty. With `write`, a dirty unit is written first.
+    fn claim(&self, index: usize, write: bool) -> Result<bool> {
+        let frame = self.frame(index);
+        if frame.latch.load().state() != State::Unlocked
+            || frame.referenced.swap(false, Ordering::Relaxed)
+        {
+            return Ok(false);
+        }
+        if frame.dirty.load(Ordering::Acquire) {
+            if !write {
+                return Ok(false);
+            }
+            self.write_back(index)?;
+        }
+        let seen = frame.latch.load();
+        if seen.state() != State::Unlocked || !frame.latch.try_exclusive(seen) {
+            return Ok(false);
+        }
+        if frame.dirty.load(Ordering::Acquire) || frame.writing.load(Ordering::Acquire) {
+            frame.latch.release_exclusive();
+            return Ok(false);
+        }
+        Ok(true)
+    }
+
+    /// Writes the page of a dirty unit to the store, as in steps 1 and 7 of spec/08 section 8.6.1. Gives false if the unit is not dirty, a writer holds it, or another thread writes it.
     fn write_back(&self, index: usize) -> Result<bool> {
-        let frame = &self.frames[index];
+        let frame = self.frame(index);
         if !frame.dirty.load(Ordering::Acquire) || frame.writing.swap(true, Ordering::Acquire) {
             return Ok(false);
         }
@@ -282,7 +697,7 @@ impl BufferPool {
     }
 
     fn write_copy(&self, index: usize) -> Result<bool> {
-        let frame = &self.frames[index];
+        let frame = self.frame(index);
         let seen = frame.latch.load();
         if !frame.latch.try_shared(seen) {
             return Ok(false);
@@ -291,10 +706,10 @@ impl BufferPool {
             frame.latch.release_shared();
             return Ok(false);
         }
-        let page = PageId(frame.page.load(Ordering::Relaxed));
+        let page = self.page_of(index);
         let mut copy = Box::new([0u8; PAGE_SIZE]);
         // SAFETY: this thread holds a shared latch, so no thread writes the bytes.
-        copy.copy_from_slice(unsafe { &*self.memory.page(index) });
+        copy.copy_from_slice(unsafe { &*self.bytes(index) });
         frame.latch.release_shared();
         self.store.write(page, &copy)?;
         self.counters.writes.fetch_add(1, Ordering::Relaxed);
@@ -310,11 +725,11 @@ impl BufferPool {
     fn latch(&self, page: PageId, exclusive: bool) -> Result<usize> {
         let mut backoff = Backoff::default();
         loop {
-            let index = self.frame_of(page)?;
-            let frame = &self.frames[index];
+            let index = self.unit_of(page)?;
+            let frame = self.frame(index);
             let seen = frame.latch.load();
             let ok = match seen.state() {
-                // The frame left the map after the lookup. Look again.
+                // The page left memory after the lookup. Look again.
                 State::Evicted => continue,
                 State::Exclusive => false,
                 State::Shared(_) if exclusive => false,
@@ -325,7 +740,7 @@ impl BufferPool {
                 backoff.wait();
                 continue;
             }
-            if frame.page.load(Ordering::Relaxed) == page.0 {
+            if self.holds(index, page) {
                 self.touch(index);
                 return Ok(index);
             }
@@ -334,6 +749,54 @@ impl BufferPool {
                 frame.latch.release_exclusive();
             } else {
                 frame.latch.release_shared();
+            }
+        }
+    }
+
+    /// Takes a unit for a new page and locks it exclusive.
+    fn place(&self, page: PageId) -> Result<usize> {
+        let in_pool = || {
+            Error::internal(format!(
+                "the store gave logical page {page}, which is in the buffer pool"
+            ))
+        };
+        match &self.units {
+            Units::Window(w) => {
+                let index = w.index(page)?;
+                let latch = &self.frame(index).latch;
+                let seen = latch.load();
+                if seen.state() != State::Evicted || !latch.try_exclusive(seen) {
+                    return Err(in_pool());
+                }
+                if let Err(e) = self.make_room(w) {
+                    latch.release_evicted();
+                    return Err(e);
+                }
+                w.set.insert(page.0);
+                Ok(index)
+            }
+            Units::Table(t) => {
+                let index = self.take_frame(t)?;
+                let mut shard = t.shard(page.0).write().unwrap_or_else(PoisonError::into_inner);
+                if shard.contains_key(&page.0) {
+                    drop(shard);
+                    t.put_free(index);
+                    return Err(in_pool());
+                }
+                t.frames[index].page.store(page.0, Ordering::Relaxed);
+                shard.insert(page.0, index);
+                Ok(index)
+            }
+        }
+    }
+
+    /// Removes a page from memory. The caller holds the exclusive latch of the unit.
+    fn drop_unit(&self, index: usize, page: PageId) {
+        match &self.units {
+            Units::Window(w) => self.drop_window_unit(w, index),
+            Units::Table(t) => {
+                t.unmap(page.0);
+                t.put_free(index);
             }
         }
     }
@@ -347,13 +810,12 @@ impl PageAccess for BufferPool {
     fn optimistic(&self, page: PageId) -> Result<OptimisticGuard<'_>> {
         let mut backoff = Backoff::default();
         loop {
-            let index = self.frame_of(page)?;
-            let frame = &self.frames[index];
-            let seen = frame.latch.load();
+            let index = self.unit_of(page)?;
+            let seen = self.frame(index).latch.load();
             match seen.state() {
                 State::Evicted => continue,
                 State::Exclusive => backoff.wait(),
-                _ if frame.page.load(Ordering::Relaxed) == page.0 => {
+                _ if self.holds(index, page) => {
                     self.touch(index);
                     return Ok(OptimisticGuard { pool: self, index, page, seen });
                 }
@@ -372,7 +834,7 @@ impl PageAccess for BufferPool {
 
     fn allocate(&self) -> Result<(PageId, ExclusiveGuard<'_>)> {
         let page = self.store.allocate()?;
-        let index = match self.take_frame() {
+        let index = match self.place(page) {
             Ok(index) => index,
             Err(e) => {
                 // The number goes back. The error of the allocation is the one to report.
@@ -380,35 +842,22 @@ impl PageAccess for BufferPool {
                 return Err(e);
             }
         };
-        let frame = &self.frames[index];
-        {
-            let mut shard = self.shard(page.0).write().unwrap_or_else(PoisonError::into_inner);
-            if shard.contains_key(&page.0) {
-                drop(shard);
-                self.put_free(index);
-                return Err(Error::internal(format!(
-                    "the store gave logical page {page}, which is in the buffer pool"
-                )));
-            }
-            frame.page.store(page.0, Ordering::Relaxed);
-            shard.insert(page.0, index);
-        }
-        // SAFETY: this thread holds the exclusive latch of the frame.
-        unsafe { &mut *self.memory.page(index) }.fill(0);
-        frame.referenced.store(true, Ordering::Relaxed);
+        // SAFETY: this thread holds the exclusive latch of the unit.
+        unsafe { &mut *self.bytes(index) }.fill(0);
+        self.frame(index).referenced.store(true, Ordering::Relaxed);
         Ok((page, ExclusiveGuard { pool: self, index }))
     }
 
     fn free(&self, page: PageId) -> Result<()> {
         let mut backoff = Backoff::default();
-        while let Some(index) = self.lookup(page) {
-            let frame = &self.frames[index];
+        while let Some(index) = self.resident_index(page) {
+            let frame = self.frame(index);
             let seen = frame.latch.load();
             if seen.state() != State::Unlocked || !frame.latch.try_exclusive(seen) {
                 backoff.wait();
                 continue;
             }
-            if frame.page.load(Ordering::Relaxed) != page.0 {
+            if !self.holds(index, page) {
                 frame.latch.release_exclusive();
                 continue;
             }
@@ -418,9 +867,8 @@ impl PageAccess for BufferPool {
                 backoff.wait();
                 continue;
             }
-            self.unmap(page.0);
             frame.dirty.store(false, Ordering::Relaxed);
-            self.put_free(index);
+            self.drop_unit(index, page);
             break;
         }
         self.store.free(page)
@@ -445,13 +893,13 @@ impl OptimisticRead for OptimisticGuard<'_> {
         if !in_page(at, out.len()) {
             return false;
         }
-        // SAFETY: the frame memory lives as long as the pool, and the range is inside the page.
-        unsafe { read_racy(self.pool.memory.page(self.index), at, out) };
+        // SAFETY: the memory of the unit lives as long as the pool, and the range is inside the page.
+        unsafe { read_racy(self.pool.bytes(self.index), at, out) };
         true
     }
 
     fn is_valid(&self) -> bool {
-        self.pool.frames[self.index].latch.still(self.seen)
+        self.pool.frame(self.index).latch.still(self.seen)
     }
 }
 
@@ -465,7 +913,7 @@ pub struct SharedGuard<'a> {
 impl SharedGuard<'_> {
     /// The logical page number.
     pub fn page(&self) -> PageId {
-        PageId(self.pool.frames[self.index].page.load(Ordering::Relaxed))
+        self.pool.page_of(self.index)
     }
 }
 
@@ -474,13 +922,13 @@ impl Deref for SharedGuard<'_> {
 
     fn deref(&self) -> &Page {
         // SAFETY: the guard holds a shared latch, so no thread writes the bytes while the reference lives.
-        unsafe { &*self.pool.memory.page(self.index) }
+        unsafe { &*self.pool.bytes(self.index) }
     }
 }
 
 impl Drop for SharedGuard<'_> {
     fn drop(&mut self) {
-        self.pool.frames[self.index].latch.release_shared();
+        self.pool.frame(self.index).latch.release_shared();
     }
 }
 
@@ -494,7 +942,7 @@ pub struct ExclusiveGuard<'a> {
 impl ExclusiveGuard<'_> {
     /// The logical page number.
     pub fn page(&self) -> PageId {
-        PageId(self.pool.frames[self.index].page.load(Ordering::Relaxed))
+        self.pool.page_of(self.index)
     }
 }
 
@@ -503,20 +951,20 @@ impl Deref for ExclusiveGuard<'_> {
 
     fn deref(&self) -> &Page {
         // SAFETY: the guard holds the exclusive latch, so no other thread writes the bytes.
-        unsafe { &*self.pool.memory.page(self.index) }
+        unsafe { &*self.pool.bytes(self.index) }
     }
 }
 
 impl DerefMut for ExclusiveGuard<'_> {
     fn deref_mut(&mut self) -> &mut Page {
         // SAFETY: the guard holds the exclusive latch, and `&mut self` makes this the only reference. Optimistic readers can read the bytes during the write. They read with `read_racy` and discard what they read when the version changes.
-        unsafe { &mut *self.pool.memory.page(self.index) }
+        unsafe { &mut *self.pool.bytes(self.index) }
     }
 }
 
 impl Drop for ExclusiveGuard<'_> {
     fn drop(&mut self) {
-        let frame = &self.pool.frames[self.index];
+        let frame = self.pool.frame(self.index);
         frame.dirty.store(true, Ordering::Release);
         frame.latch.release_exclusive();
     }
@@ -530,11 +978,31 @@ mod tests {
     use crate::MemStore;
 
     const FRAMES: u64 = MIN_FRAMES as u64;
+    const PAGE: u64 = PAGE_SIZE as u64;
+    const HAS_WINDOW: bool = cfg!(all(unix, not(miri)));
 
-    fn pool(store: &Arc<MemStore>, frames: u64) -> BufferPool {
-        let memory = MemoryPool::new(1 << 30);
-        BufferPool::new(Arc::clone(store) as Arc<dyn Store>, &memory, frames * PAGE_SIZE as u64)
-            .unwrap()
+    /// The forms that the host can run. Miri cannot reserve address space.
+    fn modes() -> Vec<PoolMode> {
+        if HAS_WINDOW { vec![PoolMode::Table, PoolMode::Window] } else { vec![PoolMode::Table] }
+    }
+
+    fn config(pages: u64, mode: PoolMode) -> PoolConfig {
+        PoolConfig { shared_buffers: pages * PAGE, mode: Some(mode), window_pages: Some(4096) }
+    }
+
+    /// A pool of `frames` pages with a budget that holds the pool and no more.
+    fn pool(store: &Arc<MemStore>, frames: u64, mode: PoolMode) -> Arc<BufferPool> {
+        let memory = MemoryPool::new(frames * FRAME_BYTES);
+        let store = Arc::clone(store) as Arc<dyn Store>;
+        BufferPool::new(store, &memory, config(frames, mode)).unwrap()
+    }
+
+    /// A window of 16 pages that can grow to 128 pages.
+    fn window(store: &Arc<MemStore>) -> (Arc<MemoryPool>, Arc<BufferPool>) {
+        let memory = MemoryPool::new(128 * PAGE);
+        let store = Arc::clone(store) as Arc<dyn Store>;
+        let pool = BufferPool::new(store, &memory, config(16, PoolMode::Window)).unwrap();
+        (memory, pool)
     }
 
     /// A store with `n` pages. Page `p` holds `p` in its first 8 bytes.
@@ -549,157 +1017,239 @@ mod tests {
         store
     }
 
-    fn first(page: &Page) -> u64 {
-        u64::from_le_bytes(page[..8].try_into().unwrap())
+    fn word(page: &Page, at: usize) -> u64 {
+        u64::from_le_bytes(page[at..at + 8].try_into().unwrap())
     }
 
     #[test]
     fn reads_go_through() {
-        let store = filled(3);
-        let pool = pool(&store, FRAMES);
-        for p in 1..=3 {
-            assert_eq!(first(&pool.shared(PageId(p)).unwrap()), p);
+        for mode in modes() {
+            let store = filled(3);
+            let pool = pool(&store, FRAMES, mode);
+            assert_eq!(pool.mode(), mode);
+            for p in 1..=3 {
+                assert_eq!(word(&pool.shared(PageId(p)).unwrap(), 0), p);
+            }
+            let g = pool.shared(PageId(2)).unwrap();
+            assert_eq!(g.page(), PageId(2));
+            // Two shared latches on one page at the same time.
+            assert_eq!(word(&pool.shared(PageId(2)).unwrap(), 0), 2);
+            drop(g);
+            let s = pool.stats();
+            assert_eq!((s.resident, s.dirty, s.misses, s.hits), (3, 0, 3, 2), "{mode}");
+            assert_eq!(store.counts().0, 3);
         }
-        let g = pool.shared(PageId(2)).unwrap();
-        assert_eq!(g.page(), PageId(2));
-        // Two shared latches on one page at the same time.
-        assert_eq!(first(&pool.shared(PageId(2)).unwrap()), 2);
-        drop(g);
-        let s = pool.stats();
-        assert_eq!((s.frames, s.resident, s.dirty), (16, 3, 0));
-        assert_eq!((s.misses, s.hits), (3, 2));
-        assert_eq!(store.counts().0, 3);
     }
 
     #[test]
     fn eviction_writes_dirty_pages() {
-        let store = filled(100);
-        let pool = pool(&store, FRAMES);
-        for p in 1..=100 {
-            let mut g = pool.exclusive(PageId(p)).unwrap();
-            g[8..16].copy_from_slice(&(p * 3).to_le_bytes());
-        }
-        let s = pool.stats();
-        assert_eq!(s.resident, 16);
-        assert!(s.evictions >= 84, "{s:?}");
-        for p in 1..=100 {
-            let g = pool.shared(PageId(p)).unwrap();
-            assert_eq!(u64::from_le_bytes(g[8..16].try_into().unwrap()), p * 3, "page {p}");
-        }
-        pool.flush().unwrap();
-        assert_eq!(pool.stats().dirty, 0);
-        assert_eq!(pool.flush().unwrap(), 0);
-        for p in 1..=100 {
-            let page = store.get(PageId(p)).unwrap();
-            assert_eq!(u64::from_le_bytes(page[8..16].try_into().unwrap()), p * 3);
+        for mode in modes() {
+            let store = filled(100);
+            let pool = pool(&store, FRAMES, mode);
+            for p in 1..=100 {
+                let mut g = pool.exclusive(PageId(p)).unwrap();
+                g[8..16].copy_from_slice(&(p * 3).to_le_bytes());
+            }
+            let s = pool.stats();
+            assert_eq!(s.resident, 16, "{mode}");
+            assert!(s.evictions >= 84, "{mode} {s:?}");
+            for p in 1..=100 {
+                assert_eq!(word(&pool.shared(PageId(p)).unwrap(), 8), p * 3, "{mode} page {p}");
+            }
+            pool.flush().unwrap();
+            assert_eq!(pool.stats().dirty, 0);
+            assert_eq!(pool.flush().unwrap(), 0);
+            for p in 1..=100 {
+                assert_eq!(word(&store.get(PageId(p)).unwrap(), 8), p * 3);
+            }
         }
     }
 
     #[test]
     fn optimistic_reads() {
-        let store = filled(2);
-        let pool = pool(&store, FRAMES);
-        let r = pool.optimistic(PageId(1)).unwrap();
-        assert_eq!(r.page(), PageId(1));
-        assert_eq!(r.u64_at(0), Some(1));
-        assert_eq!(r.u64_at(PAGE_SIZE - 4), None);
-        assert!(r.is_valid());
-        // A shared latch does not change the page.
-        drop(pool.shared(PageId(1)).unwrap());
-        assert!(r.is_valid());
-        let mut w = pool.exclusive(PageId(1)).unwrap();
-        assert!(!r.is_valid());
-        w[0] = 9;
-        drop(w);
-        assert!(!r.is_valid());
-        let r = pool.optimistic(PageId(1)).unwrap();
-        assert_eq!((r.u8_at(0), r.is_valid()), (Some(9), true));
+        for mode in modes() {
+            let store = filled(2);
+            let pool = pool(&store, FRAMES, mode);
+            let r = pool.optimistic(PageId(1)).unwrap();
+            assert_eq!(r.page(), PageId(1));
+            assert_eq!(r.u64_at(0), Some(1));
+            assert_eq!(r.u64_at(PAGE_SIZE - 4), None);
+            assert!(r.is_valid());
+            // A shared latch does not change the page.
+            drop(pool.shared(PageId(1)).unwrap());
+            assert!(r.is_valid());
+            let mut w = pool.exclusive(PageId(1)).unwrap();
+            assert!(!r.is_valid());
+            w[0] = 9;
+            drop(w);
+            assert!(!r.is_valid());
+            let r = pool.optimistic(PageId(1)).unwrap();
+            assert_eq!((r.u8_at(0), r.is_valid()), (Some(9), true));
+        }
     }
 
     #[test]
     fn an_evicted_page_fails_an_optimistic_read() {
-        let store = filled(40);
-        let pool = pool(&store, FRAMES);
-        let r = pool.optimistic(PageId(1)).unwrap();
-        for p in 2..=40 {
-            drop(pool.shared(PageId(p)).unwrap());
+        for mode in modes() {
+            let store = filled(40);
+            let pool = pool(&store, FRAMES, mode);
+            let r = pool.optimistic(PageId(1)).unwrap();
+            for p in 2..=40 {
+                drop(pool.shared(PageId(p)).unwrap());
+            }
+            assert!(pool.resident_index(PageId(1)).is_none(), "{mode}");
+            assert!(!r.is_valid());
         }
-        assert!(pool.lookup(PageId(1)).is_none());
-        assert!(!r.is_valid());
     }
 
     #[test]
     fn allocate_and_free() {
-        let store = Arc::new(MemStore::new());
-        let pool = pool(&store, FRAMES);
-        let (p, mut g) = pool.allocate().unwrap();
-        assert_eq!(p, PageId(1));
-        assert_eq!(g.page(), p);
-        assert!(g.iter().all(|&b| b == 0));
-        g[100] = 5;
-        drop(g);
-        assert_eq!(pool.stats().dirty, 1);
-        assert_eq!(pool.flush().unwrap(), 1);
-        assert_eq!(store.get(p).unwrap()[100], 5);
-        pool.free(p).unwrap();
-        assert!(store.get(p).is_none());
-        assert_eq!(pool.stats().resident, 0);
-        // The number comes back with zero bytes.
-        let (q, g) = pool.allocate().unwrap();
-        assert_eq!((q, g[100]), (p, 0));
-        drop(g);
-        // A page that is not in a frame is freed in the store only.
-        let (r, g) = pool.allocate().unwrap();
-        drop(g);
-        pool.flush().unwrap();
-        // Enough new pages to evict `r` from its frame.
-        for _ in 0..40 {
-            drop(pool.allocate().unwrap());
+        for mode in modes() {
+            let store = Arc::new(MemStore::new());
+            let pool = pool(&store, FRAMES, mode);
+            let (p, mut g) = pool.allocate().unwrap();
+            assert_eq!((p, g.page()), (PageId(1), PageId(1)));
+            assert!(g.iter().all(|&b| b == 0));
+            g[100] = 5;
+            drop(g);
+            assert_eq!(pool.stats().dirty, 1);
+            assert_eq!(pool.flush().unwrap(), 1);
+            assert_eq!(store.get(p).unwrap()[100], 5);
+            pool.free(p).unwrap();
+            assert!(store.get(p).is_none());
+            assert_eq!(pool.stats().resident, 0, "{mode}");
+            // The number comes back with zero bytes.
+            let (q, g) = pool.allocate().unwrap();
+            assert_eq!((q, g[100]), (p, 0));
+            drop(g);
+            // Enough new pages to evict `p` from memory. A page that is not in memory is freed in the store only.
+            for _ in 0..40 {
+                drop(pool.allocate().unwrap());
+            }
+            assert!(pool.resident_index(p).is_none());
+            pool.free(p).unwrap();
+            assert!(store.get(p).is_none());
         }
-        assert!(pool.lookup(r).is_none());
-        pool.free(r).unwrap();
-        assert!(store.get(r).is_none());
     }
 
     #[test]
-    fn a_failed_read_leaves_no_frame() {
-        let store = filled(1);
-        let pool = pool(&store, FRAMES);
-        let e = pool.shared(PageId(7)).unwrap_err();
-        assert_eq!(e.state(), SqlState::INTERNAL_ERROR);
-        assert_eq!(pool.stats().resident, 0);
-        assert!(pool.lookup(PageId(7)).is_none());
-        assert_eq!(first(&pool.shared(PageId(1)).unwrap()), 1);
+    fn a_failed_read_leaves_no_unit() {
+        for mode in modes() {
+            let store = filled(1);
+            let pool = pool(&store, FRAMES, mode);
+            let e = pool.shared(PageId(7)).unwrap_err();
+            assert_eq!(e.state(), SqlState::INTERNAL_ERROR);
+            assert_eq!(pool.stats().resident, 0, "{mode}");
+            assert!(pool.resident_index(PageId(7)).is_none());
+            assert_eq!(word(&pool.shared(PageId(1)).unwrap(), 0), 1);
+        }
     }
 
     #[test]
-    fn all_frames_latched() {
-        let store = filled(17);
-        let pool = pool(&store, FRAMES);
-        let held: Vec<_> = (1..=16).map(|p| pool.shared(PageId(p)).unwrap()).collect();
-        let e = pool.shared(PageId(17)).unwrap_err();
-        assert_eq!(e.state(), SqlState::OUT_OF_MEMORY);
-        assert_eq!(e.detail(), Some("All 16 frames of the buffer pool are latched or dirty."));
-        drop(held);
-        assert_eq!(first(&pool.shared(PageId(17)).unwrap()), 17);
+    fn all_units_latched() {
+        for mode in modes() {
+            let store = filled(17);
+            let pool = pool(&store, FRAMES, mode);
+            let held: Vec<_> = (1..=16).map(|p| pool.shared(PageId(p)).unwrap()).collect();
+            let e = pool.shared(PageId(17)).unwrap_err();
+            assert_eq!(e.state(), SqlState::OUT_OF_MEMORY, "{mode}");
+            assert_eq!(e.detail(), Some("All 16 pages in the buffer pool are latched or dirty."));
+            drop(held);
+            assert_eq!(word(&pool.shared(PageId(17)).unwrap(), 0), 17);
+        }
     }
 
     #[test]
     fn the_budget() {
         let store = Arc::new(MemStore::new()) as Arc<dyn Store>;
         let memory = MemoryPool::new(1 << 20);
-        let e = BufferPool::new(Arc::clone(&store), &memory, 15 * PAGE_SIZE as u64).unwrap_err();
+        let e =
+            BufferPool::new(Arc::clone(&store), &memory, config(15, PoolMode::Table)).unwrap_err();
         assert_eq!(e.state(), SqlState::INVALID_PARAMETER_VALUE);
-        let e = BufferPool::new(Arc::clone(&store), &memory, 64 * PAGE_SIZE as u64).unwrap_err();
+        let e =
+            BufferPool::new(Arc::clone(&store), &memory, config(64, PoolMode::Table)).unwrap_err();
         assert_eq!(e.state(), SqlState::OUT_OF_MEMORY);
-        let pool = BufferPool::new(Arc::clone(&store), &memory, 32 * PAGE_SIZE as u64).unwrap();
-        assert_eq!(memory.used(), 32 * FRAME_BYTES);
+        let pool =
+            BufferPool::new(Arc::clone(&store), &memory, config(32, PoolMode::Table)).unwrap();
+        assert_eq!((memory.used(), pool.stats().reserved), (32 * FRAME_BYTES, 32 * FRAME_BYTES));
         drop(pool);
         assert_eq!(memory.used(), 0);
+        assert_eq!(PoolConfig::default().shared_buffers, 128 << 20);
+        assert_eq!(PoolMode::Window.to_string(), "window");
     }
 
-    // Miri reports the reads of an optimistic reader during a write as a data race. The race is the design of the seqlock. See `read_racy`.
-    // The test needs threads of the operating system, because the simulation runs one thread and does not test the latches.
+    #[test]
+    #[cfg_attr(not(all(unix, not(miri))), ignore = "the host has no window")]
+    fn the_window_is_the_default() {
+        let store = Arc::new(MemStore::new()) as Arc<dyn Store>;
+        let memory = MemoryPool::new(1 << 30);
+        let pool = BufferPool::new(store, &memory, PoolConfig::new(16 * PAGE)).unwrap();
+        assert_eq!(pool.mode(), PoolMode::Window);
+        assert_eq!(memory.used(), 16 * PAGE);
+        let e = pool.shared(PageId(u64::MAX - 1)).unwrap_err();
+        assert_eq!(e.state(), SqlState::INSUFFICIENT_RESOURCES);
+    }
+
+    #[test]
+    #[cfg_attr(not(all(unix, not(miri))), ignore = "the host has no window")]
+    fn the_window_grows_and_gives_back() {
+        let store = filled(200);
+        let (memory, pool) = window(&store);
+        assert_eq!(pool.stats().reserved, 16 * PAGE);
+        // The pool grows to the budget and then evicts.
+        for p in 1..=200 {
+            drop(pool.shared(PageId(p)).unwrap());
+        }
+        let s = pool.stats();
+        assert_eq!((s.reserved, s.resident, s.evictions), (128 * PAGE, 128, 72));
+        // Another consumer takes memory, and the pool gives clean pages back.
+        let query = memory.reserve(40 * PAGE).unwrap();
+        let s = pool.stats();
+        assert_eq!((s.reserved, s.resident), (88 * PAGE, 88));
+        // The pool does not go below shared_buffers.
+        assert!(memory.reserve(100 * PAGE).is_err());
+        let s = pool.stats();
+        assert_eq!((s.reserved, s.resident), (16 * PAGE, 16));
+        assert_eq!(memory.used(), 56 * PAGE);
+        drop(query);
+        // The pages are read again after they were given back.
+        for p in 1..=200 {
+            assert_eq!(word(&pool.shared(PageId(p)).unwrap(), 0), p);
+        }
+        assert_eq!(pool.stats().resident, 128);
+    }
+
+    #[test]
+    #[cfg_attr(not(all(unix, not(miri))), ignore = "the host has no window")]
+    fn the_reclaimer_keeps_dirty_pages() {
+        let store = filled(72);
+        let (memory, pool) = window(&store);
+        for p in 1..=40 {
+            pool.exclusive(PageId(p)).unwrap()[8] = 1;
+        }
+        for p in 41..=72 {
+            drop(pool.shared(PageId(p)).unwrap());
+        }
+        let s = pool.stats();
+        assert_eq!((s.reserved, s.resident, s.dirty), (80 * PAGE, 72, 40));
+        // The 32 clean pages go. The 40 dirty pages stay, so the request fails.
+        let e = memory.reserve(100 * PAGE).unwrap_err();
+        assert_eq!(e.state(), SqlState::OUT_OF_MEMORY);
+        let s = pool.stats();
+        assert_eq!((s.reserved, s.resident, s.dirty), (40 * PAGE, 40, 40));
+        // After a flush the pages are clean and can go.
+        assert_eq!(pool.flush().unwrap(), 40);
+        let query = memory.reserve(100 * PAGE).unwrap();
+        assert_eq!(pool.stats().reserved, 16 * PAGE);
+        assert_eq!(store.get(PageId(40)).unwrap()[8], 1);
+        drop(query);
+        // A dropped pool gives nothing and does not fail the request.
+        drop(pool);
+        assert_eq!(memory.used(), 0);
+        assert!(memory.reserve(128 * PAGE).is_ok());
+    }
+
+    // The test needs threads of the operating system, because the simulation runs one thread and does not test the latches. Miri reports the reads of an optimistic reader during a write as a data race. The race is the design of the seqlock. See `read_racy`.
     #[test]
     #[cfg_attr(miri, ignore)]
     #[allow(clippy::disallowed_methods)]
@@ -707,38 +1257,38 @@ mod tests {
         const PAGES: u64 = 64;
         const THREADS: u64 = 4;
         const ROUNDS: u64 = 2000;
-        let store = filled(PAGES);
-        let pool = pool(&store, FRAMES);
-        thread::scope(|s| {
-            for t in 0..THREADS {
-                let pool = &pool;
-                s.spawn(move || {
-                    let mut x = t + 1;
-                    for _ in 0..ROUNDS {
-                        // A small xorshift, so that each thread visits the pages in its own order.
-                        x ^= x << 13;
-                        x ^= x >> 7;
-                        x ^= x << 17;
-                        let page = PageId(x % PAGES + 1);
-                        // The writer keeps the same count at offset 64 and at offset 8000.
-                        let mut g = pool.exclusive(page).unwrap();
-                        let n = u64::from_le_bytes(g[64..72].try_into().unwrap()) + 1;
-                        g[64..72].copy_from_slice(&n.to_le_bytes());
-                        g[8000..8008].copy_from_slice(&n.to_le_bytes());
-                        drop(g);
-                        let r = pool.optimistic(PageId(x % 7 + 1)).unwrap();
-                        let (a, b) = (r.u64_at(64), r.u64_at(8000));
-                        if r.is_valid() {
-                            assert_eq!(a, b);
+        for mode in modes() {
+            let store = filled(PAGES);
+            let pool = pool(&store, FRAMES, mode);
+            thread::scope(|s| {
+                for t in 0..THREADS {
+                    let pool = &pool;
+                    s.spawn(move || {
+                        let mut x = t + 1;
+                        for _ in 0..ROUNDS {
+                            // A small xorshift, so that each thread visits the pages in its own order.
+                            x ^= x << 13;
+                            x ^= x >> 7;
+                            x ^= x << 17;
+                            let page = PageId(x % PAGES + 1);
+                            // The writer keeps the same count at offset 64 and at offset 8000.
+                            let mut g = pool.exclusive(page).unwrap();
+                            let n = word(&g, 64) + 1;
+                            g[64..72].copy_from_slice(&n.to_le_bytes());
+                            g[8000..8008].copy_from_slice(&n.to_le_bytes());
+                            drop(g);
+                            let r = pool.optimistic(PageId(x % 7 + 1)).unwrap();
+                            let (a, b) = (r.u64_at(64), r.u64_at(8000));
+                            if r.is_valid() {
+                                assert_eq!(a, b);
+                            }
                         }
-                    }
-                });
-            }
-        });
-        pool.flush().unwrap();
-        let total: u64 = (1..=PAGES)
-            .map(|p| u64::from_le_bytes(store.get(PageId(p)).unwrap()[64..72].try_into().unwrap()))
-            .sum();
-        assert_eq!(total, THREADS * ROUNDS);
+                    });
+                }
+            });
+            pool.flush().unwrap();
+            let total: u64 = (1..=PAGES).map(|p| word(&store.get(PageId(p)).unwrap(), 64)).sum();
+            assert_eq!(total, THREADS * ROUNDS, "{mode}");
+        }
     }
 }

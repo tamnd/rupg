@@ -1,6 +1,6 @@
 //! The 64-bit state word of each frame (spec/08 section 8.8.1). This is the state word of vmcache.
 //!
-//! The high 8 bits hold the state and the low 56 bits hold the version. State 0 is unlocked, 1 to 252 is locked shared with that count of readers, 253 is locked exclusive and 255 is evicted. The release of an exclusive latch and an eviction increase the version. An optimistic reader keeps the version that it saw and compares it at the end.
+//! The high 8 bits hold the state and the low 56 bits hold the version. State 0 is evicted, 1 is unlocked, 2 to 253 is locked shared with 1 to 252 readers, and 254 is locked exclusive. A word of zero bytes is therefore an evicted unit with version 0, so the state words of the window need no setup. The release of an exclusive latch and an eviction increase the version. An optimistic reader keeps the version that it saw and compares it at the end.
 
 use std::sync::atomic::{AtomicU64, Ordering, fence};
 
@@ -17,10 +17,10 @@ pub(crate) enum State {
     Evicted,
 }
 
-const UNLOCKED: u64 = 0;
+const EVICTED: u64 = 0;
+const UNLOCKED: u64 = 1;
 const MAX_SHARED: u64 = 252;
-const EXCLUSIVE: u64 = 253;
-const EVICTED: u64 = 255;
+const EXCLUSIVE: u64 = 254;
 
 /// A value of the state word.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -40,8 +40,8 @@ impl Word {
             UNLOCKED => State::Unlocked,
             EXCLUSIVE => State::Exclusive,
             EVICTED => State::Evicted,
-            // Only the methods of `Latch` write the word, and they never write state 254.
-            n => State::Shared(n as u8),
+            // Only the methods of `Latch` write the word, and they never write state 255.
+            n => State::Shared((n - UNLOCKED) as u8),
         }
     }
 }
@@ -96,7 +96,7 @@ impl Latch {
             State::Shared(n) if u64::from(n) < MAX_SHARED => u64::from(n),
             _ => return false,
         };
-        let next = Word::new(readers + 1, seen.version());
+        let next = Word::new(UNLOCKED + readers + 1, seen.version());
         self.0.compare_exchange(seen.0, next.0, Ordering::Acquire, Ordering::Relaxed).is_ok()
     }
 
@@ -187,6 +187,13 @@ mod tests {
         l.release_exclusive();
         assert!(!l.still(seen));
         assert!(l.still(l.load()));
+    }
+
+    #[test]
+    fn a_zero_word_is_evicted() {
+        let l = Latch(AtomicU64::new(0));
+        assert_eq!((l.load().state(), l.load().version()), (State::Evicted, 0));
+        assert_eq!(Latch::evicted().load(), l.load());
     }
 
     #[test]
