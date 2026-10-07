@@ -108,8 +108,13 @@ impl<'p> View<'p> {
         )
     }
 
+    /// The offset of the `xmin` of row `i`.
+    fn xmin_at(&self, i: usize) -> usize {
+        IDS + (8 + VersionHeader::SIZE) * self.n + 4 * i
+    }
+
     pub(crate) fn xmin(&self, i: usize) -> u32 {
-        u32_at(self.page, IDS + (8 + VersionHeader::SIZE) * self.n + 4 * i)
+        u32_at(self.page, self.xmin_at(i))
     }
 
     /// The offset of the `xmax` of row `i`, or `None` when the leaf has no `xmax` minipage.
@@ -177,6 +182,45 @@ impl<'p> View<'p> {
                 Ok(Some(&self.page[start..end]))
             }
         }
+    }
+
+    /// The values of column `j` for each row, as [`View::value`] reads them. The view reads the directory entry of the column once.
+    fn data(&self, j: usize) -> Result<Data> {
+        let (column, mut at) = self.column(j)?;
+        let n = self.n;
+        let nulls: Vec<bool> = if column.nullable {
+            let nulls = (0..n).map(|i| self.page[at + i / 8] & (1 << (i % 8)) != 0).collect();
+            at += n.div_ceil(8);
+            nulls
+        } else {
+            vec![false; n]
+        };
+        let mut bytes = Vec::new();
+        let mut ends = Vec::new();
+        match column.width {
+            Width::Fixed(w) => {
+                let w = usize::from(w);
+                bytes.extend_from_slice(&self.page[at..at + w * n]);
+                for (i, _) in nulls.iter().enumerate().filter(|(_, null)| **null) {
+                    bytes[w * i..w * (i + 1)].fill(0);
+                }
+            }
+            Width::Variable => {
+                ends.reserve(n);
+                for (i, null) in nulls.iter().enumerate() {
+                    if !null {
+                        let (start, end) =
+                            (u16_at(self.page, at + 2 * i), u16_at(self.page, at + 2 * i + 2));
+                        if start > end || end > PAGE_SIZE {
+                            return Err(corrupt(self.page, "has a bad value offset"));
+                        }
+                        bytes.extend_from_slice(&self.page[start..end]);
+                    }
+                    ends.push(bytes.len());
+                }
+            }
+        }
+        Ok(Data { nulls, bytes, ends })
     }
 
     pub(crate) fn row(&self, i: usize) -> Result<Row> {
@@ -315,9 +359,9 @@ impl Pax {
             pax.headers.push(v.header(i));
             pax.xmin.push(v.xmin(i));
             pax.xmax.push(v.xmax(i));
-            for (j, (column, data)) in pax.columns.iter().zip(&mut pax.data).enumerate() {
-                data.insert(column, i, v.value(i, j)?);
-            }
+        }
+        for (j, data) in pax.data.iter_mut().enumerate() {
+            *data = v.data(j)?;
         }
         Ok(pax)
     }
@@ -515,6 +559,79 @@ impl Pax {
     }
 }
 
+/// Writes `row` over row `i` of the leaf in `page` when no section of the leaf has to move: the leaf has the schema of the row, each new value has the length of the old value, and a row with an `xmax` finds an `xmax` minipage. The result is false when the row needs a new layout, and then the page did not change.
+pub(crate) fn replace_in_place(
+    page: &mut Page,
+    schema: &Schema,
+    i: usize,
+    row: &Row,
+) -> Result<bool> {
+    let upper = usize::from(PageHeader::read(page)?.upper);
+    let v = View::new(page)?;
+    if i >= v.len()
+        || v.id(i) != row.id.bits()
+        || v.schema() != schema.version
+        || row.values.len() != v.c
+        || schema.columns.len() != v.c
+    {
+        return Ok(false);
+    }
+    let xmax = match v.xmax_at(i) {
+        Some(at) => Some(at),
+        None if row.xmax == 0 => None,
+        None => return Ok(false),
+    };
+    // For each value: its offset, its length, and the byte and bit of its null flag.
+    let mut writes = Vec::with_capacity(v.c);
+    for (j, (value, want)) in row.values.iter().zip(&schema.columns).enumerate() {
+        let (column, mut at) = v.column(j)?;
+        if column != *want || (value.is_none() && !column.nullable) {
+            return Ok(false);
+        }
+        let null = column.nullable.then(|| (at + i / 8, 1u8 << (i % 8)));
+        if column.nullable {
+            at += v.n.div_ceil(8);
+        }
+        let (start, len) = match column.width {
+            Width::Fixed(w) => (at + usize::from(w) * i, usize::from(w)),
+            Width::Variable => {
+                let (start, end) = (u16_at(page, at + 2 * i), u16_at(page, at + 2 * i + 2));
+                // A value outside the heap shares bytes with another section of a bad leaf.
+                if start < upper || start > end || end > PAGE_SIZE {
+                    return Ok(false);
+                }
+                (start, end - start)
+            }
+        };
+        if value.as_ref().is_some_and(|b| b.len() != len)
+            || (value.is_none() && column.width == Width::Variable && len != 0)
+        {
+            return Ok(false);
+        }
+        writes.push((start, len, value.as_deref(), null));
+    }
+    let (header_at, xmin_at) = (v.header_at(i), v.xmin_at(i));
+    page[header_at..header_at + VersionHeader::SIZE].copy_from_slice(&row.header.encode()?);
+    page[xmin_at..xmin_at + 4].copy_from_slice(&row.xmin.to_le_bytes());
+    if let Some(at) = xmax {
+        page[at..at + 4].copy_from_slice(&row.xmax.to_le_bytes());
+    }
+    for (start, len, value, null) in writes {
+        match value {
+            Some(bytes) => page[start..start + len].copy_from_slice(bytes),
+            None => page[start..start + len].fill(0),
+        }
+        if let Some((at, bit)) = null {
+            if value.is_none() {
+                page[at] |= bit;
+            } else {
+                page[at] &= !bit;
+            }
+        }
+    }
+    Ok(true)
+}
+
 /// What [`rewrite_leaf`] did to a page.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Rewrite {
@@ -682,6 +799,85 @@ pub(crate) mod tests {
         let mut page = Box::new([0u8; PAGE_SIZE]);
         pax.encode(&mut page, PageHeader::new(PageId(5), PageKind::HotLeaf)).unwrap();
         page
+    }
+
+    /// A new row with the lengths of the old row, and a random length or null flag in some cases, so that both results of the in-place write occur.
+    fn update_of(rng: &mut SimRng, old: &Row) -> Row {
+        let mut row = random_row(rng, old.id.bits());
+        for (new, old) in row.values.iter_mut().zip(&old.values).skip(2) {
+            if rng.below(8) != 0 {
+                *new = old.as_ref().map(|b| b.iter().map(|_| rng.below(256) as u8).collect());
+            }
+        }
+        row
+    }
+
+    /// The in-place write gives the rows of a decode, a change and an encode, and the same bytes when the leaf keeps its `xmax` minipage. A write that needs a new layout does not change the page.
+    #[test]
+    fn a_replace_in_place_agrees_with_a_new_layout() {
+        let schema = schema();
+        let mut rng = SimRng::new(11);
+        let (mut wrote, mut refused) = (0, 0);
+        for _ in 0..300 {
+            let mut pax = Pax::empty(&schema);
+            for id in 0..1 + rng.below(40) {
+                pax.insert(pax.len(), &random_row(&mut rng, id * 3));
+            }
+            let mut page = leaf(&pax);
+            for _ in 0..20 {
+                let i = rng.below(pax.len() as u64) as usize;
+                let new = update_of(&mut rng, &pax.row(i));
+                let before = page.clone();
+                let mut slow = pax.clone();
+                slow.remove(i);
+                slow.insert(i, &new);
+                if !replace_in_place(&mut page, &schema, i, &new).unwrap() {
+                    assert_eq!(page, before);
+                    refused += 1;
+                    if !slow.fits() {
+                        continue;
+                    }
+                    pax = slow;
+                    page = leaf(&pax);
+                    continue;
+                }
+                wrote += 1;
+                let decoded = Pax::decode(&page).unwrap();
+                assert_eq!(
+                    (0..decoded.len()).map(|i| decoded.row(i)).collect::<Vec<_>>(),
+                    (0..slow.len()).map(|i| slow.row(i)).collect::<Vec<_>>()
+                );
+                if View::new(&page).unwrap().xmax_at(0).is_some() == slow.has_xmax() {
+                    assert_eq!(page, leaf(&slow));
+                }
+                View::new(&page).unwrap().check().unwrap();
+                pax = slow;
+            }
+        }
+        assert!(wrote > 1000 && refused > 100, "{wrote} in place, {refused} with a new layout");
+    }
+
+    /// A decode reads each column once and gives the rows of [`View::row`].
+    #[test]
+    fn a_decode_gives_the_rows_of_the_view() {
+        let schema = schema();
+        let mut rng = SimRng::new(12);
+        for _ in 0..200 {
+            let mut pax = Pax::empty(&schema);
+            for id in 0..rng.below(60) {
+                pax.insert(pax.len(), &random_row(&mut rng, id));
+            }
+            if !pax.fits() {
+                continue;
+            }
+            let page = leaf(&pax);
+            let v = View::new(&page).unwrap();
+            let decoded = Pax::decode(&page).unwrap();
+            for i in 0..v.len() {
+                assert_eq!(decoded.row(i), v.row(i).unwrap());
+            }
+            assert_eq!(leaf(&decoded), page);
+        }
     }
 
     #[test]
