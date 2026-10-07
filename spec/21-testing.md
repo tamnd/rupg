@@ -329,6 +329,8 @@ The model can be wrong about a real file system, so two nightly tests use real k
 
 A third test kills the process with `SIGKILL` at random times during TPC-C and checks the consistency conditions after each restart. It tests recovery at a high rate.
 
+**At M1.** The scripts are in `tests/realdisk`, and the `realdisk` job of the nightly workflow runs them. They run the seeded workload of the T8 test with the `workload` mode of `rupg-crash`, which prints a digest of the tables and rows after each acknowledged change. `logwrites.py` makes ext4 or XFS on a loop device, puts dm-log-writes over it, and marks the log after each acknowledged change. It replays the log on a copy of the image after `mkfs`, and at each check point it mounts a dm-snapshot of the copy and runs the `verify` mode. The check points are a seeded sample of the flush, FUA and mark entries and of the entries between them. `kill.py` kills the workload at a random point in each round, and with `--lazyfs` it runs on LazyFS 0.3.1 and drops the data that was not synced after each kill. After each crash the tables must hold the last acknowledged change, or that change and the next one. At M1 there is no SQL, so the `SIGKILL` test uses the key-value workload in place of TPC-C. A build of rupg with no `fdatasync` failed the dm-log-writes test and the LazyFS test.
+
 ### 21.9.4 Counts
 
 The budget is 1 million distinct crash files at M1, for key-value writes through the Rust API, header slot changes and checkpoints. Each of M3 (DML, DDL and the catalog), M4 (the mover, `COPY` and segment writes), M5 (two-phase commit, savepoints and `NOTIFY`), M6 (each index access method) and M10 (Raft log and snapshot writes) adds 1 million more for its new workloads.
