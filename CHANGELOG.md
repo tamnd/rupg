@@ -8,6 +8,12 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - The hybrid logical clock and the `visible` word in `rupg-txn`. `HlcClock` gives each commit a timestamp above every value that the node gave or saw, also when the wall clock goes back. `Commits` takes the commit timestamps and keeps `visible` below each commit that is not installed, so a snapshot is one load and misses no commit.
 - The B+ tree of `rupg-tree`. `Tree` goes down with optimistic latch coupling over `PageAccess`, latches only the leaf, splits full leaves and inner nodes, and keeps its root page when the root splits. Each user gives its own leaf format through the `Leaf` trait. `scan` reads the leaves in key order, and `check` checks the kinds, the levels and the key bounds. `MemPages` is a `PageAccess` in memory for the tests of this crate and of the crates above it. Spec/12 now gives the inner node format.
+- The hot store of `rupg-hot`. `HotStore` keeps the rows of one table and shard in a B+ tree of PAX leaves keyed by row id, with `get`, `insert`, `replace`, `remove` and `scan`. `set_header` and `set_xmax` write in place. A row that does not fit in an empty leaf gives `54000`, as in PostgreSQL. A split at the end of a leaf keeps the leaf full, so rows in row id order fill the leaves. `RowIds` gives row ids in blocks of 1024. `VersionHeader`, `Row` and `Schema` give the row format. Spec/10 now gives the leaf header, the column directory and the minipages, and spec/11 gives the flag bits of the version header.
+- SQLSTATE `54000`, `program_limit_exceeded`, in `rupg-common`.
+
+### Changed
+
+- `Tree::scan` in `rupg-tree` copies each leaf and releases the latch before it calls its function, so the function can change the tree.
 
 ## 0.0.5 (2026-10-07)
 

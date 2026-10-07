@@ -32,7 +32,19 @@ Each row in a hot page has the 16-byte version header of document 10. This is it
 | `undo` | 48 | the position of the newest undo record, or 0 |
 | `flags` | 16 | the flags of document 10, lock only, lock strength (2 bits), lock group |
 
-**Two hidden minipages.** A hot leaf also has a minipage for `xmin`, 4 bytes for each row, with the low 32 bits of the id of the transaction that wrote the newest version. It has a minipage for `xmax` only when some row in the leaf has a deleter or locker, and a column directory entry of 0 means that every `xmax` in the leaf is 0. So `xmin` costs 4 bytes for each hot row, and `xmax` costs nothing in most leaves. `xmin` is stored because the Entity Framework concurrency token reads `xmin` and later updates `WHERE xmin = $1`. If `xmin` came from a map of limited size, it would change when the entry left the map, and that update would report a false conflict. Document 24 asks document 10 to list these minipages.
+On the page, `stamp` is 8 bytes, `undo` is the low 6 bytes of its value, and `flags` is 2 bytes, all little endian. These are the flag bits.
+
+| Bit | Flag |
+|---|---|
+| 0 | deleted |
+| 1 | moved to cold |
+| 2 | prior version in cold |
+| 3 | has TOAST values |
+| 4 | lock only |
+| 5 and 6 | lock strength, from `FOR KEY SHARE` at 0 to `FOR UPDATE` at 3 |
+| 7 | lock group |
+
+**Two hidden minipages.** A hot leaf also has a minipage for `xmin`, 4 bytes for each row, with the low 32 bits of the id of the transaction that wrote the newest version. It has a minipage for `xmax` only when some row in the leaf has a deleter or locker, and an `xmax` offset of 0 in the leaf header means that every `xmax` in the leaf is 0. So `xmin` costs 4 bytes for each hot row, and `xmax` costs nothing in most leaves. `xmin` is stored because the Entity Framework concurrency token reads `xmin` and later updates `WHERE xmin = $1`. If `xmin` came from a map of limited size, it would change when the entry left the map, and that update would report a false conflict. Document 24 asks document 10 to list these minipages.
 
 A cold segment stores the commit timestamp and the `xmin` of each row as two compressed columns. A bulk load is one transaction, so both columns are constant and cost a few bytes. A delete or update of a cold row puts a delete mark with its commit timestamp in the segment, and the new version goes to the hot store under the same row id (document 10 section 10.5).
 

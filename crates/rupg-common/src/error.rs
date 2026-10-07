@@ -37,6 +37,8 @@ impl SqlState {
     pub const DISK_FULL: SqlState = SqlState(*b"53100");
     /// `53200` out_of_memory.
     pub const OUT_OF_MEMORY: SqlState = SqlState(*b"53200");
+    /// `54000` program_limit_exceeded.
+    pub const PROGRAM_LIMIT_EXCEEDED: SqlState = SqlState(*b"54000");
     /// `55000` object_not_in_prerequisite_state.
     pub const OBJECT_NOT_IN_PREREQUISITE_STATE: SqlState = SqlState(*b"55000");
     /// `55006` object_in_use.
@@ -189,6 +191,7 @@ mod tests {
             (SqlState::DEADLOCK_DETECTED, "deadlock_detected"),
             (SqlState::UNDEFINED_TABLE, "undefined_table"),
             (SqlState::INSUFFICIENT_RESOURCES, "insufficient_resources"),
+            (SqlState::PROGRAM_LIMIT_EXCEEDED, "program_limit_exceeded"),
             (SqlState::DISK_FULL, "disk_full"),
             (SqlState::OUT_OF_MEMORY, "out_of_memory"),
             (SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, "object_not_in_prerequisite_state"),
