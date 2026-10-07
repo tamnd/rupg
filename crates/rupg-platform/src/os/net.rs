@@ -1,7 +1,7 @@
 //! TCP and Unix sockets of the operating system.
 
 use std::io::{self, Read, Write};
-use std::net::{Shutdown, TcpListener, TcpStream};
+use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
 
 use rupg_common::{Error, Result, SqlState};
 
@@ -33,6 +33,21 @@ impl Net for OsNet {
             )
         })?;
         OsStream::boxed(stream)
+    }
+
+    #[cfg(unix)]
+    fn interfaces(&self) -> Result<Vec<(IpAddr, IpAddr)>> {
+        super::lookup::interfaces()
+    }
+
+    #[cfg(unix)]
+    fn host_name(&self, ip: IpAddr) -> Result<String> {
+        super::lookup::host_name(ip)
+    }
+
+    #[cfg(unix)]
+    fn host_addresses(&self, name: &str) -> Result<Vec<IpAddr>> {
+        super::lookup::host_addresses(name)
     }
 }
 

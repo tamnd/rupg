@@ -3,6 +3,8 @@
 // This module is the one place where the engine may call the clock, the file system, the threads and the network of the operating system.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+#[cfg(unix)]
+mod lookup;
 mod net;
 mod tasks;
 #[cfg(unix)]
@@ -32,7 +34,16 @@ fn os_error(e: &io::Error, action: &str, path: &Path) -> Error {
         io::ErrorKind::OutOfMemory => SqlState::OUT_OF_MEMORY,
         _ => SqlState::IO_ERROR,
     };
-    Error::new(state, format!("could not {action} file \"{}\": {e}", path.display()))
+    Error::new(state, format!("could not {action} file \"{}\": {}", path.display(), os_text(e)))
+}
+
+/// The text of an error of the operating system as `%m` gives it in PostgreSQL, without the code that Rust adds.
+pub(crate) fn os_text(e: &io::Error) -> String {
+    let text = e.to_string();
+    match text.rfind(" (os error ") {
+        Some(at) => text[..at].to_string(),
+        None => text,
+    }
 }
 
 /// The file system of the operating system.
@@ -74,6 +85,24 @@ impl Io for OsIo {
     fn sync_dir(&self, _path: &Path) -> Result<()> {
         // Windows makes the names durable with the file. It has no call to sync a directory.
         Ok(())
+    }
+
+    fn read_dir(&self, path: &Path) -> Result<Vec<(String, bool)>> {
+        let dir_error = |e: &io::Error| {
+            Error::new(
+                SqlState::IO_ERROR,
+                format!("could not open directory \"{}\": {}", path.display(), os_text(e)),
+            )
+        };
+        let mut out = Vec::new();
+        for entry in fs::read_dir(path).map_err(|e| dir_error(&e))? {
+            let entry = entry.map_err(|e| dir_error(&e))?;
+            // A link to a directory counts as a directory, as `stat` sees it.
+            let meta =
+                fs::metadata(entry.path()).map_err(|e| os_error(&e, "stat", &entry.path()))?;
+            out.push((entry.file_name().to_string_lossy().into_owned(), meta.is_dir()));
+        }
+        Ok(out)
     }
 }
 
@@ -258,6 +287,26 @@ mod tests {
     }
 
     #[test]
+    fn whole_files_and_directories() {
+        let dir = TempDir::new();
+        let io = OsIo;
+        fs::write(dir.0.join("a.conf"), "local all all trust\n").unwrap();
+        fs::create_dir(dir.0.join("sub")).unwrap();
+        assert_eq!(io.read_file(&dir.0.join("a.conf")).unwrap(), b"local all all trust\n");
+        let mut entries = io.read_dir(&dir.0).unwrap();
+        entries.sort();
+        assert_eq!(entries, [("a.conf".to_string(), false), ("sub".to_string(), true)]);
+        let missing = dir.0.join("none");
+        let e = io.read_file(&missing).unwrap_err();
+        assert_eq!(e.state(), SqlState::UNDEFINED_FILE);
+        assert_eq!(
+            e.message(),
+            format!("could not open file \"{}\": No such file or directory", missing.display())
+        );
+        assert!(io.read_dir(&missing).is_err());
+    }
+
+    #[test]
     fn a_file_round_trip() {
         let dir = TempDir::new();
         let path = dir.0.join("a.rupg");
@@ -390,6 +439,18 @@ mod tests {
         fs::write(&lock, "x\n").unwrap();
         let e = OsNet.listen(&path).unwrap_err();
         assert_eq!(e.message(), format!("bogus data in lock file \"{lock}\": \"x\""));
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn lookups() {
+        let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
+        let interfaces = OsNet.interfaces().unwrap();
+        assert!(interfaces.iter().any(|(address, _)| *address == loopback), "{interfaces:?}");
+        let name = OsNet.host_name(loopback).unwrap();
+        assert!(!name.is_empty());
+        assert!(OsNet.host_addresses("localhost").unwrap().iter().any(|a| a.is_loopback()));
+        assert!(OsNet.host_addresses("no-such-host.invalid").is_err());
     }
 
     #[test]

@@ -1,6 +1,6 @@
 //! The hash functions that authentication needs.
 //!
-//! The codec has no dependencies, so it does not hash by itself. `rupg-server` implements [`Crypto`] with the provider that it uses for TLS, so the build has one SHA-256 and a FIPS build is FIPS for SCRAM too. The tests implement it in plain Rust below.
+//! [`Hashes`] implements [`Crypto`] with the pure Rust crates `sha2`, `hmac`, `pbkdf2` and `md-5`, as spec/22 section 22.5 says. The trait stays, so that a server can give another provider. The tests also implement it in plain Rust below, and check one against the other.
 //!
 //! Lifted from `crates/rudb-pgwire/src/crypto.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
@@ -13,6 +13,47 @@ pub trait Crypto {
     /// PBKDF2 with HMAC-SHA-256 and one block of output, which is `Hi` in RFC 5802.
     fn pbkdf2_sha256(&self, password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32];
     fn md5(&self, parts: &[&[u8]]) -> [u8; 16];
+}
+
+/// [`Crypto`] with the pure Rust crates of RustCrypto.
+#[derive(Clone, Copy, Debug, Default)]
+pub struct Hashes;
+
+impl Crypto for Hashes {
+    fn sha256(&self, parts: &[&[u8]]) -> [u8; 32] {
+        use sha2::Digest;
+        let mut hash = sha2::Sha256::new();
+        for part in parts {
+            hash.update(part);
+        }
+        hash.finalize().into()
+    }
+
+    fn hmac_sha256(&self, key: &[u8], parts: &[&[u8]]) -> [u8; 32] {
+        use hmac::{KeyInit, Mac};
+        let Ok(mut mac) = hmac::Hmac::<sha2::Sha256>::new_from_slice(key) else {
+            unreachable!("HMAC takes a key of any length")
+        };
+        for part in parts {
+            mac.update(part);
+        }
+        mac.finalize().into_bytes().into()
+    }
+
+    fn pbkdf2_sha256(&self, password: &[u8], salt: &[u8], iterations: u32) -> [u8; 32] {
+        let mut out = [0; 32];
+        pbkdf2::pbkdf2_hmac::<sha2::Sha256>(password, salt, iterations, &mut out);
+        out
+    }
+
+    fn md5(&self, parts: &[&[u8]]) -> [u8; 16] {
+        use md5::Digest;
+        let mut hash = md5::Md5::new();
+        for part in parts {
+            hash.update(part);
+        }
+        hash.finalize().into()
+    }
 }
 
 /// MD5, which neither crypto provider of the server offers, for the stored secrets and the answers of the `md5` method. MD5 is not safe for new uses, and PostgreSQL keeps it only for old roles, so speed does not matter here.
@@ -180,5 +221,24 @@ pub(crate) mod soft {
             hex(&Soft.pbkdf2_sha256(b"passwd", b"salt", 1)),
             "55ac046e56e3089fec1691c22544b605f94185216dde0465e68b9d57c20dacbc"
         );
+    }
+
+    #[test]
+    fn the_crates_agree() {
+        use super::Hashes;
+        let long = [b'x'; 200];
+        for parts in [&[][..], &[&b"a"[..], b"bc"], &[&long[..], b"", &long[..63]]] {
+            assert_eq!(Hashes.sha256(parts), Soft.sha256(parts));
+            assert_eq!(Hashes.md5(parts), Soft.md5(parts));
+            for key in [&b""[..], b"Jefe", &long] {
+                assert_eq!(Hashes.hmac_sha256(key, parts), Soft.hmac_sha256(key, parts));
+            }
+        }
+        for iterations in [1, 2, 4096] {
+            assert_eq!(
+                Hashes.pbkdf2_sha256(b"pencil", b"salt", iterations),
+                Soft.pbkdf2_sha256(b"pencil", b"salt", iterations)
+            );
+        }
     }
 }

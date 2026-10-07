@@ -2,7 +2,9 @@
 //!
 //! The server accepts connections, reads the startup packet, checks the user and the database, and gives the rest of the connection to [`rupg_session::connection::Connection`]. It owns the process IDs and the cancel keys of the sessions. The main loop of a session is in `rupg-session` (spec/06 section 6.1).
 //!
-//! At this step each connection has its own task and the only method of authentication is `trust`. TLS, SCRAM, `pg_hba.conf` and the workers of spec/06 section 6.2 come later in M2.
+//! At this step each connection has its own task. The server checks each connection with the rules of `pg_hba.conf` and the methods of spec/06 section 6.7, except the methods that need TLS. TLS and the workers of spec/06 section 6.2 come later in M2.
+//!
+//! The rules come from the file of the setting `hba_file` when it is set, else from [`Config::hba`], else from the defaults of spec/06 section 6.8. The tables `rupg_hba` and `rupg_ident` of the spec do not exist yet, so [`Config::hba`] and [`Config::ident`] stand in for them.
 //!
 //! The server listens on the TCP address of [`Config::listen`] and on the Unix socket `<dir>/.s.PGSQL.<port>` for each directory of `unix_socket_directories`, with the port of the TCP address (spec/06 section 6.15).
 //!
@@ -10,28 +12,46 @@
 
 #![forbid(unsafe_code)]
 
+mod auth;
+mod hba;
+
 use std::collections::BTreeMap;
+use std::fmt;
 use std::io::{Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_platform::{Entropy, Listener, Net, Stream, TaskHandle, Tasks};
+use rupg_platform::{Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
 use rupg_session::connection::{self, Connection, Next, Start};
 use rupg_session::guc::Settings;
 use rupg_wire::{
-    CANCEL_KEY_LEN, CancelKey, Handshake, Level, OutBuf, Replication, Step, cancel_target,
-    split_startup,
+    CANCEL_KEY_LEN, CancelKey, Handshake, Hashes, Level, MOCK_NONCE_LEN, OutBuf, Replication,
+    SCRAM_ITERATIONS, SCRAM_SALT_LEN, ScramSecret, Step, cancel_target, md5_encrypt,
+    prepare_password, split_startup,
 };
+
+use crate::hba::{Hba, Ident, Roles, Source};
 
 /// The size of the first read of a connection, which holds the startup packet.
 const FIRST_READ: usize = 1024;
 /// The size of each later read.
-const READ_SIZE: usize = 16 * 1024;
+pub(crate) const READ_SIZE: usize = 16 * 1024;
 /// The server sends the output when it holds this many bytes, also in the middle of a result.
 const FLUSH_AT: usize = 64 * 1024;
 /// The lowest process ID of a session. PostgreSQL uses the process ID of the backend, which is never this low on a host that runs it.
 const FIRST_PID: i32 = 1001;
+
+/// The name of the host rules in the messages when they do not come from a file.
+const HBA_NAME: &str = "pg_hba.conf";
+/// The name of the user maps in the messages when they do not come from a file.
+const IDENT_NAME: &str = "pg_ident.conf";
+
+/// The server log. The server writes the messages that PostgreSQL writes to its log and does not send to the client, such as the reason of a failed login.
+pub trait Log: Send + Sync + fmt::Debug {
+    /// Writes one message with its severity, such as `LOG` or `FATAL`. The text can have more lines, such as `DETAIL:  ...`.
+    fn write(&self, severity: &str, text: &str);
+}
 
 /// The settings of a server.
 #[derive(Clone, Debug)]
@@ -40,8 +60,16 @@ pub struct Config {
     pub listen: String,
     /// The name of the only role, which is a superuser.
     pub superuser: String,
+    /// The password of the superuser. `None` and an empty password give a role with no password.
+    pub password: Option<String>,
+    /// The text of the host rules, in the format of `pg_hba.conf`. The setting `hba_file` comes first. `None` gives the defaults of spec/06 section 6.8.
+    pub hba: Option<String>,
+    /// The text of the user maps, in the format of `pg_ident.conf`. The setting `ident_file` comes first. `None` gives no maps.
+    pub ident: Option<String>,
     /// The settings of the command line, as `-c name=value`.
     pub settings: Vec<(String, String)>,
+    /// The server log. `None` drops the messages.
+    pub log: Option<Arc<dyn Log>>,
 }
 
 impl Default for Config {
@@ -49,8 +77,21 @@ impl Default for Config {
         Config {
             listen: "127.0.0.1:5432".into(),
             superuser: "postgres".into(),
+            password: None,
+            hba: None,
+            ident: None,
             settings: Vec::new(),
+            log: None,
         }
+    }
+}
+
+/// The host rules of spec/06 section 6.8 when no rules are given. Without a password, only the Unix socket is open.
+fn default_hba(password: bool) -> &'static str {
+    if password {
+        "local all all scram-sha-256\nhost all all 127.0.0.1/32 scram-sha-256\nhost all all ::1/128 scram-sha-256\n"
+    } else {
+        "local all all trust\n"
     }
 }
 
@@ -58,7 +99,17 @@ impl Default for Config {
 #[derive(Debug)]
 struct Shared {
     base: Settings,
-    superuser: String,
+    roles: Roles,
+    /// The stored secret of the superuser, in the format of `pg_authid.rolpassword`.
+    secret: Option<String>,
+    hba: Hba,
+    ident: Ident,
+    net: Arc<dyn Net>,
+    /// The random bytes of the mock salt of a role that does not exist. They are new at each start of the server.
+    mock_nonce: [u8; MOCK_NONCE_LEN],
+    /// The iterations of the mock secret, `scram_iterations`.
+    iterations: i32,
+    log: Option<Arc<dyn Log>>,
     entropy: Arc<dyn Entropy>,
     /// The cancel key of each session, by process ID.
     keys: Mutex<BTreeMap<i32, CancelKey>>,
@@ -160,10 +211,11 @@ impl Server {
     ///
     /// # Errors
     ///
-    /// A setting of the command line that is not valid, an address that the server cannot listen on, and a task that does not start.
+    /// A setting of the command line that is not valid, host rules that do not load, an address that the server cannot listen on, and a task that does not start.
     pub fn start(
         config: &Config,
         net: Arc<dyn Net>,
+        io: Arc<dyn Io>,
         tasks: Arc<dyn Tasks>,
         entropy: Arc<dyn Entropy>,
     ) -> Result<Server> {
@@ -178,13 +230,36 @@ impl Server {
         }
         let base = connection::base_settings(&args)?;
         let sockets = socket_paths(&base, &address)?;
+        let write = |severity: &str, lines: &[String]| {
+            if let Some(log) = &config.log {
+                for line in lines {
+                    log.write(severity, line);
+                }
+            }
+        };
+        let (hba, ident) = load_rules(config, &base, &*io, &write)?;
         let mut listeners = vec![listener];
         for path in &sockets {
             listeners.push(net.listen(path)?);
         }
+        let secret = config
+            .password
+            .as_deref()
+            .filter(|p| !p.is_empty())
+            .map(|p| stored_secret(&base, &*entropy, &config.superuser, p));
+        let mut mock_nonce = [0; MOCK_NONCE_LEN];
+        entropy.fill(&mut mock_nonce);
+        let iterations = scram_iterations(&base);
         let shared = Arc::new(Shared {
             base,
-            superuser: config.superuser.clone(),
+            roles: Roles { superuser: config.superuser.clone() },
+            secret,
+            hba,
+            ident,
+            net: net.clone(),
+            mock_nonce,
+            iterations,
+            log: config.log.clone(),
             entropy,
             keys: Mutex::new(BTreeMap::new()),
             stopping: AtomicBool::new(false),
@@ -255,6 +330,86 @@ impl Server {
         }
         Ok(())
     }
+}
+
+impl Shared {
+    /// Writes a message to the server log.
+    fn log(&self, severity: &str, text: &str) {
+        if let Some(log) = &self.log {
+            log.write(severity, text);
+        }
+    }
+
+    /// Writes an error to the server log with its detail and its hint.
+    fn log_error(&self, severity: &str, error: &Error) {
+        let mut text = error.message().to_owned();
+        if let Some(detail) = error.detail() {
+            text.push_str("\nDETAIL:  ");
+            text.push_str(detail);
+        }
+        if let Some(hint) = error.hint() {
+            text.push_str("\nHINT:  ");
+            text.push_str(hint);
+        }
+        self.log(severity, &text);
+    }
+
+    /// Writes each message of a list to the server log.
+    fn log_all(&self, severity: &str, lines: &[String]) {
+        for line in lines {
+            self.log(severity, line);
+        }
+    }
+}
+
+/// The stored secret of a password, as `encrypt_password` makes it with the setting `password_encryption`.
+fn stored_secret(settings: &Settings, entropy: &dyn Entropy, user: &str, password: &str) -> String {
+    if settings.get("password_encryption").as_deref() == Some("md5") {
+        return md5_encrypt(&Hashes, password.as_bytes(), user.as_bytes());
+    }
+    let mut salt = [0; SCRAM_SALT_LEN];
+    entropy.fill(&mut salt);
+    let prepared = prepare_password(password.as_bytes());
+    ScramSecret::build(&Hashes, &prepared, &salt, scram_iterations(settings)).to_string()
+}
+
+/// The setting `scram_iterations`.
+fn scram_iterations(settings: &Settings) -> i32 {
+    settings.get("scram_iterations").and_then(|v| v.parse().ok()).unwrap_or(SCRAM_ITERATIONS)
+}
+
+/// `load_hba` and `load_ident`. An error in the host rules stops the start, as in `PostmasterMain`. An error in the user maps only goes to the log, and then no map matches.
+fn load_rules(
+    config: &Config,
+    base: &Settings,
+    io: &dyn Io,
+    log: &dyn Fn(&str, &[String]),
+) -> Result<(Hba, Ident)> {
+    let ssl = base.get("ssl").as_deref() == Some("on");
+    let password = config.password.as_deref().is_some_and(|p| !p.is_empty());
+    let hba_file = base.get("hba_file").filter(|f| !f.is_empty());
+    let (source, name) = match &hba_file {
+        Some(path) => (Source::File(path), path.as_str()),
+        None => {
+            let text = config.hba.as_deref().unwrap_or(default_hba(password));
+            (Source::Text { name: HBA_NAME, text }, HBA_NAME)
+        }
+    };
+    let mut lines = Vec::new();
+    let hba = Hba::load(io, source, ssl, &mut lines);
+    log("LOG", &lines);
+    let Some(hba) = hba else {
+        return Err(Error::internal(format!("could not load {name}")));
+    };
+    let ident_file = base.get("ident_file").filter(|f| !f.is_empty());
+    let source = match &ident_file {
+        Some(path) => Source::File(path),
+        None => Source::Text { name: IDENT_NAME, text: config.ident.as_deref().unwrap_or("") },
+    };
+    let mut lines = Vec::new();
+    let ident = Ident::load(io, source, &mut lines);
+    log("LOG", &lines);
+    Ok((hba, ident.unwrap_or_default()))
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {
@@ -433,7 +588,7 @@ fn startup(shared: &Shared, wire: &mut Wire) -> Option<(Start, u32)> {
 
 /// The checks of `InitPostgres` after the authentication: the role and the database.
 fn admit(shared: &Shared, start: &Start) -> std::result::Result<(), Error> {
-    if start.user != shared.superuser {
+    if start.user != shared.roles.superuser {
         return Err(Error::new(
             SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             format!("role \"{}\" does not exist", start.user),
@@ -483,14 +638,29 @@ fn register(shared: &Shared, protocol: u32) -> (Registered<'_>, CancelKey) {
 
 /// The authentication, the start of the session, and the main loop.
 fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
-    // The method `trust`.
+    let Some(notices) = auth::authenticate(shared, wire, start, protocol) else {
+        return;
+    };
     wire.out.authentication_ok();
     let settings =
         admit(shared, start).and_then(|()| connection::session_settings(&shared.base, start));
     let settings = match settings {
         Ok(settings) => settings,
-        Err(error) => return wire.fatal(&error),
+        Err(error) => {
+            shared.log_error("FATAL", &error);
+            return wire.fatal(&error);
+        }
     };
+    // `EmitConnectionWarnings` at the end of `InitPostgres`, after the settings of the startup packet.
+    let md5_warnings = settings.get("md5_password_warnings").as_deref() != Some("off");
+    let quiet = settings.get("client_min_messages").as_deref() == Some("error");
+    for notice in notices {
+        if quiet || (notice.md5 && !md5_warnings) {
+            continue;
+        }
+        let warning = Error::new(SqlState::WARNING, notice.message).with_detail(notice.detail);
+        connection::write_error(&mut wire.out, "WARNING", &warning, None, true);
+    }
     let (_registered, key) = register(shared, protocol);
     let mut connection = Connection::new(start, settings, protocol);
     connection.greet(&key, &mut wire.out);

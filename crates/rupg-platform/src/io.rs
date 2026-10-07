@@ -4,7 +4,7 @@ use std::fmt;
 use std::path::Path;
 use std::sync::Arc;
 
-use rupg_common::Result;
+use rupg_common::{Error, Result, SqlState};
 
 /// How [`Io::open`] opens a file.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -39,6 +39,33 @@ pub trait Io: Send + Sync + fmt::Debug {
 
     /// Makes the names in a directory durable, for example after a new file. Call it before the engine depends on the new file after a crash.
     fn sync_dir(&self, path: &Path) -> Result<()>;
+
+    /// The names of the entries of a directory, in no order, each with true for a directory. The configuration files use it for `include_dir`.
+    ///
+    /// # Errors
+    ///
+    /// The directory cannot be read. An implementation without directories gives `0A000`.
+    fn read_dir(&self, path: &Path) -> Result<Vec<(String, bool)>> {
+        Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("could not open directory \"{}\": not supported", path.display()),
+        ))
+    }
+
+    /// The whole contents of a file, for a small file such as a configuration file.
+    ///
+    /// # Errors
+    ///
+    /// The file cannot be opened or read.
+    fn read_file(&self, path: &Path) -> Result<Vec<u8>> {
+        let file = self.open(path, OpenMode::Read)?;
+        let size = usize::try_from(file.size()?).map_err(|_| {
+            Error::new(SqlState::OUT_OF_MEMORY, format!("file \"{}\" is too large", path.display()))
+        })?;
+        let mut data = vec![0; size];
+        file.read_at(0, &mut data)?;
+        Ok(data)
+    }
 }
 
 /// An open file. The offsets are in bytes. A file can be used from many threads at the same time.

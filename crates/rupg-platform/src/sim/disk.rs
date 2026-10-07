@@ -436,6 +436,20 @@ impl Io for SimIo {
         Ok(lock(&self.disk).files.contains_key(path))
     }
 
+    fn read_dir(&self, path: &Path) -> Result<Vec<(String, bool)>> {
+        // The disk has files only. A directory is the parent of a file.
+        let disk = lock(&self.disk);
+        let mut out = Vec::new();
+        for file in disk.files.keys() {
+            if file.parent() == Some(path)
+                && let Some(name) = file.file_name()
+            {
+                out.push((name.to_string_lossy().into_owned(), false));
+            }
+        }
+        Ok(out)
+    }
+
     fn sync_dir(&self, _path: &Path) -> Result<()> {
         Ok(())
     }

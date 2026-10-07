@@ -13,6 +13,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use rupg_common::{Error, Result, SqlState};
 
+use super::os_text;
 use crate::net::{Listener, Stream};
 
 /// The number of times that the server tries to create a lock file, as in `CreateLockFile`.
@@ -246,7 +247,7 @@ fn peer_uid(stream: &UnixStream) -> Result<libc::uid_t> {
 fn credentials_error() -> Error {
     Error::new(
         SqlState::IO_ERROR,
-        format!("could not get peer credentials: {}", io::Error::last_os_error()),
+        format!("could not get peer credentials: {}", os_text(&io::Error::last_os_error())),
     )
 }
 
@@ -265,7 +266,10 @@ fn user_name(uid: libc::uid_t) -> Result<String> {
         let message = if code == 0 {
             format!("local user with ID {uid} does not exist")
         } else {
-            format!("could not look up local user ID {uid}: {}", io::Error::from_raw_os_error(code))
+            format!(
+                "could not look up local user ID {uid}: {}",
+                os_text(&io::Error::from_raw_os_error(code))
+            )
         };
         return Err(Error::new(SqlState::INTERNAL_ERROR, message));
     }
