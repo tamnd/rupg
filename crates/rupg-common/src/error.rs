@@ -39,6 +39,8 @@ impl SqlState {
     pub const IO_ERROR: SqlState = SqlState(*b"58030");
     /// `58P01` undefined_file.
     pub const UNDEFINED_FILE: SqlState = SqlState(*b"58P01");
+    /// `58P02` duplicate_file.
+    pub const DUPLICATE_FILE: SqlState = SqlState(*b"58P02");
     /// `XX000` internal_error.
     pub const INTERNAL_ERROR: SqlState = SqlState(*b"XX000");
     /// `XX001` data_corrupted.
@@ -182,6 +184,7 @@ mod tests {
             (SqlState::ADMIN_SHUTDOWN, "admin_shutdown"),
             (SqlState::IO_ERROR, "io_error"),
             (SqlState::UNDEFINED_FILE, "undefined_file"),
+            (SqlState::DUPLICATE_FILE, "duplicate_file"),
             (SqlState::INTERNAL_ERROR, "internal_error"),
             (SqlState::DATA_CORRUPTED, "data_corrupted"),
         ];
