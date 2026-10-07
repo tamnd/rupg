@@ -466,7 +466,7 @@ impl Settings {
         }
     }
 
-    /// Reads a value with the type rules and the check hook of the parameter.
+    /// Reads a value with the type rules and the check hook of the parameter, and refuses a value that rupg does not support (spec/06 section 6.13.2).
     fn parse(&self, parameter: &Parameter, text: &str) -> Result<Setting, Error> {
         let setting = parameter.parse(text)?;
         let (current, reset) = match self.find_slot(lower(parameter.name).as_ref()) {
@@ -478,7 +478,18 @@ impl Settings {
                 (boot.clone(), boot)
             }
         };
-        check::check(parameter, setting, &current, &reset)
+        let setting = check::check(parameter, setting, &current, &reset)?;
+        let shown = parameter.show(&setting);
+        if super::refuses(parameter, &shown) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!(
+                    "rupg does not support parameter \"{}\" set to \"{shown}\"",
+                    parameter.name
+                ),
+            ));
+        }
+        Ok(setting)
     }
 
     /// Makes the slot of a parameter if the session did not change it before.
@@ -770,20 +781,20 @@ mod tests {
             }
         }
         let mut s = startup();
-        set(&mut s, "default_transaction_isolation", "serializable").unwrap();
+        set(&mut s, "default_transaction_isolation", "repeatable read").unwrap();
         s.end(true);
         assert_eq!(s.get("transaction_isolation").unwrap(), "read committed");
         s.start_transaction(None);
-        assert_eq!(s.get("transaction_isolation").unwrap(), "serializable");
+        assert_eq!(s.get("transaction_isolation").unwrap(), "repeatable read");
         // BEGIN ISOLATION LEVEL sets the value for the transaction only, and AND CHAIN keeps it.
-        local(&mut s, "transaction_isolation", "repeatable read");
+        local(&mut s, "transaction_isolation", "read uncommitted");
         let kept = s.characteristics();
         s.end(true);
-        assert_eq!(s.get("transaction_isolation").unwrap(), "serializable");
+        assert_eq!(s.get("transaction_isolation").unwrap(), "repeatable read");
         s.start_transaction(Some(kept));
-        assert_eq!(s.get("transaction_isolation").unwrap(), "repeatable read");
+        assert_eq!(s.get("transaction_isolation").unwrap(), "read uncommitted");
         s.end(false);
-        assert_eq!(s.get("transaction_isolation").unwrap(), "repeatable read");
+        assert_eq!(s.get("transaction_isolation").unwrap(), "read uncommitted");
     }
 
     #[test]
@@ -961,5 +972,38 @@ mod tests {
         assert_eq!(one.get("my.option").unwrap(), "x");
         assert_eq!(one.get("statement_timeout").unwrap(), "0");
         assert_eq!(two.slots.len(), 0);
+    }
+
+    #[test]
+    fn refused_values() {
+        let mut s = startup();
+        let message = |r: Result<(), Error>| {
+            let error = r.unwrap_err();
+            format!("{} {}", error.state().as_str(), error.message())
+        };
+        assert_eq!(
+            message(set(&mut s, "default_transaction_isolation", "SERIALIZABLE")),
+            "0A000 rupg does not support parameter \"default_transaction_isolation\" set to \"serializable\""
+        );
+        assert_eq!(
+            message(set(&mut s, "transaction_isolation", "serializable")),
+            "0A000 rupg does not support parameter \"transaction_isolation\" set to \"serializable\""
+        );
+        assert_eq!(
+            message(set(&mut s, "session_replication_role", "replica")),
+            "0A000 rupg does not support parameter \"session_replication_role\" set to \"replica\""
+        );
+        assert_eq!(state_of(set(&mut s, "transaction_isolation", "bogus")), "22023");
+        set(&mut s, "session_replication_role", "local").unwrap();
+        set(&mut s, "default_transaction_isolation", "repeatable read").unwrap();
+        s.end(true);
+        assert_eq!(s.get("default_transaction_isolation").unwrap(), "repeatable read");
+        assert_eq!(state_of(s.set_argument("ssl_sni", "on")), "0A000");
+        assert_eq!(state_of(s.set_file("ssl_sni", Some("on")).map(drop)), "0A000");
+        s.set_argument("ssl_sni", "off").unwrap();
+    }
+
+    fn state_of(r: Result<(), Error>) -> String {
+        r.unwrap_err().state().as_str().to_owned()
     }
 }

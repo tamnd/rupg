@@ -567,7 +567,7 @@ fn settings_that_do_not_load() {
     );
     assert_eq!(
         start_error(&[("ssl_sni", "on")], KEY).0,
-        "0A000 ssl_sni is not supported by this version of rupg"
+        "0A000 rupg does not support parameter \"ssl_sni\" set to \"on\""
     );
 }
 
