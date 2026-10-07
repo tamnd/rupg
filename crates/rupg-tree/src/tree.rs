@@ -117,6 +117,7 @@ impl<L: Leaf> Tree<L> {
             let mut parent: Option<P::Optimistic<'a>> = None;
             let mut node = pages.optimistic(self.root)?;
             let mut fence: Option<Vec<u8>> = None;
+            let mut above = u16::MAX;
             loop {
                 let kind = node.u8_at(KIND);
                 if kind == Some(L::LEAF as u8) {
@@ -128,13 +129,17 @@ impl<L: Leaf> Tree<L> {
                     }
                     continue 'restart;
                 }
-                let step = match kind == Some(L::INNER as u8) {
-                    true => inner::step(&Read(&node), key),
-                    false => None,
-                };
-                let Some(step) = step else {
+                let step = (kind == Some(L::INNER as u8))
+                    .then(|| {
+                        inner::level_below(&Read(&node), above).zip(inner::step(&Read(&node), key))
+                    })
+                    .flatten();
+                let Some((level, step)) = step else {
                     if node.is_valid() {
-                        return Err(corrupt(node.page(), "has a bad kind or bad inner bytes"));
+                        return Err(corrupt(
+                            node.page(),
+                            "has a bad kind, a bad level or bad inner bytes",
+                        ));
                     }
                     continue 'restart;
                 };
@@ -143,6 +148,7 @@ impl<L: Leaf> Tree<L> {
                     continue 'restart;
                 }
                 fence = step.fence.or(fence);
+                above = level;
                 parent = Some(node);
                 node = child?;
             }
@@ -183,6 +189,7 @@ impl<L: Leaf> Tree<L> {
             // Go down again from the root with exclusive latches. `path` holds the latched nodes from the highest node that a split can change.
             let mut path: Vec<(PageId, P::Exclusive<'_>)> =
                 vec![(self.root, pages.exclusive(self.root)?)];
+            let mut above = u16::MAX;
             loop {
                 let (id, top) =
                     path.last().ok_or_else(|| Error::internal("the tree path is empty"))?;
@@ -193,6 +200,8 @@ impl<L: Leaf> Tree<L> {
                 if kind != L::INNER as u8 {
                     return Err(corrupt(*id, "has a bad kind"));
                 }
+                above = inner::level_below(&**top, above)
+                    .ok_or_else(|| corrupt(*id, "has a bad level"))?;
                 let step =
                     inner::step(&**top, key).ok_or_else(|| corrupt(*id, "has bad inner bytes"))?;
                 let child = pages.exclusive(step.child)?;
@@ -578,6 +587,19 @@ mod tests {
         all[0].0 = 1_000;
         set_rows(&mut page, &all);
         drop(page);
+        assert!(tree.check(&pages).is_err());
+
+        // A child number that points up the tree. A read and a write give an error and do not loop.
+        all[0].0 = 0;
+        set_rows(&mut pages.exclusive(child).unwrap(), &all);
+        tree.check(&pages).unwrap();
+        let root = tree.root();
+        pages.exclusive(root).unwrap()[inner::LEFTMOST..][..8]
+            .copy_from_slice(&root.0.to_le_bytes());
+        let e = tree.read(&pages, &key(0), |_| Ok(())).unwrap_err();
+        assert_eq!(e.state(), rupg_common::SqlState::DATA_CORRUPTED);
+        let e = put(&tree, &pages, 0, 1).unwrap_err();
+        assert_eq!(e.state(), rupg_common::SqlState::DATA_CORRUPTED);
         assert!(tree.check(&pages).is_err());
 
         // A root that is not a tree page.

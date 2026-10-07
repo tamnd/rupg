@@ -149,11 +149,14 @@ fn the_catalog_gives_errors_as_postgresql() {
     assert_eq!(err.state(), SqlState::UNDEFINED_FILE);
 }
 
-/// A file that a crash left with zero bytes opens as a new file.
+/// A file that a crash left with zero bytes opens as a new file. Without `create`, it gives the error of a missing file.
 #[test]
 fn an_empty_file_opens_as_a_new_file() {
     let io = SimIo::new(4);
     io.open(Path::new(PATH), OpenMode::CreateNew).unwrap();
+    let existing = Options { create: false, ..options() };
+    let err = Database::open_on(&platform(&io, 4), Path::new(PATH), &existing).unwrap_err();
+    assert_eq!(err.state(), SqlState::UNDEFINED_FILE);
     let db = open(&io, 4, &options());
     assert!(db.table_names().is_empty());
     db.create_table("t", columns()).unwrap();

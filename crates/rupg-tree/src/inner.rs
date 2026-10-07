@@ -14,7 +14,7 @@ pub const MAX_KEY: usize = 2704;
 
 const LEVEL: usize = 40;
 const COUNT: usize = 42;
-const LEFTMOST: usize = 48;
+pub(crate) const LEFTMOST: usize = 48;
 const LOWER: usize = 34;
 const UPPER: usize = 36;
 const ENTRY: usize = 10;
@@ -115,6 +115,11 @@ pub(crate) fn step(v: &impl View, key: &[u8]) -> Option<Step> {
         false => None,
     };
     Some(Step { child, fence })
+}
+
+/// The level of an inner node, if it is 1 or more and below `above`. A descent that takes each child only through this check always goes down, so a child number that points up the tree cannot make it loop.
+pub(crate) fn level_below(v: &impl View, above: u16) -> Option<u16> {
+    v.u16_at(LEVEL).filter(|&l| l >= 1 && l < above)
 }
 
 /// The level of a node. Leaves are level 0.

@@ -34,7 +34,7 @@ pub struct Options {
     pub log_extents: usize,
     /// A transaction that starts when the log holds more than this many bytes after the redo position takes a checkpoint first. The default is half the ring.
     pub checkpoint_log: Option<u64>,
-    /// Make the file if it does not exist. The default is true. When it is false, a missing file gives SQLSTATE `58P01`.
+    /// Make the file if it does not exist or has zero bytes. The default is true. When it is false, a missing file or a file of zero bytes gives SQLSTATE `58P01`.
     pub create: bool,
     /// The number of logical pages that the window of the buffer pool can hold (spec/08 section 8.8.1). The default `None` takes the largest reservation of address space that the host gives. A reservation that large takes milliseconds to make and to free, so a test that opens many databases sets a small number. A file with more pages than the window gives an error.
     pub window_pages: Option<u64>,
@@ -145,8 +145,14 @@ impl Database {
             ));
         }
         let file = io.open(path, if exists { OpenMode::ReadWrite } else { OpenMode::CreateNew })?;
-        // A file of zero bytes is a file that a crash stopped before its first write.
+        // A file of zero bytes is a file that a crash stopped before its first write. It holds no database, so it is the same as a missing file.
         let new = file.size()? == 0;
+        if new && !options.create {
+            return Err(Error::new(
+                SqlState::UNDEFINED_FILE,
+                format!("database file \"{}\" is empty", path.display()),
+            ));
+        }
         let store = if new {
             let mut id = [0; 16];
             platform.entropy.fill(&mut id);
