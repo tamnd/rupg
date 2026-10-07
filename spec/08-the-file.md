@@ -124,7 +124,7 @@ The page kinds are these.
 |---|---|---|
 | 1 | page table node | rupg-file |
 | 2 | free space map | rupg-file |
-| 3 | log ring directory | rupg-log |
+| 3 | log ring directory | rupg-file |
 | 4 | catalog tree | rupg-catalog |
 | 5 | hot store inner node | rupg-hot |
 | 6 | hot store leaf, PAX | rupg-hot |
@@ -139,6 +139,7 @@ The page kinds are these.
 | 15 | temporary spill | rupg-exec |
 | 16 | shard map | rupg-cluster |
 | 17 | pending free list | rupg-file |
+| 18 | log ring extent list | rupg-file |
 
 Extents (section 8.4) have no page headers. The segment directory describes them.
 
@@ -263,6 +264,10 @@ Each worker has one log ring inside the file (document 04 section 4.3). A ring i
 | 8 | physical page number of the extent list |
 | 8 | checksum of the extent list page |
 | 40 | reserved |
+
+**The directory and the extent lists are in rupg-file.** rupg-log owns the blocks inside a ring, but the open path and the file store must check every page that a header slot names, and rupg-buffer cannot depend on rupg-log. So the two page kinds are in the format crate, as the page table and the free space map are. Each directory page and each extent list page holds its physical page number in the logical page field. The kind data of a directory page holds the count of entries at bytes 8 and 9 and the next page at bytes 16 to 23, in the format of a page table entry. The entries are in increasing order of the ring number. An entry is valid only if the ring size is a nonzero multiple of 16 MiB, the redo position is not above the durable position, and the durable position is not more than the ring size above the redo position. The reserved bytes are zero.
+
+**Each ring has one extent list page of kind 18.** The kind data holds the ring number at bytes 0 to 3 and the count of extents at bytes 8 and 9. After the header, the page holds the first physical page of each E4 extent, in ring order, up to 2,040 extents. An E4 extent is a whole arena, so each number is the first page of an arena, and no number is in the list two times. The count times 16 MiB is the ring size in the directory entry. One page limits a ring to about 31 GiB, which is far above the 1 GB trigger of `max_wal_size` in document 11 section 11.15.
 
 **A ring position is a 64-bit byte offset that only increases.** The physical location is the offset modulo the ring size, mapped through the extent list. Every record header holds its own position and a checksum. Recovery stops reading a ring at the first record whose position or checksum is wrong, which is how it finds the end of a ring that wrapped.
 
