@@ -7,6 +7,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - The ring directory page, kind 3, and the ring extent list page, kind 18, in `rupg-file`, with `RingEntry`, `RingDirectoryPage`, `RingExtentsPage` and their text forms. Spec/08 now gives their layout and moves the owner of kind 3 to `rupg-file`.
+- Log ring extents in `FileStore`. `add_ring_extent` gives out a free arena as an E4 extent, `free_ring_extent` takes it back after two checkpoints, and `write_ring`, `read_ring` and `sync_rings` do the I/O. `Checkpoint` now takes the rings in place of a ring directory root, and the checkpoint writes the ring directory and an extent list for each ring. `FileStore::open` reads and checks them, and `FileStore::rings` gives them.
+
+### Changed
+
+- The simulated disk grows a file with a copy from a zeroed buffer, which is much faster than `Vec::resize` in a debug build.
 
 ## 0.0.4 (2026-10-07)
 

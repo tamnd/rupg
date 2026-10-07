@@ -13,7 +13,7 @@ mod pool;
 mod resident;
 mod store;
 
-pub use file_store::{Checkpoint, FileStats, FileStore};
+pub use file_store::{Checkpoint, FileStats, FileStore, RingState};
 pub use pool::{
     BufferPool, BufferStats, ExclusiveGuard, MIN_FRAMES, OptimisticGuard, PoolConfig, PoolMode,
     SharedGuard,
