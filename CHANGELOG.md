@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.8 (2026-10-07)
+
+The eighth patch release on the 0.0 line. It makes a commit durable: each commit writes a block to the log, the hot pages go to the file at a checkpoint, and recovery replays the log into the pages of the last checkpoint. No crate is published.
+
 ### Added
 
 - Each commit with a change now writes one commit block to the log and returns when the block is safe. `Transactions::with_log` sets the log. The block holds one record for each row that the transaction changed: every column for an insert, the changed columns for an update, and no column for a delete. `replay` applies the safe blocks of a `Recovery` to the tables and gives the newest timestamp and the next transaction id. A record applies only if its commit timestamp is above the `stamp` of its row, so a second replay changes nothing. Spec/11 section 11.16 has the M1 note.
