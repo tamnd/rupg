@@ -12,9 +12,9 @@ mod layers;
 mod sha256;
 mod style;
 mod vendor;
+mod version;
 
-const USAGE: &str =
-    "usage: cargo xtask <grammar [file.y...] | layers | style | vendor [--check] [dir...]>";
+const USAGE: &str = "usage: cargo xtask <grammar [file.y...] | layers | style | vendor [--check] [dir...] | version <x.y.z>>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -25,6 +25,7 @@ fn main() -> ExitCode {
         Some("layers") => layers::check(&root),
         Some("style") => style::check(&root),
         Some("vendor") => vendor::run(&root, &args[1..]),
+        Some("version") => version::run(&root, &args[1..]),
         Some(other) => Err(format!("unknown task {other:?}\n{USAGE}")),
         None => Err(USAGE.to_string()),
     };
