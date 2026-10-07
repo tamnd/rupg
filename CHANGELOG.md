@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.13 (2026-10-08)
+
+The thirteenth patch release on the 0.0 line. It adds the system catalogs and their static rows, and the first part of the server of milestone M2: `rupg serve` with the simple query flow and the transaction block, the Unix socket with its lock file, and client authentication with `pg_hba.conf`. `psql` can log in with SCRAM, change settings and run transaction blocks. No crate is published.
+
 ### Added
 
 - `rupg-pgcatalog` has the schema of the 64 system catalogs and their static rows (spec/07 section 7.13). `cargo xtask pgcatalog` reads the vendored catalog headers and `.dat` files with the rules of `genbki.pl` and of the bootstrap mode: the defaults, the array types, the OID lookups, the OIDs from 10000, the row types of the catalogs, the `aclitem` values, the `Const` nodes of `proargdefaults`, and the descriptions. It also makes the `pg_class`, `pg_attribute` and `pg_index` rows of the catalogs, their 35 toast tables and their 124 indexes, and the 192 `pg_constraint` rows of `system_constraints.sql`. The rows are column batches in the binary. `--check` fails if the files differ, and CI runs it. A test compares the 13,770 rows with the catalogs of the oracle after `initdb`, and each difference that a later step of `initdb` makes is named in the test.
