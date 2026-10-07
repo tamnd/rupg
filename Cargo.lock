@@ -77,6 +77,10 @@ version = "0.0.1"
 [[package]]
 name = "rupg-file"
 version = "0.0.1"
+dependencies = [
+ "rupg-common",
+ "rupg-platform",
+]
 
 [[package]]
 name = "rupg-func"

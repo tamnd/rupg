@@ -19,6 +19,8 @@ impl SqlState {
     pub const NUMERIC_VALUE_OUT_OF_RANGE: SqlState = SqlState(*b"22003");
     /// `22023` invalid_parameter_value.
     pub const INVALID_PARAMETER_VALUE: SqlState = SqlState(*b"22023");
+    /// `22P02` invalid_text_representation.
+    pub const INVALID_TEXT_REPRESENTATION: SqlState = SqlState(*b"22P02");
     /// `23505` unique_violation.
     pub const UNIQUE_VIOLATION: SqlState = SqlState(*b"23505");
     /// `25006` read_only_sql_transaction.
@@ -180,6 +182,7 @@ mod tests {
             (SqlState::FEATURE_NOT_SUPPORTED, "feature_not_supported"),
             (SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "numeric_value_out_of_range"),
             (SqlState::INVALID_PARAMETER_VALUE, "invalid_parameter_value"),
+            (SqlState::INVALID_TEXT_REPRESENTATION, "invalid_text_representation"),
             (SqlState::UNIQUE_VIOLATION, "unique_violation"),
             (SqlState::READ_ONLY_SQL_TRANSACTION, "read_only_sql_transaction"),
             (SqlState::SERIALIZATION_FAILURE, "serialization_failure"),
