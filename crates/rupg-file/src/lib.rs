@@ -8,6 +8,7 @@ mod access;
 mod arena;
 mod checksum;
 mod extent;
+mod freelist;
 mod identity;
 mod le;
 mod owner;
@@ -25,6 +26,7 @@ pub use arena::{
 };
 pub use checksum::{CHECKSUM_ALGORITHM, checksum};
 pub use extent::{EXTENT_BLOCK, EXTENT_BLOCK_PAGES, Extent, ExtentClass};
+pub use freelist::{FREE_LIST_PER_PAGE, FreeListPage};
 pub use identity::{FORMAT_MAJOR, FORMAT_MINOR, Identity, MAGIC};
 pub use owner::{OWNER_MAGIC, OWNER_OFFSET, Owner, SOCKET_MAX};
 pub use page::{

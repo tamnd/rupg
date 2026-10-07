@@ -138,6 +138,7 @@ The page kinds are these.
 | 14 | vector graph | rupg-ann |
 | 15 | temporary spill | rupg-exec |
 | 16 | shard map | rupg-cluster |
+| 17 | pending free list | rupg-file |
 
 Extents (section 8.4) have no page headers. The segment directory describes them.
 
@@ -222,14 +223,16 @@ These are the steps, in this order. A step starts only when the previous step is
 6. **Sync the slot.** It calls `fdatasync`, or `F_FULLFSYNC` on macOS.
 7. **Release.** The physical pages on the pending free list of the previous interval become free. The ring space before the new redo positions becomes free. The new slot is now the active slot.
 
-**The invariant is that the durable slot never points to a location that can be overwritten.** A location becomes free only in step 7, after the slot that no longer refers to it is durable. Every crash case follows from this invariant.
+**The invariant is that no durable slot points to a location that can be overwritten.** A location becomes free only in step 7, after the slot that no longer refers to it is durable. Every crash case follows from this invariant.
+
+**A location waits for two checkpoints.** After step 6 the old slot is still on disk, and open uses it when the new slot fails its checksum. The pages that the new slot no longer uses are therefore still in use by the old slot. They go on the pending free list of the new slot, and they become free in step 7 of the next checkpoint, when that checkpoint writes over the old slot. The list of a checkpoint holds the locations that the page writer superseded in its interval and the old locations of the page table nodes, free space map pages and pending free list pages that the checkpoint wrote again. The free space map that a checkpoint writes shows the pages of the previous list as free, because they are free when the slot that names this map is durable.
 
 | Crash during | Slot found at open | State at open |
 |---|---|---|
 | steps 1 to 4 | the old slot | old page table, old pages intact, redo from the old positions |
 | step 5 | the old slot, because the new one fails its checksum | as above |
 | step 6 | either slot, both are complete | consistent in both cases |
-| step 7 | the new slot | redo from the new positions, pending frees are recomputed |
+| step 7 | the new slot | redo from the new positions, the pending free list comes from the slot |
 
 **The checkpoint triggers are the PostgreSQL settings.** A checkpoint starts when `checkpoint_timeout` passes, default 5 minutes, or when any ring holds more than `max_wal_size` of log since its redo position, default 1 GB, as in PostgreSQL. The SQL command `CHECKPOINT` runs one and waits for it. `checkpoint_completion_target` paces step 2. These settings exist in PostgreSQL and clients read and set them, so rupg keeps their names and meanings (document 19).
 
@@ -351,11 +354,13 @@ The file after page 2 is a sequence of arenas of 16 MiB, which is 1024 pages. Ea
 
 A physical page or extent goes through three states: allocated, pending free, and free. These rules apply.
 
-1. A page that the page writer superseded is pending free until the checkpoint after the write is durable.
+1. A page that the page writer superseded is pending free until the second checkpoint after the write is durable (section 8.6.2).
 2. An extent of a segment that compaction replaced is pending free until no snapshot can see the old segment. It then waits for one more checkpoint.
 3. A logical page number that a tree released is reused only after the checkpoint that records its release is durable.
 4. A write arena with fewer than 25 percent of its pages in use is a candidate for cleaning. The page writer copies its live pages to the current write arena, out of place, and the arena becomes free after the next checkpoint. 25 percent is a budget for M1.
 5. Spill arenas are freed when the query or session ends, and at every open.
+
+**The pending free list is a chain of pages of kind 17.** The header slot names the first page. Each page holds its physical page number in the logical page field, as a page table node does. The kind data holds the count of numbers at bytes 8 and 9 and the next page at bytes 16 to 23, in the format of a page table entry. After the header, the page holds up to 2,040 physical page numbers of 8 bytes in increasing order. A read checks that each number is in an arena and that the numbers increase, so a damaged page gives `XX001` and not a wrong free page. Open reads the list of the slot that it chooses, and these pages stay in use until the next checkpoint.
 
 ### 8.9.3 Growth and shrink
 

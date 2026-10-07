@@ -48,11 +48,13 @@ pub enum PageKind {
     TempSpill = 15,
     /// The shard map. rupg-cluster.
     ShardMap = 16,
+    /// A page of the pending free list. rupg-file.
+    FreeList = 17,
 }
 
 impl PageKind {
     /// Each kind, in the order of the number.
-    pub const ALL: [PageKind; 16] = [
+    pub const ALL: [PageKind; 17] = [
         PageKind::PageTable,
         PageKind::FreeSpace,
         PageKind::RingDirectory,
@@ -69,6 +71,7 @@ impl PageKind {
         PageKind::VectorGraph,
         PageKind::TempSpill,
         PageKind::ShardMap,
+        PageKind::FreeList,
     ];
 
     /// The kind with this number.
@@ -95,6 +98,7 @@ impl PageKind {
             PageKind::VectorGraph => "vector_graph",
             PageKind::TempSpill => "temp_spill",
             PageKind::ShardMap => "shard_map",
+            PageKind::FreeList => "free_list",
         }
     }
 }
@@ -399,7 +403,7 @@ mod tests {
             assert_eq!(kind.name().parse(), Ok(kind));
         }
         assert_eq!(PageKind::from_u8(0), None);
-        assert_eq!(PageKind::from_u8(17), None);
+        assert_eq!(PageKind::from_u8(18), None);
         assert_eq!("encrypted,temporary".parse(), Ok(PageFlags(0b101)));
         assert_eq!(PageFlags(0b101).to_string(), "encrypted,temporary");
         assert_eq!("none".parse(), Ok(PageFlags::NONE));
