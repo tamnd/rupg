@@ -3,6 +3,11 @@
 brin = "brin"
 RESERV = "RESERV"
 IST = "IST"
+# The fields `inh` of RangeVar and the others, and `larg` and `rarg` of SelectStmt and JoinExpr.
+inh = "inh"
+larg = "larg"
+# A test of the parser gives `SELEC` for a syntax error.
+selec = "selec"
 
 # Test inputs that are wrong on purpose.
 [default]

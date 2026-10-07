@@ -16,13 +16,14 @@ mod guc;
 mod layers;
 mod pgtype;
 mod sha256;
+mod sql;
 mod style;
 mod tzdata;
 mod unicode;
 mod vendor;
 mod version;
 
-const USAGE: &str = "usage: cargo xtask <errcodes [--check] | grammar [file.y...] | guc [--check] | layers | pgtype [--check] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
+const USAGE: &str = "usage: cargo xtask <errcodes [--check] | grammar [file.y...] | guc [--check] | layers | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -34,6 +35,7 @@ fn main() -> ExitCode {
         Some("pgtype") => pgtype::run(&root, &args[1..]),
         Some("guc") => guc::run(&root, &args[1..]),
         Some("layers") => layers::check(&root),
+        Some("sql") => sql::run(&root, &args[1..]),
         Some("style") => style::check(&root),
         Some("tzdata") => tzdata::run(&root, &args[1..]),
         Some("unicode") => unicode::run(&root, &args[1..]),

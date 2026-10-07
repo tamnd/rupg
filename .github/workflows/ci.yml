@@ -67,6 +67,9 @@ jobs:
         run: cargo xtask guc --check
       - name: time zone names
         run: cargo xtask tzdata --check
+      # The parse tables, the keywords, the nodes and the action glue must be the files that the vendored grammar and headers give. See spec/07-sql-types-and-catalog.md section 7.2.
+      - name: sql parser tables
+        run: cargo xtask sql --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
       - name: spelling

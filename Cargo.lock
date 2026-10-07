@@ -323,6 +323,9 @@ version = "0.0.11"
 [[package]]
 name = "rupg-sql"
 version = "0.0.11"
+dependencies = [
+ "rupg-common",
+]
 
 [[package]]
 name = "rupg-summary"
