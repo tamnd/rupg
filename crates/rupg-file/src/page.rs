@@ -20,7 +20,7 @@ pub enum PageKind {
     PageTable = 1,
     /// A free space map page. rupg-file.
     FreeSpace = 2,
-    /// The log ring directory. rupg-log.
+    /// The log ring directory. rupg-file.
     RingDirectory = 3,
     /// A catalog tree node. rupg-catalog.
     Catalog = 4,
@@ -50,11 +50,13 @@ pub enum PageKind {
     ShardMap = 16,
     /// A page of the pending free list. rupg-file.
     FreeList = 17,
+    /// The extent list of one log ring. rupg-file.
+    RingExtents = 18,
 }
 
 impl PageKind {
     /// Each kind, in the order of the number.
-    pub const ALL: [PageKind; 17] = [
+    pub const ALL: [PageKind; 18] = [
         PageKind::PageTable,
         PageKind::FreeSpace,
         PageKind::RingDirectory,
@@ -72,6 +74,7 @@ impl PageKind {
         PageKind::TempSpill,
         PageKind::ShardMap,
         PageKind::FreeList,
+        PageKind::RingExtents,
     ];
 
     /// The kind with this number.
@@ -99,6 +102,7 @@ impl PageKind {
             PageKind::TempSpill => "temp_spill",
             PageKind::ShardMap => "shard_map",
             PageKind::FreeList => "free_list",
+            PageKind::RingExtents => "ring_extents",
         }
     }
 }
@@ -403,7 +407,7 @@ mod tests {
             assert_eq!(kind.name().parse(), Ok(kind));
         }
         assert_eq!(PageKind::from_u8(0), None);
-        assert_eq!(PageKind::from_u8(18), None);
+        assert_eq!(PageKind::from_u8(19), None);
         assert_eq!("encrypted,temporary".parse(), Ok(PageFlags(0b101)));
         assert_eq!(PageFlags(0b101).to_string(), "encrypted,temporary");
         assert_eq!("none".parse(), Ok(PageFlags::NONE));

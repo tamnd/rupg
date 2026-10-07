@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The ring directory page, kind 3, and the ring extent list page, kind 18, in `rupg-file`, with `RingEntry`, `RingDirectoryPage`, `RingExtentsPage` and their text forms. Spec/08 now gives their layout and moves the owner of kind 3 to `rupg-file`.
+
 ## 0.0.4 (2026-10-07)
 
 The fourth patch release on the 0.0 line. It adds the file store of spec/08 with out-of-place page writes, the page table in memory and the checkpoint, so the buffer pool can keep its pages in a database file. No crate is published.

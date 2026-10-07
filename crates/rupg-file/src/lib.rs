@@ -14,6 +14,7 @@ mod le;
 mod owner;
 mod page;
 mod pagetable;
+mod ring;
 mod slot;
 pub mod text;
 
@@ -35,6 +36,10 @@ pub use page::{
 pub use pagetable::{
     MAX_PHYSICAL, PT_FANOUT, PT_MAX_LEVELS, PT_MIN_LEVELS, PtEntry, PtNode, PtPath, pt_capacity,
     pt_levels,
+};
+pub use ring::{
+    RING_ENTRY_SIZE, RING_EXTENT_BYTES, RING_EXTENTS_PER_PAGE, RINGS_PER_PAGE, RingDirectoryPage,
+    RingEntry, RingExtentsPage,
 };
 pub use slot::{Root, SLOT_MAGIC, Slot, SlotChoice, SlotName, choose_slot};
 
