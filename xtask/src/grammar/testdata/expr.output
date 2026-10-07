@@ -1,0 +1,480 @@
+Rules useless in parser due to conflicts
+
+   12 args: ε
+
+
+State 0 conflicts: 1 shift/reduce
+State 3 conflicts: 1 shift/reduce
+State 9 conflicts: 1 shift/reduce
+State 10 conflicts: 1 shift/reduce
+State 11 conflicts: 1 shift/reduce
+State 12 conflicts: 1 shift/reduce
+State 13 conflicts: 1 shift/reduce
+State 14 conflicts: 1 shift/reduce, 2 reduce/reduce
+State 23 conflicts: 1 shift/reduce
+
+
+Grammar
+
+    0 $accept: s $end
+
+    1 s: e
+    2  | s ';' e
+
+    3 e: e '+' e
+    4  | e '-' e
+    5  | e '*' e
+    6  | e '<' e
+    7  | '-' e
+    8  | NUM
+
+    9 $@1: ε
+
+   10 e: ID $@1 '(' args ')'
+   11  | ε
+
+   12 args: ε
+   13     | e
+   14     | args ',' e
+
+
+Terminals, with rules where they appear
+
+    $end (0) 0
+    '(' (40) 10
+    ')' (41) 10
+    '*' (42) 5
+    '+' (43) 3
+    ',' (44) 14
+    '-' (45) 4 7
+    ';' (59) 2
+    '<' (60) 6
+    error (256)
+    NUM (258) 8
+    ID (259) 10
+    UMINUS (260)
+
+
+Nonterminals, with rules where they appear
+
+    $accept (14)
+        on left: 0
+    s (15)
+        on left: 1 2
+        on right: 0 2
+    e (16)
+        on left: 3 4 5 6 7 8 10 11
+        on right: 1 2 3 4 5 6 7 13 14
+    $@1 (17)
+        on left: 9
+        on right: 10
+    args (18)
+        on left: 12 13 14
+        on right: 10 14
+
+
+State 0
+
+    0 $accept: • s $end
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    $end  reduce using rule 11 (e)
+    '+'   reduce using rule 11 (e)
+    '-'   [reduce using rule 11 (e)]
+    '*'   reduce using rule 11 (e)
+    '<'   reduce using rule 11 (e)
+    ';'   reduce using rule 11 (e)
+
+    s  go to state 4
+    e  go to state 5
+
+
+State 1
+
+    8 e: NUM •
+
+    $end  reduce using rule 8 (e)
+    '+'   reduce using rule 8 (e)
+    '-'   reduce using rule 8 (e)
+    '*'   reduce using rule 8 (e)
+    '<'   reduce using rule 8 (e)
+    ';'   reduce using rule 8 (e)
+    ')'   reduce using rule 8 (e)
+    ','   reduce using rule 8 (e)
+
+
+State 2
+
+   10 e: ID • $@1 '(' args ')'
+
+    '('  reduce using rule 9 ($@1)
+
+    $@1  go to state 6
+
+
+State 3
+
+    7 e: '-' • e
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    $end  reduce using rule 11 (e)
+    '+'   reduce using rule 11 (e)
+    '-'   [reduce using rule 11 (e)]
+    '*'   reduce using rule 11 (e)
+    '<'   reduce using rule 11 (e)
+    ';'   reduce using rule 11 (e)
+    ')'   reduce using rule 11 (e)
+    ','   reduce using rule 11 (e)
+
+    e  go to state 7
+
+
+State 4
+
+    0 $accept: s • $end
+    2 s: s • ';' e
+
+    $end  shift, and go to state 8
+    ';'   shift, and go to state 9
+
+
+State 5
+
+    1 s: e •
+    3 e: e • '+' e
+    4  | e • '-' e
+    5  | e • '*' e
+    6  | e • '<' e
+
+    '+'  shift, and go to state 10
+    '-'  shift, and go to state 11
+    '*'  shift, and go to state 12
+    '<'  shift, and go to state 13
+
+    $end  reduce using rule 1 (s)
+    ';'   reduce using rule 1 (s)
+
+
+State 6
+
+   10 e: ID $@1 • '(' args ')'
+
+    '('  shift, and go to state 14
+
+
+State 7
+
+    3 e: e • '+' e
+    4  | e • '-' e
+    5  | e • '*' e
+    6  | e • '<' e
+    7  | '-' e •
+
+    $end  reduce using rule 7 (e)
+    '+'   reduce using rule 7 (e)
+    '-'   reduce using rule 7 (e)
+    '*'   reduce using rule 7 (e)
+    '<'   reduce using rule 7 (e)
+    ';'   reduce using rule 7 (e)
+    ')'   reduce using rule 7 (e)
+    ','   reduce using rule 7 (e)
+
+
+State 8
+
+    0 $accept: s $end •
+
+    $default  accept
+
+
+State 9
+
+    2 s: s ';' • e
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    $end  reduce using rule 11 (e)
+    '+'   reduce using rule 11 (e)
+    '-'   [reduce using rule 11 (e)]
+    '*'   reduce using rule 11 (e)
+    '<'   reduce using rule 11 (e)
+    ';'   reduce using rule 11 (e)
+
+    e  go to state 15
+
+
+State 10
+
+    3 e: e '+' • e
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    $end  reduce using rule 11 (e)
+    '+'   reduce using rule 11 (e)
+    '-'   [reduce using rule 11 (e)]
+    '*'   reduce using rule 11 (e)
+    '<'   reduce using rule 11 (e)
+    ';'   reduce using rule 11 (e)
+    ')'   reduce using rule 11 (e)
+    ','   reduce using rule 11 (e)
+
+    e  go to state 16
+
+
+State 11
+
+    4 e: e '-' • e
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    $end  reduce using rule 11 (e)
+    '+'   reduce using rule 11 (e)
+    '-'   [reduce using rule 11 (e)]
+    '*'   reduce using rule 11 (e)
+    '<'   reduce using rule 11 (e)
+    ';'   reduce using rule 11 (e)
+    ')'   reduce using rule 11 (e)
+    ','   reduce using rule 11 (e)
+
+    e  go to state 17
+
+
+State 12
+
+    5 e: e '*' • e
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    $end  reduce using rule 11 (e)
+    '+'   reduce using rule 11 (e)
+    '-'   [reduce using rule 11 (e)]
+    '*'   reduce using rule 11 (e)
+    '<'   reduce using rule 11 (e)
+    ';'   reduce using rule 11 (e)
+    ')'   reduce using rule 11 (e)
+    ','   reduce using rule 11 (e)
+
+    e  go to state 18
+
+
+State 13
+
+    6 e: e '<' • e
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    $end  reduce using rule 11 (e)
+    '+'   reduce using rule 11 (e)
+    '-'   [reduce using rule 11 (e)]
+    '*'   reduce using rule 11 (e)
+    '<'   reduce using rule 11 (e)
+    ';'   reduce using rule 11 (e)
+    ')'   reduce using rule 11 (e)
+    ','   reduce using rule 11 (e)
+
+    e  go to state 19
+
+
+State 14
+
+   10 e: ID $@1 '(' • args ')'
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    '+'  reduce using rule 11 (e)
+    '-'  [reduce using rule 11 (e)]
+    '*'  reduce using rule 11 (e)
+    '<'  reduce using rule 11 (e)
+    ')'  reduce using rule 11 (e)
+    ')'  [reduce using rule 12 (args)]
+    ','  reduce using rule 11 (e)
+    ','  [reduce using rule 12 (args)]
+
+    e     go to state 20
+    args  go to state 21
+
+
+State 15
+
+    2 s: s ';' e •
+    3 e: e • '+' e
+    4  | e • '-' e
+    5  | e • '*' e
+    6  | e • '<' e
+
+    '+'  shift, and go to state 10
+    '-'  shift, and go to state 11
+    '*'  shift, and go to state 12
+    '<'  shift, and go to state 13
+
+    $end  reduce using rule 2 (s)
+    ';'   reduce using rule 2 (s)
+
+
+State 16
+
+    3 e: e • '+' e
+    3  | e '+' e •
+    4  | e • '-' e
+    5  | e • '*' e
+    6  | e • '<' e
+
+    '*'  shift, and go to state 12
+    '<'  shift, and go to state 13
+
+    $end  reduce using rule 3 (e)
+    '+'   reduce using rule 3 (e)
+    '-'   reduce using rule 3 (e)
+    ';'   reduce using rule 3 (e)
+    ')'   reduce using rule 3 (e)
+    ','   reduce using rule 3 (e)
+
+
+State 17
+
+    3 e: e • '+' e
+    4  | e • '-' e
+    4  | e '-' e •
+    5  | e • '*' e
+    6  | e • '<' e
+
+    '*'  shift, and go to state 12
+    '<'  shift, and go to state 13
+
+    $end  reduce using rule 4 (e)
+    '+'   reduce using rule 4 (e)
+    '-'   reduce using rule 4 (e)
+    ';'   reduce using rule 4 (e)
+    ')'   reduce using rule 4 (e)
+    ','   reduce using rule 4 (e)
+
+
+State 18
+
+    3 e: e • '+' e
+    4  | e • '-' e
+    5  | e • '*' e
+    5  | e '*' e •
+    6  | e • '<' e
+
+    '<'  shift, and go to state 13
+
+    $end  reduce using rule 5 (e)
+    '+'   reduce using rule 5 (e)
+    '-'   reduce using rule 5 (e)
+    '*'   reduce using rule 5 (e)
+    ';'   reduce using rule 5 (e)
+    ')'   reduce using rule 5 (e)
+    ','   reduce using rule 5 (e)
+
+
+State 19
+
+    3 e: e • '+' e
+    4  | e • '-' e
+    5  | e • '*' e
+    6  | e • '<' e
+    6  | e '<' e •
+
+    '<'  error (nonassociative)
+
+    $end  reduce using rule 6 (e)
+    '+'   reduce using rule 6 (e)
+    '-'   reduce using rule 6 (e)
+    '*'   reduce using rule 6 (e)
+    ';'   reduce using rule 6 (e)
+    ')'   reduce using rule 6 (e)
+    ','   reduce using rule 6 (e)
+
+
+State 20
+
+    3 e: e • '+' e
+    4  | e • '-' e
+    5  | e • '*' e
+    6  | e • '<' e
+   13 args: e •
+
+    '+'  shift, and go to state 10
+    '-'  shift, and go to state 11
+    '*'  shift, and go to state 12
+    '<'  shift, and go to state 13
+
+    ')'  reduce using rule 13 (args)
+    ','  reduce using rule 13 (args)
+
+
+State 21
+
+   10 e: ID $@1 '(' args • ')'
+   14 args: args • ',' e
+
+    ')'  shift, and go to state 22
+    ','  shift, and go to state 23
+
+
+State 22
+
+   10 e: ID $@1 '(' args ')' •
+
+    $end  reduce using rule 10 (e)
+    '+'   reduce using rule 10 (e)
+    '-'   reduce using rule 10 (e)
+    '*'   reduce using rule 10 (e)
+    '<'   reduce using rule 10 (e)
+    ';'   reduce using rule 10 (e)
+    ')'   reduce using rule 10 (e)
+    ','   reduce using rule 10 (e)
+
+
+State 23
+
+   14 args: args ',' • e
+
+    NUM  shift, and go to state 1
+    ID   shift, and go to state 2
+    '-'  shift, and go to state 3
+
+    '+'  reduce using rule 11 (e)
+    '-'  [reduce using rule 11 (e)]
+    '*'  reduce using rule 11 (e)
+    '<'  reduce using rule 11 (e)
+    ')'  reduce using rule 11 (e)
+    ','  reduce using rule 11 (e)
+
+    e  go to state 24
+
+
+State 24
+
+    3 e: e • '+' e
+    4  | e • '-' e
+    5  | e • '*' e
+    6  | e • '<' e
+   14 args: args ',' e •
+
+    '+'  shift, and go to state 10
+    '-'  shift, and go to state 11
+    '*'  shift, and go to state 12
+    '<'  shift, and go to state 13
+
+    ')'  reduce using rule 14 (args)
+    ','  reduce using rule 14 (args)

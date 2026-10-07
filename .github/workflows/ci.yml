@@ -53,6 +53,9 @@ jobs:
       # The vendored files must match the hashes in their PIN files. This step needs no network.
       - name: vendored files
         run: cargo xtask vendor --check
+      # The SQL grammar and the PL/pgSQL grammar must have the conflict counts of their %expect. See spec/22-crate-layout.md section 22.8.
+      - name: grammar conflicts
+        run: cargo xtask grammar
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
       - name: spelling

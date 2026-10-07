@@ -1,0 +1,424 @@
+Rules useless in parser due to conflicts
+
+    3 $@1: ε
+
+
+State 3 conflicts: 1 shift/reduce
+
+
+Grammar
+
+    0 $accept: prog $end
+
+    1 prog: ε
+    2     | prog stmt ';'
+
+    3 $@1: ε
+
+    4 $@2: ε
+
+    5 stmt: ID $@1 '=' expr $@2
+    6     | expr
+
+    7 expr: expr '+' expr
+    8     | expr '-' expr
+    9     | expr '*' expr
+   10     | expr '<' expr
+   11     | '-' expr
+   12     | ID '=' expr
+   13     | NUM
+   14     | '(' expr ')'
+
+
+Terminals, with rules where they appear
+
+    $end (0) 0
+    '(' (40) 14
+    ')' (41) 14
+    '*' (42) 9
+    '+' (43) 7
+    '-' (45) 8 11
+    ';' (59) 2
+    '<' (60) 10
+    '=' (61) 5 12
+    error (256)
+    ID (258) 5 12
+    NUM (259) 13
+
+
+Nonterminals, with rules where they appear
+
+    $accept (13)
+        on left: 0
+    prog (14)
+        on left: 1 2
+        on right: 0 2
+    stmt (15)
+        on left: 5 6
+        on right: 2
+    $@1 (16)
+        on left: 3
+        on right: 5
+    $@2 (17)
+        on left: 4
+        on right: 5
+    expr (18)
+        on left: 7 8 9 10 11 12 13 14
+        on right: 5 6 7 8 9 10 11 12 14
+
+
+State 0
+
+    0 $accept: • prog $end
+
+    $end  reduce using rule 1 (prog)
+    ID    reduce using rule 1 (prog)
+    NUM   reduce using rule 1 (prog)
+    '-'   reduce using rule 1 (prog)
+    '('   reduce using rule 1 (prog)
+
+    prog  go to state 1
+
+
+State 1
+
+    0 $accept: prog • $end
+    2 prog: prog • stmt ';'
+
+    $end  shift, and go to state 2
+    ID    shift, and go to state 3
+    NUM   shift, and go to state 4
+    '-'   shift, and go to state 5
+    '('   shift, and go to state 6
+
+    stmt  go to state 7
+    expr  go to state 8
+
+
+State 2
+
+    0 $accept: prog $end •
+
+    $default  accept
+
+
+State 3
+
+    5 stmt: ID • $@1 '=' expr $@2
+   12 expr: ID • '=' expr
+
+    '='  shift, and go to state 9
+
+    '='  [reduce using rule 3 ($@1)]
+
+    $@1  go to state 10
+
+
+State 4
+
+   13 expr: NUM •
+
+    '+'  reduce using rule 13 (expr)
+    '-'  reduce using rule 13 (expr)
+    '*'  reduce using rule 13 (expr)
+    '<'  reduce using rule 13 (expr)
+    ';'  reduce using rule 13 (expr)
+    ')'  reduce using rule 13 (expr)
+
+
+State 5
+
+   11 expr: '-' • expr
+
+    ID   shift, and go to state 11
+    NUM  shift, and go to state 4
+    '-'  shift, and go to state 5
+    '('  shift, and go to state 6
+
+    expr  go to state 12
+
+
+State 6
+
+   14 expr: '(' • expr ')'
+
+    ID   shift, and go to state 11
+    NUM  shift, and go to state 4
+    '-'  shift, and go to state 5
+    '('  shift, and go to state 6
+
+    expr  go to state 13
+
+
+State 7
+
+    2 prog: prog stmt • ';'
+
+    ';'  shift, and go to state 14
+
+
+State 8
+
+    6 stmt: expr •
+    7 expr: expr • '+' expr
+    8     | expr • '-' expr
+    9     | expr • '*' expr
+   10     | expr • '<' expr
+
+    '+'  shift, and go to state 15
+    '-'  shift, and go to state 16
+    '*'  shift, and go to state 17
+    '<'  shift, and go to state 18
+
+    ';'  reduce using rule 6 (stmt)
+
+
+State 9
+
+   12 expr: ID '=' • expr
+
+    ID   shift, and go to state 11
+    NUM  shift, and go to state 4
+    '-'  shift, and go to state 5
+    '('  shift, and go to state 6
+
+    expr  go to state 19
+
+
+State 10
+
+    5 stmt: ID $@1 • '=' expr $@2
+
+    '='  shift, and go to state 20
+
+
+State 11
+
+   12 expr: ID • '=' expr
+
+    '='  shift, and go to state 9
+
+
+State 12
+
+    7 expr: expr • '+' expr
+    8     | expr • '-' expr
+    9     | expr • '*' expr
+   10     | expr • '<' expr
+   11     | '-' expr •
+
+    '<'  shift, and go to state 18
+
+    '+'  reduce using rule 11 (expr)
+    '-'  reduce using rule 11 (expr)
+    '*'  reduce using rule 11 (expr)
+    ';'  reduce using rule 11 (expr)
+    ')'  reduce using rule 11 (expr)
+
+
+State 13
+
+    7 expr: expr • '+' expr
+    8     | expr • '-' expr
+    9     | expr • '*' expr
+   10     | expr • '<' expr
+   14     | '(' expr • ')'
+
+    '+'  shift, and go to state 15
+    '-'  shift, and go to state 16
+    '*'  shift, and go to state 17
+    '<'  shift, and go to state 18
+    ')'  shift, and go to state 21
+
+
+State 14
+
+    2 prog: prog stmt ';' •
+
+    $end  reduce using rule 2 (prog)
+    ID    reduce using rule 2 (prog)
+    NUM   reduce using rule 2 (prog)
+    '-'   reduce using rule 2 (prog)
+    '('   reduce using rule 2 (prog)
+
+
+State 15
+
+    7 expr: expr '+' • expr
+
+    ID   shift, and go to state 11
+    NUM  shift, and go to state 4
+    '-'  shift, and go to state 5
+    '('  shift, and go to state 6
+
+    expr  go to state 22
+
+
+State 16
+
+    8 expr: expr '-' • expr
+
+    ID   shift, and go to state 11
+    NUM  shift, and go to state 4
+    '-'  shift, and go to state 5
+    '('  shift, and go to state 6
+
+    expr  go to state 23
+
+
+State 17
+
+    9 expr: expr '*' • expr
+
+    ID   shift, and go to state 11
+    NUM  shift, and go to state 4
+    '-'  shift, and go to state 5
+    '('  shift, and go to state 6
+
+    expr  go to state 24
+
+
+State 18
+
+   10 expr: expr '<' • expr
+
+    ID   shift, and go to state 11
+    NUM  shift, and go to state 4
+    '-'  shift, and go to state 5
+    '('  shift, and go to state 6
+
+    expr  go to state 25
+
+
+State 19
+
+    7 expr: expr • '+' expr
+    8     | expr • '-' expr
+    9     | expr • '*' expr
+   10     | expr • '<' expr
+   12     | ID '=' expr •
+
+    '+'  shift, and go to state 15
+    '-'  shift, and go to state 16
+    '*'  shift, and go to state 17
+    '<'  shift, and go to state 18
+
+    ';'  reduce using rule 12 (expr)
+    ')'  reduce using rule 12 (expr)
+
+
+State 20
+
+    5 stmt: ID $@1 '=' • expr $@2
+
+    ID   shift, and go to state 11
+    NUM  shift, and go to state 4
+    '-'  shift, and go to state 5
+    '('  shift, and go to state 6
+
+    expr  go to state 26
+
+
+State 21
+
+   14 expr: '(' expr ')' •
+
+    '+'  reduce using rule 14 (expr)
+    '-'  reduce using rule 14 (expr)
+    '*'  reduce using rule 14 (expr)
+    '<'  reduce using rule 14 (expr)
+    ';'  reduce using rule 14 (expr)
+    ')'  reduce using rule 14 (expr)
+
+
+State 22
+
+    7 expr: expr • '+' expr
+    7     | expr '+' expr •
+    8     | expr • '-' expr
+    9     | expr • '*' expr
+   10     | expr • '<' expr
+
+    '*'  shift, and go to state 17
+    '<'  shift, and go to state 18
+
+    '+'  reduce using rule 7 (expr)
+    '-'  reduce using rule 7 (expr)
+    ';'  reduce using rule 7 (expr)
+    ')'  reduce using rule 7 (expr)
+
+
+State 23
+
+    7 expr: expr • '+' expr
+    8     | expr • '-' expr
+    8     | expr '-' expr •
+    9     | expr • '*' expr
+   10     | expr • '<' expr
+
+    '*'  shift, and go to state 17
+    '<'  shift, and go to state 18
+
+    '+'  reduce using rule 8 (expr)
+    '-'  reduce using rule 8 (expr)
+    ';'  reduce using rule 8 (expr)
+    ')'  reduce using rule 8 (expr)
+
+
+State 24
+
+    7 expr: expr • '+' expr
+    8     | expr • '-' expr
+    9     | expr • '*' expr
+    9     | expr '*' expr •
+   10     | expr • '<' expr
+
+    '<'  shift, and go to state 18
+
+    '+'  reduce using rule 9 (expr)
+    '-'  reduce using rule 9 (expr)
+    '*'  reduce using rule 9 (expr)
+    ';'  reduce using rule 9 (expr)
+    ')'  reduce using rule 9 (expr)
+
+
+State 25
+
+    7 expr: expr • '+' expr
+    8     | expr • '-' expr
+    9     | expr • '*' expr
+   10     | expr • '<' expr
+   10     | expr '<' expr •
+
+    '<'  error (nonassociative)
+
+    '+'  reduce using rule 10 (expr)
+    '-'  reduce using rule 10 (expr)
+    '*'  reduce using rule 10 (expr)
+    ';'  reduce using rule 10 (expr)
+    ')'  reduce using rule 10 (expr)
+
+
+State 26
+
+    5 stmt: ID $@1 '=' expr • $@2
+    7 expr: expr • '+' expr
+    8     | expr • '-' expr
+    9     | expr • '*' expr
+   10     | expr • '<' expr
+
+    '+'  shift, and go to state 15
+    '-'  shift, and go to state 16
+    '*'  shift, and go to state 17
+    '<'  shift, and go to state 18
+
+    ';'  reduce using rule 4 ($@2)
+
+    $@2  go to state 27
+
+
+State 27
+
+    5 stmt: ID $@1 '=' expr $@2 •
+
+    ';'  reduce using rule 5 (stmt)

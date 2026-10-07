@@ -7,18 +7,21 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod grammar;
 mod layers;
 mod sha256;
 mod style;
 mod vendor;
 
-const USAGE: &str = "usage: cargo xtask <layers | style | vendor [--check] [dir...]>";
+const USAGE: &str =
+    "usage: cargo xtask <grammar [file.y...] | layers | style | vendor [--check] [dir...]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let task = args.first().map(String::as_str);
     let root = root();
     let result = match task {
+        Some("grammar") => grammar::run(&root, &args[1..]),
         Some("layers") => layers::check(&root),
         Some("style") => style::check(&root),
         Some("vendor") => vendor::run(&root, &args[1..]),

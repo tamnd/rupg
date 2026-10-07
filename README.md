@@ -69,6 +69,7 @@ cargo fmt --all --check
 cargo xtask layers
 cargo xtask style
 cargo xtask vendor --check
+cargo xtask grammar
 cargo clippy --workspace --all-targets --all-features
 ```
 
