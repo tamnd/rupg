@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The M1 types in `rupg-types`. `TypeId` names a type by its OID in `pg_type`, with its name and the width of its storage form. `Datum` holds one value of `bool`, `int2`, `int4`, `int8`, `float4`, `float8`, `oid`, `text`, `bytea`, `uuid`, `date`, `timestamp` or `timestamptz`, and `encode` and `decode` give its storage form. A bad storage form gives `XX001`.
+
 ## 0.0.6 (2026-10-07)
 
 The sixth patch release on the 0.0 line. It adds the B+ tree of spec/12, the hot store of spec/10 with its PAX leaves and row id blocks, and the commit clock and the `visible` word of spec/11. No crate is published.
