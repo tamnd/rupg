@@ -3,6 +3,8 @@
 //! These checks read the whole tree, so they are not unit tests. They run through cargo, so they work the same on Linux, macOS and Windows. See `spec/22-crate-layout.md` section 22.8.
 
 #![forbid(unsafe_code)]
+// xtask is a build tool and not part of the engine, so it uses the file system directly. See clippy.toml.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;

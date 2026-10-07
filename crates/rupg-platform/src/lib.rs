@@ -9,11 +9,19 @@
 #![deny(unsafe_op_in_unsafe_fn)]
 
 mod clock;
+mod cpu;
 mod entropy;
 mod io;
+mod memory;
+mod net;
 pub mod os;
 pub mod sim;
+mod tasks;
 
 pub use clock::Clock;
+pub use cpu::{CpuFeatures, CpuLevel, physical_memory};
 pub use entropy::Entropy;
 pub use io::{File, Io, OpenMode};
+pub use memory::{MemoryPool, Reclaimer, Reservation};
+pub use net::{Listener, Net, Stream};
+pub use tasks::{Join, Task, TaskHandle, Tasks};

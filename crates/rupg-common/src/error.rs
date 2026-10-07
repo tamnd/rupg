@@ -9,6 +9,10 @@ use std::fmt;
 pub struct SqlState([u8; 5]);
 
 impl SqlState {
+    /// `08001` sqlclient_unable_to_establish_sqlconnection.
+    pub const UNABLE_TO_CONNECT: SqlState = SqlState(*b"08001");
+    /// `08006` connection_failure.
+    pub const CONNECTION_FAILURE: SqlState = SqlState(*b"08006");
     /// `0A000` feature_not_supported.
     pub const FEATURE_NOT_SUPPORTED: SqlState = SqlState(*b"0A000");
     /// `22003` numeric_value_out_of_range.
@@ -25,6 +29,8 @@ impl SqlState {
     pub const DEADLOCK_DETECTED: SqlState = SqlState(*b"40P01");
     /// `42P01` undefined_table.
     pub const UNDEFINED_TABLE: SqlState = SqlState(*b"42P01");
+    /// `53000` insufficient_resources.
+    pub const INSUFFICIENT_RESOURCES: SqlState = SqlState(*b"53000");
     /// `53100` disk_full.
     pub const DISK_FULL: SqlState = SqlState(*b"53100");
     /// `53200` out_of_memory.
@@ -169,6 +175,8 @@ mod tests {
     fn the_constants_are_in_errcodes() {
         let text = include_str!("../../../vendor/postgres-19/src/backend/utils/errcodes.txt");
         let constants = [
+            (SqlState::UNABLE_TO_CONNECT, "sqlclient_unable_to_establish_sqlconnection"),
+            (SqlState::CONNECTION_FAILURE, "connection_failure"),
             (SqlState::FEATURE_NOT_SUPPORTED, "feature_not_supported"),
             (SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "numeric_value_out_of_range"),
             (SqlState::INVALID_PARAMETER_VALUE, "invalid_parameter_value"),
@@ -177,6 +185,7 @@ mod tests {
             (SqlState::SERIALIZATION_FAILURE, "serialization_failure"),
             (SqlState::DEADLOCK_DETECTED, "deadlock_detected"),
             (SqlState::UNDEFINED_TABLE, "undefined_table"),
+            (SqlState::INSUFFICIENT_RESOURCES, "insufficient_resources"),
             (SqlState::DISK_FULL, "disk_full"),
             (SqlState::OUT_OF_MEMORY, "out_of_memory"),
             (SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, "object_not_in_prerequisite_state"),

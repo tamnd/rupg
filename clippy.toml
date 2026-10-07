@@ -1,7 +1,34 @@
-# Disallowed methods and types. See spec/22-crate-layout.md section 22.2.
-# The engine reads the time and the randomness through the platform traits, so the simulation can control them. See spec/21-testing.md.
+# Disallowed methods and types. See spec/22-crate-layout.md section 22.1.
+# The engine reaches the clock, the file system, the threads, the network and the random source only through the traits of rupg-platform, so the simulation can control them. See spec/21-testing.md section 21.10.
+# rupg-platform allows these calls in its os module. The front ends of group 13 and xtask own the process, so they allow them at the top of the crate.
 disallowed-methods = [
   { path = "std::time::Instant::now", reason = "use the Clock trait of rupg-platform" },
   { path = "std::time::SystemTime::now", reason = "use the Clock trait of rupg-platform" },
   { path = "std::thread::sleep", reason = "use the Tasks trait of rupg-platform" },
+  { path = "std::thread::spawn", reason = "use the Tasks trait of rupg-platform" },
+  { path = "std::thread::scope", reason = "use the Tasks trait of rupg-platform" },
+  { path = "std::thread::Builder::spawn", reason = "use the Tasks trait of rupg-platform" },
+  { path = "std::fs::read", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::read_to_string", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::write", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::remove_file", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::rename", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::copy", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::metadata", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::create_dir", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::create_dir_all", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::remove_dir", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::remove_dir_all", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::read_dir", reason = "use the Io trait of rupg-platform" },
+  { path = "std::path::Path::exists", reason = "use the Io trait of rupg-platform" },
+  { path = "std::collections::hash_map::RandomState::new", reason = "use the Entropy trait of rupg-platform, or a fixed hasher" },
+]
+disallowed-types = [
+  { path = "std::fs::File", reason = "use the Io trait of rupg-platform" },
+  { path = "std::fs::OpenOptions", reason = "use the Io trait of rupg-platform" },
+  { path = "std::net::TcpListener", reason = "use the Net trait of rupg-platform" },
+  { path = "std::net::TcpStream", reason = "use the Net trait of rupg-platform" },
+  { path = "std::net::UdpSocket", reason = "use the Net trait of rupg-platform" },
+  { path = "std::os::unix::net::UnixListener", reason = "use the Net trait of rupg-platform" },
+  { path = "std::os::unix::net::UnixStream", reason = "use the Net trait of rupg-platform" },
 ]
