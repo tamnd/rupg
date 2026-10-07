@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.11 (2026-10-08)
+
+The eleventh patch release on the 0.0 line. It adds the crash tests on real kernels and makes recovery faster. On server1 (4 cores, Linux 6.8), the open of a file with 1 GiB of log after a drop of the page cache takes 9.4 s, and it took 15.3 s before #129. No crate is published.
+
 ### Added
 
 - The crash tests on real kernels in `tests/realdisk` (spec/21 section 21.9.3). `logwrites.py` runs the M1 workload on ext4 or XFS over dm-log-writes, replays the log and checks the file at flush, FUA and mark entries and between them. `kill.py` kills the workload with `SIGKILL` at random points, and with `--lazyfs` it also drops the data that was not synced. See `tests/realdisk/README.md`. The nightly workflow runs them in the `realdisk` job.
@@ -13,7 +17,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Changed
 
 - The log checksum uses the CRC32C instruction when the CPU has it: SSE 4.2 on x86-64 and the CRC extension on AArch64. Other CPUs use the table code. The code moved from `rupg-log` to `rupg_kernels::crc32c`.
-- Recovery reads each ring one time. The scan finds the safe prefixes and does not copy the block bodies, and the new `Recovery::for_each_safe` gives the safe blocks in ring order to replay and to `rupg check`. An insert into a PAX page moves the bytes with one copy. On an Apple M-series laptop, the open of a file with 0.5 GiB of log takes 6.9 s, and it took 9.1 s before. The open of a file with 2294 small blocks takes 80 ms, and it took 194 ms before. Spec/11 section 11.16 has the numbers, and spec/24 Q73 tracks the gap to the replay budget.
+- Recovery reads each ring one time. The scan finds the safe prefixes and does not copy the block bodies, and the new `Recovery::for_each_safe` gives the safe blocks in ring order to replay and to `rupg check`. An insert into a PAX page moves the bytes with one copy. Spec/11 section 11.16 has the numbers, and spec/24 Q73 tracks the gap to the replay budget.
 - An update in the hot store that keeps the length of each value writes the PAX leaf in place, with no decode and encode of the leaf. Recovery replays such updates for each record. A decode of a leaf reads the directory entry of each column once. With `rupg-bench m1 --steps recovery --log-mib 512` on an Apple M-series laptop, the open takes 0.48 s, and it took 0.89 s before. The `file_open` fuzz target runs 275 inputs per second, and it ran 129 before.
 
 ## 0.0.10 (2026-10-07)

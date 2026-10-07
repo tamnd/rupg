@@ -77,7 +77,7 @@ checksum = "f8dcc9c7d52a811697d2151c701e0d08956f92b0e24136cf4cf27b57a6a0d9bf"
 
 [[package]]
 name = "rupg"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -91,7 +91,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-buffer"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
  "rupg-file",
@@ -100,11 +100,11 @@ dependencies = [
 
 [[package]]
 name = "rupg-common"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-file"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
  "rupg-platform",
@@ -125,7 +125,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-hot"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
  "rupg-file",
@@ -134,11 +134,11 @@ dependencies = [
 
 [[package]]
 name = "rupg-kernels"
-version = "0.0.10"
+version = "0.0.11"
 
 [[package]]
 name = "rupg-log"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -148,7 +148,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-platform"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "libc",
  "rupg-common",
@@ -156,7 +156,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-table"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
  "rupg-file",
@@ -166,7 +166,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-tree"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
  "rupg-file",
@@ -174,7 +174,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-txn"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
@@ -188,7 +188,7 @@ dependencies = [
 
 [[package]]
 name = "rupg-types"
-version = "0.0.10"
+version = "0.0.11"
 dependencies = [
  "rupg-common",
 ]
