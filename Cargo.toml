@@ -6,7 +6,7 @@ exclude = ["fuzz"]
 
 [workspace.package]
 # The version is 0.M.patch, where M is the last milestone that closed. See spec/23-milestones.md section 23.17.
-version = "0.0.11"
+version = "0.0.12"
 edition = "2024"
 # The MSRV is 1.88.0. Safe functions with target_feature need 1.86. core::hint::select_unpredictable needs 1.88. See spec/22-crate-layout.md section 22.11.
 rust-version = "1.88.0"
@@ -20,47 +20,47 @@ readme = "README.md"
 
 # One version for the whole workspace. Internal crates are pinned exactly, so a partial publish cannot make a build with mixed versions. `cargo xtask version` changes all the pins together.
 [workspace.dependencies]
-rupg = { version = "=0.0.11", path = "crates/rupg" }
-rupg-analyze = { version = "=0.0.11", path = "crates/rupg-analyze" }
-rupg-ann = { version = "=0.0.11", path = "crates/rupg-ann" }
-rupg-buffer = { version = "=0.0.11", path = "crates/rupg-buffer" }
-rupg-capi = { version = "=0.0.11", path = "crates/rupg-capi" }
-rupg-catalog = { version = "=0.0.11", path = "crates/rupg-catalog" }
-rupg-cli = { version = "=0.0.11", path = "crates/rupg-cli" }
-rupg-cluster = { version = "=0.0.11", path = "crates/rupg-cluster" }
-rupg-column = { version = "=0.0.11", path = "crates/rupg-column" }
-rupg-common = { version = "=0.0.11", path = "crates/rupg-common" }
-rupg-contrib = { version = "=0.0.11", path = "crates/rupg-contrib" }
-rupg-encode = { version = "=0.0.11", path = "crates/rupg-encode" }
-rupg-exchange = { version = "=0.0.11", path = "crates/rupg-exchange" }
-rupg-exec = { version = "=0.0.11", path = "crates/rupg-exec" }
-rupg-ext = { version = "=0.0.11", path = "crates/rupg-ext" }
-rupg-file = { version = "=0.0.11", path = "crates/rupg-file" }
-rupg-func = { version = "=0.0.11", path = "crates/rupg-func" }
-rupg-graph = { version = "=0.0.11", path = "crates/rupg-graph" }
-rupg-hot = { version = "=0.0.11", path = "crates/rupg-hot" }
-rupg-import = { version = "=0.0.11", path = "crates/rupg-import" }
-rupg-index = { version = "=0.0.11", path = "crates/rupg-index" }
-rupg-jit = { version = "=0.0.11", path = "crates/rupg-jit" }
-rupg-kernels = { version = "=0.0.11", path = "crates/rupg-kernels" }
-rupg-log = { version = "=0.0.11", path = "crates/rupg-log" }
-rupg-opt = { version = "=0.0.11", path = "crates/rupg-opt" }
-rupg-pgcatalog = { version = "=0.0.11", path = "crates/rupg-pgcatalog" }
-rupg-plan = { version = "=0.0.11", path = "crates/rupg-plan" }
-rupg-platform = { version = "=0.0.11", path = "crates/rupg-platform" }
-rupg-plpgsql = { version = "=0.0.11", path = "crates/rupg-plpgsql" }
-rupg-raft = { version = "=0.0.11", path = "crates/rupg-raft" }
-rupg-server = { version = "=0.0.11", path = "crates/rupg-server" }
-rupg-session = { version = "=0.0.11", path = "crates/rupg-session" }
-rupg-shim = { version = "=0.0.11", path = "crates/rupg-shim" }
-rupg-sql = { version = "=0.0.11", path = "crates/rupg-sql" }
-rupg-summary = { version = "=0.0.11", path = "crates/rupg-summary" }
-rupg-table = { version = "=0.0.11", path = "crates/rupg-table" }
-rupg-tree = { version = "=0.0.11", path = "crates/rupg-tree" }
-rupg-txn = { version = "=0.0.11", path = "crates/rupg-txn" }
-rupg-types = { version = "=0.0.11", path = "crates/rupg-types" }
-rupg-wasm = { version = "=0.0.11", path = "crates/rupg-wasm" }
-rupg-wire = { version = "=0.0.11", path = "crates/rupg-wire" }
+rupg = { version = "=0.0.12", path = "crates/rupg" }
+rupg-analyze = { version = "=0.0.12", path = "crates/rupg-analyze" }
+rupg-ann = { version = "=0.0.12", path = "crates/rupg-ann" }
+rupg-buffer = { version = "=0.0.12", path = "crates/rupg-buffer" }
+rupg-capi = { version = "=0.0.12", path = "crates/rupg-capi" }
+rupg-catalog = { version = "=0.0.12", path = "crates/rupg-catalog" }
+rupg-cli = { version = "=0.0.12", path = "crates/rupg-cli" }
+rupg-cluster = { version = "=0.0.12", path = "crates/rupg-cluster" }
+rupg-column = { version = "=0.0.12", path = "crates/rupg-column" }
+rupg-common = { version = "=0.0.12", path = "crates/rupg-common" }
+rupg-contrib = { version = "=0.0.12", path = "crates/rupg-contrib" }
+rupg-encode = { version = "=0.0.12", path = "crates/rupg-encode" }
+rupg-exchange = { version = "=0.0.12", path = "crates/rupg-exchange" }
+rupg-exec = { version = "=0.0.12", path = "crates/rupg-exec" }
+rupg-ext = { version = "=0.0.12", path = "crates/rupg-ext" }
+rupg-file = { version = "=0.0.12", path = "crates/rupg-file" }
+rupg-func = { version = "=0.0.12", path = "crates/rupg-func" }
+rupg-graph = { version = "=0.0.12", path = "crates/rupg-graph" }
+rupg-hot = { version = "=0.0.12", path = "crates/rupg-hot" }
+rupg-import = { version = "=0.0.12", path = "crates/rupg-import" }
+rupg-index = { version = "=0.0.12", path = "crates/rupg-index" }
+rupg-jit = { version = "=0.0.12", path = "crates/rupg-jit" }
+rupg-kernels = { version = "=0.0.12", path = "crates/rupg-kernels" }
+rupg-log = { version = "=0.0.12", path = "crates/rupg-log" }
+rupg-opt = { version = "=0.0.12", path = "crates/rupg-opt" }
+rupg-pgcatalog = { version = "=0.0.12", path = "crates/rupg-pgcatalog" }
+rupg-plan = { version = "=0.0.12", path = "crates/rupg-plan" }
+rupg-platform = { version = "=0.0.12", path = "crates/rupg-platform" }
+rupg-plpgsql = { version = "=0.0.12", path = "crates/rupg-plpgsql" }
+rupg-raft = { version = "=0.0.12", path = "crates/rupg-raft" }
+rupg-server = { version = "=0.0.12", path = "crates/rupg-server" }
+rupg-session = { version = "=0.0.12", path = "crates/rupg-session" }
+rupg-shim = { version = "=0.0.12", path = "crates/rupg-shim" }
+rupg-sql = { version = "=0.0.12", path = "crates/rupg-sql" }
+rupg-summary = { version = "=0.0.12", path = "crates/rupg-summary" }
+rupg-table = { version = "=0.0.12", path = "crates/rupg-table" }
+rupg-tree = { version = "=0.0.12", path = "crates/rupg-tree" }
+rupg-txn = { version = "=0.0.12", path = "crates/rupg-txn" }
+rupg-types = { version = "=0.0.12", path = "crates/rupg-types" }
+rupg-wasm = { version = "=0.0.12", path = "crates/rupg-wasm" }
+rupg-wire = { version = "=0.0.12", path = "crates/rupg-wire" }
 
 # Outside crates. Each one is in the table of spec/22-crate-layout.md section 22.5.
 # libc: the system calls of rupg-platform on Unix, for example F_FULLFSYNC and getentropy.
