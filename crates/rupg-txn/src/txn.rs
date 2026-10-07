@@ -227,7 +227,7 @@ impl<P: PageAccess> Transactions<P> {
         for _ in 0..state.writers.len() {
             match state.writers.get(&at) {
                 Some(&Some(next)) if next == me => {
-                    return Err(Error::new(SqlState::DEADLOCK_DETECTED, "deadlock detected"));
+                    return Err(Error::new(SqlState::T_R_DEADLOCK_DETECTED, "deadlock detected"));
                 }
                 Some(&Some(next)) => at = next,
                 _ => break,
@@ -538,7 +538,7 @@ impl<P: PageAccess> Transaction<P> {
                             _ => "delete",
                         };
                         return Err(Error::new(
-                            SqlState::SERIALIZATION_FAILURE,
+                            SqlState::T_R_SERIALIZATION_FAILURE,
                             format!("could not serialize access due to concurrent {what}"),
                         ));
                     }
@@ -837,7 +837,7 @@ mod tests {
         c.commit().unwrap();
         assert_eq!(read(&txns.begin(Isolation::ReadCommitted), &table, id), Some(30));
         let err = d.update(&table, id, &row(1, 40)).unwrap_err();
-        assert_eq!(err.state(), SqlState::SERIALIZATION_FAILURE);
+        assert_eq!(err.state(), SqlState::T_R_SERIALIZATION_FAILURE);
         assert_eq!(err.message(), "could not serialize access due to concurrent update");
         assert_eq!(read(&d, &table, id), Some(10));
 
@@ -902,7 +902,7 @@ mod tests {
         for (isolation, commit, want) in [
             (Isolation::ReadCommitted, true, Ok(true)),
             (Isolation::ReadCommitted, false, Ok(true)),
-            (Isolation::RepeatableRead, true, Err(SqlState::SERIALIZATION_FAILURE)),
+            (Isolation::RepeatableRead, true, Err(SqlState::T_R_SERIALIZATION_FAILURE)),
             (Isolation::RepeatableRead, false, Ok(true)),
         ] {
             let (txns, table) = setup();
@@ -967,7 +967,7 @@ mod tests {
         }
         handle.join().unwrap();
         let theirs = result.lock().unwrap().take().unwrap();
-        let deadlock = Err(SqlState::DEADLOCK_DETECTED);
+        let deadlock = Err(SqlState::T_R_DEADLOCK_DETECTED);
         assert!(
             (mine == deadlock && theirs == Ok(true)) || (mine == Ok(true) && theirs == deadlock),
             "{mine:?} {theirs:?}"
@@ -1089,7 +1089,10 @@ mod tests {
                             false => o.txn.update(&table, id, &row(v, v)),
                         };
                         if conflict {
-                            assert_eq!(got.unwrap_err().state(), SqlState::SERIALIZATION_FAILURE);
+                            assert_eq!(
+                                got.unwrap_err().state(),
+                                SqlState::T_R_SERIALIZATION_FAILURE
+                            );
                             open.swap_remove(i).txn.rollback().unwrap();
                             continue;
                         }
@@ -1146,8 +1149,10 @@ mod tests {
                                 done += 1;
                             }
                             Err(e) => {
-                                let retry =
-                                    [SqlState::SERIALIZATION_FAILURE, SqlState::DEADLOCK_DETECTED];
+                                let retry = [
+                                    SqlState::T_R_SERIALIZATION_FAILURE,
+                                    SqlState::T_R_DEADLOCK_DETECTED,
+                                ];
                                 assert!(retry.contains(&e.state()), "{e}");
                                 t.rollback().unwrap();
                             }

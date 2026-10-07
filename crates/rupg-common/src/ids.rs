@@ -5,7 +5,8 @@
 use std::fmt;
 use std::str::FromStr;
 
-use crate::error::{Error, SqlState};
+use crate::error::Error;
+use crate::sqlstate::SqlState;
 
 fn parse_error(what: &str, text: &str) -> Error {
     Error::new(SqlState::INVALID_PARAMETER_VALUE, format!("invalid {what}: {text:?}"))

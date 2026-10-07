@@ -11,6 +11,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - SASLprep in `rupg-wire`: `saslprep` and `prepare_password`, as `pg_saslprep` does it. `verify_password` applies it before it checks a SCRAM secret, so a password with characters outside ASCII gives the same result as in PostgreSQL.
 - `rupg_types::unicode`, the four Unicode normalization forms from the vendored Unicode 17.0.0 data. It passes every line of `NormalizationTest.txt`.
 - `cargo xtask unicode` makes the normalization tables and the SASLprep tables from the vendored files, and `--check` fails if they differ. CI runs the check.
+- `rupg_common::SqlState` has every code line of `errcodes.txt`: 268 constants, named as the C macro without `ERRCODE_`, with `parse`, `name`, `condition`, `for_condition`, `class_title` and `category`. `cargo xtask errcodes` makes the list, and CI checks it. The code is lifted from `rudb-common`.
+
+### Changed
+
+- Three `SqlState` constants have the names of `errcodes.txt`: `SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION`, `T_R_SERIALIZATION_FAILURE` and `T_R_DEADLOCK_DETECTED`. `SqlState::code` is now `SqlState::as_str`, and `SqlState::new` is now `SqlState::parse`.
 
 ## 0.0.11 (2026-10-08)
 

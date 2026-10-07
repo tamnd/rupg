@@ -53,6 +53,7 @@ jobs:
           cargo xtask vendor --check
           cargo xtask grammar
           cargo xtask unicode --check
+          cargo xtask errcodes --check
           cargo clippy --workspace --all-targets --all-features -- -D warnings
           cargo test --workspace --all-features
 

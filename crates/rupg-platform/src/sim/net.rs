@@ -67,7 +67,7 @@ impl Net for SimNet {
         let mut state = lock(&self.state);
         let refused = || {
             Error::new(
-                SqlState::UNABLE_TO_CONNECT,
+                SqlState::SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
                 format!("could not connect to the address \"{addr}\": connection refused"),
             )
         };
@@ -215,7 +215,10 @@ mod tests {
     #[test]
     fn no_listener_refuses() {
         let net = SimNet::new();
-        assert_eq!(net.connect("db:5432").unwrap_err().state(), SqlState::UNABLE_TO_CONNECT);
+        assert_eq!(
+            net.connect("db:5432").unwrap_err().state(),
+            SqlState::SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION
+        );
         let listener = net.listen("db:5432").unwrap();
         drop(listener);
         assert!(net.connect("db:5432").is_err());

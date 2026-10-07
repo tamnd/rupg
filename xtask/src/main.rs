@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod errcodes;
 mod grammar;
 mod layers;
 mod sha256;
@@ -17,13 +18,14 @@ mod unicode;
 mod vendor;
 mod version;
 
-const USAGE: &str = "usage: cargo xtask <grammar [file.y...] | layers | style | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
+const USAGE: &str = "usage: cargo xtask <errcodes [--check] | grammar [file.y...] | layers | style | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let task = args.first().map(String::as_str);
     let root = root();
     let result = match task {
+        Some("errcodes") => errcodes::run(&root, &args[1..]),
         Some("grammar") => grammar::run(&root, &args[1..]),
         Some("layers") => layers::check(&root),
         Some("style") => style::check(&root),
