@@ -156,10 +156,19 @@ fn index(n: u64, path: &Path) -> Result<usize> {
     })
 }
 
+/// Sets the length of an image. New bytes are zero. A copy from a zeroed buffer is much faster than `Vec::resize` in a debug build, and the tests grow files by 16 MiB.
+fn set_len(image: &mut Vec<u8>, len: usize) {
+    if len <= image.len() {
+        image.truncate(len);
+    } else {
+        image.extend_from_slice(&vec![0; len - image.len()]);
+    }
+}
+
 fn write_into(image: &mut Vec<u8>, offset: usize, data: &[u8]) {
     let end = offset + data.len();
     if image.len() < end {
-        image.resize(end, 0);
+        set_len(image, end);
     }
     image[offset..end].copy_from_slice(data);
 }
@@ -258,7 +267,7 @@ impl SimIo {
             let Some(image) = images.get_mut(path) else { continue };
             match (op, plan.fates[i]) {
                 (_, Fate::Lost) => {}
-                (Op::SetSize(size), Fate::Written) => image.resize(index(*size, path)?, 0),
+                (Op::SetSize(size), Fate::Written) => set_len(image, index(*size, path)?),
                 (Op::SetSize(_), _) => {}
                 (Op::Write { offset, data }, Fate::Written) => {
                     write_into(image, index(*offset, path)?, data);
@@ -483,7 +492,7 @@ impl File for SimFile {
         self.with("truncate", |file, _, faults, used| {
             self.check_write("truncate", file)?;
             room(&self.path, faults, used, file.current.len() as u64, size)?;
-            file.current.resize(new, 0);
+            set_len(&mut file.current, new);
             file.pending.push(Op::SetSize(size));
             Ok(())
         })

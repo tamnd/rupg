@@ -1,8 +1,10 @@
 //! `FileStore`, the store of a database file (spec/08 sections 8.5, 8.6 and 8.9).
 //!
-//! A page is never written over its durable copy. Each write goes to the next free page of the current write arena, and the page table entry in memory moves to the new copy. The old copy goes on the pending free list. A checkpoint writes the page table nodes that changed, the pending free list and the free space map, syncs, writes the inactive header slot and syncs again. A superseded page becomes free at the second checkpoint after its write, because the old slot still names it until the next checkpoint writes over that slot.
+//! A page is never written over its durable copy. Each write goes to the next free page of the current write arena, and the page table entry in memory moves to the new copy. The old copy goes on the pending free list. A checkpoint writes the page table nodes that changed, the pending free list, the ring directory and the free space map, syncs, writes the inactive header slot and syncs again. A superseded page becomes free at the second checkpoint after its write, because the old slot still names it until the next checkpoint writes over that slot.
+//!
+//! The store also gives out the E4 extents of the log rings (spec/08 section 8.7). rupg-log writes the blocks in them, and each checkpoint records the rings that the caller gives.
 
-use std::collections::{BTreeMap, BTreeSet, HashSet};
+use std::collections::{BTreeMap, BTreeSet};
 use std::sync::atomic::{AtomicBool, AtomicU64, Ordering};
 use std::sync::{Arc, PoisonError, RwLock, RwLockReadGuard, RwLockWriteGuard};
 
@@ -10,7 +12,8 @@ use rupg_common::{Error, Hlc, Result, SqlState};
 use rupg_file::{
     ARENA_PAGES, ArenaKind, ArenaMap, BLOCK_SIZE, Block, FIRST_ARENA_PAGE, FREE_LIST_PER_PAGE,
     FSM_ARENAS_PER_PAGE, Features, FileId, FreeListPage, FsmPage, Identity, PAGE_SIZE, PT_FANOUT,
-    PT_MAX_LEVELS, PT_MIN_LEVELS, Page, PageHeader, PageId, PageKind, PtEntry, PtNode, Root,
+    PT_MAX_LEVELS, PT_MIN_LEVELS, Page, PageHeader, PageId, PageKind, PtEntry, PtNode,
+    RING_EXTENT_BYTES, RINGS_PER_PAGE, RingDirectoryPage, RingEntry, RingExtentsPage, Root,
     SLOT_A_PAGE, SLOT_B_PAGE, Slot, SlotName, arena_of, arena_start, choose_slot, pt_capacity,
     pt_levels, seal, stored_checksum, verify,
 };
@@ -18,15 +21,39 @@ use rupg_platform::File;
 
 use crate::Store;
 
-/// The time and the roots that the caller gives to a checkpoint. The page table, the free space map and the pending free list come from the store.
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+/// The state of one log ring at a checkpoint. The store writes it in the ring directory (spec/08 section 8.7).
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct RingState {
+    /// The ring number.
+    pub ring: u32,
+    /// The worker that uses the ring.
+    pub worker: u32,
+    /// The ring position where redo starts.
+    pub redo: u64,
+    /// The durable position.
+    pub durable: u64,
+    /// The newest durable HLC value.
+    pub newest: Hlc,
+    /// The first physical page of each E4 extent of the ring, in ring order. Each one comes from [`FileStore::add_ring_extent`].
+    pub extents: Vec<u64>,
+}
+
+impl RingState {
+    /// The ring size in bytes.
+    pub fn size(&self) -> u64 {
+        self.extents.len() as u64 * RING_EXTENT_BYTES
+    }
+}
+
+/// The time, the roots and the rings that the caller gives to a checkpoint. The page table, the free space map and the pending free list come from the store.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Checkpoint {
     /// The time of the checkpoint. It is the page timestamp of each metadata page that the checkpoint writes.
     pub timestamp: Hlc,
     /// The root of the catalog.
     pub catalog: Root,
-    /// The log ring directory.
-    pub ring_directory: Root,
+    /// The log rings, in increasing order of the ring number. Each extent that the store gave out and did not take back must be in exactly one ring.
+    pub rings: Vec<RingState>,
     /// The root of the shard map.
     pub shard_map: Root,
     /// True when the checkpoint ends a clean shutdown.
@@ -50,6 +77,8 @@ pub struct FileStats {
     pub writes: u64,
     /// The generation of the active header slot.
     pub generation: u64,
+    /// The E4 extents of the log rings.
+    pub ring_extents: u64,
 }
 
 /// The store of a database file. It implements [`Store`] for the buffer pool.
@@ -100,9 +129,14 @@ struct Inner {
     pending_now: Vec<u64>,
     /// The pending free list of the active slot. These pages become free at the next checkpoint.
     pending_prev: Vec<u64>,
-    /// The free space map pages and the pending free list pages of the active slot.
+    /// The free space map pages, the pending free list pages, and the ring directory and extent list pages of the active slot.
     fsm_at: Vec<u64>,
     list_at: Vec<u64>,
+    ring_at: Vec<u64>,
+    /// The rings of the active slot.
+    rings: Vec<RingState>,
+    /// The first page of each ring extent that is given out.
+    ring_extents: BTreeSet<u64>,
 }
 
 /// The logical pages that one entry of a node at `level` covers.
@@ -116,6 +150,22 @@ fn offset(physical: u64) -> u64 {
 
 fn not_allocated(page: PageId) -> Error {
     Error::internal(format!("logical page {page} is not allocated"))
+}
+
+fn not_a_ring_extent(start: u64) -> Error {
+    Error::internal(format!("page {start} is not the start of a ring extent of this store"))
+}
+
+fn ring_entry(r: &RingState, extents: Root) -> RingEntry {
+    RingEntry {
+        ring: r.ring,
+        worker: r.worker,
+        size: r.size(),
+        redo: r.redo,
+        durable: r.durable,
+        newest: r.newest,
+        extents,
+    }
 }
 
 fn stopped() -> Error {
@@ -280,6 +330,82 @@ impl Inner {
         Ok(())
     }
 
+    /// Gives out a free arena as one E4 extent of a log ring. The file grows when no arena is free.
+    fn add_ring_extent(&mut self, file: &dyn File) -> Result<u64> {
+        let a = loop {
+            match self.arenas.iter().position(|a| a.kind == ArenaKind::Free) {
+                Some(a) => break a,
+                None => self.grow(file)?,
+            }
+        };
+        let arena = &mut self.arenas[a];
+        arena.kind = ArenaKind::Ring;
+        arena.map.mark(0, ARENA_PAGES)?;
+        let start = arena_start(a as u64);
+        self.ring_extents.insert(start);
+        Ok(start)
+    }
+
+    /// Takes back a ring extent. Its pages go on the pending free list, because the rings of the durable slots can still name it.
+    fn free_ring_extent(&mut self, start: u64) -> Result<()> {
+        if !self.ring_extents.remove(&start) {
+            return Err(not_a_ring_extent(start));
+        }
+        self.pending_now.extend(start..start + ARENA_PAGES);
+        Ok(())
+    }
+
+    /// Checks the rings of a checkpoint before the checkpoint writes a page.
+    fn check_rings(&self, rings: &[RingState]) -> Result<()> {
+        let mut named = BTreeSet::new();
+        let mut last = None;
+        for r in rings {
+            if last.is_some_and(|l| r.ring <= l) {
+                return Err(Error::internal(format!(
+                    "ring {} is not above the ring before it",
+                    r.ring
+                )));
+            }
+            last = Some(r.ring);
+            for &e in &r.extents {
+                if !self.ring_extents.contains(&e) {
+                    return Err(not_a_ring_extent(e));
+                }
+                if !named.insert(e) {
+                    return Err(Error::internal(format!(
+                        "the ring extent at page {e} is in two places"
+                    )));
+                }
+            }
+            // The entry rules of the directory page, with a place for the extent list.
+            let place = Root { page: FIRST_ARENA_PAGE, checksum: 0 };
+            let mut page = [0u8; PAGE_SIZE];
+            RingDirectoryPage::init(
+                &mut page,
+                FIRST_ARENA_PAGE,
+                &[ring_entry(r, place)],
+                PtEntry::EMPTY,
+            )?;
+        }
+        if let Some(e) = self.ring_extents.iter().find(|e| !named.contains(e)) {
+            return Err(Error::internal(format!("the ring extent at page {e} is in no ring")));
+        }
+        Ok(())
+    }
+
+    /// Finds the place of `len` bytes at `at` in a ring extent.
+    fn ring_offset(&self, start: u64, at: u64, len: usize) -> Result<u64> {
+        if !self.ring_extents.contains(&start) {
+            return Err(not_a_ring_extent(start));
+        }
+        if at.checked_add(len as u64).is_none_or(|end| end > RING_EXTENT_BYTES) {
+            return Err(Error::internal(format!(
+                "{len} bytes at offset {at} are outside the ring extent at page {start}"
+            )));
+        }
+        Ok(offset(start) + at)
+    }
+
     fn allocate(&mut self) -> Result<PageId> {
         if let Some(page) = self.free.pop_first() {
             return Ok(PageId(page));
@@ -369,6 +495,7 @@ impl Inner {
         pending.extend(dirty.iter().filter_map(|k| self.nodes[k].entry.physical()));
         pending.append(&mut self.fsm_at);
         pending.append(&mut self.list_at);
+        pending.append(&mut self.ring_at);
         pending.sort_unstable();
 
         // Places for the metadata pages. The free space map comes last, because the growth of the file can add map pages.
@@ -376,6 +503,11 @@ impl Inner {
         let list_at = (0..pending.len().div_ceil(FREE_LIST_PER_PAGE))
             .map(|_| self.take_page(file))
             .collect::<Result<Vec<_>>>()?;
+        let dir_at = (0..c.rings.len().div_ceil(RINGS_PER_PAGE))
+            .map(|_| self.take_page(file))
+            .collect::<Result<Vec<_>>>()?;
+        let extents_at =
+            c.rings.iter().map(|_| self.take_page(file)).collect::<Result<Vec<_>>>()?;
         let mut fsm_at = Vec::new();
         while fsm_at.len() < self.arenas.len().div_ceil(FSM_ARENAS_PER_PAGE) {
             fsm_at.push(self.take_page(file)?);
@@ -416,6 +548,28 @@ impl Inner {
             file.write_at(offset(list_at[i]), &page[..])?;
         }
 
+        // The extent list of each ring, then the directory, which holds the checksum of each list.
+        let mut entries = Vec::new();
+        for (r, &at) in c.rings.iter().zip(&extents_at) {
+            RingExtentsPage::init(&mut page, at, r.ring, &r.extents)?;
+            let sum = stamp(&mut page, at, ts)?;
+            file.write_at(offset(at), &page[..])?;
+            entries.push(ring_entry(r, Root { page: at, checksum: sum }));
+        }
+        let mut dir_sum = 0;
+        for (i, chunk) in entries.chunks(RINGS_PER_PAGE).enumerate() {
+            let next = match dir_at.get(i + 1) {
+                Some(&n) => entry(n, ts)?,
+                None => PtEntry::EMPTY,
+            };
+            RingDirectoryPage::init(&mut page, dir_at[i], chunk, next)?;
+            let sum = stamp(&mut page, dir_at[i], ts)?;
+            if i == 0 {
+                dir_sum = sum;
+            }
+            file.write_at(offset(dir_at[i]), &page[..])?;
+        }
+
         // The map that the new slot names shows the pages of the old pending free list as free, because they are free when that slot is durable.
         let mut after = self.arenas.clone();
         for &p in &self.pending_prev {
@@ -453,7 +607,7 @@ impl Inner {
                 checksum: stored_checksum(&root.page),
             },
             catalog: c.catalog,
-            ring_directory: c.ring_directory,
+            ring_directory: Root { page: dir_at.first().copied().unwrap_or(0), checksum: dir_sum },
             free_space: Root { page: fsm_at[0], checksum: fsm_sum },
             shard_map: c.shard_map,
             pending_free: Root { page: list_at.first().copied().unwrap_or(0), checksum: list_sum },
@@ -472,6 +626,9 @@ impl Inner {
         self.pending_prev = pending;
         self.fsm_at = fsm_at;
         self.list_at = list_at;
+        self.ring_at = dir_at;
+        self.ring_at.extend(extents_at);
+        self.rings = c.rings.clone();
         self.free.append(&mut self.freed);
         self.active = name;
         self.slot = slot;
@@ -480,41 +637,64 @@ impl Inner {
 
     /// Checks that the arenas mark exactly the pages in use, and that no page has two uses.
     fn check(&self) -> Result<()> {
-        let mut used = HashSet::new();
-        let mut add = |p: u64, what: &str| {
-            if used.insert(p) {
-                Ok(())
-            } else {
-                Err(Error::internal(format!("physical page {p} has two uses, one is {what}")))
+        // One flag for each physical page of the file. A page outside the file is an error at once.
+        let pages = self.file_pages();
+        let mut used = vec![false; pages as usize];
+        let mut add = |p: u64, what: &dyn Fn() -> String| {
+            if p < FIRST_ARENA_PAGE || p >= pages {
+                return Err(Error::internal(format!(
+                    "physical page {p} of {} is outside the arenas",
+                    what()
+                )));
             }
+            if std::mem::replace(&mut used[p as usize], true) {
+                return Err(Error::internal(format!(
+                    "physical page {p} has two uses, one is {}",
+                    what()
+                )));
+            }
+            Ok(())
         };
         for (&(level, index), node) in &self.nodes {
             if let Some(p) = node.entry.physical() {
-                add(p, "a page table node")?;
+                add(p, &|| "a page table node".into())?;
             }
             if level == 0 {
                 for s in 0..PT_FANOUT as u16 {
                     if let Some(p) = PtNode::entry(&node.page, s).physical() {
-                        add(p, &format!("logical page {}", index * span(1) + u64::from(s)))?;
+                        add(p, &|| format!("logical page {}", index * span(1) + u64::from(s)))?;
                     }
                 }
             }
         }
         for &p in &self.fsm_at {
-            add(p, "a free space map page")?;
+            add(p, &|| "a free space map page".into())?;
         }
         for &p in &self.list_at {
-            add(p, "a pending free list page")?;
+            add(p, &|| "a pending free list page".into())?;
+        }
+        for &p in &self.ring_at {
+            add(p, &|| "a ring directory or extent list page".into())?;
+        }
+        for &start in &self.ring_extents {
+            if arena_of(start).and_then(|a| self.arenas.get(a as usize)).map(|a| a.kind)
+                != Some(ArenaKind::Ring)
+            {
+                return Err(Error::internal(format!(
+                    "the ring extent at page {start} is not in a ring arena"
+                )));
+            }
+            for p in start..start + ARENA_PAGES {
+                add(p, &|| format!("the ring extent at page {start}"))?;
+            }
         }
         for &p in self.pending_now.iter().chain(&self.pending_prev) {
-            add(p, "a pending free page")?;
+            add(p, &|| "a pending free page".into())?;
         }
-        let mut marked = 0;
         for (a, arena) in self.arenas.iter().enumerate() {
             for off in 0..ARENA_PAGES as u16 {
                 let p = arena_start(a as u64) + u64::from(off);
-                match (arena.map.is_used(off), used.contains(&p)) {
-                    (true, true) => marked += 1,
+                match (arena.map.is_used(off), used[p as usize]) {
                     (true, false) => {
                         return Err(Error::internal(format!(
                             "physical page {p} is marked in use but has no use"
@@ -525,12 +705,9 @@ impl Inner {
                             "physical page {p} is in use but marked free"
                         )));
                     }
-                    (false, false) => {}
+                    _ => {}
                 }
             }
-        }
-        if marked != used.len() {
-            return Err(Error::internal("a page in use is outside the arenas"));
         }
         Ok(())
     }
@@ -568,6 +745,9 @@ impl FileStore {
             pending_prev: Vec::new(),
             fsm_at: Vec::new(),
             list_at: Vec::new(),
+            ring_at: Vec::new(),
+            rings: Vec::new(),
+            ring_extents: BTreeSet::new(),
         };
         let store = FileStore::with(file, inner);
         store.checkpoint(&Checkpoint { timestamp: now, ..Checkpoint::default() })?;
@@ -668,6 +848,59 @@ impl FileStore {
             expect = Expect::Tag(next.tag());
         }
 
+        // The ring directory and the extent list of each ring.
+        let mut rings: Vec<RingState> = Vec::new();
+        let mut ring_at = Vec::new();
+        let mut ring_extents = BTreeSet::new();
+        let mut at = slot.ring_directory.page;
+        let mut expect = Expect::Root(slot.ring_directory.checksum);
+        while at != 0 {
+            let page = read_meta(&*file, at, PageKind::RingDirectory, expect)?;
+            ring_at.push(at);
+            for e in RingDirectoryPage::entries(&page)? {
+                if rings.last().is_some_and(|r| e.ring <= r.ring) {
+                    return Err(Error::corrupted(format!(
+                        "ring {} is not above the ring before it in the ring directory",
+                        e.ring
+                    )));
+                }
+                let list = read_meta(
+                    &*file,
+                    e.extents.page,
+                    PageKind::RingExtents,
+                    Expect::Root(e.extents.checksum),
+                )?;
+                let extents = RingExtentsPage::extents(&list)?;
+                if RingExtentsPage::ring(&list) != e.ring
+                    || extents.len() as u64 != e.extent_count()
+                {
+                    return Err(Error::corrupted(format!(
+                        "the extent list page {} does not match ring {}",
+                        e.extents.page, e.ring
+                    )));
+                }
+                for &x in &extents {
+                    if !ring_extents.insert(x) {
+                        return Err(Error::corrupted(format!(
+                            "the ring extent at page {x} is in two rings"
+                        )));
+                    }
+                }
+                ring_at.push(e.extents.page);
+                rings.push(RingState {
+                    ring: e.ring,
+                    worker: e.worker,
+                    redo: e.redo,
+                    durable: e.durable,
+                    newest: e.newest,
+                    extents,
+                });
+            }
+            let next = RingDirectoryPage::next(&page);
+            at = next.physical().unwrap_or(0);
+            expect = Expect::Tag(next.tag());
+        }
+
         let mut inner = Inner {
             active: choice.name,
             read_only,
@@ -682,12 +915,15 @@ impl FileStore {
             pending_prev,
             fsm_at,
             list_at,
+            ring_at,
+            rings,
+            ring_extents,
             slot,
         };
         inner.free = (1..inner.next_page).filter(|&p| inner.entry(p) == PtEntry::EMPTY).collect();
         inner.check().map_err(|e| {
             Error::corrupted(format!(
-                "the free space map does not match the page table: {}",
+                "the free space map does not match the page table and the rings: {}",
                 e.message()
             ))
         })?;
@@ -721,13 +957,59 @@ impl FileStore {
     }
 
     /// Runs steps 3 to 7 of the checkpoint of spec/08 section 8.6.2. The caller flushes the buffer pool first, so that each dirty page is in the store. An error stops the store.
+    ///
+    /// Rings that do not match the extents of the store give SQLSTATE `XX000` before the checkpoint writes a page, and the store does not stop.
     pub fn checkpoint(&self, c: &Checkpoint) -> Result<()> {
         let mut inner = self.write_lock()?;
+        inner.check_rings(&c.rings)?;
         let result = inner.checkpoint(&*self.file, c);
         if result.is_err() {
             self.stopped.store(true, Ordering::Release);
         }
         result
+    }
+
+    /// Gives out a free arena as an E4 extent for a log ring and gives its first physical page. The file grows when no arena is free. The extent is durable only after a checkpoint that names it in a ring.
+    pub fn add_ring_extent(&self) -> Result<u64> {
+        let mut inner = self.write_lock()?;
+        let result = inner.add_ring_extent(&*self.file);
+        if result.is_err() {
+            self.stopped.store(true, Ordering::Release);
+        }
+        result
+    }
+
+    /// Takes back a ring extent. Its space is free after the second checkpoint from now, because the durable slots can still name it. The next checkpoint must not name it.
+    pub fn free_ring_extent(&self, start: u64) -> Result<()> {
+        self.write_lock()?.free_ring_extent(start)
+    }
+
+    /// Writes `data` at byte `at` of the ring extent at `start`. The write is durable after the next [`FileStore::sync_rings`].
+    pub fn write_ring(&self, start: u64, at: u64, data: &[u8]) -> Result<()> {
+        let inner = self.read_lock()?;
+        inner.writable()?;
+        self.file.write_at(inner.ring_offset(start, at, data.len())?, data)
+    }
+
+    /// Reads bytes at byte `at` of the ring extent at `start`.
+    pub fn read_ring(&self, start: u64, at: u64, buf: &mut [u8]) -> Result<()> {
+        let inner = self.read_lock()?;
+        self.file.read_at(inner.ring_offset(start, at, buf.len())?, buf)
+    }
+
+    /// Makes the ring writes durable. An error stops the store.
+    pub fn sync_rings(&self) -> Result<()> {
+        let _inner = self.read_lock()?;
+        let result = self.file.sync();
+        if result.is_err() {
+            self.stopped.store(true, Ordering::Release);
+        }
+        result
+    }
+
+    /// The rings of the active header slot.
+    pub fn rings(&self) -> Vec<RingState> {
+        self.inner.read().unwrap_or_else(PoisonError::into_inner).rings.clone()
     }
 
     /// The active header slot.
@@ -751,6 +1033,7 @@ impl FileStore {
             reads: self.reads.load(Ordering::Relaxed),
             writes: self.writes.load(Ordering::Relaxed),
             generation: inner.slot.generation,
+            ring_extents: inner.ring_extents.len() as u64,
         }
     }
 
@@ -1094,6 +1377,140 @@ mod tests {
         }
     }
 
+    fn ring(ring: u32, redo: u64, extents: &[u64]) -> RingState {
+        RingState {
+            ring,
+            worker: ring,
+            redo,
+            durable: redo + 100,
+            newest: ts(redo),
+            extents: extents.to_vec(),
+        }
+    }
+
+    fn checkpoint_rings(store: &FileStore, n: u64, rings: &[RingState]) -> Result<()> {
+        store.checkpoint(&Checkpoint {
+            timestamp: ts(n),
+            rings: rings.to_vec(),
+            ..Checkpoint::default()
+        })
+    }
+
+    fn free_arenas(store: &FileStore) -> usize {
+        store.inner.read().unwrap().arenas.iter().filter(|a| a.kind == ArenaKind::Free).count()
+    }
+
+    #[test]
+    fn rings_are_recorded() {
+        let io = SimIo::new(11);
+        let s = create(&io);
+        assert!(s.rings().is_empty());
+        assert_eq!(s.slot().1.ring_directory, Root::default());
+        let a = s.add_ring_extent().unwrap();
+        let b = s.add_ring_extent().unwrap();
+        let c = s.add_ring_extent().unwrap();
+        assert_eq!(s.stats().ring_extents, 3);
+        s.write_ring(a, 0, b"first").unwrap();
+        s.write_ring(c, RING_EXTENT_BYTES - 4, b"last").unwrap();
+        s.sync_rings().unwrap();
+        let rings = [ring(0, 10, &[a, b]), ring(5, 20, &[c])];
+        assert_eq!(rings[0].size(), 2 * RING_EXTENT_BYTES);
+        checkpoint_rings(&s, 1, &rings).unwrap();
+        assert_eq!(s.rings(), rings);
+        s.check().unwrap();
+        drop(s);
+
+        let s = open(&io).unwrap();
+        assert_eq!(s.rings(), rings);
+        assert_eq!(s.stats().ring_extents, 3);
+        let mut buf = [0u8; 5];
+        s.read_ring(a, 0, &mut buf).unwrap();
+        assert_eq!(&buf, b"first");
+        s.read_ring(c, RING_EXTENT_BYTES - 4, &mut buf[..4]).unwrap();
+        assert_eq!(&buf[..4], b"last");
+        // The rings stay the same over a checkpoint that changes them, and the store works after open.
+        let rings = [ring(0, 50, &[a, b]), ring(5, 60, &[c])];
+        checkpoint_rings(&s, 2, &rings).unwrap();
+        drop(s);
+        let s = open(&io).unwrap();
+        assert_eq!(s.rings(), rings);
+        s.check().unwrap();
+    }
+
+    #[test]
+    fn ring_extents_are_free_after_two_checkpoints() {
+        let io = SimIo::new(12);
+        let s = create(&io);
+        let a = s.add_ring_extent().unwrap();
+        let b = s.add_ring_extent().unwrap();
+        checkpoint_rings(&s, 1, &[ring(0, 0, &[a]), ring(1, 0, &[b])]).unwrap();
+        let free = free_arenas(&s);
+        s.free_ring_extent(b).unwrap();
+        assert_eq!(s.free_ring_extent(b).unwrap_err().state(), SqlState::INTERNAL_ERROR);
+        let e = s.write_ring(b, 0, b"x").unwrap_err();
+        assert_eq!(e.state(), SqlState::INTERNAL_ERROR);
+        checkpoint_rings(&s, 2, &[ring(0, 0, &[a])]).unwrap();
+        // The older slot still names the extent.
+        assert_eq!(free_arenas(&s), free);
+        s.check().unwrap();
+        drop(s);
+        let s = open(&io).unwrap();
+        s.check().unwrap();
+        checkpoint_rings(&s, 3, &[ring(0, 0, &[a])]).unwrap();
+        assert_eq!(free_arenas(&s), free + 1);
+        assert_eq!(s.add_ring_extent().unwrap(), b);
+        checkpoint_rings(&s, 4, &[ring(0, 0, &[a, b])]).unwrap();
+        drop(s);
+        let s = open(&io).unwrap();
+        assert_eq!(s.rings(), [ring(0, 0, &[a, b])]);
+        s.check().unwrap();
+    }
+
+    #[test]
+    fn bad_ring_calls() {
+        let io = SimIo::new(13);
+        let s = create(&io);
+        let a = s.add_ring_extent().unwrap();
+        let b = s.add_ring_extent().unwrap();
+        let mut late = ring(1, 0, &[b]);
+        late.redo = late.durable + 1;
+        for rings in [
+            vec![ring(0, 0, &[a])],
+            vec![ring(0, 0, &[a, b, b + ARENA_PAGES])],
+            vec![ring(0, 0, &[a, b]), ring(1, 0, &[b])],
+            vec![ring(1, 0, &[a]), ring(0, 0, &[b])],
+            vec![ring(0, 0, &[a]), ring(0, 0, &[b])],
+            vec![ring(0, 0, &[a, b]), ring(1, 0, &[])],
+            vec![ring(0, 0, &[a]), late],
+        ] {
+            let e = checkpoint_rings(&s, 1, &rings).unwrap_err();
+            assert_eq!(e.state(), SqlState::INTERNAL_ERROR, "{rings:?}");
+        }
+        for (start, at, len) in [(a + 1, 0, 1), (a, RING_EXTENT_BYTES - 1, 2), (a, u64::MAX, 2)] {
+            let e = s.write_ring(start, at, &vec![0; len]).unwrap_err();
+            assert_eq!(e.state(), SqlState::INTERNAL_ERROR);
+        }
+        // The store did not stop.
+        checkpoint_rings(&s, 1, &[ring(0, 0, &[a]), ring(1, 0, &[b])]).unwrap();
+        s.check().unwrap();
+    }
+
+    #[test]
+    fn a_damaged_extent_list() {
+        let io = SimIo::new(14);
+        let s = create(&io);
+        let a = s.add_ring_extent().unwrap();
+        checkpoint_rings(&s, 1, &[ring(0, 0, &[a])]).unwrap();
+        let dir = s.slot().1.ring_directory.page;
+        let list = s.inner.read().unwrap().ring_at[1];
+        drop(s);
+        let file = io.open(Path::new(PATH), OpenMode::ReadWrite).unwrap();
+        file.write_at(offset(list) + 300, &[1]).unwrap();
+        assert_eq!(open(&io).unwrap_err().state(), SqlState::DATA_CORRUPTED);
+        file.write_at(offset(dir) + 300, &[1]).unwrap();
+        assert_eq!(open(&io).unwrap_err().state(), SqlState::DATA_CORRUPTED);
+    }
+
     /// Changes that make state `y` from state `x`. An error is the death of the process.
     fn change(s: &FileStore, y: &mut Model) -> Result<()> {
         for n in 1..=3 {
@@ -1107,7 +1524,12 @@ mod tests {
         }
         s.free(PageId(4))?;
         y.remove(&4);
-        s.checkpoint(&Checkpoint { timestamp: ts(2), ..Checkpoint::default() })
+        let mut rings = s.rings();
+        let added = s.add_ring_extent()?;
+        rings[0].extents.push(added);
+        s.write_ring(added, 0, b"ring")?;
+        rings[0].redo += 1;
+        checkpoint_rings(s, 2, &rings)
     }
 
     #[test]
@@ -1128,7 +1550,8 @@ mod tests {
                 }
                 s.free(PageId(6)).unwrap();
                 x.remove(&6);
-                checkpoint(&s, 1);
+                let first = s.add_ring_extent().unwrap();
+                checkpoint_rings(&s, 1, &[ring(0, 0, &[first])]).unwrap();
 
                 file.left.store(cut, Ordering::SeqCst);
                 let mut y = x.clone();
@@ -1143,16 +1566,24 @@ mod tests {
                     assert_eq!(generation, 3);
                 }
                 matches(&s, if generation == 3 { &y } else { &x });
+                let rings = s.rings();
                 if generation == 3 {
                     assert_eq!(version(&s, 4).unwrap_err().state(), SqlState::INTERNAL_ERROR);
+                    assert_eq!((rings[0].redo, rings[0].extents.len()), (1, 2));
+                    let mut buf = [0u8; 4];
+                    s.read_ring(rings[0].extents[1], 0, &mut buf).unwrap();
+                    assert_eq!(&buf, b"ring");
+                } else {
+                    assert_eq!(rings, [ring(0, 0, &[first])]);
                 }
                 // The store works after the crash.
                 let mut z = if generation == 3 { y } else { x };
                 write(&s, &mut z, 1, 9);
-                checkpoint(&s, 3);
+                checkpoint_rings(&s, 3, &rings).unwrap();
                 drop(s);
                 let s = open(&io).unwrap();
                 matches(&s, &z);
+                assert_eq!(s.rings(), rings);
                 if done {
                     break;
                 }
