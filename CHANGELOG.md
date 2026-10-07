@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.10 (2026-10-07)
+
+The tenth patch release on the 0.0 line. It adds the T8 crash test, the M1 fuzz targets and the loom tests, and fixes the two bugs that the fuzz targets found. No crate is published.
+
 ### Added
 
 - The T8 crash test in `tests/crash` (spec/21 section 21.9). A seeded M1 workload runs on the simulated disk, and before each sync of the file the test builds crash files from the writes that are not synced: every subset of a small set, and the prefixes, the torn prefixes and a seeded sample of a larger set. A crash file with the same bytes as an earlier one counts once. Each crash file must open with exactly the acknowledged commits, or those and the one commit that was in progress at the cut, and `rupg check` must report no error. `cargo test` runs a short workload, and the `rupg-crash` binary runs a full count, for example `cargo run --release -p rupg-crash -- --files 1000000`. The nightly workflow runs 100,000 crash files.
