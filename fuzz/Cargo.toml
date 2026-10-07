@@ -1,0 +1,44 @@
+[package]
+name = "rupg-fuzz"
+version = "0.0.0"
+edition = "2024"
+publish = false
+
+# A separate workspace. cargo-fuzz needs the nightly toolchain, and the main workspace stays on the pinned stable toolchain. See spec/22-crate-layout.md section 22.2.
+[workspace]
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4"
+rupg = { path = "../crates/rupg" }
+rupg-buffer = { path = "../crates/rupg-buffer" }
+rupg-common = { path = "../crates/rupg-common" }
+rupg-file = { path = "../crates/rupg-file" }
+rupg-log = { path = "../crates/rupg-log" }
+rupg-platform = { path = "../crates/rupg-platform" }
+
+[[bin]]
+name = "file_open"
+path = "fuzz_targets/file_open.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "page_decode"
+path = "fuzz_targets/page_decode.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "log_replay"
+path = "fuzz_targets/log_replay.rs"
+test = false
+doc = false
+bench = false
+
+[profile.release]
+debug = 1

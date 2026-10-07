@@ -275,6 +275,8 @@ The budget is in CPU hours for each target. A milestone closes only when each of
 
 The 1.0 rule comes from `../2140/16-testing.md`: no known wrong-answer bug and a month of fuzzing without a new find.
 
+**At M1.** The three M1 targets are in `fuzz/`. They start from one base file on the simulated disk with 32 commits before a checkpoint and 16 after it, and no close. `file_open` changes any byte of the file and can cut it, and an open must give the rows after one of the commits. `page_decode` changes one hot page after its first 24 bytes and seals the page again, so the decoders of the hot and tree pages see the changed bytes. `log_replay` changes the log after the redo position, and an open must give the rows after a commit at or after the checkpoint, or `XX001`. Each target runs `rupg check` before the open. The corpus is not yet in `rupg-compat`. The first runs found two bugs. A file of zero bytes opened as a new database when `create` was off, and now gives `58P01`. A child number in an inner page that pointed up the tree made the descent loop, and now each descent checks that the level goes down and gives `XX001`.
+
 ## 21.8 Delete every summary and rerun every suite
 
 This is the rule that keeps the summaries of H1 to H6 honest (document 02 section 2.4.5). A summary is a copy of a fact about the data. It must never be the only source of a fact. So rupg must give the same answers when every summary is gone.
