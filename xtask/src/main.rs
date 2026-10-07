@@ -8,16 +8,20 @@ use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
 mod layers;
+mod sha256;
 mod style;
+mod vendor;
 
-const USAGE: &str = "usage: cargo xtask <layers | style>";
+const USAGE: &str = "usage: cargo xtask <layers | style | vendor [--check] [dir...]>";
 
 fn main() -> ExitCode {
-    let task = std::env::args().nth(1);
+    let args: Vec<String> = std::env::args().skip(1).collect();
+    let task = args.first().map(String::as_str);
     let root = root();
-    let result = match task.as_deref() {
+    let result = match task {
         Some("layers") => layers::check(&root),
         Some("style") => style::check(&root),
+        Some("vendor") => vendor::run(&root, &args[1..]),
         Some(other) => Err(format!("unknown task {other:?}\n{USAGE}")),
         None => Err(USAGE.to_string()),
     };
