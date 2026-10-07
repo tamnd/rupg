@@ -1,4 +1,4 @@
-//! TCP of the operating system.
+//! TCP and Unix sockets of the operating system.
 
 use std::io::{self, Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream};
@@ -7,12 +7,15 @@ use rupg_common::{Error, Result, SqlState};
 
 use crate::net::{Listener, Net, Stream};
 
-/// TCP sockets of the operating system. `TCP_NODELAY` is on for each connection, because the protocol sends small messages and waits for the answer.
+/// The sockets of the operating system. `TCP_NODELAY` is on for each TCP connection, because the protocol sends small messages and waits for the answer.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OsNet;
 
 impl Net for OsNet {
     fn listen(&self, addr: &str) -> Result<Box<dyn Listener>> {
+        if addr.starts_with('/') {
+            return unix_listen(addr);
+        }
         let listener = TcpListener::bind(addr).map_err(|e| {
             Error::new(SqlState::IO_ERROR, format!("could not bind to the address \"{addr}\": {e}"))
         })?;
@@ -20,6 +23,9 @@ impl Net for OsNet {
     }
 
     fn connect(&self, addr: &str) -> Result<Box<dyn Stream>> {
+        if addr.starts_with('/') {
+            return unix_connect(addr);
+        }
         let stream = TcpStream::connect(addr).map_err(|e| {
             Error::new(
                 SqlState::SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
@@ -28,6 +34,25 @@ impl Net for OsNet {
         })?;
         OsStream::boxed(stream)
     }
+}
+
+#[cfg(unix)]
+use super::unix::{connect as unix_connect, listen as unix_listen};
+
+#[cfg(not(unix))]
+fn unix_listen(addr: &str) -> Result<Box<dyn Listener>> {
+    Err(Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        format!("could not bind to the address \"{addr}\": Unix sockets are not supported"),
+    ))
+}
+
+#[cfg(not(unix))]
+fn unix_connect(addr: &str) -> Result<Box<dyn Stream>> {
+    Err(Error::new(
+        SqlState::SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION,
+        format!("could not connect to the address \"{addr}\": Unix sockets are not supported"),
+    ))
 }
 
 #[derive(Debug)]

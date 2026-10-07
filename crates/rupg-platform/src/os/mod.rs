@@ -5,6 +5,8 @@
 
 mod net;
 mod tasks;
+#[cfg(unix)]
+mod unix;
 
 pub use net::OsNet;
 pub use tasks::{OsTasks, STACK_SIZE};
@@ -330,6 +332,64 @@ mod tests {
             OsNet.connect("127.0.0.1:1").unwrap_err().state(),
             SqlState::SQLCLIENT_UNABLE_TO_ESTABLISH_SQLCONNECTION
         );
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn unix_sockets() {
+        use std::io::{Read, Write};
+
+        let dir = TempDir::new();
+        let path = dir.0.join(".s.PGSQL.5999").display().to_string();
+        let lock = format!("{path}.lock");
+        let listener = OsNet.listen(&path).unwrap();
+        assert_eq!(listener.local_addr(), path);
+        let text = fs::read_to_string(&lock).unwrap();
+        let lines: Vec<&str> = text.lines().collect();
+        assert_eq!(lines[0], std::process::id().to_string());
+        assert_eq!(lines[3..], ["5999", dir.0.to_str().unwrap()]);
+        let server = OsTasks
+            .spawn(
+                "rupg-echo",
+                Box::new(move || {
+                    let mut s = listener.accept().unwrap();
+                    assert!(s.is_local());
+                    assert_eq!(s.peer_addr(), "[local]");
+                    assert!(!s.peer_user().unwrap().is_empty());
+                    let mut buf = [0; 5];
+                    s.read_exact(&mut buf).unwrap();
+                    s.write_all(&buf).unwrap();
+                }),
+            )
+            .unwrap();
+        let mut c = OsNet.connect(&path).unwrap();
+        c.write_all(b"hello").unwrap();
+        let mut buf = [0; 5];
+        c.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"hello");
+        server.join().unwrap();
+        // The listener dropped with the task, and took the socket and the lock file with it.
+        assert!(!Path::new(&path).exists());
+        assert!(!Path::new(&lock).exists());
+        assert!(OsNet.connect(&path).is_err());
+
+        // Process 1 is alive, so its lock file holds.
+        fs::write(&lock, "1\n").unwrap();
+        let e = OsNet.listen(&path).unwrap_err();
+        assert_eq!(e.state(), SqlState::LOCK_FILE_EXISTS);
+        assert_eq!(e.message(), format!("lock file \"{lock}\" already exists"));
+        assert_eq!(
+            e.hint(),
+            Some(format!("Is another postmaster (PID 1) using socket file \"{path}\"?").as_str())
+        );
+        // No process has this ID, so the lock file is old and the server takes it.
+        fs::write(&lock, "999999999\n").unwrap();
+        fs::write(&path, "").unwrap();
+        let listener = OsNet.listen(&path).unwrap();
+        drop(listener);
+        fs::write(&lock, "x\n").unwrap();
+        let e = OsNet.listen(&path).unwrap_err();
+        assert_eq!(e.message(), format!("bogus data in lock file \"{lock}\": \"x\""));
     }
 
     #[test]

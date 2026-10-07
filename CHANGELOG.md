@@ -12,6 +12,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `rupg-session` has the main loop of a session after the startup (spec/06 section 6.1): the startup settings, the `ParameterStatus` reports, the simple query protocol of `exec_simple_query`, the transaction block states of `xact.c` without savepoints, and the transaction characteristics that `AND CHAIN` keeps.
 - `rupg-server` has the listener, the startup packet, the refusals of an unknown role and database, the process IDs and the cancel keys.
 - The facade crate `rupg` has the feature `server`, with `rupg::server::serve`.
+- `rupg serve` also listens on the Unix socket `<dir>/.s.PGSQL.<port>` for each directory of `unix_socket_directories`, which is `/tmp` by default (spec/06 section 6.15). The port is the port of the TCP address. Before it listens, the server creates the lock file `<socket>.lock` with the contents of PostgreSQL. If the process in a lock file is alive, the server does not start and gives `F0001` with the hint of PostgreSQL. If the process is gone, the server takes the lock file. `SHOW port` and `SHOW listen_addresses` give the TCP address that the server got.
+- `rupg-platform` takes the path of a Unix socket as an address of `Net`. A `Stream` tells if it is a Unix socket, and on a Unix socket it gives the user of the operating system on the other side, for the method `peer`.
 
 ### Changed
 
