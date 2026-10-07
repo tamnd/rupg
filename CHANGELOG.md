@@ -12,6 +12,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The text form for page table nodes and free space map pages. It parses back into the same sealed page.
 - The `PageAccess` trait in `rupg-file`, with the optimistic, shared and exclusive modes of spec/08 section 8.8.2 and the `OptimisticRead` trait for reads without a latch.
 - `BufferPool` in `rupg-buffer`. It has the vmcache state word for each frame, a clock that evicts frames and writes dirty pages first, and a fixed table of frames that it reserves from the memory budget (spec/08 section 8.8.4). It implements `PageAccess` over a `Store`. `MemStore` keeps the pages in memory.
+- The virtual memory window of spec/08 section 8.8.1 in `BufferPool` on Linux and macOS. The bytes and the state word of logical page `n` are at index `n`, so a hit needs no lookup. The pool grows from `shared_buffers` in steps of 64 pages, and its reclaimer gives clean pages back when another consumer of the memory budget needs them. `PoolConfig` selects the window or the table, and other hosts use the table.
+- `Region` in `rupg-platform`, a reservation of address space with `mmap` and `MAP_NORESERVE`. `Region::discard` gives the memory of a range back to the operating system.
 
 ## 0.0.2 (2026-10-07)
 

@@ -9,7 +9,11 @@
 mod frames;
 mod latch;
 mod pool;
+mod resident;
 mod store;
 
-pub use pool::{BufferPool, BufferStats, ExclusiveGuard, MIN_FRAMES, OptimisticGuard, SharedGuard};
+pub use pool::{
+    BufferPool, BufferStats, ExclusiveGuard, MIN_FRAMES, OptimisticGuard, PoolConfig, PoolMode,
+    SharedGuard,
+};
 pub use store::{MemStore, Store};

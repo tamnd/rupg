@@ -282,11 +282,11 @@ At open, the buffer manager reserves two ranges of anonymous virtual memory with
 
 The address of logical page `n` is the page window base plus `n * 16384`. A pointer to a page is therefore an addition, not a hash lookup. This is the property that makes vmcache faster than a hash table pool: vmcache measured that its optimistic reads cost less than 8 percent more than reads of plain memory.
 
-**Each window reserves one quarter of the user address space.** On x86-64 with 4-level page tables the user address space is 128 TiB (Linux kernel documentation, x86-64 memory map), so each window is 32 TiB. On aarch64 kernels with 48-bit virtual addresses it is 64 TiB. Some aarch64 kernels use 39-bit addresses, which gives 512 GiB of user space and 128 GiB for each window. A file larger than its window on such a host opens with the fallback of section 8.8.4.
+**Each window reserves one quarter of the user address space.** On x86-64 with 4-level page tables the user address space is 128 TiB (Linux kernel documentation, x86-64 memory map), so each window is 32 TiB. On aarch64 kernels with 48-bit virtual addresses it is 64 TiB. Some aarch64 kernels use 39-bit addresses, which gives 512 GiB of user space and 128 GiB for each window. A file larger than its window on such a host opens with the fallback of section 8.8.4. At open the pool asks for 2^31 pages and halves the request until the operating system gives the range, down to 2^22 pages (64 GiB). A host that refuses 2^22 pages, or that has operating system pages larger than 16 KiB, uses the fallback.
 
 **Each unit has a 64-bit state word.** The state words are in a separate array, also reserved with `MAP_NORESERVE`. A state word holds a version counter and a state: evicted, unlocked, locked shared with a count, or locked exclusive. This is the vmcache state word.
 
-The high 8 bits of the word hold the state and the low 56 bits hold the version. State 0 is unlocked, 1 to 252 is locked shared with that count of readers, 253 is locked exclusive and 255 is evicted. The release of an exclusive latch and an eviction increase the version. A shared latch does not change the version, so it does not make an optimistic read fail.
+The high 8 bits of the word hold the state and the low 56 bits hold the version. State 0 is evicted, 1 is unlocked, 2 to 253 is locked shared with 1 to 252 readers and 254 is locked exclusive. A word of zero bytes is therefore an evicted unit with version 0. The operating system gives the state word array as zero bytes, so the array needs no setup at open and costs no memory for a unit that was never read. The release of an exclusive latch and an eviction increase the version. A shared latch does not change the version, so it does not make an optimistic read fail.
 
 ### 8.8.2 Reads, writes and eviction
 
@@ -305,6 +305,8 @@ The high 8 bits of the word hold the state and the low 56 bits hold the version.
 ### 8.8.3 Size and memory
 
 The resident units are the buffer pool. Their size is part of the one budget `rupg.memory_limit`, default 25 percent of physical memory for the server and 256 MiB for the library (document 04 section 4.6). The pool never shrinks below `shared_buffers`. When an operator asks for memory and the budget has none, the pool evicts clean units and returns their bytes to the budget. When operators release memory, the pool can grow again.
+
+**The pool grows in steps and gives back clean units only.** A miss that finds the pool at its size takes 64 more pages from the budget, so that a miss does not lock the budget each time. When another consumer needs memory, the budget calls the reclaimer of the pool, which evicts clean units and gives their pages back. A dirty unit keeps its memory until the page writer writes it. The reclaimer does not wait for a lock that the pool holds, so a miss that grows the pool and asks the budget for memory does not wait for itself.
 
 **The page table of the process counts.** Each resident 4 KiB operating system page needs a page table entry in the kernel. For a pool of 8 GiB this is 2,097,152 entries of 8 bytes, 16 MiB. rupg reads its own resident set size from the operating system for the memory gate of document 02 section 2.6.2, so this cost is in the measured number.
 
