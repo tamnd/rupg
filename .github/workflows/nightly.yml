@@ -45,6 +45,44 @@ jobs:
           export RUSTDOCFLAGS="-Zsanitizer=$SANITIZER"
           cargo +nightly test -Zbuild-std --target x86_64-unknown-linux-gnu --workspace --lib --tests
 
+  reproducible:
+    name: reproducible build
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The same source must give the same binary. The second build is in a different directory with a different target directory, so a path in the binary shows as a difference. See .cargo/config.toml for SOURCE_DATE_EPOCH.
+      - name: build two times and compare
+        run: |
+          set -euo pipefail
+          cargo build --release --bin rupg
+          sha256sum target/release/rupg > "$RUNNER_TEMP/first.sha256"
+          cp -a . "$RUNNER_TEMP/second"
+          cd "$RUNNER_TEMP/second"
+          rm -rf target
+          cargo build --release --bin rupg
+          sha256sum target/release/rupg > "$RUNNER_TEMP/second.sha256"
+          diff <(cut -d' ' -f1 "$RUNNER_TEMP/first.sha256") <(cut -d' ' -f1 "$RUNNER_TEMP/second.sha256")
+          echo "the two builds are identical"
+
+  macos:
+    name: test on macos arm64
+    runs-on: macos-26
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      # The nightly part of the matrix in spec/21-testing.md section 21.16: clippy, T1 and T2 on macOS.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features -- -D warnings
+      - name: cargo test
+        run: cargo test --workspace --all-features
+      - name: rupg --print-config
+        run: cargo run --bin rupg -- --print-config
+
   miri:
     name: miri
     runs-on: ubuntu-24.04

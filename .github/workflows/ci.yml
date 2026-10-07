@@ -61,6 +61,7 @@ jobs:
     runs-on: ${{ matrix.os }}
     timeout-minutes: 45
     # The runner images have explicit names. An image change is then a commit, not a surprise.
+    # This is the per-change part of the matrix in spec/21-testing.md section 21.16. macOS runs each night. Windows and wasm32 run each night from M9.
     strategy:
       fail-fast: false
       matrix:
@@ -77,14 +78,6 @@ jobs:
             os: ubuntu-24.04-arm
             profile: dev
             cpu: ""
-          - name: macos arm64
-            os: macos-26
-            profile: dev
-            cpu: ""
-          - name: windows x86-64
-            os: windows-2025
-            profile: dev
-            cpu: -C target-cpu=x86-64-v3
     # The CPU flag is set for each row, because target-cpu=x86-64-v3 is not valid on arm64.
     env:
       RUSTFLAGS: -D warnings ${{ matrix.cpu }}
@@ -96,6 +89,9 @@ jobs:
         with:
           key: ${{ matrix.profile }}
           save-if: ${{ github.ref == 'refs/heads/main' }}
+      # Clippy runs on each host of the matrix, because some lints depend on the target.
+      - name: cargo clippy
+        run: cargo clippy --workspace --all-targets --all-features --profile ${{ matrix.profile }}
       - name: cargo build
         run: cargo build --workspace --all-features --profile ${{ matrix.profile }}
       - name: cargo test
@@ -107,10 +103,8 @@ jobs:
           PROFILE_DIR: ${{ matrix.profile == 'dev' && 'debug' || 'release' }}
         run: |
           set -euo pipefail
-          exe=""
-          if [ "$RUNNER_OS" = "Windows" ]; then exe=".exe"; fi
-          "./target/$PROFILE_DIR/rupg$exe" --version
-          "./target/$PROFILE_DIR/rupg$exe" --print-config
+          "./target/$PROFILE_DIR/rupg" --version
+          "./target/$PROFILE_DIR/rupg" --print-config
 
   docs:
     name: documentation
@@ -156,30 +150,6 @@ jobs:
           MSRV: ${{ steps.msrv.outputs.version }}
         run: cargo "+$MSRV" check --workspace --all-features
 
-  determinism:
-    name: reproducible build
-    needs: quick
-    runs-on: ubuntu-24.04
-    timeout-minutes: 30
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-        with:
-          save-if: ${{ github.ref == 'refs/heads/main' }}
-      # The same source must give the same binary. See .cargo/config.toml for SOURCE_DATE_EPOCH.
-      - name: build two times and compare
-        run: |
-          set -euo pipefail
-          cargo build --release --bin rupg
-          sha256sum target/release/rupg > first.sha256
-          rm -rf target/release/rupg target/release/.fingerprint
-          cargo build --release --bin rupg
-          sha256sum target/release/rupg > second.sha256
-          diff <(cut -d' ' -f1 first.sha256) <(cut -d' ' -f1 second.sha256)
-          echo "the two builds are identical"
-
   audit:
     name: supply chain
     needs: quick
@@ -207,7 +177,7 @@ jobs:
   ci:
     name: ci
     if: always()
-    needs: [quick, test, docs, msrv, determinism, audit]
+    needs: [quick, test, docs, msrv, audit]
     runs-on: ubuntu-24.04
     timeout-minutes: 5
     steps:
