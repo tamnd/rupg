@@ -12,4 +12,6 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The `rupg` binary with `--version` and `--print-config`.
 - `CompatVersion` for PostgreSQL 14 to 19 in `rupg-common`.
 - The technical specification in `spec/`.
-- CI on Linux, macOS and Windows, nightly sanitizers and Miri, a release workflow with build provenance, and security scans.
+- `vendor/` with the PostgreSQL files of the pin and of 14.24, 15.19, 16.15, 17.11 and 18.6, the time zone data 2026e and the Unicode character database 17.0.0. Each directory has a `PIN` file with the source, the revision, the license and the SHA-256 of each file.
+- `cargo xtask vendor`, which fetches the vendored files, and `cargo xtask vendor --check`, which checks them with no network.
+- CI with the matrix of `spec/21-testing.md` section 21.16, nightly sanitizers and Miri, a release workflow with build provenance, and security scans.

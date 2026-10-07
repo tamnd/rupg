@@ -1,0 +1,9 @@
+# The IANA time zone data 2026e, in the compact form that the PostgreSQL pin carries. Used by rupg-types. See spec/22-crate-layout.md section 22.8.
+# The release is the one that the PostgreSQL pin uses, so the rev is the PostgreSQL commit. The data is in the public domain.
+source https://github.com/postgres/postgres
+rev 7d3d2db7d5e533fa42a4202c7d308cbb0cbf9333
+url https://raw.githubusercontent.com/postgres/postgres/{rev}/{path}
+license LicenseRef-tz-public-domain LICENSE https://raw.githubusercontent.com/eggert/tz/2026e/LICENSE
+
+0613408568889f5739e5ae252b722a2659c02002839ad970a63dc5e9174b27cf  LICENSE
+a37ece24ccd153ebad2c458f430023eb6811f6c6648c77096442a22e3b5065cf  src/timezone/data/tzdata.zi

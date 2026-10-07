@@ -68,6 +68,7 @@ Run the same checks as CI before you push:
 cargo fmt --all --check
 cargo xtask layers
 cargo xtask style
+cargo xtask vendor --check
 cargo clippy --workspace --all-targets --all-features
 ```
 
@@ -77,6 +78,7 @@ cargo clippy --workspace --all-targets --all-features
 |---|---|
 | `crates/` | The 41 crates of [spec/22](spec/22-crate-layout.md). Most are stubs until their milestone. |
 | `xtask/` | The check tasks. `layers.toml` has the rank of each crate. A crate may depend only on a lower rank. |
+| `vendor/` | Files from PostgreSQL, the time zone data and Unicode, at their pins. Each directory has a `PIN` file with the hashes. |
 | `spec/` | The technical specification, 25 documents. |
 | `.github/` | CI, the issue templates and Dependabot. |
 

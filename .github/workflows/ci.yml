@@ -50,6 +50,9 @@ jobs:
         run: cargo xtask layers
       - name: unsafe rules and writing rules
         run: cargo xtask style
+      # The vendored files must match the hashes in their PIN files. This step needs no network.
+      - name: vendored files
+        run: cargo xtask vendor --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
       - name: spelling

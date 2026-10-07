@@ -16,11 +16,12 @@ CI runs these checks. Run them before you push.
 cargo fmt --all --check
 cargo xtask layers
 cargo xtask style
+cargo xtask vendor --check
 cargo clippy --workspace --all-targets --all-features
 cargo test --workspace --all-features
 ```
 
-`cargo xtask layers` checks the layer rule. `cargo xtask style` checks the `unsafe` rules and the writing rules.
+`cargo xtask layers` checks the layer rule. `cargo xtask style` checks the `unsafe` rules and the writing rules. `cargo xtask vendor --check` checks the vendored files against their hashes.
 
 ## What a change must include
 
