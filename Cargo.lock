@@ -184,6 +184,10 @@ version = "0.0.5"
 [[package]]
 name = "rupg-txn"
 version = "0.0.5"
+dependencies = [
+ "rupg-common",
+ "rupg-platform",
+]
 
 [[package]]
 name = "rupg-types"
