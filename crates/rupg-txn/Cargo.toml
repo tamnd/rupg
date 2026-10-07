@@ -14,9 +14,11 @@ readme.workspace = true
 publish = false
 
 [dependencies]
+rupg-buffer.workspace = true
 rupg-common.workspace = true
 rupg-file.workspace = true
 rupg-hot.workspace = true
+rupg-log.workspace = true
 rupg-platform.workspace = true
 rupg-table.workspace = true
 rupg-types.workspace = true

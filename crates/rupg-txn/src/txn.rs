@@ -2,7 +2,7 @@
 //!
 //! A writer changes a row in place. The version header of the row names the writer until it commits, and an undo record keeps the version before the change. Commit writes the commit timestamp into the header of each row that the writer changed. A reader with snapshot `S` sees a version with a commit timestamp at or below `S`, or a version that it wrote in an earlier command. For any other version it applies undo records until it gets one that it sees.
 //!
-//! This is the first MVCC of M1. The slot of an owner is its transaction id, which the node does not use again. `READ COMMITTED` and `REPEATABLE READ` are here. `SERIALIZABLE`, savepoints, row locks with `FOR UPDATE`, the log of each commit and the precise cleanup rule come later. At M1, cleanup removes the undo of a commit when every snapshot sees that commit (section 11.4.3 has the M1 note).
+//! This is the first MVCC of M1. The slot of an owner is its transaction id, which the node does not use again. `READ COMMITTED` and `REPEATABLE READ` are here. `SERIALIZABLE`, savepoints, row locks with `FOR UPDATE` and the precise cleanup rule come later. With a log, each commit writes one commit block (see `redo.rs`). At M1, cleanup removes the undo of a commit when every snapshot sees that commit (section 11.4.3 has the M1 note).
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::fmt;
@@ -11,10 +11,12 @@ use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use rupg_common::{Error, Hlc, Oid, Result, RowId, SqlState, Xid};
 use rupg_file::PageAccess;
 use rupg_hot::{Row, RowIdBlock, VersionHeader};
+use rupg_log::{Block, BlockKind, Log};
 use rupg_table::Table;
 use rupg_types::Datum;
 
 use crate::clock::HlcClock;
+use crate::redo::Changes;
 use crate::undo::{Change, Record, Undo};
 use crate::visible::Commits;
 
@@ -30,6 +32,9 @@ pub enum Isolation {
 /// The number of row latches. A writer holds the latch of a row while it reads the header and writes the change.
 const STRIPES: usize = 64;
 
+/// The log ring of each commit. At M1 every commit goes to ring 0. A ring for each worker comes with the workers.
+const RING: u16 = 0;
+
 /// The most times that a reader reads a row again because a rollback removed an undo record under it.
 const RETRIES: usize = 1_000;
 
@@ -41,6 +46,9 @@ pub struct Transactions<P> {
     state: Mutex<State>,
     ended: Condvar,
     stripes: Vec<Mutex<()>>,
+    log: Option<Arc<Log>>,
+    /// A commit holds it while it takes its timestamp and places its block, so the blocks in a ring are in timestamp order (spec/11 section 11.14.2).
+    gate: Mutex<()>,
 }
 
 impl<P> fmt::Debug for Transactions<P> {
@@ -102,7 +110,20 @@ impl<P: PageAccess> Transactions<P> {
             state: Mutex::new(state),
             ended: Condvar::new(),
             stripes: (0..STRIPES).map(|_| Mutex::new(())).collect(),
+            log: None,
+            gate: Mutex::new(()),
         }
+    }
+
+    /// Writes each commit to `log`. A commit returns when its block is safe. With no log, a commit is in memory only.
+    pub fn with_log(mut self, log: Arc<Log>) -> Transactions<P> {
+        self.log = Some(log);
+        self
+    }
+
+    /// The log, if there is one.
+    pub fn log(&self) -> Option<&Arc<Log>> {
+        self.log.as_ref()
     }
 
     /// The pages.
@@ -502,6 +523,8 @@ impl<P: PageAccess> Transaction<P> {
     }
 
     /// Commits. The result is the commit timestamp, or `None` for a transaction that changed no row.
+    ///
+    /// With a log, the commit places one commit block in the log and returns when the block is safe. If the log cannot make the block safe, the result is the error of the log and the commit is not visible. The ring stops, so no later commit is visible either, and the node must restart. Recovery keeps the commit only if its block is in a safe prefix.
     pub fn commit(mut self) -> Result<Option<Hlc>> {
         self.done = true;
         let xid = match self.xid {
@@ -512,22 +535,73 @@ impl<P: PageAccess> Transaction<P> {
             }
         };
         let owner = self.owner.clone();
-        let ts = match owner.commits.begin() {
-            Ok(ts) => ts,
+        let body = owner.log.as_ref().map(|_| self.body()).transpose();
+        let gate = owner.gate.lock().unwrap_or_else(PoisonError::into_inner);
+        let (ts, body) = match body.and_then(|body| Ok((owner.commits.begin()?, body))) {
+            Ok(begun) => begun,
             Err(e) => {
-                self.undo_all()?;
-                owner.end(self.snapshot, Some(xid), None);
-                return Err(e);
+                drop(gate);
+                return self.fail(xid, None, e);
             }
         };
-        if let Err(e) = self.stamp(ts) {
-            let undone = self.undo_all();
-            owner.commits.abandon(ts)?;
-            owner.end(self.snapshot, Some(xid), None);
-            undone?;
+        let placed = self.stamp(ts).and_then(|()| match (&owner.log, body) {
+            (Some(log), Some(body)) => {
+                let mut block = Block {
+                    kind: BlockKind::Commit,
+                    ring: RING,
+                    position: 0,
+                    commit_ts: ts,
+                    xid: xid.bits(),
+                    deps: Vec::new(),
+                    body,
+                };
+                log.append(RING, &mut block).map(|p| Some(p.end))
+            }
+            _ => Ok(None),
+        });
+        drop(gate);
+        let placed = match placed {
+            Ok(placed) => placed,
+            Err(e) => return self.fail(xid, Some(ts), e),
+        };
+        let kept = self.kept();
+        if let (Some(log), Some(end)) = (&owner.log, placed)
+            && let Err(e) = log.wait_safe(RING, end)
+        {
+            // The block can still be durable, so the rows keep their stamps and the undo stays for the snapshots below `ts`.
+            owner.end(self.snapshot, Some(xid), Some((ts, kept)));
             return Err(e);
         }
         owner.commits.installed(ts)?;
+        owner.end(self.snapshot, Some(xid), Some((ts, kept)));
+        owner.cleanup()?;
+        Ok(Some(ts))
+    }
+
+    /// Rolls back a commit that failed before its block was placed, gives back its timestamp, and gives the error.
+    fn fail(&mut self, xid: Xid, ts: Option<Hlc>, e: Error) -> Result<Option<Hlc>> {
+        let undone = self.undo_all();
+        let abandoned = ts.map_or(Ok(()), |ts| self.owner.commits.abandon(ts));
+        self.owner.end(self.snapshot, Some(xid), None);
+        undone?;
+        abandoned?;
+        Err(e)
+    }
+
+    /// The body of the commit block.
+    fn body(&self) -> Result<Vec<u8>> {
+        let mut changes = Changes::default();
+        for w in &self.writes {
+            let record = self.owner.undo.get(w.undo).ok_or_else(|| {
+                Error::internal(format!("the undo record of the row {} is missing", w.id))
+            })?;
+            changes.add(&w.table, w.id, &record.change);
+        }
+        changes.body(&*self.owner.pages)
+    }
+
+    /// The undo records of the commit and the rows that it deleted, which cleanup removes when every snapshot sees the commit.
+    fn kept(&self) -> Kept {
         let mut last: BTreeMap<(Oid, RowId), (&Arc<Table>, bool)> = BTreeMap::new();
         for w in &self.writes {
             last.insert((w.table.def().oid(), w.id), (&w.table, w.delete));
@@ -537,10 +611,7 @@ impl<P: PageAccess> Transaction<P> {
             .filter(|(_, (_, delete))| *delete)
             .map(|((_, id), (table, _))| (table.clone(), id))
             .collect();
-        let kept = Kept { undo: self.writes.iter().map(|w| w.undo).collect(), deleted };
-        owner.end(self.snapshot, Some(xid), Some((ts, kept)));
-        owner.cleanup()?;
-        Ok(Some(ts))
+        Kept { undo: self.writes.iter().map(|w| w.undo).collect(), deleted }
     }
 
     /// Writes `ts` into the header of each row that the transaction changed.
