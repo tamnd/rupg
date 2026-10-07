@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.3 (2026-10-07)
+
+The third patch release on the 0.0 line. It completes the file format of spec/08 with the page table, the extents and the free space map, and adds the buffer manager with the virtual memory window and the memory budget. No crate is published.
+
 ### Added
 
 - The page table of spec/08 section 8.5 in `rupg-file`: `PtEntry` with the 48-bit physical page and the 16-bit write tag, `PtPath` for the radix walk, and `PtNode` for the 2040 entries of a node. A table has 3 levels and grows to 6 when the logical page numbers need it.
