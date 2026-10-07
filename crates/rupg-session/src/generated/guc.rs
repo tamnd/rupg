@@ -107,8 +107,9 @@ static DEBUG_PARALLEL_QUERY_OPTIONS: [EnumOption; 9] = [
 
 /// `default_toast_compression_options`.
 #[rustfmt::skip]
-static DEFAULT_TOAST_COMPRESSION_OPTIONS: [EnumOption; 1] = [
+static DEFAULT_TOAST_COMPRESSION_OPTIONS: [EnumOption; 2] = [
     EnumOption { name: "pglz", value: 0, hidden: false },
+    EnumOption { name: "lz4", value: 1, hidden: false },
 ];
 
 /// `dynamic_shared_memory_options`.
@@ -356,16 +357,18 @@ static TRACK_FUNCTION_OPTIONS: [EnumOption; 3] = [
 
 /// `wal_compression_options`.
 #[rustfmt::skip]
-static WAL_COMPRESSION_OPTIONS: [EnumOption; 9] = [
+static WAL_COMPRESSION_OPTIONS: [EnumOption; 11] = [
     EnumOption { name: "pglz", value: 0, hidden: false },
-    EnumOption { name: "on", value: 1, hidden: false },
-    EnumOption { name: "off", value: 2, hidden: false },
-    EnumOption { name: "true", value: 1, hidden: true },
-    EnumOption { name: "false", value: 2, hidden: true },
-    EnumOption { name: "yes", value: 1, hidden: true },
-    EnumOption { name: "no", value: 2, hidden: true },
-    EnumOption { name: "1", value: 1, hidden: true },
-    EnumOption { name: "0", value: 2, hidden: true },
+    EnumOption { name: "lz4", value: 1, hidden: false },
+    EnumOption { name: "zstd", value: 2, hidden: false },
+    EnumOption { name: "on", value: 3, hidden: false },
+    EnumOption { name: "off", value: 4, hidden: false },
+    EnumOption { name: "true", value: 3, hidden: true },
+    EnumOption { name: "false", value: 4, hidden: true },
+    EnumOption { name: "yes", value: 3, hidden: true },
+    EnumOption { name: "no", value: 4, hidden: true },
+    EnumOption { name: "1", value: 3, hidden: true },
+    EnumOption { name: "0", value: 4, hidden: true },
 ];
 
 /// `wal_level_options`.
@@ -1176,7 +1179,7 @@ pub(crate) static PARAMETERS: [Parameter; 425] = [
         short_desc: "Sets the default compression method for compressible values.",
         extra_desc: None,
         flags: 0,
-        kind: Kind::Enum { boot: 0, options: &DEFAULT_TOAST_COMPRESSION_OPTIONS },
+        kind: Kind::Enum { boot: 1, options: &DEFAULT_TOAST_COMPRESSION_OPTIONS },
     },
     Parameter {
         name: "default_transaction_deferrable",
@@ -4020,7 +4023,7 @@ pub(crate) static PARAMETERS: [Parameter; 425] = [
         short_desc: "Compresses full-page writes written in WAL file with specified method.",
         extra_desc: None,
         flags: 0,
-        kind: Kind::Enum { boot: 2, options: &WAL_COMPRESSION_OPTIONS },
+        kind: Kind::Enum { boot: 4, options: &WAL_COMPRESSION_OPTIONS },
     },
     Parameter {
         name: "wal_consistency_checking",
