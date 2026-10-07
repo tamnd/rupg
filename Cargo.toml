@@ -62,6 +62,10 @@ rupg-types = { version = "=0.0.1", path = "crates/rupg-types" }
 rupg-wasm = { version = "=0.0.1", path = "crates/rupg-wasm" }
 rupg-wire = { version = "=0.0.1", path = "crates/rupg-wire" }
 
+# Outside crates. Each one is in the table of spec/22-crate-layout.md section 22.5.
+# libc: the system calls of rupg-platform on Unix, for example F_FULLFSYNC and getentropy.
+libc = "0.2"
+
 [workspace.lints.rust]
 missing_debug_implementations = "warn"
 rust_2018_idioms = "warn"
