@@ -13,6 +13,7 @@ use crate::base64;
 use crate::crypto::Crypto;
 use crate::error::{Level, ProtocolError};
 use crate::reader::Reader;
+use crate::saslprep::prepare_password;
 
 pub const SCRAM_SHA_256: &[u8] = b"SCRAM-SHA-256";
 pub const SCRAM_SHA_256_PLUS: &[u8] = b"SCRAM-SHA-256-PLUS";
@@ -103,9 +104,7 @@ pub fn verify_md5(
         && same(md5_encrypt(crypto, &secret[3..], &salt).as_bytes(), response)
 }
 
-/// `plain_crypt_verify`: the clear text password of the `password` method against the stored secret. A secret in clear text never passes, as in PostgreSQL.
-///
-/// PostgreSQL applies SASLprep to the password before it checks a SCRAM secret. This function does not. SASLprep changes only a password that is valid UTF-8 with characters outside ASCII, so only such a password can pass in PostgreSQL and fail here.
+/// `plain_crypt_verify`: the clear text password of the `password` method against the stored secret. A secret in clear text never passes, as in PostgreSQL. Before it checks a SCRAM secret, it applies SASLprep to the password with [`prepare_password`], as `scram_verify_plain_password` does.
 pub fn verify_password(
     crypto: &(impl Crypto + ?Sized),
     user: &[u8],
@@ -117,7 +116,8 @@ pub fn verify_password(
         PasswordType::ScramSha256 => {
             let Some(stored) = ScramSecret::parse(secret) else { return false };
             let Some(salt) = base64::decode(stored.salt.as_bytes()) else { return false };
-            let built = ScramSecret::build(crypto, password, &salt, stored.iterations);
+            let built =
+                ScramSecret::build(crypto, &prepare_password(password), &salt, stored.iterations);
             same(&built.server_key, &stored.server_key)
         }
         PasswordType::Plaintext => false,
@@ -154,7 +154,7 @@ impl ScramSecret {
         })
     }
 
-    /// `scram_build_secret`, for a password that SASLprep has already prepared.
+    /// `scram_build_secret`, for a password that [`prepare_password`] has already prepared.
     pub fn build(
         crypto: &(impl Crypto + ?Sized),
         password: &[u8],
@@ -1021,6 +1021,17 @@ mod tests {
         assert!(verify_password(&Soft, b"user", secret.as_bytes(), b"pencil"));
         assert!(!verify_password(&Soft, b"user", secret.as_bytes(), b"pencil2"));
         assert!(!verify_password(&Soft, b"user", b"pencil", b"pencil"));
+        // SASLprep makes U+2168 ROMAN NUMERAL NINE into "IX", so both passwords match a secret made from "IX".
+        let secret =
+            ScramSecret::build(&Soft, &prepare_password("\u{2168}".as_bytes()), b"salt", 4096)
+                .to_string();
+        assert!(verify_password(&Soft, b"user", secret.as_bytes(), b"IX"));
+        assert!(verify_password(&Soft, b"user", secret.as_bytes(), "\u{2168}".as_bytes()));
+        // A password that SASLprep refuses is used as it is.
+        let secret =
+            ScramSecret::build(&Soft, &prepare_password(b"\x07bell"), b"salt", 4096).to_string();
+        assert!(verify_password(&Soft, b"user", secret.as_bytes(), b"\x07bell"));
+        assert!(!verify_password(&Soft, b"user", secret.as_bytes(), b"bell"));
     }
 
     #[test]

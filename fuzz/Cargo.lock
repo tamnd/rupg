@@ -230,6 +230,9 @@ dependencies = [
 [[package]]
 name = "rupg-wire"
 version = "0.0.11"
+dependencies = [
+ "rupg-types",
+]
 
 [[package]]
 name = "shlex"
