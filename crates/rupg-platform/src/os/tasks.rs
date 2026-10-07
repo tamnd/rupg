@@ -7,7 +7,10 @@ use rupg_common::{Error, Result, SqlState};
 
 use crate::tasks::{Join, Task, TaskHandle, Tasks};
 
-/// Runs each task on its own thread of the operating system.
+/// The stack of each thread. It is the stack of the main thread on Linux, which is the stack of a PostgreSQL backend. The parser of a debug build needs more than the 2 MiB that Rust gives a new thread.
+pub const STACK_SIZE: usize = 8 << 20;
+
+/// Runs each task on its own thread of the operating system, with a stack of [`STACK_SIZE`] bytes.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OsTasks;
 
@@ -27,12 +30,16 @@ impl Join for OsJoin {
 
 impl Tasks for OsTasks {
     fn spawn(&self, name: &str, task: Task) -> Result<TaskHandle> {
-        let handle = thread::Builder::new().name(name.to_string()).spawn(task).map_err(|e| {
-            Error::new(
-                SqlState::INSUFFICIENT_RESOURCES,
-                format!("could not start the thread \"{name}\": {e}"),
-            )
-        })?;
+        let handle = thread::Builder::new()
+            .name(name.to_string())
+            .stack_size(STACK_SIZE)
+            .spawn(task)
+            .map_err(|e| {
+                Error::new(
+                    SqlState::INSUFFICIENT_RESOURCES,
+                    format!("could not start the thread \"{name}\": {e}"),
+                )
+            })?;
         Ok(TaskHandle::new(Box::new(OsJoin(handle))))
     }
 

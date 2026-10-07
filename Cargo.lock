@@ -141,6 +141,7 @@ dependencies = [
  "rupg-file",
  "rupg-log",
  "rupg-platform",
+ "rupg-server",
  "rupg-table",
  "rupg-txn",
  "rupg-types",
@@ -307,13 +308,21 @@ version = "0.0.12"
 [[package]]
 name = "rupg-server"
 version = "0.0.12"
+dependencies = [
+ "rupg-common",
+ "rupg-platform",
+ "rupg-session",
+ "rupg-wire",
+]
 
 [[package]]
 name = "rupg-session"
 version = "0.0.12"
 dependencies = [
  "rupg-common",
+ "rupg-sql",
  "rupg-types",
+ "rupg-wire",
 ]
 
 [[package]]
