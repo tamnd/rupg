@@ -141,7 +141,7 @@ Extents (section 8.4) have no page headers. The segment directory describes them
 
 ### 8.3.2 The checksum
 
-The checksum is the 64-bit four-lane function of rudb `storage-v3/07`, version 5. It keeps four independent 64-bit lanes, consumes 32 bytes per iteration, and ends with an avalanche step that mixes the lanes. Four independent lanes let the processor overlap the multiplies of one iteration, so the cost per byte is below a serial hash. The function, its constants and its test vectors are fixed at M1 and live in rupg-kernels. A change to the function is a new algorithm number in the identity block and an incompatible feature flag.
+The checksum is the 64-bit four-lane function of rudb `storage-v3/07`, version 5. It keeps four independent 64-bit lanes, consumes 32 bytes per iteration, and ends with an avalanche step that mixes the lanes. Four independent lanes let the processor overlap the multiplies of one iteration, so the cost per byte is below a serial hash. The function, its constants and its test vectors are fixed at M1 and live in rupg-file, because rupg-file is below rupg-kernels in the layer order of document 22 and every layer above it can call it. The function gives the same result as XXH64 with seed 0, so an outside tool can check a page. A change to the function is a new algorithm number in the identity block and an incompatible feature flag.
 
 **The checksum is always on.** PostgreSQL 18 turned data checksums on by default in `initdb`. rupg has no setting to turn them off. The read-only setting `data_checksums` shows `on`. The F3 format (SIGMOD 2025) measured that a checksum for each I/O unit is almost free relative to the cost of decoding, so the saving from turning checksums off does not justify the risk.
 
