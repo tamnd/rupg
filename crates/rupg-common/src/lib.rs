@@ -4,6 +4,12 @@
 
 #![forbid(unsafe_code)]
 
+mod error;
+mod ids;
+
+pub use error::{Error, Result, SqlState};
+pub use ids::{Hlc, Lsn, Oid, RowId, ShardId, Xid};
+
 use std::fmt;
 use std::str::FromStr;
 
