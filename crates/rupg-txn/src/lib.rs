@@ -5,7 +5,10 @@
 #![forbid(unsafe_code)]
 
 mod clock;
+mod txn;
+mod undo;
 mod visible;
 
 pub use clock::HlcClock;
+pub use txn::{Isolation, Transaction, Transactions};
 pub use visible::Commits;

@@ -15,7 +15,14 @@ publish = false
 
 [dependencies]
 rupg-common.workspace = true
+rupg-file.workspace = true
+rupg-hot.workspace = true
 rupg-platform.workspace = true
+rupg-table.workspace = true
+rupg-types.workspace = true
+
+[dev-dependencies]
+rupg-tree.workspace = true
 
 [lints]
 workspace = true
