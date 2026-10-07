@@ -26,6 +26,11 @@ version = "0.0.2"
 [[package]]
 name = "rupg-buffer"
 version = "0.0.2"
+dependencies = [
+ "rupg-common",
+ "rupg-file",
+ "rupg-platform",
+]
 
 [[package]]
 name = "rupg-capi"

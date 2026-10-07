@@ -286,6 +286,8 @@ The address of logical page `n` is the page window base plus `n * 16384`. A poin
 
 **Each unit has a 64-bit state word.** The state words are in a separate array, also reserved with `MAP_NORESERVE`. A state word holds a version counter and a state: evicted, unlocked, locked shared with a count, or locked exclusive. This is the vmcache state word.
 
+The high 8 bits of the word hold the state and the low 56 bits hold the version. State 0 is unlocked, 1 to 252 is locked shared with that count of readers, 253 is locked exclusive and 255 is evicted. The release of an exclusive latch and an eviction increase the version. A shared latch does not change the version, so it does not make an optimistic read fail.
+
 ### 8.8.2 Reads, writes and eviction
 
 **An optimistic read takes no lock.** The reader loads the state word, reads the page, and loads the state word again. If the version is the same and the page was not locked exclusive, the read is valid. Otherwise the reader retries. B+tree descents in the hot store and in indexes use optimistic reads at every inner level.
@@ -295,6 +297,10 @@ The address of logical page `n` is the page window base plus `n * 16384`. A poin
 **A miss reads the unit into its own address.** When the state is evicted, the reader takes the exclusive latch, issues the read into the unit's address in the window, checks the checksum and the logical page number or the extent block checksum, and releases the latch as shared or unlocked. With `io_uring` the read is asynchronous and the session task yields until it completes.
 
 **Eviction uses a clock and `madvise`.** The resident units are in a list that a clock hand sweeps. A unit that was used since the last sweep gets a second chance. A clean unit is evicted by setting its state to evicted and calling `madvise(MADV_DONTNEED)` on its address range, in batches of 64 units to amortize the system call. A dirty unit goes to the page writer first. vmcache measured that the exmap kernel module scales eviction further, but exmap is a kernel module that cloud images do not ship, and document 04 section 4.6 decides that rupg does not require it.
+
+**One write of a page is in flight at a time.** Two threads can find the same dirty unit, for example the page writer and a thread that needs a free unit. If both copied and wrote the page, the older copy could complete last and replace the newer one. Each unit therefore has a flag that a thread sets before it copies the page and clears after the write completes. A second thread that finds the flag set does not write the page, and the unit stays dirty. A page is freed only when its flag is clear.
+
+**An optimistic reader reads with volatile reads.** A writer can change the bytes while an optimistic reader reads them, and the reader discards what it read when the version changed. Rust has no atomic copy of bytes yet (RFC 3301), so rupg-buffer reads the bytes with volatile reads and never makes a Rust reference to them. The crossbeam seqlock uses the same method. Miri reports these reads as a data race, so the test that runs readers and writers on threads does not run under Miri.
 
 ### 8.8.3 Size and memory
 

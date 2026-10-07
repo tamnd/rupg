@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod access;
 mod arena;
 mod checksum;
 mod extent;
@@ -18,6 +19,7 @@ pub mod text;
 use std::fmt;
 use std::str::FromStr;
 
+pub use access::{OptimisticRead, PageAccess, in_page};
 pub use arena::{
     ARENA_PAGES, ArenaKind, ArenaMap, FSM_ARENAS_PER_PAGE, FsmEntry, FsmPage, arena_of, arena_start,
 };

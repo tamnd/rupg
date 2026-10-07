@@ -10,6 +10,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The extent classes E0 to E4 with `Extent`, which checks the alignment inside the arena, and the checksum of each 64 KiB block.
 - The arenas and the free space map of spec/08 section 8.9: `ArenaMap` with the buddy rule and the in-order pages of a write arena, the 8-byte `FsmEntry`, and `FsmPage` with 120 arenas in each page. A double free and an entry that does not match its bitmap are errors.
 - The text form for page table nodes and free space map pages. It parses back into the same sealed page.
+- The `PageAccess` trait in `rupg-file`, with the optimistic, shared and exclusive modes of spec/08 section 8.8.2 and the `OptimisticRead` trait for reads without a latch.
+- `BufferPool` in `rupg-buffer`. It has the vmcache state word for each frame, a clock that evicts frames and writes dirty pages first, and a fixed table of frames that it reserves from the memory budget (spec/08 section 8.8.4). It implements `PageAccess` over a `Store`. `MemStore` keeps the pages in memory.
 
 ## 0.0.2 (2026-10-07)
 
