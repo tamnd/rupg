@@ -24,7 +24,7 @@
 //!
 //! [`Recv`], the binary input of a `Bind` parameter, with the errors of PostgreSQL when the value is too short or too long. The binary output of the other types is the value in big-endian bytes.
 //!
-//! [`unicode`], the four Unicode normalization forms.
+//! [`unicode`], the four Unicode normalization forms, and [`tz`], the names of the time zones.
 //!
 //! # Known differences
 //!
@@ -56,6 +56,7 @@ mod string;
 mod typeid;
 mod types;
 pub mod typmod;
+pub mod tz;
 pub mod unicode;
 
 pub use array::{

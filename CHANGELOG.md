@@ -14,6 +14,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `rupg_common::SqlState` has every code line of `errcodes.txt`: 268 constants, named as the C macro without `ERRCODE_`, with `parse`, `name`, `condition`, `for_condition`, `class_title` and `category`. `cargo xtask errcodes` makes the list, and CI checks it. The code is lifted from `rudb-common`.
 - The text and binary forms of the types in `rupg-types` (spec/07): `bool`, `"char"`, `name`, the integers, `oid`, the floats, `bytea`, `uuid`, `text`, `varchar`, `bpchar`, `json`, `jsonb`, `numeric`, the date and time types, arrays, `int2vector`, `oidvector` and the OID alias types. Each function gives the SQLSTATE and the message of PostgreSQL. The code is lifted from `rudb-pgtypes`, and a test checks 8753 results of the server at the pin.
 - `rupg_types::oid`, one constant for each type of `pg_type.dat` and for its array type, with the `pg_type` row of each type. `cargo xtask pgtype` makes the table from the vendored file, and CI checks it.
+- `rupg_session::guc`, the configuration parameters of PostgreSQL (spec/06 section 6.13). It reads a value as `SET` does and prints it as `SHOW` does, with the errors of PostgreSQL, and `Settings` keeps the values of one session. `cargo xtask guc` makes the table from the vendored `guc_parameters.dat` and `guc_tables.c` with the boot values of the Linux oracle, and CI checks it. A test checks each of the 419 rows of `pg_settings` of the oracle. The code is lifted from `rudb-common`.
+- `rupg_types::tz`, the 598 names of the zones and links of the vendored tzdata 2026e. `cargo xtask tzdata` makes the list, and CI checks it. `TimeZone` takes these names.
 
 ### Changed
 

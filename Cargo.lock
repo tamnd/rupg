@@ -311,6 +311,10 @@ version = "0.0.11"
 [[package]]
 name = "rupg-session"
 version = "0.0.11"
+dependencies = [
+ "rupg-common",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-shim"

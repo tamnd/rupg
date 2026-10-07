@@ -63,6 +63,10 @@ jobs:
         run: cargo xtask errcodes --check
       - name: type oids
         run: cargo xtask pgtype --check
+      - name: parameter table
+        run: cargo xtask guc --check
+      - name: time zone names
+        run: cargo xtask tzdata --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
       - name: spelling
