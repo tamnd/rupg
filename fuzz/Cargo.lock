@@ -133,12 +133,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rupg-kernels"
+version = "0.0.10"
+
+[[package]]
 name = "rupg-log"
 version = "0.0.10"
 dependencies = [
  "rupg-buffer",
  "rupg-common",
  "rupg-file",
+ "rupg-kernels",
 ]
 
 [[package]]

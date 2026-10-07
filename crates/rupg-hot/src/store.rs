@@ -4,7 +4,7 @@ use rupg_common::{Error, Result, RowId, SqlState};
 use rupg_file::{PAGE_SIZE, PageAccess, PageHeader, PageId, PageKind};
 use rupg_tree::{Shape, Tree, Write};
 
-use crate::pax::{HotLeaf, Pax, View, id_of, key};
+use crate::pax::{HotLeaf, Pax, View, id_of, key, replace_in_place};
 use crate::row::{Row, VersionHeader};
 use crate::schema::Schema;
 
@@ -64,10 +64,14 @@ impl HotStore {
     pub fn replace<P: PageAccess>(&self, pages: &P, schema: &Schema, row: &Row) -> Result<bool> {
         fits_alone(schema, row)?;
         self.tree.write(pages, &key(row.id), |page| {
-            let mut pax = Pax::for_write(page, schema)?;
-            let Ok(i) = pax.find(row.id) else {
+            let Ok(i) = View::new(page)?.find(row.id.bits()) else {
                 return Ok(Write::Done(false));
             };
+            // An update that keeps the length of each value writes the leaf in place. Recovery replays such updates for each record.
+            if replace_in_place(page, schema, i, row)? {
+                return Ok(Write::Done(true));
+            }
+            let mut pax = Pax::for_write(page, schema)?;
             pax.remove(i);
             pax.insert(i, row);
             if !pax.fits() {
