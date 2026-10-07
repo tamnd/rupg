@@ -4,6 +4,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `rupg-wire`, the message codec of protocols 3.0 and 3.2 (spec/06 section 6.1). It is a copy of `rudb-pgwire` from tamnd/rudb at f5f7065a, and each file names its source. It has the startup packets, the frontend and backend messages, the SCRAM-SHA-256 messages and keys, the cancel keys, and the table of command tags. A test checks the table against the vendored `cmdtaglist.h`. SASLprep is not in this release.
+- The fuzz targets `wire_startup` and `wire_frontend` (spec/21 section 21.7). They run the small test server of `rupg-wire` on the codec, and the nightly workflow runs them with the storage targets. `wire_startup` starts from the seeds in `fuzz/seeds/wire_startup`.
+
 ## 0.0.11 (2026-10-08)
 
 The eleventh patch release on the 0.0 line. It adds the crash tests on real kernels and makes recovery faster. On server1 (4 cores, Linux 6.8), the open of a file with 1 GiB of log after a drop of the page cache takes 9.4 s, and it took 15.3 s before #129. No crate is published.

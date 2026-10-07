@@ -1,4 +1,4 @@
-# PostgreSQL 19beta4 on REL_19_STABLE. Used by the engine: rupg-sql, rupg-plpgsql, rupg-pgcatalog, rupg-common and rupg-session. See spec/22-crate-layout.md section 22.8.
+# PostgreSQL 19beta4 on REL_19_STABLE. Used by the engine: rupg-wire, rupg-sql, rupg-plpgsql, rupg-pgcatalog, rupg-common and rupg-session. See spec/22-crate-layout.md section 22.8.
 source https://github.com/postgres/postgres
 rev 7d3d2db7d5e533fa42a4202c7d308cbb0cbf9333
 url https://raw.githubusercontent.com/postgres/postgres/{rev}/{path}
@@ -7,6 +7,7 @@ license PostgreSQL COPYRIGHT
 3d6af92ff8a4c2cdf69afb1cf44edea727922f5cd0cf8b5f72b11cdecac8fdfd  COPYRIGHT
 ee8ab3f804c51e03723d7132a64d327caefed3e77137204ffb75b73166dc9137  src/backend/parser/gram.y
 4abba0753b2f71243c0102902ff5c0cde8f8420b679f701806529a8957dceb80  src/include/parser/kwlist.h
+79325deea0135791bbf93559bf4e28d6ab5e71616d56a90fb941577fe4bf988c  src/include/tcop/cmdtaglist.h
 8463fc9fb68a17c5198e604bc21cc4f4b41926afa71254337d692e6b42cb6fdc  src/pl/plpgsql/src/pl_gram.y
 89dfe9c35247a39384cd5cc0f1cfd4b196e63e0d4b344b42a247218420008ac2  src/pl/plpgsql/src/pl_unreserved_kwlist.h
 c743491696d675748f80476873ec5297b43cb2f7886ab8a54764a3f04d311b34  src/pl/plpgsql/src/pl_reserved_kwlist.h
