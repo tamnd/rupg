@@ -265,6 +265,7 @@ fn check_finds_a_lost_page_and_a_damaged_leaf() {
     let report = check(&io).unwrap();
     assert_eq!((report.tables, report.rows, report.log_blocks), (1, 1_000, 1));
     assert!(report.pages > 3, "{report:?}");
+    assert!(report.log_bytes > 0 && report.log_bytes < 4096, "{report:?}");
 
     // A tree that the catalog does not name.
     let db = open(&io, 5, &options());
