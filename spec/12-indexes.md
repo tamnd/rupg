@@ -66,6 +66,18 @@ A projection of document 10 section 10.7 that holds rows in another order can se
 
 **The user does not choose the form.** The index layer picks it for each segment. `pg_relation_size` reports the bytes of both parts, and `EXPLAIN` shows the same `Index Scan` node for both, with `Cold Part: sparse` in the verbose form (document 15 section 15.9).
 
+### 12.3.3 The tree
+
+`rupg-tree` holds the inner nodes of each tree in rupg. The hot store, the catalog, TOAST and the dense form give their own leaf format through the `Leaf` trait. The tree reaches the pages only through `PageAccess` (spec/22 section 22.4).
+
+**The inner node.** An inner node is a 16 KiB page with the page header of spec/08 section 8.3.1 and the inner kind of its user, for example kind 5 for the hot store. The kind data holds the level at bytes 0 and 1, the count of keys at bytes 2 and 3, and the leftmost child at bytes 8 to 15. Leaves are level 0. A slot array of `u16` offsets follows the header in key order. Each entry is at the end of the page: the child as a `u64`, the key length as a `u16`, then the key. Keys compare as bytes. The leftmost child holds the keys below the first key, and the child of entry `i` holds the keys at or above key `i` and below key `i + 1`. A key is at most 2,704 bytes, the B-tree key limit of PostgreSQL (section 12.13 question 1), so six keys fit in one node.
+
+**Latches.** A reader or a writer goes down with optimistic reads and latches only the leaf. After it takes the latch, it checks that the parent did not change, and it starts again from the root if the parent changed. A writer whose leaf is full goes down again with exclusive latches. It releases the latches above an inner node that has room for one more key. Each split holds the latch on the parent, so the parent check finds each split that a reader can miss. This is the optimistic lock coupling of Leis, Haubenschild and Neumann (IEEE Data Eng. Bull. 42, 2019).
+
+**Splits.** A full inner node splits at the middle of its bytes and not at the middle of its count, so each half fits when the keys have different lengths. The middle key goes up to the parent. The root page does not move. A root split copies the root to a new page, splits that page, and writes the root again one level up, so a catalog entry can keep the root page number.
+
+**No merges at M1.** A separator stays in the tree after it goes in. A scan uses this rule: it goes down again from the root at the upper bound of each leaf, so the leaves need no sibling links. Merges come with purge at M3.
+
 ## 12.4 Index entries and MVCC
 
 rupg updates rows in place with undo records, so an index entry points to a row, not to a tuple version. The rules follow InnoDB's secondary index design, which has the same problem, adapted to commit timestamps.
