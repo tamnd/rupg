@@ -9,6 +9,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The ring directory page, kind 3, and the ring extent list page, kind 18, in `rupg-file`, with `RingEntry`, `RingDirectoryPage`, `RingExtentsPage` and their text forms. Spec/08 now gives their layout and moves the owner of kind 3 to `rupg-file`.
 - Log ring extents in `FileStore`. `add_ring_extent` gives out a free arena as an E4 extent, `free_ring_extent` takes it back after two checkpoints, and `write_ring`, `read_ring` and `sync_rings` do the I/O. `Checkpoint` now takes the rings in place of a ring directory root, and the checkpoint writes the ring directory and an extent list for each ring. `FileStore::open` reads and checks them, and `FileStore::rings` gives them.
 - The log block and record formats in `rupg-log`. `Block` encodes and decodes a block with its 40 byte header, its dependencies and a CRC32C seeded with the ring number. A bad checksum or position is the end of a ring, and other damage gives `XX001`. `RecordWriter` and `RecordReader` write and read the records of a block body with delta encoded OIDs and row ids. Spec/11 now gives the offsets, the kind numbers and the fill block.
+- The log ring writer in `rupg-log`. `Ring` places blocks in a ring, pads the end of a 4 KiB unit and of an extent with a fill block, and flushes with group commit. `RingReader` reads the blocks of a ring until its end. `Log` keeps the safe position of each ring and waits for the dependencies of a commit.
 
 ### Changed
 

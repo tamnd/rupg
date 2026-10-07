@@ -1,6 +1,6 @@
 //! The log block of spec/11 section 11.13.2.
 //!
-//! A block has a header of 40 bytes, the dependencies and a body. Its length is a multiple of 8. The checksum is the CRC32C of the whole block with the checksum field at zero, seeded with the ring number. A block that fails its checksum or holds a position other than the one where it is read is the end of the ring. A block that passes both checks and is still not valid is damage and gives SQLSTATE `XX001`.
+//! A block has a header of 40 bytes, the dependencies and a body. Its length is a multiple of 8. The checksum is the CRC32C of the whole block with the checksum field at zero, seeded with the ring number. The checksum of a fill block covers only its header, so a fill to the end of an extent costs one header and not 16 MiB of writes. A block that fails its checksum or holds a position other than the one where it is read is the end of the ring. A block that passes both checks and is still not valid is damage and gives SQLSTATE `XX001`.
 
 use std::fmt;
 
@@ -91,7 +91,7 @@ pub const FLAG_DEPS: u8 = 2;
 pub struct Dep {
     /// The ring.
     pub ring: u16,
-    /// The ring position of the block.
+    /// The ring position just after the block. Ring `ring` must be safe at or above it.
     pub position: u64,
 }
 
@@ -123,6 +123,8 @@ pub struct BlockHeader {
     pub ring: u16,
     /// The ring position.
     pub position: u64,
+    /// True for a fill block. A reader reads only its header and goes on after `length` bytes.
+    pub fill: bool,
 }
 
 impl BlockHeader {
@@ -136,6 +138,7 @@ impl BlockHeader {
             length,
             ring: u16::from_le_bytes(bytes[6..8].try_into().ok()?),
             position: u64::from_le_bytes(bytes[16..24].try_into().ok()?),
+            fill: bytes[4] == BlockKind::Fill as u8,
         })
     }
 }
@@ -146,6 +149,7 @@ pub fn block_len(deps: usize, body: usize) -> usize {
 }
 
 fn checksum(bytes: &[u8], ring: u16) -> u32 {
+    let bytes = if bytes[4] == BlockKind::Fill as u8 { &bytes[..BLOCK_HEADER] } else { bytes };
     let c = crc::extend(u32::from(ring), &bytes[..8]);
     let c = crc::extend(c, &[0; 4]);
     crc::extend(c, &bytes[12..])
@@ -162,7 +166,7 @@ impl Block {
         false
     }
 
-    /// Appends the block to `out`. A block longer than [`MAX_BLOCK`], a fill block with dependencies or a body, or more than 65,535 dependencies give SQLSTATE `XX000`.
+    /// Appends the block to `out`. A block longer than [`MAX_BLOCK`], a fill block, or more than 65,535 dependencies give SQLSTATE `XX000`.
     pub fn encode(&self, out: &mut Vec<u8>) -> Result<()> {
         let len = self.len();
         if len > MAX_BLOCK || self.deps.len() > usize::from(u16::MAX) {
@@ -171,8 +175,8 @@ impl Block {
                 self.deps.len()
             )));
         }
-        if self.kind == BlockKind::Fill && !(self.deps.is_empty() && self.body.is_empty()) {
-            return Err(Error::internal("a fill block has no dependencies and no body"));
+        if self.kind == BlockKind::Fill {
+            return Err(Error::internal("a fill block comes from Block::fill"));
         }
         let start = out.len();
         out.extend_from_slice(&(len as u32).to_le_bytes());
@@ -196,36 +200,29 @@ impl Block {
         Ok(())
     }
 
-    /// The bytes of a fill block of `len` bytes at `position`. `len` must be a multiple of 8 from [`BLOCK_HEADER`] to [`MAX_BLOCK`].
-    pub fn fill(ring: u16, position: u64, len: usize) -> Result<Vec<u8>> {
+    /// The header of a fill block of `len` bytes at `position`. The writer writes only these 40 bytes, and a reader skips the rest. `len` must be a multiple of 8 from [`BLOCK_HEADER`] to [`MAX_BLOCK`].
+    pub fn fill(ring: u16, position: u64, len: usize) -> Result<[u8; BLOCK_HEADER]> {
         if !(BLOCK_HEADER..=MAX_BLOCK).contains(&len) || !len.is_multiple_of(8) {
             return Err(Error::internal(format!("a fill block cannot have {len} bytes")));
         }
-        let fill = Block {
-            kind: BlockKind::Fill,
-            ring,
-            position,
-            commit_ts: Hlc::ZERO,
-            xid: 0,
-            deps: Vec::new(),
-            body: Vec::new(),
-        };
-        let mut out = Vec::with_capacity(len);
-        fill.encode(&mut out)?;
-        out.resize(len, 0);
+        let mut out = [0; BLOCK_HEADER];
         out[0..4].copy_from_slice(&(len as u32).to_le_bytes());
+        out[4] = BlockKind::Fill as u8;
+        out[6..8].copy_from_slice(&ring.to_le_bytes());
+        out[16..24].copy_from_slice(&position.to_le_bytes());
         let sum = checksum(&out, ring);
         out[8..12].copy_from_slice(&sum.to_le_bytes());
         Ok(out)
     }
 
-    /// Reads the block in `bytes`, which must be exactly the length that [`BlockHeader::read`] gave. It gives `Ok(None)` when the checksum fails or the block is not the block of `ring` at `position`. That is the end of the ring. A block that passes those checks and is not valid gives SQLSTATE `XX001`.
+    /// Reads the block in `bytes`. For a fill block `bytes` is the header, and for other blocks it is exactly the length that [`BlockHeader::read`] gave. It gives `Ok(None)` when the checksum fails or the block is not the block of `ring` at `position`. That is the end of the ring. A block that passes those checks and is not valid gives SQLSTATE `XX001`. A fill block comes back with an empty body.
     pub fn decode(bytes: &[u8], ring: u16, position: u64) -> Result<Option<Block>> {
         let Some(h) = (bytes.len() >= BLOCK_HEADER).then(|| BlockHeader::read(bytes)).flatten()
         else {
             return Ok(None);
         };
-        if h.length != bytes.len() || h.ring != ring || h.position != position {
+        let bytes = if h.fill { &bytes[..BLOCK_HEADER] } else { bytes };
+        if (!h.fill && h.length != bytes.len()) || h.ring != ring || h.position != position {
             return Ok(None);
         }
         let stored = u32::from_le_bytes([bytes[8], bytes[9], bytes[10], bytes[11]]);
@@ -244,6 +241,9 @@ impl Block {
         }
         if (flags & FLAG_DEPS != 0) != (deps > 0) || bytes[14..16] != [0, 0] {
             return Err(bad("has a bad header".to_string()));
+        }
+        if h.fill && bytes[24..40].iter().any(|&b| b != 0) {
+            return Err(bad("is a fill block with content".to_string()));
         }
         let start = BLOCK_HEADER + deps * DEP_SIZE;
         if start > bytes.len() {
@@ -269,14 +269,6 @@ impl Block {
             deps,
             body: bytes[start..].to_vec(),
         };
-        if kind == BlockKind::Fill
-            && (!block.deps.is_empty()
-                || block.commit_ts != Hlc::ZERO
-                || block.xid != 0
-                || block.body.iter().any(|&b| b != 0))
-        {
-            return Err(bad("is a fill block with content".to_string()));
-        }
         Ok(Some(block))
     }
 }
@@ -307,7 +299,7 @@ mod tests {
         assert_eq!(b.len(), 40 + 20 + 12);
         assert_eq!(
             BlockHeader::read(bytes),
-            Some(BlockHeader { length: 72, ring: 2, position: 8192 })
+            Some(BlockHeader { length: 72, ring: 2, position: 8192, fill: false })
         );
         assert_eq!(Block::decode(bytes, 2, 8192).unwrap(), Some(b.clone()));
 
@@ -367,18 +359,28 @@ mod tests {
             let e = Block::decode(&odd, 2, 8192).unwrap_err();
             assert_eq!(e.state(), rupg_common::SqlState::DATA_CORRUPTED, "byte {at} value {value}");
         }
-        let mut fill = Block::fill(2, 0, 64).unwrap();
-        reseal(&mut fill, 50, 1, 2);
-        assert!(Block::decode(&fill, 2, 0).is_err());
+        let fill = Block::fill(2, 0, 64).unwrap();
+        for at in [5, 12, 14, 24, 32, 39] {
+            let mut odd = fill;
+            reseal(&mut odd, at, 1, 2);
+            let e = Block::decode(&odd, 2, 0).unwrap_err();
+            assert_eq!(e.state(), rupg_common::SqlState::DATA_CORRUPTED, "byte {at}");
+        }
     }
 
     #[test]
     fn fill_blocks() {
         for len in [40, 48, 4096, MAX_BLOCK] {
             let fill = Block::fill(7, 12_288, len).unwrap();
-            assert_eq!(fill.len(), len);
+            let h = BlockHeader::read(&fill).unwrap();
+            assert_eq!((h.length, h.ring, h.position, h.fill), (len, 7, 12_288, true));
             let b = Block::decode(&fill, 7, 12_288).unwrap().unwrap();
-            assert_eq!((b.kind, b.body.len()), (BlockKind::Fill, len - BLOCK_HEADER));
+            assert_eq!((b.kind, b.body.len()), (BlockKind::Fill, 0));
+            // The bytes after the header do not count.
+            let mut more = fill.to_vec();
+            more.extend_from_slice(&[0xee; 64]);
+            assert_eq!(Block::decode(&more, 7, 12_288).unwrap(), Some(b));
+            assert_eq!(Block::decode(&fill, 7, 0).unwrap(), None);
         }
         for len in [0, 32, 44, MAX_BLOCK + 8] {
             assert!(Block::fill(7, 0, len).is_err());
@@ -387,6 +389,11 @@ mod tests {
         assert!(bad.encode(&mut Vec::new()).is_err());
         let big = Block { body: vec![0; MAX_BLOCK], ..sample(1, 0) };
         assert!(big.encode(&mut Vec::new()).is_err());
+        // A commit block whose kind byte turns into a fill fails its checksum.
+        let mut out = Vec::new();
+        sample(2, 0).encode(&mut out).unwrap();
+        out[4] = BlockKind::Fill as u8;
+        assert_eq!(Block::decode(&out, 2, 0).unwrap(), None);
     }
 
     #[test]
