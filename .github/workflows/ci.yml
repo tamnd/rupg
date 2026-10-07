@@ -61,6 +61,8 @@ jobs:
         run: cargo xtask unicode --check
       - name: sqlstate list
         run: cargo xtask errcodes --check
+      - name: type oids
+        run: cargo xtask pgtype --check
       - name: cargo clippy
         run: cargo clippy --workspace --all-targets --all-features
       - name: spelling
