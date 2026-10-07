@@ -10,7 +10,7 @@ use std::collections::HashMap;
 use std::fmt;
 use std::ops::{Deref, DerefMut};
 use std::sync::atomic::{AtomicBool, AtomicU64, AtomicUsize, Ordering};
-use std::sync::{Arc, Mutex, MutexGuard, PoisonError, RwLock};
+use std::sync::{Arc, Mutex, MutexGuard, OnceLock, PoisonError, RwLock};
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_file::{OptimisticRead, PAGE_SIZE, Page, PageAccess, PageId, in_page};
@@ -50,6 +50,8 @@ struct Frame {
     dirty: AtomicBool,
     /// Set while a thread writes the page to the store. One write of a page at a time keeps the writes in order, so an old copy never replaces a newer one.
     writing: AtomicBool,
+    /// One more than the latch version of the last copy that the filter changed or skipped, or 0. The clock does not write the page again until a writer changes it, because the filter would do the same again.
+    kept: AtomicU64,
 }
 
 impl Frame {
@@ -60,12 +62,45 @@ impl Frame {
             referenced: AtomicBool::new(false),
             dirty: AtomicBool::new(false),
             writing: AtomicBool::new(false),
+            kept: AtomicU64::new(0),
         }
     }
 }
 
 /// The bytes that each frame of the table takes from the memory budget.
 const FRAME_BYTES: u64 = (PAGE_SIZE + size_of::<Frame>()) as u64;
+
+/// What a [`PageFilter`] did to the copy of a page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filtered {
+    /// The copy is the page. The pool writes it, and the page is clean after the write if no writer changed it.
+    Same,
+    /// The filter changed the copy. The pool writes it, and the page stays dirty, so the clock does not evict it.
+    Changed,
+    /// The copy must not be written now. The page stays dirty.
+    Skip,
+}
+
+/// Changes the copy of a page before the pool writes it to the store. The transaction layer uses it to keep versions that are not committed out of the file (spec/11 section 11.15).
+///
+/// The pool calls the filter while it holds a shared latch on the page, so no writer changes the page during the call. The filter must not latch a page of the pool.
+pub trait PageFilter: Send + Sync + fmt::Debug {
+    /// Changes `copy`, the copy of `page` that the pool is about to write.
+    fn filter(&self, page: PageId, copy: &mut Page) -> Result<Filtered>;
+}
+
+/// The result of one try to write a unit.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Wrote {
+    /// The page is in the store.
+    Yes,
+    /// The unit is not dirty.
+    Clean,
+    /// A writer holds the unit.
+    Latched,
+    /// The filter did not let the page go to the store.
+    Skipped,
+}
 
 /// The form of a [`BufferPool`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,6 +291,7 @@ pub struct BufferPool {
     resident: AtomicUsize,
     hand: AtomicUsize,
     counters: Counters,
+    filter: OnceLock<Arc<dyn PageFilter>>,
 }
 
 impl fmt::Debug for BufferPool {
@@ -314,6 +350,7 @@ impl BufferPool {
             resident: AtomicUsize::new(0),
             hand: AtomicUsize::new(0),
             counters: Counters::default(),
+            filter: OnceLock::new(),
         });
         if pool.mode() == PoolMode::Window {
             let weak = Arc::downgrade(&pool);
@@ -365,6 +402,48 @@ impl BufferPool {
             Ok(())
         })?;
         Ok(written)
+    }
+
+    /// Writes every page that is dirty at the call to the store, and gives the number of pages written. Unlike [`BufferPool::flush`], it waits for a page that a writer holds or that another thread writes. A page that the filter skips gives SQLSTATE `XX000`.
+    ///
+    /// A page that a writer changes during the call can stay dirty. A checkpoint stops the writers first.
+    pub fn flush_all(&self) -> Result<usize> {
+        let mut written = 0;
+        self.each_unit(|index| {
+            let frame = self.frame(index);
+            let mut backoff = Backoff::default();
+            loop {
+                if !frame.dirty.load(Ordering::Acquire) {
+                    return Ok(());
+                }
+                if frame.writing.swap(true, Ordering::Acquire) {
+                    backoff.wait();
+                    continue;
+                }
+                let result = self.write_copy(index);
+                frame.writing.store(false, Ordering::Release);
+                match result? {
+                    Wrote::Yes => {
+                        written += 1;
+                        return Ok(());
+                    }
+                    Wrote::Clean => return Ok(()),
+                    Wrote::Latched => backoff.wait(),
+                    Wrote::Skipped => {
+                        return Err(Error::internal(format!(
+                            "the filter does not let page {} go to the store",
+                            self.page_of(index)
+                        )));
+                    }
+                }
+            }
+        })?;
+        Ok(written)
+    }
+
+    /// Sets the filter that changes each page before the pool writes it. A pool has one filter, and a second call gives SQLSTATE `XX000`.
+    pub fn set_filter(&self, filter: Arc<dyn PageFilter>) -> Result<()> {
+        self.filter.set(filter).map_err(|_| Error::internal("the buffer pool has a filter already"))
     }
 
     /// Calls `f` with each unit that holds a page.
@@ -663,16 +742,19 @@ impl BufferPool {
     /// Takes the exclusive latch of a unit that the clock can evict. Gives false if the unit is latched, was used since the last sweep, or stays dirty. With `write`, a dirty unit is written first.
     fn claim(&self, index: usize, write: bool) -> Result<bool> {
         let frame = self.frame(index);
-        if frame.latch.load().state() != State::Unlocked
-            || frame.referenced.swap(false, Ordering::Relaxed)
-        {
+        let seen = frame.latch.load();
+        if seen.state() != State::Unlocked || frame.referenced.swap(false, Ordering::Relaxed) {
             return Ok(false);
         }
         if frame.dirty.load(Ordering::Acquire) {
-            if !write {
+            if !write || frame.kept.load(Ordering::Acquire) == seen.version() + 1 {
                 return Ok(false);
             }
             self.write_back(index)?;
+            // A page that stays dirty is not latched here, because the release of a latch increases the version and the clock would write the page again.
+            if frame.dirty.load(Ordering::Acquire) {
+                return Ok(false);
+            }
         }
         let seen = frame.latch.load();
         if seen.state() != State::Unlocked || !frame.latch.try_exclusive(seen) {
@@ -693,33 +775,45 @@ impl BufferPool {
         }
         let result = self.write_copy(index);
         frame.writing.store(false, Ordering::Release);
-        result
+        Ok(result? == Wrote::Yes)
     }
 
-    fn write_copy(&self, index: usize) -> Result<bool> {
+    /// Writes a copy of the page of a unit. The caller has set the writing flag of the unit.
+    fn write_copy(&self, index: usize) -> Result<Wrote> {
         let frame = self.frame(index);
         let seen = frame.latch.load();
         if !frame.latch.try_shared(seen) {
-            return Ok(false);
+            return Ok(Wrote::Latched);
         }
         if !frame.dirty.load(Ordering::Acquire) {
             frame.latch.release_shared();
-            return Ok(false);
+            return Ok(Wrote::Clean);
         }
         let page = self.page_of(index);
         let mut copy = Box::new([0u8; PAGE_SIZE]);
         // SAFETY: this thread holds a shared latch, so no thread writes the bytes.
         copy.copy_from_slice(unsafe { &*self.bytes(index) });
+        let filtered = self.filter.get().map_or(Ok(Filtered::Same), |f| f.filter(page, &mut copy));
         frame.latch.release_shared();
+        let filtered = filtered?;
+        if filtered != Filtered::Same {
+            frame.kept.store(seen.version() + 1, Ordering::Release);
+        }
+        if filtered == Filtered::Skip {
+            return Ok(Wrote::Skipped);
+        }
         self.store.write(page, &copy)?;
         self.counters.writes.fetch_add(1, Ordering::Relaxed);
-        // The page is clean only if no writer took it after the copy. A writer increases the version when it releases the latch, and it sets the dirty flag before that.
+        // The page is clean only if the copy is the page and no writer took it after the copy. A writer increases the version when it releases the latch, and it sets the dirty flag before that.
         let now = frame.latch.load();
-        if now.version() == seen.version() && frame.latch.try_shared(now) {
+        if filtered == Filtered::Same
+            && now.version() == seen.version()
+            && frame.latch.try_shared(now)
+        {
             frame.dirty.store(false, Ordering::Release);
             frame.latch.release_shared();
         }
-        Ok(true)
+        Ok(Wrote::Yes)
     }
 
     fn latch(&self, page: PageId, exclusive: bool) -> Result<usize> {
@@ -1247,6 +1341,78 @@ mod tests {
         drop(pool);
         assert_eq!(memory.used(), 0);
         assert!(memory.reserve(128 * PAGE).is_ok());
+    }
+
+    /// Byte 16 of a page tells the filter what to do: 0 keeps the copy, 1 marks it at byte 24, and any other value skips the write.
+    #[derive(Debug)]
+    struct Marks;
+
+    impl PageFilter for Marks {
+        fn filter(&self, _: PageId, copy: &mut Page) -> Result<Filtered> {
+            Ok(match copy[16] {
+                0 => Filtered::Same,
+                1 => {
+                    copy[24] = 9;
+                    Filtered::Changed
+                }
+                _ => Filtered::Skip,
+            })
+        }
+    }
+
+    #[test]
+    #[cfg_attr(miri, ignore)]
+    #[allow(clippy::disallowed_methods)]
+    fn a_filter_changes_each_write() {
+        for mode in modes() {
+            let store = filled(40);
+            let pool = pool(&store, FRAMES, mode);
+            pool.set_filter(Arc::new(Marks)).unwrap();
+            assert!(pool.set_filter(Arc::new(Marks)).is_err());
+            for p in 1..=3 {
+                let mut g = pool.exclusive(PageId(p)).unwrap();
+                g[16] = (p - 1) as u8;
+                g[8] = 5;
+            }
+            assert_eq!(pool.flush().unwrap(), 2, "{mode}");
+            let stored = |p| {
+                let page = store.get(PageId(p)).unwrap();
+                (page[8], page[24])
+            };
+            // Page 1 is clean. Page 2 has the mark in the store only and stays dirty. Page 3 is not written.
+            assert_eq!((stored(1), stored(2), stored(3)), ((5, 0), (5, 9), (0, 0)), "{mode}");
+            assert_eq!(pool.stats().dirty, 2);
+            // The clock does not evict the dirty pages, and it does not write them again.
+            let writes = store.counts().1;
+            for p in 4..=40 {
+                drop(pool.shared(PageId(p)).unwrap());
+            }
+            assert_eq!(store.counts().1, writes, "{mode}");
+            let misses = pool.stats().misses;
+            assert_eq!(pool.shared(PageId(2)).unwrap()[24], 0);
+            assert_eq!(pool.shared(PageId(3)).unwrap()[8], 5);
+            assert_eq!((pool.stats().misses, pool.stats().dirty), (misses, 2), "{mode}");
+
+            let e = pool.flush_all().unwrap_err();
+            assert_eq!(e.state(), SqlState::INTERNAL_ERROR);
+            pool.exclusive(PageId(3)).unwrap()[16] = 0;
+            assert_eq!(pool.flush_all().unwrap(), 2);
+            assert_eq!((stored(3), pool.stats().dirty), ((5, 0), 1), "{mode}");
+
+            // flush_all waits for a dirty page that a writer holds, and writes it after the writer ends.
+            pool.exclusive(PageId(5)).unwrap()[8] = 6;
+            let mut g = pool.exclusive(PageId(5)).unwrap();
+            g[8] = 7;
+            let written = thread::scope(|s| {
+                let flush = s.spawn(|| pool.flush_all().unwrap());
+                for _ in 0..1_000 {
+                    thread::yield_now();
+                }
+                drop(g);
+                flush.join().unwrap()
+            });
+            assert_eq!((written, stored(5).0), (2, 7), "{mode}");
+        }
     }
 
     // The test needs threads of the operating system, because the simulation runs one thread and does not test the latches. Miri reports the reads of an optimistic reader during a write as a data race. The race is the design of the seqlock. See `read_racy`.

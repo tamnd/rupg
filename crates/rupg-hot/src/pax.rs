@@ -4,7 +4,7 @@
 //!
 //! A directory entry is 4 bytes: the offset of the minipage as a `u16`, the fixed width (0 for a variable column), and a flag byte with bit 0 set for a nullable column. A minipage starts with a null bitmap when the column is nullable, one bit for each row and set for NULL. A fixed column then holds its values as an array, with zero bytes for a NULL. A variable column holds the row count plus one `u16` offsets into the page, and value `i` is the bytes from offset `i` to offset `i + 1`.
 
-use rupg_common::{Error, Result, RowId};
+use rupg_common::{Error, Hlc, Result, RowId};
 use rupg_file::{PAGE_HEADER_SIZE, PAGE_SIZE, Page, PageHeader, PageId, PageKind};
 use rupg_tree::Leaf;
 
@@ -509,6 +509,55 @@ impl Pax {
     }
 }
 
+/// What [`rewrite_leaf`] did to a page.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Rewrite {
+    /// Each row stayed as it was, or the page is not a hot leaf. The page did not change.
+    Same,
+    /// The page holds the new rows.
+    Changed,
+    /// The new rows do not fit in the leaf. The page did not change.
+    NoRoom,
+}
+
+/// Rewrites the rows of the hot leaf in `page` before a page write (spec/11 section 11.15). `f` gets each row and gives the row to write, with the same row id, or `None` to leave the row out. When a row changes, the page timestamp becomes `timestamp`. A page of another kind does not change.
+pub fn rewrite_leaf(
+    page: &mut Page,
+    timestamp: Hlc,
+    mut f: impl FnMut(Row) -> Result<Option<Row>>,
+) -> Result<Rewrite> {
+    let header = PageHeader::read(page)?;
+    if header.kind != PageKind::HotLeaf {
+        return Ok(Rewrite::Same);
+    }
+    let pax = Pax::decode(page)?;
+    let mut out = Pax::empty(&Schema { version: pax.schema, columns: pax.columns.clone() });
+    let mut changed = false;
+    for i in 0..pax.len() {
+        let row = pax.row(i);
+        let Some(new) = f(row.clone())? else {
+            changed = true;
+            continue;
+        };
+        if new.id != row.id {
+            return Err(Error::internal(format!(
+                "a rewrite of the hot leaf {} gives the row {} for the row {}",
+                header.page, new.id, row.id
+            )));
+        }
+        changed |= new != row;
+        out.insert(out.len(), &new);
+    }
+    if !changed {
+        return Ok(Rewrite::Same);
+    }
+    if !out.fits() {
+        return Ok(Rewrite::NoRoom);
+    }
+    out.encode(page, PageHeader { timestamp, ..header })?;
+    Ok(Rewrite::Changed)
+}
+
 fn heap_of(column: &Column, data: &Data) -> usize {
     match column.width {
         Width::Fixed(_) => 0,
@@ -627,6 +676,63 @@ pub(crate) mod tests {
         let mut page = Box::new([0u8; PAGE_SIZE]);
         pax.encode(&mut page, PageHeader::new(PageId(5), PageKind::HotLeaf)).unwrap();
         page
+    }
+
+    #[test]
+    fn a_rewrite_changes_the_rows_of_a_leaf() {
+        let schema = schema();
+        let mut rng = SimRng::new(4);
+        let mut pax = Pax::empty(&schema);
+        let mut id = 1;
+        while pax.fits() {
+            pax.insert(pax.len(), &random_row(&mut rng, id));
+            id += 1;
+        }
+        pax.remove(pax.len() - 1);
+        let page = leaf(&pax);
+        let ts = Hlc::new(Hlc::EPOCH_UNIX_MS + 9, 0).unwrap();
+
+        let mut copy = page.clone();
+        let kept = |row: Row| {
+            let even = row.id.bits().is_multiple_of(2);
+            Ok(even.then_some(Row { header: VersionHeader { stamp: 5, ..row.header }, ..row }))
+        };
+        assert_eq!(rewrite_leaf(&mut copy, ts, kept).unwrap(), Rewrite::Changed);
+        let out = Pax::decode(&copy).unwrap();
+        let want: Vec<Row> = (0..pax.len())
+            .map(|i| pax.row(i))
+            .filter(|r| r.id.bits().is_multiple_of(2))
+            .map(|r| Row { header: VersionHeader { stamp: 5, ..r.header }, ..r })
+            .collect();
+        assert_eq!((0..out.len()).map(|i| out.row(i)).collect::<Vec<_>>(), want);
+        let header = PageHeader::read(&copy).unwrap();
+        assert_eq!(
+            (header.timestamp, header.page, header.kind),
+            (ts, PageId(5), PageKind::HotLeaf)
+        );
+
+        // Rows that do not fit leave the page as it was.
+        let mut copy = page.clone();
+        let longer = |mut row: Row| {
+            row.values[2] = Some(vec![7; 40]);
+            Ok(Some(row))
+        };
+        assert_eq!(rewrite_leaf(&mut copy, ts, longer).unwrap(), Rewrite::NoRoom);
+        assert_eq!(copy, page);
+
+        let mut copy = page.clone();
+        assert_eq!(rewrite_leaf(&mut copy, ts, |row| Ok(Some(row))).unwrap(), Rewrite::Same);
+        assert_eq!(copy, page);
+
+        let mut copy = page.clone();
+        let moved = |row: Row| Ok(Some(Row { id: RowId::from_bits(row.id.bits() + 1), ..row }));
+        assert!(rewrite_leaf(&mut copy, ts, moved).is_err());
+
+        let mut other = Box::new([0u8; PAGE_SIZE]);
+        PageHeader::new(PageId(6), PageKind::HotInner).write(&mut other);
+        let before = other.clone();
+        assert_eq!(rewrite_leaf(&mut other, ts, |_| Ok(None)).unwrap(), Rewrite::Same);
+        assert_eq!(other, before);
     }
 
     #[test]

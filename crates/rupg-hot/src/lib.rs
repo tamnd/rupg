@@ -10,7 +10,7 @@ mod rowid;
 mod schema;
 mod store;
 
-pub use pax::HotLeaf;
+pub use pax::{HotLeaf, Rewrite, rewrite_leaf};
 pub use row::{Row, VersionHeader};
 pub use rowid::{RowIdBlock, RowIds};
 pub use schema::{Column, Schema, Width};
