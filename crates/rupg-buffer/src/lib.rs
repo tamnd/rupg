@@ -6,12 +6,14 @@
 
 #![deny(unsafe_op_in_unsafe_fn)]
 
+mod file_store;
 mod frames;
 mod latch;
 mod pool;
 mod resident;
 mod store;
 
+pub use file_store::{Checkpoint, FileStats, FileStore};
 pub use pool::{
     BufferPool, BufferStats, ExclusiveGuard, MIN_FRAMES, OptimisticGuard, PoolConfig, PoolMode,
     SharedGuard,

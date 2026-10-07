@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - Page kind 17 for the pending free list in `rupg-file`, with `FreeListPage` and its text form. Spec/08 now says that a superseded page waits for two checkpoints, because the old slot still uses it after the first one.
+- `FileStore` in `rupg-buffer`, the store of a database file. It writes each page out of place in a write arena and keeps the page table in memory. `FileStore::checkpoint` writes the changed page table nodes, the pending free list and the free space map, syncs, writes the inactive header slot and syncs again. `FileStore::open` chooses the slot and checks each metadata page against its slot or its parent entry. An error during a sync or a checkpoint stops the store.
 
 ## 0.0.3 (2026-10-07)
 
