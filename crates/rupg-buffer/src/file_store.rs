@@ -1037,6 +1037,12 @@ impl FileStore {
         }
     }
 
+    /// The logical pages in use, in order. `rupg check` compares them with the pages that the catalog reaches.
+    pub fn allocated(&self) -> Vec<PageId> {
+        let inner = self.inner.read().unwrap_or_else(PoisonError::into_inner);
+        (1..inner.next_page).filter(|&p| inner.is_allocated(p)).map(PageId).collect()
+    }
+
     /// Checks that the free space map in memory marks exactly the physical pages in use. `rupg check` and the tests call it. A mismatch gives SQLSTATE `XX000`.
     pub fn check(&self) -> Result<()> {
         self.inner.read().unwrap_or_else(PoisonError::into_inner).check()

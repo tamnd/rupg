@@ -58,6 +58,12 @@ pub struct Shape {
     pub leaves: u64,
 }
 
+/// The state of [`Tree::check_with`].
+struct Walk<'a> {
+    shape: Shape,
+    visit: &'a mut dyn FnMut(PageId, &Page) -> Result<()>,
+}
+
 /// A B+ tree with the leaf format `L`. The value is only the root page number, so it is cheap to copy. The pages are given to each call.
 pub struct Tree<L> {
     root: PageId,
@@ -286,10 +292,19 @@ impl<L: Leaf> Tree<L> {
 
     /// Checks the whole tree: the kinds, the page numbers, the levels, the order of the separators, and that each leaf holds only keys between its bounds. Bad bytes give SQLSTATE `XX001`. No writer may change the tree during the check.
     pub fn check<P: PageAccess>(&self, pages: &P) -> Result<Shape> {
-        let mut shape = Shape::default();
-        let level = self.check_node(pages, self.root, None, None, None, &mut shape)?;
-        shape.depth = level + 1;
-        Ok(shape)
+        self.check_with(pages, &mut |_, _| Ok(()))
+    }
+
+    /// Does [`Tree::check`] and calls `visit` once on each page of the tree after the check of the page. An error from `visit` stops the check.
+    pub fn check_with<P: PageAccess>(
+        &self,
+        pages: &P,
+        visit: &mut dyn FnMut(PageId, &Page) -> Result<()>,
+    ) -> Result<Shape> {
+        let mut walk = Walk { shape: Shape::default(), visit };
+        let level = self.check_node(pages, self.root, None, None, None, &mut walk)?;
+        walk.shape.depth = level + 1;
+        Ok(walk.shape)
     }
 
     fn check_node<P: PageAccess>(
@@ -299,7 +314,7 @@ impl<L: Leaf> Tree<L> {
         level: Option<u16>,
         lower: Option<&[u8]>,
         upper: Option<&[u8]>,
-        shape: &mut Shape,
+        walk: &mut Walk<'_>,
     ) -> Result<u16> {
         let page: Box<Page> = Box::new(*pages.shared(id)?);
         let header = PageHeader::read(&page)?;
@@ -324,7 +339,8 @@ impl<L: Leaf> Tree<L> {
             if bad {
                 return Err(corrupt(id, "holds a key outside its bounds"));
             }
-            shape.leaves += 1;
+            walk.shape.leaves += 1;
+            (walk.visit)(id, &page)?;
             return Ok(0);
         }
         if header.kind != L::INNER {
@@ -338,15 +354,16 @@ impl<L: Leaf> Tree<L> {
         if entries.iter().any(|(k, _)| !in_bounds(k, true)) {
             return Err(corrupt(id, "holds a separator outside its bounds"));
         }
-        shape.inner += 1;
+        walk.shape.inner += 1;
+        (walk.visit)(id, &page)?;
         let mut low = lower;
         let mut child = inner::leftmost(&page);
         for (key, next) in &entries {
-            self.check_node(pages, child, Some(own - 1), low, Some(key.as_slice()), shape)?;
+            self.check_node(pages, child, Some(own - 1), low, Some(key.as_slice()), walk)?;
             low = Some(key.as_slice());
             child = *next;
         }
-        self.check_node(pages, child, Some(own - 1), low, upper, shape)?;
+        self.check_node(pages, child, Some(own - 1), low, upper, walk)?;
         Ok(own)
     }
 }
