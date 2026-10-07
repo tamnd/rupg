@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.4 (2026-10-07)
+
+The fourth patch release on the 0.0 line. It adds the file store of spec/08 with out-of-place page writes, the page table in memory and the checkpoint, so the buffer pool can keep its pages in a database file. No crate is published.
+
 ### Added
 
 - Page kind 17 for the pending free list in `rupg-file`, with `FreeListPage` and its text form. Spec/08 now says that a superseded page waits for two checkpoints, because the old slot still uses it after the first one.
