@@ -1,7 +1,13 @@
 //! The operating system implementations of the traits.
 
-// This module is the one place where the engine may call the clock and the file system of the operating system.
-#![allow(clippy::disallowed_methods)]
+// This module is the one place where the engine may call the clock, the file system, the threads and the network of the operating system.
+#![allow(clippy::disallowed_methods, clippy::disallowed_types)]
+
+mod net;
+mod tasks;
+
+pub use net::OsNet;
+pub use tasks::OsTasks;
 
 use std::fs;
 use std::io;
@@ -12,6 +18,8 @@ use std::time::{Duration, Instant, SystemTime, UNIX_EPOCH};
 use rupg_common::{Error, Result, SqlState};
 
 use crate::{Clock, Entropy, File, Io, OpenMode};
+#[cfg(test)]
+use crate::{Net, Tasks};
 
 /// Converts an error of the operating system. The SQLSTATE is the one that PostgreSQL gives for the same cause.
 fn os_error(e: &io::Error, action: &str, path: &Path) -> Error {
@@ -280,6 +288,45 @@ mod tests {
         let e = io.open(&path, OpenMode::ReadWrite).unwrap_err();
         assert_eq!(e.state(), SqlState::UNDEFINED_FILE);
         assert!(e.message().contains("a.rupg"), "{e}");
+    }
+
+    #[test]
+    fn threads() {
+        let h = OsTasks.spawn("rupg-test", Box::new(|| {})).unwrap();
+        h.join().unwrap();
+        let h = OsTasks.spawn("rupg-bad", Box::new(|| panic!("a test panic"))).unwrap();
+        assert!(h.join().unwrap_err().message().contains("rupg-bad"));
+        assert!(OsTasks.parallelism() >= 1);
+    }
+
+    #[test]
+    fn tcp() {
+        use std::io::{Read, Write};
+
+        let listener = OsNet.listen("127.0.0.1:0").unwrap();
+        let addr = listener.local_addr();
+        let server = OsTasks
+            .spawn(
+                "rupg-echo",
+                Box::new(move || {
+                    let mut s = listener.accept().unwrap();
+                    let mut buf = [0; 5];
+                    s.read_exact(&mut buf).unwrap();
+                    s.write_all(&buf).unwrap();
+                    assert_eq!(s.read(&mut buf).unwrap(), 0);
+                }),
+            )
+            .unwrap();
+        let mut c = OsNet.connect(&addr).unwrap();
+        assert_eq!(c.peer_addr(), addr);
+        c.write_all(b"hello").unwrap();
+        let mut buf = [0; 5];
+        c.read_exact(&mut buf).unwrap();
+        assert_eq!(&buf, b"hello");
+        c.shutdown().unwrap();
+        server.join().unwrap();
+        // Port 1 is privileged and has no listener on a test host.
+        assert_eq!(OsNet.connect("127.0.0.1:1").unwrap_err().state(), SqlState::UNABLE_TO_CONNECT);
     }
 
     #[test]

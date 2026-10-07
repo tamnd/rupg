@@ -9,8 +9,12 @@ use std::time::Duration;
 use crate::{Clock, Entropy};
 
 mod disk;
+mod net;
+mod tasks;
 
 pub use disk::{CrashPlan, Fate, Faults, SimFile, SimIo, Unsynced};
+pub use net::SimNet;
+pub use tasks::SimTasks;
 
 /// Locks a mutex. A panic in another thread does not make the state unusable for a test, so the poison is ignored.
 fn lock<T>(m: &Mutex<T>) -> MutexGuard<'_, T> {
