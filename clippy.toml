@@ -29,6 +29,6 @@ disallowed-types = [
   { path = "std::net::TcpListener", reason = "use the Net trait of rupg-platform" },
   { path = "std::net::TcpStream", reason = "use the Net trait of rupg-platform" },
   { path = "std::net::UdpSocket", reason = "use the Net trait of rupg-platform" },
-  { path = "std::os::unix::net::UnixListener", reason = "use the Net trait of rupg-platform" },
-  { path = "std::os::unix::net::UnixStream", reason = "use the Net trait of rupg-platform" },
+  { path = "std::os::unix::net::UnixListener", reason = "use the Net trait of rupg-platform", allow-invalid = true },
+  { path = "std::os::unix::net::UnixStream", reason = "use the Net trait of rupg-platform", allow-invalid = true },
 ]
