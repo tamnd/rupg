@@ -149,7 +149,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        target: [file_open, page_decode, log_replay]
+        target: [file_open, page_decode, log_replay, wire_frontend, wire_startup]
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -159,14 +159,17 @@ jobs:
       - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
         with:
           tool: cargo-fuzz
-      # Each target runs for 20 minutes from an empty corpus. A panic, a hang over 1 second or memory over 2 GiB is a failure. See fuzz/README.md and spec/21-testing.md section 21.7.
+      # Each target runs for 20 minutes. The corpus starts empty, and the fuzzer also reads fuzz/seeds/<target> if it exists. New inputs go into the empty corpus, so the seeds do not change. A panic, a hang over 1 second or memory over 2 GiB is a failure. See fuzz/README.md and spec/21-testing.md section 21.7.
       - name: cargo fuzz run
         working-directory: fuzz
         env:
           TARGET: ${{ matrix.target }}
         run: |
           cargo +nightly fuzz build -O -s none "$TARGET"
-          cargo +nightly fuzz run -O -s none "$TARGET" -- -max_total_time=1200 -timeout=1 -rss_limit_mb=2048
+          mkdir -p "corpus/$TARGET"
+          set -- "corpus/$TARGET"
+          if [ -d "seeds/$TARGET" ]; then set -- "$@" "seeds/$TARGET"; fi
+          cargo +nightly fuzz run -O -s none "$TARGET" "$@" -- -max_total_time=1200 -timeout=1 -rss_limit_mb=2048
       - name: upload the failing input
         if: failure()
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1

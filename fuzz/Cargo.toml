@@ -11,6 +11,7 @@ publish = false
 cargo-fuzz = true
 
 [dependencies]
+arbitrary = { version = "1", features = ["derive"] }
 libfuzzer-sys = "0.4"
 rupg = { path = "../crates/rupg" }
 rupg-buffer = { path = "../crates/rupg-buffer" }
@@ -18,6 +19,7 @@ rupg-common = { path = "../crates/rupg-common" }
 rupg-file = { path = "../crates/rupg-file" }
 rupg-log = { path = "../crates/rupg-log" }
 rupg-platform = { path = "../crates/rupg-platform" }
+rupg-wire = { path = "../crates/rupg-wire" }
 
 [[bin]]
 name = "file_open"
@@ -36,6 +38,20 @@ bench = false
 [[bin]]
 name = "log_replay"
 path = "fuzz_targets/log_replay.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wire_frontend"
+path = "fuzz_targets/wire_frontend.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "wire_startup"
+path = "fuzz_targets/wire_startup.rs"
 test = false
 doc = false
 bench = false
