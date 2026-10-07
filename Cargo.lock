@@ -183,6 +183,13 @@ version = "0.0.6"
 [[package]]
 name = "rupg-table"
 version = "0.0.6"
+dependencies = [
+ "rupg-common",
+ "rupg-file",
+ "rupg-hot",
+ "rupg-tree",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-tree"

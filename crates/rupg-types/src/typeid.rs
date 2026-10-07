@@ -78,6 +78,21 @@ impl TypeId {
         }
     }
 
+    /// The name that PostgreSQL gives in messages, from `format_type_be`.
+    pub fn sql_name(self) -> &'static str {
+        match self {
+            TypeId::BOOL => "boolean",
+            TypeId::INT8 => "bigint",
+            TypeId::INT2 => "smallint",
+            TypeId::INT4 => "integer",
+            TypeId::FLOAT4 => "real",
+            TypeId::FLOAT8 => "double precision",
+            TypeId::TIMESTAMP => "timestamp without time zone",
+            TypeId::TIMESTAMPTZ => "timestamp with time zone",
+            other => other.name(),
+        }
+    }
+
     /// The bytes of a value in storage form, or `None` for a type whose values have their own length.
     pub fn width(self) -> Option<u8> {
         match self {

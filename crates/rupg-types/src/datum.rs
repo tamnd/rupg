@@ -163,6 +163,7 @@ mod tests {
             assert_eq!(Datum::decode(ty, Some(&bytes)).unwrap(), d);
             assert_eq!(TypeId::from_oid(ty.0), Some(ty));
             assert_ne!(ty.name(), "unknown");
+            assert_ne!(ty.sql_name(), "unknown");
         }
         assert_eq!(Datum::Int4(0x0102_0304).encode().unwrap(), [4, 3, 2, 1]);
         assert_eq!((Datum::Null.encode(), Datum::Null.type_id()), (None, None));
@@ -170,6 +171,7 @@ mod tests {
         let nan = Datum::decode(TypeId::FLOAT8, Some(&f64::NAN.to_le_bytes())).unwrap();
         assert!(matches!(nan, Datum::Float8(v) if v.is_nan()));
         assert_eq!(TypeId::from_oid(Oid(1700)), None);
+        assert_eq!((TypeId::INT4.sql_name(), TypeId::TEXT.sql_name()), ("integer", "text"));
     }
 
     #[test]
