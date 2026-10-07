@@ -14,7 +14,12 @@ readme.workspace = true
 publish = false
 
 [dependencies]
+rupg-buffer.workspace = true
 rupg-common.workspace = true
+rupg-file.workspace = true
+
+[dev-dependencies]
+rupg-platform.workspace = true
 
 [lints]
 workspace = true

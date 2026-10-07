@@ -241,16 +241,16 @@ A ring holds packed blocks. A flush writes the new blocks and pads the last 4 Ki
 | 4 | `kind` | 1 | 1 commit, 2 part, 3 abort, 4 prepare, 5 commit prepared, 6 abort prepared, 7 sequence, 8 fill |
 | 5 | `flags` | 1 | bit 0 compressed, bit 1 has dependencies |
 | 6 | `ring` | 2 | ring number |
-| 8 | `checksum` | 4 | CRC32C of the block with this field at zero, seeded with the ring number |
+| 8 | `checksum` | 4 | CRC32C of the block with this field at zero, seeded with the ring number, over the header only for a fill block |
 | 12 | `deps` | 2 | number of dependencies |
 | 14 | reserved | 2 | zero |
 | 16 | `position` | 8 | the ring position of the block |
 | 24 | `commit_ts` | 8 | HLC commit timestamp |
 | 32 | `xid` | 8 | full transaction id |
-| 40 | dependencies | 10 each | ring (2) and position (8) |
+| 40 | dependencies | 10 each | ring (2) and the position just after the block that must be safe first (8) |
 | after | records | rest | the records, padded with zero bytes to a multiple of 8 |
 
-A fill block has only the header and zero bytes. Replay skips it. When fewer than 40 bytes are left in a 4 KiB unit, the writer leaves them and starts the next block at the next unit, and replay does the same. No version writes the compressed flag yet, and a block with it set gives `XX001`.
+A fill block has only the header. Its checksum covers the header only, so a fill to the end of an extent writes 40 bytes and not up to 16 MiB. Replay reads the header and goes on after `length` bytes. When fewer than 40 bytes are left in a 4 KiB unit, the writer leaves them and starts the next block at the next unit, and replay does the same. No version writes the compressed flag yet, and a block with it set gives `XX001`.
 
 A block left from an earlier use of an extent holds a lower position than replay expects, or fails its checksum, so replay stops at the first such block. A length that is not a multiple of 8 or is out of range also ends the ring. A block that passes its checksum and its position and still is not valid, for example with an unknown kind, is damage and gives `XX001`. rudb's lanes find the end of the log in a similar way (`rudb-txn/src/log/lane.rs`). A block never spans two extents. When it does not fit, the rest of the extent gets a fill block.
 
@@ -268,13 +268,13 @@ The log is redo only (section 11.15).
 
 ### 11.14.1 Flushing a ring
 
-A worker flushes its ring when a commit waits and no flush runs. Commits that arrive during a flush go in the next one. This is group commit inside a worker, with no order between workers. On Linux the file is opened with `O_DIRECT`, and a flush is one `io_uring` write with `RWF_DSYNC`, which is a Force Unit Access write on a device that supports it, and otherwise a write and `fdatasync`. macOS uses `F_FULLFSYNC`.
+A worker flushes its ring when a commit waits and no flush runs. When the next block does not fit between the end of the ring and the redo position plus the ring size, the append fails with `53100`, and a checkpoint must move the redo position first. The ring writer is in `rupg-log/src/ring.rs`. Commits that arrive during a flush go in the next one. This is group commit inside a worker, with no order between workers. On Linux the file is opened with `O_DIRECT`, and a flush is one `io_uring` write with `RWF_DSYNC`, which is a Force Unit Access write on a device that supports it, and otherwise a write and `fdatasync`. macOS uses `F_FULLFSYNC`.
 
 On a device with a slow cache flush, flushes from many workers can cost more than one shared flush. `rupg.log_flush` selects `per_worker`, the default, or `grouped`, where one flusher writes the new pages of every ring and syncs once. macOS defaults to `grouped`, because `F_FULLFSYNC` flushes the whole device. gpc measured `fdatasync` at 2,247 µs p50 on WSL2 (`../2140/bench/tpc-c/`), and there we expect `grouped` to win. Document 03 measures both.
 
 ### 11.14.2 When a commit is safe
 
-Each ring has a durable position and a safe position. The safe position moves over a commit block when the block is durable and every dependency `(r, p)` has ring `r` safe at or above `p`. A commit is acknowledged when its ring's safe position reaches it.
+Each ring has a durable position and a safe position. The safe position moves over a commit block when the block is durable and every dependency `(r, p)` has ring `r` safe at or above `p`. A commit is acknowledged when its ring's safe position reaches it. A commit that waits flushes its own ring and then each ring that a block before it waits for, so no other thread has to flush for it. The safe positions are in `rupg-log/src/rings.rs`.
 
 The safe position is a prefix. A commit behind a block with an unsafe dependency waits for it, which costs at most one flush of another ring and gives recovery a simple rule. A worker takes the timestamp and appends in one step, so blocks in a ring are in timestamp order. A dependency always points to a lower timestamp, so no cycle of waits forms.
 
