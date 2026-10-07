@@ -8,6 +8,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - The `rupg` facade with the M1 Rust API. `Database::open` opens or makes a `.rupg` file and replays the log when the file was not closed cleanly. `create_table` makes a table with typed columns, and `table` and `table_names` find the tables. A `Transaction` does `insert`, `update`, `delete`, `get`, `scan` and `scan_with` over a range of row ids, and rolls back when it is dropped. `checkpoint` and `close` write a checkpoint, and a transaction that starts when the log is large writes one first. The catalog is one page that holds the tables, the next transaction id and the next OID, and each checkpoint writes it. A missing file with `create` off gives `58P01`, a table name that is in use gives `42P07`, and a name with no table gives `42P01`. Spec/17 section 17.3 has the M1 note.
 - `Transaction::scan_from` in `rupg-txn` starts a scan at a row id.
+- `rupg check FILE` in the `rupg` binary, and `rupg::check` in the facade. The check opens the file to read and does not replay the log. It checks the header slots, the page table, the free space map, the catalog page, the tree and each row of each table, that each logical page in use belongs to the catalog or to one table, and each block of the log after the redo position. It prints the counts and exits with 0, or prints the error and exits with 1. Spec/21 section 21.9.2 has the M1 note.
+- `Tree::check_with` in `rupg-tree`, `HotStore::check_with` in `rupg-hot` and `FileStore::allocated` in `rupg-buffer`, for the check.
 
 ### Changed
 

@@ -62,6 +62,8 @@ cargo build --release
 cargo test --workspace
 ```
 
+`rupg check app.rupg` checks a database file and does not change it. It prints the counts of pages, tables, rows and log blocks, or the first error with its SQLSTATE.
+
 Run the same checks as CI before you push:
 
 ```sh

@@ -1,5 +1,6 @@
 use std::collections::BTreeMap;
 
+use rupg_file::{PAGE_SIZE, PageHeader, PageKind};
 use rupg_platform::sim::{SimClock, SimEntropy, SimIo, SimRng};
 use rupg_types::TypeId;
 
@@ -51,6 +52,10 @@ fn values(rng: &mut SimRng) -> Vec<Datum> {
 fn rows(db: &Database, table: &Table) -> Rows {
     let t = db.transaction_with(Isolation::RepeatableRead).unwrap();
     t.scan(table, ..).unwrap().into_iter().collect()
+}
+
+fn check(io: &SimIo) -> Result<crate::Report> {
+    crate::check_on(&platform(io, 0), Path::new(PATH))
 }
 
 /// The slot generation, which each checkpoint increases.
@@ -227,7 +232,67 @@ fn a_crash_keeps_each_acknowledged_commit() {
             std::mem::forget(open);
             drop((db, table));
             io.crash_random().unwrap();
+            let report = check(&io).unwrap_or_else(|e| panic!("seed {seed} round {round}: {e}"));
+            assert_eq!(report.tables as usize, models.len());
         }
     }
     assert!(checkpoints > 30, "{checkpoints}");
+}
+
+#[test]
+fn check_finds_a_lost_page_and_a_damaged_leaf() {
+    let io = SimIo::new(5);
+    let db = open(&io, 5, &options());
+    let t = db.create_table("t", columns()).unwrap();
+    let mut rng = SimRng::new(5);
+    for _ in 0..20 {
+        let mut tx = db.transaction().unwrap();
+        for _ in 0..50 {
+            tx.insert(&t, &values(&mut rng)).unwrap();
+        }
+        tx.commit().unwrap();
+    }
+    db.checkpoint().unwrap();
+    let mut tx = db.transaction().unwrap();
+    tx.insert(&t, &values(&mut rng)).unwrap();
+    tx.commit().unwrap();
+    drop((db, t));
+    // The check reads the pages of the checkpoint, and the last commit is only in the log.
+    let report = check(&io).unwrap();
+    assert_eq!((report.tables, report.rows, report.log_blocks), (1, 1_000, 1));
+    assert!(report.pages > 3, "{report:?}");
+
+    // A tree that the catalog does not name.
+    let db = open(&io, 5, &options());
+    let def = TableDef::new(Oid(Oid::FIRST_USER.0 + 9), "lost", columns()).unwrap();
+    rupg_table::Table::create(&**db.shared.txns.pages(), def, ShardId(0)).unwrap();
+    db.checkpoint().unwrap();
+    drop(db);
+    let err = check(&io).unwrap_err();
+    assert_eq!(err.state(), SqlState::DATA_CORRUPTED, "{err}");
+    assert!(err.to_string().contains("does not reach"), "{err}");
+
+    // One bit of each copy of a leaf in the file.
+    let io = SimIo::new(6);
+    let db = open(&io, 6, &options());
+    let t = db.create_table("t", columns()).unwrap();
+    let mut tx = db.transaction().unwrap();
+    tx.insert(&t, &values(&mut rng)).unwrap();
+    tx.commit().unwrap();
+    db.close().unwrap();
+    drop(t);
+    check(&io).unwrap();
+    let file = io.open(Path::new(PATH), OpenMode::ReadWrite).unwrap();
+    let mut page = [0u8; PAGE_SIZE];
+    let mut leaves = 0;
+    for n in 0..file.size().unwrap() / PAGE_SIZE as u64 {
+        file.read_at(n * PAGE_SIZE as u64, &mut page).unwrap();
+        if PageHeader::read(&page).is_ok_and(|h| h.kind == PageKind::HotLeaf) {
+            page[PAGE_SIZE - 1] ^= 1;
+            file.write_at(n * PAGE_SIZE as u64, &page).unwrap();
+            leaves += 1;
+        }
+    }
+    assert!(leaves > 0);
+    assert_eq!(check(&io).unwrap_err().state(), SqlState::DATA_CORRUPTED);
 }

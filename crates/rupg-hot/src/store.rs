@@ -1,7 +1,7 @@
 //! The hot store of one table and shard: a B+ tree of PAX leaves keyed by row id (spec/10 section 10.3).
 
 use rupg_common::{Error, Result, RowId, SqlState};
-use rupg_file::{PAGE_SIZE, PageAccess, PageHeader, PageId};
+use rupg_file::{PAGE_SIZE, PageAccess, PageHeader, PageId, PageKind};
 use rupg_tree::{Shape, Tree, Write};
 
 use crate::pax::{HotLeaf, Pax, View, id_of, key};
@@ -161,6 +161,25 @@ impl HotStore {
     /// Checks each page of the store. Bad bytes give SQLSTATE `XX001`. No writer may change the store during the check.
     pub fn check<P: PageAccess>(&self, pages: &P) -> Result<Shape> {
         self.tree.check(pages)
+    }
+
+    /// Does [`HotStore::check`], and calls `page` on each page of the tree and `row` on each row of each leaf, in row id order. An error from `page` or `row` stops the check.
+    pub fn check_with<P: PageAccess>(
+        &self,
+        pages: &P,
+        page: &mut dyn FnMut(PageId) -> Result<()>,
+        row: &mut dyn FnMut(Row) -> Result<()>,
+    ) -> Result<Shape> {
+        self.tree.check_with(pages, &mut |id, p| {
+            page(id)?;
+            if PageHeader::read(p)?.kind == PageKind::HotLeaf {
+                let v = View::new(p)?;
+                for i in 0..v.len() {
+                    row(v.row(i)?)?;
+                }
+            }
+            Ok(())
+        })
     }
 }
 

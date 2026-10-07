@@ -316,6 +316,8 @@ After it builds a file, the test opens it, runs recovery, and checks four things
 3. `rupg check` reports no error. It reads every page, every segment and every index and checks each checksum, each reference and each index entry against the table.
 4. The answers to a fixed set of queries equal the answers of a model that holds only the acknowledged transactions.
 
+**At M1.** `rupg check FILE` opens the file to read and does not replay the log, so it checks the pages of the last checkpoint and the log after it. It checks the header slots, the page table and the free space map. It reads the catalog page and, for each table, each page of the tree and each row. A row must decode against the columns of its table, have no owner, have a commit timestamp at or below the checkpoint and have a row id that the table gave. Each logical page in use must be the catalog page or a page of exactly one table. Each block of the log after the redo position must read again with a good checksum and name only tables of the catalog. M1 has no segments and no indexes. The crash test of the facade runs the check after each power cut, before the next open.
+
 ### 21.9.3 Real kernels
 
 The model can be wrong about a real file system, so two nightly tests use real kernels on Linux.

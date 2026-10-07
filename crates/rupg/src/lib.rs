@@ -24,8 +24,10 @@
 #![forbid(unsafe_code)]
 
 mod catalog;
+mod check;
 mod database;
 
+pub use check::{Report, check, check_on};
 pub use database::{Database, Options, Platform, Table, Transaction};
 pub use rupg_common::{
     CompatVersion, Error, Oid, POSTGRES_COMMIT, POSTGRES_PIN, Result, RowId, SqlState,
