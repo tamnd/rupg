@@ -6,7 +6,7 @@ A PostgreSQL 19 compatible database in Rust. It runs as a server and as an embed
 
 A client that connects to PostgreSQL 19 connects to rupg with no change except the host, the port and the credentials. The same engine also runs inside the application process, with no server. A database is one `.rupg` file. Cold data is in compressed columns. Hot data is in row pages. The file format, the timestamps and the log are designed for shards and replicas from the start.
 
-**Status: M0.** This repository has the workspace, the layer rule, the CI and the full specification. It does not store data or answer queries yet. The milestones that build the engine are issues with the label [`kind/milestone`](https://github.com/tamnd/rupg/issues?q=label%3Akind%2Fmilestone).
+**Status: M1.** The file, the log, recovery and a Rust key-value API over typed tables work. The engine does not answer SQL yet. The milestones that build the engine are issues with the label [`kind/milestone`](https://github.com/tamnd/rupg/issues?q=label%3Akind%2Fmilestone).
 
 ## The goal
 

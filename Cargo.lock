@@ -12,7 +12,14 @@ checksum = "ce5d3ddc6d3fa000eb1536d85e147bfe31aacaba692ed6a876f95cb7c855be78"
 name = "rupg"
 version = "0.0.8"
 dependencies = [
+ "rupg-buffer",
  "rupg-common",
+ "rupg-file",
+ "rupg-log",
+ "rupg-platform",
+ "rupg-table",
+ "rupg-txn",
+ "rupg-types",
 ]
 
 [[package]]

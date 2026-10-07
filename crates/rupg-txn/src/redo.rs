@@ -284,7 +284,7 @@ mod tests {
 
     impl Node {
         fn checkpoint(&self) -> Result<Hlc> {
-            self.txns.checkpoint(&self.store, &Checkpoint::default())
+            self.txns.checkpoint(&self.store, |_| Ok(Checkpoint::default()))
         }
     }
 
@@ -627,7 +627,7 @@ mod tests {
             let (stop, checkpoints) = (stop.clone(), checkpoints.clone());
             let task = Box::new(move || {
                 while !stop.load(Ordering::Acquire) {
-                    txns.checkpoint(&store, &Checkpoint::default()).unwrap();
+                    txns.checkpoint(&store, |_| Ok(Checkpoint::default())).unwrap();
                     checkpoints.fetch_add(1, Ordering::Relaxed);
                 }
             });

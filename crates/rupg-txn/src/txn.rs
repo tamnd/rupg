@@ -413,10 +413,20 @@ impl<P: PageAccess> Transaction<P> {
     pub fn scan(
         &self,
         table: &Table,
+        f: impl FnMut(RowId, Vec<Datum>) -> Result<bool>,
+    ) -> Result<()> {
+        self.scan_from(table, RowId::from_bits(0), f)
+    }
+
+    /// As [`Transaction::scan`], from the first row with an id at or above `from`.
+    pub fn scan_from(
+        &self,
+        table: &Table,
+        from: RowId,
         mut f: impl FnMut(RowId, Vec<Datum>) -> Result<bool>,
     ) -> Result<()> {
         let pages = &*self.owner.pages;
-        table.hot().scan(pages, RowId::from_bits(0), |row| {
+        table.hot().scan(pages, from, |row| {
             let id = row.id;
             match self.see_row(table, id, Some(row))? {
                 Some(r) => f(id, table.def().decode(&r.values)?),
