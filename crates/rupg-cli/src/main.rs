@@ -51,6 +51,7 @@ fn check(file: &str) -> ExitCode {
             println!("tables: {}", r.tables);
             println!("rows: {}", r.rows);
             println!("log blocks: {}", r.log_blocks);
+            println!("log bytes: {}", r.log_bytes);
             ExitCode::SUCCESS
         }
         Err(e) => {

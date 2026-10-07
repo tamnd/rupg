@@ -27,6 +27,8 @@ pub struct Report {
     pub rows: u64,
     /// The blocks of the log after the redo position that recovery would replay.
     pub log_blocks: u64,
+    /// The bytes of those blocks, with their headers and without the fill after a block. This is the log that an open replays.
+    pub log_bytes: u64,
 }
 
 /// Checks the database file at `path` on the operating system. See [`check_on`].
@@ -99,6 +101,7 @@ pub fn check_on(platform: &Platform, path: &Path) -> Result<Report> {
             }
         }
         report.log_blocks += 1;
+        report.log_bytes += found.placed.end - found.placed.position;
     }
     Ok(report)
 }
