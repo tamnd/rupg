@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.6 (2026-10-07)
+
+The sixth patch release on the 0.0 line. It adds the B+ tree of spec/12, the hot store of spec/10 with its PAX leaves and row id blocks, and the commit clock and the `visible` word of spec/11. No crate is published.
+
 ### Added
 
 - The hybrid logical clock and the `visible` word in `rupg-txn`. `HlcClock` gives each commit a timestamp above every value that the node gave or saw, also when the wall clock goes back. `Commits` takes the commit timestamps and keeps `visible` below each commit that is not installed, so a snapshot is one load and misses no commit.
