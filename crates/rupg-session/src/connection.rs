@@ -1,15 +1,22 @@
-//! One client connection after the startup packet: the settings of the session, the messages of the start, and the main loop of `PostgresMain` for the simple query protocol.
+//! One client connection after the startup packet: the settings of the session, the messages of the start, and the main loop of `PostgresMain` for the simple and the extended query protocol.
 //!
 //! The connection does no I/O. The server gives it the bytes that the client sent and an output buffer, and [`Connection::step`] tells the server what to do next. See `spec/06-server-and-wire.md` section 6.1.
 
 use rupg_common::{Error, SqlState};
 use rupg_sql::Severity;
 use rupg_sql::nodes::Node;
-use rupg_wire::{CancelKey, CommandTag, Field, Frontend, Level, OutBuf, ProtocolError, Session};
+use rupg_wire::{
+    CancelKey, CommandTag, Field, Frontend, Level, OutBuf, Portals, ProtocolError, Session,
+    Statements,
+};
 
-use crate::block::{Ending, Transaction};
+use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
 use crate::utility::{self, Context, Notice, Outcome};
+
+mod extended;
+
+use extended::{Failed, Portal, Prepared};
 
 /// The version of rupg, which `server_version` and the parameter `rupg.version` report.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -211,6 +218,12 @@ pub struct Connection {
     session: Session,
     user: String,
     protocol: u32,
+    statements: Statements<std::sync::Arc<Prepared>>,
+    portals: Portals<Portal>,
+    /// `xact_started` of `postgres.c`: a statement runs in the transaction, so `finish_xact_command` must end it.
+    xact_started: bool,
+    /// `XACT_FLAGS_PIPELINING`: an `Execute` completed in the transaction, so the next message starts an implicit block.
+    pipelining: bool,
 }
 
 impl Connection {
@@ -222,6 +235,10 @@ impl Connection {
             session: Session::new(),
             user: start.user.clone(),
             protocol,
+            statements: Statements::new(),
+            portals: Portals::new(),
+            xact_started: false,
+            pipelining: false,
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -264,18 +281,37 @@ impl Connection {
                 let text = String::from_utf8_lossy(sql);
                 if self.simple_query(&text, out) { self.recover(out) } else { Next::Continue }
             }
-            Some(Ok(Frontend::Sync)) => Next::Continue,
+            Some(Ok(Frontend::Parse { name, sql, types })) => {
+                let result = self.parse(name, sql, types, out);
+                self.after(result, out)
+            }
+            Some(Ok(Frontend::Bind(bind))) => {
+                let result = self.bind(bind, out);
+                self.after(result, out)
+            }
+            Some(Ok(Frontend::Describe { target, name })) => {
+                let result = self.describe(target, name, out);
+                self.after(result, out)
+            }
+            Some(Ok(Frontend::Execute { portal, max_rows })) => {
+                let result = self.execute(portal, max_rows, out);
+                self.after(result, out)
+            }
+            Some(Ok(Frontend::Close { target, name })) => {
+                self.close(target, name, out);
+                Next::Continue
+            }
+            Some(Ok(Frontend::Sync)) => {
+                self.sync();
+                Next::Continue
+            }
             Some(Ok(Frontend::Flush)) => Next::Flush,
             Some(Ok(Frontend::Terminate)) => Next::Close,
-            Some(Ok(other)) => {
-                let message = match other {
-                    Frontend::FunctionCall(_) => "the function call protocol is not supported yet",
-                    _ => "the extended query protocol is not supported yet",
-                };
+            Some(Ok(_)) => {
                 let error = ProtocolError {
                     level: Level::Error,
                     sqlstate: "0A000",
-                    message: message.to_owned(),
+                    message: "the function call protocol is not supported yet".to_owned(),
                     detail: None,
                     hint: None,
                 };
@@ -284,6 +320,17 @@ impl Connection {
             }
         };
         Step { used, next }
+    }
+
+    /// The end of a message of the extended protocol. After an error the session drops the messages until `Sync`.
+    fn after(&mut self, result: Result<(), Failed>, out: &mut OutBuf) -> Next {
+        match result {
+            Ok(()) => Next::Continue,
+            Err(failed) => {
+                self.fail(&failed.error, failed.position, out);
+                self.recover(out)
+            }
+        }
     }
 
     /// The parameters that changed, then `ReadyForQuery`.
@@ -344,9 +391,9 @@ impl Connection {
 
     /// `exec_simple_query`. It gives true when a statement failed.
     fn simple_query(&mut self, text: &str, out: &mut OutBuf) -> bool {
-        if self.transaction.start_command() {
-            self.settings.start_transaction(None);
-        }
+        self.start_xact();
+        // A Query works as if it used the unnamed statement and the unnamed portal.
+        drop(self.statements.close(b""));
         let (list, parser_notices) = match rupg_sql::parse(text) {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -378,14 +425,12 @@ impl Connection {
             .collect();
         if statements.is_empty() {
             out.empty_query_response();
-            self.finish();
+            self.finish_xact();
             return false;
         }
         let many = statements.len() > 1;
         for (i, (node, statement)) in statements.iter().enumerate() {
-            if self.transaction.start_command() {
-                self.settings.start_transaction(None);
-            }
+            self.start_xact();
             if many {
                 self.transaction.begin_implicit();
             }
@@ -395,11 +440,13 @@ impl Connection {
                     "current transaction is aborted, commands ignored until end of transaction block",
                 ))
             } else {
+                drop(self.portals.close(b""));
                 let mut cx = Context {
                     settings: &mut self.settings,
                     transaction: &mut self.transaction,
                     user: &self.user,
                     notices: &mut notices,
+                    immediate_commit: false,
                 };
                 utility::run(node, statement, &mut cx)
             };
@@ -411,11 +458,17 @@ impl Connection {
                     return true;
                 }
             };
+            if outcome == Outcome::Tag(CommandTag::DiscardAll) {
+                self.statements.deallocate_all();
+                self.portals.clear();
+            }
             if i + 1 == statements.len() {
-                self.transaction.end_implicit();
-                self.finish();
+                if many {
+                    self.transaction.end_implicit();
+                }
+                self.finish_xact();
             } else if matches!(node, Node::TransactionStmt(_)) {
-                self.finish();
+                self.finish_xact();
             }
             match outcome {
                 Outcome::Tag(tag) => out.command_tag(tag, 0),
@@ -445,8 +498,24 @@ impl Connection {
         false
     }
 
-    /// `finish_xact_command`: the end of a statement, and the end or the chained start of its transaction.
-    fn finish(&mut self) {
+    /// `start_xact_command`: the start of a statement, which starts a transaction if there is none. After an `Execute` that completed, it starts an implicit block.
+    fn start_xact(&mut self) {
+        if !self.xact_started {
+            if self.transaction.start_command() {
+                self.settings.start_transaction(None);
+            }
+            self.xact_started = true;
+        } else if self.pipelining {
+            self.transaction.begin_implicit();
+        }
+    }
+
+    /// `finish_xact_command`: the end of a statement, and the end or the chained start of its transaction. It does nothing when no statement runs.
+    fn finish_xact(&mut self) {
+        if !self.xact_started {
+            return;
+        }
+        self.xact_started = false;
         let (ending, chained) = self.transaction.finish_command();
         let kept = chained.then(|| self.settings.characteristics());
         if ending != Ending::None {
@@ -455,13 +524,31 @@ impl Connection {
         if kept.is_some() {
             self.settings.start_transaction(kept);
         }
+        if chained || self.transaction.block() == Block::Default {
+            self.ended();
+        }
     }
 
-    /// Writes the error of a statement and aborts its transaction.
+    /// The end of a transaction, which removes the portals.
+    fn ended(&mut self) {
+        self.portals.clear();
+        self.pipelining = false;
+    }
+
+    /// Writes the error of a statement and aborts its transaction. In a failed block the portals stay, but they cannot run.
     fn fail(&mut self, error: &Error, position: Option<usize>, out: &mut OutBuf) {
         write_error(out, "ERROR", error, position, false);
+        self.xact_started = false;
         if self.transaction.abort_current() == Ending::Rollback {
             self.settings.end(false);
+        }
+        if self.transaction.failed() {
+            self.portals.retain(|_, portal| {
+                portal.failed = true;
+                true
+            });
+        } else {
+            self.ended();
         }
     }
 }
@@ -519,6 +606,57 @@ mod tests {
         message(b'Q', format!("{sql}\0").as_bytes())
     }
 
+    fn parse(name: &str, sql: &str, types: &[u32]) -> Vec<u8> {
+        let mut body = format!("{name}\0{sql}\0").into_bytes();
+        body.extend(u16::try_from(types.len()).unwrap().to_be_bytes());
+        for t in types {
+            body.extend(t.to_be_bytes());
+        }
+        message(b'P', &body)
+    }
+
+    fn bind(
+        portal: &str,
+        statement: &str,
+        formats: &[i16],
+        values: &[Option<&[u8]>],
+        results: &[i16],
+    ) -> Vec<u8> {
+        let mut out = Vec::new();
+        rupg_wire::Bind::encode(
+            &mut out,
+            portal.as_bytes(),
+            statement.as_bytes(),
+            formats,
+            values,
+            results,
+        );
+        out
+    }
+
+    fn describe(target: char, name: &str) -> Vec<u8> {
+        message(b'D', format!("{target}{name}\0").as_bytes())
+    }
+
+    fn execute(portal: &str, max_rows: i32) -> Vec<u8> {
+        let mut body = format!("{portal}\0").into_bytes();
+        body.extend(max_rows.to_be_bytes());
+        message(b'E', &body)
+    }
+
+    fn close(target: char, name: &str) -> Vec<u8> {
+        message(b'C', format!("{target}{name}\0").as_bytes())
+    }
+
+    fn sync() -> Vec<u8> {
+        message(b'S', b"")
+    }
+
+    /// Parse, Bind and Execute of the unnamed statement and portal.
+    fn run(sql: &str) -> Vec<u8> {
+        [parse("", sql, &[]), bind("", "", &[], &[], &[]), execute("", 0)].concat()
+    }
+
     /// Gives `input` to the connection until it needs more, and renders what it wrote.
     fn send(connection: &mut Connection, input: &[u8]) -> Vec<String> {
         let mut out = OutBuf::new();
@@ -558,8 +696,18 @@ mod tests {
                 Backend::CommandComplete(tag) => text(tag),
                 Backend::EmptyQueryResponse => "empty".into(),
                 Backend::RowDescription(fields) => {
-                    let names: Vec<String> = fields.iter().map(|f| text(f.name)).collect();
+                    let names: Vec<String> = fields
+                        .iter()
+                        .map(|f| match f.format {
+                            0 => text(f.name),
+                            format => format!("{}/{format}", text(f.name)),
+                        })
+                        .collect();
                     format!("columns {}", names.join(","))
+                }
+                Backend::ParameterDescription(types) => {
+                    let types: Vec<String> = types.iter().map(u32::to_string).collect();
+                    format!("params {}", types.join(","))
                 }
                 Backend::DataRow(values) => {
                     let values: Vec<String> =
@@ -683,20 +831,201 @@ mod tests {
     }
 
     #[test]
-    fn messages_that_are_not_supported() {
-        big_stack(messages_that_are_not_supported_cases);
+    fn extended_queries() {
+        big_stack(extended_queries_cases);
     }
 
-    fn messages_that_are_not_supported_cases() {
+    fn extended_queries_cases() {
         let (mut c, _) = connect();
-        let mut input = message(b'P', b"\0SELECT 1\0\0\0");
-        input.extend(message(b'B', b"\0\0\0\0\0\0\0\0"));
-        input.extend(message(b'S', b""));
+        let input = [parse("", "SHOW work_mem", &[]), bind("", "", &[], &[], &[])].concat();
+        let input = [input, describe('P', ""), execute("", 0), sync()].concat();
         assert_eq!(
             send(&mut c, &input),
-            ["ERROR 0A000 the extended query protocol is not supported yet", "ready I"]
+            ["ParseComplete", "BindComplete", "columns work_mem", "row 4MB", "SHOW", "ready I"]
+        );
+        let input = [parse("s", "SET work_mem = '8MB'", &[23]), describe('S', "s")].concat();
+        let input =
+            [input, bind("", "s", &[], &[Some(b"5")], &[]), execute("", 0), sync()].concat();
+        assert_eq!(
+            send(&mut c, &input),
+            ["ParseComplete", "params 23", "NoData", "BindComplete", "SET", "ready I"]
+        );
+        assert_eq!(send(&mut c, &[run("SHOW work_mem"), sync()].concat())[2], "row 8MB");
+        assert_eq!(
+            send(&mut c, &[run(""), sync()].concat()),
+            ["ParseComplete", "BindComplete", "empty", "ready I"]
+        );
+        // A row limit suspends the portal, and the next Execute goes on from there.
+        let input = [parse("", "SHOW work_mem", &[]), bind("", "", &[], &[], &[1])].concat();
+        let input = [input, describe('P', ""), execute("", 1), execute("", 1), execute("", 0)];
+        assert_eq!(
+            send(&mut c, &[input.concat(), sync()].concat()),
+            [
+                "ParseComplete",
+                "BindComplete",
+                "columns work_mem/1",
+                "row 8MB",
+                "PortalSuspended",
+                "SHOW",
+                "SHOW",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            send(&mut c, &[close('S', "s"), close('P', "none"), sync()].concat()),
+            ["CloseComplete", "CloseComplete", "ready I"]
         );
         assert_eq!(send(&mut c, &message(b'X', b"")), ["(closed)"]);
+    }
+
+    #[test]
+    fn extended_errors() {
+        big_stack(extended_errors_cases);
+    }
+
+    fn extended_errors_cases() {
+        let (mut c, _) = connect();
+        let cases: [(Vec<u8>, &str); 12] = [
+            (run("SELEC 1"), "ERROR 42601 syntax error at or near \"SELEC\" at 1"),
+            (
+                run("SHOW work_mem; SHOW work_mem"),
+                "ERROR 42601 cannot insert multiple commands into a prepared statement",
+            ),
+            (
+                parse("", "SHOW work_mem", &[0]),
+                "ERROR 42P18 could not determine data type of parameter $1",
+            ),
+            (run("SHOW nosuch"), "ERROR 42704 unrecognized configuration parameter \"nosuch\""),
+            (run("SELECT 1"), "ERROR 0A000 SELECT is not supported yet"),
+            (bind("", "", &[], &[], &[]), "ERROR 26000 unnamed prepared statement does not exist"),
+            (
+                bind("", "nope", &[], &[], &[]),
+                "ERROR 26000 prepared statement \"nope\" does not exist",
+            ),
+            (describe('S', "nope"), "ERROR 26000 prepared statement \"nope\" does not exist"),
+            (execute("nope", 0), "ERROR 34000 portal \"nope\" does not exist"),
+            (describe('P', "nope"), "ERROR 34000 portal \"nope\" does not exist"),
+            (
+                [parse("", "SHOW ALL", &[]), bind("", "", &[], &[], &[0, 0])].concat(),
+                "ERROR 08P01 bind message has 2 result formats but query has 3 columns",
+            ),
+            (
+                [parse("", "SHOW work_mem", &[]), bind("", "", &[], &[], &[2]), execute("", 0)]
+                    .concat(),
+                "ERROR 22023 unsupported format code: 2",
+            ),
+        ];
+        for (input, error) in cases {
+            let lines = send(&mut c, &[input, execute("", 0), sync()].concat());
+            assert_eq!(lines[lines.len() - 2..], [error, "ready I"], "{lines:?}");
+        }
+        assert_eq!(
+            send(&mut c, &[parse("s", "SET work_mem = '8MB'", &[23]), sync()].concat()).len(),
+            2
+        );
+        let cases: [(Vec<u8>, &str); 5] = [
+            (
+                parse("s", "SHOW work_mem", &[]),
+                "ERROR 42P05 prepared statement \"s\" already exists",
+            ),
+            (
+                bind("", "s", &[], &[], &[]),
+                "ERROR 08P01 bind message supplies 0 parameters, but prepared statement \"s\" requires 1",
+            ),
+            (
+                bind("", "s", &[], &[Some(b"abc")], &[]),
+                "ERROR 22P02 invalid input syntax for type integer: \"abc\"",
+            ),
+            (bind("", "s", &[3], &[None], &[]), "ERROR 22023 unsupported format code: 3"),
+            (
+                [bind("p", "s", &[], &[None], &[]), execute("p", 0), execute("p", 0)].concat(),
+                "ERROR 55000 portal \"p\" cannot be run",
+            ),
+        ];
+        for (input, error) in cases {
+            let lines = send(&mut c, &[input, sync()].concat());
+            assert_eq!(lines[lines.len() - 2..], [error, "ready I"], "{lines:?}");
+        }
+        // The error rolled back the SET of the same pipeline.
+        assert_eq!(send(&mut c, &query("SHOW work_mem"))[1], "row 4MB");
+        // A Query drops the unnamed statement.
+        send(&mut c, &[parse("", "SHOW work_mem", &[]), sync()].concat());
+        send(&mut c, &query("SHOW work_mem"));
+        assert_eq!(
+            send(&mut c, &[bind("", "", &[], &[], &[]), sync()].concat()),
+            ["ERROR 26000 unnamed prepared statement does not exist", "ready I"]
+        );
+    }
+
+    #[test]
+    fn extended_transactions() {
+        big_stack(extended_transactions_cases);
+    }
+
+    fn extended_transactions_cases() {
+        let (mut c, _) = connect();
+        // A pipeline runs in one implicit block, and COMMIT in it gives the warning of no block.
+        let input = [run("SET work_mem = '2MB'"), run("COMMIT"), run("SHOW work_mem"), sync()];
+        assert_eq!(
+            send(&mut c, &input.concat()),
+            [
+                "ParseComplete",
+                "BindComplete",
+                "SET",
+                "ParseComplete",
+                "BindComplete",
+                "WARNING 25P01 there is no transaction in progress",
+                "COMMIT",
+                "ParseComplete",
+                "BindComplete",
+                "row 2MB",
+                "SHOW",
+                "ready I"
+            ]
+        );
+        // The portals of a block stay after Sync and end with the block.
+        let input = [run("BEGIN"), parse("", "SHOW work_mem", &[]), bind("p", "", &[], &[], &[])];
+        assert_eq!(send(&mut c, &[input.concat(), sync()].concat()).last().unwrap(), "ready T");
+        assert_eq!(
+            send(&mut c, &[execute("p", 0), sync()].concat()),
+            ["row 2MB", "SHOW", "ready T"]
+        );
+        assert_eq!(send(&mut c, &[run("COMMIT"), sync()].concat())[2], "COMMIT");
+        assert_eq!(
+            send(&mut c, &[execute("p", 0), sync()].concat()),
+            ["ERROR 34000 portal \"p\" does not exist", "ready I"]
+        );
+        // A failed block takes only the statements that end it.
+        let input = [run("BEGIN"), run("SELECT 1"), sync()].concat();
+        assert_eq!(send(&mut c, &input).last().unwrap(), "ready E");
+        assert_eq!(
+            send(&mut c, &[parse("", "SHOW work_mem", &[]), sync()].concat()),
+            [
+                "ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block",
+                "ready E"
+            ]
+        );
+        assert_eq!(
+            send(&mut c, &[run("ROLLBACK"), sync()].concat()),
+            ["ParseComplete", "BindComplete", "ROLLBACK", "ready I"]
+        );
+        // DISCARD ALL commits at once and drops the named statements.
+        send(&mut c, &[parse("s", "SHOW work_mem", &[]), sync()].concat());
+        assert_eq!(
+            send(&mut c, &[run("DISCARD ALL"), bind("", "s", &[], &[], &[]), sync()].concat()),
+            [
+                "ParseComplete",
+                "BindComplete",
+                "DISCARD ALL",
+                "ERROR 26000 prepared statement \"s\" does not exist",
+                "ready I"
+            ]
+        );
+        assert_eq!(send(&mut c, &query("SHOW work_mem"))[1], "row 4MB");
+        assert_eq!(
+            send(&mut c, &[run("SET work_mem = '1MB'"), run("DISCARD ALL"), sync()].concat())[5],
+            "ERROR 25001 DISCARD ALL cannot run inside a transaction block"
+        );
     }
 
     #[test]

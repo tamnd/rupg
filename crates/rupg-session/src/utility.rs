@@ -43,6 +43,8 @@ pub struct Context<'a> {
     /// The user of the session, which is the only role that rupg knows yet.
     pub user: &'a str,
     pub notices: &'a mut Vec<Notice>,
+    /// `XACT_FLAGS_NEEDIMMEDIATECOMMIT`: the statement must commit at once, also in the extended protocol, where a statement does not commit before `Sync`.
+    pub immediate_commit: bool,
 }
 
 /// `IsTransactionExitStmt`: the statements that run in a failed transaction block.
@@ -56,6 +58,38 @@ pub fn exits_transaction(node: &Node) -> bool {
             | TransactionStmtKind::TRANS_STMT_ROLLBACK_TO
     )
 }
+
+/// The check of the statement that `Parse` does before it stores it. PostgreSQL analyzes the statement there, so a statement that the session cannot run yet fails at `Parse`.
+///
+/// # Errors
+///
+/// `0A000` for a statement that the session cannot run yet.
+pub fn check(node: &Node, text: &str) -> Result<(), Error> {
+    match node {
+        Node::VariableSetStmt(_)
+        | Node::VariableShowStmt(_)
+        | Node::TransactionStmt(_)
+        | Node::DiscardStmt(_) => Ok(()),
+        _ => Err(not_supported(text)),
+    }
+}
+
+/// `UtilityTupleDescriptor`: the names of the columns of the statement, or `None` when it gives no rows. All the columns are `text`.
+///
+/// # Errors
+///
+/// The error of `SHOW` for a parameter that does not exist or that the user cannot see.
+pub fn columns(node: &Node, settings: &Settings) -> Result<Option<Vec<String>>, Error> {
+    let Node::VariableShowStmt(stmt) = node else { return Ok(None) };
+    let name = stmt.name.as_deref().unwrap_or("");
+    if name.eq_ignore_ascii_case("all") {
+        return Ok(Some(SHOW_ALL.map(str::to_owned).to_vec()));
+    }
+    Ok(Some(vec![settings.show(name)?.0]))
+}
+
+/// The columns of `SHOW ALL`.
+const SHOW_ALL: [&str; 3] = ["name", "setting", "description"];
 
 /// Runs one statement. `text` is the text of the statement, for the name in the error of a statement that the session cannot run yet.
 ///
@@ -107,8 +141,9 @@ fn require_block(cx: &Context<'_>, statement: &str) -> Result<(), Error> {
 }
 
 /// `PreventInTransactionBlock`.
-fn prevent_block(cx: &Context<'_>, statement: &str) -> Result<(), Error> {
+fn prevent_block(cx: &mut Context<'_>, statement: &str) -> Result<(), Error> {
     if !cx.transaction.in_block() {
+        cx.immediate_commit = true;
         return Ok(());
     }
     Err(Error::new(
@@ -293,7 +328,7 @@ fn show(name: &str, settings: &Settings) -> Result<Outcome, Error> {
             .show_all()
             .map(|(name, value, description)| vec![name.to_owned(), value, description.to_owned()])
             .collect();
-        let columns = ["name", "setting", "description"].map(str::to_owned).to_vec();
+        let columns = SHOW_ALL.map(str::to_owned).to_vec();
         return Ok(Outcome::Rows { columns, rows });
     }
     let (column, value) = settings.show(name)?;
@@ -411,6 +446,7 @@ mod tests {
                 transaction: &mut self.transaction,
                 user: "postgres",
                 notices: &mut self.notices,
+                immediate_commit: false,
             };
             let outcome = run(node, text, &mut cx);
             match &outcome {
