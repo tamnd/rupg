@@ -205,9 +205,11 @@ dependencies = [
 name = "rupg-txn"
 version = "0.0.7"
 dependencies = [
+ "rupg-buffer",
  "rupg-common",
  "rupg-file",
  "rupg-hot",
+ "rupg-log",
  "rupg-platform",
  "rupg-table",
  "rupg-tree",
