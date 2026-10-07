@@ -50,7 +50,7 @@ An in-place update keeps the row id and the position of the row, so an index cha
 
 A snapshot is a commit timestamp `S`, the reading transaction and its command number. A version is visible when its `stamp` is a commit timestamp at or below `S`, or when it belongs to the reader with a command number below the current one. Otherwise the reader follows the undo chain.
 
-**Taking a snapshot.** A snapshot must not miss a commit with a lower timestamp that is still being installed. One global word, `visible`, holds the highest timestamp below which every commit is installed. A snapshot reads it. A commit moves it forward over itself and every installed commit after it. This is the ordered commit of Alhomssi and Leis, and a snapshot costs one load of a shared cache line.
+**Taking a snapshot.** A snapshot must not miss a commit with a lower timestamp that is still being installed. One global word, `visible`, holds the highest timestamp below which every commit is installed. A snapshot reads it. A commit moves it forward over itself and every installed commit after it. This is the ordered commit of Alhomssi and Leis, and a snapshot costs one load of a shared cache line. A short lock orders the timestamps as commits take them, so the lowest timestamp that is not installed only goes up. The word and the clock are in `crates/rupg-txn/src/visible.rs` and `crates/rupg-txn/src/clock.rs`.
 
 `READ COMMITTED` takes a snapshot for each statement. `REPEATABLE READ` and `SERIALIZABLE` take one at the first statement.
 

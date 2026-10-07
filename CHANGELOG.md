@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The hybrid logical clock and the `visible` word in `rupg-txn`. `HlcClock` gives each commit a timestamp above every value that the node gave or saw, also when the wall clock goes back. `Commits` takes the commit timestamps and keeps `visible` below each commit that is not installed, so a snapshot is one load and misses no commit.
+
 ## 0.0.5 (2026-10-07)
 
 The fifth patch release on the 0.0 line. It adds the log of spec/11: the ring pages and ring extents in the file, the block and record formats, the ring writer with group commit, the safe positions of the rings, and recovery after a crash. No crate is published.
