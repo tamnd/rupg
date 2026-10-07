@@ -62,6 +62,8 @@ tx.commit()?;
 
 **In memory.** `Database::open_in_memory()` makes a database whose file is a buffer in memory, with the same format. It has no durability and no rings. `Database::save_to(path)` writes it to a file, with a clean close.
 
+**At M1.** M1 has no SQL, so the M1 API is a key-value API over typed tables. `Database::open` opens or makes a file and replays the log when the file was not closed cleanly. `create_table` makes a table with typed columns, and a `Transaction` does `insert`, `update`, `delete`, `get` and a scan of a range of row ids. Each change is one command, so a later read of the same transaction sees it. `create_table` writes a checkpoint, so a table is in the catalog before any commit to it is in the log. A transaction that starts when the log holds more than `Options::checkpoint_log` bytes after the redo position writes a checkpoint first. `close` writes a checkpoint that marks a clean close. The catalog is one page of kind 4 that the header slot names. It holds the next transaction id, the next OID, and for each table its columns, its hot store root and its row id counter. The catalog tree of `rupg-catalog` takes its place at M2. M1 takes no owner lock, so two processes must not open the same file. The code is in `crates/rupg/src/database.rs` and `crates/rupg/src/catalog.rs`.
+
 ## 17.4 One owner for each file
 
 ### 17.4.1 The rule

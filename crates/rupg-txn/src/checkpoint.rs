@@ -49,10 +49,16 @@ impl Transactions<BufferPool> {
         self.pages().set_filter(Arc::new(Visible(Arc::downgrade(self))))
     }
 
-    /// Writes a checkpoint of the pages and the log to `store`, with the other roots from `base`, and gives its snapshot `W`. After a crash, the file holds the rows of each commit at or below `W`, and recovery replays the blocks above `W`.
+    /// Writes a checkpoint of the pages and the log to `store` and gives its snapshot `W`. After a crash, the file holds the rows of each commit at or below `W`, and recovery replays the blocks above `W`.
     ///
-    /// The changes to the pages wait while it runs. If a page cannot be written with the versions of `W`, the result is an error and the last checkpoint stays.
-    pub fn checkpoint(&self, store: &FileStore, base: &Checkpoint) -> Result<Hlc> {
+    /// The checkpoint calls `base` with `W` after it writes the pages, while the changes to the pages wait, and takes the catalog, the shard map and the clean flag from the result. So `base` can write a catalog page with the next transaction id and the row id counters of `W`.
+    ///
+    /// If a page cannot be written with the versions of `W`, the result is an error and the last checkpoint stays.
+    pub fn checkpoint(
+        &self,
+        store: &FileStore,
+        base: impl FnOnce(Hlc) -> Result<Checkpoint>,
+    ) -> Result<Hlc> {
         let _quiet = self.quiet.write().unwrap_or_else(PoisonError::into_inner);
         let w = self.hold();
         self.filter_at.store(w.bits(), Ordering::Release);
@@ -62,8 +68,14 @@ impl Transactions<BufferPool> {
         done.map(|()| w)
     }
 
-    fn write_checkpoint(&self, store: &FileStore, base: &Checkpoint, w: Hlc) -> Result<()> {
+    fn write_checkpoint(
+        &self,
+        store: &FileStore,
+        base: impl FnOnce(Hlc) -> Result<Checkpoint>,
+        w: Hlc,
+    ) -> Result<()> {
         self.pages().flush_all()?;
+        let base = base(w)?;
         let rings = match self.log() {
             Some(log) => {
                 let _gate = self.gate.lock().unwrap_or_else(PoisonError::into_inner);
@@ -77,6 +89,6 @@ impl Transactions<BufferPool> {
             }
             None => store.rings(),
         };
-        store.checkpoint(&Checkpoint { timestamp: w, rings, ..base.clone() })
+        store.checkpoint(&Checkpoint { timestamp: w, rings, ..base })
     }
 }
