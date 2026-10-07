@@ -18,12 +18,13 @@ fn platform(io: &SimIo, seed: u64) -> Platform {
     }
 }
 
-/// Small sizes, so that the tests use few pages of memory.
+/// Small sizes, so that the tests use few pages of memory, and a small window, so that each open is fast.
 fn options() -> Options {
     Options {
         memory_limit: 16 << 20,
         shared_buffers: 4 << 20,
         log_extents: 1,
+        window_pages: Some(1 << 16),
         ..Options::default()
     }
 }

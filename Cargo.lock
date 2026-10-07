@@ -71,6 +71,16 @@ name = "rupg-contrib"
 version = "0.0.9"
 
 [[package]]
+name = "rupg-crash"
+version = "0.0.9"
+dependencies = [
+ "rupg",
+ "rupg-common",
+ "rupg-file",
+ "rupg-platform",
+]
+
+[[package]]
 name = "rupg-encode"
 version = "0.0.9"
 

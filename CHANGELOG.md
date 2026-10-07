@@ -4,6 +4,17 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The T8 crash test in `tests/crash` (spec/21 section 21.9). A seeded M1 workload runs on the simulated disk, and before each sync of the file the test builds crash files from the writes that are not synced: every subset of a small set, and the prefixes, the torn prefixes and a seeded sample of a larger set. A crash file with the same bytes as an earlier one counts once. Each crash file must open with exactly the acknowledged commits, or those and the one commit that was in progress at the cut, and `rupg check` must report no error. `cargo test` runs a short workload, and the `rupg-crash` binary runs a full count, for example `cargo run --release -p rupg-crash -- --files 1000000`. The nightly workflow runs 100,000 crash files.
+- `Options::window_pages` in the facade sets the size of the window of the buffer pool. A test that opens many databases sets a small window, because the default reservation of address space takes milliseconds to make and to free.
+- `SimIo::read_pieces` in `rupg-platform` gives the bytes of a simulated file in pieces with no copy.
+
+### Changed
+
+- The simulated disk keeps each file in chunks of 64 KiB that a fork and a sync share. A fork or a sync copies no bytes, and a write copies only the chunks that it changes.
+- `rupg check` uses a pool of the table form with 64 frames. The table form is fast to make and to free, and its frames are zeroed when it is made, so a small pool makes a check of a small file fast.
+
 ## 0.0.9 (2026-10-07)
 
 The ninth patch release on the 0.0 line. It adds the `rupg` facade with the M1 Rust API and `rupg check`. No crate is published.

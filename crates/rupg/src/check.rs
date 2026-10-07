@@ -4,7 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 use std::sync::Arc;
 
-use rupg_buffer::{BufferPool, FileStore, PoolConfig};
+use rupg_buffer::{BufferPool, FileStore, PoolConfig, PoolMode};
 use rupg_common::{Error, Hlc, Result, RowId, ShardId, SqlState};
 use rupg_file::PageId;
 use rupg_log::{RecordReader, Recovery};
@@ -13,8 +13,8 @@ use rupg_platform::{MemoryPool, OpenMode};
 use crate::Platform;
 use crate::catalog::{Contents, Entry};
 
-/// The pool of the check. The check reads each page once, so a small pool is enough.
-const POOL: u64 = 8 << 20;
+/// The pool of the check: 64 frames. The check reads each page once, so a small pool is enough. The frames of the table form are zeroed when the pool is made, so a large pool makes each check slow.
+const POOL: u64 = 1 << 20;
 
 /// The counts of a check that found no error.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -65,7 +65,9 @@ pub fn check_on(platform: &Platform, path: &Path) -> Result<Report> {
     let mut names = BTreeSet::new();
     let mut oids = BTreeMap::new();
     let memory = MemoryPool::new(2 * POOL);
-    let pool = BufferPool::new(store.clone(), &memory, PoolConfig::new(POOL))?;
+    // The check reads each page once, and the table form is fast to make and to free.
+    let config = PoolConfig { mode: Some(PoolMode::Table), ..PoolConfig::new(POOL) };
+    let pool = BufferPool::new(store.clone(), &memory, config)?;
     for e in &contents.tables {
         let (name, oid) = (e.def.name(), e.def.oid());
         if !names.insert(name) || oids.insert(oid, e).is_some() {

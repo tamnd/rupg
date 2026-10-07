@@ -36,6 +36,8 @@ pub struct Options {
     pub checkpoint_log: Option<u64>,
     /// Make the file if it does not exist. The default is true. When it is false, a missing file gives SQLSTATE `58P01`.
     pub create: bool,
+    /// The number of logical pages that the window of the buffer pool can hold (spec/08 section 8.8.1). The default `None` takes the largest reservation of address space that the host gives. A reservation that large takes milliseconds to make and to free, so a test that opens many databases sets a small number. A file with more pages than the window gives an error.
+    pub window_pages: Option<u64>,
 }
 
 impl Default for Options {
@@ -46,6 +48,7 @@ impl Default for Options {
             log_extents: 4,
             checkpoint_log: None,
             create: true,
+            window_pages: None,
         }
     }
 }
@@ -165,8 +168,11 @@ impl Database {
         };
 
         let memory = MemoryPool::new(options.memory_limit);
-        let pool =
-            BufferPool::new(store.clone(), &memory, PoolConfig::new(options.shared_buffers))?;
+        let config = PoolConfig {
+            window_pages: options.window_pages,
+            ..PoolConfig::new(options.shared_buffers)
+        };
+        let pool = BufferPool::new(store.clone(), &memory, config)?;
         let mut tables = BTreeMap::new();
         for e in contents.tables {
             let name = e.def.name().to_owned();

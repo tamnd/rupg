@@ -1,6 +1,6 @@
 //! A disk in memory with the power cut model of spec/21 section 21.9.1.
 //!
-//! Each file has two images. The durable image is what is on the disk for sure: the state at the last completed sync. The current image is what reads see. A write changes the current image and goes on the list of unsynced operations of the file. A sync copies the current image to the durable image and clears the list.
+//! Each file has two images. The durable image is what is on the disk for sure: the state at the last completed sync. The current image is what reads see. A write changes the current image and goes on the list of unsynced operations of the file. A sync makes the current image the durable image and clears the list. The images and the data of the operations are shared until a write changes them, so a fork and a sync copy no bytes.
 //!
 //! [`SimIo::crash`] is the power cut. It builds each file from its durable image and a [`CrashPlan`], which says for each unsynced operation whether it reached the disk, was lost, was torn or went to a different offset. A test can list the unsynced operations with [`SimIo::unsynced`], build every plan that it wants to try, and use [`SimIo::fork`] to try each one on its own copy of the disk.
 //!
@@ -8,7 +8,7 @@
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::sync::{Arc, Mutex, OnceLock};
 
 use rupg_common::{Error, Result, SqlState};
 
@@ -100,14 +100,14 @@ pub struct CrashPlan {
 
 #[derive(Clone, Debug)]
 enum Op {
-    Write { offset: u64, data: Vec<u8> },
+    Write { offset: u64, data: Arc<[u8]> },
     SetSize(u64),
 }
 
 #[derive(Clone, Debug, Default)]
 struct FileState {
-    durable: Vec<u8>,
-    current: Vec<u8>,
+    durable: Image,
+    current: Image,
     pending: Vec<Op>,
     /// A sync failed. Writes and syncs fail until the next crash.
     broken: bool,
@@ -156,21 +156,81 @@ fn index(n: u64, path: &Path) -> Result<usize> {
     })
 }
 
-/// Sets the length of an image. New bytes are zero. A copy from a zeroed buffer is much faster than `Vec::resize` in a debug build, and the tests grow files by 16 MiB.
-fn set_len(image: &mut Vec<u8>, len: usize) {
-    if len <= image.len() {
-        image.truncate(len);
-    } else {
-        image.extend_from_slice(&vec![0; len - image.len()]);
-    }
+/// The size of a chunk of an image.
+const CHUNK: usize = 1 << 16;
+
+/// The bytes of a file, in chunks of [`CHUNK`] bytes that the copies share until a write changes them. A fork, a sync and a power cut copy no bytes, and a write copies only the chunks that it changes. The bytes of the last chunk after the length are zero.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+struct Image {
+    len: usize,
+    chunks: Vec<Arc<Vec<u8>>>,
 }
 
-fn write_into(image: &mut Vec<u8>, offset: usize, data: &[u8]) {
-    let end = offset + data.len();
-    if image.len() < end {
-        set_len(image, end);
+/// The chunk of zeros that each new chunk shares.
+fn zero_chunk() -> Arc<Vec<u8>> {
+    static ZERO: OnceLock<Arc<Vec<u8>>> = OnceLock::new();
+    Arc::clone(ZERO.get_or_init(|| Arc::new(vec![0; CHUNK])))
+}
+
+impl Image {
+    fn len(&self) -> usize {
+        self.len
     }
-    image[offset..end].copy_from_slice(data);
+
+    /// Sets the length. New bytes are zero.
+    fn set_len(&mut self, len: usize) {
+        if len < self.len {
+            self.chunks.truncate(len.div_ceil(CHUNK));
+            if !len.is_multiple_of(CHUNK)
+                && let Some(last) = self.chunks.last_mut()
+            {
+                Arc::make_mut(last)[len % CHUNK..].fill(0);
+            }
+        } else {
+            self.chunks.resize_with(len.div_ceil(CHUNK), zero_chunk);
+        }
+        self.len = len;
+    }
+
+    fn write(&mut self, offset: usize, data: &[u8]) {
+        let end = offset + data.len();
+        if self.len < end {
+            self.set_len(end);
+        }
+        let mut at = offset;
+        while at < end {
+            let (chunk, from) = (at / CHUNK, at % CHUNK);
+            let n = (CHUNK - from).min(end - at);
+            Arc::make_mut(&mut self.chunks[chunk])[from..from + n]
+                .copy_from_slice(&data[at - offset..at - offset + n]);
+            at += n;
+        }
+    }
+
+    /// Reads `buf.len()` bytes at `offset`. The result is false if the image ends before.
+    fn read(&self, offset: usize, buf: &mut [u8]) -> bool {
+        if offset.checked_add(buf.len()).is_none_or(|end| end > self.len) {
+            return false;
+        }
+        let mut done = 0;
+        while done < buf.len() {
+            let (chunk, from) = ((offset + done) / CHUNK, (offset + done) % CHUNK);
+            let n = (CHUNK - from).min(buf.len() - done);
+            buf[done..done + n].copy_from_slice(&self.chunks[chunk][from..from + n]);
+            done += n;
+        }
+        true
+    }
+
+    /// The pieces of the image in order, with no copy.
+    fn pieces(&self) -> impl Iterator<Item = &[u8]> {
+        let len = self.len;
+        self.chunks.iter().enumerate().map(move |(i, c)| &c[..(len - i * CHUNK).min(CHUNK)])
+    }
+
+    fn to_vec(&self) -> Vec<u8> {
+        self.pieces().flatten().copied().collect()
+    }
 }
 
 /// A file system in memory with a power cut model and fault injection.
@@ -210,12 +270,21 @@ impl SimIo {
 
     /// The bytes that reads of the file see now.
     pub fn contents(&self, path: &Path) -> Option<Vec<u8>> {
-        lock(&self.disk).files.get(path).map(|f| f.current.clone())
+        lock(&self.disk).files.get(path).map(|f| f.current.to_vec())
+    }
+
+    /// Calls `f` on the bytes that reads of the file see now, in order and in pieces, with no copy. The result is false if the file does not exist.
+    pub fn read_pieces(&self, path: &Path, mut f: impl FnMut(&[u8])) -> bool {
+        let Some(image) = lock(&self.disk).files.get(path).map(|f| f.current.clone()) else {
+            return false;
+        };
+        image.pieces().for_each(&mut f);
+        true
     }
 
     /// The bytes of the file that are on the disk for sure.
     pub fn durable(&self, path: &Path) -> Option<Vec<u8>> {
-        lock(&self.disk).files.get(path).map(|f| f.durable.clone())
+        lock(&self.disk).files.get(path).map(|f| f.durable.to_vec())
     }
 
     /// The operations since the last sync of each file: the files in path order, and the operations of a file in issue order.
@@ -260,30 +329,32 @@ impl SimIo {
             return Err(Error::internal("the order of the crash plan is not a permutation"));
         }
 
-        let mut images: BTreeMap<PathBuf, Vec<u8>> =
+        let mut images: BTreeMap<PathBuf, Image> =
             disk.files.iter().map(|(p, f)| (p.clone(), f.durable.clone())).collect();
         for i in order {
             let (path, op) = &ops[i];
             let Some(image) = images.get_mut(path) else { continue };
             match (op, plan.fates[i]) {
                 (_, Fate::Lost) => {}
-                (Op::SetSize(size), Fate::Written) => set_len(image, index(*size, path)?),
+                (Op::SetSize(size), Fate::Written) => {
+                    image.set_len(index(*size, path)?);
+                }
                 (Op::SetSize(_), _) => {}
                 (Op::Write { offset, data }, Fate::Written) => {
-                    write_into(image, index(*offset, path)?, data);
+                    image.write(index(*offset, path)?, data);
                 }
                 (Op::Write { offset, data }, Fate::Torn { keep }) => {
                     let keep = index(keep, path)?.min(data.len());
-                    write_into(image, index(*offset, path)?, &data[..keep]);
+                    image.write(index(*offset, path)?, &data[..keep]);
                 }
                 (Op::Write { data, .. }, Fate::Misdirected { offset }) => {
-                    write_into(image, index(offset, path)?, data);
+                    image.write(index(offset, path)?, data);
                 }
             }
         }
         for (path, image) in images {
             let Some(file) = disk.files.get_mut(&path) else { continue };
-            file.current.clone_from(&image);
+            file.current = image.clone();
             file.durable = image;
             file.pending.clear();
             file.broken = false;
@@ -437,17 +508,14 @@ impl File for SimFile {
                 return Err(eio("read", &self.path));
             }
             let start = index(offset, &self.path)?;
-            match file.current.get(start..start + buf.len()) {
-                Some(bytes) => {
-                    buf.copy_from_slice(bytes);
-                    Ok(())
-                }
-                None => Err(Error::corrupted(format!(
-                    "could not read {} bytes at offset {offset} of file \"{}\": the file is shorter",
-                    buf.len(),
-                    self.path.display()
-                ))),
+            if file.current.read(start, buf) {
+                return Ok(());
             }
+            Err(Error::corrupted(format!(
+                "could not read {} bytes at offset {offset} of file \"{}\": the file is shorter",
+                buf.len(),
+                self.path.display()
+            )))
         })
     }
 
@@ -460,8 +528,8 @@ impl File for SimFile {
             if rng.chance(faults.write_error) {
                 return Err(eio("write to", &self.path));
             }
-            write_into(&mut file.current, start, data);
-            file.pending.push(Op::Write { offset, data: data.to_vec() });
+            file.current.write(start, data);
+            file.pending.push(Op::Write { offset, data: data.into() });
             Ok(())
         })
     }
@@ -473,7 +541,7 @@ impl File for SimFile {
                 file.broken = true;
                 return Err(eio("fdatasync", &self.path));
             }
-            file.durable.clone_from(&file.current);
+            file.durable = file.current.clone();
             file.pending.clear();
             Ok(())
         });
@@ -492,7 +560,7 @@ impl File for SimFile {
         self.with("truncate", |file, _, faults, used| {
             self.check_write("truncate", file)?;
             room(&self.path, faults, used, file.current.len() as u64, size)?;
-            set_len(&mut file.current, new);
+            file.current.set_len(new);
             file.pending.push(Op::SetSize(size));
             Ok(())
         })
@@ -502,6 +570,28 @@ impl File for SimFile {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn an_image_shares_its_chunks() {
+        let mut a = Image::default();
+        a.write(CHUNK - 3, &[7; 6]);
+        let b = a.clone();
+        a.write(1, &[9]);
+        // The copy keeps its bytes, and the chunk that the write did not change is shared.
+        assert_eq!(b.to_vec()[1], 0);
+        assert_eq!(a.to_vec()[1], 9);
+        assert!(Arc::ptr_eq(&a.chunks[1], &b.chunks[1]));
+        let mut buf = [0; 6];
+        assert!(a.read(CHUNK - 3, &mut buf));
+        assert_eq!(buf, [7; 6]);
+        assert!(!a.read(CHUNK, &mut buf));
+        // Bytes after a shrink are zero when the image grows again.
+        a.set_len(CHUNK - 1);
+        a.set_len(2 * CHUNK + 5);
+        assert!(a.read(CHUNK - 3, &mut buf));
+        assert_eq!(buf, [7, 7, 0, 0, 0, 0]);
+        assert_eq!(a.pieces().map(<[u8]>::len).collect::<Vec<_>>(), [CHUNK, CHUNK, 5]);
+    }
 
     fn path() -> PathBuf {
         PathBuf::from("/sim/a.rupg")
