@@ -1627,6 +1627,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/from_subquery.test")));
     }
 
+    /// `LATERAL` subqueries in `FROM`, which run for each row of the relations before them, in a list, in inner and outer joins and in a subquery. `connection/lateral.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn lateral() {
+        big_stack(|| script(include_str!("connection/lateral.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

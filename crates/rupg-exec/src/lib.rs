@@ -285,7 +285,7 @@ fn gate(query: &Query, eval: &mut Eval<'_>) -> Result<bool> {
     Ok(true)
 }
 
-/// The rows of the relations of a query with the rows of its subqueries in `FROM`, as `SubqueryScan` reads them. A subquery that reads no column of an outer query runs once.
+/// The rows of the relations of a query with the rows of its subqueries in `FROM`, as `SubqueryScan` reads them. A subquery that reads no column of an outer query runs once. A subquery that reads the relations before it runs in the scan.
 fn with_subqueries(
     query: &Query,
     base: &Rc<scan::Tables>,
@@ -301,7 +301,9 @@ fn with_subqueries(
     let mut frames = outer.to_vec();
     frames.push(Frame { tables: base, tuple: &[] });
     for (i, relation) in query.relations.iter().enumerate() {
-        if let Some(sub) = &relation.subquery {
+        if let Some(sub) = &relation.subquery
+            && tables.needs[i].is_empty()
+        {
             tables.rows[i] =
                 cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))?;
         }
@@ -368,9 +370,18 @@ fn run_query(
     let tables = &*tables;
     let mut eval = Eval { tables, ..eval.at(&[]) };
     let tuples = if open {
-        scan::tuples(query, tables, &mut |expr, tuple| {
-            Ok(eval.at(tuple).eval(expr)? == Value::Bool(true))
-        })?
+        let mut source = |index: usize, tuple: &[usize]| {
+            let Some(sub) = &query.relations[index].subquery else { return Ok(Vec::new()) };
+            let mut frames = outer.to_vec();
+            frames.push(Frame { tables, tuple });
+            run_query(sub, params, session, cache, &frames, false)
+        };
+        scan::tuples(
+            query,
+            tables,
+            &mut |expr, tuple| Ok(eval.at(tuple).eval(expr)? == Value::Bool(true)),
+            &mut source,
+        )?
     } else {
         Vec::new()
     };
@@ -984,7 +995,7 @@ impl<'a> Eval<'a> {
 
 /// `evaluate_expr`: the value of an expression whose arguments are constants.
 fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
-    let tables = scan::Tables { rows: Vec::new(), oids: Vec::new() };
+    let tables = scan::Tables::default();
     let cache = Cache::default();
     let mut eval = Eval {
         params: &[],

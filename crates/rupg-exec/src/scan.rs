@@ -1,7 +1,8 @@
-//! The scan of the relations and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session. A relation of the user gives the rows of [`user_rows`]. The rows of a subquery in `FROM` come from the run of the subquery, which the executor adds to [`Tables`].
+//! The scan of the relations and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session. A relation of the user gives the rows of [`user_rows`]. The rows of a subquery in `FROM` come from the run of the subquery, which the executor adds to [`Tables`]. A subquery that reads the relations before it, as `LATERAL` lets it, runs in the scan for each row of those relations.
 //!
 //! A tuple of the join is the row number of each relation of the query, or [`NONE`] for a relation that a row of an outer join does not have. The rows of each relation are read once, with only the columns that the query uses.
 
+use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
@@ -18,12 +19,36 @@ pub(crate) const NONE: usize = usize::MAX;
 const HASH_EQUALS: [u32; 8] = [60, 61, 62, 63, 65, 67, 184, 467];
 
 /// The rows of the relations of a query.
-#[derive(Clone)]
+#[derive(Clone, Default)]
 pub(crate) struct Tables {
     /// The rows of each relation, with a null for each column that the query does not use.
     pub(crate) rows: Vec<Rc<Vec<Vec<Value>>>>,
     /// The OID of each relation, for `tableoid`.
     pub(crate) oids: Vec<u32>,
+    /// For each relation, the other relations of the query that it reads, as [`lateral`] finds them.
+    pub(crate) needs: Vec<Vec<usize>>,
+    /// The rows of each relation that reads other relations. The scan adds the rows of each run.
+    grown: Vec<RefCell<Vec<Vec<Value>>>>,
+}
+
+/// For each relation of the query, the other relations of the query that its subquery reads, as `LATERAL` lets it.
+pub(crate) fn lateral(query: &Query) -> Vec<Vec<usize>> {
+    let refs = |sub: &Query| {
+        let mut out = Vec::new();
+        for (expr, depth) in sub.all_exprs(0) {
+            expr.find(depth, &mut |e, depth| {
+                if let ExprKind::Var(var) = e.kind
+                    && var.levels_up == depth + 1
+                    && !out.contains(&var.relation)
+                {
+                    out.push(var.relation);
+                }
+                None::<()>
+            });
+        }
+        out
+    };
+    query.relations.iter().map(|r| r.subquery.as_deref().map(refs).unwrap_or_default()).collect()
 }
 
 impl Tables {
@@ -37,7 +62,37 @@ impl Tables {
             return Value::Oid(self.oids[var.relation]);
         }
         let column = usize::try_from(var.attnum - 1).unwrap_or(usize::MAX);
-        self.rows[var.relation][row].get(column).cloned().unwrap_or(Value::Null)
+        if self.needs[var.relation].is_empty() {
+            return self.rows[var.relation][row].get(column).cloned().unwrap_or(Value::Null);
+        }
+        let grown = self.grown[var.relation].borrow();
+        grown[row].get(column).cloned().unwrap_or(Value::Null)
+    }
+
+    /// The tuples of a relation that reads other relations, for one row of those relations: the rows of a new run, which the relation keeps.
+    fn run(
+        &self,
+        index: usize,
+        context: &[usize],
+        width: usize,
+        source: &mut Source<'_>,
+    ) -> Result<Vec<Vec<usize>>> {
+        let rows = source(index, context)?;
+        let mut grown = self.grown[index].borrow_mut();
+        let start = grown.len();
+        grown.extend(rows);
+        Ok((start..grown.len())
+            .map(|row| {
+                let mut tuple = vec![NONE; width];
+                tuple[index] = row;
+                tuple
+            })
+            .collect())
+    }
+
+    /// True when a relation of the part reads a relation outside the part.
+    fn depends(&self, relations: &[usize]) -> bool {
+        relations.iter().any(|r| self.needs[*r].iter().any(|n| !relations.contains(n)))
     }
 }
 
@@ -75,24 +130,6 @@ fn relations_in(item: &FromItem, out: &mut Vec<usize>) {
     }
 }
 
-/// Every expression of a query that can read a column.
-fn expressions(query: &Query) -> Vec<&Expr> {
-    fn joins<'a>(item: &'a FromItem, out: &mut Vec<&'a Expr>) {
-        if let FromItem::Join(join) = item {
-            out.extend(join.on.as_ref());
-            joins(&join.left, out);
-            joins(&join.right, out);
-        }
-    }
-    let mut all: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
-    all.extend(query.filter.as_ref());
-    all.extend(query.having.as_ref());
-    for item in &query.from {
-        joins(item, &mut all);
-    }
-    all
-}
-
 /// Reads the rows of the relations of a query.
 ///
 /// # Errors
@@ -101,13 +138,17 @@ fn expressions(query: &Query) -> Vec<&Expr> {
 pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     let mut used: Vec<Vec<bool>> =
         query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
-    for expr in expressions(query) {
-        each_var(expr, &mut |var| {
-            if let Ok(i) = usize::try_from(var.attnum - 1)
+    // The expressions of the subqueries in `FROM` count too, because a `LATERAL` subquery can read the columns of the query.
+    for (expr, depth) in query.all_exprs(0) {
+        expr.find(depth, &mut |e, depth| {
+            if let ExprKind::Var(var) = e.kind
+                && var.levels_up == depth
+                && let Ok(i) = usize::try_from(var.attnum - 1)
                 && let Some(slot) = used[var.relation].get_mut(i)
             {
                 *slot = true;
             }
+            None::<()>
         });
     }
     let mut rows = Vec::with_capacity(query.relations.len());
@@ -137,7 +178,12 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         }
         rows.push(Rc::new(table));
     }
-    Ok(Tables { rows, oids: query.relations.iter().map(|r| r.oid).collect() })
+    Ok(Tables {
+        rows,
+        oids: query.relations.iter().map(|r| r.oid).collect(),
+        needs: lateral(query),
+        grown: query.relations.iter().map(|_| RefCell::default()).collect(),
+    })
 }
 
 /// The rows of a relation of the user. A session cannot add rows yet, so a table has no rows. A sequence has its one row, with the start value as `last_value`, because a session cannot call `nextval` yet.
@@ -247,6 +293,22 @@ struct JoinInput<'a> {
 /// The test of a condition on a tuple.
 type Test<'a> = dyn FnMut(&Expr, &[usize]) -> Result<bool> + 'a;
 
+/// The run of a relation that reads other relations: the rows of the relation for a tuple of the relations that it reads.
+pub(crate) type Source<'a> = dyn FnMut(usize, &[usize]) -> Result<Vec<Vec<Value>>> + 'a;
+
+/// The tuple with the rows of `inner`, and the rows of `outer` for the relations that `inner` does not have.
+fn merged(outer: &[usize], inner: &[usize]) -> Vec<usize> {
+    outer.iter().zip(inner).map(|(o, i)| if *i == NONE { *o } else { *i }).collect()
+}
+
+/// The scan of the parts of `FROM`.
+struct Scan<'a, 'b> {
+    tables: &'a Tables,
+    width: usize,
+    test: &'a mut Test<'b>,
+    source: &'a mut Source<'b>,
+}
+
 /// True when the relations of the expression are all in the list.
 fn covered(expr: &Expr, relations: &[usize]) -> bool {
     relations_of(expr).iter().all(|r| relations.contains(r))
@@ -278,8 +340,10 @@ pub(crate) fn tuples(
     query: &Query,
     tables: &Tables,
     test: &mut Test<'_>,
+    source: &mut Source<'_>,
 ) -> Result<Vec<Vec<usize>>> {
     let width = query.relations.len();
+    let mut scan = Scan { tables, width, test, source };
     let mut filter = Vec::new();
     if let Some(expr) = &query.filter {
         conjuncts(expr, &mut filter);
@@ -306,7 +370,6 @@ pub(crate) fn tuples(
     let mut acc: Vec<Vec<usize>> = vec![vec![NONE; width]];
     let mut acc_relations: Vec<usize> = Vec::new();
     for ((item, relations), conds) in items.iter().zip(own) {
-        let tuples = item_tuples(item, conds, tables, width, test)?;
         let mut all = acc_relations.clone();
         all.extend(relations);
         let mut on = Vec::new();
@@ -321,91 +384,120 @@ pub(crate) fn tuples(
         });
         let input = JoinInput {
             left: acc,
-            right: tuples,
+            right: Vec::new(),
             on: &on,
             kind: JoinKind::Inner,
             left_relations: &acc_relations,
             right_relations: relations,
         };
-        acc = join(input, tables, test)?;
+        acc = scan.join_item(input, item, conds, &vec![NONE; width])?;
         acc_relations = all;
     }
-    keep(acc, &rest, test)
+    keep(acc, &rest, scan.test)
 }
 
-/// The tuples of a part of `FROM` that pass the conditions `conds`, which read only the relations of the part.
-fn item_tuples(
-    item: &FromItem,
-    conds: Vec<Expr>,
-    tables: &Tables,
-    width: usize,
-    test: &mut Test<'_>,
-) -> Result<Vec<Vec<usize>>> {
-    let j = match item {
-        FromItem::Relation(index) => {
-            let tuples = (0..tables.rows[*index].len())
-                .map(|row| {
-                    let mut tuple = vec![NONE; width];
-                    tuple[*index] = row;
-                    tuple
-                })
-                .collect();
-            return keep(tuples, &conds, test);
+impl Scan<'_, '_> {
+    /// The join of the tuples `input.left` with the tuples of the part `item`, which pass the conditions `conds`. When the part reads relations of the left side, as `LATERAL` lets it, the part runs again for each tuple of the left side, as a nested loop with parameters does. `context` has the rows of the relations outside the join.
+    fn join_item(
+        &mut self,
+        mut input: JoinInput<'_>,
+        item: &FromItem,
+        conds: Vec<Expr>,
+        context: &[usize],
+    ) -> Result<Vec<Vec<usize>>> {
+        if !self.tables.depends(input.right_relations) {
+            input.right = self.item_tuples(item, conds, context)?;
+            return join(input, self.tables, self.test);
         }
-        FromItem::Join(j) => j,
-    };
-    let (mut left_relations, mut right_relations) = (Vec::new(), Vec::new());
-    relations_in(&j.left, &mut left_relations);
-    relations_in(&j.right, &mut right_relations);
-    let mut on = Vec::new();
-    if let Some(expr) = &j.on {
-        conjuncts(expr, &mut on);
-    }
-    // A condition on one side goes down to that side when the join keeps every row of that side. The other conditions of an inner join join the condition of the join, and those of an outer join test its result.
-    let (mut to_left, mut to_right, mut after) = (Vec::new(), Vec::new(), Vec::new());
-    let push_left = matches!(j.kind, JoinKind::Inner | JoinKind::Left);
-    let push_right = matches!(j.kind, JoinKind::Inner | JoinKind::Right);
-    for expr in conds {
-        let relations = relations_of(&expr);
-        let nonempty = !relations.is_empty();
-        if push_left && nonempty && covered(&expr, &left_relations) {
-            to_left.push(expr);
-        } else if push_right && nonempty && covered(&expr, &right_relations) {
-            to_right.push(expr);
-        } else if j.kind == JoinKind::Inner {
-            on.push(expr);
-        } else {
-            after.push(expr);
+        let left = std::mem::take(&mut input.left);
+        let mut out = Vec::new();
+        for l in left {
+            let context = merged(context, &l);
+            let right = self.item_tuples(item, conds.clone(), &context)?;
+            let input = JoinInput { left: vec![l], right, ..input };
+            out.extend(join(input, self.tables, self.test)?);
         }
+        Ok(out)
     }
-    // A condition of ON that reads one side only goes down to that side for an inner join, and to the side that can be null for an outer join.
-    if j.kind != JoinKind::Full {
-        let mut kept = Vec::with_capacity(on.len());
-        for expr in on {
+
+    /// The tuples of a part of `FROM` that pass the conditions `conds`, which read only the relations of the part. `context` has the rows of the relations outside the part.
+    fn item_tuples(
+        &mut self,
+        item: &FromItem,
+        conds: Vec<Expr>,
+        context: &[usize],
+    ) -> Result<Vec<Vec<usize>>> {
+        let width = self.width;
+        let j = match item {
+            FromItem::Relation(index) if !self.tables.needs[*index].is_empty() => {
+                let tuples = self.tables.run(*index, context, width, self.source)?;
+                return keep(tuples, &conds, self.test);
+            }
+            FromItem::Relation(index) => {
+                let tuples = (0..self.tables.rows[*index].len())
+                    .map(|row| {
+                        let mut tuple = vec![NONE; width];
+                        tuple[*index] = row;
+                        tuple
+                    })
+                    .collect();
+                return keep(tuples, &conds, self.test);
+            }
+            FromItem::Join(j) => j,
+        };
+        let (mut left_relations, mut right_relations) = (Vec::new(), Vec::new());
+        relations_in(&j.left, &mut left_relations);
+        relations_in(&j.right, &mut right_relations);
+        let mut on = Vec::new();
+        if let Some(expr) = &j.on {
+            conjuncts(expr, &mut on);
+        }
+        // A condition on one side goes down to that side when the join keeps every row of that side. The other conditions of an inner join join the condition of the join, and those of an outer join test its result.
+        let (mut to_left, mut to_right, mut after) = (Vec::new(), Vec::new(), Vec::new());
+        let push_left = matches!(j.kind, JoinKind::Inner | JoinKind::Left);
+        let push_right = matches!(j.kind, JoinKind::Inner | JoinKind::Right);
+        for expr in conds {
             let relations = relations_of(&expr);
             let nonempty = !relations.is_empty();
-            if nonempty && j.kind != JoinKind::Left && covered(&expr, &left_relations) {
+            if push_left && nonempty && covered(&expr, &left_relations) {
                 to_left.push(expr);
-            } else if nonempty && j.kind != JoinKind::Right && covered(&expr, &right_relations) {
+            } else if push_right && nonempty && covered(&expr, &right_relations) {
                 to_right.push(expr);
+            } else if j.kind == JoinKind::Inner {
+                on.push(expr);
             } else {
-                kept.push(expr);
+                after.push(expr);
             }
         }
-        on = kept;
+        // A condition of ON that reads one side only goes down to that side for an inner join, and to the side that can be null for an outer join.
+        if j.kind != JoinKind::Full {
+            let mut kept = Vec::with_capacity(on.len());
+            for expr in on {
+                let relations = relations_of(&expr);
+                let nonempty = !relations.is_empty();
+                if nonempty && j.kind != JoinKind::Left && covered(&expr, &left_relations) {
+                    to_left.push(expr);
+                } else if nonempty && j.kind != JoinKind::Right && covered(&expr, &right_relations)
+                {
+                    to_right.push(expr);
+                } else {
+                    kept.push(expr);
+                }
+            }
+            on = kept;
+        }
+        let left = self.item_tuples(&j.left, to_left, context)?;
+        let input = JoinInput {
+            left,
+            right: Vec::new(),
+            on: &on,
+            kind: j.kind,
+            left_relations: &left_relations,
+            right_relations: &right_relations,
+        };
+        let tuples = self.join_item(input, &j.right, to_right, context)?;
+        keep(tuples, &after, self.test)
     }
-    let left = item_tuples(&j.left, to_left, tables, width, test)?;
-    let right = item_tuples(&j.right, to_right, tables, width, test)?;
-    let input = JoinInput {
-        left,
-        right,
-        on: &on,
-        kind: j.kind,
-        left_relations: &left_relations,
-        right_relations: &right_relations,
-    };
-    let tuples = join(input, tables, test)?;
-    keep(tuples, &after, test)
 }
 
 /// A join of two lists of tuples: a join through an index of the right side when the condition has an `=` of a column of each side that a hash can test, or else a nested loop. The rows of an outer join that match no row get nulls for the other side.
