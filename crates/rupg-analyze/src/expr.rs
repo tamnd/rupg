@@ -50,6 +50,17 @@ pub enum ExprKind {
     Array { element: u32, multidims: bool, elements: Vec<Expr> },
     /// `SQLValueFunction`, such as `CURRENT_USER` and `CURRENT_TIMESTAMP(3)`.
     SqlValue(SqlValue),
+    /// `Var`: a column of a relation of `FROM`.
+    Var(Var),
+}
+
+/// A column of a relation of `FROM`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Var {
+    /// The index of the relation in [`crate::Query::relations`].
+    pub relation: usize,
+    /// The attribute number: from 1 for a column of the relation, or a negative number for a system column.
+    pub attnum: i16,
 }
 
 /// A call of a function.

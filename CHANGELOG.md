@@ -4,6 +4,15 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `FROM` over the tables of the system catalog (spec/23 section 23.5). A query reads the tables of `pg_catalog`, by name or with the schema, with aliases and column aliases, and joins them with `JOIN ... ON`, `USING`, `NATURAL`, `CROSS JOIN` and a comma. `INNER`, `LEFT`, `RIGHT` and `FULL` joins work, and a `USING` alias names the merged columns. The analyzer finds the columns as `parse_relation.c` does, so a bad name gives the same error, detail and hint as PostgreSQL, with the close names that `Perhaps you meant to reference the column` suggests. `*` and `t.*` expand in the target list, and `tableoid` is the OID of the table. `RowDescription` gives the table OID and the attribute number of each plain column. The executor reads only the columns that the query uses, tests each part of `WHERE` on the smallest part of `FROM` that has its relations, and joins on an `=` of two columns through an index of one side. The other system columns, a whole-row reference, and a subquery or a function in `FROM` give `0A000`. The rows that `initdb` adds after the bootstrap, such as the ACLs and `plpgsql`, are not there yet.
+
+### Fixed
+
+- An `int2vector` and an `oidvector` have the lower bound 0, as in PostgreSQL, so a cast to an array shows `[0:1]={1,2}`.
+- A cast between two array types whose element types have the same binary form, such as `int2vector` to `int2[]` and `oidvector` to `oid[]`, works now. It gave `0A000` before.
+
 ## 0.0.15 (2026-10-08)
 
 The fifteenth patch release on the 0.0 line. It adds the first part of the query engine: `SELECT` without `FROM`, through the simple and the extended query protocol, and the status of each parameter. No crate is published.

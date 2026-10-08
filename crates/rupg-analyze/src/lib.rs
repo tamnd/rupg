@@ -9,6 +9,7 @@
 mod coerce;
 mod colname;
 mod expr;
+mod from;
 mod poly;
 mod resolve;
 mod select;
@@ -24,7 +25,8 @@ use crate::coerce::AtOpt;
 
 pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
-pub use expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue};
+pub use expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, Var};
+pub use from::{Column, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};
 
 /// The OID of the schema `pg_catalog`.
@@ -62,6 +64,8 @@ pub(crate) struct Analyzer<'a> {
     notices: Vec<Error>,
     /// The depth of the expression that the analyzer reads now.
     depth: usize,
+    /// The relations and the names of `FROM`.
+    scope: from::Scope,
 }
 
 impl<'a> Analyzer<'a> {
@@ -77,6 +81,7 @@ impl<'a> Analyzer<'a> {
             variable: params.variable,
             notices: Vec::new(),
             depth: 0,
+            scope: from::Scope::default(),
         }
     }
 
@@ -316,6 +321,141 @@ mod tests {
             assert_eq!(e.message(), "could not determine data type of parameter $1");
             let declared = Params { types: vec![oid::INT8], variable: true };
             assert_eq!(run("SELECT $1 + 1", &declared).unwrap().targets[0].expr.ty, oid::INT8);
+        });
+    }
+
+    /// The SQLSTATE, the message, the detail and the hint of the error.
+    fn full_error(sql: &str) -> [String; 4] {
+        let e = run(sql, &Params::default()).expect_err(sql);
+        [
+            e.state().as_str().to_string(),
+            e.message().to_string(),
+            e.detail().unwrap_or_default().to_string(),
+            e.hint().unwrap_or_default().to_string(),
+        ]
+    }
+
+    #[test]
+    fn from_clause() {
+        big_stack(|| {
+            assert_eq!(
+                columns("SELECT * FROM pg_namespace"),
+                [
+                    ("oid".into(), oid::OID),
+                    ("nspname".into(), oid::NAME),
+                    ("nspowner".into(), oid::OID),
+                    ("nspacl".into(), oid::ACLITEM_ARRAY)
+                ]
+            );
+            assert_eq!(
+                columns("SELECT a.x, n FROM pg_namespace a(x, n)"),
+                [("x".into(), oid::OID), ("n".into(), oid::NAME)]
+            );
+            let names = |sql: &str| -> Vec<String> {
+                columns(sql).into_iter().map(|(name, _)| name).collect()
+            };
+            assert_eq!(
+                names("SELECT * FROM pg_namespace a JOIN pg_namespace b USING (oid, nspname)"),
+                ["oid", "nspname", "nspowner", "nspacl", "nspowner", "nspacl"]
+            );
+            assert_eq!(names("SELECT u.* FROM pg_am a JOIN pg_am b USING (oid) AS u"), ["oid"]);
+            assert_eq!(
+                names("SELECT a.tableoid, b.* FROM pg_am a NATURAL JOIN pg_am b"),
+                ["tableoid", "oid", "amname", "amhandler", "amtype"]
+            );
+            let query = run("SELECT oid, oid::int + 0 FROM pg_type", &Params::default()).unwrap();
+            assert_eq!(query.targets[0].origin, Some((1247, 1)));
+            assert_eq!(query.targets[1].origin, None);
+            let query =
+                run("SELECT oid FROM pg_am a FULL JOIN pg_am b USING (oid)", &Params::default())
+                    .unwrap();
+            assert_eq!(query.targets[0].origin, None);
+            assert!(matches!(query.targets[0].expr.kind, ExprKind::Coalesce(_)));
+        });
+    }
+
+    #[test]
+    fn from_errors() {
+        big_stack(|| {
+            let e = |state: &str, message: &str, at: usize| {
+                (state.to_string(), message.to_string(), Some(at))
+            };
+            assert_eq!(
+                error("SELECT 1 FROM nosuch"),
+                e("42P01", "relation \"nosuch\" does not exist", 14)
+            );
+            assert_eq!(
+                error("SELECT 1 FROM x.pg_class"),
+                e("42P01", "relation \"x.pg_class\" does not exist", 14)
+            );
+            assert_eq!(
+                error("SELECT 1 FROM a.b.pg_class"),
+                e("0A000", "cross-database references are not implemented: \"a.b.pg_class\"", 14)
+            );
+            assert_eq!(
+                error("SELECT oid FROM pg_am a, pg_am b"),
+                e("42702", "column reference \"oid\" is ambiguous", 7)
+            );
+            assert_eq!(
+                error("SELECT ctid FROM pg_am"),
+                e("0A000", "the system column \"ctid\" is not supported yet", 7)
+            );
+            let s = |v: [&str; 4]| v.map(str::to_string);
+            assert_eq!(
+                full_error("SELECT amnam FROM pg_am"),
+                s([
+                    "42703",
+                    "column \"amnam\" does not exist",
+                    "",
+                    "Perhaps you meant to reference the column \"pg_am.amname\"."
+                ])
+            );
+            assert_eq!(
+                full_error("SELECT pg_am.amname FROM pg_am a"),
+                s([
+                    "42P01",
+                    "invalid reference to FROM-clause entry for table \"pg_am\"",
+                    "",
+                    "Perhaps you meant to reference the table alias \"a\"."
+                ])
+            );
+            assert_eq!(
+                full_error(
+                    "SELECT 1 FROM pg_am a JOIN (pg_am b JOIN pg_am c ON a.oid = c.oid) ON true"
+                ),
+                s([
+                    "42P01",
+                    "invalid reference to FROM-clause entry for table \"a\"",
+                    "There is an entry for table \"a\", but it cannot be referenced from this part of the query.",
+                    ""
+                ])
+            );
+            assert_eq!(
+                full_error("SELECT a.amname FROM (pg_am a JOIN pg_am b USING (oid)) j"),
+                s([
+                    "42P01",
+                    "invalid reference to FROM-clause entry for table \"a\"",
+                    "There is an entry for table \"a\", but it cannot be referenced from this part of the query.",
+                    ""
+                ])
+            );
+            assert_eq!(
+                full_error("SELECT 1 FROM pg_am a, pg_am a"),
+                s(["42712", "table name \"a\" specified more than once", "", ""])
+            );
+            assert_eq!(
+                full_error("SELECT 1 FROM pg_am a JOIN pg_am b USING (nosuch)"),
+                s([
+                    "42703",
+                    "column \"nosuch\" specified in USING clause does not exist in left table",
+                    "",
+                    ""
+                ])
+            );
+            assert_eq!(
+                full_error("SELECT 1 FROM pg_am a(x, y, z, w, v)"),
+                s(["42P10", "table \"a\" has 4 columns available but 5 columns specified", "", ""])
+            );
         });
     }
 }

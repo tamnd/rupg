@@ -85,8 +85,8 @@ impl Env for TestSession {
     }
 }
 
-/// The text of each column of the row of a query, `NULL` for a null value, or the SQLSTATE and the message of the error.
-fn row(sql: &str) -> std::result::Result<Option<Vec<String>>, (String, String)> {
+/// The text of each column of each row of a query, `NULL` for a null value, or the SQLSTATE and the message of the error.
+fn rows(sql: &str) -> std::result::Result<Vec<Vec<String>>, (String, String)> {
     let session = TestSession { zone: FixedZone::utc() };
     let fail = |e: rupg_common::Error| (e.state().as_str().to_string(), e.message().to_string());
     let (stmts, _) = rupg_sql::parse(sql).map_err(|e| ("42601".to_string(), e.message.clone()))?;
@@ -94,21 +94,32 @@ fn row(sql: &str) -> std::result::Result<Option<Vec<String>>, (String, String)> 
     let query = analyze(raw.stmt.as_ref().expect("a statement"), &session, &Params::default())
         .map_err(fail)?;
     let plan = prepare(query).map_err(fail)?;
-    let Some(values) = plan.run(&[], &session).map_err(fail)? else { return Ok(None) };
-    let texts = plan
-        .columns()
-        .iter()
-        .zip(values)
-        .map(|(target, value)| {
-            if value.is_null() {
-                return "NULL".to_string();
-            }
-            let mut out = Vec::new();
-            rupg_func::output(target.expr.ty, &value, &session, &mut out).expect("output");
-            String::from_utf8(out).expect("utf8")
+    let rows = plan.run(&[], &session).map_err(fail)?;
+    let texts = rows
+        .into_iter()
+        .map(|values| {
+            plan.columns()
+                .iter()
+                .zip(values)
+                .map(|(target, value)| {
+                    if value.is_null() {
+                        return "NULL".to_string();
+                    }
+                    let mut out = Vec::new();
+                    rupg_func::output(target.expr.ty, &value, &session, &mut out).expect("output");
+                    String::from_utf8(out).expect("utf8")
+                })
+                .collect()
         })
         .collect();
-    Ok(Some(texts))
+    Ok(texts)
+}
+
+/// The row of a query that gives at most one row.
+fn row(sql: &str) -> std::result::Result<Option<Vec<String>>, (String, String)> {
+    let mut all = rows(sql)?;
+    assert!(all.len() < 2, "{sql} gave {} rows", all.len());
+    Ok(all.pop())
 }
 
 fn one(sql: &str) -> String {
@@ -189,5 +200,81 @@ fn filter_and_session_values() {
         assert_eq!(one("SELECT now()"), "2000-01-11 00:00:00+00");
         assert_eq!(one("SELECT LOCALTIMESTAMP"), "2000-01-11 00:00:00");
         assert_eq!(one("SELECT CURRENT_TIME"), "00:00:00+00");
+    });
+}
+
+/// The rows of a query, each as its columns joined with `|`.
+fn lines(sql: &str) -> Vec<String> {
+    let mut all: Vec<String> = match rows(sql) {
+        Ok(rows) => rows.into_iter().map(|r| r.join("|")).collect(),
+        Err(e) => panic!("{sql}: {e:?}"),
+    };
+    all.sort();
+    all
+}
+
+#[test]
+fn catalog_tables() {
+    big_stack(|| {
+        assert_eq!(lines("SELECT nspname FROM pg_namespace"), ["pg_catalog", "pg_toast", "public"]);
+        assert_eq!(
+            lines("SELECT oid, typname, typlen FROM pg_type WHERE typname = 'int4'"),
+            ["23|int4|4"]
+        );
+        assert_eq!(
+            lines(
+                "SELECT p.proname, t.typname FROM pg_proc p JOIN pg_type t ON p.prorettype = t.oid WHERE p.oid = 184"
+            ),
+            ["oideq|bool"]
+        );
+        assert_eq!(
+            lines(
+                "SELECT a.amname, b.amname FROM pg_am a LEFT JOIN pg_am b ON a.oid = b.oid AND b.amtype = 'i' WHERE a.amname IN ('heap', 'hash')"
+            ),
+            ["hash|hash", "heap|NULL"]
+        );
+        assert_eq!(
+            lines(
+                "SELECT a.oid, b.oid FROM pg_am a FULL JOIN pg_am b ON a.oid = b.oid AND a.oid < 403 AND b.oid < 403"
+            ),
+            [
+                "2742|NULL",
+                "2|2",
+                "3580|NULL",
+                "4000|NULL",
+                "403|NULL",
+                "405|NULL",
+                "783|NULL",
+                "NULL|2742",
+                "NULL|3580",
+                "NULL|4000",
+                "NULL|403",
+                "NULL|405",
+                "NULL|783"
+            ]
+        );
+        assert_eq!(
+            lines("SELECT oid FROM pg_am a FULL JOIN pg_am b USING (oid) WHERE oid IN (2, 403)"),
+            ["2", "403"]
+        );
+        assert_eq!(
+            lines(
+                "SELECT b.oid FROM pg_am a RIGHT JOIN pg_am b ON false WHERE a.oid IS NULL AND b.oid = 2"
+            ),
+            ["2"]
+        );
+        assert_eq!(lines("SELECT tableoid FROM pg_am WHERE oid = 2"), ["2601"]);
+        assert_eq!(
+            lines("SELECT indkey, indclass FROM pg_index WHERE indexrelid = 2662"),
+            ["1|1981"]
+        );
+        assert_eq!(
+            lines("SELECT oprcode FROM pg_operator WHERE oid IN (96, 15)"),
+            ["int48eq", "int4eq"]
+        );
+        assert_eq!(
+            lines("SELECT 1 FROM pg_am a, pg_am b, pg_am c WHERE a.oid = b.oid AND b.oid = c.oid"),
+            ["1", "1", "1", "1", "1", "1", "1"]
+        );
     });
 }

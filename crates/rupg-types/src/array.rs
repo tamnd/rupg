@@ -48,6 +48,15 @@ impl<T> Array<T> {
         let len = i32::try_from(values.len()).unwrap_or(i32::MAX);
         Array { dims: vec![ArrayDim { len, lower: 1 }], values }
     }
+
+    /// The array of an `int2vector` or an `oidvector`: one dimension with the lower bound 0, or the empty array when there are no values.
+    pub fn vector(values: Vec<Option<T>>) -> Array<T> {
+        if values.is_empty() {
+            return Array::empty();
+        }
+        let len = i32::try_from(values.len()).unwrap_or(i32::MAX);
+        Array { dims: vec![ArrayDim { len, lower: 0 }], values }
+    }
 }
 
 fn malformed(input: &str, detail: &str) -> TypeError {

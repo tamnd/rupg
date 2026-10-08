@@ -30,20 +30,22 @@ pub(crate) struct Column {
     /// `typlen` of the type.
     pub(crate) size: i16,
     pub(crate) typmod: i32,
+    /// The OID of the table and the attribute number when the column is a column of a table, or zeros.
+    pub(crate) origin: (u32, i16),
 }
 
 impl Column {
     /// A column of type `text`, as the utility statements give.
     pub(crate) fn text(name: String) -> Column {
-        Column { name, ty: oid::TEXT, size: -1, typmod: -1 }
+        Column { name, ty: oid::TEXT, size: -1, typmod: -1, origin: (0, 0) }
     }
 
     /// The field of `RowDescription` in a format.
     pub(crate) fn field(&self, format: i16) -> Field<'_> {
         Field {
             name: self.name.as_bytes(),
-            table: 0,
-            column: 0,
+            table: self.origin.0,
+            column: self.origin.1,
             type_oid: self.ty,
             type_size: self.size,
             type_modifier: self.typmod,
@@ -276,6 +278,7 @@ pub(crate) fn columns(plan: &Plan) -> Vec<Column> {
             ty: target.expr.ty,
             size: rupg_pgcatalog::builtin::type_by_oid(target.expr.ty).map_or(-1, |row| row.len),
             typmod: target.expr.typmod,
+            origin: target.origin.unwrap_or_default(),
         })
         .collect()
 }
@@ -291,22 +294,25 @@ pub(crate) fn run(
     reader: &Reader<'_>,
     formats: &[i16],
 ) -> Result<Vec<Row>> {
-    let Some(values) = plan.run(params, reader)? else { return Ok(Vec::new()) };
-    let mut row = Vec::with_capacity(values.len());
-    for (i, (target, value)) in plan.columns().iter().zip(&values).enumerate() {
-        if matches!(value, Value::Null) {
-            row.push(None);
-            continue;
+    let mut rows = Vec::new();
+    for values in plan.run(params, reader)? {
+        let mut row = Vec::with_capacity(values.len());
+        for (i, (target, value)) in plan.columns().iter().zip(&values).enumerate() {
+            if matches!(value, Value::Null) {
+                row.push(None);
+                continue;
+            }
+            let mut bytes = Vec::new();
+            if formats.get(i) == Some(&1) {
+                rupg_func::send(target.expr.ty, value, &mut bytes)?;
+            } else {
+                rupg_func::output(target.expr.ty, value, reader, &mut bytes)?;
+            }
+            row.push(Some(bytes));
         }
-        let mut bytes = Vec::new();
-        if formats.get(i) == Some(&1) {
-            rupg_func::send(target.expr.ty, value, &mut bytes)?;
-        } else {
-            rupg_func::output(target.expr.ty, value, reader, &mut bytes)?;
-        }
-        row.push(Some(bytes));
+        rows.push(row);
     }
-    Ok(vec![row])
+    Ok(rows)
 }
 
 /// The value of parameter `number`, from 1, of a `Bind`: the input function of the type for the text format and the receive function for the binary format.

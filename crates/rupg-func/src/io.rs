@@ -77,6 +77,11 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::CSTRING
             | oid::UUID
             | oid::JSONB
+            | oid::REGPROC
+            | oid::PG_NODE_TREE
+            | oid::ACLITEM
+            | oid::ANYARRAY
+            | oid::PG_LSN
     )
 }
 
@@ -86,7 +91,17 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some((elem, _)) = array_of(ty) {
         return input_supported(elem);
     }
-    output_supported(ty) && !matches!(ty, XID | CID | oid::REGTYPE)
+    output_supported(ty)
+        && !matches!(
+            ty,
+            XID | CID
+                | oid::REGTYPE
+                | oid::REGPROC
+                | oid::PG_NODE_TREE
+                | oid::ACLITEM
+                | oid::ANYARRAY
+                | oid::PG_LSN
+        )
 }
 
 /// The name of a type for an error.
@@ -139,6 +154,7 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
             Some(_) => out.extend_from_slice(types::format_type(*v).as_bytes()),
             None => types::reg_out_oid(RegKind::Type, *v, out),
         },
+        (oid::REGPROC, Value::Oid(v)) => regproc_out(*v, out),
         (oid::OID | XID | CID, Value::Oid(v)) => types::oid_out(*v, out),
         (_, Value::Char(v)) => types::char_out(*v, out),
         (_, Value::Text(v)) => out.extend_from_slice(v.as_bytes()),
@@ -170,6 +186,21 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         _ => return Err(not_yet(format!("output of type {}", type_name(ty)))),
     }
     Ok(())
+}
+
+/// `regprocout`: the name of the function, with its schema when the name alone does not give one function, `-` for 0, or the OID for a function that does not exist.
+fn regproc_out(func: u32, out: &mut Vec<u8>) {
+    let Some(proc) = builtin::proc_by_oid(func) else {
+        types::reg_out_oid(RegKind::Proc, func, out);
+        return;
+    };
+    let name = crate::text::quote_identifier(proc.name);
+    if builtin::procs_named(proc.name).nth(1).is_none() {
+        out.extend_from_slice(name.as_bytes());
+    } else {
+        out.extend_from_slice(b"pg_catalog.");
+        out.extend_from_slice(name.as_bytes());
+    }
 }
 
 /// The elements of an `int2vector` or an `oidvector`, which have no null element.
@@ -230,13 +261,13 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
         oid::UUID => Value::Uuid(types::uuid_in(text).map_err(type_error)?),
         oid::INT2VECTOR => {
             let values = types::int2vector_in(text).map_err(type_error)?;
-            Value::Array(Box::new(Array::one(
+            Value::Array(Box::new(Array::vector(
                 values.into_iter().map(|v| Some(Value::Int2(v))).collect(),
             )))
         }
         oid::OIDVECTOR => {
             let values = types::oidvector_in(text).map_err(type_error)?;
-            Value::Array(Box::new(Array::one(
+            Value::Array(Box::new(Array::vector(
                 values.into_iter().map(|v| Some(Value::Oid(v))).collect(),
             )))
         }
@@ -352,13 +383,13 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::INTERVAL => Value::Interval(types::interval_recv(recv, typmod)?),
         oid::INT2VECTOR => {
             let values = types::int2vector_recv(recv)?;
-            Value::Array(Box::new(Array::one(
+            Value::Array(Box::new(Array::vector(
                 values.into_iter().map(|v| Some(Value::Int2(v))).collect(),
             )))
         }
         oid::OIDVECTOR => {
             let values = types::oidvector_recv(recv)?;
-            Value::Array(Box::new(Array::one(
+            Value::Array(Box::new(Array::vector(
                 values.into_iter().map(|v| Some(Value::Oid(v))).collect(),
             )))
         }
@@ -392,6 +423,9 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         return failed.map_or(Ok(()), Err);
     }
     match (ty, value) {
+        (oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN, _) => {
+            return Err(not_yet(format!("binary output of type {}", type_name(ty))));
+        }
         (_, Value::Bool(v)) => out.push(u8::from(*v)),
         (_, Value::Int2(v)) => out.extend_from_slice(&v.to_be_bytes()),
         (_, Value::Int4(v) | Value::Date(v)) => out.extend_from_slice(&v.to_be_bytes()),

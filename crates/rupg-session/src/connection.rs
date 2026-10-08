@@ -816,9 +816,15 @@ mod tests {
                 Backend::RowDescription(fields) => {
                     let names: Vec<String> = fields
                         .iter()
-                        .map(|f| match f.format {
-                            0 => text(f.name),
-                            format => format!("{}/{format}", text(f.name)),
+                        .map(|f| {
+                            let name = match f.table {
+                                0 => text(f.name),
+                                table => format!("{}@{table}.{}", text(f.name), f.column),
+                            };
+                            match f.format {
+                                0 => name,
+                                format => format!("{name}/{format}"),
+                            }
                         })
                         .collect();
                     format!("columns {}", names.join(","))
@@ -949,6 +955,16 @@ mod tests {
         assert_eq!(
             send(&mut c, &query("SELECT 1 WHERE false")),
             ["columns ?column?", "SELECT 0", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("SELECT amname, oid::int, tableoid FROM pg_am WHERE oid < 405")),
+            [
+                "columns amname@2601.2,oid,tableoid@2601.-6",
+                "row heap,2,2601",
+                "row btree,403,2601",
+                "SELECT 2",
+                "ready I"
+            ]
         );
         assert_eq!(
             send(&mut c, &query("SELECT current_user, current_database(), pg_backend_pid()")),
