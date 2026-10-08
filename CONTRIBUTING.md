@@ -28,6 +28,8 @@ To compare the tables with bison, make a report with `bison -Dlr.default-reducti
 
 `cargo xtask lifts [dir]` checks the files that rupg lifts from rudb (spec/22 section 22.7). It reads the history of each source file in a rudb checkout, `../rudb` when you give no directory, and lists each rudb commit after the lift that nobody reviewed. The checkout must have the full history. When you port a change or decline it, add a line `// Reviewed at <commit> (<date>): <decision>.` under the provenance header of the file. CI has no rudb checkout, so run this task before each milestone release.
 
+`cargo xtask bench` runs the instruction count set of spec/21 section 21.14. It builds `crates/rupg/examples/icount.rs` in release mode, runs each case under `perf stat -e instructions:u` and prints the user space instructions of each case. Each case runs three times and the task takes the median. `--save <file>` writes the counts, and `--check <file>` fails when one case is more than 3 percent higher than the saved count or the total is more than 1 percent higher. The task needs `perf` and a machine that shows the hardware counters, and most virtual machines do not. Counts change with the processor and the toolchain, so compare only counts from the same machine. `xtask/icount.txt` has the counts at each release, with the machine and the toolchain in its header. To add a case, add it to `CASES` in the example and add its count to the file in the same pull request.
+
 ## What a change must include
 
 1. A test for each behavior that the change adds or fixes. A fix for a wrong answer includes the query that showed it.

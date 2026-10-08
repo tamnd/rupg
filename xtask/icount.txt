@@ -1,0 +1,8 @@
+# The instruction counts of `cargo xtask bench`. Compare only with counts from the same machine and the same toolchain.
+# Machine: AMD EPYC virtual machine (x86_64, 8 cores, perf with instructions:u). Toolchain: rustc 1.98.1. Source: main at 4387e818 plus the bench pull request.
+insert 913405498
+get 46029656
+scan 16841512
+update 1036390509
+delete 697541998
+commit 5078710
