@@ -1,0 +1,218 @@
+> SELECT 1 FROM (SELECT 1/0 AS x) s
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT x FROM (SELECT 1/0 AS x) s
+ERROR 22012 division by zero
+> SELECT 1 FROM (SELECT 1/0 AS x OFFSET 0) s
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM (SELECT 1/0 AS x) s WHERE false
+ERROR 22012 division by zero
+> SELECT * FROM (SELECT 1/0 AS x OFFSET 0) s WHERE false
+fields x:23:4:-1
+SELECT 0
+> SELECT * FROM (SELECT 1 AS a, 2 AS b) s
+fields a:23:4:-1,b:23:4:-1
+row 1,2
+SELECT 1
+> SELECT * FROM (SELECT 1 AS a, 2 AS b)
+fields a:23:4:-1,b:23:4:-1
+row 1,2
+SELECT 1
+> SELECT unnamed_subquery.a FROM (SELECT 1 AS a)
+ERROR 42P01 invalid reference to FROM-clause entry for table "unnamed_subquery" at 8
+> SELECT * FROM (SELECT relname, relkind FROM pg_class WHERE relname = 'pg_am') AS c(n)
+fields n@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1
+row pg_am,r
+SELECT 1
+> SELECT * FROM (SELECT 1 AS a) s(x, y)
+ERROR 42P10 table "s" has 1 columns available but 2 columns specified
+> SELECT * FROM (SELECT 1, 2) s
+fields ?column?:23:4:-1,?column?:23:4:-1
+row 1,2
+SELECT 1
+> SELECT s.* FROM pg_am a, (SELECT a.amname) s
+ERROR 42P01 invalid reference to FROM-clause entry for table "a" at 34
+> SELECT count(*) FROM (SELECT DISTINCT amtype FROM pg_am) s
+fields count:20:8:-1
+row 2
+SELECT 1
+> SELECT (SELECT n FROM (SELECT a.amname AS n) s) FROM pg_am a ORDER BY 1 LIMIT 2
+fields n:19:64:-1
+row brin
+row btree
+SELECT 2
+> SELECT * FROM (SELECT 'x') s
+fields ?column?:25:-1:-1
+row x
+SELECT 1
+> SELECT * FROM (SELECT 'x' AS t) s WHERE t = 'x'
+fields t:25:-1:-1
+row x
+SELECT 1
+> SELECT pg_typeof(t) FROM (SELECT 'x' AS t) s
+fields pg_typeof:2206:4:-1
+row text
+SELECT 1
+> SELECT * FROM (SELECT 1 AS a) s, (SELECT 2 AS a) s
+ERROR 42712 table name "s" specified more than once
+> SELECT * FROM (SELECT 1 AS a) s JOIN (SELECT 1 AS a) t USING (a)
+fields a:23:4:-1
+row 1
+SELECT 1
+> SELECT a FROM (SELECT 1 AS a) s, (SELECT 2 AS a) t
+ERROR 42702 column reference "a" is ambiguous at 8
+> SELECT * FROM (SELECT oid, relname FROM pg_class) c WHERE c.relname = 'pg_am'
+fields oid@pg_class.1:26:4:-1,relname@pg_class.2:19:64:-1
+row 2601,pg_am
+SELECT 1
+> SELECT * FROM (SELECT * FROM (SELECT 3 AS z) i) o
+fields z:23:4:-1
+row 3
+SELECT 1
+> SELECT tableoid FROM (SELECT 1 AS a) s
+ERROR 42703 column "tableoid" does not exist at 8
+> SELECT s.tableoid FROM (SELECT 1 AS a) s
+ERROR 42703 column s.tableoid does not exist at 8
+> SELECT * FROM (SELECT amname FROM pg_am ORDER BY amname LIMIT 2) s
+fields amname@pg_am.2:19:64:-1
+row brin
+row btree
+SELECT 2
+> SELECT 1 FROM pg_am a, (SELECT 1/0 AS x OFFSET 0) s WHERE false
+fields ?column?:23:4:-1
+SELECT 0
+> SELECT x FROM pg_am a, (SELECT 1/0 AS x OFFSET 0) s WHERE false
+ERROR 22012 division by zero
+> SELECT x FROM (SELECT 1/0 AS x OFFSET 0) s WHERE false
+fields x:23:4:-1
+SELECT 0
+> SELECT 1 FROM (SELECT DISTINCT 1/0 AS x) s
+ERROR 22012 division by zero
+> SELECT 1 FROM (SELECT 1/0 AS x ORDER BY 1) s
+ERROR 22012 division by zero
+> SELECT 1 FROM (SELECT 1/0 AS x GROUP BY 1) s
+ERROR 22012 division by zero
+> SELECT 1 FROM (SELECT count(*), 1/0 AS x) s
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT 1 FROM (SELECT 1/0 AS x LIMIT 1) s
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT 1 FROM (SELECT set_config('a.b', 'c', false) AS x OFFSET 0) s
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT current_setting('a.b', true)
+fields current_setting:25:-1:-1
+row c
+SELECT 1
+> SELECT 1 FROM (SELECT set_config('a.c', 'c', false) AS x) s
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT current_setting('a.c', true)
+fields current_setting:25:-1:-1
+row c
+SELECT 1
+> SELECT * FROM pg_am a LEFT JOIN (SELECT 1 AS one) s ON false ORDER BY 1 LIMIT 1
+fields oid@pg_am.1:26:4:-1,amname@pg_am.2:19:64:-1,amhandler@pg_am.3:24:4:-1,amtype@pg_am.4:18:1:-1,one:23:4:-1
+row 2,heap,heap_tableam_handler,t,NULL
+SELECT 1
+> SELECT 1 FROM (SELECT 1 AS a WHERE 1/0 = 1) s
+ERROR 22012 division by zero
+> SELECT 1 FROM (SELECT 1 AS a WHERE 1/0 = 1 OFFSET 0) s
+ERROR 22012 division by zero
+> SELECT x, sqrt(-1) FROM (SELECT 1/0 AS x) s
+ERROR 22012 division by zero
+> SELECT sqrt(-1) FROM (SELECT 1/0 AS x) s WHERE x = 1
+ERROR 2201F cannot take square root of a negative number
+> SELECT x FROM (SELECT 1/0 AS x) s WHERE sqrt(-1) > 0
+ERROR 22012 division by zero
+> SELECT x FROM (SELECT 1/0 AS x OFFSET 0) s WHERE sqrt(-1) > 0
+ERROR 2201F cannot take square root of a negative number
+> SELECT a.amname, s.n FROM pg_am a JOIN (SELECT amname AS n, amtype FROM pg_am) s ON s.n = a.amname WHERE a.amtype = 'i' ORDER BY 1
+fields amname@pg_am.2:19:64:-1,n@pg_am.2:19:64:-1
+row brin,brin
+row btree,btree
+row gin,gin
+row gist,gist
+row hash,hash
+row spgist,spgist
+SELECT 6
+> SELECT a.amname, s.k FROM pg_am a LEFT JOIN (SELECT 'btree'::name AS n, 1 AS k) s ON s.n = a.amname ORDER BY 1
+fields amname@pg_am.2:19:64:-1,k:23:4:-1
+row brin,NULL
+row btree,1
+row gin,NULL
+row gist,NULL
+row hash,NULL
+row heap,NULL
+row spgist,NULL
+SELECT 7
+> SELECT amtype, count(*) FROM (SELECT amtype FROM pg_am) s GROUP BY amtype ORDER BY 1
+fields amtype@pg_am.4:18:1:-1,count:20:8:-1
+row i,6
+row t,1
+SELECT 2
+> SELECT max(n) FROM (SELECT amname AS n FROM pg_am WHERE amtype = 'i') s
+fields max:25:-1:-1
+row spgist
+SELECT 1
+> SELECT n FROM (SELECT amname AS n FROM pg_am) s WHERE EXISTS (SELECT 1 FROM (SELECT s.n AS m) t WHERE m = 'hash')
+fields n@pg_am.2:19:64:-1
+row hash
+SELECT 1
+> SELECT a.amname FROM pg_am a WHERE a.amname IN (SELECT n FROM (SELECT amname AS n FROM pg_am WHERE amtype = 't') s)
+fields amname@pg_am.2:19:64:-1
+row heap
+SELECT 1
+> SELECT * FROM (SELECT amname FROM pg_am ORDER BY amname DESC) s LIMIT 3
+fields amname@pg_am.2:19:64:-1
+row spgist
+row heap
+row hash
+SELECT 3
+> SELECT DISTINCT t FROM (SELECT amtype AS t FROM pg_am) s ORDER BY 1
+fields t@pg_am.4:18:1:-1
+row i
+row t
+SELECT 2
+> SELECT s.x + 1 FROM (SELECT 41 AS x) s
+fields ?column?:23:4:-1
+row 42
+SELECT 1
+> SELECT x / 0 FROM (SELECT 1 AS x) s
+ERROR 22012 division by zero
+> SELECT x / 0 FROM (SELECT 1 AS x OFFSET 0) s
+fields ?column?:23:4:-1
+ERROR 22012 division by zero
+> SELECT * FROM (SELECT 1 AS a) AS s(b)
+fields b:23:4:-1
+row 1
+SELECT 1
+> SELECT b FROM (SELECT 1 AS a, 2 AS c) AS s(b)
+fields b:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM (SELECT 1) AS s, (SELECT 2) AS t
+fields ?column?:23:4:-1,?column?:23:4:-1
+row 1,2
+SELECT 1
+> SELECT count(*) FROM (SELECT 1 FROM pg_am WHERE false) s
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM (SELECT amname FROM pg_am WHERE 1/0 = 1) s WHERE false
+ERROR 22012 division by zero
+> SELECT * FROM (SELECT amname FROM pg_am) s WHERE (SELECT 1/0) = 1 AND false
+fields amname@pg_am.2:19:64:-1
+SELECT 0
+> SELECT * FROM (SELECT 1 AS a) s WHERE s.nope = 1
+ERROR 42703 column s.nope does not exist at 39
+> SELECT nope.a FROM (SELECT 1 AS a) s
+ERROR 42P01 missing FROM-clause entry for table "nope" at 8

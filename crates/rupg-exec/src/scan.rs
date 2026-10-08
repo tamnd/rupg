@@ -1,8 +1,9 @@
-//! The scan of the relations and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session. A relation of the user gives the rows of [`user_rows`].
+//! The scan of the relations and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session. A relation of the user gives the rows of [`user_rows`]. The rows of a subquery in `FROM` come from the run of the subquery, which the executor adds to [`Tables`].
 //!
 //! A tuple of the join is the row number of each relation of the query, or [`NONE`] for a relation that a row of an outer join does not have. The rows of each relation are read once, with only the columns that the query uses.
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 
 use rupg_analyze::{Expr, ExprKind, FromItem, JoinKind, Query, TABLE_OID_ATTNUM, Var};
 use rupg_common::{Error, Result};
@@ -17,9 +18,10 @@ pub(crate) const NONE: usize = usize::MAX;
 const HASH_EQUALS: [u32; 8] = [60, 61, 62, 63, 65, 67, 184, 467];
 
 /// The rows of the relations of a query.
+#[derive(Clone)]
 pub(crate) struct Tables {
     /// The rows of each relation, with a null for each column that the query does not use.
-    pub(crate) rows: Vec<Vec<Vec<Value>>>,
+    pub(crate) rows: Vec<Rc<Vec<Vec<Value>>>>,
     /// The OID of each relation, for `tableoid`.
     pub(crate) oids: Vec<u32>,
 }
@@ -110,8 +112,12 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     }
     let mut rows = Vec::with_capacity(query.relations.len());
     for (relation, used) in query.relations.iter().zip(&used) {
+        if relation.subquery.is_some() {
+            rows.push(Rc::default());
+            continue;
+        }
         let Some(catalog) = rupg_pgcatalog::catalog_by_oid(relation.oid) else {
-            rows.push(user_rows(relation.oid, session)?);
+            rows.push(Rc::new(user_rows(relation.oid, session)?));
             continue;
         };
         let mut table = Vec::with_capacity(catalog.len);
@@ -129,7 +135,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         if let Some(user) = session.catalog() {
             table.extend(crate::user::rows(catalog, user, session)?);
         }
-        rows.push(table);
+        rows.push(Rc::new(table));
     }
     Ok(Tables { rows, oids: query.relations.iter().map(|r| r.oid).collect() })
 }

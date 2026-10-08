@@ -306,7 +306,7 @@ impl Expr {
                 strip(child);
             }
             if let ExprKind::SubLink(sub) = &mut expr.kind {
-                sub.query.exprs_mut().into_iter().for_each(strip);
+                sub.query.each_expr_mut(0, &mut |e, _| strip(e));
             }
         }
         let (mut a, mut b) = (self.clone(), other.clone());
@@ -330,8 +330,8 @@ impl Expr {
             }
         }
         if let ExprKind::SubLink(sub) = &self.kind {
-            for expr in sub.query.exprs() {
-                if let Some(found) = expr.find(depth + 1, f) {
+            for (expr, depth) in sub.query.all_exprs(depth + 1) {
+                if let Some(found) = expr.find(depth, f) {
                     return Some(found);
                 }
             }
@@ -359,9 +359,7 @@ impl Expr {
                 raise_at(child, levels, depth);
             }
             if let ExprKind::SubLink(sub) = &mut expr.kind {
-                for e in sub.query.exprs_mut() {
-                    raise_at(e, levels, depth + 1);
-                }
+                sub.query.each_expr_mut(depth + 1, &mut |e, depth| raise_at(e, levels, depth));
             }
         }
         raise_at(self, levels, 0);

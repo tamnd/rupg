@@ -100,6 +100,29 @@ impl Query {
         );
         out
     }
+
+    /// The expressions of the query and of its subqueries in `FROM`, each with its depth: `depth` for the query, and one more for each subquery in `FROM` between the expression and the query. The subqueries in `FROM` come after the expressions of the query, as in `query_tree_walker`.
+    pub fn all_exprs(&self, depth: usize) -> Vec<(&Expr, usize)> {
+        let mut out: Vec<(&Expr, usize)> = self.exprs().into_iter().map(|e| (e, depth)).collect();
+        for relation in &self.relations {
+            if let Some(sub) = &relation.subquery {
+                out.extend(sub.all_exprs(depth + 1));
+            }
+        }
+        out
+    }
+
+    /// Calls `f` for each expression of [`Query::all_exprs`], with its depth.
+    pub fn each_expr_mut(&mut self, depth: usize, f: &mut impl FnMut(&mut Expr, usize)) {
+        for expr in self.exprs_mut() {
+            f(expr, depth);
+        }
+        for relation in &mut self.relations {
+            if let Some(sub) = &mut relation.subquery {
+                sub.each_expr_mut(depth + 1, f);
+            }
+        }
+    }
 }
 
 /// The error of a clause that the analyzer does not take yet.
@@ -163,12 +186,19 @@ impl Analyzer<'_> {
         if !s.lockingClause.is_empty() {
             return Err(not_yet("FOR UPDATE and FOR SHARE"));
         }
-        // markTargetListOrigins: a target that is a column of a relation names the table and the column.
+        // markTargetListOrigins: a target that is a column of a relation names the table and the column. A column of a subquery in FROM has the origin of the column of the subquery.
         for target in &mut targets {
             if let ExprKind::Var(var) = &target.expr.kind
                 && var.levels_up == 0
             {
-                target.origin = Some((self.scope.relations[var.relation].oid, var.attnum));
+                let relation = &self.scope.relations[var.relation];
+                target.origin = match &relation.subquery {
+                    None => Some((relation.oid, var.attnum)),
+                    Some(sub) => usize::try_from(var.attnum - 1)
+                        .ok()
+                        .and_then(|i| sub.targets.iter().filter(|t| !t.junk).nth(i))
+                        .and_then(|t| t.origin),
+                };
             }
         }
         let sort = self.sort_clause(&s.sortClause, &mut targets)?;

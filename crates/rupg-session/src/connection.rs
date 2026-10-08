@@ -1621,6 +1621,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/user_select.test")));
     }
 
+    /// Subqueries in `FROM`: the names and the aliases of their columns, the errors of the names, and the order of the errors of the fold. A subquery that the planner pulls up folds where the query reads its columns, and a column that the query does not read does not run. `connection/from_subquery.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn from_subquery() {
+        big_stack(|| script(include_str!("connection/from_subquery.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {
