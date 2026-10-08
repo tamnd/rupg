@@ -128,6 +128,31 @@ impl Analyzer<'_> {
                 inner.location,
             ));
         }
+        // check_agg_arguments: an aggregate whose arguments read only the columns of outer queries belongs to the outer query.
+        let level = args
+            .iter()
+            .chain(filter.as_deref())
+            .filter_map(|e| {
+                let mut min: Option<usize> = None;
+                e.find(0, &mut |e, depth| {
+                    if let ExprKind::Var(var) = e.kind
+                        && var.levels_up >= depth
+                    {
+                        let up = var.levels_up - depth;
+                        min = Some(min.map_or(up, |m| m.min(up)));
+                    }
+                    None::<()>
+                });
+                min
+            })
+            .min();
+        if level.is_some_and(|l| l > 0) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "an aggregate of an outer query is not supported yet",
+            )
+            .at_opt(at));
+        }
         match self.kind {
             Kind::JoinOn => {
                 return Err(grouping_error(
@@ -160,17 +185,23 @@ impl Analyzer<'_> {
         let vars: Vec<Var> = grouped
             .iter()
             .filter_map(|e| match e.kind {
-                ExprKind::Var(var) => Some(var),
+                ExprKind::Var(var) if var.levels_up == 0 => Some(var),
                 _ => None,
             })
             .collect();
-        let mut check =
-            Check { analyzer: self, grouped: &grouped, non_var, vars: &vars, proven: Vec::new() };
+        let mut check = Check {
+            analyzer: self,
+            grouped: &grouped,
+            raised: Vec::new(),
+            non_var,
+            vars: &vars,
+            proven: Vec::new(),
+        };
         for target in targets {
-            check.expr(&target.expr)?;
+            check.expr(&target.expr, 0)?;
         }
         if let Some(having) = having {
-            check.expr(having)?;
+            check.expr(having, 0)?;
         }
         Ok(())
     }
@@ -181,6 +212,8 @@ struct Check<'a, 'b> {
     analyzer: &'a Analyzer<'b>,
     /// The expressions of `GROUP BY`.
     grouped: &'a [&'a Expr],
+    /// `groupClauseSubLevels`: the expressions of `GROUP BY` as a subquery sees them, with the index 0 for a subquery of the query.
+    raised: Vec<Vec<Expr>>,
     /// `have_non_var_grouping`: true when an item of `GROUP BY` is not a column.
     non_var: bool,
     /// The items of `GROUP BY` that are columns.
@@ -190,26 +223,58 @@ struct Check<'a, 'b> {
 }
 
 impl Check<'_, '_> {
-    fn expr(&mut self, expr: &Expr) -> Result<()> {
-        if let ExprKind::Agg(_) = expr.kind {
+    /// Checks an expression of the query, or of a subquery `depth` levels down.
+    fn expr(&mut self, expr: &Expr, depth: usize) -> Result<()> {
+        if let ExprKind::Agg(_) = expr.kind
+            && depth == 0
+        {
             return Ok(());
         }
-        if self.non_var && self.grouped.iter().any(|g| g.same(expr)) {
+        if self.non_var && self.is_grouped(expr, depth) {
             return Ok(());
         }
         match &expr.kind {
             ExprKind::Const(_) | ExprKind::Param(_) => Ok(()),
-            ExprKind::Var(var) => self.var(*var, expr.location),
+            ExprKind::Var(var) if var.levels_up == depth => {
+                self.var(Var { levels_up: 0, ..*var }, depth, expr.location)
+            }
+            ExprKind::Var(_) => Ok(()),
             _ => {
                 for child in expr.children() {
-                    self.expr(child)?;
+                    self.expr(child, depth)?;
+                }
+                if let ExprKind::SubLink(sub) = &expr.kind {
+                    for e in sub.query.exprs() {
+                        self.expr(e, depth + 1)?;
+                    }
                 }
                 Ok(())
             }
         }
     }
 
-    fn var(&mut self, var: Var, at: Option<usize>) -> Result<()> {
+    /// True when the expression is an item of `GROUP BY`, as a subquery `depth` levels down sees it.
+    fn is_grouped(&mut self, expr: &Expr, depth: usize) -> bool {
+        if depth == 0 {
+            return self.grouped.iter().any(|g| g.same(expr));
+        }
+        while self.raised.len() < depth {
+            let levels = self.raised.len() + 1;
+            let raised = self
+                .grouped
+                .iter()
+                .map(|g| {
+                    let mut g = (*g).clone();
+                    g.raise(levels);
+                    g
+                })
+                .collect();
+            self.raised.push(raised);
+        }
+        self.raised[depth - 1].iter().any(|g| g.same(expr))
+    }
+
+    fn var(&mut self, var: Var, depth: usize, at: Option<usize>) -> Result<()> {
         if !self.non_var && self.vars.contains(&var) {
             return Ok(());
         }
@@ -219,17 +284,19 @@ impl Check<'_, '_> {
         // check_functional_grouping: all the columns of the primary key are in GROUP BY.
         let relid = self.analyzer.scope.relations[var.relation].oid;
         if let Some(key) = builtin::primary_key(relid)
-            && key.iter().all(|&attnum| self.vars.contains(&Var { relation: var.relation, attnum }))
+            && key.iter().all(|&attnum| self.vars.contains(&Var { attnum, ..var }))
         {
             self.proven.push(var.relation);
             return Ok(());
         }
         let (table, column) = self.analyzer.column_names(var);
-        Err(grouping_error(
+        let message = if depth == 0 {
             format!(
                 "column \"{table}.{column}\" must appear in the GROUP BY clause or be used in an aggregate function"
-            ),
-            at,
-        ))
+            )
+        } else {
+            format!("subquery uses ungrouped column \"{table}.{column}\" from outer query")
+        };
+        Err(grouping_error(message, at))
     }
 }

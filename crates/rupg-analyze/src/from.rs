@@ -121,14 +121,17 @@ fn levenshtein(a: &str, b: &str) -> usize {
 /// `FuzzyAttrMatchState`: the best matches of a column name that does not exist.
 struct Fuzzy {
     distance: usize,
-    first: Option<(usize, usize)>,
-    second: Option<(usize, usize)>,
-    exact: Vec<usize>,
+    first: Option<(Place, usize)>,
+    second: Option<(Place, usize)>,
+    exact: Vec<Place>,
 }
+
+/// The place of an entry of the range table: the query level, 0 for the query of the name, and the index of the entry at that level.
+type Place = (usize, usize);
 
 impl Fuzzy {
     /// `updateFuzzyAttrMatchState`.
-    fn update(&mut self, penalty: usize, entry: usize, actual: &str, wanted: &str, column: usize) {
+    fn update(&mut self, penalty: usize, entry: Place, actual: &str, wanted: &str, column: usize) {
         if penalty > self.distance || actual.is_empty() {
             return;
         }
@@ -249,7 +252,8 @@ impl Analyzer<'_> {
             .enumerate()
             .map(|(i, (n, c))| {
                 let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
-                (n.clone(), Expr::new(ExprKind::Var(Var { relation: index, attnum }), c.ty))
+                let var = Var { relation: index, attnum, levels_up: 0 };
+                (n.clone(), Expr::new(ExprKind::Var(var), c.ty))
             })
             .collect();
         self.scope.relations.push(Relation { oid: catalog.oid, columns });
@@ -555,17 +559,33 @@ impl Analyzer<'_> {
                 .at_opt(at));
             }
         };
-        let Some(item) = self.item_by_name(schema, table, at)? else {
+        let Some((level, item)) = self.item_by_name(schema, table, at)? else {
             return Err(self.missing_entry(schema, table, at));
         };
-        match self.column_in(&item, column, at)? {
+        match self.column_in(level, &item, column, at)? {
             Some(expr) => Ok(expr),
             None => Err(self.missing_column(Some(table), column, at)),
         }
     }
 
-    /// `scanNSItemForColumn`: the column of an item with this name, or `None`.
-    fn column_in(&self, item: &Item, name: &str, at: Option<usize>) -> Result<Option<Expr>> {
+    /// The scopes of the query and of the queries outside it, with their levels: 0 for the query, 1 for the query outside it, and so on.
+    fn levels(&self) -> impl Iterator<Item = (usize, &Scope)> {
+        std::iter::once(&self.scope).chain(self.outer.iter().rev()).enumerate()
+    }
+
+    /// The scope of a level.
+    fn level(&self, level: usize) -> &Scope {
+        self.levels().nth(level).map_or(&self.scope, |(_, scope)| scope)
+    }
+
+    /// `scanNSItemForColumn`: the column of an item of a level with this name, or `None`. The columns of the expression are `levels_up` of the level.
+    fn column_in(
+        &self,
+        level: usize,
+        item: &Item,
+        name: &str,
+        at: Option<usize>,
+    ) -> Result<Option<Expr>> {
         let mut found = None;
         for (n, expr) in &item.columns {
             if n == name {
@@ -576,16 +596,18 @@ impl Analyzer<'_> {
             }
         }
         if let Some(expr) = found {
-            return Ok(Some(expr.clone().at(at)));
+            let mut expr = expr.clone().at(at);
+            expr.raise(level);
+            return Ok(Some(expr));
         }
-        let entry = &self.scope.entries[item.entry];
+        let entry = &self.level(level).entries[item.entry];
         let Some(relation) = entry.relation else { return Ok(None) };
         if item.columns.len() != entry.columns.len() {
             // The item of a USING alias gives only the columns of USING.
             return Ok(None);
         }
         if name == "tableoid" {
-            let var = Var { relation, attnum: TABLE_OID_ATTNUM };
+            let var = Var { relation, attnum: TABLE_OID_ATTNUM, levels_up: level };
             return Ok(Some(Expr::new(ExprKind::Var(var), oid::OID).at(at)));
         }
         if OTHER_SYSTEM_COLUMNS.contains(&name) {
@@ -596,8 +618,8 @@ impl Analyzer<'_> {
 
     /// The name of the relation and the name of the column of a `Var`, as `eref->aliasname` and `get_rte_attribute_name` give them for an error.
     pub(crate) fn column_names(&self, var: Var) -> (String, String) {
-        let Some(entry) = self.scope.entries.iter().find(|e| e.relation == Some(var.relation))
-        else {
+        let scope = self.level(var.levels_up);
+        let Some(entry) = scope.entries.iter().find(|e| e.relation == Some(var.relation)) else {
             return (String::new(), String::new());
         };
         let column = match usize::try_from(var.attnum) {
@@ -607,23 +629,44 @@ impl Analyzer<'_> {
         (entry.name.clone(), column)
     }
 
-    /// `colNameToVar`: the column that an unqualified name gives, or `None`.
+    /// `colNameToVar`: the column that an unqualified name gives, or `None`. The search goes up the query levels and stops at the first level that has the name.
     pub(crate) fn column_by_name(&self, name: &str, at: Option<usize>) -> Result<Option<Expr>> {
-        let mut result = None;
-        for item in self.scope.namespace.iter().filter(|i| i.cols_visible) {
-            if let Some(expr) = self.column_in(item, name, at)? {
-                if result.is_some() {
-                    return Err(ambiguous(name, at));
+        for (level, scope) in self.levels() {
+            let mut result = None;
+            for item in scope.namespace.iter().filter(|i| i.cols_visible) {
+                if let Some(expr) = self.column_in(level, item, name, at)? {
+                    if result.is_some() {
+                        return Err(ambiguous(name, at));
+                    }
+                    result = Some(expr);
                 }
-                result = Some(expr);
+            }
+            if result.is_some() {
+                return Ok(result);
             }
         }
-        Ok(result)
+        Ok(None)
     }
 
-    /// `refnameNamespaceItem`: the item that a table name gives, or `None`.
+    /// `refnameNamespaceItem`: the item that a table name gives and its level, or `None`. The search goes up the query levels and stops at the first level that has the name.
     fn item_by_name(
         &self,
+        schema: Option<&str>,
+        name: &str,
+        at: Option<usize>,
+    ) -> Result<Option<(usize, Item)>> {
+        for (level, scope) in self.levels() {
+            if let Some(item) = self.item_in(scope, schema, name, at)? {
+                return Ok(Some((level, item)));
+            }
+        }
+        Ok(None)
+    }
+
+    /// `scanNameSpaceForRefname` and `scanNameSpaceForRelid`: the item of a scope that a table name gives, or `None`.
+    fn item_in(
+        &self,
+        scope: &Scope,
         schema: Option<&str>,
         name: &str,
         at: Option<usize>,
@@ -638,8 +681,8 @@ impl Analyzer<'_> {
             };
             let Some(catalog) = self.lookup_relation(&rv)? else { return Ok(None) };
             let mut result = None;
-            for item in self.scope.namespace.iter().filter(|i| i.rel_visible) {
-                let entry = &self.scope.entries[item.entry];
+            for item in scope.namespace.iter().filter(|i| i.rel_visible) {
+                let entry = &scope.entries[item.entry];
                 if entry.relation.is_some() && !entry.aliased && entry.oid == catalog.oid {
                     if result.is_some() {
                         return Err(Error::new(
@@ -654,7 +697,7 @@ impl Analyzer<'_> {
             return Ok(result);
         }
         let mut result = None;
-        for item in self.scope.namespace.iter().filter(|i| i.rel_visible) {
+        for item in scope.namespace.iter().filter(|i| i.rel_visible) {
             if item.name == name {
                 if result.is_some() {
                     return Err(Error::new(
@@ -678,31 +721,31 @@ impl Analyzer<'_> {
             ..RangeVar::default()
         };
         let oid = self.lookup_relation(&rv).ok().flatten().map(|c| c.oid);
-        let found = self
-            .scope
-            .entries
-            .iter()
-            .position(|e| (e.relation.is_some() && Some(e.oid) == oid) || e.name == name);
-        let Some(found) = found else {
+        let found = self.levels().find_map(|(level, scope)| {
+            let index = scope
+                .entries
+                .iter()
+                .position(|e| (e.relation.is_some() && Some(e.oid) == oid) || e.name == name)?;
+            Some((level, index))
+        });
+        let Some((level, found)) = found else {
             return Error::new(
                 SqlState::UNDEFINED_TABLE,
                 format!("missing FROM-clause entry for table \"{name}\""),
             )
             .at_opt(at);
         };
-        let entry = &self.scope.entries[found];
+        let entry = &self.level(level).entries[found];
         let error = Error::new(
             SqlState::UNDEFINED_TABLE,
             format!("invalid reference to FROM-clause entry for table \"{name}\""),
         )
         .at_opt(at);
         if entry.aliased && entry.name != name {
-            let visible = self
-                .scope
-                .namespace
-                .iter()
-                .filter(|i| i.rel_visible && i.name == entry.name)
-                .any(|i| i.entry == found);
+            let visible = matches!(
+                self.item_by_name(None, &entry.name, None),
+                Ok(Some((l, item))) if l == level && item.entry == found
+            );
             if visible {
                 return error.with_hint(format!(
                     "Perhaps you meant to reference the table alias \"{}\".",
@@ -724,7 +767,10 @@ impl Analyzer<'_> {
             second: None,
             exact: Vec::new(),
         };
-        for (index, entry) in self.scope.entries.iter().enumerate() {
+        let entries = self.levels().flat_map(|(level, scope)| {
+            scope.entries.iter().enumerate().map(move |(index, entry)| ((level, index), entry))
+        });
+        for (index, entry) in entries {
             if entry.relation.is_none() {
                 continue;
             }
@@ -746,7 +792,7 @@ impl Analyzer<'_> {
             None => format!("column \"{column}\" does not exist"),
         };
         let error = Error::new(SqlState::UNDEFINED_COLUMN, message).at_opt(at);
-        let entries = &self.scope.entries;
+        let entry = |(level, index): Place| &self.level(level).entries[index];
         if fuzzy.exact.len() > 1 {
             let error = error.with_detail(format!("There are columns named \"{column}\", but they are in tables that cannot be referenced from this part of the query."));
             return if table.is_none() {
@@ -756,17 +802,19 @@ impl Analyzer<'_> {
             };
         }
         if let Some(&index) = fuzzy.exact.first() {
-            let error = error.with_detail(format!("There is a column named \"{column}\" in table \"{}\", but it cannot be referenced from this part of the query.", entries[index].name));
+            let error = error.with_detail(format!("There is a column named \"{column}\" in table \"{}\", but it cannot be referenced from this part of the query.", entry(index).name));
             // rte_visible_if_qualified: the item has a name that a query can qualify.
-            let qualified = self.scope.namespace.iter().any(|i| i.entry == index && i.rel_visible);
+            let qualified = self.levels().any(|(level, scope)| {
+                level == index.0
+                    && scope.namespace.iter().any(|i| i.entry == index.1 && i.rel_visible)
+            });
             return if table.is_none() && qualified {
                 error.with_hint("To reference that column, you must use a table-qualified name.")
             } else {
                 error
             };
         }
-        let name =
-            |(e, c): (usize, usize)| format!("{}.{}", entries[e].name, entries[e].columns[c]);
+        let name = |(e, c): (Place, usize)| format!("{}.{}", entry(e).name, entry(e).columns[c]);
         match (fuzzy.first, fuzzy.second) {
             (Some(first), None) => error.with_hint(format!(
                 "Perhaps you meant to reference the column \"{}\".",
@@ -817,7 +865,10 @@ impl Analyzer<'_> {
                     .at_opt(at));
                 }
                 match self.item_by_name(schema, table, at)? {
-                    Some(item) => vec![item],
+                    Some((0, item)) => vec![item],
+                    Some(_) => {
+                        return Err(not_yet("a row expansion of a relation of an outer query", at));
+                    }
                     None => return Err(self.missing_entry(schema, table, at)),
                 }
             }

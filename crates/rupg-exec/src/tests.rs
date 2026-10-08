@@ -473,3 +473,187 @@ fn aggregates_and_groups() {
         );
     });
 }
+
+#[test]
+fn subqueries() {
+    big_stack(|| {
+        // The results come from PostgreSQL 19.
+        assert_eq!(
+            one(
+                "SELECT (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0) FROM pg_class c WHERE c.relname = 'pg_class'"
+            ),
+            "34"
+        );
+        assert_eq!(
+            ordered(
+                "SELECT typname FROM pg_type t WHERE EXISTS (SELECT 1 FROM pg_type e WHERE e.oid = t.typelem AND e.typname = 'int4') ORDER BY 1"
+            ),
+            ["_int4"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT amname FROM pg_am WHERE oid IN (SELECT opcmethod FROM pg_opclass WHERE opcname = 'int4_ops') ORDER BY 1"
+            ),
+            ["btree", "hash"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT amname FROM pg_am WHERE oid NOT IN (SELECT opcmethod FROM pg_opclass) ORDER BY 1"
+            ),
+            ["heap"]
+        );
+        assert_eq!(
+            one("SELECT ARRAY(SELECT amname FROM pg_am ORDER BY 1)"),
+            "{brin,btree,gin,gist,hash,heap,spgist}"
+        );
+        assert_eq!(
+            row(
+                "SELECT 4 = ALL (SELECT typlen FROM pg_type WHERE typname IN ('int4','oid')), 4 = ALL (SELECT typlen FROM pg_type WHERE typname IN ('int4','int8'))"
+            ),
+            Ok(Some(vec!["t".to_string(), "f".to_string()]))
+        );
+        assert_eq!(
+            ordered(
+                "SELECT 1 = ANY (SELECT NULL::int) IS NULL, 1 = ALL (SELECT 1 WHERE false), 1 = ANY (SELECT 1 WHERE false), 1 NOT IN (SELECT NULL::int) IS NULL"
+            ),
+            ["t|t|f|t"]
+        );
+        assert_eq!(
+            one("SELECT 3 < ANY (SELECT typlen FROM pg_type WHERE typname IN ('int2','int4'))"),
+            "t"
+        );
+        assert_eq!(
+            ordered(
+                "SELECT amtype, (SELECT count(*) FROM pg_am a2 WHERE a2.amtype = a.amtype) FROM pg_am a GROUP BY amtype ORDER BY 1"
+            ),
+            ["i|6", "t|1"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT a.amname, (SELECT count(*) FROM pg_opclass o WHERE o.opcmethod = a.oid) FROM pg_am a ORDER BY 1"
+            ),
+            ["brin|72", "btree|45", "gin|4", "gist|9", "hash|42", "heap|0", "spgist|7"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT a.amname FROM pg_am a WHERE EXISTS (SELECT 1 FROM pg_opclass o WHERE o.opcmethod = a.oid AND EXISTS (SELECT 1 FROM pg_type t WHERE t.oid = o.opcintype AND t.typname = 'int4' AND a.amname = 'hash'))"
+            ),
+            ["hash"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT (SELECT a2.amname FROM pg_am a2 ORDER BY 1 OFFSET a.oid::int - a.oid::int LIMIT 1) FROM pg_am a LIMIT 1"
+            ),
+            ["brin"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT amtype FROM pg_am GROUP BY amtype HAVING count(*) > (SELECT 1) ORDER BY 1"
+            ),
+            ["i"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT a.amname, (SELECT max(o.opcname || a.amname) FROM pg_opclass o WHERE o.opcmethod = a.oid) FROM pg_am a WHERE a.amname = 'hash'"
+            ),
+            ["hash|xid_opshash"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT a.amname FROM pg_am a JOIN pg_am b ON a.oid = b.oid AND EXISTS (SELECT 1 FROM pg_opclass o WHERE o.opcmethod = b.oid) ORDER BY 1"
+            ),
+            ["brin", "btree", "gin", "gist", "hash", "spgist"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT amname FROM pg_am a ORDER BY (SELECT count(*) FROM pg_opclass o WHERE o.opcmethod = a.oid) DESC, amname LIMIT 3"
+            ),
+            ["brin", "btree", "hash"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT pg_typeof((SELECT 'x')), pg_typeof(ARRAY(SELECT 'x')), pg_typeof(ARRAY(SELECT 1::int2))"
+            ),
+            ["text|text[]|smallint[]"]
+        );
+        assert_eq!(
+            one(
+                "SELECT (SELECT amname FROM pg_am WHERE oid = c.oid OR c.relname = 'x') FROM pg_class c WHERE c.relname = 'pg_am'"
+            ),
+            "NULL"
+        );
+        assert_eq!(one("SELECT (SELECT oid FROM pg_am WHERE false) IS NULL"), "t");
+        assert_eq!(one("SELECT ARRAY(SELECT typname FROM pg_type WHERE false)"), "{}");
+        assert_eq!(
+            ordered(
+                "SELECT ARRAY(SELECT oid::int - oid::int FROM pg_am WHERE amname IN ('heap','hash')), ARRAY(SELECT NULL::int)"
+            ),
+            ["{0,0}|{NULL}"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT (SELECT relname FROM pg_class WHERE relname = 'pg_am')::text, (SELECT c.relname FROM pg_class c WHERE oid = 1259)"
+            ),
+            ["pg_am|pg_class"]
+        );
+        assert_eq!(one("SELECT (SELECT relnatts FROM pg_class WHERE oid = 1259) + 1"), "35");
+        assert_eq!(one("SELECT relname FROM pg_class c WHERE relname = (SELECT 'pg_am')"), "pg_am");
+        assert_eq!(
+            one(
+                "SELECT count(*) FROM pg_am a WHERE a.oid > ALL (SELECT o.opcmethod FROM pg_opclass o WHERE o.opcname = 'int4_ops')"
+            ),
+            "4"
+        );
+        assert_eq!(one("SELECT 1 FROM pg_am GROUP BY (SELECT 1)"), "1");
+        assert_eq!(one("SELECT 1 FROM pg_am a WHERE (SELECT a.oid) = 2 LIMIT (SELECT 1)"), "1");
+        assert_eq!(ordered("SELECT (SELECT count(*)) FROM pg_am"), ["1"; 7]);
+        assert_eq!(
+            ordered("SELECT amname FROM pg_am a WHERE a.oid IN (SELECT a.oid) ORDER BY 1 LIMIT 2"),
+            ["brin", "btree"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT amname FROM pg_am a WHERE amname = ANY (SELECT amname FROM pg_am b WHERE b.oid < a.oid)"
+            ),
+            [""; 0]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT (SELECT b.amname FROM pg_am b WHERE b.oid = a.oid) FROM pg_am a ORDER BY 1 LIMIT 2"
+            ),
+            ["brin", "btree"]
+        );
+        // simplify_EXISTS_query: with no aggregate, `HAVING` or `OFFSET`, EXISTS does not compute the target list.
+        assert_eq!(one("SELECT EXISTS (SELECT 1/0 FROM pg_am WHERE false)"), "f");
+        assert_eq!(one("SELECT EXISTS (SELECT 1/(oid::int - oid::int) FROM pg_am)"), "t");
+        assert_eq!(one("SELECT 1 WHERE EXISTS (SELECT 1/0 FROM pg_am)"), "1");
+        assert_eq!(one("SELECT EXISTS (SELECT 1/0)"), "t");
+        assert_eq!(
+            ordered(
+                "SELECT EXISTS (SELECT 1/(oid::int - oid::int) FROM pg_am LIMIT 1), EXISTS (SELECT 1/(oid::int - oid::int) FROM pg_am LIMIT NULL)"
+            ),
+            ["t|t"]
+        );
+        assert_eq!(one("SELECT EXISTS (SELECT 1/(oid::int - oid::int) FROM pg_am LIMIT 0)"), "f");
+        assert_eq!(
+            error("SELECT EXISTS (SELECT 1/(oid::int - oid::int) FROM pg_am OFFSET 0)"),
+            "22012"
+        );
+        assert_eq!(error("SELECT EXISTS (SELECT count(*)/0 FROM pg_am)"), "22012");
+        assert_eq!(one("SELECT (SELECT 1/(oid::int - oid::int) FROM pg_am WHERE false)"), "NULL");
+        assert_eq!(
+            rows("SELECT (SELECT oid FROM pg_am)"),
+            Err((
+                "21000".to_string(),
+                "more than one row returned by a subquery used as an expression".to_string()
+            ))
+        );
+        // rupg does not take an aggregate of an outer query yet. PostgreSQL gives 2 here.
+        assert_eq!(
+            error(
+                "SELECT (SELECT max(a.oid) FROM pg_type LIMIT 1) FROM pg_am a WHERE a.amname = 'heap'"
+            ),
+            "0A000"
+        );
+    });
+}

@@ -59,6 +59,49 @@ pub struct Target {
     pub junk: bool,
 }
 
+impl Query {
+    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET` and `LIMIT`.
+    pub fn exprs(&self) -> Vec<&Expr> {
+        fn joins<'a>(item: &'a FromItem, out: &mut Vec<&'a Expr>) {
+            if let FromItem::Join(j) = item {
+                joins(&j.left, out);
+                joins(&j.right, out);
+                out.extend(&j.on);
+            }
+        }
+        let mut out: Vec<&Expr> = self.targets.iter().map(|t| &t.expr).collect();
+        for item in &self.from {
+            joins(item, &mut out);
+        }
+        out.extend(self.filter.iter().chain(&self.having).chain(&self.offset).chain(&self.limit));
+        out
+    }
+
+    /// The expressions of the query, in the order of [`Query::exprs`].
+    pub fn exprs_mut(&mut self) -> Vec<&mut Expr> {
+        fn joins<'a>(item: &'a mut FromItem, out: &mut Vec<&'a mut Expr>) {
+            if let FromItem::Join(j) = item {
+                let j = &mut **j;
+                joins(&mut j.left, out);
+                joins(&mut j.right, out);
+                out.extend(&mut j.on);
+            }
+        }
+        let mut out: Vec<&mut Expr> = self.targets.iter_mut().map(|t| &mut t.expr).collect();
+        for item in &mut self.from {
+            joins(item, &mut out);
+        }
+        out.extend(
+            self.filter
+                .iter_mut()
+                .chain(&mut self.having)
+                .chain(&mut self.offset)
+                .chain(&mut self.limit),
+        );
+        out
+    }
+}
+
 /// The error of a clause that the analyzer does not take yet.
 fn not_yet(what: &str) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet"))
@@ -122,7 +165,9 @@ impl Analyzer<'_> {
         }
         // markTargetListOrigins: a target that is a column of a relation names the table and the column.
         for target in &mut targets {
-            if let ExprKind::Var(var) = &target.expr.kind {
+            if let ExprKind::Var(var) = &target.expr.kind
+                && var.levels_up == 0
+            {
                 target.origin = Some((self.scope.relations[var.relation].oid, var.attnum));
             }
         }
