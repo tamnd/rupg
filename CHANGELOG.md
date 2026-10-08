@@ -4,6 +4,20 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.3 (2026-10-08)
+
+A patch release on the way to M2. The catalog functions now know the objects that a user makes.
+
+### Added
+
+- `regclass`, `regnamespace` and `regtype` read and show the user schemas, relations and types, with the schema when the name alone does not find the object (#180). `to_regclass`, `to_regnamespace`, `to_regtype`, `pg_table_is_visible` and `pg_type_is_visible` use the same lookups.
+- `format_type` is a port of `format_type_extended`. A user array type shows as `elem[]`, and a type without a `typmodout` function shows its typmod as a number (#180).
+- `pg_get_expr`, `pg_get_constraintdef` and `pg_get_indexdef` show the defaults, checks, constraints and indexes of the user objects with the same text as PostgreSQL 19, in the normal and the pretty forms (#181). An object of a system catalog gives `0A000`, and a function with a SQL syntax, for example `EXTRACT`, shows as a plain call.
+
+### Fixed
+
+- Input of `pg_node_tree` gives `0A000` "cannot accept a value of type pg_node_tree", as in PostgreSQL (#181).
+
 ## 0.1.2 (2026-10-08)
 
 A patch release on the way to M2. A session can now define tables and see them in the catalogs.
