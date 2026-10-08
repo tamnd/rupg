@@ -301,6 +301,9 @@ version = "0.0.18"
 [[package]]
 name = "rupg-catalog"
 version = "0.0.18"
+dependencies = [
+ "rupg-common",
+]
 
 [[package]]
 name = "rupg-cli"
