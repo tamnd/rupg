@@ -241,6 +241,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "rupg-func"
+version = "0.0.16"
+dependencies = [
+ "md-5",
+ "rupg-common",
+ "rupg-pgcatalog",
+ "rupg-sql",
+ "rupg-types",
+]
+
+[[package]]
 name = "rupg-fuzz"
 version = "0.0.0"
 dependencies = [
@@ -250,8 +261,10 @@ dependencies = [
  "rupg-buffer",
  "rupg-common",
  "rupg-file",
+ "rupg-func",
  "rupg-log",
  "rupg-platform",
+ "rupg-types",
  "rupg-wire",
 ]
 
@@ -279,10 +292,21 @@ dependencies = [
 ]
 
 [[package]]
+name = "rupg-pgcatalog"
+version = "0.0.16"
+
+[[package]]
 name = "rupg-platform"
 version = "0.0.16"
 dependencies = [
  "libc",
+ "rupg-common",
+]
+
+[[package]]
+name = "rupg-sql"
+version = "0.0.16"
+dependencies = [
  "rupg-common",
 ]
 

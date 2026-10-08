@@ -29,6 +29,30 @@ The targets of the wire run the small server of `crates/rupg-wire/tests/support/
 
 `seeds/wire_startup` holds the seed inputs of `wire_startup`. `cargo test -p rupg-wire` in the main workspace runs the seeds and every input in `crates/rupg-wire/tests/crashers` through the same checks, so a crash that the fuzzer found stays fixed. At M2 the startup uses `trust`. The SCRAM exchange joins `wire_startup` with `rupg-server`.
 
+### The types
+
+The targets of the types call the input, output, receive and send functions of `rupg-types` and `rupg-func` for a value of one of 52 types: the scalar types of M2, some typmods such as `numeric(10,4)` and `timestamptz(3)`, and arrays. The session is in UTC, and its clock is fixed.
+
+| Target | Input | Also a failure |
+|---|---|---|
+| `type_input` | a type, the settings `DateStyle`, `IntervalStyle`, `extra_float_digits`, `bytea_output` and `array_nulls`, and a text | an internal error that PostgreSQL does not also give, a value that the input takes but the output refuses, an output that does not read back to the same output, or a send and receive that give a different output |
+| `type_recv` | a type and the bytes of a binary value | an internal error that PostgreSQL does not also give, a value that does not give the same bytes after a send and a receive, or an output that does not read back to the same output |
+
+A float output with `extra_float_digits` below 1 loses digits, so `type_input` does not read it back. An empty `int2vector` or `oidvector` does not come back from its binary form in PostgreSQL either, so `type_input` does not check its send and receive.
+
+The checks in the loop do not compare with PostgreSQL. The example `type_replay` compares a corpus with the oracle. It writes a psql script, and the script prints one line for each case: the error of `pg_input_error_info`, or the output and the hex of the send function. For `type_recv` it writes each case as a file of `COPY` in the binary format, and the script reads the file with `COPY`. Then `type_replay diff` compares the lines with the lines of rupg:
+
+```sh
+cargo +nightly run --release --example type_replay -- sql input corpus/type_input > in.sql
+psql -X -At -F "$(printf '\t')" -f in.sql > in.tsv
+cargo +nightly run --release --example type_replay -- diff input corpus/type_input in.tsv
+cargo +nightly run --release --example type_replay -- sql recv corpus/type_recv "$PWD/copy" > rc.sql
+psql -X -At -F "$(printf '\t')" -f rc.sql > rc.tsv
+cargo +nightly run --release --example type_replay -- diff recv corpus/type_recv rc.tsv
+```
+
+The server reads the files of `COPY`, so the directory must be an absolute path that the server can read, and the user must be a superuser or have `pg_read_server_files`. A case where rupg gives `0A000`, or refuses a zone name because it has no tz database yet, counts as not supported. For an input with `now`, `today`, `tomorrow` or `yesterday`, only `OK` or the SQLSTATE of the error counts.
+
 ## Run a target
 
 Install `cargo-fuzz` and the nightly toolchain:
@@ -52,4 +76,4 @@ To run a failing input again:
 cargo +nightly fuzz run -O -s none file_open artifacts/file_open/crash-<hash>
 ```
 
-`cargo test` in this directory builds the base file and applies 200 random inputs to each target of the file. The nightly workflow runs each target for 20 minutes.
+`cargo test` in this directory builds the base file and applies 200 random inputs to each target of the file, and 2000 random inputs to `type_input` and `type_recv`. The nightly workflow runs each target for 20 minutes.

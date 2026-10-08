@@ -310,7 +310,7 @@ fn unexpected(token: Token, error: Error) -> Fail {
     Fail { error, start: token.start, end: token.end }
 }
 
-/// The semantic actions of a parse. Each event comes after the lexer reads its token and before it reads the next one, as in `pg_parse_json`, so an error of an action comes before an error of a later token.
+/// The semantic actions of a parse, in the order of `pg_parse_json`. A scalar comes after the lexer reads the next token, as in `parse_scalar`, so an error of that token comes before an error of the action. The other events come before the lexer reads the next token.
 pub(crate) trait Sink {
     /// The start of an array or an object.
     fn open(&mut self, open: Open);
@@ -356,6 +356,8 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
     let input = input.as_bytes();
     let mut lexer = Lexer { input, at: 0, escapes, text: String::new() };
     let mut stack = Vec::new();
+    // The decoded text of the last scalar. The lexer reads the next token before the action takes the scalar, so the two texts swap.
+    let mut decoded = String::new();
     let mut token = lexer.next()?;
     let mut step = Step::Value;
     loop {
@@ -389,8 +391,11 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                     }
                 }
                 Kind::String | Kind::Number | Kind::True | Kind::False | Kind::Null => {
-                    sink.scalar(token.kind, text(token), &lexer.text).map_err(Stop::Action)?;
+                    // `parse_scalar` reads the next token before it calls the action.
+                    let scalar = token;
+                    std::mem::swap(&mut lexer.text, &mut decoded);
                     token = lexer.next()?;
+                    sink.scalar(scalar.kind, text(scalar), &decoded).map_err(Stop::Action)?;
                     Step::After
                 }
                 _ => return Err(unexpected(token, Error::ExpectedJson).into()),
