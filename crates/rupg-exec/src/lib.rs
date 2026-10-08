@@ -1,11 +1,11 @@
 //! The vectorized executor, the point path, compressed execution, spill, the per-distinct result tables of document 14 section 14.6.
 //!
-//! This version reads the tables of the catalog. It joins the parts of `FROM`, tests the `WHERE` clause and computes the target list for each row. [`prepare`] checks that the engine has every function and every type of the query, so that a query that the engine cannot run is an error `0A000` before it runs. [`Plan::run`] then computes the row as `ExecInterpExpr` of PostgreSQL does.
+//! This version reads the tables of the catalog. It joins the parts of `FROM`, tests the `WHERE` clause and computes the target list for each row. Then it applies `DISTINCT`, `ORDER BY`, `OFFSET` and `LIMIT` as the plan of PostgreSQL does with the nodes `Sort`, `Unique` and `Limit`. [`prepare`] checks that the engine has every function and every type of the query, so that a query that the engine cannot run is an error `0A000` before it runs. [`Plan::run`] then computes the row as `ExecInterpExpr` of PostgreSQL does.
 
 #![forbid(unsafe_code)]
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Query, SqlValue, Target,
+    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Query, SortGroup, SqlValue, Target,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -123,13 +123,36 @@ pub fn prepare(query: Query) -> Result<Plan> {
     for item in &query.from {
         check_join(item)?;
     }
+    for expr in query.offset.iter().chain(&query.limit) {
+        check(expr)?;
+    }
+    for group in &query.sort {
+        kernel(group.sort, None)?;
+        if query.with_ties {
+            kernel(group.equal, None)?;
+        }
+    }
+    for group in &query.distinct {
+        kernel(group.equal, None)?;
+        if group.sort != 0 {
+            kernel(group.sort, None)?;
+        }
+    }
+    // `create_distinct_paths`: a `DISTINCT` sorts the rows when every type has an order and else uses a hash table.
+    if !query.distinct.iter().all(|g| g.sort != 0) && !query.distinct.iter().all(|g| g.hashable) {
+        return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement DISTINCT")
+            .with_detail(
+                "Some of the datatypes only support hashing, while others only support sorting.",
+            ));
+    }
     Ok(Plan { query })
 }
 
 impl Plan {
-    /// The columns of the result.
+    /// The columns of the result. The junk columns of `ORDER BY` do not count.
     pub fn columns(&self) -> &[Target] {
-        &self.query.targets
+        let n = self.query.targets.iter().take_while(|t| !t.junk).count();
+        &self.query.targets[..n]
     }
 
     /// The warnings of the analysis of the query.
@@ -148,23 +171,120 @@ impl Plan {
     ///
     /// The error of a function, such as a division by zero.
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
-        let tables = scan::read(&self.query, session)?;
+        let query = &self.query;
+        let tables = scan::read(query, session)?;
         let mut eval = Eval { params, session, case: Vec::new(), tables: &tables, tuple: &[] };
-        let tuples = scan::tuples(&self.query, &tables, &mut |expr, tuple| {
+        let (offset, count) = eval.limits(query)?;
+        if count == Some(0) {
+            return Ok(Vec::new());
+        }
+        let tuples = scan::tuples(query, &tables, &mut |expr, tuple| {
             let mut eval = Eval { params, session, case: Vec::new(), tables: &tables, tuple };
             Ok(eval.eval(expr)? == Value::Bool(true))
         })?;
-        let mut rows = Vec::with_capacity(tuples.len());
-        for tuple in &tuples {
+        // With no sort, `Limit` stops after the rows that it gives.
+        let ordered = !query.sort.is_empty() || !query.distinct.is_empty();
+        let needed = match count {
+            Some(count) if !ordered => offset.saturating_add(count),
+            _ => usize::MAX,
+        };
+        let mut rows = Vec::with_capacity(tuples.len().min(needed));
+        for tuple in tuples.iter().take(needed) {
             eval.tuple = tuple;
-            let row = self
-                .query
-                .targets
-                .iter()
-                .map(|t| eval.eval(&t.expr))
-                .collect::<Result<Vec<_>>>()?;
+            let row =
+                query.targets.iter().map(|t| eval.eval(&t.expr)).collect::<Result<Vec<_>>>()?;
             rows.push(row);
         }
+        let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
+        let rows = self.order(rows, &types, offset, count, session)?;
+        let width = self.columns().len();
+        Ok(rows
+            .into_iter()
+            .map(|mut row| {
+                row.truncate(width);
+                row
+            })
+            .collect())
+    }
+
+    /// `DISTINCT`, `ORDER BY`, `OFFSET` and `LIMIT`. A `DISTINCT` sorts the rows on the items of `DISTINCT` and keeps the first row of each group, as `Sort` and `Unique` do. When a type of `DISTINCT` has no order, it keeps the first row of each group in the order of the rows and then sorts for `ORDER BY`. A `Sort` below `Limit` keeps only the first `OFFSET` + `LIMIT` rows, as `tuplesort_set_bound` does.
+    fn order(
+        &self,
+        mut rows: Vec<Vec<Value>>,
+        types: &[u32],
+        offset: usize,
+        count: Option<usize>,
+        session: &dyn Session,
+    ) -> Result<Vec<Vec<Value>>> {
+        let query = &self.query;
+        let mut sorted = query.sort.is_empty();
+        if !query.distinct.is_empty() {
+            let equal = sort::Keys::new(&query.distinct, types, session)?;
+            if query.distinct.iter().all(|g| g.sort != 0) {
+                // The items of `DISTINCT ON` come first in `ORDER BY`, so the longer list sorts for both.
+                let list: &[SortGroup] = if query.sort.len() > query.distinct.len() {
+                    &query.sort
+                } else {
+                    &query.distinct
+                };
+                let keys = sort::Keys::new(list, types, session)?;
+                sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?;
+                let mut unique: Vec<Vec<Value>> = Vec::new();
+                for row in rows {
+                    if let Some(last) = unique.last()
+                        && equal.equal(last, &row)?
+                    {
+                        continue;
+                    }
+                    unique.push(row);
+                }
+                rows = unique;
+                sorted = true;
+            } else {
+                let mut unique: Vec<Vec<Value>> = Vec::new();
+                for row in rows {
+                    let mut seen = false;
+                    for other in &unique {
+                        if equal.equal(other, &row)? {
+                            seen = true;
+                            break;
+                        }
+                    }
+                    if !seen {
+                        unique.push(row);
+                    }
+                }
+                rows = unique;
+            }
+        }
+        if !sorted {
+            let keys = sort::Keys::new(&query.sort, types, session)?;
+            // `compute_tuples_needed` and `tuplesort_set_bound`: the bound must allow `bound * 2` in an `int`.
+            let bound = match count {
+                Some(count) if !query.with_ties => offset
+                    .checked_add(count)
+                    .filter(|b| *b <= usize::try_from(i32::MAX / 2).unwrap_or(usize::MAX)),
+                _ => None,
+            };
+            match bound {
+                Some(bound) if rows.len() > bound * 2 => {
+                    rows = sort::bounded(rows, bound, &mut |a, b| keys.compare(a, b))?;
+                }
+                _ => sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?,
+            }
+        }
+        let start = offset.min(rows.len());
+        let mut end = count.map_or(rows.len(), |c| start.saturating_add(c).min(rows.len()));
+        if query.with_ties && end > start {
+            // `LIMIT_WINDOWEND_TIES`: the rows equal to the last row of the window on the items of `ORDER BY` come too.
+            let keys = sort::Keys::new(&query.sort, types, session)?;
+            let last = end - 1;
+            while end < rows.len() && keys.equal(&rows[last], &rows[end])? {
+                end += 1;
+            }
+        }
+        rows.truncate(end);
+        rows.drain(..start);
         Ok(rows)
     }
 }
@@ -182,6 +302,34 @@ struct Eval<'a> {
 }
 
 impl Eval<'_> {
+    /// `recompute_limits` of `nodeLimit.c`: the number of rows that `OFFSET` skips, and the number of rows that `LIMIT` gives or `None` for all rows. A null `OFFSET` is 0.
+    fn limits(&mut self, query: &Query) -> Result<(usize, Option<usize>)> {
+        let mut value = |expr: Option<&Expr>| -> Result<Option<i64>> {
+            match expr.map(|e| self.eval(e)).transpose()? {
+                None | Some(Value::Null) => Ok(None),
+                Some(Value::Int8(v)) => Ok(Some(v)),
+                Some(_) => Err(Error::internal("LIMIT and OFFSET must be bigint")),
+            }
+        };
+        let offset = value(query.offset.as_ref())?.unwrap_or(0);
+        if offset < 0 {
+            return Err(Error::new(
+                SqlState::INVALID_ROW_COUNT_IN_RESULT_OFFSET_CLAUSE,
+                "OFFSET must not be negative",
+            ));
+        }
+        let count = value(query.limit.as_ref())?;
+        if count.is_some_and(|c| c < 0) {
+            return Err(Error::new(
+                SqlState::INVALID_ROW_COUNT_IN_LIMIT_CLAUSE,
+                "LIMIT must not be negative",
+            ));
+        }
+        // A number of rows that does not fit in memory is the same as all rows.
+        let size = |v: i64| usize::try_from(v).unwrap_or(usize::MAX);
+        Ok((size(offset), count.map(size)))
+    }
+
     fn eval(&mut self, expr: &Expr) -> Result<Value> {
         match &expr.kind {
             ExprKind::Const(v) => Ok(v.clone()),
@@ -530,6 +678,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 }
 
 mod scan;
+mod sort;
 
 #[cfg(test)]
 mod tests;

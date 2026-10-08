@@ -39,44 +39,12 @@ impl Tables {
     }
 }
 
-/// The expressions that an expression has as its arguments.
-pub(crate) fn children(expr: &Expr) -> Vec<&Expr> {
-    match &expr.kind {
-        ExprKind::Const(_)
-        | ExprKind::Param(_)
-        | ExprKind::CaseTest
-        | ExprKind::SqlValue(_)
-        | ExprKind::Var(_) => Vec::new(),
-        ExprKind::Func(f) => f.args.iter().collect(),
-        ExprKind::Relabel(arg)
-        | ExprKind::CoerceViaIo(arg)
-        | ExprKind::NullTest(arg, _)
-        | ExprKind::BooleanTest(arg, _) => vec![&**arg],
-        ExprKind::Bool(_, args)
-        | ExprKind::Coalesce(args)
-        | ExprKind::MinMax { args, .. }
-        | ExprKind::NullIf { args, .. }
-        | ExprKind::Distinct { args, .. }
-        | ExprKind::ScalarArrayOp { args, .. }
-        | ExprKind::Array { elements: args, .. } => args.iter().collect(),
-        ExprKind::Case(case) => {
-            let mut all: Vec<&Expr> = case.arg.as_deref().into_iter().collect();
-            for (when, then) in &case.whens {
-                all.push(when);
-                all.push(then);
-            }
-            all.push(&case.default);
-            all
-        }
-    }
-}
-
 /// Calls `f` for each column that an expression reads.
 fn each_var(expr: &Expr, f: &mut impl FnMut(Var)) {
     if let ExprKind::Var(var) = &expr.kind {
         f(*var);
     }
-    for child in children(expr) {
+    for child in expr.children() {
         each_var(child, f);
     }
 }

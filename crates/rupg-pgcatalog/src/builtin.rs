@@ -1,6 +1,6 @@
-//! Typed rows of the built-in types, functions, operators and casts, with indexes by OID and by name.
+//! Typed rows of the built-in types, functions, operators, casts and operator classes, with indexes by OID and by name.
 //!
-//! The analyzer resolves names, operators, functions and casts with these rows, as `parse_oper.c`, `parse_func.c` and `parse_coerce.c` do with the syscache of PostgreSQL. The rows are read once from the static batches of `pg_type`, `pg_proc`, `pg_operator` and `pg_cast`, so they hold the values of the pin and nothing else.
+//! The analyzer resolves names, operators, functions and casts with these rows, as `parse_oper.c`, `parse_func.c` and `parse_coerce.c` do with the syscache of PostgreSQL. It finds the sort and equality operators of a type with the rows of `pg_opclass` and `pg_amop`, as `typcache.c` does. The rows are read once from the static batches of the catalogs, so they hold the values of the pin and nothing else.
 
 use std::collections::HashMap;
 use std::sync::LazyLock;
@@ -108,11 +108,40 @@ pub struct CastRow {
     pub method: u8,
 }
 
+/// A row of `pg_opclass`.
+#[derive(Debug)]
+pub struct OpclassRow {
+    pub oid: u32,
+    /// `opcmethod`: the access method, such as 403 for btree and 405 for hash.
+    pub method: u32,
+    pub name: &'static str,
+    pub family: u32,
+    /// `opcintype`: the type that the class indexes.
+    pub intype: u32,
+    /// `opcdefault`: true for the default class of the type and the method.
+    pub default: bool,
+}
+
+/// A row of `pg_amop`.
+#[derive(Debug)]
+pub struct AmopRow {
+    pub family: u32,
+    pub left: u32,
+    pub right: u32,
+    pub strategy: i16,
+    /// `amoppurpose`: `s` for search or `o` for ordering.
+    pub purpose: u8,
+    pub operator: u32,
+    pub method: u32,
+}
+
 struct Builtin {
     types: Vec<TypeRow>,
     procs: Vec<ProcRow>,
     operators: Vec<OperatorRow>,
     casts: Vec<CastRow>,
+    opclasses: Vec<OpclassRow>,
+    amops: Vec<AmopRow>,
     type_oid: HashMap<u32, usize>,
     type_name: HashMap<&'static str, Vec<usize>>,
     proc_oid: HashMap<u32, usize>,
@@ -120,6 +149,8 @@ struct Builtin {
     operator_oid: HashMap<u32, usize>,
     operator_name: HashMap<&'static str, Vec<usize>>,
     cast_pair: HashMap<(u32, u32), usize>,
+    amop_member: HashMap<(u32, u32, u32, i16), usize>,
+    amop_operator: HashMap<u32, Vec<usize>>,
 }
 
 static BUILTIN: LazyLock<Builtin> = LazyLock::new(Builtin::load);
@@ -202,6 +233,16 @@ impl Builtin {
         let procs = load_procs();
         let operators = load_operators();
         let casts = load_casts();
+        let opclasses = load_opclasses();
+        let amops = load_amops();
+        let mut amop_member = HashMap::new();
+        let mut amop_operator: HashMap<u32, Vec<usize>> = HashMap::new();
+        for (i, a) in amops.iter().enumerate() {
+            if a.purpose == b's' {
+                amop_member.insert((a.family, a.left, a.right, a.strategy), i);
+            }
+            amop_operator.entry(a.operator).or_default().push(i);
+        }
         let mut proc_name: HashMap<&'static str, Vec<usize>> = HashMap::new();
         for (i, p) in procs.iter().enumerate() {
             proc_name.entry(p.name).or_default().push(i);
@@ -222,10 +263,14 @@ impl Builtin {
             operator_oid: operators.iter().enumerate().map(|(i, o)| (o.oid, i)).collect(),
             operator_name,
             cast_pair: casts.iter().enumerate().map(|(i, c)| ((c.source, c.target), i)).collect(),
+            amop_member,
+            amop_operator,
             types,
             procs,
             operators,
             casts,
+            opclasses,
+            amops,
         }
     }
 }
@@ -362,6 +407,41 @@ fn load_casts() -> Vec<CastRow> {
         .collect()
 }
 
+fn load_opclasses() -> Vec<OpclassRow> {
+    let r = Rows::new("pg_opclass");
+    let (oid, method, name) = (r.oid("oid"), r.oid("opcmethod"), r.text("opcname"));
+    let (family, intype, default) = (r.oid("opcfamily"), r.oid("opcintype"), r.bool("opcdefault"));
+    (0..r.catalog.len)
+        .map(|i| OpclassRow {
+            oid: oid[i],
+            method: method[i],
+            name: name[i],
+            family: family[i],
+            intype: intype[i],
+            default: default[i],
+        })
+        .collect()
+}
+
+fn load_amops() -> Vec<AmopRow> {
+    let r = Rows::new("pg_amop");
+    let (family, left, right) =
+        (r.oid("amopfamily"), r.oid("amoplefttype"), r.oid("amoprighttype"));
+    let (strategy, purpose) = (r.int2("amopstrategy"), r.char("amoppurpose"));
+    let (operator, method) = (r.oid("amopopr"), r.oid("amopmethod"));
+    (0..r.catalog.len)
+        .map(|i| AmopRow {
+            family: family[i],
+            left: left[i],
+            right: right[i],
+            strategy: strategy[i],
+            purpose: purpose[i],
+            operator: operator[i],
+            method: method[i],
+        })
+        .collect()
+}
+
 /// Every built-in type, in the order of `pg_type.dat`.
 pub fn types() -> &'static [TypeRow] {
     &BUILTIN.types
@@ -420,6 +500,23 @@ pub fn cast(source: u32, target: u32) -> Option<&'static CastRow> {
     BUILTIN.cast_pair.get(&(source, target)).map(|&i| &BUILTIN.casts[i])
 }
 
+/// Every built-in operator class.
+pub fn opclasses() -> &'static [OpclassRow] {
+    &BUILTIN.opclasses
+}
+
+/// `get_opfamily_member`: the search operator of the family for the two types and the strategy.
+pub fn opfamily_member(family: u32, left: u32, right: u32, strategy: i16) -> Option<u32> {
+    let b = &*BUILTIN;
+    b.amop_member.get(&(family, left, right, strategy)).map(|&i| b.amops[i].operator)
+}
+
+/// The rows of `pg_amop` for this operator.
+pub fn amops_of_operator(operator: u32) -> impl Iterator<Item = &'static AmopRow> {
+    let b = &*BUILTIN;
+    b.amop_operator.get(&operator).into_iter().flatten().map(|&i| &b.amops[i])
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -438,6 +535,11 @@ mod tests {
         let to_int8 = cast(23, 20).unwrap();
         assert_eq!((to_int8.context, to_int8.method), (b'i', b'f'));
         assert_eq!(cast(25, 1043).unwrap().method, b'b');
+        let int4_ops = opclasses().iter().find(|c| c.method == 403 && c.intype == 23 && c.default);
+        let family = int4_ops.unwrap().family;
+        assert_eq!(opfamily_member(family, 23, 23, 1), Some(97));
+        assert_eq!(opfamily_member(family, 23, 23, 5), Some(521));
+        assert!(amops_of_operator(97).any(|a| a.method == 403 && a.strategy == 1));
         let set_config = procs_named("set_config").next().unwrap();
         assert_eq!(set_config.volatile, b'v');
         let keywords = procs_named("pg_get_keywords").next().unwrap().argnames.unwrap().to_vec();

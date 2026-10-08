@@ -278,3 +278,59 @@ fn catalog_tables() {
         );
     });
 }
+
+/// The rows of a query in the order of the result, each as its columns joined with `|`.
+fn ordered(sql: &str) -> Vec<String> {
+    match rows(sql) {
+        Ok(rows) => rows.into_iter().map(|r| r.join("|")).collect(),
+        Err(e) => panic!("{sql}: {e:?}"),
+    }
+}
+
+#[test]
+fn order_distinct_and_limit() {
+    big_stack(|| {
+        assert_eq!(
+            ordered("SELECT amname FROM pg_am ORDER BY amname"),
+            ["brin", "btree", "gin", "gist", "hash", "heap", "spgist"]
+        );
+        assert_eq!(
+            ordered("SELECT amname FROM pg_am ORDER BY amname DESC LIMIT 2 OFFSET 1"),
+            ["heap", "hash"]
+        );
+        assert_eq!(
+            ordered("SELECT amname FROM pg_am ORDER BY amtype DESC, 1 USING >"),
+            ["heap", "spgist", "hash", "gist", "gin", "btree", "brin"]
+        );
+        assert_eq!(
+            ordered("SELECT NULLIF(amname, 'heap') AS n FROM pg_am ORDER BY n NULLS FIRST LIMIT 2"),
+            ["NULL", "brin"]
+        );
+        assert_eq!(
+            ordered("SELECT NULLIF(amname, 'heap') AS n FROM pg_am ORDER BY n DESC LIMIT 2"),
+            ["NULL", "spgist"]
+        );
+        assert_eq!(ordered("SELECT DISTINCT amtype FROM pg_am ORDER BY 1"), ["i", "t"]);
+        assert_eq!(
+            ordered(
+                "SELECT DISTINCT ON (amtype) amtype, amname FROM pg_am ORDER BY amtype, amname"
+            ),
+            ["i|brin", "t|heap"]
+        );
+        assert_eq!(
+            ordered("SELECT amtype FROM pg_am ORDER BY amtype FETCH FIRST 1 ROW WITH TIES"),
+            ["i", "i", "i", "i", "i", "i"]
+        );
+        assert_eq!(ordered("SELECT amname FROM pg_am ORDER BY amname LIMIT 0"), [""; 0]);
+        assert_eq!(ordered("SELECT amname FROM pg_am ORDER BY amname OFFSET 9"), [""; 0]);
+        assert_eq!(ordered("SELECT amname FROM pg_am LIMIT NULL OFFSET NULL").len(), 7);
+        assert_eq!(
+            ordered("SELECT amname FROM pg_am ORDER BY amname LIMIT 1.5"),
+            ["brin", "btree"]
+        );
+        assert_eq!(error("SELECT amname FROM pg_am LIMIT -1"), "2201W");
+        assert_eq!(error("SELECT amname FROM pg_am OFFSET -1"), "2201X");
+        // OFFSET comes first, as recompute_limits does.
+        assert_eq!(error("SELECT amname FROM pg_am LIMIT -1 OFFSET -1"), "2201X");
+    });
+}

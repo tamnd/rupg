@@ -338,17 +338,28 @@ impl Analyzer<'_> {
 
     /// `coerce_to_boolean`: the condition of `construct`, such as `WHERE` or `AND`, cast to `boolean`.
     pub(crate) fn coerce_to_boolean(&mut self, expr: Expr, construct: &str) -> Result<Expr> {
-        if expr.ty == oid::BOOL {
+        self.coerce_to_specific(expr, oid::BOOL, construct)
+    }
+
+    /// `coerce_to_specific_type`: the expression as a value of the type, with an assignment cast, for a clause such as `LIMIT`.
+    pub(crate) fn coerce_to_specific(
+        &mut self,
+        expr: Expr,
+        target: u32,
+        construct: &str,
+    ) -> Result<Expr> {
+        if expr.ty == target {
             return Ok(expr);
         }
         let ty = expr.ty;
         let place = expr.place();
-        match self.coerce_to_target(expr, oid::BOOL, -1, Context::Assignment, None)? {
+        match self.coerce_to_target(expr, target, -1, Context::Assignment, None)? {
             Some(expr) => Ok(expr),
             None => Err(Error::new(
                 SqlState::DATATYPE_MISMATCH,
                 format!(
-                    "argument of {construct} must be type boolean, not type {}",
+                    "argument of {construct} must be type {}, not type {}",
+                    types::name(target),
                     types::name(ty)
                 ),
             )

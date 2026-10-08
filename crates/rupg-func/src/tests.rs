@@ -289,3 +289,22 @@ fn date_and_timestamp_casts() {
     let error = operator("+", Value::Date(2_147_483_000), Value::Int4(1_000)).unwrap_err();
     assert_eq!(error.state(), SqlState::DATETIME_VALUE_OUT_OF_RANGE);
 }
+
+#[test]
+fn oidvector_compares_the_length_first() {
+    let vector = |oids: &[u32]| {
+        Value::Array(Box::new(Array::one(oids.iter().map(|o| Some(Value::Oid(*o))).collect())))
+    };
+    let types = [oid::OIDVECTOR, oid::OIDVECTOR];
+    let (short, long) = (vector(&[9]), vector(&[1, 2]));
+    assert_eq!(
+        call_types("oidvectorlt", &types, &[short.clone(), long.clone()]),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(call_types("btoidvectorcmp", &types, &[long.clone(), short]), Ok(Value::Int4(1)));
+    assert_eq!(
+        call_types("oidvectorgt", &types, &[vector(&[1, 3]), long.clone()]),
+        Ok(Value::Bool(true))
+    );
+    assert_eq!(call_types("oidvectoreq", &types, &[vector(&[1, 2]), long]), Ok(Value::Bool(true)));
+}

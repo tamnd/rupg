@@ -161,6 +161,91 @@ impl Expr {
         }
     }
 
+    /// The expressions that this expression has as its arguments.
+    pub fn children(&self) -> Vec<&Expr> {
+        match &self.kind {
+            ExprKind::Const(_)
+            | ExprKind::Param(_)
+            | ExprKind::CaseTest
+            | ExprKind::SqlValue(_)
+            | ExprKind::Var(_) => Vec::new(),
+            ExprKind::Func(f) => f.args.iter().collect(),
+            ExprKind::Relabel(arg)
+            | ExprKind::CoerceViaIo(arg)
+            | ExprKind::NullTest(arg, _)
+            | ExprKind::BooleanTest(arg, _) => vec![&**arg],
+            ExprKind::Bool(_, args)
+            | ExprKind::Coalesce(args)
+            | ExprKind::MinMax { args, .. }
+            | ExprKind::NullIf { args, .. }
+            | ExprKind::Distinct { args, .. }
+            | ExprKind::ScalarArrayOp { args, .. }
+            | ExprKind::Array { elements: args, .. } => args.iter().collect(),
+            ExprKind::Case(case) => {
+                let mut all: Vec<&Expr> = case.arg.as_deref().into_iter().collect();
+                for (when, then) in &case.whens {
+                    all.push(when);
+                    all.push(then);
+                }
+                all.push(&case.default);
+                all
+            }
+        }
+    }
+
+    fn children_mut(&mut self) -> Vec<&mut Expr> {
+        match &mut self.kind {
+            ExprKind::Const(_)
+            | ExprKind::Param(_)
+            | ExprKind::CaseTest
+            | ExprKind::SqlValue(_)
+            | ExprKind::Var(_) => Vec::new(),
+            ExprKind::Func(f) => f.args.iter_mut().collect(),
+            ExprKind::Relabel(arg)
+            | ExprKind::CoerceViaIo(arg)
+            | ExprKind::NullTest(arg, _)
+            | ExprKind::BooleanTest(arg, _) => vec![&mut **arg],
+            ExprKind::Bool(_, args)
+            | ExprKind::Coalesce(args)
+            | ExprKind::MinMax { args, .. }
+            | ExprKind::NullIf { args, .. }
+            | ExprKind::Distinct { args, .. }
+            | ExprKind::ScalarArrayOp { args, .. }
+            | ExprKind::Array { elements: args, .. } => args.iter_mut().collect(),
+            ExprKind::Case(case) => {
+                let mut all: Vec<&mut Expr> = case.arg.as_deref_mut().into_iter().collect();
+                for (when, then) in &mut case.whens {
+                    all.push(when);
+                    all.push(then);
+                }
+                all.push(&mut case.default);
+                all
+            }
+        }
+    }
+
+    /// `equal` of PostgreSQL: true when the two expressions are the same apart from their locations.
+    pub fn same(&self, other: &Expr) -> bool {
+        fn strip(expr: &mut Expr) {
+            expr.location = None;
+            for child in expr.children_mut() {
+                strip(child);
+            }
+        }
+        let (mut a, mut b) = (self.clone(), other.clone());
+        strip(&mut a);
+        strip(&mut b);
+        a == b
+    }
+
+    /// The first column that the expression reads, as `locate_var_of_level` finds it.
+    pub fn first_var(&self) -> Option<&Expr> {
+        if matches!(self.kind, ExprKind::Var(_)) {
+            return Some(self);
+        }
+        self.children().into_iter().find_map(Expr::first_var)
+    }
+
     /// `exprLocation`: the place of the expression. For a call, an operator or a test it is the leftmost of the place of the node and the place of the first argument, as in PostgreSQL.
     pub fn place(&self) -> Option<usize> {
         let first = match &self.kind {
