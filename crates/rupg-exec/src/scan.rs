@@ -1,4 +1,4 @@
-//! The scan of the tables of the catalog and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session.
+//! The scan of the relations and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session. A relation of the user gives the rows of [`user_rows`].
 //!
 //! A tuple of the join is the row number of each relation of the query, or [`NONE`] for a relation that a row of an outer join does not have. The rows of each relation are read once, with only the columns that the query uses.
 
@@ -110,9 +110,10 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     }
     let mut rows = Vec::with_capacity(query.relations.len());
     for (relation, used) in query.relations.iter().zip(&used) {
-        let catalog = rupg_pgcatalog::catalog_by_oid(relation.oid).ok_or_else(|| {
-            Error::internal(format!("no table of the catalog has the OID {}", relation.oid))
-        })?;
+        let Some(catalog) = rupg_pgcatalog::catalog_by_oid(relation.oid) else {
+            rows.push(user_rows(relation.oid, session)?);
+            continue;
+        };
         let mut table = Vec::with_capacity(catalog.len);
         for row in 0..catalog.len {
             let mut values = Vec::with_capacity(used.len());
@@ -131,6 +132,20 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         rows.push(table);
     }
     Ok(Tables { rows, oids: query.relations.iter().map(|r| r.oid).collect() })
+}
+
+/// The rows of a relation of the user. A session cannot add rows yet, so a table has no rows. A sequence has its one row, with the start value as `last_value`, because a session cannot call `nextval` yet.
+fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
+    let relation = session
+        .catalog()
+        .and_then(|c| c.relation(oid))
+        .ok_or_else(|| Error::internal(format!("no relation has the OID {oid}")))?;
+    Ok(match &relation.sequence {
+        Some(sequence) => {
+            vec![vec![Value::Int8(sequence.start), Value::Int8(0), Value::Bool(false)]]
+        }
+        None => Vec::new(),
+    })
 }
 
 /// The value of a row of a column of the catalog.

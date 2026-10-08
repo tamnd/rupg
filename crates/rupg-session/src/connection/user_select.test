@@ -1,0 +1,106 @@
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TABLE t (a int, b varchar(10), c numeric(5,2), d text[], e char(3), f timestamptz, g bool NOT NULL DEFAULT true)
+CREATE TABLE
+> CREATE TABLE s.u (x int PRIMARY KEY, y text)
+CREATE TABLE
+> CREATE TABLE ids (id serial, n bigint)
+CREATE TABLE
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:1043:-1:14,c@t.3:1700:-1:327686,d@t.4:1009:-1:-1,e@t.5:1042:-1:7,f@t.6:1184:8:-1,g@t.7:16:1:-1
+SELECT 0
+> SELECT a, b, c, d, e FROM t WHERE a > 1 ORDER BY b
+fields a@t.1:23:4:-1,b@t.2:1043:-1:14,c@t.3:1700:-1:327686,d@t.4:1009:-1:-1,e@t.5:1042:-1:7
+SELECT 0
+> SELECT b FROM t WHERE b = 'x'
+fields b@t.2:1043:-1:14
+SELECT 0
+> SELECT count(*), sum(a), max(b), bool_and(g) FROM t
+fields count:20:8:-1,sum:20:8:-1,max:25:-1:-1,bool_and:16:1:-1
+row 0,NULL,NULL,NULL
+SELECT 1
+> SELECT a FROM t GROUP BY a
+fields a@t.1:23:4:-1
+SELECT 0
+> SELECT DISTINCT e FROM t ORDER BY e LIMIT 3
+fields e@t.5:1042:-1:7
+SELECT 0
+> SELECT tableoid::regclass FROM t
+fields tableoid:2205:4:-1
+SELECT 0
+> SELECT t.* FROM t
+fields a@t.1:23:4:-1,b@t.2:1043:-1:14,c@t.3:1700:-1:327686,d@t.4:1009:-1:-1,e@t.5:1042:-1:7,f@t.6:1184:8:-1,g@t.7:16:1:-1
+SELECT 0
+> SELECT z.p, z.q FROM t AS z(p, q)
+fields p@t.1:23:4:-1,q@t.2:1043:-1:14
+SELECT 0
+> SELECT * FROM s.u
+fields x@s.u.1:23:4:-1,y@s.u.2:25:-1:-1
+SELECT 0
+> SELECT * FROM u
+ERROR 42P01 relation "u" does not exist at 15
+> SELECT x, y FROM s.u JOIN t ON t.a = s.u.x
+fields x@s.u.1:23:4:-1,y@s.u.2:25:-1:-1
+SELECT 0
+> SELECT c.relname, t.a, t.b FROM pg_class c LEFT JOIN t ON t.a = c.relnatts WHERE c.relname = 't'
+fields relname@pg_class.2:19:64:-1,a@t.1:23:4:-1,b@t.2:1043:-1:14
+row t,NULL,NULL
+SELECT 1
+> SELECT EXISTS (SELECT 1 FROM t), (SELECT count(*) FROM s.u)
+fields exists:16:1:-1,count:20:8:-1
+row f,0
+SELECT 1
+> SELECT relname FROM pg_class WHERE oid IN (SELECT a FROM t)
+fields relname@pg_class.2:19:64:-1
+SELECT 0
+> SELECT * FROM ids
+fields id@ids.1:23:4:-1,n@ids.2:20:8:-1
+SELECT 0
+> SELECT * FROM ids_id_seq
+fields last_value@ids_id_seq.1:20:8:-1,log_cnt@ids_id_seq.2:20:8:-1,is_called@ids_id_seq.3:16:1:-1
+row 1,0,f
+SELECT 1
+> SELECT last_value, log_cnt, is_called FROM ids_id_seq
+fields last_value@ids_id_seq.1:20:8:-1,log_cnt@ids_id_seq.2:20:8:-1,is_called@ids_id_seq.3:16:1:-1
+row 1,0,f
+SELECT 1
+> SELECT * FROM t_pkey
+ERROR 42P01 relation "t_pkey" does not exist at 15
+> SELECT * FROM u_pkey
+ERROR 42P01 relation "u_pkey" does not exist at 15
+> SELECT * FROM s.u_pkey
+ERROR 42809 cannot open relation "u_pkey" at 15
+> SELECT * FROM t, s.u
+fields a@t.1:23:4:-1,b@t.2:1043:-1:14,c@t.3:1700:-1:327686,d@t.4:1009:-1:-1,e@t.5:1042:-1:7,f@t.6:1184:8:-1,g@t.7:16:1:-1,x@s.u.1:23:4:-1,y@s.u.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t WHERE nope = 1
+ERROR 42703 column "nope" does not exist at 23
+> SELECT t.a + 1, b || 'x', c * 2, upper(e) FROM t
+fields ?column?:23:4:-1,?column?:25:-1:-1,?column?:1700:-1:-1,upper:25:-1:-1
+SELECT 0
+> CREATE TABLE s.pg_am (z int)
+CREATE TABLE
+> SET search_path = s, pg_catalog
+SET
+search_path=s, pg_catalog
+> SELECT * FROM pg_am
+fields z@pg_am.1:23:4:-1
+SELECT 0
+> SELECT * FROM pg_catalog.pg_am WHERE amname = 'hash'
+fields oid@pg_catalog.pg_am.1:26:4:-1,amname@pg_catalog.pg_am.2:19:64:-1,amhandler@pg_catalog.pg_am.3:24:4:-1,amtype@pg_catalog.pg_am.4:18:1:-1
+row 405,hash,hashhandler,i
+SELECT 1
+> SELECT * FROM u
+fields x@u.1:23:4:-1,y@u.2:25:-1:-1
+SELECT 0
+> RESET search_path
+RESET
+search_path="$user", public
+> SELECT * FROM pg_am WHERE amname = 'hash'
+fields oid@pg_am.1:26:4:-1,amname@pg_am.2:19:64:-1,amhandler@pg_am.3:24:4:-1,amtype@pg_am.4:18:1:-1
+row 405,hash,hashhandler,i
+SELECT 1
+> SELECT * FROM missing
+ERROR 42P01 relation "missing" does not exist at 15
+> SELECT * FROM s.missing
+ERROR 42P01 relation "s.missing" does not exist at 15
