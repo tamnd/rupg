@@ -102,9 +102,9 @@ These questions came up while the documents were written. They are closed, and t
 
 ## 24.5 The file, storage and compression
 
-**Q30. The log ring size.** Document 19 proposes 64 MiB per worker. Document 08 owns ring sizes and starts each ring at 64 MiB in 16 MiB extents, which is large for an embedded library. Raised by documents 11, 17 and 19. Closes at M1, from the load and TPC-C runs.
+**Q30. The log ring size.** Document 19 proposes 64 MiB per worker. Document 08 owns ring sizes and starts each ring at 64 MiB in 16 MiB extents, which is large for an embedded library. Raised by documents 11, 17 and 19. Closes at M1, from the load and TPC-C runs. At the M1 close (#2) this is still open. The load and TPC-C runs need SQL writes, which come after M1. M1 gives one data point: with the default options, an empty file after a clean close is 80.05 MiB long, and the 4 extents of 16 MiB of the ring are 64 MiB of it. See Q74.
 
-**Q31. The checkpoint trigger.** `max_wal_size` applies to each ring, so the worst redo is the number of rings times 1 GB, about 16 s on 16 rings. The other choice is the sum over all rings. Raised by document 11. Closes at M1.
+**Q31. The checkpoint trigger.** `max_wal_size` applies to each ring, so the worst redo is the number of rings times 1 GB, about 16 s on 16 rings. The other choice is the sum over all rings. Raised by document 11. Closes at M1. At the M1 close (#2) this is still open. At M1 every commit goes to ring 0, so the two choices give the same trigger. Document 11 section 11.15 uses each ring until a decision.
 
 **Q32. Dictionary leftovers.** Strings from deleted rows and aborted transactions stay in the dictionary until `REPACK` or `VACUUM FULL`. A user who deletes data for privacy expects it to be gone. Raised by document 09. Closes at M4. The choice is between a scrub in compaction and a documented rule.
 
@@ -118,11 +118,13 @@ These questions came up while the documents were written. They are closed, and t
 
 **Q37. Data key rotation.** A new passphrase only rewraps the data key. A new data key means a rewrite of every page. Raised by document 08. Closes at M10, with backup.
 
-**Q38. 39-bit aarch64 hosts.** On hosts with a 39-bit virtual address space, each buffer window is limited to 128 GiB, so a larger file uses the hash table fallback. Its cost is not measured. Raised by document 08. Closes at M1.
+**Q38. 39-bit aarch64 hosts.** On hosts with a 39-bit virtual address space, each buffer window is limited to 128 GiB, so a larger file uses the hash table fallback. Its cost is not measured. Raised by document 08. Closes at M1. At the M1 close (#2) this is still open. The project has no aarch64 host with a 39-bit address space, so the fallback is not measured.
 
 **Q39. FSST with 12-bit codes.** The 17.0 percent gain needs a different decoder. Only the OptFSST trainer with the 8-bit decoder is adopted now. Raised by document 09. Closes at M8.
 
-**Q40. Two files during an upgrade.** Between `0.M` lines, `rupg upgrade` writes a new file, so two files exist while it runs. The rule of no sidecar file applies during operation, and the upgrade is not operation. Raised by document 23. Closes at M1, with the format version rule of document 08.
+**Q40. Two files during an upgrade.** Between `0.M` lines, `rupg upgrade` writes a new file, so two files exist while it runs. The rule of no sidecar file applies during operation, and the upgrade is not operation. Raised by document 23. Closes at M1, with the format version rule of document 08. At the M1 close (#2) this is still open. No release has changed the file format between `0.M` lines, and `rupg upgrade` is not written yet.
+
+**Q74. The size of an empty file.** Document 17 section 17.10 gives an empty file a budget of 256 KiB. At M1, an empty file after a clean close is 80.05 MiB long, with 300 KiB allocated on ext4: 3 header pages, one arena of 16 MiB for the pages, and a log ring of 4 extents of 16 MiB. Document 17 section 17.5 says that the library releases each ring at a clean close and truncates the file after its last used extent, but one arena of 16 MiB stays after that. The options are a smaller first arena or a smaller extent for the library, or a budget for the allocated size and not the length. Measured in tamnd/rupg-bench#22. Raised by document 17. Closes at M9, with the library work of document 17.
 
 ## 24.6 Transactions and the cluster
 
@@ -188,9 +190,9 @@ These questions came up while the documents were written. They are closed, and t
 
 **Q68. The load case with a warm page cache.** Document 20 section 20.3 runs the load with the source in the page cache and without it. The gate reads the cold case. The board of ClickBench does not say which case each system used. Raised by document 20. Closes at M0.
 
-**Q69. Thresholds of the performance tests.** 3 percent more instructions on one query fails a change, 1 percent in total fails a change, a nightly slowdown over 5 percent opens a bug, and CI must finish in 30 minutes. These are budgets until the noise is measured. Raised by document 21. Closes at M1.
+**Q69. Thresholds of the performance tests.** 3 percent more instructions on one query fails a change, 1 percent in total fails a change, a nightly slowdown over 5 percent opens a bug, and CI must finish in 30 minutes. These are budgets until the noise is measured. Raised by document 21. Closes at M1. At the M1 close (#2) part of this is measured. Two passes of `cargo xtask bench` on one machine differ by 0.01 percent or less for each case, and the CI workflow takes 7 to 14 minutes. The nightly wall time is not measured, so the question stays open for the 5 percent budget.
 
-**Q70. Crate names.** All 41 crate names and the two sibling repository names are free today. crates.io does not allow name squatting, so names are published at M1. Raised by document 22. Closes at M1.
+**Q70. Crate names.** All 41 crate names and the two sibling repository names are free today. crates.io does not allow name squatting, so names are published at M1. Raised by document 22. Closes at M1. At the M1 close (#2) the names are not published. The project owner decides when to publish.
 
 **Q71. Dates.** The documents give no dates. A forecast is possible after M2, when the time per milestone and the lines against the budgets of document 22 are measured. Raised by document 23. Closes at M2.
 
