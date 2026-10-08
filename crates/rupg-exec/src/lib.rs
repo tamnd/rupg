@@ -332,6 +332,15 @@ impl Plan {
         &self.query.params
     }
 
+    /// Folds the constant parts of the expressions as the planner does, and gives the plan that runs the folded expressions. `params` has the values of the parameters of `Bind`, which the fold takes as constants as a custom plan does.
+    ///
+    /// # Errors
+    ///
+    /// The error of an immutable function of constants, such as a division by zero.
+    pub fn fold(&self, params: Option<&[Value]>, session: &dyn Session) -> Result<Plan> {
+        Ok(Plan { query: fold::query(&self.query, params, session)? })
+    }
+
     /// Runs the query and gives its rows.
     ///
     /// # Errors
@@ -901,6 +910,24 @@ impl<'a> Eval<'a> {
     }
 }
 
+/// `evaluate_expr`: the value of an expression whose arguments are constants.
+fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
+    let tables = scan::Tables { rows: Vec::new(), oids: Vec::new() };
+    let cache = Cache::default();
+    let mut eval = Eval {
+        params: &[],
+        session,
+        case: Vec::new(),
+        tables: &tables,
+        tuple: &[],
+        aggs: Vec::new(),
+        cache: &cache,
+        outer: &[],
+        sub: Vec::new(),
+    };
+    eval.eval(expr)
+}
+
 /// A value as a binary-compatible type holds it: an `int4` as an `oid` keeps its bits, and an `oid` as an `int4` too.
 #[allow(clippy::cast_sign_loss, clippy::cast_possible_wrap)]
 fn relabel(value: Value, ty: u32) -> Value {
@@ -923,6 +950,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 }
 
 mod agg;
+mod fold;
 mod scan;
 mod sort;
 mod user;

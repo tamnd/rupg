@@ -1,0 +1,111 @@
+> SELECT 1/0
+ERROR 22012 division by zero
+> SELECT 1/0 WHERE false
+ERROR 22012 division by zero
+> SELECT 1/0 FROM pg_am WHERE false
+ERROR 22012 division by zero
+> SELECT 1 + (2/0)
+ERROR 22012 division by zero
+> SELECT length(repeat('x', -1)), 1/0
+ERROR 22012 division by zero
+> SELECT now() IS NULL, 1/0
+ERROR 22012 division by zero
+> SELECT set_config('', 'x', false)
+fields set_config:25:-1:-1
+ERROR 42704 unrecognized configuration parameter ""
+> SELECT set_config(NULL, 'x', false)
+fields set_config:25:-1:-1
+ERROR 22004 SET requires parameter name
+> SELECT to_regtype('int4(1)')
+fields to_regtype:2206:4:-1
+ERROR 42601 type modifier is not allowed for type "int4"
+> SELECT CASE WHEN false THEN 1/0 END
+fields case:23:4:-1
+row NULL
+SELECT 1
+> SELECT CASE WHEN NULL THEN 1/0 ELSE 2 END
+fields case:23:4:-1
+row 2
+SELECT 1
+> SELECT CASE WHEN true THEN 1 ELSE 1/0 END
+fields case:23:4:-1
+row 1
+SELECT 1
+> SELECT CASE WHEN true THEN 1 WHEN 1/0 = 1 THEN 2 END
+fields case:23:4:-1
+row 1
+SELECT 1
+> SELECT CASE 1 WHEN 2 THEN 1/0 ELSE 3 END
+fields case:23:4:-1
+row 3
+SELECT 1
+> SELECT CASE 1 WHEN 1 THEN 4 ELSE 1/0 END
+fields case:23:4:-1
+row 4
+SELECT 1
+> SELECT CASE WHEN oid > 0 THEN 1/0 END FROM pg_am WHERE false
+ERROR 22012 division by zero
+> SELECT COALESCE(1, 1/0)
+fields coalesce:23:4:-1
+row 1
+SELECT 1
+> SELECT COALESCE(NULL, 1/0)
+ERROR 22012 division by zero
+> SELECT COALESCE(oid, 1/0) FROM pg_am WHERE false
+fields coalesce:26:4:-1
+SELECT 0
+> SELECT 1 FROM pg_am a LEFT JOIN pg_am b ON true WHERE COALESCE(b.oid::int4, 1/0) = 0
+ERROR 22012 division by zero
+> SELECT 1 FROM pg_am a LEFT JOIN pg_am b ON COALESCE(b.oid::int4, 1/0) = 0 WHERE false
+fields ?column?:23:4:-1
+SELECT 0
+> SELECT 1 WHERE false AND 1/0 = 1
+fields ?column?:23:4:-1
+SELECT 0
+> SELECT 1 WHERE true OR 1/0 = 1
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT 1 WHERE 1/0 = 1 AND false
+ERROR 22012 division by zero
+> SELECT NULL + (1/0)
+ERROR 22012 division by zero
+> SELECT (SELECT 1/0) + NULL
+fields ?column?:23:4:-1
+row NULL
+SELECT 1
+> SELECT (SELECT 1/0) + 1
+ERROR 22012 division by zero
+> SELECT NULLIF(1/0, NULL)
+ERROR 22012 division by zero
+> SELECT NULLIF(1, 1/0)
+ERROR 22012 division by zero
+> SELECT 1/0 IS NULL
+ERROR 22012 division by zero
+> SELECT (1/0 = 1) IS TRUE
+ERROR 22012 division by zero
+> SELECT 1/0 IS DISTINCT FROM 1
+ERROR 22012 division by zero
+> SELECT GREATEST(1, 1/0)
+ERROR 22012 division by zero
+> SELECT ARRAY[1, 1/0]
+ERROR 22012 division by zero
+> SELECT 1 = ANY (ARRAY[1, 1/0])
+ERROR 22012 division by zero
+> SELECT 'abc'::text::int4
+ERROR 22P02 invalid input syntax for type integer: "abc"
+> SELECT '2000-01-01'::text::timestamptz IS NULL
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT count(1/0) FROM pg_am WHERE false
+ERROR 22012 division by zero
+> SELECT 1 FROM pg_am HAVING 1/0 = 1
+ERROR 22012 division by zero
+> SELECT 1 LIMIT 1/0
+ERROR 22012 division by zero
+> SELECT 1 OFFSET 1/0
+ERROR 22012 division by zero
+> SELECT 1 WHERE EXISTS (SELECT 1/0 WHERE false)
+fields ?column?:23:4:-1
+SELECT 0

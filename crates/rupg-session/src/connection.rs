@@ -606,6 +606,8 @@ impl Connection {
             if many {
                 self.transaction.begin_implicit();
             }
+            // The columns of a query that failed at run time. PostgreSQL sends `RowDescription` when the executor starts, so the error comes after it.
+            let mut described = None;
             let result = if let Err(error) = self.interrupted() {
                 Err(error)
             } else if self.transaction.failed() && !utility::exits_transaction(node) {
@@ -615,7 +617,7 @@ impl Connection {
                 ))
             } else if query::is_query(node) {
                 drop(self.portals.close(b""));
-                self.select(node, &mut notices)
+                self.select(node, &mut notices, &mut described)
             } else if rupg_analyze::is_definition(node) {
                 drop(self.portals.close(b""));
                 self.define(node, &mut notices)
@@ -634,6 +636,11 @@ impl Connection {
             let outcome = match result {
                 Ok(outcome) => outcome,
                 Err(error) => {
+                    if let Some(columns) = described {
+                        let fields: Vec<Field<'_>> =
+                            columns.iter().map(|column| column.field(0)).collect();
+                        out.row_description(&fields);
+                    }
                     let position = error.position().map(|at| character_position(text, at));
                     self.fail(&error, position, out);
                     return true;
@@ -668,14 +675,26 @@ impl Connection {
         false
     }
 
-    /// Plans and runs a query of a `Query` message. The warnings of the analysis go to `notices`.
-    fn select(&self, node: &Node, notices: &mut Vec<Notice>) -> Result<Done, Error> {
+    /// Plans and runs a query of a `Query` message. The warnings of the analysis go to `notices`. When the run fails after the plan, the columns of the plan go to `described`.
+    fn select(
+        &self,
+        node: &Node,
+        notices: &mut Vec<Notice>,
+        described: &mut Option<Vec<Column>>,
+    ) -> Result<Done, Error> {
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
         let plan = query::plan(node, &reader, &Params::default())?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
-        let rows = query::run(&plan, &[], &reader, &[])?;
-        Ok(Done::Rows { columns: query::columns(&plan), rows, tag: CommandTag::Select })
+        let plan = plan.fold(None, &reader)?;
+        let columns = query::columns(&plan);
+        match query::run(&plan, &[], &reader, &[]) {
+            Ok(rows) => Ok(Done::Rows { columns, rows, tag: CommandTag::Select }),
+            Err(error) => {
+                *described = Some(columns);
+                Err(error)
+            }
+        }
     }
 
     /// `start_xact_command`: the start of a statement, which starts a transaction if there is none. After an `Execute` that completed, it starts an implicit block.
@@ -785,7 +804,7 @@ mod tests {
         let mut connection = Connection::new(&start, settings, PROTOCOL_3_0);
         let mut out = OutBuf::new();
         connection.greet(&CancelKey::new(1234, PROTOCOL_3_0, [7; CANCEL_KEY_LEN]), &mut out);
-        let mut lines = render(&out);
+        let mut lines = render(&out, false);
         lines.extend(send(&mut connection, &[]));
         (connection, lines)
     }
@@ -854,7 +873,7 @@ mod tests {
     }
 
     /// Gives `input` to the connection until it needs more, and renders what it wrote.
-    fn send(connection: &mut Connection, input: &[u8]) -> Vec<String> {
+    fn exchange(connection: &mut Connection, input: &[u8]) -> OutBuf {
         let mut out = OutBuf::new();
         let mut at = 0;
         loop {
@@ -870,11 +889,15 @@ mod tests {
             }
         }
         assert_eq!(at, input.len());
-        render(&out)
+        out
     }
 
-    /// One short line for each message.
-    fn render(out: &OutBuf) -> Vec<String> {
+    fn send(connection: &mut Connection, input: &[u8]) -> Vec<String> {
+        render(&exchange(connection, input), false)
+    }
+
+    /// One short line for each message. With `full`, a `RowDescription` is a line `fields` with the name, the table OID, the column number, the type, the size and the typmod of each column, and else a line `columns` with the names.
+    fn render(out: &OutBuf, full: bool) -> Vec<String> {
         let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
         let field = |fields: &[(u8, &[u8])], code: u8| {
             fields.iter().find(|(c, _)| *c == code).map_or(String::new(), |(_, v)| text(v))
@@ -891,6 +914,19 @@ mod tests {
                 Backend::ReadyForQuery(status) => format!("ready {}", char::from(status.byte())),
                 Backend::CommandComplete(tag) => text(tag),
                 Backend::EmptyQueryResponse => "empty".into(),
+                Backend::RowDescription(fields) if full => {
+                    let parts: Vec<String> = fields
+                        .iter()
+                        .map(|f| {
+                            let name = match f.table {
+                                0 => text(f.name),
+                                table => format!("{}@{table}.{}", text(f.name), f.column),
+                            };
+                            format!("{name}:{}:{}:{}", f.type_oid, f.type_size, f.type_modifier)
+                        })
+                        .collect();
+                    format!("fields {}", parts.join(","))
+                }
                 Backend::RowDescription(fields) => {
                     let names: Vec<String> = fields
                         .iter()
@@ -1019,6 +1055,7 @@ mod tests {
             row(&mut c, "SELECT pg_typeof(set_config('work_mem', '4MB', false))"),
             "row text"
         );
+        // `set_config` is volatile, so its errors come when the query runs, after the description of the rows.
         for (sql, error) in [
             ("SELECT set_config(NULL, 'x', false)", "ERROR 22004 SET requires parameter name"),
             (
@@ -1050,7 +1087,7 @@ mod tests {
                 "ERROR 22023 invalid value for parameter \"work_mem\": \"\"",
             ),
         ] {
-            assert_eq!(one(&mut c, sql), [error, "ready I"], "{sql}");
+            assert_eq!(one(&mut c, sql), ["columns set_config", error, "ready I"], "{sql}");
         }
         // A placeholder of an extension, and its reset to an empty string.
         assert_eq!(row(&mut c, "SELECT set_config('my.var', 'x', false)"), "row x");
@@ -1138,6 +1175,7 @@ mod tests {
         assert_eq!(
             one(&mut c, "SELECT set_config('transaction_isolation', 'serializable', false)"),
             [
+                "columns set_config",
                 "ERROR 25001 SET TRANSACTION ISOLATION LEVEL must be called before any query",
                 "ready I"
             ]
@@ -1145,6 +1183,7 @@ mod tests {
         assert_eq!(
             one(&mut c, "SELECT set_config('transaction_deferrable', 'on', false)"),
             [
+                "columns set_config",
                 "ERROR 25001 SET TRANSACTION [NOT] DEFERRABLE must be called before any query",
                 "ready I"
             ]
@@ -1339,7 +1378,12 @@ mod tests {
         );
         assert_eq!(
             send(&mut c, &query("SET TimeZone = 'Europe/Paris'; SELECT now()::text")),
-            ["SET", "ERROR 0A000 the time zone \"Europe/Paris\" is not supported yet", "ready I"]
+            [
+                "SET",
+                "columns now",
+                "ERROR 0A000 the time zone \"Europe/Paris\" is not supported yet",
+                "ready I"
+            ]
         );
     }
 
@@ -1515,7 +1559,7 @@ mod tests {
         big_stack(catalog_rows_cases);
     }
 
-    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the form of `render`, without the lines of `ReadyForQuery` and `RowDescription`.
+    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database.
     fn script(text: &str) {
         let (mut c, _) = connect();
         let mut lines = text.lines().peekable();
@@ -1525,13 +1569,32 @@ mod tests {
             while let Some(next) = lines.next_if(|l| !l.starts_with("> ")) {
                 want.push(next);
             }
-            let got: Vec<String> = send(&mut c, &query(sql))
+            let got: Vec<String> = render(&exchange(&mut c, &query(sql)), true)
                 .into_iter()
-                .filter(|l| !l.starts_with("ready ") && !l.starts_with("columns "))
+                .filter(|l| !l.starts_with("ready "))
+                .map(|l| match l.strip_prefix("fields ") {
+                    Some(fields) => format!("fields {}", table_names(&mut c, fields)),
+                    None => l,
+                })
                 .flat_map(|l| l.split('\n').map(str::to_string).collect::<Vec<_>>())
                 .collect();
             assert_eq!(got, want, "{sql}");
         }
+    }
+
+    /// The columns of a line `fields`, with the OID of each table replaced by its `regclass` text on the connection.
+    fn table_names(c: &mut Connection, fields: &str) -> String {
+        let parts: Vec<String> = fields
+            .split(',')
+            .map(|part| {
+                let Some((name, rest)) = part.split_once('@') else { return part.to_string() };
+                let (table, rest) = rest.split_once('.').unwrap();
+                let lines = send(c, &query(&format!("SELECT {table}::regclass")));
+                let row = lines.iter().find_map(|l| l.strip_prefix("row ")).unwrap();
+                format!("{name}@{row}.{rest}")
+            })
+            .collect();
+        parts.join(",")
     }
 
     /// The names of the user objects in the OID alias types, `format_type` and the visibility functions. `connection/reg_names.test` is the output of PostgreSQL 19 for the same script in a new database.
@@ -1544,6 +1607,37 @@ mod tests {
     #[test]
     fn deparse() {
         big_stack(|| script(include_str!("connection/deparse.test")));
+    }
+
+    /// The fold of the constant parts of the expressions, as `eval_const_expressions` does it. An error of the fold comes before the description of the rows, and a part that the fold drops gives no error. `connection/fold.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn fold() {
+        big_stack(|| script(include_str!("connection/fold.test")));
+    }
+
+    /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
+    #[test]
+    fn fold_at_bind() {
+        big_stack(|| {
+            let (mut c, _) = connect();
+            let input = [parse("f", "SELECT $1 / 0", &[23]), describe('S', "f"), sync()];
+            assert_eq!(
+                send(&mut c, &input.concat()),
+                ["ParseComplete", "params 23", "columns ?column?", "ready I"]
+            );
+            let run = [describe('P', ""), execute("", 0), sync()].concat();
+            let input = [bind("", "f", &[], &[Some(b"1")], &[]), run.clone()];
+            assert_eq!(send(&mut c, &input.concat()), ["ERROR 22012 division by zero", "ready I"]);
+            let input = [bind("", "f", &[], &[None], &[]), run.clone()];
+            assert_eq!(
+                send(&mut c, &input.concat()),
+                ["BindComplete", "columns ?column?", "row NULL", "SELECT 1", "ready I"]
+            );
+            let input = [parse("", "SELECT 1 / 0", &[]), sync()];
+            assert_eq!(send(&mut c, &input.concat()), ["ParseComplete", "ready I"]);
+            let input = [bind("", "", &[], &[], &[]), run];
+            assert_eq!(send(&mut c, &input.concat()), ["ERROR 22012 division by zero", "ready I"]);
+        });
     }
 
     #[test]
@@ -1880,7 +1974,7 @@ mod tests {
         flag.store(true, Ordering::Relaxed);
         assert!(c.simple_query("SET work_mem = '8MB'; SHOW work_mem", &mut out));
         c.recover(&mut out);
-        assert_eq!(render(&out), ["ERROR 57014 canceling statement due to user request"]);
+        assert_eq!(render(&out, false), ["ERROR 57014 canceling statement due to user request"]);
         assert_eq!(
             send(&mut c, &query("SHOW work_mem")),
             ["ready I", "columns work_mem", "row 4MB", "SHOW", "ready I"]
@@ -1892,7 +1986,7 @@ mod tests {
         flag.store(true, Ordering::Relaxed);
         let result = c.execute(b"p", 0, &mut out);
         c.after(result, &mut out);
-        assert_eq!(render(&out), ["ERROR 57014 canceling statement due to user request"]);
+        assert_eq!(render(&out, false), ["ERROR 57014 canceling statement due to user request"]);
         assert_eq!(send(&mut c, &[execute("p", 0), sync()].concat()), ["ready I"]);
         assert!(!flag.load(Ordering::Relaxed));
     }
