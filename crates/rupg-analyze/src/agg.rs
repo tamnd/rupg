@@ -282,8 +282,8 @@ impl Check<'_, '_> {
                     self.expr(child, depth)?;
                 }
                 if let ExprKind::SubLink(sub) = &expr.kind {
-                    for e in sub.query.exprs() {
-                        self.expr(e, depth + 1)?;
+                    for (e, depth) in sub.query.all_exprs(depth + 1) {
+                        self.expr(e, depth)?;
                     }
                 }
                 Ok(())

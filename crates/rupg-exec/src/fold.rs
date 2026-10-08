@@ -9,7 +9,7 @@ use rupg_func::Session;
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
 
-use super::{agg, evaluate, relabel};
+use super::{agg, evaluate, relabel, volatile};
 
 /// `subquery_planner`: folds the expressions of a query in the order of `preprocess_expression`, which is the target list, the conditions of the joins and `WHERE`, `HAVING`, `OFFSET` and `LIMIT`. The subqueries of each clause come after the clause, as `SS_process_sublinks` plans them. `params` has the values of the parameters of `Bind`, which a custom plan takes as constants.
 pub(crate) fn query(
@@ -20,18 +20,14 @@ pub(crate) fn query(
     plan(query, params, session, false)
 }
 
-/// Folds a query or a subquery. For the subquery of `EXISTS`, `simplify_EXISTS_query` drops the target list and a constant `LIMIT` first when it can.
+/// Folds a query or a subquery. For the subquery of `EXISTS`, `simplify_EXISTS_query` drops the target list and a constant `LIMIT` first when it can. A subquery in `FROM` that the planner pulls up folds where the query reads its columns, then each subquery in `FROM` folds after the query, with null for each column that the query does not read.
 fn plan(
     query: &Query,
     params: Option<&[Value]>,
     session: &dyn Session,
     exists: bool,
 ) -> Result<Query> {
-    let mut nulled = vec![false; query.relations.len()];
-    for item in &query.from {
-        mark(item, false, &mut nulled);
-    }
-    let mut fold = Fold { params, session, relations: &query.relations, nulled, case: Vec::new() };
+    let mut fold = Fold::new(query, params, session);
     let mut out = query.clone();
     let mut simple = false;
     if exists && agg::calls(query).is_empty() && query.having.is_none() && query.offset.is_none() {
@@ -60,7 +56,69 @@ fn plan(
     if !simple {
         out.limit = fold.one(query.limit.as_ref())?;
     }
+    // A relation that is the only part of `FROM`, with a `WHERE` that is false or null, is dummy: the planner makes no plan for it.
+    let dummy = matches!(out.from.as_slice(), [FromItem::Relation(_)])
+        && out.filter.as_ref().and_then(value).is_some_and(|v| *v != Value::Bool(true));
+    let used = used(&out);
+    for (relation, used) in out.relations.iter_mut().zip(&used) {
+        if let Some(sub) = &mut relation.subquery {
+            if dummy && !simple_subquery(sub) {
+                continue;
+            }
+            prune(sub, used);
+            **sub = plan(sub, params, session, false)?;
+        }
+    }
     Ok(out)
+}
+
+/// `is_simple_subquery` of `prepjointree.c`: true when the planner pulls the subquery in `FROM` up into the query, so that its expressions fold where the query reads them. Such a subquery has no aggregate, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `OFFSET` or `LIMIT`, and no volatile function in its target list.
+fn simple_subquery(query: &Query) -> bool {
+    !query.grouped
+        && agg::calls(query).is_empty()
+        && query.sort.is_empty()
+        && query.distinct.is_empty()
+        && query.offset.is_none()
+        && query.limit.is_none()
+        && !query.targets.iter().any(|t| volatile(&t.expr))
+}
+
+/// `attrs_used`: for each relation of the query, the columns that the expressions of the query read, also in its subqueries.
+fn used(query: &Query) -> Vec<Vec<bool>> {
+    let mut used: Vec<Vec<bool>> =
+        query.relations.iter().map(|r| vec![false; r.columns.len()]).collect();
+    for (expr, depth) in query.all_exprs(0) {
+        expr.find(depth, &mut |e, depth| {
+            if let ExprKind::Var(var) = e.kind
+                && var.levels_up == depth
+                && let Ok(column) = usize::try_from(var.attnum - 1)
+                && let Some(slot) = used.get_mut(var.relation).and_then(|u| u.get_mut(column))
+            {
+                *slot = true;
+            }
+            None::<()>
+        });
+    }
+    used
+}
+
+/// `remove_unused_subquery_outputs`: each column of a subquery in `FROM` that the query does not read becomes a null constant, so that it does not run. With a plain `DISTINCT`, all the columns stay. A column that `ORDER BY`, `GROUP BY` or `DISTINCT` reads, or that calls a volatile function, stays.
+fn prune(sub: &mut Query, used: &[bool]) {
+    if !sub.distinct.is_empty() && !sub.distinct_on {
+        return;
+    }
+    let keep: Vec<usize> =
+        sub.sort.iter().chain(&sub.group).chain(&sub.distinct).map(|s| s.target).collect();
+    for (i, target) in sub.targets.iter_mut().enumerate() {
+        if target.junk
+            || used.get(i).is_none_or(|u| *u)
+            || keep.contains(&i)
+            || volatile(&target.expr)
+        {
+            continue;
+        }
+        target.expr = with(&target.expr, ExprKind::Const(Value::Null));
+    }
 }
 
 /// Marks the relations that an outer join of `item` can make null, as the `varnullingrels` of their columns. With `nullable`, a join above `item` can make all its relations null.
@@ -91,6 +149,10 @@ struct Fold<'a> {
     relations: &'a [Relation],
     /// For each relation, true when an outer join can make its columns null where the expression is.
     nulled: Vec<bool>,
+    /// For each relation, true when an outer join of the query can make its columns null.
+    wrapped: Vec<bool>,
+    /// For each relation, true for a subquery that the planner pulls up into the query.
+    pulled: Vec<bool>,
     /// `case_val`: the argument of each open `CASE` when it is a constant.
     case: Vec<Option<Expr>>,
 }
@@ -113,7 +175,51 @@ fn immutable(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.volatile == b'i')
 }
 
-impl Fold<'_> {
+impl<'a> Fold<'a> {
+    /// The state of the fold of a query.
+    fn new(query: &'a Query, params: Option<&'a [Value]>, session: &'a dyn Session) -> Self {
+        let mut nulled = vec![false; query.relations.len()];
+        for item in &query.from {
+            mark(item, false, &mut nulled);
+        }
+        let pulled = query
+            .relations
+            .iter()
+            .map(|r| r.subquery.as_deref().is_some_and(simple_subquery))
+            .collect();
+        Fold {
+            params,
+            session,
+            relations: &query.relations,
+            wrapped: nulled.clone(),
+            nulled,
+            pulled,
+            case: Vec::new(),
+        }
+    }
+
+    /// The subquery in `FROM` that the planner pulls up for a relation.
+    fn pulled_query(&self, relation: usize) -> Option<&'a Query> {
+        let relations = self.relations;
+        if !self.pulled.get(relation).copied().unwrap_or(false) {
+            return None;
+        }
+        relations.get(relation)?.subquery.as_deref()
+    }
+
+    /// `pull_up_simple_subquery`: a column of a subquery that the planner pulls up is the expression of the subquery, which folds where the query reads the column. A constant takes the place of the column, unless an outer join can make the column null, where a `PlaceHolderVar` keeps it.
+    fn var(&mut self, expr: &Expr, var: Var) -> Result<Expr> {
+        let sub = if var.levels_up == 0 { self.pulled_query(var.relation) } else { None };
+        let target =
+            sub.zip(usize::try_from(var.attnum - 1).ok()).and_then(|(s, i)| s.targets.get(i));
+        let (Some(sub), Some(target)) = (sub, target) else { return Ok(expr.clone()) };
+        let folded = Fold::new(sub, self.params, self.session).expr(&target.expr)?;
+        Ok(match folded.kind {
+            ExprKind::Const(v) if !self.wrapped[var.relation] => with(expr, ExprKind::Const(v)),
+            _ => expr.clone(),
+        })
+    }
+
     /// `preprocess_expression`: folds the expressions of a clause, then the subqueries that the folded expressions still have.
     fn clause(&mut self, exprs: &[&Expr]) -> Result<Vec<Expr>> {
         let mut folded = exprs.iter().map(|e| self.expr(e)).collect::<Result<Vec<_>>>()?;
@@ -131,7 +237,19 @@ impl Fold<'_> {
 
     /// `preprocess_qual_conditions`: the conditions of the joins of a part of `FROM`, the inner joins first. In the condition of a join, the join itself does not make the columns null.
     fn join(&mut self, item: &FromItem) -> Result<FromItem> {
-        let FromItem::Join(join) = item else { return Ok(item.clone()) };
+        let FromItem::Join(join) = item else {
+            // The conditions of a subquery that the planner pulls up fold at its place in `FROM`.
+            if let FromItem::Relation(index) = item
+                && let Some(sub) = self.pulled_query(*index)
+            {
+                let mut fold = Fold::new(sub, self.params, self.session);
+                for item in &sub.from {
+                    fold.join(item)?;
+                }
+                fold.one(sub.filter.as_ref())?;
+            }
+            return Ok(item.clone());
+        };
         let left = self.join(&join.left)?;
         let right = self.join(&join.right)?;
         let mut on = None;
@@ -213,10 +331,8 @@ impl Fold<'_> {
     /// `eval_const_expressions_mutator`.
     fn expr(&mut self, expr: &Expr) -> Result<Expr> {
         match &expr.kind {
-            ExprKind::Const(_)
-            | ExprKind::SqlValue(_)
-            | ExprKind::Var(_)
-            | ExprKind::SubColumn(_) => Ok(expr.clone()),
+            ExprKind::Const(_) | ExprKind::SqlValue(_) | ExprKind::SubColumn(_) => Ok(expr.clone()),
+            ExprKind::Var(var) => self.var(expr, *var),
             ExprKind::Param(n) => {
                 let given = n.checked_sub(1).and_then(|i| self.params?.get(i));
                 Ok(given.map_or_else(|| expr.clone(), |v| with(expr, ExprKind::Const(v.clone()))))

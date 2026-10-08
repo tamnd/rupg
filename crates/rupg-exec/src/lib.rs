@@ -164,6 +164,11 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
     for item in &query.from {
         check_join(item)?;
     }
+    for relation in &query.relations {
+        if let Some(sub) = &relation.subquery {
+            check_query(sub, false)?;
+        }
+    }
     for expr in query.offset.iter().chain(&query.limit) {
         check(expr)?;
     }
@@ -205,6 +210,24 @@ impl Cache {
         self.tables.borrow_mut().push((query, Rc::clone(&tables)));
         Ok(tables)
     }
+
+    /// The rows of a subquery: the rows that the cache keeps for a subquery that reads no column of an outer query, or else the rows of a new run.
+    fn rows(&self, query: &Query, run: impl FnOnce() -> Result<Rows>) -> Result<Rc<Rows>> {
+        let kept = self
+            .rows
+            .borrow()
+            .iter()
+            .find(|(q, _)| std::ptr::eq(*q, query))
+            .map(|(_, rows)| Rc::clone(rows));
+        if let Some(rows) = kept {
+            return Ok(rows);
+        }
+        let rows = Rc::new(run()?);
+        if !correlated(query) {
+            self.rows.borrow_mut().push((query, Rc::clone(&rows)));
+        }
+        Ok(rows)
+    }
 }
 
 /// The row of a query outside a subquery, which the columns of an outer query in the subquery read.
@@ -216,13 +239,74 @@ struct Frame<'a> {
 
 /// True when a subquery reads a column of a query outside it, so that it must run again for each row of that query.
 fn correlated(query: &Query) -> bool {
-    query.exprs().iter().any(|e| {
-        e.find(0, &mut |e, depth| match e.kind {
+    query.all_exprs(0).iter().any(|(e, depth)| {
+        e.find(*depth, &mut |e, depth| match e.kind {
             ExprKind::Var(var) if var.levels_up > depth => Some(()),
             _ => None,
         })
         .is_some()
     })
+}
+
+/// `contain_volatile_functions`: true when the expression calls a volatile function, also in a subquery.
+fn volatile(expr: &Expr) -> bool {
+    let volatile = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.volatile == b'v');
+    expr.find(0, &mut |e, _| match &e.kind {
+        ExprKind::Func(f) if volatile(f.oid) => Some(()),
+        ExprKind::NullIf { equal: func, .. }
+        | ExprKind::Distinct { equal: func, .. }
+        | ExprKind::ScalarArrayOp { func, .. }
+            if volatile(*func) =>
+        {
+            Some(())
+        }
+        _ => None,
+    })
+    .is_some()
+}
+
+/// The one-time filter of the `Result` node that `create_gating_plan` puts over the scan: each part of `WHERE` that `AND` joins and that reads no column of the query and calls no volatile function runs once, before the scan. The result is false when such a part is not true, so the query reads no rows.
+fn gate(query: &Query, eval: &mut Eval<'_>) -> Result<bool> {
+    fn parts<'a>(expr: &'a Expr, out: &mut Vec<&'a Expr>) {
+        match &expr.kind {
+            ExprKind::Bool(BoolOp::And, args) => args.iter().for_each(|a| parts(a, out)),
+            _ => out.push(expr),
+        }
+    }
+    let mut all = Vec::new();
+    if let Some(filter) = &query.filter {
+        parts(filter, &mut all);
+    }
+    for expr in all {
+        if expr.first_var().is_none() && !volatile(expr) && eval.eval(expr)? != Value::Bool(true) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
+/// The rows of the relations of a query with the rows of its subqueries in `FROM`, as `SubqueryScan` reads them. A subquery that reads no column of an outer query runs once.
+fn with_subqueries(
+    query: &Query,
+    base: &Rc<scan::Tables>,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+    outer: &[Frame<'_>],
+) -> Result<Rc<scan::Tables>> {
+    if query.relations.iter().all(|r| r.subquery.is_none()) {
+        return Ok(Rc::clone(base));
+    }
+    let mut tables = (**base).clone();
+    let mut frames = outer.to_vec();
+    frames.push(Frame { tables: base, tuple: &[] });
+    for (i, relation) in query.relations.iter().enumerate() {
+        if let Some(sub) = &relation.subquery {
+            tables.rows[i] =
+                cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))?;
+        }
+    }
+    Ok(Rc::new(tables))
 }
 
 /// True when an expression is a constant for `eval_const_expressions`: constants, parameters and immutable functions of them.
@@ -247,13 +331,12 @@ fn run_query(
     outer: &[Frame<'_>],
     exists: bool,
 ) -> Result<Vec<Vec<Value>>> {
-    let tables = cache.tables(query, session)?;
-    let tables = &*tables;
+    let base = cache.tables(query, session)?;
     let mut eval = Eval {
         params,
         session,
         case: Vec::new(),
-        tables,
+        tables: &base,
         tuple: &[],
         aggs: Vec::new(),
         cache,
@@ -261,8 +344,9 @@ fn run_query(
         sub: Vec::new(),
     };
     // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.
+    let mut simple = false;
     if exists && agg::calls(query).is_empty() && query.having.is_none() && query.offset.is_none() {
-        let simple = match &query.limit {
+        simple = match &query.limit {
             None => true,
             Some(limit) if constant(limit) => match eval.eval(limit)? {
                 Value::Int8(n) => n > 0,
@@ -270,20 +354,29 @@ fn run_query(
             },
             Some(_) => false,
         };
-        if simple {
-            let tuples = scan::tuples(query, tables, &mut |expr, tuple| {
-                Ok(eval.at(tuple).eval(expr)? == Value::Bool(true))
-            })?;
-            return Ok(if tuples.is_empty() { Vec::new() } else { vec![Vec::new()] });
-        }
     }
-    let (offset, count) = eval.limits(query)?;
+    let (offset, count) = if simple { (0, None) } else { eval.limits(query)? };
     if count == Some(0) {
         return Ok(Vec::new());
     }
-    let tuples = scan::tuples(query, tables, &mut |expr, tuple| {
-        Ok(eval.at(tuple).eval(expr)? == Value::Bool(true))
-    })?;
+    let open = gate(query, &mut eval)?;
+    let tables = if open {
+        with_subqueries(query, &base, params, session, cache, outer)?
+    } else {
+        Rc::clone(&base)
+    };
+    let tables = &*tables;
+    let mut eval = Eval { tables, ..eval.at(&[]) };
+    let tuples = if open {
+        scan::tuples(query, tables, &mut |expr, tuple| {
+            Ok(eval.at(tuple).eval(expr)? == Value::Bool(true))
+        })?
+    } else {
+        Vec::new()
+    };
+    if simple {
+        return Ok(if tuples.is_empty() { Vec::new() } else { vec![Vec::new()] });
+    }
     let none = vec![scan::NONE; query.relations.len()];
     let rows = if query.grouped {
         agg::rows(&mut eval, query, &tuples, &none)?
@@ -610,32 +703,11 @@ impl<'a> Eval<'a> {
     fn sublink(&mut self, sub: &SubLink) -> Result<Value> {
         let exists = sub.kind == SubLinkKind::Exists;
         let query = &sub.query;
-        let cached = self
-            .cache
-            .rows
-            .borrow()
-            .iter()
-            .find(|(q, _)| std::ptr::eq(*q, query))
-            .map(|(_, rows)| Rc::clone(rows));
-        let rows = match cached {
-            Some(rows) => rows,
-            None => {
-                let mut frames = self.outer.to_vec();
-                frames.push(Frame { tables: self.tables, tuple: self.tuple });
-                let rows = Rc::new(run_query(
-                    query,
-                    self.params,
-                    self.session,
-                    self.cache,
-                    &frames,
-                    exists,
-                )?);
-                if !correlated(query) {
-                    self.cache.rows.borrow_mut().push((query, Rc::clone(&rows)));
-                }
-                rows
-            }
-        };
+        let mut frames = self.outer.to_vec();
+        frames.push(Frame { tables: self.tables, tuple: self.tuple });
+        let rows = self.cache.rows(query, || {
+            run_query(query, self.params, self.session, self.cache, &frames, exists)
+        })?;
         match sub.kind {
             SubLinkKind::Exists => Ok(Value::Bool(!rows.is_empty())),
             SubLinkKind::Expr => match rows.as_slice() {

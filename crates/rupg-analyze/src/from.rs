@@ -4,7 +4,7 @@ use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::Values;
 use rupg_pgcatalog::builtin::{self, Named};
-use rupg_sql::nodes::{Alias, ColumnRef, JoinExpr, JoinType, Node, RangeVar};
+use rupg_sql::nodes::{Alias, ColumnRef, JoinExpr, JoinType, Node, RangeSubselect, RangeVar};
 use rupg_types::oid;
 
 use crate::Analyzer;
@@ -22,13 +22,15 @@ pub const TABLE_OID_ATTNUM: i16 = -6;
 /// The system columns other than `tableoid`, which rupg does not have yet.
 const OTHER_SYSTEM_COLUMNS: [&str; 5] = ["ctid", "xmin", "cmin", "xmax", "cmax"];
 
-/// A relation of `FROM`, as a `RangeTblEntry` of the kind `RTE_RELATION`.
+/// A relation of `FROM`, as a `RangeTblEntry` of the kind `RTE_RELATION` or `RTE_SUBQUERY`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Relation {
-    /// The OID of the `pg_class` row.
+    /// The OID of the `pg_class` row, or 0 for a subquery.
     pub oid: u32,
-    /// The columns of the relation, with their real names.
+    /// The columns of the relation, with their real names. The columns of a subquery are the columns of its result.
     pub columns: Vec<Column>,
+    /// The query of a subquery in `FROM`.
+    pub subquery: Option<Box<crate::Query>>,
 }
 
 /// A column of a relation.
@@ -104,6 +106,8 @@ pub(crate) struct Scope {
     pub(crate) relations: Vec<Relation>,
     entries: Vec<Entry>,
     namespace: Vec<Item>,
+    /// The items that only a `LATERAL` subquery can see, as the items with `p_lateral_only`, each with `p_lateral_ok`: the parts of `FROM` before a subquery, and the left side of a join while the analyzer reads the right side.
+    lateral: Vec<(Item, bool)>,
 }
 
 /// `varstr_levenshtein` with costs of 1: the edit distance of two names, by characters.
@@ -205,7 +209,11 @@ impl Analyzer<'_> {
                 Ok((FromItem::Relation(index), item.clone(), vec![item]))
             }
             Node::JoinExpr(j) => self.join(j),
-            Node::RangeSubselect(_) => Err(not_yet("a subquery in FROM", None)),
+            Node::RangeSubselect(r) => {
+                let item = self.range_subselect(r)?;
+                let index = self.scope.entries[item.entry].relation.unwrap_or_default();
+                Ok((FromItem::Relation(index), item.clone(), vec![item]))
+            }
             Node::RangeFunction(_) => Err(not_yet("a function in FROM", None)),
             Node::RangeTableSample(_) => Err(not_yet("TABLESAMPLE", None)),
             Node::RangeTableFunc(_) | Node::JsonTable(_) => {
@@ -229,6 +237,64 @@ impl Analyzer<'_> {
         let columns = self.open_relation(oid, name, at)?;
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
+        self.add_relation(Relation { oid, columns, subquery: None }, refname, alias)
+    }
+
+    /// `transformRangeSubselect` and `addRangeTableEntryForSubquery`: a subquery in `FROM` and its namespace item. With no alias, the name of the entry is `unnamed_subquery`, and a qualified name cannot use it.
+    fn range_subselect(&mut self, r: &RangeSubselect) -> Result<Item> {
+        if r.lateral {
+            return Err(not_yet("LATERAL", None));
+        }
+        let query = self.subquery_in_from(r.subquery.as_ref())?;
+        let columns = query
+            .targets
+            .iter()
+            .filter(|t| !t.junk)
+            .map(|t| Column {
+                name: t.name.clone(),
+                ty: t.expr.ty,
+                typmod: t.expr.typmod,
+                not_null: false,
+            })
+            .collect();
+        let alias = r.alias.as_deref();
+        let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or("unnamed_subquery");
+        let relation = Relation { oid: 0, columns, subquery: Some(Box::new(query)) };
+        let mut item = self.add_relation(relation, refname.to_string(), alias)?;
+        item.rel_visible = alias.is_some();
+        Ok(item)
+    }
+
+    /// `parse_sub_analyze` for a subquery in `FROM` with no `LATERAL`: the subquery sees the queries outside this query, but not the names of this query.
+    fn subquery_in_from(&mut self, node: Option<&Node>) -> Result<crate::Query> {
+        let Some(Node::SelectStmt(stmt)) = node else {
+            return Err(Error::internal("a subquery in FROM that is not SelectStmt"));
+        };
+        let mut scope = std::mem::take(&mut self.scope);
+        let before = scope.lateral.len();
+        let hidden = std::mem::take(&mut scope.namespace);
+        scope.lateral.extend(hidden.into_iter().map(|item| (item, true)));
+        self.outer.push(scope);
+        let kind = std::mem::replace(&mut self.kind, Kind::Other);
+        let has_aggs = std::mem::replace(&mut self.has_aggs, false);
+        let result = self.select(stmt);
+        self.has_aggs = has_aggs;
+        self.kind = kind;
+        let mut scope = self.outer.pop().unwrap_or_default();
+        scope.namespace =
+            scope.lateral.split_off(before).into_iter().map(|(item, _)| item).collect();
+        self.scope = scope;
+        result
+    }
+
+    /// `buildNSItemFromLists`: adds a relation to the range table with the name `refname`, and gives its namespace item. The names of the alias replace the first names of the columns.
+    fn add_relation(
+        &mut self,
+        relation: Relation,
+        refname: String,
+        alias: Option<&Alias>,
+    ) -> Result<Item> {
+        let columns = &relation.columns;
         let mut colnames: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
         if let Some(alias) = alias {
             let given = alias_columns(alias);
@@ -249,7 +315,7 @@ impl Analyzer<'_> {
         let index = self.scope.relations.len();
         let exprs: Vec<(String, Expr)> = colnames
             .iter()
-            .zip(&columns)
+            .zip(columns)
             .enumerate()
             .map(|(i, (n, c))| {
                 let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
@@ -259,7 +325,8 @@ impl Analyzer<'_> {
                 (n.clone(), expr)
             })
             .collect();
-        self.scope.relations.push(Relation { oid, columns });
+        let oid = relation.oid;
+        self.scope.relations.push(relation);
         let entry = self.scope.entries.len();
         self.scope.entries.push(Entry {
             name: refname.clone(),
@@ -295,7 +362,7 @@ impl Analyzer<'_> {
             })
             .collect();
         let colnames = columns.iter().map(|c| c.name.clone()).collect();
-        self.scope.relations.push(Relation { oid, columns });
+        self.scope.relations.push(Relation { oid, columns, subquery: None });
         let entry = self.scope.entries.len();
         self.scope.entries.push(Entry {
             name: name.to_string(),
@@ -408,11 +475,6 @@ impl Analyzer<'_> {
     fn join(&mut self, j: &JoinExpr) -> Result<(FromItem, Item, Vec<Item>)> {
         let left_node = j.larg.as_ref().ok_or_else(|| Error::internal("a join with no left"))?;
         let right_node = j.rarg.as_ref().ok_or_else(|| Error::internal("a join with no right"))?;
-        let (left, l_item, l_namespace) = self.transform_from_item(left_node)?;
-        let (right, r_item, r_namespace) = self.transform_from_item(right_node)?;
-        self.check_conflicts(&l_namespace, &r_namespace)?;
-        let mut namespace = l_namespace;
-        namespace.extend(r_namespace);
         let kind = match j.jointype {
             JoinType::JOIN_INNER => JoinKind::Inner,
             JoinType::JOIN_LEFT => JoinKind::Left,
@@ -420,6 +482,17 @@ impl Analyzer<'_> {
             JoinType::JOIN_FULL => JoinKind::Full,
             _ => return Err(Error::internal("unrecognized join type")),
         };
+        let (left, l_item, l_namespace) = self.transform_from_item(left_node)?;
+        // The right side can see the left side only with LATERAL, and only for an inner or a left join.
+        let before = self.scope.lateral.len();
+        let lateral_ok = matches!(kind, JoinKind::Inner | JoinKind::Left);
+        self.scope.lateral.extend(l_namespace.iter().map(|item| (item.clone(), lateral_ok)));
+        let right = self.transform_from_item(right_node);
+        self.scope.lateral.truncate(before);
+        let (right, r_item, r_namespace) = right?;
+        self.check_conflicts(&l_namespace, &r_namespace)?;
+        let mut namespace = l_namespace;
+        namespace.extend(r_namespace);
         let l_names: Vec<&str> = l_item.columns.iter().map(|(n, _)| n.as_str()).collect();
         let r_names: Vec<&str> = r_item.columns.iter().map(|(n, _)| n.as_str()).collect();
         let using: Vec<String> = if j.isNatural {
@@ -492,8 +565,10 @@ impl Analyzer<'_> {
         } else if let Some(quals) = &j.quals {
             // transformJoinOnClause: the condition sees only the two sides of the join.
             let saved = std::mem::replace(&mut self.scope.namespace, namespace.clone());
+            let lateral = std::mem::take(&mut self.scope.lateral);
             let result = self.with_kind(Kind::JoinOn, |a| a.transform(Some(quals)));
             self.scope.namespace = saved;
+            self.scope.lateral = lateral;
             on = Some(self.coerce_to_boolean(result?, "JOIN/ON")?);
         }
         let mut columns = merged;
@@ -699,8 +774,8 @@ impl Analyzer<'_> {
         }
         let entry = &self.level(level).entries[item.entry];
         let Some(relation) = entry.relation else { return Ok(None) };
-        if item.columns.len() != entry.columns.len() {
-            // The item of a USING alias gives only the columns of USING.
+        if item.columns.len() != entry.columns.len() || entry.oid == 0 {
+            // The item of a USING alias gives only the columns of USING, and a subquery has no system columns.
             return Ok(None);
         }
         if name == "tableoid" {
@@ -857,10 +932,20 @@ impl Analyzer<'_> {
                 ));
             }
         }
-        error.with_detail(format!(
+        let error = error.with_detail(format!(
             "There is an entry for table \"{}\", but it cannot be referenced from this part of the query.",
             entry.name
-        ))
+        ));
+        if self.visible_if_lateral((level, found)) {
+            return error
+                .with_hint("To reference that table, you must mark this subquery with LATERAL.");
+        }
+        error
+    }
+
+    /// `rte_visible_if_lateral`: true when a `LATERAL` subquery could see the entry.
+    fn visible_if_lateral(&self, (level, index): Place) -> bool {
+        self.level(level).lateral.iter().any(|(item, ok)| item.entry == index && *ok)
     }
 
     /// `errorMissingColumn`, with the hint of a close name.
@@ -887,7 +972,7 @@ impl Analyzer<'_> {
                 }
                 fuzzy.update(penalty, index, name, column, i);
             }
-            if (exact || column == "tableoid") && penalty == 0 {
+            if (exact || (column == "tableoid" && entry.oid != 0)) && penalty == 0 {
                 fuzzy.exact.push(index);
             }
         }
@@ -912,7 +997,11 @@ impl Analyzer<'_> {
                 level == index.0
                     && scope.namespace.iter().any(|i| i.entry == index.1 && i.rel_visible)
             });
-            return if table.is_none() && qualified {
+            return if self.visible_if_lateral(index) {
+                error.with_hint(
+                    "To reference that column, you must mark this subquery with LATERAL.",
+                )
+            } else if table.is_none() && qualified {
                 error.with_hint("To reference that column, you must use a table-qualified name.")
             } else {
                 error

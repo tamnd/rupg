@@ -546,6 +546,31 @@ mod tests {
                     ""
                 ])
             );
+            // A subquery in `FROM` with no `LATERAL` does not see the parts of `FROM` before it. The hint names `LATERAL` only where `LATERAL` could make the name visible.
+            let entry = "There is an entry for table \"a\", but it cannot be referenced from this part of the query.";
+            let lateral = "To reference that table, you must mark this subquery with LATERAL.";
+            let invalid = "invalid reference to FROM-clause entry for table \"a\"";
+            assert_eq!(
+                full_error("SELECT s.* FROM pg_am a, (SELECT a.amname) s"),
+                s(["42P01", invalid, entry, lateral])
+            );
+            assert_eq!(
+                full_error("SELECT 1 FROM pg_am a JOIN (SELECT a.amname) s ON true"),
+                s(["42P01", invalid, entry, lateral])
+            );
+            assert_eq!(
+                full_error("SELECT 1 FROM pg_am a FULL JOIN (SELECT a.amname) s ON true"),
+                s(["42P01", invalid, entry, ""])
+            );
+            assert_eq!(
+                full_error("SELECT s.* FROM pg_am a, (SELECT amname) s"),
+                s([
+                    "42703",
+                    "column \"amname\" does not exist",
+                    "There is a column named \"amname\" in table \"a\", but it cannot be referenced from this part of the query.",
+                    "To reference that column, you must mark this subquery with LATERAL."
+                ])
+            );
             assert_eq!(
                 full_error("SELECT a.amname FROM (pg_am a JOIN pg_am b USING (oid)) j"),
                 s([
