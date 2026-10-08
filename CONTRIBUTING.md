@@ -26,6 +26,8 @@ cargo test --workspace --all-features
 
 To compare the tables with bison, make a report with `bison -Dlr.default-reduction=accepting -v file.y` and run `cargo xtask grammar --compare file.y file.output`. The command matches the states by their kernel items and compares each shift, reduction, error action and goto.
 
+`cargo xtask lifts [dir]` checks the files that rupg lifts from rudb (spec/22 section 22.7). It reads the history of each source file in a rudb checkout, `../rudb` when you give no directory, and lists each rudb commit after the lift that nobody reviewed. The checkout must have the full history. When you port a change or decline it, add a line `// Reviewed at <commit> (<date>): <decision>.` under the provenance header of the file. CI has no rudb checkout, so run this task before each milestone release.
+
 ## What a change must include
 
 1. A test for each behavior that the change adds or fixes. A fix for a wrong answer includes the query that showed it.

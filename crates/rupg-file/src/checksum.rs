@@ -4,6 +4,7 @@
 
 // Lifted from rudb crates/rudb-native/src/lib.rs at cd9f9676 (2026-10-05).
 // Changes: the seed is fixed at 0, the word reads use as_chunks and do not call expect, and the public name is `checksum`.
+// Reviewed at b0e2dfd5 (2026-10-08): the 33 rudb commits to the file after the lift change other functions. `checksum`, `seeded_checksum`, the round, word, block and tail functions and the test vectors are the same, so there is nothing to port.
 
 /// The algorithm number of this function in the identity block.
 pub const CHECKSUM_ALGORITHM: u8 = 1;
