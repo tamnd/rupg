@@ -5,7 +5,7 @@ use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
 
 use crate::Analyzer;
-use crate::expr::{Expr, ExprKind, Func, FuncForm};
+use crate::expr::{CastForm, Expr, ExprKind, Func, FuncForm};
 use crate::types;
 
 /// `CoercionContext`: where a cast happens. A cast is allowed in its own context and in each later one.
@@ -154,8 +154,25 @@ impl Analyzer<'_> {
         if !can_coerce(&[expr.ty], &[target], context) {
             return Ok(None);
         }
+        let input = (expr.ty, expr.typmod);
         let expr = self.coerce(expr, target, typmod, context, location)?;
-        Ok(Some(self.coerce_typmod(expr, target, typmod, context, location)))
+        // A length cast hides the cast below it, which the analyzer made in the same step, as `hide_coercion_node` does.
+        let hide = (expr.ty, expr.typmod) != input && !matches!(expr.kind, ExprKind::Const(_));
+        let mut expr = self.coerce_typmod(expr, target, typmod, context, location);
+        if hide && let ExprKind::Func(Func { args, .. }) = &mut expr.kind {
+            match args.first_mut().map(|arg| &mut arg.kind) {
+                Some(ExprKind::Func(Func { form, .. }))
+                    if matches!(form, FuncForm::ExplicitCast | FuncForm::ImplicitCast) =>
+                {
+                    *form = FuncForm::ImplicitCast;
+                }
+                Some(ExprKind::Relabel(_, form) | ExprKind::CoerceViaIo(_, form)) => {
+                    *form = CastForm::Implicit;
+                }
+                _ => {}
+            }
+        }
+        Ok(Some(expr))
     }
 
     /// `coerce_type`: the expression cast to the type. The caller has checked that the cast exists.
@@ -216,10 +233,10 @@ impl Analyzer<'_> {
                 });
             }
         }
-        let form = if context == Context::Explicit {
-            FuncForm::ExplicitCast
+        let (form, cast) = if context == Context::Explicit {
+            (FuncForm::ExplicitCast, CastForm::Explicit)
         } else {
-            FuncForm::ImplicitCast
+            (FuncForm::ImplicitCast, CastForm::Implicit)
         };
         match find_path(target, input, context) {
             Path::None => Err(Error::internal(format!(
@@ -228,13 +245,13 @@ impl Analyzer<'_> {
                 types::name(target)
             ))),
             Path::Relabel => Ok(Expr {
-                kind: ExprKind::Relabel(Box::new(expr)),
+                kind: ExprKind::Relabel(Box::new(expr), cast),
                 ty: target,
                 typmod: -1,
                 location,
             }),
             Path::ViaIo => Ok(Expr {
-                kind: ExprKind::CoerceViaIo(Box::new(expr)),
+                kind: ExprKind::CoerceViaIo(Box::new(expr), cast),
                 ty: target,
                 typmod: -1,
                 location,
@@ -246,7 +263,7 @@ impl Analyzer<'_> {
                     == Path::Relabel =>
             {
                 Ok(Expr {
-                    kind: ExprKind::Relabel(Box::new(expr)),
+                    kind: ExprKind::Relabel(Box::new(expr), cast),
                     ty: target,
                     typmod: -1,
                     location,
@@ -291,7 +308,17 @@ impl Analyzer<'_> {
                     expr.typmod = typmod;
                     expr
                 } else {
-                    Expr { kind: ExprKind::Relabel(Box::new(expr)), ty: target, typmod, location }
+                    let form = if context == Context::Explicit {
+                        CastForm::Explicit
+                    } else {
+                        CastForm::Implicit
+                    };
+                    Expr {
+                        kind: ExprKind::Relabel(Box::new(expr), form),
+                        ty: target,
+                        typmod,
+                        location,
+                    }
                 }
             }
         }

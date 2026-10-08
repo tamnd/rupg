@@ -196,7 +196,7 @@ fn key(value: Value) -> Option<Key> {
 fn plain_var(expr: &Expr) -> Option<Var> {
     match &expr.kind {
         ExprKind::Var(var) if var.levels_up == 0 => Some(*var),
-        ExprKind::Relabel(arg) => plain_var(arg),
+        ExprKind::Relabel(arg, _) => plain_var(arg),
         _ => None,
     }
 }

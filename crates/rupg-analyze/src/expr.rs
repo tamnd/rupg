@@ -26,9 +26,9 @@ pub enum ExprKind {
     /// `FuncExpr` and `OpExpr`: a call of the function with this `pg_proc` OID.
     Func(Func),
     /// `RelabelType`: the value of the argument with another type that has the same binary form.
-    Relabel(Box<Expr>),
+    Relabel(Box<Expr>, CastForm),
     /// `CoerceViaIO`: the output function of the type of the argument, then the input function of the type of the expression.
-    CoerceViaIo(Box<Expr>),
+    CoerceViaIo(Box<Expr>, CastForm),
     /// `BoolExpr`: `AND`, `OR` and `NOT`.
     Bool(BoolOp, Vec<Expr>),
     /// `NullTest`: `IS NULL` when the flag is true, `IS NOT NULL` when it is false.
@@ -144,6 +144,15 @@ pub enum FuncForm {
     ImplicitCast,
 }
 
+/// `CoercionForm` of a cast node: the way a cast was written, which a deparse function shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CastForm {
+    /// `x::type` or `CAST(x AS type)`.
+    Explicit,
+    /// A cast that the analyzer added.
+    Implicit,
+}
+
 /// The operators of `BoolExpr`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum BoolOp {
@@ -229,8 +238,8 @@ impl Expr {
             ExprKind::SubLink(sub) => sub.test.iter().collect(),
             ExprKind::Func(f) => f.args.iter().collect(),
             ExprKind::Agg(agg) => agg.args.iter().chain(agg.filter.as_deref()).collect(),
-            ExprKind::Relabel(arg)
-            | ExprKind::CoerceViaIo(arg)
+            ExprKind::Relabel(arg, _)
+            | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => vec![&**arg],
             ExprKind::Bool(_, args)
@@ -266,8 +275,8 @@ impl Expr {
                 let Aggref { args, filter, .. } = &mut **agg;
                 args.iter_mut().chain(filter.as_deref_mut()).collect()
             }
-            ExprKind::Relabel(arg)
-            | ExprKind::CoerceViaIo(arg)
+            ExprKind::Relabel(arg, _)
+            | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => vec![&mut **arg],
             ExprKind::Bool(_, args)
@@ -366,15 +375,14 @@ impl Expr {
         self.children().into_iter().find_map(Expr::first_agg)
     }
 
-    /// `strip_implicit_coercions`: the expression without the casts that the analyzer added. A cast that the query writes has a place in the query, so a relabel without a place is a cast that the analyzer added.
+    /// `strip_implicit_coercions`: the expression without the casts that the analyzer added.
     pub fn strip_implicit(&self) -> &Expr {
         match &self.kind {
             ExprKind::Func(Func { form: FuncForm::ImplicitCast, args, .. }) if !args.is_empty() => {
                 args[0].strip_implicit()
             }
-            ExprKind::Relabel(arg) | ExprKind::CoerceViaIo(arg) if self.location.is_none() => {
-                arg.strip_implicit()
-            }
+            ExprKind::Relabel(arg, CastForm::Implicit)
+            | ExprKind::CoerceViaIo(arg, CastForm::Implicit) => arg.strip_implicit(),
             _ => self,
         }
     }
@@ -387,8 +395,8 @@ impl Expr {
             | ExprKind::NullIf { args, .. }
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. } => args.first(),
-            ExprKind::Relabel(arg)
-            | ExprKind::CoerceViaIo(arg)
+            ExprKind::Relabel(arg, _)
+            | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => Some(&**arg),
             ExprKind::SubLink(sub) => sub.test.as_ref(),

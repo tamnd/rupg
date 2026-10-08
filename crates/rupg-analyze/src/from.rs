@@ -7,7 +7,7 @@ use rupg_types::oid;
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{Expr, ExprKind, Var};
+use crate::expr::{CastForm, Expr, ExprKind, Var};
 use crate::typename::place;
 
 /// `MAX_FUZZY_DISTANCE` of `parse_relation.c`: the largest distance of a name that an error suggests.
@@ -527,7 +527,12 @@ impl Analyzer<'_> {
             if e.ty != ty {
                 self.coerce(e, ty, typmod, Context::Implicit, None)
             } else if e.typmod != typmod {
-                Ok(Expr { kind: ExprKind::Relabel(Box::new(e)), ty, typmod, location: None })
+                Ok(Expr {
+                    kind: ExprKind::Relabel(Box::new(e), CastForm::Implicit),
+                    ty,
+                    typmod,
+                    location: None,
+                })
             } else {
                 Ok(e)
             }

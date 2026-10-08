@@ -149,7 +149,7 @@ fn is_mutable(expr: &Expr) -> bool {
                 mutable_proc(*equal)
             }
             ExprKind::ScalarArrayOp { func, .. } => mutable_proc(*func),
-            ExprKind::CoerceViaIo(arg) => {
+            ExprKind::CoerceViaIo(arg, _) => {
                 let output = builtin::type_by_oid(arg.ty).map_or(0, |t| t.output);
                 let input = builtin::type_by_oid(e.ty).map_or(0, |t| t.input);
                 mutable_proc(output) || mutable_proc(input)

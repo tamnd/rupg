@@ -1,6 +1,6 @@
 //! The input, output, receive and send functions of the types, as `typinput`, `typoutput`, `typreceive` and `typsend` of `pg_type` give them.
 
-use rupg_common::{Error, Result};
+use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{
     self as types, Array, DateTimeInput, NoZones, Recv, RegKind, Value, ZoneAbbrevs, oid,
@@ -89,8 +89,7 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some((elem, _)) = array_of(ty) {
         return input_supported(elem);
     }
-    output_supported(ty)
-        && !matches!(ty, XID | CID | oid::PG_NODE_TREE | oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN)
+    output_supported(ty) && !matches!(ty, XID | CID | oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN)
 }
 
 /// The name of a type for an error.
@@ -270,6 +269,13 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
         oid::INTERVAL => Value::Interval(
             types::interval_in(text, typmod, session.interval_style()).map_err(type_error)?,
         ),
+        // `pg_node_tree_in`: a stored node tree comes only from the server.
+        oid::PG_NODE_TREE => {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot accept a value of type pg_node_tree",
+            ));
+        }
         _ => return Err(not_yet(format!("input of type {}", type_name(ty)))),
     };
     Ok(value)
