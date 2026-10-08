@@ -3,8 +3,7 @@
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
     A_ArrayExpr, A_Const, A_Expr, A_Expr_Kind, BoolExpr, BoolExprType, BoolTestType, CaseExpr,
-    ColumnRef, FuncCall, MinMaxOp, Node, NullTestType, SQLValueFunction, SQLValueFunctionOp,
-    TypeCast,
+    FuncCall, MinMaxOp, Node, NullTestType, SQLValueFunction, SQLValueFunctionOp, TypeCast,
 };
 use rupg_types::{Value, oid};
 
@@ -65,7 +64,7 @@ impl Analyzer<'_> {
     fn transform_node(&mut self, node: &Node) -> Result<Expr> {
         match node {
             Node::A_Const(c) => self.transform_const(c),
-            Node::ColumnRef(c) => Err(self.column_error(c)),
+            Node::ColumnRef(c) => self.column_ref(c),
             Node::ParamRef(p) => self.transform_param(p.number, place(p.location)),
             Node::A_Expr(a) => self.transform_a_expr(a),
             Node::BoolExpr(b) => self.transform_bool(b),
@@ -214,42 +213,6 @@ impl Analyzer<'_> {
             ty => ty,
         };
         Ok(Expr { kind: ExprKind::Param(n), ty, typmod: -1, location: at })
-    }
-
-    /// The error of a column name in a query with no `FROM`.
-    fn column_error(&self, c: &ColumnRef) -> Error {
-        let at = place(c.location);
-        let fields: Vec<Option<&str>> = c
-            .fields
-            .iter()
-            .map(|f| match f {
-                Some(Node::String(s)) => Some(&**s),
-                _ => None,
-            })
-            .collect();
-        match fields.as_slice() {
-            [Some(name)] => {
-                Error::new(SqlState::UNDEFINED_COLUMN, format!("column \"{name}\" does not exist"))
-                    .at_opt(at)
-            }
-            [None] => {
-                Error::new(SqlState::SYNTAX_ERROR, "SELECT * with no tables specified is not valid")
-                    .at_opt(at)
-            }
-            [Some(table), _] | [_, Some(table), _] | [_, _, Some(table), _] => Error::new(
-                SqlState::UNDEFINED_TABLE,
-                format!("missing FROM-clause entry for table \"{table}\""),
-            )
-            .at_opt(at),
-            _ => {
-                let text: Vec<&str> = fields.iter().map(|f| f.unwrap_or("*")).collect();
-                Error::new(
-                    SqlState::SYNTAX_ERROR,
-                    format!("improper qualified name (too many dotted names): {}", text.join(".")),
-                )
-                .at_opt(at)
-            }
-        }
     }
 
     /// The operators and the other forms of `A_Expr`.

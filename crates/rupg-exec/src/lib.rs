@@ -1,10 +1,12 @@
 //! The vectorized executor, the point path, compressed execution, spill, the per-distinct result tables of document 14 section 14.6.
 //!
-//! This version runs a query without a `FROM` clause: it computes the target list once, after the `WHERE` clause. [`prepare`] checks that the engine has every function and every type of the query, so that a query that the engine cannot run is an error `0A000` before it runs. [`Plan::run`] then computes the row as `ExecInterpExpr` of PostgreSQL does.
+//! This version reads the tables of the catalog. It joins the parts of `FROM`, tests the `WHERE` clause and computes the target list for each row. [`prepare`] checks that the engine has every function and every type of the query, so that a query that the engine cannot run is an error `0A000` before it runs. [`Plan::run`] then computes the row as `ExecInterpExpr` of PostgreSQL does.
 
 #![forbid(unsafe_code)]
 
-use rupg_analyze::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, Query, SqlValue, Target};
+use rupg_analyze::{
+    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Query, SqlValue, Target,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
 use rupg_pgcatalog::builtin;
@@ -47,7 +49,11 @@ fn strict(func: u32) -> bool {
 /// Checks that the engine has every function and every type that an expression uses.
 fn check(expr: &Expr) -> Result<()> {
     match &expr.kind {
-        ExprKind::Const(_) | ExprKind::Param(_) | ExprKind::CaseTest | ExprKind::SqlValue(_) => {}
+        ExprKind::Const(_)
+        | ExprKind::Param(_)
+        | ExprKind::CaseTest
+        | ExprKind::SqlValue(_)
+        | ExprKind::Var(_) => {}
         ExprKind::Func(f) => {
             kernel(f.oid, expr.location)?;
             f.args.iter().try_for_each(check)?;
@@ -87,6 +93,18 @@ fn check(expr: &Expr) -> Result<()> {
     Ok(())
 }
 
+/// Checks the conditions of the joins of a part of `FROM`.
+fn check_join(item: &FromItem) -> Result<()> {
+    if let FromItem::Join(join) = item {
+        if let Some(on) = &join.on {
+            check(on)?;
+        }
+        check_join(&join.left)?;
+        check_join(&join.right)?;
+    }
+    Ok(())
+}
+
 /// Checks a query and makes the plan to run it.
 ///
 /// # Errors
@@ -101,6 +119,9 @@ pub fn prepare(query: Query) -> Result<Plan> {
     }
     if let Some(filter) = &query.filter {
         check(filter)?;
+    }
+    for item in &query.from {
+        check_join(item)?;
     }
     Ok(Plan { query })
 }
@@ -121,21 +142,30 @@ impl Plan {
         &self.query.params
     }
 
-    /// Runs the query: the row, or `None` when the `WHERE` clause is not true.
+    /// Runs the query and gives its rows.
     ///
     /// # Errors
     ///
     /// The error of a function, such as a division by zero.
-    pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Option<Vec<Value>>> {
-        let mut eval = Eval { params, session, case: Vec::new() };
-        if let Some(filter) = &self.query.filter
-            && eval.eval(filter)? != Value::Bool(true)
-        {
-            return Ok(None);
+    pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
+        let tables = scan::read(&self.query, session)?;
+        let mut eval = Eval { params, session, case: Vec::new(), tables: &tables, tuple: &[] };
+        let tuples = scan::tuples(&self.query, &tables, &mut |expr, tuple| {
+            let mut eval = Eval { params, session, case: Vec::new(), tables: &tables, tuple };
+            Ok(eval.eval(expr)? == Value::Bool(true))
+        })?;
+        let mut rows = Vec::with_capacity(tuples.len());
+        for tuple in &tuples {
+            eval.tuple = tuple;
+            let row = self
+                .query
+                .targets
+                .iter()
+                .map(|t| eval.eval(&t.expr))
+                .collect::<Result<Vec<_>>>()?;
+            rows.push(row);
         }
-        let row =
-            self.query.targets.iter().map(|t| eval.eval(&t.expr)).collect::<Result<Vec<_>>>()?;
-        Ok(Some(row))
+        Ok(rows)
     }
 }
 
@@ -145,6 +175,10 @@ struct Eval<'a> {
     session: &'a dyn Session,
     /// The values of the `CASE` expressions that are open, for `CaseTest`.
     case: Vec<Value>,
+    /// The rows of the relations of the query.
+    tables: &'a scan::Tables,
+    /// The row of each relation.
+    tuple: &'a [usize],
 }
 
 impl Eval<'_> {
@@ -234,6 +268,7 @@ impl Eval<'_> {
             ExprKind::ScalarArrayOp { func, any, args } => self.scalar_array_op(*func, *any, args),
             ExprKind::Array { multidims, elements, .. } => self.array(*multidims, elements),
             ExprKind::SqlValue(v) => self.sql_value(*v),
+            ExprKind::Var(var) => Ok(self.tables.var(self.tuple, *var)),
         }
     }
 
@@ -480,9 +515,21 @@ fn relabel(value: Value, ty: u32) -> Value {
     match value {
         Value::Int4(v) if ty != oid::INT4 => Value::Oid(v as u32),
         Value::Oid(v) if ty == oid::INT4 => Value::Int4(v as i32),
+        Value::Array(mut array) => {
+            // The elements of an array take the element type, as an array cast with a relabel of each element does.
+            let element = builtin::type_by_oid(ty).map_or(0, |row| row.elem);
+            if element != 0 {
+                for value in array.values.iter_mut().flatten() {
+                    *value = relabel(std::mem::replace(value, Value::Null), element);
+                }
+            }
+            Value::Array(array)
+        }
         value => value,
     }
 }
+
+mod scan;
 
 #[cfg(test)]
 mod tests;

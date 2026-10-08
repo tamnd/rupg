@@ -239,6 +239,18 @@ impl Analyzer<'_> {
                 location,
             }),
             Path::Func(func) => Ok(build_cast(expr, func, target, typmod, context, form, location)),
+            // ArrayCoerceExpr with a relabel of each element: the array keeps its values.
+            Path::ArrayCoerce
+                if find_path(types::element(target), types::element(input), context)
+                    == Path::Relabel =>
+            {
+                Ok(Expr {
+                    kind: ExprKind::Relabel(Box::new(expr)),
+                    ty: target,
+                    typmod: -1,
+                    location,
+                })
+            }
             Path::ArrayCoerce => Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 format!(
