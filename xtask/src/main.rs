@@ -9,6 +9,7 @@
 use std::path::{Path, PathBuf};
 use std::process::ExitCode;
 
+mod bench;
 mod dat;
 mod errcodes;
 mod grammar;
@@ -25,13 +26,14 @@ mod unicode;
 mod vendor;
 mod version;
 
-const USAGE: &str = "usage: cargo xtask <errcodes [--check] | grammar [file.y...] | guc [--check] | layers | lifts [rudb dir] | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
+const USAGE: &str = "usage: cargo xtask <bench [--binary file] [--save file] [--check file] | errcodes [--check] | grammar [file.y...] | guc [--check] | layers | lifts [rudb dir] | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
     let task = args.first().map(String::as_str);
     let root = root();
     let result = match task {
+        Some("bench") => bench::run(&root, &args[1..]),
         Some("errcodes") => errcodes::run(&root, &args[1..]),
         Some("grammar") => grammar::run(&root, &args[1..]),
         Some("pgcatalog") => pgcatalog::run(&root, &args[1..]),
