@@ -219,6 +219,18 @@ pub fn parse(text: &str) -> Result<(crate::nodes::List, Vec<Notice>), Error> {
     Ok(parser.finish())
 }
 
+/// `typeStringToTypeName` without its checks: the `TypeName` of `text`, as `raw_parser` gives it in the mode `RAW_PARSE_TYPE_NAME`. An error is the first error of the lexer, the grammar or an action, at a byte offset in `text`.
+pub fn parse_type_name(text: &str) -> Result<crate::nodes::TypeName, Error> {
+    let mut parser = Parser::with_mode(text, Some(crate::token::MODE_TYPE_NAME));
+    if run(&mut parser)?.is_none() {
+        return Err(parser.yyerror("syntax error"));
+    }
+    match parser.finish().0.pop() {
+        Some(Some(crate::nodes::Node::TypeName(name))) => Ok(*name),
+        _ => Err(Error::internal("the mode of a type name gave no TypeName")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

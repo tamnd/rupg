@@ -36,6 +36,7 @@ pub use expr::{
 pub use from::{Column, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};
 pub use sort::SortGroup;
+pub use typename::parse_type;
 
 /// The OID of the schema `pg_catalog`.
 pub const PG_CATALOG_NAMESPACE: u32 = 11;

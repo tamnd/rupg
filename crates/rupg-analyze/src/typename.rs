@@ -8,9 +8,9 @@ use rupg_types::typmod::{
     numeric_typmod,
 };
 
-use crate::Analyzer;
 use crate::coerce::AtOpt;
 use crate::types;
+use crate::{Analyzer, Env, Params};
 
 /// `MaxAttrSize`, the largest length of `varchar(n)` and `character(n)`.
 const MAX_ATTR_SIZE: i32 = 10 * 1024 * 1024;
@@ -73,6 +73,41 @@ pub(crate) fn names(list: &[Option<Node>]) -> Vec<&str> {
 /// The location of a node in the raw tree as a byte offset, or `None` for -1.
 pub(crate) fn place(location: i32) -> Option<usize> {
     usize::try_from(location).ok()
+}
+
+/// The bytes that `scanner_isspace` takes as white space.
+fn is_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c)
+}
+
+/// `parseTypeString`: the OID and the typmod of the type that a string names, as the input of `regtype` and `to_regtypemod` read it.
+///
+/// # Errors
+///
+/// The outer error is an error for any caller: a syntax error, `SETOF`, a name with too many dots and a bad type modifier. The inner error is a type or a schema that does not exist, which `to_regtype` gives as a null. No error has a place, except a syntax error, whose place is in `text`.
+pub fn parse_type(text: &str, env: &dyn Env) -> Result<Result<(u32, i32)>> {
+    let invalid = || Error::new(SqlState::SYNTAX_ERROR, format!("invalid type name \"{text}\""));
+    if text.bytes().all(is_space) {
+        return Err(invalid());
+    }
+    let name = rupg_sql::parse_type_name(text).map_err(|e| {
+        // `scanner_errposition` counts characters, and the session reads the place as a byte offset in the query text.
+        let at = e.location.map(|at| text[..at.min(text.len())].chars().count());
+        Error::from(e).with_position(at).with_context(format!("invalid type name \"{text}\""))
+    })?;
+    if name.setof {
+        return Err(invalid());
+    }
+    let mut analyzer = Analyzer::new(env, &Params::default());
+    match analyzer.type_name(&name) {
+        Ok(found) => Ok(Ok(found)),
+        Err(e) if e.state() == SqlState::UNDEFINED_SCHEMA => Ok(Err(e.with_position(None))),
+        Err(e) if e.state() == SqlState::UNDEFINED_OBJECT => Ok(Err(Error::new(
+            SqlState::UNDEFINED_OBJECT,
+            format!("type \"{}\" does not exist", type_name_text(&name)),
+        ))),
+        Err(e) => Err(e.with_position(None)),
+    }
 }
 
 impl Analyzer<'_> {

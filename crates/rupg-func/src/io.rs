@@ -6,7 +6,7 @@ use rupg_types::{
     self as types, Array, DateTimeInput, NoZones, Recv, RegKind, Value, ZoneAbbrevs, oid,
 };
 
-use crate::{Session, bad_value, not_yet, type_error};
+use crate::{Session, bad_value, not_yet, reg, type_error};
 
 /// The OID of `xid`.
 const XID: u32 = 28;
@@ -73,16 +73,14 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::INTERVAL
             | oid::TIMETZ
             | oid::NUMERIC
-            | oid::REGTYPE
             | oid::CSTRING
             | oid::UUID
             | oid::JSONB
-            | oid::REGPROC
             | oid::PG_NODE_TREE
             | oid::ACLITEM
             | oid::ANYARRAY
             | oid::PG_LSN
-    )
+    ) || RegKind::from_oid(ty).is_some()
 }
 
 /// True when the engine has the text input function of the type.
@@ -92,16 +90,7 @@ pub fn input_supported(ty: u32) -> bool {
         return input_supported(elem);
     }
     output_supported(ty)
-        && !matches!(
-            ty,
-            XID | CID
-                | oid::REGTYPE
-                | oid::REGPROC
-                | oid::PG_NODE_TREE
-                | oid::ACLITEM
-                | oid::ANYARRAY
-                | oid::PG_LSN
-        )
+        && !matches!(ty, XID | CID | oid::PG_NODE_TREE | oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN)
 }
 
 /// The name of a type for an error.
@@ -142,6 +131,10 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         });
         return failed.map_or(Ok(()), Err);
     }
+    if let (Some(kind), Value::Oid(v)) = (RegKind::from_oid(ty), value) {
+        reg::output(kind, *v, session, out);
+        return Ok(());
+    }
     match (ty, value) {
         (_, Value::Bool(v)) => types::bool_out(*v, out),
         (_, Value::Int2(v)) => types::int_out(i64::from(*v), out),
@@ -150,11 +143,6 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         (_, Value::Float4(v)) => types::float4_out(*v, session.extra_float_digits(), out),
         (_, Value::Float8(v)) => types::float8_out(*v, session.extra_float_digits(), out),
         (_, Value::Numeric(v)) => types::numeric_out(v, out),
-        (oid::REGTYPE, Value::Oid(v)) => match builtin::type_by_oid(*v) {
-            Some(_) => out.extend_from_slice(types::format_type(*v).as_bytes()),
-            None => types::reg_out_oid(RegKind::Type, *v, out),
-        },
-        (oid::REGPROC, Value::Oid(v)) => regproc_out(*v, out),
         (oid::OID | XID | CID, Value::Oid(v)) => types::oid_out(*v, out),
         (_, Value::Char(v)) => types::char_out(*v, out),
         (_, Value::Text(v)) => out.extend_from_slice(v.as_bytes()),
@@ -186,21 +174,6 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         _ => return Err(not_yet(format!("output of type {}", type_name(ty)))),
     }
     Ok(())
-}
-
-/// `regprocout`: the name of the function, with its schema when the name alone does not give one function, `-` for 0, or the OID for a function that does not exist.
-fn regproc_out(func: u32, out: &mut Vec<u8>) {
-    let Some(proc) = builtin::proc_by_oid(func) else {
-        types::reg_out_oid(RegKind::Proc, func, out);
-        return;
-    };
-    let name = crate::text::quote_identifier(proc.name);
-    if builtin::procs_named(proc.name).nth(1).is_none() {
-        out.extend_from_slice(name.as_bytes());
-    } else {
-        out.extend_from_slice(b"pg_catalog.");
-        out.extend_from_slice(name.as_bytes());
-    }
 }
 
 /// The elements of an `int2vector` or an `oidvector`, which have no null element.
@@ -240,6 +213,9 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
         })
         .map_err(type_error)?;
         return Ok(Value::Array(Box::new(array)));
+    }
+    if let Some(kind) = RegKind::from_oid(ty) {
+        return Ok(Value::Oid(reg::input(kind, text, session)??));
     }
     let value = match ty {
         oid::BOOL => Value::Bool(types::bool_in(text).map_err(type_error)?),
@@ -366,6 +342,7 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::VARCHAR => Value::text(types::varchar_in(recv.text()?, typmod)?),
         oid::BPCHAR => Value::text(types::bpchar_in(recv.text()?, typmod)?),
         oid::OID => Value::Oid(recv.u32()?),
+        ty if RegKind::from_oid(ty).is_some() => Value::Oid(recv.u32()?),
         oid::JSON => Value::text(types::json_in(recv.text()?)?),
         oid::JSONB => Value::Text(types::jsonb_recv(recv.rest())?),
         oid::FLOAT4 => Value::Float4(recv.f32()?),

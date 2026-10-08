@@ -158,6 +158,61 @@ pub struct AggregateRow {
     pub initval: Option<&'static str>,
 }
 
+/// A built-in object of a kind that an OID alias type names: a relation, a schema, a role, a database, a collation, a text search configuration or a text search dictionary.
+#[derive(Debug)]
+pub struct NamedRow {
+    pub oid: u32,
+    pub name: &'static str,
+    /// The schema, or 0 for a kind that has no schema.
+    pub namespace: u32,
+    /// `collencoding` of a collation, -1 for a collation of any encoding. It is -1 for the other kinds.
+    pub encoding: i32,
+}
+
+/// The kinds of [`NamedRow`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Named {
+    /// `pg_class`.
+    Class,
+    /// `pg_namespace`.
+    Namespace,
+    /// `pg_authid`.
+    Role,
+    /// `pg_database`.
+    Database,
+    /// `pg_collation`.
+    Collation,
+    /// `pg_ts_config`.
+    Config,
+    /// `pg_ts_dict`.
+    Dictionary,
+}
+
+impl Named {
+    /// The catalog, the column of the name and the column of the schema, or `""` for a kind that has no schema.
+    fn columns(self) -> (&'static str, &'static str, &'static str) {
+        match self {
+            Named::Class => ("pg_class", "relname", "relnamespace"),
+            Named::Namespace => ("pg_namespace", "nspname", ""),
+            Named::Role => ("pg_authid", "rolname", ""),
+            Named::Database => ("pg_database", "datname", ""),
+            Named::Collation => ("pg_collation", "collname", "collnamespace"),
+            Named::Config => ("pg_ts_config", "cfgname", "cfgnamespace"),
+            Named::Dictionary => ("pg_ts_dict", "dictname", "dictnamespace"),
+        }
+    }
+
+    const ALL: [Named; 7] = [
+        Named::Class,
+        Named::Namespace,
+        Named::Role,
+        Named::Database,
+        Named::Collation,
+        Named::Config,
+        Named::Dictionary,
+    ];
+}
+
 struct Builtin {
     types: Vec<TypeRow>,
     procs: Vec<ProcRow>,
@@ -177,6 +232,7 @@ struct Builtin {
     aggregates: Vec<AggregateRow>,
     aggregate_fn: HashMap<u32, usize>,
     primary_keys: HashMap<u32, Vec<i16>>,
+    named: HashMap<Named, Vec<NamedRow>>,
 }
 
 static BUILTIN: LazyLock<Builtin> = LazyLock::new(Builtin::load);
@@ -295,6 +351,7 @@ impl Builtin {
             aggregate_fn: aggregates.iter().enumerate().map(|(i, a)| (a.fnoid, i)).collect(),
             aggregates,
             primary_keys: load_primary_keys(),
+            named: Named::ALL.into_iter().map(|kind| (kind, load_named(kind))).collect(),
             types,
             procs,
             operators,
@@ -496,6 +553,23 @@ fn load_aggregates() -> Vec<AggregateRow> {
         .collect()
 }
 
+/// The built-in objects of a kind, from its catalog.
+fn load_named(kind: Named) -> Vec<NamedRow> {
+    let (catalog, name, namespace) = kind.columns();
+    let r = Rows::new(catalog);
+    let (oid, name) = (r.oid("oid"), r.text(name));
+    let namespace = if namespace.is_empty() { None } else { Some(r.oid(namespace)) };
+    let encoding = (kind == Named::Collation).then(|| r.int4("collencoding"));
+    (0..r.catalog.len)
+        .map(|i| NamedRow {
+            oid: oid[i],
+            name: name[i],
+            namespace: namespace.map_or(0, |n| n[i]),
+            encoding: encoding.map_or(-1, |e| e[i]),
+        })
+        .collect()
+}
+
 /// The columns of the primary key of each table that has one that the database checks at once, from `pg_constraint`.
 fn load_primary_keys() -> HashMap<u32, Vec<i16>> {
     let r = Rows::new("pg_constraint");
@@ -593,6 +667,16 @@ pub fn amops_of_operator(operator: u32) -> impl Iterator<Item = &'static AmopRow
 /// The row of `pg_aggregate` of the aggregate function with this OID.
 pub fn aggregate(fnoid: u32) -> Option<&'static AggregateRow> {
     BUILTIN.aggregate_fn.get(&fnoid).map(|&i| &BUILTIN.aggregates[i])
+}
+
+/// The built-in objects of a kind, in the order of the `.dat` file.
+pub fn named(kind: Named) -> &'static [NamedRow] {
+    BUILTIN.named.get(&kind).map_or(&[], Vec::as_slice)
+}
+
+/// The built-in object of a kind with this OID.
+pub fn named_by_oid(kind: Named, oid: u32) -> Option<&'static NamedRow> {
+    named(kind).iter().find(|row| row.oid == oid)
 }
 
 /// The attribute numbers of the primary key of the table, when the key is not deferrable, as `check_functional_grouping` finds them.
