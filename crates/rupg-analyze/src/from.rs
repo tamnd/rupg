@@ -1,6 +1,9 @@
 //! `transformFromClause` of `parse_clause.c` and the name lookup of `parse_relation.c`: the relations of `FROM`, the joins, and the column that a name gives.
 
+use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
+use rupg_pgcatalog::Values;
+use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{Alias, ColumnRef, JoinExpr, JoinType, Node, RangeVar};
 use rupg_types::oid;
 
@@ -216,23 +219,14 @@ impl Analyzer<'_> {
     fn relation(&mut self, rv: &RangeVar) -> Result<Item> {
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default();
-        let catalog = self.lookup_relation(rv)?.ok_or_else(|| {
+        let oid = self.lookup_relation(rv)?.ok_or_else(|| {
             let message = match &rv.schemaname {
                 Some(schema) => format!("relation \"{schema}.{name}\" does not exist"),
                 None => format!("relation \"{name}\" does not exist"),
             };
             Error::new(SqlState::UNDEFINED_TABLE, message).at_opt(at)
         })?;
-        let columns: Vec<Column> = catalog
-            .columns
-            .iter()
-            .map(|c| Column {
-                name: c.name.to_string(),
-                ty: c.type_oid,
-                typmod: -1,
-                not_null: c.not_null,
-            })
-            .collect();
+        let columns = self.open_relation(oid, name, at)?;
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
         let mut colnames: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
@@ -260,17 +254,19 @@ impl Analyzer<'_> {
             .map(|(i, (n, c))| {
                 let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
                 let var = Var { relation: index, attnum, levels_up: 0 };
-                (n.clone(), Expr::new(ExprKind::Var(var), c.ty))
+                let mut expr = Expr::new(ExprKind::Var(var), c.ty);
+                expr.typmod = c.typmod;
+                (n.clone(), expr)
             })
             .collect();
-        self.scope.relations.push(Relation { oid: catalog.oid, columns });
+        self.scope.relations.push(Relation { oid, columns });
         let entry = self.scope.entries.len();
         self.scope.entries.push(Entry {
             name: refname.clone(),
             aliased: alias.is_some(),
             columns: colnames,
             relation: Some(index),
-            oid: catalog.oid,
+            oid,
         });
         Ok(Item { entry, name: refname, columns: exprs, rel_visible: true, cols_visible: true })
     }
@@ -317,8 +313,8 @@ impl Analyzer<'_> {
         });
     }
 
-    /// `RangeVarGetRelid`: the table of the catalog that a name gives, or `None`.
-    fn lookup_relation(&self, rv: &RangeVar) -> Result<Option<&'static rupg_pgcatalog::Catalog>> {
+    /// `RangeVarGetRelid`: the OID of the relation that a name gives, or `None`. The relation can be of any kind.
+    fn lookup_relation(&self, rv: &RangeVar) -> Result<Option<u32>> {
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default();
         if let Some(database) = &rv.catalogname
@@ -334,17 +330,57 @@ impl Analyzer<'_> {
             .at_opt(at));
         }
         let in_schema = |namespace: u32| {
-            if namespace == crate::PG_CATALOG_NAMESPACE {
-                rupg_pgcatalog::catalog(name)
-            } else {
-                None
-            }
+            builtin::named(Named::Class)
+                .iter()
+                .find(|r| r.namespace == namespace && r.name == name)
+                .map(|r| r.oid)
+                .or_else(|| self.env.catalog()?.relation_by_name(namespace, name).map(|r| r.oid))
         };
         match &rv.schemaname {
             // A schema that does not exist has no relation, as RangeVarGetRelid with missing_ok gives.
             Some(schema) => Ok(self.schema(schema).and_then(in_schema)),
             None => Ok(self.path.iter().find_map(|&ns| in_schema(ns))),
         }
+    }
+
+    /// The checks of `table_open` for a relation in `FROM`, and the columns of the relation. A table of the catalog, a table of the user and a sequence of the user can be in `FROM`. An index gives `42809`, and a built-in view gives `0A000`.
+    fn open_relation(&self, oid: u32, name: &str, at: Option<usize>) -> Result<Vec<Column>> {
+        let index_error = || {
+            Error::new(SqlState::WRONG_OBJECT_TYPE, format!("cannot open relation \"{name}\""))
+                .with_detail("This operation is not supported for indexes.")
+                .at_opt(at)
+        };
+        if let Some(catalog) = rupg_pgcatalog::catalog_by_oid(oid) {
+            return Ok(catalog
+                .columns
+                .iter()
+                .map(|c| Column {
+                    name: c.name.to_string(),
+                    ty: c.type_oid,
+                    typmod: -1,
+                    not_null: c.not_null,
+                })
+                .collect());
+        }
+        if let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) {
+            if rel.kind == RelKind::Index {
+                return Err(index_error());
+            }
+            return Ok(rel
+                .columns
+                .iter()
+                .map(|c| Column {
+                    name: c.name.clone(),
+                    ty: c.ty,
+                    typmod: c.typmod,
+                    not_null: c.not_null,
+                })
+                .collect());
+        }
+        if builtin_relkind(oid) == Some(b'i') {
+            return Err(index_error());
+        }
+        Err(not_yet(&format!("the system relation \"{name}\""), at))
     }
 
     /// `checkNameSpaceConflicts`: two items that the same name qualifies are an error, except two relations with no alias that are not the same relation.
@@ -747,15 +783,15 @@ impl Analyzer<'_> {
                 location: at.map_or(-1, |a| i32::try_from(a).unwrap_or(-1)),
                 ..RangeVar::default()
             };
-            let Some(catalog) = self.lookup_relation(&rv)? else { return Ok(None) };
+            let Some(oid) = self.lookup_relation(&rv)? else { return Ok(None) };
             let mut result = None;
             for item in scope.namespace.iter().filter(|i| i.rel_visible) {
                 let entry = &scope.entries[item.entry];
-                if entry.relation.is_some() && !entry.aliased && entry.oid == catalog.oid {
+                if entry.relation.is_some() && !entry.aliased && entry.oid == oid {
                     if result.is_some() {
                         return Err(Error::new(
                             SqlState::AMBIGUOUS_ALIAS,
-                            format!("table reference {} is ambiguous", catalog.oid),
+                            format!("table reference {oid} is ambiguous"),
                         )
                         .at_opt(at));
                     }
@@ -788,7 +824,7 @@ impl Analyzer<'_> {
             relname: Some(name.into()),
             ..RangeVar::default()
         };
-        let oid = self.lookup_relation(&rv).ok().flatten().map(|c| c.oid);
+        let oid = self.lookup_relation(&rv).ok().flatten();
         let found = self.levels().find_map(|(level, scope)| {
             let index = scope
                 .entries
@@ -959,6 +995,17 @@ fn ambiguous(name: &str, at: Option<usize>) -> Error {
 }
 
 /// The error of a part of `FROM` that the analyzer does not take yet.
+/// The `relkind` of a built-in relation, from the static rows of `pg_class`.
+fn builtin_relkind(oid: u32) -> Option<u8> {
+    let class = rupg_pgcatalog::catalog("pg_class")?;
+    let (Values::Oid(oids), Values::Char(kinds)) =
+        (&class.rows[class.column("oid")?].values, &class.rows[class.column("relkind")?].values)
+    else {
+        return None;
+    };
+    oids.iter().position(|&o| o == oid).map(|row| kinds[row])
+}
+
 fn not_yet(what: &str, at: Option<usize>) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet")).at_opt(at)
 }

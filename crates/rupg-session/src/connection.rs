@@ -1615,6 +1615,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/fold.test")));
     }
 
+    /// `SELECT` from the tables and sequences of the user, with the types of the columns. `connection/user_select.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn user_select() {
+        big_stack(|| script(include_str!("connection/user_select.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {
