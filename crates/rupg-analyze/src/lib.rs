@@ -11,6 +11,7 @@ mod coerce;
 mod colname;
 mod expr;
 mod from;
+pub mod node;
 mod poly;
 mod resolve;
 mod select;
