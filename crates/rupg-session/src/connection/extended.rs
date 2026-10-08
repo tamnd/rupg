@@ -49,6 +49,8 @@ enum Run {
 #[derive(Debug)]
 pub(super) struct Portal {
     statement: Arc<Prepared>,
+    /// The plan of the query of the statement with the values of the parameters, which `Bind` makes.
+    plan: Option<Plan>,
     /// The result format of each column.
     formats: Vec<i16>,
     /// The values of the parameters of a statement that the engine runs.
@@ -213,6 +215,11 @@ impl Connection {
             })?;
         }
         let result_formats = values.finish()?;
+        // `GetCachedPlan` plans the query with the values of the parameters, as a custom plan, before the portal takes the formats of the result.
+        let plan = match &statement.plan {
+            Some(plan) => Some(plan.fold(Some(&params), &self.reader())?),
+            None => None,
+        };
         let formats = match &statement.columns {
             Some(columns) => {
                 let count = result_formats.len();
@@ -230,7 +237,7 @@ impl Connection {
             }
             None => Vec::new(),
         };
-        let portal = Portal { statement, formats, params, run: Run::Ready, failed: false };
+        let portal = Portal { statement, plan, formats, params, run: Run::Ready, failed: false };
         self.portals.insert(bind.portal, portal);
         out.bind_complete();
         Ok(())
@@ -319,11 +326,12 @@ impl Connection {
         }
         let ready = matches!(portal.run, Run::Ready);
         let params = std::mem::take(&mut portal.params);
+        let plan = portal.plan.take();
         let formats = portal.formats.clone();
         let mut immediate_commit = false;
         let mut tag = None;
         if ready {
-            let done = if let Some(plan) = &statement.plan {
+            let done = if let Some(plan) = &plan {
                 self.settings.borrow_mut().take_snapshot();
                 let rows = query::run(plan, &params, &self.reader(), &formats)?;
                 Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }

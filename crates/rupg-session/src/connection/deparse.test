@@ -3,6 +3,7 @@ CREATE SCHEMA
 > CREATE TABLE d (c1 int DEFAULT 1, c2 int DEFAULT -1, c3 bigint DEFAULT 1, c4 numeric DEFAULT 1.5, c5 numeric(5,2) DEFAULT -2.25, c6 float8 DEFAULT 1.5, c7 real DEFAULT 2, c8 text DEFAULT 'x', c9 text DEFAULT 'it''s', c10 varchar(10) DEFAULT 'v', c11 char(3) DEFAULT 'ab', c12 bool DEFAULT true, c13 bool DEFAULT false, c14 date DEFAULT '2024-01-02', c15 timestamptz DEFAULT now(), c16 timestamptz DEFAULT CURRENT_TIMESTAMP, c17 text DEFAULT CURRENT_USER, c18 int[] DEFAULT '{1,2}', c19 int[] DEFAULT ARRAY[1, 2], c20 text DEFAULT lower('ABC'), c21 int DEFAULT 1 + 2 * 3, c22 int DEFAULT (1 + 2) * 3, c23 bigint DEFAULT 5::bigint, c24 oid DEFAULT 0, c25 text DEFAULT 5::text, c26 int DEFAULT NULL, c27 interval DEFAULT '1 day', c28 numeric DEFAULT 2::numeric, c29 int DEFAULT abs(-3), c30 text DEFAULT 'a' || 'b', c31 int DEFAULT CASE WHEN true THEN 1 ELSE 2 END, c32 int DEFAULT COALESCE(NULL, 3), c33 int DEFAULT -(1), c34 bigint DEFAULT -9223372036854775808, c35 numeric DEFAULT -1.5, c36 float8 DEFAULT -1.5, c37 text DEFAULT E'a\\b', c38 varchar DEFAULT 'q'::varchar, c39 varchar(5) DEFAULT 'q'::text, c40 int DEFAULT '7', c41 smallint DEFAULT 1, c42 int2 DEFAULT -1, c43 bool DEFAULT (NOT true), c44 int DEFAULT GREATEST(1, 2), c45 int DEFAULT NULLIF(1, 2), c46 date DEFAULT CURRENT_DATE, c47 text DEFAULT 'x'::varchar(2), c48 float4 DEFAULT 'NaN', c49 numeric DEFAULT 'NaN', c50 float8 DEFAULT '-Infinity')
 CREATE TABLE
 > SELECT adnum, pg_get_expr(adbin, adrelid), pg_get_expr(adbin, adrelid, true) FROM pg_attrdef WHERE adrelid = 'd'::regclass ORDER BY adnum
+fields adnum@pg_attrdef.3:21:2:-1,pg_get_expr:25:-1:-1,pg_get_expr:25:-1:-1
 row 1,1,1
 row 2,'-1'::integer,'-1'::integer
 row 3,1,1
@@ -64,6 +65,7 @@ SELECT 49
 > CREATE TABLE c (a int, b text, n numeric, v varchar(10), t timestamp, f bool, x int[], CHECK (a > 0), CHECK (a > 0 AND b <> 'x'), CHECK (a > 0 OR a < -10 AND b IS NOT NULL), CHECK (NOT (a = 1)), CHECK (n > 0), CHECK (v <> 'x'), CHECK (v::text <> 'y'), CHECK (a IN (1, 2, 3)), CHECK (a NOT IN (1, 2)), CHECK (b IN ('a', 'b')), CHECK (a BETWEEN 1 AND 10), CHECK (b LIKE 'a%'), CHECK (b NOT LIKE 'a%'), CHECK (b ILIKE 'a%'), CHECK (b ~ '^a'), CHECK (f IS TRUE), CHECK (f IS NOT FALSE), CHECK (f IS UNKNOWN), CHECK (a IS NULL), CHECK (a IS DISTINCT FROM 5), CHECK (a IS NOT DISTINCT FROM 5), CHECK (f), CHECK (NOT f), CHECK (a = ANY (x)), CHECK (a > ALL (ARRAY[1, 2])), CHECK (length(b) < 10), CHECK (CASE WHEN a > 0 THEN true ELSE false END), CHECK (CASE a WHEN 1 THEN true WHEN 2 THEN false END), CHECK (t > '2024-01-01'), CHECK (a::text <> b), CHECK (a::bigint > 1), CHECK (-a < 5), CHECK (a % 2 = 0), CHECK (abs(a) >= 0), CHECK (b || 'x' <> 'y'), CHECK (a + 1 > a - 1), CHECK (n::int > 0), CHECK (COALESCE(a, 0) >= 0), CHECK (a::numeric(5,1) > 1.5), CHECK (n > 1.5), CHECK (a <> -1), CHECK (b <> ''))
 CREATE TABLE
 > SELECT conname, pg_get_constraintdef(oid), pg_get_constraintdef(oid, true), pg_get_expr(conbin, conrelid) FROM pg_constraint WHERE conrelid = 'c'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1,pg_get_constraintdef:25:-1:-1,pg_get_expr:25:-1:-1
 row c_a_check,CHECK ((a > 0)),CHECK (a > 0),(a > 0)
 row c_a_check1,CHECK ((NOT (a = 1))),CHECK (NOT a = 1),(NOT (a = 1))
 row c_a_check10,CHECK (
@@ -141,6 +143,7 @@ CREATE TABLE
 > CREATE TABLE f (a int REFERENCES k, b text REFERENCES k (b) ON DELETE CASCADE, c int, d int, e int, FOREIGN KEY (c, d) REFERENCES k (c, d) MATCH FULL ON UPDATE SET NULL, FOREIGN KEY (a, e) REFERENCES s.r ON DELETE SET DEFAULT ON UPDATE RESTRICT DEFERRABLE INITIALLY DEFERRED, CONSTRAINT fk5 FOREIGN KEY (e) REFERENCES k (a) ON DELETE SET NULL NOT VALID)
 CREATE TABLE
 > SELECT conname, contype, pg_get_constraintdef(oid), pg_get_constraintdef(oid, true) FROM pg_constraint WHERE conrelid IN ('k'::regclass, 'f'::regclass, 's.r'::regclass) ORDER BY conrelid, conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,pg_get_constraintdef:25:-1:-1,pg_get_constraintdef:25:-1:-1
 row k_a_not_null,n,NOT NULL a,NOT NULL a
 row k_b_key,u,UNIQUE (b),UNIQUE (b)
 row k_c_d_key,u,UNIQUE (c, d),UNIQUE (c, d)
@@ -182,6 +185,7 @@ CREATE INDEX
 > CREATE INDEX i11 ON k (a) WHERE b IN ('x', 'y')
 CREATE INDEX
 > SELECT indexrelid::regclass, pg_get_indexdef(indexrelid), pg_get_indexdef(indexrelid, 0, true), pg_get_indexdef(indexrelid, 1, false), pg_get_indexdef(indexrelid, 2, true), pg_get_expr(indpred, indrelid), pg_get_expr(indexprs, indrelid) FROM pg_index WHERE indrelid IN ('k'::regclass, 's.r'::regclass, 'f'::regclass) ORDER BY indexrelid
+fields indexrelid:2205:4:-1,pg_get_indexdef:25:-1:-1,pg_get_indexdef:25:-1:-1,pg_get_indexdef:25:-1:-1,pg_get_indexdef:25:-1:-1,pg_get_expr:25:-1:-1,pg_get_expr:25:-1:-1
 row k_pkey,CREATE UNIQUE INDEX k_pkey ON public.k USING btree (a),CREATE UNIQUE INDEX k_pkey ON k USING btree (a),a,,NULL,NULL
 row k_b_key,CREATE UNIQUE INDEX k_b_key ON public.k USING btree (b),CREATE UNIQUE INDEX k_b_key ON k USING btree (b),b,,NULL,NULL
 row k_c_d_key,CREATE UNIQUE INDEX k_c_d_key ON public.k USING btree (c, d),CREATE UNIQUE INDEX k_c_d_key ON k USING btree (c, d),c,d,NULL,NULL
@@ -205,6 +209,7 @@ SELECT 18
 SET
 search_path=s
 > SELECT conname, pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint WHERE conrelid = 'public.f'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1
 row f_a_e_fkey,FOREIGN KEY (a, e) REFERENCES r(x, y) ON UPDATE RESTRICT ON DELETE SET DEFAULT DEFERRABLE INITIALLY DEFERRED
 row f_a_fkey,FOREIGN KEY (a) REFERENCES public.k(a)
 row f_b_fkey,FOREIGN KEY (b) REFERENCES public.k(b) ON DELETE CASCADE
@@ -212,6 +217,7 @@ row f_c_d_fkey,FOREIGN KEY (c, d) REFERENCES public.k(c, d) MATCH FULL ON UPDATE
 row fk5,FOREIGN KEY (e) REFERENCES public.k(a) ON DELETE SET NULL
 SELECT 5
 > SELECT indexrelid::regclass, pg_get_indexdef(indexrelid) FROM pg_catalog.pg_index WHERE indrelid IN ('public.k'::regclass, 's.r'::regclass) ORDER BY indexrelid
+fields indexrelid:2205:4:-1,pg_get_indexdef:25:-1:-1
 row public.k_pkey,CREATE UNIQUE INDEX k_pkey ON public.k USING btree (a)
 row public.k_b_key,CREATE UNIQUE INDEX k_b_key ON public.k USING btree (b)
 row public.k_c_d_key,CREATE UNIQUE INDEX k_c_d_key ON public.k USING btree (c, d)
@@ -235,12 +241,15 @@ SELECT 18
 RESET
 search_path="$user", public
 > SELECT pg_get_expr(adbin, 'c'::regclass) FROM pg_attrdef WHERE adrelid = 'd'::regclass AND adnum = 1
+fields pg_get_expr:25:-1:-1
 row 1
 SELECT 1
 > SELECT pg_get_expr(adbin, 0) FROM pg_attrdef WHERE adrelid = 'd'::regclass AND adnum = 1
+fields pg_get_expr:25:-1:-1
 row 1
 SELECT 1
 > SELECT pg_get_expr(NULL, 0), pg_get_constraintdef(0), pg_get_indexdef(0), pg_get_indexdef(0, 0, true), pg_get_constraintdef(NULL)
+fields pg_get_expr:25:-1:-1,pg_get_constraintdef:25:-1:-1,pg_get_indexdef:25:-1:-1,pg_get_indexdef:25:-1:-1,pg_get_constraintdef:25:-1:-1
 row NULL,NULL,NULL,NULL,NULL
 SELECT 1
 > SELECT pg_get_expr('x', 0)

@@ -34,6 +34,8 @@ pub struct Column {
     pub name: String,
     pub ty: u32,
     pub typmod: i32,
+    /// `attnotnull`: the column has a not-null constraint.
+    pub not_null: bool,
 }
 
 /// A part of `FROM`: a relation or a join.
@@ -224,7 +226,12 @@ impl Analyzer<'_> {
         let columns: Vec<Column> = catalog
             .columns
             .iter()
-            .map(|c| Column { name: c.name.to_string(), ty: c.type_oid, typmod: -1 })
+            .map(|c| Column {
+                name: c.name.to_string(),
+                ty: c.type_oid,
+                typmod: -1,
+                not_null: c.not_null,
+            })
             .collect();
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
@@ -284,7 +291,12 @@ impl Analyzer<'_> {
             .collect();
         let columns: Vec<Column> = columns
             .iter()
-            .map(|(n, ty, typmod)| Column { name: n.clone(), ty: *ty, typmod: *typmod })
+            .map(|(n, ty, typmod)| Column {
+                name: n.clone(),
+                ty: *ty,
+                typmod: *typmod,
+                not_null: false,
+            })
             .collect();
         let colnames = columns.iter().map(|c| c.name.clone()).collect();
         self.scope.relations.push(Relation { oid, columns });

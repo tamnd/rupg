@@ -1,0 +1,503 @@
+//! `eval_const_expressions` of `clauses.c`: the planner computes each part of an expression whose arguments are constants and whose function is immutable. An error of such a part, such as a division by zero, comes when the query is planned, before the server sends the description of the rows. The plan then runs the folded expressions, so a part that the fold drops does not run.
+
+use rupg_analyze::{
+    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Join, JoinKind, Query, Relation,
+    SubLink, SubLinkKind, Var,
+};
+use rupg_common::Result;
+use rupg_func::Session;
+use rupg_pgcatalog::builtin;
+use rupg_types::{Value, oid};
+
+use super::{agg, evaluate, relabel};
+
+/// `subquery_planner`: folds the expressions of a query in the order of `preprocess_expression`, which is the target list, the conditions of the joins and `WHERE`, `HAVING`, `OFFSET` and `LIMIT`. The subqueries of each clause come after the clause, as `SS_process_sublinks` plans them. `params` has the values of the parameters of `Bind`, which a custom plan takes as constants.
+pub(crate) fn query(
+    query: &Query,
+    params: Option<&[Value]>,
+    session: &dyn Session,
+) -> Result<Query> {
+    plan(query, params, session, false)
+}
+
+/// Folds a query or a subquery. For the subquery of `EXISTS`, `simplify_EXISTS_query` drops the target list and a constant `LIMIT` first when it can.
+fn plan(
+    query: &Query,
+    params: Option<&[Value]>,
+    session: &dyn Session,
+    exists: bool,
+) -> Result<Query> {
+    let mut nulled = vec![false; query.relations.len()];
+    for item in &query.from {
+        mark(item, false, &mut nulled);
+    }
+    let mut fold = Fold { params, session, relations: &query.relations, nulled, case: Vec::new() };
+    let mut out = query.clone();
+    let mut simple = false;
+    if exists && agg::calls(query).is_empty() && query.having.is_none() && query.offset.is_none() {
+        simple = match &query.limit {
+            None => true,
+            Some(limit) => match value(&fold.expr(limit)?) {
+                Some(Value::Int8(n)) => *n > 0,
+                Some(_) => true,
+                None => false,
+            },
+        };
+    }
+    if simple {
+        out.limit = None;
+    } else {
+        let targets: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
+        for (target, expr) in out.targets.iter_mut().zip(fold.clause(&targets)?) {
+            // The description of the rows keeps the type and the typmod of the analysis.
+            target.expr = Expr { ty: target.expr.ty, typmod: target.expr.typmod, ..expr };
+        }
+    }
+    out.from = query.from.iter().map(|item| fold.join(item)).collect::<Result<_>>()?;
+    out.filter = fold.one(query.filter.as_ref())?;
+    out.having = fold.one(query.having.as_ref())?;
+    out.offset = fold.one(query.offset.as_ref())?;
+    if !simple {
+        out.limit = fold.one(query.limit.as_ref())?;
+    }
+    Ok(out)
+}
+
+/// Marks the relations that an outer join of `item` can make null, as the `varnullingrels` of their columns. With `nullable`, a join above `item` can make all its relations null.
+fn mark(item: &FromItem, nullable: bool, nulled: &mut [bool]) {
+    match item {
+        FromItem::Relation(index) => {
+            if nullable && let Some(slot) = nulled.get_mut(*index) {
+                *slot = true;
+            }
+        }
+        FromItem::Join(join) => {
+            let (left, right) = match join.kind {
+                JoinKind::Inner => (false, false),
+                JoinKind::Left => (false, true),
+                JoinKind::Right => (true, false),
+                JoinKind::Full => (true, true),
+            };
+            mark(&join.left, nullable || left, nulled);
+            mark(&join.right, nullable || right, nulled);
+        }
+    }
+}
+
+/// The state of the fold of the expressions of one query.
+struct Fold<'a> {
+    params: Option<&'a [Value]>,
+    session: &'a dyn Session,
+    relations: &'a [Relation],
+    /// For each relation, true when an outer join can make its columns null where the expression is.
+    nulled: Vec<bool>,
+    /// `case_val`: the argument of each open `CASE` when it is a constant.
+    case: Vec<Option<Expr>>,
+}
+
+/// An expression with the type, the typmod and the place of another.
+fn with(expr: &Expr, kind: ExprKind) -> Expr {
+    Expr { kind, ty: expr.ty, typmod: expr.typmod, location: expr.location }
+}
+
+/// The value of a constant expression.
+fn value(expr: &Expr) -> Option<&Value> {
+    match &expr.kind {
+        ExprKind::Const(value) => Some(value),
+        _ => None,
+    }
+}
+
+/// True when the function is immutable, as `ece_function_is_safe` tests it.
+fn immutable(func: u32) -> bool {
+    builtin::proc_by_oid(func).is_some_and(|p| p.volatile == b'i')
+}
+
+impl Fold<'_> {
+    /// `preprocess_expression`: folds the expressions of a clause, then the subqueries that the folded expressions still have.
+    fn clause(&mut self, exprs: &[&Expr]) -> Result<Vec<Expr>> {
+        let mut folded = exprs.iter().map(|e| self.expr(e)).collect::<Result<Vec<_>>>()?;
+        for expr in &mut folded {
+            self.subqueries(expr)?;
+        }
+        Ok(folded)
+    }
+
+    /// A clause of one expression, or `None`.
+    fn one(&mut self, expr: Option<&Expr>) -> Result<Option<Expr>> {
+        let Some(expr) = expr else { return Ok(None) };
+        Ok(self.clause(&[expr])?.pop())
+    }
+
+    /// `preprocess_qual_conditions`: the conditions of the joins of a part of `FROM`, the inner joins first. In the condition of a join, the join itself does not make the columns null.
+    fn join(&mut self, item: &FromItem) -> Result<FromItem> {
+        let FromItem::Join(join) = item else { return Ok(item.clone()) };
+        let left = self.join(&join.left)?;
+        let right = self.join(&join.right)?;
+        let mut on = None;
+        if let Some(condition) = &join.on {
+            let mut nulled = vec![false; self.relations.len()];
+            mark(&join.left, false, &mut nulled);
+            mark(&join.right, false, &mut nulled);
+            let outer = std::mem::replace(&mut self.nulled, nulled);
+            let result = self.one(Some(condition));
+            self.nulled = outer;
+            on = result?;
+        }
+        Ok(FromItem::Join(Box::new(Join { kind: join.kind, left, right, on })))
+    }
+
+    /// `SS_process_sublinks`: folds the subqueries of a folded expression.
+    fn subqueries(&self, expr: &mut Expr) -> Result<()> {
+        match &mut expr.kind {
+            ExprKind::Const(_)
+            | ExprKind::Param(_)
+            | ExprKind::CaseTest
+            | ExprKind::SqlValue(_)
+            | ExprKind::Var(_)
+            | ExprKind::SubColumn(_) => Ok(()),
+            ExprKind::Func(f) => self.all(&mut f.args),
+            ExprKind::Relabel(arg, _)
+            | ExprKind::CoerceViaIo(arg, _)
+            | ExprKind::NullTest(arg, _)
+            | ExprKind::BooleanTest(arg, _) => self.subqueries(arg),
+            ExprKind::Bool(_, args)
+            | ExprKind::Coalesce(args)
+            | ExprKind::MinMax { args, .. }
+            | ExprKind::NullIf { args, .. }
+            | ExprKind::Distinct { args, .. }
+            | ExprKind::ScalarArrayOp { args, .. } => self.all(args),
+            ExprKind::Array { elements, .. } => self.all(elements),
+            ExprKind::Case(case) => {
+                if let Some(arg) = &mut case.arg {
+                    self.subqueries(arg)?;
+                }
+                for (when, then) in &mut case.whens {
+                    self.subqueries(when)?;
+                    self.subqueries(then)?;
+                }
+                self.subqueries(&mut case.default)
+            }
+            ExprKind::Agg(agg) => {
+                self.all(&mut agg.args)?;
+                match &mut agg.filter {
+                    Some(filter) => self.subqueries(filter),
+                    None => Ok(()),
+                }
+            }
+            ExprKind::SubLink(sub) => {
+                if let Some(test) = &mut sub.test {
+                    self.subqueries(test)?;
+                }
+                let exists = sub.kind == SubLinkKind::Exists;
+                sub.query = plan(&sub.query, self.params, self.session, exists)?;
+                Ok(())
+            }
+        }
+    }
+
+    fn all(&self, exprs: &mut [Expr]) -> Result<()> {
+        exprs.iter_mut().try_for_each(|e| self.subqueries(e))
+    }
+
+    /// The constant of the value of an expression, as `evaluate_expr` makes it.
+    fn evaluate(&self, expr: Expr) -> Result<Expr> {
+        let value = evaluate(&expr, self.session)?;
+        Ok(with(&expr, ExprKind::Const(value)))
+    }
+
+    fn list(&mut self, exprs: &[Expr]) -> Result<Vec<Expr>> {
+        exprs.iter().map(|e| self.expr(e)).collect()
+    }
+
+    /// `eval_const_expressions_mutator`.
+    fn expr(&mut self, expr: &Expr) -> Result<Expr> {
+        match &expr.kind {
+            ExprKind::Const(_)
+            | ExprKind::SqlValue(_)
+            | ExprKind::Var(_)
+            | ExprKind::SubColumn(_) => Ok(expr.clone()),
+            ExprKind::Param(n) => {
+                let given = n.checked_sub(1).and_then(|i| self.params?.get(i));
+                Ok(given.map_or_else(|| expr.clone(), |v| with(expr, ExprKind::Const(v.clone()))))
+            }
+            ExprKind::Func(f) => {
+                let args = self.list(&f.args)?;
+                let func = Func { oid: f.oid, args, form: f.form, variadic: f.variadic };
+                self.function(with(expr, ExprKind::Func(func)))
+            }
+            ExprKind::Relabel(arg, form) => {
+                let arg = self.expr(arg)?;
+                Ok(match arg.kind {
+                    ExprKind::Const(v) => with(expr, ExprKind::Const(relabel(v, expr.ty))),
+                    _ => with(expr, ExprKind::Relabel(Box::new(arg), *form)),
+                })
+            }
+            ExprKind::CoerceViaIo(arg, form) => {
+                let arg = self.expr(arg)?;
+                self.coerce(with(expr, ExprKind::CoerceViaIo(Box::new(arg), *form)))
+            }
+            ExprKind::Bool(BoolOp::Not, args) => {
+                let args = self.list(args)?;
+                Ok(match args.first().and_then(value) {
+                    Some(v) => {
+                        let not = v.as_bool().map_or(Value::Null, |b| Value::Bool(!b));
+                        with(expr, ExprKind::Const(not))
+                    }
+                    None => with(expr, ExprKind::Bool(BoolOp::Not, args)),
+                })
+            }
+            ExprKind::Bool(op, args) => self.and_or(expr, *op, args),
+            ExprKind::NullTest(arg, is_null) => {
+                let arg = self.expr(arg)?;
+                if let Some(v) = value(&arg) {
+                    return Ok(with(expr, ExprKind::Const(Value::Bool(v.is_null() == *is_null))));
+                }
+                if self.nonnullable(&arg) {
+                    return Ok(with(expr, ExprKind::Const(Value::Bool(!is_null))));
+                }
+                Ok(with(expr, ExprKind::NullTest(Box::new(arg), *is_null)))
+            }
+            ExprKind::BooleanTest(arg, test) => {
+                let arg = self.expr(arg)?;
+                if let Some(v) = value(&arg) {
+                    let v = v.as_bool();
+                    let result = match test {
+                        BoolTest::IsTrue => v == Some(true),
+                        BoolTest::IsNotTrue => v != Some(true),
+                        BoolTest::IsFalse => v == Some(false),
+                        BoolTest::IsNotFalse => v != Some(false),
+                        BoolTest::IsUnknown => v.is_none(),
+                        BoolTest::IsNotUnknown => v.is_some(),
+                    };
+                    return Ok(with(expr, ExprKind::Const(Value::Bool(result))));
+                }
+                if self.nonnullable(&arg) {
+                    return Ok(match test {
+                        BoolTest::IsTrue | BoolTest::IsNotFalse => arg,
+                        BoolTest::IsFalse | BoolTest::IsNotTrue => {
+                            with(expr, ExprKind::Bool(BoolOp::Not, vec![arg]))
+                        }
+                        BoolTest::IsUnknown => with(expr, ExprKind::Const(Value::Bool(false))),
+                        BoolTest::IsNotUnknown => with(expr, ExprKind::Const(Value::Bool(true))),
+                    });
+                }
+                Ok(with(expr, ExprKind::BooleanTest(Box::new(arg), *test)))
+            }
+            ExprKind::Case(case) => self.case(expr, case),
+            ExprKind::CaseTest => {
+                Ok(self.case.last().cloned().flatten().unwrap_or_else(|| expr.clone()))
+            }
+            ExprKind::Coalesce(args) => self.coalesce(expr, args),
+            ExprKind::MinMax { greatest, less, args } => {
+                let args = self.list(args)?;
+                let all = args.iter().all(|a| value(a).is_some());
+                let folded =
+                    with(expr, ExprKind::MinMax { greatest: *greatest, less: *less, args });
+                if all { self.evaluate(folded) } else { Ok(folded) }
+            }
+            ExprKind::Array { element, multidims, elements } => {
+                let elements = self.list(elements)?;
+                let all = elements.iter().all(|a| value(a).is_some());
+                let kind = ExprKind::Array { element: *element, multidims: *multidims, elements };
+                if all { self.evaluate(with(expr, kind)) } else { Ok(with(expr, kind)) }
+            }
+            ExprKind::NullIf { equal, args } => {
+                let args = self.list(args)?;
+                if args.iter().any(|a| value(a).is_some_and(Value::is_null)) {
+                    return Ok(args.into_iter().next().unwrap_or_else(|| expr.clone()));
+                }
+                let constant = args.iter().all(|a| value(a).is_some());
+                let folded = with(expr, ExprKind::NullIf { equal: *equal, args });
+                if constant && immutable(*equal) { self.evaluate(folded) } else { Ok(folded) }
+            }
+            ExprKind::Distinct { equal, not, args } => {
+                let args = self.list(args)?;
+                let values: Option<Vec<&Value>> = args.iter().map(value).collect();
+                let folded =
+                    |args| with(expr, ExprKind::Distinct { equal: *equal, not: *not, args });
+                let Some(values) = values else { return Ok(folded(args)) };
+                let nulls = values.iter().filter(|v| v.is_null()).count();
+                if nulls > 0 {
+                    let distinct = nulls < values.len();
+                    return Ok(with(expr, ExprKind::Const(Value::Bool(distinct != *not))));
+                }
+                if immutable(*equal) { self.evaluate(folded(args)) } else { Ok(folded(args)) }
+            }
+            ExprKind::ScalarArrayOp { func, any, args } => {
+                let args = self.list(args)?;
+                let all = args.iter().all(|a| value(a).is_some());
+                let folded = with(expr, ExprKind::ScalarArrayOp { func: *func, any: *any, args });
+                if all && immutable(*func) { self.evaluate(folded) } else { Ok(folded) }
+            }
+            ExprKind::Agg(agg) => {
+                let mut agg = agg.clone();
+                agg.args = self.list(&agg.args)?;
+                if let Some(filter) = &agg.filter {
+                    agg.filter = Some(Box::new(self.expr(filter)?));
+                }
+                Ok(with(expr, ExprKind::Agg(agg)))
+            }
+            ExprKind::SubLink(sub) => {
+                let test = sub.test.as_ref().map(|t| self.expr(t)).transpose()?;
+                let sub = SubLink { kind: sub.kind, test, query: sub.query.clone() };
+                Ok(with(expr, ExprKind::SubLink(Box::new(sub))))
+            }
+        }
+    }
+
+    /// `simplify_function` and `evaluate_function`: a strict function with a null constant argument is null, and an immutable function with constant arguments is its value.
+    fn function(&self, expr: Expr) -> Result<Expr> {
+        let ExprKind::Func(f) = &expr.kind else { return Ok(expr) };
+        let Some(proc) = builtin::proc_by_oid(f.oid) else { return Ok(expr) };
+        if proc.retset || proc.rettype == oid::RECORD {
+            return Ok(expr);
+        }
+        let values: Vec<Option<&Value>> = f.args.iter().map(value).collect();
+        if proc.strict && values.iter().flatten().any(|v| v.is_null()) {
+            return Ok(with(&expr, ExprKind::Const(Value::Null)));
+        }
+        if values.iter().any(Option::is_none) || proc.volatile != b'i' {
+            return Ok(expr);
+        }
+        self.evaluate(expr)
+    }
+
+    /// `CoerceViaIO`: the output function of the type of the argument, then the input function of the type of the result. Each one folds as a function does.
+    fn coerce(&self, expr: Expr) -> Result<Expr> {
+        let ExprKind::CoerceViaIo(arg, _) = &expr.kind else { return Ok(expr) };
+        let procs = builtin::type_by_oid(arg.ty)
+            .and_then(|t| builtin::proc_by_oid(t.output))
+            .zip(builtin::type_by_oid(expr.ty).and_then(|t| builtin::proc_by_oid(t.input)));
+        let (Some(v), Some((output, input))) = (value(arg), procs) else { return Ok(expr) };
+        if v.is_null() {
+            if output.strict && input.strict {
+                return Ok(with(&expr, ExprKind::Const(Value::Null)));
+            }
+            return Ok(expr);
+        }
+        if output.volatile == b'i' && input.volatile == b'i' {
+            self.evaluate(expr)
+        } else {
+            Ok(expr)
+        }
+    }
+
+    /// `simplify_and_arguments` and `simplify_or_arguments`. `AND` stops at the first false constant and `OR` at the first true constant, so the arguments after it do not fold.
+    fn and_or(&mut self, expr: &Expr, op: BoolOp, args: &[Expr]) -> Result<Expr> {
+        let stop = op == BoolOp::Or;
+        let mut kept = Vec::new();
+        let mut null = false;
+        for arg in args {
+            let arg = self.expr(arg)?;
+            match value(&arg).map(Value::as_bool) {
+                Some(Some(v)) if v == stop => {
+                    return Ok(with(expr, ExprKind::Const(Value::Bool(stop))));
+                }
+                Some(Some(_)) => {}
+                Some(None) => null = true,
+                None => kept.push(arg),
+            }
+        }
+        if null {
+            kept.push(with(expr, ExprKind::Const(Value::Null)));
+        }
+        Ok(match kept.len() {
+            0 => with(expr, ExprKind::Const(Value::Bool(!stop))),
+            1 => kept.pop().unwrap_or_else(|| expr.clone()),
+            _ => with(expr, ExprKind::Bool(op, kept)),
+        })
+    }
+
+    /// `CaseExpr`: a condition that is a false or null constant drops its result with no fold. A condition that is a true constant makes its result the result of `ELSE`, and the conditions after it do not fold.
+    fn case(&mut self, expr: &Expr, case: &Case) -> Result<Expr> {
+        let arg = case.arg.as_ref().map(|a| self.expr(a)).transpose()?;
+        self.case.push(arg.clone().filter(|a| value(a).is_some()));
+        let result = self.case_whens(expr, case, arg);
+        self.case.pop();
+        result
+    }
+
+    fn case_whens(&mut self, expr: &Expr, case: &Case, arg: Option<Expr>) -> Result<Expr> {
+        let mut whens = Vec::new();
+        let mut default = None;
+        for (when, then) in &case.whens {
+            let condition = self.expr(when)?;
+            let certain = match value(&condition) {
+                Some(v) if *v != Value::Bool(true) => continue,
+                Some(_) => true,
+                None => false,
+            };
+            let result = self.expr(then)?;
+            if !certain {
+                whens.push((condition, result));
+                continue;
+            }
+            default = Some(result);
+            break;
+        }
+        let default = match default {
+            Some(default) => default,
+            None => self.expr(&case.default)?,
+        };
+        if whens.is_empty() {
+            return Ok(default);
+        }
+        let case = Case { arg: arg.map(Box::new), whens, default: Box::new(default) };
+        Ok(with(expr, ExprKind::Case(case)))
+    }
+
+    /// `CoalesceExpr`: the null constants drop, and the fold stops after the first argument that cannot be null.
+    fn coalesce(&mut self, expr: &Expr, args: &[Expr]) -> Result<Expr> {
+        let mut kept = Vec::new();
+        for arg in args {
+            let arg = self.expr(arg)?;
+            if value(&arg).is_some_and(Value::is_null) {
+                continue;
+            }
+            let last = value(&arg).is_some() || self.nonnullable(&arg);
+            kept.push(arg);
+            if last {
+                break;
+            }
+        }
+        Ok(match kept.len() {
+            0 => with(expr, ExprKind::Const(Value::Null)),
+            1 => kept.pop().unwrap_or_else(|| expr.clone()),
+            _ => with(expr, ExprKind::Coalesce(kept)),
+        })
+    }
+
+    /// `expr_is_nonnullable`: true when the expression cannot be null.
+    fn nonnullable(&self, expr: &Expr) -> bool {
+        match &expr.kind {
+            ExprKind::Var(var) => self.var_nonnullable(*var),
+            ExprKind::Const(v) => !v.is_null(),
+            ExprKind::Coalesce(args) | ExprKind::MinMax { args, .. } => {
+                args.iter().any(|a| self.nonnullable(a))
+            }
+            ExprKind::Case(case) => {
+                self.nonnullable(&case.default)
+                    && case.whens.iter().all(|(_, r)| self.nonnullable(r))
+            }
+            ExprKind::Array { .. } | ExprKind::NullTest(..) | ExprKind::BooleanTest(..) => true,
+            // `IS NOT DISTINCT FROM` is a `NOT` above a `DistinctExpr`.
+            ExprKind::Distinct { not, .. } => !not,
+            ExprKind::Relabel(arg, _) => self.nonnullable(arg),
+            _ => false,
+        }
+    }
+
+    /// `var_is_nonnullable`: a column of a relation of the query that no outer join makes null, and that is a system column or has a not-null constraint.
+    fn var_nonnullable(&self, var: Var) -> bool {
+        if var.levels_up != 0 || self.nulled.get(var.relation).is_none_or(|n| *n) {
+            return false;
+        }
+        if var.attnum < 0 {
+            return true;
+        }
+        let column = usize::try_from(var.attnum - 1).ok();
+        let relation = self.relations.get(var.relation);
+        column.and_then(|c| relation?.columns.get(c)).is_some_and(|c| c.not_null)
+    }
+}
