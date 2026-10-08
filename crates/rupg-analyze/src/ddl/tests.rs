@@ -193,7 +193,7 @@ fn catalog_order() {
         let expected: Vec<(u32, String)> =
             expected.iter().map(|(o, n)| (*o, n.to_string())).collect();
         assert_eq!(names, expected);
-        assert_eq!(catalog.depends().len(), 71);
+        assert_eq!(catalog.depends().len(), 74);
     });
 }
 

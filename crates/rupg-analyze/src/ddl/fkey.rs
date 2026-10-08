@@ -6,7 +6,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::Constraint;
 
-use super::{Definer, Found, is_system, not_yet, relkind_detail, relname};
+use super::{Definer, Found, not_yet, relkind_detail, relname};
 use crate::coerce::{Context, can_coerce};
 use crate::typename::{names, place};
 use crate::types;
@@ -77,7 +77,7 @@ impl Definer<'_, '_> {
                 format!("referenced relation \"{pk_name}\" is not a table"),
             ));
         }
-        if is_system(found) {
+        if self.is_system(found) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied: \"{pk_name}\" is a system catalog"),

@@ -1425,6 +1425,96 @@ mod tests {
         big_stack(definitions_cases);
     }
 
+    /// The queries of the catalog in `connection/catalog_rows.out`.
+    const CATALOG_QUERIES: [(&str, &str); 9] = [
+        (
+            "pg_namespace",
+            "SELECT oid, nspname, nspowner, nspacl FROM pg_namespace WHERE oid >= 16384 ORDER BY oid",
+        ),
+        (
+            "pg_class",
+            "SELECT oid, relname, relnamespace, reltype, reloftype, relowner, relam, relfilenode, reltablespace, relpages, reltuples, relallvisible, relallfrozen, reltoastrelid, relhasindex, relisshared, relpersistence, relkind, relnatts, relchecks, relhasrules, relhastriggers, relhassubclass, relrowsecurity, relforcerowsecurity, relispopulated, relreplident, relispartition, relrewrite, relfrozenxid = 0, relminmxid, relacl, reloptions, relpartbound FROM pg_class WHERE oid >= 16384 ORDER BY oid",
+        ),
+        (
+            "pg_type",
+            "SELECT oid, typname, typnamespace, typowner, typlen, typbyval, typtype, typcategory, typispreferred, typisdefined, typdelim, typrelid, typsubscript, typelem, typarray, typinput, typoutput, typreceive, typsend, typmodin, typmodout, typanalyze, typalign, typstorage, typnotnull, typbasetype, typtypmod, typndims, typcollation, typdefaultbin, typdefault, typacl FROM pg_type WHERE oid >= 16384 ORDER BY oid",
+        ),
+        (
+            "pg_attribute",
+            "SELECT attrelid, attname, atttypid, attlen, attnum, atttypmod, attndims, attbyval, attalign, attstorage, attcompression, attnotnull, atthasdef, atthasmissing, attidentity, attgenerated, attisdropped, attislocal, attinhcount, attcollation, attstattarget, attacl, attoptions, attfdwoptions, attmissingval FROM pg_attribute WHERE attrelid >= 16384 ORDER BY attrelid, attnum",
+        ),
+        (
+            "pg_attrdef",
+            "SELECT oid, adrelid, adnum, adbin IS NOT NULL FROM pg_attrdef WHERE oid >= 16384 ORDER BY oid",
+        ),
+        (
+            "pg_constraint",
+            "SELECT oid, conname, connamespace, contype, condeferrable, condeferred, conenforced, convalidated, conrelid, contypid, conindid, conparentid, confrelid, confupdtype, confdeltype, confmatchtype, conislocal, coninhcount, connoinherit, conperiod, conkey, confkey, conpfeqop, conppeqop, conffeqop, confdelsetcols, conexclop, conbin IS NOT NULL FROM pg_constraint WHERE oid >= 16384 ORDER BY oid",
+        ),
+        (
+            "pg_index",
+            "SELECT indexrelid, indrelid, indnatts, indnkeyatts, indisunique, indnullsnotdistinct, indisprimary, indisexclusion, indimmediate, indisclustered, indisvalid, indcheckxmin, indisready, indislive, indisreplident, indkey, indcollation, indclass, indoption, indexprs IS NOT NULL, indpred IS NOT NULL FROM pg_index WHERE indexrelid >= 16384 ORDER BY indexrelid",
+        ),
+        (
+            "pg_sequence",
+            "SELECT seqrelid, seqtypid, seqstart, seqincrement, seqmax, seqmin, seqcache, seqcycle FROM pg_sequence WHERE seqrelid >= 16384 ORDER BY seqrelid",
+        ),
+        (
+            "pg_depend",
+            "SELECT classid, objid, objsubid, refclassid, refobjid, refobjsubid, deptype FROM pg_depend WHERE objid >= 16384 AND classid <> 2620 ORDER BY classid, objid, objsubid, refclassid, refobjid, refobjsubid, deptype",
+        ),
+    ];
+
+    /// The rows of the user objects in the catalog. `connection/catalog_rows.out` is the output of PostgreSQL 19 for the same statements and queries in a new database, in the unaligned format of `psql` with the field separator `,` and the null string `NULL`, with the OIDs moved to start at 16384. The queries leave out the expressions, which rupg keeps in its own form, and the value of `relfrozenxid`, which depends on the cluster.
+    fn catalog_rows_cases() {
+        let (mut c, _) = connect();
+        let statements = [
+            ("CREATE SCHEMA s", "CREATE SCHEMA"),
+            (
+                "CREATE TABLE s.t (a int PRIMARY KEY, b text NOT NULL DEFAULT 'x', c numeric(5,2) CHECK (c > 0), d serial)",
+                "CREATE TABLE",
+            ),
+            ("CREATE INDEX ON s.t (lower(b)) WHERE a > 1", "CREATE INDEX"),
+            ("CREATE TABLE s.u (a int REFERENCES s.t, b varchar(10)[] UNIQUE)", "CREATE TABLE"),
+        ];
+        for (sql, tag) in statements {
+            assert_eq!(send(&mut c, &query(sql)), [tag, "ready I"], "{sql}");
+        }
+        let mut expected: Vec<(&str, Vec<&str>)> = Vec::new();
+        for line in include_str!("connection/catalog_rows.out").lines() {
+            match expected.last_mut() {
+                Some((_, rows)) if !line.starts_with("pg_") => rows.push(line),
+                _ => expected.push((line, Vec::new())),
+            }
+        }
+        assert_eq!(expected.len(), CATALOG_QUERIES.len());
+        for ((name, sql), (want_name, want)) in CATALOG_QUERIES.iter().zip(&expected) {
+            assert_eq!(name, want_name);
+            let lines = send(&mut c, &query(sql));
+            let rows: Vec<&str> = lines.iter().filter_map(|l| l.strip_prefix("row ")).collect();
+            for (i, (got, want)) in rows.iter().zip(want).enumerate() {
+                assert_eq!(got, want, "row {} of {name}", i + 1);
+            }
+            assert_eq!(rows.len(), want.len(), "{name}: {lines:?}");
+        }
+        assert_eq!(
+            send(&mut c, &query("CREATE INDEX ON pg_toast.pg_toast_16386 (chunk_id)")),
+            ["ERROR 42501 permission denied: \"pg_toast_16386\" is a system catalog", "ready I"]
+        );
+        assert_eq!(
+            send(
+                &mut c,
+                &query("CREATE TABLE v (a oid REFERENCES pg_toast.pg_toast_16386 (chunk_id))")
+            ),
+            ["ERROR 42809 referenced relation \"pg_toast_16386\" is not a table", "ready I"]
+        );
+    }
+
+    #[test]
+    fn catalog_rows() {
+        big_stack(catalog_rows_cases);
+    }
+
     #[test]
     fn extended_selects() {
         big_stack(extended_selects_cases);

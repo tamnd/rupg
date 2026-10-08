@@ -2,7 +2,7 @@
 //!
 //! At M2 the catalog holds the schemas, tables, sequences, indexes, column defaults and constraints that DDL makes. Each object gets its OID in the order that PostgreSQL 19 gives OIDs, and each object without a name in the statement gets the name that PostgreSQL gives it. Thus after the same statements on a new cluster, the OIDs and the names are the same as in PostgreSQL.
 //!
-//! The catalog does not read SQL. The analyzer turns a statement into calls of this crate in the order of `DefineRelation`, `DefineIndex` and `ATAddForeignKeyConstraint`, and it gives each expression as text that only the analyzer reads back. The catalog does not make TOAST tables or the triggers of foreign keys, but it uses their OIDs, so the OIDs of later objects agree with PostgreSQL. It records no `pg_depend` rows for these objects. The catalog also records the rows of `pg_depend` in the order that PostgreSQL inserts them.
+//! The catalog does not read SQL. The analyzer turns a statement into calls of this crate in the order of `DefineRelation`, `DefineIndex` and `ATAddForeignKeyConstraint`, and it gives each expression as text that only the analyzer reads back. The catalog makes the TOAST tables that PostgreSQL makes, with their indexes, but they hold no data. It does not make the triggers of foreign keys, but it uses their OIDs, so the OIDs of later objects agree with PostgreSQL. It records no `pg_depend` rows for these triggers. The catalog also records the rows of `pg_depend` in the order that PostgreSQL inserts them.
 //!
 //! This crate first ships in milestone M2. See `spec/22-crate-layout.md` section 22.4 and `spec/23-milestones.md`.
 
@@ -33,6 +33,18 @@ pub const PG_NAMESPACE: u32 = 2615;
 pub const PG_DATABASE: u32 = 1262;
 /// The OID of `pg_largeobject`.
 pub const PG_LARGEOBJECT: u32 = 2613;
+/// The OID of the schema `pg_toast`.
+pub const PG_TOAST_NAMESPACE: u32 = 99;
+/// The OID of the type `oid`.
+const OID: u32 = 26;
+/// The OID of the type `int4`.
+const INT4: u32 = 23;
+/// The OID of the type `bytea`.
+const BYTEA: u32 = 17;
+/// The OID of the operator class `oid_ops` of `btree`.
+const OID_OPS: u32 = 1981;
+/// The OID of the operator class `int4_ops` of `btree`.
+const INT4_OPS: u32 = 1978;
 /// The OID of the schema `public`.
 pub const PUBLIC: u32 = 2200;
 /// The OID of `pg_constraint`.
@@ -64,6 +76,8 @@ pub enum RelKind {
     Index,
     /// A sequence, `S`.
     Sequence,
+    /// A TOAST table, `t`.
+    Toast,
 }
 
 impl RelKind {
@@ -73,6 +87,7 @@ impl RelKind {
             RelKind::Table => 'r',
             RelKind::Index => 'i',
             RelKind::Sequence => 'S',
+            RelKind::Toast => 't',
         }
     }
 }
@@ -161,7 +176,7 @@ pub struct SequenceInfo {
     pub cycle: bool,
 }
 
-/// A relation: a table, an index or a sequence.
+/// A relation: a table, an index, a sequence or a TOAST table.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Relation {
     /// The OID.
@@ -180,6 +195,10 @@ pub struct Relation {
     pub columns: Vec<Column>,
     /// `relhasindex`: true after the first index on the table.
     pub has_index: bool,
+    /// `relhastriggers`: true after the first foreign key that refers to the table or that the table has.
+    pub has_triggers: bool,
+    /// `reltoastrelid`: the OID of the TOAST table, or 0.
+    pub toast: u32,
     /// The facts of an index.
     pub index: Option<IndexInfo>,
     /// The facts of a sequence.
@@ -518,7 +537,7 @@ impl Catalog {
         self.next_oid = self.next_oid.max(oid);
     }
 
-    /// Uses `count` OIDs for objects that PostgreSQL makes and rupg does not, such as a TOAST table and its index.
+    /// Uses `count` OIDs for objects that PostgreSQL makes and rupg does not, such as the triggers of a foreign key.
     pub fn skip_oids(&mut self, count: u32) {
         for _ in 0..count {
             self.new_oid();
@@ -796,6 +815,8 @@ impl Catalog {
                 row_type,
                 columns: new.columns,
                 has_index: false,
+                has_triggers: false,
+                toast: 0,
                 index: None,
                 sequence: None,
             },
@@ -810,9 +831,12 @@ impl Catalog {
         Ok(oid)
     }
 
-    /// `DefineSequence`. A sequence has no row type.
-    pub fn create_sequence(&mut self, new: NewRelation, info: SequenceInfo) -> Result<u32> {
+    /// `DefineSequence`. A sequence has no row type, and each column of a sequence is not null.
+    pub fn create_sequence(&mut self, mut new: NewRelation, info: SequenceInfo) -> Result<u32> {
         self.check_new_relation(new.namespace, &new.name, false)?;
+        for column in &mut new.columns {
+            column.not_null = true;
+        }
         let oid = self.new_oid();
         self.relations.insert(
             oid,
@@ -825,6 +849,8 @@ impl Catalog {
                 row_type: 0,
                 columns: new.columns,
                 has_index: false,
+                has_triggers: false,
+                toast: 0,
                 index: None,
                 sequence: Some(info),
             },
@@ -1034,11 +1060,19 @@ impl Catalog {
             exprs: new.exprs,
             predicate: new.predicate,
         };
+        let table_columns = self.relations.get(&new.table).map_or(&[][..], |r| &r.columns[..]);
         let columns = new
             .columns
             .iter()
             .zip(column_names)
-            .map(|(c, name)| Column::new(name, c.ty, c.typmod, c.collation))
+            .map(|(c, name)| {
+                let mut column = Column::new(name, c.ty, c.typmod, c.collation);
+                let from = usize::try_from(c.key).ok().and_then(|k| k.checked_sub(1));
+                if let Some(from) = from.and_then(|k| table_columns.get(k)) {
+                    column.ndims = from.ndims;
+                }
+                column
+            })
             .collect();
         self.relations.insert(
             oid,
@@ -1051,6 +1085,8 @@ impl Catalog {
                 row_type: 0,
                 columns,
                 has_index: false,
+                has_triggers: false,
+                toast: 0,
                 index: Some(info),
                 sequence: None,
             },
@@ -1060,6 +1096,7 @@ impl Catalog {
         if let Some(kind) = new.constraint {
             let mut constraint = self.new_constraint(name, namespace, kind, new.table, keys);
             constraint.index = oid;
+            constraint.no_inherit = true;
             constraint.deferrable = new.deferrable;
             constraint.deferred = new.deferred;
             let referenced = ObjRef::new(PG_CONSTRAINT, constraint.oid);
@@ -1106,6 +1143,7 @@ impl Catalog {
         let mut constraint =
             self.new_constraint(name, namespace, ConKind::Foreign, new.table, new.keys);
         constraint.index = new.index;
+        constraint.no_inherit = true;
         constraint.deferrable = new.deferrable;
         constraint.deferred = new.deferred;
         let oid = constraint.oid;
@@ -1119,6 +1157,74 @@ impl Catalog {
         }
         self.depend(me, ObjRef::new(PG_CLASS, new.index), DepKind::Normal);
         self.skip_oids(FOREIGN_KEY_TRIGGERS);
+        self.relation_mut(new.table)?.has_triggers = true;
+        self.relation_mut(referenced)?.has_triggers = true;
+        Ok(oid)
+    }
+
+    /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`. The TOAST table gets an OID, then its index. They have no row type.
+    pub fn create_toast(&mut self, table: u32) -> Result<u32> {
+        let owner = self.relations.get(&table).ok_or_else(|| no_object("relation", table))?.owner;
+        let oid = self.new_oid();
+        let index = self.new_oid();
+        let name = format!("pg_toast_{table}");
+        let chunk_id = Column::new("chunk_id", OID, -1, 0);
+        let chunk_seq = Column::new("chunk_seq", INT4, -1, 0);
+        let chunk_data = Column::new("chunk_data", BYTEA, -1, 0);
+        self.relations.insert(
+            oid,
+            Relation {
+                oid,
+                name: name.clone(),
+                namespace: PG_TOAST_NAMESPACE,
+                kind: RelKind::Toast,
+                owner,
+                row_type: 0,
+                columns: vec![chunk_id.clone(), chunk_seq.clone(), chunk_data],
+                has_index: true,
+                has_triggers: false,
+                toast: 0,
+                index: None,
+                sequence: None,
+            },
+        );
+        let info = IndexInfo {
+            table: oid,
+            keys: vec![1, 2],
+            key_count: 2,
+            unique: true,
+            nulls_not_distinct: false,
+            primary: true,
+            immediate: true,
+            method: BTREE,
+            collations: vec![0, 0],
+            classes: vec![OID_OPS, INT4_OPS],
+            options: vec![0, 0],
+            exprs: None,
+            predicate: None,
+        };
+        self.relations.insert(
+            index,
+            Relation {
+                oid: index,
+                name: format!("{name}_index"),
+                namespace: PG_TOAST_NAMESPACE,
+                kind: RelKind::Index,
+                owner,
+                row_type: 0,
+                columns: vec![chunk_id, chunk_seq],
+                has_index: false,
+                has_triggers: false,
+                toast: 0,
+                index: Some(info),
+                sequence: None,
+            },
+        );
+        self.relation_mut(table)?.toast = oid;
+        self.depend(ObjRef::new(PG_CLASS, oid), ObjRef::new(PG_CLASS, table), DepKind::Internal);
+        for column in 1..=2 {
+            self.depend(ObjRef::new(PG_CLASS, index), ObjRef::column(oid, column), DepKind::Auto);
+        }
         Ok(oid)
     }
 }

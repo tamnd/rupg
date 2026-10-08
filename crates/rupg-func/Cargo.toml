@@ -16,6 +16,7 @@ publish = false
 [dependencies]
 md-5.workspace = true
 rupg-analyze.workspace = true
+rupg-catalog.workspace = true
 rupg-common.workspace = true
 rupg-pgcatalog.workspace = true
 rupg-sql.workspace = true

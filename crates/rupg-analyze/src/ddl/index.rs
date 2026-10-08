@@ -6,7 +6,7 @@ use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{IndexElem, IndexStmt, Node, SortByDir, SortByNulls};
 use rupg_types::oid;
 
-use super::{Definer, Found, is_mutable, is_system, not_yet, references, relkind_detail};
+use super::{Definer, Found, is_mutable, not_yet, references, relkind_detail};
 use crate::agg::Kind;
 use crate::coerce::AtOpt;
 use crate::colname::figure_index_colname;
@@ -71,7 +71,7 @@ impl Definer<'_, '_> {
                 format!("must be owner of {what} {name}"),
             ));
         }
-        if is_system(found) {
+        if self.is_system(found) {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
                 format!("permission denied: \"{name}\" is a system catalog"),

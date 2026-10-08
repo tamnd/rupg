@@ -158,23 +158,28 @@ fn strtoul(b: &[u8]) -> (u64, usize, bool) {
 
 /// The text input of `oid`. A negative number from -2147483648 to -1 is the OID with the same bits, so `-1` is 4294967295.
 pub fn oid_in(s: &str) -> Result<u32, TypeError> {
+    uint32_in(s, "oid")
+}
+
+/// `uint32in_subr` for all of `s`: the text input of `oid`, `xid` and `cid`. The errors show `type_name`.
+pub fn uint32_in(s: &str, type_name: &str) -> Result<u32, TypeError> {
     let b = s.as_bytes();
     let (value, mut end, overflow) = strtoul(b);
     if end == 0 {
-        return Err(TypeError::syntax("oid", s));
+        return Err(TypeError::syntax(type_name, s));
     }
     if overflow {
-        return Err(TypeError::range(s, "oid"));
+        return Err(TypeError::range(s, type_name));
     }
     while end < b.len() && is_space(b[end]) {
         end += 1;
     }
     if end != b.len() {
-        return Err(TypeError::syntax("oid", s));
+        return Err(TypeError::syntax(type_name, s));
     }
     let result = value as u32;
     if value != u64::from(result) && value != i64::from(result as i32) as u64 {
-        return Err(TypeError::range(s, "oid"));
+        return Err(TypeError::range(s, type_name));
     }
     Ok(result)
 }

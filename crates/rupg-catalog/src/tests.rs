@@ -194,7 +194,7 @@ fn postgres_order() {
         Shape { len: -1, align: b'i', storage: b'x', ty: TEXT, typmod: -1 },
     ];
     assert!(needs_toast(&shapes));
-    cat.skip_oids(2);
+    assert_eq!(cat.create_toast(t).unwrap(), 16395);
     let (pkey, pkey_con) =
         cat.create_index(index(t, None, &[("a", 1, INT4)], Some(ConKind::Primary))).unwrap();
     assert_eq!((pkey, pkey_con), (16397, Some(16398)));
@@ -242,6 +242,15 @@ fn postgres_order() {
     );
     let rel = cat.relation(t).unwrap();
     assert!(rel.has_index && rel.columns[0].not_null && rel.columns[1].has_default);
+    assert!(rel.has_triggers && rel.toast == 16395);
+    let toast = cat.relation(16395).unwrap();
+    assert_eq!(
+        (toast.name.as_str(), toast.kind.code(), toast.namespace),
+        ("pg_toast_16388", 't', 99)
+    );
+    let toast_index = cat.relation(16396).unwrap();
+    assert_eq!(toast_index.name, "pg_toast_16388_index");
+    assert_eq!(toast_index.index.as_ref().map(|i| i.classes.clone()), Some(vec![1981, 1978]));
 
     let seq_name = cat.choose_relation_name("u", Some("x"), "seq", s, false);
     let (new, info) = serial_sequence(s, &seq_name);
@@ -337,6 +346,9 @@ fn postgres_order() {
         (PG_CONSTRAINT, 16392, 0, PG_CLASS, 16388, 3, 'a'),
         (PG_CONSTRAINT, 16393, 0, PG_CLASS, 16388, 1, 'a'),
         (PG_CONSTRAINT, 16394, 0, PG_CLASS, 16388, 2, 'a'),
+        (PG_CLASS, 16395, 0, PG_CLASS, 16388, 0, 'i'),
+        (PG_CLASS, 16396, 0, PG_CLASS, 16395, 1, 'a'),
+        (PG_CLASS, 16396, 0, PG_CLASS, 16395, 2, 'a'),
         (PG_CLASS, 16397, 0, PG_CONSTRAINT, 16398, 0, 'i'),
         (PG_CONSTRAINT, 16398, 0, PG_CLASS, 16388, 1, 'a'),
         (PG_CLASS, 16399, 0, PG_CONSTRAINT, 16400, 0, 'i'),

@@ -925,6 +925,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 mod agg;
 mod scan;
 mod sort;
+mod user;
 
 #[cfg(test)]
 mod tests;

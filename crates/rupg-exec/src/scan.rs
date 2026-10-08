@@ -1,4 +1,4 @@
-//! The scan of the tables of the catalog and the joins of `FROM`.
+//! The scan of the tables of the catalog and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session.
 //!
 //! A tuple of the join is the row number of each relation of the query, or [`NONE`] for a relation that a row of an outer join does not have. The rows of each relation are read once, with only the columns that the query uses.
 
@@ -125,13 +125,16 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
             }
             table.push(values);
         }
+        if let Some(user) = session.catalog() {
+            table.extend(crate::user::rows(catalog, user, session)?);
+        }
         rows.push(table);
     }
     Ok(Tables { rows, oids: query.relations.iter().map(|r| r.oid).collect() })
 }
 
 /// The value of a row of a column of the catalog.
-fn value(batch: &Batch, row: usize, ty: u32, session: &dyn Session) -> Result<Value> {
+pub(crate) fn value(batch: &Batch, row: usize, ty: u32, session: &dyn Session) -> Result<Value> {
     if batch.is_null(row) {
         return Ok(Value::Null);
     }

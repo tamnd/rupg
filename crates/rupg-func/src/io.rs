@@ -226,6 +226,8 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
         oid::INT4 => Value::Int4(types::int4_in(text).map_err(type_error)?),
         oid::INT8 => Value::Int8(types::int8_in(text).map_err(type_error)?),
         oid::OID => Value::Oid(types::oid_in(text).map_err(type_error)?),
+        XID => Value::Oid(types::uint32_in(text, "xid").map_err(type_error)?),
+        CID => Value::Oid(types::uint32_in(text, "cid").map_err(type_error)?),
         oid::TEXT | oid::UNKNOWN | oid::CSTRING => Value::text(text),
         oid::VARCHAR => Value::text(types::varchar_in(text, typmod).map_err(type_error)?),
         oid::BPCHAR => Value::text(types::bpchar_in(text, typmod).map_err(type_error)?),

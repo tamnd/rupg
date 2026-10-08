@@ -326,12 +326,23 @@ impl Definer<'_, '_> {
         })
     }
 
+    /// `IsSystemRelation`: true for a relation of the catalog and for a TOAST table or its index.
+    fn is_system(&self, found: Found) -> bool {
+        match found {
+            Found::Builtin(row) => row.oid < rupg_catalog::FIRST_UNPINNED_OID,
+            Found::User(oid) => {
+                self.catalog.relation(oid).is_some_and(|r| r.namespace == PG_TOAST_NAMESPACE)
+            }
+        }
+    }
+
     /// The kind of a relation as a `relkind` code.
     fn kind_of(&self, found: Found) -> u8 {
         match found {
             Found::User(oid) => match self.catalog.relation(oid).map(|r| r.kind) {
                 Some(RelKind::Index) => b'i',
                 Some(RelKind::Sequence) => b'S',
+                Some(RelKind::Toast) => b't',
                 _ => b'r',
             },
             Found::Builtin(row) => row.kind,
@@ -402,11 +413,6 @@ impl Definer<'_, '_> {
         self.catalog.create_schema(&name, owner)?;
         Ok(())
     }
-}
-
-/// True for a relation of the system catalogs, which a user cannot change: a built-in relation with an OID below `FirstUnpinnedObjectId`.
-fn is_system(found: Found) -> bool {
-    matches!(found, Found::Builtin(row) if row.oid < rupg_catalog::FIRST_UNPINNED_OID)
 }
 
 /// The detail of `errdetail_relkind_not_supported`.
