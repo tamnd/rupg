@@ -9,7 +9,6 @@ use rupg_types::typmod::{
 };
 
 use crate::coerce::AtOpt;
-use crate::types;
 use crate::{Analyzer, Env, Params};
 
 /// `MaxAttrSize`, the largest length of `varchar(n)` and `character(n)`.
@@ -110,6 +109,26 @@ pub fn parse_type(text: &str, env: &dyn Env) -> Result<Result<(u32, i32)>> {
     }
 }
 
+/// The facts of a type that a type name reads.
+struct Found {
+    oid: u32,
+    /// The OID of the array type, or 0.
+    array: u32,
+    /// The OID of the `typmodin` function, or 0.
+    modin: u32,
+}
+
+impl Found {
+    fn builtin(row: &TypeRow) -> Found {
+        Found { oid: row.oid, array: row.array, modin: row.modin }
+    }
+
+    /// A row type or an array type of the catalog, which takes no type modifier.
+    fn user(ty: &rupg_catalog::Type) -> Found {
+        Found { oid: ty.oid, array: ty.array, modin: 0 }
+    }
+}
+
 impl Analyzer<'_> {
     /// `typenameTypeIdAndMod`: the OID and the typmod of a type name.
     pub(crate) fn type_name(&mut self, name: &TypeName) -> Result<(u32, i32)> {
@@ -118,46 +137,53 @@ impl Analyzer<'_> {
             return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "%TYPE is not supported yet")
                 .at_opt(at));
         }
-        let row = if name.typeOid != 0 {
-            builtin::type_by_oid(name.typeOid)
+        let mut row = if name.typeOid != 0 {
+            self.type_by_oid(name.typeOid)
         } else {
             self.lookup_type(&names(&name.names), at)?
         };
-        let Some(mut row) = row else {
+        if !name.arrayBounds.is_empty() {
+            // `get_array_type`: an array type has no array type, so the name finds no type.
+            row = row.and_then(|element| self.type_by_oid(element.array));
+        }
+        let Some(row) = row else {
             return Err(Error::new(
                 SqlState::UNDEFINED_OBJECT,
                 format!("type \"{}\" does not exist", type_name_text(name)),
             )
             .at_opt(at));
         };
-        if !name.arrayBounds.is_empty() {
-            let element = row;
-            row = match types::row(element.array) {
-                Some(array) if element.array != 0 => array,
-                _ => {
-                    return Err(Error::new(
-                        SqlState::UNDEFINED_OBJECT,
-                        format!(
-                            "could not find array type for data type {}",
-                            types::name(element.oid)
-                        ),
-                    )
-                    .at_opt(at));
-                }
-            };
-        }
         let first = self.notices.len();
-        let typmod = self.type_modifier(name, row).map_err(|e| e.at_opt(at))?;
+        let typmod = self.type_modifier(name, &row).map_err(|e| e.at_opt(at))?;
         for notice in &mut self.notices[first..] {
             *notice = notice.clone().at_opt(at);
         }
         Ok((row.oid, typmod))
     }
 
-    /// `LookupTypeName`: the row of the type with this name, in the schema that the name gives or in the search path.
-    fn lookup_type(&self, names: &[&str], at: Option<usize>) -> Result<Option<&'static TypeRow>> {
+    /// The type with this OID, a built-in type or a type of the catalog.
+    fn type_by_oid(&self, oid: u32) -> Option<Found> {
+        if oid == 0 {
+            return None;
+        }
+        if let Some(row) = builtin::type_by_oid(oid) {
+            return Some(Found::builtin(row));
+        }
+        self.env.catalog()?.type_by_oid(oid).map(Found::user)
+    }
+
+    /// The type with this name in the schema.
+    fn type_in(&self, namespace: u32, name: &str) -> Option<Found> {
+        if let Some(row) = builtin::type_by_name(namespace, name) {
+            return Some(Found::builtin(row));
+        }
+        self.env.catalog()?.type_by_name(namespace, name).map(Found::user)
+    }
+
+    /// `LookupTypeName`: the type with this name, in the schema that the name gives or in the search path.
+    fn lookup_type(&self, names: &[&str], at: Option<usize>) -> Result<Option<Found>> {
         match names {
-            [name] => Ok(self.path.iter().find_map(|&ns| builtin::type_by_name(ns, name))),
+            [name] => Ok(self.path.iter().find_map(|&ns| self.type_in(ns, name))),
             [schema, name] => {
                 let ns = self.schema(schema).ok_or_else(|| {
                     Error::new(
@@ -166,7 +192,7 @@ impl Analyzer<'_> {
                     )
                     .at_opt(at)
                 })?;
-                Ok(builtin::type_by_name(ns, name))
+                Ok(self.type_in(ns, name))
             }
             [catalog, schema, name] => {
                 if *catalog != self.env.database() {
@@ -190,7 +216,7 @@ impl Analyzer<'_> {
     }
 
     /// `typenameTypeMod`: the typmod from the type modifiers of the name, with the `typmodin` function of the type.
-    fn type_modifier(&mut self, name: &TypeName, row: &TypeRow) -> Result<i32> {
+    fn type_modifier(&mut self, name: &TypeName, row: &Found) -> Result<i32> {
         if name.typemod != -1 {
             return Ok(name.typemod);
         }

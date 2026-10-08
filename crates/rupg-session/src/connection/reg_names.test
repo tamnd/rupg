@@ -1,0 +1,124 @@
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TABLE s.t (a int PRIMARY KEY, b serial)
+CREATE TABLE
+> CREATE TABLE p (a int)
+CREATE TABLE
+> CREATE TABLE "Mixed Case" (x int)
+CREATE TABLE
+> CREATE TABLE s.p (a int)
+CREATE TABLE
+> SELECT 's.t'::regclass, 'p'::regclass, 'public.p'::regclass, '"Mixed Case"'::regclass, 's.p'::regclass
+row s.t,p,p,"Mixed Case",s.p
+SELECT 1
+> SELECT 's.t_pkey'::regclass, 's.t_b_seq'::regclass, 's'::regnamespace
+row s.t_pkey,s.t_b_seq,s
+SELECT 1
+> SELECT 't'::regclass
+ERROR 42P01 relation "t" does not exist at 8
+> SELECT 'nosuch.t'::regclass
+ERROR 42P01 relation "nosuch.t" does not exist at 8
+> SELECT 'mixed case'::regclass
+ERROR 42602 invalid name syntax at 8
+> SELECT to_regclass('s.t'), to_regclass('t'), to_regclass('nosuch.t'), to_regnamespace('s'), to_regnamespace('nosuch')
+row s.t,NULL,NULL,s,NULL
+SELECT 1
+> SELECT 's.t'::regclass = (SELECT oid FROM pg_class WHERE relname = 't'), 's'::regnamespace = (SELECT oid FROM pg_namespace WHERE nspname = 's')
+row t,t
+SELECT 1
+> SELECT 's.t'::regtype, 's.t[]'::regtype, 'p'::regtype, 's.p'::regtype, 's._t'::regtype, 's.t[][]'::regtype
+row s.t,s.t[],p,s.p,s.t[],s.t[]
+SELECT 1
+> SELECT 's.t(1)'::regtype
+ERROR 42601 type modifier is not allowed for type "s.t" at 8
+> SELECT to_regtype('s.t(1)')
+ERROR 42601 type modifier is not allowed for type "s.t"
+> SELECT 's._t[]'::regtype
+ERROR 42704 type "s._t[]" does not exist at 8
+> SELECT to_regtype('s._t[]'), to_regtype('nosuch.t')
+row NULL,NULL
+SELECT 1
+> SELECT relname, oid::regclass, reltype::regtype, format_type(reltype, NULL), pg_table_is_visible(oid), pg_type_is_visible(reltype) FROM pg_class WHERE relnamespace IN ('s'::regnamespace, 'public'::regnamespace) ORDER BY relnamespace, relname
+row Mixed Case,"Mixed Case","Mixed Case","Mixed Case",t,t
+row p,p,p,p,t,t
+row p,s.p,s.p,s.p,f,f
+row t,s.t,s.t,s.t,f,f
+row t_b_seq,s.t_b_seq,-,-,f,NULL
+row t_pkey,s.t_pkey,-,-,f,NULL
+SELECT 6
+> SELECT typname, oid::regtype, format_type(oid, NULL), format_type(oid, -1), format_type(oid, 5), typelem::regtype FROM pg_type WHERE typnamespace IN ('s'::regnamespace, 'public'::regnamespace) ORDER BY typnamespace, typname
+row Mixed Case,"Mixed Case","Mixed Case","Mixed Case","Mixed Case"(5),-
+row _Mixed Case,"Mixed Case"[],"Mixed Case"[],"Mixed Case"[],"Mixed Case"(5)[],"Mixed Case"
+row _p,p[],p[],p[],p(5)[],p
+row p,p,p,p,p(5),-
+row _p,s.p[],s.p[],s.p[],s.p(5)[],s.p
+row _t,s.t[],s.t[],s.t[],s.t(5)[],s.t
+row p,s.p,s.p,s.p,s.p(5),-
+row t,s.t,s.t,s.t,s.t(5),-
+SELECT 8
+> SELECT format_type('text'::regtype, 5), format_type('int4'::regtype, 5), format_type('bool[]'::regtype, 3), format_type('text[]'::regtype, 7), format_type('"char"'::regtype, 2), format_type('bit'::regtype, -1), format_type('bpchar'::regtype, -1), format_type('varbit'::regtype, 3), format_type('bit[]'::regtype, 2)
+row text(5),integer,boolean[],text(7)[],"char"(2),"bit",bpchar,bit varying(3),bit(2)[]
+SELECT 1
+> SELECT format_type(99999, NULL), format_type(99999, 3), 99999::regtype, 99999::regclass, 99999::regnamespace
+row ???,???,99999,99999,99999
+SELECT 1
+> SET search_path = s, public
+SET
+search_path=s, public
+> SELECT 't'::regclass, 'p'::regclass, 'public.p'::regclass, 's.p'::regclass, 's.t'::regtype, 'p'::regtype, 'public.p'::regtype
+row t,p,public.p,p,t,p,public.p
+SELECT 1
+> SELECT relname, oid::regclass, reltype::regtype, format_type(reltype, NULL), pg_table_is_visible(oid), pg_type_is_visible(reltype) FROM pg_class WHERE relnamespace IN ('s'::regnamespace, 'public'::regnamespace) ORDER BY relnamespace, relname
+row Mixed Case,"Mixed Case","Mixed Case","Mixed Case",t,t
+row p,public.p,public.p,public.p,f,f
+row p,p,p,p,t,t
+row t,t,t,t,t,t
+row t_b_seq,t_b_seq,-,-,t,NULL
+row t_pkey,t_pkey,-,-,t,NULL
+SELECT 6
+> SELECT 's.t'::regclass::oid = 't'::regclass::oid, to_regclass('t') IS NOT NULL, to_regtype('t') IS NOT NULL, to_regtype('nosuch') IS NULL
+row t,t,t,t
+SELECT 1
+> SET search_path = pg_catalog
+SET
+search_path=pg_catalog
+> SELECT 's.t'::regclass, 'p'::regclass
+ERROR 42P01 relation "p" does not exist at 25
+> SELECT 'public.p'::regclass, 's.t'::regtype, 'public.p'::regtype
+row public.p,s.t,public.p
+SELECT 1
+> SELECT attrelid::regclass, attname, atttypid::regtype FROM pg_attribute WHERE attrelid = 's.t'::regclass AND attnum > 0 ORDER BY attnum
+row s.t,a,integer
+row s.t,b,integer
+SELECT 2
+> RESET search_path
+RESET
+search_path="$user", public
+> CREATE TABLE text (x int)
+CREATE TABLE
+> CREATE TABLE pg_class (x int)
+CREATE TABLE
+> SELECT 'text'::regtype, 'public.text'::regtype, 'pg_class'::regclass, 'public.pg_class'::regclass, pg_table_is_visible('public.pg_class'::regclass), pg_type_is_visible('public.text'::regtype)
+row text,public.text,pg_class,public.pg_class,f,f
+SELECT 1
+> SET search_path = public, pg_catalog
+SET
+search_path=public, pg_catalog
+> SELECT 'text'::regtype, 'pg_catalog.text'::regtype, format_type('pg_catalog.text'::regtype, 4), 'pg_class'::regclass, 'pg_catalog.pg_class'::regclass, pg_table_is_visible('pg_catalog.pg_class'::regclass), pg_type_is_visible('pg_catalog.text'::regtype)
+row text,pg_catalog.text,pg_catalog.text(4),pg_class,pg_catalog.pg_class,f,f
+SELECT 1
+> RESET search_path
+RESET
+search_path="$user", public
+> SELECT 'S.T'::regclass
+row s.t
+SELECT 1
+> SELECT '"s"."t"'::regclass, ' s . t '::regclass
+row s.t,s.t
+SELECT 1
+> SELECT 'other.s.t'::regclass
+ERROR 0A000 cross-database references are not implemented: "other.s.t" at 8
+> SELECT 's.t'::text::regclass, 'nosuch.t'::text::regclass
+ERROR 3F000 schema "nosuch" does not exist
+> SELECT 't'::text::regclass
+ERROR 42P01 relation "t" does not exist

@@ -1515,6 +1515,30 @@ mod tests {
         big_stack(catalog_rows_cases);
     }
 
+    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the form of `render`, without the lines of `ReadyForQuery` and `RowDescription`.
+    fn script(text: &str) {
+        let (mut c, _) = connect();
+        let mut lines = text.lines().peekable();
+        while let Some(line) = lines.next() {
+            let Some(sql) = line.strip_prefix("> ") else { panic!("not a statement: {line}") };
+            let mut want = Vec::new();
+            while let Some(next) = lines.next_if(|l| !l.starts_with("> ")) {
+                want.push(next);
+            }
+            let got: Vec<String> = send(&mut c, &query(sql))
+                .into_iter()
+                .filter(|l| !l.starts_with("ready ") && !l.starts_with("columns "))
+                .collect();
+            assert_eq!(got, want, "{sql}");
+        }
+    }
+
+    /// The names of the user objects in the OID alias types, `format_type` and the visibility functions. `connection/reg_names.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn reg_names() {
+        big_stack(|| script(include_str!("connection/reg_names.test")));
+    }
+
     #[test]
     fn extended_selects() {
         big_stack(extended_selects_cases);

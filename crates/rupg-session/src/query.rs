@@ -306,6 +306,10 @@ impl Env for Reader<'_> {
     fn input(&self, ty: u32, text: &str, typmod: i32) -> Result<Value> {
         rupg_func::input(ty, text, typmod, self)
     }
+
+    fn catalog(&self) -> Option<&Catalog> {
+        Some(&self.catalog)
+    }
 }
 
 /// `parse_analyze` and the plan of a statement.
