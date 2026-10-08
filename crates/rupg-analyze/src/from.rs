@@ -268,6 +268,43 @@ impl Analyzer<'_> {
         Ok(Item { entry, name: refname, columns: exprs, rel_visible: true, cols_visible: true })
     }
 
+    /// `addRangeTableEntryForRelation` and `addNSItemToQuery` for a table of a statement that defines an object: the expressions of the statement can use the columns. Each column is a name, a type and a typmod.
+    pub(crate) fn add_table(&mut self, oid: u32, name: &str, columns: &[(String, u32, i32)]) {
+        let index = self.scope.relations.len();
+        let exprs: Vec<(String, Expr)> = columns
+            .iter()
+            .enumerate()
+            .map(|(i, (n, ty, typmod))| {
+                let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
+                let var = Var { relation: index, attnum, levels_up: 0 };
+                let mut expr = Expr::new(ExprKind::Var(var), *ty);
+                expr.typmod = *typmod;
+                (n.clone(), expr)
+            })
+            .collect();
+        let columns: Vec<Column> = columns
+            .iter()
+            .map(|(n, ty, typmod)| Column { name: n.clone(), ty: *ty, typmod: *typmod })
+            .collect();
+        let colnames = columns.iter().map(|c| c.name.clone()).collect();
+        self.scope.relations.push(Relation { oid, columns });
+        let entry = self.scope.entries.len();
+        self.scope.entries.push(Entry {
+            name: name.to_string(),
+            aliased: false,
+            columns: colnames,
+            relation: Some(index),
+            oid,
+        });
+        self.scope.namespace.push(Item {
+            entry,
+            name: name.to_string(),
+            columns: exprs,
+            rel_visible: true,
+            cols_visible: true,
+        });
+    }
+
     /// `RangeVarGetRelid`: the table of the catalog that a name gives, or `None`.
     fn lookup_relation(&self, rv: &RangeVar) -> Result<Option<&'static rupg_pgcatalog::Catalog>> {
         let at = place(rv.location);
@@ -510,6 +547,13 @@ impl Analyzer<'_> {
     /// `transformColumnRef`: the value of a column name.
     pub(crate) fn column_ref(&mut self, c: &ColumnRef) -> Result<Expr> {
         let at = place(c.location);
+        if self.kind == Kind::ColumnDefault {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot use column reference in DEFAULT expression",
+            )
+            .at_opt(at));
+        }
         let names = fields(&c.fields);
         let (schema, table, column) = match names.as_slice() {
             [Some(column)] => {
@@ -611,6 +655,13 @@ impl Analyzer<'_> {
             return Ok(Some(Expr::new(ExprKind::Var(var), oid::OID).at(at)));
         }
         if OTHER_SYSTEM_COLUMNS.contains(&name) {
+            if self.kind == Kind::Check {
+                return Err(Error::new(
+                    SqlState::INVALID_COLUMN_REFERENCE,
+                    format!("system column \"{name}\" reference in check constraint is invalid"),
+                )
+                .at_opt(at));
+            }
             return Err(not_yet(&format!("the system column \"{name}\""), at));
         }
         Ok(None)

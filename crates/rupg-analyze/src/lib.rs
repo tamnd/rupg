@@ -9,6 +9,7 @@
 mod agg;
 mod coerce;
 mod colname;
+mod ddl;
 mod expr;
 mod from;
 pub mod node;
@@ -30,6 +31,7 @@ use crate::coerce::AtOpt;
 
 pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
+pub use ddl::{Defined, Message, define, is_definition};
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink, SubLinkKind,
     Var,
@@ -161,7 +163,7 @@ mod tests {
     use super::*;
 
     /// A session with the default `search_path` and the input functions of a few types.
-    struct TestEnv;
+    pub(crate) struct TestEnv;
 
     impl Env for TestEnv {
         fn search_path(&self) -> Vec<u32> {

@@ -146,7 +146,11 @@ impl Analyzer<'_> {
                 }
             };
         }
+        let first = self.notices.len();
         let typmod = self.type_modifier(name, row).map_err(|e| e.at_opt(at))?;
+        for notice in &mut self.notices[first..] {
+            *notice = notice.clone().at_opt(at);
+        }
         Ok((row.oid, typmod))
     }
 

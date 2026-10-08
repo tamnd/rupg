@@ -10,6 +10,11 @@ pub fn figure_colname(node: Option<&Node>) -> String {
     }
 }
 
+/// `FigureIndexColname`: the name of a column of an index for an expression, or `None` when the caller uses `expr`.
+pub(crate) fn figure_index_colname(node: Option<&Node>) -> Option<String> {
+    figure(node).map(|(name, _)| name)
+}
+
 /// The last `String` node of a list.
 fn last_string(list: &[Option<Node>]) -> Option<String> {
     list.iter().rev().find_map(|n| match n {
