@@ -2,6 +2,7 @@
 
 use rupg_types::Value;
 
+use crate::select::Query;
 use crate::sort::SortGroup;
 
 /// An expression with its type and its typmod. A typmod of -1 means that the expression has no typmod.
@@ -56,6 +57,34 @@ pub enum ExprKind {
     Var(Var),
     /// `Aggref`: a call of an aggregate function, which reads all the rows of a group.
     Agg(Box<Aggref>),
+    /// `SubLink`: a subquery in an expression.
+    SubLink(Box<SubLink>),
+    /// `Param` of the kind `PARAM_SUBLINK`: the value of the column with this index, from 0, of a row of the subquery, in the test of `ANY` or `ALL`.
+    SubColumn(usize),
+}
+
+/// A subquery in an expression, as `SubLink`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct SubLink {
+    pub kind: SubLinkKind,
+    /// `testexpr`: for `ANY` and `ALL`, the test of each row of the subquery. It compares the left side with [`ExprKind::SubColumn`].
+    pub test: Option<Expr>,
+    pub query: Query,
+}
+
+/// The kinds of `SubLink` that the analyzer takes.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SubLinkKind {
+    /// `EXISTS (SELECT ...)`.
+    Exists,
+    /// `x op ALL (SELECT ...)`.
+    All,
+    /// `x op ANY (SELECT ...)` and `x IN (SELECT ...)`.
+    Any,
+    /// `(SELECT ...)`, which gives the value of the one column of the one row.
+    Expr,
+    /// `ARRAY(SELECT ...)`, which gives the values of the one column as an array.
+    Array,
 }
 
 /// A column of a relation of `FROM`.
@@ -65,6 +94,8 @@ pub struct Var {
     pub relation: usize,
     /// The attribute number: from 1 for a column of the relation, or a negative number for a system column.
     pub attnum: i16,
+    /// `varlevelsup`: 0 for a relation of the query that has the expression, 1 for a relation of the query outside it, and so on.
+    pub levels_up: usize,
 }
 
 /// A call of a function.
@@ -193,7 +224,9 @@ impl Expr {
             | ExprKind::Param(_)
             | ExprKind::CaseTest
             | ExprKind::SqlValue(_)
-            | ExprKind::Var(_) => Vec::new(),
+            | ExprKind::Var(_)
+            | ExprKind::SubColumn(_) => Vec::new(),
+            ExprKind::SubLink(sub) => sub.test.iter().collect(),
             ExprKind::Func(f) => f.args.iter().collect(),
             ExprKind::Agg(agg) => agg.args.iter().chain(agg.filter.as_deref()).collect(),
             ExprKind::Relabel(arg)
@@ -225,7 +258,9 @@ impl Expr {
             | ExprKind::Param(_)
             | ExprKind::CaseTest
             | ExprKind::SqlValue(_)
-            | ExprKind::Var(_) => Vec::new(),
+            | ExprKind::Var(_)
+            | ExprKind::SubColumn(_) => Vec::new(),
+            ExprKind::SubLink(sub) => sub.test.iter_mut().collect(),
             ExprKind::Func(f) => f.args.iter_mut().collect(),
             ExprKind::Agg(agg) => {
                 let Aggref { args, filter, .. } = &mut **agg;
@@ -261,6 +296,9 @@ impl Expr {
             for child in expr.children_mut() {
                 strip(child);
             }
+            if let ExprKind::SubLink(sub) = &mut expr.kind {
+                sub.query.exprs_mut().into_iter().for_each(strip);
+            }
         }
         let (mut a, mut b) = (self.clone(), other.clone());
         strip(&mut a);
@@ -268,12 +306,56 @@ impl Expr {
         a == b
     }
 
-    /// The first column that the expression reads, as `locate_var_of_level` finds it.
-    pub fn first_var(&self) -> Option<&Expr> {
-        if matches!(self.kind, ExprKind::Var(_)) {
-            return Some(self);
+    /// Calls `f` for the expression and for each expression in it, also in its subqueries, with the number of subqueries between the expression and this expression. The search stops at the first `Some` that `f` gives.
+    pub fn find<'a, T>(
+        &'a self,
+        depth: usize,
+        f: &mut impl FnMut(&'a Expr, usize) -> Option<T>,
+    ) -> Option<T> {
+        if let Some(found) = f(self, depth) {
+            return Some(found);
         }
-        self.children().into_iter().find_map(Expr::first_var)
+        for child in self.children() {
+            if let Some(found) = child.find(depth, f) {
+                return Some(found);
+            }
+        }
+        if let ExprKind::SubLink(sub) = &self.kind {
+            for expr in sub.query.exprs() {
+                if let Some(found) = expr.find(depth + 1, f) {
+                    return Some(found);
+                }
+            }
+        }
+        None
+    }
+
+    /// The first column of the query of the expression that the expression reads, also in a subquery, as `locate_var_of_level` finds it with level 0.
+    pub fn first_var(&self) -> Option<&Expr> {
+        self.find(0, &mut |e, depth| match e.kind {
+            ExprKind::Var(var) if var.levels_up == depth => Some(e),
+            _ => None,
+        })
+    }
+
+    /// `IncrementVarSublevelsUp`: the columns of the outer queries in the expression, also in its subqueries, are `levels` more levels up. A column of a query in the expression does not change.
+    pub fn raise(&mut self, levels: usize) {
+        fn raise_at(expr: &mut Expr, levels: usize, depth: usize) {
+            if let ExprKind::Var(var) = &mut expr.kind
+                && var.levels_up >= depth
+            {
+                var.levels_up += levels;
+            }
+            for child in expr.children_mut() {
+                raise_at(child, levels, depth);
+            }
+            if let ExprKind::SubLink(sub) = &mut expr.kind {
+                for e in sub.query.exprs_mut() {
+                    raise_at(e, levels, depth + 1);
+                }
+            }
+        }
+        raise_at(self, levels, 0);
     }
 
     /// `contain_aggs_of_level` and `locate_agg_of_level`: the first aggregate call in the expression.
@@ -309,6 +391,7 @@ impl Expr {
             | ExprKind::CoerceViaIo(arg)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => Some(&**arg),
+            ExprKind::SubLink(sub) => sub.test.as_ref(),
             _ => None,
         };
         match (self.location, first.and_then(Expr::place)) {

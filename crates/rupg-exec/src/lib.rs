@@ -4,9 +4,12 @@
 
 #![forbid(unsafe_code)]
 
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use rupg_analyze::{
     Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Query, SortGroup, SqlValue,
-    Target,
+    SubLink, SubLinkKind, Target,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -54,7 +57,14 @@ fn check(expr: &Expr) -> Result<()> {
         | ExprKind::Param(_)
         | ExprKind::CaseTest
         | ExprKind::SqlValue(_)
-        | ExprKind::Var(_) => {}
+        | ExprKind::Var(_)
+        | ExprKind::SubColumn(_) => {}
+        ExprKind::SubLink(sub) => {
+            if let Some(test) = &sub.test {
+                check(test)?;
+            }
+            check_query(&sub.query, false)?;
+        }
         ExprKind::Func(f) => {
             kernel(f.oid, expr.location)?;
             f.args.iter().try_for_each(check)?;
@@ -122,6 +132,12 @@ const MIXED_KEYS: &str =
 ///
 /// `0A000` for a function or a type that the engine does not have yet.
 pub fn prepare(query: Query) -> Result<Plan> {
+    check_query(&query, true)?;
+    Ok(Plan { query })
+}
+
+/// Checks that the engine can run a query or a subquery. With `output`, it also checks that the engine has the output function of each column.
+fn check_query(query: &Query, output: bool) -> Result<()> {
     // `create_ordinary_grouping_paths`: a `GROUP BY` sorts the rows when every type has an order, or else uses a hash table. The planner gives this error before the engine checks its functions.
     if !query.group.iter().all(|g| g.sort != 0) && !query.group.iter().all(|g| g.hashable) {
         return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement GROUP BY")
@@ -133,7 +149,7 @@ pub fn prepare(query: Query) -> Result<Plan> {
             .with_detail(MIXED_KEYS));
     }
     for target in &query.targets {
-        if !rupg_func::output_supported(target.expr.ty) {
+        if output && !rupg_func::output_supported(target.expr.ty) {
             return Err(not_yet(format!("output of type {}", format_type(target.expr.ty))));
         }
         check(&target.expr)?;
@@ -144,7 +160,7 @@ pub fn prepare(query: Query) -> Result<Plan> {
     if let Some(having) = &query.having {
         check(having)?;
     }
-    agg::check(&query)?;
+    agg::check(query)?;
     for item in &query.from {
         check_join(item)?;
     }
@@ -163,7 +179,140 @@ pub fn prepare(query: Query) -> Result<Plan> {
             kernel(group.sort, None)?;
         }
     }
-    Ok(Plan { query })
+    Ok(())
+}
+
+/// The rows of a query.
+type Rows = Vec<Vec<Value>>;
+
+/// The state of a run that the query and its subqueries share.
+#[derive(Default)]
+struct Cache {
+    /// The rows of the relations of each query, by the address of the query. A subquery reads them once, also when it runs for each row of the query outside it.
+    tables: RefCell<Vec<(*const Query, Rc<scan::Tables>)>>,
+    /// The rows of each subquery that reads no column of an outer query, as an `InitPlan` keeps them. It runs once, when the query first needs it.
+    rows: RefCell<Vec<(*const Query, Rc<Rows>)>>,
+}
+
+impl Cache {
+    fn tables(&self, query: &Query, session: &dyn Session) -> Result<Rc<scan::Tables>> {
+        if let Some((_, tables)) =
+            self.tables.borrow().iter().find(|(q, _)| std::ptr::eq(*q, query))
+        {
+            return Ok(Rc::clone(tables));
+        }
+        let tables = Rc::new(scan::read(query, session)?);
+        self.tables.borrow_mut().push((query, Rc::clone(&tables)));
+        Ok(tables)
+    }
+}
+
+/// The row of a query outside a subquery, which the columns of an outer query in the subquery read.
+#[derive(Clone, Copy)]
+struct Frame<'a> {
+    tables: &'a scan::Tables,
+    tuple: &'a [usize],
+}
+
+/// True when a subquery reads a column of a query outside it, so that it must run again for each row of that query.
+fn correlated(query: &Query) -> bool {
+    query.exprs().iter().any(|e| {
+        e.find(0, &mut |e, depth| match e.kind {
+            ExprKind::Var(var) if var.levels_up > depth => Some(()),
+            _ => None,
+        })
+        .is_some()
+    })
+}
+
+/// True when an expression is a constant for `eval_const_expressions`: constants, parameters and immutable functions of them.
+fn constant(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Const(_) | ExprKind::Param(_) => true,
+        ExprKind::Relabel(arg) => constant(arg),
+        ExprKind::Func(f) => {
+            builtin::proc_by_oid(f.oid).is_some_and(|p| p.volatile == b'i')
+                && f.args.iter().all(constant)
+        }
+        _ => false,
+    }
+}
+
+/// Runs a query or a subquery and gives its rows, with no junk columns. `outer` has the rows of the queries outside a subquery, with the query just outside it last. With `exists`, the query runs as `simplify_EXISTS_query` makes it when it can, and gives one empty row when it has a row.
+fn run_query(
+    query: &Query,
+    params: &[Value],
+    session: &dyn Session,
+    cache: &Cache,
+    outer: &[Frame<'_>],
+    exists: bool,
+) -> Result<Vec<Vec<Value>>> {
+    let tables = cache.tables(query, session)?;
+    let tables = &*tables;
+    let mut eval = Eval {
+        params,
+        session,
+        case: Vec::new(),
+        tables,
+        tuple: &[],
+        aggs: Vec::new(),
+        cache,
+        outer,
+        sub: Vec::new(),
+    };
+    // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.
+    if exists && agg::calls(query).is_empty() && query.having.is_none() && query.offset.is_none() {
+        let simple = match &query.limit {
+            None => true,
+            Some(limit) if constant(limit) => match eval.eval(limit)? {
+                Value::Int8(n) => n > 0,
+                _ => true,
+            },
+            Some(_) => false,
+        };
+        if simple {
+            let tuples = scan::tuples(query, tables, &mut |expr, tuple| {
+                Ok(eval.at(tuple).eval(expr)? == Value::Bool(true))
+            })?;
+            return Ok(if tuples.is_empty() { Vec::new() } else { vec![Vec::new()] });
+        }
+    }
+    let (offset, count) = eval.limits(query)?;
+    if count == Some(0) {
+        return Ok(Vec::new());
+    }
+    let tuples = scan::tuples(query, tables, &mut |expr, tuple| {
+        Ok(eval.at(tuple).eval(expr)? == Value::Bool(true))
+    })?;
+    let none = vec![scan::NONE; query.relations.len()];
+    let rows = if query.grouped {
+        agg::rows(&mut eval, query, &tuples, &none)?
+    } else {
+        // With no sort, `Limit` stops after the rows that it gives.
+        let ordered = !query.sort.is_empty() || !query.distinct.is_empty();
+        let needed = match count {
+            Some(count) if !ordered => offset.saturating_add(count),
+            _ => usize::MAX,
+        };
+        let mut rows = Vec::with_capacity(tuples.len().min(needed));
+        for tuple in tuples.iter().take(needed) {
+            eval.tuple = tuple;
+            let row =
+                query.targets.iter().map(|t| eval.eval(&t.expr)).collect::<Result<Vec<_>>>()?;
+            rows.push(row);
+        }
+        rows
+    };
+    let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
+    let rows = order(query, rows, &types, offset, count, session)?;
+    let width = query.targets.iter().take_while(|t| !t.junk).count();
+    Ok(rows
+        .into_iter()
+        .map(|mut row| {
+            row.truncate(width);
+            row
+        })
+        .collect())
 }
 
 impl Plan {
@@ -189,142 +338,85 @@ impl Plan {
     ///
     /// The error of a function, such as a division by zero.
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
-        let query = &self.query;
-        let tables = scan::read(query, session)?;
-        let mut eval = Eval {
-            params,
-            session,
-            case: Vec::new(),
-            tables: &tables,
-            tuple: &[],
-            aggs: Vec::new(),
-        };
-        let (offset, count) = eval.limits(query)?;
-        if count == Some(0) {
-            return Ok(Vec::new());
-        }
-        let tuples = scan::tuples(query, &tables, &mut |expr, tuple| {
-            let mut eval = Eval {
-                params,
-                session,
-                case: Vec::new(),
-                tables: &tables,
-                tuple,
-                aggs: Vec::new(),
-            };
-            Ok(eval.eval(expr)? == Value::Bool(true))
-        })?;
-        let none = vec![scan::NONE; query.relations.len()];
-        let rows = if query.grouped {
-            agg::rows(&mut eval, query, &tuples, &none)?
-        } else {
-            // With no sort, `Limit` stops after the rows that it gives.
-            let ordered = !query.sort.is_empty() || !query.distinct.is_empty();
-            let needed = match count {
-                Some(count) if !ordered => offset.saturating_add(count),
-                _ => usize::MAX,
-            };
-            let mut rows = Vec::with_capacity(tuples.len().min(needed));
-            for tuple in tuples.iter().take(needed) {
-                eval.tuple = tuple;
-                let row =
-                    query.targets.iter().map(|t| eval.eval(&t.expr)).collect::<Result<Vec<_>>>()?;
-                rows.push(row);
-            }
-            rows
-        };
-        let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
-        let rows = self.order(rows, &types, offset, count, session)?;
-        let width = self.columns().len();
-        Ok(rows
-            .into_iter()
-            .map(|mut row| {
-                row.truncate(width);
-                row
-            })
-            .collect())
+        run_query(&self.query, params, session, &Cache::default(), &[], false)
     }
+}
 
-    /// `DISTINCT`, `ORDER BY`, `OFFSET` and `LIMIT`. A `DISTINCT` sorts the rows on the items of `DISTINCT` and keeps the first row of each group, as `Sort` and `Unique` do. When a type of `DISTINCT` has no order, it keeps the first row of each group in the order of the rows and then sorts for `ORDER BY`. A `Sort` below `Limit` keeps only the first `OFFSET` + `LIMIT` rows, as `tuplesort_set_bound` does.
-    fn order(
-        &self,
-        mut rows: Vec<Vec<Value>>,
-        types: &[u32],
-        offset: usize,
-        count: Option<usize>,
-        session: &dyn Session,
-    ) -> Result<Vec<Vec<Value>>> {
-        let query = &self.query;
-        let mut sorted = query.sort.is_empty();
-        if !query.distinct.is_empty() {
-            let equal = sort::Keys::new(&query.distinct, types, session)?;
-            if query.distinct.iter().all(|g| g.sort != 0) {
-                // The items of `DISTINCT ON` come first in `ORDER BY`, so the longer list sorts for both.
-                let list: &[SortGroup] = if query.sort.len() > query.distinct.len() {
-                    &query.sort
-                } else {
-                    &query.distinct
-                };
-                let keys = sort::Keys::new(list, types, session)?;
-                sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?;
-                let mut unique: Vec<Vec<Value>> = Vec::new();
-                for row in rows {
-                    if let Some(last) = unique.last()
-                        && equal.equal(last, &row)?
-                    {
-                        continue;
+/// `DISTINCT`, `ORDER BY`, `OFFSET` and `LIMIT`. A `DISTINCT` sorts the rows on the items of `DISTINCT` and keeps the first row of each group, as `Sort` and `Unique` do. When a type of `DISTINCT` has no order, it keeps the first row of each group in the order of the rows and then sorts for `ORDER BY`. A `Sort` below `Limit` keeps only the first `OFFSET` + `LIMIT` rows, as `tuplesort_set_bound` does.
+fn order(
+    query: &Query,
+    mut rows: Vec<Vec<Value>>,
+    types: &[u32],
+    offset: usize,
+    count: Option<usize>,
+    session: &dyn Session,
+) -> Result<Vec<Vec<Value>>> {
+    let mut sorted = query.sort.is_empty();
+    if !query.distinct.is_empty() {
+        let equal = sort::Keys::new(&query.distinct, types, session)?;
+        if query.distinct.iter().all(|g| g.sort != 0) {
+            // The items of `DISTINCT ON` come first in `ORDER BY`, so the longer list sorts for both.
+            let list: &[SortGroup] =
+                if query.sort.len() > query.distinct.len() { &query.sort } else { &query.distinct };
+            let keys = sort::Keys::new(list, types, session)?;
+            sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?;
+            let mut unique: Vec<Vec<Value>> = Vec::new();
+            for row in rows {
+                if let Some(last) = unique.last()
+                    && equal.equal(last, &row)?
+                {
+                    continue;
+                }
+                unique.push(row);
+            }
+            rows = unique;
+            sorted = true;
+        } else {
+            let mut unique: Vec<Vec<Value>> = Vec::new();
+            for row in rows {
+                let mut seen = false;
+                for other in &unique {
+                    if equal.equal(other, &row)? {
+                        seen = true;
+                        break;
                     }
+                }
+                if !seen {
                     unique.push(row);
                 }
-                rows = unique;
-                sorted = true;
-            } else {
-                let mut unique: Vec<Vec<Value>> = Vec::new();
-                for row in rows {
-                    let mut seen = false;
-                    for other in &unique {
-                        if equal.equal(other, &row)? {
-                            seen = true;
-                            break;
-                        }
-                    }
-                    if !seen {
-                        unique.push(row);
-                    }
-                }
-                rows = unique;
             }
+            rows = unique;
         }
-        if !sorted {
-            let keys = sort::Keys::new(&query.sort, types, session)?;
-            // `compute_tuples_needed` and `tuplesort_set_bound`: the bound must allow `bound * 2` in an `int`.
-            let bound = match count {
-                Some(count) if !query.with_ties => offset
-                    .checked_add(count)
-                    .filter(|b| *b <= usize::try_from(i32::MAX / 2).unwrap_or(usize::MAX)),
-                _ => None,
-            };
-            match bound {
-                Some(bound) if rows.len() > bound * 2 => {
-                    rows = sort::bounded(rows, bound, &mut |a, b| keys.compare(a, b))?;
-                }
-                _ => sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?,
-            }
-        }
-        let start = offset.min(rows.len());
-        let mut end = count.map_or(rows.len(), |c| start.saturating_add(c).min(rows.len()));
-        if query.with_ties && end > start {
-            // `LIMIT_WINDOWEND_TIES`: the rows equal to the last row of the window on the items of `ORDER BY` come too.
-            let keys = sort::Keys::new(&query.sort, types, session)?;
-            let last = end - 1;
-            while end < rows.len() && keys.equal(&rows[last], &rows[end])? {
-                end += 1;
-            }
-        }
-        rows.truncate(end);
-        rows.drain(..start);
-        Ok(rows)
     }
+    if !sorted {
+        let keys = sort::Keys::new(&query.sort, types, session)?;
+        // `compute_tuples_needed` and `tuplesort_set_bound`: the bound must allow `bound * 2` in an `int`.
+        let bound = match count {
+            Some(count) if !query.with_ties => offset
+                .checked_add(count)
+                .filter(|b| *b <= usize::try_from(i32::MAX / 2).unwrap_or(usize::MAX)),
+            _ => None,
+        };
+        match bound {
+            Some(bound) if rows.len() > bound * 2 => {
+                rows = sort::bounded(rows, bound, &mut |a, b| keys.compare(a, b))?;
+            }
+            _ => sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?,
+        }
+    }
+    let start = offset.min(rows.len());
+    let mut end = count.map_or(rows.len(), |c| start.saturating_add(c).min(rows.len()));
+    if query.with_ties && end > start {
+        // `LIMIT_WINDOWEND_TIES`: the rows equal to the last row of the window on the items of `ORDER BY` come too.
+        let keys = sort::Keys::new(&query.sort, types, session)?;
+        let last = end - 1;
+        while end < rows.len() && keys.equal(&rows[last], &rows[end])? {
+            end += 1;
+        }
+    }
+    rows.truncate(end);
+    rows.drain(..start);
+    Ok(rows)
 }
 
 /// The state of the evaluation of the expressions of one row.
@@ -339,9 +431,32 @@ struct Eval<'a> {
     tuple: &'a [usize],
     /// The result of each aggregate call for the group, by the address of the call in the query.
     aggs: Vec<(*const Aggref, Value)>,
+    cache: &'a Cache,
+    /// The rows of the queries outside the query, with the query just outside it last.
+    outer: &'a [Frame<'a>],
+    /// The rows of the subqueries of `ANY` and `ALL` whose test runs now, for `SubColumn`.
+    sub: Vec<Vec<Value>>,
 }
 
-impl Eval<'_> {
+impl<'a> Eval<'a> {
+    /// A new state for the evaluation of a condition on another tuple of the same query.
+    fn at<'b>(&self, tuple: &'b [usize]) -> Eval<'b>
+    where
+        'a: 'b,
+    {
+        Eval {
+            params: self.params,
+            session: self.session,
+            case: Vec::new(),
+            tables: self.tables,
+            tuple,
+            aggs: Vec::new(),
+            cache: self.cache,
+            outer: self.outer,
+            sub: Vec::new(),
+        }
+    }
+
     /// `recompute_limits` of `nodeLimit.c`: the number of rows that `OFFSET` skips, and the number of rows that `LIMIT` gives or `None` for all rows. A null `OFFSET` is 0.
     fn limits(&mut self, query: &Query) -> Result<(usize, Option<usize>)> {
         let mut value = |expr: Option<&Expr>| -> Result<Option<i64>> {
@@ -456,13 +571,97 @@ impl Eval<'_> {
             ExprKind::ScalarArrayOp { func, any, args } => self.scalar_array_op(*func, *any, args),
             ExprKind::Array { multidims, elements, .. } => self.array(*multidims, elements),
             ExprKind::SqlValue(v) => self.sql_value(*v),
-            ExprKind::Var(var) => Ok(self.tables.var(self.tuple, *var)),
+            ExprKind::Var(var) if var.levels_up == 0 => Ok(self.tables.var(self.tuple, *var)),
+            ExprKind::Var(var) => {
+                let frame = self
+                    .outer
+                    .len()
+                    .checked_sub(var.levels_up)
+                    .and_then(|i| self.outer.get(i))
+                    .ok_or_else(|| Error::internal("a column of an outer query has no row"))?;
+                Ok(frame.tables.var(frame.tuple, *var))
+            }
+            ExprKind::SubLink(sub) => self.sublink(sub),
+            ExprKind::SubColumn(n) => self
+                .sub
+                .last()
+                .and_then(|row| row.get(*n))
+                .cloned()
+                .ok_or_else(|| Error::internal("a subquery column is outside of ANY or ALL")),
             ExprKind::Agg(agg) => self
                 .aggs
                 .iter()
                 .find(|(call, _)| std::ptr::eq(*call, &**agg))
                 .map(|(_, value)| value.clone())
                 .ok_or_else(|| Error::internal("an aggregate call is outside of a group")),
+        }
+    }
+
+    /// `ExecScanSubPlan`: the value of a subquery in an expression.
+    fn sublink(&mut self, sub: &SubLink) -> Result<Value> {
+        let exists = sub.kind == SubLinkKind::Exists;
+        let query = &sub.query;
+        let cached = self
+            .cache
+            .rows
+            .borrow()
+            .iter()
+            .find(|(q, _)| std::ptr::eq(*q, query))
+            .map(|(_, rows)| Rc::clone(rows));
+        let rows = match cached {
+            Some(rows) => rows,
+            None => {
+                let mut frames = self.outer.to_vec();
+                frames.push(Frame { tables: self.tables, tuple: self.tuple });
+                let rows = Rc::new(run_query(
+                    query,
+                    self.params,
+                    self.session,
+                    self.cache,
+                    &frames,
+                    exists,
+                )?);
+                if !correlated(query) {
+                    self.cache.rows.borrow_mut().push((query, Rc::clone(&rows)));
+                }
+                rows
+            }
+        };
+        match sub.kind {
+            SubLinkKind::Exists => Ok(Value::Bool(!rows.is_empty())),
+            SubLinkKind::Expr => match rows.as_slice() {
+                [] => Ok(Value::Null),
+                [row] => row
+                    .first()
+                    .cloned()
+                    .ok_or_else(|| Error::internal("a subquery row has no column")),
+                _ => Err(Error::new(
+                    SqlState::CARDINALITY_VIOLATION,
+                    "more than one row returned by a subquery used as an expression",
+                )),
+            },
+            SubLinkKind::Array => {
+                let values =
+                    rows.iter().map(|row| row.first().filter(|v| !v.is_null()).cloned()).collect();
+                Ok(Value::Array(Box::new(Array::one(values))))
+            }
+            SubLinkKind::Any | SubLinkKind::All => {
+                let test =
+                    sub.test.as_ref().ok_or_else(|| Error::internal("ANY and ALL need a test"))?;
+                let any = sub.kind == SubLinkKind::Any;
+                let mut unknown = false;
+                for row in rows.iter() {
+                    self.sub.push(row.clone());
+                    let result = self.eval(test);
+                    self.sub.pop();
+                    match result?.as_bool() {
+                        Some(v) if v == any => return Ok(Value::Bool(any)),
+                        Some(_) => {}
+                        None => unknown = true,
+                    }
+                }
+                Ok(if unknown { Value::Null } else { Value::Bool(!any) })
+            }
         }
     }
 

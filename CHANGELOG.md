@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Subqueries in expressions (spec/23 section 23.5): `EXISTS`, `IN`, `NOT IN`, `op ANY`, `op ALL`, `ARRAY(SELECT ...)` and a scalar subquery, in the target list, `WHERE`, `JOIN ... ON`, `HAVING`, `GROUP BY`, `ORDER BY`, `LIMIT` and `OFFSET`. A subquery can read the columns of the queries outside it at any depth. The analyzer finds a name as `parse_relation.c` does, from the subquery up to the outer queries, so a bad name gives the same error and hint as PostgreSQL, also for a close name of an outer relation. It gives the errors of `transformSubLink` for a wrong number of columns, and `subquery uses ungrouped column` for a column of a grouped outer query. The executor runs a subquery that reads no outer column once, as an `InitPlan` does, and runs the other subqueries again for each row. It reads the tables of a subquery once. `EXISTS` skips the target list when `simplify_EXISTS_query` can drop it, so `EXISTS (SELECT 1/0 FROM t)` gives no error, and a scalar subquery with more than one row gives `21000`. A row on the left of `IN` or `ANY`, `ARRAY()` of an array, an aggregate of an outer query, and a subquery in `FROM` give `0A000`.
+
 ## 0.0.17 (2026-10-08)
 
 The seventeenth patch release on the 0.0 line. `SELECT` now has aggregate functions, `GROUP BY` and `HAVING`, and two new fuzz targets check the input, output, receive and send functions of 52 types against PostgreSQL. No crate is published.

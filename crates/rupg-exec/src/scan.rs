@@ -39,14 +39,16 @@ impl Tables {
     }
 }
 
-/// Calls `f` for each column that an expression reads.
+/// Calls `f` for each column of the query that an expression reads, also in a subquery. A column of an outer query does not count.
 fn each_var(expr: &Expr, f: &mut impl FnMut(Var)) {
-    if let ExprKind::Var(var) = &expr.kind {
-        f(*var);
-    }
-    for child in expr.children() {
-        each_var(child, f);
-    }
+    expr.find(0, &mut |e, depth| {
+        if let ExprKind::Var(var) = e.kind
+            && var.levels_up == depth
+        {
+            f(var);
+        }
+        None::<()>
+    });
 }
 
 /// The relations that an expression reads.
@@ -190,7 +192,7 @@ fn key(value: Value) -> Option<Key> {
 /// The column of an expression that is a column, or a column with another type of the same form.
 fn plain_var(expr: &Expr) -> Option<Var> {
     match &expr.kind {
-        ExprKind::Var(var) => Some(*var),
+        ExprKind::Var(var) if var.levels_up == 0 => Some(*var),
         ExprKind::Relabel(arg) => plain_var(arg),
         _ => None,
     }

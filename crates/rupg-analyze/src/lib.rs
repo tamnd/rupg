@@ -15,6 +15,7 @@ mod poly;
 mod resolve;
 mod select;
 mod sort;
+mod sublink;
 mod transform;
 mod typcache;
 mod typename;
@@ -28,7 +29,10 @@ use crate::coerce::AtOpt;
 
 pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
-pub use expr::{Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, Var};
+pub use expr::{
+    Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink, SubLinkKind,
+    Var,
+};
 pub use from::{Column, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};
 pub use sort::SortGroup;
@@ -70,6 +74,8 @@ pub(crate) struct Analyzer<'a> {
     depth: usize,
     /// The relations and the names of `FROM`.
     scope: from::Scope,
+    /// The scopes of the queries outside the subquery that the analyzer reads now, as `parentParseState`. The last is the query just outside it.
+    outer: Vec<from::Scope>,
     /// The part of the query that the analyzer reads now.
     kind: agg::Kind,
     /// `p_hasAggs`: true when the query has an aggregate call.
@@ -90,6 +96,7 @@ impl<'a> Analyzer<'a> {
             notices: Vec::new(),
             depth: 0,
             scope: from::Scope::default(),
+            outer: Vec::new(),
             kind: agg::Kind::Other,
             has_aggs: false,
         }
@@ -701,6 +708,82 @@ mod tests {
             for (sql, state, message, at) in cases {
                 assert_eq!(error(sql), (state.to_string(), message.to_string(), Some(at)), "{sql}");
             }
+        });
+    }
+
+    #[test]
+    fn subquery_errors() {
+        big_stack(|| {
+            // The errors and the positions come from PostgreSQL 19.
+            let cases = [
+                ("SELECT (SELECT 1, 2)", "42601", "subquery must return only one column", 7),
+                ("SELECT 1 IN (SELECT 1, 2)", "42601", "subquery has too many columns", 9),
+                ("SELECT 1 IN (SELECT FROM pg_am)", "42601", "subquery has too few columns", 9),
+                (
+                    "SELECT (SELECT c.amname) FROM pg_am c GROUP BY c.amtype",
+                    "42803",
+                    "subquery uses ungrouped column \"c.amname\" from outer query",
+                    15,
+                ),
+                (
+                    "SELECT 1 = ANY (SELECT 'a'::text)",
+                    "42883",
+                    "operator does not exist: integer = text",
+                    9,
+                ),
+                (
+                    "SELECT 1 + ANY (SELECT 1)",
+                    "42804",
+                    "row comparison operator must yield type boolean, not type integer",
+                    9,
+                ),
+                (
+                    "SELECT (SELECT nosuch FROM pg_am) FROM pg_class",
+                    "42703",
+                    "column \"nosuch\" does not exist",
+                    15,
+                ),
+                (
+                    "SELECT (SELECT x.oid FROM pg_am) FROM pg_class c",
+                    "42P01",
+                    "missing FROM-clause entry for table \"x\"",
+                    15,
+                ),
+                (
+                    "SELECT 1 FROM pg_am LIMIT (SELECT oid FROM pg_am a2 WHERE a2.oid = pg_am.oid)",
+                    "42P10",
+                    "argument of LIMIT must not contain variables",
+                    67,
+                ),
+            ];
+            for (sql, state, message, at) in cases {
+                assert_eq!(error(sql), (state.to_string(), message.to_string(), Some(at)), "{sql}");
+            }
+            assert_eq!(
+                error("SELECT ARRAY(SELECT NULL::pg_node_tree)"),
+                (
+                    "42704".to_string(),
+                    "could not find array type for data type pg_node_tree".to_string(),
+                    None
+                )
+            );
+            // The hint of a close name searches the relations of the outer queries too.
+            assert_eq!(
+                full_error("SELECT (SELECT amnam FROM pg_am) FROM pg_class")[3],
+                "Perhaps you meant to reference the column \"pg_am.amname\"."
+            );
+            assert_eq!(
+                full_error("SELECT (SELECT relnam FROM pg_am) FROM pg_class")[3],
+                "Perhaps you meant to reference the column \"pg_class.relname\" or the column \"pg_class.relam\"."
+            );
+            // A column of an outer query is a constant for LIMIT of the subquery.
+            let query = run(
+                "SELECT (SELECT a2.amname FROM pg_am a2 LIMIT a.oid::int8) FROM pg_am a",
+                &Params::default(),
+            )
+            .expect("an outer column in LIMIT");
+            let ExprKind::SubLink(sub) = &query.targets[0].expr.kind else { panic!("no SubLink") };
+            assert!(sub.query.limit.as_ref().and_then(Expr::first_var).is_none());
         });
     }
 

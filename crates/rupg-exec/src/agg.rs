@@ -315,7 +315,7 @@ fn collect<'q>(expr: &'q Expr, out: &mut Vec<(&'q Aggref, &'q Expr)>) {
 }
 
 /// The aggregate calls of the select list and of `HAVING`.
-fn calls(query: &Query) -> Vec<(&Aggref, &Expr)> {
+pub(crate) fn calls(query: &Query) -> Vec<(&Aggref, &Expr)> {
     let mut out = Vec::new();
     for target in &query.targets {
         collect(&target.expr, &mut out);
