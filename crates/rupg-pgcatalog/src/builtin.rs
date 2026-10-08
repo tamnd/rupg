@@ -235,6 +235,118 @@ impl Named {
     ];
 }
 
+/// A row of `pg_class`, with the columns that the privilege checks read.
+#[derive(Debug)]
+pub struct ClassRow {
+    pub oid: u32,
+    pub name: &'static str,
+    pub namespace: u32,
+    /// `relkind`: `r` table, `i` index, `t` toast table, `v` view, `S` sequence and the others.
+    pub kind: u8,
+    /// `relnatts`: the number of user columns.
+    pub natts: i16,
+    pub owner: u32,
+    /// `relacl`, or `None` for the default privileges of the owner.
+    pub acl: Option<&'static [&'static str]>,
+}
+
+/// A row of `pg_attribute`, with the columns that the privilege checks read.
+#[derive(Debug)]
+pub struct AttributeRow {
+    pub name: &'static str,
+    pub num: i16,
+    pub dropped: bool,
+    /// `attacl`, or `None` when the column has no privileges of its own.
+    pub acl: Option<&'static [&'static str]>,
+}
+
+/// A built-in object of a kind that has an owner and privileges, other than a relation.
+#[derive(Debug)]
+pub struct OwnedRow {
+    pub oid: u32,
+    /// The name, or `""` for a large object.
+    pub name: &'static str,
+    pub owner: u32,
+    /// The `aclitem[]` column, or `None` for the default privileges of the owner.
+    pub acl: Option<&'static [&'static str]>,
+}
+
+/// The kinds of [`OwnedRow`].
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum Owned {
+    /// `pg_namespace`.
+    Namespace,
+    /// `pg_database`.
+    Database,
+    /// `pg_proc`.
+    Function,
+    /// `pg_type`.
+    Type,
+    /// `pg_language`.
+    Language,
+    /// `pg_tablespace`.
+    Tablespace,
+    /// `pg_foreign_data_wrapper`.
+    ForeignDataWrapper,
+    /// `pg_foreign_server`.
+    ForeignServer,
+    /// `pg_largeobject_metadata`.
+    LargeObject,
+}
+
+impl Owned {
+    /// The catalog, the column of the name, the column of the owner and the column of the privileges. A column that the kind does not have is `""`.
+    fn columns(self) -> (&'static str, &'static str, &'static str, &'static str) {
+        match self {
+            Owned::Namespace => ("pg_namespace", "nspname", "nspowner", "nspacl"),
+            Owned::Database => ("pg_database", "datname", "datdba", "datacl"),
+            Owned::Function => ("pg_proc", "proname", "proowner", "proacl"),
+            Owned::Type => ("pg_type", "typname", "typowner", "typacl"),
+            Owned::Language => ("pg_language", "lanname", "lanowner", "lanacl"),
+            Owned::Tablespace => ("pg_tablespace", "spcname", "spcowner", "spcacl"),
+            Owned::ForeignDataWrapper => {
+                ("pg_foreign_data_wrapper", "fdwname", "fdwowner", "fdwacl")
+            }
+            Owned::ForeignServer => ("pg_foreign_server", "srvname", "srvowner", "srvacl"),
+            Owned::LargeObject => ("pg_largeobject_metadata", "", "lomowner", "lomacl"),
+        }
+    }
+
+    const ALL: [Owned; 9] = [
+        Owned::Namespace,
+        Owned::Database,
+        Owned::Function,
+        Owned::Type,
+        Owned::Language,
+        Owned::Tablespace,
+        Owned::ForeignDataWrapper,
+        Owned::ForeignServer,
+        Owned::LargeObject,
+    ];
+}
+
+/// A row of `pg_authid`, with the columns that the privilege checks read.
+#[derive(Debug)]
+pub struct RoleRow {
+    pub oid: u32,
+    pub name: &'static str,
+    /// `rolsuper`.
+    pub superuser: bool,
+}
+
+/// A row of `pg_auth_members`: `member` is a member of `role`.
+#[derive(Debug)]
+pub struct MemberRow {
+    pub role: u32,
+    pub member: u32,
+    /// `admin_option`: the member can grant the membership to other roles.
+    pub admin: bool,
+    /// `inherit_option`: the member has the privileges of the role.
+    pub inherit: bool,
+    /// `set_option`: the member can `SET ROLE` to the role.
+    pub set: bool,
+}
+
 /// A row of `pg_description`, or of `pg_shdescription` with `objsubid` 0.
 #[derive(Debug)]
 pub struct DescriptionRow {
@@ -267,6 +379,14 @@ struct Builtin {
     descriptions: Vec<DescriptionRow>,
     description_key: HashMap<(u32, u32, i32), usize>,
     shared_descriptions: Vec<DescriptionRow>,
+    classes: Vec<ClassRow>,
+    class_oid: HashMap<u32, usize>,
+    attributes: HashMap<u32, Vec<AttributeRow>>,
+    owned: HashMap<Owned, Vec<OwnedRow>>,
+    owned_oid: HashMap<(Owned, u32), usize>,
+    roles: Vec<RoleRow>,
+    members: Vec<MemberRow>,
+    multirange_range: HashMap<u32, u32>,
 }
 
 static BUILTIN: LazyLock<Builtin> = LazyLock::new(Builtin::load);
@@ -353,6 +473,9 @@ impl Builtin {
         let amops = load_amops();
         let aggregates = load_aggregates();
         let descriptions = load_descriptions("pg_description");
+        let classes = load_classes();
+        let owned: HashMap<Owned, Vec<OwnedRow>> =
+            Owned::ALL.into_iter().map(|kind| (kind, load_owned(kind))).collect();
         let mut amop_member = HashMap::new();
         let mut amop_operator: HashMap<u32, Vec<usize>> = HashMap::new();
         for (i, a) in amops.iter().enumerate() {
@@ -394,6 +517,17 @@ impl Builtin {
                 .collect(),
             descriptions,
             shared_descriptions: load_descriptions("pg_shdescription"),
+            class_oid: classes.iter().enumerate().map(|(i, c)| (c.oid, i)).collect(),
+            classes,
+            attributes: load_attributes(),
+            owned_oid: owned
+                .iter()
+                .flat_map(|(kind, rows)| rows.iter().enumerate().map(|(i, r)| ((*kind, r.oid), i)))
+                .collect(),
+            owned,
+            roles: load_roles(),
+            members: load_members(),
+            multirange_range: load_multirange_ranges(),
             types,
             procs,
             operators,
@@ -614,6 +748,104 @@ fn load_named(kind: Named) -> Vec<NamedRow> {
         .collect()
 }
 
+/// The rows of `pg_class`.
+fn load_classes() -> Vec<ClassRow> {
+    let r = Rows::new("pg_class");
+    let (oid, name, namespace) = (r.oid("oid"), r.text("relname"), r.oid("relnamespace"));
+    let (kind, natts, owner) = (r.char("relkind"), r.int2("relnatts"), r.oid("relowner"));
+    (0..r.catalog.len)
+        .map(|i| ClassRow {
+            oid: oid[i],
+            name: name[i],
+            namespace: namespace[i],
+            kind: kind[i],
+            natts: natts[i],
+            owner: owner[i],
+            acl: r.optional("relacl", i, text_array),
+        })
+        .collect()
+}
+
+/// The rows of `pg_attribute`, by relation, in the order of the catalog.
+fn load_attributes() -> HashMap<u32, Vec<AttributeRow>> {
+    let r = Rows::new("pg_attribute");
+    let (relid, name, num) = (r.oid("attrelid"), r.text("attname"), r.int2("attnum"));
+    let dropped = r.bool("attisdropped");
+    let mut out: HashMap<u32, Vec<AttributeRow>> = HashMap::new();
+    for i in 0..r.catalog.len {
+        out.entry(relid[i]).or_default().push(AttributeRow {
+            name: name[i],
+            num: num[i],
+            dropped: dropped[i],
+            acl: r.optional("attacl", i, text_array),
+        });
+    }
+    out
+}
+
+/// The objects of a kind that has an owner, from its catalog. A catalog that has no static rows gives none.
+fn load_owned(kind: Owned) -> Vec<OwnedRow> {
+    let (catalog, name, owner, acl) = kind.columns();
+    let r = Rows::new(catalog);
+    if r.catalog.len == 0 {
+        return Vec::new();
+    }
+    let (oid, owners) = (r.oid("oid"), r.oid(owner));
+    let names = if name.is_empty() { None } else { Some(r.text(name)) };
+    (0..r.catalog.len)
+        .map(|i| OwnedRow {
+            oid: oid[i],
+            name: names.map_or("", |n| n[i]),
+            owner: owners[i],
+            acl: r.optional(acl, i, text_array),
+        })
+        .collect()
+}
+
+/// The rows of `pg_authid`.
+fn load_roles() -> Vec<RoleRow> {
+    let r = Rows::new("pg_authid");
+    let (oid, name, superuser) = (r.oid("oid"), r.text("rolname"), r.bool("rolsuper"));
+    (0..r.catalog.len)
+        .map(|i| RoleRow { oid: oid[i], name: name[i], superuser: superuser[i] })
+        .collect()
+}
+
+/// The rows of `pg_auth_members`.
+fn load_members() -> Vec<MemberRow> {
+    let r = Rows::new("pg_auth_members");
+    if r.catalog.len == 0 {
+        return Vec::new();
+    }
+    let (role, member) = (r.oid("roleid"), r.oid("member"));
+    let (admin, inherit, set) =
+        (r.bool("admin_option"), r.bool("inherit_option"), r.bool("set_option"));
+    (0..r.catalog.len)
+        .map(|i| MemberRow {
+            role: role[i],
+            member: member[i],
+            admin: admin[i],
+            inherit: inherit[i],
+            set: set[i],
+        })
+        .collect()
+}
+
+/// The range type of each multirange type, from `pg_range`.
+fn load_multirange_ranges() -> HashMap<u32, u32> {
+    let r = Rows::new("pg_range");
+    let (range, multirange) = (r.oid("rngtypid"), r.oid("rngmultitypid"));
+    (0..r.catalog.len).map(|i| (multirange[i], range[i])).collect()
+}
+
+/// The values of an `aclitem[]` column, for [`Rows::optional`].
+fn text_array(values: &'static Values) -> Option<&'static [&'static [&'static str]]> {
+    match values {
+        Values::TextArray(v) => Some(*v),
+        _ => None,
+    }
+}
+
 /// The rows of `pg_description` or `pg_shdescription`, in the order of the catalog.
 fn load_descriptions(catalog: &str) -> Vec<DescriptionRow> {
     let r = Rows::new(catalog);
@@ -764,6 +996,41 @@ pub fn shared_description(objoid: u32, classoid: u32) -> Option<&'static str> {
 /// The attribute numbers of the primary key of the table, when the key is not deferrable, as `check_functional_grouping` finds them.
 pub fn primary_key(relid: u32) -> Option<&'static [i16]> {
     BUILTIN.primary_keys.get(&relid).map(Vec::as_slice)
+}
+
+/// The relation with this OID.
+pub fn class_by_oid(oid: u32) -> Option<&'static ClassRow> {
+    BUILTIN.class_oid.get(&oid).map(|&i| &BUILTIN.classes[i])
+}
+
+/// The columns of a relation, with the system columns, in the order of the catalog.
+pub fn attributes(relid: u32) -> &'static [AttributeRow] {
+    BUILTIN.attributes.get(&relid).map_or(&[], Vec::as_slice)
+}
+
+/// The objects of a kind that has an owner.
+pub fn owned(kind: Owned) -> &'static [OwnedRow] {
+    BUILTIN.owned.get(&kind).map_or(&[], Vec::as_slice)
+}
+
+/// The object of a kind that has an owner with this OID.
+pub fn owned_by_oid(kind: Owned, oid: u32) -> Option<&'static OwnedRow> {
+    BUILTIN.owned_oid.get(&(kind, oid)).map(|&i| &BUILTIN.owned[&kind][i])
+}
+
+/// The roles, in the order of `pg_authid`.
+pub fn roles() -> &'static [RoleRow] {
+    &BUILTIN.roles
+}
+
+/// The memberships of roles, in the order of `pg_auth_members`.
+pub fn members() -> &'static [MemberRow] {
+    &BUILTIN.members
+}
+
+/// The range type of a multirange type, as `get_multirange_range` gives it.
+pub fn multirange_range(multirange: u32) -> Option<u32> {
+    BUILTIN.multirange_range.get(&multirange).copied()
 }
 
 #[cfg(test)]

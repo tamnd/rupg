@@ -27,5 +27,13 @@ pub(crate) static COLUMNS: [Batch; 4] = [
         nulls: &[],
     },
     // nspacl
-    Batch::NULL,
+    Batch {
+        values: Values::TextArray(&[
+            &["postgres=UC/postgres", "=U/postgres"], &[],
+            &["pg_database_owner=UC/pg_database_owner", "=U/pg_database_owner"],
+        ]),
+        nulls: &[
+            0x0000000000000002,
+        ],
+    },
 ];

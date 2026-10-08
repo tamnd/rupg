@@ -1,6 +1,6 @@
 //! The schemas and the static rows of the system catalogs.
 //!
-//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`.
+//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`. Last, it gives the static rows the privileges that `initdb` gives them, from the steps of `initdb.c` and the `GRANT` and `REVOKE` statements of `system_views.sql`.
 //!
 //! `cargo xtask pgcatalog --check` writes nothing. It fails if a file is not the same as the file that the task makes. See `spec/07-sql-types-and-catalog.md` section 7.13.2.
 
@@ -306,6 +306,8 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
     relation_rows(&catalogs, &lookups, &types, &opclasses, &c_collation, next_oid, &mut rows_out)?;
     proc_arg_defaults(&catalogs, &mut rows_out)?;
     operator_descriptions(&catalogs, &mut rows_out)?;
+    let src = include.parent().ok_or("the include directory has no parent")?;
+    initdb_privileges(&catalogs, &read(&src.join(SYSTEM_VIEWS))?, &mut rows_out)?;
 
     let mut files = Vec::new();
     files.push((
@@ -1595,6 +1597,317 @@ fn array_items(text: &str) -> Option<Vec<Option<String>>> {
             Some(_) => return None,
         }
     }
+}
+
+/// The script that `setup_run_file` of `initdb` runs after the bootstrap. Its `GRANT` and `REVOKE` statements change the privileges of some catalogs.
+const SYSTEM_VIEWS: &str = "backend/catalog/system_views.sql";
+
+/// An `aclitem` as `aclitemout` writes it: the grantee (empty for PUBLIC), the privilege bits in the order of [`ACL_RIGHTS`] with the grant option bits 16 places higher, and the grantor.
+type AclItem = (String, u32, String);
+
+/// The bits of privilege letters such as `arwdDxtm`.
+fn acl_bits(letters: &str) -> Option<u32> {
+    letters.chars().try_fold(0, |bits, c| Some(bits | 1 << ACL_RIGHTS.find(c)?))
+}
+
+/// Reads an `aclitem[]` value that [`acl_text`] wrote.
+fn parse_acl(text: &str) -> Option<Vec<AclItem>> {
+    let mut items = Vec::new();
+    for item in array_elements(text)? {
+        let (grantee, rest) = item.split_once('=')?;
+        let (privs, grantor) = rest.split_once('/')?;
+        let mut bits = 0;
+        let mut last = 0;
+        for c in privs.chars() {
+            if c == '*' {
+                bits |= last << 16;
+            } else {
+                last = acl_bits(&c.to_string())?;
+                bits |= last;
+            }
+        }
+        items.push((grantee.to_string(), bits, grantor.to_string()));
+    }
+    Some(items)
+}
+
+/// Writes an `aclitem[]` value as `aclitemout` does.
+fn format_acl(items: &[AclItem]) -> String {
+    let items: Vec<String> = items
+        .iter()
+        .map(|(grantee, bits, grantor)| {
+            let mut letters = String::new();
+            for (i, c) in ACL_RIGHTS.chars().enumerate() {
+                if bits & 1 << i != 0 {
+                    letters.push(c);
+                    if bits & 1 << (i + 16) != 0 {
+                        letters.push('*');
+                    }
+                }
+            }
+            format!("{grantee}={letters}/{grantor}")
+        })
+        .collect();
+    format!("{{{}}}", items.join(","))
+}
+
+/// The kinds of object of `acldefault` that `initdb` changes.
+#[derive(Clone, Copy)]
+enum AclKind {
+    Relation,
+    Sequence,
+    Column,
+    Database,
+    Schema,
+}
+
+/// `acldefault` of `acl.c`: the privileges of an object with a null ACL. The PUBLIC item comes before the owner item.
+fn acl_default(kind: AclKind, owner: &str) -> Vec<AclItem> {
+    let (world, all) = match kind {
+        AclKind::Relation => ("", "arwdDxtm"),
+        AclKind::Sequence => ("", "rwU"),
+        AclKind::Column => ("", ""),
+        AclKind::Database => ("Tc", "CTc"),
+        AclKind::Schema => ("", "UC"),
+    };
+    let mut items = Vec::new();
+    for (grantee, letters) in [("", world), (owner, all)] {
+        if !letters.is_empty() {
+            items.push((grantee.to_string(), acl_bits(letters).unwrap_or(0), owner.to_string()));
+        }
+    }
+    items
+}
+
+/// `aclupdate` of `acl.c` for a `GRANT` (`add`) or a `REVOKE` by the owner. A grant adds the bits to the item of the grantee and the owner, or adds an item at the end. A revoke removes the bits and the grant option bits, and removes an item that has no bits.
+fn acl_update(acl: &mut Vec<AclItem>, grantee: &str, bits: u32, owner: &str, add: bool) {
+    let found = acl.iter().position(|(g, _, grantor)| g == grantee && grantor == owner);
+    match (found, add) {
+        (Some(i), true) => acl[i].1 |= bits,
+        (None, true) => acl.push((grantee.to_string(), bits, owner.to_string())),
+        (Some(i), false) => {
+            acl[i].1 &= !(bits | bits << 16);
+            if acl[i].1 == 0 {
+                acl.remove(i);
+            }
+        }
+        (None, false) => {}
+    }
+}
+
+/// The privileges of a `GRANT` or a `REVOKE` on a relation or a column, as `privilege_to_string` names them.
+fn relation_privileges(list: &str, kind: AclKind) -> Result<u32, String> {
+    let mut bits = 0;
+    for name in list.split(',').map(str::trim) {
+        bits |= match (name.to_ascii_uppercase().as_str(), kind) {
+            ("ALL", AclKind::Column) => acl_bits("arwx"),
+            ("ALL", AclKind::Sequence) => acl_bits("rwU"),
+            ("ALL", _) => acl_bits("arwdDxtm"),
+            ("SELECT", _) => acl_bits("r"),
+            ("INSERT", _) => acl_bits("a"),
+            ("UPDATE", _) => acl_bits("w"),
+            ("DELETE", _) => acl_bits("d"),
+            ("TRUNCATE", _) => acl_bits("D"),
+            ("REFERENCES", _) => acl_bits("x"),
+            ("TRIGGER", _) => acl_bits("t"),
+            ("MAINTAIN", _) => acl_bits("m"),
+            _ => None,
+        }
+        .ok_or_else(|| format!("{SYSTEM_VIEWS}: unknown privilege {name:?}"))?;
+    }
+    Ok(bits)
+}
+
+/// One `GRANT` or `REVOKE` statement on a relation: the privileges, the columns if the statement names columns, the relation, the grantee (empty for PUBLIC) and true for a grant.
+struct AclStatement {
+    privileges: String,
+    columns: Option<Vec<String>>,
+    relation: String,
+    grantee: String,
+    grant: bool,
+}
+
+/// The `GRANT` and `REVOKE` statements of a script, in order. The statements must have the forms `GRANT privileges [ (columns) ] ON name TO role` and `REVOKE privileges ON name FROM role`.
+fn acl_statements(script: &str) -> Result<Vec<AclStatement>, String> {
+    let text: String =
+        script.lines().map(|l| l.split("--").next().unwrap_or("")).collect::<Vec<_>>().join(" ");
+    let mut out = Vec::new();
+    for statement in text.split(';') {
+        let statement = statement.split_whitespace().collect::<Vec<_>>().join(" ");
+        let (grant, rest) = if let Some(rest) = statement.strip_prefix("GRANT ") {
+            (true, rest)
+        } else if let Some(rest) = statement.strip_prefix("REVOKE ") {
+            (false, rest)
+        } else {
+            continue;
+        };
+        let bad = || format!("{SYSTEM_VIEWS}: a statement that the task cannot read: {statement}");
+        let (target, grantee) =
+            rest.rsplit_once(if grant { " TO " } else { " FROM " }).ok_or_else(bad)?;
+        let (privileges, relation) = target.split_once(" ON ").ok_or_else(bad)?;
+        if relation.contains(' ') {
+            return Err(bad());
+        }
+        let (privileges, columns) = match privileges.split_once('(') {
+            Some((p, c)) => {
+                let c = c.strip_suffix(')').ok_or_else(bad)?;
+                (p.trim(), Some(c.split(',').map(|n| n.trim().to_string()).collect()))
+            }
+            None => (privileges, None),
+        };
+        let grantee = if grantee.eq_ignore_ascii_case("public") { "" } else { grantee };
+        out.push(AclStatement {
+            privileges: privileges.to_string(),
+            columns,
+            relation: relation.to_string(),
+            grantee: grantee.to_string(),
+            grant,
+        });
+    }
+    Ok(out)
+}
+
+/// The privileges that `initdb` gives to the static rows, in its order of steps:
+///
+/// 1. `setup_auth` runs `REVOKE ALL ON pg_authid FROM public`.
+/// 2. `setup_run_file` runs `system_views.sql`. Its `GRANT` and `REVOKE` statements on a catalog change `relacl` or `attacl`. The statements on views are not here, because the static rows have no views.
+/// 3. `setup_privileges` gives `=r` to PUBLIC on each table, view, materialized view and sequence that has a null `relacl`, runs `GRANT USAGE ON SCHEMA pg_catalog, public TO PUBLIC`, and runs `REVOKE ALL ON pg_largeobject FROM PUBLIC`.
+/// 4. `make_template0` runs `REVOKE CREATE,TEMPORARY ON DATABASE template1 FROM public`.
+///
+/// A superuser runs each statement, so `select_best_grantor` makes the owner the grantor.
+fn initdb_privileges(
+    catalogs: &[Catalog],
+    system_views: &str,
+    rows: &mut BTreeMap<String, Vec<Vec<Option<String>>>>,
+) -> Result<(), String> {
+    let index = |catalog: &str, column: &str| -> Result<usize, String> {
+        catalogs
+            .iter()
+            .find(|c| c.name == catalog)
+            .and_then(|c| c.columns.iter().position(|col| col.name == column))
+            .ok_or_else(|| format!("no column {catalog}.{column}"))
+    };
+    let (a_oid, a_name) = (index("pg_authid", "oid")?, index("pg_authid", "rolname")?);
+    let roles: BTreeMap<String, String> = rows["pg_authid"]
+        .iter()
+        .filter_map(|r| Some((r[a_oid].clone()?, r[a_name].clone()?)))
+        .collect();
+    let role = |oid: &Option<String>| -> Result<String, String> {
+        oid.as_ref().and_then(|o| roles.get(o)).cloned().ok_or_else(|| format!("no role {oid:?}"))
+    };
+    let acl =
+        |value: &Option<String>, kind: AclKind, owner: &str| -> Result<Vec<AclItem>, String> {
+            match value {
+                Some(text) => parse_acl(text).ok_or_else(|| format!("bad aclitem[] {text:?}")),
+                None => Ok(acl_default(kind, owner)),
+            }
+        };
+
+    let (c_oid, c_name, c_kind, c_owner, c_acl) = (
+        index("pg_class", "oid")?,
+        index("pg_class", "relname")?,
+        index("pg_class", "relkind")?,
+        index("pg_class", "relowner")?,
+        index("pg_class", "relacl")?,
+    );
+    let (at_rel, at_name, at_acl) = (
+        index("pg_attribute", "attrelid")?,
+        index("pg_attribute", "attname")?,
+        index("pg_attribute", "attacl")?,
+    );
+    let mut statements = vec![AclStatement {
+        privileges: "ALL".into(),
+        columns: None,
+        relation: "pg_authid".into(),
+        grantee: String::new(),
+        grant: false,
+    }];
+    statements.extend(acl_statements(system_views)?);
+    for statement in &statements {
+        let classes = rows.get_mut("pg_class").ok_or("no pg_class rows")?;
+        let Some(class) =
+            classes.iter_mut().find(|r| r[c_name].as_deref() == Some(statement.relation.as_str()))
+        else {
+            continue;
+        };
+        let owner = role(&class[c_owner])?;
+        let relid = class[c_oid].clone();
+        let Some(columns) = &statement.columns else {
+            let kind = if class[c_kind].as_deref() == Some("S") {
+                AclKind::Sequence
+            } else {
+                AclKind::Relation
+            };
+            let mut items = acl(&class[c_acl], kind, &owner)?;
+            let bits = relation_privileges(&statement.privileges, kind)?;
+            acl_update(&mut items, &statement.grantee, bits, &owner, statement.grant);
+            class[c_acl] = Some(format_acl(&items));
+            continue;
+        };
+        let bits = relation_privileges(&statement.privileges, AclKind::Column)?;
+        for name in columns {
+            let attribute = rows
+                .get_mut("pg_attribute")
+                .into_iter()
+                .flatten()
+                .find(|r| r[at_rel] == relid && r[at_name].as_deref() == Some(name.as_str()))
+                .ok_or_else(|| {
+                    format!("{SYSTEM_VIEWS}: {} has no column {name}", statement.relation)
+                })?;
+            let mut items = acl(&attribute[at_acl], AclKind::Column, &owner)?;
+            acl_update(&mut items, &statement.grantee, bits, &owner, statement.grant);
+            attribute[at_acl] = Some(format_acl(&items));
+        }
+    }
+
+    for class in rows.get_mut("pg_class").into_iter().flatten() {
+        let kind = match class[c_kind].as_deref() {
+            Some("r" | "v" | "m") => AclKind::Relation,
+            Some("S") => AclKind::Sequence,
+            _ => continue,
+        };
+        if class[c_acl].is_none() {
+            let owner = role(&class[c_owner])?;
+            let mut items = acl_default(kind, &owner);
+            acl_update(&mut items, "", acl_bits("r").unwrap_or(0), &owner, true);
+            class[c_acl] = Some(format_acl(&items));
+        }
+    }
+    let (n_name, n_owner, n_acl) = (
+        index("pg_namespace", "nspname")?,
+        index("pg_namespace", "nspowner")?,
+        index("pg_namespace", "nspacl")?,
+    );
+    for schema in rows.get_mut("pg_namespace").into_iter().flatten() {
+        if matches!(schema[n_name].as_deref(), Some("pg_catalog" | "public")) {
+            let owner = role(&schema[n_owner])?;
+            let mut items = acl(&schema[n_acl], AclKind::Schema, &owner)?;
+            acl_update(&mut items, "", acl_bits("U").unwrap_or(0), &owner, true);
+            schema[n_acl] = Some(format_acl(&items));
+        }
+    }
+    for class in rows.get_mut("pg_class").into_iter().flatten() {
+        if class[c_name].as_deref() == Some("pg_largeobject") {
+            let owner = role(&class[c_owner])?;
+            let mut items = acl(&class[c_acl], AclKind::Relation, &owner)?;
+            acl_update(&mut items, "", acl_bits("arwdDxtm").unwrap_or(0), &owner, false);
+            class[c_acl] = Some(format_acl(&items));
+        }
+    }
+    let (d_name, d_owner, d_acl) = (
+        index("pg_database", "datname")?,
+        index("pg_database", "datdba")?,
+        index("pg_database", "datacl")?,
+    );
+    for database in rows.get_mut("pg_database").into_iter().flatten() {
+        if database[d_name].as_deref() == Some("template1") {
+            let owner = role(&database[d_owner])?;
+            let mut items = acl(&database[d_acl], AclKind::Database, &owner)?;
+            acl_update(&mut items, "", acl_bits("CT").unwrap_or(0), &owner, false);
+            database[d_acl] = Some(format_acl(&items));
+        }
+    }
+    Ok(())
 }
 
 const HEAD: &str = "`cargo xtask pgcatalog` makes this file from the catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog`. Do not edit it.";
