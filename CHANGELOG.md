@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.18 (2026-10-08)
+
+The eighteenth patch release on the 0.0 line. `SELECT` now has subqueries in expressions, the 12 OID alias types such as `regclass` and `regtype`, and the catalog visibility and comment functions. No crate is published.
+
 ### Added
 
 - The catalog information functions of spec/07 section 7.18.3: `pg_table_is_visible`, `pg_type_is_visible`, `pg_function_is_visible`, `pg_operator_is_visible`, `pg_opclass_is_visible`, `pg_opfamily_is_visible`, `pg_collation_is_visible`, `pg_conversion_is_visible`, the four `pg_ts_*_is_visible` functions and `pg_statistics_obj_is_visible`. Each one finds the object as `namespace.c` does, with the schemas of `search_path`, and gives a null for an OID that no object has. `pg_get_userbyid` gives the name of the role, or `unknown (OID=n)`. `obj_description`, `col_description` and `shobj_description` give the comments of `pg_description` and `pg_shdescription`, as the SQL functions of `system_functions.sql` do. The catalog has the built-in objects and comments only, so the objects and comments that the scripts of initdb add are not there yet.
