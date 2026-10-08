@@ -23,7 +23,8 @@ const UTF8_NAME: &str = "UTF8";
 /// `FUNC_MAX_ARGS`.
 const FUNC_MAX_ARGS: usize = 100;
 /// The databases that `initdb` makes, with the OIDs that `pg_database.h` gives them. The `.dat` file has only `template1`.
-const DATABASES: [(&str, u32); 3] = [("template1", 1), ("template0", 4), ("postgres", 5)];
+pub(crate) const DATABASES: [(&str, u32); 3] =
+    [("template1", 1), ("template0", 4), ("postgres", 5)];
 
 /// The result of the input: the outer error is a hard error, and the inner error is a soft error.
 type Soft<T> = Result<Result<T>>;
@@ -557,10 +558,19 @@ fn to_regtypemod(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(found.map_or(Value::Null, |(_, typmod)| Value::Int4(typmod)))
 }
 
+/// The relation of a list of names, as `RangeVarGetRelid` finds it for `text_regclass`.
+///
+/// # Errors
+///
+/// `42P01` for a relation that does not exist, `3F000` for a schema that does not exist, and the errors of a list of names that is not correct.
+pub(crate) fn relation_oid(names: &[Cow<'_, str>], session: &dyn Session) -> Result<u32> {
+    class_in(names, session, true)?
+}
+
 /// `text_regclass`, the cast from `text` to `regclass`. A name that does not exist is an error, as `RangeVarGetRelid` gives it.
 fn text_regclass(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let names = qualified_name_list(text_arg(args)?).map_err(type_error)?;
-    Ok(Value::Oid(class_in(&names, call.session, true)??))
+    Ok(Value::Oid(relation_oid(&names, call.session)?))
 }
 
 /// The kernel of a function of this module by its `prosrc`.

@@ -313,3 +313,302 @@ fn oidvector_compares_the_length_first() {
     );
     assert_eq!(call_types("oidvectoreq", &types, &[vector(&[1, 2]), long]), Ok(Value::Bool(true)));
 }
+
+/// A call of a privilege function. A text value fits an argument of type `name` or `text`.
+fn privilege(name: &str, args: &[Value]) -> Result<Value> {
+    let fits = |ty: &u32, v: &Value| match v {
+        Value::Text(_) => *ty == oid::TEXT || *ty == oid::NAME,
+        Value::Oid(_) => *ty == oid::OID,
+        Value::Int2(_) => *ty == oid::INT2,
+        _ => false,
+    };
+    let proc = builtin::procs_named(name)
+        .find(|p| {
+            p.argtypes.len() == args.len() && p.argtypes.iter().zip(args).all(|(t, v)| fits(t, v))
+        })
+        .unwrap_or_else(|| panic!("no function {name} for {args:?}"));
+    call_types(name, proc.argtypes, args)
+}
+
+/// The results of PostgreSQL 19 for the same calls, as a superuser.
+#[test]
+fn table_and_sequence_privileges() {
+    let yes = Ok(Value::Bool(true));
+    let no = Ok(Value::Bool(false));
+    let table = |args: &[&str]| {
+        privilege("has_table_privilege", &args.iter().map(|a| text(a)).collect::<Vec<_>>())
+    };
+    for p in [
+        "select",
+        "SELECT, INSERT",
+        " select with grant option ",
+        "select  ,  insert",
+        "trigger, truncate",
+        "MAINTAIN",
+    ] {
+        assert_eq!(table(&["pg_class", p]), yes, "{p}");
+    }
+    assert_eq!(table(&["pg_catalog.pg_class", "references"]), yes);
+    assert_eq!(table(&["\"pg_class\"", "select"]), yes);
+    assert_eq!(table(&["PG_CLASS", "select"]), yes);
+    for p in ["foo", "", "select,", "usage", "rule"] {
+        assert_eq!(sqlstate(table(&["pg_class", p])), SqlState::INVALID_PARAMETER_VALUE, "{p}");
+    }
+    let error = table(&["pg_class", "select,"]).unwrap_err();
+    assert_eq!(error.message(), "unrecognized privilege type: \"\"");
+    assert_eq!(sqlstate(table(&["nosuch", "select"])), SqlState::UNDEFINED_TABLE);
+    assert_eq!(sqlstate(table(&["nosuch.pg_class", "select"])), SqlState::UNDEFINED_SCHEMA);
+    assert_eq!(sqlstate(table(&["a.b.c.d", "select"])), SqlState::SYNTAX_ERROR);
+    assert_eq!(
+        privilege("has_table_privilege", &[Value::Oid(99999), text("select")]),
+        Ok(Value::Null)
+    );
+    assert_eq!(sqlstate(table(&["nobody", "pg_class", "select"])), SqlState::UNDEFINED_OBJECT);
+    assert_eq!(
+        privilege("has_table_privilege", &[Value::Oid(99999), text("pg_class"), text("select")]),
+        yes
+    );
+    assert_eq!(table(&["pg_monitor", "pg_class", "select"]), yes);
+    assert_eq!(table(&["pg_monitor", "pg_class", "insert"]), no);
+    assert_eq!(table(&["pg_monitor", "pg_class", "update"]), no);
+    assert_eq!(table(&["pg_monitor", "pg_class", "select with grant option"]), no);
+    assert_eq!(table(&["pg_monitor", "pg_authid", "select"]), no);
+    assert_eq!(table(&["pg_read_all_data", "pg_authid", "select"]), yes);
+    assert_eq!(table(&["pg_read_all_data", "pg_class", "select with grant option"]), no);
+    assert_eq!(table(&["pg_write_all_data", "pg_class", "update"]), no);
+    assert_eq!(table(&["pg_maintain", "pg_class", "maintain"]), yes);
+    assert_eq!(table(&["public", "pg_class", "select"]), yes);
+    assert_eq!(table(&["public", "pg_authid", "select"]), no);
+    assert_eq!(table(&["pg_database_owner", "pg_class", "select"]), yes);
+    assert_eq!(table(&["postgres", "pg_class", "select"]), yes);
+    assert_eq!(
+        privilege("has_table_privilege", &[Value::Oid(10), text("pg_class"), text("select")]),
+        yes
+    );
+
+    let sequence = |args: &[Value]| privilege("has_sequence_privilege", args);
+    assert_eq!(sqlstate(sequence(&[text("pg_class"), text("usage")])), SqlState::WRONG_OBJECT_TYPE);
+    assert_eq!(sequence(&[Value::Oid(99999), text("usage")]), Ok(Value::Null));
+    let error = sequence(&[Value::Oid(1259), text("usage")]).unwrap_err();
+    assert_eq!(
+        (error.state(), error.message()),
+        (SqlState::WRONG_OBJECT_TYPE, "\"pg_class\" is not a sequence")
+    );
+    assert_eq!(sqlstate(sequence(&[text("nosuch"), text("usage")])), SqlState::UNDEFINED_TABLE);
+}
+
+#[test]
+fn column_privileges() {
+    let yes = Ok(Value::Bool(true));
+    let column = |args: &[Value]| privilege("has_column_privilege", args);
+    assert_eq!(column(&[text("pg_class"), text("relname"), text("select")]), yes);
+    assert_eq!(column(&[text("pg_class"), text("relname"), text("insert")]), yes);
+    assert_eq!(
+        sqlstate(column(&[text("pg_class"), text("relname"), text("delete")])),
+        SqlState::INVALID_PARAMETER_VALUE
+    );
+    let error = column(&[text("pg_class"), text("nosuch"), text("select")]).unwrap_err();
+    assert_eq!(
+        (error.state(), error.message()),
+        (SqlState::UNDEFINED_COLUMN, "column \"nosuch\" of relation \"pg_class\" does not exist")
+    );
+    assert_eq!(
+        sqlstate(column(&[Value::Oid(1259), text("nosuch"), text("select")])),
+        SqlState::UNDEFINED_COLUMN
+    );
+    for (attnum, expected) in [
+        (1, yes.clone()),
+        (-1, yes.clone()),
+        (0, Ok(Value::Null)),
+        (-7, Ok(Value::Null)),
+        (999, Ok(Value::Null)),
+    ] {
+        assert_eq!(
+            column(&[text("pg_class"), Value::Int2(attnum), text("select")]),
+            expected,
+            "{attnum}"
+        );
+    }
+    assert_eq!(column(&[Value::Oid(99999), Value::Int2(1), text("select")]), Ok(Value::Null));
+    let monitor = |table: &str, name: &str| {
+        column(&[text("pg_monitor"), text(table), text(name), text("select")])
+    };
+    assert_eq!(monitor("pg_subscription", "subname"), yes);
+    assert_eq!(monitor("pg_subscription", "subconninfo"), Ok(Value::Bool(false)));
+
+    let any = |args: &[&str]| {
+        privilege("has_any_column_privilege", &args.iter().map(|a| text(a)).collect::<Vec<_>>())
+    };
+    assert_eq!(any(&["pg_monitor", "pg_subscription", "select"]), yes);
+    assert_eq!(any(&["pg_monitor", "pg_authid", "select"]), Ok(Value::Bool(false)));
+    assert_eq!(sqlstate(any(&["pg_class", "delete"])), SqlState::INVALID_PARAMETER_VALUE);
+}
+
+#[test]
+fn database_privileges() {
+    let yes = Ok(Value::Bool(true));
+    let no = Ok(Value::Bool(false));
+    let check = |name: &str, args: &[&str]| {
+        privilege(name, &args.iter().map(|a| text(a)).collect::<Vec<_>>())
+    };
+    let by_oid = |name: &str, p: &str| privilege(name, &[Value::Oid(99999), text(p)]);
+
+    let database = |args: &[&str]| check("has_database_privilege", args);
+    assert_eq!(database(&["postgres", "connect"]), yes);
+    assert_eq!(database(&["postgres", "temporary"]), yes);
+    assert_eq!(database(&["postgres", "create"]), yes);
+    assert_eq!(sqlstate(database(&["postgres", "select"])), SqlState::INVALID_PARAMETER_VALUE);
+    assert_eq!(sqlstate(database(&["nosuch", "connect"])), SqlState::UNDEFINED_DATABASE);
+    assert_eq!(database(&["pg_monitor", "template0", "connect"]), yes);
+    assert_eq!(database(&["pg_monitor", "template1", "connect"]), yes);
+    assert_eq!(database(&["pg_monitor", "postgres", "temp"]), yes);
+    assert_eq!(database(&["pg_monitor", "postgres", "create"]), no);
+    assert_eq!(by_oid("has_database_privilege", "connect"), yes);
+}
+
+#[test]
+fn schema_privileges() {
+    let yes = Ok(Value::Bool(true));
+    let no = Ok(Value::Bool(false));
+    let check = |name: &str, args: &[&str]| {
+        privilege(name, &args.iter().map(|a| text(a)).collect::<Vec<_>>())
+    };
+    let by_oid = |name: &str, p: &str| privilege(name, &[Value::Oid(99999), text(p)]);
+
+    let schema = |args: &[&str]| check("has_schema_privilege", args);
+    assert_eq!(schema(&["pg_catalog", "usage"]), yes);
+    assert_eq!(sqlstate(schema(&["nosuch", "usage"])), SqlState::UNDEFINED_SCHEMA);
+    assert_eq!(by_oid("has_schema_privilege", "usage"), yes);
+    assert_eq!(schema(&["pg_monitor", "pg_catalog", "create"]), no);
+    assert_eq!(schema(&["pg_monitor", "public", "create"]), no);
+    assert_eq!(schema(&["pg_monitor", "pg_toast", "usage"]), no);
+    assert_eq!(schema(&["pg_monitor", "public", "usage"]), yes);
+    assert_eq!(schema(&["pg_read_all_data", "pg_toast", "usage"]), yes);
+    assert_eq!(schema(&["pg_write_all_data", "pg_toast", "usage"]), yes);
+    assert_eq!(schema(&["pg_database_owner", "public", "create"]), yes);
+}
+
+#[test]
+fn function_privileges() {
+    big_stack(function_cases);
+}
+
+fn function_cases() {
+    let yes = Ok(Value::Bool(true));
+    let no = Ok(Value::Bool(false));
+    let check = |name: &str, args: &[&str]| {
+        privilege(name, &args.iter().map(|a| text(a)).collect::<Vec<_>>())
+    };
+    let by_oid = |name: &str, p: &str| privilege(name, &[Value::Oid(99999), text(p)]);
+
+    let function = |args: &[&str]| check("has_function_privilege", args);
+    assert_eq!(function(&["now()", "execute"]), yes);
+    assert_eq!(function(&["pg_catalog.now()", "execute"]), yes);
+    assert_eq!(function(&["upper(text)", "EXECUTE"]), yes);
+    assert_eq!(by_oid("has_function_privilege", "execute"), yes);
+    assert_eq!(function(&["pg_monitor", "pg_ls_waldir()", "execute"]), yes);
+    assert_eq!(function(&["pg_monitor", "pg_read_file(text)", "execute"]), no);
+    assert_eq!(function(&["pg_read_server_files", "pg_read_file(text)", "execute"]), no);
+    assert_eq!(sqlstate(function(&["nosuch()", "execute"])), SqlState::UNDEFINED_FUNCTION);
+    assert_eq!(sqlstate(function(&["now", "execute"])), SqlState::INVALID_TEXT_REPRESENTATION);
+    assert_eq!(function(&["pg_monitor", "pg_read_file(text)", "execute with grant option"]), no);
+    assert_eq!(function(&["pg_monitor", "now()", "execute with grant option"]), no);
+}
+
+/// Runs the cases in a thread with 8 MiB of stack. A type name, also in the signature of a function, goes through the parser, and in a debug build the action functions of the parser have large frames, which need more than the 2 MiB of a test thread.
+// The thread is not an engine task, so it uses std::thread and not the Tasks trait of rupg-platform.
+#[allow(clippy::disallowed_methods)]
+fn big_stack(cases: fn()) {
+    std::thread::Builder::new().stack_size(8 << 20).spawn(cases).unwrap().join().unwrap();
+}
+
+#[test]
+fn language_and_type_privileges() {
+    big_stack(language_and_type_cases);
+}
+
+fn language_and_type_cases() {
+    let yes = Ok(Value::Bool(true));
+    let check = |name: &str, args: &[&str]| {
+        privilege(name, &args.iter().map(|a| text(a)).collect::<Vec<_>>())
+    };
+    let by_oid = |name: &str, p: &str| privilege(name, &[Value::Oid(99999), text(p)]);
+
+    let language = |args: &[&str]| check("has_language_privilege", args);
+    assert_eq!(language(&["sql", "usage"]), yes);
+    assert_eq!(language(&["pg_monitor", "c", "usage"]), yes);
+    assert_eq!(language(&["pg_monitor", "internal", "usage"]), yes);
+    assert_eq!(by_oid("has_language_privilege", "usage"), yes);
+
+    let ty = |args: &[&str]| check("has_type_privilege", args);
+    assert_eq!(ty(&["int4", "usage"]), yes);
+    assert_eq!(ty(&["pg_monitor", "int4", "usage"]), yes);
+    assert_eq!(ty(&["int4[]", "usage"]), yes);
+    assert_eq!(ty(&["pg_monitor", "int4[]", "usage"]), yes);
+    assert_eq!(ty(&["integer", "usage"]), yes);
+    assert_eq!(by_oid("has_type_privilege", "usage"), yes);
+    assert_eq!(sqlstate(ty(&["nosuch", "usage"])), SqlState::UNDEFINED_OBJECT);
+}
+
+#[test]
+fn tablespace_and_foreign_privileges() {
+    let yes = Ok(Value::Bool(true));
+    let no = Ok(Value::Bool(false));
+    let check = |name: &str, args: &[&str]| {
+        privilege(name, &args.iter().map(|a| text(a)).collect::<Vec<_>>())
+    };
+    let by_oid = |name: &str, p: &str| privilege(name, &[Value::Oid(99999), text(p)]);
+
+    let tablespace = |args: &[&str]| check("has_tablespace_privilege", args);
+    assert_eq!(tablespace(&["pg_default", "create"]), yes);
+    assert_eq!(tablespace(&["pg_monitor", "pg_default", "create"]), no);
+    assert_eq!(tablespace(&["pg_monitor", "pg_global", "create"]), no);
+    assert_eq!(by_oid("has_tablespace_privilege", "create"), yes);
+
+    let error = check("has_foreign_data_wrapper_privilege", &["nosuch", "usage"]).unwrap_err();
+    assert_eq!(
+        (error.state(), error.message()),
+        (SqlState::UNDEFINED_OBJECT, "foreign-data wrapper \"nosuch\" does not exist")
+    );
+    let error = check("has_server_privilege", &["nosuch", "usage"]).unwrap_err();
+    assert_eq!(
+        (error.state(), error.message()),
+        (SqlState::UNDEFINED_OBJECT, "server \"nosuch\" does not exist")
+    );
+}
+
+#[test]
+fn role_and_parameter_privileges() {
+    let yes = Ok(Value::Bool(true));
+    let no = Ok(Value::Bool(false));
+    let role =
+        |args: &[&str]| privilege("pg_has_role", &args.iter().map(|a| text(a)).collect::<Vec<_>>());
+    assert_eq!(role(&["pg_monitor", "member"]), yes);
+    assert_eq!(role(&["pg_monitor", "pg_read_all_stats", "member"]), yes);
+    assert_eq!(role(&["pg_monitor", "pg_read_all_stats", "usage"]), yes);
+    assert_eq!(role(&["pg_monitor", "pg_read_all_stats", "member with admin option"]), no);
+    assert_eq!(role(&["pg_monitor", "pg_read_all_stats", "usage with grant option"]), no);
+    assert_eq!(role(&["pg_read_all_stats", "pg_monitor", "member"]), no);
+    assert_eq!(role(&["pg_monitor", "pg_monitor", "set"]), yes);
+    assert_eq!(role(&["pg_monitor", "pg_signal_backend", "member"]), no);
+    assert_eq!(sqlstate(role(&["nosuch", "member"])), SqlState::UNDEFINED_OBJECT);
+    assert_eq!(sqlstate(role(&["public", "member"])), SqlState::UNDEFINED_OBJECT);
+    assert_eq!(sqlstate(role(&["pg_monitor", "foo"])), SqlState::INVALID_PARAMETER_VALUE);
+    let unknown = |args: &[Value]| privilege("pg_has_role", args);
+    assert_eq!(unknown(&[Value::Oid(99999), text("pg_monitor"), text("member")]), no);
+    assert_eq!(unknown(&[text("pg_monitor"), Value::Oid(99999), text("member")]), no);
+    assert_eq!(role(&["pg_monitor", "pg_database_owner", "member"]), no);
+    assert_eq!(role(&["postgres", "pg_database_owner", "member"]), yes);
+    assert_eq!(role(&["postgres", "pg_database_owner", "usage"]), yes);
+
+    let parameter = |args: &[&str]| {
+        privilege("has_parameter_privilege", &args.iter().map(|a| text(a)).collect::<Vec<_>>())
+    };
+    assert_eq!(parameter(&["work_mem", "set"]), yes);
+    assert_eq!(parameter(&["work_mem", "SET, ALTER SYSTEM"]), yes);
+    assert_eq!(parameter(&["nosuch.x", "set"]), yes);
+    assert_eq!(parameter(&["nosuch", "set"]), yes);
+    assert_eq!(sqlstate(parameter(&["work_mem", "foo"])), SqlState::INVALID_PARAMETER_VALUE);
+    assert_eq!(parameter(&["pg_monitor", "work_mem", "set"]), no);
+    assert_eq!(parameter(&["pg_monitor", "shared_buffers", "alter system"]), no);
+}

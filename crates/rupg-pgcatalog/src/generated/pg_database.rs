@@ -110,5 +110,10 @@ pub(crate) static COLUMNS: [Batch; 18] = [
     // datcollversion
     Batch::NULL,
     // datacl
-    Batch::NULL,
+    Batch {
+        values: Values::TextArray(&[
+            &["=c/postgres", "postgres=CTc/postgres"],
+        ]),
+        nulls: &[],
+    },
 ];
