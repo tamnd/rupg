@@ -4,6 +4,20 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.4 (2026-10-09)
+
+A patch release on the way to M2. A session can now read the tables of the user and subqueries in `FROM`, and the planner folds constant expressions as PostgreSQL does.
+
+### Added
+
+- `SELECT` reads the tables and the sequences that a user makes (#184). A table has no rows yet, because rupg has no storage for user data. A sequence gives its one row. The columns have the types, the typmods and the not-null flags of the catalog.
+- A query can have a subquery in `FROM`, with column aliases and the name `unnamed_subquery` when it has no alias (#185). The planner pulls up a simple subquery and drops the columns that the query does not read, as PostgreSQL does. The errors of a name that only `LATERAL` could make visible have the hint of PostgreSQL. `LATERAL` itself gives `0A000`.
+
+### Changed
+
+- The planner folds the constant parts of each expression, as `eval_const_expressions` does (#183). An error of the fold, such as `SELECT 1/0`, comes before `RowDescription`, and an error of a function that runs with the rows comes after it. A part that PostgreSQL drops at plan time does not run. The extended protocol folds at `Bind` with the values of the parameters.
+- Before the scan, the executor runs the parts of `WHERE` that read no column and call no volatile function, so a false condition stops the query before it reads rows (#185).
+
 ## 0.1.3 (2026-10-08)
 
 A patch release on the way to M2. The catalog functions now know the objects that a user makes.
