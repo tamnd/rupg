@@ -4,13 +4,24 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.0 (2026-10-08)
+
+The release that closes M1, the file. The single `.rupg` file, the buffer manager, the per-worker log, recovery, the hot store and the first MVCC are complete, and the three M1 fuzz targets ran 24 CPU hours each with no find. The close report is in issue #2. This release also has the first instruction count set and the first privilege functions. No crate is published.
+
 ### Added
 
 - `set_config` (spec/06 section 6.13), which is `SET` as a function. It takes the same values and gives the same errors as `SET`, and gives the new value as `SHOW` does. A null value resets the parameter. The change counts for the rest of the query, so a `set_config` of `TimeZone` changes the output of the values after it in the same row. An error or a rollback undoes the change, and a local change ends with its transaction.
 
+- The access privilege inquiry functions (spec/07 section 7.18.3): the `has_*_privilege` functions for tables, columns, sequences, schemas, functions, types, languages, tablespaces, databases, foreign data wrappers, foreign servers, large objects and parameters, and `pg_has_role`. All 90 forms of `pg_proc.dat` have a kernel. The checks are a port of `acl.c` and `aclchk.c`, with the walks over `pg_auth_members` and the roles `pg_read_all_data`, `pg_write_all_data`, `pg_maintain` and `pg_database_owner`. The errors come in the same order as in PostgreSQL. The server has one role, the bootstrap superuser, so a check for the current user always gives true.
+
+- `cargo xtask bench` (spec/21 section 21.14). It runs the instruction count set of six cases under `perf stat` and fails when one case is more than 3 percent higher or the total is more than 1 percent higher than a saved count. `xtask/icount.txt` has the first counts.
+
+- `cargo xtask lifts` (spec/22 section 22.7). It reads the history of each file that rupg lifts from rudb and lists each rudb change after the lift that nobody reviewed.
+
 ### Fixed
 
 - After the first query of a transaction, `SET TRANSACTION ISOLATION LEVEL` with a new level, `SET TRANSACTION [NOT] DEFERRABLE` and `SET TRANSACTION READ WRITE` in a read-only transaction now give `25001`, as in PostgreSQL. A query takes the snapshot of the transaction when it is analyzed, in a `Query` or a `Parse` message.
+- The static catalog rows have the privileges that `initdb` gives them. `relacl`, `attacl`, `nspacl` and `datacl` are no longer null where PostgreSQL has a value, and all 284 values of the rows below OID 10000 are the same as in PostgreSQL 19.
 
 ## 0.0.18 (2026-10-08)
 
