@@ -318,9 +318,17 @@ pub fn type_recv(case: &RecvCase) {
         .unwrap_or_else(|e| panic!("the receive of the send failed: {e:?}"));
     assert_eq!(send(ty, &back).expect("the send"), bytes, "the binary round trip");
     let text = output(ty, &value, &session).expect("the output of a received value");
+    if smallest_time(ty, &text) {
+        return;
+    }
     let again = rupg_func::input(ty.oid, &text, ty.typmod, &session)
         .unwrap_or_else(|e| panic!("the input of the output {text:?} failed: {e:?}"));
     assert_eq!(output(ty, &again, &session).expect("the output"), text, "the text round trip");
+}
+
+/// True for an `interval` whose time is the smallest `int64`. The receive function accepts it, but the input function refuses its output: `'-2562047788:00:54.775808'::interval` gives 22007 on the oracle, and `'-2562047788:00:54.775807'::interval` is correct.
+fn smallest_time(ty: &Type, text: &str) -> bool {
+    matches!(ty.oid, oid::INTERVAL | oid::INTERVAL_ARRAY) && text.contains("-2562047788:00:54.775808")
 }
 
 /// A line of the replay: the error, or the output text and the hex of the send.
