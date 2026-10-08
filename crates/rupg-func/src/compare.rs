@@ -223,6 +223,66 @@ fn cmp(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     }))
 }
 
+/// `btoidvectorcmp`: an `oidvector` with fewer elements comes first, then the elements in order.
+fn oidvector_order(args: &[Value]) -> Result<Ordering> {
+    let [Value::Array(a), Value::Array(b)] = args else { return Err(bad_value()) };
+    let mut order = a.values.len().cmp(&b.values.len());
+    for (x, y) in a.values.iter().zip(&b.values) {
+        if order.is_ne() {
+            break;
+        }
+        let (Some(Value::Oid(x)), Some(Value::Oid(y))) = (x, y) else { return Err(bad_value()) };
+        order = x.cmp(y);
+    }
+    Ok(order)
+}
+
+fn oidvector_eq(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(oidvector_order(args)?.is_eq()))
+}
+
+fn oidvector_ne(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(oidvector_order(args)?.is_ne()))
+}
+
+fn oidvector_lt(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(oidvector_order(args)?.is_lt()))
+}
+
+fn oidvector_le(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(oidvector_order(args)?.is_le()))
+}
+
+fn oidvector_gt(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(oidvector_order(args)?.is_gt()))
+}
+
+fn oidvector_ge(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(oidvector_order(args)?.is_ge()))
+}
+
+fn oidvector_cmp(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Int4(match oidvector_order(args)? {
+        Ordering::Less => -1,
+        Ordering::Equal => 0,
+        Ordering::Greater => 1,
+    }))
+}
+
+/// The comparison functions of `oidvector`, which do not compare as arrays.
+fn oidvector_by_src(src: &str) -> Option<Kernel> {
+    Some(match src {
+        "oidvectoreq" => oidvector_eq,
+        "oidvectorne" => oidvector_ne,
+        "oidvectorlt" => oidvector_lt,
+        "oidvectorle" => oidvector_le,
+        "oidvectorgt" => oidvector_gt,
+        "oidvectorge" => oidvector_ge,
+        "btoidvectorcmp" => oidvector_cmp,
+        _ => return None,
+    })
+}
+
 /// True when both arguments of the function are of one family that compares here.
 fn comparable(left: u32, right: u32) -> bool {
     family(left).is_some() && family(left) == family(right)
@@ -250,7 +310,9 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     if !comparable(*left, *right) {
         return None;
     }
-    if src.ends_with("larger") {
+    if let Some(kernel) = oidvector_by_src(src) {
+        Some(kernel)
+    } else if src.ends_with("larger") {
         Some(larger)
     } else if src.ends_with("smaller") {
         Some(smaller)

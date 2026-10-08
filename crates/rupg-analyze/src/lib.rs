@@ -13,7 +13,9 @@ mod from;
 mod poly;
 mod resolve;
 mod select;
+mod sort;
 mod transform;
+mod typcache;
 mod typename;
 pub mod types;
 
@@ -28,6 +30,7 @@ pub use colname::figure_colname;
 pub use expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, Var};
 pub use from::{Column, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};
+pub use sort::SortGroup;
 
 /// The OID of the schema `pg_catalog`.
 pub const PG_CATALOG_NAMESPACE: u32 = 11;
@@ -371,6 +374,96 @@ mod tests {
                     .unwrap();
             assert_eq!(query.targets[0].origin, None);
             assert!(matches!(query.targets[0].expr.kind, ExprKind::Coalesce(_)));
+        });
+    }
+
+    #[test]
+    fn order_by_errors() {
+        big_stack(|| {
+            let e = |state: &str, message: &str, at: usize| {
+                (state.to_string(), message.to_string(), Some(at))
+            };
+            assert_eq!(
+                error("SELECT oid FROM pg_am ORDER BY 2"),
+                e("42P10", "ORDER BY position 2 is not in select list", 31)
+            );
+            assert_eq!(
+                error("SELECT oid FROM pg_am ORDER BY 'x'"),
+                e("42601", "non-integer constant in ORDER BY", 31)
+            );
+            assert_eq!(
+                error("SELECT amname AS a, oid AS a FROM pg_am ORDER BY a"),
+                e("42702", "ORDER BY \"a\" is ambiguous", 49)
+            );
+            assert_eq!(
+                error("SELECT point(1, 2) AS p ORDER BY p"),
+                e("42883", "could not identify an ordering operator for type point", 33)
+            );
+            assert_eq!(
+                error("SELECT DISTINCT amname FROM pg_am ORDER BY oid"),
+                e(
+                    "42P10",
+                    "for SELECT DISTINCT, ORDER BY expressions must appear in select list",
+                    43
+                )
+            );
+            assert_eq!(
+                error("SELECT DISTINCT ON (oid) amname FROM pg_am ORDER BY amname"),
+                e(
+                    "42P10",
+                    "SELECT DISTINCT ON expressions must match initial ORDER BY expressions",
+                    20
+                )
+            );
+            assert_eq!(
+                error("SELECT amname FROM pg_am LIMIT oid"),
+                e("42P10", "argument of LIMIT must not contain variables", 31)
+            );
+            assert_eq!(
+                error("SELECT amname FROM pg_am LIMIT true"),
+                e("42804", "argument of LIMIT must be type bigint, not type boolean", 31)
+            );
+            assert_eq!(
+                error("SELECT amname FROM pg_am ORDER BY amname USING ="),
+                e("42809", "operator = is not a valid ordering operator", 47)
+            );
+            let (state, message, _) =
+                error("SELECT amname FROM pg_am ORDER BY 1 FETCH FIRST NULL ROWS WITH TIES");
+            assert_eq!(
+                (state.as_str(), message.as_str()),
+                ("2201W", "row count cannot be null in FETCH FIRST ... WITH TIES clause")
+            );
+        });
+    }
+
+    #[test]
+    fn order_by_clauses() {
+        big_stack(|| {
+            let query = run(
+                "SELECT amname FROM pg_am ORDER BY amtype DESC NULLS LAST, 1, amname",
+                &Params::default(),
+            )
+            .unwrap();
+            // amtype is a junk column. The second amname is the same item as the first.
+            assert_eq!(query.targets.len(), 2);
+            assert!(!query.targets[0].junk && query.targets[1].junk);
+            let items: Vec<_> =
+                query.sort.iter().map(|s| (s.target, s.operator, s.nulls_first)).collect();
+            assert_eq!(items, [(1, 633, false), (0, 660, false)]);
+            let query = run(
+                "SELECT DISTINCT ON (amtype) amtype, amname FROM pg_am ORDER BY amtype, oid",
+                &Params::default(),
+            )
+            .unwrap();
+            assert!(query.distinct_on);
+            assert_eq!(query.distinct.iter().map(|s| s.target).collect::<Vec<_>>(), [0]);
+            assert_eq!(query.sort.iter().map(|s| s.target).collect::<Vec<_>>(), [0, 2]);
+            let query =
+                run("SELECT DISTINCT amname, 1 FROM pg_am LIMIT 2 OFFSET 1", &Params::default())
+                    .unwrap();
+            assert_eq!(query.distinct.iter().map(|s| s.target).collect::<Vec<_>>(), [0, 1]);
+            assert_eq!(query.limit.map(|e| e.ty), Some(oid::INT8));
+            assert_eq!(query.offset.map(|e| e.ty), Some(oid::INT8));
         });
     }
 
