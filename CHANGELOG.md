@@ -4,6 +4,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `set_config` (spec/06 section 6.13), which is `SET` as a function. It takes the same values and gives the same errors as `SET`, and gives the new value as `SHOW` does. A null value resets the parameter. The change counts for the rest of the query, so a `set_config` of `TimeZone` changes the output of the values after it in the same row. An error or a rollback undoes the change, and a local change ends with its transaction.
+
+### Fixed
+
+- After the first query of a transaction, `SET TRANSACTION ISOLATION LEVEL` with a new level, `SET TRANSACTION [NOT] DEFERRABLE` and `SET TRANSACTION READ WRITE` in a read-only transaction now give `25001`, as in PostgreSQL. A query takes the snapshot of the transaction when it is analyzed, in a `Query` or a `Parse` message.
+
 ## 0.0.18 (2026-10-08)
 
 The eighteenth patch release on the 0.0 line. `SELECT` now has subqueries in expressions, the 12 OID alias types such as `regclass` and `regtype`, and the catalog visibility and comment functions. No crate is published.

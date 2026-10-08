@@ -2,6 +2,9 @@
 //!
 //! [`Reader`] gives the analyzer and the functions the settings, the user, the database, the time zone, the times of the transaction and the statement, and the process ID. The time zone rules of the IANA data come later, so the engine has the zones with one offset: a number of hours, an interval, a POSIX zone without daylight saving time, the names of UTC and GMT, and `Etc/GMT+N`. A function that needs another zone gives `0A000`, so it never gives a wrong time.
 
+use std::cell::{Ref, RefCell};
+use std::rc::Rc;
+
 use rupg_analyze::{Env, Params};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
@@ -13,8 +16,9 @@ use rupg_types::{
 };
 use rupg_wire::Field;
 
-use crate::guc::{self, Settings, Zone};
+use crate::guc::{self, Action, Origin, Settings, Zone};
 use crate::param::type_error;
+use crate::utility;
 
 /// The schemas of a new database, from `pg_namespace.dat`.
 const SCHEMAS: [(&str, u32); 3] = [("pg_catalog", 11), ("pg_toast", 99), ("public", 2200)];
@@ -67,30 +71,34 @@ pub(crate) fn now(clock: &dyn Clock) -> i64 {
     i64::try_from(clock.wall_us()).unwrap_or(i64::MAX).saturating_sub(EPOCH_SHIFT_US)
 }
 
-/// What a statement reads of the session.
+/// What a statement reads of the session, and the settings that `set_config` changes.
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {
-    pub(crate) settings: &'a Settings,
+    settings: &'a RefCell<Settings>,
     pub(crate) user: &'a str,
     pub(crate) database: &'a str,
     pub(crate) transaction_start: i64,
     pub(crate) statement_start: i64,
     pub(crate) clock: &'a dyn Clock,
     pub(crate) pid: i32,
-    /// The zone of `TimeZone`, or the name of a zone whose rules the engine does not have yet.
-    zone: std::result::Result<FixedZone, String>,
+    /// The text of `TimeZone` and its zone, or the name of a zone whose rules the engine does not have yet. A call of `set_config` can change the setting, so the zone is made again when the text changes.
+    zone: RefCell<(String, ZoneOf)>,
 }
+
+/// The zone of a `TimeZone` value, or the name of a zone whose rules the engine does not have yet.
+type ZoneOf = std::result::Result<Rc<FixedZone>, String>;
 
 impl<'a> Reader<'a> {
     pub(crate) fn new(
-        settings: &'a Settings,
+        settings: &'a RefCell<Settings>,
         user: &'a str,
         database: &'a str,
         times: (i64, i64),
         clock: &'a dyn Clock,
         pid: i32,
     ) -> Reader<'a> {
-        let name = settings.get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
+        let name = settings.borrow().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
+        let zone = fixed_zone(&name).map(Rc::new);
         Reader {
             settings,
             user,
@@ -99,13 +107,18 @@ impl<'a> Reader<'a> {
             statement_start: times.1,
             clock,
             pid,
-            zone: fixed_zone(&name),
+            zone: RefCell::new((name, zone)),
         }
+    }
+
+    /// The settings of the session.
+    pub(crate) fn settings(&self) -> Ref<'_, Settings> {
+        self.settings.borrow()
     }
 
     /// The schemas of `search_path` that exist, in order, without the implicit schemas, as `recomputeNamespacePath` finds them. `$user` names the schema of the user, and `pg_temp` the temporary schema, which do not exist yet.
     fn path(&self) -> Vec<(&'static str, u32)> {
-        let text = self.settings.get("search_path").unwrap_or_default();
+        let text = self.settings().get("search_path").unwrap_or_default();
         let mut path: Vec<(&'static str, u32)> = Vec::new();
         for name in guc::split_identifiers(&text, ',').unwrap_or_default() {
             let name = if name == "$user" { self.user.to_owned() } else { name };
@@ -163,11 +176,11 @@ fn date_format(text: &str) -> DateFormat {
 
 impl rupg_func::Session for Reader<'_> {
     fn date_format(&self) -> DateFormat {
-        self.settings.get("DateStyle").map_or(DateFormat::ISO_MDY, |text| date_format(&text))
+        self.settings().get("DateStyle").map_or(DateFormat::ISO_MDY, |text| date_format(&text))
     }
 
     fn interval_style(&self) -> IntervalStyle {
-        match self.settings.get("IntervalStyle").as_deref() {
+        match self.settings().get("IntervalStyle").as_deref() {
             Some("postgres_verbose") => IntervalStyle::PostgresVerbose,
             Some("sql_standard") => IntervalStyle::SqlStandard,
             Some("iso_8601") => IntervalStyle::Iso8601,
@@ -175,9 +188,15 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
-    fn zone(&self) -> Result<&dyn TimeZone> {
-        match &self.zone {
-            Ok(zone) => Ok(zone),
+    fn zone(&self) -> Result<Rc<dyn TimeZone>> {
+        let name = self.settings().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
+        let mut zone = self.zone.borrow_mut();
+        if zone.0 != name {
+            let made = fixed_zone(&name).map(Rc::new);
+            *zone = (name, made);
+        }
+        match &zone.1 {
+            Ok(zone) => Ok(Rc::clone(zone) as Rc<dyn TimeZone>),
             Err(name) => Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 format!("the time zone \"{name}\" is not supported yet"),
@@ -187,18 +206,18 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn extra_float_digits(&self) -> i32 {
-        self.settings.get("extra_float_digits").and_then(|v| v.parse().ok()).unwrap_or(1)
+        self.settings().get("extra_float_digits").and_then(|v| v.parse().ok()).unwrap_or(1)
     }
 
     fn bytea_output(&self) -> ByteaOutput {
-        match self.settings.get("bytea_output").as_deref() {
+        match self.settings().get("bytea_output").as_deref() {
             Some("escape") => ByteaOutput::Escape,
             _ => ByteaOutput::Hex,
         }
     }
 
     fn array_nulls(&self) -> bool {
-        self.settings.get("array_nulls").as_deref() != Some("off")
+        self.settings().get("array_nulls").as_deref() != Some("off")
     }
 
     fn transaction_start(&self) -> i64 {
@@ -238,7 +257,17 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn setting(&self, name: &str) -> Option<String> {
-        self.settings.get(name)
+        self.settings().get(name)
+    }
+
+    fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String> {
+        if let Some(value) = value {
+            utility::check_role(name, value, self.user)?;
+        }
+        let action = if local { Action::Local } else { Action::Set };
+        let mut settings = self.settings.borrow_mut();
+        settings.set(name, value, action, Origin::Statement)?;
+        Ok(settings.show(name)?.1)
     }
 }
 

@@ -15,6 +15,7 @@ mod reg;
 mod text;
 
 use std::collections::BTreeMap;
+use std::rc::Rc;
 use std::sync::OnceLock;
 
 use rupg_common::{Error, Result, SqlState};
@@ -39,7 +40,7 @@ pub trait Session {
     /// # Errors
     ///
     /// `0A000` for a zone whose rules the engine does not have yet.
-    fn zone(&self) -> Result<&dyn TimeZone>;
+    fn zone(&self) -> Result<Rc<dyn TimeZone>>;
     /// The `extra_float_digits` setting.
     fn extra_float_digits(&self) -> i32;
     /// The `bytea_output` setting.
@@ -66,6 +67,12 @@ pub trait Session {
     fn version(&self) -> String;
     /// The value of a setting as `SHOW` gives it, or `None` for a name that is not a setting.
     fn setting(&self, name: &str) -> Option<String>;
+    /// `set_config_option` for `set_config`: sets a parameter for the session, or for the transaction when `local` is true, and gives the new value as `SHOW` gives it. `value` is `None` for a reset.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `SET` for the name and the value.
+    fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String>;
 }
 
 /// A call of a function.

@@ -252,19 +252,18 @@ fn assign(
     action: Action,
 ) -> Result<(), Error> {
     if let Some(value) = value {
-        let parameter = guc::find(name);
-        match parameter.map(|parameter| parameter.name) {
-            // check_role and check_session_authorization: the session user is the only role yet.
-            Some("role") if value != "none" && value != cx.user => {
-                return Err(no_role(value));
-            }
-            Some("session_authorization") if value != cx.user => {
-                return Err(no_role(value));
-            }
-            _ => {}
-        }
+        check_role(name, value, cx.user)?;
     }
     cx.settings.set(name, value, action, Origin::Statement)
+}
+
+/// `check_role` and `check_session_authorization` for a value of `role` or `session_authorization`. The session user is the only role yet.
+pub(crate) fn check_role(name: &str, value: &str, user: &str) -> Result<(), Error> {
+    match guc::find(name).map(|parameter| parameter.name) {
+        Some("role") if value != "none" && value != user => Err(no_role(value)),
+        Some("session_authorization") if value != user => Err(no_role(value)),
+        _ => Ok(()),
+    }
 }
 
 fn no_role(name: &str) -> Error {

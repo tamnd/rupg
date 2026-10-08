@@ -220,6 +220,8 @@ pub struct Settings {
     reported: Arc<HashMap<&'static str, String>>,
     generation: u64,
     superuser: bool,
+    /// `FirstSnapshotSet`: a statement of the current transaction took a snapshot, so the isolation level and the deferrable mode cannot change.
+    snapshot: bool,
 }
 
 impl Settings {
@@ -235,6 +237,7 @@ impl Settings {
             reported: Arc::default(),
             generation: 0,
             superuser,
+            snapshot: false,
         }
     }
 
@@ -480,6 +483,7 @@ impl Settings {
         };
         let setting = check::check(parameter, setting, &current, &reset)?;
         let shown = parameter.show(&setting);
+        self.check_transaction(parameter, &shown, &current)?;
         if super::refuses(parameter, &shown) {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
@@ -490,6 +494,36 @@ impl Settings {
             ));
         }
         Ok(setting)
+    }
+
+    /// `check_transaction_isolation`, `check_transaction_deferrable` and `check_transaction_read_only`: after the first snapshot of a transaction, its isolation level cannot change, its deferrable mode cannot be set, and it cannot become read-write.
+    fn check_transaction(
+        &self,
+        parameter: &Parameter,
+        shown: &str,
+        current: &str,
+    ) -> Result<(), Error> {
+        if !self.snapshot {
+            return Ok(());
+        }
+        let message = match parameter.name {
+            "transaction_isolation" if shown != current => {
+                "SET TRANSACTION ISOLATION LEVEL must be called before any query"
+            }
+            "transaction_deferrable" => {
+                "SET TRANSACTION [NOT] DEFERRABLE must be called before any query"
+            }
+            "transaction_read_only" if shown == "off" && current == "on" => {
+                "transaction read-write mode must be set before any query"
+            }
+            _ => return Ok(()),
+        };
+        Err(Error::new(SqlState::ACTIVE_SQL_TRANSACTION, message))
+    }
+
+    /// `GetTransactionSnapshot` in a transaction: a statement that analyzes or runs a query takes the first snapshot of the transaction, and [`Settings::start_transaction`] clears it.
+    pub fn take_snapshot(&mut self) {
+        self.snapshot = true;
     }
 
     /// Makes the slot of a parameter if the session did not change it before.
@@ -571,6 +605,7 @@ impl Settings {
 
     /// `StartTransaction`: a new transaction takes `transaction_isolation`, `transaction_read_only` and `transaction_deferrable` from their defaults, or from the transaction before it after `AND CHAIN`. PostgreSQL sets the variables of these parameters directly, so the change is not in the stack of the transaction and the end of the transaction does not restore it.
     pub fn start_transaction(&mut self, chained: Option<Characteristics>) {
+        self.snapshot = false;
         for (i, (name, default)) in CHARACTERISTICS.into_iter().enumerate() {
             let (Some(parameter), Some(default)) = (find(name), find(default)) else { continue };
             let setting = match &chained {
