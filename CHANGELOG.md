@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.17 (2026-10-08)
+
+The seventeenth patch release on the 0.0 line. `SELECT` now has aggregate functions, `GROUP BY` and `HAVING`, and two new fuzz targets check the input, output, receive and send functions of 52 types against PostgreSQL. No crate is published.
+
 ### Added
 
 - The fuzz targets `type_input` and `type_recv` of M2 (spec/21 section 21.7). They call the input, output, receive and send functions of 52 types with the settings that change the text, and check that each value reads back to the same output in the text and the binary formats. The example `type_replay` compares a corpus with the oracle. The nightly workflow runs both targets.
