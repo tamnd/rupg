@@ -36,7 +36,7 @@ pub struct Config {
     pub seed: u64,
     /// The number of steps of the workload. A step is a transaction, a checkpoint, a new table, a clean close or a held transaction.
     pub steps: u32,
-    /// The number of random plans at each sync point with more than [`SMALL`] writes.
+    /// The number of random plans at each sync point with more than `SMALL` writes.
     pub sample: usize,
 }
 

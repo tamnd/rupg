@@ -18,7 +18,7 @@ pub fn write(expr: &Expr) -> Result<String> {
     Ok(out)
 }
 
-/// The expression of a stored form that [`write`] made.
+/// The expression of a stored form that [`write()`] made.
 ///
 /// # Errors
 ///
