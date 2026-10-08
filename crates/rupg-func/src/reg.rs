@@ -1,18 +1,19 @@
 //! The text input and output of the OID alias types, such as `regclass` and `regprocedure`, and the functions `to_regclass` and the others, which give a null for a name that does not exist.
 //!
-//! A port of `src/backend/utils/adt/regproc.c` and of the lookups of `namespace.c` that it calls. The catalog has the built-in objects, so a name finds a built-in object or nothing.
+//! A port of `src/backend/utils/adt/regproc.c` and of the lookups of `namespace.c` that it calls. A schema, a relation or a type is a built-in object or an object of the catalog of the session. The other kinds have only the built-in objects.
 //!
 //! The input separates two kinds of errors, as the `escontext` of PostgreSQL does. A soft error, such as a name that does not exist, is an error of the input function and a null of `to_regclass`. A hard error, such as a syntax error in a type name, is an error of both.
 
 use std::borrow::Cow;
 
 use rupg_analyze::Env;
+use rupg_catalog::Catalog;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, NamedRow, OperatorRow, ProcRow};
-use rupg_types::{self as types, RegInput, RegKind, Value, qualified_name_list};
+use rupg_types::{self as types, RegInput, RegKind, Value, oid, qualified_name_list};
 
 use crate::text::quote_identifier;
-use crate::{Call, Kernel, Session, bad_value, type_error};
+use crate::{Call, Kernel, Session, bad_value, not_yet, type_error};
 
 /// The OID of `pg_catalog`.
 const PG_CATALOG: u32 = 11;
@@ -34,11 +35,11 @@ struct SessionEnv<'a>(&'a dyn Session);
 
 impl Env for SessionEnv<'_> {
     fn search_path(&self) -> Vec<u32> {
-        self.0.schemas().iter().filter_map(|name| namespace_oid(name)).collect()
+        self.0.schemas().iter().filter_map(|name| namespace_oid(name, self.0)).collect()
     }
 
     fn namespace(&self, name: &str) -> Option<u32> {
-        namespace_oid(name)
+        namespace_oid(name, self.0)
     }
 
     fn database(&self) -> String {
@@ -48,21 +49,32 @@ impl Env for SessionEnv<'_> {
     fn input(&self, ty: u32, text: &str, typmod: i32) -> Result<Value> {
         crate::io::input(ty, text, typmod, self.0)
     }
+
+    fn catalog(&self) -> Option<&Catalog> {
+        self.0.catalog()
+    }
 }
 
 /// The OID of the schema with this name.
-fn namespace_oid(name: &str) -> Option<u32> {
-    builtin::named(Named::Namespace).iter().find(|row| row.name == name).map(|row| row.oid)
+fn namespace_oid(name: &str, session: &dyn Session) -> Option<u32> {
+    builtin::named(Named::Namespace)
+        .iter()
+        .find(|row| row.name == name)
+        .map(|row| row.oid)
+        .or_else(|| session.catalog()?.schema_by_name(name).map(|s| s.oid))
 }
 
 /// The name of the schema with this OID.
-pub(crate) fn namespace_name(oid: u32) -> Option<&'static str> {
-    builtin::named_by_oid(Named::Namespace, oid).map(|row| row.name)
+pub(crate) fn namespace_name(oid: u32, session: &dyn Session) -> Option<&str> {
+    builtin::named_by_oid(Named::Namespace, oid)
+        .map(|row| row.name)
+        .or_else(|| session.catalog()?.schema(oid).map(|s| s.name.as_str()))
 }
 
 /// The schemas that an unqualified name searches: `pg_catalog` first when `search_path` does not name it, then the schemas of `search_path` that exist.
 pub(crate) fn path(session: &dyn Session) -> Vec<u32> {
-    let mut path: Vec<u32> = session.schemas().iter().filter_map(|n| namespace_oid(n)).collect();
+    let mut path: Vec<u32> =
+        session.schemas().iter().filter_map(|n| namespace_oid(n, session)).collect();
     if !path.contains(&PG_CATALOG) {
         path.insert(0, PG_CATALOG);
     }
@@ -118,7 +130,7 @@ fn deconstruct<'n>(
 /// The schemas that a name searches: the schema that the name gives, or none when it does not exist, as the lookups with `missing_ok` give. A name without a schema searches the path.
 fn spaces(schema: Option<&str>, session: &dyn Session) -> Vec<u32> {
     match schema {
-        Some(schema) => namespace_oid(schema).into_iter().collect(),
+        Some(schema) => namespace_oid(schema, session).into_iter().collect(),
         None => path(session),
     }
 }
@@ -136,9 +148,53 @@ fn find(kind: Named, spaces: &[u32], name: &str, method: u32) -> Option<&'static
     })
 }
 
-/// `RelationIsVisible` and the other checks of `namespace.c`: true when the unqualified name finds the object.
+/// The checks of `namespace.c` for the kinds that have only built-in objects: true when the unqualified name finds the object.
 pub(crate) fn visible(kind: Named, row: &NamedRow, session: &dyn Session) -> bool {
     find(kind, &path(session), row.name, row.method).is_some_and(|found| found.oid == row.oid)
+}
+
+/// The OID of the relation with the name in the first schema of `spaces` that has one.
+fn find_class(spaces: &[u32], name: &str, session: &dyn Session) -> Option<u32> {
+    spaces.iter().find_map(|&ns| {
+        find(Named::Class, &[ns], name, 0)
+            .map(|row| row.oid)
+            .or_else(|| session.catalog()?.relation_by_name(ns, name).map(|r| r.oid))
+    })
+}
+
+/// The OID of the type with the name in the first schema of `spaces` that has one.
+fn find_type(spaces: &[u32], name: &str, session: &dyn Session) -> Option<u32> {
+    spaces.iter().find_map(|&ns| {
+        builtin::type_by_name(ns, name)
+            .map(|row| row.oid)
+            .or_else(|| session.catalog()?.type_by_name(ns, name).map(|t| t.oid))
+    })
+}
+
+/// The name and the schema of the relation with this OID.
+fn class_name(oid: u32, session: &dyn Session) -> Option<(&str, u32)> {
+    builtin::named_by_oid(Named::Class, oid)
+        .map(|row| (row.name, row.namespace))
+        .or_else(|| session.catalog()?.relation(oid).map(|r| (r.name.as_str(), r.namespace)))
+}
+
+/// The name and the schema of the type with this OID.
+pub(crate) fn type_name(oid: u32, session: &dyn Session) -> Option<(&str, u32)> {
+    builtin::type_by_oid(oid)
+        .map(|row| (row.name, row.namespace))
+        .or_else(|| session.catalog()?.type_by_oid(oid).map(|t| (t.name.as_str(), t.namespace)))
+}
+
+/// `RelationIsVisible`, or `None` when no relation has the OID.
+pub(crate) fn class_visible(oid: u32, session: &dyn Session) -> Option<bool> {
+    let (name, _) = class_name(oid, session)?;
+    Some(find_class(&path(session), name, session) == Some(oid))
+}
+
+/// `TypeIsVisible`, or `None` when no type has the OID.
+pub(crate) fn type_visible(oid: u32, session: &dyn Session) -> Option<bool> {
+    let (name, _) = type_name(oid, session)?;
+    Some(find_type(&path(session), name, session) == Some(oid))
 }
 
 /// `FuncnameGetCandidates`: the functions with the name in the schemas, in the order of the schemas. A function with the same argument types as a function in a schema before it is hidden.
@@ -187,6 +243,97 @@ pub(crate) fn operator_visible(op: &OperatorRow, session: &dyn Session) -> bool 
         .is_some_and(|f| f.oid == op.oid)
 }
 
+/// `F_ARRAY_SUBSCRIPT_HANDLER`, the `typsubscript` of a true array type.
+const ARRAY_SUBSCRIPT_HANDLER: u32 = 6179;
+/// The bytes of the header of a `varlena` value, which a typmod of a string type counts.
+const VARHDRSZ: i32 = 4;
+
+/// `format_type_extended` with `FORMAT_TYPE_ALLOW_INVALID`: `-` for OID 0, or the name of a type, with its schema when the name alone does not find it, and with its typmod. A typmod of `None` is the form without `FORMAT_TYPE_TYPEMOD_GIVEN`.
+///
+/// # Errors
+///
+/// `0A000` for a typmod of `interval`, which the engine cannot show yet.
+pub(crate) fn type_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> Result<String> {
+    if ty == 0 {
+        return Ok("-".to_string());
+    }
+    // A true array type shows the name of its element type with `[]`, and a plain array type such as `oidvector` shows its own name.
+    let element = match builtin::type_by_oid(ty) {
+        Some(row) if row.elem != 0 && row.subscript == ARRAY_SUBSCRIPT_HANDLER => {
+            (row.storage != b'p').then_some(row.elem)
+        }
+        Some(_) => None,
+        None => match session.catalog().and_then(|c| c.type_by_oid(ty)) {
+            Some(user) => (user.element != 0).then_some(user.element),
+            None => return Ok("???".to_string()),
+        },
+    };
+    match element {
+        Some(element) if type_name(element, session).is_none() => Ok("???[]".to_string()),
+        Some(element) => Ok(format!("{}[]", base_text(element, typmod, session)?)),
+        None => base_text(ty, typmod, session),
+    }
+}
+
+/// The part of `format_type_extended` after the array test: the name of a type that is not a true array type.
+fn base_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> Result<String> {
+    let given = typmod.is_some();
+    let with = typmod.filter(|m| *m >= 0);
+    let special = match (ty, with) {
+        (oid::BIT, Some(m)) => Some(format!("bit({m})")),
+        (oid::BIT, None) if !given => Some("bit".to_string()),
+        (oid::BOOL, _) => Some("boolean".to_string()),
+        (oid::BPCHAR, Some(m)) => Some(format!("character{}", length(m))),
+        (oid::BPCHAR, None) if !given => Some("character".to_string()),
+        (oid::FLOAT4, _) => Some("real".to_string()),
+        (oid::FLOAT8, _) => Some("double precision".to_string()),
+        (oid::INT2, _) => Some("smallint".to_string()),
+        (oid::INT4, _) => Some("integer".to_string()),
+        (oid::INT8, _) => Some("bigint".to_string()),
+        (oid::NUMERIC, Some(m)) if m >= VARHDRSZ => {
+            let bits = m - VARHDRSZ;
+            let scale = ((bits & 0x7ff) ^ 1024) - 1024;
+            Some(format!("numeric({},{scale})", (bits >> 16) & 0xffff))
+        }
+        (oid::NUMERIC, _) => Some("numeric".to_string()),
+        (oid::INTERVAL, Some(_)) => return Err(not_yet("format_type of interval with a typmod")),
+        (oid::INTERVAL, None) => Some("interval".to_string()),
+        (oid::TIME, m) => Some(format!("time{} without time zone", precision(m))),
+        (oid::TIMETZ, m) => Some(format!("time{} with time zone", precision(m))),
+        (oid::TIMESTAMP, m) => Some(format!("timestamp{} without time zone", precision(m))),
+        (oid::TIMESTAMPTZ, m) => Some(format!("timestamp{} with time zone", precision(m))),
+        (oid::VARBIT, m) => Some(format!("bit varying{}", precision(m))),
+        (oid::VARCHAR, m) => Some(format!("character varying{}", m.map_or(String::new(), length))),
+        (oid::JSON, _) => Some("json".to_string()),
+        _ => None,
+    };
+    if let Some(text) = special {
+        return Ok(text);
+    }
+    let Some((name, namespace)) = type_name(ty, session) else { return Ok("???".to_string()) };
+    let schema = if type_visible(ty, session) == Some(true) {
+        None
+    } else {
+        namespace_name(namespace, session)
+    };
+    let text = qualified(schema, name);
+    // The types with a `typmodout` function all have a special form, so the default form shows the typmod as a number.
+    Ok(match with {
+        Some(m) => format!("{text}({m})"),
+        None => text,
+    })
+}
+
+/// The typmod text of `anytime_typmodout` and `bittypmodout`.
+fn precision(typmod: Option<i32>) -> String {
+    typmod.map_or(String::new(), |m| format!("({m})"))
+}
+
+/// The typmod text of `bpchartypmodout` and `varchartypmodout`.
+fn length(typmod: i32) -> String {
+    if typmod > VARHDRSZ { format!("({})", typmod - VARHDRSZ) } else { String::new() }
+}
+
 /// The text output of an OID alias type: the name of the object, with its schema when the name alone does not find it, the text of OID 0 for the kind, or the number for an OID that no object has.
 pub(crate) fn output(kind: RegKind, oid: u32, session: &dyn Session, out: &mut Vec<u8>) {
     let text = if oid == 0 { None } else { name_of(kind, oid, session) };
@@ -200,37 +347,54 @@ pub(crate) fn output(kind: RegKind, oid: u32, session: &dyn Session, out: &mut V
 fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
     let named = |named: Named| {
         let row = builtin::named_by_oid(named, oid)?;
-        let schema =
-            if visible(named, row, session) { None } else { namespace_name(row.namespace) };
+        let schema = if visible(named, row, session) {
+            None
+        } else {
+            namespace_name(row.namespace, session)
+        };
         Some(qualified(schema, row.name))
     };
     match kind {
-        RegKind::Class => named(Named::Class),
+        RegKind::Class => {
+            let (name, namespace) = class_name(oid, session)?;
+            let schema = if class_visible(oid, session)? {
+                None
+            } else {
+                namespace_name(namespace, session)
+            };
+            Some(qualified(schema, name))
+        }
         RegKind::Collation => named(Named::Collation),
         RegKind::Config => named(Named::Config),
         RegKind::Dictionary => named(Named::Dictionary),
-        RegKind::Namespace => namespace_name(oid).map(quote_identifier),
+        RegKind::Namespace => namespace_name(oid, session).map(quote_identifier),
         RegKind::Role => builtin::named_by_oid(Named::Role, oid).map(|r| quote_identifier(r.name)),
         RegKind::Database => DATABASES.iter().find(|d| d.1 == oid).map(|d| quote_identifier(d.0)),
-        RegKind::Type => builtin::type_by_oid(oid).map(|_| types::format_type(oid).into_owned()),
+        RegKind::Type => {
+            type_name(oid, session)?;
+            Some(type_text(oid, None, session).ok()?)
+        }
         RegKind::Proc => {
             let proc = builtin::proc_by_oid(oid)?;
             let only =
                 matches!(functions(&path(session), proc.name, None)[..], [f] if f.oid == oid);
-            let schema = if only { None } else { namespace_name(proc.namespace) };
+            let schema = if only { None } else { namespace_name(proc.namespace, session) };
             Some(qualified(schema, proc.name))
         }
         RegKind::Procedure => {
             let proc = builtin::proc_by_oid(oid)?;
-            let schema =
-                if function_visible(proc, session) { None } else { namespace_name(proc.namespace) };
+            let schema = if function_visible(proc, session) {
+                None
+            } else {
+                namespace_name(proc.namespace, session)
+            };
             let args: Vec<_> = proc.argtypes.iter().map(|&ty| types::format_type(ty)).collect();
             Some(format!("{}({})", qualified(schema, proc.name), args.join(",")))
         }
         RegKind::Oper => {
             let op = builtin::operator_by_oid(oid)?;
             let only = matches!(operators(&path(session), op.name)[..], [f] if f.oid == oid);
-            match namespace_name(op.namespace) {
+            match namespace_name(op.namespace, session) {
                 Some(schema) if !only => Some(format!("{}.{}", quote_identifier(schema), op.name)),
                 _ => Some(op.name.to_string()),
             }
@@ -239,7 +403,7 @@ fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
             let op = builtin::operator_by_oid(oid)?;
             let mut text = String::new();
             if !operator_visible(op, session)
-                && let Some(schema) = namespace_name(op.namespace)
+                && let Some(schema) = namespace_name(op.namespace, session)
             {
                 text.push_str(&quote_identifier(schema));
                 text.push('.');
@@ -292,6 +456,10 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
     let rows = |named: Named| -> Vec<(&str, u32)> {
         builtin::named(named).iter().map(|r| (r.name, r.oid)).collect()
     };
+    let mut schemas = rows(Named::Namespace);
+    if let Some(catalog) = session.catalog() {
+        schemas.extend(catalog.schemas().map(|s| (s.name.as_str(), s.oid)));
+    }
     let in_schema = |named: Named, state: SqlState, message: String| {
         let (schema, name) = deconstruct(names, session)?;
         match find(named, &spaces(schema, session), name, 0) {
@@ -301,7 +469,7 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
     };
     match kind {
         RegKind::Class => class_in(names, session, false),
-        RegKind::Namespace => simple(&rows(Named::Namespace), SqlState::UNDEFINED_SCHEMA, "schema"),
+        RegKind::Namespace => simple(&schemas, SqlState::UNDEFINED_SCHEMA, "schema"),
         RegKind::Role => simple(&rows(Named::Role), SqlState::UNDEFINED_OBJECT, "role"),
         RegKind::Database => simple(&DATABASES, SqlState::UNDEFINED_OBJECT, "database"),
         RegKind::Collation => in_schema(
@@ -376,7 +544,7 @@ fn class_in(names: &[Cow<'_, str>], session: &dyn Session, strict: bool) -> Soft
         }
     };
     let spaces = match schema {
-        Some(schema) => match namespace_oid(schema) {
+        Some(schema) => match namespace_oid(schema, session) {
             Some(ns) => vec![ns],
             None if strict => {
                 return Err(Error::new(
@@ -388,8 +556,8 @@ fn class_in(names: &[Cow<'_, str>], session: &dyn Session, strict: bool) -> Soft
         },
         None => path(session),
     };
-    if let Some(row) = find(Named::Class, &spaces, name, 0) {
-        return Ok(Ok(row.oid));
+    if let Some(oid) = find_class(&spaces, name, session) {
+        return Ok(Ok(oid));
     }
     let message = if strict {
         match schema {

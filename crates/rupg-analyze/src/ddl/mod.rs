@@ -97,6 +97,10 @@ impl Env for SchemaEnv<'_> {
     fn input(&self, ty: u32, text: &str, typmod: i32) -> Result<Value> {
         self.env.input(ty, text, typmod)
     }
+
+    fn catalog(&self) -> Option<&Catalog> {
+        self.env.catalog()
+    }
 }
 
 /// A relation that a name gives.

@@ -6,7 +6,7 @@ use rupg_common::Result;
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_types::Value;
 
-use crate::reg::{self, path};
+use crate::reg;
 use crate::{Call, Kernel, bad_value};
 
 /// The OID of `pg_catalog`.
@@ -26,11 +26,14 @@ fn named_visible(kind: Named, call: &Call<'_>, args: &[Value]) -> Result<Value> 
         .map_or(Value::Null, |row| Value::Bool(reg::visible(kind, row, call.session))))
 }
 
+/// `pg_table_is_visible`: true when the first relation with the name in the search path is this relation.
+fn table_visible(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(reg::class_visible(oid_arg(args, 0)?, call.session).map_or(Value::Null, Value::Bool))
+}
+
 /// `pg_type_is_visible`: true when the first type with the name in the search path is this type.
 fn type_visible(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let Some(row) = builtin::type_by_oid(oid_arg(args, 0)?) else { return Ok(Value::Null) };
-    let found = path(call.session).into_iter().find_map(|ns| builtin::type_by_name(ns, row.name));
-    Ok(Value::Bool(found.is_some_and(|t| t.oid == row.oid)))
+    Ok(reg::type_visible(oid_arg(args, 0)?, call.session).map_or(Value::Null, Value::Bool))
 }
 
 /// `pg_function_is_visible`.
@@ -105,7 +108,7 @@ fn shobj_description(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
-        "pg_table_is_visible" => |c, a| named_visible(Named::Class, c, a),
+        "pg_table_is_visible" => table_visible,
         "pg_collation_is_visible" => |c, a| named_visible(Named::Collation, c, a),
         "pg_conversion_is_visible" => |c, a| named_visible(Named::Conversion, c, a),
         "pg_opclass_is_visible" => |c, a| named_visible(Named::Opclass, c, a),
