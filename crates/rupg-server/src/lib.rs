@@ -32,6 +32,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
 use rupg_session::connection::{self, Connection, Next, Start};
 use rupg_session::guc::Settings;
+use rupg_session::store::Store;
 use rupg_wire::{
     CANCEL_KEY_LEN, CancelKey, Handshake, Hashes, Level, MOCK_NONCE_LEN, OutBuf, Replication,
     SCRAM_ITERATIONS, SCRAM_SALT_LEN, ScramSecret, Step, cancel_target, md5_encrypt,
@@ -127,6 +128,8 @@ struct Shared {
     log: Option<Arc<dyn Log>>,
     clock: Option<Arc<dyn Clock>>,
     entropy: Arc<dyn Entropy>,
+    /// The catalog that all the sessions share.
+    store: Arc<Store>,
     /// The cancel key and the cancel flag of each session, by process ID.
     keys: Mutex<BTreeMap<i32, Live>>,
     stopping: AtomicBool,
@@ -279,6 +282,7 @@ impl Server {
             iterations,
             log: config.log.clone(),
             clock: config.clock.clone(),
+            store: Arc::new(Store::with_tasks(tasks.clone())),
             entropy,
             keys: Mutex::new(BTreeMap::new()),
             stopping: AtomicBool::new(false),
@@ -749,6 +753,7 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
     if let Some(clock) = &shared.clock {
         connection.set_clock(Arc::clone(clock));
     }
+    connection.set_store(Arc::clone(&shared.store));
     let (_registered, key) = register(shared, protocol, connection.cancel_flag());
     connection.greet(&key, &mut wire.out);
     loop {

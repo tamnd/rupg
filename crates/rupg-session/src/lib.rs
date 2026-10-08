@@ -12,4 +12,5 @@ mod generated;
 pub mod guc;
 mod param;
 mod query;
+pub mod store;
 pub mod utility;

@@ -6,8 +6,10 @@ use std::cell::{Ref, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rupg_analyze::Params;
+use rupg_analyze::{Message, Params};
+use rupg_catalog::Catalog;
 use rupg_common::{Error, SqlState};
+use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
 use rupg_platform::os::OsClock;
 use rupg_sql::Severity;
@@ -20,6 +22,7 @@ use rupg_wire::{
 use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
 use crate::query::{self, Column, Reader, Row};
+use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
 
 mod extended;
@@ -278,7 +281,16 @@ pub struct Connection {
     /// `xactStartTimestamp` and `stmtStartTimestamp`, in microseconds since 2000-01-01 UTC.
     transaction_start: i64,
     statement_start: i64,
+    /// The OID of the role of the session.
+    role: u32,
+    /// The catalog that the sessions of the server share.
+    store: Arc<Store>,
+    /// The lock of the store and the copy of the catalog, while the transaction changes the catalog.
+    lease: Option<Lease>,
 }
+
+/// The OID of the bootstrap superuser, which owns the objects of initdb.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
 
 impl Connection {
     /// A session with the settings that [`session_settings`] gave. `protocol` is the version of the protocol that the client uses.
@@ -299,6 +311,9 @@ impl Connection {
             pid: 0,
             transaction_start: 0,
             statement_start: 0,
+            role: role_oid(start),
+            store: Arc::new(Store::new()),
+            lease: None,
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -307,6 +322,11 @@ impl Connection {
     /// Sets the clock of `now()` and the other times of the session. The clock of the operating system is the default.
     pub fn set_clock(&mut self, clock: Arc<dyn Clock>) {
         self.clock = clock;
+    }
+
+    /// Sets the catalog that the sessions of the server share. A new session has a catalog of its own.
+    pub fn set_store(&mut self, store: Arc<Store>) {
+        self.store = store;
     }
 
     /// `SetCurrentStatementStartTimestamp`: the start of a message that runs a statement.
@@ -323,7 +343,46 @@ impl Connection {
             (self.transaction_start, self.statement_start),
             &*self.clock,
             self.pid,
+            self.catalog(),
         )
+    }
+
+    /// The catalog that a statement sees: the copy of the transaction when it changed the catalog, or the catalog of the last commit.
+    fn catalog(&self) -> Arc<Catalog> {
+        match &self.lease {
+            Some(lease) => Arc::clone(&lease.catalog),
+            None => self.store.committed(),
+        }
+    }
+
+    /// Runs a statement that defines an object. The statement takes the lock of the store, which the transaction holds until it ends. After an error the changes of the statement go, but its OIDs stay used.
+    fn define(&mut self, node: &Node, notices: &mut Vec<Notice>) -> Result<Done, Error> {
+        if self.lease.is_none() {
+            self.lease = Some(self.store.lease(&self.cancel)?);
+        }
+        let mut work = Catalog::clone(&self.catalog());
+        let defined = rupg_analyze::define(node, &self.reader(), &mut work, self.role);
+        notices.extend(defined.messages.into_iter().map(|message| match message {
+            Message::Warning(error) => Notice::warning(error),
+            Message::Notice(error) => Notice { severity: Severity::Notice, error },
+        }));
+        let Some(lease) = self.lease.as_mut() else {
+            return Err(Error::internal("the lock of the catalog is gone"));
+        };
+        match defined.result {
+            Ok(()) => {
+                lease.catalog = Arc::new(work);
+                Ok(Done::Tag(match node {
+                    Node::IndexStmt(_) => CommandTag::CreateIndex,
+                    Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
+                    _ => CommandTag::CreateTable,
+                }))
+            }
+            Err(error) => {
+                Arc::make_mut(&mut lease.catalog).advance_oid(work.next_oid());
+                Err(error)
+            }
+        }
     }
 
     /// The flag that a `CancelRequest` sets. The server keeps a clone of it with the cancel key of the session.
@@ -557,6 +616,9 @@ impl Connection {
             } else if query::is_query(node) {
                 drop(self.portals.close(b""));
                 self.select(node, &mut notices)
+            } else if rupg_analyze::is_definition(node) {
+                drop(self.portals.close(b""));
+                self.define(node, &mut notices)
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
@@ -639,6 +701,11 @@ impl Connection {
         let kept = chained.then(|| self.settings.get_mut().characteristics());
         if ending != Ending::None {
             self.settings.get_mut().end(ending == Ending::Commit);
+            if let Some(lease) = self.lease.take()
+                && ending == Ending::Commit
+            {
+                lease.commit();
+            }
         }
         if kept.is_some() {
             self.settings.get_mut().start_transaction(kept);
@@ -661,6 +728,7 @@ impl Connection {
         self.xact_started = false;
         if self.transaction.abort_current() == Ending::Rollback {
             self.settings.get_mut().end(false);
+            self.lease = None;
         }
         if self.transaction.failed() {
             self.portals.retain(|_, portal| {
@@ -671,6 +739,14 @@ impl Connection {
             self.ended();
         }
     }
+}
+
+/// The OID of the role of a session. The superuser of the server is the bootstrap superuser.
+fn role_oid(start: &Start) -> u32 {
+    if start.superuser {
+        return BOOTSTRAP_SUPERUSER;
+    }
+    builtin::roles().iter().find(|role| role.name == start.user).map_or(0, |role| role.oid)
 }
 
 /// The position of a byte offset in characters, from 1, as the field `P` gives it.
@@ -1265,6 +1341,88 @@ mod tests {
             send(&mut c, &query("SET TimeZone = 'Europe/Paris'; SELECT now()::text")),
             ["SET", "ERROR 0A000 the time zone \"Europe/Paris\" is not supported yet", "ready I"]
         );
+    }
+
+    /// `CREATE SCHEMA`, `CREATE TABLE` and `CREATE INDEX`, with the messages of PostgreSQL 19 for the same statements.
+    fn definitions_cases() {
+        let (mut c, _) = connect();
+        assert_eq!(send(&mut c, &query("CREATE SCHEMA s")), ["CREATE SCHEMA", "ready I"]);
+        assert_eq!(
+            send(&mut c, &query("SET search_path = s, public; SELECT current_schemas(false)")),
+            [
+                "SET",
+                "columns current_schemas",
+                "row {s,public}",
+                "SELECT 1",
+                "search_path=s, public",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            send(&mut c, &query("CREATE TABLE t (a int PRIMARY KEY)")),
+            ["CREATE TABLE", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("CREATE TABLE t (a int)")),
+            ["ERROR 42P07 relation \"t\" already exists", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("CREATE TABLE IF NOT EXISTS t (a int)")),
+            ["NOTICE 42P07 relation \"t\" already exists, skipping", "CREATE TABLE", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("BEGIN; CREATE TABLE u (a int); ROLLBACK")),
+            ["BEGIN", "CREATE TABLE", "ROLLBACK", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("CREATE TABLE u (b nosuch)")),
+            ["ERROR 42704 type \"nosuch\" does not exist at 19", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("CREATE TABLE u (a int); CREATE INDEX ON u (a)")),
+            ["CREATE TABLE", "CREATE INDEX", "ready I"]
+        );
+        let catalog = c.store.committed();
+        let names: Vec<&str> = catalog.relations().map(|r| r.name.as_str()).collect();
+        assert_eq!(names, ["t", "t_pkey", "u", "u_a_idx"]);
+        assert_eq!(
+            send(&mut c, &query("BEGIN; CREATE TABLE w (a int)")),
+            ["BEGIN", "CREATE TABLE", "ready T"]
+        );
+        assert_eq!(
+            send(&mut c, &query("CREATE TABLE w (a int)")),
+            ["ERROR 42P07 relation \"w\" already exists", "ready E"]
+        );
+        assert_eq!(
+            send(&mut c, &query("CREATE TABLE x (a int)")),
+            [
+                "ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block",
+                "ready E"
+            ]
+        );
+        assert_eq!(send(&mut c, &query("ROLLBACK")), ["ROLLBACK", "ready I"]);
+        assert_eq!(send(&mut c, &query("CREATE TABLE w (a int)")), ["CREATE TABLE", "ready I"]);
+        assert_eq!(
+            send(&mut c, &run("CREATE TABLE pg_catalog.z (a int)")),
+            [
+                "ParseComplete",
+                "BindComplete",
+                "ERROR 42501 permission denied to create \"pg_catalog.z\""
+            ]
+        );
+        assert_eq!(send(&mut c, &sync()), ["ready I"]);
+        // A second session of the same server sees the catalog of the last commit.
+        let (mut d, _) = connect();
+        d.set_store(Arc::clone(&c.store));
+        assert_eq!(
+            send(&mut d, &query("CREATE TABLE s.t (a int)")),
+            ["ERROR 42P07 relation \"t\" already exists", "ready I"]
+        );
+    }
+
+    #[test]
+    fn definitions() {
+        big_stack(definitions_cases);
     }
 
     #[test]

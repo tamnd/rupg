@@ -4,8 +4,10 @@
 
 use std::cell::{Ref, RefCell};
 use std::rc::Rc;
+use std::sync::Arc;
 
 use rupg_analyze::{Env, Params};
+use rupg_catalog::Catalog;
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_platform::Clock;
@@ -81,6 +83,8 @@ pub(crate) struct Reader<'a> {
     pub(crate) statement_start: i64,
     pub(crate) clock: &'a dyn Clock,
     pub(crate) pid: i32,
+    /// The catalog that the statement sees: the catalog of the last commit, or the copy of the transaction that changes it.
+    pub(crate) catalog: Arc<Catalog>,
     /// The text of `TimeZone` and its zone, or the name of a zone whose rules the engine does not have yet. A call of `set_config` can change the setting, so the zone is made again when the text changes.
     zone: RefCell<(String, ZoneOf)>,
 }
@@ -96,6 +100,7 @@ impl<'a> Reader<'a> {
         times: (i64, i64),
         clock: &'a dyn Clock,
         pid: i32,
+        catalog: Arc<Catalog>,
     ) -> Reader<'a> {
         let name = settings.borrow().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
         let zone = fixed_zone(&name).map(Rc::new);
@@ -107,6 +112,7 @@ impl<'a> Reader<'a> {
             statement_start: times.1,
             clock,
             pid,
+            catalog,
             zone: RefCell::new((name, zone)),
         }
     }
@@ -117,18 +123,27 @@ impl<'a> Reader<'a> {
     }
 
     /// The schemas of `search_path` that exist, in order, without the implicit schemas, as `recomputeNamespacePath` finds them. `$user` names the schema of the user, and `pg_temp` the temporary schema, which do not exist yet.
-    fn path(&self) -> Vec<(&'static str, u32)> {
+    fn path(&self) -> Vec<(String, u32)> {
         let text = self.settings().get("search_path").unwrap_or_default();
-        let mut path: Vec<(&'static str, u32)> = Vec::new();
+        let mut path: Vec<(String, u32)> = Vec::new();
         for name in guc::split_identifiers(&text, ',').unwrap_or_default() {
             let name = if name == "$user" { self.user.to_owned() } else { name };
-            if let Some(&found) = SCHEMAS.iter().find(|(n, _)| *n == name)
-                && !path.contains(&found)
+            if let Some(oid) = self.schema(&name)
+                && !path.iter().any(|&(_, o)| o == oid)
             {
-                path.push(found);
+                path.push((name, oid));
             }
         }
         path
+    }
+
+    /// The OID of a built-in schema or a schema of the catalog.
+    fn schema(&self, name: &str) -> Option<u32> {
+        SCHEMAS
+            .iter()
+            .find(|(n, _)| *n == name)
+            .map(|(_, oid)| *oid)
+            .or_else(|| self.catalog.schema_by_name(name).map(|s| s.oid))
     }
 }
 
@@ -245,7 +260,7 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn schemas(&self) -> Vec<String> {
-        self.path().into_iter().map(|(name, _)| name.to_owned()).collect()
+        self.path().into_iter().map(|(name, _)| name).collect()
     }
 
     fn backend_pid(&self) -> i32 {
@@ -277,7 +292,7 @@ impl Env for Reader<'_> {
     }
 
     fn namespace(&self, name: &str) -> Option<u32> {
-        SCHEMAS.iter().find(|(n, _)| *n == name).map(|(_, oid)| *oid)
+        self.schema(name)
     }
 
     fn database(&self) -> String {
