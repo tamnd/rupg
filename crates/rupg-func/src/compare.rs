@@ -316,9 +316,26 @@ pub(crate) fn by_operator(name: &str, left: u32, right: u32) -> Option<Kernel> {
     })
 }
 
+/// `xideq` and `xidneq` of `xid.c`: the values are equal when the numbers are equal.
+fn xid_eq(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Oid(a), Value::Oid(b)] = args else { return Err(bad_value()) };
+    Ok(Value::Bool(a == b))
+}
+
+fn xid_ne(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Oid(a), Value::Oid(b)] = args else { return Err(bad_value()) };
+    Ok(Value::Bool(a != b))
+}
+
 /// The kernel of `larger`, `smaller` and the B-tree `cmp` functions.
 pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     let [left, right] = proc.argtypes else { return None };
+    // `xid` has `=` and `<>` and no order, so it is not in a family.
+    match src {
+        "xideq" => return Some(xid_eq),
+        "xidneq" => return Some(xid_ne),
+        _ => {}
+    }
     if !comparable(*left, *right) {
         return None;
     }

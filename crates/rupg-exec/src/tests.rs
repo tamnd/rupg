@@ -460,6 +460,13 @@ fn aggregates_and_groups() {
         assert_eq!(ordered("SELECT 1 HAVING false"), [""; 0]);
         assert_eq!(one("SELECT 1 HAVING true"), "1");
         assert_eq!(error("SELECT sum(1e308::float8) FROM pg_class WHERE oid < 10000"), "22003");
+        // `xid` has `=` and no order, so the groups use only `xideq`. The catalog of rupg has other values of `relfrozenxid` than an oracle after `initdb`, so the test compares two forms of the same count.
+        assert_eq!(one("SELECT relfrozenxid = relfrozenxid FROM pg_class WHERE oid = 1259"), "t");
+        assert_eq!(
+            ordered("SELECT count(*) FROM pg_class WHERE oid < 10000 GROUP BY relfrozenxid").len(),
+            ordered("SELECT DISTINCT relfrozenxid::text FROM pg_class WHERE oid < 10000").len()
+        );
+        assert_eq!(error("SELECT count(DISTINCT relfrozenxid) FROM pg_class"), "42883");
         assert_eq!(
             rows("SELECT count(*) FROM pg_class GROUP BY relfrozenxid, relname::text::varbit"),
             Err(("0A000".to_string(), "could not implement GROUP BY".to_string()))
