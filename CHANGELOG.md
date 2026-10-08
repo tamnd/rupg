@@ -4,6 +4,16 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.2 (2026-10-08)
+
+A patch release on the way to M2. A session can now define tables and see them in the catalogs.
+
+### Added
+
+- A session runs `CREATE SCHEMA`, `CREATE TABLE` and `CREATE INDEX` (#177). All the sessions of a server share one catalog. A transaction that defines an object holds a lock on the catalog until it ends, and its changes become visible to the other sessions at `COMMIT`. At a rollback the changes go, but the OIDs stay used, as in PostgreSQL. The notices go to the client as `NoticeResponse`.
+- The catalog tables `pg_namespace`, `pg_class`, `pg_type`, `pg_attribute`, `pg_attrdef`, `pg_constraint`, `pg_index`, `pg_sequence` and `pg_depend` show the objects that a user makes (#178). `CREATE TABLE` makes the TOAST table and its index with the OIDs of PostgreSQL. The columns of type `pg_node_tree` hold the analyzer form of the expression, not the PostgreSQL node text.
+- `xid` and `cid` have text input, and `xideqint4` and `xidneqint4` work (#178).
+
 ## 0.1.1 (2026-10-08)
 
 A patch release on the way to M2. The SQL that a session can run is the same as in 0.1.0.
