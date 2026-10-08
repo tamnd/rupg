@@ -1,10 +1,11 @@
 //! The choice of a function or an operator for the types of the arguments, as `parse_func.c` and `parse_oper.c` make it, with the errors of PostgreSQL when no function fits or when more than one fits.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin::{self, OperatorRow, ProcRow};
+use rupg_pgcatalog::builtin::{self, AggregateRow, OperatorRow};
 use rupg_types::oid;
 
 use crate::Analyzer;
+use crate::agg::Parts;
 use crate::coerce::{AtOpt, Context, Path, can_coerce, find_path};
 use crate::expr::{Expr, ExprKind, Func, FuncForm};
 use crate::poly;
@@ -43,6 +44,80 @@ enum Detail {
 }
 
 /// `funcname_signature_string`: the name and the argument types, such as `lower(integer)`.
+/// The checks of `ParseFuncOrColumn` of the parts of a call that only an aggregate or a window function can have.
+fn check_parts(
+    parts: &Parts<'_>,
+    detail: &Detail,
+    prokind: u8,
+    aggregate: Option<&AggregateRow>,
+    name: &str,
+    at: Option<usize>,
+) -> Result<()> {
+    let wrong = |message: String| Err(Error::new(SqlState::WRONG_OBJECT_TYPE, message).at_opt(at));
+    let plain = match detail {
+        Detail::Normal(_) => prokind == b'f',
+        Detail::Coercion(_) => true,
+        _ => false,
+    };
+    if plain {
+        if parts.star {
+            return wrong(format!("{name}(*) specified, but {name} is not an aggregate function"));
+        }
+        if parts.distinct {
+            return wrong(format!("DISTINCT specified, but {name} is not an aggregate function"));
+        }
+        if parts.within_group {
+            return wrong(format!(
+                "WITHIN GROUP specified, but {name} is not an aggregate function"
+            ));
+        }
+        if !parts.order.is_empty() {
+            return wrong(format!("ORDER BY specified, but {name} is not an aggregate function"));
+        }
+        if parts.filter.is_some() {
+            return wrong(format!("FILTER specified, but {name} is not an aggregate function"));
+        }
+        if parts.over {
+            return wrong(format!(
+                "OVER specified, but {name} is not a window function nor an aggregate function"
+            ));
+        }
+        if parts.null_treatment {
+            return wrong(format!(
+                "RESPECT/IGNORE NULLS specified, but {name} is not a window function"
+            ));
+        }
+    } else if let Some(row) = aggregate {
+        if row.kind == b'o' || row.kind == b'h' {
+            if !parts.within_group {
+                return wrong(format!("WITHIN GROUP is required for ordered-set aggregate {name}"));
+            }
+            if parts.over {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("OVER is not supported for ordered-set aggregate {name}"),
+                )
+                .at_opt(at));
+            }
+        } else if parts.within_group {
+            return wrong(format!(
+                "{name} is not an ordered-set aggregate, so it cannot have WITHIN GROUP"
+            ));
+        }
+        if parts.null_treatment {
+            return wrong("aggregate functions do not accept RESPECT/IGNORE NULLS".into());
+        }
+    } else if prokind == b'w' {
+        if !parts.over {
+            return wrong(format!("window function {name} requires an OVER clause"));
+        }
+        if parts.within_group {
+            return wrong(format!("window function {name} cannot have WITHIN GROUP"));
+        }
+    }
+    Ok(())
+}
+
 fn signature(name: &str, args: &[u32]) -> String {
     let args: Vec<String> = args.iter().map(|&t| types::name(t)).collect();
     format!("{name}({})", args.join(", "))
@@ -341,6 +416,7 @@ impl Analyzer<'_> {
         names: &[&str],
         args: Vec<Expr>,
         variadic_keyword: bool,
+        parts: Option<Parts<'_>>,
         at: Option<usize>,
     ) -> Result<Expr> {
         if args.len() > FUNC_MAX_ARGS {
@@ -353,6 +429,26 @@ impl Analyzer<'_> {
         let inputs: Vec<u32> = args.iter().map(|a| a.ty).collect();
         let (detail, flags) = self.func_detail(names, &args, &inputs, !variadic_keyword, at)?;
         let name = names.join(".");
+        let proc = match &detail {
+            Detail::Normal(c) => builtin::proc_by_oid(c.oid),
+            _ => None,
+        };
+        let prokind = proc.map_or(b'f', |p| p.kind);
+        if prokind == b'p' {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("{} is a procedure", signature(&name, &inputs)),
+            )
+            .with_hint("To call a procedure, use CALL.")
+            .at_opt(at));
+        }
+        let aggregate = match (&detail, prokind) {
+            (Detail::Normal(_), b'a') => builtin::aggregate(proc.map_or(0, |p| p.oid)),
+            _ => None,
+        };
+        if let Some(parts) = &parts {
+            check_parts(parts, &detail, prokind, aggregate, &name, at)?;
+        }
         let candidate = match detail {
             Detail::Coercion(target) => {
                 let arg = args.into_iter().next().expect("one argument");
@@ -368,6 +464,18 @@ impl Analyzer<'_> {
                 .at_opt(at));
             }
             Detail::NotFound => {
+                if let Some(parts) = &parts
+                    && parts.order.len() > 1
+                    && !parts.within_group
+                {
+                    return Err(Error::new(
+                        SqlState::UNDEFINED_FUNCTION,
+                        format!("function {} does not exist", signature(&name, &inputs)),
+                    )
+                    .with_detail("No aggregate function matches the given name and argument types.")
+                    .with_hint("Perhaps you misplaced ORDER BY; ORDER BY must appear after all regular arguments of the aggregate.")
+                    .at_opt(at));
+                }
                 let error = Error::new(
                     SqlState::UNDEFINED_FUNCTION,
                     format!("function {} does not exist", signature(&name, &inputs)),
@@ -396,7 +504,6 @@ impl Analyzer<'_> {
             Detail::Normal(c) => c,
         };
         let proc = builtin::proc_by_oid(candidate.oid).expect("candidate in pg_proc");
-        self.check_kind(proc, &name, &inputs, at)?;
         let mut declared = candidate.args.clone();
         let result = poly::resolve(&inputs, &mut declared, proc.rettype)?;
         self.check_internal(&declared, result, at)?;
@@ -432,6 +539,40 @@ impl Analyzer<'_> {
                 .at_opt(last.place()));
             }
         }
+        let over = parts.as_ref().is_some_and(|p| p.over);
+        if let (Some(row), Some(parts)) = (aggregate, parts)
+            && !over
+        {
+            if args.len() > FUNC_MAX_ARGS - 1 {
+                return Err(Error::new(
+                    SqlState::TOO_MANY_ARGUMENTS,
+                    format!("aggregates cannot have more than {} arguments", FUNC_MAX_ARGS - 1),
+                )
+                .at_opt(at));
+            }
+            if args.is_empty() && !parts.star && !parts.within_group {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("{name}(*) must be used to call a parameterless aggregate function"),
+                )
+                .at_opt(at));
+            }
+            if row.kind != b'n' {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("ordered-set aggregate {name} is not supported yet"),
+                )
+                .at_opt(at));
+            }
+            return self.aggregate_call(proc.oid, args, parts, variadic, result, at);
+        }
+        if over || prokind != b'f' {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a window function is not supported yet",
+            )
+            .at_opt(at));
+        }
         if proc.retset {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
@@ -448,35 +589,6 @@ impl Analyzer<'_> {
             typmod: -1,
             location: at,
         })
-    }
-
-    /// The checks of the kind of the function: an aggregate, a window function and a procedure need more than this analyzer gives yet.
-    fn check_kind(
-        &self,
-        proc: &ProcRow,
-        name: &str,
-        inputs: &[u32],
-        at: Option<usize>,
-    ) -> Result<()> {
-        match proc.kind {
-            b'f' => Ok(()),
-            b'p' => Err(Error::new(
-                SqlState::WRONG_OBJECT_TYPE,
-                format!("{} is a procedure", signature(name, inputs)),
-            )
-            .with_hint("To call a procedure, use CALL.")
-            .at_opt(at)),
-            b'a' => Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                format!("aggregate function {} is not supported yet", signature(name, inputs)),
-            )
-            .at_opt(at)),
-            _ => Err(Error::new(
-                SqlState::WRONG_OBJECT_TYPE,
-                format!("window function {name} requires an OVER clause"),
-            )
-            .at_opt(at)),
-        }
     }
 
     /// The errors of a function that takes or gives `internal`.

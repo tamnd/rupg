@@ -135,6 +135,29 @@ pub struct AmopRow {
     pub method: u32,
 }
 
+/// A row of `pg_aggregate`.
+#[derive(Debug)]
+pub struct AggregateRow {
+    /// `aggfnoid`: the function of the aggregate in `pg_proc`.
+    pub fnoid: u32,
+    /// `aggkind`: `n` for a normal aggregate, `o` for an ordered-set aggregate or `h` for a hypothetical-set aggregate.
+    pub kind: u8,
+    /// `aggnumdirectargs`: the number of direct arguments of an ordered-set aggregate.
+    pub ndirect: i16,
+    /// `aggtransfn`: the transition function.
+    pub transfn: u32,
+    /// `aggfinalfn`: the final function, or 0.
+    pub finalfn: u32,
+    /// `aggfinalextra`: true when the final function gets a null for each argument of the aggregate after the state.
+    pub finalextra: bool,
+    /// `aggsortop`: the sort operator of `min` and `max`, or 0.
+    pub sortop: u32,
+    /// `aggtranstype`: the type of the state.
+    pub transtype: u32,
+    /// `agginitval`: the text of the first state, or `None` when the first state is null.
+    pub initval: Option<&'static str>,
+}
+
 struct Builtin {
     types: Vec<TypeRow>,
     procs: Vec<ProcRow>,
@@ -151,6 +174,9 @@ struct Builtin {
     cast_pair: HashMap<(u32, u32), usize>,
     amop_member: HashMap<(u32, u32, u32, i16), usize>,
     amop_operator: HashMap<u32, Vec<usize>>,
+    aggregates: Vec<AggregateRow>,
+    aggregate_fn: HashMap<u32, usize>,
+    primary_keys: HashMap<u32, Vec<i16>>,
 }
 
 static BUILTIN: LazyLock<Builtin> = LazyLock::new(Builtin::load);
@@ -235,6 +261,7 @@ impl Builtin {
         let casts = load_casts();
         let opclasses = load_opclasses();
         let amops = load_amops();
+        let aggregates = load_aggregates();
         let mut amop_member = HashMap::new();
         let mut amop_operator: HashMap<u32, Vec<usize>> = HashMap::new();
         for (i, a) in amops.iter().enumerate() {
@@ -265,6 +292,9 @@ impl Builtin {
             cast_pair: casts.iter().enumerate().map(|(i, c)| ((c.source, c.target), i)).collect(),
             amop_member,
             amop_operator,
+            aggregate_fn: aggregates.iter().enumerate().map(|(i, a)| (a.fnoid, i)).collect(),
+            aggregates,
+            primary_keys: load_primary_keys(),
             types,
             procs,
             operators,
@@ -442,6 +472,49 @@ fn load_amops() -> Vec<AmopRow> {
         .collect()
 }
 
+fn load_aggregates() -> Vec<AggregateRow> {
+    let r = Rows::new("pg_aggregate");
+    let (fnoid, kind, ndirect) = (r.oid("aggfnoid"), r.char("aggkind"), r.int2("aggnumdirectargs"));
+    let (transfn, finalfn, finalextra) =
+        (r.oid("aggtransfn"), r.oid("aggfinalfn"), r.bool("aggfinalextra"));
+    let (sortop, transtype) = (r.oid("aggsortop"), r.oid("aggtranstype"));
+    (0..r.catalog.len)
+        .map(|i| AggregateRow {
+            fnoid: fnoid[i],
+            kind: kind[i],
+            ndirect: ndirect[i],
+            transfn: transfn[i],
+            finalfn: finalfn[i],
+            finalextra: finalextra[i],
+            sortop: sortop[i],
+            transtype: transtype[i],
+            initval: r.optional("agginitval", i, |v| match v {
+                Values::Text(v) => Some(*v),
+                _ => None,
+            }),
+        })
+        .collect()
+}
+
+/// The columns of the primary key of each table that has one that the database checks at once, from `pg_constraint`.
+fn load_primary_keys() -> HashMap<u32, Vec<i16>> {
+    let r = Rows::new("pg_constraint");
+    let (relid, kind, deferrable) = (r.oid("conrelid"), r.char("contype"), r.bool("condeferrable"));
+    let mut keys = HashMap::new();
+    for i in 0..r.catalog.len {
+        if kind[i] != b'p' || deferrable[i] {
+            continue;
+        }
+        let columns = r.optional("conkey", i, |v| match v {
+            Values::TextArray(v) => Some(*v),
+            _ => None,
+        });
+        let columns = columns.unwrap_or_default().iter().map(|c| c.parse().expect("an attnum"));
+        keys.insert(relid[i], columns.collect());
+    }
+    keys
+}
+
 /// Every built-in type, in the order of `pg_type.dat`.
 pub fn types() -> &'static [TypeRow] {
     &BUILTIN.types
@@ -517,6 +590,16 @@ pub fn amops_of_operator(operator: u32) -> impl Iterator<Item = &'static AmopRow
     b.amop_operator.get(&operator).into_iter().flatten().map(|&i| &b.amops[i])
 }
 
+/// The row of `pg_aggregate` of the aggregate function with this OID.
+pub fn aggregate(fnoid: u32) -> Option<&'static AggregateRow> {
+    BUILTIN.aggregate_fn.get(&fnoid).map(|&i| &BUILTIN.aggregates[i])
+}
+
+/// The attribute numbers of the primary key of the table, when the key is not deferrable, as `check_functional_grouping` finds them.
+pub fn primary_key(relid: u32) -> Option<&'static [i16]> {
+    BUILTIN.primary_keys.get(&relid).map(Vec::as_slice)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -544,5 +627,15 @@ mod tests {
         assert_eq!(set_config.volatile, b'v');
         let keywords = procs_named("pg_get_keywords").next().unwrap().argnames.unwrap().to_vec();
         assert_eq!(keywords, ["word", "catcode", "barelabel", "catdesc", "baredesc"]);
+        let count = procs_named("count").find(|p| p.argtypes.is_empty()).unwrap();
+        let row = aggregate(count.oid).unwrap();
+        assert_eq!(
+            (row.kind, proc_by_oid(row.transfn).unwrap().src, row.initval),
+            (b'n', "int8inc", Some("0"))
+        );
+        let max = procs_named("max").find(|p| p.argtypes == [23]).unwrap();
+        assert_eq!(aggregate(max.oid).unwrap().initval, None);
+        // pg_class has the primary key (oid).
+        assert_eq!(primary_key(1259), Some(&[1][..]));
     }
 }

@@ -1,11 +1,12 @@
-//! `ORDER BY`, `DISTINCT`, `DISTINCT ON`, `LIMIT` and `OFFSET`, as `transformSortClause`, `transformDistinctClause`, `transformDistinctOnClause` and `transformLimitClause` of `parse_clause.c` make them.
+//! `ORDER BY`, `GROUP BY`, `DISTINCT`, `DISTINCT ON`, `LIMIT` and `OFFSET`, as `transformSortClause`, `transformGroupClause`, `transformDistinctClause`, `transformDistinctOnClause` and `transformLimitClause` of `parse_clause.c` make them.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_sql::nodes::{List, Node, SortBy, SortByDir, SortByNulls};
+use rupg_sql::nodes::{CoercionForm, GroupingSetKind, List, Node, SortBy, SortByDir, SortByNulls};
 use rupg_types::oid;
 
 use crate::Analyzer;
+use crate::agg::{Kind, grouping_error};
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind};
 use crate::select::Target;
@@ -13,7 +14,7 @@ use crate::typcache::{self, is_binary_coercible};
 use crate::typename::place;
 use crate::types;
 
-/// An item of `ORDER BY`, `DISTINCT` or `DISTINCT ON`, as `SortGroupClause`.
+/// An item of `ORDER BY`, `GROUP BY`, `DISTINCT` or `DISTINCT ON`, as `SortGroupClause`.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SortGroup {
     /// The index of the column in [`crate::Query::targets`].
@@ -28,22 +29,6 @@ pub struct SortGroup {
     pub nulls_first: bool,
     /// True when the `=` operator can use a hash table, as `op_hashjoinable` gives it.
     pub hashable: bool,
-}
-
-/// The parts of a query that `ParseExprKindName` names in an error.
-#[derive(Clone, Copy, PartialEq, Eq)]
-enum Clause {
-    OrderBy,
-    DistinctOn,
-}
-
-impl Clause {
-    fn name(self) -> &'static str {
-        match self {
-            Clause::OrderBy => "ORDER BY",
-            Clause::DistinctOn => "DISTINCT ON",
-        }
-    }
 }
 
 /// `leftmostLoc`.
@@ -93,15 +78,16 @@ fn invalid_reference(message: String, at: Option<usize>) -> Error {
 }
 
 impl Analyzer<'_> {
-    /// `findTargetlistEntrySQL92`: the column of the select list that an item of `ORDER BY` or `DISTINCT ON` names. A bare name is an output column, and an integer is a position in the select list. Any other expression goes to [`Analyzer::target_sql99`].
+    /// `findTargetlistEntrySQL92`: the column of the select list that an item of `ORDER BY`, `GROUP BY` or `DISTINCT ON` names. A bare name is an output column, and an integer is a position in the select list. In `GROUP BY` a column of `FROM` comes before an output column. Any other expression goes to [`Analyzer::target_sql99`].
     fn target_sql92(
         &mut self,
         node: Option<&Node>,
         targets: &mut Vec<Target>,
-        clause: Clause,
+        kind: Kind,
     ) -> Result<usize> {
         if let Some(Node::ColumnRef(c)) = node
             && let [Some(Node::String(name))] = c.fields.as_slice()
+            && (kind != Kind::GroupBy || self.column_by_name(name, place(c.location))?.is_none())
         {
             let mut found: Option<usize> = None;
             for (i, target) in targets.iter().enumerate() {
@@ -112,7 +98,7 @@ impl Analyzer<'_> {
                     Some(first) if !targets[first].expr.same(&target.expr) => {
                         return Err(Error::new(
                             SqlState::AMBIGUOUS_COLUMN,
-                            format!("{} \"{name}\" is ambiguous", clause.name()),
+                            format!("{} \"{name}\" is ambiguous", kind.name()),
                         )
                         .at_opt(place(c.location)));
                     }
@@ -121,6 +107,7 @@ impl Analyzer<'_> {
                 }
             }
             if let Some(i) = found {
+                self.check_sql92(&targets[i], kind)?;
                 return Ok(i);
             }
         }
@@ -129,7 +116,7 @@ impl Analyzer<'_> {
             let Some(Node::Integer(position)) = c.val.as_ref().filter(|_| !c.isnull) else {
                 return Err(Error::new(
                     SqlState::SYNTAX_ERROR,
-                    format!("non-integer constant in {}", clause.name()),
+                    format!("non-integer constant in {}", kind.name()),
                 )
                 .at_opt(at));
             };
@@ -138,21 +125,41 @@ impl Analyzer<'_> {
             for (i, _) in visible {
                 seen += 1;
                 if seen == *position {
+                    self.check_sql92(&targets[i], kind)?;
                     return Ok(i);
                 }
             }
             return Err(invalid_reference(
-                format!("{} position {position} is not in select list", clause.name()),
+                format!("{} position {position} is not in select list", kind.name()),
                 at,
             ));
         }
-        self.target_sql99(node, targets)
+        self.target_sql99(node, targets, kind)
     }
 
-    /// `findTargetlistEntrySQL99`: the column of the select list with the same expression, or a new junk column that the result does not show.
-    fn target_sql99(&mut self, node: Option<&Node>, targets: &mut Vec<Target>) -> Result<usize> {
-        let expr = self.transform(node)?;
-        if let Some(i) = targets.iter().position(|t| t.expr.same(&expr)) {
+    /// `checkTargetlistEntrySQL92`: an item of `GROUP BY` that names a column of the select list cannot name an aggregate call.
+    fn check_sql92(&self, target: &Target, kind: Kind) -> Result<()> {
+        if kind == Kind::GroupBy
+            && self.has_aggs
+            && let Some(agg) = target.expr.first_agg()
+        {
+            return Err(grouping_error(
+                format!("aggregate functions are not allowed in {}", kind.name()),
+                agg.location,
+            ));
+        }
+        Ok(())
+    }
+
+    /// `findTargetlistEntrySQL99`: the column of the select list with the same expression, or a new junk column that the result does not show. A cast that the analyzer added to a column does not count.
+    fn target_sql99(
+        &mut self,
+        node: Option<&Node>,
+        targets: &mut Vec<Target>,
+        kind: Kind,
+    ) -> Result<usize> {
+        let expr = self.with_kind(kind, |a| a.transform(node))?;
+        if let Some(i) = targets.iter().position(|t| t.expr.strip_implicit().same(&expr)) {
             return Ok(i);
         }
         targets.push(Target { name: String::new(), expr, origin: None, junk: true });
@@ -168,21 +175,67 @@ impl Analyzer<'_> {
         Ok(())
     }
 
-    /// `transformSortClause`.
+    /// `transformSortClause` of the `ORDER BY` of a query.
     pub(crate) fn sort_clause(
         &mut self,
         list: &List,
         targets: &mut Vec<Target>,
+    ) -> Result<Vec<SortGroup>> {
+        self.sort_list(list, targets, false)
+    }
+
+    /// `transformSortClause` of the `ORDER BY` of an aggregate call, which uses the rules of SQL99 only.
+    pub(crate) fn sort_clause_sql99(
+        &mut self,
+        list: &List,
+        targets: &mut Vec<Target>,
+    ) -> Result<Vec<SortGroup>> {
+        self.sort_list(list, targets, true)
+    }
+
+    fn sort_list(
+        &mut self,
+        list: &List,
+        targets: &mut Vec<Target>,
+        sql99: bool,
     ) -> Result<Vec<SortGroup>> {
         let mut sort = Vec::new();
         for item in list {
             let Some(Node::SortBy(by)) = item else {
                 return Err(Error::internal("an item of ORDER BY that is not SortBy"));
             };
-            let target = self.target_sql92(by.node.as_ref(), targets, Clause::OrderBy)?;
+            let target = if sql99 {
+                self.target_sql99(by.node.as_ref(), targets, Kind::OrderBy)?
+            } else {
+                self.target_sql92(by.node.as_ref(), targets, Kind::OrderBy)?
+            };
             self.add_sort(by, target, targets, &mut sort)?;
         }
         Ok(sort)
+    }
+
+    /// `transformGroupClause`: the items of `GROUP BY`, and true when the list has the empty grouping set `()`. An item that is also an item of `ORDER BY` takes the operator of `ORDER BY`. The same item comes once.
+    pub(crate) fn group_clause(
+        &mut self,
+        list: &List,
+        targets: &mut Vec<Target>,
+        sort: &[SortGroup],
+    ) -> Result<(Vec<SortGroup>, bool)> {
+        let mut flat = Vec::new();
+        let empty_set = flatten_groups(list, &mut flat)?;
+        let mut result = Vec::new();
+        for node in flat {
+            let target = self.target_sql92(node, targets, Kind::GroupBy)?;
+            if result.iter().any(|g: &SortGroup| g.target == target) {
+                continue;
+            }
+            if let Some(item) = sort.iter().find(|s| s.target == target) {
+                result.push(item.clone());
+                continue;
+            }
+            self.add_group(target, targets, &mut result, raw_location(node))?;
+        }
+        Ok((result, empty_set))
     }
 
     /// `addTargetToSortList`.
@@ -298,20 +351,23 @@ impl Analyzer<'_> {
         Ok(())
     }
 
-    /// `transformDistinctClause`: the items of `ORDER BY`, then the other columns of the select list.
+    /// `transformDistinctClause`: the items of `ORDER BY`, then the other columns of the select list or the other arguments of the aggregate call.
     pub(crate) fn distinct_clause(
         &mut self,
         targets: &mut [Target],
         sort: &[SortGroup],
+        is_agg: bool,
     ) -> Result<Vec<SortGroup>> {
         let mut list = Vec::new();
         for item in sort {
             let target = &targets[item.target];
             if target.junk {
-                return Err(invalid_reference(
-                    "for SELECT DISTINCT, ORDER BY expressions must appear in select list".into(),
-                    target.expr.place(),
-                ));
+                let message = if is_agg {
+                    "in an aggregate with DISTINCT, ORDER BY expressions must appear in argument list"
+                } else {
+                    "for SELECT DISTINCT, ORDER BY expressions must appear in select list"
+                };
+                return Err(invalid_reference(message.into(), target.expr.place()));
             }
             list.push(item.clone());
         }
@@ -322,10 +378,12 @@ impl Analyzer<'_> {
             }
         }
         if list.is_empty() {
-            return Err(Error::new(
-                SqlState::SYNTAX_ERROR,
-                "SELECT DISTINCT must have at least one column",
-            ));
+            let message = if is_agg {
+                "an aggregate with DISTINCT must have at least one argument"
+            } else {
+                "SELECT DISTINCT must have at least one column"
+            };
+            return Err(Error::new(SqlState::SYNTAX_ERROR, message));
         }
         Ok(list)
     }
@@ -339,7 +397,7 @@ impl Analyzer<'_> {
     ) -> Result<Vec<SortGroup>> {
         let mut refs = Vec::with_capacity(on.len());
         for node in on {
-            refs.push(self.target_sql92(node.as_ref(), targets, Clause::DistinctOn)?);
+            refs.push(self.target_sql92(node.as_ref(), targets, Kind::DistinctOn)?);
         }
         let mismatch = |at| {
             invalid_reference(
@@ -396,6 +454,30 @@ impl Analyzer<'_> {
         }
         Ok(Some(expr))
     }
+}
+
+/// `flatten_grouping_sets`: the items of `GROUP BY` with the items of a row in parentheses as items of their own. The result is true when the list has the empty grouping set `()`, which adds no item. The analyzer does not take the other grouping sets yet.
+fn flatten_groups<'a>(list: &'a List, flat: &mut Vec<Option<&'a Node>>) -> Result<bool> {
+    let mut empty_set = false;
+    for node in list {
+        match node {
+            Some(Node::RowExpr(row)) if row.row_format == CoercionForm::COERCE_IMPLICIT_CAST => {
+                empty_set |= flatten_groups(&row.args, flat)?;
+            }
+            Some(Node::GroupingSet(set)) if set.kind == GroupingSetKind::GROUPING_SET_EMPTY => {
+                empty_set = true;
+            }
+            Some(Node::GroupingSet(set)) => {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "GROUPING SETS, ROLLUP and CUBE are not supported yet",
+                )
+                .at_opt(place(set.location)));
+            }
+            node => flat.push(node.as_ref()),
+        }
+    }
+    Ok(empty_set)
 }
 
 /// The function of an operator, or 0.

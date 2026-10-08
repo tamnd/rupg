@@ -5,6 +5,7 @@ use rupg_sql::nodes::{Alias, ColumnRef, JoinExpr, JoinType, Node, RangeVar};
 use rupg_types::oid;
 
 use crate::Analyzer;
+use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind, Var};
 use crate::typename::place;
@@ -402,7 +403,7 @@ impl Analyzer<'_> {
         } else if let Some(quals) = &j.quals {
             // transformJoinOnClause: the condition sees only the two sides of the join.
             let saved = std::mem::replace(&mut self.scope.namespace, namespace.clone());
-            let result = self.transform(Some(quals));
+            let result = self.with_kind(Kind::JoinOn, |a| a.transform(Some(quals)));
             self.scope.namespace = saved;
             on = Some(self.coerce_to_boolean(result?, "JOIN/ON")?);
         }
@@ -593,8 +594,21 @@ impl Analyzer<'_> {
         Ok(None)
     }
 
+    /// The name of the relation and the name of the column of a `Var`, as `eref->aliasname` and `get_rte_attribute_name` give them for an error.
+    pub(crate) fn column_names(&self, var: Var) -> (String, String) {
+        let Some(entry) = self.scope.entries.iter().find(|e| e.relation == Some(var.relation))
+        else {
+            return (String::new(), String::new());
+        };
+        let column = match usize::try_from(var.attnum) {
+            Ok(n) if n > 0 => entry.columns.get(n - 1).cloned().unwrap_or_default(),
+            _ => "tableoid".to_string(),
+        };
+        (entry.name.clone(), column)
+    }
+
     /// `colNameToVar`: the column that an unqualified name gives, or `None`.
-    fn column_by_name(&self, name: &str, at: Option<usize>) -> Result<Option<Expr>> {
+    pub(crate) fn column_by_name(&self, name: &str, at: Option<usize>) -> Result<Option<Expr>> {
         let mut result = None;
         for item in self.scope.namespace.iter().filter(|i| i.cols_visible) {
             if let Some(expr) = self.column_in(item, name, at)? {

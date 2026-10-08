@@ -1,10 +1,11 @@
-//! `transformSelectStmt` of `analyze.c`: `FROM`, the target list, the `WHERE` condition, `ORDER BY`, `DISTINCT`, `LIMIT` and `OFFSET`.
+//! `transformSelectStmt` of `analyze.c`: `FROM`, the target list, the `WHERE` condition, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `LIMIT` and `OFFSET`.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{LimitOption, Node, SelectStmt, SetOperation};
 use rupg_types::oid;
 
 use crate::Analyzer;
+use crate::agg::Kind;
 use crate::coerce::Context;
 use crate::colname::figure_colname;
 use crate::expr::{Expr, ExprKind};
@@ -18,10 +19,16 @@ pub struct Query {
     pub relations: Vec<Relation>,
     /// The parts of `FROM`. The query joins them with a cross join.
     pub from: Vec<FromItem>,
-    /// The columns of the result, then the junk columns that only `ORDER BY` reads.
+    /// The columns of the result, then the junk columns that only `ORDER BY` and `GROUP BY` read.
     pub targets: Vec<Target>,
     /// The `WHERE` condition, of type `boolean`.
     pub filter: Option<Expr>,
+    /// True when the query makes groups of rows: it has an aggregate call, `GROUP BY` or `HAVING`. With no item of `GROUP BY`, all the rows make one group, also when there are no rows.
+    pub grouped: bool,
+    /// The items of `GROUP BY`.
+    pub group: Vec<SortGroup>,
+    /// The `HAVING` condition, of type `boolean`, which each group must pass.
+    pub having: Option<Expr>,
     /// The items of `ORDER BY`.
     pub sort: Vec<SortGroup>,
     /// The items of `DISTINCT` or `DISTINCT ON`. The items of `ORDER BY` come first.
@@ -48,7 +55,7 @@ pub struct Target {
     pub expr: Expr,
     /// The OID of the table and the attribute number of the column when the target is a plain column, as `resorigtbl` and `resorigcol`.
     pub origin: Option<(u32, i16)>,
-    /// `resjunk`: true for a column that only `ORDER BY` reads, which the result does not show.
+    /// `resjunk`: true for a column that only `ORDER BY` or `GROUP BY` reads, which the result does not show.
     pub junk: bool,
 }
 
@@ -86,7 +93,7 @@ impl Analyzer<'_> {
                 }
                 continue;
             }
-            let expr = self.transform(rt.val.as_ref())?;
+            let expr = self.with_kind(Kind::Select, |a| a.transform(rt.val.as_ref()))?;
             let name = match &rt.name {
                 Some(name) => name.to_string(),
                 None => figure_colname(rt.val.as_ref()),
@@ -95,14 +102,18 @@ impl Analyzer<'_> {
         }
         let filter = match &s.whereClause {
             Some(node) => {
-                let expr = self.transform(Some(node))?;
+                let expr = self.with_kind(Kind::Where, |a| a.transform(Some(node)))?;
                 Some(self.coerce_to_boolean(expr, "WHERE")?)
             }
             None => None,
         };
-        if s.havingClause.is_some() || !s.groupClause.is_empty() {
-            return Err(not_yet("GROUP BY and HAVING"));
-        }
+        let having = match &s.havingClause {
+            Some(node) => {
+                let expr = self.with_kind(Kind::Having, |a| a.transform(Some(node)))?;
+                Some(self.coerce_to_boolean(expr, "HAVING")?)
+            }
+            None => None,
+        };
         if !s.windowClause.is_empty() {
             return Err(not_yet("WINDOW"));
         }
@@ -116,6 +127,7 @@ impl Analyzer<'_> {
             }
         }
         let sort = self.sort_clause(&s.sortClause, &mut targets)?;
+        let (group, empty_set) = self.group_clause(&s.groupClause, &mut targets, &sort)?;
         // The parser gives a list with one null item for `DISTINCT` and the expressions for `DISTINCT ON`.
         let distinct_on = matches!(s.distinctClause.first(), Some(Some(_)));
         let distinct = if s.distinctClause.is_empty() {
@@ -123,11 +135,15 @@ impl Analyzer<'_> {
         } else if distinct_on {
             self.distinct_on_clause(&s.distinctClause, &mut targets, &sort)?
         } else {
-            self.distinct_clause(&mut targets, &sort)?
+            self.distinct_clause(&mut targets, &sort, false)?
         };
         let with_ties = s.limitOption == LimitOption::LIMIT_OPTION_WITH_TIES;
-        let offset = self.limit_clause(s.limitOffset.as_ref(), "OFFSET", with_ties)?;
-        let limit = self.limit_clause(s.limitCount.as_ref(), "LIMIT", with_ties)?;
+        let offset = self.with_kind(Kind::Offset, |a| {
+            a.limit_clause(s.limitOffset.as_ref(), "OFFSET", with_ties)
+        })?;
+        let limit = self.with_kind(Kind::Limit, |a| {
+            a.limit_clause(s.limitCount.as_ref(), "LIMIT", with_ties)
+        })?;
         // `resolveTargetListUnknowns`: a column of type `unknown` becomes `text`.
         for target in &mut targets {
             if target.expr.ty == oid::UNKNOWN {
@@ -135,12 +151,19 @@ impl Analyzer<'_> {
                 target.expr = self.coerce(expr, oid::TEXT, -1, Context::Implicit, None)?;
             }
         }
+        let grouped = self.has_aggs || !group.is_empty() || empty_set || having.is_some();
+        if grouped {
+            self.check_grouping(&targets, having.as_ref(), &group)?;
+        }
         let relations = std::mem::take(&mut self.scope.relations);
         Ok(Query {
             relations,
             from,
             targets,
             filter,
+            grouped,
+            group,
+            having,
             sort,
             distinct,
             distinct_on,

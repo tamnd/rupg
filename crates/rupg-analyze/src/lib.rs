@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+mod agg;
 mod coerce;
 mod colname;
 mod expr;
@@ -27,7 +28,7 @@ use crate::coerce::AtOpt;
 
 pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
-pub use expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, Var};
+pub use expr::{Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, Var};
 pub use from::{Column, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};
 pub use sort::SortGroup;
@@ -69,6 +70,10 @@ pub(crate) struct Analyzer<'a> {
     depth: usize,
     /// The relations and the names of `FROM`.
     scope: from::Scope,
+    /// The part of the query that the analyzer reads now.
+    kind: agg::Kind,
+    /// `p_hasAggs`: true when the query has an aggregate call.
+    has_aggs: bool,
 }
 
 impl<'a> Analyzer<'a> {
@@ -85,6 +90,8 @@ impl<'a> Analyzer<'a> {
             notices: Vec::new(),
             depth: 0,
             scope: from::Scope::default(),
+            kind: agg::Kind::Other,
+            has_aggs: false,
         }
     }
 
@@ -549,6 +556,170 @@ mod tests {
                 full_error("SELECT 1 FROM pg_am a(x, y, z, w, v)"),
                 s(["42P10", "table \"a\" has 4 columns available but 5 columns specified", "", ""])
             );
+        });
+    }
+
+    #[test]
+    fn aggregate_errors() {
+        big_stack(|| {
+            // The errors and the positions come from PostgreSQL 19.
+            let cases = [
+                ("SELECT sum(*) FROM pg_class", "42883", "function sum() does not exist", 7),
+                (
+                    "SELECT lower(DISTINCT relname) FROM pg_class",
+                    "42809",
+                    "DISTINCT specified, but lower is not an aggregate function",
+                    7,
+                ),
+                (
+                    "SELECT count(*) FROM pg_class WHERE count(*) > 1",
+                    "42803",
+                    "aggregate functions are not allowed in WHERE",
+                    36,
+                ),
+                (
+                    "SELECT 1 FROM pg_class JOIN pg_namespace n ON count(*) > 0",
+                    "42803",
+                    "aggregate functions are not allowed in JOIN conditions",
+                    46,
+                ),
+                (
+                    "SELECT count(*) FROM pg_class GROUP BY count(*)",
+                    "42803",
+                    "aggregate functions are not allowed in GROUP BY",
+                    39,
+                ),
+                (
+                    "SELECT count(*) FROM pg_class LIMIT count(*)",
+                    "42803",
+                    "aggregate functions are not allowed in LIMIT",
+                    36,
+                ),
+                (
+                    "SELECT sum(count(*)) FROM pg_class",
+                    "42803",
+                    "aggregate function calls cannot be nested",
+                    11,
+                ),
+                (
+                    "SELECT count(*) FILTER (WHERE count(*) > 1) FROM pg_class",
+                    "42803",
+                    "aggregate functions are not allowed in FILTER",
+                    30,
+                ),
+                (
+                    "SELECT relname, count(*) FROM pg_class",
+                    "42803",
+                    "column \"pg_class.relname\" must appear in the GROUP BY clause or be used in an aggregate function",
+                    7,
+                ),
+                (
+                    "SELECT c.relname FROM pg_class c GROUP BY c.relkind",
+                    "42803",
+                    "column \"c.relname\" must appear in the GROUP BY clause or be used in an aggregate function",
+                    7,
+                ),
+                (
+                    "SELECT mode(relnatts) FROM pg_class",
+                    "42809",
+                    "WITHIN GROUP is required for ordered-set aggregate mode",
+                    7,
+                ),
+                (
+                    "SELECT count(*) WITHIN GROUP (ORDER BY relname) FROM pg_class",
+                    "42809",
+                    "count is not an ordered-set aggregate, so it cannot have WITHIN GROUP",
+                    7,
+                ),
+                (
+                    "SELECT count(DISTINCT relname ORDER BY relkind) FROM pg_class",
+                    "42P10",
+                    "in an aggregate with DISTINCT, ORDER BY expressions must appear in argument list",
+                    39,
+                ),
+                (
+                    "SELECT count() FROM pg_class",
+                    "42809",
+                    "count(*) must be used to call a parameterless aggregate function",
+                    7,
+                ),
+                (
+                    "SELECT now(*) FROM pg_class",
+                    "42809",
+                    "now(*) specified, but now is not an aggregate function",
+                    7,
+                ),
+                (
+                    "SELECT count(*) FILTER (WHERE 1) FROM pg_class",
+                    "42804",
+                    "argument of FILTER must be type boolean, not type integer",
+                    30,
+                ),
+                (
+                    "SELECT relkind FROM pg_class GROUP BY relkind HAVING relnatts > 1",
+                    "42803",
+                    "column \"pg_class.relnatts\" must appear in the GROUP BY clause or be used in an aggregate function",
+                    53,
+                ),
+                (
+                    "SELECT relkind AS relname FROM pg_class GROUP BY relname",
+                    "42803",
+                    "column \"pg_class.relkind\" must appear in the GROUP BY clause or be used in an aggregate function",
+                    7,
+                ),
+                (
+                    "SELECT count(*) AS c FROM pg_class GROUP BY 1",
+                    "42803",
+                    "aggregate functions are not allowed in GROUP BY",
+                    7,
+                ),
+                (
+                    "SELECT n.nspname, c.relname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace GROUP BY n.oid",
+                    "42803",
+                    "column \"c.relname\" must appear in the GROUP BY clause or be used in an aggregate function",
+                    18,
+                ),
+                (
+                    "SELECT oid FROM pg_class HAVING true",
+                    "42803",
+                    "column \"pg_class.oid\" must appear in the GROUP BY clause or be used in an aggregate function",
+                    7,
+                ),
+                (
+                    "SELECT array_agg(DISTINCT relacl::text::point) FROM pg_class",
+                    "42883",
+                    "could not identify an equality operator for type point",
+                    26,
+                ),
+                (
+                    "SELECT upper(relname) FROM pg_class GROUP BY lower(relname)",
+                    "42803",
+                    "column \"pg_class.relname\" must appear in the GROUP BY clause or be used in an aggregate function",
+                    13,
+                ),
+            ];
+            for (sql, state, message, at) in cases {
+                assert_eq!(error(sql), (state.to_string(), message.to_string(), Some(at)), "{sql}");
+            }
+        });
+    }
+
+    #[test]
+    fn groups() {
+        big_stack(|| {
+            let ok =
+                |sql: &str| run(sql, &Params::default()).unwrap_or_else(|e| panic!("{sql}: {e:?}"));
+            let query =
+                ok("SELECT relkind, count(*) FROM pg_class GROUP BY relkind HAVING count(*) > 1");
+            assert!(query.grouped && query.having.is_some());
+            assert_eq!(query.group.iter().map(|g| g.target).collect::<Vec<_>>(), [0]);
+            // oid is the primary key of pg_class, so relname depends on it.
+            assert!(ok("SELECT relname FROM pg_class GROUP BY oid").grouped);
+            assert!(ok("SELECT lower(relname) FROM pg_class GROUP BY lower(relname)").grouped);
+            assert!(ok("SELECT count(relname ORDER BY relname, relkind) FROM pg_class").grouped);
+            assert!(ok("SELECT 1 HAVING true").grouped);
+            assert!(ok("SELECT count(*) FROM pg_class GROUP BY ()").group.is_empty());
+            assert!(!ok("SELECT relname FROM pg_class").grouped);
         });
     }
 }

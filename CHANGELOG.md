@@ -4,6 +4,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Aggregate functions, `GROUP BY` and `HAVING` (spec/23 section 23.5). The analyzer makes an aggregate call as `parse_agg.c` does, with `DISTINCT`, `ORDER BY` and `FILTER` in the call, and gives the same errors as PostgreSQL for an aggregate call in a wrong place, a nested call, and a column that is not in `GROUP BY`. A column of a table whose primary key is in `GROUP BY` is grouped too. The executor runs the transition and final functions of `pg_aggregate` for `count`, `sum`, `avg`, `min`, `max`, `bool_and`, `bool_or`, `every`, `bit_and`, `bit_or`, `bit_xor`, `any_value`, `string_agg`, `array_agg` and the `float4` and `float8` forms of `var_pop`, `var_samp`, `variance`, `stddev_pop`, `stddev_samp` and `stddev`. The sums and the averages of `bigint` and `numeric` keep their state as `numeric.c` does, with the count of `NaN` and of the infinite values. The groups come out in the order of their keys, and the rows of a group keep the order of the scan. A `GROUP BY` on a type that has `=` and no order, such as `xid`, keeps the groups in the order of their first rows. A `GROUP BY` that can neither sort nor use a hash table gives `could not implement GROUP BY`, as PostgreSQL does. The ordered-set aggregates, the window functions, `GROUPING SETS`, `ROLLUP`, `CUBE`, the JSON aggregates, `array_agg` of an array, and the `var_pop` and `stddev` forms of the integer and `numeric` types give `0A000`.
+
+### Fixed
+
+- For two equal values, the `larger` and `smaller` functions such as `numeric_larger` and `float8smaller` give the second value, as in PostgreSQL. The functions of `bpchar` and `tid` give the first value, as in PostgreSQL.
+
 ## 0.0.16 (2026-10-08)
 
 The sixteenth patch release on the 0.0 line. `SELECT` now reads the tables of the system catalog with `FROM` and joins, and sorts and cuts the result with `ORDER BY`, `DISTINCT`, `LIMIT` and `OFFSET`. No crate is published.

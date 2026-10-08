@@ -202,14 +202,26 @@ fn ge(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(order(call, args)?.is_ge()))
 }
 
-/// `larger`: the second argument when it is greater, else the first.
+/// `larger`: the first argument when it is greater, else the second. So for two equal values, such as `1.0` and `1.00`, the result is the second.
 fn larger(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let pick = !order(call, args)?.is_gt();
+    Ok(args[usize::from(pick)].clone())
+}
+
+/// `smaller`: the first argument when it is less, else the second.
+fn smaller(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let pick = !order(call, args)?.is_lt();
+    Ok(args[usize::from(pick)].clone())
+}
+
+/// `bpchar_larger` and `tidlarger`: the first argument when it is greater or equal, else the second.
+fn larger_or_first(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let pick = order(call, args)?.is_lt();
     Ok(args[usize::from(pick)].clone())
 }
 
-/// `smaller`: the second argument when it is less, else the first.
-fn smaller(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+/// `bpchar_smaller` and `tidsmaller`: the first argument when it is less or equal, else the second.
+fn smaller_or_first(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let pick = order(call, args)?.is_gt();
     Ok(args[usize::from(pick)].clone())
 }
@@ -304,14 +316,35 @@ pub(crate) fn by_operator(name: &str, left: u32, right: u32) -> Option<Kernel> {
     })
 }
 
+/// `xideq` and `xidneq` of `xid.c`: the values are equal when the numbers are equal.
+fn xid_eq(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Oid(a), Value::Oid(b)] = args else { return Err(bad_value()) };
+    Ok(Value::Bool(a == b))
+}
+
+fn xid_ne(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Oid(a), Value::Oid(b)] = args else { return Err(bad_value()) };
+    Ok(Value::Bool(a != b))
+}
+
 /// The kernel of `larger`, `smaller` and the B-tree `cmp` functions.
 pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     let [left, right] = proc.argtypes else { return None };
+    // `xid` has `=` and `<>` and no order, so it is not in a family.
+    match src {
+        "xideq" => return Some(xid_eq),
+        "xidneq" => return Some(xid_ne),
+        _ => {}
+    }
     if !comparable(*left, *right) {
         return None;
     }
     if let Some(kernel) = oidvector_by_src(src) {
         Some(kernel)
+    } else if src == "bpchar_larger" || src == "tidlarger" {
+        Some(larger_or_first)
+    } else if src == "bpchar_smaller" || src == "tidsmaller" {
+        Some(smaller_or_first)
     } else if src.ends_with("larger") {
         Some(larger)
     } else if src.ends_with("smaller") {

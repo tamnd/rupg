@@ -2,6 +2,8 @@
 
 use rupg_types::Value;
 
+use crate::sort::SortGroup;
+
 /// An expression with its type and its typmod. A typmod of -1 means that the expression has no typmod.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Expr {
@@ -52,6 +54,8 @@ pub enum ExprKind {
     SqlValue(SqlValue),
     /// `Var`: a column of a relation of `FROM`.
     Var(Var),
+    /// `Aggref`: a call of an aggregate function, which reads all the rows of a group.
+    Agg(Box<Aggref>),
 }
 
 /// A column of a relation of `FROM`.
@@ -73,6 +77,27 @@ pub struct Func {
     pub form: FuncForm,
     /// True when the last argument is the array of a variadic function, as `funcvariadic` of `FuncExpr`. A function with `VARIADIC "any"` then takes the elements of the array as its arguments.
     pub variadic: bool,
+}
+
+/// A call of an aggregate function, as `Aggref`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Aggref {
+    /// `aggfnoid`: the OID of the aggregate function in `pg_proc`.
+    pub oid: u32,
+    /// The arguments, then the expressions that only the `ORDER BY` of the call reads.
+    pub args: Vec<Expr>,
+    /// The number of arguments at the start of `args`.
+    pub nargs: usize,
+    /// `aggorder`: the items of the `ORDER BY` of the call. Each item names an expression of `args`.
+    pub order: Vec<SortGroup>,
+    /// `aggdistinct`: the items of `DISTINCT`, which are all the arguments. The items of `ORDER BY` come first.
+    pub distinct: Vec<SortGroup>,
+    /// `aggstar`: true for `count(*)`.
+    pub star: bool,
+    /// `aggvariadic`: true when the last argument is the array of a variadic aggregate.
+    pub variadic: bool,
+    /// `aggfilter`: the condition of `FILTER (WHERE ...)`.
+    pub filter: Option<Box<Expr>>,
 }
 
 /// The way a call was written, which a deparse function shows.
@@ -170,6 +195,7 @@ impl Expr {
             | ExprKind::SqlValue(_)
             | ExprKind::Var(_) => Vec::new(),
             ExprKind::Func(f) => f.args.iter().collect(),
+            ExprKind::Agg(agg) => agg.args.iter().chain(agg.filter.as_deref()).collect(),
             ExprKind::Relabel(arg)
             | ExprKind::CoerceViaIo(arg)
             | ExprKind::NullTest(arg, _)
@@ -201,6 +227,10 @@ impl Expr {
             | ExprKind::SqlValue(_)
             | ExprKind::Var(_) => Vec::new(),
             ExprKind::Func(f) => f.args.iter_mut().collect(),
+            ExprKind::Agg(agg) => {
+                let Aggref { args, filter, .. } = &mut **agg;
+                args.iter_mut().chain(filter.as_deref_mut()).collect()
+            }
             ExprKind::Relabel(arg)
             | ExprKind::CoerceViaIo(arg)
             | ExprKind::NullTest(arg, _)
@@ -244,6 +274,27 @@ impl Expr {
             return Some(self);
         }
         self.children().into_iter().find_map(Expr::first_var)
+    }
+
+    /// `contain_aggs_of_level` and `locate_agg_of_level`: the first aggregate call in the expression.
+    pub fn first_agg(&self) -> Option<&Expr> {
+        if matches!(self.kind, ExprKind::Agg(_)) {
+            return Some(self);
+        }
+        self.children().into_iter().find_map(Expr::first_agg)
+    }
+
+    /// `strip_implicit_coercions`: the expression without the casts that the analyzer added. A cast that the query writes has a place in the query, so a relabel without a place is a cast that the analyzer added.
+    pub fn strip_implicit(&self) -> &Expr {
+        match &self.kind {
+            ExprKind::Func(Func { form: FuncForm::ImplicitCast, args, .. }) if !args.is_empty() => {
+                args[0].strip_implicit()
+            }
+            ExprKind::Relabel(arg) | ExprKind::CoerceViaIo(arg) if self.location.is_none() => {
+                arg.strip_implicit()
+            }
+            _ => self,
+        }
     }
 
     /// `exprLocation`: the place of the expression. For a call, an operator or a test it is the leftmost of the place of the node and the place of the first argument, as in PostgreSQL.

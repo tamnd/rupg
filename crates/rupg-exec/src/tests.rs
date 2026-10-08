@@ -334,3 +334,142 @@ fn order_distinct_and_limit() {
         assert_eq!(error("SELECT amname FROM pg_am LIMIT -1 OFFSET -1"), "2201X");
     });
 }
+
+#[test]
+fn aggregates_and_groups() {
+    big_stack(|| {
+        // The values come from PostgreSQL 19 with the same catalog rows.
+        let all = |sql: &str| row(sql).unwrap_or_else(|e| panic!("{sql}: {e:?}")).expect(sql);
+        assert_eq!(
+            all(
+                "SELECT count(*), sum(relnatts), avg(relnatts), min(relname), max(relname) FROM pg_class WHERE oid < 10000"
+            ),
+            [
+                "258",
+                "994",
+                "3.8527131782945736",
+                "pg_aggregate",
+                "pg_user_mapping_user_server_index"
+            ]
+        );
+        assert_eq!(
+            all(
+                "SELECT bool_and(relhasindex), bool_or(relhasindex), every(relispopulated), bit_and(relnatts), bit_or(relnatts), bit_xor(relnatts) FROM pg_class WHERE oid < 10000"
+            ),
+            ["f", "t", "t", "0", "63", "22"]
+        );
+        assert_eq!(
+            all(
+                "SELECT avg(relnatts::int8), sum(relnatts::numeric), avg(relnatts::numeric / 7), avg(relnatts::float4), sum(relnatts::float8) FROM pg_class WHERE oid < 10000"
+            ),
+            ["3.8527131782945736", "994", "0.55038759689922480742", "3.852713178294574", "994"]
+        );
+        assert_eq!(
+            all(
+                "SELECT sum(2147483647), sum(9223372036854775807), avg(9223372036854775807) FROM pg_class WHERE oid < 10000"
+            ),
+            ["554050780926", "2379629985508532158206", "9223372036854775807"]
+        );
+        assert_eq!(
+            all(
+                "SELECT var_pop(relnatts::float8 ORDER BY oid), stddev_samp(relnatts::float8 ORDER BY oid) FROM pg_class WHERE oid < 10000"
+            ),
+            ["27.63722132083409", "5.267329413183231"]
+        );
+        assert_eq!(
+            all(
+                "SELECT var_samp(relnatts::float8), avg(relnatts::float8), sum(relnatts), count(*) FROM pg_class WHERE oid < 0"
+            ),
+            ["NULL", "NULL", "NULL", "0"]
+        );
+        assert_eq!(
+            one("SELECT string_agg(relname, ',' ORDER BY relname) FROM pg_class WHERE oid < 1260"),
+            "pg_attribute,pg_class,pg_default_acl,pg_default_acl_oid_index,pg_default_acl_role_nsp_obj_index,pg_foreign_data_wrapper_name_index,pg_foreign_data_wrapper_oid_index,pg_foreign_server_name_index,pg_foreign_server_oid_index,pg_proc,pg_shdepend,pg_shdepend_depender_index,pg_shdepend_reference_index,pg_tablespace,pg_type,pg_user_mapping_oid_index,pg_user_mapping_user_server_index"
+        );
+        let bytes = one(
+            "SELECT string_agg(relname::bytea, '\\x00'::bytea ORDER BY relname) FROM pg_class WHERE oid < 1250",
+        );
+        assert!(
+            bytes.starts_with("\\x70675f6174747269627574650070675f64656661756c745f61636c00"),
+            "{bytes}"
+        );
+        assert!(
+            bytes.ends_with("0070675f757365725f6d617070696e675f757365725f7365727665725f696e646578"),
+            "{bytes}"
+        );
+        assert_eq!(
+            all(
+                "SELECT array_agg(DISTINCT relkind ORDER BY relkind DESC), array_agg(DISTINCT nullif(relnatts, 3)) FROM pg_class WHERE oid < 10000"
+            ),
+            ["{t,r,i}", "{1,2,4,5,6,7,8,9,11,12,15,18,19,21,22,23,25,28,30,31,32,34,NULL}"]
+        );
+        assert_eq!(
+            all(
+                "SELECT count(DISTINCT relkind), count(*) FILTER (WHERE relkind = 'r'), sum(DISTINCT relnatts) FROM pg_class WHERE oid < 10000"
+            ),
+            ["3", "64", "366"]
+        );
+        assert_eq!(
+            all(
+                "SELECT sum(CASE WHEN oid = 1259 THEN 'NaN'::numeric ELSE 1 END), sum(CASE WHEN oid = 1259 THEN 'Infinity'::numeric WHEN oid = 1255 THEN '-Infinity' ELSE 1 END), avg(CASE WHEN oid = 1259 THEN '-Infinity'::numeric ELSE 1 END) FROM pg_class WHERE oid < 10000"
+            ),
+            ["NaN", "NaN", "-Infinity"]
+        );
+        // For two equal values, larger and smaller give the second.
+        assert_eq!(
+            all(
+                "SELECT numeric_larger(1.0, 1.00), numeric_smaller(1.0, 1.00), float8larger(0, -0.0::float8), float8smaller(0, -0.0::float8), int4_sum(NULL, 3), booland_statefunc(true, false)"
+            ),
+            ["1.00", "1.00", "-0", "-0", "3", "f"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT relkind, count(*), max(relnatts), min(oid) FROM pg_class WHERE oid < 10000 GROUP BY relkind ORDER BY 1"
+            ),
+            ["i|159|4|112", "r|64|34|826", "t|35|3|2336"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT relkind FROM pg_class WHERE oid < 10000 GROUP BY relkind HAVING count(*) > 100 ORDER BY 1"
+            ),
+            ["i"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT relnatts % 3 AS m, count(*) FROM pg_class WHERE oid < 10000 GROUP BY relnatts % 3 ORDER BY 1"
+            ),
+            ["0|74", "1|97", "2|87"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT c.relname, count(a.attnum) FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid WHERE c.oid < 1250 GROUP BY c.oid ORDER BY 1 LIMIT 3"
+            ),
+            ["pg_attribute|31", "pg_default_acl|11", "pg_default_acl_oid_index|1"]
+        );
+        assert_eq!(
+            ordered(
+                "SELECT relkind, count(*) FROM pg_class WHERE oid < 10000 GROUP BY 1 ORDER BY sum(relnatts) DESC"
+            ),
+            ["r|64", "i|159", "t|35"]
+        );
+        assert_eq!(
+            ordered("SELECT count(*) FROM pg_class WHERE oid < 0 GROUP BY relkind"),
+            [""; 0]
+        );
+        assert_eq!(one("SELECT count(*) FROM pg_class WHERE oid < 0 GROUP BY ()"), "0");
+        assert_eq!(ordered("SELECT 1 HAVING false"), [""; 0]);
+        assert_eq!(one("SELECT 1 HAVING true"), "1");
+        assert_eq!(error("SELECT sum(1e308::float8) FROM pg_class WHERE oid < 10000"), "22003");
+        // `xid` has `=` and no order, so the groups use only `xideq`. The catalog of rupg has other values of `relfrozenxid` than an oracle after `initdb`, so the test compares two forms of the same count.
+        assert_eq!(one("SELECT relfrozenxid = relfrozenxid FROM pg_class WHERE oid = 1259"), "t");
+        assert_eq!(
+            ordered("SELECT count(*) FROM pg_class WHERE oid < 10000 GROUP BY relfrozenxid").len(),
+            ordered("SELECT DISTINCT relfrozenxid::text FROM pg_class WHERE oid < 10000").len()
+        );
+        assert_eq!(error("SELECT count(DISTINCT relfrozenxid) FROM pg_class"), "42883");
+        assert_eq!(
+            rows("SELECT count(*) FROM pg_class GROUP BY relfrozenxid, relname::text::varbit"),
+            Err(("0A000".to_string(), "could not implement GROUP BY".to_string()))
+        );
+    });
+}
