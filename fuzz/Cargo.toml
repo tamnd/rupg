@@ -17,8 +17,10 @@ rupg = { path = "../crates/rupg" }
 rupg-buffer = { path = "../crates/rupg-buffer" }
 rupg-common = { path = "../crates/rupg-common" }
 rupg-file = { path = "../crates/rupg-file" }
+rupg-func = { path = "../crates/rupg-func" }
 rupg-log = { path = "../crates/rupg-log" }
 rupg-platform = { path = "../crates/rupg-platform" }
+rupg-types = { path = "../crates/rupg-types" }
 rupg-wire = { path = "../crates/rupg-wire" }
 
 [[bin]]
@@ -52,6 +54,20 @@ bench = false
 [[bin]]
 name = "wire_startup"
 path = "fuzz_targets/wire_startup.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "type_input"
+path = "fuzz_targets/type_input.rs"
+test = false
+doc = false
+bench = false
+
+[[bin]]
+name = "type_recv"
+path = "fuzz_targets/type_recv.rs"
 test = false
 doc = false
 bench = false

@@ -6,10 +6,15 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The fuzz targets `type_input` and `type_recv` of M2 (spec/21 section 21.7). They call the input, output, receive and send functions of 52 types with the settings that change the text, and check that each value reads back to the same output in the text and the binary formats. The example `type_replay` compares a corpus with the oracle. The nightly workflow runs both targets.
+
 - Aggregate functions, `GROUP BY` and `HAVING` (spec/23 section 23.5). The analyzer makes an aggregate call as `parse_agg.c` does, with `DISTINCT`, `ORDER BY` and `FILTER` in the call, and gives the same errors as PostgreSQL for an aggregate call in a wrong place, a nested call, and a column that is not in `GROUP BY`. A column of a table whose primary key is in `GROUP BY` is grouped too. The executor runs the transition and final functions of `pg_aggregate` for `count`, `sum`, `avg`, `min`, `max`, `bool_and`, `bool_or`, `every`, `bit_and`, `bit_or`, `bit_xor`, `any_value`, `string_agg`, `array_agg` and the `float4` and `float8` forms of `var_pop`, `var_samp`, `variance`, `stddev_pop`, `stddev_samp` and `stddev`. The sums and the averages of `bigint` and `numeric` keep their state as `numeric.c` does, with the count of `NaN` and of the infinite values. The groups come out in the order of their keys, and the rows of a group keep the order of the scan. A `GROUP BY` on a type that has `=` and no order, such as `xid`, keeps the groups in the order of their first rows. A `GROUP BY` that can neither sort nor use a hash table gives `could not implement GROUP BY`, as PostgreSQL does. The ordered-set aggregates, the window functions, `GROUPING SETS`, `ROLLUP`, `CUBE`, the JSON aggregates, `array_agg` of an array, and the `var_pop` and `stddev` forms of the integer and `numeric` types give `0A000`.
 
 ### Fixed
 
+- The shortest text of a `float4` or `float8` value is the text of Ryu in PostgreSQL. A text that is exactly halfway to the next value is not the shortest text, so `1e23::float8` is `9.999999999999999e+22` and `42483247::float4` is `4.2483248e+07`. When a value is exactly halfway between two shortest texts, the text with the even last digit comes out, so `-3222613.25::float4` is `-3.2226132e+06`.
+- The binary input of `jsonb` checks the encoding of the text before the JSON syntax, as `pq_getmsgtext` does. A zero byte gives `invalid byte sequence for encoding "UTF8": 0x00`, and a bad byte shows its value.
+- The input of `json` and `jsonb` reads the token after a scalar before the action of the scalar, as `parse_scalar` does. So `'[1e999999 x]'::jsonb` gives the syntax error of the token `x` and not `value overflows numeric format`.
 - For two equal values, the `larger` and `smaller` functions such as `numeric_larger` and `float8smaller` give the second value, as in PostgreSQL. The functions of `bpchar` and `tid` give the first value, as in PostgreSQL.
 
 ## 0.0.16 (2026-10-08)

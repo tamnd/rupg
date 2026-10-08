@@ -1,10 +1,12 @@
-//! The M1 fuzz targets of spec/21 section 21.7: `file_open`, `page_decode` and `log_replay`.
+//! The M1 fuzz targets of spec/21 section 21.7: `file_open`, `page_decode` and `log_replay`. The M2 targets of the types are in [`types`].
 //!
 //! Each target starts from the same base file. The base is a database on the simulated disk with two tables, commits before and after a checkpoint, and no close, so each open replays the log. The base keeps the model of the tables after each commit. A target changes some bytes of a fork of the disk, runs `rupg check` and opens the file.
 //!
 //! A panic is a failure. An open that gives tables that are not equal to one of the kept models is also a failure, because the file then gave data that it does not hold.
 //!
 //! The input of each target is a list of changes of 7 bytes each: an offset of 4 bytes in little-endian order, a kind and a value of 2 bytes. The offset is taken modulo the length of the range that the target changes. Bytes after the last full change are not used.
+
+pub mod types;
 
 use std::collections::{BTreeMap, BTreeSet};
 use std::ops::Range;

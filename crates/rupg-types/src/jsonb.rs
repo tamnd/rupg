@@ -6,6 +6,7 @@
 //!
 //! Lifted from `crates/rudb-pgtypes/src/jsonb.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
+use crate::binary::Recv;
 use crate::error::TypeError;
 use crate::json::{self, Kind, Open, Sink, Stop};
 use crate::numeric::{numeric_in, numeric_out};
@@ -178,23 +179,14 @@ pub fn jsonb_in(s: &str) -> Result<String, TypeError> {
     Ok(out)
 }
 
-/// The binary input of `jsonb`: the version byte and then the text.
+/// The binary input of `jsonb`: the version byte and then the text. `pq_getmsgtext` checks the encoding of the text before the parser reads it, so a zero byte is an error of the encoding and not of the syntax.
 pub fn jsonb_recv(bytes: &[u8]) -> Result<String, TypeError> {
-    match bytes.split_first() {
-        Some((&VERSION, text)) => match std::str::from_utf8(text) {
-            Ok(text) => jsonb_in(text),
-            Err(_) => Err(TypeError::new(
-                rupg_common::SqlState::CHARACTER_NOT_IN_REPERTOIRE,
-                "invalid byte sequence for encoding \"UTF8\"".to_string(),
-            )),
-        },
-        Some((&version, _)) => Err(TypeError::new(
+    let mut recv = Recv::new(bytes);
+    match recv.bytes(1)?[0] {
+        VERSION => jsonb_in(recv.text()?),
+        version => Err(TypeError::new(
             rupg_common::SqlState::INTERNAL_ERROR,
             format!("unsupported jsonb version number {version}"),
-        )),
-        None => Err(TypeError::new(
-            rupg_common::SqlState::PROTOCOL_VIOLATION,
-            "insufficient data left in message".to_string(),
         )),
     }
 }
@@ -265,6 +257,14 @@ mod tests {
         // The lexer decodes a string before the parser looks at where it is.
         assert_eq!(fails(r#"{"a": 1 "\u0000"}"#).0, "22P05");
         assert!(json::json_in(r#"["\u0000", "\ud800"]"#).is_ok());
+        // `parse_scalar` reads the next token before the action reads the number, so a bad token after a number that is too large is the error.
+        assert_eq!(fails("[1e999999\x1d]"), syntax("Token \"\x1d\" is invalid."));
+        assert_eq!(fails(r#"{"a":1e999999 x}"#), syntax(r#"Token "x" is invalid."#));
+        assert_eq!(fails(r#"1e999999 "b"#), syntax(r#"Token ""b" is invalid."#));
+        let overflow =
+            ("22003".to_owned(), "value overflows numeric format".to_owned(), String::new());
+        assert_eq!(fails("[1e999999,\x1d]"), overflow);
+        assert_eq!(fails(r#"{"a":1e999999 "b"}"#), overflow);
     }
 
     #[test]
@@ -285,5 +285,21 @@ mod tests {
         );
         let empty = jsonb_recv(b"").unwrap_err();
         assert_eq!(empty.sqlstate, rupg_common::SqlState::PROTOCOL_VIOLATION);
+    }
+
+    /// The oracle checks the encoding of the whole text first, so a zero byte after a number that is too large is an error of the encoding (the fuzz target `type_recv`).
+    #[test]
+    fn the_binary_format_checks_the_encoding_first() {
+        let message = |bytes: &[u8]| {
+            let error = jsonb_recv(bytes).unwrap_err();
+            assert_eq!(error.sqlstate, rupg_common::SqlState::CHARACTER_NOT_IN_REPERTOIRE);
+            error.message
+        };
+        let mut big = vec![1];
+        big.extend_from_slice(&[b'9'; 59]);
+        big.extend_from_slice(b"\x15\0");
+        assert_eq!(message(&big), "invalid byte sequence for encoding \"UTF8\": 0x00");
+        assert_eq!(message(b"\x01[1,\0"), "invalid byte sequence for encoding \"UTF8\": 0x00");
+        assert_eq!(message(b"\x01\xfe"), "invalid byte sequence for encoding \"UTF8\": 0xfe");
     }
 }
