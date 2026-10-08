@@ -135,21 +135,8 @@ impl Analyzer<'_> {
                     )
                     .at_opt(at));
                 }
-                let collation = names(&c.collname).last().copied().unwrap_or_default();
-                if C_COLLATIONS.contains(&collation) {
-                    Ok(arg)
-                } else if OTHER_COLLATIONS.contains(&collation) {
-                    Err(not_yet(&format!("collation \"{collation}\""), at))
-                } else {
-                    Err(Error::new(
-                        SqlState::UNDEFINED_OBJECT,
-                        format!(
-                            "collation \"{}\" for encoding \"UTF8\" does not exist",
-                            names(&c.collname).join(".")
-                        ),
-                    )
-                    .at_opt(at))
-                }
+                self.collation_oid(&c.collname, at)?;
+                Ok(arg)
             }
             Node::RowExpr(r) => Err(not_yet("ROW()", place(r.location))),
             Node::SubLink(s) => self.transform_sublink(s),
@@ -161,6 +148,27 @@ impl Analyzer<'_> {
             .at_opt(place(g.location))),
             _ => Err(not_yet("this kind of expression", None)),
         }
+    }
+
+    /// `LookupCollation`: the OID of the collation that a name gives. Only the collations that compare as the bytes of the string are supported.
+    pub(crate) fn collation_oid(&self, list: &[Option<Node>], at: Option<usize>) -> Result<u32> {
+        let parts = names(list);
+        let (schema, name) = self.split_name(&parts, at)?;
+        let in_catalog = schema.is_none_or(|ns| ns == crate::PG_CATALOG_NAMESPACE);
+        if in_catalog && C_COLLATIONS.contains(&name) {
+            let row = rupg_pgcatalog::builtin::named(rupg_pgcatalog::builtin::Named::Collation)
+                .iter()
+                .find(|r| r.name == name && (r.encoding == -1 || r.encoding == 6));
+            return row.map(|r| r.oid).ok_or_else(|| Error::internal("a built-in collation"));
+        }
+        if in_catalog && OTHER_COLLATIONS.contains(&name) {
+            return Err(not_yet(&format!("collation \"{name}\""), at));
+        }
+        Err(Error::new(
+            SqlState::UNDEFINED_OBJECT,
+            format!("collation \"{}\" for encoding \"UTF8\" does not exist", parts.join(".")),
+        )
+        .at_opt(at))
     }
 
     /// The expressions of a list.

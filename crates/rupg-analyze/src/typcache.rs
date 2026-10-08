@@ -68,7 +68,7 @@ fn is_complex(ty: u32) -> bool {
 }
 
 /// `GetDefaultOpClass`: the default operator class of the type for the access method. An exact match comes first. Else the one class that the type has a binary cast to, or the one for a preferred type of its category when there are more.
-fn default_opclass(ty: u32, method: u32) -> Option<&'static OpclassRow> {
+pub(crate) fn default_opclass(ty: u32, method: u32) -> Option<&'static OpclassRow> {
     let ty = types::base(ty);
     let category = types::category(ty);
     let (mut exact, mut compatible, mut preferred) = (0, 0, 0);

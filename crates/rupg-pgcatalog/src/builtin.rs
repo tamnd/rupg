@@ -37,6 +37,8 @@ pub struct TypeRow {
     pub modin: u32,
     pub modout: u32,
     pub align: u8,
+    /// `typstorage`: `p`, `e`, `m` or `x`.
+    pub storage: u8,
     /// `typbasetype`: the base type of a domain, or 0.
     pub base: u32,
     pub typmod: i32,
@@ -548,6 +550,7 @@ fn load_types() -> Vec<TypeRow> {
     let (input, output) = (r.oid("typinput"), r.oid("typoutput"));
     let (receive, send) = (r.oid("typreceive"), r.oid("typsend"));
     let (modin, modout, align) = (r.oid("typmodin"), r.oid("typmodout"), r.char("typalign"));
+    let storage = r.char("typstorage");
     let (base, typmod, collation) =
         (r.oid("typbasetype"), r.int4("typtypmod"), r.oid("typcollation"));
     (0..r.catalog.len)
@@ -572,6 +575,7 @@ fn load_types() -> Vec<TypeRow> {
             modin: modin[i],
             modout: modout[i],
             align: align[i],
+            storage: storage[i],
             base: base[i],
             typmod: typmod[i],
             collation: collation[i],

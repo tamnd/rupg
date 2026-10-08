@@ -32,6 +32,37 @@ pub fn read(text: &str) -> Result<Expr> {
     expr_of(&item)
 }
 
+/// The stored form of a list of expressions, such as the expressions of an index: `(e1 e2 ...)`.
+///
+/// # Errors
+///
+/// As [`write()`].
+pub fn write_list(exprs: &[Expr]) -> Result<String> {
+    let mut out = String::from("(");
+    for (i, expr) in exprs.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        write_expr(expr, &mut out)?;
+    }
+    out.push(')');
+    Ok(out)
+}
+
+/// The expressions of a stored form that [`write_list`] made.
+///
+/// # Errors
+///
+/// An internal error when the text is not a stored list.
+pub fn read_list(text: &str) -> Result<Vec<Expr>> {
+    let mut tokens = Tokens { text, at: 0 };
+    let item = tokens.item()?;
+    if tokens.next()?.is_some() {
+        return Err(bad("text after the end"));
+    }
+    list(&item)?.iter().map(expr_of).collect()
+}
+
 /// The error of a bad stored form.
 fn bad(what: &str) -> Error {
     Error::internal(format!("bad stored expression: {what}"))
@@ -770,6 +801,10 @@ mod tests {
         for node in &nodes {
             round_trip(node);
         }
+        let text = write_list(&nodes[..2]).expect("write");
+        assert!(text.starts_with("({BOOL") && text.ends_with("})"), "{text}");
+        assert_eq!(read_list(&text).expect("read"), nodes[..2]);
+        assert_eq!(read_list("()").expect("read"), []);
     }
 
     #[test]

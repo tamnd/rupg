@@ -252,7 +252,7 @@ impl Analyzer<'_> {
     }
 
     /// `DeconstructQualifiedName`: the schema that the name gives, if any, and the last name.
-    fn split_name<'n>(
+    pub(crate) fn split_name<'n>(
         &self,
         names: &[&'n str],
         at: Option<usize>,
@@ -539,6 +539,14 @@ impl Analyzer<'_> {
                 .at_opt(last.place()));
             }
         }
+        // check_srf_call_placement.
+        if proc.retset && self.kind.is_definition() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("set-returning functions are not allowed in {}", self.kind.name()),
+            )
+            .at_opt(at));
+        }
         let over = parts.as_ref().is_some_and(|p| p.over);
         if let (Some(row), Some(parts)) = (aggregate, parts)
             && !over
@@ -565,6 +573,13 @@ impl Analyzer<'_> {
                 .at_opt(at));
             }
             return self.aggregate_call(proc.oid, args, parts, variadic, result, at);
+        }
+        if over && self.kind.is_definition() {
+            return Err(Error::new(
+                SqlState::WINDOWING_ERROR,
+                format!("window functions are not allowed in {}", self.kind.name()),
+            )
+            .at_opt(at));
         }
         if over || prokind != b'f' {
             return Err(Error::new(

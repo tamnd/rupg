@@ -37,6 +37,13 @@ impl Analyzer<'_> {
     /// `transformSubLink`.
     pub(crate) fn transform_sublink(&mut self, s: &RawSubLink) -> Result<Expr> {
         let at = place(s.location);
+        if self.kind.is_definition() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("cannot use subquery in {}", self.kind.subquery_name()),
+            )
+            .at_opt(at));
+        }
         let kind = match s.subLinkType {
             SubLinkType::EXISTS_SUBLINK => SubLinkKind::Exists,
             SubLinkType::ALL_SUBLINK => SubLinkKind::All,

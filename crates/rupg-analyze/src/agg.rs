@@ -25,6 +25,14 @@ pub(crate) enum Kind {
     DistinctOn,
     Limit,
     Offset,
+    /// `EXPR_KIND_COLUMN_DEFAULT`.
+    ColumnDefault,
+    /// `EXPR_KIND_CHECK_CONSTRAINT`.
+    Check,
+    /// `EXPR_KIND_INDEX_EXPRESSION`.
+    IndexExpression,
+    /// `EXPR_KIND_INDEX_PREDICATE`.
+    IndexPredicate,
 }
 
 impl Kind {
@@ -42,6 +50,28 @@ impl Kind {
             Kind::DistinctOn => "DISTINCT ON",
             Kind::Limit => "LIMIT",
             Kind::Offset => "OFFSET",
+            Kind::ColumnDefault => "DEFAULT expressions",
+            Kind::Check => "check constraints",
+            Kind::IndexExpression => "index expressions",
+            Kind::IndexPredicate => "index predicates",
+        }
+    }
+
+    /// True for an expression of a statement that defines an object, where an aggregate, a window function, a set-returning function and a subquery are errors.
+    pub(crate) fn is_definition(self) -> bool {
+        matches!(
+            self,
+            Kind::ColumnDefault | Kind::Check | Kind::IndexExpression | Kind::IndexPredicate
+        )
+    }
+
+    /// The name of the place in the error of a subquery, as `transformSubLink` gives it.
+    pub(crate) fn subquery_name(self) -> &'static str {
+        match self {
+            Kind::ColumnDefault => "DEFAULT expression",
+            Kind::Check => "check constraint",
+            Kind::IndexExpression => "index expression",
+            _ => "index predicate",
         }
     }
 }
@@ -160,7 +190,15 @@ impl Analyzer<'_> {
                     at,
                 ));
             }
-            Kind::Where | Kind::Filter | Kind::GroupBy | Kind::Limit | Kind::Offset => {
+            Kind::Where
+            | Kind::Filter
+            | Kind::GroupBy
+            | Kind::Limit
+            | Kind::Offset
+            | Kind::ColumnDefault
+            | Kind::Check
+            | Kind::IndexExpression
+            | Kind::IndexPredicate => {
                 return Err(grouping_error(
                     format!("aggregate functions are not allowed in {}", self.kind.name()),
                     at,
