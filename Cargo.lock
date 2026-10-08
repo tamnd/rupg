@@ -352,6 +352,7 @@ name = "rupg-exec"
 version = "0.1.1"
 dependencies = [
  "rupg-analyze",
+ "rupg-catalog",
  "rupg-common",
  "rupg-func",
  "rupg-pgcatalog",
@@ -377,6 +378,7 @@ version = "0.1.1"
 dependencies = [
  "md-5",
  "rupg-analyze",
+ "rupg-catalog",
  "rupg-common",
  "rupg-pgcatalog",
  "rupg-sql",

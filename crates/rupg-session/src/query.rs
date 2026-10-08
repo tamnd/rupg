@@ -259,6 +259,10 @@ impl rupg_func::Session for Reader<'_> {
         self.database
     }
 
+    fn catalog(&self) -> Option<&Catalog> {
+        Some(&self.catalog)
+    }
+
     fn schemas(&self) -> Vec<String> {
         self.path().into_iter().map(|(name, _)| name).collect()
     }

@@ -74,6 +74,10 @@ pub trait Session {
     ///
     /// The errors of `SET` for the name and the value.
     fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String>;
+    /// The catalog of the user objects that the statement sees, or `None` when the session has no catalog.
+    fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
+        None
+    }
 }
 
 /// A call of a function.

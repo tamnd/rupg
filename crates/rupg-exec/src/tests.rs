@@ -155,6 +155,10 @@ fn expressions() {
         assert_eq!(one("SELECT 7 / 2"), "3");
         assert_eq!(one("SELECT 2 ^ 10 > 1000"), "t");
         assert_eq!(one("SELECT -(3)"), "-3");
+        assert_eq!(
+            row("SELECT '4294967295'::xid = -1, '3'::xid = 3, '3'::xid <> 3, '3'::xid = '3'::xid, '3'::xid <> '4'::xid").unwrap().unwrap(),
+            ["t", "t", "f", "t", "t"]
+        );
         assert_eq!(one("SELECT 'abc' LIKE 'a%'"), "t");
         assert_eq!(one("SELECT 'x' || 1"), "x1");
         assert_eq!(one("SELECT 1 || true::text"), "1true");
@@ -996,4 +1000,139 @@ fn oid_alias_type_error_places() {
         assert_eq!(place("SELECT 1, 'varchar(0)'::regtype"), (Some(10), None));
         assert_eq!(place("SELECT 1, to_regtype('varchar(0)')"), (None, None));
     });
+}
+
+/// The value of each column of the rows of the user objects has the type of the column.
+#[test]
+fn user_rows_have_the_column_types() {
+    use rupg_catalog::{
+        Catalog, Column, ConKind, ForeignKey, NewForeignKey, NewIndex, NewIndexColumn, NewRelation,
+        ObjRef, SequenceInfo,
+    };
+    use rupg_types::oid;
+
+    fn kind_matches(ty: u32, value: &Value) -> bool {
+        match value {
+            Value::Null => true,
+            Value::Bool(_) => ty == oid::BOOL,
+            Value::Char(_) => ty == oid::CHAR,
+            Value::Int2(_) => ty == oid::INT2,
+            Value::Int4(_) => ty == oid::INT4,
+            Value::Int8(_) => ty == oid::INT8,
+            Value::Float4(_) => ty == oid::FLOAT4,
+            Value::Text(_) => matches!(ty, oid::NAME | oid::TEXT | oid::PG_NODE_TREE),
+            Value::Array(_) => {
+                matches!(ty, oid::INT2VECTOR | oid::OIDVECTOR | oid::INT2_ARRAY | oid::OID_ARRAY)
+            }
+            Value::Oid(_) => {
+                ty != oid::INT4
+                    && ty != oid::FLOAT4
+                    && rupg_pgcatalog::builtin::type_by_oid(ty).is_some_and(|t| t.len == 4)
+            }
+            _ => false,
+        }
+    }
+
+    let mut catalog = Catalog::new();
+    let s = catalog.create_schema("s", 10).unwrap();
+    let new = |name: &str, columns: Vec<Column>| NewRelation {
+        namespace: s,
+        name: name.into(),
+        owner: 10,
+        columns,
+    };
+    let int8 = |name: &str| Column::new(name, oid::INT8, -1, 0);
+    let info = SequenceInfo {
+        ty: oid::INT4,
+        start: 1,
+        increment: 1,
+        max: 9,
+        min: 1,
+        cache: 1,
+        cycle: false,
+    };
+    let seq = catalog
+        .create_sequence(new("t_a_seq", vec![int8("last_value"), int8("log_cnt")]), info)
+        .unwrap();
+    let t = catalog
+        .create_table(new(
+            "t",
+            vec![Column::new("a", oid::INT4, -1, 0), Column::new("b", oid::TEXT, -1, 100)],
+        ))
+        .unwrap();
+    catalog
+        .add_default(t, 1, "nextval".into(), &[ObjRef::new(rupg_catalog::PG_CLASS, seq)])
+        .unwrap();
+    catalog.add_check(t, None, "a > 0".into(), vec![1], &[ObjRef::column(t, 1)], false).unwrap();
+    catalog.create_toast(t).unwrap();
+    let column = NewIndexColumn {
+        name: "a".into(),
+        key: 1,
+        ty: oid::INT4,
+        typmod: -1,
+        collation: 0,
+        class: 1978,
+        option: 0,
+    };
+    let index = NewIndex {
+        table: t,
+        name: None,
+        columns: vec![column],
+        key_count: 1,
+        method: rupg_catalog::BTREE,
+        unique: true,
+        nulls_not_distinct: false,
+        constraint: Some(ConKind::Primary),
+        deferrable: false,
+        deferred: false,
+        exprs: None,
+        predicate: Some("a > 1".into()),
+        refs: Vec::new(),
+    };
+    let (pkey, _) = catalog.create_index(index).unwrap();
+    let foreign = ForeignKey {
+        table: t,
+        keys: vec![1],
+        update: 'a',
+        delete: 'a',
+        match_type: 's',
+        pf_eq: vec![96],
+        pp_eq: vec![96],
+        ff_eq: vec![96],
+    };
+    let fkey = NewForeignKey {
+        table: t,
+        name: None,
+        keys: vec![1],
+        index: pkey,
+        deferrable: false,
+        deferred: false,
+        foreign,
+    };
+    catalog.add_foreign_key(fkey).unwrap();
+
+    let session = TestSession { zone: Rc::new(FixedZone::utc()) };
+    let tables = [
+        "pg_namespace",
+        "pg_class",
+        "pg_type",
+        "pg_attribute",
+        "pg_attrdef",
+        "pg_constraint",
+        "pg_index",
+        "pg_sequence",
+        "pg_depend",
+    ];
+    for name in tables {
+        let table = rupg_pgcatalog::catalog(name).unwrap();
+        let rows = crate::user::rows(table, &catalog, &session).unwrap();
+        assert!(!rows.is_empty(), "{name}");
+        for row in rows {
+            assert_eq!(row.len(), table.columns.len(), "{name}");
+            for (column, value) in table.columns.iter().zip(&row) {
+                assert!(kind_matches(column.type_oid, value), "{name}.{}: {value:?}", column.name);
+                assert!(!value.is_null() || !column.not_null, "{name}.{} is null", column.name);
+            }
+        }
+    }
 }

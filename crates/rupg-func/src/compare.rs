@@ -317,15 +317,24 @@ pub(crate) fn by_operator(name: &str, left: u32, right: u32) -> Option<Kernel> {
     })
 }
 
+/// The number of an `xid`, or of the `int4` of `xideqint4` and `xidneqint4`, which compare the bits of the `int4` as an `xid`.
+fn xid_number(value: &Value) -> Result<u32> {
+    match value {
+        Value::Oid(n) => Ok(*n),
+        Value::Int4(n) => Ok(n.cast_unsigned()),
+        _ => Err(bad_value()),
+    }
+}
+
 /// `xideq` and `xidneq` of `xid.c`: the values are equal when the numbers are equal.
 fn xid_eq(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let [Value::Oid(a), Value::Oid(b)] = args else { return Err(bad_value()) };
-    Ok(Value::Bool(a == b))
+    let [a, b] = args else { return Err(bad_value()) };
+    Ok(Value::Bool(xid_number(a)? == xid_number(b)?))
 }
 
 fn xid_ne(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let [Value::Oid(a), Value::Oid(b)] = args else { return Err(bad_value()) };
-    Ok(Value::Bool(a != b))
+    let [a, b] = args else { return Err(bad_value()) };
+    Ok(Value::Bool(xid_number(a)? != xid_number(b)?))
 }
 
 /// The kernel of `larger`, `smaller` and the B-tree `cmp` functions.

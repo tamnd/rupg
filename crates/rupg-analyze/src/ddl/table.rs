@@ -603,7 +603,7 @@ impl Definer<'_, '_> {
         self.add_checks(table, plan)?;
         self.add_not_nulls(table, plan)?;
         if needs_toast(&shapes) {
-            self.catalog.skip_oids(2);
+            self.catalog.create_toast(table)?;
         }
         Ok(table)
     }
