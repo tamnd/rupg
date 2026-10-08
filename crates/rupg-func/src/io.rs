@@ -155,7 +155,7 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
             types::timestamp_out(*v, session.date_format(), out).map_err(type_error)?;
         }
         (_, Value::TimestampTz(v)) => {
-            types::timestamptz_out(*v, session.date_format(), session.zone()?, out)
+            types::timestamptz_out(*v, session.date_format(), &*session.zone()?, out)
                 .map_err(type_error)?;
         }
         (_, Value::Interval(v)) => types::interval_out(v, session.interval_style(), out),
@@ -249,7 +249,7 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
         }
         oid::DATE | oid::TIME | oid::TIMETZ | oid::TIMESTAMP | oid::TIMESTAMPTZ => {
             let zone = session.zone()?;
-            let cx = datetime_input(session, zone);
+            let cx = datetime_input(session, &*zone);
             match ty {
                 oid::DATE => Value::Date(types::date_in(text, &cx).map_err(type_error)?),
                 oid::TIME => Value::Time(types::time_in(text, typmod, &cx).map_err(type_error)?),

@@ -2,6 +2,7 @@
 //!
 //! The connection does no I/O. The server gives it the bytes that the client sent and an output buffer, and [`Connection::step`] tells the server what to do next. See `spec/06-server-and-wire.md` section 6.1.
 
+use std::cell::{Ref, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
@@ -257,7 +258,7 @@ pub struct Step {
 /// The state of one session in the main loop.
 #[derive(Debug)]
 pub struct Connection {
-    settings: Settings,
+    settings: RefCell<Settings>,
     transaction: Transaction,
     session: Session,
     user: String,
@@ -283,7 +284,7 @@ impl Connection {
     /// A session with the settings that [`session_settings`] gave. `protocol` is the version of the protocol that the client uses.
     pub fn new(start: &Start, settings: Settings, protocol: u32) -> Connection {
         let mut connection = Connection {
-            settings,
+            settings: RefCell::new(settings),
             transaction: Transaction::default(),
             session: Session::new(),
             user: start.user.clone(),
@@ -342,13 +343,13 @@ impl Connection {
     }
 
     /// The settings of the session.
-    pub fn settings(&self) -> &Settings {
-        &self.settings
+    pub fn settings(&self) -> Ref<'_, Settings> {
+        self.settings.borrow()
     }
 
     /// The messages after `AuthenticationOk`: a `ParameterStatus` for each parameter that the client must know, then `BackendKeyData`. The first `ReadyForQuery` comes from the first [`Connection::step`].
     pub fn greet(&mut self, key: &CancelKey, out: &mut OutBuf) {
-        for (name, value) in self.settings.startup_reports() {
+        for (name, value) in self.settings.get_mut().startup_reports() {
             out.parameter_status(name.as_bytes(), value.as_bytes());
         }
         out.parameter_status(b"rupg.version", VERSION.as_bytes());
@@ -358,7 +359,7 @@ impl Connection {
 
     /// True when the client encoding is `UTF8`, so the strings of the messages must be valid UTF-8.
     fn utf8(&self) -> bool {
-        self.settings.get("client_encoding").is_none_or(|name| name != "SQL_ASCII")
+        self.settings.borrow().get("client_encoding").is_none_or(|name| name != "SQL_ASCII")
     }
 
     /// Reads at most one message from `input` and writes the answer to `out`.
@@ -448,7 +449,7 @@ impl Connection {
     /// The parameters that changed, then `ReadyForQuery`.
     fn ready_for_query(&mut self, out: &mut OutBuf) {
         self.session.set_utf8(self.utf8());
-        let mut reports = self.settings.reports();
+        let mut reports = self.settings.get_mut().reports();
         // PostgreSQL changes `is_superuser` inside the change of `session_authorization`, so it reports `session_authorization` first.
         let at = |reports: &[(&str, String)], name| reports.iter().position(|(n, _)| *n == name);
         if let (Some(user), Some(superuser)) =
@@ -483,7 +484,7 @@ impl Connection {
         locations: &[Option<usize>],
         out: &mut OutBuf,
     ) {
-        let least = match self.settings.get("client_min_messages").as_deref() {
+        let least = match self.settings.borrow().get("client_min_messages").as_deref() {
             Some("warning") => 1,
             Some("error") => 2,
             _ => 0,
@@ -559,7 +560,7 @@ impl Connection {
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
-                    settings: &mut self.settings,
+                    settings: self.settings.get_mut(),
                     transaction: &mut self.transaction,
                     user: &self.user,
                     notices: &mut notices,
@@ -607,6 +608,7 @@ impl Connection {
 
     /// Plans and runs a query of a `Query` message. The warnings of the analysis go to `notices`.
     fn select(&self, node: &Node, notices: &mut Vec<Notice>) -> Result<Done, Error> {
+        self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
         let plan = query::plan(node, &reader, &Params::default())?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
@@ -618,7 +620,7 @@ impl Connection {
     fn start_xact(&mut self) {
         if !self.xact_started {
             if self.transaction.start_command() {
-                self.settings.start_transaction(None);
+                self.settings.get_mut().start_transaction(None);
                 self.transaction_start = self.statement_start;
             }
             self.xact_started = true;
@@ -634,12 +636,12 @@ impl Connection {
         }
         self.xact_started = false;
         let (ending, chained) = self.transaction.finish_command();
-        let kept = chained.then(|| self.settings.characteristics());
+        let kept = chained.then(|| self.settings.get_mut().characteristics());
         if ending != Ending::None {
-            self.settings.end(ending == Ending::Commit);
+            self.settings.get_mut().end(ending == Ending::Commit);
         }
         if kept.is_some() {
-            self.settings.start_transaction(kept);
+            self.settings.get_mut().start_transaction(kept);
             self.transaction_start = self.statement_start;
         }
         if chained || self.transaction.block() == Block::Default {
@@ -658,7 +660,7 @@ impl Connection {
         write_error(out, "ERROR", error, position, false);
         self.xact_started = false;
         if self.transaction.abort_current() == Ending::Rollback {
-            self.settings.end(false);
+            self.settings.get_mut().end(false);
         }
         if self.transaction.failed() {
             self.portals.retain(|_, portal| {
@@ -908,6 +910,263 @@ mod tests {
             send(&mut c, &query("SET application_name = 'x'")),
             ["SET", "application_name=x", "ready I"]
         );
+    }
+
+    #[test]
+    fn set_config() {
+        big_stack(set_config_cases);
+    }
+
+    /// `set_config` in a query. Each result is the result of PostgreSQL 19.
+    fn set_config_cases() {
+        let (mut c, _) = connect();
+        let one = |c: &mut Connection, sql: &str| send(c, &query(sql));
+        let row = |c: &mut Connection, sql: &str| one(c, sql)[1].clone();
+        assert_eq!(
+            one(&mut c, "SELECT set_config('work_mem', '16MB', false); SHOW work_mem"),
+            [
+                "columns set_config",
+                "row 16MB",
+                "SELECT 1",
+                "columns work_mem",
+                "row 16MB",
+                "SHOW",
+                "ready I"
+            ]
+        );
+        assert_eq!(row(&mut c, "SELECT set_config('work_mem', '1024', false)"), "row 1MB");
+        assert_eq!(row(&mut c, "SELECT set_config('work_mem', NULL, false)"), "row 4MB");
+        assert_eq!(row(&mut c, "SELECT set_config('work_mem', '16MB', NULL)"), "row 16MB");
+        assert_eq!(row(&mut c, "SELECT set_config('Work_Mem', '2MB', false)"), "row 2MB");
+        assert_eq!(one(&mut c, "RESET work_mem"), ["RESET", "ready I"]);
+        assert_eq!(
+            row(&mut c, "SELECT pg_typeof(set_config('work_mem', '4MB', false))"),
+            "row text"
+        );
+        for (sql, error) in [
+            ("SELECT set_config(NULL, 'x', false)", "ERROR 22004 SET requires parameter name"),
+            (
+                "SELECT set_config('nope', 'x', false)",
+                "ERROR 42704 unrecognized configuration parameter \"nope\"",
+            ),
+            (
+                "SELECT set_config('', 'x', false)",
+                "ERROR 42704 unrecognized configuration parameter \"\"",
+            ),
+            (
+                "SELECT set_config('role', 'nobody', false)",
+                "ERROR 22023 role \"nobody\" does not exist",
+            ),
+            (
+                "SELECT set_config('session_authorization', 'nobody', false)",
+                "ERROR 22023 role \"nobody\" does not exist",
+            ),
+            (
+                "SELECT set_config('server_version', '1', false)",
+                "ERROR 55P02 parameter \"server_version\" cannot be changed",
+            ),
+            (
+                "SELECT set_config('work_mem', 'abc', false)",
+                "ERROR 22023 invalid value for parameter \"work_mem\": \"abc\"",
+            ),
+            (
+                "SELECT set_config('work_mem', '', false)",
+                "ERROR 22023 invalid value for parameter \"work_mem\": \"\"",
+            ),
+        ] {
+            assert_eq!(one(&mut c, sql), [error, "ready I"], "{sql}");
+        }
+        // A placeholder of an extension, and its reset to an empty string.
+        assert_eq!(row(&mut c, "SELECT set_config('my.var', 'x', false)"), "row x");
+        assert_eq!(row(&mut c, "SELECT current_setting('my.var')"), "row x");
+        assert_eq!(row(&mut c, "SELECT set_config('my.var', NULL, false)"), "row ");
+        assert_eq!(row(&mut c, "SELECT set_config('a.b.c', 'x', false)"), "row x");
+        // A local value ends with its transaction.
+        assert_eq!(row(&mut c, "SELECT set_config('work_mem', '8MB', true)"), "row 8MB");
+        assert_eq!(row(&mut c, "SHOW work_mem"), "row 4MB");
+        assert_eq!(one(&mut c, "BEGIN"), ["BEGIN", "ready T"]);
+        assert_eq!(row(&mut c, "SELECT set_config('work_mem', '8MB', true)"), "row 8MB");
+        assert_eq!(row(&mut c, "SHOW work_mem"), "row 8MB");
+        assert_eq!(one(&mut c, "COMMIT"), ["COMMIT", "ready I"]);
+        assert_eq!(row(&mut c, "SHOW work_mem"), "row 4MB");
+        // An error or a rollback undoes the change.
+        assert_eq!(
+            one(&mut c, "SELECT set_config('work_mem', '16MB', false), 1/0"),
+            ["ERROR 22012 division by zero", "ready I"]
+        );
+        assert_eq!(row(&mut c, "SHOW work_mem"), "row 4MB");
+        assert_eq!(one(&mut c, "BEGIN"), ["BEGIN", "ready T"]);
+        assert_eq!(row(&mut c, "SELECT set_config('work_mem', '16MB', false)"), "row 16MB");
+        assert_eq!(one(&mut c, "ROLLBACK"), ["ROLLBACK", "ready I"]);
+        assert_eq!(row(&mut c, "SHOW work_mem"), "row 4MB");
+        // The new value counts for the rest of the query, and a reported parameter is reported.
+        assert_eq!(
+            one(
+                &mut c,
+                "SELECT set_config('timezone', 'Etc/GMT-3', false), '2000-01-01 00:00+00'::timestamptz::text, '2000-01-01 00:00+00'::timestamptz"
+            ),
+            [
+                "columns set_config,text,timestamptz",
+                "row Etc/GMT-3,2000-01-01 03:00:00+03,2000-01-01 03:00:00+03",
+                "SELECT 1",
+                "TimeZone=Etc/GMT-3",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            one(
+                &mut c,
+                "SELECT '2000-01-01 00:00+00'::timestamptz::text, set_config('timezone', 'UTC', false), '2000-01-01 00:00+00'::timestamptz::text"
+            ),
+            [
+                "columns text,set_config,text",
+                "row 2000-01-01 03:00:00+03,UTC,2000-01-01 00:00:00+00",
+                "SELECT 1",
+                "TimeZone=UTC",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            one(
+                &mut c,
+                "SELECT set_config('search_path', 'pg_catalog', false), current_schemas(false)"
+            ),
+            [
+                "columns set_config,current_schemas",
+                "row pg_catalog,{pg_catalog}",
+                "SELECT 1",
+                "search_path=pg_catalog",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            one(&mut c, "RESET search_path"),
+            ["RESET", "search_path=\"$user\", public", "ready I"]
+        );
+        assert_eq!(
+            one(&mut c, "SELECT set_config('datestyle', 'german', false)"),
+            [
+                "columns set_config",
+                "row German, DMY",
+                "SELECT 1",
+                "DateStyle=German, DMY",
+                "ready I"
+            ]
+        );
+        assert_eq!(one(&mut c, "RESET datestyle"), ["RESET", "DateStyle=ISO, MDY", "ready I"]);
+        // A query takes a snapshot, so the isolation level and the deferrable mode cannot change after it.
+        assert_eq!(
+            row(&mut c, "SELECT set_config('transaction_isolation', 'read committed', false)"),
+            "row read committed"
+        );
+        assert_eq!(
+            one(&mut c, "SELECT set_config('transaction_isolation', 'serializable', false)"),
+            [
+                "ERROR 25001 SET TRANSACTION ISOLATION LEVEL must be called before any query",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            one(&mut c, "SELECT set_config('transaction_deferrable', 'on', false)"),
+            [
+                "ERROR 25001 SET TRANSACTION [NOT] DEFERRABLE must be called before any query",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            row(&mut c, "SELECT set_config('transaction_read_only', 'on', false)"),
+            "row on"
+        );
+        assert_eq!(
+            row(&mut c, "SELECT set_config('transaction_read_only', 'off', false)"),
+            "row off"
+        );
+        assert_eq!(
+            row(&mut c, "SELECT set_config('default_transaction_read_only', 'on', true)"),
+            "row on"
+        );
+    }
+
+    #[test]
+    fn transaction_modes_after_a_query() {
+        big_stack(transaction_modes_after_a_query_cases);
+    }
+
+    /// `SET TRANSACTION` after the first snapshot of the transaction. Each result is the result of PostgreSQL 19.
+    fn transaction_modes_after_a_query_cases() {
+        let (mut c, _) = connect();
+        let one = |c: &mut Connection, sql: &str| send(c, &query(sql));
+        assert_eq!(one(&mut c, "BEGIN READ ONLY")[0], "BEGIN");
+        assert_eq!(one(&mut c, "SELECT 1")[1], "row 1");
+        assert_eq!(one(&mut c, "SET TRANSACTION READ ONLY"), ["SET", "ready T"]);
+        assert_eq!(
+            one(&mut c, "SET TRANSACTION READ WRITE"),
+            ["ERROR 25001 transaction read-write mode must be set before any query", "ready E"]
+        );
+        assert_eq!(one(&mut c, "ROLLBACK"), ["ROLLBACK", "ready I"]);
+        assert_eq!(one(&mut c, "BEGIN READ ONLY")[0], "BEGIN");
+        assert_eq!(one(&mut c, "SET TRANSACTION READ WRITE"), ["SET", "ready T"]);
+        assert_eq!(one(&mut c, "SHOW transaction_read_only")[1], "row off");
+        assert_eq!(one(&mut c, "ROLLBACK"), ["ROLLBACK", "ready I"]);
+        // SHOW takes no snapshot.
+        assert_eq!(one(&mut c, "BEGIN")[0], "BEGIN");
+        assert_eq!(one(&mut c, "SHOW work_mem")[1], "row 4MB");
+        assert_eq!(
+            one(&mut c, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"),
+            ["SET", "ready T"]
+        );
+        assert_eq!(one(&mut c, "SHOW transaction_isolation")[1], "row repeatable read");
+        assert_eq!(one(&mut c, "ROLLBACK"), ["ROLLBACK", "ready I"]);
+        assert_eq!(one(&mut c, "BEGIN")[0], "BEGIN");
+        assert_eq!(one(&mut c, "SELECT 1")[1], "row 1");
+        assert_eq!(
+            one(&mut c, "SET TRANSACTION NOT DEFERRABLE"),
+            [
+                "ERROR 25001 SET TRANSACTION [NOT] DEFERRABLE must be called before any query",
+                "ready E"
+            ]
+        );
+        assert_eq!(one(&mut c, "ROLLBACK"), ["ROLLBACK", "ready I"]);
+        assert_eq!(
+            one(&mut c, "SELECT 1; SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"),
+            [
+                "columns ?column?",
+                "row 1",
+                "SELECT 1",
+                "ERROR 25001 SET TRANSACTION ISOLATION LEVEL must be called before any query",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            one(
+                &mut c,
+                "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ; SELECT 1; SHOW transaction_isolation"
+            ),
+            [
+                "SET",
+                "columns ?column?",
+                "row 1",
+                "SELECT 1",
+                "columns transaction_isolation",
+                "row repeatable read",
+                "SHOW",
+                "ready I"
+            ]
+        );
+        // Parse of a query in a block takes the snapshot too.
+        assert_eq!(one(&mut c, "BEGIN")[0], "BEGIN");
+        assert_eq!(
+            send(&mut c, &[parse("", "SELECT 1", &[]), sync()].concat()),
+            ["ParseComplete", "ready T"]
+        );
+        assert_eq!(
+            one(&mut c, "SET TRANSACTION ISOLATION LEVEL REPEATABLE READ"),
+            [
+                "ERROR 25001 SET TRANSACTION ISOLATION LEVEL must be called before any query",
+                "ready E"
+            ]
+        );
+        assert_eq!(one(&mut c, "ROLLBACK"), ["ROLLBACK", "ready I"]);
     }
 
     #[test]

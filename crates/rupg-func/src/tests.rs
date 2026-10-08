@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use rupg_common::{Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{
@@ -8,12 +10,12 @@ use rupg_types::{
 use crate::{Call, Session, kernel, output};
 
 struct TestSession {
-    zone: FixedZone,
+    zone: Rc<FixedZone>,
 }
 
 impl TestSession {
     fn new() -> TestSession {
-        TestSession { zone: FixedZone::utc() }
+        TestSession { zone: Rc::new(FixedZone::utc()) }
     }
 }
 
@@ -24,8 +26,8 @@ impl Session for TestSession {
     fn interval_style(&self) -> IntervalStyle {
         IntervalStyle::Postgres
     }
-    fn zone(&self) -> Result<&dyn TimeZone> {
-        Ok(&self.zone)
+    fn zone(&self) -> Result<Rc<dyn TimeZone>> {
+        Ok(Rc::clone(&self.zone) as Rc<dyn TimeZone>)
     }
     fn extra_float_digits(&self) -> i32 {
         1
@@ -65,6 +67,9 @@ impl Session for TestSession {
     }
     fn setting(&self, name: &str) -> Option<String> {
         (name == "datestyle").then(|| "ISO, MDY".to_string())
+    }
+    fn set_setting(&self, _: &str, _: Option<&str>, _: bool) -> Result<String> {
+        Err(rupg_common::Error::internal("the test session has no settings to change"))
     }
 }
 

@@ -1,3 +1,5 @@
+use std::rc::Rc;
+
 use rupg_analyze::{Env, Params, analyze};
 use rupg_common::Result;
 use rupg_sql::nodes::Node;
@@ -9,7 +11,7 @@ use crate::prepare;
 
 /// A session at 2000-01-11 00:00 UTC with the default settings.
 struct TestSession {
-    zone: FixedZone,
+    zone: Rc<FixedZone>,
 }
 
 impl rupg_func::Session for TestSession {
@@ -19,8 +21,8 @@ impl rupg_func::Session for TestSession {
     fn interval_style(&self) -> IntervalStyle {
         IntervalStyle::Postgres
     }
-    fn zone(&self) -> Result<&dyn TimeZone> {
-        Ok(&self.zone)
+    fn zone(&self) -> Result<Rc<dyn TimeZone>> {
+        Ok(Rc::clone(&self.zone) as Rc<dyn TimeZone>)
     }
     fn extra_float_digits(&self) -> i32 {
         1
@@ -61,6 +63,9 @@ impl rupg_func::Session for TestSession {
     fn setting(&self, _: &str) -> Option<String> {
         None
     }
+    fn set_setting(&self, _: &str, _: Option<&str>, _: bool) -> Result<String> {
+        Err(rupg_common::Error::internal("the test session has no settings to change"))
+    }
 }
 
 impl Env for TestSession {
@@ -87,7 +92,7 @@ impl Env for TestSession {
 
 /// The text of each column of each row of a query, `NULL` for a null value, or the error.
 fn run(sql: &str) -> Result<Vec<Vec<String>>> {
-    let session = TestSession { zone: FixedZone::utc() };
+    let session = TestSession { zone: Rc::new(FixedZone::utc()) };
     let (stmts, _) = rupg_sql::parse(sql).map_err(rupg_common::Error::from)?;
     let Some(Some(Node::RawStmt(raw))) = stmts.first() else { panic!("no statement in {sql}") };
     let query = analyze(raw.stmt.as_ref().expect("a statement"), &session, &Params::default())?;

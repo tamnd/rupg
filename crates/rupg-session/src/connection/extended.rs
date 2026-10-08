@@ -149,6 +149,7 @@ impl Connection {
                 return Err(aborted().into());
             }
             if query::is_query(node) {
+                self.settings.borrow_mut().take_snapshot();
                 let given = Params { types: params.clone(), variable: true };
                 let made = query::plan(node, &self.reader(), &given).map_err(|error| Failed {
                     position: error.position().map(|at| character_position(&text, at)),
@@ -162,7 +163,7 @@ impl Connection {
                 plan = Some(made);
             } else {
                 utility::check(node, &text)?;
-                columns = utility::columns(node, &self.settings)?
+                columns = utility::columns(node, &self.settings.borrow())?
                     .map(|names| names.into_iter().map(Column::text).collect());
             }
         }
@@ -191,6 +192,9 @@ impl Connection {
         let exits = statement.stmt.as_ref().is_some_and(utility::exits_transaction);
         if self.transaction.failed() && !(exits && statement.params.is_empty()) {
             return Err(aborted().into());
+        }
+        if statement.plan.is_some() || !statement.params.is_empty() {
+            self.settings.borrow_mut().take_snapshot();
         }
         self.portals.make_room(bind.portal)?;
         let formats = values.formats;
@@ -235,7 +239,7 @@ impl Connection {
     /// `bind_param_error_callback`: the context line of an error in the value of parameter `number`. `text` is the value in the text format, which the line shows in quotes with at most `log_parameter_max_length_on_error` bytes.
     fn param_context(&self, portal: &[u8], number: usize, text: Option<&str>) -> String {
         let max = match guc::find("log_parameter_max_length_on_error")
-            .map(|parameter| self.settings.setting(parameter))
+            .map(|parameter| self.settings.borrow().setting(parameter))
         {
             Some(Setting::Int(max)) => max,
             _ => 0,
@@ -320,12 +324,13 @@ impl Connection {
         let mut tag = None;
         if ready {
             let done = if let Some(plan) = &statement.plan {
+                self.settings.borrow_mut().take_snapshot();
                 let rows = query::run(plan, &params, &self.reader(), &formats)?;
                 Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
             } else {
                 let mut notices = Vec::new();
                 let mut cx = Context {
-                    settings: &mut self.settings,
+                    settings: self.settings.get_mut(),
                     transaction: &mut self.transaction,
                     user: &self.user,
                     notices: &mut notices,

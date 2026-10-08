@@ -145,6 +145,27 @@ fn current_setting(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     ))
 }
 
+/// `set_config_by_name`: `set_config`, which is `SET` as a function. A null value resets the parameter, and a null `is_local` is false.
+fn set_config(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let name = match args.first() {
+        Some(Value::Null) => {
+            return Err(Error::new(
+                SqlState::NULL_VALUE_NOT_ALLOWED,
+                "SET requires parameter name",
+            ));
+        }
+        Some(name) => name.as_str().ok_or_else(bad_value)?,
+        None => return Err(bad_value()),
+    };
+    let value = match args.get(1) {
+        Some(Value::Null) => None,
+        Some(value) => Some(value.as_str().ok_or_else(bad_value)?),
+        None => return Err(bad_value()),
+    };
+    let local = args.get(2).and_then(Value::as_bool).unwrap_or(false);
+    Ok(Value::Text(call.session.set_setting(name, value, local)?))
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
@@ -162,6 +183,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_client_encoding" => pg_client_encoding,
         "format_type" => format_type,
         "show_config_by_name" | "show_config_by_name_missing_ok" => current_setting,
+        "set_config_by_name" => set_config,
         _ => return None,
     })
 }
