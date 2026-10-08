@@ -158,7 +158,7 @@ pub struct AggregateRow {
     pub initval: Option<&'static str>,
 }
 
-/// A built-in object of a kind that an OID alias type names: a relation, a schema, a role, a database, a collation, a text search configuration or a text search dictionary.
+/// A built-in object that has a name, of a kind that an OID alias type or a function such as `pg_opclass_is_visible` reads.
 #[derive(Debug)]
 pub struct NamedRow {
     pub oid: u32,
@@ -167,6 +167,8 @@ pub struct NamedRow {
     pub namespace: u32,
     /// `collencoding` of a collation, -1 for a collation of any encoding. It is -1 for the other kinds.
     pub encoding: i32,
+    /// The access method of an operator class or an operator family, or 0 for the other kinds.
+    pub method: u32,
 }
 
 /// The kinds of [`NamedRow`].
@@ -186,23 +188,38 @@ pub enum Named {
     Config,
     /// `pg_ts_dict`.
     Dictionary,
+    /// `pg_ts_parser`.
+    Parser,
+    /// `pg_ts_template`.
+    Template,
+    /// `pg_opclass`.
+    Opclass,
+    /// `pg_opfamily`.
+    Opfamily,
+    /// `pg_conversion`.
+    Conversion,
 }
 
 impl Named {
-    /// The catalog, the column of the name and the column of the schema, or `""` for a kind that has no schema.
-    fn columns(self) -> (&'static str, &'static str, &'static str) {
+    /// The catalog, the column of the name, the column of the schema and the column of the access method. A column that the kind does not have is `""`.
+    fn columns(self) -> (&'static str, &'static str, &'static str, &'static str) {
         match self {
-            Named::Class => ("pg_class", "relname", "relnamespace"),
-            Named::Namespace => ("pg_namespace", "nspname", ""),
-            Named::Role => ("pg_authid", "rolname", ""),
-            Named::Database => ("pg_database", "datname", ""),
-            Named::Collation => ("pg_collation", "collname", "collnamespace"),
-            Named::Config => ("pg_ts_config", "cfgname", "cfgnamespace"),
-            Named::Dictionary => ("pg_ts_dict", "dictname", "dictnamespace"),
+            Named::Class => ("pg_class", "relname", "relnamespace", ""),
+            Named::Namespace => ("pg_namespace", "nspname", "", ""),
+            Named::Role => ("pg_authid", "rolname", "", ""),
+            Named::Database => ("pg_database", "datname", "", ""),
+            Named::Collation => ("pg_collation", "collname", "collnamespace", ""),
+            Named::Config => ("pg_ts_config", "cfgname", "cfgnamespace", ""),
+            Named::Dictionary => ("pg_ts_dict", "dictname", "dictnamespace", ""),
+            Named::Parser => ("pg_ts_parser", "prsname", "prsnamespace", ""),
+            Named::Template => ("pg_ts_template", "tmplname", "tmplnamespace", ""),
+            Named::Opclass => ("pg_opclass", "opcname", "opcnamespace", "opcmethod"),
+            Named::Opfamily => ("pg_opfamily", "opfname", "opfnamespace", "opfmethod"),
+            Named::Conversion => ("pg_conversion", "conname", "connamespace", ""),
         }
     }
 
-    const ALL: [Named; 7] = [
+    const ALL: [Named; 12] = [
         Named::Class,
         Named::Namespace,
         Named::Role,
@@ -210,7 +227,21 @@ impl Named {
         Named::Collation,
         Named::Config,
         Named::Dictionary,
+        Named::Parser,
+        Named::Template,
+        Named::Opclass,
+        Named::Opfamily,
+        Named::Conversion,
     ];
+}
+
+/// A row of `pg_description`, or of `pg_shdescription` with `objsubid` 0.
+#[derive(Debug)]
+pub struct DescriptionRow {
+    pub objoid: u32,
+    pub classoid: u32,
+    pub objsubid: i32,
+    pub description: &'static str,
 }
 
 struct Builtin {
@@ -233,6 +264,9 @@ struct Builtin {
     aggregate_fn: HashMap<u32, usize>,
     primary_keys: HashMap<u32, Vec<i16>>,
     named: HashMap<Named, Vec<NamedRow>>,
+    descriptions: Vec<DescriptionRow>,
+    description_key: HashMap<(u32, u32, i32), usize>,
+    shared_descriptions: Vec<DescriptionRow>,
 }
 
 static BUILTIN: LazyLock<Builtin> = LazyLock::new(Builtin::load);
@@ -318,6 +352,7 @@ impl Builtin {
         let opclasses = load_opclasses();
         let amops = load_amops();
         let aggregates = load_aggregates();
+        let descriptions = load_descriptions("pg_description");
         let mut amop_member = HashMap::new();
         let mut amop_operator: HashMap<u32, Vec<usize>> = HashMap::new();
         for (i, a) in amops.iter().enumerate() {
@@ -352,6 +387,13 @@ impl Builtin {
             aggregates,
             primary_keys: load_primary_keys(),
             named: Named::ALL.into_iter().map(|kind| (kind, load_named(kind))).collect(),
+            description_key: descriptions
+                .iter()
+                .enumerate()
+                .map(|(i, d)| ((d.objoid, d.classoid, d.objsubid), i))
+                .collect(),
+            descriptions,
+            shared_descriptions: load_descriptions("pg_shdescription"),
             types,
             procs,
             operators,
@@ -555,10 +597,11 @@ fn load_aggregates() -> Vec<AggregateRow> {
 
 /// The built-in objects of a kind, from its catalog.
 fn load_named(kind: Named) -> Vec<NamedRow> {
-    let (catalog, name, namespace) = kind.columns();
+    let (catalog, name, namespace, method) = kind.columns();
     let r = Rows::new(catalog);
     let (oid, name) = (r.oid("oid"), r.text(name));
     let namespace = if namespace.is_empty() { None } else { Some(r.oid(namespace)) };
+    let method = if method.is_empty() { None } else { Some(r.oid(method)) };
     let encoding = (kind == Named::Collation).then(|| r.int4("collencoding"));
     (0..r.catalog.len)
         .map(|i| NamedRow {
@@ -566,6 +609,23 @@ fn load_named(kind: Named) -> Vec<NamedRow> {
             name: name[i],
             namespace: namespace.map_or(0, |n| n[i]),
             encoding: encoding.map_or(-1, |e| e[i]),
+            method: method.map_or(0, |m| m[i]),
+        })
+        .collect()
+}
+
+/// The rows of `pg_description` or `pg_shdescription`, in the order of the catalog.
+fn load_descriptions(catalog: &str) -> Vec<DescriptionRow> {
+    let r = Rows::new(catalog);
+    let (objoid, classoid, description) =
+        (r.oid("objoid"), r.oid("classoid"), r.text("description"));
+    let objsubid = (catalog == "pg_description").then(|| r.int4("objsubid"));
+    (0..r.catalog.len)
+        .map(|i| DescriptionRow {
+            objoid: objoid[i],
+            classoid: classoid[i],
+            objsubid: objsubid.map_or(0, |s| s[i]),
+            description: description[i],
         })
         .collect()
 }
@@ -677,6 +737,28 @@ pub fn named(kind: Named) -> &'static [NamedRow] {
 /// The built-in object of a kind with this OID.
 pub fn named_by_oid(kind: Named, oid: u32) -> Option<&'static NamedRow> {
     named(kind).iter().find(|row| row.oid == oid)
+}
+
+/// The comment of an object from `pg_description`: the OID of the object, the OID of its catalog and the column number, or 0 for the object itself.
+pub fn description(objoid: u32, classoid: u32, objsubid: i32) -> Option<&'static str> {
+    BUILTIN
+        .description_key
+        .get(&(objoid, classoid, objsubid))
+        .map(|&i| BUILTIN.descriptions[i].description)
+}
+
+/// The rows of `pg_description`, in the order of the catalog.
+pub fn descriptions() -> &'static [DescriptionRow] {
+    &BUILTIN.descriptions
+}
+
+/// The comment of a shared object from `pg_shdescription`: the OID of the object and the OID of its catalog.
+pub fn shared_description(objoid: u32, classoid: u32) -> Option<&'static str> {
+    BUILTIN
+        .shared_descriptions
+        .iter()
+        .find(|d| d.objoid == objoid && d.classoid == classoid)
+        .map(|d| d.description)
 }
 
 /// The attribute numbers of the primary key of the table, when the key is not deferrable, as `check_functional_grouping` finds them.

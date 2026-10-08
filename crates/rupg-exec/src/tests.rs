@@ -858,6 +858,121 @@ fn oid_alias_types() {
     });
 }
 
+/// The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `obj_description`, `col_description` and `shobj_description`. Each result is the result of PostgreSQL 19 for `SELECT` and the text, with `search_path` at its default. The counts use only the OIDs below 10000, because the scripts of initdb add more rows.
+#[test]
+fn catalog_information_functions() {
+    const CASES: &[(&str, &str)] = &[
+        ("pg_table_is_visible(1259)", "t"),
+        ("pg_table_is_visible('pg_class'::regclass)", "t"),
+        ("pg_table_is_visible(2604)", "t"),
+        ("pg_table_is_visible(0)", "NULL"),
+        ("pg_table_is_visible(99999)", "NULL"),
+        ("pg_table_is_visible(NULL)", "NULL"),
+        ("pg_table_is_visible('pg_toast.pg_toast_1255'::regclass)", "f"),
+        ("pg_type_is_visible(23)", "t"),
+        ("pg_type_is_visible('int4'::regtype)", "t"),
+        ("pg_type_is_visible(0)", "NULL"),
+        ("pg_type_is_visible(99999)", "NULL"),
+        ("pg_type_is_visible(1007)", "t"),
+        ("pg_type_is_visible('pg_class'::regtype)", "t"),
+        ("pg_function_is_visible(177)", "t"),
+        ("pg_function_is_visible('int4pl'::regproc)", "t"),
+        ("pg_function_is_visible(0)", "NULL"),
+        ("pg_function_is_visible(99999)", "NULL"),
+        ("pg_operator_is_visible(551)", "t"),
+        ("pg_operator_is_visible(96)", "t"),
+        ("pg_operator_is_visible(0)", "NULL"),
+        ("pg_operator_is_visible(99999)", "NULL"),
+        ("pg_opclass_is_visible(1978)", "t"),
+        ("pg_opclass_is_visible(99999)", "NULL"),
+        ("pg_opfamily_is_visible(1976)", "t"),
+        ("pg_opfamily_is_visible(99999)", "NULL"),
+        ("pg_conversion_is_visible(4402)", "NULL"),
+        ("pg_conversion_is_visible(99999)", "NULL"),
+        ("pg_ts_parser_is_visible(3722)", "t"),
+        ("pg_ts_parser_is_visible(99999)", "NULL"),
+        ("pg_ts_template_is_visible(3727)", "t"),
+        ("pg_ts_template_is_visible(99999)", "NULL"),
+        ("pg_ts_config_is_visible(3748)", "t"),
+        ("pg_ts_config_is_visible(99999)", "NULL"),
+        ("pg_ts_dict_is_visible(3765)", "t"),
+        ("pg_ts_dict_is_visible(99999)", "NULL"),
+        ("pg_collation_is_visible(100)", "t"),
+        ("pg_collation_is_visible(950)", "t"),
+        ("pg_collation_is_visible(99999)", "NULL"),
+        ("pg_statistics_obj_is_visible(99999)", "NULL"),
+        ("pg_statistics_obj_is_visible(0)", "NULL"),
+        ("pg_get_userbyid(10)", "postgres"),
+        ("pg_get_userbyid(0)", "unknown (OID=0)"),
+        ("pg_get_userbyid(99999)", "unknown (OID=99999)"),
+        ("pg_get_userbyid(NULL)", "NULL"),
+        ("pg_typeof(pg_get_userbyid(10))", "name"),
+        ("obj_description(1259, 'pg_class')", "NULL"),
+        ("obj_description(11, 'pg_namespace')", "system catalog schema"),
+        ("obj_description(2200, 'pg_namespace')", "standard public schema"),
+        ("obj_description(99, 'pg_namespace')", "reserved schema for TOAST tables"),
+        ("obj_description(23, 'pg_type')", "-2 billion to 2 billion integer, 4-byte storage"),
+        ("obj_description('int4pl'::regproc, 'pg_proc')", "implementation of + operator"),
+        ("obj_description(551, 'pg_operator')", "add"),
+        ("obj_description(403, 'pg_am')", "b-tree index access method"),
+        ("obj_description(23, 'pg_proc')", "NULL"),
+        ("obj_description(23, 'no_such_catalog')", "NULL"),
+        ("obj_description(23, NULL)", "NULL"),
+        ("obj_description(NULL, 'pg_type')", "NULL"),
+        ("obj_description(1, 'pg_database')", "NULL"),
+        ("obj_description(23)", "-2 billion to 2 billion integer, 4-byte storage"),
+        ("obj_description(551)", "add"),
+        ("obj_description(11)", "system catalog schema"),
+        ("obj_description(99999)", "NULL"),
+        ("obj_description(0)", "NULL"),
+        ("pg_typeof(obj_description(23))", "text"),
+        ("col_description(1259, 1)", "NULL"),
+        ("col_description(1259, 0)", "NULL"),
+        ("col_description(99999, 1)", "NULL"),
+        ("col_description(1259, NULL)", "NULL"),
+        ("shobj_description(1, 'pg_database')", "default template for new databases"),
+        ("shobj_description(10, 'pg_authid')", "NULL"),
+        ("shobj_description(1, 'pg_class')", "NULL"),
+        ("shobj_description(99999, 'pg_database')", "NULL"),
+        ("shobj_description(1, NULL)", "NULL"),
+        (
+            "obj_description(oid, 'pg_proc') FROM pg_proc WHERE proname = 'int4pl'",
+            "implementation of + operator",
+        ),
+        ("count(*) FROM pg_type WHERE oid < 10000 AND pg_type_is_visible(oid)", "203"),
+        ("count(*) FROM pg_class WHERE oid < 10000 AND pg_table_is_visible(oid)", "188"),
+        ("count(*) FROM pg_proc WHERE oid < 1000 AND pg_function_is_visible(oid)", "580"),
+        ("count(*) FROM pg_operator WHERE oid < 1000 AND pg_operator_is_visible(oid)", "284"),
+        ("count(*) FROM pg_opclass WHERE pg_opclass_is_visible(oid)", "179"),
+        ("count(*) FROM pg_opfamily WHERE pg_opfamily_is_visible(oid)", "148"),
+        ("count(*) FROM pg_conversion WHERE pg_conversion_is_visible(oid)", "98"),
+        (
+            "count(*) FROM pg_proc WHERE oid < 1000 AND obj_description(oid, 'pg_proc') IS NOT NULL",
+            "580",
+        ),
+        (
+            "count(*) FROM pg_type WHERE obj_description(oid, 'pg_type') IS NOT NULL AND oid < 1000",
+            "36",
+        ),
+        ("count(*) FROM pg_operator WHERE obj_description(oid) IS NOT NULL AND oid < 1000", "284"),
+    ];
+    big_stack(|| {
+        for (text, expected) in CASES {
+            assert_eq!(outcome(&format!("SELECT {text}")), *expected, "{text}");
+        }
+        assert_eq!(
+            row(
+                "SELECT 'int4'::regtype, pg_type_is_visible('int4'::regtype), obj_description('int4'::regtype, 'pg_type')"
+            ),
+            Ok(Some(vec![
+                "integer".into(),
+                "t".into(),
+                "-2 billion to 2 billion integer, 4-byte storage".into()
+            ]))
+        );
+    });
+}
+
 /// The place of an error in the input of an OID alias type. An error of a literal is at the literal, as `pcb_error_callback` gives it. A syntax error in a type name at run time is at its place in the type name, with the line of `CONTEXT`. The places are the places of PostgreSQL 19, from 0.
 #[test]
 fn oid_alias_type_error_places() {

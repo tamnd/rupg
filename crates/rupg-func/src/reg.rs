@@ -55,12 +55,12 @@ fn namespace_oid(name: &str) -> Option<u32> {
 }
 
 /// The name of the schema with this OID.
-fn namespace_name(oid: u32) -> Option<&'static str> {
+pub(crate) fn namespace_name(oid: u32) -> Option<&'static str> {
     builtin::named_by_oid(Named::Namespace, oid).map(|row| row.name)
 }
 
 /// The schemas that an unqualified name searches: `pg_catalog` first when `search_path` does not name it, then the schemas of `search_path` that exist.
-fn path(session: &dyn Session) -> Vec<u32> {
+pub(crate) fn path(session: &dyn Session) -> Vec<u32> {
     let mut path: Vec<u32> = session.schemas().iter().filter_map(|n| namespace_oid(n)).collect();
     if !path.contains(&PG_CATALOG) {
         path.insert(0, PG_CATALOG);
@@ -122,20 +122,22 @@ fn spaces(schema: Option<&str>, session: &dyn Session) -> Vec<u32> {
     }
 }
 
-/// The object of a kind with a name in the first schema of `spaces` that has one. A collation of the encoding of the database comes before a collation of any encoding in the same schema, as `lookup_collation` finds it.
-fn find(kind: Named, spaces: &[u32], name: &str) -> Option<&'static NamedRow> {
+/// The object of a kind with a name in the first schema of `spaces` that has one. An operator class or an operator family must have the access method `method`, which is 0 for the other kinds. A collation of the encoding of the database comes before a collation of any encoding in the same schema, as `lookup_collation` finds it.
+fn find(kind: Named, spaces: &[u32], name: &str, method: u32) -> Option<&'static NamedRow> {
     let rows = builtin::named(kind);
     spaces.iter().find_map(|&ns| {
         let here = |encoding: i32| {
-            rows.iter().find(|r| r.namespace == ns && r.name == name && r.encoding == encoding)
+            rows.iter().find(|r| {
+                r.namespace == ns && r.name == name && r.method == method && r.encoding == encoding
+            })
         };
         if kind == Named::Collation { here(UTF8).or_else(|| here(-1)) } else { here(-1) }
     })
 }
 
 /// `RelationIsVisible` and the other checks of `namespace.c`: true when the unqualified name finds the object.
-fn visible(kind: Named, row: &NamedRow, session: &dyn Session) -> bool {
-    find(kind, &path(session), row.name).is_some_and(|found| found.oid == row.oid)
+pub(crate) fn visible(kind: Named, row: &NamedRow, session: &dyn Session) -> bool {
+    find(kind, &path(session), row.name, row.method).is_some_and(|found| found.oid == row.oid)
 }
 
 /// `FuncnameGetCandidates`: the functions with the name in the schemas, in the order of the schemas. A function with the same argument types as a function in a schema before it is hidden.
@@ -169,7 +171,7 @@ fn operators(spaces: &[u32], name: &str) -> Vec<&'static OperatorRow> {
 }
 
 /// `FunctionIsVisible`.
-fn function_visible(proc: &ProcRow, session: &dyn Session) -> bool {
+pub(crate) fn function_visible(proc: &ProcRow, session: &dyn Session) -> bool {
     functions(&path(session), proc.name, Some(proc.argtypes.len()))
         .iter()
         .find(|f| f.argtypes == proc.argtypes)
@@ -177,7 +179,7 @@ fn function_visible(proc: &ProcRow, session: &dyn Session) -> bool {
 }
 
 /// `OperatorIsVisible`.
-fn operator_visible(op: &OperatorRow, session: &dyn Session) -> bool {
+pub(crate) fn operator_visible(op: &OperatorRow, session: &dyn Session) -> bool {
     operators(&path(session), op.name)
         .iter()
         .find(|f| (f.left, f.right) == (op.left, op.right))
@@ -291,7 +293,7 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
     };
     let in_schema = |named: Named, state: SqlState, message: String| {
         let (schema, name) = deconstruct(names, session)?;
-        match find(named, &spaces(schema, session), name) {
+        match find(named, &spaces(schema, session), name, 0) {
             Some(row) => Ok(Ok(row.oid)),
             None => soft(state, message),
         }
@@ -385,7 +387,7 @@ fn class_in(names: &[Cow<'_, str>], session: &dyn Session, strict: bool) -> Soft
         },
         None => path(session),
     };
-    if let Some(row) = find(Named::Class, &spaces, name) {
+    if let Some(row) = find(Named::Class, &spaces, name, 0) {
         return Ok(Ok(row.oid));
     }
     let message = if strict {
@@ -539,7 +541,7 @@ fn operator_in(text: &str, session: &dyn Session) -> Soft<u32> {
 }
 
 /// The text argument of a function.
-fn text_arg(args: &[Value]) -> Result<&str> {
+pub(crate) fn text_arg(args: &[Value]) -> Result<&str> {
     args.first().and_then(Value::as_str).ok_or_else(bad_value)
 }
 

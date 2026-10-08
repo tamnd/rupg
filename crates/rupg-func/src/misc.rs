@@ -174,6 +174,6 @@ pub(crate) fn sql_function(func: u32) -> Option<Kernel> {
         1810 | 1811 => bit_length,
         2003 | 2004 => any_concat,
         1285 | 1290 => quote_any,
-        _ => return math::numeric_sql(func),
+        _ => return math::numeric_sql(func).or_else(|| crate::catinfo::sql_function(func)),
     })
 }
