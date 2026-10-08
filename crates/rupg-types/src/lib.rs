@@ -8,6 +8,8 @@
 //!
 //! [`oid`], one constant for each type in `pg_type.dat` at the pin and for its array type, and [`TypeInfo`], the row of `pg_type` that the protocol needs. [`PgType`] is an OID with a typmod, and [`typmod`] encodes and decodes the typmod of `varchar`, `numeric` and `interval`. The row types of the shared catalogs, such as `pg_database`, come from the catalog headers and not from `pg_type.dat`, so they are not here.
 //!
+//! [`Value`], one value of any type in the engine. The expression that gives a value has its type, so the value does not carry it.
+//!
 //! The text forms of `bool`, `"char"`, `name`, `int2`, `int4`, `int8`, `oid`, `float4`, `float8`, `bytea` and `uuid`. An input function takes the string and gives the value or a [`TypeError`]. An output function appends to a buffer, so the row encoder can write a whole row into one buffer with no allocation per value. [`float8_out`] and [`float4_out`] take `extra_float_digits`: above zero they give the shortest text that reads back to the same value, and at zero or below they give the `%g` text of old servers.
 //!
 //! `text`, `varchar(n)`, `character(n)` and `json`. The text form of `text` is the string. [`varchar_in`] and [`bpchar_in`] take the typmod, refuse a value that is too long, and remove the spaces after the length. [`bpchar_in`] also pads a short value with spaces. [`varchar_coerce`] and [`bpchar_coerce`] are the length casts, which cut with no error when the cast is explicit. [`json_in`] checks the syntax with the error details of PostgreSQL and gives the string. [`Recv::text`] is the encoding check of the receive function of each string type.
@@ -58,6 +60,7 @@ mod types;
 pub mod typmod;
 pub mod tz;
 pub mod unicode;
+mod value;
 
 pub use array::{
     Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, array_in, array_out, array_recv, array_send,
@@ -70,10 +73,10 @@ pub use datetime::{
     DateTimeInput, FixedZone, Interval, IntervalStyle, NoZones, POSTGRES_EPOCH_JDATE,
     TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, TimeZone, UNIX_EPOCH_JDATE,
     UNIX_TO_POSTGRES_DAYS, UNIX_TO_POSTGRES_USECS, USECS_PER_DAY, USECS_PER_SEC, ZoneAbbrevs,
-    ZoneLookup, date_from_unix, date_in, date_out, date_recv, date2j, interval_in, interval_out,
-    interval_recv, interval_send, j2date, time_in, time_out, time_recv, timestamp_from_unix,
-    timestamp_in, timestamp_out, timestamp_recv, timestamptz_in, timestamptz_out, timetz_in,
-    timetz_out, timetz_recv,
+    ZoneLookup, adjust_interval, adjust_time, adjust_timestamp, date_from_unix, date_in, date_out,
+    date_recv, date2j, interval_in, interval_out, interval_recv, interval_send, j2date, time_in,
+    time_out, time_recv, timestamp_from_unix, timestamp_in, timestamp_out, timestamp_recv,
+    timestamptz_in, timestamptz_out, timetz_in, timetz_out, timetz_recv,
 };
 pub use datum::Datum;
 pub use error::TypeError;
@@ -96,3 +99,4 @@ pub use scalar::{
 pub use string::{bpchar_coerce, bpchar_in, varchar_coerce, varchar_in};
 pub use typeid::TypeId;
 pub use types::{Oid, PgType, TypeInfo, format_type};
+pub use value::Value;

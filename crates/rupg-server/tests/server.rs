@@ -147,7 +147,9 @@ fn a_session() {
     stream.write_all(&query("SHOW work_mem; BEGIN")).unwrap();
     assert_eq!(read(&mut *stream), ["columns 1", "row 16MB", "SHOW", "BEGIN", "ready T"]);
     stream.write_all(&query("SELECT 1")).unwrap();
-    assert_eq!(read(&mut *stream), ["ERROR 0A000 SELECT is not supported yet", "ready E"]);
+    assert_eq!(read(&mut *stream), ["columns 1", "row 1", "SELECT 1", "ready T"]);
+    stream.write_all(&query("SELECT 1/0")).unwrap();
+    assert_eq!(read(&mut *stream), ["ERROR 22012 division by zero", "ready E"]);
     stream.write_all(&query("ROLLBACK")).unwrap();
     assert_eq!(read(&mut *stream), ["ROLLBACK", "ready I"]);
     stream.write_all(&message(b'X', b"")).unwrap();

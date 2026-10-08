@@ -412,7 +412,8 @@ fn time_value(recv: &mut Recv<'_>) -> Result<i64, TypeError> {
     Ok(time)
 }
 
-fn adjust_time(time: i64, typmod: i32) -> i64 {
+/// `AdjustTimeForTypmod`: the time rounded to the precision of the typmod.
+pub fn adjust_time(time: i64, typmod: i32) -> i64 {
     if (0..=MAX_TIME_PRECISION).contains(&typmod) { round_usecs(time, typmod) } else { time }
 }
 
@@ -538,8 +539,8 @@ pub fn timestamp_recv(recv: &mut Recv<'_>, typmod: i32) -> Result<i64, TypeError
     adjust_timestamp(ts, typmod)
 }
 
-/// `AdjustTimestampForTypmod`.
-fn adjust_timestamp(ts: i64, typmod: i32) -> Result<i64, TypeError> {
+/// `AdjustTimestampForTypmod`: the timestamp rounded to the precision of the typmod.
+pub fn adjust_timestamp(ts: i64, typmod: i32) -> Result<i64, TypeError> {
     if ts == TIMESTAMP_NEGATIVE_INFINITY
         || ts == TIMESTAMP_INFINITY
         || typmod == -1
@@ -746,8 +747,8 @@ pub fn interval_recv(recv: &mut Recv<'_>, typmod: i32) -> Result<Interval, TypeE
     adjust_interval(iv, typmod)
 }
 
-/// `AdjustIntervalForTypmod`.
-fn adjust_interval(mut iv: Interval, typmod: i32) -> Result<Interval, TypeError> {
+/// `AdjustIntervalForTypmod`: the interval with the fields and the precision of the typmod.
+pub fn adjust_interval(mut iv: Interval, typmod: i32) -> Result<Interval, TypeError> {
     if typmod < 0 || iv == Interval::INFINITY || iv == Interval::NEGATIVE_INFINITY {
         return Ok(iv);
     }

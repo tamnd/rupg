@@ -8,6 +8,8 @@ inh = "inh"
 larg = "larg"
 # A test of the parser gives `SELEC` for a syntax error.
 selec = "selec"
+# The `prosrc` of the casts `i2toi4` and `i4toi2`.
+toi = "toi"
 
 # Test inputs that are wrong on purpose.
 [default]

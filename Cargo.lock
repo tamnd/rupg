@@ -273,6 +273,12 @@ dependencies = [
 [[package]]
 name = "rupg-analyze"
 version = "0.0.14"
+dependencies = [
+ "rupg-common",
+ "rupg-pgcatalog",
+ "rupg-sql",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-ann"
@@ -340,6 +346,14 @@ version = "0.0.14"
 [[package]]
 name = "rupg-exec"
 version = "0.0.14"
+dependencies = [
+ "rupg-analyze",
+ "rupg-common",
+ "rupg-func",
+ "rupg-pgcatalog",
+ "rupg-sql",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-ext"
@@ -356,6 +370,13 @@ dependencies = [
 [[package]]
 name = "rupg-func"
 version = "0.0.14"
+dependencies = [
+ "md-5",
+ "rupg-common",
+ "rupg-pgcatalog",
+ "rupg-sql",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-graph"
@@ -444,7 +465,12 @@ dependencies = [
 name = "rupg-session"
 version = "0.0.14"
 dependencies = [
+ "rupg-analyze",
  "rupg-common",
+ "rupg-exec",
+ "rupg-func",
+ "rupg-pgcatalog",
+ "rupg-platform",
  "rupg-sql",
  "rupg-types",
  "rupg-wire",
