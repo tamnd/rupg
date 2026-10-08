@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.0.15 (2026-10-08)
+
+The fifteenth patch release on the 0.0 line. It adds the first part of the query engine: `SELECT` without `FROM`, through the simple and the extended query protocol, and the status of each parameter. No crate is published.
+
 ### Added
 
 - The status of each parameter (spec/06 section 6.13.2). rupg honors 37 parameters, accepts 384, and refuses some values of 4. A refused value fails with `0A000` and `rupg does not support parameter "%s" set to "%s"`, from `SET`, `BEGIN`, the startup packet, the command line or the configuration file. The refused values are `serializable` for `transaction_isolation` and `default_transaction_isolation`, `replica` for `session_replication_role`, and `on` for `ssl_sni`. `crates/rupg-session/tests/status.tsv` is the report.
