@@ -4,6 +4,19 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.1 (2026-10-08)
+
+A patch release on the way to M2. The SQL that a session can run is the same as in 0.1.0.
+
+### Added
+
+- The analyzer can run `CREATE TABLE`, `CREATE INDEX` and `CREATE SCHEMA` on a catalog (#174). It makes the same rows, OIDs, names, notices and errors as PostgreSQL 19 for 102 cases from the oracle. A session does not send these statements to it yet, so they still give `0A000`.
+
+### Fixed
+
+- The header of `cargo xtask bench` gives the toolchain that made the instruction counts (#173).
+- The `type_recv` fuzz target does not fail on an `interval` whose time is the smallest `int64`. PostgreSQL also refuses the output of that value as input (#175).
+
 ## 0.1.0 (2026-10-08)
 
 The release that closes M1, the file. The single `.rupg` file, the buffer manager, the per-worker log, recovery, the hot store and the first MVCC are complete, and the three M1 fuzz targets ran 24 CPU hours each with no find. The close report is in issue #2. This release also has the first instruction count set and the first privilege functions. No crate is published.
