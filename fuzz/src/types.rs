@@ -2,6 +2,8 @@
 //!
 //! A target gives one value to the input or the receive function of a type. A panic and an internal error (`XX000`) are failures. When the function accepts the value, the output, input, send and receive functions must agree on it: the text of the value must read back to the same text, and the binary form must read back to the same text. A difference from PostgreSQL is not a failure of the target, because the oracle is a separate process. The replay tool runs the corpus of a target on the oracle and shows each case where rupg gives a different answer.
 
+use std::rc::Rc;
+
 use arbitrary::{Arbitrary, Unstructured};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
@@ -135,14 +137,14 @@ impl Settings {
     }
 
     fn session(self) -> FuzzSession {
-        FuzzSession { settings: self, zone: FixedZone::utc() }
+        FuzzSession { settings: self, zone: Rc::new(FixedZone::utc()) }
     }
 }
 
 /// A session in UTC at 2000-01-11 00:00 with the settings.
 struct FuzzSession {
     settings: Settings,
-    zone: FixedZone,
+    zone: Rc<FixedZone>,
 }
 
 impl Session for FuzzSession {
@@ -153,8 +155,8 @@ impl Session for FuzzSession {
     fn interval_style(&self) -> IntervalStyle {
         self.settings.interval().1
     }
-    fn zone(&self) -> Result<&dyn TimeZone> {
-        Ok(&self.zone)
+    fn zone(&self) -> Result<Rc<dyn TimeZone>> {
+        Ok(Rc::clone(&self.zone) as Rc<dyn TimeZone>)
     }
     fn extra_float_digits(&self) -> i32 {
         self.settings.float_digits()
@@ -194,6 +196,9 @@ impl Session for FuzzSession {
     }
     fn setting(&self, _: &str) -> Option<String> {
         None
+    }
+    fn set_setting(&self, _: &str, _: Option<&str>, _: bool) -> Result<String> {
+        Err(Error::internal("the fuzz session has no settings to change"))
     }
 }
 
