@@ -28,25 +28,35 @@ impl Status {
 }
 
 /// The honored parameters with the part of rupg that reads each one, in the order of the names without regard to case.
-pub static HONORED: [(&str, &str); 29] = [
+pub static HONORED: [(&str, &str); 37] = [
     ("application_name", "The server reports it to the client."),
+    ("array_nulls", "The input of an array reads an unquoted NULL as a null when it is on."),
+    ("bytea_output", "The output of bytea uses the hex or the escape form."),
     (
         "client_encoding",
         "The session checks the strings of the messages. Only UTF8 and SQL_ASCII are taken.",
     ),
     ("client_min_messages", "The session sends only the notices at this level or above."),
     ("data_checksums", "rupg checks each page and has no way to turn it off."),
+    ("DateStyle", "The output and the input of the date and time types follow it."),
+    ("extra_float_digits", "The output of real and double precision follows it."),
     ("hba_file", "The server reads the rules of client authentication from it."),
     ("ident_file", "The server reads the user name maps from it."),
     ("in_hot_standby", "rupg has no standby yet, so the value is off."),
     ("integer_datetimes", "rupg keeps the date and time types as integers."),
+    ("IntervalStyle", "The output of interval follows it."),
     ("is_superuser", "The session sets it from the role of the connection."),
     ("listen_addresses", "The server listens on these TCP addresses."),
+    (
+        "log_parameter_max_length_on_error",
+        "The context of a bad parameter value in Bind shows this many bytes of the value.",
+    ),
     ("max_identifier_length", "The lexer cuts a longer name to 63 bytes."),
     ("md5_password_warnings", "The server warns when a client uses an MD5 password."),
     ("password_encryption", "The server stores new passwords with this method."),
     ("port", "The server listens on this port and names its socket with it."),
     ("scram_iterations", "The server uses this iteration count for new SCRAM secrets."),
+    ("search_path", "The analyzer looks up the functions and the types in these schemas."),
     ("server_encoding", "rupg keeps all text in UTF8."),
     ("server_version", "The session reports the version of PostgreSQL and of rupg."),
     ("server_version_num", "The session reports the version of PostgreSQL."),
@@ -68,6 +78,10 @@ pub static HONORED: [(&str, &str); 29] = [
     (
         "standard_conforming_strings",
         "PostgreSQL 19 takes only on, and the lexer reads strings with the standard rules.",
+    ),
+    (
+        "TimeZone",
+        "The date and time functions use it. A named zone other than UTC, GMT and Etc/GMT+N gives 0A000 when a statement needs it.",
     ),
     ("unix_socket_directories", "The server makes its Unix sockets in these directories."),
 ];

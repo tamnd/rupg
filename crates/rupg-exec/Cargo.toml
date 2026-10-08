@@ -14,6 +14,14 @@ readme.workspace = true
 publish = false
 
 [dependencies]
+rupg-analyze.workspace = true
+rupg-common.workspace = true
+rupg-func.workspace = true
+rupg-pgcatalog.workspace = true
+rupg-types.workspace = true
+
+[dev-dependencies]
+rupg-sql.workspace = true
 
 [lints]
 workspace = true

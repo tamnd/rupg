@@ -6,14 +6,18 @@
 
 use std::sync::Arc;
 
+use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
+use rupg_exec::Plan;
 use rupg_sql::nodes::Node;
-use rupg_types::oid;
+use rupg_types::{Value, oid};
 use rupg_wire::{Bind, CommandTag, Field, Oids, OutBuf, ProtocolError, Target};
 
-use super::{Connection, TEXT_OID};
+use super::{Connection, Done, character_position};
+use crate::guc::{self, Setting};
 use crate::param;
-use crate::utility::{self, Context, Notice, Outcome};
+use crate::query::{self, Column, Row};
+use crate::utility::{self, Context, Notice};
 
 /// A prepared statement.
 #[derive(Debug)]
@@ -24,8 +28,10 @@ pub(super) struct Prepared {
     stmt: Option<Node>,
     /// The type OIDs of the parameters.
     params: Vec<u32>,
-    /// The names of the columns, or `None` when the statement gives no rows.
-    columns: Option<Vec<String>>,
+    /// The columns, or `None` when the statement gives no rows.
+    columns: Option<Vec<Column>>,
+    /// The plan of a statement that the engine runs, or `None` for a statement that the session runs.
+    plan: Option<Plan>,
 }
 
 /// What a portal did so far.
@@ -33,8 +39,8 @@ pub(super) struct Prepared {
 enum Run {
     /// The statement did not run yet.
     Ready,
-    /// The statement ran and gave rows. `at` is the first row that the client did not fetch.
-    Rows { rows: Vec<Vec<String>>, at: usize },
+    /// The statement ran and gave rows. `at` is the first row that the client did not fetch, and `tag` is the tag of `CommandComplete`.
+    Rows { rows: Vec<Row>, at: usize, tag: CommandTag },
     /// The statement ran and gave no rows, so it cannot run again.
     Done,
 }
@@ -45,6 +51,8 @@ pub(super) struct Portal {
     statement: Arc<Prepared>,
     /// The result format of each column.
     formats: Vec<i16>,
+    /// The values of the parameters of a statement that the engine runs.
+    params: Vec<Value>,
     run: Run,
     /// The transaction block failed after the portal was made, so the portal cannot run.
     pub(super) failed: bool,
@@ -85,8 +93,8 @@ pub(super) fn aborted() -> Error {
     )
 }
 
-/// `RowDescription` for the columns, or `NoData` when there are none. All the columns are `text`.
-fn describe_rows(columns: Option<&[String]>, formats: &[i16], out: &mut OutBuf) {
+/// `RowDescription` for the columns, or `NoData` when there are none.
+fn describe_rows(columns: Option<&[Column]>, formats: &[i16], out: &mut OutBuf) {
     let Some(columns) = columns else {
         out.no_data();
         return;
@@ -94,15 +102,7 @@ fn describe_rows(columns: Option<&[String]>, formats: &[i16], out: &mut OutBuf) 
     let fields: Vec<Field<'_>> = columns
         .iter()
         .enumerate()
-        .map(|(i, name)| Field {
-            name: name.as_bytes(),
-            table: 0,
-            column: 0,
-            type_oid: TEXT_OID,
-            type_size: -1,
-            type_modifier: -1,
-            format: formats.get(i).copied().unwrap_or(0),
-        })
+        .map(|(i, column)| column.field(formats.get(i).copied().unwrap_or(0)))
         .collect();
     out.row_description(&fields);
 }
@@ -142,15 +142,33 @@ impl Connection {
             .into());
         }
         let mut columns = None;
+        let mut plan = None;
+        let mut params: Vec<u32> = types.iter().collect();
         if let Some(node) = &stmt {
             if self.transaction.failed() && !utility::exits_transaction(node) {
                 return Err(aborted().into());
             }
-            utility::check(node, &text)?;
-            columns = utility::columns(node, &self.settings)?;
+            if query::is_query(node) {
+                let given = Params { types: params.clone(), variable: true };
+                let made = query::plan(node, &self.reader(), &given).map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&text, at)),
+                    error,
+                })?;
+                let mut notices: Vec<Notice> =
+                    made.notices().iter().map(|error| Notice::warning(error.clone())).collect();
+                self.notices(&mut notices, &text, &[], out);
+                columns = Some(query::columns(&made));
+                params = made.params().to_vec();
+                plan = Some(made);
+            } else {
+                utility::check(node, &text)?;
+                columns = utility::columns(node, &self.settings)?
+                    .map(|names| names.into_iter().map(Column::text).collect());
+            }
         }
-        let params: Vec<u32> = types.iter().collect();
-        if let Some(at) = params.iter().position(|&t| t == 0 || t == oid::UNKNOWN) {
+        if plan.is_none()
+            && let Some(at) = params.iter().position(|&t| t == 0 || t == oid::UNKNOWN)
+        {
             return Err(Error::new(
                 SqlState::INDETERMINATE_DATATYPE,
                 format!("could not determine data type of parameter ${}", at + 1),
@@ -158,7 +176,7 @@ impl Connection {
             .into());
         }
         self.interrupted()?;
-        let prepared = Prepared { text, stmt, params, columns };
+        let prepared = Prepared { text, stmt, params, columns, plan };
         self.statements.insert(name, Arc::new(prepared))?;
         out.parse_complete();
         Ok(())
@@ -176,9 +194,19 @@ impl Connection {
         }
         self.portals.make_room(bind.portal)?;
         let formats = values.formats;
+        let mut params = Vec::new();
         for (i, &type_oid) in statement.params.iter().enumerate() {
             let value = values.next().transpose()?.flatten();
-            param::check(type_oid, formats.of(i), value, i + 1)?;
+            let format = formats.of(i);
+            let result = if statement.plan.is_some() {
+                query::param(type_oid, format, value, i + 1, &self.reader()).map(|v| params.push(v))
+            } else {
+                param::check(type_oid, format, value, i + 1)
+            };
+            result.map_err(|error| {
+                let text = value.filter(|_| format == 0).and_then(|v| std::str::from_utf8(v).ok());
+                error.with_context(self.param_context(bind.portal, i + 1, text))
+            })?;
         }
         let result_formats = values.finish()?;
         let formats = match &statement.columns {
@@ -198,10 +226,36 @@ impl Connection {
             }
             None => Vec::new(),
         };
-        let portal = Portal { statement, formats, run: Run::Ready, failed: false };
+        let portal = Portal { statement, formats, params, run: Run::Ready, failed: false };
         self.portals.insert(bind.portal, portal);
         out.bind_complete();
         Ok(())
+    }
+
+    /// `bind_param_error_callback`: the context line of an error in the value of parameter `number`. `text` is the value in the text format, which the line shows in quotes with at most `log_parameter_max_length_on_error` bytes.
+    fn param_context(&self, portal: &[u8], number: usize, text: Option<&str>) -> String {
+        let max = match guc::find("log_parameter_max_length_on_error")
+            .map(|parameter| self.settings.setting(parameter))
+        {
+            Some(Setting::Int(max)) => max,
+            _ => 0,
+        };
+        let value = text.map(|text| {
+            let (shown, ellipsis) = match usize::try_from(max) {
+                Ok(max) if max < text.len() => {
+                    let end = (0..=max).rev().find(|&at| text.is_char_boundary(at)).unwrap_or(0);
+                    (&text[..end], "...")
+                }
+                _ => (text, ""),
+            };
+            format!(" = '{}{ellipsis}'", shown.replace('\'', "''"))
+        });
+        let value = value.unwrap_or_default();
+        if portal.is_empty() {
+            format!("unnamed portal parameter ${number}{value}")
+        } else {
+            format!("portal \"{}\" parameter ${number}{value}", String::from_utf8_lossy(portal))
+        }
     }
 
     /// `exec_describe_statement_message` and `exec_describe_portal_message`.
@@ -259,61 +313,75 @@ impl Connection {
             )
             .into());
         }
+        let ready = matches!(portal.run, Run::Ready);
+        let params = std::mem::take(&mut portal.params);
+        let formats = portal.formats.clone();
         let mut immediate_commit = false;
         let mut tag = None;
-        if matches!(portal.run, Run::Ready) {
-            let mut notices = Vec::new();
-            let mut cx = Context {
-                settings: &mut self.settings,
-                transaction: &mut self.transaction,
-                user: &self.user,
-                notices: &mut notices,
-                immediate_commit: false,
+        if ready {
+            let done = if let Some(plan) = &statement.plan {
+                let rows = query::run(plan, &params, &self.reader(), &formats)?;
+                Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
+            } else {
+                let mut notices = Vec::new();
+                let mut cx = Context {
+                    settings: &mut self.settings,
+                    transaction: &mut self.transaction,
+                    user: &self.user,
+                    notices: &mut notices,
+                    immediate_commit: false,
+                };
+                let result = utility::run(node, &statement.text, &mut cx);
+                immediate_commit = cx.immediate_commit;
+                self.notices(&mut notices, &statement.text, &[], out);
+                result?.into()
             };
-            let result = utility::run(node, &statement.text, &mut cx);
-            immediate_commit = cx.immediate_commit;
-            self.notices(&mut notices, &statement.text, &[], out);
-            match result? {
-                Outcome::Tag(done) => {
+            match done {
+                Done::Tag(done) => {
                     if done == CommandTag::DiscardAll {
                         self.statements.deallocate_all();
                         self.portals.clear();
                     } else if let Some(portal) = self.portals.find_mut(name) {
                         portal.run = Run::Done;
                     }
-                    tag = Some(done);
+                    tag = Some((done, 0));
                 }
-                Outcome::Rows { rows, .. } => {
+                Done::Rows { rows, tag, .. } => {
                     if let Some(portal) = self.portals.find_mut(name) {
-                        portal.run = Run::Rows { rows, at: 0 };
+                        portal.run = Run::Rows { rows, at: 0, tag };
                     }
                 }
             }
         }
-        let tag = match tag {
+        let (tag, count) = match tag {
             Some(tag) => tag,
-            None => {
-                if !self.fetch(name, max_rows, out)? {
+            None => match self.fetch(name, max_rows, out)? {
+                (tag, count, true) => (tag, count),
+                (_, _, false) => {
                     out.portal_suspended();
                     self.pipelining = true;
                     return Ok(());
                 }
-                CommandTag::Show
-            }
+            },
         };
         if transaction_statement || immediate_commit {
             self.finish_xact();
         } else {
             self.pipelining = true;
         }
-        out.command_tag(tag, 0);
+        out.command_tag(tag, count);
         Ok(())
     }
 
-    /// `PortalRunSelect` on the rows of a portal: sends at most `max_rows` of them, or all of them when `max_rows` is zero or less. It gives true when the portal is at its end, which is when it sent fewer rows than `max_rows`.
-    fn fetch(&mut self, name: &[u8], max_rows: i32, out: &mut OutBuf) -> Result<bool, Failed> {
+    /// `PortalRunSelect` on the rows of a portal: sends at most `max_rows` of them, or all of them when `max_rows` is zero or less. It gives the tag of the portal, the number of rows that it sent, and true when the portal is at its end, which is when it sent fewer rows than `max_rows`.
+    fn fetch(
+        &mut self,
+        name: &[u8],
+        max_rows: i32,
+        out: &mut OutBuf,
+    ) -> Result<(CommandTag, u64, bool), Failed> {
         let portal = self.portals.get_mut(name)?;
-        let Run::Rows { rows, at } = &mut portal.run else {
+        let Run::Rows { rows, at, tag } = &mut portal.run else {
             return Err(Error::internal("a portal with no rows to fetch").into());
         };
         let left = rows.len() - *at;
@@ -329,13 +397,13 @@ impl Connection {
             )
             .into());
         }
-        // The binary form of `text` is its bytes, as in the text form.
+        // The binary form of `text` is its bytes, as in the text form, so the rows of a `SHOW` serve both formats.
         for row in &rows[*at..*at + count] {
-            let values: Vec<Option<&[u8]>> = row.iter().map(|v| Some(v.as_bytes())).collect();
+            let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
             out.data_row(&values);
         }
         *at += count;
-        Ok(max.is_none_or(|max| count < max))
+        Ok((*tag, count as u64, max.is_none_or(|max| count < max)))
     }
 
     /// The `Close` message. A name that is not there is not an error.

@@ -246,6 +246,12 @@ impl Clock for OsClock {
             .map_or(0, |d| u64::try_from(d.as_millis()).unwrap_or(u64::MAX))
     }
 
+    fn wall_us(&self) -> u64 {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .map_or(0, |d| u64::try_from(d.as_micros()).unwrap_or(u64::MAX))
+    }
+
     fn monotonic(&self) -> Duration {
         self.start.elapsed()
     }

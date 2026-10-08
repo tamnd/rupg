@@ -5,7 +5,10 @@
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
+use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
+use rupg_platform::Clock;
+use rupg_platform::os::OsClock;
 use rupg_sql::Severity;
 use rupg_sql::nodes::Node;
 use rupg_wire::{
@@ -15,6 +18,7 @@ use rupg_wire::{
 
 use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
+use crate::query::{self, Column, Reader, Row};
 use crate::utility::{self, Context, Notice, Outcome};
 
 mod extended;
@@ -23,9 +27,6 @@ use extended::{Failed, Portal, Prepared};
 
 /// The version of rupg, which `server_version` and the parameter `rupg.version` report.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
-
-/// The OID of the type `text`.
-const TEXT_OID: u32 = 25;
 
 /// What the startup packet asked for, after the server accepted it.
 #[derive(Clone, Debug, Default)]
@@ -43,6 +44,41 @@ pub struct Start {
 /// `server_version` as the spec gives it: the major version of PostgreSQL and the version of rupg.
 pub fn server_version() -> String {
     format!("19.0 (rupg {VERSION})")
+}
+
+/// The text of `version()`: the version, the target triple of the build and the version of the compiler, in the form of PostgreSQL (spec/05 section 5.7).
+pub fn version_text() -> String {
+    format!(
+        "PostgreSQL 19.0 (rupg {VERSION}) on {}, compiled by rustc {}, {}-bit",
+        env!("RUPG_TARGET"),
+        env!("RUPG_RUSTC"),
+        usize::BITS
+    )
+}
+
+/// The result of a statement as the session sends it.
+#[derive(Debug)]
+enum Done {
+    /// `CommandComplete` with this tag and no rows.
+    Tag(CommandTag),
+    /// `RowDescription`, the rows, then `CommandComplete` with the tag and the number of rows.
+    Rows { columns: Vec<Column>, rows: Vec<Row>, tag: CommandTag },
+}
+
+impl From<Outcome> for Done {
+    fn from(outcome: Outcome) -> Done {
+        match outcome {
+            Outcome::Tag(tag) => Done::Tag(tag),
+            Outcome::Rows { columns, rows } => Done::Rows {
+                columns: columns.into_iter().map(Column::text).collect(),
+                rows: rows
+                    .into_iter()
+                    .map(|row| row.into_iter().map(|v| Some(v.into_bytes())).collect())
+                    .collect(),
+                tag: CommandTag::Show,
+            },
+        }
+    }
 }
 
 /// The values that every session starts with: the values that the server owns, then the values of the command line. The values that depend on the session come later in [`session_settings`].
@@ -187,6 +223,9 @@ pub fn write_error(
     if let Some(position) = &position {
         fields.push((b'P', position.as_bytes()));
     }
+    if let Some(context) = error.context() {
+        fields.push((b'W', context.as_bytes()));
+    }
     if notice {
         out.notice_response(&fields);
     } else {
@@ -222,6 +261,7 @@ pub struct Connection {
     transaction: Transaction,
     session: Session,
     user: String,
+    database: String,
     protocol: u32,
     statements: Statements<Arc<Prepared>>,
     portals: Portals<Portal>,
@@ -231,6 +271,12 @@ pub struct Connection {
     pipelining: bool,
     /// `QueryCancelPending`. The server sets it when a `CancelRequest` with the key of this session arrives.
     cancel: Arc<AtomicBool>,
+    clock: Arc<dyn Clock>,
+    /// The process ID of the cancel key, which `pg_backend_pid()` gives.
+    pid: i32,
+    /// `xactStartTimestamp` and `stmtStartTimestamp`, in microseconds since 2000-01-01 UTC.
+    transaction_start: i64,
+    statement_start: i64,
 }
 
 impl Connection {
@@ -241,15 +287,42 @@ impl Connection {
             transaction: Transaction::default(),
             session: Session::new(),
             user: start.user.clone(),
+            database: start.database.clone(),
             protocol,
             statements: Statements::new(),
             portals: Portals::new(),
             xact_started: false,
             pipelining: false,
             cancel: Arc::new(AtomicBool::new(false)),
+            clock: Arc::new(OsClock::new()),
+            pid: 0,
+            transaction_start: 0,
+            statement_start: 0,
         };
         connection.session.set_utf8(connection.utf8());
         connection
+    }
+
+    /// Sets the clock of `now()` and the other times of the session. The clock of the operating system is the default.
+    pub fn set_clock(&mut self, clock: Arc<dyn Clock>) {
+        self.clock = clock;
+    }
+
+    /// `SetCurrentStatementStartTimestamp`: the start of a message that runs a statement.
+    fn start_statement(&mut self) {
+        self.statement_start = query::now(&*self.clock);
+    }
+
+    /// What a statement reads of the session.
+    fn reader(&self) -> Reader<'_> {
+        Reader::new(
+            &self.settings,
+            &self.user,
+            &self.database,
+            (self.transaction_start, self.statement_start),
+            &*self.clock,
+            self.pid,
+        )
     }
 
     /// The flag that a `CancelRequest` sets. The server keeps a clone of it with the cancel key of the session.
@@ -279,6 +352,7 @@ impl Connection {
             out.parameter_status(name.as_bytes(), value.as_bytes());
         }
         out.parameter_status(b"rupg.version", VERSION.as_bytes());
+        self.pid = key.pid();
         key.write(out);
     }
 
@@ -298,6 +372,16 @@ impl Connection {
         if read.message.is_some() {
             // A cancel does nothing when no statement runs, so the main loop of `postgres.c` drops a cancel that came while it read the message.
             self.cancel.store(false, Ordering::Relaxed);
+        }
+        if let Some(Ok(
+            Frontend::Query(_)
+            | Frontend::Parse { .. }
+            | Frontend::Bind(_)
+            | Frontend::Describe { .. }
+            | Frontend::Execute { .. },
+        )) = &read.message
+        {
+            self.start_statement();
         }
         let next = match read.message {
             None => Next::Read,
@@ -410,8 +494,8 @@ impl Connection {
                 Severity::Warning => (1, "WARNING"),
             };
             if rank >= least {
-                let position =
-                    locations.get(i).copied().flatten().map(|at| character_position(text, at));
+                let at = locations.get(i).copied().flatten().or_else(|| notice.error.position());
+                let position = at.map(|at| character_position(text, at));
                 write_error(out, severity, &notice.error, position, true);
             }
         }
@@ -469,6 +553,9 @@ impl Connection {
                     SqlState::IN_FAILED_SQL_TRANSACTION,
                     "current transaction is aborted, commands ignored until end of transaction block",
                 ))
+            } else if query::is_query(node) {
+                drop(self.portals.close(b""));
+                self.select(node, &mut notices)
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
@@ -478,17 +565,18 @@ impl Connection {
                     notices: &mut notices,
                     immediate_commit: false,
                 };
-                utility::run(node, statement, &mut cx)
+                utility::run(node, statement, &mut cx).map(Done::from)
             };
             self.notices(&mut notices, text, &[], out);
             let outcome = match result {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    self.fail(&error, None, out);
+                    let position = error.position().map(|at| character_position(text, at));
+                    self.fail(&error, position, out);
                     return true;
                 }
             };
-            if outcome == Outcome::Tag(CommandTag::DiscardAll) {
+            if matches!(outcome, Done::Tag(CommandTag::DiscardAll)) {
                 self.statements.deallocate_all();
                 self.portals.clear();
             }
@@ -501,31 +589,29 @@ impl Connection {
                 self.finish_xact();
             }
             match outcome {
-                Outcome::Tag(tag) => out.command_tag(tag, 0),
-                Outcome::Rows { columns, rows } => {
-                    let fields: Vec<Field<'_>> = columns
-                        .iter()
-                        .map(|name| Field {
-                            name: name.as_bytes(),
-                            table: 0,
-                            column: 0,
-                            type_oid: TEXT_OID,
-                            type_size: -1,
-                            type_modifier: -1,
-                            format: 0,
-                        })
-                        .collect();
+                Done::Tag(tag) => out.command_tag(tag, 0),
+                Done::Rows { columns, rows, tag } => {
+                    let fields: Vec<Field<'_>> =
+                        columns.iter().map(|column| column.field(0)).collect();
                     out.row_description(&fields);
                     for row in &rows {
-                        let values: Vec<Option<&[u8]>> =
-                            row.iter().map(|value| Some(value.as_bytes())).collect();
+                        let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
                         out.data_row(&values);
                     }
-                    out.command_tag(CommandTag::Show, 0);
+                    out.command_tag(tag, rows.len() as u64);
                 }
             }
         }
         false
+    }
+
+    /// Plans and runs a query of a `Query` message. The warnings of the analysis go to `notices`.
+    fn select(&self, node: &Node, notices: &mut Vec<Notice>) -> Result<Done, Error> {
+        let reader = self.reader();
+        let plan = query::plan(node, &reader, &Params::default())?;
+        notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
+        let rows = query::run(&plan, &[], &reader, &[])?;
+        Ok(Done::Rows { columns: query::columns(&plan), rows, tag: CommandTag::Select })
     }
 
     /// `start_xact_command`: the start of a statement, which starts a transaction if there is none. After an `Execute` that completed, it starts an implicit block.
@@ -533,6 +619,7 @@ impl Connection {
         if !self.xact_started {
             if self.transaction.start_command() {
                 self.settings.start_transaction(None);
+                self.transaction_start = self.statement_start;
             }
             self.xact_started = true;
         } else if self.pipelining {
@@ -553,6 +640,7 @@ impl Connection {
         }
         if kept.is_some() {
             self.settings.start_transaction(kept);
+            self.transaction_start = self.statement_start;
         }
         if chained || self.transaction.block() == Block::Default {
             self.ended();
@@ -755,6 +843,10 @@ mod tests {
                     if !position.is_empty() {
                         line.push_str(&format!(" at {position}"));
                     }
+                    let context = field(&fields, b'W');
+                    if !context.is_empty() {
+                        line.push_str(&format!(" ({context})"));
+                    }
                     line
                 }
                 other => format!("{other:?}"),
@@ -820,8 +912,8 @@ mod tests {
     fn a_failed_block_cases() {
         let (mut c, _) = connect();
         assert_eq!(
-            send(&mut c, &query("BEGIN; SET work_mem = '1MB'; SELECT 1")),
-            ["BEGIN", "SET", "ERROR 0A000 SELECT is not supported yet", "ready E"]
+            send(&mut c, &query("BEGIN; SET work_mem = '1MB'; SELECT 1/0")),
+            ["BEGIN", "SET", "ERROR 22012 division by zero", "ready E"]
         );
         assert_eq!(
             send(&mut c, &query("SHOW work_mem")),
@@ -837,8 +929,8 @@ mod tests {
         );
         // An error in the implicit block of a Query rolls back the statements before it.
         assert_eq!(
-            send(&mut c, &query("SET work_mem = '2MB'; SELECT 1")),
-            ["SET", "ERROR 0A000 SELECT is not supported yet", "ready I"]
+            send(&mut c, &query("SET work_mem = '2MB'; SELECT 1/0")),
+            ["SET", "ERROR 22012 division by zero", "ready I"]
         );
         assert_eq!(send(&mut c, &query("SHOW work_mem"))[1], "row 4MB");
     }
@@ -846,6 +938,121 @@ mod tests {
     #[test]
     fn notices() {
         big_stack(notices_cases);
+    }
+
+    fn queries_cases() {
+        let (mut c, _) = connect();
+        assert_eq!(
+            send(&mut c, &query("SELECT 1 AS a, 'x' || 'y', NULL::int4")),
+            ["columns a,?column?,int4", "row 1,xy,NULL", "SELECT 1", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("SELECT 1 WHERE false")),
+            ["columns ?column?", "SELECT 0", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("SELECT current_user, current_database(), pg_backend_pid()")),
+            [
+                "columns current_user,current_database,pg_backend_pid",
+                "row postgres,postgres,1234",
+                "SELECT 1",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            send(&mut c, &query("SELECT version() LIKE 'PostgreSQL 19.0 (rupg %, 64-bit'"))[1],
+            "row t"
+        );
+        // The times of a transaction block are the time of its start.
+        assert_eq!(
+            send(
+                &mut c,
+                &query("BEGIN; SELECT now() = statement_timestamp(), now() <= clock_timestamp()")
+            )[2],
+            "row t,t"
+        );
+        assert_eq!(send(&mut c, &query("COMMIT")), ["COMMIT", "ready I"]);
+        assert_eq!(
+            send(
+                &mut c,
+                &query("SET TimeZone = 'Etc/GMT+5'; SELECT '2000-01-01 12:00+00'::timestamptz")
+            ),
+            [
+                "SET",
+                "columns timestamptz",
+                "row 2000-01-01 07:00:00-05",
+                "SELECT 1",
+                "TimeZone=Etc/GMT+5",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            send(&mut c, &query("SET TimeZone = 'Europe/Paris'; SELECT now()::text")),
+            ["SET", "ERROR 0A000 the time zone \"Europe/Paris\" is not supported yet", "ready I"]
+        );
+    }
+
+    #[test]
+    fn extended_selects() {
+        big_stack(extended_selects_cases);
+    }
+
+    fn extended_selects_cases() {
+        let (mut c, _) = connect();
+        assert_eq!(
+            send(
+                &mut c,
+                &[parse("s", "SELECT $1 + 1 AS n", &[]), describe('S', "s"), sync()].concat()
+            ),
+            ["ParseComplete", "params 23", "columns n", "ready I"]
+        );
+        assert_eq!(
+            send(
+                &mut c,
+                &[bind("", "s", &[], &[Some(b"41")], &[]), execute("", 0), sync()].concat()
+            ),
+            ["BindComplete", "row 42", "SELECT 1", "ready I"]
+        );
+        let input = [
+            bind("", "s", &[1], &[Some(&41_i32.to_be_bytes())], &[1]),
+            describe('P', ""),
+            execute("", 1),
+            execute("", 1),
+            sync(),
+        ];
+        assert_eq!(
+            send(&mut c, &input.concat()),
+            [
+                "BindComplete",
+                "columns n/1",
+                "row \0\0\0*",
+                "PortalSuspended",
+                "SELECT 0",
+                "ready I"
+            ]
+        );
+        assert_eq!(
+            send(&mut c, &[bind("", "s", &[], &[None], &[]), execute("", 0), sync()].concat()),
+            ["BindComplete", "row NULL", "SELECT 1", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &[bind("", "s", &[], &[Some(b"x")], &[]), sync()].concat()),
+            [
+                "ERROR 22P02 invalid input syntax for type integer: \"x\" (unnamed portal parameter $1 = '...')",
+                "ready I"
+            ]
+        );
+        send(&mut c, &query("SET log_parameter_max_length_on_error = 3"));
+        assert_eq!(
+            send(&mut c, &[bind("p", "s", &[], &[Some("ab'éz".as_bytes())], &[]), sync()].concat())
+                [0],
+            "ERROR 22P02 invalid input syntax for type integer: \"ab'éz\" (portal \"p\" parameter $1 = 'ab''...')"
+        );
+    }
+
+    #[test]
+    fn queries() {
+        big_stack(queries_cases);
     }
 
     fn notices_cases() {
@@ -926,7 +1133,7 @@ mod tests {
                 "ERROR 42P18 could not determine data type of parameter $1",
             ),
             (run("SHOW nosuch"), "ERROR 42704 unrecognized configuration parameter \"nosuch\""),
-            (run("SELECT 1"), "ERROR 0A000 SELECT is not supported yet"),
+            (run("SELECT nosuch()"), "ERROR 42883 function nosuch() does not exist at 8"),
             (bind("", "", &[], &[], &[]), "ERROR 26000 unnamed prepared statement does not exist"),
             (
                 bind("", "nope", &[], &[], &[]),
@@ -964,9 +1171,12 @@ mod tests {
             ),
             (
                 bind("", "s", &[], &[Some(b"abc")], &[]),
-                "ERROR 22P02 invalid input syntax for type integer: \"abc\"",
+                "ERROR 22P02 invalid input syntax for type integer: \"abc\" (unnamed portal parameter $1 = '...')",
             ),
-            (bind("", "s", &[3], &[None], &[]), "ERROR 22023 unsupported format code: 3"),
+            (
+                bind("", "s", &[3], &[None], &[]),
+                "ERROR 22023 unsupported format code: 3 (unnamed portal parameter $1)",
+            ),
             (
                 [bind("p", "s", &[], &[None], &[]), execute("p", 0), execute("p", 0)].concat(),
                 "ERROR 55000 portal \"p\" cannot be run",
@@ -1026,7 +1236,7 @@ mod tests {
             ["ERROR 34000 portal \"p\" does not exist", "ready I"]
         );
         // A failed block takes only the statements that end it.
-        let input = [run("BEGIN"), run("SELECT 1"), sync()].concat();
+        let input = [run("BEGIN"), run("SELECT 1/0"), sync()].concat();
         assert_eq!(send(&mut c, &input).last().unwrap(), "ready E");
         assert_eq!(
             send(&mut c, &[parse("", "SHOW work_mem", &[]), sync()].concat()),

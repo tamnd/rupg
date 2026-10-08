@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod builtin;
 mod generated;
 
 use std::fmt::Write as _;

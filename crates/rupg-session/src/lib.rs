@@ -11,4 +11,5 @@ pub mod connection;
 mod generated;
 pub mod guc;
 mod param;
+mod query;
 pub mod utility;

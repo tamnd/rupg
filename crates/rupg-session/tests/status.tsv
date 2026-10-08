@@ -7,7 +7,7 @@ archive_command	accepted
 archive_library	accepted
 archive_mode	accepted
 archive_timeout	accepted
-array_nulls	accepted
+array_nulls	honored
 authentication_timeout	accepted
 autovacuum	accepted
 autovacuum_analyze_scale_factor	accepted
@@ -41,7 +41,7 @@ bgwriter_lru_multiplier	accepted
 block_size	accepted
 bonjour	accepted
 bonjour_name	accepted
-bytea_output	accepted
+bytea_output	honored
 check_function_bodies	accepted
 checkpoint_completion_target	accepted
 checkpoint_flush_after	accepted
@@ -66,7 +66,7 @@ data_checksums	honored
 data_directory	accepted
 data_directory_mode	accepted
 data_sync_retry	accepted
-DateStyle	accepted
+DateStyle	honored
 deadlock_timeout	accepted
 debug_assertions	accepted
 debug_discard_caches	accepted
@@ -123,7 +123,7 @@ event_triggers	accepted
 exit_on_error	accepted
 extension_control_path	accepted
 external_pid_file	accepted
-extra_float_digits	accepted
+extra_float_digits	honored
 file_copy_method	accepted
 file_extend_method	accepted
 from_collapse_limit	accepted
@@ -157,7 +157,7 @@ ignore_invalid_pages	accepted
 ignore_system_indexes	accepted
 in_hot_standby	honored
 integer_datetimes	honored
-IntervalStyle	accepted
+IntervalStyle	honored
 io_combine_limit	accepted
 io_max_combine_limit	accepted
 io_max_concurrency	accepted
@@ -209,7 +209,7 @@ log_min_duration_statement	accepted
 log_min_error_statement	accepted
 log_min_messages	accepted
 log_parameter_max_length	accepted
-log_parameter_max_length_on_error	accepted
+log_parameter_max_length_on_error	honored
 log_parser_stats	accepted
 log_planner_stats	accepted
 log_recovery_conflict_waits	accepted
@@ -301,7 +301,7 @@ restrict_nonsystem_relation_kind	accepted
 role	accepted
 row_security	accepted
 scram_iterations	honored
-search_path	accepted
+search_path	honored
 seed	accepted
 segment_size	accepted
 send_abort_for_crash	accepted
@@ -359,7 +359,7 @@ tcp_user_timeout	accepted
 temp_buffers	accepted
 temp_file_limit	accepted
 temp_tablespaces	accepted
-TimeZone	accepted
+TimeZone	honored
 timezone_abbreviations	accepted
 timing_clock_source	accepted
 trace_connection_negotiation	accepted

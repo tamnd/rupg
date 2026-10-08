@@ -29,7 +29,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_platform::{Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
+use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
 use rupg_session::connection::{self, Connection, Next, Start};
 use rupg_session::guc::Settings;
 use rupg_wire::{
@@ -81,6 +81,8 @@ pub struct Config {
     pub settings: Vec<(String, String)>,
     /// The server log. `None` drops the messages.
     pub log: Option<Arc<dyn Log>>,
+    /// The clock of `now()` and the other times of SQL. `None` gives the clock of the operating system.
+    pub clock: Option<Arc<dyn Clock>>,
 }
 
 impl Default for Config {
@@ -93,6 +95,7 @@ impl Default for Config {
             ident: None,
             settings: Vec::new(),
             log: None,
+            clock: None,
         }
     }
 }
@@ -122,6 +125,7 @@ struct Shared {
     /// The iterations of the mock secret, `scram_iterations`.
     iterations: i32,
     log: Option<Arc<dyn Log>>,
+    clock: Option<Arc<dyn Clock>>,
     entropy: Arc<dyn Entropy>,
     /// The cancel key and the cancel flag of each session, by process ID.
     keys: Mutex<BTreeMap<i32, Live>>,
@@ -274,6 +278,7 @@ impl Server {
             mock_nonce,
             iterations,
             log: config.log.clone(),
+            clock: config.clock.clone(),
             entropy,
             keys: Mutex::new(BTreeMap::new()),
             stopping: AtomicBool::new(false),
@@ -741,6 +746,9 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         connection::write_error(&mut wire.out, "WARNING", &warning, None, true);
     }
     let mut connection = Connection::new(start, settings, protocol);
+    if let Some(clock) = &shared.clock {
+        connection.set_clock(Arc::clone(clock));
+    }
     let (_registered, key) = register(shared, protocol, connection.cancel_flag());
     connection.greet(&key, &mut wire.out);
     loop {

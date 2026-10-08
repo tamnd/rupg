@@ -21,7 +21,7 @@ pub struct Notice {
 }
 
 impl Notice {
-    fn warning(error: Error) -> Notice {
+    pub(crate) fn warning(error: Error) -> Notice {
         Notice { severity: Severity::Warning, error }
     }
 }
@@ -512,8 +512,11 @@ mod tests {
         s.run("SET ROLE none").unwrap();
         assert_eq!(s.state("SET client_encoding = 'LATIN1'"), "0A000");
         s.run("SET NAMES 'SQL_ASCII'").unwrap();
-        assert_eq!(s.state("SELECT 1"), "0A000");
-        assert_eq!(s.run("SELECT 1").unwrap_err().message(), "SELECT is not supported yet");
+        assert_eq!(s.state("INSERT INTO t VALUES (1)"), "0A000");
+        assert_eq!(
+            s.run("INSERT INTO t VALUES (1)").unwrap_err().message(),
+            "INSERT is not supported yet"
+        );
         let Outcome::Rows { columns, rows } = s.run("SHOW ALL").unwrap() else { panic!() };
         assert_eq!(columns, ["name", "setting", "description"]);
         assert!(rows.iter().any(|row| row[0] == "work_mem"));
