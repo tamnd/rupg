@@ -471,6 +471,7 @@ name = "rupg-session"
 version = "0.1.1"
 dependencies = [
  "rupg-analyze",
+ "rupg-catalog",
  "rupg-common",
  "rupg-exec",
  "rupg-func",

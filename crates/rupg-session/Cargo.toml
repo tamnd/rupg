@@ -15,6 +15,7 @@ publish = false
 
 [dependencies]
 rupg-analyze.workspace = true
+rupg-catalog.workspace = true
 rupg-common.workspace = true
 rupg-exec.workspace = true
 rupg-func.workspace = true

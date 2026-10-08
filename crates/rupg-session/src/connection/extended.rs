@@ -161,7 +161,7 @@ impl Connection {
                 columns = Some(query::columns(&made));
                 params = made.params().to_vec();
                 plan = Some(made);
-            } else {
+            } else if !rupg_analyze::is_definition(node) {
                 utility::check(node, &text)?;
                 columns = utility::columns(node, &self.settings.borrow())?
                     .map(|names| names.into_iter().map(Column::text).collect());
@@ -327,6 +327,14 @@ impl Connection {
                 self.settings.borrow_mut().take_snapshot();
                 let rows = query::run(plan, &params, &self.reader(), &formats)?;
                 Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
+            } else if rupg_analyze::is_definition(node) {
+                let mut notices = Vec::new();
+                let result = self.define(node, &mut notices);
+                self.notices(&mut notices, &statement.text, &[], out);
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
             } else {
                 let mut notices = Vec::new();
                 let mut cx = Context {
