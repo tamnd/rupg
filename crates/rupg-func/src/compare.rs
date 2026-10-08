@@ -202,14 +202,26 @@ fn ge(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(order(call, args)?.is_ge()))
 }
 
-/// `larger`: the second argument when it is greater, else the first.
+/// `larger`: the first argument when it is greater, else the second. So for two equal values, such as `1.0` and `1.00`, the result is the second.
 fn larger(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let pick = !order(call, args)?.is_gt();
+    Ok(args[usize::from(pick)].clone())
+}
+
+/// `smaller`: the first argument when it is less, else the second.
+fn smaller(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let pick = !order(call, args)?.is_lt();
+    Ok(args[usize::from(pick)].clone())
+}
+
+/// `bpchar_larger` and `tidlarger`: the first argument when it is greater or equal, else the second.
+fn larger_or_first(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let pick = order(call, args)?.is_lt();
     Ok(args[usize::from(pick)].clone())
 }
 
-/// `smaller`: the second argument when it is less, else the first.
-fn smaller(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+/// `bpchar_smaller` and `tidsmaller`: the first argument when it is less or equal, else the second.
+fn smaller_or_first(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let pick = order(call, args)?.is_gt();
     Ok(args[usize::from(pick)].clone())
 }
@@ -312,6 +324,10 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     }
     if let Some(kernel) = oidvector_by_src(src) {
         Some(kernel)
+    } else if src == "bpchar_larger" || src == "tidlarger" {
+        Some(larger_or_first)
+    } else if src == "bpchar_smaller" || src == "tidsmaller" {
+        Some(smaller_or_first)
     } else if src.ends_with("larger") {
         Some(larger)
     } else if src.ends_with("smaller") {

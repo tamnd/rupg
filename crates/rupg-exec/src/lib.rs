@@ -5,7 +5,8 @@
 #![forbid(unsafe_code)]
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Query, SortGroup, SqlValue, Target,
+    Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Query, SortGroup, SqlValue,
+    Target,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -89,6 +90,12 @@ fn check(expr: &Expr) -> Result<()> {
             args.iter().try_for_each(check)?;
         }
         ExprKind::Array { elements, .. } => elements.iter().try_for_each(check)?,
+        ExprKind::Agg(agg) => {
+            agg.args.iter().try_for_each(check)?;
+            if let Some(filter) = &agg.filter {
+                check(filter)?;
+            }
+        }
     }
     Ok(())
 }
@@ -105,12 +112,26 @@ fn check_join(item: &FromItem) -> Result<()> {
     Ok(())
 }
 
+/// The detail of the error of a `DISTINCT` or a `GROUP BY` that can neither sort nor use a hash table.
+const MIXED_KEYS: &str =
+    "Some of the datatypes only support hashing, while others only support sorting.";
+
 /// Checks a query and makes the plan to run it.
 ///
 /// # Errors
 ///
 /// `0A000` for a function or a type that the engine does not have yet.
 pub fn prepare(query: Query) -> Result<Plan> {
+    // `create_ordinary_grouping_paths`: a `GROUP BY` sorts the rows when every type has an order, or else uses a hash table. The planner gives this error before the engine checks its functions.
+    if !query.group.iter().all(|g| g.sort != 0) && !query.group.iter().all(|g| g.hashable) {
+        return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement GROUP BY")
+            .with_detail(MIXED_KEYS));
+    }
+    // `create_distinct_paths` does the same for `DISTINCT`, after the groups.
+    if !query.distinct.iter().all(|g| g.sort != 0) && !query.distinct.iter().all(|g| g.hashable) {
+        return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement DISTINCT")
+            .with_detail(MIXED_KEYS));
+    }
     for target in &query.targets {
         if !rupg_func::output_supported(target.expr.ty) {
             return Err(not_yet(format!("output of type {}", format_type(target.expr.ty))));
@@ -120,6 +141,10 @@ pub fn prepare(query: Query) -> Result<Plan> {
     if let Some(filter) = &query.filter {
         check(filter)?;
     }
+    if let Some(having) = &query.having {
+        check(having)?;
+    }
+    agg::check(&query)?;
     for item in &query.from {
         check_join(item)?;
     }
@@ -137,13 +162,6 @@ pub fn prepare(query: Query) -> Result<Plan> {
         if group.sort != 0 {
             kernel(group.sort, None)?;
         }
-    }
-    // `create_distinct_paths`: a `DISTINCT` sorts the rows when every type has an order and else uses a hash table.
-    if !query.distinct.iter().all(|g| g.sort != 0) && !query.distinct.iter().all(|g| g.hashable) {
-        return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement DISTINCT")
-            .with_detail(
-                "Some of the datatypes only support hashing, while others only support sorting.",
-            ));
     }
     Ok(Plan { query })
 }
@@ -173,28 +191,48 @@ impl Plan {
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         let query = &self.query;
         let tables = scan::read(query, session)?;
-        let mut eval = Eval { params, session, case: Vec::new(), tables: &tables, tuple: &[] };
+        let mut eval = Eval {
+            params,
+            session,
+            case: Vec::new(),
+            tables: &tables,
+            tuple: &[],
+            aggs: Vec::new(),
+        };
         let (offset, count) = eval.limits(query)?;
         if count == Some(0) {
             return Ok(Vec::new());
         }
         let tuples = scan::tuples(query, &tables, &mut |expr, tuple| {
-            let mut eval = Eval { params, session, case: Vec::new(), tables: &tables, tuple };
+            let mut eval = Eval {
+                params,
+                session,
+                case: Vec::new(),
+                tables: &tables,
+                tuple,
+                aggs: Vec::new(),
+            };
             Ok(eval.eval(expr)? == Value::Bool(true))
         })?;
-        // With no sort, `Limit` stops after the rows that it gives.
-        let ordered = !query.sort.is_empty() || !query.distinct.is_empty();
-        let needed = match count {
-            Some(count) if !ordered => offset.saturating_add(count),
-            _ => usize::MAX,
+        let none = vec![scan::NONE; query.relations.len()];
+        let rows = if query.grouped {
+            agg::rows(&mut eval, query, &tuples, &none)?
+        } else {
+            // With no sort, `Limit` stops after the rows that it gives.
+            let ordered = !query.sort.is_empty() || !query.distinct.is_empty();
+            let needed = match count {
+                Some(count) if !ordered => offset.saturating_add(count),
+                _ => usize::MAX,
+            };
+            let mut rows = Vec::with_capacity(tuples.len().min(needed));
+            for tuple in tuples.iter().take(needed) {
+                eval.tuple = tuple;
+                let row =
+                    query.targets.iter().map(|t| eval.eval(&t.expr)).collect::<Result<Vec<_>>>()?;
+                rows.push(row);
+            }
+            rows
         };
-        let mut rows = Vec::with_capacity(tuples.len().min(needed));
-        for tuple in tuples.iter().take(needed) {
-            eval.tuple = tuple;
-            let row =
-                query.targets.iter().map(|t| eval.eval(&t.expr)).collect::<Result<Vec<_>>>()?;
-            rows.push(row);
-        }
         let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
         let rows = self.order(rows, &types, offset, count, session)?;
         let width = self.columns().len();
@@ -297,8 +335,10 @@ struct Eval<'a> {
     case: Vec<Value>,
     /// The rows of the relations of the query.
     tables: &'a scan::Tables,
-    /// The row of each relation.
+    /// The row of each relation. In a query with groups it is the first row of the group.
     tuple: &'a [usize],
+    /// The result of each aggregate call for the group, by the address of the call in the query.
+    aggs: Vec<(*const Aggref, Value)>,
 }
 
 impl Eval<'_> {
@@ -417,6 +457,12 @@ impl Eval<'_> {
             ExprKind::Array { multidims, elements, .. } => self.array(*multidims, elements),
             ExprKind::SqlValue(v) => self.sql_value(*v),
             ExprKind::Var(var) => Ok(self.tables.var(self.tuple, *var)),
+            ExprKind::Agg(agg) => self
+                .aggs
+                .iter()
+                .find(|(call, _)| std::ptr::eq(*call, &**agg))
+                .map(|(_, value)| value.clone())
+                .ok_or_else(|| Error::internal("an aggregate call is outside of a group")),
         }
     }
 
@@ -677,6 +723,7 @@ fn relabel(value: Value, ty: u32) -> Value {
     }
 }
 
+mod agg;
 mod scan;
 mod sort;
 

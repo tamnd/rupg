@@ -8,6 +8,7 @@ use rupg_sql::nodes::{
 use rupg_types::{Value, oid};
 
 use crate::Analyzer;
+use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, can_coerce, common_of};
 use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, SqlValue};
 use crate::typename::{names, place};
@@ -470,23 +471,36 @@ impl Analyzer<'_> {
     fn transform_func(&mut self, f: &FuncCall) -> Result<Expr> {
         let at = place(f.location);
         let func_names = names(&f.funcname);
-        let name = func_names.join(".");
-        if f.over.is_some() {
-            return Err(not_yet("a window function", at));
-        }
-        if f.agg_star
-            || f.agg_distinct
-            || !f.agg_order.is_empty()
-            || f.agg_filter.is_some()
-            || f.agg_within_group
-        {
-            return Err(not_yet(&format!("the aggregate call {name}"), at));
-        }
         if f.args.iter().any(|a| matches!(a, Some(Node::NamedArgExpr(_)))) {
             return Err(not_yet("a call with named arguments", at));
         }
-        let args = self.transform_list(&f.args)?;
-        self.make_func(&func_names, args, f.func_variadic, at)
+        let mut args = self.transform_list(&f.args)?;
+        // transformFuncCall: the items of WITHIN GROUP come after the direct arguments.
+        if f.agg_within_group {
+            for item in &f.agg_order {
+                let Some(Node::SortBy(by)) = item else {
+                    return Err(Error::internal("an item of WITHIN GROUP that is not SortBy"));
+                };
+                args.push(self.transform(by.node.as_ref())?);
+            }
+        }
+        let filter = match &f.agg_filter {
+            Some(node) => {
+                let expr = self.with_kind(Kind::Filter, |a| a.transform(Some(node)))?;
+                Some(self.coerce_to_boolean(expr, "FILTER")?)
+            }
+            None => None,
+        };
+        let parts = Parts {
+            star: f.agg_star,
+            distinct: f.agg_distinct,
+            within_group: f.agg_within_group,
+            order: &f.agg_order,
+            filter,
+            over: f.over.is_some(),
+            null_treatment: f.ignore_nulls != 0,
+        };
+        self.make_func(&func_names, args, f.func_variadic, Some(parts), at)
     }
 
     /// `transformTypeCast`: `x::type` and `CAST(x AS type)`.

@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod agg;
 mod cast;
 mod compare;
 mod io;
@@ -134,6 +135,7 @@ pub fn kernel(func: u32) -> Option<Kernel> {
 /// The kernel of an internal function by its `prosrc`.
 fn by_src(src: &str) -> Option<Kernel> {
     cast::by_src(src)
+        .or_else(|| agg::by_src(src))
         .or_else(|| math::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))

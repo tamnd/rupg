@@ -82,6 +82,7 @@ fn expressions(query: &Query) -> Vec<&Expr> {
     }
     let mut all: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
     all.extend(query.filter.as_ref());
+    all.extend(query.having.as_ref());
     for item in &query.from {
         joins(item, &mut all);
     }
