@@ -186,12 +186,10 @@ impl Analyzer<'_> {
         if !s.lockingClause.is_empty() {
             return Err(not_yet("FOR UPDATE and FOR SHARE"));
         }
-        // markTargetListOrigins: a target that is a column of a relation names the table and the column. A column of a subquery in FROM has the origin of the column of the subquery.
+        // markTargetListOrigins: a target that is a column of a relation names the table and the column, also for a column of a query outside this query. A column of a subquery in FROM has the origin of the column of the subquery.
         for target in &mut targets {
-            if let ExprKind::Var(var) = &target.expr.kind
-                && var.levels_up == 0
-            {
-                let relation = &self.scope.relations[var.relation];
+            if let ExprKind::Var(var) = &target.expr.kind {
+                let relation = &self.level(var.levels_up).relations[var.relation];
                 target.origin = match &relation.subquery {
                     None => Some((relation.oid, var.attnum)),
                     Some(sub) => usize::try_from(var.attnum - 1)

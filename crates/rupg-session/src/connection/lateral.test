@@ -1,0 +1,140 @@
+> SELECT a.amname, s.n FROM pg_am a, LATERAL (SELECT a.amname AS n) s ORDER BY 1 LIMIT 3
+fields amname@pg_am.2:19:64:-1,n@pg_am.2:19:64:-1
+row brin,brin
+row btree,btree
+row gin,gin
+SELECT 3
+> SELECT * FROM pg_am a, LATERAL (SELECT a.amname) s ORDER BY 1 LIMIT 2
+fields oid@pg_am.1:26:4:-1,amname@pg_am.2:19:64:-1,amhandler@pg_am.3:24:4:-1,amtype@pg_am.4:18:1:-1,amname@pg_am.2:19:64:-1
+row 2,heap,heap_tableam_handler,t,heap
+row 403,btree,bthandler,i,btree
+SELECT 2
+> SELECT a.amname, s.c FROM pg_am a, LATERAL (SELECT count(*) AS c FROM pg_am b WHERE b.amtype = a.amtype) s ORDER BY 1
+fields amname@pg_am.2:19:64:-1,c:20:8:-1
+row brin,6
+row btree,6
+row gin,6
+row gist,6
+row hash,6
+row heap,1
+row spgist,6
+SELECT 7
+> SELECT a.amname, s.x FROM pg_am a LEFT JOIN LATERAL (SELECT a.amname AS x WHERE a.amtype = 't') s ON true ORDER BY 1
+fields amname@pg_am.2:19:64:-1,x@pg_am.2:19:64:-1
+row brin,NULL
+row btree,NULL
+row gin,NULL
+row gist,NULL
+row hash,NULL
+row heap,heap
+row spgist,NULL
+SELECT 7
+> SELECT a.amname, s.x FROM pg_am a JOIN LATERAL (SELECT a.amname AS x WHERE a.amtype = 't') s ON true ORDER BY 1
+fields amname@pg_am.2:19:64:-1,x@pg_am.2:19:64:-1
+row heap,heap
+SELECT 1
+> SELECT a.amname, s.x FROM pg_am a LEFT JOIN LATERAL (SELECT a.amname AS x) s ON s.x = 'hash' ORDER BY 1
+fields amname@pg_am.2:19:64:-1,x@pg_am.2:19:64:-1
+row brin,NULL
+row btree,NULL
+row gin,NULL
+row gist,NULL
+row hash,hash
+row heap,NULL
+row spgist,NULL
+SELECT 7
+> SELECT 1 FROM pg_am a FULL JOIN LATERAL (SELECT a.amname) s ON true
+ERROR 42P10 invalid reference to FROM-clause entry for table "a" at 49
+> SELECT 1 FROM pg_am a RIGHT JOIN LATERAL (SELECT amname) s ON true
+ERROR 42P10 invalid reference to FROM-clause entry for table "a" at 50
+> SELECT 1 FROM pg_am a FULL JOIN LATERAL (SELECT 1 AS k) s ON true LIMIT 1
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT a.amname, s.n FROM pg_am a, LATERAL (SELECT b.amname AS n FROM pg_am b WHERE b.oid > a.oid ORDER BY b.oid LIMIT 1) s ORDER BY 1
+fields amname@pg_am.2:19:64:-1,n@pg_am.2:19:64:-1
+row brin,spgist
+row btree,hash
+row gin,brin
+row gist,gin
+row hash,gist
+row heap,btree
+SELECT 6
+> SELECT a.amname, s.n, t.m FROM pg_am a, LATERAL (SELECT a.oid::int AS n) s, LATERAL (SELECT s.n + 1 AS m) t WHERE a.amname = 'btree'
+fields amname@pg_am.2:19:64:-1,n:23:4:-1,m:23:4:-1
+row btree,403,404
+SELECT 1
+> SELECT a.amname FROM pg_am a WHERE EXISTS (SELECT 1 FROM pg_am b, LATERAL (SELECT b.amname AS n WHERE b.amname = a.amname) s) ORDER BY 1 LIMIT 2
+fields amname@pg_am.2:19:64:-1
+row brin
+row btree
+SELECT 2
+> SELECT a.amname, s.n FROM pg_am a CROSS JOIN LATERAL (SELECT upper(a.amname::text) AS n) s WHERE s.n LIKE 'B%' ORDER BY 1
+fields amname@pg_am.2:19:64:-1,n:25:-1:-1
+row brin,BRIN
+row btree,BTREE
+SELECT 2
+> SELECT count(*) FROM pg_am a, LATERAL (SELECT 1 FROM pg_am b WHERE b.amtype = a.amtype) s
+fields count:20:8:-1
+row 37
+SELECT 1
+> SELECT c.relname, s.n FROM pg_class c, LATERAL (SELECT count(*) AS n FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0) s WHERE c.relname IN ('pg_am', 'pg_class') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,n:20:8:-1
+row pg_am,4
+row pg_class,34
+SELECT 2
+> SELECT * FROM LATERAL (SELECT 1 AS x) s
+fields x:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM (SELECT 1 AS x) s, LATERAL (SELECT s.x + 1 AS y) t
+fields x:23:4:-1,y:23:4:-1
+row 1,2
+SELECT 1
+> SELECT * FROM (SELECT 1 AS x) s, LATERAL (SELECT x + 1 AS y) t
+fields x:23:4:-1,y:23:4:-1
+row 1,2
+SELECT 1
+> SELECT * FROM (SELECT 1 AS x) s, LATERAL (SELECT nope + 1 AS y) t
+ERROR 42703 column "nope" does not exist at 50
+> SELECT * FROM LATERAL (SELECT 1/0 AS x) s
+ERROR 22012 division by zero
+> SELECT a.amname FROM pg_am a, LATERAL (SELECT 1/0 AS x) s
+fields amname@pg_am.2:19:64:-1
+row heap
+row btree
+row hash
+row gist
+row gin
+row spgist
+row brin
+SELECT 7
+> SELECT a.amname FROM pg_am a, LATERAL (SELECT a.oid::int / 0 AS x OFFSET 0) s
+fields amname@pg_am.2:19:64:-1
+row heap
+row btree
+row hash
+row gist
+row gin
+row spgist
+row brin
+SELECT 7
+> SELECT a.amname, s.x FROM pg_am a, LATERAL (SELECT a.oid::int / 0 AS x OFFSET 0) s
+fields amname@pg_am.2:19:64:-1,x:23:4:-1
+ERROR 22012 division by zero
+> SELECT 1 FROM pg_am a, LATERAL (SELECT 1 WHERE false) s
+fields ?column?:23:4:-1
+SELECT 0
+> SELECT 1 FROM pg_am a JOIN pg_am b ON true JOIN LATERAL (SELECT a.oid::int + b.oid::int AS z) s ON s.z = 4 ORDER BY 1
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT a.oid, b.oid, s.z FROM pg_am a JOIN pg_am b ON true JOIN LATERAL (SELECT a.oid::int + b.oid::int AS z) s ON s.z = 4 ORDER BY 1, 2
+fields oid@pg_am.1:26:4:-1,oid@pg_am.1:26:4:-1,z:23:4:-1
+row 2,2,4
+SELECT 1
+> SELECT a.amname, s.z FROM pg_am a LEFT JOIN (pg_am b JOIN LATERAL (SELECT a.amname AS z) s ON true) ON b.oid = a.oid ORDER BY 1 LIMIT 2
+fields amname@pg_am.2:19:64:-1,z@pg_am.2:19:64:-1
+row brin,brin
+row btree,btree
+SELECT 2

@@ -562,6 +562,17 @@ mod tests {
                 full_error("SELECT 1 FROM pg_am a FULL JOIN (SELECT a.amname) s ON true"),
                 s(["42P01", invalid, entry, ""])
             );
+            // With `LATERAL`, the left side of a full or a right join is visible, but a reference to it is an error.
+            let combining =
+                "The combining JOIN type must be INNER or LEFT for a LATERAL reference.";
+            assert_eq!(
+                full_error("SELECT 1 FROM pg_am a FULL JOIN LATERAL (SELECT a.amname) s ON true"),
+                s(["42P10", invalid, combining, ""])
+            );
+            assert_eq!(
+                full_error("SELECT 1 FROM pg_am a RIGHT JOIN LATERAL (SELECT amname) s ON true"),
+                s(["42P10", invalid, combining, ""])
+            );
             assert_eq!(
                 full_error("SELECT s.* FROM pg_am a, (SELECT amname) s"),
                 s([

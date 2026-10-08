@@ -108,6 +108,29 @@ pub(crate) struct Scope {
     namespace: Vec<Item>,
     /// The items that only a `LATERAL` subquery can see, as the items with `p_lateral_only`, each with `p_lateral_ok`: the parts of `FROM` before a subquery, and the left side of a join while the analyzer reads the right side.
     lateral: Vec<(Item, bool)>,
+    /// `p_lateral_active`: true while the analyzer reads a `LATERAL` subquery of this query, which can see the items of `lateral`.
+    lateral_active: bool,
+}
+
+impl Scope {
+    /// The items that a name can find, each with `p_lateral_ok`: the namespace, then the items that only `LATERAL` can see when a `LATERAL` subquery is active.
+    fn visible(&self) -> impl Iterator<Item = (&Item, bool)> {
+        let lateral = self.lateral.iter().filter(|_| self.lateral_active);
+        self.namespace.iter().map(|i| (i, true)).chain(lateral.map(|(i, ok)| (i, *ok)))
+    }
+}
+
+/// `check_lateral_ref_ok`: an item on the left side of a full or a right join is visible in a `LATERAL` subquery on the right side, but a reference to it is an error.
+fn check_lateral_ok(item: &Item, ok: bool, at: Option<usize>) -> Result<()> {
+    if ok {
+        return Ok(());
+    }
+    Err(Error::new(
+        SqlState::INVALID_COLUMN_REFERENCE,
+        format!("invalid reference to FROM-clause entry for table \"{}\"", item.name),
+    )
+    .with_detail("The combining JOIN type must be INNER or LEFT for a LATERAL reference.")
+    .at_opt(at))
 }
 
 /// `varstr_levenshtein` with costs of 1: the edit distance of two names, by characters.
@@ -242,10 +265,7 @@ impl Analyzer<'_> {
 
     /// `transformRangeSubselect` and `addRangeTableEntryForSubquery`: a subquery in `FROM` and its namespace item. With no alias, the name of the entry is `unnamed_subquery`, and a qualified name cannot use it.
     fn range_subselect(&mut self, r: &RangeSubselect) -> Result<Item> {
-        if r.lateral {
-            return Err(not_yet("LATERAL", None));
-        }
-        let query = self.subquery_in_from(r.subquery.as_ref())?;
+        let query = self.subquery_in_from(r.subquery.as_ref(), r.lateral)?;
         let columns = query
             .targets
             .iter()
@@ -265,8 +285,8 @@ impl Analyzer<'_> {
         Ok(item)
     }
 
-    /// `parse_sub_analyze` for a subquery in `FROM` with no `LATERAL`: the subquery sees the queries outside this query, but not the names of this query.
-    fn subquery_in_from(&mut self, node: Option<&Node>) -> Result<crate::Query> {
+    /// `parse_sub_analyze` for a subquery in `FROM`: the subquery sees the queries outside this query. It sees the parts of `FROM` before it only with `LATERAL`.
+    fn subquery_in_from(&mut self, node: Option<&Node>, lateral: bool) -> Result<crate::Query> {
         let Some(Node::SelectStmt(stmt)) = node else {
             return Err(Error::internal("a subquery in FROM that is not SelectStmt"));
         };
@@ -274,6 +294,7 @@ impl Analyzer<'_> {
         let before = scope.lateral.len();
         let hidden = std::mem::take(&mut scope.namespace);
         scope.lateral.extend(hidden.into_iter().map(|item| (item, true)));
+        let active = std::mem::replace(&mut scope.lateral_active, lateral);
         self.outer.push(scope);
         let kind = std::mem::replace(&mut self.kind, Kind::Other);
         let has_aggs = std::mem::replace(&mut self.has_aggs, false);
@@ -281,6 +302,7 @@ impl Analyzer<'_> {
         self.has_aggs = has_aggs;
         self.kind = kind;
         let mut scope = self.outer.pop().unwrap_or_default();
+        scope.lateral_active = active;
         scope.namespace =
             scope.lateral.split_off(before).into_iter().map(|(item, _)| item).collect();
         self.scope = scope;
@@ -746,7 +768,7 @@ impl Analyzer<'_> {
     }
 
     /// The scope of a level.
-    fn level(&self, level: usize) -> &Scope {
+    pub(crate) fn level(&self, level: usize) -> &Scope {
         self.levels().nth(level).map_or(&self.scope, |(_, scope)| scope)
     }
 
@@ -812,11 +834,12 @@ impl Analyzer<'_> {
     pub(crate) fn column_by_name(&self, name: &str, at: Option<usize>) -> Result<Option<Expr>> {
         for (level, scope) in self.levels() {
             let mut result = None;
-            for item in scope.namespace.iter().filter(|i| i.cols_visible) {
+            for (item, ok) in scope.visible().filter(|(i, _)| i.cols_visible) {
                 if let Some(expr) = self.column_in(level, item, name, at)? {
                     if result.is_some() {
                         return Err(ambiguous(name, at));
                     }
+                    check_lateral_ok(item, ok, at)?;
                     result = Some(expr);
                 }
             }
@@ -860,7 +883,7 @@ impl Analyzer<'_> {
             };
             let Some(oid) = self.lookup_relation(&rv)? else { return Ok(None) };
             let mut result = None;
-            for item in scope.namespace.iter().filter(|i| i.rel_visible) {
+            for (item, ok) in scope.visible().filter(|(i, _)| i.rel_visible) {
                 let entry = &scope.entries[item.entry];
                 if entry.relation.is_some() && !entry.aliased && entry.oid == oid {
                     if result.is_some() {
@@ -870,13 +893,14 @@ impl Analyzer<'_> {
                         )
                         .at_opt(at));
                     }
+                    check_lateral_ok(item, ok, at)?;
                     result = Some(item.clone());
                 }
             }
             return Ok(result);
         }
         let mut result = None;
-        for item in scope.namespace.iter().filter(|i| i.rel_visible) {
+        for (item, ok) in scope.visible().filter(|(i, _)| i.rel_visible) {
             if item.name == name {
                 if result.is_some() {
                     return Err(Error::new(
@@ -885,6 +909,7 @@ impl Analyzer<'_> {
                     )
                     .at_opt(at));
                 }
+                check_lateral_ok(item, ok, at)?;
                 result = Some(item.clone());
             }
         }
@@ -945,6 +970,9 @@ impl Analyzer<'_> {
 
     /// `rte_visible_if_lateral`: true when a `LATERAL` subquery could see the entry.
     fn visible_if_lateral(&self, (level, index): Place) -> bool {
+        if self.scope.lateral_active {
+            return false;
+        }
         self.level(level).lateral.iter().any(|(item, ok)| item.entry == index && *ok)
     }
 
