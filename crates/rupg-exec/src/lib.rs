@@ -69,10 +69,10 @@ fn check(expr: &Expr) -> Result<()> {
             kernel(f.oid, expr.location)?;
             f.args.iter().try_for_each(check)?;
         }
-        ExprKind::Relabel(arg) | ExprKind::NullTest(arg, _) | ExprKind::BooleanTest(arg, _) => {
+        ExprKind::Relabel(arg, _) | ExprKind::NullTest(arg, _) | ExprKind::BooleanTest(arg, _) => {
             check(arg)?
         }
-        ExprKind::CoerceViaIo(arg) => {
+        ExprKind::CoerceViaIo(arg, _) => {
             if !rupg_func::output_supported(arg.ty) {
                 return Err(not_yet(format!("output of type {}", format_type(arg.ty))));
             }
@@ -229,7 +229,7 @@ fn correlated(query: &Query) -> bool {
 fn constant(expr: &Expr) -> bool {
     match &expr.kind {
         ExprKind::Const(_) | ExprKind::Param(_) => true,
-        ExprKind::Relabel(arg) => constant(arg),
+        ExprKind::Relabel(arg, _) => constant(arg),
         ExprKind::Func(f) => {
             builtin::proc_by_oid(f.oid).is_some_and(|p| p.volatile == b'i')
                 && f.args.iter().all(constant)
@@ -494,8 +494,8 @@ impl<'a> Eval<'a> {
                 value.cloned().ok_or_else(|| Error::internal("a parameter has no value"))
             }
             ExprKind::Func(f) => self.func(f, expr),
-            ExprKind::Relabel(arg) => Ok(relabel(self.eval(arg)?, expr.ty)),
-            ExprKind::CoerceViaIo(arg) => {
+            ExprKind::Relabel(arg, _) => Ok(relabel(self.eval(arg)?, expr.ty)),
+            ExprKind::CoerceViaIo(arg, _) => {
                 let value = self.eval(arg)?;
                 if value.is_null() {
                     return Ok(Value::Null);

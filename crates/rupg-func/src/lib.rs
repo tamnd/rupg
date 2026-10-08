@@ -9,6 +9,7 @@ mod agg;
 mod cast;
 mod catinfo;
 mod compare;
+mod deparse;
 mod io;
 mod math;
 mod misc;
@@ -156,6 +157,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
         .or_else(|| acl::by_src(src))
+        .or_else(|| deparse::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.

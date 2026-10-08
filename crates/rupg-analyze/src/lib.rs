@@ -33,12 +33,13 @@ pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
 pub use ddl::{Defined, Message, define, is_definition};
 pub use expr::{
-    Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink, SubLinkKind,
-    Var,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink,
+    SubLinkKind, Var,
 };
 pub use from::{Column, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};
 pub use sort::SortGroup;
+pub use typcache::default_opclass;
 pub use typename::parse_type;
 
 /// The OID of the schema `pg_catalog`.

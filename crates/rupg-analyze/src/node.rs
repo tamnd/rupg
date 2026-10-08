@@ -5,7 +5,9 @@
 use rupg_common::{Error, Result};
 use rupg_types::{Array, ArrayDim, Interval, Recv, Value};
 
-use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue, Var};
+use crate::expr::{
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, Var,
+};
 
 /// The stored form of an expression.
 ///
@@ -72,8 +74,8 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
     let name = match &expr.kind {
         ExprKind::Const(_) => "CONST",
         ExprKind::Func(_) => "FUNC",
-        ExprKind::Relabel(_) => "RELABEL",
-        ExprKind::CoerceViaIo(_) => "COERCEVIAIO",
+        ExprKind::Relabel(..) => "RELABEL",
+        ExprKind::CoerceViaIo(..) => "COERCEVIAIO",
         ExprKind::Bool(..) => "BOOL",
         ExprKind::NullTest(..) => "NULLTEST",
         ExprKind::BooleanTest(..) => "BOOLEANTEST",
@@ -111,7 +113,13 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push_str(&format!(" :variadic {}", f.variadic));
             write_args(&f.args, out)?;
         }
-        ExprKind::Relabel(arg) | ExprKind::CoerceViaIo(arg) => write_field("arg", arg, out)?,
+        ExprKind::Relabel(arg, form) | ExprKind::CoerceViaIo(arg, form) => {
+            out.push_str(match form {
+                CastForm::Explicit => " :form explicit",
+                CastForm::Implicit => " :form implicit",
+            });
+            write_field("arg", arg, out)?;
+        }
         ExprKind::Bool(op, args) => {
             let op = match op {
                 BoolOp::And => "and",
@@ -526,8 +534,8 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 variadic: f.flag("variadic")?,
             })
         }
-        "RELABEL" => ExprKind::Relabel(f.expr("arg")?),
-        "COERCEVIAIO" => ExprKind::CoerceViaIo(f.expr("arg")?),
+        "RELABEL" => ExprKind::Relabel(f.expr("arg")?, cast_form(&f)?),
+        "COERCEVIAIO" => ExprKind::CoerceViaIo(f.expr("arg")?, cast_form(&f)?),
         "BOOL" => {
             let op = match f.atom("op")? {
                 "and" => BoolOp::And,
@@ -597,6 +605,15 @@ fn expr_of(item: &Item) -> Result<Expr> {
         _ => return Err(bad(&format!("the node {name}"))),
     };
     Ok(Expr { kind, ty, typmod, location })
+}
+
+/// The form of a relabel or of an I/O cast.
+fn cast_form(f: &Fields<'_>) -> Result<CastForm> {
+    match f.atom("form")? {
+        "explicit" => Ok(CastForm::Explicit),
+        "implicit" => Ok(CastForm::Implicit),
+        _ => Err(bad("a cast form")),
+    }
 }
 
 /// The bytes of `x` and hex digits.
@@ -784,8 +801,9 @@ mod tests {
             ),
             Expr::new(ExprKind::SqlValue(SqlValue::CurrentTimestamp(Some(3))), oid::TIMESTAMPTZ),
             Expr::new(ExprKind::SqlValue(SqlValue::CurrentUser), oid::NAME),
-            Expr::new(ExprKind::Relabel(Box::new(var(1))), oid::OID).at(Some(0)),
-            Expr::new(ExprKind::CoerceViaIo(Box::new(var(1))), oid::TEXT),
+            Expr::new(ExprKind::Relabel(Box::new(var(1)), CastForm::Explicit), oid::OID)
+                .at(Some(0)),
+            Expr::new(ExprKind::CoerceViaIo(Box::new(var(1)), CastForm::Implicit), oid::TEXT),
             Expr {
                 kind: ExprKind::Func(Func {
                     oid: 1,

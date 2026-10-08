@@ -1,0 +1,247 @@
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TABLE d (c1 int DEFAULT 1, c2 int DEFAULT -1, c3 bigint DEFAULT 1, c4 numeric DEFAULT 1.5, c5 numeric(5,2) DEFAULT -2.25, c6 float8 DEFAULT 1.5, c7 real DEFAULT 2, c8 text DEFAULT 'x', c9 text DEFAULT 'it''s', c10 varchar(10) DEFAULT 'v', c11 char(3) DEFAULT 'ab', c12 bool DEFAULT true, c13 bool DEFAULT false, c14 date DEFAULT '2024-01-02', c15 timestamptz DEFAULT now(), c16 timestamptz DEFAULT CURRENT_TIMESTAMP, c17 text DEFAULT CURRENT_USER, c18 int[] DEFAULT '{1,2}', c19 int[] DEFAULT ARRAY[1, 2], c20 text DEFAULT lower('ABC'), c21 int DEFAULT 1 + 2 * 3, c22 int DEFAULT (1 + 2) * 3, c23 bigint DEFAULT 5::bigint, c24 oid DEFAULT 0, c25 text DEFAULT 5::text, c26 int DEFAULT NULL, c27 interval DEFAULT '1 day', c28 numeric DEFAULT 2::numeric, c29 int DEFAULT abs(-3), c30 text DEFAULT 'a' || 'b', c31 int DEFAULT CASE WHEN true THEN 1 ELSE 2 END, c32 int DEFAULT COALESCE(NULL, 3), c33 int DEFAULT -(1), c34 bigint DEFAULT -9223372036854775808, c35 numeric DEFAULT -1.5, c36 float8 DEFAULT -1.5, c37 text DEFAULT E'a\\b', c38 varchar DEFAULT 'q'::varchar, c39 varchar(5) DEFAULT 'q'::text, c40 int DEFAULT '7', c41 smallint DEFAULT 1, c42 int2 DEFAULT -1, c43 bool DEFAULT (NOT true), c44 int DEFAULT GREATEST(1, 2), c45 int DEFAULT NULLIF(1, 2), c46 date DEFAULT CURRENT_DATE, c47 text DEFAULT 'x'::varchar(2), c48 float4 DEFAULT 'NaN', c49 numeric DEFAULT 'NaN', c50 float8 DEFAULT '-Infinity')
+CREATE TABLE
+> SELECT adnum, pg_get_expr(adbin, adrelid), pg_get_expr(adbin, adrelid, true) FROM pg_attrdef WHERE adrelid = 'd'::regclass ORDER BY adnum
+row 1,1,1
+row 2,'-1'::integer,'-1'::integer
+row 3,1,1
+row 4,1.5,1.5
+row 5,'-2.25'::numeric,'-2.25'::numeric
+row 6,1.5,1.5
+row 7,2,2
+row 8,'x'::text,'x'::text
+row 9,'it''s'::text,'it''s'::text
+row 10,'v'::character varying,'v'::character varying
+row 11,'ab'::bpchar,'ab'::bpchar
+row 12,true,true
+row 13,false,false
+row 14,'2024-01-02'::date,'2024-01-02'::date
+row 15,now(),now()
+row 16,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP
+row 17,CURRENT_USER,CURRENT_USER
+row 18,'{1,2}'::integer[],'{1,2}'::integer[]
+row 19,ARRAY[1, 2],ARRAY[1, 2]
+row 20,lower('ABC'::text),lower('ABC'::text)
+row 21,(1 + (2 * 3)),1 + 2 * 3
+row 22,((1 + 2) * 3),(1 + 2) * 3
+row 23,(5)::bigint,5::bigint
+row 24,0,0
+row 25,(5)::text,5::text
+row 27,'1 day'::interval,'1 day'::interval
+row 28,(2)::numeric,2::numeric
+row 29,abs('-3'::integer),abs('-3'::integer)
+row 30,('a'::text || 'b'::text),'a'::text || 'b'::text
+row 31,
+CASE
+    WHEN true THEN 1
+    ELSE 2
+END,
+CASE
+    WHEN true THEN 1
+    ELSE 2
+END
+row 32,COALESCE(NULL::integer, 3),COALESCE(NULL::integer, 3)
+row 33,'-1'::integer,'-1'::integer
+row 34,'-9223372036854775808'::bigint,'-9223372036854775808'::bigint
+row 35,'-1.5'::numeric,'-1.5'::numeric
+row 36,'-1.5'::numeric,'-1.5'::numeric
+row 37,'a\b'::text,'a\b'::text
+row 38,'q'::character varying,'q'::character varying
+row 39,'q'::text,'q'::text
+row 40,7,7
+row 41,1,1
+row 42,'-1'::integer,'-1'::integer
+row 43,(NOT true),NOT true
+row 44,GREATEST(1, 2),GREATEST(1, 2)
+row 45,NULLIF(1, 2),NULLIF(1, 2)
+row 46,CURRENT_DATE,CURRENT_DATE
+row 47,'x'::character varying(2),'x'::character varying(2)
+row 48,'NaN'::real,'NaN'::real
+row 49,'NaN'::numeric,'NaN'::numeric
+row 50,'-Infinity'::double precision,'-Infinity'::double precision
+SELECT 49
+> CREATE TABLE c (a int, b text, n numeric, v varchar(10), t timestamp, f bool, x int[], CHECK (a > 0), CHECK (a > 0 AND b <> 'x'), CHECK (a > 0 OR a < -10 AND b IS NOT NULL), CHECK (NOT (a = 1)), CHECK (n > 0), CHECK (v <> 'x'), CHECK (v::text <> 'y'), CHECK (a IN (1, 2, 3)), CHECK (a NOT IN (1, 2)), CHECK (b IN ('a', 'b')), CHECK (a BETWEEN 1 AND 10), CHECK (b LIKE 'a%'), CHECK (b NOT LIKE 'a%'), CHECK (b ILIKE 'a%'), CHECK (b ~ '^a'), CHECK (f IS TRUE), CHECK (f IS NOT FALSE), CHECK (f IS UNKNOWN), CHECK (a IS NULL), CHECK (a IS DISTINCT FROM 5), CHECK (a IS NOT DISTINCT FROM 5), CHECK (f), CHECK (NOT f), CHECK (a = ANY (x)), CHECK (a > ALL (ARRAY[1, 2])), CHECK (length(b) < 10), CHECK (CASE WHEN a > 0 THEN true ELSE false END), CHECK (CASE a WHEN 1 THEN true WHEN 2 THEN false END), CHECK (t > '2024-01-01'), CHECK (a::text <> b), CHECK (a::bigint > 1), CHECK (-a < 5), CHECK (a % 2 = 0), CHECK (abs(a) >= 0), CHECK (b || 'x' <> 'y'), CHECK (a + 1 > a - 1), CHECK (n::int > 0), CHECK (COALESCE(a, 0) >= 0), CHECK (a::numeric(5,1) > 1.5), CHECK (n > 1.5), CHECK (a <> -1), CHECK (b <> ''))
+CREATE TABLE
+> SELECT conname, pg_get_constraintdef(oid), pg_get_constraintdef(oid, true), pg_get_expr(conbin, conrelid) FROM pg_constraint WHERE conrelid = 'c'::regclass ORDER BY conname
+row c_a_check,CHECK ((a > 0)),CHECK (a > 0),(a > 0)
+row c_a_check1,CHECK ((NOT (a = 1))),CHECK (NOT a = 1),(NOT (a = 1))
+row c_a_check10,CHECK (
+CASE a
+    WHEN 1 THEN true
+    WHEN 2 THEN false
+    ELSE NULL::boolean
+END),CHECK (
+CASE a
+    WHEN 1 THEN true
+    WHEN 2 THEN false
+    ELSE NULL::boolean
+END),
+CASE a
+    WHEN 1 THEN true
+    WHEN 2 THEN false
+    ELSE NULL::boolean
+END
+row c_a_check11,CHECK (((a)::bigint > 1)),CHECK (a::bigint > 1),((a)::bigint > 1)
+row c_a_check12,CHECK (((- a) < 5)),CHECK ((- a) < 5),((- a) < 5)
+row c_a_check13,CHECK (((a % 2) = 0)),CHECK ((a % 2) = 0),((a % 2) = 0)
+row c_a_check14,CHECK ((abs(a) >= 0)),CHECK (abs(a) >= 0),(abs(a) >= 0)
+row c_a_check15,CHECK (((a + 1) > (a - 1))),CHECK ((a + 1) > (a - 1)),((a + 1) > (a - 1))
+row c_a_check16,CHECK ((COALESCE(a, 0) >= 0)),CHECK (COALESCE(a, 0) >= 0),(COALESCE(a, 0) >= 0)
+row c_a_check17,CHECK (((a)::numeric(5,1) > 1.5)),CHECK (a::numeric(5,1) > 1.5),((a)::numeric(5,1) > 1.5)
+row c_a_check18,CHECK ((a <> '-1'::integer)),CHECK (a <> '-1'::integer),(a <> '-1'::integer)
+row c_a_check2,CHECK ((a = ANY (ARRAY[1, 2, 3]))),CHECK (a = ANY (ARRAY[1, 2, 3])),(a = ANY (ARRAY[1, 2, 3]))
+row c_a_check3,CHECK ((a <> ALL (ARRAY[1, 2]))),CHECK (a <> ALL (ARRAY[1, 2])),(a <> ALL (ARRAY[1, 2]))
+row c_a_check4,CHECK (((a >= 1) AND (a <= 10))),CHECK (a >= 1 AND a <= 10),((a >= 1) AND (a <= 10))
+row c_a_check5,CHECK ((a IS NULL)),CHECK (a IS NULL),(a IS NULL)
+row c_a_check6,CHECK ((a IS DISTINCT FROM 5)),CHECK (a IS DISTINCT FROM 5),(a IS DISTINCT FROM 5)
+row c_a_check7,CHECK ((NOT (a IS DISTINCT FROM 5))),CHECK (NOT a IS DISTINCT FROM 5),(NOT (a IS DISTINCT FROM 5))
+row c_a_check8,CHECK ((a > ALL (ARRAY[1, 2]))),CHECK (a > ALL (ARRAY[1, 2])),(a > ALL (ARRAY[1, 2]))
+row c_a_check9,CHECK (
+CASE
+    WHEN (a > 0) THEN true
+    ELSE false
+END),CHECK (
+CASE
+    WHEN a > 0 THEN true
+    ELSE false
+END),
+CASE
+    WHEN (a > 0) THEN true
+    ELSE false
+END
+row c_b_check,CHECK ((b = ANY (ARRAY['a'::text, 'b'::text]))),CHECK (b = ANY (ARRAY['a'::text, 'b'::text])),(b = ANY (ARRAY['a'::text, 'b'::text]))
+row c_b_check1,CHECK ((b ~~ 'a%'::text)),CHECK (b ~~ 'a%'::text),(b ~~ 'a%'::text)
+row c_b_check2,CHECK ((b !~~ 'a%'::text)),CHECK (b !~~ 'a%'::text),(b !~~ 'a%'::text)
+row c_b_check3,CHECK ((b ~~* 'a%'::text)),CHECK (b ~~* 'a%'::text),(b ~~* 'a%'::text)
+row c_b_check4,CHECK ((b ~ '^a'::text)),CHECK (b ~ '^a'::text),(b ~ '^a'::text)
+row c_b_check5,CHECK ((length(b) < 10)),CHECK (length(b) < 10),(length(b) < 10)
+row c_b_check6,CHECK (((b || 'x'::text) <> 'y'::text)),CHECK ((b || 'x'::text) <> 'y'::text),((b || 'x'::text) <> 'y'::text)
+row c_b_check7,CHECK ((b <> ''::text)),CHECK (b <> ''::text),(b <> ''::text)
+row c_check,CHECK (((a > 0) AND (b <> 'x'::text))),CHECK (a > 0 AND b <> 'x'::text),((a > 0) AND (b <> 'x'::text))
+row c_check1,CHECK (((a > 0) OR ((a < '-10'::integer) AND (b IS NOT NULL)))),CHECK (a > 0 OR a < '-10'::integer AND b IS NOT NULL),((a > 0) OR ((a < '-10'::integer) AND (b IS NOT NULL)))
+row c_check2,CHECK ((a = ANY (x))),CHECK (a = ANY (x)),(a = ANY (x))
+row c_check3,CHECK (((a)::text <> b)),CHECK (a::text <> b),((a)::text <> b)
+row c_f_check,CHECK ((f IS TRUE)),CHECK (f IS TRUE),(f IS TRUE)
+row c_f_check1,CHECK ((f IS NOT FALSE)),CHECK (f IS NOT FALSE),(f IS NOT FALSE)
+row c_f_check2,CHECK ((f IS UNKNOWN)),CHECK (f IS UNKNOWN),(f IS UNKNOWN)
+row c_f_check3,CHECK (f),CHECK (f),f
+row c_f_check4,CHECK ((NOT f)),CHECK (NOT f),(NOT f)
+row c_n_check,CHECK ((n > (0)::numeric)),CHECK (n > 0::numeric),(n > (0)::numeric)
+row c_n_check1,CHECK (((n)::integer > 0)),CHECK (n::integer > 0),((n)::integer > 0)
+row c_n_check2,CHECK ((n > 1.5)),CHECK (n > 1.5),(n > 1.5)
+row c_t_check,CHECK ((t > '2024-01-01 00:00:00'::timestamp without time zone)),CHECK (t > '2024-01-01 00:00:00'::timestamp without time zone),(t > '2024-01-01 00:00:00'::timestamp without time zone)
+row c_v_check,CHECK (((v)::text <> 'x'::text)),CHECK (v::text <> 'x'::text),((v)::text <> 'x'::text)
+row c_v_check1,CHECK (((v)::text <> 'y'::text)),CHECK (v::text <> 'y'::text),((v)::text <> 'y'::text)
+SELECT 42
+> CREATE TABLE k (a int PRIMARY KEY, b text UNIQUE, c int NOT NULL, d int, e int, UNIQUE (c, d), UNIQUE NULLS NOT DISTINCT (e), CONSTRAINT kpos CHECK (a > 0) NO INHERIT, CONSTRAINT kdef UNIQUE (d, e) DEFERRABLE, CONSTRAINT kdef2 UNIQUE (e, d) DEFERRABLE INITIALLY DEFERRED)
+CREATE TABLE
+> CREATE TABLE s.r (x int, y int, z text, PRIMARY KEY (x, y))
+CREATE TABLE
+> CREATE TABLE f (a int REFERENCES k, b text REFERENCES k (b) ON DELETE CASCADE, c int, d int, e int, FOREIGN KEY (c, d) REFERENCES k (c, d) MATCH FULL ON UPDATE SET NULL, FOREIGN KEY (a, e) REFERENCES s.r ON DELETE SET DEFAULT ON UPDATE RESTRICT DEFERRABLE INITIALLY DEFERRED, CONSTRAINT fk5 FOREIGN KEY (e) REFERENCES k (a) ON DELETE SET NULL NOT VALID)
+CREATE TABLE
+> SELECT conname, contype, pg_get_constraintdef(oid), pg_get_constraintdef(oid, true) FROM pg_constraint WHERE conrelid IN ('k'::regclass, 'f'::regclass, 's.r'::regclass) ORDER BY conrelid, conname
+row k_a_not_null,n,NOT NULL a,NOT NULL a
+row k_b_key,u,UNIQUE (b),UNIQUE (b)
+row k_c_d_key,u,UNIQUE (c, d),UNIQUE (c, d)
+row k_c_not_null,n,NOT NULL c,NOT NULL c
+row k_e_key,u,UNIQUE NULLS NOT DISTINCT (e),UNIQUE NULLS NOT DISTINCT (e)
+row k_pkey,p,PRIMARY KEY (a),PRIMARY KEY (a)
+row kdef,u,UNIQUE (d, e) DEFERRABLE,UNIQUE (d, e) DEFERRABLE
+row kdef2,u,UNIQUE (e, d) DEFERRABLE INITIALLY DEFERRED,UNIQUE (e, d) DEFERRABLE INITIALLY DEFERRED
+row kpos,c,CHECK ((a > 0)) NO INHERIT,CHECK (a > 0) NO INHERIT
+row r_pkey,p,PRIMARY KEY (x, y),PRIMARY KEY (x, y)
+row r_x_not_null,n,NOT NULL x,NOT NULL x
+row r_y_not_null,n,NOT NULL y,NOT NULL y
+row f_a_e_fkey,f,FOREIGN KEY (a, e) REFERENCES s.r(x, y) ON UPDATE RESTRICT ON DELETE SET DEFAULT DEFERRABLE INITIALLY DEFERRED,FOREIGN KEY (a, e) REFERENCES s.r(x, y) ON UPDATE RESTRICT ON DELETE SET DEFAULT DEFERRABLE INITIALLY DEFERRED
+row f_a_fkey,f,FOREIGN KEY (a) REFERENCES k(a),FOREIGN KEY (a) REFERENCES k(a)
+row f_b_fkey,f,FOREIGN KEY (b) REFERENCES k(b) ON DELETE CASCADE,FOREIGN KEY (b) REFERENCES k(b) ON DELETE CASCADE
+row f_c_d_fkey,f,FOREIGN KEY (c, d) REFERENCES k(c, d) MATCH FULL ON UPDATE SET NULL,FOREIGN KEY (c, d) REFERENCES k(c, d) MATCH FULL ON UPDATE SET NULL
+row fk5,f,FOREIGN KEY (e) REFERENCES k(a) ON DELETE SET NULL,FOREIGN KEY (e) REFERENCES k(a) ON DELETE SET NULL
+SELECT 17
+> CREATE INDEX i1 ON k (b)
+CREATE INDEX
+> CREATE INDEX i2 ON k (c DESC, d NULLS FIRST)
+CREATE INDEX
+> CREATE INDEX i3 ON k (lower(b)) WHERE a > 1
+CREATE INDEX
+> CREATE INDEX i4 ON k (c) INCLUDE (d, e)
+CREATE INDEX
+> CREATE UNIQUE INDEX i5 ON k ((a + 1), b text_pattern_ops)
+CREATE INDEX
+> CREATE INDEX i6 ON k USING hash (b)
+CREATE INDEX
+> CREATE INDEX i7 ON k (b COLLATE "C" DESC NULLS LAST)
+CREATE INDEX
+> CREATE INDEX i8 ON s.r (z) WHERE x > 0 AND z IS NOT NULL
+CREATE INDEX
+> CREATE UNIQUE INDEX i9 ON k (c) NULLS NOT DISTINCT
+CREATE INDEX
+> CREATE INDEX "I Ten" ON k (("c" * 2), (b || 'x'))
+CREATE INDEX
+> CREATE INDEX i11 ON k (a) WHERE b IN ('x', 'y')
+CREATE INDEX
+> SELECT indexrelid::regclass, pg_get_indexdef(indexrelid), pg_get_indexdef(indexrelid, 0, true), pg_get_indexdef(indexrelid, 1, false), pg_get_indexdef(indexrelid, 2, true), pg_get_expr(indpred, indrelid), pg_get_expr(indexprs, indrelid) FROM pg_index WHERE indrelid IN ('k'::regclass, 's.r'::regclass, 'f'::regclass) ORDER BY indexrelid
+row k_pkey,CREATE UNIQUE INDEX k_pkey ON public.k USING btree (a),CREATE UNIQUE INDEX k_pkey ON k USING btree (a),a,,NULL,NULL
+row k_b_key,CREATE UNIQUE INDEX k_b_key ON public.k USING btree (b),CREATE UNIQUE INDEX k_b_key ON k USING btree (b),b,,NULL,NULL
+row k_c_d_key,CREATE UNIQUE INDEX k_c_d_key ON public.k USING btree (c, d),CREATE UNIQUE INDEX k_c_d_key ON k USING btree (c, d),c,d,NULL,NULL
+row k_e_key,CREATE UNIQUE INDEX k_e_key ON public.k USING btree (e) NULLS NOT DISTINCT,CREATE UNIQUE INDEX k_e_key ON k USING btree (e) NULLS NOT DISTINCT,e,,NULL,NULL
+row kdef,CREATE UNIQUE INDEX kdef ON public.k USING btree (d, e),CREATE UNIQUE INDEX kdef ON k USING btree (d, e),d,e,NULL,NULL
+row kdef2,CREATE UNIQUE INDEX kdef2 ON public.k USING btree (e, d),CREATE UNIQUE INDEX kdef2 ON k USING btree (e, d),e,d,NULL,NULL
+row s.r_pkey,CREATE UNIQUE INDEX r_pkey ON s.r USING btree (x, y),CREATE UNIQUE INDEX r_pkey ON s.r USING btree (x, y),x,y,NULL,NULL
+row i1,CREATE INDEX i1 ON public.k USING btree (b),CREATE INDEX i1 ON k USING btree (b),b,,NULL,NULL
+row i2,CREATE INDEX i2 ON public.k USING btree (c DESC, d NULLS FIRST),CREATE INDEX i2 ON k USING btree (c DESC, d NULLS FIRST),c,d,NULL,NULL
+row i3,CREATE INDEX i3 ON public.k USING btree (lower(b)) WHERE (a > 1),CREATE INDEX i3 ON k USING btree (lower(b)) WHERE a > 1,lower(b),,(a > 1),lower(b)
+row i4,CREATE INDEX i4 ON public.k USING btree (c) INCLUDE (d, e),CREATE INDEX i4 ON k USING btree (c) INCLUDE (d, e),c,d,NULL,NULL
+row i5,CREATE UNIQUE INDEX i5 ON public.k USING btree (((a + 1)), b text_pattern_ops),CREATE UNIQUE INDEX i5 ON k USING btree ((a + 1), b text_pattern_ops),((a + 1)),b,NULL,(a + 1)
+row i6,CREATE INDEX i6 ON public.k USING hash (b),CREATE INDEX i6 ON k USING hash (b),b,,NULL,NULL
+row i7,CREATE INDEX i7 ON public.k USING btree (b COLLATE "C" DESC NULLS LAST),CREATE INDEX i7 ON k USING btree (b COLLATE "C" DESC NULLS LAST),b,,NULL,NULL
+row s.i8,CREATE INDEX i8 ON s.r USING btree (z) WHERE ((x > 0) AND (z IS NOT NULL)),CREATE INDEX i8 ON s.r USING btree (z) WHERE x > 0 AND z IS NOT NULL,z,,((x > 0) AND (z IS NOT NULL)),NULL
+row i9,CREATE UNIQUE INDEX i9 ON public.k USING btree (c) NULLS NOT DISTINCT,CREATE UNIQUE INDEX i9 ON k USING btree (c) NULLS NOT DISTINCT,c,,NULL,NULL
+row "I Ten",CREATE INDEX "I Ten" ON public.k USING btree (((c * 2)), ((b || 'x'::text))),CREATE INDEX "I Ten" ON k USING btree ((c * 2), (b || 'x'::text)),((c * 2)),(b || 'x'::text),NULL,(c * 2), (b || 'x'::text)
+row i11,CREATE INDEX i11 ON public.k USING btree (a) WHERE (b = ANY (ARRAY['x'::text, 'y'::text])),CREATE INDEX i11 ON k USING btree (a) WHERE b = ANY (ARRAY['x'::text, 'y'::text]),a,,(b = ANY (ARRAY['x'::text, 'y'::text])),NULL
+SELECT 18
+> SET search_path = s
+SET
+search_path=s
+> SELECT conname, pg_get_constraintdef(oid) FROM pg_catalog.pg_constraint WHERE conrelid = 'public.f'::regclass ORDER BY conname
+row f_a_e_fkey,FOREIGN KEY (a, e) REFERENCES r(x, y) ON UPDATE RESTRICT ON DELETE SET DEFAULT DEFERRABLE INITIALLY DEFERRED
+row f_a_fkey,FOREIGN KEY (a) REFERENCES public.k(a)
+row f_b_fkey,FOREIGN KEY (b) REFERENCES public.k(b) ON DELETE CASCADE
+row f_c_d_fkey,FOREIGN KEY (c, d) REFERENCES public.k(c, d) MATCH FULL ON UPDATE SET NULL
+row fk5,FOREIGN KEY (e) REFERENCES public.k(a) ON DELETE SET NULL
+SELECT 5
+> SELECT indexrelid::regclass, pg_get_indexdef(indexrelid) FROM pg_catalog.pg_index WHERE indrelid IN ('public.k'::regclass, 's.r'::regclass) ORDER BY indexrelid
+row public.k_pkey,CREATE UNIQUE INDEX k_pkey ON public.k USING btree (a)
+row public.k_b_key,CREATE UNIQUE INDEX k_b_key ON public.k USING btree (b)
+row public.k_c_d_key,CREATE UNIQUE INDEX k_c_d_key ON public.k USING btree (c, d)
+row public.k_e_key,CREATE UNIQUE INDEX k_e_key ON public.k USING btree (e) NULLS NOT DISTINCT
+row public.kdef,CREATE UNIQUE INDEX kdef ON public.k USING btree (d, e)
+row public.kdef2,CREATE UNIQUE INDEX kdef2 ON public.k USING btree (e, d)
+row r_pkey,CREATE UNIQUE INDEX r_pkey ON s.r USING btree (x, y)
+row public.i1,CREATE INDEX i1 ON public.k USING btree (b)
+row public.i2,CREATE INDEX i2 ON public.k USING btree (c DESC, d NULLS FIRST)
+row public.i3,CREATE INDEX i3 ON public.k USING btree (lower(b)) WHERE (a > 1)
+row public.i4,CREATE INDEX i4 ON public.k USING btree (c) INCLUDE (d, e)
+row public.i5,CREATE UNIQUE INDEX i5 ON public.k USING btree (((a + 1)), b text_pattern_ops)
+row public.i6,CREATE INDEX i6 ON public.k USING hash (b)
+row public.i7,CREATE INDEX i7 ON public.k USING btree (b COLLATE "C" DESC NULLS LAST)
+row i8,CREATE INDEX i8 ON s.r USING btree (z) WHERE ((x > 0) AND (z IS NOT NULL))
+row public.i9,CREATE UNIQUE INDEX i9 ON public.k USING btree (c) NULLS NOT DISTINCT
+row public."I Ten",CREATE INDEX "I Ten" ON public.k USING btree (((c * 2)), ((b || 'x'::text)))
+row public.i11,CREATE INDEX i11 ON public.k USING btree (a) WHERE (b = ANY (ARRAY['x'::text, 'y'::text]))
+SELECT 18
+> RESET search_path
+RESET
+search_path="$user", public
+> SELECT pg_get_expr(adbin, 'c'::regclass) FROM pg_attrdef WHERE adrelid = 'd'::regclass AND adnum = 1
+row 1
+SELECT 1
+> SELECT pg_get_expr(adbin, 0) FROM pg_attrdef WHERE adrelid = 'd'::regclass AND adnum = 1
+row 1
+SELECT 1
+> SELECT pg_get_expr(NULL, 0), pg_get_constraintdef(0), pg_get_indexdef(0), pg_get_indexdef(0, 0, true), pg_get_constraintdef(NULL)
+row NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_get_expr('x', 0)
+ERROR 0A000 cannot accept a value of type pg_node_tree at 20

@@ -1528,6 +1528,7 @@ mod tests {
             let got: Vec<String> = send(&mut c, &query(sql))
                 .into_iter()
                 .filter(|l| !l.starts_with("ready ") && !l.starts_with("columns "))
+                .flat_map(|l| l.split('\n').map(str::to_string).collect::<Vec<_>>())
                 .collect();
             assert_eq!(got, want, "{sql}");
         }
@@ -1537,6 +1538,12 @@ mod tests {
     #[test]
     fn reg_names() {
         big_stack(|| script(include_str!("connection/reg_names.test")));
+    }
+
+    /// The deparse functions `pg_get_expr`, `pg_get_constraintdef` and `pg_get_indexdef`. `connection/deparse.test` is the output of PostgreSQL 19 for the same script in a new database. A value with a newline takes more than one line.
+    #[test]
+    fn deparse() {
+        big_stack(|| script(include_str!("connection/deparse.test")));
     }
 
     #[test]

@@ -82,7 +82,7 @@ pub(crate) fn path(session: &dyn Session) -> Vec<u32> {
 }
 
 /// `quote_qualified_identifier`: the name with its schema, or the name alone when `schema` is `None`.
-fn qualified(schema: Option<&str>, name: &str) -> String {
+pub(crate) fn qualified(schema: Option<&str>, name: &str) -> String {
     match schema {
         Some(schema) => format!("{}.{}", quote_identifier(schema), quote_identifier(name)),
         None => quote_identifier(name),
@@ -172,7 +172,7 @@ fn find_type(spaces: &[u32], name: &str, session: &dyn Session) -> Option<u32> {
 }
 
 /// The name and the schema of the relation with this OID.
-fn class_name(oid: u32, session: &dyn Session) -> Option<(&str, u32)> {
+pub(crate) fn class_name(oid: u32, session: &dyn Session) -> Option<(&str, u32)> {
     builtin::named_by_oid(Named::Class, oid)
         .map(|row| (row.name, row.namespace))
         .or_else(|| session.catalog()?.relation(oid).map(|r| (r.name.as_str(), r.namespace)))
