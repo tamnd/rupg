@@ -60,6 +60,13 @@ impl Error {
         self
     }
 
+    /// Sets the place in the query text and drops the place that the error has, as `parser_errposition` in an error context callback does. `None` drops the place.
+    #[must_use]
+    pub fn with_position(mut self, location: Option<usize>) -> Error {
+        self.position = location;
+        self
+    }
+
     /// Adds a line to the context, as `errcontext` does in an error context callback. The lines go from the inner place to the outer place.
     #[must_use]
     pub fn with_context(mut self, line: impl Into<String>) -> Error {

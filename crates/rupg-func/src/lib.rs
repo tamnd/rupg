@@ -10,6 +10,7 @@ mod compare;
 mod io;
 mod math;
 mod misc;
+mod reg;
 mod text;
 
 use std::collections::BTreeMap;
@@ -139,6 +140,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| math::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
+        .or_else(|| reg::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.

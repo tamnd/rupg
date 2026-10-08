@@ -47,10 +47,17 @@ pub(crate) struct Parser<'a> {
     notices: Vec<Notice>,
     /// The `parsetree` of `base_yy_extra_type`: the list that the start rule gives.
     pub(crate) parsetree: List,
+    /// The token of the mode of `raw_parser`, such as `MODE_TYPE_NAME`, which the parser reads before the text. `None` parses statements.
+    mode: Option<u16>,
 }
 
 impl<'a> Parser<'a> {
     pub(crate) fn new(text: &'a str) -> Parser<'a> {
+        Parser::with_mode(text, None)
+    }
+
+    /// A parser that reads the token `mode` first, as `raw_parser` does for a mode other than `RAW_PARSE_DEFAULT`.
+    pub(crate) fn with_mode(text: &'a str, mode: Option<u16>) -> Parser<'a> {
         let text = Lexer::new(text).text();
         Parser {
             text,
@@ -58,6 +65,7 @@ impl<'a> Parser<'a> {
             last: (0, 0),
             notices: Vec::new(),
             parsetree: List::new(),
+            mode,
         }
     }
 
@@ -88,6 +96,9 @@ impl Machine for Parser<'_> {
     type Error = Error;
 
     fn token(&mut self) -> Result<(u16, Value, i32), Error> {
+        if let Some(mode) = self.mode.take() {
+            return Ok((mode, Value::default(), 0));
+        }
         let token = self.tokens.next_token()?;
         // The notices of the lexer come before those of the actions that run after this token.
         self.notices.append(&mut self.tokens.take_notices());

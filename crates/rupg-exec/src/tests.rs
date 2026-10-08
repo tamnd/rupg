@@ -85,34 +85,34 @@ impl Env for TestSession {
     }
 }
 
+/// The text of each column of each row of a query, `NULL` for a null value, or the error.
+fn run(sql: &str) -> Result<Vec<Vec<String>>> {
+    let session = TestSession { zone: FixedZone::utc() };
+    let (stmts, _) = rupg_sql::parse(sql).map_err(rupg_common::Error::from)?;
+    let Some(Some(Node::RawStmt(raw))) = stmts.first() else { panic!("no statement in {sql}") };
+    let query = analyze(raw.stmt.as_ref().expect("a statement"), &session, &Params::default())?;
+    let plan = prepare(query)?;
+    let rows = plan.run(&[], &session)?;
+    let mut texts = Vec::new();
+    for values in rows {
+        let mut row = Vec::new();
+        for (target, value) in plan.columns().iter().zip(values) {
+            if value.is_null() {
+                row.push("NULL".to_string());
+                continue;
+            }
+            let mut out = Vec::new();
+            rupg_func::output(target.expr.ty, &value, &session, &mut out)?;
+            row.push(String::from_utf8(out).expect("utf8"));
+        }
+        texts.push(row);
+    }
+    Ok(texts)
+}
+
 /// The text of each column of each row of a query, `NULL` for a null value, or the SQLSTATE and the message of the error.
 fn rows(sql: &str) -> std::result::Result<Vec<Vec<String>>, (String, String)> {
-    let session = TestSession { zone: FixedZone::utc() };
-    let fail = |e: rupg_common::Error| (e.state().as_str().to_string(), e.message().to_string());
-    let (stmts, _) = rupg_sql::parse(sql).map_err(|e| ("42601".to_string(), e.message.clone()))?;
-    let Some(Some(Node::RawStmt(raw))) = stmts.first() else { panic!("no statement in {sql}") };
-    let query = analyze(raw.stmt.as_ref().expect("a statement"), &session, &Params::default())
-        .map_err(fail)?;
-    let plan = prepare(query).map_err(fail)?;
-    let rows = plan.run(&[], &session).map_err(fail)?;
-    let texts = rows
-        .into_iter()
-        .map(|values| {
-            plan.columns()
-                .iter()
-                .zip(values)
-                .map(|(target, value)| {
-                    if value.is_null() {
-                        return "NULL".to_string();
-                    }
-                    let mut out = Vec::new();
-                    rupg_func::output(target.expr.ty, &value, &session, &mut out).expect("output");
-                    String::from_utf8(out).expect("utf8")
-                })
-                .collect()
-        })
-        .collect();
-    Ok(texts)
+    run(sql).map_err(|e| (e.state().as_str().to_string(), e.message().to_string()))
 }
 
 /// The row of a query that gives at most one row.
@@ -655,5 +655,225 @@ fn subqueries() {
             ),
             "0A000"
         );
+    });
+}
+
+/// The value of a query of one row and one column, `NULL`, or the error as `ERROR`, the SQLSTATE, the message and the hint.
+fn outcome(sql: &str) -> String {
+    match run(sql) {
+        Ok(mut rows) if rows.len() == 1 && rows[0].len() == 1 => rows[0].remove(0),
+        Ok(rows) => panic!("{sql} gave {rows:?}"),
+        Err(e) => {
+            let mut text = format!("ERROR {} {}", e.state().as_str(), e.message());
+            if let Some(hint) = e.hint() {
+                text.push_str(" HINT ");
+                text.push_str(hint);
+            }
+            text
+        }
+    }
+}
+
+/// The input and output of the OID alias types and the functions `to_regclass` and the others. Each result is the result of PostgreSQL 19 for `SELECT` and the expression, with `search_path` at its default.
+#[test]
+fn oid_alias_types() {
+    const CASES: &[(&str, &str)] = &[
+        ("'pg_class'::regclass", "pg_class"),
+        ("2836::regclass", "pg_toast.pg_toast_1255"),
+        ("0::regclass", "-"),
+        ("99999::regclass", "99999"),
+        ("'pg_catalog.pg_class'::regclass::oid", "1259"),
+        ("'postgres.pg_catalog.pg_class'::regclass", "pg_class"),
+        ("'\"pg_class\"'::regclass", "pg_class"),
+        ("'pg_toast.pg_toast_1255'::regclass::oid", "2836"),
+        ("'-'::regclass::oid", "0"),
+        ("'int4'::regtype", "integer"),
+        ("'integer[]'::regtype", "integer[]"),
+        ("'varchar(10)'::regtype", "character varying"),
+        ("'double precision'::regtype", "double precision"),
+        ("'\"char\"'::regtype", "\"char\""),
+        ("'pg_catalog.int8'::regtype", "bigint"),
+        ("'timestamptz'::regtype", "timestamp with time zone"),
+        ("'varbit'::regtype", "bit varying"),
+        ("0::regtype", "-"),
+        ("'now'::regproc", "now"),
+        ("'pg_catalog.now'::regproc::oid", "1299"),
+        ("2::regproc", "2"),
+        ("'now()'::regprocedure", "now()"),
+        ("'abs(int4)'::regprocedure", "abs(integer)"),
+        ("'lower(text)'::regprocedure", "lower(text)"),
+        ("'abs( integer )'::regprocedure::oid", "1397"),
+        ("'pg_catalog.abs(int4)'::regprocedure::oid", "1397"),
+        ("1397::regprocedure", "abs(integer)"),
+        ("'||/'::regoper", "||/"),
+        ("'||/'::regoper::oid", "597"),
+        ("0::regoper", "0"),
+        ("551::regoper", "pg_catalog.+"),
+        ("'+(int4,int4)'::regoperator", "+(integer,integer)"),
+        ("'-(NONE,int4)'::regoperator", "-(NONE,integer)"),
+        ("'-(none, integer)'::regoperator::oid", "558"),
+        ("96::regoperator", "=(integer,integer)"),
+        ("0::regoperator", "0"),
+        ("'pg_catalog'::regnamespace", "pg_catalog"),
+        ("'pg_toast'::regnamespace::oid", "99"),
+        ("12345::regnamespace", "12345"),
+        ("'postgres'::regrole", "postgres"),
+        ("'pg_monitor'::regrole::oid", "3373"),
+        ("10::regrole", "postgres"),
+        ("'\"C\"'::regcollation", "\"C\""),
+        ("'\"C\"'::regcollation::oid", "950"),
+        ("'pg_catalog.\"POSIX\"'::regcollation::oid", "951"),
+        ("'ucs_basic'::regcollation::oid", "962"),
+        ("100::regcollation", "\"default\""),
+        ("'simple'::regconfig::oid", "3748"),
+        ("3748::regconfig", "simple"),
+        ("'simple'::regdictionary::oid", "3765"),
+        ("3765::regdictionary", "simple"),
+        ("'template1'::regdatabase::oid", "1"),
+        ("1::regdatabase", "template1"),
+        ("'postgres'::regdatabase::oid", "5"),
+        ("to_regclass('pg_class')::oid", "1259"),
+        ("to_regclass('nosuch')", "NULL"),
+        ("to_regclass('nosch.nosuch')", "NULL"),
+        ("to_regclass('a..b')", "NULL"),
+        ("to_regclass('09')", "NULL"),
+        ("to_regtype('int4')", "integer"),
+        ("to_regtype('nosuch')", "NULL"),
+        ("to_regtype('nosch.nosuch')", "NULL"),
+        ("to_regtypemod('varchar(10)')", "14"),
+        ("to_regtypemod('int4')", "-1"),
+        ("to_regtypemod('nosuch')", "NULL"),
+        ("to_regtypemod('numeric(5,2)')", "327686"),
+        ("to_regtypemod('interval year to month')", "458751"),
+        ("to_regtypemod('timestamp(3)')", "3"),
+        ("to_regtypemod('char')", "5"),
+        ("to_regtypemod('bit(3)')", "3"),
+        ("to_regproc('abs')", "NULL"),
+        ("to_regproc('now')::oid", "1299"),
+        ("to_regproc('nosuch')", "NULL"),
+        ("to_regprocedure('abs(int4)')::oid", "1397"),
+        ("to_regprocedure('abs(text)')", "NULL"),
+        ("to_regprocedure('abs')", "NULL"),
+        ("to_regprocedure('abs(nosuch)')", "NULL"),
+        ("to_regoper('+')", "NULL"),
+        ("to_regoper('||/')::oid", "597"),
+        ("to_regoperator('+(int4,int4)')::oid", "551"),
+        ("to_regoperator('+(int4)')", "NULL"),
+        ("to_regoperator('+(int4,int4,int4)')", "NULL"),
+        ("to_regoperator('+(text,text)')", "NULL"),
+        ("to_regnamespace('pg_catalog')::oid", "11"),
+        ("to_regnamespace('nosuch')", "NULL"),
+        ("to_regnamespace('a.b')", "NULL"),
+        ("to_regrole('postgres')::oid", "10"),
+        ("to_regrole('public')", "NULL"),
+        ("to_regcollation('\"C\"')::oid", "950"),
+        ("to_regcollation('C')", "NULL"),
+        ("to_regdatabase('template1')::oid", "1"),
+        ("to_regdatabase('nosuch')", "NULL"),
+        ("'pg_class'::text::regclass", "pg_class"),
+        ("1259::regclass::text", "pg_class"),
+        ("1259::regclass::oid::int4", "1259"),
+        ("1259::int8::regclass", "pg_class"),
+        ("(-1)::regclass", "4294967295"),
+        ("'pg_class'::regclass = 1259", "t"),
+        ("'nosuch'::regclass", "ERROR 42P01 relation \"nosuch\" does not exist"),
+        ("'nosch.nosuch'::regclass", "ERROR 42P01 relation \"nosch.nosuch\" does not exist"),
+        ("'\"PG_CLASS\"'::regclass", "ERROR 42P01 relation \"PG_CLASS\" does not exist"),
+        (
+            "'a.b.c.d'::regclass",
+            "ERROR 42601 improper relation name (too many dotted names): a.b.c.d",
+        ),
+        (
+            "'x.pg_catalog.pg_class'::regclass",
+            "ERROR 0A000 cross-database references are not implemented: \"x.pg_catalog.pg_class\"",
+        ),
+        ("'a..b'::regclass", "ERROR 42602 invalid name syntax"),
+        ("''::regclass", "ERROR 42602 invalid name syntax"),
+        ("'nosuch'::regtype", "ERROR 42704 type \"nosuch\" does not exist"),
+        ("'nosch.nosuch'::regtype", "ERROR 3F000 schema \"nosch\" does not exist"),
+        ("'int4 int4'::regtype", "ERROR 42601 syntax error at or near \"int4\""),
+        ("' '::regtype", "ERROR 42601 invalid type name \" \""),
+        ("'setof int4'::regtype", "ERROR 42601 invalid type name \"setof int4\""),
+        ("'varchar(0)'::regtype", "ERROR 22023 length for type varchar must be at least 1"),
+        ("'void[]'::regtype", "ERROR 42704 type \"void[]\" does not exist"),
+        ("'abs'::regproc", "ERROR 42725 more than one function named \"abs\""),
+        ("'nosuch'::regproc", "ERROR 42883 function \"nosuch\" does not exist"),
+        ("'abs'::regprocedure", "ERROR 22P02 expected a left parenthesis"),
+        ("'abs(int4'::regprocedure", "ERROR 22P02 expected a right parenthesis"),
+        ("'abs(int4)x'::regprocedure", "ERROR 22P02 expected a right parenthesis"),
+        ("'abs(int4,)'::regprocedure", "ERROR 22P02 expected a type name"),
+        ("'abs(nosuch)'::regprocedure", "ERROR 42704 type \"nosuch\" does not exist"),
+        ("'abs(text)'::regprocedure", "ERROR 42883 function \"abs(text)\" does not exist"),
+        ("'+'::regoper", "ERROR 42725 more than one operator named +"),
+        ("'!'::regoper", "ERROR 42883 operator does not exist: !"),
+        (
+            "'+(int4)'::regoperator",
+            "ERROR 42P02 missing argument HINT Use NONE to denote the missing argument of a unary operator.",
+        ),
+        (
+            "'+(int4,int4,int4)'::regoperator",
+            "ERROR 54023 too many arguments HINT Provide two argument types for operator.",
+        ),
+        ("'+(text,text)'::regoperator", "ERROR 42883 operator does not exist: +(text,text)"),
+        ("'nosuch'::regnamespace", "ERROR 3F000 schema \"nosuch\" does not exist"),
+        ("'a.b'::regnamespace", "ERROR 42602 invalid name syntax"),
+        ("'nosuch'::regrole", "ERROR 42704 role \"nosuch\" does not exist"),
+        ("'public'::regrole", "ERROR 42704 role \"public\" does not exist"),
+        ("'C'::regcollation", "ERROR 42704 collation \"c\" for encoding \"UTF8\" does not exist"),
+        ("'nosuch'::regconfig", "ERROR 42704 text search configuration \"nosuch\" does not exist"),
+        ("'nosuch'::regdictionary", "ERROR 42704 text search dictionary \"nosuch\" does not exist"),
+        ("'nosuch'::regdatabase", "ERROR 42704 database \"nosuch\" does not exist"),
+        ("'x'::text::regclass", "ERROR 42P01 relation \"x\" does not exist"),
+        ("'nosch.x'::text::regclass", "ERROR 3F000 schema \"nosch\" does not exist"),
+        ("to_regtype('int4 int4')", "ERROR 42601 syntax error at or near \"int4\""),
+        (
+            "to_regclass('a.b.c.d')",
+            "ERROR 42601 improper relation name (too many dotted names): a.b.c.d",
+        ),
+        (
+            "to_regclass('x.pg_catalog.pg_class')",
+            "ERROR 0A000 cross-database references are not implemented: \"x.pg_catalog.pg_class\"",
+        ),
+        ("to_regtype('varchar(0)')", "ERROR 22023 length for type varchar must be at least 1"),
+        ("'abs(\"int4)'::regprocedure", "ERROR 22P02 improper type name"),
+        ("'abs(numeric(1)'::regprocedure", "ERROR 22P02 improper type name"),
+        ("'abs(int4))'::regprocedure", "ERROR 22P02 improper type name"),
+        ("'abs()'::regprocedure", "ERROR 42883 function \"abs()\" does not exist"),
+        ("'now( )'::regprocedure::oid", "1299"),
+        ("'pg_catalog.+'::regoper", "ERROR 42725 more than one operator named pg_catalog.+"),
+        ("'nosch.+'::regoper", "ERROR 42883 operator does not exist: nosch.+"),
+        (
+            "'a.b.c.d'::regproc",
+            "ERROR 42601 improper qualified name (too many dotted names): a.b.c.d",
+        ),
+        (
+            "'x.pg_catalog.now'::regproc",
+            "ERROR 0A000 cross-database references are not implemented: x.pg_catalog.now",
+        ),
+    ];
+    big_stack(|| {
+        for (expr, expected) in CASES {
+            assert_eq!(outcome(&format!("SELECT {expr}")), *expected, "{expr}");
+        }
+    });
+}
+
+/// The place of an error in the input of an OID alias type. An error of a literal is at the literal, as `pcb_error_callback` gives it. A syntax error in a type name at run time is at its place in the type name, with the line of `CONTEXT`. The places are the places of PostgreSQL 19, from 0.
+#[test]
+fn oid_alias_type_error_places() {
+    big_stack(|| {
+        let place = |sql: &str| {
+            let e = run(sql).expect_err(sql);
+            (e.position(), e.context().map(str::to_string))
+        };
+        let context = Some("invalid type name \"int4 int4\"".to_string());
+        assert_eq!(place("SELECT 'nosuch'::regclass"), (Some(7), None));
+        assert_eq!(place("SELECT 1, 'int4 int4'::regtype"), (Some(10), context.clone()));
+        assert_eq!(place("SELECT 1, 'a.b.c.d'::regclass"), (Some(10), None));
+        assert_eq!(place("SELECT 1, 'abs(int4 int4)'::regprocedure"), (Some(10), context.clone()));
+        assert_eq!(place("SELECT 1, to_regtype('int4 int4')"), (Some(5), context));
+        assert_eq!(place("SELECT 1, to_regclass('a.b.c.d')"), (None, None));
+        assert_eq!(place("SELECT 1, 'varchar(0)'::regtype"), (Some(10), None));
+        assert_eq!(place("SELECT 1, to_regtype('varchar(0)')"), (None, None));
     });
 }

@@ -4,7 +4,7 @@ use std::cmp::Ordering;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ProcRow};
-use rupg_types::{Array, USECS_PER_DAY, USECS_PER_SEC, Value, oid};
+use rupg_types::{Array, RegKind, USECS_PER_DAY, USECS_PER_SEC, Value, oid};
 
 use crate::io::base_type;
 use crate::{Call, Kernel, bad_value};
@@ -40,7 +40,8 @@ fn family(ty: u32) -> Option<Family> {
         oid::TEXT | oid::NAME | oid::VARCHAR | oid::BPCHAR => Family::Text,
         oid::BOOL => Family::Bool,
         oid::CHAR => Family::Char,
-        oid::OID | oid::REGTYPE => Family::Oid,
+        oid::OID => Family::Oid,
+        ty if RegKind::from_oid(ty).is_some() => Family::Oid,
         oid::BYTEA => Family::Bytea,
         oid::UUID => Family::Uuid,
         oid::DATE => Family::Date,
