@@ -1,0 +1,69 @@
+> SELECT m, format_type(1186, m) AS t, information_schema._pg_interval_type(1186, m) AS f FROM (VALUES (-1), (327679), (196607), (589823), (67174399), (134283263), (268500991), (458751), (67698687), (201916415), (470351871), (201392127), (469827583), (402718719), (2147483647), (268435456), (268435459), (268435462), (470286336), (470286339), (470286342), (469762048), (469762051), (469762054), (402653184), (402653187), (402653190), (2147418112), (2147418115), (2147418118), (524288), (524291), (524294)) AS v(m) ORDER BY m
+fields m:23:4:-1,t:25:-1:-1,f:25:-1:-1
+row -1,interval,NULL
+row 196607,interval month,MONTH
+row 327679,interval year,YEAR
+row 458751,interval year to month,YEAR TO MONTH
+row 524288,interval day(0),DAY(0)
+row 524291,interval day(3),DAY(3)
+row 524294,interval day(6),DAY(6)
+row 589823,interval day,DAY
+row 67174399,interval hour,HOUR
+row 67698687,interval day to hour,DAY TO HOUR
+row 134283263,interval minute,MINUTE
+row 201392127,interval hour to minute,HOUR TO MINUTE
+row 201916415,interval day to minute,DAY TO MINUTE
+row 268435456,interval second(0),SECOND(0)
+row 268435459,interval second(3),SECOND(3)
+row 268435462,interval second(6),SECOND(6)
+row 268500991,interval second,SECOND
+row 402653184,interval minute to second(0),MINUTE TO SECOND(0)
+row 402653187,interval minute to second(3),MINUTE TO SECOND(3)
+row 402653190,interval minute to second(6),MINUTE TO SECOND(6)
+row 402718719,interval minute to second,MINUTE TO SECOND
+row 469762048,interval hour to second(0),HOUR TO SECOND(0)
+row 469762051,interval hour to second(3),HOUR TO SECOND(3)
+row 469762054,interval hour to second(6),HOUR TO SECOND(6)
+row 469827583,interval hour to second,HOUR TO SECOND
+row 470286336,interval day to second(0),DAY TO SECOND(0)
+row 470286339,interval day to second(3),DAY TO SECOND(3)
+row 470286342,interval day to second(6),DAY TO SECOND(6)
+row 470351871,interval day to second,DAY TO SECOND
+row 2147418112,interval(0),NULL
+row 2147418115,interval(3),NULL
+row 2147418118,interval(6),NULL
+row 2147483647,interval,NULL
+SELECT 33
+> SELECT format_type(1186, 3 * 65536)
+fields format_type:25:-1:-1
+ERROR XX000 invalid INTERVAL typmod: 0x30000
+> SELECT information_schema._pg_interval_type(1186, -1), information_schema._pg_interval_type(1186, 589823)
+fields _pg_interval_type:25:-1:-1,_pg_interval_type:25:-1:-1
+row NULL,DAY
+SELECT 1
+> SELECT information_schema._pg_interval_type(1186, NULL), information_schema._pg_interval_type(23, 6), information_schema._pg_interval_type(1187, 6)
+fields _pg_interval_type:25:-1:-1,_pg_interval_type:25:-1:-1,_pg_interval_type:25:-1:-1
+row NULL,NULL,NULL
+SELECT 1
+> SELECT '1 day'::interval day, '1'::interval(2), CAST('3 4:5:6.789' AS interval day to second(1)), '1-2'::interval year to month
+fields interval:1186:16:589823,interval:1186:16:2147418114,interval:1186:16:470286337,interval:1186:16:458751
+row 1 day,00:00:01,3 days 04:05:06.8,1 year 2 mons
+SELECT 1
+> CREATE VIEW ivv AS SELECT '1 day'::interval day AS a, '1'::interval(2) AS b, CAST('3 4:5:6.789' AS interval day to second(1)) AS c, '1-2'::interval year to month AS d, '5'::interval minute to second(0) AS e
+CREATE VIEW
+> SELECT pg_get_viewdef('ivv'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT '1 day'::interval day AS a,
+    '00:00:01'::interval(2) AS b,
+    '3 days 04:05:06.8'::interval day to second(1) AS c,
+    '1 year 2 mons'::interval year to month AS d,
+    '00:00:05'::interval minute to second(0) AS e;
+SELECT 1
+> SELECT attname, format_type(atttypid, atttypmod), information_schema._pg_interval_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'ivv'::regclass ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,_pg_interval_type:25:-1:-1
+row a,interval day,DAY
+row b,interval(2),NULL
+row c,interval day to second(1),DAY TO SECOND(1)
+row d,interval year to month,YEAR TO MONTH
+row e,interval minute to second(0),MINUTE TO SECOND(0)
+SELECT 5
