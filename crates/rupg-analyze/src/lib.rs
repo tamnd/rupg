@@ -16,6 +16,7 @@ mod from;
 pub mod node;
 mod poly;
 mod prepare;
+mod record;
 mod resolve;
 mod select;
 mod setop;
@@ -43,6 +44,7 @@ pub use expr::{
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use prepare::{execute_params, param_types};
+pub use record::{out_columns, record_fields};
 pub use select::{Query, Target};
 pub use setop::{SetKind, SetOp, SetTree};
 pub use sort::SortGroup;

@@ -75,18 +75,6 @@ fn strict(func: u32) -> bool {
     builtin::proc_by_oid(func).is_none_or(|p| p.strict)
 }
 
-/// The types of the `OUT`, `INOUT` and `TABLE` arguments of a function, which are the fields of the rows that it gives.
-fn out_types(func: u32) -> Vec<u32> {
-    let Some(proc) = builtin::proc_by_oid(func) else { return Vec::new() };
-    let (Some(types), Some(modes)) = (proc.allargtypes, proc.argmodes) else { return Vec::new() };
-    types
-        .iter()
-        .zip(modes)
-        .filter(|(_, mode)| matches!(mode, b'o' | b'b' | b't'))
-        .map(|(ty, _)| *ty)
-        .collect()
-}
-
 /// The calls of functions that give a set in the targets, by level, as `split_pathtarget_at_srfs` puts them in `ProjectSet` nodes: a call is one level above the highest call in its arguments.
 fn set_levels(targets: &[Target]) -> Vec<Vec<&Expr>> {
     fn walk<'a>(expr: &'a Expr, levels: &mut Vec<Vec<&'a Expr>>) -> usize {
@@ -127,15 +115,6 @@ fn check(expr: &Expr) -> Result<()> {
         }
         ExprKind::Func(f) if f.retset => {
             set_kernel(f.oid, expr.location)?;
-            if expr.ty == oid::RECORD
-                && out_types(f.oid).into_iter().any(rupg_analyze::types::is_polymorphic)
-            {
-                let error = not_yet(format!("the call of {} in a target", signature(f.oid)));
-                return Err(match expr.location {
-                    Some(at) => error.at(at),
-                    None => error,
-                });
-            }
             f.args.iter().try_for_each(check)?;
         }
         ExprKind::Func(f) => {
@@ -944,7 +923,9 @@ impl<'a> Eval<'a> {
             return Err(Error::internal("a set that is not a function call"));
         };
         let rows = self.function_set(call, 1)?;
-        let types = out_types(f.oid);
+        // The types of the `OUT` parameters, with the actual types of the call for a polymorphic type.
+        let columns = rupg_analyze::out_columns(f)?.unwrap_or_default();
+        let types: Vec<u32> = columns.into_iter().map(|c| c.ty).collect();
         Ok(rows
             .into_iter()
             .map(|mut row| {

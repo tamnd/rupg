@@ -1,0 +1,150 @@
+> SELECT (pg_get_keywords()).word ORDER BY 1 LIMIT 3
+fields word:25:-1:-1
+row abort
+row absent
+row absolute
+SELECT 3
+> SELECT (k).word, (k).catdesc FROM (SELECT pg_get_keywords() AS k) s ORDER BY 1 LIMIT 2
+fields word:25:-1:-1,catdesc:25:-1:-1
+row abort,unreserved
+row absent,unreserved
+SELECT 2
+> SELECT (s.k).word FROM (SELECT pg_get_keywords() AS k) s WHERE (s.k).word LIKE 'ab%' ORDER BY 1
+fields word:25:-1:-1
+row abort
+row absent
+row absolute
+SELECT 3
+> SELECT (pg_get_keywords()).nope
+ERROR 42703 could not identify column "nope" in record data type at 9
+> SELECT (k).nope FROM (SELECT pg_get_keywords() AS k) s
+ERROR 42703 could not identify column "nope" in record data type at 9
+> SELECT (pg_options_to_table(ARRAY['a=1', 'b=2'])).option_value
+fields option_value:25:-1:-1
+row 1
+row 2
+SELECT 2
+> SELECT (x).option_name FROM (SELECT pg_options_to_table(ARRAY['a=1', 'b=2']) AS x) s
+fields option_name:25:-1:-1
+row a
+row b
+SELECT 2
+> SELECT (x).option_name FROM (SELECT pg_options_to_table(ARRAY['a=1', 'b=2']) AS x OFFSET 0) s
+fields option_name:25:-1:-1
+row a
+row b
+SELECT 2
+> SELECT (y.x).option_name FROM (SELECT x FROM (SELECT pg_options_to_table(ARRAY['a=1']) AS x) s) y
+fields option_name:25:-1:-1
+row a
+SELECT 1
+> SELECT (x).option_name FROM pg_options_to_table(ARRAY['a=1']) x
+fields option_name:25:-1:-1
+row a
+SELECT 1
+> SELECT (x).word FROM (VALUES (1)) v, LATERAL (SELECT pg_get_keywords() AS x LIMIT 1) s
+fields word:25:-1:-1
+row abort
+SELECT 1
+> SELECT x FROM (SELECT pg_options_to_table(ARRAY['a=1', 'b=2']) AS x) s
+fields x:2249:-1:-1
+row (a,1)
+row (b,2)
+SELECT 2
+> SELECT (x).option_name FROM (SELECT pg_options_to_table(ARRAY['a=1']) AS x UNION ALL SELECT pg_options_to_table(ARRAY['b=1'])) s
+fields option_name:25:-1:-1
+row a
+row b
+SELECT 2
+> SELECT ((pg_options_to_table(ARRAY['a=1']))).option_name
+fields option_name:25:-1:-1
+row a
+SELECT 1
+> SELECT (pg_options_to_table(ARRAY['a=1'])).option_name || 'x'
+fields ?column?:25:-1:-1
+row ax
+SELECT 1
+> SELECT pg_typeof((pg_options_to_table(ARRAY['a=1'])).option_name)
+fields pg_typeof:2206:4:-1
+row text
+SELECT 1
+> CREATE VIEW fsv AS SELECT (x).option_name AS n, (pg_options_to_table(ARRAY['q=1'])).option_value AS v FROM (SELECT pg_options_to_table(ARRAY['a=1']) AS x) s
+CREATE VIEW
+> SELECT * FROM fsv
+fields n@fsv.1:25:-1:-1,v@fsv.2:25:-1:-1
+row a,1
+SELECT 1
+> SELECT pg_get_viewdef('fsv'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (x).option_name AS n,
+    (pg_options_to_table(ARRAY['q=1'::text])).option_value AS v
+   FROM ( SELECT pg_options_to_table(ARRAY['a=1'::text]) AS x) s;
+SELECT 1
+> SELECT attname, atttypid::regtype FROM pg_attribute WHERE attrelid = 'fsv'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1
+row n,text
+row v,text
+SELECT 2
+> SELECT (SELECT (s.k).word) FROM (SELECT pg_get_keywords() AS k) s ORDER BY 1 LIMIT 2
+fields word:25:-1:-1
+row abort
+row absent
+SELECT 2
+> SELECT (x).option_name, count(*) FROM (SELECT pg_options_to_table(ARRAY['a=1', 'b=2', 'a=3']) AS x) s GROUP BY 1 ORDER BY 1
+fields option_name:25:-1:-1,count:20:8:-1
+row a,2
+row b,1
+SELECT 2
+> SELECT (x).option_value FROM (SELECT pg_options_to_table(ARRAY['a=1', 'b=2', 'a=3']) AS x) s ORDER BY (x).option_value DESC
+fields option_value:25:-1:-1
+row 3
+row 2
+row 1
+SELECT 3
+> SELECT (y.r).a FROM (SELECT s AS r FROM (SELECT 1 AS a) s) y
+fields a:23:4:-1
+row 1
+SELECT 1
+> SELECT (y.r).b FROM (SELECT s AS r FROM (SELECT 1 AS a) s(b)) y
+fields b:23:4:-1
+row 1
+SELECT 1
+> SELECT (y.r).a FROM (SELECT s AS r FROM (SELECT 1 AS a) s(b)) y
+ERROR 42703 could not identify column "a" in record data type at 9
+> SELECT (x).option_name FROM (SELECT pg_options_to_table(ARRAY['a=1']) AS x, 1 AS y) s(z)
+ERROR 42703 column "x" does not exist at 9
+> SELECT (z).option_name FROM (SELECT pg_options_to_table(ARRAY['a=1']) AS x, 1 AS y) s(z)
+fields option_name:25:-1:-1
+row a
+SELECT 1
+> SELECT (s.x).option_name FROM (SELECT 1) t, LATERAL (SELECT pg_options_to_table(ARRAY['p=1']) AS x) s
+fields option_name:25:-1:-1
+row p
+SELECT 1
+> SELECT t.n FROM (SELECT (x).option_name AS n FROM (SELECT pg_options_to_table(ARRAY['a=1', 'b=1']) AS x) s) t WHERE t.n = 'b'
+fields n:25:-1:-1
+row b
+SELECT 1
+> CREATE VIEW fsw AS SELECT pg_options_to_table(ARRAY['a=1']) AS x
+ERROR 42P16 column "x" has pseudo-type record
+> CREATE VIEW fsu AS SELECT (y.r).b, (s.x).option_value FROM (SELECT s AS r FROM (SELECT 1 AS a) s(b)) y, (SELECT pg_options_to_table(ARRAY['a=1']) AS x) s
+CREATE VIEW
+> SELECT pg_get_viewdef('fsu'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (y.r).b AS b,
+    (s.x).option_value AS option_value
+   FROM ( SELECT s_1.*::record AS r
+           FROM ( SELECT 1 AS a) s_1(b)) y,
+    ( SELECT pg_options_to_table(ARRAY['a=1'::text]) AS x) s;
+SELECT 1
+> SELECT * FROM fsu
+fields b@fsu.1:23:4:-1,option_value@fsu.2:25:-1:-1
+row 1,1
+SELECT 1
+> SELECT (pg_options_to_table(NULL)).option_name
+fields option_name:25:-1:-1
+SELECT 0
+> SELECT (x).option_name IS NULL FROM (SELECT pg_options_to_table(ARRAY['a=1']) AS x) s
+fields ?column?:16:1:-1
+row f
+SELECT 1

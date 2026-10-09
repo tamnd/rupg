@@ -44,7 +44,7 @@ impl Analyzer<'_> {
         Ok(result)
     }
 
-    /// `ParseComplexProjection` and `unknown_attribute`: the field of a row value with the name. A field of the whole row of a relation is the column of the relation. A name that is no field can be a function in the functional notation, which rupg does not have yet.
+    /// `ParseComplexProjection` and `unknown_attribute`: the field of a row value with the name. A field of the whole row of a relation is the column of the relation. A value of type `record` has the fields that [`crate::record_fields`] finds. A name that is no field can be a function in the functional notation, which rupg does not have yet.
     fn field_select(&mut self, arg: Expr, name: &str, at: Option<usize>) -> Result<Expr> {
         if let ExprKind::Var(var) = arg.kind
             && var.attnum == 0
@@ -52,7 +52,8 @@ impl Analyzer<'_> {
             return self.whole_row_field(var, name, at);
         }
         let ty = arg.ty;
-        let columns = if ty == oid::RECORD { None } else { self.row_columns(ty) };
+        let columns =
+            if ty == oid::RECORD { self.record_columns(&arg)? } else { self.row_columns(ty) };
         if let Some(columns) = &columns
             && let Some(i) = columns.iter().position(|c| c.name == name)
         {
@@ -68,13 +69,13 @@ impl Analyzer<'_> {
             .at_opt(at));
         }
         let (state, message) = match (columns, ty) {
+            (_, oid::RECORD) => (
+                SqlState::UNDEFINED_COLUMN,
+                format!("could not identify column \"{name}\" in record data type"),
+            ),
             (Some(_), _) => (
                 SqlState::UNDEFINED_COLUMN,
                 format!("column \"{name}\" not found in data type {}", types::name(ty)),
-            ),
-            (None, oid::RECORD) => (
-                SqlState::UNDEFINED_COLUMN,
-                format!("could not identify column \"{name}\" in record data type"),
             ),
             (None, _) => (
                 SqlState::WRONG_OBJECT_TYPE,

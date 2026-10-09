@@ -50,6 +50,8 @@ struct Namespace {
     print_aliases: Vec<bool>,
     /// The value and the name of each column of `USING` of a join with no alias that is not a column of one side. PostgreSQL shows such a column by its name, as a column of the join.
     merged: Vec<(Expr, String)>,
+    /// The relations of the query, where a field of a value of type `record` finds its name.
+    relations: Vec<rupg_analyze::Relation>,
 }
 
 /// A deparse of an expression or of a query, as `deparse_context`. Each form of the functions sets `PRETTYFLAG_INDENT`, so a `CASE` always takes more than one line.
@@ -83,6 +85,7 @@ impl<'a> Deparser<'a> {
             columns: vec![columns],
             print_aliases: vec![false],
             merged: Vec::new(),
+            relations: Vec::new(),
         });
         d
     }
@@ -224,7 +227,7 @@ impl<'a> Deparser<'a> {
                 if parens {
                     self.buf.push(')');
                 }
-                let name = field_name(arg.ty, *field, self.session)?;
+                let name = self.field_name(arg, *field)?;
                 self.buf.push('.');
                 self.buf.push_str(&quote_identifier(&name));
             }
@@ -675,8 +678,24 @@ fn has_var(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Var(_)) || e.children().into_iter().any(has_var)
 }
 
+impl Deparser<'_> {
+    /// `get_name_for_var_field`: the name of the field with the index from 0. A value of type `record` takes the name from the expression that gives it, as the analyzer finds the fields.
+    fn field_name(&self, arg: &Expr, field: usize) -> Result<String> {
+        if arg.ty == oid::RECORD {
+            let levels: Vec<&[rupg_analyze::Relation]> =
+                self.namespaces.iter().rev().map(|n| &n.relations[..]).collect();
+            if let Some(columns) = rupg_analyze::record_fields(arg, &levels)?
+                && let Some(column) = columns.get(field)
+            {
+                return Ok(column.name.clone());
+            }
+        }
+        row_field_name(arg.ty, field, self.session)
+    }
+}
+
 /// `get_name_for_var_field` for a value of a composite type: the name of the field with the index from 0.
-fn field_name(ty: u32, field: usize, session: &dyn Session) -> Result<String> {
+fn row_field_name(ty: u32, field: usize, session: &dyn Session) -> Result<String> {
     let relid = match builtin::type_by_oid(ty) {
         Some(row) => row.relid,
         None => session
