@@ -3,6 +3,7 @@
 use super::lex::{
     AHEAD_NEG, AHEAD_POS, BEHIND_NEG, BEHIND_POS, CLASS_NAMES, DUPMAX, Lexer, Tok, is_space,
 };
+use super::tree::{LONGER, SHORTER};
 use super::{Code, flags};
 
 /// The count of a bound with no upper limit, `DUPINF`.
@@ -39,7 +40,7 @@ pub(super) enum Assert {
 }
 
 /// A node of the tree of a pattern.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) enum Node {
     /// The empty string.
     Empty,
@@ -57,8 +58,8 @@ pub(super) enum Node {
     Concat(Vec<Node>),
     /// One of the nodes.
     Alt(Vec<Node>),
-    /// `min` to `max` times the node, where `max` is `DUPINF` for no limit.
-    Repeat(Box<Node>, u32, u32),
+    /// `min` to `max` times the node, where `max` is `DUPINF` for no limit, with the preference of the quantifier: `LONGER`, `SHORTER` or 0 for `{m}`.
+    Repeat(Box<Node>, u32, u32, u8),
 }
 
 /// A set of characters, as the colors of the arcs of `regcomp.c` give it.
@@ -482,44 +483,49 @@ impl<'a> Parser<'a> {
             }
             _ => return Err(Code::Assert),
         };
-        let (min, max) = match self.lex.tok {
+        let prefer = |value: u32| if value != 0 { LONGER } else { SHORTER };
+        let (min, max, qprefer) = match self.lex.tok {
             Tok::Op(b'*') => {
+                let qprefer = prefer(self.lex.value);
                 self.lex.next()?;
-                (0, DUPINF)
+                (0, DUPINF, qprefer)
             }
             Tok::Op(b'+') => {
+                let qprefer = prefer(self.lex.value);
                 self.lex.next()?;
-                (1, DUPINF)
+                (1, DUPINF, qprefer)
             }
             Tok::Op(b'?') => {
+                let qprefer = prefer(self.lex.value);
                 self.lex.next()?;
-                (0, 1)
+                (0, 1, qprefer)
             }
             Tok::Op(b'{') => {
                 self.lex.next()?;
                 let min = self.scan_num()?;
-                let max = if self.lex.see_op(b',') {
+                let (max, qprefer) = if self.lex.see_op(b',') {
                     self.lex.next()?;
                     let max = if self.lex.see(Tok::Digit) { self.scan_num()? } else { DUPINF };
                     if min > max {
                         return Err(Code::BadBr);
                     }
-                    max
+                    // `{m,n}` has a preference, also when `m` and `n` are the same.
+                    (max, prefer(self.lex.value))
                 } else {
-                    min
+                    (min, 0)
                 };
                 if !self.lex.see_op(b'}') {
                     return Err(Code::BadBr);
                 }
                 self.lex.next()?;
-                (min, max)
+                (min, max, qprefer)
             }
-            _ => (1, 1),
+            _ => (1, 1, 0),
         };
-        Ok(match (min, max) {
-            (0, 0) => Node::Empty,
-            (1, 1) => atom,
-            _ => Node::Repeat(Box::new(atom), min, max),
+        Ok(match (min, max, qprefer) {
+            (0, 0, _) => Node::Empty,
+            (1, 1, 0) => atom,
+            _ => Node::Repeat(Box::new(atom), min, max, qprefer),
         })
     }
 
