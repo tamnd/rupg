@@ -138,6 +138,11 @@ pub fn system_views() -> &'static str {
     generated::system_views::TEXT
 }
 
+/// The text of `information_schema.sql`, the script that `initdb` runs after `system_views.sql`. It makes the schema `information_schema` with its functions, domains, tables and views.
+pub fn information_schema() -> &'static str {
+    generated::information_schema::TEXT
+}
+
 /// A system catalog by the OID of its `pg_class` row.
 pub fn catalog_by_oid(oid: u32) -> Option<&'static Catalog> {
     catalogs().iter().find(|c| c.oid == oid)

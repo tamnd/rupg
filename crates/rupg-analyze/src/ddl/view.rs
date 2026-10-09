@@ -284,6 +284,7 @@ fn expr_references(expr: &Expr, levels: &[&Query], refs: &mut Vec<ObjRef>) {
         (ExprKind::SubLink(sub), _) => query_references(&sub.query, levels, refs),
         _ => {}
     }
+    refs.extend(super::type_reference(expr));
     for child in expr.children() {
         expr_references(child, levels, refs);
     }

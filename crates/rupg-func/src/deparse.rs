@@ -201,6 +201,12 @@ impl<'a> Deparser<'a> {
             ExprKind::ArrayCoerce { arg, form, .. } => {
                 self.cast_node(e, arg, *form, e.typmod, implicit)?;
             }
+            // An implicit cast to a domain shows its argument with no parentheses.
+            ExprKind::CoerceToDomain(arg, CastForm::Implicit) if !implicit => {
+                self.expr(arg, false)?;
+            }
+            ExprKind::CoerceToDomain(arg, _) => self.coercion(arg, e.ty, e.typmod, e)?,
+            ExprKind::DomainValue => self.buf.push_str("VALUE"),
             ExprKind::Subscript(sub) => {
                 // The array needs parentheses unless it is a column, also when it is another subscript.
                 let parens = !matches!(sub.container.kind, ExprKind::Var(_));
@@ -568,7 +574,11 @@ fn bool_simple(op: BoolOp, parent: &Expr, paren: bool) -> bool {
 /// `isSimpleNode`: true when the node needs no parentheses in its parent.
 fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
     match &e.kind {
-        ExprKind::Const(_) | ExprKind::Param(_) | ExprKind::Var(_) | ExprKind::SubColumn(_) => true,
+        ExprKind::Const(_)
+        | ExprKind::Param(_)
+        | ExprKind::Var(_)
+        | ExprKind::SubColumn(_)
+        | ExprKind::DomainValue => true,
         ExprKind::Array { .. }
         | ExprKind::Subscript(_)
         | ExprKind::Coalesce(_)
@@ -580,7 +590,8 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,
         ExprKind::Relabel(arg, _)
         | ExprKind::CoerceViaIo(arg, _)
-        | ExprKind::ArrayCoerce { arg, .. } => is_simple(arg, e, paren),
+        | ExprKind::ArrayCoerce { arg, .. }
+        | ExprKind::CoerceToDomain(arg, _) => is_simple(arg, e, paren),
         ExprKind::Func(f) => {
             if paren
                 && matches!(&parent.kind, ExprKind::Func(p) if matches!(p.form, FuncForm::Operator(_)))
@@ -645,6 +656,11 @@ fn deparse(text: &str, columns: &[String], paren: bool, session: &dyn Session) -
     let mut d = Deparser::for_columns(session, columns.to_vec(), paren);
     d.list(&exprs, false)?;
     Ok(d.buf)
+}
+
+/// `deparse_expression` of a stored expression that has no column, such as the default of a domain in `typdefault`.
+pub fn deparse_expression(text: &str, session: &dyn Session) -> Result<String> {
+    deparse(text, &[], false, session)
 }
 
 /// The expressions of a stored form. A list is `(...)`, and an expression is `{...}`.
@@ -740,9 +756,11 @@ fn action(code: char) -> Option<&'static str> {
 /// `pg_get_constraintdef_worker`.
 fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Result<String> {
     let catalog = session.catalog().ok_or_else(|| Error::internal("no catalog"))?;
-    let rel = catalog.relation(con.relation).ok_or_else(|| {
-        Error::internal(format!("cache lookup failed for relation {}", con.relation))
-    })?;
+    let relation = || {
+        catalog.relation(con.relation).ok_or_else(|| {
+            Error::internal(format!("cache lookup failed for relation {}", con.relation))
+        })
+    };
     let mut out = String::new();
     match con.kind {
         ConKind::Foreign => {
@@ -755,7 +773,7 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
             })?;
             out.push_str(&format!(
                 "FOREIGN KEY ({}) REFERENCES {}({})",
-                column_list(rel, &con.keys)?,
+                column_list(relation()?, &con.keys)?,
                 relation_name(fk.table, session)?,
                 column_list(target, &fk.keys)?
             ));
@@ -780,6 +798,7 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
             if con.kind == ConKind::Unique && index.nulls_not_distinct {
                 out.push_str("NULLS NOT DISTINCT ");
             }
+            let rel = relation()?;
             out.push_str(&format!("({})", column_list(rel, &con.keys)?));
             if index.keys.len() > con.keys.len() {
                 out.push_str(&format!(
@@ -793,14 +812,19 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
                 .expr
                 .as_deref()
                 .ok_or_else(|| Error::internal("a check constraint without its expression"))?;
-            let columns: Vec<String> = rel.columns.iter().map(|c| c.name.clone()).collect();
+            // The check of a domain has no relation and no column. It refers to the value with `VALUE`.
+            let columns: Vec<String> = if con.domain == 0 {
+                relation()?.columns.iter().map(|c| c.name.clone()).collect()
+            } else {
+                Vec::new()
+            };
             out.push_str(&format!("CHECK ({})", deparse(text, &columns, paren, session)?));
             if con.no_inherit {
                 out.push_str(" NO INHERIT");
             }
         }
         ConKind::NotNull => {
-            out.push_str(&format!("NOT NULL {}", column_list(rel, &con.keys[..1])?));
+            out.push_str(&format!("NOT NULL {}", column_list(relation()?, &con.keys[..1])?));
             if con.no_inherit {
                 out.push_str(" NO INHERIT");
             }

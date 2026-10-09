@@ -142,7 +142,8 @@ fn namespaces<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             let mut row = Row::new(table);
             row.set("oid", oid(schema.oid))
                 .set("nspname", Value::text(schema.name.clone()))
-                .set("nspowner", oid(schema.owner));
+                .set("nspowner", oid(schema.owner))
+                .set("nspacl", schema.acl.as_deref().map_or(Value::Null, text_array));
             row
         })
         .collect()
@@ -212,7 +213,7 @@ fn type_row(table: &Table, type_oid: u32, session: &dyn Session) -> Result<usize
     Err(Error::internal(format!("cache lookup failed for type {type_oid}")))
 }
 
-/// The row types and their array types. Each row copies the row of the row type of `pg_class` or of its array type, which have the same form.
+/// The row types, the domains and their array types. The row of a row type copies the row of the row type of `pg_class`, which has the same form. The row of a domain copies the row of its base type, as `DefineDomain` takes the storage of the base type. An array type copies the array type of the row type of `pg_class` or of the base type of the domain.
 fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Result<Vec<Row<'a>>> {
     let row_type = rupg_pgcatalog::catalog("pg_class").map_or(0, |c| c.rowtype_oid);
     let array_type = builtin::type_by_oid(row_type).map_or(0, |t| t.array);
@@ -220,8 +221,44 @@ fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Resu
         (type_row(table, row_type, session)?, type_row(table, array_type, session)?);
     let mut rows = Vec::new();
     for ty in catalog.types() {
-        let template = if ty.relation == 0 { array_template } else { row_template };
+        let element_domain = catalog.type_by_oid(ty.element).and_then(|t| t.domain.as_ref());
+        let template = if let Some(domain) = &ty.domain {
+            type_row(table, domain.base, session)?
+        } else if let Some(domain) = element_domain {
+            let base_array = builtin::type_by_oid(domain.base).map_or(0, |t| t.array);
+            type_row(table, base_array, session)?
+        } else if ty.relation == 0 {
+            array_template
+        } else {
+            row_template
+        };
         let mut row = Row::copy(table, template, session)?;
+        if let Some(domain) = &ty.domain {
+            let default = match &domain.default {
+                Some(text) => Value::text(rupg_func::deparse_expression(text, session)?),
+                None => Value::Null,
+            };
+            row.set("typtype", code('d'))
+                .set("typispreferred", Value::Bool(false))
+                .set("typsubscript", oid(0))
+                .set("typinput", oid(builtin::DOMAIN_IN))
+                .set("typreceive", oid(builtin::DOMAIN_RECV))
+                .set("typmodin", oid(0))
+                .set("typmodout", oid(0))
+                .set("typnotnull", Value::Bool(false))
+                .set("typbasetype", oid(domain.base))
+                .set("typtypmod", Value::Int4(domain.typmod))
+                .set("typndims", Value::Int4(0))
+                .set("typcollation", oid(domain.collation))
+                .set("typdefaultbin", tree(domain.default.as_ref()))
+                .set("typdefault", default)
+                .set("typacl", Value::Null);
+        }
+        if let Some(domain) = element_domain {
+            row.set("typcollation", oid(domain.collation))
+                .set("typmodin", oid(0))
+                .set("typmodout", oid(0));
+        }
         row.set("oid", oid(ty.oid))
             .set("typname", Value::text(ty.name.clone()))
             .set("typnamespace", oid(ty.namespace))
@@ -334,7 +371,7 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
         .set("conenforced", Value::Bool(true))
         .set("convalidated", Value::Bool(con.validated))
         .set("conrelid", oid(con.relation))
-        .set("contypid", oid(0))
+        .set("contypid", oid(con.domain))
         .set("conindid", oid(con.index))
         .set("conparentid", oid(0))
         .set("confrelid", oid(foreign.map_or(0, |f| f.table)))

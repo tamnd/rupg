@@ -77,6 +77,8 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Relabel(..) => "RELABEL",
         ExprKind::CoerceViaIo(..) => "COERCEVIAIO",
         ExprKind::ArrayCoerce { .. } => "ARRAYCOERCE",
+        ExprKind::CoerceToDomain(..) => "COERCETODOMAIN",
+        ExprKind::DomainValue => "COERCETODOMAINVALUE",
         ExprKind::Subscript(_) => "SUBSCRIPT",
         ExprKind::Bool(..) => "BOOL",
         ExprKind::NullTest(..) => "NULLTEST",
@@ -116,7 +118,9 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push_str(&format!(" :variadic {}", f.variadic));
             write_args(&f.args, out)?;
         }
-        ExprKind::Relabel(arg, form) | ExprKind::CoerceViaIo(arg, form) => {
+        ExprKind::Relabel(arg, form)
+        | ExprKind::CoerceViaIo(arg, form)
+        | ExprKind::CoerceToDomain(arg, form) => {
             out.push_str(match form {
                 CastForm::Explicit => " :form explicit",
                 CastForm::Implicit => " :form implicit",
@@ -179,7 +183,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push(')');
             write_field("default", &case.default, out)?;
         }
-        ExprKind::CaseTest => {}
+        ExprKind::CaseTest | ExprKind::DomainValue => {}
         ExprKind::Coalesce(args) => write_args(args, out)?,
         ExprKind::MinMax { greatest, less, args } => {
             out.push_str(&format!(" :greatest {greatest} :less {less}"));
@@ -591,6 +595,8 @@ fn expr_of(item: &Item) -> Result<Expr> {
         }
         "RELABEL" => ExprKind::Relabel(f.expr("arg")?, cast_form(&f)?),
         "COERCEVIAIO" => ExprKind::CoerceViaIo(f.expr("arg")?, cast_form(&f)?),
+        "COERCETODOMAIN" => ExprKind::CoerceToDomain(f.expr("arg")?, cast_form(&f)?),
+        "COERCETODOMAINVALUE" => ExprKind::DomainValue,
         "ARRAYCOERCE" => ExprKind::ArrayCoerce {
             arg: f.expr("arg")?,
             element: f.expr("element")?,

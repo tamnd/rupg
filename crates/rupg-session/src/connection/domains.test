@@ -1,0 +1,119 @@
+> SELECT nspname, nspacl, oid = 13350 AS pg_oid FROM pg_namespace WHERE nspname = 'information_schema'
+fields nspname@pg_namespace.2:19:64:-1,nspacl@pg_namespace.4:1034:-1:-1,pg_oid:16:1:-1
+row information_schema,{postgres=UC/postgres,=U/postgres},t
+SELECT 1
+> SELECT oid::regtype AS t, typname, typtype, typlen, typbyval, typcategory, typispreferred, typisdefined, typdelim, typrelid, typsubscript, typelem::regtype, typarray::regtype, typinput, typoutput, typreceive, typsend, typmodin, typmodout, typanalyze, typalign, typstorage, typnotnull, typbasetype::regtype, typtypmod, typndims, typcollation::regcollation, typdefault, typdefaultbin IS NULL AS no_default, typacl FROM pg_type WHERE typnamespace = 'information_schema'::regnamespace AND (typtype = 'd' OR typelem IN (SELECT oid FROM pg_type WHERE typtype = 'd')) ORDER BY oid
+fields t:2206:4:-1,typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typlen@pg_type.5:21:2:-1,typbyval@pg_type.6:16:1:-1,typcategory@pg_type.8:18:1:-1,typispreferred@pg_type.9:16:1:-1,typisdefined@pg_type.10:16:1:-1,typdelim@pg_type.11:18:1:-1,typrelid@pg_type.12:26:4:-1,typsubscript@pg_type.13:24:4:-1,typelem:2206:4:-1,typarray:2206:4:-1,typinput@pg_type.16:24:4:-1,typoutput@pg_type.17:24:4:-1,typreceive@pg_type.18:24:4:-1,typsend@pg_type.19:24:4:-1,typmodin@pg_type.20:24:4:-1,typmodout@pg_type.21:24:4:-1,typanalyze@pg_type.22:24:4:-1,typalign@pg_type.23:18:1:-1,typstorage@pg_type.24:18:1:-1,typnotnull@pg_type.25:16:1:-1,typbasetype:2206:4:-1,typtypmod@pg_type.27:23:4:-1,typndims@pg_type.28:23:4:-1,typcollation:4191:4:-1,typdefault@pg_type.31:25:-1:-1,no_default:16:1:-1,typacl@pg_type.32:1034:-1:-1
+row information_schema.cardinal_number[],_cardinal_number,b,-1,f,A,f,t,,,0,array_subscript_handler,information_schema.cardinal_number,-,array_in,array_out,array_recv,array_send,-,-,array_typanalyze,i,x,f,-,-1,0,-,NULL,t,NULL
+row information_schema.cardinal_number,cardinal_number,d,4,t,N,f,t,,,0,-,-,information_schema.cardinal_number[],domain_in,int4out,domain_recv,int4send,-,-,-,i,p,f,integer,-1,0,-,NULL,t,NULL
+row information_schema.character_data[],_character_data,b,-1,f,A,f,t,,,0,array_subscript_handler,information_schema.character_data,-,array_in,array_out,array_recv,array_send,-,-,array_typanalyze,i,x,f,-,-1,0,"C",NULL,t,NULL
+row information_schema.character_data,character_data,d,-1,f,S,f,t,,,0,-,-,information_schema.character_data[],domain_in,varcharout,domain_recv,varcharsend,-,-,-,i,x,f,character varying,-1,0,"C",NULL,t,NULL
+row information_schema.sql_identifier[],_sql_identifier,b,-1,f,A,f,t,,,0,array_subscript_handler,information_schema.sql_identifier,-,array_in,array_out,array_recv,array_send,-,-,array_typanalyze,i,x,f,-,-1,0,"C",NULL,t,NULL
+row information_schema.sql_identifier,sql_identifier,d,64,f,S,f,t,,,0,-,-,information_schema.sql_identifier[],domain_in,nameout,domain_recv,namesend,-,-,-,c,p,f,name,-1,0,"C",NULL,t,NULL
+row information_schema.time_stamp[],_time_stamp,b,-1,f,A,f,t,,,0,array_subscript_handler,information_schema.time_stamp,-,array_in,array_out,array_recv,array_send,-,-,array_typanalyze,d,x,f,-,-1,0,-,NULL,t,NULL
+row information_schema.time_stamp,time_stamp,d,8,t,D,f,t,,,0,-,-,information_schema.time_stamp[],domain_in,timestamptz_out,domain_recv,timestamptz_send,-,-,-,d,p,f,timestamp with time zone,2,0,-,CURRENT_TIMESTAMP(2),f,NULL
+row information_schema.yes_or_no[],_yes_or_no,b,-1,f,A,f,t,,,0,array_subscript_handler,information_schema.yes_or_no,-,array_in,array_out,array_recv,array_send,-,-,array_typanalyze,i,x,f,-,-1,0,"C",NULL,t,NULL
+row information_schema.yes_or_no,yes_or_no,d,-1,f,S,f,t,,,0,-,-,information_schema.yes_or_no[],domain_in,varcharout,domain_recv,varcharsend,-,-,-,i,x,f,character varying,7,0,"C",NULL,t,NULL
+SELECT 10
+> SELECT array_agg(oid ORDER BY oid) = '{13363,13364,13366,13367,13368,13369,13374,13375,13376,13377}' AS pg_oids FROM pg_type WHERE typnamespace = 'information_schema'::regnamespace AND (typtype = 'd' OR typelem IN (SELECT oid FROM pg_type WHERE typtype = 'd'))
+fields pg_oids:16:1:-1
+row t
+SELECT 1
+> SELECT conname, contype, condeferrable, condeferred, conenforced, convalidated, conrelid, contypid::regtype, conindid, conparentid, confrelid, conislocal, coninhcount, connoinherit, conperiod, conkey, pg_get_constraintdef(oid), pg_get_constraintdef(oid, true), pg_get_expr(conbin, 0), oid IN (13365, 13378) AS pg_oid FROM pg_constraint WHERE connamespace = 'information_schema'::regnamespace ORDER BY oid
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1,conenforced@pg_constraint.7:16:1:-1,convalidated@pg_constraint.8:16:1:-1,conrelid@pg_constraint.9:26:4:-1,contypid:2206:4:-1,conindid@pg_constraint.11:26:4:-1,conparentid@pg_constraint.12:26:4:-1,confrelid@pg_constraint.13:26:4:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,conperiod@pg_constraint.20:16:1:-1,conkey@pg_constraint.21:1005:-1:-1,pg_get_constraintdef:25:-1:-1,pg_get_constraintdef:25:-1:-1,pg_get_expr:25:-1:-1,pg_oid:16:1:-1
+row cardinal_number_domain_check,c,f,f,t,t,0,information_schema.cardinal_number,0,0,0,t,0,f,f,NULL,CHECK ((VALUE >= 0)),CHECK (VALUE >= 0),(VALUE >= 0),t
+row yes_or_no_check,c,f,f,t,t,0,information_schema.yes_or_no,0,0,0,t,0,f,f,NULL,CHECK (((VALUE)::text = ANY ((ARRAY['YES'::character varying, 'NO'::character varying])::text[]))),CHECK (VALUE::text = ANY (ARRAY['YES'::character varying, 'NO'::character varying]::text[])),((VALUE)::text = ANY ((ARRAY['YES'::character varying, 'NO'::character varying])::text[])),t
+SELECT 2
+> SELECT classid::regclass, CASE classid WHEN 'pg_type'::regclass THEN objid::regtype::text ELSE (SELECT conname::text FROM pg_constraint WHERE oid = objid) END AS obj, refclassid::regclass, CASE refclassid WHEN 'pg_type'::regclass THEN refobjid::regtype::text ELSE refobjid::regnamespace::text END AS ref, deptype FROM pg_depend WHERE (classid = 'pg_type'::regclass AND objid IN (SELECT oid FROM pg_type WHERE typnamespace = 'information_schema'::regnamespace AND (typtype = 'd' OR typelem IN (SELECT oid FROM pg_type WHERE typtype = 'd')))) OR (classid = 'pg_constraint'::regclass AND objid IN (SELECT oid FROM pg_constraint WHERE connamespace = 'information_schema'::regnamespace)) ORDER BY objid, refobjid
+fields classid:2205:4:-1,obj:25:-1:-1,refclassid:2205:4:-1,ref:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row pg_type,information_schema.cardinal_number[],pg_type,information_schema.cardinal_number,i
+row pg_type,information_schema.cardinal_number,pg_namespace,information_schema,n
+row pg_constraint,cardinal_number_domain_check,pg_type,information_schema.cardinal_number,a
+row pg_type,information_schema.character_data[],pg_type,information_schema.character_data,i
+row pg_type,information_schema.character_data,pg_namespace,information_schema,n
+row pg_type,information_schema.sql_identifier[],pg_type,information_schema.sql_identifier,i
+row pg_type,information_schema.sql_identifier,pg_namespace,information_schema,n
+row pg_type,information_schema.time_stamp[],pg_type,information_schema.time_stamp,i
+row pg_type,information_schema.time_stamp,pg_namespace,information_schema,n
+row pg_type,information_schema.yes_or_no[],pg_type,information_schema.yes_or_no,i
+row pg_type,information_schema.yes_or_no,pg_namespace,information_schema,n
+row pg_constraint,yes_or_no_check,pg_type,information_schema.yes_or_no,a
+SELECT 12
+> SELECT format_type('information_schema.cardinal_number'::regtype, -1), format_type('information_schema.yes_or_no'::regtype, 7), format_type('information_schema.cardinal_number[]'::regtype, -1), format_type('information_schema._yes_or_no'::regtype, -1), format_type('information_schema.time_stamp'::regtype, 2), format_type('information_schema.sql_identifier'::regtype, NULL)
+fields format_type:25:-1:-1,format_type:25:-1:-1,format_type:25:-1:-1,format_type:25:-1:-1,format_type:25:-1:-1,format_type:25:-1:-1
+row information_schema.cardinal_number,information_schema.yes_or_no(7),information_schema.cardinal_number[],information_schema.yes_or_no[],information_schema.time_stamp(2),information_schema.sql_identifier
+SELECT 1
+> SELECT 'YES'::information_schema.yes_or_no, pg_typeof('YES'::information_schema.yes_or_no)
+fields yes_or_no:1043:-1:7,pg_typeof:2206:4:-1
+row YES,information_schema.yes_or_no
+SELECT 1
+> SELECT 'abcd'::information_schema.yes_or_no
+fields yes_or_no:1043:-1:7
+ERROR 23514 value for domain information_schema.yes_or_no violates check constraint "yes_or_no_check"
+> SELECT 'maybe'::information_schema.yes_or_no
+fields yes_or_no:1043:-1:7
+ERROR 23514 value for domain information_schema.yes_or_no violates check constraint "yes_or_no_check"
+> SELECT 'MAYBE'::varchar::information_schema.yes_or_no
+fields yes_or_no:1043:-1:7
+ERROR 23514 value for domain information_schema.yes_or_no violates check constraint "yes_or_no_check"
+> SELECT 5::information_schema.cardinal_number, pg_typeof(5::information_schema.cardinal_number)
+fields cardinal_number:23:4:-1,pg_typeof:2206:4:-1
+row 5,information_schema.cardinal_number
+SELECT 1
+> SELECT (-1)::information_schema.cardinal_number
+fields cardinal_number:23:4:-1
+ERROR 23514 value for domain information_schema.cardinal_number violates check constraint "cardinal_number_domain_check"
+> SELECT '-3'::information_schema.cardinal_number
+fields cardinal_number:23:4:-1
+ERROR 23514 value for domain information_schema.cardinal_number violates check constraint "cardinal_number_domain_check"
+> SELECT NULL::information_schema.cardinal_number IS NULL
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT 2.7::information_schema.cardinal_number
+fields cardinal_number:23:4:-1
+row 3
+SELECT 1
+> SELECT x::information_schema.cardinal_number FROM (VALUES (1), (2)) v(x)
+fields x:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT x::information_schema.cardinal_number FROM (VALUES (-2)) v(x)
+fields x:23:4:-1
+ERROR 23514 value for domain information_schema.cardinal_number violates check constraint "cardinal_number_domain_check"
+> SELECT 'abc'::information_schema.sql_identifier, pg_typeof('abc'::information_schema.sql_identifier)
+fields sql_identifier:19:64:-1,pg_typeof:2206:4:-1
+row abc,information_schema.sql_identifier
+SELECT 1
+> SELECT 'x'::information_schema.character_data || 'y', pg_typeof('x'::information_schema.character_data || 'y')
+fields ?column?:25:-1:-1,pg_typeof:2206:4:-1
+row xy,text
+SELECT 1
+> SELECT 3::information_schema.cardinal_number + 4, pg_typeof(3::information_schema.cardinal_number + 4)
+fields ?column?:23:4:-1,pg_typeof:2206:4:-1
+row 7,integer
+SELECT 1
+> SELECT '{1,2}'::information_schema.cardinal_number[], pg_typeof('{1,2}'::information_schema.cardinal_number[])
+fields cardinal_number:13363:-1:-1,pg_typeof:2206:4:-1
+row {1,2},information_schema.cardinal_number[]
+SELECT 1
+> SELECT '{1,-2}'::information_schema.cardinal_number[]
+ERROR 23514 value for domain information_schema.cardinal_number violates check constraint "cardinal_number_domain_check" at 8
+> SELECT CAST('YES' AS information_schema.yes_or_no) = 'YES'
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT 'NO'::information_schema.yes_or_no::text, length('NO'::information_schema.yes_or_no)
+fields text:25:-1:-1,length:23:4:-1
+row NO,2
+SELECT 1
+> SELECT typname FROM pg_type WHERE typname IN ('cardinal_number', 'yes_or_no') ORDER BY oid
+fields typname@pg_type.2:19:64:-1
+row cardinal_number
+row yes_or_no
+SELECT 2
+> SELECT 'information_schema.cardinal_number'::regtype, 'information_schema.yes_or_no[]'::regtype
+fields regtype:2206:4:-1,regtype:2206:4:-1
+row information_schema.cardinal_number,information_schema.yes_or_no[]
+SELECT 1

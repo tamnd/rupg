@@ -8,6 +8,8 @@
 #[rustfmt::skip]
 pub(crate) mod catalogs;
 #[rustfmt::skip]
+pub(crate) mod information_schema;
+#[rustfmt::skip]
 pub(crate) mod pg_aggregate;
 #[rustfmt::skip]
 pub(crate) mod pg_am;

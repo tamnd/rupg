@@ -44,6 +44,18 @@ pub fn base(ty: u32) -> u32 {
     ty
 }
 
+/// `getBaseTypeAndTypmod`: the base type of a domain with the typmod of the domain, or the type and `typmod` for a type that is not a domain.
+pub fn base_typmod(ty: u32, typmod: i32) -> (u32, i32) {
+    let (mut ty, mut typmod) = (ty, typmod);
+    while let Some(t) = row(ty) {
+        if t.kind != b'd' || t.base == 0 {
+            break;
+        }
+        (ty, typmod) = (t.base, t.typmod);
+    }
+    (ty, typmod)
+}
+
 /// `get_element_type`: the element type of a true array type, or 0. `int2vector` and `oidvector` are true arrays here.
 pub fn element(ty: u32) -> u32 {
     row(ty).map_or(0, |t| {

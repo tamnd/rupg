@@ -79,6 +79,10 @@ fn state(expr: &Expr, levels: &[&Query], catalog: Option<&Catalog>) -> State {
             case.whens.iter().map(|(_, then)| then).chain([&*case.default]).collect()
         }
         ExprKind::Agg(agg) => agg.args.iter().take(agg.nargs).collect(),
+        // A domain with a collation that is not the default gives its own collation. Any other domain takes the collation of its input.
+        ExprKind::CoerceToDomain(..) if own != DEFAULT_COLLATION => {
+            return State::Implicit(own);
+        }
         _ => expr.children(),
     };
     let merged =
