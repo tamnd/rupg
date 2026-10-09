@@ -1,0 +1,89 @@
+> CREATE TABLE rt (a int, b text)
+CREATE TABLE
+> CREATE VIEW rv AS SELECT a, b FROM rt WHERE a > 1
+CREATE VIEW
+> CREATE VIEW "R v" AS SELECT b AS "B", count(*) AS n FROM rt GROUP BY b ORDER BY 2 DESC
+CREATE VIEW
+> SELECT pg_get_ruledef(r.oid) FROM pg_rewrite r WHERE r.ev_class = 'rv'::regclass
+fields pg_get_ruledef:25:-1:-1
+row CREATE RULE "_RETURN" AS
+    ON SELECT TO public.rv DO INSTEAD  SELECT a,
+    b
+   FROM rt
+  WHERE (a > 1);
+SELECT 1
+> SELECT pg_get_ruledef(r.oid, true) FROM pg_rewrite r WHERE r.ev_class = 'rv'::regclass
+fields pg_get_ruledef:25:-1:-1
+row CREATE RULE "_RETURN" AS
+    ON SELECT TO rv DO INSTEAD  SELECT a,
+    b
+   FROM rt
+  WHERE a > 1;
+SELECT 1
+> SELECT pg_get_ruledef(r.oid, false), pg_get_ruledef(r.oid, true) FROM pg_rewrite r WHERE r.ev_class = '"R v"'::regclass
+fields pg_get_ruledef:25:-1:-1,pg_get_ruledef:25:-1:-1
+row CREATE RULE "_RETURN" AS
+    ON SELECT TO public."R v" DO INSTEAD  SELECT b AS "B",
+    count(*) AS n
+   FROM rt
+  GROUP BY b
+  ORDER BY (count(*)) DESC;,CREATE RULE "_RETURN" AS
+    ON SELECT TO "R v" DO INSTEAD  SELECT b AS "B",
+    count(*) AS n
+   FROM rt
+  GROUP BY b
+  ORDER BY (count(*)) DESC;
+SELECT 1
+> SELECT pg_get_ruledef(r.oid, false) FROM pg_rewrite r WHERE r.ev_class = 'pg_roles'::regclass
+fields pg_get_ruledef:25:-1:-1
+row CREATE RULE "_RETURN" AS
+    ON SELECT TO pg_catalog.pg_roles DO INSTEAD  SELECT pg_authid.rolname,
+    pg_authid.rolsuper,
+    pg_authid.rolinherit,
+    pg_authid.rolcreaterole,
+    pg_authid.rolcreatedb,
+    pg_authid.rolcanlogin,
+    pg_authid.rolreplication,
+    pg_authid.rolconnlimit,
+    '********'::text AS rolpassword,
+    pg_authid.rolvaliduntil,
+    pg_authid.rolbypassrls,
+    s.setconfig AS rolconfig,
+    pg_authid.oid
+   FROM (pg_authid
+     LEFT JOIN pg_db_role_setting s ON (((pg_authid.oid = s.setrole) AND (s.setdatabase = (0)::oid))));
+SELECT 1
+> SELECT pg_get_ruledef(r.oid, true) FROM pg_rewrite r WHERE r.ev_class = 'information_schema.enabled_roles'::regclass
+fields pg_get_ruledef:25:-1:-1
+row CREATE RULE "_RETURN" AS
+    ON SELECT TO information_schema.enabled_roles DO INSTEAD  SELECT rolname::information_schema.sql_identifier AS role_name
+   FROM pg_authid a
+  WHERE pg_has_role(oid, 'USAGE'::text);
+SELECT 1
+> SELECT pg_get_ruledef(0), pg_get_ruledef(0, true), pg_get_ruledef(NULL), pg_get_ruledef('pg_class'::regclass::oid), pg_typeof(pg_get_ruledef(0))
+fields pg_get_ruledef:25:-1:-1,pg_get_ruledef:25:-1:-1,pg_get_ruledef:25:-1:-1,pg_get_ruledef:25:-1:-1,pg_typeof:2206:4:-1
+row NULL,NULL,NULL,NULL,text
+SELECT 1
+> SELECT count(*), count(pg_get_ruledef(r.oid)) FROM pg_rewrite r WHERE r.rulename = '_RETURN' AND r.ev_class < 16384
+fields count:20:8:-1,count:20:8:-1
+row 151,151
+SELECT 1
+> SELECT md5(string_agg(pg_get_ruledef(r.oid), ',' ORDER BY r.oid)), md5(string_agg(pg_get_ruledef(r.oid, true), ',' ORDER BY r.oid)) FROM pg_rewrite r WHERE r.rulename = '_RETURN' AND r.ev_class < 16384
+fields md5:25:-1:-1,md5:25:-1:-1
+row 5ccea9581961626974d11e4de86129fb,1fa9009809d8dd78560551c24e46cd27
+SELECT 1
+> SELECT schemaname, tablename, rulename, definition FROM pg_rules WHERE tablename <> 'pg_settings' ORDER BY 1, 2, 3
+fields schemaname@pg_rules.1:19:64:-1,tablename@pg_rules.2:19:64:-1,rulename@pg_rules.3:19:64:-1,definition@pg_rules.4:25:-1:-1
+SELECT 0
+> SELECT pg_get_triggerdef(0), pg_get_triggerdef(0, true), pg_get_triggerdef(NULL), pg_typeof(pg_get_triggerdef(0))
+fields pg_get_triggerdef:25:-1:-1,pg_get_triggerdef:25:-1:-1,pg_get_triggerdef:25:-1:-1,pg_typeof:2206:4:-1
+row NULL,NULL,NULL,text
+SELECT 1
+> SELECT count(*) FROM information_schema.triggers
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM information_schema.triggered_update_columns
+fields count:20:8:-1
+row 0
+SELECT 1

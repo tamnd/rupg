@@ -12,7 +12,8 @@ use rupg_types::qualified_name_list;
 use super::{
     Aggref, Deparser, Error, Expr, ExprKind, Func, FuncForm, INDENT_STD, INDENT_VAR, Namespace,
     Result, SortGroup, SubLink, SubLinkKind, Value, WindowClause, WindowFunc, builtin,
-    looks_like_function, oid, quote_identifier, reg, relation_name, sort_operators,
+    looks_like_function, oid, pretty_arg, qualified_relation_name, quote_identifier, reg,
+    relation_name, sort_operators,
 };
 use crate::{Call, Session, bad_value, not_yet, type_error};
 
@@ -1044,4 +1045,24 @@ pub(super) fn get_viewdef_name(call: &Call<'_>, args: &[Value]) -> Result<Value>
     let oid = reg::relation_oid(&names, call.session)?;
     let (paren, wrap) = flags(args)?;
     viewdef(oid, paren, wrap, call.session)
+}
+
+/// `pg_get_ruledef(oid)` and `pg_get_ruledef(oid, bool)`: the `CREATE RULE` statement of a rule, as `make_ruledef` makes it, or null when no rule has the OID. The only rules of rupg are the `_RETURN` rules of the views, which are `ON SELECT DO INSTEAD` with the query of the view.
+pub(super) fn get_ruledef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
+    let pretty = pretty_arg(args, 1)?;
+    let view = call.session.catalog().and_then(|c| {
+        c.relations().find(|r| r.view.as_ref().is_some_and(|v| v.rule == oid)).map(|r| r.oid)
+    });
+    let Some(view) = view else { return Ok(Value::Null) };
+    let Value::Text(query) = viewdef(view, pretty, 0, call.session)? else {
+        return Ok(Value::Null);
+    };
+    let name = if pretty {
+        relation_name(view, call.session)?
+    } else {
+        qualified_relation_name(view, call.session)?
+    };
+    let rule = quote_identifier("_RETURN");
+    Ok(Value::Text(format!("CREATE RULE {rule} AS\n    ON SELECT TO {name} DO INSTEAD {query}")))
 }
