@@ -4,6 +4,16 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.8 (2026-10-09)
+
+A patch release on the way to M2. A query can now read array subscripts and match regular expressions, and the system views of `pg_catalog` are in the catalog.
+
+### Added
+
+- A query can read the subscripts of an array, such as `a[2]`, `a[1:2]` and `m[1][2]`, also on the `int2vector` and `oidvector` columns of the catalog (#197).
+- The regular expression operators `~`, `~*`, `!~` and `!~*` on `text`, `name` and `character`, with the errors of the compiler of PostgreSQL (#198). The `\d` queries of psql use them.
+- rupg runs `system_views.sql` once in each process, as `initdb` does, so 85 of the 86 system views of `pg_catalog` are in the catalog with their OIDs, privileges and options (#199). `CREATE VIEW` accepts the options `security_barrier` and `security_invoker`.
+
 ## 0.1.7 (2026-10-09)
 
 A patch release on the way to M2. A session can now create views, cast arrays element by element, and call the common array functions.
