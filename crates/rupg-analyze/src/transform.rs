@@ -743,10 +743,17 @@ impl Analyzer<'_> {
             };
             coerced.push(new);
         }
+        // exprTypmod of an ArrayExpr: the typmod of the elements when they all have the same type and typmod.
+        let typmod = match coerced.first() {
+            Some(first) if coerced.iter().all(|e| e.ty == first.ty && e.typmod == first.typmod) => {
+                first.typmod
+            }
+            _ => -1,
+        };
         Ok(Expr {
             kind: ExprKind::Array { element, multidims, elements: coerced },
             ty: array,
-            typmod: -1,
+            typmod,
             location: at,
         })
     }

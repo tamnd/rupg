@@ -29,6 +29,8 @@ pub enum ExprKind {
     Relabel(Box<Expr>, CastForm),
     /// `CoerceViaIO`: the output function of the type of the argument, then the input function of the type of the expression.
     CoerceViaIo(Box<Expr>, CastForm),
+    /// `ArrayCoerceExpr`: a cast of each element of an array. `element` casts [`ExprKind::CaseTest`], which is the value of one element.
+    ArrayCoerce { arg: Box<Expr>, element: Box<Expr>, form: CastForm },
     /// `BoolExpr`: `AND`, `OR` and `NOT`.
     Bool(BoolOp, Vec<Expr>),
     /// `NullTest`: `IS NULL` when the flag is true, `IS NOT NULL` when it is false.
@@ -242,6 +244,7 @@ impl Expr {
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => vec![&**arg],
+            ExprKind::ArrayCoerce { arg, element, .. } => vec![&**arg, &**element],
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
             | ExprKind::MinMax { args, .. }
@@ -279,6 +282,7 @@ impl Expr {
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => vec![&mut **arg],
+            ExprKind::ArrayCoerce { arg, element, .. } => vec![&mut **arg, &mut **element],
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
             | ExprKind::MinMax { args, .. }
@@ -380,7 +384,8 @@ impl Expr {
                 args[0].strip_implicit()
             }
             ExprKind::Relabel(arg, CastForm::Implicit)
-            | ExprKind::CoerceViaIo(arg, CastForm::Implicit) => arg.strip_implicit(),
+            | ExprKind::CoerceViaIo(arg, CastForm::Implicit)
+            | ExprKind::ArrayCoerce { arg, form: CastForm::Implicit, .. } => arg.strip_implicit(),
             _ => self,
         }
     }
@@ -395,6 +400,7 @@ impl Expr {
             | ExprKind::ScalarArrayOp { args, .. } => args.first(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
+            | ExprKind::ArrayCoerce { arg, .. }
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => Some(&**arg),
             ExprKind::SubLink(sub) => sub.test.as_ref(),

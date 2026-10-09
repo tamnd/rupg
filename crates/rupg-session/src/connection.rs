@@ -1663,6 +1663,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/lateral.test")));
     }
 
+    /// Casts of arrays that cast each element, as `ArrayCoerceExpr` does: `text[]` to `name[]`, casts through the text form, length casts of the elements, and arrays with more than one dimension or other lower bounds. `connection/array_coerce.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn array_coerce() {
+        big_stack(|| script(include_str!("connection/array_coerce.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

@@ -1,0 +1,90 @@
+> SELECT ARRAY['a', 'b']::name[] AS n, pg_typeof(ARRAY['a', 'b']::name[])
+fields n:1003:-1:-1,pg_typeof:2206:4:-1
+row {a,b},name[]
+SELECT 1
+> SELECT ARRAY['1', '2', NULL]::int[] AS i
+fields i:1007:-1:-1
+row {1,2,NULL}
+SELECT 1
+> SELECT '{1,2}'::int[]::text[] AS t
+fields t:1009:-1:-1
+row {1,2}
+SELECT 1
+> SELECT ARRAY[1.5, 2.4, -0.5]::int[] AS r
+fields r:1007:-1:-1
+row {2,2,-1}
+SELECT 1
+> SELECT '{abc,de,f}'::varchar(2)[] AS v
+fields v:1015:-1:6
+row {ab,de,f}
+SELECT 1
+> SELECT ARRAY['abc', NULL]::varchar[]::varchar(2)[] AS v
+fields v:1015:-1:6
+row {ab,NULL}
+SELECT 1
+> SELECT ARRAY['abc']::char(2)[] AS c, ARRAY['a']::char(3)[] AS d
+fields c:1014:-1:6,d:1014:-1:7
+row {ab},{"a  "}
+SELECT 1
+> SELECT '{{1,2},{3,4}}'::int[]::bigint[] AS m
+fields m:1016:-1:-1
+row {{1,2},{3,4}}
+SELECT 1
+> SELECT '[2:3]={1,2}'::int[]::text[] AS b
+fields b:1009:-1:-1
+row [2:3]={1,2}
+SELECT 1
+> SELECT ARRAY['x', '1']::int[]
+ERROR 22P02 invalid input syntax for type integer: "x" at 14
+> SELECT NULL::text[]::int[] AS n
+fields n:1007:-1:-1
+row NULL
+SELECT 1
+> SELECT '{}'::text[]::int[] AS e
+fields e:1007:-1:-1
+row {}
+SELECT 1
+> SELECT a::name[] AS n, b::int[] AS i, b::numeric(3,1)[] AS r FROM (VALUES (ARRAY['p', 'q'], ARRAY[1.25, 2.75]), (NULL, '{}'), (ARRAY[NULL, 'r'], ARRAY[NULL, 3.5])) AS ta (a, b) ORDER BY 1
+fields n:1003:-1:-1,i:1007:-1:-1,r:1231:-1:196613
+row {p,q},{1,3},{1.3,2.8}
+row {NULL,r},{NULL,4},{NULL,3.5}
+row NULL,{},{}
+SELECT 3
+> CREATE TABLE td (a varchar(4)[] DEFAULT ARRAY['abcdef']::varchar(2)[], b int[] DEFAULT ARRAY['7']::int[])
+CREATE TABLE
+> SELECT adnum, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 'td'::regclass ORDER BY 1
+fields adnum@pg_attrdef.3:21:2:-1,pg_get_expr:25:-1:-1
+row 1,ARRAY['abcdef'::character varying(2)]
+row 2,ARRAY[7]
+SELECT 2
+> CREATE VIEW vac AS SELECT a::name[] AS n, b::int[] AS i, b::numeric(3,1)[] AS r FROM (VALUES (ARRAY['p', 'q'], ARRAY[1.25, 2.75]), (NULL, '{}'), (ARRAY[NULL, 'r'], ARRAY[NULL, 3.5])) AS ta (a, b)
+CREATE VIEW
+> SELECT attname, atttypid::regtype, atttypmod FROM pg_attribute WHERE attrelid = 'vac'::regclass ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,atttypmod@pg_attribute.6:23:4:-1
+row n,name[],-1
+row i,integer[],-1
+row r,numeric[],196613
+SELECT 3
+> SELECT * FROM vac ORDER BY 1
+fields n@vac.1:1003:-1:-1,i@vac.2:1007:-1:-1,r@vac.3:1231:-1:196613
+row {p,q},{1,3},{1.3,2.8}
+row {NULL,r},{NULL,4},{NULL,3.5}
+row NULL,{},{}
+SELECT 3
+> SELECT CASE WHEN true THEN ARRAY['1']::int[] END AS c
+fields c:1007:-1:-1
+row {1}
+SELECT 1
+> SELECT ARRAY['10', '20']::int[]::text[]::int[] AS back
+fields back:1007:-1:-1
+row {10,20}
+SELECT 1
+> SELECT CASE 'x' WHEN 'x' THEN ARRAY['1', '2']::int[] END AS c
+fields c:1007:-1:-1
+row {1,2}
+SELECT 1
+> SELECT CASE a WHEN ARRAY['5', '6'] THEN a::int[] ELSE NULL END AS c FROM (VALUES (ARRAY['5', '6']), (ARRAY['7'])) AS v (a) ORDER BY 1
+fields c:1007:-1:-1
+row {5,6}
+row NULL
+SELECT 2

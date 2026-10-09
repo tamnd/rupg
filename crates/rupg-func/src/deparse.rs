@@ -126,6 +126,9 @@ impl Deparser<'_> {
             ExprKind::Func(f) => self.func(e, f, implicit)?,
             ExprKind::Relabel(arg, form) => self.cast_node(e, arg, *form, e.typmod, implicit)?,
             ExprKind::CoerceViaIo(arg, form) => self.cast_node(e, arg, *form, -1, implicit)?,
+            ExprKind::ArrayCoerce { arg, form, .. } => {
+                self.cast_node(e, arg, *form, e.typmod, implicit)?;
+            }
             ExprKind::Bool(op, args) => {
                 self.open();
                 if *op == BoolOp::Not {
@@ -466,7 +469,9 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::Agg(_)
         | ExprKind::Case(_) => true,
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,
-        ExprKind::Relabel(arg, _) | ExprKind::CoerceViaIo(arg, _) => is_simple(arg, e, paren),
+        ExprKind::Relabel(arg, _)
+        | ExprKind::CoerceViaIo(arg, _)
+        | ExprKind::ArrayCoerce { arg, .. } => is_simple(arg, e, paren),
         ExprKind::Func(f) => {
             if paren
                 && matches!(&parent.kind, ExprKind::Func(p) if matches!(p.form, FuncForm::Operator(_)))

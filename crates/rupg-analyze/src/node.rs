@@ -76,6 +76,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Func(_) => "FUNC",
         ExprKind::Relabel(..) => "RELABEL",
         ExprKind::CoerceViaIo(..) => "COERCEVIAIO",
+        ExprKind::ArrayCoerce { .. } => "ARRAYCOERCE",
         ExprKind::Bool(..) => "BOOL",
         ExprKind::NullTest(..) => "NULLTEST",
         ExprKind::BooleanTest(..) => "BOOLEANTEST",
@@ -119,6 +120,14 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
                 CastForm::Implicit => " :form implicit",
             });
             write_field("arg", arg, out)?;
+        }
+        ExprKind::ArrayCoerce { arg, element, form } => {
+            out.push_str(match form {
+                CastForm::Explicit => " :form explicit",
+                CastForm::Implicit => " :form implicit",
+            });
+            write_field("arg", arg, out)?;
+            write_field("element", element, out)?;
         }
         ExprKind::Bool(op, args) => {
             let op = match op {
@@ -536,6 +545,11 @@ fn expr_of(item: &Item) -> Result<Expr> {
         }
         "RELABEL" => ExprKind::Relabel(f.expr("arg")?, cast_form(&f)?),
         "COERCEVIAIO" => ExprKind::CoerceViaIo(f.expr("arg")?, cast_form(&f)?),
+        "ARRAYCOERCE" => ExprKind::ArrayCoerce {
+            arg: f.expr("arg")?,
+            element: f.expr("element")?,
+            form: cast_form(&f)?,
+        },
         "BOOL" => {
             let op = match f.atom("op")? {
                 "and" => BoolOp::And,
