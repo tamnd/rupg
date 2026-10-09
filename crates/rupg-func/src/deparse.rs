@@ -241,8 +241,9 @@ impl<'a> Deparser<'a> {
             ExprKind::CoerceToDomain(arg, _) => self.coercion(arg, e.ty, e.typmod, e)?,
             ExprKind::DomainValue => self.buf.push_str("VALUE"),
             ExprKind::Subscript(sub) => {
-                // The array needs parentheses unless it is a column, also when it is another subscript.
-                let parens = !matches!(sub.container.kind, ExprKind::Var(_));
+                // The array needs parentheses unless it is a column or a field, also when it is another subscript.
+                let parens =
+                    !matches!(sub.container.kind, ExprKind::Var(_) | ExprKind::FieldSelect(..));
                 if parens {
                     self.buf.push('(');
                 }
@@ -1089,6 +1090,11 @@ fn looks_like_function(e: &Expr) -> bool {
     }
 }
 
+/// `pg_get_statisticsobjdef`, `pg_get_statisticsobjdef_columns` and `pg_get_statisticsobjdef_expressions`: the text of an object of extended statistics. rupg has no such objects, and an OID that is not an object gives null.
+fn get_statisticsobjdef(_: &Call<'_>, _: &[Value]) -> Result<Value> {
+    Ok(Value::Null)
+}
+
 /// `pg_get_indexdef(oid)` and `pg_get_indexdef(oid, int4, bool)`.
 fn get_indexdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
@@ -1119,6 +1125,9 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_expr" | "pg_get_expr_ext" => get_expr,
         "pg_get_constraintdef" | "pg_get_constraintdef_ext" => get_constraintdef,
         "pg_get_indexdef" | "pg_get_indexdef_ext" => get_indexdef,
+        "pg_get_statisticsobjdef"
+        | "pg_get_statisticsobjdef_columns"
+        | "pg_get_statisticsobjdef_expressions" => get_statisticsobjdef,
         "pg_get_function_arguments" => function::get_function_arguments,
         "pg_get_function_identity_arguments" => function::get_function_identity_arguments,
         "pg_get_function_result" => function::get_function_result,

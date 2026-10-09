@@ -902,6 +902,12 @@ fn nextval(sequence: u32) -> Result<Expr> {
         .next()
         .ok_or_else(|| Error::internal("function nextval does not exist"))?;
     let arg = Expr::constant(Value::Oid(sequence), oid::REGCLASS, -1, None);
-    let func = Func { oid: proc.oid, args: vec![arg], form: FuncForm::Call, variadic: false };
+    let func = Func {
+        oid: proc.oid,
+        args: vec![arg],
+        form: FuncForm::Call,
+        variadic: false,
+        retset: false,
+    };
     Ok(Expr::new(ExprKind::Func(func), proc.rettype))
 }

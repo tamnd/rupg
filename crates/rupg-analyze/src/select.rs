@@ -115,6 +115,11 @@ impl Query {
         out
     }
 
+    /// `hasTargetSRFs`: true when a target calls a function that gives a set.
+    pub fn has_target_srfs(&self) -> bool {
+        self.targets.iter().any(|t| t.expr.first_set_call().is_some())
+    }
+
     /// The expressions of the query and of its subqueries in `FROM`, each with its depth: `depth` for the query, and one more for each subquery in `FROM` between the expression and the query. The subqueries in `FROM` come after the expressions of the query, as in `query_tree_walker`.
     pub fn all_exprs(&self, depth: usize) -> Vec<(&Expr, usize)> {
         let mut out: Vec<(&Expr, usize)> = self.exprs().into_iter().map(|e| (e, depth)).collect();

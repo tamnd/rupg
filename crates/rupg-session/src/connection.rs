@@ -1811,7 +1811,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/views.test")));
     }
 
-    /// The views that `system_views.sql` makes in `pg_catalog` when the cluster starts: their rows in `pg_class`, `pg_type`, `pg_rewrite` and `pg_attribute`, with the privileges and the options, and the queries that read them. The script also shows the options of `CREATE VIEW` and their errors. `pg_stats_ext_exprs` is not there yet. `connection/system_views.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// The views that `system_views.sql` makes in `pg_catalog` when the cluster starts: their rows in `pg_class`, `pg_type`, `pg_rewrite` and `pg_attribute`, with the privileges and the options, and the queries that read them. The script also shows the options of `CREATE VIEW` and their errors, and `row_security_active` and `pg_get_statisticsobjdef_expressions`, which the view `pg_stats_ext_exprs` calls. `connection/system_views.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn system_views() {
         big_stack(|| script(include_str!("connection/system_views.test")));
@@ -1899,6 +1899,12 @@ mod tests {
     #[test]
     fn regex_matches() {
         big_stack(|| script(include_str!("connection/regex_matches.test")));
+    }
+
+    /// The functions that give a set in the target list, as the nodes `ProjectSet` of PostgreSQL run them: calls side by side with nulls for the shorter sets, nested calls, calls inside expressions, the rows with no values, the calls above aggregates and below `ORDER BY`, `DISTINCT` and `LIMIT`, subqueries, row values and each error of a call in a wrong place. `connection/target_srf.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn target_srf() {
+        big_stack(|| script(include_str!("connection/target_srf.test")));
     }
 
     /// `format_type` of `interval` with each range and precision that a typmod can have, the error for a bad range, `_pg_interval_type` of `information_schema`, and the interval types of a view in `pg_get_viewdef` and `pg_attribute`. `connection/interval_typmods.test` is the output of PostgreSQL 19 for the same script in a new database.

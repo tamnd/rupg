@@ -77,14 +77,21 @@ impl Analyzer<'_> {
             Node::BoolExpr(b) => self.transform_bool(b),
             Node::FuncCall(f) => self.transform_func(f),
             Node::TypeCast(t) => self.transform_cast(t),
-            Node::CaseExpr(c) => self.transform_case(c),
+            Node::CaseExpr(c) => {
+                let before = self.srfs.0;
+                let expr = self.transform_case(c)?;
+                self.no_srf_since(before, "CASE")?;
+                Ok(expr)
+            }
             Node::CoalesceExpr(c) => {
+                let before = self.srfs.0;
                 let args = self.transform_list(&c.args)?;
                 let ty = self.common_type(&args, "COALESCE")?;
                 let args = args
                     .into_iter()
                     .map(|a| self.coerce_to_common(a, ty, "COALESCE"))
                     .collect::<Result<Vec<_>>>()?;
+                self.no_srf_since(before, "COALESCE")?;
                 Ok(Expr {
                     kind: ExprKind::Coalesce(args),
                     ty,

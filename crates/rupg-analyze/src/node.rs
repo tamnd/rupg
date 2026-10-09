@@ -613,6 +613,8 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 args: f.exprs("args")?,
                 form,
                 variadic: f.flag("variadic")?,
+                // A stored expression has no call of a function that gives a set.
+                retset: false,
             })
         }
         "RELABEL" => ExprKind::Relabel(f.expr("arg")?, cast_form(&f)?),
@@ -876,6 +878,7 @@ mod tests {
                 args: vec![var(1), constant(Value::Int4(1), oid::INT4)],
                 form: FuncForm::Operator(551),
                 variadic: false,
+                retset: false,
             }),
             ty: oid::INT4,
             typmod: -1,
@@ -929,6 +932,7 @@ mod tests {
                     args: vec![],
                     form: FuncForm::ImplicitCast,
                     variadic: true,
+                    retset: false,
                 }),
                 ty: oid::VARCHAR,
                 typmod: 14,

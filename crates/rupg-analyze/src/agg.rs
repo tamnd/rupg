@@ -37,6 +37,8 @@ pub(crate) enum Kind {
     FromFunction,
     /// `EXPR_KIND_VALUES`.
     Values,
+    /// `EXPR_KIND_VALUES_SINGLE`: a `VALUES` list with one row.
+    ValuesSingle,
     /// `EXPR_KIND_EXECUTE_PARAMETER`.
     ExecuteParameter,
 }
@@ -61,7 +63,7 @@ impl Kind {
             Kind::IndexExpression => "index expressions",
             Kind::IndexPredicate => "index predicates",
             Kind::FromFunction => "functions in FROM",
-            Kind::Values => "VALUES",
+            Kind::Values | Kind::ValuesSingle => "VALUES",
             Kind::ExecuteParameter => "EXECUTE parameters",
         }
     }
@@ -106,6 +108,19 @@ pub(crate) struct Parts<'a> {
     pub(crate) over: bool,
     /// True when the call has `RESPECT NULLS` or `IGNORE NULLS`.
     pub(crate) null_treatment: bool,
+}
+
+/// The hint of the errors of a call of a function that gives a set inside an expression that cannot take a set.
+pub(crate) const SRF_HINT: &str =
+    "You might be able to move the set-returning function into a LATERAL FROM item.";
+
+/// `check_agg_arguments_walker`: the first aggregate call or call of a function that gives a set in the arguments of an aggregate, outside their subqueries.
+fn nested(expr: &Expr) -> Option<&Expr> {
+    match &expr.kind {
+        ExprKind::Agg(_) => Some(expr),
+        ExprKind::Func(f) if f.retset => Some(expr),
+        _ => expr.children().into_iter().find_map(nested),
+    }
 }
 
 /// An error of an aggregate call in a wrong place, with the SQLSTATE `42803`.
@@ -165,12 +180,20 @@ impl Analyzer<'_> {
         };
         let args: Vec<Expr> = targets.into_iter().map(|t| t.expr).collect();
         let filter = parts.filter.map(Box::new);
-        // check_agg_arguments: an aggregate call in the arguments is of the same level.
-        if let Some(inner) = args.iter().chain(filter.as_deref()).find_map(Expr::first_agg) {
-            return Err(grouping_error(
-                "aggregate function calls cannot be nested".into(),
-                inner.location,
-            ));
+        // check_agg_arguments: an aggregate call in the arguments is of the same level, and a set cannot be an argument.
+        if let Some(inner) = args.iter().chain(filter.as_deref()).find_map(nested) {
+            if let ExprKind::Agg(_) = inner.kind {
+                return Err(grouping_error(
+                    "aggregate function calls cannot be nested".into(),
+                    inner.location,
+                ));
+            }
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "aggregate function calls cannot contain set-returning function calls",
+            )
+            .with_hint(SRF_HINT)
+            .at_opt(inner.location));
         }
         // check_agg_arguments: an aggregate whose arguments read only the columns of outer queries belongs to the outer query.
         let level = args
@@ -215,6 +238,7 @@ impl Analyzer<'_> {
             | Kind::IndexPredicate
             | Kind::FromFunction
             | Kind::Values
+            | Kind::ValuesSingle
             | Kind::ExecuteParameter => {
                 return Err(grouping_error(
                     format!("aggregate functions are not allowed in {}", self.kind.name()),

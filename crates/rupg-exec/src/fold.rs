@@ -35,6 +35,7 @@ fn plan(
         && agg::calls(query).is_empty()
         && query.having.is_none()
         && query.offset.is_none()
+        && !query.has_target_srfs()
     {
         simple = match &query.limit {
             None => true,
@@ -94,7 +95,7 @@ fn plan(
     Ok(out)
 }
 
-/// `is_simple_subquery` of `prepjointree.c`: true when the planner pulls the subquery in `FROM` up into the query, so that its expressions fold where the query reads them. Such a subquery has no aggregate, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `OFFSET` or `LIMIT`, and no volatile function in its target list.
+/// `is_simple_subquery` of `prepjointree.c`: true when the planner pulls the subquery in `FROM` up into the query, so that its expressions fold where the query reads them. Such a subquery has no aggregate, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `OFFSET` or `LIMIT`, and no volatile function and no function that gives a set in its target list.
 fn simple_subquery(query: &Query) -> bool {
     query.set_op.is_none()
         && !query.grouped
@@ -104,6 +105,7 @@ fn simple_subquery(query: &Query) -> bool {
         && query.offset.is_none()
         && query.limit.is_none()
         && !query.targets.iter().any(|t| volatile(&t.expr))
+        && !query.has_target_srfs()
 }
 
 /// `attrs_used`: for each relation of the query, the columns that the expressions of the query read, also in its subqueries.
@@ -133,7 +135,7 @@ fn used(query: &Query) -> Vec<Vec<bool>> {
     used
 }
 
-/// `remove_unused_subquery_outputs`: each column of a subquery in `FROM` that the query does not read becomes a null constant, so that it does not run. With a plain `DISTINCT`, all the columns stay. A column that `ORDER BY`, `GROUP BY` or `DISTINCT` reads, or that calls a volatile function, stays.
+/// `remove_unused_subquery_outputs`: each column of a subquery in `FROM` that the query does not read becomes a null constant, so that it does not run. With a plain `DISTINCT`, all the columns stay. A column that `ORDER BY`, `GROUP BY` or `DISTINCT` reads, or that calls a volatile function or a function that gives a set, stays.
 fn prune(sub: &mut Query, used: &[bool]) {
     if !sub.distinct.is_empty() && !sub.distinct_on {
         return;
@@ -145,6 +147,7 @@ fn prune(sub: &mut Query, used: &[bool]) {
             || used.get(i).is_none_or(|u| *u)
             || keep.contains(&i)
             || volatile(&target.expr)
+            || target.expr.first_set_call().is_some()
         {
             continue;
         }
@@ -395,7 +398,7 @@ impl<'a> Fold<'a> {
             }
             ExprKind::Func(f) => {
                 let args = self.list(&f.args)?;
-                let func = Func { oid: f.oid, args, form: f.form, variadic: f.variadic };
+                let func = Func { args, ..f.clone() };
                 self.function(with(expr, ExprKind::Func(func)))
             }
             ExprKind::Relabel(arg, form) => {

@@ -27,7 +27,9 @@ impl Analyzer<'_> {
         self.outer.push(scope);
         let kind = std::mem::replace(&mut self.kind, Kind::Other);
         let has_aggs = std::mem::replace(&mut self.has_aggs, false);
+        let srfs = self.srfs;
         let result = self.select(stmt);
+        self.srfs = srfs;
         self.has_aggs = has_aggs;
         self.kind = kind;
         self.scope = self.outer.pop().unwrap_or_default();
