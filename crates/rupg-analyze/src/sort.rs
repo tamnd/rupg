@@ -494,6 +494,22 @@ fn no_ordering(ty: u32, at: Option<usize>) -> Error {
     .at_opt(at)
 }
 
+/// `makeSortGroupClauseForSetOp`: the operators that a set operation uses for a column, to find the rows that are equal.
+pub(crate) fn set_group(target: usize, ty: u32, at: Option<usize>) -> Result<SortGroup> {
+    let ops = typcache::operators(ty);
+    if ops.eq == 0 {
+        return Err(no_equality(ty, at));
+    }
+    Ok(SortGroup {
+        target,
+        operator: ops.lt,
+        sort: function_of(ops.lt),
+        equal: function_of(ops.eq),
+        nulls_first: false,
+        hashable: typcache::hashable(ops.eq, ty),
+    })
+}
+
 fn no_equality(ty: u32, at: Option<usize>) -> Error {
     Error::new(
         SqlState::UNDEFINED_FUNCTION,

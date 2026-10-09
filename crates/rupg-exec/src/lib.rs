@@ -8,8 +8,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rupg_analyze::{
-    Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query, SortGroup,
-    SqlValue, SubLink, SubLinkKind, Target,
+    Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query, SetKind,
+    SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Target,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -209,7 +209,110 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
             kernel(group.sort, None)?;
         }
     }
+    if let Some(op) = &query.set_op {
+        check_set_op(op)?;
+    }
     Ok(())
+}
+
+/// Checks the operators of each operation of a set operation. As for `DISTINCT`, the planner sorts the rows or uses a hash table, and gives an error when it can do neither.
+fn check_set_op(op: &SetOp) -> Result<()> {
+    if !op.groups.iter().all(|g| g.sort != 0) && !op.groups.iter().all(|g| g.hashable) {
+        let name = match op.kind {
+            SetKind::Union => "UNION",
+            SetKind::Intersect => "INTERSECT",
+            SetKind::Except => "EXCEPT",
+        };
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("could not implement {name}"),
+        )
+        .with_detail(MIXED_KEYS));
+    }
+    for group in &op.groups {
+        kernel(group.equal, None)?;
+        if group.sort != 0 {
+            kernel(group.sort, None)?;
+        }
+    }
+    for part in [&op.left, &op.right] {
+        if let SetTree::Op(op) = part {
+            check_set_op(op)?;
+        }
+    }
+    Ok(())
+}
+
+/// The rows of a part of a set operation. A `SELECT` gives the rows of its subquery.
+fn part_rows(part: &SetTree, tables: &scan::Tables, session: &dyn Session) -> Result<Rows> {
+    match part {
+        SetTree::Leaf(index) => Ok((*tables.rows[*index]).clone()),
+        SetTree::Op(op) => set_rows(op, tables, session),
+    }
+}
+
+/// The rows of an operation of a set operation, as `Append`, `Unique` and `SetOp` give them. `UNION ALL` gives the rows of the left part, then the rows of the right part. The other operations make groups of equal rows: they sort the rows when every type has an order, or else keep the groups in the order of the rows, as a hash table does. For each group, `UNION` gives one row, `INTERSECT` gives one row when both parts have the row, and `EXCEPT` gives one row when only the left part has it. With `ALL`, `INTERSECT` gives the row as many times as the part with fewer copies has it, and `EXCEPT` gives it as many times as the left part has more copies than the right part.
+fn set_rows(op: &SetOp, tables: &scan::Tables, session: &dyn Session) -> Result<Rows> {
+    let left = part_rows(&op.left, tables, session)?;
+    let right = part_rows(&op.right, tables, session)?;
+    if op.kind == SetKind::Union && op.all {
+        let mut rows = left;
+        rows.extend(right);
+        return Ok(rows);
+    }
+    let types: Vec<u32> = op.columns.iter().map(|(ty, _)| *ty).collect();
+    let keys = sort::Keys::new(&op.groups, &types, session)?;
+    let mut tagged: Vec<(Vec<Value>, bool)> =
+        left.into_iter().map(|r| (r, false)).chain(right.into_iter().map(|r| (r, true))).collect();
+    // Each group is a row with the number of copies in the left part and in the right part.
+    let mut groups: Vec<(Vec<Value>, usize, usize)> = Vec::new();
+    let sorted = op.groups.iter().all(|g| g.sort != 0);
+    if sorted {
+        sort::qsort(&mut tagged, &mut |a, b| keys.compare(&a.0, &b.0))?;
+    }
+    for (row, right) in tagged {
+        let found = if sorted {
+            match groups.last() {
+                Some(last) if keys.equal(&last.0, &row)? => Some(groups.len() - 1),
+                _ => None,
+            }
+        } else {
+            let mut found = None;
+            for (i, group) in groups.iter().enumerate() {
+                if keys.equal(&group.0, &row)? {
+                    found = Some(i);
+                    break;
+                }
+            }
+            found
+        };
+        let group = match found {
+            Some(i) => &mut groups[i],
+            None => {
+                groups.push((row, 0, 0));
+                groups.last_mut().ok_or_else(|| Error::internal("no group"))?
+            }
+        };
+        if right {
+            group.2 += 1;
+        } else {
+            group.1 += 1;
+        }
+    }
+    let mut rows = Vec::new();
+    for (row, left, right) in groups {
+        let copies = match (op.kind, op.all) {
+            (SetKind::Union, _) => 1,
+            (SetKind::Intersect, true) => left.min(right),
+            (SetKind::Intersect, false) => usize::from(left > 0 && right > 0),
+            (SetKind::Except, true) => left.saturating_sub(right),
+            (SetKind::Except, false) => usize::from(left > 0 && right == 0),
+        };
+        for _ in 0..copies {
+            rows.push(row.clone());
+        }
+    }
+    Ok(rows)
 }
 
 /// The rows of a query.
@@ -368,7 +471,12 @@ fn run_query(
     let mut eval = Eval::new(params, session, &base, cache, outer);
     // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.
     let mut simple = false;
-    if exists && agg::calls(query).is_empty() && query.having.is_none() && query.offset.is_none() {
+    if exists
+        && query.set_op.is_none()
+        && agg::calls(query).is_empty()
+        && query.having.is_none()
+        && query.offset.is_none()
+    {
         simple = match &query.limit {
             None => true,
             Some(limit) if constant(limit) => match eval.eval(limit)? {
@@ -383,14 +491,34 @@ fn run_query(
         return Ok(Vec::new());
     }
     let open = gate(query, &mut eval)?;
-    let tables = if open {
+    let mut tables = if open {
         with_subqueries(query, &base, params, session, cache, outer)?
     } else {
         Rc::clone(&base)
     };
+    // The rows of a set operation take the place of the rows of the leftmost `SELECT`, which the targets read.
+    let mut set_tuples = Vec::new();
+    if let Some(op) = &query.set_op
+        && open
+    {
+        let rows = set_rows(op, &tables, session)?;
+        let leftmost = op.left.leftmost();
+        set_tuples = (0..rows.len())
+            .map(|row| {
+                let mut tuple = vec![scan::NONE; query.relations.len()];
+                tuple[leftmost] = row;
+                tuple
+            })
+            .collect();
+        let mut set = (*tables).clone();
+        set.rows[leftmost] = Rc::new(rows);
+        tables = Rc::new(set);
+    }
     let tables = &*tables;
     let mut eval = Eval { tables, ..eval.at(&[]) };
-    let tuples = if open {
+    let tuples = if query.set_op.is_some() {
+        set_tuples
+    } else if open {
         let mut source = |index: usize, tuple: &[usize]| {
             let relation = &query.relations[index];
             if let Some(function) = &relation.function {

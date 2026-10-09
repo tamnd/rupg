@@ -1,6 +1,8 @@
 //! `FigureColname`: the name of a column of the result when the query gives no `AS` name, from the raw expression as `parse_target.c` finds it.
 
-use rupg_sql::nodes::{A_Expr_Kind, MinMaxOp, Node, SQLValueFunctionOp, SubLinkType};
+use rupg_sql::nodes::{
+    A_Expr_Kind, MinMaxOp, Node, SQLValueFunctionOp, SelectStmt, SetOperation, SubLinkType,
+};
 
 /// The name of the column for the expression, or `?column?`.
 pub fn figure_colname(node: Option<&Node>) -> String {
@@ -21,6 +23,16 @@ fn last_string(list: &[Option<Node>]) -> Option<String> {
         Some(Node::String(s)) => Some(s.to_string()),
         _ => None,
     })
+}
+
+/// The leftmost `SELECT` of a set operation, or the `SELECT` itself.
+fn leftmost(mut select: &SelectStmt) -> &SelectStmt {
+    while select.op != SetOperation::SETOP_NONE
+        && let Some(left) = select.larg.as_deref()
+    {
+        select = left;
+    }
+    select
 }
 
 /// `FigureColnameInternal`: the name with its strength. A name of strength 2 is a real name. A name of strength 1, such as the type of a cast, is used only when nothing gives a better one.
@@ -49,7 +61,8 @@ fn figure(node: Option<&Node>) -> Option<(String, u8)> {
             SubLinkType::EXISTS_SUBLINK => strong("exists"),
             SubLinkType::ARRAY_SUBLINK => strong("array"),
             SubLinkType::EXPR_SUBLINK => match &s.subselect {
-                Some(Node::SelectStmt(select)) => match select.targetList.first() {
+                // The query of a set operation has the names of its leftmost `SELECT`.
+                Some(Node::SelectStmt(select)) => match leftmost(select).targetList.first() {
                     Some(Some(Node::ResTarget(t))) => match &t.name {
                         Some(name) => strong(name),
                         None => Some((figure_colname(t.val.as_ref()), 2)),

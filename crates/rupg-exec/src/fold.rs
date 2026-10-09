@@ -30,7 +30,12 @@ fn plan(
     let mut fold = Fold::new(query, params, session);
     let mut out = query.clone();
     let mut simple = false;
-    if exists && agg::calls(query).is_empty() && query.having.is_none() && query.offset.is_none() {
+    if exists
+        && query.set_op.is_none()
+        && agg::calls(query).is_empty()
+        && query.having.is_none()
+        && query.offset.is_none()
+    {
         simple = match &query.limit {
             None => true,
             Some(limit) => match value(&fold.expr(limit)?) {
@@ -71,7 +76,10 @@ fn plan(
             if dummy && !simple_subquery(sub) {
                 continue;
             }
-            prune(sub, used);
+            // Each `SELECT` of a set operation gives all its columns.
+            if out.set_op.is_none() {
+                prune(sub, used);
+            }
             **sub = plan(sub, params, session, false)?;
         }
     }
@@ -80,7 +88,8 @@ fn plan(
 
 /// `is_simple_subquery` of `prepjointree.c`: true when the planner pulls the subquery in `FROM` up into the query, so that its expressions fold where the query reads them. Such a subquery has no aggregate, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `OFFSET` or `LIMIT`, and no volatile function in its target list.
 fn simple_subquery(query: &Query) -> bool {
-    !query.grouped
+    query.set_op.is_none()
+        && !query.grouped
         && agg::calls(query).is_empty()
         && query.sort.is_empty()
         && query.distinct.is_empty()
@@ -188,10 +197,11 @@ impl<'a> Fold<'a> {
         for item in &query.from {
             mark(item, false, &mut nulled);
         }
+        // The `SELECT` parts of a set operation are not subqueries that the planner pulls up.
         let pulled = query
             .relations
             .iter()
-            .map(|r| r.subquery.as_deref().is_some_and(simple_subquery))
+            .map(|r| query.set_op.is_none() && r.subquery.as_deref().is_some_and(simple_subquery))
             .collect();
         Fold {
             params,
