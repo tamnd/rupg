@@ -1,0 +1,398 @@
+> CREATE TABLE ut (a int, b text, c int)
+CREATE TABLE
+> CREATE VIEW uv01 AS SELECT a, b FROM ut
+CREATE VIEW
+> CREATE VIEW uv02 AS SELECT a + 1 AS a1, b FROM ut
+CREATE VIEW
+> CREATE VIEW uv03 AS SELECT a + 1 AS x FROM ut
+CREATE VIEW
+> CREATE VIEW uv04 AS SELECT DISTINCT a FROM ut
+CREATE VIEW
+> CREATE VIEW uv05 AS SELECT a, count(*) AS n FROM ut GROUP BY a
+CREATE VIEW
+> CREATE VIEW uv06 AS SELECT a FROM ut LIMIT 1
+CREATE VIEW
+> CREATE VIEW uv07 AS SELECT t1.a FROM ut t1, ut t2
+CREATE VIEW
+> CREATE VIEW uv08 AS SELECT a, b FROM uv01
+CREATE VIEW
+> CREATE VIEW uv09 AS SELECT a1 FROM uv02
+CREATE VIEW
+> CREATE VIEW uv10 AS SELECT b, a1 FROM uv02
+CREATE VIEW
+> CREATE VIEW uv11 AS SELECT * FROM (SELECT a FROM ut) s
+CREATE VIEW
+> CREATE VIEW uv12 AS SELECT a, generate_series(1, 2) AS g FROM ut
+CREATE VIEW
+> CREATE VIEW uv13 AS SELECT a, row_number() OVER () AS r FROM ut
+CREATE VIEW
+> CREATE VIEW uv14 AS SELECT a FROM ut UNION SELECT c FROM ut
+CREATE VIEW
+> CREATE VIEW uv15 AS SELECT a, ut FROM ut
+CREATE VIEW
+> CREATE VIEW uv17 AS SELECT a FROM ut ORDER BY b
+CREATE VIEW
+> CREATE VIEW uv18 AS SELECT a, b FROM ut WHERE a > (SELECT 1)
+CREATE VIEW
+> CREATE VIEW uv19 AS SELECT 1 AS one
+CREATE VIEW
+> CREATE VIEW uv20 AS SELECT a::bigint AS a8, b::varchar AS bv FROM ut
+CREATE VIEW
+> CREATE VIEW uv21 AS SELECT a FROM ut OFFSET 1
+CREATE VIEW
+> CREATE VIEW uv22 AS SELECT max(a) AS m FROM ut
+CREATE VIEW
+> CREATE VIEW uv23 AS SELECT a FROM ut t1 JOIN ut t2 USING (a)
+CREATE VIEW
+> CREATE VIEW uv24 AS SELECT * FROM generate_series(1, 3) g
+CREATE VIEW
+> CREATE VIEW uv25 AS SELECT a, a AS a2, c FROM ut
+CREATE VIEW
+> CREATE VIEW uv26 AS SELECT x FROM uv03
+CREATE VIEW
+> CREATE VIEW uv27 AS SELECT * FROM (VALUES (1)) v (x)
+CREATE VIEW
+> SELECT c.relname, pg_relation_is_updatable(c.oid, false) AS u, pg_relation_is_updatable(c.oid, true) AS t FROM pg_class c WHERE c.relnamespace = 'public'::regnamespace ORDER BY 1
+fields relname@pg_class.2:19:64:-1,u:23:4:-1,t:23:4:-1
+row ut,28,28
+row uv01,28,28
+row uv02,28,28
+row uv03,16,16
+row uv04,0,0
+row uv05,0,0
+row uv06,0,0
+row uv07,0,0
+row uv08,28,28
+row uv09,16,16
+row uv10,28,28
+row uv11,0,0
+row uv12,0,0
+row uv13,0,0
+row uv14,0,0
+row uv15,28,28
+row uv17,28,28
+row uv18,28,28
+row uv19,0,0
+row uv20,16,16
+row uv21,0,0
+row uv22,0,0
+row uv23,0,0
+row uv24,0,0
+row uv25,28,28
+row uv26,16,16
+row uv27,0,0
+SELECT 27
+> SELECT c.relname, a.attname, a.attnum, pg_column_is_updatable(c.oid, a.attnum, false) AS u FROM pg_class c JOIN pg_attribute a ON a.attrelid = c.oid WHERE c.relnamespace = 'public'::regnamespace AND c.relkind IN ('r', 'v') AND (a.attnum > 0 OR a.attname = 'ctid') ORDER BY 1, 3
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,u:16:1:-1
+row ut,ctid,-1,f
+row ut,a,1,t
+row ut,b,2,t
+row ut,c,3,t
+row uv01,a,1,t
+row uv01,b,2,t
+row uv02,a1,1,f
+row uv02,b,2,t
+row uv03,x,1,f
+row uv04,a,1,f
+row uv05,a,1,f
+row uv05,n,2,f
+row uv06,a,1,f
+row uv07,a,1,f
+row uv08,a,1,t
+row uv08,b,2,t
+row uv09,a1,1,f
+row uv10,b,1,t
+row uv10,a1,2,f
+row uv11,a,1,f
+row uv12,a,1,f
+row uv12,g,2,f
+row uv13,a,1,f
+row uv13,r,2,f
+row uv14,a,1,f
+row uv15,a,1,t
+row uv15,ut,2,f
+row uv17,a,1,t
+row uv18,a,1,t
+row uv18,b,2,t
+row uv19,one,1,f
+row uv20,a8,1,f
+row uv20,bv,2,f
+row uv21,a,1,f
+row uv22,m,1,f
+row uv23,a,1,f
+row uv24,g,1,f
+row uv25,a,1,t
+row uv25,a2,2,t
+row uv25,c,3,t
+row uv26,x,1,f
+row uv27,x,1,f
+SELECT 42
+> SELECT pg_relation_is_updatable(0, false), pg_column_is_updatable(0, 1::int2, false), pg_column_is_updatable('ut'::regclass, 0::int2, false), pg_column_is_updatable('ut'::regclass, 9::int2, false), pg_column_is_updatable('uv01'::regclass, 9::int2, false)
+fields pg_relation_is_updatable:23:4:-1,pg_column_is_updatable:16:1:-1,pg_column_is_updatable:16:1:-1,pg_column_is_updatable:16:1:-1,pg_column_is_updatable:16:1:-1
+row 0,f,f,t,f
+SELECT 1
+> SELECT pg_relation_is_updatable(NULL, false), pg_column_is_updatable('ut'::regclass, NULL, false), pg_typeof(pg_relation_is_updatable(0, false)), pg_typeof(pg_column_is_updatable(0, 1::int2, false))
+fields pg_relation_is_updatable:23:4:-1,pg_column_is_updatable:16:1:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row NULL,NULL,integer,boolean
+SELECT 1
+> SELECT pg_relation_is_updatable('pg_class'::regclass, false), pg_relation_is_updatable('pg_class_oid_index'::regclass, false), pg_relation_is_updatable('pg_roles'::regclass, false), pg_relation_is_updatable('pg_group'::regclass, true)
+fields pg_relation_is_updatable:23:4:-1,pg_relation_is_updatable:23:4:-1,pg_relation_is_updatable:23:4:-1,pg_relation_is_updatable:23:4:-1
+row 28,0,0,28
+SELECT 1
+> SELECT n.nspname, c.relname, pg_relation_is_updatable(c.oid, false) AS u FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE c.relkind = 'v' AND n.nspname IN ('pg_catalog', 'information_schema') AND c.relname <> 'pg_settings' AND pg_relation_is_updatable(c.oid, false) <> 0 ORDER BY 1, 2
+fields nspname@pg_namespace.2:19:64:-1,relname@pg_class.2:19:64:-1,u:23:4:-1
+row information_schema,enabled_roles,16
+row pg_catalog,pg_group,28
+row pg_catalog,pg_stat_database_conflicts,28
+SELECT 3
+> SELECT pg_relation_is_updatable(c.oid, false) AS u, count(*) FROM pg_class c WHERE c.relkind = 'v' AND c.relnamespace IN ('pg_catalog'::regnamespace, 'information_schema'::regnamespace) AND c.relname <> 'pg_settings' GROUP BY 1 ORDER BY 1
+fields u:23:4:-1,count:20:8:-1
+row 0,147
+row 16,1
+row 28,2
+SELECT 3
+> SELECT table_name, column_name, ordinal_position, is_updatable FROM information_schema.columns WHERE table_schema = 'pg_catalog' AND table_name IN ('pg_group', 'pg_roles', 'pg_stat_database_conflicts', 'pg_class') ORDER BY 1, 3
+fields table_name@information_schema.columns.3:19:64:-1,column_name@information_schema.columns.4:19:64:-1,ordinal_position@information_schema.columns.5:23:4:-1,is_updatable@information_schema.columns.44:1043:-1:7
+row pg_class,oid,1,YES
+row pg_class,relname,2,YES
+row pg_class,relnamespace,3,YES
+row pg_class,reltype,4,YES
+row pg_class,reloftype,5,YES
+row pg_class,relowner,6,YES
+row pg_class,relam,7,YES
+row pg_class,relfilenode,8,YES
+row pg_class,reltablespace,9,YES
+row pg_class,relpages,10,YES
+row pg_class,reltuples,11,YES
+row pg_class,relallvisible,12,YES
+row pg_class,relallfrozen,13,YES
+row pg_class,reltoastrelid,14,YES
+row pg_class,relhasindex,15,YES
+row pg_class,relisshared,16,YES
+row pg_class,relpersistence,17,YES
+row pg_class,relkind,18,YES
+row pg_class,relnatts,19,YES
+row pg_class,relchecks,20,YES
+row pg_class,relhasrules,21,YES
+row pg_class,relhastriggers,22,YES
+row pg_class,relhassubclass,23,YES
+row pg_class,relrowsecurity,24,YES
+row pg_class,relforcerowsecurity,25,YES
+row pg_class,relispopulated,26,YES
+row pg_class,relreplident,27,YES
+row pg_class,relispartition,28,YES
+row pg_class,relrewrite,29,YES
+row pg_class,relfrozenxid,30,YES
+row pg_class,relminmxid,31,YES
+row pg_class,relacl,32,YES
+row pg_class,reloptions,33,YES
+row pg_class,relpartbound,34,YES
+row pg_group,groname,1,YES
+row pg_group,grosysid,2,YES
+row pg_group,grolist,3,NO
+row pg_roles,rolname,1,NO
+row pg_roles,rolsuper,2,NO
+row pg_roles,rolinherit,3,NO
+row pg_roles,rolcreaterole,4,NO
+row pg_roles,rolcreatedb,5,NO
+row pg_roles,rolcanlogin,6,NO
+row pg_roles,rolreplication,7,NO
+row pg_roles,rolconnlimit,8,NO
+row pg_roles,rolpassword,9,NO
+row pg_roles,rolvaliduntil,10,NO
+row pg_roles,rolbypassrls,11,NO
+row pg_roles,rolconfig,12,NO
+row pg_roles,oid,13,NO
+row pg_stat_database_conflicts,datid,1,YES
+row pg_stat_database_conflicts,datname,2,YES
+row pg_stat_database_conflicts,confl_tablespace,3,NO
+row pg_stat_database_conflicts,confl_lock,4,NO
+row pg_stat_database_conflicts,confl_snapshot,5,NO
+row pg_stat_database_conflicts,confl_bufferpin,6,NO
+row pg_stat_database_conflicts,confl_deadlock,7,NO
+row pg_stat_database_conflicts,confl_active_logicalslot,8,NO
+row pg_stat_database_conflicts,stats_reset,9,NO
+SELECT 59
+> SELECT table_name, table_type, is_insertable_into, is_typed, commit_action FROM information_schema.tables WHERE table_schema = 'public' ORDER BY 1
+fields table_name@information_schema.tables.3:19:64:-1,table_type@information_schema.tables.4:1043:-1:-1,is_insertable_into@information_schema.tables.10:1043:-1:7,is_typed@information_schema.tables.11:1043:-1:7,commit_action@information_schema.tables.12:1043:-1:-1
+row ut,BASE TABLE,YES,NO,NULL
+row uv01,VIEW,YES,NO,NULL
+row uv02,VIEW,YES,NO,NULL
+row uv03,VIEW,NO,NO,NULL
+row uv04,VIEW,NO,NO,NULL
+row uv05,VIEW,NO,NO,NULL
+row uv06,VIEW,NO,NO,NULL
+row uv07,VIEW,NO,NO,NULL
+row uv08,VIEW,YES,NO,NULL
+row uv09,VIEW,NO,NO,NULL
+row uv10,VIEW,YES,NO,NULL
+row uv11,VIEW,NO,NO,NULL
+row uv12,VIEW,NO,NO,NULL
+row uv13,VIEW,NO,NO,NULL
+row uv14,VIEW,NO,NO,NULL
+row uv15,VIEW,YES,NO,NULL
+row uv17,VIEW,YES,NO,NULL
+row uv18,VIEW,YES,NO,NULL
+row uv19,VIEW,NO,NO,NULL
+row uv20,VIEW,NO,NO,NULL
+row uv21,VIEW,NO,NO,NULL
+row uv22,VIEW,NO,NO,NULL
+row uv23,VIEW,NO,NO,NULL
+row uv24,VIEW,NO,NO,NULL
+row uv25,VIEW,YES,NO,NULL
+row uv26,VIEW,NO,NO,NULL
+row uv27,VIEW,NO,NO,NULL
+SELECT 27
+> SELECT table_name, check_option, is_updatable, is_insertable_into, is_trigger_updatable, is_trigger_deletable, is_trigger_insertable_into FROM information_schema.views WHERE table_schema = 'public' ORDER BY 1
+fields table_name@information_schema.views.3:19:64:-1,check_option@information_schema.views.5:1043:-1:-1,is_updatable@information_schema.views.6:1043:-1:7,is_insertable_into@information_schema.views.7:1043:-1:7,is_trigger_updatable@information_schema.views.8:1043:-1:7,is_trigger_deletable@information_schema.views.9:1043:-1:7,is_trigger_insertable_into@information_schema.views.10:1043:-1:7
+row uv01,NONE,YES,YES,NO,NO,NO
+row uv02,NONE,YES,YES,NO,NO,NO
+row uv03,NONE,NO,NO,NO,NO,NO
+row uv04,NONE,NO,NO,NO,NO,NO
+row uv05,NONE,NO,NO,NO,NO,NO
+row uv06,NONE,NO,NO,NO,NO,NO
+row uv07,NONE,NO,NO,NO,NO,NO
+row uv08,NONE,YES,YES,NO,NO,NO
+row uv09,NONE,NO,NO,NO,NO,NO
+row uv10,NONE,YES,YES,NO,NO,NO
+row uv11,NONE,NO,NO,NO,NO,NO
+row uv12,NONE,NO,NO,NO,NO,NO
+row uv13,NONE,NO,NO,NO,NO,NO
+row uv14,NONE,NO,NO,NO,NO,NO
+row uv15,NONE,YES,YES,NO,NO,NO
+row uv17,NONE,YES,YES,NO,NO,NO
+row uv18,NONE,YES,YES,NO,NO,NO
+row uv19,NONE,NO,NO,NO,NO,NO
+row uv20,NONE,NO,NO,NO,NO,NO
+row uv21,NONE,NO,NO,NO,NO,NO
+row uv22,NONE,NO,NO,NO,NO,NO
+row uv23,NONE,NO,NO,NO,NO,NO
+row uv24,NONE,NO,NO,NO,NO,NO
+row uv25,NONE,YES,YES,NO,NO,NO
+row uv26,NONE,NO,NO,NO,NO,NO
+row uv27,NONE,NO,NO,NO,NO,NO
+SELECT 26
+> SELECT table_name, column_name, ordinal_position, is_updatable, data_type, is_nullable FROM information_schema.columns WHERE table_schema = 'public' ORDER BY 1, 3
+fields table_name@information_schema.columns.3:19:64:-1,column_name@information_schema.columns.4:19:64:-1,ordinal_position@information_schema.columns.5:23:4:-1,is_updatable@information_schema.columns.44:1043:-1:7,data_type@information_schema.columns.8:1043:-1:-1,is_nullable@information_schema.columns.7:1043:-1:7
+row ut,a,1,YES,integer,YES
+row ut,b,2,YES,text,YES
+row ut,c,3,YES,integer,YES
+row uv01,a,1,YES,integer,YES
+row uv01,b,2,YES,text,YES
+row uv02,a1,1,NO,integer,YES
+row uv02,b,2,YES,text,YES
+row uv03,x,1,NO,integer,YES
+row uv04,a,1,NO,integer,YES
+row uv05,a,1,NO,integer,YES
+row uv05,n,2,NO,bigint,YES
+row uv06,a,1,NO,integer,YES
+row uv07,a,1,NO,integer,YES
+row uv08,a,1,YES,integer,YES
+row uv08,b,2,YES,text,YES
+row uv09,a1,1,NO,integer,YES
+row uv10,b,1,YES,text,YES
+row uv10,a1,2,NO,integer,YES
+row uv11,a,1,NO,integer,YES
+row uv12,a,1,NO,integer,YES
+row uv12,g,2,NO,integer,YES
+row uv13,a,1,NO,integer,YES
+row uv13,r,2,NO,bigint,YES
+row uv14,a,1,NO,integer,YES
+row uv15,a,1,YES,integer,YES
+row uv15,ut,2,NO,USER-DEFINED,YES
+row uv17,a,1,YES,integer,YES
+row uv18,a,1,YES,integer,YES
+row uv18,b,2,YES,text,YES
+row uv19,one,1,NO,integer,YES
+row uv20,a8,1,NO,bigint,YES
+row uv20,bv,2,NO,character varying,YES
+row uv21,a,1,NO,integer,YES
+row uv22,m,1,NO,integer,YES
+row uv23,a,1,NO,integer,YES
+row uv24,g,1,NO,integer,YES
+row uv25,a,1,YES,integer,YES
+row uv25,a2,2,YES,integer,YES
+row uv25,c,3,YES,integer,YES
+row uv26,x,1,NO,integer,YES
+row uv27,x,1,NO,integer,YES
+SELECT 41
+> SELECT table_name, is_insertable_into FROM information_schema.tables WHERE table_schema = 'information_schema' ORDER BY 1
+fields table_name@information_schema.tables.3:19:64:-1,is_insertable_into@information_schema.tables.10:1043:-1:7
+row _pg_foreign_data_wrappers,NO
+row _pg_foreign_servers,NO
+row _pg_foreign_table_columns,NO
+row _pg_foreign_tables,NO
+row _pg_user_mappings,NO
+row administrable_role_authorizations,NO
+row applicable_roles,NO
+row attributes,NO
+row character_sets,NO
+row check_constraint_routine_usage,NO
+row check_constraints,NO
+row collation_character_set_applicability,NO
+row collations,NO
+row column_column_usage,NO
+row column_domain_usage,NO
+row column_options,NO
+row column_privileges,NO
+row column_udt_usage,NO
+row columns,NO
+row constraint_column_usage,NO
+row constraint_table_usage,NO
+row data_type_privileges,NO
+row domain_constraints,NO
+row domain_udt_usage,NO
+row domains,NO
+row element_types,NO
+row enabled_roles,NO
+row foreign_data_wrapper_options,NO
+row foreign_data_wrappers,NO
+row foreign_server_options,NO
+row foreign_servers,NO
+row foreign_table_options,NO
+row foreign_tables,NO
+row information_schema_catalog_name,NO
+row key_column_usage,NO
+row parameters,NO
+row referential_constraints,NO
+row role_column_grants,NO
+row role_routine_grants,NO
+row role_table_grants,NO
+row role_udt_grants,NO
+row role_usage_grants,NO
+row routine_column_usage,NO
+row routine_privileges,NO
+row routine_routine_usage,NO
+row routine_sequence_usage,NO
+row routine_table_usage,NO
+row routines,NO
+row schemata,NO
+row sequences,NO
+row sql_features,YES
+row sql_implementation_info,YES
+row sql_parts,YES
+row sql_sizing,YES
+row table_constraints,NO
+row table_privileges,NO
+row tables,NO
+row transforms,NO
+row triggered_update_columns,NO
+row triggers,NO
+row udt_privileges,NO
+row usage_privileges,NO
+row user_defined_types,NO
+row user_mapping_options,NO
+row user_mappings,NO
+row view_column_usage,NO
+row view_routine_usage,NO
+row view_table_usage,NO
+row views,NO
+SELECT 69
+> SELECT table_name, is_updatable, is_insertable_into FROM information_schema.views WHERE table_schema = 'pg_catalog' AND table_name IN ('pg_group', 'pg_roles', 'pg_stat_database_conflicts', 'pg_user', 'pg_tables') ORDER BY 1
+fields table_name@information_schema.views.3:19:64:-1,is_updatable@information_schema.views.6:1043:-1:7,is_insertable_into@information_schema.views.7:1043:-1:7
+row pg_group,YES,YES
+row pg_roles,NO,NO
+row pg_stat_database_conflicts,YES,YES
+row pg_tables,NO,NO
+row pg_user,NO,NO
+SELECT 5

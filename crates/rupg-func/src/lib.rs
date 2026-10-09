@@ -25,6 +25,7 @@ mod shared;
 mod srf;
 mod stat;
 mod text;
+mod updatable;
 mod zones;
 
 use std::collections::BTreeMap;
@@ -214,6 +215,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
         .or_else(|| acl::by_src(src))
+        .or_else(|| updatable::by_src(src))
         .or_else(|| deparse::by_src(src))
         .or_else(|| stat::by_src(src))
         .or_else(|| array::by_src(src))
