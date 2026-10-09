@@ -4,6 +4,15 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.15 (2026-10-10)
+
+A patch release on the way to M2. rupg now has all the regular expression functions of PostgreSQL and runs set-returning functions in the target list. Thus the setup makes all the views of `system_views.sql`.
+
+### Added
+
+- The regular expression functions that find each match (#227): `regexp_replace`, `regexp_count`, `regexp_instr`, `regexp_substr`, `regexp_matches`, `regexp_split_to_table` and `regexp_split_to_array`.
+- Set-returning functions in the target list (#228). The calls run side by side and give nulls for the shorter sets, as the `ProjectSet` node of PostgreSQL does, and a call in a wrong place gives the error of PostgreSQL. The view `pg_stats_ext_exprs` is now in the catalog, with `row_security_active` and the functions of extended statistics.
+
 ## 0.1.14 (2026-10-10)
 
 A patch release on the way to M2. rupg now has rows as values and the regular expression functions that give the text of a match. Thus 9 of the 11 functions in SQL of `information_schema` now run.
