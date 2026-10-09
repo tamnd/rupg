@@ -1669,6 +1669,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_coerce.test")));
     }
 
+    /// The functions of the arrays: `string_to_array` with and without the null string, `array_to_string`, `array_length`, `array_lower`, `array_upper`, `array_ndims`, `array_dims`, `cardinality`, `array_append`, `array_prepend`, `array_cat` and the `||` operators of the arrays, with null arguments, empty arrays, other lower bounds and arrays with two dimensions. `connection/array_functions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn array_functions() {
+        big_stack(|| script(include_str!("connection/array_functions.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {
