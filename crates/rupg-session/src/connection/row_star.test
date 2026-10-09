@@ -1,0 +1,156 @@
+> SELECT acldefault('r', 10), acldefault('s', 10), acldefault('d', 10), acldefault('f', 10)
+fields acldefault:1034:-1:-1,acldefault:1034:-1:-1,acldefault:1034:-1:-1,acldefault:1034:-1:-1
+row {postgres=arwdDxtm/postgres},{postgres=rwU/postgres},{=Tc/postgres,postgres=CTc/postgres},{=X/postgres,postgres=X/postgres}
+SELECT 1
+> SELECT acldefault('l', 10), acldefault('L', 10), acldefault('n', 10), acldefault('p', 10)
+fields acldefault:1034:-1:-1,acldefault:1034:-1:-1,acldefault:1034:-1:-1,acldefault:1034:-1:-1
+row {=U/postgres,postgres=U/postgres},{postgres=rw/postgres},{postgres=UC/postgres},{postgres=sA/postgres}
+SELECT 1
+> SELECT acldefault('t', 10), acldefault('F', 10), acldefault('S', 10), acldefault('T', 10)
+fields acldefault:1034:-1:-1,acldefault:1034:-1:-1,acldefault:1034:-1:-1,acldefault:1034:-1:-1
+row {postgres=C/postgres},{postgres=U/postgres},{postgres=U/postgres},{=U/postgres,postgres=U/postgres}
+SELECT 1
+> SELECT acldefault('c', 10), cardinality(acldefault('c', 10)), acldefault('r', 123456), acldefault('T', 6171)
+fields acldefault:1034:-1:-1,cardinality:23:4:-1,acldefault:1034:-1:-1,acldefault:1034:-1:-1
+row {},0,{123456=arwdDxtm/123456},{=U/pg_database_owner,pg_database_owner=U/pg_database_owner}
+SELECT 1
+> SELECT acldefault('x', 10)
+ERROR XX000 unrecognized object type abbreviation: x
+> SELECT acldefault('r', NULL) IS NULL AS a, acldefault(NULL, 10) IS NULL AS b
+fields a:16:1:-1,b:16:1:-1
+row t,t
+SELECT 1
+> SELECT (aclexplode(acldefault('d', 10))).*
+fields grantor:26:4:-1,grantee:26:4:-1,privilege_type:25:-1:-1,is_grantable:16:1:-1
+row 10,0,TEMPORARY,f
+row 10,0,CONNECT,f
+row 10,10,CREATE,f
+row 10,10,TEMPORARY,f
+row 10,10,CONNECT,f
+SELECT 5
+> SELECT (a).* FROM (SELECT aclexplode(acldefault('f', 10)) AS a) s
+fields grantor:26:4:-1,grantee:26:4:-1,privilege_type:25:-1:-1,is_grantable:16:1:-1
+row 10,0,EXECUTE,f
+row 10,10,EXECUTE,f
+SELECT 2
+> SELECT relname, (aclexplode(coalesce(relacl, acldefault('r', relowner)))).* FROM pg_class WHERE relname IN ('pg_am', 'pg_authid') ORDER BY 1, 4
+fields relname@pg_class.2:19:64:-1,grantor:26:4:-1,grantee:26:4:-1,privilege_type:25:-1:-1,is_grantable:16:1:-1
+row pg_am,10,10,DELETE,f
+row pg_am,10,10,INSERT,f
+row pg_am,10,10,MAINTAIN,f
+row pg_am,10,10,REFERENCES,f
+row pg_am,10,0,SELECT,f
+row pg_am,10,10,SELECT,f
+row pg_am,10,10,TRIGGER,f
+row pg_am,10,10,TRUNCATE,f
+row pg_am,10,10,UPDATE,f
+row pg_authid,10,10,DELETE,f
+row pg_authid,10,10,INSERT,f
+row pg_authid,10,10,MAINTAIN,f
+row pg_authid,10,10,REFERENCES,f
+row pg_authid,10,10,SELECT,f
+row pg_authid,10,10,TRIGGER,f
+row pg_authid,10,10,TRUNCATE,f
+row pg_authid,10,10,UPDATE,f
+SELECT 17
+> SELECT * FROM (SELECT oid > 0 AS ok, (aclexplode(coalesce(relacl, acldefault('r', relowner)))).* FROM pg_class WHERE relname = 'pg_am') AS x (ok, grantor, grantee, prtype, grantable)
+fields ok:16:1:-1,grantor:26:4:-1,grantee:26:4:-1,prtype:25:-1:-1,grantable:16:1:-1
+row t,10,10,INSERT,f
+row t,10,10,SELECT,f
+row t,10,10,UPDATE,f
+row t,10,10,DELETE,f
+row t,10,10,TRUNCATE,f
+row t,10,10,REFERENCES,f
+row t,10,10,TRIGGER,f
+row t,10,10,MAINTAIN,f
+row t,10,0,SELECT,f
+SELECT 9
+> SELECT (c).* FROM (SELECT 1 AS a, 'x' AS b) c
+fields a:23:4:-1,b:25:-1:-1
+row 1,x
+SELECT 1
+> SELECT (c).*, 3 AS z FROM (SELECT 1 AS a, 2 AS a) c
+fields a:23:4:-1,a:23:4:-1,z:23:4:-1
+row 1,2,3
+SELECT 1
+> SELECT (pg_get_keywords()).word LIMIT 2
+fields word:25:-1:-1
+row abort
+row absent
+SELECT 2
+> SELECT (pg_get_keywords()).* LIMIT 2
+fields word:25:-1:-1,catcode:18:1:-1,barelabel:16:1:-1,catdesc:25:-1:-1,baredesc:25:-1:-1
+row abort,U,t,unreserved,can be bare label
+row absent,U,t,unreserved,can be bare label
+SELECT 2
+> SELECT (1).*
+ERROR 42809 type integer is not composite
+> SELECT (1, 2) = (1, 2) AS a, (1, 2) = (1, 3) AS b, (1, NULL) = (1, 2) AS c, (1, NULL) = (2, 2) AS d
+fields a:16:1:-1,b:16:1:-1,c:16:1:-1,d:16:1:-1
+row t,f,NULL,f
+SELECT 1
+> SELECT (1, 'a') <> (1, 'b') AS a, (1, 'a') <> (1, 'a') AS b, (NULL, 'a') <> (1, 'b') AS c, (NULL, 'a') <> (1, 'a') AS d
+fields a:16:1:-1,b:16:1:-1,c:16:1:-1,d:16:1:-1
+row t,f,t,NULL
+SELECT 1
+> SELECT (1, 2.5) = (1.0, 2.5) AS a, ('x'::text, 1::int2) = ('x'::name, 1::int8) AS b
+fields a:16:1:-1,b:16:1:-1
+row t,t
+SELECT 1
+> SELECT (1) = (1) AS a
+fields a:16:1:-1
+row t
+SELECT 1
+> SELECT (1, 2) = (1, 2, 3)
+ERROR 42601 unequal number of entries in row expressions at 15
+> SELECT (1, 'a') = (1, 2)
+ERROR 22P02 invalid input syntax for type integer: "a" at 12
+> SELECT (1, true) = (1, 1)
+ERROR 42883 operator does not exist: boolean = integer at 18
+> SELECT relname FROM pg_class WHERE (relnamespace, relname) = ('pg_catalog'::regnamespace, 'pg_am')
+fields relname@pg_class.2:19:64:-1
+row pg_am
+SELECT 1
+> SELECT count(*) > 0 AS ok FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace AND (n.nspname, c.relkind) <> ('pg_catalog', 'r')
+fields ok:16:1:-1
+row t
+SELECT 1
+> CREATE VIEW rc_v AS SELECT relname FROM pg_class WHERE (relnamespace, relname) = ('pg_catalog'::regnamespace, 'pg_am') OR (relkind, relname) <> ('r', 'x')
+CREATE VIEW
+> SELECT pg_get_viewdef('rc_v'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT relname
+   FROM pg_class
+  WHERE (((relnamespace = ('pg_catalog'::regnamespace)::oid) AND (relname = 'pg_am'::name)) OR ((relkind <> 'r'::"char") OR (relname <> 'x'::name)));
+SELECT 1
+> CREATE VIEW st_v AS SELECT relname, (aclexplode(coalesce(relacl, acldefault('r', relowner)))).* FROM pg_class
+CREATE VIEW
+> SELECT pg_get_viewdef('st_v'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT relname,
+    (aclexplode(COALESCE(relacl, acldefault('r'::"char", relowner)))).grantor AS grantor,
+    (aclexplode(COALESCE(relacl, acldefault('r'::"char", relowner)))).grantee AS grantee,
+    (aclexplode(COALESCE(relacl, acldefault('r'::"char", relowner)))).privilege_type AS privilege_type,
+    (aclexplode(COALESCE(relacl, acldefault('r'::"char", relowner)))).is_grantable AS is_grantable
+   FROM pg_class;
+SELECT 1
+> SELECT attname, atttypid::regtype FROM pg_attribute WHERE attrelid = 'st_v'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1
+row relname,name
+row grantor,oid
+row grantee,oid
+row privilege_type,text
+row is_grantable,boolean
+SELECT 5
+> SELECT * FROM st_v WHERE relname = 'pg_am'
+fields relname@st_v.1:19:64:-1,grantor@st_v.2:26:4:-1,grantee@st_v.3:26:4:-1,privilege_type@st_v.4:25:-1:-1,is_grantable@st_v.5:16:1:-1
+row pg_am,10,10,INSERT,f
+row pg_am,10,10,SELECT,f
+row pg_am,10,10,UPDATE,f
+row pg_am,10,10,DELETE,f
+row pg_am,10,10,TRUNCATE,f
+row pg_am,10,10,REFERENCES,f
+row pg_am,10,10,TRIGGER,f
+row pg_am,10,10,MAINTAIN,f
+row pg_am,10,0,SELECT,f
+SELECT 9

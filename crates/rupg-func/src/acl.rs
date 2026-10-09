@@ -1,4 +1,4 @@
-//! The access privilege inquiry functions: `has_table_privilege` and the other `has_*_privilege` functions, and `pg_has_role`.
+//! The access privilege inquiry functions: `has_table_privilege` and the other `has_*_privilege` functions, `pg_has_role`, and `acldefault` and `aclexplode`, which give the items of an `aclitem[]` value.
 //!
 //! A port of the functions of `src/backend/utils/adt/acl.c` and of the checks of `aclchk.c` that they call. The privileges are the `aclitem[]` values of the static rows, which have the privileges that `initdb` gives. Each function has forms with a role name or OID first, or no role for the current user, and with the object as text or as an OID. The form of a call is clear from its values: a name is text and an OID is an OID. A form with the OID of an object that does not exist gives null.
 
@@ -270,6 +270,9 @@ enum AclKind {
     Tablespace,
     Type,
     Other,
+    Column,
+    LargeObject,
+    Parameter,
 }
 
 /// `acldefault`: the privileges of an object with a null ACL, as (grantee, bits). The owner has all the privileges of the kind, and PUBLIC has some of them on some kinds.
@@ -283,13 +286,18 @@ fn acl_default(kind: AclKind, owner: u32) -> Vec<(u32, u32)> {
         AclKind::Schema => (0, "UC"),
         AclKind::Tablespace => (0, "C"),
         AclKind::Other => (0, "U"),
+        AclKind::Column => (0, ""),
+        AclKind::LargeObject => (0, "rw"),
+        AclKind::Parameter => (0, "sA"),
     };
     let all = all.chars().filter_map(|c| RIGHTS.find(c)).fold(0, |bits, at| bits | 1 << at);
     let mut items = Vec::new();
     if world != 0 {
         items.push((PUBLIC, world));
     }
-    items.push((owner, all));
+    if all != 0 {
+        items.push((owner, all));
+    }
     items
 }
 
@@ -451,7 +459,7 @@ fn owned_kind(kind: Owned) -> AclKind {
         Owned::Language => AclKind::Language,
         Owned::Tablespace => AclKind::Tablespace,
         Owned::ForeignDataWrapper | Owned::ForeignServer => AclKind::Other,
-        Owned::LargeObject => AclKind::Sequence,
+        Owned::LargeObject => AclKind::LargeObject,
     }
 }
 
@@ -777,6 +785,82 @@ pub(crate) fn aclexplode(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Valu
     Ok(rows)
 }
 
+/// `putid`: the name of a role in an `aclitem` value, in double quotes when it has a character that is not alphanumeric or `_`. A role that does not exist shows as its OID.
+fn put_role(out: &mut String, role: u32) {
+    let Some(row) = builtin::roles().iter().find(|r| r.oid == role) else {
+        out.push_str(&role.to_string());
+        return;
+    };
+    if row.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+        out.push_str(row.name);
+        return;
+    }
+    out.push('"');
+    for c in row.name.chars() {
+        if c == '"' {
+            out.push('"');
+        }
+        out.push(c);
+    }
+    out.push('"');
+}
+
+/// `aclitemout`: the text of an item with no grant options, as `grantee=privileges/grantor`. The grantee of PUBLIC is empty.
+fn acl_item(grantee: u32, bits: u32, grantor: u32) -> String {
+    let mut out = String::new();
+    if grantee != PUBLIC {
+        put_role(&mut out, grantee);
+    }
+    out.push('=');
+    for (bit, letter) in RIGHTS.chars().enumerate() {
+        if bits & (1 << bit) != 0 {
+            out.push(letter);
+            if bits & go(1 << bit) != 0 {
+                out.push('*');
+            }
+        }
+    }
+    out.push('/');
+    put_role(&mut out, grantor);
+    out
+}
+
+/// `acldefault(char, oid)`: the privileges of an object of a kind with a null ACL and this owner, as an `aclitem[]` value.
+///
+/// # Errors
+///
+/// `XX000` for a letter that is not the letter of a kind.
+fn acldefault(_call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (Some(Value::Char(kind)), Some(Value::Oid(owner))) = (args.first(), args.get(1)) else {
+        return Err(bad_value());
+    };
+    let kind = match kind {
+        b'c' => AclKind::Column,
+        b'r' => AclKind::Table,
+        b's' => AclKind::Sequence,
+        b'd' => AclKind::Database,
+        b'f' => AclKind::Function,
+        b'l' => AclKind::Language,
+        b'L' => AclKind::LargeObject,
+        b'n' => AclKind::Schema,
+        b'p' => AclKind::Parameter,
+        b't' => AclKind::Tablespace,
+        b'F' | b'S' => AclKind::Other,
+        b'T' => AclKind::Type,
+        other => {
+            return Err(Error::internal(format!(
+                "unrecognized object type abbreviation: {}",
+                char::from(*other)
+            )));
+        }
+    };
+    let items = acl_default(kind, *owner)
+        .into_iter()
+        .map(|(grantee, bits)| Some(Value::text(acl_item(grantee, bits, *owner))))
+        .collect();
+    Ok(Value::Array(Box::new(rupg_types::Array::one(items))))
+}
+
 /// `row_security_active(oid)` and `row_security_active(text)`: true when row security applies to the relation for the current user. No relation of rupg has row security, so the result is false. A name of a relation that does not exist is an error.
 fn row_security_active(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     if let Some(Value::Text(name)) = args.first() {
@@ -788,6 +872,9 @@ fn row_security_active(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     if matches!(src, "row_security_active" | "row_security_active_name") {
         return Some(row_security_active);
+    }
+    if src == "acldefault_sql" {
+        return Some(acldefault);
     }
     let family = if src.starts_with("pg_has_role") {
         "pg_has_role"
