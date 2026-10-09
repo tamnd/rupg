@@ -1,6 +1,6 @@
 //! The catalog that the sessions of a server share, the lock of the statements that change it, and the table of the sessions.
 
-use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
@@ -21,6 +21,8 @@ pub struct Store {
     tasks: Option<Arc<dyn Tasks>>,
     /// The table of the sessions, `BackendStatusArray`. The index of a slot is the number of its session.
     backends: Mutex<Vec<Option<Backend>>>,
+    /// The time of the last reset of the statistics of the whole server, or 0 before the first session. PostgreSQL resets them when it starts with no statistics file, so the start of the first session sets it.
+    stats_reset: AtomicI64,
 }
 
 #[derive(Debug)]
@@ -87,6 +89,12 @@ impl Store {
 
     /// `pgstat_bestart`: puts a session in the first free slot of the table, and gives the number of the slot.
     pub(crate) fn join(&self, mut backend: Backend) -> i32 {
+        let _ = self.stats_reset.compare_exchange(
+            0,
+            backend.backend_start,
+            Ordering::Relaxed,
+            Ordering::Relaxed,
+        );
         let mut backends = self.backends_mut();
         let slot = backends.iter().position(Option::is_none).unwrap_or(backends.len());
         let number = i32::try_from(slot).unwrap_or(i32::MAX);
@@ -115,6 +123,11 @@ impl Store {
         {
             change(backend);
         }
+    }
+
+    /// The time of the last reset of the statistics of the whole server, or 0 before the first session.
+    pub(crate) fn stats_reset(&self) -> i64 {
+        self.stats_reset.load(Ordering::Relaxed)
     }
 
     /// `pgstat_read_current_status`: a copy of the rows of the table, in the order of their numbers.

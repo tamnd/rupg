@@ -1,0 +1,209 @@
+> SELECT backend_type, object, context, reads IS NULL AS r, read_bytes IS NULL AS rb, read_time IS NULL AS rt, writes IS NULL AS w, write_bytes IS NULL AS wb, write_time IS NULL AS wt, writebacks IS NULL AS wbk, writeback_time IS NULL AS wbt, extends IS NULL AS e, extend_bytes IS NULL AS eb, extend_time IS NULL AS et, hits IS NULL AS h, evictions IS NULL AS ev, reuses IS NULL AS ru, fsyncs IS NULL AS f, fsync_time IS NULL AS ft, stats_reset IS NULL AS sr FROM pg_stat_io
+fields backend_type@pg_stat_io.1:25:-1:-1,object@pg_stat_io.2:25:-1:-1,context@pg_stat_io.3:25:-1:-1,r:16:1:-1,rb:16:1:-1,rt:16:1:-1,w:16:1:-1,wb:16:1:-1,wt:16:1:-1,wbk:16:1:-1,wbt:16:1:-1,e:16:1:-1,eb:16:1:-1,et:16:1:-1,h:16:1:-1,ev:16:1:-1,ru:16:1:-1,f:16:1:-1,ft:16:1:-1,sr:16:1:-1
+row client backend,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row client backend,relation,bulkwrite,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row client backend,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row client backend,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row client backend,relation,vacuum,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row client backend,temp relation,normal,f,f,f,f,f,f,t,t,f,f,f,f,f,t,t,t,f
+row client backend,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row client backend,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row autovacuum launcher,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row autovacuum launcher,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row autovacuum launcher,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row autovacuum launcher,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row autovacuum launcher,wal,normal,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row autovacuum worker,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row autovacuum worker,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row autovacuum worker,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row autovacuum worker,relation,vacuum,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row autovacuum worker,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row autovacuum worker,wal,normal,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row background worker,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row background worker,relation,bulkwrite,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row background worker,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row background worker,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row background worker,relation,vacuum,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row background worker,temp relation,normal,f,f,f,f,f,f,t,t,f,f,f,f,f,t,t,t,f
+row background worker,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row background worker,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row walsender,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row walsender,relation,bulkwrite,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row walsender,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row walsender,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row walsender,relation,vacuum,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row walsender,temp relation,normal,f,f,f,f,f,f,t,t,f,f,f,f,f,t,t,t,f
+row walsender,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row walsender,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row slotsync worker,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row slotsync worker,relation,bulkwrite,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row slotsync worker,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row slotsync worker,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row slotsync worker,relation,vacuum,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row slotsync worker,temp relation,normal,f,f,f,f,f,f,t,t,f,f,f,f,f,t,t,t,f
+row slotsync worker,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row slotsync worker,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row standalone backend,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row standalone backend,relation,bulkwrite,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row standalone backend,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row standalone backend,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row standalone backend,relation,vacuum,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row standalone backend,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row standalone backend,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row background writer,relation,init,t,t,t,f,f,f,f,f,t,t,t,t,t,t,f,f,f
+row background writer,relation,normal,t,t,t,f,f,f,f,f,t,t,t,t,t,t,f,f,f
+row background writer,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row background writer,wal,normal,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row checkpointer,relation,init,t,t,t,f,f,f,f,f,t,t,t,t,t,t,f,f,f
+row checkpointer,relation,normal,t,t,t,f,f,f,f,f,t,t,t,t,t,t,f,f,f
+row checkpointer,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row checkpointer,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row io worker,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row io worker,relation,bulkwrite,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row io worker,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row io worker,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row io worker,relation,vacuum,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row io worker,temp relation,normal,f,f,f,f,f,f,t,t,f,f,f,f,f,t,t,t,f
+row io worker,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row io worker,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row startup,relation,bulkread,f,f,f,f,f,f,f,f,t,t,t,f,f,f,t,t,f
+row startup,relation,bulkwrite,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row startup,relation,init,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row startup,relation,normal,f,f,f,f,f,f,f,f,f,f,f,f,f,t,f,f,f
+row startup,relation,vacuum,f,f,f,f,f,f,f,f,f,f,f,f,f,f,t,t,f
+row startup,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row startup,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row walreceiver,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row walreceiver,wal,normal,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row walsummarizer,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row walsummarizer,wal,normal,f,f,f,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row walwriter,wal,init,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+row walwriter,wal,normal,t,t,t,f,f,f,t,t,t,t,t,t,t,t,f,f,f
+SELECT 79
+> SELECT count(*) FROM pg_stat_io
+fields count:20:8:-1
+row 79
+SELECT 1
+> SELECT count(*) FROM pg_stat_io WHERE reads < 0 OR read_bytes < 0 OR read_time < 0 OR writes < 0 OR write_bytes < 0 OR write_time < 0 OR writebacks < 0 OR writeback_time < 0 OR extends < 0 OR extend_bytes < 0 OR extend_time < 0 OR hits < 0 OR evictions < 0 OR reuses < 0 OR fsyncs < 0 OR fsync_time < 0
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM pg_stat_io WHERE false
+fields backend_type@pg_stat_io.1:25:-1:-1,object@pg_stat_io.2:25:-1:-1,context@pg_stat_io.3:25:-1:-1,reads@pg_stat_io.4:20:8:-1,read_bytes@pg_stat_io.5:1700:-1:-1,read_time@pg_stat_io.6:701:8:-1,writes@pg_stat_io.7:20:8:-1,write_bytes@pg_stat_io.8:1700:-1:-1,write_time@pg_stat_io.9:701:8:-1,writebacks@pg_stat_io.10:20:8:-1,writeback_time@pg_stat_io.11:701:8:-1,extends@pg_stat_io.12:20:8:-1,extend_bytes@pg_stat_io.13:1700:-1:-1,extend_time@pg_stat_io.14:701:8:-1,hits@pg_stat_io.15:20:8:-1,evictions@pg_stat_io.16:20:8:-1,reuses@pg_stat_io.17:20:8:-1,fsyncs@pg_stat_io.18:20:8:-1,fsync_time@pg_stat_io.19:701:8:-1,stats_reset@pg_stat_io.20:1184:8:-1
+SELECT 0
+> SELECT * FROM pg_stat_bgwriter WHERE false
+fields buffers_clean@pg_stat_bgwriter.1:20:8:-1,maxwritten_clean@pg_stat_bgwriter.2:20:8:-1,buffers_alloc@pg_stat_bgwriter.3:20:8:-1,stats_reset@pg_stat_bgwriter.4:1184:8:-1
+SELECT 0
+> SELECT buffers_clean >= 0, maxwritten_clean >= 0, buffers_alloc >= 0, stats_reset IS NULL FROM pg_stat_bgwriter
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f
+SELECT 1
+> SELECT * FROM pg_stat_checkpointer WHERE false
+fields num_timed@pg_stat_checkpointer.1:20:8:-1,num_requested@pg_stat_checkpointer.2:20:8:-1,num_done@pg_stat_checkpointer.3:20:8:-1,restartpoints_timed@pg_stat_checkpointer.4:20:8:-1,restartpoints_req@pg_stat_checkpointer.5:20:8:-1,restartpoints_done@pg_stat_checkpointer.6:20:8:-1,write_time@pg_stat_checkpointer.7:701:8:-1,sync_time@pg_stat_checkpointer.8:701:8:-1,buffers_written@pg_stat_checkpointer.9:20:8:-1,slru_written@pg_stat_checkpointer.10:20:8:-1,stats_reset@pg_stat_checkpointer.11:1184:8:-1
+SELECT 0
+> SELECT num_timed >= 0, num_requested >= 0, num_done >= 0, restartpoints_timed >= 0, restartpoints_req >= 0, restartpoints_done >= 0, write_time >= 0, sync_time >= 0, buffers_written >= 0, slru_written >= 0, stats_reset IS NULL FROM pg_stat_checkpointer
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,t,t,t,t,t,t,f
+SELECT 1
+> SELECT * FROM pg_stat_wal WHERE false
+fields wal_records@pg_stat_wal.1:20:8:-1,wal_fpi@pg_stat_wal.2:20:8:-1,wal_bytes@pg_stat_wal.3:1700:-1:-1,wal_fpi_bytes@pg_stat_wal.4:1700:-1:-1,wal_buffers_full@pg_stat_wal.5:20:8:-1,stats_reset@pg_stat_wal.6:1184:8:-1
+SELECT 0
+> SELECT wal_records >= 0, wal_fpi >= 0, wal_bytes >= 0, wal_fpi_bytes >= 0, wal_buffers_full >= 0, stats_reset IS NULL FROM pg_stat_wal
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,t,f
+SELECT 1
+> SELECT * FROM pg_stat_archiver WHERE false
+fields archived_count@pg_stat_archiver.1:20:8:-1,last_archived_wal@pg_stat_archiver.2:25:-1:-1,last_archived_time@pg_stat_archiver.3:1184:8:-1,failed_count@pg_stat_archiver.4:20:8:-1,last_failed_wal@pg_stat_archiver.5:25:-1:-1,last_failed_time@pg_stat_archiver.6:1184:8:-1,stats_reset@pg_stat_archiver.7:1184:8:-1
+SELECT 0
+> SELECT archived_count, last_archived_wal, last_archived_time, failed_count, last_failed_wal, last_failed_time, stats_reset IS NULL FROM pg_stat_archiver
+fields archived_count@pg_stat_archiver.1:20:8:-1,last_archived_wal@pg_stat_archiver.2:25:-1:-1,last_archived_time@pg_stat_archiver.3:1184:8:-1,failed_count@pg_stat_archiver.4:20:8:-1,last_failed_wal@pg_stat_archiver.5:25:-1:-1,last_failed_time@pg_stat_archiver.6:1184:8:-1,?column?:16:1:-1
+row 0,NULL,NULL,0,NULL,NULL,f
+SELECT 1
+> SELECT * FROM pg_stat_slru WHERE false
+fields name@pg_stat_slru.1:25:-1:-1,blks_zeroed@pg_stat_slru.2:20:8:-1,blks_hit@pg_stat_slru.3:20:8:-1,blks_read@pg_stat_slru.4:20:8:-1,blks_written@pg_stat_slru.5:20:8:-1,blks_exists@pg_stat_slru.6:20:8:-1,flushes@pg_stat_slru.7:20:8:-1,truncates@pg_stat_slru.8:20:8:-1,stats_reset@pg_stat_slru.9:1184:8:-1
+SELECT 0
+> SELECT name, blks_zeroed >= 0, blks_hit >= 0, blks_read >= 0, blks_written >= 0, blks_exists >= 0, flushes >= 0, truncates >= 0, stats_reset IS NULL FROM pg_stat_slru
+fields name@pg_stat_slru.1:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row commit_timestamp,t,t,t,t,t,t,t,f
+row multixact_member,t,t,t,t,t,t,t,f
+row multixact_offset,t,t,t,t,t,t,t,f
+row notify,t,t,t,t,t,t,t,f
+row serializable,t,t,t,t,t,t,t,f
+row subtransaction,t,t,t,t,t,t,t,f
+row transaction,t,t,t,t,t,t,t,f
+row other,t,t,t,t,t,t,t,f
+SELECT 8
+> SELECT * FROM pg_stat_recovery_prefetch WHERE false
+fields stats_reset@pg_stat_recovery_prefetch.1:1184:8:-1,prefetch@pg_stat_recovery_prefetch.2:20:8:-1,hit@pg_stat_recovery_prefetch.3:20:8:-1,skip_init@pg_stat_recovery_prefetch.4:20:8:-1,skip_new@pg_stat_recovery_prefetch.5:20:8:-1,skip_fpw@pg_stat_recovery_prefetch.6:20:8:-1,skip_rep@pg_stat_recovery_prefetch.7:20:8:-1,wal_distance@pg_stat_recovery_prefetch.8:23:4:-1,block_distance@pg_stat_recovery_prefetch.9:23:4:-1,io_depth@pg_stat_recovery_prefetch.10:23:4:-1
+SELECT 0
+> SELECT stats_reset IS NULL, prefetch, hit, skip_init, skip_new, skip_fpw, skip_rep, wal_distance, block_distance, io_depth FROM pg_stat_recovery_prefetch
+fields ?column?:16:1:-1,prefetch@pg_stat_recovery_prefetch.2:20:8:-1,hit@pg_stat_recovery_prefetch.3:20:8:-1,skip_init@pg_stat_recovery_prefetch.4:20:8:-1,skip_new@pg_stat_recovery_prefetch.5:20:8:-1,skip_fpw@pg_stat_recovery_prefetch.6:20:8:-1,skip_rep@pg_stat_recovery_prefetch.7:20:8:-1,wal_distance@pg_stat_recovery_prefetch.8:23:4:-1,block_distance@pg_stat_recovery_prefetch.9:23:4:-1,io_depth@pg_stat_recovery_prefetch.10:23:4:-1
+row f,0,0,0,0,0,0,0,0,0
+SELECT 1
+> SELECT * FROM pg_stat_lock WHERE false
+fields locktype@pg_stat_lock.1:25:-1:-1,waits@pg_stat_lock.2:20:8:-1,wait_time@pg_stat_lock.3:701:8:-1,fastpath_exceeded@pg_stat_lock.4:20:8:-1,stats_reset@pg_stat_lock.5:1184:8:-1
+SELECT 0
+> SELECT locktype, waits >= 0, wait_time >= 0, fastpath_exceeded >= 0, stats_reset IS NULL FROM pg_stat_lock
+fields locktype@pg_stat_lock.1:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row relation,t,t,t,f
+row extend,t,t,t,f
+row frozenid,t,t,t,f
+row page,t,t,t,f
+row tuple,t,t,t,f
+row transactionid,t,t,t,f
+row virtualxid,t,t,t,f
+row spectoken,t,t,t,f
+row object,t,t,t,f
+row userlock,t,t,t,f
+row advisory,t,t,t,f
+row applytransaction,t,t,t,f
+SELECT 12
+> SELECT pg_stat_get_bgwriter_buf_written_clean() >= 0, pg_stat_get_bgwriter_maxwritten_clean() >= 0, pg_stat_get_buf_alloc() >= 0, pg_stat_get_bgwriter_stat_reset_time() IS NULL
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f
+SELECT 1
+> SELECT pg_typeof(pg_stat_get_checkpointer_write_time()), pg_typeof(pg_stat_get_checkpointer_sync_time()), pg_typeof(pg_stat_get_checkpointer_slru_written()), pg_typeof(pg_stat_get_checkpointer_stat_reset_time())
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row double precision,double precision,bigint,timestamp with time zone
+SELECT 1
+> SELECT count(*) FROM pg_stat_get_io()
+fields count:20:8:-1
+row 79
+SELECT 1
+> SELECT count(*), count(DISTINCT backend_type), count(DISTINCT object), count(DISTINCT context) FROM pg_stat_io
+fields count:20:8:-1,count:20:8:-1,count:20:8:-1,count:20:8:-1
+row 79,14,3,5
+SELECT 1
+> SELECT backend_type, count(*) FROM pg_stat_io GROUP BY backend_type ORDER BY backend_type
+fields backend_type@pg_stat_io.1:25:-1:-1,count:20:8:-1
+row autovacuum launcher,5
+row autovacuum worker,6
+row background worker,8
+row background writer,4
+row checkpointer,4
+row client backend,8
+row io worker,8
+row slotsync worker,8
+row standalone backend,7
+row startup,7
+row walreceiver,2
+row walsender,8
+row walsummarizer,2
+row walwriter,2
+SELECT 14
+> SELECT count(*) FROM pg_stat_get_slru()
+fields count:20:8:-1
+row 8
+SELECT 1
+> SELECT count(*) FROM pg_stat_get_lock()
+fields count:20:8:-1
+row 12
+SELECT 1
+> SELECT wal_records >= 0 FROM pg_stat_get_wal()
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT failed_count FROM pg_stat_get_archiver()
+fields failed_count:20:8:-1
+row 0
+SELECT 1

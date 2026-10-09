@@ -19,6 +19,7 @@ mod network;
 mod reg;
 mod regex;
 mod replication;
+mod shared;
 mod srf;
 mod stat;
 mod text;
@@ -98,6 +99,10 @@ pub trait Session {
     }
     /// `pgstat_clear_snapshot`: drops the snapshot of the table of the sessions.
     fn clear_backends(&self) {}
+    /// The time of the last reset of the statistics of the whole server in microseconds since 2000-01-01 UTC, or 0 when the session has no server.
+    fn stats_reset(&self) -> i64 {
+        0
+    }
     /// The two ends of the connection of the session: the client, then the server.
     fn addresses(&self) -> (Client, Client) {
         (Client::Unknown, Client::Unknown)
@@ -187,6 +192,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| network::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
+        .or_else(|| shared::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.
