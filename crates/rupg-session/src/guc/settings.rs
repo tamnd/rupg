@@ -29,6 +29,33 @@ pub enum Source {
     Session,
 }
 
+impl Source {
+    /// The text of the `source` column of `pg_settings`, from `GucSource_Names` in `guc_tables.c`.
+    #[must_use]
+    pub const fn name(self) -> &'static str {
+        match self {
+            Source::Default => "default",
+            Source::File => "configuration file",
+            Source::Argument => "command line",
+            Source::Client => "client",
+            Source::Session => "session",
+        }
+    }
+}
+
+/// The columns of a row of `pg_settings` that change with the values of the session.
+#[derive(Clone, Debug)]
+pub struct Current {
+    /// The parameter of the row.
+    pub parameter: &'static Parameter,
+    /// The `setting` column: the value in the base unit, or the text of the show hook of the parameter.
+    pub setting: String,
+    /// The `source` column.
+    pub source: &'static str,
+    /// The `reset_val` column, or `None` for a string parameter that the server sets at start and that has no value yet.
+    pub reset: Option<String>,
+}
+
 /// What a statement does with a value.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Action {
@@ -603,7 +630,7 @@ impl Settings {
         }))
     }
 
-    /// `StartTransaction`: a new transaction takes `transaction_isolation`, `transaction_read_only` and `transaction_deferrable` from their defaults, or from the transaction before it after `AND CHAIN`. PostgreSQL sets the variables of these parameters directly, so the change is not in the stack of the transaction and the end of the transaction does not restore it.
+    /// `StartTransaction`: a new transaction takes `transaction_isolation`, `transaction_read_only` and `transaction_deferrable` from their defaults, or from the transaction before it after `AND CHAIN`. PostgreSQL sets the variables of these parameters directly, so the change is not in the stack of the transaction, the end of the transaction does not restore it, and the source of the value does not change.
     pub fn start_transaction(&mut self, chained: Option<Characteristics>) {
         self.snapshot = false;
         for (i, (name, default)) in CHARACTERISTICS.into_iter().enumerate() {
@@ -613,7 +640,11 @@ impl Settings {
                 None => self.setting(default),
             };
             if self.setting(parameter) != setting {
-                self.store_reset(parameter, Value { setting, source: Source::Default });
+                // The source stays, so `pg_settings` shows `session` after a `SET TRANSACTION` that committed, as in PostgreSQL.
+                let source = self
+                    .find_slot(lower(parameter.name).as_ref())
+                    .map_or(Source::Default, |slot| slot.current.source);
+                self.store_reset(parameter, Value { setting, source });
             }
         }
     }
@@ -704,6 +735,40 @@ impl Settings {
                     && (self.superuser || !parameter.has(flag::SUPERUSER_ONLY))
             })
             .map(|parameter| (parameter.name, self.shown(parameter), parameter.short_desc))
+    }
+
+    /// The parameters that `pg_show_all_settings` lists, which are those of `SHOW ALL` in the same order, each with the columns that [`Current`] holds, as `GetConfigOptionValues` gives them.
+    pub fn show_all_current(&self) -> impl Iterator<Item = Current> + '_ {
+        super::all()
+            .iter()
+            .filter(|parameter| {
+                !parameter.has(flag::NO_SHOW_ALL)
+                    && (self.superuser || !parameter.has(flag::SUPERUSER_ONLY))
+            })
+            .map(|parameter| self.current(parameter))
+    }
+
+    /// The row of `pg_settings` for one parameter.
+    fn current(&self, parameter: &'static Parameter) -> Current {
+        let slot = self.find_slot(lower(parameter.name).as_ref());
+        let value = slot.map_or_else(|| parameter.boot(), |slot| slot.current.setting.clone());
+        // `ShowGUCOption` without the units: a number in the base unit, unless a show hook gives the text.
+        let setting = match value {
+            Setting::Int(_) | Setting::Real(_) if !parameter.mode() => parameter.setting(&value),
+            _ => self.shown(parameter),
+        };
+        let source = match slot.map_or(Source::Default, |slot| slot.current.source) {
+            // `InitializeGUCOptions` sets the modes of the transaction with `PGC_S_OVERRIDE`.
+            Source::Default if CHARACTERISTICS.iter().any(|(name, _)| *name == parameter.name) => {
+                "override"
+            }
+            source => source.name(),
+        };
+        let reset = match slot {
+            Some(slot) => Some(parameter.setting(&slot.reset.setting)),
+            None => parameter.boot_text(),
+        };
+        Current { parameter, setting, source, reset }
     }
 
     /// The value of a parameter as `SHOW` gives it, with the show hooks of PostgreSQL.

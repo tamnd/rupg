@@ -1,4 +1,4 @@
-//! The set-returning functions that a query can call in `FROM`: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode` and `pg_get_keywords`.
+//! The set-returning functions that a query can call in `FROM`: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords` and `pg_show_all_settings`.
 //!
 //! A set kernel gives all the rows of the call at once, as a function of PostgreSQL in the materialize mode gives a tuplestore. Each row has one value for each column of the result: one value for a function of a scalar type, or one value for each `OUT` parameter.
 
@@ -27,6 +27,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_options_to_table" => options_to_table,
         "aclexplode" => crate::acl::aclexplode,
         "pg_get_keywords" => keywords,
+        "show_all_settings" => all_settings,
         _ => return None,
     };
     Some(kernel)
@@ -114,6 +115,11 @@ fn options_to_table(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
 }
 
 /// `pg_get_keywords`: each keyword of the parser with its category and its description, and whether it can be a column label without `AS`.
+/// `show_all_settings`: the parameters of the session with their values, which the view `pg_settings` reads.
+fn all_settings(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(call.session.all_settings())
+}
+
 fn keywords(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(rupg_sql::keywords()
         .iter()

@@ -1,0 +1,256 @@
+> SELECT count(*) FROM pg_settings
+fields count:20:8:-1
+row 419
+SELECT 1
+> SELECT name, setting, unit, category, short_desc, extra_desc, context, vartype, source, min_val, max_val, enumvals, boot_val, reset_val, sourcefile, sourceline, pending_restart FROM pg_settings WHERE name IN ('work_mem', 'search_path', 'enable_seqscan', 'random_page_cost', 'client_min_messages', 'unix_socket_permissions', 'archive_command', 'statement_timeout', 'transaction_isolation', 'transaction_read_only', 'timing_clock_source', 'data_directory_mode', 'log_file_mode', 'bytea_output', 'extra_float_digits', 'cursor_tuple_fraction', 'vacuum_cost_delay', 'tcp_keepalives_idle', 'in_hot_standby', 'IntervalStyle') ORDER BY name
+fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1,unit@pg_settings.3:25:-1:-1,category@pg_settings.4:25:-1:-1,short_desc@pg_settings.5:25:-1:-1,extra_desc@pg_settings.6:25:-1:-1,context@pg_settings.7:25:-1:-1,vartype@pg_settings.8:25:-1:-1,source@pg_settings.9:25:-1:-1,min_val@pg_settings.10:25:-1:-1,max_val@pg_settings.11:25:-1:-1,enumvals@pg_settings.12:1009:-1:-1,boot_val@pg_settings.13:25:-1:-1,reset_val@pg_settings.14:25:-1:-1,sourcefile@pg_settings.15:25:-1:-1,sourceline@pg_settings.16:23:4:-1,pending_restart@pg_settings.17:16:1:-1
+row IntervalStyle,postgres,NULL,Client Connection Defaults / Locale and Formatting,Sets the display format for interval values.,NULL,user,enum,default,NULL,NULL,{postgres,postgres_verbose,sql_standard,iso_8601},postgres,postgres,NULL,NULL,f
+row archive_command,(disabled),NULL,Write-Ahead Log / Archiving,Sets the shell command that will be called to archive a WAL file.,An empty string means use "archive_library".,sighup,string,default,NULL,NULL,NULL,,,NULL,NULL,f
+row bytea_output,hex,NULL,Client Connection Defaults / Statement Behavior,Sets the output format for bytea.,NULL,user,enum,default,NULL,NULL,{escape,hex},hex,hex,NULL,NULL,f
+row client_min_messages,notice,NULL,Client Connection Defaults / Statement Behavior,Sets the message levels that are sent to the client.,Each level includes all the levels that follow it. The later the level, the fewer messages are sent.,user,enum,default,NULL,NULL,{debug5,debug4,debug3,debug2,debug1,log,notice,warning,error},notice,notice,NULL,NULL,f
+row cursor_tuple_fraction,0.1,NULL,Query Tuning / Other Planner Options,Sets the planner's estimate of the fraction of a cursor's rows that will be retrieved.,NULL,user,real,default,0,1,NULL,0.1,0.1,NULL,NULL,f
+row data_directory_mode,0700,NULL,Preset Options,Shows the mode of the data directory.,The parameter value is a numeric mode specification in the form accepted by the chmod and umask system calls. (To use the customary octal format the number must start with a 0 (zero).),internal,integer,default,0,511,NULL,448,448,NULL,NULL,f
+row enable_seqscan,on,NULL,Query Tuning / Planner Method Configuration,Enables the planner's use of sequential-scan plans.,NULL,user,bool,default,NULL,NULL,NULL,on,on,NULL,NULL,f
+row extra_float_digits,1,NULL,Client Connection Defaults / Locale and Formatting,Sets the number of digits displayed for floating-point values.,This affects real, double precision, and geometric data types. A zero or negative parameter value is added to the standard number of digits (FLT_DIG or DBL_DIG as appropriate). Any value greater than zero selects precise output mode.,user,integer,default,-15,3,NULL,1,1,NULL,NULL,f
+row in_hot_standby,off,NULL,Preset Options,Shows whether hot standby is currently active.,NULL,internal,bool,default,NULL,NULL,NULL,off,off,NULL,NULL,f
+row log_file_mode,0600,NULL,Reporting and Logging / Where to Log,Sets the file permissions for log files.,The parameter value is expected to be a numeric mode specification in the form accepted by the chmod and umask system calls. (To use the customary octal format the number must start with a 0 (zero).),sighup,integer,default,0,511,NULL,384,384,NULL,NULL,f
+row random_page_cost,4,NULL,Query Tuning / Planner Cost Constants,Sets the planner's estimate of the cost of a nonsequentially fetched disk page.,NULL,user,real,default,0,1.79769e+308,NULL,4,4,NULL,NULL,f
+row search_path,"$user", public,NULL,Client Connection Defaults / Statement Behavior,Sets the schema search order for names that are not schema-qualified.,NULL,user,string,default,NULL,NULL,NULL,"$user", public,"$user", public,NULL,NULL,f
+row statement_timeout,0,ms,Client Connection Defaults / Statement Behavior,Sets the maximum allowed duration of any statement.,0 disables the timeout.,user,integer,default,0,2147483647,NULL,0,0,NULL,NULL,f
+row tcp_keepalives_idle,0,s,Connections and Authentication / TCP Settings,Time between issuing TCP keepalives.,0 means use the system default.,user,integer,default,0,2147483647,NULL,0,0,NULL,NULL,f
+row timing_clock_source,auto (system),NULL,Resource Usage / Time,Controls the clock source used for collecting timing measurements.,This enables the use of specialized clock sources, specifically the RDTSC clock source on x86-64 systems (if available), to support timing measurements with lower overhead during EXPLAIN and other instrumentation.,superuser,enum,default,NULL,NULL,{auto,system,tsc},auto,auto,NULL,NULL,f
+row transaction_isolation,read committed,NULL,Client Connection Defaults / Statement Behavior,Sets the current transaction's isolation level.,NULL,user,enum,override,NULL,NULL,{serializable,"repeatable read","read committed","read uncommitted"},read committed,read committed,NULL,NULL,f
+row transaction_read_only,off,NULL,Client Connection Defaults / Statement Behavior,Sets the current transaction's read-only status.,NULL,user,bool,override,NULL,NULL,NULL,off,off,NULL,NULL,f
+row unix_socket_permissions,0777,NULL,Connections and Authentication / Connection Settings,Sets the access permissions of the Unix-domain socket.,Unix-domain sockets use the usual Unix file system permission set. The parameter value is expected to be a numeric mode specification in the form accepted by the chmod and umask system calls. (To use the customary octal format the number must start with a 0 (zero).),postmaster,integer,default,0,511,NULL,511,511,NULL,NULL,f
+row vacuum_cost_delay,0,ms,Vacuuming / Cost-Based Vacuum Delay,Vacuum cost delay in milliseconds.,NULL,user,real,default,0,100,NULL,0,0,NULL,NULL,f
+row work_mem,4096,kB,Resource Usage / Memory,Sets the maximum memory to be used for query workspaces.,This much memory can be used by each internal sort operation and hash table before switching to temporary disk files.,user,integer,default,64,2147483647,NULL,4096,4096,NULL,NULL,f
+SELECT 20
+> SELECT * FROM pg_show_all_settings() WHERE name = 'work_mem'
+fields name:25:-1:-1,setting:25:-1:-1,unit:25:-1:-1,category:25:-1:-1,short_desc:25:-1:-1,extra_desc:25:-1:-1,context:25:-1:-1,vartype:25:-1:-1,source:25:-1:-1,min_val:25:-1:-1,max_val:25:-1:-1,enumvals:1009:-1:-1,boot_val:25:-1:-1,reset_val:25:-1:-1,sourcefile:25:-1:-1,sourceline:23:4:-1,pending_restart:16:1:-1
+row work_mem,4096,kB,Resource Usage / Memory,Sets the maximum memory to be used for query workspaces.,This much memory can be used by each internal sort operation and hash table before switching to temporary disk files.,user,integer,default,64,2147483647,NULL,4096,4096,NULL,NULL,f
+SELECT 1
+> SELECT name, vartype, enumvals FROM pg_settings WHERE vartype = 'enum' ORDER BY name LIMIT 6
+fields name@pg_settings.1:25:-1:-1,vartype@pg_settings.8:25:-1:-1,enumvals@pg_settings.12:1009:-1:-1
+row IntervalStyle,enum,{postgres,postgres_verbose,sql_standard,iso_8601}
+row archive_mode,enum,{always,on,off}
+row backslash_quote,enum,{safe_encoding,on,off}
+row bytea_output,enum,{escape,hex}
+row client_min_messages,enum,{debug5,debug4,debug3,debug2,debug1,log,notice,warning,error}
+row compute_query_id,enum,{auto,regress,on,off}
+SELECT 6
+> SELECT category, count(*) FROM pg_settings GROUP BY category ORDER BY category
+fields category@pg_settings.4:25:-1:-1,count:20:8:-1
+row Client Connection Defaults / Locale and Formatting,12
+row Client Connection Defaults / Other Defaults,3
+row Client Connection Defaults / Shared Library Preloading,4
+row Client Connection Defaults / Statement Behavior,27
+row Connections and Authentication / Authentication,9
+row Connections and Authentication / Connection Settings,10
+row Connections and Authentication / SSL,16
+row Connections and Authentication / TCP Settings,5
+row Developer Options,25
+row Error Handling,4
+row File Locations,6
+row Lock Management,5
+row Preset Options,22
+row Query Tuning / Genetic Query Optimizer,7
+row Query Tuning / Other Planner Options,8
+row Query Tuning / Planner Cost Constants,14
+row Query Tuning / Planner Method Configuration,25
+row Replication / Primary Server,2
+row Replication / Sending Servers,10
+row Replication / Standby Servers,12
+row Replication / Subscribers,4
+row Reporting and Logging / Process Title,2
+row Reporting and Logging / What to Log,24
+row Reporting and Logging / When to Log,7
+row Reporting and Logging / Where to Log,13
+row Resource Usage / Background Writer,4
+row Resource Usage / Disk,4
+row Resource Usage / I/O,11
+row Resource Usage / Kernel Resources,1
+row Resource Usage / Memory,22
+row Resource Usage / Time,1
+row Resource Usage / Worker Processes,5
+row Statistics / Cumulative Query and Index Statistics,8
+row Statistics / Monitoring,5
+row Vacuuming / Automatic Vacuuming,21
+row Vacuuming / Cost-Based Vacuum Delay,5
+row Vacuuming / Default Behavior,1
+row Vacuuming / Freezing,7
+row Version and Platform Compatibility / Other Platforms and Clients,2
+row Version and Platform Compatibility / Previous PostgreSQL Versions,6
+row Write-Ahead Log / Archive Recovery,3
+row Write-Ahead Log / Archiving,4
+row Write-Ahead Log / Checkpoints,6
+row Write-Ahead Log / Recovery,2
+row Write-Ahead Log / Recovery Target,8
+row Write-Ahead Log / Settings,15
+row Write-Ahead Log / Summarization,2
+SELECT 47
+> SELECT vartype, count(*) FROM pg_settings GROUP BY vartype ORDER BY vartype
+fields vartype@pg_settings.8:25:-1:-1,count:20:8:-1
+row bool,116
+row enum,42
+row integer,154
+row real,31
+row string,76
+SELECT 5
+> SELECT name FROM pg_settings WHERE context = 'internal' ORDER BY name
+fields name@pg_settings.1:25:-1:-1
+row block_size
+row data_checksums
+row data_directory_mode
+row debug_assertions
+row debug_exec_backend
+row effective_wal_level
+row huge_pages_status
+row in_hot_standby
+row integer_datetimes
+row max_function_args
+row max_identifier_length
+row max_index_keys
+row num_os_semaphores
+row segment_size
+row server_encoding
+row server_version
+row server_version_num
+row shared_memory_size
+row shared_memory_size_in_huge_pages
+row ssl_library
+row wal_block_size
+row wal_segment_size
+SELECT 22
+> SELECT name, setting FROM pg_settings WHERE name LIKE 'enable%' ORDER BY name
+fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1
+row enable_async_append,on
+row enable_bitmapscan,on
+row enable_distinct_reordering,on
+row enable_eager_aggregate,on
+row enable_gathermerge,on
+row enable_group_by_reordering,on
+row enable_hashagg,on
+row enable_hashjoin,on
+row enable_incremental_sort,on
+row enable_indexonlyscan,on
+row enable_indexscan,on
+row enable_material,on
+row enable_memoize,on
+row enable_mergejoin,on
+row enable_nestloop,on
+row enable_parallel_append,on
+row enable_parallel_hash,on
+row enable_partition_pruning,on
+row enable_partitionwise_aggregate,off
+row enable_partitionwise_join,off
+row enable_presorted_aggregate,on
+row enable_self_join_elimination,on
+row enable_seqscan,on
+row enable_sort,on
+row enable_tidscan,on
+SELECT 25
+> SET work_mem = '8MB'
+SET
+> SET search_path = s, public
+SET
+search_path=s, public
+> SET extra_float_digits = 2
+SET
+> SELECT name, setting, unit, source, reset_val FROM pg_settings WHERE name IN ('work_mem', 'search_path', 'extra_float_digits', 'enable_seqscan') ORDER BY name
+fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1,unit@pg_settings.3:25:-1:-1,source@pg_settings.9:25:-1:-1,reset_val@pg_settings.14:25:-1:-1
+row enable_seqscan,on,NULL,default,on
+row extra_float_digits,2,NULL,session,1
+row search_path,s, public,NULL,session,"$user", public
+row work_mem,8192,kB,session,4096
+SELECT 4
+> BEGIN
+BEGIN
+> SET LOCAL enable_seqscan = off
+SET
+> SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+SET
+> SELECT name, setting, source, reset_val FROM pg_settings WHERE name IN ('enable_seqscan', 'transaction_isolation') ORDER BY name
+fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1,reset_val@pg_settings.14:25:-1:-1
+row enable_seqscan,off,session,on
+row transaction_isolation,repeatable read,session,read committed
+SELECT 2
+> COMMIT
+COMMIT
+> SELECT name, setting, source, reset_val FROM pg_settings WHERE name IN ('enable_seqscan', 'transaction_isolation') ORDER BY name
+fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1,reset_val@pg_settings.14:25:-1:-1
+row enable_seqscan,on,default,on
+row transaction_isolation,read committed,session,read committed
+SELECT 2
+> SELECT set_config('random_page_cost', '1.5', false)
+fields set_config:25:-1:-1
+row 1.5
+SELECT 1
+> SELECT name, setting, source, reset_val FROM pg_settings WHERE name = 'random_page_cost'
+fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1,reset_val@pg_settings.14:25:-1:-1
+row random_page_cost,1.5,session,4
+SELECT 1
+> RESET work_mem
+RESET
+> RESET ALL
+RESET
+search_path="$user", public
+> SELECT name, setting, source, reset_val FROM pg_settings WHERE name IN ('work_mem', 'search_path', 'extra_float_digits', 'random_page_cost') ORDER BY name
+fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1,reset_val@pg_settings.14:25:-1:-1
+row extra_float_digits,1,default,1
+row random_page_cost,4,default,4
+row search_path,"$user", public,default,"$user", public
+row work_mem,4096,default,4096
+SELECT 4
+> SELECT s.name, s.setting, current_setting(s.name) FROM pg_settings s WHERE s.name IN ('work_mem', 'bytea_output', 'unix_socket_permissions', 'vacuum_cost_delay') ORDER BY 1
+fields name@pg_settings.1:25:-1:-1,setting@pg_settings.2:25:-1:-1,current_setting:25:-1:-1
+row bytea_output,hex,hex
+row unix_socket_permissions,0777,0777
+row vacuum_cost_delay,0,0
+row work_mem,4096,4MB
+SELECT 4
+> SELECT count(*) FROM pg_settings WHERE source = 'default' AND setting IS NULL
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN ISOLATION LEVEL REPEATABLE READ
+BEGIN
+> COMMIT
+COMMIT
+> SELECT setting, source FROM pg_settings WHERE name = 'transaction_isolation'
+fields setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1
+row read committed,session
+SELECT 1
+> BEGIN
+BEGIN
+> SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+SET
+> ROLLBACK
+ROLLBACK
+> SELECT setting, source FROM pg_settings WHERE name = 'transaction_isolation'
+fields setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1
+row read committed,session
+SELECT 1
+> BEGIN
+BEGIN
+> SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+SET
+> COMMIT
+COMMIT
+> SELECT setting, source FROM pg_settings WHERE name = 'transaction_isolation'
+fields setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1
+row read committed,session
+SELECT 1
+> SELECT setting, source FROM pg_settings WHERE name = 'transaction_isolation'
+fields setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1
+row read committed,session
+SELECT 1
+> BEGIN
+BEGIN
+> SET TRANSACTION READ ONLY
+SET
+> COMMIT
+COMMIT
+> SELECT setting, source FROM pg_settings WHERE name = 'transaction_read_only'
+fields setting@pg_settings.2:25:-1:-1,source@pg_settings.9:25:-1:-1
+row off,session
+SELECT 1
