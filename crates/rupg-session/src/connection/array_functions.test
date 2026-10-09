@@ -1,0 +1,98 @@
+> SELECT string_to_array('a,b,,c', ',') AS a, string_to_array('a,b,,c', ',', '') AS b
+fields a:1009:-1:-1,b:1009:-1:-1
+row {a,b,"",c},{a,b,NULL,c}
+SELECT 1
+> SELECT string_to_array('abc', NULL) AS a, string_to_array('abc', '') AS b, string_to_array('', ',') AS c
+fields a:1009:-1:-1,b:1009:-1:-1,c:1009:-1:-1
+row {a,b,c},{abc},{}
+SELECT 1
+> SELECT string_to_array(NULL, ',') AS a, string_to_array('a,x,b', ',', 'x') AS b, string_to_array('a,b', ',', NULL) AS c
+fields a:1009:-1:-1,b:1009:-1:-1,c:1009:-1:-1
+row NULL,{a,NULL,b},{a,b}
+SELECT 1
+> SELECT string_to_array('1||2||3', '||') AS a, string_to_array('é,ü', ',') AS b
+fields a:1009:-1:-1,b:1009:-1:-1
+row {1,2,3},{é,ü}
+SELECT 1
+> SELECT array_to_string(ARRAY[1, 2, 3], ',') AS a, array_to_string(ARRAY['a', NULL, 'c'], '-') AS b, array_to_string(ARRAY['a', NULL, 'c'], '-', '*') AS c
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1
+row 1,2,3,a-c,a-*-c
+SELECT 1
+> SELECT array_to_string(ARRAY[NULL, 'b'], ',') AS a, array_to_string(ARRAY[NULL, 'b'], ',', NULL) AS b, array_to_string(NULL::int[], ',') AS c, array_to_string(ARRAY[1], NULL, 'x') AS d
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1
+row b,b,NULL,NULL
+SELECT 1
+> SELECT array_to_string('{{1,2},{3,4}}'::int[], ':') AS a, array_to_string('{}'::int[], ',') AS b, array_to_string(ARRAY[1.50, 2.25], ' ') AS c, array_to_string(ARRAY[true, false], '') AS d
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1
+row 1:2:3:4,,1.50 2.25,tf
+SELECT 1
+> SELECT array_to_string(ARRAY['2024-01-02'::date], ',') AS a, array_to_string(ARRAY['a b', 'c"d'], ',') AS b
+fields a:25:-1:-1,b:25:-1:-1
+row 2024-01-02,a b,c"d
+SELECT 1
+> SELECT array_length(ARRAY[1, 2, 3], 1) AS a, array_length(ARRAY[1, 2, 3], 2) AS b, array_length('{}'::int[], 1) AS c, array_length('{{1,2,3},{4,5,6}}'::int[], 2) AS d, array_length(ARRAY[1], 0) AS e
+fields a:23:4:-1,b:23:4:-1,c:23:4:-1,d:23:4:-1,e:23:4:-1
+row 3,NULL,NULL,3,NULL
+SELECT 1
+> SELECT array_lower('[3:5]={1,2,3}'::int[], 1) AS a, array_upper('[3:5]={1,2,3}'::int[], 1) AS b, array_lower('{}'::int[], 1) AS c, array_upper(ARRAY[1, 2], 2) AS d, array_lower('[-2:-1]={1,2}'::int[], 1) AS e
+fields a:23:4:-1,b:23:4:-1,c:23:4:-1,d:23:4:-1,e:23:4:-1
+row 3,5,NULL,NULL,-2
+SELECT 1
+> SELECT array_ndims(ARRAY[1]) AS a, array_ndims('{{1},{2}}'::int[]) AS b, array_ndims('{}'::int[]) AS c
+fields a:23:4:-1,b:23:4:-1,c:23:4:-1
+row 1,2,NULL
+SELECT 1
+> SELECT array_dims(ARRAY[1, 2]) AS a, array_dims('[2:3][-1:0]={{1,2},{3,4}}'::int[]) AS b, array_dims('{}'::int[]) AS c
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1
+row [1:2],[2:3][-1:0],NULL
+SELECT 1
+> SELECT cardinality(ARRAY[1, 2, 3]) AS a, cardinality('{{1,2},{3,4}}'::int[]) AS b, cardinality('{}'::int[]) AS c, cardinality(NULL::int[]) AS d
+fields a:23:4:-1,b:23:4:-1,c:23:4:-1,d:23:4:-1
+row 3,4,0,NULL
+SELECT 1
+> SELECT array_append(ARRAY[1, 2], 3) AS a, array_append(NULL, 3) AS b, array_append('{}'::int[], NULL) AS c, array_append(ARRAY['a'], 'b') AS d
+fields a:1007:-1:-1,b:1007:-1:-1,c:1007:-1:-1,d:1009:-1:-1
+row {1,2,3},{3},{NULL},{a,b}
+SELECT 1
+> SELECT array_prepend(0, ARRAY[1, 2]) AS a, array_prepend(1, NULL) AS b, array_prepend(NULL::int, '{}') AS c, array_prepend(1, '[2:3]={5,6}'::int[]) AS d
+fields a:1007:-1:-1,b:1007:-1:-1,c:1007:-1:-1,d:1007:-1:-1
+row {0,1,2},{1},{NULL},[2:4]={1,5,6}
+SELECT 1
+> SELECT array_append('[2:3]={5,6}'::int[], 7) AS a, ARRAY[1, 2] || 3 AS b, 0 || ARRAY[1, 2] AS c
+fields a:1007:-1:-1,b:1007:-1:-1,c:1007:-1:-1
+row [2:4]={5,6,7},{1,2,3},{0,1,2}
+SELECT 1
+> SELECT array_cat(ARRAY[1, 2], ARRAY[3]) AS a, array_cat(NULL, ARRAY[3]) AS b, array_cat(ARRAY[1], NULL) AS c, array_cat(NULL::int[], NULL) AS d, ARRAY[1, 2] || ARRAY[3, 4] AS e
+fields a:1007:-1:-1,b:1007:-1:-1,c:1007:-1:-1,d:1007:-1:-1,e:1007:-1:-1
+row {1,2,3},{3},{1},NULL,{1,2,3,4}
+SELECT 1
+> SELECT array_cat('{{1,2},{3,4}}'::int[], ARRAY[5, 6]) AS a, array_cat(ARRAY[0, 1], '{{1,2},{3,4}}'::int[]) AS b, array_cat('{{1,2}}'::int[], '{{3,4}}'::int[]) AS c, array_cat('{}'::int[], '[2:3]={7,8}'::int[]) AS d
+fields a:1007:-1:-1,b:1007:-1:-1,c:1007:-1:-1,d:1007:-1:-1
+row {{1,2},{3,4},{5,6}},{{0,1},{1,2},{3,4}},{{1,2},{3,4}},[2:3]={7,8}
+SELECT 1
+> SELECT array_cat('[2:3]={1,2}'::int[], ARRAY[3]) AS a, array_cat(ARRAY[1], '[5:6]={2,3}'::int[]) AS b
+fields a:1007:-1:-1,b:1007:-1:-1
+row [2:4]={1,2,3},{1,2,3}
+SELECT 1
+> SELECT array_cat('{{1,2}}'::int[], ARRAY[3])
+ERROR 2202E cannot concatenate incompatible arrays
+> SELECT array_cat(ARRAY[1, 2], '{{1,2},{3,4}}'::int[])
+fields array_cat:1007:-1:-1
+row {{1,2},{1,2},{3,4}}
+SELECT 1
+> SELECT array_append('{{1,2}}'::int[], 3)
+ERROR 22000 argument must be empty or one-dimensional array
+> SELECT array_length(a, 1) AS l, array_to_string(a, '/') AS s, cardinality(a) AS c, array_dims(a) AS d FROM (VALUES (string_to_array('x y z', ' ')), ('{}'), (NULL)) AS v (a) ORDER BY 1, 2
+fields l:23:4:-1,s:25:-1:-1,c:23:4:-1,d:25:-1:-1
+row 3,x/y/z,3,[1:3]
+row NULL,,0,NULL
+row NULL,NULL,NULL,NULL
+SELECT 3
+> SELECT pg_typeof(string_to_array('a', ',')) AS a, pg_typeof(array_append(ARRAY[1::int8], 2)) AS b, pg_typeof(array_cat(ARRAY[1], ARRAY[2.5])) AS c, array_cat(ARRAY[1], ARRAY[2.5]) AS d
+fields a:2206:4:-1,b:2206:4:-1,c:2206:4:-1,d:1231:-1:-1
+row text[],bigint[],numeric[],{1,2.5}
+SELECT 1
+> SELECT array_append(ARRAY[1], 2.5) AS a, array_prepend(2.5, ARRAY[1]) AS b
+fields a:1231:-1:-1,b:1231:-1:-1
+row {1,2.5},{2.5,1}
+SELECT 1

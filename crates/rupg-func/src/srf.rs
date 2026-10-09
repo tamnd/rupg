@@ -93,14 +93,10 @@ fn subscripts(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
 /// `text_to_table`: the parts of the string between the separators. The function is not strict: a null string gives no rows, and a null separator gives each character. An empty separator gives the whole string, and an empty string gives no rows. A part equal to the third argument is null.
 fn text_to_table(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     let Some(input) = args.first().and_then(Value::as_str) else { return Ok(Vec::new()) };
+    let separator = args.get(1).and_then(Value::as_str);
     let null = args.get(2).and_then(Value::as_str);
-    let part = |s: &str| vec![if Some(s) == null { Value::Null } else { Value::text(s) }];
-    Ok(match args.get(1).and_then(Value::as_str) {
-        _ if input.is_empty() => Vec::new(),
-        Some("") => vec![part(input)],
-        Some(sep) => input.split(sep).map(part).collect(),
-        None => input.char_indices().map(|(at, c)| part(&input[at..at + c.len_utf8()])).collect(),
-    })
+    let parts = crate::array::split(input, separator, null);
+    Ok(parts.into_iter().map(|v| vec![v.unwrap_or(Value::Null)]).collect())
 }
 
 /// `pg_options_to_table` with `untransformRelOptions`: each option of the form `name=value` gives its name and its value. An option with no `=` has a null value.
