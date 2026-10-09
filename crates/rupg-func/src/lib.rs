@@ -4,6 +4,7 @@
 
 #![forbid(unsafe_code)]
 
+mod absent;
 mod acl;
 mod activity;
 mod agg;

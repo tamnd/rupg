@@ -1688,6 +1688,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/databases.test")));
     }
 
+    /// The views of the parts of the server that rupg does not have, which have no rows: asynchronous I/O, the registry of dynamic shared memory, the replication origins, recovery, the publications and the cursors. Also the error of `pg_shmem_allocations_numa` with no NUMA support, and the errors of the functions of the publications for a name that is not a publication. `connection/absent.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn absent() {
+        big_stack(|| script(include_str!("connection/absent.test")));
+    }
+
     /// The views of the statistics of the whole server: `pg_stat_bgwriter`, `pg_stat_checkpointer`, `pg_stat_wal`, `pg_stat_io`, `pg_stat_archiver`, `pg_stat_slru`, `pg_stat_recovery_prefetch` and `pg_stat_lock`. The script checks the columns and their types, the rows and the null cells of `pg_stat_io`, and that each counter is not negative and each `stats_reset` is not null. `connection/shared.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn shared_statistics() {

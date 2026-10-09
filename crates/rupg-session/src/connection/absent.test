@@ -1,0 +1,92 @@
+> SELECT * FROM pg_aios
+fields pid@pg_aios.1:23:4:-1,io_id@pg_aios.2:23:4:-1,io_generation@pg_aios.3:20:8:-1,state@pg_aios.4:25:-1:-1,operation@pg_aios.5:25:-1:-1,off@pg_aios.6:20:8:-1,length@pg_aios.7:20:8:-1,target@pg_aios.8:25:-1:-1,handle_data_len@pg_aios.9:21:2:-1,raw_result@pg_aios.10:23:4:-1,result@pg_aios.11:25:-1:-1,target_desc@pg_aios.12:25:-1:-1,f_sync@pg_aios.13:16:1:-1,f_localmem@pg_aios.14:16:1:-1,f_buffered@pg_aios.15:16:1:-1
+SELECT 0
+> SELECT count(*) FROM pg_aios
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM pg_get_aios()
+fields pid:23:4:-1,io_id:23:4:-1,io_generation:20:8:-1,state:25:-1:-1,operation:25:-1:-1,off:20:8:-1,length:20:8:-1,target:25:-1:-1,handle_data_len:21:2:-1,raw_result:23:4:-1,result:25:-1:-1,target_desc:25:-1:-1,f_sync:16:1:-1,f_localmem:16:1:-1,f_buffered:16:1:-1
+SELECT 0
+> SELECT * FROM pg_dsm_registry_allocations
+fields name@pg_dsm_registry_allocations.1:25:-1:-1,type@pg_dsm_registry_allocations.2:25:-1:-1,size@pg_dsm_registry_allocations.3:20:8:-1
+SELECT 0
+> SELECT * FROM pg_get_dsm_registry_allocations()
+fields name:25:-1:-1,type:25:-1:-1,size:20:8:-1
+SELECT 0
+> SELECT * FROM pg_replication_origin_status
+fields local_id@pg_replication_origin_status.1:26:4:-1,external_id@pg_replication_origin_status.2:25:-1:-1,remote_lsn@pg_replication_origin_status.3:3220:8:-1,local_lsn@pg_replication_origin_status.4:3220:8:-1
+SELECT 0
+> SELECT * FROM pg_show_replication_origin_status()
+fields local_id:26:4:-1,external_id:25:-1:-1,remote_lsn:3220:8:-1,local_lsn:3220:8:-1
+SELECT 0
+> SELECT * FROM pg_stat_recovery
+fields promote_triggered@pg_stat_recovery.1:16:1:-1,last_replayed_read_lsn@pg_stat_recovery.2:3220:8:-1,last_replayed_end_lsn@pg_stat_recovery.3:3220:8:-1,last_replayed_tli@pg_stat_recovery.4:23:4:-1,replay_end_lsn@pg_stat_recovery.5:3220:8:-1,replay_end_tli@pg_stat_recovery.6:23:4:-1,recovery_last_xact_time@pg_stat_recovery.7:1184:8:-1,current_chunk_start_time@pg_stat_recovery.8:1184:8:-1,pause_state@pg_stat_recovery.9:25:-1:-1
+SELECT 0
+> SELECT count(*) FROM pg_stat_recovery
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM pg_stat_get_recovery()
+fields promote_triggered:16:1:-1,last_replayed_read_lsn:3220:8:-1,last_replayed_end_lsn:3220:8:-1,last_replayed_tli:23:4:-1,replay_end_lsn:3220:8:-1,replay_end_tli:23:4:-1,recovery_last_xact_time:1184:8:-1,current_chunk_start_time:1184:8:-1,pause_state:25:-1:-1
+row NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT promote_triggered IS NULL, pause_state IS NULL FROM pg_stat_get_recovery()
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT * FROM pg_shmem_allocations_numa
+fields name@pg_shmem_allocations_numa.1:25:-1:-1,numa_node@pg_shmem_allocations_numa.2:23:4:-1,size@pg_shmem_allocations_numa.3:20:8:-1
+ERROR XX000 libnuma initialization failed or NUMA is not supported on this platform
+> SELECT * FROM pg_get_shmem_allocations_numa()
+fields name:25:-1:-1,numa_node:23:4:-1,size:20:8:-1
+ERROR XX000 libnuma initialization failed or NUMA is not supported on this platform
+> SELECT * FROM pg_publication_tables
+fields pubname@pg_publication_tables.1:19:64:-1,schemaname@pg_publication_tables.2:19:64:-1,tablename@pg_publication_tables.3:19:64:-1,attnames@pg_publication_tables.4:1003:-1:-1,rowfilter@pg_publication_tables.5:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_publication_sequences
+fields pubname@pg_publication_sequences.1:19:64:-1,schemaname@pg_publication_sequences.2:19:64:-1,sequencename@pg_publication_sequences.3:19:64:-1
+SELECT 0
+> SELECT * FROM pg_get_publication_tables('nope')
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+ERROR 42704 publication "nope" does not exist
+> SELECT * FROM pg_get_publication_tables('a', 'b')
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+ERROR 42704 publication "a" does not exist
+> SELECT * FROM pg_get_publication_tables(VARIADIC ARRAY['nope', 'other'])
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+ERROR 42704 publication "nope" does not exist
+> SELECT * FROM pg_get_publication_tables(VARIADIC ARRAY[]::text[])
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+SELECT 0
+> SELECT * FROM pg_get_publication_tables(VARIADIC ARRAY[NULL, 'x'])
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+ERROR 22004 null array element not allowed in this context
+> SELECT * FROM pg_get_publication_tables(VARIADIC NULL::text[])
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+SELECT 0
+> SELECT * FROM pg_get_publication_tables(ARRAY['nope'], 1259)
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+SELECT 0
+> SELECT * FROM pg_get_publication_tables(ARRAY[NULL], 1259)
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+SELECT 0
+> SELECT * FROM pg_get_publication_tables(NULL::text[], 1259)
+fields pubid:26:4:-1,relid:26:4:-1,attrs:22:-1:-1,qual:194:-1:-1
+SELECT 0
+> SELECT * FROM pg_get_publication_sequences('nope')
+fields relid:26:4:-1
+ERROR 42704 publication "nope" does not exist
+> SELECT * FROM pg_get_publication_sequences(NULL)
+fields relid:26:4:-1
+SELECT 0
+> SELECT * FROM pg_cursors
+fields name@pg_cursors.1:25:-1:-1,statement@pg_cursors.2:25:-1:-1,is_holdable@pg_cursors.3:16:1:-1,is_binary@pg_cursors.4:16:1:-1,is_scrollable@pg_cursors.5:16:1:-1,creation_time@pg_cursors.6:1184:8:-1
+SELECT 0
+> SELECT * FROM pg_cursor()
+fields name:25:-1:-1,statement:25:-1:-1,is_holdable:16:1:-1,is_binary:16:1:-1,is_scrollable:16:1:-1,creation_time:1184:8:-1
+SELECT 0
+> SELECT count(*) FROM pg_cursors
+fields count:20:8:-1
+row 0
+SELECT 1
