@@ -1,0 +1,194 @@
+> VALUES (1)
+fields column1:23:4:-1
+row 1
+SELECT 1
+> VALUES (1, 'a'), (2, 'b')
+fields column1:23:4:-1,column2:25:-1:-1
+row 1,a
+row 2,b
+SELECT 2
+> VALUES (1), (2), (3) ORDER BY 1 DESC
+fields column1:23:4:-1
+row 3
+row 2
+row 1
+SELECT 3
+> VALUES (1), (2), (3) ORDER BY column1 DESC LIMIT 2
+fields column1:23:4:-1
+row 3
+row 2
+SELECT 2
+> VALUES (1), (2) ORDER BY "*VALUES*".column1 DESC
+fields column1:23:4:-1
+row 2
+row 1
+SELECT 2
+> VALUES (1), (2) OFFSET 1
+fields column1:23:4:-1
+row 2
+SELECT 1
+> VALUES ('a'), ('b')
+fields column1:25:-1:-1
+row a
+row b
+SELECT 2
+> VALUES (NULL), (NULL)
+fields column1:25:-1:-1
+row NULL
+row NULL
+SELECT 2
+> VALUES (NULL), (1)
+fields column1:23:4:-1
+row NULL
+row 1
+SELECT 2
+> VALUES (1), (1.5)
+fields column1:1700:-1:-1
+row 1
+row 1.5
+SELECT 2
+> VALUES (1), ('a')
+ERROR 22P02 invalid input syntax for type integer: "a" at 14
+> VALUES ('a'), (1)
+ERROR 22P02 invalid input syntax for type integer: "a" at 9
+> VALUES (1), (true)
+ERROR 42804 VALUES types integer and boolean cannot be matched at 14
+> VALUES (1, 2), (3)
+ERROR 42601 VALUES lists must all be the same length at 17
+> VALUES (1), (2, 3)
+ERROR 42601 VALUES lists must all be the same length at 14
+> VALUES (DEFAULT)
+ERROR 42601 DEFAULT is not allowed in this context at 9
+> VALUES (1), (DEFAULT)
+ERROR 42601 DEFAULT is not allowed in this context at 14
+> VALUES (count(*))
+ERROR 42803 aggregate functions are not allowed in VALUES at 9
+> VALUES (1/0)
+ERROR 22012 division by zero
+> VALUES (1), (2) FOR UPDATE
+ERROR 0A000 FOR UPDATE cannot be applied to VALUES
+> VALUES (1) FOR KEY SHARE
+ERROR 0A000 FOR KEY SHARE cannot be applied to VALUES
+> VALUES ('a'::varchar(3)), ('b'::varchar(3))
+fields column1:1043:-1:7
+row a
+row b
+SELECT 2
+> VALUES ('a'::varchar(3)), ('b'::varchar(5))
+fields column1:1043:-1:-1
+row a
+row b
+SELECT 2
+> VALUES ('a'::varchar(3)), ('bb')
+fields column1:1043:-1:-1
+row a
+row bb
+SELECT 2
+> VALUES (1::int2), (2::int8)
+fields column1:20:8:-1
+row 1
+row 2
+SELECT 2
+> VALUES (nosuch)
+ERROR 42703 column "nosuch" does not exist at 9
+> VALUES ((SELECT 1)), ((SELECT 2))
+fields column1:23:4:-1
+row 1
+row 2
+SELECT 2
+> VALUES (1) UNION VALUES (2) ORDER BY 1
+fields column1:23:4:-1
+row 1
+row 2
+SELECT 2
+> VALUES (1), (2) EXCEPT VALUES (2)
+fields column1:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM (VALUES (1, 'a'), (2, 'b')) v
+fields column1:23:4:-1,column2:25:-1:-1
+row 1,a
+row 2,b
+SELECT 2
+> SELECT * FROM (VALUES (1, 'a'), (2, 'b')) v(n, s) ORDER BY n DESC
+fields n:23:4:-1,s:25:-1:-1
+row 2,b
+row 1,a
+SELECT 2
+> SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(n)
+fields n:23:4:-1,column2:25:-1:-1
+row 1,a
+row 2,b
+SELECT 2
+> SELECT * FROM (VALUES (1, 'a')) AS v(a, b, c)
+ERROR 42P10 table "v" has 2 columns available but 3 columns specified
+> SELECT v.column2 FROM (VALUES (1, 'a')) v
+fields column2:25:-1:-1
+row a
+SELECT 1
+> SELECT column1 + 1 FROM (VALUES (1), (2)) v WHERE column1 > 1
+fields ?column?:23:4:-1
+row 3
+SELECT 1
+> SELECT a.amname, v.x FROM pg_am a, (VALUES ('heap', 1), ('btree', 2)) v(n, x) WHERE a.amname = v.n ORDER BY 2
+fields amname@pg_am.2:19:64:-1,x:23:4:-1
+row heap,1
+row btree,2
+SELECT 2
+> SELECT a.amname, v.x FROM pg_am a, LATERAL (VALUES (a.amname || '!'), ('x')) v(x) WHERE a.amtype = 't' ORDER BY 2
+fields amname@pg_am.2:19:64:-1,x:25:-1:-1
+row heap,heap!
+row heap,x
+SELECT 2
+> SELECT (VALUES (1))
+fields column1:23:4:-1
+row 1
+SELECT 1
+> SELECT (VALUES (1), (2))
+fields column1:23:4:-1
+ERROR 21000 more than one row returned by a subquery used as an expression
+> SELECT 1 WHERE 2 IN (VALUES (1), (2))
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT 1 WHERE EXISTS (VALUES (1))
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT a.amname FROM pg_am a WHERE a.amname IN (VALUES ('heap'), ('hash')) ORDER BY 1
+fields amname@pg_am.2:19:64:-1
+row hash
+row heap
+SELECT 2
+> SELECT * FROM (VALUES (1), (2)) v(a) JOIN (VALUES (2), (3)) w(a) USING (a)
+fields a:23:4:-1
+row 2
+SELECT 1
+> SELECT count(*), sum(column1) FROM (VALUES (1), (2), (3)) v
+fields count:20:8:-1,sum:20:8:-1
+row 3,6
+SELECT 1
+> SELECT * FROM (VALUES (1/0)) v
+ERROR 22012 division by zero
+> SELECT * FROM (VALUES (1), (2)) v WHERE false
+fields column1:23:4:-1
+SELECT 0
+> VALUES (1, 'x'), (2, NULL), (NULL, 'z') ORDER BY 1 NULLS FIRST
+fields column1:23:4:-1,column2:25:-1:-1
+row NULL,z
+row 1,x
+row 2,NULL
+SELECT 3
+> VALUES ('{}'::json)
+fields column1:114:-1:-1
+row {}
+SELECT 1
+> SELECT "*VALUES*".column1 FROM (VALUES (1)) v
+ERROR 42P01 missing FROM-clause entry for table "*VALUES*" at 8
+> SELECT * FROM (VALUES (1)) v, (VALUES (2)) w
+fields column1:23:4:-1,column1:23:4:-1
+row 1,2
+SELECT 1
+> VALUES (1) LIMIT 0
+fields column1:23:4:-1
+SELECT 0

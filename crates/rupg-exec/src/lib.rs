@@ -184,6 +184,7 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
         if let Some(sub) = &relation.subquery {
             check_query(sub, false)?;
         }
+        relation.values.iter().flatten().flatten().try_for_each(check)?;
         for (call, width) in relation.function.iter().flat_map(|f| &f.calls) {
             match &call.kind {
                 ExprKind::Func(f) if table_function(f.oid, *width) => {
@@ -422,7 +423,11 @@ fn with_subqueries(
     cache: &Cache,
     outer: &[Frame<'_>],
 ) -> Result<Rc<scan::Tables>> {
-    if query.relations.iter().all(|r| r.subquery.is_none() && r.function.is_none()) {
+    if query
+        .relations
+        .iter()
+        .all(|r| r.subquery.is_none() && r.function.is_none() && r.values.is_none())
+    {
         return Ok(Rc::clone(base));
     }
     let mut tables = (**base).clone();
@@ -440,6 +445,12 @@ fn with_subqueries(
         {
             let mut eval = Eval::new(params, session, base, cache, outer);
             tables.rows[i] = Rc::new(eval.function_rows(function)?);
+        }
+        if let Some(rows) = &relation.values
+            && tables.needs[i].is_empty()
+        {
+            let mut eval = Eval::new(params, session, base, cache, outer);
+            tables.rows[i] = Rc::new(eval.values_rows(rows)?);
         }
     }
     Ok(Rc::new(tables))
@@ -525,6 +536,11 @@ fn run_query(
                 let mut eval = Eval::new(params, session, tables, cache, outer);
                 eval.tuple = tuple;
                 return eval.function_rows(function);
+            }
+            if let Some(rows) = &relation.values {
+                let mut eval = Eval::new(params, session, tables, cache, outer);
+                eval.tuple = tuple;
+                return eval.values_rows(rows);
             }
             let Some(sub) = &relation.subquery else { return Ok(Vec::new()) };
             let mut frames = outer.to_vec();
@@ -726,6 +742,11 @@ impl<'a> Eval<'a> {
             outer,
             sub: Vec::new(),
         }
+    }
+
+    /// The rows of a `VALUES` list, as `ValuesScan` gives them.
+    fn values_rows(&mut self, rows: &[Vec<Expr>]) -> Result<Rows> {
+        rows.iter().map(|row| row.iter().map(|e| self.eval(e)).collect()).collect()
     }
 
     /// `ExecFunctionScan`: the rows of a function in `FROM`. The rows of the calls of `ROWS FROM` go side by side, and a call with fewer rows gives nulls. With ordinality, the last column is the number of the row.

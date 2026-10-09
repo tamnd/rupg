@@ -62,6 +62,10 @@ fn figure(node: Option<&Node>) -> Option<(String, u8)> {
             SubLinkType::ARRAY_SUBLINK => strong("array"),
             SubLinkType::EXPR_SUBLINK => match &s.subselect {
                 // The query of a set operation has the names of its leftmost `SELECT`.
+                // The first column of a `VALUES` list is `column1`.
+                Some(Node::SelectStmt(select)) if !leftmost(select).valuesLists.is_empty() => {
+                    strong("column1")
+                }
                 Some(Node::SelectStmt(select)) => match leftmost(select).targetList.first() {
                     Some(Some(Node::ResTarget(t))) => match &t.name {
                         Some(name) => strong(name),

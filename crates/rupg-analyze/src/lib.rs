@@ -23,6 +23,7 @@ mod transform;
 mod typcache;
 mod typename;
 pub mod types;
+mod values;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::Node;
