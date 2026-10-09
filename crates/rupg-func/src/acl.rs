@@ -2,8 +2,9 @@
 //!
 //! A port of the functions of `src/backend/utils/adt/acl.c` and of the checks of `aclchk.c` that they call. The privileges are the `aclitem[]` values of the static rows, which have the privileges that `initdb` gives. Each function has forms with a role name or OID first, or no role for the current user, and with the object as text or as an OID. The form of a call is clear from its values: a name is text and an OID is an OID. A form with the OID of an object that does not exist gives null.
 
+use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin::{self, ClassRow, Owned};
+use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_types::{RegKind, Value, qualified_name_list};
 
 use crate::reg;
@@ -367,24 +368,100 @@ fn aclmask(acl: &[(u32, u32)], role: u32, owner: u32, mask: u32) -> u32 {
 /// The result of a check: `None` when the object does not exist, as the `is_missing` of PostgreSQL gives it.
 type Check = Result<Option<bool>>;
 
+/// A relation as the checks of its privileges read it.
+struct Class<'a> {
+    oid: u32,
+    name: &'a str,
+    namespace: u32,
+    /// The `relkind` letter.
+    kind: char,
+    /// The number of user columns.
+    natts: i16,
+    owner: u32,
+    /// `relacl`, or `None` for the default privileges of the owner.
+    acl: Option<Vec<&'a str>>,
+}
+
+/// The relation with this OID, from the built-in catalogs or from the catalog of the session. The system views and the relations that the user makes are in the catalog of the session.
+fn class_of(relid: u32, session: &dyn Session) -> Option<Class<'_>> {
+    if let Some(class) = builtin::class_by_oid(relid) {
+        return Some(Class {
+            oid: class.oid,
+            name: class.name,
+            namespace: class.namespace,
+            kind: char::from(class.kind),
+            natts: class.natts,
+            owner: class.owner,
+            acl: class.acl.map(<[&str]>::to_vec),
+        });
+    }
+    let rel = session.catalog()?.relation(relid)?;
+    Some(Class {
+        oid: rel.oid,
+        name: &rel.name,
+        namespace: rel.namespace,
+        kind: rel.kind.code(),
+        natts: i16::try_from(rel.columns.len()).unwrap_or(i16::MAX),
+        owner: rel.owner,
+        acl: rel.acl.as_ref().map(|acl| acl.iter().map(String::as_str).collect()),
+    })
+}
+
+/// A column of a relation as the checks of its privileges read it.
+struct Attribute<'a> {
+    name: &'a str,
+    num: i16,
+    dropped: bool,
+    /// `attacl`, or `None` for a column with no privileges of its own.
+    acl: Option<&'a [&'a str]>,
+}
+
+/// The system columns of a relation with storage, with their numbers.
+const SYSTEM_COLUMNS: [(&str, i16); 6] =
+    [("ctid", -1), ("xmin", -2), ("cmin", -3), ("xmax", -4), ("cmax", -5), ("tableoid", -6)];
+
+/// The columns of a relation, with the system columns. A relation of the catalog of the session has no dropped columns and no privileges on its columns, and a view or an index of it has no system columns.
+fn attributes_of(relid: u32, session: &dyn Session) -> Vec<Attribute<'_>> {
+    if builtin::class_by_oid(relid).is_some() {
+        return builtin::attributes(relid)
+            .iter()
+            .map(|a| Attribute { name: a.name, num: a.num, dropped: a.dropped, acl: a.acl })
+            .collect();
+    }
+    let Some(rel) = session.catalog().and_then(|c| c.relation(relid)) else { return Vec::new() };
+    let system: &[(&str, i16)] = match rel.kind {
+        RelKind::Table | RelKind::Sequence | RelKind::Toast => &SYSTEM_COLUMNS,
+        RelKind::Index | RelKind::View => &[],
+    };
+    let system =
+        system.iter().map(|&(name, num)| Attribute { name, num, dropped: false, acl: None });
+    let user = rel.columns.iter().zip(1..).map(|(column, num)| Attribute {
+        name: &column.name,
+        num,
+        dropped: false,
+        acl: None,
+    });
+    system.chain(user).collect()
+}
+
 /// `IsSystemClass`: a toast table or a relation with an OID below `FirstUnpinnedObjectId`.
-fn is_system_class(class: &ClassRow) -> bool {
+fn is_system_class(class: &Class<'_>) -> bool {
     class.namespace == PG_TOAST || class.oid < FIRST_UNPINNED_OBJECT_ID
 }
 
 /// `pg_class_aclmask_ext` with `ACLMASK_ANY`. Only a superuser can change a system catalog. The roles `pg_read_all_data`, `pg_write_all_data` and `pg_maintain` add their privileges to the result.
-fn class_check(relid: u32, role: u32, mask: u32) -> Check {
-    let Some(class) = builtin::class_by_oid(relid) else { return Ok(None) };
+fn class_check(relid: u32, role: u32, mask: u32, session: &dyn Session) -> Check {
+    let Some(class) = class_of(relid, session) else { return Ok(None) };
     let mut mask = mask;
     let changes = ACL_INSERT | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE | ACL_USAGE;
-    if mask & changes != 0 && is_system_class(class) && class.kind != b'v' && !superuser(role) {
+    if mask & changes != 0 && is_system_class(&class) && class.kind != 'v' && !superuser(role) {
         mask &= !changes;
     }
     if superuser(role) {
         return Ok(Some(mask != 0));
     }
-    let kind = if class.kind == b'S' { AclKind::Sequence } else { AclKind::Table };
-    let acl = acl_of(class.acl, kind, class.owner)?;
+    let kind = if class.kind == 'S' { AclKind::Sequence } else { AclKind::Table };
+    let acl = acl_of(class.acl.as_deref(), kind, class.owner)?;
     let mut result = aclmask(&acl, role, class.owner, mask);
     if mask & ACL_SELECT != 0
         && result & ACL_SELECT == 0
@@ -406,9 +483,10 @@ fn class_check(relid: u32, role: u32, mask: u32) -> Check {
 }
 
 /// `pg_attribute_aclmask_ext` with `ACLMASK_ANY`. A column with a null ACL has no privileges of its own, also for a superuser.
-fn attribute_check(relid: u32, attnum: i16, role: u32, mask: u32) -> Check {
-    let found = builtin::attributes(relid).iter().find(|a| a.num == attnum && !a.dropped);
-    let (Some(attribute), Some(class)) = (found, builtin::class_by_oid(relid)) else {
+fn attribute_check(relid: u32, attnum: i16, role: u32, mask: u32, session: &dyn Session) -> Check {
+    let attributes = attributes_of(relid, session);
+    let found = attributes.iter().find(|a| a.num == attnum && !a.dropped);
+    let (Some(attribute), Some(class)) = (found, class_of(relid, session)) else {
         return Ok(None);
     };
     let Some(acl) = attribute.acl else { return Ok(Some(false)) };
@@ -416,9 +494,9 @@ fn attribute_check(relid: u32, attnum: i16, role: u32, mask: u32) -> Check {
 }
 
 /// `pg_attribute_aclcheck_all_ext` with `ACLMASK_ANY`: true when a user column that is not dropped has a privilege of `mask`.
-fn all_attributes_check(relid: u32, role: u32, mask: u32) -> Check {
-    let Some(class) = builtin::class_by_oid(relid) else { return Ok(None) };
-    for attribute in builtin::attributes(relid) {
+fn all_attributes_check(relid: u32, role: u32, mask: u32, session: &dyn Session) -> Check {
+    let Some(class) = class_of(relid, session) else { return Ok(None) };
+    for attribute in attributes_of(relid, session) {
         if attribute.num < 1 || attribute.num > class.natts || attribute.dropped {
             continue;
         }
@@ -431,16 +509,16 @@ fn all_attributes_check(relid: u32, role: u32, mask: u32) -> Check {
 }
 
 /// `column_privilege_check`: null for a column that does not exist or is dropped, else true when the role has a privilege on the column or on the table.
-fn column_check(relid: u32, attnum: i16, role: u32, mask: u32) -> Check {
+fn column_check(relid: u32, attnum: i16, role: u32, mask: u32, session: &dyn Session) -> Check {
     if attnum == 0 {
         return Ok(None);
     }
-    match attribute_check(relid, attnum, role, mask)? {
+    match attribute_check(relid, attnum, role, mask, session)? {
         Some(true) => return Ok(Some(true)),
         None => return Ok(None),
         Some(false) => {}
     }
-    class_check(relid, role, mask)
+    class_check(relid, role, mask, session)
 }
 
 /// The privileges of a database.
@@ -595,7 +673,7 @@ fn has_table_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         _ => return Err(bad_value()),
     };
     let mask = privileges(text(args, at + 1)?, TABLE_PRIVS)?;
-    Ok(result(class_check(relid, role, mask)?))
+    Ok(result(class_check(relid, role, mask, call.session)?))
 }
 
 /// `has_sequence_privilege`: the privileges come before the relation. A relation that is not a sequence is an error.
@@ -606,27 +684,27 @@ fn has_sequence_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let mask = privileges(text(args, at + 1)?, SEQUENCE_PRIVS)?;
     let (relid, shown) = match &args[at] {
         Value::Text(name) => (table_name(name, call.session)?, name.clone()),
-        Value::Oid(oid) => match builtin::class_by_oid(*oid) {
+        Value::Oid(oid) => match class_of(*oid, call.session) {
             Some(class) => (*oid, class.name.to_string()),
             None => return Ok(Value::Null),
         },
         _ => return Err(bad_value()),
     };
-    if builtin::class_by_oid(relid).is_none_or(|c| c.kind != b'S') {
+    if class_of(relid, call.session).is_none_or(|c| c.kind != 'S') {
         return Err(Error::new(
             SqlState::WRONG_OBJECT_TYPE,
             format!("\"{shown}\" is not a sequence"),
         ));
     }
-    Ok(result(class_check(relid, role, mask)?))
+    Ok(result(class_check(relid, role, mask, call.session)?))
 }
 
 /// `convert_column_name`: the number of a column by name. A dropped column gives 0, and so does a relation that does not exist.
-fn column_number(relid: u32, name: &str) -> Result<i16> {
-    if let Some(attribute) = builtin::attributes(relid).iter().find(|a| a.name == name) {
+fn column_number(relid: u32, name: &str, session: &dyn Session) -> Result<i16> {
+    if let Some(attribute) = attributes_of(relid, session).iter().find(|a| a.name == name) {
         return Ok(if attribute.dropped { 0 } else { attribute.num });
     }
-    match builtin::class_by_oid(relid) {
+    match class_of(relid, session) {
         Some(class) => Err(Error::new(
             SqlState::UNDEFINED_COLUMN,
             format!("column \"{name}\" of relation \"{}\" does not exist", class.name),
@@ -646,11 +724,11 @@ fn has_column_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         _ => return Err(bad_value()),
     };
     let attnum = match &args[at + 1] {
-        Value::Text(name) => column_number(relid, name)?,
+        Value::Text(name) => column_number(relid, name, call.session)?,
         value => value.as_i64().and_then(|n| i16::try_from(n).ok()).ok_or_else(bad_value)?,
     };
     let mask = privileges(text(args, at + 2)?, COLUMN_PRIVS)?;
-    Ok(result(column_check(relid, attnum, role, mask)?))
+    Ok(result(column_check(relid, attnum, role, mask, call.session)?))
 }
 
 /// `has_any_column_privilege`: the privilege on the relation, or on any column of it.
@@ -664,8 +742,8 @@ fn has_any_column_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         _ => return Err(bad_value()),
     };
     let mask = privileges(text(args, at + 1)?, COLUMN_PRIVS)?;
-    Ok(result(match class_check(relid, role, mask)? {
-        Some(false) => all_attributes_check(relid, role, mask)?,
+    Ok(result(match class_check(relid, role, mask, call.session)? {
+        Some(false) => all_attributes_check(relid, role, mask, call.session)?,
         other => other,
     }))
 }
