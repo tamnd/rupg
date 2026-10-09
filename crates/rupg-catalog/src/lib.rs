@@ -914,7 +914,7 @@ impl Catalog {
         self.create_relation(new, RelKind::Table)
     }
 
-    /// `heap_create_with_catalog` for a relation with a row type: the relation gets an OID, then its array type, then its row type.
+    /// `heap_create_with_catalog` for a relation with a row type: the relation gets an OID, then its array type, then its row type. Each column depends on its type and its collation, as `AddNewAttributeTuples` records them.
     fn create_relation(&mut self, new: NewRelation, kind: RelKind) -> Result<u32> {
         Catalog::check_columns(&new.columns)?;
         self.check_new_relation(new.namespace, &new.name, true)?;
@@ -922,6 +922,16 @@ impl Catalog {
         let array = self.new_oid();
         let row_type = self.new_oid();
         let array_name = self.array_type_name(&new.name, new.namespace);
+        let column_refs: Vec<(ObjRef, ObjRef)> = (1i16..)
+            .zip(&new.columns)
+            .flat_map(|(n, c)| {
+                let types = [(PG_TYPE, c.ty), (PG_COLLATION, c.collation)];
+                types
+                    .into_iter()
+                    .filter(|&(_, found)| found != 0)
+                    .map(move |(class, found)| (ObjRef::column(oid, n), ObjRef::new(class, found)))
+            })
+            .collect();
         self.types.insert(
             row_type,
             Type {
@@ -970,6 +980,9 @@ impl Catalog {
         );
         self.depend(ObjRef::new(PG_TYPE, row_type), ObjRef::new(PG_CLASS, oid), DepKind::Internal);
         self.depend(ObjRef::new(PG_TYPE, array), ObjRef::new(PG_TYPE, row_type), DepKind::Internal);
+        for (column, found) in column_refs {
+            self.depend(column, found, DepKind::Normal);
+        }
         self.depend(
             ObjRef::new(PG_CLASS, oid),
             ObjRef::new(PG_NAMESPACE, new.namespace),

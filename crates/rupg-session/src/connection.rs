@@ -1943,6 +1943,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_in_subquery.test")));
     }
 
+    /// The views and the tables that `information_schema.sql` makes when the cluster starts: their rows in `pg_class`, `pg_type`, `pg_attribute`, `pg_rewrite` and `pg_depend` and the text of their queries, then the views that read a new table, a new view and a foreign key,, the domains of the schema and their checks. `connection/information_schema.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn information_schema() {
+        big_stack(|| script(include_str!("connection/information_schema.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

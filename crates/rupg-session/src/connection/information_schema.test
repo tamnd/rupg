@@ -1,0 +1,322 @@
+> SELECT relname, relkind, relnatts, relhasrules, relpersistence, relowner = 10, reltype::regtype, reltoastrelid <> 0, relacl FROM pg_class WHERE relnamespace = 'information_schema'::regnamespace ORDER BY oid
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relnatts@pg_class.19:21:2:-1,relhasrules@pg_class.21:16:1:-1,relpersistence@pg_class.17:18:1:-1,?column?:16:1:-1,reltype:2206:4:-1,?column?:16:1:-1,relacl@pg_class.32:1034:-1:-1
+row information_schema_catalog_name,v,1,t,p,t,information_schema.information_schema_catalog_name,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row applicable_roles,v,3,t,p,t,information_schema.applicable_roles,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row administrable_role_authorizations,v,3,t,p,t,information_schema.administrable_role_authorizations,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row attributes,v,31,t,p,t,information_schema.attributes,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row character_sets,v,8,t,p,t,information_schema.character_sets,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row check_constraint_routine_usage,v,6,t,p,t,information_schema.check_constraint_routine_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row check_constraints,v,4,t,p,t,information_schema.check_constraints,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row collations,v,4,t,p,t,information_schema.collations,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row collation_character_set_applicability,v,6,t,p,t,information_schema.collation_character_set_applicability,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row column_column_usage,v,5,t,p,t,information_schema.column_column_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row column_domain_usage,v,7,t,p,t,information_schema.column_domain_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row column_privileges,v,8,t,p,t,information_schema.column_privileges,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row column_udt_usage,v,7,t,p,t,information_schema.column_udt_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row columns,v,44,t,p,t,information_schema.columns,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row constraint_column_usage,v,7,t,p,t,information_schema.constraint_column_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row constraint_table_usage,v,6,t,p,t,information_schema.constraint_table_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row domain_constraints,v,8,t,p,t,information_schema.domain_constraints,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row domain_udt_usage,v,6,t,p,t,information_schema.domain_udt_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row domains,v,27,t,p,t,information_schema.domains,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row enabled_roles,v,1,t,p,t,information_schema.enabled_roles,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row key_column_usage,v,9,t,p,t,information_schema.key_column_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row parameters,v,32,t,p,t,information_schema.parameters,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row referential_constraints,v,9,t,p,t,information_schema.referential_constraints,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row role_column_grants,v,8,t,p,t,information_schema.role_column_grants,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row routine_column_usage,v,10,t,p,t,information_schema.routine_column_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row routine_privileges,v,10,t,p,t,information_schema.routine_privileges,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row role_routine_grants,v,10,t,p,t,information_schema.role_routine_grants,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row routine_routine_usage,v,6,t,p,t,information_schema.routine_routine_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row routine_sequence_usage,v,9,t,p,t,information_schema.routine_sequence_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row routine_table_usage,v,9,t,p,t,information_schema.routine_table_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row routines,v,82,t,p,t,information_schema.routines,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row schemata,v,7,t,p,t,information_schema.schemata,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row sequences,v,12,t,p,t,information_schema.sequences,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row sql_features,r,7,f,p,t,information_schema.sql_features,t,{postgres=arwdDxtm/postgres,=r/postgres}
+row sql_implementation_info,r,5,f,p,t,information_schema.sql_implementation_info,t,{postgres=arwdDxtm/postgres,=r/postgres}
+row sql_parts,r,5,f,p,t,information_schema.sql_parts,t,NULL
+row sql_sizing,r,4,f,p,t,information_schema.sql_sizing,t,{postgres=arwdDxtm/postgres,=r/postgres}
+row table_constraints,v,11,t,p,t,information_schema.table_constraints,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row table_privileges,v,8,t,p,t,information_schema.table_privileges,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row role_table_grants,v,8,t,p,t,information_schema.role_table_grants,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row tables,v,12,t,p,t,information_schema.tables,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row transforms,v,8,t,p,t,information_schema.transforms,f,NULL
+row triggered_update_columns,v,7,t,p,t,information_schema.triggered_update_columns,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row triggers,v,17,t,p,t,information_schema.triggers,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row udt_privileges,v,7,t,p,t,information_schema.udt_privileges,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row role_udt_grants,v,7,t,p,t,information_schema.role_udt_grants,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row usage_privileges,v,8,t,p,t,information_schema.usage_privileges,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row role_usage_grants,v,8,t,p,t,information_schema.role_usage_grants,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row user_defined_types,v,29,t,p,t,information_schema.user_defined_types,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row view_column_usage,v,7,t,p,t,information_schema.view_column_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row view_routine_usage,v,6,t,p,t,information_schema.view_routine_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row view_table_usage,v,6,t,p,t,information_schema.view_table_usage,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row views,v,10,t,p,t,information_schema.views,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row data_type_privileges,v,5,t,p,t,information_schema.data_type_privileges,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row element_types,v,28,t,p,t,information_schema.element_types,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row _pg_foreign_table_columns,v,4,t,p,t,information_schema._pg_foreign_table_columns,f,NULL
+row column_options,v,6,t,p,t,information_schema.column_options,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row _pg_foreign_data_wrappers,v,7,t,p,t,information_schema._pg_foreign_data_wrappers,f,NULL
+row foreign_data_wrapper_options,v,4,t,p,t,information_schema.foreign_data_wrapper_options,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row foreign_data_wrappers,v,5,t,p,t,information_schema.foreign_data_wrappers,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row _pg_foreign_servers,v,9,t,p,t,information_schema._pg_foreign_servers,f,NULL
+row foreign_server_options,v,4,t,p,t,information_schema.foreign_server_options,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row foreign_servers,v,7,t,p,t,information_schema.foreign_servers,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row _pg_foreign_tables,v,7,t,p,t,information_schema._pg_foreign_tables,f,NULL
+row foreign_table_options,v,5,t,p,t,information_schema.foreign_table_options,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row foreign_tables,v,5,t,p,t,information_schema.foreign_tables,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row _pg_user_mappings,v,7,t,p,t,information_schema._pg_user_mappings,f,NULL
+row user_mapping_options,v,5,t,p,t,information_schema.user_mapping_options,f,{postgres=arwdDxtm/postgres,=r/postgres}
+row user_mappings,v,3,t,p,t,information_schema.user_mappings,f,{postgres=arwdDxtm/postgres,=r/postgres}
+SELECT 69
+> SELECT t.typname, t.typtype, t.typcategory, t.typarray::regtype FROM pg_type t, pg_class c WHERE t.typrelid = c.oid AND c.relnamespace = 'information_schema'::regnamespace ORDER BY t.oid
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typcategory@pg_type.8:18:1:-1,typarray:2206:4:-1
+row information_schema_catalog_name,c,C,information_schema.information_schema_catalog_name[]
+row applicable_roles,c,C,information_schema.applicable_roles[]
+row administrable_role_authorizations,c,C,information_schema.administrable_role_authorizations[]
+row attributes,c,C,information_schema.attributes[]
+row character_sets,c,C,information_schema.character_sets[]
+row check_constraint_routine_usage,c,C,information_schema.check_constraint_routine_usage[]
+row check_constraints,c,C,information_schema.check_constraints[]
+row collations,c,C,information_schema.collations[]
+row collation_character_set_applicability,c,C,information_schema.collation_character_set_applicability[]
+row column_column_usage,c,C,information_schema.column_column_usage[]
+row column_domain_usage,c,C,information_schema.column_domain_usage[]
+row column_privileges,c,C,information_schema.column_privileges[]
+row column_udt_usage,c,C,information_schema.column_udt_usage[]
+row columns,c,C,information_schema.columns[]
+row constraint_column_usage,c,C,information_schema.constraint_column_usage[]
+row constraint_table_usage,c,C,information_schema.constraint_table_usage[]
+row domain_constraints,c,C,information_schema.domain_constraints[]
+row domain_udt_usage,c,C,information_schema.domain_udt_usage[]
+row domains,c,C,information_schema.domains[]
+row enabled_roles,c,C,information_schema.enabled_roles[]
+row key_column_usage,c,C,information_schema.key_column_usage[]
+row parameters,c,C,information_schema.parameters[]
+row referential_constraints,c,C,information_schema.referential_constraints[]
+row role_column_grants,c,C,information_schema.role_column_grants[]
+row routine_column_usage,c,C,information_schema.routine_column_usage[]
+row routine_privileges,c,C,information_schema.routine_privileges[]
+row role_routine_grants,c,C,information_schema.role_routine_grants[]
+row routine_routine_usage,c,C,information_schema.routine_routine_usage[]
+row routine_sequence_usage,c,C,information_schema.routine_sequence_usage[]
+row routine_table_usage,c,C,information_schema.routine_table_usage[]
+row routines,c,C,information_schema.routines[]
+row schemata,c,C,information_schema.schemata[]
+row sequences,c,C,information_schema.sequences[]
+row sql_features,c,C,information_schema.sql_features[]
+row sql_implementation_info,c,C,information_schema.sql_implementation_info[]
+row sql_parts,c,C,information_schema.sql_parts[]
+row sql_sizing,c,C,information_schema.sql_sizing[]
+row table_constraints,c,C,information_schema.table_constraints[]
+row table_privileges,c,C,information_schema.table_privileges[]
+row role_table_grants,c,C,information_schema.role_table_grants[]
+row tables,c,C,information_schema.tables[]
+row transforms,c,C,information_schema.transforms[]
+row triggered_update_columns,c,C,information_schema.triggered_update_columns[]
+row triggers,c,C,information_schema.triggers[]
+row udt_privileges,c,C,information_schema.udt_privileges[]
+row role_udt_grants,c,C,information_schema.role_udt_grants[]
+row usage_privileges,c,C,information_schema.usage_privileges[]
+row role_usage_grants,c,C,information_schema.role_usage_grants[]
+row user_defined_types,c,C,information_schema.user_defined_types[]
+row view_column_usage,c,C,information_schema.view_column_usage[]
+row view_routine_usage,c,C,information_schema.view_routine_usage[]
+row view_table_usage,c,C,information_schema.view_table_usage[]
+row views,c,C,information_schema.views[]
+row data_type_privileges,c,C,information_schema.data_type_privileges[]
+row element_types,c,C,information_schema.element_types[]
+row _pg_foreign_table_columns,c,C,information_schema._pg_foreign_table_columns[]
+row column_options,c,C,information_schema.column_options[]
+row _pg_foreign_data_wrappers,c,C,information_schema._pg_foreign_data_wrappers[]
+row foreign_data_wrapper_options,c,C,information_schema.foreign_data_wrapper_options[]
+row foreign_data_wrappers,c,C,information_schema.foreign_data_wrappers[]
+row _pg_foreign_servers,c,C,information_schema._pg_foreign_servers[]
+row foreign_server_options,c,C,information_schema.foreign_server_options[]
+row foreign_servers,c,C,information_schema.foreign_servers[]
+row _pg_foreign_tables,c,C,information_schema._pg_foreign_tables[]
+row foreign_table_options,c,C,information_schema.foreign_table_options[]
+row foreign_tables,c,C,information_schema.foreign_tables[]
+row _pg_user_mappings,c,C,information_schema._pg_user_mappings[]
+row user_mapping_options,c,C,information_schema.user_mapping_options[]
+row user_mappings,c,C,information_schema.user_mappings[]
+SELECT 69
+> SELECT count(*), md5(string_agg(concat_ws(' ', c.relname, a.attnum, a.attname, a.atttypid::regtype, a.atttypmod, a.attlen, a.attbyval, a.attalign, a.attnotnull, a.attcollation <> 0), ',' ORDER BY c.oid, a.attnum)) FROM pg_attribute a, pg_class c WHERE a.attrelid = c.oid AND c.relnamespace = 'information_schema'::regnamespace AND a.attnum > 0
+fields count:20:8:-1,md5:25:-1:-1
+row 696,0da401f51c1504cc5907b2c79adb619a
+SELECT 1
+> SELECT count(*), md5(string_agg(concat_ws(' ', t.oid, typname, typlen, typbyval, typtype, typcategory, typrelid, typelem, typarray, typinput, typoutput, typalign, typstorage, typbasetype, typtypmod, typcollation), ',' ORDER BY t.oid)) FROM pg_type t WHERE typnamespace = 'information_schema'::regnamespace
+fields count:20:8:-1,md5:25:-1:-1
+row 148,a4caeb3d3b4a4eb0266f2c06851efde3
+SELECT 1
+> SELECT count(*), md5(string_agg(concat_ws(' ', oid, rulename, ev_class, ev_type, ev_enabled, is_instead), ',' ORDER BY oid)) FROM pg_rewrite WHERE ev_class IN (SELECT oid FROM pg_class WHERE relnamespace = 'information_schema'::regnamespace)
+fields count:20:8:-1,md5:25:-1:-1
+row 65,082086ac059d42a2123c85bf331db1b3
+SELECT 1
+> SELECT count(*), md5(string_agg(concat_ws(' ', classid, objid, objsubid, refclassid, refobjid, refobjsubid, deptype), ',' ORDER BY classid, objid, objsubid, refclassid, refobjid, refobjsubid)) FROM pg_depend WHERE objid BETWEEN 13350 AND 13703
+fields count:20:8:-1,md5:25:-1:-1
+row 1252,a916a9f4b965dfcc76d972a8fb93b9f0
+SELECT 1
+> SELECT count(*), md5(string_agg(c.relname || ' ' || pg_get_viewdef(c.oid), ',' ORDER BY c.oid)) FROM pg_class c WHERE c.relnamespace = 'information_schema'::regnamespace AND c.relkind = 'v'
+fields count:20:8:-1,md5:25:-1:-1
+row 65,e7ca86e447a8827511d681f158fff45c
+SELECT 1
+> SELECT pg_get_viewdef('information_schema.enabled_roles'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT rolname::information_schema.sql_identifier AS role_name
+   FROM pg_authid a
+  WHERE pg_has_role(oid, 'USAGE'::text);
+SELECT 1
+> SELECT pg_get_viewdef('information_schema.schemata'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT current_database()::information_schema.sql_identifier AS catalog_name,
+    n.nspname::information_schema.sql_identifier AS schema_name,
+    u.rolname::information_schema.sql_identifier AS schema_owner,
+    NULL::name::information_schema.sql_identifier AS default_character_set_catalog,
+    NULL::name::information_schema.sql_identifier AS default_character_set_schema,
+    NULL::name::information_schema.sql_identifier AS default_character_set_name,
+    NULL::character varying::information_schema.character_data AS sql_path
+   FROM pg_namespace n,
+    pg_authid u
+  WHERE n.nspowner = u.oid AND (pg_has_role(n.nspowner, 'USAGE'::text) OR has_schema_privilege(n.oid, 'CREATE, USAGE'::text));
+SELECT 1
+> CREATE TABLE is_t (a int PRIMARY KEY, b varchar(10) NOT NULL DEFAULT 'x', c numeric(8, 2) CHECK (c > 0), d text[] UNIQUE)
+CREATE TABLE
+> CREATE TABLE is_r (x int REFERENCES is_t)
+CREATE TABLE
+> CREATE VIEW is_v AS SELECT a, b FROM is_t WHERE c > 1
+CREATE VIEW
+> SELECT constraint_schema, constraint_name, table_schema, table_name, constraint_type, is_deferrable, initially_deferred, enforced, nulls_distinct FROM information_schema.table_constraints WHERE table_name IN ('is_t', 'is_r') ORDER BY table_name, constraint_type, constraint_name
+fields constraint_schema@information_schema.table_constraints.2:19:64:-1,constraint_name@information_schema.table_constraints.3:19:64:-1,table_schema@information_schema.table_constraints.5:19:64:-1,table_name@information_schema.table_constraints.6:19:64:-1,constraint_type@information_schema.table_constraints.7:1043:-1:-1,is_deferrable@information_schema.table_constraints.8:1043:-1:7,initially_deferred@information_schema.table_constraints.9:1043:-1:7,enforced@information_schema.table_constraints.10:1043:-1:7,nulls_distinct@information_schema.table_constraints.11:1043:-1:7
+row public,is_r_x_fkey,public,is_r,FOREIGN KEY,NO,NO,YES,NULL
+row public,is_t_a_not_null,public,is_t,CHECK,NO,NO,YES,NULL
+row public,is_t_b_not_null,public,is_t,CHECK,NO,NO,YES,NULL
+row public,is_t_c_check,public,is_t,CHECK,NO,NO,YES,NULL
+row public,is_t_pkey,public,is_t,PRIMARY KEY,NO,NO,YES,NULL
+row public,is_t_d_key,public,is_t,UNIQUE,NO,NO,YES,YES
+SELECT 6
+> SELECT view_schema, view_name, table_schema, table_name FROM information_schema.view_table_usage WHERE view_name = 'is_v'
+fields view_schema@information_schema.view_table_usage.2:19:64:-1,view_name@information_schema.view_table_usage.3:19:64:-1,table_schema@information_schema.view_table_usage.5:19:64:-1,table_name@information_schema.view_table_usage.6:19:64:-1
+row public,is_v,public,is_t
+SELECT 1
+> SELECT view_schema, view_name, table_schema, table_name, column_name FROM information_schema.view_column_usage WHERE view_name = 'is_v' ORDER BY column_name
+fields view_schema@information_schema.view_column_usage.2:19:64:-1,view_name@information_schema.view_column_usage.3:19:64:-1,table_schema@information_schema.view_column_usage.5:19:64:-1,table_name@information_schema.view_column_usage.6:19:64:-1,column_name@information_schema.view_column_usage.7:19:64:-1
+row public,is_v,public,is_t,a
+row public,is_v,public,is_t,b
+row public,is_v,public,is_t,c
+SELECT 3
+> SELECT schema_name, schema_owner, default_character_set_name, sql_path FROM information_schema.schemata WHERE schema_name IN ('information_schema', 'pg_catalog', 'public') ORDER BY schema_name
+fields schema_name@information_schema.schemata.2:19:64:-1,schema_owner@information_schema.schemata.3:19:64:-1,default_character_set_name@information_schema.schemata.6:19:64:-1,sql_path@information_schema.schemata.7:1043:-1:-1
+row information_schema,postgres,NULL,NULL
+row pg_catalog,postgres,NULL,NULL
+row public,pg_database_owner,NULL,NULL
+SELECT 3
+> SELECT grantor, grantee, table_schema, table_name, privilege_type, is_grantable, with_hierarchy FROM information_schema.table_privileges WHERE table_name = 'is_t' ORDER BY privilege_type
+fields grantor@information_schema.table_privileges.1:19:64:-1,grantee@information_schema.table_privileges.2:19:64:-1,table_schema@information_schema.table_privileges.4:19:64:-1,table_name@information_schema.table_privileges.5:19:64:-1,privilege_type@information_schema.table_privileges.6:1043:-1:-1,is_grantable@information_schema.table_privileges.7:1043:-1:7,with_hierarchy@information_schema.table_privileges.8:1043:-1:7
+row postgres,postgres,public,is_t,DELETE,YES,NO
+row postgres,postgres,public,is_t,INSERT,YES,NO
+row postgres,postgres,public,is_t,REFERENCES,YES,NO
+row postgres,postgres,public,is_t,SELECT,YES,YES
+row postgres,postgres,public,is_t,TRIGGER,YES,NO
+row postgres,postgres,public,is_t,TRUNCATE,YES,NO
+row postgres,postgres,public,is_t,UPDATE,YES,NO
+SELECT 7
+> SELECT grantor, grantee, table_schema, table_name, column_name, privilege_type, is_grantable FROM information_schema.column_privileges WHERE table_name = 'is_t' ORDER BY column_name, privilege_type
+fields grantor@information_schema.column_privileges.1:19:64:-1,grantee@information_schema.column_privileges.2:19:64:-1,table_schema@information_schema.column_privileges.4:19:64:-1,table_name@information_schema.column_privileges.5:19:64:-1,column_name@information_schema.column_privileges.6:19:64:-1,privilege_type@information_schema.column_privileges.7:1043:-1:-1,is_grantable@information_schema.column_privileges.8:1043:-1:7
+row postgres,postgres,public,is_t,a,INSERT,YES
+row postgres,postgres,public,is_t,a,REFERENCES,YES
+row postgres,postgres,public,is_t,a,SELECT,YES
+row postgres,postgres,public,is_t,a,UPDATE,YES
+row postgres,postgres,public,is_t,b,INSERT,YES
+row postgres,postgres,public,is_t,b,REFERENCES,YES
+row postgres,postgres,public,is_t,b,SELECT,YES
+row postgres,postgres,public,is_t,b,UPDATE,YES
+row postgres,postgres,public,is_t,c,INSERT,YES
+row postgres,postgres,public,is_t,c,REFERENCES,YES
+row postgres,postgres,public,is_t,c,SELECT,YES
+row postgres,postgres,public,is_t,c,UPDATE,YES
+row postgres,postgres,public,is_t,d,INSERT,YES
+row postgres,postgres,public,is_t,d,REFERENCES,YES
+row postgres,postgres,public,is_t,d,SELECT,YES
+row postgres,postgres,public,is_t,d,UPDATE,YES
+SELECT 16
+> SELECT role_name FROM information_schema.enabled_roles WHERE role_name LIKE 'pg\_%' OR role_name = 'postgres' ORDER BY role_name
+fields role_name@information_schema.enabled_roles.1:19:64:-1
+row pg_checkpoint
+row pg_create_subscription
+row pg_database_owner
+row pg_execute_server_program
+row pg_maintain
+row pg_monitor
+row pg_read_all_data
+row pg_read_all_settings
+row pg_read_all_stats
+row pg_read_server_files
+row pg_signal_autovacuum_worker
+row pg_signal_backend
+row pg_stat_scan_tables
+row pg_use_reserved_connections
+row pg_write_all_data
+row pg_write_server_files
+row postgres
+SELECT 17
+> SELECT domain_schema, domain_name, data_type, character_maximum_length, numeric_precision, datetime_precision, domain_default, udt_name FROM information_schema.domains ORDER BY domain_name
+fields domain_schema@information_schema.domains.2:19:64:-1,domain_name@information_schema.domains.3:19:64:-1,data_type@information_schema.domains.4:1043:-1:-1,character_maximum_length@information_schema.domains.5:23:4:-1,numeric_precision@information_schema.domains.13:23:4:-1,datetime_precision@information_schema.domains.16:23:4:-1,domain_default@information_schema.domains.19:1043:-1:-1,udt_name@information_schema.domains.22:19:64:-1
+row information_schema,cardinal_number,integer,NULL,32,NULL,NULL,int4
+row information_schema,character_data,character varying,NULL,NULL,NULL,NULL,varchar
+row information_schema,sql_identifier,name,NULL,NULL,NULL,NULL,name
+row information_schema,time_stamp,timestamp with time zone,NULL,NULL,2,CURRENT_TIMESTAMP(2),timestamptz
+row information_schema,yes_or_no,character varying,3,NULL,NULL,NULL,varchar
+SELECT 5
+> SELECT constraint_schema, constraint_name, unique_constraint_schema, unique_constraint_name, match_option, update_rule, delete_rule FROM information_schema.referential_constraints
+fields constraint_schema@information_schema.referential_constraints.2:19:64:-1,constraint_name@information_schema.referential_constraints.3:19:64:-1,unique_constraint_schema@information_schema.referential_constraints.5:19:64:-1,unique_constraint_name@information_schema.referential_constraints.6:19:64:-1,match_option@information_schema.referential_constraints.7:1043:-1:-1,update_rule@information_schema.referential_constraints.8:1043:-1:-1,delete_rule@information_schema.referential_constraints.9:1043:-1:-1
+row public,is_r_x_fkey,public,is_t_pkey,NONE,NO ACTION,NO ACTION
+SELECT 1
+> SELECT udt_schema, udt_name, table_schema, table_name, column_name FROM information_schema.column_udt_usage WHERE table_name = 'is_t' ORDER BY column_name
+fields udt_schema@information_schema.column_udt_usage.2:19:64:-1,udt_name@information_schema.column_udt_usage.3:19:64:-1,table_schema@information_schema.column_udt_usage.5:19:64:-1,table_name@information_schema.column_udt_usage.6:19:64:-1,column_name@information_schema.column_udt_usage.7:19:64:-1
+row pg_catalog,int4,public,is_t,a
+row pg_catalog,varchar,public,is_t,b
+row pg_catalog,numeric,public,is_t,c
+row pg_catalog,_text,public,is_t,d
+SELECT 4
+> SELECT constraint_schema, constraint_name, domain_schema, domain_name, is_deferrable, initially_deferred FROM information_schema.domain_constraints ORDER BY constraint_name
+fields constraint_schema@information_schema.domain_constraints.2:19:64:-1,constraint_name@information_schema.domain_constraints.3:19:64:-1,domain_schema@information_schema.domain_constraints.5:19:64:-1,domain_name@information_schema.domain_constraints.6:19:64:-1,is_deferrable@information_schema.domain_constraints.7:1043:-1:7,initially_deferred@information_schema.domain_constraints.8:1043:-1:7
+row information_schema,cardinal_number_domain_check,information_schema,cardinal_number,NO,NO
+row information_schema,yes_or_no_check,information_schema,yes_or_no,NO,NO
+SELECT 2
+> SELECT udt_schema, udt_name, domain_schema, domain_name FROM information_schema.domain_udt_usage ORDER BY domain_name
+fields udt_schema@information_schema.domain_udt_usage.2:19:64:-1,udt_name@information_schema.domain_udt_usage.3:19:64:-1,domain_schema@information_schema.domain_udt_usage.5:19:64:-1,domain_name@information_schema.domain_udt_usage.6:19:64:-1
+row pg_catalog,int4,information_schema,cardinal_number
+row pg_catalog,varchar,information_schema,character_data
+row pg_catalog,name,information_schema,sql_identifier
+row pg_catalog,timestamptz,information_schema,time_stamp
+row pg_catalog,varchar,information_schema,yes_or_no
+SELECT 5
+> SELECT count(*) FROM information_schema.sequences
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM information_schema.foreign_data_wrappers
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM information_schema.column_domain_usage WHERE table_schema <> 'information_schema'
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM information_schema.attributes
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT 'yes'::information_schema.yes_or_no, 5::information_schema.cardinal_number, 'abc'::information_schema.sql_identifier
+fields yes_or_no:1043:-1:7,cardinal_number:23:4:-1,sql_identifier:19:64:-1
+ERROR 23514 value for domain information_schema.yes_or_no violates check constraint "yes_or_no_check"
+> SELECT (-1)::information_schema.cardinal_number
+fields cardinal_number:23:4:-1
+ERROR 23514 value for domain information_schema.cardinal_number violates check constraint "cardinal_number_domain_check"
+> SELECT 'maybe'::information_schema.yes_or_no
+fields yes_or_no:1043:-1:7
+ERROR 23514 value for domain information_schema.yes_or_no violates check constraint "yes_or_no_check"
+> SELECT a FROM information_schema.sql_parts
+ERROR 42703 column "a" does not exist at 8
