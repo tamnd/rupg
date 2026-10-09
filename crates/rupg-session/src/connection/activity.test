@@ -1,0 +1,106 @@
+> SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT pid = pg_backend_pid(), datid = (SELECT oid FROM pg_database WHERE datname = current_database()), usesysid, usename, state, query, wait_event_type, wait_event, backend_xid, backend_type, client_addr, client_hostname, client_port, leader_pid, query_id FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields ?column?:16:1:-1,?column?:16:1:-1,usesysid@pg_stat_activity.5:26:4:-1,usename@pg_stat_activity.6:19:64:-1,state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,wait_event_type@pg_stat_activity.15:25:-1:-1,wait_event@pg_stat_activity.16:25:-1:-1,backend_xid@pg_stat_activity.18:28:4:-1,backend_type@pg_stat_activity.22:25:-1:-1,client_addr@pg_stat_activity.8:869:-1:-1,client_hostname@pg_stat_activity.9:25:-1:-1,client_port@pg_stat_activity.10:23:4:-1,leader_pid@pg_stat_activity.4:23:4:-1,query_id@pg_stat_activity.20:20:8:-1
+row t,t,10,postgres,active,SELECT pid = pg_backend_pid(), datid = (SELECT oid FROM pg_database WHERE datname = current_database()), usesysid, usename, state, query, wait_event_type, wait_event, backend_xid, backend_type, client_addr, client_hostname, client_port, leader_pid, query_id FROM pg_stat_activity WHERE pid = pg_backend_pid(),NULL,NULL,NULL,client backend,NULL,NULL,-1,NULL,NULL
+SELECT 1
+> SELECT xact_start = now(), query_start = statement_timestamp(), backend_start <= query_start, state_change >= query_start, state_change <= clock_timestamp() FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,t
+SELECT 1
+> SET application_name = 'probe'
+SET
+application_name=probe
+> SELECT application_name, pg_typeof(backend_start), pg_typeof(client_addr), pg_typeof(query_id) FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields application_name@pg_stat_activity.7:25:-1:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row probe,timestamp with time zone,inet,bigint
+SELECT 1
+> SELECT 1 AS one; SELECT query FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields one:23:4:-1
+row 1
+SELECT 1
+fields query@pg_stat_activity.21:25:-1:-1
+row SELECT 1 AS one; SELECT query FROM pg_stat_activity WHERE pid = pg_backend_pid()
+SELECT 1
+> BEGIN
+BEGIN
+> SELECT state, query, xact_start = now() FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,?column?:16:1:-1
+row active,SELECT state, query, xact_start = now() FROM pg_stat_activity WHERE pid = pg_backend_pid(),t
+SELECT 1
+> SELECT state, query, xact_start = now(), query_start < statement_timestamp() FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1
+row active,SELECT state, query, xact_start = now() FROM pg_stat_activity WHERE pid = pg_backend_pid(),t,t
+SELECT 1
+> SELECT pg_stat_clear_snapshot()
+fields pg_stat_clear_snapshot:2278:4:-1
+row 
+SELECT 1
+> SELECT state, query, query_start = statement_timestamp() FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,?column?:16:1:-1
+row active,SELECT state, query, query_start = statement_timestamp() FROM pg_stat_activity WHERE pid = pg_backend_pid(),t
+SELECT 1
+> COMMIT
+COMMIT
+> SELECT count(*) FROM pg_stat_get_activity(pg_backend_pid())
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT count(*) FROM pg_stat_get_activity(0)
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_stat_get_activity(NULL) WHERE pid = pg_backend_pid()
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT pg_stat_get_backend_pid(s) = pg_backend_pid(), pg_stat_get_backend_userid(s), pg_stat_get_backend_activity(s), pg_stat_get_backend_activity_start(s) = statement_timestamp(), pg_stat_get_backend_xact_start(s) = now(), pg_stat_get_backend_start(s) <= now(), pg_stat_get_backend_client_addr(s), pg_stat_get_backend_client_port(s), pg_stat_get_backend_wait_event_type(s), pg_stat_get_backend_wait_event(s) FROM pg_stat_get_backend_idset() s WHERE pg_stat_get_backend_dbid(s) = (SELECT oid FROM pg_database WHERE datname = current_database())
+fields ?column?:16:1:-1,pg_stat_get_backend_userid:26:4:-1,pg_stat_get_backend_activity:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,pg_stat_get_backend_client_addr:869:-1:-1,pg_stat_get_backend_client_port:23:4:-1,pg_stat_get_backend_wait_event_type:25:-1:-1,pg_stat_get_backend_wait_event:25:-1:-1
+row t,10,SELECT pg_stat_get_backend_pid(s) = pg_backend_pid(), pg_stat_get_backend_userid(s), pg_stat_get_backend_activity(s), pg_stat_get_backend_activity_start(s) = statement_timestamp(), pg_stat_get_backend_xact_start(s) = now(), pg_stat_get_backend_start(s) <= now(), pg_stat_get_backend_client_addr(s), pg_stat_get_backend_client_port(s), pg_stat_get_backend_wait_event_type(s), pg_stat_get_backend_wait_event(s) FROM pg_stat_get_backend_idset() s WHERE pg_stat_get_backend_dbid(s) = (SELECT oid FROM pg_database WHERE datname = current_database()),t,t,t,NULL,-1,NULL,NULL
+SELECT 1
+> SELECT pg_stat_get_backend_pid(-1), pg_stat_get_backend_dbid(-1), pg_stat_get_backend_userid(-1), pg_stat_get_backend_activity(-1), pg_stat_get_backend_wait_event_type(-1), pg_stat_get_backend_wait_event(-1), pg_stat_get_backend_activity_start(-1), pg_stat_get_backend_xact_start(-1), pg_stat_get_backend_start(-1), pg_stat_get_backend_client_addr(-1), pg_stat_get_backend_client_port(-1)
+fields pg_stat_get_backend_pid:23:4:-1,pg_stat_get_backend_dbid:26:4:-1,pg_stat_get_backend_userid:26:4:-1,pg_stat_get_backend_activity:25:-1:-1,pg_stat_get_backend_wait_event_type:25:-1:-1,pg_stat_get_backend_wait_event:25:-1:-1,pg_stat_get_backend_activity_start:1184:8:-1,pg_stat_get_backend_xact_start:1184:8:-1,pg_stat_get_backend_start:1184:8:-1,pg_stat_get_backend_client_addr:869:-1:-1,pg_stat_get_backend_client_port:23:4:-1
+row NULL,NULL,NULL,<backend information not available>,<backend information not available>,<backend information not available>,NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_stat_get_db_numbackends(oid) FROM pg_database WHERE datname = current_database()
+fields pg_stat_get_db_numbackends:23:4:-1
+row 1
+SELECT 1
+> SELECT pg_stat_get_db_numbackends(1), pg_stat_get_db_numbackends(4)
+fields pg_stat_get_db_numbackends:23:4:-1,pg_stat_get_db_numbackends:23:4:-1
+row 0,0
+SELECT 1
+> SELECT numbackends FROM pg_stat_database WHERE datname = current_database()
+fields numbackends@pg_stat_database.3:23:4:-1
+row 1
+SELECT 1
+> SELECT inet_client_addr(), inet_client_port(), inet_server_addr(), inet_server_port()
+fields inet_client_addr:869:-1:-1,inet_client_port:23:4:-1,inet_server_addr:869:-1:-1,inet_server_port:23:4:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT ssl, version, cipher, bits, client_dn, client_serial, issuer_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid()
+fields ssl@pg_stat_ssl.2:16:1:-1,version@pg_stat_ssl.3:25:-1:-1,cipher@pg_stat_ssl.4:25:-1:-1,bits@pg_stat_ssl.5:23:4:-1,client_dn@pg_stat_ssl.6:25:-1:-1,client_serial@pg_stat_ssl.7:1700:-1:-1,issuer_dn@pg_stat_ssl.8:25:-1:-1
+row f,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT gss_authenticated, principal, encrypted, credentials_delegated FROM pg_stat_gssapi WHERE pid = pg_backend_pid()
+fields gss_authenticated@pg_stat_gssapi.2:16:1:-1,principal@pg_stat_gssapi.3:25:-1:-1,encrypted@pg_stat_gssapi.4:16:1:-1,credentials_delegated@pg_stat_gssapi.5:16:1:-1
+row f,NULL,f,f
+SELECT 1
+> SET track_activities = off
+SET
+> SELECT state, query, query_start, xact_start, state_change, wait_event FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,query_start@pg_stat_activity.13:1184:8:-1,xact_start@pg_stat_activity.12:1184:8:-1,state_change@pg_stat_activity.14:1184:8:-1,wait_event@pg_stat_activity.16:25:-1:-1
+row disabled,,NULL,NULL,NULL,NULL
+SELECT 1
+> RESET track_activities
+RESET
+> SELECT state, query FROM pg_stat_activity WHERE pid = pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1
+row active,SELECT state, query FROM pg_stat_activity WHERE pid = pg_backend_pid()
+SELECT 1
+> SELECT length(query), octet_length(query), right(query, 3) FROM pg_stat_activity WHERE pid = pg_backend_pid() AND 'éééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééééé' <> ''
+fields length:23:4:-1,octet_length:23:4:-1,right:25:-1:-1
+row 569,1023,ééé
+SELECT 1

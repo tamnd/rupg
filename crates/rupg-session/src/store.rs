@@ -1,4 +1,4 @@
-//! The catalog that the sessions of a server share, and the lock of the statements that change it.
+//! The catalog that the sessions of a server share, the lock of the statements that change it, and the table of the sessions.
 
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
@@ -6,6 +6,7 @@ use std::time::Duration;
 
 use rupg_catalog::Catalog;
 use rupg_common::{Error, Result, SqlState};
+use rupg_func::Backend;
 use rupg_platform::Tasks;
 
 /// How long a session waits for the lock before it looks at its cancel flag again.
@@ -18,6 +19,8 @@ pub struct Store {
     free: Condvar,
     /// The tasks of the server. A session that waits for the lock lets the other tasks run, because the simulated scheduler runs all the tasks on one thread.
     tasks: Option<Arc<dyn Tasks>>,
+    /// The table of the sessions, `BackendStatusArray`. The index of a slot is the number of its session.
+    backends: Mutex<Vec<Option<Backend>>>,
 }
 
 #[derive(Debug)]
@@ -77,6 +80,47 @@ impl Store {
         state.locked = true;
         Ok(Lease { store: Arc::clone(self), catalog: Arc::clone(&state.committed) })
     }
+
+    fn backends_mut(&self) -> MutexGuard<'_, Vec<Option<Backend>>> {
+        self.backends.lock().unwrap_or_else(PoisonError::into_inner)
+    }
+
+    /// `pgstat_bestart`: puts a session in the first free slot of the table, and gives the number of the slot.
+    pub(crate) fn join(&self, mut backend: Backend) -> i32 {
+        let mut backends = self.backends_mut();
+        let slot = backends.iter().position(Option::is_none).unwrap_or(backends.len());
+        let number = i32::try_from(slot).unwrap_or(i32::MAX);
+        backend.number = number;
+        if slot == backends.len() {
+            backends.push(Some(backend));
+        } else {
+            backends[slot] = Some(backend);
+        }
+        number
+    }
+
+    /// The end of a session, which frees its slot.
+    pub(crate) fn leave(&self, number: i32) {
+        let mut backends = self.backends_mut();
+        if let Some(slot) = usize::try_from(number).ok().and_then(|at| backends.get_mut(at)) {
+            *slot = None;
+        }
+    }
+
+    /// Changes the row of the session with this number.
+    pub(crate) fn report(&self, number: i32, change: impl FnOnce(&mut Backend)) {
+        let mut backends = self.backends_mut();
+        if let Some(Some(backend)) =
+            usize::try_from(number).ok().and_then(|at| backends.get_mut(at))
+        {
+            change(backend);
+        }
+    }
+
+    /// `pgstat_read_current_status`: a copy of the rows of the table, in the order of their numbers.
+    pub(crate) fn backends(&self) -> Arc<[Backend]> {
+        self.backends_mut().iter().flatten().cloned().collect()
+    }
 }
 
 /// The lock of a transaction and its copy of the catalog. The drop of a lease releases the lock and discards the changes, but the OIDs that the transaction used stay used, as in PostgreSQL.
@@ -127,6 +171,22 @@ mod tests {
         assert_eq!(oid, next);
         lease.commit();
         assert_eq!(store.committed().schema_by_name("s").map(|s| s.oid), Some(oid));
+    }
+
+    /// A session takes the first free slot of the table, and a snapshot has the rows in the order of the slots.
+    #[test]
+    fn sessions_take_the_free_slots() {
+        let store = Store::new();
+        let backend = |pid| Backend { pid, ..Backend::default() };
+        assert_eq!(store.join(backend(1)), 0);
+        assert_eq!(store.join(backend(2)), 1);
+        store.leave(0);
+        assert_eq!(store.join(backend(3)), 0);
+        store.report(1, |b| b.query = "SELECT 1".to_owned());
+        let rows = store.backends();
+        let seen: Vec<(i32, i32, &str)> =
+            rows.iter().map(|b| (b.number, b.pid, b.query.as_str())).collect();
+        assert_eq!(seen, [(0, 3, ""), (1, 2, "SELECT 1")]);
     }
 
     #[test]

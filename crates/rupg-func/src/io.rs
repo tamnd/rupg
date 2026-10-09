@@ -82,6 +82,7 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::ACLITEM
             | oid::ANYARRAY
             | oid::PG_LSN
+            | oid::VOID
     ) || RegKind::from_oid(ty).is_some()
 }
 
@@ -91,7 +92,8 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some((elem, _)) = array_of(ty) {
         return input_supported(elem);
     }
-    output_supported(ty) && !matches!(ty, XID | CID | oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN)
+    output_supported(ty)
+        && !matches!(ty, XID | CID | oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN | oid::VOID)
 }
 
 /// The name of a type for an error.

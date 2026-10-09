@@ -243,6 +243,13 @@ fn has_privs_of_role(member: u32, role: u32) -> bool {
     reaches(member, role, Recurse::Privs)
 }
 
+/// `HAS_PGSTAT_PERMISSIONS`: the current user has the privileges of `pg_read_all_stats` or of `role`, so it sees all the columns of a session of `role`.
+pub(crate) fn has_pgstat_permissions(session: &dyn Session, role: u32) -> bool {
+    let user = current_user(session);
+    role_oid("pg_read_all_stats", session).is_some_and(|stats| has_privs_of_role(user, stats))
+        || has_privs_of_role(user, role)
+}
+
 /// `is_admin_of_role`: true when `member` is a superuser, or when a role that `member` is a member of has the admin option on `role`. A role is not an admin of itself.
 fn is_admin_of_role(member: u32, role: u32) -> bool {
     if superuser(member) {

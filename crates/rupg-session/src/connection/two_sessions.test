@@ -1,0 +1,61 @@
+A> SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+fields count:20:8:-1
+row 2
+SELECT 1
+B> SELECT 'b one'
+fields ?column?:25:-1:-1
+row b one
+SELECT 1
+A> SELECT state, query, wait_event_type, wait_event, xact_start IS NULL, query_start <= state_change, backend_type FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,wait_event_type@pg_stat_activity.15:25:-1:-1,wait_event@pg_stat_activity.16:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1,backend_type@pg_stat_activity.22:25:-1:-1
+row idle,SELECT 'b one',Client,ClientRead,t,t,client backend
+SELECT 1
+B> BEGIN
+BEGIN
+B> SELECT 'b two'
+fields ?column?:25:-1:-1
+row b two
+SELECT 1
+A> SELECT state, query, wait_event_type, wait_event, xact_start IS NULL, query_start <= state_change FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,wait_event_type@pg_stat_activity.15:25:-1:-1,wait_event@pg_stat_activity.16:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1
+row idle in transaction,SELECT 'b two',Client,ClientRead,f,t
+SELECT 1
+B> SELECT 1/0
+ERROR 22012 division by zero
+A> SELECT state, query, wait_event_type, wait_event, xact_start IS NULL, query_start <= state_change FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,wait_event_type@pg_stat_activity.15:25:-1:-1,wait_event@pg_stat_activity.16:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1
+row idle in transaction (aborted),SELECT 1/0,Client,ClientRead,t,t
+SELECT 1
+B> ROLLBACK
+ROLLBACK
+A> SELECT state, query, wait_event_type, wait_event, xact_start IS NULL, query_start <= state_change FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+fields state@pg_stat_activity.17:25:-1:-1,query@pg_stat_activity.21:25:-1:-1,wait_event_type@pg_stat_activity.15:25:-1:-1,wait_event@pg_stat_activity.16:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1
+row idle,ROLLBACK,Client,ClientRead,t,t
+SELECT 1
+A> BEGIN
+BEGIN
+A> SELECT count(*) FROM pg_stat_activity WHERE datname = current_database()
+fields count:20:8:-1
+row 2
+SELECT 1
+B> SELECT 'b three'
+fields ?column?:25:-1:-1
+row b three
+SELECT 1
+A> SELECT query FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+fields query@pg_stat_activity.21:25:-1:-1
+row ROLLBACK
+SELECT 1
+A> COMMIT
+COMMIT
+A> SELECT query FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+fields query@pg_stat_activity.21:25:-1:-1
+row SELECT 'b three'
+SELECT 1
+B> SET application_name = 'bee'
+SET
+application_name=bee
+A> SELECT application_name, query FROM pg_stat_activity WHERE datname = current_database() AND pid <> pg_backend_pid()
+fields application_name@pg_stat_activity.7:25:-1:-1,query@pg_stat_activity.21:25:-1:-1
+row bee,SET application_name = 'bee'
+SELECT 1

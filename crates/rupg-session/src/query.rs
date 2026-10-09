@@ -10,6 +10,7 @@ use rupg_analyze::{Env, Params};
 use rupg_catalog::Catalog;
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
+use rupg_func::{Backend, Client};
 use rupg_platform::Clock;
 use rupg_sql::nodes::Node;
 use rupg_types::{
@@ -18,8 +19,10 @@ use rupg_types::{
 };
 use rupg_wire::Field;
 
+use crate::connection::Activity;
 use crate::guc::{self, Action, Origin, Settings, Zone};
 use crate::param::type_error;
+use crate::store::Store;
 use crate::utility;
 
 /// The schemas of a new database, from `pg_namespace.dat`.
@@ -87,6 +90,8 @@ pub(crate) struct Reader<'a> {
     pub(crate) catalog: Arc<Catalog>,
     /// The text of `TimeZone` and its zone, or the name of a zone whose rules the engine does not have yet. A call of `set_config` can change the setting, so the zone is made again when the text changes.
     zone: RefCell<(String, ZoneOf)>,
+    /// The row of the session in the table of the sessions, and the store that has the table, or `None` for a reader that is not a session.
+    activity: Option<(&'a Activity, &'a Store)>,
 }
 
 /// The zone of a `TimeZone` value, or the name of a zone whose rules the engine does not have yet.
@@ -114,7 +119,14 @@ impl<'a> Reader<'a> {
             pid,
             catalog,
             zone: RefCell::new((name, zone)),
+            activity: None,
         }
+    }
+
+    /// The reader of a session, which reads the table of the sessions in `store`.
+    pub(crate) fn with_activity(mut self, activity: &'a Activity, store: &'a Store) -> Reader<'a> {
+        self.activity = Some((activity, store));
+        self
     }
 
     /// The settings of the session.
@@ -269,6 +281,24 @@ impl rupg_func::Session for Reader<'_> {
 
     fn backend_pid(&self) -> i32 {
         self.pid
+    }
+
+    fn backends(&self) -> Arc<[Backend]> {
+        match self.activity {
+            Some((activity, store)) => activity.backends(store, &self.settings()),
+            None => Arc::from(Vec::new()),
+        }
+    }
+
+    fn clear_backends(&self) {
+        if let Some((activity, _)) = self.activity {
+            activity.clear();
+        }
+    }
+
+    fn addresses(&self) -> (Client, Client) {
+        self.activity
+            .map_or_else(Default::default, |(activity, _)| (activity.client, activity.server))
     }
 
     fn version(&self) -> String {

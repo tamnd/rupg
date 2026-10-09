@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
-use rupg_session::connection::{self, Connection, Next, Start};
+use rupg_session::connection::{self, Client, Connection, Next, Start};
 use rupg_session::guc::Settings;
 use rupg_session::store::Store;
 use rupg_wire::{
@@ -724,6 +724,14 @@ fn register(
     }
 }
 
+/// An end of the connection from the text of its address. A Unix socket has no address.
+fn address(wire: &Wire, text: &str) -> Client {
+    if wire.stream.is_local() {
+        return Client::Local;
+    }
+    text.parse().map_or(Client::Unknown, Client::Inet)
+}
+
 /// The authentication, the start of the session, and the main loop.
 fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
     let Some(notices) = auth::authenticate(shared, wire, start, protocol) else {
@@ -754,6 +762,8 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         connection.set_clock(Arc::clone(clock));
     }
     connection.set_store(Arc::clone(&shared.store));
+    let client = address(wire, &wire.stream.peer_addr());
+    connection.set_addresses(client, address(wire, &wire.stream.local_addr()));
     let (_registered, key) = register(shared, protocol, connection.cancel_flag());
     connection.greet(&key, &mut wire.out);
     loop {

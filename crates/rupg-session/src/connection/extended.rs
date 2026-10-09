@@ -9,6 +9,7 @@ use std::sync::Arc;
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
+use rupg_func::BackendState;
 use rupg_sql::nodes::Node;
 use rupg_types::{Value, oid};
 use rupg_wire::{Bind, CommandTag, Field, Oids, OutBuf, ProtocolError, Target};
@@ -118,9 +119,10 @@ impl Connection {
         types: Oids<'_>,
         out: &mut OutBuf,
     ) -> Result<(), Failed> {
+        let text = String::from_utf8_lossy(sql).into_owned();
+        self.report(BackendState::Running, Some(&text));
         self.start_xact();
         self.statements.start_parse(name);
-        let text = String::from_utf8_lossy(sql).into_owned();
         let (list, parser_notices) = rupg_sql::parse(&text).map_err(|error| {
             let position = error.position(&text);
             Failed { error: error.into(), position }
@@ -188,6 +190,7 @@ impl Connection {
     /// `exec_bind_message`.
     pub(super) fn bind(&mut self, bind: Bind<'_>, out: &mut OutBuf) -> Result<(), Failed> {
         let statement = Arc::clone(self.statements.get(bind.statement)?);
+        self.report(BackendState::Running, Some(&statement.text));
         self.start_xact();
         let mut values = bind.params(statement.params.len())?;
         // Only a statement that ends the transaction, with no parameters, can run in a failed block.
@@ -310,6 +313,7 @@ impl Connection {
             out.empty_query_response();
             return Ok(());
         };
+        self.report(BackendState::Running, Some(&statement.text));
         let transaction_statement = matches!(node, Node::TransactionStmt(_));
         self.start_xact();
         if self.transaction.failed() && !utility::exits_transaction(node) {
