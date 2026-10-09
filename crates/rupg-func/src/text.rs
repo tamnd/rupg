@@ -1,6 +1,7 @@
 //! The string functions of `varlena.c`, `oracle_compat.c`, `like.c` and `quote.c` for the C locale and the UTF8 encoding.
 
 use md5::{Digest, Md5};
+use rupg_catalog::names::{NAMEDATALEN, clip};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::Category;
 use rupg_types::{Value, oid};
@@ -596,6 +597,16 @@ pub(crate) fn bit_length(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(count(bytes.saturating_mul(8)))
 }
 
+/// `nameconcatoid`: the name, then `_` and the OID. The views of `information_schema` use it for names that must be unique. When the result is longer than `NAMEDATALEN - 1` bytes, the name loses characters at its end, and the OID stays whole.
+fn nameconcatoid(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(Value::Oid(oid)) = args.get(1) else {
+        return Err(bad_value());
+    };
+    let suffix = format!("_{oid}");
+    let name = clip(arg(args, 0)?, NAMEDATALEN - 1 - suffix.len());
+    Ok(Value::Text(format!("{name}{suffix}")))
+}
+
 /// The kernel of a string function by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
@@ -635,6 +646,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "md5_text" => md5_text,
         "text_concat" => concat,
         "text_concat_ws" => concat_ws,
+        "nameconcatoid" => nameconcatoid,
         _ => return None,
     })
 }

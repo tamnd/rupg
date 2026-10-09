@@ -1949,6 +1949,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/information_schema.test")));
     }
 
+    /// `nameconcatoid` and `getdatabaseencoding`, and the views of `information_schema` that call them: the character sets, the collations of each character set, the routines with their parameters and privileges, and the usage views of the routines. `nameconcatoid` cuts a long name at a character boundary and keeps the OID whole. `connection/routine_views.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn routine_views() {
+        big_stack(|| script(include_str!("connection/routine_views.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {
