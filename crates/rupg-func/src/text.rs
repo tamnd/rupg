@@ -578,6 +578,214 @@ fn concat_ws(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Text(join(call, &values, separator)?))
 }
 
+/// The error of a format string of `format` that ends in a conversion specifier.
+fn unterminated_format() -> Error {
+    Error::new(SqlState::INVALID_PARAMETER_VALUE, "unterminated format() type specifier")
+        .with_hint("For a single \"%\" use \"%%\".")
+}
+
+/// The error of a number in a format string of `format` that is too large.
+fn format_out_of_range() -> Error {
+    Error::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "number is out of range")
+}
+
+/// `ADVANCE_PARSE_POINTER`: the next byte of the format string, or an error when the string ends.
+fn format_advance(bytes: &[u8], at: &mut usize) -> Result<()> {
+    *at += 1;
+    if *at >= bytes.len() {
+        return Err(unterminated_format());
+    }
+    Ok(())
+}
+
+/// `text_format_parse_digits`: the number of the decimal digits at `at`, or `None` when there is no digit.
+fn format_digits(bytes: &[u8], at: &mut usize) -> Result<Option<i32>> {
+    let mut found = None;
+    while bytes[*at].is_ascii_digit() {
+        let digit = i32::from(bytes[*at] - b'0');
+        let value = found.unwrap_or(0i32);
+        let value = value.checked_mul(10).and_then(|v| v.checked_add(digit));
+        found = Some(value.ok_or_else(format_out_of_range)?);
+        format_advance(bytes, at)?;
+    }
+    Ok(found)
+}
+
+/// The parts of a conversion specifier of `format` before its type: `[argpos$][-][width]`, `[argpos$][-]*` or `[argpos$][-]*widthpos$`.
+#[derive(Debug, Default)]
+struct FormatSpec {
+    /// The number of the argument to show, or `None` for the next argument.
+    argpos: Option<usize>,
+    /// The number of the argument of the width, 0 for the next argument, or `None` when no argument gives the width.
+    widthpos: Option<usize>,
+    /// True for the flag `-`, which aligns the value to the left.
+    minus: bool,
+    /// The width that the specifier gives, or 0.
+    width: i32,
+}
+
+/// The number of an argument in a format string. The arguments are numbered from 1.
+fn format_position(n: i32) -> Result<usize> {
+    if n == 0 {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "format specifies argument 0, but arguments are numbered from 1",
+        ));
+    }
+    usize::try_from(n).map_err(|_| format_out_of_range())
+}
+
+/// `text_format_parse_format`: the parts of a conversion specifier after the `%`. At the end, `at` is at the type of the specifier.
+fn format_spec(bytes: &[u8], at: &mut usize) -> Result<FormatSpec> {
+    let mut spec = FormatSpec::default();
+    if let Some(n) = format_digits(bytes, at)? {
+        if bytes[*at] != b'$' {
+            spec.width = n;
+            return Ok(spec);
+        }
+        spec.argpos = Some(format_position(n)?);
+        format_advance(bytes, at)?;
+    }
+    while bytes[*at] == b'-' {
+        spec.minus = true;
+        format_advance(bytes, at)?;
+    }
+    if bytes[*at] == b'*' {
+        format_advance(bytes, at)?;
+        match format_digits(bytes, at)? {
+            Some(n) => {
+                if bytes[*at] != b'$' {
+                    return Err(Error::new(
+                        SqlState::INVALID_PARAMETER_VALUE,
+                        "width argument position must be ended by \"$\"",
+                    ));
+                }
+                spec.widthpos = Some(format_position(n)?);
+                format_advance(bytes, at)?;
+            }
+            None => spec.widthpos = Some(0),
+        }
+    } else if let Some(n) = format_digits(bytes, at)? {
+        spec.width = n;
+    }
+    Ok(spec)
+}
+
+/// `text_format_append_string`: the string with spaces before it, or after it when `left` is true, up to `width` characters. A negative width aligns to the left.
+fn format_append(out: &mut String, s: &str, left: bool, width: i32) -> Result<()> {
+    let (left, width) = if width < 0 {
+        (true, width.checked_neg().ok_or_else(format_out_of_range)?)
+    } else {
+        (left, width)
+    };
+    let pad = usize::try_from(width).unwrap_or(0).saturating_sub(s.chars().count());
+    if !left {
+        out.extend(std::iter::repeat_n(' ', pad));
+    }
+    out.push_str(s);
+    if left {
+        out.extend(std::iter::repeat_n(' ', pad));
+    }
+    Ok(())
+}
+
+/// The text of the output function of the type, as `OutputFunctionCall` gives it. A `boolean` gives `t` or `f`, and not the `true` or `false` of a cast to `text`.
+fn output_text(ty: u32, value: &Value, session: &dyn crate::Session) -> Result<String> {
+    let mut out = Vec::new();
+    output(ty, value, session, &mut out)?;
+    String::from_utf8(out)
+        .map_err(|_| Error::internal("an output function gave bytes that are not UTF-8"))
+}
+
+/// The argument of `format` with this number, from 1, with its type.
+fn format_arg<'a>(values: &[(u32, &'a Value)], arg: usize) -> Result<(u32, &'a Value)> {
+    values.get(arg.wrapping_sub(1)).copied().ok_or_else(|| {
+        Error::new(SqlState::INVALID_PARAMETER_VALUE, "too few arguments for format()")
+    })
+}
+
+/// `text_format` and `text_format_nv`: `format(text)` and `format(text, VARIADIC "any")`. Each `%s`, `%I` or `%L` of the format string shows the text of an argument, as an identifier with `%I` and as a literal with `%L`. `%%` shows `%`. A null format string gives null, and the null array of a `VARIADIC` call has no elements. It is not strict.
+fn format(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let fmt = match args.first() {
+        Some(Value::Null) => return Ok(Value::Null),
+        Some(Value::Text(s)) => s.as_str(),
+        _ => return Err(bad_value()),
+    };
+    let values = variadic_values(call, args, 1)?.unwrap_or_default();
+    let bytes = fmt.as_bytes();
+    let mut out = String::new();
+    let mut arg = 1;
+    let mut start = 0;
+    let mut at = 0;
+    while at < bytes.len() {
+        if bytes[at] != b'%' {
+            at += 1;
+            continue;
+        }
+        out.push_str(&fmt[start..at]);
+        format_advance(bytes, &mut at)?;
+        if bytes[at] == b'%' {
+            out.push('%');
+            at += 1;
+            start = at;
+            continue;
+        }
+        let spec = format_spec(bytes, &mut at)?;
+        let conversion = bytes[at];
+        if !matches!(conversion, b's' | b'I' | b'L') {
+            let found = fmt[at..].chars().next().unwrap_or_default();
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!("unrecognized format() type specifier \"{found}\""),
+            )
+            .with_hint("For a single \"%\" use \"%%\"."));
+        }
+        let mut width = spec.width;
+        if let Some(widthpos) = spec.widthpos {
+            if widthpos > 0 {
+                arg = widthpos;
+            }
+            let (ty, value) = format_arg(&values, arg)?;
+            arg += 1;
+            width = match value {
+                Value::Null => 0,
+                Value::Int4(n) => *n,
+                Value::Int2(n) => i32::from(*n),
+                _ => {
+                    let text = output_text(ty, value, call.session)?;
+                    match crate::input(oid::INT4, &text, -1, call.session)? {
+                        Value::Int4(n) => n,
+                        _ => return Err(bad_value()),
+                    }
+                }
+            };
+        }
+        if let Some(argpos) = spec.argpos {
+            arg = argpos;
+        }
+        let (ty, value) = format_arg(&values, arg)?;
+        arg += 1;
+        let text = match (value, conversion) {
+            (Value::Null, b's') => String::new(),
+            (Value::Null, b'L') => "NULL".to_owned(),
+            (Value::Null, _) => {
+                return Err(Error::new(
+                    SqlState::NULL_VALUE_NOT_ALLOWED,
+                    "null values cannot be formatted as an SQL identifier",
+                ));
+            }
+            (_, b'I') => quote_identifier(&output_text(ty, value, call.session)?),
+            (_, b'L') => quote_literal_text(&output_text(ty, value, call.session)?),
+            _ => output_text(ty, value, call.session)?,
+        };
+        format_append(&mut out, &text, spec.minus, width)?;
+        at += 1;
+        start = at;
+    }
+    out.push_str(&fmt[start..]);
+    Ok(Value::Text(out))
+}
+
 /// `textanycat` and `anytextcat`: `||` with one argument of a type that is not a string, which is a function in SQL that casts that argument to `text`.
 pub(crate) fn any_concat(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let mut out = String::new();
@@ -646,6 +854,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "md5_text" => md5_text,
         "text_concat" => concat,
         "text_concat_ws" => concat_ws,
+        "text_format" | "text_format_nv" => format,
         "nameconcatoid" => nameconcatoid,
         _ => return None,
     })
