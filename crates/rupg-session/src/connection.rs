@@ -1688,6 +1688,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/databases.test")));
     }
 
+    /// The views of the work that rupg does not do yet, which have no rows: the progress of commands, replication, the logical replication workers, the replication slots and the prepared transactions. Also the statistics of a subscription with no statistics, the error for an unknown command name and the names of the phases of an index build. `connection/replication.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn replication() {
+        big_stack(|| script(include_str!("connection/replication.test")));
+    }
+
     /// The table of the sessions in `pg_stat_activity` and the functions of one session: the state, the text of the statement and its times, the snapshot of a transaction and `pg_stat_clear_snapshot`, `track_activities` and `track_activity_query_size`, the addresses of a Unix socket, and the views `pg_stat_ssl`, `pg_stat_gssapi` and `pg_stat_database`. `connection/activity.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn activity() {

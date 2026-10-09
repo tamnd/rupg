@@ -1,0 +1,120 @@
+> SELECT count(*) FROM pg_stat_progress_vacuum
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_stat_progress_analyze
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_stat_progress_cluster
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_stat_progress_repack
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_stat_progress_create_index
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_stat_progress_basebackup
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_stat_progress_copy
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM pg_stat_get_progress_info('vacuum')
+fields pid:23:4:-1,datid:26:4:-1,relid:26:4:-1,param1:20:8:-1,param2:20:8:-1,param3:20:8:-1,param4:20:8:-1,param5:20:8:-1,param6:20:8:-1,param7:20:8:-1,param8:20:8:-1,param9:20:8:-1,param10:20:8:-1,param11:20:8:-1,param12:20:8:-1,param13:20:8:-1,param14:20:8:-1,param15:20:8:-1,param16:20:8:-1,param17:20:8:-1,param18:20:8:-1,param19:20:8:-1,param20:20:8:-1
+SELECT 0
+> SELECT count(*) FROM pg_stat_get_progress_info('Create Index')
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM pg_stat_get_progress_info('reindex')
+fields pid:23:4:-1,datid:26:4:-1,relid:26:4:-1,param1:20:8:-1,param2:20:8:-1,param3:20:8:-1,param4:20:8:-1,param5:20:8:-1,param6:20:8:-1,param7:20:8:-1,param8:20:8:-1,param9:20:8:-1,param10:20:8:-1,param11:20:8:-1,param12:20:8:-1,param13:20:8:-1,param14:20:8:-1,param15:20:8:-1,param16:20:8:-1,param17:20:8:-1,param18:20:8:-1,param19:20:8:-1,param20:20:8:-1
+ERROR 22023 invalid command name: "reindex"
+> SELECT * FROM pg_stat_get_progress_info(NULL)
+fields pid:23:4:-1,datid:26:4:-1,relid:26:4:-1,param1:20:8:-1,param2:20:8:-1,param3:20:8:-1,param4:20:8:-1,param5:20:8:-1,param6:20:8:-1,param7:20:8:-1,param8:20:8:-1,param9:20:8:-1,param10:20:8:-1,param11:20:8:-1,param12:20:8:-1,param13:20:8:-1,param14:20:8:-1,param15:20:8:-1,param16:20:8:-1,param17:20:8:-1,param18:20:8:-1,param19:20:8:-1,param20:20:8:-1
+SELECT 0
+> SELECT * FROM pg_stat_replication
+fields pid@pg_stat_replication.1:23:4:-1,usesysid@pg_stat_replication.2:26:4:-1,usename@pg_stat_replication.3:19:64:-1,application_name@pg_stat_replication.4:25:-1:-1,client_addr@pg_stat_replication.5:869:-1:-1,client_hostname@pg_stat_replication.6:25:-1:-1,client_port@pg_stat_replication.7:23:4:-1,backend_start@pg_stat_replication.8:1184:8:-1,backend_xmin@pg_stat_replication.9:28:4:-1,state@pg_stat_replication.10:25:-1:-1,sent_lsn@pg_stat_replication.11:3220:8:-1,write_lsn@pg_stat_replication.12:3220:8:-1,flush_lsn@pg_stat_replication.13:3220:8:-1,replay_lsn@pg_stat_replication.14:3220:8:-1,write_lag@pg_stat_replication.15:1186:16:-1,flush_lag@pg_stat_replication.16:1186:16:-1,replay_lag@pg_stat_replication.17:1186:16:-1,sync_priority@pg_stat_replication.18:23:4:-1,sync_state@pg_stat_replication.19:25:-1:-1,reply_time@pg_stat_replication.20:1184:8:-1
+SELECT 0
+> SELECT * FROM pg_stat_get_wal_senders()
+fields pid:23:4:-1,state:25:-1:-1,sent_lsn:3220:8:-1,write_lsn:3220:8:-1,flush_lsn:3220:8:-1,replay_lsn:3220:8:-1,write_lag:1186:16:-1,flush_lag:1186:16:-1,replay_lag:1186:16:-1,sync_priority:23:4:-1,sync_state:25:-1:-1,reply_time:1184:8:-1
+SELECT 0
+> SELECT * FROM pg_stat_wal_receiver
+fields pid@pg_stat_wal_receiver.1:23:4:-1,status@pg_stat_wal_receiver.2:25:-1:-1,receive_start_lsn@pg_stat_wal_receiver.3:3220:8:-1,receive_start_tli@pg_stat_wal_receiver.4:23:4:-1,written_lsn@pg_stat_wal_receiver.5:3220:8:-1,flushed_lsn@pg_stat_wal_receiver.6:3220:8:-1,received_tli@pg_stat_wal_receiver.7:23:4:-1,last_msg_send_time@pg_stat_wal_receiver.8:1184:8:-1,last_msg_receipt_time@pg_stat_wal_receiver.9:1184:8:-1,latest_end_lsn@pg_stat_wal_receiver.10:3220:8:-1,latest_end_time@pg_stat_wal_receiver.11:1184:8:-1,slot_name@pg_stat_wal_receiver.12:25:-1:-1,sender_host@pg_stat_wal_receiver.13:25:-1:-1,sender_port@pg_stat_wal_receiver.14:23:4:-1,conninfo@pg_stat_wal_receiver.15:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_stat_get_wal_receiver()
+fields pid:23:4:-1,status:25:-1:-1,receive_start_lsn:3220:8:-1,receive_start_tli:23:4:-1,written_lsn:3220:8:-1,flushed_lsn:3220:8:-1,received_tli:23:4:-1,last_msg_send_time:1184:8:-1,last_msg_receipt_time:1184:8:-1,latest_end_lsn:3220:8:-1,latest_end_time:1184:8:-1,slot_name:25:-1:-1,sender_host:25:-1:-1,sender_port:23:4:-1,conninfo:25:-1:-1
+row NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_stat_subscription
+fields subid@pg_stat_subscription.1:26:4:-1,subname@pg_stat_subscription.2:19:64:-1,worker_type@pg_stat_subscription.3:25:-1:-1,pid@pg_stat_subscription.4:23:4:-1,leader_pid@pg_stat_subscription.5:23:4:-1,relid@pg_stat_subscription.6:26:4:-1,received_lsn@pg_stat_subscription.7:3220:8:-1,last_msg_send_time@pg_stat_subscription.8:1184:8:-1,last_msg_receipt_time@pg_stat_subscription.9:1184:8:-1,latest_end_lsn@pg_stat_subscription.10:3220:8:-1,latest_end_time@pg_stat_subscription.11:1184:8:-1
+SELECT 0
+> SELECT * FROM pg_stat_get_subscription(NULL)
+fields subid:26:4:-1,relid:26:4:-1,pid:23:4:-1,leader_pid:23:4:-1,received_lsn:3220:8:-1,last_msg_send_time:1184:8:-1,last_msg_receipt_time:1184:8:-1,latest_end_lsn:3220:8:-1,latest_end_time:1184:8:-1,worker_type:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_stat_get_subscription(1)
+fields subid:26:4:-1,relid:26:4:-1,pid:23:4:-1,leader_pid:23:4:-1,received_lsn:3220:8:-1,last_msg_send_time:1184:8:-1,last_msg_receipt_time:1184:8:-1,latest_end_lsn:3220:8:-1,latest_end_time:1184:8:-1,worker_type:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_stat_subscription_stats
+fields subid@pg_stat_subscription_stats.1:26:4:-1,subname@pg_stat_subscription_stats.2:19:64:-1,apply_error_count@pg_stat_subscription_stats.3:20:8:-1,sync_seq_error_count@pg_stat_subscription_stats.4:20:8:-1,sync_table_error_count@pg_stat_subscription_stats.5:20:8:-1,confl_insert_exists@pg_stat_subscription_stats.6:20:8:-1,confl_update_origin_differs@pg_stat_subscription_stats.7:20:8:-1,confl_update_exists@pg_stat_subscription_stats.8:20:8:-1,confl_update_deleted@pg_stat_subscription_stats.9:20:8:-1,confl_update_missing@pg_stat_subscription_stats.10:20:8:-1,confl_delete_origin_differs@pg_stat_subscription_stats.11:20:8:-1,confl_delete_missing@pg_stat_subscription_stats.12:20:8:-1,confl_multiple_unique_conflicts@pg_stat_subscription_stats.13:20:8:-1,stats_reset@pg_stat_subscription_stats.14:1184:8:-1
+SELECT 0
+> SELECT * FROM pg_stat_get_subscription_stats(12345)
+fields subid:26:4:-1,apply_error_count:20:8:-1,sync_seq_error_count:20:8:-1,sync_table_error_count:20:8:-1,confl_insert_exists:20:8:-1,confl_update_origin_differs:20:8:-1,confl_update_exists:20:8:-1,confl_update_deleted:20:8:-1,confl_update_missing:20:8:-1,confl_delete_origin_differs:20:8:-1,confl_delete_missing:20:8:-1,confl_multiple_unique_conflicts:20:8:-1,stats_reset:1184:8:-1
+row 12345,0,0,0,0,0,0,0,0,0,0,0,NULL
+SELECT 1
+> SELECT * FROM pg_stat_get_subscription_stats(NULL)
+fields subid:26:4:-1,apply_error_count:20:8:-1,sync_seq_error_count:20:8:-1,sync_table_error_count:20:8:-1,confl_insert_exists:20:8:-1,confl_update_origin_differs:20:8:-1,confl_update_exists:20:8:-1,confl_update_deleted:20:8:-1,confl_update_missing:20:8:-1,confl_delete_origin_differs:20:8:-1,confl_delete_missing:20:8:-1,confl_multiple_unique_conflicts:20:8:-1,stats_reset:1184:8:-1
+row NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_replication_slots
+fields slot_name@pg_replication_slots.1:19:64:-1,plugin@pg_replication_slots.2:19:64:-1,slot_type@pg_replication_slots.3:25:-1:-1,datoid@pg_replication_slots.4:26:4:-1,database@pg_replication_slots.5:19:64:-1,temporary@pg_replication_slots.6:16:1:-1,active@pg_replication_slots.7:16:1:-1,active_pid@pg_replication_slots.8:23:4:-1,xmin@pg_replication_slots.9:28:4:-1,catalog_xmin@pg_replication_slots.10:28:4:-1,restart_lsn@pg_replication_slots.11:3220:8:-1,confirmed_flush_lsn@pg_replication_slots.12:3220:8:-1,wal_status@pg_replication_slots.13:25:-1:-1,safe_wal_size@pg_replication_slots.14:20:8:-1,two_phase@pg_replication_slots.15:16:1:-1,two_phase_at@pg_replication_slots.16:3220:8:-1,inactive_since@pg_replication_slots.17:1184:8:-1,conflicting@pg_replication_slots.18:16:1:-1,invalidation_reason@pg_replication_slots.19:25:-1:-1,failover@pg_replication_slots.20:16:1:-1,synced@pg_replication_slots.21:16:1:-1,slotsync_skip_reason@pg_replication_slots.22:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_stat_replication_slots
+fields slot_name@pg_stat_replication_slots.1:25:-1:-1,spill_txns@pg_stat_replication_slots.2:20:8:-1,spill_count@pg_stat_replication_slots.3:20:8:-1,spill_bytes@pg_stat_replication_slots.4:20:8:-1,stream_txns@pg_stat_replication_slots.5:20:8:-1,stream_count@pg_stat_replication_slots.6:20:8:-1,stream_bytes@pg_stat_replication_slots.7:20:8:-1,mem_exceeded_count@pg_stat_replication_slots.8:20:8:-1,total_txns@pg_stat_replication_slots.9:20:8:-1,total_bytes@pg_stat_replication_slots.10:20:8:-1,slotsync_skip_count@pg_stat_replication_slots.11:20:8:-1,slotsync_last_skip@pg_stat_replication_slots.12:1184:8:-1,stats_reset@pg_stat_replication_slots.13:1184:8:-1
+SELECT 0
+> SELECT * FROM pg_get_replication_slots()
+fields slot_name:19:64:-1,plugin:19:64:-1,slot_type:25:-1:-1,datoid:26:4:-1,temporary:16:1:-1,active:16:1:-1,active_pid:23:4:-1,xmin:28:4:-1,catalog_xmin:28:4:-1,restart_lsn:3220:8:-1,confirmed_flush_lsn:3220:8:-1,wal_status:25:-1:-1,safe_wal_size:20:8:-1,two_phase:16:1:-1,two_phase_at:3220:8:-1,inactive_since:1184:8:-1,conflicting:16:1:-1,invalidation_reason:25:-1:-1,failover:16:1:-1,synced:16:1:-1,slotsync_skip_reason:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_prepared_xacts
+fields transaction@pg_prepared_xacts.1:28:4:-1,gid@pg_prepared_xacts.2:25:-1:-1,prepared@pg_prepared_xacts.3:1184:8:-1,owner@pg_prepared_xacts.4:19:64:-1,database@pg_prepared_xacts.5:19:64:-1
+SELECT 0
+> SELECT * FROM pg_prepared_xact()
+fields transaction:28:4:-1,gid:25:-1:-1,prepared:1184:8:-1,ownerid:26:4:-1,dbid:26:4:-1
+SELECT 0
+> SELECT n, pg_indexam_progress_phasename(403, n), pg_indexam_progress_phasename(2742, n), pg_indexam_progress_phasename(405, n) FROM generate_series(0, 7) n
+fields n:23:4:-1,pg_indexam_progress_phasename:25:-1:-1,pg_indexam_progress_phasename:25:-1:-1,pg_indexam_progress_phasename:25:-1:-1
+row 0,NULL,NULL,NULL
+row 1,initializing,initializing,NULL
+row 2,scanning table,scanning table,NULL
+row 3,sorting live tuples,sorting tuples (workers),NULL
+row 4,sorting dead tuples,merging tuples (workers),NULL
+row 5,loading tuples in tree,sorting tuples,NULL
+row 6,NULL,merging tuples,NULL
+row 7,NULL,NULL,NULL
+SELECT 8
+> SELECT pg_indexam_progress_phasename(403, 4294967298), pg_indexam_progress_phasename(2, 1), pg_indexam_progress_phasename(0, 1), pg_indexam_progress_phasename(NULL, 1), pg_indexam_progress_phasename(403, NULL)
+fields pg_indexam_progress_phasename:25:-1:-1,pg_indexam_progress_phasename:25:-1:-1,pg_indexam_progress_phasename:25:-1:-1,pg_indexam_progress_phasename:25:-1:-1,pg_indexam_progress_phasename:25:-1:-1
+row scanning table,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_indexam_progress_phasename(403, -1), pg_indexam_progress_phasename(403, 9223372036854775807)
+fields pg_indexam_progress_phasename:25:-1:-1,pg_indexam_progress_phasename:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT * FROM pg_stat_get_replication_slot('s1')
+fields slot_name:25:-1:-1,spill_txns:20:8:-1,spill_count:20:8:-1,spill_bytes:20:8:-1,stream_txns:20:8:-1,stream_count:20:8:-1,stream_bytes:20:8:-1,mem_exceeded_count:20:8:-1,total_txns:20:8:-1,total_bytes:20:8:-1,slotsync_skip_count:20:8:-1,slotsync_last_skip:1184:8:-1,stats_reset:1184:8:-1
+row s1,0,0,0,0,0,0,0,0,0,0,NULL,NULL
+SELECT 1
+> SELECT slot_name, length(slot_name) FROM pg_stat_get_replication_slot(repeat('x', 70))
+fields slot_name:25:-1:-1,length:23:4:-1
+row xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,63
+SELECT 1
+> SELECT * FROM pg_stat_get_replication_slot(NULL)
+fields slot_name:25:-1:-1,spill_txns:20:8:-1,spill_count:20:8:-1,spill_bytes:20:8:-1,stream_txns:20:8:-1,stream_count:20:8:-1,stream_bytes:20:8:-1,mem_exceeded_count:20:8:-1,total_txns:20:8:-1,total_bytes:20:8:-1,slotsync_skip_count:20:8:-1,slotsync_last_skip:1184:8:-1,stats_reset:1184:8:-1
+row NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 1
