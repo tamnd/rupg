@@ -4,6 +4,16 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.9 (2026-10-09)
+
+A patch release on the way to M2. The views `pg_settings`, `pg_views` and the statistics views of one object now return rows.
+
+### Added
+
+- `pg_show_all_settings` gives a row for each setting, so `pg_settings` shows the 438 settings with the columns of PostgreSQL (#201).
+- The `pg_stat_get_*` functions of a relation, an index, a function and a database, with their `xact` forms (#202). rupg does not keep the counters yet, so each one gives the value of PostgreSQL for an object with no entry. The views `pg_stat_*_tables`, `pg_stat_*_indexes`, `pg_statio_*` and `pg_stat_database_conflicts` return a row for each object.
+- `pg_get_viewdef` in its five forms gives the text of PostgreSQL for the views of the user and for 85 of the 86 system views (#203). `pg_views` shows the definition of each view.
+
 ## 0.1.8 (2026-10-09)
 
 A patch release on the way to M2. A query can now read array subscripts and match regular expressions, and the system views of `pg_catalog` are in the catalog.
