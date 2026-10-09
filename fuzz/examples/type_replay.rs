@@ -4,7 +4,7 @@
 //!
 //! `type_replay sql recv <corpus> <dir>` writes each case to `<dir>` as a file of `COPY` in the binary format, and prints a psql script that reads each file with `COPY`. `COPY` calls the receive function of the type with the typmod of the column, as `Bind` does. The server reads the files, so `<dir>` must be an absolute path that the server can read.
 //!
-//! `type_replay diff input|recv <corpus> <oracle.tsv>` reads the output of the script, `psql -X -At -F '<tab>' -f script.sql`, and prints each case where rupg gives a different line. A case where rupg gives `0A000`, or refuses a zone name because it has no tz database yet, counts as not supported. For the date and time types an input with `now`, `today`, `tomorrow` or `yesterday` depends on the clock, so only `OK` or the SQLSTATE of the error counts.
+//! `type_replay diff input|recv <corpus> <oracle.tsv>` reads the output of the script, `psql -X -At -F '<tab>' -f script.sql`, and prints each case where rupg gives a different line. A case where rupg gives `0A000` counts as not supported. For the date and time types an input with `now`, `today`, `tomorrow` or `yesterday` depends on the clock, so only `OK` or the SQLSTATE of the error counts.
 
 // A replay tool reads and writes files of the host, and is not part of the engine.
 #![allow(clippy::disallowed_types, clippy::disallowed_methods)]
@@ -142,11 +142,6 @@ fn key(line: &str, clock: bool) -> &str {
     }
 }
 
-/// True when rupg refuses a zone name. rupg has no tz database yet, so it knows no zone name, no abbreviation whose offset changed over time and no POSIX zone such as `q8`, and PostgreSQL knows them.
-fn needs_tz_database(line: &str) -> bool {
-    line.starts_with("ERROR 22023 time zone \"") || line.starts_with("ERROR F0000 time zone \"")
-}
-
 const CLOCK_WORDS: [&str; 4] = ["now", "today", "tomorrow", "yesterday"];
 
 fn diff(kind: &str, dir: &Path, oracle: &Path) -> bool {
@@ -172,7 +167,7 @@ fn diff(kind: &str, dir: &Path, oracle: &Path) -> bool {
             missing += 1;
             continue;
         };
-        if ours.starts_with("ERROR 0A000 ") || needs_tz_database(&ours) {
+        if ours.starts_with("ERROR 0A000 ") {
             not_yet += 1;
         } else if key(&ours, clock) == key(theirs, clock) {
             same += 1;

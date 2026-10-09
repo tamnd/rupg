@@ -328,7 +328,8 @@ pub fn type_recv(case: &RecvCase) {
 
 /// True for an `interval` whose time is the smallest `int64`. The receive function accepts it, but the input function refuses its output: `'-2562047788:00:54.775808'::interval` gives 22007 on the oracle, and `'-2562047788:00:54.775807'::interval` is correct.
 fn smallest_time(ty: &Type, text: &str) -> bool {
-    matches!(ty.oid, oid::INTERVAL | oid::INTERVAL_ARRAY) && text.contains("-2562047788:00:54.775808")
+    matches!(ty.oid, oid::INTERVAL | oid::INTERVAL_ARRAY)
+        && text.contains("-2562047788:00:54.775808")
 }
 
 /// A line of the replay: the error, or the output text and the hex of the send.

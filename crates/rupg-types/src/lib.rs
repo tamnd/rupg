@@ -28,13 +28,13 @@
 //!
 //! [`Recv`], the binary input of a `Bind` parameter, with the errors of PostgreSQL when the value is too short or too long. The binary output of the other types is the value in big-endian bytes.
 //!
-//! [`unicode`], the four Unicode normalization forms, and [`tz`], the names of the time zones.
+//! [`unicode`], the four Unicode normalization forms, and [`tz`], the time zones of the IANA data.
 //!
 //! # Known differences
 //!
 //! The input functions take a string in the server encoding, which is UTF-8. The caller converts from the client encoding first.
 //!
-//! Only [`FixedZone`] implements [`TimeZone`], and only [`NoZones`] implements [`ZoneLookup`]. So a zone with daylight saving time, a zone name in the input such as `Europe/Paris`, and an abbreviation whose offset changed over time such as `MSK` need the tz database, which comes later. Until then the input refuses a zone name with the error of an unknown zone.
+//! [`tz::Zone`] implements [`TimeZone`] with the rules of the IANA data, and [`tz::TzDatabase`] implements [`ZoneLookup`]. [`FixedZone`] and [`NoZones`] are for the tests and for a caller without the data.
 //!
 //! PostgreSQL parses `json` by recursion and stops a deep value with `stack depth limit exceeded` when it reaches `max_stack_depth`. [`json_in`] uses no recursion and takes a value at any depth.
 //!
@@ -77,9 +77,9 @@ pub use datetime::{
     TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, TimeZone, UNIX_EPOCH_JDATE,
     UNIX_TO_POSTGRES_DAYS, UNIX_TO_POSTGRES_USECS, USECS_PER_DAY, USECS_PER_SEC, ZoneAbbrevs,
     ZoneLookup, adjust_interval, adjust_time, adjust_timestamp, date_from_unix, date_in, date_out,
-    date_recv, date2j, interval_in, interval_out, interval_recv, interval_send, j2date, time_in,
-    time_out, time_recv, timestamp_from_unix, timestamp_in, timestamp_out, timestamp_recv,
-    timestamptz_in, timestamptz_out, timetz_in, timetz_out, timetz_recv,
+    date_recv, date2j, interval_in, interval_out, interval_recv, interval_send, j2date,
+    local_offset, time_in, time_out, time_recv, timestamp_from_unix, timestamp_in, timestamp_out,
+    timestamp_recv, timestamptz_in, timestamptz_out, timetz_in, timetz_out, timetz_recv,
 };
 pub use datum::Datum;
 pub use error::TypeError;

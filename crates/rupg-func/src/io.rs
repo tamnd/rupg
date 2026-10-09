@@ -2,9 +2,7 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_types::{
-    self as types, Array, DateTimeInput, NoZones, Recv, RegKind, Value, ZoneAbbrevs, oid,
-};
+use rupg_types::{self as types, Array, DateTimeInput, Recv, RegKind, Value, ZoneAbbrevs, oid, tz};
 
 use crate::{Session, bad_value, not_yet, reg, type_error};
 
@@ -109,7 +107,7 @@ fn datetime_input<'a>(
     DateTimeInput {
         order: session.date_format().order,
         zone,
-        zones: &NoZones,
+        zones: &tz::TzDatabase,
         abbrevs: ZoneAbbrevs::postgres_default(),
         now: session.transaction_start(),
     }

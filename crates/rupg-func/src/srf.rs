@@ -1,4 +1,4 @@
-//! The set-returning functions that a query can call in `FROM`: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, the functions of the views of replication, of progress and of the prepared transactions, the functions of the statistics of the whole server that give rows, and the functions of the views of asynchronous I/O, shared memory, replication origins, recovery, publications and cursors.
+//! The set-returning functions that a query can call in `FROM`: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, the functions of the views of replication, of progress and of the prepared transactions, the functions of the statistics of the whole server that give rows, the functions of the views of asynchronous I/O, shared memory, replication origins, recovery, publications and cursors, and the functions of the views of the time zones.
 //!
 //! A set kernel gives all the rows of the call at once, as a function of PostgreSQL in the materialize mode gives a tuplestore. Each row has one value for each column of the result: one value for a function of a scalar type, or one value for each `OUT` parameter.
 
@@ -54,6 +54,9 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_stat_get_slru" => crate::shared::slru,
         "pg_stat_get_recovery_prefetch" => crate::shared::recovery_prefetch,
         "pg_stat_get_lock" => crate::shared::lock,
+        "pg_timezone_names" => crate::zones::names,
+        "pg_timezone_abbrevs_zone" => crate::zones::abbrevs_zone,
+        "pg_timezone_abbrevs_abbrevs" => crate::zones::abbrevs_abbrevs,
         _ => return None,
     };
     Some(kernel)
