@@ -34,7 +34,7 @@ pub struct Relation {
     pub oid: u32,
     /// The columns of the relation, with their real names. The columns of a subquery are the columns of its result.
     pub columns: Vec<Column>,
-    /// The query of a subquery in `FROM`.
+    /// The query of a subquery in `FROM`, or the query of a view, which the executor reads in place of the view.
     pub subquery: Option<Box<crate::Query>>,
     /// The calls of a function in `FROM`.
     pub function: Option<FromFunction>,
@@ -283,13 +283,42 @@ impl Analyzer<'_> {
             Error::new(SqlState::UNDEFINED_TABLE, message).at_opt(at)
         })?;
         let columns = self.open_relation(oid, name, at)?;
+        let subquery = self.view_query(oid)?.map(Box::new);
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
         self.add_relation(
-            Relation { oid, columns, subquery: None, function: None, values: None },
+            Relation { oid, columns, subquery, function: None, values: None },
             refname,
             alias,
         )
+    }
+
+    /// `ApplyRetrieveRule`: the query of a view of the user, which takes the place of the view as a subquery, or `None` for a relation that is not a view. The analyzer reads the statement that made the view again, with the schemas of `search_path` of that statement. An error in the query of the view has no position, and the warnings of the query go.
+    fn view_query(&self, oid: u32) -> Result<Option<crate::Query>> {
+        let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(None) };
+        let Some(view) = &rel.view else { return Ok(None) };
+        if self.views.contains(&oid) {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                format!("infinite recursion detected in rules for relation \"{}\"", rel.name),
+            ));
+        }
+        let (list, _) = rupg_sql::parse(&view.text).map_err(Error::from)?;
+        let query = list.iter().flatten().find_map(|node| match node {
+            Node::RawStmt(raw) => match raw.stmt.as_ref() {
+                Some(Node::ViewStmt(stmt)) => stmt.query.as_ref(),
+                _ => None,
+            },
+            _ => None,
+        });
+        let Some(Node::SelectStmt(select)) = query else {
+            return Err(Error::internal("the query of a view is not a SELECT"));
+        };
+        let mut an = Analyzer::new(self.env, &crate::Params::default());
+        an.path.clone_from(&view.path);
+        an.views.clone_from(&self.views);
+        an.views.push(oid);
+        an.select(select).map(Some).map_err(|error| error.with_position(None))
     }
 
     /// `transformRangeSubselect` and `addRangeTableEntryForSubquery`: a subquery in `FROM` and its namespace item. With no alias, the name of the entry is `unnamed_subquery`, and a qualified name cannot use it.
@@ -1156,8 +1185,9 @@ impl Analyzer<'_> {
         }
         let entry = &self.level(level).entries[item.entry];
         let Some(relation) = entry.relation else { return Ok(None) };
-        if item.columns.len() != entry.columns.len() || entry.oid == 0 {
-            // The item of a USING alias gives only the columns of USING, and a subquery has no system columns.
+        let view = self.level(level).relations.get(relation).is_some_and(|r| r.subquery.is_some());
+        if item.columns.len() != entry.columns.len() || entry.oid == 0 || view {
+            // The item of a USING alias gives only the columns of USING, and a subquery and a view have no system columns.
             return Ok(None);
         }
         if name == "tableoid" {

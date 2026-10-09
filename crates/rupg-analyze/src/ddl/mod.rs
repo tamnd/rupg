@@ -1,10 +1,11 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX` and `CREATE SCHEMA`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex` and `CreateSchemaCommand` run them, and they change a [`Catalog`].
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA` and `CREATE VIEW`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand` and `DefineView` run them, and they change a [`Catalog`].
 
 mod fkey;
 mod index;
 mod table;
 #[cfg(test)]
 mod tests;
+mod view;
 
 pub(crate) use table::check_attribute_type;
 
@@ -42,11 +43,14 @@ pub struct Defined {
 
 /// True for a statement that [`define`] runs.
 pub fn is_definition(stmt: &Node) -> bool {
-    matches!(stmt, Node::CreateStmt(_) | Node::IndexStmt(_) | Node::CreateSchemaStmt(_))
+    matches!(
+        stmt,
+        Node::CreateStmt(_) | Node::IndexStmt(_) | Node::CreateSchemaStmt(_) | Node::ViewStmt(_)
+    )
 }
 
-/// Runs a statement that defines an object, for the role `user`, and adds the object to the catalog. The statement is the `stmt` of a `RawStmt`.
-pub fn define(stmt: &Node, env: &dyn Env, catalog: &mut Catalog, user: u32) -> Defined {
+/// Runs a statement that defines an object, for the role `user`, and adds the object to the catalog. The statement is the `stmt` of a `RawStmt`, and `text` is its text, which the catalog keeps for a view.
+pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, user: u32) -> Defined {
     let schemas = SchemaEnv::new(env, catalog);
     let mut definer = Definer {
         an: Analyzer::new(&schemas, &Params::default()),
@@ -58,6 +62,7 @@ pub fn define(stmt: &Node, env: &dyn Env, catalog: &mut Catalog, user: u32) -> D
         Node::CreateStmt(create) => definer.create_table(create),
         Node::IndexStmt(index) => definer.create_index(index),
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
+        Node::ViewStmt(view) => definer.create_view(view, text),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
@@ -349,6 +354,7 @@ impl Definer<'_, '_> {
                 Some(RelKind::Index) => b'i',
                 Some(RelKind::Sequence) => b'S',
                 Some(RelKind::Toast) => b't',
+                Some(RelKind::View) => b'v',
                 _ => b'r',
             },
             Found::Builtin(row) => row.kind,

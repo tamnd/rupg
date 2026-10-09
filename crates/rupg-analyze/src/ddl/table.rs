@@ -471,6 +471,36 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
+    /// The checks of `heap_create_with_catalog` on the name of a new relation: no relation with the name in the schema, no type with the name, and no relation in a system schema. The last check uses one OID, as PostgreSQL gives the relation its OID first.
+    pub(super) fn check_relation_name(&mut self, namespace: u32, name: &str) -> Result<()> {
+        if self.relation_in(namespace, name).is_some() {
+            return Err(Error::new(
+                SqlState::DUPLICATE_TABLE,
+                format!("relation \"{name}\" already exists"),
+            ));
+        }
+        if let Some(ty) = builtin::type_by_name(namespace, name) {
+            let auto_array = ty.elem != 0 && types::row(ty.elem).is_some_and(|e| e.array == ty.oid);
+            if !auto_array {
+                return Err(Error::new(SqlState::DUPLICATE_OBJECT, format!("type \"{name}\" already exists")).with_hint(
+                    "A relation has an associated type of the same name, so you must use a name that doesn't conflict with any existing type.",
+                ));
+            }
+            if !is_system_namespace(namespace) {
+                return Err(not_yet("a table with the name of a built-in array type", None));
+            }
+        }
+        if is_system_namespace(namespace) {
+            self.catalog.skip_oids(1);
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("permission denied to create \"{}.{}\"", self.schema_name(namespace), name),
+            )
+            .with_detail("System catalog modifications are currently disallowed."));
+        }
+        Ok(())
+    }
+
     /// `DefineRelation` and `heap_create_with_catalog` for the table, then its defaults, its check constraints and its not-null constraints. The result is the OID of the table.
     fn define_relation(&mut self, plan: &Plan) -> Result<u32> {
         if plan.columns.len() > MAX_COLUMNS {
@@ -517,35 +547,7 @@ impl Definer<'_, '_> {
         for column in &columns {
             check_attribute_type(&column.name, column.ty)?;
         }
-        if self.relation_in(plan.namespace, &plan.relname).is_some() {
-            return Err(Error::new(
-                SqlState::DUPLICATE_TABLE,
-                format!("relation \"{}\" already exists", plan.relname),
-            ));
-        }
-        if let Some(ty) = builtin::type_by_name(plan.namespace, &plan.relname) {
-            let auto_array = ty.elem != 0 && types::row(ty.elem).is_some_and(|e| e.array == ty.oid);
-            if !auto_array {
-                return Err(Error::new(SqlState::DUPLICATE_OBJECT, format!("type \"{}\" already exists", plan.relname)).with_hint(
-                    "A relation has an associated type of the same name, so you must use a name that doesn't conflict with any existing type.",
-                ));
-            }
-            if !is_system_namespace(plan.namespace) {
-                return Err(not_yet("a table with the name of a built-in array type", None));
-            }
-        }
-        if is_system_namespace(plan.namespace) {
-            self.catalog.skip_oids(1);
-            return Err(Error::new(
-                SqlState::INSUFFICIENT_PRIVILEGE,
-                format!(
-                    "permission denied to create \"{}.{}\"",
-                    self.schema_name(plan.namespace),
-                    plan.relname
-                ),
-            )
-            .with_detail("System catalog modifications are currently disallowed."));
-        }
+        self.check_relation_name(plan.namespace, &plan.relname)?;
         let shapes: Vec<Shape> = columns
             .iter()
             .map(|c| {

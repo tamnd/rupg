@@ -122,6 +122,7 @@ pub(crate) fn rows(
         "pg_index" => indexes(table, catalog),
         "pg_sequence" => sequences(table, catalog),
         "pg_depend" => depends(table, catalog),
+        "pg_rewrite" => rewrites(table, catalog),
         _ => Vec::new(),
     };
     Ok(rows.into_iter().map(|row| row.values).collect())
@@ -149,6 +150,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 RelKind::Table | RelKind::Toast => (HEAP, 0, -1.0),
                 RelKind::Index => (rel.index.as_ref().map_or(0, |i| i.method), 1, 0.0),
                 RelKind::Sequence => (0, 1, 1.0),
+                RelKind::View => (0, 0, -1.0),
             };
             let checks = catalog.constraints_of(rel.oid).filter(|c| c.kind == ConKind::Check);
             let mut row = Row::new(table);
@@ -159,7 +161,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("reloftype", oid(0))
                 .set("relowner", oid(rel.owner))
                 .set("relam", oid(am))
-                .set("relfilenode", oid(rel.oid))
+                .set("relfilenode", oid(if rel.kind == RelKind::View { 0 } else { rel.oid }))
                 .set("reltablespace", oid(0))
                 .set("relpages", Value::Int4(pages))
                 .set("reltuples", Value::Float4(tuples))
@@ -172,7 +174,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("relkind", code(rel.kind.code()))
                 .set("relnatts", Value::Int2(number(rel.columns.len()) - 1))
                 .set("relchecks", Value::Int2(i16::try_from(checks.count()).unwrap_or(i16::MAX)))
-                .set("relhasrules", Value::Bool(false))
+                .set("relhasrules", Value::Bool(rel.view.is_some()))
                 .set("relhastriggers", Value::Bool(rel.has_triggers))
                 .set("relhassubclass", Value::Bool(false))
                 .set("relrowsecurity", Value::Bool(false))
@@ -237,7 +239,7 @@ fn attributes<'a>(
     }
     let mut rows = Vec::new();
     for rel in catalog.relations() {
-        if rel.kind != RelKind::Index {
+        if !matches!(rel.kind, RelKind::Index | RelKind::View) {
             for &template in &system {
                 let mut row = Row::copy(table, template, session)?;
                 row.set("attrelid", oid(rel.oid));
@@ -369,6 +371,26 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("indoption", int2_vector(&info.options))
                 .set("indexprs", tree(info.exprs.as_ref()))
                 .set("indpred", tree(info.predicate.as_ref()));
+            Some(row)
+        })
+        .collect()
+}
+
+/// The `_RETURN` rule of each view. `ev_action` holds the statement that made the view.
+fn rewrites<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .relations()
+        .filter_map(|rel| {
+            let view = rel.view.as_ref()?;
+            let mut row = Row::new(table);
+            row.set("oid", oid(view.rule))
+                .set("rulename", Value::text("_RETURN"))
+                .set("ev_class", oid(rel.oid))
+                .set("ev_type", code('1'))
+                .set("ev_enabled", code('O'))
+                .set("is_instead", Value::Bool(true))
+                .set("ev_qual", Value::text("<>"))
+                .set("ev_action", Value::text(view.text.clone()));
             Some(row)
         })
         .collect()

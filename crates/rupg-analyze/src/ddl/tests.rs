@@ -29,7 +29,7 @@ fn run(catalog: &mut Catalog, sql: &str) -> (Vec<Note>, Option<rupg_common::Erro
     let Some(Some(Node::RawStmt(raw))) = stmts.first() else { panic!("no statement in {sql}") };
     let stmt = raw.stmt.as_ref().expect("a statement");
     let mut work = catalog.clone();
-    let defined = define(stmt, &TestEnv, &mut work, POSTGRES);
+    let defined = define(stmt, sql, &TestEnv, &mut work, POSTGRES);
     let notes = defined
         .messages
         .iter()

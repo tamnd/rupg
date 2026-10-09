@@ -8,6 +8,7 @@
 
 mod agg;
 mod coerce;
+mod collate;
 mod colname;
 mod ddl;
 mod expr;
@@ -94,6 +95,8 @@ pub(crate) struct Analyzer<'a> {
     has_aggs: bool,
     /// True when the next `SELECT` keeps its columns of type `unknown`, as `parse_sub_analyze` with no `resolve_unknowns` does for a part of a set operation.
     keep_unknowns: bool,
+    /// The views whose queries the analyzer reads now, from the outermost. A view in its own query gives `42P17`, as `fireRIRrules` does.
+    views: Vec<u32>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -114,6 +117,7 @@ impl<'a> Analyzer<'a> {
             kind: agg::Kind::Other,
             has_aggs: false,
             keep_unknowns: false,
+            views: Vec::new(),
         }
     }
 

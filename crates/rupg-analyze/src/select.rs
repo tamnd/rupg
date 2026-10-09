@@ -202,13 +202,14 @@ impl Analyzer<'_> {
         if !s.lockingClause.is_empty() {
             return Err(not_yet("FOR UPDATE and FOR SHARE"));
         }
-        // markTargetListOrigins: a target that is a column of a relation names the table and the column, also for a column of a query outside this query. A column of a subquery in FROM has the origin of the column of the subquery, and a column of a function in FROM has no origin.
+        // markTargetListOrigins: a target that is a column of a relation names the table and the column, also for a column of a query outside this query. A column of a view is a column of the view. A column of a subquery in FROM has the origin of the column of the subquery, and a column of a function in FROM has no origin.
         for target in &mut targets {
             if let ExprKind::Var(var) = &target.expr.kind {
                 let relation = &self.level(var.levels_up).relations[var.relation];
                 target.origin = match &relation.subquery {
                     None if relation.function.is_some() || relation.values.is_some() => None,
                     None => Some((relation.oid, var.attnum)),
+                    Some(_) if relation.oid != 0 => Some((relation.oid, var.attnum)),
                     Some(sub) => usize::try_from(var.attnum - 1)
                         .ok()
                         .and_then(|i| sub.targets.iter().filter(|t| !t.junk).nth(i))

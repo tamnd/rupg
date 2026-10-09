@@ -337,7 +337,7 @@ impl Connection {
                 Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
             } else if rupg_analyze::is_definition(node) {
                 let mut notices = Vec::new();
-                let result = self.define(node, &mut notices);
+                let result = self.define(node, &statement.text, &mut notices);
                 self.notices(&mut notices, &statement.text, &[], out);
                 result.map_err(|error| Failed {
                     position: error.position().map(|at| character_position(&statement.text, at)),
