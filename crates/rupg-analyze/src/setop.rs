@@ -68,7 +68,7 @@ impl SetTree {
 }
 
 /// `LCS_asString`.
-fn strength_name(strength: LockClauseStrength) -> &'static str {
+pub(crate) fn strength_name(strength: LockClauseStrength) -> &'static str {
     match strength {
         LockClauseStrength::LCS_FORKEYSHARE => "FOR KEY SHARE",
         LockClauseStrength::LCS_FORSHARE => "FOR SHARE",
@@ -217,7 +217,13 @@ impl Analyzer<'_> {
                 .collect();
             let index = self.scope.relations.len();
             let subquery = Some(Box::new(query));
-            self.scope.relations.push(Relation { oid: 0, columns, subquery, function: None });
+            self.scope.relations.push(Relation {
+                oid: 0,
+                columns,
+                subquery,
+                function: None,
+                values: None,
+            });
             return Ok((SetTree::Leaf(index), exprs));
         }
         let (kind, context) = match s.op {

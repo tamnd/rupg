@@ -65,6 +65,11 @@ impl Analyzer<'_> {
     fn transform_node(&mut self, node: &Node) -> Result<Expr> {
         match node {
             Node::A_Const(c) => self.transform_const(c),
+            // `transformExpressionList` keeps `DEFAULT` only in `INSERT` and `UPDATE`.
+            Node::SetToDefault(d) => {
+                Err(Error::new(SqlState::SYNTAX_ERROR, "DEFAULT is not allowed in this context")
+                    .at_opt(place(d.location)))
+            }
             Node::ColumnRef(c) => self.column_ref(c),
             Node::ParamRef(p) => self.transform_param(p.number, place(p.location)),
             Node::A_Expr(a) => self.transform_a_expr(a),

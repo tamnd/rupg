@@ -38,6 +38,8 @@ pub struct Relation {
     pub subquery: Option<Box<crate::Query>>,
     /// The calls of a function in `FROM`.
     pub function: Option<FromFunction>,
+    /// The rows of a `VALUES` list, each with one expression for each column.
+    pub values: Option<Vec<Vec<Expr>>>,
 }
 
 /// A call of a function in `FROM` with its name and its column definition list.
@@ -283,7 +285,11 @@ impl Analyzer<'_> {
         let columns = self.open_relation(oid, name, at)?;
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
-        self.add_relation(Relation { oid, columns, subquery: None, function: None }, refname, alias)
+        self.add_relation(
+            Relation { oid, columns, subquery: None, function: None, values: None },
+            refname,
+            alias,
+        )
     }
 
     /// `transformRangeSubselect` and `addRangeTableEntryForSubquery`: a subquery in `FROM` and its namespace item. With no alias, the name of the entry is `unnamed_subquery`, and a qualified name cannot use it.
@@ -302,8 +308,13 @@ impl Analyzer<'_> {
             .collect();
         let alias = r.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or("unnamed_subquery");
-        let relation =
-            Relation { oid: 0, columns, subquery: Some(Box::new(query)), function: None };
+        let relation = Relation {
+            oid: 0,
+            columns,
+            subquery: Some(Box::new(query)),
+            function: None,
+            values: None,
+        };
         let mut item = self.add_relation(relation, refname.to_string(), alias)?;
         item.rel_visible = alias.is_some();
         Ok(item)
@@ -391,7 +402,8 @@ impl Analyzer<'_> {
             columns.push(Column { name, ty: oid::INT8, typmod: -1, not_null: false });
         }
         let function = FromFunction { calls: out, ordinality: r.ordinality };
-        let relation = Relation { oid: 0, columns, subquery: None, function: Some(function) };
+        let relation =
+            Relation { oid: 0, columns, subquery: None, function: Some(function), values: None };
         self.add_relation(relation, refname, alias)
     }
 
@@ -662,6 +674,18 @@ impl Analyzer<'_> {
         Ok(Item { entry, name: refname, columns: exprs, rel_visible: true, cols_visible: true })
     }
 
+    /// `addRangeTableEntryForValues` and `addNSItemToQuery`: adds the relation of a `VALUES` list with the name `*VALUES*`, and gives its index and its columns.
+    pub(crate) fn add_values(
+        &mut self,
+        relation: Relation,
+    ) -> Result<(usize, Vec<(String, Expr)>)> {
+        let item = self.add_relation(relation, "*VALUES*".to_string(), None)?;
+        let index = self.scope.entries[item.entry].relation.unwrap_or_default();
+        let columns = item.columns.clone();
+        self.scope.namespace.push(item);
+        Ok((index, columns))
+    }
+
     /// `addRangeTableEntryForJoin` and `addNSItemToQuery` for the columns of a set operation: an unqualified name in `ORDER BY` can find the columns, and a qualified name cannot. It gives the number of entries and of items before the change, for [`Analyzer::remove_columns`].
     pub(crate) fn add_columns(&mut self, columns: Vec<(String, Expr)>) -> (usize, usize) {
         let before = (self.scope.entries.len(), self.scope.namespace.len());
@@ -714,7 +738,13 @@ impl Analyzer<'_> {
             })
             .collect();
         let colnames = columns.iter().map(|c| c.name.clone()).collect();
-        self.scope.relations.push(Relation { oid, columns, subquery: None, function: None });
+        self.scope.relations.push(Relation {
+            oid,
+            columns,
+            subquery: None,
+            function: None,
+            values: None,
+        });
         let entry = self.scope.entries.len();
         self.scope.entries.push(Entry {
             name: name.to_string(),

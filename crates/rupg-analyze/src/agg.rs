@@ -35,6 +35,8 @@ pub(crate) enum Kind {
     IndexPredicate,
     /// `EXPR_KIND_FROM_FUNCTION`.
     FromFunction,
+    /// `EXPR_KIND_VALUES`.
+    Values,
 }
 
 impl Kind {
@@ -57,6 +59,7 @@ impl Kind {
             Kind::IndexExpression => "index expressions",
             Kind::IndexPredicate => "index predicates",
             Kind::FromFunction => "functions in FROM",
+            Kind::Values => "VALUES",
         }
     }
 
@@ -202,7 +205,8 @@ impl Analyzer<'_> {
             | Kind::Check
             | Kind::IndexExpression
             | Kind::IndexPredicate
-            | Kind::FromFunction => {
+            | Kind::FromFunction
+            | Kind::Values => {
                 return Err(grouping_error(
                     format!("aggregate functions are not allowed in {}", self.kind.name()),
                     at,

@@ -62,7 +62,7 @@ pub struct Target {
 }
 
 impl Query {
-    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET`, `LIMIT` and the calls of the functions in `FROM`.
+    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET`, `LIMIT`, the calls of the functions in `FROM` and the rows of the `VALUES` lists.
     pub fn exprs(&self) -> Vec<&Expr> {
         fn joins<'a>(item: &'a FromItem, out: &mut Vec<&'a Expr>) {
             if let FromItem::Join(j) = item {
@@ -76,8 +76,11 @@ impl Query {
             joins(item, &mut out);
         }
         out.extend(self.filter.iter().chain(&self.having).chain(&self.offset).chain(&self.limit));
-        for function in self.relations.iter().filter_map(|r| r.function.as_ref()) {
-            out.extend(function.calls.iter().map(|(call, _)| call));
+        for relation in &self.relations {
+            if let Some(function) = &relation.function {
+                out.extend(function.calls.iter().map(|(call, _)| call));
+            }
+            out.extend(relation.values.iter().flatten().flatten());
         }
         out
     }
@@ -103,8 +106,11 @@ impl Query {
                 .chain(&mut self.offset)
                 .chain(&mut self.limit),
         );
-        for function in self.relations.iter_mut().filter_map(|r| r.function.as_mut()) {
-            out.extend(function.calls.iter_mut().map(|(call, _)| call));
+        for relation in &mut self.relations {
+            if let Some(function) = &mut relation.function {
+                out.extend(function.calls.iter_mut().map(|(call, _)| call));
+            }
+            out.extend(relation.values.iter_mut().flatten().flatten());
         }
         out
     }
@@ -147,7 +153,7 @@ impl Analyzer<'_> {
             return self.set_operation(s);
         }
         if !s.valuesLists.is_empty() {
-            return Err(not_yet("VALUES"));
+            return self.values_clause(s);
         }
         if s.withClause.is_some() {
             return Err(not_yet("WITH"));
@@ -201,7 +207,7 @@ impl Analyzer<'_> {
             if let ExprKind::Var(var) = &target.expr.kind {
                 let relation = &self.level(var.levels_up).relations[var.relation];
                 target.origin = match &relation.subquery {
-                    None if relation.function.is_some() => None,
+                    None if relation.function.is_some() || relation.values.is_some() => None,
                     None => Some((relation.oid, var.attnum)),
                     Some(sub) => usize::try_from(var.attnum - 1)
                         .ok()

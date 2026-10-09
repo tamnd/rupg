@@ -61,13 +61,25 @@ pub(crate) fn lateral(query: &Query) -> Vec<Vec<usize>> {
         }
         out
     };
+    let values = |rows: &Vec<Vec<Expr>>| {
+        let mut out = Vec::new();
+        for expr in rows.iter().flatten() {
+            each_var(expr, &mut |var| {
+                if !out.contains(&var.relation) {
+                    out.push(var.relation);
+                }
+            });
+        }
+        out
+    };
     query
         .relations
         .iter()
-        .map(|r| match (&r.subquery, &r.function) {
-            (Some(sub), _) => refs(sub),
-            (None, Some(function)) => calls(function),
-            (None, None) => Vec::new(),
+        .map(|r| match (&r.subquery, &r.function, &r.values) {
+            (Some(sub), _, _) => refs(sub),
+            (None, Some(function), _) => calls(function),
+            (None, None, Some(rows)) => values(rows),
+            (None, None, None) => Vec::new(),
         })
         .collect()
 }
@@ -174,7 +186,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     }
     let mut rows = Vec::with_capacity(query.relations.len());
     for (relation, used) in query.relations.iter().zip(&used) {
-        if relation.subquery.is_some() || relation.function.is_some() {
+        if relation.subquery.is_some() || relation.function.is_some() || relation.values.is_some() {
             rows.push(Rc::default());
             continue;
         }

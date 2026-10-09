@@ -1639,6 +1639,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/set_operation.test")));
     }
 
+    /// `VALUES` lists: as a query with `ORDER BY`, `LIMIT` and `OFFSET`, in `FROM` with column aliases, in a `LATERAL` subquery, in `IN`, in a scalar subquery and in a set operation, the column types and typmods, and the errors of the analysis. `connection/values.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn values() {
+        big_stack(|| script(include_str!("connection/values.test")));
+    }
+
     /// `LATERAL` subqueries in `FROM`, which run for each row of the relations before them, in a list, in inner and outer joins and in a subquery. `connection/lateral.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn lateral() {

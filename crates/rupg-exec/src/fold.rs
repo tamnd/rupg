@@ -67,6 +67,14 @@ fn plan(
     if !simple {
         out.limit = fold.one(query.limit.as_ref())?;
     }
+    // The rows of a `VALUES` list fold after the clauses, as the range table does in `subquery_planner`.
+    for (relation, old) in out.relations.iter_mut().zip(&query.relations) {
+        let (Some(rows), Some(old)) = (&mut relation.values, &old.values) else { continue };
+        for (row, old) in rows.iter_mut().zip(old) {
+            let exprs: Vec<&Expr> = old.iter().collect();
+            *row = fold.clause(&exprs)?;
+        }
+    }
     // A relation that is the only part of `FROM`, with a `WHERE` that is false or null, is dummy: the planner makes no plan for it.
     let dummy = matches!(out.from.as_slice(), [FromItem::Relation(_)])
         && out.filter.as_ref().and_then(value).is_some_and(|v| *v != Value::Bool(true));
