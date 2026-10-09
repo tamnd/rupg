@@ -1,0 +1,102 @@
+> SELECT format('Hello'), format('Hello %s', 'World'), format('%s %s', 1, 2.5), format('%%'), format('a%%b%sc', 'x')
+fields format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1
+row Hello,Hello World,1 2.5,%,a%bxc
+SELECT 1
+> SELECT format('%I', 'abc'), format('%I', 'Abc'), format('%I', 'select'), format('%I', 'a"b'), format('%L', 'it''s'), format('%L', 'a\b'), format('%L', 42)
+fields format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1
+row abc,"Abc","select","a""b",'it''s',E'a\\b','42'
+SELECT 1
+> SELECT format('%s|%L', NULL, NULL), format(NULL, 1), format(NULL), format('%s', NULL::text) IS NULL
+fields format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,?column?:16:1:-1
+row |NULL,NULL,NULL,f
+SELECT 1
+> SELECT format('%I', NULL)
+fields format:25:-1:-1
+ERROR 22004 null values cannot be formatted as an SQL identifier
+> SELECT format('%2$s %1$s', 'a', 'b'), format('%1$s %1$s %s', 'a', 'b'), format('%2$s %s', 'a', 'b', 'c')
+fields format:25:-1:-1,format:25:-1:-1,format:25:-1:-1
+row b a,a a b,b c
+SELECT 1
+> SELECT format('[%10s]', 'abc'), format('[%-10s]', 'abc'), format('[%*s]', 6, 'ab'), format('[%-*s]', 6, 'ab'), format('[%*s]', -6, 'ab'), format('[%1$*2$s]', 'ab', 5), format('[%-*2$s]', 'ab', 5, 'c'), format('[%3$*2$s]', 'x', 4, 'ab')
+fields format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1
+row [       abc],[abc       ],[    ab],[ab    ],[ab    ],[   ab],[c    ],[  ab]
+SELECT 1
+> SELECT format('[%*s]', NULL, 'ab'), format('[%*s]', 3::int2, 'ab'), format('[%*s]', 4::int8, 'ab'), format('[%*s]', '5'::text, 'ab'), format('[%2s]', 'abcdef'), format('[%5s]', 'ñé'), format('[%L]', 'ñ')
+fields format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1
+row [ab],[ ab],[  ab],[   ab],[abcdef],[   ñé],['ñ']
+SELECT 1
+> SELECT format('%s', ARRAY[1, 2]), format('%s, %s', true, 1.5::float8), format('%s', 'x'::name), format('%I', 'ab cd'), format('%I.%I', 'pg_catalog', 'pg_class')
+fields format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1
+row {1,2},t, 1.5,x,"ab cd",pg_catalog.pg_class
+SELECT 1
+> SELECT format('%s %s', VARIADIC ARRAY['a', 'b']), format('%s', VARIADIC ARRAY[1]), format('%2$s', VARIADIC ARRAY[3, 4]), format('x', VARIADIC NULL::text[]), format('%s', VARIADIC ARRAY[NULL]::text[]) = ''
+fields format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,format:25:-1:-1,?column?:16:1:-1
+row a b,1,4,x,t
+SELECT 1
+> SELECT format('%s %s', 'a')
+fields format:25:-1:-1
+ERROR 22023 too few arguments for format()
+> SELECT format('[%*2$s]', 'ab', 5)
+fields format:25:-1:-1
+ERROR 22023 too few arguments for format()
+> SELECT format('%s', VARIADIC NULL::int[])
+fields format:25:-1:-1
+ERROR 22023 too few arguments for format()
+> SELECT format('%0$s', 'a')
+fields format:25:-1:-1
+ERROR 22023 format specifies argument 0, but arguments are numbered from 1
+> SELECT format('%*0$s', 'a')
+fields format:25:-1:-1
+ERROR 22023 format specifies argument 0, but arguments are numbered from 1
+> SELECT format('%*2s', 'a', 1)
+fields format:25:-1:-1
+ERROR 22023 width argument position must be ended by "$"
+> SELECT format('%d', 1)
+fields format:25:-1:-1
+ERROR 22023 unrecognized format() type specifier "d"
+> SELECT format('%é', 1)
+fields format:25:-1:-1
+ERROR 22023 unrecognized format() type specifier "é"
+> SELECT format('abc%')
+fields format:25:-1:-1
+ERROR 22023 unterminated format() type specifier
+> SELECT format('%1', 'a')
+fields format:25:-1:-1
+ERROR 22023 unterminated format() type specifier
+> SELECT format('%1$', 'a')
+fields format:25:-1:-1
+ERROR 22023 unterminated format() type specifier
+> SELECT format('%99999999999s', 'a')
+fields format:25:-1:-1
+ERROR 22003 number is out of range
+> SELECT format('%*s', 'abc', 'a')
+fields format:25:-1:-1
+ERROR 22P02 invalid input syntax for type integer: "abc"
+> SELECT format('%*s', true, 'a')
+fields format:25:-1:-1
+ERROR 22P02 invalid input syntax for type integer: "t"
+> SELECT format('%*s', -2147483648, 'a')
+fields format:25:-1:-1
+ERROR 22003 number is out of range
+> SELECT format('%-')
+fields format:25:-1:-1
+ERROR 22023 unterminated format() type specifier
+> SELECT pg_typeof(format('x')), pg_typeof(format('%s', 1))
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row text,text
+SELECT 1
+> SELECT constraint_schema, constraint_name, check_clause FROM information_schema.check_constraints WHERE constraint_schema = 'public' ORDER BY 2
+fields constraint_schema@information_schema.check_constraints.2:19:64:-1,constraint_name@information_schema.check_constraints.3:19:64:-1,check_clause@information_schema.check_constraints.4:1043:-1:-1
+SELECT 0
+> CREATE TABLE fc (a int NOT NULL, b text CHECK (b <> ''), c int CONSTRAINT c_pos CHECK (c > 0))
+CREATE TABLE
+> SELECT constraint_name, check_clause FROM information_schema.check_constraints WHERE constraint_schema = 'public' ORDER BY 2
+fields constraint_name@information_schema.check_constraints.3:19:64:-1,check_clause@information_schema.check_constraints.4:1043:-1:-1
+row fc_b_check,(b <> ''::text)
+row c_pos,(c > 0)
+row fc_a_not_null,a IS NOT NULL
+SELECT 3
+> SELECT count(*) > 0 FROM information_schema.check_constraints WHERE constraint_schema = 'pg_catalog'
+fields ?column?:16:1:-1
+row t
+SELECT 1
