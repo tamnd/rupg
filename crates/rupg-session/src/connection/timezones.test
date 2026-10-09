@@ -1,0 +1,146 @@
+> SET TIME ZONE 'XYZ+3:00:30'
+ERROR 22023 time zone "XYZ+3:00:30" appears to use leap seconds
+> SET TIME ZONE ':America/New_York'
+SET
+TimeZone=America/New_York
+> SHOW TimeZone
+fields TimeZone:25:-1:-1
+row America/New_York
+SHOW
+> SET TIME ZONE ':utc'
+SET
+TimeZone=UTC
+> SHOW TimeZone
+fields TimeZone:25:-1:-1
+row UTC
+SHOW
+> SET TIME ZONE 'gmt'
+SET
+TimeZone=GMT
+> SHOW TimeZone
+fields TimeZone:25:-1:-1
+row GMT
+SHOW
+> SELECT '2024-07-01 12:00:00+00'::timestamptz, '2024-01-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 12:00:00+00,2024-01-01 12:00:00+00
+SELECT 1
+> SET TIME ZONE 'america/new_york'
+SET
+TimeZone=America/New_York
+> SHOW TimeZone
+fields TimeZone:25:-1:-1
+row America/New_York
+SHOW
+> SELECT '2024-07-01 12:00:00+00'::timestamptz, '2024-01-01 12:00:00+00'::timestamptz, '1900-01-01 12:00:00+00'::timestamptz, '2400-07-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1,timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 08:00:00-04,2024-01-01 07:00:00-05,1900-01-01 07:00:00-05,2400-07-01 08:00:00-04
+SELECT 1
+> SELECT '2024-03-10 02:30:00'::timestamptz, '2024-11-03 01:30:00'::timestamptz, '2024-07-01 12:00 EDT'::timestamptz, '2024-07-01 12:00 EST'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1,timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-03-10 03:30:00-04,2024-11-03 01:30:00-05,2024-07-01 12:00:00-04,2024-07-01 13:00:00-04
+SELECT 1
+> SELECT '2024-07-01 12:00:00'::timestamp::timestamptz, '2024-07-01'::date::timestamptz, '2024-07-01 12:00:00+00'::timestamptz::timestamp
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1,timestamp:1114:8:-1
+row 2024-07-01 12:00:00-04,2024-07-01 00:00:00-04,2024-07-01 08:00:00
+SELECT 1
+> SELECT '12:00 America/New_York'::timetz
+ERROR 22007 invalid input syntax for type time with time zone: "12:00 America/New_York" at 8
+> SELECT '2024-07-01 12:00 Europe/Paris'::timestamptz, '2024-07-01 12:00 Asia/Kolkata'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 06:00:00-04,2024-07-01 02:30:00-04
+SELECT 1
+> SET TIME ZONE 'EST5EDT'
+SET
+TimeZone=EST5EDT
+> SELECT '2024-07-01 12:00:00+00'::timestamptz, '2024-01-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 08:00:00-04,2024-01-01 07:00:00-05
+SELECT 1
+> SET TIME ZONE 'XYZ5ABC,M3.2.0,M11.1.0'
+SET
+TimeZone=XYZ5ABC,M3.2.0,M11.1.0
+> SHOW TimeZone
+fields TimeZone:25:-1:-1
+row XYZ5ABC,M3.2.0,M11.1.0
+SHOW
+> SELECT '2024-07-01 12:00:00+00'::timestamptz, '2024-01-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 08:00:00-04,2024-01-01 07:00:00-05
+SELECT 1
+> SET TIME ZONE 'XYZ5ABC'
+SET
+TimeZone=XYZ5ABC
+> SELECT '2024-07-01 12:00:00+00'::timestamptz, '2024-01-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 08:00:00-04,2024-01-01 07:00:00-05
+SELECT 1
+> SET TIME ZONE 'Australia/Lord_Howe'
+SET
+TimeZone=Australia/Lord_Howe
+> SELECT '2024-07-01 12:00:00+00'::timestamptz, '2024-01-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 22:30:00+10:30,2024-01-01 23:00:00+11
+SELECT 1
+> SET TIME ZONE 'Europe/Dublin'
+SET
+TimeZone=Europe/Dublin
+> SELECT '2024-07-01 12:00:00+00'::timestamptz, '2024-01-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 13:00:00+01,2024-01-01 12:00:00+00
+SELECT 1
+> SET TIME ZONE 'Africa/Casablanca'
+SET
+TimeZone=Africa/Casablanca
+> SELECT '2024-07-01 12:00:00+00'::timestamptz, '2024-03-20 12:00:00+00'::timestamptz, '2087-04-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 2024-07-01 13:00:00+01,2024-03-20 12:00:00+00,2087-04-01 12:00:00+00
+SELECT 1
+> SET TIME ZONE 'Asia/Kolkata'
+SET
+TimeZone=Asia/Kolkata
+> SELECT '1941-07-01 12:00:00+00'::timestamptz, '1850-01-01 12:00:00+00'::timestamptz
+fields timestamptz:1184:8:-1,timestamptz:1184:8:-1
+row 1941-07-01 17:30:00+05:30,1850-01-01 17:53:28+05:53:28
+SELECT 1
+> SET TIME ZONE INTERVAL '00:00:30' HOUR TO SECOND
+ERROR 42601 time zone interval must be HOUR or HOUR TO MINUTE at 35
+> SHOW TimeZone
+fields TimeZone:25:-1:-1
+row Asia/Kolkata
+SHOW
+> SET TIME ZONE 'Nowhere/X'
+ERROR 22023 invalid value for parameter "TimeZone": "Nowhere/X"
+> SET TIME ZONE 'XYZ'
+ERROR 22023 invalid value for parameter "TimeZone": "XYZ"
+> SELECT pg_typeof(utc_offset), pg_typeof(is_dst) FROM pg_timezone_names LIMIT 1
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row interval,boolean
+SELECT 1
+> SELECT count(*) FROM pg_timezone_names
+fields count:20:8:-1
+row 598
+SELECT 1
+> SELECT name, abbrev, utc_offset FROM pg_timezone_names WHERE name IN ('UTC', 'Asia/Tokyo', 'Etc/GMT+5', 'Asia/Kolkata') ORDER BY name
+fields name@pg_timezone_names.1:25:-1:-1,abbrev@pg_timezone_names.2:25:-1:-1,utc_offset@pg_timezone_names.3:1186:16:-1
+row Asia/Kolkata,IST,05:30:00
+row Asia/Tokyo,JST,09:00:00
+row Etc/GMT+5,-05,-05:00:00
+row UTC,UTC,00:00:00
+SELECT 4
+> SET TIME ZONE 'Asia/Tokyo'
+SET
+TimeZone=Asia/Tokyo
+> SELECT * FROM pg_timezone_abbrevs WHERE abbrev IN ('JST', 'JDT', 'EST', 'CEST', 'UTC', 'LMT') ORDER BY abbrev
+fields abbrev@pg_timezone_abbrevs.1:25:-1:-1,utc_offset@pg_timezone_abbrevs.2:1186:16:-1,is_dst@pg_timezone_abbrevs.3:16:1:-1
+row CEST,02:00:00,t
+row EST,-05:00:00,f
+row JDT,10:00:00,t
+row JST,09:00:00,f
+row LMT,09:18:59,f
+row UTC,00:00:00,f
+SELECT 6
+> SELECT count(*) > 100 FROM pg_timezone_abbrevs
+fields ?column?:16:1:-1
+row t
+SELECT 1

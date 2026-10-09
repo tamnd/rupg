@@ -24,6 +24,7 @@ mod shared;
 mod srf;
 mod stat;
 mod text;
+mod zones;
 
 use std::collections::BTreeMap;
 use std::rc::Rc;

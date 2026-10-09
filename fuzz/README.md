@@ -51,7 +51,7 @@ psql -X -At -F "$(printf '\t')" -f rc.sql > rc.tsv
 cargo +nightly run --release --example type_replay -- diff recv corpus/type_recv rc.tsv
 ```
 
-The server reads the files of `COPY`, so the directory must be an absolute path that the server can read, and the user must be a superuser or have `pg_read_server_files`. A case where rupg gives `0A000`, or refuses a zone name because it has no tz database yet, counts as not supported. For an input with `now`, `today`, `tomorrow` or `yesterday`, only `OK` or the SQLSTATE of the error counts.
+The server reads the files of `COPY`, so the directory must be an absolute path that the server can read, and the user must be a superuser or have `pg_read_server_files`. A case where rupg gives `0A000` counts as not supported. For an input with `now`, `today`, `tomorrow` or `yesterday`, only `OK` or the SQLSTATE of the error counts.
 
 ## Run a target
 

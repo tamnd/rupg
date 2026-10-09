@@ -4,7 +4,9 @@
 //!
 //! Lifted from `crates/rudb-common/src/guc/check.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
-use rupg_types::tz::zone_name;
+use std::sync::Arc;
+
+use rupg_types::tz;
 
 use super::{Parameter, Setting};
 use rupg_common::Error;
@@ -38,8 +40,13 @@ pub(super) fn check(
             .map(Setting::String)
             .map_err(|detail| invalid(parameter, &text, Some(detail))),
         ("TimeZone" | "log_timezone", Setting::String(text)) => match zone(&text) {
-            Ok((_, name)) => Ok(Setting::String(name)),
-            Err(detail) => Err(invalid(parameter, &text, detail)),
+            Ok(zone) => Ok(Setting::String(zone.name().to_owned())),
+            Err(ZoneError::Invalid(detail)) => Err(invalid(parameter, &text, detail)),
+            Err(ZoneError::LeapSeconds) => Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!("time zone \"{text}\" appears to use leap seconds"),
+            )
+            .with_detail("PostgreSQL does not support leap seconds.")),
         },
         ("client_encoding", Setting::String(text)) => {
             let Some(encoding) = encoding(&text) else {
@@ -197,51 +204,53 @@ fn split_datestyle(text: &str) -> (&'static str, &'static str) {
     (style.unwrap_or("ISO"), order.unwrap_or("MDY"))
 }
 
-/// A time zone of the `TimeZone` parameter.
-#[derive(Clone, Debug, PartialEq)]
-pub enum Zone {
-    /// A zone of the time zone database, by its name in the data.
-    Named(&'static str),
-    /// A zone with one offset at all instants: a number of hours, an interval, or a POSIX zone without daylight saving time.
-    Fixed {
-        /// Seconds east of UTC.
-        offset: i32,
-        /// The abbreviation, which can be empty.
-        abbrev: String,
-    },
+/// Why a `TimeZone` value is not valid.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum ZoneError {
+    /// The value is not a zone, with the detail of the error if there is one.
+    Invalid(Option<String>),
+    /// The value names a zone whose local time is not on a whole minute, which `pg_tz_acceptable` refuses.
+    LeapSeconds,
 }
 
 /// The largest number of hours in a POSIX offset, from `getsecs` in `localtime.c`.
 const MAX_OFFSET_HOURS: i64 = 24 * 7 - 1;
 
-/// `check_timezone` and `pg_tzset`: the zone and its canonical name. The error is the detail, if there is one.
-pub fn zone(text: &str) -> Result<(Zone, String), Option<String>> {
+/// `check_timezone`: the zone of a `TimeZone` value, whose name is the canonical name of the value.
+pub fn zone(text: &str) -> Result<Arc<tz::Zone>, ZoneError> {
     if text.len() >= 8 && text[..8].eq_ignore_ascii_case("interval") {
         let rest = text[8..].trim_start();
         let inner = rest
             .strip_prefix('\'')
             .and_then(|r| r.strip_suffix('\''))
             .filter(|r| !r.contains('\''));
-        let seconds = inner.and_then(interval_seconds).ok_or(None)?;
+        let seconds = inner.and_then(interval_seconds).ok_or(ZoneError::Invalid(None))?;
         return offset_zone(-seconds);
     }
     if let Some((hours, rest)) = super::strtod(text)
         && rest.is_empty()
     {
         if !hours.is_finite() {
-            return Err(Some("UTC timezone offset is out of range.".to_owned()));
+            return Err(out_of_range());
         }
         // The cast saturates, and a value that is too large fails the range check.
         #[allow(clippy::cast_possible_truncation)]
         let seconds = (-hours * 3600.0) as i64;
         return offset_zone(seconds);
     }
-    named_zone(text).ok_or(None)
+    let zone = tz::load(text).ok_or(ZoneError::Invalid(None))?;
+    if !zone.acceptable() {
+        return Err(ZoneError::LeapSeconds);
+    }
+    Ok(zone)
+}
+
+fn out_of_range() -> ZoneError {
+    ZoneError::Invalid(Some("UTC timezone offset is out of range.".to_owned()))
 }
 
 /// `pg_tzset_offset`: a zone with an offset in seconds west of UTC, with a name such as `<+05:30>-05:30`.
-fn offset_zone(west: i64) -> Result<(Zone, String), Option<String>> {
-    let out_of_range = || Some("UTC timezone offset is out of range.".to_owned());
+fn offset_zone(west: i64) -> Result<Arc<tz::Zone>, ZoneError> {
     let abs = west.unsigned_abs();
     if abs > (MAX_OFFSET_HOURS as u64) * 3600 + 3599 {
         return Err(out_of_range());
@@ -254,7 +263,7 @@ fn offset_zone(west: i64) -> Result<(Zone, String), Option<String>> {
         }
     }
     let name = if west > 0 { format!("<-{text}>+{text}") } else { format!("<+{text}>-{text}") };
-    named_zone(&name).ok_or_else(out_of_range)
+    tz::load(&name).ok_or_else(out_of_range)
 }
 
 /// The seconds of an interval of the forms that `SET TIME ZONE INTERVAL` takes in practice: `[+-]h[:mm[:ss]]`, a number of hours, and the output of `interval_out` such as `05:30:00` and `-08:00:00`. `None` for an interval with days or months, or one that is not of these forms.
@@ -274,53 +283,6 @@ fn interval_seconds(text: &str) -> Option<i64> {
     }
     let total = hours * 3600 + minutes * 60 + seconds;
     Some(if negative { -total } else { total })
-}
-
-/// `pg_tzset`: a zone of the time zone database without regard to case, or a POSIX zone in upper case. `GMT` is always the POSIX zone.
-fn named_zone(text: &str) -> Option<(Zone, String)> {
-    let upper = text.to_ascii_uppercase();
-    if upper != "GMT"
-        && let Some(name) = zone_name(text)
-    {
-        return Some((Zone::Named(name), name.to_owned()));
-    }
-    if upper.starts_with(':') {
-        return None;
-    }
-    let (abbrev, west) = posix(&upper)?;
-    Some((Zone::Fixed { offset: -west, abbrev }, upper))
-}
-
-/// `tzparse` for a POSIX zone without daylight saving time: a name, alphabetic or in angle brackets, then an offset `[+-]h[:mm[:ss]]` west of UTC. The name and the offset in seconds.
-fn posix(text: &str) -> Option<(String, i32)> {
-    let (name, rest) = if let Some(rest) = text.strip_prefix('<') {
-        let end = rest.find('>')?;
-        (&rest[..end], &rest[end + 1..])
-    } else {
-        let end = text.find(|c: char| !c.is_ascii_alphabetic()).unwrap_or(text.len());
-        text.split_at(end)
-    };
-    let (negative, rest) = match rest.as_bytes().first()? {
-        b'-' => (true, &rest[1..]),
-        b'+' => (false, &rest[1..]),
-        _ => (false, rest),
-    };
-    let mut parts = rest.split(':');
-    let number = |part: Option<&str>, max: i64| -> Option<i64> {
-        let part = part?;
-        if part.is_empty() || part.len() > 3 || !part.bytes().all(|b| b.is_ascii_digit()) {
-            return None;
-        }
-        part.parse().ok().filter(|n| *n <= max)
-    };
-    let hours = number(parts.next(), MAX_OFFSET_HOURS)?;
-    let minutes = parts.next().map_or(Some(0), |m| number(Some(m), 59))?;
-    let seconds = parts.next().map_or(Some(0), |s| number(Some(s), 59))?;
-    if parts.next().is_some() {
-        return None;
-    }
-    let total = i32::try_from(hours * 3600 + minutes * 60 + seconds).ok()?;
-    Some((name.to_owned(), if negative { -total } else { total }))
 }
 
 /// `pg_char_to_encoding` for the client encodings: the canonical name of an encoding name or alias, without regard to case and to the characters that are not letters or digits.
@@ -414,6 +376,8 @@ pub fn encoding(name: &str) -> Option<&'static str> {
 
 #[cfg(test)]
 mod tests {
+    use rupg_types::TimeZone;
+
     use super::*;
 
     #[test]
@@ -436,24 +400,26 @@ mod tests {
 
     #[test]
     fn zones_have_the_canonical_names_of_postgres() {
-        let name = |text: &str| zone(text).map(|(_, name)| name).ok();
+        let name = |text: &str| zone(text).map(|zone| zone.name().to_owned()).ok();
         assert_eq!(name("asia/tokyo").as_deref(), Some("Asia/Tokyo"));
         assert_eq!(name("utc").as_deref(), Some("UTC"));
         assert_eq!(name("America/new_york").as_deref(), Some("America/New_York"));
+        assert_eq!(name(":america/new_york").as_deref(), Some("America/New_York"));
+        assert_eq!(name("gmt").as_deref(), Some("GMT"));
         assert_eq!(name("-3").as_deref(), Some("<-03>+03"));
         assert_eq!(name("5.5").as_deref(), Some("<+05:30>-05:30"));
         assert_eq!(name("1e1").as_deref(), Some("<+10>-10"));
         assert_eq!(name("+03:00").as_deref(), Some("+03:00"));
         assert_eq!(name("abc+3").as_deref(), Some("ABC+3"));
         assert_eq!(name("<+0530>-5:30").as_deref(), Some("<+0530>-5:30"));
+        assert_eq!(name("xyz5abc,M3.2.0,M11.1.0").as_deref(), Some("XYZ5ABC,M3.2.0,M11.1.0"));
         assert_eq!(name("interval '-08:00'").as_deref(), Some("<-08>+08"));
         assert_eq!(name("Z"), None);
+        assert_eq!(name("XYZ"), None);
         assert_eq!(name("Nowhere/X"), None);
-        assert_eq!(
-            zone("XYZ+3").unwrap().0,
-            Zone::Fixed { offset: -3 * 3600, abbrev: "XYZ".into() }
-        );
-        assert_eq!(zone("-3").unwrap().0, Zone::Fixed { offset: -3 * 3600, abbrev: "-03".into() });
+        assert_eq!(zone("XYZ+3").unwrap().at(0), (-3 * 3600, "XYZ"));
+        assert_eq!(zone("-3").unwrap().at(0), (-3 * 3600, "-03"));
+        assert_eq!(zone("XYZ+3:00:30").unwrap_err(), ZoneError::LeapSeconds);
         assert!(zone("200").is_err());
     }
 

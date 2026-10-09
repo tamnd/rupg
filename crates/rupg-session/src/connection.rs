@@ -1412,11 +1412,18 @@ mod tests {
             ]
         );
         assert_eq!(
-            send(&mut c, &query("SET TimeZone = 'Europe/Paris'; SELECT now()::text")),
+            send(
+                &mut c,
+                &query(
+                    "SET TimeZone = 'Europe/Paris'; SELECT '2024-07-01 12:00:00+00'::timestamptz"
+                )
+            ),
             [
                 "SET",
-                "columns now",
-                "ERROR 0A000 the time zone \"Europe/Paris\" is not supported yet",
+                "columns timestamptz",
+                "row 2024-07-01 14:00:00+02",
+                "SELECT 1",
+                "TimeZone=Europe/Paris",
                 "ready I"
             ]
         );
@@ -1674,6 +1681,12 @@ mod tests {
     #[test]
     fn viewdef() {
         big_stack(|| script(include_str!("connection/viewdef.test")));
+    }
+
+    /// The rules of the time zone data: `TimeZone` with the names of the data, POSIX zone strings and the error for leap seconds, the output and the input of `timestamptz` in zones with daylight saving time, in a gap and in an overlap, the casts from `timestamp` and `date`, and the views `pg_timezone_names` and `pg_timezone_abbrevs` for zones without a change now. `connection/timezones.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn timezones() {
+        big_stack(|| script(include_str!("connection/timezones.test")));
     }
 
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -135,6 +135,11 @@ impl ZoneAbbrevs {
         Some((abbrev, value))
     }
 
+    /// Each abbreviation in lower case and its meaning, in the order of the abbreviations.
+    pub fn iter(&self) -> impl Iterator<Item = (&str, &Abbrev)> {
+        self.entries.iter().map(|(abbrev, value)| (abbrev.as_str(), value))
+    }
+
     pub fn len(&self) -> usize {
         self.entries.len()
     }
@@ -751,7 +756,11 @@ fn determine_offset(tm: &Tm, zone: &dyn TimeZone) -> (i32, i64) {
         return (0, 0);
     }
     let day = i64::from(date2j(tm.year, tm.mon, tm.mday) - UNIX_EPOCH_JDATE) * 86400;
-    let mytime = day + i64::from(tm.sec) + (i64::from(tm.min) + i64::from(tm.hour) * 60) * 60;
+    local_offset(day + i64::from(tm.sec) + (i64::from(tm.min) + i64::from(tm.hour) * 60) * 60, zone)
+}
+
+/// The part of `DetermineTimeZoneOffsetInternal` after the fields: the offset west of UTC of a local time in seconds since 1970-01-01 in a zone, and the instant. In a gap the local time is in the offset before the change, and in an overlap it is in the offset after the change.
+pub fn local_offset(mytime: i64, zone: &dyn TimeZone) -> (i32, i64) {
     let (before, change) = zone.next_change(mytime - 86400);
     let before_time = mytime - i64::from(before);
     let Some((boundary, after)) = change else {

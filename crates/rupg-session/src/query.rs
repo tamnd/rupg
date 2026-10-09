@@ -1,6 +1,6 @@
 //! The statements that the engine plans and runs, which are `SELECT` lists without `FROM` for now, and what they read of the session.
 //!
-//! [`Reader`] gives the analyzer and the functions the settings, the user, the database, the time zone, the times of the transaction and the statement, and the process ID. The time zone rules of the IANA data come later, so the engine has the zones with one offset: a number of hours, an interval, a POSIX zone without daylight saving time, the names of UTC and GMT, and `Etc/GMT+N`. A function that needs another zone gives `0A000`, so it never gives a wrong time.
+//! [`Reader`] gives the analyzer and the functions the settings, the user, the database, the time zone, the times of the transaction and the statement, and the process ID. The time zone is the zone of [`rupg_types::tz`] for the canonical name in the setting.
 
 use std::cell::{Ref, RefCell};
 use std::rc::Rc;
@@ -14,13 +14,13 @@ use rupg_func::{Backend, Client};
 use rupg_platform::Clock;
 use rupg_sql::nodes::Node;
 use rupg_types::{
-    Array, ByteaOutput, DateFormat, DateOrder, DateStyle, FixedZone, IntervalStyle, Recv, TimeZone,
-    Value, oid,
+    Array, ByteaOutput, DateFormat, DateOrder, DateStyle, IntervalStyle, Recv, TimeZone, Value,
+    oid, tz,
 };
 use rupg_wire::Field;
 
 use crate::connection::Activity;
-use crate::guc::{self, Action, Origin, Settings, Zone};
+use crate::guc::{self, Action, Origin, Settings};
 use crate::param::type_error;
 use crate::store::Store;
 use crate::utility;
@@ -94,8 +94,8 @@ pub(crate) struct Reader<'a> {
     activity: Option<(&'a Activity, &'a Store)>,
 }
 
-/// The zone of a `TimeZone` value, or the name of a zone whose rules the engine does not have yet.
-type ZoneOf = std::result::Result<Rc<FixedZone>, String>;
+/// The zone of a `TimeZone` value, or the value if it is not a zone.
+type ZoneOf = std::result::Result<Rc<Arc<tz::Zone>>, String>;
 
 impl<'a> Reader<'a> {
     pub(crate) fn new(
@@ -108,7 +108,7 @@ impl<'a> Reader<'a> {
         catalog: Arc<Catalog>,
     ) -> Reader<'a> {
         let name = settings.borrow().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
-        let zone = fixed_zone(&name).map(Rc::new);
+        let zone = session_zone(&name);
         Reader {
             settings,
             user,
@@ -159,29 +159,9 @@ impl<'a> Reader<'a> {
     }
 }
 
-/// The zone of a `TimeZone` value that the setting accepted, or the name of a zone that the engine does not have yet.
-fn fixed_zone(text: &str) -> std::result::Result<FixedZone, String> {
-    match guc::zone(text) {
-        Ok((Zone::Fixed { offset, abbrev }, _)) => Ok(FixedZone { offset, abbrev }),
-        Ok((Zone::Named(name), _)) => named_zone(name).ok_or_else(|| name.to_owned()),
-        Err(_) => Err(text.to_owned()),
-    }
-}
-
-/// The zones of the IANA data with one offset: the names of UTC and GMT, and `Etc/GMT+N`, whose offset is west of UTC, with the abbreviation `%z` of the data.
-fn named_zone(name: &str) -> Option<FixedZone> {
-    let upper = name.to_ascii_uppercase();
-    let base = upper.strip_prefix("ETC/").unwrap_or(&upper);
-    match base {
-        "UTC" | "UCT" | "UNIVERSAL" | "ZULU" => return Some(FixedZone::utc()),
-        "GMT" | "GMT0" | "GMT+0" | "GMT-0" | "GREENWICH" => {
-            return Some(FixedZone { offset: 0, abbrev: "GMT".to_owned() });
-        }
-        _ => {}
-    }
-    let hours: i32 = upper.strip_prefix("ETC/GMT")?.parse().ok()?;
-    let sign = if hours > 0 { '-' } else { '+' };
-    Some(FixedZone { offset: -hours * 3600, abbrev: format!("{sign}{:02}", hours.abs()) })
+/// The zone of a `TimeZone` value that the setting accepted. The setting keeps the canonical name, which `pg_tzset` takes again.
+fn session_zone(text: &str) -> ZoneOf {
+    tz::load(text).map(Rc::new).ok_or_else(|| text.to_owned())
 }
 
 /// `DateStyle` in its canonical form, such as `ISO, MDY`.
@@ -219,16 +199,15 @@ impl rupg_func::Session for Reader<'_> {
         let name = self.settings().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
         let mut zone = self.zone.borrow_mut();
         if zone.0 != name {
-            let made = fixed_zone(&name).map(Rc::new);
+            let made = session_zone(&name);
             *zone = (name, made);
         }
         match &zone.1 {
             Ok(zone) => Ok(Rc::clone(zone) as Rc<dyn TimeZone>),
             Err(name) => Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                format!("the time zone \"{name}\" is not supported yet"),
-            )
-            .with_hint("Set TimeZone to UTC or to a fixed offset, such as SET TIME ZONE '+02'.")),
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!("time zone \"{name}\" not recognized"),
+            )),
         }
     }
 
@@ -472,16 +451,19 @@ mod tests {
     use super::*;
 
     #[test]
-    fn zones_with_one_offset() {
-        assert_eq!(fixed_zone("UTC").unwrap().abbrev, "UTC");
-        assert_eq!(fixed_zone("Etc/Zulu").unwrap().offset, 0);
-        assert_eq!(fixed_zone("Greenwich").unwrap().abbrev, "GMT");
-        let zone = fixed_zone("Etc/GMT+5").unwrap();
-        assert_eq!((zone.offset, zone.abbrev.as_str()), (-18000, "-05"));
-        let zone = fixed_zone("etc/gmt-14").unwrap();
-        assert_eq!((zone.offset, zone.abbrev.as_str()), (50400, "+14"));
-        assert_eq!(fixed_zone("+02").unwrap().offset, 7200);
-        assert_eq!(fixed_zone("Europe/Paris").unwrap_err(), "Europe/Paris");
+    fn zones_of_the_canonical_names() {
+        let at = |text: &str, instant: i64| {
+            let zone = session_zone(text).unwrap();
+            let (offset, abbrev) = zone.at(instant);
+            (offset, abbrev.to_owned())
+        };
+        assert_eq!(at("UTC", 0), (0, "UTC".to_owned()));
+        assert_eq!(at("Etc/GMT+5", 0), (-18000, "-05".to_owned()));
+        assert_eq!(at("<+02>-02", 0), (7200, "+02".to_owned()));
+        // 2024-07-01 12:00 UTC and 2024-01-01 12:00 UTC.
+        assert_eq!(at("Europe/Paris", 1_719_835_200), (7200, "CEST".to_owned()));
+        assert_eq!(at("Europe/Paris", 1_704_110_400), (3600, "CET".to_owned()));
+        assert!(session_zone("Nowhere/X").is_err());
     }
 
     #[test]

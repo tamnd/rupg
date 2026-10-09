@@ -3,14 +3,14 @@
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{
     self as types, DATE_INFINITY, DATE_NEGATIVE_INFINITY, Numeric, NumericSign,
-    POSTGRES_EPOCH_JDATE, TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, USECS_PER_DAY,
-    USECS_PER_SEC, Value, oid,
+    POSTGRES_EPOCH_JDATE, TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, UNIX_TO_POSTGRES_USECS,
+    USECS_PER_DAY, USECS_PER_SEC, Value, oid,
 };
 
 use crate::compare::float;
 use crate::io::base_type;
 use crate::math::{float_value, integer};
-use crate::{Call, Kernel, Session, bad_value, not_yet, type_error};
+use crate::{Call, Kernel, Session, bad_value, type_error};
 
 /// `TIMESTAMP_END_JULIAN`: the first Julian day after the last timestamp.
 const TIMESTAMP_END_JULIAN: i32 = 109_203_528;
@@ -300,12 +300,12 @@ pub fn local_time(session: &dyn Session, utc: i64) -> Result<(i64, i32)> {
     Ok((local(session, utc)?, offset_at(session, utc)? as i32))
 }
 
-/// The instant of a local time of the session. Only a zone with one offset has it here.
+/// The instant of a local time of the session, with the offset that `DetermineTimeZoneOffset` gives for the time.
 fn instant(session: &dyn Session, local: i64) -> Result<i64> {
-    let Some(offset) = session.zone()?.fixed_offset() else {
-        return Err(not_yet("a time zone with daylight saving time"));
-    };
-    Ok(local - i64::from(offset) * USECS_PER_SEC)
+    let zone = session.zone()?;
+    let seconds = local.div_euclid(USECS_PER_SEC) - UNIX_TO_POSTGRES_USECS / USECS_PER_SEC;
+    let (west, _) = types::local_offset(seconds, zone.as_ref());
+    local.checked_add(i64::from(west) * USECS_PER_SEC).ok_or_else(timestamp_range)
 }
 
 /// `IS_VALID_TIMESTAMP`.

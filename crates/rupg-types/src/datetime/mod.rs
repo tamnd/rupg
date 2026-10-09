@@ -11,8 +11,8 @@ mod decode;
 use rupg_common::SqlState;
 
 pub use decode::{
-    Abbrev, DateTimeInput, NoZones, ZoneAbbrevs, ZoneLookup, date_in, interval_in, time_in,
-    timestamp_in, timestamptz_in, timetz_in,
+    Abbrev, DateTimeInput, NoZones, ZoneAbbrevs, ZoneLookup, date_in, interval_in, local_offset,
+    time_in, timestamp_in, timestamptz_in, timetz_in,
 };
 
 use crate::binary::Recv;
@@ -104,19 +104,50 @@ pub trait TimeZone {
         (self.at(unix_seconds).0, None)
     }
 
-    /// The meaning of an abbreviation in upper case in this zone over all of its history, as `pg_interpret_timezone_abbrev` gives it.
+    /// The meaning of an abbreviation in upper case in this zone over all of its history, as `pg_timezone_abbrev_is_known` gives it.
     fn abbrev_meaning(&self, _abbrev: &str) -> Option<AbbrevMeaning> {
         None
     }
 
-    /// The offset east of UTC and the daylight saving flag of an abbreviation in upper case at an instant, as `pg_timezone_abbrev_is_known` gives them.
+    /// The offset east of UTC and the daylight saving flag of an abbreviation in upper case at an instant, as `pg_interpret_timezone_abbrev` gives them.
     fn abbrev_at(&self, _abbrev: &str, _unix_seconds: i64) -> Option<(i32, bool)> {
         None
     }
 
-    /// The offset east of UTC if the zone has one offset at all instants.
+    /// The offset east of UTC if the zone has one offset at all instants, as `pg_get_timezone_offset` gives it.
     fn fixed_offset(&self) -> Option<i32> {
         None
+    }
+
+    /// The abbreviations that the zone uses, in the order of `pg_get_next_timezone_abbrev`.
+    fn abbrevs(&self) -> Vec<&str> {
+        Vec::new()
+    }
+}
+
+impl<T: TimeZone + ?Sized> TimeZone for std::sync::Arc<T> {
+    fn at(&self, unix_seconds: i64) -> (i32, &str) {
+        (**self).at(unix_seconds)
+    }
+
+    fn next_change(&self, unix_seconds: i64) -> (i32, Option<(i64, i32)>) {
+        (**self).next_change(unix_seconds)
+    }
+
+    fn abbrev_meaning(&self, abbrev: &str) -> Option<AbbrevMeaning> {
+        (**self).abbrev_meaning(abbrev)
+    }
+
+    fn abbrev_at(&self, abbrev: &str, unix_seconds: i64) -> Option<(i32, bool)> {
+        (**self).abbrev_at(abbrev, unix_seconds)
+    }
+
+    fn fixed_offset(&self) -> Option<i32> {
+        (**self).fixed_offset()
+    }
+
+    fn abbrevs(&self) -> Vec<&str> {
+        (**self).abbrevs()
     }
 }
 
@@ -159,6 +190,10 @@ impl TimeZone for FixedZone {
 
     fn fixed_offset(&self) -> Option<i32> {
         Some(self.offset)
+    }
+
+    fn abbrevs(&self) -> Vec<&str> {
+        vec![&self.abbrev]
     }
 }
 
