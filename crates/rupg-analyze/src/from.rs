@@ -1265,6 +1265,32 @@ impl Analyzer<'_> {
         Ok(expr)
     }
 
+    /// `ExpandRowReference` of a whole-row reference: the columns of the relation, as for `t.*`.
+    pub(crate) fn whole_row_columns(
+        &self,
+        var: Var,
+        at: Option<usize>,
+    ) -> Result<Vec<(String, Expr)>> {
+        let scope = self.level(var.levels_up);
+        let entry = scope
+            .entries
+            .iter()
+            .find(|e| e.relation == Some(var.relation))
+            .ok_or_else(|| Error::internal("a whole-row reference has no entry"))?;
+        let relation = scope
+            .relations
+            .get(var.relation)
+            .ok_or_else(|| Error::internal("a whole-row reference has no relation"))?;
+        let mut columns = Vec::with_capacity(entry.columns.len());
+        for (i, (name, column)) in entry.columns.iter().zip(&relation.columns).enumerate() {
+            let attnum = i16::try_from(i + 1).map_err(|_| Error::internal("too many columns"))?;
+            let mut expr = Expr::new(ExprKind::Var(Var { attnum, ..var }), column.ty).at(at);
+            expr.typmod = column.typmod;
+            columns.push((name.clone(), expr));
+        }
+        Ok(columns)
+    }
+
     /// The scopes of the query and of the queries outside it, with their levels: 0 for the query, 1 for the query outside it, and so on.
     pub(crate) fn levels(&self) -> impl Iterator<Item = (usize, &Scope)> {
         std::iter::once(&self.scope).chain(self.outer.iter().rev()).enumerate()

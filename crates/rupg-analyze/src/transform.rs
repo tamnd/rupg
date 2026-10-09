@@ -11,7 +11,7 @@ use rupg_types::{Value, oid};
 use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, can_coerce, common_of};
-use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, FuncForm, SqlValue};
+use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue};
 use crate::typename::{names, place};
 use crate::types;
 
@@ -23,6 +23,29 @@ const OTHER_COLLATIONS: [&str; 2] = ["pg_unicode_fast", "unicode"];
 /// An error for an expression that the analyzer does not take yet.
 fn not_yet(what: &str, at: Option<usize>) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet")).at_opt(at)
+}
+
+/// `COMPARE_EQ` of `CompareType`, which is also the btree strategy of `=`.
+const COMPARE_EQ: u32 = 3;
+/// `COMPARE_NE` of `CompareType`.
+const COMPARE_NE: u32 = 6;
+
+/// `get_op_index_interpretation`: the kinds of comparison of an operator, as a bit for each `CompareType`. A btree strategy is the number of its kind. An operator that no btree family has is `<>` when its negator is the equality operator of a btree family.
+fn compare_kinds(operator: u32) -> u8 {
+    let btree = |operator: u32| {
+        rupg_pgcatalog::builtin::amops_of_operator(operator)
+            .filter(|a| a.method == crate::typcache::BTREE && (1..=5).contains(&a.strategy))
+            .map(|a| a.strategy)
+    };
+    let kinds = btree(operator).fold(0u8, |bits, strategy| bits | 1 << strategy);
+    if kinds != 0 {
+        return kinds;
+    }
+    let negator = rupg_pgcatalog::builtin::operator_by_oid(operator).map_or(0, |o| o.negator);
+    if negator != 0 && btree(negator).any(|s| s == crate::typcache::EQUAL) {
+        return 1 << COMPARE_NE;
+    }
+    0
 }
 
 /// A raw `A_Expr` of one operator, as `makeSimpleA_Expr` builds it.
@@ -237,6 +260,76 @@ impl Analyzer<'_> {
         Ok(Expr { kind: ExprKind::Param(n), ty, typmod: -1, location: at })
     }
 
+    /// `make_row_comparison_op`: `(a, b) op (c, d)`, with an operator for each pair of fields. The operators of `=` combine with `AND`, and the operators of `<>` with `OR`. The kind of comparison is the first kind, in the order of `CompareType`, that each operator has in a btree operator family, or `<>` for the negator of an equality operator of a btree family.
+    ///
+    /// # Errors
+    ///
+    /// `42601` for rows with a different number of fields, `0A000` for rows with no fields or for operators with no common kind, and `42804` for an operator that does not give `boolean` or that gives a set.
+    fn row_comparison(
+        &mut self,
+        op_names: &[&str],
+        left: &[Option<Node>],
+        right: &[Option<Node>],
+        at: Option<usize>,
+    ) -> Result<Expr> {
+        let left = left.iter().map(|n| self.transform(n.as_ref())).collect::<Result<Vec<_>>>()?;
+        let right = right.iter().map(|n| self.transform(n.as_ref())).collect::<Result<Vec<_>>>()?;
+        if left.len() != right.len() {
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                "unequal number of entries in row expressions",
+            )
+            .at_opt(at));
+        }
+        if left.is_empty() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot compare rows of zero length",
+            )
+            .at_opt(at));
+        }
+        let mut ops = Vec::with_capacity(left.len());
+        for (l, r) in left.into_iter().zip(right) {
+            let op = self.make_op(op_names, Some(l), r, at)?;
+            let message = if op.ty != oid::BOOL {
+                format!(
+                    "row comparison operator must yield type boolean, not type {}",
+                    types::name(op.ty)
+                )
+            } else if op.first_set_call().is_some() {
+                "row comparison operator must not return a set".to_string()
+            } else {
+                ops.push(op);
+                continue;
+            };
+            return Err(Error::new(SqlState::DATATYPE_MISMATCH, message).at_opt(at));
+        }
+        if ops.len() == 1 {
+            return Ok(ops.remove(0));
+        }
+        let mut kinds = u8::MAX;
+        for op in &ops {
+            let ExprKind::Func(Func { form: FuncForm::Operator(operator), .. }) = op.kind else {
+                return Err(Error::internal("a row comparison that is not an operator"));
+            };
+            kinds &= compare_kinds(operator);
+        }
+        match kinds.trailing_zeros() {
+            COMPARE_EQ => Ok(Expr::new(ExprKind::Bool(BoolOp::And, ops), oid::BOOL).at(at)),
+            COMPARE_NE => Ok(Expr::new(ExprKind::Bool(BoolOp::Or, ops), oid::BOOL).at(at)),
+            8 => Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!(
+                    "could not determine interpretation of row comparison operator {}",
+                    op_names.last().copied().unwrap_or_default()
+                ),
+            )
+            .with_hint("Row comparison operators must be associated with btree operator families.")
+            .at_opt(at)),
+            _ => Err(not_yet("a row comparison with an ordering operator", at)),
+        }
+    }
+
     /// The operators and the other forms of `A_Expr`.
     fn transform_a_expr(&mut self, a: &A_Expr) -> Result<Expr> {
         let at = place(a.location);
@@ -246,9 +339,8 @@ impl Analyzer<'_> {
             | A_Expr_Kind::AEXPR_LIKE
             | A_Expr_Kind::AEXPR_ILIKE
             | A_Expr_Kind::AEXPR_SIMILAR => {
-                if matches!((&a.lexpr, &a.rexpr), (Some(Node::RowExpr(_)), Some(Node::RowExpr(_))))
-                {
-                    return Err(not_yet("a row comparison", at));
+                if let (Some(Node::RowExpr(l)), Some(Node::RowExpr(r))) = (&a.lexpr, &a.rexpr) {
+                    return self.row_comparison(&op_names, &l.args, &r.args, at);
                 }
                 let left = match &a.lexpr {
                     Some(node) => Some(self.transform(Some(node))?),

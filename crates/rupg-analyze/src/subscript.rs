@@ -15,10 +15,58 @@ const ARRAY_SUBSCRIPT_HANDLER: u32 = 6179;
 impl Analyzer<'_> {
     /// `transformIndirection`: the subscripts and the field selections after an expression. The subscripts before a field apply first. `.*` is not supported here.
     pub(crate) fn transform_indirection(&mut self, ind: &A_Indirection) -> Result<Expr> {
-        let mut result = self.transform(ind.arg.as_ref())?;
+        self.indirection(ind.arg.as_ref(), &ind.indirection)
+    }
+
+    /// `ExpandIndirectionStar` and `ExpandRowReference`: the fields of `(expr).*` in a target list, with their names, or `None` when the indirection does not end with `*`. A whole-row reference gives the columns of its relation. Each other field is a field selection of its own copy of the expression, so the expression runs once for each field, as in PostgreSQL.
+    ///
+    /// # Errors
+    ///
+    /// `42809` for an expression of a type that is not composite, or of type `record` with fields that the analyzer cannot find.
+    pub(crate) fn expand_indirection_star(
+        &mut self,
+        ind: &A_Indirection,
+    ) -> Result<Option<Vec<(String, Expr)>>> {
+        let Some((Some(Node::A_Star(_)), rest)) = ind.indirection.split_last() else {
+            return Ok(None);
+        };
+        let expr = self.indirection(ind.arg.as_ref(), rest)?;
+        let at = expr.place();
+        if let ExprKind::Var(var) = expr.kind
+            && var.attnum == 0
+        {
+            return self.whole_row_columns(var, at).map(Some);
+        }
+        let ty = expr.ty;
+        let columns =
+            if ty == oid::RECORD { self.record_columns(&expr)? } else { self.row_columns(ty) };
+        let Some(columns) = columns else {
+            let message = if ty == oid::RECORD {
+                "record type has not been registered".to_string()
+            } else {
+                format!("type {} is not composite", types::name(ty))
+            };
+            return Err(Error::new(SqlState::WRONG_OBJECT_TYPE, message));
+        };
+        let fields = columns
+            .into_iter()
+            .enumerate()
+            .map(|(i, column)| {
+                let mut field =
+                    Expr::new(ExprKind::FieldSelect(Box::new(expr.clone()), i), column.ty);
+                field.typmod = column.typmod;
+                (column.name, field)
+            })
+            .collect();
+        Ok(Some(fields))
+    }
+
+    /// The subscripts and the field selections of the items after the expression `arg`.
+    fn indirection(&mut self, arg: Option<&Node>, items: &[Option<Node>]) -> Result<Expr> {
+        let mut result = self.transform(arg)?;
         let location = result.place();
         let mut subscripts: Vec<&A_Indices> = Vec::new();
-        for item in &ind.indirection {
+        for item in items {
             match item {
                 Some(Node::A_Indices(indices)) => subscripts.push(indices),
                 Some(Node::A_Star(_)) => {

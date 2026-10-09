@@ -180,6 +180,15 @@ impl Analyzer<'_> {
                 }
                 continue;
             }
+            if let Some(Node::A_Indirection(ind)) = &rt.val
+                && let Some(fields) =
+                    self.with_kind(Kind::Select, |a| a.expand_indirection_star(ind))?
+            {
+                for (name, expr) in fields {
+                    targets.push(Target { name, expr, origin: None, junk: false });
+                }
+                continue;
+            }
             let expr = self.with_kind(Kind::Select, |a| a.transform(rt.val.as_ref()))?;
             let name = match &rt.name {
                 Some(name) => name.to_string(),

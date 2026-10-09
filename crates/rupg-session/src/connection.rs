@@ -1913,6 +1913,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/record_fields.test")));
     }
 
+    /// `(x).*` in a target list, for a call of a function that gives a set, a whole row and a view, the row comparisons of `=` and `<>` with their kinds from the btree operator families and their errors, and `acldefault` for each kind of object. `connection/row_star.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_star() {
+        big_stack(|| script(include_str!("connection/row_star.test")));
+    }
+
     /// The functions of `information_schema` with a query in the body: `_pg_expandarray` with a query in a string and polymorphic `OUT` parameters, and `_pg_index_position` with `BEGIN ATOMIC`. The script calls them in `FROM`, in the target list and with `LATERAL`, also with null and empty arrays, and reads their rows of `pg_proc` and `pg_depend`. `connection/sql_bodies.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn sql_bodies() {
