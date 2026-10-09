@@ -13,8 +13,8 @@ use rupg_exec::Plan;
 use rupg_platform::Clock;
 use rupg_sql::nodes::Node;
 use rupg_types::{
-    ByteaOutput, DateFormat, DateOrder, DateStyle, FixedZone, IntervalStyle, Recv, TimeZone, Value,
-    oid,
+    Array, ByteaOutput, DateFormat, DateOrder, DateStyle, FixedZone, IntervalStyle, Recv, TimeZone,
+    Value, oid,
 };
 use rupg_wire::Field;
 
@@ -277,6 +277,42 @@ impl rupg_func::Session for Reader<'_> {
 
     fn setting(&self, name: &str) -> Option<String> {
         self.settings().get(name)
+    }
+
+    fn all_settings(&self) -> Vec<Vec<Value>> {
+        let text = |text: Option<String>| text.map_or(Value::Null, Value::text);
+        let settings = self.settings();
+        settings
+            .show_all_current()
+            .map(|current| {
+                let parameter = current.parameter;
+                let (min, max) = parameter.range();
+                let enumvals = parameter.enum_names().map_or(Value::Null, |names| {
+                    let elements = names.into_iter().map(|name| Some(Value::text(name)));
+                    Value::Array(Box::new(Array::one(elements.collect())))
+                });
+                vec![
+                    Value::text(parameter.name),
+                    Value::text(current.setting),
+                    text(parameter.unit().map(str::to_owned)),
+                    Value::text(parameter.category),
+                    Value::text(parameter.short_desc),
+                    text(parameter.extra_desc.map(str::to_owned)),
+                    Value::text(parameter.context.name()),
+                    Value::text(parameter.vartype()),
+                    Value::text(current.source),
+                    text(min),
+                    text(max),
+                    enumvals,
+                    text(parameter.boot_text()),
+                    text(current.reset),
+                    // rupg reads no configuration file, so no value has a file and a line.
+                    Value::Null,
+                    Value::Null,
+                    Value::Bool(false),
+                ]
+            })
+            .collect()
     }
 
     fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String> {

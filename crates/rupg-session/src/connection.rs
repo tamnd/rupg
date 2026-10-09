@@ -1634,6 +1634,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/system_views.test")));
     }
 
+    /// `pg_show_all_settings` and the view `pg_settings`: the columns of each parameter, the source and the reset value after `SET`, `SET LOCAL`, `SET TRANSACTION`, `set_config`, `RESET` and `RESET ALL`, and the source of the modes of the transaction after a commit and a rollback. The script reads only parameters that the configuration of the oracle does not set. `connection/show_all_settings.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn show_all_settings() {
+        big_stack(|| script(include_str!("connection/show_all_settings.test")));
+    }
+
     /// `SELECT` from the tables and sequences of the user, with the types of the columns. `connection/user_select.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn user_select() {

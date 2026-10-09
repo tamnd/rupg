@@ -13,7 +13,7 @@ mod settings;
 mod status;
 
 pub use check::{Zone, encoding, split_identifiers, zone};
-pub use settings::{Action, Arg, Characteristics, Origin, Settings, Source, flatten};
+pub use settings::{Action, Arg, Characteristics, Current, Origin, Settings, Source, flatten};
 pub use status::{HONORED, REFUSED, Status, refuses, status};
 
 use crate::generated::guc::PARAMETERS;
@@ -312,6 +312,32 @@ impl Parameter {
             flag::UNIT_MIN => Some("min"),
             _ => None,
         }
+    }
+
+    /// The `min_val` and `max_val` columns of `pg_settings`, for an `integer` or `real` parameter.
+    #[must_use]
+    pub fn range(&self) -> (Option<String>, Option<String>) {
+        match self.kind {
+            Kind::Int { min, max, .. } => (Some(min.to_string()), Some(max.to_string())),
+            Kind::Real { min, max, .. } => (Some(g(min)), Some(g(max))),
+            _ => (None, None),
+        }
+    }
+
+    /// The `boot_val` column of `pg_settings`, which is `None` for a string parameter that the server sets at start.
+    #[must_use]
+    pub fn boot_text(&self) -> Option<String> {
+        match self.kind {
+            Kind::String { boot: None } => None,
+            _ => Some(self.setting(&self.boot())),
+        }
+    }
+
+    /// The elements of the `enumvals` column of `pg_settings`: the options of an `enum` parameter that are not hidden, as `config_enum_get_options` gives them.
+    #[must_use]
+    pub fn enum_names(&self) -> Option<Vec<&'static str>> {
+        let Kind::Enum { options, .. } = self.kind else { return None };
+        Some(options.iter().filter(|o| !o.hidden).map(|o| o.name).collect())
     }
 
     /// Reads a value in the text that `SET` takes.

@@ -79,6 +79,10 @@ pub trait Session {
     ///
     /// The errors of `SET` for the name and the value.
     fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String>;
+    /// The rows of `pg_show_all_settings`, one for each parameter that `SHOW ALL` lists, in the 17 columns of the function.
+    fn all_settings(&self) -> Vec<Vec<Value>> {
+        Vec::new()
+    }
     /// The catalog of the user objects that the statement sees, or `None` when the session has no catalog.
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
