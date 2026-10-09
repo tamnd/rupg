@@ -560,6 +560,23 @@ impl Analyzer<'_> {
         alias: Option<&Alias>,
         count: usize,
     ) -> Result<Vec<Column>> {
+        let at = coldefs.first().and_then(|c| match c {
+            Some(Node::ColumnDef(def)) => place(def.location),
+            _ => None,
+        });
+        if let ExprKind::Func(f) = &expr.kind
+            && expr.ty == oid::RECORD
+            && let Some(columns) = crate::record::out_columns(f)?
+        {
+            if !coldefs.is_empty() {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "a column definition list is redundant for a function with OUT parameters",
+                )
+                .at_opt(at));
+            }
+            return Ok(columns);
+        }
         let proc = match &expr.kind {
             ExprKind::Func(f) => builtin::proc_by_oid(f.oid),
             _ => None,
@@ -576,31 +593,6 @@ impl Analyzer<'_> {
                     outs.push((named, *ty));
                 }
             }
-        }
-        let at = coldefs.first().and_then(|c| match c {
-            Some(Node::ColumnDef(def)) => place(def.location),
-            _ => None,
-        });
-        if outs.len() > 1 && expr.ty == oid::RECORD {
-            if !coldefs.is_empty() {
-                return Err(Error::new(
-                    SqlState::SYNTAX_ERROR,
-                    "a column definition list is redundant for a function with OUT parameters",
-                )
-                .at_opt(at));
-            }
-            let mut columns = Vec::with_capacity(outs.len());
-            for (i, (name, ty)) in outs.into_iter().enumerate() {
-                let name = name.map_or_else(|| format!("column{}", i + 1), str::to_string);
-                if types::is_polymorphic(ty) {
-                    return Err(not_yet(
-                        "a function in FROM with polymorphic OUT parameters",
-                        expr.location,
-                    ));
-                }
-                columns.push(Column { name, ty, typmod: -1, not_null: false });
-            }
-            return Ok(columns);
         }
         let row = types::row(expr.ty);
         if expr.ty == oid::RECORD {
@@ -1274,7 +1266,7 @@ impl Analyzer<'_> {
     }
 
     /// The scopes of the query and of the queries outside it, with their levels: 0 for the query, 1 for the query outside it, and so on.
-    fn levels(&self) -> impl Iterator<Item = (usize, &Scope)> {
+    pub(crate) fn levels(&self) -> impl Iterator<Item = (usize, &Scope)> {
         std::iter::once(&self.scope).chain(self.outer.iter().rev()).enumerate()
     }
 

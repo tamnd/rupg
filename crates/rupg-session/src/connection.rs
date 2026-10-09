@@ -1907,6 +1907,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/target_srf.test")));
     }
 
+    /// The fields of a value of type `record`, as `(x).name` reads them: the `OUT` parameters of a call, the columns of a subquery through more subqueries, `LATERAL` and `UNION ALL`, a whole row with the names of its alias, the views that show such fields, and the errors of a field that is not there and of a view column of type `record`. `connection/record_fields.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn record_fields() {
+        big_stack(|| script(include_str!("connection/record_fields.test")));
+    }
+
     /// `format_type` of `interval` with each range and precision that a typmod can have, the error for a bad range, `_pg_interval_type` of `information_schema`, and the interval types of a view in `pg_get_viewdef` and `pg_attribute`. `connection/interval_typmods.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn interval_typmods() {

@@ -118,6 +118,7 @@ impl Deparser<'_> {
         for item in &query.from {
             merged_columns(item, &mut space.merged);
         }
+        space.relations.clone_from(&query.relations);
         space
     }
 
