@@ -1,5 +1,6 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA` and `CREATE VIEW`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand` and `DefineView` run them, and they change a [`Catalog`].
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW` and `CREATE DOMAIN`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView` and `DefineDomain` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN`, for the domains of `information_schema`, so [`is_definition`] does not list it.
 
+mod domain;
 mod fkey;
 mod index;
 mod table;
@@ -63,6 +64,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::IndexStmt(index) => definer.create_index(index),
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
         Node::ViewStmt(view) => definer.create_view(view, text),
+        Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
@@ -205,15 +207,27 @@ fn references(relation: u32, exprs: &[&Expr]) -> Vec<ObjRef> {
                 }
                 _ => None,
             };
-            if let Some(found) = found
-                && !refs.contains(&found)
-            {
-                refs.push(found);
+            for found in found.into_iter().chain(type_reference(e)) {
+                if !refs.contains(&found) {
+                    refs.push(found);
+                }
             }
             None::<()>
         });
     }
     refs
+}
+
+/// The type that `find_expr_references_walker` records for a constant or a cast, which is the type of its result. The catalog drops the references to the built-in types, so only a type such as a domain of `initdb` stays.
+pub(crate) fn type_reference(expr: &Expr) -> Option<ObjRef> {
+    match expr.kind {
+        ExprKind::Const(_)
+        | ExprKind::Relabel(..)
+        | ExprKind::CoerceViaIo(..)
+        | ExprKind::ArrayCoerce { .. }
+        | ExprKind::CoerceToDomain(..) => Some(ObjRef::new(PG_TYPE, expr.ty)),
+        _ => None,
+    }
 }
 
 impl Definer<'_, '_> {

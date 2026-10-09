@@ -1,4 +1,4 @@
-//! The objects that `initdb` makes with SQL after the bootstrap: the system views of `system_views.sql`.
+//! The objects that `initdb` makes with SQL after the bootstrap: the system views of `system_views.sql` and the schema `information_schema` of `information_schema.sql`.
 //!
 //! `initdb` runs the script in one backend as the bootstrap superuser, with `search_path` set to `pg_catalog` and `allow_system_table_mods` on. rupg runs each `CREATE VIEW` of the script through the analyzer in the same way, once in each process, and each new store starts from the result.
 //!
@@ -6,18 +6,23 @@
 //!
 //! The `GRANT` and `REVOKE` statements of the script on views set the privileges of these views. Then each view without privileges gets `SELECT` for PUBLIC, as `setup_privileges` of `initdb` gives it. The statements on catalogs changed the static rows already.
 //!
-//! These parts of the script are not done yet: the view `pg_stats_ext_exprs`, which has a set-returning function in its target list, and the rules `pg_settings_u` and `pg_settings_n` on `pg_settings`. Their OIDs stay unused.
+//! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges and the five domains, with the OIDs of PostgreSQL 19. The functions, the tables and the views of the script are not done yet.
+//!
+//! These parts of `system_views.sql` are not done yet: the view `pg_stats_ext_exprs`, which has a set-returning function in its target list, and the rules `pg_settings_u` and `pg_settings_n` on `pg_settings`. Their OIDs stay unused.
 
 use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
 use rupg_catalog::{Catalog, FIRST_NORMAL_OID, FIRST_UNPINNED_OID, RelKind};
 use rupg_common::{Error, Result};
+use rupg_pgcatalog::builtin;
 use rupg_platform::os::OsClock;
-use rupg_sql::nodes::{GrantStmt, Node, RoleSpecType};
+use rupg_sql::nodes::{GrantStmt, Node, ObjectType, RoleSpecType};
 
 use crate::connection::base_settings;
+use crate::guc::{Action, Origin};
 use crate::query::Reader;
+use crate::utility::flatten;
 
 /// The OID of the schema `pg_catalog`.
 const PG_CATALOG: u32 = 11;
@@ -118,6 +123,18 @@ const VIEW_OIDS: [(&str, u32); 86] = [
     ("pg_aios", 12392),
 ];
 
+/// The OID of the schema `information_schema` in PostgreSQL 19.
+const INFORMATION_SCHEMA: u32 = 13350;
+
+/// The OID of the array type of each domain of `information_schema` in PostgreSQL 19. The domain takes the next OID, and its check constraint the OID after that.
+const DOMAIN_OIDS: [(&str, u32); 5] = [
+    ("cardinal_number", 13363),
+    ("character_data", 13366),
+    ("sql_identifier", 13368),
+    ("time_stamp", 13374),
+    ("yes_or_no", 13376),
+];
+
 /// The views of the script that rupg cannot make yet.
 const NOT_YET: [&str; 1] = ["pg_stats_ext_exprs"];
 
@@ -207,13 +224,177 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
             failed.push((oid.to_string(), error));
         }
     }
+    information_schema(&mut catalog, &mut failed, &clock, &user);
     catalog.set_next_oid(FIRST_NORMAL_OID);
     (catalog, failed)
 }
 
+/// Runs the parts of `information_schema.sql` that rupg can run: the schema, its privileges, the `search_path` of the script and the domains. Each domain also goes into the rows of `rupg-pgcatalog`, so that the analyzer and the executor find it as they find a built-in type.
+fn information_schema(
+    catalog: &mut Catalog,
+    failed: &mut Vec<(String, Error)>,
+    clock: &OsClock,
+    user: &str,
+) {
+    let text = rupg_pgcatalog::information_schema();
+    let Ok((list, _)) = rupg_sql::parse(text) else {
+        failed.push(("information_schema.sql".to_string(), Error::internal("no parse")));
+        return;
+    };
+    let settings = match base_settings(&[
+        ("search_path".to_string(), "pg_catalog".to_string()),
+        ("allow_system_table_mods".to_string(), "on".to_string()),
+    ]) {
+        Ok(settings) => RefCell::new(settings),
+        Err(error) => {
+            failed.push(("search_path".to_string(), error));
+            return;
+        }
+    };
+    for node in list.iter().flatten() {
+        let Node::RawStmt(raw) = node else { continue };
+        let Some(stmt) = raw.stmt.as_ref() else { continue };
+        let start = usize::try_from(raw.stmt_location).unwrap_or(0).min(text.len());
+        let end =
+            usize::try_from(raw.stmt_len).map_or(text.len(), |len| (start + len).min(text.len()));
+        let statement = text.get(start..end).unwrap_or_default();
+        let done = match stmt {
+            Node::CreateSchemaStmt(schema) => {
+                catalog.set_next_oid(INFORMATION_SCHEMA);
+                let name = schema.schemaname.as_deref().unwrap_or_default();
+                catalog.create_schema(name, BOOTSTRAP_SUPERUSER).map(|_| ())
+            }
+            Node::GrantStmt(grant) if grant.objtype == ObjectType::OBJECT_SCHEMA => {
+                schema_privileges(catalog, grant, user)
+            }
+            Node::VariableSetStmt(set) => {
+                let name = set.name.as_deref().unwrap_or_default();
+                flatten(name, &set.args).and_then(|value| {
+                    settings.borrow_mut().set(
+                        name,
+                        value.as_deref(),
+                        Action::Set,
+                        Origin::Statement,
+                    )
+                })
+            }
+            Node::CreateDomainStmt(domain) => {
+                let name = names(&domain.domainname);
+                match DOMAIN_OIDS.iter().find(|(n, _)| Some(*n) == name.last().copied()) {
+                    Some(&(name, array)) => {
+                        catalog.set_next_oid(array);
+                        let reader = Reader::new(
+                            &settings,
+                            user,
+                            "postgres",
+                            (0, 0),
+                            clock,
+                            0,
+                            Arc::new(catalog.clone()),
+                        );
+                        let mut work = catalog.clone();
+                        rupg_analyze::define(
+                            stmt,
+                            statement,
+                            &reader,
+                            &mut work,
+                            BOOTSTRAP_SUPERUSER,
+                        )
+                        .result
+                        .and_then(|()| {
+                            *catalog = work;
+                            add_system_domain(catalog, name)
+                        })
+                    }
+                    None => Err(Error::internal("a domain that PostgreSQL 19 does not have")),
+                }
+            }
+            _ => Ok(()),
+        };
+        if let Err(error) = done {
+            failed.push((statement.to_string(), error));
+        }
+    }
+}
+
+/// The names of a qualified name.
+fn names(list: &[Option<Node>]) -> Vec<&str> {
+    list.iter()
+        .filter_map(|n| match n {
+            Some(Node::String(s)) => Some(&**s),
+            _ => None,
+        })
+        .collect()
+}
+
+/// Adds the rows of a domain of `information_schema` and of its array type to the rows of `rupg-pgcatalog`, with its check constraints.
+fn add_system_domain(catalog: &Catalog, name: &str) -> Result<()> {
+    let namespace = INFORMATION_SCHEMA;
+    let missing = || Error::internal(format!("no domain {name}"));
+    let ty = catalog.type_by_name(namespace, name).ok_or_else(missing)?;
+    let domain = ty.domain.as_ref().ok_or_else(missing)?;
+    let array = catalog.type_by_oid(ty.array).ok_or_else(missing)?;
+    let rows = builtin::domain_rows(builtin::NewDomainRows {
+        oid: ty.oid,
+        name: ty.name.clone(),
+        array: array.oid,
+        array_name: array.name.clone(),
+        namespace,
+        base: domain.base,
+        typmod: domain.typmod,
+        collation: domain.collation,
+    });
+    let (row, array_row) = rows.ok_or_else(missing)?;
+    builtin::add_system_type(row);
+    builtin::add_system_type(array_row);
+    let mut checks: Vec<_> = catalog.constraints_of_domain(ty.oid).collect();
+    checks.sort_by_key(|c| c.oid);
+    builtin::add_system_domain(builtin::DomainRow {
+        oid: ty.oid,
+        checks: checks
+            .iter()
+            .map(|c| (c.name.clone(), c.expr.clone().unwrap_or_default()))
+            .collect(),
+    });
+    Ok(())
+}
+
+/// `ExecGrant_Namespace` for a `GRANT` of the script on a schema. The superuser runs it, so the owner is the grantor.
+fn schema_privileges(catalog: &mut Catalog, grant: &GrantStmt, owner: &str) -> Result<()> {
+    let mut letters = String::new();
+    for privilege in grant.privileges.iter().flatten() {
+        let Node::AccessPriv(privilege) = privilege else { continue };
+        match privilege.priv_name.as_deref().unwrap_or_default() {
+            "usage" => letters.push('U'),
+            "create" => letters.push('C'),
+            name => return Err(Error::internal(format!("unknown privilege {name}"))),
+        }
+    }
+    for object in grant.objects.iter().flatten() {
+        let Node::String(name) = object else { continue };
+        let name: &str = name;
+        let schema = catalog
+            .schema_by_name(name)
+            .ok_or_else(|| Error::internal(format!("no schema {name}")))?;
+        let mut acl = vec![format!("{owner}=UC/{owner}")];
+        for grantee in grant.grantees.iter().flatten() {
+            let Node::RoleSpec(spec) = grantee else { continue };
+            let grantee = if spec.roletype == RoleSpecType::ROLESPEC_PUBLIC {
+                ""
+            } else {
+                spec.rolename.as_deref().unwrap_or_default()
+            };
+            acl.push(format!("{grantee}={letters}/{owner}"));
+        }
+        let oid = schema.oid;
+        catalog.set_schema_acl(oid, Some(acl))?;
+    }
+    Ok(())
+}
+
 /// The name of the bootstrap superuser.
 fn owner_name() -> String {
-    rupg_pgcatalog::builtin::roles()
+    builtin::roles()
         .iter()
         .find(|r| r.oid == BOOTSTRAP_SUPERUSER)
         .map_or_else(|| "postgres".to_string(), |r| r.name.to_string())

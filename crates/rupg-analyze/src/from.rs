@@ -1142,6 +1142,12 @@ impl Analyzer<'_> {
             .at_opt(at));
         }
         let names = fields(&c.fields);
+        // `replace_domain_constraint_value`: in a check constraint of a domain, `value` is the value that the domain checks.
+        if let Some((ty, typmod)) = self.domain_value
+            && names.as_slice() == [Some("value")]
+        {
+            return Ok(Expr { kind: ExprKind::DomainValue, ty, typmod, location: at });
+        }
         let (schema, table, column) = match names.as_slice() {
             [Some(column)] => {
                 if let Some(expr) = self.column_by_name(column, at)? {

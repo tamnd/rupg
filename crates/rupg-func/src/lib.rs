@@ -38,8 +38,14 @@ use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Va
 pub use activity::{Backend, BackendState, Client, Ssl};
 pub use cast::local_time;
 pub use compare::{compare, equal};
+pub use deparse::deparse_expression;
 pub use io::{base_type, input, input_supported, output, output_supported, receive, send, to_text};
 pub use srf::{SetKernel, set_kernel};
+
+/// `format_type_be`: the name of a type for a message, with its schema when the search path does not find it.
+pub fn type_message_name(ty: u32, session: &dyn Session) -> String {
+    reg::type_text(ty, None, session).unwrap_or_else(|_| "???".to_string())
+}
 
 /// The OID of `internal`, the language of the functions in C.
 const INTERNAL_LANGUAGE: u32 = 12;

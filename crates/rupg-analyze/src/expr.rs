@@ -31,6 +31,10 @@ pub enum ExprKind {
     CoerceViaIo(Box<Expr>, CastForm),
     /// `ArrayCoerceExpr`: a cast of each element of an array. `element` casts [`ExprKind::CaseTest`], which is the value of one element.
     ArrayCoerce { arg: Box<Expr>, element: Box<Expr>, form: CastForm },
+    /// `CoerceToDomain`: the value of the argument as a value of the domain of the expression, after the domain checks its constraints. The argument has the base type of the domain.
+    CoerceToDomain(Box<Expr>, CastForm),
+    /// `CoerceToDomainValue`: `VALUE` in a check constraint of a domain, the value that the domain checks.
+    DomainValue,
     /// `SubscriptingRef`: an element or a slice of an array.
     Subscript(Box<Subscript>),
     /// `BoolExpr`: `AND`, `OR` and `NOT`.
@@ -256,6 +260,7 @@ impl Expr {
             ExprKind::Const(_)
             | ExprKind::Param(_)
             | ExprKind::CaseTest
+            | ExprKind::DomainValue
             | ExprKind::SqlValue(_)
             | ExprKind::Var(_)
             | ExprKind::SubColumn(_) => Vec::new(),
@@ -264,6 +269,7 @@ impl Expr {
             ExprKind::Agg(agg) => agg.args.iter().chain(agg.filter.as_deref()).collect(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
+            | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => vec![&**arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&**arg, &**element],
@@ -292,6 +298,7 @@ impl Expr {
             ExprKind::Const(_)
             | ExprKind::Param(_)
             | ExprKind::CaseTest
+            | ExprKind::DomainValue
             | ExprKind::SqlValue(_)
             | ExprKind::Var(_)
             | ExprKind::SubColumn(_) => Vec::new(),
@@ -303,6 +310,7 @@ impl Expr {
             }
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
+            | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => vec![&mut **arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&mut **arg, &mut **element],
@@ -413,6 +421,7 @@ impl Expr {
             }
             ExprKind::Relabel(arg, CastForm::Implicit)
             | ExprKind::CoerceViaIo(arg, CastForm::Implicit)
+            | ExprKind::CoerceToDomain(arg, CastForm::Implicit)
             | ExprKind::ArrayCoerce { arg, form: CastForm::Implicit, .. } => arg.strip_implicit(),
             _ => self,
         }
@@ -428,6 +437,7 @@ impl Expr {
             | ExprKind::ScalarArrayOp { args, .. } => args.first(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
+            | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::ArrayCoerce { arg, .. }
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => Some(&**arg),

@@ -323,7 +323,12 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
             files.push((format!("{}.rs", catalog.name), rows_file(catalog, rows)?));
         }
     }
-    files.push(("system_views.rs".to_string(), system_views_file(&system_views)));
+    files.push(("system_views.rs".to_string(), script_file("system_views.sql", &system_views)));
+    let information_schema = read(&src.join(INFORMATION_SCHEMA))?;
+    files.push((
+        "information_schema.rs".to_string(),
+        script_file("information_schema.sql", &information_schema),
+    ));
     files.push(("mod.rs".to_string(), mod_file(&catalogs, &rows_out)));
     Ok(files)
 }
@@ -1606,6 +1611,7 @@ fn array_items(text: &str) -> Option<Vec<Option<String>>> {
 
 /// The script that `setup_run_file` of `initdb` runs after the bootstrap. Its `GRANT` and `REVOKE` statements change the privileges of some catalogs.
 const SYSTEM_VIEWS: &str = "backend/catalog/system_views.sql";
+const INFORMATION_SCHEMA: &str = "backend/catalog/information_schema.sql";
 
 /// An `aclitem` as `aclitemout` writes it: the grantee (empty for PUBLIC), the privilege bits in the order of [`ACL_RIGHTS`] with the grant option bits 16 places higher, and the grantor.
 type AclItem = (String, u32, String);
@@ -2050,6 +2056,7 @@ fn mod_file(catalogs: &[Catalog], rows: &BTreeMap<String, Vec<Vec<Option<String>
         catalogs.iter().filter(|c| rows.contains_key(&c.name)).map(|c| c.name.as_str()).collect();
     names.push("catalogs");
     names.push("system_views");
+    names.push("information_schema");
     names.sort_unstable();
     for name in names {
         writeln!(out, "#[rustfmt::skip]\npub(crate) mod {name};").unwrap();
@@ -2057,14 +2064,14 @@ fn mod_file(catalogs: &[Catalog], rows: &BTreeMap<String, Vec<Vec<Option<String>
     out
 }
 
-/// The file with the text of `system_views.sql`, from which the session makes the system views. The text is a raw string with enough `#` marks that no quote in the text ends it.
-fn system_views_file(text: &str) -> String {
+/// The file with the text of a script of `initdb`, such as `system_views.sql`, from which the session makes the objects of the script. The text is a raw string with enough `#` marks that no quote in the text ends it.
+fn script_file(name: &str, text: &str) -> String {
     let mut marks = String::from("#");
     while text.contains(&format!("\"{marks}")) {
         marks.push('#');
     }
     format!(
-        "//! The script `system_views.sql` that `initdb` runs after the bootstrap.\n//!\n//! `cargo xtask pgcatalog` makes this file from `vendor/postgres-19/src/backend/catalog/system_views.sql`. Do not edit it.\n\n/// The text of the script.\npub(crate) static TEXT: &str = r{marks}\"{text}\"{marks};\n"
+        "//! The script `{name}` that `initdb` runs after the bootstrap.\n//!\n//! `cargo xtask pgcatalog` makes this file from `vendor/postgres-19/src/backend/catalog/{name}`. Do not edit it.\n\n/// The text of the script.\npub(crate) static TEXT: &str = r{marks}\"{text}\"{marks};\n"
     )
 }
 

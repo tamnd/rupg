@@ -1751,6 +1751,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/wait_events.test")));
     }
 
+    /// The five domains of `information_schema`: the schema and its privileges, the rows of `pg_type`, `pg_constraint` and `pg_depend` with the OIDs of PostgreSQL, `format_type`, the casts to a domain with the check constraints in a constant, in a column and in each element of an array, and the type of a domain in `RowDescription`, which is the base type. `connection/domains.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn domains() {
+        big_stack(|| script(include_str!("connection/domains.test")));
+    }
+
     /// The views of the parts of the server that rupg does not have, which have no rows: asynchronous I/O, the registry of dynamic shared memory, the replication origins, recovery, the publications and the cursors. Also the error of `pg_shmem_allocations_numa` with no NUMA support, and the errors of the functions of the publications for a name that is not a publication. `connection/absent.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn absent() {

@@ -72,6 +72,7 @@ fn check(expr: &Expr) -> Result<()> {
         ExprKind::Const(_)
         | ExprKind::Param(_)
         | ExprKind::CaseTest
+        | ExprKind::DomainValue
         | ExprKind::SqlValue(_)
         | ExprKind::Var(_)
         | ExprKind::SubColumn(_) => {}
@@ -85,9 +86,10 @@ fn check(expr: &Expr) -> Result<()> {
             kernel(f.oid, expr.location)?;
             f.args.iter().try_for_each(check)?;
         }
-        ExprKind::Relabel(arg, _) | ExprKind::NullTest(arg, _) | ExprKind::BooleanTest(arg, _) => {
-            check(arg)?
-        }
+        ExprKind::Relabel(arg, _)
+        | ExprKind::CoerceToDomain(arg, _)
+        | ExprKind::NullTest(arg, _)
+        | ExprKind::BooleanTest(arg, _) => check(arg)?,
         ExprKind::CoerceViaIo(arg, _) => {
             if !rupg_func::output_supported(arg.ty) {
                 return Err(not_yet(format!("output of type {}", format_type(arg.ty))));
@@ -327,6 +329,9 @@ fn set_rows(op: &SetOp, tables: &scan::Tables, session: &dyn Session) -> Result<
 /// The rows of a query.
 type Rows = Vec<Vec<Value>>;
 
+/// The name and the expression of each check constraint of a domain.
+type Checks = Rc<Vec<(String, Expr)>>;
+
 /// The state of a run that the query and its subqueries share.
 #[derive(Default)]
 struct Cache {
@@ -334,9 +339,28 @@ struct Cache {
     tables: RefCell<Vec<(*const Query, Rc<scan::Tables>)>>,
     /// The rows of each subquery that reads no column of an outer query, as an `InitPlan` keeps them. It runs once, when the query first needs it.
     rows: RefCell<Vec<(*const Query, Rc<Rows>)>>,
+    /// The name and the expression of each check constraint of a domain, by the OID of the domain, as the type cache keeps them.
+    domains: RefCell<Vec<(u32, Checks)>>,
 }
 
 impl Cache {
+    /// `load_domaintype_info`: the check constraints of a domain, in the order of their names.
+    fn domain_checks(&self, domain: u32) -> Result<Checks> {
+        if let Some((_, checks)) = self.domains.borrow().iter().find(|(d, _)| *d == domain) {
+            return Ok(Rc::clone(checks));
+        }
+        let mut checks = Vec::new();
+        if let Some(row) = builtin::domain_by_oid(domain) {
+            for (name, text) in &row.checks {
+                checks.push((name.clone(), rupg_analyze::node::read(text)?));
+            }
+        }
+        checks.sort_by(|a, b| a.0.cmp(&b.0));
+        let checks = Rc::new(checks);
+        self.domains.borrow_mut().push((domain, Rc::clone(&checks)));
+        Ok(checks)
+    }
+
     fn tables(&self, query: &Query, session: &dyn Session) -> Result<Rc<scan::Tables>> {
         if let Some((_, tables)) =
             self.tables.borrow().iter().find(|(q, _)| std::ptr::eq(*q, query))
@@ -728,6 +752,8 @@ struct Eval<'a> {
     outer: &'a [Frame<'a>],
     /// The rows of the subqueries of `ANY` and `ALL` whose test runs now, for `SubColumn`.
     sub: Vec<Vec<Value>>,
+    /// The values that the checks of a domain test now, for `DomainValue`.
+    domain_value: Vec<Value>,
 }
 
 impl<'a> Eval<'a> {
@@ -749,6 +775,7 @@ impl<'a> Eval<'a> {
             cache,
             outer,
             sub: Vec::new(),
+            domain_value: Vec::new(),
         }
     }
 
@@ -813,6 +840,7 @@ impl<'a> Eval<'a> {
             cache: self.cache,
             outer: self.outer,
             sub: Vec::new(),
+            domain_value: Vec::new(),
         }
     }
 
@@ -867,6 +895,15 @@ impl<'a> Eval<'a> {
                 rupg_func::input(expr.ty, &text, -1, self.session)
             }
             ExprKind::ArrayCoerce { arg, element, .. } => self.array_coerce(arg, element),
+            ExprKind::CoerceToDomain(arg, _) => {
+                let value = relabel(self.eval(arg)?, expr.ty);
+                self.domain_check(expr.ty, value)
+            }
+            ExprKind::DomainValue => self
+                .domain_value
+                .last()
+                .cloned()
+                .ok_or_else(|| Error::internal("a VALUE is outside of the check of a domain")),
             ExprKind::Subscript(sub) => self.subscript(sub),
             ExprKind::Bool(op, args) => self.bool_op(*op, args),
             ExprKind::NullTest(arg, is_null) => {
@@ -1044,6 +1081,25 @@ impl<'a> Eval<'a> {
             }
         }
         Ok(if unknown { Value::Null } else { Value::Bool(!stop) })
+    }
+
+    /// `ExecEvalConstraintCheck` for each check constraint of the domain, with the value as `VALUE`. A check that gives false is an error, and a check that gives null passes.
+    fn domain_check(&mut self, domain: u32, value: Value) -> Result<Value> {
+        for (name, check) in self.cache.domain_checks(domain)?.iter() {
+            self.domain_value.push(value.clone());
+            let result = self.eval(check);
+            self.domain_value.pop();
+            if result?.as_bool() == Some(false) {
+                return Err(Error::new(
+                    SqlState::CHECK_VIOLATION,
+                    format!(
+                        "value for domain {} violates check constraint \"{name}\"",
+                        rupg_func::type_message_name(domain, self.session)
+                    ),
+                ));
+            }
+        }
+        Ok(value)
     }
 
     /// `ExecEvalArrayCoerce`: the cast of each element of the array, with the element as the value of `CaseTest`. The result has the dimensions of the array.
@@ -1315,8 +1371,44 @@ fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
         cache: &cache,
         outer: &[],
         sub: Vec::new(),
+        domain_value: Vec::new(),
     };
     eval.eval(expr)
+}
+
+/// The checks that the input function of a domain or of an array of a domain makes: `domain_in` checks the value with the check constraints of the domain, and `array_in` checks each element in the same way. A value of another type passes.
+///
+/// # Errors
+///
+/// `23514` for a value that a check constraint rejects, and the errors of the checks.
+pub fn check_input(ty: u32, value: &Value, session: &dyn Session) -> Result<()> {
+    let element = builtin::type_by_oid(ty).map_or(0, |row| row.elem);
+    let (domain, values) = match value {
+        Value::Array(array) if builtin::domain_by_oid(element).is_some() => {
+            (element, array.values.iter().flatten().collect())
+        }
+        Value::Null => return Ok(()),
+        value if builtin::domain_by_oid(ty).is_some() => (ty, vec![value]),
+        _ => return Ok(()),
+    };
+    let tables = scan::Tables::default();
+    let cache = Cache::default();
+    let mut eval = Eval {
+        params: &[],
+        session,
+        case: Vec::new(),
+        tables: &tables,
+        tuple: &[],
+        aggs: Vec::new(),
+        cache: &cache,
+        outer: &[],
+        sub: Vec::new(),
+        domain_value: Vec::new(),
+    };
+    for value in values {
+        eval.domain_check(domain, value.clone())?;
+    }
+    Ok(())
 }
 
 /// A value as a binary-compatible type holds it: an `int4` as an `oid` keeps its bits, and an `oid` as an `int4` too.

@@ -305,12 +305,14 @@ impl<'a> Fold<'a> {
             ExprKind::Const(_)
             | ExprKind::Param(_)
             | ExprKind::CaseTest
+            | ExprKind::DomainValue
             | ExprKind::SqlValue(_)
             | ExprKind::Var(_)
             | ExprKind::SubColumn(_) => Ok(()),
             ExprKind::Func(f) => self.all(&mut f.args),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
+            | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => self.subqueries(arg),
             ExprKind::ArrayCoerce { arg, element, .. } => {
@@ -398,6 +400,18 @@ impl<'a> Fold<'a> {
                 let arg = self.expr(arg)?;
                 self.coerce(with(expr, ExprKind::CoerceViaIo(Box::new(arg), *form)))
             }
+            // A domain with no check constraint is a relabel of the value. The checks of any other domain run with the query, as in PostgreSQL.
+            ExprKind::CoerceToDomain(arg, form) => {
+                let arg = self.expr(arg)?;
+                let checked = builtin::domain_by_oid(expr.ty).is_some_and(|d| !d.checks.is_empty());
+                Ok(match arg.kind {
+                    ExprKind::Const(v) if !checked => {
+                        with(expr, ExprKind::Const(relabel(v, expr.ty)))
+                    }
+                    _ => with(expr, ExprKind::CoerceToDomain(Box::new(arg), *form)),
+                })
+            }
+            ExprKind::DomainValue => Ok(expr.clone()),
             ExprKind::ArrayCoerce { arg, element, form } => {
                 let arg = self.expr(arg)?;
                 // The CaseTest of the element is not the value of a CASE outside.

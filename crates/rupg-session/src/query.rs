@@ -371,7 +371,9 @@ impl Env for Reader<'_> {
     }
 
     fn input(&self, ty: u32, text: &str, typmod: i32) -> Result<Value> {
-        rupg_func::input(ty, text, typmod, self)
+        let value = rupg_func::input(ty, text, typmod, self)?;
+        rupg_exec::check_input(ty, &value, self)?;
+        Ok(value)
     }
 
     fn catalog(&self) -> Option<&Catalog> {
@@ -392,16 +394,19 @@ pub(crate) fn plan(node: &Node, reader: &Reader<'_>, params: &Params) -> Result<
     rupg_exec::prepare(rupg_analyze::analyze(node, reader, params)?)
 }
 
-/// The columns of the result of a plan.
+/// The columns of the result of a plan. A column of a domain has the base type and the typmod of the domain, as `SendRowDescriptionMessage` gives them.
 pub(crate) fn columns(plan: &Plan) -> Vec<Column> {
     plan.columns()
         .iter()
-        .map(|target| Column {
-            name: target.name.clone(),
-            ty: target.expr.ty,
-            size: rupg_pgcatalog::builtin::type_by_oid(target.expr.ty).map_or(-1, |row| row.len),
-            typmod: target.expr.typmod,
-            origin: target.origin.unwrap_or_default(),
+        .map(|target| {
+            let (ty, typmod) = rupg_analyze::types::base_typmod(target.expr.ty, target.expr.typmod);
+            Column {
+                name: target.name.clone(),
+                ty,
+                size: rupg_pgcatalog::builtin::type_by_oid(ty).map_or(-1, |row| row.len),
+                typmod,
+                origin: target.origin.unwrap_or_default(),
+            }
         })
         .collect()
 }

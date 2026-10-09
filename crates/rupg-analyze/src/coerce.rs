@@ -159,22 +159,11 @@ impl Analyzer<'_> {
         // A length cast hides the cast below it, which the analyzer made in the same step, as `hide_coercion_node` does.
         let hide = (expr.ty, expr.typmod) != input && !matches!(expr.kind, ExprKind::Const(_));
         let mut expr = self.coerce_typmod(expr, target, typmod, context, location);
-        if hide && let ExprKind::Func(Func { args, .. }) = &mut expr.kind {
-            match args.first_mut().map(|arg| &mut arg.kind) {
-                Some(ExprKind::Func(Func { form, .. }))
-                    if matches!(form, FuncForm::ExplicitCast | FuncForm::ImplicitCast) =>
-                {
-                    *form = FuncForm::ImplicitCast;
-                }
-                Some(
-                    ExprKind::Relabel(_, form)
-                    | ExprKind::CoerceViaIo(_, form)
-                    | ExprKind::ArrayCoerce { form, .. },
-                ) => {
-                    *form = CastForm::Implicit;
-                }
-                _ => {}
-            }
+        if hide
+            && let ExprKind::Func(Func { args, .. }) = &mut expr.kind
+            && let Some(arg) = args.first_mut()
+        {
+            hide_cast(arg);
         }
         Ok(Some(expr))
     }
@@ -208,8 +197,8 @@ impl Analyzer<'_> {
         if input == oid::UNKNOWN {
             if let ExprKind::Const(value) = &expr.kind {
                 // The input function takes the typmod only for `interval`. The caller applies any other typmod with a length cast.
-                let base = types::base(target);
-                let input_typmod = if base == oid::INTERVAL { typmod } else { -1 };
+                let (base, base_typmod) = types::base_typmod(target, typmod);
+                let input_typmod = if base == oid::INTERVAL { base_typmod } else { -1 };
                 let value = match value {
                     Value::Text(text) => {
                         let text = text.clone();
@@ -223,8 +212,8 @@ impl Analyzer<'_> {
                     }
                     _ => Value::Null,
                 };
-                let typmod = if base == oid::INTERVAL { typmod } else { -1 };
-                return Ok(Expr::constant(value, target, typmod, expr.location));
+                let constant = Expr::constant(value, base, input_typmod, expr.location);
+                return Ok(coerce_to_domain(constant, target, context, location, false));
             }
             if let ExprKind::Param(n) = expr.kind
                 && let Some(ty) = self.param_type(n, target, expr.location)?
@@ -242,25 +231,36 @@ impl Analyzer<'_> {
         } else {
             (FuncForm::ImplicitCast, CastForm::Implicit)
         };
+        // A cast to a domain casts to the base type, then checks the constraints of the domain.
+        let (base, base_typmod) = types::base_typmod(target, typmod);
         match find_path(target, input, context) {
             Path::None => Err(Error::internal(format!(
                 "failed to find conversion function from {} to {}",
                 types::name(input),
                 types::name(target)
             ))),
+            Path::Relabel if base != target => {
+                Ok(coerce_to_domain(expr, target, context, location, false))
+            }
             Path::Relabel => Ok(Expr {
                 kind: ExprKind::Relabel(Box::new(expr), cast),
                 ty: target,
                 typmod: -1,
                 location,
             }),
-            Path::ViaIo => Ok(Expr {
-                kind: ExprKind::CoerceViaIo(Box::new(expr), cast),
-                ty: target,
-                typmod: -1,
-                location,
-            }),
-            Path::Func(func) => Ok(build_cast(expr, func, target, typmod, context, form, location)),
+            Path::ViaIo => {
+                let expr = Expr {
+                    kind: ExprKind::CoerceViaIo(Box::new(expr), cast),
+                    ty: base,
+                    typmod: -1,
+                    location,
+                };
+                Ok(coerce_to_domain(expr, target, context, location, true))
+            }
+            Path::Func(func) => {
+                let expr = build_cast(expr, func, base, base_typmod, context, form, location);
+                Ok(coerce_to_domain(expr, target, context, location, true))
+            }
             // ArrayCoerceExpr with a relabel of each element: the array keeps its values.
             Path::ArrayCoerce
                 if find_path(types::element(target), types::element(input), context)
@@ -300,7 +300,7 @@ impl Analyzer<'_> {
         }
     }
 
-    /// `coerce_type_typmod`: the length cast of a type that has a typmod, or a relabel that shows the typmod.
+    /// `coerce_type_typmod`: the length cast of a type that has a typmod, or a relabel that shows the typmod. The cast shows as explicit in the explicit context.
     pub(crate) fn coerce_typmod(
         &mut self,
         expr: Expr,
@@ -309,62 +309,59 @@ impl Analyzer<'_> {
         context: Context,
         location: Option<usize>,
     ) -> Expr {
-        if typmod < 0 || expr.typmod == typmod && expr.ty == target {
-            return expr;
+        let explicit = context == Context::Explicit;
+        typmod_cast(expr, target, typmod, context, explicit, location)
+    }
+}
+
+/// `coerce_type_typmod` with the form of the cast: explicit when `explicit` is true, else implicit.
+fn typmod_cast(
+    expr: Expr,
+    target: u32,
+    typmod: i32,
+    context: Context,
+    explicit: bool,
+    location: Option<usize>,
+) -> Expr {
+    if typmod < 0 || expr.typmod == typmod && expr.ty == target {
+        return expr;
+    }
+    let (form, cast) = if explicit {
+        (FuncForm::ExplicitCast, CastForm::Explicit)
+    } else {
+        (FuncForm::ImplicitCast, CastForm::Implicit)
+    };
+    match typmod_function(target) {
+        Some((func, false)) => build_cast(expr, func, target, typmod, context, form, location),
+        // An ArrayCoerceExpr applies the function to each element.
+        Some((func, true)) => {
+            let ty = types::element(target);
+            let test = Expr { kind: ExprKind::CaseTest, ty, typmod: expr.typmod, location: None };
+            let element = build_cast(test, func, ty, typmod, context, form, location);
+            Expr {
+                kind: ExprKind::ArrayCoerce {
+                    arg: Box::new(expr),
+                    element: Box::new(element),
+                    form: cast,
+                },
+                ty: target,
+                typmod,
+                location,
+            }
         }
-        match typmod_function(target) {
-            Some((func, false)) => {
-                let form = if context == Context::Explicit {
-                    FuncForm::ExplicitCast
-                } else {
-                    FuncForm::ImplicitCast
-                };
-                build_cast(expr, func, target, typmod, context, form, location)
-            }
-            // An ArrayCoerceExpr applies the function to each element.
-            Some((func, true)) => {
-                let (form, cast) = if context == Context::Explicit {
-                    (FuncForm::ExplicitCast, CastForm::Explicit)
-                } else {
-                    (FuncForm::ImplicitCast, CastForm::Implicit)
-                };
-                let ty = types::element(target);
-                let test =
-                    Expr { kind: ExprKind::CaseTest, ty, typmod: expr.typmod, location: None };
-                let element = build_cast(test, func, ty, typmod, context, form, location);
-                Expr {
-                    kind: ExprKind::ArrayCoerce {
-                        arg: Box::new(expr),
-                        element: Box::new(element),
-                        form: cast,
-                    },
-                    ty: target,
-                    typmod,
-                    location,
-                }
-            }
-            None => {
-                let mut expr = expr;
-                if let ExprKind::Const(_) = expr.kind {
-                    expr.typmod = typmod;
-                    expr
-                } else {
-                    let form = if context == Context::Explicit {
-                        CastForm::Explicit
-                    } else {
-                        CastForm::Implicit
-                    };
-                    Expr {
-                        kind: ExprKind::Relabel(Box::new(expr), form),
-                        ty: target,
-                        typmod,
-                        location,
-                    }
-                }
+        None => {
+            let mut expr = expr;
+            if let ExprKind::Const(_) = expr.kind {
+                expr.typmod = typmod;
+                expr
+            } else {
+                Expr { kind: ExprKind::Relabel(Box::new(expr), cast), ty: target, typmod, location }
             }
         }
     }
+}
 
+impl Analyzer<'_> {
     /// `select_common_type`: the type that all the expressions can take, for `CASE`, `COALESCE` and the others that `context` names.
     pub(crate) fn common_type(&self, exprs: &[Expr], context: &str) -> Result<u32> {
         let tys: Vec<u32> = exprs.iter().map(|e| e.ty).collect();
@@ -434,6 +431,42 @@ impl Analyzer<'_> {
             )
             .at_opt(place)),
         }
+    }
+}
+
+/// `coerce_to_domain`: the expression, which has the base type of the domain `target`, with the typmod of the domain and a `CoerceToDomain` node above it. When `hide` is true, the cast below shows as implicit, as `hide_coercion_node` does. For a type that is not a domain, the expression does not change.
+fn coerce_to_domain(
+    mut expr: Expr,
+    target: u32,
+    context: Context,
+    location: Option<usize>,
+    hide: bool,
+) -> Expr {
+    let (base, typmod) = types::base_typmod(target, -1);
+    if base == target {
+        return expr;
+    }
+    if hide {
+        hide_cast(&mut expr);
+    }
+    let expr = typmod_cast(expr, base, typmod, context, false, location);
+    let form = if context == Context::Explicit { CastForm::Explicit } else { CastForm::Implicit };
+    Expr { kind: ExprKind::CoerceToDomain(Box::new(expr), form), ty: target, typmod: -1, location }
+}
+
+/// `hide_coercion_node`: a cast that the analyzer made shows as implicit.
+fn hide_cast(expr: &mut Expr) {
+    match &mut expr.kind {
+        ExprKind::Func(Func { form, .. })
+            if matches!(form, FuncForm::ExplicitCast | FuncForm::ImplicitCast) =>
+        {
+            *form = FuncForm::ImplicitCast;
+        }
+        ExprKind::Relabel(_, form)
+        | ExprKind::CoerceViaIo(_, form)
+        | ExprKind::ArrayCoerce { form, .. }
+        | ExprKind::CoerceToDomain(_, form) => *form = CastForm::Implicit,
+        _ => {}
     }
 }
 

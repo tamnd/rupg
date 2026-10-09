@@ -3,12 +3,12 @@
 //! The analyzer resolves names, operators, functions and casts with these rows, as `parse_oper.c`, `parse_func.c` and `parse_coerce.c` do with the syscache of PostgreSQL. It finds the sort and equality operators of a type with the rows of `pg_opclass` and `pg_amop`, as `typcache.c` does. The rows are read once from the static batches of the catalogs, so they hold the values of the pin and nothing else.
 
 use std::collections::HashMap;
-use std::sync::LazyLock;
+use std::sync::{LazyLock, PoisonError, RwLock};
 
 use crate::{Batch, Catalog, Values, catalog};
 
 /// A row of `pg_type`.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct TypeRow {
     pub oid: u32,
     pub name: &'static str,
@@ -890,15 +890,125 @@ pub fn types() -> &'static [TypeRow] {
     &BUILTIN.types
 }
 
-/// The built-in type with this OID.
+/// The built-in type with this OID, or a type that [`add_system_type`] added.
 pub fn type_by_oid(oid: u32) -> Option<&'static TypeRow> {
-    BUILTIN.type_oid.get(&oid).map(|&i| &BUILTIN.types[i])
+    BUILTIN
+        .type_oid
+        .get(&oid)
+        .map(|&i| &BUILTIN.types[i])
+        .or_else(|| system().types.iter().copied().find(|t| t.oid == oid))
 }
 
-/// The built-in type with this name in this schema.
+/// The built-in type with this name in this schema, or a type that [`add_system_type`] added.
 pub fn type_by_name(namespace: u32, name: &str) -> Option<&'static TypeRow> {
     let b = &*BUILTIN;
-    b.type_name.get(name)?.iter().map(|&i| &b.types[i]).find(|t| t.namespace == namespace)
+    let builtin = b
+        .type_name
+        .get(name)
+        .and_then(|rows| rows.iter().map(|&i| &b.types[i]).find(|t| t.namespace == namespace));
+    builtin.or_else(|| {
+        system().types.iter().copied().find(|t| t.namespace == namespace && t.name == name)
+    })
+}
+
+/// The constraints of a domain that `initdb` makes with SQL.
+#[derive(Debug)]
+pub struct DomainRow {
+    /// The OID of the domain.
+    pub oid: u32,
+    /// The name and the expression of each check constraint, in the order of their OIDs. The expression is `conbin` in the form of the analyzer.
+    pub checks: Vec<(String, String)>,
+}
+
+/// The types and the domains that `initdb` makes with SQL after the bootstrap, such as the domains of `information_schema`.
+struct System {
+    types: Vec<&'static TypeRow>,
+    domains: Vec<&'static DomainRow>,
+}
+
+/// The setup of a new cluster fills this once in the process, before the first session. Each database has the same objects of `initdb`, so the rows are the same for all of them, as the built-in rows are.
+static SYSTEM: RwLock<System> = RwLock::new(System { types: Vec::new(), domains: Vec::new() });
+
+fn system() -> std::sync::RwLockReadGuard<'static, System> {
+    SYSTEM.read().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Adds a type that `initdb` makes with SQL, so that [`type_by_oid`] and [`type_by_name`] find it. A type with the OID of a known type changes nothing.
+pub fn add_system_type(row: TypeRow) {
+    if type_by_oid(row.oid).is_some() {
+        return;
+    }
+    // The rows live as long as the process, as the built-in rows do.
+    SYSTEM.write().unwrap_or_else(PoisonError::into_inner).types.push(Box::leak(Box::new(row)));
+}
+
+/// Adds the constraints of a domain that `initdb` makes with SQL. A domain that has its constraints already changes nothing.
+pub fn add_system_domain(domain: DomainRow) {
+    if domain_by_oid(domain.oid).is_some() {
+        return;
+    }
+    SYSTEM
+        .write()
+        .unwrap_or_else(PoisonError::into_inner)
+        .domains
+        .push(Box::leak(Box::new(domain)));
+}
+
+/// The constraints of a domain that [`add_system_domain`] added.
+pub fn domain_by_oid(oid: u32) -> Option<&'static DomainRow> {
+    system().domains.iter().copied().find(|d| d.oid == oid)
+}
+
+/// The OID of `domain_in`, the input function of every domain.
+pub const DOMAIN_IN: u32 = 2597;
+/// The OID of `domain_recv`, the receive function of every domain.
+pub const DOMAIN_RECV: u32 = 2598;
+
+/// The facts of a new domain for [`domain_rows`].
+#[derive(Debug)]
+pub struct NewDomainRows {
+    pub oid: u32,
+    pub name: String,
+    pub array: u32,
+    pub array_name: String,
+    pub namespace: u32,
+    pub base: u32,
+    pub typmod: i32,
+    pub collation: u32,
+}
+
+/// The rows of a domain and of its array type, as `DefineDomain` makes them from the row of the base type and the row of its array type. `None` if the base type or its array type is not known. The names live as long as the process, as the names of the built-in rows do.
+pub fn domain_rows(new: NewDomainRows) -> Option<(TypeRow, TypeRow)> {
+    let base = *type_by_oid(new.base)?;
+    let mut array = *type_by_oid(base.array)?;
+    let domain = TypeRow {
+        oid: new.oid,
+        name: new.name.leak(),
+        namespace: new.namespace,
+        kind: b'd',
+        preferred: false,
+        relid: 0,
+        subscript: 0,
+        elem: 0,
+        array: new.array,
+        input: DOMAIN_IN,
+        receive: DOMAIN_RECV,
+        modin: 0,
+        modout: 0,
+        base: new.base,
+        typmod: new.typmod,
+        collation: new.collation,
+        ..base
+    };
+    array.oid = new.array;
+    array.name = new.array_name.leak();
+    array.namespace = new.namespace;
+    array.elem = new.oid;
+    array.collation = new.collation;
+    // `DefineDomain` gives the array type no typmod functions.
+    array.modin = 0;
+    array.modout = 0;
+    Some((domain, array))
 }
 
 /// Every built-in function, in the order of `pg_proc.dat`.

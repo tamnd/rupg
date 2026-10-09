@@ -104,6 +104,8 @@ pub(crate) struct Analyzer<'a> {
     keep_unknowns: bool,
     /// The views whose queries the analyzer reads now, from the outermost. A view in its own query gives `42P17`, as `fireRIRrules` does.
     views: Vec<u32>,
+    /// The base type and the typmod of the domain whose check constraint the analyzer reads now, or `None`. Then the name `value` is [`ExprKind::DomainValue`].
+    domain_value: Option<(u32, i32)>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -125,6 +127,7 @@ impl<'a> Analyzer<'a> {
             has_aggs: false,
             keep_unknowns: false,
             views: Vec::new(),
+            domain_value: None,
         }
     }
 

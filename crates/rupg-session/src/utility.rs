@@ -178,7 +178,7 @@ fn arg(node: Option<&Node>) -> Result<Option<Arg>, Error> {
 }
 
 /// `flatten_set_variable_args`: the arguments as one value, or `None` for no arguments.
-fn flatten(name: &str, args: &[Option<Node>]) -> Result<Option<String>, Error> {
+pub(crate) fn flatten(name: &str, args: &[Option<Node>]) -> Result<Option<String>, Error> {
     if args.is_empty() {
         return Ok(None);
     }

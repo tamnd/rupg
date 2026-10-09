@@ -53,6 +53,8 @@ pub const PUBLIC: u32 = 2200;
 pub const PG_CONSTRAINT: u32 = 2606;
 /// The OID of `pg_attrdef`.
 pub const PG_ATTRDEF: u32 = 2604;
+/// The OID of the catalog `pg_collation`.
+pub const PG_COLLATION: u32 = 3456;
 /// The OID of the `btree` access method.
 pub const BTREE: u32 = 403;
 /// The number of triggers that PostgreSQL makes for one foreign key.
@@ -67,6 +69,8 @@ pub struct Schema {
     pub name: String,
     /// The OID of the owner role.
     pub owner: u32,
+    /// `nspacl`: the privileges as `aclitem` texts, or `None` for the default privileges of the owner.
+    pub acl: Option<Vec<String>>,
 }
 
 /// The kind of a relation, `relkind`.
@@ -241,7 +245,7 @@ impl Relation {
     }
 }
 
-/// A row type or the array type of a row type.
+/// A row type, a domain, or the array type of one of them.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Type {
     /// The OID.
@@ -256,8 +260,23 @@ pub struct Type {
     pub relation: u32,
     /// The OID of the element type of an array type, or 0 for a row type.
     pub element: u32,
-    /// The OID of the array type of a row type, or 0 for an array type.
+    /// The OID of the array type of a row type or a domain, or 0 for an array type.
     pub array: u32,
+    /// The facts of a domain, or `None` for a type of another kind.
+    pub domain: Option<Domain>,
+}
+
+/// The facts of a domain that `pg_type` holds for a type of the kind `d`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Domain {
+    /// `typbasetype`: the OID of the base type.
+    pub base: u32,
+    /// `typtypmod`: the typmod that the domain applies to the base type, or -1.
+    pub typmod: i32,
+    /// `typcollation`: the collation of the domain, or 0 for a type that is not collatable.
+    pub collation: u32,
+    /// `typdefaultbin`: the default in the form of the analyzer, or `None`.
+    pub default: Option<String>,
 }
 
 /// A column default, one row of `pg_attrdef`.
@@ -333,8 +352,10 @@ pub struct Constraint {
     pub namespace: u32,
     /// The kind.
     pub kind: ConKind,
-    /// The OID of the relation.
+    /// The OID of the relation, or 0 for a constraint of a domain.
     pub relation: u32,
+    /// `contypid`: the OID of the domain of a domain constraint, else 0.
+    pub domain: u32,
     /// The constrained columns, `conkey`.
     pub keys: Vec<i16>,
     /// The OID of the index of a primary key, a unique constraint or a foreign key, else 0.
@@ -407,6 +428,19 @@ pub struct Depend {
     pub referenced: ObjRef,
     /// The kind.
     pub kind: DepKind,
+}
+
+/// A new domain for [`Catalog::create_domain`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewDomain {
+    /// The OID of the schema.
+    pub namespace: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the owner role.
+    pub owner: u32,
+    /// The facts of the domain.
+    pub domain: Domain,
 }
 
 /// A new table, a new index or a new sequence before it has an OID.
@@ -675,6 +709,11 @@ impl Catalog {
         self.constraints.values().filter(move |c| c.relation == relation)
     }
 
+    /// The check constraints of a domain.
+    pub fn constraints_of_domain(&self, domain: u32) -> impl Iterator<Item = &Constraint> {
+        self.constraints.values().filter(move |c| c.domain == domain)
+    }
+
     /// The rows of `pg_depend` for user objects, in the order that PostgreSQL inserts them.
     pub fn depends(&self) -> &[Depend] {
         &self.depends
@@ -753,7 +792,7 @@ impl Catalog {
             ));
         }
         let oid = self.new_oid();
-        self.schemas.insert(oid, Schema { oid, name: name.to_string(), owner });
+        self.schemas.insert(oid, Schema { oid, name: name.to_string(), owner, acl: None });
         Ok(oid)
     }
 
@@ -765,6 +804,11 @@ impl Catalog {
         if !row_type {
             return Ok(());
         }
+        self.check_new_type(namespace, name)
+    }
+
+    /// Checks the name of a new type: when the name is the name of an array type that PostgreSQL made, the array type gets a new name, as `moveArrayTypeName` gives it. Any other type with the name is an error.
+    fn check_new_type(&mut self, namespace: u32, name: &str) -> Result<()> {
         let Some(old) = self.type_by_name(namespace, name).map(|t| (t.oid, t.element)) else {
             return Ok(());
         };
@@ -822,6 +866,7 @@ impl Catalog {
                 relation: oid,
                 element: 0,
                 array,
+                domain: None,
             },
         );
         self.types.insert(
@@ -834,6 +879,7 @@ impl Catalog {
                 relation: 0,
                 element: row_type,
                 array: 0,
+                domain: None,
             },
         );
         self.relations.insert(
@@ -936,6 +982,97 @@ impl Catalog {
     pub fn set_options(&mut self, oid: u32, options: Vec<String>) -> Result<()> {
         self.relation_mut(oid)?.options = options;
         Ok(())
+    }
+
+    /// Sets `nspacl` of a schema.
+    pub fn set_schema_acl(&mut self, oid: u32, acl: Option<Vec<String>>) -> Result<()> {
+        self.schemas.get_mut(&oid).ok_or_else(|| no_object("schema", oid))?.acl = acl;
+        Ok(())
+    }
+
+    /// `DefineDomain`: the domain gets the OID after the OID of its array type, as `AssignTypeArrayOid` takes the first one. `refs` are the objects that the default refers to. The caller checks the base type, and adds the check constraints with [`Catalog::add_domain_check`] after this.
+    pub fn create_domain(&mut self, new: NewDomain, refs: &[ObjRef]) -> Result<u32> {
+        self.check_new_type(new.namespace, &new.name)?;
+        let array = self.new_oid();
+        let oid = self.new_oid();
+        let array_name = self.array_type_name(&new.name, new.namespace);
+        let base = new.domain.base;
+        let collation = new.domain.collation;
+        self.types.insert(
+            oid,
+            Type {
+                oid,
+                name: new.name,
+                namespace: new.namespace,
+                owner: new.owner,
+                relation: 0,
+                element: 0,
+                array,
+                domain: Some(new.domain),
+            },
+        );
+        self.types.insert(
+            array,
+            Type {
+                oid: array,
+                name: array_name,
+                namespace: new.namespace,
+                owner: new.owner,
+                relation: 0,
+                element: oid,
+                array: 0,
+                domain: None,
+            },
+        );
+        // `record_object_address_dependencies` sorts the objects by the OID of their catalog.
+        let me = ObjRef::new(PG_TYPE, oid);
+        self.depend(me, ObjRef::new(PG_TYPE, base), DepKind::Normal);
+        self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
+        if collation != 0 {
+            self.depend(me, ObjRef::new(PG_COLLATION, collation), DepKind::Normal);
+        }
+        for &referenced in refs {
+            self.depend(me, referenced, DepKind::Normal);
+        }
+        self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
+        Ok(oid)
+    }
+
+    /// `domainAddCheckConstraint`: a check constraint of a domain. Without a name, the name is `domain_check`. `refs` are the objects that the expression refers to.
+    pub fn add_domain_check(
+        &mut self,
+        domain: u32,
+        name: Option<&str>,
+        expr: String,
+        refs: &[ObjRef],
+    ) -> Result<u32> {
+        let ty = self.types.get(&domain).ok_or_else(|| no_object("type", domain))?;
+        let (domain_name, namespace) = (ty.name.clone(), ty.namespace);
+        let name = match name {
+            Some(name) => {
+                if self.constraints_of_domain(domain).any(|c| c.name == name) {
+                    return Err(Error::new(
+                        SqlState::DUPLICATE_OBJECT,
+                        format!(
+                            "constraint \"{name}\" for domain \"{domain_name}\" already exists"
+                        ),
+                    ));
+                }
+                name.to_string()
+            }
+            None => self.choose_constraint_name(&domain_name, None, "check", namespace),
+        };
+        let mut constraint = self.new_constraint(name, namespace, ConKind::Check, 0, Vec::new());
+        constraint.domain = domain;
+        constraint.expr = Some(expr);
+        let me = ObjRef::new(PG_CONSTRAINT, constraint.oid);
+        let oid = constraint.oid;
+        self.insert_constraint(constraint);
+        self.depend(me, ObjRef::new(PG_TYPE, domain), DepKind::Auto);
+        for &referenced in refs {
+            self.depend(me, referenced, DepKind::Normal);
+        }
+        Ok(oid)
     }
 
     /// Sets `relacl` of a relation.
@@ -1049,6 +1186,7 @@ impl Catalog {
             namespace,
             kind,
             relation,
+            domain: 0,
             keys,
             index: 0,
             deferrable: false,
