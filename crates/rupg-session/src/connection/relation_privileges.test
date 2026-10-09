@@ -1,0 +1,236 @@
+> CREATE TABLE acl_t (a int, b text)
+CREATE TABLE
+> CREATE VIEW acl_v AS SELECT a FROM acl_t
+CREATE VIEW
+> CREATE INDEX acl_i ON acl_t (a)
+CREATE INDEX
+> SELECT has_table_privilege('pg_tables', 'select'), has_table_privilege('pg_roles', 'select'), has_table_privilege('pg_config', 'select'), has_table_privilege('pg_file_settings', 'select')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,t,t,t
+SELECT 1
+> SELECT has_table_privilege('pg_tables', 'insert'), has_table_privilege('pg_tables', 'update'), has_table_privilege('pg_tables', 'truncate, maintain')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT has_table_privilege('pg_tables'::regclass, 'select'), has_table_privilege('pg_catalog.pg_stat_activity', 'select')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,t
+SELECT 1
+> SELECT has_table_privilege('pg_monitor', 'pg_tables', 'select'), has_table_privilege('pg_monitor', 'pg_config', 'select'), has_table_privilege('pg_monitor', 'pg_file_settings', 'select')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT has_table_privilege('pg_read_all_stats', 'pg_backend_memory_contexts', 'select'), has_table_privilege('pg_read_all_stats', 'pg_shmem_allocations', 'select'), has_table_privilege('pg_monitor', 'pg_shmem_allocations', 'select')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT has_table_privilege('pg_monitor', 'pg_tables', 'insert'), has_table_privilege('pg_monitor', 'pg_tables', 'update'), has_table_privilege('pg_write_all_data', 'pg_tables', 'insert')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row f,f,t
+SELECT 1
+> SELECT has_table_privilege('pg_read_all_data', 'pg_config', 'select'), has_table_privilege('pg_read_all_data', 'pg_hba_file_rules', 'select'), has_table_privilege('pg_read_all_data', 'pg_config', 'insert')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,t,f
+SELECT 1
+> SELECT has_table_privilege('pg_monitor', 'pg_stat_activity', 'select with grant option'), has_table_privilege('pg_monitor', 'pg_settings', 'update')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row f,t
+SELECT 1
+> SELECT has_table_privilege('information_schema.tables', 'select'), has_table_privilege('pg_monitor', 'information_schema.tables', 'select'), has_table_privilege('pg_monitor', 'information_schema.sql_features', 'update')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,t,f
+SELECT 1
+> SELECT has_table_privilege('acl_t', 'select'), has_table_privilege('acl_v', 'insert'), has_table_privilege('acl_i', 'select'), has_table_privilege('acl_t'::regclass, 'delete')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,t,t,t
+SELECT 1
+> SELECT has_table_privilege('pg_monitor', 'acl_t', 'select'), has_table_privilege('pg_monitor', 'acl_v', 'select'), has_table_privilege('pg_monitor', 'acl_i', 'select')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row f,f,f
+SELECT 1
+> SELECT has_table_privilege('pg_read_all_data', 'acl_t', 'select'), has_table_privilege('pg_read_all_data', 'acl_t', 'insert'), has_table_privilege('pg_write_all_data', 'acl_t', 'insert, update, delete'), has_table_privilege('pg_write_all_data', 'acl_t', 'truncate')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,f,t,f
+SELECT 1
+> SELECT has_table_privilege('pg_maintain', 'acl_t', 'maintain'), has_table_privilege('pg_maintain', 'acl_t', 'select'), has_table_privilege('pg_read_all_data', 'acl_v', 'select')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT has_table_privilege('pg_monitor', 'acl_t', 'select with grant option'), has_table_privilege('acl_t', 'select with grant option')
+fields has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row f,t
+SELECT 1
+> SELECT has_table_privilege('no_such_table', 'select')
+fields has_table_privilege:16:1:-1
+ERROR 42P01 relation "no_such_table" does not exist
+> SELECT has_table_privilege('acl_t', 'nonsense')
+fields has_table_privilege:16:1:-1
+ERROR 22023 unrecognized privilege type: "nonsense"
+> SELECT has_column_privilege('pg_tables', 'tablename', 'select'), has_column_privilege('pg_monitor', 'pg_config', 'name', 'select'), has_column_privilege('pg_monitor', 'pg_tables', 'tablename', 'select')
+fields has_column_privilege:16:1:-1,has_column_privilege:16:1:-1,has_column_privilege:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT has_column_privilege('pg_tables', 1::int2, 'select'), has_column_privilege('pg_tables', 99::int2, 'select'), has_column_privilege('pg_tables', -1::int2, 'select')
+fields has_column_privilege:16:1:-1,has_column_privilege:16:1:-1,has_column_privilege:16:1:-1
+row t,NULL,NULL
+SELECT 1
+> SELECT has_column_privilege('pg_tables', 'ctid', 'select')
+fields has_column_privilege:16:1:-1
+ERROR 42703 column "ctid" of relation "pg_tables" does not exist
+> SELECT has_column_privilege('acl_t', 'b', 'update'), has_column_privilege('acl_t', 'ctid', 'select'), has_column_privilege('acl_t', 'tableoid', 'select'), has_column_privilege('acl_t', -6::int2, 'select'), has_column_privilege('acl_t', -7::int2, 'select')
+fields has_column_privilege:16:1:-1,has_column_privilege:16:1:-1,has_column_privilege:16:1:-1,has_column_privilege:16:1:-1,has_column_privilege:16:1:-1
+row t,t,t,t,NULL
+SELECT 1
+> SELECT has_column_privilege('acl_t', 3::int2, 'select'), has_column_privilege('acl_t', 0::int2, 'select'), has_column_privilege('acl_v', 'a', 'select'), has_column_privilege('acl_v', 2::int2, 'select')
+fields has_column_privilege:16:1:-1,has_column_privilege:16:1:-1,has_column_privilege:16:1:-1,has_column_privilege:16:1:-1
+row NULL,NULL,t,NULL
+SELECT 1
+> SELECT has_column_privilege('pg_monitor', 'acl_t', 'a', 'select'), has_column_privilege('pg_read_all_data', 'acl_t', 'a', 'select'), has_column_privilege('pg_monitor', 'acl_t', 'xmin', 'select')
+fields has_column_privilege:16:1:-1,has_column_privilege:16:1:-1,has_column_privilege:16:1:-1
+row f,t,f
+SELECT 1
+> SELECT has_column_privilege('acl_t', 'zz', 'select')
+fields has_column_privilege:16:1:-1
+ERROR 42703 column "zz" of relation "acl_t" does not exist
+> SELECT has_column_privilege('acl_v', 'ctid', 'select')
+fields has_column_privilege:16:1:-1
+ERROR 42703 column "ctid" of relation "acl_v" does not exist
+> SELECT has_column_privilege('acl_i', 'a', 'select'), has_column_privilege('acl_i', 1::int2, 'select')
+fields has_column_privilege:16:1:-1,has_column_privilege:16:1:-1
+row t,t
+SELECT 1
+> SELECT has_any_column_privilege('pg_tables', 'select'), has_any_column_privilege('pg_monitor', 'pg_config', 'select'), has_any_column_privilege('pg_monitor', 'pg_tables', 'select')
+fields has_any_column_privilege:16:1:-1,has_any_column_privilege:16:1:-1,has_any_column_privilege:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT has_any_column_privilege('acl_t', 'update'), has_any_column_privilege('pg_monitor', 'acl_t', 'select'), has_any_column_privilege('pg_read_all_data', 'acl_v', 'select')
+fields has_any_column_privilege:16:1:-1,has_any_column_privilege:16:1:-1,has_any_column_privilege:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT has_sequence_privilege('acl_t', 'usage')
+fields has_sequence_privilege:16:1:-1
+ERROR 42809 "acl_t" is not a sequence
+> SELECT has_sequence_privilege('pg_tables', 'select')
+fields has_sequence_privilege:16:1:-1
+ERROR 42809 "pg_tables" is not a sequence
+> SELECT has_sequence_privilege('acl_t'::regclass, 'usage')
+fields has_sequence_privilege:16:1:-1
+ERROR 42809 "acl_t" is not a sequence
+> SELECT count(*) FROM pg_class c WHERE c.relnamespace = 'pg_catalog'::regnamespace AND c.relkind = 'v' AND has_table_privilege(c.oid, 'select') IS NOT TRUE
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT c.relname, has_table_privilege('pg_monitor', c.oid, 'select'), has_table_privilege('pg_read_all_stats', c.oid, 'select') FROM pg_class c WHERE c.relnamespace = 'pg_catalog'::regnamespace AND c.relkind = 'v' AND c.relacl IS NOT NULL ORDER BY 1
+fields relname@pg_class.2:19:64:-1,has_table_privilege:16:1:-1,has_table_privilege:16:1:-1
+row pg_aios,t,t
+row pg_available_extension_versions,t,t
+row pg_available_extensions,t,t
+row pg_backend_memory_contexts,t,t
+row pg_config,f,f
+row pg_cursors,t,t
+row pg_dsm_registry_allocations,t,t
+row pg_file_settings,f,f
+row pg_group,t,t
+row pg_hba_file_rules,f,f
+row pg_ident_file_mappings,f,f
+row pg_indexes,t,t
+row pg_locks,t,t
+row pg_matviews,t,t
+row pg_policies,t,t
+row pg_prepared_statements,t,t
+row pg_prepared_xacts,t,t
+row pg_publication_sequences,t,t
+row pg_publication_tables,t,t
+row pg_replication_origin_status,f,f
+row pg_replication_slots,t,t
+row pg_roles,t,t
+row pg_rules,t,t
+row pg_seclabels,t,t
+row pg_sequences,t,t
+row pg_settings,t,t
+row pg_shadow,f,f
+row pg_shmem_allocations,t,t
+row pg_shmem_allocations_numa,t,t
+row pg_stat_activity,t,t
+row pg_stat_all_indexes,t,t
+row pg_stat_all_tables,t,t
+row pg_stat_archiver,t,t
+row pg_stat_autovacuum_scores,t,t
+row pg_stat_bgwriter,t,t
+row pg_stat_checkpointer,t,t
+row pg_stat_database,t,t
+row pg_stat_database_conflicts,t,t
+row pg_stat_gssapi,t,t
+row pg_stat_io,t,t
+row pg_stat_lock,t,t
+row pg_stat_progress_analyze,t,t
+row pg_stat_progress_basebackup,t,t
+row pg_stat_progress_cluster,t,t
+row pg_stat_progress_copy,t,t
+row pg_stat_progress_create_index,t,t
+row pg_stat_progress_repack,t,t
+row pg_stat_progress_vacuum,t,t
+row pg_stat_recovery,t,t
+row pg_stat_recovery_prefetch,t,t
+row pg_stat_replication,t,t
+row pg_stat_replication_slots,t,t
+row pg_stat_slru,t,t
+row pg_stat_ssl,t,t
+row pg_stat_subscription,t,t
+row pg_stat_subscription_stats,t,t
+row pg_stat_sys_indexes,t,t
+row pg_stat_sys_tables,t,t
+row pg_stat_user_functions,t,t
+row pg_stat_user_indexes,t,t
+row pg_stat_user_tables,t,t
+row pg_stat_wal,t,t
+row pg_stat_wal_receiver,t,t
+row pg_stat_xact_all_tables,t,t
+row pg_stat_xact_sys_tables,t,t
+row pg_stat_xact_user_functions,t,t
+row pg_stat_xact_user_tables,t,t
+row pg_statio_all_indexes,t,t
+row pg_statio_all_sequences,t,t
+row pg_statio_all_tables,t,t
+row pg_statio_sys_indexes,t,t
+row pg_statio_sys_sequences,t,t
+row pg_statio_sys_tables,t,t
+row pg_statio_user_indexes,t,t
+row pg_statio_user_sequences,t,t
+row pg_statio_user_tables,t,t
+row pg_stats,t,t
+row pg_stats_ext,t,t
+row pg_stats_ext_exprs,t,t
+row pg_tables,t,t
+row pg_timezone_abbrevs,t,t
+row pg_timezone_names,t,t
+row pg_user,t,t
+row pg_user_mappings,t,t
+row pg_views,t,t
+row pg_wait_events,t,t
+SELECT 86
+> SELECT count(*) FROM pg_class c WHERE c.relnamespace = 'information_schema'::regnamespace AND has_table_privilege('pg_monitor', c.oid, 'select')
+fields count:20:8:-1
+row 62
+SELECT 1
+> SELECT c.relname FROM pg_class c WHERE c.relnamespace = 'information_schema'::regnamespace AND c.relkind IN ('r', 'v') AND NOT has_table_privilege('pg_monitor', c.oid, 'select') ORDER BY 1
+fields relname@pg_class.2:19:64:-1
+row _pg_foreign_data_wrappers
+row _pg_foreign_servers
+row _pg_foreign_table_columns
+row _pg_foreign_tables
+row _pg_user_mappings
+row sql_parts
+row transforms
+SELECT 7
+> SELECT a.attname FROM pg_attribute a WHERE a.attrelid = 'acl_t'::regclass AND has_column_privilege('pg_read_all_data', a.attrelid, a.attnum, 'select') ORDER BY a.attnum
+fields attname@pg_attribute.2:19:64:-1
+row tableoid
+row cmax
+row xmax
+row cmin
+row xmin
+row ctid
+row a
+row b
+SELECT 8

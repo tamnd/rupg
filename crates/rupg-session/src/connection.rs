@@ -2003,6 +2003,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/state_views.test")));
     }
 
+    /// `has_table_privilege`, `has_column_privilege`, `has_any_column_privilege` and `has_sequence_privilege` on the system views, the views of `information_schema`, and a table, a view and an index that the script makes. The checks run for the superuser and for the predefined roles, with the system columns, column numbers that do not exist, and the errors of a bad name or a relation that is not a sequence. `connection/relation_privileges.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn relation_privileges() {
+        big_stack(|| script(include_str!("connection/relation_privileges.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {
