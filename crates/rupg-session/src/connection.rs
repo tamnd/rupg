@@ -1640,6 +1640,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/show_all_settings.test")));
     }
 
+    /// The views `pg_stat_*` and `pg_statio_*` of tables, indexes, sequences, functions and database conflicts: the columns and their types, a row for each object, and the functions `pg_stat_get_*` for an object with no entry. The counters of PostgreSQL change when the backend sends its counts, so the script tests only that each counter is not negative. `connection/statistics.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn statistics() {
+        big_stack(|| script(include_str!("connection/statistics.test")));
+    }
+
     /// `SELECT` from the tables and sequences of the user, with the types of the columns. `connection/user_select.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn user_select() {
