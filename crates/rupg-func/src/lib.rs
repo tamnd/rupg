@@ -54,7 +54,7 @@ pub trait Session {
     ///
     /// # Errors
     ///
-    /// `0A000` for a zone whose rules the engine does not have yet.
+    /// `22023` when the value of `TimeZone` is not a zone.
     fn zone(&self) -> Result<Rc<dyn TimeZone>>;
     /// The `extra_float_digits` setting.
     fn extra_float_digits(&self) -> i32;
@@ -90,6 +90,10 @@ pub trait Session {
     fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String>;
     /// The rows of `pg_show_all_settings`, one for each parameter that `SHOW ALL` lists, in the 17 columns of the function.
     fn all_settings(&self) -> Vec<Vec<Value>> {
+        Vec::new()
+    }
+    /// The rows of `pg_prepared_statement`, one for each named prepared statement of the session, in the 8 columns of the function. The order is not defined.
+    fn prepared_statements(&self) -> Vec<Vec<Value>> {
         Vec::new()
     }
     /// The catalog of the user objects that the statement sees, or `None` when the session has no catalog.

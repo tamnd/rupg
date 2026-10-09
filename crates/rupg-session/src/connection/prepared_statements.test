@@ -1,0 +1,130 @@
+> SELECT * FROM pg_prepared_statements
+fields name@pg_prepared_statements.1:25:-1:-1,statement@pg_prepared_statements.2:25:-1:-1,prepare_time@pg_prepared_statements.3:1184:8:-1,parameter_types@pg_prepared_statements.4:2211:-1:-1,result_types@pg_prepared_statements.5:2211:-1:-1,from_sql@pg_prepared_statements.6:16:1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+SELECT 0
+P s1|SELECT $1::int + 1
+P s2|SELECT relname FROM pg_class WHERE oid = $1
+P s3|SHOW DateStyle
+P s4|SELECT 1 AS a, 'x'::text AS b
+P |SELECT 2
+P s5|SET search_path = public
+P s6|BEGIN
+P s7|
+P sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx|SELECT $1::text, $2::bool
+P s1|SELECT 3
+ERROR 42P05 prepared statement "s1" already exists
+> SELECT name, statement, parameter_types, result_types, from_sql, generic_plans, custom_plans, prepare_time IS NOT NULL, pg_typeof(prepare_time) FROM pg_prepared_statements ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,statement@pg_prepared_statements.2:25:-1:-1,parameter_types@pg_prepared_statements.4:2211:-1:-1,result_types@pg_prepared_statements.5:2211:-1:-1,from_sql@pg_prepared_statements.6:16:1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1,?column?:16:1:-1,pg_typeof:2206:4:-1
+row s1,SELECT $1::int + 1,{integer},{integer},f,0,0,t,timestamp with time zone
+row s2,SELECT relname FROM pg_class WHERE oid = $1,{oid},{name},f,0,0,t,timestamp with time zone
+row s3,SHOW DateStyle,{},{text},f,0,0,t,timestamp with time zone
+row s4,SELECT 1 AS a, 'x'::text AS b,{},{integer,text},f,0,0,t,timestamp with time zone
+row s5,SET search_path = public,{},NULL,f,0,0,t,timestamp with time zone
+row s6,BEGIN,{},NULL,f,0,0,t,timestamp with time zone
+row s7,,{},NULL,f,0,0,t,timestamp with time zone
+row sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,SELECT $1::text, $2::bool,{text,boolean},{text,boolean},f,0,0,t,timestamp with time zone
+SELECT 8
+X s1|5
+row 6
+SELECT 1
+X s1|6
+row 7
+SELECT 1
+X s4
+row 1,x
+SELECT 1
+X s4
+row 1,x
+SELECT 1
+X s3
+row ISO, MDY
+SHOW
+X s5
+SET
+search_path=public
+X s7
+empty
+> SELECT name, generic_plans, custom_plans FROM pg_prepared_statements ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row s1,0,2
+row s2,0,0
+row s3,1,0
+row s4,2,0
+row s5,1,0
+row s6,0,0
+row s7,1,0
+row sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,0,0
+SELECT 8
+X s1|1
+row 2
+SELECT 1
+X s1|2
+row 3
+SELECT 1
+X s1|3
+row 4
+SELECT 1
+X s1|4
+row 5
+SELECT 1
+X s1|abc
+ERROR 22P02 invalid input syntax for type integer: "abc" (unnamed portal parameter $1 = '...')
+X s1|5
+row 6
+SELECT 1
+X s1|6
+row 7
+SELECT 1
+X s2|1259
+row pg_class
+SELECT 1
+> SELECT name, generic_plans, custom_plans FROM pg_prepared_statements ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row s1,3,5
+row s2,0,1
+row s3,1,0
+row s4,2,0
+row s5,1,0
+row s6,0,0
+row s7,1,0
+row sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,0,0
+SELECT 8
+> SET plan_cache_mode = force_custom_plan
+SET
+X s1|7
+row 8
+SELECT 1
+X s4
+row 1,x
+SELECT 1
+> SET plan_cache_mode = force_generic_plan
+SET
+X s2|1259
+row pg_class
+SELECT 1
+> SELECT name, generic_plans, custom_plans FROM pg_prepared_statements ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row s1,3,6
+row s2,1,1
+row s3,1,0
+row s4,3,0
+row s5,1,0
+row s6,0,0
+row s7,1,0
+row sxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,0,0
+SELECT 8
+> RESET plan_cache_mode
+RESET
+> SELECT count(*), sum(generic_plans), sum(custom_plans) FROM pg_prepared_statement()
+fields count:20:8:-1,sum:1700:-1:-1,sum:1700:-1:-1
+row 8,10,7
+SELECT 1
+> SELECT * FROM pg_prepared_statement() WHERE false
+fields name:25:-1:-1,statement:25:-1:-1,prepare_time:1184:8:-1,parameter_types:2211:-1:-1,result_types:2211:-1:-1,from_sql:16:1:-1,generic_plans:20:8:-1,custom_plans:20:8:-1
+SELECT 0
+> DISCARD ALL
+DISCARD ALL
+search_path="$user", public
+> SELECT count(*) FROM pg_prepared_statements
+fields count:20:8:-1
+row 0
+SELECT 1

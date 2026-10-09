@@ -17,9 +17,9 @@ use rupg_types::{
     Array, ByteaOutput, DateFormat, DateOrder, DateStyle, IntervalStyle, Recv, TimeZone, Value,
     oid, tz,
 };
-use rupg_wire::Field;
+use rupg_wire::{Field, Statements};
 
-use crate::connection::Activity;
+use crate::connection::{Activity, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
 use crate::param::type_error;
 use crate::store::Store;
@@ -92,6 +92,8 @@ pub(crate) struct Reader<'a> {
     zone: RefCell<(String, ZoneOf)>,
     /// The row of the session in the table of the sessions, and the store that has the table, or `None` for a reader that is not a session.
     activity: Option<(&'a Activity, &'a Store)>,
+    /// The prepared statements of the session, or `None` for a reader that is not a session.
+    statements: Option<&'a Statements<Arc<Prepared>>>,
 }
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
@@ -120,12 +122,22 @@ impl<'a> Reader<'a> {
             catalog,
             zone: RefCell::new((name, zone)),
             activity: None,
+            statements: None,
         }
     }
 
     /// The reader of a session, which reads the table of the sessions in `store`.
     pub(crate) fn with_activity(mut self, activity: &'a Activity, store: &'a Store) -> Reader<'a> {
         self.activity = Some((activity, store));
+        self
+    }
+
+    /// The reader of a session with prepared statements.
+    pub(crate) fn with_statements(
+        mut self,
+        statements: &'a Statements<Arc<Prepared>>,
+    ) -> Reader<'a> {
+        self.statements = Some(statements);
         self
     }
 
@@ -290,6 +302,12 @@ impl rupg_func::Session for Reader<'_> {
 
     fn setting(&self, name: &str) -> Option<String> {
         self.settings().get(name)
+    }
+
+    fn prepared_statements(&self) -> Vec<Vec<Value>> {
+        self.statements.map_or_else(Vec::new, |statements| {
+            statements.iter().map(|(name, statement)| statement.row(name)).collect()
+        })
     }
 
     fn all_settings(&self) -> Vec<Vec<Value>> {
