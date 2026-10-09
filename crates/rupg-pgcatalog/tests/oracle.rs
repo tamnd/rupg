@@ -33,11 +33,6 @@ const INITDB_COLUMNS: [(&str, &[&str]); 6] = [
 const SQL_BODY: &str = "see system_functions.sql";
 const SQL_BODY_COLUMNS: [&str; 3] = ["prosrc", "prosqlbody", "procost"];
 
-/// True for an oracle row that is not a static row. make_template0 and make_postgres of `initdb` add the databases 4 and 5 and their descriptions.
-fn made_by_initdb(name: &str, row: &[String]) -> bool {
-    matches!(name, "pg_database" | "pg_shdescription") && (row[0] == "4" || row[0] == "5")
-}
-
 /// The rows of each catalog, as lists of fields.
 type Rows = BTreeMap<&'static str, Vec<Vec<String>>>;
 
@@ -91,11 +86,6 @@ fn normalize(ours: &mut Rows, theirs: &mut Rows) {
             blank("pg_proc", row, &SQL_BODY_COLUMNS);
         }
     }
-    for (name, rows) in theirs.iter_mut() {
-        let static_rows: BTreeSet<&String> =
-            ours.get(name).into_iter().flatten().map(|row| &row[0]).collect();
-        rows.retain(|row| static_rows.contains(&row[0]) || !made_by_initdb(name, row));
-    }
 }
 
 #[test]
@@ -128,15 +118,14 @@ fn every_static_row_is_the_row_of_the_oracle() {
     assert!(report.is_empty(), "{report}");
 }
 
-/// The rules must not hide rows: each catalog keeps its row count, except for the rows that `initdb` adds.
+/// The rules must not hide rows: each catalog keeps its row count.
 #[test]
 fn the_rules_keep_the_rows() {
     let ours = generated();
     let theirs = oracle();
     let count = |rows: &Rows, name: &str| rows.get(name).map_or(0, Vec::len);
     for name in ours.keys() {
-        let added = theirs[name].iter().filter(|row| made_by_initdb(name, row)).count();
-        assert_eq!(count(&ours, name), count(&theirs, name) - added, "{name}");
+        assert_eq!(count(&ours, name), count(&theirs, name), "{name}");
     }
     assert_eq!(count(&ours, "pg_class"), 258);
     assert_eq!(count(&ours, "pg_attribute"), 1588);

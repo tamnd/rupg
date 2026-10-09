@@ -1,0 +1,47 @@
+> SELECT oid, datname, datdba, encoding, datlocprovider, datistemplate, datallowconn, dathasloginevt, datconnlimit, datminmxid, dattablespace, datcollate, datctype, datlocale, daticurules, datacl FROM pg_database WHERE oid < 16384 ORDER BY oid
+fields oid@pg_database.1:26:4:-1,datname@pg_database.2:19:64:-1,datdba@pg_database.3:26:4:-1,encoding@pg_database.4:23:4:-1,datlocprovider@pg_database.5:18:1:-1,datistemplate@pg_database.6:16:1:-1,datallowconn@pg_database.7:16:1:-1,dathasloginevt@pg_database.8:16:1:-1,datconnlimit@pg_database.9:23:4:-1,datminmxid@pg_database.11:28:4:-1,dattablespace@pg_database.12:26:4:-1,datcollate@pg_database.13:25:-1:-1,datctype@pg_database.14:25:-1:-1,datlocale@pg_database.15:25:-1:-1,daticurules@pg_database.16:25:-1:-1,datacl@pg_database.18:1034:-1:-1
+row 1,template1,10,6,c,t,t,f,-1,1,1663,C,C,NULL,NULL,{=c/postgres,postgres=CTc/postgres}
+row 4,template0,10,6,c,t,f,f,-1,1,1663,C,C,NULL,NULL,{=c/postgres,postgres=CTc/postgres}
+row 5,postgres,10,6,c,f,t,f,-1,1,1663,C,C,NULL,NULL,NULL
+SELECT 3
+> SELECT d.datname, s.description FROM pg_shdescription s JOIN pg_database d ON d.oid = s.objoid AND s.classoid = 'pg_database'::regclass ORDER BY 1
+fields datname@pg_database.2:19:64:-1,description@pg_shdescription.3:25:-1:-1
+row postgres,default administrative connection database
+row template0,unmodifiable empty database
+row template1,default template for new databases
+SELECT 3
+> SELECT shobj_description(oid, 'pg_database') FROM pg_database WHERE oid < 16384 ORDER BY oid
+fields shobj_description:25:-1:-1
+row default template for new databases
+row unmodifiable empty database
+row default administrative connection database
+SELECT 3
+> SELECT 'postgres'::regdatabase, 'template0'::regdatabase::oid, 5::regdatabase, 4::oid::regdatabase
+fields regdatabase:6490:4:-1,oid:26:4:-1,regdatabase:6490:4:-1,regdatabase:6490:4:-1
+row postgres,4,postgres,template0
+SELECT 1
+> SELECT 'nosuch'::regdatabase
+ERROR 42704 database "nosuch" does not exist at 8
+> SELECT to_regdatabase('template0')::oid, to_regdatabase('nosuch')
+fields to_regdatabase:26:4:-1,to_regdatabase:6490:4:-1
+row 4,NULL
+SELECT 1
+> SELECT has_database_privilege('postgres', 'CONNECT'), has_database_privilege('template0', 'CREATE'), has_database_privilege('pg_monitor', 'postgres', 'TEMPORARY'), has_database_privilege('pg_monitor', 'template0', 'TEMPORARY'), has_database_privilege('pg_monitor', 5, 'CREATE')
+fields has_database_privilege:16:1:-1,has_database_privilege:16:1:-1,has_database_privilege:16:1:-1,has_database_privilege:16:1:-1,has_database_privilege:16:1:-1
+row t,t,t,f,f
+SELECT 1
+> SELECT has_database_privilege('nosuch', 'CONNECT')
+fields has_database_privilege:16:1:-1
+ERROR 3D000 database "nosuch" does not exist
+> SELECT datname, datistemplate FROM pg_database WHERE datallowconn AND oid < 16384 ORDER BY 1
+fields datname@pg_database.2:19:64:-1,datistemplate@pg_database.6:16:1:-1
+row postgres,f
+row template1,t
+SELECT 2
+> SELECT a.grantee, a.privilege_type FROM aclexplode((SELECT datacl FROM pg_database WHERE datname = 'template0')) a ORDER BY 1, 2
+fields grantee:26:4:-1,privilege_type:25:-1:-1
+row 0,CONNECT
+row 10,CONNECT
+row 10,CREATE
+row 10,TEMPORARY
+SELECT 4

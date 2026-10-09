@@ -1,6 +1,6 @@
 //! The schemas and the static rows of the system catalogs.
 //!
-//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`. Last, it gives the static rows the privileges that `initdb` gives them, from the steps of `initdb.c` and the `GRANT` and `REVOKE` statements of `system_views.sql`.
+//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. It adds the rows of `template0` and `postgres`, which `initdb` copies from `template1`. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`. Last, it gives the static rows the privileges that `initdb` gives them, from the steps of `initdb.c` and the `GRANT` and `REVOKE` statements of `system_views.sql`.
 //!
 //! `cargo xtask pgcatalog --check` writes nothing. It fails if a file is not the same as the file that the task makes. See `spec/07-sql-types-and-catalog.md` section 7.13.2.
 
@@ -202,6 +202,9 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
             }
             if name == "pg_type" {
                 generate_array_types(&catalog, &mut rows);
+            }
+            if name == "pg_database" {
+                initdb_databases(&mut rows)?;
             }
             for row in &rows {
                 let Some(descr) = row.get("descr") else { continue };
@@ -1769,12 +1772,41 @@ fn acl_statements(script: &str) -> Result<Vec<AclStatement>, String> {
     Ok(out)
 }
 
+/// The databases that `initdb` makes from `template1`: `make_template0` makes `template0` with the OID 4, and `make_postgres` makes `postgres` with the OID 5. `CREATE DATABASE` does not copy `datacl`, and each step adds a comment.
+fn initdb_databases(rows: &mut Vec<Row>) -> Result<(), String> {
+    let template1 = rows
+        .iter()
+        .find(|r| r.get("datname").map(String::as_str) == Some("template1"))
+        .cloned()
+        .ok_or("pg_database.dat: no template1")?;
+    let copies = [
+        ("4", "template0", "t", "f", "unmodifiable empty database"),
+        ("5", "postgres", "f", "t", "default administrative connection database"),
+    ];
+    for (oid, name, template, connect, descr) in copies {
+        let mut row = template1.clone();
+        row.remove("oid_symbol");
+        for (column, value) in [
+            ("oid", oid),
+            ("datname", name),
+            ("datistemplate", template),
+            ("datallowconn", connect),
+            ("datacl", "_null_"),
+            ("descr", descr),
+        ] {
+            row.insert(column.into(), value.into());
+        }
+        rows.push(row);
+    }
+    Ok(())
+}
+
 /// The privileges that `initdb` gives to the static rows, in its order of steps:
 ///
 /// 1. `setup_auth` runs `REVOKE ALL ON pg_authid FROM public`.
 /// 2. `setup_run_file` runs `system_views.sql`. Its `GRANT` and `REVOKE` statements on a catalog change `relacl` or `attacl`. The statements on views are not here, because the static rows have no views.
 /// 3. `setup_privileges` gives `=r` to PUBLIC on each table, view, materialized view and sequence that has a null `relacl`, runs `GRANT USAGE ON SCHEMA pg_catalog, public TO PUBLIC`, and runs `REVOKE ALL ON pg_largeobject FROM PUBLIC`.
-/// 4. `make_template0` runs `REVOKE CREATE,TEMPORARY ON DATABASE template1 FROM public`.
+/// 4. `make_template0` runs `REVOKE CREATE,TEMPORARY ON DATABASE template1 FROM public` and the same statement for `template0`.
 ///
 /// A superuser runs each statement, so `select_best_grantor` makes the owner the grantor.
 fn initdb_privileges(
@@ -1902,7 +1934,7 @@ fn initdb_privileges(
         index("pg_database", "datacl")?,
     );
     for database in rows.get_mut("pg_database").into_iter().flatten() {
-        if database[d_name].as_deref() == Some("template1") {
+        if matches!(database[d_name].as_deref(), Some("template1" | "template0")) {
             let owner = role(&database[d_owner])?;
             let mut items = acl(&database[d_acl], AclKind::Database, &owner)?;
             acl_update(&mut items, "", acl_bits("CT").unwrap_or(0), &owner, false);

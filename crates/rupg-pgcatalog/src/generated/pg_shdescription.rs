@@ -1,4 +1,4 @@
-//! The 1 static rows of `pg_shdescription`, one batch for each column.
+//! The 3 static rows of `pg_shdescription`, one batch for each column.
 //!
 //! `cargo xtask pgcatalog` makes this file from the catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog`. Do not edit it.
 
@@ -8,21 +8,22 @@ pub(crate) static COLUMNS: [Batch; 3] = [
     // objoid
     Batch {
         values: Values::Oid(&[
-            1,
+            1, 4, 5,
         ]),
         nulls: &[],
     },
     // classoid
     Batch {
         values: Values::Oid(&[
-            1262,
+            1262, 1262, 1262,
         ]),
         nulls: &[],
     },
     // description
     Batch {
         values: Values::Text(&[
-            "default template for new databases",
+            "default template for new databases", "unmodifiable empty database",
+            "default administrative connection database",
         ]),
         nulls: &[],
     },
