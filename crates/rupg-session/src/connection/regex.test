@@ -1,0 +1,281 @@
+> SELECT s, p, s ~ p AS m, s ~* p AS i, s !~ p AS n, s !~* p AS ni FROM (VALUES ('pg_class', '^(pg_class)$'), ('pg_classes', '^(pg_class)$'), ('PG_CLASS', '^(pg_class)$'), ('xabcx', 'a.c'), ('abc', ''), ('', ''), ('', '^$'), ('a', '^$'), ('aaa', '^a{2,3}$'), ('aaaa', '^a{2,3}$'), ('a', '^a{0}$'), ('', '^a{0}$'), ('aaab', '(a*)*b'), ('b', '(a*)+b'), ('abab', '^(ab)+$'), ('aba', '^(ab)+$'), ('foo', 'foo|bar'), ('bar', '^(foo|bar)$'), ('baz', '^(foo|bar)$'), ('ab', 'a?b'), ('b', '^a?b$'), ('aab', '^a?b$'), ('aXb', 'a[A-Z]b'), ('axb', 'a[A-Z]b'), ('a-b', 'a[-x]b'), ('a]b', 'a[]]b'), ('a^b', 'a[x^]b'), ('abcd', '[^a-c]'), ('abc', '[^a-c]'), ('xyz', 'x.*z'), ('xz', 'x.+z'), ('a.c', 'a\.c'), ('abc', 'a\.c')) AS v (s, p) ORDER BY 1, 2
+fields s:25:-1:-1,p:25:-1:-1,m:16:1:-1,i:16:1:-1,n:16:1:-1,ni:16:1:-1
+row ,,t,t,f,f
+row ,^$,t,t,f,f
+row ,^a{0}$,t,t,f,f
+row PG_CLASS,^(pg_class)$,f,t,t,f
+row a,^$,f,f,t,t
+row a,^a{0}$,f,f,t,t
+row a-b,a[-x]b,t,t,f,f
+row a.c,a\.c,t,t,f,f
+row aXb,a[A-Z]b,t,t,f,f
+row a]b,a[]]b,t,t,f,f
+row a^b,a[x^]b,t,t,f,f
+row aaa,^a{2,3}$,t,t,f,f
+row aaaa,^a{2,3}$,f,f,t,t
+row aaab,(a*)*b,t,t,f,f
+row aab,^a?b$,f,f,t,t
+row ab,a?b,t,t,f,f
+row aba,^(ab)+$,f,f,t,t
+row abab,^(ab)+$,t,t,f,f
+row abc,,t,t,f,f
+row abc,[^a-c],f,f,t,t
+row abc,a\.c,f,f,t,t
+row abcd,[^a-c],t,t,f,f
+row axb,a[A-Z]b,f,t,t,f
+row b,(a*)+b,t,t,f,f
+row b,^a?b$,t,t,f,f
+row bar,^(foo|bar)$,t,t,f,f
+row baz,^(foo|bar)$,f,f,t,t
+row foo,foo|bar,t,t,f,f
+row pg_class,^(pg_class)$,t,t,f,f
+row pg_classes,^(pg_class)$,f,f,t,t
+row xabcx,a.c,t,t,f,f
+row xyz,x.*z,t,t,f,f
+row xz,x.+z,f,f,t,t
+SELECT 33
+> SELECT s, p, s ~ p AS m, s ~* p AS i FROM (VALUES ('x12', '[[:digit:]]+'), ('x', '[[:digit:]]'), ('a b', 'a[[:space:]]b'), ('a_b', '^[[:word:]]+$'), ('a-b', '^[[:word:]]+$'), ('ABC', '^[[:lower:]]+$'), ('abc', '^[[:upper:]]+$'), ('Ab1', '^[[:alnum:]]+$'), ('f0A', '^[[:xdigit:]]+$'), ('fg', '^[[:xdigit:]]+$'), ('!?', '^[[:punct:]]+$'), ('a!', '^[[:punct:]]+$'), ('a	b', 'a[[:blank:]]b'), ('a b', '^[[:graph:]]+$'), ('a b', '^[[:print:]]+$'), ('abc', '^[[:alpha:]]+$'), ('a1', '^[[:alpha:]]+$'), ('a', '[[.a.]]'), ('-', '[[.hyphen.]]'), (' ', '[[.space.]]'), ('a', '[[=a=]]'), ('A', '[[=a=]]'), ('x', '[[:ascii:]]'), ('a', '[[.a.]-c]'), ('b', '[a-[.c.]]')) AS v (s, p) ORDER BY 1, 2
+fields s:25:-1:-1,p:25:-1:-1,m:16:1:-1,i:16:1:-1
+row  ,[[.space.]],t,t
+row !?,^[[:punct:]]+$,t,t
+row -,[[.hyphen.]],t,t
+row A,[[=a=]],f,t
+row ABC,^[[:lower:]]+$,f,t
+row Ab1,^[[:alnum:]]+$,t,t
+row a,[[.a.]-c],t,t
+row a,[[.a.]],t,t
+row a,[[=a=]],t,t
+row a	b,a[[:blank:]]b,t,t
+row a b,^[[:graph:]]+$,f,f
+row a b,^[[:print:]]+$,t,t
+row a b,a[[:space:]]b,t,t
+row a!,^[[:punct:]]+$,f,f
+row a-b,^[[:word:]]+$,f,f
+row a1,^[[:alpha:]]+$,f,f
+row a_b,^[[:word:]]+$,t,t
+row abc,^[[:alpha:]]+$,t,t
+row abc,^[[:upper:]]+$,f,t
+row b,[a-[.c.]],t,t
+row f0A,^[[:xdigit:]]+$,t,t
+row fg,^[[:xdigit:]]+$,f,f
+row x,[[:ascii:]],t,t
+row x,[[:digit:]],f,f
+row x12,[[:digit:]]+,t,t
+SELECT 25
+> SELECT s, p, s ~ p AS m, s ~* p AS i FROM (VALUES ('a1', '\d'), ('ab', '\d'), ('ab', '^\D+$'), ('a b', '\s'), ('ab', '^\S+$'), ('a_1', '^\w+$'), ('a-1', '\W'), ('a1', '[\d]'), ('ab', '[\D]'), ('a b', '[\s]'), ('ab', '^[^\d]+$'), ('a foo b', '\mfoo\M'), ('afoob', '\mfoo\M'), ('foo bar', '\yfoo\y'), ('foobar', 'o\Yb'), ('foo bar', 'o\Y '), ('foo', '\Afoo\Z'), ('xfoo', '\Afoo'), ('a foo b', '[[:<:]]foo[[:>:]]'), ('a	b', 'a\tb'), ('a', '\x61'), ('a', 'a'), ('a', '\141'), ('ab', 'a\Bb'), ('a', '\e'), ('a.b', 'a\.b'), ('abc', '***=a.c'), ('a.c', '***=a.c'), ('abc', '***:a.c'), ('ABC', '(?i)abc'), ('abc', '(?c)ABC'), ('a b', '(?x)a b'), ('ab', '(?x)a b'), ('ab', E'(?x)a#c\nb'), ('a.c', '(?q)a.c'), ('abc', '(?b)a\(b\)c'), ('abc', '(?e)a(b)c'), ('ab', '(?e)a{1}b')) AS v (s, p) ORDER BY 1, 2
+fields s:25:-1:-1,p:25:-1:-1,m:16:1:-1,i:16:1:-1
+row ABC,(?i)abc,t,t
+row a,\141,t,t
+row a,\e,f,f
+row a,\x61,t,t
+row a,a,t,t
+row a	b,a\tb,t,t
+row a b,(?x)a b,f,f
+row a b,[\s],t,t
+row a b,\s,t,t
+row a foo b,[[:<:]]foo[[:>:]],t,t
+row a foo b,\mfoo\M,t,t
+row a-1,\W,t,t
+row a.b,a\.b,t,t
+row a.c,(?q)a.c,t,t
+row a.c,***=a.c,t,t
+row a1,[\d],t,t
+row a1,\d,t,t
+row a_1,^\w+$,t,t
+row ab,(?e)a{1}b,t,t
+row ab,(?x)a b,t,t
+row ab,(?x)a#c
+b,t,t
+row ab,[\D],t,t
+row ab,\d,f,f
+row ab,^[^\d]+$,t,t
+row ab,^\D+$,t,t
+row ab,^\S+$,t,t
+row ab,a\Bb,f,f
+row abc,(?b)a\(b\)c,t,t
+row abc,(?c)ABC,f,f
+row abc,(?e)a(b)c,t,t
+row abc,***:a.c,t,t
+row abc,***=a.c,f,f
+row afoob,\mfoo\M,f,f
+row foo,\Afoo\Z,t,t
+row foo bar,\yfoo\y,t,t
+row foo bar,o\Y ,f,f
+row foobar,o\Yb,t,t
+row xfoo,\Afoo,f,f
+SELECT 38
+> SELECT s, p, s ~ p AS m, s ~* p AS i FROM (VALUES ('aaaa', '^(a+)\1$'), ('aaa', '^(a+)\1$'), ('abab', '^(ab)\1$'), ('abAB', '^(ab)\1$'), ('abcabc', '(a)(b)(c)\1\2\3'), ('xx', '^(x)?\1$'), ('foobar', 'foo(?=bar)'), ('foobaz', 'foo(?=bar)'), ('foobar', 'foo(?!bar)'), ('foobaz', 'foo(?!bar)'), ('ab', '(?<=a)b'), ('cb', '(?<=a)b'), ('ab', '(?<!a)b'), ('cb', '(?<!a)b'), ('xab', '(?<=x(a))b'), ('abc', 'a(?:b)c'), ('ac', 'a(?:b)?c'), ('aaa', '^a*?$'), ('aaa', '^a+?$'), ('a', '^a??$'), ('aaa', '^a{2,}?$'), ('aaa', '^a{1,2}?$'), ('abc', '(?<=^a)bc'), ('ab', 'a(?=b$)'), (E'foo\nbar', '^bar'), (E'foo\nbar', '(?n)^bar'), (E'foo\nbar', '(?w)^bar'), (E'foo\nbar', '(?p)^bar'), (E'foo\nbar', 'foo$'), (E'foo\nbar', '(?n)foo$'), (E'foo\nbar', '(?n)o.b'), (E'foo\nbar', 'o.b'), (E'foo\nbar', '(?n)o[^x]b'), (E'foo\nbar', '(?p)o.b'), (E'foo\nbar', '(?w)o.b')) AS v (s, p) ORDER BY 1, 2
+fields s:25:-1:-1,p:25:-1:-1,m:16:1:-1,i:16:1:-1
+row a,^a??$,t,t
+row aaa,^(a+)\1$,f,f
+row aaa,^a*?$,t,t
+row aaa,^a+?$,t,t
+row aaa,^a{1,2}?$,f,f
+row aaa,^a{2,}?$,t,t
+row aaaa,^(a+)\1$,t,t
+row ab,(?<!a)b,f,f
+row ab,(?<=a)b,t,t
+row ab,a(?=b$),t,t
+row abAB,^(ab)\1$,f,t
+row abab,^(ab)\1$,t,t
+row abc,(?<=^a)bc,t,t
+row abc,a(?:b)c,t,t
+row abcabc,(a)(b)(c)\1\2\3,t,t
+row ac,a(?:b)?c,t,t
+row cb,(?<!a)b,t,t
+row cb,(?<=a)b,f,f
+row foo
+bar,(?n)^bar,t,t
+row foo
+bar,(?n)foo$,t,t
+row foo
+bar,(?n)o.b,f,f
+row foo
+bar,(?n)o[^x]b,f,f
+row foo
+bar,(?p)^bar,f,f
+row foo
+bar,(?p)o.b,f,f
+row foo
+bar,(?w)^bar,t,t
+row foo
+bar,(?w)o.b,t,t
+row foo
+bar,^bar,f,f
+row foo
+bar,foo$,f,f
+row foo
+bar,o.b,t,t
+row foobar,foo(?!bar),f,f
+row foobar,foo(?=bar),t,t
+row foobaz,foo(?!bar),t,t
+row foobaz,foo(?=bar),f,f
+row xab,(?<=x(a))b,t,t
+row xx,^(x)?\1$,t,t
+SELECT 35
+> SELECT relname FROM pg_catalog.pg_class WHERE relname OPERATOR(pg_catalog.~) '^(pg_class)$' COLLATE pg_catalog.default
+fields relname@pg_class.2:19:64:-1
+row pg_class
+SELECT 1
+> SELECT relname FROM pg_catalog.pg_class WHERE relname ~ '^pg_(class|type|proc)$' ORDER BY 1
+fields relname@pg_class.2:19:64:-1
+row pg_class
+row pg_proc
+row pg_type
+SELECT 3
+> SELECT relname FROM pg_catalog.pg_class WHERE relname ~* '^PG_CLASS_.*INDEX$' ORDER BY 1
+fields relname@pg_class.2:19:64:-1
+row pg_class_oid_index
+row pg_class_relname_nsp_index
+row pg_class_tblspc_relfilenode_index
+SELECT 3
+> SELECT 'ABC'::name ~* 'abc' AS a, 'abc'::name !~ 'b' AS b, 'abc'::name !~* 'B' AS c, 'abc' ~ 'b'::name AS d
+fields a:16:1:-1,b:16:1:-1,c:16:1:-1,d:16:1:-1
+row t,f,f,t
+SELECT 1
+> SELECT 'abc  '::char(5) ~ 'c$' AS a, 'abc'::char(5) ~* 'C$' AS b, 'abc'::varchar ~ 'b' AS c
+fields a:16:1:-1,b:16:1:-1,c:16:1:-1
+row f,f,t
+SELECT 1
+> SELECT NULL ~ 'a' AS a, 'a' ~ NULL AS b
+fields a:16:1:-1,b:16:1:-1
+row NULL,NULL
+SELECT 1
+> SELECT 'a' ~ '*a'
+ERROR 2201B invalid regular expression: quantifier operand invalid
+> SELECT 'a' ~ 'a**'
+ERROR 2201B invalid regular expression: quantifier operand invalid
+> SELECT 'a' ~ 'a)'
+ERROR 2201B invalid regular expression: parentheses () not balanced
+> SELECT 'a' ~ '(a'
+ERROR 2201B invalid regular expression: parentheses () not balanced
+> SELECT 'a' ~ '[a'
+ERROR 2201B invalid regular expression: brackets [] not balanced
+> SELECT 'a' ~ 'a{3,2}'
+ERROR 2201B invalid regular expression: invalid repetition count(s)
+> SELECT 'a' ~ 'a{256}'
+ERROR 2201B invalid regular expression: invalid repetition count(s)
+> SELECT 'a' ~ 'a{1'
+ERROR 2201B invalid regular expression: braces {} not balanced
+> SELECT 'a' ~ 'a{1,2'
+ERROR 2201B invalid regular expression: braces {} not balanced
+> SELECT 'a' ~ 'a{x'
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT 'a' ~ '[z-a]'
+ERROR 2201B invalid regular expression: invalid character range
+> SELECT 'a' ~ '[a-c-e]'
+ERROR 2201B invalid regular expression: invalid character range
+> SELECT 'a' ~ '[[:foo:]]'
+ERROR 2201B invalid regular expression: invalid character class
+> SELECT 'a' ~ '[[.foo.]]'
+ERROR 2201B invalid regular expression: invalid collating element
+> SELECT 'a' ~ '[[=foo=]]'
+ERROR 2201B invalid regular expression: invalid collating element
+> SELECT 'a' ~ '[[::]]'
+ERROR 2201B invalid regular expression: invalid character class
+> SELECT 'a' ~ '[[..]]'
+ERROR 2201B invalid regular expression: invalid collating element
+> SELECT 'a' ~ '[\w-z]'
+ERROR 2201B invalid regular expression: invalid character range
+> SELECT 'a' ~ '[a-\d]'
+ERROR 2201B invalid regular expression: invalid character range
+> SELECT 'a' ~ '\1(a)'
+ERROR 2201B invalid regular expression: invalid backreference number
+> SELECT 'a' ~ '(a)\2'
+ERROR 2201B invalid regular expression: invalid backreference number
+> SELECT 'a' ~ '(?=(a)\1)'
+ERROR 2201B invalid regular expression: invalid backreference number
+> SELECT 'a' ~ '\'
+ERROR 2201B invalid regular expression: invalid escape \ sequence
+> SELECT 'a' ~ '\q'
+ERROR 2201B invalid regular expression: invalid escape \ sequence
+> SELECT 'a' ~ '[\q]'
+ERROR 2201B invalid regular expression: invalid escape \ sequence
+> SELECT 'a' ~ '(?z)a'
+ERROR 2201B invalid regular expression: invalid embedded option
+> SELECT 'a' ~ '(?i'
+ERROR 2201B invalid regular expression: invalid embedded option
+> SELECT 'a' ~ '***?'
+ERROR 2201B invalid regular expression: invalid regexp (reg version 0.8)
+> SELECT 'a' ~ '^*'
+ERROR 2201B invalid regular expression: quantifier operand invalid
+> SELECT 'a' ~ '(?=a)*'
+ERROR 2201B invalid regular expression: quantifier operand invalid
+> SELECT 'a' ~ 'a|*'
+ERROR 2201B invalid regular expression: quantifier operand invalid
+> SELECT 'a' ~ '()'
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT 'a' ~ 'a||b'
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT 'a' ~ '\x'
+ERROR 2201B invalid regular expression: invalid escape \ sequence
+> SELECT 'a' ~ '\u12'
+ERROR 2201B invalid regular expression: invalid escape \ sequence
+> SELECT 'a' ~ '\b' AS a, 'a' ~ '[[:alpha:]-z]' AS b
+ERROR 2201B invalid regular expression: invalid character range
+> SELECT 'a' ~ '(a){0}\1'
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT 'ab' ~ '[[.a.]-[.b.]]' AS a, 'A' ~* '[a-c]' AS b, 'b' ~* '[A-C]' AS c, '[' ~* '[Z-a]' AS d
+fields a:16:1:-1,b:16:1:-1,c:16:1:-1,d:16:1:-1
+row t,t,t,t
+SELECT 1
+> SELECT 'a' ~ '[[:alpha:]'
+ERROR 2201B invalid regular expression: brackets [] not balanced
+> SELECT 'a' ~ '{1}'
+ERROR 2201B invalid regular expression: quantifier operand invalid
+> SELECT 'a' ~ 'a{,2}' AS a, 'a{' ~ 'a{' AS b, 'a}' ~ 'a}' AS c
+fields a:16:1:-1,b:16:1:-1,c:16:1:-1
+row f,t,t
+SELECT 1
+> SELECT repeat('a', 5000) ~ '^(a|aa)*b' AS a, repeat('ab', 2000) ~ '^(ab)*$' AS b, repeat('a', 3000) ~ '^(a+)\1$' AS c, repeat('x', 4000) ~* '(?<=X)Y|X{3}$' AS d
+fields a:16:1:-1,b:16:1:-1,c:16:1:-1,d:16:1:-1
+row f,t,t,t
+SELECT 1

@@ -1681,6 +1681,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/subscripts.test")));
     }
 
+    /// The regular expression operators `~`, `~*`, `!~` and `!~*` on `text`, `name` and `character`: the anchors, the bounds, the brackets with classes and collating elements, the escapes, the embedded options, the back references, the lookarounds, the newline modes, the queries of `psql` on the names of the catalog, long strings, and each error of the compiler. `connection/regex.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn regex() {
+        big_stack(|| script(include_str!("connection/regex.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

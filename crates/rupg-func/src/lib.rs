@@ -15,6 +15,7 @@ mod io;
 mod math;
 mod misc;
 mod reg;
+mod regex;
 mod srf;
 mod text;
 
@@ -162,6 +163,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| acl::by_src(src))
         .or_else(|| deparse::by_src(src))
         .or_else(|| array::by_src(src))
+        .or_else(|| regex::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.
