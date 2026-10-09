@@ -4,6 +4,16 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.12 (2026-10-09)
+
+A patch release on the way to M2. rupg now runs the SQL statements of the prepared statements, and two more system views return the rows of PostgreSQL.
+
+### Added
+
+- `pg_prepared_statements` shows the statements of `Parse`, with the counts of the generic and the custom plans that `plan_cache_mode` chooses (#216).
+- The SQL statements `PREPARE`, `EXECUTE` and `DEALLOCATE` (#217). They share the prepared statements with the extended protocol, and `EXECUTE` coerces its values and gives the errors of PostgreSQL.
+- `pg_get_function_arguments`, `pg_get_function_identity_arguments`, `pg_get_function_result` and `pg_get_function_arg_default` give the text of PostgreSQL for each built-in function (#218). `pg_sequence_last_value`, `pg_my_temp_schema` and `pg_is_other_temp_schema` run, so `pg_sequences` and `pg_seclabels` return rows.
+
 ## 0.1.11 (2026-10-09)
 
 A patch release on the way to M2. rupg now has the rules of the time zone data, and more system views return the rows of PostgreSQL.
