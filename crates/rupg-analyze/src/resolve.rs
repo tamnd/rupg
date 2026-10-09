@@ -540,7 +540,7 @@ impl Analyzer<'_> {
             }
         }
         // check_srf_call_placement.
-        if proc.retset && self.kind.is_definition() {
+        if proc.retset && self.kind.is_standalone() {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 format!("set-returning functions are not allowed in {}", self.kind.name()),
@@ -574,7 +574,7 @@ impl Analyzer<'_> {
             }
             return self.aggregate_call(proc.oid, args, parts, variadic, result, at);
         }
-        if over && self.kind.is_definition() {
+        if over && self.kind.is_standalone() {
             return Err(Error::new(
                 SqlState::WINDOWING_ERROR,
                 format!("window functions are not allowed in {}", self.kind.name()),

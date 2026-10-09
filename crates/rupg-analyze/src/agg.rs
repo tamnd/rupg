@@ -37,6 +37,8 @@ pub(crate) enum Kind {
     FromFunction,
     /// `EXPR_KIND_VALUES`.
     Values,
+    /// `EXPR_KIND_EXECUTE_PARAMETER`.
+    ExecuteParameter,
 }
 
 impl Kind {
@@ -60,14 +62,19 @@ impl Kind {
             Kind::IndexPredicate => "index predicates",
             Kind::FromFunction => "functions in FROM",
             Kind::Values => "VALUES",
+            Kind::ExecuteParameter => "EXECUTE parameters",
         }
     }
 
-    /// True for an expression of a statement that defines an object, where an aggregate, a window function, a set-returning function and a subquery are errors.
-    pub(crate) fn is_definition(self) -> bool {
+    /// True for an expression that is not part of a query: an expression of a statement that defines an object, or a parameter of `EXECUTE`. There an aggregate, a window function, a set-returning function and a subquery are errors.
+    pub(crate) fn is_standalone(self) -> bool {
         matches!(
             self,
-            Kind::ColumnDefault | Kind::Check | Kind::IndexExpression | Kind::IndexPredicate
+            Kind::ColumnDefault
+                | Kind::Check
+                | Kind::IndexExpression
+                | Kind::IndexPredicate
+                | Kind::ExecuteParameter
         )
     }
 
@@ -77,6 +84,7 @@ impl Kind {
             Kind::ColumnDefault => "DEFAULT expression",
             Kind::Check => "check constraint",
             Kind::IndexExpression => "index expression",
+            Kind::ExecuteParameter => "EXECUTE parameter",
             _ => "index predicate",
         }
     }
@@ -206,7 +214,8 @@ impl Analyzer<'_> {
             | Kind::IndexExpression
             | Kind::IndexPredicate
             | Kind::FromFunction
-            | Kind::Values => {
+            | Kind::Values
+            | Kind::ExecuteParameter => {
                 return Err(grouping_error(
                     format!("aggregate functions are not allowed in {}", self.kind.name()),
                     at,
