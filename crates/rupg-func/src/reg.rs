@@ -30,8 +30,8 @@ pub(crate) const DATABASES: [(&str, u32); 3] =
 /// The result of the input: the outer error is a hard error, and the inner error is a soft error.
 type Soft<T> = Result<Result<T>>;
 
-/// The session as the analyzer reads it, for the type names in the input of `regtype` and `regprocedure`.
-struct SessionEnv<'a>(&'a dyn Session);
+/// The session as the analyzer reads it, for the type names in the input of `regtype` and `regprocedure` and for the query of a view.
+pub(crate) struct SessionEnv<'a>(pub(crate) &'a dyn Session);
 
 impl Env for SessionEnv<'_> {
     fn search_path(&self) -> Vec<u32> {

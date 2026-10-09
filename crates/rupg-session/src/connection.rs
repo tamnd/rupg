@@ -1616,6 +1616,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/deparse.test")));
     }
 
+    /// `pg_get_viewdef` for the views of the user and for the system views: joins, subqueries, set operations, aggregates, the special syntax of the SQL standard, the wrap column and the names of a view in text. `connection/viewdef.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn viewdef() {
+        big_stack(|| script(include_str!("connection/viewdef.test")));
+    }
+
     /// The fold of the constant parts of the expressions, as `eval_const_expressions` does it. An error of the fold comes before the description of the rows, and a part that the fold drops gives no error. `connection/fold.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn fold() {

@@ -3,14 +3,15 @@
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
     A_ArrayExpr, A_Const, A_Expr, A_Expr_Kind, BoolExpr, BoolExprType, BoolTestType, CaseExpr,
-    FuncCall, MinMaxOp, Node, NullTestType, SQLValueFunction, SQLValueFunctionOp, TypeCast,
+    CoercionForm, FuncCall, MinMaxOp, Node, NullTestType, SQLValueFunction, SQLValueFunctionOp,
+    TypeCast,
 };
 use rupg_types::{Value, oid};
 
 use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, can_coerce, common_of};
-use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, SqlValue};
+use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, FuncForm, SqlValue};
 use crate::typename::{names, place};
 use crate::types;
 
@@ -513,7 +514,14 @@ impl Analyzer<'_> {
             over: f.over.is_some(),
             null_treatment: f.ignore_nulls != 0,
         };
-        self.make_func(&func_names, args, f.func_variadic, Some(parts), at)
+        let mut call = self.make_func(&func_names, args, f.func_variadic, Some(parts), at)?;
+        if f.funcformat == CoercionForm::COERCE_SQL_SYNTAX
+            && let ExprKind::Func(func) = &mut call.kind
+            && func.form == FuncForm::Call
+        {
+            func.form = FuncForm::SqlSyntax;
+        }
+        Ok(call)
     }
 
     /// `transformTypeCast`: `x::type` and `CAST(x AS type)`.

@@ -69,8 +69,7 @@ impl Analyzer<'_> {
                 not_null: false,
             })
             .collect();
-        let relation =
-            Relation { oid: 0, columns, subquery: None, function: None, values: Some(rows) };
+        let relation = Relation::new(0, columns, None, None, Some(rows));
         let (index, columns) = self.add_values(relation)?;
         // expandNSItemAttrs: the targets are the columns, with no location.
         let mut targets: Vec<Target> = columns

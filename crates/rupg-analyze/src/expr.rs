@@ -164,6 +164,8 @@ pub enum FuncForm {
     ExplicitCast,
     /// A cast that the analyzer added.
     ImplicitCast,
+    /// A call in the special syntax of the SQL standard, such as `SUBSTRING(x FROM 2)` or `x AT TIME ZONE 'UTC'`, as `COERCE_SQL_SYNTAX`.
+    SqlSyntax,
 }
 
 /// `CoercionForm` of a cast node: the way a cast was written, which a deparse function shows.

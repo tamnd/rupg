@@ -217,13 +217,9 @@ impl Analyzer<'_> {
                 .collect();
             let index = self.scope.relations.len();
             let subquery = Some(Box::new(query));
-            self.scope.relations.push(Relation {
-                oid: 0,
-                columns,
-                subquery,
-                function: None,
-                values: None,
-            });
+            let mut relation = Relation::new(0, columns, subquery, None, None);
+            relation.name = format!("*SELECT* {}", index + 1);
+            self.scope.relations.push(relation);
             return Ok((SetTree::Leaf(index), exprs));
         }
         let (kind, context) = match s.op {

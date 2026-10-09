@@ -286,7 +286,17 @@ impl<'a> Fold<'a> {
             self.nulled = outer;
             on = result?;
         }
-        Ok(FromItem::Join(Box::new(Join { kind: join.kind, left, right, on })))
+        Ok(FromItem::Join(Box::new(Join {
+            kind: join.kind,
+            left,
+            right,
+            on,
+            using: join.using.clone(),
+            plain_using: join.plain_using,
+            alias: join.alias.clone(),
+            using_alias: join.using_alias.clone(),
+            merged: join.merged.clone(),
+        })))
     }
 
     /// `SS_process_sublinks`: folds the subqueries of a folded expression.
