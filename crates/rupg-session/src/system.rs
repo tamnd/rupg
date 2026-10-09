@@ -6,7 +6,7 @@
 //!
 //! The `GRANT` and `REVOKE` statements of the script on views set the privileges of these views. Then each view without privileges gets `SELECT` for PUBLIC, as `setup_privileges` of `initdb` gives it. The statements on catalogs changed the static rows already.
 //!
-//! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges, the five domains and the functions in SQL with a `RETURN` body, with the OIDs of PostgreSQL 19. The other functions, the tables and the views of the script are not done yet.
+//! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges, the five domains and the eleven functions in SQL, with the OIDs of PostgreSQL 19. The tables and the views of the script are not done yet.
 //!
 //! These parts of `system_views.sql` are not done yet: the rules `pg_settings_u` and `pg_settings_n` on `pg_settings`. Their OIDs stay unused.
 
@@ -135,8 +135,10 @@ const DOMAIN_OIDS: [(&str, u32); 5] = [
     ("yes_or_no", 13376),
 ];
 
-/// The OID of each function of `information_schema` in PostgreSQL 19 that rupg makes. The OID 13357 is the TOAST value of the long body of `_pg_char_octet_length`. The functions `_pg_expandarray` and `_pg_index_position` take the OIDs 13351 and 13352 and are not done yet.
-const FUNCTION_OIDS: [(&str, u32); 9] = [
+/// The OID of each function of `information_schema` in PostgreSQL 19. The OID 13357 is the TOAST value of the long body of `_pg_char_octet_length`.
+const FUNCTION_OIDS: [(&str, u32); 11] = [
+    ("_pg_expandarray", 13351),
+    ("_pg_index_position", 13352),
     ("_pg_truetypid", 13353),
     ("_pg_truetypmod", 13354),
     ("_pg_char_max_length", 13355),
@@ -341,6 +343,10 @@ fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
         let names: Vec<&'static str> = f.argnames.iter().map(|n| &*n.clone().leak()).collect();
         &*names.leak()
     });
+    let allargtypes: Option<&'static [u32]> =
+        (!f.allargtypes.is_empty()).then(|| &*f.allargtypes.clone().leak());
+    let argmodes: Option<&'static [u8]> =
+        (!f.argmodes.is_empty()).then(|| &*f.argmodes.clone().leak());
     builtin::add_system_proc(builtin::ProcRow {
         oid,
         name: f.name.clone().leak(),
@@ -349,14 +355,14 @@ fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
         variadic: 0,
         kind: b'f',
         strict: f.strict,
-        retset: false,
+        retset: f.retset,
         volatile: f.volatile,
         nargs: i16::try_from(f.argtypes.len()).unwrap_or(i16::MAX),
         nargdefaults: 0,
         rettype: f.rettype,
         argtypes: f.argtypes.clone().leak(),
-        allargtypes: None,
-        argmodes: None,
+        allargtypes,
+        argmodes,
         argnames,
         argdefaults: None,
         src: "",

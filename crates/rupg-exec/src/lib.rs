@@ -8,8 +8,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rupg_analyze::{
-    Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query, SetKind,
-    SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, Target,
+    Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query,
+    SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, Target,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -114,7 +114,9 @@ fn check(expr: &Expr) -> Result<()> {
             check_query(&sub.query, false)?;
         }
         ExprKind::Func(f) if f.retset => {
-            set_kernel(f.oid, expr.location)?;
+            if !builtin::is_system_proc(f.oid) {
+                set_kernel(f.oid, expr.location)?;
+            }
             f.args.iter().try_for_each(check)?;
         }
         ExprKind::Func(f) => {
@@ -240,7 +242,9 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
         for (call, width) in relation.function.iter().flat_map(|f| &f.calls) {
             match &call.kind {
                 ExprKind::Func(f) if table_function(f.oid, *width) => {
-                    set_kernel(f.oid, call.location)?;
+                    if !builtin::is_system_proc(f.oid) {
+                        set_kernel(f.oid, call.location)?;
+                    }
                     f.args.iter().try_for_each(check)?;
                 }
                 _ => check(call)?,
@@ -374,8 +378,8 @@ type Rows = Vec<Vec<Value>>;
 /// The name and the expression of each check constraint of a domain.
 type Checks = Rc<Vec<(String, Expr)>>;
 
-/// The body of each function in SQL, by the OID of the function, or `None` for a function of the catalog that is not in SQL.
-type Bodies = Rc<RefCell<Vec<(u32, Option<Rc<Expr>>)>>>;
+/// The body of each function in SQL, by the OID of the function and the types of the arguments of the call, or `None` for a function of the catalog that is not in SQL.
+type Bodies = Rc<RefCell<Vec<((u32, Vec<u32>), Option<Rc<Body>>)>>>;
 
 /// The state of a run that the query and its subqueries share.
 #[derive(Default)]
@@ -408,16 +412,22 @@ impl Cache {
         Ok(checks)
     }
 
-    /// The body of a function in SQL of the catalog of the session, which the analyzer reads once for each run, or `None` for another function.
-    fn body(&self, func: u32, session: &dyn Session) -> Result<Option<Rc<Expr>>> {
+    /// The body of a function in SQL of the catalog of the session for a call with arguments of the types `inputs`, which the analyzer reads once for each run, or `None` for another function.
+    fn body(&self, func: u32, inputs: &[u32], session: &dyn Session) -> Result<Option<Rc<Body>>> {
         if session.catalog().and_then(|c| c.function(func)).is_none() {
             return Ok(None);
         }
-        if let Some((_, body)) = self.bodies.borrow().iter().find(|(f, _)| *f == func) {
-            return Ok(body.clone());
+        let kept = self
+            .bodies
+            .borrow()
+            .iter()
+            .find(|((f, t), _)| *f == func && t == inputs)
+            .map(|(_, body)| body.clone());
+        if let Some(body) = kept {
+            return Ok(body);
         }
-        let body = rupg_func::function_body(func, session)?.map(Rc::new);
-        self.bodies.borrow_mut().push((func, body.clone()));
+        let body = rupg_func::function_body(func, inputs, session)?.map(Rc::new);
+        self.bodies.borrow_mut().push(((func, inputs.to_vec()), body.clone()));
         Ok(body)
     }
 
@@ -880,13 +890,20 @@ impl<'a> Eval<'a> {
         if !table_function(f.oid, width) {
             return Ok(vec![vec![self.eval(call)?]]);
         }
-        let kernel = set_kernel(f.oid, call.location)?;
         let args = f.args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
         if strict(f.oid) && args.iter().any(Value::is_null) {
             let retset = builtin::proc_by_oid(f.oid).is_some_and(|p| p.retset);
             return Ok(if retset { Vec::new() } else { vec![vec![Value::Null; width]] });
         }
         let types: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
+        if let Some(body) = self.cache.body(f.oid, &types, self.session)? {
+            let Body::Query(query) = &*body else {
+                return Err(Error::internal("a function that returns a set with no query"));
+            };
+            let cache = Cache { bodies: Rc::clone(&self.cache.bodies), ..Cache::default() };
+            return run_query(query, &args, self.session, &cache, &[], false);
+        }
+        let kernel = set_kernel(f.oid, call.location)?;
         let c = Call { session: self.session, args: &types, ret: call.ty, variadic: f.variadic };
         kernel(&c, &args)
     }
@@ -1182,11 +1199,24 @@ impl<'a> Eval<'a> {
         if strict(func) && args.iter().any(Value::is_null) {
             return Ok(Value::Null);
         }
-        if let Some(body) = self.cache.body(func, self.session)? {
+        if let Some(body) = self.cache.body(func, types, self.session)? {
             // The body runs with a cache of its own, so that a subquery of the body that reads an argument runs again for each call.
             let cache = Cache { bodies: Rc::clone(&self.cache.bodies), ..Cache::default() };
-            let tables = scan::Tables::default();
-            return Eval::new(args, self.session, &tables, &cache, &[]).eval(&body);
+            return match &*body {
+                Body::Value(expr) => {
+                    let tables = scan::Tables::default();
+                    Eval::new(args, self.session, &tables, &cache, &[]).eval(expr)
+                }
+                // `fmgr_sql` for a function that does not return a set: the first column of the first row, or null.
+                Body::Query(query) => {
+                    let rows = run_query(query, args, self.session, &cache, &[], false)?;
+                    Ok(rows
+                        .into_iter()
+                        .next()
+                        .and_then(|row| row.into_iter().next())
+                        .unwrap_or(Value::Null))
+                }
+            };
         }
         let kernel = kernel(func, None)?;
         let call = Call { session: self.session, args: types, ret, variadic };

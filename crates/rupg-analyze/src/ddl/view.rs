@@ -2,7 +2,7 @@
 //!
 //! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the query again each time a query uses the view. The rule of the view depends on the relations and the columns that the query reads, as `recordDependencyOnExpr` records them.
 
-use rupg_catalog::{Column, MAX_COLUMNS, NewRelation, ObjRef, PG_CLASS, PG_TYPE};
+use rupg_catalog::{Column, MAX_COLUMNS, NewRelation, ObjRef, PG_CLASS, PG_PROC, PG_TYPE};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{Node, ViewCheckOption, ViewStmt};
@@ -248,7 +248,20 @@ fn type_with_typmod(ty: u32, typmod: i32) -> String {
     }
 }
 
-/// `find_expr_references_walker` for the query of a view: each relation of the query, each column that the query reads, and the relation or the type of each `regclass` or `regtype` constant, also in the subqueries. `outer` holds the queries outside `query`, from the nearest. A view in the query is one relation, and the query of the view does not count.
+/// The objects that a query in the body of a function refers to, as for a view, each one once.
+pub(super) fn function_references(query: &Query) -> Vec<ObjRef> {
+    let mut found = Vec::new();
+    query_references(query, &[], &mut found);
+    let mut refs = Vec::new();
+    for object in found {
+        if !refs.contains(&object) {
+            refs.push(object);
+        }
+    }
+    refs
+}
+
+/// `find_expr_references_walker` for the query of a view: each relation of the query, each column that the query reads, each function that the query calls, and the relation or the type of each `regclass` or `regtype` constant, also in the subqueries. `outer` holds the queries outside `query`, from the nearest. A view in the query is one relation, and the query of the view does not count.
 fn query_references(query: &Query, outer: &[&Query], refs: &mut Vec<ObjRef>) {
     let mut levels = vec![query];
     levels.extend_from_slice(outer);
@@ -281,6 +294,7 @@ fn expr_references(expr: &Expr, levels: &[&Query], refs: &mut Vec<ObjRef>) {
         (ExprKind::Const(Value::Oid(found)), oid::REGTYPE) => {
             refs.push(ObjRef::new(PG_TYPE, *found));
         }
+        (ExprKind::Func(f), _) => refs.push(ObjRef::new(PG_PROC, f.oid)),
         (ExprKind::SubLink(sub), _) => query_references(&sub.query, levels, refs),
         _ => {}
     }

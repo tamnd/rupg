@@ -9,7 +9,7 @@ mod table;
 mod tests;
 mod view;
 
-pub use function::function_body;
+pub use function::{Body, function_body};
 pub(crate) use table::check_attribute_type;
 
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
