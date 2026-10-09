@@ -4,6 +4,18 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.10 (2026-10-09)
+
+A patch release on the way to M2. The types `inet` and `cidr` are in, and the views of the sessions, of TLS, of replication and of progress return the rows of PostgreSQL.
+
+### Added
+
+- The types `inet` and `cidr`, with their input and output, casts, comparisons, operators and functions such as `host`, `masklen`, `network`, `broadcast` and `set_masklen` (#205).
+- The rows `template0` and `postgres` of `pg_database`, next to `template1` (#206).
+- A table of the sessions of the server, which `pg_stat_activity`, `pg_stat_get_activity` and the `pg_stat_get_backend_*` functions read (#207). Each session reports its state, the text of its statement, the start of its transaction and its `application_name`, and a transaction reads one snapshot of the table, as in PostgreSQL.
+- `pg_stat_ssl` shows the TLS version, the cipher, the bits and the client certificate of each session, in the forms of OpenSSL (#208).
+- The views of replication, of subscriptions, of prepared transactions and of the progress of commands return no rows, as on a server with none of them (#209). `pg_stat_wal_receiver` gives its row of nulls, `pg_indexam_progress_phasename` gives the names of the phases of btree and GIN, and `pg_stat_get_progress_info` rejects a bad command name.
+
 ## 0.1.9 (2026-10-09)
 
 A patch release on the way to M2. The views `pg_settings`, `pg_views` and the statistics views of one object now return rows.
