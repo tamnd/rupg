@@ -1895,6 +1895,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/regex_functions.test")));
     }
 
+    /// `format_type` of `interval` with each range and precision that a typmod can have, the error for a bad range, `_pg_interval_type` of `information_schema`, and the interval types of a view in `pg_get_viewdef` and `pg_attribute`. `connection/interval_typmods.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn interval_typmods() {
+        big_stack(|| script(include_str!("connection/interval_typmods.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

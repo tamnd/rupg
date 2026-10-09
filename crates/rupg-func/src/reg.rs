@@ -13,7 +13,7 @@ use rupg_pgcatalog::builtin::{self, Named, NamedRow, OperatorRow, ProcRow};
 use rupg_types::{self as types, RegInput, RegKind, Value, oid, qualified_name_list};
 
 use crate::text::quote_identifier;
-use crate::{Call, Kernel, Session, bad_value, not_yet, type_error};
+use crate::{Call, Kernel, Session, bad_value, type_error};
 
 /// The OID of `pg_catalog`.
 const PG_CATALOG: u32 = 11;
@@ -293,7 +293,7 @@ fn base_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> Result<Stri
             Some(format!("numeric({},{scale})", (bits >> 16) & 0xffff))
         }
         (oid::NUMERIC, _) => Some("numeric".to_string()),
-        (oid::INTERVAL, Some(_)) => return Err(not_yet("format_type of interval with a typmod")),
+        (oid::INTERVAL, Some(m)) => Some(format!("interval{}", interval_typmod(m)?)),
         (oid::INTERVAL, None) => Some("interval".to_string()),
         (oid::TIME, m) => Some(format!("time{} without time zone", precision(m))),
         (oid::TIMETZ, m) => Some(format!("time{} with time zone", precision(m))),
@@ -324,6 +324,44 @@ fn base_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> Result<Stri
 /// The typmod text of `anytime_typmodout` and `bittypmodout`.
 fn precision(typmod: Option<i32>) -> String {
     typmod.map_or(String::new(), |m| format!("({m})"))
+}
+
+/// The typmod text of `intervaltypmodout`: the fields of the range, then the precision when the typmod has one.
+fn interval_typmod(typmod: i32) -> Result<String> {
+    const YEAR: i32 = 1 << 2;
+    const MONTH: i32 = 1 << 1;
+    const DAY: i32 = 1 << 3;
+    const HOUR: i32 = 1 << 10;
+    const MINUTE: i32 = 1 << 11;
+    const SECOND: i32 = 1 << 12;
+    let (precision, range) = types::typmod::interval_precision_range(typmod).unwrap_or_default();
+    let fields = match range {
+        YEAR => " year",
+        MONTH => " month",
+        DAY => " day",
+        HOUR => " hour",
+        MINUTE => " minute",
+        SECOND => " second",
+        r if r == YEAR | MONTH => " year to month",
+        r if r == DAY | HOUR => " day to hour",
+        r if r == DAY | HOUR | MINUTE => " day to minute",
+        r if r == DAY | HOUR | MINUTE | SECOND => " day to second",
+        r if r == HOUR | MINUTE => " hour to minute",
+        r if r == HOUR | MINUTE | SECOND => " hour to second",
+        r if r == MINUTE | SECOND => " minute to second",
+        types::typmod::INTERVAL_FULL_RANGE => "",
+        _ => {
+            return Err(Error::new(
+                SqlState::INTERNAL_ERROR,
+                format!("invalid INTERVAL typmod: 0x{typmod:x}"),
+            ));
+        }
+    };
+    Ok(if precision == types::typmod::INTERVAL_FULL_PRECISION {
+        fields.to_string()
+    } else {
+        format!("{fields}({precision})")
+    })
 }
 
 /// The typmod text of `bpchartypmodout` and `varchartypmodout`.
