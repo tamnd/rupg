@@ -739,7 +739,7 @@ pub(crate) static CATALOGS: [Catalog; 64] = [
             Column { name: "datacl", type_oid: 1034, len: -1, by_val: false, align: b'd', storage: b'x', ndims: 1, collation: 0, not_null: false },
         ],
         rows: &super::pg_database::COLUMNS,
-        len: 1,
+        len: 3,
     },
     Catalog {
         name: "pg_db_role_setting",
@@ -842,7 +842,7 @@ pub(crate) static CATALOGS: [Catalog; 64] = [
             Column { name: "description", type_oid: 25, len: -1, by_val: false, align: b'i', storage: b'x', ndims: 0, collation: 950, not_null: true },
         ],
         rows: &super::pg_shdescription::COLUMNS,
-        len: 1,
+        len: 3,
     },
     Catalog {
         name: "pg_ts_config",

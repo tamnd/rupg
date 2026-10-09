@@ -23,9 +23,6 @@ const UTF8: i32 = 6;
 const UTF8_NAME: &str = "UTF8";
 /// `FUNC_MAX_ARGS`.
 const FUNC_MAX_ARGS: usize = 100;
-/// The databases that `initdb` makes, with the OIDs that `pg_database.h` gives them. The `.dat` file has only `template1`.
-pub(crate) const DATABASES: [(&str, u32); 3] =
-    [("template1", 1), ("template0", 4), ("postgres", 5)];
 
 /// The result of the input: the outer error is a hard error, and the inner error is a soft error.
 type Soft<T> = Result<Result<T>>;
@@ -369,7 +366,9 @@ fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
         RegKind::Dictionary => named(Named::Dictionary),
         RegKind::Namespace => namespace_name(oid, session).map(quote_identifier),
         RegKind::Role => builtin::named_by_oid(Named::Role, oid).map(|r| quote_identifier(r.name)),
-        RegKind::Database => DATABASES.iter().find(|d| d.1 == oid).map(|d| quote_identifier(d.0)),
+        RegKind::Database => {
+            builtin::named_by_oid(Named::Database, oid).map(|r| quote_identifier(r.name))
+        }
         RegKind::Type => {
             type_name(oid, session)?;
             Some(type_text(oid, None, session).ok()?)
@@ -471,7 +470,7 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
         RegKind::Class => class_in(names, session, false),
         RegKind::Namespace => simple(&schemas, SqlState::UNDEFINED_SCHEMA, "schema"),
         RegKind::Role => simple(&rows(Named::Role), SqlState::UNDEFINED_OBJECT, "role"),
-        RegKind::Database => simple(&DATABASES, SqlState::UNDEFINED_OBJECT, "database"),
+        RegKind::Database => simple(&rows(Named::Database), SqlState::UNDEFINED_OBJECT, "database"),
         RegKind::Collation => in_schema(
             Named::Collation,
             SqlState::UNDEFINED_OBJECT,

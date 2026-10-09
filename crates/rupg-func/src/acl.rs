@@ -6,7 +6,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Owned};
 use rupg_types::{RegKind, Value, qualified_name_list};
 
-use crate::reg::{self, DATABASES};
+use crate::reg;
 use crate::{Call, Kernel, Session, bad_value, type_error};
 
 const ACL_INSERT: u32 = 1 << 0;
@@ -48,8 +48,6 @@ const FIRST_UNPINNED_OBJECT_ID: u32 = 12000;
 const PG_TOAST: u32 = 99;
 /// `F_ARRAY_SUBSCRIPT_HANDLER`, the subscript handler of a true array type.
 const ARRAY_SUBSCRIPT_HANDLER: u32 = 6179;
-/// The OID of `template1`, the only database that the static rows have.
-const TEMPLATE1: u32 = 1;
 
 /// A privilege name of a function and its bits, as the `priv_map` arrays of `acl.c` give them.
 type PrivMap = &'static [(&'static str, u32)];
@@ -430,18 +428,10 @@ fn column_check(relid: u32, attnum: i16, role: u32, mask: u32) -> Check {
     class_check(relid, role, mask)
 }
 
-/// The privileges of a database. The static rows have only `template1`. `make_template0` revokes `CREATE` and `TEMPORARY` from PUBLIC on `template0` as on `template1`, and the `postgres` database has the default privileges. `initdb` makes the bootstrap superuser the owner of each one.
+/// The privileges of a database.
 fn database_acl(oid: u32) -> Result<Option<Vec<(u32, u32)>>> {
-    let owner = BOOTSTRAP_SUPERUSER;
-    if let Some(row) = builtin::owned_by_oid(Owned::Database, oid) {
-        return acl_of(row.acl, AclKind::Database, row.owner).map(Some);
-    }
-    let Some(&(name, _)) = DATABASES.iter().find(|d| d.1 == oid) else { return Ok(None) };
-    let acl = match name {
-        "template0" => builtin::owned_by_oid(Owned::Database, TEMPLATE1).and_then(|r| r.acl),
-        _ => None,
-    };
-    acl_of(acl, AclKind::Database, owner).map(Some)
+    let Some(row) = builtin::owned_by_oid(Owned::Database, oid) else { return Ok(None) };
+    acl_of(row.acl, AclKind::Database, row.owner).map(Some)
 }
 
 /// The kind of `acldefault` of an object kind.
@@ -546,11 +536,7 @@ fn reg_name(kind: RegKind, text: &str, session: &dyn Session, what: &str) -> Res
 
 /// The OID of an object of a kind without a schema by its name, with the error of `get_*_oid`.
 fn simple_name(kind: Owned, name: &str) -> Result<u32> {
-    let found = if kind == Owned::Database {
-        DATABASES.iter().find(|d| d.0 == name).map(|d| d.1)
-    } else {
-        builtin::owned(kind).iter().find(|r| r.name == name).map(|r| r.oid)
-    };
+    let found = builtin::owned(kind).iter().find(|r| r.name == name).map(|r| r.oid);
     found.ok_or_else(|| {
         let (state, what) = match kind {
             Owned::Namespace => (SqlState::UNDEFINED_SCHEMA, "schema"),
