@@ -1,0 +1,178 @@
+> SELECT regexp_replace('foobarbaz', 'b..', 'X'), regexp_replace('foobarbaz', 'b..', 'X', 'g'), regexp_replace('foobarbaz', 'b(..)', 'X\1Y', 'g'), regexp_replace('fooBarBaz', 'b(..)', 'X\1Y', 'gi'), regexp_replace('abc', '(b)', '[\&|\1|\2|\\|\x|\]'), regexp_replace('abc', 'b', '\'), regexp_replace('abc', '', '-', 'g'), regexp_replace('abc', 'x*', '-', 'g'), regexp_replace('', 'x*', '-', 'g')
+fields regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1
+row fooXbaz,fooXX,fooXarYXazY,fooXarYXazY,a[b|b||\|\x|\]c,a\c,-a-b-c-,-a-b-c-,-
+SELECT 1
+> SELECT regexp_replace('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, 0, 'i'), regexp_replace('A PostgreSQL function', 'a|e|i|o|u', 'X', 1, 3, 'i'), regexp_replace('A PostgreSQL function', 'a|e|i|o|u', 'X', 9), regexp_replace('A PostgreSQL function', 'a|e|i|o|u', 'X', 9, 2), regexp_replace('abc', 'b', 'X', 10), regexp_replace('aaa', 'a*?', '-', 1, 0), regexp_replace('aaa', 'a', '-', 2, 0), regexp_replace('héllo wörld', '[éö]', '_', 'g')
+fields regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1,regexp_replace:25:-1:-1
+row X PXstgrXSQL fXnctXXn,A PostgrXSQL function,A PostgrXSQL function,A PostgreSQL fXnction,abc,-a-a-a-,a--,h_llo w_rld
+SELECT 1
+> SELECT regexp_replace('abc', 'b', 'X', '1')
+ERROR 22023 invalid regular expression option: "1"
+> SELECT regexp_replace('abc', 'b', 'X', 0)
+ERROR 22023 invalid value for parameter "start": 0
+> SELECT regexp_replace('abc', 'b', 'X', 1, -1)
+ERROR 22023 invalid value for parameter "n": -1
+> SELECT regexp_replace('abc', 'b', 'X', 1, 1, 'z')
+ERROR 22023 invalid regular expression option: "z"
+> SELECT regexp_count('ABCABCAXYaxy', 'A.'), regexp_count('ABCABCAXYaxy', 'A.', 1, 'i'), regexp_count('ABCABCAXYaxy', 'A.', 4), regexp_count('abc', 'x*'), regexp_count('abc', 'x*', 3), regexp_count('abc', 'x*', 4), regexp_count('abc', 'x*', 5), regexp_count('aaa', 'a*?'), regexp_count('aaa', '(a)\1'), regexp_count('', '')
+fields regexp_count:23:4:-1,regexp_count:23:4:-1,regexp_count:23:4:-1,regexp_count:23:4:-1,regexp_count:23:4:-1,regexp_count:23:4:-1,regexp_count:23:4:-1,regexp_count:23:4:-1,regexp_count:23:4:-1,regexp_count:23:4:-1
+row 3,4,2,4,2,1,0,4,1,1
+SELECT 1
+> SELECT regexp_count('abc', 'b', 0)
+ERROR 22023 invalid value for parameter "start": 0
+> SELECT regexp_count('abc', 'b', 1, 'g')
+ERROR 22023 regexp_count() does not support the "global" option
+> SELECT regexp_instr('number of your street, town zip, FR', '[^,]+', 1, 2), regexp_instr('ABCDEFGHI', '(c..)(...)', 1, 1, 0, 'i', 2), regexp_instr('ABCDEFGHI', '(c..)(...)', 1, 1, 1, 'i', 2), regexp_instr('abcabc', 'b', 3), regexp_instr('abcabc', 'b', 1, 3), regexp_instr('abc', 'b', 1, 1, 0, '', 1), regexp_instr('abc', 'b', 1, 1, 0, '', 2), regexp_instr('abc', '(x)?b', 1, 1, 0, '', 1), regexp_instr('abc', 'b', 1, 1, 1), regexp_instr('abc', 'x'), regexp_instr('aaa', 'a*?', 1, 2), regexp_instr('aaa', '(a*?)(a*)', 1, 1, 1, '', 2)
+fields regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1
+row 23,6,9,5,0,2,0,0,3,0,2,1
+SELECT 1
+> SELECT regexp_instr('abc', 'b', 1, 0)
+ERROR 22023 invalid value for parameter "n": 0
+> SELECT regexp_instr('abc', 'b', 1, 1, 2)
+ERROR 22023 invalid value for parameter "endoption": 2
+> SELECT regexp_instr('abc', 'b', 1, 1, 0, '', -1)
+ERROR 22023 invalid value for parameter "subexpr": -1
+> SELECT regexp_instr('abc', 'b', 1, 1, 0, 'g')
+ERROR 22023 regexp_instr() does not support the "global" option
+> SELECT regexp_substr('number of your street, town zip, FR', '[^,]+', 1, 2), regexp_substr('ABCDEFGHI', '(c..)(...)', 1, 1, 'i', 2), regexp_substr('abcabc', 'b.', 3), regexp_substr('abc', 'x'), regexp_substr('abc', '(x)?b', 1, 1, '', 1), regexp_substr('abc', 'b', 1, 1, '', 1), regexp_substr('abc', 'b', 1, 1, '', 2), regexp_substr('aaa', 'a*?', 1, 3), regexp_substr('aaa', '(a+?)(a*)', 1, 1, '', 2)
+fields regexp_substr:25:-1:-1,regexp_substr:25:-1:-1,regexp_substr:25:-1:-1,regexp_substr:25:-1:-1,regexp_substr:25:-1:-1,regexp_substr:25:-1:-1,regexp_substr:25:-1:-1,regexp_substr:25:-1:-1,regexp_substr:25:-1:-1
+row  town zip,FGH,bc,NULL,NULL,b,NULL,,
+SELECT 1
+> SELECT regexp_substr('abc', 'b', 1, 1, 'g')
+ERROR 22023 regexp_substr() does not support the "global" option
+> SELECT regexp_substr('abc', 'b', -1)
+ERROR 22023 invalid value for parameter "start": -1
+> SELECT * FROM regexp_matches('foobarbequebaz', '(bar)(beque)')
+fields regexp_matches:1009:-1:-1
+row {bar,beque}
+SELECT 1
+> SELECT * FROM regexp_matches('foobarbequebazilbarfbonk', '(b[^b]+)(b[^b]+)', 'g')
+fields regexp_matches:1009:-1:-1
+row {bar,beque}
+row {bazil,barf}
+SELECT 2
+> SELECT * FROM regexp_matches('abc', 'x')
+fields regexp_matches:1009:-1:-1
+SELECT 0
+> SELECT * FROM regexp_matches('abc', '', 'g')
+fields regexp_matches:1009:-1:-1
+row {""}
+row {""}
+row {""}
+row {""}
+SELECT 4
+> SELECT * FROM regexp_matches('abc', 'b|(x)', 'g')
+fields regexp_matches:1009:-1:-1
+row {NULL}
+SELECT 1
+> SELECT * FROM regexp_matches('aaa', 'a*?', 'g')
+fields regexp_matches:1009:-1:-1
+row {""}
+row {""}
+row {""}
+row {""}
+SELECT 4
+> SELECT m, n FROM regexp_matches('a1b2c3', '[a-z](\d)', 'g') WITH ORDINALITY AS t(m, n)
+fields m:1009:-1:-1,n:20:8:-1
+row {1},1
+row {2},2
+row {3},3
+SELECT 3
+> SELECT * FROM regexp_matches('abc', 'b', 'z')
+fields regexp_matches:1009:-1:-1
+ERROR 22023 invalid regular expression option: "z"
+> SELECT * FROM regexp_split_to_table('the quick brown fox', '\s+')
+fields regexp_split_to_table:25:-1:-1
+row the
+row quick
+row brown
+row fox
+SELECT 4
+> SELECT * FROM regexp_split_to_table('the quick brown fox', '\s*')
+fields regexp_split_to_table:25:-1:-1
+row t
+row h
+row e
+row q
+row u
+row i
+row c
+row k
+row b
+row r
+row o
+row w
+row n
+row f
+row o
+row x
+SELECT 16
+> SELECT * FROM regexp_split_to_table('abc', '')
+fields regexp_split_to_table:25:-1:-1
+row a
+row b
+row c
+SELECT 3
+> SELECT * FROM regexp_split_to_table('', 'x')
+fields regexp_split_to_table:25:-1:-1
+row 
+SELECT 1
+> SELECT * FROM regexp_split_to_table('xaxbx', 'x')
+fields regexp_split_to_table:25:-1:-1
+row 
+row a
+row b
+row 
+SELECT 4
+> SELECT * FROM regexp_split_to_table('aXbxc', 'x', 'i')
+fields regexp_split_to_table:25:-1:-1
+row a
+row b
+row c
+SELECT 3
+> SELECT * FROM regexp_split_to_table('abc', 'b', 'g')
+fields regexp_split_to_table:25:-1:-1
+ERROR 22023 regexp_split_to_table() does not support the "global" option
+> SELECT regexp_split_to_array('the quick brown fox', '\s+'), regexp_split_to_array('abc', ''), regexp_split_to_array('', 'x'), regexp_split_to_array('a,b,,c', ','), regexp_split_to_array('abc', '(b)'), regexp_split_to_array('ab', 'x*')
+fields regexp_split_to_array:1009:-1:-1,regexp_split_to_array:1009:-1:-1,regexp_split_to_array:1009:-1:-1,regexp_split_to_array:1009:-1:-1,regexp_split_to_array:1009:-1:-1,regexp_split_to_array:1009:-1:-1
+row {the,quick,brown,fox},{a,b,c},{""},{a,b,"",c},{a,c},{a,b}
+SELECT 1
+> SELECT regexp_split_to_array('abc', 'b', 'g')
+ERROR 22023 regexp_split_to_array() does not support the "global" option
+> SELECT regexp_count('abab', '(?<=a)b', 2), regexp_instr('xab', '^a', 2), regexp_instr('xab', 'a', 2), regexp_replace('abcdefghijk', '(a)(b)(c)(d)(e)(f)(g)(h)(i)(j)', '\10'), regexp_instr('héllo wörld', 'ö'), regexp_substr('héllo wörld', 'w.r'), regexp_count('aAaA', 'a', 1, 'i'), regexp_replace('a.b.c', '.', '-', 'gq'), regexp_count('abcabc', '\yabc', 2), regexp_count(repeat('ab', 50), 'b')
+fields regexp_count:23:4:-1,regexp_instr:23:4:-1,regexp_instr:23:4:-1,regexp_replace:25:-1:-1,regexp_instr:23:4:-1,regexp_substr:25:-1:-1,regexp_count:23:4:-1,regexp_replace:25:-1:-1,regexp_count:23:4:-1,regexp_count:23:4:-1
+row 2,0,2,a0k,8,wör,4,a-b-c,0,50
+SELECT 1
+> SELECT * FROM regexp_matches('xaxbx', '(?:^|x)(.)', 'g')
+fields regexp_matches:1009:-1:-1
+row {a}
+row {b}
+SELECT 2
+> SELECT * FROM regexp_split_to_table('héllo wörld', 'ö|\s')
+fields regexp_split_to_table:25:-1:-1
+row héllo
+row w
+row rld
+SELECT 3
+> CREATE VIEW rxw AS SELECT regexp_replace(s, 'b', 'X', 'g') AS a, regexp_count(s, 'b') AS b, regexp_instr(s, 'c', 1, 1, 1) AS c, regexp_substr(s, '.c') AS d, regexp_split_to_array(s, '') AS e, regexp_replace(s, 'b', 'Y', 1, 0) AS f FROM (VALUES ('abcbc')) AS t(s)
+CREATE VIEW
+> SELECT pg_get_viewdef('rxw'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT regexp_replace(s, 'b'::text, 'X'::text, 'g'::text) AS a,
+    regexp_count(s, 'b'::text) AS b,
+    regexp_instr(s, 'c'::text, 1, 1, 1) AS c,
+    regexp_substr(s, '.c'::text) AS d,
+    regexp_split_to_array(s, ''::text) AS e,
+    regexp_replace(s, 'b'::text, 'Y'::text, 1, 0) AS f
+   FROM ( VALUES ('abcbc'::text)) t(s);
+SELECT 1
+> SELECT * FROM rxw
+fields a@rxw.1:25:-1:-1,b@rxw.2:23:4:-1,c@rxw.3:23:4:-1,d@rxw.4:25:-1:-1,e@rxw.5:1009:-1:-1,f@rxw.6:25:-1:-1
+row aXcXc,2,4,bc,{a,b,c,b,c},aYcYc
+SELECT 1
+> SELECT r.n, m FROM (VALUES (1, 'a1b22'), (2, 'c333')) AS r(n, s), LATERAL regexp_matches(r.s, '\d+', 'g') AS m ORDER BY 1, 2
+fields n:23:4:-1,m:1009:-1:-1
+row 1,{1}
+row 1,{22}
+row 2,{333}
+SELECT 3
