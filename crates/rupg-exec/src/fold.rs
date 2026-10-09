@@ -9,7 +9,7 @@ use rupg_func::Session;
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
 
-use super::{agg, evaluate, relabel, volatile};
+use super::{agg, evaluate, null_test, relabel, volatile};
 
 /// `subquery_planner`: folds the expressions of a query in the order of `preprocess_expression`, which is the target list, the conditions of the joins and `WHERE`, `HAVING`, `OFFSET` and `LIMIT`. The subqueries of each clause come after the clause, as `SS_process_sublinks` plans them. `params` has the values of the parameters of `Bind`, which a custom plan takes as constants.
 pub(crate) fn query(
@@ -114,10 +114,18 @@ fn used(query: &Query) -> Vec<Vec<bool>> {
         expr.find(depth, &mut |e, depth| {
             if let ExprKind::Var(var) = e.kind
                 && var.levels_up == depth
-                && let Ok(column) = usize::try_from(var.attnum - 1)
-                && let Some(slot) = used.get_mut(var.relation).and_then(|u| u.get_mut(column))
+                && let Some(used) = used.get_mut(var.relation)
             {
-                *slot = true;
+                // A whole-row reference reads all the columns.
+                match usize::try_from(var.attnum - 1) {
+                    Ok(column) => {
+                        if let Some(slot) = used.get_mut(column) {
+                            *slot = true;
+                        }
+                    }
+                    Err(_) if var.attnum == 0 => used.fill(true),
+                    Err(_) => {}
+                }
             }
             None::<()>
         });
@@ -314,7 +322,8 @@ impl<'a> Fold<'a> {
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
-            | ExprKind::BooleanTest(arg, _) => self.subqueries(arg),
+            | ExprKind::BooleanTest(arg, _)
+            | ExprKind::FieldSelect(arg, _) => self.subqueries(arg),
             ExprKind::ArrayCoerce { arg, element, .. } => {
                 self.subqueries(arg)?;
                 self.subqueries(element)
@@ -412,6 +421,17 @@ impl<'a> Fold<'a> {
                 })
             }
             ExprKind::DomainValue => Ok(expr.clone()),
+            ExprKind::FieldSelect(arg, field) => {
+                let arg = self.expr(arg)?;
+                Ok(match value(&arg) {
+                    Some(Value::Record(record)) => {
+                        let v = record.values.get(*field).cloned().unwrap_or(Value::Null);
+                        with(expr, ExprKind::Const(v))
+                    }
+                    Some(Value::Null) => with(expr, ExprKind::Const(Value::Null)),
+                    _ => with(expr, ExprKind::FieldSelect(Box::new(arg), *field)),
+                })
+            }
             ExprKind::ArrayCoerce { arg, element, form } => {
                 let arg = self.expr(arg)?;
                 // The CaseTest of the element is not the value of a CASE outside.
@@ -453,9 +473,10 @@ impl<'a> Fold<'a> {
             ExprKind::NullTest(arg, is_null) => {
                 let arg = self.expr(arg)?;
                 if let Some(v) = value(&arg) {
-                    return Ok(with(expr, ExprKind::Const(Value::Bool(v.is_null() == *is_null))));
+                    return Ok(with(expr, ExprKind::Const(Value::Bool(null_test(v, *is_null)))));
                 }
-                if self.nonnullable(&arg) {
+                // A row with a null field is not null and not `IS NOT NULL`.
+                if self.nonnullable(&arg) && !rupg_func::is_row_type(arg.ty) {
                     return Ok(with(expr, ExprKind::Const(Value::Bool(!is_null))));
                 }
                 Ok(with(expr, ExprKind::NullTest(Box::new(arg), *is_null)))

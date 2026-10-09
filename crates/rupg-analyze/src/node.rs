@@ -3,7 +3,7 @@
 //! PostgreSQL stores these as `pg_node_tree` text that `nodeToString` writes. rupg stores its own text, which document 05 section 5.2 permits, because clients do not read it. The form looks like the form of PostgreSQL: `{NAME :field value ...}`. A constant keeps its value in a form that does not change with the settings of the session, so the expression reads back to the same tree.
 
 use rupg_common::{Error, Result};
-use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Recv, Value};
+use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Record, Recv, Value};
 
 use crate::expr::{
     BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, Subscript, Var,
@@ -93,6 +93,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Array { .. } => "ARRAY",
         ExprKind::SqlValue(_) => "SQLVALUE",
         ExprKind::Var(_) => "VAR",
+        ExprKind::FieldSelect(..) => "FIELDSELECT",
         ExprKind::Param(_) | ExprKind::Agg(_) | ExprKind::SubLink(_) | ExprKind::SubColumn(_) => {
             return Err(Error::internal("a stored expression cannot have this node"));
         }
@@ -218,6 +219,10 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
                 " :relation {} :attnum {} :levelsup {}",
                 var.relation, var.attnum, var.levels_up
             ));
+        }
+        ExprKind::FieldSelect(arg, field) => {
+            out.push_str(&format!(" :field {field}"));
+            write_field("arg", arg, out)?;
         }
         ExprKind::Param(_) | ExprKind::Agg(_) | ExprKind::SubLink(_) | ExprKind::SubColumn(_) => {}
     }
@@ -393,6 +398,23 @@ fn write_value(value: &Value, out: &mut String) {
                     Some(element) => write_value(element, out),
                     None => out.push_str("null"),
                 }
+            }
+            out.push_str("))");
+        }
+        Value::Record(record) => {
+            out.push_str("(record (");
+            for (i, ty) in record.types.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                out.push_str(&ty.to_string());
+            }
+            out.push_str(") (");
+            for (i, field) in record.values.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                write_value(field, out);
             }
             out.push_str("))");
         }
@@ -676,6 +698,7 @@ fn expr_of(item: &Item) -> Result<Expr> {
             attnum: f.number("attnum")?,
             levels_up: f.number("levelsup")?,
         }),
+        "FIELDSELECT" => ExprKind::FieldSelect(f.expr("arg")?, f.number("field")?),
         _ => return Err(bad(&format!("the node {name}"))),
     };
     Ok(Expr { kind, ty, typmod, location })
@@ -777,6 +800,12 @@ fn value_of(item: &Item) -> Result<Value> {
                 });
             }
             Value::Array(Box::new(array))
+        }
+        "record" => {
+            let [types, values] = parts else { return Err(bad("a record value")) };
+            let types = list(types)?.iter().map(|t| number(atom(t)?)).collect::<Result<_>>()?;
+            let values = list(values)?.iter().map(value_of).collect::<Result<_>>()?;
+            Value::Record(Box::new(Record { types, values }))
         }
         kind => return Err(bad(&format!("the value kind {kind}"))),
     };

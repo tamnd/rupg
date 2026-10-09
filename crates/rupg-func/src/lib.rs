@@ -39,7 +39,10 @@ pub use activity::{Backend, BackendState, Client, Ssl};
 pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use deparse::deparse_expression;
-pub use io::{base_type, input, input_supported, output, output_supported, receive, send, to_text};
+pub use io::{
+    base_type, input, input_supported, is_row_type, output, output_supported, receive, send,
+    to_text,
+};
 pub use srf::{SetKernel, set_kernel};
 
 /// `format_type_be`: the name of a type for a message, with its schema when the search path does not find it.

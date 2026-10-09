@@ -61,8 +61,10 @@ pub enum ExprKind {
     Array { element: u32, multidims: bool, elements: Vec<Expr> },
     /// `SQLValueFunction`, such as `CURRENT_USER` and `CURRENT_TIMESTAMP(3)`.
     SqlValue(SqlValue),
-    /// `Var`: a column of a relation of `FROM`.
+    /// `Var`: a column of a relation of `FROM`, or with the attribute number 0 the whole row of the relation, as a value of its row type.
     Var(Var),
+    /// `FieldSelect`: the field with this index, from 0, of a row value.
+    FieldSelect(Box<Expr>, usize),
     /// `Aggref`: a call of an aggregate function, which reads all the rows of a group.
     Agg(Box<Aggref>),
     /// `SubLink`: a subquery in an expression.
@@ -271,7 +273,8 @@ impl Expr {
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
-            | ExprKind::BooleanTest(arg, _) => vec![&**arg],
+            | ExprKind::BooleanTest(arg, _)
+            | ExprKind::FieldSelect(arg, _) => vec![&**arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&**arg, &**element],
             ExprKind::Subscript(sub) => sub.bounds().chain([&sub.container]).collect(),
             ExprKind::Bool(_, args)
@@ -312,7 +315,8 @@ impl Expr {
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::NullTest(arg, _)
-            | ExprKind::BooleanTest(arg, _) => vec![&mut **arg],
+            | ExprKind::BooleanTest(arg, _)
+            | ExprKind::FieldSelect(arg, _) => vec![&mut **arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&mut **arg, &mut **element],
             ExprKind::Subscript(sub) => {
                 let Subscript { container, upper, lower } = &mut **sub;
@@ -440,7 +444,8 @@ impl Expr {
             | ExprKind::CoerceToDomain(arg, _)
             | ExprKind::ArrayCoerce { arg, .. }
             | ExprKind::NullTest(arg, _)
-            | ExprKind::BooleanTest(arg, _) => Some(&**arg),
+            | ExprKind::BooleanTest(arg, _)
+            | ExprKind::FieldSelect(arg, _) => Some(&**arg),
             ExprKind::Subscript(sub) => Some(&sub.container),
             ExprKind::SubLink(sub) => sub.test.as_ref(),
             _ => None,

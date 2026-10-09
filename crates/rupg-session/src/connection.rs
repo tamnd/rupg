@@ -1763,6 +1763,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sql_functions.test")));
     }
 
+    /// Whole-row references and fields of a row: the text form of a row with the quotes of its fields, `IS NULL` and `IS NOT NULL` on a row, `(t).a` and `(x).typname`, a row of the null side of an outer join, the errors of a bad field, and `pg_get_viewdef` of a view with `t.*` and `(x).typname`. Also the functions `_pg_truetypid` and `_pg_truetypmod` of `information_schema`, which take the rows of `pg_attribute` and `pg_type`. `connection/rows.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn rows() {
+        big_stack(|| script(include_str!("connection/rows.test")));
+    }
+
     /// The views of the parts of the server that rupg does not have, which have no rows: asynchronous I/O, the registry of dynamic shared memory, the replication origins, recovery, the publications and the cursors. Also the error of `pg_shmem_allocations_numa` with no NUMA support, and the errors of the functions of the publications for a name that is not a publication. `connection/absent.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn absent() {

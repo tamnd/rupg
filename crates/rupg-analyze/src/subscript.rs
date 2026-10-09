@@ -13,9 +13,10 @@ use crate::types;
 const ARRAY_SUBSCRIPT_HANDLER: u32 = 6179;
 
 impl Analyzer<'_> {
-    /// `transformIndirection`: the subscripts after an expression. A field selection and `.*` are not supported yet.
+    /// `transformIndirection`: the subscripts and the field selections after an expression. The subscripts before a field apply first. `.*` is not supported here.
     pub(crate) fn transform_indirection(&mut self, ind: &A_Indirection) -> Result<Expr> {
         let mut result = self.transform(ind.arg.as_ref())?;
+        let location = result.place();
         let mut subscripts: Vec<&A_Indices> = Vec::new();
         for item in &ind.indirection {
             match item {
@@ -25,21 +26,65 @@ impl Analyzer<'_> {
                         SqlState::FEATURE_NOT_SUPPORTED,
                         "row expansion via \"*\" is not supported here",
                     )
-                    .at_opt(result.place()));
+                    .at_opt(location));
                 }
-                _ => {
-                    return Err(Error::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        "a field selection is not supported yet",
-                    )
-                    .at_opt(result.place()));
+                Some(Node::String(field)) => {
+                    if !subscripts.is_empty() {
+                        result = self.container_subscripts(result, &subscripts)?;
+                        subscripts.clear();
+                    }
+                    result = self.field_select(result, field, location)?;
                 }
+                _ => return Err(Error::internal("unrecognized indirection")),
             }
         }
         if !subscripts.is_empty() {
             result = self.container_subscripts(result, &subscripts)?;
         }
         Ok(result)
+    }
+
+    /// `ParseComplexProjection` and `unknown_attribute`: the field of a row value with the name. A field of the whole row of a relation is the column of the relation. A name that is no field can be a function in the functional notation, which rupg does not have yet.
+    fn field_select(&mut self, arg: Expr, name: &str, at: Option<usize>) -> Result<Expr> {
+        if let ExprKind::Var(var) = arg.kind
+            && var.attnum == 0
+        {
+            return self.whole_row_field(var, name, at);
+        }
+        let ty = arg.ty;
+        let columns = if ty == oid::RECORD { None } else { self.row_columns(ty) };
+        if let Some(columns) = &columns
+            && let Some(i) = columns.iter().position(|c| c.name == name)
+        {
+            let mut expr = Expr::new(ExprKind::FieldSelect(Box::new(arg), i), columns[i].ty);
+            expr.typmod = columns[i].typmod;
+            return Ok(expr);
+        }
+        if rupg_pgcatalog::builtin::procs_named(name).any(|p| p.nargs == 1) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("the call of the function {name} as a field is not supported yet"),
+            )
+            .at_opt(at));
+        }
+        let (state, message) = match (columns, ty) {
+            (Some(_), _) => (
+                SqlState::UNDEFINED_COLUMN,
+                format!("column \"{name}\" not found in data type {}", types::name(ty)),
+            ),
+            (None, oid::RECORD) => (
+                SqlState::UNDEFINED_COLUMN,
+                format!("could not identify column \"{name}\" in record data type"),
+            ),
+            (None, _) => (
+                SqlState::WRONG_OBJECT_TYPE,
+                format!(
+                    "column notation .{name} applied to type {}, which is not a composite type",
+                    types::name(ty)
+                ),
+            ),
+        };
+        Err(Error::new(state, message).at_opt(at))
     }
 
     /// `transformContainerSubscripts` for a fetch. A domain over an array subscripts its base type, and `int2vector` and `oidvector` are `int2[]` and `oid[]`. The result is the element, or an array for a slice, with the typmod of the container.

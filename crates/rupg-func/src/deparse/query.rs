@@ -257,6 +257,10 @@ impl Deparser<'_> {
                     self.expr(&target.expr, true)?;
                     merged
                 }
+                ExprKind::Var(var) if var.attnum == 0 => {
+                    self.whole_row(var, &target.expr, true)?;
+                    if self.names_visible { None } else { Some("?column?".to_string()) }
+                }
                 ExprKind::Var(var) => Some(self.variable(var, false)?),
                 _ => {
                     self.expr(&target.expr, true)?;
@@ -594,7 +598,7 @@ impl Deparser<'_> {
         }
         match &e.kind {
             ExprKind::Const(value) => self.constant(e, value, 1),
-            ExprKind::Var(var) => self.variable(var, true).map(|_| ()),
+            ExprKind::Var(var) if var.attnum != 0 => self.variable(var, true).map(|_| ()),
             _ => {
                 let paren = self.paren
                     || matches!(&e.kind, ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)))

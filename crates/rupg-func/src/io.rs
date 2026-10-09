@@ -2,7 +2,9 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_types::{self as types, Array, DateTimeInput, Recv, RegKind, Value, ZoneAbbrevs, oid, tz};
+use rupg_types::{
+    self as types, Array, DateTimeInput, Record, Recv, RegKind, Value, ZoneAbbrevs, oid, tz,
+};
 
 use crate::{Session, bad_value, not_yet, reg, type_error};
 
@@ -82,6 +84,12 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::PG_LSN
             | oid::VOID
     ) || RegKind::from_oid(ty).is_some()
+        || is_row_type(ty)
+}
+
+/// True for `record` and for the row type of a system catalog, which `record_out` and `record_send` show. The output of each field needs the output of its type, which the engine checks when it shows the row.
+pub fn is_row_type(ty: u32) -> bool {
+    ty == oid::RECORD || builtin::type_by_oid(ty).is_some_and(|row| row.kind == b'c')
 }
 
 /// True when the engine has the text input function of the type.
@@ -92,6 +100,7 @@ pub fn input_supported(ty: u32) -> bool {
     }
     output_supported(ty)
         && !matches!(ty, XID | CID | oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN | oid::VOID)
+        && !is_row_type(ty)
 }
 
 /// The name of a type for an error.
@@ -136,6 +145,9 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         reg::output(kind, *v, session, out);
         return Ok(());
     }
+    if let Value::Record(record) = value {
+        return record_out(record, session, out);
+    }
     match (ty, value) {
         (_, Value::Bool(v)) => types::bool_out(*v, out),
         (_, Value::Int2(v)) => types::int_out(i64::from(*v), out),
@@ -174,6 +186,63 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         }
         (_, Value::Null) => return Err(Error::internal("the output function got a null value")),
         _ => return Err(not_yet(format!("output of type {}", type_name(ty)))),
+    }
+    Ok(())
+}
+
+/// `record_out`: the fields in parentheses with a comma between them. A null field is empty. A field that is empty or has a quote, a backslash, a parenthesis, a comma or white space is in double quotes, with each quote and each backslash doubled.
+fn record_out(record: &Record, session: &dyn Session, out: &mut Vec<u8>) -> Result<()> {
+    out.push(b'(');
+    let mut field = Vec::new();
+    for (i, (ty, value)) in record.types.iter().zip(&record.values).enumerate() {
+        if i > 0 {
+            out.push(b',');
+        }
+        if value.is_null() {
+            continue;
+        }
+        field.clear();
+        output(*ty, value, session, &mut field)?;
+        let quote = field.is_empty()
+            || field.iter().any(|b| matches!(b, b'"' | b'\\' | b'(' | b')' | b',') || is_space(*b));
+        if !quote {
+            out.extend_from_slice(&field);
+            continue;
+        }
+        out.push(b'"');
+        for &b in &field {
+            if matches!(b, b'"' | b'\\') {
+                out.push(b);
+            }
+            out.push(b);
+        }
+        out.push(b'"');
+    }
+    out.push(b')');
+    Ok(())
+}
+
+/// `isspace` of C in the C locale.
+fn is_space(b: u8) -> bool {
+    matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C)
+}
+
+/// `record_send`: the number of fields, then for each field the OID of its type and the length and the bytes of its value, with the length -1 for a null.
+fn record_send(record: &Record, out: &mut Vec<u8>) -> Result<()> {
+    let count = i32::try_from(record.values.len()).map_err(|_| bad_value())?;
+    out.extend_from_slice(&count.to_be_bytes());
+    let mut field = Vec::new();
+    for (ty, value) in record.types.iter().zip(&record.values) {
+        out.extend_from_slice(&ty.to_be_bytes());
+        if value.is_null() {
+            out.extend_from_slice(&(-1i32).to_be_bytes());
+            continue;
+        }
+        field.clear();
+        send(*ty, value, &mut field)?;
+        let len = i32::try_from(field.len()).map_err(|_| bad_value())?;
+        out.extend_from_slice(&len.to_be_bytes());
+        out.extend_from_slice(&field);
     }
     Ok(())
 }
@@ -450,6 +519,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
             let values = vector(array, Value::as_oid)?;
             types::oidvector_send(&values, out);
         }
+        (_, Value::Record(record)) => record_send(record, out)?,
         (_, Value::Null) => return Err(Error::internal("the send function got a null value")),
         _ => return Err(not_yet(format!("binary output of type {}", type_name(ty)))),
     }
