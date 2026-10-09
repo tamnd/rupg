@@ -1,0 +1,138 @@
+> SELECT count(*), md5(string_agg(pg_get_function_arguments(oid) || '|' || pg_get_function_identity_arguments(oid) || '|' || coalesce(pg_get_function_result(oid), '-'), E'\n' ORDER BY oid)) FROM pg_proc WHERE oid < 12000
+fields count:20:8:-1,md5:25:-1:-1
+row 3414,7fe0ec9242aba1db0b2d773849581cad
+SELECT 1
+> SELECT p.oid::regprocedure::text AS f, pg_get_function_arguments(p.oid), pg_get_function_result(p.oid) FROM pg_proc p WHERE pronargdefaults > 0 ORDER BY 1
+fields f:25:-1:-1,pg_get_function_arguments:25:-1:-1,pg_get_function_result:25:-1:-1
+row "normalize"(text,text),text, text DEFAULT 'NFC'::text,text
+row is_normalized(text,text),text, text DEFAULT 'NFC'::text,boolean
+row json_populate_record(anyelement,json,boolean),base anyelement, from_json json, use_json_as_text boolean DEFAULT false,anyelement
+row json_populate_recordset(anyelement,json,boolean),base anyelement, from_json json, use_json_as_text boolean DEFAULT false,SETOF anyelement
+row json_strip_nulls(json,boolean),target json, strip_in_arrays boolean DEFAULT false,json
+row jsonb_insert(jsonb,text[],jsonb,boolean),jsonb_in jsonb, path text[], replacement jsonb, insert_after boolean DEFAULT false,jsonb
+row jsonb_path_exists(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,boolean
+row jsonb_path_exists_tz(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,boolean
+row jsonb_path_match(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,boolean
+row jsonb_path_match_tz(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,boolean
+row jsonb_path_query(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,SETOF jsonb
+row jsonb_path_query_array(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,jsonb
+row jsonb_path_query_array_tz(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,jsonb
+row jsonb_path_query_first(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,jsonb
+row jsonb_path_query_first_tz(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,jsonb
+row jsonb_path_query_tz(jsonb,jsonpath,jsonb,boolean),target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false,SETOF jsonb
+row jsonb_set(jsonb,text[],jsonb,boolean),jsonb_in jsonb, path text[], replacement jsonb, create_if_missing boolean DEFAULT true,jsonb
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),jsonb_in jsonb, path text[], replacement jsonb, create_if_missing boolean DEFAULT true, null_value_treatment text DEFAULT 'use_json_null'::text,jsonb
+row jsonb_strip_nulls(jsonb,boolean),target jsonb, strip_in_arrays boolean DEFAULT false,jsonb
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),years integer DEFAULT 0, months integer DEFAULT 0, weeks integer DEFAULT 0, days integer DEFAULT 0, hours integer DEFAULT 0, mins integer DEFAULT 0, secs double precision DEFAULT '0'::double precision,interval
+row parse_ident(text,boolean),str text, strict boolean DEFAULT true,text[]
+row pg_backup_start(text,boolean),label text, fast boolean DEFAULT false,pg_lsn
+row pg_backup_stop(boolean),wait_for_archive boolean DEFAULT true, OUT lsn pg_lsn, OUT labelfile text, OUT spcmapfile text,record
+row pg_create_logical_replication_slot(name,name,boolean,boolean,boolean),slot_name name, plugin name, temporary boolean DEFAULT false, twophase boolean DEFAULT false, failover boolean DEFAULT false, OUT slot_name name, OUT lsn pg_lsn,record
+row pg_create_physical_replication_slot(name,boolean,boolean),slot_name name, immediately_reserve boolean DEFAULT false, temporary boolean DEFAULT false, OUT slot_name name, OUT lsn pg_lsn,record
+row pg_logical_emit_message(boolean,text,bytea,boolean),transactional boolean, prefix text, message bytea, flush boolean DEFAULT false,pg_lsn
+row pg_logical_emit_message(boolean,text,text,boolean),transactional boolean, prefix text, message text, flush boolean DEFAULT false,pg_lsn
+row pg_logical_slot_get_binary_changes(name,pg_lsn,integer,text[]),slot_name name, upto_lsn pg_lsn, upto_nchanges integer, VARIADIC options text[] DEFAULT '{}'::text[], OUT lsn pg_lsn, OUT xid xid, OUT data bytea,SETOF record
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),slot_name name, upto_lsn pg_lsn, upto_nchanges integer, VARIADIC options text[] DEFAULT '{}'::text[], OUT lsn pg_lsn, OUT xid xid, OUT data text,SETOF record
+row pg_logical_slot_peek_binary_changes(name,pg_lsn,integer,text[]),slot_name name, upto_lsn pg_lsn, upto_nchanges integer, VARIADIC options text[] DEFAULT '{}'::text[], OUT lsn pg_lsn, OUT xid xid, OUT data bytea,SETOF record
+row pg_logical_slot_peek_changes(name,pg_lsn,integer,text[]),slot_name name, upto_lsn pg_lsn, upto_nchanges integer, VARIADIC options text[] DEFAULT '{}'::text[], OUT lsn pg_lsn, OUT xid xid, OUT data text,SETOF record
+row pg_promote(boolean,integer),wait boolean DEFAULT true, wait_seconds integer DEFAULT 60,boolean
+row pg_replication_origin_session_setup(text,integer),node_name text, pid integer DEFAULT 0,void
+row pg_stat_reset_shared(text),target text DEFAULT NULL::text,void
+row pg_stat_reset_slru(text),target text DEFAULT NULL::text,void
+row pg_terminate_backend(integer,bigint),pid integer, timeout bigint DEFAULT '0'::bigint,boolean
+row random_normal(double precision,double precision),mean double precision DEFAULT '0'::double precision, stddev double precision DEFAULT '1'::double precision,double precision
+SELECT 37
+> SELECT p.oid::regprocedure::text AS f, n, pg_get_function_arg_default(p.oid, n) FROM pg_proc p, generate_series(0, 8) n WHERE proname IN ('make_interval', 'pg_backup_stop', 'pg_logical_slot_get_changes', 'jsonb_set_lax', 'normalize') ORDER BY 1, 2
+fields f:25:-1:-1,n:23:4:-1,pg_get_function_arg_default:25:-1:-1
+row "normalize"(text,text),0,NULL
+row "normalize"(text,text),1,NULL
+row "normalize"(text,text),2,'NFC'::text
+row "normalize"(text,text),3,NULL
+row "normalize"(text,text),4,NULL
+row "normalize"(text,text),5,NULL
+row "normalize"(text,text),6,NULL
+row "normalize"(text,text),7,NULL
+row "normalize"(text,text),8,NULL
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),0,NULL
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),1,NULL
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),2,NULL
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),3,NULL
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),4,true
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),5,'use_json_null'::text
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),6,NULL
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),7,NULL
+row jsonb_set_lax(jsonb,text[],jsonb,boolean,text),8,NULL
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),0,NULL
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),1,0
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),2,0
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),3,0
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),4,0
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),5,0
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),6,0
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),7,'0'::double precision
+row make_interval(integer,integer,integer,integer,integer,integer,double precision),8,NULL
+row pg_backup_stop(boolean),0,NULL
+row pg_backup_stop(boolean),1,true
+row pg_backup_stop(boolean),2,NULL
+row pg_backup_stop(boolean),3,NULL
+row pg_backup_stop(boolean),4,NULL
+row pg_backup_stop(boolean),5,NULL
+row pg_backup_stop(boolean),6,NULL
+row pg_backup_stop(boolean),7,NULL
+row pg_backup_stop(boolean),8,NULL
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),0,NULL
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),1,NULL
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),2,NULL
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),3,NULL
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),4,'{}'::text[]
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),5,NULL
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),6,NULL
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),7,NULL
+row pg_logical_slot_get_changes(name,pg_lsn,integer,text[]),8,NULL
+SELECT 45
+> SELECT p.oid::regprocedure::text AS f, pg_get_function_arguments(p.oid), pg_get_function_identity_arguments(p.oid), pg_get_function_result(p.oid) FROM pg_proc p WHERE proname IN ('percentile_disc', 'rank', 'mode', 'pg_get_keywords', 'generate_series', 'json_each', 'pg_stat_get_wal', 'now', 'abs', 'count', 'pg_input_error_info') ORDER BY 1
+fields f:25:-1:-1,pg_get_function_arguments:25:-1:-1,pg_get_function_identity_arguments:25:-1:-1,pg_get_function_result:25:-1:-1
+row abs(bigint),bigint,bigint,bigint
+row abs(double precision),double precision,double precision,double precision
+row abs(integer),integer,integer,integer
+row abs(numeric),numeric,numeric,numeric
+row abs(real),real,real,real
+row abs(smallint),smallint,smallint,smallint
+row count("any"),"any","any",bigint
+row count(),,,bigint
+row generate_series(bigint,bigint),bigint, bigint,bigint, bigint,SETOF bigint
+row generate_series(bigint,bigint,bigint),bigint, bigint, bigint,bigint, bigint, bigint,SETOF bigint
+row generate_series(integer,integer),integer, integer,integer, integer,SETOF integer
+row generate_series(integer,integer,integer),integer, integer, integer,integer, integer, integer,SETOF integer
+row generate_series(numeric,numeric),numeric, numeric,numeric, numeric,SETOF numeric
+row generate_series(numeric,numeric,numeric),numeric, numeric, numeric,numeric, numeric, numeric,SETOF numeric
+row generate_series(timestamp with time zone,timestamp with time zone,interval),timestamp with time zone, timestamp with time zone, interval,timestamp with time zone, timestamp with time zone, interval,SETOF timestamp with time zone
+row generate_series(timestamp with time zone,timestamp with time zone,interval,text),timestamp with time zone, timestamp with time zone, interval, text,timestamp with time zone, timestamp with time zone, interval, text,SETOF timestamp with time zone
+row generate_series(timestamp without time zone,timestamp without time zone,interval),timestamp without time zone, timestamp without time zone, interval,timestamp without time zone, timestamp without time zone, interval,SETOF timestamp without time zone
+row json_each(json),from_json json, OUT key text, OUT value json,from_json json, OUT key text, OUT value json,SETOF record
+row mode(anyelement),ORDER BY anyelement,ORDER BY anyelement,anyelement
+row now(),,,timestamp with time zone
+row percentile_disc(double precision,anyelement),double precision ORDER BY anyelement,double precision ORDER BY anyelement,anyelement
+row percentile_disc(double precision[],anyelement),double precision[] ORDER BY anyelement,double precision[] ORDER BY anyelement,anyarray
+row pg_get_keywords(),OUT word text, OUT catcode "char", OUT barelabel boolean, OUT catdesc text, OUT baredesc text,OUT word text, OUT catcode "char", OUT barelabel boolean, OUT catdesc text, OUT baredesc text,SETOF record
+row pg_input_error_info(text,text),value text, type_name text, OUT message text, OUT detail text, OUT hint text, OUT sql_error_code text,value text, type_name text, OUT message text, OUT detail text, OUT hint text, OUT sql_error_code text,record
+row pg_stat_get_wal(),OUT wal_records bigint, OUT wal_fpi bigint, OUT wal_bytes numeric, OUT wal_fpi_bytes numeric, OUT wal_buffers_full bigint, OUT stats_reset timestamp with time zone,OUT wal_records bigint, OUT wal_fpi bigint, OUT wal_bytes numeric, OUT wal_fpi_bytes numeric, OUT wal_buffers_full bigint, OUT stats_reset timestamp with time zone,record
+row rank("any"),VARIADIC "any" ORDER BY VARIADIC "any",VARIADIC "any" ORDER BY VARIADIC "any",bigint
+row rank(),,,bigint
+SELECT 27
+> SELECT pg_get_function_arguments(0), pg_get_function_identity_arguments(0), pg_get_function_result(0), pg_get_function_arg_default(0, 1), pg_get_function_arg_default('make_interval'::regproc, NULL)
+fields pg_get_function_arguments:25:-1:-1,pg_get_function_identity_arguments:25:-1:-1,pg_get_function_result:25:-1:-1,pg_get_function_arg_default:25:-1:-1,pg_get_function_arg_default:25:-1:-1
+row NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_get_function_arguments(NULL), pg_get_function_result(NULL)
+fields pg_get_function_arguments:25:-1:-1,pg_get_function_result:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT pg_get_function_result('pg_class'::regclass), pg_get_function_arguments(4294967295)
+fields pg_get_function_result:25:-1:-1,pg_get_function_arguments:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT count(*) FROM pg_seclabels
+fields count:20:8:-1
+row 0
+SELECT 1

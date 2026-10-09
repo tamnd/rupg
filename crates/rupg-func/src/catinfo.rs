@@ -1,8 +1,9 @@
-//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, and the comments of `obj_description`, `col_description` and `shobj_description`.
+//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_sequence_last_value`, and the comments of `obj_description`, `col_description` and `shobj_description`.
 //!
 //! The visibility functions are a port of the `*IsVisible` functions of `namespace.c`. Each one gives null for an OID that no object has, as the `is_missing` form of PostgreSQL does.
 
-use rupg_common::Result;
+use rupg_catalog::RelKind;
+use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_types::Value;
 
@@ -105,6 +106,34 @@ fn shobj_description(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(comment(catalog_oid(args)?.and_then(|class| builtin::shared_description(oid, class))))
 }
 
+/// `pg_is_other_temp_schema(oid)`: `isOtherTempNamespace`, true for a temporary schema of another session. A session has no temporary schema yet, so each schema with the name of a temporary schema is of another session.
+fn is_other_temp_schema(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = oid_arg(args, 0)?;
+    let temp = reg::namespace_name(oid, call.session)
+        .is_some_and(|name| name.starts_with("pg_temp_") || name.starts_with("pg_toast_temp_"));
+    Ok(Value::Bool(temp))
+}
+
+/// `pg_sequence_last_value(regclass)`: the last value of a sequence when `is_called` is true, else null. A session cannot call `nextval` yet, so each sequence keeps `is_called` false and the value is null. The errors are those of `init_sequence`.
+fn sequence_last_value(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = oid_arg(args, 0)?;
+    let Some((name, _)) = reg::class_name(oid, call.session) else {
+        return Err(Error::internal(format!("could not open relation with OID {oid}")));
+    };
+    let sequence = call
+        .session
+        .catalog()
+        .and_then(|c| c.relation(oid))
+        .is_some_and(|r| r.kind == RelKind::Sequence);
+    if !sequence {
+        return Err(Error::new(
+            SqlState::WRONG_OBJECT_TYPE,
+            format!("\"{name}\" is not a sequence"),
+        ));
+    }
+    Ok(Value::Null)
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
@@ -122,6 +151,10 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_operator_is_visible" => operator_visible,
         "pg_statistics_obj_is_visible" => statistics_obj_visible,
         "pg_get_userbyid" => get_userbyid,
+        // A session has no temporary schema yet, so `myTempNamespace` is 0.
+        "pg_my_temp_schema" => |_, _| Ok(Value::Oid(0)),
+        "pg_is_other_temp_schema" => is_other_temp_schema,
+        "pg_sequence_last_value" => sequence_last_value,
         _ => return None,
     };
     Some(kernel)

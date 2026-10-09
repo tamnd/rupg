@@ -1,7 +1,8 @@
-//! The deparse functions `pg_get_expr`, `pg_get_constraintdef`, `pg_get_indexdef` and `pg_get_viewdef`: a port of the parts of `ruleutils.c` that show the expressions, the queries and the definitions of the catalog.
+//! The deparse functions `pg_get_expr`, `pg_get_constraintdef`, `pg_get_indexdef`, `pg_get_viewdef` and the `pg_get_function_*` functions: a port of the parts of `ruleutils.c` that show the expressions, the queries and the definitions of the catalog.
 //!
 //! The functions read the stored form that `rupg_analyze::node` writes, or the query that the analyzer makes from the text of a view, and show it as PostgreSQL shows its node trees. The rules for parentheses, casts and constants follow `get_rule_expr`. The functions show the objects of the user and the system views. An index or a constraint of a system catalog gives an error that says that the engine cannot show it yet.
 
+mod function;
 mod query;
 
 use std::ptr;
@@ -1039,6 +1040,10 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_expr" | "pg_get_expr_ext" => get_expr,
         "pg_get_constraintdef" | "pg_get_constraintdef_ext" => get_constraintdef,
         "pg_get_indexdef" | "pg_get_indexdef_ext" => get_indexdef,
+        "pg_get_function_arguments" => function::get_function_arguments,
+        "pg_get_function_identity_arguments" => function::get_function_identity_arguments,
+        "pg_get_function_result" => function::get_function_result,
+        "pg_get_function_arg_default" => function::get_function_arg_default,
         "pg_get_viewdef" | "pg_get_viewdef_ext" | "pg_get_viewdef_wrap" => query::get_viewdef,
         "pg_get_viewdef_name" | "pg_get_viewdef_name_ext" => query::get_viewdef_name,
         _ => return None,
