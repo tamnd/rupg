@@ -298,6 +298,8 @@ pub struct Function {
     pub cost: u32,
     /// `prorows`: the number of rows of a function that returns a set, or 0.
     pub rows: u32,
+    /// `prosupport`: the OID of the support function, or 0.
+    pub support: u32,
     /// `proisstrict`: true when a null argument gives null without a call.
     pub strict: bool,
     /// `provolatile`: `i` immutable, `s` stable or `v` volatile.
@@ -306,11 +308,19 @@ pub struct Function {
     pub parallel: u8,
     /// `prorettype`: the OID of the result type.
     pub rettype: u32,
-    /// `proargtypes`: the types of the arguments.
+    /// `proretset`: true when the function returns a set.
+    pub retset: bool,
+    /// `proargtypes`: the types of the input arguments.
     pub argtypes: Vec<u32>,
+    /// `proallargtypes`: the types of all the arguments, with the `OUT` arguments. The list is empty when all the arguments are input arguments.
+    pub allargtypes: Vec<u32>,
+    /// `proargmodes`: the mode of each argument, `i`, `o`, `b` or `t`. The list is empty when all the arguments are input arguments.
+    pub argmodes: Vec<u8>,
     /// `proargnames`: the name of each argument, with an empty name for an argument without a name. The list is empty when no argument has a name.
     pub argnames: Vec<String>,
-    /// The body in SQL, or `None`.
+    /// `prosrc`: the body in a string, or empty for a body in SQL.
+    pub src: String,
+    /// The text of the statement that made the function, or `None`.
     pub body: Option<FunctionBody>,
 }
 

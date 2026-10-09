@@ -1,0 +1,157 @@
+> SELECT * FROM information_schema._pg_expandarray(ARRAY['a', 'b', 'c'])
+fields x:25:-1:-1,n:23:4:-1
+row a,1
+row b,2
+row c,3
+SELECT 3
+> SELECT information_schema._pg_expandarray(ARRAY[10, 20])
+fields _pg_expandarray:2249:-1:-1
+row (10,1)
+row (20,2)
+SELECT 2
+> SELECT (information_schema._pg_expandarray(ARRAY[10, 20])).x
+fields x:23:4:-1
+row 10
+row 20
+SELECT 2
+> SELECT (information_schema._pg_expandarray(ARRAY[10, 20])).n
+fields n:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT pg_typeof((information_schema._pg_expandarray(ARRAY[1.5])).x), pg_typeof((information_schema._pg_expandarray(ARRAY[1.5])).n)
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row numeric,integer
+SELECT 1
+> SELECT * FROM information_schema._pg_expandarray(NULL::int[])
+fields x:23:4:-1,n:23:4:-1
+SELECT 0
+> SELECT * FROM information_schema._pg_expandarray('{}'::text[])
+fields x:25:-1:-1,n:23:4:-1
+SELECT 0
+> SELECT * FROM information_schema._pg_expandarray(ARRAY[[1, 2], [3, 4]])
+fields x:23:4:-1,n:23:4:-1
+row 1,1
+row 2,2
+row 3,3
+row 4,4
+SELECT 4
+> SELECT x, n FROM information_schema._pg_expandarray('1 3 2'::int2vector)
+fields x:21:2:-1,n:23:4:-1
+row 1,1
+row 3,2
+row 2,3
+SELECT 3
+> SELECT pg_typeof(x) FROM information_schema._pg_expandarray('1 3 2'::int2vector) LIMIT 1
+fields pg_typeof:2206:4:-1
+row smallint
+SELECT 1
+> SELECT * FROM information_schema._pg_expandarray(ARRAY['a', NULL])
+fields x:25:-1:-1,n:23:4:-1
+row a,1
+row NULL,2
+SELECT 2
+> SELECT * FROM information_schema._pg_expandarray(ARRAY['a']) AS t(p, q)
+fields p:25:-1:-1,q:23:4:-1
+row a,1
+SELECT 1
+> SELECT * FROM information_schema._pg_expandarray(ARRAY['a']) AS t
+fields x:25:-1:-1,n:23:4:-1
+row a,1
+SELECT 1
+> SELECT * FROM information_schema._pg_expandarray(1)
+ERROR 42883 function information_schema._pg_expandarray(integer) does not exist at 15
+> SELECT * FROM information_schema._pg_expandarray('{1,2}')
+ERROR 42804 could not determine polymorphic type because input has type unknown
+> SELECT proname, proretset, prorows, prosupport, proargtypes::regtype[], proallargtypes::regtype[], proargmodes, proargnames, prorettype::regtype, provolatile, proisstrict, proparallel, prokind, procost, pronargs FROM pg_proc WHERE oid = 'information_schema._pg_expandarray'::regproc
+fields proname@pg_proc.2:19:64:-1,proretset@pg_proc.14:16:1:-1,prorows@pg_proc.7:700:4:-1,prosupport@pg_proc.9:24:4:-1,proargtypes:2211:-1:-1,proallargtypes:2211:-1:-1,proargmodes@pg_proc.22:1002:-1:-1,proargnames@pg_proc.23:1009:-1:-1,prorettype:2206:4:-1,provolatile@pg_proc.15:18:1:-1,proisstrict@pg_proc.13:16:1:-1,proparallel@pg_proc.16:18:1:-1,prokind@pg_proc.10:18:1:-1,procost@pg_proc.6:700:4:-1,pronargs@pg_proc.17:21:2:-1
+row _pg_expandarray,t,100,array_unnest_support,[0:0]={anyarray},{anyarray,anyelement,integer},{i,o,o},{"",x,n},record,i,t,s,f,100,1
+SELECT 1
+> SELECT proname, proretset, prorows, prosupport, proargtypes::regtype[], proallargtypes::regtype[], proargmodes, proargnames, prorettype::regtype, provolatile, proisstrict, proparallel, prokind, procost, pronargs FROM pg_proc WHERE oid = 'information_schema._pg_index_position'::regproc
+fields proname@pg_proc.2:19:64:-1,proretset@pg_proc.14:16:1:-1,prorows@pg_proc.7:700:4:-1,prosupport@pg_proc.9:24:4:-1,proargtypes:2211:-1:-1,proallargtypes:2211:-1:-1,proargmodes@pg_proc.22:1002:-1:-1,proargnames@pg_proc.23:1009:-1:-1,prorettype:2206:4:-1,provolatile@pg_proc.15:18:1:-1,proisstrict@pg_proc.13:16:1:-1,proparallel@pg_proc.16:18:1:-1,prokind@pg_proc.10:18:1:-1,procost@pg_proc.6:700:4:-1,pronargs@pg_proc.17:21:2:-1
+row _pg_index_position,f,0,-,[0:1]={oid,smallint},NULL,NULL,NULL,integer,s,t,u,f,100,2
+SELECT 1
+> SELECT prosrc, prosqlbody IS NULL FROM pg_proc WHERE oid = 'information_schema._pg_expandarray'::regproc
+fields prosrc@pg_proc.26:25:-1:-1,?column?:16:1:-1
+row SELECT * FROM pg_catalog.unnest($1) WITH ORDINALITY,t
+SELECT 1
+> SELECT prosrc, prosqlbody IS NULL FROM pg_proc WHERE oid = 'information_schema._pg_index_position'::regproc
+fields prosrc@pg_proc.26:25:-1:-1,?column?:16:1:-1
+row ,f
+SELECT 1
+> SELECT pg_get_function_arguments('information_schema._pg_expandarray'::regproc), pg_get_function_result('information_schema._pg_expandarray'::regproc), pg_get_function_identity_arguments('information_schema._pg_expandarray'::regproc)
+fields pg_get_function_arguments:25:-1:-1,pg_get_function_result:25:-1:-1,pg_get_function_identity_arguments:25:-1:-1
+row anyarray, OUT x anyelement, OUT n integer,SETOF record,anyarray, OUT x anyelement, OUT n integer
+SELECT 1
+> SELECT pg_get_function_arguments('information_schema._pg_index_position'::regproc), pg_get_function_result('information_schema._pg_index_position'::regproc)
+fields pg_get_function_arguments:25:-1:-1,pg_get_function_result:25:-1:-1
+row oid, smallint,integer
+SELECT 1
+> SELECT c.relname, information_schema._pg_index_position(i.indexrelid, 1::smallint), information_schema._pg_index_position(i.indexrelid, 2::smallint), information_schema._pg_index_position(i.indexrelid, 3::smallint) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname IN ('pg_class_oid_index', 'pg_class_relname_nsp_index', 'pg_attribute_relid_attnum_index', 'pg_depend_reference_index') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,_pg_index_position:23:4:-1,_pg_index_position:23:4:-1,_pg_index_position:23:4:-1
+row pg_attribute_relid_attnum_index,1,NULL,NULL
+row pg_class_oid_index,1,NULL,NULL
+row pg_class_relname_nsp_index,NULL,1,2
+row pg_depend_reference_index,NULL,NULL,NULL
+SELECT 4
+> SELECT information_schema._pg_index_position(0, 1::smallint)
+fields _pg_index_position:23:4:-1
+row NULL
+SELECT 1
+> SELECT information_schema._pg_index_position(NULL, 1::smallint)
+fields _pg_index_position:23:4:-1
+row NULL
+SELECT 1
+> SELECT information_schema._pg_index_position('pg_class_oid_index'::regclass, NULL)
+fields _pg_index_position:23:4:-1
+row NULL
+SELECT 1
+> SELECT pg_typeof(information_schema._pg_index_position(0, 1::smallint))
+fields pg_typeof:2206:4:-1
+row integer
+SELECT 1
+> SELECT objid::regprocedure, refobjid::regprocedure, deptype FROM pg_depend WHERE classid = 'pg_proc'::regclass AND objid IN ('information_schema._pg_expandarray'::regproc, 'information_schema._pg_index_position'::regproc) AND refclassid = 'pg_proc'::regclass ORDER BY 1, 2
+fields objid:2202:4:-1,refobjid:2202:4:-1,deptype@pg_depend.7:18:1:-1
+row information_schema._pg_index_position(oid,smallint),information_schema._pg_expandarray(anyarray),n
+SELECT 1
+> SELECT (y.a).x, (y.a).n FROM (SELECT information_schema._pg_expandarray(ARRAY['p', 'q']) AS a) y
+fields x:25:-1:-1,n:23:4:-1
+row p,1
+row q,2
+SELECT 2
+> SELECT information_schema._pg_expandarray(ARRAY['p', 'q']) AS a, 1 AS b
+fields a:2249:-1:-1,b:23:4:-1
+row (p,1),1
+row (q,2),1
+SELECT 2
+> SELECT count(*) FROM information_schema._pg_expandarray(ARRAY[1, 2, 3]) e, information_schema._pg_expandarray(ARRAY[4, 5]) f
+fields count:20:8:-1
+row 6
+SELECT 1
+> SELECT x FROM information_schema._pg_expandarray(ARRAY[3, 1, 2]) ORDER BY x
+fields x:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT a.x, b.x FROM information_schema._pg_expandarray(ARRAY[1, 2]) a, LATERAL information_schema._pg_expandarray(ARRAY[a.x * 10, a.x * 100]) b
+fields x:23:4:-1,x:23:4:-1
+row 1,10
+row 1,100
+row 2,20
+row 2,200
+SELECT 4
+> SELECT proname, proretset, prokind FROM pg_proc WHERE pronamespace = 'information_schema'::regnamespace ORDER BY 1
+fields proname@pg_proc.2:19:64:-1,proretset@pg_proc.14:16:1:-1,prokind@pg_proc.10:18:1:-1
+row _pg_char_max_length,f,f
+row _pg_char_octet_length,f,f
+row _pg_datetime_precision,f,f
+row _pg_expandarray,t,f
+row _pg_index_position,f,f
+row _pg_interval_type,f,f
+row _pg_numeric_precision,f,f
+row _pg_numeric_precision_radix,f,f
+row _pg_numeric_scale,f,f
+row _pg_truetypid,f,f
+row _pg_truetypmod,f,f
+SELECT 11

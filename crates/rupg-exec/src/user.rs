@@ -82,6 +82,14 @@ fn oid_array(values: &[u32]) -> Value {
     Value::Array(Box::new(Array::one(values.iter().map(|&v| Some(Value::Oid(v))).collect())))
 }
 
+/// A `"char"[]`, or null for no element.
+fn char_array(values: &[u8]) -> Value {
+    if values.is_empty() {
+        return Value::Null;
+    }
+    Value::Array(Box::new(Array::one(values.iter().map(|&v| Some(Value::Char(v))).collect())))
+}
+
 /// A `text[]` or an `aclitem[]` of the texts.
 fn text_array(values: &[String]) -> Value {
     Value::Array(Box::new(Array::one(
@@ -465,7 +473,7 @@ fn sequences<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-/// The functions in SQL. The body in `prosqlbody` is the text of the statement that made the function, and `prosrc` is empty, as for a function with a `RETURN` body.
+/// The functions in SQL. A body in a string is in `prosrc`. For a body in SQL, `prosqlbody` has the text of the statement that made the function, and `prosrc` is empty.
 fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     catalog
         .functions()
@@ -482,21 +490,26 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("procost", Value::Float4(cost))
                 .set("prorows", Value::Float4(rows))
                 .set("provariadic", oid(0))
-                .set("prosupport", oid(0))
+                .set("prosupport", oid(f.support))
                 .set("prokind", code('f'))
                 .set("prosecdef", Value::Bool(false))
                 .set("proleakproof", Value::Bool(false))
                 .set("proisstrict", Value::Bool(f.strict))
-                .set("proretset", Value::Bool(false))
+                .set("proretset", Value::Bool(f.retset))
                 .set("provolatile", Value::Char(f.volatile))
                 .set("proparallel", Value::Char(f.parallel))
                 .set("pronargs", Value::Int2(i16::try_from(f.argtypes.len()).unwrap_or(i16::MAX)))
                 .set("pronargdefaults", Value::Int2(0))
                 .set("prorettype", oid(f.rettype))
                 .set("proargtypes", oid_vector(&f.argtypes))
+                .set("proallargtypes", oid_array(&f.allargtypes))
+                .set("proargmodes", char_array(&f.argmodes))
                 .set("proargnames", names)
-                .set("prosrc", Value::text(""))
-                .set("prosqlbody", tree(f.body.as_ref().map(|b| &b.text)));
+                .set("prosrc", Value::text(f.src.clone()))
+                .set(
+                    "prosqlbody",
+                    tree(f.body.as_ref().filter(|_| f.src.is_empty()).map(|b| &b.text)),
+                );
             row
         })
         .collect()
