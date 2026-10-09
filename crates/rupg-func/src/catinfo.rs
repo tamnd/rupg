@@ -167,6 +167,7 @@ pub(crate) fn sql_function(func: u32) -> Option<Kernel> {
         1216 => col_description,
         1348 => obj_description_any,
         1993 => shobj_description,
+        2074 => crate::regex::similar_substring,
         _ => return None,
     })
 }

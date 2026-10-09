@@ -1,10 +1,12 @@
 //! The matcher: the tree of the parser compiled to a program of a backtracking machine.
 //!
+//! The program of a pattern tells if the pattern matches, and where the leftmost match starts. The program of a node of the tree of subexpressions tells where a match of the node can end, which the dissection of a match needs.
+//!
 //! A program with no back reference keeps a set of the pairs of instruction and position that it has tried, so each pair is tried once and the search takes time in proportion to the size of the program and the length of the string. A program with back references cannot do this, because the result then depends on the groups, and it stops an empty loop with a mark of the position at the start of each pass.
 
 use std::collections::HashMap;
 
-use super::parse::{Assert, DUPINF, Look, Node, Parsed, Set, to_lower};
+use super::parse::{Assert, DUPINF, Look, Node, Set, to_lower};
 use super::{Code, flags};
 
 /// The largest number of instructions of a program, after the copies of the counted repeats.
@@ -134,7 +136,7 @@ impl Compiler {
                     self.patch(prog, jump, Inst::Jmp(end));
                 }
             }
-            Node::Repeat(inner, min, max) => {
+            Node::Repeat(inner, min, max, _) => {
                 for _ in 0..*min {
                     self.node(prog, inner, set_of)?;
                 }
@@ -203,29 +205,38 @@ fn is_word(c: u32) -> bool {
 }
 
 impl Program {
-    /// The program of a tree.
-    pub(super) fn compile(parsed: &Parsed) -> Result<Self, Code> {
+    /// The program of a node, with the number of the groups of the pattern and the flags after the embedded options.
+    pub(super) fn new(node: &Node, groups: usize, cflags: u32) -> Result<Self, Code> {
         let mut compiler =
             Compiler { progs: vec![Prog::default()], sets: Vec::new(), marks: 0, backrefs: false };
         let mut set_of = SetIds::default();
-        compiler.node(0, &parsed.node, &mut set_of)?;
+        compiler.node(0, node, &mut set_of)?;
         compiler.emit(0, Inst::Match)?;
         Ok(Program {
             progs: compiler.progs,
             sets: compiler.sets,
-            groups: parsed.groups,
+            groups,
             marks: compiler.marks,
             backrefs: compiler.backrefs,
-            nlanch: parsed.cflags & flags::NLANCH != 0,
-            icase: parsed.cflags & flags::ICASE != 0,
+            nlanch: cflags & flags::NLANCH != 0,
+            icase: cflags & flags::ICASE != 0,
         })
     }
 
-    /// True when the pattern matches a part of `s`.
-    pub(super) fn search(&self, s: &[u32]) -> bool {
+    /// The start of the leftmost match in `s` that starts at `from` or after it.
+    pub(super) fn first(&self, s: &[u32], from: usize) -> Option<usize> {
         let mut search = Search { program: self, s, looks: vec![Vec::new(); self.progs.len()] };
         let mut visited = search.visited(0);
-        (0..=s.len()).any(|start| search.run(0, start, None, visited.as_mut()))
+        (from..=s.len()).find(|&start| search.run(0, start, None, visited.as_mut(), None))
+    }
+
+    /// The ends of the matches from `start`: the item at a position is true when a match ends there.
+    pub(super) fn ends(&self, s: &[u32], start: usize) -> Vec<bool> {
+        let mut search = Search { program: self, s, looks: vec![Vec::new(); self.progs.len()] };
+        let mut visited = search.visited(0);
+        let mut ends = vec![false; s.len() + 1];
+        search.run(0, start, None, visited.as_mut(), Some(&mut ends));
+        ends
     }
 }
 
@@ -266,11 +277,13 @@ impl Search<'_> {
             let found = match look {
                 Look::Ahead | Look::NotAhead => {
                     let mut visited = self.visited(prog);
-                    self.run(prog, pos, None, visited.as_mut())
+                    self.run(prog, pos, None, visited.as_mut(), None)
                 }
                 Look::Behind | Look::NotBehind => {
                     let mut visited = self.visited(prog);
-                    (0..=pos).rev().any(|start| self.run(prog, start, Some(pos), visited.as_mut()))
+                    (0..=pos)
+                        .rev()
+                        .any(|start| self.run(prog, start, Some(pos), visited.as_mut(), None))
                 }
             };
             self.looks[prog][pos] = if found { 2 } else { 1 };
@@ -297,13 +310,14 @@ impl Search<'_> {
         same.then_some(pos + len)
     }
 
-    /// The search in a program from a start position. With an end, a match must end there.
+    /// The search in a program from a start position. With an end, a match must end there. With a list of ends, the search does not stop at a match: it tries all the paths and marks the end of each match in the list.
     fn run(
         &mut self,
         prog: usize,
         start: usize,
         end: Option<usize>,
         mut visited: Option<&mut Vec<u64>>,
+        mut ends: Option<&mut [bool]>,
     ) -> bool {
         let program = self.program;
         let insts = &program.progs[prog].insts;
@@ -381,6 +395,10 @@ impl Search<'_> {
                         pc += 1;
                     }
                     Inst::Match => {
+                        if let Some(ends) = ends.as_deref_mut() {
+                            ends[pos] = true;
+                            break;
+                        }
                         if end.is_none_or(|end| end == pos) {
                             return true;
                         }

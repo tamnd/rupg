@@ -1889,6 +1889,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/regex.test")));
     }
 
+    /// The functions of regular expressions that give the text of a match: `substring` with a pattern of POSIX and of SQL, `similar_to_escape`, `similar_escape`, `SIMILAR TO`, `regexp_match` and `regexp_like`. The cases include the greedy and the lazy quantifiers, the groups that do not match, the groups in iterations, the back references, the options and each error. `connection/regex_functions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn regex_functions() {
+        big_stack(|| script(include_str!("connection/regex_functions.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

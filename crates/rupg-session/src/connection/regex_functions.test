@@ -1,0 +1,173 @@
+> SELECT id, pat, str, regexp_match(str, pat) AS m, substring(str FROM pat) AS sub FROM (VALUES (1, 'a(b)c', 'xabcx'), (2, '(a*)(b*)', 'aaabbb'), (3, '(a*?)(a*)', 'aaa'), (4, '(a+?)(a*)', 'aaa'), (5, '(a|ab)(c|bcd)(d*)', 'abcd'), (6, '(.*)(\d+)', 'abc123'), (7, '(.*?)(\d+)', 'abc123'), (8, '(a)|(b)', 'b'), (9, '(a)*', 'aaa'), (10, '(a|b)*c', 'abac'), (11, '((a)|(b))*', 'ab'), (12, '(ab)*?', 'abab'), (13, '(.)\1', 'xaab'), (14, '(a+)\1', 'aaaa'), (15, '^(\w+)\s+(\w+)$', 'hello world'), (16, 'x(y)?z', 'xz'), (17, '(a{2,3})(a*)', 'aaaaa'), (18, '(a{2,3}?)(a*)', 'aaaaa'), (19, '(a){2}', 'aaa'), (20, '(?:a(b))+', 'ababab'), (21, '((a)(b))', 'ab'), (22, '(a*)*', 'b'), (23, '(a*)+', 'b'), (24, '(a|)+', 'aa'), (25, '(\d+)-(\d+)', 'tel 123-4567 x'), (26, '([a-z]+)@([a-z]+)\.com', 'mail bob@site.com'), (27, '(bc+d$|ef*g.|h?i(j|k))', 'reffgz'), (28, '(a)(b)?', 'a'), (29, 'a(b*?)(b*)c', 'abbbc'), (30, '(.*)c(.*)', 'abcdcef'), (31, '(.*?)c(.*)', 'abcdcef'), (32, '(a+|b+)*', 'aabba'), (33, '(a+|b+)*?c', 'aabbac'), (34, '((.)*)x', 'abx'), (35, '(\w)(?=\d)', 'ab1'), (36, '(a)b(?!c)', 'abcab'), (37, '(^a|b)(c)', 'bc'), (38, '((a)|b)*', 'bba'), (39, '((a)|b)*', 'ab'), (40, '(a)?(a)?(a)?', 'aa'), (41, '(.+)(.+)', 'abcd'), (42, '(.+?)(.+?)', 'abcd'), (43, '(.+?)(.+)', 'abcd'), (44, '((a*)b)*', 'abaab'), (45, '(x)?(?:(y)|z)', 'z'), (46, '()', 'abc'), (47, '(a)\1*', 'aaaa'), (48, '(a)(\1){2}', 'aaab'), (49, '(.)(.)\2\1', 'xabbay'), (50, '(\w+)\s\1', 'the the cat'), (51, '(a*)b\1', 'aabaa'), (52, '(a*)b\1', 'aaba'), (53, '(?:(a)|b)\1', 'bba'), (54, 'a.*?', 'abc'), (55, 'x.*?y*', 'xaayy'), (56, '(a.*?)(y*)', 'xaayy'), (57, 'a.*?c|b', 'abcbc'), (58, '(a|b)(c|d)?', 'ad'), (59, '[a-c]+?(\d)', 'abc1d2'), (60, '(a(b(c)))(d)', 'abcd'), (61, '((a)|(b))+?', 'ab'), (62, '(a+){2,}?', 'aaaaa'), (63, '(a+?){2,}', 'aaaaa'), (64, '(a+){1,1}?(a+)', 'aaaaa'), (65, '(?:(a)|(b)){1,1}?(a*)', 'aaa'), (66, 'b*', 'abc'), (67, '(b*)', 'abc'), (68, '$', 'abc'), (69, '(^|x)(a)', 'a'), (70, '(\y\w+\y)', 'one two'), (71, '(\m\w+\M) (\w+)', 'one two'), (72, '(.)(?<=b)', 'abc'), (73, '(a{0})b', 'ab'), (74, '(a){0}b', 'ab'), (75, '([^,]*),([^,]*)', 'x,,y'), (76, '(((((a)))))', 'a'), (77, '(a)(?:b|(c))*', 'abcb'), (78, '(a(?:b|c)*)(c)', 'abcbc'), (79, '(ab|a)(bc|c)?', 'abc'), (80, '(a|ab)(bc|c)?', 'abc')) AS v(id, pat, str) ORDER BY id
+fields id:23:4:-1,pat:25:-1:-1,str:25:-1:-1,m:1009:-1:-1,sub:25:-1:-1
+row 1,a(b)c,xabcx,{b},b
+row 2,(a*)(b*),aaabbb,{aaa,bbb},aaa
+row 3,(a*?)(a*),aaa,{"",""},
+row 4,(a+?)(a*),aaa,{a,""},a
+row 5,(a|ab)(c|bcd)(d*),abcd,{ab,c,d},ab
+row 6,(.*)(\d+),abc123,{abc12,3},abc12
+row 7,(.*?)(\d+),abc123,{abc,1},abc
+row 8,(a)|(b),b,{NULL,b},NULL
+row 9,(a)*,aaa,{a},a
+row 10,(a|b)*c,abac,{a},a
+row 11,((a)|(b))*,ab,{b,NULL,b},b
+row 12,(ab)*?,abab,{NULL},NULL
+row 13,(.)\1,xaab,{a},a
+row 14,(a+)\1,aaaa,{aa},aa
+row 15,^(\w+)\s+(\w+)$,hello world,{hello,world},hello
+row 16,x(y)?z,xz,{NULL},NULL
+row 17,(a{2,3})(a*),aaaaa,{aaa,aa},aaa
+row 18,(a{2,3}?)(a*),aaaaa,{aa,""},aa
+row 19,(a){2},aaa,{a},a
+row 20,(?:a(b))+,ababab,{b},b
+row 21,((a)(b)),ab,{ab,a,b},ab
+row 22,(a*)*,b,{""},
+row 23,(a*)+,b,{""},
+row 24,(a|)+,aa,{""},
+row 25,(\d+)-(\d+),tel 123-4567 x,{123,4567},123
+row 26,([a-z]+)@([a-z]+)\.com,mail bob@site.com,{bob,site},bob
+row 27,(bc+d$|ef*g.|h?i(j|k)),reffgz,{effgz,NULL},effgz
+row 28,(a)(b)?,a,{a,NULL},a
+row 29,a(b*?)(b*)c,abbbc,{"",bbb},
+row 30,(.*)c(.*),abcdcef,{abcd,ef},abcd
+row 31,(.*?)c(.*),abcdcef,{ab,""},ab
+row 32,(a+|b+)*,aabba,{a},a
+row 33,(a+|b+)*?c,aabbac,{a},a
+row 34,((.)*)x,abx,{ab,b},ab
+row 35,(\w)(?=\d),ab1,{b},b
+row 36,(a)b(?!c),abcab,{a},a
+row 37,(^a|b)(c),bc,{b,c},b
+row 38,((a)|b)*,bba,{a,a},a
+row 39,((a)|b)*,ab,{b,NULL},b
+row 40,(a)?(a)?(a)?,aa,{a,a,NULL},a
+row 41,(.+)(.+),abcd,{abc,d},abc
+row 42,(.+?)(.+?),abcd,{a,b},a
+row 43,(.+?)(.+),abcd,{a,b},a
+row 44,((a*)b)*,abaab,{aab,aa},aab
+row 45,(x)?(?:(y)|z),z,{NULL,NULL},NULL
+row 46,(),abc,{""},
+row 47,(a)\1*,aaaa,{a},a
+row 48,(a)(\1){2},aaab,{a,a},a
+row 49,(.)(.)\2\1,xabbay,{a,b},a
+row 50,(\w+)\s\1,the the cat,{the},the
+row 51,(a*)b\1,aabaa,{aa},aa
+row 52,(a*)b\1,aaba,{a},a
+row 53,(?:(a)|b)\1,bba,NULL,NULL
+row 54,a.*?,abc,{a},a
+row 55,x.*?y*,xaayy,{x},x
+row 56,(a.*?)(y*),xaayy,{a,""},a
+row 57,a.*?c|b,abcbc,{abcbc},abcbc
+row 58,(a|b)(c|d)?,ad,{a,d},a
+row 59,[a-c]+?(\d),abc1d2,{1},1
+row 60,(a(b(c)))(d),abcd,{abc,bc,c,d},abc
+row 61,((a)|(b))+?,ab,{a,a,NULL},a
+row 62,(a+){2,}?,aaaaa,{a},a
+row 63,(a+?){2,},aaaaa,{a},a
+row 64,(a+){1,1}?(a+),aaaaa,{a,a},a
+row 65,(?:(a)|(b)){1,1}?(a*),aaa,{a,NULL,""},a
+row 66,b*,abc,{""},
+row 67,(b*),abc,{""},
+row 68,$,abc,{""},
+row 69,(^|x)(a),a,{"",a},
+row 70,(\y\w+\y),one two,{one},one
+row 71,(\m\w+\M) (\w+),one two,{one,two},one
+row 72,(.)(?<=b),abc,{b},b
+row 73,(a{0})b,ab,{""},
+row 74,(a){0}b,ab,{NULL},NULL
+row 75,([^,]*),([^,]*),x,,y,{x,""},x
+row 76,(((((a))))),a,{a,a,a,a,a},a
+row 77,(a)(?:b|(c))*,abcb,{a,NULL},a
+row 78,(a(?:b|c)*)(c),abcbc,{abcb,c},abcb
+row 79,(ab|a)(bc|c)?,abc,{ab,c},ab
+row 80,(a|ab)(bc|c)?,abc,{ab,c},ab
+SELECT 80
+> SELECT regexp_match('foobarbequebaz', 'b[a][rz]'), regexp_match('foobarbequebaz', '(bar)(beque)'), regexp_match('foobarbequebaz', '(BAR)(BEQUE)', 'i'), regexp_match('abc', 'x')
+fields regexp_match:1009:-1:-1,regexp_match:1009:-1:-1,regexp_match:1009:-1:-1,regexp_match:1009:-1:-1
+row {bar},{bar,beque},{bar,beque},NULL
+SELECT 1
+> SELECT regexp_match('ab' || chr(10) || 'cd', '^c(d)', 'n'), regexp_match('ab' || chr(10) || 'cd', '^c(d)'), regexp_match('a b', 'a b', 'x'), regexp_match('ab', 'a b', 'x'), regexp_match('a.c', 'a.c', 'q'), regexp_match('abc', 'a.c', 'q')
+fields regexp_match:1009:-1:-1,regexp_match:1009:-1:-1,regexp_match:1009:-1:-1,regexp_match:1009:-1:-1,regexp_match:1009:-1:-1,regexp_match:1009:-1:-1
+row {d},NULL,NULL,{ab},{a.c},NULL
+SELECT 1
+> SELECT regexp_like('Steven', '^Ste(v|ph)en$'), regexp_like('a' || chr(10) || 'b', '^b'), regexp_like('a' || chr(10) || 'b', '^b', 'n'), regexp_like('ABC', 'b', 'i'), regexp_like('ABC', 'b'), regexp_like('abc', 'B', 'ic')
+fields regexp_like:16:1:-1,regexp_like:16:1:-1,regexp_like:16:1:-1,regexp_like:16:1:-1,regexp_like:16:1:-1,regexp_like:16:1:-1
+row t,f,t,t,f,f
+SELECT 1
+> SELECT regexp_match('abc', 'b', 'g')
+ERROR 22023 regexp_match() does not support the "global" option
+> SELECT regexp_match('abc', 'b', 'z')
+ERROR 22023 invalid regular expression option: "z"
+> SELECT regexp_like('abc', 'b', 'g')
+ERROR 22023 regexp_like() does not support the "global" option
+> SELECT regexp_like('abc', 'b', 'ik')
+ERROR 22023 invalid regular expression option: "k"
+> SELECT regexp_match('abc', '(b')
+ERROR 2201B invalid regular expression: parentheses () not balanced
+> SELECT substring('abc' FROM 'b'), substring('abc' FROM '(b)(c)'), substring('abc' FROM 'x'), substring('foobar' FROM 'foo(bar)?'), substring('foo' FROM 'foo(bar)?'), substring('PostgreSQL 19 on x86_64' FROM '^[^0-9]*')
+fields substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1
+row b,b,NULL,bar,NULL,PostgreSQL 
+SELECT 1
+> SELECT substring('Thomas' SIMILAR '%#"o_a#"_' ESCAPE '#'), substring('Thomas' SIMILAR '#"o_a#"_' ESCAPE '#'), substring('Thomas' SIMILAR '%#"o_a#"%' ESCAPE '#'), substring('Thomas' SIMILAR 'Th#"%#"' ESCAPE '#'), substring('Thomas' SIMILAR '#"%#"' ESCAPE '#'), substring('Thomas' SIMILAR '%' ESCAPE '#')
+fields substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1
+row oma,NULL,oma,omas,Thomas,Thomas
+SELECT 1
+> SELECT substring('interval(6) year to month' SIMILAR 'interval[()0-9]* #"%#"' ESCAPE '#'), substring('interval year' SIMILAR 'interval[()0-9]* #"%#"' ESCAPE '#'), substring('interval' SIMILAR 'interval[()0-9]* #"%#"' ESCAPE '#'), substring('abcdefg' SIMILAR 'a#"%#"g' ESCAPE '#'), substring('abcdefg' SIMILAR 'a*#"%#"g*' ESCAPE '#'), substring('abc' SIMILAR '%#"b#"%' ESCAPE NULL)
+fields substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1,substring:25:-1:-1
+row year to month,year,NULL,bcdef,abcdefg,NULL
+SELECT 1
+> SELECT substring('Thomas' SIMILAR '%#"o#"a#"s' ESCAPE '#')
+ERROR 2200C SQL regular expression may not contain more than two escape-double-quote separators (SQL function "substring" statement 1)
+> SELECT 'abc' SIMILAR TO 'a%', 'abc' SIMILAR TO 'b%', 'abc' SIMILAR TO '(a|b)%c', 'ab' NOT SIMILAR TO 'a_', 'a_c' SIMILAR TO 'a\_c', 'abc' SIMILAR TO 'a\_c', 'a%c' SIMILAR TO 'a#%c' ESCAPE '#', 'abc' SIMILAR TO '[a-c]+', 'a.c' SIMILAR TO 'a.c', 'abc' SIMILAR TO 'a.c'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,f,t,t,t,f
+SELECT 1
+> SELECT similar_to_escape('a%b_[x]\.'), similar_to_escape('a#%b', '#'), similar_to_escape('a%\', ''), similar_escape(NULL, 'x'), similar_escape('a\%', NULL), similar_to_escape('[]%]x(y|z)^$'), similar_to_escape('[^]%]_'), similar_to_escape('a#"b#"c', '#'), similar_to_escape('[\d]'), similar_to_escape('x#[y', '#')
+fields similar_to_escape:25:-1:-1,similar_to_escape:25:-1:-1,similar_to_escape:25:-1:-1,similar_escape:25:-1:-1,similar_escape:25:-1:-1,similar_to_escape:25:-1:-1,similar_to_escape:25:-1:-1,similar_to_escape:25:-1:-1,similar_to_escape:25:-1:-1,similar_to_escape:25:-1:-1
+row ^(?:a.*b.[x]\.)$,^(?:a\%b)$,^(?:a.*\\)$,NULL,^(?:a\%)$,^(?:[]%]x(?:y|z)\^\$)$,^(?:[^]%].)$,^(?:a){1,1}?(b){1,1}(?:c)$,^(?:[\d])$,^(?:x\[y)$
+SELECT 1
+> SELECT similar_to_escape('a', 'ab')
+ERROR 22025 invalid escape string
+> SELECT similar_to_escape('a', NULL) IS NULL, similar_escape('a', ''), similar_to_escape(NULL) IS NULL
+fields ?column?:16:1:-1,similar_escape:25:-1:-1,?column?:16:1:-1
+row t,^(?:a)$,t
+SELECT 1
+> SELECT regexp_match(pg_get_triggerdef_text, E'.{35,} WHEN \\((.+)\\) EXECUTE FUNCTION') FROM (VALUES ('CREATE TRIGGER t1 BEFORE INSERT ON public.tab FOR EACH ROW WHEN ((new.a > 0)) EXECUTE FUNCTION f()'), ('CREATE TRIGGER t2 AFTER UPDATE ON public.tab FOR EACH ROW EXECUTE FUNCTION f()')) AS v(pg_get_triggerdef_text)
+fields regexp_match:1009:-1:-1
+row {"(new.a > 0)"}
+row NULL
+SELECT 2
+> SELECT p.oid = 2074 AS pg_oid, p.proisstrict, p.provolatile FROM pg_proc p WHERE p.proname = 'substring' AND p.proargtypes::text = '25 25 25'
+fields pg_oid:16:1:-1,proisstrict@pg_proc.13:16:1:-1,provolatile@pg_proc.15:18:1:-1
+row t,t,i
+SELECT 1
+> CREATE VIEW rxv AS SELECT substring(s FROM 'b(.)') AS a, substring(s SIMILAR '%#"b#"%' ESCAPE '#') AS b, s SIMILAR TO 'a%' AS c, s NOT SIMILAR TO 'a%' ESCAPE '#' AS d, regexp_match(s, 'x', 'i') AS e, regexp_like(s, 'y') AS f FROM (VALUES ('abc')) AS t(s)
+CREATE VIEW
+> SELECT pg_get_viewdef('rxv'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT "substring"(s, 'b(.)'::text) AS a,
+    SUBSTRING(s SIMILAR '%#"b#"%'::text ESCAPE '#'::text) AS b,
+    s ~ similar_to_escape('a%'::text) AS c,
+    s !~ similar_to_escape('a%'::text, '#'::text) AS d,
+    regexp_match(s, 'x'::text, 'i'::text) AS e,
+    regexp_like(s, 'y'::text) AS f
+   FROM ( VALUES ('abc'::text)) t(s);
+SELECT 1
+> SELECT * FROM rxv
+fields a@rxv.1:25:-1:-1,b@rxv.2:25:-1:-1,c@rxv.3:16:1:-1,d@rxv.4:16:1:-1,e@rxv.5:1009:-1:-1,f@rxv.6:16:1:-1
+row c,b,t,f,NULL,f
+SELECT 1
+> SELECT id, regexp_match(str, pat) AS m FROM (VALUES (1, '(a)(\1)*', 'aaaab'), (2, '(a)(\1+)', 'aaa'), (3, '(a*)(\1)?b', 'aaaab'), (4, '(a)(\1){2,3}?', 'aaaaa'), (5, '((a)\2)+', 'aaaa'), (6, '(a)((\1)b)*', 'aabab'), (7, '(.)(\1|x)*', 'aaxa'), (8, '(\w+)(\s\1)*$', 'go go go'), (9, '(A)\1', 'aA'), (10, '(?i)(A)\1', 'aA'), (11, '(a+)\1*?b', 'aaaab'), (12, '(a)\1{2}', 'aaaa')) AS v(id, pat, str) ORDER BY id
+fields id:23:4:-1,m:1009:-1:-1
+row 1,{a,a}
+row 2,{a,aa}
+row 3,{aaaa,NULL}
+row 4,{a,a}
+row 5,{aa,a}
+row 6,{a,ab,a}
+row 7,{a,a}
+row 8,{go," go"}
+row 9,NULL
+row 10,{a}
+row 11,{aaaa}
+row 12,{a}
+SELECT 12
