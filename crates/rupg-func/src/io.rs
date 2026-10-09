@@ -79,6 +79,9 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::CIDR
             | oid::JSONB
             | oid::PG_NODE_TREE
+            | oid::PG_NDISTINCT
+            | oid::PG_DEPENDENCIES
+            | oid::PG_MCV_LIST
             | oid::ACLITEM
             | oid::ANYARRAY
             | oid::PG_LSN
@@ -159,6 +162,12 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         (oid::OID | XID | CID, Value::Oid(v)) => types::oid_out(*v, out),
         (_, Value::Char(v)) => types::char_out(*v, out),
         (_, Value::Text(v)) => out.extend_from_slice(v.as_bytes()),
+        (oid::PG_NDISTINCT, Value::Bytea(v)) => {
+            types::pg_ndistinct_out(v, out).map_err(type_error)?
+        }
+        (oid::PG_DEPENDENCIES, Value::Bytea(v)) => {
+            types::pg_dependencies_out(v, out).map_err(type_error)?;
+        }
         (_, Value::Bytea(v)) => types::bytea_out(v, session.bytea_output(), out),
         (_, Value::Uuid(v)) => types::uuid_out(v, out),
         (_, Value::Inet(v)) => types::inet_out(v, ty == oid::CIDR, out),
@@ -345,15 +354,22 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
             types::interval_in(text, typmod, session.interval_style()).map_err(type_error)?,
         ),
         // `pg_node_tree_in`: a stored node tree comes only from the server.
-        oid::PG_NODE_TREE => {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "cannot accept a value of type pg_node_tree",
-            ));
-        }
+        oid::PG_NODE_TREE => return Err(no_input(ty)),
+        oid::PG_NDISTINCT => Value::Bytea(types::pg_ndistinct_in(text).map_err(type_error)?),
+        oid::PG_DEPENDENCIES => Value::Bytea(types::pg_dependencies_in(text).map_err(type_error)?),
+        // `pg_mcv_list_in`: a list of the most common values comes only from `ANALYZE`.
+        oid::PG_MCV_LIST => return Err(no_input(ty)),
         _ => return Err(not_yet(format!("input of type {}", type_name(ty)))),
     };
     Ok(value)
+}
+
+/// The error of the input and the receive functions of a type whose values come only from the server.
+fn no_input(ty: u32) -> Error {
+    Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        format!("cannot accept a value of type {}", type_name(ty)),
+    )
 }
 
 /// An error of the engine as the error of a type function, for an element of an array.
@@ -453,6 +469,9 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
             Value::Array(Box::new(Array::vector(
                 values.into_iter().map(|v| Some(Value::Oid(v))).collect(),
             )))
+        }
+        oid::PG_NDISTINCT | oid::PG_DEPENDENCIES | oid::PG_MCV_LIST => {
+            return Err(Received::Engine(no_input(ty)));
         }
         _ => {
             return Err(Received::Engine(not_yet(format!(

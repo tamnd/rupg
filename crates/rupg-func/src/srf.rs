@@ -1,4 +1,4 @@
-//! The set-returning functions that a query can call in `FROM` or in its target list: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `regexp_matches`, `regexp_split_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, `pg_prepared_statement`, the functions of the views of replication, of progress and of the prepared transactions, the functions of the statistics of the whole server that give rows, the functions of the views of asynchronous I/O, shared memory, replication origins, recovery, publications and cursors, and the functions of the views of the time zones.
+//! The set-returning functions that a query can call in `FROM` or in its target list: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `regexp_matches`, `regexp_split_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, `pg_prepared_statement`, the functions of the views of replication, of progress and of the prepared transactions, the functions of the statistics of the whole server that give rows, the functions of the views of asynchronous I/O, shared memory, extended statistics, replication origins, recovery, publications and cursors, and the functions of the views of the time zones.
 //!
 //! A set kernel gives all the rows of the call at once, as a function of PostgreSQL in the materialize mode gives a tuplestore. Each row has one value for each column of the result: one value for a function of a scalar type, or one value for each `OUT` parameter.
 
@@ -50,6 +50,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         | "pg_cursor" => crate::absent::none,
         "pg_stat_get_recovery" => crate::absent::recovery,
         "pg_get_shmem_allocations_numa" => crate::absent::shmem_numa,
+        "pg_stats_ext_mcvlist_items" => crate::absent::mcv_list_items,
         "pg_get_publication_tables_a" => crate::absent::publication_tables,
         "pg_get_publication_tables_b" => crate::absent::publication_tables_of,
         "pg_get_publication_sequences" => crate::absent::publication_sequences,
