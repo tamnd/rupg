@@ -18,6 +18,7 @@ mod misc;
 mod network;
 mod reg;
 mod regex;
+mod replication;
 mod srf;
 mod stat;
 mod text;
@@ -185,6 +186,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| regex::by_src(src))
         .or_else(|| network::by_src(src))
         .or_else(|| activity::by_src(src))
+        .or_else(|| replication::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.

@@ -1,4 +1,4 @@
-//! The set-returning functions that a query can call in `FROM`: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity` and `pg_stat_get_backend_idset`.
+//! The set-returning functions that a query can call in `FROM`: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, and the functions of the views of replication, of progress and of the prepared transactions.
 //!
 //! A set kernel gives all the rows of the call at once, as a function of PostgreSQL in the materialize mode gives a tuplestore. Each row has one value for each column of the result: one value for a function of a scalar type, or one value for each `OUT` parameter.
 
@@ -30,6 +30,14 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "show_all_settings" => all_settings,
         "pg_stat_get_activity" => crate::activity::activity,
         "pg_stat_get_backend_idset" => crate::activity::backend_idset,
+        "pg_stat_get_progress_info" => crate::replication::progress_info,
+        "pg_stat_get_wal_senders"
+        | "pg_stat_get_subscription"
+        | "pg_get_replication_slots"
+        | "pg_prepared_xact" => crate::replication::none,
+        "pg_stat_get_wal_receiver" => crate::replication::wal_receiver,
+        "pg_stat_get_subscription_stats" => crate::replication::subscription_stats,
+        "pg_stat_get_replication_slot" => crate::replication::replication_slot,
         _ => return None,
     };
     Some(kernel)
