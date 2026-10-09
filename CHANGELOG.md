@@ -4,6 +4,15 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.13 (2026-10-10)
+
+A patch release on the way to M2. rupg now has domains and functions in SQL, and the setup of a new cluster makes the domains and the first functions of `information_schema`.
+
+### Added
+
+- Domains (#220). The setup makes the five domains of `information_schema`, such as `cardinal_number` and `sql_identifier`, with the OIDs of PostgreSQL. A cast to a domain checks its constraints, and `pg_type`, `pg_constraint` and `pg_depend` show the rows of PostgreSQL.
+- Functions in SQL with a `RETURN` body (#221). The setup makes seven functions of `information_schema`, such as `_pg_char_max_length` and `_pg_numeric_precision`, and the engine runs the body of each function. Also the shift operators `<<` and `>>` of the integer types and `pg_encoding_max_length`.
+
 ## 0.1.12 (2026-10-09)
 
 A patch release on the way to M2. rupg now runs the SQL statements of the prepared statements, and two more system views return the rows of PostgreSQL.
