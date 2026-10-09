@@ -9,7 +9,7 @@ use std::rc::Rc;
 
 use rupg_analyze::{
     Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query, SetKind,
-    SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Target,
+    SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, Target,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -100,6 +100,10 @@ fn check(expr: &Expr) -> Result<()> {
         ExprKind::ArrayCoerce { arg, element, .. } => {
             check(arg)?;
             check(element)?;
+        }
+        ExprKind::Subscript(sub) => {
+            check(&sub.container)?;
+            sub.bounds().try_for_each(check)?;
         }
         ExprKind::Bool(_, args) | ExprKind::Coalesce(args) => args.iter().try_for_each(check)?,
         ExprKind::Case(case) => {
@@ -863,6 +867,7 @@ impl<'a> Eval<'a> {
                 rupg_func::input(expr.ty, &text, -1, self.session)
             }
             ExprKind::ArrayCoerce { arg, element, .. } => self.array_coerce(arg, element),
+            ExprKind::Subscript(sub) => self.subscript(sub),
             ExprKind::Bool(op, args) => self.bool_op(*op, args),
             ExprKind::NullTest(arg, is_null) => {
                 Ok(Value::Bool(self.eval(arg)?.is_null() == *is_null))
@@ -1057,6 +1062,48 @@ impl<'a> Eval<'a> {
             values.push((!result.is_null()).then_some(result));
         }
         Ok(Value::Array(Box::new(Array { dims: array.dims, values })))
+    }
+
+    /// `ExecEvalSubscriptingRef` for a fetch from an array. A null array gives null before the subscripts run, and a null subscript gives null.
+    fn subscript(&mut self, sub: &Subscript) -> Result<Value> {
+        let array = match self.eval(&sub.container)? {
+            Value::Null => return Ok(Value::Null),
+            Value::Array(array) => array,
+            _ => return Err(Error::internal("the container of a SubscriptingRef is not an array")),
+        };
+        let upper = self.subscript_list(&sub.upper)?;
+        let lower = match &sub.lower {
+            Some(lower) => Some(self.subscript_list(lower)?),
+            None => None,
+        };
+        let (Some(upper), Some(lower)) = (upper, lower.unwrap_or(Some(Vec::new()))) else {
+            return Ok(Value::Null);
+        };
+        Ok(if sub.lower.is_some() {
+            Value::Array(Box::new(array_slice(&array, &lower, &upper)))
+        } else {
+            array_element(&array, &upper)
+        })
+    }
+
+    /// The values of the subscripts of one bound, with `None` for a bound that the query does not give. A null subscript gives `None` for the list.
+    fn subscript_list(&mut self, list: &[Option<Expr>]) -> Result<Option<Vec<Option<i32>>>> {
+        let mut out = Vec::with_capacity(list.len());
+        let mut null = false;
+        for item in list {
+            out.push(match item {
+                Some(expr) => match self.eval(expr)? {
+                    Value::Int4(n) => Some(n),
+                    Value::Null => {
+                        null = true;
+                        None
+                    }
+                    _ => return Err(Error::internal("a subscript is not an int4")),
+                },
+                None => None,
+            });
+        }
+        Ok(if null { None } else { Some(out) })
     }
 
     fn case(&mut self, case: &Case) -> Result<Value> {
@@ -1301,3 +1348,67 @@ mod user;
 
 #[cfg(test)]
 mod tests;
+
+/// `array_get_element`: the element at the subscripts, or null when the number of subscripts is not the number of dimensions or a subscript is outside its dimension.
+fn array_element(array: &Array<Value>, subscripts: &[Option<i32>]) -> Value {
+    if subscripts.len() != array.dims.len() {
+        return Value::Null;
+    }
+    let mut offset = 0usize;
+    for (dim, at) in array.dims.iter().zip(subscripts) {
+        let at = i64::from(at.unwrap_or(dim.lower));
+        let (lower, len) = (i64::from(dim.lower), i64::from(dim.len));
+        if at < lower || at >= lower + len {
+            return Value::Null;
+        }
+        let (Ok(step), Ok(len)) = (usize::try_from(at - lower), usize::try_from(len)) else {
+            return Value::Null;
+        };
+        offset = offset * len + step;
+    }
+    array.values.get(offset).cloned().flatten().unwrap_or(Value::Null)
+}
+
+/// `array_get_slice`: the elements between the bounds, which the bounds of the array limit. A bound that the query does not give is the bound of the array, and a dimension with no subscripts is the full dimension. The result has the lower bound 1 in each dimension. A slice with no elements, or with more subscripts than the array has dimensions, is the empty array.
+fn array_slice(array: &Array<Value>, lower: &[Option<i32>], upper: &[Option<i32>]) -> Array<Value> {
+    let ndim = array.dims.len();
+    if ndim < upper.len() || ndim == 0 {
+        return Array::empty();
+    }
+    let mut ranges = Vec::with_capacity(ndim);
+    for (i, dim) in array.dims.iter().enumerate() {
+        let (first, past) = (i64::from(dim.lower), i64::from(dim.lower) + i64::from(dim.len));
+        let from = lower.get(i).copied().flatten().map_or(first, |n| i64::from(n).max(first));
+        let to = upper.get(i).copied().flatten().map_or(past - 1, |n| i64::from(n).min(past - 1));
+        if from > to {
+            return Array::empty();
+        }
+        ranges.push((from - first, to - from + 1));
+    }
+    let mut dims = Vec::with_capacity(ndim);
+    for &(_, len) in &ranges {
+        dims.push(ArrayDim { len: i32::try_from(len).unwrap_or(i32::MAX), lower: 1 });
+    }
+    let mut values = Vec::new();
+    slice_values(array, &ranges, 0, 0, &mut values);
+    Array { dims, values }
+}
+
+/// Pushes the elements of the slice in the dimensions from `level`, in the order of storage. `base` is the offset of the first element of the part of the array at `level`.
+fn slice_values(
+    array: &Array<Value>,
+    ranges: &[(i64, i64)],
+    level: usize,
+    base: usize,
+    out: &mut Vec<Option<Value>>,
+) {
+    let Some(&(start, len)) = ranges.get(level) else {
+        out.push(array.values.get(base).cloned().flatten());
+        return;
+    };
+    let size = usize::try_from(array.dims[level].len).unwrap_or(0);
+    for step in start..start + len {
+        let step = usize::try_from(step).unwrap_or(0);
+        slice_values(array, ranges, level + 1, base * size + step, out);
+    }
+}

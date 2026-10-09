@@ -145,7 +145,7 @@ impl Analyzer<'_> {
             }
             Node::RowExpr(r) => Err(not_yet("ROW()", place(r.location))),
             Node::SubLink(s) => self.transform_sublink(s),
-            Node::A_Indirection(_) => Err(not_yet("a subscript or a field selection", None)),
+            Node::A_Indirection(i) => self.transform_indirection(i),
             Node::GroupingFunc(g) => Err(Error::new(
                 SqlState::GROUPING_ERROR,
                 "arguments to GROUPING must be grouping expressions of the associated query level",

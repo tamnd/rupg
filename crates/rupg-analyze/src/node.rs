@@ -6,7 +6,7 @@ use rupg_common::{Error, Result};
 use rupg_types::{Array, ArrayDim, Interval, Recv, Value};
 
 use crate::expr::{
-    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, Var,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, Subscript, Var,
 };
 
 /// The stored form of an expression.
@@ -77,6 +77,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Relabel(..) => "RELABEL",
         ExprKind::CoerceViaIo(..) => "COERCEVIAIO",
         ExprKind::ArrayCoerce { .. } => "ARRAYCOERCE",
+        ExprKind::Subscript(_) => "SUBSCRIPT",
         ExprKind::Bool(..) => "BOOL",
         ExprKind::NullTest(..) => "NULLTEST",
         ExprKind::BooleanTest(..) => "BOOLEANTEST",
@@ -128,6 +129,16 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             });
             write_field("arg", arg, out)?;
             write_field("element", element, out)?;
+        }
+        ExprKind::Subscript(sub) => {
+            write_field("container", &sub.container, out)?;
+            out.push_str(" :upper ");
+            write_bounds(&sub.upper, out)?;
+            out.push_str(" :lower ");
+            match &sub.lower {
+                Some(lower) => write_bounds(lower, out)?,
+                None => out.push_str("<>"),
+            }
         }
         ExprKind::Bool(op, args) => {
             let op = match op {
@@ -224,6 +235,33 @@ fn write_args(args: &[Expr], out: &mut String) -> Result<()> {
     }
     out.push(')');
     Ok(())
+}
+
+/// The subscripts of one bound of a `SUBSCRIPT`, with `<>` for a bound that the query does not give.
+fn write_bounds(bounds: &[Option<Expr>], out: &mut String) -> Result<()> {
+    out.push('(');
+    for (i, bound) in bounds.iter().enumerate() {
+        if i > 0 {
+            out.push(' ');
+        }
+        match bound {
+            Some(bound) => write_expr(bound, out)?,
+            None => out.push_str("<>"),
+        }
+    }
+    out.push(')');
+    Ok(())
+}
+
+/// The subscripts of one bound of a `SUBSCRIPT`.
+fn bounds_of(item: &Item) -> Result<Vec<Option<Expr>>> {
+    list(item)?
+        .iter()
+        .map(|item| match item {
+            Item::Atom(empty) if empty == "<>" => Ok(None),
+            item => expr_of(item).map(Some),
+        })
+        .collect()
 }
 
 const TESTS: [(BoolTest, &str); 6] = [
@@ -550,6 +588,14 @@ fn expr_of(item: &Item) -> Result<Expr> {
             element: f.expr("element")?,
             form: cast_form(&f)?,
         },
+        "SUBSCRIPT" => ExprKind::Subscript(Box::new(Subscript {
+            container: *f.expr("container")?,
+            upper: bounds_of(f.get("upper")?)?,
+            lower: match f.get("lower")? {
+                Item::Atom(empty) if empty == "<>" => None,
+                item => Some(bounds_of(item)?),
+            },
+        })),
         "BOOL" => {
             let op = match f.atom("op")? {
                 "and" => BoolOp::And,
