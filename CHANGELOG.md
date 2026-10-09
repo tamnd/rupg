@@ -4,6 +4,15 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.6 (2026-10-09)
+
+A patch release on the way to M2. A query can now run set operations and `VALUES` lists.
+
+### Added
+
+- A query can combine `SELECT` parts with `UNION`, `INTERSECT` and `EXCEPT`, with and without `ALL`, and with parentheses, `ORDER BY`, `LIMIT` and `OFFSET` on the result (#190). The columns get the common types of PostgreSQL, and a part can be a subquery in `FROM` or in an expression. A locking clause and a column type with no sort or hash operators give the errors of PostgreSQL.
+- `VALUES` runs as a query and as a subquery in `FROM`, with `ORDER BY`, `LIMIT` and `OFFSET` (#191). The columns get the common types of the rows and the names `column1`, `column2` and so on. Rows of different lengths, `DEFAULT` and a locking clause give the errors of PostgreSQL.
+
 ## 0.1.5 (2026-10-09)
 
 A patch release on the way to M2. A query can now read `LATERAL` subqueries and functions in `FROM`.
