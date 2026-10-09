@@ -221,14 +221,15 @@ fn references(relation: u32, exprs: &[&Expr]) -> Vec<ObjRef> {
     refs
 }
 
-/// The type that `find_expr_references_walker` records for a constant or a cast, which is the type of its result. The catalog drops the references to the built-in types, so only a type such as a domain of `initdb` stays.
+/// The type that `find_expr_references_walker` records for a constant, a cast or the `Param` of a column of a subquery, which is the type of its result. The catalog drops the references to the built-in types, so only a type such as a domain of `initdb` stays.
 pub(crate) fn type_reference(expr: &Expr) -> Option<ObjRef> {
     match expr.kind {
         ExprKind::Const(_)
         | ExprKind::Relabel(..)
         | ExprKind::CoerceViaIo(..)
         | ExprKind::ArrayCoerce { .. }
-        | ExprKind::CoerceToDomain(..) => Some(ObjRef::new(PG_TYPE, expr.ty)),
+        | ExprKind::CoerceToDomain(..)
+        | ExprKind::SubColumn(_) => Some(ObjRef::new(PG_TYPE, expr.ty)),
         _ => None,
     }
 }

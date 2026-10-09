@@ -126,6 +126,79 @@ const VIEW_OIDS: [(&str, u32); 86] = [
 /// The OID of the schema `information_schema` in PostgreSQL 19.
 const INFORMATION_SCHEMA: u32 = 13350;
 
+/// The OID of each view and each table of `information_schema` in PostgreSQL 19, in the order of the script. The array type takes the next OID, the row type the OID after that, and then the `_RETURN` rule of a view or the TOAST table and its index of a table. Most views use one more OID after their rule, because PostgreSQL keeps the long query tree of the rule in TOAST, and each value in TOAST takes an OID.
+const INFORMATION_SCHEMA_OIDS: [(&str, u32); 69] = [
+    ("information_schema_catalog_name", 13370),
+    ("applicable_roles", 13379),
+    ("administrable_role_authorizations", 13384),
+    ("attributes", 13388),
+    ("character_sets", 13393),
+    ("check_constraint_routine_usage", 13398),
+    ("check_constraints", 13403),
+    ("collations", 13408),
+    ("collation_character_set_applicability", 13413),
+    ("column_column_usage", 13418),
+    ("column_domain_usage", 13423),
+    ("column_privileges", 13428),
+    ("column_udt_usage", 13433),
+    ("columns", 13438),
+    ("constraint_column_usage", 13443),
+    ("constraint_table_usage", 13448),
+    ("domain_constraints", 13453),
+    ("domain_udt_usage", 13458),
+    ("domains", 13463),
+    ("enabled_roles", 13468),
+    ("key_column_usage", 13472),
+    ("parameters", 13477),
+    ("referential_constraints", 13482),
+    ("role_column_grants", 13487),
+    ("routine_column_usage", 13491),
+    ("routine_privileges", 13496),
+    ("role_routine_grants", 13501),
+    ("routine_routine_usage", 13505),
+    ("routine_sequence_usage", 13510),
+    ("routine_table_usage", 13515),
+    ("routines", 13520),
+    ("schemata", 13525),
+    ("sequences", 13530),
+    ("sql_features", 13535),
+    ("sql_implementation_info", 13540),
+    ("sql_parts", 13545),
+    ("sql_sizing", 13550),
+    ("table_constraints", 13555),
+    ("table_privileges", 13560),
+    ("role_table_grants", 13565),
+    ("tables", 13569),
+    ("transforms", 13574),
+    ("triggered_update_columns", 13579),
+    ("triggers", 13584),
+    ("udt_privileges", 13589),
+    ("role_udt_grants", 13594),
+    ("usage_privileges", 13598),
+    ("role_usage_grants", 13603),
+    ("user_defined_types", 13607),
+    ("view_column_usage", 13612),
+    ("view_routine_usage", 13617),
+    ("view_table_usage", 13622),
+    ("views", 13627),
+    ("data_type_privileges", 13632),
+    ("element_types", 13637),
+    ("_pg_foreign_table_columns", 13642),
+    ("column_options", 13647),
+    ("_pg_foreign_data_wrappers", 13651),
+    ("foreign_data_wrapper_options", 13656),
+    ("foreign_data_wrappers", 13660),
+    ("_pg_foreign_servers", 13664),
+    ("foreign_server_options", 13669),
+    ("foreign_servers", 13673),
+    ("_pg_foreign_tables", 13677),
+    ("foreign_table_options", 13682),
+    ("foreign_tables", 13686),
+    ("_pg_user_mappings", 13690),
+    ("user_mapping_options", 13695),
+    ("user_mappings", 13700),
+];
+
 /// The OID of the array type of each domain of `information_schema` in PostgreSQL 19. The domain takes the next OID, and its check constraint the OID after that.
 const DOMAIN_OIDS: [(&str, u32); 5] = [
     ("cardinal_number", 13363),
@@ -217,7 +290,7 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
                 }
             }
             Node::GrantStmt(grant) => {
-                if let Err(error) = privileges(&mut catalog, grant, &user) {
+                if let Err(error) = privileges(&mut catalog, grant, &user, PG_CATALOG) {
                     failed.push((statement.to_string(), error));
                 }
             }
@@ -240,7 +313,7 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
     (catalog, failed)
 }
 
-/// Runs the parts of `information_schema.sql` that rupg can run: the schema, its privileges, the `search_path` of the script and the domains. Each domain also goes into the rows of `rupg-pgcatalog`, so that the analyzer and the executor find it as they find a built-in type.
+/// Runs the parts of `information_schema.sql` that rupg can run: the schema, its privileges, the `search_path` of the script, the domains, the functions, the views, the tables and the privileges on the views and the tables. Each domain and each function also goes into the rows of `rupg-pgcatalog`, so that the analyzer and the executor find it as they find a built-in object. The rows of the tables are not there yet, because rupg cannot run `INSERT`.
 fn information_schema(
     catalog: &mut Catalog,
     failed: &mut Vec<(String, Error)>,
@@ -311,6 +384,22 @@ fn information_schema(
                     None => Ok(()),
                 }
             }
+            Node::ViewStmt(_) | Node::CreateStmt(_) => {
+                let relation = match stmt {
+                    Node::ViewStmt(view) => view.view.as_ref(),
+                    Node::CreateStmt(table) => table.relation.as_ref(),
+                    _ => None,
+                };
+                let name = relation.and_then(|rv| rv.relname.as_deref()).unwrap_or_default();
+                match INFORMATION_SCHEMA_OIDS.iter().find(|(n, _)| *n == name) {
+                    Some(&(_, oid)) => {
+                        catalog.set_next_oid(oid);
+                        define(catalog, &settings, (user, clock), stmt, statement)
+                    }
+                    None => Err(Error::internal("a relation that PostgreSQL 19 does not have")),
+                }
+            }
+            Node::GrantStmt(grant) => privileges(catalog, grant, user, INFORMATION_SCHEMA),
             _ => Ok(()),
         };
         if let Err(error) = done {
@@ -453,8 +542,8 @@ fn owner_name() -> String {
         .map_or_else(|| "postgres".to_string(), |r| r.name.to_string())
 }
 
-/// `ExecGrant_Relation` for a `GRANT` or `REVOKE` of the script on views. The superuser runs it, so the owner is the grantor. A statement on a catalog changes nothing here.
-fn privileges(catalog: &mut Catalog, grant: &GrantStmt, owner: &str) -> Result<()> {
+/// `ExecGrant_Relation` for a `GRANT` or `REVOKE` of a script on the relations of the schema `namespace`. The superuser runs it, so the owner is the grantor. A statement on a catalog changes nothing here.
+fn privileges(catalog: &mut Catalog, grant: &GrantStmt, owner: &str, namespace: u32) -> Result<()> {
     let mut bits = 0;
     for privilege in grant.privileges.iter().flatten() {
         let Node::AccessPriv(privilege) = privilege else { continue };
@@ -490,7 +579,7 @@ fn privileges(catalog: &mut Catalog, grant: &GrantStmt, owner: &str) -> Result<(
     for object in grant.objects.iter().flatten() {
         let Node::RangeVar(rv) = object else { continue };
         let name = rv.relname.as_deref().unwrap_or_default();
-        let Some(view) = catalog.relation_by_name(PG_CATALOG, name) else { continue };
+        let Some(view) = catalog.relation_by_name(namespace, name) else { continue };
         let oid = view.oid;
         let mut items = match &view.acl {
             Some(acl) => acl.iter().map(|item| parse_item(item)).collect::<Result<Vec<_>>>()?,
@@ -549,9 +638,15 @@ mod tests {
         assert_eq!(catalog.next_oid(), FIRST_NORMAL_OID);
         let views: Vec<(&str, u32)> = catalog
             .relations()
-            .filter(|r| r.kind == RelKind::View)
+            .filter(|r| r.kind == RelKind::View && r.namespace == PG_CATALOG)
             .map(|r| (r.name.as_str(), r.oid))
             .collect();
         assert_eq!(views, VIEW_OIDS);
+        let relations: Vec<(&str, u32)> = catalog
+            .relations()
+            .filter(|r| r.namespace == INFORMATION_SCHEMA)
+            .map(|r| (r.name.as_str(), r.oid))
+            .collect();
+        assert_eq!(relations, INFORMATION_SCHEMA_OIDS);
     }
 }
