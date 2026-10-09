@@ -752,16 +752,35 @@ impl Deparser<'_> {
         self.buf.push_str(if sub.kind == SubLinkKind::Array { "ARRAY(" } else { "(" });
         let mut opname = "";
         if let Some(test) = &sub.test {
-            let ExprKind::Func(Func { form: FuncForm::Operator(opno), args, .. }) = &test.kind
-            else {
-                return Err(not_yet("a deparse of a subquery with this test"));
+            // One operator, or the operators of `=` or `<>` for a row on the left.
+            let (ops, row) = match &test.kind {
+                ExprKind::Bool(_, ops) => (ops.as_slice(), true),
+                _ => (std::slice::from_ref(test), false),
             };
-            let left =
-                args.first().ok_or_else(|| Error::internal("a test with no left argument"))?;
-            self.expr(left, true)?;
-            opname = builtin::operator_by_oid(*opno).map(|op| op.name).ok_or_else(|| {
-                Error::internal(format!("cache lookup failed for operator {opno}"))
-            })?;
+            if row {
+                self.buf.push('(');
+            }
+            for (i, op) in ops.iter().enumerate() {
+                let ExprKind::Func(Func { form: FuncForm::Operator(opno), args, .. }) = &op.kind
+                else {
+                    return Err(not_yet("a deparse of a subquery with this test"));
+                };
+                if i > 0 {
+                    self.buf.push_str(", ");
+                }
+                let left =
+                    args.first().ok_or_else(|| Error::internal("a test with no left argument"))?;
+                self.expr(left, true)?;
+                if i == 0 {
+                    opname =
+                        builtin::operator_by_oid(*opno).map(|op| op.name).ok_or_else(|| {
+                            Error::internal(format!("cache lookup failed for operator {opno}"))
+                        })?;
+                }
+            }
+            if row {
+                self.buf.push(')');
+            }
         }
         let paren = match sub.kind {
             SubLinkKind::Exists => {

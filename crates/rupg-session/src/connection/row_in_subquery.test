@@ -1,0 +1,101 @@
+> SELECT (1, 'a') IN (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(x, y))
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT (1, 'b') IN (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(x, y))
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT (1, 'b') NOT IN (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(x, y))
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT (1, NULL) IN (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(x, y))
+fields ?column?:16:1:-1
+row NULL
+SELECT 1
+> SELECT (3, NULL) IN (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(x, y))
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT (1, 'a') IN (SELECT x, y FROM (VALUES (1, 'a')) AS v(x, y) WHERE false)
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT (1, 'a') <> ALL (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(x, y))
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT (3, 'a') <> ALL (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(x, y))
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT (1, 'a') <> ANY (SELECT * FROM (VALUES (1, 'a'), (2, 'b')) AS v(x, y))
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT (1, 'a') = ALL (SELECT * FROM (VALUES (1, 'a'), (1, 'a')) AS v(x, y))
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT (1, 2, 3) IN (SELECT g, g + 1, g + 2 FROM generate_series(1, 5) AS g)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT g, (g, g * 2) IN (SELECT a, b FROM (VALUES (1, 2), (2, 5), (3, 6)) AS v(a, b)) FROM generate_series(1, 4) AS g ORDER BY g
+fields g:23:4:-1,?column?:16:1:-1
+row 1,t
+row 2,f
+row 3,t
+row 4,f
+SELECT 4
+> SELECT g FROM generate_series(1, 5) AS g WHERE (g, g % 2) IN (SELECT a, 1 FROM generate_series(2, 5) AS a) ORDER BY g
+fields g:23:4:-1
+row 3
+row 5
+SELECT 2
+> SELECT (1, 'a') IN (SELECT 1)
+ERROR 42601 subquery has too few columns at 17
+> SELECT 1 IN (SELECT 1, 2)
+ERROR 42601 subquery has too many columns at 10
+> SELECT (1, 2, 3) IN (SELECT 1, 2)
+ERROR 42601 subquery has too few columns at 18
+> SELECT (1, 2) IN (SELECT 1, 2, 3)
+ERROR 42601 subquery has too many columns at 15
+> SELECT (1, 'a') IN (SELECT 1, 2)
+ERROR 22P02 invalid input syntax for type integer: "a" at 12
+> SELECT (1, 2) ~~ ANY (SELECT 'a', 'b')
+ERROR 42883 operator does not exist: integer ~~ text at 15
+> SELECT (1, 2) + ANY (SELECT 1, 2)
+ERROR 42804 row comparison operator must yield type boolean, not type integer at 15
+> SELECT ROW(1) IN (SELECT 1)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT ROW(1, 2) IN (SELECT 1, 2)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT 1 IN (SELECT FROM generate_series(1, 2))
+ERROR 42601 subquery has too few columns at 10
+> SELECT 1 < ANY (SELECT 2)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT 1 + ANY (SELECT 2)
+ERROR 42804 row comparison operator must yield type boolean, not type integer at 10
+> CREATE VIEW rv AS SELECT g FROM generate_series(1, 5) AS g WHERE (g, g % 2) IN (SELECT a, 1 FROM generate_series(2, 5) AS a) AND (g, 1) <> ALL (SELECT 3, 1) AND g NOT IN (SELECT 4)
+CREATE VIEW
+> SELECT pg_get_viewdef('rv'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT g
+   FROM generate_series(1, 5) g(g)
+  WHERE (((g, (g % 2)) IN ( SELECT a.a,
+            1
+           FROM generate_series(2, 5) a(a))) AND ((g, 1) <> ALL ( SELECT 3,
+            1)) AND (NOT (g IN ( SELECT 4))));
+SELECT 1
+> SELECT * FROM rv ORDER BY 1
+fields g@rv.1:23:4:-1
+row 5
+SELECT 1

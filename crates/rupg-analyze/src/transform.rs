@@ -265,15 +265,13 @@ impl Analyzer<'_> {
     /// # Errors
     ///
     /// `42601` for rows with a different number of fields, `0A000` for rows with no fields or for operators with no common kind, and `42804` for an operator that does not give `boolean` or that gives a set.
-    fn row_comparison(
+    pub(crate) fn row_comparison(
         &mut self,
         op_names: &[&str],
-        left: &[Option<Node>],
-        right: &[Option<Node>],
+        left: Vec<Expr>,
+        right: Vec<Expr>,
         at: Option<usize>,
     ) -> Result<Expr> {
-        let left = left.iter().map(|n| self.transform(n.as_ref())).collect::<Result<Vec<_>>>()?;
-        let right = right.iter().map(|n| self.transform(n.as_ref())).collect::<Result<Vec<_>>>()?;
         if left.len() != right.len() {
             return Err(Error::new(
                 SqlState::SYNTAX_ERROR,
@@ -340,7 +338,9 @@ impl Analyzer<'_> {
             | A_Expr_Kind::AEXPR_ILIKE
             | A_Expr_Kind::AEXPR_SIMILAR => {
                 if let (Some(Node::RowExpr(l)), Some(Node::RowExpr(r))) = (&a.lexpr, &a.rexpr) {
-                    return self.row_comparison(&op_names, &l.args, &r.args, at);
+                    let left = self.transform_list(&l.args)?;
+                    let right = self.transform_list(&r.args)?;
+                    return self.row_comparison(&op_names, left, right, at);
                 }
                 let left = match &a.lexpr {
                     Some(node) => Some(self.transform(Some(node))?),
