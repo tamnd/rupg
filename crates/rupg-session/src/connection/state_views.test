@@ -1,0 +1,109 @@
+> SELECT name FROM pg_config
+fields name@pg_config.1:25:-1:-1
+row BINDIR
+row DOCDIR
+row HTMLDIR
+row INCLUDEDIR
+row PKGINCLUDEDIR
+row INCLUDEDIR-SERVER
+row LIBDIR
+row PKGLIBDIR
+row LOCALEDIR
+row MANDIR
+row SHAREDIR
+row SYSCONFDIR
+row PGXS
+row CONFIGURE
+row CC
+row CPPFLAGS
+row CFLAGS
+row CFLAGS_SL
+row LDFLAGS
+row LDFLAGS_EX
+row LDFLAGS_SL
+row LIBS
+row VERSION
+SELECT 23
+> SELECT count(*), count(DISTINCT name) FROM pg_config
+fields count:20:8:-1,count:20:8:-1
+row 23,23
+SELECT 1
+> SELECT name, setting LIKE 'PostgreSQL %' FROM pg_config WHERE name = 'VERSION'
+fields name@pg_config.1:25:-1:-1,?column?:16:1:-1
+row VERSION,t
+SELECT 1
+> SELECT * FROM pg_config WHERE false
+fields name@pg_config.1:25:-1:-1,setting@pg_config.2:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_config() WHERE false
+fields name:25:-1:-1,setting:25:-1:-1
+SELECT 0
+> SELECT pg_typeof(name), pg_typeof(setting) FROM pg_config LIMIT 1
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row text,text
+SELECT 1
+> SELECT * FROM pg_file_settings WHERE false
+fields sourcefile@pg_file_settings.1:25:-1:-1,sourceline@pg_file_settings.2:23:4:-1,seqno@pg_file_settings.3:23:4:-1,name@pg_file_settings.4:25:-1:-1,setting@pg_file_settings.5:25:-1:-1,applied@pg_file_settings.6:16:1:-1,error@pg_file_settings.7:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_show_all_file_settings() WHERE false
+fields sourcefile:25:-1:-1,sourceline:23:4:-1,seqno:23:4:-1,name:25:-1:-1,setting:25:-1:-1,applied:16:1:-1,error:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_available_extensions WHERE false
+fields name@pg_available_extensions.1:19:64:-1,default_version@pg_available_extensions.2:25:-1:-1,installed_version@pg_available_extensions.3:25:-1:-1,location@pg_available_extensions.4:25:-1:-1,comment@pg_available_extensions.5:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_available_extension_versions WHERE false
+fields name@pg_available_extension_versions.1:19:64:-1,version@pg_available_extension_versions.2:25:-1:-1,installed@pg_available_extension_versions.3:16:1:-1,superuser@pg_available_extension_versions.4:16:1:-1,trusted@pg_available_extension_versions.5:16:1:-1,relocatable@pg_available_extension_versions.6:16:1:-1,schema@pg_available_extension_versions.7:19:64:-1,requires@pg_available_extension_versions.8:1003:-1:-1,location@pg_available_extension_versions.9:25:-1:-1,comment@pg_available_extension_versions.10:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_available_extensions() WHERE false
+fields name:19:64:-1,default_version:25:-1:-1,location:25:-1:-1,comment:25:-1:-1
+SELECT 0
+> SELECT * FROM pg_available_extension_versions() WHERE false
+fields name:19:64:-1,version:25:-1:-1,superuser:16:1:-1,trusted:16:1:-1,relocatable:16:1:-1,schema:19:64:-1,requires:1003:-1:-1,location:25:-1:-1,comment:25:-1:-1
+SELECT 0
+> SELECT count(*) FROM pg_available_extensions WHERE name = 'no_such_extension'
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_available_extension_versions WHERE name = 'no_such_extension'
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_file_settings WHERE name = 'no_such_setting'
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT relacl FROM pg_class WHERE relname IN ('pg_config', 'pg_file_settings', 'pg_hba_file_rules') ORDER BY relname
+fields relacl@pg_class.32:1034:-1:-1
+row {postgres=arwdDxtm/postgres}
+row {postgres=arwdDxtm/postgres}
+row {postgres=arwdDxtm/postgres}
+SELECT 3
+> SELECT count(*) FROM pg_config WHERE setting IS NULL OR name IS NULL
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT name FROM pg_config WHERE name LIKE '%DIR%' ORDER BY name
+fields name@pg_config.1:25:-1:-1
+row BINDIR
+row DOCDIR
+row HTMLDIR
+row INCLUDEDIR
+row INCLUDEDIR-SERVER
+row LIBDIR
+row LOCALEDIR
+row MANDIR
+row PKGINCLUDEDIR
+row PKGLIBDIR
+row SHAREDIR
+row SYSCONFDIR
+SELECT 12
+> SELECT (pg_config()).name LIMIT 3
+fields name:25:-1:-1
+row BINDIR
+row DOCDIR
+row HTMLDIR
+SELECT 3
+> SELECT pg_show_all_file_settings(1)
+ERROR 42883 function pg_show_all_file_settings(integer) does not exist at 8
+> SELECT * FROM pg_config(1)
+ERROR 42883 function pg_config(integer) does not exist at 15

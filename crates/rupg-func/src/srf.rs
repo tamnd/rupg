@@ -48,6 +48,9 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         | "pg_get_dsm_registry_allocations"
         | "pg_show_replication_origin_status"
         | "pg_cursor" => crate::absent::none,
+        "pg_available_extensions" | "pg_available_extension_versions" => crate::absent::extensions,
+        "show_all_file_settings" => crate::absent::file_settings,
+        "pg_config" => crate::absent::config,
         "pg_stat_get_recovery" => crate::absent::recovery,
         "pg_get_shmem_allocations_numa" => crate::absent::shmem_numa,
         "pg_stats_ext_mcvlist_items" => crate::absent::mcv_list_items,
