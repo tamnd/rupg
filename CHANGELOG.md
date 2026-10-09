@@ -4,6 +4,16 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.14 (2026-10-10)
+
+A patch release on the way to M2. rupg now has rows as values and the regular expression functions that give the text of a match. Thus 9 of the 11 functions in SQL of `information_schema` now run.
+
+### Added
+
+- Whole-row references and the fields of a row value (#223). `SELECT t FROM ... AS t`, `t.*` as an argument and `(x).field` give the results of PostgreSQL, and the setup makes `_pg_truetypid` and `_pg_truetypmod` of `information_schema`.
+- The positions of regular expression matches and groups (#224). The engine builds the tree of subexpressions of PostgreSQL, so each group gets the same text. `substring` with a POSIX or an SQL pattern, `similar_to_escape`, `SIMILAR TO`, `regexp_match` and `regexp_like` run.
+- `format_type` of an interval with a typmod, such as `interval day to second(3)` (#225). `_pg_interval_type` of `information_schema` gives the results of PostgreSQL.
+
 ## 0.1.13 (2026-10-10)
 
 A patch release on the way to M2. rupg now has domains and functions in SQL, and the setup of a new cluster makes the domains and the first functions of `information_schema`.
