@@ -1,0 +1,85 @@
+> CREATE TABLE oacl_t (a int)
+CREATE TABLE
+> CREATE VIEW oacl_v AS SELECT a FROM oacl_t
+CREATE VIEW
+> CREATE SCHEMA oacl_s
+CREATE SCHEMA
+> CREATE TABLE oacl_s.inner_t (b text)
+CREATE TABLE
+> SELECT has_schema_privilege('information_schema', 'usage'), has_schema_privilege('pg_monitor', 'information_schema', 'usage'), has_schema_privilege('pg_monitor', 'information_schema', 'create')
+fields has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1
+row t,t,f
+SELECT 1
+> SELECT has_schema_privilege('pg_monitor', 'information_schema', 'usage with grant option'), has_schema_privilege('information_schema'::regnamespace, 'create')
+fields has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1
+row f,t
+SELECT 1
+> SELECT has_schema_privilege('oacl_s', 'usage'), has_schema_privilege('oacl_s', 'create'), has_schema_privilege('pg_monitor', 'oacl_s', 'usage'), has_schema_privilege('pg_monitor', 'oacl_s', 'create')
+fields has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1
+row t,t,f,f
+SELECT 1
+> SELECT has_schema_privilege('pg_read_all_data', 'oacl_s', 'usage'), has_schema_privilege('pg_write_all_data', 'oacl_s', 'usage'), has_schema_privilege('pg_write_all_data', 'oacl_s', 'create'), has_schema_privilege('pg_maintain', 'oacl_s', 'usage')
+fields has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1
+row t,t,f,f
+SELECT 1
+> SELECT has_schema_privilege('pg_monitor', 'oacl_s'::regnamespace, 'usage'), has_schema_privilege('pg_monitor', 99999::oid, 'usage'), has_schema_privilege(99999::oid, 'usage')
+fields has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1
+row f,NULL,t
+SELECT 1
+> SELECT has_schema_privilege('public', 'create'), has_schema_privilege('pg_monitor', 'public', 'create'), has_schema_privilege('pg_monitor', 'public', 'usage')
+fields has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT has_schema_privilege('no_such_schema', 'usage')
+fields has_schema_privilege:16:1:-1
+ERROR 3F000 schema "no_such_schema" does not exist
+> SELECT has_schema_privilege('oacl_s', 'select')
+fields has_schema_privilege:16:1:-1
+ERROR 22023 unrecognized privilege type: "select"
+> SELECT has_type_privilege('oacl_t', 'usage'), has_type_privilege('pg_monitor', 'oacl_t', 'usage'), has_type_privilege('pg_monitor', 'oacl_t[]', 'usage'), has_type_privilege('pg_monitor', 'oacl_v', 'usage')
+fields has_type_privilege:16:1:-1,has_type_privilege:16:1:-1,has_type_privilege:16:1:-1,has_type_privilege:16:1:-1
+row t,t,t,t
+SELECT 1
+> SELECT has_type_privilege('pg_monitor', 'oacl_s.inner_t', 'usage'), has_type_privilege('pg_monitor', 'oacl_s.inner_t[]', 'usage with grant option'), has_type_privilege('pg_monitor', 'oacl_t'::regtype, 'usage')
+fields has_type_privilege:16:1:-1,has_type_privilege:16:1:-1,has_type_privilege:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT has_type_privilege('information_schema.cardinal_number', 'usage'), has_type_privilege('pg_monitor', 'information_schema.sql_identifier', 'usage'), has_type_privilege('pg_monitor', 'information_schema.yes_or_no[]', 'usage')
+fields has_type_privilege:16:1:-1,has_type_privilege:16:1:-1,has_type_privilege:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT has_type_privilege('pg_tables', 'usage'), has_type_privilege('pg_monitor', 'pg_tables', 'usage'), has_type_privilege('pg_monitor', 'information_schema.tables', 'usage'), has_type_privilege('pg_monitor', 99999::oid, 'usage')
+fields has_type_privilege:16:1:-1,has_type_privilege:16:1:-1,has_type_privilege:16:1:-1,has_type_privilege:16:1:-1
+row t,t,t,NULL
+SELECT 1
+> SELECT has_type_privilege('no_such_type', 'usage')
+fields has_type_privilege:16:1:-1
+ERROR 42704 type "no_such_type" does not exist
+> SELECT has_function_privilege('information_schema._pg_truetypid(pg_attribute, pg_type)', 'execute'), has_function_privilege('pg_monitor', 'information_schema._pg_char_max_length(oid, integer)', 'execute')
+fields has_function_privilege:16:1:-1,has_function_privilege:16:1:-1
+row t,t
+SELECT 1
+> SELECT has_function_privilege('pg_monitor', 'information_schema._pg_expandarray(anyarray)', 'execute with grant option'), has_function_privilege('pg_monitor', 'pg_config()', 'execute'), has_function_privilege('pg_monitor', 'pg_show_all_file_settings()', 'execute')
+fields has_function_privilege:16:1:-1,has_function_privilege:16:1:-1,has_function_privilege:16:1:-1
+row f,f,f
+SELECT 1
+> SELECT count(*) FROM pg_proc p WHERE p.pronamespace = 'information_schema'::regnamespace AND has_function_privilege('pg_monitor', p.oid, 'execute')
+fields count:20:8:-1
+row 11
+SELECT 1
+> SELECT count(*) FROM pg_type t WHERE t.typnamespace = 'information_schema'::regnamespace AND has_type_privilege('pg_monitor', t.oid, 'usage')
+fields count:20:8:-1
+row 148
+SELECT 1
+> SELECT count(*) FROM pg_type t WHERE t.typnamespace = 'information_schema'::regnamespace AND has_type_privilege('pg_monitor', t.oid, 'usage with grant option')
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT n.nspname, has_schema_privilege('pg_monitor', n.oid, 'usage'), has_schema_privilege('pg_write_all_data', n.oid, 'usage'), has_schema_privilege('pg_database_owner', n.oid, 'create') FROM pg_namespace n WHERE n.nspname NOT LIKE 'pg_temp%' AND n.nspname NOT LIKE 'pg_toast_temp%' ORDER BY 1
+fields nspname@pg_namespace.2:19:64:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1,has_schema_privilege:16:1:-1
+row information_schema,t,t,f
+row oacl_s,f,t,f
+row pg_catalog,t,t,f
+row pg_toast,f,t,f
+row public,t,t,t
+SELECT 5
