@@ -1721,6 +1721,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/sql_prepare.test")));
     }
 
+    /// `pg_get_function_arguments`, `pg_get_function_identity_arguments`, `pg_get_function_result` and `pg_get_function_arg_default`: a hash of the text of all the built-in functions of `pg_proc.dat`, the defaults of the arguments, the ordered-set aggregates, the output arguments, and an OID that is not a function. `connection/function_arguments.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn function_arguments() {
+        big_stack(|| script(include_str!("connection/function_arguments.test")));
+    }
+
+    /// The view `pg_sequences` for the sequences of `serial` columns, `pg_sequence_last_value` with its errors, `pg_my_temp_schema`, `pg_is_other_temp_schema` and the view `pg_seclabels`. `connection/sequences.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sequences() {
+        big_stack(|| script(include_str!("connection/sequences.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {
