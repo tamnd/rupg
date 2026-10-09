@@ -1985,6 +1985,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_agg_array.test")));
     }
 
+    /// The input and output of `pg_ndistinct` and `pg_dependencies`, their errors, the casts to `bytea`, the error for `pg_mcv_list` input, `pg_mcv_list_items` and the view `pg_stats_ext`. `connection/stats_types.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn stats_types() {
+        big_stack(|| script(include_str!("connection/stats_types.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

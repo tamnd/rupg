@@ -36,6 +36,8 @@
 //!
 //! [`tz::Zone`] implements [`TimeZone`] with the rules of the IANA data, and [`tz::TzDatabase`] implements [`ZoneLookup`]. [`FixedZone`] and [`NoZones`] are for the tests and for a caller without the data.
 //!
+//! [`pg_ndistinct_in`] and [`pg_dependencies_in`] read the JSON text of the types of the extended statistics with the details of the errors of PostgreSQL, and give the bytes of the value. [`pg_ndistinct_out`] and [`pg_dependencies_out`] write the text from the bytes.
+//!
 //! PostgreSQL parses `json` by recursion and stops a deep value with `stack depth limit exceeded` when it reaches `max_stack_depth`. [`json_in`] uses no recursion and takes a value at any depth.
 //!
 //! The text and binary forms are lifted from `crates/rudb-pgtypes` of tamnd/rudb at f5f7065a (spec/04 section 4.9). The `DataRow` encoder and the `Bind` decoder of that crate need the executor, so they come with rupg-server.
@@ -57,6 +59,7 @@ mod numeric;
 pub mod numeric_layout;
 mod reg;
 mod scalar;
+mod stats;
 mod string;
 mod typeid;
 mod types;
@@ -103,6 +106,7 @@ pub use scalar::{
     ByteaOutput, NAME_MAX_BYTES, bool_in, bool_out, bytea_in, bytea_out, char_in, char_out,
     name_in, uuid_in, uuid_out,
 };
+pub use stats::{pg_dependencies_in, pg_dependencies_out, pg_ndistinct_in, pg_ndistinct_out};
 pub use string::{bpchar_coerce, bpchar_in, varchar_coerce, varchar_in};
 pub use typeid::TypeId;
 pub use types::{Oid, PgType, TypeInfo, format_type};

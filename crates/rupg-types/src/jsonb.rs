@@ -91,27 +91,30 @@ impl Tree {
 }
 
 impl Sink for Tree {
-    fn open(&mut self, open: Open) {
+    fn open(&mut self, open: Open) -> Result<(), TypeError> {
         let node = self.nodes.len();
         self.nodes.push(match open {
             Open::Array => Node::Array(Vec::new()),
             Open::Object => Node::Object(Vec::new()),
         });
         self.open.push((node, None));
+        Ok(())
     }
 
-    fn close(&mut self) {
-        let Some((node, _)) = self.open.pop() else { return };
+    fn close(&mut self, _: Open) -> Result<(), TypeError> {
+        let Some((node, _)) = self.open.pop() else { return Ok(()) };
         if let Node::Object(fields) = &mut self.nodes[node] {
             unique(fields);
         }
         self.attach(node);
+        Ok(())
     }
 
-    fn key(&mut self, key: &str) {
+    fn key(&mut self, key: &str) -> Result<(), TypeError> {
         if let Some((_, slot)) = self.open.last_mut() {
             *slot = Some(key.to_owned());
         }
+        Ok(())
     }
 
     fn scalar(&mut self, kind: Kind, token: &str, text: &str) -> Result<(), TypeError> {

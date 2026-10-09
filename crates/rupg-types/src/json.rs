@@ -310,14 +310,40 @@ fn unexpected(token: Token, error: Error) -> Fail {
     Fail { error, start: token.start, end: token.end }
 }
 
-/// The semantic actions of a parse, in the order of `pg_parse_json`. A scalar comes after the lexer reads the next token, as in `parse_scalar`, so an error of that token comes before an error of the action. The other events come before the lexer reads the next token.
+/// The semantic actions of a parse, in the order of `pg_parse_json`. An action can stop the parse with an error. The order decides which error comes first:
+///
+/// - The start of an array or an object comes before the lexer reads the next token.
+/// - The end of an array or an object comes after the lexer reads the token after it, as in `parse_array` and `parse_object`.
+/// - The key of a field and the start of an element of an array come after the lexer reads the first token of the value.
+/// - A scalar comes after the lexer reads the next token, as in `parse_scalar`.
 pub(crate) trait Sink {
     /// The start of an array or an object.
-    fn open(&mut self, open: Open);
+    ///
+    /// # Errors
+    ///
+    /// The error of the action, which stops the parse.
+    fn open(&mut self, open: Open) -> Result<(), TypeError>;
     /// The end of the array or the object that was opened last.
-    fn close(&mut self);
+    ///
+    /// # Errors
+    ///
+    /// The error of the action, which stops the parse.
+    fn close(&mut self, open: Open) -> Result<(), TypeError>;
     /// The key of the next field of an object, decoded.
-    fn key(&mut self, key: &str);
+    ///
+    /// # Errors
+    ///
+    /// The error of the action, which stops the parse.
+    fn key(&mut self, key: &str) -> Result<(), TypeError>;
+    /// The start of an element of an array, with true when the element is `null`.
+    ///
+    /// # Errors
+    ///
+    /// The error of the action, which stops the parse.
+    fn element(&mut self, null: bool) -> Result<(), TypeError> {
+        let _ = null;
+        Ok(())
+    }
     /// A scalar: its kind, its bytes in the input and, for a string, its decoded text.
     ///
     /// # Errors
@@ -342,9 +368,15 @@ impl From<Fail> for Stop {
 struct Check;
 
 impl Sink for Check {
-    fn open(&mut self, _: Open) {}
-    fn close(&mut self) {}
-    fn key(&mut self, _: &str) {}
+    fn open(&mut self, _: Open) -> Result<(), TypeError> {
+        Ok(())
+    }
+    fn close(&mut self, _: Open) -> Result<(), TypeError> {
+        Ok(())
+    }
+    fn key(&mut self, _: &str) -> Result<(), TypeError> {
+        Ok(())
+    }
     fn scalar(&mut self, _: Kind, _: &str, _: &str) -> Result<(), TypeError> {
         Ok(())
     }
@@ -358,58 +390,67 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
     let mut stack = Vec::new();
     // The decoded text of the last scalar. The lexer reads the next token before the action takes the scalar, so the two texts swap.
     let mut decoded = String::new();
+    // The key of the field that the parser is in.
+    let mut name = String::new();
     let mut token = lexer.next()?;
     let mut step = Step::Value;
     loop {
         step = match step {
-            Step::Value => match token.kind {
-                Kind::ObjectStart => {
-                    stack.push(Open::Object);
-                    sink.open(Open::Object);
-                    token = lexer.next()?;
-                    match token.kind {
-                        Kind::String => Step::Field,
-                        Kind::ObjectEnd => {
-                            stack.pop();
-                            sink.close();
-                            token = lexer.next()?;
-                            Step::After
-                        }
-                        _ => return Err(unexpected(token, Error::ExpectedObjectFirst).into()),
-                    }
+            Step::Value => {
+                if stack.last() == Some(&Open::Array) {
+                    sink.element(token.kind == Kind::Null).map_err(Stop::Action)?;
                 }
-                Kind::ArrayStart => {
-                    sink.open(Open::Array);
-                    token = lexer.next()?;
-                    if token.kind == Kind::ArrayEnd {
-                        sink.close();
+                match token.kind {
+                    Kind::ObjectStart => {
+                        stack.push(Open::Object);
+                        sink.open(Open::Object).map_err(Stop::Action)?;
                         token = lexer.next()?;
-                        Step::After
-                    } else {
-                        stack.push(Open::Array);
-                        Step::Value
+                        match token.kind {
+                            Kind::String => Step::Field,
+                            Kind::ObjectEnd => {
+                                stack.pop();
+                                token = lexer.next()?;
+                                sink.close(Open::Object).map_err(Stop::Action)?;
+                                Step::After
+                            }
+                            _ => return Err(unexpected(token, Error::ExpectedObjectFirst).into()),
+                        }
                     }
+                    Kind::ArrayStart => {
+                        sink.open(Open::Array).map_err(Stop::Action)?;
+                        token = lexer.next()?;
+                        if token.kind == Kind::ArrayEnd {
+                            token = lexer.next()?;
+                            sink.close(Open::Array).map_err(Stop::Action)?;
+                            Step::After
+                        } else {
+                            stack.push(Open::Array);
+                            Step::Value
+                        }
+                    }
+                    Kind::String | Kind::Number | Kind::True | Kind::False | Kind::Null => {
+                        // `parse_scalar` reads the next token before it calls the action.
+                        let scalar = token;
+                        std::mem::swap(&mut lexer.text, &mut decoded);
+                        token = lexer.next()?;
+                        sink.scalar(scalar.kind, text(scalar), &decoded).map_err(Stop::Action)?;
+                        Step::After
+                    }
+                    _ => return Err(unexpected(token, Error::ExpectedJson).into()),
                 }
-                Kind::String | Kind::Number | Kind::True | Kind::False | Kind::Null => {
-                    // `parse_scalar` reads the next token before it calls the action.
-                    let scalar = token;
-                    std::mem::swap(&mut lexer.text, &mut decoded);
-                    token = lexer.next()?;
-                    sink.scalar(scalar.kind, text(scalar), &decoded).map_err(Stop::Action)?;
-                    Step::After
-                }
-                _ => return Err(unexpected(token, Error::ExpectedJson).into()),
-            },
+            }
             Step::Field => {
                 if token.kind != Kind::String {
                     return Err(unexpected(token, Error::ExpectedString).into());
                 }
-                sink.key(&lexer.text);
+                name.clear();
+                name.push_str(&lexer.text);
                 token = lexer.next()?;
                 if token.kind != Kind::Colon {
                     return Err(unexpected(token, Error::ExpectedColon).into());
                 }
                 token = lexer.next()?;
+                sink.key(&name).map_err(Stop::Action)?;
                 Step::Value
             }
             Step::After => {
@@ -428,8 +469,8 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                     next
                 } else if token.kind == close {
                     stack.pop();
-                    sink.close();
                     token = lexer.next()?;
+                    sink.close(open).map_err(Stop::Action)?;
                     Step::After
                 } else {
                     return Err(unexpected(token, error).into());

@@ -1,4 +1,4 @@
-//! The functions of the views of the parts of the server that rupg does not have: asynchronous I/O, the registry of dynamic shared memory, the NUMA nodes, the replication origins, recovery, the publications and the cursors of `DECLARE`.
+//! The functions of the views of the parts of the server that rupg does not have: asynchronous I/O, the registry of dynamic shared memory, the NUMA nodes, the replication origins, recovery, the publications, the cursors of `DECLARE` and the lists of the most common values of the extended statistics.
 //!
 //! These functions give what PostgreSQL gives on a primary server with none of these objects: no rows, one row of nulls for `pg_stat_get_recovery`, and the error of a build with no NUMA support for `pg_get_shmem_allocations_numa`. A publication name is always unknown, because rupg has no publications.
 
@@ -26,6 +26,11 @@ pub(crate) fn shmem_numa(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
         SqlState::INTERNAL_ERROR,
         "libnuma initialization failed or NUMA is not supported on this platform",
     ))
+}
+
+/// `pg_mcv_list_items`: rupg has no extended statistics, so no `pg_mcv_list` value exists. The function is strict, so a null list gives no rows with no call.
+pub(crate) fn mcv_list_items(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Err(Error::internal("pg_mcv_list_items got a value, but no pg_mcv_list value can exist"))
 }
 
 /// The error of `GetPublicationByName` for a name that is not a publication.
