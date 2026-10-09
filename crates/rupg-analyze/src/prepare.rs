@@ -67,5 +67,6 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         params: Vec::new(),
         notices: analyzer.notices,
         set_op: None,
+        windows: Vec::new(),
     })
 }

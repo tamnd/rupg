@@ -94,7 +94,11 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::SqlValue(_) => "SQLVALUE",
         ExprKind::Var(_) => "VAR",
         ExprKind::FieldSelect(..) => "FIELDSELECT",
-        ExprKind::Param(_) | ExprKind::Agg(_) | ExprKind::SubLink(_) | ExprKind::SubColumn(_) => {
+        ExprKind::Param(_)
+        | ExprKind::Agg(_)
+        | ExprKind::Window(_)
+        | ExprKind::SubLink(_)
+        | ExprKind::SubColumn(_) => {
             return Err(Error::internal("a stored expression cannot have this node"));
         }
     };
@@ -224,7 +228,11 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push_str(&format!(" :field {field}"));
             write_field("arg", arg, out)?;
         }
-        ExprKind::Param(_) | ExprKind::Agg(_) | ExprKind::SubLink(_) | ExprKind::SubColumn(_) => {}
+        ExprKind::Param(_)
+        | ExprKind::Agg(_)
+        | ExprKind::Window(_)
+        | ExprKind::SubLink(_)
+        | ExprKind::SubColumn(_) => {}
     }
     out.push('}');
     Ok(())

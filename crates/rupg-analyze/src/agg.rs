@@ -2,7 +2,7 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_sql::nodes::List;
+use rupg_sql::nodes::{List, WindowDef};
 
 use crate::Analyzer;
 use crate::coerce::AtOpt;
@@ -25,6 +25,10 @@ pub(crate) enum Kind {
     DistinctOn,
     Limit,
     Offset,
+    /// `EXPR_KIND_WINDOW_PARTITION`: the `PARTITION BY` of a window.
+    WindowPartition,
+    /// `EXPR_KIND_WINDOW_ORDER`: the `ORDER BY` of a window.
+    WindowOrder,
     /// `EXPR_KIND_COLUMN_DEFAULT`.
     ColumnDefault,
     /// `EXPR_KIND_CHECK_CONSTRAINT`.
@@ -58,6 +62,8 @@ impl Kind {
             Kind::DistinctOn => "DISTINCT ON",
             Kind::Limit => "LIMIT",
             Kind::Offset => "OFFSET",
+            Kind::WindowPartition => "window PARTITION BY",
+            Kind::WindowOrder => "window ORDER BY",
             Kind::ColumnDefault => "DEFAULT expressions",
             Kind::Check => "check constraints",
             Kind::IndexExpression => "index expressions",
@@ -104,10 +110,12 @@ pub(crate) struct Parts<'a> {
     pub(crate) order: &'a List,
     /// The condition of `FILTER (WHERE ...)`.
     pub(crate) filter: Option<Expr>,
-    /// True when the call has `OVER`.
-    pub(crate) over: bool,
+    /// The window of `OVER`.
+    pub(crate) over: Option<&'a WindowDef>,
     /// True when the call has `RESPECT NULLS` or `IGNORE NULLS`.
     pub(crate) null_treatment: bool,
+    /// The number of the calls of functions that give a set before the arguments, as `last_srf` of `ParseFuncOrColumn`.
+    pub(crate) srfs: usize,
 }
 
 /// The hint of the errors of a call of a function that gives a set inside an expression that cannot take a set.

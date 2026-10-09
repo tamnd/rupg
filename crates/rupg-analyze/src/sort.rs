@@ -181,7 +181,7 @@ impl Analyzer<'_> {
         list: &List,
         targets: &mut Vec<Target>,
     ) -> Result<Vec<SortGroup>> {
-        self.sort_list(list, targets, false)
+        self.sort_list(list, targets, false, Kind::OrderBy)
     }
 
     /// `transformSortClause` of the `ORDER BY` of an aggregate call, which uses the rules of SQL99 only.
@@ -190,7 +190,38 @@ impl Analyzer<'_> {
         list: &List,
         targets: &mut Vec<Target>,
     ) -> Result<Vec<SortGroup>> {
-        self.sort_list(list, targets, true)
+        self.sort_list(list, targets, true, Kind::OrderBy)
+    }
+
+    /// `transformSortClause` of the `ORDER BY` of a window, which uses the rules of SQL99 only.
+    pub(crate) fn window_order(
+        &mut self,
+        list: &List,
+        targets: &mut Vec<Target>,
+    ) -> Result<Vec<SortGroup>> {
+        self.sort_list(list, targets, true, Kind::WindowOrder)
+    }
+
+    /// `transformGroupClause` of the `PARTITION BY` of a window, which uses the rules of SQL99 only. An item that is also an item of the `ORDER BY` of the window takes its operator.
+    pub(crate) fn window_partition(
+        &mut self,
+        list: &List,
+        targets: &mut Vec<Target>,
+        order: &[SortGroup],
+    ) -> Result<Vec<SortGroup>> {
+        let mut result = Vec::new();
+        for node in list {
+            let target = self.target_sql99(node.as_ref(), targets, Kind::WindowPartition)?;
+            if result.iter().any(|g: &SortGroup| g.target == target) {
+                continue;
+            }
+            if let Some(item) = order.iter().find(|s| s.target == target) {
+                result.push(item.clone());
+                continue;
+            }
+            self.add_group(target, targets, &mut result, raw_location(node.as_ref()))?;
+        }
+        Ok(result)
     }
 
     fn sort_list(
@@ -198,6 +229,7 @@ impl Analyzer<'_> {
         list: &List,
         targets: &mut Vec<Target>,
         sql99: bool,
+        kind: Kind,
     ) -> Result<Vec<SortGroup>> {
         let mut sort = Vec::new();
         for item in list {
@@ -205,7 +237,7 @@ impl Analyzer<'_> {
                 return Err(Error::internal("an item of ORDER BY that is not SortBy"));
             };
             let target = if sql99 {
-                self.target_sql99(by.node.as_ref(), targets, Kind::OrderBy)?
+                self.target_sql99(by.node.as_ref(), targets, kind)?
             } else {
                 self.target_sql92(by.node.as_ref(), targets, Kind::OrderBy)?
             };

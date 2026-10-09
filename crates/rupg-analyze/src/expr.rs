@@ -67,6 +67,8 @@ pub enum ExprKind {
     FieldSelect(Box<Expr>, usize),
     /// `Aggref`: a call of an aggregate function, which reads all the rows of a group.
     Agg(Box<Aggref>),
+    /// `WindowFunc`: a call of a window function, which reads the rows of its window.
+    Window(Box<WindowFunc>),
     /// `SubLink`: a subquery in an expression.
     SubLink(Box<SubLink>),
     /// `Param` of the kind `PARAM_SUBLINK`: the value of the column with this index, from 0, of a row of the subquery, in the test of `ANY` or `ALL`.
@@ -159,6 +161,18 @@ pub struct Aggref {
     pub variadic: bool,
     /// `aggfilter`: the condition of `FILTER (WHERE ...)`.
     pub filter: Option<Box<Expr>>,
+}
+
+/// A call of a window function, as `WindowFunc`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct WindowFunc {
+    /// `winfnoid`: the OID of the function in `pg_proc`.
+    pub oid: u32,
+    pub args: Vec<Expr>,
+    /// `winref`: the number of the window in [`crate::Query::windows`], from 1.
+    pub winref: usize,
+    /// `winstar`: true for `f(*)`.
+    pub star: bool,
 }
 
 /// The way a call was written, which a deparse function shows.
@@ -271,6 +285,7 @@ impl Expr {
             ExprKind::SubLink(sub) => sub.test.iter().collect(),
             ExprKind::Func(f) => f.args.iter().collect(),
             ExprKind::Agg(agg) => agg.args.iter().chain(agg.filter.as_deref()).collect(),
+            ExprKind::Window(w) => w.args.iter().collect(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
@@ -313,6 +328,7 @@ impl Expr {
                 let Aggref { args, filter, .. } = &mut **agg;
                 args.iter_mut().chain(filter.as_deref_mut()).collect()
             }
+            ExprKind::Window(w) => w.args.iter_mut().collect(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
@@ -417,6 +433,14 @@ impl Expr {
             return Some(self);
         }
         self.children().into_iter().find_map(Expr::first_agg)
+    }
+
+    /// `contain_windowfuncs` and `locate_windowfunc`: the first call of a window function in the expression, outside its subqueries.
+    pub fn first_window(&self) -> Option<&Expr> {
+        if matches!(self.kind, ExprKind::Window(_)) {
+            return Some(self);
+        }
+        self.children().into_iter().find_map(Expr::first_window)
     }
 
     /// `expression_returns_set` and `exprLocation` of the first call: the first call of a function that gives a set in the expression, outside its subqueries.

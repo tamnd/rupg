@@ -9,7 +9,7 @@ use std::ptr;
 
 use rupg_analyze::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SortGroup, SqlValue,
-    SubLink, SubLinkKind, Var,
+    SubLink, SubLinkKind, Var, WindowClause, WindowFunc,
 };
 use rupg_analyze::{default_opclass, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, Relation};
@@ -73,6 +73,10 @@ struct Deparser<'a> {
     in_group_by: bool,
     /// The name of each column of the result of the query, with the column of `FROM` that the column shows. A column in `ORDER BY` with the name of another column of the result shows the name of its relation, as `get_variable` does.
     outputs: Vec<(String, Option<Var>)>,
+    /// `windowClause`: the windows of the query, which a window function call names by number.
+    windows: Vec<WindowClause>,
+    /// The expressions of the targets of the query, which the items of the windows name.
+    window_targets: Vec<Expr>,
     buf: String,
 }
 
@@ -102,6 +106,8 @@ impl<'a> Deparser<'a> {
             names_visible: true,
             in_group_by: false,
             outputs: Vec::new(),
+            windows: Vec::new(),
+            window_targets: Vec::new(),
             buf: String::new(),
         }
     }
@@ -358,6 +364,7 @@ impl<'a> Deparser<'a> {
             }
             ExprKind::SqlValue(value) => self.buf.push_str(&sql_value(*value)),
             ExprKind::Agg(agg) => self.aggregate(agg)?,
+            ExprKind::Window(w) => self.window_func(w)?,
             ExprKind::SubLink(sub) => self.sublink(sub)?,
             ExprKind::SubColumn(_) => {
                 return Err(Error::internal("a column of a subquery outside its test"));
@@ -595,6 +602,7 @@ fn own_syntax(parent: &Expr) -> bool {
         | ExprKind::MinMax { .. }
         | ExprKind::NullIf { .. }
         | ExprKind::Agg(_)
+        | ExprKind::Window(_)
         | ExprKind::Case(_) => true,
         _ => false,
     }
@@ -631,6 +639,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::SqlValue(_)
         | ExprKind::NullIf { .. }
         | ExprKind::Agg(_)
+        | ExprKind::Window(_)
         | ExprKind::Case(_) => true,
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,
         ExprKind::Relabel(arg, _)

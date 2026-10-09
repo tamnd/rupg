@@ -295,6 +295,8 @@ fn expr_references(expr: &Expr, levels: &[&Query], refs: &mut Vec<ObjRef>) {
             refs.push(ObjRef::new(PG_TYPE, *found));
         }
         (ExprKind::Func(f), _) => refs.push(ObjRef::new(PG_PROC, f.oid)),
+        (ExprKind::Agg(a), _) => refs.push(ObjRef::new(PG_PROC, a.oid)),
+        (ExprKind::Window(w), _) => refs.push(ObjRef::new(PG_PROC, w.oid)),
         (ExprKind::SubLink(sub), _) => query_references(&sub.query, levels, refs),
         _ => {}
     }

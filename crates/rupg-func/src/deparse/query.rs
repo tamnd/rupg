@@ -11,8 +11,8 @@ use rupg_types::qualified_name_list;
 
 use super::{
     Aggref, Deparser, Error, Expr, ExprKind, Func, FuncForm, INDENT_STD, INDENT_VAR, Namespace,
-    Result, SortGroup, SubLink, SubLinkKind, Value, builtin, looks_like_function, oid,
-    quote_identifier, reg, relation_name, sort_operators,
+    Result, SortGroup, SubLink, SubLinkKind, Value, WindowClause, WindowFunc, builtin,
+    looks_like_function, oid, quote_identifier, reg, relation_name, sort_operators,
 };
 use crate::{Call, Session, bad_value, not_yet, type_error};
 
@@ -52,9 +52,14 @@ impl Deparser<'_> {
         let saved_visible = std::mem::replace(&mut self.names_visible, names_visible);
         let saved_group = std::mem::replace(&mut self.in_group_by, false);
         let saved_outputs = std::mem::replace(&mut self.outputs, outputs);
+        let saved_windows = std::mem::replace(&mut self.windows, query.windows.clone());
+        let targets = query.targets.iter().map(|t| t.expr.clone()).collect();
+        let saved_targets = std::mem::replace(&mut self.window_targets, targets);
         self.namespaces.push(space);
         let done = self.select_query(query, result);
         self.namespaces.pop();
+        self.windows = saved_windows;
+        self.window_targets = saved_targets;
         self.indent = saved_indent;
         self.prefix = saved_prefix;
         self.names_visible = saved_visible;
@@ -223,6 +228,95 @@ impl Deparser<'_> {
         if let Some(having) = &query.having {
             self.keyword(" HAVING ", -INDENT_STD, INDENT_STD, 0);
             self.expr(having, false)?;
+        }
+        // get_rule_windowclause: the windows with a name.
+        let mut first = true;
+        for window in &query.windows {
+            let Some(name) = &window.name else { continue };
+            if first {
+                self.keyword(" WINDOW ", -INDENT_STD, INDENT_STD, 1);
+            } else {
+                self.buf.push_str(", ");
+            }
+            first = false;
+            self.buf.push_str(&format!("{} AS ", quote_identifier(name)));
+            self.window_spec(window)?;
+        }
+        Ok(())
+    }
+
+    /// `get_rule_windowspec`: the window in parentheses. The items of `PARTITION BY` show only for a window that copies no window, and the items of `ORDER BY` show only when they are not a copy.
+    fn window_spec(&mut self, window: &WindowClause) -> Result<()> {
+        let targets = std::mem::take(&mut self.window_targets);
+        let exprs: Vec<&Expr> = targets.iter().collect();
+        let done = self.window_parts(window, &exprs);
+        self.window_targets = targets;
+        done
+    }
+
+    /// The parts of [`Deparser::window_spec`], with the expressions of the targets.
+    fn window_parts(&mut self, window: &WindowClause, exprs: &[&Expr]) -> Result<()> {
+        self.buf.push('(');
+        let mut space = false;
+        if let Some(refname) = &window.refname {
+            self.buf.push_str(&quote_identifier(refname));
+            space = true;
+        }
+        if !window.partition.is_empty() && window.refname.is_none() {
+            if space {
+                self.buf.push(' ');
+            }
+            self.buf.push_str("PARTITION BY ");
+            for (i, item) in window.partition.iter().enumerate() {
+                if i > 0 {
+                    self.buf.push_str(", ");
+                }
+                let e = exprs
+                    .get(item.target)
+                    .ok_or_else(|| Error::internal("an item of PARTITION BY with no expression"))?;
+                self.sort_group(e, item.target + 1, false)?;
+            }
+            space = true;
+        }
+        if !window.order.is_empty() && !window.copied_order {
+            if space {
+                self.buf.push(' ');
+            }
+            self.buf.push_str("ORDER BY ");
+            self.order_by(&window.order, exprs, false)?;
+        }
+        self.buf.push(')');
+        Ok(())
+    }
+
+    /// `get_windowfunc_expr`: a call of a window function, then `OVER` and the name of its window or the window in parentheses.
+    pub(super) fn window_func(&mut self, w: &WindowFunc) -> Result<()> {
+        let proc = builtin::proc_by_oid(w.oid).ok_or_else(|| {
+            Error::internal(format!("cache lookup failed for function {}", w.oid))
+        })?;
+        self.buf.push_str(&quote_identifier(proc.name));
+        self.buf.push('(');
+        if w.star {
+            self.buf.push('*');
+        } else {
+            for (i, arg) in w.args.iter().enumerate() {
+                if i > 0 {
+                    self.buf.push_str(", ");
+                }
+                self.expr(arg, true)?;
+            }
+        }
+        self.buf.push_str(") OVER ");
+        let window = w.winref.checked_sub(1).and_then(|i| self.windows.get(i)).cloned();
+        let Some(window) = window else {
+            return Err(Error::internal(format!(
+                "could not find window clause for winref {}",
+                w.winref
+            )));
+        };
+        match &window.name {
+            Some(name) => self.buf.push_str(&quote_identifier(name)),
+            None => self.window_spec(&window)?,
         }
         Ok(())
     }
@@ -603,7 +697,7 @@ impl Deparser<'_> {
             _ => {
                 let paren = self.paren
                     || matches!(&e.kind, ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)))
-                    || matches!(e.kind, ExprKind::Agg(_));
+                    || matches!(e.kind, ExprKind::Agg(_) | ExprKind::Window(_));
                 if paren {
                     self.buf.push('(');
                 }

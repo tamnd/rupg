@@ -362,6 +362,7 @@ impl<'a> Fold<'a> {
                     None => Ok(()),
                 }
             }
+            ExprKind::Window(w) => self.all(&mut w.args),
             ExprKind::SubLink(sub) => {
                 if let Some(test) = &mut sub.test {
                     self.subqueries(test)?;
@@ -564,6 +565,11 @@ impl<'a> Fold<'a> {
                 }
                 Ok(with(expr, ExprKind::Agg(agg)))
             }
+            ExprKind::Window(w) => {
+                let mut w = w.clone();
+                w.args = self.list(&w.args)?;
+                Ok(with(expr, ExprKind::Window(w)))
+            }
             ExprKind::SubLink(sub) => {
                 let test = sub.test.as_ref().map(|t| self.expr(t)).transpose()?;
                 let sub = SubLink { kind: sub.kind, test, query: sub.query.clone() };
@@ -743,7 +749,10 @@ fn mutable(expr: &Expr) -> bool {
                 let input = builtin::type_by_oid(e.ty).map_or(0, |t| t.input);
                 mutable_proc(output) || mutable_proc(input)
             }
-            ExprKind::SqlValue(_) | ExprKind::SubLink(_) | ExprKind::Agg(_) => true,
+            ExprKind::SqlValue(_)
+            | ExprKind::SubLink(_)
+            | ExprKind::Agg(_)
+            | ExprKind::Window(_) => true,
             _ => false,
         };
         mutable.then_some(())
