@@ -17,6 +17,7 @@ mod misc;
 mod reg;
 mod regex;
 mod srf;
+mod stat;
 mod text;
 
 use std::collections::BTreeMap;
@@ -166,6 +167,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| catinfo::by_src(src))
         .or_else(|| acl::by_src(src))
         .or_else(|| deparse::by_src(src))
+        .or_else(|| stat::by_src(src))
         .or_else(|| array::by_src(src))
         .or_else(|| regex::by_src(src))
 }
