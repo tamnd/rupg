@@ -60,7 +60,7 @@ pub struct Target {
 }
 
 impl Query {
-    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET` and `LIMIT`.
+    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET`, `LIMIT` and the calls of the functions in `FROM`.
     pub fn exprs(&self) -> Vec<&Expr> {
         fn joins<'a>(item: &'a FromItem, out: &mut Vec<&'a Expr>) {
             if let FromItem::Join(j) = item {
@@ -74,6 +74,9 @@ impl Query {
             joins(item, &mut out);
         }
         out.extend(self.filter.iter().chain(&self.having).chain(&self.offset).chain(&self.limit));
+        for function in self.relations.iter().filter_map(|r| r.function.as_ref()) {
+            out.extend(function.calls.iter().map(|(call, _)| call));
+        }
         out
     }
 
@@ -98,6 +101,9 @@ impl Query {
                 .chain(&mut self.offset)
                 .chain(&mut self.limit),
         );
+        for function in self.relations.iter_mut().filter_map(|r| r.function.as_mut()) {
+            out.extend(function.calls.iter_mut().map(|(call, _)| call));
+        }
         out
     }
 
@@ -186,11 +192,12 @@ impl Analyzer<'_> {
         if !s.lockingClause.is_empty() {
             return Err(not_yet("FOR UPDATE and FOR SHARE"));
         }
-        // markTargetListOrigins: a target that is a column of a relation names the table and the column, also for a column of a query outside this query. A column of a subquery in FROM has the origin of the column of the subquery.
+        // markTargetListOrigins: a target that is a column of a relation names the table and the column, also for a column of a query outside this query. A column of a subquery in FROM has the origin of the column of the subquery, and a column of a function in FROM has no origin.
         for target in &mut targets {
             if let ExprKind::Var(var) = &target.expr.kind {
                 let relation = &self.level(var.levels_up).relations[var.relation];
                 target.origin = match &relation.subquery {
+                    None if relation.function.is_some() => None,
                     None => Some((relation.oid, var.attnum)),
                     Some(sub) => usize::try_from(var.attnum - 1)
                         .ok()

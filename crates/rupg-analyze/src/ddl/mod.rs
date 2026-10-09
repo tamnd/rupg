@@ -6,6 +6,8 @@ mod table;
 #[cfg(test)]
 mod tests;
 
+pub(crate) use table::check_attribute_type;
+
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, Owned};

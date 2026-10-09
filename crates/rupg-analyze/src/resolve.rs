@@ -5,7 +5,7 @@ use rupg_pgcatalog::builtin::{self, AggregateRow, OperatorRow};
 use rupg_types::oid;
 
 use crate::Analyzer;
-use crate::agg::Parts;
+use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, Path, can_coerce, find_path};
 use crate::expr::{Expr, ExprKind, Func, FuncForm};
 use crate::poly;
@@ -588,7 +588,8 @@ impl Analyzer<'_> {
             )
             .at_opt(at));
         }
-        if proc.retset {
+        // A set-returning function can be at the top of a function in FROM, which `transformRangeFunction` checks.
+        if proc.retset && self.kind != Kind::FromFunction {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 format!(

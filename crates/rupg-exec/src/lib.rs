@@ -8,8 +8,8 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use rupg_analyze::{
-    Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Query, SortGroup, SqlValue,
-    SubLink, SubLinkKind, Target,
+    Aggref, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query, SortGroup,
+    SqlValue, SubLink, SubLinkKind, Target,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -43,6 +43,22 @@ fn kernel(func: u32, location: Option<usize>) -> Result<Kernel> {
             None => error,
         }
     })
+}
+
+/// The set kernel of a function in `FROM`, or the error of a function that the engine does not have.
+fn set_kernel(func: u32, location: Option<usize>) -> Result<rupg_func::SetKernel> {
+    rupg_func::set_kernel(func).ok_or_else(|| {
+        let error = not_yet(format!("function {}", signature(func)));
+        match location {
+            Some(at) => error.at(at),
+            None => error,
+        }
+    })
+}
+
+/// True when a call in `FROM` needs the set kernel of the function: the function gives a set, or a row with `width` columns.
+fn table_function(func: u32, width: usize) -> bool {
+    width > 1 || builtin::proc_by_oid(func).is_some_and(|p| p.retset)
 }
 
 /// True when the function gives null for a null argument without a call.
@@ -168,6 +184,15 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
         if let Some(sub) = &relation.subquery {
             check_query(sub, false)?;
         }
+        for (call, width) in relation.function.iter().flat_map(|f| &f.calls) {
+            match &call.kind {
+                ExprKind::Func(f) if table_function(f.oid, *width) => {
+                    set_kernel(f.oid, call.location)?;
+                    f.args.iter().try_for_each(check)?;
+                }
+                _ => check(call)?,
+            }
+        }
     }
     for expr in query.offset.iter().chain(&query.limit) {
         check(expr)?;
@@ -285,7 +310,7 @@ fn gate(query: &Query, eval: &mut Eval<'_>) -> Result<bool> {
     Ok(true)
 }
 
-/// The rows of the relations of a query with the rows of its subqueries in `FROM`, as `SubqueryScan` reads them. A subquery that reads no column of an outer query runs once. A subquery that reads the relations before it runs in the scan.
+/// The rows of the relations of a query with the rows of its subqueries and its functions in `FROM`, as `SubqueryScan` and `FunctionScan` read them. A subquery that reads no column of an outer query runs once. A subquery or a function that reads the relations before it runs in the scan.
 fn with_subqueries(
     query: &Query,
     base: &Rc<scan::Tables>,
@@ -294,7 +319,7 @@ fn with_subqueries(
     cache: &Cache,
     outer: &[Frame<'_>],
 ) -> Result<Rc<scan::Tables>> {
-    if query.relations.iter().all(|r| r.subquery.is_none()) {
+    if query.relations.iter().all(|r| r.subquery.is_none() && r.function.is_none()) {
         return Ok(Rc::clone(base));
     }
     let mut tables = (**base).clone();
@@ -306,6 +331,12 @@ fn with_subqueries(
         {
             tables.rows[i] =
                 cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))?;
+        }
+        if let Some(function) = &relation.function
+            && tables.needs[i].is_empty()
+        {
+            let mut eval = Eval::new(params, session, base, cache, outer);
+            tables.rows[i] = Rc::new(eval.function_rows(function)?);
         }
     }
     Ok(Rc::new(tables))
@@ -334,17 +365,7 @@ fn run_query(
     exists: bool,
 ) -> Result<Vec<Vec<Value>>> {
     let base = cache.tables(query, session)?;
-    let mut eval = Eval {
-        params,
-        session,
-        case: Vec::new(),
-        tables: &base,
-        tuple: &[],
-        aggs: Vec::new(),
-        cache,
-        outer,
-        sub: Vec::new(),
-    };
+    let mut eval = Eval::new(params, session, &base, cache, outer);
     // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.
     let mut simple = false;
     if exists && agg::calls(query).is_empty() && query.having.is_none() && query.offset.is_none() {
@@ -371,7 +392,13 @@ fn run_query(
     let mut eval = Eval { tables, ..eval.at(&[]) };
     let tuples = if open {
         let mut source = |index: usize, tuple: &[usize]| {
-            let Some(sub) = &query.relations[index].subquery else { return Ok(Vec::new()) };
+            let relation = &query.relations[index];
+            if let Some(function) = &relation.function {
+                let mut eval = Eval::new(params, session, tables, cache, outer);
+                eval.tuple = tuple;
+                return eval.function_rows(function);
+            }
+            let Some(sub) = &relation.subquery else { return Ok(Vec::new()) };
             let mut frames = outer.to_vec();
             frames.push(Frame { tables, tuple });
             run_query(sub, params, session, cache, &frames, false)
@@ -552,6 +579,68 @@ struct Eval<'a> {
 }
 
 impl<'a> Eval<'a> {
+    /// A new state for the evaluation of the expressions of a query with no row.
+    fn new(
+        params: &'a [Value],
+        session: &'a dyn Session,
+        tables: &'a scan::Tables,
+        cache: &'a Cache,
+        outer: &'a [Frame<'a>],
+    ) -> Eval<'a> {
+        Eval {
+            params,
+            session,
+            case: Vec::new(),
+            tables,
+            tuple: &[],
+            aggs: Vec::new(),
+            cache,
+            outer,
+            sub: Vec::new(),
+        }
+    }
+
+    /// `ExecFunctionScan`: the rows of a function in `FROM`. The rows of the calls of `ROWS FROM` go side by side, and a call with fewer rows gives nulls. With ordinality, the last column is the number of the row.
+    fn function_rows(&mut self, function: &FromFunction) -> Result<Rows> {
+        let mut sets = Vec::with_capacity(function.calls.len());
+        for (call, width) in &function.calls {
+            sets.push(self.function_set(call, *width)?);
+        }
+        let count = sets.iter().map(Vec::len).max().unwrap_or(0);
+        let mut rows = Vec::with_capacity(count);
+        for i in 0..count {
+            let mut row = Vec::new();
+            for ((_, width), set) in function.calls.iter().zip(&sets) {
+                match set.get(i) {
+                    Some(values) => row.extend(values.iter().cloned()),
+                    None => row.extend(std::iter::repeat_n(Value::Null, *width)),
+                }
+            }
+            if function.ordinality {
+                row.push(Value::Int8(i64::try_from(i + 1).unwrap_or(i64::MAX)));
+            }
+            rows.push(row);
+        }
+        Ok(rows)
+    }
+
+    /// `ExecMakeTableFunctionResult`: the rows of one call of a function in `FROM`. A strict function with a null argument gives no rows when it gives a set, and else one row of nulls. Another expression gives one row with its value.
+    fn function_set(&mut self, call: &Expr, width: usize) -> Result<Rows> {
+        let ExprKind::Func(f) = &call.kind else { return Ok(vec![vec![self.eval(call)?]]) };
+        if !table_function(f.oid, width) {
+            return Ok(vec![vec![self.eval(call)?]]);
+        }
+        let kernel = set_kernel(f.oid, call.location)?;
+        let args = f.args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
+        if strict(f.oid) && args.iter().any(Value::is_null) {
+            let retset = builtin::proc_by_oid(f.oid).is_some_and(|p| p.retset);
+            return Ok(if retset { Vec::new() } else { vec![vec![Value::Null; width]] });
+        }
+        let types: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
+        let c = Call { session: self.session, args: &types, ret: call.ty, variadic: f.variadic };
+        kernel(&c, &args)
+    }
+
     /// A new state for the evaluation of a condition on another tuple of the same query.
     fn at<'b>(&self, tuple: &'b [usize]) -> Eval<'b>
     where

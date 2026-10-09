@@ -1,0 +1,283 @@
+> SELECT * FROM generate_series(1, 3)
+fields generate_series:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT * FROM generate_series(1, 3) g
+fields g:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT * FROM generate_series(1, 3) g(n)
+fields n:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT g FROM generate_series(1, 3) g
+fields g:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT g.g FROM generate_series(1, 3) g
+fields g:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT generate_series FROM generate_series(1, 2)
+fields generate_series:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT * FROM generate_series(1, 3) WITH ORDINALITY
+fields generate_series:23:4:-1,ordinality:20:8:-1
+row 1,1
+row 2,2
+row 3,3
+SELECT 3
+> SELECT * FROM generate_series(1, 3) WITH ORDINALITY AS g(n, o)
+fields n:23:4:-1,o:20:8:-1
+row 1,1
+row 2,2
+row 3,3
+SELECT 3
+> SELECT * FROM generate_series(1, 0)
+fields generate_series:23:4:-1
+SELECT 0
+> SELECT * FROM generate_series(1::bigint, 2)
+fields generate_series:20:8:-1
+row 1
+row 2
+SELECT 2
+> SELECT * FROM generate_series(1, 10, 4)
+fields generate_series:23:4:-1
+row 1
+row 5
+row 9
+SELECT 3
+> SELECT * FROM generate_series(1, 3, 0)
+fields generate_series:23:4:-1
+ERROR 22023 step size cannot equal zero
+> SELECT * FROM generate_series(1, NULL)
+fields generate_series:23:4:-1
+SELECT 0
+> SELECT * FROM unnest(ARRAY[1, 2, 3])
+fields unnest:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT * FROM unnest(ARRAY['a', 'b']) u
+fields u:25:-1:-1
+row a
+row b
+SELECT 2
+> SELECT * FROM unnest(ARRAY[[1, 2], [3, 4]]) WITH ORDINALITY
+fields unnest:23:4:-1,ordinality:20:8:-1
+row 1,1
+row 2,2
+row 3,3
+row 4,4
+SELECT 4
+> SELECT * FROM unnest('{}'::int[])
+fields unnest:23:4:-1
+SELECT 0
+> SELECT * FROM unnest(NULL::int[])
+fields unnest:23:4:-1
+SELECT 0
+> SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(5, 7))
+fields generate_series:23:4:-1,generate_series:23:4:-1
+row 1,5
+row 2,6
+row NULL,7
+SELECT 3
+> SELECT * FROM ROWS FROM (generate_series(1, 2), unnest(ARRAY['x'])) WITH ORDINALITY AS r(a, b, c)
+fields a:23:4:-1,b:25:-1:-1,c:20:8:-1
+row 1,x,1
+row 2,NULL,2
+SELECT 2
+> SELECT * FROM upper('x')
+fields upper:25:-1:-1
+row X
+SELECT 1
+> SELECT * FROM upper('x') u
+fields u:25:-1:-1
+row X
+SELECT 1
+> SELECT * FROM upper('x') AS u(v)
+fields v:25:-1:-1
+row X
+SELECT 1
+> SELECT * FROM lower(NULL)
+fields lower:25:-1:-1
+row NULL
+SELECT 1
+> SELECT * FROM pg_options_to_table(ARRAY['a=1', 'b=2'])
+fields option_name:25:-1:-1,option_value:25:-1:-1
+row a,1
+row b,2
+SELECT 2
+> SELECT * FROM pg_options_to_table(ARRAY['a=1']) o
+fields option_name:25:-1:-1,option_value:25:-1:-1
+row a,1
+SELECT 1
+> SELECT * FROM pg_options_to_table(ARRAY['a=1']) o(k)
+fields k:25:-1:-1,option_value:25:-1:-1
+row a,1
+SELECT 1
+> SELECT * FROM pg_options_to_table(ARRAY['a=1']) o(k, v, w)
+ERROR 42P10 table "o" has 2 columns available but 3 columns specified
+> SELECT * FROM pg_get_keywords() LIMIT 2
+fields word:25:-1:-1,catcode:18:1:-1,barelabel:16:1:-1,catdesc:25:-1:-1,baredesc:25:-1:-1
+row abort,U,t,unreserved,can be bare label
+row absent,U,t,unreserved,can be bare label
+SELECT 2
+> SELECT * FROM generate_series(1, 2) AS g(a int)
+ERROR 42601 a column definition list is only allowed for functions returning "record" at 42
+> SELECT * FROM json_to_record('{"a":1}')
+ERROR 42601 a column definition list is required for functions returning "record" at 15
+> SELECT a.* FROM pg_namespace n, aclexplode(n.nspacl) a WHERE n.nspname = 'public'
+fields grantor:26:4:-1,grantee:26:4:-1,privilege_type:25:-1:-1,is_grantable:16:1:-1
+row 6171,6171,USAGE,f
+row 6171,6171,CREATE,f
+row 6171,0,USAGE,f
+SELECT 3
+> SELECT a.amname, g FROM pg_am a, generate_series(1, a.oid::int % 3) g WHERE a.amtype = 't'
+fields amname@pg_am.2:19:64:-1,g:23:4:-1
+row heap,1
+row heap,2
+SELECT 2
+> SELECT a.amname, g FROM pg_am a, LATERAL generate_series(1, 2) g WHERE a.amtype = 't'
+fields amname@pg_am.2:19:64:-1,g:23:4:-1
+row heap,1
+row heap,2
+SELECT 2
+> SELECT * FROM generate_series(1, 2) g, generate_series(1, g) h
+fields g:23:4:-1,h:23:4:-1
+row 1,1
+row 2,1
+row 2,2
+SELECT 3
+> SELECT * FROM generate_series(1, 1/0)
+ERROR 22012 division by zero
+> SELECT 1 FROM generate_series(1, 1/0)
+ERROR 22012 division by zero
+> SELECT * FROM abs(-1) a WHERE a > 5
+fields a:23:4:-1
+SELECT 0
+> SELECT * FROM generate_series(1, 2) g(a, b)
+ERROR 42P10 table "g" has 1 columns available but 2 columns specified
+> SELECT * FROM nofunc()
+ERROR 42883 function nofunc() does not exist at 15
+> SELECT * FROM pg_am()
+ERROR 42883 function pg_am() does not exist at 15
+> SELECT * FROM count(*)
+ERROR 42803 aggregate functions are not allowed in functions in FROM at 15
+> SELECT * FROM generate_series(1, 2) g WHERE g.nope = 1
+ERROR 42703 column g.nope does not exist at 45
+> SELECT g.tableoid FROM generate_series(1, 2) g
+ERROR 42703 column g.tableoid does not exist at 8
+> SELECT * FROM CAST(1 AS text)
+fields text:25:-1:-1
+row 1
+SELECT 1
+> SELECT * FROM coalesce(1, 2)
+fields coalesce:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM pg_typeof(1)
+fields pg_typeof:2206:4:-1
+row integer
+SELECT 1
+> SELECT * FROM generate_subscripts(ARRAY[5, 6, 7], 1)
+fields generate_subscripts:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT * FROM string_to_table('a,b', ',')
+fields string_to_table:25:-1:-1
+row a
+row b
+SELECT 2
+> SELECT * FROM json_to_record('{"a":1}') AS r(a int, a text)
+ERROR 42701 column name "a" specified more than once
+> SELECT * FROM json_to_record('{"a":1}') AS r(a int, b void)
+ERROR 42P16 column "b" has pseudo-type void
+> SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(1, 3)) AS r(a int)
+ERROR 42601 ROWS FROM() with multiple functions cannot have a column definition list at 77
+> SELECT * FROM unnest(ARRAY[1, 2], ARRAY['a', 'b', 'c'])
+fields unnest:23:4:-1,unnest:25:-1:-1
+row 1,a
+row 2,b
+row NULL,c
+SELECT 3
+> SELECT * FROM unnest(ARRAY[1, 2], ARRAY['a']) AS u(a int)
+ERROR 42601 UNNEST() with multiple arguments cannot have a column definition list at 52
+> SELECT * FROM json_to_record('{"a":1}') WITH ORDINALITY AS r(a int)
+ERROR 42601 WITH ORDINALITY cannot be used with a column definition list at 62
+> SELECT * FROM ROWS FROM (json_to_record('{"a":1}') AS (a int)) AS r(a int)
+ERROR 42601 multiple column definition lists are not allowed for the same function at 69
+> SELECT * FROM generate_series(1, generate_series(1, 2))
+ERROR 0A000 set-returning functions must appear at top level of FROM at 34
+> SELECT * FROM abs(generate_series(1, 2))
+ERROR 0A000 set-returning functions must appear at top level of FROM at 19
+> SELECT * FROM generate_series(2147483646, 2147483647)
+fields generate_series:23:4:-1
+row 2147483646
+row 2147483647
+SELECT 2
+> SELECT * FROM string_to_table('a,b,,c', ',', '')
+fields string_to_table:25:-1:-1
+row a
+row b
+row NULL
+row c
+SELECT 4
+> SELECT * FROM string_to_table('abc', NULL)
+fields string_to_table:25:-1:-1
+row a
+row b
+row c
+SELECT 3
+> SELECT * FROM generate_subscripts(ARRAY[5, 6, 7], 1, true)
+fields generate_subscripts:23:4:-1
+row 3
+row 2
+row 1
+SELECT 3
+> SELECT * FROM generate_subscripts(ARRAY[5, 6, 7], 2)
+fields generate_subscripts:23:4:-1
+SELECT 0
+> SELECT (SELECT count(*) FROM generate_series(1, a.oid::int % 5)) FROM pg_am a WHERE a.amname = 'heap'
+fields count:20:8:-1
+row 2
+SELECT 1
+> SELECT count(*) FROM pg_get_keywords()
+fields count:20:8:-1
+row 499
+SELECT 1
+> SELECT catcode, count(*) FROM pg_get_keywords() GROUP BY 1 ORDER BY 1
+fields catcode:18:1:-1,count:20:8:-1
+row C,63
+row R,78
+row T,23
+row U,335
+SELECT 4
+> SELECT sum(g) FROM generate_series(1, 100) g
+fields sum:20:8:-1
+row 5050
+SELECT 1
+> SELECT x.amname, g FROM pg_am x LEFT JOIN generate_series(1, 2) g ON g = 2 WHERE x.amname = 'heap'
+fields amname@pg_am.2:19:64:-1,g:23:4:-1
+row heap,2
+SELECT 1
+> SELECT * FROM generate_series(1, 2) a, LATERAL (SELECT a + 10) s
+fields a:23:4:-1,?column?:23:4:-1
+row 1,11
+row 2,12
+SELECT 2

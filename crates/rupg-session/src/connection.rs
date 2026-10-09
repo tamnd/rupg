@@ -1627,6 +1627,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/from_subquery.test")));
     }
 
+    /// Functions in `FROM`: `generate_series`, `unnest`, `ROWS FROM`, `WITH ORDINALITY`, the functions with `OUT` parameters, a function of a scalar type, a function that reads the parts of `FROM` before it, and the errors of the column definition lists. `connection/from_function.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn from_function() {
+        big_stack(|| script(include_str!("connection/from_function.test")));
+    }
+
     /// `LATERAL` subqueries in `FROM`, which run for each row of the relations before them, in a list, in inner and outer joins and in a subquery. `connection/lateral.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn lateral() {
