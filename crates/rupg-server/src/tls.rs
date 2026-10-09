@@ -13,11 +13,14 @@ use std::sync::{Arc, Mutex, PoisonError};
 use ring::digest;
 use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Io, Stream};
+use rupg_session::connection::Ssl;
 use rupg_session::guc::Settings;
 use rustls::pki_types::pem::PemObject;
 use rustls::pki_types::{CertificateDer, CertificateRevocationListDer, PrivateKeyDer};
 use rustls::server::{NoServerSessionStorage, WebPkiClientVerifier};
-use rustls::{RootCertStore, ServerConfig, ServerConnection, StreamOwned};
+use rustls::{
+    CipherSuite, ProtocolVersion, RootCertStore, ServerConfig, ServerConnection, StreamOwned,
+};
 
 use crate::Secured;
 use crate::x509;
@@ -287,12 +290,57 @@ pub(crate) fn accept(
                 .to_owned(),
         ));
     }
-    let peer = match owned.conn.peer_certificates().and_then(<[_]>::first) {
+    let cert = owned.conn.peer_certificates().and_then(<[_]>::first);
+    let peer = match cert {
         Some(cert) => Some(x509::subject(cert).map_err(|text| text.map(str::to_owned))?),
         None => None,
     };
+    let status = status(&owned.conn, cert.map(|cert| cert.as_ref()));
     *stream = Box::new(TlsStream(Mutex::new(owned)));
-    Ok(Secured { hash: tls.hash.clone(), peer })
+    Ok(Secured { hash: tls.hash.clone(), peer, status })
+}
+
+/// The TLS status of a connection after the handshake, as `pgstat_bestart` gets it from OpenSSL.
+fn status(conn: &ServerConnection, cert: Option<&[u8]>) -> Ssl {
+    let version = match conn.protocol_version() {
+        Some(ProtocolVersion::TLSv1_3) => "TLSv1.3",
+        Some(ProtocolVersion::TLSv1_2) => "TLSv1.2",
+        _ => "unknown",
+    };
+    let (cipher, bits) = conn.negotiated_cipher_suite().map_or(("", 0), |s| cipher(s.suite()));
+    let names = cert.and_then(x509::names);
+    Ssl {
+        version: version.to_owned(),
+        cipher: cipher.to_owned(),
+        bits,
+        client_dn: names.as_ref().map(|n| n.subject.clone()).unwrap_or_default(),
+        client_serial: names.as_ref().map(|n| n.serial.clone()).unwrap_or_default(),
+        issuer_dn: names.map(|n| n.issuer).unwrap_or_default(),
+    }
+}
+
+/// The name of a cipher suite in OpenSSL, `SSL_get_cipher`, and the bits of its key, `SSL_get_cipher_bits`.
+fn cipher(suite: CipherSuite) -> (&'static str, i32) {
+    match suite {
+        CipherSuite::TLS13_AES_256_GCM_SHA384 => ("TLS_AES_256_GCM_SHA384", 256),
+        CipherSuite::TLS13_AES_128_GCM_SHA256 => ("TLS_AES_128_GCM_SHA256", 128),
+        CipherSuite::TLS13_CHACHA20_POLY1305_SHA256 => ("TLS_CHACHA20_POLY1305_SHA256", 256),
+        CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_256_GCM_SHA384 => {
+            ("ECDHE-ECDSA-AES256-GCM-SHA384", 256)
+        }
+        CipherSuite::TLS_ECDHE_ECDSA_WITH_AES_128_GCM_SHA256 => {
+            ("ECDHE-ECDSA-AES128-GCM-SHA256", 128)
+        }
+        CipherSuite::TLS_ECDHE_ECDSA_WITH_CHACHA20_POLY1305_SHA256 => {
+            ("ECDHE-ECDSA-CHACHA20-POLY1305", 256)
+        }
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_256_GCM_SHA384 => ("ECDHE-RSA-AES256-GCM-SHA384", 256),
+        CipherSuite::TLS_ECDHE_RSA_WITH_AES_128_GCM_SHA256 => ("ECDHE-RSA-AES128-GCM-SHA256", 128),
+        CipherSuite::TLS_ECDHE_RSA_WITH_CHACHA20_POLY1305_SHA256 => {
+            ("ECDHE-RSA-CHACHA20-POLY1305", 256)
+        }
+        _ => ("unknown", 0),
+    }
 }
 
 /// The place of a stream while the handshake runs.

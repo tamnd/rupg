@@ -1,4 +1,4 @@
-//! Runs the server with TLS on a free port of the loopback address and talks to it with a rustls client. The certificates are in `tests/tls`: a root `ca.crt`, the server `localhost`, and the clients `postgres` and `alice`.
+//! Runs the server with TLS on a free port of the loopback address and talks to it with a rustls client. The certificates are in `tests/tls`: a root `ca.crt`, the server `localhost`, and the clients `postgres` and `alice`. The client `bob` has a second root, a subject with escapes and a negative serial number, and `both.crt` has the two roots.
 #![cfg(feature = "tls")]
 
 use std::io::{Read, Write};
@@ -278,7 +278,8 @@ fn talk(stream: &mut (impl Read + Write), packet: &[u8], binding: Option<&[u8]>)
                     Some(format!("{} {} {}", field(b'S'), field(b'C'), field(b'M')))
                 }
                 Backend::DataRow(values) => {
-                    let values: Vec<String> = values.iter().map(|v| text(v.unwrap())).collect();
+                    let values: Vec<String> =
+                        values.iter().map(|v| v.map_or_else(|| "NULL".to_owned(), text)).collect();
                     Some(format!("row {}", values.join(",")))
                 }
                 Backend::CommandComplete(tag) => Some(text(tag)),
@@ -583,6 +584,53 @@ fn the_versions() {
     assert_eq!(talk(&mut stream, &startup(), None), ["ok", "ready I"]);
     assert_eq!(stream.conn.protocol_version(), Some(rustls::ProtocolVersion::TLSv1_2));
     drop(stream);
+    server.stop().unwrap();
+    assert_eq!(log.take(), Vec::<String>::new());
+}
+
+/// The TLS status in `pg_stat_ssl`. The rows are the output of the PostgreSQL 19 oracle, which has the same certificates and `both.crt` as `ssl_ca_file`, for a client with each certificate. The subject of `bob` is cut to 63 bytes.
+#[test]
+fn pg_stat_ssl() {
+    const SQL: &str = "SELECT ssl, version, cipher, bits, client_dn, client_serial, issuer_dn FROM pg_stat_ssl WHERE pid = pg_backend_pid()";
+    let row = |server: &Server, cert: Option<&str>| {
+        let mut stream = ssl_request(server, client(cert, false));
+        assert_eq!(talk(&mut stream, &startup(), None), ["ok", "ready I"]);
+        talk(&mut stream, &query(SQL), None)
+    };
+    let hba = "hostssl all all 127.0.0.1/32 trust\n";
+    let (server, log) = start(hba, &[("ssl_ca_file", &file("both.crt"))], KEY);
+    let server = server.unwrap();
+    assert_eq!(
+        row(&server, Some("alice")),
+        [
+            "row t,TLSv1.3,TLS_AES_256_GCM_SHA384,256,/O=rupg/CN=alice,436212100067157045909515178316855433954780046727,/CN=rupg test ca",
+            "SELECT 1",
+            "ready I"
+        ]
+    );
+    assert_eq!(
+        row(&server, None),
+        ["row t,TLSv1.3,TLS_AES_256_GCM_SHA384,256,NULL,NULL,NULL", "SELECT 1", "ready I"]
+    );
+    assert_eq!(
+        row(&server, Some("bob")),
+        [
+            "row t,TLSv1.3,TLS_AES_256_GCM_SHA384,256,/DC=org/O=Acme\\, Inc./CN=bob/OU=d\u{e9}v/emailAddress=bob@example.c,-1234567890123,/C=VN/O=Test Org/CN=other ca",
+            "SELECT 1",
+            "ready I"
+        ]
+    );
+    server.stop().unwrap();
+    let (server, _) = start(hba, &[("ssl_max_protocol_version", "TLSv1.2")], KEY);
+    let server = server.unwrap();
+    assert_eq!(
+        row(&server, Some("alice")),
+        [
+            "row t,TLSv1.2,ECDHE-ECDSA-AES256-GCM-SHA384,256,/O=rupg/CN=alice,436212100067157045909515178316855433954780046727,/CN=rupg test ca",
+            "SELECT 1",
+            "ready I"
+        ]
+    );
     server.stop().unwrap();
     assert_eq!(log.take(), Vec::<String>::new());
 }

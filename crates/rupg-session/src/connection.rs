@@ -10,7 +10,7 @@ use rupg_analyze::{Message, Params};
 use rupg_catalog::Catalog;
 use rupg_common::{Error, SqlState};
 use rupg_func::BackendState;
-pub use rupg_func::Client;
+pub use rupg_func::{Client, Ssl};
 use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
 use rupg_platform::os::OsClock;
