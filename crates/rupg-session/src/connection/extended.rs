@@ -1,17 +1,18 @@
 //! The extended query protocol: `Parse`, `Bind`, `Describe`, `Execute`, `Close` and `Sync`, as `exec_parse_message`, `exec_bind_message`, `exec_describe_statement_message`, `exec_describe_portal_message`, `exec_execute_message` and the main loop of `postgres.c` run them.
 //!
-//! A prepared statement keeps its parse tree, the types of its parameters and the names of its columns. A portal keeps its statement, the result format of each column and the rows of a `SHOW` that the client did not fetch yet. The portals end with the transaction, as in PostgreSQL. After an error the session drops the messages until `Sync`.
+//! A prepared statement keeps its parse tree, the types of its parameters, the names of its columns and the number of its generic and custom plans. A portal keeps its statement, the result format of each column and the rows of a `SHOW` that the client did not fetch yet. The portals end with the transaction, as in PostgreSQL. After an error the session drops the messages until `Sync`.
 //!
 //! An `Execute` that completes does not end the transaction. The statements after it, up to `Sync`, run in one implicit block, and `Sync` commits it. A transaction statement, and a statement that must commit at once such as `DISCARD ALL`, end the transaction at the end of their `Execute`.
 
 use std::sync::Arc;
+use std::sync::atomic::{AtomicI64, Ordering};
 
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_func::BackendState;
 use rupg_sql::nodes::Node;
-use rupg_types::{Value, oid};
+use rupg_types::{Array, Value, oid};
 use rupg_wire::{Bind, CommandTag, Field, Oids, OutBuf, ProtocolError, Target};
 
 use super::{Connection, Done, character_position};
@@ -22,7 +23,7 @@ use crate::utility::{self, Context, Notice};
 
 /// A prepared statement.
 #[derive(Debug)]
-pub(super) struct Prepared {
+pub(crate) struct Prepared {
     /// The text of the query, for the error of a statement that the session cannot run yet.
     text: String,
     /// The statement, or `None` for an empty query.
@@ -33,6 +34,51 @@ pub(super) struct Prepared {
     columns: Option<Vec<Column>>,
     /// The plan of a statement that the engine runs, or `None` for a statement that the session runs.
     plan: Option<Plan>,
+    /// The start of the statement that prepared it.
+    prepare_time: i64,
+    /// The number of runs with a generic plan.
+    generic_plans: AtomicI64,
+    /// The number of runs with a custom plan.
+    custom_plans: AtomicI64,
+}
+
+impl Prepared {
+    /// The row of the statement in `pg_prepared_statement`, with the name that the registry keeps.
+    pub(crate) fn row(&self, name: &[u8]) -> Vec<Value> {
+        let types = |types: &mut dyn Iterator<Item = u32>| {
+            let elements = types.map(|ty| Some(Value::Oid(ty))).collect();
+            Value::Array(Box::new(Array::one(elements)))
+        };
+        let result_types = match &self.columns {
+            Some(columns) => types(&mut columns.iter().map(|column| column.ty)),
+            None => Value::Null,
+        };
+        vec![
+            Value::text(String::from_utf8_lossy(name)),
+            Value::text(self.text.as_str()),
+            Value::TimestampTz(self.prepare_time),
+            types(&mut self.params.iter().copied()),
+            result_types,
+            Value::Bool(false),
+            Value::Int8(self.generic_plans.load(Ordering::Relaxed)),
+            Value::Int8(self.custom_plans.load(Ordering::Relaxed)),
+        ]
+    }
+
+    /// `choose_custom_plan` in `plancache.c`: counts a run of the statement with a generic plan or with a custom plan, as `GetCachedPlan` does.
+    ///
+    /// A statement without parameters, a utility statement and an empty query use the generic plan. Else `plan_cache_mode` decides, and in the mode `auto` the first five runs use a custom plan. After them PostgreSQL compares the cost of the generic plan with the mean cost of the custom plans. rupg has no costs, so it uses the generic plan, as PostgreSQL does when the generic plan costs less.
+    fn count_plan(&self, mode: Option<&str>) {
+        let custom = self.plan.is_some()
+            && !self.params.is_empty()
+            && match mode {
+                Some("force_generic_plan") => false,
+                Some("force_custom_plan") => true,
+                _ => self.custom_plans.load(Ordering::Relaxed) < 5,
+            };
+        let count = if custom { &self.custom_plans } else { &self.generic_plans };
+        count.fetch_add(1, Ordering::Relaxed);
+    }
 }
 
 /// What a portal did so far.
@@ -181,7 +227,16 @@ impl Connection {
             .into());
         }
         self.interrupted()?;
-        let prepared = Prepared { text, stmt, params, columns, plan };
+        let prepared = Prepared {
+            text,
+            stmt,
+            params,
+            columns,
+            plan,
+            prepare_time: self.statement_start,
+            generic_plans: AtomicI64::new(0),
+            custom_plans: AtomicI64::new(0),
+        };
         self.statements.insert(name, Arc::new(prepared))?;
         out.parse_complete();
         Ok(())
@@ -223,6 +278,7 @@ impl Connection {
             Some(plan) => Some(plan.fold(Some(&params), &self.reader())?),
             None => None,
         };
+        statement.count_plan(self.settings.borrow().get("plan_cache_mode").as_deref());
         let formats = match &statement.columns {
             Some(columns) => {
                 let count = result_formats.len();

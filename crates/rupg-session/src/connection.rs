@@ -31,7 +31,8 @@ mod activity;
 mod extended;
 
 pub(crate) use activity::Activity;
-use extended::{Failed, Portal, Prepared};
+pub(crate) use extended::Prepared;
+use extended::{Failed, Portal};
 
 /// The version of rupg, which `server_version` and the parameter `rupg.version` report.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -353,6 +354,7 @@ impl Connection {
             self.catalog(),
         )
         .with_activity(&self.activity, &self.store)
+        .with_statements(&self.statements)
     }
 
     /// The catalog that a statement sees: the copy of the transaction when it changed the catalog, or the catalog of the last commit.
@@ -1605,22 +1607,36 @@ mod tests {
     /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database.
     fn script(text: &str) {
         let (mut c, _) = connect();
+        let starts = |l: &str| ["> ", "P ", "X "].iter().any(|prefix| l.starts_with(prefix));
         let mut lines = text.lines().peekable();
         while let Some(line) = lines.next() {
-            let Some(sql) = line.strip_prefix("> ") else { panic!("not a statement: {line}") };
+            assert!(starts(line), "not a statement: {line}");
             let mut want = Vec::new();
-            while let Some(next) = lines.next_if(|l| !l.starts_with("> ")) {
+            while let Some(next) = lines.next_if(|l| !starts(l)) {
                 want.push(next);
             }
-            assert_eq!(script_lines(&mut c, sql), want, "{sql}");
+            assert_eq!(script_lines(&mut c, line), want, "{line}");
         }
     }
 
-    /// The lines of a statement of a script.
-    fn script_lines(c: &mut Connection, sql: &str) -> Vec<String> {
-        render(&exchange(c, &query(sql)), true)
+    /// The lines of a statement of a script. A line `> sql` is a simple query. A line `P name|sql` is `Parse` of a statement and `Sync`, and a line `X name|value|value` is `Bind` of the statement to the unnamed portal with values in the text format, `Execute` and `Sync`.
+    fn script_lines(c: &mut Connection, line: &str) -> Vec<String> {
+        let input = match line.split_at(2) {
+            ("P ", rest) => {
+                let (name, sql) = rest.split_once('|').unwrap();
+                [parse(name, sql, &[]), sync()].concat()
+            }
+            ("X ", rest) => {
+                let mut parts = rest.split('|');
+                let name = parts.next().unwrap();
+                let values: Vec<Option<&[u8]>> = parts.map(|v| Some(v.as_bytes())).collect();
+                [bind("", name, &[], &values, &[]), execute("", 0), sync()].concat()
+            }
+            (_, sql) => query(sql),
+        };
+        render(&exchange(c, &input), true)
             .into_iter()
-            .filter(|l| !l.starts_with("ready "))
+            .filter(|l| !l.starts_with("ready ") && l != "ParseComplete" && l != "BindComplete")
             .map(|l| match l.strip_prefix("fields ") {
                 Some(fields) => format!("fields {}", table_names(c, fields)),
                 None => l,
@@ -1646,7 +1662,7 @@ mod tests {
             while let Some(next) = lines.next_if(|l| !starts(l)) {
                 want.push(next);
             }
-            assert_eq!(script_lines(c, sql), want, "{line}");
+            assert_eq!(script_lines(c, &format!("> {sql}")), want, "{line}");
         }
     }
 
@@ -1687,6 +1703,12 @@ mod tests {
     #[test]
     fn timezones() {
         big_stack(|| script(include_str!("connection/timezones.test")));
+    }
+
+    /// `pg_prepared_statements` for the statements of `Parse`: the types of the parameters and of the columns, the statements that give no rows, the empty query, a name that is longer than 63 bytes, and the count of the generic and the custom plans in each mode of `plan_cache_mode`. A `Bind` that fails does not count, and `DISCARD ALL` drops the statements. `connection/prepared_statements.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn prepared_statements() {
+        big_stack(|| script(include_str!("connection/prepared_statements.test")));
     }
 
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
