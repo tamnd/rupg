@@ -1895,6 +1895,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/regex_functions.test")));
     }
 
+    /// The functions of regular expressions that find each match: `regexp_replace` in each form with the replacement escapes, `regexp_count`, `regexp_instr`, `regexp_substr`, `regexp_matches` and `regexp_split_to_table` in `FROM`, and `regexp_split_to_array`. The cases include empty matches, a start after the first character, the characters of more than one byte, each error and a view. `connection/regex_matches.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn regex_matches() {
+        big_stack(|| script(include_str!("connection/regex_matches.test")));
+    }
+
     /// `format_type` of `interval` with each range and precision that a typmod can have, the error for a bad range, `_pg_interval_type` of `information_schema`, and the interval types of a view in `pg_get_viewdef` and `pg_attribute`. `connection/interval_typmods.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn interval_typmods() {
