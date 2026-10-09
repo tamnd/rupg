@@ -4,6 +4,16 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.7 (2026-10-09)
+
+A patch release on the way to M2. A session can now create views, cast arrays element by element, and call the common array functions.
+
+### Added
+
+- `CREATE VIEW` and `CREATE OR REPLACE VIEW` make a view in the catalog, with its row type, its rule and the dependencies of its query (#193). A query reads a view as a subquery. The column names, types, typmods and collations, and the errors of a bad replacement, are those of PostgreSQL.
+- A cast of an array casts each element, as `ArrayCoerceExpr` does (#194). This covers casts such as `text[]` to `name[]`, casts through the text form and length casts such as `varchar(2)[]`.
+- The array functions `string_to_array`, `array_to_string`, `array_length`, `array_lower`, `array_upper`, `array_ndims`, `array_dims`, `cardinality`, `array_append`, `array_prepend` and `array_cat`, and the `||` operators of the arrays (#195).
+
 ## 0.1.6 (2026-10-09)
 
 A patch release on the way to M2. A query can now run set operations and `VALUES` lists.
