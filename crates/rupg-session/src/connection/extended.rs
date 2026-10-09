@@ -15,7 +15,7 @@ use rupg_sql::nodes::Node;
 use rupg_types::{Array, Value, oid};
 use rupg_wire::{Bind, CommandTag, Field, Oids, OutBuf, ProtocolError, Target};
 
-use super::{Connection, Done, character_position};
+use super::{Connection, Done, character_position, prepare};
 use crate::guc::{self, Setting};
 use crate::param;
 use crate::query::{self, Column, Row};
@@ -24,18 +24,20 @@ use crate::utility::{self, Context, Notice};
 /// A prepared statement.
 #[derive(Debug)]
 pub(crate) struct Prepared {
-    /// The text of the query, for the error of a statement that the session cannot run yet.
-    text: String,
+    /// The text of the query, for the error of a statement that the session cannot run yet. For `PREPARE` it is the whole query string.
+    pub(super) text: String,
     /// The statement, or `None` for an empty query.
-    stmt: Option<Node>,
+    pub(super) stmt: Option<Node>,
     /// The type OIDs of the parameters.
-    params: Vec<u32>,
+    pub(super) params: Vec<u32>,
     /// The columns, or `None` when the statement gives no rows.
-    columns: Option<Vec<Column>>,
+    pub(super) columns: Option<Vec<Column>>,
     /// The plan of a statement that the engine runs, or `None` for a statement that the session runs.
-    plan: Option<Plan>,
+    pub(super) plan: Option<Plan>,
     /// The start of the statement that prepared it.
     prepare_time: i64,
+    /// True for a statement of `PREPARE`, and false for a statement of `Parse`.
+    from_sql: bool,
     /// The number of runs with a generic plan.
     generic_plans: AtomicI64,
     /// The number of runs with a custom plan.
@@ -43,6 +45,28 @@ pub(crate) struct Prepared {
 }
 
 impl Prepared {
+    pub(super) fn new(
+        text: String,
+        stmt: Option<Node>,
+        params: Vec<u32>,
+        columns: Option<Vec<Column>>,
+        plan: Option<Plan>,
+        prepare_time: i64,
+        from_sql: bool,
+    ) -> Prepared {
+        Prepared {
+            text,
+            stmt,
+            params,
+            columns,
+            plan,
+            prepare_time,
+            from_sql,
+            generic_plans: AtomicI64::new(0),
+            custom_plans: AtomicI64::new(0),
+        }
+    }
+
     /// The row of the statement in `pg_prepared_statement`, with the name that the registry keeps.
     pub(crate) fn row(&self, name: &[u8]) -> Vec<Value> {
         let types = |types: &mut dyn Iterator<Item = u32>| {
@@ -59,7 +83,7 @@ impl Prepared {
             Value::TimestampTz(self.prepare_time),
             types(&mut self.params.iter().copied()),
             result_types,
-            Value::Bool(false),
+            Value::Bool(self.from_sql),
             Value::Int8(self.generic_plans.load(Ordering::Relaxed)),
             Value::Int8(self.custom_plans.load(Ordering::Relaxed)),
         ]
@@ -68,7 +92,7 @@ impl Prepared {
     /// `choose_custom_plan` in `plancache.c`: counts a run of the statement with a generic plan or with a custom plan, as `GetCachedPlan` does.
     ///
     /// A statement without parameters, a utility statement and an empty query use the generic plan. Else `plan_cache_mode` decides, and in the mode `auto` the first five runs use a custom plan. After them PostgreSQL compares the cost of the generic plan with the mean cost of the custom plans. rupg has no costs, so it uses the generic plan, as PostgreSQL does when the generic plan costs less.
-    fn count_plan(&self, mode: Option<&str>) {
+    pub(super) fn count_plan(&self, mode: Option<&str>) {
         let custom = self.plan.is_some()
             && !self.params.is_empty()
             && match mode {
@@ -122,16 +146,21 @@ impl From<Error> for Failed {
 
 impl From<ProtocolError> for Failed {
     fn from(error: ProtocolError) -> Failed {
-        let state = SqlState::parse(error.sqlstate).unwrap_or(SqlState::PROTOCOL_VIOLATION);
-        let mut out = Error::new(state, error.message);
-        if let Some(detail) = error.detail {
-            out = out.with_detail(detail);
-        }
-        if let Some(hint) = error.hint {
-            out = out.with_hint(hint);
-        }
-        out.into()
+        protocol_error(error).into()
     }
+}
+
+/// The error of a registry of names, with its SQLSTATE.
+pub(super) fn protocol_error(error: ProtocolError) -> Error {
+    let state = SqlState::parse(error.sqlstate).unwrap_or(SqlState::PROTOCOL_VIOLATION);
+    let mut out = Error::new(state, error.message);
+    if let Some(detail) = error.detail {
+        out = out.with_detail(detail);
+    }
+    if let Some(hint) = error.hint {
+        out = out.with_hint(hint);
+    }
+    out
 }
 
 /// The error of a statement in a failed transaction block.
@@ -211,6 +240,8 @@ impl Connection {
                 columns = Some(query::columns(&made));
                 params = made.params().to_vec();
                 plan = Some(made);
+            } else if let Node::ExecuteStmt(stmt) = node {
+                columns = self.execute_columns(stmt);
             } else if !rupg_analyze::is_definition(node) {
                 utility::check(node, &text)?;
                 columns = utility::columns(node, &self.settings.borrow())?
@@ -227,16 +258,8 @@ impl Connection {
             .into());
         }
         self.interrupted()?;
-        let prepared = Prepared {
-            text,
-            stmt,
-            params,
-            columns,
-            plan,
-            prepare_time: self.statement_start,
-            generic_plans: AtomicI64::new(0),
-            custom_plans: AtomicI64::new(0),
-        };
+        let prepared =
+            Prepared::new(text, stmt, params, columns, plan, self.statement_start, false);
         self.statements.insert(name, Arc::new(prepared))?;
         out.parse_complete();
         Ok(())
@@ -395,6 +418,14 @@ impl Connection {
                 self.settings.borrow_mut().take_snapshot();
                 let rows = query::run(plan, &params, &self.reader(), &formats)?;
                 Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
+            } else if prepare::is_prepare(node) {
+                let mut notices = Vec::new();
+                let result = self.run_prepare(node, &statement.text, &formats, &mut notices, 0);
+                self.notices(&mut notices, &statement.text, &[], out);
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
             } else if rupg_analyze::is_definition(node) {
                 let mut notices = Vec::new();
                 let result = self.define(node, &statement.text, &mut notices);

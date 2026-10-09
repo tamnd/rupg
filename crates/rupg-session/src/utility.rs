@@ -69,7 +69,9 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         Node::VariableSetStmt(_)
         | Node::VariableShowStmt(_)
         | Node::TransactionStmt(_)
-        | Node::DiscardStmt(_) => Ok(()),
+        | Node::DiscardStmt(_)
+        | Node::PrepareStmt(_)
+        | Node::DeallocateStmt(_) => Ok(()),
         _ => Err(not_supported(text)),
     }
 }

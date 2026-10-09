@@ -37,7 +37,7 @@ impl Analyzer<'_> {
     /// `transformSubLink`.
     pub(crate) fn transform_sublink(&mut self, s: &RawSubLink) -> Result<Expr> {
         let at = place(s.location);
-        if self.kind.is_definition() {
+        if self.kind.is_standalone() {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 format!("cannot use subquery in {}", self.kind.subquery_name()),

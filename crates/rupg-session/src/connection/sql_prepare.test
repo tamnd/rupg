@@ -1,0 +1,279 @@
+P s5|SET search_path = public
+P s3|SHOW DateStyle
+P s6|BEGIN
+P s1|SELECT $1::int + 1
+> EXECUTE s5
+SET
+search_path=public
+> EXECUTE s3
+fields DateStyle:25:-1:-1
+row ISO, MDY
+SHOW
+> EXECUTE s6
+BEGIN
+> ROLLBACK
+ROLLBACK
+> EXECUTE s1(41)
+fields ?column?:23:4:-1
+row 42
+SELECT 1
+> EXECUTE s1('41')
+fields ?column?:23:4:-1
+row 42
+SELECT 1
+> EXECUTE s1(41.6)
+fields ?column?:23:4:-1
+row 43
+SELECT 1
+> EXECUTE s1('x')
+ERROR 22P02 invalid input syntax for type integer: "x" at 12
+> EXECUTE s1(true)
+ERROR 42804 parameter $1 of type boolean cannot be coerced to the expected type integer at 12
+> EXECUTE s1
+ERROR 42601 wrong number of parameters for prepared statement "s1"
+> EXECUTE s1(1, 2)
+ERROR 42601 wrong number of parameters for prepared statement "s1"
+> EXECUTE nope
+ERROR 26000 prepared statement "nope" does not exist
+> EXECUTE nope(1)
+ERROR 26000 prepared statement "nope" does not exist
+> DEALLOCATE nope
+ERROR 26000 prepared statement "nope" does not exist
+> DEALLOCATE PREPARE nope
+ERROR 26000 prepared statement "nope" does not exist
+> PREPARE p AS SELECT $1
+PREPARE
+> PREPARE p(int) AS SELECT $1, $2
+ERROR 42P05 prepared statement "p" already exists
+> PREPARE p(int) AS SELECT $1 + $2
+ERROR 42P05 prepared statement "p" already exists
+> PREPARE p(nosuchtype) AS SELECT $1
+ERROR 42704 type "nosuchtype" does not exist at 11
+> PREPARE p(int, int) AS SELECT $1
+ERROR 42P05 prepared statement "p" already exists
+> EXECUTE p(1, 2)
+ERROR 42601 wrong number of parameters for prepared statement "p"
+> PREPARE p AS SELECT 1
+ERROR 42P05 prepared statement "p" already exists
+> PREPARE s1 AS SELECT 1
+ERROR 42P05 prepared statement "s1" already exists
+> PREPARE "" AS SELECT 1
+ERROR 42601 zero-length delimited identifier at or near """" at 9
+> PREPARE p2(text) AS SELECT upper($1) AS u, length($1) AS n
+PREPARE
+> EXECUTE p2('abc' || 'd')
+fields u:25:-1:-1,n:23:4:-1
+row ABCD,4
+SELECT 1
+> EXECUTE p2(NULL)
+fields u:25:-1:-1,n:23:4:-1
+row NULL,NULL
+SELECT 1
+> EXECUTE p2(1)
+fields u:25:-1:-1,n:23:4:-1
+row 1,1
+SELECT 1
+> EXECUTE p2((SELECT 'z'))
+ERROR 0A000 cannot use subquery in EXECUTE parameter at 12
+> EXECUTE p2(count(*))
+ERROR 42803 aggregate functions are not allowed in EXECUTE parameters at 12
+> EXECUTE p2(relname)
+ERROR 42703 column "relname" does not exist at 12
+> PREPARE p3 AS VALUES (1, 'a'), (2, 'b')
+PREPARE
+> EXECUTE p3
+fields column1:23:4:-1,column2:25:-1:-1
+row 1,a
+row 2,b
+SELECT 2
+> PREPARE p4(regclass) AS SELECT relkind FROM pg_class WHERE oid = $1
+PREPARE
+> EXECUTE p4('pg_class')
+fields relkind@pg_class.18:18:1:-1
+row r
+SELECT 1
+> PREPARE p5 AS SELECT 1/x FROM (VALUES (0), (1)) v(x)
+PREPARE
+> EXECUTE p5
+ERROR 22012 division by zero
+> BEGIN
+BEGIN
+> PREPARE t1 AS SELECT 't1'
+PREPARE
+> SELECT 1/0
+ERROR 22012 division by zero
+> PREPARE t2 AS SELECT 't2'
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> EXECUTE t1
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> DEALLOCATE t1
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK
+ROLLBACK
+> EXECUTE t1
+fields ?column?:25:-1:-1
+row t1
+SELECT 1
+P s7|
+P sc|CREATE TABLE t_ex (a int)
+> EXECUTE s7
+EXECUTE
+> EXECUTE sc
+CREATE TABLE
+> SELECT count(*) FROM pg_class WHERE relname = 't_ex'
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT name, generic_plans, custom_plans FROM pg_prepared_statements ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row p,0,0
+row p2,0,3
+row p3,1,0
+row p4,0,1
+row p5,1,0
+row s1,0,3
+row s3,1,0
+row s5,1,0
+row s6,1,0
+row s7,1,0
+row sc,1,0
+row t1,1,0
+SELECT 12
+> PREPARE p7(int) AS SELECT $1 WHERE $1 > 0
+PREPARE
+> EXECUTE p7(1)
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> EXECUTE p7(1 + 1)
+fields ?column?:23:4:-1
+row 2
+SELECT 1
+> EXECUTE p7(-1)
+fields ?column?:23:4:-1
+SELECT 0
+> EXECUTE p7('1'::text)
+ERROR 42804 parameter $1 of type text cannot be coerced to the expected type integer at 12
+> EXECUTE p7(abs(-3))
+fields ?column?:23:4:-1
+row 3
+SELECT 1
+> EXECUTE p7(generate_series(1, 2))
+ERROR 0A000 set-returning functions are not allowed in EXECUTE parameters at 12
+> EXECUTE p7(sum(1) OVER ())
+ERROR 42P20 window functions are not allowed in EXECUTE parameters at 12
+> PREPARE p8(int, int) AS SELECT $1
+PREPARE
+> EXECUTE p8(1, 2)
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> PREPARE p9(int) AS SELECT $2
+PREPARE
+> PREPARE p10 AS SELECT $1 + 1
+PREPARE
+> PREPARE p11(text) AS SELECT $1::int
+PREPARE
+> PREPARE p12(int) AS SHOW DateStyle
+ERROR 42601 syntax error at or near "SHOW" at 21
+> PREPARE p13 AS SELECT 1 AS x; EXECUTE p13
+PREPARE
+fields x:23:4:-1
+row 1
+SELECT 1
+> EXECUTE p13;
+fields x:23:4:-1
+row 1
+SELECT 1
+> SELECT name, parameter_types, result_types FROM pg_prepared_statements WHERE from_sql ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,parameter_types@pg_prepared_statements.4:2211:-1:-1,result_types@pg_prepared_statements.5:2211:-1:-1
+row p,{text},{text}
+row p10,{integer},{integer}
+row p11,{text},{integer}
+row p13,{},{integer}
+row p2,{text},{text,integer}
+row p3,{},{integer,text}
+row p4,{regclass},{"\"char\""}
+row p5,{},{integer}
+row p7,{integer},{integer}
+row p8,{integer,integer},{integer}
+row p9,{integer,text},{text}
+row t1,{},{text}
+SELECT 12
+> SELECT name, statement, parameter_types, result_types, from_sql, generic_plans, custom_plans FROM pg_prepared_statements ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,statement@pg_prepared_statements.2:25:-1:-1,parameter_types@pg_prepared_statements.4:2211:-1:-1,result_types@pg_prepared_statements.5:2211:-1:-1,from_sql@pg_prepared_statements.6:16:1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row p,PREPARE p AS SELECT $1,{text},{text},t,0,0
+row p10,PREPARE p10 AS SELECT $1 + 1,{integer},{integer},t,0,0
+row p11,PREPARE p11(text) AS SELECT $1::int,{text},{integer},t,0,0
+row p13,PREPARE p13 AS SELECT 1 AS x; EXECUTE p13,{},{integer},t,2,0
+row p2,PREPARE p2(text) AS SELECT upper($1) AS u, length($1) AS n,{text},{text,integer},t,0,3
+row p3,PREPARE p3 AS VALUES (1, 'a'), (2, 'b'),{},{integer,text},t,1,0
+row p4,PREPARE p4(regclass) AS SELECT relkind FROM pg_class WHERE oid = $1,{regclass},{"\"char\""},t,0,1
+row p5,PREPARE p5 AS SELECT 1/x FROM (VALUES (0), (1)) v(x),{},{integer},t,1,0
+row p7,PREPARE p7(int) AS SELECT $1 WHERE $1 > 0,{integer},{integer},t,0,4
+row p8,PREPARE p8(int, int) AS SELECT $1,{integer,integer},{integer},t,0,1
+row p9,PREPARE p9(int) AS SELECT $2,{integer,text},{text},t,0,0
+row s1,SELECT $1::int + 1,{integer},{integer},f,0,3
+row s3,SHOW DateStyle,{},{text},f,1,0
+row s5,SET search_path = public,{},NULL,f,1,0
+row s6,BEGIN,{},NULL,f,1,0
+row s7,,{},NULL,f,1,0
+row sc,CREATE TABLE t_ex (a int),{},NULL,f,1,0
+row t1,PREPARE t1 AS SELECT 't1',{},{text},t,1,0
+SELECT 18
+X p2|hi
+row HI,2
+SELECT 1
+> SELECT name, generic_plans, custom_plans FROM pg_prepared_statements WHERE name = 'p2'
+fields name@pg_prepared_statements.1:25:-1:-1,generic_plans@pg_prepared_statements.7:20:8:-1,custom_plans@pg_prepared_statements.8:20:8:-1
+row p2,0,4
+SELECT 1
+> DEALLOCATE p2
+DEALLOCATE
+> DEALLOCATE ALL
+DEALLOCATE ALL
+> SELECT count(*) FROM pg_prepared_statements
+fields count:20:8:-1
+row 0
+SELECT 1
+> PREPARE m1 AS SELECT 1; PREPARE m2 AS SELECT 2; EXECUTE m1; DEALLOCATE m2
+PREPARE
+PREPARE
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+DEALLOCATE
+> SELECT name, statement FROM pg_prepared_statements ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,statement@pg_prepared_statements.2:25:-1:-1
+row m1,PREPARE m1 AS SELECT 1; PREPARE m2 AS SELECT 2; EXECUTE m1; DEALLOCATE m2
+SELECT 1
+P ex|EXECUTE m1
+P ex2|EXECUTE m1(1)
+P ex3|EXECUTE nope
+P de2|DEALLOCATE nope
+X ex
+row 1
+SELECT 1
+P de|DEALLOCATE m1
+X de
+DEALLOCATE
+P pr|PREPARE m3 AS SELECT 3
+X pr
+PREPARE
+> SELECT name, statement, from_sql FROM pg_prepared_statements ORDER BY name
+fields name@pg_prepared_statements.1:25:-1:-1,statement@pg_prepared_statements.2:25:-1:-1,from_sql@pg_prepared_statements.6:16:1:-1
+row de,DEALLOCATE m1,f
+row de2,DEALLOCATE nope,f
+row ex,EXECUTE m1,f
+row ex2,EXECUTE m1(1),f
+row ex3,EXECUTE nope,f
+row m3,PREPARE m3 AS SELECT 3,t
+row pr,PREPARE m3 AS SELECT 3,f
+SELECT 7
+P rec|EXECUTE rec
+> EXECUTE rec
+ERROR 54001 stack depth limit exceeded
+> SELECT 1
+fields ?column?:23:4:-1
+row 1
+SELECT 1

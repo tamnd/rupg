@@ -29,6 +29,7 @@ use crate::utility::{self, Context, Notice, Outcome};
 
 mod activity;
 mod extended;
+mod prepare;
 
 pub(crate) use activity::Activity;
 pub(crate) use extended::Prepared;
@@ -634,6 +635,9 @@ impl Connection {
                     SqlState::IN_FAILED_SQL_TRANSACTION,
                     "current transaction is aborted, commands ignored until end of transaction block",
                 ))
+            } else if prepare::is_prepare(node) {
+                drop(self.portals.close(b""));
+                self.run_prepare(node, text, &[], &mut notices, 0)
             } else if query::is_query(node) {
                 drop(self.portals.close(b""));
                 self.select(node, &mut notices, &mut described)
@@ -1709,6 +1713,12 @@ mod tests {
     #[test]
     fn prepared_statements() {
         big_stack(|| script(include_str!("connection/prepared_statements.test")));
+    }
+
+    /// `PREPARE`, `EXECUTE` and `DEALLOCATE`: the types of the parameters, the coercion of the values of `EXECUTE` and their errors, the statements of `Parse` that `EXECUTE` runs, the errors in a failed transaction, the count of the plans, a query string with more than one statement, the three statements in a `Parse`, and a statement of `Parse` that runs `EXECUTE` of itself. `connection/sql_prepare.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sql_prepare() {
+        big_stack(|| script(include_str!("connection/sql_prepare.test")));
     }
 
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -15,6 +15,7 @@ mod expr;
 mod from;
 pub mod node;
 mod poly;
+mod prepare;
 mod resolve;
 mod select;
 mod setop;
@@ -41,6 +42,7 @@ pub use expr::{
     SubLinkKind, Subscript, Var,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
+pub use prepare::{execute_params, param_types};
 pub use select::{Query, Target};
 pub use setop::{SetKind, SetOp, SetTree};
 pub use sort::SortGroup;
