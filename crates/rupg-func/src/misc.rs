@@ -65,6 +65,11 @@ fn pg_client_encoding(_: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::text("UTF8"))
 }
 
+/// `getdatabaseencoding`: the encoding of the database, which is always UTF8.
+fn getdatabaseencoding(_: &Call<'_>, _: &[Value]) -> Result<Value> {
+    Ok(Value::text("UTF8"))
+}
+
 /// `format_type(oid, int4)`. It is not strict: a null type gives null, and a null typmod gives the name without a typmod.
 fn format_type(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let ty = match args.first() {
@@ -185,6 +190,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_typeof" => pg_typeof,
         "pg_backend_pid" => pg_backend_pid,
         "pg_client_encoding" => pg_client_encoding,
+        "getdatabaseencoding" => getdatabaseencoding,
         "pg_encoding_max_length_sql" => pg_encoding_max_length,
         "format_type" => format_type,
         "show_config_by_name" | "show_config_by_name_missing_ok" => current_setting,

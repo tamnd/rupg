@@ -1,0 +1,123 @@
+> SELECT nameconcatoid('abc', 123), nameconcatoid('', 0), nameconcatoid('abc', 4294967295)
+fields nameconcatoid:19:64:-1,nameconcatoid:19:64:-1,nameconcatoid:19:64:-1
+row abc_123,_0,abc_4294967295
+SELECT 1
+> SELECT pg_typeof(nameconcatoid('abc', 1)), nameconcatoid(NULL, 1), nameconcatoid('abc', NULL)
+fields pg_typeof:2206:4:-1,nameconcatoid:19:64:-1,nameconcatoid:19:64:-1
+row name,NULL,NULL
+SELECT 1
+> SELECT nameconcatoid(repeat('x', 60), 4294967295), length(nameconcatoid(repeat('x', 60), 4294967295)), octet_length(nameconcatoid(repeat('x', 70)::name, 7))
+fields nameconcatoid:19:64:-1,length:23:4:-1,octet_length:23:4:-1
+row xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_4294967295,63,63
+SELECT 1
+> SELECT nameconcatoid(repeat('é', 30), 12345), octet_length(nameconcatoid(repeat('é', 30), 12345))
+fields nameconcatoid:19:64:-1,octet_length:23:4:-1
+row éééééééééééééééééééééééééééé_12345,62
+SELECT 1
+> SELECT nameconcatoid(repeat('é', 31), 1), octet_length(nameconcatoid(repeat('é', 31), 1)), nameconcatoid(repeat('x', 57), 12345)
+fields nameconcatoid:19:64:-1,octet_length:23:4:-1,nameconcatoid:19:64:-1
+row éééééééééééééééééééééééééééééé_1,62,xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx_12345
+SELECT 1
+> SELECT getdatabaseencoding(), pg_typeof(getdatabaseencoding()), getdatabaseencoding() = pg_client_encoding()
+fields getdatabaseencoding:19:64:-1,pg_typeof:2206:4:-1,?column?:16:1:-1
+row UTF8,name,t
+SELECT 1
+> SELECT character_set_schema, character_set_name, character_repertoire, form_of_use FROM information_schema.character_sets
+fields character_set_schema@information_schema.character_sets.2:19:64:-1,character_set_name@information_schema.character_sets.3:19:64:-1,character_repertoire@information_schema.character_sets.4:19:64:-1,form_of_use@information_schema.character_sets.5:19:64:-1
+row NULL,UTF8,UCS,UTF8
+SELECT 1
+> SELECT collation_schema, collation_name, character_set_name FROM information_schema.collation_character_set_applicability WHERE collation_name IN ('C', 'POSIX', 'ucs_basic', 'pg_c_utf8', 'unicode', 'pg_unicode_fast', 'default') ORDER BY collation_name
+fields collation_schema@information_schema.collation_character_set_applicability.2:19:64:-1,collation_name@information_schema.collation_character_set_applicability.3:19:64:-1,character_set_name@information_schema.collation_character_set_applicability.6:19:64:-1
+row pg_catalog,C,UTF8
+row pg_catalog,POSIX,UTF8
+row pg_catalog,default,UTF8
+row pg_catalog,pg_c_utf8,UTF8
+row pg_catalog,pg_unicode_fast,UTF8
+row pg_catalog,ucs_basic,UTF8
+row pg_catalog,unicode,UTF8
+SELECT 7
+> SELECT specific_schema, specific_name = nameconcatoid(routine_name, 'lower(text)'::regprocedure), routine_schema, routine_name, routine_type, data_type, type_udt_name, routine_body, external_name, external_language, parameter_style, is_deterministic, sql_data_access, is_null_call, schema_level_routine, is_user_defined_cast, is_implicitly_invocable, security_type, as_locator, is_udt_dependent FROM information_schema.routines WHERE routine_name = 'lower' AND data_type = 'text'
+fields specific_schema@information_schema.routines.2:19:64:-1,?column?:16:1:-1,routine_schema@information_schema.routines.5:19:64:-1,routine_name@information_schema.routines.6:19:64:-1,routine_type@information_schema.routines.7:1043:-1:-1,data_type@information_schema.routines.14:1043:-1:-1,type_udt_name@information_schema.routines.31:19:64:-1,routine_body@information_schema.routines.37:1043:-1:-1,external_name@information_schema.routines.39:1043:-1:-1,external_language@information_schema.routines.40:1043:-1:-1,parameter_style@information_schema.routines.41:1043:-1:-1,is_deterministic@information_schema.routines.42:1043:-1:7,sql_data_access@information_schema.routines.43:1043:-1:-1,is_null_call@information_schema.routines.44:1043:-1:7,schema_level_routine@information_schema.routines.46:1043:-1:7,is_user_defined_cast@information_schema.routines.48:1043:-1:7,is_implicitly_invocable@information_schema.routines.49:1043:-1:7,security_type@information_schema.routines.50:1043:-1:-1,as_locator@information_schema.routines.54:1043:-1:7,is_udt_dependent@information_schema.routines.58:1043:-1:7
+row pg_catalog,t,pg_catalog,lower,FUNCTION,text,text,EXTERNAL,NULL,INTERNAL,GENERAL,YES,MODIFIES,YES,YES,NULL,NULL,INVOKER,NO,NO
+SELECT 1
+> SELECT routine_name, routine_type, data_type, type_udt_name FROM information_schema.routines WHERE routine_name IN ('nameconcatoid', 'getdatabaseencoding', 'now', 'abs', 'generate_series') ORDER BY routine_name, specific_name
+fields routine_name@information_schema.routines.6:19:64:-1,routine_type@information_schema.routines.7:1043:-1:-1,data_type@information_schema.routines.14:1043:-1:-1,type_udt_name@information_schema.routines.31:19:64:-1
+row abs,FUNCTION,real,float4
+row abs,FUNCTION,double precision,float8
+row abs,FUNCTION,bigint,int8
+row abs,FUNCTION,integer,int4
+row abs,FUNCTION,smallint,int2
+row abs,FUNCTION,numeric,numeric
+row generate_series,FUNCTION,integer,int4
+row generate_series,FUNCTION,integer,int4
+row generate_series,FUNCTION,bigint,int8
+row generate_series,FUNCTION,bigint,int8
+row generate_series,FUNCTION,numeric,numeric
+row generate_series,FUNCTION,numeric,numeric
+row generate_series,FUNCTION,timestamp with time zone,timestamptz
+row generate_series,FUNCTION,timestamp without time zone,timestamp
+row generate_series,FUNCTION,timestamp with time zone,timestamptz
+row getdatabaseencoding,FUNCTION,name,name
+row nameconcatoid,FUNCTION,name,name
+row now,FUNCTION,timestamp with time zone,timestamptz
+SELECT 18
+> SELECT ordinal_position, parameter_mode, is_result, as_locator, parameter_name, data_type, udt_name, parameter_default FROM information_schema.parameters WHERE specific_name = nameconcatoid('nameconcatoid', 'nameconcatoid'::regproc) ORDER BY ordinal_position
+fields ordinal_position@information_schema.parameters.4:23:4:-1,parameter_mode@information_schema.parameters.5:1043:-1:-1,is_result@information_schema.parameters.6:1043:-1:7,as_locator@information_schema.parameters.7:1043:-1:7,parameter_name@information_schema.parameters.8:19:64:-1,data_type@information_schema.parameters.9:1043:-1:-1,udt_name@information_schema.parameters.26:19:64:-1,parameter_default@information_schema.parameters.32:1043:-1:-1
+row 1,IN,NO,NO,NULL,name,name,NULL
+row 2,IN,NO,NO,NULL,oid,oid,NULL
+SELECT 2
+> SELECT p.ordinal_position, p.parameter_mode, p.parameter_name, p.data_type, p.parameter_default FROM information_schema.parameters p WHERE specific_name = nameconcatoid('make_interval', 'make_interval'::regproc) ORDER BY ordinal_position
+fields ordinal_position@information_schema.parameters.4:23:4:-1,parameter_mode@information_schema.parameters.5:1043:-1:-1,parameter_name@information_schema.parameters.8:19:64:-1,data_type@information_schema.parameters.9:1043:-1:-1,parameter_default@information_schema.parameters.32:1043:-1:-1
+row 1,IN,years,integer,0
+row 2,IN,months,integer,0
+row 3,IN,weeks,integer,0
+row 4,IN,days,integer,0
+row 5,IN,hours,integer,0
+row 6,IN,mins,integer,0
+row 7,IN,secs,double precision,'0'::double precision
+SELECT 7
+> SELECT grantor, grantee, routine_name, privilege_type, is_grantable FROM information_schema.routine_privileges WHERE routine_name = 'lower' ORDER BY specific_name, grantee
+fields grantor@information_schema.routine_privileges.1:19:64:-1,grantee@information_schema.routine_privileges.2:19:64:-1,routine_name@information_schema.routine_privileges.8:19:64:-1,privilege_type@information_schema.routine_privileges.9:1043:-1:-1,is_grantable@information_schema.routine_privileges.10:1043:-1:7
+row postgres,PUBLIC,lower,EXECUTE,NO
+row postgres,postgres,lower,EXECUTE,YES
+row postgres,PUBLIC,lower,EXECUTE,NO
+row postgres,postgres,lower,EXECUTE,YES
+row postgres,PUBLIC,lower,EXECUTE,NO
+row postgres,postgres,lower,EXECUTE,YES
+SELECT 6
+> SELECT grantor, grantee, routine_name, privilege_type, is_grantable FROM information_schema.role_routine_grants WHERE routine_name = 'pg_reload_conf'
+fields grantor@information_schema.role_routine_grants.1:19:64:-1,grantee@information_schema.role_routine_grants.2:19:64:-1,routine_name@information_schema.role_routine_grants.8:19:64:-1,privilege_type@information_schema.role_routine_grants.9:1043:-1:-1,is_grantable@information_schema.role_routine_grants.10:1043:-1:7
+row postgres,postgres,pg_reload_conf,EXECUTE,YES
+SELECT 1
+> SELECT count(*) FROM information_schema.check_constraint_routine_usage
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM information_schema.routine_column_usage
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM information_schema.routine_routine_usage
+fields count:20:8:-1
+row 2
+SELECT 1
+> SELECT count(*) FROM information_schema.routine_sequence_usage
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM information_schema.routine_table_usage
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM information_schema.view_routine_usage
+fields count:20:8:-1
+row 31
+SELECT 1
+> SELECT count(*) FROM information_schema.transforms
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) > 3000 FROM information_schema.routines
+fields ?column?:16:1:-1
+row t
+SELECT 1
