@@ -2009,6 +2009,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/relation_privileges.test")));
     }
 
+    /// `has_schema_privilege`, `has_type_privilege` and `has_function_privilege` on the objects of the catalog of the session: `information_schema` with its domains and functions, a schema that the script makes, and the row types of its tables and views with their arrays. The checks run for the superuser and for the predefined roles, with OIDs that do not exist and the errors of a bad name or a bad privilege. `connection/object_privileges.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn object_privileges() {
+        big_stack(|| script(include_str!("connection/object_privileges.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

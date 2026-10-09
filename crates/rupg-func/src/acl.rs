@@ -541,28 +541,62 @@ fn owned_kind(kind: Owned) -> AclKind {
     }
 }
 
-/// `object_aclmask_ext` with `ACLMASK_ANY`, with `pg_namespace_aclmask_ext` and `pg_type_aclmask_ext`. A superuser has each privilege, also on an object that does not exist. A true array type and a multirange type have the privileges of their element type and their range type. `pg_read_all_data` and `pg_write_all_data` have `USAGE` on each schema.
-fn object_check(kind: Owned, oid: u32, role: u32, mask: u32) -> Check {
+/// The items of a parsed `aclitem[]` value with the owner of the object.
+type Privileges = (Vec<(u32, u32)>, u32);
+
+/// The privileges and the owner of a schema, a type or a function of the catalog of the session, or `None` when the catalog has no such object. A type and a function there have the default privileges of their owner.
+fn session_object(kind: Owned, oid: u32, session: &dyn Session) -> Result<Option<Privileges>> {
+    let Some(catalog) = session.catalog() else { return Ok(None) };
+    let (acl, owner) = match kind {
+        Owned::Namespace => match catalog.schema(oid) {
+            Some(schema) => (schema.acl.as_ref(), schema.owner),
+            None => return Ok(None),
+        },
+        Owned::Type => match catalog.type_by_oid(oid) {
+            Some(ty) => (None, ty.owner),
+            None => return Ok(None),
+        },
+        Owned::Function => match catalog.function(oid) {
+            Some(function) => (None, function.owner),
+            None => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    let acl: Option<Vec<&str>> = acl.map(|acl| acl.iter().map(String::as_str).collect());
+    Ok(Some((acl_of(acl.as_deref(), owned_kind(kind), owner)?, owner)))
+}
+
+/// `object_aclmask_ext` with `ACLMASK_ANY`, with `pg_namespace_aclmask_ext` and `pg_type_aclmask_ext`. A superuser has each privilege, also on an object that does not exist. A true array type and a multirange type have the privileges of their element type and their range type. `pg_read_all_data` and `pg_write_all_data` have `USAGE` on each schema. An object that is not in the built-in catalogs comes from the catalog of the session.
+fn object_check(kind: Owned, oid: u32, role: u32, mask: u32, session: &dyn Session) -> Check {
     if superuser(role) {
         return Ok(Some(mask != 0));
     }
     let mut oid = oid;
     if kind == Owned::Type {
-        let Some(ty) = builtin::type_by_oid(oid) else { return Ok(None) };
-        if ty.elem != 0 && ty.subscript == ARRAY_SUBSCRIPT_HANDLER {
-            oid = ty.elem;
-        }
-        if builtin::type_by_oid(oid).is_some_and(|t| t.kind == b'm') {
-            let Some(range) = builtin::multirange_range(oid) else { return Ok(None) };
-            oid = range;
+        if let Some(ty) = builtin::type_by_oid(oid) {
+            if ty.elem != 0 && ty.subscript == ARRAY_SUBSCRIPT_HANDLER {
+                oid = ty.elem;
+            }
+            if builtin::type_by_oid(oid).is_some_and(|t| t.kind == b'm') {
+                let Some(range) = builtin::multirange_range(oid) else { return Ok(None) };
+                oid = range;
+            }
+        } else {
+            let found = session.catalog().and_then(|c| c.type_by_oid(oid));
+            let Some(ty) = found else { return Ok(None) };
+            if ty.element != 0 {
+                oid = ty.element;
+            }
         }
     }
     let (acl, owner) = if kind == Owned::Database {
         let Some(acl) = database_acl(oid)? else { return Ok(None) };
         (acl, BOOTSTRAP_SUPERUSER)
-    } else {
-        let Some(row) = builtin::owned_by_oid(kind, oid) else { return Ok(None) };
+    } else if let Some(row) = builtin::owned_by_oid(kind, oid) {
         (acl_of(row.acl, owned_kind(kind), row.owner)?, row.owner)
+    } else {
+        let Some(object) = session_object(kind, oid, session)? else { return Ok(None) };
+        object
     };
     let mut result = aclmask(&acl, role, owner, mask);
     if kind == Owned::Namespace
@@ -628,8 +662,11 @@ fn reg_name(kind: RegKind, text: &str, session: &dyn Session, what: &str) -> Res
 }
 
 /// The OID of an object of a kind without a schema by its name, with the error of `get_*_oid`.
-fn simple_name(kind: Owned, name: &str) -> Result<u32> {
-    let found = builtin::owned(kind).iter().find(|r| r.name == name).map(|r| r.oid);
+fn simple_name(kind: Owned, name: &str, session: &dyn Session) -> Result<u32> {
+    let mut found = builtin::owned(kind).iter().find(|r| r.name == name).map(|r| r.oid);
+    if found.is_none() && kind == Owned::Namespace {
+        found = session.catalog().and_then(|c| c.schema_by_name(name)).map(|s| s.oid);
+    }
     found.ok_or_else(|| {
         let (state, what) = match kind {
             Owned::Namespace => (SqlState::UNDEFINED_SCHEMA, "schema"),
@@ -757,13 +794,13 @@ fn has_object_privilege(kind: Owned, call: &Call<'_>, args: &[Value]) -> Result<
         Value::Text(name) => match kind {
             Owned::Function => reg_name(RegKind::Procedure, name, call.session, "function")?,
             Owned::Type => reg_name(RegKind::Type, name, call.session, "type")?,
-            _ => simple_name(kind, name)?,
+            _ => simple_name(kind, name, call.session)?,
         },
         Value::Oid(oid) => *oid,
         _ => return Err(bad_value()),
     };
     let mask = privileges(text(args, at + 1)?, owned_privs(kind))?;
-    Ok(result(object_check(kind, oid, role, mask)?))
+    Ok(result(object_check(kind, oid, role, mask, call.session)?))
 }
 
 /// `has_largeobject_privilege`: null for a large object that does not exist. The static rows have no large objects.
@@ -776,7 +813,7 @@ fn has_largeobject_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     if builtin::owned_by_oid(Owned::LargeObject, oid).is_none() {
         return Ok(Value::Null);
     }
-    Ok(result(object_check(Owned::LargeObject, oid, role, mask)?))
+    Ok(result(object_check(Owned::LargeObject, oid, role, mask, call.session)?))
 }
 
 /// `has_parameter_privilege`: the privileges come before the role.
