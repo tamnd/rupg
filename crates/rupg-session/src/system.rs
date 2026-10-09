@@ -8,7 +8,7 @@
 //!
 //! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges, the five domains and the functions in SQL with a `RETURN` body, with the OIDs of PostgreSQL 19. The other functions, the tables and the views of the script are not done yet.
 //!
-//! These parts of `system_views.sql` are not done yet: the view `pg_stats_ext_exprs`, which has a set-returning function in its target list, and the rules `pg_settings_u` and `pg_settings_n` on `pg_settings`. Their OIDs stay unused.
+//! These parts of `system_views.sql` are not done yet: the rules `pg_settings_u` and `pg_settings_n` on `pg_settings`. Their OIDs stay unused.
 
 use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
@@ -148,9 +148,6 @@ const FUNCTION_OIDS: [(&str, u32); 9] = [
     ("_pg_interval_type", 13362),
 ];
 
-/// The views of the script that rupg cannot make yet.
-const NOT_YET: [&str; 1] = ["pg_stats_ext_exprs"];
-
 /// The catalog of a new cluster: the objects that `initdb` makes with SQL. The first call makes it on a thread with a large stack, because the queries of some views are deep.
 // The thread runs once in the process before any session, as `initdb` runs before the server. It is not an engine task, so it uses std::thread and not the Tasks trait of rupg-platform.
 #[allow(clippy::disallowed_methods)]
@@ -168,7 +165,7 @@ pub(crate) fn catalog() -> Arc<Catalog> {
     Arc::clone(made)
 }
 
-/// Runs `system_views.sql` on a catalog of the bootstrap. Also gives each statement that failed, except the views of [`NOT_YET`], with its error.
+/// Runs `system_views.sql` on a catalog of the bootstrap. Also gives each statement that failed, with its error.
 pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
     let mut catalog = Catalog::new();
     let mut failed = Vec::new();
@@ -214,7 +211,6 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
                     rupg_analyze::define(stmt, statement, &reader, &mut work, BOOTSTRAP_SUPERUSER);
                 match defined.result {
                     Ok(()) => catalog = work,
-                    Err(_) if NOT_YET.contains(&name) => {}
                     Err(error) => failed.push((name.to_string(), error)),
                 }
             }
@@ -550,8 +546,6 @@ mod tests {
             .filter(|r| r.kind == RelKind::View)
             .map(|r| (r.name.as_str(), r.oid))
             .collect();
-        let expected: Vec<(&str, u32)> =
-            VIEW_OIDS.iter().copied().filter(|(name, _)| !NOT_YET.contains(name)).collect();
-        assert_eq!(views, expected);
+        assert_eq!(views, VIEW_OIDS);
     }
 }

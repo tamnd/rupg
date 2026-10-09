@@ -1,6 +1,6 @@
 //! The vectorized executor, the point path, compressed execution, spill, the per-distinct result tables of document 14 section 14.6.
 //!
-//! This version reads the tables of the catalog. It joins the parts of `FROM`, tests the `WHERE` clause and computes the target list for each row. Then it applies `DISTINCT`, `ORDER BY`, `OFFSET` and `LIMIT` as the plan of PostgreSQL does with the nodes `Sort`, `Unique` and `Limit`. [`prepare`] checks that the engine has every function and every type of the query, so that a query that the engine cannot run is an error `0A000` before it runs. [`Plan::run`] then computes the row as `ExecInterpExpr` of PostgreSQL does.
+//! This version reads the tables of the catalog. It joins the parts of `FROM`, tests the `WHERE` clause and computes the target list for each row, with the values of the functions that give a set as the node `ProjectSet` gives them. Then it applies `DISTINCT`, `ORDER BY`, `OFFSET` and `LIMIT` as the plan of PostgreSQL does with the nodes `Sort`, `Unique` and `Limit`. [`prepare`] checks that the engine has every function and every type of the query, so that a query that the engine cannot run is an error `0A000` before it runs. [`Plan::run`] then computes the row as `ExecInterpExpr` of PostgreSQL does.
 
 #![forbid(unsafe_code)]
 
@@ -14,7 +14,7 @@ use rupg_analyze::{
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
 use rupg_pgcatalog::builtin;
-use rupg_types::{Array, ArrayDim, MAXDIM, Value, format_type, oid};
+use rupg_types::{Array, ArrayDim, MAXDIM, Record, Value, format_type, oid};
 
 /// A query that the engine can run.
 #[derive(Debug)]
@@ -75,6 +75,40 @@ fn strict(func: u32) -> bool {
     builtin::proc_by_oid(func).is_none_or(|p| p.strict)
 }
 
+/// The types of the `OUT`, `INOUT` and `TABLE` arguments of a function, which are the fields of the rows that it gives.
+fn out_types(func: u32) -> Vec<u32> {
+    let Some(proc) = builtin::proc_by_oid(func) else { return Vec::new() };
+    let (Some(types), Some(modes)) = (proc.allargtypes, proc.argmodes) else { return Vec::new() };
+    types
+        .iter()
+        .zip(modes)
+        .filter(|(_, mode)| matches!(mode, b'o' | b'b' | b't'))
+        .map(|(ty, _)| *ty)
+        .collect()
+}
+
+/// The calls of functions that give a set in the targets, by level, as `split_pathtarget_at_srfs` puts them in `ProjectSet` nodes: a call is one level above the highest call in its arguments.
+fn set_levels(targets: &[Target]) -> Vec<Vec<&Expr>> {
+    fn walk<'a>(expr: &'a Expr, levels: &mut Vec<Vec<&'a Expr>>) -> usize {
+        let below = expr.children().into_iter().map(|c| walk(c, levels)).max().unwrap_or(0);
+        match &expr.kind {
+            ExprKind::Func(f) if f.retset => {
+                if levels.len() == below {
+                    levels.push(Vec::new());
+                }
+                levels[below].push(expr);
+                below + 1
+            }
+            _ => below,
+        }
+    }
+    let mut levels = Vec::new();
+    for target in targets {
+        walk(&target.expr, &mut levels);
+    }
+    levels
+}
+
 /// Checks that the engine has every function and every type that an expression uses.
 fn check(expr: &Expr) -> Result<()> {
     match &expr.kind {
@@ -90,6 +124,19 @@ fn check(expr: &Expr) -> Result<()> {
                 check(test)?;
             }
             check_query(&sub.query, false)?;
+        }
+        ExprKind::Func(f) if f.retset => {
+            set_kernel(f.oid, expr.location)?;
+            if expr.ty == oid::RECORD
+                && out_types(f.oid).into_iter().any(rupg_analyze::types::is_polymorphic)
+            {
+                let error = not_yet(format!("the call of {} in a target", signature(f.oid)));
+                return Err(match expr.location {
+                    Some(at) => error.at(at),
+                    None => error,
+                });
+            }
+            f.args.iter().try_for_each(check)?;
         }
         ExprKind::Func(f) => {
             // The engine runs the body of a function in SQL, so such a function needs no kernel.
@@ -186,6 +233,9 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
     if !query.distinct.iter().all(|g| g.sort != 0) && !query.distinct.iter().all(|g| g.hashable) {
         return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "could not implement DISTINCT")
             .with_detail(MIXED_KEYS));
+    }
+    if query.group.iter().any(|g| query.targets[g.target].expr.first_set_call().is_some()) {
+        return Err(not_yet("a set-returning function in GROUP BY"));
     }
     for target in &query.targets {
         if output && !rupg_func::output_supported(target.expr.ty) {
@@ -550,6 +600,7 @@ fn run_query(
         && agg::calls(query).is_empty()
         && query.having.is_none()
         && query.offset.is_none()
+        && !query.has_target_srfs()
     {
         simple = match &query.limit {
             None => true,
@@ -632,12 +683,14 @@ fn run_query(
             Some(count) if !ordered => offset.saturating_add(count),
             _ => usize::MAX,
         };
+        let levels = set_levels(&query.targets);
         let mut rows = Vec::with_capacity(tuples.len().min(needed));
-        for tuple in tuples.iter().take(needed) {
+        for tuple in &tuples {
+            if rows.len() >= needed {
+                break;
+            }
             eval.tuple = tuple;
-            let row =
-                query.targets.iter().map(|t| eval.eval(&t.expr)).collect::<Result<Vec<_>>>()?;
-            rows.push(row);
+            eval.project(&query.targets, &levels, &mut rows)?;
         }
         rows
     };
@@ -785,6 +838,8 @@ struct Eval<'a> {
     sub: Vec<Vec<Value>>,
     /// The values that the checks of a domain test now, for `DomainValue`.
     domain_value: Vec<Value>,
+    /// The value of each call of a function that gives a set in the row that the targets compute now, by the address of the call in the query.
+    sets: Vec<(*const Expr, Value)>,
 }
 
 impl<'a> Eval<'a> {
@@ -807,6 +862,7 @@ impl<'a> Eval<'a> {
             outer,
             sub: Vec::new(),
             domain_value: Vec::new(),
+            sets: Vec::new(),
         }
     }
 
@@ -856,6 +912,51 @@ impl<'a> Eval<'a> {
         kernel(&c, &args)
     }
 
+    /// `ExecProjectSet`: the rows of the targets for the row of the query. The calls of functions that give a set run level by level, and the calls of a level read the values of the levels below. The calls of one level go side by side, and a call with fewer values gives nulls, as `ExecProjectSRF` does. When no call of a level gives a value, the row gives no rows.
+    fn project(
+        &mut self,
+        targets: &[Target],
+        levels: &[Vec<&Expr>],
+        out: &mut Vec<Vec<Value>>,
+    ) -> Result<()> {
+        let Some((calls, above)) = levels.split_first() else {
+            out.push(targets.iter().map(|t| self.eval(&t.expr)).collect::<Result<_>>()?);
+            return Ok(());
+        };
+        let sets = calls.iter().map(|call| self.set_values(call)).collect::<Result<Vec<_>>>()?;
+        let count = sets.iter().map(Vec::len).max().unwrap_or(0);
+        let base = self.sets.len();
+        for i in 0..count {
+            for (call, set) in calls.iter().zip(&sets) {
+                let value = set.get(i).cloned().unwrap_or(Value::Null);
+                self.sets.push((std::ptr::from_ref(*call), value));
+            }
+            let result = self.project(targets, above, out);
+            self.sets.truncate(base);
+            result?;
+        }
+        Ok(())
+    }
+
+    /// `ExecMakeFunctionResultSet`: the values of a call of a function that gives a set. A function that gives rows of more than one column, or of type `record`, gives a row value for each row.
+    fn set_values(&mut self, call: &Expr) -> Result<Vec<Value>> {
+        let ExprKind::Func(f) = &call.kind else {
+            return Err(Error::internal("a set that is not a function call"));
+        };
+        let rows = self.function_set(call, 1)?;
+        let types = out_types(f.oid);
+        Ok(rows
+            .into_iter()
+            .map(|mut row| {
+                if row.len() == 1 && call.ty != oid::RECORD {
+                    row.pop().unwrap_or(Value::Null)
+                } else {
+                    Value::Record(Box::new(Record { types: types.clone(), values: row }))
+                }
+            })
+            .collect())
+    }
+
     /// A new state for the evaluation of a condition on another tuple of the same query.
     fn at<'b>(&self, tuple: &'b [usize]) -> Eval<'b>
     where
@@ -872,6 +973,7 @@ impl<'a> Eval<'a> {
             outer: self.outer,
             sub: Vec::new(),
             domain_value: Vec::new(),
+            sets: Vec::new(),
         }
     }
 
@@ -910,6 +1012,16 @@ impl<'a> Eval<'a> {
                 // `$n` counts from 1.
                 let value = n.checked_sub(1).and_then(|i| self.params.get(i));
                 value.cloned().ok_or_else(|| Error::internal("a parameter has no value"))
+            }
+            ExprKind::Func(f) if f.retset => {
+                let at = std::ptr::from_ref(expr);
+                let value = self.sets.iter().rev().find(|(call, _)| *call == at);
+                value.map(|(_, v)| v.clone()).ok_or_else(|| {
+                    Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "set-valued function called in context that cannot accept a set",
+                    )
+                })
             }
             ExprKind::Func(f) => self.func(f, expr),
             ExprKind::Relabel(arg, _) => Ok(relabel(self.eval(arg)?, expr.ty)),
@@ -1413,6 +1525,7 @@ fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
         outer: &[],
         sub: Vec::new(),
         domain_value: Vec::new(),
+        sets: Vec::new(),
     };
     eval.eval(expr)
 }
@@ -1445,6 +1558,7 @@ pub fn check_input(ty: u32, value: &Value, session: &dyn Session) -> Result<()> 
         outer: &[],
         sub: Vec::new(),
         domain_value: Vec::new(),
+        sets: Vec::new(),
     };
     for value in values {
         eval.domain_check(domain, value.clone())?;

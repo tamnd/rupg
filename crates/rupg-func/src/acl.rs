@@ -777,7 +777,18 @@ pub(crate) fn aclexplode(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Valu
     Ok(rows)
 }
 
+/// `row_security_active(oid)` and `row_security_active(text)`: true when row security applies to the relation for the current user. No relation of rupg has row security, so the result is false. A name of a relation that does not exist is an error.
+fn row_security_active(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    if let Some(Value::Text(name)) = args.first() {
+        table_name(name, call.session)?;
+    }
+    Ok(Value::Bool(false))
+}
+
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
+    if matches!(src, "row_security_active" | "row_security_active_name") {
+        return Some(row_security_active);
+    }
     let family = if src.starts_with("pg_has_role") {
         "pg_has_role"
     } else {

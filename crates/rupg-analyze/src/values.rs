@@ -20,13 +20,14 @@ impl Analyzer<'_> {
             return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "WITH is not supported yet"));
         }
         let mut columns: Vec<Vec<Expr>> = Vec::new();
+        let kind = if s.valuesLists.len() == 1 { Kind::ValuesSingle } else { Kind::Values };
         for (row, list) in s.valuesLists.iter().enumerate() {
             let Some(Node::List(list)) = list else {
                 return Err(Error::internal("a VALUES row that is not a list"));
             };
             let mut exprs = Vec::with_capacity(list.len());
             for node in list {
-                exprs.push(self.with_kind(Kind::Values, |a| a.transform(node.as_ref()))?);
+                exprs.push(self.with_kind(kind, |a| a.transform(node.as_ref()))?);
             }
             if row == 0 {
                 columns = vec![Vec::with_capacity(s.valuesLists.len()); exprs.len()];

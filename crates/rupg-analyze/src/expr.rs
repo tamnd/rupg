@@ -136,6 +136,8 @@ pub struct Func {
     pub form: FuncForm,
     /// True when the last argument is the array of a variadic function, as `funcvariadic` of `FuncExpr`. A function with `VARIADIC "any"` then takes the elements of the array as its arguments.
     pub variadic: bool,
+    /// `funcretset`: true when the function gives a set.
+    pub retset: bool,
 }
 
 /// A call of an aggregate function, as `Aggref`.
@@ -415,6 +417,14 @@ impl Expr {
             return Some(self);
         }
         self.children().into_iter().find_map(Expr::first_agg)
+    }
+
+    /// `expression_returns_set` and `exprLocation` of the first call: the first call of a function that gives a set in the expression, outside its subqueries.
+    pub fn first_set_call(&self) -> Option<&Expr> {
+        if matches!(&self.kind, ExprKind::Func(f) if f.retset) {
+            return Some(self);
+        }
+        self.children().into_iter().find_map(Expr::first_set_call)
     }
 
     /// `strip_implicit_coercions`: the expression without the casts that the analyzer added.

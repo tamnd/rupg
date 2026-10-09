@@ -413,6 +413,7 @@ pub(crate) fn rows<'a>(
             })
         })
         .collect::<Result<_>>()?;
+    let levels = super::set_levels(&query.targets);
     let mut rows = Vec::new();
     for group in groups(eval, query, tuples)? {
         let mut states = aggs.iter().map(|a| a.start(eval)).collect::<Result<Vec<_>>>()?;
@@ -465,7 +466,7 @@ pub(crate) fn rows<'a>(
         {
             continue;
         }
-        rows.push(query.targets.iter().map(|t| eval.eval(&t.expr)).collect::<Result<Vec<_>>>()?);
+        eval.project(&query.targets, &levels, &mut rows)?;
     }
     eval.aggs.clear();
     Ok(rows)

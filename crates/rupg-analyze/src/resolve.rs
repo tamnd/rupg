@@ -539,13 +539,8 @@ impl Analyzer<'_> {
                 .at_opt(last.place()));
             }
         }
-        // check_srf_call_placement.
-        if proc.retset && self.kind.is_standalone() {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                format!("set-returning functions are not allowed in {}", self.kind.name()),
-            )
-            .at_opt(at));
+        if proc.retset {
+            self.check_srf_placement(&signature(&name, &inputs), at)?;
         }
         let over = parts.as_ref().is_some_and(|p| p.over);
         if let (Some(row), Some(parts)) = (aggregate, parts)
@@ -588,23 +583,63 @@ impl Analyzer<'_> {
             )
             .at_opt(at));
         }
-        // A set-returning function can be at the top of a function in FROM, which `transformRangeFunction` checks.
-        if proc.retset && self.kind != Kind::FromFunction {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                format!(
-                    "set-returning function {} is not supported yet",
-                    signature(&name, &inputs)
-                ),
-            )
-            .at_opt(at));
+        if proc.retset {
+            self.srfs = (self.srfs.0 + 1, at);
         }
         Ok(Expr {
-            kind: ExprKind::Func(Func { oid: proc.oid, args, form: FuncForm::Call, variadic }),
+            kind: ExprKind::Func(Func {
+                oid: proc.oid,
+                args,
+                form: FuncForm::Call,
+                variadic,
+                retset: proc.retset,
+            }),
             ty: result,
             typmod: -1,
             location: at,
         })
+    }
+
+    /// `check_srf_call_placement`: the error of a call of a function that gives a set in a part of the query where it cannot be. A function in `FROM` can only be at the top, which `transformRangeFunction` checks.
+    fn check_srf_placement(&self, signature: &str, at: Option<usize>) -> Result<()> {
+        let message = match self.kind {
+            Kind::Select
+            | Kind::GroupBy
+            | Kind::OrderBy
+            | Kind::DistinctOn
+            | Kind::FromFunction => return Ok(()),
+            Kind::JoinOn => "set-returning functions are not allowed in JOIN conditions".to_owned(),
+            Kind::Where
+            | Kind::Having
+            | Kind::Filter
+            | Kind::Limit
+            | Kind::Offset
+            | Kind::Values
+            | Kind::ColumnDefault
+            | Kind::Check
+            | Kind::IndexExpression
+            | Kind::IndexPredicate
+            | Kind::ExecuteParameter => {
+                format!("set-returning functions are not allowed in {}", self.kind.name())
+            }
+            Kind::ValuesSingle | Kind::Other => {
+                format!("set-returning function {signature} is not supported yet")
+            }
+        };
+        Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, message).at_opt(at))
+    }
+
+    /// The error of a call of a function that gives a set in the arguments of `CASE` or `COALESCE`, when the analysis made such a call after `before`, which is the number of the calls before the arguments.
+    pub(crate) fn no_srf_since(&self, before: usize, construct: &str) -> Result<()> {
+        if self.srfs.0 == before {
+            return Ok(());
+        }
+        Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("set-returning functions are not allowed in {construct}"),
+        )
+        .with_hint(crate::agg::SRF_HINT)
+        .at_opt(self.srfs.1))
     }
 
     /// The errors of a function that takes or gives `internal`.
@@ -807,6 +842,7 @@ impl Analyzer<'_> {
                 args,
                 form: FuncForm::Operator(op.oid),
                 variadic: false,
+                retset: false,
             }),
             ty: result,
             typmod: -1,

@@ -106,6 +106,8 @@ pub(crate) struct Analyzer<'a> {
     views: Vec<u32>,
     /// The base type and the typmod of the domain whose check constraint the analyzer reads now, or `None`. Then the name `value` is [`ExprKind::DomainValue`].
     domain_value: Option<(u32, i32)>,
+    /// The number of the calls of functions that give a set that the analysis of the query has made, and the place of the last one. It takes the place of `p_last_srf`: `CASE` and `COALESCE` compare the number before and after their arguments.
+    srfs: (usize, Option<usize>),
 }
 
 impl<'a> Analyzer<'a> {
@@ -128,6 +130,7 @@ impl<'a> Analyzer<'a> {
             keep_unknowns: false,
             views: Vec::new(),
             domain_value: None,
+            srfs: (0, None),
         }
     }
 

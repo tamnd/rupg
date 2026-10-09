@@ -1,0 +1,367 @@
+> SELECT generate_series(1, 3) AS g
+fields g:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT generate_series(1, 3) AS a, generate_series(1, 2) AS b
+fields a:23:4:-1,b:23:4:-1
+row 1,1
+row 2,2
+row 3,NULL
+SELECT 3
+> SELECT generate_series(1, 3) AS a, unnest(ARRAY['x', 'y', 'z', 'w']) AS b
+fields a:23:4:-1,b:25:-1:-1
+row 1,x
+row 2,y
+row 3,z
+row NULL,w
+SELECT 4
+> SELECT generate_series(1, 0) AS g
+fields g:23:4:-1
+SELECT 0
+> SELECT 1 AS k, generate_series(1, 0) AS g
+fields k:23:4:-1,g:23:4:-1
+SELECT 0
+> SELECT generate_series(1, 2) AS a, generate_series(1, 0) AS b
+fields a:23:4:-1,b:23:4:-1
+row 1,NULL
+row 2,NULL
+SELECT 2
+> SELECT generate_series(1, 3) + 10 AS g
+fields g:23:4:-1
+row 11
+row 12
+row 13
+SELECT 3
+> SELECT generate_series(1, generate_series(1, 3)) AS g
+fields g:23:4:-1
+row 1
+row 1
+row 2
+row 1
+row 2
+row 3
+SELECT 6
+> SELECT generate_series(1, generate_series(1, 3)) AS g, generate_series(1, 2) AS h
+fields g:23:4:-1,h:23:4:-1
+row 1,1
+row 1,2
+row 2,2
+row 1,NULL
+row 2,NULL
+row 3,NULL
+SELECT 6
+> SELECT generate_series(1, 3) AS a, generate_series(2, generate_series(1, 3)) AS b
+fields a:23:4:-1,b:23:4:-1
+row 2,2
+row 3,2
+row 3,3
+SELECT 3
+> SELECT unnest(ARRAY[generate_series(1, 2), 10]) AS u
+fields u:23:4:-1
+row 1
+row 10
+row 2
+row 10
+SELECT 4
+> SELECT x, generate_series(1, x) AS g FROM (VALUES (1), (2), (3)) v(x)
+fields x:23:4:-1,g:23:4:-1
+row 1,1
+row 2,1
+row 2,2
+row 3,1
+row 3,2
+row 3,3
+SELECT 6
+> SELECT x, generate_series(1, x) AS g FROM (VALUES (1), (2), (3)) v(x) ORDER BY 2 DESC, 1
+fields x:23:4:-1,g:23:4:-1
+row 3,3
+row 2,2
+row 3,2
+row 1,1
+row 2,1
+row 3,1
+SELECT 6
+> SELECT DISTINCT generate_series(1, x) AS g FROM (VALUES (1), (2), (3)) v(x) ORDER BY 1
+fields g:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT x, generate_series(1, x) AS g FROM (VALUES (3), (2)) v(x) LIMIT 4
+fields x:23:4:-1,g:23:4:-1
+row 3,1
+row 3,2
+row 3,3
+row 2,1
+SELECT 4
+> SELECT generate_series(1, 5) AS g LIMIT 2 OFFSET 1
+fields g:23:4:-1
+row 2
+row 3
+SELECT 2
+> SELECT count(*) AS c, generate_series(1, 3) AS g FROM (VALUES (1), (2)) v(x)
+fields c:20:8:-1,g:23:4:-1
+row 2,1
+row 2,2
+row 2,3
+SELECT 3
+> SELECT generate_series(1, count(*)::int) AS g FROM (VALUES (1), (2)) v(x)
+fields g:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT max(x) AS m, generate_series(1, max(x)) AS g FROM (VALUES (2), (1)) v(x)
+fields m:23:4:-1,g:23:4:-1
+row 2,1
+row 2,2
+SELECT 2
+> SELECT x, generate_series(1, 2) AS g FROM (VALUES (1), (2)) v(x) GROUP BY x HAVING x > 1
+fields x:23:4:-1,g:23:4:-1
+row 2,1
+row 2,2
+SELECT 2
+> SELECT count(*) AS c, generate_series(1, 2) AS g FROM (VALUES (1)) v(x) WHERE x > 5
+fields c:20:8:-1,g:23:4:-1
+row 0,1
+row 0,2
+SELECT 2
+> SELECT unnest(ARRAY[1, NULL, 3]) AS u
+fields u:23:4:-1
+row 1
+row NULL
+row 3
+SELECT 3
+> SELECT unnest(NULL::int[]) AS u
+fields u:23:4:-1
+SELECT 0
+> SELECT 7 AS k, unnest(NULL::int[]) AS u
+fields k:23:4:-1,u:23:4:-1
+SELECT 0
+> SELECT unnest(ARRAY[[1, 2], [3, 4]]) AS u
+fields u:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> SELECT generate_series(1, x) AS g FROM (VALUES (1), (NULL), (2)) v(x)
+fields g:23:4:-1
+row 1
+row 1
+row 2
+SELECT 3
+> SELECT a, unnest(a) AS u FROM (VALUES (ARRAY[1, 2]), (ARRAY[]::int[]), (ARRAY[3])) v(a)
+fields a:1007:-1:-1,u:23:4:-1
+row {1,2},1
+row {1,2},2
+row {3},3
+SELECT 3
+> SELECT (SELECT generate_series(1, 1)) AS s
+fields s:23:4:-1
+row 1
+SELECT 1
+> SELECT (SELECT generate_series(1, 2)) AS s
+fields s:23:4:-1
+ERROR 21000 more than one row returned by a subquery used as an expression
+> SELECT (SELECT generate_series(1, 0)) AS s
+fields s:23:4:-1
+row NULL
+SELECT 1
+> SELECT ARRAY(SELECT generate_series(1, 4)) AS a
+fields a:1007:-1:-1
+row {1,2,3,4}
+SELECT 1
+> SELECT EXISTS (SELECT generate_series(1, 0)) AS e, EXISTS (SELECT generate_series(1, 2)) AS f
+fields e:16:1:-1,f:16:1:-1
+row f,t
+SELECT 1
+> SELECT 5 IN (SELECT generate_series(1, 10)) AS i, 50 IN (SELECT generate_series(1, 10)) AS j
+fields i:16:1:-1,j:16:1:-1
+row t,f
+SELECT 1
+> SELECT generate_series(1, 3) AS g ORDER BY g DESC
+fields g:23:4:-1
+row 3
+row 2
+row 1
+SELECT 3
+> SELECT 1 AS one ORDER BY generate_series(1, 3)
+fields one:23:4:-1
+row 1
+row 1
+row 1
+SELECT 3
+> SELECT x FROM (VALUES (5)) v(x) ORDER BY generate_series(1, 2) DESC
+fields x:23:4:-1
+row 5
+row 5
+SELECT 2
+> SELECT * FROM (SELECT generate_series(1, 4) AS g) s WHERE g > 2
+fields g:23:4:-1
+row 3
+row 4
+SELECT 2
+> SELECT g, count(*) AS c FROM (SELECT generate_series(1, x) AS g FROM (VALUES (1), (2), (3)) v(x)) s GROUP BY g ORDER BY g
+fields g:23:4:-1,c:20:8:-1
+row 1,3
+row 2,2
+row 3,1
+SELECT 3
+> SELECT array_agg(g) AS a FROM (SELECT generate_series(1, 4) AS g) s
+fields a:1007:-1:-1
+row {1,2,3,4}
+SELECT 1
+> SELECT count(*) AS c FROM (SELECT generate_series(1, 1000)) s
+fields c:20:8:-1
+row 1000
+SELECT 1
+> SELECT count(*) AS c FROM (SELECT 1 AS one, generate_series(1, 3) AS g) s
+fields c:20:8:-1
+row 3
+SELECT 1
+> SELECT generate_series(1, 3) UNION SELECT 5 ORDER BY 1
+fields generate_series:23:4:-1
+row 1
+row 2
+row 3
+row 5
+SELECT 4
+> SELECT (SELECT max(g) FROM (SELECT generate_series(1, x) AS g) s) AS m FROM (VALUES (2), (4)) v(x)
+fields m:23:4:-1
+row 2
+row 4
+SELECT 2
+> SELECT DISTINCT ON (x % 2) x, generate_series(1, 2) AS g FROM (VALUES (1), (2), (3)) v(x) ORDER BY x % 2, g DESC
+fields x:23:4:-1,g:23:4:-1
+row 2,2
+row 1,2
+SELECT 2
+> SELECT generate_series(1, 2) IS NULL AS n, generate_series(1, 2) = ANY (ARRAY[1]) AS q
+fields n:16:1:-1,q:16:1:-1
+row f,t
+row f,f
+SELECT 2
+> SELECT unnest('{c,a,b}'::text[]) AS u ORDER BY 1 DESC
+fields u:25:-1:-1
+row c
+row b
+row a
+SELECT 3
+> SELECT regexp_matches('abcabc', '(b)(c)', 'g') AS m
+fields m:1009:-1:-1
+row {b,c}
+row {b,c}
+SELECT 2
+> SELECT string_to_table('a,b,c', ',') AS t, generate_subscripts(ARRAY[5, 6], 1) AS s
+fields t:25:-1:-1,s:23:4:-1
+row a,1
+row b,2
+row c,NULL
+SELECT 3
+> SELECT regexp_split_to_table('one two', ' ') AS w
+fields w:25:-1:-1
+row one
+row two
+SELECT 2
+> SELECT x, generate_series(1, 2) AS g FROM (VALUES (1), (2)) v(x) WHERE x = 2
+fields x:23:4:-1,g:23:4:-1
+row 2,1
+row 2,2
+SELECT 2
+> SELECT 1 WHERE generate_series(1, 2) > 1
+ERROR 0A000 set-returning functions are not allowed in WHERE at 16
+> SELECT CASE WHEN true THEN generate_series(1, 2) END
+ERROR 0A000 set-returning functions are not allowed in CASE at 28
+> SELECT CASE generate_series(1, 2) WHEN 1 THEN 0 END
+ERROR 0A000 set-returning functions are not allowed in CASE at 13
+> SELECT COALESCE(generate_series(1, 2), 0)
+ERROR 0A000 set-returning functions are not allowed in COALESCE at 17
+> SELECT sum(generate_series(1, 3))
+ERROR 0A000 aggregate function calls cannot contain set-returning function calls at 12
+> SELECT 1 + sum(1 + generate_series(1, 3))
+ERROR 0A000 aggregate function calls cannot contain set-returning function calls at 20
+> SELECT 1 LIMIT generate_series(1, 2)
+ERROR 0A000 set-returning functions are not allowed in LIMIT at 16
+> SELECT 1 OFFSET generate_series(1, 2)
+ERROR 0A000 set-returning functions are not allowed in OFFSET at 17
+> SELECT count(*) FILTER (WHERE generate_series(1, 2) > 0) FROM (VALUES (1)) v(x)
+ERROR 0A000 set-returning functions are not allowed in FILTER at 31
+> SELECT 1 FROM (VALUES (1)) a(x) JOIN (VALUES (1)) b(y) ON generate_series(1, 2) = 1
+ERROR 0A000 set-returning functions are not allowed in JOIN conditions at 59
+> VALUES (1), (generate_series(1, 2))
+ERROR 0A000 set-returning functions are not allowed in VALUES at 14
+> SELECT count(*) FROM (VALUES (1)) v(x) HAVING generate_series(1, 2) > 0
+ERROR 0A000 set-returning functions are not allowed in HAVING at 47
+> SELECT * FROM generate_series(1, generate_series(1, 2))
+ERROR 0A000 set-returning functions must appear at top level of FROM at 34
+> SELECT sum((SELECT generate_series(1, 1))) AS s
+fields s:20:8:-1
+row 1
+SELECT 1
+> SELECT generate_series(1, 2) + NULL AS n
+fields n:23:4:-1
+row NULL
+SELECT 1
+> SELECT generate_series(1, 2) AS g, NULL::int + 1 AS n
+fields g:23:4:-1,n:23:4:-1
+row 1,NULL
+row 2,NULL
+SELECT 2
+> SELECT pg_options_to_table(ARRAY['fillfactor=70', 'autovacuum_enabled=off']) AS o
+fields o:2249:-1:-1
+row (fillfactor,70)
+row (autovacuum_enabled,off)
+SELECT 2
+> SELECT x, (SELECT count(*) FROM (SELECT generate_series(1, x)) s) AS c FROM (VALUES (1), (3)) v(x)
+fields x:23:4:-1,c:20:8:-1
+row 1,1
+row 3,3
+SELECT 2
+> SELECT x FROM (SELECT generate_series(1, 3) AS x) s LIMIT 1
+fields x:23:4:-1
+row 1
+SELECT 1
+> SELECT generate_series(1, 2) AS g FROM (VALUES (2), (1)) v(x) ORDER BY x
+fields g:23:4:-1
+row 1
+row 2
+row 1
+row 2
+SELECT 4
+> SELECT DISTINCT ON (generate_series(1, 2)) x FROM (VALUES (5), (6)) v(x) ORDER BY generate_series(1, 2), x DESC
+fields x:23:4:-1
+row 6
+row 6
+SELECT 2
+> SELECT generate_series(1, 3) AS g WHERE false
+fields g:23:4:-1
+SELECT 0
+> SELECT 1 AS one FROM (VALUES (1)) v(x) WHERE x = 2 ORDER BY generate_series(1, 2)
+fields one:23:4:-1
+SELECT 0
+> SELECT unnest(ARRAY[1, 2]) AS u UNION ALL SELECT unnest(ARRAY[3]) ORDER BY 1 DESC
+fields u:23:4:-1
+row 3
+row 2
+row 1
+SELECT 3
+> SELECT generate_series(1, 3) * generate_series(1, 2) AS p
+fields p:23:4:-1
+row 1
+row 4
+row NULL
+SELECT 3
+> SELECT ARRAY[generate_series(1, 2), generate_series(5, 7)] AS a
+fields a:1007:-1:-1
+row {1,5}
+row {2,6}
+row {NULL,7}
+SELECT 3
+> SELECT (SELECT generate_series(1, x)) AS s FROM (VALUES (1)) v(x)
+fields s:23:4:-1
+row 1
+SELECT 1
+> SELECT generate_series(1, 2) FROM (VALUES (1)) v(x) GROUP BY x HAVING sum(generate_series(1, 2)) > 0
+ERROR 0A000 set-returning functions are not allowed in HAVING at 75
