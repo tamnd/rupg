@@ -1,0 +1,93 @@
+> SELECT ('{10,20,30}'::int[])[2] AS a, ('{10,20,30}'::int[])[0] AS b, ('{10,20,30}'::int[])[4] AS c, ('{10,20,30}'::int[])[NULL] AS d
+fields a:23:4:-1,b:23:4:-1,c:23:4:-1,d:23:4:-1
+row 20,NULL,NULL,NULL
+SELECT 1
+> SELECT (ARRAY[1, 2, 3])[1 + 1] AS a, (ARRAY['x', 'y'])[length('ab')] AS b, (ARRAY[1, 2])['2'] AS c, (ARRAY[1, 2])[1.6] AS d, (ARRAY[1, 2])[2::int8] AS e
+fields a:23:4:-1,b:25:-1:-1,c:23:4:-1,d:23:4:-1,e:23:4:-1
+row 2,y,2,2,2
+SELECT 1
+> SELECT ARRAY[1, 2, 3][2]
+ERROR 42601 syntax error at or near "[" at 22
+> SELECT (ARRAY[1, 2])['x']
+ERROR 22P02 invalid input syntax for type integer: "x" at 22
+> SELECT (ARRAY[1, 2])[true]
+ERROR 42804 array subscript must have type integer at 22
+> SELECT (1)[1]
+ERROR 42804 cannot subscript type integer because it does not support subscripting at 9
+> SELECT ('abc'::text)[1]
+ERROR 42804 cannot subscript type text because it does not support subscripting at 9
+> SELECT (ARRAY[1])[1][1][1][1][1][1][1]
+ERROR 54000 number of array dimensions (7) exceeds the maximum allowed (6)
+> SELECT a[1] AS f, a[2:3] AS s, a[:2] AS l, a[2:] AS u, a[:] AS w, a[3:2] AS e, a[-5:10] AS b FROM (VALUES ('{1,2,3}'::int[]), ('[0:1]={7,8}'), (NULL), ('{}')) AS v (a) ORDER BY 1, 2
+fields f:23:4:-1,s:1007:-1:-1,l:1007:-1:-1,u:1007:-1:-1,w:1007:-1:-1,e:1007:-1:-1,b:1007:-1:-1
+row 1,{2,3},{1,2},{2,3},{1,2,3},{},{1,2,3}
+row 8,{},{7,8},{},{7,8},{},{7,8}
+row NULL,{},{},{},{},{},{}
+row NULL,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 4
+> SELECT m[1][2] AS e, m[2] AS one, m[1:2][1] AS s, m[2][1:2] AS t, m[2:2] AS r, m[1][1][1] AS three FROM (VALUES ('{{1,2},{3,4}}'::int[]), ('[2:3][0:1]={{5,6},{7,8}}')) AS v (m) ORDER BY 1
+fields e:23:4:-1,one:23:4:-1,s:1007:-1:-1,t:1007:-1:-1,r:1007:-1:-1,three:23:4:-1
+row 2,NULL,{{1},{3}},{{1,2},{3,4}},{{3,4}},NULL
+row NULL,NULL,{{6}},{{6}},{{5,6}},NULL
+SELECT 2
+> SELECT a[NULL:2] AS a, a[1:NULL] AS b, a[NULL] AS c, a[1:2][NULL] AS d FROM (VALUES ('{1,2,3}'::int[])) AS v (a)
+fields a:1007:-1:-1,b:1007:-1:-1,c:23:4:-1,d:1007:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT (NULL::int[])[1 / 0] AS d
+ERROR 22012 division by zero
+> SELECT (NULL::int[])[n] AS a, ('{1}'::int[])[n] AS b FROM (VALUES (1), (NULL)) AS v (n) ORDER BY 2
+fields a:23:4:-1,b:23:4:-1
+row NULL,1
+row NULL,NULL
+SELECT 2
+> SELECT (ARRAY[NULL, 2])[1] AS a, (ARRAY[NULL, 2])[1:1] AS b, ('{{a,b},{c,d}}'::text[])[1:1][2:2] AS c
+fields a:23:4:-1,b:1007:-1:-1,c:1009:-1:-1
+row NULL,{NULL},{{b}}
+SELECT 1
+> SELECT pg_typeof((ARRAY[1, 2])[1]) AS a, pg_typeof((ARRAY[1, 2])[1:1]) AS b, pg_typeof(('{a}'::name[])[1]) AS c
+fields a:2206:4:-1,b:2206:4:-1,c:2206:4:-1
+row integer,integer[],name
+SELECT 1
+> SELECT indkey[0] AS k0, indkey[1] AS k1, indkey AS k, pg_typeof(indkey[0]) AS t, pg_typeof(indkey[0:0]) AS st, indkey[0:0] AS s FROM pg_index WHERE indexrelid = 'pg_class_oid_index'::regclass
+fields k0:21:2:-1,k1:21:2:-1,k@pg_index.16:22:-1:-1,t:2206:4:-1,st:2206:4:-1,s:1005:-1:-1
+row 1,NULL,1,smallint,smallint[],{1}
+SELECT 1
+> SELECT proargtypes[0]::regtype AS a0, proargtypes[1]::regtype AS a1, proargtypes[2] AS a2, proargtypes[0:1] AS s FROM pg_proc WHERE oid = 'pg_catalog.int4pl(int4,int4)'::regprocedure
+fields a0:2206:4:-1,a1:2206:4:-1,a2:26:4:-1,s:1028:-1:-1
+row integer,integer,NULL,{23,23}
+SELECT 1
+> SELECT conkey[1] AS k FROM pg_constraint WHERE conname = 'pg_class_oid_index'
+fields k:21:2:-1
+row 1
+SELECT 1
+> CREATE TABLE tsub (a int DEFAULT ('{1,2}'::int[])[1], b int[] DEFAULT (ARRAY[1, 2, 3])[2:3], c text DEFAULT ('{x}'::text[])[1])
+CREATE TABLE
+> SELECT adnum, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 'tsub'::regclass ORDER BY 1
+fields adnum@pg_attrdef.3:21:2:-1,pg_get_expr:25:-1:-1
+row 1,('{1,2}'::integer[])[1]
+row 2,(ARRAY[1, 2, 3])[2:3]
+row 3,('{x}'::text[])[1]
+SELECT 3
+> CREATE VIEW vsub AS SELECT a[1] AS e, a[1:2] AS s, a AS w, (a || a)[2] AS c, (a[1:2])[1] AS n FROM (VALUES ('{abc,de}'::varchar(3)[])) AS v (a)
+CREATE VIEW
+> SELECT attname, atttypid::regtype, atttypmod FROM pg_attribute WHERE attrelid = 'vsub'::regclass ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,atttypmod@pg_attribute.6:23:4:-1
+row e,character varying,7
+row s,character varying[],7
+row w,character varying[],7
+row c,character varying,-1
+row n,character varying,7
+SELECT 5
+> SELECT * FROM vsub
+fields e@vsub.1:1043:-1:7,s@vsub.2:1015:-1:7,w@vsub.3:1015:-1:7,c@vsub.4:1043:-1:-1,n@vsub.5:1043:-1:7
+row abc,{abc,de},{abc,de},de,abc
+SELECT 1
+> SELECT a[1], (a)[2] FROM (VALUES (ARRAY[5, 6])) AS v (a)
+fields a:23:4:-1,a:23:4:-1
+row 5,6
+SELECT 1
+> SELECT x.a[2] AS q FROM (VALUES (ARRAY[5, 6])) AS x (a)
+fields q:23:4:-1
+row 6
+SELECT 1

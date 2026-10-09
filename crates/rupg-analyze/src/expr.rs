@@ -31,6 +31,8 @@ pub enum ExprKind {
     CoerceViaIo(Box<Expr>, CastForm),
     /// `ArrayCoerceExpr`: a cast of each element of an array. `element` casts [`ExprKind::CaseTest`], which is the value of one element.
     ArrayCoerce { arg: Box<Expr>, element: Box<Expr>, form: CastForm },
+    /// `SubscriptingRef`: an element or a slice of an array.
+    Subscript(Box<Subscript>),
     /// `BoolExpr`: `AND`, `OR` and `NOT`.
     Bool(BoolOp, Vec<Expr>),
     /// `NullTest`: `IS NULL` when the flag is true, `IS NOT NULL` when it is false.
@@ -63,6 +65,24 @@ pub enum ExprKind {
     SubLink(Box<SubLink>),
     /// `Param` of the kind `PARAM_SUBLINK`: the value of the column with this index, from 0, of a row of the subquery, in the test of `ANY` or `ALL`.
     SubColumn(usize),
+}
+
+/// The parts of a fetch from an array, as `SubscriptingRef`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Subscript {
+    /// `refexpr`: the array.
+    pub container: Expr,
+    /// `refupperindexpr`: the subscript of each dimension, or the upper bound of a slice. `None` is a bound that the query does not give.
+    pub upper: Vec<Option<Expr>>,
+    /// `reflowerindexpr`: the lower bound of each dimension of a slice, or `None` for one element.
+    pub lower: Option<Vec<Option<Expr>>>,
+}
+
+impl Subscript {
+    /// The subscripts that the query gives, the upper bounds first.
+    pub fn bounds(&self) -> impl Iterator<Item = &Expr> {
+        self.upper.iter().chain(self.lower.iter().flatten()).flatten()
+    }
 }
 
 /// A subquery in an expression, as `SubLink`.
@@ -245,6 +265,7 @@ impl Expr {
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => vec![&**arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&**arg, &**element],
+            ExprKind::Subscript(sub) => sub.bounds().chain([&sub.container]).collect(),
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
             | ExprKind::MinMax { args, .. }
@@ -283,6 +304,11 @@ impl Expr {
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => vec![&mut **arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&mut **arg, &mut **element],
+            ExprKind::Subscript(sub) => {
+                let Subscript { container, upper, lower } = &mut **sub;
+                let bounds = upper.iter_mut().chain(lower.iter_mut().flatten()).flatten();
+                bounds.chain([container]).collect()
+            }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
             | ExprKind::MinMax { args, .. }
@@ -403,6 +429,7 @@ impl Expr {
             | ExprKind::ArrayCoerce { arg, .. }
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => Some(&**arg),
+            ExprKind::Subscript(sub) => Some(&sub.container),
             ExprKind::SubLink(sub) => sub.test.as_ref(),
             _ => None,
         };

@@ -20,6 +20,7 @@ mod select;
 mod setop;
 mod sort;
 mod sublink;
+mod subscript;
 mod transform;
 mod typcache;
 mod typename;
@@ -37,7 +38,7 @@ pub use colname::figure_colname;
 pub use ddl::{Defined, Message, define, is_definition};
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink,
-    SubLinkKind, Var,
+    SubLinkKind, Subscript, Var,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};

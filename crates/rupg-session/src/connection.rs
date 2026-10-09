@@ -1675,6 +1675,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_functions.test")));
     }
 
+    /// The subscripts of the arrays, of `int2vector` and of `oidvector`: one element, slices with and without bounds, arrays with two dimensions, null and out of range subscripts, the errors of the analyzer, the default expressions that `pg_get_expr` shows, and the types and typmods of the columns of a view. `connection/subscripts.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn subscripts() {
+        big_stack(|| script(include_str!("connection/subscripts.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

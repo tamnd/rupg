@@ -129,6 +129,30 @@ impl Deparser<'_> {
             ExprKind::ArrayCoerce { arg, form, .. } => {
                 self.cast_node(e, arg, *form, e.typmod, implicit)?;
             }
+            ExprKind::Subscript(sub) => {
+                // The array needs parentheses unless it is a column, also when it is another subscript.
+                let parens = !matches!(sub.container.kind, ExprKind::Var(_));
+                if parens {
+                    self.buf.push('(');
+                }
+                self.expr(&sub.container, implicit)?;
+                if parens {
+                    self.buf.push(')');
+                }
+                for (i, upper) in sub.upper.iter().enumerate() {
+                    self.buf.push('[');
+                    if let Some(lower) = &sub.lower {
+                        if let Some(Some(lower)) = lower.get(i) {
+                            self.expr(lower, false)?;
+                        }
+                        self.buf.push(':');
+                    }
+                    if let Some(upper) = upper {
+                        self.expr(upper, false)?;
+                    }
+                    self.buf.push(']');
+                }
+            }
             ExprKind::Bool(op, args) => {
                 self.open();
                 if *op == BoolOp::Not {
@@ -433,6 +457,7 @@ fn own_syntax(parent: &Expr) -> bool {
     match &parent.kind {
         ExprKind::Func(f) => f.form == FuncForm::Call,
         ExprKind::Bool(..)
+        | ExprKind::Subscript(_)
         | ExprKind::Array { .. }
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }
@@ -462,6 +487,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
     match &e.kind {
         ExprKind::Const(_) | ExprKind::Param(_) | ExprKind::Var(_) | ExprKind::SubColumn(_) => true,
         ExprKind::Array { .. }
+        | ExprKind::Subscript(_)
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }
         | ExprKind::SqlValue(_)
