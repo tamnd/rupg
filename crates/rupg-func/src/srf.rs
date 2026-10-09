@@ -1,4 +1,4 @@
-//! The set-returning functions that a query can call in `FROM`: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords` and `pg_show_all_settings`.
+//! The set-returning functions that a query can call in `FROM`: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity` and `pg_stat_get_backend_idset`.
 //!
 //! A set kernel gives all the rows of the call at once, as a function of PostgreSQL in the materialize mode gives a tuplestore. Each row has one value for each column of the result: one value for a function of a scalar type, or one value for each `OUT` parameter.
 
@@ -28,6 +28,8 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "aclexplode" => crate::acl::aclexplode,
         "pg_get_keywords" => keywords,
         "show_all_settings" => all_settings,
+        "pg_stat_get_activity" => crate::activity::activity,
+        "pg_stat_get_backend_idset" => crate::activity::backend_idset,
         _ => return None,
     };
     Some(kernel)

@@ -129,4 +129,8 @@ impl Stream for OsStream {
     fn peer_addr(&self) -> String {
         self.0.peer_addr().map_or_else(|_| "unknown".to_string(), |a| a.to_string())
     }
+
+    fn local_addr(&self) -> String {
+        self.0.local_addr().map(|a| a.to_string()).unwrap_or_default()
+    }
 }

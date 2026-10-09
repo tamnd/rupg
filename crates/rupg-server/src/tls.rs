@@ -368,6 +368,10 @@ impl Stream for TlsStream {
     fn peer_addr(&self) -> String {
         self.0.lock().unwrap_or_else(PoisonError::into_inner).sock.peer_addr()
     }
+
+    fn local_addr(&self) -> String {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).sock.local_addr()
+    }
 }
 
 #[cfg(test)]

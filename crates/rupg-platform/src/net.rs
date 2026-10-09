@@ -65,6 +65,11 @@ pub trait Stream: Read + Write + Send + fmt::Debug {
     /// The address of the other side. It is `[local]` on a Unix socket, as in the log of PostgreSQL.
     fn peer_addr(&self) -> String;
 
+    /// The address of this side, or an empty text when the stream does not know it.
+    fn local_addr(&self) -> String {
+        String::new()
+    }
+
     /// True when the connection is a Unix socket.
     fn is_local(&self) -> bool {
         false

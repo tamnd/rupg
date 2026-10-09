@@ -9,6 +9,8 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rupg_analyze::{Message, Params};
 use rupg_catalog::Catalog;
 use rupg_common::{Error, SqlState};
+use rupg_func::BackendState;
+pub use rupg_func::Client;
 use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
 use rupg_platform::os::OsClock;
@@ -25,8 +27,10 @@ use crate::query::{self, Column, Reader, Row};
 use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
 
+mod activity;
 mod extended;
 
+pub(crate) use activity::Activity;
 use extended::{Failed, Portal, Prepared};
 
 /// The version of rupg, which `server_version` and the parameter `rupg.version` report.
@@ -287,6 +291,8 @@ pub struct Connection {
     store: Arc<Store>,
     /// The lock of the store and the copy of the catalog, while the transaction changes the catalog.
     lease: Option<Lease>,
+    /// The row of the session in the table of the sessions of the store.
+    activity: Activity,
 }
 
 /// The OID of the bootstrap superuser, which owns the objects of initdb.
@@ -314,6 +320,7 @@ impl Connection {
             role: role_oid(start),
             store: Arc::new(Store::new()),
             lease: None,
+            activity: Activity::default(),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -324,7 +331,7 @@ impl Connection {
         self.clock = clock;
     }
 
-    /// Sets the catalog that the sessions of the server share. A new session has a catalog of its own.
+    /// Sets the catalog and the table of the sessions that the sessions of the server share, before [`Connection::greet`]. A new session has a store of its own.
     pub fn set_store(&mut self, store: Arc<Store>) {
         self.store = store;
     }
@@ -345,6 +352,7 @@ impl Connection {
             self.pid,
             self.catalog(),
         )
+        .with_activity(&self.activity, &self.store)
     }
 
     /// The catalog that a statement sees: the copy of the transaction when it changed the catalog, or the catalog of the last commit.
@@ -419,6 +427,7 @@ impl Connection {
         }
         out.parameter_status(b"rupg.version", VERSION.as_bytes());
         self.pid = key.pid();
+        self.join();
         key.write(out);
     }
 
@@ -513,6 +522,7 @@ impl Connection {
 
     /// The parameters that changed, then `ReadyForQuery`.
     fn ready_for_query(&mut self, out: &mut OutBuf) {
+        self.report_idle();
         self.session.set_utf8(self.utf8());
         let mut reports = self.settings.get_mut().reports();
         // PostgreSQL changes `is_superuser` inside the change of `session_authorization`, so it reports `session_authorization` first.
@@ -569,6 +579,7 @@ impl Connection {
 
     /// `exec_simple_query`. It gives true when a statement failed.
     fn simple_query(&mut self, text: &str, out: &mut OutBuf) -> bool {
+        self.report(BackendState::Running, Some(text));
         self.start_xact();
         // A Query works as if it used the unnamed statement and the unnamed portal.
         drop(self.statements.close(b""));
@@ -709,6 +720,7 @@ impl Connection {
             if self.transaction.start_command() {
                 self.settings.get_mut().start_transaction(None);
                 self.transaction_start = self.statement_start;
+                self.transaction_started();
             }
             self.xact_started = true;
         } else if self.pipelining {
@@ -731,10 +743,12 @@ impl Connection {
             {
                 lease.commit();
             }
+            self.transaction_ended();
         }
         if kept.is_some() {
             self.settings.get_mut().start_transaction(kept);
             self.transaction_start = self.statement_start;
+            self.transaction_started();
         }
         if chained || self.transaction.block() == Block::Default {
             self.ended();
@@ -755,6 +769,7 @@ impl Connection {
             self.settings.get_mut().end(false);
             self.lease = None;
         }
+        self.transaction_ended();
         if self.transaction.failed() {
             self.portals.retain(|_, portal| {
                 portal.failed = true;
@@ -763,6 +778,12 @@ impl Connection {
         } else {
             self.ended();
         }
+    }
+}
+
+impl Drop for Connection {
+    fn drop(&mut self) {
+        self.leave();
     }
 }
 
@@ -805,11 +826,19 @@ mod tests {
     }
 
     fn connect() -> (Connection, Vec<String>) {
+        connect_to(&Arc::new(Store::new()), 1234)
+    }
+
+    /// A session with the process ID `pid` on the store of a server.
+    fn connect_to(store: &Arc<Store>, pid: i32) -> (Connection, Vec<String>) {
         let start = start(None, &[("application_name", "test")]);
         let settings = session_settings(&base_settings(&[]).unwrap(), &start).unwrap();
         let mut connection = Connection::new(&start, settings, PROTOCOL_3_0);
+        connection.set_store(Arc::clone(store));
+        // The oracle runs the scripts on a Unix socket.
+        connection.set_addresses(Client::Local, Client::Local);
         let mut out = OutBuf::new();
-        connection.greet(&CancelKey::new(1234, PROTOCOL_3_0, [7; CANCEL_KEY_LEN]), &mut out);
+        connection.greet(&CancelKey::new(pid, PROTOCOL_3_0, [7; CANCEL_KEY_LEN]), &mut out);
         let mut lines = render(&out, false);
         lines.extend(send(&mut connection, &[]));
         (connection, lines)
@@ -1576,16 +1605,41 @@ mod tests {
             while let Some(next) = lines.next_if(|l| !l.starts_with("> ")) {
                 want.push(next);
             }
-            let got: Vec<String> = render(&exchange(&mut c, &query(sql)), true)
-                .into_iter()
-                .filter(|l| !l.starts_with("ready "))
-                .map(|l| match l.strip_prefix("fields ") {
-                    Some(fields) => format!("fields {}", table_names(&mut c, fields)),
-                    None => l,
-                })
-                .flat_map(|l| l.split('\n').map(str::to_string).collect::<Vec<_>>())
-                .collect();
-            assert_eq!(got, want, "{sql}");
+            assert_eq!(script_lines(&mut c, sql), want, "{sql}");
+        }
+    }
+
+    /// The lines of a statement of a script.
+    fn script_lines(c: &mut Connection, sql: &str) -> Vec<String> {
+        render(&exchange(c, &query(sql)), true)
+            .into_iter()
+            .filter(|l| !l.starts_with("ready "))
+            .map(|l| match l.strip_prefix("fields ") {
+                Some(fields) => format!("fields {}", table_names(c, fields)),
+                None => l,
+            })
+            .flat_map(|l| l.split('\n').map(str::to_string).collect::<Vec<_>>())
+            .collect()
+    }
+
+    /// Runs a script on two sessions of one server, as [`script`] does. A line `A> ` or `B> ` is a simple query of the session `A` or `B`.
+    fn two_sessions(text: &str) {
+        let store = Arc::new(Store::new());
+        let (mut a, _) = connect_to(&store, 1234);
+        let (mut b, _) = connect_to(&store, 1235);
+        let starts = |l: &str| l.starts_with("A> ") || l.starts_with("B> ");
+        let mut lines = text.lines().peekable();
+        while let Some(line) = lines.next() {
+            let (c, sql) = match line.split_at_checked(3) {
+                Some(("A> ", sql)) => (&mut a, sql),
+                Some(("B> ", sql)) => (&mut b, sql),
+                _ => panic!("not a statement: {line}"),
+            };
+            let mut want = Vec::new();
+            while let Some(next) = lines.next_if(|l| !starts(l)) {
+                want.push(next);
+            }
+            assert_eq!(script_lines(c, sql), want, "{line}");
         }
     }
 
@@ -1632,6 +1686,18 @@ mod tests {
     #[test]
     fn databases() {
         big_stack(|| script(include_str!("connection/databases.test")));
+    }
+
+    /// The table of the sessions in `pg_stat_activity` and the functions of one session: the state, the text of the statement and its times, the snapshot of a transaction and `pg_stat_clear_snapshot`, `track_activities` and `track_activity_query_size`, the addresses of a Unix socket, and the views `pg_stat_ssl`, `pg_stat_gssapi` and `pg_stat_database`. `connection/activity.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn activity() {
+        big_stack(|| script(include_str!("connection/activity.test")));
+    }
+
+    /// Two sessions that look at each other in `pg_stat_activity`: the idle states, the wait for the client, the end of `xact_start` in a failed block, the snapshot of a transaction and `application_name`. `connection/two_sessions.test` is the output of PostgreSQL 19 for the same script on two connections to a new database.
+    #[test]
+    fn activity_of_two_sessions() {
+        big_stack(|| two_sessions(include_str!("connection/two_sessions.test")));
     }
 
     /// The fold of the constant parts of the expressions, as `eval_const_expressions` does it. An error of the fold comes before the description of the rows, and a part that the fold drops gives no error. `connection/fold.test` is the output of PostgreSQL 19 for the same script in a new database.

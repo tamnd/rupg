@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 mod acl;
+mod activity;
 mod agg;
 mod array;
 mod cast;
@@ -23,12 +24,13 @@ mod text;
 
 use std::collections::BTreeMap;
 use std::rc::Rc;
-use std::sync::OnceLock;
+use std::sync::{Arc, OnceLock};
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Value};
 
+pub use activity::{Backend, BackendState, Client};
 pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use io::{base_type, input, input_supported, output, output_supported, receive, send, to_text};
@@ -88,6 +90,16 @@ pub trait Session {
     /// The catalog of the user objects that the statement sees, or `None` when the session has no catalog.
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
+    }
+    /// The rows of the table of the sessions in the order of their numbers, from the snapshot of the transaction. The first call of a transaction takes the snapshot.
+    fn backends(&self) -> Arc<[Backend]> {
+        Arc::from(Vec::new())
+    }
+    /// `pgstat_clear_snapshot`: drops the snapshot of the table of the sessions.
+    fn clear_backends(&self) {}
+    /// The two ends of the connection of the session: the client, then the server.
+    fn addresses(&self) -> (Client, Client) {
+        (Client::Unknown, Client::Unknown)
     }
 }
 
@@ -172,6 +184,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| array::by_src(src))
         .or_else(|| regex::by_src(src))
         .or_else(|| network::by_src(src))
+        .or_else(|| activity::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.
