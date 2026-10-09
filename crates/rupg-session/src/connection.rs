@@ -1622,6 +1622,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/viewdef.test")));
     }
 
+    /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inet() {
+        big_stack(|| script(include_str!("connection/inet.test")));
+    }
+
     /// The fold of the constant parts of the expressions, as `eval_const_expressions` does it. An error of the fold comes before the description of the rows, and a part that the fold drops gives no error. `connection/fold.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn fold() {

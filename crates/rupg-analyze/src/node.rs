@@ -3,7 +3,7 @@
 //! PostgreSQL stores these as `pg_node_tree` text that `nodeToString` writes. rupg stores its own text, which document 05 section 5.2 permits, because clients do not read it. The form looks like the form of PostgreSQL: `{NAME :field value ...}`. A constant keeps its value in a form that does not change with the settings of the session, so the expression reads back to the same tree.
 
 use rupg_common::{Error, Result};
-use rupg_types::{Array, ArrayDim, Interval, Recv, Value};
+use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Recv, Value};
 
 use crate::expr::{
     BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, Subscript, Var,
@@ -365,6 +365,12 @@ fn write_value(value: &Value, out: &mut String) {
         Value::TimestampTz(v) => out.push_str(&format!("(timestamptz {v})")),
         Value::Interval(v) => {
             out.push_str(&format!("(interval {} {} {})", v.time, v.day, v.month));
+        }
+        Value::Inet(v) => {
+            let family = if v.family == NetFamily::V4 { 4 } else { 6 };
+            out.push_str(&format!("(inet {family} {} ", v.bits));
+            hex(v.bytes(), out);
+            out.push(')');
         }
         Value::Array(array) => {
             out.push_str("(array (");
@@ -730,6 +736,20 @@ fn value_of(item: &Item) -> Result<Value> {
         "timetz" => Value::TimeTz(number(part(0)?)?, number(part(1)?)?),
         "timestamp" => Value::Timestamp(number(part(0)?)?),
         "timestamptz" => Value::TimestampTz(number(part(0)?)?),
+        "inet" => {
+            let family = match part(0)? {
+                "4" => NetFamily::V4,
+                "6" => NetFamily::V6,
+                _ => return Err(bad("an inet family that is not 4 or 6")),
+            };
+            let bytes = bytes_of(part(2)?)?;
+            if bytes.len() != family.size() {
+                return Err(bad("an inet address of the wrong size"));
+            }
+            let mut addr = [0u8; 16];
+            addr[..bytes.len()].copy_from_slice(&bytes);
+            Value::Inet(Inet { family, bits: number(part(1)?)?, addr })
+        }
         "interval" => Value::Interval(Interval {
             time: number(part(0)?)?,
             day: number(part(1)?)?,
@@ -799,6 +819,8 @@ mod tests {
             (Value::Timestamp(i64::MIN), oid::TIMESTAMP),
             (Value::TimestampTz(5), oid::TIMESTAMPTZ),
             (Value::Interval(Interval { time: -1, day: 2, month: -3 }), oid::INTERVAL),
+            (Value::Inet(rupg_types::inet_in("10.1.2.3/8", false).expect("inet")), oid::INET),
+            (Value::Inet(rupg_types::inet_in("2001:db8::/32", true).expect("cidr")), oid::CIDR),
         ];
         for (value, ty) in values {
             round_trip(&constant(value, ty));
