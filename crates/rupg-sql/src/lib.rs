@@ -32,6 +32,6 @@ pub use generated::keywords::{Category, Keyword};
 pub use generated::tables::{RULES, STATES, TOKENS, token};
 pub use lexer::{Lexer, Token, Value};
 pub use parser::{
-    SyntaxError, character, check, keyword, parse, parse_type_name, recognize, rule_name,
+    SyntaxError, character, check, keyword, keywords, parse, parse_type_name, recognize, rule_name,
     symbol_name,
 };

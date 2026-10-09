@@ -25,6 +25,11 @@ pub fn keyword(word: &str) -> Option<&'static Keyword> {
     keywords::lookup(word.as_bytes())
 }
 
+/// Every keyword, in the order of `kwlist.h`.
+pub fn keywords() -> &'static [Keyword] {
+    &keywords::KEYWORDS
+}
+
 /// The place where the grammar stops accepting the input.
 #[derive(Clone, Copy, PartialEq, Eq, Debug)]
 pub struct SyntaxError {

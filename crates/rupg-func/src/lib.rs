@@ -14,6 +14,7 @@ mod io;
 mod math;
 mod misc;
 mod reg;
+mod srf;
 mod text;
 
 use std::collections::BTreeMap;
@@ -27,6 +28,7 @@ use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Va
 pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use io::{base_type, input, input_supported, output, output_supported, receive, send, to_text};
+pub use srf::{SetKernel, set_kernel};
 
 /// The OID of `internal`, the language of the functions in C.
 const INTERNAL_LANGUAGE: u32 = 12;

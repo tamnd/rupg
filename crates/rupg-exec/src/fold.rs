@@ -40,6 +40,12 @@ fn plan(
             },
         };
     }
+    // preprocess_function_rtes: the calls of the functions in `FROM` fold first.
+    for relation in &mut out.relations {
+        for (call, _) in relation.function.iter_mut().flat_map(|f| &mut f.calls) {
+            *call = fold.clause(&[&*call])?.pop().unwrap_or_else(|| call.clone());
+        }
+    }
     if simple {
         out.limit = None;
     } else {

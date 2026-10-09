@@ -36,7 +36,7 @@ pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink,
     SubLinkKind, Var,
 };
-pub use from::{Column, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
+pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};
 pub use sort::SortGroup;
 pub use typcache::default_opclass;

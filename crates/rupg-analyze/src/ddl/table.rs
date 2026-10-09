@@ -879,7 +879,7 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
 }
 
 /// `CheckAttributeType`: a column cannot have a pseudo-type, also as the base type of a domain or the element type of an array.
-fn check_attribute_type(name: &str, ty: u32) -> Result<()> {
+pub(crate) fn check_attribute_type(name: &str, ty: u32) -> Result<()> {
     let Some(row) = types::row(ty) else { return Ok(()) };
     match row.kind {
         b'p' => Err(Error::new(

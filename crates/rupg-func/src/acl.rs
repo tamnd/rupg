@@ -725,6 +725,65 @@ fn pg_has_role(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// The kernel of a function of this module by its `prosrc`, such as `has_table_privilege_name_id`. One kernel serves each form of a function.
+/// `convert_aclright_to_string`: the name of each privilege bit, from bit 0.
+const RIGHT_NAMES: [&str; 15] = [
+    "INSERT",
+    "SELECT",
+    "UPDATE",
+    "DELETE",
+    "TRUNCATE",
+    "REFERENCES",
+    "TRIGGER",
+    "EXECUTE",
+    "USAGE",
+    "CREATE",
+    "TEMPORARY",
+    "CONNECT",
+    "SET",
+    "ALTER SYSTEM",
+    "MAINTAIN",
+];
+
+/// `aclexplode`: a row for each privilege of each item of an `aclitem[]` value, with the grantor, the grantee, the name of the privilege and its grant option. The items come in order, and the privileges of an item come in the order of their bits.
+///
+/// # Errors
+///
+/// `42704` for an item with a role that does not exist.
+pub(crate) fn aclexplode(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    let Some(Value::Array(acl)) = args.first() else { return Err(bad_value()) };
+    let mut rows = Vec::new();
+    for item in acl.values.iter().flatten() {
+        let item = item.as_str().ok_or_else(bad_value)?;
+        let bad = || Error::internal(format!("an aclitem that the engine cannot read: {item}"));
+        let (grantee, rest) = item.split_once('=').ok_or_else(bad)?;
+        let (letters, grantor) = rest.split_once('/').ok_or_else(bad)?;
+        let grantee =
+            if grantee.is_empty() { PUBLIC } else { get_role_oid(grantee, call.session)? };
+        let grantor = get_role_oid(grantor, call.session)?;
+        let mut bits: u32 = 0;
+        let mut last = 0;
+        for c in letters.chars() {
+            if c == '*' {
+                bits |= last << 16;
+            } else {
+                last = 1 << RIGHTS.find(c).ok_or_else(bad)?;
+                bits |= last;
+            }
+        }
+        for (bit, name) in RIGHT_NAMES.iter().enumerate() {
+            if bits & (1 << bit) != 0 {
+                rows.push(vec![
+                    Value::Oid(grantor),
+                    Value::Oid(grantee),
+                    Value::text(*name),
+                    Value::Bool(bits & go(1 << bit) != 0),
+                ]);
+            }
+        }
+    }
+    Ok(rows)
+}
+
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let family = if src.starts_with("pg_has_role") {
         "pg_has_role"

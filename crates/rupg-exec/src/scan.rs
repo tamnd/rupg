@@ -1,4 +1,4 @@
-//! The scan of the relations and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session. A relation of the user gives the rows of [`user_rows`]. The rows of a subquery in `FROM` come from the run of the subquery, which the executor adds to [`Tables`]. A subquery that reads the relations before it, as `LATERAL` lets it, runs in the scan for each row of those relations.
+//! The scan of the relations and the joins of `FROM`. A table of the catalog gives its static rows, then the rows of the user objects of the session. A relation of the user gives the rows of [`user_rows`]. The rows of a subquery or a function in `FROM` come from the executor, which adds them to [`Tables`]. A subquery or a function that reads the relations before it, as `LATERAL` lets it, runs in the scan for each row of those relations.
 //!
 //! A tuple of the join is the row number of each relation of the query, or [`NONE`] for a relation that a row of an outer join does not have. The rows of each relation are read once, with only the columns that the query uses.
 
@@ -6,7 +6,9 @@ use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
 
-use rupg_analyze::{Expr, ExprKind, FromItem, JoinKind, Query, TABLE_OID_ATTNUM, Var};
+use rupg_analyze::{
+    Expr, ExprKind, FromFunction, FromItem, JoinKind, Query, TABLE_OID_ATTNUM, Var,
+};
 use rupg_common::{Error, Result};
 use rupg_func::Session;
 use rupg_pgcatalog::{Batch, Values};
@@ -31,7 +33,7 @@ pub(crate) struct Tables {
     grown: Vec<RefCell<Vec<Vec<Value>>>>,
 }
 
-/// For each relation of the query, the other relations of the query that its subquery reads, as `LATERAL` lets it.
+/// For each relation of the query, the other relations of the query that its subquery or its function reads, as `LATERAL` lets it.
 pub(crate) fn lateral(query: &Query) -> Vec<Vec<usize>> {
     let refs = |sub: &Query| {
         let mut out = Vec::new();
@@ -48,7 +50,26 @@ pub(crate) fn lateral(query: &Query) -> Vec<Vec<usize>> {
         }
         out
     };
-    query.relations.iter().map(|r| r.subquery.as_deref().map(refs).unwrap_or_default()).collect()
+    let calls = |function: &FromFunction| {
+        let mut out = Vec::new();
+        for (call, _) in &function.calls {
+            each_var(call, &mut |var| {
+                if !out.contains(&var.relation) {
+                    out.push(var.relation);
+                }
+            });
+        }
+        out
+    };
+    query
+        .relations
+        .iter()
+        .map(|r| match (&r.subquery, &r.function) {
+            (Some(sub), _) => refs(sub),
+            (None, Some(function)) => calls(function),
+            (None, None) => Vec::new(),
+        })
+        .collect()
 }
 
 impl Tables {
@@ -153,7 +174,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     }
     let mut rows = Vec::with_capacity(query.relations.len());
     for (relation, used) in query.relations.iter().zip(&used) {
-        if relation.subquery.is_some() {
+        if relation.subquery.is_some() || relation.function.is_some() {
             rows.push(Rc::default());
             continue;
         }

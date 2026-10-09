@@ -4,14 +4,19 @@ use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::Values;
 use rupg_pgcatalog::builtin::{self, Named};
-use rupg_sql::nodes::{Alias, ColumnRef, JoinExpr, JoinType, Node, RangeSubselect, RangeVar};
+use rupg_sql::nodes::{
+    Alias, CoercionForm, ColumnRef, FuncCall, JoinExpr, JoinType, Node, RangeFunction,
+    RangeSubselect, RangeVar,
+};
 use rupg_types::oid;
 
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
+use crate::colname::figure_colname;
 use crate::expr::{CastForm, Expr, ExprKind, Var};
 use crate::typename::place;
+use crate::types;
 
 /// `MAX_FUZZY_DISTANCE` of `parse_relation.c`: the largest distance of a name that an error suggests.
 const MAX_FUZZY_DISTANCE: usize = 3;
@@ -31,6 +36,20 @@ pub struct Relation {
     pub columns: Vec<Column>,
     /// The query of a subquery in `FROM`.
     pub subquery: Option<Box<crate::Query>>,
+    /// The calls of a function in `FROM`.
+    pub function: Option<FromFunction>,
+}
+
+/// A call of a function in `FROM` with its name and its column definition list.
+type FunctionCall<'n> = (Expr, String, &'n [Option<Node>]);
+
+/// A function in `FROM`, as the `functions` and `funcordinality` of a `RangeTblEntry` of the kind `RTE_FUNCTION`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FromFunction {
+    /// The call of the function, or of each function of `ROWS FROM`, with the number of columns that it gives. The rows of the calls go side by side, and a call with fewer rows gives nulls.
+    pub calls: Vec<(Expr, usize)>,
+    /// `WITH ORDINALITY`: the last column is the number of the row, from 1.
+    pub ordinality: bool,
 }
 
 /// A column of a relation.
@@ -237,7 +256,11 @@ impl Analyzer<'_> {
                 let index = self.scope.entries[item.entry].relation.unwrap_or_default();
                 Ok((FromItem::Relation(index), item.clone(), vec![item]))
             }
-            Node::RangeFunction(_) => Err(not_yet("a function in FROM", None)),
+            Node::RangeFunction(r) => {
+                let item = self.range_function(r)?;
+                let index = self.scope.entries[item.entry].relation.unwrap_or_default();
+                Ok((FromItem::Relation(index), item.clone(), vec![item]))
+            }
             Node::RangeTableSample(_) => Err(not_yet("TABLESAMPLE", None)),
             Node::RangeTableFunc(_) | Node::JsonTable(_) => {
                 Err(not_yet("XMLTABLE and JSON_TABLE", None))
@@ -260,7 +283,7 @@ impl Analyzer<'_> {
         let columns = self.open_relation(oid, name, at)?;
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
-        self.add_relation(Relation { oid, columns, subquery: None }, refname, alias)
+        self.add_relation(Relation { oid, columns, subquery: None, function: None }, refname, alias)
     }
 
     /// `transformRangeSubselect` and `addRangeTableEntryForSubquery`: a subquery in `FROM` and its namespace item. With no alias, the name of the entry is `unnamed_subquery`, and a qualified name cannot use it.
@@ -279,7 +302,8 @@ impl Analyzer<'_> {
             .collect();
         let alias = r.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or("unnamed_subquery");
-        let relation = Relation { oid: 0, columns, subquery: Some(Box::new(query)) };
+        let relation =
+            Relation { oid: 0, columns, subquery: Some(Box::new(query)), function: None };
         let mut item = self.add_relation(relation, refname.to_string(), alias)?;
         item.rel_visible = alias.is_some();
         Ok(item)
@@ -307,6 +331,279 @@ impl Analyzer<'_> {
             scope.lateral.split_off(before).into_iter().map(|(item, _)| item).collect();
         self.scope = scope;
         result
+    }
+
+    /// `transformRangeFunction` and `addRangeTableEntryForFunction`: a function in `FROM`, or the functions of `ROWS FROM`, and its namespace item. The arguments can read the parts of `FROM` before the function, also with no `LATERAL`.
+    fn range_function(&mut self, r: &RangeFunction) -> Result<Item> {
+        let before = self.scope.lateral.len();
+        let hidden = std::mem::take(&mut self.scope.namespace);
+        self.scope.lateral.extend(hidden.into_iter().map(|item| (item, true)));
+        let active = std::mem::replace(&mut self.scope.lateral_active, true);
+        let calls = self.function_calls(r);
+        self.scope.lateral_active = active;
+        self.scope.namespace =
+            self.scope.lateral.split_off(before).into_iter().map(|(item, _)| item).collect();
+        let mut calls = calls?;
+        if let Some(Some(Node::ColumnDef(first))) = r.coldeflist.first() {
+            let at = place(first.location);
+            if calls.len() != 1 {
+                let (message, hint) = if r.is_rowsfrom {
+                    (
+                        "ROWS FROM() with multiple functions cannot have a column definition list",
+                        "Put a separate column definition list for each function inside ROWS FROM().",
+                    )
+                } else {
+                    (
+                        "UNNEST() with multiple arguments cannot have a column definition list",
+                        "Use separate UNNEST() calls inside ROWS FROM(), and attach a column definition list to each one.",
+                    )
+                };
+                return Err(Error::new(SqlState::SYNTAX_ERROR, message).with_hint(hint).at_opt(at));
+            }
+            if r.ordinality {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "WITH ORDINALITY cannot be used with a column definition list",
+                )
+                .with_hint("Put the column definition list inside ROWS FROM().")
+                .at_opt(at));
+            }
+            calls[0].2 = &r.coldeflist;
+        }
+        let alias = r.alias.as_deref();
+        let first = calls.first().map(|c| c.1.clone()).unwrap_or_default();
+        let refname = alias.and_then(|a| a.aliasname.as_deref()).map_or(first, str::to_string);
+        let count = calls.len();
+        let mut columns = Vec::new();
+        let mut out = Vec::with_capacity(count);
+        for (expr, name, coldefs) in calls {
+            let given = self.function_columns(&expr, &name, coldefs, alias, count)?;
+            out.push((expr, given.len()));
+            columns.extend(given);
+        }
+        if r.ordinality {
+            let name = "ordinality".to_string();
+            columns.push(Column { name, ty: oid::INT8, typmod: -1, not_null: false });
+        }
+        let function = FromFunction { calls: out, ordinality: r.ordinality };
+        let relation = Relation { oid: 0, columns, subquery: None, function: Some(function) };
+        self.add_relation(relation, refname, alias)
+    }
+
+    /// The calls of a function in `FROM`, each with the name that `FigureColname` gives it and its column definition list. A call of `unnest` with more than one argument and no other parts becomes a call of `pg_catalog.unnest` for each argument, as `ROWS FROM` does.
+    fn function_calls<'n>(&mut self, r: &'n RangeFunction) -> Result<Vec<FunctionCall<'n>>> {
+        let mut out = Vec::with_capacity(r.functions.len());
+        for pair in &r.functions {
+            let Some(Node::List(pair)) = pair else {
+                return Err(Error::internal("a function in FROM that is not a pair"));
+            };
+            let node = pair.first().and_then(Option::as_ref);
+            let coldefs: &[Option<Node>] = match pair.get(1) {
+                Some(Some(Node::List(list))) => list,
+                _ => &[],
+            };
+            if let Some(Node::FuncCall(fc)) = node
+                && fc.funcname.len() == 1
+                && fields(&fc.funcname) == [Some("unnest")]
+                && fc.args.len() > 1
+                && fc.agg_order.is_empty()
+                && fc.agg_filter.is_none()
+                && fc.over.is_none()
+                && !fc.agg_star
+                && !fc.agg_distinct
+                && !fc.func_variadic
+                && coldefs.is_empty()
+            {
+                for arg in &fc.args {
+                    let call = FuncCall {
+                        funcname: vec![
+                            Some(Node::String("pg_catalog".into())),
+                            Some(Node::String("unnest".into())),
+                        ],
+                        args: vec![arg.clone()],
+                        funcformat: CoercionForm::COERCE_EXPLICIT_CALL,
+                        location: fc.location,
+                        ..FuncCall::default()
+                    };
+                    let call = Node::FuncCall(Box::new(call));
+                    let expr = self.function_expr(Some(&call))?;
+                    out.push((expr, figure_colname(Some(&call)), &[][..]));
+                }
+                continue;
+            }
+            let expr = self.function_expr(node)?;
+            if !coldefs.is_empty()
+                && let Some(Some(Node::ColumnDef(first))) = r.coldeflist.first()
+            {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "multiple column definition lists are not allowed for the same function",
+                )
+                .at_opt(place(first.location)));
+            }
+            out.push((expr, figure_colname(node), coldefs));
+        }
+        Ok(out)
+    }
+
+    /// The expression of a function in `FROM`. A set-returning function can only be at the top, because `nodeFunctionscan.c` calls only that function as a set.
+    fn function_expr(&mut self, node: Option<&Node>) -> Result<Expr> {
+        let expr = self.with_kind(Kind::FromFunction, |a| a.transform(node))?;
+        let retset = |e: &Expr| match &e.kind {
+            ExprKind::Func(f) => builtin::proc_by_oid(f.oid).is_some_and(|p| p.retset),
+            _ => false,
+        };
+        let mut nested = |e: &Expr, depth: usize| (depth == 0 && retset(e)).then_some(e.location);
+        let found = match &expr.kind {
+            ExprKind::Func(f) if retset(&expr) => {
+                f.args.iter().find_map(|a| a.find(0, &mut nested))
+            }
+            _ => expr.find(0, &mut nested),
+        };
+        if let Some(at) = found {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "set-returning functions must appear at top level of FROM",
+            )
+            .at_opt(at));
+        }
+        Ok(expr)
+    }
+
+    /// `get_expr_result_type` and the column definition list of `addRangeTableEntryForFunction`: the columns of one call of a function in `FROM`. A function with two or more `OUT` parameters gives a column for each, a function that gives `record` takes its columns from the column definition list, and a function of another type gives one column.
+    fn function_columns(
+        &mut self,
+        expr: &Expr,
+        name: &str,
+        coldefs: &[Option<Node>],
+        alias: Option<&Alias>,
+        count: usize,
+    ) -> Result<Vec<Column>> {
+        let proc = match &expr.kind {
+            ExprKind::Func(f) => builtin::proc_by_oid(f.oid),
+            _ => None,
+        };
+        // The OUT, INOUT and TABLE parameters, as `build_function_result_tupdesc_d` reads them.
+        let mut outs: Vec<(Option<&str>, u32)> = Vec::new();
+        if let Some(p) = proc
+            && let (Some(types), Some(modes)) = (p.allargtypes, p.argmodes)
+        {
+            for (i, (ty, mode)) in types.iter().zip(modes).enumerate() {
+                if matches!(mode, b'o' | b'b' | b't') {
+                    let named =
+                        p.argnames.and_then(|n| n.get(i)).copied().filter(|n| !n.is_empty());
+                    outs.push((named, *ty));
+                }
+            }
+        }
+        let at = coldefs.first().and_then(|c| match c {
+            Some(Node::ColumnDef(def)) => place(def.location),
+            _ => None,
+        });
+        if outs.len() > 1 && expr.ty == oid::RECORD {
+            if !coldefs.is_empty() {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "a column definition list is redundant for a function with OUT parameters",
+                )
+                .at_opt(at));
+            }
+            let mut columns = Vec::with_capacity(outs.len());
+            for (i, (name, ty)) in outs.into_iter().enumerate() {
+                let name = name.map_or_else(|| format!("column{}", i + 1), str::to_string);
+                if types::is_polymorphic(ty) {
+                    return Err(not_yet(
+                        "a function in FROM with polymorphic OUT parameters",
+                        expr.location,
+                    ));
+                }
+                columns.push(Column { name, ty, typmod: -1, not_null: false });
+            }
+            return Ok(columns);
+        }
+        let row = types::row(expr.ty);
+        if expr.ty == oid::RECORD {
+            if coldefs.is_empty() {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "a column definition list is required for functions returning \"record\"",
+                )
+                .at_opt(expr.place()));
+            }
+            return self.column_definitions(coldefs);
+        }
+        if row.is_some_and(|r| r.kind == b'c') {
+            if !coldefs.is_empty() {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "a column definition list is redundant for a function returning a named composite type",
+                )
+                .at_opt(at));
+            }
+            return Err(not_yet("a function in FROM that returns a composite type", expr.location));
+        }
+        if !coldefs.is_empty() {
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                "a column definition list is only allowed for functions returning \"record\"",
+            )
+            .at_opt(at));
+        }
+        if row.is_some_and(|r| r.kind == b'p') && !matches!(expr.ty, oid::VOID | oid::CSTRING) {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "function \"{name}\" in FROM has unsupported return type {}",
+                    types::name(expr.ty)
+                ),
+            )
+            .at_opt(expr.place()));
+        }
+        // chooseScalarFunctionAlias: the name of the one OUT parameter, or else the alias of a single function, or else the name of the function.
+        let column = match outs.as_slice() {
+            [(Some(n), _)] => (*n).to_string(),
+            _ => match alias.and_then(|a| a.aliasname.as_deref()) {
+                Some(a) if count == 1 => a.to_string(),
+                _ => name.to_string(),
+            },
+        };
+        Ok(vec![Column { name: column, ty: expr.ty, typmod: expr.typmod, not_null: false }])
+    }
+
+    /// The columns of a column definition list, with the checks of `CheckAttributeNamesTypes`: no name twice, and no pseudo-type other than `record` and `record[]`.
+    fn column_definitions(&mut self, coldefs: &[Option<Node>]) -> Result<Vec<Column>> {
+        let mut columns: Vec<Column> = Vec::with_capacity(coldefs.len());
+        for def in coldefs {
+            let Some(Node::ColumnDef(def)) = def else {
+                return Err(Error::internal("a column definition that is not ColumnDef"));
+            };
+            let name = def.colname.as_deref().unwrap_or_default().to_string();
+            let type_name =
+                def.typeName.as_deref().ok_or_else(|| Error::internal("a column with no type"))?;
+            if type_name.setof {
+                return Err(Error::new(
+                    SqlState::INVALID_TABLE_DEFINITION,
+                    format!("column \"{name}\" cannot be declared SETOF"),
+                )
+                .at_opt(place(def.location)));
+            }
+            let (ty, typmod) = self.type_name(type_name)?;
+            columns.push(Column { name, ty, typmod, not_null: false });
+        }
+        for (i, column) in columns.iter().enumerate() {
+            if columns[..i].iter().any(|c| c.name == column.name) {
+                return Err(Error::new(
+                    SqlState::DUPLICATE_COLUMN,
+                    format!("column name \"{}\" specified more than once", column.name),
+                ));
+            }
+        }
+        for column in &columns {
+            if !matches!(column.ty, oid::RECORD | oid::RECORD_ARRAY) {
+                crate::ddl::check_attribute_type(&column.name, column.ty)?;
+            }
+        }
+        Ok(columns)
     }
 
     /// `buildNSItemFromLists`: adds a relation to the range table with the name `refname`, and gives its namespace item. The names of the alias replace the first names of the columns.
@@ -384,7 +681,7 @@ impl Analyzer<'_> {
             })
             .collect();
         let colnames = columns.iter().map(|c| c.name.clone()).collect();
-        self.scope.relations.push(Relation { oid, columns, subquery: None });
+        self.scope.relations.push(Relation { oid, columns, subquery: None, function: None });
         let entry = self.scope.entries.len();
         self.scope.entries.push(Entry {
             name: name.to_string(),
