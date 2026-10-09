@@ -1,5 +1,7 @@
 //! `transformSubLink` of `parse_expr.c`: a subquery in an expression, as `EXISTS`, `ANY`, `ALL`, `IN`, `ARRAY` or a scalar subquery.
 
+use std::cmp::Ordering;
+
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{Node, SubLink as RawSubLink, SubLinkType};
 use rupg_types::oid;
@@ -86,41 +88,30 @@ impl Analyzer<'_> {
                 }
             }
             SubLinkKind::Any | SubLinkKind::All => {
-                if let Some(Node::RowExpr(r)) = &s.testexpr {
-                    return Err(not_yet("a row on the left of a subquery", place(r.location)));
-                }
-                let left = self.transform(s.testexpr.as_ref())?;
+                let left = match &s.testexpr {
+                    Some(Node::RowExpr(r)) => self.transform_list(&r.args)?,
+                    node => vec![self.transform(node.as_ref())?],
+                };
                 let op_names = if s.operName.is_empty() { vec!["="] } else { names(&s.operName) };
-                match columns.len() {
-                    0 => {
-                        return Err(Error::new(
-                            SqlState::SYNTAX_ERROR,
-                            "subquery has too few columns",
-                        )
-                        .at_opt(at));
-                    }
-                    1 => {}
-                    _ => {
-                        return Err(Error::new(
-                            SqlState::SYNTAX_ERROR,
-                            "subquery has too many columns",
-                        )
-                        .at_opt(at));
-                    }
+                let message = match left.len().cmp(&columns.len()) {
+                    Ordering::Less => Some("subquery has too many columns"),
+                    Ordering::Greater => Some("subquery has too few columns"),
+                    Ordering::Equal => None,
+                };
+                if let Some(message) = message {
+                    return Err(Error::new(SqlState::SYNTAX_ERROR, message).at_opt(at));
                 }
-                let (ty, typmod) = columns[0];
-                let param = Expr { kind: ExprKind::SubColumn(0), ty, typmod, location: None };
-                let test = self.make_op(&op_names, Some(left), param, at)?;
-                if test.ty != oid::BOOL {
-                    return Err(Error::new(
-                        SqlState::DATATYPE_MISMATCH,
-                        format!(
-                            "row comparison operator must yield type boolean, not type {}",
-                            types::name(test.ty)
-                        ),
-                    )
-                    .at_opt(at));
-                }
+                let right = columns
+                    .iter()
+                    .enumerate()
+                    .map(|(n, &(ty, typmod))| Expr {
+                        kind: ExprKind::SubColumn(n),
+                        ty,
+                        typmod,
+                        location: None,
+                    })
+                    .collect();
+                let test = self.row_comparison(&op_names, left, right, at)?;
                 (oid::BOOL, -1, Some(test))
             }
         };
