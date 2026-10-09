@@ -166,7 +166,11 @@ impl Analyzer<'_> {
                 {
                     *form = FuncForm::ImplicitCast;
                 }
-                Some(ExprKind::Relabel(_, form) | ExprKind::CoerceViaIo(_, form)) => {
+                Some(
+                    ExprKind::Relabel(_, form)
+                    | ExprKind::CoerceViaIo(_, form)
+                    | ExprKind::ArrayCoerce { form, .. },
+                ) => {
                     *form = CastForm::Implicit;
                 }
                 _ => {}
@@ -269,15 +273,30 @@ impl Analyzer<'_> {
                     location,
                 })
             }
-            Path::ArrayCoerce => Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                format!(
-                    "a cast from {} to {} is not supported yet",
-                    types::name(input),
-                    types::name(target)
-                ),
-            )
-            .at_opt(location)),
+            Path::ArrayCoerce => {
+                let test = Expr {
+                    kind: ExprKind::CaseTest,
+                    ty: types::element(input),
+                    typmod: expr.typmod,
+                    location: None,
+                };
+                let element = self
+                    .coerce_to_target(test, types::element(target), typmod, context, location)?
+                    .ok_or_else(|| {
+                        Error::internal("failed to coerce array element type as expected")
+                    })?;
+                let typmod = element.typmod;
+                Ok(Expr {
+                    kind: ExprKind::ArrayCoerce {
+                        arg: Box::new(expr),
+                        element: Box::new(element),
+                        form: cast,
+                    },
+                    ty: target,
+                    typmod,
+                    location,
+                })
+            }
         }
     }
 
@@ -302,7 +321,29 @@ impl Analyzer<'_> {
                 };
                 build_cast(expr, func, target, typmod, context, form, location)
             }
-            _ => {
+            // An ArrayCoerceExpr applies the function to each element.
+            Some((func, true)) => {
+                let (form, cast) = if context == Context::Explicit {
+                    (FuncForm::ExplicitCast, CastForm::Explicit)
+                } else {
+                    (FuncForm::ImplicitCast, CastForm::Implicit)
+                };
+                let ty = types::element(target);
+                let test =
+                    Expr { kind: ExprKind::CaseTest, ty, typmod: expr.typmod, location: None };
+                let element = build_cast(test, func, ty, typmod, context, form, location);
+                Expr {
+                    kind: ExprKind::ArrayCoerce {
+                        arg: Box::new(expr),
+                        element: Box::new(element),
+                        form: cast,
+                    },
+                    ty: target,
+                    typmod,
+                    location,
+                }
+            }
+            None => {
                 let mut expr = expr;
                 if let ExprKind::Const(_) = expr.kind {
                     expr.typmod = typmod;

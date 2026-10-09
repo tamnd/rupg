@@ -97,6 +97,10 @@ fn check(expr: &Expr) -> Result<()> {
             }
             check(arg)?;
         }
+        ExprKind::ArrayCoerce { arg, element, .. } => {
+            check(arg)?;
+            check(element)?;
+        }
         ExprKind::Bool(_, args) | ExprKind::Coalesce(args) => args.iter().try_for_each(check)?,
         ExprKind::Case(case) => {
             if let Some(arg) = &case.arg {
@@ -858,6 +862,7 @@ impl<'a> Eval<'a> {
                 })?;
                 rupg_func::input(expr.ty, &text, -1, self.session)
             }
+            ExprKind::ArrayCoerce { arg, element, .. } => self.array_coerce(arg, element),
             ExprKind::Bool(op, args) => self.bool_op(*op, args),
             ExprKind::NullTest(arg, is_null) => {
                 Ok(Value::Bool(self.eval(arg)?.is_null() == *is_null))
@@ -1034,6 +1039,24 @@ impl<'a> Eval<'a> {
             }
         }
         Ok(if unknown { Value::Null } else { Value::Bool(!stop) })
+    }
+
+    /// `ExecEvalArrayCoerce`: the cast of each element of the array, with the element as the value of `CaseTest`. The result has the dimensions of the array.
+    fn array_coerce(&mut self, arg: &Expr, element: &Expr) -> Result<Value> {
+        let array = match self.eval(arg)? {
+            Value::Null => return Ok(Value::Null),
+            Value::Array(array) => *array,
+            _ => return Err(Error::internal("the argument of an ArrayCoerceExpr is not an array")),
+        };
+        let mut values = Vec::with_capacity(array.values.len());
+        for value in array.values {
+            self.case.push(value.unwrap_or(Value::Null));
+            let result = self.eval(element);
+            self.case.pop();
+            let result = result?;
+            values.push((!result.is_null()).then_some(result));
+        }
+        Ok(Value::Array(Box::new(Array { dims: array.dims, values })))
     }
 
     fn case(&mut self, case: &Case) -> Result<Value> {

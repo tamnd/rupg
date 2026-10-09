@@ -303,6 +303,10 @@ impl<'a> Fold<'a> {
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::NullTest(arg, _)
             | ExprKind::BooleanTest(arg, _) => self.subqueries(arg),
+            ExprKind::ArrayCoerce { arg, element, .. } => {
+                self.subqueries(arg)?;
+                self.subqueries(element)
+            }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
             | ExprKind::MinMax { args, .. }
@@ -376,6 +380,21 @@ impl<'a> Fold<'a> {
             ExprKind::CoerceViaIo(arg, form) => {
                 let arg = self.expr(arg)?;
                 self.coerce(with(expr, ExprKind::CoerceViaIo(Box::new(arg), *form)))
+            }
+            ExprKind::ArrayCoerce { arg, element, form } => {
+                let arg = self.expr(arg)?;
+                // The CaseTest of the element is not the value of a CASE outside.
+                self.case.push(None);
+                let element = self.expr(element);
+                self.case.pop();
+                let element = element?;
+                let fold = value(&arg).is_some() && !mutable(&element);
+                let kind = ExprKind::ArrayCoerce {
+                    arg: Box::new(arg),
+                    element: Box::new(element),
+                    form: *form,
+                };
+                if fold { self.evaluate(with(expr, kind)) } else { Ok(with(expr, kind)) }
             }
             ExprKind::Bool(BoolOp::Not, args) => {
                 let args = self.list(args)?;
@@ -640,4 +659,27 @@ impl<'a> Fold<'a> {
         let relation = self.relations.get(var.relation);
         column.and_then(|c| relation?.columns.get(c)).is_some_and(|c| c.not_null)
     }
+}
+
+/// `contain_mutable_functions`: true when the expression calls a function that is not immutable.
+fn mutable(expr: &Expr) -> bool {
+    let mutable_proc = |oid: u32| builtin::proc_by_oid(oid).is_none_or(|p| p.volatile != b'i');
+    expr.find(0, &mut |e, _| {
+        let mutable = match &e.kind {
+            ExprKind::Func(f) => mutable_proc(f.oid),
+            ExprKind::NullIf { equal: func, .. }
+            | ExprKind::Distinct { equal: func, .. }
+            | ExprKind::ScalarArrayOp { func, .. }
+            | ExprKind::MinMax { less: func, .. } => mutable_proc(*func),
+            ExprKind::CoerceViaIo(arg, _) => {
+                let output = builtin::type_by_oid(arg.ty).map_or(0, |t| t.output);
+                let input = builtin::type_by_oid(e.ty).map_or(0, |t| t.input);
+                mutable_proc(output) || mutable_proc(input)
+            }
+            ExprKind::SqlValue(_) | ExprKind::SubLink(_) | ExprKind::Agg(_) => true,
+            _ => false,
+        };
+        mutable.then_some(())
+    })
+    .is_some()
 }
