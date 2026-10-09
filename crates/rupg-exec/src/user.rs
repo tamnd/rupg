@@ -1,4 +1,4 @@
-//! The rows of the catalog for the user objects: the schemas, the relations, their row types and columns, the column defaults, the constraints, the indexes, the sequences and the dependencies between them. A scan of a table of the catalog gives these rows after the static rows.
+//! The rows of the catalog for the user objects: the schemas, the relations, their row types and columns, the column defaults, the constraints, the indexes, the sequences, the functions and the dependencies between them. A scan of a table of the catalog gives these rows after the static rows.
 //!
 //! The columns of `pg_node_tree` hold the expressions in the form of the analyzer, not in the form of `nodeToString`.
 
@@ -128,6 +128,7 @@ pub(crate) fn rows(
         "pg_constraint" => constraints(table, catalog),
         "pg_index" => indexes(table, catalog),
         "pg_sequence" => sequences(table, catalog),
+        "pg_proc" => functions(table, catalog),
         "pg_depend" => depends(table, catalog),
         "pg_rewrite" => rewrites(table, catalog),
         _ => Vec::new(),
@@ -460,6 +461,43 @@ fn sequences<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("seqcache", Value::Int8(seq.cache))
                 .set("seqcycle", Value::Bool(seq.cycle));
             Some(row)
+        })
+        .collect()
+}
+
+/// The functions in SQL. The body in `prosqlbody` is the text of the statement that made the function, and `prosrc` is empty, as for a function with a `RETURN` body.
+fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .functions()
+        .map(|f| {
+            let mut row = Row::new(table);
+            #[allow(clippy::cast_precision_loss)]
+            let (cost, rows) = (f.cost as f32, f.rows as f32);
+            let names = if f.argnames.is_empty() { Value::Null } else { text_array(&f.argnames) };
+            row.set("oid", oid(f.oid))
+                .set("proname", Value::text(f.name.clone()))
+                .set("pronamespace", oid(f.namespace))
+                .set("proowner", oid(f.owner))
+                .set("prolang", oid(f.lang))
+                .set("procost", Value::Float4(cost))
+                .set("prorows", Value::Float4(rows))
+                .set("provariadic", oid(0))
+                .set("prosupport", oid(0))
+                .set("prokind", code('f'))
+                .set("prosecdef", Value::Bool(false))
+                .set("proleakproof", Value::Bool(false))
+                .set("proisstrict", Value::Bool(f.strict))
+                .set("proretset", Value::Bool(false))
+                .set("provolatile", Value::Char(f.volatile))
+                .set("proparallel", Value::Char(f.parallel))
+                .set("pronargs", Value::Int2(i16::try_from(f.argtypes.len()).unwrap_or(i16::MAX)))
+                .set("pronargdefaults", Value::Int2(0))
+                .set("prorettype", oid(f.rettype))
+                .set("proargtypes", oid_vector(&f.argtypes))
+                .set("proargnames", names)
+                .set("prosrc", Value::text(""))
+                .set("prosqlbody", tree(f.body.as_ref().map(|b| &b.text)));
+            row
         })
         .collect()
 }

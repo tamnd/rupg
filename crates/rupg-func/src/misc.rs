@@ -95,6 +95,60 @@ fn current_setting(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     ))
 }
 
+/// `pg_wchar_table[].maxmblen`: the longest character of each encoding in bytes, by the number of the encoding. The number 7, which was `MULE_INTERNAL`, has no encoding.
+const MAX_CHAR_LENGTHS: [Option<i32>; 42] = [
+    Some(1),
+    Some(3),
+    Some(3),
+    Some(3),
+    Some(4),
+    Some(3),
+    Some(4),
+    None,
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(1),
+    Some(2),
+    Some(2),
+    Some(2),
+    Some(2),
+    Some(4),
+    Some(3),
+    Some(2),
+];
+
+/// `pg_encoding_max_length_sql`: the longest character of the encoding in bytes, or null for a number that is not an encoding.
+fn pg_encoding_max_length(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let encoding = args.first().and_then(Value::as_i64).ok_or_else(bad_value)?;
+    let length =
+        usize::try_from(encoding).ok().and_then(|e| MAX_CHAR_LENGTHS.get(e).copied().flatten());
+    Ok(length.map_or(Value::Null, Value::Int4))
+}
+
 /// `set_config_by_name`: `set_config`, which is `SET` as a function. A null value resets the parameter, and a null `is_local` is false.
 fn set_config(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let name = match args.first() {
@@ -131,6 +185,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_typeof" => pg_typeof,
         "pg_backend_pid" => pg_backend_pid,
         "pg_client_encoding" => pg_client_encoding,
+        "pg_encoding_max_length_sql" => pg_encoding_max_length,
         "format_type" => format_type,
         "show_config_by_name" | "show_config_by_name_missing_ok" => current_setting,
         "set_config_by_name" => set_config,

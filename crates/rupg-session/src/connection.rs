@@ -1757,6 +1757,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/domains.test")));
     }
 
+    /// The functions in SQL of `information_schema` that have a `RETURN` body, such as `_pg_char_max_length`: the rows of `pg_proc` and `pg_depend` with the OIDs of PostgreSQL, `pg_get_function_arguments` and `pg_get_function_result`, the results for many types and type modifiers and for the columns of a table, a call with and without the schema in `search_path`, and the errors of a bad argument. Also the shift operators `<<` and `>>` of the integer types, which the bodies use. `connection/sql_functions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sql_functions() {
+        big_stack(|| script(include_str!("connection/sql_functions.test")));
+    }
+
     /// The views of the parts of the server that rupg does not have, which have no rows: asynchronous I/O, the registry of dynamic shared memory, the replication origins, recovery, the publications and the cursors. Also the error of `pg_shmem_allocations_numa` with no NUMA support, and the errors of the functions of the publications for a name that is not a publication. `connection/absent.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn absent() {
