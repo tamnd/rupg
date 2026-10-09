@@ -25,8 +25,9 @@ mod tzdata;
 mod unicode;
 mod vendor;
 mod version;
+mod waitevents;
 
-const USAGE: &str = "usage: cargo xtask <bench [--binary file] [--save file] [--check file] | errcodes [--check] | grammar [file.y...] | guc [--check] | layers | lifts [rudb dir] | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z>>";
+const USAGE: &str = "usage: cargo xtask <bench [--binary file] [--save file] [--check file] | errcodes [--check] | grammar [file.y...] | guc [--check] | layers | lifts [rudb dir] | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z> | waitevents [--check]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -47,6 +48,7 @@ fn main() -> ExitCode {
         Some("unicode") => unicode::run(&root, &args[1..]),
         Some("vendor") => vendor::run(&root, &args[1..]),
         Some("version") => version::run(&root, &args[1..]),
+        Some("waitevents") => waitevents::run(&root, &args[1..]),
         Some(other) => Err(format!("unknown task {other:?}\n{USAGE}")),
         None => Err(USAGE.to_string()),
     };
