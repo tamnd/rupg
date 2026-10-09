@@ -1961,6 +1961,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/subquery_filters.test")));
     }
 
+    /// `pg_relation_is_updatable` and `pg_column_is_updatable` for tables, for views that the database can update and for views that it cannot update, for views on views, for the built-in relations and for the views of `information_schema` that call them. `connection/updatable.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn updatable() {
+        big_stack(|| script(include_str!("connection/updatable.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {
