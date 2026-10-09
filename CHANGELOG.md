@@ -4,6 +4,25 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.16 (2026-10-10)
+
+A patch release on the way to M2. rupg now makes the 65 views and the 4 tables of `information_schema`, has window functions, and reads the types of extended statistics.
+
+### Added
+
+- The fields of a `record` value with `(x).name` (#230), and the functions `_pg_expandarray` and `_pg_index_position` of `information_schema` with a query body (#231).
+- `(f(...)).*` in a target list, the comparison of two rows, and `acldefault` for a null ACL (#232).
+- Window functions with `PARTITION BY`, `ORDER BY` and named windows (#233). Aggregates with `OVER` and window frames are not supported yet.
+- A row on the left of `IN`, `NOT IN`, `ANY` and `ALL` with a subquery (#234).
+- The views and tables of `information_schema` with the OIDs of PostgreSQL 19 (#235), and the functions that they call: `nameconcatoid` and `getdatabaseencoding` (#236), `pg_relation_is_updatable` and `pg_column_is_updatable` (#238), and `format` (#239).
+- `pg_get_ruledef` and `pg_get_triggerdef` (#240), and `array_agg` of arrays (#241).
+- The input and output of `pg_ndistinct` and `pg_dependencies` (#242). The view `pg_stats_ext` now runs.
+- `pg_input_is_valid` and `pg_input_error_info` (#243). The input of a domain uses the typmod of the domain, and a pseudo-type gives the error of PostgreSQL.
+
+### Fixed
+
+- A subquery in a scan condition read the rows of another subquery (#237). `key_column_usage`, `constraint_column_usage` and `role_usage_grants` now give the rows of PostgreSQL.
+
 ## 0.1.15 (2026-10-10)
 
 A patch release on the way to M2. rupg now has all the regular expression functions of PostgreSQL and runs set-returning functions in the target list. Thus the setup makes all the views of `system_views.sql`.
