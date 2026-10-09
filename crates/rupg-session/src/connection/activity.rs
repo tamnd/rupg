@@ -5,7 +5,7 @@
 use std::cell::RefCell;
 use std::sync::Arc;
 
-use rupg_func::{Backend, BackendState, Client};
+use rupg_func::{Backend, BackendState, Client, Ssl};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_wire::TransactionStatus;
 
@@ -14,8 +14,8 @@ use crate::guc::{self, Setting, Settings};
 use crate::query;
 use crate::store::Store;
 
-/// `NAMEDATALEN - 1`, the most bytes of `application_name` in the table.
-const APPLICATION_NAME_BYTES: usize = 63;
+/// `NAMEDATALEN - 1`, the most bytes of `application_name` and of the texts of the TLS status in the table.
+const NAME_BYTES: usize = 63;
 
 /// What a session knows of the table of the sessions.
 #[derive(Debug, Default)]
@@ -25,6 +25,8 @@ pub(crate) struct Activity {
     /// The two ends of the connection.
     pub(crate) client: Client,
     pub(crate) server: Client,
+    /// The TLS of the connection, if it has TLS.
+    ssl: Option<Ssl>,
     /// The snapshot of the table that the transaction reads, after its first read.
     snapshot: RefCell<Option<Arc<[Backend]>>>,
 }
@@ -54,7 +56,7 @@ impl Activity {
 /// The value of `application_name`, cut to the bytes that the table keeps.
 fn application_name(settings: &Settings) -> String {
     let mut name = settings.get("application_name").unwrap_or_default();
-    clip(&mut name, APPLICATION_NAME_BYTES);
+    clip(&mut name, NAME_BYTES);
     name
 }
 
@@ -64,6 +66,20 @@ fn clip(text: &mut String, max: usize) {
         let end = (0..=max).rev().find(|&at| text.is_char_boundary(at)).unwrap_or(0);
         text.truncate(end);
     }
+}
+
+/// The TLS status as the table keeps it: `pgstat_bestart` copies each text with `strlcpy` into `NAMEDATALEN` bytes. rupg cuts a long text at the end of a character, so that the text stays valid UTF-8.
+fn clipped(mut ssl: Ssl) -> Ssl {
+    for text in [
+        &mut ssl.version,
+        &mut ssl.cipher,
+        &mut ssl.client_dn,
+        &mut ssl.client_serial,
+        &mut ssl.issuer_dn,
+    ] {
+        clip(text, NAME_BYTES);
+    }
+    ssl
 }
 
 /// `pgstat_track_activities`.
@@ -87,6 +103,11 @@ impl Connection {
         self.activity.server = server;
     }
 
+    /// Sets the TLS of the connection, before [`Connection::greet`].
+    pub fn set_ssl(&mut self, ssl: Ssl) {
+        self.activity.ssl = Some(clipped(ssl));
+    }
+
     /// `pgstat_bestart`: puts the session in the table of its store.
     pub(super) fn join(&mut self) {
         let database = builtin::named(Named::Database)
@@ -100,6 +121,7 @@ impl Connection {
             application: application_name(self.settings.get_mut()),
             backend_start: query::now(&*self.clock),
             client: self.activity.client,
+            ssl: self.activity.ssl.clone(),
             ..Backend::default()
         };
         self.activity.number = Some(self.store.join(backend));

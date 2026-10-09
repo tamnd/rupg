@@ -1,5 +1,7 @@
 //! The subject of a client certificate, as PostgreSQL gets it from OpenSSL: the first common name, `peer_cn`, and the distinguished name in the RFC 2253 form of `X509_NAME_print_ex`, `peer_dn`. The `cert` method and `clientcert=verify-full` compare one of them with the user.
 //!
+//! The table of the sessions shows the subject and the issuer in the form of `X509_NAME_to_cstring` of PostgreSQL, and the serial number in decimal, as `BN_bn2dec` gives it. That form has `/`, the short name and `=` before each field, in the order of the certificate. A field with a type that has no short name in this module shows its type as the dotted numbers.
+//!
 //! The certificate is DER, and the TLS library already checked it, so this module only walks to the subject. The printer is a port of `do_name_ex`, `do_print_ex` and `do_buf` of OpenSSL with the flags of `XN_FLAG_RFC2253`: the fields come in reverse order, `,` separates the relative names and `+` the parts of one, a field has its short name, and a field with an unknown name or an unknown string type is `#` and the hex of its DER.
 //!
 //! Lifted from `crates/rudb-server/src/x509.rs` of tamnd/rudb at f5f7065a.
@@ -11,6 +13,17 @@ pub(crate) struct Subject {
     pub(crate) cn: Option<String>,
     /// The subject in the RFC 2253 form of OpenSSL.
     pub(crate) dn: String,
+}
+
+/// The client certificate as the table of the sessions shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct Names {
+    /// The subject in the form of `X509_NAME_to_cstring`.
+    pub(crate) subject: String,
+    /// The serial number in decimal.
+    pub(crate) serial: String,
+    /// The issuer in the form of `X509_NAME_to_cstring`.
+    pub(crate) issuer: String,
 }
 
 /// The short names of OpenSSL for the attribute types of a subject, from `objects.txt`.
@@ -164,6 +177,7 @@ const CONSTRUCTED: u8 = 0x20;
 const SEQUENCE: u32 = 16;
 const SET: u32 = 17;
 const OID: u32 = 6;
+const INTEGER: u32 = 2;
 
 /// Reads one DER element from the start of `input`, and gives the rest.
 fn tlv(input: &[u8]) -> Option<(Tlv<'_>, &[u8])> {
@@ -221,8 +235,25 @@ pub(crate) fn subject(certificate: &[u8]) -> Result<Subject, Option<&'static str
     Ok(Subject { cn, dn: distinguished_name(&fields).ok_or(None)? })
 }
 
-/// The fields of the subject, in the order of the certificate.
-fn fields(certificate: &[u8]) -> Option<Vec<Field<'_>>> {
+/// The client certificate as the table of the sessions shows it, or `None` when the certificate cannot be read.
+pub(crate) fn names(certificate: &[u8]) -> Option<Names> {
+    let parts = parts(certificate)?;
+    Some(Names {
+        subject: slashed(&fields_of(parts.subject)?),
+        serial: decimal(parts.serial.content),
+        issuer: slashed(&fields_of(parts.issuer)?),
+    })
+}
+
+/// The parts of a certificate that this module reads.
+struct Parts<'a> {
+    serial: Tlv<'a>,
+    issuer: Tlv<'a>,
+    subject: Tlv<'a>,
+}
+
+/// Walks to the serial number, the issuer and the subject of a certificate in DER.
+fn parts(certificate: &[u8]) -> Option<Parts<'_>> {
     let (certificate, _) = expect(certificate, true, SEQUENCE)?;
     let (tbs, _) = expect(certificate.content, true, SEQUENCE)?;
     let mut rest = tbs.content;
@@ -231,13 +262,25 @@ fn fields(certificate: &[u8]) -> Option<Vec<Field<'_>>> {
     if first.class == 0x80 | CONSTRUCTED && first.number == 0 {
         rest = next;
     }
-    // The serial number, the signature algorithm, the issuer and the validity.
-    for _ in 0..4 {
-        rest = tlv(rest)?.1;
-    }
+    let (serial, rest) = expect(rest, false, INTEGER)?;
+    // The signature algorithm.
+    let rest = tlv(rest)?.1;
+    let (issuer, rest) = expect(rest, true, SEQUENCE)?;
+    // The validity.
+    let rest = tlv(rest)?.1;
     let (subject, _) = expect(rest, true, SEQUENCE)?;
+    Some(Parts { serial, issuer, subject })
+}
+
+/// The fields of the subject, in the order of the certificate.
+fn fields(certificate: &[u8]) -> Option<Vec<Field<'_>>> {
+    fields_of(parts(certificate)?.subject)
+}
+
+/// The fields of a name, in the order of the certificate.
+fn fields_of(name: Tlv<'_>) -> Option<Vec<Field<'_>>> {
     let mut fields = Vec::new();
-    let mut names = subject.content;
+    let mut names = name.content;
     let mut set = 0;
     while !names.is_empty() {
         let (name, next) = expect(names, true, SET)?;
@@ -281,6 +324,62 @@ fn oid_text(oid: &[u8]) -> String {
     text
 }
 
+/// The short name of OpenSSL for a field type, or the dotted numbers.
+fn short_name(oid: &[u8]) -> String {
+    let oid = oid_text(oid);
+    NAMES.iter().find(|(dotted, _)| *dotted == oid).map_or(oid, |(_, name)| (*name).to_owned())
+}
+
+/// `X509_NAME_to_cstring` of PostgreSQL: each field as `/`, its short name, `=` and its value as `ASN1_STRING_print_ex` prints it with the flags of RFC 2253 but not `ASN1_STRFLGS_ESC_MSB`. A value that cannot be printed is dumped.
+fn slashed(fields: &[Field<'_>]) -> String {
+    let mut out = Vec::new();
+    for field in fields {
+        out.push(b'/');
+        out.extend_from_slice(short_name(field.oid).as_bytes());
+        out.push(b'=');
+        let at = out.len();
+        if value(&mut out, field.value, false).is_none() {
+            out.truncate(at);
+            dump(&mut out, field.value.whole);
+        }
+    }
+    String::from_utf8_lossy(&out).into_owned()
+}
+
+/// `BN_bn2dec` of a DER `INTEGER`, which is in two's complement.
+fn decimal(bytes: &[u8]) -> String {
+    let negative = bytes.first().is_some_and(|&byte| byte & 0x80 != 0);
+    let mut magnitude = bytes.to_vec();
+    if negative {
+        let mut carry = true;
+        for byte in magnitude.iter_mut().rev() {
+            *byte = !*byte;
+            if carry {
+                let (sum, over) = byte.overflowing_add(1);
+                *byte = sum;
+                carry = over;
+            }
+        }
+    }
+    let mut digits = Vec::new();
+    while magnitude.iter().any(|&byte| byte != 0) {
+        let mut rest = 0u16;
+        for byte in &mut magnitude {
+            let current = rest << 8 | u16::from(*byte);
+            *byte = u8::try_from(current / 10).unwrap_or(u8::MAX);
+            rest = current % 10;
+        }
+        digits.push(char::from(b'0' + u8::try_from(rest).unwrap_or(0)));
+    }
+    if digits.is_empty() {
+        digits.push('0');
+    }
+    if negative {
+        digits.push('-');
+    }
+    digits.iter().rev().collect()
+}
+
 /// `do_name_ex` with `XN_FLAG_RFC2253`.
 fn distinguished_name(fields: &[Field<'_>]) -> Option<String> {
     let mut out = Vec::new();
@@ -297,7 +396,7 @@ fn distinguished_name(fields: &[Field<'_>]) -> Option<String> {
             Some((_, name)) => {
                 out.extend_from_slice(name.as_bytes());
                 out.push(b'=');
-                value(&mut out, field.value)?;
+                value(&mut out, field.value, true)?;
             }
             None => {
                 out.extend_from_slice(oid.as_bytes());
@@ -309,8 +408,8 @@ fn distinguished_name(fields: &[Field<'_>]) -> Option<String> {
     String::from_utf8(out).ok()
 }
 
-/// `do_print_ex` with `ASN1_STRFLGS_RFC2253`: a string type is printed with escapes, and any other type is dumped.
-fn value(out: &mut Vec<u8>, value: Tlv<'_>) -> Option<()> {
+/// `do_print_ex` with `ASN1_STRFLGS_RFC2253`: a string type is printed with escapes, and any other type is dumped. `msb` is `ASN1_STRFLGS_ESC_MSB`, the escape of the bytes over 127.
+fn value(out: &mut Vec<u8>, value: Tlv<'_>, msb: bool) -> Option<()> {
     // `tag2nbyte`: the width of a character, and whether it goes through UTF-8.
     let width = match (value.class, value.number) {
         (UNIVERSAL, 12) => Some((1, false)),
@@ -320,7 +419,7 @@ fn value(out: &mut Vec<u8>, value: Tlv<'_>) -> Option<()> {
         _ => None,
     };
     match width {
-        Some((width, convert)) => string(out, value.content, width, convert),
+        Some((width, convert)) => string(out, value.content, width, convert, msb),
         None => {
             dump(out, value.whole);
             Some(())
@@ -342,7 +441,7 @@ const FIRST: u8 = 1;
 const LAST: u8 = 2;
 
 /// `do_buf`: the characters of a string of `width` bytes each, as UTF-8 when `convert` is set.
-fn string(out: &mut Vec<u8>, bytes: &[u8], width: usize, convert: bool) -> Option<()> {
+fn string(out: &mut Vec<u8>, bytes: &[u8], width: usize, convert: bool, msb: bool) -> Option<()> {
     if !bytes.len().is_multiple_of(width) {
         return None;
     }
@@ -359,17 +458,17 @@ fn string(out: &mut Vec<u8>, bytes: &[u8], width: usize, convert: bool) -> Optio
         if convert {
             let mut buf = [0u8; 4];
             for &byte in char::from_u32(c)?.encode_utf8(&mut buf).as_bytes() {
-                escape(out, byte, edge);
+                escape(out, byte, edge, msb);
             }
         } else {
-            escape(out, u8::try_from(c).ok()?, edge);
+            escape(out, u8::try_from(c).ok()?, edge, msb);
         }
     }
     Some(())
 }
 
-/// `do_esc_char` with the escapes of RFC 2253, of control characters and of bytes over 127.
-fn escape(out: &mut Vec<u8>, c: u8, edge: u8) {
+/// `do_esc_char` with the escapes of RFC 2253, of control characters, and of bytes over 127 when `msb` is set.
+fn escape(out: &mut Vec<u8>, c: u8, edge: u8, msb: bool) {
     let backslash = match c {
         b'"' | b'+' | b',' | b';' | b'<' | b'>' | b'\\' => true,
         b' ' => edge != 0,
@@ -378,7 +477,7 @@ fn escape(out: &mut Vec<u8>, c: u8, edge: u8) {
     };
     if backslash {
         out.extend_from_slice(&[b'\\', c]);
-    } else if !(0x20..0x7f).contains(&c) {
+    } else if c < 0x20 || c == 0x7f || (c > 0x7f && msb) {
         out.extend_from_slice(format!("\\{c:02X}").as_bytes());
     } else {
         out.push(c);
@@ -482,5 +581,15 @@ mod tests {
         let other = certificate(&[&[(O, 0x0c, b"x")]]);
         assert_eq!(subject(&other), Ok(Subject { cn: None, dn: "O=x".to_owned() }));
         assert_eq!(subject(&[0x30, 0x03, 0x30]), Err(None));
+    }
+
+    #[test]
+    fn the_serial_in_decimal() {
+        assert_eq!(decimal(&[0x00]), "0");
+        assert_eq!(decimal(&[0x01, 0x00]), "256");
+        assert_eq!(decimal(&[0x00, 0xff]), "255");
+        assert_eq!(decimal(&[0xff]), "-1");
+        assert_eq!(decimal(&[0x80]), "-128");
+        assert_eq!(decimal(&[0xfe, 0xe0, 0x8e, 0x04, 0xfb, 0x35]), "-1234567890123");
     }
 }

@@ -7,7 +7,7 @@
 use std::net::SocketAddr;
 
 use rupg_common::Result;
-use rupg_types::{Value, inet_in};
+use rupg_types::{Value, inet_in, numeric_in};
 
 use crate::{Call, Kernel, Session, acl, bad_value, type_error};
 
@@ -88,6 +88,23 @@ impl Client {
     }
 }
 
+/// The TLS of a session, `PgBackendSSLStatus`. An empty text of the client certificate is null, as for a session with no client certificate.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Ssl {
+    /// The protocol, as `SSL_get_version` gives it, for example `TLSv1.3`.
+    pub version: String,
+    /// The cipher suite, by its name in OpenSSL.
+    pub cipher: String,
+    /// The bits of the key of the cipher.
+    pub bits: i32,
+    /// The subject of the client certificate, in the form of `X509_NAME_to_cstring`.
+    pub client_dn: String,
+    /// The serial number of the client certificate, in decimal.
+    pub client_serial: String,
+    /// The issuer of the client certificate, in the form of `X509_NAME_to_cstring`.
+    pub issuer_dn: String,
+}
+
 /// A row of the table of the sessions, `PgBackendStatus`.
 #[derive(Clone, Debug, Default)]
 pub struct Backend {
@@ -110,6 +127,8 @@ pub struct Backend {
     /// True when the session waits for a message of the client, the wait event `ClientRead`.
     pub reading: bool,
     pub client: Client,
+    /// The TLS of the session, or `None` for a session with no TLS.
+    pub ssl: Option<Ssl>,
 }
 
 /// `HAS_PGSTAT_PERMISSIONS`: the current user has the privileges of `pg_read_all_stats` or of the role of the session.
@@ -125,6 +144,11 @@ fn time(at: Option<i64>) -> Value {
 /// A text value, or null.
 fn text(value: Option<&str>) -> Value {
     value.map_or(Value::Null, Value::text)
+}
+
+/// A text of the TLS status that is null when it is empty.
+fn filled(value: &str) -> Value {
+    if value.is_empty() { Value::Null } else { Value::text(value) }
 }
 
 /// An OID that is null when it is 0.
@@ -160,7 +184,17 @@ fn activity_row(session: &dyn Session, backend: &Backend) -> Result<Vec<Value>> 
     row[12] = backend.client.addr()?;
     row[14] = backend.client.shown_port();
     row[17] = Value::text(CLIENT_BACKEND);
-    row[18] = Value::Bool(false);
+    row[18] = Value::Bool(backend.ssl.is_some());
+    if let Some(ssl) = &backend.ssl {
+        row[19] = Value::text(&ssl.version);
+        row[20] = Value::text(&ssl.cipher);
+        row[21] = Value::Int4(ssl.bits);
+        row[22] = filled(&ssl.client_dn);
+        if !ssl.client_serial.is_empty() {
+            row[23] = Value::Numeric(numeric_in(&ssl.client_serial, -1).map_err(type_error)?);
+        }
+        row[24] = filled(&ssl.issuer_dn);
+    }
     row[25] = Value::Bool(false);
     row[27] = Value::Bool(false);
     row[28] = Value::Bool(false);

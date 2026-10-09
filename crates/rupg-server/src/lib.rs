@@ -30,7 +30,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
-use rupg_session::connection::{self, Client, Connection, Next, Start};
+use rupg_session::connection::{self, Client, Connection, Next, Ssl, Start};
 use rupg_session::guc::Settings;
 use rupg_session::store::Store;
 use rupg_wire::{
@@ -463,13 +463,15 @@ fn accept(
     }
 }
 
-/// What the authentication needs to know of a TLS connection.
+/// What the authentication and the table of the sessions need to know of a TLS connection.
 #[derive(Debug)]
 struct Secured {
     /// The hash of the certificate of the server for SCRAM with channel binding.
     hash: Vec<u8>,
     /// The subject of the client certificate, which the TLS library checked against `ssl_ca_file`.
     peer: Option<Subject>,
+    /// The TLS status that `pg_stat_ssl` shows.
+    status: Ssl,
 }
 
 /// The bytes that a connection read and did not use yet, and the output that waits.
@@ -764,6 +766,9 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
     connection.set_store(Arc::clone(&shared.store));
     let client = address(wire, &wire.stream.peer_addr());
     connection.set_addresses(client, address(wire, &wire.stream.local_addr()));
+    if let Some(secured) = &wire.secured {
+        connection.set_ssl(secured.status.clone());
+    }
     let (_registered, key) = register(shared, protocol, connection.cancel_flag());
     connection.greet(&key, &mut wire.out);
     loop {
