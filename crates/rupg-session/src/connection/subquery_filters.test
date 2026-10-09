@@ -1,0 +1,82 @@
+> SELECT g FROM (SELECT relname AS g, relnatts AS n FROM pg_class WHERE relname = (SELECT 'pg_class'::name)) s WHERE g IN (SELECT 'pg_type'::name)
+fields g@pg_class.2:19:64:-1
+SELECT 0
+> SELECT g FROM (SELECT relname AS g, relnatts AS n FROM pg_class WHERE relname = (SELECT 'pg_class'::name)) s WHERE n IN (SELECT 33::int2)
+fields g@pg_class.2:19:64:-1
+SELECT 0
+> SELECT g FROM (SELECT relname AS g FROM pg_class WHERE relname IN ('pg_class', 'pg_type') AND (SELECT true)) s WHERE g = (SELECT 'pg_type'::name)
+fields g@pg_class.2:19:64:-1
+row pg_type
+SELECT 1
+> SELECT g FROM (SELECT relname AS g FROM pg_class WHERE relname IN ('pg_class', 'pg_type', 'pg_proc') AND (SELECT true)) s WHERE g = ANY (SELECT 'pg_type'::name UNION ALL SELECT 'pg_proc') ORDER BY g
+fields g@pg_class.2:19:64:-1
+row pg_proc
+row pg_type
+SELECT 2
+> SELECT a.relname, b.typname FROM pg_class a JOIN pg_type b ON b.typrelid = a.oid AND b.typname = (SELECT 'pg_proc'::name) WHERE a.relname = (SELECT 'pg_proc'::name) AND a.relnatts > (SELECT 1)
+fields relname@pg_class.2:19:64:-1,typname@pg_type.2:19:64:-1
+row pg_proc,pg_proc
+SELECT 1
+> SELECT count(*) FROM (SELECT relname FROM pg_class WHERE relkind = (SELECT 'v'::"char")) s WHERE relname IN (SELECT 'pg_roles'::name UNION ALL SELECT 'pg_user')
+fields count:20:8:-1
+row 2
+SELECT 1
+> CREATE TABLE kc1 (a int, b text, c int, PRIMARY KEY (a, b), UNIQUE (c))
+CREATE TABLE
+> CREATE TABLE kc2 (x int, y text, z int REFERENCES kc1 (c), FOREIGN KEY (x, y) REFERENCES kc1)
+CREATE TABLE
+> SELECT constraint_schema, constraint_name, table_schema, table_name, column_name, ordinal_position, position_in_unique_constraint FROM information_schema.key_column_usage WHERE table_name IN ('kc1', 'kc2') ORDER BY table_name, constraint_name, ordinal_position
+fields constraint_schema@information_schema.key_column_usage.2:19:64:-1,constraint_name@information_schema.key_column_usage.3:19:64:-1,table_schema@information_schema.key_column_usage.5:19:64:-1,table_name@information_schema.key_column_usage.6:19:64:-1,column_name@information_schema.key_column_usage.7:19:64:-1,ordinal_position@information_schema.key_column_usage.8:23:4:-1,position_in_unique_constraint@information_schema.key_column_usage.9:23:4:-1
+row public,kc1_c_key,public,kc1,c,1,NULL
+row public,kc1_pkey,public,kc1,a,1,NULL
+row public,kc1_pkey,public,kc1,b,2,NULL
+row public,kc2_x_y_fkey,public,kc2,x,1,1
+row public,kc2_x_y_fkey,public,kc2,y,2,2
+row public,kc2_z_fkey,public,kc2,z,1,1
+SELECT 6
+> SELECT table_schema, table_name, column_name, constraint_schema, constraint_name FROM information_schema.constraint_column_usage WHERE table_name IN ('kc1', 'kc2') ORDER BY constraint_name, column_name
+fields table_schema@information_schema.constraint_column_usage.2:19:64:-1,table_name@information_schema.constraint_column_usage.3:19:64:-1,column_name@information_schema.constraint_column_usage.4:19:64:-1,constraint_schema@information_schema.constraint_column_usage.6:19:64:-1,constraint_name@information_schema.constraint_column_usage.7:19:64:-1
+row public,kc1,a,public,kc1_a_not_null
+row public,kc1,b,public,kc1_b_not_null
+row public,kc1,c,public,kc1_c_key
+row public,kc1,a,public,kc1_pkey
+row public,kc1,b,public,kc1_pkey
+row public,kc1,a,public,kc2_x_y_fkey
+row public,kc1,b,public,kc2_x_y_fkey
+row public,kc1,c,public,kc2_z_fkey
+SELECT 8
+> SELECT grantor, grantee, object_schema, object_name, object_type, privilege_type, is_grantable FROM information_schema.role_usage_grants WHERE object_schema = 'information_schema' ORDER BY object_name, grantee
+fields grantor@information_schema.role_usage_grants.1:19:64:-1,grantee@information_schema.role_usage_grants.2:19:64:-1,object_schema@information_schema.role_usage_grants.4:19:64:-1,object_name@information_schema.role_usage_grants.5:19:64:-1,object_type@information_schema.role_usage_grants.6:1043:-1:-1,privilege_type@information_schema.role_usage_grants.7:1043:-1:-1,is_grantable@information_schema.role_usage_grants.8:1043:-1:7
+row postgres,PUBLIC,information_schema,cardinal_number,DOMAIN,USAGE,NO
+row postgres,postgres,information_schema,cardinal_number,DOMAIN,USAGE,YES
+row postgres,PUBLIC,information_schema,character_data,DOMAIN,USAGE,NO
+row postgres,postgres,information_schema,character_data,DOMAIN,USAGE,YES
+row postgres,PUBLIC,information_schema,sql_identifier,DOMAIN,USAGE,NO
+row postgres,postgres,information_schema,sql_identifier,DOMAIN,USAGE,YES
+row postgres,PUBLIC,information_schema,time_stamp,DOMAIN,USAGE,NO
+row postgres,postgres,information_schema,time_stamp,DOMAIN,USAGE,YES
+row postgres,PUBLIC,information_schema,yes_or_no,DOMAIN,USAGE,NO
+row postgres,postgres,information_schema,yes_or_no,DOMAIN,USAGE,YES
+SELECT 10
+> SELECT count(*) FROM information_schema.role_usage_grants WHERE object_type = 'COLLATION' AND object_name IN ('C', 'POSIX', 'default')
+fields count:20:8:-1
+row 3
+SELECT 1
+> SELECT conname, conkey[1] > 0 AS k, conkey[1] + 0 AS n FROM pg_constraint WHERE conname IN ('pg_class_oid_index', 'pg_class_relname_nsp_index') ORDER BY 1
+fields conname@pg_constraint.2:19:64:-1,k:16:1:-1,n:23:4:-1
+row pg_class_oid_index,t,1
+row pg_class_relname_nsp_index,t,2
+SELECT 2
+> SELECT constraint_name, column_name, ordinal_position FROM information_schema.key_column_usage WHERE table_schema = 'pg_catalog' AND table_name = 'pg_class' ORDER BY 1, 3
+fields constraint_name@information_schema.key_column_usage.3:19:64:-1,column_name@information_schema.key_column_usage.7:19:64:-1,ordinal_position@information_schema.key_column_usage.8:23:4:-1
+row pg_class_oid_index,oid,1
+row pg_class_relname_nsp_index,relname,1
+row pg_class_relname_nsp_index,relnamespace,2
+SELECT 3
+> SELECT column_name, constraint_name FROM information_schema.constraint_column_usage WHERE table_schema = 'pg_catalog' AND table_name = 'pg_type' ORDER BY 2, 1
+fields column_name@information_schema.constraint_column_usage.4:19:64:-1,constraint_name@information_schema.constraint_column_usage.7:19:64:-1
+row oid,pg_type_oid_index
+row oid,pg_type_oid_not_null
+row typname,pg_type_typname_nsp_index
+row typnamespace,pg_type_typname_nsp_index
+SELECT 4
