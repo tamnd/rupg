@@ -67,3 +67,5 @@ pub(crate) mod pg_ts_parser;
 pub(crate) mod pg_ts_template;
 #[rustfmt::skip]
 pub(crate) mod pg_type;
+#[rustfmt::skip]
+pub(crate) mod system_views;

@@ -64,6 +64,10 @@ pub trait Env {
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
     }
+    /// The `allow_system_table_mods` setting, which lets a statement make a relation in a system schema. `initdb` turns it on.
+    fn allow_system_table_mods(&self) -> bool {
+        false
+    }
 }
 
 /// The parameters of a statement.

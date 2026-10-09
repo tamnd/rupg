@@ -82,6 +82,13 @@ fn oid_array(values: &[u32]) -> Value {
     Value::Array(Box::new(Array::one(values.iter().map(|&v| Some(Value::Oid(v))).collect())))
 }
 
+/// A `text[]` or an `aclitem[]` of the texts.
+fn text_array(values: &[String]) -> Value {
+    Value::Array(Box::new(Array::one(
+        values.iter().map(|v| Some(Value::text(v.clone()))).collect(),
+    )))
+}
+
 /// An `int2vector`.
 fn int2_vector(values: &[i16]) -> Value {
     Value::Array(Box::new(Array::vector(values.iter().map(|&v| Some(Value::Int2(v))).collect())))
@@ -184,7 +191,12 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("relispartition", Value::Bool(false))
                 .set("relrewrite", oid(0))
                 .set("relfrozenxid", oid(if heap { FIRST_NORMAL_XID } else { 0 }))
-                .set("relminmxid", oid(u32::from(heap)));
+                .set("relminmxid", oid(u32::from(heap)))
+                .set("relacl", rel.acl.as_deref().map_or(Value::Null, text_array))
+                .set(
+                    "reloptions",
+                    if rel.options.is_empty() { Value::Null } else { text_array(&rel.options) },
+                );
             row
         })
         .collect()

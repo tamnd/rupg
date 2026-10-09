@@ -20,19 +20,26 @@ pub struct Store {
     tasks: Option<Arc<dyn Tasks>>,
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug)]
 struct State {
     committed: Arc<Catalog>,
     locked: bool,
 }
 
+impl Default for State {
+    /// The catalog of a new cluster, with the system views.
+    fn default() -> State {
+        State { committed: crate::system::catalog(), locked: false }
+    }
+}
+
 impl Store {
-    /// A store with an empty catalog.
+    /// A store with the catalog of a new cluster.
     pub fn new() -> Store {
         Store::default()
     }
 
-    /// A store with an empty catalog for the sessions that run as `tasks`.
+    /// A store with the catalog of a new cluster for the sessions that run as `tasks`.
     pub fn with_tasks(tasks: Arc<dyn Tasks>) -> Store {
         Store { tasks: Some(tasks), ..Store::default() }
     }

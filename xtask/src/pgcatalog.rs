@@ -307,7 +307,8 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
     proc_arg_defaults(&catalogs, &mut rows_out)?;
     operator_descriptions(&catalogs, &mut rows_out)?;
     let src = include.parent().ok_or("the include directory has no parent")?;
-    initdb_privileges(&catalogs, &read(&src.join(SYSTEM_VIEWS))?, &mut rows_out)?;
+    let system_views = read(&src.join(SYSTEM_VIEWS))?;
+    initdb_privileges(&catalogs, &system_views, &mut rows_out)?;
 
     let mut files = Vec::new();
     files.push((
@@ -319,6 +320,7 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
             files.push((format!("{}.rs", catalog.name), rows_file(catalog, rows)?));
         }
     }
+    files.push(("system_views.rs".to_string(), system_views_file(&system_views)));
     files.push(("mod.rs".to_string(), mod_file(&catalogs, &rows_out)));
     Ok(files)
 }
@@ -2015,11 +2017,23 @@ fn mod_file(catalogs: &[Catalog], rows: &BTreeMap<String, Vec<Vec<Option<String>
     let mut names: Vec<&str> =
         catalogs.iter().filter(|c| rows.contains_key(&c.name)).map(|c| c.name.as_str()).collect();
     names.push("catalogs");
+    names.push("system_views");
     names.sort_unstable();
     for name in names {
         writeln!(out, "#[rustfmt::skip]\npub(crate) mod {name};").unwrap();
     }
     out
+}
+
+/// The file with the text of `system_views.sql`, from which the session makes the system views. The text is a raw string with enough `#` marks that no quote in the text ends it.
+fn system_views_file(text: &str) -> String {
+    let mut marks = String::from("#");
+    while text.contains(&format!("\"{marks}")) {
+        marks.push('#');
+    }
+    format!(
+        "//! The script `system_views.sql` that `initdb` runs after the bootstrap.\n//!\n//! `cargo xtask pgcatalog` makes this file from `vendor/postgres-19/src/backend/catalog/system_views.sql`. Do not edit it.\n\n/// The text of the script.\npub(crate) static TEXT: &str = r{marks}\"{text}\"{marks};\n"
+    )
 }
 
 /// Writes items with a comma after each, up to 100 columns on each line.

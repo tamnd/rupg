@@ -1,0 +1,1204 @@
+> SELECT relname, relkind, relnatts, relhasrules, relpersistence, relowner = 10, reltype::regtype, reloptions, relacl FROM pg_class WHERE relnamespace = 'pg_catalog'::regnamespace AND relkind = 'v' AND relname <> 'pg_stats_ext_exprs' ORDER BY relname
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relnatts@pg_class.19:21:2:-1,relhasrules@pg_class.21:16:1:-1,relpersistence@pg_class.17:18:1:-1,?column?:16:1:-1,reltype:2206:4:-1,reloptions@pg_class.33:1009:-1:-1,relacl@pg_class.32:1034:-1:-1
+row pg_aios,v,15,t,p,t,pg_aios,NULL,{postgres=arwdDxtm/postgres,pg_read_all_stats=r/postgres}
+row pg_available_extension_versions,v,10,t,p,t,pg_available_extension_versions,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_available_extensions,v,5,t,p,t,pg_available_extensions,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_backend_memory_contexts,v,10,t,p,t,pg_backend_memory_contexts,NULL,{postgres=arwdDxtm/postgres,pg_read_all_stats=r/postgres}
+row pg_config,v,2,t,p,t,pg_config,NULL,{postgres=arwdDxtm/postgres}
+row pg_cursors,v,6,t,p,t,pg_cursors,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_dsm_registry_allocations,v,3,t,p,t,pg_dsm_registry_allocations,NULL,{postgres=arwdDxtm/postgres,pg_read_all_stats=r/postgres}
+row pg_file_settings,v,7,t,p,t,pg_file_settings,NULL,{postgres=arwdDxtm/postgres}
+row pg_group,v,3,t,p,t,pg_group,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_hba_file_rules,v,11,t,p,t,pg_hba_file_rules,NULL,{postgres=arwdDxtm/postgres}
+row pg_ident_file_mappings,v,7,t,p,t,pg_ident_file_mappings,NULL,{postgres=arwdDxtm/postgres}
+row pg_indexes,v,5,t,p,t,pg_indexes,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_locks,v,16,t,p,t,pg_locks,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_matviews,v,7,t,p,t,pg_matviews,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_policies,v,8,t,p,t,pg_policies,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_prepared_statements,v,8,t,p,t,pg_prepared_statements,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_prepared_xacts,v,5,t,p,t,pg_prepared_xacts,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_publication_sequences,v,3,t,p,t,pg_publication_sequences,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_publication_tables,v,5,t,p,t,pg_publication_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_replication_origin_status,v,4,t,p,t,pg_replication_origin_status,NULL,{postgres=arwdDxtm/postgres}
+row pg_replication_slots,v,22,t,p,t,pg_replication_slots,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_roles,v,13,t,p,t,pg_roles,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_rules,v,4,t,p,t,pg_rules,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_seclabels,v,8,t,p,t,pg_seclabels,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_sequences,v,11,t,p,t,pg_sequences,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_settings,v,17,t,p,t,pg_settings,NULL,{postgres=arwdDxtm/postgres,=rw/postgres}
+row pg_shadow,v,9,t,p,t,pg_shadow,NULL,{postgres=arwdDxtm/postgres}
+row pg_shmem_allocations,v,4,t,p,t,pg_shmem_allocations,NULL,{postgres=arwdDxtm/postgres,pg_read_all_stats=r/postgres}
+row pg_shmem_allocations_numa,v,3,t,p,t,pg_shmem_allocations_numa,NULL,{postgres=arwdDxtm/postgres,pg_read_all_stats=r/postgres}
+row pg_stat_activity,v,22,t,p,t,pg_stat_activity,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_all_indexes,v,10,t,p,t,pg_stat_all_indexes,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_all_tables,v,31,t,p,t,pg_stat_all_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_archiver,v,7,t,p,t,pg_stat_archiver,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_autovacuum_scores,v,12,t,p,t,pg_stat_autovacuum_scores,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_bgwriter,v,4,t,p,t,pg_stat_bgwriter,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_checkpointer,v,11,t,p,t,pg_stat_checkpointer,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_database,v,30,t,p,t,pg_stat_database,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_database_conflicts,v,9,t,p,t,pg_stat_database_conflicts,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_gssapi,v,5,t,p,t,pg_stat_gssapi,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_io,v,20,t,p,t,pg_stat_io,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_lock,v,5,t,p,t,pg_stat_lock,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_progress_analyze,v,14,t,p,t,pg_stat_progress_analyze,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_progress_basebackup,v,7,t,p,t,pg_stat_progress_basebackup,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_progress_cluster,v,12,t,p,t,pg_stat_progress_cluster,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_progress_copy,v,11,t,p,t,pg_stat_progress_copy,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_progress_create_index,v,16,t,p,t,pg_stat_progress_create_index,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_progress_repack,v,14,t,p,t,pg_stat_progress_repack,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_progress_vacuum,v,17,t,p,t,pg_stat_progress_vacuum,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_recovery,v,9,t,p,t,pg_stat_recovery,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_recovery_prefetch,v,10,t,p,t,pg_stat_recovery_prefetch,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_replication,v,20,t,p,t,pg_stat_replication,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_replication_slots,v,13,t,p,t,pg_stat_replication_slots,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_slru,v,9,t,p,t,pg_stat_slru,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_ssl,v,8,t,p,t,pg_stat_ssl,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_subscription,v,11,t,p,t,pg_stat_subscription,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_subscription_stats,v,14,t,p,t,pg_stat_subscription_stats,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_sys_indexes,v,10,t,p,t,pg_stat_sys_indexes,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_sys_tables,v,31,t,p,t,pg_stat_sys_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_user_functions,v,7,t,p,t,pg_stat_user_functions,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_user_indexes,v,10,t,p,t,pg_stat_user_indexes,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_user_tables,v,31,t,p,t,pg_stat_user_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_wal,v,6,t,p,t,pg_stat_wal,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_wal_receiver,v,15,t,p,t,pg_stat_wal_receiver,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_xact_all_tables,v,12,t,p,t,pg_stat_xact_all_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_xact_sys_tables,v,12,t,p,t,pg_stat_xact_sys_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_xact_user_functions,v,6,t,p,t,pg_stat_xact_user_functions,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stat_xact_user_tables,v,12,t,p,t,pg_stat_xact_user_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_all_indexes,v,8,t,p,t,pg_statio_all_indexes,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_all_sequences,v,6,t,p,t,pg_statio_all_sequences,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_all_tables,v,12,t,p,t,pg_statio_all_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_sys_indexes,v,8,t,p,t,pg_statio_sys_indexes,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_sys_sequences,v,6,t,p,t,pg_statio_sys_sequences,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_sys_tables,v,12,t,p,t,pg_statio_sys_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_user_indexes,v,8,t,p,t,pg_statio_user_indexes,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_user_sequences,v,6,t,p,t,pg_statio_user_sequences,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_statio_user_tables,v,12,t,p,t,pg_statio_user_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stats,v,19,t,p,t,pg_stats,{security_barrier=true},{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_stats_ext,v,17,t,p,t,pg_stats_ext,{security_barrier=true},{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_tables,v,8,t,p,t,pg_tables,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_timezone_abbrevs,v,3,t,p,t,pg_timezone_abbrevs,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_timezone_names,v,4,t,p,t,pg_timezone_names,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_user,v,9,t,p,t,pg_user,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_user_mappings,v,6,t,p,t,pg_user_mappings,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_views,v,4,t,p,t,pg_views,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+row pg_wait_events,v,3,t,p,t,pg_wait_events,NULL,{postgres=arwdDxtm/postgres,=r/postgres}
+SELECT 85
+> SELECT t.typname, t.typtype, t.typcategory, t.typarray::regtype, t.typnamespace::regnamespace FROM pg_type t, pg_class c WHERE t.typrelid = c.oid AND c.relnamespace = 'pg_catalog'::regnamespace AND c.relkind = 'v' AND c.relname <> 'pg_stats_ext_exprs' ORDER BY t.typname
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typcategory@pg_type.8:18:1:-1,typarray:2206:4:-1,typnamespace:4089:4:-1
+row pg_aios,c,C,pg_aios[],pg_catalog
+row pg_available_extension_versions,c,C,pg_available_extension_versions[],pg_catalog
+row pg_available_extensions,c,C,pg_available_extensions[],pg_catalog
+row pg_backend_memory_contexts,c,C,pg_backend_memory_contexts[],pg_catalog
+row pg_config,c,C,pg_config[],pg_catalog
+row pg_cursors,c,C,pg_cursors[],pg_catalog
+row pg_dsm_registry_allocations,c,C,pg_dsm_registry_allocations[],pg_catalog
+row pg_file_settings,c,C,pg_file_settings[],pg_catalog
+row pg_group,c,C,pg_group[],pg_catalog
+row pg_hba_file_rules,c,C,pg_hba_file_rules[],pg_catalog
+row pg_ident_file_mappings,c,C,pg_ident_file_mappings[],pg_catalog
+row pg_indexes,c,C,pg_indexes[],pg_catalog
+row pg_locks,c,C,pg_locks[],pg_catalog
+row pg_matviews,c,C,pg_matviews[],pg_catalog
+row pg_policies,c,C,pg_policies[],pg_catalog
+row pg_prepared_statements,c,C,pg_prepared_statements[],pg_catalog
+row pg_prepared_xacts,c,C,pg_prepared_xacts[],pg_catalog
+row pg_publication_sequences,c,C,pg_publication_sequences[],pg_catalog
+row pg_publication_tables,c,C,pg_publication_tables[],pg_catalog
+row pg_replication_origin_status,c,C,pg_replication_origin_status[],pg_catalog
+row pg_replication_slots,c,C,pg_replication_slots[],pg_catalog
+row pg_roles,c,C,pg_roles[],pg_catalog
+row pg_rules,c,C,pg_rules[],pg_catalog
+row pg_seclabels,c,C,pg_seclabels[],pg_catalog
+row pg_sequences,c,C,pg_sequences[],pg_catalog
+row pg_settings,c,C,pg_settings[],pg_catalog
+row pg_shadow,c,C,pg_shadow[],pg_catalog
+row pg_shmem_allocations,c,C,pg_shmem_allocations[],pg_catalog
+row pg_shmem_allocations_numa,c,C,pg_shmem_allocations_numa[],pg_catalog
+row pg_stat_activity,c,C,pg_stat_activity[],pg_catalog
+row pg_stat_all_indexes,c,C,pg_stat_all_indexes[],pg_catalog
+row pg_stat_all_tables,c,C,pg_stat_all_tables[],pg_catalog
+row pg_stat_archiver,c,C,pg_stat_archiver[],pg_catalog
+row pg_stat_autovacuum_scores,c,C,pg_stat_autovacuum_scores[],pg_catalog
+row pg_stat_bgwriter,c,C,pg_stat_bgwriter[],pg_catalog
+row pg_stat_checkpointer,c,C,pg_stat_checkpointer[],pg_catalog
+row pg_stat_database,c,C,pg_stat_database[],pg_catalog
+row pg_stat_database_conflicts,c,C,pg_stat_database_conflicts[],pg_catalog
+row pg_stat_gssapi,c,C,pg_stat_gssapi[],pg_catalog
+row pg_stat_io,c,C,pg_stat_io[],pg_catalog
+row pg_stat_lock,c,C,pg_stat_lock[],pg_catalog
+row pg_stat_progress_analyze,c,C,pg_stat_progress_analyze[],pg_catalog
+row pg_stat_progress_basebackup,c,C,pg_stat_progress_basebackup[],pg_catalog
+row pg_stat_progress_cluster,c,C,pg_stat_progress_cluster[],pg_catalog
+row pg_stat_progress_copy,c,C,pg_stat_progress_copy[],pg_catalog
+row pg_stat_progress_create_index,c,C,pg_stat_progress_create_index[],pg_catalog
+row pg_stat_progress_repack,c,C,pg_stat_progress_repack[],pg_catalog
+row pg_stat_progress_vacuum,c,C,pg_stat_progress_vacuum[],pg_catalog
+row pg_stat_recovery,c,C,pg_stat_recovery[],pg_catalog
+row pg_stat_recovery_prefetch,c,C,pg_stat_recovery_prefetch[],pg_catalog
+row pg_stat_replication,c,C,pg_stat_replication[],pg_catalog
+row pg_stat_replication_slots,c,C,pg_stat_replication_slots[],pg_catalog
+row pg_stat_slru,c,C,pg_stat_slru[],pg_catalog
+row pg_stat_ssl,c,C,pg_stat_ssl[],pg_catalog
+row pg_stat_subscription,c,C,pg_stat_subscription[],pg_catalog
+row pg_stat_subscription_stats,c,C,pg_stat_subscription_stats[],pg_catalog
+row pg_stat_sys_indexes,c,C,pg_stat_sys_indexes[],pg_catalog
+row pg_stat_sys_tables,c,C,pg_stat_sys_tables[],pg_catalog
+row pg_stat_user_functions,c,C,pg_stat_user_functions[],pg_catalog
+row pg_stat_user_indexes,c,C,pg_stat_user_indexes[],pg_catalog
+row pg_stat_user_tables,c,C,pg_stat_user_tables[],pg_catalog
+row pg_stat_wal,c,C,pg_stat_wal[],pg_catalog
+row pg_stat_wal_receiver,c,C,pg_stat_wal_receiver[],pg_catalog
+row pg_stat_xact_all_tables,c,C,pg_stat_xact_all_tables[],pg_catalog
+row pg_stat_xact_sys_tables,c,C,pg_stat_xact_sys_tables[],pg_catalog
+row pg_stat_xact_user_functions,c,C,pg_stat_xact_user_functions[],pg_catalog
+row pg_stat_xact_user_tables,c,C,pg_stat_xact_user_tables[],pg_catalog
+row pg_statio_all_indexes,c,C,pg_statio_all_indexes[],pg_catalog
+row pg_statio_all_sequences,c,C,pg_statio_all_sequences[],pg_catalog
+row pg_statio_all_tables,c,C,pg_statio_all_tables[],pg_catalog
+row pg_statio_sys_indexes,c,C,pg_statio_sys_indexes[],pg_catalog
+row pg_statio_sys_sequences,c,C,pg_statio_sys_sequences[],pg_catalog
+row pg_statio_sys_tables,c,C,pg_statio_sys_tables[],pg_catalog
+row pg_statio_user_indexes,c,C,pg_statio_user_indexes[],pg_catalog
+row pg_statio_user_sequences,c,C,pg_statio_user_sequences[],pg_catalog
+row pg_statio_user_tables,c,C,pg_statio_user_tables[],pg_catalog
+row pg_stats,c,C,pg_stats[],pg_catalog
+row pg_stats_ext,c,C,pg_stats_ext[],pg_catalog
+row pg_tables,c,C,pg_tables[],pg_catalog
+row pg_timezone_abbrevs,c,C,pg_timezone_abbrevs[],pg_catalog
+row pg_timezone_names,c,C,pg_timezone_names[],pg_catalog
+row pg_user,c,C,pg_user[],pg_catalog
+row pg_user_mappings,c,C,pg_user_mappings[],pg_catalog
+row pg_views,c,C,pg_views[],pg_catalog
+row pg_wait_events,c,C,pg_wait_events[],pg_catalog
+SELECT 85
+> SELECT r.rulename, r.ev_class::regclass, r.ev_type, r.is_instead, r.ev_enabled FROM pg_rewrite r, pg_class c WHERE r.ev_class = c.oid AND c.relnamespace = 'pg_catalog'::regnamespace AND c.relkind = 'v' AND c.relname <> 'pg_stats_ext_exprs' AND r.rulename = '_RETURN' ORDER BY c.relname
+fields rulename@pg_rewrite.2:19:64:-1,ev_class:2205:4:-1,ev_type@pg_rewrite.4:18:1:-1,is_instead@pg_rewrite.6:16:1:-1,ev_enabled@pg_rewrite.5:18:1:-1
+row _RETURN,pg_aios,1,t,O
+row _RETURN,pg_available_extension_versions,1,t,O
+row _RETURN,pg_available_extensions,1,t,O
+row _RETURN,pg_backend_memory_contexts,1,t,O
+row _RETURN,pg_config,1,t,O
+row _RETURN,pg_cursors,1,t,O
+row _RETURN,pg_dsm_registry_allocations,1,t,O
+row _RETURN,pg_file_settings,1,t,O
+row _RETURN,pg_group,1,t,O
+row _RETURN,pg_hba_file_rules,1,t,O
+row _RETURN,pg_ident_file_mappings,1,t,O
+row _RETURN,pg_indexes,1,t,O
+row _RETURN,pg_locks,1,t,O
+row _RETURN,pg_matviews,1,t,O
+row _RETURN,pg_policies,1,t,O
+row _RETURN,pg_prepared_statements,1,t,O
+row _RETURN,pg_prepared_xacts,1,t,O
+row _RETURN,pg_publication_sequences,1,t,O
+row _RETURN,pg_publication_tables,1,t,O
+row _RETURN,pg_replication_origin_status,1,t,O
+row _RETURN,pg_replication_slots,1,t,O
+row _RETURN,pg_roles,1,t,O
+row _RETURN,pg_rules,1,t,O
+row _RETURN,pg_seclabels,1,t,O
+row _RETURN,pg_sequences,1,t,O
+row _RETURN,pg_settings,1,t,O
+row _RETURN,pg_shadow,1,t,O
+row _RETURN,pg_shmem_allocations,1,t,O
+row _RETURN,pg_shmem_allocations_numa,1,t,O
+row _RETURN,pg_stat_activity,1,t,O
+row _RETURN,pg_stat_all_indexes,1,t,O
+row _RETURN,pg_stat_all_tables,1,t,O
+row _RETURN,pg_stat_archiver,1,t,O
+row _RETURN,pg_stat_autovacuum_scores,1,t,O
+row _RETURN,pg_stat_bgwriter,1,t,O
+row _RETURN,pg_stat_checkpointer,1,t,O
+row _RETURN,pg_stat_database,1,t,O
+row _RETURN,pg_stat_database_conflicts,1,t,O
+row _RETURN,pg_stat_gssapi,1,t,O
+row _RETURN,pg_stat_io,1,t,O
+row _RETURN,pg_stat_lock,1,t,O
+row _RETURN,pg_stat_progress_analyze,1,t,O
+row _RETURN,pg_stat_progress_basebackup,1,t,O
+row _RETURN,pg_stat_progress_cluster,1,t,O
+row _RETURN,pg_stat_progress_copy,1,t,O
+row _RETURN,pg_stat_progress_create_index,1,t,O
+row _RETURN,pg_stat_progress_repack,1,t,O
+row _RETURN,pg_stat_progress_vacuum,1,t,O
+row _RETURN,pg_stat_recovery,1,t,O
+row _RETURN,pg_stat_recovery_prefetch,1,t,O
+row _RETURN,pg_stat_replication,1,t,O
+row _RETURN,pg_stat_replication_slots,1,t,O
+row _RETURN,pg_stat_slru,1,t,O
+row _RETURN,pg_stat_ssl,1,t,O
+row _RETURN,pg_stat_subscription,1,t,O
+row _RETURN,pg_stat_subscription_stats,1,t,O
+row _RETURN,pg_stat_sys_indexes,1,t,O
+row _RETURN,pg_stat_sys_tables,1,t,O
+row _RETURN,pg_stat_user_functions,1,t,O
+row _RETURN,pg_stat_user_indexes,1,t,O
+row _RETURN,pg_stat_user_tables,1,t,O
+row _RETURN,pg_stat_wal,1,t,O
+row _RETURN,pg_stat_wal_receiver,1,t,O
+row _RETURN,pg_stat_xact_all_tables,1,t,O
+row _RETURN,pg_stat_xact_sys_tables,1,t,O
+row _RETURN,pg_stat_xact_user_functions,1,t,O
+row _RETURN,pg_stat_xact_user_tables,1,t,O
+row _RETURN,pg_statio_all_indexes,1,t,O
+row _RETURN,pg_statio_all_sequences,1,t,O
+row _RETURN,pg_statio_all_tables,1,t,O
+row _RETURN,pg_statio_sys_indexes,1,t,O
+row _RETURN,pg_statio_sys_sequences,1,t,O
+row _RETURN,pg_statio_sys_tables,1,t,O
+row _RETURN,pg_statio_user_indexes,1,t,O
+row _RETURN,pg_statio_user_sequences,1,t,O
+row _RETURN,pg_statio_user_tables,1,t,O
+row _RETURN,pg_stats,1,t,O
+row _RETURN,pg_stats_ext,1,t,O
+row _RETURN,pg_tables,1,t,O
+row _RETURN,pg_timezone_abbrevs,1,t,O
+row _RETURN,pg_timezone_names,1,t,O
+row _RETURN,pg_user,1,t,O
+row _RETURN,pg_user_mappings,1,t,O
+row _RETURN,pg_views,1,t,O
+row _RETURN,pg_wait_events,1,t,O
+SELECT 85
+> SELECT c.relname, a.attnum, a.attname, a.atttypid::regtype, a.atttypmod, a.attlen, a.attbyval, a.attalign, a.attnotnull, a.attcollation <> 0 FROM pg_attribute a, pg_class c WHERE a.attrelid = c.oid AND c.relnamespace = 'pg_catalog'::regnamespace AND c.relkind = 'v' AND c.relname <> 'pg_stats_ext_exprs' ORDER BY c.relname, a.attnum
+fields relname@pg_class.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,atttypmod@pg_attribute.6:23:4:-1,attlen@pg_attribute.4:21:2:-1,attbyval@pg_attribute.8:16:1:-1,attalign@pg_attribute.9:18:1:-1,attnotnull@pg_attribute.12:16:1:-1,?column?:16:1:-1
+row pg_aios,1,pid,integer,-1,4,t,i,f,f
+row pg_aios,2,io_id,integer,-1,4,t,i,f,f
+row pg_aios,3,io_generation,bigint,-1,8,t,d,f,f
+row pg_aios,4,state,text,-1,-1,f,i,f,t
+row pg_aios,5,operation,text,-1,-1,f,i,f,t
+row pg_aios,6,off,bigint,-1,8,t,d,f,f
+row pg_aios,7,length,bigint,-1,8,t,d,f,f
+row pg_aios,8,target,text,-1,-1,f,i,f,t
+row pg_aios,9,handle_data_len,smallint,-1,2,t,s,f,f
+row pg_aios,10,raw_result,integer,-1,4,t,i,f,f
+row pg_aios,11,result,text,-1,-1,f,i,f,t
+row pg_aios,12,target_desc,text,-1,-1,f,i,f,t
+row pg_aios,13,f_sync,boolean,-1,1,t,c,f,f
+row pg_aios,14,f_localmem,boolean,-1,1,t,c,f,f
+row pg_aios,15,f_buffered,boolean,-1,1,t,c,f,f
+row pg_available_extension_versions,1,name,name,-1,64,f,c,f,t
+row pg_available_extension_versions,2,version,text,-1,-1,f,i,f,t
+row pg_available_extension_versions,3,installed,boolean,-1,1,t,c,f,f
+row pg_available_extension_versions,4,superuser,boolean,-1,1,t,c,f,f
+row pg_available_extension_versions,5,trusted,boolean,-1,1,t,c,f,f
+row pg_available_extension_versions,6,relocatable,boolean,-1,1,t,c,f,f
+row pg_available_extension_versions,7,schema,name,-1,64,f,c,f,t
+row pg_available_extension_versions,8,requires,name[],-1,-1,f,i,f,t
+row pg_available_extension_versions,9,location,text,-1,-1,f,i,f,t
+row pg_available_extension_versions,10,comment,text,-1,-1,f,i,f,t
+row pg_available_extensions,1,name,name,-1,64,f,c,f,t
+row pg_available_extensions,2,default_version,text,-1,-1,f,i,f,t
+row pg_available_extensions,3,installed_version,text,-1,-1,f,i,f,t
+row pg_available_extensions,4,location,text,-1,-1,f,i,f,t
+row pg_available_extensions,5,comment,text,-1,-1,f,i,f,t
+row pg_backend_memory_contexts,1,name,text,-1,-1,f,i,f,t
+row pg_backend_memory_contexts,2,ident,text,-1,-1,f,i,f,t
+row pg_backend_memory_contexts,3,type,text,-1,-1,f,i,f,t
+row pg_backend_memory_contexts,4,level,integer,-1,4,t,i,f,f
+row pg_backend_memory_contexts,5,path,integer[],-1,-1,f,i,f,f
+row pg_backend_memory_contexts,6,total_bytes,bigint,-1,8,t,d,f,f
+row pg_backend_memory_contexts,7,total_nblocks,bigint,-1,8,t,d,f,f
+row pg_backend_memory_contexts,8,free_bytes,bigint,-1,8,t,d,f,f
+row pg_backend_memory_contexts,9,free_chunks,bigint,-1,8,t,d,f,f
+row pg_backend_memory_contexts,10,used_bytes,bigint,-1,8,t,d,f,f
+row pg_config,1,name,text,-1,-1,f,i,f,t
+row pg_config,2,setting,text,-1,-1,f,i,f,t
+row pg_cursors,1,name,text,-1,-1,f,i,f,t
+row pg_cursors,2,statement,text,-1,-1,f,i,f,t
+row pg_cursors,3,is_holdable,boolean,-1,1,t,c,f,f
+row pg_cursors,4,is_binary,boolean,-1,1,t,c,f,f
+row pg_cursors,5,is_scrollable,boolean,-1,1,t,c,f,f
+row pg_cursors,6,creation_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_dsm_registry_allocations,1,name,text,-1,-1,f,i,f,t
+row pg_dsm_registry_allocations,2,type,text,-1,-1,f,i,f,t
+row pg_dsm_registry_allocations,3,size,bigint,-1,8,t,d,f,f
+row pg_file_settings,1,sourcefile,text,-1,-1,f,i,f,t
+row pg_file_settings,2,sourceline,integer,-1,4,t,i,f,f
+row pg_file_settings,3,seqno,integer,-1,4,t,i,f,f
+row pg_file_settings,4,name,text,-1,-1,f,i,f,t
+row pg_file_settings,5,setting,text,-1,-1,f,i,f,t
+row pg_file_settings,6,applied,boolean,-1,1,t,c,f,f
+row pg_file_settings,7,error,text,-1,-1,f,i,f,t
+row pg_group,1,groname,name,-1,64,f,c,f,t
+row pg_group,2,grosysid,oid,-1,4,t,i,f,f
+row pg_group,3,grolist,oid[],-1,-1,f,i,f,f
+row pg_hba_file_rules,1,rule_number,integer,-1,4,t,i,f,f
+row pg_hba_file_rules,2,file_name,text,-1,-1,f,i,f,t
+row pg_hba_file_rules,3,line_number,integer,-1,4,t,i,f,f
+row pg_hba_file_rules,4,type,text,-1,-1,f,i,f,t
+row pg_hba_file_rules,5,database,text[],-1,-1,f,i,f,t
+row pg_hba_file_rules,6,user_name,text[],-1,-1,f,i,f,t
+row pg_hba_file_rules,7,address,text,-1,-1,f,i,f,t
+row pg_hba_file_rules,8,netmask,text,-1,-1,f,i,f,t
+row pg_hba_file_rules,9,auth_method,text,-1,-1,f,i,f,t
+row pg_hba_file_rules,10,options,text[],-1,-1,f,i,f,t
+row pg_hba_file_rules,11,error,text,-1,-1,f,i,f,t
+row pg_ident_file_mappings,1,map_number,integer,-1,4,t,i,f,f
+row pg_ident_file_mappings,2,file_name,text,-1,-1,f,i,f,t
+row pg_ident_file_mappings,3,line_number,integer,-1,4,t,i,f,f
+row pg_ident_file_mappings,4,map_name,text,-1,-1,f,i,f,t
+row pg_ident_file_mappings,5,sys_name,text,-1,-1,f,i,f,t
+row pg_ident_file_mappings,6,pg_username,text,-1,-1,f,i,f,t
+row pg_ident_file_mappings,7,error,text,-1,-1,f,i,f,t
+row pg_indexes,1,schemaname,name,-1,64,f,c,f,t
+row pg_indexes,2,tablename,name,-1,64,f,c,f,t
+row pg_indexes,3,indexname,name,-1,64,f,c,f,t
+row pg_indexes,4,tablespace,name,-1,64,f,c,f,t
+row pg_indexes,5,indexdef,text,-1,-1,f,i,f,t
+row pg_locks,1,locktype,text,-1,-1,f,i,f,t
+row pg_locks,2,database,oid,-1,4,t,i,f,f
+row pg_locks,3,relation,oid,-1,4,t,i,f,f
+row pg_locks,4,page,integer,-1,4,t,i,f,f
+row pg_locks,5,tuple,smallint,-1,2,t,s,f,f
+row pg_locks,6,virtualxid,text,-1,-1,f,i,f,t
+row pg_locks,7,transactionid,xid,-1,4,t,i,f,f
+row pg_locks,8,classid,oid,-1,4,t,i,f,f
+row pg_locks,9,objid,oid,-1,4,t,i,f,f
+row pg_locks,10,objsubid,smallint,-1,2,t,s,f,f
+row pg_locks,11,virtualtransaction,text,-1,-1,f,i,f,t
+row pg_locks,12,pid,integer,-1,4,t,i,f,f
+row pg_locks,13,mode,text,-1,-1,f,i,f,t
+row pg_locks,14,granted,boolean,-1,1,t,c,f,f
+row pg_locks,15,fastpath,boolean,-1,1,t,c,f,f
+row pg_locks,16,waitstart,timestamp with time zone,-1,8,t,d,f,f
+row pg_matviews,1,schemaname,name,-1,64,f,c,f,t
+row pg_matviews,2,matviewname,name,-1,64,f,c,f,t
+row pg_matviews,3,matviewowner,name,-1,64,f,c,f,t
+row pg_matviews,4,tablespace,name,-1,64,f,c,f,t
+row pg_matviews,5,hasindexes,boolean,-1,1,t,c,f,f
+row pg_matviews,6,ispopulated,boolean,-1,1,t,c,f,f
+row pg_matviews,7,definition,text,-1,-1,f,i,f,t
+row pg_policies,1,schemaname,name,-1,64,f,c,f,t
+row pg_policies,2,tablename,name,-1,64,f,c,f,t
+row pg_policies,3,policyname,name,-1,64,f,c,f,t
+row pg_policies,4,permissive,text,-1,-1,f,i,f,t
+row pg_policies,5,roles,name[],-1,-1,f,i,f,t
+row pg_policies,6,cmd,text,-1,-1,f,i,f,t
+row pg_policies,7,qual,text,-1,-1,f,i,f,t
+row pg_policies,8,with_check,text,-1,-1,f,i,f,t
+row pg_prepared_statements,1,name,text,-1,-1,f,i,f,t
+row pg_prepared_statements,2,statement,text,-1,-1,f,i,f,t
+row pg_prepared_statements,3,prepare_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_prepared_statements,4,parameter_types,regtype[],-1,-1,f,i,f,f
+row pg_prepared_statements,5,result_types,regtype[],-1,-1,f,i,f,f
+row pg_prepared_statements,6,from_sql,boolean,-1,1,t,c,f,f
+row pg_prepared_statements,7,generic_plans,bigint,-1,8,t,d,f,f
+row pg_prepared_statements,8,custom_plans,bigint,-1,8,t,d,f,f
+row pg_prepared_xacts,1,transaction,xid,-1,4,t,i,f,f
+row pg_prepared_xacts,2,gid,text,-1,-1,f,i,f,t
+row pg_prepared_xacts,3,prepared,timestamp with time zone,-1,8,t,d,f,f
+row pg_prepared_xacts,4,owner,name,-1,64,f,c,f,t
+row pg_prepared_xacts,5,database,name,-1,64,f,c,f,t
+row pg_publication_sequences,1,pubname,name,-1,64,f,c,f,t
+row pg_publication_sequences,2,schemaname,name,-1,64,f,c,f,t
+row pg_publication_sequences,3,sequencename,name,-1,64,f,c,f,t
+row pg_publication_tables,1,pubname,name,-1,64,f,c,f,t
+row pg_publication_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_publication_tables,3,tablename,name,-1,64,f,c,f,t
+row pg_publication_tables,4,attnames,name[],-1,-1,f,i,f,t
+row pg_publication_tables,5,rowfilter,text,-1,-1,f,i,f,t
+row pg_replication_origin_status,1,local_id,oid,-1,4,t,i,f,f
+row pg_replication_origin_status,2,external_id,text,-1,-1,f,i,f,t
+row pg_replication_origin_status,3,remote_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_replication_origin_status,4,local_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_replication_slots,1,slot_name,name,-1,64,f,c,f,t
+row pg_replication_slots,2,plugin,name,-1,64,f,c,f,t
+row pg_replication_slots,3,slot_type,text,-1,-1,f,i,f,t
+row pg_replication_slots,4,datoid,oid,-1,4,t,i,f,f
+row pg_replication_slots,5,database,name,-1,64,f,c,f,t
+row pg_replication_slots,6,temporary,boolean,-1,1,t,c,f,f
+row pg_replication_slots,7,active,boolean,-1,1,t,c,f,f
+row pg_replication_slots,8,active_pid,integer,-1,4,t,i,f,f
+row pg_replication_slots,9,xmin,xid,-1,4,t,i,f,f
+row pg_replication_slots,10,catalog_xmin,xid,-1,4,t,i,f,f
+row pg_replication_slots,11,restart_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_replication_slots,12,confirmed_flush_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_replication_slots,13,wal_status,text,-1,-1,f,i,f,t
+row pg_replication_slots,14,safe_wal_size,bigint,-1,8,t,d,f,f
+row pg_replication_slots,15,two_phase,boolean,-1,1,t,c,f,f
+row pg_replication_slots,16,two_phase_at,pg_lsn,-1,8,t,d,f,f
+row pg_replication_slots,17,inactive_since,timestamp with time zone,-1,8,t,d,f,f
+row pg_replication_slots,18,conflicting,boolean,-1,1,t,c,f,f
+row pg_replication_slots,19,invalidation_reason,text,-1,-1,f,i,f,t
+row pg_replication_slots,20,failover,boolean,-1,1,t,c,f,f
+row pg_replication_slots,21,synced,boolean,-1,1,t,c,f,f
+row pg_replication_slots,22,slotsync_skip_reason,text,-1,-1,f,i,f,t
+row pg_roles,1,rolname,name,-1,64,f,c,f,t
+row pg_roles,2,rolsuper,boolean,-1,1,t,c,f,f
+row pg_roles,3,rolinherit,boolean,-1,1,t,c,f,f
+row pg_roles,4,rolcreaterole,boolean,-1,1,t,c,f,f
+row pg_roles,5,rolcreatedb,boolean,-1,1,t,c,f,f
+row pg_roles,6,rolcanlogin,boolean,-1,1,t,c,f,f
+row pg_roles,7,rolreplication,boolean,-1,1,t,c,f,f
+row pg_roles,8,rolconnlimit,integer,-1,4,t,i,f,f
+row pg_roles,9,rolpassword,text,-1,-1,f,i,f,t
+row pg_roles,10,rolvaliduntil,timestamp with time zone,-1,8,t,d,f,f
+row pg_roles,11,rolbypassrls,boolean,-1,1,t,c,f,f
+row pg_roles,12,rolconfig,text[],-1,-1,f,i,f,t
+row pg_roles,13,oid,oid,-1,4,t,i,f,f
+row pg_rules,1,schemaname,name,-1,64,f,c,f,t
+row pg_rules,2,tablename,name,-1,64,f,c,f,t
+row pg_rules,3,rulename,name,-1,64,f,c,f,t
+row pg_rules,4,definition,text,-1,-1,f,i,f,t
+row pg_seclabels,1,objoid,oid,-1,4,t,i,f,f
+row pg_seclabels,2,classoid,oid,-1,4,t,i,f,f
+row pg_seclabels,3,objsubid,integer,-1,4,t,i,f,f
+row pg_seclabels,4,objtype,text,-1,-1,f,i,f,t
+row pg_seclabels,5,objnamespace,oid,-1,4,t,i,f,f
+row pg_seclabels,6,objname,text,-1,-1,f,i,f,t
+row pg_seclabels,7,provider,text,-1,-1,f,i,f,t
+row pg_seclabels,8,label,text,-1,-1,f,i,f,t
+row pg_sequences,1,schemaname,name,-1,64,f,c,f,t
+row pg_sequences,2,sequencename,name,-1,64,f,c,f,t
+row pg_sequences,3,sequenceowner,name,-1,64,f,c,f,t
+row pg_sequences,4,data_type,regtype,-1,4,t,i,f,f
+row pg_sequences,5,start_value,bigint,-1,8,t,d,f,f
+row pg_sequences,6,min_value,bigint,-1,8,t,d,f,f
+row pg_sequences,7,max_value,bigint,-1,8,t,d,f,f
+row pg_sequences,8,increment_by,bigint,-1,8,t,d,f,f
+row pg_sequences,9,cycle,boolean,-1,1,t,c,f,f
+row pg_sequences,10,cache_size,bigint,-1,8,t,d,f,f
+row pg_sequences,11,last_value,bigint,-1,8,t,d,f,f
+row pg_settings,1,name,text,-1,-1,f,i,f,t
+row pg_settings,2,setting,text,-1,-1,f,i,f,t
+row pg_settings,3,unit,text,-1,-1,f,i,f,t
+row pg_settings,4,category,text,-1,-1,f,i,f,t
+row pg_settings,5,short_desc,text,-1,-1,f,i,f,t
+row pg_settings,6,extra_desc,text,-1,-1,f,i,f,t
+row pg_settings,7,context,text,-1,-1,f,i,f,t
+row pg_settings,8,vartype,text,-1,-1,f,i,f,t
+row pg_settings,9,source,text,-1,-1,f,i,f,t
+row pg_settings,10,min_val,text,-1,-1,f,i,f,t
+row pg_settings,11,max_val,text,-1,-1,f,i,f,t
+row pg_settings,12,enumvals,text[],-1,-1,f,i,f,t
+row pg_settings,13,boot_val,text,-1,-1,f,i,f,t
+row pg_settings,14,reset_val,text,-1,-1,f,i,f,t
+row pg_settings,15,sourcefile,text,-1,-1,f,i,f,t
+row pg_settings,16,sourceline,integer,-1,4,t,i,f,f
+row pg_settings,17,pending_restart,boolean,-1,1,t,c,f,f
+row pg_shadow,1,usename,name,-1,64,f,c,f,t
+row pg_shadow,2,usesysid,oid,-1,4,t,i,f,f
+row pg_shadow,3,usecreatedb,boolean,-1,1,t,c,f,f
+row pg_shadow,4,usesuper,boolean,-1,1,t,c,f,f
+row pg_shadow,5,userepl,boolean,-1,1,t,c,f,f
+row pg_shadow,6,usebypassrls,boolean,-1,1,t,c,f,f
+row pg_shadow,7,passwd,text,-1,-1,f,i,f,t
+row pg_shadow,8,valuntil,timestamp with time zone,-1,8,t,d,f,f
+row pg_shadow,9,useconfig,text[],-1,-1,f,i,f,t
+row pg_shmem_allocations,1,name,text,-1,-1,f,i,f,t
+row pg_shmem_allocations,2,off,bigint,-1,8,t,d,f,f
+row pg_shmem_allocations,3,size,bigint,-1,8,t,d,f,f
+row pg_shmem_allocations,4,allocated_size,bigint,-1,8,t,d,f,f
+row pg_shmem_allocations_numa,1,name,text,-1,-1,f,i,f,t
+row pg_shmem_allocations_numa,2,numa_node,integer,-1,4,t,i,f,f
+row pg_shmem_allocations_numa,3,size,bigint,-1,8,t,d,f,f
+row pg_stat_activity,1,datid,oid,-1,4,t,i,f,f
+row pg_stat_activity,2,datname,name,-1,64,f,c,f,t
+row pg_stat_activity,3,pid,integer,-1,4,t,i,f,f
+row pg_stat_activity,4,leader_pid,integer,-1,4,t,i,f,f
+row pg_stat_activity,5,usesysid,oid,-1,4,t,i,f,f
+row pg_stat_activity,6,usename,name,-1,64,f,c,f,t
+row pg_stat_activity,7,application_name,text,-1,-1,f,i,f,t
+row pg_stat_activity,8,client_addr,inet,-1,-1,f,i,f,f
+row pg_stat_activity,9,client_hostname,text,-1,-1,f,i,f,t
+row pg_stat_activity,10,client_port,integer,-1,4,t,i,f,f
+row pg_stat_activity,11,backend_start,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_activity,12,xact_start,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_activity,13,query_start,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_activity,14,state_change,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_activity,15,wait_event_type,text,-1,-1,f,i,f,t
+row pg_stat_activity,16,wait_event,text,-1,-1,f,i,f,t
+row pg_stat_activity,17,state,text,-1,-1,f,i,f,t
+row pg_stat_activity,18,backend_xid,xid,-1,4,t,i,f,f
+row pg_stat_activity,19,backend_xmin,xid,-1,4,t,i,f,f
+row pg_stat_activity,20,query_id,bigint,-1,8,t,d,f,f
+row pg_stat_activity,21,query,text,-1,-1,f,i,f,t
+row pg_stat_activity,22,backend_type,text,-1,-1,f,i,f,t
+row pg_stat_all_indexes,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_all_indexes,2,indexrelid,oid,-1,4,t,i,f,f
+row pg_stat_all_indexes,3,schemaname,name,-1,64,f,c,f,t
+row pg_stat_all_indexes,4,relname,name,-1,64,f,c,f,t
+row pg_stat_all_indexes,5,indexrelname,name,-1,64,f,c,f,t
+row pg_stat_all_indexes,6,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_all_indexes,7,last_idx_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_all_indexes,8,idx_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_all_indexes,9,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_all_indexes,10,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_all_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_all_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_all_tables,3,relname,name,-1,64,f,c,f,t
+row pg_stat_all_tables,4,seq_scan,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,5,last_seq_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_all_tables,6,seq_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,7,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,8,last_idx_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_all_tables,9,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,10,n_tup_ins,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,11,n_tup_upd,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,12,n_tup_del,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,13,n_tup_hot_upd,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,14,n_tup_newpage_upd,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,15,n_live_tup,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,16,n_dead_tup,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,17,n_mod_since_analyze,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,18,n_ins_since_vacuum,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,19,last_vacuum,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_all_tables,20,last_autovacuum,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_all_tables,21,last_analyze,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_all_tables,22,last_autoanalyze,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_all_tables,23,vacuum_count,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,24,autovacuum_count,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,25,analyze_count,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,26,autoanalyze_count,bigint,-1,8,t,d,f,f
+row pg_stat_all_tables,27,total_vacuum_time,double precision,-1,8,t,d,f,f
+row pg_stat_all_tables,28,total_autovacuum_time,double precision,-1,8,t,d,f,f
+row pg_stat_all_tables,29,total_analyze_time,double precision,-1,8,t,d,f,f
+row pg_stat_all_tables,30,total_autoanalyze_time,double precision,-1,8,t,d,f,f
+row pg_stat_all_tables,31,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_archiver,1,archived_count,bigint,-1,8,t,d,f,f
+row pg_stat_archiver,2,last_archived_wal,text,-1,-1,f,i,f,t
+row pg_stat_archiver,3,last_archived_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_archiver,4,failed_count,bigint,-1,8,t,d,f,f
+row pg_stat_archiver,5,last_failed_wal,text,-1,-1,f,i,f,t
+row pg_stat_archiver,6,last_failed_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_archiver,7,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_autovacuum_scores,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_autovacuum_scores,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_autovacuum_scores,3,relname,name,-1,64,f,c,f,t
+row pg_stat_autovacuum_scores,4,score,double precision,-1,8,t,d,f,f
+row pg_stat_autovacuum_scores,5,xid_score,double precision,-1,8,t,d,f,f
+row pg_stat_autovacuum_scores,6,mxid_score,double precision,-1,8,t,d,f,f
+row pg_stat_autovacuum_scores,7,vacuum_score,double precision,-1,8,t,d,f,f
+row pg_stat_autovacuum_scores,8,vacuum_insert_score,double precision,-1,8,t,d,f,f
+row pg_stat_autovacuum_scores,9,analyze_score,double precision,-1,8,t,d,f,f
+row pg_stat_autovacuum_scores,10,do_vacuum,boolean,-1,1,t,c,f,f
+row pg_stat_autovacuum_scores,11,do_analyze,boolean,-1,1,t,c,f,f
+row pg_stat_autovacuum_scores,12,for_wraparound,boolean,-1,1,t,c,f,f
+row pg_stat_bgwriter,1,buffers_clean,bigint,-1,8,t,d,f,f
+row pg_stat_bgwriter,2,maxwritten_clean,bigint,-1,8,t,d,f,f
+row pg_stat_bgwriter,3,buffers_alloc,bigint,-1,8,t,d,f,f
+row pg_stat_bgwriter,4,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_checkpointer,1,num_timed,bigint,-1,8,t,d,f,f
+row pg_stat_checkpointer,2,num_requested,bigint,-1,8,t,d,f,f
+row pg_stat_checkpointer,3,num_done,bigint,-1,8,t,d,f,f
+row pg_stat_checkpointer,4,restartpoints_timed,bigint,-1,8,t,d,f,f
+row pg_stat_checkpointer,5,restartpoints_req,bigint,-1,8,t,d,f,f
+row pg_stat_checkpointer,6,restartpoints_done,bigint,-1,8,t,d,f,f
+row pg_stat_checkpointer,7,write_time,double precision,-1,8,t,d,f,f
+row pg_stat_checkpointer,8,sync_time,double precision,-1,8,t,d,f,f
+row pg_stat_checkpointer,9,buffers_written,bigint,-1,8,t,d,f,f
+row pg_stat_checkpointer,10,slru_written,bigint,-1,8,t,d,f,f
+row pg_stat_checkpointer,11,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_database,1,datid,oid,-1,4,t,i,f,f
+row pg_stat_database,2,datname,name,-1,64,f,c,f,t
+row pg_stat_database,3,numbackends,integer,-1,4,t,i,f,f
+row pg_stat_database,4,xact_commit,bigint,-1,8,t,d,f,f
+row pg_stat_database,5,xact_rollback,bigint,-1,8,t,d,f,f
+row pg_stat_database,6,blks_read,bigint,-1,8,t,d,f,f
+row pg_stat_database,7,blks_hit,bigint,-1,8,t,d,f,f
+row pg_stat_database,8,tup_returned,bigint,-1,8,t,d,f,f
+row pg_stat_database,9,tup_fetched,bigint,-1,8,t,d,f,f
+row pg_stat_database,10,tup_inserted,bigint,-1,8,t,d,f,f
+row pg_stat_database,11,tup_updated,bigint,-1,8,t,d,f,f
+row pg_stat_database,12,tup_deleted,bigint,-1,8,t,d,f,f
+row pg_stat_database,13,conflicts,bigint,-1,8,t,d,f,f
+row pg_stat_database,14,temp_files,bigint,-1,8,t,d,f,f
+row pg_stat_database,15,temp_bytes,bigint,-1,8,t,d,f,f
+row pg_stat_database,16,deadlocks,bigint,-1,8,t,d,f,f
+row pg_stat_database,17,checksum_failures,bigint,-1,8,t,d,f,f
+row pg_stat_database,18,checksum_last_failure,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_database,19,blk_read_time,double precision,-1,8,t,d,f,f
+row pg_stat_database,20,blk_write_time,double precision,-1,8,t,d,f,f
+row pg_stat_database,21,session_time,double precision,-1,8,t,d,f,f
+row pg_stat_database,22,active_time,double precision,-1,8,t,d,f,f
+row pg_stat_database,23,idle_in_transaction_time,double precision,-1,8,t,d,f,f
+row pg_stat_database,24,sessions,bigint,-1,8,t,d,f,f
+row pg_stat_database,25,sessions_abandoned,bigint,-1,8,t,d,f,f
+row pg_stat_database,26,sessions_fatal,bigint,-1,8,t,d,f,f
+row pg_stat_database,27,sessions_killed,bigint,-1,8,t,d,f,f
+row pg_stat_database,28,parallel_workers_to_launch,bigint,-1,8,t,d,f,f
+row pg_stat_database,29,parallel_workers_launched,bigint,-1,8,t,d,f,f
+row pg_stat_database,30,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_database_conflicts,1,datid,oid,-1,4,t,i,f,f
+row pg_stat_database_conflicts,2,datname,name,-1,64,f,c,f,t
+row pg_stat_database_conflicts,3,confl_tablespace,bigint,-1,8,t,d,f,f
+row pg_stat_database_conflicts,4,confl_lock,bigint,-1,8,t,d,f,f
+row pg_stat_database_conflicts,5,confl_snapshot,bigint,-1,8,t,d,f,f
+row pg_stat_database_conflicts,6,confl_bufferpin,bigint,-1,8,t,d,f,f
+row pg_stat_database_conflicts,7,confl_deadlock,bigint,-1,8,t,d,f,f
+row pg_stat_database_conflicts,8,confl_active_logicalslot,bigint,-1,8,t,d,f,f
+row pg_stat_database_conflicts,9,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_gssapi,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_gssapi,2,gss_authenticated,boolean,-1,1,t,c,f,f
+row pg_stat_gssapi,3,principal,text,-1,-1,f,i,f,t
+row pg_stat_gssapi,4,encrypted,boolean,-1,1,t,c,f,f
+row pg_stat_gssapi,5,credentials_delegated,boolean,-1,1,t,c,f,f
+row pg_stat_io,1,backend_type,text,-1,-1,f,i,f,t
+row pg_stat_io,2,object,text,-1,-1,f,i,f,t
+row pg_stat_io,3,context,text,-1,-1,f,i,f,t
+row pg_stat_io,4,reads,bigint,-1,8,t,d,f,f
+row pg_stat_io,5,read_bytes,numeric,-1,-1,f,i,f,f
+row pg_stat_io,6,read_time,double precision,-1,8,t,d,f,f
+row pg_stat_io,7,writes,bigint,-1,8,t,d,f,f
+row pg_stat_io,8,write_bytes,numeric,-1,-1,f,i,f,f
+row pg_stat_io,9,write_time,double precision,-1,8,t,d,f,f
+row pg_stat_io,10,writebacks,bigint,-1,8,t,d,f,f
+row pg_stat_io,11,writeback_time,double precision,-1,8,t,d,f,f
+row pg_stat_io,12,extends,bigint,-1,8,t,d,f,f
+row pg_stat_io,13,extend_bytes,numeric,-1,-1,f,i,f,f
+row pg_stat_io,14,extend_time,double precision,-1,8,t,d,f,f
+row pg_stat_io,15,hits,bigint,-1,8,t,d,f,f
+row pg_stat_io,16,evictions,bigint,-1,8,t,d,f,f
+row pg_stat_io,17,reuses,bigint,-1,8,t,d,f,f
+row pg_stat_io,18,fsyncs,bigint,-1,8,t,d,f,f
+row pg_stat_io,19,fsync_time,double precision,-1,8,t,d,f,f
+row pg_stat_io,20,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_lock,1,locktype,text,-1,-1,f,i,f,t
+row pg_stat_lock,2,waits,bigint,-1,8,t,d,f,f
+row pg_stat_lock,3,wait_time,double precision,-1,8,t,d,f,f
+row pg_stat_lock,4,fastpath_exceeded,bigint,-1,8,t,d,f,f
+row pg_stat_lock,5,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_progress_analyze,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_progress_analyze,2,datid,oid,-1,4,t,i,f,f
+row pg_stat_progress_analyze,3,datname,name,-1,64,f,c,f,t
+row pg_stat_progress_analyze,4,relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_analyze,5,phase,text,-1,-1,f,i,f,t
+row pg_stat_progress_analyze,6,sample_blks_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_analyze,7,sample_blks_scanned,bigint,-1,8,t,d,f,f
+row pg_stat_progress_analyze,8,ext_stats_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_analyze,9,ext_stats_computed,bigint,-1,8,t,d,f,f
+row pg_stat_progress_analyze,10,child_tables_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_analyze,11,child_tables_done,bigint,-1,8,t,d,f,f
+row pg_stat_progress_analyze,12,current_child_table_relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_analyze,13,delay_time,double precision,-1,8,t,d,f,f
+row pg_stat_progress_analyze,14,started_by,text,-1,-1,f,i,f,t
+row pg_stat_progress_basebackup,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_progress_basebackup,2,phase,text,-1,-1,f,i,f,t
+row pg_stat_progress_basebackup,3,backup_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_basebackup,4,backup_streamed,bigint,-1,8,t,d,f,f
+row pg_stat_progress_basebackup,5,tablespaces_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_basebackup,6,tablespaces_streamed,bigint,-1,8,t,d,f,f
+row pg_stat_progress_basebackup,7,backup_type,text,-1,-1,f,i,f,t
+row pg_stat_progress_cluster,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_progress_cluster,2,datid,oid,-1,4,t,i,f,f
+row pg_stat_progress_cluster,3,datname,name,-1,64,f,c,f,t
+row pg_stat_progress_cluster,4,relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_cluster,5,command,text,-1,-1,f,i,f,t
+row pg_stat_progress_cluster,6,phase,text,-1,-1,f,i,f,t
+row pg_stat_progress_cluster,7,cluster_index_relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_cluster,8,heap_tuples_scanned,bigint,-1,8,t,d,f,f
+row pg_stat_progress_cluster,9,heap_tuples_written,bigint,-1,8,t,d,f,f
+row pg_stat_progress_cluster,10,heap_blks_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_cluster,11,heap_blks_scanned,bigint,-1,8,t,d,f,f
+row pg_stat_progress_cluster,12,index_rebuild_count,bigint,-1,8,t,d,f,f
+row pg_stat_progress_copy,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_progress_copy,2,datid,oid,-1,4,t,i,f,f
+row pg_stat_progress_copy,3,datname,name,-1,64,f,c,f,t
+row pg_stat_progress_copy,4,relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_copy,5,command,text,-1,-1,f,i,f,t
+row pg_stat_progress_copy,6,type,text,-1,-1,f,i,f,t
+row pg_stat_progress_copy,7,bytes_processed,bigint,-1,8,t,d,f,f
+row pg_stat_progress_copy,8,bytes_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_copy,9,tuples_processed,bigint,-1,8,t,d,f,f
+row pg_stat_progress_copy,10,tuples_excluded,bigint,-1,8,t,d,f,f
+row pg_stat_progress_copy,11,tuples_skipped,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_progress_create_index,2,datid,oid,-1,4,t,i,f,f
+row pg_stat_progress_create_index,3,datname,name,-1,64,f,c,f,t
+row pg_stat_progress_create_index,4,relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_create_index,5,index_relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_create_index,6,command,text,-1,-1,f,i,f,t
+row pg_stat_progress_create_index,7,phase,text,-1,-1,f,i,f,t
+row pg_stat_progress_create_index,8,lockers_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,9,lockers_done,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,10,current_locker_pid,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,11,blocks_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,12,blocks_done,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,13,tuples_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,14,tuples_done,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,15,partitions_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_create_index,16,partitions_done,bigint,-1,8,t,d,f,f
+row pg_stat_progress_repack,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_progress_repack,2,datid,oid,-1,4,t,i,f,f
+row pg_stat_progress_repack,3,datname,name,-1,64,f,c,f,t
+row pg_stat_progress_repack,4,relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_repack,5,command,text,-1,-1,f,i,f,t
+row pg_stat_progress_repack,6,phase,text,-1,-1,f,i,f,t
+row pg_stat_progress_repack,7,repack_index_relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_repack,8,heap_tuples_scanned,bigint,-1,8,t,d,f,f
+row pg_stat_progress_repack,9,heap_tuples_inserted,bigint,-1,8,t,d,f,f
+row pg_stat_progress_repack,10,heap_tuples_updated,bigint,-1,8,t,d,f,f
+row pg_stat_progress_repack,11,heap_tuples_deleted,bigint,-1,8,t,d,f,f
+row pg_stat_progress_repack,12,heap_blks_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_repack,13,heap_blks_scanned,bigint,-1,8,t,d,f,f
+row pg_stat_progress_repack,14,index_rebuild_count,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_progress_vacuum,2,datid,oid,-1,4,t,i,f,f
+row pg_stat_progress_vacuum,3,datname,name,-1,64,f,c,f,t
+row pg_stat_progress_vacuum,4,relid,oid,-1,4,t,i,f,f
+row pg_stat_progress_vacuum,5,phase,text,-1,-1,f,i,f,t
+row pg_stat_progress_vacuum,6,heap_blks_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,7,heap_blks_scanned,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,8,heap_blks_vacuumed,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,9,index_vacuum_count,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,10,max_dead_tuple_bytes,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,11,dead_tuple_bytes,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,12,num_dead_item_ids,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,13,indexes_total,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,14,indexes_processed,bigint,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,15,delay_time,double precision,-1,8,t,d,f,f
+row pg_stat_progress_vacuum,16,mode,text,-1,-1,f,i,f,t
+row pg_stat_progress_vacuum,17,started_by,text,-1,-1,f,i,f,t
+row pg_stat_recovery,1,promote_triggered,boolean,-1,1,t,c,f,f
+row pg_stat_recovery,2,last_replayed_read_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_recovery,3,last_replayed_end_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_recovery,4,last_replayed_tli,integer,-1,4,t,i,f,f
+row pg_stat_recovery,5,replay_end_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_recovery,6,replay_end_tli,integer,-1,4,t,i,f,f
+row pg_stat_recovery,7,recovery_last_xact_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_recovery,8,current_chunk_start_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_recovery,9,pause_state,text,-1,-1,f,i,f,t
+row pg_stat_recovery_prefetch,1,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_recovery_prefetch,2,prefetch,bigint,-1,8,t,d,f,f
+row pg_stat_recovery_prefetch,3,hit,bigint,-1,8,t,d,f,f
+row pg_stat_recovery_prefetch,4,skip_init,bigint,-1,8,t,d,f,f
+row pg_stat_recovery_prefetch,5,skip_new,bigint,-1,8,t,d,f,f
+row pg_stat_recovery_prefetch,6,skip_fpw,bigint,-1,8,t,d,f,f
+row pg_stat_recovery_prefetch,7,skip_rep,bigint,-1,8,t,d,f,f
+row pg_stat_recovery_prefetch,8,wal_distance,integer,-1,4,t,i,f,f
+row pg_stat_recovery_prefetch,9,block_distance,integer,-1,4,t,i,f,f
+row pg_stat_recovery_prefetch,10,io_depth,integer,-1,4,t,i,f,f
+row pg_stat_replication,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_replication,2,usesysid,oid,-1,4,t,i,f,f
+row pg_stat_replication,3,usename,name,-1,64,f,c,f,t
+row pg_stat_replication,4,application_name,text,-1,-1,f,i,f,t
+row pg_stat_replication,5,client_addr,inet,-1,-1,f,i,f,f
+row pg_stat_replication,6,client_hostname,text,-1,-1,f,i,f,t
+row pg_stat_replication,7,client_port,integer,-1,4,t,i,f,f
+row pg_stat_replication,8,backend_start,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_replication,9,backend_xmin,xid,-1,4,t,i,f,f
+row pg_stat_replication,10,state,text,-1,-1,f,i,f,t
+row pg_stat_replication,11,sent_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_replication,12,write_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_replication,13,flush_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_replication,14,replay_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_replication,15,write_lag,interval,-1,16,f,d,f,f
+row pg_stat_replication,16,flush_lag,interval,-1,16,f,d,f,f
+row pg_stat_replication,17,replay_lag,interval,-1,16,f,d,f,f
+row pg_stat_replication,18,sync_priority,integer,-1,4,t,i,f,f
+row pg_stat_replication,19,sync_state,text,-1,-1,f,i,f,t
+row pg_stat_replication,20,reply_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_replication_slots,1,slot_name,text,-1,-1,f,i,f,t
+row pg_stat_replication_slots,2,spill_txns,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,3,spill_count,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,4,spill_bytes,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,5,stream_txns,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,6,stream_count,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,7,stream_bytes,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,8,mem_exceeded_count,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,9,total_txns,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,10,total_bytes,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,11,slotsync_skip_count,bigint,-1,8,t,d,f,f
+row pg_stat_replication_slots,12,slotsync_last_skip,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_replication_slots,13,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_slru,1,name,text,-1,-1,f,i,f,t
+row pg_stat_slru,2,blks_zeroed,bigint,-1,8,t,d,f,f
+row pg_stat_slru,3,blks_hit,bigint,-1,8,t,d,f,f
+row pg_stat_slru,4,blks_read,bigint,-1,8,t,d,f,f
+row pg_stat_slru,5,blks_written,bigint,-1,8,t,d,f,f
+row pg_stat_slru,6,blks_exists,bigint,-1,8,t,d,f,f
+row pg_stat_slru,7,flushes,bigint,-1,8,t,d,f,f
+row pg_stat_slru,8,truncates,bigint,-1,8,t,d,f,f
+row pg_stat_slru,9,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_ssl,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_ssl,2,ssl,boolean,-1,1,t,c,f,f
+row pg_stat_ssl,3,version,text,-1,-1,f,i,f,t
+row pg_stat_ssl,4,cipher,text,-1,-1,f,i,f,t
+row pg_stat_ssl,5,bits,integer,-1,4,t,i,f,f
+row pg_stat_ssl,6,client_dn,text,-1,-1,f,i,f,t
+row pg_stat_ssl,7,client_serial,numeric,-1,-1,f,i,f,f
+row pg_stat_ssl,8,issuer_dn,text,-1,-1,f,i,f,t
+row pg_stat_subscription,1,subid,oid,-1,4,t,i,f,f
+row pg_stat_subscription,2,subname,name,-1,64,f,c,f,t
+row pg_stat_subscription,3,worker_type,text,-1,-1,f,i,f,t
+row pg_stat_subscription,4,pid,integer,-1,4,t,i,f,f
+row pg_stat_subscription,5,leader_pid,integer,-1,4,t,i,f,f
+row pg_stat_subscription,6,relid,oid,-1,4,t,i,f,f
+row pg_stat_subscription,7,received_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_subscription,8,last_msg_send_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_subscription,9,last_msg_receipt_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_subscription,10,latest_end_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_subscription,11,latest_end_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_subscription_stats,1,subid,oid,-1,4,t,i,f,f
+row pg_stat_subscription_stats,2,subname,name,-1,64,f,c,f,t
+row pg_stat_subscription_stats,3,apply_error_count,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,4,sync_seq_error_count,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,5,sync_table_error_count,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,6,confl_insert_exists,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,7,confl_update_origin_differs,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,8,confl_update_exists,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,9,confl_update_deleted,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,10,confl_update_missing,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,11,confl_delete_origin_differs,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,12,confl_delete_missing,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,13,confl_multiple_unique_conflicts,bigint,-1,8,t,d,f,f
+row pg_stat_subscription_stats,14,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_indexes,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_sys_indexes,2,indexrelid,oid,-1,4,t,i,f,f
+row pg_stat_sys_indexes,3,schemaname,name,-1,64,f,c,f,t
+row pg_stat_sys_indexes,4,relname,name,-1,64,f,c,f,t
+row pg_stat_sys_indexes,5,indexrelname,name,-1,64,f,c,f,t
+row pg_stat_sys_indexes,6,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_sys_indexes,7,last_idx_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_indexes,8,idx_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_sys_indexes,9,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_sys_indexes,10,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_sys_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_sys_tables,3,relname,name,-1,64,f,c,f,t
+row pg_stat_sys_tables,4,seq_scan,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,5,last_seq_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_tables,6,seq_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,7,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,8,last_idx_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_tables,9,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,10,n_tup_ins,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,11,n_tup_upd,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,12,n_tup_del,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,13,n_tup_hot_upd,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,14,n_tup_newpage_upd,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,15,n_live_tup,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,16,n_dead_tup,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,17,n_mod_since_analyze,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,18,n_ins_since_vacuum,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,19,last_vacuum,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_tables,20,last_autovacuum,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_tables,21,last_analyze,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_tables,22,last_autoanalyze,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_sys_tables,23,vacuum_count,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,24,autovacuum_count,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,25,analyze_count,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,26,autoanalyze_count,bigint,-1,8,t,d,f,f
+row pg_stat_sys_tables,27,total_vacuum_time,double precision,-1,8,t,d,f,f
+row pg_stat_sys_tables,28,total_autovacuum_time,double precision,-1,8,t,d,f,f
+row pg_stat_sys_tables,29,total_analyze_time,double precision,-1,8,t,d,f,f
+row pg_stat_sys_tables,30,total_autoanalyze_time,double precision,-1,8,t,d,f,f
+row pg_stat_sys_tables,31,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_functions,1,funcid,oid,-1,4,t,i,f,f
+row pg_stat_user_functions,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_user_functions,3,funcname,name,-1,64,f,c,f,t
+row pg_stat_user_functions,4,calls,bigint,-1,8,t,d,f,f
+row pg_stat_user_functions,5,total_time,double precision,-1,8,t,d,f,f
+row pg_stat_user_functions,6,self_time,double precision,-1,8,t,d,f,f
+row pg_stat_user_functions,7,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_indexes,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_user_indexes,2,indexrelid,oid,-1,4,t,i,f,f
+row pg_stat_user_indexes,3,schemaname,name,-1,64,f,c,f,t
+row pg_stat_user_indexes,4,relname,name,-1,64,f,c,f,t
+row pg_stat_user_indexes,5,indexrelname,name,-1,64,f,c,f,t
+row pg_stat_user_indexes,6,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_user_indexes,7,last_idx_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_indexes,8,idx_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_user_indexes,9,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_user_indexes,10,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_user_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_user_tables,3,relname,name,-1,64,f,c,f,t
+row pg_stat_user_tables,4,seq_scan,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,5,last_seq_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_tables,6,seq_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,7,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,8,last_idx_scan,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_tables,9,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,10,n_tup_ins,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,11,n_tup_upd,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,12,n_tup_del,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,13,n_tup_hot_upd,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,14,n_tup_newpage_upd,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,15,n_live_tup,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,16,n_dead_tup,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,17,n_mod_since_analyze,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,18,n_ins_since_vacuum,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,19,last_vacuum,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_tables,20,last_autovacuum,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_tables,21,last_analyze,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_tables,22,last_autoanalyze,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_user_tables,23,vacuum_count,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,24,autovacuum_count,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,25,analyze_count,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,26,autoanalyze_count,bigint,-1,8,t,d,f,f
+row pg_stat_user_tables,27,total_vacuum_time,double precision,-1,8,t,d,f,f
+row pg_stat_user_tables,28,total_autovacuum_time,double precision,-1,8,t,d,f,f
+row pg_stat_user_tables,29,total_analyze_time,double precision,-1,8,t,d,f,f
+row pg_stat_user_tables,30,total_autoanalyze_time,double precision,-1,8,t,d,f,f
+row pg_stat_user_tables,31,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_wal,1,wal_records,bigint,-1,8,t,d,f,f
+row pg_stat_wal,2,wal_fpi,bigint,-1,8,t,d,f,f
+row pg_stat_wal,3,wal_bytes,numeric,-1,-1,f,i,f,f
+row pg_stat_wal,4,wal_fpi_bytes,numeric,-1,-1,f,i,f,f
+row pg_stat_wal,5,wal_buffers_full,bigint,-1,8,t,d,f,f
+row pg_stat_wal,6,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_wal_receiver,1,pid,integer,-1,4,t,i,f,f
+row pg_stat_wal_receiver,2,status,text,-1,-1,f,i,f,t
+row pg_stat_wal_receiver,3,receive_start_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_wal_receiver,4,receive_start_tli,integer,-1,4,t,i,f,f
+row pg_stat_wal_receiver,5,written_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_wal_receiver,6,flushed_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_wal_receiver,7,received_tli,integer,-1,4,t,i,f,f
+row pg_stat_wal_receiver,8,last_msg_send_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_wal_receiver,9,last_msg_receipt_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_wal_receiver,10,latest_end_lsn,pg_lsn,-1,8,t,d,f,f
+row pg_stat_wal_receiver,11,latest_end_time,timestamp with time zone,-1,8,t,d,f,f
+row pg_stat_wal_receiver,12,slot_name,text,-1,-1,f,i,f,t
+row pg_stat_wal_receiver,13,sender_host,text,-1,-1,f,i,f,t
+row pg_stat_wal_receiver,14,sender_port,integer,-1,4,t,i,f,f
+row pg_stat_wal_receiver,15,conninfo,text,-1,-1,f,i,f,t
+row pg_stat_xact_all_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_xact_all_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_xact_all_tables,3,relname,name,-1,64,f,c,f,t
+row pg_stat_xact_all_tables,4,seq_scan,bigint,-1,8,t,d,f,f
+row pg_stat_xact_all_tables,5,seq_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_xact_all_tables,6,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_xact_all_tables,7,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_xact_all_tables,8,n_tup_ins,bigint,-1,8,t,d,f,f
+row pg_stat_xact_all_tables,9,n_tup_upd,bigint,-1,8,t,d,f,f
+row pg_stat_xact_all_tables,10,n_tup_del,bigint,-1,8,t,d,f,f
+row pg_stat_xact_all_tables,11,n_tup_hot_upd,bigint,-1,8,t,d,f,f
+row pg_stat_xact_all_tables,12,n_tup_newpage_upd,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_xact_sys_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_xact_sys_tables,3,relname,name,-1,64,f,c,f,t
+row pg_stat_xact_sys_tables,4,seq_scan,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,5,seq_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,6,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,7,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,8,n_tup_ins,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,9,n_tup_upd,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,10,n_tup_del,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,11,n_tup_hot_upd,bigint,-1,8,t,d,f,f
+row pg_stat_xact_sys_tables,12,n_tup_newpage_upd,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_functions,1,funcid,oid,-1,4,t,i,f,f
+row pg_stat_xact_user_functions,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_xact_user_functions,3,funcname,name,-1,64,f,c,f,t
+row pg_stat_xact_user_functions,4,calls,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_functions,5,total_time,double precision,-1,8,t,d,f,f
+row pg_stat_xact_user_functions,6,self_time,double precision,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_stat_xact_user_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_stat_xact_user_tables,3,relname,name,-1,64,f,c,f,t
+row pg_stat_xact_user_tables,4,seq_scan,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,5,seq_tup_read,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,6,idx_scan,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,7,idx_tup_fetch,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,8,n_tup_ins,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,9,n_tup_upd,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,10,n_tup_del,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,11,n_tup_hot_upd,bigint,-1,8,t,d,f,f
+row pg_stat_xact_user_tables,12,n_tup_newpage_upd,bigint,-1,8,t,d,f,f
+row pg_statio_all_indexes,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_all_indexes,2,indexrelid,oid,-1,4,t,i,f,f
+row pg_statio_all_indexes,3,schemaname,name,-1,64,f,c,f,t
+row pg_statio_all_indexes,4,relname,name,-1,64,f,c,f,t
+row pg_statio_all_indexes,5,indexrelname,name,-1,64,f,c,f,t
+row pg_statio_all_indexes,6,idx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_all_indexes,7,idx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_all_indexes,8,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_statio_all_sequences,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_all_sequences,2,schemaname,name,-1,64,f,c,f,t
+row pg_statio_all_sequences,3,relname,name,-1,64,f,c,f,t
+row pg_statio_all_sequences,4,blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_all_sequences,5,blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_all_sequences,6,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_statio_all_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_all_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_statio_all_tables,3,relname,name,-1,64,f,c,f,t
+row pg_statio_all_tables,4,heap_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_all_tables,5,heap_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_all_tables,6,idx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_all_tables,7,idx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_all_tables,8,toast_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_all_tables,9,toast_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_all_tables,10,tidx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_all_tables,11,tidx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_all_tables,12,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_statio_sys_indexes,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_sys_indexes,2,indexrelid,oid,-1,4,t,i,f,f
+row pg_statio_sys_indexes,3,schemaname,name,-1,64,f,c,f,t
+row pg_statio_sys_indexes,4,relname,name,-1,64,f,c,f,t
+row pg_statio_sys_indexes,5,indexrelname,name,-1,64,f,c,f,t
+row pg_statio_sys_indexes,6,idx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_sys_indexes,7,idx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_sys_indexes,8,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_statio_sys_sequences,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_sys_sequences,2,schemaname,name,-1,64,f,c,f,t
+row pg_statio_sys_sequences,3,relname,name,-1,64,f,c,f,t
+row pg_statio_sys_sequences,4,blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_sys_sequences,5,blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_sys_sequences,6,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_statio_sys_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_sys_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_statio_sys_tables,3,relname,name,-1,64,f,c,f,t
+row pg_statio_sys_tables,4,heap_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_sys_tables,5,heap_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_sys_tables,6,idx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_sys_tables,7,idx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_sys_tables,8,toast_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_sys_tables,9,toast_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_sys_tables,10,tidx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_sys_tables,11,tidx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_sys_tables,12,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_statio_user_indexes,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_user_indexes,2,indexrelid,oid,-1,4,t,i,f,f
+row pg_statio_user_indexes,3,schemaname,name,-1,64,f,c,f,t
+row pg_statio_user_indexes,4,relname,name,-1,64,f,c,f,t
+row pg_statio_user_indexes,5,indexrelname,name,-1,64,f,c,f,t
+row pg_statio_user_indexes,6,idx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_user_indexes,7,idx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_user_indexes,8,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_statio_user_sequences,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_user_sequences,2,schemaname,name,-1,64,f,c,f,t
+row pg_statio_user_sequences,3,relname,name,-1,64,f,c,f,t
+row pg_statio_user_sequences,4,blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_user_sequences,5,blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_user_sequences,6,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_statio_user_tables,1,relid,oid,-1,4,t,i,f,f
+row pg_statio_user_tables,2,schemaname,name,-1,64,f,c,f,t
+row pg_statio_user_tables,3,relname,name,-1,64,f,c,f,t
+row pg_statio_user_tables,4,heap_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_user_tables,5,heap_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_user_tables,6,idx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_user_tables,7,idx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_user_tables,8,toast_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_user_tables,9,toast_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_user_tables,10,tidx_blks_read,bigint,-1,8,t,d,f,f
+row pg_statio_user_tables,11,tidx_blks_hit,bigint,-1,8,t,d,f,f
+row pg_statio_user_tables,12,stats_reset,timestamp with time zone,-1,8,t,d,f,f
+row pg_stats,1,schemaname,name,-1,64,f,c,f,t
+row pg_stats,2,tablename,name,-1,64,f,c,f,t
+row pg_stats,3,tableid,oid,-1,4,t,i,f,f
+row pg_stats,4,attname,name,-1,64,f,c,f,t
+row pg_stats,5,attnum,smallint,-1,2,t,s,f,f
+row pg_stats,6,inherited,boolean,-1,1,t,c,f,f
+row pg_stats,7,null_frac,real,-1,4,t,i,f,f
+row pg_stats,8,avg_width,integer,-1,4,t,i,f,f
+row pg_stats,9,n_distinct,real,-1,4,t,i,f,f
+row pg_stats,10,most_common_vals,anyarray,-1,-1,f,d,f,f
+row pg_stats,11,most_common_freqs,real[],-1,-1,f,i,f,f
+row pg_stats,12,histogram_bounds,anyarray,-1,-1,f,d,f,f
+row pg_stats,13,correlation,real,-1,4,t,i,f,f
+row pg_stats,14,most_common_elems,anyarray,-1,-1,f,d,f,f
+row pg_stats,15,most_common_elem_freqs,real[],-1,-1,f,i,f,f
+row pg_stats,16,elem_count_histogram,real[],-1,-1,f,i,f,f
+row pg_stats,17,range_length_histogram,anyarray,-1,-1,f,d,f,f
+row pg_stats,18,range_empty_frac,real,-1,4,t,i,f,f
+row pg_stats,19,range_bounds_histogram,anyarray,-1,-1,f,d,f,f
+row pg_stats_ext,1,schemaname,name,-1,64,f,c,f,t
+row pg_stats_ext,2,tablename,name,-1,64,f,c,f,t
+row pg_stats_ext,3,tableid,oid,-1,4,t,i,f,f
+row pg_stats_ext,4,statistics_schemaname,name,-1,64,f,c,f,t
+row pg_stats_ext,5,statistics_name,name,-1,64,f,c,f,t
+row pg_stats_ext,6,statistics_id,oid,-1,4,t,i,f,f
+row pg_stats_ext,7,statistics_owner,name,-1,64,f,c,f,t
+row pg_stats_ext,8,attnames,name[],-1,-1,f,i,f,t
+row pg_stats_ext,9,exprs,text[],-1,-1,f,i,f,t
+row pg_stats_ext,10,kinds,"char"[],-1,-1,f,i,f,f
+row pg_stats_ext,11,inherited,boolean,-1,1,t,c,f,f
+row pg_stats_ext,12,n_distinct,pg_ndistinct,-1,-1,f,i,f,t
+row pg_stats_ext,13,dependencies,pg_dependencies,-1,-1,f,i,f,t
+row pg_stats_ext,14,most_common_vals,text[],-1,-1,f,i,f,t
+row pg_stats_ext,15,most_common_val_nulls,boolean[],-1,-1,f,i,f,f
+row pg_stats_ext,16,most_common_freqs,double precision[],-1,-1,f,d,f,f
+row pg_stats_ext,17,most_common_base_freqs,double precision[],-1,-1,f,d,f,f
+row pg_tables,1,schemaname,name,-1,64,f,c,f,t
+row pg_tables,2,tablename,name,-1,64,f,c,f,t
+row pg_tables,3,tableowner,name,-1,64,f,c,f,t
+row pg_tables,4,tablespace,name,-1,64,f,c,f,t
+row pg_tables,5,hasindexes,boolean,-1,1,t,c,f,f
+row pg_tables,6,hasrules,boolean,-1,1,t,c,f,f
+row pg_tables,7,hastriggers,boolean,-1,1,t,c,f,f
+row pg_tables,8,rowsecurity,boolean,-1,1,t,c,f,f
+row pg_timezone_abbrevs,1,abbrev,text,-1,-1,f,i,f,t
+row pg_timezone_abbrevs,2,utc_offset,interval,-1,16,f,d,f,f
+row pg_timezone_abbrevs,3,is_dst,boolean,-1,1,t,c,f,f
+row pg_timezone_names,1,name,text,-1,-1,f,i,f,t
+row pg_timezone_names,2,abbrev,text,-1,-1,f,i,f,t
+row pg_timezone_names,3,utc_offset,interval,-1,16,f,d,f,f
+row pg_timezone_names,4,is_dst,boolean,-1,1,t,c,f,f
+row pg_user,1,usename,name,-1,64,f,c,f,t
+row pg_user,2,usesysid,oid,-1,4,t,i,f,f
+row pg_user,3,usecreatedb,boolean,-1,1,t,c,f,f
+row pg_user,4,usesuper,boolean,-1,1,t,c,f,f
+row pg_user,5,userepl,boolean,-1,1,t,c,f,f
+row pg_user,6,usebypassrls,boolean,-1,1,t,c,f,f
+row pg_user,7,passwd,text,-1,-1,f,i,f,t
+row pg_user,8,valuntil,timestamp with time zone,-1,8,t,d,f,f
+row pg_user,9,useconfig,text[],-1,-1,f,i,f,t
+row pg_user_mappings,1,umid,oid,-1,4,t,i,f,f
+row pg_user_mappings,2,srvid,oid,-1,4,t,i,f,f
+row pg_user_mappings,3,srvname,name,-1,64,f,c,f,t
+row pg_user_mappings,4,umuser,oid,-1,4,t,i,f,f
+row pg_user_mappings,5,usename,name,-1,64,f,c,f,t
+row pg_user_mappings,6,umoptions,text[],-1,-1,f,i,f,t
+row pg_views,1,schemaname,name,-1,64,f,c,f,t
+row pg_views,2,viewname,name,-1,64,f,c,f,t
+row pg_views,3,viewowner,name,-1,64,f,c,f,t
+row pg_views,4,definition,text,-1,-1,f,i,f,t
+row pg_wait_events,1,type,text,-1,-1,f,i,f,t
+row pg_wait_events,2,name,text,-1,-1,f,i,f,t
+row pg_wait_events,3,description,text,-1,-1,f,i,f,t
+SELECT 885
+> CREATE VIEW v1 WITH (security_barrier) AS SELECT 1 AS a
+CREATE VIEW
+> CREATE VIEW v2 WITH (security_invoker = 'TRUE', security_barrier = off) AS SELECT 1 AS a
+CREATE VIEW
+> CREATE VIEW v3 WITH (security_barrier = 1, toast.x = 5) AS SELECT 1 AS a
+CREATE VIEW
+> CREATE VIEW v4 WITH (security_barrier = t) AS SELECT 1 AS a
+CREATE VIEW
+> SELECT relname, reloptions FROM pg_class WHERE relname IN ('v1', 'v2', 'v3', 'v4') ORDER BY relname
+fields relname@pg_class.2:19:64:-1,reloptions@pg_class.33:1009:-1:-1
+row v1,{security_barrier=true}
+row v2,{security_invoker=TRUE,security_barrier=off}
+row v3,{security_barrier=1}
+row v4,{security_barrier=t}
+SELECT 4
+> CREATE VIEW v5 WITH (foo = 1) AS SELECT 1 AS a
+ERROR 22023 unrecognized parameter "foo"
+> CREATE VIEW v5 WITH (security_barrier = maybe) AS SELECT 1 AS a
+ERROR 22023 invalid value for boolean option "security_barrier": maybe
+> CREATE VIEW v5 WITH (security_barrier = 1.5) AS SELECT 1 AS a
+ERROR 22023 invalid value for boolean option "security_barrier": 1.5
+> CREATE VIEW v5 WITH (security_barrier = int4) AS SELECT 1 AS a
+ERROR 22023 invalid value for boolean option "security_barrier": int4
+> CREATE VIEW v5 WITH (security_barrier, security_barrier = false) AS SELECT 1 AS a
+ERROR 22023 parameter "security_barrier" specified more than once
+> CREATE VIEW nosuch.v5 WITH (foo = 1) AS SELECT 1 AS a
+ERROR 3F000 schema "nosuch" does not exist
+> CREATE VIEW v5 (a, a) WITH (foo = 1) AS SELECT 1, 2
+ERROR 22023 unrecognized parameter "foo"
+> CREATE OR REPLACE VIEW v1 AS SELECT 1 AS a
+CREATE VIEW
+> CREATE OR REPLACE VIEW v2 WITH (security_barrier = on) AS SELECT 1 AS a
+CREATE VIEW
+> SELECT relname, reloptions, relacl FROM pg_class WHERE relname IN ('v1', 'v2') ORDER BY relname
+fields relname@pg_class.2:19:64:-1,reloptions@pg_class.33:1009:-1:-1,relacl@pg_class.32:1034:-1:-1
+row v1,NULL,NULL
+row v2,{security_barrier=on},NULL
+SELECT 2
+> CREATE VIEW pg_catalog.v6 AS SELECT 1 AS a
+ERROR 42501 permission denied to create "pg_catalog.v6"
+> SELECT relname, relnatts FROM pg_class WHERE relname = 'pg_user'
+fields relname@pg_class.2:19:64:-1,relnatts@pg_class.19:21:2:-1
+row pg_user,9
+SELECT 1
+> SELECT usename, usesuper, userepl, usebypassrls FROM pg_user
+fields usename@pg_user.1:19:64:-1,usesuper@pg_user.4:16:1:-1,userepl@pg_user.5:16:1:-1,usebypassrls@pg_user.6:16:1:-1
+row postgres,t,t,t
+SELECT 1
+> SELECT rolname, rolsuper, rolinherit, rolcanlogin FROM pg_roles WHERE rolname = 'postgres'
+fields rolname@pg_roles.1:19:64:-1,rolsuper@pg_roles.2:16:1:-1,rolinherit@pg_roles.3:16:1:-1,rolcanlogin@pg_roles.6:16:1:-1
+row postgres,t,t,t
+SELECT 1

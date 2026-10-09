@@ -12,7 +12,7 @@ use super::{Definer, Found, check_attribute_type, not_yet, relname};
 use crate::collate::target_collation;
 use crate::expr::{Expr, ExprKind};
 use crate::select::Query;
-use crate::typename::{names, place};
+use crate::typename::{names, place, type_name_text};
 use crate::types;
 
 /// The 4 bytes of the length word of a `varlena` value, which a typmod of the character types and `numeric` includes.
@@ -35,8 +35,8 @@ impl Definer<'_, '_> {
         if stmt.withCheckOption != ViewCheckOption::NO_CHECK_OPTION {
             return Err(not_yet("WITH CHECK OPTION", None));
         }
-        if !stmt.options.is_empty() {
-            return Err(not_yet("a view with options", None));
+        if stmt.options.iter().flatten().any(|o| def_name(o) == Some("check_option")) {
+            return Err(not_yet("WITH CHECK OPTION", None));
         }
         let targets: Vec<&Expr> =
             query.targets.iter().filter(|t| !t.junk).map(|t| &t.expr).collect();
@@ -94,8 +94,11 @@ impl Definer<'_, '_> {
                 _ => return Err(not_a_view(&name)),
             };
             check_view_columns(&columns, &old)?;
-            return self.catalog.replace_view(view, columns, text.to_string(), path, &refs);
+            let options = view_options(&stmt.options)?;
+            self.catalog.replace_view(view, columns, text.to_string(), path, &refs)?;
+            return self.catalog.set_options(view, options);
         }
+        let options = view_options(&stmt.options)?;
         if columns.len() > MAX_COLUMNS {
             return Err(Error::new(
                 SqlState::TOO_MANY_COLUMNS,
@@ -111,13 +114,70 @@ impl Definer<'_, '_> {
             }
         }
         for column in &columns {
-            check_attribute_type(&column.name, column.ty)?;
+            check_attribute_type(&column.name, column.ty, self.an.env.allow_system_table_mods())?;
         }
         self.check_relation_name(namespace, &name)?;
         let new = NewRelation { namespace, name, owner: self.user, columns };
-        self.catalog.create_view(new, text.to_string(), path, &refs)?;
-        Ok(())
+        let view = self.catalog.create_view(new, text.to_string(), path, &refs)?;
+        self.catalog.set_options(view, options)
     }
+}
+
+/// The name of a `DefElem`.
+fn def_name(node: &Node) -> Option<&str> {
+    match node {
+        Node::DefElem(def) => def.defname.as_deref(),
+        _ => None,
+    }
+}
+
+/// `defGetString`: the value of an option as text. An option without a value is `true`.
+fn def_string(arg: Option<&Node>) -> String {
+    match arg {
+        None => "true".to_string(),
+        Some(Node::Integer(n)) => n.to_string(),
+        Some(Node::Float(s) | Node::String(s) | Node::BitString(s)) => s.to_string(),
+        Some(Node::Boolean(b)) => b.to_string(),
+        Some(Node::TypeName(name)) => type_name_text(name),
+        Some(_) => String::new(),
+    }
+}
+
+/// `parse_bool`: as `boolin`, but without spaces around the word.
+fn parse_bool(text: &str) -> Option<bool> {
+    if text.trim() != text {
+        return None;
+    }
+    rupg_types::bool_in(text).ok()
+}
+
+/// `transformRelOptions` and `view_reloptions`: the options of `WITH` as `name=value`, in the order of the statement. An option with a namespace, such as `toast.name`, does not apply to a view and is dropped.
+fn view_options(options: &[Option<Node>]) -> Result<Vec<String>> {
+    let invalid = |message: String| Error::new(SqlState::INVALID_PARAMETER_VALUE, message);
+    let mut out = Vec::new();
+    let mut seen: Vec<&str> = Vec::new();
+    for option in options.iter().flatten() {
+        let Node::DefElem(def) = option else { continue };
+        if def.defnamespace.is_some() {
+            continue;
+        }
+        let name = def.defname.as_deref().unwrap_or_default();
+        let value = def_string(def.arg.as_ref());
+        out.push((name, value));
+    }
+    for (name, value) in &out {
+        if !matches!(*name, "security_barrier" | "security_invoker") {
+            return Err(invalid(format!("unrecognized parameter \"{name}\"")));
+        }
+        if seen.contains(name) {
+            return Err(invalid(format!("parameter \"{name}\" specified more than once")));
+        }
+        seen.push(name);
+        if parse_bool(value).is_none() {
+            return Err(invalid(format!("invalid value for boolean option \"{name}\": {value}")));
+        }
+    }
+    Ok(out.into_iter().map(|(name, value)| format!("{name}={value}")).collect())
 }
 
 /// The error of `CREATE OR REPLACE VIEW` for a relation that is not a view.

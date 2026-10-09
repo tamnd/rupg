@@ -310,6 +310,10 @@ impl Env for Reader<'_> {
     fn catalog(&self) -> Option<&Catalog> {
         Some(&self.catalog)
     }
+
+    fn allow_system_table_mods(&self) -> bool {
+        self.settings().get("allow_system_table_mods").as_deref() == Some("on")
+    }
 }
 
 /// `parse_analyze` and the plan of a statement.
