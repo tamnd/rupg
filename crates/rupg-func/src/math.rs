@@ -114,6 +114,28 @@ fn int_xor(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     integer(call.ret, a ^ b)
 }
 
+/// `int2shl`, `int4shl` and `int8shl`, and the `shr` functions with `left` false. As in C on the hosts of PostgreSQL, a shift of `int2` and `int4` uses the low 5 bits of the count and a shift of `int8` the low 6 bits, and the bits that go out of the type are lost without an error. An `int2` shifts as an `int4`, and then the result keeps its low 16 bits.
+#[allow(clippy::cast_possible_truncation)]
+fn int_shift(call: &Call<'_>, args: &[Value], left: bool) -> Result<Value> {
+    let [a, count] = args else { return Err(bad_value()) };
+    let (Some(a), Some(count)) = (a.as_i64(), count.as_i64()) else { return Err(bad_value()) };
+    let count = (count as i32).cast_unsigned();
+    let narrow = |a: i32| if left { a.wrapping_shl(count) } else { a.wrapping_shr(count) };
+    Ok(match base_type(call.ret) {
+        oid::INT8 => Value::Int8(if left { a.wrapping_shl(count) } else { a.wrapping_shr(count) }),
+        oid::INT4 => Value::Int4(narrow(a as i32)),
+        _ => Value::Int2(narrow(a as i32) as i16),
+    })
+}
+
+fn int_shl(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    int_shift(call, args, true)
+}
+
+fn int_shr(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    int_shift(call, args, false)
+}
+
 fn int_neg(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     integer(call.ret, -one_integer(args)?)
 }
@@ -614,6 +636,8 @@ pub(crate) fn by_operator(name: &str, left: u32, right: u32, ret: u32) -> Option
         (Kind::Integer, "&") => int_and,
         (Kind::Integer, "|") => int_or,
         (Kind::Integer, "#") => int_xor,
+        (Kind::Integer, "<<") => int_shl,
+        (Kind::Integer, ">>") => int_shr,
         (Kind::Float, "+") => float_add,
         (Kind::Float, "-") => float_sub,
         (Kind::Float, "*") => float_mul,

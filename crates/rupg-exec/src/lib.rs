@@ -83,7 +83,10 @@ fn check(expr: &Expr) -> Result<()> {
             check_query(&sub.query, false)?;
         }
         ExprKind::Func(f) => {
-            kernel(f.oid, expr.location)?;
+            // The engine runs the body of a function in SQL, so such a function needs no kernel.
+            if !builtin::is_system_proc(f.oid) {
+                kernel(f.oid, expr.location)?;
+            }
             f.args.iter().try_for_each(check)?;
         }
         ExprKind::Relabel(arg, _)
@@ -332,6 +335,9 @@ type Rows = Vec<Vec<Value>>;
 /// The name and the expression of each check constraint of a domain.
 type Checks = Rc<Vec<(String, Expr)>>;
 
+/// The body of each function in SQL, by the OID of the function, or `None` for a function of the catalog that is not in SQL.
+type Bodies = Rc<RefCell<Vec<(u32, Option<Rc<Expr>>)>>>;
+
 /// The state of a run that the query and its subqueries share.
 #[derive(Default)]
 struct Cache {
@@ -341,6 +347,8 @@ struct Cache {
     rows: RefCell<Vec<(*const Query, Rc<Rows>)>>,
     /// The name and the expression of each check constraint of a domain, by the OID of the domain, as the type cache keeps them.
     domains: RefCell<Vec<(u32, Checks)>>,
+    /// The body of each function in SQL that the run calls. The run of a body shares them.
+    bodies: Bodies,
 }
 
 impl Cache {
@@ -359,6 +367,19 @@ impl Cache {
         let checks = Rc::new(checks);
         self.domains.borrow_mut().push((domain, Rc::clone(&checks)));
         Ok(checks)
+    }
+
+    /// The body of a function in SQL of the catalog of the session, which the analyzer reads once for each run, or `None` for another function.
+    fn body(&self, func: u32, session: &dyn Session) -> Result<Option<Rc<Expr>>> {
+        if session.catalog().and_then(|c| c.function(func)).is_none() {
+            return Ok(None);
+        }
+        if let Some((_, body)) = self.bodies.borrow().iter().find(|(f, _)| *f == func) {
+            return Ok(body.clone());
+        }
+        let body = rupg_func::function_body(func, session)?.map(Rc::new);
+        self.bodies.borrow_mut().push((func, body.clone()));
+        Ok(body)
     }
 
     fn tables(&self, query: &Query, session: &dyn Session) -> Result<Rc<scan::Tables>> {
@@ -1053,6 +1074,12 @@ impl<'a> Eval<'a> {
     ) -> Result<Value> {
         if strict(func) && args.iter().any(Value::is_null) {
             return Ok(Value::Null);
+        }
+        if let Some(body) = self.cache.body(func, self.session)? {
+            // The body runs with a cache of its own, so that a subquery of the body that reads an argument runs again for each call.
+            let cache = Cache { bodies: Rc::clone(&self.cache.bodies), ..Cache::default() };
+            let tables = scan::Tables::default();
+            return Eval::new(args, self.session, &tables, &cache, &[]).eval(&body);
         }
         let kernel = kernel(func, None)?;
         let call = Call { session: self.session, args: types, ret, variadic };

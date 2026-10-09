@@ -1,0 +1,107 @@
+> SELECT p.proname, p.oid = v.o::oid AS pg_oid, p.pronamespace::regnamespace, p.proowner::regrole, (SELECT lanname FROM pg_language l WHERE l.oid = p.prolang) AS lang, p.procost, p.prorows, p.provariadic::regtype, p.prosupport, p.prokind, p.prosecdef, p.proleakproof, p.proisstrict, p.proretset, p.provolatile, p.proparallel, p.pronargs, p.pronargdefaults, p.prorettype::regtype, p.proallargtypes, p.proargmodes, p.proargnames, p.proargdefaults IS NULL AS no_defaults, p.protrftypes, p.prosrc, p.probin, p.prosqlbody IS NOT NULL AS has_body, p.proconfig, p.proacl FROM pg_proc p JOIN (VALUES ('_pg_char_max_length', 13355), ('_pg_char_octet_length', 13356), ('_pg_numeric_precision', 13358), ('_pg_numeric_precision_radix', 13359), ('_pg_numeric_scale', 13360), ('_pg_datetime_precision', 13361), ('_pg_interval_type', 13362)) v(n, o) ON p.proname = v.n ORDER BY p.proname
+fields proname@pg_proc.2:19:64:-1,pg_oid:16:1:-1,pronamespace:4089:4:-1,proowner:4096:4:-1,lang:19:64:-1,procost@pg_proc.6:700:4:-1,prorows@pg_proc.7:700:4:-1,provariadic:2206:4:-1,prosupport@pg_proc.9:24:4:-1,prokind@pg_proc.10:18:1:-1,prosecdef@pg_proc.11:16:1:-1,proleakproof@pg_proc.12:16:1:-1,proisstrict@pg_proc.13:16:1:-1,proretset@pg_proc.14:16:1:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1,pronargs@pg_proc.17:21:2:-1,pronargdefaults@pg_proc.18:21:2:-1,prorettype:2206:4:-1,proallargtypes@pg_proc.21:1028:-1:-1,proargmodes@pg_proc.22:1002:-1:-1,proargnames@pg_proc.23:1009:-1:-1,no_defaults:16:1:-1,protrftypes@pg_proc.25:1028:-1:-1,prosrc@pg_proc.26:25:-1:-1,probin@pg_proc.27:25:-1:-1,has_body:16:1:-1,proconfig@pg_proc.29:1009:-1:-1,proacl@pg_proc.30:1034:-1:-1
+row _pg_char_max_length,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,integer,NULL,NULL,{typid,typmod},t,NULL,,NULL,t,NULL,NULL
+row _pg_char_octet_length,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,integer,NULL,NULL,{typid,typmod},t,NULL,,NULL,t,NULL,NULL
+row _pg_datetime_precision,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,integer,NULL,NULL,{typid,typmod},t,NULL,,NULL,t,NULL,NULL
+row _pg_interval_type,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,text,NULL,NULL,{typid,mod},t,NULL,,NULL,t,NULL,NULL
+row _pg_numeric_precision,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,integer,NULL,NULL,{typid,typmod},t,NULL,,NULL,t,NULL,NULL
+row _pg_numeric_precision_radix,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,integer,NULL,NULL,{typid,typmod},t,NULL,,NULL,t,NULL,NULL
+row _pg_numeric_scale,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,integer,NULL,NULL,{typid,typmod},t,NULL,,NULL,t,NULL,NULL
+SELECT 7
+> SELECT proname, pg_get_function_arguments(oid), pg_get_function_identity_arguments(oid), pg_get_function_result(oid), pg_function_is_visible(oid) FROM pg_proc WHERE pronamespace = 'information_schema'::regnamespace AND proname IN ('_pg_char_max_length', '_pg_char_octet_length', '_pg_numeric_precision', '_pg_numeric_precision_radix', '_pg_numeric_scale', '_pg_datetime_precision', '_pg_interval_type') ORDER BY proname
+fields proname@pg_proc.2:19:64:-1,pg_get_function_arguments:25:-1:-1,pg_get_function_identity_arguments:25:-1:-1,pg_get_function_result:25:-1:-1,pg_function_is_visible:16:1:-1
+row _pg_char_max_length,typid oid, typmod integer,typid oid, typmod integer,integer,f
+row _pg_char_octet_length,typid oid, typmod integer,typid oid, typmod integer,integer,f
+row _pg_datetime_precision,typid oid, typmod integer,typid oid, typmod integer,integer,f
+row _pg_interval_type,typid oid, mod integer,typid oid, mod integer,text,f
+row _pg_numeric_precision,typid oid, typmod integer,typid oid, typmod integer,integer,f
+row _pg_numeric_precision_radix,typid oid, typmod integer,typid oid, typmod integer,integer,f
+row _pg_numeric_scale,typid oid, typmod integer,typid oid, typmod integer,integer,f
+SELECT 7
+> SELECT d.classid::regclass, (SELECT proname FROM pg_proc WHERE oid = d.objid) AS object, d.objsubid, d.refclassid::regclass, CASE WHEN d.refclassid = 'pg_proc'::regclass THEN (SELECT proname FROM pg_proc WHERE oid = d.refobjid)::text ELSE d.refobjid::regnamespace::text END AS referenced, d.refobjsubid, d.deptype FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid IN (SELECT oid FROM pg_proc WHERE pronamespace = 'information_schema'::regnamespace AND proname IN ('_pg_char_max_length', '_pg_char_octet_length', '_pg_numeric_precision', '_pg_numeric_precision_radix', '_pg_numeric_scale', '_pg_datetime_precision', '_pg_interval_type')) ORDER BY 2, 5
+fields classid:2205:4:-1,object:19:64:-1,objsubid@pg_depend.3:23:4:-1,refclassid:2205:4:-1,referenced:25:-1:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_proc,_pg_char_max_length,0,pg_namespace,information_schema,0,n
+row pg_proc,_pg_char_octet_length,0,pg_proc,_pg_char_max_length,0,n
+row pg_proc,_pg_char_octet_length,0,pg_namespace,information_schema,0,n
+row pg_proc,_pg_datetime_precision,0,pg_namespace,information_schema,0,n
+row pg_proc,_pg_interval_type,0,pg_namespace,information_schema,0,n
+row pg_proc,_pg_numeric_precision,0,pg_namespace,information_schema,0,n
+row pg_proc,_pg_numeric_precision_radix,0,pg_namespace,information_schema,0,n
+row pg_proc,_pg_numeric_scale,0,pg_namespace,information_schema,0,n
+SELECT 8
+> SELECT t, m, information_schema._pg_char_max_length(t, m) AS max_length, information_schema._pg_char_octet_length(t, m) AS octet_length, information_schema._pg_numeric_precision(t, m) AS np, information_schema._pg_numeric_precision_radix(t, m) AS radix, information_schema._pg_numeric_scale(t, m) AS scale, information_schema._pg_datetime_precision(t, m) AS dp FROM (VALUES (1043, 14), (1042, -1), (1042, 5), (25, -1), (1560, 8), (1562, -1), (21, -1), (23, -1), (20, -1), (1700, 655366), (1700, 1310724), (1700, -1), (700, -1), (701, -1), (1082, -1), (1083, 3), (1114, -1), (1184, 2), (1266, 0), (1186, -1), (1186, 2147418112), (1186, 65539), (1186, 196611), (16, -1), (NULL, 1), (1043, NULL)) v(t, m) ORDER BY 1, 2
+fields t:23:4:-1,m:23:4:-1,max_length:23:4:-1,octet_length:23:4:-1,np:23:4:-1,radix:23:4:-1,scale:23:4:-1,dp:23:4:-1
+row 16,-1,NULL,NULL,NULL,NULL,NULL,NULL
+row 20,-1,NULL,NULL,64,2,0,NULL
+row 21,-1,NULL,NULL,16,2,0,NULL
+row 23,-1,NULL,NULL,32,2,0,NULL
+row 25,-1,NULL,1073741824,NULL,NULL,NULL,NULL
+row 700,-1,NULL,NULL,24,2,NULL,NULL
+row 701,-1,NULL,NULL,53,2,NULL,NULL
+row 1042,-1,NULL,1073741824,NULL,NULL,NULL,NULL
+row 1042,5,1,4,NULL,NULL,NULL,NULL
+row 1043,14,10,40,NULL,NULL,NULL,NULL
+row 1043,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+row 1082,-1,NULL,NULL,NULL,NULL,NULL,0
+row 1083,3,NULL,NULL,NULL,NULL,NULL,3
+row 1114,-1,NULL,NULL,NULL,NULL,NULL,6
+row 1184,2,NULL,NULL,NULL,NULL,NULL,2
+row 1186,-1,NULL,NULL,NULL,NULL,NULL,6
+row 1186,65539,NULL,NULL,NULL,NULL,NULL,3
+row 1186,196611,NULL,NULL,NULL,NULL,NULL,3
+row 1186,2147418112,NULL,NULL,NULL,NULL,NULL,0
+row 1266,0,NULL,NULL,NULL,NULL,NULL,0
+row 1560,8,8,NULL,NULL,NULL,NULL,NULL
+row 1562,-1,NULL,NULL,NULL,NULL,NULL,NULL
+row 1700,-1,NULL,NULL,NULL,10,NULL,NULL
+row 1700,655366,NULL,NULL,10,10,2,NULL
+row 1700,1310724,NULL,NULL,20,10,0,NULL
+row NULL,1,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 26
+> SELECT information_schema._pg_interval_type(23, -1) IS NULL AS not_interval, information_schema._pg_interval_type(NULL, 2) IS NULL AS null_type
+fields not_interval:16:1:-1,null_type:16:1:-1
+row t,t
+SELECT 1
+> CREATE TABLE t (a varchar(10), b numeric(8,3), c timestamp(3), d bit(5), e char, f text, g float4, h interval(2), i int8, j varbit)
+CREATE TABLE
+> SELECT attname, information_schema._pg_char_max_length(atttypid, atttypmod) AS max_length, information_schema._pg_char_octet_length(atttypid, atttypmod) AS octet_length, information_schema._pg_numeric_precision(atttypid, atttypmod) AS np, information_schema._pg_numeric_precision_radix(atttypid, atttypmod) AS radix, information_schema._pg_numeric_scale(atttypid, atttypmod) AS scale, information_schema._pg_datetime_precision(atttypid, atttypmod) AS dp FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,max_length:23:4:-1,octet_length:23:4:-1,np:23:4:-1,radix:23:4:-1,scale:23:4:-1,dp:23:4:-1
+row a,10,40,NULL,NULL,NULL,NULL
+row b,NULL,NULL,8,10,3,NULL
+row c,NULL,NULL,NULL,NULL,NULL,3
+row d,5,NULL,NULL,NULL,NULL,NULL
+row e,1,4,NULL,NULL,NULL,NULL
+row f,NULL,1073741824,NULL,NULL,NULL,NULL
+row g,NULL,NULL,24,2,NULL,NULL
+row h,NULL,NULL,NULL,NULL,NULL,2
+row i,NULL,NULL,64,2,0,NULL
+row j,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 10
+> SELECT 'information_schema._pg_numeric_scale'::regproc::oid = 13360 AS pg_oid, 'information_schema._pg_numeric_scale(oid,int4)'::regprocedure::text AS signature
+fields pg_oid:16:1:-1,signature:25:-1:-1
+row t,information_schema._pg_numeric_scale(oid,integer)
+SELECT 1
+> SELECT _pg_numeric_scale(1700, 655366)
+ERROR 42883 function _pg_numeric_scale(integer, integer) does not exist at 8
+> SELECT information_schema._pg_char_max_length('a', 1)
+ERROR 22P02 invalid input syntax for type oid: "a" at 47
+> SELECT information_schema._pg_char_max_length(1043)
+ERROR 42883 function information_schema._pg_char_max_length(integer) does not exist at 8
+> SET search_path = information_schema, public
+SET
+search_path=information_schema, public
+> SELECT _pg_numeric_scale(1700, 655366) AS scale, pg_function_is_visible('_pg_numeric_scale'::regproc) AS visible
+fields scale:23:4:-1,visible:16:1:-1
+row 2,t
+SELECT 1
+> RESET search_path
+RESET
+search_path="$user", public
+> SELECT 1 << 33 AS a, 1::int2 << 17 AS b, -8 >> 1 AS c, 1::int8 << 65 AS d, 1::int2 << 15 AS e, -1 >> 40 AS f, 5 << -1 AS g, 1 << 31 AS h, 1::int8 << 63 AS i, (-32768)::int2 >> 1 AS j, 3::int2 << 14 AS k, 1::int2 << 31 AS l, 1::int2 << 32 AS m, 1 >> -1 AS n
+fields a:23:4:-1,b:21:2:-1,c:23:4:-1,d:20:8:-1,e:21:2:-1,f:23:4:-1,g:23:4:-1,h:23:4:-1,i:20:8:-1,j:21:2:-1,k:21:2:-1,l:21:2:-1,m:21:2:-1,n:23:4:-1
+row 2,0,-4,2,-32768,-1,-2147483648,-2147483648,-9223372036854775808,-16384,-16384,0,1,0
+SELECT 1
+> SELECT pg_typeof(1::int2 << 1), pg_typeof(1::int8 >> 1), pg_typeof(1 << 1::int2)
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row smallint,bigint,integer
+SELECT 1

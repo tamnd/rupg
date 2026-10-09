@@ -1,13 +1,15 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW` and `CREATE DOMAIN`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView` and `DefineDomain` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN`, for the domains of `information_schema`, so [`is_definition`] does not list it.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN` and `CREATE FUNCTION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain` and `CreateFunction` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them.
 
 mod domain;
 mod fkey;
+mod function;
 mod index;
 mod table;
 #[cfg(test)]
 mod tests;
 mod view;
 
+pub use function::function_body;
 pub(crate) use table::check_attribute_type;
 
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
@@ -50,7 +52,7 @@ pub fn is_definition(stmt: &Node) -> bool {
     )
 }
 
-/// Runs a statement that defines an object, for the role `user`, and adds the object to the catalog. The statement is the `stmt` of a `RawStmt`, and `text` is its text, which the catalog keeps for a view.
+/// Runs a statement that defines an object, for the role `user`, and adds the object to the catalog. The statement is the `stmt` of a `RawStmt`, and `text` is its text, which the catalog keeps for a view and for a function.
 pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, user: u32) -> Defined {
     let schemas = SchemaEnv::new(env, catalog);
     let mut definer = Definer {
@@ -65,6 +67,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
         Node::ViewStmt(view) => definer.create_view(view, text),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
+        Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }

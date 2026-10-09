@@ -29,6 +29,8 @@ pub const PG_CLASS: u32 = 1259;
 pub const PG_TYPE: u32 = 1247;
 /// The OID of `pg_rewrite`.
 pub const PG_REWRITE: u32 = 2618;
+/// The OID of `pg_proc`.
+pub const PG_PROC: u32 = 1255;
 /// The OID of `pg_namespace`.
 pub const PG_NAMESPACE: u32 = 2615;
 /// The OID of `pg_database`.
@@ -277,6 +279,48 @@ pub struct Domain {
     pub collation: u32,
     /// `typdefaultbin`: the default in the form of the analyzer, or `None`.
     pub default: Option<String>,
+}
+
+/// A function, one row of `pg_proc`. Only the setup of a new cluster makes functions, for the functions in SQL of `information_schema`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Function {
+    /// The OID. [`Catalog::create_function`] sets it.
+    pub oid: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the schema.
+    pub namespace: u32,
+    /// The OID of the owner role.
+    pub owner: u32,
+    /// `prolang`: the OID of the language.
+    pub lang: u32,
+    /// `procost`: the cost in units of `cpu_operator_cost`.
+    pub cost: u32,
+    /// `prorows`: the number of rows of a function that returns a set, or 0.
+    pub rows: u32,
+    /// `proisstrict`: true when a null argument gives null without a call.
+    pub strict: bool,
+    /// `provolatile`: `i` immutable, `s` stable or `v` volatile.
+    pub volatile: u8,
+    /// `proparallel`: `s` safe, `r` restricted or `u` unsafe.
+    pub parallel: u8,
+    /// `prorettype`: the OID of the result type.
+    pub rettype: u32,
+    /// `proargtypes`: the types of the arguments.
+    pub argtypes: Vec<u32>,
+    /// `proargnames`: the name of each argument, with an empty name for an argument without a name. The list is empty when no argument has a name.
+    pub argnames: Vec<String>,
+    /// The body in SQL, or `None`.
+    pub body: Option<FunctionBody>,
+}
+
+/// The body of a function in SQL, which the analyzer reads again each time a query calls the function, as it reads the query of a view.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FunctionBody {
+    /// The text of the statement that made the function.
+    pub text: String,
+    /// The schemas of `search_path` when that statement ran, in order.
+    pub path: Vec<u32>,
 }
 
 /// A column default, one row of `pg_attrdef`.
@@ -534,6 +578,7 @@ pub struct Catalog {
     types: BTreeMap<u32, Type>,
     defaults: BTreeMap<u32, AttrDefault>,
     constraints: BTreeMap<u32, Constraint>,
+    functions: BTreeMap<u32, Function>,
     depends: Vec<Depend>,
 }
 
@@ -579,6 +624,7 @@ impl Catalog {
             types: BTreeMap::new(),
             defaults: BTreeMap::new(),
             constraints: BTreeMap::new(),
+            functions: BTreeMap::new(),
             depends: Vec::new(),
         }
     }
@@ -712,6 +758,16 @@ impl Catalog {
     /// The check constraints of a domain.
     pub fn constraints_of_domain(&self, domain: u32) -> impl Iterator<Item = &Constraint> {
         self.constraints.values().filter(move |c| c.domain == domain)
+    }
+
+    /// The functions in the order of their OIDs.
+    pub fn functions(&self) -> impl Iterator<Item = &Function> {
+        self.functions.values()
+    }
+
+    /// The function with the OID.
+    pub fn function(&self, oid: u32) -> Option<&Function> {
+        self.functions.get(&oid)
     }
 
     /// The rows of `pg_depend` for user objects, in the order that PostgreSQL inserts them.
@@ -1035,6 +1091,31 @@ impl Catalog {
             self.depend(me, referenced, DepKind::Normal);
         }
         self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
+        Ok(oid)
+    }
+
+    /// `ProcedureCreate`: a new function, which gets the next OID. It depends on its schema and on the objects in `refs`, which are the objects that its body refers to.
+    ///
+    /// # Errors
+    ///
+    /// `42723` when the schema has a function with the same name and the same argument types.
+    pub fn create_function(&mut self, mut new: Function, refs: &[ObjRef]) -> Result<u32> {
+        if self.functions.values().any(|f| {
+            f.namespace == new.namespace && f.name == new.name && f.argtypes == new.argtypes
+        }) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_FUNCTION,
+                format!("function \"{}\" already exists with same argument types", new.name),
+            ));
+        }
+        let oid = self.new_oid();
+        new.oid = oid;
+        let me = ObjRef::new(PG_PROC, oid);
+        self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
+        for &referenced in refs {
+            self.depend(me, referenced, DepKind::Normal);
+        }
+        self.functions.insert(oid, new);
         Ok(oid)
     }
 

@@ -920,14 +920,16 @@ pub struct DomainRow {
     pub checks: Vec<(String, String)>,
 }
 
-/// The types and the domains that `initdb` makes with SQL after the bootstrap, such as the domains of `information_schema`.
+/// The types, the domains and the functions that `initdb` makes with SQL after the bootstrap, such as the domains and the functions of `information_schema`.
 struct System {
     types: Vec<&'static TypeRow>,
     domains: Vec<&'static DomainRow>,
+    procs: Vec<&'static ProcRow>,
 }
 
 /// The setup of a new cluster fills this once in the process, before the first session. Each database has the same objects of `initdb`, so the rows are the same for all of them, as the built-in rows are.
-static SYSTEM: RwLock<System> = RwLock::new(System { types: Vec::new(), domains: Vec::new() });
+static SYSTEM: RwLock<System> =
+    RwLock::new(System { types: Vec::new(), domains: Vec::new(), procs: Vec::new() });
 
 fn system() -> std::sync::RwLockReadGuard<'static, System> {
     SYSTEM.read().unwrap_or_else(PoisonError::into_inner)
@@ -952,6 +954,19 @@ pub fn add_system_domain(domain: DomainRow) {
         .unwrap_or_else(PoisonError::into_inner)
         .domains
         .push(Box::leak(Box::new(domain)));
+}
+
+/// Adds a function that `initdb` makes with SQL, so that [`proc_by_oid`] and [`procs_named`] find it. A function with the OID of a known function changes nothing.
+pub fn add_system_proc(row: ProcRow) {
+    if proc_by_oid(row.oid).is_some() {
+        return;
+    }
+    SYSTEM.write().unwrap_or_else(PoisonError::into_inner).procs.push(Box::leak(Box::new(row)));
+}
+
+/// True for a function that [`add_system_proc`] added. Such a function is in SQL, and the engine runs its body.
+pub fn is_system_proc(oid: u32) -> bool {
+    !BUILTIN.proc_oid.contains_key(&oid) && system().procs.iter().any(|p| p.oid == oid)
 }
 
 /// The constraints of a domain that [`add_system_domain`] added.
@@ -1016,15 +1031,21 @@ pub fn procs() -> &'static [ProcRow] {
     &BUILTIN.procs
 }
 
-/// The built-in function with this OID.
+/// The built-in function with this OID, or a function that [`add_system_proc`] added.
 pub fn proc_by_oid(oid: u32) -> Option<&'static ProcRow> {
-    BUILTIN.proc_oid.get(&oid).map(|&i| &BUILTIN.procs[i])
+    BUILTIN
+        .proc_oid
+        .get(&oid)
+        .map(|&i| &BUILTIN.procs[i])
+        .or_else(|| system().procs.iter().copied().find(|p| p.oid == oid))
 }
 
-/// The built-in functions with this name, in the order of `pg_proc.dat`.
+/// The built-in functions with this name, in the order of `pg_proc.dat`, then the functions with this name that [`add_system_proc`] added.
 pub fn procs_named(name: &str) -> impl Iterator<Item = &'static ProcRow> {
     let b = &*BUILTIN;
-    b.proc_name.get(name).into_iter().flatten().map(|&i| &b.procs[i])
+    let added: Vec<&'static ProcRow> =
+        system().procs.iter().copied().filter(|p| p.name == name).collect();
+    b.proc_name.get(name).into_iter().flatten().map(|&i| &b.procs[i]).chain(added)
 }
 
 /// Every built-in operator.

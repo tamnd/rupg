@@ -6,7 +6,7 @@
 //!
 //! The `GRANT` and `REVOKE` statements of the script on views set the privileges of these views. Then each view without privileges gets `SELECT` for PUBLIC, as `setup_privileges` of `initdb` gives it. The statements on catalogs changed the static rows already.
 //!
-//! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges and the five domains, with the OIDs of PostgreSQL 19. The functions, the tables and the views of the script are not done yet.
+//! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges, the five domains and the functions in SQL with a `RETURN` body, with the OIDs of PostgreSQL 19. The other functions, the tables and the views of the script are not done yet.
 //!
 //! These parts of `system_views.sql` are not done yet: the view `pg_stats_ext_exprs`, which has a set-returning function in its target list, and the rules `pg_settings_u` and `pg_settings_n` on `pg_settings`. Their OIDs stay unused.
 
@@ -20,7 +20,7 @@ use rupg_platform::os::OsClock;
 use rupg_sql::nodes::{GrantStmt, Node, ObjectType, RoleSpecType};
 
 use crate::connection::base_settings;
-use crate::guc::{Action, Origin};
+use crate::guc::{Action, Origin, Settings};
 use crate::query::Reader;
 use crate::utility::flatten;
 
@@ -133,6 +133,17 @@ const DOMAIN_OIDS: [(&str, u32); 5] = [
     ("sql_identifier", 13368),
     ("time_stamp", 13374),
     ("yes_or_no", 13376),
+];
+
+/// The OID of each function of `information_schema` in PostgreSQL 19 that rupg makes. The OID 13357 is the TOAST value of the long body of `_pg_char_octet_length`. The functions `_pg_expandarray`, `_pg_index_position`, `_pg_truetypid` and `_pg_truetypmod` take the OIDs 13351 to 13354 and are not done yet.
+const FUNCTION_OIDS: [(&str, u32); 7] = [
+    ("_pg_char_max_length", 13355),
+    ("_pg_char_octet_length", 13356),
+    ("_pg_numeric_precision", 13358),
+    ("_pg_numeric_precision_radix", 13359),
+    ("_pg_numeric_scale", 13360),
+    ("_pg_datetime_precision", 13361),
+    ("_pg_interval_type", 13362),
 ];
 
 /// The views of the script that rupg cannot make yet.
@@ -283,30 +294,21 @@ fn information_schema(
                 match DOMAIN_OIDS.iter().find(|(n, _)| Some(*n) == name.last().copied()) {
                     Some(&(name, array)) => {
                         catalog.set_next_oid(array);
-                        let reader = Reader::new(
-                            &settings,
-                            user,
-                            "postgres",
-                            (0, 0),
-                            clock,
-                            0,
-                            Arc::new(catalog.clone()),
-                        );
-                        let mut work = catalog.clone();
-                        rupg_analyze::define(
-                            stmt,
-                            statement,
-                            &reader,
-                            &mut work,
-                            BOOTSTRAP_SUPERUSER,
-                        )
-                        .result
-                        .and_then(|()| {
-                            *catalog = work;
-                            add_system_domain(catalog, name)
-                        })
+                        define(catalog, &settings, (user, clock), stmt, statement)
+                            .and_then(|()| add_system_domain(catalog, name))
                     }
                     None => Err(Error::internal("a domain that PostgreSQL 19 does not have")),
+                }
+            }
+            Node::CreateFunctionStmt(function) => {
+                let name = names(&function.funcname);
+                match FUNCTION_OIDS.iter().find(|(n, _)| Some(*n) == name.last().copied()) {
+                    Some(&(_, oid)) => {
+                        catalog.set_next_oid(oid);
+                        define(catalog, &settings, (user, clock), stmt, statement)
+                            .and_then(|()| add_system_proc(catalog, oid))
+                    }
+                    None => Ok(()),
                 }
             }
             _ => Ok(()),
@@ -315,6 +317,53 @@ fn information_schema(
             failed.push((statement.to_string(), error));
         }
     }
+}
+
+/// Runs a statement of the script that defines an object, as the bootstrap superuser. The catalog changes only when the statement succeeds.
+fn define(
+    catalog: &mut Catalog,
+    settings: &RefCell<Settings>,
+    (user, clock): (&str, &OsClock),
+    stmt: &Node,
+    statement: &str,
+) -> Result<()> {
+    let reader =
+        Reader::new(settings, user, "postgres", (0, 0), clock, 0, Arc::new(catalog.clone()));
+    let mut work = catalog.clone();
+    rupg_analyze::define(stmt, statement, &reader, &mut work, BOOTSTRAP_SUPERUSER).result?;
+    *catalog = work;
+    Ok(())
+}
+
+/// Adds the row of a function of `information_schema` to the rows of `rupg-pgcatalog`, so that the analyzer finds the function.
+fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
+    let f = catalog.function(oid).ok_or_else(|| Error::internal(format!("no function {oid}")))?;
+    // The rows live as long as the process, as the built-in rows do.
+    let argnames: Option<&'static [&'static str]> = (!f.argnames.is_empty()).then(|| {
+        let names: Vec<&'static str> = f.argnames.iter().map(|n| &*n.clone().leak()).collect();
+        &*names.leak()
+    });
+    builtin::add_system_proc(builtin::ProcRow {
+        oid,
+        name: f.name.clone().leak(),
+        namespace: f.namespace,
+        lang: f.lang,
+        variadic: 0,
+        kind: b'f',
+        strict: f.strict,
+        retset: false,
+        volatile: f.volatile,
+        nargs: i16::try_from(f.argtypes.len()).unwrap_or(i16::MAX),
+        nargdefaults: 0,
+        rettype: f.rettype,
+        argtypes: f.argtypes.clone().leak(),
+        allargtypes: None,
+        argmodes: None,
+        argnames,
+        argdefaults: None,
+        src: "",
+    });
+    Ok(())
 }
 
 /// The names of a qualified name.

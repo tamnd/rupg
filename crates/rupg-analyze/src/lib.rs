@@ -36,7 +36,7 @@ use crate::coerce::AtOpt;
 
 pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
-pub use ddl::{Defined, Message, define, is_definition};
+pub use ddl::{Defined, Message, define, function_body, is_definition};
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink,
     SubLinkKind, Subscript, Var,

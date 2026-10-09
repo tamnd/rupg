@@ -168,6 +168,15 @@ pub(crate) fn bad_value() -> Error {
     Error::internal("a function got a value of the wrong kind")
 }
 
+/// The body of a function in SQL of the catalog of the session, as the analyzer reads it, with `$1` as the first argument. `None` for a function that is not in the catalog of the session.
+///
+/// # Errors
+///
+/// The errors of the analysis of the body.
+pub fn function_body(func: u32, session: &dyn Session) -> Result<Option<rupg_analyze::Expr>> {
+    rupg_analyze::function_body(&reg::SessionEnv(session), func)
+}
+
 /// The kernel of the function with this `pg_proc` OID, or `None` if the engine does not have it.
 pub fn kernel(func: u32) -> Option<Kernel> {
     let proc = builtin::proc_by_oid(func)?;
