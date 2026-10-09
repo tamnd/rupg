@@ -135,8 +135,10 @@ const DOMAIN_OIDS: [(&str, u32); 5] = [
     ("yes_or_no", 13376),
 ];
 
-/// The OID of each function of `information_schema` in PostgreSQL 19 that rupg makes. The OID 13357 is the TOAST value of the long body of `_pg_char_octet_length`. The functions `_pg_expandarray`, `_pg_index_position`, `_pg_truetypid` and `_pg_truetypmod` take the OIDs 13351 to 13354 and are not done yet.
-const FUNCTION_OIDS: [(&str, u32); 7] = [
+/// The OID of each function of `information_schema` in PostgreSQL 19 that rupg makes. The OID 13357 is the TOAST value of the long body of `_pg_char_octet_length`. The functions `_pg_expandarray` and `_pg_index_position` take the OIDs 13351 and 13352 and are not done yet.
+const FUNCTION_OIDS: [(&str, u32); 9] = [
+    ("_pg_truetypid", 13353),
+    ("_pg_truetypmod", 13354),
     ("_pg_char_max_length", 13355),
     ("_pg_char_octet_length", 13356),
     ("_pg_numeric_precision", 13358),

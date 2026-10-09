@@ -42,6 +42,17 @@ pub enum Value {
     Inet(Inet),
     /// An array, `int2vector` or `oidvector`. A null element is `None`, and no element is `Some(Value::Null)`.
     Array(Box<Array<Value>>),
+    /// A row of a composite type or of `record`.
+    Record(Box<Record>),
+}
+
+/// The value of a composite type or of `record`, as a `HeapTupleHeader` datum. As that datum keeps the type of the row, a record keeps the type of each field, so that the output of an anonymous `record` can show the fields.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Record {
+    /// The type of each field.
+    pub types: Vec<u32>,
+    /// The value of each field, with `Null` for a null field.
+    pub values: Vec<Value>,
 }
 
 impl Value {

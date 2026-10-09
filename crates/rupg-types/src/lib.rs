@@ -106,4 +106,4 @@ pub use scalar::{
 pub use string::{bpchar_coerce, bpchar_in, varchar_coerce, varchar_in};
 pub use typeid::TypeId;
 pub use types::{Oid, PgType, TypeInfo, format_type};
-pub use value::Value;
+pub use value::{Record, Value};

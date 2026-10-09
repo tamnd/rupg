@@ -1153,10 +1153,16 @@ impl Analyzer<'_> {
                 if let Some(expr) = self.column_by_name(column, at)? {
                     return Ok(expr);
                 }
-                if self.item_by_name(None, column, at)?.is_some() {
-                    return Err(not_yet("a whole-row reference", at));
+                if let Some((level, item)) = self.item_by_name(None, column, at)? {
+                    return self.whole_row(level, &item, at);
                 }
                 return Err(self.missing_column(None, column, at));
+            }
+            [Some(table), None] => {
+                let Some((level, item)) = self.item_by_name(None, table, at)? else {
+                    return Err(self.missing_entry(None, table, at));
+                };
+                return self.whole_row(level, &item, at);
             }
             [None] => {
                 return Err(Error::new(
@@ -1203,6 +1209,66 @@ impl Analyzer<'_> {
             Some(expr) => Ok(expr),
             None => Err(self.missing_column(Some(table), column, at)),
         }
+    }
+
+    /// `transformWholeRowRef`: the whole row of the relation of an item, as a `Var` with the attribute number 0. Its type is the row type of the relation, or `record` for a subquery, a function and `VALUES`.
+    fn whole_row(&self, level: usize, item: &Item, at: Option<usize>) -> Result<Expr> {
+        let entry = &self.level(level).entries[item.entry];
+        let Some(relation) = entry.relation else {
+            return Err(not_yet("a whole-row reference to a join", at));
+        };
+        let ty = match entry.oid {
+            0 => oid::RECORD,
+            rel => self
+                .row_type(rel)
+                .ok_or_else(|| not_yet("a whole-row reference to this relation", at))?,
+        };
+        let var = Var { relation, attnum: 0, levels_up: level };
+        Ok(Expr::new(ExprKind::Var(var), ty).at(at))
+    }
+
+    /// `get_rel_type_id`: the row type of a relation, or `None`.
+    fn row_type(&self, rel: u32) -> Option<u32> {
+        if let Some(catalog) = rupg_pgcatalog::catalog_by_oid(rel) {
+            return Some(catalog.rowtype_oid).filter(|&ty| ty != 0);
+        }
+        self.env.catalog()?.relation(rel).map(|r| r.row_type).filter(|&ty| ty != 0)
+    }
+
+    /// The columns of a row type, which are the columns of its relation, or `None` for a type that is not the row type of a relation.
+    pub(crate) fn row_columns(&self, ty: u32) -> Option<Vec<Column>> {
+        let relid = match types::row(ty) {
+            Some(row) if row.kind == b'c' => row.relid,
+            Some(_) => return None,
+            None => self.env.catalog()?.relations().find(|r| r.row_type == ty)?.oid,
+        };
+        self.open_relation(relid, "", None).ok()
+    }
+
+    /// `scanNSItemForColumn` for a field of a whole-row `Var`: the column of the relation with the name, as `(t).a` is `t.a`. The error names the relation by its alias.
+    pub(crate) fn whole_row_field(&self, var: Var, name: &str, at: Option<usize>) -> Result<Expr> {
+        let scope = self.level(var.levels_up);
+        let entry = scope
+            .entries
+            .iter()
+            .find(|e| e.relation == Some(var.relation))
+            .ok_or_else(|| Error::internal("a whole-row reference has no entry"))?;
+        let column = entry.columns.iter().position(|c| c == name).and_then(|i| {
+            let column = scope.relations.get(var.relation)?.columns.get(i)?;
+            Some((i, column))
+        });
+        let Some((i, column)) = column else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_COLUMN,
+                format!("column {}.{name} does not exist", entry.name),
+            )
+            .at_opt(at));
+        };
+        let attnum = i16::try_from(i + 1).map_err(|_| Error::internal("too many columns"))?;
+        let var = Var { attnum, ..var };
+        let mut expr = Expr::new(ExprKind::Var(var), column.ty).at(at);
+        expr.typmod = column.typmod;
+        Ok(expr)
     }
 
     /// The scopes of the query and of the queries outside it, with their levels: 0 for the query, 1 for the query outside it, and so on.

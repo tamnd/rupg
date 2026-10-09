@@ -145,6 +145,23 @@ impl<'a> Deparser<'a> {
         Ok(attname)
     }
 
+    /// `get_variable` for a whole-row `Var`: the name of the relation and `*`. At the top level of a target list the text has a cast to the row type.
+    fn whole_row(&mut self, var: &Var, e: &Expr, top: bool) -> Result<()> {
+        let bogus = || Error::internal(format!("bogus varlevelsup: {}", var.levels_up));
+        let depth = self.namespaces.len().checked_sub(var.levels_up + 1).ok_or_else(bogus)?;
+        let refname = self.namespaces[depth].names.get(var.relation).cloned().unwrap_or_default();
+        if !refname.is_empty() {
+            self.buf.push_str(&quote_identifier(&refname));
+            self.buf.push('.');
+        }
+        self.buf.push('*');
+        if top {
+            self.buf.push_str("::");
+            self.buf.push_str(&reg::type_text(e.ty, Some(e.typmod), self.session)?);
+        }
+        Ok(())
+    }
+
     /// The `(` that a node writes around itself when the flags do not have `PRETTYFLAG_PAREN`.
     fn open(&mut self) {
         if !self.paren {
@@ -192,8 +209,24 @@ impl<'a> Deparser<'a> {
         match &e.kind {
             ExprKind::Const(value) => self.constant(e, value, 0)?,
             ExprKind::Param(n) => self.buf.push_str(&format!("${n}")),
+            ExprKind::Var(var) if var.attnum == 0 => self.whole_row(var, e, false)?,
             ExprKind::Var(var) => {
                 self.variable(var, false)?;
+            }
+            ExprKind::FieldSelect(arg, field) => {
+                // The argument needs parentheses unless it is a subscript or another field, also when it is a column.
+                let parens =
+                    !matches!(arg.kind, ExprKind::Subscript(_) | ExprKind::FieldSelect(..));
+                if parens {
+                    self.buf.push('(');
+                }
+                self.expr(arg, true)?;
+                if parens {
+                    self.buf.push(')');
+                }
+                let name = field_name(arg.ty, *field, self.session)?;
+                self.buf.push('.');
+                self.buf.push_str(&quote_identifier(&name));
             }
             ExprKind::Func(f) => self.func(e, f, implicit)?,
             ExprKind::Relabel(arg, form) => self.cast_node(e, arg, *form, e.typmod, implicit)?,
@@ -450,7 +483,13 @@ impl<'a> Deparser<'a> {
         let proc = builtin::proc_by_oid(f.oid).ok_or_else(|| {
             Error::internal(format!("cache lookup failed for function {}", f.oid))
         })?;
-        self.buf.push_str(&quote_identifier(proc.name));
+        // `generate_function_name`: the name has its schema when the name alone does not find the function.
+        if reg::function_visible(proc, self.session) {
+            self.buf.push_str(&quote_identifier(proc.name));
+        } else {
+            let schema = reg::namespace_name(proc.namespace, self.session);
+            self.buf.push_str(&reg::qualified(schema, proc.name));
+        }
         self.buf.push('(');
         let variadic = f.variadic && proc.variadic != 0;
         for (i, arg) in f.args.iter().enumerate() {
@@ -579,6 +618,8 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::Var(_)
         | ExprKind::SubColumn(_)
         | ExprKind::DomainValue => true,
+        // The `.` binds the most, but a field of a field needs parentheses.
+        ExprKind::FieldSelect(..) => !matches!(parent.kind, ExprKind::FieldSelect(..)),
         ExprKind::Array { .. }
         | ExprKind::Subscript(_)
         | ExprKind::Coalesce(_)
@@ -631,6 +672,20 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
 /// True when a `Var` is in the expression.
 fn has_var(e: &Expr) -> bool {
     matches!(e.kind, ExprKind::Var(_)) || e.children().into_iter().any(has_var)
+}
+
+/// `get_name_for_var_field` for a value of a composite type: the name of the field with the index from 0.
+fn field_name(ty: u32, field: usize, session: &dyn Session) -> Result<String> {
+    let relid = match builtin::type_by_oid(ty) {
+        Some(row) => row.relid,
+        None => session
+            .catalog()
+            .and_then(|c| c.relations().find(|r| r.row_type == ty))
+            .map_or(0, |r| r.oid),
+    };
+    column_names(relid, session).and_then(|names| names.get(field).cloned()).ok_or_else(|| {
+        Error::internal(format!("could not identify column {} in a record", field + 1))
+    })
 }
 
 /// The names of the columns of a relation, by the column number from 1, or `None` when no relation has the OID.

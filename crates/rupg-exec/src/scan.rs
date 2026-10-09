@@ -12,7 +12,7 @@ use rupg_analyze::{
 use rupg_common::{Error, Result};
 use rupg_func::Session;
 use rupg_pgcatalog::{Batch, Values};
-use rupg_types::{Array, Value, oid};
+use rupg_types::{Array, Record, Value, oid};
 
 /// The row number of a relation that is null in a tuple.
 pub(crate) const NONE: usize = usize::MAX;
@@ -27,6 +27,8 @@ pub(crate) struct Tables {
     pub(crate) rows: Vec<Rc<Vec<Vec<Value>>>>,
     /// The OID of each relation, for `tableoid`.
     pub(crate) oids: Vec<u32>,
+    /// The types of the columns of each relation, for the value of a whole-row reference.
+    types: Vec<Vec<u32>>,
     /// For each relation, the other relations of the query that it reads, as [`lateral`] finds them.
     pub(crate) needs: Vec<Vec<usize>>,
     /// The rows of each relation that reads other relations. The scan adds the rows of each run.
@@ -93,6 +95,15 @@ impl Tables {
         }
         if var.attnum == TABLE_OID_ATTNUM {
             return Value::Oid(self.oids[var.relation]);
+        }
+        if var.attnum == 0 {
+            let values = if self.needs[var.relation].is_empty() {
+                self.rows[var.relation][row].clone()
+            } else {
+                self.grown[var.relation].borrow()[row].clone()
+            };
+            let types = self.types[var.relation].clone();
+            return Value::Record(Box::new(Record { types, values }));
         }
         let column = usize::try_from(var.attnum - 1).unwrap_or(usize::MAX);
         if self.needs[var.relation].is_empty() {
@@ -176,10 +187,17 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         expr.find(depth, &mut |e, depth| {
             if let ExprKind::Var(var) = e.kind
                 && var.levels_up == depth
-                && let Ok(i) = usize::try_from(var.attnum - 1)
-                && let Some(slot) = used[var.relation].get_mut(i)
             {
-                *slot = true;
+                // A whole-row reference reads all the columns.
+                match usize::try_from(var.attnum - 1) {
+                    Ok(i) => {
+                        if let Some(slot) = used[var.relation].get_mut(i) {
+                            *slot = true;
+                        }
+                    }
+                    Err(_) if var.attnum == 0 => used[var.relation].fill(true),
+                    Err(_) => {}
+                }
             }
             None::<()>
         });
@@ -214,6 +232,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     Ok(Tables {
         rows,
         oids: query.relations.iter().map(|r| r.oid).collect(),
+        types: query.relations.iter().map(|r| r.columns.iter().map(|c| c.ty).collect()).collect(),
         needs: lateral(query),
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
     })

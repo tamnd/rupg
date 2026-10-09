@@ -61,6 +61,15 @@ fn table_function(func: u32, width: usize) -> bool {
     width > 1 || builtin::proc_by_oid(func).is_some_and(|p| p.retset)
 }
 
+/// `ExecEvalRowNull` and `ExecEvalRowNotNull` for a row, else the plain test: a row is null when all its fields are null, and not null when none of its fields is null.
+fn null_test(value: &Value, is_null: bool) -> bool {
+    match value {
+        Value::Record(record) if is_null => record.values.iter().all(Value::is_null),
+        Value::Record(record) => !record.values.iter().any(Value::is_null),
+        value => value.is_null() == is_null,
+    }
+}
+
 /// True when the function gives null for a null argument without a call.
 fn strict(func: u32) -> bool {
     builtin::proc_by_oid(func).is_none_or(|p| p.strict)
@@ -92,7 +101,8 @@ fn check(expr: &Expr) -> Result<()> {
         ExprKind::Relabel(arg, _)
         | ExprKind::CoerceToDomain(arg, _)
         | ExprKind::NullTest(arg, _)
-        | ExprKind::BooleanTest(arg, _) => check(arg)?,
+        | ExprKind::BooleanTest(arg, _)
+        | ExprKind::FieldSelect(arg, _) => check(arg)?,
         ExprKind::CoerceViaIo(arg, _) => {
             if !rupg_func::output_supported(arg.ty) {
                 return Err(not_yet(format!("output of type {}", format_type(arg.ty))));
@@ -928,8 +938,12 @@ impl<'a> Eval<'a> {
             ExprKind::Subscript(sub) => self.subscript(sub),
             ExprKind::Bool(op, args) => self.bool_op(*op, args),
             ExprKind::NullTest(arg, is_null) => {
-                Ok(Value::Bool(self.eval(arg)?.is_null() == *is_null))
+                Ok(Value::Bool(null_test(&self.eval(arg)?, *is_null)))
             }
+            ExprKind::FieldSelect(arg, field) => Ok(match self.eval(arg)? {
+                Value::Record(record) => record.values.get(*field).cloned().unwrap_or(Value::Null),
+                _ => Value::Null,
+            }),
             ExprKind::BooleanTest(arg, test) => {
                 let v = self.eval(arg)?.as_bool();
                 Ok(Value::Bool(match test {

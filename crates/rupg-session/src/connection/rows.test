@@ -1,0 +1,129 @@
+> SELECT p.proname, p.oid = v.o::oid AS pg_oid, p.pronamespace::regnamespace, p.proowner::regrole, (SELECT lanname FROM pg_language l WHERE l.oid = p.prolang) AS lang, p.procost, p.prorows, p.provariadic::regtype, p.prosupport, p.prokind, p.prosecdef, p.proleakproof, p.proisstrict, p.proretset, p.provolatile, p.proparallel, p.pronargs, p.pronargdefaults, p.prorettype::regtype, p.proallargtypes, p.proargmodes, p.proargnames, p.proargdefaults IS NULL AS no_defaults, p.protrftypes, p.prosrc, p.probin, p.prosqlbody IS NOT NULL AS has_body, p.proconfig, p.proacl FROM pg_proc p JOIN (VALUES ('_pg_truetypid', 13353), ('_pg_truetypmod', 13354)) v(n, o) ON p.proname = v.n ORDER BY p.proname
+fields proname@pg_proc.2:19:64:-1,pg_oid:16:1:-1,pronamespace:4089:4:-1,proowner:4096:4:-1,lang:19:64:-1,procost@pg_proc.6:700:4:-1,prorows@pg_proc.7:700:4:-1,provariadic:2206:4:-1,prosupport@pg_proc.9:24:4:-1,prokind@pg_proc.10:18:1:-1,prosecdef@pg_proc.11:16:1:-1,proleakproof@pg_proc.12:16:1:-1,proisstrict@pg_proc.13:16:1:-1,proretset@pg_proc.14:16:1:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1,pronargs@pg_proc.17:21:2:-1,pronargdefaults@pg_proc.18:21:2:-1,prorettype:2206:4:-1,proallargtypes@pg_proc.21:1028:-1:-1,proargmodes@pg_proc.22:1002:-1:-1,proargnames@pg_proc.23:1009:-1:-1,no_defaults:16:1:-1,protrftypes@pg_proc.25:1028:-1:-1,prosrc@pg_proc.26:25:-1:-1,probin@pg_proc.27:25:-1:-1,has_body:16:1:-1,proconfig@pg_proc.29:1009:-1:-1,proacl@pg_proc.30:1034:-1:-1
+row _pg_truetypid,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,oid,NULL,NULL,NULL,t,NULL,,NULL,t,NULL,NULL
+row _pg_truetypmod,t,information_schema,postgres,sql,100,0,-,-,f,f,f,t,f,i,s,2,0,integer,NULL,NULL,NULL,t,NULL,,NULL,t,NULL,NULL
+SELECT 2
+> SELECT proname, pg_get_function_arguments(oid), pg_get_function_identity_arguments(oid), pg_get_function_result(oid), pg_function_is_visible(oid) FROM pg_proc WHERE pronamespace = 'information_schema'::regnamespace AND proname IN ('_pg_truetypid', '_pg_truetypmod') ORDER BY proname
+fields proname@pg_proc.2:19:64:-1,pg_get_function_arguments:25:-1:-1,pg_get_function_identity_arguments:25:-1:-1,pg_get_function_result:25:-1:-1,pg_function_is_visible:16:1:-1
+row _pg_truetypid,pg_attribute, pg_type,pg_attribute, pg_type,oid,f
+row _pg_truetypmod,pg_attribute, pg_type,pg_attribute, pg_type,integer,f
+SELECT 2
+> SELECT d.classid::regclass, (SELECT proname FROM pg_proc WHERE oid = d.objid) AS object, d.objsubid, d.refclassid::regclass, CASE WHEN d.refclassid = 'pg_proc'::regclass THEN (SELECT proname FROM pg_proc WHERE oid = d.refobjid)::text WHEN d.refclassid = 'pg_type'::regclass THEN d.refobjid::regtype::text ELSE d.refobjid::regnamespace::text END AS referenced, d.refobjsubid, d.deptype FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid IN (SELECT oid FROM pg_proc WHERE pronamespace = 'information_schema'::regnamespace AND proname IN ('_pg_truetypid', '_pg_truetypmod')) ORDER BY 2, 5
+fields classid:2205:4:-1,object:19:64:-1,objsubid@pg_depend.3:23:4:-1,refclassid:2205:4:-1,referenced:25:-1:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_proc,_pg_truetypid,0,pg_namespace,information_schema,0,n
+row pg_proc,_pg_truetypmod,0,pg_namespace,information_schema,0,n
+SELECT 2
+> SELECT t FROM (VALUES (1, 'one', 1.5, true)) AS t
+fields t:2249:-1:-1
+row (1,one,1.5,t)
+SELECT 1
+> SELECT r FROM (VALUES (1, 'a b', NULL::int), (2, '', 3), (3, 'x,y', 4), (4, 'q"r\s', 5), (5, '(p)', 6), (NULL, NULL, NULL)) AS r(a, b, c) ORDER BY a
+fields r:2249:-1:-1
+row (1,"a b",)
+row (2,"",3)
+row (3,"x,y",4)
+row (4,"q""r\\s",5)
+row (5,"(p)",6)
+row (,,)
+SELECT 6
+> SELECT pg_typeof(r), r IS NULL AS n, r IS NOT NULL AS nn FROM (VALUES (1, 2), (NULL, 2), (NULL, NULL)) AS r(a, b)
+fields pg_typeof:2206:4:-1,n:16:1:-1,nn:16:1:-1
+row record,f,t
+row record,f,f
+row record,t,f
+SELECT 3
+> SELECT s, pg_typeof(s) FROM (SELECT 1 AS a, 'z'::text AS b) AS s
+fields s:2249:-1:-1,pg_typeof:2206:4:-1
+row (1,z),record
+SELECT 1
+> SELECT (s).a, (s).b, s.a FROM (SELECT 1 AS a, 'z'::text AS b) AS s
+fields a:23:4:-1,b:25:-1:-1,a:23:4:-1
+row 1,z,1
+SELECT 1
+> SELECT s.* FROM (SELECT 1 AS a, 'z'::text AS b) AS s
+fields a:23:4:-1,b:25:-1:-1
+row 1,z
+SELECT 1
+> SELECT a.attname, (a).attnum, (t).typname, information_schema._pg_truetypid(a, t)::regtype, information_schema._pg_truetypmod(a, t) FROM pg_attribute a JOIN pg_type t ON a.atttypid = t.oid WHERE a.attrelid = 'pg_namespace'::regclass AND a.attnum > 0 ORDER BY a.attnum
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,typname@pg_type.2:19:64:-1,_pg_truetypid:2206:4:-1,_pg_truetypmod:23:4:-1
+row oid,1,oid,oid,-1
+row nspname,2,name,name,-1
+row nspowner,3,oid,oid,-1
+row nspacl,4,_aclitem,aclitem[],-1
+SELECT 4
+> SELECT a.attname, information_schema._pg_truetypid(a, t)::regtype, information_schema._pg_truetypmod(a, t) FROM pg_attribute a JOIN pg_type t ON a.atttypid = t.oid WHERE a.attrelid = 'information_schema.sql_identifier'::regtype::oid AND false
+fields attname@pg_attribute.2:19:64:-1,_pg_truetypid:2206:4:-1,_pg_truetypmod:23:4:-1
+SELECT 0
+> SELECT pg_typeof(a), pg_typeof(t) FROM pg_attribute a, pg_type t WHERE a.attrelid = 'pg_namespace'::regclass AND a.attnum = 1 AND t.oid = 23
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row pg_attribute,pg_type
+SELECT 1
+> SELECT (x).typname, (x).typlen, x IS NULL AS n, x IS NOT NULL AS nn FROM (SELECT t AS x FROM pg_type t WHERE t.oid = 23) AS s
+fields typname:19:64:-1,typlen:21:2:-1,n:16:1:-1,nn:16:1:-1
+row int4,4,f,f
+SELECT 1
+> SELECT ((SELECT t FROM pg_type t WHERE t.oid = 25)).typname
+fields typname:19:64:-1
+row text
+SELECT 1
+> SELECT b FROM (VALUES (1)) AS a(x) LEFT JOIN (VALUES (2, 3)) AS b(y, z) ON false
+fields b:2249:-1:-1
+row NULL
+SELECT 1
+> SELECT b IS NULL AS n, b IS NOT NULL AS nn FROM (VALUES (1)) AS a(x) LEFT JOIN (VALUES (2, 3)) AS b(y, z) ON false
+fields n:16:1:-1,nn:16:1:-1
+row t,f
+SELECT 1
+> SELECT (s).nope FROM (SELECT 1 AS a) AS s
+ERROR 42703 column s.nope does not exist at 9
+> SELECT s.nope FROM (SELECT 1 AS a) AS s
+ERROR 42703 column s.nope does not exist at 8
+> SELECT (1).a
+ERROR 42809 column notation .a applied to type integer, which is not a composite type at 9
+> SELECT (t).nope FROM pg_type t
+ERROR 42703 column t.nope does not exist at 9
+> SELECT x.* FROM (SELECT 1 AS a) AS s
+ERROR 42P01 missing FROM-clause entry for table "x" at 8
+> SELECT s FROM (SELECT ARRAY[1,2] AS a, '{}'::int[] AS b, ARRAY['x y', NULL] AS c) AS s
+fields s:2249:-1:-1
+row ("{1,2}",{},"{""x y"",NULL}")
+SELECT 1
+> SELECT s FROM (SELECT 1.5::float8 AS f, '2026-01-02'::date AS d, NULL::text AS n) AS s
+fields s:2249:-1:-1
+row (1.5,2026-01-02,)
+SELECT 1
+> SELECT s FROM (SELECT ' a' AS a, 'b ' AS b, E'c\td' AS c) AS s
+fields s:2249:-1:-1
+row (" a","b ","c	d")
+SELECT 1
+> CREATE VIEW v1 AS SELECT s IS NULL AS n, s IS NOT NULL AS nn, (s).a, s.b FROM (SELECT 1 AS a, 'z'::text AS b) AS s
+CREATE VIEW
+> SELECT pg_get_viewdef('v1'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (s.* IS NULL) AS n,
+    (s.* IS NOT NULL) AS nn,
+    a,
+    b
+   FROM ( SELECT 1 AS a,
+            'z'::text AS b) s;
+SELECT 1
+> SELECT * FROM v1
+fields n@v1.1:16:1:-1,nn@v1.2:16:1:-1,a@v1.3:23:4:-1,b@v1.4:25:-1:-1
+row f,t,1,z
+SELECT 1
+> CREATE VIEW v2 AS SELECT (x).typname FROM (SELECT t AS x FROM pg_type t) AS s
+CREATE VIEW
+> SELECT pg_get_viewdef('v2'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (x).typname AS typname
+   FROM ( SELECT t.*::pg_type AS x
+           FROM pg_type t) s;
+SELECT 1
+> CREATE VIEW v3 AS SELECT information_schema._pg_truetypid(a, t) AS ty FROM pg_attribute a, pg_type t
+CREATE VIEW
+> SELECT pg_get_viewdef('v3'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT information_schema._pg_truetypid(a.*, t.*) AS ty
+   FROM pg_attribute a,
+    pg_type t;
+SELECT 1
