@@ -27,6 +27,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_options_to_table" => options_to_table,
         "aclexplode" => crate::acl::aclexplode,
         "pg_get_keywords" => keywords,
+        "pg_get_wait_events" => wait_events,
         "show_all_settings" => all_settings,
         "pg_stat_get_activity" => crate::activity::activity,
         "pg_stat_get_backend_idset" => crate::activity::backend_idset,
@@ -143,6 +144,16 @@ fn options_to_table(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
 /// `show_all_settings`: the parameters of the session with their values, which the view `pg_settings` reads.
 fn all_settings(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(call.session.all_settings())
+}
+
+/// `pg_get_wait_events`: the wait events of `wait_event_names.txt`. PostgreSQL also gives the events that extensions add, and rupg has no extensions.
+fn wait_events(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(crate::generated::wait_events::WAIT_EVENTS
+        .iter()
+        .map(|&(kind, name, description)| {
+            vec![Value::text(kind), Value::text(name), Value::text(description)]
+        })
+        .collect())
 }
 
 fn keywords(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {

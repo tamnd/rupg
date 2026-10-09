@@ -1,0 +1,319 @@
+> SELECT * FROM pg_wait_events WHERE false
+fields type@pg_wait_events.1:25:-1:-1,name@pg_wait_events.2:25:-1:-1,description@pg_wait_events.3:25:-1:-1
+SELECT 0
+> SELECT count(*) FROM pg_wait_events
+fields count:20:8:-1
+row 287
+SELECT 1
+> SELECT type, count(*) FROM pg_wait_events GROUP BY type ORDER BY type
+fields type@pg_wait_events.1:25:-1:-1,count:20:8:-1
+row Activity,18
+row Buffer,4
+row Client,9
+row Extension,1
+row IO,83
+row IPC,62
+row LWLock,87
+row Lock,12
+row Timeout,11
+SELECT 9
+> SELECT * FROM pg_get_wait_events()
+fields type:25:-1:-1,name:25:-1:-1,description:25:-1:-1
+row Activity,ArchiverMain,Waiting in main loop of archiver process
+row Activity,AutovacuumMain,Waiting in main loop of autovacuum launcher process
+row Activity,BgwriterHibernate,Waiting in background writer process, hibernating
+row Activity,BgwriterMain,Waiting in main loop of background writer process
+row Activity,CheckpointerMain,Waiting in main loop of checkpointer process
+row Activity,CheckpointerShutdown,Waiting for checkpointer process to be terminated
+row Activity,IoWorkerMain,Waiting in main loop of IO Worker process
+row Activity,LogicalApplyMain,Waiting in main loop of logical replication apply process
+row Activity,LogicalLauncherMain,Waiting in main loop of logical replication launcher process
+row Activity,LogicalParallelApplyMain,Waiting in main loop of logical replication parallel apply process
+row Activity,RecoveryWalStream,Waiting in main loop of startup process for WAL to arrive, during streaming recovery
+row Activity,ReplicationSlotsyncMain,Waiting in main loop of slot synchronization
+row Activity,ReplicationSlotsyncShutdown,Waiting for slot sync worker to shut down
+row Activity,SysloggerMain,Waiting in main loop of syslogger process
+row Activity,WalReceiverMain,Waiting in main loop of WAL receiver process
+row Activity,WalSenderMain,Waiting in main loop of WAL sender process
+row Activity,WalSummarizerWal,Waiting in WAL summarizer for more WAL to be generated
+row Activity,WalWriterMain,Waiting in main loop of WAL writer process
+row Buffer,BufferCleanup,Waiting to acquire an exclusive pin on a buffer. Buffer pin waits can be protracted if another process holds an open cursor that last read data from the buffer in question
+row Buffer,BufferExclusive,Waiting to acquire an exclusive lock on a buffer
+row Buffer,BufferShared,Waiting to acquire a shared lock on a buffer
+row Buffer,BufferShareExclusive,Waiting to acquire a share exclusive lock on a buffer
+row Client,ClientRead,Waiting to read data from the client
+row Client,ClientWrite,Waiting to write data to the client
+row Client,GssOpenServer,Waiting to read data from the client while establishing a GSSAPI session
+row Client,LibpqwalreceiverConnect,Waiting in WAL receiver to establish connection to remote server
+row Client,LibpqwalreceiverReceive,Waiting in WAL receiver to receive data from remote server
+row Client,SslOpenServer,Waiting for SSL while attempting connection
+row Client,WaitForStandbyConfirmation,Waiting for WAL to be received and flushed by the physical standby
+row Client,WalSenderWaitForWal,Waiting for WAL to be flushed in WAL sender process
+row Client,WalSenderWriteData,Waiting for any activity when processing replies from WAL receiver in WAL sender process
+row Extension,Extension,Waiting in an extension
+row IO,AioIoCompletion,Waiting for another process to complete IO
+row IO,AioIoUringExecution,Waiting for IO execution via io_uring
+row IO,AioIoUringSubmit,Waiting for IO submission via io_uring
+row IO,BasebackupRead,Waiting for base backup to read from a file
+row IO,BasebackupSync,Waiting for data written by a base backup to reach durable storage
+row IO,BasebackupWrite,Waiting for base backup to write to a file
+row IO,BuffileRead,Waiting for a read from a buffered file
+row IO,BuffileTruncate,Waiting for a buffered file to be truncated
+row IO,BuffileWrite,Waiting for a write to a buffered file
+row IO,ControlFileRead,Waiting for a read from the pg_control file
+row IO,ControlFileSync,Waiting for the pg_control file to reach durable storage
+row IO,ControlFileSyncUpdate,Waiting for an update to the pg_control file to reach durable storage
+row IO,ControlFileWrite,Waiting for a write to the pg_control file
+row IO,ControlFileWriteUpdate,Waiting for a write to update the pg_control file
+row IO,CopyFileCopy,Waiting for a file copy operation
+row IO,CopyFileRead,Waiting for a read during a file copy operation
+row IO,CopyFileWrite,Waiting for a write during a file copy operation
+row IO,CopyFromRead,Waiting to read data from a pipe, a file or a program during COPY FROM
+row IO,CopyToWrite,Waiting to write data to a pipe, a file or a program during COPY TO
+row IO,DataFileExtend,Waiting for a relation data file to be extended
+row IO,DataFileFlush,Waiting for a relation data file to reach durable storage
+row IO,DataFileImmediateSync,Waiting for an immediate synchronization of a relation data file to durable storage
+row IO,DataFilePrefetch,Waiting for an asynchronous prefetch from a relation data file
+row IO,DataFileRead,Waiting for a read from a relation data file
+row IO,DataFileSync,Waiting for changes to a relation data file to reach durable storage
+row IO,DataFileTruncate,Waiting for a relation data file to be truncated
+row IO,DataFileWrite,Waiting for a write to a relation data file
+row IO,DsmAllocate,Waiting for a dynamic shared memory segment to be allocated
+row IO,DsmFillZeroWrite,Waiting to fill a dynamic shared memory backing file with zeroes
+row IO,LockFileAddtodatadirRead,Waiting for a read while adding a line to the data directory lock file
+row IO,LockFileAddtodatadirSync,Waiting for data to reach durable storage while adding a line to the data directory lock file
+row IO,LockFileAddtodatadirWrite,Waiting for a write while adding a line to the data directory lock file
+row IO,LockFileCreateRead,Waiting to read while creating the data directory lock file
+row IO,LockFileCreateSync,Waiting for data to reach durable storage while creating the data directory lock file
+row IO,LockFileCreateWrite,Waiting for a write while creating the data directory lock file
+row IO,LockFileRecheckdatadirRead,Waiting for a read during recheck of the data directory lock file
+row IO,LogicalRewriteCheckpointSync,Waiting for logical rewrite mappings to reach durable storage during a checkpoint
+row IO,LogicalRewriteMappingSync,Waiting for mapping data to reach durable storage during a logical rewrite
+row IO,LogicalRewriteMappingWrite,Waiting for a write of mapping data during a logical rewrite
+row IO,LogicalRewriteSync,Waiting for logical rewrite mappings to reach durable storage
+row IO,LogicalRewriteTruncate,Waiting for truncate of mapping data during a logical rewrite
+row IO,LogicalRewriteWrite,Waiting for a write of logical rewrite mappings
+row IO,RelationMapRead,Waiting for a read of the relation map file
+row IO,RelationMapReplace,Waiting for durable replacement of a relation map file
+row IO,RelationMapWrite,Waiting for a write to the relation map file
+row IO,ReorderBufferRead,Waiting for a read during reorder buffer management
+row IO,ReorderBufferWrite,Waiting for a write during reorder buffer management
+row IO,ReorderLogicalMappingRead,Waiting for a read of a logical mapping during reorder buffer management
+row IO,ReplicationSlotRead,Waiting for a read from a replication slot control file
+row IO,ReplicationSlotRestoreSync,Waiting for a replication slot control file to reach durable storage while restoring it to memory
+row IO,ReplicationSlotSync,Waiting for a replication slot control file to reach durable storage
+row IO,ReplicationSlotWrite,Waiting for a write to a replication slot control file
+row IO,SlruFlushSync,Waiting for SLRU data to reach durable storage during a checkpoint or database shutdown
+row IO,SlruRead,Waiting for a read of an SLRU page
+row IO,SlruSync,Waiting for SLRU data to reach durable storage following a page write
+row IO,SlruWrite,Waiting for a write of an SLRU page
+row IO,SnapbuildRead,Waiting for a read of a serialized historical catalog snapshot
+row IO,SnapbuildSync,Waiting for a serialized historical catalog snapshot to reach durable storage
+row IO,SnapbuildWrite,Waiting for a write of a serialized historical catalog snapshot
+row IO,TimelineHistoryFileSync,Waiting for a timeline history file received via streaming replication to reach durable storage
+row IO,TimelineHistoryFileWrite,Waiting for a write of a timeline history file received via streaming replication
+row IO,TimelineHistoryRead,Waiting for a read of a timeline history file
+row IO,TimelineHistorySync,Waiting for a newly created timeline history file to reach durable storage
+row IO,TimelineHistoryWrite,Waiting for a write of a newly created timeline history file
+row IO,TwophaseFileRead,Waiting for a read of a two phase state file
+row IO,TwophaseFileSync,Waiting for a two phase state file to reach durable storage
+row IO,TwophaseFileWrite,Waiting for a write of a two phase state file
+row IO,VersionFileSync,Waiting for the version file to reach durable storage while creating a database
+row IO,VersionFileWrite,Waiting for the version file to be written while creating a database
+row IO,WalsenderTimelineHistoryRead,Waiting for a read from a timeline history file during a walsender timeline command
+row IO,WalBootstrapSync,Waiting for WAL to reach durable storage during bootstrapping
+row IO,WalBootstrapWrite,Waiting for a write of a WAL page during bootstrapping
+row IO,WalCopyRead,Waiting for a read when creating a new WAL segment by copying an existing one
+row IO,WalCopySync,Waiting for a new WAL segment created by copying an existing one to reach durable storage
+row IO,WalCopyWrite,Waiting for a write when creating a new WAL segment by copying an existing one
+row IO,WalInitSync,Waiting for a newly initialized WAL file to reach durable storage
+row IO,WalInitWrite,Waiting for a write while initializing a new WAL file
+row IO,WalRead,Waiting for a read from a WAL file
+row IO,WalSummaryRead,Waiting for a read from a WAL summary file
+row IO,WalSummaryWrite,Waiting for a write to a WAL summary file
+row IO,WalSync,Waiting for a WAL file to reach durable storage
+row IO,WalSyncMethodAssign,Waiting for data to reach durable storage while assigning a new WAL sync method
+row IO,WalWrite,Waiting for a write to a WAL file
+row IPC,AppendReady,Waiting for subplan nodes of an Append plan node to be ready
+row IPC,ArchiveCleanupCommand,Waiting for archive_cleanup_command to complete
+row IPC,ArchiveCommand,Waiting for archive_command to complete
+row IPC,BackendTermination,Waiting for the termination of another backend
+row IPC,BackupWaitWalArchive,Waiting for WAL files required for a backup to be successfully archived
+row IPC,BgworkerShutdown,Waiting for background worker to shut down
+row IPC,BgworkerStartup,Waiting for background worker to start up
+row IPC,BtreePage,Waiting for the page number needed to continue a parallel B-tree scan to become available
+row IPC,BufferIo,Waiting for buffer I/O to complete
+row IPC,CheckpointDelayComplete,Waiting for a backend that blocks a checkpoint from completing
+row IPC,CheckpointDelayStart,Waiting for a backend that blocks a checkpoint from starting
+row IPC,CheckpointDone,Waiting for a checkpoint to complete
+row IPC,CheckpointStart,Waiting for a checkpoint to start
+row IPC,ExecuteGather,Waiting for activity from a child process while executing a Gather plan node
+row IPC,HashBatchAllocate,Waiting for an elected Parallel Hash participant to allocate a hash table
+row IPC,HashBatchElect,Waiting to elect a Parallel Hash participant to allocate a hash table
+row IPC,HashBatchLoad,Waiting for other Parallel Hash participants to finish loading a hash table
+row IPC,HashBuildAllocate,Waiting for an elected Parallel Hash participant to allocate the initial hash table
+row IPC,HashBuildElect,Waiting to elect a Parallel Hash participant to allocate the initial hash table
+row IPC,HashBuildHashInner,Waiting for other Parallel Hash participants to finish hashing the inner relation
+row IPC,HashBuildHashOuter,Waiting for other Parallel Hash participants to finish partitioning the outer relation
+row IPC,HashGrowBatchesDecide,Waiting to elect a Parallel Hash participant to decide on future batch growth
+row IPC,HashGrowBatchesElect,Waiting to elect a Parallel Hash participant to allocate more batches
+row IPC,HashGrowBatchesFinish,Waiting for an elected Parallel Hash participant to decide on future batch growth
+row IPC,HashGrowBatchesReallocate,Waiting for an elected Parallel Hash participant to allocate more batches
+row IPC,HashGrowBatchesRepartition,Waiting for other Parallel Hash participants to finish repartitioning
+row IPC,HashGrowBucketsElect,Waiting to elect a Parallel Hash participant to allocate more buckets
+row IPC,HashGrowBucketsReallocate,Waiting for an elected Parallel Hash participant to finish allocating more buckets
+row IPC,HashGrowBucketsReinsert,Waiting for other Parallel Hash participants to finish inserting tuples into new buckets
+row IPC,LogicalApplySendData,Waiting for a logical replication leader apply process to send data to a parallel apply process
+row IPC,LogicalParallelApplyStateChange,Waiting for a logical replication parallel apply process to change state
+row IPC,LogicalSyncData,Waiting for a logical replication remote server to send data for initial table synchronization
+row IPC,LogicalSyncStateChange,Waiting for a logical replication remote server to change state
+row IPC,MessageQueueInternal,Waiting for another process to be attached to a shared message queue
+row IPC,MessageQueuePutMessage,Waiting to write a protocol message to a shared message queue
+row IPC,MessageQueueReceive,Waiting to receive bytes from a shared message queue
+row IPC,MessageQueueSend,Waiting to send bytes to a shared message queue
+row IPC,MultixactCreation,Waiting for a multixact creation to complete
+row IPC,ParallelBitmapScan,Waiting for parallel bitmap scan to become initialized
+row IPC,ParallelCreateIndexScan,Waiting for parallel CREATE INDEX workers to finish heap scan
+row IPC,ParallelFinish,Waiting for parallel workers to finish computing
+row IPC,ProcarrayGroupUpdate,Waiting for the group leader to clear the transaction ID at transaction end
+row IPC,ProcSignalBarrier,Waiting for a barrier event to be processed by all backends
+row IPC,Promote,Waiting for standby promotion
+row IPC,RecoveryConflictSnapshot,Waiting for recovery conflict resolution for a vacuum cleanup
+row IPC,RecoveryConflictTablespace,Waiting for recovery conflict resolution for dropping a tablespace
+row IPC,RecoveryEndCommand,Waiting for recovery_end_command to complete
+row IPC,RecoveryPause,Waiting for recovery to be resumed
+row IPC,RepackWorkerExport,Waiting for decoding worker to export a new output file
+row IPC,ReplicationOriginDrop,Waiting for a replication origin to become inactive so it can be dropped
+row IPC,ReplicationSlotDrop,Waiting for a replication slot to become inactive so it can be dropped
+row IPC,RestoreCommand,Waiting for restore_command to complete
+row IPC,SafeSnapshot,Waiting to obtain a valid snapshot for a READ ONLY DEFERRABLE transaction
+row IPC,SyncRep,Waiting for confirmation from a remote server during synchronous replication
+row IPC,WaitForWalFlush,Waiting for WAL flush to reach a target LSN on a primary or standby
+row IPC,WaitForWalReplay,Waiting for WAL replay to reach a target LSN on a standby
+row IPC,WaitForWalWrite,Waiting for WAL write to reach a target LSN on a standby
+row IPC,WalReceiverExit,Waiting for the WAL receiver to exit
+row IPC,WalReceiverUpstreamCatchup,Waiting for upstream server WAL flush position to catch up to requested start point
+row IPC,WalReceiverWaitStart,Waiting for startup process to send initial data for streaming replication
+row IPC,WalSummaryReady,Waiting for a new WAL summary to be generated
+row IPC,XactGroupUpdate,Waiting for the group leader to update transaction status at transaction end
+row Lock,advisory,Waiting to acquire an advisory user lock
+row Lock,applytransaction,Waiting to acquire a lock on a remote transaction being applied by a logical replication subscriber
+row Lock,extend,Waiting to extend a relation
+row Lock,frozenid,Waiting to update pg_database.datfrozenxid and pg_database.datminmxid
+row Lock,object,Waiting to acquire a lock on a non-relation database object
+row Lock,page,Waiting to acquire a lock on a page of a relation
+row Lock,relation,Waiting to acquire a lock on a relation
+row Lock,spectoken,Waiting to acquire a speculative insertion lock
+row Lock,transactionid,Waiting for a transaction to finish
+row Lock,tuple,Waiting to acquire a lock on a tuple
+row Lock,userlock,Waiting to acquire a user lock
+row Lock,virtualxid,Waiting to acquire a virtual transaction ID lock
+row LWLock,AddinShmemInit,Waiting to manage an extension's space allocation in shared memory
+row LWLock,AioUringCompletion,Waiting for another process to complete IO via io_uring
+row LWLock,AioWorkerControl,Waiting to update AIO worker information
+row LWLock,AioWorkerSubmissionQueue,Waiting to access AIO worker submission queue
+row LWLock,AutoFile,Waiting to update the postgresql.auto.conf file
+row LWLock,Autovacuum,Waiting to read or update the current state of autovacuum workers
+row LWLock,AutovacuumSchedule,Waiting to ensure that a table selected for autovacuum still needs vacuuming
+row LWLock,BackgroundWorker,Waiting to read or update background worker state
+row LWLock,BtreeVacuum,Waiting to read or update vacuum-related information for a B-tree index
+row LWLock,BufferMapping,Waiting to associate a data block with a buffer in the buffer pool
+row LWLock,CheckpointerComm,Waiting to manage fsync requests
+row LWLock,CommitTs,Waiting to read or update the last value set for a transaction commit timestamp
+row LWLock,CommitTsBuffer,Waiting for I/O on a commit timestamp SLRU buffer
+row LWLock,CommitTsSLRU,Waiting to access the commit timestamp SLRU cache
+row LWLock,ControlFile,Waiting to read or update the pg_control file or create a new WAL file
+row LWLock,DSMRegistry,Waiting to read or update the dynamic shared memory registry
+row LWLock,DSMRegistryDSA,Waiting to access dynamic shared memory registry's dynamic shared memory allocator
+row LWLock,DSMRegistryHash,Waiting to access dynamic shared memory registry's shared hash table
+row LWLock,DynamicSharedMemoryControl,Waiting to read or update dynamic shared memory allocation information
+row LWLock,InjectionPoint,Waiting to read or update information related to injection points
+row LWLock,LockFastPath,Waiting to read or update a process' fast-path lock information
+row LWLock,LockManager,Waiting to read or update information about "heavyweight" locks
+row LWLock,LogicalDecodingControl,Waiting to read or update logical decoding status information
+row LWLock,LogicalRepLauncherDSA,Waiting to access logical replication launcher's dynamic shared memory allocator
+row LWLock,LogicalRepLauncherHash,Waiting to access logical replication launcher's shared hash table
+row LWLock,LogicalRepWorker,Waiting to read or update the state of logical replication workers
+row LWLock,MultiXactGen,Waiting to read or update shared multixact state
+row LWLock,MultiXactMemberBuffer,Waiting for I/O on a multixact member SLRU buffer
+row LWLock,MultiXactMemberSLRU,Waiting to access the multixact member SLRU cache
+row LWLock,MultiXactOffsetBuffer,Waiting for I/O on a multixact offset SLRU buffer
+row LWLock,MultiXactOffsetSLRU,Waiting to access the multixact offset SLRU cache
+row LWLock,MultiXactTruncation,Waiting to read or truncate multixact information
+row LWLock,NotifyBuffer,Waiting for I/O on a NOTIFY message SLRU buffer
+row LWLock,NotifyChannelHash,Waiting to access the NOTIFY channel hash table
+row LWLock,NotifyQueue,Waiting to read or update NOTIFY messages
+row LWLock,NotifyQueueTail,Waiting to update limit on NOTIFY message storage
+row LWLock,NotifySLRU,Waiting to access the NOTIFY message SLRU cache
+row LWLock,OidGen,Waiting to allocate a new OID
+row LWLock,ParallelAppend,Waiting to choose the next subplan during Parallel Append plan execution
+row LWLock,ParallelBtreeScan,Waiting to synchronize workers during Parallel B-tree scan plan execution
+row LWLock,ParallelHashJoin,Waiting to synchronize workers during Parallel Hash Join plan execution
+row LWLock,ParallelQueryDSA,Waiting for parallel query dynamic shared memory allocation
+row LWLock,ParallelVacuumDSA,Waiting for parallel vacuum dynamic shared memory allocation
+row LWLock,PerSessionDSA,Waiting for parallel query dynamic shared memory allocation
+row LWLock,PerSessionRecordType,Waiting to access a parallel query's information about composite types
+row LWLock,PerSessionRecordTypmod,Waiting to access a parallel query's information about type modifiers that identify anonymous record types
+row LWLock,PerXactPredicateList,Waiting to access the list of predicate locks held by the current serializable transaction during a parallel query
+row LWLock,PgStatsData,Waiting for shared memory stats data access
+row LWLock,PgStatsDSA,Waiting for stats dynamic shared memory allocator access
+row LWLock,PgStatsHash,Waiting for stats shared memory hash table access
+row LWLock,PredicateLockManager,Waiting to access predicate lock information used by serializable transactions
+row LWLock,ProcArray,Waiting to access the shared per-process data structures (typically, to get a snapshot or report a session's transaction ID)
+row LWLock,RelationMapping,Waiting to read or update a pg_filenode.map file (used to track the filenode assignments of certain system catalogs)
+row LWLock,RelCacheInit,Waiting to read or update a pg_internal.init relation cache initialization file
+row LWLock,ReplicationOrigin,Waiting to create, drop or use a replication origin
+row LWLock,ReplicationOriginState,Waiting to read or update the progress of one replication origin
+row LWLock,ReplicationSlotAllocation,Waiting to allocate or free a replication slot
+row LWLock,ReplicationSlotControl,Waiting to read or update replication slot state
+row LWLock,ReplicationSlotIO,Waiting for I/O on a replication slot
+row LWLock,SerialBuffer,Waiting for I/O on a serializable transaction conflict SLRU buffer
+row LWLock,SerialControl,Waiting to read or update shared pg_serial state
+row LWLock,SerializableFinishedList,Waiting to access the list of finished serializable transactions
+row LWLock,SerializablePredicateList,Waiting to access the list of predicate locks held by serializable transactions
+row LWLock,SerializableXactHash,Waiting to read or update information about serializable transactions
+row LWLock,SerialSLRU,Waiting to access the serializable transaction conflict SLRU cache
+row LWLock,SharedTidBitmap,Waiting to access a shared TID bitmap during a parallel bitmap index scan
+row LWLock,SharedTupleStore,Waiting to access a shared tuple store during parallel query
+row LWLock,ShmemIndex,Waiting to find or allocate space in shared memory
+row LWLock,SInvalRead,Waiting to retrieve messages from the shared catalog invalidation queue
+row LWLock,SInvalWrite,Waiting to add a message to the shared catalog invalidation queue
+row LWLock,SubtransBuffer,Waiting for I/O on a sub-transaction SLRU buffer
+row LWLock,SubtransSLRU,Waiting to access the sub-transaction SLRU cache
+row LWLock,SyncRep,Waiting to read or update information about the state of synchronous replication
+row LWLock,SyncScan,Waiting to select the starting location of a synchronized table scan
+row LWLock,TablespaceCreate,Waiting to create or drop a tablespace
+row LWLock,TwoPhaseState,Waiting to read or update the state of prepared transactions
+row LWLock,WaitEventCustom,Waiting to read or update custom wait events information
+row LWLock,WaitLSN,Waiting to read or update shared Wait-for-LSN state
+row LWLock,WALBufMapping,Waiting to replace a page in WAL buffers
+row LWLock,WALInsert,Waiting to insert WAL data into a memory buffer
+row LWLock,WALSummarizer,Waiting to read or update WAL summarization state
+row LWLock,WALWrite,Waiting for WAL buffers to be written to disk
+row LWLock,WrapLimitsVacuum,Waiting to update limits on transaction id and multixact consumption
+row LWLock,XactBuffer,Waiting for I/O on a transaction status SLRU buffer
+row LWLock,XactSLRU,Waiting to access the transaction status SLRU cache
+row LWLock,XactTruncation,Waiting to execute pg_xact_status or update the oldest transaction ID available to it
+row LWLock,XidGen,Waiting to allocate a new transaction ID
+row Timeout,BaseBackupThrottle,Waiting during base backup when throttling activity
+row Timeout,CheckpointWriteDelay,Waiting between writes while performing a checkpoint
+row Timeout,CommitDelay,Waiting for commit delay before WAL flush
+row Timeout,PgSleep,Waiting due to a call to pg_sleep or a sibling function
+row Timeout,RecoveryApplyDelay,Waiting to apply WAL during recovery because of a delay setting
+row Timeout,RecoveryRetrieveRetryInterval,Waiting during recovery when WAL data is not available from any source (pg_wal, archive or stream)
+row Timeout,RegisterSyncRequest,Waiting while sending synchronization requests to the checkpointer, because the request queue is full
+row Timeout,SpinDelay,Waiting while acquiring a contended spinlock
+row Timeout,VacuumDelay,Waiting in a cost-based vacuum delay point
+row Timeout,VacuumTruncate,Waiting to acquire an exclusive lock to truncate off any empty pages at the end of a table vacuumed
+row Timeout,WalSummarizerError,Waiting after a WAL summarizer error
+SELECT 287
+> SELECT type, name FROM pg_wait_events WHERE name IN ('ClientRead', 'PgSleep', 'relation', 'LockManager')
+fields type@pg_wait_events.1:25:-1:-1,name@pg_wait_events.2:25:-1:-1
+row Client,ClientRead
+row Lock,relation
+row LWLock,LockManager
+row Timeout,PgSleep
+SELECT 4
+> SELECT a.wait_event_type, a.wait_event, w.description FROM pg_stat_activity a JOIN pg_wait_events w ON w.type = a.wait_event_type AND w.name = a.wait_event WHERE a.pid = pg_backend_pid()
+fields wait_event_type@pg_stat_activity.15:25:-1:-1,wait_event@pg_stat_activity.16:25:-1:-1,description@pg_wait_events.3:25:-1:-1
+SELECT 0

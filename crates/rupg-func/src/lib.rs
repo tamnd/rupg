@@ -13,6 +13,7 @@ mod cast;
 mod catinfo;
 mod compare;
 mod deparse;
+mod generated;
 mod io;
 mod math;
 mod misc;

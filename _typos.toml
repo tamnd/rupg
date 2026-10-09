@@ -17,4 +17,4 @@ extend-ignore-re = ['"infinit"', '"onn"']
 
 [files]
 # The catalog rows hold the names and descriptions of the vendored .dat files, such as `box_overright` and `dispell_init`.
-extend-exclude = ["vendor/", "*.expected", "crates/rupg-types/tests/oracle.sql", "crates/rupg-types/tests/oracle.tsv", "crates/rupg-pgcatalog/src/generated/", "crates/rupg-pgcatalog/tests/oracle.tsv"]
+extend-exclude = ["vendor/", "*.expected", "crates/rupg-types/tests/oracle.sql", "crates/rupg-types/tests/oracle.tsv", "crates/rupg-pgcatalog/src/generated/", "crates/rupg-func/src/generated/", "crates/rupg-pgcatalog/tests/oracle.tsv"]
