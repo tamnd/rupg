@@ -10,6 +10,7 @@ use std::rc::Rc;
 use rupg_analyze::{
     Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query,
     SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, Target,
+    WindowFunc,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -173,6 +174,10 @@ fn check(expr: &Expr) -> Result<()> {
                 check(filter)?;
             }
         }
+        ExprKind::Window(w) => {
+            window::method(w.oid, expr.location)?;
+            w.args.iter().try_for_each(check)?;
+        }
     }
     Ok(())
 }
@@ -218,6 +223,7 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
     if query.group.iter().any(|g| query.targets[g.target].expr.first_set_call().is_some()) {
         return Err(not_yet("a set-returning function in GROUP BY"));
     }
+    window::check(query)?;
     for target in &query.targets {
         if output && !rupg_func::output_supported(target.expr.ty) {
             return Err(not_yet(format!("output of type {}", format_type(target.expr.ty))));
@@ -587,6 +593,7 @@ fn run_query(
     if exists
         && query.set_op.is_none()
         && agg::calls(query).is_empty()
+        && window::calls(query).is_empty()
         && query.having.is_none()
         && query.offset.is_none()
         && !query.has_target_srfs()
@@ -673,12 +680,22 @@ fn run_query(
             _ => usize::MAX,
         };
         let levels = set_levels(&query.targets);
+        // The window function calls run before the targets, and the rows come in the order of the last sort of the windows.
+        let calls = window::calls(query);
+        let (sequence, mut values) = if calls.is_empty() {
+            ((0..tuples.len()).collect(), Vec::new())
+        } else {
+            window::compute(&eval, query, &calls, &tuples, session)?
+        };
         let mut rows = Vec::with_capacity(tuples.len().min(needed));
-        for tuple in &tuples {
+        for i in sequence {
             if rows.len() >= needed {
                 break;
             }
-            eval.tuple = tuple;
+            eval.tuple = &tuples[i];
+            if let Some(values) = values.get_mut(i) {
+                eval.windows = std::mem::take(values);
+            }
             eval.project(&query.targets, &levels, &mut rows)?;
         }
         rows
@@ -829,6 +846,8 @@ struct Eval<'a> {
     domain_value: Vec<Value>,
     /// The value of each call of a function that gives a set in the row that the targets compute now, by the address of the call in the query.
     sets: Vec<(*const Expr, Value)>,
+    /// The value of each window function call for the row, by the address of the call in the query.
+    windows: Vec<(*const WindowFunc, Value)>,
 }
 
 impl<'a> Eval<'a> {
@@ -852,6 +871,7 @@ impl<'a> Eval<'a> {
             sub: Vec::new(),
             domain_value: Vec::new(),
             sets: Vec::new(),
+            windows: Vec::new(),
         }
     }
 
@@ -972,6 +992,7 @@ impl<'a> Eval<'a> {
             sub: Vec::new(),
             domain_value: Vec::new(),
             sets: Vec::new(),
+            windows: Vec::new(),
         }
     }
 
@@ -1137,6 +1158,12 @@ impl<'a> Eval<'a> {
                 .find(|(call, _)| std::ptr::eq(*call, &**agg))
                 .map(|(_, value)| value.clone())
                 .ok_or_else(|| Error::internal("an aggregate call is outside of a group")),
+            ExprKind::Window(w) => self
+                .windows
+                .iter()
+                .find(|(call, _)| std::ptr::eq(*call, &**w))
+                .map(|(_, value)| value.clone())
+                .ok_or_else(|| Error::internal("a window function call is outside of a window")),
         }
     }
 
@@ -1537,6 +1564,7 @@ fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
         sub: Vec::new(),
         domain_value: Vec::new(),
         sets: Vec::new(),
+        windows: Vec::new(),
     };
     eval.eval(expr)
 }
@@ -1570,6 +1598,7 @@ pub fn check_input(ty: u32, value: &Value, session: &dyn Session) -> Result<()> 
         sub: Vec::new(),
         domain_value: Vec::new(),
         sets: Vec::new(),
+        windows: Vec::new(),
     };
     for value in values {
         eval.domain_check(domain, value.clone())?;
@@ -1603,6 +1632,7 @@ mod fold;
 mod scan;
 mod sort;
 mod user;
+mod window;
 
 #[cfg(test)]
 mod tests;

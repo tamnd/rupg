@@ -173,6 +173,7 @@ impl Analyzer<'_> {
             params: Vec::new(),
             notices: Vec::new(),
             set_op: Some(*op),
+            windows: Vec::new(),
         })
     }
 

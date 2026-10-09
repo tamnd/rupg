@@ -11,6 +11,7 @@ use crate::colname::figure_colname;
 use crate::expr::{Expr, ExprKind};
 use crate::from::{FromItem, Relation};
 use crate::sort::SortGroup;
+use crate::window::WindowClause;
 
 /// The query tree of a `SELECT`.
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +48,8 @@ pub struct Query {
     pub notices: Vec<Error>,
     /// `UNION`, `INTERSECT` or `EXCEPT`. Each `SELECT` of the operation is a subquery in [`Query::relations`], and the rows of the operation are the rows of the leftmost one, which the targets read. The query has no `FROM`.
     pub set_op: Option<crate::SetOp>,
+    /// The windows of the window function calls and of the `WINDOW` clause. A [`crate::WindowFunc`] names its window by its number, from 1.
+    pub windows: Vec<WindowClause>,
 }
 
 /// A column of the result.
@@ -166,6 +169,21 @@ impl Analyzer<'_> {
         if s.intoClause.is_some() {
             return Err(not_yet("SELECT INTO"));
         }
+        // The windows of the `WINDOW` clause come first, and each query has its own windows.
+        let defs = s.windowClause.iter().flatten().filter_map(|node| match node {
+            Node::WindowDef(def) => Some((**def).clone()),
+            _ => None,
+        });
+        let windowdefs = std::mem::replace(&mut self.windowdefs, defs.collect());
+        let has_windows = std::mem::replace(&mut self.has_windows, false);
+        let result = self.plain_select(s, keep_unknowns);
+        self.windowdefs = windowdefs;
+        self.has_windows = has_windows;
+        result
+    }
+
+    /// The query tree of a `SELECT` that is not a set operation or a `VALUES` list.
+    fn plain_select(&mut self, s: &SelectStmt, keep_unknowns: bool) -> Result<Query> {
         let from = self.transform_from(&s.fromClause)?;
         let mut targets = Vec::with_capacity(s.targetList.len());
         for target in &s.targetList {
@@ -210,9 +228,6 @@ impl Analyzer<'_> {
             }
             None => None,
         };
-        if !s.windowClause.is_empty() {
-            return Err(not_yet("WINDOW"));
-        }
         if !s.lockingClause.is_empty() {
             return Err(not_yet("FOR UPDATE and FOR SHARE"));
         }
@@ -249,6 +264,7 @@ impl Analyzer<'_> {
         let limit = self.with_kind(Kind::Limit, |a| {
             a.limit_clause(s.limitCount.as_ref(), "LIMIT", with_ties)
         })?;
+        let windows = self.window_clauses(&mut targets)?;
         // `resolveTargetListUnknowns`: a column of type `unknown` becomes `text`.
         for target in targets.iter_mut().filter(|_| !keep_unknowns) {
             if target.expr.ty == oid::UNKNOWN {
@@ -257,6 +273,9 @@ impl Analyzer<'_> {
             }
         }
         let grouped = self.has_aggs || !group.is_empty() || empty_set || having.is_some();
+        if grouped && self.has_windows {
+            return Err(not_yet("a window function in a query with GROUP BY or an aggregate"));
+        }
         if grouped {
             self.check_grouping(&targets, having.as_ref(), &group)?;
         }
@@ -278,6 +297,7 @@ impl Analyzer<'_> {
             params: Vec::new(),
             notices: Vec::new(),
             set_op: None,
+            windows,
         })
     }
 }

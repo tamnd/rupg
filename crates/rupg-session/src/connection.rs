@@ -1931,6 +1931,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/interval_typmods.test")));
     }
 
+    /// The window functions: `row_number`, `rank`, `dense_rank`, `percent_rank`, `cume_dist`, `ntile`, `lag`, `lead`, `first_value`, `last_value` and `nth_value` with the default frame, the `WINDOW` clause and windows that copy a window, the order of the rows after the sorts of the windows, the errors of the analyzer and of the planner, and views with windows in `pg_get_viewdef`. `connection/windows.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn windows() {
+        big_stack(|| script(include_str!("connection/windows.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

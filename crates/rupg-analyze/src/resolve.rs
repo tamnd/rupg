@@ -77,7 +77,7 @@ fn check_parts(
         if parts.filter.is_some() {
             return wrong(format!("FILTER specified, but {name} is not an aggregate function"));
         }
-        if parts.over {
+        if parts.over.is_some() {
             return wrong(format!(
                 "OVER specified, but {name} is not a window function nor an aggregate function"
             ));
@@ -92,7 +92,7 @@ fn check_parts(
             if !parts.within_group {
                 return wrong(format!("WITHIN GROUP is required for ordered-set aggregate {name}"));
             }
-            if parts.over {
+            if parts.over.is_some() {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
                     format!("OVER is not supported for ordered-set aggregate {name}"),
@@ -108,7 +108,7 @@ fn check_parts(
             return wrong("aggregate functions do not accept RESPECT/IGNORE NULLS".into());
         }
     } else if prokind == b'w' {
-        if !parts.over {
+        if parts.over.is_none() {
             return wrong(format!("window function {name} requires an OVER clause"));
         }
         if parts.within_group {
@@ -542,10 +542,18 @@ impl Analyzer<'_> {
         if proc.retset {
             self.check_srf_placement(&signature(&name, &inputs), at)?;
         }
-        let over = parts.as_ref().is_some_and(|p| p.over);
-        if let (Some(row), Some(parts)) = (aggregate, parts)
-            && !over
-        {
+        let over = parts.as_ref().is_some_and(|p| p.over.is_some());
+        if over && let Some(parts) = parts {
+            return self.window_call(
+                proc,
+                aggregate.is_some().then_some(&*name),
+                args,
+                parts,
+                result,
+                at,
+            );
+        }
+        if let (Some(row), Some(parts)) = (aggregate, parts) {
             if args.len() > FUNC_MAX_ARGS - 1 {
                 return Err(Error::new(
                     SqlState::TOO_MANY_ARGUMENTS,
@@ -569,17 +577,10 @@ impl Analyzer<'_> {
             }
             return self.aggregate_call(proc.oid, args, parts, variadic, result, at);
         }
-        if over && self.kind.is_standalone() {
-            return Err(Error::new(
-                SqlState::WINDOWING_ERROR,
-                format!("window functions are not allowed in {}", self.kind.name()),
-            )
-            .at_opt(at));
-        }
-        if over || prokind != b'f' {
+        if prokind != b'f' {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
-                "a window function is not supported yet",
+                "a call of this function is not supported yet",
             )
             .at_opt(at));
         }
@@ -609,6 +610,9 @@ impl Analyzer<'_> {
             | Kind::DistinctOn
             | Kind::FromFunction => return Ok(()),
             Kind::JoinOn => "set-returning functions are not allowed in JOIN conditions".to_owned(),
+            Kind::WindowPartition | Kind::WindowOrder => {
+                "set-returning functions are not allowed in window definitions".to_owned()
+            }
             Kind::Where
             | Kind::Having
             | Kind::Filter

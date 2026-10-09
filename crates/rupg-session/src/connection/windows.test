@@ -1,0 +1,393 @@
+> SELECT a, b, row_number() OVER (ORDER BY a, b), rank() OVER (ORDER BY a), dense_rank() OVER (ORDER BY a), percent_rank() OVER (ORDER BY a), cume_dist() OVER (ORDER BY a) FROM (VALUES (1, 'x'), (1, 'y'), (2, 'z'), (3, 'w'), (3, 'v'), (3, 'u')) AS t(a, b) ORDER BY a, b
+fields a:23:4:-1,b:25:-1:-1,row_number:20:8:-1,rank:20:8:-1,dense_rank:20:8:-1,percent_rank:701:8:-1,cume_dist:701:8:-1
+row 1,x,1,1,1,0,0.3333333333333333
+row 1,y,2,1,1,0,0.3333333333333333
+row 2,z,3,3,2,0.4,0.5
+row 3,u,4,4,3,0.6,1
+row 3,v,5,4,3,0.6,1
+row 3,w,6,4,3,0.6,1
+SELECT 6
+> SELECT rank() OVER (), dense_rank() OVER (), percent_rank() OVER (), cume_dist() OVER () FROM generate_series(1, 3)
+fields rank:20:8:-1,dense_rank:20:8:-1,percent_rank:701:8:-1,cume_dist:701:8:-1
+row 1,1,0,1
+row 1,1,0,1
+row 1,1,0,1
+SELECT 3
+> SELECT percent_rank() OVER (), cume_dist() OVER () FROM generate_series(1, 1)
+fields percent_rank:701:8:-1,cume_dist:701:8:-1
+row 0,1
+SELECT 1
+> SELECT g, ntile(4) OVER (ORDER BY g) FROM generate_series(1, 10) AS g ORDER BY g
+fields g:23:4:-1,ntile:23:4:-1
+row 1,1
+row 2,1
+row 3,1
+row 4,2
+row 5,2
+row 6,2
+row 7,3
+row 8,3
+row 9,4
+row 10,4
+SELECT 10
+> SELECT g, ntile(3) OVER (PARTITION BY g % 2 ORDER BY g) FROM generate_series(1, 10) AS g ORDER BY g
+fields g:23:4:-1,ntile:23:4:-1
+row 1,1
+row 2,1
+row 3,1
+row 4,1
+row 5,2
+row 6,2
+row 7,2
+row 8,2
+row 9,3
+row 10,3
+SELECT 10
+> SELECT g, ntile(20) OVER (ORDER BY g) FROM generate_series(1, 5) AS g ORDER BY g
+fields g:23:4:-1,ntile:23:4:-1
+row 1,1
+row 2,2
+row 3,3
+row 4,4
+row 5,5
+SELECT 5
+> SELECT g, ntile(NULLIF(g, 1)) OVER (ORDER BY g) FROM generate_series(1, 5) AS g ORDER BY g
+fields g:23:4:-1,ntile:23:4:-1
+row 1,NULL
+row 2,1
+row 3,1
+row 4,1
+row 5,2
+SELECT 5
+> SELECT ntile(0) OVER () FROM generate_series(1, 3)
+fields ntile:23:4:-1
+ERROR 22014 argument of ntile must be greater than zero
+> SELECT g, lag(g) OVER (ORDER BY g), lead(g) OVER (ORDER BY g), lag(g, 2) OVER (ORDER BY g), lead(g, 2, -1) OVER (ORDER BY g), lag(g, -1, 0) OVER (ORDER BY g) FROM generate_series(1, 5) AS g ORDER BY g
+fields g:23:4:-1,lag:23:4:-1,lead:23:4:-1,lag:23:4:-1,lead:23:4:-1,lag:23:4:-1
+row 1,NULL,2,NULL,3,2
+row 2,1,3,NULL,4,3
+row 3,2,4,1,5,4
+row 4,3,5,2,-1,5
+row 5,4,NULL,3,-1,0
+SELECT 5
+> SELECT g, lag(g, NULL) OVER (ORDER BY g), lead(g * 10, 1, g) OVER w, lag(g, 1, 0.5) OVER w FROM generate_series(1, 4) AS g WINDOW w AS (ORDER BY g) ORDER BY g
+fields g:23:4:-1,lag:23:4:-1,lead:23:4:-1,lag:1700:-1:-1
+row 1,NULL,20,0.5
+row 2,NULL,30,1
+row 3,NULL,40,2
+row 4,NULL,4,3
+SELECT 4
+> SELECT g, first_value(g) OVER (ORDER BY g DESC), last_value(g) OVER (ORDER BY g / 2), nth_value(g, 2) OVER (ORDER BY g), nth_value(g, 4) OVER (ORDER BY g / 2) FROM generate_series(1, 5) AS g ORDER BY g
+fields g:23:4:-1,first_value:23:4:-1,last_value:23:4:-1,nth_value:23:4:-1,nth_value:23:4:-1
+row 1,5,1,NULL,NULL
+row 2,5,3,2,NULL
+row 3,5,3,2,NULL
+row 4,5,5,2,4
+row 5,5,5,2,4
+SELECT 5
+> SELECT g, first_value(g) OVER (), last_value(g) OVER (PARTITION BY g % 2) FROM generate_series(1, 4) AS g ORDER BY g
+fields g:23:4:-1,first_value:23:4:-1,last_value:23:4:-1
+row 1,2,3
+row 2,2,4
+row 3,2,3
+row 4,2,4
+SELECT 4
+> SELECT nth_value(g, 0) OVER () FROM generate_series(1, 2) AS g
+fields nth_value:23:4:-1
+ERROR 22016 argument of nth_value must be greater than zero
+> SELECT g, rank() OVER w, rank() OVER w2, dense_rank() OVER (w ORDER BY g DESC) FROM generate_series(1, 6) AS g WINDOW w AS (PARTITION BY g % 2), w2 AS (w ORDER BY g) ORDER BY g
+fields g:23:4:-1,rank:20:8:-1,rank:20:8:-1,dense_rank:20:8:-1
+row 1,1,1,3
+row 2,1,1,3
+row 3,1,2,2
+row 4,1,2,2
+row 5,1,3,1
+row 6,1,3,1
+SELECT 6
+> SELECT g, rank() OVER (ORDER BY g) FROM generate_series(1, 5) AS g LIMIT 2
+fields g:23:4:-1,rank:20:8:-1
+row 1,1
+row 2,2
+SELECT 2
+> SELECT g % 2, g, row_number() OVER (PARTITION BY g % 2 ORDER BY g DESC) FROM generate_series(1, 6) AS g
+fields ?column?:23:4:-1,g:23:4:-1,row_number:20:8:-1
+row 0,6,1
+row 0,4,2
+row 0,2,3
+row 1,5,1
+row 1,3,2
+row 1,1,3
+SELECT 6
+> SELECT g, row_number() OVER (ORDER BY g DESC), row_number() OVER (ORDER BY g) FROM generate_series(1, 4) AS g
+fields g:23:4:-1,row_number:20:8:-1,row_number:20:8:-1
+row 1,4,1
+row 2,3,2
+row 3,2,3
+row 4,1,4
+SELECT 4
+> SELECT g, row_number() OVER (ORDER BY g), row_number() OVER (ORDER BY g DESC) FROM generate_series(1, 4) AS g
+fields g:23:4:-1,row_number:20:8:-1,row_number:20:8:-1
+row 1,1,4
+row 2,2,3
+row 3,3,2
+row 4,4,1
+SELECT 4
+> SELECT DISTINCT rank() OVER (ORDER BY g / 2) FROM generate_series(1, 5) AS g ORDER BY 1
+fields rank:20:8:-1
+row 1
+row 2
+row 4
+SELECT 3
+> SELECT g FROM generate_series(1, 4) AS g ORDER BY rank() OVER (ORDER BY g DESC)
+fields g:23:4:-1
+row 4
+row 3
+row 2
+row 1
+SELECT 4
+> SELECT g, (SELECT max(h) FROM generate_series(1, g) AS h), lag(g) OVER (ORDER BY g) FROM generate_series(1, 3) AS g ORDER BY g
+fields g:23:4:-1,max:23:4:-1,lag:23:4:-1
+row 1,1,NULL
+row 2,2,1
+row 3,3,2
+SELECT 3
+> SELECT x, rank() OVER (ORDER BY x) FROM (SELECT g, row_number() OVER (ORDER BY g DESC) AS x FROM generate_series(1, 3) AS g) AS s ORDER BY 1
+fields x:20:8:-1,rank:20:8:-1
+row 1,1
+row 2,2
+row 3,3
+SELECT 3
+> SELECT g, generate_series(1, 2), row_number() OVER (ORDER BY g) FROM generate_series(1, 2) AS g ORDER BY 1, 2
+fields g:23:4:-1,generate_series:23:4:-1,row_number:20:8:-1
+row 1,1,1
+row 1,2,1
+row 2,1,2
+row 2,2,2
+SELECT 4
+> SELECT rank(*) OVER () FROM generate_series(1, 2)
+fields rank:20:8:-1
+row 1
+row 1
+SELECT 2
+> SELECT rank() OVER (w ORDER BY g) FROM generate_series(1, 3) AS g WINDOW w AS (ORDER BY g)
+ERROR 42P20 cannot override ORDER BY clause of window "w" at 20
+> SELECT rank() OVER (w PARTITION BY g) FROM generate_series(1, 3) AS g WINDOW w AS (ORDER BY g)
+ERROR 42P20 cannot override PARTITION BY clause of window "w" at 20
+> SELECT rank() OVER x FROM generate_series(1, 3) AS g
+ERROR 42704 window "x" does not exist at 20
+> SELECT rank() OVER (x) FROM generate_series(1, 3) AS g
+ERROR 42704 window "x" does not exist at 20
+> SELECT 1 FROM generate_series(1, 3) AS g WINDOW w AS (), w AS ()
+ERROR 42P20 window "w" is already defined at 63
+> SELECT g FROM generate_series(1, 3) AS g WHERE rank() OVER () > 1
+ERROR 42P20 window functions are not allowed in WHERE at 48
+> SELECT g FROM generate_series(1, 3) AS g GROUP BY rank() OVER ()
+ERROR 42P20 window functions are not allowed in GROUP BY at 51
+> SELECT 1 FROM generate_series(1, 3) AS g HAVING rank() OVER () > 1
+ERROR 42P20 window functions are not allowed in HAVING at 49
+> SELECT rank() OVER (ORDER BY rank() OVER ()) FROM generate_series(1, 3)
+ERROR 42P20 window functions are not allowed in window definitions at 30
+> SELECT rank() OVER (PARTITION BY rank() OVER ()) FROM generate_series(1, 3)
+ERROR 42P20 window functions are not allowed in window definitions at 34
+> SELECT row_number() FILTER (WHERE true) OVER () FROM generate_series(1, 3)
+ERROR 0A000 FILTER is not implemented for non-aggregate window functions at 8
+> SELECT ntile(DISTINCT 2) OVER () FROM generate_series(1, 3)
+ERROR 0A000 DISTINCT is not implemented for window functions at 8
+> SELECT ntile(2 ORDER BY 1) OVER () FROM generate_series(1, 3)
+ERROR 0A000 aggregate ORDER BY is not implemented for window functions at 8
+> SELECT lag(generate_series(1, 2)) OVER () FROM generate_series(1, 3)
+ERROR 0A000 window function calls cannot contain set-returning function calls at 12
+> SELECT rank() OVER (PARTITION BY generate_series(1, 2)) FROM generate_series(1, 3)
+ERROR 0A000 set-returning functions are not allowed in window definitions at 34
+> SELECT lag(rank() OVER ()) OVER () FROM generate_series(1, 3)
+ERROR 42P20 window function calls cannot be nested at 12
+> SELECT 1 FROM generate_series(1, 2) AS a JOIN generate_series(1, 2) AS b ON rank() OVER () = 1
+ERROR 42P20 window functions are not allowed in JOIN conditions at 77
+> SELECT * FROM generate_series(1, rank() OVER ())
+ERROR 42P20 window functions are not allowed in functions in FROM at 34
+> VALUES (rank() OVER ())
+ERROR 42P20 window functions are not allowed in VALUES at 9
+> SELECT g FROM generate_series(1, 3) AS g LIMIT rank() OVER ()
+ERROR 42P20 window functions are not allowed in LIMIT at 48
+> SELECT g FROM generate_series(1, 3) AS g OFFSET rank() OVER ()
+ERROR 42P20 window functions are not allowed in OFFSET at 49
+> SELECT rank() OVER (PARTITION BY '1'::xid) FROM generate_series(1, 3)
+ERROR 0A000 could not implement window PARTITION BY
+> SELECT 1 FROM generate_series(1, 3) WINDOW w AS (PARTITION BY '1'::xid)
+fields ?column?:23:4:-1
+row 1
+row 1
+row 1
+SELECT 3
+> SELECT rank() FROM generate_series(1, 3)
+ERROR 42809 window function rank requires an OVER clause at 8
+> SELECT lower('a') OVER () FROM generate_series(1, 3)
+ERROR 42809 OVER specified, but lower is not a window function nor an aggregate function at 8
+> CREATE VIEW wv AS SELECT g, rank() OVER (PARTITION BY g % 2 ORDER BY g DESC) AS r, lag(g, 1, 0) OVER w, first_value(g) OVER (w), row_number() OVER (ORDER BY g + 1), nth_value(g, 2) OVER w2 FROM generate_series(1, 4) AS g WINDOW w AS (ORDER BY g), w2 AS (PARTITION BY g), w3 AS (w)
+CREATE VIEW
+> SELECT pg_get_viewdef('wv'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT g,
+    rank() OVER (PARTITION BY (g % 2) ORDER BY g DESC) AS r,
+    lag(g, 1, 0) OVER w AS lag,
+    first_value(g) OVER w3 AS first_value,
+    row_number() OVER (ORDER BY (g + 1)) AS row_number,
+    nth_value(g, 2) OVER w2 AS nth_value
+   FROM generate_series(1, 4) g(g)
+  WINDOW w AS (ORDER BY g), w2 AS (PARTITION BY g), w3 AS (w);
+SELECT 1
+> SELECT pg_get_viewdef('wv'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT g,
+    rank() OVER (PARTITION BY (g % 2) ORDER BY g DESC) AS r,
+    lag(g, 1, 0) OVER w AS lag,
+    first_value(g) OVER w3 AS first_value,
+    row_number() OVER (ORDER BY (g + 1)) AS row_number,
+    nth_value(g, 2) OVER w2 AS nth_value
+   FROM generate_series(1, 4) g(g)
+  WINDOW w AS (ORDER BY g), w2 AS (PARTITION BY g), w3 AS (w);
+SELECT 1
+> SELECT * FROM wv ORDER BY g
+fields g@wv.1:23:4:-1,r@wv.2:20:8:-1,lag@wv.3:23:4:-1,first_value@wv.4:23:4:-1,row_number@wv.5:20:8:-1,nth_value@wv.6:23:4:-1
+row 1,2,0,1,1,NULL
+row 2,2,1,1,2,NULL
+row 3,1,2,1,3,NULL
+row 4,1,3,1,4,NULL
+SELECT 4
+> SELECT refobjid::regprocedure FROM pg_depend WHERE objid = (SELECT oid FROM pg_rewrite WHERE ev_class = 'wv'::regclass) AND refclassid = 'pg_proc'::regclass ORDER BY 1
+fields refobjid:2202:4:-1
+SELECT 0
+> CREATE VIEW wv2 AS SELECT g, (SELECT rank() OVER (ORDER BY g) FROM generate_series(1, 1)) AS s FROM generate_series(1, 2) AS g ORDER BY rank() OVER (ORDER BY g DESC)
+CREATE VIEW
+> SELECT pg_get_viewdef('wv2'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT g,
+    ( SELECT rank() OVER (ORDER BY g.g) AS rank
+           FROM generate_series(1, 1) generate_series(generate_series)) AS s
+   FROM generate_series(1, 2) g(g)
+  ORDER BY (rank() OVER (ORDER BY g DESC));
+SELECT 1
+> SELECT a, rank() OVER (ORDER BY a NULLS FIRST), rank() OVER (ORDER BY a DESC), dense_rank() OVER (ORDER BY a) FROM (VALUES (1), (NULL), (2), (NULL)) AS t(a) ORDER BY a NULLS FIRST
+fields a:23:4:-1,rank:20:8:-1,rank:20:8:-1,dense_rank:20:8:-1
+row NULL,1,1,3
+row NULL,1,1,3
+row 1,3,4,1
+row 2,4,3,2
+SELECT 4
+> SELECT g, rank() OVER (PARTITION BY g % 2), rank() OVER (PARTITION BY g % 2 ORDER BY g) FROM generate_series(1, 6) AS g
+fields g:23:4:-1,rank:20:8:-1,rank:20:8:-1
+row 2,1,1
+row 4,1,2
+row 6,1,3
+row 1,1,1
+row 3,1,2
+row 5,1,3
+SELECT 6
+> SELECT g, rank() OVER (ORDER BY g % 3, g), row_number() OVER (ORDER BY g DESC) FROM generate_series(1, 6) AS g
+fields g:23:4:-1,rank:20:8:-1,row_number:20:8:-1
+row 3,1,4
+row 6,2,1
+row 1,3,6
+row 4,4,3
+row 2,5,5
+row 5,6,2
+SELECT 6
+> SELECT g, row_number() OVER (ORDER BY g DESC), rank() OVER (ORDER BY g % 3, g) FROM generate_series(1, 6) AS g
+fields g:23:4:-1,row_number:20:8:-1,rank:20:8:-1
+row 6,1,2
+row 5,2,6
+row 4,3,4
+row 3,4,1
+row 2,5,5
+row 1,6,3
+SELECT 6
+> SELECT rank() OVER (ORDER BY g) FROM generate_series(1, 2) AS g UNION ALL SELECT row_number() OVER () FROM generate_series(1, 2)
+fields rank:20:8:-1
+row 1
+row 2
+row 1
+row 2
+SELECT 4
+P s1|SELECT g, ntile($1) OVER (ORDER BY g) FROM generate_series(1, 5) AS g ORDER BY g
+X s1|2
+row 1,1
+row 2,1
+row 3,1
+row 4,2
+row 5,2
+SELECT 5
+> SELECT b, lag(b, 1, 'none') OVER (ORDER BY b) FROM (VALUES ('a'), ('b')) AS t(b) ORDER BY b
+fields b:25:-1:-1,lag:25:-1:-1
+row a,none
+row b,a
+SELECT 2
+> SELECT g, CASE WHEN rank() OVER (ORDER BY g) > 1 THEN 'x' END, rank() OVER (ORDER BY g) + 1 FROM generate_series(1, 3) AS g ORDER BY g
+fields g:23:4:-1,case:25:-1:-1,?column?:20:8:-1
+row 1,NULL,2
+row 2,x,3
+row 3,x,4
+SELECT 3
+> SELECT EXISTS (SELECT rank() OVER () FROM generate_series(1, 2))
+fields exists:16:1:-1
+row t
+SELECT 1
+> SELECT g, (SELECT max(r) FROM (SELECT rank() OVER (ORDER BY h % g) AS r FROM generate_series(1, 4) AS h) AS s) FROM generate_series(1, 3) AS g ORDER BY g
+fields g:23:4:-1,max:20:8:-1
+row 1,1
+row 2,3
+row 3,4
+SELECT 3
+> SELECT ntile(g) OVER () FROM generate_series(0, 2) AS g
+fields ntile:23:4:-1
+ERROR 22014 argument of ntile must be greater than zero
+> SELECT g, nth_value(g, NULL) OVER (), lead(g, 2147483647) OVER (ORDER BY g) FROM generate_series(1, 2) AS g ORDER BY g
+fields g:23:4:-1,nth_value:23:4:-1,lead:23:4:-1
+row 1,NULL,NULL
+row 2,NULL,NULL
+SELECT 2
+> SELECT DISTINCT ON (g % 2) g % 2, g, rank() OVER (ORDER BY g DESC) FROM generate_series(1, 5) AS g ORDER BY g % 2, g
+fields ?column?:23:4:-1,g:23:4:-1,rank:20:8:-1
+row 0,2,4
+row 1,1,5
+SELECT 2
+> SELECT first_value('a') OVER () FROM generate_series(1, 2)
+ERROR 42804 could not determine polymorphic type because input has type unknown
+> SELECT g, rank() OVER w FROM generate_series(1, 3) AS g WINDOW w AS (ORDER BY g) ORDER BY rank() OVER w DESC
+fields g:23:4:-1,rank:20:8:-1
+row 3,3
+row 2,2
+row 1,1
+SELECT 3
+> SELECT g, rank() OVER (w ORDER BY g DESC NULLS LAST) FROM generate_series(1, 4) AS g WINDOW w AS (PARTITION BY g % 2, g / 3) ORDER BY g
+fields g:23:4:-1,rank:20:8:-1
+row 1,1
+row 2,1
+row 3,1
+row 4,1
+SELECT 4
+> CREATE VIEW wv3 AS SELECT s.g, rank() OVER (w ORDER BY s.g DESC NULLS LAST), percent_rank() OVER (PARTITION BY s.g % 2, s.g / 3 ORDER BY s.g USING >) FROM (SELECT g, row_number() OVER () AS n FROM generate_series(1, 4) AS g) AS s WINDOW w AS (PARTITION BY s.g % 2, s.g / 3), unused AS (ORDER BY s.n)
+CREATE VIEW
+> SELECT pg_get_viewdef('wv3'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT g,
+    rank() OVER (w ORDER BY g DESC NULLS LAST) AS rank,
+    percent_rank() OVER (PARTITION BY (g % 2), (g / 3) ORDER BY g DESC) AS percent_rank
+   FROM ( SELECT g.g,
+            row_number() OVER () AS n
+           FROM generate_series(1, 4) g(g)) s
+  WINDOW w AS (PARTITION BY (g % 2), (g / 3)), unused AS (ORDER BY n);
+SELECT 1
+> SELECT * FROM wv3 ORDER BY g
+fields g@wv3.1:23:4:-1,rank@wv3.2:20:8:-1,percent_rank@wv3.3:701:8:-1
+row 1,1,0
+row 2,1,0
+row 3,1,0
+row 4,1,0
+SELECT 4
+> SELECT x.g, rank() OVER (ORDER BY y.h) FROM generate_series(1, 2) AS x(g), generate_series(3, 4) AS y(h) ORDER BY 1, 2
+fields g:23:4:-1,rank:20:8:-1
+row 1,1
+row 1,3
+row 2,1
+row 2,3
+SELECT 4

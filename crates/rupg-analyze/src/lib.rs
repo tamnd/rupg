@@ -28,6 +28,7 @@ mod typcache;
 mod typename;
 pub mod types;
 mod values;
+mod window;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::Node;
@@ -40,7 +41,7 @@ pub use colname::figure_colname;
 pub use ddl::{Body, Defined, Message, define, function_body, is_definition};
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink,
-    SubLinkKind, Subscript, Var,
+    SubLinkKind, Subscript, Var, WindowFunc,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use prepare::{execute_params, param_types};
@@ -50,6 +51,7 @@ pub use setop::{SetKind, SetOp, SetTree};
 pub use sort::SortGroup;
 pub use typcache::{default_opclass, sort_operators};
 pub use typename::parse_type;
+pub use window::WindowClause;
 
 /// The OID of the schema `pg_catalog`.
 pub const PG_CATALOG_NAMESPACE: u32 = 11;
@@ -102,6 +104,10 @@ pub(crate) struct Analyzer<'a> {
     kind: agg::Kind,
     /// `p_hasAggs`: true when the query has an aggregate call.
     has_aggs: bool,
+    /// `p_windowdefs`: the windows of the `WINDOW` clause of the query, then the windows of its `OVER` clauses.
+    windowdefs: Vec<rupg_sql::nodes::WindowDef>,
+    /// `p_hasWindowFuncs`: true when the query has a call of a window function.
+    has_windows: bool,
     /// True when the next `SELECT` keeps its columns of type `unknown`, as `parse_sub_analyze` with no `resolve_unknowns` does for a part of a set operation.
     keep_unknowns: bool,
     /// The views whose queries the analyzer reads now, from the outermost. A view in its own query gives `42P17`, as `fireRIRrules` does.
@@ -129,6 +135,8 @@ impl<'a> Analyzer<'a> {
             outer: Vec::new(),
             kind: agg::Kind::Other,
             has_aggs: false,
+            windowdefs: Vec::new(),
+            has_windows: false,
             keep_unknowns: false,
             views: Vec::new(),
             domain_value: None,

@@ -587,6 +587,7 @@ impl Analyzer<'_> {
         if f.args.iter().any(|a| matches!(a, Some(Node::NamedArgExpr(_)))) {
             return Err(not_yet("a call with named arguments", at));
         }
+        let srfs = self.srfs.0;
         let mut args = self.transform_list(&f.args)?;
         // transformFuncCall: the items of WITHIN GROUP come after the direct arguments.
         if f.agg_within_group {
@@ -610,8 +611,9 @@ impl Analyzer<'_> {
             within_group: f.agg_within_group,
             order: &f.agg_order,
             filter,
-            over: f.over.is_some(),
+            over: f.over.as_deref(),
             null_treatment: f.ignore_nulls != 0,
+            srfs,
         };
         let mut call = self.make_func(&func_names, args, f.func_variadic, Some(parts), at)?;
         if f.funcformat == CoercionForm::COERCE_SQL_SYNTAX
