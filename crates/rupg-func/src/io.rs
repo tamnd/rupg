@@ -75,6 +75,8 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::NUMERIC
             | oid::CSTRING
             | oid::UUID
+            | oid::INET
+            | oid::CIDR
             | oid::JSONB
             | oid::PG_NODE_TREE
             | oid::ACLITEM
@@ -147,6 +149,7 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         (_, Value::Text(v)) => out.extend_from_slice(v.as_bytes()),
         (_, Value::Bytea(v)) => types::bytea_out(v, session.bytea_output(), out),
         (_, Value::Uuid(v)) => types::uuid_out(v, out),
+        (_, Value::Inet(v)) => types::inet_out(v, ty == oid::CIDR, out),
         (_, Value::Date(v)) => types::date_out(*v, session.date_format(), out),
         (_, Value::Time(v)) => types::time_out(*v, out),
         (_, Value::TimeTz(time, zone)) => types::timetz_out(*time, *zone, out),
@@ -236,6 +239,9 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
         oid::FLOAT8 => Value::Float8(types::float8_in(text).map_err(type_error)?),
         oid::NUMERIC => Value::Numeric(types::numeric_in(text, typmod).map_err(type_error)?),
         oid::UUID => Value::Uuid(types::uuid_in(text).map_err(type_error)?),
+        oid::INET | oid::CIDR => {
+            Value::Inet(types::inet_in(text, ty == oid::CIDR).map_err(type_error)?)
+        }
         oid::INT2VECTOR => {
             let values = types::int2vector_in(text).map_err(type_error)?;
             Value::Array(Box::new(Array::vector(
@@ -357,6 +363,7 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::FLOAT8 => Value::Float8(recv.f64()?),
         oid::NUMERIC => Value::Numeric(types::numeric_recv(recv, typmod)?),
         oid::UUID => Value::Uuid(recv.uuid()?),
+        oid::INET | oid::CIDR => Value::Inet(types::inet_recv(recv, ty == oid::CIDR)?),
         oid::DATE => Value::Date(types::date_recv(recv)?),
         oid::TIME => Value::Time(types::time_recv(recv, typmod)?),
         oid::TIMETZ => {
@@ -426,6 +433,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         (_, Value::Text(v)) => out.extend_from_slice(v.as_bytes()),
         (_, Value::Bytea(v)) => out.extend_from_slice(v),
         (_, Value::Uuid(v)) => out.extend_from_slice(v),
+        (_, Value::Inet(v)) => types::inet_send(v, ty == oid::CIDR, out),
         (_, Value::TimeTz(time, zone)) => {
             out.extend_from_slice(&time.to_be_bytes());
             out.extend_from_slice(&zone.to_be_bytes());

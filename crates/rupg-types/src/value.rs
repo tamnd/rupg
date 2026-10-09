@@ -4,6 +4,7 @@
 
 use crate::array::Array;
 use crate::datetime::Interval;
+use crate::network::Inet;
 use crate::numeric::Numeric;
 
 /// One value of the engine.
@@ -37,6 +38,8 @@ pub enum Value {
     /// `timestamptz`, the microseconds since 1 January 2000 UTC.
     TimestampTz(i64),
     Interval(Interval),
+    /// `inet` and `cidr`.
+    Inet(Inet),
     /// An array, `int2vector` or `oidvector`. A null element is `None`, and no element is `Some(Value::Null)`.
     Array(Box<Array<Value>>),
 }

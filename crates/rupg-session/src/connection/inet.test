@@ -1,0 +1,212 @@
+> SELECT '192.168.1.5'::inet, '192.168.1.5/24'::inet, '10.0.0.0/8'::cidr, '::1'::inet, '::ffff:1.2.3.4'::inet
+fields inet:869:-1:-1,inet:869:-1:-1,cidr:650:-1:-1,inet:869:-1:-1,inet:869:-1:-1
+row 192.168.1.5,192.168.1.5/24,10.0.0.0/8,::1,::ffff:1.2.3.4
+SELECT 1
+> SELECT '10'::cidr, '172.16'::cidr, '192.168.1'::cidr, '224.0.0.0'::cidr, '240'::cidr, '128'::cidr, '0x0a'::cidr, '0xc0a8'::cidr, '0xc0a81'::cidr
+fields cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1
+row 10.0.0.0/8,172.16.0.0/16,192.168.1.0/24,224.0.0.0/32,240.0.0.0/32,128.0.0.0/16,10.0.0.0/8,192.168.0.0/24,192.168.16.0/24
+SELECT 1
+> SELECT '2001:db8:0:0:1:0:0:1'::inet, '2001:db8::/32'::cidr, '1::/64'::inet, 'fe80::1%eth0'::inet
+ERROR 22P02 invalid input syntax for type inet: "fe80::1%eth0" at 77
+> SELECT '1.2.3'::inet
+ERROR 22P02 invalid input syntax for type inet: "1.2.3" at 8
+> SELECT '1.2.3.4/33'::inet
+ERROR 22P02 invalid input syntax for type inet: "1.2.3.4/33" at 8
+> SELECT '192.168.1.5/24'::cidr
+ERROR 22P02 invalid cidr value: "192.168.1.5/24" at 8
+> SELECT ''::inet
+ERROR 22P02 invalid input syntax for type inet: "" at 8
+> SELECT ' 1.2.3.4'::inet
+ERROR 22P02 invalid input syntax for type inet: " 1.2.3.4" at 8
+> SELECT '1.2.3.4 '::inet
+ERROR 22P02 invalid input syntax for type inet: "1.2.3.4 " at 8
+> SELECT '1.2.3.4/'::inet
+ERROR 22P02 invalid input syntax for type inet: "1.2.3.4/" at 8
+> SELECT '1.2.3.4/024'::inet
+fields inet:869:-1:-1
+row 1.2.3.4/24
+SELECT 1
+> SELECT '01.02.03.04'::inet
+fields inet:869:-1:-1
+row 1.2.3.4
+SELECT 1
+> SELECT '1.2.3.256'::inet
+ERROR 22P02 invalid input syntax for type inet: "1.2.3.256" at 8
+> SELECT '::1.2.3.4'::inet, '::1.2.3.4/120'::inet, '1:2:3:4:5:6:1.2.3.4'::inet, '::'::inet, '::/0'::cidr, '0.0.0.0/0'::cidr
+fields inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1
+row ::1.2.3.4,::1.2.3.4/120,1:2:3:4:5:6:102:304,::,::/0,0.0.0.0/0
+SELECT 1
+> SELECT '1:2:3:4:5:6:7:8:9'::inet
+ERROR 22P02 invalid input syntax for type inet: "1:2:3:4:5:6:7:8:9" at 8
+> SELECT ':1::'::inet
+ERROR 22P02 invalid input syntax for type inet: ":1::" at 8
+> SELECT '1::2::3'::inet
+ERROR 22P02 invalid input syntax for type inet: "1::2::3" at 8
+> SELECT '12345::'::inet
+ERROR 22P02 invalid input syntax for type inet: "12345::" at 8
+> SELECT '::1/129'::inet
+ERROR 22P02 invalid input syntax for type inet: "::1/129" at 8
+> SELECT '::1/01'::inet
+ERROR 22P02 invalid input syntax for type inet: "::1/01" at 8
+> SELECT '1.2.3.4/8'::inet::cidr, cidr('10.1.2.3/16'::inet), '10.1.2.3/16'::inet::text, text('1.2.3.4'::inet), '::1'::inet::text, '10.0.0.0/8'::cidr::text
+fields cidr:650:-1:-1,cidr:650:-1:-1,text:25:-1:-1,text:25:-1:-1,text:25:-1:-1,text:25:-1:-1
+row 1.0.0.0/8,10.1.0.0/16,10.1.2.3/16,1.2.3.4/32,::1/128,10.0.0.0/8
+SELECT 1
+> SELECT host('10.1.2.3/8'::inet), host('::1/64'::inet), abbrev('10.1.2.3/8'::inet), abbrev('10.1.0.0/16'::cidr), abbrev('10.0.0.0/8'::cidr), abbrev('10.1.2.128/25'::cidr), abbrev('0.0.0.0/0'::cidr)
+fields host:25:-1:-1,host:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1
+row 10.1.2.3,::1,10.1.2.3/8,10.1/16,10/8,10.1.2.128/25,0/0
+SELECT 1
+> SELECT abbrev('2001:db8::/32'::cidr), abbrev('::/0'::cidr), abbrev('::ffff:1.2.3.0/120'::cidr), abbrev('::1.2.3.4/128'::cidr), abbrev('1:2:3:4::/64'::cidr), abbrev('ff00::/8'::cidr), abbrev('0:0:1::/48'::cidr)
+fields abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1
+row 2001:db8/32,::/0,::ffff:1.2.3/120,::1.2.3.4/128,1:2:3:4/64,ff00::/8,::1/48
+SELECT 1
+> SELECT masklen('10.1.2.3/8'::inet), family('10.1.2.3'::inet), family('::1'::inet), broadcast('10.1.2.3/8'::inet), network('10.1.2.3/8'::inet), netmask('10.1.2.3/8'::inet), hostmask('10.1.2.3/8'::inet)
+fields masklen:23:4:-1,family:23:4:-1,family:23:4:-1,broadcast:869:-1:-1,network:650:-1:-1,netmask:869:-1:-1,hostmask:869:-1:-1
+row 8,4,6,10.255.255.255/8,10.0.0.0/8,255.0.0.0,0.255.255.255
+SELECT 1
+> SELECT broadcast('2001:db8::1/33'::inet), network('2001:db8:ffff::1/33'::inet), netmask('::1/33'::inet), hostmask('::1/33'::inet), netmask('1.2.3.4/0'::inet), hostmask('1.2.3.4/32'::inet)
+fields broadcast:869:-1:-1,network:650:-1:-1,netmask:869:-1:-1,hostmask:869:-1:-1,netmask:869:-1:-1,hostmask:869:-1:-1
+row 2001:db8:7fff:ffff:ffff:ffff:ffff:ffff/33,2001:db8:8000::/33,ffff:ffff:8000::,::7fff:ffff:ffff:ffff:ffff:ffff,0.0.0.0,0.0.0.0
+SELECT 1
+> SELECT set_masklen('10.1.2.3/8'::inet, 16), set_masklen('10.1.2.3/8'::cidr, 16), set_masklen('10.1.2.3'::inet, -1), set_masklen('10.0.0.0/8'::cidr, 4)
+ERROR 22P02 invalid cidr value: "10.1.2.3/8" at 57
+> SELECT set_masklen('10.1.2.3'::inet, 33)
+ERROR 22023 invalid mask length: 33
+> SELECT set_masklen('::1'::inet, -2)
+ERROR 22023 invalid mask length: -2
+> SELECT inet_same_family('1.2.3.4', '::1'), inet_same_family('1.2.3.4', '5.6.7.8'), inet_merge('192.168.1.5/24', '192.168.2.5/24'), inet_merge('10.0.0.1', '10.0.0.255')
+fields inet_same_family:16:1:-1,inet_same_family:16:1:-1,inet_merge:650:-1:-1,inet_merge:650:-1:-1
+row f,t,192.168.0.0/22,10.0.0.0/24
+SELECT 1
+> SELECT inet_merge('1.2.3.4', '::1')
+ERROR 22023 cannot merge addresses from different families
+> SELECT '10.1.2.3'::inet << '10.0.0.0/8', '10.0.0.0/8'::inet << '10.0.0.0/8', '10.0.0.0/8'::inet <<= '10.0.0.0/8', '10.0.0.0/8'::inet >> '10.1.2.3', '10.0.0.0/8'::inet >>= '10.0.0.0/8', '10.0.0.0/8'::inet && '10.1.0.0/16', '10.0.0.0/8'::inet && '11.0.0.0/8', '::1'::inet << '10.0.0.0/8'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,t,t,f,f
+SELECT 1
+> SELECT ~'10.1.2.3/8'::inet, '10.1.2.3'::inet & '0.0.255.255', '10.1.2.3'::inet | '0.0.255.255', '10.1.2.3/8'::inet + 300, 300 + '10.1.2.3/8'::inet, '10.1.2.3'::inet - 4, '10.1.2.3'::inet - '10.1.1.1'::inet, '::1'::inet - '::2'::inet
+fields ?column?:869:-1:-1,?column?:869:-1:-1,?column?:869:-1:-1,?column?:869:-1:-1,?column?:869:-1:-1,?column?:869:-1:-1,?column?:20:8:-1,?column?:20:8:-1
+row 245.254.253.252/8,0.0.2.3,10.1.255.255,10.1.3.47/8,10.1.3.47/8,10.1.1.255,258,-1
+SELECT 1
+> SELECT '255.255.255.255'::inet + 1
+ERROR 22003 result is out of range
+> SELECT '0.0.0.0'::inet - 1
+ERROR 22003 result is out of range
+> SELECT '::'::inet - 1
+ERROR 22003 result is out of range
+> SELECT 'ffff::'::inet - '::1'::inet
+ERROR 22003 result is out of range
+> SELECT '1.2.3.4'::inet & '::1'
+ERROR 22023 cannot AND inet values of different sizes
+> SELECT '1.2.3.4'::inet - '::1'
+ERROR 22023 cannot subtract inet values of different sizes
+> SELECT '10.0.0.0/8'::inet < '10.0.0.1'::inet, '10.0.0.1/32'::inet < '::1'::inet, '10.0.0.0/8'::cidr = '10.0.0.0/8'::inet, '10.1.2.3/8'::inet > '10.0.0.0/16'::inet
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f
+SELECT 1
+> SELECT v FROM (VALUES ('10.0.0.1'::inet), ('::1'), ('10.0.0.0/8'), ('10.0.0.0/16'), ('9.255.255.255'), ('10.0.0.1/24'), ('::/0')) t(v) ORDER BY v
+fields v:869:-1:-1
+row 9.255.255.255
+row 10.0.0.0/8
+row 10.0.0.0/16
+row 10.0.0.1/24
+row 10.0.0.1
+row ::/0
+row ::1
+SELECT 7
+> SELECT max(v), min(v), count(DISTINCT v) FROM (VALUES ('10.0.0.1'::inet), ('::1'), ('10.0.0.1'), ('1.2.3.4/8')) t(v)
+fields max:869:-1:-1,min:869:-1:-1,count:20:8:-1
+row ::1,1.2.3.4/8,3
+SELECT 1
+> SELECT pg_typeof('1.2.3.4'::inet), pg_typeof('1.2.3.4'::cidr), pg_typeof(host('1.2.3.4'::inet)), '1.2.3.4'::inet::varchar, '1.2.3.4'::cidr::varchar(20), '1.2.3.4/8'::inet::cidr::inet
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,varchar:1043:-1:-1,varchar:1043:-1:24,inet:869:-1:-1
+row inet,cidr,text,1.2.3.4/32,1.2.3.4/32,1.0.0.0/8
+SELECT 1
+> SELECT ARRAY['1.2.3.4'::inet, '::1'], '{10.0.0.0/8,::/0}'::cidr[]
+fields array:1041:-1:-1,cidr:651:-1:-1
+row {1.2.3.4,::1},{10.0.0.0/8,::/0}
+SELECT 1
+> SELECT '1:0:0:2:0:0:0:3'::inet, '1:0:0:2:0:0:3:4'::inet, '0:0:1:0:0:0:0:0'::inet, '1:0:2:0:3:0:4:0'::inet, '::ffff:0:0'::inet, '::0.0.0.1'::inet, '::1:0:0'::inet, '0:0:0:0:0:1:0:0'::inet
+fields inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1
+row 1:0:0:2::3,1::2:0:0:3:4,0:0:1::,1:0:2:0:3:0:4:0,::ffff:0.0.0.0,::1,::1:0:0,::1:0:0
+SELECT 1
+> SELECT '::ffff:1.2.3.4/104'::inet, '::1.2.3.4'::cidr, '::0.0.1.0/120'::cidr, '::ffff:255.255.255.255'::inet, '0::0.0.0.2'::inet, '::0:2'::inet
+fields inet:869:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,inet:869:-1:-1,inet:869:-1:-1,inet:869:-1:-1
+row ::ffff:1.2.3.4/104,::1.2.3.4/128,::100/120,::ffff:255.255.255.255,::2,::2
+SELECT 1
+> SELECT abbrev('1:0:0:2::/64'::cidr), abbrev('0:0:1:0:0:1::/96'::cidr), abbrev('1::/16'::cidr), abbrev('1:2::/17'::cidr), abbrev('::ffff:0.0.0.0/96'::cidr), abbrev('::1.2.3.0/121'::cidr), abbrev('::1.2.0.0/112'::cidr), abbrev('0:0:0:0:0:0:0:1/128'::cidr)
+ERROR 22P02 invalid cidr value: "1:2::/17" at 103
+> SELECT abbrev('0:0:0:1:0:0:0:0/64'::cidr), abbrev('1:0:0:0:1:0:0:0/80'::cidr), abbrev('0:1::/32'::cidr), abbrev('::/1'::cidr), abbrev('8000::/1'::cidr), abbrev('::1:0:0:0/96'::cidr)
+fields abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1,abbrev:25:-1:-1
+row ::1/64,1::1/80,::1/32,::/1,8000::/1,::1:0/96
+SELECT 1
+> SELECT '0x1'::cidr, '0xa/4'::cidr, '0xc0a80101'::cidr, '1.2.3.4/32'::cidr, '10.0/8'::cidr, '10.0.0/24'::cidr, '192/2'::cidr, '224'::cidr, '225'::cidr, '0'::cidr
+fields cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1,cidr:650:-1:-1
+row 16.0.0.0/8,160.0.0.0/4,192.168.1.1/32,1.2.3.4/32,10.0.0.0/8,10.0.0.0/24,192.0.0.0/2,224.0.0.0/4,225.0.0.0/8,0.0.0.0/8
+SELECT 1
+> SELECT '0x'::cidr
+ERROR 22P02 invalid input syntax for type cidr: "0x" at 8
+> SELECT '0xc0a8010101'::cidr
+ERROR 22P02 invalid input syntax for type cidr: "0xc0a8010101" at 8
+> SELECT '1.2.3.4.5'::cidr
+ERROR 22P02 invalid input syntax for type cidr: "1.2.3.4.5" at 8
+> SELECT '10.1/8'::cidr
+ERROR 22P02 invalid cidr value: "10.1/8" at 8
+> SELECT '1.2.3.4/33'::cidr
+ERROR 22P02 invalid input syntax for type cidr: "1.2.3.4/33" at 8
+> SELECT '::1/64'::cidr
+ERROR 22P02 invalid cidr value: "::1/64" at 8
+> SELECT '1.2.3.4/0'::inet, '1.2.3.0/24'::inet, '1.2/16'::inet, '1.2/24'::inet, '1/8'::inet, '0/0'::inet
+ERROR 22P02 invalid input syntax for type inet: "1.2/24" at 63
+> SELECT '1.2/32'::inet
+ERROR 22P02 invalid input syntax for type inet: "1.2/32" at 8
+> SELECT '1.2.3.4/8'::cidr
+ERROR 22P02 invalid cidr value: "1.2.3.4/8" at 8
+> SELECT inet '1.2.3.4', cidr '10.0.0.0/8', '1.2.3.4'::text::inet, '10/8'::text::cidr, '1.2.3.4'::varchar::inet
+fields inet:869:-1:-1,cidr:650:-1:-1,inet:869:-1:-1,cidr:650:-1:-1,inet:869:-1:-1
+row 1.2.3.4,10.0.0.0/8,1.2.3.4,10.0.0.0/8,1.2.3.4
+SELECT 1
+> SELECT GREATEST('1.2.3.4'::inet, '::1'), LEAST('1.2.3.4'::inet, '1.2.3.4/8'), '1.2.3.4'::inet IN ('1.2.3.4', '::1'), '1.2.3.4'::inet BETWEEN '1.0.0.0' AND '2.0.0.0'
+fields greatest:869:-1:-1,least:869:-1:-1,?column?:16:1:-1,?column?:16:1:-1
+row ::1,1.2.3.4/8,t,t
+SELECT 1
+> SELECT network_cmp('1.2.3.4', '1.2.3.4/8'), network_cmp('::1', '1.2.3.4'), network_cmp('1.2.3.4', '1.2.3.4'), network_larger('1.2.3.4', '1.2.3.5'), network_smaller('1.2.3.4', '1.2.3.5')
+fields network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1,network_larger:869:-1:-1,network_smaller:869:-1:-1
+row 24,1,0,1.2.3.5,1.2.3.4
+SELECT 1
+> SELECT '10.0.0.0/8'::cidr + 1, '10.0.0.0/8'::cidr - 1, '::'::inet + 9223372036854775807, '::'::inet - (-9223372036854775807 - 1), 'ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff'::inet - '::'::inet
+ERROR 22003 result is out of range
+> SELECT '::ffff:ffff:ffff:ffff'::inet - '::'::inet, '::7fff:ffff:ffff:ffff'::inet - '::'::inet, '::'::inet - '::8000:0:0:0'::inet, '::'::inet - '::7fff:ffff:ffff:ffff'::inet
+ERROR 22003 result is out of range
+> SELECT '1::'::inet - '::'::inet
+ERROR 22003 result is out of range
+> SELECT '::1:0:0:0:0'::inet - '::'::inet
+ERROR 22003 result is out of range
+> SELECT '255.255.255.255'::inet - '0.0.0.0'::inet, '0.0.0.0'::inet - '255.255.255.255'::inet, '1.2.3.4'::inet + (-16909060), '1.2.3.4'::inet - 16909061
+ERROR 22003 result is out of range
+> SELECT ~'::'::inet, ~'1.2.3.4/0'::inet, '1.2.3.4/8'::inet & '255.0.0.0/16', '1.2.3.4/8'::inet | '0.0.0.0/30'
+fields ?column?:869:-1:-1,?column?:869:-1:-1,?column?:869:-1:-1,?column?:869:-1:-1
+row ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff,254.253.252.251/0,1.0.0.0/16,1.2.3.4/30
+SELECT 1
+> SELECT '1.2.3.4'::inet | '::1'
+ERROR 22023 cannot OR inet values of different sizes
+> SELECT set_masklen('::1'::cidr, 0), set_masklen('ffff::'::cidr, 3), set_masklen('1.2.3.4'::cidr, 129)
+ERROR 22023 invalid mask length: 129
+> SELECT '1.2.3.4'::inet::cidr::text, abbrev('1.2.3.4'::inet), abbrev('1.2.3.4/32'::cidr), abbrev('::1'::inet), host('1.2.3.4/0'::cidr), text('::/0'::cidr)
+ERROR 22P02 invalid cidr value: "1.2.3.4/0" at 116
+> SELECT inet_merge('::1', '::2'), inet_merge('8000::', '::'), inet_merge('1.2.3.4/0', '1.2.3.4'), inet_merge('10.1.2.3/30', '10.1.2.1/31'), inet_merge('ff:ff::/32', 'ff:fe::/32')
+fields inet_merge:650:-1:-1,inet_merge:650:-1:-1,inet_merge:650:-1:-1,inet_merge:650:-1:-1,inet_merge:650:-1:-1
+row ::/126,::/0,0.0.0.0/0,10.1.2.0/30,ff:fe::/31
+SELECT 1
+> SELECT '1.2.3.4'::inet && '::1', '::/0'::inet >>= '::1', '0/0'::inet >> '1.2.3.4', '1.2.3.4'::inet << '1.2.3.4/32', '1.2.3.0/24'::inet <<= '1.2.3.4/24'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t,f,t
+SELECT 1
+> SELECT '1.2.3.4'::inet = '1.2.3.4/32'::cidr, '1.2.3.4/24'::inet = '1.2.3.0/24'::cidr, '1.2.3.4/24'::inet > '1.2.3.0/24'::cidr
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT network_cmp('1.2.3.4', '1.2.3.9'), network_cmp('1.2.3.9', '1.2.3.4'), network_cmp('1.2.3.4/8', '9.2.3.4/8'), network_cmp('1.2.3.4/12', '1.18.3.4/12'), network_cmp('1.2.3.4/12', '1.130.3.4/12'), network_cmp('1.2.3.4/8', '1.2.3.4/32'), network_cmp('1.2.3.4/8', '1.2.3.9/8'), network_cmp('1.2.3.200/8', '1.2.3.9/8'), network_cmp('::1', '::ff'), network_cmp('1.2.3.4', '::1')
+fields network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1,network_cmp:23:4:-1
+row -5,5,-8,-1,-1,-24,-5,191,-254,-1
+SELECT 1

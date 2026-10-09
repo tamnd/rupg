@@ -22,6 +22,8 @@
 //!
 //! [`Array`], an array of any element type with up to [`MAXDIM`] dimensions and any lower bounds. [`array_in`], [`array_out`], [`array_recv`] and [`array_send`] take the function of the element type as a closure and give the errors of PostgreSQL, also the error of the element. The binary input refuses an element type that is not the expected type, and [`format_type`] gives the names in that error. `int2vector` and `oidvector` are arrays with the lower bound 0 and a text form with spaces, in [`int2vector_in`], [`oidvector_in`] and the functions beside them.
 //!
+//! [`Inet`], a value of `inet` or `cidr`, with [`inet_in`], [`inet_out`], [`inet_recv`] and [`inet_send`], which take a flag for `cidr`. [`network_cmp`] is the order of the B-tree operator class.
+//!
 //! [`RegKind`], the OID alias types such as `regclass` and `regtype`. [`reg_in`] reads a number or `-` as PostgreSQL does and gives any other string as a name, and [`reg_out_oid`] writes OID 0 and an OID with no object. The catalog finds the names: it splits a name such as `schema.table` with [`qualified_name_list`] and writes the names of the objects.
 //!
 //! [`Recv`], the binary input of a `Bind` parameter, with the errors of PostgreSQL when the value is too short or too long. The binary output of the other types is the value in big-endian bytes.
@@ -49,6 +51,7 @@ mod float;
 mod generated;
 mod json;
 mod jsonb;
+mod network;
 mod number;
 mod numeric;
 pub mod numeric_layout;
@@ -84,6 +87,10 @@ pub use float::{float4_in, float4_out, float8_in, float8_out};
 pub use generated::oids as oid;
 pub use json::json_in;
 pub use jsonb::{jsonb_in, jsonb_recv, jsonb_send};
+pub use network::{
+    Inet, NetFamily, bitncmp, bitncommon, cidr_abbrev, inet_in, inet_out, inet_recv, inet_send,
+    net_ntop, network_cmp,
+};
 pub use number::{int_out, int2_in, int4_in, int8_in, oid_in, oid_out, u64_out, uint32_in};
 pub use numeric::{
     Numeric, NumericSign, decimal_out, decimal_send, numeric_in, numeric_out, numeric_recv,

@@ -21,6 +21,7 @@ enum Family {
     Oid,
     Bytea,
     Uuid,
+    Network,
     Date,
     Time,
     TimeTz,
@@ -44,6 +45,7 @@ fn family(ty: u32) -> Option<Family> {
         ty if RegKind::from_oid(ty).is_some() => Family::Oid,
         oid::BYTEA => Family::Bytea,
         oid::UUID => Family::Uuid,
+        oid::INET | oid::CIDR => Family::Network,
         oid::DATE => Family::Date,
         oid::TIME => Family::Time,
         oid::TIMETZ => Family::TimeTz,
@@ -90,6 +92,7 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
         (Value::Oid(x), Value::Oid(y)) => x.cmp(y),
         (Value::Bytea(x), Value::Bytea(y)) => x.cmp(y),
         (Value::Uuid(x), Value::Uuid(y)) => x.cmp(y),
+        (Value::Inet(x), Value::Inet(y)) => rupg_types::network_cmp(x, y).cmp(&0),
         (Value::Date(x), Value::Date(y)) => x.cmp(y),
         (Value::Time(x), Value::Time(y))
         | (Value::Timestamp(x), Value::Timestamp(y))
