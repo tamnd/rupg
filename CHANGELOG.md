@@ -4,6 +4,17 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.11 (2026-10-09)
+
+A patch release on the way to M2. rupg now has the rules of the time zone data, and more system views return the rows of PostgreSQL.
+
+### Added
+
+- The functions of the statistics of the whole server, so `pg_stat_bgwriter`, `pg_stat_checkpointer`, `pg_stat_wal`, `pg_stat_io`, `pg_stat_archiver`, `pg_stat_slru`, `pg_stat_recovery_prefetch` and `pg_stat_lock` return their rows (#211). rupg does not keep these counters yet, so each counter is 0, as on a server that has not done the work.
+- The views of the parts that rupg does not have, such as `pg_aios`, `pg_replication_origin_status`, `pg_publication_tables` and `pg_cursors`, return the rows of PostgreSQL on a server with none of them (#212).
+- `pg_wait_events` gives the 287 wait events of PostgreSQL 19 (#213). The new task `cargo xtask waitevents` makes the table from the vendored `wait_event_names.txt`.
+- The rules of the time zone data 2026e (#214). `TimeZone` takes every zone of the data and POSIX zone strings with rules, and `timestamptz` output, input and casts use the offsets of the zone, also across daylight saving time changes. The zone compiler is a port of `zic.c`, and its output is equal to the files of PostgreSQL for all 598 zones. `pg_timezone_names` and `pg_timezone_abbrevs` return rows.
+
 ## 0.1.10 (2026-10-09)
 
 A patch release on the way to M2. The types `inet` and `cidr` are in, and the views of the sessions, of TLS, of replication and of progress return the rows of PostgreSQL.
