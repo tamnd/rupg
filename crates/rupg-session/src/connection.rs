@@ -1973,6 +1973,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/format.test")));
     }
 
+    /// `pg_get_ruledef` for the `_RETURN` rules of user views and of the system views, with and without the pretty flags, `pg_get_triggerdef`, and the views `pg_rules`, `triggers` and `triggered_update_columns`. `connection/ruledef.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ruledef() {
+        big_stack(|| script(include_str!("connection/ruledef.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {
