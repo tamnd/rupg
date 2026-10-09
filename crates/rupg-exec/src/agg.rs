@@ -3,10 +3,10 @@
 //! The rows of each group come in the order of the scan, as with the hash table of `HashAggregate`. When every key of `GROUP BY` has an order, the groups come in the order of the keys. Else they come in the order of their first rows. A query with no `GROUP BY` has one group, also when it has no rows.
 
 use rupg_analyze::{Aggref, Expr, ExprKind, Query, SortGroup};
-use rupg_common::{Error, Result};
+use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel};
 use rupg_pgcatalog::builtin;
-use rupg_types::{Array, Numeric, NumericSign, Value, oid};
+use rupg_types::{Array, ArrayDim, MAXDIM, Numeric, NumericSign, Value, oid};
 
 use crate::{Eval, kernel, not_yet, signature, sort, strict};
 
@@ -31,6 +31,8 @@ pub(crate) enum Method {
     Concat { bytea: bool },
     /// `array_agg` of values that are not arrays.
     ArrayAgg,
+    /// `array_agg` of arrays, which makes an array with one more dimension.
+    ArrayAggArray,
 }
 
 /// True for a pseudo-type that takes the type of the arguments.
@@ -70,6 +72,7 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
         ("string_agg_transfn", "string_agg_finalfn") => Method::Concat { bytea: false },
         ("bytea_string_agg_transfn", "bytea_string_agg_finalfn") => Method::Concat { bytea: true },
         ("array_agg_transfn", "array_agg_finalfn") => Method::ArrayAgg,
+        ("array_agg_array_transfn", "array_agg_array_finalfn") => Method::ArrayAggArray,
         _ => {
             let state =
                 if polymorphic(row.transtype) && row.finalfn == 0 { ty } else { row.transtype };
@@ -121,6 +124,12 @@ enum State {
     ArrayAgg {
         values: Option<Vec<Option<Value>>>,
     },
+    /// The dimensions of the first input array, the number of input arrays and their elements.
+    ArrayAggArray {
+        dims: Vec<ArrayDim>,
+        count: i32,
+        values: Vec<Option<Value>>,
+    },
 }
 
 /// An aggregate call of the query with its method.
@@ -148,6 +157,9 @@ impl Agg<'_> {
             }
             Method::Concat { .. } => State::Concat { data: None, cut: 0 },
             Method::ArrayAgg => State::ArrayAgg { values: None },
+            Method::ArrayAggArray => {
+                State::ArrayAggArray { dims: Vec::new(), count: 0, values: Vec::new() }
+            }
         })
     }
 
@@ -240,6 +252,9 @@ impl Agg<'_> {
                 let value = args.first().cloned().unwrap_or(Value::Null);
                 values.get_or_insert_with(Vec::new).push((!value.is_null()).then_some(value));
             }
+            (Method::ArrayAggArray, State::ArrayAggArray { dims, count, values }) => {
+                accumulate_array(args.first(), dims, count, values)?;
+            }
             _ => return Err(Error::internal("an aggregate state of the wrong kind")),
         }
         Ok(())
@@ -298,9 +313,60 @@ impl Agg<'_> {
                 None => Value::Null,
                 Some(values) => Value::Array(Box::new(Array::one(values))),
             }),
+            (Method::ArrayAggArray, State::ArrayAggArray { dims, count, values }) => {
+                if count == 0 {
+                    return Ok(Value::Null);
+                }
+                let mut all = Vec::with_capacity(dims.len() + 1);
+                all.push(ArrayDim { len: count, lower: 1 });
+                all.extend(dims);
+                Ok(Value::Array(Box::new(Array { dims: all, values })))
+            }
             _ => Err(Error::internal("an aggregate state of the wrong kind")),
         }
     }
+}
+
+/// `accumulateArrayResultArr`: adds the elements of one input array of `array_agg` to the state. Each input array must have the dimensions and the lower bounds of the first input array.
+fn accumulate_array(
+    input: Option<&Value>,
+    dims: &mut Vec<ArrayDim>,
+    count: &mut i32,
+    values: &mut Vec<Option<Value>>,
+) -> Result<()> {
+    let subscript = |message: &str| Error::new(SqlState::ARRAY_SUBSCRIPT_ERROR, message);
+    let array = match input {
+        Some(Value::Array(array)) => array,
+        Some(Value::Null) | None => {
+            return Err(Error::new(
+                SqlState::NULL_VALUE_NOT_ALLOWED,
+                "cannot accumulate null arrays",
+            ));
+        }
+        Some(_) => return Err(Error::internal("array_agg got a value that is not an array")),
+    };
+    if *count == 0 {
+        if array.dims.is_empty() {
+            return Err(subscript("cannot accumulate empty arrays"));
+        }
+        if array.dims.len() + 1 > MAXDIM {
+            return Err(Error::new(
+                SqlState::PROGRAM_LIMIT_EXCEEDED,
+                format!(
+                    "number of array dimensions ({}) exceeds the maximum allowed ({MAXDIM})",
+                    array.dims.len() + 1
+                ),
+            ));
+        }
+        dims.clone_from(&array.dims);
+    } else if array.dims != *dims {
+        return Err(subscript("cannot accumulate arrays of different dimensionality"));
+    }
+    *count = count
+        .checked_add(1)
+        .ok_or_else(|| Error::internal("array_agg has too many input arrays"))?;
+    values.extend(array.values.iter().cloned());
+    Ok(())
 }
 
 /// The aggregate calls of an expression. An aggregate call has no other aggregate call in it.

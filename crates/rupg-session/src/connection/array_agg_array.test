@@ -1,0 +1,96 @@
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1,2]), (ARRAY[3,4])) v(a)
+fields array_agg:1007:-1:-1
+row {{1,2},{3,4}}
+SELECT 1
+> SELECT array_agg(a) FROM (VALUES (ARRAY['a','b']), (ARRAY['c',NULL])) v(a)
+fields array_agg:1009:-1:-1
+row {{a,b},{c,NULL}}
+SELECT 1
+> SELECT array_agg(a) FROM (VALUES ('[0:1]={1,2}'::int[]), ('[0:1]={3,4}'::int[])) v(a)
+fields array_agg:1007:-1:-1
+row [1:2][0:1]={{1,2},{3,4}}
+SELECT 1
+> SELECT array_dims(array_agg(a)) FROM (VALUES ('[0:1]={1,2}'::int[]), ('[0:1]={3,4}'::int[])) v(a)
+fields array_dims:25:-1:-1
+row [1:2][0:1]
+SELECT 1
+> SELECT array_agg(a) FROM (VALUES (ARRAY[[1,2],[3,4]]), (ARRAY[[5,6],[7,8]])) v(a)
+fields array_agg:1007:-1:-1
+row {{{1,2},{3,4}},{{5,6},{7,8}}}
+SELECT 1
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1,2]), (NULL)) v(a)
+fields array_agg:1007:-1:-1
+ERROR 22004 cannot accumulate null arrays
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1,2]), ('{}'::int[])) v(a)
+fields array_agg:1007:-1:-1
+ERROR 2202E cannot accumulate arrays of different dimensionality
+> SELECT array_agg(a) FROM (VALUES ('{}'::int[])) v(a)
+fields array_agg:1007:-1:-1
+ERROR 2202E cannot accumulate empty arrays
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1,2]), (ARRAY[3])) v(a)
+fields array_agg:1007:-1:-1
+ERROR 2202E cannot accumulate arrays of different dimensionality
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1,2]), (ARRAY[[3,4]])) v(a)
+fields array_agg:1007:-1:-1
+ERROR 2202E cannot accumulate arrays of different dimensionality
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1,2]), ('[2:3]={3,4}'::int[])) v(a)
+fields array_agg:1007:-1:-1
+ERROR 2202E cannot accumulate arrays of different dimensionality
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1,2])) v(a) WHERE false
+fields array_agg:1007:-1:-1
+row NULL
+SELECT 1
+> SELECT array_agg(a), count(*) FROM (VALUES (1, ARRAY[1,2]), (1, ARRAY[3,4]), (2, ARRAY[5,6])) v(g, a) GROUP BY g ORDER BY g
+fields array_agg:1007:-1:-1,count:20:8:-1
+row {{1,2},{3,4}},2
+row {{5,6}},1
+SELECT 2
+> SELECT array_agg(a ORDER BY a DESC) FROM (VALUES (ARRAY[1,2]), (ARRAY[3,4])) v(a)
+fields array_agg:1007:-1:-1
+row {{3,4},{1,2}}
+SELECT 1
+> SELECT array_agg(DISTINCT a) FROM (VALUES (ARRAY[1,2]), (ARRAY[1,2]), (ARRAY[3,4])) v(a)
+fields array_agg:1007:-1:-1
+row {{1,2},{3,4}}
+SELECT 1
+> SELECT array_agg(a) FILTER (WHERE a[1] > 1) FROM (VALUES (ARRAY[1,2]), (ARRAY[3,4])) v(a)
+fields array_agg:1007:-1:-1
+row {{3,4}}
+SELECT 1
+> SELECT pg_typeof(array_agg(a)) FROM (VALUES (ARRAY[1,2])) v(a)
+fields pg_typeof:2206:4:-1
+row integer[]
+SELECT 1
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1.5,2]::numeric[])) v(a)
+fields array_agg:1231:-1:-1
+row {{1.5,2}}
+SELECT 1
+> SELECT array_agg(ARRAY[x, x * 10]) FROM generate_series(1, 3) x
+fields array_agg:1007:-1:-1
+row {{1,10},{2,20},{3,30}}
+SELECT 1
+> SELECT array_agg(a)::text FROM (VALUES (ARRAY[true]), (ARRAY[false])) v(a)
+fields array_agg:25:-1:-1
+row {{t},{f}}
+SELECT 1
+> SELECT array_agg(a) FROM (VALUES (ARRAY[NULL::int]), (ARRAY[NULL::int])) v(a)
+fields array_agg:1007:-1:-1
+row {{NULL},{NULL}}
+SELECT 1
+> SELECT array_agg(a) FROM (VALUES ('{{{{{{1}}}}}}'::int[])) v(a)
+fields array_agg:1007:-1:-1
+ERROR 54000 number of array dimensions (7) exceeds the maximum allowed (6)
+> SELECT array_agg(a) FROM (VALUES ('{{{{{1}}}}}'::int[])) v(a)
+fields array_agg:1007:-1:-1
+row {{{{{{1}}}}}}
+SELECT 1
+> SELECT array_agg(a) FROM (VALUES (NULL::int[])) v(a)
+fields array_agg:1007:-1:-1
+ERROR 22004 cannot accumulate null arrays
+> SELECT array_agg(a) FROM (VALUES (ARRAY[1,2]), (NULL)) v(a) WHERE a IS NOT NULL
+fields array_agg:1007:-1:-1
+row {{1,2}}
+SELECT 1
+> SELECT * FROM pg_stats_ext_exprs
+fields schemaname@pg_stats_ext_exprs.1:19:64:-1,tablename@pg_stats_ext_exprs.2:19:64:-1,tableid@pg_stats_ext_exprs.3:26:4:-1,statistics_schemaname@pg_stats_ext_exprs.4:19:64:-1,statistics_name@pg_stats_ext_exprs.5:19:64:-1,statistics_id@pg_stats_ext_exprs.6:26:4:-1,statistics_owner@pg_stats_ext_exprs.7:19:64:-1,expr@pg_stats_ext_exprs.8:25:-1:-1,inherited@pg_stats_ext_exprs.9:16:1:-1,null_frac@pg_stats_ext_exprs.10:700:4:-1,avg_width@pg_stats_ext_exprs.11:23:4:-1,n_distinct@pg_stats_ext_exprs.12:700:4:-1,most_common_vals@pg_stats_ext_exprs.13:2277:-1:-1,most_common_freqs@pg_stats_ext_exprs.14:1021:-1:-1,histogram_bounds@pg_stats_ext_exprs.15:2277:-1:-1,correlation@pg_stats_ext_exprs.16:700:4:-1,most_common_elems@pg_stats_ext_exprs.17:2277:-1:-1,most_common_elem_freqs@pg_stats_ext_exprs.18:1021:-1:-1,elem_count_histogram@pg_stats_ext_exprs.19:1021:-1:-1,range_length_histogram@pg_stats_ext_exprs.20:2277:-1:-1,range_empty_frac@pg_stats_ext_exprs.21:700:4:-1,range_bounds_histogram@pg_stats_ext_exprs.22:2277:-1:-1
+SELECT 0
