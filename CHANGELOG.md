@@ -4,6 +4,15 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.5 (2026-10-09)
+
+A patch release on the way to M2. A query can now read `LATERAL` subqueries and functions in `FROM`.
+
+### Added
+
+- A `LATERAL` subquery in `FROM` reads the columns of the parts of `FROM` before it (#187). The scan runs it again for each row of those parts, at the top of `FROM` and in inner and left joins. A reference to the left side of a full or a right join gives `42P10` with the detail of PostgreSQL.
+- A query can call a function in `FROM`, with `ROWS FROM`, `WITH ORDINALITY`, column aliases and column definition lists (#188). The function can read the parts of `FROM` before it. The set-returning functions are `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `pg_options_to_table`, `aclexplode` and `pg_get_keywords`. A function of a scalar type gives one row.
+
 ## 0.1.4 (2026-10-09)
 
 A patch release on the way to M2. A session can now read the tables of the user and subqueries in `FROM`, and the planner folds constant expressions as PostgreSQL does.
