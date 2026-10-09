@@ -1,6 +1,6 @@
 //! The rupg catalog of user objects: schemas, tables, columns, constraints, indexes, roles, privileges.
 //!
-//! At M2 the catalog holds the schemas, tables, sequences, indexes, column defaults and constraints that DDL makes. Each object gets its OID in the order that PostgreSQL 19 gives OIDs, and each object without a name in the statement gets the name that PostgreSQL gives it. Thus after the same statements on a new cluster, the OIDs and the names are the same as in PostgreSQL.
+//! At M2 the catalog holds the schemas, tables, sequences, indexes, views, column defaults and constraints that DDL makes. Each object gets its OID in the order that PostgreSQL 19 gives OIDs, and each object without a name in the statement gets the name that PostgreSQL gives it. Thus after the same statements on a new cluster, the OIDs and the names are the same as in PostgreSQL.
 //!
 //! The catalog does not read SQL. The analyzer turns a statement into calls of this crate in the order of `DefineRelation`, `DefineIndex` and `ATAddForeignKeyConstraint`, and it gives each expression as text that only the analyzer reads back. The catalog makes the TOAST tables that PostgreSQL makes, with their indexes, but they hold no data. It does not make the triggers of foreign keys, but it uses their OIDs, so the OIDs of later objects agree with PostgreSQL. It records no `pg_depend` rows for these triggers. The catalog also records the rows of `pg_depend` in the order that PostgreSQL inserts them.
 //!
@@ -27,6 +27,8 @@ pub const MAX_COLUMNS: usize = 1600;
 pub const PG_CLASS: u32 = 1259;
 /// The OID of `pg_type`.
 pub const PG_TYPE: u32 = 1247;
+/// The OID of `pg_rewrite`.
+pub const PG_REWRITE: u32 = 2618;
 /// The OID of `pg_namespace`.
 pub const PG_NAMESPACE: u32 = 2615;
 /// The OID of `pg_database`.
@@ -78,6 +80,8 @@ pub enum RelKind {
     Sequence,
     /// A TOAST table, `t`.
     Toast,
+    /// A view, `v`.
+    View,
 }
 
 impl RelKind {
@@ -88,6 +92,7 @@ impl RelKind {
             RelKind::Index => 'i',
             RelKind::Sequence => 'S',
             RelKind::Toast => 't',
+            RelKind::View => 'v',
         }
     }
 }
@@ -203,6 +208,19 @@ pub struct Relation {
     pub index: Option<IndexInfo>,
     /// The facts of a sequence.
     pub sequence: Option<SequenceInfo>,
+    /// The query of a view.
+    pub view: Option<ViewInfo>,
+}
+
+/// The query of a view and its `_RETURN` rule.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct ViewInfo {
+    /// The OID of the `_RETURN` rule in `pg_rewrite`.
+    pub rule: u32,
+    /// The text of the statement that made the view or that last replaced its query. Only the analyzer reads it back.
+    pub text: String,
+    /// The schemas of `search_path` when that statement ran, in order. The analyzer finds the names of the query in these schemas again.
+    pub path: Vec<u32>,
 }
 
 impl Relation {
@@ -774,6 +792,11 @@ impl Catalog {
 
     /// `heap_create_with_catalog` for an ordinary table: the table gets an OID, then its array type, then its row type.
     pub fn create_table(&mut self, new: NewRelation) -> Result<u32> {
+        self.create_relation(new, RelKind::Table)
+    }
+
+    /// `heap_create_with_catalog` for a relation with a row type: the relation gets an OID, then its array type, then its row type.
+    fn create_relation(&mut self, new: NewRelation, kind: RelKind) -> Result<u32> {
         Catalog::check_columns(&new.columns)?;
         self.check_new_relation(new.namespace, &new.name, true)?;
         let oid = self.new_oid();
@@ -810,7 +833,7 @@ impl Catalog {
                 oid,
                 name: new.name,
                 namespace: new.namespace,
-                kind: RelKind::Table,
+                kind,
                 owner: new.owner,
                 row_type,
                 columns: new.columns,
@@ -819,6 +842,7 @@ impl Catalog {
                 toast: 0,
                 index: None,
                 sequence: None,
+                view: None,
             },
         );
         self.depend(ObjRef::new(PG_TYPE, row_type), ObjRef::new(PG_CLASS, oid), DepKind::Internal);
@@ -829,6 +853,72 @@ impl Catalog {
             DepKind::Normal,
         );
         Ok(oid)
+    }
+
+    /// `DefineView`: the view gets its OID, its array type and its row type as a table does, then its `_RETURN` rule. The rule is part of the view, and it depends on the objects that the query reads.
+    pub fn create_view(
+        &mut self,
+        new: NewRelation,
+        text: String,
+        path: Vec<u32>,
+        refs: &[ObjRef],
+    ) -> Result<u32> {
+        let oid = self.create_relation(new, RelKind::View)?;
+        let rule = self.new_oid();
+        self.relation_mut(oid)?.view = Some(ViewInfo { rule, text, path });
+        self.depend_rule(rule, oid, refs);
+        Ok(oid)
+    }
+
+    /// `CREATE OR REPLACE VIEW` of a view that exists. The columns after the old columns are new, and the rule gets the new query and new dependencies. The caller checks that the old columns did not change.
+    pub fn replace_view(
+        &mut self,
+        oid: u32,
+        columns: Vec<Column>,
+        text: String,
+        path: Vec<u32>,
+        refs: &[ObjRef],
+    ) -> Result<()> {
+        Catalog::check_columns(&columns)?;
+        let rel = self.relation_mut(oid)?;
+        let old = rel.columns.len();
+        rel.columns.extend(columns.into_iter().skip(old));
+        let view = rel.view.as_mut().ok_or_else(|| no_object("view", oid))?;
+        view.text = text;
+        view.path = path;
+        let rule = view.rule;
+        self.depends.retain(|d| d.object != ObjRef::new(PG_REWRITE, rule));
+        self.depend_rule(rule, oid, refs);
+        Ok(())
+    }
+
+    /// The dependencies of the `_RETURN` rule of a view, as `InsertRule` and `recordDependencyOnExpr` record them. The rule is part of the view, and it depends on each object that the query reads. The objects come in the order of `eliminate_duplicate_dependencies`, from the highest OID down, and a column takes the place of its whole relation.
+    fn depend_rule(&mut self, rule: u32, view: u32, refs: &[ObjRef]) {
+        let object = ObjRef::new(PG_REWRITE, rule);
+        self.depend(object, ObjRef::new(PG_CLASS, view), DepKind::Internal);
+        let mut refs = refs.to_vec();
+        refs.sort_by(|a, b| {
+            b.oid
+                .cmp(&a.oid)
+                .then(a.class.cmp(&b.class))
+                .then(a.sub.cast_unsigned().cmp(&b.sub.cast_unsigned()))
+        });
+        let mut kept: Vec<ObjRef> = Vec::with_capacity(refs.len());
+        for r in refs {
+            match kept.last_mut() {
+                Some(prior) if prior.class == r.class && prior.oid == r.oid => {
+                    if prior.sub == 0 {
+                        prior.sub = r.sub;
+                    } else if prior.sub != r.sub {
+                        kept.push(r);
+                    }
+                }
+                _ => kept.push(r),
+            }
+        }
+        for referenced in kept {
+            self.depend(object, referenced, DepKind::Normal);
+        }
     }
 
     /// `DefineSequence`. A sequence has no row type, and each column of a sequence is not null.
@@ -853,6 +943,7 @@ impl Catalog {
                 toast: 0,
                 index: None,
                 sequence: Some(info),
+                view: None,
             },
         );
         self.depend(
@@ -1089,6 +1180,7 @@ impl Catalog {
                 toast: 0,
                 index: Some(info),
                 sequence: None,
+                view: None,
             },
         );
         let me = ObjRef::new(PG_CLASS, oid);
@@ -1186,6 +1278,7 @@ impl Catalog {
                 toast: 0,
                 index: None,
                 sequence: None,
+                view: None,
             },
         );
         let info = IndexInfo {
@@ -1218,6 +1311,7 @@ impl Catalog {
                 toast: 0,
                 index: Some(info),
                 sequence: None,
+                view: None,
             },
         );
         self.relation_mut(table)?.toast = oid;

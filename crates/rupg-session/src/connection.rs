@@ -356,12 +356,17 @@ impl Connection {
     }
 
     /// Runs a statement that defines an object. The statement takes the lock of the store, which the transaction holds until it ends. After an error the changes of the statement go, but its OIDs stay used.
-    fn define(&mut self, node: &Node, notices: &mut Vec<Notice>) -> Result<Done, Error> {
+    fn define(
+        &mut self,
+        node: &Node,
+        text: &str,
+        notices: &mut Vec<Notice>,
+    ) -> Result<Done, Error> {
         if self.lease.is_none() {
             self.lease = Some(self.store.lease(&self.cancel)?);
         }
         let mut work = Catalog::clone(&self.catalog());
-        let defined = rupg_analyze::define(node, &self.reader(), &mut work, self.role);
+        let defined = rupg_analyze::define(node, text, &self.reader(), &mut work, self.role);
         notices.extend(defined.messages.into_iter().map(|message| match message {
             Message::Warning(error) => Notice::warning(error),
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
@@ -375,6 +380,7 @@ impl Connection {
                 Ok(Done::Tag(match node {
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
+                    Node::ViewStmt(_) => CommandTag::CreateView,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -620,7 +626,7 @@ impl Connection {
                 self.select(node, &mut notices, &mut described)
             } else if rupg_analyze::is_definition(node) {
                 drop(self.portals.close(b""));
-                self.define(node, &mut notices)
+                self.define(node, statement, &mut notices)
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
@@ -1613,6 +1619,12 @@ mod tests {
     #[test]
     fn fold() {
         big_stack(|| script(include_str!("connection/fold.test")));
+    }
+
+    /// `CREATE VIEW` and `CREATE OR REPLACE VIEW`, the queries that read the views, and the rows of the views in `pg_class`, `pg_type`, `pg_attribute`, `pg_rewrite` and `pg_depend`. `connection/views.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn views() {
+        big_stack(|| script(include_str!("connection/views.test")));
     }
 
     /// `SELECT` from the tables and sequences of the user, with the types of the columns. `connection/user_select.test` is the output of PostgreSQL 19 for the same script in a new database.
