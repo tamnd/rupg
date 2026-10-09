@@ -111,6 +111,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
                 FuncForm::Operator(op) => out.push_str(&format!(" :form (operator {op})")),
                 FuncForm::ExplicitCast => out.push_str(" :form explicit"),
                 FuncForm::ImplicitCast => out.push_str(" :form implicit"),
+                FuncForm::SqlSyntax => out.push_str(" :form sql"),
             }
             out.push_str(&format!(" :variadic {}", f.variadic));
             write_args(&f.args, out)?;
@@ -569,6 +570,7 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 Item::Atom(form) if form == "call" => FuncForm::Call,
                 Item::Atom(form) if form == "explicit" => FuncForm::ExplicitCast,
                 Item::Atom(form) if form == "implicit" => FuncForm::ImplicitCast,
+                Item::Atom(form) if form == "sql" => FuncForm::SqlSyntax,
                 Item::List(parts) if parts.len() == 2 && atom(&parts[0])? == "operator" => {
                     FuncForm::Operator(number(atom(&parts[1])?)?)
                 }

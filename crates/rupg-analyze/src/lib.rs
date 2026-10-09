@@ -44,7 +44,7 @@ pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_O
 pub use select::{Query, Target};
 pub use setop::{SetKind, SetOp, SetTree};
 pub use sort::SortGroup;
-pub use typcache::default_opclass;
+pub use typcache::{default_opclass, sort_operators};
 pub use typename::parse_type;
 
 /// The OID of the schema `pg_catalog`.
@@ -149,6 +149,11 @@ impl<'a> Analyzer<'a> {
         }
         Ok(Some(target))
     }
+}
+
+/// The query of a view of the catalog, from the text of the view and the `search_path` that the view keeps, or `None` when the catalog has no view with the OID. `pg_get_viewdef` shows this query.
+pub fn view_query(env: &dyn Env, oid: u32) -> Result<Option<Query>> {
+    Analyzer::new(env, &Params::default()).view_query(oid)
 }
 
 /// `parse_analyze`: the query tree of a raw statement, which is the `stmt` of a `RawStmt`. For a statement of the extended protocol, the [`Query`] has the type of each parameter.

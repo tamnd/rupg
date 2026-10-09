@@ -92,6 +92,12 @@ pub fn default_opclass(ty: u32, method: u32) -> Option<&'static OpclassRow> {
         .flatten()
 }
 
+/// The `<` and the `>` operators of the type, as `lookup_type_cache` gives `lt_opr` and `gt_opr`, or 0 for an operator that the type does not have. `get_rule_orderby` uses them to show the direction of a sort.
+pub fn sort_operators(ty: u32) -> (u32, u32) {
+    let ops = operators(ty);
+    (ops.lt, ops.gt)
+}
+
 /// The operators of the type, as `lookup_type_cache` gives `lt_opr`, `eq_opr` and `gt_opr`. An array has the operators only when its element type has them, and the same for a record.
 pub(crate) fn operators(ty: u32) -> Operators {
     let btree = default_opclass(ty, BTREE);

@@ -1,11 +1,16 @@
-//! The deparse functions `pg_get_expr`, `pg_get_constraintdef` and `pg_get_indexdef`: a port of the parts of `ruleutils.c` that show the expressions and the definitions of the catalog.
+//! The deparse functions `pg_get_expr`, `pg_get_constraintdef`, `pg_get_indexdef` and `pg_get_viewdef`: a port of the parts of `ruleutils.c` that show the expressions, the queries and the definitions of the catalog.
 //!
-//! The functions read the stored form that `rupg_analyze::node` writes, and show it as PostgreSQL shows its node trees. The rules for parentheses, casts and constants follow `get_rule_expr`. The functions show the objects of the user. An index or a constraint of a system catalog gives an error that says that the engine cannot show it yet.
+//! The functions read the stored form that `rupg_analyze::node` writes, or the query that the analyzer makes from the text of a view, and show it as PostgreSQL shows its node trees. The rules for parentheses, casts and constants follow `get_rule_expr`. The functions show the objects of the user and the system views. An index or a constraint of a system catalog gives an error that says that the engine cannot show it yet.
+
+mod query;
 
 use std::ptr;
 
-use rupg_analyze::{BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue};
-use rupg_analyze::{default_opclass, node};
+use rupg_analyze::{
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SortGroup, SqlValue,
+    SubLink, SubLinkKind, Var,
+};
+use rupg_analyze::{default_opclass, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -33,21 +38,72 @@ const NULLS_FIRST: i16 = 2;
 /// The first OID that a user object can have.
 const FIRST_USER_OID: u32 = 16384;
 
-/// A deparse of one expression, as `deparse_context`. Each form of the functions sets `PRETTYFLAG_INDENT`, so a `CASE` always takes more than one line.
+/// The names of the relations of one query and of their columns, as `deparse_namespace` with its `deparse_columns`.
+#[derive(Debug, Default)]
+struct Namespace {
+    /// The name of each relation of the query, by its index, as `rtable_names`. The name is unique in the query and in the queries outside it.
+    names: Vec<String>,
+    /// The names of the columns of each relation, by the column number from 1.
+    columns: Vec<Vec<String>>,
+    /// For each relation, true when `FROM` shows the names of the columns after the name of the relation, as `printaliases`.
+    print_aliases: Vec<bool>,
+    /// The value and the name of each column of `USING` of a join with no alias that is not a column of one side. PostgreSQL shows such a column by its name, as a column of the join.
+    merged: Vec<(Expr, String)>,
+}
+
+/// A deparse of an expression or of a query, as `deparse_context`. Each form of the functions sets `PRETTYFLAG_INDENT`, so a `CASE` always takes more than one line.
 struct Deparser<'a> {
     session: &'a dyn Session,
-    /// The names of the columns of the relation that a `Var` names, by the column number from 1.
-    columns: &'a [String],
+    /// The names of the queries that have the expression, the outermost query first. A `Var` finds its relation in the namespace of its level.
+    namespaces: Vec<Namespace>,
     /// `PRETTYFLAG_PAREN`: add parentheses only where the syntax needs them.
     paren: bool,
     /// `indentLevel`.
     indent: i32,
+    /// `wrapColumn`: the length of a line after which the target list and `FROM` start a new line for the next item, or -1 to keep the items on one line.
+    wrap: i32,
+    /// `varprefix`: show the name of the relation before the name of each column.
+    prefix: bool,
+    /// `colNamesVisible`: the names of the columns of the query show in its result.
+    names_visible: bool,
+    /// `inGroupBy`.
+    in_group_by: bool,
+    /// The name of each column of the result of the query, with the column of `FROM` that the column shows. A column in `ORDER BY` with the name of another column of the result shows the name of its relation, as `get_variable` does.
+    outputs: Vec<(String, Option<Var>)>,
     buf: String,
 }
 
-impl Deparser<'_> {
-    /// `appendContextKeyword`: a new line with the indent, then the keyword.
-    fn keyword(&mut self, word: &str, before: i32, after: i32) {
+impl<'a> Deparser<'a> {
+    /// A deparse of an expression of one relation, as `deparse_context_for`: a `Var` shows the name of its column with no name of the relation.
+    fn for_columns(session: &'a dyn Session, columns: Vec<String>, paren: bool) -> Deparser<'a> {
+        let mut d = Deparser::new(session, paren, 0);
+        d.namespaces.push(Namespace {
+            names: vec![String::new()],
+            columns: vec![columns],
+            print_aliases: vec![false],
+            merged: Vec::new(),
+        });
+        d
+    }
+
+    /// A deparse with no query.
+    fn new(session: &'a dyn Session, paren: bool, wrap: i32) -> Deparser<'a> {
+        Deparser {
+            session,
+            namespaces: Vec::new(),
+            paren,
+            indent: 0,
+            wrap,
+            prefix: false,
+            names_visible: true,
+            in_group_by: false,
+            outputs: Vec::new(),
+            buf: String::new(),
+        }
+    }
+
+    /// `appendContextKeyword`: a new line with the indent and `plus` more spaces, then the keyword.
+    fn keyword(&mut self, word: &str, before: i32, after: i32, plus: i32) {
         self.indent += before;
         let kept = self.buf.trim_end_matches(' ').len();
         self.buf.truncate(kept);
@@ -56,12 +112,36 @@ impl Deparser<'_> {
             self.indent.max(0)
         } else {
             (INDENT_LIMIT + (self.indent - INDENT_LIMIT) / (INDENT_STD / 2)) % INDENT_LIMIT
-        };
+        } + plus;
         for _ in 0..amount {
             self.buf.push(' ');
         }
         self.buf.push_str(word);
         self.indent = (self.indent + after).max(0);
+    }
+
+    /// `get_variable`: the column with the name of its relation when the query needs it, and the name of the column. A column of `ORDER BY` also shows the name of its relation when a column of the result has the same name and shows another value.
+    fn variable(&mut self, var: &Var, in_order_by: bool) -> Result<String> {
+        let bogus = || Error::internal(format!("bogus varlevelsup: {}", var.levels_up));
+        let depth = self.namespaces.len().checked_sub(var.levels_up + 1).ok_or_else(bogus)?;
+        let space = &self.namespaces[depth];
+        let refname = space.names.get(var.relation).cloned().unwrap_or_default();
+        let attname = match usize::try_from(var.attnum) {
+            Ok(n) if n > 0 => space.columns.get(var.relation).and_then(|c| c.get(n - 1)).cloned(),
+            _ => system_column(var.attnum).map(str::to_string),
+        };
+        let attname =
+            attname.ok_or_else(|| Error::internal(format!("invalid attnum {}", var.attnum)))?;
+        let mut prefix = self.prefix;
+        if in_order_by && !self.in_group_by && !prefix {
+            prefix = self.outputs.iter().any(|(name, v)| *name == attname && *v != Some(*var));
+        }
+        if prefix && !refname.is_empty() {
+            self.buf.push_str(&quote_identifier(&refname));
+            self.buf.push('.');
+        }
+        self.buf.push_str(&quote_identifier(&attname));
+        Ok(attname)
     }
 
     /// The `(` that a node writes around itself when the flags do not have `PRETTYFLAG_PAREN`.
@@ -104,24 +184,15 @@ impl Deparser<'_> {
 
     /// `get_rule_expr`. `implicit` is `showimplicit`: true to show the casts that the analyzer added.
     fn expr(&mut self, e: &Expr, implicit: bool) -> Result<()> {
+        if let Some(name) = self.merged_name(e) {
+            self.buf.push_str(&quote_identifier(&name));
+            return Ok(());
+        }
         match &e.kind {
             ExprKind::Const(value) => self.constant(e, value, 0)?,
             ExprKind::Param(n) => self.buf.push_str(&format!("${n}")),
             ExprKind::Var(var) => {
-                let name = match var.attnum {
-                    n if n > 0 => self.columns.get(usize::try_from(n - 1).unwrap_or(usize::MAX)),
-                    _ => None,
-                };
-                let name = match name {
-                    Some(name) => quote_identifier(name),
-                    None => match system_column(var.attnum) {
-                        Some(name) => name.to_string(),
-                        None => {
-                            return Err(Error::internal(format!("invalid attnum {}", var.attnum)));
-                        }
-                    },
-                };
-                self.buf.push_str(&name);
+                self.variable(var, false)?;
             }
             ExprKind::Func(f) => self.func(e, f, implicit)?,
             ExprKind::Relabel(arg, form) => self.cast_node(e, arg, *form, e.typmod, implicit)?,
@@ -242,8 +313,10 @@ impl Deparser<'_> {
                 }
             }
             ExprKind::SqlValue(value) => self.buf.push_str(&sql_value(*value)),
-            ExprKind::Agg(_) | ExprKind::SubLink(_) | ExprKind::SubColumn(_) => {
-                return Err(not_yet("a deparse of an aggregate or a subquery"));
+            ExprKind::Agg(agg) => self.aggregate(agg)?,
+            ExprKind::SubLink(sub) => self.sublink(sub)?,
+            ExprKind::SubColumn(_) => {
+                return Err(Error::internal("a column of a subquery outside its test"));
             }
         }
         Ok(())
@@ -355,31 +428,40 @@ impl Deparser<'_> {
             FuncForm::ExplicitCast | FuncForm::ImplicitCast => {
                 self.coercion(&f.args[0], e.ty, e.typmod, e)?;
             }
-            FuncForm::Call => {
-                let proc = builtin::proc_by_oid(f.oid).ok_or_else(|| {
-                    Error::internal(format!("cache lookup failed for function {}", f.oid))
-                })?;
-                self.buf.push_str(&quote_identifier(proc.name));
-                self.buf.push('(');
-                let variadic = f.variadic && proc.variadic != 0;
-                for (i, arg) in f.args.iter().enumerate() {
-                    if i > 0 {
-                        self.buf.push_str(", ");
-                    }
-                    if variadic && i + 1 == f.args.len() {
-                        self.buf.push_str("VARIADIC ");
-                    }
-                    self.expr(arg, true)?;
+            FuncForm::SqlSyntax => {
+                if !self.sql_syntax(e, f)? {
+                    self.call(f)?;
                 }
-                self.buf.push(')');
             }
+            FuncForm::Call => self.call(f)?,
         }
+        Ok(())
+    }
+
+    /// A call in the form `name(args)`.
+    fn call(&mut self, f: &Func) -> Result<()> {
+        let proc = builtin::proc_by_oid(f.oid).ok_or_else(|| {
+            Error::internal(format!("cache lookup failed for function {}", f.oid))
+        })?;
+        self.buf.push_str(&quote_identifier(proc.name));
+        self.buf.push('(');
+        let variadic = f.variadic && proc.variadic != 0;
+        for (i, arg) in f.args.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            if variadic && i + 1 == f.args.len() {
+                self.buf.push_str("VARIADIC ");
+            }
+            self.expr(arg, true)?;
+        }
+        self.buf.push(')');
         Ok(())
     }
 
     /// A `CASE`. With an argument, a condition `CaseTestExpr = value` shows only the value.
     fn case(&mut self, case: &Case) -> Result<()> {
-        self.keyword("CASE", 0, INDENT_VAR);
+        self.keyword("CASE", 0, INDENT_VAR, 0);
         if let Some(arg) = &case.arg {
             self.buf.push(' ');
             self.expr(arg, true)?;
@@ -393,14 +475,14 @@ impl Deparser<'_> {
             {
                 shown = right;
             }
-            self.keyword("WHEN ", 0, 0);
+            self.keyword("WHEN ", 0, 0, 0);
             self.expr(shown, false)?;
             self.buf.push_str(" THEN ");
             self.expr(result, true)?;
         }
-        self.keyword("ELSE ", 0, 0);
+        self.keyword("ELSE ", 0, 0, 0);
         self.expr(&case.default, true)?;
-        self.keyword("END", -INDENT_VAR, 0);
+        self.keyword("END", -INDENT_VAR, 0, 0);
         Ok(())
     }
 }
@@ -559,7 +641,7 @@ fn column_names(relid: u32, session: &dyn Session) -> Option<Vec<String>> {
 /// `deparse_expression_pretty` for a stored expression or a stored list of expressions, with the columns of the relation.
 fn deparse(text: &str, columns: &[String], paren: bool, session: &dyn Session) -> Result<String> {
     let exprs = stored(text)?;
-    let mut d = Deparser { session, columns, paren, indent: 0, buf: String::new() };
+    let mut d = Deparser::for_columns(session, columns.to_vec(), paren);
     d.list(&exprs, false)?;
     Ok(d.buf)
 }
@@ -872,8 +954,7 @@ fn index_def(
             let e =
                 exprs.next().ok_or_else(|| Error::internal("too few entries in indexprs list"))?;
             if shown {
-                let mut d =
-                    Deparser { session, columns: &columns, paren, indent: 0, buf: String::new() };
+                let mut d = Deparser::for_columns(session, columns.clone(), paren);
                 d.expr(e, false)?;
                 if looks_like_function(e) {
                     out.push_str(&d.buf);
@@ -919,7 +1000,7 @@ fn index_def(
 /// `looks_like_function`: true for an index expression that the syntax of an index column takes without parentheses.
 fn looks_like_function(e: &Expr) -> bool {
     match &e.kind {
-        ExprKind::Func(f) => f.form == FuncForm::Call,
+        ExprKind::Func(f) => matches!(f.form, FuncForm::Call | FuncForm::SqlSyntax),
         ExprKind::NullIf { .. }
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }
@@ -958,6 +1039,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_expr" | "pg_get_expr_ext" => get_expr,
         "pg_get_constraintdef" | "pg_get_constraintdef_ext" => get_constraintdef,
         "pg_get_indexdef" | "pg_get_indexdef_ext" => get_indexdef,
+        "pg_get_viewdef" | "pg_get_viewdef_ext" | "pg_get_viewdef_wrap" => query::get_viewdef,
+        "pg_get_viewdef_name" | "pg_get_viewdef_name_ext" => query::get_viewdef_name,
         _ => return None,
     })
 }

@@ -40,6 +40,34 @@ pub struct Relation {
     pub function: Option<FromFunction>,
     /// The rows of a `VALUES` list, each with one expression for each column.
     pub values: Option<Vec<Vec<Expr>>>,
+    /// `eref->aliasname`: the alias, or the name that the analyzer gives the relation, such as the name of the table, `unnamed_subquery` or the name of the function.
+    pub name: String,
+    /// The names of the columns of the alias when the query gives the relation an alias, as `alias->colnames`. [`Relation::name`] is then the name of the alias.
+    pub alias: Option<Vec<String>>,
+    /// True when the query writes `LATERAL` before a subquery or a function.
+    pub lateral: bool,
+}
+
+impl Relation {
+    /// A relation with no name, no alias and no `LATERAL`. `add_relation` gives it its name.
+    pub(crate) fn new(
+        oid: u32,
+        columns: Vec<Column>,
+        subquery: Option<Box<crate::Query>>,
+        function: Option<FromFunction>,
+        values: Option<Vec<Vec<Expr>>>,
+    ) -> Relation {
+        Relation {
+            oid,
+            columns,
+            subquery,
+            function,
+            values,
+            name: String::new(),
+            alias: None,
+            lateral: false,
+        }
+    }
 }
 
 /// A call of a function in `FROM` with its name and its column definition list.
@@ -52,6 +80,8 @@ pub struct FromFunction {
     pub calls: Vec<(Expr, usize)>,
     /// `WITH ORDINALITY`: the last column is the number of the row, from 1.
     pub ordinality: bool,
+    /// For each call, true when the query gives a column definition list for it, as `funccolnames` of `RangeTblFunction`.
+    pub coldefs: Vec<bool>,
 }
 
 /// A column of a relation.
@@ -80,6 +110,16 @@ pub struct Join {
     pub right: FromItem,
     /// The condition of `ON` or of `USING`, of type `boolean`, or `None` for a cross join.
     pub on: Option<Expr>,
+    /// The names of the columns of `USING`, or the common columns of a natural join.
+    pub using: Vec<String>,
+    /// True when each merged column of `USING` is a column of one side with no cast. A merged column of a full join, or with a cast, is not a column of one side, as `has_dangerous_join_using` finds.
+    pub plain_using: bool,
+    /// The alias of the join.
+    pub alias: Option<String>,
+    /// The alias of `USING (...) AS name`.
+    pub using_alias: Option<String>,
+    /// The value of each column of `USING`, as `joinaliasvars` has it: a column of one side, a cast of it, or `COALESCE` of the two sides for a full join.
+    pub merged: Vec<Expr>,
 }
 
 /// The kinds of join.
@@ -286,15 +326,11 @@ impl Analyzer<'_> {
         let subquery = self.view_query(oid)?.map(Box::new);
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
-        self.add_relation(
-            Relation { oid, columns, subquery, function: None, values: None },
-            refname,
-            alias,
-        )
+        self.add_relation(Relation::new(oid, columns, subquery, None, None), refname, alias)
     }
 
     /// `ApplyRetrieveRule`: the query of a view of the user, which takes the place of the view as a subquery, or `None` for a relation that is not a view. The analyzer reads the statement that made the view again, with the schemas of `search_path` of that statement. An error in the query of the view has no position, and the warnings of the query go.
-    fn view_query(&self, oid: u32) -> Result<Option<crate::Query>> {
+    pub(crate) fn view_query(&self, oid: u32) -> Result<Option<crate::Query>> {
         let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(None) };
         let Some(view) = &rel.view else { return Ok(None) };
         if self.views.contains(&oid) {
@@ -337,13 +373,8 @@ impl Analyzer<'_> {
             .collect();
         let alias = r.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or("unnamed_subquery");
-        let relation = Relation {
-            oid: 0,
-            columns,
-            subquery: Some(Box::new(query)),
-            function: None,
-            values: None,
-        };
+        let mut relation = Relation::new(0, columns, Some(Box::new(query)), None, None);
+        relation.lateral = r.lateral;
         let mut item = self.add_relation(relation, refname.to_string(), alias)?;
         item.rel_visible = alias.is_some();
         Ok(item)
@@ -421,8 +452,10 @@ impl Analyzer<'_> {
         let count = calls.len();
         let mut columns = Vec::new();
         let mut out = Vec::with_capacity(count);
+        let mut defined = Vec::with_capacity(count);
         for (expr, name, coldefs) in calls {
             let given = self.function_columns(&expr, &name, coldefs, alias, count)?;
+            defined.push(!coldefs.is_empty());
             out.push((expr, given.len()));
             columns.extend(given);
         }
@@ -430,9 +463,9 @@ impl Analyzer<'_> {
             let name = "ordinality".to_string();
             columns.push(Column { name, ty: oid::INT8, typmod: -1, not_null: false });
         }
-        let function = FromFunction { calls: out, ordinality: r.ordinality };
-        let relation =
-            Relation { oid: 0, columns, subquery: None, function: Some(function), values: None };
+        let function = FromFunction { calls: out, ordinality: r.ordinality, coldefs: defined };
+        let mut relation = Relation::new(0, columns, None, Some(function), None);
+        relation.lateral = r.lateral;
         self.add_relation(relation, refname, alias)
     }
 
@@ -691,6 +724,9 @@ impl Analyzer<'_> {
             })
             .collect();
         let oid = relation.oid;
+        let mut relation = relation;
+        relation.name.clone_from(&refname);
+        relation.alias = alias.map(alias_columns);
         self.scope.relations.push(relation);
         let entry = self.scope.entries.len();
         self.scope.entries.push(Entry {
@@ -767,13 +803,9 @@ impl Analyzer<'_> {
             })
             .collect();
         let colnames = columns.iter().map(|c| c.name.clone()).collect();
-        self.scope.relations.push(Relation {
-            oid,
-            columns,
-            subquery: None,
-            function: None,
-            values: None,
-        });
+        let mut relation = Relation::new(oid, columns, None, None, None);
+        relation.name = name.to_string();
+        self.scope.relations.push(relation);
         let entry = self.scope.entries.len();
         self.scope.entries.push(Entry {
             name: name.to_string(),
@@ -982,6 +1014,8 @@ impl Analyzer<'_> {
             self.scope.lateral = lateral;
             on = Some(self.coerce_to_boolean(result?, "JOIN/ON")?);
         }
+        let plain_using = merged.iter().all(|(_, e)| matches!(e.kind, ExprKind::Var(_)));
+        let merged_values: Vec<Expr> = merged.iter().map(|(_, e)| e.clone()).collect();
         let mut columns = merged;
         let using_count = columns.len();
         for (i, c) in l_item.columns.iter().enumerate() {
@@ -1047,7 +1081,21 @@ impl Analyzer<'_> {
             cols_visible: true,
         };
         namespace.push(item.clone());
-        let join = Join { kind, left, right, on };
+        let join = Join {
+            kind,
+            left,
+            right,
+            on,
+            plain_using,
+            using,
+            alias: alias.and_then(|a| a.aliasname.as_deref()).map(str::to_string),
+            using_alias: j
+                .join_using_alias
+                .as_deref()
+                .and_then(|a| a.aliasname.as_deref())
+                .map(str::to_string),
+            merged: merged_values,
+        };
         Ok((FromItem::Join(Box::new(join)), item, namespace))
     }
 

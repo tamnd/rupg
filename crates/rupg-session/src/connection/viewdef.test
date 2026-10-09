@@ -1,0 +1,272 @@
+> CREATE SCHEMA vd
+CREATE SCHEMA
+> CREATE TABLE vd.t (a int, b text, c numeric)
+CREATE TABLE
+> CREATE TABLE vd.u (a int, d text)
+CREATE TABLE
+> CREATE VIEW vd.v1 AS SELECT a, b FROM vd.t
+CREATE VIEW
+> CREATE VIEW vd.v2 AS SELECT t.a, b AS bee, d FROM vd.t JOIN vd.u USING (a) WHERE c > 1
+CREATE VIEW
+> CREATE VIEW vd.v3 AS SELECT x.a, y.d FROM vd.t x LEFT JOIN vd.u y ON x.a = y.a AND y.d <> 'q'
+CREATE VIEW
+> CREATE VIEW vd.v4 AS SELECT s.n FROM (SELECT a + 1 AS n FROM vd.t) s ORDER BY n DESC LIMIT 10 OFFSET 2
+CREATE VIEW
+> CREATE VIEW vd.v5 AS SELECT * FROM generate_series(1, 3) g
+CREATE VIEW
+> CREATE VIEW vd.v6 AS SELECT * FROM (VALUES (1, 'x'), (2, 'y')) AS v(p, q)
+CREATE VIEW
+> CREATE VIEW vd.v7 AS SELECT a FROM vd.t UNION SELECT a FROM vd.u
+CREATE VIEW
+> CREATE VIEW vd.v8 AS SELECT b, count(*) AS n, sum(DISTINCT a) AS s, string_agg(b, ',' ORDER BY b) AS l, count(a) FILTER (WHERE a > 0) AS f FROM vd.t GROUP BY b HAVING count(*) > 1
+CREATE VIEW
+> CREATE VIEW vd.v9 AS SELECT a FROM vd.t WHERE EXISTS (SELECT 1 FROM vd.u WHERE u.a = t.a) AND a IN (SELECT a FROM vd.u) AND a > ALL (SELECT a FROM vd.u) AND b = (SELECT max(d) FROM vd.u)
+CREATE VIEW
+> CREATE VIEW vd.v10 AS SELECT ARRAY(SELECT d FROM vd.u ORDER BY d) AS arr, CASE WHEN a > 1 THEN 'big' ELSE 'small' END AS size, a::text AS at, CAST(c AS int) AS ci FROM vd.t
+CREATE VIEW
+> CREATE VIEW vd.v11 AS SELECT EXTRACT(year FROM now()) AS y, substring(b FROM 2 FOR 3) AS s, trim(both 'x' FROM b) AS tr, position('a' IN b) AS p, now() AT TIME ZONE 'UTC' AS z FROM vd.t
+CREATE VIEW
+> CREATE VIEW vd.v12 AS SELECT DISTINCT ON (a) a, b FROM vd.t ORDER BY a, b DESC NULLS LAST
+CREATE VIEW
+> CREATE VIEW vd.v13 AS SELECT DISTINCT a FROM vd.t
+CREATE VIEW
+> CREATE VIEW vd.v14 AS VALUES (1, 'one'), (2, 'two')
+CREATE VIEW
+> CREATE VIEW vd.v15 AS SELECT a, b FROM vd.t UNION ALL SELECT a, d FROM vd.u ORDER BY 1 LIMIT 5
+CREATE VIEW
+> CREATE VIEW vd.v16 AS SELECT t1.a, t2.a AS a2 FROM vd.t t1, vd.t t2
+CREATE VIEW
+> CREATE VIEW vd.v17 AS SELECT a FROM vd.t, LATERAL (SELECT d FROM vd.u WHERE u.a = t.a) l
+CREATE VIEW
+> CREATE VIEW vd.v18 AS SELECT a FROM vd.t CROSS JOIN vd.u
+ERROR 42702 column reference "a" is ambiguous at 30
+> CREATE VIEW vd.v19 AS SELECT * FROM vd.t NATURAL JOIN vd.u
+CREATE VIEW
+> CREATE VIEW vd.v20 AS SELECT a, b FROM vd.t ORDER BY b USING >, a NULLS FIRST
+CREATE VIEW
+> SELECT c.relname, replace(pg_get_viewdef(c.oid), E'\n', '|') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'vd' AND c.relkind = 'v' ORDER BY length(c.relname), c.relname
+fields relname@pg_class.2:19:64:-1,replace:25:-1:-1
+row v1, SELECT a,|    b|   FROM vd.t;
+row v2, SELECT t.a,|    t.b AS bee,|    u.d|   FROM (vd.t|     JOIN vd.u USING (a))|  WHERE (t.c > (1)::numeric);
+row v3, SELECT x.a,|    y.d|   FROM (vd.t x|     LEFT JOIN vd.u y ON (((x.a = y.a) AND (y.d <> 'q'::text))));
+row v4, SELECT n|   FROM ( SELECT (t.a + 1) AS n|           FROM vd.t) s|  ORDER BY n DESC| OFFSET 2| LIMIT 10;
+row v5, SELECT g|   FROM generate_series(1, 3) g(g);
+row v6, SELECT p,|    q|   FROM ( VALUES (1,'x'::text), (2,'y'::text)) v(p, q);
+row v7, SELECT t.a|   FROM vd.t|UNION| SELECT u.a|   FROM vd.u;
+row v8, SELECT b,|    count(*) AS n,|    sum(DISTINCT a) AS s,|    string_agg(b, ','::text ORDER BY b) AS l,|    count(a) FILTER (WHERE (a > 0)) AS f|   FROM vd.t|  GROUP BY b| HAVING (count(*) > 1);
+row v9, SELECT a|   FROM vd.t|  WHERE ((EXISTS ( SELECT 1|           FROM vd.u|          WHERE (u.a = t.a))) AND (a IN ( SELECT u.a|           FROM vd.u)) AND (a > ALL ( SELECT u.a|           FROM vd.u)) AND (b = ( SELECT max(u.d) AS max|           FROM vd.u)));
+row v10, SELECT ARRAY( SELECT u.d|           FROM vd.u|          ORDER BY u.d) AS arr,|        CASE|            WHEN (a > 1) THEN 'big'::text|            ELSE 'small'::text|        END AS size,|    (a)::text AS at,|    (c)::integer AS ci|   FROM vd.t;
+row v11, SELECT EXTRACT(year FROM now()) AS y,|    SUBSTRING(b FROM 2 FOR 3) AS s,|    TRIM(BOTH 'x'::text FROM b) AS tr,|    POSITION(('a'::text) IN (b)) AS p,|    (now() AT TIME ZONE 'UTC'::text) AS z|   FROM vd.t;
+row v12, SELECT DISTINCT ON (a) a,|    b|   FROM vd.t|  ORDER BY a, b DESC NULLS LAST;
+row v13, SELECT DISTINCT a|   FROM vd.t;
+row v14, VALUES (1,'one'::text), (2,'two'::text);
+row v15, SELECT t.a,|    t.b|   FROM vd.t|UNION ALL| SELECT u.a,|    u.d AS b|   FROM vd.u|  ORDER BY 1| LIMIT 5;
+row v16, SELECT t1.a,|    t2.a AS a2|   FROM vd.t t1,|    vd.t t2;
+row v17, SELECT t.a|   FROM vd.t,|    LATERAL ( SELECT u.d|           FROM vd.u|          WHERE (u.a = t.a)) l;
+row v19, SELECT t.a,|    t.b,|    t.c,|    u.d|   FROM (vd.t|     JOIN vd.u USING (a));
+row v20, SELECT a,|    b|   FROM vd.t|  ORDER BY b DESC, a NULLS FIRST;
+SELECT 19
+> SELECT c.relname, replace(pg_get_viewdef(c.oid, true), E'\n', '|') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'vd' AND c.relkind = 'v' ORDER BY length(c.relname), c.relname
+fields relname@pg_class.2:19:64:-1,replace:25:-1:-1
+row v1, SELECT a,|    b|   FROM vd.t;
+row v2, SELECT t.a,|    t.b AS bee,|    u.d|   FROM vd.t|     JOIN vd.u USING (a)|  WHERE t.c > 1::numeric;
+row v3, SELECT x.a,|    y.d|   FROM vd.t x|     LEFT JOIN vd.u y ON x.a = y.a AND y.d <> 'q'::text;
+row v4, SELECT n|   FROM ( SELECT t.a + 1 AS n|           FROM vd.t) s|  ORDER BY n DESC| OFFSET 2| LIMIT 10;
+row v5, SELECT g|   FROM generate_series(1, 3) g(g);
+row v6, SELECT p,|    q|   FROM ( VALUES (1,'x'::text), (2,'y'::text)) v(p, q);
+row v7, SELECT t.a|   FROM vd.t|UNION| SELECT u.a|   FROM vd.u;
+row v8, SELECT b,|    count(*) AS n,|    sum(DISTINCT a) AS s,|    string_agg(b, ','::text ORDER BY b) AS l,|    count(a) FILTER (WHERE a > 0) AS f|   FROM vd.t|  GROUP BY b| HAVING count(*) > 1;
+row v9, SELECT a|   FROM vd.t|  WHERE (EXISTS ( SELECT 1|           FROM vd.u|          WHERE u.a = t.a)) AND (a IN ( SELECT u.a|           FROM vd.u)) AND (a > ALL ( SELECT u.a|           FROM vd.u)) AND b = (( SELECT max(u.d) AS max|           FROM vd.u));
+row v10, SELECT ARRAY( SELECT u.d|           FROM vd.u|          ORDER BY u.d) AS arr,|        CASE|            WHEN a > 1 THEN 'big'::text|            ELSE 'small'::text|        END AS size,|    a::text AS at,|    c::integer AS ci|   FROM vd.t;
+row v11, SELECT EXTRACT(year FROM now()) AS y,|    SUBSTRING(b FROM 2 FOR 3) AS s,|    TRIM(BOTH 'x'::text FROM b) AS tr,|    POSITION(('a'::text) IN (b)) AS p,|    (now() AT TIME ZONE 'UTC'::text) AS z|   FROM vd.t;
+row v12, SELECT DISTINCT ON (a) a,|    b|   FROM vd.t|  ORDER BY a, b DESC NULLS LAST;
+row v13, SELECT DISTINCT a|   FROM vd.t;
+row v14, VALUES (1,'one'::text), (2,'two'::text);
+row v15, SELECT t.a,|    t.b|   FROM vd.t|UNION ALL| SELECT u.a,|    u.d AS b|   FROM vd.u|  ORDER BY 1| LIMIT 5;
+row v16, SELECT t1.a,|    t2.a AS a2|   FROM vd.t t1,|    vd.t t2;
+row v17, SELECT t.a|   FROM vd.t,|    LATERAL ( SELECT u.d|           FROM vd.u|          WHERE u.a = t.a) l;
+row v19, SELECT t.a,|    t.b,|    t.c,|    u.d|   FROM vd.t|     JOIN vd.u USING (a);
+row v20, SELECT a,|    b|   FROM vd.t|  ORDER BY b DESC, a NULLS FIRST;
+SELECT 19
+> SELECT replace(pg_get_viewdef('vd.v8'::regclass, 40), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT b, count(*) AS n,|    sum(DISTINCT a) AS s,|    string_agg(b, ','::text ORDER BY b) AS l,|    count(a) FILTER (WHERE a > 0) AS f|   FROM vd.t|  GROUP BY b| HAVING count(*) > 1;
+SELECT 1
+> SELECT replace(pg_get_viewdef('vd.v8'::regclass, -1), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT b, count(*) AS n, sum(DISTINCT a) AS s, string_agg(b, ','::text ORDER BY b) AS l, count(a) FILTER (WHERE a > 0) AS f|   FROM vd.t|  GROUP BY b| HAVING count(*) > 1;
+SELECT 1
+> SELECT replace(pg_get_viewdef('vd.v2'), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT t.a,|    t.b AS bee,|    u.d|   FROM (vd.t|     JOIN vd.u USING (a))|  WHERE (t.c > (1)::numeric);
+SELECT 1
+> SELECT replace(pg_get_viewdef('vd.v2', true), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT t.a,|    t.b AS bee,|    u.d|   FROM vd.t|     JOIN vd.u USING (a)|  WHERE t.c > 1::numeric;
+SELECT 1
+> SELECT pg_get_viewdef('vd.t'::regclass) = '', pg_get_viewdef(0) = '', pg_get_viewdef(NULL::oid) IS NULL
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row NULL,NULL,t
+SELECT 1
+> SELECT pg_get_viewdef('vd.nope')
+fields pg_get_viewdef:25:-1:-1
+ERROR 42P01 relation "vd.nope" does not exist
+> SET search_path = vd, public
+SET
+search_path=vd, public
+> SELECT replace(pg_get_viewdef('v2'), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT t.a,|    t.b AS bee,|    u.d|   FROM (t|     JOIN u USING (a))|  WHERE (t.c > (1)::numeric);
+SELECT 1
+> SELECT replace(pg_get_viewdef('vd.v4'::regclass), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT n|   FROM ( SELECT (t.a + 1) AS n|           FROM t) s|  ORDER BY n DESC| OFFSET 2| LIMIT 10;
+SELECT 1
+> CREATE SCHEMA vx
+CREATE SCHEMA
+> CREATE TABLE vx.t (a int, b text, c numeric)
+CREATE TABLE
+> CREATE TABLE vx.u (a int, d text)
+CREATE TABLE
+> CREATE VIEW vx.w1 AS SELECT 1 AS x UNION SELECT 2::bigint
+CREATE VIEW
+> CREATE VIEW vx.w2 AS SELECT * FROM unnest(ARRAY[1, 2]) WITH ORDINALITY
+CREATE VIEW
+> CREATE VIEW vx.w3 AS SELECT * FROM ROWS FROM (generate_series(1, 2), generate_series(1, 3)) r
+ERROR 42701 column "generate_series" specified more than once
+> CREATE VIEW vx.w4 AS SELECT a FROM vx.t GROUP BY a ORDER BY a
+CREATE VIEW
+> CREATE VIEW vx.w5 AS SELECT a FROM vx.t ORDER BY a FETCH FIRST 3 ROWS WITH TIES
+CREATE VIEW
+> CREATE VIEW vx.w6 AS SELECT x FROM (SELECT a FROM vx.t) s(x)
+CREATE VIEW
+> CREATE VIEW vx.w7 AS SELECT a FROM vx.t INTERSECT (SELECT a FROM vx.u EXCEPT SELECT a FROM vx.t)
+CREATE VIEW
+> CREATE VIEW vx.w8 AS SELECT a FROM vx.t LIMIT ALL
+CREATE VIEW
+> CREATE VIEW vx.w9 AS SELECT * FROM generate_series(1, 2) AS g(n)
+CREATE VIEW
+> CREATE VIEW vx.w10 AS SELECT a FROM vx.t WHERE a < ANY (SELECT a FROM vx.u)
+CREATE VIEW
+> CREATE VIEW vx.w11 AS SELECT t.a FROM vx.t t JOIN vx.u u ON t.a = u.a RIGHT JOIN vx.t t3 ON t3.a = u.a
+CREATE VIEW
+> CREATE VIEW vx.w12 AS SELECT b, d FROM vx.t, vx.u
+CREATE VIEW
+> CREATE VIEW vx.w13 AS SELECT count(*) FROM vx.t
+CREATE VIEW
+> CREATE VIEW vx.w14 AS SELECT b FROM vx.t WHERE a BETWEEN 1 AND 3 AND b IS NOT NULL
+CREATE VIEW
+> CREATE VIEW vx.w15 AS SELECT a FROM vx.t WHERE a IN (SELECT t.a FROM vx.t)
+CREATE VIEW
+> CREATE VIEW vx.w16 AS SELECT a, a + 1, upper(b) FROM vx.t
+CREATE VIEW
+> CREATE VIEW vx.w18 AS SELECT t.a FROM vx.t LEFT JOIN vx.u ON true
+CREATE VIEW
+> CREATE VIEW vx.w19 AS SELECT b FROM vx.t GROUP BY b HAVING max(a) > 2 ORDER BY max(a)
+CREATE VIEW
+> CREATE VIEW vx.w20 AS SELECT 'x' AS k UNION ALL SELECT b FROM vx.t
+CREATE VIEW
+> SELECT c.relname, replace(pg_get_viewdef(c.oid), E'\n', '|') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'vx' AND c.relkind = 'v' ORDER BY length(c.relname), c.relname
+fields relname@pg_class.2:19:64:-1,replace:25:-1:-1
+row w1, SELECT 1 AS x|UNION| SELECT (2)::bigint AS x;
+row w2, SELECT unnest,|    ordinality|   FROM unnest(ARRAY[1, 2]) WITH ORDINALITY unnest(unnest, ordinality);
+row w4, SELECT a|   FROM vx.t|  GROUP BY a|  ORDER BY a;
+row w5, SELECT a|   FROM vx.t|  ORDER BY a| FETCH FIRST (3) ROWS WITH TIES;
+row w6, SELECT x|   FROM ( SELECT t.a|           FROM vx.t) s(x);
+row w7, SELECT t.a|   FROM vx.t|INTERSECT (|         SELECT u.a|           FROM vx.u|        EXCEPT|         SELECT t.a|           FROM vx.t|);
+row w8, SELECT a|   FROM vx.t| LIMIT ALL;
+row w9, SELECT n|   FROM generate_series(1, 2) g(n);
+row w10, SELECT a|   FROM vx.t|  WHERE (a < ANY ( SELECT u.a|           FROM vx.u));
+row w11, SELECT t.a|   FROM ((vx.t t|     JOIN vx.u u ON ((t.a = u.a)))|     RIGHT JOIN vx.t t3 ON ((t3.a = u.a)));
+row w12, SELECT t.b,|    u.d|   FROM vx.t,|    vx.u;
+row w13, SELECT count(*) AS count|   FROM vx.t;
+row w14, SELECT b|   FROM vx.t|  WHERE (((a >= 1) AND (a <= 3)) AND (b IS NOT NULL));
+row w15, SELECT a|   FROM vx.t|  WHERE (a IN ( SELECT t_1.a|           FROM vx.t t_1));
+row w16, SELECT a,|    (a + 1) AS "?column?",|    upper(b) AS upper|   FROM vx.t;
+row w18, SELECT t.a|   FROM (vx.t|     LEFT JOIN vx.u ON (true));
+row w19, SELECT b|   FROM vx.t|  GROUP BY b| HAVING (max(a) > 2)|  ORDER BY (max(a));
+row w20, SELECT 'x'::text AS k|UNION ALL| SELECT t.b AS k|   FROM vx.t;
+SELECT 18
+> SELECT c.relname, replace(pg_get_viewdef(c.oid, true), E'\n', '|') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'vx' AND c.relkind = 'v' ORDER BY length(c.relname), c.relname
+fields relname@pg_class.2:19:64:-1,replace:25:-1:-1
+row w1, SELECT 1 AS x|UNION| SELECT 2::bigint AS x;
+row w2, SELECT unnest,|    ordinality|   FROM unnest(ARRAY[1, 2]) WITH ORDINALITY unnest(unnest, ordinality);
+row w4, SELECT a|   FROM vx.t|  GROUP BY a|  ORDER BY a;
+row w5, SELECT a|   FROM vx.t|  ORDER BY a| FETCH FIRST (3) ROWS WITH TIES;
+row w6, SELECT x|   FROM ( SELECT t.a|           FROM vx.t) s(x);
+row w7, SELECT t.a|   FROM vx.t|INTERSECT (|         SELECT u.a|           FROM vx.u|        EXCEPT|         SELECT t.a|           FROM vx.t|);
+row w8, SELECT a|   FROM vx.t| LIMIT ALL;
+row w9, SELECT n|   FROM generate_series(1, 2) g(n);
+row w10, SELECT a|   FROM vx.t|  WHERE (a < ANY ( SELECT u.a|           FROM vx.u));
+row w11, SELECT t.a|   FROM vx.t t|     JOIN vx.u u ON t.a = u.a|     RIGHT JOIN vx.t t3 ON t3.a = u.a;
+row w12, SELECT t.b,|    u.d|   FROM vx.t,|    vx.u;
+row w13, SELECT count(*) AS count|   FROM vx.t;
+row w14, SELECT b|   FROM vx.t|  WHERE a >= 1 AND a <= 3 AND b IS NOT NULL;
+row w15, SELECT a|   FROM vx.t|  WHERE (a IN ( SELECT t_1.a|           FROM vx.t t_1));
+row w16, SELECT a,|    a + 1 AS "?column?",|    upper(b) AS upper|   FROM vx.t;
+row w18, SELECT t.a|   FROM vx.t|     LEFT JOIN vx.u ON true;
+row w19, SELECT b|   FROM vx.t|  GROUP BY b| HAVING max(a) > 2|  ORDER BY (max(a));
+row w20, SELECT 'x'::text AS k|UNION ALL| SELECT t.b AS k|   FROM vx.t;
+SELECT 18
+> SELECT replace(pg_get_viewdef('vx.w11'::regclass, 30), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT t.a|   FROM vx.t t|     JOIN vx.u u ON t.a = u.a|     RIGHT JOIN vx.t t3 ON t3.a = u.a;
+SELECT 1
+> SELECT replace(pg_get_viewdef('vx.w12', true), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT t.b,|    u.d|   FROM vx.t,|    vx.u;
+SELECT 1
+> CREATE SCHEMA vz
+CREATE SCHEMA
+> CREATE TABLE vz.t (a int, b text, c numeric)
+CREATE TABLE
+> CREATE TABLE vz.u (a int, d text)
+CREATE TABLE
+> CREATE TABLE vz.w (a bigint, e text)
+CREATE TABLE
+> CREATE VIEW vz.j1 AS SELECT a FROM vz.t t FULL JOIN vz.u u USING (a)
+CREATE VIEW
+> CREATE VIEW vz.j2 AS SELECT a, b, d FROM vz.t FULL JOIN vz.u USING (a) ORDER BY a
+CREATE VIEW
+> CREATE VIEW vz.j3 AS SELECT a, e FROM vz.t LEFT JOIN vz.w USING (a)
+CREATE VIEW
+> CREATE VIEW vz.j4 AS SELECT b FROM vz.t FULL JOIN vz.u USING (a) WHERE EXISTS (SELECT 1 WHERE a > 0)
+CREATE VIEW
+> CREATE VIEW vz.j5 AS SELECT a, count(*) AS n FROM vz.t FULL JOIN vz.u USING (a) GROUP BY a
+CREATE VIEW
+> CREATE VIEW vz.j6 AS SELECT * FROM vz.t NATURAL FULL JOIN vz.u
+CREATE VIEW
+> CREATE VIEW vz.j7 AS SELECT a + 1 AS a1 FROM vz.u RIGHT JOIN vz.w USING (a)
+CREATE VIEW
+> SELECT c.relname, replace(pg_get_viewdef(c.oid), E'\n', '|') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'vz' AND c.relkind = 'v' ORDER BY length(c.relname), c.relname
+fields relname@pg_class.2:19:64:-1,replace:25:-1:-1
+row j1, SELECT a|   FROM (vz.t t|     FULL JOIN vz.u u USING (a));
+row j2, SELECT a,|    t.b,|    u.d|   FROM (vz.t|     FULL JOIN vz.u USING (a))|  ORDER BY a;
+row j3, SELECT a,|    w.e|   FROM (vz.t|     LEFT JOIN vz.w USING (a));
+row j4, SELECT t.b|   FROM (vz.t|     FULL JOIN vz.u USING (a))|  WHERE (EXISTS ( SELECT 1|          WHERE (a > 0)));
+row j5, SELECT a,|    count(*) AS n|   FROM (vz.t|     FULL JOIN vz.u USING (a))|  GROUP BY a;
+row j6, SELECT a,|    t.b,|    t.c,|    u.d|   FROM (vz.t|     FULL JOIN vz.u USING (a));
+row j7, SELECT (w.a + 1) AS a1|   FROM (vz.u|     RIGHT JOIN vz.w USING (a));
+SELECT 7
+> SELECT c.relname, replace(pg_get_viewdef(c.oid, true), E'\n', '|') FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'vz' AND c.relkind = 'v' ORDER BY length(c.relname), c.relname
+fields relname@pg_class.2:19:64:-1,replace:25:-1:-1
+row j1, SELECT a|   FROM vz.t t|     FULL JOIN vz.u u USING (a);
+row j2, SELECT a,|    t.b,|    u.d|   FROM vz.t|     FULL JOIN vz.u USING (a)|  ORDER BY a;
+row j3, SELECT a,|    w.e|   FROM vz.t|     LEFT JOIN vz.w USING (a);
+row j4, SELECT t.b|   FROM vz.t|     FULL JOIN vz.u USING (a)|  WHERE (EXISTS ( SELECT 1|          WHERE a > 0));
+row j5, SELECT a,|    count(*) AS n|   FROM vz.t|     FULL JOIN vz.u USING (a)|  GROUP BY a;
+row j6, SELECT a,|    t.b,|    t.c,|    u.d|   FROM vz.t|     FULL JOIN vz.u USING (a);
+row j7, SELECT w.a + 1 AS a1|   FROM vz.u|     RIGHT JOIN vz.w USING (a);
+SELECT 7
+> SELECT replace(pg_get_viewdef('pg_catalog.pg_stat_database'::regclass, true), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT oid AS datid,|    datname,|        CASE|            WHEN oid = 0::oid THEN 0|            ELSE pg_stat_get_db_numbackends(oid)|        END AS numbackends,|    pg_stat_get_db_xact_commit(oid) AS xact_commit,|    pg_stat_get_db_xact_rollback(oid) AS xact_rollback,|    pg_stat_get_db_blocks_fetched(oid) - pg_stat_get_db_blocks_hit(oid) AS blks_read,|    pg_stat_get_db_blocks_hit(oid) AS blks_hit,|    pg_stat_get_db_tuples_returned(oid) AS tup_returned,|    pg_stat_get_db_tuples_fetched(oid) AS tup_fetched,|    pg_stat_get_db_tuples_inserted(oid) AS tup_inserted,|    pg_stat_get_db_tuples_updated(oid) AS tup_updated,|    pg_stat_get_db_tuples_deleted(oid) AS tup_deleted,|    pg_stat_get_db_conflict_all(oid) AS conflicts,|    pg_stat_get_db_temp_files(oid) AS temp_files,|    pg_stat_get_db_temp_bytes(oid) AS temp_bytes,|    pg_stat_get_db_deadlocks(oid) AS deadlocks,|    pg_stat_get_db_checksum_failures(oid) AS checksum_failures,|    pg_stat_get_db_checksum_last_failure(oid) AS checksum_last_failure,|    pg_stat_get_db_blk_read_time(oid) AS blk_read_time,|    pg_stat_get_db_blk_write_time(oid) AS blk_write_time,|    pg_stat_get_db_session_time(oid) AS session_time,|    pg_stat_get_db_active_time(oid) AS active_time,|    pg_stat_get_db_idle_in_transaction_time(oid) AS idle_in_transaction_time,|    pg_stat_get_db_sessions(oid) AS sessions,|    pg_stat_get_db_sessions_abandoned(oid) AS sessions_abandoned,|    pg_stat_get_db_sessions_fatal(oid) AS sessions_fatal,|    pg_stat_get_db_sessions_killed(oid) AS sessions_killed,|    pg_stat_get_db_parallel_workers_to_launch(oid) AS parallel_workers_to_launch,|    pg_stat_get_db_parallel_workers_launched(oid) AS parallel_workers_launched,|    pg_stat_get_db_stat_reset_time(oid) AS stats_reset|   FROM ( SELECT 0 AS oid,|            NULL::name AS datname|        UNION ALL|         SELECT pg_database.oid,|            pg_database.datname|           FROM pg_database) d;
+SELECT 1
+> SELECT replace(pg_get_viewdef('pg_roles'), E'\n', '|')
+fields replace:25:-1:-1
+row  SELECT pg_authid.rolname,|    pg_authid.rolsuper,|    pg_authid.rolinherit,|    pg_authid.rolcreaterole,|    pg_authid.rolcreatedb,|    pg_authid.rolcanlogin,|    pg_authid.rolreplication,|    pg_authid.rolconnlimit,|    '********'::text AS rolpassword,|    pg_authid.rolvaliduntil,|    pg_authid.rolbypassrls,|    s.setconfig AS rolconfig,|    pg_authid.oid|   FROM (pg_authid|     LEFT JOIN pg_db_role_setting s ON (((pg_authid.oid = s.setrole) AND (s.setdatabase = (0)::oid))));
+SELECT 1
+> SELECT viewname, definition = pg_get_viewdef('vx.w12'::regclass) FROM pg_views WHERE schemaname = 'vx' AND viewname = 'w12'
+fields viewname@pg_views.2:19:64:-1,?column?:16:1:-1
+row w12,t
+SELECT 1
