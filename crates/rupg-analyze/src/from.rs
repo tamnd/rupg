@@ -6,7 +6,7 @@ use rupg_pgcatalog::Values;
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{
     Alias, CoercionForm, ColumnRef, FuncCall, JoinExpr, JoinType, Node, RangeFunction,
-    RangeSubselect, RangeVar,
+    RangeSubselect, RangeVar, SelectStmt,
 };
 use rupg_types::oid;
 
@@ -314,6 +314,11 @@ impl Analyzer<'_> {
         let Some(Node::SelectStmt(stmt)) = node else {
             return Err(Error::internal("a subquery in FROM that is not SelectStmt"));
         };
+        self.sub_select(stmt, lateral)
+    }
+
+    /// `parse_sub_analyze`: the query tree of a subquery of this query, which sees the queries outside this query. It sees the parts of `FROM` of this query only with `LATERAL`.
+    pub(crate) fn sub_select(&mut self, stmt: &SelectStmt, lateral: bool) -> Result<crate::Query> {
         let mut scope = std::mem::take(&mut self.scope);
         let before = scope.lateral.len();
         let hidden = std::mem::take(&mut scope.namespace);
@@ -655,6 +660,34 @@ impl Analyzer<'_> {
             oid,
         });
         Ok(Item { entry, name: refname, columns: exprs, rel_visible: true, cols_visible: true })
+    }
+
+    /// `addRangeTableEntryForJoin` and `addNSItemToQuery` for the columns of a set operation: an unqualified name in `ORDER BY` can find the columns, and a qualified name cannot. It gives the number of entries and of items before the change, for [`Analyzer::remove_columns`].
+    pub(crate) fn add_columns(&mut self, columns: Vec<(String, Expr)>) -> (usize, usize) {
+        let before = (self.scope.entries.len(), self.scope.namespace.len());
+        let names = columns.iter().map(|(n, _)| n.clone()).collect();
+        let entry = self.scope.entries.len();
+        self.scope.entries.push(Entry {
+            name: "unnamed_join".to_string(),
+            aliased: false,
+            columns: names,
+            relation: None,
+            oid: 0,
+        });
+        self.scope.namespace.push(Item {
+            entry,
+            name: "unnamed_join".to_string(),
+            columns,
+            rel_visible: false,
+            cols_visible: true,
+        });
+        before
+    }
+
+    /// Removes the entry and the item that [`Analyzer::add_columns`] added.
+    pub(crate) fn remove_columns(&mut self, (entries, items): (usize, usize)) {
+        self.scope.entries.truncate(entries);
+        self.scope.namespace.truncate(items);
     }
 
     /// `addRangeTableEntryForRelation` and `addNSItemToQuery` for a table of a statement that defines an object: the expressions of the statement can use the columns. Each column is a name, a type and a typmod.

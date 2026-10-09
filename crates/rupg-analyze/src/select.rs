@@ -45,6 +45,8 @@ pub struct Query {
     pub params: Vec<u32>,
     /// The warnings and notices of the analysis, which the session sends before the result.
     pub notices: Vec<Error>,
+    /// `UNION`, `INTERSECT` or `EXCEPT`. Each `SELECT` of the operation is a subquery in [`Query::relations`], and the rows of the operation are the rows of the leftmost one, which the targets read. The query has no `FROM`.
+    pub set_op: Option<crate::SetOp>,
 }
 
 /// A column of the result.
@@ -139,8 +141,10 @@ fn not_yet(what: &str) -> Error {
 impl Analyzer<'_> {
     /// The query tree of a `SELECT`.
     pub(crate) fn select(&mut self, s: &SelectStmt) -> Result<Query> {
+        // A `SELECT` of a set operation keeps its columns of type `unknown`, so that the operation can give them a type.
+        let keep_unknowns = std::mem::take(&mut self.keep_unknowns);
         if s.op != SetOperation::SETOP_NONE {
-            return Err(not_yet("UNION, INTERSECT and EXCEPT"));
+            return self.set_operation(s);
         }
         if !s.valuesLists.is_empty() {
             return Err(not_yet("VALUES"));
@@ -225,7 +229,7 @@ impl Analyzer<'_> {
             a.limit_clause(s.limitCount.as_ref(), "LIMIT", with_ties)
         })?;
         // `resolveTargetListUnknowns`: a column of type `unknown` becomes `text`.
-        for target in &mut targets {
+        for target in targets.iter_mut().filter(|_| !keep_unknowns) {
             if target.expr.ty == oid::UNKNOWN {
                 let expr = std::mem::replace(&mut target.expr, Expr::new(ExprKind::CaseTest, 0));
                 target.expr = self.coerce(expr, oid::TEXT, -1, Context::Implicit, None)?;
@@ -252,6 +256,7 @@ impl Analyzer<'_> {
             with_ties,
             params: Vec::new(),
             notices: Vec::new(),
+            set_op: None,
         })
     }
 }

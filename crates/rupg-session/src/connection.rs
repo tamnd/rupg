@@ -1633,6 +1633,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/from_function.test")));
     }
 
+    /// `UNION`, `INTERSECT` and `EXCEPT` with and without `ALL`: the types of the columns, the order of the rows, `ORDER BY` and `LIMIT` on the result, a set operation in a subquery, and the errors of the analysis. `connection/set_operation.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn set_operation() {
+        big_stack(|| script(include_str!("connection/set_operation.test")));
+    }
+
     /// `LATERAL` subqueries in `FROM`, which run for each row of the relations before them, in a list, in inner and outer joins and in a subquery. `connection/lateral.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn lateral() {

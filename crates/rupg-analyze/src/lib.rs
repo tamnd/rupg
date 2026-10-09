@@ -16,6 +16,7 @@ pub mod node;
 mod poly;
 mod resolve;
 mod select;
+mod setop;
 mod sort;
 mod sublink;
 mod transform;
@@ -38,6 +39,7 @@ pub use expr::{
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use select::{Query, Target};
+pub use setop::{SetKind, SetOp, SetTree};
 pub use sort::SortGroup;
 pub use typcache::default_opclass;
 pub use typename::parse_type;
@@ -89,6 +91,8 @@ pub(crate) struct Analyzer<'a> {
     kind: agg::Kind,
     /// `p_hasAggs`: true when the query has an aggregate call.
     has_aggs: bool,
+    /// True when the next `SELECT` keeps its columns of type `unknown`, as `parse_sub_analyze` with no `resolve_unknowns` does for a part of a set operation.
+    keep_unknowns: bool,
 }
 
 impl<'a> Analyzer<'a> {
@@ -108,6 +112,7 @@ impl<'a> Analyzer<'a> {
             outer: Vec::new(),
             kind: agg::Kind::Other,
             has_aggs: false,
+            keep_unknowns: false,
         }
     }
 
