@@ -286,48 +286,114 @@ pub fn to_text(ty: u32, value: &Value, session: &dyn Session) -> Result<String> 
 ///
 /// `0A000` for a type that has no input function here, and the error of the input function for a bad value.
 pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<Value> {
+    input_soft(ty, text, typmod, session)?
+}
+
+/// The text input function of the type, as `InputFunctionCallSafe` calls it. The outer error is a hard error, such as a type that has no input function. The inner error is a soft error of the input function for a bad value, which `pg_input_is_valid` reports as false. The checks of a domain are not part of the input.
+///
+/// # Errors
+///
+/// `0A000` for a type that has no input function here.
+pub(crate) fn input_soft(
+    ty: u32,
+    text: &str,
+    typmod: i32,
+    session: &dyn Session,
+) -> Result<Result<Value>> {
+    match input_value(ty, text, typmod, session) {
+        Ok(value) => Ok(Ok(value)),
+        Err(Failed::Soft(error)) => Ok(Err(error)),
+        Err(Failed::Hard(error)) => Err(error),
+    }
+}
+
+/// The error of an input function.
+enum Failed {
+    /// An error that the input function reports with `ereturn`, for a bad value.
+    Soft(Error),
+    /// An error that the input function reports with `ereport`.
+    Hard(Error),
+}
+
+impl From<types::TypeError> for Failed {
+    fn from(error: types::TypeError) -> Failed {
+        Failed::Soft(type_error(error))
+    }
+}
+
+impl From<Error> for Failed {
+    fn from(error: Error) -> Failed {
+        Failed::Hard(error)
+    }
+}
+
+/// The text input function of the type.
+fn input_value(
+    ty: u32,
+    text: &str,
+    typmod: i32,
+    session: &dyn Session,
+) -> std::result::Result<Value, Failed> {
+    // `domain_in` reads the value with the typmod of the domain.
+    let typmod = match builtin::type_by_oid(ty) {
+        Some(row) if row.kind == b'd' => row.typmod,
+        _ => typmod,
+    };
     let ty = base_type(ty);
     if let Some((elem, delim)) = array_of(ty) {
+        // A hard error of an element stops the input of the array as a hard error.
+        let mut hard = None;
         let array = types::array_in(text, delim, session.array_nulls(), |item| {
-            input(elem, item, typmod, session).map_err(|e| types_error(&e))
-        })
-        .map_err(type_error)?;
-        return Ok(Value::Array(Box::new(array)));
+            match input_value(elem, item, typmod, session) {
+                Ok(value) => Ok(value),
+                Err(Failed::Soft(e)) => Err(types_error(&e)),
+                Err(Failed::Hard(e)) => {
+                    let error = types_error(&e);
+                    hard = Some(e);
+                    Err(error)
+                }
+            }
+        });
+        return match (array, hard) {
+            (_, Some(error)) => Err(Failed::Hard(error)),
+            (array, None) => Ok(Value::Array(Box::new(array?))),
+        };
     }
     if let Some(kind) = RegKind::from_oid(ty) {
-        return Ok(Value::Oid(reg::input(kind, text, session)??));
+        return match reg::input(kind, text, session)? {
+            Ok(oid) => Ok(Value::Oid(oid)),
+            Err(error) => Err(Failed::Soft(error)),
+        };
     }
     let value = match ty {
-        oid::BOOL => Value::Bool(types::bool_in(text).map_err(type_error)?),
-        oid::BYTEA => Value::Bytea(types::bytea_in(text).map_err(type_error)?),
+        oid::BOOL => Value::Bool(types::bool_in(text)?),
+        oid::BYTEA => Value::Bytea(types::bytea_in(text)?),
         oid::CHAR => Value::Char(types::char_in(text)),
         oid::NAME => Value::text(types::name_in(text)),
-        oid::INT2 => Value::Int2(types::int2_in(text).map_err(type_error)?),
-        oid::INT4 => Value::Int4(types::int4_in(text).map_err(type_error)?),
-        oid::INT8 => Value::Int8(types::int8_in(text).map_err(type_error)?),
-        oid::OID => Value::Oid(types::oid_in(text).map_err(type_error)?),
-        XID => Value::Oid(types::uint32_in(text, "xid").map_err(type_error)?),
-        CID => Value::Oid(types::uint32_in(text, "cid").map_err(type_error)?),
+        oid::INT2 => Value::Int2(types::int2_in(text)?),
+        oid::INT4 => Value::Int4(types::int4_in(text)?),
+        oid::INT8 => Value::Int8(types::int8_in(text)?),
+        oid::OID => Value::Oid(types::oid_in(text)?),
+        XID => Value::Oid(types::uint32_in(text, "xid")?),
+        CID => Value::Oid(types::uint32_in(text, "cid")?),
         oid::TEXT | oid::UNKNOWN | oid::CSTRING => Value::text(text),
-        oid::VARCHAR => Value::text(types::varchar_in(text, typmod).map_err(type_error)?),
-        oid::BPCHAR => Value::text(types::bpchar_in(text, typmod).map_err(type_error)?),
-        oid::JSON => Value::text(types::json_in(text).map_err(type_error)?),
-        oid::JSONB => Value::Text(types::jsonb_in(text).map_err(type_error)?),
-        oid::FLOAT4 => Value::Float4(types::float4_in(text).map_err(type_error)?),
-        oid::FLOAT8 => Value::Float8(types::float8_in(text).map_err(type_error)?),
-        oid::NUMERIC => Value::Numeric(types::numeric_in(text, typmod).map_err(type_error)?),
-        oid::UUID => Value::Uuid(types::uuid_in(text).map_err(type_error)?),
-        oid::INET | oid::CIDR => {
-            Value::Inet(types::inet_in(text, ty == oid::CIDR).map_err(type_error)?)
-        }
+        oid::VARCHAR => Value::text(types::varchar_in(text, typmod)?),
+        oid::BPCHAR => Value::text(types::bpchar_in(text, typmod)?),
+        oid::JSON => Value::text(types::json_in(text)?),
+        oid::JSONB => Value::Text(types::jsonb_in(text)?),
+        oid::FLOAT4 => Value::Float4(types::float4_in(text)?),
+        oid::FLOAT8 => Value::Float8(types::float8_in(text)?),
+        oid::NUMERIC => Value::Numeric(types::numeric_in(text, typmod)?),
+        oid::UUID => Value::Uuid(types::uuid_in(text)?),
+        oid::INET | oid::CIDR => Value::Inet(types::inet_in(text, ty == oid::CIDR)?),
         oid::INT2VECTOR => {
-            let values = types::int2vector_in(text).map_err(type_error)?;
+            let values = types::int2vector_in(text)?;
             Value::Array(Box::new(Array::vector(
                 values.into_iter().map(|v| Some(Value::Int2(v))).collect(),
             )))
         }
         oid::OIDVECTOR => {
-            let values = types::oidvector_in(text).map_err(type_error)?;
+            let values = types::oidvector_in(text)?;
             Value::Array(Box::new(Array::vector(
                 values.into_iter().map(|v| Some(Value::Oid(v))).collect(),
             )))
@@ -336,30 +402,32 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
             let zone = session.zone()?;
             let cx = datetime_input(session, &*zone);
             match ty {
-                oid::DATE => Value::Date(types::date_in(text, &cx).map_err(type_error)?),
-                oid::TIME => Value::Time(types::time_in(text, typmod, &cx).map_err(type_error)?),
+                oid::DATE => Value::Date(types::date_in(text, &cx)?),
+                oid::TIME => Value::Time(types::time_in(text, typmod, &cx)?),
                 oid::TIMETZ => {
-                    let (time, zone) = types::timetz_in(text, typmod, &cx).map_err(type_error)?;
+                    let (time, zone) = types::timetz_in(text, typmod, &cx)?;
                     Value::TimeTz(time, zone)
                 }
-                oid::TIMESTAMP => {
-                    Value::Timestamp(types::timestamp_in(text, typmod, &cx).map_err(type_error)?)
-                }
-                _ => Value::TimestampTz(
-                    types::timestamptz_in(text, typmod, &cx).map_err(type_error)?,
-                ),
+                oid::TIMESTAMP => Value::Timestamp(types::timestamp_in(text, typmod, &cx)?),
+                _ => Value::TimestampTz(types::timestamptz_in(text, typmod, &cx)?),
             }
         }
-        oid::INTERVAL => Value::Interval(
-            types::interval_in(text, typmod, session.interval_style()).map_err(type_error)?,
-        ),
+        oid::INTERVAL => {
+            Value::Interval(types::interval_in(text, typmod, session.interval_style())?)
+        }
         // `pg_node_tree_in`: a stored node tree comes only from the server.
-        oid::PG_NODE_TREE => return Err(no_input(ty)),
-        oid::PG_NDISTINCT => Value::Bytea(types::pg_ndistinct_in(text).map_err(type_error)?),
-        oid::PG_DEPENDENCIES => Value::Bytea(types::pg_dependencies_in(text).map_err(type_error)?),
+        oid::PG_NODE_TREE => return Err(Failed::Hard(no_input(ty))),
+        oid::PG_NDISTINCT => Value::Bytea(types::pg_ndistinct_in(text)?),
+        oid::PG_DEPENDENCIES => Value::Bytea(types::pg_dependencies_in(text)?),
         // `pg_mcv_list_in`: a list of the most common values comes only from `ANALYZE`.
-        oid::PG_MCV_LIST => return Err(no_input(ty)),
-        _ => return Err(not_yet(format!("input of type {}", type_name(ty)))),
+        oid::PG_MCV_LIST => return Err(Failed::Hard(no_input(ty))),
+        // `PSEUDOTYPE_DUMMY_INPUT_FUNC`: a pseudo-type such as `anyelement` has no values. `void` and `record` have input functions.
+        _ if builtin::type_by_oid(ty).is_some_and(|row| row.kind == b'p')
+            && !matches!(ty, oid::VOID | oid::RECORD) =>
+        {
+            return Err(Failed::Hard(no_input(ty)));
+        }
+        _ => return Err(Failed::Hard(not_yet(format!("input of type {}", type_name(ty))))),
     };
     Ok(value)
 }

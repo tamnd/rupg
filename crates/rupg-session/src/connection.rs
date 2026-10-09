@@ -1991,6 +1991,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/stats_types.test")));
     }
 
+    /// `pg_input_is_valid` and `pg_input_error_info` for the built-in types, arrays, the reg types, the domains of `information_schema` and their arrays, a function with a row result in `FROM`, null arguments, and the hard errors of a bad type name and of a type with no input. `connection/soft_input.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn soft_input() {
+        big_stack(|| script(include_str!("connection/soft_input.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

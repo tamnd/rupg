@@ -296,6 +296,10 @@ impl rupg_func::Session for Reader<'_> {
             .map_or_else(Default::default, |(activity, _)| (activity.client, activity.server))
     }
 
+    fn input_checks(&self, ty: u32, value: &Value) -> Result<Option<Error>> {
+        rupg_exec::input_failure(ty, value, self)
+    }
+
     fn version(&self) -> String {
         crate::connection::version_text()
     }

@@ -124,6 +124,15 @@ pub trait Session {
     fn addresses(&self) -> (Client, Client) {
         (Client::Unknown, Client::Unknown)
     }
+    /// `domain_check_safe` for a value of a domain or for each element of an array of a domain: the error of the first check constraint that rejects the value, or `None` when the value passes. The engine evaluates the checks, so a session without an engine cannot do this.
+    ///
+    /// # Errors
+    ///
+    /// The error of a check expression.
+    fn input_checks(&self, ty: u32, value: &Value) -> Result<Option<Error>> {
+        let _ = (ty, value);
+        Err(not_yet("the check constraints of a domain"))
+    }
 }
 
 /// A call of a function.
