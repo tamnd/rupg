@@ -10,7 +10,7 @@ use rupg_analyze::Env;
 use rupg_catalog::Catalog;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, NamedRow, OperatorRow, ProcRow};
-use rupg_types::{self as types, RegInput, RegKind, Value, oid, qualified_name_list};
+use rupg_types::{self as types, Record, RegInput, RegKind, Value, oid, qualified_name_list};
 
 use crate::text::quote_identifier;
 use crate::{Call, Kernel, Session, bad_value, type_error};
@@ -763,6 +763,45 @@ fn to_regtypemod(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(found.map_or(Value::Null, |(_, typmod)| Value::Int4(typmod)))
 }
 
+/// `pg_input_validate`: the soft error of the input of the first argument as the type that the second argument names, or `None` for a good value. A type name that is not good and a hard error of the input are errors. For a domain, the value must also pass the check constraints.
+fn input_error(call: &Call<'_>, args: &[Value]) -> Result<Option<Error>> {
+    let text = text_arg(args)?;
+    let name = args.get(1).and_then(Value::as_str).ok_or_else(bad_value)?;
+    let env = SessionEnv(call.session);
+    let (ty, typmod) = rupg_analyze::parse_type(name, &env)??;
+    let value = match crate::io::input_soft(ty, text, typmod, call.session)? {
+        Ok(value) => value,
+        Err(error) => return Ok(Some(error)),
+    };
+    let element = builtin::type_by_oid(ty).map_or(0, |row| row.elem);
+    if builtin::domain_by_oid(ty).is_some() || builtin::domain_by_oid(element).is_some() {
+        return call.session.input_checks(ty, &value);
+    }
+    Ok(None)
+}
+
+/// `pg_input_is_valid`: true when the text is a good value of the type.
+fn input_is_valid(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(input_error(call, args)?.is_none()))
+}
+
+/// `pg_input_error_info`: the message, the detail, the hint and the SQLSTATE of the soft error of the input, or a row of nulls for a good value.
+fn input_error_info(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let values = match input_error(call, args)? {
+        None => vec![Value::Null; 4],
+        Some(error) => {
+            let text = |s: Option<&str>| s.map_or(Value::Null, Value::text);
+            vec![
+                Value::text(error.message()),
+                text(error.detail()),
+                text(error.hint()),
+                Value::text(error.state().as_str()),
+            ]
+        }
+    };
+    Ok(Value::Record(Box::new(Record { types: vec![oid::TEXT; 4], values })))
+}
+
 /// The relation of a list of names, as `RangeVarGetRelid` finds it for `text_regclass`.
 ///
 /// # Errors
@@ -792,6 +831,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "to_regrole" => |c, a| to_reg(RegKind::Role, c, a),
         "to_regtype" => |c, a| to_reg(RegKind::Type, c, a),
         "to_regtypemod" => to_regtypemod,
+        "pg_input_is_valid" => input_is_valid,
+        "pg_input_error_info" => input_error_info,
         "text_regclass" => text_regclass,
         _ => return None,
     };

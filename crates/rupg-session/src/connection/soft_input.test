@@ -1,0 +1,379 @@
+> SELECT pg_input_is_valid('42', 'int4'), pg_input_is_valid('x', 'int4'), pg_input_is_valid('99999999999', 'integer')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('x', 'int4')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type integer: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('99999999999', 'int4')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value "99999999999" is out of range for type integer,NULL,NULL,22003
+SELECT 1
+> SELECT * FROM pg_input_error_info('42', 'int4')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_input_error_info('x', 'int4')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid input syntax for type integer: ""x""",,,22P02)
+SELECT 1
+> SELECT pg_input_error_info('42', 'int4')
+fields pg_input_error_info:2249:-1:-1
+row (,,,)
+SELECT 1
+> SELECT pg_input_is_valid('abcd', 'varchar(3)'), pg_input_is_valid('abc', 'varchar(3)'), pg_input_is_valid('abcd', 'varchar')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row f,t,t
+SELECT 1
+> SELECT * FROM pg_input_error_info('abcd', 'varchar(3)')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value too long for type character varying(3),NULL,NULL,22001
+SELECT 1
+> SELECT * FROM pg_input_error_info('abcd', 'char(2)')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value too long for type character(2),NULL,NULL,22001
+SELECT 1
+> SELECT * FROM pg_input_error_info('123.45', 'numeric(3,1)')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row numeric field overflow,A field with precision 3, scale 1 must round to an absolute value less than 10^2.,NULL,22003
+SELECT 1
+> SELECT * FROM pg_input_error_info('1e999', 'float8')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row "1e999" is out of range for type double precision,NULL,NULL,22003
+SELECT 1
+> SELECT * FROM pg_input_error_info('1e999', 'float4')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row "1e999" is out of range for type real,NULL,NULL,22003
+SELECT 1
+> SELECT * FROM pg_input_error_info('yes!', 'bool')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type boolean: "yes!",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('\x1', 'bytea')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid hexadecimal data: odd number of digits,NULL,NULL,22023
+SELECT 1
+> SELECT * FROM pg_input_error_info('{', 'json')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type json,The input string ended unexpectedly.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('{"a": }', 'jsonb')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type json,Expected JSON value, but found "}".,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('xyz', 'uuid')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type uuid: "xyz",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('1.2.3', 'inet')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type inet: "1.2.3",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('10.1.2.3/8', 'cidr')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid cidr value: "10.1.2.3/8",Value has bits set to right of mask.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('{1,x}', 'int4[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type integer: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('{1,2', 'int4[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row malformed array literal: "{1,2",Unexpected end of input.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('{{1},{2,3}}', 'int4[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row malformed array literal: "{{1},{2,3}}",Multidimensional arrays must have sub-arrays with matching dimensions.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('{abcd}', 'varchar(3)[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value too long for type character varying(3),NULL,NULL,22001
+SELECT 1
+> SELECT * FROM pg_input_error_info('1 x', 'int2vector')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type smallint: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('1 x', 'oidvector')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type oid: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('-1', 'oid')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('x', 'oid')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type oid: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('x', 'date')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type date: "x",NULL,NULL,22007
+SELECT 1
+> SELECT * FROM pg_input_error_info('2020-13-01', 'date')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row date/time field value out of range: "2020-13-01",NULL,Perhaps you need a different "DateStyle" setting.,22008
+SELECT 1
+> SELECT * FROM pg_input_error_info('25:00', 'time')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row date/time field value out of range: "25:00",NULL,NULL,22008
+SELECT 1
+> SELECT * FROM pg_input_error_info('12:00 nowhere', 'timetz')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type time with time zone: "12:00 nowhere",NULL,NULL,22007
+SELECT 1
+> SELECT * FROM pg_input_error_info('2020-01-01 25:00', 'timestamp')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row date/time field value out of range: "2020-01-01 25:00",NULL,NULL,22008
+SELECT 1
+> SELECT * FROM pg_input_error_info('2020-01-01 12:00 Mars/Base', 'timestamptz')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row time zone "mars/base" not recognized,NULL,NULL,22023
+SELECT 1
+> SELECT * FROM pg_input_error_info('1 fortnight', 'interval')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type interval: "1 fortnight",NULL,NULL,22007
+SELECT 1
+> SELECT * FROM pg_input_error_info('x', 'xid')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type xid: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('x', 'cid')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type cid: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT pg_input_is_valid('now', 'timestamptz'), pg_input_is_valid('today', 'date'), pg_input_is_valid('1 day', 'interval')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT pg_input_is_valid('pg_class', 'regclass'), pg_input_is_valid('nosuch', 'regclass'), pg_input_is_valid('nosuch.t', 'regclass')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch', 'regclass')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row relation "nosuch" does not exist,NULL,NULL,42P01
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch.t', 'regclass')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row relation "nosuch.t" does not exist,NULL,NULL,42P01
+SELECT 1
+> SELECT * FROM pg_input_error_info('a.b.c.d', 'regclass')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+ERROR 42601 improper relation name (too many dotted names): a.b.c.d
+> SELECT * FROM pg_input_error_info('nosuch', 'regtype')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row type "nosuch" does not exist,NULL,NULL,42704
+SELECT 1
+> SELECT * FROM pg_input_error_info('int4 x', 'regtype')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+ERROR 42601 syntax error at or near "x" at 6 (invalid type name "int4 x")
+> SELECT * FROM pg_input_error_info('nosuch', 'regproc')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row function "nosuch" does not exist,NULL,NULL,42883
+SELECT 1
+> SELECT * FROM pg_input_error_info('abs', 'regproc')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row more than one function named "abs",NULL,NULL,42725
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch(int4)', 'regprocedure')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row function "nosuch(int4)" does not exist,NULL,NULL,42883
+SELECT 1
+> SELECT * FROM pg_input_error_info('+', 'regoper')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row more than one operator named +,NULL,NULL,42725
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch', 'regoper')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row operator does not exist: nosuch,NULL,NULL,42883
+SELECT 1
+> SELECT * FROM pg_input_error_info('+(int4,nosuch)', 'regoperator')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row type "nosuch" does not exist,NULL,NULL,42704
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch', 'regnamespace')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row schema "nosuch" does not exist,NULL,NULL,3F000
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch', 'regrole')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row role "nosuch" does not exist,NULL,NULL,42704
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch', 'regcollation')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row collation "nosuch" for encoding "UTF8" does not exist,NULL,NULL,42704
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch', 'regdatabase')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row database "nosuch" does not exist,NULL,NULL,42704
+SELECT 1
+> SELECT * FROM pg_input_error_info('nosuch', 'regconfig')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row text search configuration "nosuch" does not exist,NULL,NULL,42704
+SELECT 1
+> SELECT pg_input_is_valid('1', 'information_schema.cardinal_number'), pg_input_is_valid('-1', 'information_schema.cardinal_number')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('-1', 'information_schema.cardinal_number')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value for domain information_schema.cardinal_number violates check constraint "cardinal_number_domain_check",NULL,NULL,23514
+SELECT 1
+> SELECT * FROM pg_input_error_info('x', 'information_schema.cardinal_number')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type integer: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('MAYBE', 'information_schema.yes_or_no')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value too long for type character varying(3),NULL,NULL,22001
+SELECT 1
+> SELECT * FROM pg_input_error_info('YES', 'information_schema.yes_or_no')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('abc', 'information_schema.sql_identifier')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('[]', 'pg_ndistinct')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row malformed pg_ndistinct: "[]",Item array cannot be empty.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('[{"attributes": [1], "dependency": 1, "degree": 1}]', 'pg_dependencies')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row malformed pg_dependencies: "[{"attributes": [1], "dependency": 1, "degree": 1}]",Item "dependency" with value 1 has been found in the "attributes" list.,NULL,22P02
+SELECT 1
+> SELECT pg_input_is_valid(NULL, 'int4'), pg_input_is_valid('1', NULL)
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(NULL, 'int4')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_input_error_info('x', NULL)
+fields pg_input_error_info:2249:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_input_is_valid('x', 'nosuch')
+fields pg_input_is_valid:16:1:-1
+ERROR 42704 type "nosuch" does not exist
+> SELECT pg_input_is_valid('x', 'int4 x')
+fields pg_input_is_valid:16:1:-1
+ERROR 42601 syntax error at or near "x" at 6 (invalid type name "int4 x")
+> SELECT pg_input_is_valid('x', '')
+fields pg_input_is_valid:16:1:-1
+ERROR 42601 invalid type name ""
+> SELECT pg_input_is_valid('x', 'setof int4')
+fields pg_input_is_valid:16:1:-1
+ERROR 42601 invalid type name "setof int4"
+> SELECT pg_input_is_valid('x', 'nosuch.int4')
+fields pg_input_is_valid:16:1:-1
+ERROR 3F000 schema "nosuch" does not exist
+> SELECT pg_input_is_valid('x', 'pg_node_tree')
+fields pg_input_is_valid:16:1:-1
+ERROR 0A000 cannot accept a value of type pg_node_tree
+> SELECT pg_input_is_valid('x', 'pg_mcv_list')
+fields pg_input_is_valid:16:1:-1
+ERROR 0A000 cannot accept a value of type pg_mcv_list
+> SELECT * FROM pg_input_error_info('x', 'pg_node_tree')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+ERROR 0A000 cannot accept a value of type pg_node_tree
+> SELECT pg_input_is_valid('x', 'text'), pg_input_is_valid('x', 'name'), pg_input_is_valid('x', '"char"'), pg_input_is_valid('', 'cstring')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,t,t,t
+SELECT 1
+> SELECT pg_input_is_valid('x', 'anyelement')
+fields pg_input_is_valid:16:1:-1
+ERROR 0A000 cannot accept a value of type anyelement
+> SELECT pg_input_is_valid('{"a":1}', 'json[]'), pg_input_is_valid('{"a"}', 'jsonb[]')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('{1,2}', 'int4[][]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('[1:2]={1}', 'int4[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row malformed array literal: "[1:2]={1}",Specified array dimensions do not match array contents.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info(repeat('x', 70), 'varchar(64)')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value too long for type character varying(64),NULL,NULL,22001
+SELECT 1
+> SELECT message, sql_error_code FROM pg_input_error_info('x', 'int8')
+fields message:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type bigint: "x",22P02
+SELECT 1
+> SELECT (pg_input_error_info('x', 'int2')).message
+fields message:25:-1:-1
+row invalid input syntax for type smallint: "x"
+SELECT 1
+> SELECT pg_input_is_valid(s, 'int2') FROM (VALUES ('1'), ('x'), ('70000'), (NULL)) v(s)
+fields pg_input_is_valid:16:1:-1
+row t
+row f
+row f
+row NULL
+SELECT 4
+> SELECT count(*) FILTER (WHERE pg_input_is_valid(oid::text, 'regclass')) FROM pg_class WHERE oid < 1300
+fields count:20:8:-1
+row 20
+SELECT 1
+> SELECT pg_typeof(pg_input_error_info('x', 'int4'))
+fields pg_typeof:2206:4:-1
+row record
+SELECT 1
+> SELECT proname, pronargs, proretset, provolatile, proparallel, prorettype::regtype, proargtypes::regtype[], proallargtypes::regtype[], proargmodes, proargnames FROM pg_proc WHERE proname IN ('pg_input_is_valid', 'pg_input_error_info') ORDER BY 1
+fields proname@pg_proc.2:19:64:-1,pronargs@pg_proc.17:21:2:-1,proretset@pg_proc.14:16:1:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1,prorettype:2206:4:-1,proargtypes:2211:-1:-1,proallargtypes:2211:-1:-1,proargmodes@pg_proc.22:1002:-1:-1,proargnames@pg_proc.23:1009:-1:-1
+row pg_input_error_info,2,f,s,s,record,[0:1]={text,text},{text,text,text,text,text,text},{i,i,o,o,o,o},{value,type_name,message,detail,hint,sql_error_code}
+row pg_input_is_valid,2,f,s,s,boolean,[0:1]={text,text},NULL,NULL,NULL
+SELECT 2
+> SELECT pg_input_is_valid('x', 'trigger')
+fields pg_input_is_valid:16:1:-1
+ERROR 0A000 cannot accept a value of type trigger
+> SELECT pg_input_is_valid('x', 'anyarray')
+fields pg_input_is_valid:16:1:-1
+ERROR 0A000 cannot accept a value of type anyarray
+> SELECT pg_input_is_valid('x', 'internal')
+fields pg_input_is_valid:16:1:-1
+ERROR 0A000 cannot accept a value of type internal
+> SELECT pg_input_is_valid('{1,-1}', 'information_schema.cardinal_number[]'), pg_input_is_valid('{1,2}', 'information_schema.cardinal_number[]')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row f,t
+SELECT 1
+> SELECT * FROM pg_input_error_info('{1,-1}', 'information_schema.cardinal_number[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value for domain information_schema.cardinal_number violates check constraint "cardinal_number_domain_check",NULL,NULL,23514
+SELECT 1
+> SELECT * FROM pg_input_error_info('{YES,MAYBE}', 'information_schema.yes_or_no[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value too long for type character varying(3),NULL,NULL,22001
+SELECT 1
+> SELECT * FROM pg_input_error_info('{x}', 'pg_node_tree[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+ERROR 42704 type "pg_node_tree[]" does not exist
+> SELECT * FROM pg_input_error_info('1', 'int4') i, pg_input_error_info('x', 'int4') j
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1,message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL,invalid input syntax for type integer: "x",NULL,NULL,22P02
+SELECT 1
+> SELECT t, pg_input_is_valid('1', t) FROM (VALUES ('int2'), ('float4'), ('numeric(1,0)'), ('bool'), ('oid'), ('regclass'), ('text')) v(t)
+fields t:25:-1:-1,pg_input_is_valid:16:1:-1
+row int2,t
+row float4,t
+row numeric(1,0),t
+row bool,t
+row oid,t
+row regclass,t
+row text,t
+SELECT 7
+> SELECT * FROM pg_input_error_info('x', 'regclass[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row malformed array literal: "x",Array value must start with "{" or dimension information.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('{pg_class,nosuch}', 'regclass[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row relation "nosuch" does not exist,NULL,NULL,42P01
+SELECT 1

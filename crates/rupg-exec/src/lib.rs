@@ -62,6 +62,13 @@ fn table_function(func: u32, width: usize) -> bool {
     width > 1 || builtin::proc_by_oid(func).is_some_and(|p| p.retset)
 }
 
+/// True for a function that gives one composite value and has a plain kernel but no set kernel. In `FROM`, the fields of the value are the columns of its one row.
+fn row_function(func: u32) -> bool {
+    builtin::proc_by_oid(func).is_some_and(|p| !p.retset)
+        && rupg_func::set_kernel(func).is_none()
+        && rupg_func::kernel(func).is_some()
+}
+
 /// `ExecEvalRowNull` and `ExecEvalRowNotNull` for a row, else the plain test: a row is null when all its fields are null, and not null when none of its fields is null.
 fn null_test(value: &Value, is_null: bool) -> bool {
     match value {
@@ -248,7 +255,7 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
         for (call, width) in relation.function.iter().flat_map(|f| &f.calls) {
             match &call.kind {
                 ExprKind::Func(f) if table_function(f.oid, *width) => {
-                    if !builtin::is_system_proc(f.oid) {
+                    if !builtin::is_system_proc(f.oid) && !row_function(f.oid) {
                         set_kernel(f.oid, call.location)?;
                     }
                     f.args.iter().try_for_each(check)?;
@@ -923,6 +930,14 @@ impl<'a> Eval<'a> {
             let cache = Cache { bodies: Rc::clone(&self.cache.bodies), ..Cache::default() };
             return run_query(query, &args, self.session, &cache, &[], false);
         }
+        if row_function(f.oid) {
+            // A null value gives a row of nulls.
+            return match self.call(f.oid, &types, call.ty, f.variadic, &args)? {
+                Value::Record(record) => Ok(vec![record.values]),
+                Value::Null => Ok(vec![vec![Value::Null; width]]),
+                _ => Err(Error::internal("a function in FROM did not give a row")),
+            };
+        }
         let kernel = set_kernel(f.oid, call.location)?;
         let c = Call { session: self.session, args: &types, ret: call.ty, variadic: f.variadic };
         kernel(&c, &args)
@@ -1276,21 +1291,29 @@ impl<'a> Eval<'a> {
 
     /// `ExecEvalConstraintCheck` for each check constraint of the domain, with the value as `VALUE`. A check that gives false is an error, and a check that gives null passes.
     fn domain_check(&mut self, domain: u32, value: Value) -> Result<Value> {
+        match self.domain_failure(domain, &value)? {
+            Some(error) => Err(error),
+            None => Ok(value),
+        }
+    }
+
+    /// The error of the first check constraint of the domain that gives false for the value, or `None` when no check gives false.
+    fn domain_failure(&mut self, domain: u32, value: &Value) -> Result<Option<Error>> {
         for (name, check) in self.cache.domain_checks(domain)?.iter() {
             self.domain_value.push(value.clone());
             let result = self.eval(check);
             self.domain_value.pop();
             if result?.as_bool() == Some(false) {
-                return Err(Error::new(
+                return Ok(Some(Error::new(
                     SqlState::CHECK_VIOLATION,
                     format!(
                         "value for domain {} violates check constraint \"{name}\"",
                         rupg_func::type_message_name(domain, self.session)
                     ),
-                ));
+                )));
             }
         }
-        Ok(value)
+        Ok(None)
     }
 
     /// `ExecEvalArrayCoerce`: the cast of each element of the array, with the element as the value of `CaseTest`. The result has the dimensions of the array.
@@ -1575,14 +1598,26 @@ fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
 ///
 /// `23514` for a value that a check constraint rejects, and the errors of the checks.
 pub fn check_input(ty: u32, value: &Value, session: &dyn Session) -> Result<()> {
+    match input_failure(ty, value, session)? {
+        Some(error) => Err(error),
+        None => Ok(()),
+    }
+}
+
+/// The checks of [`check_input`] as `domain_check_safe` makes them: the error of the first check constraint that rejects the value is a soft error, and `None` means that the value passes.
+///
+/// # Errors
+///
+/// The errors of the check expressions.
+pub fn input_failure(ty: u32, value: &Value, session: &dyn Session) -> Result<Option<Error>> {
     let element = builtin::type_by_oid(ty).map_or(0, |row| row.elem);
     let (domain, values) = match value {
         Value::Array(array) if builtin::domain_by_oid(element).is_some() => {
             (element, array.values.iter().flatten().collect())
         }
-        Value::Null => return Ok(()),
+        Value::Null => return Ok(None),
         value if builtin::domain_by_oid(ty).is_some() => (ty, vec![value]),
-        _ => return Ok(()),
+        _ => return Ok(None),
     };
     let tables = scan::Tables::default();
     let cache = Cache::default();
@@ -1601,9 +1636,11 @@ pub fn check_input(ty: u32, value: &Value, session: &dyn Session) -> Result<()> 
         windows: Vec::new(),
     };
     for value in values {
-        eval.domain_check(domain, value.clone())?;
+        if let Some(error) = eval.domain_failure(domain, value)? {
+            return Ok(Some(error));
+        }
     }
-    Ok(())
+    Ok(None)
 }
 
 /// A value as a binary-compatible type holds it: an `int4` as an `oid` keeps its bits, and an `oid` as an `int4` too.
