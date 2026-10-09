@@ -108,6 +108,10 @@ impl Env for SchemaEnv<'_> {
     fn catalog(&self) -> Option<&Catalog> {
         self.env.catalog()
     }
+
+    fn allow_system_table_mods(&self) -> bool {
+        self.env.allow_system_table_mods()
+    }
 }
 
 /// A relation that a name gives.

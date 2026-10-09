@@ -490,7 +490,7 @@ impl Definer<'_, '_> {
                 return Err(not_yet("a table with the name of a built-in array type", None));
             }
         }
-        if is_system_namespace(namespace) {
+        if is_system_namespace(namespace) && !self.an.env.allow_system_table_mods() {
             self.catalog.skip_oids(1);
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,
@@ -545,7 +545,7 @@ impl Definer<'_, '_> {
             }
         }
         for column in &columns {
-            check_attribute_type(&column.name, column.ty)?;
+            check_attribute_type(&column.name, column.ty, self.an.env.allow_system_table_mods())?;
         }
         self.check_relation_name(plan.namespace, &plan.relname)?;
         let shapes: Vec<Shape> = columns
@@ -880,17 +880,18 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
     })
 }
 
-/// `CheckAttributeType`: a column cannot have a pseudo-type, also as the base type of a domain or the element type of an array.
-pub(crate) fn check_attribute_type(name: &str, ty: u32) -> Result<()> {
+/// `CheckAttributeType`: a column cannot have a pseudo-type, also as the base type of a domain or the element type of an array. `anyarray` allows the type `anyarray`, as `CHKATYPE_ANYARRAY` does when `allow_system_table_mods` is on.
+pub(crate) fn check_attribute_type(name: &str, ty: u32, anyarray: bool) -> Result<()> {
     let Some(row) = types::row(ty) else { return Ok(()) };
     match row.kind {
+        b'p' if anyarray && ty == oid::ANYARRAY => Ok(()),
         b'p' => Err(Error::new(
             SqlState::INVALID_TABLE_DEFINITION,
             format!("column \"{name}\" has pseudo-type {}", types::name(ty)),
         )),
-        b'd' => check_attribute_type(name, row.base),
+        b'd' => check_attribute_type(name, row.base, false),
         b'c' => Err(not_yet("a column of a composite type", None)),
-        _ if types::element(ty) != 0 => check_attribute_type(name, types::element(ty)),
+        _ if types::element(ty) != 0 => check_attribute_type(name, types::element(ty), false),
         _ => Ok(()),
     }
 }

@@ -1433,7 +1433,8 @@ mod tests {
             ["CREATE TABLE", "CREATE INDEX", "ready I"]
         );
         let catalog = c.store.committed();
-        let names: Vec<&str> = catalog.relations().map(|r| r.name.as_str()).collect();
+        let names: Vec<&str> =
+            catalog.relations().filter(|r| r.oid >= 16384).map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["t", "t_pkey", "u", "u_a_idx"]);
         assert_eq!(
             send(&mut c, &query("BEGIN; CREATE TABLE w (a int)")),
@@ -1625,6 +1626,12 @@ mod tests {
     #[test]
     fn views() {
         big_stack(|| script(include_str!("connection/views.test")));
+    }
+
+    /// The views that `system_views.sql` makes in `pg_catalog` when the cluster starts: their rows in `pg_class`, `pg_type`, `pg_rewrite` and `pg_attribute`, with the privileges and the options, and the queries that read them. The script also shows the options of `CREATE VIEW` and their errors. `pg_stats_ext_exprs` is not there yet. `connection/system_views.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn system_views() {
+        big_stack(|| script(include_str!("connection/system_views.test")));
     }
 
     /// `SELECT` from the tables and sequences of the user, with the types of the columns. `connection/user_select.test` is the output of PostgreSQL 19 for the same script in a new database.

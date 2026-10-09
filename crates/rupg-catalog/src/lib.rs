@@ -210,6 +210,10 @@ pub struct Relation {
     pub sequence: Option<SequenceInfo>,
     /// The query of a view.
     pub view: Option<ViewInfo>,
+    /// `reloptions`: each option as `name=value`.
+    pub options: Vec<String>,
+    /// `relacl`: the items of the `aclitem[]` value in their text form, or `None` for the default privileges of the owner.
+    pub acl: Option<Vec<String>>,
 }
 
 /// The query of a view and its `_RETURN` rule.
@@ -555,6 +559,11 @@ impl Catalog {
         self.next_oid = self.next_oid.max(oid);
     }
 
+    /// Sets the OID counter. Only `initdb` gives the OIDs below 16384, so only the catalog of a new cluster sets the counter back.
+    pub fn set_next_oid(&mut self, oid: u32) {
+        self.next_oid = oid;
+    }
+
     /// Uses `count` OIDs for objects that PostgreSQL makes and rupg does not, such as the triggers of a foreign key.
     pub fn skip_oids(&mut self, count: u32) {
         for _ in 0..count {
@@ -843,6 +852,8 @@ impl Catalog {
                 index: None,
                 sequence: None,
                 view: None,
+                options: Vec::new(),
+                acl: None,
             },
         );
         self.depend(ObjRef::new(PG_TYPE, row_type), ObjRef::new(PG_CLASS, oid), DepKind::Internal);
@@ -921,6 +932,18 @@ impl Catalog {
         }
     }
 
+    /// Sets `reloptions` of a relation.
+    pub fn set_options(&mut self, oid: u32, options: Vec<String>) -> Result<()> {
+        self.relation_mut(oid)?.options = options;
+        Ok(())
+    }
+
+    /// Sets `relacl` of a relation.
+    pub fn set_acl(&mut self, oid: u32, acl: Option<Vec<String>>) -> Result<()> {
+        self.relation_mut(oid)?.acl = acl;
+        Ok(())
+    }
+
     /// `DefineSequence`. A sequence has no row type, and each column of a sequence is not null.
     pub fn create_sequence(&mut self, mut new: NewRelation, info: SequenceInfo) -> Result<u32> {
         self.check_new_relation(new.namespace, &new.name, false)?;
@@ -944,6 +967,8 @@ impl Catalog {
                 index: None,
                 sequence: Some(info),
                 view: None,
+                options: Vec::new(),
+                acl: None,
             },
         );
         self.depend(
@@ -1181,6 +1206,8 @@ impl Catalog {
                 index: Some(info),
                 sequence: None,
                 view: None,
+                options: Vec::new(),
+                acl: None,
             },
         );
         let me = ObjRef::new(PG_CLASS, oid);
@@ -1279,6 +1306,8 @@ impl Catalog {
                 index: None,
                 sequence: None,
                 view: None,
+                options: Vec::new(),
+                acl: None,
             },
         );
         let info = IndexInfo {
@@ -1312,6 +1341,8 @@ impl Catalog {
                 index: Some(info),
                 sequence: None,
                 view: None,
+                options: Vec::new(),
+                acl: None,
             },
         );
         self.relation_mut(table)?.toast = oid;

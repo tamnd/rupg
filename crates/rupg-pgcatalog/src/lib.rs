@@ -133,6 +133,11 @@ pub fn catalog(name: &str) -> Option<&'static Catalog> {
     catalogs().iter().find(|c| c.name == name)
 }
 
+/// The text of `system_views.sql`, the script that `initdb` runs after the bootstrap. It makes the system views of `pg_catalog` and gives privileges on them and on some catalogs.
+pub fn system_views() -> &'static str {
+    generated::system_views::TEXT
+}
+
 /// A system catalog by the OID of its `pg_class` row.
 pub fn catalog_by_oid(oid: u32) -> Option<&'static Catalog> {
     catalogs().iter().find(|c| c.oid == oid)

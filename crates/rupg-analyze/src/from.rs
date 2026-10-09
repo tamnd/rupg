@@ -646,7 +646,7 @@ impl Analyzer<'_> {
         }
         for column in &columns {
             if !matches!(column.ty, oid::RECORD | oid::RECORD_ARRAY) {
-                crate::ddl::check_attribute_type(&column.name, column.ty)?;
+                crate::ddl::check_attribute_type(&column.name, column.ty, false)?;
             }
         }
         Ok(columns)
