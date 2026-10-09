@@ -296,6 +296,10 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn stats_reset(&self) -> i64 {
+        self.activity.map_or(0, |(_, store)| store.stats_reset())
+    }
+
     fn addresses(&self) -> (Client, Client) {
         self.activity
             .map_or_else(Default::default, |(activity, _)| (activity.client, activity.server))
