@@ -252,7 +252,7 @@ fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
     })
 }
 
-/// The value of a row of a column of the catalog.
+/// The value of a row of a column of the catalog. The elements of an array that the catalog keeps as text, such as `conkey`, get the element type of the column.
 pub(crate) fn value(batch: &Batch, row: usize, ty: u32, session: &dyn Session) -> Result<Value> {
     if batch.is_null(row) {
         return Ok(Value::Null);
@@ -280,7 +280,17 @@ pub(crate) fn value(batch: &Batch, row: usize, ty: u32, session: &dyn Session) -
         Values::OidVector(v) => vector(v[row].iter().map(|&n| Value::Oid(n)), true),
         Values::OidArray(v) => vector(v[row].iter().map(|&n| Value::Oid(n)), false),
         Values::CharArray(v) => vector(v[row].iter().map(|&n| Value::Char(n)), false),
-        Values::TextArray(v) => vector(v[row].iter().map(|&s| Value::text(s)), false),
+        Values::TextArray(v) => {
+            let element = rupg_pgcatalog::builtin::type_by_oid(ty).map_or(0, |row| row.elem);
+            let values: Result<Vec<Value>> = v[row]
+                .iter()
+                .map(|&s| match element {
+                    0 | oid::TEXT | oid::NAME | oid::ACLITEM => Ok(Value::text(s)),
+                    _ => rupg_func::input(element, s, -1, session),
+                })
+                .collect();
+            vector(values?.into_iter(), false)
+        }
     })
 }
 
@@ -320,15 +330,15 @@ fn plain_var(expr: &Expr) -> Option<Var> {
     }
 }
 
-/// The parts of a condition that `AND` joins.
-fn conjuncts(expr: &Expr, out: &mut Vec<Expr>) {
+/// The parts of a condition that `AND` joins. They are references and not copies, because the cache of the rows of a subquery keeps them by the address of the subquery: a copy that the scan drops can free an address that another subquery then gets.
+fn conjuncts<'q>(expr: &'q Expr, out: &mut Vec<&'q Expr>) {
     match &expr.kind {
         ExprKind::Bool(rupg_analyze::BoolOp::And, args) => {
             for arg in args {
                 conjuncts(arg, out);
             }
         }
-        _ => out.push(expr.clone()),
+        _ => out.push(expr),
     }
 }
 
@@ -336,7 +346,7 @@ fn conjuncts(expr: &Expr, out: &mut Vec<Expr>) {
 struct JoinInput<'a> {
     left: Vec<Vec<usize>>,
     right: Vec<Vec<usize>>,
-    on: &'a [Expr],
+    on: &'a [&'a Expr],
     kind: JoinKind,
     left_relations: &'a [usize],
     right_relations: &'a [usize],
@@ -367,7 +377,7 @@ fn covered(expr: &Expr, relations: &[usize]) -> bool {
 }
 
 /// The tuples that pass every condition.
-fn keep(tuples: Vec<Vec<usize>>, conds: &[Expr], test: &mut Test<'_>) -> Result<Vec<Vec<usize>>> {
+fn keep(tuples: Vec<Vec<usize>>, conds: &[&Expr], test: &mut Test<'_>) -> Result<Vec<Vec<usize>>> {
     if conds.is_empty() {
         return Ok(tuples);
     }
@@ -410,11 +420,11 @@ pub(crate) fn tuples(
         })
         .collect();
     // A condition with no relation stays at the top, so that it runs once for each tuple as in a query with no FROM.
-    let mut own: Vec<Vec<Expr>> = vec![Vec::new(); items.len()];
+    let mut own: Vec<Vec<&Expr>> = vec![Vec::new(); items.len()];
     let mut rest = Vec::new();
     for expr in filter {
-        let relations = relations_of(&expr);
-        match items.iter().position(|(_, r)| !relations.is_empty() && covered(&expr, r)) {
+        let relations = relations_of(expr);
+        match items.iter().position(|(_, r)| !relations.is_empty() && covered(expr, r)) {
             Some(i) => own[i].push(expr),
             None => rest.push(expr),
         }
@@ -428,7 +438,7 @@ pub(crate) fn tuples(
         rest.retain(|expr| {
             let relations = relations_of(expr);
             if !relations.is_empty() && covered(expr, &all) {
-                on.push(expr.clone());
+                on.push(*expr);
                 false
             } else {
                 true
@@ -450,11 +460,11 @@ pub(crate) fn tuples(
 
 impl Scan<'_, '_> {
     /// The join of the tuples `input.left` with the tuples of the part `item`, which pass the conditions `conds`. When the part reads relations of the left side, as `LATERAL` lets it, the part runs again for each tuple of the left side, as a nested loop with parameters does. `context` has the rows of the relations outside the join.
-    fn join_item(
+    fn join_item<'q>(
         &mut self,
         mut input: JoinInput<'_>,
-        item: &FromItem,
-        conds: Vec<Expr>,
+        item: &'q FromItem,
+        conds: Vec<&'q Expr>,
         context: &[usize],
     ) -> Result<Vec<Vec<usize>>> {
         if !self.tables.depends(input.right_relations) {
@@ -473,10 +483,10 @@ impl Scan<'_, '_> {
     }
 
     /// The tuples of a part of `FROM` that pass the conditions `conds`, which read only the relations of the part. `context` has the rows of the relations outside the part.
-    fn item_tuples(
+    fn item_tuples<'q>(
         &mut self,
-        item: &FromItem,
-        conds: Vec<Expr>,
+        item: &'q FromItem,
+        conds: Vec<&'q Expr>,
         context: &[usize],
     ) -> Result<Vec<Vec<usize>>> {
         let width = self.width;
@@ -509,11 +519,11 @@ impl Scan<'_, '_> {
         let push_left = matches!(j.kind, JoinKind::Inner | JoinKind::Left);
         let push_right = matches!(j.kind, JoinKind::Inner | JoinKind::Right);
         for expr in conds {
-            let relations = relations_of(&expr);
+            let relations = relations_of(expr);
             let nonempty = !relations.is_empty();
-            if push_left && nonempty && covered(&expr, &left_relations) {
+            if push_left && nonempty && covered(expr, &left_relations) {
                 to_left.push(expr);
-            } else if push_right && nonempty && covered(&expr, &right_relations) {
+            } else if push_right && nonempty && covered(expr, &right_relations) {
                 to_right.push(expr);
             } else if j.kind == JoinKind::Inner {
                 on.push(expr);
@@ -525,12 +535,11 @@ impl Scan<'_, '_> {
         if j.kind != JoinKind::Full {
             let mut kept = Vec::with_capacity(on.len());
             for expr in on {
-                let relations = relations_of(&expr);
+                let relations = relations_of(expr);
                 let nonempty = !relations.is_empty();
-                if nonempty && j.kind != JoinKind::Left && covered(&expr, &left_relations) {
+                if nonempty && j.kind != JoinKind::Left && covered(expr, &left_relations) {
                     to_left.push(expr);
-                } else if nonempty && j.kind != JoinKind::Right && covered(&expr, &right_relations)
-                {
+                } else if nonempty && j.kind != JoinKind::Right && covered(expr, &right_relations) {
                     to_right.push(expr);
                 } else {
                     kept.push(expr);
