@@ -4,6 +4,20 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.18 (2026-10-10)
+
+A patch release on the way to M2. rupg now gives back the memory of an idle session, has tests for the idle size and the connection rate against PostgreSQL, and runs the replay of the catalog queries of `pg_dump` for a new database with no failed statement.
+
+### Added
+
+- The idle session test `cargo xtask idle` (#251). An idle session of rupg now gives back the stack of its last statement after 1 second.
+- The connection rate test `cargo xtask connrate` (#252), which compares rupg with PostgreSQL for each way to connect. The client now sets `TCP_NODELAY`.
+- The functions `pg_is_in_recovery`, `array_remove` and `array_replace`, the subscript of a `name`, and the rows of `pg_init_privs` for the built-in objects (#253).
+
+### Fixed
+
+- A correlated subquery read all the rows of its relations for each row of the outer query (#254). A scan now uses an index of the column when its condition has an `=` with a column of the outer query. The query of `pg_dump` for the functions went from 58 seconds to 0.4 seconds in a debug build.
+
 ## 0.1.17 (2026-10-10)
 
 A patch release on the way to M2. rupg now shows its authentication files in the views of PostgreSQL, uses regular expressions in these files, and gives the privileges of the objects of the session catalog.
