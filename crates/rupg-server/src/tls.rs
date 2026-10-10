@@ -9,6 +9,7 @@
 use std::io::{self, Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use ring::digest;
 use rupg_common::{Error, Result, SqlState};
@@ -419,6 +420,10 @@ impl Stream for TlsStream {
 
     fn local_addr(&self) -> String {
         self.0.lock().unwrap_or_else(PoisonError::into_inner).sock.local_addr()
+    }
+
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).sock.set_read_timeout(timeout)
     }
 }
 

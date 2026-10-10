@@ -28,5 +28,10 @@ rustls = { workspace = true, optional = true }
 [dev-dependencies]
 rustls.workspace = true
 
+# The idle session test of spec/06 section 6.4.3. `cargo xtask idle` runs it.
+[[example]]
+name = "idle"
+required-features = ["tls"]
+
 [lints]
 workspace = true

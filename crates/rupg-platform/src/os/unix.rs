@@ -9,10 +9,11 @@ use std::net::Shutdown;
 use std::os::fd::AsRawFd;
 use std::os::unix::fs::{OpenOptionsExt, PermissionsExt};
 use std::os::unix::net::{UnixListener, UnixStream};
-use std::time::{SystemTime, UNIX_EPOCH};
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use rupg_common::{Error, Result, SqlState};
 
+use super::net::timeout_error;
 use super::os_text;
 use crate::net::{Listener, Stream};
 
@@ -207,6 +208,10 @@ impl Stream for OsUnixStream {
 
     fn peer_user(&self) -> Result<String> {
         user_name(peer_uid(&self.0)?)
+    }
+
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
+        self.0.set_read_timeout(timeout).map_err(|e| timeout_error(&e))
     }
 }
 

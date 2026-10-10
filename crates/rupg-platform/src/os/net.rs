@@ -2,6 +2,7 @@
 
 use std::io::{self, Read, Write};
 use std::net::{IpAddr, Shutdown, TcpListener, TcpStream};
+use std::time::Duration;
 
 use rupg_common::{Error, Result, SqlState};
 
@@ -133,4 +134,13 @@ impl Stream for OsStream {
     fn local_addr(&self) -> String {
         self.0.local_addr().map(|a| a.to_string()).unwrap_or_default()
     }
+
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
+        self.0.set_read_timeout(timeout).map_err(|e| timeout_error(&e))
+    }
+}
+
+/// The error of `setsockopt` for `SO_RCVTIMEO`.
+pub(super) fn timeout_error(e: &io::Error) -> Error {
+    Error::new(SqlState::CONNECTION_FAILURE, format!("could not set the read timeout: {e}"))
 }

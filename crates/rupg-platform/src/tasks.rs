@@ -21,6 +21,9 @@ pub trait Tasks: Send + Sync + fmt::Debug {
 
     /// The number of tasks that can run at the same time, for example the number of cores.
     fn parallelism(&self) -> usize;
+
+    /// Gives back to the system the memory of the stack of the calling task that the task does not use now. A task calls it before it waits for a long time, so that the stack of a deep statement does not stay in memory while the session is idle (spec/06 section 6.4). The default does nothing.
+    fn trim_stack(&self) {}
 }
 
 /// The part of a [`TaskHandle`] that each implementation gives.

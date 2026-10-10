@@ -3,6 +3,7 @@
 use std::fmt;
 use std::io::{Read, Write};
 use std::net::IpAddr;
+use std::time::Duration;
 
 use rupg_common::{Error, Result, SqlState};
 
@@ -82,5 +83,15 @@ pub trait Stream: Read + Write + Send + fmt::Debug {
     /// The connection is not a Unix socket, or the system cannot give the user.
     fn peer_user(&self) -> Result<String> {
         Err(Error::internal("the connection is not a Unix socket"))
+    }
+
+    /// Sets the longest time that a read waits for data. After that time the read gives an error of the kind `WouldBlock` or `TimedOut`. `None` waits with no limit. The default does nothing, so that a read waits with no limit.
+    ///
+    /// # Errors
+    ///
+    /// The system cannot set the time.
+    fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
+        let _ = timeout;
+        Ok(())
     }
 }

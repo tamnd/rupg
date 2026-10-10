@@ -14,6 +14,7 @@ mod dat;
 mod errcodes;
 mod grammar;
 mod guc;
+mod idle;
 mod layers;
 mod lifts;
 mod pgcatalog;
@@ -27,7 +28,7 @@ mod vendor;
 mod version;
 mod waitevents;
 
-const USAGE: &str = "usage: cargo xtask <bench [--binary file] [--save file] [--check file] | errcodes [--check] | grammar [file.y...] | guc [--check] | layers | lifts [rudb dir] | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z> | waitevents [--check]>";
+const USAGE: &str = "usage: cargo xtask <bench [--binary file] [--save file] [--check file] | errcodes [--check] | grammar [file.y...] | guc [--check] | idle [--debug] [--sessions N] [--postgres dir] [--postgres-sessions N] | layers | lifts [rudb dir] | pgcatalog [--check] | pgtype [--check] | sql [--check | --bison] | style | tzdata [--check] | unicode [--check] | vendor [--check] [dir...] | version <x.y.z> | waitevents [--check]>";
 
 fn main() -> ExitCode {
     let args: Vec<String> = std::env::args().skip(1).collect();
@@ -40,6 +41,7 @@ fn main() -> ExitCode {
         Some("pgcatalog") => pgcatalog::run(&root, &args[1..]),
         Some("pgtype") => pgtype::run(&root, &args[1..]),
         Some("guc") => guc::run(&root, &args[1..]),
+        Some("idle") => idle::run(&root, &args[1..]),
         Some("layers") => layers::check(&root),
         Some("lifts") => lifts::run(&root, &args[1..]),
         Some("sql") => sql::run(&root, &args[1..]),

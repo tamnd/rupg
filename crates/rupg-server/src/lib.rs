@@ -24,9 +24,10 @@ mod x509;
 
 use std::collections::BTreeMap;
 use std::fmt;
-use std::io::{Read, Write};
+use std::io::{self, Read, Write};
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, PoisonError};
+use std::time::Duration;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
@@ -52,6 +53,8 @@ const FIRST_READ: usize = 1024;
 pub(crate) const READ_SIZE: usize = 16 * 1024;
 /// The server sends the output when it holds this many bytes, also in the middle of a result.
 const FLUSH_AT: usize = 64 * 1024;
+/// The time that a session waits for its next message before it gives back the memory that the last statement used (spec/06 section 6.4).
+const IDLE_TRIM: Duration = Duration::from_secs(1);
 /// The lowest process ID of a session. PostgreSQL uses the process ID of the backend, which is never this low on a host that runs it.
 const FIRST_PID: i32 = 1001;
 
@@ -129,6 +132,8 @@ struct Shared {
     log: Option<Arc<dyn Log>>,
     clock: Option<Arc<dyn Clock>>,
     entropy: Arc<dyn Entropy>,
+    /// The tasks of the sessions. A session calls [`Tasks::trim_stack`] when it is idle.
+    tasks: Arc<dyn Tasks>,
     /// The catalog that all the sessions share.
     store: Arc<Store>,
     /// The cancel key and the cancel flag of each session, by process ID.
@@ -288,6 +293,7 @@ impl Server {
             clock: config.clock.clone(),
             store: Arc::new(Store::with_tasks(tasks.clone()).with_auth(Arc::new(files))),
             entropy,
+            tasks: tasks.clone(),
             keys: Mutex::new(BTreeMap::new()),
             stopping: AtomicBool::new(false),
         });
@@ -532,6 +538,8 @@ struct Wire {
     out: OutBuf,
     /// `Some` after the TLS handshake.
     secured: Option<Secured>,
+    /// True when a read stops after [`IDLE_TRIM`].
+    timed: bool,
 }
 
 impl Wire {
@@ -555,6 +563,43 @@ impl Wire {
         n > 0
     }
 
+    /// [`Wire::fill`] for the next message of the main loop. When no message comes in [`IDLE_TRIM`], the session is idle. Then the task gives back the memory of its stack and of the buffers, and it waits with no limit.
+    fn wait(&mut self, tasks: &dyn Tasks) -> bool {
+        if !self.timed {
+            self.timed = self.stream.set_read_timeout(Some(IDLE_TRIM)).is_ok();
+        }
+        self.input.drain(..self.at);
+        self.at = 0;
+        let len = self.input.len();
+        let mut size = READ_SIZE;
+        loop {
+            self.input.resize(len + size, 0);
+            match self.stream.read(&mut self.input[len..]) {
+                Err(e)
+                    if self.timed
+                        && matches!(
+                            e.kind(),
+                            io::ErrorKind::WouldBlock | io::ErrorKind::TimedOut
+                        ) =>
+                {
+                    self.input.truncate(len);
+                    self.input.shrink_to_fit();
+                    // The output was sent before the wait.
+                    self.out = OutBuf::new();
+                    tasks.trim_stack();
+                    self.timed = self.stream.set_read_timeout(None).is_err();
+                    // A small buffer for the wait, so that an idle session holds less memory.
+                    size = FIRST_READ;
+                }
+                read => {
+                    let n = read.unwrap_or(0);
+                    self.input.truncate(len + n);
+                    return n > 0;
+                }
+            }
+        }
+    }
+
     /// Sends the output. It gives false at an error.
     fn flush(&mut self) -> bool {
         if self.out.is_empty() {
@@ -574,7 +619,8 @@ impl Wire {
 
 /// The task of one connection.
 fn serve(shared: &Shared, stream: Box<dyn Stream>) {
-    let mut wire = Wire { stream, input: Vec::new(), at: 0, out: OutBuf::new(), secured: None };
+    let mut wire =
+        Wire { stream, input: Vec::new(), at: 0, out: OutBuf::new(), secured: None, timed: false };
     if let Some((start, protocol)) = startup(shared, &mut wire) {
         session(shared, &mut wire, &start, protocol);
     }
@@ -827,7 +873,7 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         let going = match step.next {
             Next::Continue => wire.out.len() < FLUSH_AT || wire.flush(),
             Next::Flush => wire.flush(),
-            Next::Read => wire.flush() && wire.fill(READ_SIZE),
+            Next::Read => wire.flush() && wire.wait(&*shared.tasks),
             Next::Close => {
                 wire.flush();
                 false
