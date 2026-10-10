@@ -4,9 +4,10 @@
 use std::io::{Read, Write};
 use std::path::Path;
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rupg_platform::os::{OsEntropy, OsIo, OsNet, OsTasks};
-use rupg_platform::{File, FileMode, Io, Net, OpenMode, Stream};
+use rupg_platform::{File, FileMode, Io, Net, OpenMode, Stream, Tasks};
 use rupg_server::{Config, Log, Server};
 use rupg_wire::{Authentication, Backend, Crypto, Hashes, PROTOCOL_3_0};
 use rustls::pki_types::pem::PemObject;
@@ -331,6 +332,23 @@ fn an_ssl_request() {
     }
     server.stop().unwrap();
     assert_eq!(log.take(), [rejected.replacen(" 28000 ", ":  ", 1)]);
+}
+
+#[test]
+fn an_idle_session() {
+    // The read of an idle session stops after 1 second, and the TLS connection goes on after it.
+    let (server, _) = server("hostssl all all 127.0.0.1/32 trust\n");
+    let mut stream = ssl_request(&server, client(None, false));
+    assert_eq!(talk(&mut stream, &startup(), None), ["ok", "ready I"]);
+    OsTasks.sleep(Duration::from_millis(1500));
+    assert_eq!(talk(&mut stream, &query("SHOW ssl"), None), ["row on", "SHOW", "ready I"]);
+    let show = query("SHOW ssl");
+    stream.write_all(&show[..7]).unwrap();
+    stream.flush().unwrap();
+    OsTasks.sleep(Duration::from_millis(1500));
+    assert_eq!(talk(&mut stream, &show[7..], None), ["row on", "SHOW", "ready I"]);
+    drop(stream);
+    server.stop().unwrap();
 }
 
 #[test]

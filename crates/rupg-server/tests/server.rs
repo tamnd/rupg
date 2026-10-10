@@ -2,9 +2,10 @@
 
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
+use std::time::Duration;
 
 use rupg_platform::os::{OsEntropy, OsIo, OsNet, OsTasks};
-use rupg_platform::{Net, Stream};
+use rupg_platform::{Net, Stream, Tasks};
 use rupg_server::{Config, Log, Server};
 use rupg_wire::{
     Authentication, Backend, CANCEL_REQUEST_CODE, Crypto, Hashes, PROTOCOL_3_0, md5_encrypt,
@@ -154,6 +155,25 @@ fn a_session() {
     assert_eq!(read(&mut *stream), ["ROLLBACK", "ready I"]);
     stream.write_all(&message(b'X', b"")).unwrap();
     assert!(read(&mut *stream).is_empty());
+    server.stop().unwrap();
+}
+
+#[test]
+fn an_idle_session() {
+    // After 1 second with no message, the session gives back the memory of its stack and of its buffers. It keeps its state, and also the part of a message that it has.
+    let server = server();
+    let (mut stream, _) = connect(&server, &[("user", "postgres"), ("database", "postgres")]);
+    stream.write_all(&query("BEGIN; SET work_mem = '1MB'")).unwrap();
+    assert_eq!(read(&mut *stream), ["BEGIN", "SET", "ready T"]);
+    OsTasks.sleep(Duration::from_millis(1500));
+    let show = query("SHOW work_mem");
+    stream.write_all(&show[..7]).unwrap();
+    OsTasks.sleep(Duration::from_millis(1500));
+    stream.write_all(&show[7..]).unwrap();
+    assert_eq!(read(&mut *stream), ["columns 1", "row 1MB", "SHOW", "ready T"]);
+    stream.write_all(&query("COMMIT")).unwrap();
+    assert_eq!(read(&mut *stream), ["COMMIT", "ready I"]);
+    drop(stream);
     server.stop().unwrap();
 }
 
