@@ -287,6 +287,22 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn hba_rules(&self) -> Result<Vec<Vec<Value>>> {
+        match self.activity.and_then(|(_, store)| store.auth()) {
+            Some(auth) => Ok(auth.hba_rules()?.into_iter().map(crate::auth::hba_values).collect()),
+            None => Ok(Vec::new()),
+        }
+    }
+
+    fn ident_mappings(&self) -> Result<Vec<Vec<Value>>> {
+        match self.activity.and_then(|(_, store)| store.auth()) {
+            Some(auth) => {
+                Ok(auth.ident_mappings()?.into_iter().map(crate::auth::ident_values).collect())
+            }
+            None => Ok(Vec::new()),
+        }
+    }
+
     fn stats_reset(&self) -> i64 {
         self.activity.map_or(0, |(_, store)| store.stats_reset())
     }

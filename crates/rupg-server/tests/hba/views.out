@@ -1,0 +1,60 @@
+> SELECT rule_number, line_number, type, database, user_name, address, netmask, auth_method, options, error FROM pg_hba_file_rules ORDER BY line_number
+row 1,3,local,{all},{all},NULL,NULL,trust,NULL,NULL
+row 2,4,local,{sameuser,"quoted db"},{+staff,alice},NULL,NULL,peer,{map=local},NULL
+row 3,5,host,{all},{all},127.0.0.1,255.255.255.255,scram-sha-256,NULL,NULL
+row 4,6,host,{db1,db2},{u1,+notgroup},10.0.0.0,255.0.0.0,md5,NULL,NULL
+row 5,7,host,{all},{all},::1,ffff:ffff:ffff:ffff:ffff:ffff:ffff:ffff,trust,NULL,NULL
+row 6,8,host,{all},{all},127.0.0.1,255.255.255.255,password,NULL,NULL
+row 7,9,host,{replication},{all},samehost,NULL,reject,NULL,NULL
+row 8,10,host,{all},{all},samenet,NULL,reject,NULL,NULL
+row 9,11,host,{all},{all},all,NULL,reject,NULL,NULL
+row 10,12,host,{all},{all},.example.com,NULL,password,NULL,NULL
+row 11,13,host,{all},{all},db.example.com,NULL,trust,NULL,NULL
+row 12,14,host,{samerole,samegroup},{all},::ffff:10.0.0.0,ffff:ffff:ffff:ffff:ffff:ffff:ff00:0,trust,NULL,NULL
+row 13,15,host,{all},{all},192.168.0.0,255.255.0.0,trust,NULL,NULL
+row 14,18,hostssl,{all},{all},0.0.0.0,0.0.0.0,cert,{map=certmap,clientcert=verify-full},NULL
+row 15,19,hostssl,{all},{all},::,::,scram-sha-256,{clientcert=verify-ca},NULL
+row 16,20,hostssl,{all},{all},10.1.0.0,255.255.0.0,trust,{clientcert=verify-full},NULL
+row 17,21,hostnossl,{all},{all},10.2.0.0,255.255.0.0,reject,NULL,NULL
+row NULL,22,hostgssenc,{all},{all},all,NULL,trust,NULL,hostgssenc record cannot match because GSSAPI is not supported by this build
+row 18,23,hostnogssenc,{all},{all},all,NULL,trust,NULL,NULL
+row NULL,25,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid connection type "hosts"
+row NULL,26,NULL,NULL,NULL,NULL,NULL,NULL,NULL,end-of-line before role specification
+row NULL,27,NULL,NULL,NULL,NULL,NULL,NULL,NULL,end-of-line before IP address specification
+row NULL,28,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid CIDR mask in address "10.0.0.0/33"
+row NULL,29,NULL,NULL,NULL,NULL,NULL,NULL,NULL,specifying both host name and CIDR mask is invalid: "name.example.com/8"
+row NULL,30,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid IP mask "trust": Name or service not known
+row NULL,31,NULL,NULL,NULL,NULL,NULL,NULL,NULL,IP address and mask do not match
+row NULL,32,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid IP mask "bad": Name or service not known
+row NULL,33,NULL,NULL,NULL,NULL,NULL,NULL,NULL,end-of-line before authentication method
+row NULL,34,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid authentication method "gss": not supported by this build
+row NULL,35,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid authentication method "magic"
+row NULL,36,NULL,NULL,NULL,NULL,NULL,NULL,NULL,peer authentication is only supported on local sockets
+row NULL,37,NULL,NULL,NULL,NULL,NULL,NULL,NULL,cert authentication is only supported on hostssl connections
+row NULL,38,NULL,NULL,NULL,NULL,NULL,NULL,NULL,authentication option not in name=value format: map
+row NULL,39,NULL,NULL,NULL,NULL,NULL,NULL,NULL,authentication option "map" is only valid for authentication methods ident, peer, gssapi, sspi, cert, and oauth
+row NULL,40,NULL,NULL,NULL,NULL,NULL,NULL,NULL,unrecognized authentication option name: "nosuch"
+row NULL,41,NULL,NULL,NULL,NULL,NULL,NULL,NULL,authentication option "ldapserver" is only valid for authentication methods ldap
+row NULL,42,NULL,NULL,NULL,NULL,NULL,NULL,NULL,clientcert can only be configured for "hostssl" rows
+row NULL,43,NULL,NULL,NULL,NULL,NULL,NULL,NULL,clientcert can only be set to "verify-full" when using "cert" authentication
+row 19,44,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+row NULL,45,NULL,NULL,NULL,NULL,NULL,NULL,NULL,authentication method "oauth" requires argument "scope" to be set
+row NULL,46,NULL,NULL,NULL,NULL,NULL,NULL,NULL,parameter "oauth_validator_libraries" must be set for authentication method "oauth"
+row 20,47,host,{all,x},{all},10.0.0.0,255.0.0.0,trust,NULL,NULL
+row 21,48,local,{all},{all},NULL,NULL,trust,NULL,NULL
+SELECT 43
+> SELECT DISTINCT file_name = current_setting('hba_file') FROM pg_hba_file_rules
+row t
+SELECT 1
+> SELECT map_number, line_number, map_name, sys_name, pg_username, error FROM pg_ident_file_mappings ORDER BY line_number
+row 1,3,local,alice,alice,NULL
+row 2,4,certmap,cn with space,bob,NULL
+row 3,5,certmap,carol,all,NULL
+row NULL,6,NULL,NULL,NULL,missing entry at end of line
+row NULL,7,NULL,NULL,NULL,missing entry at end of line
+row NULL,8,NULL,NULL,NULL,multiple values in ident field
+row 4,9,local,bob,bob,NULL
+SELECT 7
+> SELECT DISTINCT file_name = current_setting('ident_file') FROM pg_ident_file_mappings
+row t
+SELECT 1

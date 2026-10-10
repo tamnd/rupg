@@ -9,6 +9,8 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_func::Backend;
 use rupg_platform::Tasks;
 
+use crate::auth::AuthFiles;
+
 /// How long a session waits for the lock before it looks at its cancel flag again.
 const WAIT_SLICE: Duration = Duration::from_millis(50);
 
@@ -23,6 +25,8 @@ pub struct Store {
     backends: Mutex<Vec<Option<Backend>>>,
     /// The time of the last reset of the statistics of the whole server, or 0 before the first session. PostgreSQL resets them when it starts with no statistics file, so the start of the first session sets it.
     stats_reset: AtomicI64,
+    /// The authentication files of the server, which the views `pg_hba_file_rules` and `pg_ident_file_mappings` read.
+    auth: Option<Arc<dyn AuthFiles>>,
 }
 
 #[derive(Debug)]
@@ -47,6 +51,17 @@ impl Store {
     /// A store with the catalog of a new cluster for the sessions that run as `tasks`.
     pub fn with_tasks(tasks: Arc<dyn Tasks>) -> Store {
         Store { tasks: Some(tasks), ..Store::default() }
+    }
+
+    /// The store with the authentication files of the server.
+    #[must_use]
+    pub fn with_auth(self, auth: Arc<dyn AuthFiles>) -> Store {
+        Store { auth: Some(auth), ..self }
+    }
+
+    /// The authentication files of the server, or `None` for a store with no server.
+    pub(crate) fn auth(&self) -> Option<&dyn AuthFiles> {
+        self.auth.as_deref()
     }
 
     /// The catalog of the last commit.
