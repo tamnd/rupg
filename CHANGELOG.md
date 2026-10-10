@@ -4,6 +4,21 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.17 (2026-10-10)
+
+A patch release on the way to M2. rupg now shows its authentication files in the views of PostgreSQL, uses regular expressions in these files, and gives the privileges of the objects of the session catalog.
+
+### Added
+
+- The functions of the views `pg_config`, `pg_file_settings`, `pg_available_extensions` and `pg_available_extension_versions` (#245).
+- The views `pg_hba_file_rules` and `pg_ident_file_mappings` (#248). They read the files again at each call and show the error of each line as PostgreSQL does.
+- Regular expressions in `pg_hba.conf` and `pg_ident.conf` (#249), with `\1` in the user maps.
+
+### Fixed
+
+- `has_table_privilege`, `has_column_privilege`, `has_any_column_privilege` and `has_sequence_privilege` gave NULL for the system views and for the objects of the user (#246).
+- `has_schema_privilege`, `has_type_privilege` and `has_function_privilege` gave an error or NULL for the objects that are not in the built-in catalogs (#247).
+
 ## 0.1.16 (2026-10-10)
 
 A patch release on the way to M2. rupg now makes the 65 views and the 4 tables of `information_schema`, has window functions, and reads the types of extended statistics.
