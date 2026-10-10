@@ -30,6 +30,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
+use rupg_session::auth::{HbaRule, IdentMapping};
 use rupg_session::connection::{self, Client, Connection, Next, Ssl, Start};
 use rupg_session::guc::Settings;
 use rupg_session::store::Store;
@@ -257,7 +258,10 @@ impl Server {
             }
         };
         let tls = tls::load(&base, &*io)?;
-        let (hba, ident) = load_rules(config, &base, &*io, &write)?;
+        let (hba_source, ident_source) = rule_sources(config, &base);
+        let ssl = base.get("ssl").as_deref() == Some("on");
+        let files = RuleFiles { io: io.clone(), hba: hba_source, ident: ident_source, ssl };
+        let (hba, ident) = load_rules(&files, &*io, &write)?;
         let mut listeners = vec![listener];
         for path in &sockets {
             listeners.push(net.listen(path)?);
@@ -282,7 +286,7 @@ impl Server {
             iterations,
             log: config.log.clone(),
             clock: config.clock.clone(),
-            store: Arc::new(Store::with_tasks(tasks.clone())),
+            store: Arc::new(Store::with_tasks(tasks.clone()).with_auth(Arc::new(files))),
             entropy,
             keys: Mutex::new(BTreeMap::new()),
             stopping: AtomicBool::new(false),
@@ -401,38 +405,84 @@ fn scram_iterations(settings: &Settings) -> i32 {
     settings.get("scram_iterations").and_then(|v| v.parse().ok()).unwrap_or(SCRAM_ITERATIONS)
 }
 
+/// Where the text of an authentication file comes from. The server keeps it for the views that read the file again.
+#[derive(Debug)]
+enum Stored {
+    /// A file on disk, `hba_file` or `ident_file`.
+    File(String),
+    /// The text of the configuration, with the name of the file that it stands for.
+    Text { name: &'static str, text: String },
+}
+
+impl Stored {
+    fn source(&self) -> Source<'_> {
+        match self {
+            Stored::File(path) => Source::File(path),
+            Stored::Text { name, text } => Source::Text { name, text },
+        }
+    }
+
+    fn name(&self) -> &str {
+        match self {
+            Stored::File(path) => path,
+            Stored::Text { name, .. } => name,
+        }
+    }
+}
+
+/// The sources of the host rules and the user maps: the files of `hba_file` and `ident_file`, or else the texts of the configuration.
+fn rule_sources(config: &Config, base: &Settings) -> (Stored, Stored) {
+    let password = config.password.as_deref().is_some_and(|p| !p.is_empty());
+    let hba = match base.get("hba_file").filter(|f| !f.is_empty()) {
+        Some(path) => Stored::File(path),
+        None => Stored::Text {
+            name: HBA_NAME,
+            text: config.hba.clone().unwrap_or_else(|| default_hba(password).to_owned()),
+        },
+    };
+    let ident = match base.get("ident_file").filter(|f| !f.is_empty()) {
+        Some(path) => Stored::File(path),
+        None => Stored::Text { name: IDENT_NAME, text: config.ident.clone().unwrap_or_default() },
+    };
+    (hba, ident)
+}
+
 /// `load_hba` and `load_ident`. An error in the host rules stops the start, as in `PostmasterMain`. An error in the user maps only goes to the log, and then no map matches.
 fn load_rules(
-    config: &Config,
-    base: &Settings,
+    files: &RuleFiles,
     io: &dyn Io,
     log: &dyn Fn(&str, &[String]),
 ) -> Result<(Hba, Ident)> {
-    let ssl = base.get("ssl").as_deref() == Some("on");
-    let password = config.password.as_deref().is_some_and(|p| !p.is_empty());
-    let hba_file = base.get("hba_file").filter(|f| !f.is_empty());
-    let (source, name) = match &hba_file {
-        Some(path) => (Source::File(path), path.as_str()),
-        None => {
-            let text = config.hba.as_deref().unwrap_or(default_hba(password));
-            (Source::Text { name: HBA_NAME, text }, HBA_NAME)
-        }
-    };
     let mut lines = Vec::new();
-    let hba = Hba::load(io, source, ssl, &mut lines);
+    let hba = Hba::load(io, files.hba.source(), files.ssl, &mut lines);
     log("LOG", &lines);
     let Some(hba) = hba else {
-        return Err(Error::internal(format!("could not load {name}")));
-    };
-    let ident_file = base.get("ident_file").filter(|f| !f.is_empty());
-    let source = match &ident_file {
-        Some(path) => Source::File(path),
-        None => Source::Text { name: IDENT_NAME, text: config.ident.as_deref().unwrap_or("") },
+        return Err(Error::internal(format!("could not load {}", files.hba.name())));
     };
     let mut lines = Vec::new();
-    let ident = Ident::load(io, source, &mut lines);
+    let ident = Ident::load(io, files.ident.source(), &mut lines);
     log("LOG", &lines);
     Ok((hba, ident.unwrap_or_default()))
+}
+
+/// The authentication files of the server for the views `pg_hba_file_rules` and `pg_ident_file_mappings`.
+#[derive(Debug)]
+struct RuleFiles {
+    io: Arc<dyn Io>,
+    hba: Stored,
+    ident: Stored,
+    /// The setting `ssl`.
+    ssl: bool,
+}
+
+impl rupg_session::auth::AuthFiles for RuleFiles {
+    fn hba_rules(&self) -> Result<Vec<HbaRule>> {
+        hba::hba_rules(&*self.io, self.hba.source(), self.ssl)
+    }
+
+    fn ident_mappings(&self) -> Result<Vec<IdentMapping>> {
+        hba::ident_mappings(&*self.io, self.ident.source())
+    }
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> std::sync::MutexGuard<'_, T> {

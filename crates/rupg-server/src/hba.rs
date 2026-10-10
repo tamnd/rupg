@@ -2,7 +2,7 @@
 //!
 //! Both texts go through one tokenizer. A token ends at a space, a tab or a comma, double quotes keep a token together, `""` in quotes is one quote, an unquoted `#` starts a comment, and a backslash at the end of a line joins the next line. A field is a list of tokens with commas between them. `@file` reads the tokens of a file into the field, and a line of two fields that starts with `include`, `include_if_exists` or `include_dir` reads the lines of other files.
 //!
-//! The server reads the rules when it starts. Each error goes to the log with the line of the file as its context, and the rest of the text is still checked, so one start shows every error. Host rules with an error or with no entry stop the start. User maps with an error only go to the log, and then no map matches.
+//! The server reads the rules when it starts. Each error goes to the log with the line of the file as its context, and the rest of the text is still checked, so one start shows every error. Host rules with an error or with no entry stop the start. User maps with an error only go to the log, and then no map matches. The views `pg_hba_file_rules` and `pg_ident_file_mappings` read the text again at each call, and show each line with the error that PostgreSQL keeps for it.
 //!
 //! The methods are those of PostgreSQL. `gss`, `sspi`, `pam`, `bsd` and `ldap` are methods of builds with other libraries, and a line with one of them gets the error of such a build. `oauth` needs a validator library, which rupg cannot load yet, so a line with it gets the error of a server with no `oauth_validator_libraries`.
 //!
@@ -16,8 +16,9 @@ use std::cell::RefCell;
 use std::net::{IpAddr, Ipv4Addr, Ipv6Addr};
 use std::path::{Component, Path};
 
-use rupg_common::{SqlState, SqlState as S};
+use rupg_common::{Result, SqlState, SqlState as S};
 use rupg_platform::{Io, Net};
+use rupg_session::auth::{HbaFields, HbaRule, IdentFields, IdentMapping};
 
 /// `CONF_FILE_MAX_DEPTH`: how deep files can include files.
 const MAX_DEPTH: usize = 10;
@@ -84,8 +85,8 @@ struct TokenLine {
     number: usize,
     raw: String,
     fields: Vec<Vec<Token>>,
-    /// The line had an error, which is in the log already.
-    failed: bool,
+    /// The error of the line, which is in the log already. The view `pg_hba_file_rules` shows it.
+    error: Option<String>,
 }
 
 /// A message for the log at the level `LOG`, with its `HINT` and `CONTEXT` lines.
@@ -100,6 +101,39 @@ fn message(text: &str, hint: Option<&str>, context: &[String]) -> String {
         out.push_str(line);
     }
     out
+}
+
+/// Where the errors of the parse of one line go: the log, and the text that PostgreSQL keeps for the views, `err_msg`.
+struct Report<'a> {
+    log: &'a mut Vec<String>,
+    context: [String; 1],
+    /// The text of the last error or warning of the line.
+    error: Option<String>,
+}
+
+impl<'a> Report<'a> {
+    fn new(line: &TokenLine, log: &'a mut Vec<String>) -> Report<'a> {
+        Report { log, context: [line_context(line.number, &line.file)], error: None }
+    }
+
+    /// A warning: the line still loads, but it can never match.
+    fn warn(&mut self, text: &str, hint: Option<&str>) {
+        self.log.push(message(text, hint, &self.context));
+        self.error = Some(text.to_owned());
+    }
+
+    /// An error: the line does not load.
+    fn fail<T>(&mut self, text: &str, hint: Option<&str>) -> Option<T> {
+        self.warn(text, hint);
+        None
+    }
+
+    /// The error of an option.
+    fn option<T>(&mut self, error: OptionError) -> Option<T> {
+        self.log.push(message(&error.text, None, &self.context));
+        self.error = error.view;
+        None
+    }
 }
 
 /// The context of an error on a line, `line N of configuration file "F"`.
@@ -216,13 +250,7 @@ impl Tokenizer<'_> {
                 _ => {}
             }
         }
-        lines.push(TokenLine {
-            file: file.to_owned(),
-            number,
-            raw,
-            fields,
-            failed: error.is_some(),
-        });
+        lines.push(TokenLine { file: file.to_owned(), number, raw, fields, error });
     }
 
     /// `next_field_expand`: the tokens of one field, with `@file` read in.
@@ -268,7 +296,7 @@ impl Tokenizer<'_> {
         let mut inner = Vec::new();
         self.file(&path, &text, &mut inner, depth);
         for line in inner {
-            if line.failed {
+            if line.error.is_some() {
                 *error = Some(format!("error in file \"{}\"", line.file));
                 break;
             }
@@ -463,6 +491,20 @@ pub(crate) enum Kind {
     HostNoGssEnc,
 }
 
+impl Kind {
+    /// The name of the connection type in the rules.
+    fn name(self) -> &'static str {
+        match self {
+            Kind::Local => "local",
+            Kind::Host => "host",
+            Kind::HostSsl => "hostssl",
+            Kind::HostNoSsl => "hostnossl",
+            Kind::HostGssEnc => "hostgssenc",
+            Kind::HostNoGssEnc => "hostnogssenc",
+        }
+    }
+}
+
 /// The address of a `host` line.
 #[derive(Debug, Clone, PartialEq, Eq)]
 enum Address {
@@ -562,6 +604,40 @@ pub(crate) struct HbaLine {
     pub(crate) clientname: ClientName,
 }
 
+impl HbaLine {
+    /// The parts of the line that the view `pg_hba_file_rules` shows, `fill_hba_line` and `get_hba_options`.
+    fn fields(&self) -> HbaFields {
+        let keyword = |word: &str| (Some(word.to_owned()), None);
+        let (address, netmask) = match &self.address {
+            Address::None => (None, None),
+            Address::All => keyword("all"),
+            Address::SameHost => keyword("samehost"),
+            Address::SameNet => keyword("samenet"),
+            Address::Mask(address, mask) => (Some(address.to_string()), Some(mask.to_string())),
+            Address::Name(name) => (Some(name.clone()), None),
+        };
+        let mut options = Vec::new();
+        if let Some(map) = &self.map {
+            options.push(format!("map={map}"));
+        }
+        match self.clientcert {
+            ClientCert::Off => {}
+            ClientCert::VerifyCa => options.push("clientcert=verify-ca".to_owned()),
+            ClientCert::VerifyFull => options.push("clientcert=verify-full".to_owned()),
+        }
+        let texts = |tokens: &[Token]| tokens.iter().map(|token| token.text.clone()).collect();
+        HbaFields {
+            kind: self.kind.name().to_owned(),
+            databases: texts(&self.databases),
+            users: texts(&self.roles),
+            address,
+            netmask,
+            method: self.method.name().to_owned(),
+            options,
+        }
+    }
+}
+
 /// The methods that only other builds of PostgreSQL have.
 const OTHER_BUILDS: [&str; 5] = ["gss", "sspi", "pam", "bsd", "ldap"];
 
@@ -588,18 +664,15 @@ const OTHER_OPTIONS: [(&str, &str); 19] = [
     ("radiusservers", "radius"),
 ];
 
-/// `parse_hba_line`. An error goes to `log` and gives `None`. `ssl` is the setting `ssl`.
-fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<HbaLine> {
-    let context = [line_context(line.number, &line.file)];
+/// `parse_hba_line`. An error goes to the log of `report` and gives `None`. `ssl` is the setting `ssl`.
+fn parse_hba_line(line: &TokenLine, ssl: bool, report: &mut Report<'_>) -> Option<HbaLine> {
     let mut fields = line.fields.iter();
     let kind_field = fields.next()?;
     if kind_field.len() > 1 {
-        log.push(message(
+        return report.fail(
             "multiple values specified for connection type",
             Some("Specify exactly one connection type per line."),
-            &context,
-        ));
-        return None;
+        );
     }
     let kind = match kind_field[0].text.as_str() {
         "local" => Kind::Local,
@@ -607,57 +680,48 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
         "hostssl" => {
             if !ssl {
                 // The line still loads. It can never match.
-                log.push(message(
+                report.warn(
                     "hostssl record cannot match because SSL is disabled",
                     Some("Set \"ssl = on\" in postgresql.conf."),
-                    &context,
-                ));
+                );
             }
             Kind::HostSsl
         }
         "hostnossl" => Kind::HostNoSsl,
         "hostgssenc" => {
-            log.push(message(
+            report.warn(
                 "hostgssenc record cannot match because GSSAPI is not supported by this build",
                 None,
-                &context,
-            ));
+            );
             Kind::HostGssEnc
         }
         "hostnogssenc" => Kind::HostNoGssEnc,
-        other => {
-            log.push(message(&format!("invalid connection type \"{other}\""), None, &context));
-            return None;
-        }
-    };
-    let mut fail = |text: &str, hint: Option<&str>| {
-        log.push(message(text, hint, &context));
-        None
+        other => return report.fail(&format!("invalid connection type \"{other}\""), None),
     };
     let Some(databases) = fields.next() else {
-        return fail("end-of-line before database specification", None);
+        return report.fail("end-of-line before database specification", None);
     };
     for token in databases {
         if let Err(text) = token.compile() {
-            return fail(&text, None);
+            return report.fail(&text, None);
         }
     }
     let Some(roles) = fields.next() else {
-        return fail("end-of-line before role specification", None);
+        return report.fail("end-of-line before role specification", None);
     };
     for token in roles {
         if let Err(text) = token.compile() {
-            return fail(&text, None);
+            return report.fail(&text, None);
         }
     }
     let address = if kind == Kind::Local {
         Address::None
     } else {
         let Some(tokens) = fields.next() else {
-            return fail("end-of-line before IP address specification", None);
+            return report.fail("end-of-line before IP address specification", None);
         };
         if tokens.len() > 1 {
-            return fail(
+            return report.fail(
                 "multiple values specified for host address",
                 Some("Specify one address range per line."),
             );
@@ -676,7 +740,7 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
             };
             match (numeric_host(host), bits) {
                 (None, Some(_)) => {
-                    return fail(
+                    return report.fail(
                         &format!(
                             "specifying both host name and CIDR mask is invalid: \"{}\"",
                             token.text
@@ -688,7 +752,7 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
                 (Some(ip), Some(bits)) => match cidr_mask(bits, ip.is_ipv4()) {
                     Some(mask) => Address::Mask(ip, mask),
                     None => {
-                        return fail(
+                        return report.fail(
                             &format!("invalid CIDR mask in address \"{}\"", token.text),
                             None,
                         );
@@ -696,7 +760,7 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
                 },
                 (Some(ip), None) => {
                     let Some(tokens) = fields.next() else {
-                        return fail(
+                        return report.fail(
                             "end-of-line before netmask specification",
                             Some(
                                 "Specify an address range in CIDR notation, or provide a separate netmask.",
@@ -704,16 +768,16 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
                         );
                     };
                     if tokens.len() > 1 {
-                        return fail("multiple values specified for netmask", None);
+                        return report.fail("multiple values specified for netmask", None);
                     }
                     let Some(mask) = numeric_host(&tokens[0].text) else {
-                        return fail(
+                        return report.fail(
                             &format!("invalid IP mask \"{}\": {EAI_NONAME_TEXT}", tokens[0].text),
                             None,
                         );
                     };
                     if mask.is_ipv4() != ip.is_ipv4() {
-                        return fail("IP address and mask do not match", None);
+                        return report.fail("IP address and mask do not match", None);
                     }
                     Address::Mask(ip, mask)
                 }
@@ -721,10 +785,10 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
         }
     };
     let Some(tokens) = fields.next() else {
-        return fail("end-of-line before authentication method", None);
+        return report.fail("end-of-line before authentication method", None);
     };
     if tokens.len() > 1 {
-        return fail(
+        return report.fail(
             "multiple values specified for authentication type",
             Some("Specify exactly one authentication type per line."),
         );
@@ -741,21 +805,21 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
         "cert" => Method::Cert,
         "oauth" => Method::OAuth,
         _ if OTHER_BUILDS.contains(&name) => {
-            return fail(
+            return report.fail(
                 &format!("invalid authentication method \"{name}\": not supported by this build"),
                 None,
             );
         }
-        _ => return fail(&format!("invalid authentication method \"{name}\""), None),
+        _ => return report.fail(&format!("invalid authentication method \"{name}\""), None),
     };
     if kind == Kind::Local && method == Method::Ident {
         method = Method::Peer;
     }
     if kind != Kind::Local && method == Method::Peer {
-        return fail("peer authentication is only supported on local sockets", None);
+        return report.fail("peer authentication is only supported on local sockets", None);
     }
     if kind != Kind::HostSsl && method == Method::Cert {
-        return fail("cert authentication is only supported on hostssl connections", None);
+        return report.fail("cert authentication is only supported on hostssl connections", None);
     }
     let mut parsed = HbaLine {
         file: line.file.clone(),
@@ -774,13 +838,13 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
     // The options are the tokens of the rest of the fields, not one column.
     for token in fields.flatten() {
         let Some((name, value)) = token.text.split_once('=') else {
-            return fail(
+            return report.fail(
                 &format!("authentication option not in name=value format: {}", token.text),
                 None,
             );
         };
-        if let Err(text) = parse_option(name, value, &mut parsed, &mut oauth) {
-            return fail(&text, None);
+        if let Err(error) = parse_option(name, value, &mut parsed, &mut oauth) {
+            return report.option(error);
         }
     }
     if method == Method::Cert {
@@ -789,7 +853,7 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
     if method == Method::OAuth {
         for (set, option) in [(oauth.scope, "scope"), (oauth.issuer, "issuer")] {
             if !set {
-                return fail(
+                return report.fail(
                     &format!(
                         "authentication method \"oauth\" requires argument \"{option}\" to be set"
                     ),
@@ -797,7 +861,7 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, log: &mut Vec<String>) -> Option<
                 );
             }
         }
-        return fail(
+        return report.fail(
             "parameter \"oauth_validator_libraries\" must be set for authentication method \"oauth\"",
             None,
         );
@@ -812,17 +876,37 @@ struct OAuthOptions {
     issuer: bool,
 }
 
+/// The error of an option: the text for the log, and the text that PostgreSQL keeps for the view `pg_hba_file_rules`. For some errors PostgreSQL keeps no text, or a text that is not the same as the text of the log.
+#[derive(Debug)]
+struct OptionError {
+    text: String,
+    view: Option<String>,
+}
+
+impl OptionError {
+    /// An error that PostgreSQL only writes to the log. The view shows the line with no error and with null values.
+    fn quiet(text: String) -> OptionError {
+        OptionError { text, view: None }
+    }
+}
+
+impl From<String> for OptionError {
+    fn from(text: String) -> OptionError {
+        OptionError { view: Some(text.clone()), text }
+    }
+}
+
 /// `parse_hba_auth_opt`.
 fn parse_option(
     name: &str,
     value: &str,
     line: &mut HbaLine,
     oauth: &mut OAuthOptions,
-) -> Result<(), String> {
+) -> Result<(), OptionError> {
     let only = |methods: &str| {
-        Err(format!(
+        Err(OptionError::from(format!(
             "authentication option \"{name}\" is only valid for authentication methods {methods}"
-        ))
+        )))
     };
     match name {
         "map" => {
@@ -833,28 +917,44 @@ fn parse_option(
         }
         "clientcert" => {
             if line.kind != Kind::HostSsl {
-                return Err("clientcert can only be configured for \"hostssl\" rows".to_owned());
+                return Err("clientcert can only be configured for \"hostssl\" rows"
+                    .to_owned()
+                    .into());
             }
             line.clientcert = match value {
                 "verify-full" => ClientCert::VerifyFull,
                 "verify-ca" if line.method == Method::Cert => {
-                    return Err(
-                        "clientcert only accepts \"verify-full\" when using \"cert\" authentication"
+                    return Err(OptionError {
+                        text: "clientcert only accepts \"verify-full\" when using \"cert\" authentication"
                             .to_owned(),
-                    );
+                        view: Some(
+                            "clientcert can only be set to \"verify-full\" when using \"cert\" authentication"
+                                .to_owned(),
+                        ),
+                    });
                 }
                 "verify-ca" => ClientCert::VerifyCa,
-                _ => return Err(format!("invalid value for clientcert: \"{value}\"")),
+                _ => {
+                    return Err(OptionError::quiet(format!(
+                        "invalid value for clientcert: \"{value}\""
+                    )));
+                }
             };
         }
         "clientname" => {
             if line.kind != Kind::HostSsl {
-                return Err("clientname can only be configured for \"hostssl\" rows".to_owned());
+                return Err("clientname can only be configured for \"hostssl\" rows"
+                    .to_owned()
+                    .into());
             }
             line.clientname = match value {
                 "CN" => ClientName::Cn,
                 "DN" => ClientName::Dn,
-                _ => return Err(format!("invalid value for clientname: \"{value}\"")),
+                _ => {
+                    return Err(OptionError::quiet(format!(
+                        "invalid value for clientname: \"{value}\""
+                    )));
+                }
             };
         }
         "issuer" | "scope" | "validator" | "delegate_ident_mapping" => {
@@ -872,13 +972,17 @@ fn parse_option(
             if key.is_empty()
                 || !key.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'_' || b == b'-')
             {
-                return Err(format!("invalid OAuth validator option name: \"{name}\""));
+                return Err(OptionError::quiet(format!(
+                    "invalid OAuth validator option name: \"{name}\""
+                )));
             }
         }
         _ => match OTHER_OPTIONS.iter().find(|(option, _)| *option == name) {
             // RADIUS left PostgreSQL in version 18, so its options are not known any more.
             Some((_, methods)) if *methods != "radius" => return only(methods),
-            _ => return Err(format!("unrecognized authentication option name: \"{name}\"")),
+            _ => {
+                return Err(format!("unrecognized authentication option name: \"{name}\"").into());
+            }
         },
     }
     Ok(())
@@ -1090,11 +1194,11 @@ impl Hba {
         let mut ok = true;
         let mut parsed = Vec::new();
         for line in &lines {
-            if line.failed {
+            if line.error.is_some() {
                 ok = false;
                 continue;
             }
-            match parse_hba_line(line, ssl, log) {
+            match parse_hba_line(line, ssl, &mut Report::new(line, log)) {
                 Some(line) => parsed.push(line),
                 None => ok = false,
             }
@@ -1167,6 +1271,91 @@ impl Hba {
     }
 }
 
+/// The lines of a file for a view. The view reads the file again. A file that does not open is an error of the query, as `open_auth_file` with the level `ERROR` makes it, and an error in a line goes only to the row of the line.
+fn view_lines(io: &dyn Io, source: Source<'_>) -> Result<Vec<TokenLine>> {
+    let (name, text) = match source {
+        Source::File(path) => {
+            (path, String::from_utf8_lossy(&io.read_file(Path::new(path))?).into_owned())
+        }
+        Source::Text { name, text } => (name, text.to_owned()),
+    };
+    let mut log = Vec::new();
+    Ok(tokenize(io, Source::Text { name, text: &text }, &mut log).unwrap_or_default())
+}
+
+/// A line number in a column of `int4`.
+fn line_number(number: usize) -> i32 {
+    i32::try_from(number).unwrap_or(i32::MAX)
+}
+
+/// `fill_hba_view`: each line of the host rules with its error. A line with an error has no rule number. `ssl` is the setting `ssl`.
+///
+/// # Errors
+///
+/// The error of a file that does not open.
+pub(crate) fn hba_rules(io: &dyn Io, source: Source<'_>, ssl: bool) -> Result<Vec<HbaRule>> {
+    let mut log = Vec::new();
+    let mut number = 0;
+    let mut rows = Vec::new();
+    for line in view_lines(io, source)? {
+        let (parsed, error) = match &line.error {
+            Some(error) => (None, Some(error.clone())),
+            None => {
+                let mut report = Report::new(&line, &mut log);
+                let parsed = parse_hba_line(&line, ssl, &mut report);
+                (parsed, report.error)
+            }
+        };
+        if error.is_none() {
+            number += 1;
+        }
+        rows.push(HbaRule {
+            rule_number: error.is_none().then_some(number),
+            file_name: line.file,
+            line_number: line_number(line.number),
+            fields: parsed.map(|parsed| parsed.fields()),
+            error,
+        });
+    }
+    Ok(rows)
+}
+
+/// `fill_ident_view`: each line of the user maps with its error. A line with an error has no map number.
+///
+/// # Errors
+///
+/// The error of a file that does not open.
+pub(crate) fn ident_mappings(io: &dyn Io, source: Source<'_>) -> Result<Vec<IdentMapping>> {
+    let mut log = Vec::new();
+    let mut number = 0;
+    let mut rows = Vec::new();
+    for line in view_lines(io, source)? {
+        let (parsed, error) = match &line.error {
+            Some(error) => (None, Some(error.clone())),
+            None => {
+                let mut report = Report::new(&line, &mut log);
+                let parsed = parse_ident_line(&line, &mut report);
+                (parsed, report.error)
+            }
+        };
+        if error.is_none() {
+            number += 1;
+        }
+        rows.push(IdentMapping {
+            map_number: error.is_none().then_some(number),
+            file_name: line.file,
+            line_number: line_number(line.number),
+            fields: parsed.map(|parsed| IdentFields {
+                map_name: parsed.map,
+                sys_name: parsed.system_user.text,
+                pg_username: parsed.pg_user.text,
+            }),
+            error,
+        });
+    }
+    Ok(rows)
+}
+
 /// `check_role`.
 fn check_role(user: &str, tokens: &[Token], roles: &Roles) -> bool {
     tokens.iter().any(|token| {
@@ -1216,11 +1405,11 @@ impl Ident {
         let mut ok = true;
         let mut parsed = Vec::new();
         for line in &lines {
-            if line.failed {
+            if line.error.is_some() {
                 ok = false;
                 continue;
             }
-            match parse_ident_line(line, log) {
+            match parse_ident_line(line, &mut Report::new(line, log)) {
                 Some(line) => parsed.push(line),
                 None => ok = false,
             }
@@ -1259,21 +1448,16 @@ impl Ident {
     }
 }
 
-/// `parse_ident_line`.
-fn parse_ident_line(line: &TokenLine, log: &mut Vec<String>) -> Option<IdentLine> {
-    let context = [line_context(line.number, &line.file)];
-    let mut fail = |text: &str| {
-        log.push(message(text, None, &context));
-        None
-    };
+/// `parse_ident_line`. An error goes to the log of `report` and gives `None`.
+fn parse_ident_line(line: &TokenLine, report: &mut Report<'_>) -> Option<IdentLine> {
     let mut fields = line.fields.iter();
     let mut tokens = Vec::with_capacity(3);
     for _ in 0..3 {
         let Some(field) = fields.next() else {
-            return fail("missing entry at end of line");
+            return report.fail("missing entry at end of line", None);
         };
         if field.len() > 1 {
-            return fail("multiple values in ident field");
+            return report.fail("multiple values in ident field", None);
         }
         tokens.push(field[0].clone());
     }
@@ -1282,7 +1466,7 @@ fn parse_ident_line(line: &TokenLine, log: &mut Vec<String>) -> Option<IdentLine
     let map = tokens.pop()?.text;
     for token in [&system_user, &pg_user] {
         if let Err(text) = token.compile() {
-            return fail(&text);
+            return report.fail(&text, None);
         }
     }
     Some(IdentLine { map, system_user, pg_user })

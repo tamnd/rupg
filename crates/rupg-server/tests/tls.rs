@@ -634,3 +634,47 @@ fn pg_stat_ssl() {
     server.stop().unwrap();
     assert_eq!(log.take(), Vec::<String>::new());
 }
+
+/// Writes the text of a file of the test.
+fn write(path: &str, text: &[u8]) {
+    let file = OsIo.open(Path::new(path), OpenMode::Create).unwrap();
+    file.set_size(0).unwrap();
+    file.write_at(0, text).unwrap();
+}
+
+/// The views `pg_hba_file_rules` and `pg_ident_file_mappings` read the files again at each call, so they show the files as they are now and not the rules that the server loaded. `tests/hba/views.out` is the output of PostgreSQL 19 with `ssl` on and the files `tests/hba/pg_hba.conf` and `tests/hba/pg_ident.conf`.
+#[test]
+fn the_views_of_the_rules() {
+    let dir = env!("CARGO_TARGET_TMPDIR");
+    let hba = format!("{dir}/views_pg_hba.conf");
+    let ident = format!("{dir}/views_pg_ident.conf");
+    write(&hba, b"host all all 127.0.0.1/32 trust\n");
+    write(&ident, b"");
+    let (server, _) = start("", &[("hba_file", &hba), ("ident_file", &ident)], KEY);
+    let server = server.unwrap();
+    let read = |name: &str| {
+        let path = format!("{}/tests/hba/{name}", env!("CARGO_MANIFEST_DIR"));
+        OsIo.read_file(Path::new(&path)).unwrap()
+    };
+    write(&hba, &read("pg_hba.conf"));
+    write(&ident, &read("pg_ident.conf"));
+    let mut stream = OsNet.connect(server.address()).unwrap();
+    assert_eq!(talk(&mut stream, &startup(), None), ["ok", "ready I"]);
+    let expected = String::from_utf8(read("views.out")).unwrap();
+    let mut lines = Vec::new();
+    for sql in expected.lines().filter_map(|line| line.strip_prefix("> ")) {
+        lines.push(format!("> {sql}"));
+        let mut out = talk(&mut stream, &query(sql), None);
+        assert_eq!(out.pop().as_deref(), Some("ready I"));
+        lines.extend(out);
+    }
+    assert_eq!(lines, expected.lines().collect::<Vec<_>>());
+    // A file that does not open is an error of the query.
+    OsIo.remove(Path::new(&ident)).unwrap();
+    let error = format!("ERROR 58P01 could not open file \"{ident}\": No such file or directory");
+    let sql = query("SELECT count(*) FROM pg_ident_file_mappings");
+    assert_eq!(talk(&mut stream, &sql, None), [error.as_str(), "ready I"]);
+    drop(stream);
+    server.stop().unwrap();
+    OsIo.remove(Path::new(&hba)).unwrap();
+}

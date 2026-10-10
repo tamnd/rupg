@@ -106,6 +106,22 @@ pub trait Session {
     fn prepared_statements(&self) -> Vec<Vec<Value>> {
         Vec::new()
     }
+    /// The rows of `pg_hba_file_rules`, one for each line of the host rules, in the 11 columns of the function. A session with no server has no rules and no rows.
+    ///
+    /// # Errors
+    ///
+    /// The error of a file of the rules that does not open.
+    fn hba_rules(&self) -> Result<Vec<Vec<Value>>> {
+        Ok(Vec::new())
+    }
+    /// The rows of `pg_ident_file_mappings`, one for each line of the user maps, in the 7 columns of the function. A session with no server has no maps and no rows.
+    ///
+    /// # Errors
+    ///
+    /// The error of a file of the maps that does not open.
+    fn ident_mappings(&self) -> Result<Vec<Vec<Value>>> {
+        Ok(Vec::new())
+    }
     /// The catalog of the user objects that the statement sees, or `None` when the session has no catalog.
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None

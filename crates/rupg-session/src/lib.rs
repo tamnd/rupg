@@ -6,6 +6,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod auth;
 pub mod block;
 pub mod connection;
 mod generated;
