@@ -1,0 +1,201 @@
+> SELECT pg_is_in_recovery()
+fields pg_is_in_recovery:16:1:-1
+row f
+SELECT 1
+> SELECT array_remove(ARRAY[1, 2, 3, 2, 5], 2), array_remove(ARRAY[1, 2, 3], 4), array_remove(ARRAY[1, NULL, 3, NULL], NULL), array_remove(ARRAY[1, NULL, 3], 3)
+fields array_remove:1007:-1:-1,array_remove:1007:-1:-1,array_remove:1007:-1:-1,array_remove:1007:-1:-1
+row {1,3,5},{1,2,3},{1,3},{1,NULL}
+SELECT 1
+> SELECT array_remove(ARRAY['a', 'b', 'c']::text[], 'b'), array_remove(ARRAY['check_option=local', 'x=1']::text[], 'check_option=local'), array_remove(ARRAY['a']::text[], 'a'), array_remove('{}'::int4[], 1), array_remove(NULL::int4[], 1)
+fields array_remove:1009:-1:-1,array_remove:1009:-1:-1,array_remove:1009:-1:-1,array_remove:1007:-1:-1,array_remove:1007:-1:-1
+row {a,c},{x=1},{},{},NULL
+SELECT 1
+> SELECT array_remove('[2:5]={1,2,3,4}'::int4[], 3), array_dims(array_remove('[2:5]={1,2,3,4}'::int4[], 3)), array_dims(array_remove('[2:5]={1,2,3,4}'::int4[], 9)), array_dims(array_remove('[2:3]={7,7}'::int4[], 7))
+fields array_remove:1007:-1:-1,array_dims:25:-1:-1,array_dims:25:-1:-1,array_dims:25:-1:-1
+row [2:4]={1,2,4},[2:4],[2:5],NULL
+SELECT 1
+> SELECT array_remove(ARRAY[1.0, 1.00, 2]::numeric[], 1), array_remove(ARRAY['NaN', 1, 'NaN']::float8[], 'NaN'), array_remove(ARRAY[1, 2]::int8[], 2::int4)
+fields array_remove:1231:-1:-1,array_remove:1022:-1:-1,array_remove:1016:-1:-1
+row {2},{1},{1}
+SELECT 1
+> SELECT array_remove(ARRAY[[1, 2], [3, 4]], 1)
+ERROR 0A000 removing elements from multidimensional arrays is not supported
+> SELECT array_remove(ARRAY[[1, 2], [3, 4]], 9)
+ERROR 0A000 removing elements from multidimensional arrays is not supported
+> SELECT array_replace(ARRAY[1, 2, 5, 4], 5, 3), array_replace(ARRAY[1, 2, 5, 4], 5, NULL), array_replace(ARRAY[1, NULL, 5, NULL], NULL, 0), array_replace(ARRAY[[1, 2], [2, 1]], 2, 9), array_replace('[0:1]={a,b}'::text[], 'b', 'c'), array_replace(NULL::int4[], 1, 2)
+fields array_replace:1007:-1:-1,array_replace:1007:-1:-1,array_replace:1007:-1:-1,array_replace:1007:-1:-1,array_replace:1009:-1:-1,array_replace:1007:-1:-1
+row {1,2,3,4},{1,2,NULL,4},{1,0,5,0},{{1,9},{9,1}},[0:1]={a,c},NULL
+SELECT 1
+> SELECT array_replace(ARRAY['AB', 'cd']::text[], 'cd', 'x'), array_dims(array_replace('[3:4]={1,2}'::int4[], 1, 2))
+fields array_replace:1009:-1:-1,array_dims:25:-1:-1
+row {AB,x},[3:4]
+SELECT 1
+> SELECT typname, typname[0], typname[1], typname[2], typname[62], typname[63], typname[64], typname[-1], typname[NULL], typname[0][0] FROM pg_type WHERE oid = 'int4'::regtype
+fields typname@pg_type.2:19:64:-1,typname:18:1:-1,typname:18:1:-1,typname:18:1:-1,typname:18:1:-1,typname:18:1:-1,typname:18:1:-1,typname:18:1:-1,typname:18:1:-1,typname:18:1:-1
+row int4,i,n,t,,,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT n, n[0] = 'a', n[4], n[4] = '', n[62], n[63] FROM (VALUES ('abc'::name), (repeat('x', 70)::name)) AS v(n)
+fields n:19:64:-1,?column?:16:1:-1,n:18:1:-1,?column?:16:1:-1,n:18:1:-1,n:18:1:-1
+row abc,t,,t,,
+row xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx,f,x,f,x,
+SELECT 2
+> SELECT typname, typname[0] = '_' AND typelem <> 0 AS isarray FROM pg_type WHERE typname IN ('_int4', 'int4', '_bool', 'point') ORDER BY typname
+fields typname@pg_type.2:19:64:-1,isarray:16:1:-1
+row _bool,t
+row _int4,t
+row int4,f
+row point,f
+SELECT 4
+> SELECT ('abc'::name)[1:2]
+ERROR 0A000 slices of fixed-length arrays not implemented
+> SELECT ('abc'::name)[NULL:2]
+fields name:19:64:-1
+row NULL
+SELECT 1
+> SELECT (NULL::name)[0], (NULL::name)[1:2]
+fields name:18:1:-1,name:19:64:-1
+row NULL,NULL
+SELECT 1
+> SELECT classoid::regclass, objsubid <> 0 AS column, privtype, count(*) FROM pg_init_privs GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
+fields classoid:2205:4:-1,column:16:1:-1,privtype@pg_init_privs.4:18:1:-1,count:20:8:-1
+row pg_proc,f,i,67
+row pg_class,f,i,150
+row pg_class,t,i,22
+row pg_namespace,f,i,2
+SELECT 4
+> SELECT objoid::regprocedure, initprivs FROM pg_init_privs WHERE classoid = 'pg_proc'::regclass ORDER BY objoid::regprocedure::text
+fields objoid:2202:4:-1,initprivs@pg_init_privs.5:1034:-1:-1
+row lo_export(oid,text),{postgres=X/postgres}
+row lo_import(text),{postgres=X/postgres}
+row lo_import(text,oid),{postgres=X/postgres}
+row pg_backup_start(text,boolean),{postgres=X/postgres}
+row pg_backup_stop(boolean),{postgres=X/postgres}
+row pg_config(),{postgres=X/postgres}
+row pg_create_restore_point(text),{postgres=X/postgres}
+row pg_current_logfile(),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_current_logfile(text),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_get_aios(),{postgres=X/postgres,pg_read_all_stats=X/postgres}
+row pg_get_backend_memory_contexts(),{postgres=X/postgres,pg_read_all_stats=X/postgres}
+row pg_get_dsm_registry_allocations(),{postgres=X/postgres,pg_read_all_stats=X/postgres}
+row pg_get_shmem_allocations(),{postgres=X/postgres,pg_read_all_stats=X/postgres}
+row pg_get_shmem_allocations_numa(),{postgres=X/postgres,pg_read_all_stats=X/postgres}
+row pg_hba_file_rules(),{postgres=X/postgres}
+row pg_ident_file_mappings(),{postgres=X/postgres}
+row pg_log_backend_memory_contexts(integer),{postgres=X/postgres}
+row pg_log_standby_snapshot(),{postgres=X/postgres}
+row pg_ls_archive_statusdir(),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_ls_dir(text),{postgres=X/postgres}
+row pg_ls_dir(text,boolean,boolean),{postgres=X/postgres}
+row pg_ls_logdir(),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_ls_logicalmapdir(),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_ls_logicalsnapdir(),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_ls_replslotdir(text),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_ls_summariesdir(),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_ls_tmpdir(),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_ls_tmpdir(oid),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_ls_waldir(),{postgres=X/postgres,pg_monitor=X/postgres}
+row pg_promote(boolean,integer),{postgres=X/postgres}
+row pg_read_binary_file(text),{postgres=X/postgres}
+row pg_read_binary_file(text,bigint,bigint),{postgres=X/postgres}
+row pg_read_binary_file(text,bigint,bigint,boolean),{postgres=X/postgres}
+row pg_read_binary_file(text,boolean),{postgres=X/postgres}
+row pg_read_file(text),{postgres=X/postgres}
+row pg_read_file(text,bigint,bigint),{postgres=X/postgres}
+row pg_read_file(text,bigint,bigint,boolean),{postgres=X/postgres}
+row pg_read_file(text,boolean),{postgres=X/postgres}
+row pg_reload_conf(),{postgres=X/postgres}
+row pg_replication_origin_advance(text,pg_lsn),{postgres=X/postgres}
+row pg_replication_origin_create(text),{postgres=X/postgres}
+row pg_replication_origin_drop(text),{postgres=X/postgres}
+row pg_replication_origin_oid(text),{postgres=X/postgres}
+row pg_replication_origin_progress(text,boolean),{postgres=X/postgres}
+row pg_replication_origin_session_is_setup(),{postgres=X/postgres}
+row pg_replication_origin_session_progress(boolean),{postgres=X/postgres}
+row pg_replication_origin_session_reset(),{postgres=X/postgres}
+row pg_replication_origin_session_setup(text,integer),{postgres=X/postgres}
+row pg_replication_origin_xact_reset(),{postgres=X/postgres}
+row pg_replication_origin_xact_setup(pg_lsn,timestamp with time zone),{postgres=X/postgres}
+row pg_rotate_logfile(),{postgres=X/postgres}
+row pg_show_all_file_settings(),{postgres=X/postgres}
+row pg_show_replication_origin_status(),{postgres=X/postgres}
+row pg_stat_file(text),{postgres=X/postgres}
+row pg_stat_file(text,boolean),{postgres=X/postgres}
+row pg_stat_have_stats(text,oid,bigint),{postgres=X/postgres}
+row pg_stat_reset(),{postgres=X/postgres}
+row pg_stat_reset_backend_stats(integer),{postgres=X/postgres}
+row pg_stat_reset_replication_slot(text),{postgres=X/postgres}
+row pg_stat_reset_shared(text),{postgres=X/postgres}
+row pg_stat_reset_single_function_counters(oid),{postgres=X/postgres}
+row pg_stat_reset_single_table_counters(oid),{postgres=X/postgres}
+row pg_stat_reset_slru(text),{postgres=X/postgres}
+row pg_stat_reset_subscription_stats(oid),{postgres=X/postgres}
+row pg_switch_wal(),{postgres=X/postgres}
+row pg_wal_replay_pause(),{postgres=X/postgres}
+row pg_wal_replay_resume(),{postgres=X/postgres}
+SELECT 67
+> SELECT objoid::regnamespace, initprivs FROM pg_init_privs WHERE classoid = 'pg_namespace'::regclass ORDER BY objoid::regnamespace::text
+fields objoid:4089:4:-1,initprivs@pg_init_privs.5:1034:-1:-1
+row pg_catalog,{postgres=UC/postgres,=U/postgres}
+row public,{pg_database_owner=UC/pg_database_owner,=U/pg_database_owner}
+SELECT 2
+> SELECT objoid::regclass, objsubid, initprivs FROM pg_init_privs WHERE classoid = 'pg_class'::regclass AND objsubid <> 0 ORDER BY objoid::regclass::text, 2
+fields objoid:2205:4:-1,objsubid@pg_init_privs.3:23:4:-1,initprivs@pg_init_privs.5:1034:-1:-1
+row pg_subscription,1,{=r/postgres}
+row pg_subscription,2,{=r/postgres}
+row pg_subscription,3,{=r/postgres}
+row pg_subscription,4,{=r/postgres}
+row pg_subscription,5,{=r/postgres}
+row pg_subscription,6,{=r/postgres}
+row pg_subscription,7,{=r/postgres}
+row pg_subscription,8,{=r/postgres}
+row pg_subscription,9,{=r/postgres}
+row pg_subscription,10,{=r/postgres}
+row pg_subscription,11,{=r/postgres}
+row pg_subscription,12,{=r/postgres}
+row pg_subscription,13,{=r/postgres}
+row pg_subscription,14,{=r/postgres}
+row pg_subscription,15,{=r/postgres}
+row pg_subscription,16,{=r/postgres}
+row pg_subscription,17,{=r/postgres}
+row pg_subscription,19,{=r/postgres}
+row pg_subscription,20,{=r/postgres}
+row pg_subscription,21,{=r/postgres}
+row pg_subscription,22,{=r/postgres}
+row pg_subscription,23,{=r/postgres}
+SELECT 22
+> SELECT relkind, initprivs::text, count(*) FROM pg_init_privs JOIN pg_class ON objoid = pg_class.oid WHERE classoid = 'pg_class'::regclass AND objsubid = 0 GROUP BY 1, 2 ORDER BY 1, 2
+fields relkind@pg_class.18:18:1:-1,initprivs:25:-1:-1,count:20:8:-1
+row r,{postgres=arwdDxtm/postgres,=r/postgres},58
+row r,{postgres=arwdDxtm/postgres},6
+row v,{postgres=arwdDxtm/postgres,=r/postgres},74
+row v,{postgres=arwdDxtm/postgres,=rw/postgres},1
+row v,{postgres=arwdDxtm/postgres,pg_read_all_stats=r/postgres},5
+row v,{postgres=arwdDxtm/postgres},6
+SELECT 6
+> SELECT objoid::regclass FROM pg_init_privs WHERE classoid = 'pg_class'::regclass AND objsubid = 0 AND initprivs::text NOT LIKE '%=r/%' ORDER BY objoid::regclass::text
+fields objoid:2205:4:-1
+row pg_authid
+row pg_config
+row pg_file_settings
+row pg_hba_file_rules
+row pg_ident_file_mappings
+row pg_largeobject
+row pg_replication_origin_status
+row pg_settings
+row pg_shadow
+row pg_statistic
+row pg_statistic_ext_data
+row pg_subscription
+row pg_user_mapping
+SELECT 13
+> SELECT count(*) FROM pg_init_privs i JOIN pg_class c ON i.objoid = c.oid AND i.classoid = 'pg_class'::regclass AND i.objsubid = 0 WHERE c.relnamespace = 'information_schema'::regnamespace
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_class c LEFT JOIN pg_init_privs i ON i.objoid = c.oid AND i.classoid = 'pg_class'::regclass AND i.objsubid = 0 WHERE c.relacl IS DISTINCT FROM i.initprivs AND c.relnamespace = 'pg_catalog'::regnamespace AND c.relkind IN ('r', 'v')
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT p.proname FROM pg_proc p LEFT JOIN pg_init_privs pip ON p.oid = pip.objoid AND pip.classoid = 'pg_proc'::regclass AND pip.objsubid = 0 WHERE p.proacl IS DISTINCT FROM pip.initprivs ORDER BY 1
+fields proname@pg_proc.2:19:64:-1
+SELECT 0
