@@ -1955,6 +1955,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/routine_views.test")));
     }
 
+    /// The functions and catalog rows that the queries of `pg_dump` read in a new database: `pg_is_in_recovery`, `array_remove` and `array_replace` with arrays of each shape, a subscript of a `name`, which is an array of `"char"`, and the rows of `pg_init_privs` for the built-in objects. `connection/dump_queries.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn dump_queries() {
+        big_stack(|| script(include_str!("connection/dump_queries.test")));
+    }
+
     /// Subqueries in the conditions of a scan of a subquery and of a join, which each give their own rows, and the views of `information_schema` that read `conkey` of the built-in and the user constraints. `connection/subquery_filters.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn subquery_filters() {

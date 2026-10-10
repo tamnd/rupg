@@ -139,9 +139,90 @@ pub(crate) fn rows(
         "pg_proc" => functions(table, catalog),
         "pg_depend" => depends(table, catalog),
         "pg_rewrite" => rewrites(table, catalog),
+        "pg_init_privs" => init_privs(table, catalog, session)?,
         _ => Vec::new(),
     };
     Ok(rows.into_iter().map(|row| row.values).collect())
+}
+
+/// The rows of `pg_init_privs`, as `setup_privileges` of initdb makes them: the ACL of each table, view, materialized view and sequence, of each column of these relations, and of each function, type, language and schema, when the ACL is not null. initdb runs `setup_privileges` after `system_views.sql` and before `information_schema.sql`, so the views of the system are in the table and the objects of `information_schema` are not. The objects of a cluster get their OIDs in that order, so an object is in the table when its OID is lower than the OID of the schema `information_schema`. Each row has the type `i`.
+fn init_privs<'a>(
+    table: &'a Table,
+    catalog: &Catalog,
+    session: &dyn Session,
+) -> Result<Vec<Row<'a>>> {
+    let limit = catalog
+        .schema_by_name("information_schema")
+        .map_or(rupg_catalog::FIRST_NORMAL_OID, |schema| schema.oid);
+    let mut rows = Vec::new();
+    let mut add = |object: u32, class: u32, sub: i32, acl: Value| {
+        let mut row = Row::new(table);
+        row.set("objoid", oid(object))
+            .set("classoid", oid(class))
+            .set("objsubid", Value::Int4(sub))
+            .set("privtype", code('i'))
+            .set("initprivs", acl);
+        rows.push(row);
+    };
+    let relation = |kind: &Value| matches!(kind, Value::Char(b'r' | b'v' | b'm' | b'S'));
+    let mut relations = Vec::new();
+    if let Some(pg_class) = rupg_pgcatalog::catalog("pg_class") {
+        for row in 0..pg_class.len {
+            let object = cell(pg_class, row, "oid", session)?;
+            if relation(&cell(pg_class, row, "relkind", session)?) {
+                relations.push(object.clone());
+                let acl = cell(pg_class, row, "relacl", session)?;
+                if let (Value::Oid(object), false) = (object, acl.is_null()) {
+                    add(object, pg_class.oid, 0, acl);
+                }
+            }
+        }
+        for rel in catalog.relations() {
+            let kind = matches!(rel.kind, RelKind::Table | RelKind::View | RelKind::Sequence);
+            if let (true, true, Some(acl)) = (rel.oid < limit, kind, &rel.acl) {
+                add(rel.oid, pg_class.oid, 0, text_array(acl));
+            }
+        }
+        if let Some(pg_attribute) = rupg_pgcatalog::catalog("pg_attribute") {
+            for row in 0..pg_attribute.len {
+                let acl = cell(pg_attribute, row, "attacl", session)?;
+                let object = cell(pg_attribute, row, "attrelid", session)?;
+                if acl.is_null() || !relations.contains(&object) {
+                    continue;
+                }
+                let sub = cell(pg_attribute, row, "attnum", session)?.as_i64().unwrap_or(0);
+                if let Value::Oid(object) = object {
+                    add(object, pg_class.oid, i32::try_from(sub).unwrap_or(0), acl);
+                }
+            }
+        }
+    }
+    for (name, column) in [
+        ("pg_proc", "proacl"),
+        ("pg_type", "typacl"),
+        ("pg_language", "lanacl"),
+        ("pg_namespace", "nspacl"),
+    ] {
+        let Some(source) = rupg_pgcatalog::catalog(name) else { continue };
+        for row in 0..source.len {
+            let acl = cell(source, row, column, session)?;
+            if let (Value::Oid(object), false) = (cell(source, row, "oid", session)?, acl.is_null())
+            {
+                add(object, source.oid, 0, acl);
+            }
+        }
+    }
+    for schema in catalog.schemas() {
+        if let (true, Some(acl)) = (schema.oid < limit, &schema.acl) {
+            add(
+                schema.oid,
+                rupg_pgcatalog::catalog("pg_namespace").map_or(0, |c| c.oid),
+                0,
+                text_array(acl),
+            );
+        }
+    }
+    Ok(rows)
 }
 
 fn namespaces<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {

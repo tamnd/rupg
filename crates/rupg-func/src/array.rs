@@ -1,4 +1,4 @@
-//! The functions of the arrays in `array_userfuncs.c`, `arrayfuncs.c` and `varlena.c`: `string_to_array`, `array_to_string`, the functions that read the dimensions, and `array_append`, `array_prepend` and `array_cat`.
+//! The functions of the arrays in `array_userfuncs.c`, `arrayfuncs.c` and `varlena.c`: `string_to_array`, `array_to_string`, the functions that read the dimensions, `array_append`, `array_prepend` and `array_cat`, and `array_remove` and `array_replace`.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -257,6 +257,70 @@ fn array_cat(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(value(Array { dims, values }))
 }
 
+/// `array_replace_internal`: the array with each element that is equal to the search value replaced, or removed when `replace` is `None`. A null search value finds the null elements. The array is the same when no element is equal. A removal needs an array with one dimension or less, and gives an empty array when no element stays. The lower bound does not change. It is not strict, and a null array gives null.
+fn replace_elements(
+    call: &Call<'_>,
+    args: &[Value],
+    replace: Option<Option<Value>>,
+) -> Result<Value> {
+    let array = match args.first() {
+        Some(Value::Null) => return Ok(Value::Null),
+        Some(Value::Array(array)) => array,
+        _ => return Err(bad_value()),
+    };
+    if replace.is_none() && array.dims.len() > 1 {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "removing elements from multidimensional arrays is not supported",
+        ));
+    }
+    let search = element(args, 1)?;
+    let types = (
+        element_type(call.args.first().copied().unwrap_or(0))?,
+        call.args.get(1).copied().unwrap_or(0),
+    );
+    let mut values = Vec::with_capacity(array.values.len());
+    let mut changed = false;
+    for item in &array.values {
+        let same = match (item, &search) {
+            (None, None) => true,
+            (Some(a), Some(b)) => crate::compare::equal(types.0, a, types.1, b)?,
+            _ => false,
+        };
+        if !same {
+            values.push(item.clone());
+            continue;
+        }
+        changed = true;
+        if let Some(with) = &replace {
+            values.push(with.clone());
+        }
+    }
+    if !changed {
+        return Ok(Value::Array(array.clone()));
+    }
+    let mut dims = array.dims.clone();
+    if replace.is_none() {
+        if values.is_empty() {
+            return Ok(value(Array::empty()));
+        }
+        if let Some(d) = dims.first_mut() {
+            d.len = i32::try_from(values.len()).map_err(|_| out_of_range())?;
+        }
+    }
+    Ok(value(Array { dims, values }))
+}
+
+/// `array_remove(anycompatiblearray, anycompatible)`.
+fn array_remove(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    replace_elements(call, args, None)
+}
+
+/// `array_replace(anycompatiblearray, anycompatible, anycompatible)`.
+fn array_replace(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    replace_elements(call, args, Some(element(args, 2)?))
+}
+
 /// The kernel of an array function by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
@@ -271,6 +335,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "array_append" => array_append,
         "array_prepend" => array_prepend,
         "array_cat" => array_cat,
+        "array_remove" => array_remove,
+        "array_replace" => array_replace,
         _ => return None,
     })
 }

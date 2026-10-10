@@ -70,6 +70,11 @@ fn getdatabaseencoding(_: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::text("UTF8"))
 }
 
+/// `pg_is_in_recovery`: false, because a rupg server is never a standby in recovery.
+fn pg_is_in_recovery(_: &Call<'_>, _: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(false))
+}
+
 /// `format_type(oid, int4)`. It is not strict: a null type gives null, and a null typmod gives the name without a typmod.
 fn format_type(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let ty = match args.first() {
@@ -191,6 +196,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_backend_pid" => pg_backend_pid,
         "pg_client_encoding" => pg_client_encoding,
         "getdatabaseencoding" => getdatabaseencoding,
+        "pg_is_in_recovery" => pg_is_in_recovery,
         "pg_encoding_max_length_sql" => pg_encoding_max_length,
         "format_type" => format_type,
         "show_config_by_name" | "show_config_by_name_missing_ok" => current_setting,

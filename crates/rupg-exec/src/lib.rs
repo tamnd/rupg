@@ -15,7 +15,7 @@ use rupg_analyze::{
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
 use rupg_pgcatalog::builtin;
-use rupg_types::{Array, ArrayDim, MAXDIM, Record, Value, format_type, oid};
+use rupg_types::{Array, ArrayDim, MAXDIM, NAME_MAX_BYTES, Record, Value, format_type, oid};
 
 /// A query that the engine can run.
 #[derive(Debug)]
@@ -1339,6 +1339,7 @@ impl<'a> Eval<'a> {
         let array = match self.eval(&sub.container)? {
             Value::Null => return Ok(Value::Null),
             Value::Array(array) => array,
+            Value::Text(name) => return self.name_subscript(&name, sub),
             _ => return Err(Error::internal("the container of a SubscriptingRef is not an array")),
         };
         let upper = self.subscript_list(&sub.upper)?;
@@ -1354,6 +1355,27 @@ impl<'a> Eval<'a> {
         } else {
             array_element(&array, &upper)
         })
+    }
+
+    /// A fetch from a `name`, which `raw_array_subscript_handler` reads as a fixed-length array of 64 `"char"` elements from 0. The bytes after the name are zero. A subscript out of the array or more than one subscript gives null. A slice is an error after its subscripts, as in `array_get_slice`.
+    fn name_subscript(&mut self, name: &str, sub: &Subscript) -> Result<Value> {
+        let Some(upper) = self.subscript_list(&sub.upper)? else { return Ok(Value::Null) };
+        if let Some(lower) = &sub.lower {
+            if self.subscript_list(lower)?.is_none() {
+                return Ok(Value::Null);
+            }
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "slices of fixed-length arrays not implemented",
+            ));
+        }
+        let [Some(index)] = upper[..] else { return Ok(Value::Null) };
+        match usize::try_from(index) {
+            Ok(i) if i <= NAME_MAX_BYTES => {
+                Ok(Value::Char(name.as_bytes().get(i).copied().unwrap_or(0)))
+            }
+            _ => Ok(Value::Null),
+        }
     }
 
     /// The values of the subscripts of one bound, with `None` for a bound that the query does not give. A null subscript gives `None` for the list.
