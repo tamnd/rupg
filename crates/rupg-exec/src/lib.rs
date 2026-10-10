@@ -664,12 +664,7 @@ fn run_query(
             frames.push(Frame { tables, tuple });
             run_query(sub, params, session, cache, &frames, false)
         };
-        scan::tuples(
-            query,
-            tables,
-            &mut |expr, tuple| Ok(eval.at(tuple).eval(expr)? == Value::Bool(true)),
-            &mut source,
-        )?
+        scan::tuples(query, tables, &mut |expr, tuple| eval.at(tuple).eval(expr), &mut source)?
     } else {
         Vec::new()
     };

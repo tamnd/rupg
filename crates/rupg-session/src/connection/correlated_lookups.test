@@ -1,0 +1,85 @@
+> SELECT p.oid::regprocedure FROM pg_proc p LEFT JOIN pg_init_privs pip ON (p.oid = pip.objoid AND pip.classoid = 'pg_proc'::regclass AND pip.objsubid = 0) WHERE p.prokind <> 'a' AND NOT EXISTS (SELECT 1 FROM pg_depend WHERE classid = 'pg_proc'::regclass AND objid = p.oid AND deptype = 'i') AND (p.pronamespace <> 'pg_catalog'::regnamespace OR EXISTS (SELECT 1 FROM pg_cast WHERE pg_cast.oid > 16383 AND p.oid = pg_cast.castfunc) OR p.proacl IS DISTINCT FROM pip.initprivs) ORDER BY p.oid::regprocedure::text
+fields oid:2202:4:-1
+row information_schema._pg_char_max_length(oid,integer)
+row information_schema._pg_char_octet_length(oid,integer)
+row information_schema._pg_datetime_precision(oid,integer)
+row information_schema._pg_expandarray(anyarray)
+row information_schema._pg_index_position(oid,smallint)
+row information_schema._pg_interval_type(oid,integer)
+row information_schema._pg_numeric_precision(oid,integer)
+row information_schema._pg_numeric_precision_radix(oid,integer)
+row information_schema._pg_numeric_scale(oid,integer)
+row information_schema._pg_truetypid(pg_attribute,pg_type)
+row information_schema._pg_truetypmod(pg_attribute,pg_type)
+SELECT 11
+> SELECT count(*) FROM pg_proc p WHERE EXISTS (SELECT 1 FROM pg_depend d WHERE d.classid = 'pg_proc'::regclass AND d.objid = p.oid AND d.deptype = 'i')
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT c.relname, (SELECT count(*) FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attnum > 0) FROM pg_class c WHERE c.relnamespace = 'pg_catalog'::regnamespace AND c.relkind = 'r' ORDER BY 1 LIMIT 8
+fields relname@pg_class.2:19:64:-1,count:20:8:-1
+row pg_aggregate,22
+row pg_am,4
+row pg_amop,9
+row pg_amproc,6
+row pg_attrdef,4
+row pg_attribute,25
+row pg_auth_members,7
+row pg_authid,12
+SELECT 8
+> SELECT x::regtype, (SELECT count(*) FROM pg_type t WHERE t.typarray = x), (SELECT t.typname FROM pg_type t WHERE t.typarray = x) FROM (VALUES (NULL::oid), ('int4[]'::regtype::oid), ('text[]'::regtype::oid), ('int4'::regtype::oid)) AS v(x)
+fields x:2206:4:-1,count:20:8:-1,typname:19:64:-1
+row NULL,0,NULL
+row integer[],1,int4
+row text[],1,text
+row integer,0,NULL
+SELECT 4
+> SELECT k.relkind, (SELECT count(*) FROM pg_class c WHERE c.relkind = k.relkind AND c.relnamespace = 'pg_catalog'::regnamespace) FROM (VALUES ('r'::"char"), ('v'), ('x'), (NULL)) AS k(relkind)
+fields relkind:18:1:-1,count:20:8:-1
+row r,64
+row v,86
+row x,0
+row NULL,0
+SELECT 4
+> SELECT n.nspname, s.count FROM pg_namespace n, LATERAL (SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind IN ('r', 'v')) AS s WHERE n.nspname IN ('pg_catalog', 'information_schema', 'public') ORDER BY 1
+fields nspname@pg_namespace.2:19:64:-1,count:20:8:-1
+row information_schema,69
+row pg_catalog,150
+row public,0
+SELECT 3
+> SELECT n.nspname, (SELECT count(*) FROM pg_class c WHERE c.relnamespace = n.oid AND c.relkind = 'v' AND EXISTS (SELECT 1 FROM pg_attribute a WHERE a.attrelid = c.oid AND a.attname = 'oid' AND a.attnum > 0 AND c.relnamespace = n.oid)) FROM pg_namespace n WHERE n.nspname IN ('pg_catalog', 'information_schema') ORDER BY 1
+fields nspname@pg_namespace.2:19:64:-1,count:20:8:-1
+row information_schema,3
+row pg_catalog,1
+SELECT 2
+> SELECT t.typname, (SELECT r.rngsubtype::regtype FROM pg_range r WHERE r.rngtypid = t.oid), (SELECT e.typname FROM pg_type e WHERE e.oid = t.typelem) FROM pg_type t WHERE t.typname IN ('int4range', '_int4', 'int4', 'datemultirange') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,rngsubtype:2206:4:-1,typname:19:64:-1
+row _int4,NULL,int4
+row datemultirange,NULL,NULL
+row int4,NULL,NULL
+row int4range,integer,NULL
+SELECT 4
+> SELECT a.amname, (SELECT count(*) FROM pg_opclass o JOIN pg_opfamily f ON f.oid = o.opcfamily AND f.opfmethod = a.oid WHERE o.opcmethod = a.oid AND o.opcdefault) FROM pg_am a WHERE a.amtype = 'i' ORDER BY 1
+fields amname@pg_am.2:19:64:-1,count:20:8:-1
+row brin,28
+row btree,39
+row gin,3
+row gist,9
+row hash,37
+row spgist,6
+SELECT 6
+> SELECT p.proname, (SELECT l.lanname FROM pg_language l WHERE l.oid = p.prolang), (SELECT count(*) FROM pg_type t WHERE t.oid = p.prorettype AND t.typname = 'int4') FROM pg_proc p WHERE p.proname IN ('int4pl', 'now', 'array_remove') ORDER BY 1
+fields proname@pg_proc.2:19:64:-1,lanname:19:64:-1,count:20:8:-1
+row array_remove,internal,0
+row int4pl,internal,1
+row now,internal,0
+SELECT 3
+> SELECT o.oprname, o.oprleft::regtype, o.oprright::regtype FROM pg_operator o WHERE o.oprname = '=' AND o.oprleft = 'int2'::regtype AND EXISTS (SELECT 1 FROM pg_type t WHERE t.oid = o.oprright AND t.typlen = 2) ORDER BY 2, 3
+fields oprname@pg_operator.2:19:64:-1,oprleft:2206:4:-1,oprright:2206:4:-1
+row =,smallint,smallint
+SELECT 1
+> SELECT d.description FROM pg_namespace n LEFT JOIN pg_description d ON d.objoid = n.oid AND d.classoid = 'pg_namespace'::regclass WHERE n.nspname IN ('pg_catalog', 'public') AND EXISTS (SELECT 1 FROM pg_namespace m WHERE m.oid = n.oid) ORDER BY 1
+fields description@pg_description.4:25:-1:-1
+row standard public schema
+row system catalog schema
+SELECT 2

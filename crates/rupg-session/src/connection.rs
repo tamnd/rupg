@@ -1961,6 +1961,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/dump_queries.test")));
     }
 
+    /// Correlated subqueries that find their rows through an `=` of a column and a column of the outer query: in `EXISTS` and `NOT EXISTS`, in the target list, in `LATERAL`, in a join in the subquery, in a subquery in a subquery, with a null outer value, and with an outer value of another type of the same form. The first statement is the query of `pg_dump` that finds the functions to dump. `connection/correlated_lookups.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn correlated_lookups() {
+        big_stack(|| script(include_str!("connection/correlated_lookups.test")));
+    }
+
     /// Subqueries in the conditions of a scan of a subquery and of a join, which each give their own rows, and the views of `information_schema` that read `conkey` of the built-in and the user constraints. `connection/subquery_filters.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn subquery_filters() {
