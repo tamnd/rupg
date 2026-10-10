@@ -33,5 +33,10 @@ rustls.workspace = true
 name = "idle"
 required-features = ["tls"]
 
+# The connection rate test of spec/06 section 6.18. `cargo xtask connrate` runs it.
+[[example]]
+name = "connrate"
+required-features = ["tls"]
+
 [lints]
 workspace = true
