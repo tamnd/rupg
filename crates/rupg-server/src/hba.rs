@@ -6,7 +6,7 @@
 //!
 //! The methods are those of PostgreSQL. `gss`, `sspi`, `pam`, `bsd` and `ldap` are methods of builds with other libraries, and a line with one of them gets the error of such a build. `oauth` needs a validator library, which rupg cannot load yet, so a line with it gets the error of a server with no `oauth_validator_libraries`.
 //!
-//! A token that starts with a slash is a regular expression in PostgreSQL. rupg does not have the regular expressions of PostgreSQL yet (spec/22 section 22.4), so such a token is an error on its line.
+//! A token that starts with a slash is a regular expression, also in quotes. The pattern after the slash uses the advanced syntax of PostgreSQL and the C collation, and it matches a part of the name, so a full match needs `^` and `$`. A pattern that does not compile is an error on its line. In a user map, `\1` in the user name gets the text of the first group of the match on the system user.
 //!
 //! The files come through the `Io` trait and the host name lookups through the `Net` trait of rupg-platform, so the simulation can run them.
 //!
@@ -18,7 +18,9 @@ use std::path::{Component, Path};
 
 use rupg_common::{Result, SqlState, SqlState as S};
 use rupg_platform::{Io, Net};
-use rupg_session::auth::{HbaFields, HbaRule, IdentFields, IdentMapping};
+use rupg_session::auth::{
+    HbaFields, HbaRule, IdentFields, IdentMapping, auth_compile, auth_search,
+};
 
 /// `CONF_FILE_MAX_DEPTH`: how deep files can include files.
 const MAX_DEPTH: usize = 10;
@@ -50,11 +52,13 @@ struct Token {
     text: String,
     /// The token had a double quote before its first character. A quoted token is never a keyword, a group or a file.
     quoted: bool,
+    /// The token is a regular expression that [`Token::compile`] compiled.
+    regex: bool,
 }
 
 impl Token {
     fn new(text: String, quoted: bool) -> Token {
-        Token { text, quoted }
+        Token { text, quoted, regex: false }
     }
 
     /// `token_is_keyword`.
@@ -67,14 +71,23 @@ impl Token {
         self.text.strip_prefix('+').filter(|_| !self.quoted)
     }
 
-    /// `regcomp_auth_token`: a token that starts with a slash is a regular expression, which rupg cannot compile yet.
-    fn compile(&self) -> Result<(), String> {
-        match self.text.strip_prefix('/') {
-            Some(pattern) => Err(format!(
-                "invalid regular expression \"{pattern}\": regular expressions are not supported yet"
-            )),
-            None => Ok(()),
-        }
+    /// `regcomp_auth_token`: a token that starts with a slash is a regular expression.
+    fn compile(&mut self) -> Result<(), String> {
+        let Some(pattern) = self.text.strip_prefix('/') else { return Ok(()) };
+        auth_compile(pattern)
+            .map_err(|text| format!("invalid regular expression \"{pattern}\": {text}"))?;
+        self.regex = true;
+        Ok(())
+    }
+
+    /// The pattern of a regular expression, after its slash.
+    fn pattern(&self) -> Option<&str> {
+        self.text.strip_prefix('/').filter(|_| self.regex)
+    }
+
+    /// `regexec_auth_token` with no groups: the regular expression matches a part of `name`. An error of the match is no match.
+    fn finds(&self, name: &str) -> bool {
+        self.pattern().is_some_and(|pattern| matches!(auth_search(pattern, name), Ok(Some(_))))
     }
 }
 
@@ -701,7 +714,8 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, report: &mut Report<'_>) -> Optio
     let Some(databases) = fields.next() else {
         return report.fail("end-of-line before database specification", None);
     };
-    for token in databases {
+    let mut databases = databases.clone();
+    for token in &mut databases {
         if let Err(text) = token.compile() {
             return report.fail(&text, None);
         }
@@ -709,7 +723,8 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, report: &mut Report<'_>) -> Optio
     let Some(roles) = fields.next() else {
         return report.fail("end-of-line before role specification", None);
     };
-    for token in roles {
+    let mut roles = roles.clone();
+    for token in &mut roles {
         if let Err(text) = token.compile() {
             return report.fail(&text, None);
         }
@@ -826,8 +841,8 @@ fn parse_hba_line(line: &TokenLine, ssl: bool, report: &mut Report<'_>) -> Optio
         number: line.number,
         raw: line.raw.clone(),
         kind,
-        databases: databases.clone(),
-        roles: roles.clone(),
+        databases,
+        roles,
         address,
         method,
         map: None,
@@ -1361,8 +1376,12 @@ fn check_role(user: &str, tokens: &[Token], roles: &Roles) -> bool {
     tokens.iter().any(|token| {
         if let Some(group) = token.group() {
             roles.is_member(user, group)
+        } else if token.keyword("all") {
+            true
+        } else if token.regex {
+            token.finds(user)
         } else {
-            token.keyword("all") || token.text == user
+            token.text == user
         }
     })
 }
@@ -1378,6 +1397,8 @@ fn check_db(database: &str, user: &str, tokens: &[Token], roles: &Roles) -> bool
             roles.is_member(user, database)
         } else if token.keyword("replication") {
             false
+        } else if token.regex {
+            token.finds(database)
         } else {
             token.text == database
         }
@@ -1435,16 +1456,54 @@ impl Ident {
             ));
             return false;
         };
-        let found = self.lines.iter().filter(|line| line.map == map).any(|line| {
-            line.system_user.text == system_user
-                && check_role(pg_user, std::slice::from_ref(&line.pg_user), roles)
-        });
+        let mut found = false;
+        for line in self.lines.iter().filter(|line| line.map == map) {
+            match line.check(pg_user, system_user, roles) {
+                Ok(true) => found = true,
+                Ok(false) => continue,
+                Err(text) => {
+                    log.push(text);
+                    return false;
+                }
+            }
+            break;
+        }
         if !found {
             log.push(format!(
                 "no match in usermap \"{map}\" for user \"{pg_user}\" authenticated as \"{system_user}\""
             ));
         }
         found
+    }
+}
+
+impl IdentLine {
+    /// `check_ident_usermap` for a line of the map: the line lets `system_user` log in as `pg_user`. The error is the message for the log, and it stops the search.
+    fn check(&self, pg_user: &str, system_user: &str, roles: &Roles) -> Result<bool, String> {
+        let Some(pattern) = self.system_user.pattern() else {
+            return Ok(self.system_user.text == system_user
+                && check_role(pg_user, std::slice::from_ref(&self.pg_user), roles));
+        };
+        let found = match auth_search(pattern, system_user) {
+            Ok(Some(found)) => found,
+            Ok(None) => return Ok(false),
+            Err(text) => {
+                return Err(format!("regular expression match for \"{pattern}\" failed: {text}"));
+            }
+        };
+        let target = &self.pg_user;
+        if target.group().is_some() || target.regex || !target.text.contains("\\1") {
+            return Ok(check_role(pg_user, std::slice::from_ref(target), roles));
+        }
+        let Some(group) = found.group else {
+            return Err(format!(
+                "regular expression \"{pattern}\" has no subexpressions as requested by backreference in \"{}\"",
+                target.text
+            ));
+        };
+        // The new name is quoted, so it is never a keyword or a group.
+        let expanded = Token::new(target.text.replace("\\1", &group), true);
+        Ok(check_role(pg_user, std::slice::from_ref(&expanded), roles))
     }
 }
 
@@ -1461,10 +1520,10 @@ fn parse_ident_line(line: &TokenLine, report: &mut Report<'_>) -> Option<IdentLi
         }
         tokens.push(field[0].clone());
     }
-    let pg_user = tokens.pop()?;
-    let system_user = tokens.pop()?;
+    let mut pg_user = tokens.pop()?;
+    let mut system_user = tokens.pop()?;
     let map = tokens.pop()?.text;
-    for token in [&system_user, &pg_user] {
+    for token in [&mut system_user, &mut pg_user] {
         if let Err(text) = token.compile() {
             return report.fail(&text, None);
         }
@@ -1583,9 +1642,10 @@ mod tests {
                 "local all all oauth scope=a issuer=b",
                 "parameter \"oauth_validator_libraries\" must be set for authentication method \"oauth\"",
             ),
+            ("local all /( trust", "invalid regular expression \"(\": parentheses () not balanced"),
             (
-                "local all /^a trust",
-                "invalid regular expression \"^a\": regular expressions are not supported yet",
+                "local \"/a[\" all trust",
+                "invalid regular expression \"a[\": brackets [] not balanced",
             ),
         ];
         for (line, error) in cases {
@@ -1723,7 +1783,7 @@ mod tests {
             ]
         );
         let mut log = Vec::new();
-        let source = Source::Text { name: "pg_ident.conf", text: "m a\nm a,b c\nm /^x c\n" };
+        let source = Source::Text { name: "pg_ident.conf", text: "m a\nm a,b c\nm /^x( c\n" };
         assert!(Ident::load(&io, source, &mut log).is_none());
         let first: Vec<&str> = log.iter().map(|l| l.lines().next().unwrap()).collect();
         assert_eq!(
@@ -1731,7 +1791,60 @@ mod tests {
             [
                 "missing entry at end of line",
                 "multiple values in ident field",
-                "invalid regular expression \"^x\": regular expressions are not supported yet",
+                "invalid regular expression \"^x(\": parentheses () not balanced",
+            ]
+        );
+    }
+
+    #[test]
+    fn regular_expressions() {
+        let (hba, _) = load(
+            "local /^db[0-9]$ all reject\n\
+             local all /^post trust\n\
+             local \"/gres$\" all md5\n",
+        );
+        let hba = hba.unwrap();
+        let roles = roles();
+        let net = SimNet::new();
+        let find = |user, database| {
+            let client = Client::new(None, false, user, database);
+            hba.find(&client, &roles, &net, &mut Vec::new()).map(|line| line.number)
+        };
+        assert_eq!(find("postgres", "db1"), Some(1));
+        assert_eq!(find("postgres", "db12"), Some(2));
+        assert_eq!(find("alice", "ingres"), Some(3));
+        assert_eq!(find("alice", "db"), None);
+    }
+
+    #[test]
+    fn ident_regular_expressions() {
+        let io = SimIo::new(0);
+        let mut log = Vec::new();
+        let text = "m /^(.*)@example\\.com$ \\1\n\
+                    m /^admin \\1\n\
+                    n /^a /^post\n\
+                    o /^(.*)$ \\1\n\
+                    p /^x(y)?z \\1\n";
+        let ident =
+            Ident::load(&io, Source::Text { name: "pg_ident.conf", text }, &mut log).unwrap();
+        assert!(log.is_empty());
+        let roles = roles();
+        assert!(ident.check(Some("m"), "postgres", "postgres@example.com", &roles, &mut log));
+        assert!(ident.check(Some("m"), "alice", "alice@example.com", &roles, &mut log));
+        assert!(ident.check(Some("n"), "postgres", "ab", &roles, &mut log));
+        assert!(log.is_empty());
+        assert!(!ident.check(Some("m"), "postgres", "bob@example.com", &roles, &mut log));
+        assert!(!ident.check(Some("m"), "postgres", "admin1", &roles, &mut log));
+        // The name that the match makes is quoted, so "all" is not the keyword.
+        assert!(!ident.check(Some("o"), "postgres", "all", &roles, &mut log));
+        assert!(!ident.check(Some("p"), "x", "xz", &roles, &mut log));
+        assert_eq!(
+            log,
+            [
+                "no match in usermap \"m\" for user \"postgres\" authenticated as \"bob@example.com\"",
+                "regular expression \"^admin\" has no subexpressions as requested by backreference in \"\\1\"",
+                "no match in usermap \"o\" for user \"postgres\" authenticated as \"all\"",
+                "regular expression \"^x(y)?z\" has no subexpressions as requested by backreference in \"\\1\"",
             ]
         );
     }

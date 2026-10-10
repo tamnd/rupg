@@ -1,10 +1,11 @@
 //! The rows of the views `pg_hba_file_rules` and `pg_ident_file_mappings`, as `hbafuncs.c` of PostgreSQL makes them.
 //!
-//! The server owns the authentication files, so it gives the lines of the files through [`AuthFiles`], and this module puts them in the columns of the views. PostgreSQL reads the files again at each call of the functions, so a view shows the files as they are now, and not the rules that the server loaded.
+//! The server owns the authentication files, so it gives the lines of the files through [`AuthFiles`], and this module puts them in the columns of the views. PostgreSQL reads the files again at each call of the functions, so a view shows the files as they are now, and not the rules that the server loaded. The module also gives the server the regular expressions of the files.
 
 use std::fmt;
 
 use rupg_common::Result;
+pub use rupg_func::{AuthMatch, auth_compile, auth_search};
 use rupg_types::{Array, Value};
 
 /// The parts of a line of the host rules that the view `pg_hba_file_rules` shows.
