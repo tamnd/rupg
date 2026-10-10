@@ -33,7 +33,15 @@ pub(crate) struct Tables {
     pub(crate) needs: Vec<Vec<usize>>,
     /// The rows of each relation that reads other relations. The scan adds the rows of each run.
     grown: Vec<RefCell<Vec<Vec<Value>>>>,
+    /// The index of a column, by the relation and the attribute number, that the scan makes for the first run of a correlated subquery and uses again in the next runs.
+    indexes: RefCell<Indexes>,
 }
+
+/// The row numbers of a relation for each value of a column.
+type Index = BTreeMap<Key, Vec<usize>>;
+
+/// The indexes of the columns, by the relation and the attribute number.
+type Indexes = Vec<((usize, i16), Rc<Index>)>;
 
 /// For each relation of the query, the other relations of the query that its subquery or its function reads, as `LATERAL` lets it.
 pub(crate) fn lateral(query: &Query) -> Vec<Vec<usize>> {
@@ -132,6 +140,25 @@ impl Tables {
                 tuple
             })
             .collect())
+    }
+
+    /// The index of a column of a relation that reads no other relation. The first call makes it and the next calls use it again.
+    fn index(&self, var: Var) -> Rc<Index> {
+        let column = (var.relation, var.attnum);
+        if let Some((_, index)) = self.indexes.borrow().iter().find(|(c, _)| *c == column) {
+            return Rc::clone(index);
+        }
+        let mut index = Index::new();
+        let mut tuple = vec![NONE; self.rows.len()];
+        for row in 0..self.rows[var.relation].len() {
+            tuple[var.relation] = row;
+            if let Some(k) = key(self.var(&tuple, var)) {
+                index.entry(k).or_default().push(row);
+            }
+        }
+        let index = Rc::new(index);
+        self.indexes.borrow_mut().push((column, Rc::clone(&index)));
+        index
     }
 
     /// True when a relation of the part reads a relation outside the part.
@@ -235,6 +262,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         types: query.relations.iter().map(|r| r.columns.iter().map(|c| c.ty).collect()).collect(),
         needs: lateral(query),
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
+        indexes: RefCell::default(),
     })
 }
 
@@ -330,6 +358,15 @@ fn plain_var(expr: &Expr) -> Option<Var> {
     }
 }
 
+/// True when an expression is a column of an outer query, or such a column with another type of the same form.
+fn outer_var(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Var(var) => var.levels_up > 0,
+        ExprKind::Relabel(arg, _) => outer_var(arg),
+        _ => false,
+    }
+}
+
 /// The parts of a condition that `AND` joins. They are references and not copies, because the cache of the rows of a subquery keeps them by the address of the subquery: a copy that the scan drops can free an address that another subquery then gets.
 fn conjuncts<'q>(expr: &'q Expr, out: &mut Vec<&'q Expr>) {
     match &expr.kind {
@@ -352,8 +389,8 @@ struct JoinInput<'a> {
     right_relations: &'a [usize],
 }
 
-/// The test of a condition on a tuple.
-type Test<'a> = dyn FnMut(&Expr, &[usize]) -> Result<bool> + 'a;
+/// The value of an expression for a tuple. A condition passes when it gives true.
+type Test<'a> = dyn FnMut(&Expr, &[usize]) -> Result<Value> + 'a;
 
 /// The run of a relation that reads other relations: the rows of the relation for a tuple of the relations that it reads.
 pub(crate) type Source<'a> = dyn FnMut(usize, &[usize]) -> Result<Vec<Vec<Value>>> + 'a;
@@ -384,7 +421,7 @@ fn keep(tuples: Vec<Vec<usize>>, conds: &[&Expr], test: &mut Test<'_>) -> Result
     let mut kept = Vec::with_capacity(tuples.len());
     'tuple: for tuple in tuples {
         for expr in conds {
-            if !test(expr, &tuple)? {
+            if test(expr, &tuple)? != Value::Bool(true) {
                 continue 'tuple;
             }
         }
@@ -482,6 +519,31 @@ impl Scan<'_, '_> {
         Ok(out)
     }
 
+    /// The rows of a relation that can pass the conditions `conds`, through an index of a column, when a condition is an `=` of the column and a column of an outer query, as in a correlated subquery. The subquery runs for each row of the outer query, and the index makes each run read only the rows with the value of that row, as an index scan with a parameter does. `None` when no condition is such an `=`.
+    fn lookup(&mut self, relation: usize, conds: &[&Expr]) -> Result<Option<Vec<usize>>> {
+        let found = conds.iter().find_map(|expr| {
+            let ExprKind::Func(f) = &expr.kind else { return None };
+            if !HASH_EQUALS.contains(&f.oid) || f.args.len() != 2 {
+                return None;
+            }
+            match (plain_var(&f.args[0]), plain_var(&f.args[1])) {
+                (Some(var), None) if var.relation == relation && outer_var(&f.args[1]) => {
+                    Some((var, &f.args[1]))
+                }
+                (None, Some(var)) if var.relation == relation && outer_var(&f.args[0]) => {
+                    Some((var, &f.args[0]))
+                }
+                _ => None,
+            }
+        });
+        let Some((var, outer)) = found else { return Ok(None) };
+        // A null equals no value.
+        let Some(k) = key((self.test)(outer, &vec![NONE; self.width])?) else {
+            return Ok(Some(Vec::new()));
+        };
+        Ok(Some(self.tables.index(var).get(&k).cloned().unwrap_or_default()))
+    }
+
     /// The tuples of a part of `FROM` that pass the conditions `conds`, which read only the relations of the part. `context` has the rows of the relations outside the part.
     fn item_tuples<'q>(
         &mut self,
@@ -496,7 +558,12 @@ impl Scan<'_, '_> {
                 return keep(tuples, &conds, self.test);
             }
             FromItem::Relation(index) => {
-                let tuples = (0..self.tables.rows[*index].len())
+                let rows = match self.lookup(*index, &conds)? {
+                    Some(rows) => rows,
+                    None => (0..self.tables.rows[*index].len()).collect(),
+                };
+                let tuples = rows
+                    .into_iter()
                     .map(|row| {
                         let mut tuple = vec![NONE; width];
                         tuple[*index] = row;
@@ -610,7 +677,7 @@ fn join(input: JoinInput<'_>, tables: &Tables, test: &mut Test<'_>) -> Result<Ve
             let tuple = merge(l, &right[i]);
             let mut pass = true;
             for expr in on {
-                if !test(expr, &tuple)? {
+                if test(expr, &tuple)? != Value::Bool(true) {
                     pass = false;
                     break;
                 }
