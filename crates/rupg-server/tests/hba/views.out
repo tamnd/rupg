@@ -41,8 +41,14 @@ row 19,44,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
 row NULL,45,NULL,NULL,NULL,NULL,NULL,NULL,NULL,authentication method "oauth" requires argument "scope" to be set
 row NULL,46,NULL,NULL,NULL,NULL,NULL,NULL,NULL,parameter "oauth_validator_libraries" must be set for authentication method "oauth"
 row 20,47,host,{all,x},{all},10.0.0.0,255.0.0.0,trust,NULL,NULL
-row 21,48,local,{all},{all},NULL,NULL,trust,NULL,NULL
-SELECT 43
+row 21,48,host,{/^db[0-9]$,/quoted},{/^u,+admins},10.0.0.0,255.0.0.0,trust,NULL,NULL
+row 22,49,local,{/(?i)abc},{all},NULL,NULL,trust,NULL,NULL
+row NULL,50,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid regular expression "(": parentheses () not balanced
+row NULL,51,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid regular expression "a[": brackets [] not balanced
+row NULL,52,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid regular expression "a{2": braces {} not balanced
+row NULL,53,NULL,NULL,NULL,NULL,NULL,NULL,NULL,invalid regular expression "x\": invalid escape \ sequence
+row 23,54,local,{all},{all},NULL,NULL,trust,NULL,NULL
+SELECT 49
 > SELECT DISTINCT file_name = current_setting('hba_file') FROM pg_hba_file_rules
 row t
 SELECT 1
@@ -54,7 +60,12 @@ row NULL,6,NULL,NULL,NULL,missing entry at end of line
 row NULL,7,NULL,NULL,NULL,missing entry at end of line
 row NULL,8,NULL,NULL,NULL,multiple values in ident field
 row 4,9,local,bob,bob,NULL
-SELECT 7
+row 5,10,regex,/^(.*)@example\.com$,\1,NULL
+row 6,11,regex,/^quoted(.*)$,\1x,NULL
+row 7,12,regex,/^a,+admins,NULL
+row NULL,13,NULL,NULL,NULL,invalid regular expression "(": parentheses () not balanced
+row NULL,14,NULL,NULL,NULL,invalid regular expression "x)": parentheses () not balanced
+SELECT 12
 > SELECT DISTINCT file_name = current_setting('ident_file') FROM pg_ident_file_mappings
 row t
 SELECT 1

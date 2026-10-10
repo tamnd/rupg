@@ -2,7 +2,7 @@
 //!
 //! The lexer and the parser are ports of `regc_lex.c` and `regcomp.c`, so that a pattern gives the same error as in PostgreSQL. The matcher is not a port: it is a backtracking machine that tells if a match is in the string and where the leftmost match starts. The positions of the match and of its groups follow the rules of preference of Spencer: the tree of subexpressions of `regcomp.c` and the dissection of `regexec.c` find them.
 //!
-//! The functions here are the operators `~`, `~*`, `!~` and `!~*`, `substring` with a pattern, `similar_to_escape`, `regexp_replace`, `regexp_match`, `regexp_matches`, `regexp_like`, `regexp_count`, `regexp_instr`, `regexp_substr` and the functions that split a string at the matches.
+//! The functions here are the operators `~`, `~*`, `!~` and `!~*`, `substring` with a pattern, `similar_to_escape`, `regexp_replace`, `regexp_match`, `regexp_matches`, `regexp_like`, `regexp_count`, `regexp_instr`, `regexp_substr` and the functions that split a string at the matches. [`auth_compile`] and [`auth_search`] are the regular expressions of `pg_hba.conf` and `pg_ident.conf`.
 
 mod exec;
 mod lex;
@@ -123,8 +123,17 @@ impl Regex {
     ///
     /// `2201B` for a pattern that is too complex.
     pub(crate) fn find_chars(&self, chars: &[u32], from: usize) -> Result<Option<tree::Groups>> {
+        self.search(chars, from).map_err(Code::error)
+    }
+
+    /// [`Regex::find_chars`] with the code of `regerror` for the error.
+    fn search(
+        &self,
+        chars: &[u32],
+        from: usize,
+    ) -> std::result::Result<Option<tree::Groups>, Code> {
         let tree = self.tree.get_or_init(|| tree::Tree::new(&self.parsed));
-        let tree = tree.as_ref().map_err(|code| code.error())?;
+        let tree = tree.as_ref().map_err(|code| *code)?;
         let mut from = from;
         while let Some(begin) = self.prog.first(chars, from) {
             if let Some(groups) = tree.find(chars, begin) {
@@ -168,6 +177,35 @@ pub(crate) fn compile(pattern: &str, cflags: u32) -> Result<Rc<Regex>> {
         cache.insert(0, (pattern.to_owned(), cflags, Rc::clone(&regex)));
     });
     Ok(regex)
+}
+
+/// A match of [`auth_search`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AuthMatch {
+    /// The text of the first group, or `None` when the pattern has no group or the first group did not match.
+    pub group: Option<String>,
+}
+
+/// `regcomp_auth_token`: compile a regular expression of `pg_hba.conf` or `pg_ident.conf` with the flags `REG_ADVANCED`.
+///
+/// # Errors
+///
+/// The message of `pg_regerror` for a pattern that is not valid.
+pub fn auth_compile(pattern: &str) -> std::result::Result<(), &'static str> {
+    Regex::compile(pattern, flags::ADVANCED).map(drop).map_err(Code::message)
+}
+
+/// `regexec_auth_token`: find the regular expression `pattern` of [`auth_compile`] in `s`. The result is `None` when the pattern does not match.
+///
+/// # Errors
+///
+/// The message of `pg_regerror` for a pattern that is not valid or that is too complex.
+pub fn auth_search(pattern: &str, s: &str) -> std::result::Result<Option<AuthMatch>, &'static str> {
+    let regex = Regex::compile(pattern, flags::ADVANCED).map_err(Code::message)?;
+    let points: Vec<u32> = s.chars().map(u32::from).collect();
+    let Some(groups) = regex.search(&points, 0).map_err(Code::message)? else { return Ok(None) };
+    let group = groups.get(1).copied().flatten().map(|span| chars(s, span));
+    Ok(Some(AuthMatch { group }))
 }
 
 /// The string of an argument.
