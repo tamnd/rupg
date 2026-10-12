@@ -2,7 +2,7 @@
 //!
 //! The visibility functions are a port of the `*IsVisible` functions of `namespace.c`. Each one gives null for an OID that no object has, as the `is_missing` form of PostgreSQL does.
 
-use rupg_catalog::RelKind;
+use rupg_catalog::{ObjRef, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_types::{Record, Value, oid};
@@ -76,28 +76,41 @@ fn comment(text: Option<&str>) -> Value {
     text.map_or(Value::Null, Value::text)
 }
 
-/// `obj_description(oid, name)`: the comment of an object of the catalog with the name.
-fn obj_description(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let oid = oid_arg(args, 0)?;
-    Ok(comment(catalog_oid(args)?.and_then(|class| builtin::description(oid, class, 0))))
+/// The comment of an object: a comment of the catalog of the session, else a built-in comment.
+fn description(call: &Call<'_>, object: ObjRef) -> Value {
+    let user = call.session.catalog().and_then(|c| c.description(object));
+    comment(user.or_else(|| builtin::description(object.oid, object.class, object.sub)))
 }
 
-/// `obj_description(oid)`: the first comment of an object with the OID in any catalog.
-fn obj_description_any(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+/// `obj_description(oid, name)`: the comment of an object of the catalog with the name.
+fn obj_description(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = oid_arg(args, 0)?;
+    Ok(match catalog_oid(args)? {
+        Some(class) => description(call, ObjRef::new(class, oid)),
+        None => Value::Null,
+    })
+}
+
+/// `obj_description(oid)`: the first comment of an object with the OID in any catalog. The scan of `pg_description` gives the built-in rows first.
+fn obj_description_any(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = oid_arg(args, 0)?;
     let found = builtin::descriptions().iter().find(|d| d.objoid == oid && d.objsubid == 0);
-    Ok(comment(found.map(|d| d.description)))
+    let user = || {
+        let mut rows = call.session.catalog()?.descriptions();
+        rows.find(|(object, _)| object.oid == oid && object.sub == 0).map(|(_, text)| text)
+    };
+    Ok(comment(found.map(|d| d.description).or_else(user)))
 }
 
 /// `col_description(oid, integer)`: the comment of a column of a relation.
-fn col_description(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+fn col_description(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = oid_arg(args, 0)?;
     let column = args
         .get(1)
         .and_then(Value::as_i64)
         .and_then(|n| i32::try_from(n).ok())
         .ok_or_else(bad_value)?;
-    Ok(comment(builtin::description(oid, PG_CLASS, column)))
+    Ok(description(call, ObjRef { class: PG_CLASS, oid, sub: column }))
 }
 
 /// `shobj_description(oid, name)`: the comment of a shared object of the catalog with the name.
