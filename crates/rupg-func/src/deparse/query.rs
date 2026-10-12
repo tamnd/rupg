@@ -149,6 +149,9 @@ impl Deparser<'_> {
 
     /// `get_select_query_def`: the query, then `ORDER BY`, `OFFSET` and `LIMIT`.
     fn select_query(&mut self, query: &Query, result: Option<&[String]>) -> Result<()> {
+        if !query.ctes.is_empty() || query.relations.iter().any(|r| r.cte.is_some()) {
+            return Err(not_yet("a deparse of a query with WITH"));
+        }
         let force = match &query.set_op {
             Some(op) => {
                 self.set_op(op, query, result)?;

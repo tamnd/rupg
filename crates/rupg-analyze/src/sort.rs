@@ -40,7 +40,7 @@ fn leftmost(a: Option<usize>, b: Option<usize>) -> Option<usize> {
 }
 
 /// `exprLocation` of the first item of a list that has a location.
-fn list_location(list: &List) -> Option<usize> {
+pub(crate) fn list_location(list: &List) -> Option<usize> {
     list.iter().find_map(|node| raw_location(node.as_ref()))
 }
 
@@ -48,6 +48,7 @@ fn list_location(list: &List) -> Option<usize> {
 pub(crate) fn raw_location(node: Option<&Node>) -> Option<usize> {
     match node? {
         Node::ColumnRef(c) => place(c.location),
+        Node::SortBy(s) => raw_location(s.node.as_ref()),
         Node::ParamRef(p) => place(p.location),
         Node::A_Const(c) => place(c.location),
         Node::A_ArrayExpr(a) => place(a.location),

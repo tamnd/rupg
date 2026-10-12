@@ -44,6 +44,8 @@ pub struct SetOp {
     pub columns: Vec<(u32, i32)>,
     /// The operators that find the equal rows, one for each column, as `groupClauses`. `UNION ALL` has none.
     pub groups: Vec<SortGroup>,
+    /// For the `UNION` of a recursive query of `WITH`, as `RecursiveUnion`, the number of the work table that the reference of the recursive term reads. The right side runs again with the rows of the last step in the work table until it gives no new rows.
+    pub work: Option<usize>,
 }
 
 impl SetTree {
@@ -56,7 +58,7 @@ impl SetTree {
     }
 
     /// Calls `f` for the index of each `SELECT` of the part.
-    fn each_leaf(&self, f: &mut impl FnMut(usize)) {
+    pub fn each_leaf(&self, f: &mut impl FnMut(usize)) {
         match self {
             SetTree::Leaf(index) => f(*index),
             SetTree::Op(op) => {
@@ -96,10 +98,7 @@ fn best(exprs: [&Expr; 2], ty: u32) -> Option<usize> {
 
 impl Analyzer<'_> {
     /// `transformSetOperationStmt`: the query tree of a set operation.
-    pub(crate) fn set_operation(&mut self, s: &SelectStmt) -> Result<Query> {
-        if s.withClause.is_some() {
-            return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "WITH is not supported yet"));
-        }
+    pub(crate) fn set_operation(&mut self, s: &SelectStmt, parent: Option<usize>) -> Result<Query> {
         let mut leftmost = s;
         while leftmost.op != SetOperation::SETOP_NONE
             && let Some(left) = leftmost.larg.as_deref()
@@ -112,7 +111,7 @@ impl Analyzer<'_> {
                 "SELECT INTO is not supported yet",
             ));
         }
-        let (tree, _) = self.set_tree(s, true, std::ptr::from_ref(leftmost))?;
+        let (tree, _) = self.set_tree(s, true, std::ptr::from_ref(leftmost), parent)?;
         let SetTree::Op(op) = tree else {
             return Err(Error::internal("a set operation with no operation"));
         };
@@ -174,6 +173,8 @@ impl Analyzer<'_> {
             notices: Vec::new(),
             set_op: Some(*op),
             windows: Vec::new(),
+            ctes: Vec::new(),
+            recursive: false,
         })
     }
 
@@ -183,6 +184,7 @@ impl Analyzer<'_> {
         s: &SelectStmt,
         top: bool,
         leftmost: *const SelectStmt,
+        parent: Option<usize>,
     ) -> Result<(SetTree, Vec<Expr>)> {
         if let Some(into) = &s.intoClause
             && !std::ptr::eq(s, leftmost)
@@ -231,8 +233,16 @@ impl Analyzer<'_> {
         let (Some(larg), Some(rarg)) = (s.larg.as_deref(), s.rarg.as_deref()) else {
             return Err(Error::internal("a set operation with no arguments"));
         };
-        let (left, lexprs) = self.set_tree(larg, false, leftmost)?;
-        let (right, rexprs) = self.set_tree(rarg, false, leftmost)?;
+        let (left, lexprs) = self.set_tree(larg, false, leftmost, parent)?;
+        // `determineRecursiveColTypes`: the recursive term reads the columns that the non-recursive term gives.
+        let recursive = self.recursive_parent(parent).is_some();
+        if top
+            && recursive
+            && let Some(slot) = parent
+        {
+            self.recursive_columns(slot, left.leftmost(), &lexprs)?;
+        }
+        let (right, rexprs) = self.set_tree(rarg, false, leftmost, parent)?;
         if lexprs.len() != rexprs.len() {
             return Err(Error::new(
                 SqlState::SYNTAX_ERROR,
@@ -252,12 +262,18 @@ impl Analyzer<'_> {
             let typmod =
                 if l.ty == ty && r.ty == ty && l.typmod == r.typmod { l.typmod } else { -1 };
             if kind != SetKind::Union || !s.all {
-                groups.push(set_group(i, ty, at)?);
+                let mut group = set_group(i, ty, at)?;
+                // A recursive `UNION` must hash the rows, and a record can hash when each of its fields can, which the executor finds out.
+                if recursive && matches!(ty, oid::RECORD | oid::RECORD_ARRAY) {
+                    group.hashable = true;
+                }
+                groups.push(group);
             }
             columns.push((ty, typmod));
             exprs.push(Expr { kind: ExprKind::CaseTest, ty, typmod, location: at });
         }
-        let op = SetOp { kind, all: s.all, left, right, columns, groups };
+        let work = if top { self.work_table(parent) } else { None };
+        let op = SetOp { kind, all: s.all, left, right, columns, groups, work };
         Ok((SetTree::Op(Box::new(op)), exprs))
     }
 

@@ -2,6 +2,7 @@
 
 use rupg_pgcatalog::builtin::{self, TypeRow};
 use rupg_types::oid;
+use rupg_types::typmod::VARHDRSZ;
 
 /// `typcategory` of the string types.
 pub const STRING: u8 = b'S';
@@ -94,6 +95,23 @@ pub fn is_polymorphic(ty: u32) -> bool {
 /// `format_type_be`: the name of a type in an error message.
 pub fn name(ty: u32) -> String {
     rupg_types::format_type(ty).into_owned()
+}
+
+/// `format_type_with_typemod` for the types whose typmod the analyzer can show: the character types and `numeric`. Another type shows its name without the typmod.
+pub(crate) fn with_typmod(ty: u32, typmod: i32) -> String {
+    let name = name(ty);
+    if typmod < VARHDRSZ {
+        return name;
+    }
+    match ty {
+        oid::VARCHAR | oid::BPCHAR => format!("{name}({})", typmod - VARHDRSZ),
+        oid::NUMERIC => {
+            let bits = typmod - VARHDRSZ;
+            let scale = ((bits & 0x7ff) ^ 1024) - 1024;
+            format!("numeric({},{scale})", (bits >> 16) & 0xffff)
+        }
+        _ => name,
+    }
 }
 
 #[cfg(test)]

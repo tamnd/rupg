@@ -1,0 +1,242 @@
+> WITH a AS (SELECT 1 AS x) SELECT * FROM a
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH a(x, y) AS (SELECT 1, 2) SELECT y, x FROM a
+fields y:23:4:-1,x:23:4:-1
+row 2,1
+SELECT 1
+> WITH a(x) AS (SELECT 1, 2) SELECT * FROM a
+fields x:23:4:-1,?column?:23:4:-1
+row 1,2
+SELECT 1
+> WITH a(x, y, z) AS (SELECT 1, 2) SELECT * FROM a
+ERROR 42P10 WITH query "a" has 2 columns available but 3 columns specified at 6
+> WITH a AS (SELECT 1), a AS (SELECT 2) SELECT * FROM a
+ERROR 42712 WITH query name "a" specified more than once at 23
+> WITH a AS (SELECT 1 AS x), b AS (SELECT x + 1 AS y FROM a) SELECT * FROM a, b
+fields x:23:4:-1,y:23:4:-1
+row 1,2
+SELECT 1
+> WITH b AS (SELECT * FROM a), a AS (SELECT 1) SELECT * FROM b
+ERROR 42P01 relation "a" does not exist at 26
+> WITH a AS (SELECT 1 AS x) SELECT (SELECT x FROM a), EXISTS (SELECT 1 FROM a WHERE x = 1), (SELECT (SELECT x + 1 FROM a))
+fields x:23:4:-1,exists:16:1:-1,?column?:23:4:-1
+row 1,t,2
+SELECT 1
+> WITH a AS (SELECT 1 AS x) SELECT * FROM a UNION ALL SELECT x + 1 FROM a ORDER BY 1
+fields x:23:4:-1
+row 1
+row 2
+SELECT 2
+> WITH a AS (SELECT relname FROM pg_class WHERE relname = 'pg_type') SELECT t.n, a.relname FROM a AS t(n), a
+fields n@pg_class.2:19:64:-1,relname@pg_class.2:19:64:-1
+row pg_type,pg_type
+SELECT 1
+> SELECT * FROM (WITH a AS (SELECT 2 AS x) SELECT * FROM a) s
+fields x:23:4:-1
+row 2
+SELECT 1
+> WITH pg_class AS (SELECT 1 AS x) SELECT * FROM pg_class
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH pg_class AS (SELECT 1 AS x) SELECT count(*) > 100 FROM pg_catalog.pg_class
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> WITH a AS (SELECT 1 AS x) SELECT * FROM public.a
+ERROR 42P01 relation "public.a" does not exist at 41
+> WITH a AS MATERIALIZED (SELECT 1 AS x), b AS NOT MATERIALIZED (SELECT 2 AS y) SELECT * FROM a, b
+fields x:23:4:-1,y:23:4:-1
+row 1,2
+SELECT 1
+> WITH a AS (SELECT 1 + 1, 'x'::text) SELECT * FROM a
+fields ?column?:23:4:-1,text:25:-1:-1
+row 2,x
+SELECT 1
+> WITH "A" AS (SELECT 1 AS x) SELECT * FROM "A"
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH "A" AS (SELECT 1 AS x) SELECT * FROM a
+ERROR 42P01 relation "a" does not exist at 43
+> WITH a AS (SELECT 1 / 0) SELECT 1
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> WITH a AS (SELECT 1 / 0 AS x) SELECT x FROM a
+ERROR 22012 division by zero
+> (WITH a AS (SELECT 1 AS x) SELECT x FROM a) UNION SELECT 2 ORDER BY 1
+fields x:23:4:-1
+row 1
+row 2
+SELECT 2
+> WITH a AS (SELECT 5 AS x) VALUES ((SELECT x FROM a))
+fields column1:23:4:-1
+row 5
+SELECT 1
+> WITH a AS (SELECT 1 AS x) SELECT x FROM a WHERE x IN (WITH b AS (SELECT x FROM a) SELECT * FROM b)
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH a AS (SELECT 1 AS x) SELECT * FROM a JOIN a AS b USING (x)
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH a AS (SELECT oid, relname FROM pg_class WHERE relnamespace = 'pg_catalog'::regnamespace AND relkind = 'r') SELECT count(*), min(relname), max(relname) FROM a
+fields count:20:8:-1,min:25:-1:-1,max:25:-1:-1
+row 64,pg_aggregate,pg_user_mapping
+SELECT 1
+> SELECT relname, (WITH c AS (SELECT count(*) AS n FROM pg_attribute WHERE attrelid = pg_class.oid AND attnum > 0) SELECT n FROM c) FROM pg_class WHERE relname IN ('pg_am', 'pg_index') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,n:20:8:-1
+row pg_am,4
+row pg_index,21
+SELECT 2
+> WITH RECURSIVE t(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM t WHERE n < 5) SELECT * FROM t
+fields n:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+SELECT 5
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT n % 3 + 1 FROM t) SELECT * FROM t ORDER BY 1
+fields n:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n * 2 FROM t WHERE n < 100) SELECT n FROM t
+fields n:23:4:-1
+row 1
+row 2
+row 4
+row 8
+row 16
+row 32
+row 64
+row 128
+SELECT 8
+> WITH RECURSIVE t AS (SELECT 1 AS n, 'a'::text AS s UNION ALL SELECT n + 1, s || 'b' FROM t WHERE n < 4) SELECT * FROM t
+fields n:23:4:-1,s:25:-1:-1
+row 1,a
+row 2,ab
+row 3,abb
+row 4,abbb
+SELECT 4
+> WITH RECURSIVE r(typ, depth) AS (SELECT 'int4[]'::regtype::oid, 0 UNION ALL SELECT t.typelem, r.depth + 1 FROM pg_type t JOIN r ON t.oid = r.typ WHERE t.typelem <> 0) SELECT typ::regtype, depth FROM r
+fields typ:2206:4:-1,depth:23:4:-1
+row integer[],0
+row integer,1
+SELECT 2
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < (SELECT count(*) FROM pg_am WHERE amtype = 'i')) SELECT max(n) FROM t
+fields max:23:4:-1
+row 6
+SELECT 1
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3), u AS (SELECT n * 10 AS m FROM t) SELECT * FROM t, u ORDER BY 1, 2
+fields n:23:4:-1,m:23:4:-1
+row 1,10
+row 1,20
+row 1,30
+row 2,10
+row 2,20
+row 2,30
+row 3,10
+row 3,20
+row 3,30
+SELECT 9
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT (SELECT sum(n) FROM t), (SELECT count(*) FROM t AS a, t AS b)
+fields sum:20:8:-1,count:20:8:-1
+row 6,9
+SELECT 1
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE EXISTS (SELECT 1 FROM pg_am WHERE t.n < 3)) SELECT * FROM t
+fields n:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> WITH RECURSIVE a AS (SELECT 1 AS x) SELECT * FROM a
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT 2 UNION ALL SELECT n + 2 FROM t WHERE n < 5) SELECT * FROM t
+fields n:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+row 6
+SELECT 6
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL (SELECT n + 1 FROM t WHERE n < 3)) SELECT * FROM t
+fields n:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> WITH RECURSIVE w AS ( SELECT d1.objid, d2.refobjid, c2.relkind AS refrelkind FROM pg_depend d1 JOIN pg_class c1 ON c1.oid = d1.objid AND c1.relkind = 'm' JOIN pg_rewrite r1 ON r1.ev_class = d1.objid JOIN pg_depend d2 ON d2.classid = 'pg_rewrite'::regclass AND d2.objid = r1.oid AND d2.refobjid <> d1.objid JOIN pg_class c2 ON c2.oid = d2.refobjid AND c2.relkind IN ('m','v') WHERE d1.classid = 'pg_class'::regclass UNION SELECT w.objid, d3.refobjid, c3.relkind FROM w JOIN pg_rewrite r3 ON r3.ev_class = w.refobjid JOIN pg_depend d3 ON d3.classid = 'pg_rewrite'::regclass AND d3.objid = r3.oid AND d3.refobjid <> w.refobjid JOIN pg_class c3 ON c3.oid = d3.refobjid AND c3.relkind IN ('m','v') ) SELECT 'pg_class'::regclass::oid AS classid, objid, refobjid FROM w WHERE refrelkind = 'm'
+fields classid:26:4:-1,objid:26:4:-1,refobjid:26:4:-1
+SELECT 0
+> WITH RECURSIVE t(n) AS (SELECT n FROM t) SELECT * FROM t
+ERROR 42P19 recursive query "t" does not have the form non-recursive-term UNION [ALL] recursive-term at 16
+> WITH RECURSIVE t(n) AS (SELECT n FROM t UNION SELECT 1) SELECT * FROM t
+ERROR 42P19 recursive reference to query "t" must not appear within its non-recursive term at 39
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT t.n + 1 FROM t, t AS u) SELECT * FROM t
+ERROR 42P19 recursive reference to query "t" must not appear more than once at 63
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT (SELECT n FROM t)) SELECT * FROM t
+ERROR 42P19 recursive reference to query "t" must not appear within a subquery at 62
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT n FROM (SELECT n FROM t) s) SELECT * FROM t
+fields n:23:4:-1
+row 1
+SELECT 1
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT count(*) FROM t) SELECT * FROM t
+ERROR 42P19 aggregate functions are not allowed in a recursive query's recursive term at 47
+> WITH RECURSIVE t(n) AS (SELECT 1::int UNION SELECT n::bigint FROM t) SELECT * FROM t
+ERROR 42804 recursive query "t" column 1 has type integer in non-recursive term but type bigint overall at 32
+> WITH RECURSIVE t(n) AS (SELECT 'a'::varchar(3) UNION ALL SELECT (n || 'b')::varchar(3) FROM t WHERE length(n) < 3) SELECT * FROM t
+fields n:1043:-1:7
+row a
+row ab
+row abb
+SELECT 3
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT n + 1 FROM t WHERE n < 3 ORDER BY 1) SELECT * FROM t
+ERROR 0A000 ORDER BY in a recursive query is not implemented at 81
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT n + 1 FROM t WHERE n < 3 LIMIT 3) SELECT * FROM t
+ERROR 0A000 LIMIT in a recursive query is not implemented at 78
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION SELECT n + 1 FROM t WHERE n < 3 OFFSET 1) SELECT * FROM t
+ERROR 0A000 OFFSET in a recursive query is not implemented at 79
+> WITH RECURSIVE t(n) AS (SELECT 1 INTERSECT SELECT n + 1 FROM t) SELECT * FROM t
+ERROR 42P19 recursive query "t" does not have the form non-recursive-term UNION [ALL] recursive-term at 16
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT t.n + 1 FROM pg_am LEFT JOIN t ON true WHERE t.n < 3) SELECT * FROM t
+ERROR 42P19 recursive reference to query "t" must not appear within an outer join at 80
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT t.n + 1 FROM t LEFT JOIN pg_am ON false WHERE t.n < 3) SELECT * FROM t
+fields n:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3 UNION ALL SELECT n FROM t WHERE n > 100) SELECT * FROM t
+ERROR 42P19 recursive reference to query "t" must not appear within its non-recursive term at 62
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n IN (SELECT n FROM t)) SELECT * FROM t
+ERROR 42P19 recursive reference to query "t" must not appear within a subquery at 90
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT (WITH x AS (SELECT n + 1) SELECT * FROM x) FROM t WHERE n < 3) SELECT * FROM t
+fields n:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> WITH a AS (SELECT * FROM a) SELECT * FROM a
+ERROR 42P01 relation "a" does not exist at 26
+> WITH RECURSIVE a AS (SELECT * FROM b), b AS (SELECT * FROM a) SELECT 1
+ERROR 0A000 mutual recursion between WITH items is not implemented at 16
+> WITH RECURSIVE b AS (SELECT * FROM a), a AS (SELECT 1 AS x) SELECT * FROM b
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH RECURSIVE t(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM t WHERE n < 3) SELECT * FROM t AS t(a, b)
+ERROR 42P10 table "t" has 1 columns available but 2 columns specified
+> WITH a AS (SELECT 1 AS x) SELECT a.x, a FROM a
+fields x:23:4:-1,a:2249:-1:-1
+row 1,(1)
+SELECT 1

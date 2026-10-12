@@ -411,20 +411,22 @@ impl Expr {
 
     /// `IncrementVarSublevelsUp`: the columns of the outer queries in the expression, also in its subqueries, are `levels` more levels up. A column of a query in the expression does not change.
     pub fn raise(&mut self, levels: usize) {
-        fn raise_at(expr: &mut Expr, levels: usize, depth: usize) {
-            if let ExprKind::Var(var) = &mut expr.kind
-                && var.levels_up >= depth
-            {
-                var.levels_up += levels;
-            }
-            for child in expr.children_mut() {
-                raise_at(child, levels, depth);
-            }
-            if let ExprKind::SubLink(sub) = &mut expr.kind {
-                sub.query.each_expr_mut(depth + 1, &mut |e, depth| raise_at(e, levels, depth));
-            }
+        self.raise_from(levels, 0);
+    }
+
+    /// `IncrementVarSublevelsUp` with `min_sublevels_up`: as [`Expr::raise`], but only the columns that are `depth` or more levels up change.
+    pub(crate) fn raise_from(&mut self, levels: usize, depth: usize) {
+        if let ExprKind::Var(var) = &mut self.kind
+            && var.levels_up >= depth
+        {
+            var.levels_up += levels;
         }
-        raise_at(self, levels, 0);
+        for child in self.children_mut() {
+            child.raise_from(levels, depth);
+        }
+        if let ExprKind::SubLink(sub) = &mut self.kind {
+            sub.query.each_expr_mut(depth + 1, &mut |e, depth| e.raise_from(levels, depth));
+        }
     }
 
     /// `contain_aggs_of_level` and `locate_agg_of_level`: the first aggregate call in the expression.

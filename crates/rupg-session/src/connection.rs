@@ -356,6 +356,7 @@ impl Connection {
         )
         .with_activity(&self.activity, &self.store)
         .with_statements(&self.statements)
+        .with_cancel(&self.cancel)
     }
 
     /// The catalog that a statement sees: the copy of the transaction when it changed the catalog, or the catalog of the last commit.
@@ -1719,6 +1720,12 @@ mod tests {
     #[test]
     fn sql_prepare() {
         big_stack(|| script(include_str!("connection/sql_prepare.test")));
+    }
+
+    /// `WITH` and `WITH RECURSIVE`: the names of the columns, a query of `WITH` that a subquery and a set operation read, the order of the queries, the recursive queries with `UNION` and `UNION ALL`, the checks of the form of a recursive query and their errors, and the types of the recursive term. `connection/with_queries.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn with_queries() {
+        big_stack(|| script(include_str!("connection/with_queries.test")));
     }
 
     /// `pg_get_function_arguments`, `pg_get_function_identity_arguments`, `pg_get_function_result` and `pg_get_function_arg_default`: a hash of the text of all the built-in functions of `pg_proc.dat`, the defaults of the arguments, the ordered-set aggregates, the output arguments, and an OID that is not a function. `connection/function_arguments.test` is the output of PostgreSQL 19 for the same script in a new database.

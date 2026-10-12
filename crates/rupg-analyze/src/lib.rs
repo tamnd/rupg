@@ -10,6 +10,7 @@ mod agg;
 mod coerce;
 mod collate;
 mod colname;
+mod cte;
 mod ddl;
 mod expr;
 mod from;
@@ -28,6 +29,7 @@ mod typcache;
 mod typename;
 pub mod types;
 mod values;
+mod walk;
 mod window;
 
 use rupg_common::{Error, Result, SqlState};
@@ -38,6 +40,7 @@ use crate::coerce::AtOpt;
 
 pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
+pub use cte::{Cte, CteRef};
 pub use ddl::{Body, Defined, Message, define, function_body, is_definition};
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink,
@@ -116,6 +119,10 @@ pub(crate) struct Analyzer<'a> {
     domain_value: Option<(u32, i32)>,
     /// The number of the calls of functions that give a set that the analysis of the query has made, and the place of the last one. It takes the place of `p_last_srf`: `CASE` and `COALESCE` compare the number before and after their arguments.
     srfs: (usize, Option<usize>),
+    /// `p_parent_cte`: the slot of the query of `WITH` in the scope of the query outside, while the analyzer starts the query of that query of `WITH`. The next `SELECT` takes it.
+    parent_cte: Option<usize>,
+    /// The number of work tables of recursive queries that the analysis has made, which gives each its own number.
+    works: usize,
 }
 
 impl<'a> Analyzer<'a> {
@@ -141,6 +148,8 @@ impl<'a> Analyzer<'a> {
             views: Vec::new(),
             domain_value: None,
             srfs: (0, None),
+            parent_cte: None,
+            works: 0,
         }
     }
 

@@ -15,9 +15,6 @@ use crate::select::Query;
 use crate::typename::{names, place, type_name_text};
 use crate::types;
 
-/// The 4 bytes of the length word of a `varlena` value, which a typmod of the character types and `numeric` includes.
-const VARHDRSZ: i32 = 4;
-
 impl Definer<'_, '_> {
     /// `DefineView` and `DefineVirtualRelation`. `text` is the text of the statement, which the catalog keeps.
     pub(super) fn create_view(&mut self, stmt: &ViewStmt, text: &str) -> Result<()> {
@@ -209,8 +206,8 @@ fn check_view_columns(new: &[Column], old: &[Column]) -> Result<()> {
                 format!(
                     "cannot change data type of view column \"{}\" from {} to {}",
                     old.name,
-                    type_with_typmod(old.ty, old.typmod),
-                    type_with_typmod(new.ty, new.typmod)
+                    types::with_typmod(old.ty, old.typmod),
+                    types::with_typmod(new.ty, new.typmod)
                 ),
             ));
         }
@@ -229,23 +226,6 @@ fn check_view_columns(new: &[Column], old: &[Column]) -> Result<()> {
         }
     }
     Ok(())
-}
-
-/// `format_type_with_typemod` for the types whose typmod the analyzer can show: the character types and `numeric`. Another type shows its name without the typmod.
-fn type_with_typmod(ty: u32, typmod: i32) -> String {
-    let name = types::name(ty);
-    if typmod < VARHDRSZ {
-        return name;
-    }
-    match ty {
-        oid::VARCHAR | oid::BPCHAR => format!("{name}({})", typmod - VARHDRSZ),
-        oid::NUMERIC => {
-            let bits = typmod - VARHDRSZ;
-            let scale = ((bits & 0x7ff) ^ 1024) - 1024;
-            format!("numeric({},{scale})", (bits >> 16) & 0xffff)
-        }
-        _ => name,
-    }
 }
 
 /// The objects that a query in the body of a function refers to, as for a view, each one once.
