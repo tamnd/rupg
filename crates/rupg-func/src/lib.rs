@@ -36,6 +36,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Value};
 
+pub use acl::lock_table_allowed;
 pub use activity::{Backend, BackendState, Client, Ssl};
 pub use cast::local_time;
 pub use compare::{compare, equal};

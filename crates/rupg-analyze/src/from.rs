@@ -843,7 +843,7 @@ impl Analyzer<'_> {
     }
 
     /// `RangeVarGetRelid`: the OID of the relation that a name gives, or `None`. The relation can be of any kind.
-    fn lookup_relation(&self, rv: &RangeVar) -> Result<Option<u32>> {
+    pub(crate) fn lookup_relation(&self, rv: &RangeVar) -> Result<Option<u32>> {
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default();
         if let Some(database) = &rv.catalogname

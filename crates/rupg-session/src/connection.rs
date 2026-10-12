@@ -15,7 +15,7 @@ use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
 use rupg_platform::os::OsClock;
 use rupg_sql::Severity;
-use rupg_sql::nodes::Node;
+use rupg_sql::nodes::{LockStmt, Node};
 use rupg_wire::{
     CancelKey, CommandTag, Field, Frontend, Level, OutBuf, Portals, ProtocolError, Session,
     Statements,
@@ -403,6 +403,16 @@ impl Connection {
         }
     }
 
+    /// `LOCK TABLE`: `RequireTransactionBlock`, then the checks of [`rupg_analyze::lock_table`] with the privileges of `LockTableAclCheck`. The statement takes no lock.
+    fn lock(&self, stmt: &LockStmt) -> Result<Done, Error> {
+        utility::require_block(&self.transaction, "LOCK TABLE")?;
+        let reader = self.reader();
+        let mut allowed =
+            |relid, role| rupg_func::lock_table_allowed(relid, role, stmt.mode, &reader);
+        rupg_analyze::lock_table(stmt, &reader, self.role, &mut allowed)?;
+        Ok(Done::Tag(CommandTag::LockTable))
+    }
+
     /// The flag that a `CancelRequest` sets. The server keeps a clone of it with the cancel key of the session.
     pub fn cancel_flag(&self) -> Arc<AtomicBool> {
         Arc::clone(&self.cancel)
@@ -645,6 +655,9 @@ impl Connection {
             } else if rupg_analyze::is_definition(node) {
                 drop(self.portals.close(b""));
                 self.define(node, statement, &mut notices)
+            } else if let Node::LockStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.lock(stmt)
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
@@ -1728,7 +1741,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/with_queries.test")));
     }
 
-    /// `pg_get_viewdef` of views with `WITH` and `WITH RECURSIVE`: the names of the columns of a query of `WITH`, `MATERIALIZED` and `NOT MATERIALIZED`, an alias of a reference, a quoted name, a `WITH` in a subquery and in a query of `WITH`, a `VALUES` list, and the rows of the views. `connection/with_viewdef.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `pg_get_viewdef` of views with `WITH` and `WITH RECURSIVE`: the names of the columns of a query of `WITH`, `MATERIALIZED` and `NOT MATERIALIZED`, an alias of a reference, a quoted name, a `WITH` in a subquery and in a query of `WITH`, a `VALUES` list, the rows of the views, and the rows of `pg_depend` for the relations that the queries of `WITH` read, also in a query of `WITH` that no part of the view reads. `connection/with_viewdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn with_viewdef() {
         big_stack(|| script(include_str!("connection/with_viewdef.test")));
@@ -1978,6 +1991,34 @@ mod tests {
     #[test]
     fn sequence_data() {
         big_stack(|| script(include_str!("connection/sequence_data.test")));
+    }
+
+    /// `LOCK TABLE` in the modes up to `ROW EXCLUSIVE`, which `pg_dump` uses: the error outside a transaction block, a table, a view, a view with `WITH`, a catalog and a built-in view, `ONLY`, `*` and `NOWAIT`, a name that does not exist, a schema that does not exist, an index, a sequence and an index of the catalog, a `Query` with more than one statement, and the extended protocol. `connection/lock_table.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn lock_table() {
+        big_stack(|| script(include_str!("connection/lock_table.test")));
+    }
+
+    /// A lock mode stronger than `ROW EXCLUSIVE` gives `0A000`, because rupg takes no lock on a relation. The check comes after the check of the transaction block and before the names.
+    #[test]
+    fn lock_table_strong_modes() {
+        big_stack(|| {
+            let (mut c, _) = connect();
+            assert_eq!(
+                script_lines(&mut c, "> LOCK pg_class"),
+                ["ERROR 25P01 LOCK TABLE can only be used in transaction blocks"]
+            );
+            assert_eq!(script_lines(&mut c, "> BEGIN"), ["BEGIN"]);
+            for mode in ["SHARE UPDATE EXCLUSIVE", "SHARE", "SHARE ROW EXCLUSIVE", "EXCLUSIVE"] {
+                let sql = format!("> LOCK pg_class IN {mode} MODE");
+                let want = format!("ERROR 0A000 LOCK TABLE in {mode} mode is not supported yet");
+                assert_eq!(script_lines(&mut c, &sql), [want]);
+                assert_eq!(script_lines(&mut c, "> ROLLBACK"), ["ROLLBACK"]);
+                assert_eq!(script_lines(&mut c, "> BEGIN"), ["BEGIN"]);
+            }
+            let want = "ERROR 0A000 LOCK TABLE in ACCESS EXCLUSIVE mode is not supported yet";
+            assert_eq!(script_lines(&mut c, "> LOCK missing"), [want]);
+        });
     }
 
     /// Correlated subqueries that find their rows through an `=` of a column and a column of the outer query: in `EXISTS` and `NOT EXISTS`, in the target list, in `LATERAL`, in a join in the subquery, in a subquery in a subquery, with a null outer value, and with an outer value of another type of the same form. The first statement is the query of `pg_dump` that finds the functions to dump. `connection/correlated_lookups.test` is the output of PostgreSQL 19 for the same script in a new database.

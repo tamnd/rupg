@@ -195,3 +195,31 @@ fields column_name@information_schema.columns.4:19:64:-1,data_type@information_s
 row i,integer
 row j,text
 SELECT 2
+> CREATE TABLE vw.u (c int, d text)
+CREATE TABLE
+> CREATE VIEW vw.v12 AS WITH x AS (SELECT c FROM vw.u), y AS (SELECT d FROM vw.u WHERE c > 0) SELECT 1 AS one
+CREATE VIEW
+> SELECT pg_get_viewdef('vw.v12'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  WITH x AS (
+         SELECT u.c
+           FROM vw.u
+        ), y AS (
+         SELECT u.d
+           FROM vw.u
+          WHERE u.c > 0
+        )
+ SELECT 1 AS one;
+SELECT 1
+> SELECT r.ev_class::regclass AS view, d.refobjid::regclass AS referenced, d.refobjsubid, d.deptype FROM pg_depend d JOIN pg_rewrite r ON d.objid = r.oid WHERE d.classid = 'pg_rewrite'::regclass AND r.ev_class IN ('vw.v1'::regclass, 'vw.v2'::regclass, 'vw.v3'::regclass, 'vw.v12'::regclass) ORDER BY r.ev_class::regclass::text, d.refobjid::regclass::text, d.refobjsubid
+fields view:2205:4:-1,referenced:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row vw.v1,vw.t,1,n
+row vw.v1,vw.v1,0,i
+row vw.v12,vw.u,1,n
+row vw.v12,vw.u,2,n
+row vw.v12,vw.v12,0,i
+row vw.v2,vw.t,1,n
+row vw.v2,vw.t,2,n
+row vw.v2,vw.v2,0,i
+row vw.v3,vw.v3,0,i
+SELECT 9

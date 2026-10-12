@@ -70,6 +70,7 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         | Node::VariableShowStmt(_)
         | Node::TransactionStmt(_)
         | Node::DiscardStmt(_)
+        | Node::LockStmt(_)
         | Node::PrepareStmt(_)
         | Node::DeallocateStmt(_) => Ok(()),
         _ => Err(not_supported(text)),
@@ -132,8 +133,8 @@ fn warn_no_block(cx: &mut Context<'_>, statement: &str) {
 }
 
 /// `RequireTransactionBlock`.
-fn require_block(cx: &Context<'_>, statement: &str) -> Result<(), Error> {
-    if cx.transaction.in_block() {
+pub(crate) fn require_block(transaction: &Transaction, statement: &str) -> Result<(), Error> {
+    if transaction.in_block() {
         return Ok(());
     }
     Err(Error::new(
@@ -364,18 +365,18 @@ fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTa
             Ok(CommandTag::Rollback)
         }
         TransactionStmtKind::TRANS_STMT_SAVEPOINT => {
-            require_block(cx, "SAVEPOINT")?;
+            require_block(cx.transaction, "SAVEPOINT")?;
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "SAVEPOINT is not supported yet"))
         }
         TransactionStmtKind::TRANS_STMT_RELEASE => {
-            require_block(cx, "RELEASE SAVEPOINT")?;
+            require_block(cx.transaction, "RELEASE SAVEPOINT")?;
             Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "RELEASE SAVEPOINT is not supported yet",
             ))
         }
         TransactionStmtKind::TRANS_STMT_ROLLBACK_TO => {
-            require_block(cx, "ROLLBACK TO SAVEPOINT")?;
+            require_block(cx.transaction, "ROLLBACK TO SAVEPOINT")?;
             Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "ROLLBACK TO SAVEPOINT is not supported yet",

@@ -1,15 +1,17 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN` and `CREATE FUNCTION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain` and `CreateFunction` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN` and `CREATE FUNCTION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain` and `CreateFunction` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod domain;
 mod fkey;
 mod function;
 mod index;
+mod lock;
 mod table;
 #[cfg(test)]
 mod tests;
 mod view;
 
 pub use function::{Body, function_body};
+pub use lock::{Allowed, lock_table};
 pub(crate) use table::check_attribute_type;
 
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
