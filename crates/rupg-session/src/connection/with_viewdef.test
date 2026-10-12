@@ -1,0 +1,197 @@
+> CREATE SCHEMA vw
+CREATE SCHEMA
+> CREATE TABLE vw.t (a int, b text)
+CREATE TABLE
+> CREATE VIEW vw.v1 AS WITH x AS (SELECT a FROM vw.t) SELECT * FROM x
+CREATE VIEW
+> CREATE VIEW vw.v2 AS WITH x(p, q) AS (SELECT a, b FROM vw.t WHERE a > 1), y AS MATERIALIZED (SELECT p FROM x) SELECT x.q, y.p FROM x JOIN y ON x.p = y.p
+CREATE VIEW
+> CREATE VIEW vw.v3 AS WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT n FROM r
+CREATE VIEW
+> CREATE VIEW vw.v4 AS WITH x AS NOT MATERIALIZED (SELECT 1 AS k) SELECT z.k, x.k AS k2 FROM x AS z, x
+CREATE VIEW
+> CREATE VIEW vw.v5 AS SELECT a, (WITH c AS (SELECT count(*) AS n FROM vw.t s WHERE s.a = t.a) SELECT n FROM c) AS n FROM vw.t
+CREATE VIEW
+> CREATE VIEW vw.v6 AS SELECT * FROM (WITH x AS (SELECT 2 AS m) SELECT m FROM x) s
+CREATE VIEW
+> CREATE VIEW vw.v7 AS WITH RECURSIVE r AS (SELECT 1 AS n, 'a'::text AS s UNION SELECT n + 1, s || 'b' FROM r WHERE n < 3) SELECT * FROM r r2(i, j) ORDER BY i
+CREATE VIEW
+> CREATE VIEW vw.v8 AS WITH "Q" AS (SELECT 1 AS "X") SELECT "X" FROM "Q"
+CREATE VIEW
+> CREATE VIEW vw.v9 AS WITH x AS (SELECT a FROM vw.t) SELECT a FROM x UNION ALL SELECT a FROM x
+CREATE VIEW
+> CREATE VIEW vw.v10 AS WITH x AS (SELECT 1 AS a), y AS (WITH x AS (SELECT 2 AS a) SELECT a FROM x) SELECT x.a, y.a AS b FROM x, y
+CREATE VIEW
+> CREATE VIEW vw.v11 AS WITH x AS (VALUES (1, 'one'), (2, 'two')) SELECT * FROM x
+CREATE VIEW
+> SELECT pg_get_viewdef('vw.v1'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  WITH x AS (
+         SELECT t.a
+           FROM vw.t
+        )
+ SELECT a
+   FROM x;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v2'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  WITH x(p, q) AS (
+         SELECT t.a,
+            t.b
+           FROM vw.t
+          WHERE (t.a > 1)
+        ), y AS MATERIALIZED (
+         SELECT x_1.p
+           FROM x x_1
+        )
+ SELECT x.q,
+    y.p
+   FROM (x
+     JOIN y ON ((x.p = y.p)));
+SELECT 1
+> SELECT pg_get_viewdef('vw.v2'::regclass, 40)
+fields pg_get_viewdef:25:-1:-1
+row  WITH x(p, q) AS (
+         SELECT t.a, t.b
+           FROM vw.t
+          WHERE t.a > 1
+        ), y AS MATERIALIZED (
+         SELECT x_1.p
+           FROM x x_1
+        )
+ SELECT x.q, y.p
+   FROM x
+     JOIN y ON x.p = y.p;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v3'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  WITH RECURSIVE r(n) AS (
+         SELECT 1 AS "?column?"
+        UNION ALL
+         SELECT (r_1.n + 1)
+           FROM r r_1
+          WHERE (r_1.n < 5)
+        )
+ SELECT n
+   FROM r;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v4'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  WITH x AS NOT MATERIALIZED (
+         SELECT 1 AS k
+        )
+ SELECT z.k,
+    x.k AS k2
+   FROM x z,
+    x;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v5'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    ( WITH c AS (
+                 SELECT count(*) AS n
+                   FROM vw.t s
+                  WHERE (s.a = t.a)
+                )
+         SELECT c.n
+           FROM c) AS n
+   FROM vw.t;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v6'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT m
+   FROM ( WITH x AS (
+                 SELECT 2 AS m
+                )
+         SELECT x.m
+           FROM x) s;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v7'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  WITH RECURSIVE r AS (
+         SELECT 1 AS n,
+            'a'::text AS s
+        UNION
+         SELECT r.n + 1,
+            r.s || 'b'::text
+           FROM r
+          WHERE r.n < 3
+        )
+ SELECT i,
+    j
+   FROM r r2(i, j)
+  ORDER BY i;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v8'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  WITH "Q" AS (
+         SELECT 1 AS "X"
+        )
+ SELECT "X"
+   FROM "Q";
+SELECT 1
+> SELECT pg_get_viewdef('vw.v9'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  WITH x AS (
+         SELECT t.a
+           FROM vw.t
+        )
+ SELECT x.a
+   FROM x
+UNION ALL
+ SELECT x.a
+   FROM x;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v10'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  WITH x AS (
+         SELECT 1 AS a
+        ), y AS (
+         WITH x AS (
+                 SELECT 2 AS a
+                )
+         SELECT x_1.a
+           FROM x x_1
+        )
+ SELECT x.a,
+    y.a AS b
+   FROM x,
+    y;
+SELECT 1
+> SELECT pg_get_viewdef('vw.v11'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  WITH x AS (
+         VALUES (1,'one'::text), (2,'two'::text)
+        )
+ SELECT column1,
+    column2
+   FROM x;
+SELECT 1
+> SELECT * FROM vw.v3
+fields n@vw.v3.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+row 5
+SELECT 5
+> SELECT * FROM vw.v7
+fields i@vw.v7.1:23:4:-1,j@vw.v7.2:25:-1:-1
+row 1,a
+row 2,ab
+row 3,abb
+SELECT 3
+> SELECT * FROM vw.v10
+fields a@vw.v10.1:23:4:-1,b@vw.v10.2:23:4:-1
+row 1,2
+SELECT 1
+> SELECT * FROM vw.v11
+fields column1@vw.v11.1:23:4:-1,column2@vw.v11.2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> SELECT column_name, data_type FROM information_schema.columns WHERE table_schema = 'vw' AND table_name = 'v7' ORDER BY ordinal_position
+fields column_name@information_schema.columns.4:19:64:-1,data_type@information_schema.columns.8:1043:-1:-1
+row i,integer
+row j,text
+SELECT 2

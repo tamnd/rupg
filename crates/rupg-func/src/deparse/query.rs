@@ -149,9 +149,7 @@ impl Deparser<'_> {
 
     /// `get_select_query_def`: the query, then `ORDER BY`, `OFFSET` and `LIMIT`.
     fn select_query(&mut self, query: &Query, result: Option<&[String]>) -> Result<()> {
-        if !query.ctes.is_empty() || query.relations.iter().any(|r| r.cte.is_some()) {
-            return Err(not_yet("a deparse of a query with WITH"));
-        }
+        self.with_clause(query)?;
         let force = match &query.set_op {
             Some(op) => {
                 self.set_op(op, query, result)?;
@@ -185,6 +183,39 @@ impl Deparser<'_> {
                 }
             }
         }
+        Ok(())
+    }
+
+    /// `get_with_clause`: the queries of `WITH`, each in parentheses on its own lines.
+    fn with_clause(&mut self, query: &Query) -> Result<()> {
+        if query.ctes.is_empty() {
+            return Ok(());
+        }
+        self.indent += INDENT_STD;
+        self.buf.push(' ');
+        let mut sep = if query.recursive { "WITH RECURSIVE " } else { "WITH " };
+        for cte in &query.ctes {
+            self.buf.push_str(sep);
+            self.buf.push_str(&quote_identifier(&cte.name));
+            if !cte.aliases.is_empty() {
+                let names: Vec<String> = cte.aliases.iter().map(|n| quote_identifier(n)).collect();
+                self.buf.push_str(&format!("({})", names.join(", ")));
+            }
+            self.buf.push_str(" AS ");
+            match cte.materialized {
+                Some(true) => self.buf.push_str("MATERIALIZED "),
+                Some(false) => self.buf.push_str("NOT MATERIALIZED "),
+                None => {}
+            }
+            self.buf.push('(');
+            self.keyword("", 0, 0, 0);
+            self.query_def(&cte.query, None, true, self.indent)?;
+            self.keyword("", 0, 0, 0);
+            self.buf.push(')');
+            sep = ", ";
+        }
+        self.indent -= INDENT_STD;
+        self.keyword("", 0, 0, 0);
         Ok(())
     }
 
@@ -437,7 +468,9 @@ impl Deparser<'_> {
             self.buf.push_str("LATERAL ");
         }
         let mut coldef = false;
-        if rel.oid != 0 {
+        if let Some(cte) = &rel.cte {
+            self.buf.push_str(&quote_identifier(&cte.name));
+        } else if rel.oid != 0 {
             self.buf.push_str(&relation_name(rel.oid, self.session)?);
         } else if let Some(function) = &rel.function {
             coldef = self.function_item(function, &rel.columns)?;
@@ -454,11 +487,16 @@ impl Deparser<'_> {
         let refname = space.names.get(index).cloned().unwrap_or_default();
         let columns = space.columns.get(index).cloned().unwrap_or_default();
         let print_aliases = space.print_aliases.get(index).copied().unwrap_or(false);
-        // `get_rte_alias`: a subquery, a function and a `VALUES` list always show their alias, and a table or a view shows it when the query gives one or when the name is not the name of the relation.
+        // `get_rte_alias`: a subquery, a function and a `VALUES` list always show their alias. A table, a view and a query of `WITH` show it when the query gives one or when the name is not the name of the relation.
         let show = rel.alias.is_some()
             || print_aliases
-            || rel.oid == 0
-            || reg::class_name(rel.oid, self.session).is_none_or(|(name, _)| name != refname);
+            || match &rel.cte {
+                Some(cte) => cte.name != refname,
+                None if rel.oid == 0 => true,
+                None => {
+                    reg::class_name(rel.oid, self.session).is_none_or(|(name, _)| name != refname)
+                }
+            };
         if show {
             self.buf.push(' ');
             self.buf.push_str(&quote_identifier(&refname));
