@@ -50,6 +50,10 @@ pub struct Query {
     pub set_op: Option<crate::SetOp>,
     /// The windows of the window function calls and of the `WINDOW` clause. A [`crate::WindowFunc`] names its window by its number, from 1.
     pub windows: Vec<WindowClause>,
+    /// `cteList`: the queries of the `WITH` clause of the query.
+    pub ctes: Vec<crate::Cte>,
+    /// `hasRecursive`: the query has `WITH RECURSIVE`.
+    pub recursive: bool,
 }
 
 /// A column of the result.
@@ -157,15 +161,24 @@ impl Analyzer<'_> {
     pub(crate) fn select(&mut self, s: &SelectStmt) -> Result<Query> {
         // A `SELECT` of a set operation keeps its columns of type `unknown`, so that the operation can give them a type.
         let keep_unknowns = std::mem::take(&mut self.keep_unknowns);
-        if s.op != SetOperation::SETOP_NONE {
-            return self.set_operation(s);
+        let parent = self.parent_cte.take();
+        if let Some(with) = s.withClause.as_deref() {
+            self.transform_with(with)?;
         }
-        if !s.valuesLists.is_empty() {
-            return self.values_clause(s);
-        }
-        if s.withClause.is_some() {
-            return Err(not_yet("WITH"));
-        }
+        let mut query = if s.op != SetOperation::SETOP_NONE {
+            self.set_operation(s, parent)?
+        } else if !s.valuesLists.is_empty() {
+            self.values_clause(s)?
+        } else {
+            self.simple_select(s, keep_unknowns)?
+        };
+        query.recursive = s.withClause.as_deref().is_some_and(|w| w.recursive);
+        query.ctes = self.take_ctes()?;
+        Ok(query)
+    }
+
+    /// The query tree of a `SELECT` that is not a set operation or a `VALUES` list, with its windows.
+    fn simple_select(&mut self, s: &SelectStmt, keep_unknowns: bool) -> Result<Query> {
         if s.intoClause.is_some() {
             return Err(not_yet("SELECT INTO"));
         }
@@ -236,7 +249,12 @@ impl Analyzer<'_> {
             if let ExprKind::Var(var) = &target.expr.kind {
                 let relation = &self.level(var.levels_up).relations[var.relation];
                 target.origin = match &relation.subquery {
-                    None if relation.function.is_some() || relation.values.is_some() => None,
+                    None if relation.function.is_some()
+                        || relation.values.is_some()
+                        || relation.cte.is_some() =>
+                    {
+                        None
+                    }
                     None => Some((relation.oid, var.attnum)),
                     Some(_) if relation.oid != 0 => Some((relation.oid, var.attnum)),
                     Some(sub) => usize::try_from(var.attnum - 1)
@@ -298,6 +316,8 @@ impl Analyzer<'_> {
             notices: Vec::new(),
             set_op: None,
             windows,
+            ctes: Vec::new(),
+            recursive: false,
         })
     }
 }

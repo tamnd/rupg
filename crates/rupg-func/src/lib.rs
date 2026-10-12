@@ -99,6 +99,14 @@ pub trait Session {
     ///
     /// The errors of `SET` for the name and the value.
     fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String>;
+    /// `CHECK_FOR_INTERRUPTS`: the check for a cancel of the statement, which a long loop of the executor, such as the loop of a recursive query, does at each step. A session with no server has no cancel.
+    ///
+    /// # Errors
+    ///
+    /// `57014` when a client canceled the statement.
+    fn interrupted(&self) -> Result<()> {
+        Ok(())
+    }
     /// The rows of `pg_show_all_settings`, one for each parameter that `SHOW ALL` lists, in the 17 columns of the function.
     fn all_settings(&self) -> Vec<Vec<Value>> {
         Vec::new()

@@ -290,7 +290,7 @@ impl Analyzer<'_> {
         if let Some(having) = having {
             check.expr(having, 0)?;
         }
-        Ok(())
+        self.check_recursive_aggs(targets.iter().map(|t| &t.expr).chain(having))
     }
 }
 

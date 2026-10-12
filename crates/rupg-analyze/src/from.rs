@@ -14,6 +14,7 @@ use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::colname::figure_colname;
+use crate::cte::{CteItem, CteRef};
 use crate::expr::{CastForm, Expr, ExprKind, Var};
 use crate::typename::place;
 use crate::types;
@@ -46,6 +47,8 @@ pub struct Relation {
     pub alias: Option<Vec<String>>,
     /// True when the query writes `LATERAL` before a subquery or a function.
     pub lateral: bool,
+    /// The query of `WITH` that the relation reads.
+    pub cte: Option<CteRef>,
 }
 
 impl Relation {
@@ -66,6 +69,7 @@ impl Relation {
             name: String::new(),
             alias: None,
             lateral: false,
+            cte: None,
         }
     }
 }
@@ -171,6 +175,8 @@ pub(crate) struct Scope {
     lateral: Vec<(Item, bool)>,
     /// `p_lateral_active`: true while the analyzer reads a `LATERAL` subquery of this query, which can see the items of `lateral`.
     lateral_active: bool,
+    /// `p_ctenamespace`: the queries of the `WITH` clause of this query.
+    pub(crate) ctes: Vec<CteItem>,
 }
 
 impl Scope {
@@ -313,14 +319,33 @@ impl Analyzer<'_> {
 
     /// `addRangeTableEntry` for a table of the catalog: the entry and its namespace item.
     fn relation(&mut self, rv: &RangeVar) -> Result<Item> {
+        if let Some(item) = self.cte_reference(rv)? {
+            return Ok(item);
+        }
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default();
         let oid = self.lookup_relation(rv)?.ok_or_else(|| {
-            let message = match &rv.schemaname {
-                Some(schema) => format!("relation \"{schema}.{name}\" does not exist"),
-                None => format!("relation \"{name}\" does not exist"),
+            let error = match &rv.schemaname {
+                Some(schema) => Error::new(
+                    SqlState::UNDEFINED_TABLE,
+                    format!("relation \"{schema}.{name}\" does not exist"),
+                ),
+                None if self.future_cte(name) => Error::new(
+                    SqlState::UNDEFINED_TABLE,
+                    format!("relation \"{name}\" does not exist"),
+                )
+                .with_detail(format!(
+                    "There is a WITH item named \"{name}\", but it cannot be referenced from this part of the query."
+                ))
+                .with_hint(
+                    "Use WITH RECURSIVE, or re-order the WITH items to remove forward references.",
+                ),
+                None => Error::new(
+                    SqlState::UNDEFINED_TABLE,
+                    format!("relation \"{name}\" does not exist"),
+                ),
             };
-            Error::new(SqlState::UNDEFINED_TABLE, message).at_opt(at)
+            error.at_opt(at)
         })?;
         let columns = self.open_relation(oid, name, at)?;
         let subquery = self.view_query(oid)?.map(Box::new);
@@ -680,7 +705,7 @@ impl Analyzer<'_> {
     }
 
     /// `buildNSItemFromLists`: adds a relation to the range table with the name `refname`, and gives its namespace item. The names of the alias replace the first names of the columns.
-    fn add_relation(
+    pub(crate) fn add_relation(
         &mut self,
         relation: Relation,
         refname: String,

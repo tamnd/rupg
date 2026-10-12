@@ -287,7 +287,16 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
 
 /// Checks the operators of each operation of a set operation. As for `DISTINCT`, the planner sorts the rows or uses a hash table, and gives an error when it can do neither.
 fn check_set_op(op: &SetOp) -> Result<()> {
-    if !op.groups.iter().all(|g| g.sort != 0) && !op.groups.iter().all(|g| g.hashable) {
+    // `generate_recursion_path`: a recursive `UNION` finds the equal rows with a hash table only.
+    if op.work.is_some() {
+        if !op.groups.iter().all(|g| g.hashable) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "could not implement recursive UNION",
+            )
+            .with_detail("All column datatypes must be hashable."));
+        }
+    } else if !op.groups.iter().all(|g| g.sort != 0) && !op.groups.iter().all(|g| g.hashable) {
         let name = match op.kind {
             SetKind::Union => "UNION",
             SetKind::Intersect => "INTERSECT",
@@ -313,18 +322,87 @@ fn check_set_op(op: &SetOp) -> Result<()> {
     Ok(())
 }
 
-/// The rows of a part of a set operation. A `SELECT` gives the rows of its subquery.
-fn part_rows(part: &SetTree, tables: &scan::Tables, session: &dyn Session) -> Result<Rows> {
+/// The rows of the `SELECT` of a set operation with this index.
+type Leaf<'a> = dyn FnMut(usize) -> Result<Rows> + 'a;
+
+/// The rows of a part of a set operation. A `SELECT` gives the rows that `leaf` gives for it.
+fn part_rows(part: &SetTree, leaf: &mut Leaf<'_>, session: &dyn Session) -> Result<Rows> {
     match part {
-        SetTree::Leaf(index) => Ok((*tables.rows[*index]).clone()),
-        SetTree::Op(op) => set_rows(op, tables, session),
+        SetTree::Leaf(index) => leaf(*index),
+        SetTree::Op(op) => set_rows(op, leaf, session),
     }
 }
 
+/// The rows of `rows` that are not equal to a row of `seen` or to a row before them, as the hash table of `RecursiveUnion` keeps them out. The rows that stay go into `seen` too.
+fn new_rows(keys: &sort::Keys<'_>, seen: &mut Rows, rows: Rows) -> Result<Rows> {
+    let mut fresh = Vec::new();
+    for row in rows {
+        let mut found = false;
+        for old in seen.iter() {
+            if keys.equal(old, &row)? {
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            seen.push(row.clone());
+            fresh.push(row);
+        }
+    }
+    Ok(fresh)
+}
+
+/// The rows of a run of `RecursiveUnion` for the recursive query of `WITH` whose work table is `work`. The left part gives the first rows, and they go into the work table. Then the right part runs again with the rows of the work table, and its new rows take their place, until it gives no new rows. `UNION` with no `ALL` keeps out each row that is equal to a row before it.
+fn recursive_rows(
+    query: &Query,
+    op: &SetOp,
+    work: usize,
+    tables: &scan::Tables,
+    run: &Run<'_, '_>,
+) -> Result<Rows> {
+    let types: Vec<u32> = op.columns.iter().map(|(ty, _)| *ty).collect();
+    let keys = sort::Keys::new(&op.groups, &types, run.session)?;
+    let mut seen = Vec::new();
+    let mut leaf = |i: usize| Ok((*tables.rows[i]).clone());
+    let mut step = part_rows(&op.left, &mut leaf, run.session)?;
+    if !op.all {
+        step = new_rows(&keys, &mut seen, step)?;
+    }
+    let mut frames = run.outer.to_vec();
+    frames.push(Frame { tables, tuple: &[] });
+    let mut rows = Vec::new();
+    while !step.is_empty() {
+        run.session.interrupted()?;
+        rows.extend(step.iter().cloned());
+        run.cache.work.borrow_mut().push((work, Rc::new(step)));
+        let mut leaf = |i: usize| {
+            let Some(sub) = &query.relations[i].subquery else {
+                return Err(Error::internal("a SELECT of a set operation with no query"));
+            };
+            run_query(sub, run.params, run.session, run.cache, &frames, false)
+        };
+        let next = part_rows(&op.right, &mut leaf, run.session);
+        run.cache.work.borrow_mut().pop();
+        step = next?;
+        if !op.all {
+            step = new_rows(&keys, &mut seen, step)?;
+        }
+    }
+    Ok(rows)
+}
+
+/// The parts of a run that the subqueries share.
+struct Run<'r, 'f> {
+    params: &'r [Value],
+    session: &'r dyn Session,
+    cache: &'r Cache,
+    outer: &'r [Frame<'f>],
+}
+
 /// The rows of an operation of a set operation, as `Append`, `Unique` and `SetOp` give them. `UNION ALL` gives the rows of the left part, then the rows of the right part. The other operations make groups of equal rows: they sort the rows when every type has an order, or else keep the groups in the order of the rows, as a hash table does. For each group, `UNION` gives one row, `INTERSECT` gives one row when both parts have the row, and `EXCEPT` gives one row when only the left part has it. With `ALL`, `INTERSECT` gives the row as many times as the part with fewer copies has it, and `EXCEPT` gives it as many times as the left part has more copies than the right part.
-fn set_rows(op: &SetOp, tables: &scan::Tables, session: &dyn Session) -> Result<Rows> {
-    let left = part_rows(&op.left, tables, session)?;
-    let right = part_rows(&op.right, tables, session)?;
+fn set_rows(op: &SetOp, leaf: &mut Leaf<'_>, session: &dyn Session) -> Result<Rows> {
+    let left = part_rows(&op.left, leaf, session)?;
+    let right = part_rows(&op.right, leaf, session)?;
     if op.kind == SetKind::Union && op.all {
         let mut rows = left;
         rows.extend(right);
@@ -405,6 +483,8 @@ struct Cache {
     domains: RefCell<Vec<(u32, Checks)>>,
     /// The body of each function in SQL that the run calls. The run of a body shares them.
     bodies: Bodies,
+    /// The rows of the work table of each recursive query of `WITH` that runs now, by the number of its work table. The last entry with a number is the one that the reference reads.
+    work: RefCell<Vec<(usize, Rc<Rows>)>>,
 }
 
 impl Cache {
@@ -467,7 +547,7 @@ impl Cache {
             return Ok(rows);
         }
         let rows = Rc::new(run()?);
-        if !correlated(query) {
+        if !correlated(query) && free_work(query).is_empty() {
             self.rows.borrow_mut().push((query, Rc::clone(&rows)));
         }
         Ok(rows)
@@ -490,6 +570,35 @@ fn correlated(query: &Query) -> bool {
         })
         .is_some()
     })
+}
+
+/// The work tables that a query reads in `FROM` but whose recursive query is not in it. The rows of such a query change at each step of the recursive query.
+fn free_work(query: &Query) -> Vec<usize> {
+    fn walk(query: &Query, read: &mut Vec<usize>, made: &mut Vec<usize>) {
+        if let Some(op) = &query.set_op {
+            ops(op, made);
+        }
+        for relation in &query.relations {
+            if let Some(work) = relation.cte.as_ref().and_then(|c| c.work) {
+                read.push(work);
+            }
+            if let Some(sub) = &relation.subquery {
+                walk(sub, read, made);
+            }
+        }
+    }
+    fn ops(op: &SetOp, made: &mut Vec<usize>) {
+        made.extend(op.work);
+        for part in [&op.left, &op.right] {
+            if let SetTree::Op(op) = part {
+                ops(op, made);
+            }
+        }
+    }
+    let (mut read, mut made) = (Vec::new(), Vec::new());
+    walk(query, &mut read, &mut made);
+    read.retain(|w| !made.contains(w));
+    read
 }
 
 /// `contain_volatile_functions`: true when the expression calls a volatile function, also in a subquery.
@@ -538,19 +647,29 @@ fn with_subqueries(
     cache: &Cache,
     outer: &[Frame<'_>],
 ) -> Result<Rc<scan::Tables>> {
-    if query
-        .relations
-        .iter()
-        .all(|r| r.subquery.is_none() && r.function.is_none() && r.values.is_none())
-    {
+    let work = |r: &rupg_analyze::Relation| r.cte.as_ref().and_then(|c| c.work);
+    if query.relations.iter().all(|r| {
+        r.subquery.is_none() && r.function.is_none() && r.values.is_none() && work(r).is_none()
+    }) {
         return Ok(Rc::clone(base));
+    }
+    // The `SELECT`s of the recursive term of a recursive query run at each step, with the rows of the work table.
+    let mut recursive = Vec::new();
+    if let Some(op) = query.set_op.as_ref().filter(|op| op.work.is_some()) {
+        op.right.each_leaf(&mut |i| recursive.push(i));
     }
     let mut tables = (**base).clone();
     let mut frames = outer.to_vec();
     frames.push(Frame { tables: base, tuple: &[] });
     for (i, relation) in query.relations.iter().enumerate() {
+        if let Some(id) = work(relation) {
+            let rows =
+                cache.work.borrow().iter().rev().find(|(w, _)| *w == id).map(|(_, r)| Rc::clone(r));
+            tables.rows[i] = rows.ok_or_else(|| Error::internal("a work table with no rows"))?;
+        }
         if let Some(sub) = &relation.subquery
             && tables.needs[i].is_empty()
+            && !recursive.contains(&i)
         {
             tables.rows[i] =
                 cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))?;
@@ -629,7 +748,13 @@ fn run_query(
     if let Some(op) = &query.set_op
         && open
     {
-        let rows = set_rows(op, &tables, session)?;
+        let rows = match op.work {
+            Some(work) => {
+                let run = Run { params, session, cache, outer };
+                recursive_rows(query, op, work, &tables, &run)?
+            }
+            None => set_rows(op, &mut |i| Ok((*tables.rows[i]).clone()), session)?,
+        };
         let leftmost = op.left.leftmost();
         set_tuples = (0..rows.len())
             .map(|row| {

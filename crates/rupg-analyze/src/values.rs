@@ -16,9 +16,6 @@ use crate::setop::strength_name;
 impl Analyzer<'_> {
     /// `transformValuesClause`: the query tree of a `VALUES` list, with its `ORDER BY`, `LIMIT` and `OFFSET`.
     pub(crate) fn values_clause(&mut self, s: &SelectStmt) -> Result<Query> {
-        if s.withClause.is_some() {
-            return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "WITH is not supported yet"));
-        }
         let mut columns: Vec<Vec<Expr>> = Vec::new();
         let kind = if s.valuesLists.len() == 1 { Kind::ValuesSingle } else { Kind::Values };
         for (row, list) in s.valuesLists.iter().enumerate() {
@@ -110,6 +107,8 @@ impl Analyzer<'_> {
             notices: Vec::new(),
             set_op: None,
             windows: Vec::new(),
+            ctes: Vec::new(),
+            recursive: false,
         })
     }
 }

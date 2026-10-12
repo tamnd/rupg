@@ -5,6 +5,7 @@
 use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 
 use rupg_analyze::{Env, Params};
 use rupg_catalog::Catalog;
@@ -94,6 +95,8 @@ pub(crate) struct Reader<'a> {
     activity: Option<(&'a Activity, &'a Store)>,
     /// The prepared statements of the session, or `None` for a reader that is not a session.
     statements: Option<&'a Statements<Arc<Prepared>>>,
+    /// The flag that a `CancelRequest` sets, or `None` for a reader that is not a session.
+    cancel: Option<&'a AtomicBool>,
 }
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
@@ -123,12 +126,19 @@ impl<'a> Reader<'a> {
             zone: RefCell::new((name, zone)),
             activity: None,
             statements: None,
+            cancel: None,
         }
     }
 
     /// The reader of a session, which reads the table of the sessions in `store`.
     pub(crate) fn with_activity(mut self, activity: &'a Activity, store: &'a Store) -> Reader<'a> {
         self.activity = Some((activity, store));
+        self
+    }
+
+    /// The reader of a session that a `CancelRequest` can stop.
+    pub(crate) fn with_cancel(mut self, cancel: &'a AtomicBool) -> Reader<'a> {
+        self.cancel = Some(cancel);
         self
     }
 
@@ -194,6 +204,16 @@ fn date_format(text: &str) -> DateFormat {
 }
 
 impl rupg_func::Session for Reader<'_> {
+    fn interrupted(&self) -> Result<()> {
+        if self.cancel.is_some_and(|c| c.swap(false, Ordering::Relaxed)) {
+            return Err(Error::new(
+                SqlState::QUERY_CANCELED,
+                "canceling statement due to user request",
+            ));
+        }
+        Ok(())
+    }
+
     fn date_format(&self) -> DateFormat {
         self.settings().get("DateStyle").map_or(DateFormat::ISO_MDY, |text| date_format(&text))
     }
