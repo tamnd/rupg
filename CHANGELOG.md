@@ -4,6 +4,21 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.19 (2026-10-13)
+
+A patch release on the way to M2. rupg now runs the queries of `WITH`, gives the definition of a view with `WITH`, and accepts the statements of `pg_dump` and `pg_restore` for the data of a sequence, for the locks and for the comments.
+
+### Added
+
+- `WITH` and `WITH RECURSIVE` in a query (#256), and in the definition of a view that `pg_get_viewdef` gives (#257).
+- The function `pg_get_sequence_data` (#258).
+- `LOCK TABLE` for the modes up to `ROW EXCLUSIVE` (#259). rupg takes no lock on a relation, so these modes run as checks only. A stronger mode gives `0A000`.
+- `COMMENT ON` for the schemas, tables, views, indexes, sequences, columns, table constraints, types and domains of the user (#260). `pg_description`, `obj_description` and `col_description` show the comments.
+
+### Fixed
+
+- The dependencies of a view did not include the relations in a query of `WITH` that no part of the view reads (#259).
+
 ## 0.1.18 (2026-10-10)
 
 A patch release on the way to M2. rupg now gives back the memory of an idle session, has tests for the idle size and the connection rate against PostgreSQL, and runs the replay of the catalog queries of `pg_dump` for a new database with no failed statement.
