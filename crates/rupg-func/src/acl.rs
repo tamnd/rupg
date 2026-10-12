@@ -713,6 +713,12 @@ fn has_table_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(result(class_check(relid, role, mask, call.session)?))
 }
 
+/// `pg_class_aclcheck` for `SELECT` or `USAGE` on a sequence as the current user, as `pg_get_sequence_data` does it.
+pub(crate) fn sequence_readable(relid: u32, session: &dyn Session) -> Result<bool> {
+    let check = class_check(relid, current_user(session), ACL_SELECT | ACL_USAGE, session)?;
+    Ok(check.unwrap_or(false))
+}
+
 /// `has_sequence_privilege`: the privileges come before the relation. A relation that is not a sequence is an error.
 fn has_sequence_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let with_role = args.len() == 3;

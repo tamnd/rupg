@@ -1,11 +1,11 @@
-//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_sequence_last_value`, and the comments of `obj_description`, `col_description` and `shobj_description`.
+//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_sequence_last_value`, `pg_get_sequence_data`, and the comments of `obj_description`, `col_description` and `shobj_description`.
 //!
 //! The visibility functions are a port of the `*IsVisible` functions of `namespace.c`. Each one gives null for an OID that no object has, as the `is_missing` form of PostgreSQL does.
 
 use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
-use rupg_types::Value;
+use rupg_types::{Record, Value, oid};
 
 use crate::reg;
 use crate::{Call, Kernel, bad_value};
@@ -134,6 +134,24 @@ fn sequence_last_value(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// `pg_get_sequence_data(regclass)`: the last value, `is_called` and the LSN of the page of a sequence, which `pg_dump` reads. A session cannot call `nextval` yet, so the last value is the first value and `is_called` is false. rupg keeps no pages with an LSN, so the LSN is 0/0. Each field is null for an OID that no relation has, for a relation that is not a sequence, and for a sequence on which the current user has no `SELECT` and no `USAGE`.
+fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let relid = oid_arg(args, 0)?;
+    let sequence = call
+        .session
+        .catalog()
+        .and_then(|c| c.relation(relid))
+        .filter(|r| r.kind == RelKind::Sequence)
+        .and_then(|r| r.sequence.as_ref());
+    let values = match sequence {
+        Some(info) if crate::acl::sequence_readable(relid, call.session)? => {
+            vec![Value::Int8(info.start), Value::Bool(false), Value::text("0/0")]
+        }
+        _ => vec![Value::Null; 3],
+    };
+    Ok(Value::Record(Box::new(Record { types: vec![oid::INT8, oid::BOOL, oid::PG_LSN], values })))
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
@@ -155,6 +173,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_my_temp_schema" => |_, _| Ok(Value::Oid(0)),
         "pg_is_other_temp_schema" => is_other_temp_schema,
         "pg_sequence_last_value" => sequence_last_value,
+        "pg_get_sequence_data" => get_sequence_data,
         _ => return None,
     };
     Some(kernel)

@@ -1,0 +1,35 @@
+> CREATE TABLE t (id serial, b bigserial, c smallserial)
+CREATE TABLE
+> CREATE TABLE "Mixed" ("Id" serial)
+CREATE TABLE
+> SELECT seqrelid::regclass, format_type(seqtypid, NULL), seqstart, seqincrement, seqmax, seqmin, seqcache, seqcycle, last_value, is_called FROM pg_catalog.pg_sequence, pg_get_sequence_data(seqrelid) ORDER BY seqrelid
+fields seqrelid:2205:4:-1,format_type:25:-1:-1,seqstart@pg_sequence.3:20:8:-1,seqincrement@pg_sequence.4:20:8:-1,seqmax@pg_sequence.5:20:8:-1,seqmin@pg_sequence.6:20:8:-1,seqcache@pg_sequence.7:20:8:-1,seqcycle@pg_sequence.8:16:1:-1,last_value:20:8:-1,is_called:16:1:-1
+row t_id_seq,integer,1,1,2147483647,1,1,f,1,f
+row t_b_seq,bigint,1,1,9223372036854775807,1,1,f,1,f
+row t_c_seq,smallint,1,1,32767,1,1,f,1,f
+row "Mixed_Id_seq",integer,1,1,2147483647,1,1,f,1,f
+SELECT 4
+> SELECT last_value, is_called, page_lsn IS NOT NULL FROM pg_get_sequence_data('t_id_seq')
+fields last_value:20:8:-1,is_called:16:1:-1,?column?:16:1:-1
+row 1,f,t
+SELECT 1
+> SELECT pg_get_sequence_data('"Mixed_Id_seq"'::regclass) IS NOT NULL, (pg_get_sequence_data('t_b_seq')).last_value
+fields ?column?:16:1:-1,last_value:20:8:-1
+row t,1
+SELECT 1
+> SELECT * FROM pg_get_sequence_data('t')
+fields last_value:20:8:-1,is_called:16:1:-1,page_lsn:3220:8:-1
+row NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_get_sequence_data('pg_class')
+fields last_value:20:8:-1,is_called:16:1:-1,page_lsn:3220:8:-1
+row NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_get_sequence_data(0)
+fields last_value:20:8:-1,is_called:16:1:-1,page_lsn:3220:8:-1
+row NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_get_sequence_data(NULL)
+fields last_value:20:8:-1,is_called:16:1:-1,page_lsn:3220:8:-1
+row NULL,NULL,NULL
+SELECT 1
