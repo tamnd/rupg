@@ -1,0 +1,141 @@
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TABLE s.t (id serial PRIMARY KEY, a int CHECK (a > 0), b text)
+CREATE TABLE
+> CREATE VIEW s.v AS SELECT id, b FROM s.t
+CREATE VIEW
+> CREATE INDEX t_b ON s.t (b)
+CREATE INDEX
+> COMMENT ON SCHEMA s IS 'a schema'
+COMMENT
+> COMMENT ON TABLE s.t IS 'a table'
+COMMENT
+> COMMENT ON VIEW s.v IS 'a view'
+COMMENT
+> COMMENT ON INDEX s.t_b IS 'an index'
+COMMENT
+> COMMENT ON SEQUENCE s.t_id_seq IS 'a sequence'
+COMMENT
+> COMMENT ON COLUMN s.t.a IS 'a column'
+COMMENT
+> COMMENT ON COLUMN s.v.b IS 'a view column'
+COMMENT
+> COMMENT ON CONSTRAINT t_a_check ON s.t IS 'a check'
+COMMENT
+> COMMENT ON TYPE s.t IS 'a row type'
+COMMENT
+> SELECT obj_description('s.t'::regclass, 'pg_class'), obj_description('s.v'::regclass), col_description('s.t'::regclass, 2), col_description('s.t'::regclass, 3)
+fields obj_description:25:-1:-1,obj_description:25:-1:-1,col_description:25:-1:-1,col_description:25:-1:-1
+row a table,a view,a column,NULL
+SELECT 1
+> SELECT c.relname, d.objsubid, d.description FROM pg_description d JOIN pg_class c ON c.oid = d.objoid WHERE d.classoid = 'pg_class'::regclass AND c.relnamespace = 's'::regnamespace ORDER BY 1, 2
+fields relname@pg_class.2:19:64:-1,objsubid@pg_description.3:23:4:-1,description@pg_description.4:25:-1:-1
+row t,0,a table
+row t,2,a column
+row t_b,0,an index
+row t_id_seq,0,a sequence
+row v,0,a view
+row v,2,a view column
+SELECT 6
+> SELECT d.description FROM pg_description d JOIN pg_namespace n ON n.oid = d.objoid AND d.classoid = 'pg_namespace'::regclass WHERE n.nspname = 's'
+fields description@pg_description.4:25:-1:-1
+row a schema
+SELECT 1
+> SELECT d.description FROM pg_description d JOIN pg_constraint c ON c.oid = d.objoid AND d.classoid = 'pg_constraint'::regclass WHERE c.conname = 't_a_check'
+fields description@pg_description.4:25:-1:-1
+row a check
+SELECT 1
+> SELECT d.description FROM pg_description d JOIN pg_type t ON t.oid = d.objoid AND d.classoid = 'pg_type'::regclass WHERE t.typname = 't'
+fields description@pg_description.4:25:-1:-1
+row a row type
+SELECT 1
+> SELECT obj_description(oid, 'pg_namespace') FROM pg_namespace WHERE nspname = 's'
+fields obj_description:25:-1:-1
+row a schema
+SELECT 1
+> COMMENT ON TABLE s.t IS 'changed'
+COMMENT
+> COMMENT ON COLUMN s.t.a IS ''
+COMMENT
+> COMMENT ON VIEW s.v IS NULL
+COMMENT
+> SELECT obj_description('s.t'::regclass, 'pg_class'), obj_description('s.v'::regclass, 'pg_class'), col_description('s.t'::regclass, 2)
+fields obj_description:25:-1:-1,obj_description:25:-1:-1,col_description:25:-1:-1
+row changed,NULL,NULL
+SELECT 1
+> SELECT count(*) FROM pg_description d JOIN pg_class c ON c.oid = d.objoid WHERE d.classoid = 'pg_class'::regclass AND c.relnamespace = 's'::regnamespace
+fields count:20:8:-1
+row 4
+SELECT 1
+> COMMENT ON TABLE s.v IS 'x'
+ERROR 42809 "v" is not a table
+> COMMENT ON VIEW s.t IS 'x'
+ERROR 42809 "t" is not a view
+> COMMENT ON INDEX s.t IS 'x'
+ERROR 42809 "t" is not an index
+> COMMENT ON SEQUENCE s.t IS 'x'
+ERROR 42809 "t" is not a sequence
+> COMMENT ON TABLE s.missing IS 'x'
+ERROR 42P01 relation "s.missing" does not exist
+> COMMENT ON TABLE nos.t IS 'x'
+ERROR 3F000 schema "nos" does not exist
+> COMMENT ON COLUMN s.t.missing IS 'x'
+ERROR 42703 column "missing" of relation "s.t" does not exist
+> COMMENT ON COLUMN s.t_b.b IS 'x'
+ERROR 42809 cannot set comment on relation "t_b"
+> COMMENT ON COLUMN s.t_id_seq.last_value IS 'x'
+ERROR 42809 cannot set comment on relation "t_id_seq"
+> COMMENT ON COLUMN t IS 'x'
+ERROR 42601 column name must be qualified
+> COMMENT ON COLUMN s.missing.a IS 'x'
+ERROR 42P01 relation "s.missing" does not exist
+> COMMENT ON CONSTRAINT nope ON s.t IS 'x'
+ERROR 42704 constraint "nope" for table "t" does not exist
+> COMMENT ON CONSTRAINT t_a_check ON s.missing IS 'x'
+ERROR 42P01 relation "s.missing" does not exist
+> COMMENT ON SCHEMA nos IS 'x'
+ERROR 3F000 schema "nos" does not exist
+> COMMENT ON TYPE nos IS 'x'
+ERROR 42704 type "nos" does not exist
+> COMMENT ON TYPE s.nos IS 'x'
+ERROR 42704 type "s.nos" does not exist
+> COMMENT ON DOMAIN s.t IS 'x'
+ERROR 42809 "s.t" is not a domain
+> COMMENT ON TABLE t IS 'x'
+ERROR 42P01 relation "t" does not exist
+> SET search_path = s
+SET
+search_path=s
+> COMMENT ON TABLE t IS 'by search_path'
+COMMENT
+> COMMENT ON COLUMN t.b IS 'b by search_path'
+COMMENT
+> COMMENT ON CONSTRAINT t_pkey ON t IS 'the key'
+COMMENT
+> COMMENT ON INDEX t_pkey IS 'the key index'
+COMMENT
+> SELECT obj_description('t'::regclass, 'pg_class'), col_description('t'::regclass, 3), obj_description('t_pkey'::regclass, 'pg_class')
+fields obj_description:25:-1:-1,col_description:25:-1:-1,obj_description:25:-1:-1
+row by search_path,b by search_path,the key index
+SELECT 1
+> SELECT d.description FROM pg_description d JOIN pg_constraint c ON c.oid = d.objoid AND d.classoid = 'pg_constraint'::regclass WHERE c.conname = 't_pkey'
+fields description@pg_description.4:25:-1:-1
+row the key
+SELECT 1
+> RESET search_path
+RESET
+search_path="$user", public
+> BEGIN
+BEGIN
+> COMMENT ON TABLE s.t IS 'rolled back'
+COMMENT
+> SELECT obj_description('s.t'::regclass, 'pg_class')
+fields obj_description:25:-1:-1
+row rolled back
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT obj_description('s.t'::regclass, 'pg_class')
+fields obj_description:25:-1:-1
+row by search_path
+SELECT 1

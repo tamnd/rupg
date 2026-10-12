@@ -1,5 +1,6 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN` and `CREATE FUNCTION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain` and `CreateFunction` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION` and `COMMENT`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction` and `CommentObject` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
+mod comment;
 mod domain;
 mod fkey;
 mod function;
@@ -50,7 +51,11 @@ pub struct Defined {
 pub fn is_definition(stmt: &Node) -> bool {
     matches!(
         stmt,
-        Node::CreateStmt(_) | Node::IndexStmt(_) | Node::CreateSchemaStmt(_) | Node::ViewStmt(_)
+        Node::CreateStmt(_)
+            | Node::IndexStmt(_)
+            | Node::CreateSchemaStmt(_)
+            | Node::ViewStmt(_)
+            | Node::CommentStmt(_)
     )
 }
 
@@ -70,6 +75,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::ViewStmt(view) => definer.create_view(view, text),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
+        Node::CommentStmt(comment) => definer.comment(comment),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }

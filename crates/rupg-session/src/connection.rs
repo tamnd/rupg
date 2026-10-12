@@ -393,6 +393,7 @@ impl Connection {
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::ViewStmt(_) => CommandTag::CreateView,
+                    Node::CommentStmt(_) => CommandTag::Comment,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -1997,6 +1998,45 @@ mod tests {
     #[test]
     fn lock_table() {
         big_stack(|| script(include_str!("connection/lock_table.test")));
+    }
+
+    /// `COMMENT ON` for each kind of object that rupg has: a schema, a table, a view, an index, a sequence, a column, a constraint of a table and a type, the rows of `pg_description`, a change and a drop of a comment, the errors for a wrong kind of object and for names that do not exist, a column of an index and of a sequence, names from `search_path`, and a rollback. `connection/comment.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn comment() {
+        big_stack(|| script(include_str!("connection/comment.test")));
+    }
+
+    /// A comment on a built-in object, on a system column and on an object of another kind gives `0A000`, and the built-in comment stays.
+    #[test]
+    fn comment_not_supported() {
+        big_stack(|| {
+            let (mut c, _) = connect();
+            assert_eq!(script_lines(&mut c, "> CREATE TABLE t (a int)"), ["CREATE TABLE"]);
+            let builtin = "ERROR 0A000 COMMENT on a built-in object is not supported yet";
+            for sql in [
+                "> COMMENT ON TABLE pg_class IS 'x'",
+                "> COMMENT ON COLUMN pg_class.relname IS 'x'",
+                "> COMMENT ON SCHEMA public IS 'x'",
+                "> COMMENT ON TYPE int4 IS 'x'",
+            ] {
+                assert_eq!(script_lines(&mut c, sql), [builtin], "{sql}");
+            }
+            assert_eq!(
+                script_lines(&mut c, "> COMMENT ON COLUMN t.ctid IS 'x'"),
+                ["ERROR 0A000 COMMENT on a system column is not supported yet"]
+            );
+            assert_eq!(
+                script_lines(&mut c, "> COMMENT ON FUNCTION lower(text) IS 'x'"),
+                ["ERROR 0A000 COMMENT on this kind of object is not supported yet"]
+            );
+            assert_eq!(
+                script_lines(
+                    &mut c,
+                    "> SELECT obj_description('public'::regnamespace, 'pg_namespace')"
+                ),
+                ["fields obj_description:25:-1:-1", "row standard public schema", "SELECT 1"]
+            );
+        });
     }
 
     /// A lock mode stronger than `ROW EXCLUSIVE` gives `0A000`, because rupg takes no lock on a relation. The check comes after the check of the transaction block and before the names.

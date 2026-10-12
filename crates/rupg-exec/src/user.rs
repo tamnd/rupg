@@ -1,4 +1,4 @@
-//! The rows of the catalog for the user objects: the schemas, the relations, their row types and columns, the column defaults, the constraints, the indexes, the sequences, the functions and the dependencies between them. A scan of a table of the catalog gives these rows after the static rows.
+//! The rows of the catalog for the user objects: the schemas, the relations, their row types and columns, the column defaults, the constraints, the indexes, the sequences, the functions, the dependencies between them and their comments. A scan of a table of the catalog gives these rows after the static rows.
 //!
 //! The columns of `pg_node_tree` hold the expressions in the form of the analyzer, not in the form of `nodeToString`.
 
@@ -138,6 +138,7 @@ pub(crate) fn rows(
         "pg_sequence" => sequences(table, catalog),
         "pg_proc" => functions(table, catalog),
         "pg_depend" => depends(table, catalog),
+        "pg_description" => descriptions(table, catalog),
         "pg_rewrite" => rewrites(table, catalog),
         "pg_init_privs" => init_privs(table, catalog, session)?,
         _ => Vec::new(),
@@ -591,6 +592,20 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     "prosqlbody",
                     tree(f.body.as_ref().filter(|_| f.src.is_empty()).map(|b| &b.text)),
                 );
+            row
+        })
+        .collect()
+}
+
+fn descriptions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .descriptions()
+        .map(|(object, text)| {
+            let mut row = Row::new(table);
+            row.set("objoid", oid(object.oid))
+                .set("classoid", oid(object.class))
+                .set("objsubid", Value::Int4(object.sub))
+                .set("description", Value::text(text));
             row
         })
         .collect()

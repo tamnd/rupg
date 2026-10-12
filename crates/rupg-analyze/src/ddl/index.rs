@@ -29,7 +29,7 @@ const LEGACY_OPCLASSES: [&str; 6] =
     ["network_ops", "timespan_ops", "datetime_ops", "lztext_ops", "timestamp_ops", "bigbox_ops"];
 
 /// The type of a system column, by name.
-fn system_column(name: &str) -> Option<(i16, u32)> {
+pub(super) fn system_column(name: &str) -> Option<(i16, u32)> {
     match name {
         "ctid" => Some((-1, oid::TID)),
         "xmin" => Some((-2, oid::XID)),

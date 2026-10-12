@@ -590,6 +590,7 @@ pub struct Catalog {
     constraints: BTreeMap<u32, Constraint>,
     functions: BTreeMap<u32, Function>,
     depends: Vec<Depend>,
+    descriptions: BTreeMap<ObjRef, String>,
 }
 
 impl Default for Catalog {
@@ -636,6 +637,7 @@ impl Catalog {
             constraints: BTreeMap::new(),
             functions: BTreeMap::new(),
             depends: Vec::new(),
+            descriptions: BTreeMap::new(),
         }
     }
 
@@ -783,6 +785,24 @@ impl Catalog {
     /// The rows of `pg_depend` for user objects, in the order that PostgreSQL inserts them.
     pub fn depends(&self) -> &[Depend] {
         &self.depends
+    }
+
+    /// The rows of `pg_description` for user objects: each object with its comment, in the order of the objects.
+    pub fn descriptions(&self) -> impl Iterator<Item = (ObjRef, &str)> {
+        self.descriptions.iter().map(|(object, text)| (*object, text.as_str()))
+    }
+
+    /// The comment of an object, or `None`.
+    pub fn description(&self, object: ObjRef) -> Option<&str> {
+        self.descriptions.get(&object).map(String::as_str)
+    }
+
+    /// `CreateComments`: sets the comment of an object, or drops it for `None`.
+    pub fn set_description(&mut self, object: ObjRef, text: Option<String>) {
+        match text {
+            Some(text) => self.descriptions.insert(object, text),
+            None => self.descriptions.remove(&object),
+        };
     }
 
     /// `ConstraintNameExists`: true when a constraint in the schema has the name.
