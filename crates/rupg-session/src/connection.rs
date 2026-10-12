@@ -1728,6 +1728,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/with_queries.test")));
     }
 
+    /// `pg_get_viewdef` of views with `WITH` and `WITH RECURSIVE`: the names of the columns of a query of `WITH`, `MATERIALIZED` and `NOT MATERIALIZED`, an alias of a reference, a quoted name, a `WITH` in a subquery and in a query of `WITH`, a `VALUES` list, and the rows of the views. `connection/with_viewdef.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn with_viewdef() {
+        big_stack(|| script(include_str!("connection/with_viewdef.test")));
+    }
+
     /// `pg_get_function_arguments`, `pg_get_function_identity_arguments`, `pg_get_function_result` and `pg_get_function_arg_default`: a hash of the text of all the built-in functions of `pg_proc.dat`, the defaults of the arguments, the ordered-set aggregates, the output arguments, and an OID that is not a function. `connection/function_arguments.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn function_arguments() {
