@@ -1974,6 +1974,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/dump_queries.test")));
     }
 
+    /// `pg_get_sequence_data`, which `pg_dump` calls for each row of `pg_sequence`: the sequences of `serial` columns, a call in `FROM` and in the list of the targets, and the row of nulls for a table, a catalog, an OID that no relation has and a null. `connection/sequence_data.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sequence_data() {
+        big_stack(|| script(include_str!("connection/sequence_data.test")));
+    }
+
     /// Correlated subqueries that find their rows through an `=` of a column and a column of the outer query: in `EXISTS` and `NOT EXISTS`, in the target list, in `LATERAL`, in a join in the subquery, in a subquery in a subquery, with a null outer value, and with an outer value of another type of the same form. The first statement is the query of `pg_dump` that finds the functions to dump. `connection/correlated_lookups.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn correlated_lookups() {
