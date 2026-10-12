@@ -713,6 +713,22 @@ fn has_table_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(result(class_check(relid, role, mask, call.session)?))
 }
 
+/// `LockTableAclCheck`: true when `role` can lock the relation `relid` in the lock mode `mode`, where `AccessShareLock` is 1. `MAINTAIN`, `UPDATE`, `DELETE` and `TRUNCATE` allow each mode, `SELECT` allows `ACCESS SHARE`, and `INSERT` allows the modes up to `ROW EXCLUSIVE`.
+///
+/// # Errors
+///
+/// The error of an ACL that is not correct.
+pub fn lock_table_allowed(relid: u32, role: u32, mode: i32, session: &dyn Session) -> Result<bool> {
+    let mut mask = ACL_MAINTAIN | ACL_UPDATE | ACL_DELETE | ACL_TRUNCATE;
+    if mode <= 1 {
+        mask |= ACL_SELECT;
+    }
+    if mode <= 3 {
+        mask |= ACL_INSERT;
+    }
+    Ok(class_check(relid, role, mask, session)?.unwrap_or(false))
+}
+
 /// `pg_class_aclcheck` for `SELECT` or `USAGE` on a sequence as the current user, as `pg_get_sequence_data` does it.
 pub(crate) fn sequence_readable(relid: u32, session: &dyn Session) -> Result<bool> {
     let check = class_check(relid, current_user(session), ACL_SELECT | ACL_USAGE, session)?;

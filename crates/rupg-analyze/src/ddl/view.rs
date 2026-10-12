@@ -141,7 +141,7 @@ fn def_string(arg: Option<&Node>) -> String {
 }
 
 /// `parse_bool`: as `boolin`, but without spaces around the word.
-fn parse_bool(text: &str) -> Option<bool> {
+pub(super) fn parse_bool(text: &str) -> Option<bool> {
     if text.trim() != text {
         return None;
     }
@@ -241,19 +241,24 @@ pub(super) fn function_references(query: &Query) -> Vec<ObjRef> {
     refs
 }
 
-/// `find_expr_references_walker` for the query of a view: each relation of the query, each column that the query reads, each function that the query calls, and the relation or the type of each `regclass` or `regtype` constant, also in the subqueries. `outer` holds the queries outside `query`, from the nearest. A view in the query is one relation, and the query of the view does not count.
+/// `find_expr_references_walker` for the query of a view: each relation of the query, each column that the query reads, each function that the query calls, and the relation or the type of each `regclass` or `regtype` constant, also in the subqueries and in the queries of `WITH`. A relation that reads a query of `WITH` has a copy of the query, which does not count, so a query of `WITH` that no part of the query reads also counts, as in PostgreSQL. `outer` holds the queries outside `query`, from the nearest. A view in the query is one relation, and the query of the view does not count.
 fn query_references(query: &Query, outer: &[&Query], refs: &mut Vec<ObjRef>) {
     let mut levels = vec![query];
     levels.extend_from_slice(outer);
     for relation in &query.relations {
         if relation.oid != 0 {
             refs.push(ObjRef::new(PG_CLASS, relation.oid));
-        } else if let Some(sub) = &relation.subquery {
+        } else if let Some(sub) = &relation.subquery
+            && relation.cte.is_none()
+        {
             query_references(sub, &levels, refs);
         }
     }
     for expr in query.exprs() {
         expr_references(expr, &levels, refs);
+    }
+    for cte in &query.ctes {
+        query_references(&cte.query, &levels, refs);
     }
 }
 

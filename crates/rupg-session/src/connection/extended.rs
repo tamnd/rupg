@@ -434,6 +434,8 @@ impl Connection {
                     position: error.position().map(|at| character_position(&statement.text, at)),
                     error,
                 })?
+            } else if let Node::LockStmt(stmt) = node {
+                self.lock(stmt)?
             } else {
                 let mut notices = Vec::new();
                 let mut cx = Context {
