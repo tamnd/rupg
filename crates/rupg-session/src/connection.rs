@@ -645,6 +645,8 @@ impl Connection {
             let mut described = None;
             // The format and the number of columns of a `COPY` that failed at run time.
             let mut copying = None;
+            // The warnings of the run of a query. PostgreSQL sends them after `RowDescription`.
+            let mut late = Vec::new();
             let result = if let Err(error) = self.interrupted() {
                 Err(error)
             } else if self.transaction.failed() && !utility::exits_transaction(node) {
@@ -657,7 +659,7 @@ impl Connection {
                 self.run_prepare(node, text, &[], &mut notices, 0)
             } else if query::is_query(node) {
                 drop(self.portals.close(b""));
-                self.select(node, &mut notices, &mut described)
+                self.select(node, &mut notices, &mut late, &mut described)
             } else if rupg_analyze::is_definition(node) {
                 drop(self.portals.close(b""));
                 self.define(node, statement, &mut notices)
@@ -687,6 +689,7 @@ impl Connection {
                             columns.iter().map(|column| column.field(0)).collect();
                         out.row_description(&fields);
                     }
+                    self.notices(&mut late, text, &[], out);
                     if let Some((binary, columns)) = copying {
                         copy::copy_out_response(out, binary, columns);
                     }
@@ -713,6 +716,7 @@ impl Connection {
                     let fields: Vec<Field<'_>> =
                         columns.iter().map(|column| column.field(0)).collect();
                     out.row_description(&fields);
+                    self.notices(&mut late, text, &[], out);
                     for row in &rows {
                         let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
                         out.data_row(&values);
@@ -725,11 +729,12 @@ impl Connection {
         false
     }
 
-    /// Plans and runs a query of a `Query` message. The warnings of the analysis go to `notices`. When the run fails after the plan, the columns of the plan go to `described`.
+    /// Plans and runs a query of a `Query` message. The warnings of the analysis and of the plan go to `notices`, and the warnings of the run go to `late`. When the run fails after the plan, the columns of the plan go to `described`.
     fn select(
         &self,
         node: &Node,
         notices: &mut Vec<Notice>,
+        late: &mut Vec<Notice>,
         described: &mut Option<Vec<Column>>,
     ) -> Result<Done, Error> {
         self.settings.borrow_mut().take_snapshot();
@@ -743,7 +748,7 @@ impl Connection {
         let plan = plan?;
         let columns = query::columns(&plan);
         let rows = query::run(&plan, &[], &reader, &[]);
-        notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+        late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         match rows {
             Ok(rows) => Ok(Done::Rows { columns, rows, tag: CommandTag::Select }),
             Err(error) => {
@@ -1878,6 +1883,12 @@ mod tests {
     #[test]
     fn jsonpath() {
         big_stack(|| script(include_str!("connection/jsonpath.test")));
+    }
+
+    /// The type `xml`: the check of a well formed value in content and in document mode with the errors and the warnings of libxml2, the XML declaration, `DOCTYPE` and entities, the limit of depth, `xmloption`, the output, the casts, arrays of `xml`, `pg_input_is_valid`, `pg_input_error_info`, the text and binary forms of `COPY` and a query with parameters. `connection/xml.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn xml() {
+        big_stack(|| script(include_str!("connection/xml.test")));
     }
 
     /// The operators `@@` and `@@@` of `tsvector` and `tsquery`: the operators `&`, `|` and `!`, weights, prefixes, a vector with no positions, `<->` and `<N>` with `!`, `&` and `|` under them, the largest distance, the bits of a position that PostgreSQL keeps, `GROUP BY` and a query with parameters. `connection/ts_match.test` is the output of PostgreSQL 19 for the same script in a new database.

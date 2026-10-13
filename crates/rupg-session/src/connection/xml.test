@@ -1,0 +1,958 @@
+> SELECT '<a/>'::xml
+fields xml:142:-1:-1
+row <a/>
+SELECT 1
+> SELECT xml '<a>x</a>', '<a>x</a>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <a>x</a>,<a>x</a>
+SELECT 1
+> SELECT pg_input_is_valid('<a/>', 'xml')
+fields pg_input_is_valid:16:1:-1
+row t
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Couldn't find end of Start Tag a line 1
+<a
+  ^,NULL,2200N
+SELECT 1
+> SHOW xmloption
+fields xmloption:25:-1:-1
+row content
+SHOW
+> SELECT NULL::xml, ARRAY[NULL]::xml[]
+fields xml:142:-1:-1,array:143:-1:-1
+row NULL,{NULL}
+SELECT 1
+> SELECT * FROM pg_input_error_info('', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(' ', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('abc', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a></a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a>x</a><b/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('x<a/>y', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a b="1" c=''2''/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!-- c -->', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?pi x?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?pi?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<![CDATA[<x>]]>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('&amp;&lt;&gt;&quot;&apos;', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('&#65;&#x41;&#X41;', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: CharRef: invalid decimal value
+&#65;&#x41;&#X41;
+             ^
+line 1: xmlParseCharRef: invalid xmlChar value 0
+&#65;&#x41;&#X41;
+             ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a:b xmlns:a="u"/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<x:a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<a>\n</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0" encoding="UTF-8"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0" standalone="yes"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.1"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<?xml version=\'1.0\' encoding=\'LATIN1\' standalone=\'no\'?>\n<a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<?xml version="1.0"?>\n<a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<?xml version="1.0"?>\n\n<a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml-stylesheet href="a"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Couldn't find end of Start Tag a line 1
+<a
+  ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Premature end of data in tag a line 1
+<a>
+   ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a></b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Opening and ending tag mismatch: a line 1 and b
+<a></b>
+       ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: chunk is not well balanced
+</a>
+^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Specification mandates value for attribute b
+<a b>
+    ^
+line 1: Premature end of data in tag a line 1
+<a b>
+     ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a b=1/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: AttValue: " or ' expected
+<a b=1/>
+     ^
+line 1: attributes construct error
+<a b=1/>
+     ^
+line 1: Couldn't find end of Start Tag a line 1
+<a b=1/>
+     ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a b="1"c="2"/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: attributes construct error
+<a b="1"c="2"/>
+        ^
+line 1: Couldn't find end of Start Tag a line 1
+<a b="1"c="2"/>
+        ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a b="<"/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Unescaped '<' not allowed in attributes values
+<a b="<"/>
+      ^
+line 1: attributes construct error
+<a b="<"/>
+      ^
+line 1: Couldn't find end of Start Tag a line 1
+<a b="<"/>
+      ^
+line 1: StartTag: invalid element name
+<a b="<"/>
+       ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a b="x', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: AttValue: ' expected
+<a b="x
+       ^
+line 1: attributes construct error
+<a b="x
+       ^
+line 1: Couldn't find end of Start Tag a line 1
+<a b="x
+       ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<1/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: StartTag: invalid element name
+<1/>
+ ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('&', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: xmlParseEntityRef: no name
+&
+ ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('&x;', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Entity 'x' not defined
+&x;
+   ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('&#;', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: xmlParseCharRef: invalid xmlChar value 0
+&#;
+   ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('&#xZ;', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: CharRef: invalid hexadecimal value
+&#xZ;
+   ^
+line 1: xmlParseCharRef: invalid xmlChar value 0
+&#xZ;
+   ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('&#0;', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: xmlParseCharRef: invalid xmlChar value 0
+&#0;
+    ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('&#1;', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: xmlParseCharRef: invalid xmlChar value 1
+&#1;
+    ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('&#99999999;', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: xmlParseCharRef: character reference out of bounds
+&#99999999;
+           ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info(']]>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Sequence ']]>' not allowed in content
+]]>
+^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('a]]>b', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Sequence ']]>' not allowed in content
+a]]>b
+^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!-- a -- b -->', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Double hyphen within comment: <!-- a 
+<!-- a -- b -->
+       ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!-- x', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Comment not terminated
+<!-- x
+      ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?pi', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: ParsePI: PI pi space expected
+<?pi
+    ^
+line 1: ParsePI: PI pi never end ...
+<?pi
+    ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?pi x', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: ParsePI: PI pi never end ...
+<?pi x
+      ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml-foo?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+WARNING 01000 line 1: xmlParsePITarget: invalid name prefix 'xml'
+<?xml-foo?>
+         ^
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?XML x?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Invalid PI name
+<?XML x?>
+     ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a/><?xml version="1.0"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: XML declaration allowed only at the start of the document
+<a/><?xml version="1.0"?>
+         ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<![CDATA[x', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Unregistered error message
+<![CDATA[x
+          ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a b="1" b="2"/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Attribute b redefined
+<a b="1" b="2"/>
+              ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a>&x;</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Entity 'x' not defined
+<a>&x;</a>
+      ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'x\n<a>\n<b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 3: Premature end of data in tag b line 3
+<b>
+   ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'x\n  <a>\n\t<b c>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 3: Specification mandates value for attribute c
+	<b c>
+	    ^
+line 3: Premature end of data in tag b line 3
+	<b c>
+	     ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a>xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx<b c>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Specification mandates value for attribute c
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx<b c
+                                                                               ^
+line 1: Premature end of data in tag b line 1
+xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx<b c>
+                                                                               ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a></a', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: expected '>'
+<a></a
+      ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a/ >', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: error parsing attribute name
+<a/ >
+  ^
+line 1: attributes construct error
+<a/ >
+  ^
+line 1: Couldn't find end of Start Tag a line 1
+<a/ >
+  ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a/b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: error parsing attribute name
+<a/b>
+  ^
+line 1: attributes construct error
+<a/b>
+  ^
+line 1: Couldn't find end of Start Tag a line 1
+<a/b>
+  ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a><b></a></b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Opening and ending tag mismatch: b line 1 and a
+<a><b></a></b>
+          ^
+line 1: Opening and ending tag mismatch: a line 1 and b
+<a><b></a></b>
+              ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<a>\n<b>\n</c>\n</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 3: Opening and ending tag mismatch: b line 2 and c
+</c>
+    ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('< a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: StartTag: invalid element name
+< a/>
+ ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a b=''1'' c>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Specification mandates value for attribute c
+<a b='1' c>
+          ^
+line 1: Premature end of data in tag a line 1
+<a b='1' c>
+           ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a xmlns:x=""/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<x:a></x:b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Opening and ending tag mismatch: a line 1 and b
+<x:a></x:b>
+           ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<x:a></y:a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Opening and ending tag mismatch: a line 1 and a
+<x:a></y:a>
+           ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a></a:b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Opening and ending tag mismatch: a line 1 and a:b
+<a></a:b>
+         ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: StartTag: invalid element name
+<!>
+ ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!x>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: StartTag: invalid element name
+<!x>
+ ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!-- --->', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Double hyphen within comment: <!-- 
+<!-- --->
+     ^
+line 1: Comment not terminated
+<!-- --->
+         ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!---->', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!-- é -- é -->', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Comment must not contain '--' (double-hyphen)
+<!-- é -- é -->
+          ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a>é</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<é/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<a>\r\n<b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 2: Premature end of data in tag b line 2
+<b>
+   ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<a>\r<b>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Premature end of data in tag b line 1
+<b>
+   ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'\n\n<a', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 3: Couldn't find end of Start Tag a line 3
+<a
+  ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<a>\t\t<b c>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Specification mandates value for attribute c
+<a>		<b c>
+   		    ^
+line 1: Premature end of data in tag b line 1
+<a>		<b c>
+   		     ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version=1.0?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content: invalid XML declaration,Malformed declaration: missing version.,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml encoding="x"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content: invalid XML declaration,Malformed declaration: missing version.,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0" standalone="maybe"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content: invalid XML declaration,standalone accepts only 'yes' or 'no'.,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0"', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content: invalid XML declaration,Parsing XML declaration: '?>' expected.,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xmlx?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+WARNING 01000 line 1: xmlParsePITarget: invalid name prefix 'xml'
+<?xmlx?>
+      ^
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(' <?xml version="1.0"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: XML declaration allowed only at the start of the document
+ <?xml version="1.0"?>
+      ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="2.0"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0"encoding="x"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content: invalid XML declaration,Space required.,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0" encoding=x?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content: invalid XML declaration,Missing encoding in text declaration.,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0" ?>x', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info(E'<?xml\tversion="1.0"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="é"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content: invalid XML declaration,Invalid character value.,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a><b/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a [<!ENTITY e "<b>">]><a>&e;</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Premature end of data in tag b line 1
+<b>
+   ^
+line 1: Entity 'e' failed to parse
+<!DOCTYPE a [<!ENTITY e "<b>">]><a>&e;</a>
+                                      ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: xmlParseDocTypeDecl : no DOCTYPE name !
+<!DOCTYPE
+         ^
+line 1: DOCTYPE improperly terminated
+<!DOCTYPE
+         ^
+line 1: Start tag expected, '<' not found
+<!DOCTYPE
+         ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a><a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Premature end of data in tag a line 1
+<!DOCTYPE a><a>
+               ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('x<!DOCTYPE a><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: StartTag: invalid element name
+x<!DOCTYPE a><a/>
+  ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!-- c --><!DOCTYPE a><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Start tag expected, '<' not found
+<!DOCTYPE a>
+            ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a><a/><b/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Extra content at the end of the document
+<!DOCTYPE a><a/><b/>
+                ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a><a/>x', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Extra content at the end of the document
+<!DOCTYPE a><a/>x
+                ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a [<!ELEMENT a (#PCDATA)>]><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a SYSTEM "x.dtd"><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a [<!ATTLIST a b CDATA "d">]><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a [<!x>]><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: internal error: xmlParseInternalSubset: error detected in Markup declaration
+<!DOCTYPE a [<!x>]><a/>
+             ^
+line 1: DOCTYPE improperly terminated
+<!DOCTYPE a [<!x>]><a/>
+             ^
+line 1: StartTag: invalid element name
+<!DOCTYPE a [<!x>]><a/>
+              ^
+line 1: Extra content at the end of the document
+<!DOCTYPE a [<!x>]><a/>
+              ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a [<!ENTITY % p "x">]><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a><a>&x;</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML content,line 1: Entity 'x' not defined
+<!DOCTYPE a><a>&x;</a>
+                  ^,NULL,2200N
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a SYSTEM "x"><a>&x;</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!DOCTYPE a [<!ENTITY e "&#60;b/>">]><a>&e;</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_input_error_info(repeat('<a>', 256), 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: Premature end of data in tag a line 1
+a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a>
+                                                                               ^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info(repeat('<a>', 257), 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: Excessive depth in document: 256 use XML_PARSE_HUGE option
+<a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a
+                                                                               ^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info(repeat('<a>', 258), 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: Excessive depth in document: 256 use XML_PARSE_HUGE option
+<a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a><a
+                                                                               ^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info('<a>' || chr(1) || '</a>', 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: PCDATA invalid Char value 1
+<a></a>
+   ^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info(chr(1), 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: PCDATA invalid Char value 1
+
+^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info('<a>' || chr(65534) || '</a>', 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: Char 0xFFFE out of allowed range
+<a>￾</a>
+   ^
+line 1: PCDATA invalid Char value 65534
+<a>￾</a>
+   ^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info('<a b="' || chr(2) || '"/>', 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: invalid character in attribute value
+<a b=""""/>
+      ^
+line 1: attributes construct error
+<a b=""""/>
+      ^
+line 1: Couldn't find end of Start Tag a line 1
+<a b=""""/>
+      ^
+line 1: PCDATA invalid Char value 2
+<a b=""""/>
+      ^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info('<!--' || chr(2) || '-->', 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: xmlParseComment: invalid xmlChar value 2
+<!---->
+    ^
+line 1: PCDATA invalid Char value 2
+<!---->
+    ^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info('<!--' || chr(233) || chr(2) || '-->', 'xml')
+fields pg_input_error_info:2249:-1:-1
+row ("invalid XML content","line 1: xmlParseComment: invalid xmlChar value 233
+<!--é-->
+      ^
+line 1: PCDATA invalid Char value 2
+<!--é-->
+      ^",,2200N)
+SELECT 1
+> SELECT pg_input_error_info('<?xml' || chr(233) || '?>', 'xml')
+fields pg_input_error_info:2249:-1:-1
+WARNING 01000 line 1: xmlParsePITarget: invalid name prefix 'xml'
+<?xmlé?>
+       ^
+row (,,,)
+SELECT 1
+> SELECT pg_input_error_info('<?xml' || chr(1488) || '?>', 'xml')
+fields pg_input_error_info:2249:-1:-1
+WARNING 01000 line 1: xmlParsePITarget: invalid name prefix 'xml'
+<?xmlא?>
+       ^
+row (,,,)
+SELECT 1
+> SELECT '<a/>'::xml, '<a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <a/>,<a/>
+SELECT 1
+> SELECT '<?xml version="1.0"?><a/>'::xml, '<?xml version="1.0"?><a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <a/>,<?xml version="1.0"?><a/>
+SELECT 1
+> SELECT E'<?xml version="1.0"?>\n<a/>'::xml, E'<?xml version="1.0"?>\n<a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <a/>,<?xml version="1.0"?>
+<a/>
+SELECT 1
+> SELECT E'<?xml version="1.0"?>\n\n<a/>'::xml, E'<?xml version="1.0"?>\n\n<a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row 
+<a/>,<?xml version="1.0"?>
+
+<a/>
+SELECT 1
+> SELECT '<?xml version="1.1"?><a/>'::xml, '<?xml version="1.1"?><a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <?xml version="1.1"?><a/>,<?xml version="1.1"?><a/>
+SELECT 1
+> SELECT E'<?xml version=\'1.0\' encoding=\'LATIN1\' standalone=\'no\'?>\n<a/>'::xml, E'<?xml version=\'1.0\' encoding=\'LATIN1\' standalone=\'no\'?>\n<a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <?xml version="1.0" standalone="no"?>
+<a/>,<?xml version='1.0' encoding='LATIN1' standalone='no'?>
+<a/>
+SELECT 1
+> SELECT '<?xml version="1.0" standalone="yes"?><a/>'::xml, '<?xml version="1.0" standalone="yes"?><a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <?xml version="1.0" standalone="yes"?><a/>,<?xml version="1.0" standalone="yes"?><a/>
+SELECT 1
+> SELECT E'<?xml version="1.0" encoding="UTF-8"?>\n<a/>'::xml, E'<?xml version="1.0" encoding="UTF-8"?>\n<a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <a/>,<?xml version="1.0" encoding="UTF-8"?>
+<a/>
+SELECT 1
+> SELECT '<?xml version="1.0"  ?>x'::xml, '<?xml version="1.0"  ?>x'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row x,<?xml version="1.0"  ?>x
+SELECT 1
+> SELECT ''::xml, ''::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row ,
+SELECT 1
+> SELECT '  <a/>  '::xml, '  <a/>  '::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row   <a/>  ,  <a/>  
+SELECT 1
+> SELECT '<!DOCTYPE a><a/>'::xml, '<!DOCTYPE a><a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <!DOCTYPE a><a/>,<!DOCTYPE a><a/>
+SELECT 1
+> SELECT '<?xml version="1.0"?><!DOCTYPE a><a/>'::xml, '<?xml version="1.0"?><!DOCTYPE a><a/>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <!DOCTYPE a><a/>,<?xml version="1.0"?><!DOCTYPE a><a/>
+SELECT 1
+> SELECT '<!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>'::xml, '<!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>'::xml::text
+fields xml:142:-1:-1,text:25:-1:-1
+row <!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>,<!DOCTYPE a [<!ENTITY e "x">]><a>&e;</a>
+SELECT 1
+> SELECT '<a/>'::xml, '<a/>'::xml::bytea
+ERROR 42846 cannot cast type xml to bytea at 32
+> SELECT '<a'::xml
+ERROR 2200N invalid XML content at 8
+> SELECT '<?xml version=1?>'::xml
+ERROR 2200N invalid XML content: invalid XML declaration at 8
+> SET xmloption = document
+SET
+> SELECT * FROM pg_input_error_info('<a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('x', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: Start tag expected, '<' not found
+x
+^,NULL,2200M
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a/><b/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: Extra content at the end of the document
+<a/><b/>
+    ^,NULL,2200M
+SELECT 1
+> SELECT * FROM pg_input_error_info('', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: switching encoding : no input
+
+^
+line 1: Document is empty
+
+^,NULL,2200M
+SELECT 1
+> SELECT * FROM pg_input_error_info(' <a/> ', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<!-- c --><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0"?>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: Start tag expected, '<' not found
+<?xml version="1.0"?>
+                     ^,NULL,2200M
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: Couldn't find end of Start Tag a line 1
+<a
+  ^,NULL,2200M
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version=1?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: String not started expecting ' or "
+<?xml version=1?><a/>
+              ^
+line 1: Malformed declaration expecting version
+<?xml version=1?><a/>
+              ^
+line 1: Blank needed here
+<?xml version=1?><a/>
+              ^
+line 1: parsing XML declaration: '?>' expected
+<?xml version=1?><a/>
+              ^,NULL,2200M
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.1"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+WARNING 01000 line 1: Unsupported version '1.1'
+<?xml version="1.1"?><a/>
+                   ^
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0" encoding="LATIN1"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_input_error_info('<?xml version="1.0" encoding="bogus"?><a/>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: Unsupported encoding bogus
+<?xml version="1.0" encoding="bogus"?><a/>
+                                    ^,NULL,2200M
+SELECT 1
+> SELECT * FROM pg_input_error_info('</a>', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: StartTag: invalid element name
+</a>
+ ^
+line 1: Extra content at the end of the document
+</a>
+ ^,NULL,2200M
+SELECT 1
+> SELECT * FROM pg_input_error_info('<a/>x', 'xml')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid XML document,line 1: Extra content at the end of the document
+<a/>x
+    ^,NULL,2200M
+SELECT 1
+> SELECT '<a/>x'::xml
+ERROR 2200M invalid XML document at 8
+> RESET xmloption
+RESET
+> SELECT ARRAY['<a/>', '<b>x</b>']::xml[], '{"<a b=\"1\"/>"}'::xml[]
+fields array:143:-1:-1,xml:143:-1:-1
+row {<a/>,<b>x</b>},{"<a b=\"1\"/>"}
+SELECT 1
+> COPY (SELECT '<?xml version="1.1"?><a/>'::xml AS a, E'<?xml version="1.0"?>\n<b/>'::xml AS b) TO STDOUT WITH (FORMAT binary)
+copy out 1 1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x19<?xml version=\"1.1\"?><a/>\x00\x00\x00\x04<b/>
+data \xff\xff
+copy done
+COPY 1
+> COPY (SELECT '<?xml version="1.1"?><a/>'::xml AS a) TO STDOUT
+copy out 0 0
+data <?xml version=\"1.1\"?><a/>\n
+copy done
+COPY 1
+P q1|SELECT $1::xml
+X q1|<a/>
+row <a/>
+SELECT 1
+X q1|<a
+ERROR 2200N invalid XML content (unnamed portal parameter $1 = '...')

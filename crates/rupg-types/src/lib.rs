@@ -32,6 +32,8 @@
 //!
 //! [`Lexeme`], one lexeme of a `tsvector` with its positions, with [`tsvector_parse`], [`tsvector_deparse`], [`tsvector_recv`] and [`tsvector_send`]. [`tsvector_cmp`] is the order of the B-tree operator class, and [`unique_positions`] puts positions in order as the input function does. [`QueryItem`], one operand or operator of a `tsquery`, with [`tsquery_parse`], [`tsquery_deparse`], [`tsquery_recv`] and [`tsquery_send`]. [`tsquery_cmp`] is the order of the B-tree operator class. [`JsonPath`], a value of `jsonpath`, with [`jsonpath_parse`], [`jsonpath_deparse`], [`jsonpath_recv`] and [`jsonpath_send`].
 //!
+//! [`xml_in`] checks that the text of an `xml` value is well formed, as libxml2 2.9.14 checks it for PostgreSQL, and gives the same errors and warnings. [`xml_out`] writes the value with the XML declaration of PostgreSQL, and [`xml_encoding`] reads the encoding in the declaration for the receive function.
+//!
 //! [`unicode`], the four Unicode normalization forms, and [`tz`], the time zones of the IANA data.
 //!
 //! # Known differences
@@ -83,6 +85,7 @@ pub mod typmod;
 pub mod tz;
 pub mod unicode;
 mod value;
+mod xml;
 
 pub use array::{
     Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, array_in, array_out, array_recv, array_send,
@@ -160,3 +163,4 @@ pub use tsvector::{
 pub use typeid::TypeId;
 pub use types::{Oid, PgType, TypeInfo, format_type};
 pub use value::{Record, Value};
+pub use xml::{xml_encoding, xml_in, xml_out};
