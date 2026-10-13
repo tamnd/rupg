@@ -1850,6 +1850,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/multirange.test")));
     }
 
+    /// `range_agg` and `range_intersect_agg` of ranges and of multiranges: null inputs, no input, empty ranges and empty multiranges, `GROUP BY`, `ORDER BY`, `DISTINCT` and `FILTER` in the call, the errors of a type that is not a range, and a query with parameters. `connection/range_agg.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn range_agg() {
+        big_stack(|| script(include_str!("connection/range_agg.test")));
+    }
+
     /// The operators of the multiranges: union, difference and intersection, `multirange_minus_multi`, overlap, containment of a multirange, a range and a value, the position operators and adjacency with a multirange or a range on each side, the errors of the types that do not match, and a query with parameters. `connection/multirange_ops.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn multirange_ops() {

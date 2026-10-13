@@ -6,7 +6,7 @@ use rupg_analyze::{Aggref, Expr, ExprKind, Query, SortGroup};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel};
 use rupg_pgcatalog::builtin;
-use rupg_types::{Array, ArrayDim, MAXDIM, Numeric, NumericSign, Value, oid};
+use rupg_types::{Array, ArrayDim, MAXDIM, Numeric, NumericSign, Range, Value, oid};
 
 use crate::{Eval, kernel, not_yet, signature, sort, strict};
 
@@ -33,6 +33,8 @@ pub(crate) enum Method {
     ArrayAgg,
     /// `array_agg` of arrays, which makes an array with one more dimension.
     ArrayAggArray,
+    /// `range_agg` of ranges or of multiranges, which makes a multirange.
+    RangeAgg,
 }
 
 /// True for a pseudo-type that takes the type of the arguments.
@@ -73,6 +75,7 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
         ("bytea_string_agg_transfn", "bytea_string_agg_finalfn") => Method::Concat { bytea: true },
         ("array_agg_transfn", "array_agg_finalfn") => Method::ArrayAgg,
         ("array_agg_array_transfn", "array_agg_array_finalfn") => Method::ArrayAggArray,
+        ("range_agg_transfn" | "multirange_agg_transfn", "range_agg_finalfn") => Method::RangeAgg,
         _ => {
             let state =
                 if polymorphic(row.transtype) && row.finalfn == 0 { ty } else { row.transtype };
@@ -130,6 +133,10 @@ enum State {
         count: i32,
         values: Vec<Option<Value>>,
     },
+    /// The input ranges. An empty multirange adds an empty range, so that the result is an empty multirange and not null.
+    RangeAgg {
+        ranges: Vec<Range>,
+    },
 }
 
 /// An aggregate call of the query with its method.
@@ -160,6 +167,7 @@ impl Agg<'_> {
             Method::ArrayAggArray => {
                 State::ArrayAggArray { dims: Vec::new(), count: 0, values: Vec::new() }
             }
+            Method::RangeAgg => State::RangeAgg { ranges: Vec::new() },
         })
     }
 
@@ -255,6 +263,13 @@ impl Agg<'_> {
             (Method::ArrayAggArray, State::ArrayAggArray { dims, count, values }) => {
                 accumulate_array(args.first(), dims, count, values)?;
             }
+            (Method::RangeAgg, State::RangeAgg { ranges }) => match args.first() {
+                Some(Value::Range(range)) => ranges.push((**range).clone()),
+                Some(Value::Multirange(input)) if input.is_empty() => ranges.push(Range::empty()),
+                Some(Value::Multirange(input)) => ranges.extend(input.iter().cloned()),
+                Some(Value::Null) | None => {}
+                _ => return Err(Error::internal("range_agg got a value of the wrong kind")),
+            },
             _ => return Err(Error::internal("an aggregate state of the wrong kind")),
         }
         Ok(())
@@ -322,6 +337,7 @@ impl Agg<'_> {
                 all.extend(dims);
                 Ok(Value::Array(Box::new(Array { dims: all, values })))
             }
+            (Method::RangeAgg, State::RangeAgg { ranges }) => rupg_func::range_agg(self.ty, ranges),
             _ => Err(Error::internal("an aggregate state of the wrong kind")),
         }
     }

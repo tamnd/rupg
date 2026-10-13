@@ -55,6 +55,18 @@ pub(crate) fn make_multirange(range: u32, mut ranges: Vec<Range>) -> Result<Vec<
     Ok(out)
 }
 
+/// `range_agg_finalfn`: the multirange of the type `multirange` that has the values of the ranges. No range gives null.
+///
+/// # Errors
+///
+/// The errors of the comparison of the bounds.
+pub fn range_agg(multirange: u32, ranges: Vec<Range>) -> Result<Value> {
+    if ranges.is_empty() {
+        return Ok(Value::Null);
+    }
+    Ok(Value::Multirange(make_multirange(range_of(multirange), ranges)?))
+}
+
 /// `multirange_cmp`: the order of the ranges one by one, and a multirange with fewer ranges is first when its ranges are the first ranges of the other. `sub` is the subtype.
 pub(crate) fn multirange_order(sub: u32, a: &[Range], b: &[Range]) -> Result<Ordering> {
     for (x, y) in a.iter().zip(b) {
@@ -442,7 +454,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "range_merge_from_multirange" => merge,
         "multirange_union" => union_op,
         "multirange_minus" => minus_op,
-        "multirange_intersect" => intersect_op,
+        "multirange_intersect" | "multirange_intersect_agg_transfn" => intersect_op,
         "range_overlaps_multirange"
         | "multirange_overlaps_range"
         | "multirange_overlaps_multirange" => overlaps_op,

@@ -613,7 +613,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "range_adjacent" => adjacent_op,
         "range_union" => union_op,
         "range_merge" => merge,
-        "range_intersect" => intersect_op,
+        "range_intersect" | "range_intersect_agg_transfn" => intersect_op,
         "range_minus" => minus_op,
         "int4range_subdiff" | "int8range_subdiff" | "numrange_subdiff" | "daterange_subdiff"
         | "tsrange_subdiff" | "tstzrange_subdiff" => subdiff,
