@@ -336,7 +336,7 @@ fn hex(bytes: &[u8], out: &mut String) {
     }
 }
 
-/// A value as a list of its kind and its parts, or `null`. A float keeps its bits, and a `numeric` keeps the bytes of its binary form.
+/// A value as a list of its kind and its parts, or `null`. A float keeps its bits, and a `numeric` and a `tsvector` keep the bytes of their binary form.
 fn write_value(value: &Value, out: &mut String) {
     match value {
         Value::Null => out.push_str("null"),
@@ -425,6 +425,13 @@ fn write_value(value: &Value, out: &mut String) {
                 write_value(field, out);
             }
             out.push_str("))");
+        }
+        Value::TsVector(lexemes) => {
+            let mut bytes = Vec::new();
+            rupg_types::tsvector_send(lexemes, &mut bytes);
+            out.push_str("(tsvector ");
+            hex(&bytes, out);
+            out.push(')');
         }
         Value::Range(range) => write_range(range, out),
         Value::Multirange(ranges) => {
@@ -776,6 +783,12 @@ fn value_of(item: &Item) -> Result<Value> {
                 .map_err(|_| bad("the bytes of a numeric"))?;
             Value::Numeric(value)
         }
+        "tsvector" => {
+            let bytes = bytes_of(part(0)?)?;
+            let value = rupg_types::tsvector_recv(&mut Recv::new(&bytes))
+                .map_err(|_| bad("the bytes of a tsvector"))?;
+            Value::TsVector(value)
+        }
         "oid" => Value::Oid(number(part(0)?)?),
         "char" => Value::Char(number(part(0)?)?),
         "text" => match parts.first() {
@@ -911,6 +924,13 @@ mod tests {
             ),
             (Value::Range(Box::new(Range::empty())), oid::DATERANGE),
             (Value::Multirange(Vec::new()), oid::INT4MULTIRANGE),
+            (Value::TsVector(Vec::new()), oid::TSVECTOR),
+            (
+                Value::TsVector(
+                    rupg_types::tsvector_parse("'it''s':3A a b:1,2C").expect("tsvector"),
+                ),
+                oid::TSVECTOR,
+            ),
             (
                 Value::Multirange(vec![
                     Range {

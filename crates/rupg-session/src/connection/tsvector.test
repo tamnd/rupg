@@ -1,0 +1,229 @@
+> SELECT 'a fat cat sat on a mat and ate a fat rat'::tsvector
+fields tsvector:3614:-1:-1
+row 'a' 'and' 'ate' 'cat' 'fat' 'mat' 'on' 'rat' 'sat'
+SELECT 1
+> SELECT $$the 'quick brown' fox's \\ tail$$::tsvector
+fields tsvector:3614:-1:-1
+row '\\' 'fox''s' 'quick brown' 'tail' 'the'
+SELECT 1
+> SELECT 'a:1 fat:2,4 cat:3A b:5B,6C,7D x:3,1,2,1'::tsvector
+fields tsvector:3614:-1:-1
+row 'a':1 'b':5B,6C,7 'cat':3A 'fat':2,4 'x':1,2,3
+SELECT 1
+> SELECT 'a:1A,1B,1C a:1 b:2C,2A'::tsvector, 'z:5 y z:1,3B'::tsvector
+fields tsvector:3614:-1:-1,tsvector:3614:-1:-1
+row 'a':1A 'b':2A,'y' 'z':1,3B,5
+SELECT 1
+> SELECT ''::tsvector, '   '::tsvector, length(''::tsvector)
+fields tsvector:3614:-1:-1,tsvector:3614:-1:-1,length:23:4:-1
+row ,,0
+SELECT 1
+> SELECT $$'it''s' 'a\'b' 'c\\d' e\ f$$::tsvector
+fields tsvector:3614:-1:-1
+row 'a''b' 'c\\d' 'e f' 'it''s'
+SELECT 1
+> SELECT 'a:1*,2a,3b'::tsvector, 'a:20000 b:16383 c:16384 d:99999999999'::tsvector
+fields tsvector:3614:-1:-1,tsvector:3614:-1:-1
+row 'a':1A,2A,3B,'a':16383 'b':16383 'c':16383 'd':16383
+SELECT 1
+> SELECT 'a:1A2 b:3DA c:4,5x'::tsvector
+ERROR 42601 syntax error in tsvector: "a:1A2 b:3DA c:4,5x" at 8
+> SELECT 'a:'::tsvector
+ERROR 42601 syntax error in tsvector: "a:" at 8
+> SELECT 'a:0'::tsvector
+ERROR 42601 wrong position info in tsvector: "a:0" at 8
+> SELECT 'a:1AB'::tsvector
+ERROR 42601 syntax error in tsvector: "a:1AB" at 8
+> SELECT 'a:4294967296'::tsvector
+ERROR 42601 wrong position info in tsvector: "a:4294967296" at 8
+> SELECT $$'abc$$::tsvector
+ERROR 42601 syntax error in tsvector: "'abc" at 8
+> SELECT $$abc\$$::tsvector
+ERROR 42601 there is no escaped character: "abc\" at 8
+> SELECT 'a :1'::tsvector, 'a: 1'::tsvector
+ERROR 42601 syntax error in tsvector: "a: 1" at 26
+> SELECT $$''$$::tsvector
+ERROR 42601 syntax error in tsvector: "''" at 8
+> SELECT ':1'::tsvector
+fields tsvector:3614:-1:-1
+row ':1'
+SELECT 1
+> SELECT 'а б в ä é 中文:1'::tsvector
+fields tsvector:3614:-1:-1
+row 'ä' 'é' 'а' 'б' 'в' '中文':1
+SELECT 1
+> SELECT 'b a c'::tsvector = 'c b a'::tsvector, 'a'::tsvector < 'b'::tsvector, 'aa'::tsvector < 'b'::tsvector, 'a:1'::tsvector < 'a'::tsvector, 'a b'::tsvector > 'c'::tsvector
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,f,t
+SELECT 1
+> SELECT 'a:1'::tsvector < 'a:2'::tsvector, 'a:1A'::tsvector < 'a:1'::tsvector, 'a:1,2'::tsvector < 'a:1'::tsvector, 'ab'::tsvector < 'bc'::tsvector, 'b'::tsvector < 'ab'::tsvector
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,f,t,t
+SELECT 1
+> SELECT tsvector_cmp('a:1', 'a'), tsvector_cmp('a', 'a'), tsvector_cmp('x y', 'xy z'), 'a b'::tsvector <> 'a'::tsvector, 'a'::tsvector <= 'a', 'a'::tsvector >= 'b'
+fields tsvector_cmp:23:4:-1,tsvector_cmp:23:4:-1,tsvector_cmp:23:4:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row 1,0,-1,t,t,f
+SELECT 1
+> SELECT v FROM (VALUES ('b'::tsvector), ('a:1'), ('ab'), ('a b'), (''), ('a:1A'), ('a:1,2'), ('aaa')) AS t(v) ORDER BY v
+fields v:3614:-1:-1
+row 
+row 'b'
+row 'ab'
+row 'aaa'
+row 'a':1A
+row 'a':1
+row 'a' 'b'
+row 'a':1,2
+SELECT 8
+> SELECT length('a:1 b c:2,3'::tsvector), strip('a:1 b c:2B,3'::tsvector), strip(''::tsvector)
+fields length:23:4:-1,strip:3614:-1:-1,strip:3614:-1:-1
+row 3,'a' 'b' 'c',
+SELECT 1
+> SELECT setweight('a:1 b c:2B,3'::tsvector, 'A'), setweight('a:1C b'::tsvector, 'd'), setweight('a:1 b:2 c:3'::tsvector, 'b', ARRAY['a', 'c', NULL, 'zz'])
+fields setweight:3614:-1:-1,setweight:3614:-1:-1,setweight:3614:-1:-1
+row 'a':1A 'b' 'c':2A,3A,'a':1 'b','a':1B 'b':2 'c':3B
+SELECT 1
+> SELECT setweight('a:1'::tsvector, 'x')
+ERROR 22023 unrecognized weight: "x"
+> SELECT setweight('a:1'::tsvector, '')
+ERROR 22023 unrecognized weight: "\000"
+> SELECT ts_delete('a:1 b:2 c:3'::tsvector, 'b'), ts_delete('a:1 b:2'::tsvector, 'zz'), ts_delete('a:1 b:2 c:3 d'::tsvector, ARRAY['a', 'd', NULL, 'a', 'q'])
+fields ts_delete:3614:-1:-1,ts_delete:3614:-1:-1,ts_delete:3614:-1:-1
+row 'a':1 'c':3,'a':1 'b':2,'b':2 'c':3
+SELECT 1
+> SELECT tsvector_to_array('c:1 a b:2'::tsvector), tsvector_to_array(''::tsvector), array_to_tsvector(ARRAY['b', 'a', 'b', 'c d']), array_to_tsvector('{}'::text[])
+fields tsvector_to_array:1009:-1:-1,tsvector_to_array:1009:-1:-1,array_to_tsvector:3614:-1:-1,array_to_tsvector:3614:-1:-1
+row {a,b,c},{},'a' 'b' 'c d',
+SELECT 1
+> SELECT array_to_tsvector(ARRAY['a', NULL])
+ERROR 22004 lexeme array may not contain nulls
+> SELECT array_to_tsvector(ARRAY['a', ''])
+ERROR 2200F lexeme array may not contain empty strings
+> SELECT ts_filter('a:1A,2B b:3C c:4 d'::tsvector, '{a,c}'), ts_filter('a:1A b:2'::tsvector, '{d}'), ts_filter('a:1A'::tsvector, '{b}')
+fields ts_filter:3614:-1:-1,ts_filter:3614:-1:-1,ts_filter:3614:-1:-1
+row 'a':1A 'b':3C,'b':2,
+SELECT 1
+> SELECT ts_filter('a:1A'::tsvector, '{a,NULL}')
+ERROR 22004 weight array may not contain nulls
+> SELECT ts_filter('a:1A'::tsvector, '{z}')
+ERROR 22023 unrecognized weight: "z"
+> SELECT 'a:1 b:2'::tsvector || 'b:1 c:3A'::tsvector, 'a b'::tsvector || 'a:1 c'::tsvector, ''::tsvector || 'a:1'::tsvector, 'a:3'::tsvector || ''::tsvector
+fields ?column?:3614:-1:-1,?column?:3614:-1:-1,?column?:3614:-1:-1,?column?:3614:-1:-1
+row 'a':1 'b':2,3 'c':5A,'a':1 'b' 'c','a':1,'a':3
+SELECT 1
+> SELECT 'a:16380 b:2'::tsvector || 'a:5,6 b:1'::tsvector, 'x'::tsvector || 'x:1'::tsvector
+fields ?column?:3614:-1:-1,?column?:3614:-1:-1
+row 'a':16380,16383 'b':2,16381,'x':1
+SELECT 1
+> SELECT * FROM unnest('c:1A,2 a b:3B'::tsvector)
+fields lexeme:25:-1:-1,positions:1005:-1:-1,weights:1009:-1:-1
+row a,NULL,NULL
+row b,{3},{B}
+row c,{1,2},{A,D}
+SELECT 3
+> SELECT unnest('x:1 y'::tsvector), (unnest('z:2C'::tsvector)).weights
+fields unnest:2249:-1:-1,weights:1009:-1:-1
+row (x,{1},{D}),{C}
+row (y,,),NULL
+SELECT 2
+> SELECT pg_typeof('a'::tsvector), 'a:1 b'::tsvector::text, 'b a:1'::text::tsvector
+fields pg_typeof:2206:4:-1,text:25:-1:-1,tsvector:3614:-1:-1
+row tsvector,'a':1 'b','a':1 'b'
+SELECT 1
+> SELECT pg_input_is_valid('a:1', 'tsvector'), pg_input_is_valid('a:0', 'tsvector'), pg_input_is_valid($$'a$$, 'tsvector')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('a:1AB', 'tsvector')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row syntax error in tsvector: "a:1AB",NULL,NULL,42601
+SELECT 1
+> SELECT * FROM pg_input_error_info('a:0', 'tsvector')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row wrong position info in tsvector: "a:0",NULL,NULL,42601
+SELECT 1
+> SELECT v, count(*) FROM (VALUES ('a b'::tsvector), ('b a'), ('a:1 b'), ('a'), ('b   a')) AS t(v) GROUP BY v ORDER BY v
+fields v:3614:-1:-1,count:20:8:-1
+row 'a',1
+row 'a' 'b',3
+row 'a':1 'b',1
+SELECT 3
+> COPY (SELECT 'a:1 fat:2,4A cat'::tsvector AS a, ''::tsvector AS b, $$'it''s':3$$::tsvector AS c) TO STDOUT
+copy out 0 0,0,0
+data \'a\':1 \'cat\' \'fat\':2,4A\t\t\'it\'\'s\':3\n
+copy done
+COPY 1
+> COPY (SELECT 'a:1 fat:2,4A cat'::tsvector AS a, ''::tsvector AS b, 'x:16383C'::tsvector AS c) TO STDOUT WITH (FORMAT binary)
+copy out 1 1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x1a\x00\x00\x00\x03a\x00\x00\x01\x00\x01cat\x00\x00\x00fat\x00\x00\x02\x00\x02\xc0\x04\x00\x00\x00\x04\x00\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x01x\x00\x00\x01\x7f\xff
+data \xff\xff
+copy done
+COPY 1
+> SELECT tsvector_cmp('a', 'c'), tsvector_cmp('c', 'a'), tsvector_cmp('a:1', 'a:3'), tsvector_cmp('a:1A', 'a:1C')
+fields tsvector_cmp:23:4:-1,tsvector_cmp:23:4:-1,tsvector_cmp:23:4:-1,tsvector_cmp:23:4:-1
+row -2,2,1,-1
+SELECT 1
+> SELECT 'a:1A2'::tsvector, 'b:3DA'::tsvector, 'c:1D,2'::tsvector, 'd:5,5A,5,4C'::tsvector
+fields tsvector:3614:-1:-1,tsvector:3614:-1:-1,tsvector:3614:-1:-1,tsvector:3614:-1:-1
+row 'a':1A,'b':3A,'c':1,2,'d':4C,5A
+SELECT 1
+> SELECT 'a:1,2,3x'::tsvector
+ERROR 42601 syntax error in tsvector: "a:1,2,3x" at 8
+> SELECT 'a:1DD'::tsvector
+fields tsvector:3614:-1:-1
+row 'a':1
+SELECT 1
+> SELECT 'a:1,'::tsvector
+ERROR 42601 syntax error in tsvector: "a:1," at 8
+> SELECT $$'a'b$$::tsvector, $$a'b'$$::tsvector, $$'a':1 'a'$$::tsvector
+fields tsvector:3614:-1:-1,tsvector:3614:-1:-1,tsvector:3614:-1:-1
+row 'a' 'b','a''b''','a':1
+SELECT 1
+> SELECT $$'a'  :1$$::tsvector
+fields tsvector:3614:-1:-1
+row ':1' 'a'
+SELECT 1
+> SELECT array_length(positions, 1), positions[256] FROM unnest((SELECT ('a:' || string_agg(i::text, ','))::tsvector FROM generate_series(1, 300) AS i))
+fields array_length:23:4:-1,positions:21:2:-1
+row 256,256
+SELECT 1
+> SELECT length(repeat('x', 2047)::tsvector)
+fields length:23:4:-1
+row 1
+SELECT 1
+> SELECT repeat('x', 2048)::tsvector
+ERROR 54000 word is too long (2048 bytes, max 2047 bytes)
+> SELECT 'a:16383,16382 b:16383A'::tsvector || 'a:1 b:2'::tsvector
+fields ?column?:3614:-1:-1
+row 'a':16382,16383 'b':16383A
+SELECT 1
+> SELECT 'a:1'::tsvector || 'a:2'::tsvector || 'a:3'::tsvector, strip('a:1'::tsvector) = 'a'::tsvector
+fields ?column?:3614:-1:-1,?column?:16:1:-1
+row 'a':1,3,6,t
+SELECT 1
+> SELECT ARRAY['a:1'::tsvector, 'b c'], '{"a:1 b",c}'::tsvector[]
+fields array:3643:-1:-1,tsvector:3643:-1:-1
+row {'a':1,"'b' 'c'"},{"'a':1 'b'",'c'}
+SELECT 1
+> SELECT DISTINCT v FROM (VALUES ('b a'::tsvector), ('a b'), ('a:1')) AS t(v) ORDER BY v
+fields v:3614:-1:-1
+row 'a':1
+row 'a' 'b'
+SELECT 2
+> SELECT setweight(''::tsvector, 'a'), ts_delete(''::tsvector, 'a'), ts_filter(''::tsvector, '{a}'), ''::tsvector || ''::tsvector
+fields setweight:3614:-1:-1,ts_delete:3614:-1:-1,ts_filter:3614:-1:-1,?column?:3614:-1:-1
+row ,,,
+SELECT 1
+> SELECT setweight('a:1'::tsvector, 'é')
+ERROR 22023 unrecognized weight: "\303"
+> SELECT ts_delete('a b c'::tsvector, '{}'::text[]), setweight('a:1 b:2'::tsvector, 'c', '{}'), array_to_tsvector(ARRAY[['b', 'a'], ['a', 'c']])
+fields ts_delete:3614:-1:-1,setweight:3614:-1:-1,array_to_tsvector:3614:-1:-1
+row 'a' 'b' 'c','a':1 'b':2,'a' 'b' 'c'
+SELECT 1
+P q1|SELECT $1::tsvector, length($1::tsvector), $1::tsvector || $2::tsvector
+X q1|b:1 a|c:2
+row 'a' 'b':1,2,'a' 'b':1 'c':3
+SELECT 1
+X q1||
+row ,0,
+SELECT 1

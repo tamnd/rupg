@@ -110,6 +110,7 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::CIRCLE
             | oid::PG_SNAPSHOT
             | oid::TXID_SNAPSHOT
+            | oid::TSVECTOR
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -184,6 +185,10 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
     }
     if let Value::Record(record) = value {
         return record_out(record, session, out);
+    }
+    if let Value::TsVector(lexemes) = value {
+        types::tsvector_deparse(lexemes, out);
+        return Ok(());
     }
     if let (Some(kind), Value::Bytea(v)) = (types::GeoKind::from_oid(ty), value) {
         types::geo_out(kind, v, session.extra_float_digits(), out);
@@ -518,6 +523,7 @@ fn input_value(
         oid::NAME => Value::text(types::name_in(text)),
         oid::INT2 => Value::Int2(types::int2_in(text)?),
         oid::INT4 => Value::Int4(types::int4_in(text)?),
+        oid::TSVECTOR => Value::TsVector(types::tsvector_parse(text)?),
         oid::INT8 => Value::Int8(types::int8_in(text)?),
         oid::OID => Value::Oid(types::oid_in(text)?),
         oid::MONEY => Value::Int8(types::cash_in(text)?),
@@ -774,6 +780,7 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::VARCHAR => Value::text(types::varchar_in(recv.text()?, typmod)?),
         oid::BPCHAR => Value::text(types::bpchar_in(recv.text()?, typmod)?),
         oid::OID => Value::Oid(recv.u32()?),
+        oid::TSVECTOR => Value::TsVector(types::tsvector_recv(recv)?),
         ty if RegKind::from_oid(ty).is_some() => Value::Oid(recv.u32()?),
         oid::JSON => Value::text(types::json_in(recv.text()?)?),
         oid::JSONB => Value::Text(types::jsonb_recv(recv.rest())?),
@@ -883,6 +890,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         (_, Value::Record(record)) => record_send(record, out)?,
         (_, Value::Range(range)) => range_send(ty, range, out)?,
         (_, Value::Multirange(ranges)) => multirange_send(ty, ranges, out)?,
+        (_, Value::TsVector(lexemes)) => types::tsvector_send(lexemes, out),
         (_, Value::Null) => return Err(Error::internal("the send function got a null value")),
         _ => return Err(not_yet(format!("binary output of type {}", type_name(ty)))),
     }

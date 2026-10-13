@@ -1,4 +1,4 @@
-//! The value model, `Datum`, `Vector` of 1024 values, `TypeId`, the text and binary forms of the 197 types, numeric, date and time, JSON, arrays, ranges, multiranges.
+//! The value model, `Datum`, `Vector` of 1024 values, `TypeId`, the text and binary forms of the 197 types, numeric, date and time, JSON, arrays, ranges, multiranges, `tsvector`.
 //!
 //! See `spec/07-sql-types-and-catalog.md` and `spec/22-crate-layout.md` section 22.4.
 //!
@@ -29,6 +29,8 @@
 //! [`RegKind`], the OID alias types such as `regclass` and `regtype`. [`reg_in`] reads a number or `-` as PostgreSQL does and gives any other string as a name, and [`reg_out_oid`] writes OID 0 and an OID with no object. The catalog finds the names: it splits a name such as `schema.table` with [`qualified_name_list`] and writes the names of the objects.
 //!
 //! [`Recv`], the binary input of a `Bind` parameter, with the errors of PostgreSQL when the value is too short or too long. The binary output of the other types is the value in big-endian bytes.
+//!
+//! [`Lexeme`], one lexeme of a `tsvector` with its positions, with [`tsvector_parse`], [`tsvector_deparse`], [`tsvector_recv`] and [`tsvector_send`]. [`tsvector_cmp`] is the order of the B-tree operator class, and [`unique_positions`] puts positions in order as the input function does.
 //!
 //! [`unicode`], the four Unicode normalization forms, and [`tz`], the time zones of the IANA data.
 //!
@@ -72,6 +74,7 @@ mod snapshot;
 mod stats;
 mod string;
 mod tid;
+mod tsvector;
 mod typeid;
 mod types;
 pub mod typmod;
@@ -136,6 +139,12 @@ pub use snapshot::{Snapshot, snapshot_in, snapshot_out, snapshot_recv};
 pub use stats::{pg_dependencies_in, pg_dependencies_out, pg_ndistinct_in, pg_ndistinct_out};
 pub use string::{bpchar_coerce, bpchar_in, varchar_coerce, varchar_in};
 pub use tid::{tid_in, tid_out};
+pub use tsvector::{
+    Lexeme, TSVECTOR_MAX_DATA, TSVECTOR_MAX_POSITIONS, TSVECTOR_MAX_WORD, limit_position,
+    position_of, ts_compare_string, tsvector_cmp, tsvector_data_len, tsvector_deparse,
+    tsvector_parse, tsvector_recv, tsvector_send, tsvector_size, unique_positions, weight_of,
+    with_weight, word_too_long,
+};
 pub use typeid::TypeId;
 pub use types::{Oid, PgType, TypeInfo, format_type};
 pub use value::{Record, Value};

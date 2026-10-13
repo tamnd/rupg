@@ -34,6 +34,7 @@ mod snapshot;
 mod srf;
 mod stat;
 mod text;
+mod tsvector;
 mod updatable;
 mod zones;
 
@@ -280,6 +281,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| network::by_src(src))
         .or_else(|| range::by_src(src))
         .or_else(|| multirange::by_src(src))
+        .or_else(|| tsvector::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))
