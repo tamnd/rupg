@@ -1785,6 +1785,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/bit.test")));
     }
 
+    /// The operators and functions of `path`, `polygon` and `circle`: the winding test of a point in a polygon, the containment and the overlap of polygons, the distances, the casts between the types and the errors of `polygon(integer, circle)`. `connection/geofn2.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn geofn2() {
+        big_stack(|| script(include_str!("connection/geofn2.test")));
+    }
+
     /// The operators and functions of `point`, `lseg`, `line` and `box`: the comparisons with the tolerance of `EPSILON`, NaN, the arithmetic with the errors of overflow, underflow and division by zero, the distances, the closest points and the intersections. `connection/geofn.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn geofn() {

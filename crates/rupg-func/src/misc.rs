@@ -226,6 +226,7 @@ pub(crate) fn sql_function(func: u32) -> Option<Kernel> {
         880 => rpad_space,
         1810 | 1811 => bit_length,
         1812 => crate::bit::bit_length,
+        1426 => crate::geo::path_contain_pt,
         2003 | 2004 => any_concat,
         1285 | 1290 => quote_any,
         2631 => crate::network::int8pl_inet,
