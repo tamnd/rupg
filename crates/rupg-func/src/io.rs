@@ -102,6 +102,8 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::POLYGON
             | oid::LINE
             | oid::CIRCLE
+            | oid::PG_SNAPSHOT
+            | oid::TXID_SNAPSHOT
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -118,7 +120,7 @@ pub fn input_supported(ty: u32) -> bool {
         return input_supported(elem);
     }
     output_supported(ty)
-        && !matches!(ty, XID | CID | oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN | oid::VOID)
+        && !matches!(ty, oid::ACLITEM | oid::ANYARRAY | oid::VOID)
         && !is_row_type(ty)
 }
 
@@ -173,6 +175,11 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
     }
     match (ty, value) {
         (oid::MONEY, Value::Int8(v)) => types::cash_out(*v, out),
+        (oid::PG_LSN, Value::Int8(v)) => types::pg_lsn_out(v.cast_unsigned(), out),
+        (oid::PG_SNAPSHOT | oid::TXID_SNAPSHOT, Value::Bytea(v)) => {
+            let snapshot = types::Snapshot::from_bytes(v).ok_or_else(bad_value)?;
+            types::snapshot_out(&snapshot, out);
+        }
         (oid::MACADDR, Value::Int8(v)) => types::macaddr_out(v.cast_unsigned(), out),
         (oid::MACADDR8, Value::Int8(v)) => types::macaddr8_out(v.cast_unsigned(), out),
         (oid::XID8 | oid::OID8, Value::Int8(v)) => types::u64_out(v.cast_unsigned(), out),
@@ -424,6 +431,8 @@ fn input_value(
         oid::VARBIT => Value::Text(types::bit_in(text, typmod, true)?),
         oid::XID8 => Value::Int8(types::uint64_in(text, "xid8")?.cast_signed()),
         oid::OID8 => Value::Int8(types::uint64_in(text, "oid8")?.cast_signed()),
+        oid::PG_LSN => Value::Int8(types::pg_lsn_in(text)?.cast_signed()),
+        oid::PG_SNAPSHOT | oid::TXID_SNAPSHOT => Value::Bytea(types::snapshot_in(text)?.to_bytes()),
         oid::TID => {
             let (block, offset) = types::tid_in(text)?;
             tid_value(block, offset)
@@ -475,6 +484,15 @@ fn input_value(
         oid::PG_DEPENDENCIES => Value::Bytea(types::pg_dependencies_in(text)?),
         // `pg_mcv_list_in`: a list of the most common values comes only from `ANALYZE`.
         oid::PG_MCV_LIST => return Err(Failed::Hard(no_input(ty))),
+        // `gtsvector_in` and `brin_bloom_summary_in`: these values come only from an index.
+        oid::GTSVECTOR | oid::PG_BRIN_BLOOM_SUMMARY => return Err(Failed::Hard(no_input(ty))),
+        // `brin_minmax_multi_summary_in` names the type with no `pg_` prefix.
+        oid::PG_BRIN_MINMAX_MULTI_SUMMARY => {
+            return Err(Failed::Hard(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot accept a value of type brin_minmax_multi_summary".to_string(),
+            )));
+        }
         // `PSEUDOTYPE_DUMMY_INPUT_FUNC`: a pseudo-type such as `anyelement` has no values. `void` and `record` have input functions.
         _ if builtin::type_by_oid(ty).is_some_and(|row| row.kind == b'p')
             && !matches!(ty, oid::VOID | oid::RECORD) =>
@@ -561,7 +579,11 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::NAME => Value::text(types::name_recv(recv.text()?)?),
         oid::INT2 => Value::Int2(recv.i16()?),
         oid::INT4 => Value::Int4(recv.i32()?),
-        oid::INT8 | oid::MONEY | oid::XID8 | oid::OID8 => Value::Int8(recv.i64()?),
+        oid::INT8 | oid::MONEY | oid::XID8 | oid::OID8 | oid::PG_LSN => Value::Int8(recv.i64()?),
+        XID | CID => Value::Oid(recv.u32()?),
+        oid::PG_SNAPSHOT | oid::TXID_SNAPSHOT => {
+            Value::Bytea(types::snapshot_recv(recv)?.to_bytes())
+        }
         oid::MACADDR => Value::Int8(types::macaddr_recv(recv)?.cast_signed()),
         oid::MACADDR8 => Value::Int8(types::macaddr8_recv(recv)?.cast_signed()),
         oid::BIT => Value::Text(types::bit_recv(recv, typmod, false)?),
@@ -636,7 +658,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         return failed.map_or(Ok(()), Err);
     }
     match (ty, value) {
-        (oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN, _) => {
+        (oid::ACLITEM | oid::ANYARRAY, _) => {
             return Err(not_yet(format!("binary output of type {}", type_name(ty))));
         }
         (oid::MACADDR, Value::Int8(v)) => out.extend_from_slice(&v.to_be_bytes()[2..]),

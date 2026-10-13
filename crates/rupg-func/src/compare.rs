@@ -37,6 +37,8 @@ enum Family {
     Macaddr,
     /// `macaddr8`, which holds a `u64` in the bits of a `bigint`.
     Macaddr8,
+    /// `pg_lsn`, which holds a `u64` in the bits of a `bigint`.
+    PgLsn,
     /// `bit` and `bit varying`, a string of `0` and `1` whose byte order is the order of `bitcmp`.
     Bit,
 }
@@ -69,6 +71,7 @@ fn family(ty: u32) -> Option<Family> {
         oid::OID8 => Family::Oid8,
         oid::MACADDR => Family::Macaddr,
         oid::MACADDR8 => Family::Macaddr8,
+        oid::PG_LSN => Family::PgLsn,
         oid::BIT | oid::VARBIT => Family::Bit,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
@@ -91,7 +94,8 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
     let trim = |ty: u32, s: &'_ str| -> usize {
         if base_type(ty) == oid::BPCHAR { s.trim_end_matches(' ').len() } else { s.len() }
     };
-    let unsigned = |ty: u32| matches!(base_type(ty), oid::XID8 | oid::OID8 | oid::MACADDR8);
+    let unsigned =
+        |ty: u32| matches!(base_type(ty), oid::XID8 | oid::OID8 | oid::MACADDR8 | oid::PG_LSN);
     Ok(match (a, b) {
         (Value::Int8(x), Value::Int8(y)) if unsigned(left) && unsigned(right) => {
             x.cast_unsigned().cmp(&y.cast_unsigned())
@@ -364,9 +368,9 @@ fn xid_ne(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// The kernel of `larger`, `smaller` and the B-tree `cmp` functions.
 pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     let [left, right] = proc.argtypes else { return None };
-    // `xid` has `=` and `<>` and no order, so it is not in a family.
+    // `xid` and `cid` have `=` and `<>` and no order, so they are not in a family.
     match src {
-        "xideq" => return Some(xid_eq),
+        "xideq" | "cideq" => return Some(xid_eq),
         "xidneq" => return Some(xid_ne),
         _ => {}
     }
@@ -384,7 +388,10 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     } else if src.ends_with("smaller") {
         Some(smaller)
     } else if src.starts_with("bt") && src.ends_with("cmp")
-        || matches!(src, "array_cmp" | "cash_cmp" | "xid8cmp" | "macaddr_cmp" | "macaddr8_cmp")
+        || matches!(
+            src,
+            "array_cmp" | "cash_cmp" | "xid8cmp" | "macaddr_cmp" | "macaddr8_cmp" | "pg_lsn_cmp"
+        )
     {
         Some(cmp)
     } else {

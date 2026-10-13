@@ -19,6 +19,7 @@ mod encoding;
 mod generated;
 mod geo;
 mod io;
+mod lsn;
 mod mac;
 mod math;
 mod misc;
@@ -27,6 +28,7 @@ mod reg;
 mod regex;
 mod replication;
 mod shared;
+mod snapshot;
 mod srf;
 mod stat;
 mod text;
@@ -258,6 +260,8 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| mac::by_src(src))
         .or_else(|| bit::by_src(src))
         .or_else(|| geo::by_src(src))
+        .or_else(|| lsn::by_src(src))
+        .or_else(|| snapshot::by_src(src))
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
         .or_else(|| acl::by_src(src))

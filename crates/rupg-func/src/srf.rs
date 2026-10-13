@@ -30,6 +30,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         }
         "pg_options_to_table" => options_to_table,
         "aclexplode" => crate::acl::aclexplode,
+        "pg_snapshot_xip" => crate::snapshot::snapshot_xip,
         "pg_get_keywords" => keywords,
         "pg_get_wait_events" => wait_events,
         "show_all_settings" => all_settings,

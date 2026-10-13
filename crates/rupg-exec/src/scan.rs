@@ -299,9 +299,7 @@ pub(crate) fn value(batch: &Batch, row: usize, ty: u32, session: &dyn Session) -
         Values::Float4(v) => Value::Float4(v[row]),
         Values::Oid(v) => Value::Oid(v[row]),
         Values::Text(v) => match ty {
-            oid::NAME | oid::TEXT | oid::PG_NODE_TREE | oid::ANYARRAY | oid::PG_LSN => {
-                Value::text(v[row])
-            }
+            oid::NAME | oid::TEXT | oid::PG_NODE_TREE | oid::ANYARRAY => Value::text(v[row]),
             oid::ACLITEM_ARRAY => {
                 let array = rupg_types::array_in(v[row], b',', true, |s| Ok(Value::text(s)))
                     .map_err(|e| Error::internal(e.message))?;
