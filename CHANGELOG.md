@@ -4,6 +4,21 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.22 (2026-10-13)
+
+A patch release on the way to M2. rupg now runs the operators and functions of the geometric types, and reads and writes the values of `xid`, `cid`, `pg_lsn`, `pg_snapshot` and `txid_snapshot`.
+
+### Added
+
+- The operators and functions of `point`, `lseg`, `line` and `box`, such as the distance, the intersection and the closest point (#271).
+- The input of `xid`, `cid` and `pg_lsn`, the text and binary forms of `pg_snapshot` and `txid_snapshot`, the `pg_lsn` arithmetic, and the functions `pg_snapshot_xmin`, `pg_snapshot_xmax`, `pg_snapshot_xip` and `pg_visible_in_snapshot` (#272).
+- The operators and functions of `path`, `polygon` and `circle` (#273).
+
+### Fixed
+
+- `pg_get_sequence_data` gave the LSN of a sequence as the text `0/0`. It now gives the `pg_lsn` value `0/00000000`, as PostgreSQL does (#272).
+- The input of `gtsvector` and of the BRIN summary types gave `0A000` with the wrong message. It now gives the message of PostgreSQL 19 (#272).
+
 ## 0.1.21 (2026-10-13)
 
 A patch release on the way to M2. rupg now reads and writes the values of more built-in types, so that a table with columns of these types works in queries, in `COPY` and in a `pg_dump` round trip.
