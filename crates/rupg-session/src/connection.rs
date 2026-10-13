@@ -1773,6 +1773,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sequences.test")));
     }
 
+    /// `money`, `xid8`, `oid8`, `tid` and `refcursor`: the text forms with the errors of a bad value, the rounding of `money`, the order of the unsigned types, the operators of `money`, the casts, `cash_words`, the aggregates, the arrays and the text and binary forms of `COPY`. `connection/money.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn money() {
+        big_stack(|| script(include_str!("connection/money.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {

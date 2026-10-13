@@ -153,7 +153,7 @@ fn int_inc(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `22003` for a float result that is too large.
-fn overflow() -> Error {
+pub(crate) fn overflow() -> Error {
     Error::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "value out of range: overflow")
 }
 

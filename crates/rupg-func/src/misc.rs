@@ -52,6 +52,18 @@ fn clock_timestamp(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::TimestampTz(call.session.clock()))
 }
 
+/// `tid_block`: the block number of a `tid`.
+fn tid_block(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Int8(v)] = args else { return Err(bad_value()) };
+    Ok(Value::Int8(i64::from(crate::io::tid_parts(*v)?.0)))
+}
+
+/// `tid_offset`: the offset of a `tid`.
+fn tid_offset(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Int8(v)] = args else { return Err(bad_value()) };
+    Ok(Value::Int4(i32::from(crate::io::tid_parts(*v)?.1)))
+}
+
 /// `pg_typeof`: the type of the argument as the query gives it. It is not strict.
 fn pg_typeof(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Oid(call.args.first().copied().ok_or_else(bad_value)?))
@@ -193,6 +205,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "statement_timestamp" => statement_timestamp,
         "clock_timestamp" => clock_timestamp,
         "pg_typeof" => pg_typeof,
+        "tid_block" => tid_block,
+        "tid_offset" => tid_offset,
         "pg_backend_pid" => pg_backend_pid,
         "pg_client_encoding" => pg_client_encoding,
         "getdatabaseencoding" => getdatabaseencoding,

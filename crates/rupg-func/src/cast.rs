@@ -227,6 +227,17 @@ fn oid_to_int8(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Int8(i64::from(first(args)?.as_oid().ok_or_else(bad_value)?)))
 }
 
+/// `oidtooid8`.
+fn oid_to_oid8(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Int8(i64::from(first(args)?.as_oid().ok_or_else(bad_value)?)))
+}
+
+/// `xid8toxid`: the low 32 bits.
+fn xid8_to_xid(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Value::Int8(v) = first(args)? else { return Err(bad_value()) };
+    Ok(Value::Oid(u32::try_from(v.cast_unsigned() & u64::from(u32::MAX)).map_err(|_| bad_value())?))
+}
+
 /// `varchar(varchar, int4, bool)`: the length of the typmod.
 fn varchar_typmod(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let s =
@@ -463,6 +474,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "chartoi4" => char_to_int,
         "i8tooid" => int8_to_oid,
         "oidtoi8" => oid_to_int8,
+        "oidtooid8" => oid_to_oid8,
+        "xid8toxid" => xid8_to_xid,
         "varchar" => varchar_typmod,
         "bpchar" => bpchar_typmod,
         "numeric" => numeric_typmod,
