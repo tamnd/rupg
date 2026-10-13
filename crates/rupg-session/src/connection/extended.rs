@@ -436,6 +436,8 @@ impl Connection {
                 })?
             } else if let Node::LockStmt(stmt) = node {
                 self.lock(stmt)?
+            } else if let Node::CopyStmt(stmt) = node {
+                self.copy(stmt)?
             } else {
                 let mut notices = Vec::new();
                 let mut cx = Context {
@@ -464,6 +466,13 @@ impl Connection {
                     if let Some(portal) = self.portals.find_mut(name) {
                         portal.run = Run::Rows { rows, at: 0, tag };
                     }
+                }
+                Done::Copy(copy) => {
+                    if let Some(portal) = self.portals.find_mut(name) {
+                        portal.run = Run::Done;
+                    }
+                    copy.send_data(out);
+                    tag = Some((CommandTag::Copy, copy.rows));
                 }
             }
         }
