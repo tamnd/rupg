@@ -4,6 +4,21 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.21 (2026-10-13)
+
+A patch release on the way to M2. rupg now reads and writes the values of more built-in types, so that a table with columns of these types works in queries, in `COPY` and in a `pg_dump` round trip.
+
+### Added
+
+- The text and binary forms of `money`, `xid8`, `oid8`, `tid` and `refcursor` (#266).
+- The text and binary forms of `macaddr` and `macaddr8`, with their operators, `trunc` and `macaddr8_set7bit` (#267).
+- Bit string constants such as `B'1011'` and `X'1F'`, and the text and binary forms of `bit` and `bit varying`, with their operators, functions, casts and aggregates (#268).
+- The text and binary forms of the geometric types `point`, `lseg`, `box`, `path`, `polygon`, `line` and `circle` (#269).
+
+### Fixed
+
+- PostgreSQL inlines the SQL functions `anytextcat`, `textanycat`, `quote_literal(anyelement)` and `quote_nullable(anyelement)`, and folds the call when the output function of the type is immutable. rupg did not fold these calls, so an error in the call came after the description of the rows (#268).
+
 ## 0.1.20 (2026-10-13)
 
 A patch release on the way to M2. rupg now sends the data of a table with `COPY TO STDOUT`, so `pg_dump` can dump a database of rupg, and a nightly job does a round trip of a dump through PostgreSQL 19.
