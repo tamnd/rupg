@@ -1785,6 +1785,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/bit.test")));
     }
 
+    /// The geometric types `point`, `lseg`, `box`, `path`, `polygon`, `line` and `circle`: the text forms of each format with the errors of a bad value, `extra_float_digits`, the arrays, the soft errors and the text and binary forms of `COPY`. `connection/geo.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn geo() {
+        big_stack(|| script(include_str!("connection/geo.test")));
+    }
+
     /// `macaddr` and `macaddr8`: the text forms of each format with the errors of a bad value, the order, `trunc`, the bit operators, `macaddr8_set7bit`, the casts, the arrays and the text and binary forms of `COPY`. `connection/mac.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn mac() {
