@@ -30,7 +30,7 @@
 //!
 //! [`Recv`], the binary input of a `Bind` parameter, with the errors of PostgreSQL when the value is too short or too long. The binary output of the other types is the value in big-endian bytes.
 //!
-//! [`Lexeme`], one lexeme of a `tsvector` with its positions, with [`tsvector_parse`], [`tsvector_deparse`], [`tsvector_recv`] and [`tsvector_send`]. [`tsvector_cmp`] is the order of the B-tree operator class, and [`unique_positions`] puts positions in order as the input function does. [`QueryItem`], one operand or operator of a `tsquery`, with [`tsquery_parse`], [`tsquery_deparse`], [`tsquery_recv`] and [`tsquery_send`]. [`tsquery_cmp`] is the order of the B-tree operator class.
+//! [`Lexeme`], one lexeme of a `tsvector` with its positions, with [`tsvector_parse`], [`tsvector_deparse`], [`tsvector_recv`] and [`tsvector_send`]. [`tsvector_cmp`] is the order of the B-tree operator class, and [`unique_positions`] puts positions in order as the input function does. [`QueryItem`], one operand or operator of a `tsquery`, with [`tsquery_parse`], [`tsquery_deparse`], [`tsquery_recv`] and [`tsquery_send`]. [`tsquery_cmp`] is the order of the B-tree operator class. [`JsonPath`], a value of `jsonpath`, with [`jsonpath_parse`], [`jsonpath_deparse`], [`jsonpath_recv`] and [`jsonpath_send`].
 //!
 //! [`unicode`], the four Unicode normalization forms, and [`tz`], the time zones of the IANA data.
 //!
@@ -42,7 +42,7 @@
 //!
 //! [`pg_ndistinct_in`] and [`pg_dependencies_in`] read the JSON text of the types of the extended statistics with the details of the errors of PostgreSQL, and give the bytes of the value. [`pg_ndistinct_out`] and [`pg_dependencies_out`] write the text from the bytes.
 //!
-//! PostgreSQL parses `json` by recursion and stops a deep value with `stack depth limit exceeded` when it reaches `max_stack_depth`. [`json_in`] uses no recursion and takes a value at any depth. PostgreSQL stops a deep `tsquery` in the same way. [`tsquery_parse`] gives the same error for a query with 1000 levels, as the analyzer does for an expression.
+//! PostgreSQL parses `json` by recursion and stops a deep value with `stack depth limit exceeded` when it reaches `max_stack_depth`. [`json_in`] uses no recursion and takes a value at any depth. PostgreSQL stops a deep `tsquery` in the same way. [`tsquery_parse`] gives the same error for a query with 1000 levels, as the analyzer does for an expression. [`jsonpath_parse`] has the same limit for a path.
 //!
 //! The text and binary forms are lifted from `crates/rudb-pgtypes` of tamnd/rudb at f5f7065a (spec/04 section 4.9). The `DataRow` encoder and the `Bind` decoder of that crate need the executor, so they come with rupg-server.
 
@@ -59,6 +59,7 @@ mod generated;
 mod geo;
 mod json;
 mod jsonb;
+mod jsonpath;
 mod lsn;
 mod mac;
 mod money;
@@ -107,6 +108,11 @@ pub use generated::oids as oid;
 pub use geo::{GeoKind, geo_in, geo_out, geo_recv};
 pub use json::json_in;
 pub use jsonb::{jsonb_in, jsonb_recv, jsonb_send};
+pub use jsonpath::{
+    Chain, JSONPATH_LAST, JSONPATH_REGEX_DOTALL, JSONPATH_REGEX_ICASE, JSONPATH_REGEX_MLINE,
+    JSONPATH_REGEX_QUOTE, JSONPATH_REGEX_WSPACE, JsonPath, PathItem, PathOp, RegexCheck,
+    jsonpath_deparse, jsonpath_parse, jsonpath_recv, jsonpath_regex_flags, jsonpath_send,
+};
 pub use lsn::{pg_lsn_in, pg_lsn_out};
 pub use mac::{
     macaddr_in, macaddr_out, macaddr_recv, macaddr_to_macaddr8, macaddr8_in, macaddr8_out,

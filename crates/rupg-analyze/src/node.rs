@@ -440,6 +440,13 @@ fn write_value(value: &Value, out: &mut String) {
             hex(&bytes, out);
             out.push(')');
         }
+        Value::JsonPath(path) => {
+            let mut bytes = Vec::new();
+            rupg_types::jsonpath_send(path, &mut bytes);
+            out.push_str("(jsonpath ");
+            hex(&bytes, out);
+            out.push(')');
+        }
         Value::Range(range) => write_range(range, out),
         Value::Multirange(ranges) => {
             out.push_str("(multirange");
@@ -807,6 +814,13 @@ fn value_of(item: &Item) -> Result<Value> {
                 Value::TsQuery(value)
             }
         }
+        "jsonpath" => {
+            let bytes = bytes_of(part(0)?)?;
+            // The input checked the patterns of `like_regex` when it made the value.
+            let value = rupg_types::jsonpath_recv(&mut Recv::new(&bytes), &|_, _| Ok(()))
+                .map_err(|_| bad("the bytes of a jsonpath"))?;
+            Value::JsonPath(Box::new(value))
+        }
         "oid" => Value::Oid(number(part(0)?)?),
         "char" => Value::Char(number(part(0)?)?),
         "text" => match parts.first() {
@@ -955,6 +969,17 @@ mod tests {
                     rupg_types::tsquery_parse("'it''s':A* & !(b | c <2> d)").expect("tsquery"),
                 ),
                 oid::TSQUERY,
+            ),
+            (
+                Value::JsonPath(Box::new(
+                    rupg_types::jsonpath_parse(
+                        "strict $.a[1 to last] ? (@ like_regex \"^b\" flag \"i\").**{2}",
+                        false,
+                        &|_, _| Ok(()),
+                    )
+                    .expect("jsonpath"),
+                )),
+                oid::JSONPATH,
             ),
             (
                 Value::Multirange(vec![

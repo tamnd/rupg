@@ -112,6 +112,7 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::TXID_SNAPSHOT
             | oid::TSVECTOR
             | oid::TSQUERY
+            | oid::JSONPATH
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -193,6 +194,10 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
     }
     if let Value::TsQuery(items) = value {
         types::tsquery_deparse(items, out);
+        return Ok(());
+    }
+    if let Value::JsonPath(path) = value {
+        types::jsonpath_deparse(path, out);
         return Ok(());
     }
     if let (Some(kind), Value::Bytea(v)) = (types::GeoKind::from_oid(ty), value) {
@@ -498,6 +503,19 @@ fn tsquery_in(
     Ok(items)
 }
 
+/// `jsonpath_in`. A number that is too large and a path that is too deep are errors that `pg_input_is_valid` does not catch. The error for a code point that is too large is not the same in the soft input, as in PostgreSQL.
+fn jsonpath_in(text: &str, noisy: bool) -> std::result::Result<types::JsonPath, Failed> {
+    types::jsonpath_parse(text, !noisy, &crate::regex::validate).map_err(|error| {
+        if error.sqlstate == SqlState::NUMERIC_VALUE_OUT_OF_RANGE
+            || error.sqlstate == SqlState::STATEMENT_TOO_COMPLEX
+        {
+            Failed::Hard(type_error(error))
+        } else {
+            Failed::from(error)
+        }
+    })
+}
+
 /// The text input function of the type. `noisy` is false for the soft input of `pg_input_is_valid`, which gives no notices, as `escontext` does in PostgreSQL.
 fn input_value(
     ty: u32,
@@ -555,6 +573,7 @@ fn input_value(
         oid::INT4 => Value::Int4(types::int4_in(text)?),
         oid::TSVECTOR => Value::TsVector(types::tsvector_parse(text)?),
         oid::TSQUERY => Value::TsQuery(tsquery_in(text, session, noisy)?),
+        oid::JSONPATH => Value::JsonPath(Box::new(jsonpath_in(text, noisy)?)),
         oid::INT8 => Value::Int8(types::int8_in(text)?),
         oid::OID => Value::Oid(types::oid_in(text)?),
         oid::MONEY => Value::Int8(types::cash_in(text)?),
@@ -815,6 +834,9 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::OID => Value::Oid(recv.u32()?),
         oid::TSVECTOR => Value::TsVector(types::tsvector_recv(recv)?),
         oid::TSQUERY => Value::TsQuery(types::tsquery_recv(recv)?),
+        oid::JSONPATH => {
+            Value::JsonPath(Box::new(types::jsonpath_recv(recv, &crate::regex::validate)?))
+        }
         ty if RegKind::from_oid(ty).is_some() => Value::Oid(recv.u32()?),
         oid::JSON => Value::text(types::json_in(recv.text()?)?),
         oid::JSONB => Value::Text(types::jsonb_recv(recv.rest())?),
@@ -926,6 +948,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         (_, Value::Multirange(ranges)) => multirange_send(ty, ranges, out)?,
         (_, Value::TsVector(lexemes)) => types::tsvector_send(lexemes, out),
         (_, Value::TsQuery(items)) => types::tsquery_send(items, out),
+        (_, Value::JsonPath(path)) => types::jsonpath_send(path, out),
         (_, Value::Null) => return Err(Error::internal("the send function got a null value")),
         _ => return Err(not_yet(format!("binary output of type {}", type_name(ty)))),
     }
