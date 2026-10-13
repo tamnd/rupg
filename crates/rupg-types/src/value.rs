@@ -7,6 +7,7 @@ use crate::datetime::Interval;
 use crate::network::Inet;
 use crate::numeric::Numeric;
 use crate::range::Range;
+use crate::tsvector::Lexeme;
 
 /// One value of the engine.
 #[derive(Clone, Debug, PartialEq)]
@@ -49,6 +50,8 @@ pub enum Value {
     Range(Box<Range>),
     /// A value of a multirange type: the ranges in order, with no empty range and no two ranges that overlap or touch.
     Multirange(Vec<Range>),
+    /// A value of `tsvector`: the lexemes in order.
+    TsVector(Vec<Lexeme>),
 }
 
 /// The value of a composite type or of `record`, as a `HeapTupleHeader` datum. As that datum keeps the type of the row, a record keeps the type of each field, so that the output of an anonymous `record` can show the fields.

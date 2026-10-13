@@ -1862,6 +1862,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/multirange_ops.test")));
     }
 
+    /// The type `tsvector`: the text input with quotes, escapes, positions and weights and its errors, the output, the order, `length`, `strip`, `setweight`, `ts_delete`, `tsvector_to_array`, `array_to_tsvector`, `ts_filter`, `unnest`, the operator `||`, the limits of the positions and of a lexeme, arrays of `tsvector`, `GROUP BY` and `DISTINCT`, the text and binary forms of `COPY` and a query with parameters. `connection/tsvector.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn tsvector() {
+        big_stack(|| script(include_str!("connection/tsvector.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {

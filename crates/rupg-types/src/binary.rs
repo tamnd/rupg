@@ -65,27 +65,20 @@ impl<'a> Recv<'a> {
 
     /// The rest of the value as a string in the server encoding, as `pq_getmsgtext` reads it for `textrecv`, `varcharrecv`, `json_recv` and the other string types. The client encoding is UTF-8, so the check is the check of `pg_verify_mbstr`: a zero byte or a byte sequence that is not UTF-8 is an error that shows the bytes of the bad character.
     pub fn text(&mut self) -> Result<&'a str, TypeError> {
-        let rest = self.rest();
-        let valid = match std::str::from_utf8(rest) {
-            Ok(text) if !text.contains('\0') => return Ok(text),
-            Ok(text) => text.len(),
-            Err(error) => error.valid_up_to(),
+        utf8(self.rest())
+    }
+
+    /// `pq_getmsgstring`: the bytes up to a zero byte, which the function reads too, as a string in the server encoding with the check of [`Recv::text`].
+    pub fn cstring(&mut self) -> Result<&'a str, TypeError> {
+        let rest = &self.data[self.at..];
+        let Some(len) = rest.iter().position(|&b| b == 0) else {
+            return Err(TypeError::new(
+                SqlState::PROTOCOL_VIOLATION,
+                "invalid string in message".to_string(),
+            ));
         };
-        let bad = rest[..valid].iter().position(|&b| b == 0).unwrap_or(valid);
-        // pg_encoding_mblen_or_incomplete gives the length from the first byte.
-        let len = match rest[bad] {
-            b if b & 0x80 == 0 => 1,
-            b if b & 0xe0 == 0xc0 => 2,
-            b if b & 0xf0 == 0xe0 => 3,
-            b if b & 0xf8 == 0xf0 => 4,
-            _ => 1,
-        };
-        let bytes: Vec<String> =
-            rest[bad..].iter().take(len).map(|b| format!("0x{b:02x}")).collect();
-        Err(TypeError::new(
-            SqlState::CHARACTER_NOT_IN_REPERTOIRE,
-            format!("invalid byte sequence for encoding \"UTF8\": {}", bytes.join(" ")),
-        ))
+        self.at += len + 1;
+        utf8(&rest[..len])
     }
 
     /// `boolrecv`: any byte other than 0 is true.
@@ -132,6 +125,29 @@ impl<'a> Recv<'a> {
             format!("incorrect binary data format in bind parameter {number}"),
         ))
     }
+}
+
+/// The check of `pg_verify_mbstr` for a string from the client: a zero byte or a byte sequence that is not UTF-8 is an error that shows the bytes of the bad character.
+fn utf8(rest: &[u8]) -> Result<&str, TypeError> {
+    let valid = match std::str::from_utf8(rest) {
+        Ok(text) if !text.contains('\0') => return Ok(text),
+        Ok(text) => text.len(),
+        Err(error) => error.valid_up_to(),
+    };
+    let bad = rest[..valid].iter().position(|&b| b == 0).unwrap_or(valid);
+    // pg_encoding_mblen_or_incomplete gives the length from the first byte.
+    let len = match rest[bad] {
+        b if b & 0x80 == 0 => 1,
+        b if b & 0xe0 == 0xc0 => 2,
+        b if b & 0xf0 == 0xe0 => 3,
+        b if b & 0xf8 == 0xf0 => 4,
+        _ => 1,
+    };
+    let bytes: Vec<String> = rest[bad..].iter().take(len).map(|b| format!("0x{b:02x}")).collect();
+    Err(TypeError::new(
+        SqlState::CHARACTER_NOT_IN_REPERTOIRE,
+        format!("invalid byte sequence for encoding \"UTF8\": {}", bytes.join(" ")),
+    ))
 }
 
 /// `namerecv`: unlike the text input, the binary input refuses a name that is too long. The caller checks the encoding first, as `pq_getmsgtext` does.
