@@ -1,0 +1,194 @@
+> SET TimeZone = 'UTC'
+SET
+> SET DateStyle = 'ISO, MDY'
+SET
+> SELECT int4range(1,5) && int4range(3,8), int4range(1,5) && int4range(5,8), int4range(1,5,'[]') && int4range(5,8), 'empty'::int4range && int4range(1,5), '(,)'::int4range && 'empty'::int4range
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,f
+SELECT 1
+> SELECT numrange(1,5) && numrange(5,8), numrange(1,5,'[]') && numrange(5,8,'[]'), numrange(NULL,5) && numrange(NULL,1), numrange(5,NULL) && numrange(NULL,1)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t,f
+SELECT 1
+> SELECT int4range(1,10) @> int4range(2,5), int4range(1,10) @> int4range(2,11), int4range(1,10) @> 'empty'::int4range, 'empty'::int4range @> 'empty'::int4range, 'empty'::int4range @> int4range(1,2), '(,)'::int4range @> int4range(NULL,3)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f,t
+SELECT 1
+> SELECT int4range(2,5) <@ int4range(1,10), int4range(0,5) <@ int4range(1,10), 'empty'::int4range <@ int4range(1,10), int4range(1,10) <@ '(,)'::int4range
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t
+SELECT 1
+> SELECT int4range(1,10) @> 5, int4range(1,10) @> 10, int4range(1,10) @> 1, int4range(1,10) @> 0, 'empty'::int4range @> 1, '(,)'::int4range @> 1, int4range(NULL,10) @> -2147483648
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,f,t,t
+SELECT 1
+> SELECT 5 <@ int4range(1,10), 10 <@ int4range(1,10), numrange(1,2) @> 1.5, 2.0 <@ numrange(1,2,'[]'), numrange(1,2,'(]') @> 1::numeric
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f
+SELECT 1
+> SELECT numrange(1,10) @> 5
+ERROR 42883 operator does not exist: numrange @> integer at 23
+> SELECT daterange('2020-01-01','2020-02-01') @> '2020-01-15'::date, daterange('2020-01-01','2020-02-01') @> date '2020-02-01', tsrange('2020-01-01','2020-02-01') @> '2020-01-15'::timestamp
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT int4range(1,5) << int4range(5,8), int4range(1,5,'[]') << int4range(5,8), int4range(1,5) << int4range(NULL,8), 'empty'::int4range << int4range(1,2), int4range(1,2) << 'empty'::int4range
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,f,f
+SELECT 1
+> SELECT int4range(5,8) >> int4range(1,5), int4range(5,8) >> int4range(1,5,'[]'), int4range(NULL,8) >> int4range(1,5), numrange(5,8) >> numrange(1,5,'[]'), numrange(5,8,'()') >> numrange(1,5,'[]')
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,f,t
+SELECT 1
+> SELECT int4range(1,5) &< int4range(3,8), int4range(1,9) &< int4range(3,8), int4range(1,8) &< int4range(3,8), int4range(1,5) &< 'empty'::int4range, numrange(1,8,'[]') &< numrange(3,8), numrange(1,8) &< numrange(3,8,'[]')
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,f,t
+SELECT 1
+> SELECT int4range(3,5) &> int4range(1,8), int4range(0,5) &> int4range(1,8), numrange(1,5,'()') &> numrange(1,5), numrange(1,5) &> numrange(1,5,'()'), int4range(NULL,5) &> int4range(1,8)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,f
+SELECT 1
+> SELECT int4range(1,5) -|- int4range(5,8), int4range(5,8) -|- int4range(1,5), int4range(1,5) -|- int4range(6,8), int4range(1,5,'[]') -|- int4range(6,8), int4range(1,5) -|- int4range(4,8), 'empty'::int4range -|- int4range(1,5)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,f,f
+SELECT 1
+> SELECT numrange(1,5) -|- numrange(5,8), numrange(1,5,'[]') -|- numrange(5,8), numrange(1,5,'[]') -|- numrange(5,8,'()'), numrange(1,5,'[)') -|- numrange(5,8,'()'), numrange(1,5) -|- numrange(5.1,8)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,f
+SELECT 1
+> SELECT daterange('2020-01-01','2020-01-05') -|- daterange('2020-01-05','2020-01-09'), daterange('2020-01-01','2020-01-05','[]') -|- daterange('2020-01-06','2020-01-09'), int4range(NULL,5) -|- int4range(5,NULL), numrange(NULL,NULL) -|- numrange(1,2)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f
+SELECT 1
+> SELECT int4range(1,5) + int4range(3,8), int4range(1,5) + int4range(5,8), int4range(5,8) + int4range(1,5), int4range(1,5) + 'empty'::int4range, 'empty'::int4range + int4range(1,5), int4range(NULL,5) + int4range(3,NULL)
+fields ?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1
+row [1,8),[1,8),[1,8),[1,5),[1,5),(,)
+SELECT 1
+> SELECT numrange(1,5) + numrange(5,8), numrange(1,5,'[]') + numrange(2,3), numrange(1,5,'()') + numrange(1,5,'[)')
+fields ?column?:3906:-1:-1,?column?:3906:-1:-1,?column?:3906:-1:-1
+row [1,8),[1,5],[1,5)
+SELECT 1
+> SELECT int4range(1,5) + int4range(6,8)
+ERROR 22000 result of range union would not be contiguous
+> SELECT numrange(1,5) + numrange(5,8,'()')
+ERROR 22000 result of range union would not be contiguous
+> SELECT range_merge(int4range(1,5), int4range(10,20)), range_merge(int4range(10,20), int4range(1,5)), range_merge('empty'::int4range, int4range(1,5)), range_merge(numrange(1,2), numrange(NULL,0)), range_merge(int4range(1,5), int4range(2,3))
+fields range_merge:3904:-1:-1,range_merge:3904:-1:-1,range_merge:3904:-1:-1,range_merge:3906:-1:-1,range_merge:3904:-1:-1
+row [1,20),[1,20),[1,5),(,2),[1,5)
+SELECT 1
+> SELECT int4range(1,5) * int4range(3,8), int4range(1,5) * int4range(5,8), int4range(1,5,'[]') * int4range(5,8), int4range(NULL,5) * int4range(3,NULL), int4range(1,5) * 'empty'::int4range, '(,)'::int4range * '(,)'::int4range
+fields ?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1
+row [3,5),empty,[5,6),[3,5),empty,(,)
+SELECT 1
+> SELECT numrange(1,5,'[]') * numrange(1,5,'()'), numrange(1,5,'()') * numrange(0,5,'[]'), daterange('2020-01-01','2020-01-10') * daterange('2020-01-05',NULL)
+fields ?column?:3906:-1:-1,?column?:3906:-1:-1,?column?:3912:-1:-1
+row (1,5),(1,5),[2020-01-05,2020-01-10)
+SELECT 1
+> SELECT int4range(1,10) - int4range(5,15), int4range(1,10) - int4range(0,5), int4range(1,10) - int4range(0,15), int4range(1,10) - int4range(20,30), int4range(1,10) - 'empty'::int4range, 'empty'::int4range - int4range(1,2), int4range(1,10) - int4range(1,10)
+fields ?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1
+row [1,5),[5,10),empty,[1,10),[1,10),empty,empty
+SELECT 1
+> SELECT numrange(1,10) - numrange(5,15), numrange(1,10,'[]') - numrange(0,5,'[]'), numrange(1,10) - numrange(10,15), numrange(1,10,'[]') - numrange(10,15), int4range(NULL,10) - int4range(5,NULL)
+fields ?column?:3906:-1:-1,?column?:3906:-1:-1,?column?:3906:-1:-1,?column?:3906:-1:-1,?column?:3904:-1:-1
+row [1,5),(5,10],[1,10),[1,10),(,5)
+SELECT 1
+> SELECT int4range(1,10) - int4range(3,5)
+ERROR 22000 result of range difference would not be contiguous
+> SELECT int4range(1,10) - int4range(1,5), int4range(1,10) - int4range(5,10), numrange(1,10) - numrange(5,10,'(]')
+fields ?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3906:-1:-1
+row [5,10),[1,5),[1,5]
+SELECT 1
+> SELECT numrange(1,10) - numrange(1,5,'(]')
+ERROR 22000 result of range difference would not be contiguous
+> SELECT * FROM range_minus_multi(int4range(1,10), int4range(3,5))
+fields range_minus_multi:3904:-1:-1
+row [1,3)
+row [5,10)
+SELECT 2
+> SELECT * FROM range_minus_multi(int4range(1,10), int4range(5,15))
+fields range_minus_multi:3904:-1:-1
+row [1,5)
+SELECT 1
+> SELECT * FROM range_minus_multi(int4range(1,10), int4range(0,15))
+fields range_minus_multi:3904:-1:-1
+SELECT 0
+> SELECT * FROM range_minus_multi(int4range(1,10), 'empty'::int4range)
+fields range_minus_multi:3904:-1:-1
+row [1,10)
+SELECT 1
+> SELECT * FROM range_minus_multi('empty'::int4range, int4range(1,10))
+fields range_minus_multi:3904:-1:-1
+SELECT 0
+> SELECT * FROM range_minus_multi(numrange(1,10,'[]'), numrange(3,5,'[]'))
+fields range_minus_multi:3906:-1:-1
+row [1,3)
+row (5,10]
+SELECT 2
+> SELECT range_minus_multi(int4range(1,10), int4range(20,30)), range_minus_multi(int4range(NULL,NULL), int4range(0,5))
+fields range_minus_multi:3904:-1:-1,range_minus_multi:3904:-1:-1
+row [1,10),(,0)
+row NULL,[5,)
+SELECT 2
+> SELECT int4range(1,5) && NULL, NULL::int4range @> 1, int4range(1,5) @> NULL::int4, int4range(1,5) + NULL
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:3904:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT int4range(1,5) && numrange(1,5)
+ERROR 42883 operator does not exist: int4range && numrange at 23
+> SELECT int4range(1,5) && '[3,4)', '[3,4)' <@ int4range(1,5), int4range(1,5) + '[5,7)', int4range(1,5) - '[2,7)', '[1,2)'::int4range * '[1,3)'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1,?column?:3904:-1:-1
+row t,t,[1,7),[1,2),[1,2)
+SELECT 1
+> SELECT int8range(1,10) * int8range(5,20), int8range(1,10) @> 5::int8
+fields ?column?:3926:-1:-1,?column?:16:1:-1
+row [5,10),t
+SELECT 1
+> SELECT int8range(1,10) @> 5
+ERROR 42883 operator does not exist: int8range @> integer at 24
+> SELECT tstzrange('2020-01-01 00:00+00','2020-01-02 00:00+00') && tstzrange('2020-01-01 12:00+00','2020-01-03 00:00+00'), tstzrange('2020-01-01 00:00+00','2020-01-02 00:00+00') * tstzrange('2020-01-01 12:00+00','2020-01-03 00:00+00')
+fields ?column?:16:1:-1,?column?:3910:-1:-1
+row t,["2020-01-01 12:00:00+00","2020-01-02 00:00:00+00")
+SELECT 1
+> SELECT int4range_subdiff(10, 3), int8range_subdiff(3, 10), numrange_subdiff(10.5, 3.25), daterange_subdiff('2020-03-01', '2020-01-01'), tsrange_subdiff('2020-01-02 00:00:01.5', '2020-01-01'), tstzrange_subdiff('2020-01-02 00:00+00', '2020-01-01 00:00+00')
+fields int4range_subdiff:701:8:-1,int8range_subdiff:701:8:-1,numrange_subdiff:701:8:-1,daterange_subdiff:701:8:-1,tsrange_subdiff:701:8:-1,tstzrange_subdiff:701:8:-1
+row 7,-7,7.25,60,86401.5,86400
+SELECT 1
+> SELECT int4range_subdiff(2147483647, -2147483648), int8range_subdiff(9223372036854775807, -9223372036854775808), numrange_subdiff(1e300, -1e300)
+fields int4range_subdiff:701:8:-1,int8range_subdiff:701:8:-1,numrange_subdiff:701:8:-1
+row 4294967295,1.8446744073709552e+19,2e+300
+SELECT 1
+> SELECT range_overlaps(int4range(1,5), int4range(3,8)), range_contains(int4range(1,5), int4range(2,3)), range_contained_by(int4range(1,5), int4range(2,3)), range_contains_elem(int4range(1,5), 3), elem_contained_by_range(3, int4range(1,5))
+fields range_overlaps:16:1:-1,range_contains:16:1:-1,range_contained_by:16:1:-1,range_contains_elem:16:1:-1,elem_contained_by_range:16:1:-1
+row t,t,f,t,t
+SELECT 1
+> SELECT range_before(int4range(1,5), int4range(6,8)), range_after(int4range(1,5), int4range(6,8)), range_overleft(int4range(1,5), int4range(6,8)), range_adjacent(int4range(1,5), int4range(5,8)), range_union(int4range(1,5), int4range(5,8)), range_intersect(int4range(1,5), int4range(3,8)), range_minus(int4range(1,5), int4range(3,8))
+fields range_before:16:1:-1,range_after:16:1:-1,range_overleft:16:1:-1,range_adjacent:16:1:-1,range_union:3904:-1:-1,range_intersect:3904:-1:-1,range_minus:3904:-1:-1
+row t,f,t,t,[1,8),[3,5),[1,3)
+SELECT 1
+> SELECT r, r && int4range(3,6) AS ov, r @> 4 AS has4, r * int4range(3,6) AS isect FROM (VALUES (int4range(1,4)), (int4range(5,9)), ('empty'::int4range), (int4range(NULL,2)), (NULL)) v(r) ORDER BY r
+fields r:3904:-1:-1,ov:16:1:-1,has4:16:1:-1,isect:3904:-1:-1
+row empty,f,f,empty
+row (,2),f,f,empty
+row [1,4),t,f,[3,4)
+row [5,9),t,f,[5,6)
+row NULL,NULL,NULL,NULL
+SELECT 5
+> SELECT a, b, a -|- b AS adj, a << b AS bef, a >> b AS aft FROM (VALUES (int4range(1,3)), (int4range(3,5)), (int4range(6,9))) x(a), (VALUES (int4range(1,3)), (int4range(3,5)), (int4range(6,9))) y(b) ORDER BY a, b
+fields a:3904:-1:-1,b:3904:-1:-1,adj:16:1:-1,bef:16:1:-1,aft:16:1:-1
+row [1,3),[1,3),f,f,f
+row [1,3),[3,5),t,t,f
+row [1,3),[6,9),f,t,f
+row [3,5),[1,3),t,f,t
+row [3,5),[3,5),f,f,f
+row [3,5),[6,9),f,t,f
+row [6,9),[1,3),f,f,t
+row [6,9),[3,5),f,f,t
+row [6,9),[6,9),f,f,f
+SELECT 9
+P q1|SELECT $1::int4range && $2::int4range, $1::int4range + $2::int4range, $1::int4range * $2::int4range
+X q1|[1,5)|[3,8)
+row t,[1,8),[3,5)
+SELECT 1
+X q1|[1,5)|empty
+row f,[1,5),empty
+SELECT 1
