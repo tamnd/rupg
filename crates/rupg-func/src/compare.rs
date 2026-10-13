@@ -7,7 +7,7 @@ use rupg_pgcatalog::builtin::{self, ProcRow};
 use rupg_types::{Array, RegKind, USECS_PER_DAY, USECS_PER_SEC, Value, oid};
 
 use crate::io::base_type;
-use crate::{Call, Kernel, bad_value};
+use crate::{Call, Kernel, bad_value, range};
 
 /// The groups of types that compare with each other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +41,8 @@ enum Family {
     PgLsn,
     /// `bit` and `bit varying`, a string of `0` and `1` whose byte order is the order of `bitcmp`.
     Bit,
+    /// The range types, which compare as `range_cmp` does.
+    Range,
 }
 
 /// The family of a type, or `None` for a type that has no comparison here.
@@ -73,6 +75,8 @@ fn family(ty: u32) -> Option<Family> {
         oid::MACADDR8 => Family::Macaddr8,
         oid::PG_LSN => Family::PgLsn,
         oid::BIT | oid::VARBIT => Family::Bit,
+        oid::ANYRANGE => Family::Range,
+        ty if builtin::range_subtype(ty).is_some() => Family::Range,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
             _ => return None,
@@ -129,6 +133,13 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
         }
         (Value::Interval(x), Value::Interval(y)) => span(x).cmp(&span(y)),
         (Value::Array(x), Value::Array(y)) => array_order(element(left), x, element(right), y)?,
+        (Value::Range(x), Value::Range(y)) => {
+            let sub = match range::subtype(left) {
+                0 => range::subtype(right),
+                sub => sub,
+            };
+            range::range_order(sub, x, y)?
+        }
         _ => return Err(bad_value()),
     })
 }
@@ -390,7 +401,13 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     } else if src.starts_with("bt") && src.ends_with("cmp")
         || matches!(
             src,
-            "array_cmp" | "cash_cmp" | "xid8cmp" | "macaddr_cmp" | "macaddr8_cmp" | "pg_lsn_cmp"
+            "array_cmp"
+                | "cash_cmp"
+                | "xid8cmp"
+                | "macaddr_cmp"
+                | "macaddr8_cmp"
+                | "pg_lsn_cmp"
+                | "range_cmp"
         )
     {
         Some(cmp)

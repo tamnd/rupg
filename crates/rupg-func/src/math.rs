@@ -532,7 +532,7 @@ fn numeric_sign(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `IS_VALID_DATE`.
-fn valid_date(d: i64) -> bool {
+pub(crate) fn valid_date(d: i64) -> bool {
     (-i64::from(POSTGRES_EPOCH_JDATE)..i64::from(DATE_END_JULIAN - POSTGRES_EPOCH_JDATE))
         .contains(&d)
 }

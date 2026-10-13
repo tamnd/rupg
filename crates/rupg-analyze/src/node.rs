@@ -3,7 +3,7 @@
 //! PostgreSQL stores these as `pg_node_tree` text that `nodeToString` writes. rupg stores its own text, which document 05 section 5.2 permits, because clients do not read it. The form looks like the form of PostgreSQL: `{NAME :field value ...}`. A constant keeps its value in a form that does not change with the settings of the session, so the expression reads back to the same tree.
 
 use rupg_common::{Error, Result};
-use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Record, Recv, Value};
+use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value};
 
 use crate::expr::{
     BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, Subscript, Var,
@@ -426,6 +426,13 @@ fn write_value(value: &Value, out: &mut String) {
             }
             out.push_str("))");
         }
+        Value::Range(range) => {
+            out.push_str(&format!("(range {} ", range.flags));
+            write_value(&range.lower, out);
+            out.push(' ');
+            write_value(&range.upper, out);
+            out.push(')');
+        }
     }
 }
 
@@ -817,6 +824,14 @@ fn value_of(item: &Item) -> Result<Value> {
             let values = list(values)?.iter().map(value_of).collect::<Result<_>>()?;
             Value::Record(Box::new(Record { types, values }))
         }
+        "range" => {
+            let [flags, lower, upper] = parts else { return Err(bad("a range value")) };
+            Value::Range(Box::new(Range {
+                flags: number(atom(flags)?)?,
+                lower: value_of(lower)?,
+                upper: value_of(upper)?,
+            }))
+        }
         kind => return Err(bad(&format!("the value kind {kind}"))),
     };
     Ok(value)
@@ -866,6 +881,15 @@ mod tests {
             (Value::Interval(Interval { time: -1, day: 2, month: -3 }), oid::INTERVAL),
             (Value::Inet(rupg_types::inet_in("10.1.2.3/8", false).expect("inet")), oid::INET),
             (Value::Inet(rupg_types::inet_in("2001:db8::/32", true).expect("cidr")), oid::CIDR),
+            (
+                Value::Range(Box::new(Range {
+                    flags: rupg_types::RANGE_LB_INC,
+                    lower: Value::Int4(1),
+                    upper: Value::Int4(10),
+                })),
+                oid::INT4RANGE,
+            ),
+            (Value::Range(Box::new(Range::empty())), oid::DATERANGE),
         ];
         for (value, ty) in values {
             round_trip(&constant(value, ty));

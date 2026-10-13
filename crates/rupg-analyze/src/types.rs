@@ -69,6 +69,21 @@ pub fn array_of(ty: u32) -> u32 {
     row(ty).map_or(0, |t| t.array)
 }
 
+/// `get_range_subtype`: the subtype of a range type, or 0.
+pub fn range_subtype(ty: u32) -> u32 {
+    builtin::range_subtype(ty).unwrap_or(0)
+}
+
+/// `get_range_multirange`: the multirange type of a range type, or 0.
+pub fn range_multirange(ty: u32) -> u32 {
+    builtin::range_multirange(ty).unwrap_or(0)
+}
+
+/// `get_multirange_range`: the range type of a multirange type, or 0.
+pub fn multirange_range(ty: u32) -> u32 {
+    builtin::multirange_range(ty).unwrap_or(0)
+}
+
 /// `type_is_collatable`.
 pub fn collatable(ty: u32) -> bool {
     row(base(ty)).is_some_and(|t| t.collation != 0)
