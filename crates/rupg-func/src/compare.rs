@@ -29,6 +29,11 @@ enum Family {
     TimestampTz,
     Interval,
     Array,
+    Money,
+    Tid,
+    /// `xid8` and `oid8`, which hold a `u64` in the bits of a `bigint`.
+    Xid8,
+    Oid8,
 }
 
 /// The family of a type, or `None` for a type that has no comparison here.
@@ -53,6 +58,10 @@ fn family(ty: u32) -> Option<Family> {
         oid::TIMESTAMPTZ => Family::TimestampTz,
         oid::INTERVAL => Family::Interval,
         oid::ANYARRAY | oid::INT2VECTOR | oid::OIDVECTOR => Family::Array,
+        oid::MONEY => Family::Money,
+        oid::TID => Family::Tid,
+        oid::XID8 => Family::Xid8,
+        oid::OID8 => Family::Oid8,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
             _ => return None,
@@ -74,7 +83,11 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
     let trim = |ty: u32, s: &'_ str| -> usize {
         if base_type(ty) == oid::BPCHAR { s.trim_end_matches(' ').len() } else { s.len() }
     };
+    let unsigned = |ty: u32| matches!(base_type(ty), oid::XID8 | oid::OID8);
     Ok(match (a, b) {
+        (Value::Int8(x), Value::Int8(y)) if unsigned(left) && unsigned(right) => {
+            x.cast_unsigned().cmp(&y.cast_unsigned())
+        }
         (Value::Int2(_) | Value::Int4(_) | Value::Int8(_), _) => {
             let (Some(x), Some(y)) = (a.as_i64(), b.as_i64()) else { return Err(bad_value()) };
             x.cmp(&y)
@@ -362,7 +375,9 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
         Some(larger)
     } else if src.ends_with("smaller") {
         Some(smaller)
-    } else if src.starts_with("bt") && src.ends_with("cmp") || src == "array_cmp" {
+    } else if src.starts_with("bt") && src.ends_with("cmp")
+        || matches!(src, "array_cmp" | "cash_cmp" | "xid8cmp")
+    {
         Some(cmp)
     } else {
         None

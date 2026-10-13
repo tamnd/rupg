@@ -9,6 +9,7 @@ mod acl;
 mod activity;
 mod agg;
 mod array;
+mod cash;
 mod cast;
 mod catinfo;
 mod compare;
@@ -250,6 +251,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))
+        .or_else(|| cash::by_src(src))
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
         .or_else(|| acl::by_src(src))

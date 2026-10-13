@@ -184,6 +184,29 @@ pub fn uint32_in(s: &str, type_name: &str) -> Result<u32, TypeError> {
     Ok(result)
 }
 
+/// `uint64in_subr` for all of `s`: the text input of `xid8` and `oid8`. The errors show `type_name`.
+///
+/// # Errors
+///
+/// `22P02` for text that is not a number, and `22003` for a number out of the range of `u64`.
+pub fn uint64_in(s: &str, type_name: &str) -> Result<u64, TypeError> {
+    let b = s.as_bytes();
+    let (value, mut end, overflow) = strtoul(b);
+    if end == 0 {
+        return Err(TypeError::syntax(type_name, s));
+    }
+    if overflow {
+        return Err(TypeError::range(s, type_name));
+    }
+    while end < b.len() && is_space(b[end]) {
+        end += 1;
+    }
+    if end != b.len() {
+        return Err(TypeError::syntax(type_name, s));
+    }
+    Ok(value)
+}
+
 /// `uint32in_subr` with an end pointer: a number as `oid_in` reads it, at the start of `s`, and the length of its text. The caller reads what comes after it. An error shows all of `s`.
 pub(crate) fn uint32_in_subr(s: &str, type_name: &str) -> Result<(u32, usize), TypeError> {
     let (value, end, overflow) = strtoul(s.as_bytes());

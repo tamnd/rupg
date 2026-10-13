@@ -86,6 +86,11 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::ANYARRAY
             | oid::PG_LSN
             | oid::VOID
+            | oid::MONEY
+            | oid::TID
+            | oid::XID8
+            | oid::OID8
+            | oid::REFCURSOR
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -152,6 +157,12 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         return record_out(record, session, out);
     }
     match (ty, value) {
+        (oid::MONEY, Value::Int8(v)) => types::cash_out(*v, out),
+        (oid::XID8 | oid::OID8, Value::Int8(v)) => types::u64_out(v.cast_unsigned(), out),
+        (oid::TID, Value::Int8(v)) => {
+            let (block, offset) = tid_parts(*v)?;
+            types::tid_out(block, offset, out);
+        }
         (_, Value::Bool(v)) => types::bool_out(*v, out),
         (_, Value::Int2(v)) => types::int_out(i64::from(*v), out),
         (_, Value::Int4(v)) => types::int_out(i64::from(*v), out),
@@ -197,6 +208,18 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         _ => return Err(not_yet(format!("output of type {}", type_name(ty)))),
     }
     Ok(())
+}
+
+/// A `tid` value: the block number and the offset in a `bigint`, so that the order of the values is the order of `tid`.
+pub(crate) fn tid_value(block: u32, offset: u16) -> Value {
+    Value::Int8(i64::from(block) << 16 | i64::from(offset))
+}
+
+/// The block number and the offset of a `tid` value.
+pub(crate) fn tid_parts(value: i64) -> Result<(u32, u16)> {
+    let block = u32::try_from(value >> 16).map_err(|_| bad_value())?;
+    let offset = u16::try_from(value & 0xFFFF).map_err(|_| bad_value())?;
+    Ok((block, offset))
 }
 
 /// `record_out`: the fields in parentheses with a comma between them. A null field is empty. A field that is empty or has a quote, a backslash, a parenthesis, a comma or white space is in double quotes, with each quote and each backslash doubled.
@@ -374,9 +397,16 @@ fn input_value(
         oid::INT4 => Value::Int4(types::int4_in(text)?),
         oid::INT8 => Value::Int8(types::int8_in(text)?),
         oid::OID => Value::Oid(types::oid_in(text)?),
+        oid::MONEY => Value::Int8(types::cash_in(text)?),
+        oid::XID8 => Value::Int8(types::uint64_in(text, "xid8")?.cast_signed()),
+        oid::OID8 => Value::Int8(types::uint64_in(text, "oid8")?.cast_signed()),
+        oid::TID => {
+            let (block, offset) = types::tid_in(text)?;
+            tid_value(block, offset)
+        }
         XID => Value::Oid(types::uint32_in(text, "xid")?),
         CID => Value::Oid(types::uint32_in(text, "cid")?),
-        oid::TEXT | oid::UNKNOWN | oid::CSTRING => Value::text(text),
+        oid::TEXT | oid::UNKNOWN | oid::CSTRING | oid::REFCURSOR => Value::text(text),
         oid::VARCHAR => Value::text(types::varchar_in(text, typmod)?),
         oid::BPCHAR => Value::text(types::bpchar_in(text, typmod)?),
         oid::JSON => Value::text(types::json_in(text)?),
@@ -504,8 +534,12 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::NAME => Value::text(types::name_recv(recv.text()?)?),
         oid::INT2 => Value::Int2(recv.i16()?),
         oid::INT4 => Value::Int4(recv.i32()?),
-        oid::INT8 => Value::Int8(recv.i64()?),
-        oid::TEXT | oid::UNKNOWN | oid::CSTRING => Value::text(recv.text()?),
+        oid::INT8 | oid::MONEY | oid::XID8 | oid::OID8 => Value::Int8(recv.i64()?),
+        oid::TID => {
+            let block = recv.u32()?;
+            tid_value(block, recv.i16()?.cast_unsigned())
+        }
+        oid::TEXT | oid::UNKNOWN | oid::CSTRING | oid::REFCURSOR => Value::text(recv.text()?),
         oid::VARCHAR => Value::text(types::varchar_in(recv.text()?, typmod)?),
         oid::BPCHAR => Value::text(types::bpchar_in(recv.text()?, typmod)?),
         oid::OID => Value::Oid(recv.u32()?),
@@ -573,6 +607,11 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
     match (ty, value) {
         (oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN, _) => {
             return Err(not_yet(format!("binary output of type {}", type_name(ty))));
+        }
+        (oid::TID, Value::Int8(v)) => {
+            let (block, offset) = tid_parts(*v)?;
+            out.extend_from_slice(&block.to_be_bytes());
+            out.extend_from_slice(&offset.to_be_bytes());
         }
         (_, Value::Bool(v)) => out.push(u8::from(*v)),
         (_, Value::Int2(v)) => out.extend_from_slice(&v.to_be_bytes()),

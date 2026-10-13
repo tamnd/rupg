@@ -1,0 +1,208 @@
+> SELECT '12.34'::money, '-12.34'::money, '0'::money, '$1,234,567.89'::money, '1234567.891'::money, '1234567.895'::money
+fields money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1
+row $12.34,-$12.34,$0.00,$1,234,567.89,$1,234,567.89,$1,234,567.90
+SELECT 1
+> SELECT ' $ 12'::money, '-$12'::money, '$-12'::money, '(12.5)'::money, '12-'::money, '+12'::money, '12 $'::money, '1,2,3.4'::money, '.5'::money, '$'::money
+fields money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1
+row $12.00,-$12.00,-$12.00,-$12.50,-$12.00,$12.00,$12.00,$123.40,$0.50,$0.00
+SELECT 1
+> SELECT '92233720368547758.07'::money, '-92233720368547758.08'::money
+fields money:790:8:-1,money:790:8:-1
+row $92,233,720,368,547,758.07,-$92,233,720,368,547,758.08
+SELECT 1
+> SELECT '92233720368547758.08'::money
+ERROR 22003 value "92233720368547758.08" is out of range for type money at 8
+> SELECT '-92233720368547758.09'::money
+ERROR 22003 value "-92233720368547758.09" is out of range for type money at 8
+> SELECT '92233720368547758.075'::money
+ERROR 22003 value "92233720368547758.075" is out of range for type money at 8
+> SELECT '12.3.4'::money
+ERROR 22P02 invalid input syntax for type money: "12.3.4" at 8
+> SELECT 'abc'::money
+ERROR 22P02 invalid input syntax for type money: "abc" at 8
+> SELECT ''::money
+fields money:790:8:-1
+row $0.00
+SELECT 1
+> SELECT '12 34'::money
+ERROR 22P02 invalid input syntax for type money: "12 34" at 8
+> SELECT '1.2345'::money, '1.2355'::money, '0.005'::money, '-0.005'::money, '0.004'::money
+fields money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1
+row $1.23,$1.24,$0.01,-$0.01,$0.00
+SELECT 1
+> SELECT '12.34'::money = '12.34'::money, '1'::money < '2'::money, '-1'::money > '1'::money, cash_cmp('1', '2'), cashlarger('1', '2'), cashsmaller('1', '2')
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,cash_cmp:23:4:-1,cashlarger:790:8:-1,cashsmaller:790:8:-1
+row t,t,f,-1,$2.00,$1.00
+SELECT 1
+> SELECT '12.34'::money + '1'::money, '12.34'::money - '20'::money, '12.34'::money * 2, 2 * '12.34'::money, '12.34'::money / 2, '12.34'::money / '2'::money, '10'::money * 1.5::float8, '10'::money / 3::float8, '10'::money * 2::int2, '10'::money / 3::int8
+fields ?column?:790:8:-1,?column?:790:8:-1,?column?:790:8:-1,?column?:790:8:-1,?column?:790:8:-1,?column?:701:8:-1,?column?:790:8:-1,?column?:790:8:-1,?column?:790:8:-1,?column?:790:8:-1
+row $13.34,-$7.66,$24.68,$24.68,$6.17,6.17,$15.00,$3.33,$20.00,$3.33
+SELECT 1
+> SELECT '10'::money / 0
+ERROR 22012 division by zero
+> SELECT '10'::money / 0::float8
+ERROR 22012 division by zero
+> SELECT '92233720368547758.07'::money + '0.01'::money
+ERROR 22003 money out of range
+> SELECT 12::money, 12::int8::money, 12.345::numeric::money, 12.344::money, '12.34'::money::numeric, (-5)::money
+fields money:790:8:-1,money:790:8:-1,money:790:8:-1,money:790:8:-1,numeric:1700:-1:-1,money:790:8:-1
+row $12.00,$12.00,$12.35,$12.34,12.34,-$5.00
+SELECT 1
+> SELECT cash_words('1234.56'), cash_words('-0.01'), cash_words('0'), cash_words('1000000')
+fields cash_words:25:-1:-1,cash_words:25:-1:-1,cash_words:25:-1:-1,cash_words:25:-1:-1
+row One thousand two hundred thirty four dollars and fifty six cents,Minus zero dollars and one cent,Zero dollars and zero cents,One million  dollars and zero cents
+SELECT 1
+> SELECT max(m), min(m), sum(m) FROM (VALUES ('1'::money), ('3.50'::money), ('-2'::money)) v(m)
+fields max:790:8:-1,min:790:8:-1,sum:790:8:-1
+row $3.50,-$2.00,$2.50
+SELECT 1
+> SELECT avg(m) FROM (VALUES ('1'::money), ('3.50'::money)) v(m)
+ERROR 42883 function avg(money) does not exist at 8
+> SELECT ARRAY['1'::money, '-2.5'::money], '{1,2.5}'::money[]
+fields array:791:-1:-1,money:791:-1:-1
+row {$1.00,-$2.50},{$1.00,$2.50}
+SELECT 1
+> SELECT '12'::xid8, '18446744073709551615'::xid8, '0x10'::xid8, '010'::xid8, ' 7 '::xid8, '-1'::xid8
+fields xid8:5069:8:-1,xid8:5069:8:-1,xid8:5069:8:-1,xid8:5069:8:-1,xid8:5069:8:-1,xid8:5069:8:-1
+row 12,18446744073709551615,16,8,7,18446744073709551615
+SELECT 1
+> SELECT '18446744073709551616'::xid8
+ERROR 22003 value "18446744073709551616" is out of range for type xid8 at 8
+> SELECT 'x'::xid8
+ERROR 22P02 invalid input syntax for type xid8: "x" at 8
+> SELECT '1'::xid8 < '18446744073709551615'::xid8, '5'::xid8 = '5'::xid8, xid8cmp('1', '2'), xid8_larger('1', '18446744073709551615'), xid8_smaller('1', '18446744073709551615')
+fields ?column?:16:1:-1,?column?:16:1:-1,xid8cmp:23:4:-1,xid8_larger:5069:8:-1,xid8_smaller:5069:8:-1
+row t,t,-1,18446744073709551615,1
+SELECT 1
+> SELECT max(x), min(x) FROM (VALUES ('1'::xid8), ('18446744073709551615'::xid8)) v(x)
+fields max:5069:8:-1,min:5069:8:-1
+row 18446744073709551615,1
+SELECT 1
+> SELECT '12'::xid8::xid, '18446744073709551615'::xid8::xid
+fields xid:28:4:-1,xid:28:4:-1
+row 12,4294967295
+SELECT 1
+> SELECT '12'::oid8, '18446744073709551615'::oid8, '-1'::oid8, ' 0x1F'::oid8
+fields oid8:6437:8:-1,oid8:6437:8:-1,oid8:6437:8:-1,oid8:6437:8:-1
+row 12,18446744073709551615,18446744073709551615,31
+SELECT 1
+> SELECT '18446744073709551616'::oid8
+ERROR 22003 value "18446744073709551616" is out of range for type oid8 at 8
+> SELECT '1'::oid8 < '18446744073709551615'::oid8, oid8larger('1', '2'), oid8smaller('1', '2'), btoid8cmp('3', '2'), 5::oid8, 7::int8::oid8, '9'::oid8::int8, 12::oid::oid8
+fields ?column?:16:1:-1,oid8larger:6437:8:-1,oid8smaller:6437:8:-1,btoid8cmp:23:4:-1,oid8:6437:8:-1,oid8:6437:8:-1,int8:20:8:-1,oid8:6437:8:-1
+row t,2,1,1,5,7,9,12
+SELECT 1
+> SELECT '12'::oid8::oid
+ERROR 42846 cannot cast type oid8 to oid at 18
+> SELECT max(o), min(o) FROM (VALUES ('1'::oid8), ('18446744073709551615'::oid8)) v(o)
+fields max:6437:8:-1,min:6437:8:-1
+row 18446744073709551615,1
+SELECT 1
+> SELECT '-1'::int8::oid8, (-5)::oid8
+fields oid8:6437:8:-1,oid8:6437:8:-1
+row 18446744073709551615,18446744073709551611
+SELECT 1
+> SELECT '-1'::oid8::int8
+fields int8:20:8:-1
+row -1
+SELECT 1
+> SELECT '(0,1)'::tid, '(4294967295,65535)'::tid, '(-1,1)'::tid, 'ab(1,2)cd'::tid, '(,2)'::tid, '( 1, 2)'::tid, '(+1,+2)'::tid
+fields tid:27:6:-1,tid:27:6:-1,tid:27:6:-1,tid:27:6:-1,tid:27:6:-1,tid:27:6:-1,tid:27:6:-1
+row (0,1),(4294967295,65535),(4294967295,1),(1,2),(0,2),(1,2),(1,2)
+SELECT 1
+> SELECT '(1,65536)'::tid
+ERROR 22P02 invalid input syntax for type tid: "(1,65536)" at 8
+> SELECT '(4294967296,1)'::tid
+ERROR 22P02 invalid input syntax for type tid: "(4294967296,1)" at 8
+> SELECT '(1,2'::tid
+ERROR 22P02 invalid input syntax for type tid: "(1,2" at 8
+> SELECT '1,2)'::tid
+ERROR 22P02 invalid input syntax for type tid: "1,2)" at 8
+> SELECT '(1 ,2)'::tid
+ERROR 22P02 invalid input syntax for type tid: "(1 ,2)" at 8
+> SELECT '(0,1)'::tid < '(0,2)'::tid, '(1,0)'::tid > '(0,9)'::tid, '(1,1)'::tid = '(1,1)'::tid, bttidcmp('(1,1)', '(0,1)'), tidlarger('(1,1)', '(0,1)'), tidsmaller('(1,1)', '(0,1)')
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,bttidcmp:23:4:-1,tidlarger:27:6:-1,tidsmaller:27:6:-1
+row t,t,t,1,(1,1),(0,1)
+SELECT 1
+> SELECT max(t), min(t) FROM (VALUES ('(1,1)'::tid), ('(0,5)'::tid)) v(t)
+fields max:27:6:-1,min:27:6:-1
+row (1,1),(0,5)
+SELECT 1
+> SELECT 'abc'::refcursor, 'abc'::refcursor::text, 'x'::text::refcursor, pg_typeof('a'::refcursor)
+fields refcursor:1790:-1:-1,text:25:-1:-1,refcursor:1790:-1:-1,pg_typeof:2206:4:-1
+row abc,abc,x,refcursor
+SELECT 1
+> SELECT pg_input_is_valid('12.5', 'money'), pg_input_is_valid('x', 'money'), pg_input_is_valid('x', 'tid'), pg_input_is_valid('-5', 'xid8'), pg_input_is_valid('99999999999999999999', 'oid8')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f,t,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('92233720368547758.08', 'money')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row value "92233720368547758.08" is out of range for type money,NULL,NULL,22003
+SELECT 1
+> SELECT * FROM pg_input_error_info('(1,2', 'tid')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type tid: "(1,2",NULL,NULL,22P02
+SELECT 1
+> COPY (SELECT '12.34'::money, '-1'::money, '18446744073709551615'::xid8, '7'::oid8, '(258,3)'::tid, 'cur'::refcursor) TO stdout
+copy out 0 0,0,0,0,0,0
+data $12.34\t-$1.00\t18446744073709551615\t7\t(258,3)\tcur\n
+copy done
+COPY 1
+> COPY (SELECT '12.34'::money, '-1'::money, '18446744073709551615'::xid8, '7'::oid8, '(258,3)'::tid, 'cur'::refcursor) TO stdout (FORMAT binary)
+copy out 1 1,1,1,1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x06\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x04\xd2\x00\x00\x00\x08\xff\xff\xff\xff\xff\xff\xff\x9c\x00\x00\x00\x08\xff\xff\xff\xff\xff\xff\xff\xff\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x07\x00\x00\x00\x06\x00\x00\x01\x02\x00\x03\x00\x00\x00\x03cur
+data \xff\xff
+copy done
+COPY 1
+> SELECT '1234.5'::money
+fields money:790:8:-1
+row $1,234.50
+SELECT 1
+> SELECT tid_block('(5,3)'), tid_offset('(5,3)'), tid_block('(4294967295,65535)'), tid_offset('(4294967295,65535)')
+fields tid_block:20:8:-1,tid_offset:23:4:-1,tid_block:20:8:-1,tid_offset:23:4:-1
+row 5,3,4294967295,65535
+SELECT 1
+> SELECT m, count(*) FROM (VALUES ('1'::money), ('1.00'::money), ('-2'::money)) v(m) GROUP BY m ORDER BY m
+fields m:790:8:-1,count:20:8:-1
+row -$2.00,1
+row $1.00,2
+SELECT 2
+> SELECT x FROM (VALUES ('1'::xid8), ('18446744073709551615'::xid8), ('7'::xid8)) v(x) ORDER BY x DESC
+fields x:5069:8:-1
+row 18446744073709551615
+row 7
+row 1
+SELECT 3
+> SELECT '{"(0,1)","(2,3)"}'::tid[], ARRAY['1'::xid8], '{5}'::oid8[]
+fields tid:1010:-1:-1,array:271:-1:-1,oid8:6442:-1:-1
+row {"(0,1)","(2,3)"},{1},{5}
+SELECT 1
+> SELECT '92233720368547758.07'::money * 2
+ERROR 22003 money out of range
+> SELECT '1'::money * 'Infinity'::float8
+ERROR 22003 money out of range
+> SELECT '1'::money / 1e-300::float8
+ERROR 22003 money out of range
+> SELECT '-92233720368547758.08'::money / -1
+ERROR 22003 money out of range
+> SELECT 'NaN'::numeric::money
+fields money:790:8:-1
+ERROR 0A000 cannot convert NaN to bigint
+> SELECT 92233720368547759::numeric::money
+fields money:790:8:-1
+ERROR 22003 bigint out of range
+> SELECT 92233720368547758::int8::money
+fields money:790:8:-1
+row $92,233,720,368,547,758.00
+SELECT 1
+> SELECT cash_words('-92233720368547758.08'), cash_words('115.20'), cash_words('101.01')
+fields cash_words:25:-1:-1,cash_words:25:-1:-1,cash_words:25:-1:-1
+row Minus ninety two quadrillion two hundred thirty three trillion seven hundred twenty billion three hundred sixty eight million five hundred forty seven thousand seven hundred fifty eight dollars and eight cents,One hundred and fifteen dollars and twenty cents,One hundred and one dollars and one cent
+SELECT 1
+> CREATE TABLE mt (m money, x xid8, o oid8, t tid, r refcursor, ma money[])
+CREATE TABLE
+> COPY mt TO stdout
+copy out 0 0,0,0,0,0,0
+copy done
+COPY 0
