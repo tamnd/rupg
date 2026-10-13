@@ -1791,6 +1791,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/geofn.test")));
     }
 
+    /// `xid`, `cid`, `pg_lsn`, `pg_snapshot` and `txid_snapshot`: the text forms with the errors of a bad value, the order and the arithmetic of `pg_lsn`, the functions of the snapshots, the soft errors, the types with no input, the arrays and the text and binary forms of `COPY`. `connection/snap.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn snap() {
+        big_stack(|| script(include_str!("connection/snap.test")));
+    }
+
     /// The geometric types `point`, `lseg`, `box`, `path`, `polygon`, `line` and `circle`: the text forms of each format with the errors of a bad value, `extra_float_digits`, the arrays, the soft errors and the text and binary forms of `COPY`. `connection/geo.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn geo() {

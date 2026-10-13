@@ -1,0 +1,190 @@
+> SELECT '5'::xid, ' 4294967295 '::xid, '-1'::xid, '0x10'::xid, '010'::xid, '7'::cid, '4294967296'::xid
+ERROR 22003 value "4294967296" is out of range for type xid at 85
+> SELECT 'abc'::xid
+ERROR 22P02 invalid input syntax for type xid: "abc" at 8
+> SELECT '1x'::cid
+ERROR 22P02 invalid input syntax for type cid: "1x" at 8
+> SELECT ''::xid
+ERROR 22P02 invalid input syntax for type xid: "" at 8
+> SELECT '16/B374D848'::pg_lsn, '0/0'::pg_lsn, 'FFFFFFFF/FFFFFFFF'::pg_lsn, 'ff/ab'::pg_lsn
+fields pg_lsn:3220:8:-1,pg_lsn:3220:8:-1,pg_lsn:3220:8:-1,pg_lsn:3220:8:-1
+row 16/B374D848,0/00000000,FFFFFFFF/FFFFFFFF,FF/000000AB
+SELECT 1
+> SELECT '16/B374D848x'::pg_lsn
+ERROR 22P02 invalid input syntax for type pg_lsn: "16/B374D848x" at 8
+> SELECT '1/100000000'::pg_lsn
+ERROR 22P02 invalid input syntax for type pg_lsn: "1/100000000" at 8
+> SELECT ' 1/1'::pg_lsn
+ERROR 22P02 invalid input syntax for type pg_lsn: " 1/1" at 8
+> SELECT '/1'::pg_lsn
+ERROR 22P02 invalid input syntax for type pg_lsn: "/1" at 8
+> SELECT '10:20:10,14,15'::txid_snapshot, '10:20:'::txid_snapshot, ' 10:20: '::txid_snapshot, '10:20:10,10,14'::txid_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: " 10:20: " at 66
+> SELECT '10:20:10,14,15'::pg_snapshot, '10:10:'::pg_snapshot
+fields pg_snapshot:5038:-1:-1,pg_snapshot:5038:-1:-1
+row 10:20:10,14,15,10:10:
+SELECT 1
+> SELECT '20:10:'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "20:10:" at 8
+> SELECT '10:20:9'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "10:20:9" at 8
+> SELECT '10:20:20'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "10:20:20" at 8
+> SELECT '10:20:14,12'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "10:20:14,12" at 8
+> SELECT '0:20:'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "0:20:" at 8
+> SELECT 'a:20:'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "a:20:" at 8
+> SELECT '10:20:10,'::pg_snapshot
+fields pg_snapshot:5038:-1:-1
+row 10:20:10
+SELECT 1
+> SELECT pg_snapshot_xmin('10:20:10,14,15'), pg_snapshot_xmax('10:20:10,14,15'), txid_snapshot_xmin('10:20:10,14,15'), txid_snapshot_xmax('10:20:10,14,15')
+fields pg_snapshot_xmin:5069:8:-1,pg_snapshot_xmax:5069:8:-1,txid_snapshot_xmin:20:8:-1,txid_snapshot_xmax:20:8:-1
+row 10,20,10,20
+SELECT 1
+> SELECT pg_snapshot_xip('10:20:10,14,15')
+fields pg_snapshot_xip:5069:8:-1
+row 10
+row 14
+row 15
+SELECT 3
+> SELECT txid_snapshot_xip('10:20:10,14,15')
+fields txid_snapshot_xip:20:8:-1
+row 10
+row 14
+row 15
+SELECT 3
+> SELECT pg_visible_in_snapshot('9', '10:20:10,14,15'), pg_visible_in_snapshot('10', '10:20:10,14,15'), pg_visible_in_snapshot('11', '10:20:10,14,15'), pg_visible_in_snapshot('20', '10:20:10,14,15')
+fields pg_visible_in_snapshot:16:1:-1,pg_visible_in_snapshot:16:1:-1,pg_visible_in_snapshot:16:1:-1,pg_visible_in_snapshot:16:1:-1
+row t,f,t,f
+SELECT 1
+> SELECT txid_visible_in_snapshot(9, '10:20:10,14,15'), txid_visible_in_snapshot(11, '10:20:10,14,15')
+fields txid_visible_in_snapshot:16:1:-1,txid_visible_in_snapshot:16:1:-1
+row t,t
+SELECT 1
+> SELECT 'x'::pg_node_tree
+ERROR 0A000 cannot accept a value of type pg_node_tree at 8
+> SELECT 'x'::gtsvector
+ERROR 0A000 cannot accept a value of type gtsvector at 8
+> SELECT 'x'::pg_brin_bloom_summary
+ERROR 0A000 cannot accept a value of type pg_brin_bloom_summary at 8
+> SELECT 'x'::pg_brin_minmax_multi_summary
+ERROR 0A000 cannot accept a value of type brin_minmax_multi_summary at 8
+> SELECT 'x'::pg_mcv_list
+ERROR 0A000 cannot accept a value of type pg_mcv_list at 8
+> SELECT pg_input_is_valid('10:20:', 'pg_snapshot'), pg_input_is_valid('20:10:', 'pg_snapshot'), pg_input_is_valid('1/1', 'pg_lsn'), pg_input_is_valid('1/x', 'pg_lsn'), pg_input_is_valid('a', 'xid')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,t,f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('20:10:', 'pg_snapshot')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type pg_snapshot: "20:10:",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('1/x', 'pg_lsn')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type pg_lsn: "1/x",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('a', 'xid')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type xid: "a",NULL,NULL,22P02
+SELECT 1
+> SELECT '16/B374D848'::pg_lsn - '16/B374D840'::pg_lsn, '16/B374D848'::pg_lsn + 8, '16/B374D848'::pg_lsn - 8, '1/1'::pg_lsn < '1/2'::pg_lsn, pg_lsn_larger('1/1', '1/2')
+fields ?column?:1700:-1:-1,?column?:3220:8:-1,?column?:3220:8:-1,?column?:16:1:-1,pg_lsn_larger:3220:8:-1
+row 8,16/B374D850,16/B374D840,t,1/00000002
+SELECT 1
+> SELECT '0/1'::pg_lsn - 2
+ERROR 22023 pg_lsn out of range
+> SELECT 'FFFFFFFF/FFFFFFFF'::pg_lsn + 1
+ERROR 22023 pg_lsn out of range
+> SELECT '1/1'::pg_lsn + 'NaN'::numeric
+ERROR 0A000 cannot add NaN to pg_lsn
+> SELECT '5'::xid = '5'::xid, '5'::xid <> 6, '5'::xid = 5, '7'::cid = '7'::cid, xid8_larger('5', '6'), '5'::xid8::xid
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,xid8_larger:5069:8:-1,xid:28:4:-1
+row t,t,t,t,6,5
+SELECT 1
+> SELECT ARRAY['10:20:'::pg_snapshot], ARRAY['1/1'::pg_lsn], ARRAY['5'::xid], ARRAY['7'::cid]
+fields array:5039:-1:-1,array:3221:-1:-1,array:1011:-1:-1,array:1012:-1:-1
+row {10:20:},{1/00000001},{5},{7}
+SELECT 1
+> COPY (SELECT '5'::xid, '7'::cid, '16/B374D848'::pg_lsn, '10:20:10,14,15'::txid_snapshot, '10:20:10,14,15'::pg_snapshot) TO stdout (FORMAT binary)
+copy out 1 1,1,1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x05\x00\x00\x00\x04\x00\x00\x00\x05\x00\x00\x00\x04\x00\x00\x00\x07\x00\x00\x00\x08\x00\x00\x00\x16\xb3t\xd8H\x00\x00\x00,\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x00\x00\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x00\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x0f\x00\x00\x00,\x00\x00\x00\x03\x00\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x00\x00\x00\x00\x14\x00\x00\x00\x00\x00\x00\x00\n\x00\x00\x00\x00\x00\x00\x00\x0e\x00\x00\x00\x00\x00\x00\x00\x0f
+data \xff\xff
+copy done
+COPY 1
+> SELECT '5'::xid, ' 4294967295 '::xid, '-1'::xid, '0x10'::xid, '010'::xid, '7'::cid, '-2147483648'::xid, '+5'::xid
+fields xid:28:4:-1,xid:28:4:-1,xid:28:4:-1,xid:28:4:-1,xid:28:4:-1,cid:29:4:-1,xid:28:4:-1,xid:28:4:-1
+row 5,4294967295,4294967295,16,8,7,2147483648,5
+SELECT 1
+> SELECT '4294967296'::xid
+ERROR 22003 value "4294967296" is out of range for type xid at 8
+> SELECT '-4294967296'::cid
+ERROR 22003 value "-4294967296" is out of range for type cid at 8
+> SELECT '1e3'::xid
+ERROR 22P02 invalid input syntax for type xid: "1e3" at 8
+> SELECT '10:20:10,14,15'::txid_snapshot, '10:20:'::txid_snapshot, '10:20:10,10,14'::txid_snapshot, '00010:020:'::pg_snapshot
+fields txid_snapshot:2970:-1:-1,txid_snapshot:2970:-1:-1,txid_snapshot:2970:-1:-1,pg_snapshot:5038:-1:-1
+row 10:20:10,14,15,10:20:,10:20:10,14,10:20:
+SELECT 1
+> SELECT ' 10:20:'::pg_snapshot
+fields pg_snapshot:5038:-1:-1
+row 10:20:
+SELECT 1
+> SELECT '10:20: '::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "10:20: " at 8
+> SELECT '10 :20:'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "10 :20:" at 8
+> SELECT '10:20'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "10:20" at 8
+> SELECT '18446744073709551615:18446744073709551615:'::pg_snapshot
+fields pg_snapshot:5038:-1:-1
+row 18446744073709551615:18446744073709551615:
+SELECT 1
+> SELECT '18446744073709551616:18446744073709551616:'::pg_snapshot
+fields pg_snapshot:5038:-1:-1
+row 18446744073709551615:18446744073709551615:
+SELECT 1
+> SELECT '-1:20:'::pg_snapshot
+ERROR 22P02 invalid input syntax for type pg_snapshot: "-1:20:" at 8
+> SELECT '1/1'::pg_lsn - 'NaN'::numeric
+ERROR 0A000 cannot subtract NaN from pg_lsn
+> SELECT '1/1'::pg_lsn + 'Infinity'::numeric
+ERROR 0A000 cannot convert infinity to pg_lsn
+> SELECT '1/1'::pg_lsn + 0.5, '1/1'::pg_lsn - 1.5, pg_wal_lsn_diff('0/10', '0/20'), pg_lsn(20::numeric), pg_lsn(18446744073709551615::numeric)
+fields ?column?:3220:8:-1,?column?:3220:8:-1,pg_wal_lsn_diff:1700:-1:-1,pg_lsn:3220:8:-1,pg_lsn:3220:8:-1
+row 1/00000002,1/00000000,-16,0/00000014,FFFFFFFF/FFFFFFFF
+SELECT 1
+> SELECT pg_lsn(-1::numeric)
+ERROR 22023 pg_lsn out of range
+> SELECT min(x), max(x) FROM (VALUES ('1/1'::pg_lsn), ('FFFFFFFF/0'), ('0/FF')) v(x)
+fields min:3220:8:-1,max:3220:8:-1
+row 0/000000FF,FFFFFFFF/00000000
+SELECT 1
+> SELECT x FROM (VALUES ('1/1'::pg_lsn), ('FFFFFFFF/0'), ('0/FF')) v(x) ORDER BY x
+fields x:3220:8:-1
+row 0/000000FF
+row 1/00000001
+row FFFFFFFF/00000000
+SELECT 3
+> SELECT pg_lsn_cmp('1/1', '1/2'), pg_lsn_smaller('1/1', '1/2'), '1/1'::pg_lsn >= '1/1', '1/1'::pg_lsn <> '1/2'
+fields pg_lsn_cmp:23:4:-1,pg_lsn_smaller:3220:8:-1,?column?:16:1:-1,?column?:16:1:-1
+row -1,1/00000001,t,t
+SELECT 1
+> SELECT '7'::cid = '8'::cid, '5'::xid <> '5'::xid
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,f
+SELECT 1
+> SELECT pg_snapshot_xip('10:20:')
+fields pg_snapshot_xip:5069:8:-1
+SELECT 0
+> SELECT pg_snapshot_xmax('18446744073709551615:18446744073709551615:'), txid_snapshot_xmax('18446744073709551615:18446744073709551615:')
+fields pg_snapshot_xmax:5069:8:-1,txid_snapshot_xmax:20:8:-1
+row 18446744073709551615,-1
+SELECT 1
+> COPY (SELECT '5'::xid, '7'::cid, '16/B374D848'::pg_lsn, '10:20:10,14,15'::txid_snapshot, '10:20:10,14,15'::pg_snapshot) TO stdout
+copy out 0 0,0,0,0,0
+data 5\t7\t16/B374D848\t10:20:10,14,15\t10:20:10,14,15\n
+copy done
+COPY 1

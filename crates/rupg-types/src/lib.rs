@@ -22,7 +22,7 @@
 //!
 //! [`Array`], an array of any element type with up to [`MAXDIM`] dimensions and any lower bounds. [`array_in`], [`array_out`], [`array_recv`] and [`array_send`] take the function of the element type as a closure and give the errors of PostgreSQL, also the error of the element. The binary input refuses an element type that is not the expected type, and [`format_type`] gives the names in that error. `int2vector` and `oidvector` are arrays with the lower bound 0 and a text form with spaces, in [`int2vector_in`], [`oidvector_in`] and the functions beside them.
 //!
-//! [`cash_in`], [`cash_out`] and [`cash_words`] for `money`, a count of cents in an `i64`, with the symbols of the `C` locale. [`tid_in`] and [`tid_out`] for `tid`, and [`uint64_in`] for `xid8` and `oid8`. [`macaddr_in`], [`macaddr8_in`] and the other functions of `macaddr` and `macaddr8`, with the bytes of the address in a `u64`. [`bit_in`], [`bit_coerce`], [`bit_recv`] and [`bit_send`] for `bit` and `bit varying`, a string of `0` and `1`. [`geo_in`], [`geo_out`] and [`geo_recv`] for the geometric types, the bytes of the binary form.
+//! [`cash_in`], [`cash_out`] and [`cash_words`] for `money`, a count of cents in an `i64`, with the symbols of the `C` locale. [`tid_in`] and [`tid_out`] for `tid`, and [`uint64_in`] for `xid8` and `oid8`. [`macaddr_in`], [`macaddr8_in`] and the other functions of `macaddr` and `macaddr8`, with the bytes of the address in a `u64`. [`bit_in`], [`bit_coerce`], [`bit_recv`] and [`bit_send`] for `bit` and `bit varying`, a string of `0` and `1`. [`geo_in`], [`geo_out`] and [`geo_recv`] for the geometric types, the bytes of the binary form. [`pg_lsn_in`] and [`pg_lsn_out`] for `pg_lsn`, a `u64`. [`snapshot_in`], [`snapshot_out`] and [`snapshot_recv`] for `pg_snapshot` and `txid_snapshot`, with the binary form of a [`Snapshot`] as the value.
 //!
 //! [`Inet`], a value of `inet` or `cidr`, with [`inet_in`], [`inet_out`], [`inet_recv`] and [`inet_send`], which take a flag for `cidr`. [`network_cmp`] is the order of the B-tree operator class.
 //!
@@ -57,6 +57,7 @@ mod generated;
 mod geo;
 mod json;
 mod jsonb;
+mod lsn;
 mod mac;
 mod money;
 mod network;
@@ -65,6 +66,7 @@ mod numeric;
 pub mod numeric_layout;
 mod reg;
 mod scalar;
+mod snapshot;
 mod stats;
 mod string;
 mod tid;
@@ -99,6 +101,7 @@ pub use generated::oids as oid;
 pub use geo::{GeoKind, geo_in, geo_out, geo_recv};
 pub use json::json_in;
 pub use jsonb::{jsonb_in, jsonb_recv, jsonb_send};
+pub use lsn::{pg_lsn_in, pg_lsn_out};
 pub use mac::{
     macaddr_in, macaddr_out, macaddr_recv, macaddr_to_macaddr8, macaddr8_in, macaddr8_out,
     macaddr8_recv, macaddr8_to_macaddr,
@@ -122,6 +125,7 @@ pub use scalar::{
     ByteaOutput, NAME_MAX_BYTES, bool_in, bool_out, bytea_in, bytea_out, char_in, char_out,
     name_in, uuid_in, uuid_out,
 };
+pub use snapshot::{Snapshot, snapshot_in, snapshot_out, snapshot_recv};
 pub use stats::{pg_dependencies_in, pg_dependencies_out, pg_ndistinct_in, pg_ndistinct_out};
 pub use string::{bpchar_coerce, bpchar_in, varchar_coerce, varchar_in};
 pub use tid::{tid_in, tid_out};

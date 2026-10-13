@@ -147,7 +147,7 @@ fn sequence_last_value(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Null)
 }
 
-/// `pg_get_sequence_data(regclass)`: the last value, `is_called` and the LSN of the page of a sequence, which `pg_dump` reads. A session cannot call `nextval` yet, so the last value is the first value and `is_called` is false. rupg keeps no pages with an LSN, so the LSN is 0/0. Each field is null for an OID that no relation has, for a relation that is not a sequence, and for a sequence on which the current user has no `SELECT` and no `USAGE`.
+/// `pg_get_sequence_data(regclass)`: the last value, `is_called` and the LSN of the page of a sequence, which `pg_dump` reads. A session cannot call `nextval` yet, so the last value is the first value and `is_called` is false. rupg keeps no pages with an LSN, so the LSN is 0/00000000. Each field is null for an OID that no relation has, for a relation that is not a sequence, and for a sequence on which the current user has no `SELECT` and no `USAGE`.
 fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let relid = oid_arg(args, 0)?;
     let sequence = call
@@ -158,7 +158,7 @@ fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         .and_then(|r| r.sequence.as_ref());
     let values = match sequence {
         Some(info) if crate::acl::sequence_readable(relid, call.session)? => {
-            vec![Value::Int8(info.start), Value::Bool(false), Value::text("0/0")]
+            vec![Value::Int8(info.start), Value::Bool(false), Value::Int8(0)]
         }
         _ => vec![Value::Null; 3],
     };
