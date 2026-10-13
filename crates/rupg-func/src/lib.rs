@@ -167,6 +167,10 @@ pub trait Session {
         let _ = (ty, value);
         Err(not_yet("the check constraints of a domain"))
     }
+    /// `ereport(WARNING)` in a function: a warning for the client, such as the warning of the input of an `aclitem` value with no grantor. A session with no client drops it.
+    fn warn(&self, warning: Error) {
+        let _ = warning;
+    }
 }
 
 /// A call of a function.

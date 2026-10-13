@@ -72,6 +72,11 @@ pub trait Env {
     fn database(&self) -> String;
     /// The input function of the type: the value of a string literal. The settings of the session, such as `DateStyle`, apply.
     fn input(&self, ty: u32, text: &str, typmod: i32) -> Result<Value>;
+    /// [`Env::input`] for a literal at this place in the query text, so that a warning of the input function points at the literal.
+    fn input_at(&self, ty: u32, text: &str, typmod: i32, at: Option<usize>) -> Result<Value> {
+        let _ = at;
+        self.input(ty, text, typmod)
+    }
     /// The objects that the user made, or `None` when the session has no catalog.
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None

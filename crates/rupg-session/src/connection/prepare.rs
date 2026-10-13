@@ -60,8 +60,10 @@ impl Connection {
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
         let types = rupg_analyze::param_types(&stmt.argtypes, &reader)?;
-        let plan = query::plan(node, &reader, &Params { types, variable: true })?;
+        let plan = query::plan(node, &reader, &Params { types, variable: true });
+        notices.extend(reader.take_warnings().into_iter().map(Notice::warning));
         drop(reader);
+        let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
         let params = plan.params().to_vec();
         let columns = Some(query::columns(&plan));

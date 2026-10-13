@@ -203,12 +203,12 @@ impl Analyzer<'_> {
                     Value::Text(text) => {
                         let text = text.clone();
                         // The place of the literal replaces any place that the input function gives, as `pcb_error_callback` does.
-                        self.env.input(base, &text, input_typmod).map_err(|e| {
-                            match expr.location {
+                        self.env.input_at(base, &text, input_typmod, expr.location).map_err(
+                            |e| match expr.location {
                                 Some(at) => e.with_position(Some(at)),
                                 None => e,
-                            }
-                        })?
+                            },
+                        )?
                     }
                     _ => Value::Null,
                 };

@@ -66,8 +66,7 @@ struct Options {
 impl CopyOut {
     /// `CopyOutResponse`, the `CopyData` messages and `CopyDone`.
     pub(super) fn send_data(&self, out: &mut OutBuf) {
-        let format = i8::from(self.binary);
-        out.copy_out_response(format, &vec![i16::from(self.binary); self.columns]);
+        copy_out_response(out, self.binary, self.columns);
         for data in &self.data {
             out.copy_data(data);
         }
@@ -81,9 +80,18 @@ impl CopyOut {
     }
 }
 
+/// `CopyOutResponse` with the same format for all the columns.
+pub(super) fn copy_out_response(out: &mut OutBuf, binary: bool, columns: usize) {
+    out.copy_out_response(i8::from(binary), &vec![i16::from(binary); columns]);
+}
+
 impl Connection {
-    /// `DoCopy` for `COPY ... TO STDOUT`.
-    pub(super) fn copy(&self, stmt: &CopyStmt) -> Result<Done, Error> {
+    /// `DoCopy` for `COPY ... TO STDOUT`. PostgreSQL sends `CopyOutResponse` before it runs the query, so `started` gets the format and the number of columns at that point. The caller then sends `CopyOutResponse` before an error of the run.
+    pub(super) fn copy(
+        &self,
+        stmt: &CopyStmt,
+        started: &mut Option<(bool, usize)>,
+    ) -> Result<Done, Error> {
         if stmt.is_from {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
@@ -156,6 +164,7 @@ impl Connection {
         }
         let binary = options.format == Format::Binary;
         let formats = vec![i16::from(binary); selected.len()];
+        *started = Some((binary, selected.len()));
         let rows = query::run(&plan, &[], &reader, &formats)?;
         let names: Vec<&str> = selected.iter().map(|&i| columns[i].as_str()).collect();
         let data =

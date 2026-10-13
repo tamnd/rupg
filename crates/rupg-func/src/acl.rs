@@ -1,4 +1,4 @@
-//! The access privilege inquiry functions: `has_table_privilege` and the other `has_*_privilege` functions, `pg_has_role`, and `acldefault` and `aclexplode`, which give the items of an `aclitem[]` value.
+//! The access privilege inquiry functions: `has_table_privilege` and the other `has_*_privilege` functions, `pg_has_role`, and `acldefault` and `aclexplode`, which give the items of an `aclitem[]` value. The module also has the input of `aclitem`, `makeaclitem`, `aclcontains` and the hash functions of `aclitem`.
 //!
 //! A port of the functions of `src/backend/utils/adt/acl.c` and of the checks of `aclchk.c` that they call. The privileges are the `aclitem[]` values of the static rows, which have the privileges that `initdb` gives. Each function has forms with a role name or OID first, or no role for the current user, and with the object as text or as an OID. The form of a call is clear from its values: a name is text and an OID is an OID. A form with the OID of an object that does not exist gives null.
 
@@ -8,7 +8,7 @@ use rupg_pgcatalog::builtin::{self, Owned};
 use rupg_types::{RegKind, Value, qualified_name_list};
 
 use crate::reg;
-use crate::{Call, Kernel, Session, bad_value, type_error};
+use crate::{Call, Kernel, Session, bad_value, not_yet, type_error};
 
 const ACL_INSERT: u32 = 1 << 0;
 const ACL_SELECT: u32 = 1 << 1;
@@ -891,30 +891,14 @@ pub(crate) fn aclexplode(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Valu
     let Some(Value::Array(acl)) = args.first() else { return Err(bad_value()) };
     let mut rows = Vec::new();
     for item in acl.values.iter().flatten() {
-        let item = item.as_str().ok_or_else(bad_value)?;
-        let bad = || Error::internal(format!("an aclitem that the engine cannot read: {item}"));
-        let (grantee, rest) = item.split_once('=').ok_or_else(bad)?;
-        let (letters, grantor) = rest.split_once('/').ok_or_else(bad)?;
-        let grantee =
-            if grantee.is_empty() { PUBLIC } else { get_role_oid(grantee, call.session)? };
-        let grantor = get_role_oid(grantor, call.session)?;
-        let mut bits: u32 = 0;
-        let mut last = 0;
-        for c in letters.chars() {
-            if c == '*' {
-                bits |= last << 16;
-            } else {
-                last = 1 << RIGHTS.find(c).ok_or_else(bad)?;
-                bits |= last;
-            }
-        }
+        let item = stored_item(item, call.session)?;
         for (bit, name) in RIGHT_NAMES.iter().enumerate() {
-            if bits & (1 << bit) != 0 {
+            if item.bits & (1 << bit) != 0 {
                 rows.push(vec![
-                    Value::Oid(grantor),
-                    Value::Oid(grantee),
+                    Value::Oid(item.grantor),
+                    Value::Oid(item.grantee),
                     Value::text(*name),
-                    Value::Bool(bits & go(1 << bit) != 0),
+                    Value::Bool(item.bits & go(1 << bit) != 0),
                 ]);
             }
         }
@@ -922,13 +906,272 @@ pub(crate) fn aclexplode(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Valu
     Ok(rows)
 }
 
-/// `putid`: the name of a role in an `aclitem` value, in double quotes when it has a character that is not alphanumeric or `_`. A role that does not exist shows as its OID.
+/// An `aclitem` value: the grantee, the privileges with their grant options in the bits of [`go`], and the grantor.
+#[derive(Debug, Clone, Copy)]
+struct AclItem {
+    grantee: u32,
+    bits: u32,
+    grantor: u32,
+}
+
+/// `NAMEDATALEN`: a role name has fewer bytes than this.
+const NAMEDATALEN: usize = 64;
+
+/// `is_safe_acl_char` of `getid`: a byte of a role name with no quotes. A byte with the high bit set counts.
+fn is_name_byte(c: u8) -> bool {
+    c >= 0x80 || c.is_ascii_alphanumeric() || c == b'_'
+}
+
+/// The text after the white space at its start.
+fn skip_spaces(s: &[u8]) -> &[u8] {
+    let n = s.iter().take_while(|&&c| is_space(char::from(c))).count();
+    &s[n..]
+}
+
+/// `getid`: a role name after any white space, with double quotes around all or part of it or with no quotes. In quotes, `""` is a quote. It gives the name and the text after the name and any white space.
+///
+/// # Errors
+///
+/// `42622` for a name of `NAMEDATALEN` bytes or more.
+fn getid(s: &[u8]) -> Result<(String, &[u8])> {
+    let mut s = skip_spaces(s);
+    let mut name = Vec::new();
+    let mut in_quotes = false;
+    while let Some((&c, rest)) = s.split_first() {
+        if !(in_quotes || c == b'"' || is_name_byte(c)) {
+            break;
+        }
+        s = rest;
+        if c == b'"' {
+            if !in_quotes {
+                in_quotes = true;
+                continue;
+            }
+            if s.first() != Some(&b'"') {
+                in_quotes = false;
+                continue;
+            }
+            s = &s[1..];
+        }
+        if name.len() >= NAMEDATALEN - 1 {
+            return Err(Error::new(SqlState::NAME_TOO_LONG, "identifier too long")
+                .with_detail(format!("Identifier must be less than {NAMEDATALEN} characters.")));
+        }
+        name.push(c);
+    }
+    Ok((String::from_utf8_lossy(&name).into_owned(), skip_spaces(s)))
+}
+
+/// The error `22P02` of a bad `aclitem` text.
+fn acl_syntax(message: impl Into<String>) -> Error {
+    Error::new(SqlState::INVALID_TEXT_REPRESENTATION, message)
+}
+
+/// The OID of a role of an `aclitem` text. In the text of a stored value, a role that does not exist shows as its OID, as `aclitemout` writes it.
+///
+/// # Errors
+///
+/// `42704` for a role that does not exist.
+fn acl_role(name: &str, session: &dyn Session, stored: bool) -> Result<u32> {
+    if stored
+        && role_oid(name, session).is_none()
+        && let Ok(oid) = name.parse::<u32>()
+    {
+        return Ok(oid);
+    }
+    get_role_oid(name, session)
+}
+
+/// `aclparse`: an item in the form `grantee=privileges/grantor`, and the text after it. The key word `group` or `user` can come before the grantee, and an empty grantee is PUBLIC. A `*` after a privilege is its grant option. An item with no grantor has the bootstrap superuser as its grantor, with a warning. `stored` reads the text of a stored value.
+///
+/// # Errors
+///
+/// `22P02` for a bad item, `42622` for a name that is too long, and `42704` for a role that does not exist.
+fn aclparse<'a>(s: &'a [u8], session: &dyn Session, stored: bool) -> Result<(AclItem, &'a [u8])> {
+    let (mut name, mut s) = getid(s)?;
+    if s.first() != Some(&b'=') {
+        if name != "group" && name != "user" {
+            return Err(acl_syntax(format!("unrecognized key word: \"{name}\""))
+                .with_hint("ACL key word must be \"group\" or \"user\"."));
+        }
+        (name, s) = getid(s)?;
+        if name.is_empty() {
+            return Err(acl_syntax("missing name")
+                .with_hint("A name must follow the \"group\" or \"user\" key word."));
+        }
+    }
+    let Some(mut s) = s.strip_prefix(b"=") else {
+        return Err(acl_syntax("missing \"=\" sign"));
+    };
+    let mut bits = 0;
+    let mut read = 0;
+    while let Some((&c, rest)) = s.split_first() {
+        if c == b'*' {
+            bits |= go(read);
+        } else if c.is_ascii_alphabetic() {
+            let Some(bit) = RIGHTS.find(char::from(c)) else {
+                return Err(acl_syntax(format!(
+                    "invalid mode character: must be one of \"{RIGHTS}\""
+                )));
+            };
+            read = 1 << bit;
+            bits |= read;
+        } else {
+            break;
+        }
+        s = rest;
+    }
+    let grantee = if name.is_empty() { PUBLIC } else { acl_role(&name, session, stored)? };
+    let grantor = if let Some(rest) = s.strip_prefix(b"/") {
+        let (name, rest) = getid(rest)?;
+        s = rest;
+        if name.is_empty() {
+            return Err(acl_syntax("a name must follow the \"/\" sign"));
+        }
+        acl_role(&name, session, stored)?
+    } else {
+        session.warn(Error::new(
+            SqlState::INVALID_GRANTOR,
+            format!("defaulting grantor to user ID {BOOTSTRAP_SUPERUSER}"),
+        ));
+        BOOTSTRAP_SUPERUSER
+    };
+    Ok((AclItem { grantee, bits, grantor }, s))
+}
+
+/// `aclitemin`: an `aclitem` value as the text of `aclitemout`.
+///
+/// # Errors
+///
+/// The errors of [`aclparse`], and `22P02` for text after the item.
+pub(crate) fn aclitem_in(text: &str, session: &dyn Session) -> Result<String> {
+    let (item, rest) = aclparse(text.as_bytes(), session, false)?;
+    if !skip_spaces(rest).is_empty() {
+        return Err(acl_syntax("extra garbage at the end of the ACL specification"));
+    }
+    Ok(acl_item(item.grantee, item.bits, item.grantor))
+}
+
+/// The parts of an `aclitem` value, which has the text of `aclitemout`.
+fn stored_item(value: &Value, session: &dyn Session) -> Result<AclItem> {
+    let text = value.as_str().ok_or_else(bad_value)?;
+    Ok(aclparse(text.as_bytes(), session, true)?.0)
+}
+
+/// `check_acl`: the items of an `aclitem[]` value, which must have one dimension and no null items.
+///
+/// # Errors
+///
+/// `22023` for an array that does not have one dimension, and `22004` for a null item.
+fn acl_items(value: &Value, session: &dyn Session) -> Result<Vec<AclItem>> {
+    let Value::Array(acl) = value else { return Err(bad_value()) };
+    if acl.dims.len() != 1 {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "ACL arrays must be one-dimensional",
+        ));
+    }
+    if acl.values.iter().any(Option::is_none) {
+        return Err(Error::new(
+            SqlState::NULL_VALUE_NOT_ALLOWED,
+            "ACL arrays must not contain null values",
+        ));
+    }
+    acl.values.iter().flatten().map(|item| stored_item(item, session)).collect()
+}
+
+/// `aclitem_eq`: the grantees, the privileges and the grantors are equal. The text of a value has one form, so the texts are equal.
+fn aclitem_eq(_call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(text(args, 0)? == text(args, 1)?))
+}
+
+/// `aclcontains`: true when the array has an item with the grantee and the grantor of the item, and with all its privileges and grant options.
+///
+/// # Errors
+///
+/// The errors of [`acl_items`].
+fn aclcontains(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [acl, item] = args else { return Err(bad_value()) };
+    let items = acl_items(acl, call.session)?;
+    let item = stored_item(item, call.session)?;
+    Ok(Value::Bool(items.iter().any(|a| {
+        a.grantee == item.grantee && a.grantor == item.grantor && (a.bits & item.bits) == item.bits
+    })))
+}
+
+/// The privileges of `makeaclitem`: the privileges of all kinds of objects.
+const ANY_PRIVS: PrivMap = &[
+    ("SELECT", ACL_SELECT),
+    ("INSERT", ACL_INSERT),
+    ("UPDATE", ACL_UPDATE),
+    ("DELETE", ACL_DELETE),
+    ("TRUNCATE", ACL_TRUNCATE),
+    ("REFERENCES", ACL_REFERENCES),
+    ("TRIGGER", ACL_TRIGGER),
+    ("EXECUTE", ACL_EXECUTE),
+    ("USAGE", ACL_USAGE),
+    ("CREATE", ACL_CREATE),
+    ("TEMP", ACL_CREATE_TEMP),
+    ("TEMPORARY", ACL_CREATE_TEMP),
+    ("CONNECT", ACL_CONNECT),
+    ("SET", ACL_SET),
+    ("ALTER SYSTEM", ACL_ALTER_SYSTEM),
+    ("MAINTAIN", ACL_MAINTAIN),
+];
+
+/// `makeaclitem(grantee, grantor, privileges, is_grantable)`: an item with the privileges of a list of names, with their grant options when `is_grantable` is true.
+///
+/// # Errors
+///
+/// `22023` for a name that is not the name of a privilege.
+fn makeaclitem(_call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (Some(Value::Oid(grantee)), Some(Value::Oid(grantor)), Some(Value::Bool(grantable))) =
+        (args.first(), args.get(1), args.get(3))
+    else {
+        return Err(bad_value());
+    };
+    let privs = privileges(text(args, 2)?, ANY_PRIVS)?;
+    let bits = if *grantable { privs | go(privs) } else { privs };
+    Ok(Value::text(acl_item(*grantee, bits, *grantor)))
+}
+
+/// The hash of `hash_aclitem`: the sum of the privileges with no grant options, the grantee and the grantor, in 32 bits.
+fn aclitem_sum(item: AclItem) -> u32 {
+    (item.bits & 0xFFFF).wrapping_add(item.grantee).wrapping_add(item.grantor)
+}
+
+/// `hash_aclitem`.
+fn hash_aclitem(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [item] = args else { return Err(bad_value()) };
+    Ok(Value::Int4(aclitem_sum(stored_item(item, call.session)?).cast_signed()))
+}
+
+/// `hash_aclitem_extended`: the sum of `hash_aclitem` for the seed 0. The engine does not have the hash of another seed yet.
+fn hash_aclitem_extended(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [item, Value::Int8(seed)] = args else { return Err(bad_value()) };
+    if *seed != 0 {
+        return Err(not_yet("hash_aclitem_extended with a seed that is not 0"));
+    }
+    Ok(Value::Int8(i64::from(aclitem_sum(stored_item(item, call.session)?))))
+}
+
+/// `aclinsert`, which PostgreSQL no longer has.
+fn aclinsert(_call: &Call<'_>, _args: &[Value]) -> Result<Value> {
+    Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "aclinsert is no longer supported"))
+}
+
+/// `aclremove`, which PostgreSQL no longer has.
+fn aclremove(_call: &Call<'_>, _args: &[Value]) -> Result<Value> {
+    Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "aclremove is no longer supported"))
+}
+
+/// `putid`: the name of a role in an `aclitem` value, in double quotes when it has a character that is not an ASCII letter, an ASCII digit or `_`. A role that does not exist shows as its OID.
 fn put_role(out: &mut String, role: u32) {
     let Some(row) = builtin::roles().iter().find(|r| r.oid == role) else {
         out.push_str(&role.to_string());
         return;
     };
-    if row.name.chars().all(|c| c.is_alphanumeric() || c == '_') {
+    if row.name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
         out.push_str(row.name);
         return;
     }
@@ -1010,9 +1253,22 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     if matches!(src, "row_security_active" | "row_security_active_name") {
         return Some(row_security_active);
     }
-    if src == "acldefault_sql" {
-        return Some(acldefault);
-    }
+    let kernel: Kernel = match src {
+        "acldefault_sql" => acldefault,
+        "aclitem_eq" => aclitem_eq,
+        "aclcontains" => aclcontains,
+        "makeaclitem" => makeaclitem,
+        "hash_aclitem" => hash_aclitem,
+        "hash_aclitem_extended" => hash_aclitem_extended,
+        "aclinsert" => aclinsert,
+        "aclremove" => aclremove,
+        _ => return privilege_kernel(src),
+    };
+    Some(kernel)
+}
+
+/// The kernel of a `has_*_privilege` function or of `pg_has_role`.
+fn privilege_kernel(src: &str) -> Option<Kernel> {
     let family = if src.starts_with("pg_has_role") {
         "pg_has_role"
     } else {

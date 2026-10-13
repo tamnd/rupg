@@ -1,0 +1,227 @@
+> SELECT 'postgres=arwdDxtm/postgres'::aclitem, '=r/postgres'::aclitem, 'postgres=r*w/postgres'::aclitem, 'postgres=arwdDxtXUCTcsAm/postgres'::aclitem
+fields aclitem:1033:16:-1,aclitem:1033:16:-1,aclitem:1033:16:-1,aclitem:1033:16:-1
+row postgres=arwdDxtm/postgres,=r/postgres,postgres=r*w/postgres,postgres=arwdDxtXUCTcsAm/postgres
+SELECT 1
+> SELECT 'postgres=a*r*w*d*D*x*t*X*U*C*T*c*s*A*m*/postgres'::aclitem, '=/postgres'::aclitem, 'postgres=***r/postgres'::aclitem, 'postgres=rr/postgres'::aclitem
+fields aclitem:1033:16:-1,aclitem:1033:16:-1,aclitem:1033:16:-1,aclitem:1033:16:-1
+row postgres=a*r*w*d*D*x*t*X*U*C*T*c*s*A*m*/postgres,=/postgres,postgres=r/postgres,postgres=r/postgres
+SELECT 1
+> SELECT ' postgres=a/postgres '::aclitem, 'postgres =a/postgres'::aclitem, 'postgres=a/ postgres'::aclitem, E'\tpostgres=a/postgres\n'::aclitem
+fields aclitem:1033:16:-1,aclitem:1033:16:-1,aclitem:1033:16:-1,aclitem:1033:16:-1
+row postgres=a/postgres,postgres=a/postgres,postgres=a/postgres,postgres=a/postgres
+SELECT 1
+> SELECT '"postgres"=a/"postgres"'::aclitem, 'group postgres=r/postgres'::aclitem, 'user postgres=r/postgres'::aclitem
+fields aclitem:1033:16:-1,aclitem:1033:16:-1,aclitem:1033:16:-1
+row postgres=a/postgres,postgres=r/postgres,postgres=r/postgres
+SELECT 1
+> SELECT 'group"postgres"=r/postgres'::aclitem
+ERROR 42704 role "grouppostgres" does not exist at 8
+> SELECT 'group"postgres" =r/postgres'::aclitem, 'user"postgres"=r/postgres'::aclitem
+ERROR 42704 role "grouppostgres" does not exist at 8
+> SELECT 'postgres=a /postgres'::aclitem
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+ERROR 22P02 extra garbage at the end of the ACL specification at 8
+> SELECT 'postgres= a/postgres'::aclitem
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+ERROR 22P02 extra garbage at the end of the ACL specification at 8
+> SELECT 'postgres=r'::aclitem
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+fields aclitem:1033:16:-1
+row postgres=r/postgres
+SELECT 1
+> SELECT '=rw*'::aclitem, 'postgres=r/postgres'::aclitem
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+fields aclitem:1033:16:-1,aclitem:1033:16:-1
+row =rw*/postgres,postgres=r/postgres
+SELECT 1
+> SELECT 'postgres'::aclitem
+ERROR 22P02 unrecognized key word: "postgres" at 8
+> SELECT 'Group postgres=r/postgres'::aclitem
+ERROR 22P02 unrecognized key word: "Group" at 8
+> SELECT 'postgres r/postgres'::aclitem
+ERROR 22P02 unrecognized key word: "postgres" at 8
+> SELECT 'group =r/postgres'::aclitem
+ERROR 42704 role "group" does not exist at 8
+> SELECT 'group postgres r/postgres'::aclitem
+ERROR 22P02 missing "=" sign at 8
+> SELECT ''::aclitem
+ERROR 22P02 unrecognized key word: "" at 8
+> SELECT 'postgres=r/'::aclitem
+ERROR 22P02 a name must follow the "/" sign at 8
+> SELECT 'postgres=r/ '::aclitem
+ERROR 22P02 a name must follow the "/" sign at 8
+> SELECT 'postgres=q/postgres'::aclitem
+ERROR 22P02 invalid mode character: must be one of "arwdDxtXUCTcsAm" at 8
+> SELECT 'postgres=r-/postgres'::aclitem
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+ERROR 22P02 extra garbage at the end of the ACL specification at 8
+> SELECT 'postgres=r/postgres x'::aclitem
+ERROR 22P02 extra garbage at the end of the ACL specification at 8
+> SELECT 'postgres=r/postgres/postgres'::aclitem
+ERROR 22P02 extra garbage at the end of the ACL specification at 8
+> SELECT 'nobody=r/postgres'::aclitem
+ERROR 42704 role "nobody" does not exist at 8
+> SELECT 'postgres=r/nobody'::aclitem
+ERROR 42704 role "nobody" does not exist at 8
+> SELECT '"no body"=r/postgres'::aclitem
+ERROR 42704 role "no body" does not exist at 8
+> SELECT '"no""body"=r/postgres'::aclitem
+ERROR 42704 role "no"body" does not exist at 8
+> SELECT '"postgres=r/postgres'::aclitem
+ERROR 22P02 unrecognized key word: "postgres=r/postgres" at 8
+> SELECT 'nobody=q/postgres'::aclitem
+ERROR 22P02 invalid mode character: must be one of "arwdDxtXUCTcsAm" at 8
+> SELECT 'nobody=r'::aclitem
+ERROR 42704 role "nobody" does not exist at 8
+> SELECT 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=r/postgres'::aclitem
+ERROR 42704 role "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" does not exist at 8
+> SELECT 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=r/postgres'::aclitem
+ERROR 42622 identifier too long at 8
+> SELECT 'postgres=r/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'::aclitem
+ERROR 42622 identifier too long at 8
+> SELECT '{postgres=r/postgres,=w/postgres}'::aclitem[], '{}'::aclitem[], '{"postgres=r/postgres",NULL}'::aclitem[]
+fields aclitem:1034:-1:-1,aclitem:1034:-1:-1,aclitem:1034:-1:-1
+row {postgres=r/postgres,=w/postgres},{},{postgres=r/postgres,NULL}
+SELECT 1
+> SELECT '{postgres=r,=w}'::aclitem[]
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+fields aclitem:1034:-1:-1
+row {postgres=r/postgres,=w/postgres}
+SELECT 1
+> SELECT '{postgres=r/postgres,nobody=w/postgres}'::aclitem[]
+ERROR 42704 role "nobody" does not exist at 8
+> SELECT pg_input_is_valid('postgres=r/postgres', 'aclitem'), pg_input_is_valid('postgres=q/postgres', 'aclitem'), pg_input_is_valid('nobody=r/postgres', 'aclitem'), pg_input_is_valid('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=r/postgres', 'aclitem')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('postgres=q/postgres', 'aclitem')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid mode character: must be one of "arwdDxtXUCTcsAm",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('postgres', 'aclitem')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row unrecognized key word: "postgres",NULL,ACL key word must be "group" or "user".,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('group =r/postgres', 'aclitem')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row role "group" does not exist,NULL,NULL,42704
+SELECT 1
+> SELECT * FROM pg_input_error_info('nobody=r/postgres', 'aclitem')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row role "nobody" does not exist,NULL,NULL,42704
+SELECT 1
+> SELECT * FROM pg_input_error_info('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa=r/postgres', 'aclitem')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row identifier too long,Identifier must be less than 64 characters.,NULL,42622
+SELECT 1
+> SELECT * FROM pg_input_error_info('{postgres=r/postgres,=q/postgres}', 'aclitem[]')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid mode character: must be one of "arwdDxtXUCTcsAm",NULL,NULL,22P02
+SELECT 1
+> SELECT 'postgres=r/postgres'::aclitem = 'postgres=r/postgres'::aclitem, 'postgres=r/postgres'::aclitem = 'postgres=r*/postgres'::aclitem, '=r/postgres'::aclitem = 'postgres=r/postgres'::aclitem, aclitemeq('=r/postgres', '=r/postgres')
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,aclitemeq:16:1:-1
+row t,f,f,t
+SELECT 1
+> SELECT makeaclitem('postgres'::regrole, 'postgres'::regrole, 'SELECT, UPDATE', true), makeaclitem(0, 'postgres'::regrole, 'select', false), makeaclitem('postgres'::regrole, 'postgres'::regrole, ' temp , Alter System,MAINTAIN', false)
+fields makeaclitem:1033:16:-1,makeaclitem:1033:16:-1,makeaclitem:1033:16:-1
+row postgres=r*w*/postgres,=r/postgres,postgres=TAm/postgres
+SELECT 1
+> SELECT makeaclitem('postgres'::regrole, 'postgres'::regrole, 'INSERT,SELECT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER,EXECUTE,USAGE,CREATE,TEMPORARY,CONNECT,SET,ALTER SYSTEM,MAINTAIN', true)
+fields makeaclitem:1033:16:-1
+row postgres=a*r*w*d*D*x*t*X*U*C*T*c*s*A*m*/postgres
+SELECT 1
+> SELECT makeaclitem('postgres'::regrole, 'postgres'::regrole, 'SELECT, foo', false)
+ERROR 22023 unrecognized privilege type: "foo"
+> SELECT makeaclitem('postgres'::regrole, 'postgres'::regrole, '', false)
+ERROR 22023 unrecognized privilege type: ""
+> SELECT makeaclitem('postgres'::regrole, 'postgres'::regrole, 'SELECT,', false)
+ERROR 22023 unrecognized privilege type: ""
+> SELECT makeaclitem(12345, 'postgres'::regrole, 'SELECT', false), makeaclitem('postgres'::regrole, 0, 'SELECT', false)
+fields makeaclitem:1033:16:-1,makeaclitem:1033:16:-1
+row 12345=r/postgres,postgres=r/0
+SELECT 1
+> SELECT makeaclitem(NULL, 'postgres'::regrole, 'SELECT', false), makeaclitem('postgres'::regrole, 'postgres'::regrole, 'SELECT', NULL)
+fields makeaclitem:1033:16:-1,makeaclitem:1033:16:-1
+row NULL,NULL
+SELECT 1
+> SELECT '{postgres=r/postgres}'::aclitem[] @> 'postgres=r/postgres'::aclitem, aclcontains('{postgres=rw/postgres}', 'postgres=r/postgres')
+fields ?column?:16:1:-1,aclcontains:16:1:-1
+row t,t
+SELECT 1
+> SELECT aclcontains('{postgres=rw/postgres}', 'postgres=r*/postgres'), aclcontains('{postgres=r*w/postgres}', 'postgres=r/postgres'), aclcontains('{postgres=r/postgres}', '=r/postgres'), aclcontains('{=/postgres}', '=/postgres')
+fields aclcontains:16:1:-1,aclcontains:16:1:-1,aclcontains:16:1:-1,aclcontains:16:1:-1
+row f,t,f,t
+SELECT 1
+> SELECT aclcontains('{}', '=r/postgres')
+ERROR 22023 ACL arrays must be one-dimensional
+> SELECT aclcontains('{{=r/postgres}}', '=r/postgres')
+ERROR 22023 ACL arrays must be one-dimensional
+> SELECT aclcontains('{=r/postgres,NULL}', '=r/postgres')
+ERROR 22004 ACL arrays must not contain null values
+> SELECT privilege_type, is_grantable FROM aclexplode('{postgres=r*w/postgres,=a/postgres}'::aclitem[])
+fields privilege_type:25:-1:-1,is_grantable:16:1:-1
+row SELECT,t
+row UPDATE,f
+row INSERT,f
+SELECT 3
+> SELECT grantee, privilege_type FROM aclexplode(ARRAY[makeaclitem(12345, 'postgres'::regrole, 'SELECT', false)])
+fields grantee:26:4:-1,privilege_type:25:-1:-1
+row 12345,SELECT
+SELECT 1
+> SELECT aclcontains(ARRAY[makeaclitem(12345, 'postgres'::regrole, 'SELECT, UPDATE', false)], makeaclitem(12345, 'postgres'::regrole, 'UPDATE', false)), hash_aclitem(makeaclitem(12345, 0, 'SELECT', false))
+fields aclcontains:16:1:-1,hash_aclitem:23:4:-1
+row t,12347
+SELECT 1
+> SELECT aclcontains('{=r/postgres,postgres=rw/postgres}', 'postgres=w/postgres'), aclcontains('{postgres=rw/postgres}', 'postgres=w/pg_monitor'), aclcontains('{pg_monitor=rw/postgres}', 'pg_monitor=w/postgres')
+fields aclcontains:16:1:-1,aclcontains:16:1:-1,aclcontains:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT aclinsert('{}', '=r/postgres')
+ERROR 0A000 aclinsert is no longer supported
+> SELECT aclremove('{}', '=r/postgres')
+ERROR 0A000 aclremove is no longer supported
+> SELECT hash_aclitem('postgres=r/postgres'), hash_aclitem('=/postgres'), hash_aclitem('postgres=a*r*w*d*D*x*t*X*U*C*T*c*s*A*m*/postgres'), hash_aclitem_extended('postgres=r/postgres', 0)
+fields hash_aclitem:23:4:-1,hash_aclitem:23:4:-1,hash_aclitem:23:4:-1,hash_aclitem_extended:20:8:-1
+row 22,10,32787,22
+SELECT 1
+> SELECT acldefault('r', 'postgres'::regrole) @> 'postgres=r/postgres'::aclitem, acldefault('f', 'postgres'::regrole)
+fields ?column?:16:1:-1,acldefault:1034:-1:-1
+row t,{=X/postgres,postgres=X/postgres}
+SELECT 1
+> SELECT '{postgres=r/postgres}'::aclitem[] = '{postgres=r/postgres}'::aclitem[], '{postgres=r/postgres}'::aclitem[] = '{postgres=w/postgres}'::aclitem[]
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> SELECT 'pg_monitor=r/pg_read_all_data'::aclitem, 'pg_database_owner=U/postgres'::aclitem
+fields aclitem:1033:16:-1,aclitem:1033:16:-1
+row pg_monitor=r/pg_read_all_data,pg_database_owner=U/postgres
+SELECT 1
+> SELECT 'postgres=r/postgres'::aclitem::text, 'postgres=r/postgres'::text::aclitem
+fields text:25:-1:-1,aclitem:1033:16:-1
+row postgres=r/postgres,postgres=r/postgres
+SELECT 1
+> COPY (SELECT 'postgres=r/postgres'::aclitem, '{=r/postgres,postgres=r*/postgres}'::aclitem[]) TO stdout
+copy out 0 0,0
+data postgres=r/postgres\t{=r/postgres,postgres=r*/postgres}\n
+copy done
+COPY 1
+> COPY (SELECT 'postgres=r/postgres'::aclitem) TO stdout (FORMAT csv)
+copy out 0 0
+data postgres=r/postgres\n
+copy done
+COPY 1
+> COPY (SELECT 'postgres=r/postgres'::aclitem) TO stdout (FORMAT binary)
+copy out 1 1
+ERROR 42883 no binary output function available for type aclitem
+> COPY (SELECT '{=r/postgres}'::aclitem[]) TO stdout (FORMAT binary)
+copy out 1 1
+ERROR 42883 no binary output function available for type aclitem
+P a|SELECT 'postgres=r'::aclitem
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+X a
+row postgres=r/postgres
+SELECT 1
+P b|SELECT 'postgres=r /x'::aclitem
+WARNING 0L000 defaulting grantor to user ID 10 at 8
+ERROR 22P02 extra garbage at the end of the ACL specification at 8

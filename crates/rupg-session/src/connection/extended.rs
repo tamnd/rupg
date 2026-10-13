@@ -15,7 +15,7 @@ use rupg_sql::nodes::Node;
 use rupg_types::{Array, Value, oid};
 use rupg_wire::{Bind, CommandTag, Field, Oids, OutBuf, ProtocolError, Target};
 
-use super::{Connection, Done, character_position, prepare};
+use super::{Connection, Done, character_position, copy, prepare};
 use crate::guc::{self, Setting};
 use crate::param;
 use crate::query::{self, Column, Row};
@@ -230,12 +230,17 @@ impl Connection {
             if query::is_query(node) {
                 self.settings.borrow_mut().take_snapshot();
                 let given = Params { types: params.clone(), variable: true };
-                let made = query::plan(node, &self.reader(), &given).map_err(|error| Failed {
+                let reader = self.reader();
+                let made = query::plan(node, &reader, &given);
+                let mut notices: Vec<Notice> =
+                    reader.take_warnings().into_iter().map(Notice::warning).collect();
+                drop(reader);
+                self.notices(&mut notices, &text, &[], out);
+                let made = made.map_err(|error| Failed {
                     position: error.position().map(|at| character_position(&text, at)),
                     error,
                 })?;
-                let mut notices: Vec<Notice> =
-                    made.notices().iter().map(|error| Notice::warning(error.clone())).collect();
+                notices.extend(made.notices().iter().map(|error| Notice::warning(error.clone())));
                 self.notices(&mut notices, &text, &[], out);
                 columns = Some(query::columns(&made));
                 params = made.params().to_vec();
@@ -437,7 +442,14 @@ impl Connection {
             } else if let Node::LockStmt(stmt) = node {
                 self.lock(stmt)?
             } else if let Node::CopyStmt(stmt) = node {
-                self.copy(stmt)?
+                let mut started = None;
+                let result = self.copy(stmt, &mut started);
+                if result.is_err()
+                    && let Some((binary, columns)) = started
+                {
+                    copy::copy_out_response(out, binary, columns);
+                }
+                result?
             } else {
                 let mut notices = Vec::new();
                 let mut cx = Context {
