@@ -4,6 +4,22 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.23 (2026-10-13)
+
+A patch release on the way to M2. rupg now reads and writes `aclitem` values and the values of the range and multirange types, and runs the operators of the range types.
+
+### Added
+
+- The input of `aclitem`, with `makeaclitem`, `aclcontains`, `aclitemeq` and the hash functions of `aclitem`. A function can now send a warning, such as "defaulting grantor to user ID 10" (#275).
+- The text and binary forms of the six built-in range types, with the constructors, the functions that read the bounds and the flags, and the order of the ranges (#276).
+- The operators of the range types, `range_merge`, `range_minus_multi` and the subtype difference functions (#277).
+- The text and binary forms of the six built-in multirange types, with the constructors, the cast from a range, the functions that read the bounds and the flags, `range_merge`, `unnest` and the order of the multiranges (#278).
+
+### Fixed
+
+- PostgreSQL sends `CopyOutResponse` before it runs the query of `COPY ... TO STDOUT`. rupg now sends it before an error of the run too (#275).
+- An integer literal that fits `int4` after the parser negates it, such as `-2147483648`, is now an `int4`, as in PostgreSQL (#277).
+
 ## 0.1.22 (2026-10-13)
 
 A patch release on the way to M2. rupg now runs the operators and functions of the geometric types, and reads and writes the values of `xid`, `cid`, `pg_lsn`, `pg_snapshot` and `txid_snapshot`.
