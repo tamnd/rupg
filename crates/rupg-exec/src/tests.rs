@@ -867,6 +867,48 @@ fn oid_alias_types() {
     });
 }
 
+/// `pg_encoding_to_char` and `pg_char_to_encoding`. Each result is the result of PostgreSQL 19 for `SELECT` and the text.
+#[test]
+fn encoding_functions() {
+    const CASES: &[(&str, &str)] = &[
+        ("pg_encoding_to_char(0)", "SQL_ASCII"),
+        ("pg_encoding_to_char(6)", "UTF8"),
+        ("pg_encoding_to_char(7)", ""),
+        ("pg_encoding_to_char(8)", "LATIN1"),
+        ("pg_encoding_to_char(41)", "SHIFT_JIS_2004"),
+        ("pg_encoding_to_char(42)", ""),
+        ("pg_encoding_to_char(-1)", ""),
+        ("pg_encoding_to_char(NULL)", "NULL"),
+        ("pg_typeof(pg_encoding_to_char(6))", "name"),
+        ("pg_char_to_encoding('UTF8')", "6"),
+        ("pg_char_to_encoding('utf-8')", "6"),
+        ("pg_char_to_encoding('Latin-1')", "8"),
+        ("pg_char_to_encoding('mule_internal')", "-1"),
+        ("pg_char_to_encoding('')", "-1"),
+        ("pg_char_to_encoding('bogus')", "-1"),
+        ("pg_char_to_encoding('shift_jis_2004')", "41"),
+        ("pg_char_to_encoding(NULL)", "NULL"),
+        ("pg_typeof(pg_char_to_encoding('utf8'))", "integer"),
+        (
+            "pg_encoding_to_char(encoding) FROM pg_database WHERE datname = current_database()",
+            "UTF8",
+        ),
+        (
+            "string_agg(pg_encoding_to_char(n), ',' ORDER BY n) FROM generate_series(0, 42) n",
+            "SQL_ASCII,EUC_JP,EUC_CN,EUC_KR,EUC_TW,EUC_JIS_2004,UTF8,,LATIN1,LATIN2,LATIN3,LATIN4,LATIN5,LATIN6,LATIN7,LATIN8,LATIN9,LATIN10,WIN1256,WIN1258,WIN866,WIN874,KOI8R,WIN1251,WIN1252,ISO_8859_5,ISO_8859_6,ISO_8859_7,ISO_8859_8,WIN1250,WIN1253,WIN1254,WIN1255,WIN1257,KOI8U,SJIS,BIG5,GBK,UHC,GB18030,JOHAB,SHIFT_JIS_2004,",
+        ),
+        (
+            "count(*) FROM generate_series(0, 42) n WHERE pg_char_to_encoding(pg_encoding_to_char(n)) = n",
+            "41",
+        ),
+    ];
+    big_stack(|| {
+        for (text, expected) in CASES {
+            assert_eq!(outcome(&format!("SELECT {text}")), *expected, "{text}");
+        }
+    });
+}
+
 /// The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `obj_description`, `col_description` and `shobj_description`. Each result is the result of PostgreSQL 19 for `SELECT` and the text, with `search_path` at its default. The counts use only the OIDs below 10000, because the scripts of initdb add more rows.
 #[test]
 fn catalog_information_functions() {

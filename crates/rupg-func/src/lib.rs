@@ -13,6 +13,7 @@ mod cast;
 mod catinfo;
 mod compare;
 mod deparse;
+mod encoding;
 mod generated;
 mod io;
 mod math;
@@ -41,6 +42,7 @@ pub use activity::{Backend, BackendState, Client, Ssl};
 pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use deparse::deparse_expression;
+pub use encoding::encoding;
 pub use io::{
     base_type, input, input_supported, is_row_type, output, output_supported, receive, send,
     to_text,
@@ -247,6 +249,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| math::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
+        .or_else(|| encoding::by_src(src))
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
         .or_else(|| acl::by_src(src))
