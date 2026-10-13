@@ -24,6 +24,7 @@ mod mac;
 mod math;
 mod misc;
 mod network;
+mod range;
 mod reg;
 mod regex;
 mod replication;
@@ -275,6 +276,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| array::by_src(src))
         .or_else(|| regex::by_src(src))
         .or_else(|| network::by_src(src))
+        .or_else(|| range::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))

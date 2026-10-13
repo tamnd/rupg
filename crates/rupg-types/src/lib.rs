@@ -64,6 +64,7 @@ mod network;
 mod number;
 mod numeric;
 pub mod numeric_layout;
+mod range;
 mod reg;
 mod scalar;
 mod snapshot;
@@ -117,6 +118,10 @@ pub use number::{
 pub use numeric::{
     Numeric, NumericSign, decimal_out, decimal_send, numeric_in, numeric_out, numeric_recv,
     numeric_send,
+};
+pub use range::{
+    RANGE_EMPTY, RANGE_LB_INC, RANGE_LB_INF, RANGE_UB_INC, RANGE_UB_INF, Range, RangeBytes,
+    RangeText, range_deparse, range_parse, range_recv, range_send,
 };
 pub use reg::{
     RegInput, RegKind, qualified_name_list, reg_in, reg_out_oid, split_identifier_string,

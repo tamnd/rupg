@@ -1,0 +1,234 @@
+> SET TimeZone = 'UTC'
+SET
+> SET DateStyle = 'ISO, MDY'
+SET
+> SELECT '[1,10)'::int4range, '[1,10]'::int4range, '(1,10]'::int4range, '(1,10)'::int4range, '(,10)'::int4range, '[1,)'::int4range, '(,)'::int4range
+fields int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1
+row [1,10),[1,11),[2,11),[2,10),(,10),[1,),(,)
+SELECT 1
+> SELECT 'empty'::int4range, ' EMPTY '::int4range, '[5,5)'::int4range, '(5,5]'::int4range, '[5,5]'::int4range, '(5,6)'::int4range
+fields int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1
+row empty,empty,empty,empty,[5,6),empty
+SELECT 1
+> SELECT '[,10]'::int4range, '[1,]'::int4range, '[ 1 , 10 ]'::int4range, ' [1,10) '::int4range
+fields int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1
+row (,11),[1,),[1,11),[1,10)
+SELECT 1
+> SELECT '["1","10")'::int4range, '[1,"10"]'::int4range
+fields int4range:3904:-1:-1,int4range:3904:-1:-1
+row [1,10),[1,11)
+SELECT 1
+> SELECT '[10,1)'::int4range
+ERROR 22000 range lower bound must be less than or equal to range upper bound at 8
+> SELECT '[1,10'::int4range
+ERROR 22P02 malformed range literal: "[1,10" at 8
+> SELECT '1,10)'::int4range
+ERROR 22P02 malformed range literal: "1,10)" at 8
+> SELECT '[1 10)'::int4range
+ERROR 22P02 malformed range literal: "[1 10)" at 8
+> SELECT '[1,10,11)'::int4range
+ERROR 22P02 malformed range literal: "[1,10,11)" at 8
+> SELECT '[1,10)x'::int4range
+ERROR 22P02 malformed range literal: "[1,10)x" at 8
+> SELECT ''::int4range
+ERROR 22P02 malformed range literal: "" at 8
+> SELECT 'emptyx'::int4range
+ERROR 22P02 malformed range literal: "emptyx" at 8
+> SELECT '[a,10)'::int4range
+ERROR 22P02 invalid input syntax for type integer: "a" at 8
+> SELECT '[1,2147483647]'::int4range
+ERROR 22003 integer out of range at 8
+> SELECT '[1,2147483647)'::int4range, '(2147483646,2147483647]'::int4range
+ERROR 22003 integer out of range at 37
+> SELECT '(-2147483648,5)'::int4range, '[-2147483648,5)'::int4range
+fields int4range:3904:-1:-1,int4range:3904:-1:-1
+row [-2147483647,5),[-2147483648,5)
+SELECT 1
+> SELECT '[1,10]'::int8range, '(1,10)'::int8range, '[1,9223372036854775807)'::int8range
+fields int8range:3926:-1:-1,int8range:3926:-1:-1,int8range:3926:-1:-1
+row [1,11),[2,10),[1,9223372036854775807)
+SELECT 1
+> SELECT '[1,9223372036854775807]'::int8range
+ERROR 22003 bigint out of range at 8
+> SELECT '[1.5,10)'::numrange, '(1.50,10.0]'::numrange, '[1,1]'::numrange, '(1,1]'::numrange, '[-inf,inf]'::numrange
+fields numrange:3906:-1:-1,numrange:3906:-1:-1,numrange:3906:-1:-1,numrange:3906:-1:-1,numrange:3906:-1:-1
+row [1.5,10),(1.50,10.0],[1,1],empty,[-Infinity,Infinity]
+SELECT 1
+> SELECT '[NaN,1)'::numrange
+ERROR 22000 range lower bound must be less than or equal to range upper bound at 8
+> SELECT '[1,NaN)'::numrange
+fields numrange:3906:-1:-1
+row [1,NaN)
+SELECT 1
+> SELECT '[2020-01-01,2020-01-05]'::daterange, '(2020-01-01,2020-01-05)'::daterange, '[-infinity,infinity]'::daterange, '(infinity,infinity]'::daterange
+fields daterange:3912:-1:-1,daterange:3912:-1:-1,daterange:3912:-1:-1,daterange:3912:-1:-1
+row [2020-01-01,2020-01-06),[2020-01-02,2020-01-05),[-infinity,infinity],empty
+SELECT 1
+> SELECT '[2020-01-01 10:00,2020-01-05)'::tsrange, '["2020-01-01 10:00","2020-01-05 00:00:01.5"]'::tsrange, '[-infinity,infinity)'::tsrange
+fields tsrange:3908:-1:-1,tsrange:3908:-1:-1,tsrange:3908:-1:-1
+row ["2020-01-01 10:00:00","2020-01-05 00:00:00"),["2020-01-01 10:00:00","2020-01-05 00:00:01.5"],[-infinity,infinity)
+SELECT 1
+> SELECT '[2020-01-01 10:00+02,2020-01-05)'::tstzrange
+fields tstzrange:3910:-1:-1
+row ["2020-01-01 08:00:00+00","2020-01-05 00:00:00+00")
+SELECT 1
+> SELECT int4range(1, 10), int4range(1, 10, '[]'), int4range(1, 10, '()'), int4range(1, 10, '(]'), int4range(NULL, 10), int4range(1, NULL, '[]'), int4range(NULL, NULL)
+fields int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1,int4range:3904:-1:-1
+row [1,10),[1,11),[2,10),[2,11),(,10),[1,),(,)
+SELECT 1
+> SELECT int4range(1, 10, 'x')
+ERROR 42601 invalid range bound flags
+> SELECT int4range(1, 10, NULL)
+ERROR 22000 range constructor flags argument must not be null
+> SELECT int4range(10, 1)
+ERROR 22000 range lower bound must be less than or equal to range upper bound
+> SELECT int8range(1, 10), numrange(1.5, 2.5), numrange(1, 2, '[]'), daterange('2020-01-01', '2020-02-01', '[]'), tsrange('2020-01-01', '2020-01-02'), tstzrange('2020-01-01', '2020-01-02')
+fields int8range:3926:-1:-1,numrange:3906:-1:-1,numrange:3906:-1:-1,daterange:3912:-1:-1,tsrange:3908:-1:-1,tstzrange:3910:-1:-1
+row [1,10),[1.5,2.5),[1,2],[2020-01-01,2020-02-02),["2020-01-01 00:00:00","2020-01-02 00:00:00"),["2020-01-01 00:00:00+00","2020-01-02 00:00:00+00")
+SELECT 1
+> SELECT numrange(1, 'NaN')
+fields numrange:3906:-1:-1
+row [1,NaN)
+SELECT 1
+> SELECT lower('[1,10)'::int4range), upper('[1,10)'::int4range), lower('(,10)'::int4range), upper('empty'::int4range), lower('[1.5,2]'::numrange)
+fields lower:23:4:-1,upper:23:4:-1,lower:23:4:-1,upper:23:4:-1,lower:1700:-1:-1
+row 1,10,NULL,NULL,1.5
+SELECT 1
+> SELECT isempty('empty'::int4range), isempty('[1,2)'::int4range), lower_inc('[1,2)'::int4range), upper_inc('[1,2)'::int4range), lower_inf('(,2)'::int4range), upper_inf('(,2)'::int4range), lower_inc('empty'::int4range), lower_inf('empty'::int4range)
+fields isempty:16:1:-1,isempty:16:1:-1,lower_inc:16:1:-1,upper_inc:16:1:-1,lower_inf:16:1:-1,upper_inf:16:1:-1,lower_inc:16:1:-1,lower_inf:16:1:-1
+row t,f,t,f,t,f,f,f
+SELECT 1
+> SELECT lower_inc('[1,2]'::numrange), upper_inc('[1,2]'::numrange), upper_inc('(,)'::numrange), lower_inc('(,)'::numrange)
+fields lower_inc:16:1:-1,upper_inc:16:1:-1,upper_inc:16:1:-1,lower_inc:16:1:-1
+row t,t,f,f
+SELECT 1
+> SELECT pg_typeof(lower('[1,10)'::int8range)), pg_typeof(int4range(1,2)), pg_typeof('[2020-01-01,2020-01-02]'::daterange), pg_typeof(lower('[2020-01-01,2020-01-05]'::daterange))
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row bigint,int4range,daterange,date
+SELECT 1
+> SELECT r FROM (VALUES ('[1,10)'::int4range), ('empty'), ('(,5)'), ('[1,5)'), ('[1,)'), ('(,)'), ('[0,3)'), ('[1,10]')) v(r) ORDER BY r
+fields r:3904:-1:-1
+row empty
+row (,5)
+row (,)
+row [0,3)
+row [1,5)
+row [1,10)
+row [1,11)
+row [1,)
+SELECT 8
+> SELECT '[1,10)'::int4range = '[1,9]'::int4range, '[1,10)'::int4range < '[1,11)'::int4range, 'empty'::int4range < '(,)'::int4range, '(,1)'::int4range < '[0,1)'::int4range, '[1,)'::int4range > '[1,5)'::int4range, '[1,2)'::int4range <> '[1,3)'::int4range, '[1,2)'::int4range <= '[1,2)'::int4range, '[1,2)'::int4range >= '[1,3)'::int4range
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,t,t,t,f
+SELECT 1
+> SELECT range_cmp('[1,10)'::int4range, '[1,9]'::int4range), range_cmp('empty'::int4range, '[1,2)'::int4range), range_cmp('[1,2)'::int4range, 'empty'::int4range), range_cmp('(,5)'::int4range, '[1,5)'::int4range)
+fields range_cmp:23:4:-1,range_cmp:23:4:-1,range_cmp:23:4:-1,range_cmp:23:4:-1
+row 0,-1,1,-1
+SELECT 1
+> SELECT '[1.0,2.0]'::numrange = '[1,2]'::numrange, '[1,2)'::numrange < '[1,2]'::numrange, '(1,2)'::numrange > '[1,2)'::numrange
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT ARRAY['[1,2)'::int4range, 'empty', '(,)'], '{"[1,3)","(4,7]"}'::int4range[], '{"[a,b)"}'::text[]
+fields array:3905:-1:-1,int4range:3905:-1:-1,text:1009:-1:-1
+row {"[1,2)",empty,"(,)"},{"[1,3)","[5,8)"},{"[a,b)"}
+SELECT 1
+> SELECT greatest('[1,2)'::int4range, '[1,3)'::int4range), least('[1,2)'::int4range, 'empty'::int4range)
+fields greatest:3904:-1:-1,least:3904:-1:-1
+row [1,3),empty
+SELECT 1
+> SELECT '[1,10)'::int4range::text, '(1,10]'::text::int4range, CAST('[2020-01-01,2020-01-02]' AS daterange)
+fields text:25:-1:-1,int4range:3904:-1:-1,daterange:3912:-1:-1
+row [1,10),[2,11),[2020-01-01,2020-01-03)
+SELECT 1
+> SELECT pg_input_is_valid('[1,2)', 'int4range'), pg_input_is_valid('[2,1)', 'int4range'), pg_input_is_valid('[a,1)', 'int4range'), pg_input_is_valid('[1,2', 'int4range')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('[2,1)', 'int4range')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row range lower bound must be less than or equal to range upper bound,NULL,NULL,22000
+SELECT 1
+> SELECT * FROM pg_input_error_info('[a,1)', 'int4range')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type integer: "a",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('[1,2', 'int4range')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row malformed range literal: "[1,2",Unexpected end of input.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('[1,2147483647]', 'int4range')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row integer out of range,NULL,NULL,22003
+SELECT 1
+> SELECT '("a b","c\\d"]'::tsrange
+ERROR 22007 invalid input syntax for type timestamp: "a b" at 8
+> SELECT '[a\,b,c]'::int4range
+ERROR 22P02 invalid input syntax for type integer: "a,b" at 8
+> SELECT '[1,2)'::int4range::int8range
+ERROR 42846 cannot cast type int4range to int8range at 26
+> SELECT lower(NULL::int4range), lower('[1,2)')
+fields lower:23:4:-1,lower:25:-1:-1
+row NULL,[1,2)
+SELECT 1
+> SELECT '[1,2)'::int4range IS NULL, '[1,2)'::int4range IS DISTINCT FROM '[1,3)'::int4range
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,t
+SELECT 1
+> SELECT DISTINCT r FROM (VALUES ('[1,10)'::int4range), ('[1,9]'), ('empty'), ('[5,5)')) v(r) ORDER BY r
+fields r:3904:-1:-1
+row empty
+row [1,10)
+SELECT 2
+> COPY (SELECT '[1,10)'::int4range, 'empty'::int4range, '(,5]'::int8range, '[1.5,2]'::numrange, '[2020-01-01,2020-01-05]'::daterange, '[2020-01-01 10:00,)'::tsrange, '(,)'::tstzrange) TO stdout
+copy out 0 0,0,0,0,0,0,0
+data [1,10)\tempty\t(,6)\t[1.5,2]\t[2020-01-01,2020-01-06)\t[\"2020-01-01 10:00:00\",)\t(,)\n
+copy done
+COPY 1
+> COPY (SELECT '[1,10)'::int4range, 'empty'::int4range, '(,5]'::int8range, '[1.5,2]'::numrange, '[2020-01-01,2020-01-05]'::daterange, '[2020-01-01 10:00,)'::tsrange, '(,)'::tstzrange) TO stdout (FORMAT binary)
+copy out 1 1,1,1,1,1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x07\x00\x00\x00\x11\x02\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00\x04\x00\x00\x00\n\x00\x00\x00\x01\x01\x00\x00\x00\r\x08\x00\x00\x00\x08\x00\x00\x00\x00\x00\x00\x00\x06\x00\x00\x00\x1f\x06\x00\x00\x00\x0c\x00\x02\x00\x00\x00\x00\x00\x01\x00\x01\x13\x88\x00\x00\x00\n\x00\x01\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x11\x02\x00\x00\x00\x04\x00\x00\x1c\x89\x00\x00\x00\x04\x00\x00\x1c\x8e\x00\x00\x00\r\x12\x00\x00\x00\x08\x00\x02>\x0f\xe8\x86\xc8\x00\x00\x00\x00\x01\x18
+data \xff\xff
+copy done
+COPY 1
+> SELECT int4range(1, 2) = int4range(1, 2, '[)'), lower(int4range(NULL, 5)), upper_inf(int4range(1, NULL))
+fields ?column?:16:1:-1,lower:23:4:-1,upper_inf:16:1:-1
+row t,NULL,t
+SELECT 1
+> SELECT numrange(1.5, 2.5, '[]') > numrange(1.5, 2.5), daterange('2020-01-01', '2020-01-01', '[]')
+fields ?column?:16:1:-1,daterange:3912:-1:-1
+row t,[2020-01-01,2020-01-02)
+SELECT 1
+> SELECT '[1,2)'::int4range = '[1,2)'::int8range
+ERROR 42883 operator does not exist: int4range = int8range at 27
+> SELECT lower(int4range(1, 2), 1)
+ERROR 42883 function lower(int4range, integer) does not exist at 8
+> SELECT int4range(1, 2) < '[1,3)', '[1,3)' > int4range(1, 2)
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+P q1|SELECT $1::int4range, lower($1::int4range)
+X q1|[3,7]
+row [3,8),3
+SELECT 1
+X q1|empty
+row empty,NULL
+SELECT 1
+> SELECT '(2020-01-01,infinity]'::daterange, '[-infinity,2020-01-01]'::daterange
+fields daterange:3912:-1:-1,daterange:3912:-1:-1
+row [2020-01-02,infinity],[-infinity,2020-01-02)
+SELECT 1
+> SELECT '[1,10)'::int4range IN ('[1,9]', 'empty'), CASE WHEN '[1,2)'::int4range = 'empty' THEN 1 ELSE 2 END
+fields ?column?:16:1:-1,case:23:4:-1
+row t,2
+SELECT 1
+> SELECT r, count(*) FROM (VALUES ('[1,10)'::int4range), ('[1,9]'), ('empty'), ('[5,5)'), ('(,3)')) v(r) GROUP BY r ORDER BY r
+fields r:3904:-1:-1,count:20:8:-1
+row empty,2
+row (,3),1
+row [1,10),2
+SELECT 3
+> SELECT a.r FROM (VALUES ('[1,3)'::int4range), ('[2,4)')) a(r) JOIN (VALUES ('[1,2]'::int4range)) b(r) ON a.r = b.r
+fields r:3904:-1:-1
+row [1,3)
+SELECT 1

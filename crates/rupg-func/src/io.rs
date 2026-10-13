@@ -45,6 +45,9 @@ pub fn output_supported(ty: u32) -> bool {
     if let Some((elem, _)) = array_of(ty) {
         return output_supported(elem);
     }
+    if let Some(sub) = builtin::range_subtype(ty) {
+        return output_supported(sub);
+    }
     matches!(
         ty,
         oid::BOOL
@@ -119,6 +122,9 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some((elem, _)) = array_of(ty) {
         return input_supported(elem);
     }
+    if let Some(sub) = builtin::range_subtype(ty) {
+        return input_supported(sub);
+    }
     output_supported(ty) && !matches!(ty, oid::ANYARRAY | oid::VOID) && !is_row_type(ty)
 }
 
@@ -163,6 +169,9 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
     if let (Some(kind), Value::Oid(v)) = (RegKind::from_oid(ty), value) {
         reg::output(kind, *v, session, out);
         return Ok(());
+    }
+    if let Value::Range(range) = value {
+        return range_out(ty, range, session, out);
     }
     if let Value::Record(record) = value {
         return record_out(record, session, out);
@@ -242,6 +251,49 @@ pub(crate) fn tid_parts(value: i64) -> Result<(u32, u16)> {
     let block = u32::try_from(value >> 16).map_err(|_| bad_value())?;
     let offset = u16::try_from(value & 0xFFFF).map_err(|_| bad_value())?;
     Ok((block, offset))
+}
+
+/// `range_out`: the output function of the subtype for each bound that the range has, in the text of the range.
+fn range_out(
+    ty: u32,
+    range: &types::Range,
+    session: &dyn Session,
+    out: &mut Vec<u8>,
+) -> Result<()> {
+    let sub = crate::range::subtype(ty);
+    let (mut lower, mut upper) = (Vec::new(), Vec::new());
+    if range.has_lower() {
+        output(sub, &range.lower, session, &mut lower)?;
+    }
+    if range.has_upper() {
+        output(sub, &range.upper, session, &mut upper)?;
+    }
+    types::range_deparse(
+        range.flags,
+        range.has_lower().then_some(&lower[..]),
+        range.has_upper().then_some(&upper[..]),
+        out,
+    );
+    Ok(())
+}
+
+/// `range_send`: the send function of the subtype for each bound that the range has, in the binary form of the range.
+fn range_send(ty: u32, range: &types::Range, out: &mut Vec<u8>) -> Result<()> {
+    let sub = crate::range::subtype(ty);
+    let (mut lower, mut upper) = (Vec::new(), Vec::new());
+    if range.has_lower() {
+        send(sub, &range.lower, &mut lower)?;
+    }
+    if range.has_upper() {
+        send(sub, &range.upper, &mut upper)?;
+    }
+    types::range_send(
+        range.flags,
+        range.has_lower().then_some(&lower[..]),
+        range.has_upper().then_some(&upper[..]),
+        out,
+    );
+    Ok(())
 }
 
 /// `record_out`: the fields in parentheses with a comma between them. A null field is empty. A field that is empty or has a quote, a backslash, a parenthesis, a comma or white space is in double quotes, with each quote and each backslash doubled.
@@ -404,6 +456,9 @@ fn input_value(
             (array, None) => Ok(Value::Array(Box::new(array?))),
         };
     }
+    if let Some(sub) = builtin::range_subtype(ty) {
+        return range_in(ty, sub, text, session);
+    }
     if let Some(kind) = RegKind::from_oid(ty) {
         return match reg::input(kind, text, session)? {
             Ok(oid) => Ok(Value::Oid(oid)),
@@ -503,6 +558,37 @@ fn input_value(
     Ok(value)
 }
 
+/// `range_in`: the text of the range, then the input function of the subtype for each bound that is not infinite. The error of a bound that is above the other bound is a soft error.
+fn range_in(
+    ty: u32,
+    sub: u32,
+    text: &str,
+    session: &dyn Session,
+) -> std::result::Result<Value, Failed> {
+    let parsed = types::range_parse(text)?;
+    let bound = |text: Option<&String>| match text {
+        Some(text) => input_value(sub, text, -1, session),
+        None => Ok(Value::Null),
+    };
+    let lower = bound(parsed.lower.as_ref())?;
+    let upper = bound(parsed.upper.as_ref())?;
+    let range = crate::range::make_range(ty, parsed.flags, lower, upper).map_err(Failed::Soft)?;
+    Ok(Value::Range(Box::new(range)))
+}
+
+/// `range_recv`: the binary form of the range, then the receive function of the subtype for the bytes of each bound. The receive function of a bound does not have to read all its bytes.
+fn range_recv(ty: u32, sub: u32, recv: &mut Recv<'_>) -> std::result::Result<Value, Received> {
+    let (flags, lower, upper) = types::range_recv(recv)?;
+    let bound = |bytes: Option<&[u8]>| match bytes {
+        Some(bytes) => receive_from(sub, &mut Recv::new(bytes), -1),
+        None => Ok(Value::Null),
+    };
+    let lower = bound(lower)?;
+    let upper = bound(upper)?;
+    let range = crate::range::make_range(ty, flags, lower, upper).map_err(Received::Engine)?;
+    Ok(Value::Range(Box::new(range)))
+}
+
 /// The error of the input and the receive functions of a type whose values come only from the server.
 fn no_input(ty: u32) -> Error {
     Error::new(
@@ -575,6 +661,9 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
             return Err(Received::Engine(error));
         }
         return Ok(Value::Array(Box::new(array?)));
+    }
+    if let Some(sub) = builtin::range_subtype(ty) {
+        return range_recv(ty, sub, recv);
     }
     if let Some(kind) = types::GeoKind::from_oid(ty) {
         return Ok(Value::Bytea(types::geo_recv(kind, recv)?));
@@ -710,6 +799,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
             types::oidvector_send(&values, out);
         }
         (_, Value::Record(record)) => record_send(record, out)?,
+        (_, Value::Range(range)) => range_send(ty, range, out)?,
         (_, Value::Null) => return Err(Error::internal("the send function got a null value")),
         _ => return Err(not_yet(format!("binary output of type {}", type_name(ty)))),
     }

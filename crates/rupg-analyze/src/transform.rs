@@ -871,7 +871,7 @@ impl Analyzer<'_> {
         })
     }
 
-    /// The function of the `<` operator of the type, for `GREATEST` and `LEAST`.
+    /// The function of the `<` operator of the type, for `GREATEST` and `LEAST`. A type with no `<` of its own, such as a range type, takes the `<` of its default btree operator class.
     fn comparison(&self, ty: u32, at: Option<usize>) -> Result<u32> {
         let base = types::base(ty);
         rupg_pgcatalog::builtin::operators_named("<")
@@ -879,6 +879,10 @@ impl Analyzer<'_> {
                 op.kind == b'b' && op.left == base && op.right == base && op.namespace == PG_CATALOG
             })
             .map(|op| op.code)
+            .or_else(|| {
+                let lt = crate::typcache::operators(base).lt;
+                rupg_pgcatalog::builtin::operator_by_oid(lt).map(|op| op.code)
+            })
             .ok_or_else(|| {
                 Error::new(
                     SqlState::UNDEFINED_FUNCTION,

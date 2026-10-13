@@ -389,6 +389,8 @@ struct Builtin {
     roles: Vec<RoleRow>,
     members: Vec<MemberRow>,
     multirange_range: HashMap<u32, u32>,
+    /// The subtype and the multirange type of each range type.
+    range_types: HashMap<u32, (u32, u32)>,
 }
 
 static BUILTIN: LazyLock<Builtin> = LazyLock::new(Builtin::load);
@@ -530,6 +532,7 @@ impl Builtin {
             roles: load_roles(),
             members: load_members(),
             multirange_range: load_multirange_ranges(),
+            range_types: load_range_types(),
             types,
             procs,
             operators,
@@ -840,6 +843,14 @@ fn load_multirange_ranges() -> HashMap<u32, u32> {
     let r = Rows::new("pg_range");
     let (range, multirange) = (r.oid("rngtypid"), r.oid("rngmultitypid"));
     (0..r.catalog.len).map(|i| (multirange[i], range[i])).collect()
+}
+
+/// The subtype and the multirange type of each range type, from `pg_range`.
+fn load_range_types() -> HashMap<u32, (u32, u32)> {
+    let r = Rows::new("pg_range");
+    let (range, subtype, multirange) =
+        (r.oid("rngtypid"), r.oid("rngsubtype"), r.oid("rngmultitypid"));
+    (0..r.catalog.len).map(|i| (range[i], (subtype[i], multirange[i]))).collect()
 }
 
 /// The values of an `aclitem[]` column, for [`Rows::optional`].
@@ -1166,6 +1177,16 @@ pub fn members() -> &'static [MemberRow] {
 /// The range type of a multirange type, as `get_multirange_range` gives it.
 pub fn multirange_range(multirange: u32) -> Option<u32> {
     BUILTIN.multirange_range.get(&multirange).copied()
+}
+
+/// The subtype of a range type, as `get_range_subtype` gives it.
+pub fn range_subtype(range: u32) -> Option<u32> {
+    BUILTIN.range_types.get(&range).map(|&(subtype, _)| subtype)
+}
+
+/// The multirange type of a range type, as `get_range_multirange` gives it.
+pub fn range_multirange(range: u32) -> Option<u32> {
+    BUILTIN.range_types.get(&range).map(|&(_, multirange)| multirange)
 }
 
 #[cfg(test)]

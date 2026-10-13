@@ -1832,6 +1832,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/mac.test")));
     }
 
+    /// The range types: the text forms with the canonical form of `int4range`, `int8range` and `daterange`, the errors of a bad literal and of a lower bound above the upper bound, the soft errors, the constructors, the functions of the bounds and the flags, the order, the arrays of ranges, a parameter and the text and binary forms of `COPY`. `connection/range.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn range() {
+        big_stack(|| script(include_str!("connection/range.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {

@@ -6,6 +6,7 @@ use crate::array::Array;
 use crate::datetime::Interval;
 use crate::network::Inet;
 use crate::numeric::Numeric;
+use crate::range::Range;
 
 /// One value of the engine.
 #[derive(Clone, Debug, PartialEq)]
@@ -44,6 +45,8 @@ pub enum Value {
     Array(Box<Array<Value>>),
     /// A row of a composite type or of `record`.
     Record(Box<Record>),
+    /// A value of a range type.
+    Range(Box<Range>),
 }
 
 /// The value of a composite type or of `record`, as a `HeapTupleHeader` datum. As that datum keeps the type of the row, a record keeps the type of each field, so that the output of an anonymous `record` can show the fields.
