@@ -1,4 +1,4 @@
-//! The functions and operators of `point`, `lseg`, `line` and `box` from `geo_ops.c`: the constructors, the casts, the comparisons, the arithmetic, the distances, the closest points and the intersections. A value is the bytes of its binary form in [`Value::Bytea`], as `rupg-types` reads it.
+//! The functions and operators of `point`, `lseg`, `line`, `box`, `path`, `polygon` and `circle` from `geo_ops.c`: the constructors, the casts, the comparisons, the arithmetic, the distances, the closest points, the intersections and the containment tests. A value is the bytes of its binary form in [`Value::Bytea`], as `rupg-types` reads it.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::Value;
@@ -9,7 +9,7 @@ use crate::{Call, Kernel, bad_value};
 /// `EPSILON`: two numbers that differ by no more than this are equal in the fuzzy comparisons of `geo_decls.h`.
 const EPSILON: f64 = 1.0e-6;
 
-/// The kernel of a function of `point`, `lseg`, `line` or `box` by its `prosrc`.
+/// The kernel of a geometric function by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
         "construct_point" => |_, a| Ok(point_value(Point { x: float8(a, 0)?, y: float8(a, 1)? })),
@@ -147,6 +147,217 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
             let (s, b) = (lseg(a, 0)?, rect(a, 1)?);
             Ok(Value::Bool(box_contain_point(b, s.p[0]) && box_contain_point(b, s.p[1])))
         },
+        "path_area" => path_area,
+        "path_n_lt" => |_, a| Ok(Value::Bool(path(a, 0)?.p.len() < path(a, 1)?.p.len())),
+        "path_n_gt" => |_, a| Ok(Value::Bool(path(a, 0)?.p.len() > path(a, 1)?.p.len())),
+        "path_n_eq" => |_, a| Ok(Value::Bool(path(a, 0)?.p.len() == path(a, 1)?.p.len())),
+        "path_n_le" => |_, a| Ok(Value::Bool(path(a, 0)?.p.len() <= path(a, 1)?.p.len())),
+        "path_n_ge" => |_, a| Ok(Value::Bool(path(a, 0)?.p.len() >= path(a, 1)?.p.len())),
+        "path_isclosed" => |_, a| Ok(Value::Bool(path(a, 0)?.closed)),
+        "path_isopen" => |_, a| Ok(Value::Bool(!path(a, 0)?.closed)),
+        "path_npoints" => |_, a| Ok(Value::Int4(count(&path(a, 0)?.p))),
+        "path_close" => |_, a| Ok(path_value(true, &path(a, 0)?.p)),
+        "path_open" => |_, a| Ok(path_value(false, &path(a, 0)?.p)),
+        "path_inter" => path_inter,
+        "path_distance" => path_distance,
+        "path_length" => |_, a| {
+            let mut result = 0.0;
+            for s in path_segments(&path(a, 0)?) {
+                result = float8_pl(result, point_dt(s.p[0], s.p[1])?)?;
+            }
+            Ok(Value::Float8(result))
+        },
+        "path_add" => |_, a| {
+            let (p1, p2) = (path(a, 0)?, path(a, 1)?);
+            if p1.closed || p2.closed {
+                return Ok(Value::Null);
+            }
+            Ok(path_value(false, &[p1.p, p2.p].concat()))
+        },
+        "path_add_pt" => |_, a| path_translate(a, point_add),
+        "path_sub_pt" => |_, a| path_translate(a, point_sub),
+        "path_mul_pt" => |_, a| path_translate(a, point_mul),
+        "path_div_pt" => |_, a| path_translate(a, point_div),
+        "path_poly" => |_, a| {
+            let p = path(a, 0)?;
+            if !p.closed {
+                return Err(Error::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    "open path cannot be converted to polygon",
+                ));
+            }
+            Ok(poly_value(&p.p))
+        },
+        "poly_path" => |_, a| Ok(path_value(true, &polygon(a, 0)?)),
+        "dist_ppath" => |_, a| Ok(Value::Float8(dist_ppath(point(a, 0)?, &path(a, 1)?)?)),
+        "dist_pathp" => |_, a| Ok(Value::Float8(dist_ppath(point(a, 1)?, &path(a, 0)?)?)),
+        "on_ppath" => |_, a| Ok(Value::Bool(on_ppath(point(a, 0)?, &path(a, 1)?)?)),
+        "poly_left" => |_, a| polys(a, |b, c| b.high.x < c.low.x),
+        "poly_overleft" => |_, a| polys(a, |b, c| b.high.x <= c.high.x),
+        "poly_right" => |_, a| polys(a, |b, c| b.low.x > c.high.x),
+        concat!("poly_over", "right") => |_, a| polys(a, |b, c| b.low.x >= c.low.x),
+        "poly_below" => |_, a| polys(a, |b, c| b.high.y < c.low.y),
+        "poly_overbelow" => |_, a| polys(a, |b, c| b.high.y <= c.high.y),
+        "poly_above" => |_, a| polys(a, |b, c| b.low.y > c.high.y),
+        "poly_overabove" => |_, a| polys(a, |b, c| b.low.y >= c.low.y),
+        "poly_same" => |_, a| {
+            let (p, q) = (polygon(a, 0)?, polygon(a, 1)?);
+            Ok(Value::Bool(p.len() == q.len() && plist_same(&p, &q)))
+        },
+        "poly_overlap" => |_, a| Ok(Value::Bool(poly_overlap(&polygon(a, 0)?, &polygon(a, 1)?)?)),
+        "poly_contain" => {
+            |_, a| Ok(Value::Bool(poly_contain_poly(&polygon(a, 0)?, &polygon(a, 1)?)?))
+        }
+        "poly_contained" => {
+            |_, a| Ok(Value::Bool(poly_contain_poly(&polygon(a, 1)?, &polygon(a, 0)?)?))
+        }
+        "poly_contain_pt" => {
+            |_, a| Ok(Value::Bool(point_inside(point(a, 1)?, &polygon(a, 0)?)? != 0))
+        }
+        "pt_contained_poly" => {
+            |_, a| Ok(Value::Bool(point_inside(point(a, 0)?, &polygon(a, 1)?)? != 0))
+        }
+        "poly_distance" => poly_distance,
+        "poly_npoints" => |_, a| Ok(Value::Int4(count(&polygon(a, 0)?))),
+        "poly_center" => |_, a| Ok(point_value(poly_to_circle(&polygon(a, 0)?)?.center)),
+        "poly_box" => |_, a| Ok(box_value(bound_box(&polygon(a, 0)?))),
+        "box_poly" => |_, a| {
+            let b = rect(a, 0)?;
+            let (h, l) = (b.high, b.low);
+            let corners = [l, Point { x: l.x, y: h.y }, h, Point { x: h.x, y: l.y }];
+            Ok(poly_value(&corners))
+        },
+        "poly_circle" => |_, a| Ok(circle_value(poly_to_circle(&polygon(a, 0)?)?)),
+        "dist_ppoly" => |_, a| Ok(Value::Float8(dist_ppoly(point(a, 0)?, &polygon(a, 1)?)?)),
+        "dist_polyp" => |_, a| Ok(Value::Float8(dist_ppoly(point(a, 1)?, &polygon(a, 0)?)?)),
+        "dist_cpoly" => |_, a| Ok(Value::Float8(dist_cpoly(circle(a, 0)?, &polygon(a, 1)?)?)),
+        "dist_polyc" => |_, a| Ok(Value::Float8(dist_cpoly(circle(a, 1)?, &polygon(a, 0)?)?)),
+        "circle_same" => |_, a| {
+            circles(a, |c, d| {
+                let radius = (c.radius.is_nan() && d.radius.is_nan()) || fp_eq(c.radius, d.radius);
+                Ok(radius && point_eq(c.center, d.center))
+            })
+        },
+        "circle_overlap" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_le(point_dt(c.center, d.center)?, float8_pl(c.radius, d.radius)?))
+            })
+        },
+        "circle_overleft" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_le(float8_pl(c.center.x, c.radius)?, float8_pl(d.center.x, d.radius)?))
+            })
+        },
+        "circle_left" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_lt(float8_pl(c.center.x, c.radius)?, float8_mi(d.center.x, d.radius)?))
+            })
+        },
+        "circle_right" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_gt(float8_mi(c.center.x, c.radius)?, float8_pl(d.center.x, d.radius)?))
+            })
+        },
+        concat!("circle_over", "right") => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_ge(float8_mi(c.center.x, c.radius)?, float8_mi(d.center.x, d.radius)?))
+            })
+        },
+        "circle_contained" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_le(point_dt(c.center, d.center)?, float8_mi(d.radius, c.radius)?))
+            })
+        },
+        "circle_contain" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_le(point_dt(c.center, d.center)?, float8_mi(c.radius, d.radius)?))
+            })
+        },
+        "circle_below" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_lt(float8_pl(c.center.y, c.radius)?, float8_mi(d.center.y, d.radius)?))
+            })
+        },
+        "circle_above" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_gt(float8_mi(c.center.y, c.radius)?, float8_pl(d.center.y, d.radius)?))
+            })
+        },
+        "circle_overbelow" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_le(float8_pl(c.center.y, c.radius)?, float8_pl(d.center.y, d.radius)?))
+            })
+        },
+        "circle_overabove" => |_, a| {
+            circles(a, |c, d| {
+                Ok(fp_ge(float8_mi(c.center.y, c.radius)?, float8_mi(d.center.y, d.radius)?))
+            })
+        },
+        "circle_eq" => |_, a| circles(a, |c, d| Ok(fp_eq(circle_ar(c)?, circle_ar(d)?))),
+        "circle_ne" => |_, a| circles(a, |c, d| Ok(fp_ne(circle_ar(c)?, circle_ar(d)?))),
+        "circle_lt" => |_, a| circles(a, |c, d| Ok(fp_lt(circle_ar(c)?, circle_ar(d)?))),
+        "circle_gt" => |_, a| circles(a, |c, d| Ok(fp_gt(circle_ar(c)?, circle_ar(d)?))),
+        "circle_le" => |_, a| circles(a, |c, d| Ok(fp_le(circle_ar(c)?, circle_ar(d)?))),
+        "circle_ge" => |_, a| circles(a, |c, d| Ok(fp_ge(circle_ar(c)?, circle_ar(d)?))),
+        "circle_add_pt" => |_, a| {
+            let (c, p) = (circle(a, 0)?, point(a, 1)?);
+            Ok(circle_value(Circle { center: point_add(c.center, p)?, radius: c.radius }))
+        },
+        "circle_sub_pt" => |_, a| {
+            let (c, p) = (circle(a, 0)?, point(a, 1)?);
+            Ok(circle_value(Circle { center: point_sub(c.center, p)?, radius: c.radius }))
+        },
+        "circle_mul_pt" => |_, a| {
+            let (c, p) = (circle(a, 0)?, point(a, 1)?);
+            let center = point_mul(c.center, p)?;
+            Ok(circle_value(Circle { center, radius: float8_mul(c.radius, p.x.hypot(p.y))? }))
+        },
+        "circle_div_pt" => |_, a| {
+            let (c, p) = (circle(a, 0)?, point(a, 1)?);
+            let center = point_div(c.center, p)?;
+            Ok(circle_value(Circle { center, radius: float8_div(c.radius, p.x.hypot(p.y))? }))
+        },
+        "circle_area" => |_, a| Ok(Value::Float8(circle_ar(circle(a, 0)?)?)),
+        "circle_diameter" => |_, a| Ok(Value::Float8(float8_mul(circle(a, 0)?.radius, 2.0)?)),
+        "circle_radius" => |_, a| Ok(Value::Float8(circle(a, 0)?.radius)),
+        "circle_distance" => |_, a| {
+            let (c, d) = (circle(a, 0)?, circle(a, 1)?);
+            let result = float8_mi(point_dt(c.center, d.center)?, float8_pl(c.radius, d.radius)?)?;
+            Ok(Value::Float8(if result < 0.0 { 0.0 } else { result }))
+        },
+        "circle_contain_pt" => {
+            |_, a| Ok(Value::Bool(circle_contain_point(circle(a, 0)?, point(a, 1)?)?))
+        }
+        "pt_contained_circle" => {
+            |_, a| Ok(Value::Bool(circle_contain_point(circle(a, 1)?, point(a, 0)?)?))
+        }
+        "dist_pc" => |_, a| Ok(Value::Float8(dist_pc(point(a, 0)?, circle(a, 1)?)?)),
+        "dist_cpoint" => |_, a| Ok(Value::Float8(dist_pc(point(a, 1)?, circle(a, 0)?)?)),
+        "circle_center" => |_, a| Ok(point_value(circle(a, 0)?.center)),
+        "cr_circle" => {
+            |_, a| Ok(circle_value(Circle { center: point(a, 0)?, radius: float8(a, 1)? }))
+        }
+        "circle_box" => |_, a| {
+            let c = circle(a, 0)?;
+            let delta = float8_div(c.radius, 2.0_f64.sqrt())?;
+            let hx = float8_pl(c.center.x, delta)?;
+            let lx = float8_mi(c.center.x, delta)?;
+            let hy = float8_pl(c.center.y, delta)?;
+            let ly = float8_mi(c.center.y, delta)?;
+            Ok(box_value(Rect { high: Point { x: hx, y: hy }, low: Point { x: lx, y: ly } }))
+        },
+        "box_circle" => |_, a| {
+            let b = rect(a, 0)?;
+            let x = float8_div(float8_pl(b.high.x, b.low.x)?, 2.0)?;
+            let y = float8_div(float8_pl(b.high.y, b.low.y)?, 2.0)?;
+            let center = Point { x, y };
+            Ok(circle_value(Circle { center, radius: point_dt(center, b.high)? }))
+        },
+        "circle_poly" => |_, a| {
+            let Some(Value::Int4(npts)) = a.first() else { return Err(bad_value()) };
+            circle_poly(*npts, circle(a, 1)?)
+        },
+        "circle_to_poly" => |_, a| circle_poly(12, circle(a, 0)?),
         _ => return None,
     };
     Some(kernel)
@@ -856,6 +1067,491 @@ fn inter_lb(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(false))
 }
 
+/// A `path`: the points, and the flag of a closed path.
+#[derive(Clone, Debug)]
+struct Path {
+    closed: bool,
+    p: Vec<Point>,
+}
+
+/// A `circle`: the center and the radius.
+#[derive(Clone, Copy, Debug)]
+struct Circle {
+    center: Point,
+    radius: f64,
+}
+
+/// The points of the binary form of a `path` or a `polygon` after the flag: the number of points as an `int4`, then the points. There is at least one point.
+fn point_list(bytes: &[u8]) -> Result<Vec<Point>> {
+    let Some((npts, rest)) = bytes.split_first_chunk::<4>() else { return Err(bad_value()) };
+    let (floats, tail) = rest.as_chunks::<8>();
+    let (pairs, odd) = floats.as_chunks::<2>();
+    let npts = usize::try_from(i32::from_be_bytes(*npts)).ok();
+    if pairs.is_empty() || !tail.is_empty() || !odd.is_empty() || npts != Some(pairs.len()) {
+        return Err(bad_value());
+    }
+    Ok(pairs
+        .iter()
+        .map(|[x, y]| Point { x: f64::from_be_bytes(*x), y: f64::from_be_bytes(*y) })
+        .collect())
+}
+
+/// The `path` of argument `n`.
+fn path(args: &[Value], n: usize) -> Result<Path> {
+    let Some(Value::Bytea(bytes)) = args.get(n) else { return Err(bad_value()) };
+    let Some((&closed, rest)) = bytes.split_first() else { return Err(bad_value()) };
+    Ok(Path { closed: closed != 0, p: point_list(rest)? })
+}
+
+/// The points of the `polygon` of argument `n`.
+fn polygon(args: &[Value], n: usize) -> Result<Vec<Point>> {
+    let Some(Value::Bytea(bytes)) = args.get(n) else { return Err(bad_value()) };
+    point_list(bytes)
+}
+
+/// The `circle` of argument `n`.
+fn circle(args: &[Value], n: usize) -> Result<Circle> {
+    let [x, y, radius] = floats(args, n)?;
+    Ok(Circle { center: Point { x, y }, radius })
+}
+
+/// The number of points as an `int4`.
+fn count(p: &[Point]) -> i32 {
+    i32::try_from(p.len()).unwrap_or(i32::MAX)
+}
+
+/// Adds the number of points and the points to a binary form.
+fn put_points(out: &mut Vec<u8>, p: &[Point]) {
+    out.extend_from_slice(&count(p).to_be_bytes());
+    for q in p {
+        out.extend_from_slice(&q.x.to_be_bytes());
+        out.extend_from_slice(&q.y.to_be_bytes());
+    }
+}
+
+/// A `path` value.
+fn path_value(closed: bool, p: &[Point]) -> Value {
+    let mut out = vec![u8::from(closed)];
+    put_points(&mut out, p);
+    Value::Bytea(out)
+}
+
+/// A `polygon` value.
+fn poly_value(p: &[Point]) -> Value {
+    let mut out = Vec::new();
+    put_points(&mut out, p);
+    Value::Bytea(out)
+}
+
+/// A `circle` value.
+fn circle_value(c: Circle) -> Value {
+    floats_value(&[c.center.x, c.center.y, c.radius])
+}
+
+/// A test of the bounding boxes of two polygons.
+fn polys(args: &[Value], test: fn(Rect, Rect) -> bool) -> Result<Value> {
+    Ok(Value::Bool(test(bound_box(&polygon(args, 0)?), bound_box(&polygon(args, 1)?))))
+}
+
+/// A test of two circles.
+fn circles(args: &[Value], test: fn(Circle, Circle) -> Result<bool>) -> Result<Value> {
+    Ok(Value::Bool(test(circle(args, 0)?, circle(args, 1)?)?))
+}
+
+/// `FPne`.
+fn fp_ne(a: f64, b: f64) -> bool {
+    a != b && (a - b).abs() > EPSILON
+}
+
+/// `make_bound_box`: the smallest box that holds the points.
+fn bound_box(p: &[Point]) -> Rect {
+    let mut b = Rect { high: p[0], low: p[0] };
+    for q in &p[1..] {
+        if float8_lt(q.x, b.low.x) {
+            b.low.x = q.x;
+        }
+        if float8_gt(q.x, b.high.x) {
+            b.high.x = q.x;
+        }
+        if float8_lt(q.y, b.low.y) {
+            b.low.y = q.y;
+        }
+        if float8_gt(q.y, b.high.y) {
+            b.high.y = q.y;
+        }
+    }
+    b
+}
+
+/// The segments of a path in the order of the loops of `geo_ops.c`: first the segment that closes a closed path, then the segment to each point after the first point.
+fn path_segments(path: &Path) -> impl Iterator<Item = Lseg> + '_ {
+    let closing = match (path.closed, path.p.last(), path.p.first()) {
+        (true, Some(&last), Some(&first)) => Some(Lseg { p: [last, first] }),
+        _ => None,
+    };
+    closing.into_iter().chain(path.p.windows(2).map(|w| Lseg { p: [w[0], w[1]] }))
+}
+
+/// `path_area`: the area of a closed path, or NULL for an open path.
+fn path_area(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let path = path(args, 0)?;
+    if !path.closed {
+        return Ok(Value::Null);
+    }
+    let mut area = 0.0;
+    for (p, q) in path.p.iter().zip(path.p.iter().cycle().skip(1)) {
+        area = float8_pl(area, float8_mul(p.x, q.y)?)?;
+        area = float8_mi(area, float8_mul(p.y, q.x)?)?;
+    }
+    Ok(Value::Float8(float8_div(area.abs(), 2.0)?))
+}
+
+/// `path_inter`: true when two paths cross. The bounding boxes give a quick check first.
+fn path_inter(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (p1, p2) = (path(args, 0)?, path(args, 1)?);
+    if !box_ov(bound_box(&p1.p), bound_box(&p2.p)) {
+        return Ok(Value::Bool(false));
+    }
+    for s1 in path_segments(&p1) {
+        for s2 in path_segments(&p2) {
+            if lseg_interpt_lseg(s1, s2)?.is_some() {
+                return Ok(Value::Bool(true));
+            }
+        }
+    }
+    Ok(Value::Bool(false))
+}
+
+/// The smallest distance between the segments of two paths, or `None` when a path has no segment.
+fn segments_distance(p1: &Path, p2: &Path) -> Result<Option<f64>> {
+    let mut min = None;
+    for s1 in path_segments(p1) {
+        for s2 in path_segments(p2) {
+            let d = lseg_closept_lseg(s1, s2)?.0;
+            if min.is_none_or(|m| float8_lt(d, m)) {
+                min = Some(d);
+            }
+        }
+    }
+    Ok(min)
+}
+
+/// `path_distance`: the distance between two paths, or NULL when a path has no segment.
+fn path_distance(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let min = segments_distance(&path(args, 0)?, &path(args, 1)?)?;
+    Ok(min.map_or(Value::Null, Value::Float8))
+}
+
+/// The translation, the turn or the scale of each point of a path.
+fn path_translate(args: &[Value], op: fn(Point, Point) -> Result<Point>) -> Result<Value> {
+    let (mut path, q) = (path(args, 0)?, point(args, 1)?);
+    for p in &mut path.p {
+        *p = op(*p, q)?;
+    }
+    Ok(path_value(path.closed, &path.p))
+}
+
+/// `dist_ppath_internal`: the distance from a point to a path. It is 0 for an open path with one point.
+fn dist_ppath(pt: Point, path: &Path) -> Result<f64> {
+    let mut result = None;
+    for s in path_segments(path) {
+        let d = lseg_closept_point(s, pt)?.0;
+        if result.is_none_or(|r| float8_lt(d, r)) {
+            result = Some(d);
+        }
+    }
+    Ok(result.unwrap_or(0.0))
+}
+
+/// `on_ppath`: true when the point is on an open path, or in a closed path.
+fn on_ppath(pt: Point, path: &Path) -> Result<bool> {
+    if path.closed {
+        return Ok(point_inside(pt, &path.p)? != 0);
+    }
+    let mut a = point_dt(pt, path.p[0])?;
+    for w in path.p.windows(2) {
+        let b = point_dt(pt, w[1])?;
+        if fp_eq(float8_pl(a, b)?, point_dt(w[0], w[1])?) {
+            return Ok(true);
+        }
+        a = b;
+    }
+    Ok(false)
+}
+
+/// The SQL function `path_contain_pt(path, point)`, which calls `on_ppath` with the arguments in the other order.
+pub(crate) fn path_contain_pt(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Bool(on_ppath(point(args, 1)?, &path(args, 0)?)?))
+}
+
+/// `point_inside`: 1 when the point is in the polygon, 2 when it is on an edge, and 0 when it is outside. The sum of the crossings of the positive X axis is 0 for a point outside.
+fn point_inside(p: Point, plist: &[Point]) -> Result<i32> {
+    let x0 = float8_mi(plist[0].x, p.x)?;
+    let y0 = float8_mi(plist[0].y, p.y)?;
+    let (mut prev_x, mut prev_y) = (x0, y0);
+    let mut total_cross = 0;
+    for q in &plist[1..] {
+        let x = float8_mi(q.x, p.x)?;
+        let y = float8_mi(q.y, p.y)?;
+        let Some(cross) = lseg_crossing(x, y, prev_x, prev_y)? else { return Ok(2) };
+        total_cross += cross;
+        (prev_x, prev_y) = (x, y);
+    }
+    let Some(cross) = lseg_crossing(x0, y0, prev_x, prev_y)? else { return Ok(2) };
+    total_cross += cross;
+    Ok(i32::from(total_cross != 0))
+}
+
+/// `lseg_crossing`: 2 or -2 when the segment crosses the positive X axis up or down, 1 or -1 when one end is on the positive X axis, and 0 for no crossing. `None` is `POINT_ON_POLYGON`: the segment holds the origin.
+fn lseg_crossing(x: f64, y: f64, prev_x: f64, prev_y: f64) -> Result<Option<i32>> {
+    if fp_zero(y) {
+        if fp_zero(x) {
+            return Ok(None);
+        }
+        if fp_gt(x, 0.0) {
+            if fp_zero(prev_y) {
+                return Ok(fp_gt(prev_x, 0.0).then_some(0));
+            }
+            return Ok(Some(if fp_lt(prev_y, 0.0) { 1 } else { -1 }));
+        }
+        if fp_zero(prev_y) {
+            return Ok(fp_lt(prev_x, 0.0).then_some(0));
+        }
+        return Ok(Some(0));
+    }
+    let y_sign = if fp_gt(y, 0.0) { 1 } else { -1 };
+    if fp_zero(prev_y) {
+        return Ok(Some(if fp_lt(prev_x, 0.0) { 0 } else { y_sign }));
+    }
+    if (y_sign < 0 && fp_lt(prev_y, 0.0)) || (y_sign > 0 && fp_gt(prev_y, 0.0)) {
+        return Ok(Some(0));
+    }
+    if fp_ge(x, 0.0) && fp_gt(prev_x, 0.0) {
+        return Ok(Some(2 * y_sign));
+    }
+    if fp_lt(x, 0.0) && fp_le(prev_x, 0.0) {
+        return Ok(Some(0));
+    }
+    let z =
+        float8_mi(float8_mul(float8_mi(x, prev_x)?, y)?, float8_mul(float8_mi(y, prev_y)?, x)?)?;
+    if fp_zero(z) {
+        return Ok(None);
+    }
+    if (y_sign < 0 && fp_lt(z, 0.0)) || (y_sign > 0 && fp_gt(z, 0.0)) {
+        return Ok(Some(0));
+    }
+    Ok(Some(2 * y_sign))
+}
+
+/// `plist_same`: true when two lists of the same length have the same points in the same cycle, forward or backward.
+fn plist_same(p1: &[Point], p2: &[Point]) -> bool {
+    let n = p1.len();
+    for (i, &first) in p2.iter().enumerate() {
+        if !point_eq(first, p1[0]) {
+            continue;
+        }
+        if (1..n).all(|ii| point_eq(p2[(i + ii) % n], p1[ii])) {
+            return true;
+        }
+        if (1..n).all(|ii| point_eq(p2[(i + n - ii) % n], p1[ii])) {
+            return true;
+        }
+    }
+    false
+}
+
+/// `poly_overlap_internal`: true when two polygons overlap. Two edges that cross give true. If no edges cross, a polygon that holds the first point of the other polygon gives true.
+fn poly_overlap(pa: &[Point], pb: &[Point]) -> Result<bool> {
+    if !box_ov(bound_box(pa), bound_box(pb)) {
+        return Ok(false);
+    }
+    let mut a0 = pa[pa.len() - 1];
+    for &a1 in pa {
+        let mut b0 = pb[pb.len() - 1];
+        for &b1 in pb {
+            if lseg_interpt_lseg(Lseg { p: [a0, a1] }, Lseg { p: [b0, b1] })?.is_some() {
+                return Ok(true);
+            }
+            b0 = b1;
+        }
+        a0 = a1;
+    }
+    Ok(point_inside(pa[0], pb)? != 0 || point_inside(pb[0], pa)? != 0)
+}
+
+/// `touched_lseg_inside_poly`: the test of the segment from `a` to `b`, where `a` is on the edge `s` and the segment is not in `s`.
+fn touched_lseg_inside_poly(
+    a: Point,
+    b: Point,
+    s: Lseg,
+    poly: &[Point],
+    start: usize,
+) -> Result<bool> {
+    let t = Lseg { p: [a, b] };
+    if point_eq(a, s.p[0]) {
+        if lseg_contain_point(t, s.p[1])? {
+            return lseg_inside_poly(b, s.p[1], poly, start);
+        }
+    } else if point_eq(a, s.p[1]) {
+        if lseg_contain_point(t, s.p[0])? {
+            return lseg_inside_poly(b, s.p[0], poly, start);
+        }
+    } else if lseg_contain_point(t, s.p[0])? {
+        return lseg_inside_poly(b, s.p[0], poly, start);
+    } else if lseg_contain_point(t, s.p[1])? {
+        return lseg_inside_poly(b, s.p[1], poly, start);
+    }
+    Ok(true)
+}
+
+/// `lseg_inside_poly`: true when the segment from `a` to `b` is in the polygon. The check starts at the edge that ends at point `start`. A segment that crosses an edge is cut in two parts, and each part gets the check again.
+fn lseg_inside_poly(a: Point, b: Point, poly: &[Point], start: usize) -> Result<bool> {
+    let t = Lseg { p: [a, b] };
+    let mut res = true;
+    let mut intersection = false;
+    let mut s0 = poly[if start == 0 { poly.len() - 1 } else { start - 1 }];
+    for (i, &s1) in poly.iter().enumerate().skip(start) {
+        if !res {
+            break;
+        }
+        let s = Lseg { p: [s0, s1] };
+        if lseg_contain_point(s, t.p[0])? {
+            if lseg_contain_point(s, t.p[1])? {
+                return Ok(true);
+            }
+            res = touched_lseg_inside_poly(t.p[0], t.p[1], s, poly, i + 1)?;
+        } else if lseg_contain_point(s, t.p[1])? {
+            res = touched_lseg_inside_poly(t.p[1], t.p[0], s, poly, i + 1)?;
+        } else if let Some(interpt) = lseg_interpt_lseg(t, s)? {
+            intersection = true;
+            res = lseg_inside_poly(t.p[0], interpt, poly, i + 1)?;
+            if res {
+                res = lseg_inside_poly(t.p[1], interpt, poly, i + 1)?;
+            }
+        }
+        s0 = s1;
+    }
+    if res && !intersection {
+        let x = float8_div(float8_pl(t.p[0].x, t.p[1].x)?, 2.0)?;
+        let y = float8_div(float8_pl(t.p[0].y, t.p[1].y)?, 2.0)?;
+        res = point_inside(Point { x, y }, poly)? != 0;
+    }
+    Ok(res)
+}
+
+/// `poly_contain_poly`: true when each edge of the second polygon is in the first polygon.
+fn poly_contain_poly(outer: &[Point], inner: &[Point]) -> Result<bool> {
+    if !box_contain_box(bound_box(outer), bound_box(inner)) {
+        return Ok(false);
+    }
+    let mut s0 = inner[inner.len() - 1];
+    for &s1 in inner {
+        if !lseg_inside_poly(s0, s1, outer, 0)? {
+            return Ok(false);
+        }
+        s0 = s1;
+    }
+    Ok(true)
+}
+
+/// `poly_distance`: 0 for two polygons that overlap, else the smallest distance between the edges.
+fn poly_distance(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (pa, pb) = (polygon(args, 0)?, polygon(args, 1)?);
+    if poly_overlap(&pa, &pb)? {
+        return Ok(Value::Float8(0.0));
+    }
+    let (pa, pb) = (Path { closed: true, p: pa }, Path { closed: true, p: pb });
+    Ok(segments_distance(&pa, &pb)?.map_or(Value::Null, Value::Float8))
+}
+
+/// `dist_ppoly_internal`: 0 for a point in the polygon, else the smallest distance from the point to an edge.
+fn dist_ppoly(pt: Point, poly: &[Point]) -> Result<f64> {
+    if point_inside(pt, poly)? != 0 {
+        return Ok(0.0);
+    }
+    let mut result = lseg_closept_point(Lseg { p: [poly[0], poly[poly.len() - 1]] }, pt)?.0;
+    for w in poly.windows(2) {
+        let d = lseg_closept_point(Lseg { p: [w[0], w[1]] }, pt)?.0;
+        if float8_lt(d, result) {
+            result = d;
+        }
+    }
+    Ok(result)
+}
+
+/// `dist_cpoly_internal`: the distance from the center to the polygon, less the radius, and 0 when that is negative.
+fn dist_cpoly(c: Circle, poly: &[Point]) -> Result<f64> {
+    let result = float8_mi(dist_ppoly(c.center, poly)?, c.radius)?;
+    Ok(if result < 0.0 { 0.0 } else { result })
+}
+
+/// `poly_to_circle`: the center is the mean of the points, and the radius is the mean distance from the center to the points.
+fn poly_to_circle(poly: &[Point]) -> Result<Circle> {
+    let mut center = Point { x: 0.0, y: 0.0 };
+    for &p in poly {
+        center = point_add(center, p)?;
+    }
+    let npts = f64::from(count(poly));
+    center.x = float8_div(center.x, npts)?;
+    center.y = float8_div(center.y, npts)?;
+    let mut radius = 0.0;
+    for &p in poly {
+        radius = float8_pl(radius, point_dt(p, center)?)?;
+    }
+    Ok(Circle { center, radius: float8_div(radius, npts)? })
+}
+
+/// `circle_ar`: the area of a circle.
+fn circle_ar(c: Circle) -> Result<f64> {
+    float8_mul(float8_mul(c.radius, c.radius)?, std::f64::consts::PI)
+}
+
+/// True when the point is in the circle or on it, with an exact comparison.
+fn circle_contain_point(c: Circle, p: Point) -> Result<bool> {
+    Ok(point_dt(c.center, p)? <= c.radius)
+}
+
+/// `dist_pc`: the distance from a point to the center, less the radius, and 0 when that is negative.
+fn dist_pc(p: Point, c: Circle) -> Result<f64> {
+    let result = float8_mi(point_dt(p, c.center)?, c.radius)?;
+    Ok(if result < 0.0 { 0.0 } else { result })
+}
+
+/// `circle_poly_internal`: the polygon with `npts` points on the circle. The size checks give the errors of PostgreSQL for the size of the polygon in memory, which has 40 bytes of header and 16 bytes for each point.
+fn circle_poly(npts: i32, c: Circle) -> Result<Value> {
+    if fp_zero(c.radius) {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "cannot convert circle with radius zero to polygon",
+        ));
+    }
+    if npts < 2 {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "must request at least 2 points",
+        ));
+    }
+    let size = 40 + 16 * i64::from(npts);
+    if size > i64::from(i32::MAX) {
+        return Err(Error::new(SqlState::PROGRAM_LIMIT_EXCEEDED, "too many points requested"));
+    }
+    if size > 0x3fff_ffff {
+        return Err(Error::new(
+            SqlState::INTERNAL_ERROR,
+            format!("invalid memory alloc request size {size}"),
+        ));
+    }
+    let anglestep = float8_div(2.0 * std::f64::consts::PI, f64::from(npts))?;
+    let mut poly = Vec::new();
+    for i in 0..npts {
+        let angle = float8_mul(anglestep, f64::from(i))?;
+        let x = float8_mi(c.center.x, float8_mul(c.radius, angle.cos())?)?;
+        let y = float8_pl(c.center.y, float8_mul(c.radius, angle.sin())?)?;
+        poly.push(Point { x, y });
+    }
+    Ok(poly_value(&poly))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -879,5 +1575,22 @@ mod tests {
         let (d, c) =
             box_closept_point(Rect { high: p(2.0, 2.0), low: p(0.0, 0.0) }, p(5.0, 5.0)).unwrap();
         assert_eq!((d.to_bits(), c.x, c.y), (18f64.sqrt().to_bits(), 2.0, 2.0));
+    }
+
+    /// The results of PostgreSQL 19 for the same polygons and circles.
+    #[test]
+    fn polygons_and_circles() {
+        let square = [p(0.0, 0.0), p(4.0, 0.0), p(4.0, 4.0), p(0.0, 4.0)];
+        assert_eq!(point_inside(p(2.0, 2.0), &square).unwrap(), 1);
+        assert_eq!(point_inside(p(4.0, 2.0), &square).unwrap(), 2);
+        assert_eq!(point_inside(p(5.0, 2.0), &square).unwrap(), 0);
+        let triangle = [p(0.0, 0.0), p(1.0, 0.0), p(1.0, 1.0)];
+        assert!(plist_same(&triangle, &[p(1.0, 1.0), p(1.0, 0.0), p(0.0, 0.0)]));
+        assert!(!plist_same(&triangle, &[p(0.0, 0.0), p(1.0, 1.0), p(1.0, 2.0)]));
+        assert!(poly_contain_poly(&square, &[p(1.0, 1.0), p(2.0, 1.0), p(2.0, 2.0)]).unwrap());
+        assert!(!poly_contain_poly(&square, &[p(1.0, 1.0), p(5.0, 1.0), p(2.0, 2.0)]).unwrap());
+        let c = poly_to_circle(&[p(0.0, 0.0), p(2.0, 0.0), p(2.0, 2.0), p(0.0, 2.0)]).unwrap();
+        assert_eq!((c.center.x, c.center.y, c.radius), (1.0, 1.0, 2f64.sqrt()));
+        assert!(circle_poly(1, c).is_err());
     }
 }

@@ -1,0 +1,184 @@
+> SELECT area('((0,0),(4,0),(4,3))'::path), area('[(0,0),(4,0),(4,3)]'::path), area('((0,0),(1,0),(1,1),(0,1))'::path), area('((0,0),(NaN,1),(1,1))'::path), area('((0,0))'::path)
+fields area:701:8:-1,area:701:8:-1,area:701:8:-1,area:701:8:-1,area:701:8:-1
+row 6,NULL,1,NaN,0
+SELECT 1
+> SELECT isclosed('((0,0),(1,1))'::path), isopen('((0,0),(1,1))'::path), isclosed('[(0,0),(1,1)]'::path), npoints('[(0,0),(1,1),(2,0)]'::path), # '((0,0),(1,1))'::path, pclose('[(0,0),(1,1)]'::path), popen('((0,0),(1,1))'::path)
+fields isclosed:16:1:-1,isopen:16:1:-1,isclosed:16:1:-1,npoints:23:4:-1,?column?:23:4:-1,pclose:602:-1:-1,popen:602:-1:-1
+row t,f,f,3,2,((0,0),(1,1)),[(0,0),(1,1)]
+SELECT 1
+> SELECT '[(0,0),(1,1)]'::path < '[(0,0),(1,1),(2,2)]', '[(0,0),(1,1)]'::path > '((0,0),(1,1))', '[(0,0),(1,1)]'::path = '((5,5),(6,6))', '[(0,0),(1,1)]'::path <= '[(0,0)]', '[(0,0),(1,1)]'::path >= '[(0,0)]'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t
+SELECT 1
+> SELECT @-@ '[(0,0),(3,4),(3,0)]'::path, length('((0,0),(3,4),(3,0))'::path), length('[(0,0)]'::path), length('((0,0),(Infinity,0))'::path)
+fields ?column?:701:8:-1,length:701:8:-1,length:701:8:-1,length:701:8:-1
+row 9,12,0,Infinity
+SELECT 1
+> SELECT '[(0,0),(2,2)]'::path ?# '[(0,2),(2,0)]', '[(0,0),(2,2)]'::path ?# '[(3,0),(4,1)]', '[(0,0),(1,0),(1,1)]'::path ?# '[(0,1),(0.5,0.5)]', '((0,0),(1,0),(1,1))'::path ?# '[(0,1),(0.5,0.5)]', '[(0,0)]'::path ?# '[(0,0)]', '((0,0))'::path ?# '((0,0))'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,t,f,f
+SELECT 1
+> SELECT '[(0,0),(2,0)]'::path <-> '[(0,1),(2,3)]', '((0,0),(2,0),(2,2))'::path <-> '[(3,0),(4,0)]', '[(0,0)]'::path <-> '[(1,1),(2,2)]', '((0,0))'::path <-> '((3,4))'
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 1,1,NULL,5
+SELECT 1
+> SELECT '[(0,0),(1,1)]'::path + '[(2,2),(3,3)]', '((0,0),(1,1))'::path + '[(2,2)]', '[(0,0)]'::path + '((2,2))'
+fields ?column?:602:-1:-1,?column?:602:-1:-1,?column?:602:-1:-1
+row [(0,0),(1,1),(2,2),(3,3)],NULL,NULL
+SELECT 1
+> SELECT '[(0,0),(1,1)]'::path + '(1,2)'::point, '[(0,0),(1,1)]'::path + '(1,2)', '((0,0),(1,1))'::path - '(1,2)', '[(1,0),(0,1)]'::path * '(0,1)', '[(1,0),(0,2)]'::path / '(0,2)'
+fields ?column?:602:-1:-1,?column?:602:-1:-1,?column?:602:-1:-1,?column?:602:-1:-1,?column?:602:-1:-1
+row [(1,2),(2,3)],NULL,((-1,-2),(0,-1)),[(0,1),(-1,0)],[(0,-0.5),(1,0)]
+SELECT 1
+> SELECT '[(1,0)]'::path / '(0,0)'
+ERROR 22012 division by zero
+> SELECT '[(1e300,0)]'::path * '(1e300,0)'
+ERROR 22003 value out of range: overflow
+> SELECT '[(1e308,0)]'::path + '(1e308,0)'::point
+ERROR 22003 value out of range: overflow
+> SELECT polygon('((0,0),(1,1),(2,0))'::path), path('((0,0),(1,1),(2,0))'::polygon), polygon('(1,1),(0,0)'::box), box('((0,0),(1,3),(2,-1))'::polygon), box('((0,0),(NaN,1))'::polygon)
+fields polygon:604:-1:-1,path:602:-1:-1,polygon:604:-1:-1,box:603:32:-1,box:603:32:-1
+row ((0,0),(1,1),(2,0)),((0,0),(1,1),(2,0)),((0,0),(0,1),(1,1),(1,0)),(2,3),(0,-1),(NaN,1),(0,0)
+SELECT 1
+> SELECT polygon('[(0,0),(1,1)]'::path)
+ERROR 22023 open path cannot be converted to polygon
+> SELECT '(1,1)'::point <-> '[(0,0),(2,0)]'::path, '[(0,0),(2,0)]'::path <-> '(1,1)'::point, '(3,0)'::point <-> '((0,0),(2,0),(2,2))'::path, '(1,1)'::point <-> '[(0,0)]'::path, '(1,1)'::point <-> '((0,0))'::path, '(1,NaN)'::point <-> '[(0,0),(2,0)]'::path
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 1,1,1,0,1.4142135623730951,NaN
+SELECT 1
+> SELECT '(1,0)'::point <@ '[(0,0),(2,0)]'::path, '(1,1)'::point <@ '[(0,0),(2,0)]'::path, '(1,1)'::point <@ '((0,0),(3,0),(3,3),(0,3))'::path, '(5,5)'::point <@ '((0,0),(3,0),(3,3),(0,3))'::path, '(3,1)'::point <@ '((0,0),(3,0),(3,3),(0,3))'::path, '(0,0)'::point <@ '[(0,0)]'::path
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,f
+SELECT 1
+> SELECT '((0,0),(3,0),(3,3),(0,3))'::path @> '(1,1)'::point, '[(0,0),(2,0)]'::path @> '(1,0)'::point, '[(0,0),(2,0)]'::path @> '(1,1e-7)'::point, '[(0,0),(2,0)]'::path @> '(NaN,0)'::point
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f
+SELECT 1
+> SELECT '((0,0),(1,1))'::polygon << '((2,0),(3,1))', '((0,0),(2,1))'::polygon << '((2,0),(3,1))', '((0,0),(2,1))'::polygon &< '((2,0),(3,1))', '((2,0),(3,1))'::polygon >> '((0,0),(1,1))', '((2,0),(3,1))'::polygon &> '((2,0),(3,1))', '((0,0),(1,1))'::polygon <<| '((0,2),(1,3))', '((0,0),(1,1))'::polygon &<| '((0,2),(1,3))', '((0,2),(1,3))'::polygon |>> '((0,0),(1,1))', '((0,2),(1,3))'::polygon |&> '((0,0),(1,1))'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,t,t,t,t,t
+SELECT 1
+> SELECT '((0,0),(1,1))'::polygon << '((1.0000001,0),(3,1))', '((0,0),(1,1),(1,0))'::polygon &> '((0,0),(NaN,1))', '((0,0),(1,1))'::polygon << '((NaN,0),(3,1))'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT '((0,0),(1,0),(1,1))'::polygon ~= '((1,1),(0,0),(1,0))', '((0,0),(1,0),(1,1))'::polygon ~= '((1,1),(1,0),(0,0))', '((0,0),(1,0),(1,1))'::polygon ~= '((0,0),(1,1),(1,2))', '((0,0),(1,0))'::polygon ~= '((0,0),(1,0),(1,1))', '((0,0),(1,0.0000001))'::polygon ~= '((0,0),(1,0))', '((NaN,0),(1,0))'::polygon ~= '((1,0),(NaN,0))'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,f,t,t
+SELECT 1
+> SELECT '((0,0),(2,0),(2,2),(0,2))'::polygon && '((1,1),(3,1),(3,3),(1,3))', '((0,0),(2,0),(2,2),(0,2))'::polygon && '((3,3),(4,3),(4,4))', '((0,0),(4,0),(4,4),(0,4))'::polygon && '((1,1),(2,1),(2,2))', '((1,1),(2,1),(2,2))'::polygon && '((0,0),(4,0),(4,4),(0,4))', '((0,0),(4,0),(0,4))'::polygon && '((3,3),(5,3),(5,5),(3,5))', '((0,0),(2,0),(2,2),(0,2))'::polygon && '((2,2),(3,2),(3,3))'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f,t
+SELECT 1
+> SELECT '((0,0),(4,0),(4,4),(0,4))'::polygon @> '((1,1),(2,1),(2,2))', '((1,1),(2,1),(2,2))'::polygon <@ '((0,0),(4,0),(4,4),(0,4))', '((0,0),(4,0),(4,4),(0,4))'::polygon @> '((0,0),(4,0),(4,4))', '((0,0),(4,0),(4,4),(0,4))'::polygon @> '((1,1),(5,1),(2,2))', '((0,0),(4,0),(4,2),(2,2),(2,4),(0,4))'::polygon @> '((1,1),(3,1),(3,3),(1,3))', '((0,0),(4,0),(4,2),(2,2),(2,4),(0,4))'::polygon @> '((0,0),(4,0),(2,2),(0,4))'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f,f,t
+SELECT 1
+> SELECT '((0,0),(4,0),(4,4),(0,4))'::polygon @> '((0,0),(4,4))', '((0,0),(4,0),(4,4),(0,4))'::polygon @> '((0,2),(4,2))', '((0,0),(4,0),(4,4),(2,1),(0,4))'::polygon @> '((0,3),(4,3))', '((0,0),(3,0),(3,3),(0,3))'::polygon @> '((0,0),(3,0),(3,3),(0,3))', '((0,0),(4,0),(4,4),(0,4))'::polygon @> '((0,1),(0,3),(1,2))', '((0,0),(4,0),(4,4),(0,4))'::polygon @> '((1,0),(0,1),(2,4),(4,2))'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,t,t
+SELECT 1
+> SELECT '((0,0),(4,0),(4,4),(0,4))'::polygon @> '(2,2)'::point, '((0,0),(4,0),(4,4),(0,4))'::polygon @> '(4,2)'::point, '((0,0),(4,0),(4,4),(0,4))'::polygon @> '(5,2)'::point, '(2,2)'::point <@ '((0,0),(4,0),(4,4),(0,4))'::polygon, '(0,0)'::point <@ '((0,0),(4,0),(4,4),(0,4))'::polygon, '(2,4.0000001)'::point <@ '((0,0),(4,0),(4,4),(0,4))'::polygon, '(NaN,2)'::point <@ '((0,0),(4,0),(4,4),(0,4))'::polygon, '(1,1)'::point <@ '((0,0),(2,0),(2,2),(1,0.5),(0,2))'::polygon
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,t,t,f,f
+SELECT 1
+> SELECT '((0,0),(1,0),(1,1))'::polygon <-> '((3,0),(4,0),(4,1))', '((0,0),(4,0),(4,4),(0,4))'::polygon <-> '((1,1),(2,1),(2,2))', '((0,0),(1,0),(1,1))'::polygon <-> '((0,3),(1,3))', '((0,0))'::polygon <-> '((3,4))'
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 2,0,2,5
+SELECT 1
+> SELECT '(5,1)'::point <-> '((0,0),(2,0),(2,2),(0,2))'::polygon, '((0,0),(2,0),(2,2),(0,2))'::polygon <-> '(1,1)'::point, '((0,0),(2,0),(2,2),(0,2))'::polygon <-> '(-3,6)'::point, '(3,4)'::point <-> '((0,0))'::polygon, '(1,NaN)'::point <-> '((0,0),(2,0),(2,2))'::polygon
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 3,0,5,5,0
+SELECT 1
+> SELECT '<(5,1),1>'::circle <-> '((0,0),(2,0),(2,2),(0,2))'::polygon, '((0,0),(2,0),(2,2),(0,2))'::polygon <-> '<(5,1),1>'::circle, '<(5,1),4>'::circle <-> '((0,0),(2,0),(2,2),(0,2))'::polygon, '<(1,1),1>'::circle <-> '((0,0),(2,0),(2,2),(0,2))'::polygon, '<(5,1),NaN>'::circle <-> '((0,0),(2,0),(2,2),(0,2))'::polygon
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 2,2,0,0,NaN
+SELECT 1
+> SELECT npoints('((0,0),(1,1),(2,0))'::polygon), # '((0,0))'::polygon, @@ '((0,0),(2,0),(2,2),(0,2))'::polygon, @@ '((0,0),(2,0),(1,3))'::polygon, point('((0,0),(4,0))'::polygon), circle('((0,0),(2,0),(2,2),(0,2))'::polygon), circle('((0,0),(1,0),(0,1))'::polygon), circle('((0,0),(NaN,0))'::polygon), circle('((1,1))'::polygon)
+fields npoints:23:4:-1,?column?:23:4:-1,?column?:600:16:-1,?column?:600:16:-1,point:600:16:-1,circle:718:24:-1,circle:718:24:-1,circle:718:24:-1,circle:718:24:-1
+row 3,1,(1,1),(1,1),(2,0),<(1,1),1.4142135623730951>,<(0.3333333333333333,0.3333333333333333),0.6540388352636305>,<(NaN,0),NaN>,<(1,1),0>
+SELECT 1
+> SELECT circle('((1e308,0),(1e308,0))'::polygon)
+ERROR 22003 value out of range: overflow
+> SELECT @@ '((1e308,0),(1e308,0))'::polygon
+ERROR 22003 value out of range: overflow
+> SELECT circle('(1,2)'::point, 3), circle('(1,2)'::point, 'NaN'), circle('(1,2)'::point, -1), circle('(2,2),(0,0)'::box), circle('(1,1),(1,1)'::box), box('<(0,0),2>'::circle), box('<(1,1),0>'::circle), box('<(1,1),NaN>'::circle)
+fields circle:718:24:-1,circle:718:24:-1,circle:718:24:-1,circle:718:24:-1,circle:718:24:-1,box:603:32:-1,box:603:32:-1,box:603:32:-1
+row <(1,2),3>,<(1,2),NaN>,<(1,2),-1>,<(1,1),1.4142135623730951>,<(1,1),0>,(1.414213562373095,1.414213562373095),(-1.414213562373095,-1.414213562373095),(1,1),(1,1),(NaN,NaN),(NaN,NaN)
+SELECT 1
+> SELECT box('<(1e308,0),1e308>'::circle)
+fields box:603:32:-1
+row (1.7071067811865475e+308,7.071067811865475e+307),(2.9289321881345255e+307,-7.071067811865475e+307)
+SELECT 1
+> SELECT circle('(1e308,1e308),(1e308,1e308)'::box)
+ERROR 22003 value out of range: overflow
+> SELECT polygon(4, '<(0,0),1>'::circle), polygon(2, '<(1,1),2>'::circle), polygon('<(0,0),1>'::circle), polygon(3, '<(1,1),Infinity>'::circle), polygon(3, '<(1,1),NaN>'::circle)
+fields polygon:604:-1:-1,polygon:604:-1:-1,polygon:604:-1:-1,polygon:604:-1:-1,polygon:604:-1:-1
+row ((-1,0),(-6.123233995736766e-17,1),(1,1.2246467991473532e-16),(1.8369701987210297e-16,-1)),((-1,1),(3,1.0000000000000002)),((-1,0),(-0.8660254037844387,0.49999999999999994),(-0.5000000000000001,0.8660254037844386),(-6.123233995736766e-17,1),(0.4999999999999998,0.8660254037844387),(0.8660254037844385,0.5000000000000003),(1,1.2246467991473532e-16),(0.8660254037844388,-0.4999999999999997),(0.5000000000000004,-0.8660254037844384),(1.8369701987210297e-16,-1),(-0.49999999999999933,-0.866025403784439),(-0.8660254037844384,-0.5000000000000004)),((-Infinity,NaN),(Infinity,Infinity),(Infinity,-Infinity)),((NaN,NaN),(NaN,NaN),(NaN,NaN))
+SELECT 1
+> SELECT polygon(1, '<(0,0),1>'::circle)
+ERROR 22023 must request at least 2 points
+> SELECT polygon(-5, '<(0,0),1>'::circle)
+ERROR 22023 must request at least 2 points
+> SELECT polygon(4, '<(0,0),0>'::circle)
+ERROR 0A000 cannot convert circle with radius zero to polygon
+> SELECT polygon(4, '<(0,0),0.0000001>'::circle)
+ERROR 0A000 cannot convert circle with radius zero to polygon
+> SELECT polygon('<(0,0),0>'::circle)
+ERROR 0A000 cannot convert circle with radius zero to polygon
+> SELECT polygon(2147483647, '<(0,0),1>'::circle)
+ERROR 54000 too many points requested
+> SELECT polygon(134217724, '<(0,0),1>'::circle)
+ERROR XX000 invalid memory alloc request size 2147483624
+> SELECT polygon(3, '<(1e308,0),1e308>'::circle)
+fields polygon:604:-1:-1
+row ((0,0),(1.4999999999999998e+308,8.660254037844387e+307),(1.5000000000000004e+308,-8.660254037844384e+307))
+SELECT 1
+> SELECT '<(0,0),1>'::circle ~= '<(0,0),1.0000001>', '<(0,0),NaN>'::circle ~= '<(0,0),NaN>', '<(0,0),1>'::circle ~= '<(0,0),2>', '<(NaN,0),1>'::circle ~= '<(NaN,0),1>', '<(0,0),1>'::circle && '<(2,0),1>', '<(0,0),1>'::circle && '<(3,0),1>', '<(0,0),1>'::circle && '<(2.000001,0),1>', '<(0,0),1>'::circle && '<(2.000002,0),1>'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,t,f,t,f
+SELECT 1
+> SELECT '<(0,0),1>'::circle << '<(3,0),1>', '<(0,0),1>'::circle << '<(2,0),1>', '<(0,0),1>'::circle &< '<(2,0),1>', '<(3,0),1>'::circle >> '<(0,0),1>', '<(0,0),2>'::circle &> '<(0,0),1>', '<(0,0),1>'::circle <<| '<(0,3),1>', '<(0,0),1>'::circle &<| '<(0,1),1>', '<(0,3),1>'::circle |>> '<(0,0),1>', '<(0,1),1>'::circle |&> '<(0,0),1>'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f,t,t,t,t
+SELECT 1
+> SELECT '<(0,0),1>'::circle <@ '<(0,0),2>', '<(0,0),2>'::circle @> '<(0,0),1>', '<(1,0),1>'::circle <@ '<(0,0),2>', '<(1.5,0),1>'::circle <@ '<(0,0),2>', '<(0,0),2>'::circle @> '<(0,0),2>', '<(0,0),NaN>'::circle @> '<(0,0),1>'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f,t,f
+SELECT 1
+> SELECT '<(0,0),1>'::circle = '<(5,5),1>', '<(0,0),1>'::circle <> '<(0,0),1.0000001>', '<(0,0),1>'::circle < '<(0,0),2>', '<(0,0),1>'::circle > '<(0,0),2>', '<(0,0),1>'::circle <= '<(0,0),1>', '<(0,0),1>'::circle >= '<(0,0),2>', '<(0,0),NaN>'::circle = '<(0,0),NaN>', '<(0,0),NaN>'::circle <> '<(0,0),1>', '<(0,0),NaN>'::circle < '<(0,0),1>'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,f,f,f,f
+SELECT 1
+> SELECT '<(1,2),3>'::circle + '(1,1)', '<(1,2),3>'::circle - '(1,1)', '<(1,2),3>'::circle * '(0,2)', '<(1,2),3>'::circle / '(0,2)', '<(1,2),3>'::circle * '(3,4)', '<(1,2),3>'::circle * '(NaN,0)'
+fields ?column?:718:24:-1,?column?:718:24:-1,?column?:718:24:-1,?column?:718:24:-1,?column?:718:24:-1,?column?:718:24:-1
+row <(2,3),3>,<(0,1),3>,<(-4,2),6>,<(1,-0.5),1.5>,<(-5,10),15>,<(NaN,NaN),NaN>
+SELECT 1
+> SELECT '<(1,2),3>'::circle / '(0,0)'
+ERROR 22012 division by zero
+> SELECT '<(1,2),1e300>'::circle * '(1e300,0)'
+ERROR 22003 value out of range: overflow
+> SELECT area('<(0,0),1>'::circle), diameter('<(0,0),1.5>'::circle), radius('<(0,0),1.5>'::circle), area('<(0,0),NaN>'::circle), center('<(1,2),3>'::circle), @@ '<(1,2),3>'::circle, point('<(1,2),3>'::circle), circle_center('<(1,2),3>'::circle)
+fields area:701:8:-1,diameter:701:8:-1,radius:701:8:-1,area:701:8:-1,center:600:16:-1,?column?:600:16:-1,point:600:16:-1,circle_center:600:16:-1
+row 3.141592653589793,3,1.5,NaN,(1,2),(1,2),(1,2),(1,2)
+SELECT 1
+> SELECT area('<(0,0),1e200>'::circle)
+ERROR 22003 value out of range: overflow
+> SELECT '<(0,0),1>'::circle <-> '<(5,0),1>', '<(0,0),1>'::circle <-> '<(1,0),1>', '<(0,0),NaN>'::circle <-> '<(5,0),1>', '<(0,0),Infinity>'::circle <-> '<(5,0),1>'
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 3,0,NaN,0
+SELECT 1
+> SELECT '<(0,0),2>'::circle @> '(1,1)'::point, '<(0,0),2>'::circle @> '(2,0)'::point, '<(0,0),2>'::circle @> '(2.0000001,0)'::point, '(1,1)'::point <@ '<(0,0),2>'::circle, '(3,3)'::point <@ '<(0,0),2>'::circle, '(1,1)'::point <@ '<(0,0),NaN>'::circle
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,f,f
+SELECT 1
+> SELECT '(5,0)'::point <-> '<(0,0),2>'::circle, '<(0,0),2>'::circle <-> '(5,0)'::point, '(1,0)'::point <-> '<(0,0),2>'::circle, '(5,NaN)'::point <-> '<(0,0),2>'::circle
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1,?column?:701:8:-1
+row 3,3,0,NaN
+SELECT 1
+> SELECT '(1e308,0)'::point <-> '<(-1e308,0),2>'::circle
+ERROR 22003 value out of range: overflow
+> SELECT '((0,0),(3,0),(3,3),(0,3))'::path @> NULL::point, NULL::path ?# '[(0,0)]', polygon(NULL::int, '<(0,0),1>'::circle), area(NULL::circle)
+fields ?column?:16:1:-1,?column?:16:1:-1,polygon:604:-1:-1,area:701:8:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
