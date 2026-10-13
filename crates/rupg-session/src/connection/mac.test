@@ -1,0 +1,96 @@
+> SELECT '08:00:2b:01:02:03'::macaddr, '08-00-2b-01-02-03'::macaddr, '08002b:010203'::macaddr, '08002b-010203'::macaddr, '0800.2b01.0203'::macaddr, '0800-2b01-0203'::macaddr, '08002b010203'::macaddr, 'AB:CD:EF:01:02:03'::macaddr
+fields macaddr:829:6:-1,macaddr:829:6:-1,macaddr:829:6:-1,macaddr:829:6:-1,macaddr:829:6:-1,macaddr:829:6:-1,macaddr:829:6:-1,macaddr:829:6:-1
+row 08:00:2b:01:02:03,08:00:2b:01:02:03,08:00:2b:01:02:03,08:00:2b:01:02:03,08:00:2b:01:02:03,08:00:2b:01:02:03,08:00:2b:01:02:03,ab:cd:ef:01:02:03
+SELECT 1
+> SELECT ' 08:00:2b:01:02:03 '::macaddr
+fields macaddr:829:6:-1
+row 08:00:2b:01:02:03
+SELECT 1
+> SELECT '08:00:2b:01:02'::macaddr
+ERROR 22P02 invalid input syntax for type macaddr: "08:00:2b:01:02" at 8
+> SELECT '08:00:2b:01:02:03:04'::macaddr
+ERROR 22P02 invalid input syntax for type macaddr: "08:00:2b:01:02:03:04" at 8
+> SELECT '08:00:2b:01:02:0g'::macaddr
+ERROR 22P02 invalid input syntax for type macaddr: "08:00:2b:01:02:0g" at 8
+> SELECT '08:00:2b:01:02:100'::macaddr
+ERROR 22003 invalid octet value in "macaddr" value: "08:00:2b:01:02:100" at 8
+> SELECT '8:0:2b:1:2:3'::macaddr
+fields macaddr:829:6:-1
+row 08:00:2b:01:02:03
+SELECT 1
+> SELECT '08:00-2b:01:02:03'::macaddr
+ERROR 22P02 invalid input syntax for type macaddr: "08:00-2b:01:02:03" at 8
+> SELECT ''::macaddr
+ERROR 22P02 invalid input syntax for type macaddr: "" at 8
+> SELECT '08:00:2b:01:02:03'::macaddr8, '08:00:2b:01:02:03:04:05'::macaddr8, '08-00-2b-01-02-03-04-05'::macaddr8, '08002b0102030405'::macaddr8, '0800.2b01.0203.0405'::macaddr8, '08002b:0102030405'::macaddr8, '08:00:2b:01:02:03:04:05 '::macaddr8, '0800:2b01:0203:0405'::macaddr8
+fields macaddr8:774:8:-1,macaddr8:774:8:-1,macaddr8:774:8:-1,macaddr8:774:8:-1,macaddr8:774:8:-1,macaddr8:774:8:-1,macaddr8:774:8:-1,macaddr8:774:8:-1
+row 08:00:2b:ff:fe:01:02:03,08:00:2b:01:02:03:04:05,08:00:2b:01:02:03:04:05,08:00:2b:01:02:03:04:05,08:00:2b:01:02:03:04:05,08:00:2b:01:02:03:04:05,08:00:2b:01:02:03:04:05,08:00:2b:01:02:03:04:05
+SELECT 1
+> SELECT '08:00:2b:01:02:03:04'::macaddr8
+ERROR 22P02 invalid input syntax for type macaddr8: "08:00:2b:01:02:03:04" at 8
+> SELECT '08:00:2b:01:02:03:04:05:06'::macaddr8
+ERROR 22P02 invalid input syntax for type macaddr8: "08:00:2b:01:02:03:04:05:06" at 8
+> SELECT 'x'::macaddr8
+ERROR 22P02 invalid input syntax for type macaddr8: "x" at 8
+> SELECT '08:00:2b:01:02:3'::macaddr8
+ERROR 22P02 invalid input syntax for type macaddr8: "08:00:2b:01:02:3" at 8
+> SELECT '08:00:2b:01:02:03'::macaddr < '08:00:2b:01:02:04'::macaddr, '08:00:2b:01:02:03'::macaddr = '08-00-2b-01-02-03'::macaddr, 'ff:00:00:00:00:00'::macaddr > '01:00:00:00:00:00'::macaddr, macaddr_cmp('08:00:2b:01:02:03', '08:00:2b:01:02:04')
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,macaddr_cmp:23:4:-1
+row t,t,t,-1
+SELECT 1
+> SELECT 'ff:00:00:00:00:00:00:00'::macaddr8 > '01:00:00:00:00:00:00:00'::macaddr8, macaddr8_cmp('08:00:2b:01:02:03:04:05', '08:00:2b:01:02:03:04:06'), '08:00:2b:01:02:03:04:05'::macaddr8 <> '08:00:2b:01:02:03:04:06'::macaddr8
+fields ?column?:16:1:-1,macaddr8_cmp:23:4:-1,?column?:16:1:-1
+row t,-1,t
+SELECT 1
+> SELECT trunc('08:00:2b:01:02:03'::macaddr), trunc('08:00:2b:01:02:03:04:05'::macaddr8), macaddr8_set7bit('08:00:2b:01:02:03:04:05'::macaddr8)
+fields trunc:829:6:-1,trunc:774:8:-1,macaddr8_set7bit:774:8:-1
+row 08:00:2b:00:00:00,08:00:2b:00:00:00:00:00,0a:00:2b:01:02:03:04:05
+SELECT 1
+> SELECT ~'08:00:2b:01:02:03'::macaddr, '08:00:2b:01:02:03'::macaddr & 'ff:ff:ff:00:00:00'::macaddr, '08:00:2b:01:02:03'::macaddr | '00:00:00:ff:00:00'::macaddr
+fields ?column?:829:6:-1,?column?:829:6:-1,?column?:829:6:-1
+row f7:ff:d4:fe:fd:fc,08:00:2b:00:00:00,08:00:2b:ff:02:03
+SELECT 1
+> SELECT ~'08:00:2b:01:02:03:04:05'::macaddr8, '08:00:2b:01:02:03:04:05'::macaddr8 & 'ff:ff:ff:00:00:00:00:00'::macaddr8, '08:00:2b:01:02:03:04:05'::macaddr8 | '00:00:00:ff:00:00:00:00'::macaddr8
+fields ?column?:774:8:-1,?column?:774:8:-1,?column?:774:8:-1
+row f7:ff:d4:fe:fd:fc:fb:fa,08:00:2b:00:00:00:00:00,08:00:2b:ff:02:03:04:05
+SELECT 1
+> SELECT '08:00:2b:01:02:03'::macaddr::macaddr8, '08:00:2b:ff:fe:01:02:03'::macaddr8::macaddr
+fields macaddr8:774:8:-1,macaddr:829:6:-1
+row 08:00:2b:ff:fe:01:02:03,08:00:2b:01:02:03
+SELECT 1
+> SELECT '08:00:2b:01:02:03:04:05'::macaddr8::macaddr
+ERROR 22003 macaddr8 data out of range to convert to macaddr
+> SELECT max(m), min(m) FROM (VALUES ('08:00:2b:01:02:03'::macaddr), ('ff:00:00:00:00:00'::macaddr)) v(m)
+ERROR 42883 function max(macaddr) does not exist at 8
+> SELECT ARRAY['08:00:2b:01:02:03'::macaddr], '{08:00:2b:01:02:03:04:05}'::macaddr8[]
+fields array:1040:-1:-1,macaddr8:775:-1:-1
+row {08:00:2b:01:02:03},{08:00:2b:01:02:03:04:05}
+SELECT 1
+> SELECT m FROM (VALUES ('08:00:2b:01:02:03'::macaddr), ('01:00:00:00:00:00'::macaddr), ('08:00:2b:01:02:03'::macaddr)) v(m) GROUP BY m ORDER BY m
+fields m:829:6:-1
+row 01:00:00:00:00:00
+row 08:00:2b:01:02:03
+SELECT 2
+> SELECT pg_input_is_valid('08:00:2b:01:02:03', 'macaddr'), pg_input_is_valid('08:00:2b:01:02', 'macaddr'), pg_input_is_valid('x', 'macaddr8')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('08:00:2b:01:02', 'macaddr')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type macaddr: "08:00:2b:01:02",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('x', 'macaddr8')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type macaddr8: "x",NULL,NULL,22P02
+SELECT 1
+> COPY (SELECT '08:00:2b:01:02:03'::macaddr, '08:00:2b:01:02:03:04:05'::macaddr8) TO stdout
+copy out 0 0,0
+data 08:00:2b:01:02:03\t08:00:2b:01:02:03:04:05\n
+copy done
+COPY 1
+> COPY (SELECT '08:00:2b:01:02:03'::macaddr, '08:00:2b:01:02:03:04:05'::macaddr8) TO stdout (FORMAT binary)
+copy out 1 1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x06\x08\x00+\x01\x02\x03\x00\x00\x00\x08\x08\x00+\x01\x02\x03\x04\x05
+data \xff\xff
+copy done
+COPY 1

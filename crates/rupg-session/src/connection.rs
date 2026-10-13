@@ -1779,6 +1779,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/money.test")));
     }
 
+    /// `macaddr` and `macaddr8`: the text forms of each format with the errors of a bad value, the order, `trunc`, the bit operators, `macaddr8_set7bit`, the casts, the arrays and the text and binary forms of `COPY`. `connection/mac.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn mac() {
+        big_stack(|| script(include_str!("connection/mac.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {
