@@ -91,6 +91,8 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::XID8
             | oid::OID8
             | oid::REFCURSOR
+            | oid::MACADDR
+            | oid::MACADDR8
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -158,6 +160,8 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
     }
     match (ty, value) {
         (oid::MONEY, Value::Int8(v)) => types::cash_out(*v, out),
+        (oid::MACADDR, Value::Int8(v)) => types::macaddr_out(v.cast_unsigned(), out),
+        (oid::MACADDR8, Value::Int8(v)) => types::macaddr8_out(v.cast_unsigned(), out),
         (oid::XID8 | oid::OID8, Value::Int8(v)) => types::u64_out(v.cast_unsigned(), out),
         (oid::TID, Value::Int8(v)) => {
             let (block, offset) = tid_parts(*v)?;
@@ -398,6 +402,8 @@ fn input_value(
         oid::INT8 => Value::Int8(types::int8_in(text)?),
         oid::OID => Value::Oid(types::oid_in(text)?),
         oid::MONEY => Value::Int8(types::cash_in(text)?),
+        oid::MACADDR => Value::Int8(types::macaddr_in(text)?.cast_signed()),
+        oid::MACADDR8 => Value::Int8(types::macaddr8_in(text)?.cast_signed()),
         oid::XID8 => Value::Int8(types::uint64_in(text, "xid8")?.cast_signed()),
         oid::OID8 => Value::Int8(types::uint64_in(text, "oid8")?.cast_signed()),
         oid::TID => {
@@ -535,6 +541,8 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::INT2 => Value::Int2(recv.i16()?),
         oid::INT4 => Value::Int4(recv.i32()?),
         oid::INT8 | oid::MONEY | oid::XID8 | oid::OID8 => Value::Int8(recv.i64()?),
+        oid::MACADDR => Value::Int8(types::macaddr_recv(recv)?.cast_signed()),
+        oid::MACADDR8 => Value::Int8(types::macaddr8_recv(recv)?.cast_signed()),
         oid::TID => {
             let block = recv.u32()?;
             tid_value(block, recv.i16()?.cast_unsigned())
@@ -608,6 +616,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         (oid::ACLITEM | oid::ANYARRAY | oid::PG_LSN, _) => {
             return Err(not_yet(format!("binary output of type {}", type_name(ty))));
         }
+        (oid::MACADDR, Value::Int8(v)) => out.extend_from_slice(&v.to_be_bytes()[2..]),
         (oid::TID, Value::Int8(v)) => {
             let (block, offset) = tid_parts(*v)?;
             out.extend_from_slice(&block.to_be_bytes());

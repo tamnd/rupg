@@ -22,7 +22,7 @@
 //!
 //! [`Array`], an array of any element type with up to [`MAXDIM`] dimensions and any lower bounds. [`array_in`], [`array_out`], [`array_recv`] and [`array_send`] take the function of the element type as a closure and give the errors of PostgreSQL, also the error of the element. The binary input refuses an element type that is not the expected type, and [`format_type`] gives the names in that error. `int2vector` and `oidvector` are arrays with the lower bound 0 and a text form with spaces, in [`int2vector_in`], [`oidvector_in`] and the functions beside them.
 //!
-//! [`cash_in`], [`cash_out`] and [`cash_words`] for `money`, a count of cents in an `i64`, with the symbols of the `C` locale. [`tid_in`] and [`tid_out`] for `tid`, and [`uint64_in`] for `xid8` and `oid8`.
+//! [`cash_in`], [`cash_out`] and [`cash_words`] for `money`, a count of cents in an `i64`, with the symbols of the `C` locale. [`tid_in`] and [`tid_out`] for `tid`, and [`uint64_in`] for `xid8` and `oid8`. [`macaddr_in`], [`macaddr8_in`] and the other functions of `macaddr` and `macaddr8`, with the bytes of the address in a `u64`.
 //!
 //! [`Inet`], a value of `inet` or `cidr`, with [`inet_in`], [`inet_out`], [`inet_recv`] and [`inet_send`], which take a flag for `cidr`. [`network_cmp`] is the order of the B-tree operator class.
 //!
@@ -55,6 +55,7 @@ mod float;
 mod generated;
 mod json;
 mod jsonb;
+mod mac;
 mod money;
 mod network;
 mod number;
@@ -94,6 +95,10 @@ pub use float::{float4_in, float4_out, float8_in, float8_out};
 pub use generated::oids as oid;
 pub use json::json_in;
 pub use jsonb::{jsonb_in, jsonb_recv, jsonb_send};
+pub use mac::{
+    macaddr_in, macaddr_out, macaddr_recv, macaddr_to_macaddr8, macaddr8_in, macaddr8_out,
+    macaddr8_recv, macaddr8_to_macaddr,
+};
 pub use money::{cash_in, cash_out, cash_words};
 pub use network::{
     Inet, NetFamily, bitncmp, bitncommon, cidr_abbrev, inet_in, inet_out, inet_recv, inet_send,

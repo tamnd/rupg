@@ -34,6 +34,9 @@ enum Family {
     /// `xid8` and `oid8`, which hold a `u64` in the bits of a `bigint`.
     Xid8,
     Oid8,
+    Macaddr,
+    /// `macaddr8`, which holds a `u64` in the bits of a `bigint`.
+    Macaddr8,
 }
 
 /// The family of a type, or `None` for a type that has no comparison here.
@@ -62,6 +65,8 @@ fn family(ty: u32) -> Option<Family> {
         oid::TID => Family::Tid,
         oid::XID8 => Family::Xid8,
         oid::OID8 => Family::Oid8,
+        oid::MACADDR => Family::Macaddr,
+        oid::MACADDR8 => Family::Macaddr8,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
             _ => return None,
@@ -83,7 +88,7 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
     let trim = |ty: u32, s: &'_ str| -> usize {
         if base_type(ty) == oid::BPCHAR { s.trim_end_matches(' ').len() } else { s.len() }
     };
-    let unsigned = |ty: u32| matches!(base_type(ty), oid::XID8 | oid::OID8);
+    let unsigned = |ty: u32| matches!(base_type(ty), oid::XID8 | oid::OID8 | oid::MACADDR8);
     Ok(match (a, b) {
         (Value::Int8(x), Value::Int8(y)) if unsigned(left) && unsigned(right) => {
             x.cast_unsigned().cmp(&y.cast_unsigned())
@@ -376,7 +381,7 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     } else if src.ends_with("smaller") {
         Some(smaller)
     } else if src.starts_with("bt") && src.ends_with("cmp")
-        || matches!(src, "array_cmp" | "cash_cmp" | "xid8cmp")
+        || matches!(src, "array_cmp" | "cash_cmp" | "xid8cmp" | "macaddr_cmp" | "macaddr8_cmp")
     {
         Some(cmp)
     } else {
