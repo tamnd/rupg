@@ -23,6 +23,7 @@ mod lsn;
 mod mac;
 mod math;
 mod misc;
+mod multirange;
 mod network;
 mod range;
 mod reg;
@@ -277,6 +278,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| regex::by_src(src))
         .or_else(|| network::by_src(src))
         .or_else(|| range::by_src(src))
+        .or_else(|| multirange::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))

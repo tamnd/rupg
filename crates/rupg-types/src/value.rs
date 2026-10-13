@@ -47,6 +47,8 @@ pub enum Value {
     Record(Box<Record>),
     /// A value of a range type.
     Range(Box<Range>),
+    /// A value of a multirange type: the ranges in order, with no empty range and no two ranges that overlap or touch.
+    Multirange(Vec<Range>),
 }
 
 /// The value of a composite type or of `record`, as a `HeapTupleHeader` datum. As that datum keeps the type of the row, a record keeps the type of each field, so that the output of an anonymous `record` can show the fields.

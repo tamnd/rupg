@@ -1,4 +1,4 @@
-//! The value model, `Datum`, `Vector` of 1024 values, `TypeId`, the text and binary forms of the 197 types, numeric, date and time, JSON, arrays, ranges.
+//! The value model, `Datum`, `Vector` of 1024 values, `TypeId`, the text and binary forms of the 197 types, numeric, date and time, JSON, arrays, ranges, multiranges.
 //!
 //! See `spec/07-sql-types-and-catalog.md` and `spec/22-crate-layout.md` section 22.4.
 //!
@@ -60,6 +60,7 @@ mod jsonb;
 mod lsn;
 mod mac;
 mod money;
+mod multirange;
 mod network;
 mod number;
 mod numeric;
@@ -108,6 +109,7 @@ pub use mac::{
     macaddr8_recv, macaddr8_to_macaddr,
 };
 pub use money::{cash_in, cash_out, cash_words};
+pub use multirange::{multirange_deparse, multirange_parse, multirange_recv, multirange_send};
 pub use network::{
     Inet, NetFamily, bitncmp, bitncommon, cidr_abbrev, inet_in, inet_out, inet_recv, inet_send,
     net_ntop, network_cmp,

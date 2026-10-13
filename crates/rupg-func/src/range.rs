@@ -345,7 +345,7 @@ fn order_of(
 }
 
 /// `range_before_internal`: true when the upper bound of `a` is before the lower bound of `b`.
-fn before(range: u32, a: &Range, b: &Range) -> Result<bool> {
+pub(crate) fn before(range: u32, a: &Range, b: &Range) -> Result<bool> {
     Ok(order_of(range, a, b, true, false)?.is_some_and(Ordering::is_lt))
 }
 
@@ -379,7 +379,7 @@ fn bounds_adjacent(range: u32, a: &Bound<'_>, b: &Bound<'_>) -> Result<bool> {
 }
 
 /// `range_adjacent_internal`: true when one range stops where the other range starts. An empty range is not adjacent to a range.
-fn adjacent(range: u32, a: &Range, b: &Range) -> Result<bool> {
+pub(crate) fn adjacent(range: u32, a: &Range, b: &Range) -> Result<bool> {
     if a.is_empty() || b.is_empty() {
         return Ok(false);
     }
@@ -389,7 +389,7 @@ fn adjacent(range: u32, a: &Range, b: &Range) -> Result<bool> {
 }
 
 /// `range_union_internal`: the smallest range that contains the two ranges. When `strict` is true, the ranges must overlap or be adjacent.
-fn union(range: u32, a: &Range, b: &Range, strict: bool) -> Result<Range> {
+pub(crate) fn union(range: u32, a: &Range, b: &Range, strict: bool) -> Result<Range> {
     if a.is_empty() {
         return Ok(b.clone());
     }
