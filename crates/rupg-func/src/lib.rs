@@ -55,6 +55,7 @@ pub use io::{
     base_type, input, input_supported, is_row_type, output, output_supported, receive, send,
     to_text,
 };
+pub use multirange::range_agg;
 pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use srf::{SetKernel, set_kernel};
 
