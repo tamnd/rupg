@@ -19,7 +19,7 @@ pub(crate) fn subtype(range: u32) -> u32 {
 }
 
 /// One bound of a range, as `RangeBound` of `rangetypes.h` gives it.
-struct Bound<'a> {
+pub(crate) struct Bound<'a> {
     value: &'a Value,
     infinite: bool,
     inclusive: bool,
@@ -27,7 +27,7 @@ struct Bound<'a> {
 }
 
 /// The lower bound and the upper bound of a range.
-fn bounds(range: &Range) -> (Bound<'_>, Bound<'_>) {
+pub(crate) fn bounds(range: &Range) -> (Bound<'_>, Bound<'_>) {
     let flags = range.flags;
     (
         Bound {
@@ -61,7 +61,7 @@ fn cmp_bound_values(sub: u32, b1: &Bound<'_>, b2: &Bound<'_>) -> Result<Ordering
 }
 
 /// `range_cmp_bounds`: the order of two bounds. For equal values, an exclusive lower bound is after the value and an exclusive upper bound is before it.
-fn cmp_bounds(sub: u32, b1: &Bound<'_>, b2: &Bound<'_>) -> Result<Ordering> {
+pub(crate) fn cmp_bounds(sub: u32, b1: &Bound<'_>, b2: &Bound<'_>) -> Result<Ordering> {
     let order = cmp_bound_values(sub, b1, b2)?;
     if order.is_ne() || b1.infinite || b2.infinite {
         return Ok(order);
@@ -295,7 +295,7 @@ fn flip<'a>(bound: &Bound<'a>) -> Bound<'a> {
 }
 
 /// `range_overlaps_internal`: true when the ranges have a common value.
-fn overlaps(range: u32, a: &Range, b: &Range) -> Result<bool> {
+pub(crate) fn overlaps(range: u32, a: &Range, b: &Range) -> Result<bool> {
     if a.is_empty() || b.is_empty() {
         return Ok(false);
     }
@@ -308,7 +308,7 @@ fn overlaps(range: u32, a: &Range, b: &Range) -> Result<bool> {
 }
 
 /// `range_contains_internal`: true when each value of `b` is in `a`. Each range contains an empty range.
-fn contains(range: u32, a: &Range, b: &Range) -> Result<bool> {
+pub(crate) fn contains(range: u32, a: &Range, b: &Range) -> Result<bool> {
     if b.is_empty() {
         return Ok(true);
     }
@@ -355,7 +355,7 @@ fn after(range: u32, a: &Range, b: &Range) -> Result<bool> {
 }
 
 /// `range_overleft_internal`: true when `a` does not go to the right of `b`.
-fn over_left(range: u32, a: &Range, b: &Range) -> Result<bool> {
+pub(crate) fn over_left(range: u32, a: &Range, b: &Range) -> Result<bool> {
     Ok(order_of(range, a, b, true, true)?.is_some_and(Ordering::is_le))
 }
 
@@ -365,7 +365,7 @@ fn over_right(range: u32, a: &Range, b: &Range) -> Result<bool> {
 }
 
 /// `bounds_adjacent`: true when no value is between the upper bound `a` and the lower bound `b` and no value is in both. For a discrete subtype, the range between the bounds must be empty.
-fn bounds_adjacent(range: u32, a: &Bound<'_>, b: &Bound<'_>) -> Result<bool> {
+pub(crate) fn bounds_adjacent(range: u32, a: &Bound<'_>, b: &Bound<'_>) -> Result<bool> {
     Ok(match cmp_bound_values(subtype(range), a, b)? {
         Ordering::Less => {
             if !matches!(base_type(range), oid::INT4RANGE | oid::INT8RANGE | oid::DATERANGE) {
@@ -411,7 +411,7 @@ pub(crate) fn union(range: u32, a: &Range, b: &Range, strict: bool) -> Result<Ra
 }
 
 /// `range_intersect_internal`: the values that are in the two ranges.
-fn intersect(range: u32, a: &Range, b: &Range) -> Result<Range> {
+pub(crate) fn intersect(range: u32, a: &Range, b: &Range) -> Result<Range> {
     if !overlaps(range, a, b)? {
         return Ok(Range::empty());
     }
@@ -456,8 +456,21 @@ fn minus_multi(range: u32, a: &Range, b: &Range) -> Result<Vec<Range>> {
     })
 }
 
+/// `range_split_internal`: the part of `a` below `b` and the part above `b`, when `b` is inside `a` and leaves a part on each side.
+pub(crate) fn split(range: u32, a: &Range, b: &Range) -> Result<Option<(Range, Range)>> {
+    let sub = subtype(range);
+    let (lower1, upper1) = bounds(a);
+    let (lower2, upper2) = bounds(b);
+    if cmp_bounds(sub, &lower1, &lower2)?.is_lt() && cmp_bounds(sub, &upper1, &upper2)?.is_gt() {
+        let below = from_bounds(range, &lower1, &flip(&lower2))?;
+        let above = from_bounds(range, &flip(&upper2), &upper1)?;
+        return Ok(Some((below, above)));
+    }
+    Ok(None)
+}
+
 /// `range_minus_internal`: the values of `a` that are not in `b`. The result must be one range.
-fn minus(range: u32, a: &Range, b: &Range) -> Result<Range> {
+pub(crate) fn minus(range: u32, a: &Range, b: &Range) -> Result<Range> {
     if a.is_empty() || b.is_empty() {
         return Ok(a.clone());
     }
@@ -538,7 +551,7 @@ fn elem_contained_op(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `range_contains_elem_internal`: true when the value is in the range.
-fn contains_elem(sub: u32, range: &Range, value: &Value) -> Result<bool> {
+pub(crate) fn contains_elem(sub: u32, range: &Range, value: &Value) -> Result<bool> {
     if range.is_empty() {
         return Ok(false);
     }

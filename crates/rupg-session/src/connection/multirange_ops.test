@@ -1,0 +1,96 @@
+> SET TimeZone = 'UTC'
+SET
+> SET DateStyle = 'ISO, MDY'
+SET
+> SELECT '{[1,5),[8,10)}'::int4multirange + '{[3,9)}', '{}'::int4multirange + '{[1,2)}', '{[1,2)}'::int4multirange + '{}', '{[1,2)}'::int4multirange + '{[2,3)}', '{[5,6)}'::int4multirange + '{(,1),[10,)}'
+fields ?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1
+row {[1,10)},{[1,2)},{[1,2)},{[1,3)},{(,1),[5,6),[10,)}
+SELECT 1
+> SELECT '{[1,10)}'::int4multirange - '{[3,4),[6,7)}', '{[1,5),[8,10)}'::int4multirange - '{[4,9)}', '{[1,5)}'::int4multirange - '{}', '{}'::int4multirange - '{[1,5)}', '{[1,5)}'::int4multirange - '{(,)}', '{[1,5),[10,20)}'::int4multirange - '{[0,2),[4,11),[15,16),[19,30)}'
+fields ?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1
+row {[1,3),[4,6),[7,10)},{[1,4),[9,10)},{[1,5)},{},{},{[2,4),[11,15),[16,19)}
+SELECT 1
+> SELECT '{[1,10)}'::nummultirange - '{[3,4],(6,7)}', '{(,)}'::nummultirange - '{[1,2)}', '{[1,2],[3,4]}'::nummultirange - '{[2,3]}'
+fields ?column?:4532:-1:-1,?column?:4532:-1:-1,?column?:4532:-1:-1
+row {[1,3),(4,6],[7,10)},{(,1),[2,)},{[1,2),(3,4]}
+SELECT 1
+> SELECT '{[1,5),[8,10)}'::int4multirange * '{[3,9)}', '{[1,5)}'::int4multirange * '{}', '{[1,5),[8,10),[20,30)}'::int4multirange * '{[0,2),[4,25)}', '{[1,5)}'::int4multirange * '{[5,6)}', '{(,)}'::nummultirange * '{[1.5,2.5],(3,4)}'
+fields ?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4451:-1:-1,?column?:4532:-1:-1
+row {[3,5),[8,9)},{},{[1,2),[4,5),[8,10),[20,25)},{},{[1.5,2.5],(3,4)}
+SELECT 1
+> SELECT * FROM multirange_minus_multi('{[1,10)}'::int4multirange, '{[3,4)}'::int4multirange)
+fields multirange_minus_multi:4451:-1:-1
+row {[1,3),[4,10)}
+SELECT 1
+> SELECT * FROM multirange_minus_multi('{[1,10)}'::int4multirange, '{[0,20)}'::int4multirange)
+fields multirange_minus_multi:4451:-1:-1
+SELECT 0
+> SELECT * FROM multirange_minus_multi('{}'::int4multirange, '{[0,20)}'::int4multirange)
+fields multirange_minus_multi:4451:-1:-1
+SELECT 0
+> SELECT * FROM multirange_minus_multi('{[1,2)}'::int4multirange, '{}'::int4multirange)
+fields multirange_minus_multi:4451:-1:-1
+row {[1,2)}
+SELECT 1
+> SELECT '{[1,5),[8,10)}'::int4multirange && '{[4,6)}'::int4multirange, '{[1,5),[8,10)}'::int4multirange && '{[5,8)}'::int4multirange, '{}'::int4multirange && '{}'::int4multirange, '{[1,5),[8,10)}'::int4multirange && int4range(9,20), '{[1,5)}'::int4multirange && 'empty'::int4range, int4range(4,8) && '{[1,5)}'::int4multirange, int4range(5,8) && '{[1,5)}'::int4multirange
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,t,f,t,f
+SELECT 1
+> SELECT '{[1,5),[8,10)}'::int4multirange @> 4, '{[1,5),[8,10)}'::int4multirange @> 5, '{}'::int4multirange @> 1, 9 <@ '{[1,5),[8,10)}'::int4multirange, '{(,5)}'::int4multirange @> -100, '{[1.5,2]}'::nummultirange @> 2.0
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,t,t,t
+SELECT 1
+> SELECT '{[1,5),[8,10)}'::int4multirange @> int4range(2,4), '{[1,5),[8,10)}'::int4multirange @> int4range(4,9), '{}'::int4multirange @> 'empty'::int4range, '{}'::int4multirange @> int4range(1,2), int4range(2,4) <@ '{[1,5)}'::int4multirange, int4range(1,10) @> '{[1,5),[8,10)}'::int4multirange, int4range(1,9) @> '{[1,5),[8,10)}'::int4multirange, 'empty'::int4range @> '{}'::int4multirange, '{[2,3),[4,5)}'::int4multirange <@ int4range(1,6)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,t,f,t,t
+SELECT 1
+> SELECT '{[1,5),[8,10)}'::int4multirange @> '{[2,3),[8,9)}'::int4multirange, '{[1,5),[8,10)}'::int4multirange @> '{[2,9)}'::int4multirange, '{[1,5)}'::int4multirange @> '{}'::int4multirange, '{}'::int4multirange @> '{[1,2)}'::int4multirange, '{[2,3)}'::int4multirange <@ '{[1,5),[8,10)}'::int4multirange, '{[1,5),[8,10)}'::int4multirange @> '{[11,12)}'::int4multirange
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,f
+SELECT 1
+> SELECT '{[1,5)}'::int4multirange << '{[5,6)}'::int4multirange, '{[1,5)}'::int4multirange << '{[4,6)}'::int4multirange, '{[1,5)}'::int4multirange >> '{[0,1)}'::int4multirange, '{[1,5)}'::int4multirange << int4range(5,6), '{[1,5)}'::int4multirange >> int4range(-5,1), int4range(1,2) << '{[3,4)}'::int4multirange, int4range(5,6) >> '{[3,4),[4,5)}'::int4multirange, '{}'::int4multirange << '{[1,2)}'::int4multirange, '{[1,2)}'::int4multirange << 'empty'::int4range
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,t,t,t,f,f
+SELECT 1
+> SELECT '{[1,5)}'::int4multirange &< '{[2,5)}'::int4multirange, '{[1,6)}'::int4multirange &< '{[2,5)}'::int4multirange, '{[1,5)}'::int4multirange &> '{[1,2)}'::int4multirange, '{[0,5)}'::int4multirange &> '{[1,2)}'::int4multirange, '{[1,5)}'::int4multirange &< int4range(0,5), '{[1,5)}'::int4multirange &> int4range(1,2), int4range(1,4) &< '{[1,2),[3,4)}'::int4multirange, int4range(1,4) &> '{[1,2),[3,4)}'::int4multirange, '{}'::int4multirange &< '{[1,2)}'::int4multirange
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,t,t,t,f
+SELECT 1
+> SELECT '{[1,5)}'::int4multirange -|- '{[5,6)}'::int4multirange, '{[1,5),[8,9)}'::int4multirange -|- '{[0,1)}'::int4multirange, '{[1,5)}'::int4multirange -|- '{[6,7)}'::int4multirange, '{[1,5)}'::int4multirange -|- int4range(5,9), int4range(-1,1) -|- '{[1,5),[7,8)}'::int4multirange, int4range(8,9) -|- '{[1,5),[7,8)}'::int4multirange, '{[1,2]}'::nummultirange -|- '{(2,3]}'::nummultirange, '{[1,2]}'::nummultirange -|- numrange(2,3), '{}'::int4multirange -|- int4range(1,2)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,t,t,t,f,f
+SELECT 1
+> SELECT '{[1,5),[7,8)}'::int4multirange -|- '{[5,7)}'::int4multirange, '{[3,4),[7,8)}'::int4multirange -|- '{[1,3),[8,9)}'::int4multirange
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,f
+SELECT 1
+> SELECT '{[1,5)}'::int4multirange + '{[1,5)}'::int8multirange
+ERROR 42883 operator does not exist: int4multirange + int8multirange at 34
+> SELECT '{[1,5)}'::int4multirange @> 4::bigint
+ERROR 42883 operator does not exist: int4multirange @> bigint at 34
+> SELECT int4multirange(int4range(1,3)) * int4multirange(int4range(2,6)), range_merge(int4multirange(int4range(1,3)) + int4multirange(int4range(7,9)))
+fields ?column?:4451:-1:-1,range_merge:3904:-1:-1
+row {[2,3)},[1,9)
+SELECT 1
+> SELECT '{[2020-01-01,2020-02-01)}'::datemultirange - '{[2020-01-10,2020-01-20)}'::datemultirange, '{[2020-01-01,2020-02-01)}'::datemultirange @> '2020-01-15'::date, '{["2020-01-01 10:00","2020-01-01 12:00")}'::tsmultirange * '{["2020-01-01 11:00",)}'::tsmultirange
+fields ?column?:4535:-1:-1,?column?:16:1:-1,?column?:4533:-1:-1
+row {[2020-01-01,2020-01-10),[2020-01-20,2020-02-01)},t,{["2020-01-01 11:00:00","2020-01-01 12:00:00")}
+SELECT 1
+> SELECT a, b, a + b AS u, a * b AS i, a - b AS m, a && b AS o, a @> b AS c, a << b AS l, a -|- b AS adj FROM (VALUES ('{[1,3),[5,7)}'::int4multirange), ('{}'), ('{[2,6)}'), ('{(,1)}')) x(a), (VALUES ('{[3,5)}'::int4multirange), ('{[0,10)}')) y(b) ORDER BY a, b
+fields a:4451:-1:-1,b:4451:-1:-1,u:4451:-1:-1,i:4451:-1:-1,m:4451:-1:-1,o:16:1:-1,c:16:1:-1,l:16:1:-1,adj:16:1:-1
+row {},{[0,10)},{[0,10)},{},{},f,f,f,f
+row {},{[3,5)},{[3,5)},{},{},f,f,f,f
+row {(,1)},{[0,10)},{(,10)},{[0,1)},{(,0)},t,f,f,f
+row {(,1)},{[3,5)},{(,1),[3,5)},{},{(,1)},f,f,t,f
+row {[1,3),[5,7)},{[0,10)},{[0,10)},{[1,3),[5,7)},{},t,f,f,f
+row {[1,3),[5,7)},{[3,5)},{[1,7)},{},{[1,3),[5,7)},f,f,f,f
+row {[2,6)},{[0,10)},{[0,10)},{[2,6)},{},t,f,f,f
+row {[2,6)},{[3,5)},{[2,6)},{[3,5)},{[2,3),[5,6)},t,t,f,f
+SELECT 8
+P q1|SELECT $1::int4multirange @> $2::int4, $1::int4multirange - $3::int4multirange
+X q1|{[1,5),[8,10)}|9|{[2,9)}
+row t,{[1,2),[9,10)}
+SELECT 1
+X q1|{}|1|{}
+row f,{}
+SELECT 1

@@ -1850,6 +1850,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/multirange.test")));
     }
 
+    /// The operators of the multiranges: union, difference and intersection, `multirange_minus_multi`, overlap, containment of a multirange, a range and a value, the position operators and adjacency with a multirange or a range on each side, the errors of the types that do not match, and a query with parameters. `connection/multirange_ops.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn multirange_ops() {
+        big_stack(|| script(include_str!("connection/multirange_ops.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {
