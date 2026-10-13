@@ -1785,6 +1785,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/bit.test")));
     }
 
+    /// The operators and functions of `point`, `lseg`, `line` and `box`: the comparisons with the tolerance of `EPSILON`, NaN, the arithmetic with the errors of overflow, underflow and division by zero, the distances, the closest points and the intersections. `connection/geofn.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn geofn() {
+        big_stack(|| script(include_str!("connection/geofn.test")));
+    }
+
     /// The geometric types `point`, `lseg`, `box`, `path`, `polygon`, `line` and `circle`: the text forms of each format with the errors of a bad value, `extra_float_digits`, the arrays, the soft errors and the text and binary forms of `COPY`. `connection/geo.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn geo() {

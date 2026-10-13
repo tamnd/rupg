@@ -17,6 +17,7 @@ mod compare;
 mod deparse;
 mod encoding;
 mod generated;
+mod geo;
 mod io;
 mod mac;
 mod math;
@@ -256,6 +257,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| cash::by_src(src))
         .or_else(|| mac::by_src(src))
         .or_else(|| bit::by_src(src))
+        .or_else(|| geo::by_src(src))
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
         .or_else(|| acl::by_src(src))
