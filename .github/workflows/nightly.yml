@@ -142,6 +142,38 @@ jobs:
           RUN: ${{ github.run_number }}
         run: python3 tests/realdisk/kill.py --bin target/release/rupg-crash --work "$RUNNER_TEMP/lazyfs-run" --lazyfs "$RUNNER_TEMP/lazyfs/lazyfs/build/lazyfs" --first-seed "$((RUN * 1000))" --rounds 200
 
+  # The pg_dump round trip of spec/21 section 21.4.1 with PostgreSQL 19 at the pin of CONTRIBUTING.md. See tests/dumprt/README.md.
+  dumprt:
+    name: pg_dump round trip
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: build PostgreSQL 19 at the pin
+        run: |
+          set -euo pipefail
+          sudo apt-get update -q
+          sudo apt-get install -yq meson ninja-build bison flex
+          git init -q "$RUNNER_TEMP/postgres"
+          cd "$RUNNER_TEMP/postgres"
+          git fetch -q --depth 1 https://github.com/postgres/postgres 7d3d2db7d5e533fa42a4202c7d308cbb0cbf9333
+          git checkout -q FETCH_HEAD
+          meson setup build --prefix "$RUNNER_TEMP/pg" --libdir lib -Dicu=disabled -Dreadline=disabled
+          ninja -C build install
+      - name: cargo build rupg-cli
+        run: cargo build -p rupg-cli
+      - name: round trip
+        run: python3 tests/dumprt/roundtrip.py --pg-bin "$RUNNER_TEMP/pg/bin" --rupg target/debug/rupg --work "$RUNNER_TEMP/dumprt"
+      - name: upload the dumps and the logs
+        if: failure()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: dumprt
+          path: ${{ runner.temp }}/dumprt/
+          if-no-files-found: ignore
+
   fuzz:
     name: fuzz ${{ matrix.target }}
     runs-on: ubuntu-24.04
