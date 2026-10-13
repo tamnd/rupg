@@ -95,6 +95,13 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::MACADDR8
             | oid::BIT
             | oid::VARBIT
+            | oid::POINT
+            | oid::LSEG
+            | oid::PATH
+            | oid::BOX
+            | oid::POLYGON
+            | oid::LINE
+            | oid::CIRCLE
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -159,6 +166,10 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
     }
     if let Value::Record(record) = value {
         return record_out(record, session, out);
+    }
+    if let (Some(kind), Value::Bytea(v)) = (types::GeoKind::from_oid(ty), value) {
+        types::geo_out(kind, v, session.extra_float_digits(), out);
+        return Ok(());
     }
     match (ty, value) {
         (oid::MONEY, Value::Int8(v)) => types::cash_out(*v, out),
@@ -394,6 +405,9 @@ fn input_value(
             Err(error) => Err(Failed::Soft(error)),
         };
     }
+    if let Some(kind) = types::GeoKind::from_oid(ty) {
+        return Ok(Value::Bytea(types::geo_in(kind, text)?));
+    }
     let value = match ty {
         oid::BOOL => Value::Bool(types::bool_in(text)?),
         oid::BYTEA => Value::Bytea(types::bytea_in(text)?),
@@ -536,6 +550,9 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
             return Err(Received::Engine(error));
         }
         return Ok(Value::Array(Box::new(array?)));
+    }
+    if let Some(kind) = types::GeoKind::from_oid(ty) {
+        return Ok(Value::Bytea(types::geo_recv(kind, recv)?));
     }
     let value = match ty {
         oid::BOOL => Value::Bool(recv.bool()?),
