@@ -1,0 +1,490 @@
+> SELECT '$'::jsonpath, 'strict $'::jsonpath, 'lax $'::jsonpath, '$.a'::jsonpath, '$.a.b'::jsonpath, '$."a b"'::jsonpath, '$.a[*]'::jsonpath, '$.*'::jsonpath, '$.**'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $,strict $,$,$."a",$."a"."b",$."a b",$."a"[*],$.*,$.**
+SELECT 1
+> SELECT '1 + 2'::jsonpath, '1 + 2 + 3'::jsonpath, '1 + (2 + 3)'::jsonpath, '1 * 2 + 3'::jsonpath, '1 + 2 * 3'::jsonpath, '-1'::jsonpath, '- -1'::jsonpath, '-$.a'::jsonpath, '+$.a'::jsonpath, '-(1 + 2)'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row (1 + 2),((1 + 2) + 3),(1 + (2 + 3)),(1 * 2 + 3),(1 + 2 * 3),-1,1,(-$."a"),(+$."a"),(-(1 + 2))
+SELECT 1
+> SELECT '$ ? (@ > 1)'::jsonpath, '$ ? (@ > 1 && @ < 5 || @ == 7)'::jsonpath, '$ ? (!(@ > 1))'::jsonpath, '$ ? ((@ > 1) is unknown)'::jsonpath, '$ ? (exists (@.a))'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $?(@ > 1),$?(@ > 1 && @ < 5 || @ == 7),$?(!(@ > 1)),$?((@ > 1) is unknown),$?(exists (@."a"))
+SELECT 1
+> SELECT '$.a starts with "x"'::jsonpath, '$.a starts with $v'::jsonpath, '$ like_regex "a.c"'::jsonpath, '$ like_regex "a" flag "ismq"'::jsonpath, '$ like_regex "a" flag "iiq"'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row ($."a" starts with "x"),($."a" starts with $"v"),($ like_regex "a.c"),($ like_regex "a" flag "ismq"),($ like_regex "a" flag "iq")
+SELECT 1
+> SELECT '$.a[1]'::jsonpath, '$.a[1, 2 to 3, last]'::jsonpath, '$.a[last - 1]'::jsonpath, '$[$.a]'::jsonpath, '$.**{2}'::jsonpath, '$.**{2 to 5}'::jsonpath, '$.**{last}'::jsonpath, '$.**{1 to last}'::jsonpath, '$.**{last to 2}'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."a"[1],$."a"[1,2 to 3,last],$."a"[last - 1],$[$."a"],$.**{2},$.**{2 to 5},$.**{last},$.**{1 to last},$.**{last to 2}
+SELECT 1
+> SELECT '$.type()'::jsonpath, '$.size().abs().floor().ceiling().double().keyvalue()'::jsonpath, '$.bigint().boolean().date().integer().number().string()'::jsonpath, '$.lower().upper().initcap()'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $.type(),$.size().abs().floor().ceiling().double().keyvalue(),$.bigint().boolean().date().integer().number().string(),$.lower().upper().initcap()
+SELECT 1
+> SELECT '$.datetime()'::jsonpath, '$.datetime("HH24")'::jsonpath, '$.time()'::jsonpath, '$.time(3)'::jsonpath, '$.time_tz(2)'::jsonpath, '$.timestamp()'::jsonpath, '$.timestamp_tz(1)'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $.datetime(),$.datetime("HH24"),$.time(),$.time(3),$.time_tz(2),$.timestamp(),$.timestamp_tz(1)
+SELECT 1
+> SELECT '$.decimal()'::jsonpath, '$.decimal(4)'::jsonpath, '$.decimal(4, 2)'::jsonpath, '$.decimal(+4, -2)'::jsonpath, '$.replace("a", "b")'::jsonpath, '$.split_part(",", 2)'::jsonpath, '$.split_part(",", -2)'::jsonpath, '$.ltrim()'::jsonpath, '$.rtrim("x")'::jsonpath, '$.btrim(" ")'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $.decimal(),$.decimal(4),$.decimal(4,2),$.decimal(4,-2),$.replace("a","b"),$.split_part(",",2),$.split_part(",",-2),$.ltrim(),$.rtrim("x"),$.btrim(" ")
+SELECT 1
+> SELECT '$.type'::jsonpath, '$.Type()'::jsonpath, '$.TYPE'::jsonpath, 'STRICT $'::jsonpath, '$.null'::jsonpath, '$.NULL'::jsonpath, '$.true'::jsonpath, '$.last'::jsonpath, '$.to.is.with.flag'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."type",$.type(),$."TYPE",strict $,$."null",$."NULL",$."true",$."last",$."to"."is"."with"."flag"
+SELECT 1
+> SELECT 'null'::jsonpath, 'true'::jsonpath, 'false'::jsonpath, '"abc"'::jsonpath, '$var'::jsonpath, '$"my var"'::jsonpath, '@'::text, '1.5'::jsonpath, '.5'::jsonpath, '5.'::jsonpath, '1e3'::jsonpath, '1.5e-3'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,text:25:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row null,true,false,"abc",$"var",$"my var",@,1.5,0.5,5,1000,0.0015
+SELECT 1
+> SELECT '0x1F'::jsonpath, '0o17'::jsonpath, '0b101'::jsonpath, '1_000'::jsonpath, '1_000.5_5'::jsonpath, '0'::jsonpath, '00'::text
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,text:25:-1:-1
+row 31,15,5,1000,1000.55,0,00
+SELECT 1
+> SELECT '(1).a'::jsonpath, '(1 + 2).a'::jsonpath, '($.a).b'::jsonpath, '($ > 1).a'::jsonpath, '"x".type()'::jsonpath, '$.a + $.b * $.c'::jsonpath, '$.a - ($.b - $.c)'::jsonpath, '($.a - $.b) - $.c'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row (1)."a",(1 + 2)."a",$."a"."b",($ > 1)."a","x".type(),($."a" + $."b" * $."c"),($."a" - ($."b" - $."c")),(($."a" - $."b") - $."c")
+SELECT 1
+> SELECT '$."\n\t\"\\x"'::jsonpath, '$.ab'::jsonpath, '"é\x41\u{1F600}"'::jsonpath, '$."\b\f\r\v"'::jsonpath, '$.\a'::jsonpath, '"\/"'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."\n\t\"\\x",$."ab","éA😀",$."\b\f\r\u000b",$."a","/"
+SELECT 1
+> SELECT '$ ? (@.a == 1 && (@.b == 2 || @.c == 3))'::jsonpath, '$ ? (@.a == 1 || @.b == 2 && @.c == 3)'::jsonpath, '$ ? ((@.a == 1 || @.b == 2) && @.c == 3)'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $?(@."a" == 1 && (@."b" == 2 || @."c" == 3)),$?(@."a" == 1 || @."b" == 2 && @."c" == 3),$?((@."a" == 1 || @."b" == 2) && @."c" == 3)
+SELECT 1
+> SELECT '$ ? (@ == "x" && !(@ starts with "y"))'::jsonpath, '$ ? (@ like_regex "^a" flag "i").b'::jsonpath, '$[*] ? (@ > 1) ? (@ < 5)'::jsonpath, '$.a ? (@ == $x).b[0]'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $?(@ == "x" && !(@ starts with "y")),$?(@ like_regex "^a" flag "i")."b",$[*]?(@ > 1)?(@ < 5),$."a"?(@ == $"x")."b"[0]
+SELECT 1
+> SELECT ''::jsonpath
+ERROR 22P02 invalid input syntax for type jsonpath: "" at 8
+> SELECT '   '::jsonpath
+ERROR 22P02 invalid input syntax for type jsonpath: "   " at 8
+> SELECT '/* x */'::jsonpath
+ERROR 22P02 invalid input syntax for type jsonpath: "/* x */" at 8
+> SELECT 'strict'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$ abc'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$ abc def'::jsonpath
+ERROR 42601 syntax error at or near " " of jsonpath input at 8
+> SELECT '$.a b'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$a b'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$.a.'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$ +'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$.1'::jsonpath
+ERROR 42601 syntax error at or near ".1" of jsonpath input at 8
+> SELECT '1a'::jsonpath
+ERROR 42601 trailing junk after numeric literal at or near "1a" of jsonpath input at 8
+> SELECT '1.a'::jsonpath
+ERROR 42601 trailing junk after numeric literal at or near "1.a" of jsonpath input at 8
+> SELECT '1e'::jsonpath
+ERROR 42601 trailing junk after numeric literal at or near "1e" of jsonpath input at 8
+> SELECT '1e+'::jsonpath
+ERROR 42601 invalid numeric literal at or near "1e+" of jsonpath input at 8
+> SELECT '1__0'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '0x'::jsonpath
+ERROR 42601 trailing junk after numeric literal at or near "0x" of jsonpath input at 8
+> SELECT '0x1g'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '"abc'::jsonpath
+ERROR 42601 unterminated quoted string at end of jsonpath input at 8
+> SELECT '$."abc'::jsonpath
+ERROR 42601 unterminated quoted string at end of jsonpath input at 8
+> SELECT '/* abc'::jsonpath
+ERROR 42601 unexpected end of comment at end of jsonpath input at 8
+> SELECT '"\u12"'::jsonpath
+ERROR 42601 invalid Unicode escape sequence at or near "\u12" of jsonpath input at 8
+> SELECT '"\x1"'::jsonpath
+ERROR 42601 invalid hexadecimal character sequence at or near "\x1" of jsonpath input at 8
+> SELECT '"\u0000"'::jsonpath
+ERROR 22P05 unsupported Unicode escape sequence at 8
+> SELECT '"\ud83d"'::jsonpath
+ERROR 22P02 invalid input syntax for type jsonpath at 8
+> SELECT '"\ude00"'::jsonpath
+ERROR 22P02 invalid input syntax for type jsonpath at 8
+> SELECT '"😀"'::jsonpath
+fields jsonpath:4072:-1:-1
+row "😀"
+SELECT 1
+> SELECT '"abc\'::jsonpath
+ERROR 42601 unexpected end after backslash at or near "\" of jsonpath input at 8
+> SELECT '@'::jsonpath
+ERROR 42601 @ is not allowed in root expressions at 8
+> SELECT '$.a[@]'::jsonpath
+ERROR 42601 @ is not allowed in root expressions at 8
+> SELECT 'last'::jsonpath
+ERROR 42601 LAST is allowed only in array subscripts at 8
+> SELECT '$ ? (last > 1)'::jsonpath
+ERROR 42601 LAST is allowed only in array subscripts at 8
+> SELECT '$[last ? (@ > last)]'::jsonpath
+fields jsonpath:4072:-1:-1
+row $[last?(@ > last)]
+SELECT 1
+> SELECT '@ + last'::jsonpath
+ERROR 42601 @ is not allowed in root expressions at 8
+> SELECT 'last + @'::jsonpath
+ERROR 42601 LAST is allowed only in array subscripts at 8
+> SELECT '$.decimal(1, 2, 3)'::jsonpath
+ERROR 42601 invalid input syntax for type jsonpath at 8
+> SELECT '$ like_regex "a" flag "z"'::jsonpath
+ERROR 42601 invalid input syntax for type jsonpath at 8
+> SELECT '$ like_regex "a" flag "x"'::jsonpath
+ERROR 0A000 XQuery "x" flag (expanded regular expressions) is not implemented at 8
+> SELECT '$ like_regex "a" flag "qx"'::jsonpath
+fields jsonpath:4072:-1:-1
+row ($ like_regex "a" flag "xq")
+SELECT 1
+> SELECT '$ like_regex "(a"'::jsonpath
+ERROR 2201B invalid regular expression: parentheses () not balanced at 8
+> SELECT '$.**{99999999999}'::jsonpath
+ERROR 22003 value "99999999999" is out of range for type integer at 8
+> SELECT '$ > 1 > 2'::jsonpath
+ERROR 42601 syntax error at or near ">" of jsonpath input at 8
+> SELECT '($ > 1) + 2'::jsonpath
+ERROR 42601 syntax error at or near "+" of jsonpath input at 8
+> SELECT '!($.a)'::jsonpath
+ERROR 42601 syntax error at or near ")" of jsonpath input at 8
+> SELECT '!($ > 1).a'::jsonpath
+ERROR 42601 syntax error at or near "." of jsonpath input at 8
+> SELECT '!($ > 1) is unknown'::jsonpath
+ERROR 42601 syntax error at or near " " of jsonpath input at 8
+> SELECT '(1) is unknown'::jsonpath
+ERROR 42601 syntax error at or near " " of jsonpath input at 8
+> SELECT 'exists($ > 1)'::jsonpath
+ERROR 42601 syntax error at or near ">" of jsonpath input at 8
+> SELECT 'exists(($ > 1))'::jsonpath
+ERROR 42601 syntax error at or near ")" of jsonpath input at 8
+> SELECT '-($ > 1)'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$ ? (true)'::jsonpath
+ERROR 42601 syntax error at or near ")" of jsonpath input at 8
+> SELECT '$ ? (@ == TRUE)'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$.a && $.b'::jsonpath
+ERROR 42601 syntax error at or near "&&" of jsonpath input at 8
+> SELECT '$.type('::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$.time("x")'::jsonpath
+ERROR 42601 syntax error at or near """ of jsonpath input at 8
+> SELECT '$[1, *]'::jsonpath
+ERROR 42601 syntax error at or near "*" of jsonpath input at 8
+> SELECT '$ = 1'::jsonpath
+ERROR 42601 syntax error at or near "=" of jsonpath input at 8
+> SELECT '$ ** 2'::jsonpath
+ERROR 42601 syntax error at or near "**" of jsonpath input at 8
+> SELECT '$.** * 2'::jsonpath
+fields jsonpath:4072:-1:-1
+row ($.** * 2)
+SELECT 1
+> SELECT '$ & 1'::jsonpath
+ERROR 42601 syntax error at or near "&" of jsonpath input at 8
+> SELECT '$#'::jsonpath
+ERROR 42601 syntax error at or near "#" of jsonpath input at 8
+> SELECT '$.a::text'::jsonpath
+ERROR 42601 syntax error at or near ":" of jsonpath input at 8
+> SELECT '$.a{1}'::jsonpath
+ERROR 42601 syntax error at or near "{" of jsonpath input at 8
+> SELECT '$.a/*c*/.b'::jsonpath
+ERROR 42601 syntax error at or near "." of jsonpath input at 8
+> SELECT '123abc'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '00'::jsonpath
+ERROR 42601 trailing junk after numeric literal at or near "00" of jsonpath input at 8
+> SELECT '1e5x'::jsonpath
+ERROR 42601 trailing junk after numeric literal at or near "1e5x" of jsonpath input at 8
+> SELECT '1e5xy'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '1.5e3abc'::jsonpath
+ERROR 42601 trailing junk after numeric literal at or near "1.5e3a" of jsonpath input at 8
+> SELECT '$ ? (@ == 1e1000000)'::jsonpath
+ERROR 22003 value overflows numeric format at 8
+> SELECT '$.**{0x10}'::jsonpath, '$.**{1_0 to 0b11}'::jsonpath, '$.**{0}'::jsonpath, '$.**{0 to last}'::jsonpath, '$.**{last to last}'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $.**{16},$.**{10 to 3},$.**{0},$.**,$.**{last}
+SELECT 1
+> SELECT '"\u{110000}"'::jsonpath
+ERROR 42601 invalid Unicode code point at 8
+> SELECT pg_input_is_valid('"\u{110000}"', 'jsonpath')
+fields pg_input_is_valid:16:1:-1
+row f
+SELECT 1
+> SELECT * FROM pg_input_error_info('"\u{110000}"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row could not convert Unicode to server encoding,NULL,NULL,42601
+SELECT 1
+> SELECT * FROM pg_input_error_info('"\ud83d"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type jsonpath,Unicode low surrogate must follow a high surrogate.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('"\ud83dx"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type jsonpath,Unicode low surrogate must follow a high surrogate.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('"\ude00"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type jsonpath,Unicode low surrogate must follow a high surrogate.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('"\ud83d\ud83d"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type jsonpath,Unicode high surrogate must not follow a high surrogate.,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('"\u0000"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row unsupported Unicode escape sequence,\u0000 cannot be converted to text.,NULL,22P05
+SELECT 1
+> SELECT * FROM pg_input_error_info('$.decimal(1, 2, 3)', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type jsonpath,.decimal() can only have an optional precision[,scale].,NULL,42601
+SELECT 1
+> SELECT * FROM pg_input_error_info('$ like_regex "a" flag "iw"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type jsonpath,Unrecognized flag character "w" in LIKE_REGEX predicate.,NULL,42601
+SELECT 1
+> SELECT * FROM pg_input_error_info('$ like_regex "a" flag "é"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type jsonpath,Unrecognized flag character "é" in LIKE_REGEX predicate.,NULL,42601
+SELECT 1
+> SELECT * FROM pg_input_error_info('$ like_regex "(a"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid regular expression: parentheses () not balanced,NULL,NULL,2201B
+SELECT 1
+> SELECT * FROM pg_input_error_info('$ like_regex "a" flag "x"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row XQuery "x" flag (expanded regular expressions) is not implemented,NULL,NULL,0A000
+SELECT 1
+> SELECT * FROM pg_input_error_info('', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid input syntax for type jsonpath: "",NULL,NULL,22P02
+SELECT 1
+> SELECT * FROM pg_input_error_info('$ ? (@ > 1', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row syntax error at end of jsonpath input,NULL,NULL,42601
+SELECT 1
+> SELECT * FROM pg_input_error_info('@', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row @ is not allowed in root expressions,NULL,NULL,42601
+SELECT 1
+> SELECT pg_input_is_valid('$.a', 'jsonpath'), pg_input_is_valid('$.a +', 'jsonpath'), pg_input_is_valid('last', 'jsonpath')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT pg_input_is_valid('$.**{99999999999}', 'jsonpath')
+fields pg_input_is_valid:16:1:-1
+ERROR 22003 value "99999999999" is out of range for type integer
+> SELECT '"ሴ5"'::jsonpath, '"\u{1234567}"'::text
+fields jsonpath:4072:-1:-1,text:25:-1:-1
+row "ሴ5","\u{1234567}"
+SELECT 1
+> SELECT '"\u{1234567}"'::jsonpath
+ERROR 42601 invalid Unicode escape sequence at or near "\u{123456" of jsonpath input at 8
+> SELECT '"\uZ"'::jsonpath
+ERROR 42601 invalid Unicode escape sequence at or near "\u" of jsonpath input at 8
+> SELECT '"\xZ"'::jsonpath
+ERROR 42601 invalid hexadecimal character sequence at or near "\x" of jsonpath input at 8
+> SELECT '"\x41\x7a"'::jsonpath, '"a\qb\é"'::jsonpath, '$.Abc'::jsonpath, '$.aB'::jsonpath, '$.\x41'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row "Az","aqbé",$."Abc",$."aB",$."A"
+SELECT 1
+> SELECT '$.true'::jsonpath, '$var.a'::jsonpath, '$1'::jsonpath, '$"x\"y"'::jsonpath, '$"x"[0]'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."true",$"var"."a",$"1",$"x\"y",$"x"[0]
+SELECT 1
+> SELECT '$."a"."b"'::jsonpath, '$.a."b c".d'::jsonpath, '$."".a'::jsonpath, '$.é'::jsonpath, '$.a1_b'::jsonpath, '$._x'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."a"."b",$."a"."b c"."d",$.""."a",$."é",$."a1_b",$."_x"
+SELECT 1
+> SELECT 'strict $.a ? (@.b == 1).c'::jsonpath, 'LAX $'::jsonpath, 'Strict $'::jsonpath, 'lax 1'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row strict $."a"?(@."b" == 1)."c",$,strict $,1
+SELECT 1
+> SELECT '$.a[1 + 2, $.b to last]'::jsonpath, '$[last - 1 to last]'::jsonpath, '$[(1)]'::jsonpath, '$[1].a[2]'::jsonpath, '$[*][*]'::jsonpath, '$.a[*].**{1}.*'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."a"[1 + 2,$."b" to last],$[last - 1 to last],$[1],$[1]."a"[2],$[*][*],$."a"[*].**{1}.*
+SELECT 1
+> SELECT '-1 * 2'::jsonpath, '-$.a * 2'::jsonpath, '-(1).a'::jsonpath, '+1'::jsonpath, '-0'::jsonpath, '- - $'::jsonpath, '-(-$)'::jsonpath, '1 - -1'::jsonpath, '1 - - $'::jsonpath, '(1 * 2) * 3'::jsonpath, '1 * (2 * 3)'::jsonpath, '1 / 2 % 3'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row (-1 * 2),(-$."a" * 2),(-(1)."a"),1,0,(-(-$)),(-(-$)),(1 - -1),(1 - -$),((1 * 2) * 3),(1 * (2 * 3)),((1 / 2) % 3)
+SELECT 1
+> SELECT '$ ? (@ like_regex "a" && @ starts with "b")'::jsonpath, '$ ? ((@ + 1) like_regex "a")'::jsonpath, '$ ? (-@ like_regex "a")'::jsonpath, '$ ? (@ like_regex "a" flag "")'::jsonpath, '$ ? (@ like_regex "a\\d" flag "q")'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $?(@ like_regex "a" && @ starts with "b"),$?((@ + 1) like_regex "a"),$?((-@) like_regex "a"),$?(@ like_regex "a"),$?(@ like_regex "a\\d" flag "q")
+SELECT 1
+> SELECT '$ ? (!exists(@.a))'::jsonpath, '$ ? (exists(@ ? (@ > 1)))'::jsonpath, '$ ? (!(@ == 1) && ((@ == 2) is unknown))'::jsonpath, 'exists($)'::jsonpath, '$ == 1'::jsonpath, '($ == 1) is unknown'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $?(!(exists (@."a"))),$?(exists (@?(@ > 1))),$?(!(@ == 1) && (@ == 2) is unknown),exists ($),($ == 1),($ == 1) is unknown
+SELECT 1
+> SELECT '$.a ? ($.b > 1)'::jsonpath, '$ ? (@.a ? (@ > 1) > 2)'::jsonpath, '1 + $'::jsonpath, '(1 + $).a'::jsonpath, '($).a'::jsonpath, '(($.a))'::jsonpath, '((1 == 1))'::jsonpath, '(($ > 1)).a'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."a"?($."b" > 1),$?(@."a"?(@ > 1) > 2),(1 + $),(1 + $)."a",$."a",$."a",(1 == 1),($ > 1)."a"
+SELECT 1
+> SELECT '$.datetime().time().type()'::jsonpath, '$.split_part("", +1)'::jsonpath, '$.decimal(0, 0)'::jsonpath, '$.replace("\n", "\"")'::jsonpath, '$.time(0x10)'::jsonpath, '$.decimal(1_0)'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $.datetime().time().type(),$.split_part("",1),$.decimal(0,0),$.replace("\n","\""),$.time(16),$.decimal(10)
+SELECT 1
+> SELECT '$.exists'::jsonpath, '$.like_regex'::jsonpath, '$.starts'::jsonpath, '$.unknown'::jsonpath, '$.strict'::jsonpath, '$.lax'::jsonpath, '$.datetime'::jsonpath, '$.decimal'::jsonpath, '$.split_part'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."exists",$."like_regex",$."starts",$."unknown",$."strict",$."lax",$."datetime",$."decimal",$."split_part"
+SELECT 1
+> SELECT '$.a'::jsonpath::text, '$.a'::text::jsonpath, ARRAY['$.a', 'strict $[*]']::jsonpath[], '$'::jsonpath IS NULL
+fields text:25:-1:-1,jsonpath:4072:-1:-1,array:4073:-1:-1,?column?:16:1:-1
+row $."a",$."a",{"$.\"a\"","strict $[*]"},f
+SELECT 1
+> SELECT '$ ? (@ == null || @ == true || @ == false || @ == "s" || @ == 1.5 || @ == $v)'::jsonpath
+fields jsonpath:4072:-1:-1
+row $?(((((@ == null || @ == true) || @ == false) || @ == "s") || @ == 1.5) || @ == $"v")
+SELECT 1
+> SELECT '$.time(-1)'::jsonpath
+ERROR 42601 syntax error at or near "-" of jsonpath input at 8
+> SELECT '$.decimal(1.5)'::jsonpath
+ERROR 42601 syntax error at or near "1.5" of jsonpath input at 8
+> SELECT '$.split_part("a", "b")'::jsonpath
+ERROR 42601 syntax error at or near """ of jsonpath input at 8
+> SELECT '$.replace("a")'::jsonpath
+ERROR 42601 syntax error at or near ")" of jsonpath input at 8
+> SELECT '$.**{-1}'::jsonpath
+ERROR 42601 syntax error at or near "-" of jsonpath input at 8
+> SELECT '$.**{1'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$[1 2]'::jsonpath
+ERROR 42601 syntax error at or near "2" of jsonpath input at 8
+> SELECT '$[]'::jsonpath
+ERROR 42601 syntax error at or near "]" of jsonpath input at 8
+> SELECT '$ ? ()'::jsonpath
+ERROR 42601 syntax error at or near ")" of jsonpath input at 8
+> SELECT '$ ? (@ starts "a")'::jsonpath
+ERROR 42601 syntax error at or near """ of jsonpath input at 8
+> SELECT '$ ? (@ starts with 1)'::jsonpath
+ERROR 42601 syntax error at or near "1" of jsonpath input at 8
+> SELECT '$ ? (@ like_regex 1)'::jsonpath
+ERROR 42601 syntax error at or near "1" of jsonpath input at 8
+> SELECT '$ ? (@ like_regex "a" flag 1)'::jsonpath
+ERROR 42601 syntax error at or near "1" of jsonpath input at 8
+> SELECT '$ ? (@ like_regex "a" junk)'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$ like_regex "(a" flag "z"'::jsonpath
+ERROR 42601 invalid input syntax for type jsonpath at 8
+> SELECT '$ like_regex "(a" junk'::jsonpath
+ERROR 2201B invalid regular expression: parentheses () not balanced at 8
+> SELECT '$.decimal(1, 2, 3) junk'::jsonpath
+ERROR 42601 invalid input syntax for type jsonpath at 8
+> SELECT '$ ? (@ > 1) is unknown'::jsonpath
+ERROR 42601 syntax error at or near " " of jsonpath input at 8
+> SELECT '$ ? ((@ > 1) is unknown is unknown)'::jsonpath
+ERROR 42601 syntax error at or near " " of jsonpath input at 8
+> SELECT 'lax strict $'::jsonpath
+ERROR 42601 syntax error at or near " " of jsonpath input at 8
+> SELECT '$ strict'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT 'true && false'::jsonpath
+ERROR 42601 syntax error at or near "&&" of jsonpath input at 8
+> SELECT '!true'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$.a.type ()'::jsonpath
+fields jsonpath:4072:-1:-1
+row $."a".type()
+SELECT 1
+> SELECT '$.a. b'::jsonpath, '$ .a'::jsonpath, '$ [1]'::jsonpath, '$ ? (@)'::text
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,text:25:-1:-1
+row $."a"."b",$."a",$[1],$ ? (@)
+SELECT 1
+> SELECT '$.a.type ( )'::jsonpath
+fields jsonpath:4072:-1:-1
+row $."a".type()
+SELECT 1
+> SELECT '$ ? (@ == "a" "b")'::jsonpath
+ERROR 42601 syntax error at or near """ of jsonpath input at 8
+> SELECT 'é'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$.a == $.b == 1'::jsonpath
+ERROR 42601 syntax error at or near "==" of jsonpath input at 8
+> SELECT '|| 1'::jsonpath
+ERROR 42601 syntax error at or near "||" of jsonpath input at 8
+> SELECT '$ /* c */ .a'::jsonpath, '$.a /*c*/'::jsonpath, '$ . a'::jsonpath, '  $  '::jsonpath, '$/**/.a'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."a",$."a",$."a",$,$."a"
+SELECT 1
+> SELECT '$.a/***/[1]'::jsonpath
+ERROR 42601 syntax error at or near "[" of jsonpath input at 8
+> SELECT '$.a/*c*/'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '"😀A"'::jsonpath, '"\u{41}\u{1F600}"'::jsonpath, '"\uD83D\uDE00\u0041"'::jsonpath, '"\u{0041}\\"'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row "😀A","A😀","😀A","A\\"
+SELECT 1
+> SELECT '$."A\"'::jsonpath
+ERROR 42601 unterminated quoted string at end of jsonpath input at 8
+> SELECT '"\ud83d\u0041"'::jsonpath
+ERROR 22P02 invalid input syntax for type jsonpath at 8
+> SELECT '$.a\u0041\x42\n'::jsonpath, '$."\u0041"'::jsonpath, '$.\u0041 ? (@ > 1)'::jsonpath
+fields jsonpath:4072:-1:-1,jsonpath:4072:-1:-1,jsonpath:4072:-1:-1
+row $."aAB\n",$."A",$."A"?(@ > 1)
+SELECT 1
+> SELECT '$\u0041'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$x\u0041'::jsonpath
+ERROR 42601 syntax error at end of jsonpath input at 8
+> SELECT '$.a\'::jsonpath
+ERROR 42601 unexpected end after backslash at or near "\" of jsonpath input at 8
+> SELECT '"\u{}"'::jsonpath
+ERROR 42601 invalid Unicode escape sequence at or near "\u{" of jsonpath input at 8
+> SELECT '"\u{12345678}"'::jsonpath
+ERROR 42601 invalid Unicode escape sequence at or near "\u{123456" of jsonpath input at 8
+> SELECT pg_input_is_valid('1e1000000', 'jsonpath')
+fields pg_input_is_valid:16:1:-1
+ERROR 22003 value overflows numeric format
+> SELECT '1e1000000'::jsonpath
+ERROR 22003 value overflows numeric format at 8
+> SELECT pg_typeof('$'::jsonpath), '$.a'::jsonpath::text = '$."a"', ARRAY['$.a ? (@ > 1)']::jsonpath[]::text, NULL::jsonpath IS NULL
+fields pg_typeof:2206:4:-1,?column?:16:1:-1,array:25:-1:-1,?column?:16:1:-1
+row jsonpath,t,{"$.\"a\"?(@ > 1)"},t
+SELECT 1
+> SELECT '$.a'::jsonpath::text || '!', length('$.**{1 to 2}'::jsonpath::text)
+fields ?column?:25:-1:-1,length:23:4:-1
+row $."a"!,12
+SELECT 1
+> SELECT x::jsonpath FROM (VALUES ('$.b'), ('strict $.a[last]'), ('$ ? (@.c like_regex "^x" flag "im")')) AS v(x)
+fields x:4072:-1:-1
+row $."b"
+row strict $."a"[last]
+row $?(@."c" like_regex "^x" flag "im")
+SELECT 3
+> SELECT * FROM pg_input_error_info('$.a/*', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row unexpected end of comment at end of jsonpath input,NULL,NULL,42601
+SELECT 1
+> SELECT * FROM pg_input_error_info('$ ? (@ like_regex "[")', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row invalid regular expression: brackets [] not balanced,NULL,NULL,2201B
+SELECT 1
+> SELECT * FROM pg_input_error_info('$."\u{110000}"', 'jsonpath')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row could not convert Unicode to server encoding,NULL,NULL,42601
+SELECT 1
+> COPY (SELECT '$.a ? (@ > 1)'::jsonpath AS a, 'strict $[*]'::jsonpath AS b) TO STDOUT
+copy out 0 0,0
+data $.\"a\"?(@ > 1)\tstrict $[*]\n
+copy done
+COPY 1
+> COPY (SELECT '$.a ? (@ > 1)'::jsonpath AS a, 'strict $[*]'::jsonpath AS b) TO STDOUT WITH (FORMAT binary)
+copy out 1 1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x02\x00\x00\x00\x0e\x01$.\"a\"?(@ > 1)\x00\x00\x00\x0c\x01strict $[*]
+data \xff\xff
+copy done
+COPY 1
+P q1|SELECT $1::jsonpath
+X q1|$.a.b
+row $."a"."b"
+SELECT 1
+X q1|strict $ ? (@ like_regex "x")
+row strict $?(@ like_regex "x")
+SELECT 1
+X q1|$ +
+ERROR 42601 syntax error at end of jsonpath input (unnamed portal parameter $1 = '...')

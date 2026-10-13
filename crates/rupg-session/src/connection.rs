@@ -1874,6 +1874,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/tsquery.test")));
     }
 
+    /// The type `jsonpath`: the text input with its keys, variables, literals, operators, filters, subscripts and methods, the escapes and the comments, the errors of the scanner and of the parser at the same token as PostgreSQL, the checks of `@` and `last`, the output, arrays of `jsonpath`, `pg_input_is_valid`, `pg_input_error_info`, the text and binary forms of `COPY` and a query with parameters. `connection/jsonpath.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn jsonpath() {
+        big_stack(|| script(include_str!("connection/jsonpath.test")));
+    }
+
     /// The operators `@@` and `@@@` of `tsvector` and `tsquery`: the operators `&`, `|` and `!`, weights, prefixes, a vector with no positions, `<->` and `<N>` with `!`, `&` and `|` under them, the largest distance, the bits of a position that PostgreSQL keeps, `GROUP BY` and a query with parameters. `connection/ts_match.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn ts_match() {

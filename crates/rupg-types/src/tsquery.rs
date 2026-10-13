@@ -55,7 +55,7 @@ fn is_operator(c: char) -> bool {
 }
 
 /// The error of `check_stack_depth`.
-fn too_deep() -> TypeError {
+pub(crate) fn too_deep() -> TypeError {
     let mut error =
         TypeError::new(SqlState::STATEMENT_TOO_COMPLEX, "stack depth limit exceeded".to_string());
     error.hint = Some("Increase the configuration parameter \"max_stack_depth\" (currently 2048kB), after ensuring the platform's stack depth limit is adequate.".to_string());

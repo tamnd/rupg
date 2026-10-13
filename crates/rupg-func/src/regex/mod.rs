@@ -195,6 +195,11 @@ pub fn auth_compile(pattern: &str) -> std::result::Result<(), &'static str> {
     Regex::compile(pattern, flags::ADVANCED).map(drop).map_err(Code::message)
 }
 
+/// The check of the pattern of `like_regex` in a `jsonpath`: the message of `pg_regerror` when `pattern` is not valid with the `cflags`.
+pub(crate) fn validate(pattern: &str, cflags: u32) -> std::result::Result<(), String> {
+    Regex::compile(pattern, cflags).map(drop).map_err(|code| code.message().to_string())
+}
+
 /// `regexec_auth_token`: find the regular expression `pattern` of [`auth_compile`] in `s`. The result is `None` when the pattern does not match.
 ///
 /// # Errors
