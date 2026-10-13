@@ -1874,6 +1874,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/tsquery.test")));
     }
 
+    /// The operators `@@` and `@@@` of `tsvector` and `tsquery`: the operators `&`, `|` and `!`, weights, prefixes, a vector with no positions, `<->` and `<N>` with `!`, `&` and `|` under them, the largest distance, the bits of a position that PostgreSQL keeps, `GROUP BY` and a query with parameters. `connection/ts_match.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_match() {
+        big_stack(|| script(include_str!("connection/ts_match.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {

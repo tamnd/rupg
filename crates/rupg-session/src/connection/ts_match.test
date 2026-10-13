@@ -1,0 +1,85 @@
+> SELECT 'a fat cat sat on a mat'::tsvector @@ 'cat'::tsquery, 'a fat cat'::tsvector @@ 'dog'::tsquery, 'cat'::tsquery @@ 'a fat cat'::tsvector, 'a b'::tsvector @@ ''::tsquery
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 163
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f
+SELECT 1
+> SELECT 'a b c'::tsvector @@ 'a & b'::tsquery, 'a b c'::tsvector @@ 'a & d'::tsquery, 'a b c'::tsvector @@ 'd | c'::tsquery, 'a b c'::tsvector @@ '!d'::tsquery, 'a b c'::tsvector @@ '!a'::tsquery, 'a b c'::tsvector @@ 'a & !(b | d)'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f,f
+SELECT 1
+> SELECT 'a:1A b:2B c:3C d:4'::tsvector @@ 'a:A'::tsquery, 'a:1A b:2B c:3C d:4'::tsvector @@ 'a:B'::tsquery, 'a:1A b:2B c:3C d:4'::tsvector @@ 'd:D'::tsquery, 'a:1A b:2B c:3C d:4'::tsvector @@ 'c:AB'::tsquery, 'a:1A b:2B c:3C d:4'::tsvector @@ 'b:BC'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t
+SELECT 1
+> SELECT 'a b c'::tsvector @@ 'a:A'::tsquery, strip('a:1A'::tsvector) @@ 'a:B'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT 'cat catalog dog'::tsvector @@ 'cat:*'::tsquery, 'catalog dog'::tsvector @@ 'cat:*'::tsquery, 'ca dog'::tsvector @@ 'cat:*'::tsquery, 'catalog:1A cats:2B'::tsvector @@ 'cat:*C'::tsquery, 'catalog:1A cats:2B'::tsvector @@ 'cat:*B'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,f,t
+SELECT 1
+> SELECT 'a:1 b:2 c:3'::tsvector @@ 'a <-> b'::tsquery, 'a:1 b:2 c:3'::tsvector @@ 'b <-> a'::tsquery, 'a:1 b:2 c:3'::tsvector @@ 'a <2> c'::tsquery, 'a:1 b:2 c:3'::tsvector @@ 'a <-> c'::tsquery, 'a:1 b:2 c:3'::tsvector @@ 'a <0> a'::tsquery, 'a:1 b:2 c:3'::tsvector @@ 'a <-> b <-> c'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,t
+SELECT 1
+> SELECT 'a b c'::tsvector @@ 'a <-> b'::tsquery, 'a b c'::tsvector @@ 'a & b <-> c'::tsquery, 'a b c'::tsvector @@ 'a | b <-> c'::tsquery, 'a:1 b c'::tsvector @@ 'a <-> b'::tsquery, 'a:1 b c'::tsvector @@ 'a <-> x'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,f,t,f,f
+SELECT 1
+> SELECT 'a:1 b:2 c:3 d:4'::tsvector @@ 'a <-> !c'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ 'a <-> !b'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '!a <-> b'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '!b <-> c'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '!x <-> b'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '!a <-> !b'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,f,t,t
+SELECT 1
+> SELECT 'a:1 b:2 c:3 d:4'::tsvector @@ 'a <-> (b | x)'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ 'a <-> (x | !b)'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '(a <-> b) <-> (c <-> d)'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ 'a <-> (b <-> c | d)'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ 'a <3> (b & d)'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f
+SELECT 1
+> SELECT 'a:1 b:2 c:3 d:4'::tsvector @@ '(a | b) <-> (c | x)'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '(a & b) <-> c'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '(a & !x) <-> b'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '(!a & !x) <-> c'::tsquery, 'a:1 b:2 c:3 d:4'::tsvector @@ '(!a | !b) <-> c'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,t
+SELECT 1
+> SELECT 'a:1,5 b:2,9 c:3'::tsvector @@ 'b <-> a'::tsquery, 'a:1,5 b:2,6 c:3'::tsvector @@ 'a <-> b <-> c'::tsquery, 'a:1,5 b:2,6 c:7'::tsvector @@ 'a <-> b <-> c'::tsquery, 'a:1A b:2B'::tsvector @@ 'a:A <-> b:A'::tsquery, 'a:1A b:2B'::tsvector @@ 'a:A <-> b:B'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t,f,t
+SELECT 1
+> SELECT 'cat:1 catalog:2 dog:3'::tsvector @@ 'cat:* <-> dog'::tsquery, 'cat:1 catalog:5 dog:3'::tsvector @@ 'cat:* <-> dog'::tsquery, 'cat:1 catalog dog:3'::tsvector @@ 'cat:* <-> dog'::tsquery, 'cat:1A catalog:2B dog:3'::tsvector @@ 'cat:*A <-> dog'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,f
+SELECT 1
+> SELECT 'a:16383 b:1'::tsvector @@ 'b <16382> a'::tsquery, 'a:16383 b:1'::tsvector @@ 'b <16384> a'::tsquery, 'a:16383 b:16383'::tsvector @@ 'b <16384> a'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT 'a:1 b:6 c:16383 d:5'::tsvector @@ '((a <5> b) | c) <-> d'::tsquery, 'a:1 b:6 c:16383 d:7'::tsvector @@ '((a <5> b) | c) <-> d'::tsquery, 'a:1 b:2 c:5'::tsvector @@ '(a <-> b | c) <-> d'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,f
+SELECT 1
+> SELECT 'a:1 b:2 c:3'::tsvector @@ '(a <-> b) & c'::tsquery, 'a:1 b:2 c:3'::tsvector @@ '(a <-> b) & !c'::tsquery, 'a b:2'::tsvector @@ '!(a <-> b)'::tsquery, strip('a:1 b:2'::tsvector) @@ '!(a <-> b)'::tsquery, 'a:1 b:2'::tsvector @@ '!a <-> !b'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,t
+SELECT 1
+> SELECT 'a:1 b:3'::tsvector @@ 'a <2> b'::tsquery, 'a:1 b:3'::tsvector @@ 'a <1> b'::tsquery, 'a:3 b:3'::tsvector @@ 'a <0> b'::tsquery, 'a:1 b:2 c:3'::tsvector @@ '!(a <-> b)'::tsquery, 'a:1 b:2 c:3'::tsvector @@ '!(a <-> c)'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t
+SELECT 1
+> SELECT v @@ 'fat & cat'::tsquery AS m, count(*) FROM (VALUES ('fat cat'::tsvector), ('cat'), ('fat rat'), ('a fat black cat')) AS t(v) GROUP BY 1 ORDER BY 1
+fields m:16:1:-1,count:20:8:-1
+row f,2
+row t,2
+SELECT 2
+> SELECT 'a:1 b:2'::tsvector @@@ 'a <-> b'::tsquery, 'a <-> b'::tsquery @@@ 'a:1 b:2'::tsvector
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+P m1|SELECT $1::tsvector @@ $2::tsquery
+X m1|a:1 b:2|a <-> b
+row t
+SELECT 1
+X m1|a:1 b:2|b <-> a
+row f
+SELECT 1
+X m1|a:1 b:2|
+NOTICE 00000 text-search query doesn't contain lexemes: "" (unnamed portal parameter $2 = '')
+row f
+SELECT 1

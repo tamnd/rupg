@@ -34,6 +34,7 @@ mod snapshot;
 mod srf;
 mod stat;
 mod text;
+mod tsmatch;
 mod tsquery;
 mod tsvector;
 mod updatable;
@@ -284,6 +285,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| multirange::by_src(src))
         .or_else(|| tsvector::by_src(src))
         .or_else(|| tsquery::by_src(src))
+        .or_else(|| tsmatch::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))
