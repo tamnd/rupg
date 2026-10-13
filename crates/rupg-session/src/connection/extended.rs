@@ -233,7 +233,7 @@ impl Connection {
                 let reader = self.reader();
                 let made = query::plan(node, &reader, &given);
                 let mut notices: Vec<Notice> =
-                    reader.take_warnings().into_iter().map(Notice::warning).collect();
+                    reader.take_warnings().into_iter().map(Notice::of_function).collect();
                 drop(reader);
                 self.notices(&mut notices, &text, &[], out);
                 let made = made.map_err(|error| Failed {
@@ -287,19 +287,31 @@ impl Connection {
         self.portals.make_room(bind.portal)?;
         let formats = values.formats;
         let mut params = Vec::new();
+        let reader = self.reader();
         for (i, &type_oid) in statement.params.iter().enumerate() {
             let value = values.next().transpose()?.flatten();
             let format = formats.of(i);
             let result = if statement.plan.is_some() {
-                query::param(type_oid, format, value, i + 1, &self.reader()).map(|v| params.push(v))
+                query::param(type_oid, format, value, i + 1, &reader).map(|v| params.push(v))
             } else {
                 param::check(type_oid, format, value, i + 1)
             };
+            let text = value.filter(|_| format == 0).and_then(|v| std::str::from_utf8(v).ok());
+            // A notice of an input function, such as the notice of `tsqueryin` for a query with no lexemes, has the context of the parameter.
+            let mut notices: Vec<Notice> = reader
+                .take_warnings()
+                .into_iter()
+                .map(|error| {
+                    let context = self.param_context(bind.portal, i + 1, text);
+                    Notice::of_function(error.with_context(context))
+                })
+                .collect();
+            self.notices(&mut notices, "", &[], out);
             result.map_err(|error| {
-                let text = value.filter(|_| format == 0).and_then(|v| std::str::from_utf8(v).ok());
                 error.with_context(self.param_context(bind.portal, i + 1, text))
             })?;
         }
+        drop(reader);
         let result_formats = values.finish()?;
         // `GetCachedPlan` plans the query with the values of the parameters, as a custom plan, before the portal takes the formats of the result.
         let plan = match &statement.plan {

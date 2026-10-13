@@ -30,7 +30,7 @@
 //!
 //! [`Recv`], the binary input of a `Bind` parameter, with the errors of PostgreSQL when the value is too short or too long. The binary output of the other types is the value in big-endian bytes.
 //!
-//! [`Lexeme`], one lexeme of a `tsvector` with its positions, with [`tsvector_parse`], [`tsvector_deparse`], [`tsvector_recv`] and [`tsvector_send`]. [`tsvector_cmp`] is the order of the B-tree operator class, and [`unique_positions`] puts positions in order as the input function does.
+//! [`Lexeme`], one lexeme of a `tsvector` with its positions, with [`tsvector_parse`], [`tsvector_deparse`], [`tsvector_recv`] and [`tsvector_send`]. [`tsvector_cmp`] is the order of the B-tree operator class, and [`unique_positions`] puts positions in order as the input function does. [`QueryItem`], one operand or operator of a `tsquery`, with [`tsquery_parse`], [`tsquery_deparse`], [`tsquery_recv`] and [`tsquery_send`]. [`tsquery_cmp`] is the order of the B-tree operator class.
 //!
 //! [`unicode`], the four Unicode normalization forms, and [`tz`], the time zones of the IANA data.
 //!
@@ -42,7 +42,7 @@
 //!
 //! [`pg_ndistinct_in`] and [`pg_dependencies_in`] read the JSON text of the types of the extended statistics with the details of the errors of PostgreSQL, and give the bytes of the value. [`pg_ndistinct_out`] and [`pg_dependencies_out`] write the text from the bytes.
 //!
-//! PostgreSQL parses `json` by recursion and stops a deep value with `stack depth limit exceeded` when it reaches `max_stack_depth`. [`json_in`] uses no recursion and takes a value at any depth.
+//! PostgreSQL parses `json` by recursion and stops a deep value with `stack depth limit exceeded` when it reaches `max_stack_depth`. [`json_in`] uses no recursion and takes a value at any depth. PostgreSQL stops a deep `tsquery` in the same way. [`tsquery_parse`] gives the same error for a query with 1000 levels, as the analyzer does for an expression.
 //!
 //! The text and binary forms are lifted from `crates/rudb-pgtypes` of tamnd/rudb at f5f7065a (spec/04 section 4.9). The `DataRow` encoder and the `Bind` decoder of that crate need the executor, so they come with rupg-server.
 
@@ -74,6 +74,7 @@ mod snapshot;
 mod stats;
 mod string;
 mod tid;
+mod tsquery;
 mod tsvector;
 mod typeid;
 mod types;
@@ -139,6 +140,11 @@ pub use snapshot::{Snapshot, snapshot_in, snapshot_out, snapshot_recv};
 pub use stats::{pg_dependencies_in, pg_dependencies_out, pg_ndistinct_in, pg_ndistinct_out};
 pub use string::{bpchar_coerce, bpchar_in, varchar_coerce, varchar_in};
 pub use tid::{tid_in, tid_out};
+pub use tsquery::{
+    QueryItem, TSQUERY_AND, TSQUERY_MAX_DISTANCE, TSQUERY_NOT, TSQUERY_OR, TSQUERY_PHRASE,
+    legacy_crc32, tsquery_bad_distance, tsquery_cmp, tsquery_contains, tsquery_deparse,
+    tsquery_join, tsquery_parse, tsquery_recv, tsquery_send, tsquery_tree,
+};
 pub use tsvector::{
     Lexeme, TSVECTOR_MAX_DATA, TSVECTOR_MAX_POSITIONS, TSVECTOR_MAX_WORD, limit_position,
     position_of, ts_compare_string, tsvector_cmp, tsvector_data_len, tsvector_deparse,

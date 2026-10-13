@@ -433,6 +433,13 @@ fn write_value(value: &Value, out: &mut String) {
             hex(&bytes, out);
             out.push(')');
         }
+        Value::TsQuery(items) => {
+            let mut bytes = Vec::new();
+            rupg_types::tsquery_send(items, &mut bytes);
+            out.push_str("(tsquery ");
+            hex(&bytes, out);
+            out.push(')');
+        }
         Value::Range(range) => write_range(range, out),
         Value::Multirange(ranges) => {
             out.push_str("(multirange");
@@ -789,6 +796,17 @@ fn value_of(item: &Item) -> Result<Value> {
                 .map_err(|_| bad("the bytes of a tsvector"))?;
             Value::TsVector(value)
         }
+        "tsquery" => {
+            let bytes = bytes_of(part(0)?)?;
+            // The binary input takes no empty query, so the count 0 is the empty query here.
+            if bytes == [0; 4] {
+                Value::TsQuery(Vec::new())
+            } else {
+                let value = rupg_types::tsquery_recv(&mut Recv::new(&bytes))
+                    .map_err(|_| bad("the bytes of a tsquery"))?;
+                Value::TsQuery(value)
+            }
+        }
         "oid" => Value::Oid(number(part(0)?)?),
         "char" => Value::Char(number(part(0)?)?),
         "text" => match parts.first() {
@@ -930,6 +948,13 @@ mod tests {
                     rupg_types::tsvector_parse("'it''s':3A a b:1,2C").expect("tsvector"),
                 ),
                 oid::TSVECTOR,
+            ),
+            (Value::TsQuery(Vec::new()), oid::TSQUERY),
+            (
+                Value::TsQuery(
+                    rupg_types::tsquery_parse("'it''s':A* & !(b | c <2> d)").expect("tsquery"),
+                ),
+                oid::TSQUERY,
             ),
             (
                 Value::Multirange(vec![

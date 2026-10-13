@@ -180,7 +180,7 @@ pub fn word_too_long(len: usize) -> TypeError {
 }
 
 /// `isspace` of C for the byte of a character. A character that is not ASCII is not a space.
-fn is_space(c: char) -> bool {
+pub(crate) fn is_space(c: char) -> bool {
     matches!(c, ' ' | '\t' | '\n' | '\r' | '\u{0b}' | '\u{0c}')
 }
 
