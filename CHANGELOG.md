@@ -4,6 +4,16 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.20 (2026-10-13)
+
+A patch release on the way to M2. rupg now sends the data of a table with `COPY TO STDOUT`, so `pg_dump` can dump a database of rupg, and a nightly job does a round trip of a dump through PostgreSQL 19.
+
+### Added
+
+- `COPY ... TO STDOUT` for a table or a list of its columns, in the formats `text`, `csv` and `binary` (#262). `COPY` to a file or to a program gives `0A000`.
+- The functions `pg_encoding_to_char` and `pg_char_to_encoding` (#263).
+- The nightly round trip of `pg_dump` (#264). The job dumps a schema from rupg in the plain and custom formats, restores the dump into PostgreSQL 19, and compares the result with a dump of the same schema from PostgreSQL. See [`tests/dumprt/README.md`](tests/dumprt/README.md).
+
 ## 0.1.19 (2026-10-13)
 
 A patch release on the way to M2. rupg now runs the queries of `WITH`, gives the definition of a view with `WITH`, and accepts the statements of `pg_dump` and `pg_restore` for the data of a sequence, for the locks and for the comments.
