@@ -231,7 +231,11 @@ impl Analyzer<'_> {
             },
             Some(Node::Boolean(v)) => (Value::Bool(*v), oid::BOOL),
             Some(Node::String(s)) => (Value::text(&**s), oid::UNKNOWN),
-            Some(Node::BitString(_)) => return Err(not_yet("a bit string constant", at)),
+            Some(Node::BitString(s)) => {
+                let bits =
+                    rupg_types::bit_in(s, -1, false).map_err(|e| Error::from(e).at_opt(at))?;
+                (Value::Text(bits), oid::BIT)
+            }
             _ => return Err(Error::internal("unrecognized node type in A_Const")),
         };
         Ok(Expr::constant(value, ty, -1, at))

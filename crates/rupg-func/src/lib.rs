@@ -9,6 +9,7 @@ mod acl;
 mod activity;
 mod agg;
 mod array;
+mod bit;
 mod cash;
 mod cast;
 mod catinfo;
@@ -254,6 +255,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| encoding::by_src(src))
         .or_else(|| cash::by_src(src))
         .or_else(|| mac::by_src(src))
+        .or_else(|| bit::by_src(src))
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
         .or_else(|| acl::by_src(src))
