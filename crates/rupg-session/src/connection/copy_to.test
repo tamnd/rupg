@@ -1,0 +1,349 @@
+> CREATE TABLE t (a int, b text, c numeric)
+CREATE TABLE
+> CREATE TABLE serial_t (id serial, name text)
+CREATE TABLE
+> CREATE INDEX ti ON t (a)
+CREATE INDEX
+> CREATE VIEW v AS SELECT 1 AS x
+CREATE VIEW
+> COPY t TO stdout
+copy out 0 0,0,0
+copy done
+COPY 0
+> COPY public.t (b, a) TO stdout WITH (FORMAT csv, HEADER)
+copy out 0 0,0
+data b,a\n
+copy done
+COPY 0
+> COPY t TO stdout WITH (FORMAT binary)
+copy out 1 1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff
+copy done
+COPY 0
+> COPY t TO STDOUT WITH CSV HEADER DELIMITER ';' FORCE QUOTE a
+copy out 0 0,0,0
+data a;b;c\n
+copy done
+COPY 0
+> COPY BINARY t TO stdout
+copy out 1 1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff
+copy done
+COPY 0
+> COPY t TO stdout USING DELIMITERS '|'
+copy out 0 0,0,0
+copy done
+COPY 0
+> COPY (SELECT 1 AS a, 'x' AS b, NULL::text AS c) TO stdout
+copy out 0 0,0,0
+data 1\tx\t\\N\n
+copy done
+COPY 1
+> COPY (VALUES (1, 'a b', NULL), (2, E'tab\there', 'back\slash')) TO stdout
+copy out 0 0,0,0
+data 1\ta b\t\\N\n
+data 2\ttab\\there\tback\\\\slash\n
+copy done
+COPY 2
+> COPY (SELECT E'line\nbreak' AS x, E'cr\r' AS y, E'\b\f\v' AS z, 'é' AS w) TO stdout
+copy out 0 0,0,0,0
+data line\\nbreak\tcr\\r\t\\b\\f\\v\t\xc3\xa9\n
+copy done
+COPY 1
+> COPY (VALUES (1, 'a,b', NULL), (2, 'say "hi"', ''), (3, E'two\nlines', 'x')) TO stdout (FORMAT csv)
+copy out 0 0,0,0
+data 1,\"a,b\",\n
+data 2,\"say \"\"hi\"\"\",\"\"\n
+data 3,\"two\nlines\",x\n
+copy done
+COPY 3
+> COPY (VALUES (1, 'a,b', NULL)) TO stdout (FORMAT csv, HEADER true, FORCE_QUOTE *)
+copy out 0 0,0,0
+data column1,column2,column3\n
+data \"1\",\"a,b\",\n
+copy done
+COPY 1
+> COPY (SELECT 1 AS a, 'q' AS b) TO stdout (FORMAT csv, FORCE_QUOTE (b))
+copy out 0 0,0
+data 1,\"q\"\n
+copy done
+COPY 1
+> COPY (SELECT 1 AS a, 'q' AS b) TO stdout (FORMAT csv, FORCE_QUOTE (z))
+ERROR 42703 column "z" does not exist
+> COPY (SELECT E'\\.' AS a) TO stdout (FORMAT csv)
+copy out 0 0
+data \"\\.\"\n
+copy done
+COPY 1
+> COPY (SELECT E'\\.' AS a, 1 AS b) TO stdout (FORMAT csv)
+copy out 0 0,0
+data \\.,1\n
+copy done
+COPY 1
+> COPY (SELECT 'x|y' AS a, NULL AS b, 'nil' AS c) TO stdout (DELIMITER '|', NULL 'nil')
+copy out 0 0,0,0
+data x\\|y|nil|nil\n
+copy done
+COPY 1
+> COPY (SELECT 'x|y' AS a, NULL AS b, 'nil' AS c, 'it''s' AS d) TO stdout (FORMAT csv, DELIMITER '|', NULL 'nil', QUOTE '''', ESCAPE '\')
+copy out 0 0,0,0,0
+data \'x|y\'|nil|\'nil\'|\'it\\\'s\'\n
+copy done
+COPY 1
+> COPY (SELECT 'a"b' AS a) TO stdout (FORMAT csv, ESCAPE '\')
+copy out 0 0
+data \"a\\\"b\"\n
+copy done
+COPY 1
+> COPY (SELECT 'a b' AS "my col", 2 AS "x,y") TO stdout (FORMAT csv, HEADER)
+copy out 0 0,0
+data my col,\"x,y\"\n
+data a b,2\n
+copy done
+COPY 1
+> COPY (SELECT 1 AS "a	b") TO stdout (HEADER)
+copy out 0 0
+data a\\tb\n
+data 1\n
+copy done
+COPY 1
+> COPY (SELECT 1::int4 AS a, 'abc'::text AS b, NULL::int8 AS c, true AS d) TO stdout (FORMAT binary)
+copy out 1 1,1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x04\x00\x00\x00\x04\x00\x00\x00\x01\x00\x00\x00\x03abc\xff\xff\xff\xff\x00\x00\x00\x01\x01
+data \xff\xff
+copy done
+COPY 1
+> COPY (VALUES (1), (2)) TO stdout (FORMAT binary)
+copy out 1 1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x01\x00\x00\x00\x04\x00\x00\x00\x01
+data \x00\x01\x00\x00\x00\x04\x00\x00\x00\x02
+data \xff\xff
+copy done
+COPY 2
+> COPY (SELECT 1 WHERE false) TO stdout (FORMAT binary)
+copy out 1 1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\xff\xff
+copy done
+COPY 0
+> COPY (SELECT 1 WHERE false) TO stdout
+copy out 0 0
+copy done
+COPY 0
+> COPY (SELECT amname, amtype FROM pg_am ORDER BY amname) TO stdout (HEADER)
+copy out 0 0,0
+data amname\tamtype\n
+data brin\ti\n
+data btree\ti\n
+data gin\ti\n
+data gist\ti\n
+data hash\ti\n
+data heap\tt\n
+data spgist\ti\n
+copy done
+COPY 7
+> COPY (SELECT x FROM v) TO stdout
+copy out 0 0
+data 1\n
+copy done
+COPY 1
+> COPY serial_t TO stdout
+copy out 0 0,0
+copy done
+COPY 0
+> COPY (SELECT 1 AS a) TO stdout (ENCODING 'utf8')
+copy out 0 0
+data 1\n
+copy done
+COPY 1
+> COPY (SELECT 1 AS a) TO stdout (FORMAT 'text', HEADER on, FREEZE false, FREEZE_x 1)
+ERROR 42601 option "freeze_x" not recognized at 73
+> COPY nosuch TO stdout
+ERROR 42P01 relation "nosuch" does not exist
+> COPY nosuch.t TO stdout
+ERROR 3F000 schema "nosuch" does not exist
+> COPY public.nosuch TO stdout
+ERROR 42P01 relation "public.nosuch" does not exist
+> COPY t (z) TO stdout
+ERROR 42703 column "z" of relation "t" does not exist
+> COPY t (a, a) TO stdout
+ERROR 42701 column "a" specified more than once
+> COPY t (a, z) TO stdout (FORMAT bogus)
+ERROR 42703 column "z" of relation "t" does not exist
+> COPY v TO stdout
+ERROR 42809 cannot copy from view "v"
+> COPY v (q) TO stdout
+ERROR 42703 column "q" of relation "v" does not exist
+> COPY serial_t_id_seq TO stdout
+ERROR 42809 cannot copy from sequence "serial_t_id_seq"
+> COPY ti TO stdout
+ERROR 42809 cannot open relation "ti"
+> COPY pg_tables TO stdout
+ERROR 42809 cannot copy from view "pg_tables"
+> COPY t TO stdout (FORMAT xml)
+ERROR 22023 COPY format "xml" not recognized at 19
+> COPY t TO stdout (FORMAT 'CSV')
+ERROR 22023 COPY format "CSV" not recognized at 19
+> COPY t TO stdout (FORMAT csv, FORMAT text)
+ERROR 42601 conflicting or redundant options at 31
+> COPY t TO stdout (bogus 1)
+ERROR 42601 option "bogus" not recognized at 19
+> COPY t TO stdout (FORMAT binary, DELIMITER ',')
+ERROR 42601 cannot specify DELIMITER in BINARY mode
+> COPY t TO stdout (FORMAT binary, NULL 'x')
+ERROR 42601 cannot specify NULL in BINARY mode
+> COPY t TO stdout (FORMAT binary, HEADER)
+ERROR 0A000 cannot specify HEADER in BINARY mode
+> COPY t TO stdout (DELIMITER ',,')
+ERROR 0A000 COPY delimiter must be a single one-byte character
+> COPY t TO stdout (DELIMITER E'\n')
+ERROR 22023 COPY delimiter cannot be newline or carriage return
+> COPY t TO stdout (NULL E'a\rb')
+ERROR 22023 COPY null representation cannot use newline or carriage return
+> COPY t TO stdout (DELIMITER 'a')
+ERROR 22023 COPY delimiter cannot be "a"
+> COPY t TO stdout (DELIMITER '\')
+ERROR 22023 COPY delimiter cannot be "\"
+> COPY t TO stdout (DELIMITER '.', FORMAT csv)
+copy out 0 0,0,0
+copy done
+COPY 0
+> COPY t TO stdout (QUOTE '"')
+ERROR 0A000 COPY QUOTE requires CSV mode
+> COPY t TO stdout (ESCAPE '"')
+ERROR 0A000 COPY ESCAPE requires CSV mode
+> COPY t TO stdout (FORCE_QUOTE (a))
+ERROR 0A000 COPY FORCE_QUOTE requires CSV mode
+> COPY t TO stdout (FORCE_QUOTE *)
+ERROR 0A000 COPY FORCE_QUOTE requires CSV mode
+> COPY t TO stdout (FORMAT csv, QUOTE 'ab')
+ERROR 0A000 COPY quote must be a single one-byte character
+> COPY t TO stdout (FORMAT csv, DELIMITER ',', QUOTE ',')
+ERROR 22023 COPY delimiter and quote must be different
+> COPY t TO stdout (FORMAT csv, ESCAPE 'ab')
+ERROR 0A000 COPY escape must be a single one-byte character
+> COPY t TO stdout (FORMAT csv, ESCAPE '')
+ERROR 0A000 COPY escape must be a single one-byte character
+> COPY t TO stdout (FORMAT csv, FORCE_NOT_NULL (a))
+ERROR 22023 COPY FORCE_NOT_NULL cannot be used with COPY TO
+> COPY t TO stdout (FORCE_NOT_NULL (a))
+ERROR 0A000 COPY FORCE_NOT_NULL requires CSV mode
+> COPY t TO stdout (FORMAT csv, FORCE_NULL *)
+ERROR 22023 COPY FORCE_NULL cannot be used with COPY TO
+> COPY t TO stdout (FORMAT csv, FORCE_QUOTE (a), FORCE_QUOTE (b))
+ERROR 42601 conflicting or redundant options at 48
+> COPY t TO stdout (NULL 'a,b', FORMAT csv)
+ERROR 22023 COPY delimiter character must not appear in the NULL specification
+> COPY t TO stdout (NULL '"', FORMAT csv)
+ERROR 22023 CSV quote character must not appear in the NULL specification
+> COPY t TO stdout (NULL 'x', NULL 'y')
+ERROR 42601 conflicting or redundant options at 29
+> COPY t TO stdout (FREEZE)
+ERROR 22023 COPY FREEZE cannot be used with COPY TO
+> COPY t TO stdout (FREEZE false)
+copy out 0 0,0,0
+copy done
+COPY 0
+> COPY t TO stdout (FREEZE 2)
+ERROR 42601 freeze requires a Boolean value
+> COPY t TO stdout (FREEZE 'maybe')
+ERROR 42601 freeze requires a Boolean value
+> COPY t TO stdout (FORCE_ARRAY)
+ERROR 22023 COPY FORCE_ARRAY can only be used with JSON mode
+> COPY t TO stdout (FORCE_ARRAY false)
+copy out 0 0,0,0
+copy done
+COPY 0
+> COPY t TO stdout (DEFAULT 'x')
+ERROR 0A000 COPY DEFAULT cannot be used with COPY TO
+> COPY t TO stdout (FORMAT binary, DEFAULT 'x')
+ERROR 42601 cannot specify DEFAULT in BINARY mode
+> COPY t TO stdout (ON_ERROR ignore)
+ERROR 22023 COPY ON_ERROR cannot be used with COPY TO at 19
+> COPY t TO stdout (ON_ERROR)
+ERROR 42601 on_error requires a parameter
+> COPY t TO stdout (LOG_VERBOSITY bogus)
+ERROR 22023 COPY LOG_VERBOSITY "bogus" not recognized at 19
+> COPY t TO stdout (LOG_VERBOSITY verbose)
+copy out 0 0,0,0
+copy done
+COPY 0
+> COPY t TO stdout (LOG_VERBOSITY verbose, LOG_VERBOSITY silent)
+ERROR 42601 conflicting or redundant options at 42
+> COPY t TO stdout (REJECT_LIMIT 0)
+ERROR 22023 REJECT_LIMIT (0) must be greater than zero
+> COPY t TO stdout (REJECT_LIMIT 5)
+ERROR 22023 COPY REJECT_LIMIT requires ON_ERROR to be set to IGNORE
+> COPY t TO stdout (REJECT_LIMIT 'x')
+ERROR 22P02 invalid input syntax for type bigint: "x"
+> COPY t TO stdout (REJECT_LIMIT 1.5)
+ERROR 22P02 invalid input syntax for type bigint: "1.5"
+> COPY t TO stdout (REJECT_LIMIT)
+ERROR 42601 reject_limit requires a numeric value
+> COPY t TO stdout (HEADER match)
+ERROR 0A000 cannot use "match" with HEADER in COPY TO
+> COPY t TO stdout (HEADER 2)
+ERROR 0A000 cannot use multi-line header in COPY TO
+> COPY t TO stdout (HEADER -1)
+ERROR 22023 a negative integer value cannot be specified for header
+> COPY t TO stdout (HEADER 'maybe')
+ERROR 42601 header requires a Boolean value, an integer value greater than or equal to zero, or the string "match"
+> COPY t TO stdout (HEADER '1')
+copy out 0 0,0,0
+data a\tb\tc\n
+copy done
+COPY 0
+> COPY t TO stdout (HEADER 1)
+copy out 0 0,0,0
+data a\tb\tc\n
+copy done
+COPY 0
+> COPY t TO stdout (HEADER 0, HEADER 1)
+ERROR 42601 conflicting or redundant options at 29
+> COPY t TO stdout (ENCODING 'nosuch')
+ERROR 22023 argument to option "encoding" must be a valid encoding name at 19
+> COPY t TO stdout (ENCODING 'utf8', ENCODING 'utf8')
+ERROR 42601 conflicting or redundant options at 36
+> COPY t TO stdout (DELIMITER)
+ERROR 42601 delimiter requires a parameter
+> COPY t TO stdout (FORMAT)
+ERROR 42601 format requires a parameter
+> COPY t TO stdout (FORMAT csv, FORCE_QUOTE (z))
+ERROR 42703 column "z" of relation "t" does not exist
+> COPY t (a) TO stdout (FORMAT csv, FORCE_QUOTE (b))
+ERROR 42P10 FORCE_QUOTE column "b" not referenced by COPY
+> COPY t (a) TO stdout (FORMAT csv, FORCE_QUOTE (a, a))
+ERROR 42701 column "a" specified more than once
+> COPY (SELECT 1 INTO x) TO stdout
+ERROR 0A000 COPY (SELECT INTO) is not supported
+> COPY (SELECT nosuch) TO stdout
+ERROR 42703 column "nosuch" does not exist at 14
+> COPY (SELECT 1) TO stdout (FORMAT xml)
+ERROR 22023 COPY format "xml" not recognized at 28
+> COPY t TO 'relative.txt'
+ERROR 42602 relative path not allowed for COPY to file
+> COPY t TO stdout WHERE a > 1
+ERROR 42601 WHERE clause not allowed with COPY TO at 18
+> COPY t TO PROGRAM stdout
+ERROR 42601 STDIN/STDOUT not allowed with PROGRAM
+> BEGIN
+BEGIN
+> COPY (VALUES ('in'), ('block')) TO stdout
+copy out 0 0
+data in\n
+data block\n
+copy done
+COPY 2
+> COPY nosuch TO stdout
+ERROR 42P01 relation "nosuch" does not exist
+> COPY t TO stdout
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK
+ROLLBACK
+P s1|COPY (VALUES (1, 'x'), (2, NULL)) TO stdout (FORMAT csv)
+X s1
+copy out 0 0,0
+data 1,x\n
+data 2,\n
+copy done
+COPY 2
+P s2|COPY t TO stdout (FORMAT bogus)

@@ -41,7 +41,10 @@ use crate::coerce::AtOpt;
 pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
 pub use cte::{Cte, CteRef};
-pub use ddl::{Allowed, Body, Defined, Message, define, function_body, is_definition, lock_table};
+pub use ddl::{
+    Allowed, Body, CopyRelation, Defined, Message, attnums, copy_relation, define, function_body,
+    is_definition, lock_table,
+};
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink,
     SubLinkKind, Subscript, Var, WindowFunc,

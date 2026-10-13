@@ -71,6 +71,7 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         | Node::TransactionStmt(_)
         | Node::DiscardStmt(_)
         | Node::LockStmt(_)
+        | Node::CopyStmt(_)
         | Node::PrepareStmt(_)
         | Node::DeallocateStmt(_) => Ok(()),
         _ => Err(not_supported(text)),

@@ -51,7 +51,7 @@ pub fn lock_table(
     let mut locker = Locker { an, allowed, ancestors: Vec::new() };
     for node in stmt.relations.iter().flatten() {
         let Node::RangeVar(rv) = node else { continue };
-        let relid = locker.lookup(rv)?;
+        let relid = lookup(&locker.an, rv)?;
         let name = rv.relname.as_deref().unwrap_or_default();
         let kind = relkind(env, relid);
         if !matches!(kind, b'r' | b'p' | b'v') {
@@ -71,6 +71,27 @@ pub fn lock_table(
     Ok(())
 }
 
+/// `RangeVarGetRelid` with no `missing_ok`. The errors have no position, as in PostgreSQL.
+pub(super) fn lookup(an: &Analyzer<'_>, rv: &RangeVar) -> Result<u32> {
+    let found = an.lookup_relation(rv).map_err(|error| error.with_position(None))?;
+    if let Some(relid) = found {
+        return Ok(relid);
+    }
+    let name = rv.relname.as_deref().unwrap_or_default();
+    Err(match rv.schemaname.as_deref() {
+        Some(schema) if an.schema(schema).is_none() => {
+            Error::new(SqlState::UNDEFINED_SCHEMA, format!("schema \"{schema}\" does not exist"))
+        }
+        Some(schema) => Error::new(
+            SqlState::UNDEFINED_TABLE,
+            format!("relation \"{schema}.{name}\" does not exist"),
+        ),
+        None => {
+            Error::new(SqlState::UNDEFINED_TABLE, format!("relation \"{name}\" does not exist"))
+        }
+    })
+}
+
 /// The state of one `LOCK TABLE`.
 struct Locker<'a, 'f> {
     an: Analyzer<'a>,
@@ -80,28 +101,6 @@ struct Locker<'a, 'f> {
 }
 
 impl Locker<'_, '_> {
-    /// `RangeVarGetRelid` with no `missing_ok`. The errors have no position, as in PostgreSQL.
-    fn lookup(&self, rv: &RangeVar) -> Result<u32> {
-        let found = self.an.lookup_relation(rv).map_err(|error| error.with_position(None))?;
-        if let Some(relid) = found {
-            return Ok(relid);
-        }
-        let name = rv.relname.as_deref().unwrap_or_default();
-        Err(match rv.schemaname.as_deref() {
-            Some(schema) if self.an.schema(schema).is_none() => Error::new(
-                SqlState::UNDEFINED_SCHEMA,
-                format!("schema \"{schema}\" does not exist"),
-            ),
-            Some(schema) => Error::new(
-                SqlState::UNDEFINED_TABLE,
-                format!("relation \"{schema}.{name}\" does not exist"),
-            ),
-            None => {
-                Error::new(SqlState::UNDEFINED_TABLE, format!("relation \"{name}\" does not exist"))
-            }
-        })
-    }
-
     /// `LockViewRecurse` for a view of the catalog. A built-in view has the bootstrap superuser as its owner and no `security_invoker`, so each check in its query passes, and the walk skips it.
     fn view(&mut self, relid: u32, user: u32) -> Result<()> {
         let Some(query) = self.an.view_query(relid)? else { return Ok(()) };
@@ -178,7 +177,7 @@ impl Locker<'_, '_> {
 }
 
 /// The `relkind` of a relation of the catalog or of the built-in catalog.
-fn relkind(env: &dyn Env, relid: u32) -> u8 {
+pub(super) fn relkind(env: &dyn Env, relid: u32) -> u8 {
     match env.catalog().and_then(|c| c.relation(relid)) {
         Some(rel) => match rel.kind {
             RelKind::Table => b'r',

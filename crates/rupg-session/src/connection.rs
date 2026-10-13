@@ -28,6 +28,7 @@ use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
 
 mod activity;
+mod copy;
 mod extended;
 mod prepare;
 
@@ -73,6 +74,8 @@ enum Done {
     Tag(CommandTag),
     /// `RowDescription`, the rows, then `CommandComplete` with the tag and the number of rows.
     Rows { columns: Vec<Column>, rows: Vec<Row>, tag: CommandTag },
+    /// `CopyOutResponse`, the `CopyData` messages, `CopyDone`, then `CommandComplete` with `COPY` and the number of rows.
+    Copy(copy::CopyOut),
 }
 
 impl From<Outcome> for Done {
@@ -659,6 +662,9 @@ impl Connection {
             } else if let Node::LockStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.lock(stmt)
+            } else if let Node::CopyStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.copy(stmt)
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
@@ -708,6 +714,7 @@ impl Connection {
                     }
                     out.command_tag(tag, rows.len() as u64);
                 }
+                Done::Copy(copy) => copy.send(out),
             }
         }
         false
@@ -1008,6 +1015,12 @@ mod tests {
                         values.iter().map(|v| text(v.unwrap_or(b"NULL"))).collect();
                     format!("row {}", values.join(","))
                 }
+                Backend::CopyOutResponse { format, columns } => {
+                    let columns: Vec<String> = columns.iter().map(i16::to_string).collect();
+                    format!("copy out {format} {}", columns.join(","))
+                }
+                Backend::CopyData(data) => format!("data {}", data.escape_ascii()),
+                Backend::CopyDone => "copy done".into(),
                 Backend::ErrorResponse(fields) | Backend::NoticeResponse(fields) => {
                     let mut line = format!(
                         "{} {} {}",
@@ -2004,6 +2017,34 @@ mod tests {
     #[test]
     fn comment() {
         big_stack(|| script(include_str!("connection/comment.test")));
+    }
+
+    /// `COPY ... TO STDOUT` of a table, of a list of columns and of a query, in the text, CSV and binary formats, with the old and the new forms of the options, the errors of the names, of the kind of the relation and of each option, a file, a program and the extended protocol. `connection/copy_to.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn copy_to() {
+        big_stack(|| script(include_str!("connection/copy_to.test")));
+    }
+
+    /// `COPY FROM`, the JSON format, an encoding other than `UTF8` and a file give `0A000`.
+    #[test]
+    fn copy_not_supported() {
+        big_stack(|| {
+            let (mut c, _) = connect();
+            assert_eq!(script_lines(&mut c, "> CREATE TABLE t (a int)"), ["CREATE TABLE"]);
+            for (sql, error) in [
+                ("COPY t FROM stdin", "COPY FROM is not supported yet"),
+                ("COPY t TO stdout (FORMAT json)", "COPY FORMAT JSON is not supported yet"),
+                (
+                    "COPY t TO stdout (ENCODING 'latin1')",
+                    "COPY with ENCODING LATIN1 is not supported yet",
+                ),
+                ("COPY t TO '/tmp/rupg-copy.txt'", "COPY to a file is not supported yet"),
+                ("COPY t TO PROGRAM 'cat'", "COPY to a program is not supported yet"),
+            ] {
+                let want = format!("ERROR 0A000 {error}");
+                assert_eq!(script_lines(&mut c, &format!("> {sql}")), [want], "{sql}");
+            }
+        });
     }
 
     /// A comment on a built-in object, on a system column and on an object of another kind gives `0A000`, and the built-in comment stays.
