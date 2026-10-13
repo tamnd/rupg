@@ -93,6 +93,8 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::REFCURSOR
             | oid::MACADDR
             | oid::MACADDR8
+            | oid::BIT
+            | oid::VARBIT
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -404,6 +406,8 @@ fn input_value(
         oid::MONEY => Value::Int8(types::cash_in(text)?),
         oid::MACADDR => Value::Int8(types::macaddr_in(text)?.cast_signed()),
         oid::MACADDR8 => Value::Int8(types::macaddr8_in(text)?.cast_signed()),
+        oid::BIT => Value::Text(types::bit_in(text, typmod, false)?),
+        oid::VARBIT => Value::Text(types::bit_in(text, typmod, true)?),
         oid::XID8 => Value::Int8(types::uint64_in(text, "xid8")?.cast_signed()),
         oid::OID8 => Value::Int8(types::uint64_in(text, "oid8")?.cast_signed()),
         oid::TID => {
@@ -543,6 +547,8 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::INT8 | oid::MONEY | oid::XID8 | oid::OID8 => Value::Int8(recv.i64()?),
         oid::MACADDR => Value::Int8(types::macaddr_recv(recv)?.cast_signed()),
         oid::MACADDR8 => Value::Int8(types::macaddr8_recv(recv)?.cast_signed()),
+        oid::BIT => Value::Text(types::bit_recv(recv, typmod, false)?),
+        oid::VARBIT => Value::Text(types::bit_recv(recv, typmod, true)?),
         oid::TID => {
             let block = recv.u32()?;
             tid_value(block, recv.i16()?.cast_unsigned())
@@ -634,6 +640,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         (_, Value::Oid(v)) => out.extend_from_slice(&v.to_be_bytes()),
         (_, Value::Char(v)) => out.push(*v),
         (oid::JSONB, Value::Text(v)) => types::jsonb_send(v, out),
+        (oid::BIT | oid::VARBIT, Value::Text(v)) => types::bit_send(v, out),
         (_, Value::Text(v)) => out.extend_from_slice(v.as_bytes()),
         (_, Value::Bytea(v)) => out.extend_from_slice(v),
         (_, Value::Uuid(v)) => out.extend_from_slice(v),

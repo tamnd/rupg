@@ -209,6 +209,17 @@ fn immutable(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.volatile == b'i')
 }
 
+/// `inline_function`: PostgreSQL inlines the SQL functions `textanycat`, `anytextcat`, `quote_literal(anyelement)` and `quote_nullable(anyelement)`, which are stable. The body casts the argument of any type to `text`, and the cast folds when the output function of the type is immutable. Then the call folds as an immutable function does.
+fn inlines_immutable(f: &Func, proc: &builtin::ProcRow) -> bool {
+    matches!(f.oid, 1285 | 1290 | 2003 | 2004)
+        && f.args.iter().zip(proc.argtypes).all(|(arg, &declared)| {
+            declared == oid::TEXT
+                || builtin::type_by_oid(arg.ty)
+                    .and_then(|t| builtin::proc_by_oid(t.output))
+                    .is_some_and(|p| p.volatile == b'i')
+        })
+}
+
 impl<'a> Fold<'a> {
     /// The state of the fold of a query.
     fn new(query: &'a Query, params: Option<&'a [Value]>, session: &'a dyn Session) -> Self {
@@ -589,7 +600,9 @@ impl<'a> Fold<'a> {
         if proc.strict && values.iter().flatten().any(|v| v.is_null()) {
             return Ok(with(&expr, ExprKind::Const(Value::Null)));
         }
-        if values.iter().any(Option::is_none) || proc.volatile != b'i' {
+        if values.iter().any(Option::is_none)
+            || proc.volatile != b'i' && !inlines_immutable(f, proc)
+        {
             return Ok(expr);
         }
         self.evaluate(expr)

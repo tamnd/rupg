@@ -37,6 +37,8 @@ enum Family {
     Macaddr,
     /// `macaddr8`, which holds a `u64` in the bits of a `bigint`.
     Macaddr8,
+    /// `bit` and `bit varying`, a string of `0` and `1` whose byte order is the order of `bitcmp`.
+    Bit,
 }
 
 /// The family of a type, or `None` for a type that has no comparison here.
@@ -67,6 +69,7 @@ fn family(ty: u32) -> Option<Family> {
         oid::OID8 => Family::Oid8,
         oid::MACADDR => Family::Macaddr,
         oid::MACADDR8 => Family::Macaddr8,
+        oid::BIT | oid::VARBIT => Family::Bit,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
             _ => return None,

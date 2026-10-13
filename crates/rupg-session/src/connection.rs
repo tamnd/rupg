@@ -1779,6 +1779,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/money.test")));
     }
 
+    /// `bit` and `bit varying`: the constants, the text forms with the errors of a bad digit or length, the length casts, the casts to and from the integer types, the operators, the functions, the aggregates, the order, the arrays and the text and binary forms of `COPY`. `connection/bit.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn bit() {
+        big_stack(|| script(include_str!("connection/bit.test")));
+    }
+
     /// `macaddr` and `macaddr8`: the text forms of each format with the errors of a bad value, the order, `trunc`, the bit operators, `macaddr8_set7bit`, the casts, the arrays and the text and binary forms of `COPY`. `connection/mac.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn mac() {

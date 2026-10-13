@@ -1,0 +1,167 @@
+> SELECT B'1011', B'', X'1F', X'', '101'::bit(3), '101'::varbit, '101'::bit varying(5), 'x1f'::varbit, 'X1F'::bit(8), 'b101'::varbit
+fields ?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,bit:1560:-1:3,varbit:1562:-1:-1,varbit:1562:-1:5,varbit:1562:-1:-1,bit:1560:-1:8,varbit:1562:-1:-1
+row 1011,,00011111,,101,101,101,00011111,00011111,101
+SELECT 1
+> SELECT '101'::bit(5)
+fields bit:1560:-1:5
+row 10100
+SELECT 1
+> SELECT '10101'::bit(3)
+fields bit:1560:-1:3
+row 101
+SELECT 1
+> SELECT '101'::varbit(2)
+fields varbit:1562:-1:2
+row 10
+SELECT 1
+> SELECT '102'::varbit
+ERROR 22P02 "2" is not a valid binary digit at 8
+> SELECT 'x1g'::varbit
+ERROR 22P02 "g" is not a valid hexadecimal digit at 8
+> SELECT ''::bit
+fields bit:1560:-1:1
+row 0
+SELECT 1
+> SELECT '1'::bit, '0'::bit(1), B'1'::bit(4), B'1101'::bit(2), B'1101'::varbit(2), B'11'::bit(4)::varbit
+fields bit:1560:-1:1,bit:1560:-1:1,bit:1560:-1:4,bit:1560:-1:2,varbit:1562:-1:2,varbit:1562:-1:-1
+row 1,0,1000,11,11,1100
+SELECT 1
+> SELECT 5::bit(8), (-1)::bit(4), 256::bit(8), 5::int8::bit(16), B'0101'::int4, B'11111111'::int8, B'1'::int4
+fields bit:1560:-1:8,bit:1560:-1:4,bit:1560:-1:8,bit:1560:-1:16,int4:23:4:-1,int8:20:8:-1,int4:23:4:-1
+row 00000101,1111,00000000,0000000000000101,5,255,1
+SELECT 1
+> SELECT (B'1' || repeat('0', 32))::bit(33)::int4
+ERROR 22003 integer out of range
+> SELECT B'1100' & B'1010', B'1100' | B'1010', B'1100' # B'1010', ~B'1100', B'1100' << 1, B'1100' >> 1, B'1100' << -1, B'1100' >> 5
+fields ?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1
+row 1000,1110,0110,0011,1000,0110,0110,0000
+SELECT 1
+> SELECT B'1100' & B'101'
+ERROR 22026 cannot AND bit strings of different sizes
+> SELECT B'101' || B'11', length(B'10101'), bit_length(B'10101'), octet_length(B'101011001'), bit_count(B'1011'), get_bit(B'1011', 1), set_bit(B'1011', 1, 0), position(B'11' IN B'01011'), substring(B'101101' FROM 2 FOR 3), substring(B'101101' FROM 3), overlay(B'11111' PLACING B'00' FROM 2 FOR 2)
+fields ?column?:1562:-1:-1,length:23:4:-1,bit_length:23:4:-1,octet_length:23:4:-1,bit_count:20:8:-1,get_bit:23:4:-1,set_bit:1560:-1:-1,position:23:4:-1,substring:1560:-1:-1,substring:1560:-1:-1,overlay:1560:-1:-1
+row 10111,5,5,2,3,0,1011,4,011,1101,10011
+SELECT 1
+> SELECT get_bit(B'1011', 4)
+ERROR 2202E bit index 4 out of valid range (0..3)
+> SELECT ARRAY[B'101', B'11'], '{101,1}'::varbit[], '{1,0}'::bit[]
+fields array:1561:-1:-1,varbit:1563:-1:-1,bit:1561:-1:1
+row {101,11},{101,1},{1,0}
+SELECT 1
+> SELECT pg_input_is_valid('101', 'bit(3)'), pg_input_is_valid('101', 'bit(4)'), pg_input_is_valid('12', 'varbit')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT * FROM pg_input_error_info('101', 'bit(4)')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row bit string length 3 does not match type bit(4),NULL,NULL,22026
+SELECT 1
+> SELECT * FROM pg_input_error_info('12', 'varbit')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row "2" is not a valid binary digit,NULL,NULL,22P02
+SELECT 1
+> COPY (SELECT B'101', B'1010101010'::varbit, B''::varbit, X'ABC'::bit(12)) TO stdout
+copy out 0 0,0,0,0
+data 101\t1010101010\t\t101010111100\n
+copy done
+COPY 1
+> COPY (SELECT B'101', B'1010101010'::varbit, B''::varbit) TO stdout (FORMAT binary)
+copy out 1 1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x05\x00\x00\x00\x03\xa0\x00\x00\x00\x06\x00\x00\x00\n\xaa\x80\x00\x00\x00\x04\x00\x00\x00\x00
+data \xff\xff
+copy done
+COPY 1
+> SELECT b FROM (VALUES (B'11'), (B'100'), (B'1'), (B'')) v(b) ORDER BY b
+fields b:1560:-1:-1
+row 
+row 1
+row 100
+row 11
+SELECT 4
+> SELECT format_type('bit'::regtype, 5), format_type('varbit'::regtype, 7), format_type('bit'::regtype, -1)
+fields format_type:25:-1:-1,format_type:25:-1:-1,format_type:25:-1:-1
+row bit(5),bit varying(7),"bit"
+SELECT 1
+> SELECT B'101' = B'101', B'10' < B'100', B'11' > B'100', B'101'::varbit = B'101'::bit(3), bitcmp(B'11', B'100'), varbitcmp(B'1', B'10'), B'101' <> B'1010'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,bitcmp:23:4:-1,varbitcmp:23:4:-1,?column?:16:1:-1
+row t,t,t,t,64,-1,t
+SELECT 1
+> SELECT bit_and(b), bit_or(b), bit_xor(b) FROM (VALUES (B'1100'), (B'1010'), (B'0110')) v(b)
+fields bit_and:1560:-1:-1,bit_or:1560:-1:-1,bit_xor:1560:-1:-1
+row 0000,1110,0000
+SELECT 1
+> SELECT bit_and(b) FROM (VALUES (B'1100'), (B'101')) v(b)
+fields bit_and:1560:-1:-1
+ERROR 22026 cannot AND bit strings of different sizes
+> SELECT B'1100' | B'101'
+ERROR 22026 cannot OR bit strings of different sizes
+> SELECT B'1100' # B'101'
+ERROR 22026 cannot XOR bit strings of different sizes
+> SELECT B'101101' << 3, B'101101' >> 3, B'1011010011' << 9, B'1011010011' >> 9, B'1011010011' << 10, ~B'101101101'
+fields ?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1,?column?:1560:-1:-1
+row 101000,000101,1000000000,0000000001,0000000000,010010010
+SELECT 1
+> SELECT substring(B'101101' FROM 0 FOR 3), substring(B'101101' FROM 5 FOR 10), substring(B'101101' FROM 7), substring(B'1011010011' FROM 4 FOR 6)
+fields substring:1560:-1:-1,substring:1560:-1:-1,substring:1560:-1:-1,substring:1560:-1:-1
+row 10,01,,101001
+SELECT 1
+> SELECT substring(B'101' FROM 1 FOR -1)
+ERROR 22011 negative substring length not allowed
+> SELECT overlay(B'11111' PLACING B'000' FROM 4), overlay(B'1111' PLACING B'00' FROM 0)
+ERROR 22011 negative substring length not allowed
+> SELECT position(B'' IN B'101'), position(B'1' IN B''), position(B'0110' IN B'10101101100'), position(B'111' IN B'101')
+fields position:23:4:-1,position:23:4:-1,position:23:4:-1,position:23:4:-1
+row 1,0,4,0
+SELECT 1
+> SELECT set_bit(B'1011', 4, 1)
+ERROR 2202E bit index 4 out of valid range (0..3)
+> SELECT set_bit(B'1011', 0, 2)
+ERROR 22023 new bit must be 0 or 1
+> SELECT get_bit(B'1011', -1)
+ERROR 2202E bit index -1 out of valid range (0..3)
+> SELECT bit_count(B''), bit_count(B'111111111'), octet_length(B''), octet_length(B'11111111'), length(B''::varbit)
+fields bit_count:20:8:-1,bit_count:20:8:-1,octet_length:23:4:-1,octet_length:23:4:-1,length:23:4:-1
+row 0,9,0,1,0
+SELECT 1
+> SELECT 5::bit(3), 5::bit(40), (-5)::bit(40), (-5)::int8::bit(70), 0::bit, 1::bit
+fields bit:1560:-1:3,bit:1560:-1:40,bit:1560:-1:40,bit:1560:-1:70,bit:1560:-1:1,bit:1560:-1:1
+row 101,0000000000000000000000000000000000000101,1111111111111111111111111111111111111011,1111111111111111111111111111111111111111111111111111111111111111111011,0,1
+SELECT 1
+> SELECT B'11111111111111111111111111111111'::int4, B'1'::int8, (B'1' || repeat('0', 63))::bit(64)::int8
+fields int4:23:4:-1,int8:20:8:-1,int8:20:8:-1
+row -1,1,-9223372036854775808
+SELECT 1
+> SELECT (B'1' || repeat('0', 64))::bit(65)::int8
+ERROR 22003 bigint out of range
+> SELECT B'101'::bit(3)::bit(5)
+fields bit:1560:-1:5
+row 10100
+SELECT 1
+> SELECT 'é'::bit(1)
+ERROR 22P02 "é" is not a valid binary digit at 8
+> SELECT 'é'::varbit
+ERROR 22P02 "é" is not a valid binary digit at 8
+> SELECT '1010'::varbit(3)
+fields varbit:1562:-1:3
+row 101
+SELECT 1
+> SELECT * FROM pg_input_error_info('1010', 'varbit(3)')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row bit string too long for type bit varying(3),NULL,NULL,22001
+SELECT 1
+> SELECT B'1' || X'F', X'F' || B'1'
+fields ?column?:1562:-1:-1,?column?:1562:-1:-1
+row 11111,11111
+SELECT 1
+> SELECT format('%s', B'101'), B'101'::text
+fields format:25:-1:-1,text:25:-1:-1
+row 101,101
+SELECT 1
+> SELECT '101'::text::varbit
+fields varbit:1562:-1:-1
+row 101
+SELECT 1
+> SELECT bit_length(B'10101'), bit_length(B'10101'::varbit)
+fields bit_length:23:4:-1,bit_length:23:4:-1
+row 5,5
+SELECT 1

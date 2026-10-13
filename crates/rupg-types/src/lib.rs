@@ -22,7 +22,7 @@
 //!
 //! [`Array`], an array of any element type with up to [`MAXDIM`] dimensions and any lower bounds. [`array_in`], [`array_out`], [`array_recv`] and [`array_send`] take the function of the element type as a closure and give the errors of PostgreSQL, also the error of the element. The binary input refuses an element type that is not the expected type, and [`format_type`] gives the names in that error. `int2vector` and `oidvector` are arrays with the lower bound 0 and a text form with spaces, in [`int2vector_in`], [`oidvector_in`] and the functions beside them.
 //!
-//! [`cash_in`], [`cash_out`] and [`cash_words`] for `money`, a count of cents in an `i64`, with the symbols of the `C` locale. [`tid_in`] and [`tid_out`] for `tid`, and [`uint64_in`] for `xid8` and `oid8`. [`macaddr_in`], [`macaddr8_in`] and the other functions of `macaddr` and `macaddr8`, with the bytes of the address in a `u64`.
+//! [`cash_in`], [`cash_out`] and [`cash_words`] for `money`, a count of cents in an `i64`, with the symbols of the `C` locale. [`tid_in`] and [`tid_out`] for `tid`, and [`uint64_in`] for `xid8` and `oid8`. [`macaddr_in`], [`macaddr8_in`] and the other functions of `macaddr` and `macaddr8`, with the bytes of the address in a `u64`. [`bit_in`], [`bit_coerce`], [`bit_recv`] and [`bit_send`] for `bit` and `bit varying`, a string of `0` and `1`.
 //!
 //! [`Inet`], a value of `inet` or `cidr`, with [`inet_in`], [`inet_out`], [`inet_recv`] and [`inet_send`], which take a flag for `cidr`. [`network_cmp`] is the order of the B-tree operator class.
 //!
@@ -48,6 +48,7 @@
 
 mod array;
 mod binary;
+mod bit;
 mod datetime;
 mod datum;
 mod error;
@@ -79,6 +80,7 @@ pub use array::{
     oidvector_recv, oidvector_send,
 };
 pub use binary::{Recv, name_recv};
+pub use bit::{BIT_MAX_LEN, bit_bytes, bit_coerce, bit_in, bit_recv, bit_send};
 pub use datetime::{
     Abbrev, AbbrevMeaning, DATE_INFINITY, DATE_NEGATIVE_INFINITY, DateFormat, DateOrder, DateStyle,
     DateTimeInput, FixedZone, Interval, IntervalStyle, NoZones, POSTGRES_EPOCH_JDATE,

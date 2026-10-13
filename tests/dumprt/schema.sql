@@ -12,7 +12,7 @@ CREATE TABLE plain (a int, b text[], c jsonb, d timestamptz, e inet, f bool NOT 
 CREATE VIEW rec AS WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n + 1 FROM r WHERE n < 5) SELECT n FROM r;
 CREATE TABLE app.item (id int PRIMARY KEY, code text NOT NULL, kind smallint, price numeric CONSTRAINT price_positive CHECK (price > 0), CONSTRAINT item_code_kind UNIQUE (code, kind));
 CREATE TABLE app.line (order_id bigint REFERENCES app.orders ON UPDATE CASCADE, item_id int REFERENCES app.item, qty int DEFAULT 1 NOT NULL, PRIMARY KEY (order_id, item_id));
-CREATE TABLE app.scratch (k text, v bytea, u uuid, t time(3), iv interval, js json DEFAULT '{}', r real, d double precision, ts timestamp(0), c char(3), n name, o oid, i2 int2[], m money, x8 xid8, o8 oid8, ti tid, rc refcursor, ma money[], mc macaddr, m8 macaddr8);
+CREATE TABLE app.scratch (k text, v bytea, u uuid, t time(3), iv interval, js json DEFAULT '{}', r real, d double precision, ts timestamp(0), c char(3), n name, o oid, i2 int2[], m money, x8 xid8, o8 oid8, ti tid, rc refcursor, ma money[], mc macaddr, m8 macaddr8, bt bit(3), vb varbit(5));
 CREATE INDEX line_qty_idx ON app.line USING btree (qty DESC NULLS LAST);
 CREATE INDEX scratch_k_idx ON app.scratch USING hash (k);
 CREATE INDEX scratch_kv_idx ON app.scratch (k) INCLUDE (u);
