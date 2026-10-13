@@ -47,6 +47,8 @@ enum Family {
     Multirange,
     /// `tsvector`, which compares as `tsvector_cmp` does.
     TsVector,
+    /// `tsquery`, which compares as `tsquery_cmp` does.
+    TsQuery,
 }
 
 /// The family of a type, or `None` for a type that has no comparison here.
@@ -84,6 +86,7 @@ fn family(ty: u32) -> Option<Family> {
         oid::ANYMULTIRANGE => Family::Multirange,
         ty if builtin::multirange_range(ty).is_some() => Family::Multirange,
         oid::TSVECTOR => Family::TsVector,
+        oid::TSQUERY => Family::TsQuery,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
             _ => return None,
@@ -155,6 +158,7 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
             multirange::multirange_order(sub, x, y)?
         }
         (Value::TsVector(x), Value::TsVector(y)) => rupg_types::tsvector_cmp(x, y).cmp(&0),
+        (Value::TsQuery(x), Value::TsQuery(y)) => rupg_types::tsquery_cmp(x, y).cmp(&0),
         _ => return Err(bad_value()),
     })
 }

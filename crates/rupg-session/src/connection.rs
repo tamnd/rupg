@@ -735,15 +735,15 @@ impl Connection {
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
         let plan = query::plan(node, &reader, &Params::default());
-        notices.extend(reader.take_warnings().into_iter().map(Notice::warning));
+        notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
         let plan = plan.fold(None, &reader);
-        notices.extend(reader.take_warnings().into_iter().map(Notice::warning));
+        notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         let columns = query::columns(&plan);
         let rows = query::run(&plan, &[], &reader, &[]);
-        notices.extend(reader.take_warnings().into_iter().map(Notice::warning));
+        notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         match rows {
             Ok(rows) => Ok(Done::Rows { columns, rows, tag: CommandTag::Select }),
             Err(error) => {
@@ -1866,6 +1866,12 @@ mod tests {
     #[test]
     fn tsvector() {
         big_stack(|| script(include_str!("connection/tsvector.test")));
+    }
+
+    /// The type `tsquery`: the text input with its operators, weights and prefixes and its errors, the notice for a query with no lexemes, the output, the order, `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@`, the limits of the distance, the lexeme and the stack of operators, arrays of `tsquery`, `GROUP BY`, `pg_input_is_valid`, the text and binary forms of `COPY` and a query with parameters. `connection/tsquery.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn tsquery() {
+        big_stack(|| script(include_str!("connection/tsquery.test")));
     }
 
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.

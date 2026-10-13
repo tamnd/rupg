@@ -1,0 +1,268 @@
+> SELECT 'a & b'::tsquery, 'a|b'::tsquery, '!a'::tsquery, 'a <-> b'::tsquery, 'a <2> b'::tsquery, 'a <0> b'::tsquery, 'a <1> b'::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a' & 'b','a' | 'b',!'a','a' <-> 'b','a' <2> 'b','a' <0> 'b','a' <-> 'b'
+SELECT 1
+> SELECT 'a & b | c & d'::tsquery, '(a | b) & (c | d)'::tsquery, 'a & !(b | c)'::tsquery, '!!a'::tsquery, '!(a & b)'::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a' & 'b' | 'c' & 'd',( 'a' | 'b' ) & ( 'c' | 'd' ),'a' & !( 'b' | 'c' ),!!'a',!( 'a' & 'b' )
+SELECT 1
+> SELECT 'a <-> b <-> c'::tsquery, 'a <-> (b <-> c)'::tsquery, '(a <-> b) <-> c'::tsquery, 'a <-> (b & c)'::tsquery, '(a | b) <-> c'::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a' <-> 'b' <-> 'c','a' <-> ( 'b' <-> 'c' ),'a' <-> 'b' <-> 'c','a' <-> ( 'b' & 'c' ),( 'a' | 'b' ) <-> 'c'
+SELECT 1
+> SELECT 'a & b <-> c | d'::tsquery, 'a | b & !c <-> d'::tsquery, '!a <-> !b'::tsquery, 'a & (b)'::tsquery, '((a))'::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a' & 'b' <-> 'c' | 'd','a' | 'b' & !'c' <-> 'd',!'a' <-> !'b','a' & 'b','a'
+SELECT 1
+> SELECT 'a:A'::tsquery, 'a:*'::tsquery, 'a:*AB'::tsquery, 'a:dcba*'::tsquery, 'a:'::tsquery, 'a:BB'::tsquery, 'a:*&b'::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a':A,'a':*,'a':*AB,'a':*ABCD,'a','a':B,'a':* & 'b'
+SELECT 1
+> SELECT $$'a b' & 'it''s' & c\'d & e\\f & 'g\'h'$$::tsquery, $$'x':A & 'y':*$$::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a b' & 'it''s' & 'c''d' & 'e\\f' & 'g''h','x':A & 'y':*
+SELECT 1
+> SELECT 'a&b|c'::tsquery, 'a&!b'::tsquery, 'a<->b'::tsquery, '  a  '::tsquery, 'aé & ß'::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a' & 'b' | 'c','a' & !'b','a' <-> 'b','a','aé' & 'ß'
+SELECT 1
+> SELECT ''::tsquery
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 8
+fields tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT '   '::tsquery, numnode('   '::tsquery), querytree(''::tsquery)
+NOTICE 00000 text-search query doesn't contain lexemes: "   " at 8
+NOTICE 00000 text-search query doesn't contain lexemes: "   " at 32
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 59
+fields tsquery:3615:-1:-1,numnode:23:4:-1,querytree:25:-1:-1
+row ,0,
+SELECT 1
+> SELECT 'a &'::tsquery
+ERROR 42601 no operand in tsquery: "a &" at 8
+> SELECT '& a'::tsquery
+ERROR 42601 syntax error in tsquery: "& a" at 8
+> SELECT 'a b'::tsquery
+ERROR 42601 syntax error in tsquery: "a b" at 8
+> SELECT 'a & (b'::tsquery
+ERROR 42601 syntax error in tsquery: "a & (b" at 8
+> SELECT 'a & b)'::tsquery
+ERROR 42601 syntax error in tsquery: "a & b)" at 8
+> SELECT '()'::tsquery
+ERROR 42601 syntax error in tsquery: "()" at 8
+> SELECT '!'::tsquery
+ERROR 42601 no operand in tsquery: "!" at 8
+> SELECT 'a <-> '::tsquery
+ERROR 42601 no operand in tsquery: "a <-> " at 8
+> SELECT 'a <-'::tsquery
+ERROR 42601 syntax error in tsquery: "a <-" at 8
+> SELECT 'a <->'::tsquery
+ERROR 42601 syntax error in tsquery: "a <->" at 8
+> SELECT 'a <x> b'::tsquery
+ERROR 42601 syntax error in tsquery: "a <x> b" at 8
+> SELECT 'a <16384> b'::tsquery, 'a <00016384> b'::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a' <16384> 'b','a' <16384> 'b'
+SELECT 1
+> SELECT 'a <16385> b'::tsquery
+ERROR 22023 distance in phrase operator must be an integer value between zero and 16384 inclusive at 8
+> SELECT 'a <99999999999999999999> b'::tsquery
+ERROR 22023 distance in phrase operator must be an integer value between zero and 16384 inclusive at 8
+> SELECT 'a:x'::tsquery
+ERROR 42601 syntax error in tsquery: "a:x" at 8
+> SELECT ':a'::tsquery
+ERROR 42601 syntax error in tsquery: ":a" at 8
+> SELECT $$'a$$::tsquery
+ERROR 42601 syntax error in tsquery: "'a" at 8
+> SELECT $$''$$::tsquery
+ERROR 42601 syntax error in tsquery: "''" at 8
+> SELECT $$a\$$::tsquery
+ERROR 42601 there is no escaped character: "a\" at 8
+> SELECT 'a & :b'::tsquery
+ERROR 42601 syntax error in tsquery: "a & :b" at 8
+> SELECT 'a<b'::tsquery
+ERROR 42601 syntax error in tsquery: "a<b" at 8
+> SELECT 'a & b & c' ::tsquery, 'a&|b'::tsquery
+ERROR 42601 syntax error in tsquery: "a&|b" at 31
+> SELECT length(repeat('x', 2047)::tsquery::text)
+fields length:23:4:-1
+row 2049
+SELECT 1
+> SELECT repeat('x', 2048)::tsquery
+ERROR 54000 word is too long in tsquery: "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+> SELECT numnode('a & b'::tsquery), numnode('a'::tsquery), numnode('!a <-> (b | c)'::tsquery)
+fields numnode:23:4:-1,numnode:23:4:-1,numnode:23:4:-1
+row 3,1,6
+SELECT 1
+> SELECT querytree('a & !b'::tsquery), querytree('!a'::tsquery), querytree('!a | b'::tsquery), querytree('a <-> !b'::tsquery), querytree('(a | !b) & c'::tsquery), querytree('!a & !b'::tsquery)
+fields querytree:25:-1:-1,querytree:25:-1:-1,querytree:25:-1:-1,querytree:25:-1:-1,querytree:25:-1:-1,querytree:25:-1:-1
+row 'a',T,T,'a','c',T
+SELECT 1
+> SELECT 'a'::tsquery && 'b'::tsquery, 'a | b'::tsquery && 'c'::tsquery, 'a'::tsquery || 'b & c'::tsquery, !! 'a'::tsquery, !! 'a & b'::tsquery
+fields ?column?:3615:-1:-1,?column?:3615:-1:-1,?column?:3615:-1:-1,?column?:3615:-1:-1,?column?:3615:-1:-1
+row 'a' & 'b',( 'a' | 'b' ) & 'c','a' | 'b' & 'c',!'a',!( 'a' & 'b' )
+SELECT 1
+> SELECT 'a'::tsquery <-> 'b'::tsquery, 'a <-> b'::tsquery <-> 'c'::tsquery, 'a'::tsquery <-> 'b <-> c'::tsquery, tsquery_phrase('a', 'b', 3), tsquery_phrase('a | b', 'c', 0)
+fields ?column?:3615:-1:-1,?column?:3615:-1:-1,?column?:3615:-1:-1,tsquery_phrase:3615:-1:-1,tsquery_phrase:3615:-1:-1
+row 'a' <-> 'b','a' <-> 'b' <-> 'c','a' <-> ( 'b' <-> 'c' ),'a' <3> 'b',( 'a' | 'b' ) <0> 'c'
+SELECT 1
+> SELECT tsquery_phrase('a', 'b', -1)
+ERROR 22023 distance in phrase operator must be an integer value between zero and 16384 inclusive
+> SELECT tsquery_phrase('a', 'b', 16385)
+ERROR 22023 distance in phrase operator must be an integer value between zero and 16384 inclusive
+> SELECT tsquery_phrase('a', 'b', 16384)
+fields tsquery_phrase:3615:-1:-1
+row 'a' <16384> 'b'
+SELECT 1
+> SELECT 'a'::tsquery = 'a'::tsquery, 'a:A'::tsquery = 'a'::tsquery, 'a:*'::tsquery = 'a'::tsquery, 'a & b'::tsquery = 'b & a'::tsquery, 'a <1> b'::tsquery = 'a <2> b'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f,f
+SELECT 1
+> SELECT tsquery_cmp('a', 'b'), tsquery_cmp('b', 'a'), tsquery_cmp('a', 'a & b'), tsquery_cmp('ab', 'a'), tsquery_cmp('a & b', 'a | b'), tsquery_cmp('a <1> b', 'a <2> b'), tsquery_cmp('!a', 'b')
+fields tsquery_cmp:23:4:-1,tsquery_cmp:23:4:-1,tsquery_cmp:23:4:-1,tsquery_cmp:23:4:-1,tsquery_cmp:23:4:-1,tsquery_cmp:23:4:-1,tsquery_cmp:23:4:-1
+row -1,1,-1,1,1,1,1
+SELECT 1
+> SELECT 'a'::tsquery < 'b'::tsquery, 'a'::tsquery <= 'b'::tsquery, 'a'::tsquery > 'b'::tsquery, 'a'::tsquery >= 'b'::tsquery, 'a'::tsquery <> 'b'::tsquery
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,f,t
+SELECT 1
+> SELECT v, numnode(v) FROM (VALUES ('a'::tsquery), ('b'), ('c'), ('ab'), ('a & b'), ('a | b'), ('!a'), ('a <-> b'), ('a <2> b'), ('cat'), ('dog & cat'), ('x:A')) AS t(v) ORDER BY v
+fields v:3615:-1:-1,numnode:23:4:-1
+row 'x':A,1
+row 'a',1
+row 'c',1
+row 'b',1
+row 'ab',1
+row 'cat',1
+row !'a',2
+row 'a' <2> 'b',3
+row 'a' <-> 'b',3
+row 'a' | 'b',3
+row 'a' & 'b',3
+row 'dog' & 'cat',3
+SELECT 12
+> SELECT 'a & b'::tsquery @> 'a'::tsquery, 'a & b'::tsquery @> 'c'::tsquery, 'a'::tsquery <@ 'a | b'::tsquery, 'a & a'::tsquery @> 'a & a & a'::tsquery, 'a'::tsquery @> 'a & b'::tsquery, ''::tsquery <@ 'a'::tsquery
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 186
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f,t
+SELECT 1
+> SELECT ''::tsquery && 'a'::tsquery, 'a'::tsquery || ''::tsquery, !! ''::tsquery, ''::tsquery <-> ''::tsquery
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 8
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 53
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 69
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 82
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 98
+fields ?column?:3615:-1:-1,?column?:3615:-1:-1,?column?:3615:-1:-1,?column?:3615:-1:-1
+row 'a','a',,
+SELECT 1
+> SELECT v, count(*) FROM (VALUES ('a & b'::tsquery), ('a&b'), ('b & a'), ('a'), ('a | b'), ('a|b')) AS t(v) GROUP BY v ORDER BY v
+fields v:3615:-1:-1,count:20:8:-1
+row 'a',1
+row 'a' | 'b',2
+row 'b' & 'a',1
+row 'a' & 'b',2
+SELECT 4
+> SELECT ARRAY['a & b'::tsquery, '!c'], '{"a & b", c}'::tsquery[]
+fields array:3645:-1:-1,tsquery:3645:-1:-1
+row {"'a' & 'b'",!'c'},{"'a' & 'b'",'c'}
+SELECT 1
+> SELECT * FROM pg_input_error_info('a &', 'tsquery')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row no operand in tsquery: "a &",NULL,NULL,42601
+SELECT 1
+> SELECT * FROM pg_input_error_info('a <20000> b', 'tsquery')
+fields message:25:-1:-1,detail:25:-1:-1,hint:25:-1:-1,sql_error_code:25:-1:-1
+row distance in phrase operator must be an integer value between zero and 16384 inclusive,NULL,NULL,22023
+SELECT 1
+> SELECT pg_input_is_valid('a & b', 'tsquery'), pg_input_is_valid('a b', 'tsquery')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f
+SELECT 1
+> COPY (SELECT 'a & b:A'::tsquery AS a, 'x <3> !y:*'::tsquery AS b, $$'it''s' | z$$::tsquery AS c) TO STDOUT
+copy out 0 0,0,0
+data \'a\' & \'b\':A\t\'x\' <3> !\'y\':*\t\'it\'\'s\' | \'z\'\n
+copy done
+COPY 1
+> COPY (SELECT 'a & b:A'::tsquery AS a, 'x <3> !y:*'::tsquery AS b, 'q <-> r'::tsquery AS c) TO STDOUT WITH (FORMAT binary)
+copy out 1 1,1,1
+data PGCOPY\n\xff\r\n\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x03\x00\x00\x00\x10\x00\x00\x00\x03\x02\x02\x01\x08\x00b\x00\x01\x00\x00a\x00\x00\x00\x00\x14\x00\x00\x00\x04\x02\x04\x00\x03\x02\x01\x01\x00\x01y\x00\x01\x00\x00x\x00\x00\x00\x00\x12\x00\x00\x00\x03\x02\x04\x00\x01\x01\x00\x00r\x00\x01\x00\x00q\x00
+data \xff\xff
+copy done
+COPY 1
+> SELECT '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!a'::tsquery
+fields tsquery:3615:-1:-1
+row !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'a'
+SELECT 1
+> SELECT '!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!a'::tsquery
+ERROR XX000 tsquery stack too small at 8
+> SELECT 'a <-> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!b'::tsquery
+fields tsquery:3615:-1:-1
+row 'a' <-> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!'b'
+SELECT 1
+> SELECT 'a | b & c <-> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!b'::tsquery
+fields tsquery:3615:-1:-1
+row 'a' | 'b' & 'c' <-> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!'b'
+SELECT 1
+> SELECT 'a | b & c <-> !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!b'::tsquery
+ERROR XX000 tsquery stack too small at 8
+P q1|SELECT $1::tsquery, numnode($1::tsquery), $1::tsquery && $2::tsquery
+X q1|a & b|!c
+row 'a' & 'b',3,'a' & 'b' & !'c'
+SELECT 1
+X q1|a|
+NOTICE 00000 text-search query doesn't contain lexemes: "" (unnamed portal parameter $2 = '')
+row 'a',1,'a'
+SELECT 1
+> SELECT v FROM (VALUES ('apple'::tsquery), ('pear'), ('cherry'), ('date'), ('egg'), ('fig'), ('kiwi'), ('lime'), ('melon'), ('plum')) AS t(v) ORDER BY v
+fields v:3615:-1:-1
+row 'fig'
+row 'egg'
+row 'kiwi'
+row 'date'
+row 'lime'
+row 'pear'
+row 'plum'
+row 'melon'
+row 'apple'
+row 'cherry'
+SELECT 10
+> SELECT v FROM (VALUES ('a & b'::tsquery), ('a & c'), ('c & a'), ('b & c'), ('a <3> b'), ('a <-> c'), ('!b'), ('!c')) AS t(v) ORDER BY v
+fields v:3615:-1:-1
+row !'c'
+row !'b'
+row 'a' <-> 'c'
+row 'a' <3> 'b'
+row 'c' & 'a'
+row 'a' & 'c'
+row 'b' & 'c'
+row 'a' & 'b'
+SELECT 8
+> SELECT '((((a))))'::tsquery, '!(!(a))'::tsquery, 'a & b'::tsquery::text, '(a & b) <-> (c | d)'::tsquery, 'a <-> b & c <-> d'::tsquery
+fields tsquery:3615:-1:-1,tsquery:3615:-1:-1,text:25:-1:-1,tsquery:3615:-1:-1,tsquery:3615:-1:-1
+row 'a',!!'a','a' & 'b',( 'a' & 'b' ) <-> ( 'c' | 'd' ),'a' <-> 'b' & 'c' <-> 'd'
+SELECT 1
+> SELECT pg_input_is_valid('', 'tsquery'), pg_input_is_valid('a <-> b', 'tsquery')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,t
+SELECT 1
+> SELECT pg_input_is_valid('!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!a', 'tsquery')
+fields pg_input_is_valid:16:1:-1
+ERROR XX000 tsquery stack too small
+> SELECT numnode(''::tsquery), querytree('a'::tsquery), querytree('a <2> b & c'::tsquery)
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 16
+fields numnode:23:4:-1,querytree:25:-1:-1,querytree:25:-1:-1
+row 0,'a','a' <2> 'b' & 'c'
+SELECT 1
+> SELECT 'a'::tsquery <@ ''::tsquery, ''::tsquery @> ''::tsquery
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 24
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 37
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 52
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,t
+SELECT 1
+X q1|a &|b
+ERROR 42601 no operand in tsquery: "a &" (unnamed portal parameter $1 = '...')
+X q1|  |b
+NOTICE 00000 text-search query doesn't contain lexemes: "  " (unnamed portal parameter $1 = '...')
+row ,0,'b'
+SELECT 1

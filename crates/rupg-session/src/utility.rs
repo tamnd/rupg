@@ -24,6 +24,13 @@ impl Notice {
     pub(crate) fn warning(error: Error) -> Notice {
         Notice { severity: Severity::Warning, error }
     }
+
+    /// A message of a function: a `NOTICE` for a SQLSTATE of class `00`, as `ereport(NOTICE)` gives it, and a `WARNING` for any other SQLSTATE.
+    pub(crate) fn of_function(error: Error) -> Notice {
+        let severity =
+            if error.state().class() == "00" { Severity::Notice } else { Severity::Warning };
+        Notice { severity, error }
+    }
 }
 
 /// The result of a statement.

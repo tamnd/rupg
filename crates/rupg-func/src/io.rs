@@ -111,6 +111,7 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::PG_SNAPSHOT
             | oid::TXID_SNAPSHOT
             | oid::TSVECTOR
+            | oid::TSQUERY
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -188,6 +189,10 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
     }
     if let Value::TsVector(lexemes) = value {
         types::tsvector_deparse(lexemes, out);
+        return Ok(());
+    }
+    if let Value::TsQuery(items) = value {
+        types::tsquery_deparse(items, out);
         return Ok(());
     }
     if let (Some(kind), Value::Bytea(v)) = (types::GeoKind::from_oid(ty), value) {
@@ -428,7 +433,10 @@ pub fn to_text(ty: u32, value: &Value, session: &dyn Session) -> Result<String> 
 ///
 /// `0A000` for a type that has no input function here, and the error of the input function for a bad value.
 pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<Value> {
-    input_soft(ty, text, typmod, session)?
+    match input_value(ty, text, typmod, session, true) {
+        Ok(value) => Ok(value),
+        Err(Failed::Soft(error) | Failed::Hard(error)) => Err(error),
+    }
 }
 
 /// The text input function of the type, as `InputFunctionCallSafe` calls it. The outer error is a hard error, such as a type that has no input function. The inner error is a soft error of the input function for a bad value, which `pg_input_is_valid` reports as false. The checks of a domain are not part of the input.
@@ -442,7 +450,7 @@ pub(crate) fn input_soft(
     typmod: i32,
     session: &dyn Session,
 ) -> Result<Result<Value>> {
-    match input_value(ty, text, typmod, session) {
+    match input_value(ty, text, typmod, session, false) {
         Ok(value) => Ok(Ok(value)),
         Err(Failed::Soft(error)) => Ok(Err(error)),
         Err(Failed::Hard(error)) => Err(error),
@@ -469,12 +477,34 @@ impl From<Error> for Failed {
     }
 }
 
-/// The text input function of the type.
+/// `tsqueryin`, with the notice of PostgreSQL for a query with no lexemes when `noisy` is true. A full stack of operators and a query that is too deep are errors that `pg_input_is_valid` does not catch.
+fn tsquery_in(
+    text: &str,
+    session: &dyn Session,
+    noisy: bool,
+) -> std::result::Result<Vec<types::QueryItem>, Failed> {
+    let items = types::tsquery_parse(text).map_err(|error| {
+        if error.sqlstate == SqlState::INTERNAL_ERROR
+            || error.sqlstate == SqlState::STATEMENT_TOO_COMPLEX
+        {
+            Failed::Hard(type_error(error))
+        } else {
+            Failed::from(error)
+        }
+    })?;
+    if noisy && items.is_empty() {
+        session.warn(crate::tsquery::no_lexemes(text));
+    }
+    Ok(items)
+}
+
+/// The text input function of the type. `noisy` is false for the soft input of `pg_input_is_valid`, which gives no notices, as `escontext` does in PostgreSQL.
 fn input_value(
     ty: u32,
     text: &str,
     typmod: i32,
     session: &dyn Session,
+    noisy: bool,
 ) -> std::result::Result<Value, Failed> {
     // `domain_in` reads the value with the typmod of the domain.
     let typmod = match builtin::type_by_oid(ty) {
@@ -486,7 +516,7 @@ fn input_value(
         // A hard error of an element stops the input of the array as a hard error.
         let mut hard = None;
         let array = types::array_in(text, delim, session.array_nulls(), |item| {
-            match input_value(elem, item, typmod, session) {
+            match input_value(elem, item, typmod, session, noisy) {
                 Ok(value) => Ok(value),
                 Err(Failed::Soft(e)) => Err(types_error(&e)),
                 Err(Failed::Hard(e)) => {
@@ -502,10 +532,10 @@ fn input_value(
         };
     }
     if let Some(sub) = builtin::range_subtype(ty) {
-        return range_in(ty, sub, text, session);
+        return range_in(ty, sub, text, session, noisy);
     }
     if let Some(range) = builtin::multirange_range(ty) {
-        return multirange_in(range, text, session);
+        return multirange_in(range, text, session, noisy);
     }
     if let Some(kind) = RegKind::from_oid(ty) {
         return match reg::input(kind, text, session)? {
@@ -524,6 +554,7 @@ fn input_value(
         oid::INT2 => Value::Int2(types::int2_in(text)?),
         oid::INT4 => Value::Int4(types::int4_in(text)?),
         oid::TSVECTOR => Value::TsVector(types::tsvector_parse(text)?),
+        oid::TSQUERY => Value::TsQuery(tsquery_in(text, session, noisy)?),
         oid::INT8 => Value::Int8(types::int8_in(text)?),
         oid::OID => Value::Oid(types::oid_in(text)?),
         oid::MONEY => Value::Int8(types::cash_in(text)?),
@@ -613,10 +644,11 @@ fn range_in(
     sub: u32,
     text: &str,
     session: &dyn Session,
+    noisy: bool,
 ) -> std::result::Result<Value, Failed> {
     let parsed = types::range_parse(text)?;
     let bound = |text: Option<&String>| match text {
-        Some(text) => input_value(sub, text, -1, session),
+        Some(text) => input_value(sub, text, -1, session, noisy),
         None => Ok(Value::Null),
     };
     let lower = bound(parsed.lower.as_ref())?;
@@ -630,9 +662,10 @@ fn multirange_in(
     range_ty: u32,
     text: &str,
     session: &dyn Session,
+    noisy: bool,
 ) -> std::result::Result<Value, Failed> {
     let mut ranges = Vec::new();
-    types::multirange_parse(text, |text| match input_value(range_ty, text, -1, session)? {
+    types::multirange_parse(text, |text| match input_value(range_ty, text, -1, session, noisy)? {
         Value::Range(range) => {
             if !range.is_empty() {
                 ranges.push(*range);
@@ -781,6 +814,7 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::BPCHAR => Value::text(types::bpchar_in(recv.text()?, typmod)?),
         oid::OID => Value::Oid(recv.u32()?),
         oid::TSVECTOR => Value::TsVector(types::tsvector_recv(recv)?),
+        oid::TSQUERY => Value::TsQuery(types::tsquery_recv(recv)?),
         ty if RegKind::from_oid(ty).is_some() => Value::Oid(recv.u32()?),
         oid::JSON => Value::text(types::json_in(recv.text()?)?),
         oid::JSONB => Value::Text(types::jsonb_recv(recv.rest())?),
@@ -891,6 +925,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         (_, Value::Range(range)) => range_send(ty, range, out)?,
         (_, Value::Multirange(ranges)) => multirange_send(ty, ranges, out)?,
         (_, Value::TsVector(lexemes)) => types::tsvector_send(lexemes, out),
+        (_, Value::TsQuery(items)) => types::tsquery_send(items, out),
         (_, Value::Null) => return Err(Error::internal("the send function got a null value")),
         _ => return Err(not_yet(format!("binary output of type {}", type_name(ty)))),
     }

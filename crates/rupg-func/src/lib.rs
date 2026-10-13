@@ -34,6 +34,7 @@ mod snapshot;
 mod srf;
 mod stat;
 mod text;
+mod tsquery;
 mod tsvector;
 mod updatable;
 mod zones;
@@ -171,7 +172,7 @@ pub trait Session {
         let _ = (ty, value);
         Err(not_yet("the check constraints of a domain"))
     }
-    /// `ereport(WARNING)` in a function: a warning for the client, such as the warning of the input of an `aclitem` value with no grantor. A session with no client drops it.
+    /// `ereport(WARNING)` or `ereport(NOTICE)` in a function: a message for the client, such as the warning of the input of an `aclitem` value with no grantor. A message with a SQLSTATE of class `00` is a `NOTICE`, and any other message is a `WARNING`. A session with no client drops it.
     fn warn(&self, warning: Error) {
         let _ = warning;
     }
@@ -282,6 +283,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| range::by_src(src))
         .or_else(|| multirange::by_src(src))
         .or_else(|| tsvector::by_src(src))
+        .or_else(|| tsquery::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))
