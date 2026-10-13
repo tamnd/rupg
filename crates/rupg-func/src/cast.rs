@@ -115,7 +115,7 @@ fn numeric_to_int(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `numeric_float8` and `numeric_float4`: the input function of the float type on the text of the number.
-fn numeric_to_float(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+pub(crate) fn numeric_to_float(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let Value::Numeric(n) = first(args)? else { return Err(bad_value()) };
     let special = match n.sign() {
         NumericSign::NaN => Some(f64::NAN),

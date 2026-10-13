@@ -221,8 +221,11 @@ impl Analyzer<'_> {
         let (value, ty) = match &c.val {
             Some(Node::Integer(v)) => (Value::Int4(*v), oid::INT4),
             Some(Node::Float(text)) => match rupg_types::int8_in(text) {
-                // A literal that fits `int8` is an `int8`, and any other number is a `numeric`.
-                Ok(v) => (Value::Int8(v), oid::INT8),
+                // A literal that fits `int4`, such as `-2147483648`, is an `int4`. A literal that fits `int8` is an `int8`, and any other number is a `numeric`.
+                Ok(v) => match i32::try_from(v) {
+                    Ok(v) => (Value::Int4(v), oid::INT4),
+                    Err(_) => (Value::Int8(v), oid::INT8),
+                },
                 Err(_) => {
                     let v =
                         rupg_types::numeric_in(text, -1).map_err(|e| Error::from(e).at_opt(at))?;

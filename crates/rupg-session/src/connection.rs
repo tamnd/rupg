@@ -1838,6 +1838,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/range.test")));
     }
 
+    /// The operators of the ranges: overlap, containment of a range and of a value, the position operators, adjacency, union, intersection and difference with the errors of a result that is not contiguous, `range_merge`, `range_minus_multi`, the subtype difference functions and the operators in a query with a parameter. `connection/range_ops.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn range_ops() {
+        big_stack(|| script(include_str!("connection/range_ops.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {
