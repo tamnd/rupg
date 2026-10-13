@@ -7,7 +7,7 @@ use rupg_pgcatalog::builtin::{self, ProcRow};
 use rupg_types::{Array, RegKind, USECS_PER_DAY, USECS_PER_SEC, Value, oid};
 
 use crate::io::base_type;
-use crate::{Call, Kernel, bad_value, range};
+use crate::{Call, Kernel, bad_value, multirange, range};
 
 /// The groups of types that compare with each other.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -43,6 +43,8 @@ enum Family {
     Bit,
     /// The range types, which compare as `range_cmp` does.
     Range,
+    /// The multirange types, which compare as `multirange_cmp` does.
+    Multirange,
 }
 
 /// The family of a type, or `None` for a type that has no comparison here.
@@ -77,6 +79,8 @@ fn family(ty: u32) -> Option<Family> {
         oid::BIT | oid::VARBIT => Family::Bit,
         oid::ANYRANGE => Family::Range,
         ty if builtin::range_subtype(ty).is_some() => Family::Range,
+        oid::ANYMULTIRANGE => Family::Multirange,
+        ty if builtin::multirange_range(ty).is_some() => Family::Multirange,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
             _ => return None,
@@ -139,6 +143,13 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
                 sub => sub,
             };
             range::range_order(sub, x, y)?
+        }
+        (Value::Multirange(x), Value::Multirange(y)) => {
+            let sub = match range::subtype(multirange::range_of(left)) {
+                0 => range::subtype(multirange::range_of(right)),
+                sub => sub,
+            };
+            multirange::multirange_order(sub, x, y)?
         }
         _ => return Err(bad_value()),
     })
@@ -408,6 +419,7 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
                 | "macaddr8_cmp"
                 | "pg_lsn_cmp"
                 | "range_cmp"
+                | "multirange_cmp"
         )
     {
         Some(cmp)

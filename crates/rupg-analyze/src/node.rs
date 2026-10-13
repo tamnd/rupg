@@ -426,14 +426,25 @@ fn write_value(value: &Value, out: &mut String) {
             }
             out.push_str("))");
         }
-        Value::Range(range) => {
-            out.push_str(&format!("(range {} ", range.flags));
-            write_value(&range.lower, out);
-            out.push(' ');
-            write_value(&range.upper, out);
+        Value::Range(range) => write_range(range, out),
+        Value::Multirange(ranges) => {
+            out.push_str("(multirange");
+            for range in ranges {
+                out.push(' ');
+                write_range(range, out);
+            }
             out.push(')');
         }
     }
+}
+
+/// The stored form of a range: `(range FLAGS LOWER UPPER)`.
+fn write_range(range: &Range, out: &mut String) {
+    out.push_str(&format!("(range {} ", range.flags));
+    write_value(&range.lower, out);
+    out.push(' ');
+    write_value(&range.upper, out);
+    out.push(')');
 }
 
 /// A part of a stored form.
@@ -832,6 +843,15 @@ fn value_of(item: &Item) -> Result<Value> {
                 upper: value_of(upper)?,
             }))
         }
+        "multirange" => Value::Multirange(
+            parts
+                .iter()
+                .map(|part| match value_of(part)? {
+                    Value::Range(range) => Ok(*range),
+                    _ => Err(bad("a multirange value")),
+                })
+                .collect::<Result<_>>()?,
+        ),
         kind => return Err(bad(&format!("the value kind {kind}"))),
     };
     Ok(value)
@@ -890,6 +910,22 @@ mod tests {
                 oid::INT4RANGE,
             ),
             (Value::Range(Box::new(Range::empty())), oid::DATERANGE),
+            (Value::Multirange(Vec::new()), oid::INT4MULTIRANGE),
+            (
+                Value::Multirange(vec![
+                    Range {
+                        flags: rupg_types::RANGE_LB_INF,
+                        lower: Value::Null,
+                        upper: Value::Int8(-4),
+                    },
+                    Range {
+                        flags: rupg_types::RANGE_LB_INC,
+                        lower: Value::Int8(7),
+                        upper: Value::Int8(9),
+                    },
+                ]),
+                oid::INT8MULTIRANGE,
+            ),
         ];
         for (value, ty) in values {
             round_trip(&constant(value, ty));

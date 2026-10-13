@@ -48,6 +48,9 @@ pub fn output_supported(ty: u32) -> bool {
     if let Some(sub) = builtin::range_subtype(ty) {
         return output_supported(sub);
     }
+    if let Some(range) = builtin::multirange_range(ty) {
+        return output_supported(range);
+    }
     matches!(
         ty,
         oid::BOOL
@@ -125,6 +128,9 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some(sub) = builtin::range_subtype(ty) {
         return input_supported(sub);
     }
+    if let Some(range) = builtin::multirange_range(ty) {
+        return input_supported(range);
+    }
     output_supported(ty) && !matches!(ty, oid::ANYARRAY | oid::VOID) && !is_row_type(ty)
 }
 
@@ -172,6 +178,9 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
     }
     if let Value::Range(range) = value {
         return range_out(ty, range, session, out);
+    }
+    if let Value::Multirange(ranges) = value {
+        return multirange_out(ty, ranges, session, out);
     }
     if let Value::Record(record) = value {
         return record_out(record, session, out);
@@ -293,6 +302,37 @@ fn range_send(ty: u32, range: &types::Range, out: &mut Vec<u8>) -> Result<()> {
         range.has_upper().then_some(&upper[..]),
         out,
     );
+    Ok(())
+}
+
+/// `multirange_out`: the output function of the range type for each range, in braces.
+fn multirange_out(
+    ty: u32,
+    ranges: &[types::Range],
+    session: &dyn Session,
+    out: &mut Vec<u8>,
+) -> Result<()> {
+    let range_ty = crate::multirange::range_of(ty);
+    let mut texts = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        let mut text = Vec::new();
+        range_out(range_ty, range, session, &mut text)?;
+        texts.push(text);
+    }
+    types::multirange_deparse(texts.iter().map(Vec::as_slice), out);
+    Ok(())
+}
+
+/// `multirange_send`: the send function of the range type for each range, in the binary form of the multirange.
+fn multirange_send(ty: u32, ranges: &[types::Range], out: &mut Vec<u8>) -> Result<()> {
+    let range_ty = crate::multirange::range_of(ty);
+    let mut bytes = Vec::with_capacity(ranges.len());
+    for range in ranges {
+        let mut one = Vec::new();
+        range_send(range_ty, range, &mut one)?;
+        bytes.push(one);
+    }
+    types::multirange_send(&bytes.iter().map(Vec::as_slice).collect::<Vec<_>>(), out);
     Ok(())
 }
 
@@ -459,6 +499,9 @@ fn input_value(
     if let Some(sub) = builtin::range_subtype(ty) {
         return range_in(ty, sub, text, session);
     }
+    if let Some(range) = builtin::multirange_range(ty) {
+        return multirange_in(range, text, session);
+    }
     if let Some(kind) = RegKind::from_oid(ty) {
         return match reg::input(kind, text, session)? {
             Ok(oid) => Ok(Value::Oid(oid)),
@@ -576,6 +619,26 @@ fn range_in(
     Ok(Value::Range(Box::new(range)))
 }
 
+/// `multirange_in`: the text of the multirange, then the input function of the range type for each range. The empty ranges are not kept.
+fn multirange_in(
+    range_ty: u32,
+    text: &str,
+    session: &dyn Session,
+) -> std::result::Result<Value, Failed> {
+    let mut ranges = Vec::new();
+    types::multirange_parse(text, |text| match input_value(range_ty, text, -1, session)? {
+        Value::Range(range) => {
+            if !range.is_empty() {
+                ranges.push(*range);
+            }
+            Ok(())
+        }
+        _ => Err(Failed::Hard(bad_value())),
+    })?;
+    let ranges = crate::multirange::make_multirange(range_ty, ranges).map_err(Failed::Soft)?;
+    Ok(Value::Multirange(ranges))
+}
+
 /// `range_recv`: the binary form of the range, then the receive function of the subtype for the bytes of each bound. The receive function of a bound does not have to read all its bytes.
 fn range_recv(ty: u32, sub: u32, recv: &mut Recv<'_>) -> std::result::Result<Value, Received> {
     let (flags, lower, upper) = types::range_recv(recv)?;
@@ -587,6 +650,22 @@ fn range_recv(ty: u32, sub: u32, recv: &mut Recv<'_>) -> std::result::Result<Val
     let upper = bound(upper)?;
     let range = crate::range::make_range(ty, flags, lower, upper).map_err(Received::Engine)?;
     Ok(Value::Range(Box::new(range)))
+}
+
+/// `multirange_recv`: the binary form of the multirange, then the receive function of the range type for the bytes of each range.
+fn multirange_recv(range_ty: u32, recv: &mut Recv<'_>) -> std::result::Result<Value, Received> {
+    let mut ranges = Vec::new();
+    types::multirange_recv(recv, |bytes| {
+        match receive_from(range_ty, &mut Recv::new(bytes), -1)? {
+            Value::Range(range) => {
+                ranges.push(*range);
+                Ok(())
+            }
+            _ => Err(Received::Engine(bad_value())),
+        }
+    })?;
+    let ranges = crate::multirange::make_multirange(range_ty, ranges).map_err(Received::Engine)?;
+    Ok(Value::Multirange(ranges))
 }
 
 /// The error of the input and the receive functions of a type whose values come only from the server.
@@ -664,6 +743,9 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
     }
     if let Some(sub) = builtin::range_subtype(ty) {
         return range_recv(ty, sub, recv);
+    }
+    if let Some(range) = builtin::multirange_range(ty) {
+        return multirange_recv(range, recv);
     }
     if let Some(kind) = types::GeoKind::from_oid(ty) {
         return Ok(Value::Bytea(types::geo_recv(kind, recv)?));
@@ -800,6 +882,7 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         }
         (_, Value::Record(record)) => record_send(record, out)?,
         (_, Value::Range(range)) => range_send(ty, range, out)?,
+        (_, Value::Multirange(ranges)) => multirange_send(ty, ranges, out)?,
         (_, Value::Null) => return Err(Error::internal("the send function got a null value")),
         _ => return Err(not_yet(format!("binary output of type {}", type_name(ty)))),
     }

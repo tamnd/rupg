@@ -1844,6 +1844,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/range_ops.test")));
     }
 
+    /// The multirange types: the text forms with the merge of the ranges on input and the errors of a bad literal, the constructors with a `VARIADIC` array, the cast from a range, the functions that read the bounds and the flags, `range_merge`, `unnest`, the order, `DISTINCT` and `GROUP BY`, the soft errors, `COPY` in text and binary and a parameter. `connection/multirange.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn multirange() {
+        big_stack(|| script(include_str!("connection/multirange.test")));
+    }
+
     /// `inet` and `cidr`: the text forms of IPv4 and IPv6 with the errors of a bad value, the class of a `cidr` with no mask length, the casts, the functions such as `abbrev` and `set_masklen`, the containment, bit and arithmetic operators and the order. `connection/inet.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn inet() {
