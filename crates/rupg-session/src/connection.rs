@@ -643,6 +643,8 @@ impl Connection {
             }
             // The columns of a query that failed at run time. PostgreSQL sends `RowDescription` when the executor starts, so the error comes after it.
             let mut described = None;
+            // The format and the number of columns of a `COPY` that failed at run time.
+            let mut copying = None;
             let result = if let Err(error) = self.interrupted() {
                 Err(error)
             } else if self.transaction.failed() && !utility::exits_transaction(node) {
@@ -664,7 +666,7 @@ impl Connection {
                 self.lock(stmt)
             } else if let Node::CopyStmt(stmt) = node {
                 drop(self.portals.close(b""));
-                self.copy(stmt)
+                self.copy(stmt, &mut copying)
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
@@ -684,6 +686,9 @@ impl Connection {
                         let fields: Vec<Field<'_>> =
                             columns.iter().map(|column| column.field(0)).collect();
                         out.row_description(&fields);
+                    }
+                    if let Some((binary, columns)) = copying {
+                        copy::copy_out_response(out, binary, columns);
                     }
                     let position = error.position().map(|at| character_position(text, at));
                     self.fail(&error, position, out);
@@ -729,11 +734,17 @@ impl Connection {
     ) -> Result<Done, Error> {
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
-        let plan = query::plan(node, &reader, &Params::default())?;
+        let plan = query::plan(node, &reader, &Params::default());
+        notices.extend(reader.take_warnings().into_iter().map(Notice::warning));
+        let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
-        let plan = plan.fold(None, &reader)?;
+        let plan = plan.fold(None, &reader);
+        notices.extend(reader.take_warnings().into_iter().map(Notice::warning));
+        let plan = plan?;
         let columns = query::columns(&plan);
-        match query::run(&plan, &[], &reader, &[]) {
+        let rows = query::run(&plan, &[], &reader, &[]);
+        notices.extend(reader.take_warnings().into_iter().map(Notice::warning));
+        match rows {
             Ok(rows) => Ok(Done::Rows { columns, rows, tag: CommandTag::Select }),
             Err(error) => {
                 *described = Some(columns);
@@ -1801,6 +1812,12 @@ mod tests {
     #[test]
     fn snap() {
         big_stack(|| script(include_str!("connection/snap.test")));
+    }
+
+    /// `aclitem`: the text forms with the errors and the warning of a bad item, the soft errors, `makeaclitem`, `aclcontains`, `aclexplode`, the hash functions, the arrays, the text form of `COPY` and the error of the binary form. A warning of the input of a literal points at the literal, in a simple query and in `Parse`. `connection/acl.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn acl() {
+        big_stack(|| script(include_str!("connection/acl.test")));
     }
 
     /// The geometric types `point`, `lseg`, `box`, `path`, `polygon`, `line` and `circle`: the text forms of each format with the errors of a bad value, `extra_float_digits`, the arrays, the soft errors and the text and binary forms of `COPY`. `connection/geo.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -97,6 +97,8 @@ pub(crate) struct Reader<'a> {
     statements: Option<&'a Statements<Arc<Prepared>>>,
     /// The flag that a `CancelRequest` sets, or `None` for a reader that is not a session.
     cancel: Option<&'a AtomicBool>,
+    /// The warnings of the functions that the statement called, such as the input function of `aclitem`. The session sends them before the result.
+    warnings: RefCell<Vec<Error>>,
 }
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
@@ -127,7 +129,13 @@ impl<'a> Reader<'a> {
             activity: None,
             statements: None,
             cancel: None,
+            warnings: RefCell::new(Vec::new()),
         }
+    }
+
+    /// The warnings of the functions since the last call.
+    pub(crate) fn take_warnings(&self) -> Vec<Error> {
+        self.warnings.take()
     }
 
     /// The reader of a session, which reads the table of the sessions in `store`.
@@ -336,6 +344,10 @@ impl rupg_func::Session for Reader<'_> {
         rupg_exec::input_failure(ty, value, self)
     }
 
+    fn warn(&self, warning: Error) {
+        self.warnings.borrow_mut().push(warning);
+    }
+
     fn version(&self) -> String {
         crate::connection::version_text()
     }
@@ -414,6 +426,15 @@ impl Env for Reader<'_> {
         let value = rupg_func::input(ty, text, typmod, self)?;
         rupg_exec::check_input(ty, &value, self)?;
         Ok(value)
+    }
+
+    fn input_at(&self, ty: u32, text: &str, typmod: i32, at: Option<usize>) -> Result<Value> {
+        let before = self.warnings.borrow().len();
+        let value = self.input(ty, text, typmod);
+        let mut warnings = self.warnings.borrow_mut();
+        let new = warnings.split_off(before);
+        warnings.extend(new.into_iter().map(|warning| warning.with_position(at)));
+        value
     }
 
     fn catalog(&self) -> Option<&Catalog> {

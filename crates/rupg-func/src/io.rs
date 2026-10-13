@@ -119,9 +119,7 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some((elem, _)) = array_of(ty) {
         return input_supported(elem);
     }
-    output_supported(ty)
-        && !matches!(ty, oid::ACLITEM | oid::ANYARRAY | oid::VOID)
-        && !is_row_type(ty)
+    output_supported(ty) && !matches!(ty, oid::ANYARRAY | oid::VOID) && !is_row_type(ty)
 }
 
 /// The name of a type for an error.
@@ -439,6 +437,7 @@ fn input_value(
         }
         XID => Value::Oid(types::uint32_in(text, "xid")?),
         CID => Value::Oid(types::uint32_in(text, "cid")?),
+        oid::ACLITEM => Value::Text(crate::acl::aclitem_in(text, session).map_err(Failed::Soft)?),
         oid::TEXT | oid::UNKNOWN | oid::CSTRING | oid::REFCURSOR => Value::text(text),
         oid::VARCHAR => Value::text(types::varchar_in(text, typmod)?),
         oid::BPCHAR => Value::text(types::bpchar_in(text, typmod)?),
@@ -509,6 +508,14 @@ fn no_input(ty: u32) -> Error {
     Error::new(
         SqlState::FEATURE_NOT_SUPPORTED,
         format!("cannot accept a value of type {}", type_name(ty)),
+    )
+}
+
+/// `getTypeBinaryInputInfo` and `getTypeBinaryOutputInfo`: the error of a type that has no receive or no send function, such as `aclitem`.
+fn no_binary(ty: u32, what: &str) -> Error {
+    Error::new(
+        SqlState::UNDEFINED_FUNCTION,
+        format!("no binary {what} function available for type {}", type_name(ty)),
     )
 }
 
@@ -628,6 +635,7 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         oid::PG_NDISTINCT | oid::PG_DEPENDENCIES | oid::PG_MCV_LIST => {
             return Err(Received::Engine(no_input(ty)));
         }
+        oid::ACLITEM => return Err(Received::Engine(no_binary(ty, "input"))),
         _ => {
             return Err(Received::Engine(not_yet(format!(
                 "binary input of type {}",
@@ -658,7 +666,8 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         return failed.map_or(Ok(()), Err);
     }
     match (ty, value) {
-        (oid::ACLITEM | oid::ANYARRAY, _) => {
+        (oid::ACLITEM, _) => return Err(no_binary(ty, "output")),
+        (oid::ANYARRAY, _) => {
             return Err(not_yet(format!("binary output of type {}", type_name(ty))));
         }
         (oid::MACADDR, Value::Int8(v)) => out.extend_from_slice(&v.to_be_bytes()[2..]),
