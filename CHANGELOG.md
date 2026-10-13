@@ -4,6 +4,23 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.24 (2026-10-13)
+
+A patch release on the way to M2. rupg now runs the operators and aggregates of the multirange types, and reads and writes the text search types `tsvector` and `tsquery` with their operators and the match operator `@@`.
+
+### Added
+
+- The operators of the multirange types, such as `+`, `-`, `*`, `&&`, `@>`, `<<` and `-|-`, and the set function `multirange_minus_multi` (#280).
+- The aggregates `range_agg` and `range_intersect_agg` for ranges and multiranges (#281).
+- The text and binary forms of `tsvector`, with `length`, `strip`, `setweight`, `ts_delete`, `tsvector_to_array`, `array_to_tsvector`, `ts_filter`, `unnest`, the operator `||` and the order of the vectors (#282).
+- The text and binary forms of `tsquery`, with `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@` and the order of the queries (#283).
+- The match operators `@@` and `@@@` of `tsvector` and `tsquery`, with weights, prefixes and the rules of PostgreSQL for `<N>` (#284).
+
+### Fixed
+
+- A message of a function with a SQLSTATE of class `00` is now a `NOTICE`, as in PostgreSQL. Before, it was a `WARNING` (#283).
+- The `Bind` message now sends the notices of the input functions of the parameters. Before, the session dropped them (#283).
+
 ## 0.1.23 (2026-10-13)
 
 A patch release on the way to M2. rupg now reads and writes `aclitem` values and the values of the range and multirange types, and runs the operators of the range types.
