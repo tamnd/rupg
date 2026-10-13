@@ -1,0 +1,178 @@
+> SELECT point(1, 2), point(1.5, 'NaN'), point(0, '-0'), point(1e300, -1e-300)
+fields point:600:16:-1,point:600:16:-1,point:600:16:-1,point:600:16:-1
+row (1,2),(1.5,NaN),(0,-0),(1e+300,-1e-300)
+SELECT 1
+> SELECT '(1,2)'::point << '(2,2)', '(1,2)'::point >> '(0,2)', '(1,2)'::point <^ '(1,3)', '(1,2)'::point >^ '(1,1)', '(1,2)'::point <<| '(1,3)', '(1,2)'::point |>> '(1,1)', '(1,2)'::point ?| '(1.0000001,5)', '(1,2)'::point ?- '(7,2)', '(1,2)'::point ~= '(1.0000001,2)', '(1,2)'::point <> '(1,2.1)'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,t,t,t,t,t,t
+SELECT 1
+> SELECT '(1,2)'::point << '(1.0000001,2)', '(1,2)'::point >> '(0.9999999,2)', '(1,2)'::point <^ '(1,2.0000001)', '(1,2)'::point >^ '(1,1.9999999)'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,f,f,f
+SELECT 1
+> SELECT '(NaN,1)'::point ~= '(NaN,1)', '(NaN,1)'::point <> '(NaN,1)', '(NaN,1)'::point << '(1,1)', '(NaN,1)'::point ?- '(1,1)', '(NaN,1)'::point ~= '(1,1)'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,t,f
+SELECT 1
+> SELECT '(0,0)'::point <-> '(3,4)', slope('(0,0)', '(2,1)'), slope('(1,0)', '(1,5)'), slope('(0,1)', '(5,1)'), ishorizontal('(0,1)'::point, '(5,1)'), isvertical('(1,0)'::point, '(1,5)'), isvertical('(1,0)'::point, '(2,5)')
+fields ?column?:701:8:-1,slope:701:8:-1,slope:701:8:-1,slope:701:8:-1,ishorizontal:16:1:-1,isvertical:16:1:-1,isvertical:16:1:-1
+row 5,0.5,Infinity,0,t,t,f
+SELECT 1
+> SELECT '(1,2)'::point + '(3,4)', '(1,2)'::point - '(3,5)', '(1,2)'::point * '(3,4)', '(1,2)'::point / '(3,4)', '(1,2)'::point * '(0,1)'
+fields ?column?:600:16:-1,?column?:600:16:-1,?column?:600:16:-1,?column?:600:16:-1,?column?:600:16:-1
+row (4,6),(-2,-3),(-5,10),(0.44,0.08),(-2,1)
+SELECT 1
+> SELECT '(Infinity,1)'::point + '(1,1)', '(Infinity,1)'::point - '(Infinity,1)', '(1,2)'::point <-> '(Infinity,2)', '(NaN,2)'::point <-> '(1,2)'
+fields ?column?:600:16:-1,?column?:600:16:-1,?column?:701:8:-1,?column?:701:8:-1
+row (Infinity,2),(NaN,0),Infinity,NaN
+SELECT 1
+> SELECT '(1,2)'::point / '(0,0)'
+ERROR 22012 division by zero
+> SELECT '(1e300,1e300)'::point * '(1e300,1e300)'
+ERROR 22003 value out of range: overflow
+> SELECT '(1e-300,1)'::point * '(1e-300,0)'
+ERROR 22003 value out of range: underflow
+> SELECT '(1e308,0)'::point + '(1e308,0)'
+ERROR 22003 value out of range: overflow
+> SELECT '(1e308,0)'::point <-> '(-1e308,0)'
+ERROR 22003 value out of range: overflow
+> SELECT box('(1,2)'::point, '(3,0)'), box('(1,2)'::point), point('(0,0),(2,4)'::box), lseg('(0,0),(2,4)'::box), diagonal('(0,0),(2,4)'::box), center('(0,0),(2,4)'::box), @@ '(0,0),(2,4)'::box
+fields box:603:32:-1,box:603:32:-1,point:600:16:-1,lseg:601:32:-1,diagonal:601:32:-1,center:600:16:-1,?column?:600:16:-1
+row (3,2),(1,0),(1,2),(1,2),(1,2),[(2,4),(0,0)],[(2,4),(0,0)],(1,2),(1,2)
+SELECT 1
+> SELECT '(1,2)'::point::box, '(0,0),(2,4)'::box::point, '[(0,0),(2,4)]'::lseg::point
+fields box:603:32:-1,point:600:16:-1,point:600:16:-1
+row (1,2),(1,2),(1,2),(1,2)
+SELECT 1
+> SELECT area('(0,0),(2,4)'::box), width('(0,0),(2,4)'::box), height('(0,0),(2,4)'::box), '(0,0),(2,4)'::box <-> '(3,3),(5,5)', box('(NaN,1)'::point, '(2,3)')
+fields area:701:8:-1,width:701:8:-1,height:701:8:-1,?column?:701:8:-1,box:603:32:-1
+row 8,2,4,3.605551275463989,(NaN,3),(2,1)
+SELECT 1
+> SELECT a && b, a ?# b, a << b, a &< b, a >> b, a &> b, a <<| b, a &<| b, a |>> b, a |&> b, a <@ b, a @> b, a <^ b, a >^ b, a ~= b, a = b, a < b, a <= b, a > b, a >= b, a # b, bound_box(a, b) FROM (VALUES ('(0,0),(2,2)'::box, '(1,1),(3,3)'::box), ('(0,0),(1,1)', '(2,2),(3,3)'), ('(0,0),(4,4)', '(1,1),(2,2)'), ('(0,0),(1,1)', '(0,1),(1,2)'), ('(2,2),(3,3)', '(0,0),(1,1)'), ('(0,0),(2,2)', '(0,0),(2,2)'), ('(NaN,NaN),(0,0)', '(0,0),(2,2)')) v(a, b)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:603:32:-1,bound_box:603:32:-1
+row t,t,f,t,f,f,f,t,f,f,f,f,f,f,f,t,f,t,f,t,(2,2),(1,1),(3,3),(0,0)
+row f,f,t,t,f,f,t,t,f,f,f,f,t,f,f,t,f,t,f,t,NULL,(3,3),(0,0)
+row t,t,f,f,f,f,f,f,f,f,f,t,f,f,f,f,f,f,t,t,(2,2),(1,1),(4,4),(0,0)
+row t,t,f,t,f,t,f,t,f,f,f,f,t,f,f,t,f,t,f,t,(1,1),(0,1),(1,2),(0,0)
+row f,f,f,f,t,t,f,f,t,t,f,f,f,t,f,t,f,t,f,t,NULL,(3,3),(0,0)
+row t,t,f,t,f,t,f,t,f,t,t,t,f,f,t,t,f,t,f,t,(2,2),(0,0),(2,2),(0,0)
+row f,f,f,f,f,t,f,f,f,t,f,f,f,f,f,f,f,f,f,f,NULL,(NaN,NaN),(0,0)
+SELECT 7
+> SELECT '(0,0),(2,2)'::box @> '(1,1)'::point, '(1,1)'::point <@ '(0,0),(2,2)'::box, '(3,1)'::point <@ '(0,0),(2,2)'::box, '(2,2)'::point <@ '(0,0),(2,2)'::box, '(0,0),(Infinity,Infinity)'::box @> '(5,5)'::point
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,t
+SELECT 1
+> SELECT '(0,0),(2,2)'::box + '(1,1)'::point, '(0,0),(2,2)'::box - '(1,1)'::point, '(1,1),(2,2)'::box * '(2,0)'::point, '(1,1),(2,2)'::box * '(-1,0)'::point, '(2,2),(4,4)'::box / '(2,0)'::point, '(1,1),(2,2)'::box * '(0,1)'::point
+fields ?column?:603:32:-1,?column?:603:32:-1,?column?:603:32:-1,?column?:603:32:-1,?column?:603:32:-1,?column?:603:32:-1
+row (3,3),(1,1),(1,1),(-1,-1),(4,4),(2,2),(-1,-1),(-2,-2),(2,2),(1,1),(-1,2),(-2,1)
+SELECT 1
+> SELECT '(0,0),(2,2)'::box / '(0,0)'::point
+ERROR 22012 division by zero
+> SELECT center('(1e308,0),(1.5e308,0)'::box)
+ERROR 22003 value out of range: overflow
+> SELECT area('(1e200,1e200),(-1e200,-1e200)'::box)
+ERROR 22003 value out of range: overflow
+> SELECT area('(0,0),(Infinity,1)'::box), width('(0,0),(Infinity,1)'::box), center('(0,0),(Infinity,1)'::box)
+fields area:701:8:-1,width:701:8:-1,center:600:16:-1
+row Infinity,Infinity,(Infinity,0.5)
+SELECT 1
+> SELECT lseg('(0,0)'::point, '(3,4)'), length('[(0,0),(3,4)]'::lseg), @-@ '[(0,0),(3,4)]'::lseg, point('[(0,0),(2,4)]'::lseg), @@ '[(0,0),(2,4)]'::lseg, lseg_center('[(1,1),(2,2)]')
+fields lseg:601:32:-1,length:701:8:-1,?column?:701:8:-1,point:600:16:-1,?column?:600:16:-1,lseg_center:600:16:-1
+row [(0,0),(3,4)],5,5,(1,2),(1,2),(1.5,1.5)
+SELECT 1
+> SELECT a ?# b, a ?|| b, a ?-| b, a = b, a <> b, a < b, a <= b, a > b, a >= b, a <-> b, a # b, a ## b FROM (VALUES ('[(0,0),(2,2)]'::lseg, '[(0,2),(2,0)]'::lseg), ('[(0,0),(1,1)]', '[(2,2),(3,3)]'), ('[(0,0),(0,1)]', '[(1,0),(2,0)]'), ('[(0,0),(1,0)]', '[(0,1),(1,1)]'), ('[(0,0),(4,0)]', '[(1,1),(3,2)]'), ('[(0,0),(2,2)]', '[(0,0),(2,2)]'), ('[(0,0),(2,0)]', '[(1,0),(1,3)]'), ('[(0,0),(1,2)]', '[(5,1),(7,0)]')) v(a, b)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:701:8:-1,?column?:600:16:-1,?column?:600:16:-1
+row t,f,t,f,t,f,t,f,t,0,(1,1),(1,1)
+row f,t,f,f,t,f,t,f,t,1.4142135623730951,NULL,NULL
+row f,f,t,f,t,f,t,f,t,1,NULL,(1,0)
+row f,t,f,f,t,f,t,f,t,1,NULL,NULL
+row f,f,f,f,t,f,f,t,t,1,NULL,(1,1)
+row f,t,f,t,f,f,t,f,t,0,NULL,NULL
+row t,f,t,f,t,t,t,f,f,0,(1,0),(1,0)
+row f,f,t,f,t,f,t,f,t,4.123105625617661,NULL,(5,1)
+SELECT 8
+> SELECT ?| '[(1,0),(1,5)]'::lseg, ?- '[(0,1),(5,1)]'::lseg, isvertical('[(1,0),(1,5)]'::lseg), ishorizontal('[(1,0),(1,5)]'::lseg), isparallel('[(0,0),(1,1)]'::lseg, '[(1,0),(2,1)]'::lseg), isperp('[(0,0),(1,1)]'::lseg, '[(0,1),(1,0)]'::lseg), isperp('[(0,0),(0,1)]'::lseg, '[(0,0),(1,0)]'::lseg)
+fields ?column?:16:1:-1,?column?:16:1:-1,isvertical:16:1:-1,ishorizontal:16:1:-1,isparallel:16:1:-1,isperp:16:1:-1,isperp:16:1:-1
+row t,t,t,f,t,t,t
+SELECT 1
+> SELECT line('(0,0)'::point, '(1,1)'), line('(0,0)'::point, '(0,1)'), line('(1,1)'::point, '(3,1)'), line('(1,2)'::point, '(3,7)')
+fields line:628:24:-1,line:628:24:-1,line:628:24:-1,line:628:24:-1
+row {1,-1,0},{-1,0,0},{0,-1,1},{2.5,-1,-0.5}
+SELECT 1
+> SELECT line('(1,1)'::point, '(1,1)')
+ERROR 22023 invalid line specification: must be two distinct points
+> SELECT a ?# b, a ?|| b, a ?-| b, a = b, a <-> b, a # b FROM (VALUES ('{1,-1,0}'::line, '{1,1,-2}'::line), ('{1,-1,0}', '{2,-2,4}'), ('{0,-1,1}', '{-1,0,3}'), ('{1,2,3}', '{2,4,6}'), ('{NaN,1,1}', '{NaN,1,1}'), ('{1,0,-1}', '{2,0,-4}'), ('{1,-1,0}', '{-1,1,0}'), ('{3,4,5}', '{3,4,-5}'), ('{0,1,0}', '{0,2,1}')) v(a, b)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:701:8:-1,?column?:600:16:-1
+row t,f,t,f,0,(1,1)
+row f,t,f,f,1.414213562373095,NULL
+row t,f,t,f,0,(3,1)
+row f,t,f,t,0,NULL
+row t,f,f,t,0,(NaN,NaN)
+row f,t,f,f,1,NULL
+row f,t,f,t,0,NULL
+row f,t,f,f,2,NULL
+row f,t,f,f,0.5,NULL
+SELECT 9
+> SELECT ?| '{1,0,3}'::line, ?- '{0,1,3}'::line, isvertical('{1,0,3}'::line), ishorizontal('{1,0,3}'::line), isparallel('{1,-1,0}'::line, '{2,-2,1}'::line), isperp('{1,-1,0}'::line, '{1,1,0}'::line), isperp('{1,0,0}'::line, '{0,1,0}'::line), isperp('{1,2,0}'::line, '{2,1,0}'::line)
+fields ?column?:16:1:-1,?column?:16:1:-1,isvertical:16:1:-1,ishorizontal:16:1:-1,isparallel:16:1:-1,isperp:16:1:-1,isperp:16:1:-1,isperp:16:1:-1
+row t,t,t,f,t,t,t,f
+SELECT 1
+> SELECT p <-> l, l <-> p, p ## l, p <@ l FROM (VALUES ('(0,2)'::point, '{1,-1,0}'::line), ('(1,1)', '{1,-1,0}'), ('(5,5)', '{0,-1,3}'), ('(3,0)', '{-1,0,1}'), ('(NaN,NaN)', '{1,-1,0}'), ('(2,7)', '{2.5,-1,-0.5}')) v(p, l)
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:600:16:-1,?column?:16:1:-1
+row 1.4142135623730951,1.4142135623730951,(1,1),f
+row 0,0,(1,1),t
+row 2,2,(5,3),f
+row 2,2,(1,0),f
+row NaN,NaN,NULL,f
+row 0.9284766908852595,0.9284766908852595,(2.8620689655172415,6.655172413793103),f
+SELECT 6
+> SELECT p <-> s, s <-> p, p ## s, p <@ s FROM (VALUES ('(0,2)'::point, '[(0,0),(2,2)]'::lseg), ('(1,1)', '[(0,0),(2,2)]'), ('(5,0)', '[(0,0),(2,2)]'), ('(-1,-3)', '[(0,0),(2,2)]'), ('(1,5)', '[(0,0),(0,2)]'), ('(3,3)', '[(1,1),(1,1)]')) v(p, s)
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:600:16:-1,?column?:16:1:-1
+row 1.4142135623730951,1.4142135623730951,(1,1),f
+row 0,0,(1,1),t
+row 3.605551275463989,3.605551275463989,(2,2),f
+row 3.1622776601683795,3.1622776601683795,(0,0),f
+row 3.1622776601683795,3.1622776601683795,(0,2),f
+row 2.8284271247461903,2.8284271247461903,(1,1),f
+SELECT 6
+> SELECT p <-> b, b <-> p, p ## b FROM (VALUES ('(1,1)'::point, '(0,0),(2,2)'::box), ('(3,1)', '(0,0),(2,2)'), ('(5,5)', '(0,0),(2,2)'), ('(-1,-2)', '(0,0),(2,2)'), ('(1,-4)', '(0,0),(2,2)')) v(p, b)
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:600:16:-1
+row 0,0,(1,1)
+row 1,1,(2,1)
+row 4.242640687119285,4.242640687119285,(2,2)
+row 2.23606797749979,2.23606797749979,(0,0)
+row 4,4,(1,0)
+SELECT 5
+> SELECT s <-> l, l <-> s, l ## s, s ?# l, s <@ l FROM (VALUES ('[(0,0),(2,2)]'::lseg, '{1,1,-2}'::line), ('[(0,0),(1,1)]', '{1,1,-4}'), ('[(0,0),(1,1)]', '{1,-1,1}'), ('[(1,1),(2,2)]', '{1,-1,0}'), ('[(0,3),(1,5)]', '{0,-1,1}'), ('[(0,0),(3,1)]', '{1,0,-5}')) v(s, l)
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:600:16:-1,?column?:16:1:-1,?column?:16:1:-1
+row 0,0,(1,1),t,f
+row 1.4142135623730951,1.4142135623730951,(1,1),f,f
+row 0.7071067811865476,0.7071067811865476,NULL,f,f
+row 0,0,NULL,f,t
+row 2,2,(0,3),f,f
+row 2,2,(3,1),f,f
+SELECT 6
+> SELECT s <-> b, b <-> s, s ## b, s ?# b, s <@ b FROM (VALUES ('[(1,1),(3,3)]'::lseg, '(0,0),(2,2)'::box), ('[(3,0),(4,5)]', '(0,0),(2,2)'), ('[(0.5,0.5),(1,1)]', '(0,0),(2,2)'), ('[(-1,3),(3,-1)]', '(0,0),(2,2)'), ('[(5,5),(6,7)]', '(0,0),(2,2)'), ('[(3,-1),(3,4)]', '(0,0),(2,2)')) v(s, b)
+fields ?column?:701:8:-1,?column?:701:8:-1,?column?:600:16:-1,?column?:16:1:-1,?column?:16:1:-1
+row 0,0,(1,1),t,f
+row 1,1,(2,0),f,f
+row 0,0,(1,1),t,t
+row 0,0,(1,1),t,f
+row 4.242640687119285,4.242640687119285,(2,2),f,f
+row 1,1,(2,2),f,f
+SELECT 6
+> SELECT l ?# b FROM (VALUES ('{1,-1,0}'::line, '(0,0),(2,2)'::box), ('{1,-1,5}', '(0,0),(2,2)'), ('{0,-1,1}', '(0,0),(2,2)'), ('{1,0,-3}', '(0,0),(2,2)')) v(l, b)
+fields ?column?:16:1:-1
+row t
+row f
+row t
+row f
+SELECT 4
+> SELECT '[(0,0),(1,1)]'::lseg <@ '{1,-1,0}'::line, '{1,-1,0}'::line # '{NaN,1,0}', '(1,1)'::point <@ '{1,-1,0}'::line
+fields ?column?:16:1:-1,?column?:600:16:-1,?column?:16:1:-1
+row t,(NaN,NaN),t
+SELECT 1
+> SELECT '{1,-1,0}'::line <-> '{1,-1,1e308}'::line
+fields ?column?:701:8:-1
+row 7.071067811865475e+307
+SELECT 1

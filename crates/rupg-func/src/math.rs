@@ -158,7 +158,7 @@ pub(crate) fn overflow() -> Error {
 }
 
 /// `22003` for a float result that is too small.
-fn underflow() -> Error {
+pub(crate) fn underflow() -> Error {
     Error::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "value out of range: underflow")
 }
 
