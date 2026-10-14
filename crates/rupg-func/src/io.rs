@@ -113,6 +113,7 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::TSVECTOR
             | oid::TSQUERY
             | oid::JSONPATH
+            | oid::XML
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
 }
@@ -227,6 +228,11 @@ pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) 
         (_, Value::Numeric(v)) => types::numeric_out(v, out),
         (oid::OID | XID | CID, Value::Oid(v)) => types::oid_out(*v, out),
         (_, Value::Char(v)) => types::char_out(*v, out),
+        (oid::XML, Value::Text(v)) => {
+            if let Some(warning) = types::xml_out(v, out) {
+                session.warn(type_error(warning));
+            }
+        }
         (_, Value::Text(v)) => out.extend_from_slice(v.as_bytes()),
         (oid::PG_NDISTINCT, Value::Bytea(v)) => {
             types::pg_ndistinct_out(v, out).map_err(type_error)?
@@ -503,6 +509,40 @@ fn tsquery_in(
     Ok(items)
 }
 
+/// `xml_in` with the `xmloption` of the session. PostgreSQL reports each warning of libxml2 as it parses, so the warnings come before the error, and they come in the soft input too.
+fn xml_in(text: &[u8], session: &dyn Session) -> std::result::Result<(), types::TypeError> {
+    let document = session.setting("xmloption").is_some_and(|v| v.eq_ignore_ascii_case("document"));
+    types::xml_in(text, document, &mut |warning| {
+        session.warn(Error::new(SqlState::WARNING, warning))
+    })
+}
+
+/// `xml_recv`: the bytes are in the encoding of the XML declaration, or in UTF-8 if it has none. Only UTF-8 and `SQL_ASCII` need no conversion, so the other encodings are not supported yet. The check of the encoding comes after the check of the value, as in PostgreSQL.
+fn xml_recv<'a>(
+    recv: &mut Recv<'a>,
+    session: &dyn Session,
+) -> std::result::Result<&'a str, Received> {
+    let bytes = recv.rest();
+    if let Some(name) = types::xml_encoding(bytes) {
+        match crate::encoding::encoding(&name) {
+            Some("UTF8" | "SQL_ASCII") => {}
+            Some(other) => {
+                return Err(Received::Engine(not_yet(format!(
+                    "binary input of type xml in the encoding {other}"
+                ))));
+            }
+            None => {
+                return Err(Received::Engine(Error::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    format!("invalid encoding name \"{name}\""),
+                )));
+            }
+        }
+    }
+    xml_in(bytes, session)?;
+    Ok(Recv::new(bytes).text()?)
+}
+
 /// `jsonpath_in`. A number that is too large and a path that is too deep are errors that `pg_input_is_valid` does not catch. The error for a code point that is too large is not the same in the soft input, as in PostgreSQL.
 fn jsonpath_in(text: &str, noisy: bool) -> std::result::Result<types::JsonPath, Failed> {
     types::jsonpath_parse(text, !noisy, &crate::regex::validate).map_err(|error| {
@@ -574,6 +614,10 @@ fn input_value(
         oid::TSVECTOR => Value::TsVector(types::tsvector_parse(text)?),
         oid::TSQUERY => Value::TsQuery(tsquery_in(text, session, noisy)?),
         oid::JSONPATH => Value::JsonPath(Box::new(jsonpath_in(text, noisy)?)),
+        oid::XML => {
+            xml_in(text.as_bytes(), session)?;
+            Value::text(text)
+        }
         oid::INT8 => Value::Int8(types::int8_in(text)?),
         oid::OID => Value::Oid(types::oid_in(text)?),
         oid::MONEY => Value::Int8(types::cash_in(text)?),
@@ -698,10 +742,15 @@ fn multirange_in(
 }
 
 /// `range_recv`: the binary form of the range, then the receive function of the subtype for the bytes of each bound. The receive function of a bound does not have to read all its bytes.
-fn range_recv(ty: u32, sub: u32, recv: &mut Recv<'_>) -> std::result::Result<Value, Received> {
+fn range_recv(
+    ty: u32,
+    sub: u32,
+    recv: &mut Recv<'_>,
+    session: &dyn Session,
+) -> std::result::Result<Value, Received> {
     let (flags, lower, upper) = types::range_recv(recv)?;
     let bound = |bytes: Option<&[u8]>| match bytes {
-        Some(bytes) => receive_from(sub, &mut Recv::new(bytes), -1),
+        Some(bytes) => receive_from(sub, &mut Recv::new(bytes), -1, session),
         None => Ok(Value::Null),
     };
     let lower = bound(lower)?;
@@ -711,10 +760,14 @@ fn range_recv(ty: u32, sub: u32, recv: &mut Recv<'_>) -> std::result::Result<Val
 }
 
 /// `multirange_recv`: the binary form of the multirange, then the receive function of the range type for the bytes of each range.
-fn multirange_recv(range_ty: u32, recv: &mut Recv<'_>) -> std::result::Result<Value, Received> {
+fn multirange_recv(
+    range_ty: u32,
+    recv: &mut Recv<'_>,
+    session: &dyn Session,
+) -> std::result::Result<Value, Received> {
     let mut ranges = Vec::new();
     types::multirange_recv(recv, |bytes| {
-        match receive_from(range_ty, &mut Recv::new(bytes), -1)? {
+        match receive_from(range_ty, &mut Recv::new(bytes), -1, session)? {
             Value::Range(range) => {
                 ranges.push(*range);
                 Ok(())
@@ -758,9 +811,15 @@ fn types_error(error: &Error) -> types::TypeError {
 /// # Errors
 ///
 /// `0A000` for a type that has no receive function here, and the error of the receive function for bad data.
-pub fn receive(ty: u32, data: &[u8], typmod: i32, number: usize) -> Result<Value> {
+pub fn receive(
+    ty: u32,
+    data: &[u8],
+    typmod: i32,
+    number: usize,
+    session: &dyn Session,
+) -> Result<Value> {
     let mut recv = Recv::new(data);
-    let value = receive_from(ty, &mut recv, typmod).map_err(|e| match e {
+    let value = receive_from(ty, &mut recv, typmod, session).map_err(|e| match e {
         Received::Type(e) => type_error(e),
         Received::Engine(e) => e,
     })?;
@@ -781,29 +840,35 @@ impl From<types::TypeError> for Received {
 }
 
 /// The receive function of the type, which reads the bytes of one value.
-fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Result<Value, Received> {
+fn receive_from(
+    ty: u32,
+    recv: &mut Recv<'_>,
+    typmod: i32,
+    session: &dyn Session,
+) -> std::result::Result<Value, Received> {
     let ty = base_type(ty);
     if let Some((elem, _)) = array_of(ty) {
         let mut failed = None;
-        let array = types::array_recv(recv, elem, |item| match receive_from(elem, item, typmod) {
-            Ok(value) => Ok(value),
-            Err(Received::Type(e)) => Err(e),
-            Err(Received::Engine(e)) => {
-                let text = types_error(&e);
-                failed = Some(e);
-                Err(text)
-            }
-        });
+        let array =
+            types::array_recv(recv, elem, |item| match receive_from(elem, item, typmod, session) {
+                Ok(value) => Ok(value),
+                Err(Received::Type(e)) => Err(e),
+                Err(Received::Engine(e)) => {
+                    let text = types_error(&e);
+                    failed = Some(e);
+                    Err(text)
+                }
+            });
         if let Some(error) = failed {
             return Err(Received::Engine(error));
         }
         return Ok(Value::Array(Box::new(array?)));
     }
     if let Some(sub) = builtin::range_subtype(ty) {
-        return range_recv(ty, sub, recv);
+        return range_recv(ty, sub, recv, session);
     }
     if let Some(range) = builtin::multirange_range(ty) {
-        return multirange_recv(range, recv);
+        return multirange_recv(range, recv, session);
     }
     if let Some(kind) = types::GeoKind::from_oid(ty) {
         return Ok(Value::Bytea(types::geo_recv(kind, recv)?));
@@ -839,6 +904,7 @@ fn receive_from(ty: u32, recv: &mut Recv<'_>, typmod: i32) -> std::result::Resul
         }
         ty if RegKind::from_oid(ty).is_some() => Value::Oid(recv.u32()?),
         oid::JSON => Value::text(types::json_in(recv.text()?)?),
+        oid::XML => Value::text(xml_recv(recv, session)?),
         oid::JSONB => Value::Text(types::jsonb_recv(recv.rest())?),
         oid::FLOAT4 => Value::Float4(recv.f32()?),
         oid::FLOAT8 => Value::Float8(recv.f64()?),
@@ -923,6 +989,10 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
         (_, Value::Char(v)) => out.push(*v),
         (oid::JSONB, Value::Text(v)) => types::jsonb_send(v, out),
         (oid::BIT | oid::VARBIT, Value::Text(v)) => types::bit_send(v, out),
+        // `xml_send` gives the warning of `xml_out` for a declaration that does not parse, but each stored value has a declaration that parses.
+        (oid::XML, Value::Text(v)) => {
+            let _ = types::xml_out(v, out);
+        }
         (_, Value::Text(v)) => out.extend_from_slice(v.as_bytes()),
         (_, Value::Bytea(v)) => out.extend_from_slice(v),
         (_, Value::Uuid(v)) => out.extend_from_slice(v),

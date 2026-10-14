@@ -310,12 +310,12 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "circle_mul_pt" => |_, a| {
             let (c, p) = (circle(a, 0)?, point(a, 1)?);
             let center = point_mul(c.center, p)?;
-            Ok(circle_value(Circle { center, radius: float8_mul(c.radius, p.x.hypot(p.y))? }))
+            Ok(circle_value(Circle { center, radius: float8_mul(c.radius, hypot(p.x, p.y))? }))
         },
         "circle_div_pt" => |_, a| {
             let (c, p) = (circle(a, 0)?, point(a, 1)?);
             let center = point_div(c.center, p)?;
-            Ok(circle_value(Circle { center, radius: float8_div(c.radius, p.x.hypot(p.y))? }))
+            Ok(circle_value(Circle { center, radius: float8_div(c.radius, hypot(p.x, p.y))? }))
         },
         "circle_area" => |_, a| Ok(Value::Float8(circle_ar(circle(a, 0)?)?)),
         "circle_diameter" => |_, a| Ok(Value::Float8(float8_mul(circle(a, 0)?.radius, 2.0)?)),
@@ -596,7 +596,38 @@ pub(crate) fn point_eq(p: Point, q: Point) -> bool {
 pub(crate) fn point_dt(p: Point, q: Point) -> Result<f64> {
     let x = float8_mi(p.x, q.x)?;
     let y = float8_mi(p.y, q.y)?;
-    Ok(x.hypot(y))
+    Ok(hypot(x, y))
+}
+
+/// `hypot` of the C library, which PostgreSQL uses for each distance. The C libraries of different platforms give different last digits, so this computes the correctly rounded result, which is what glibc gives on x86-64. The squares are summed in double-double arithmetic and one Newton step corrects the square root. A result that is too large is infinity and not an error, as in PostgreSQL.
+pub(crate) fn hypot(x: f64, y: f64) -> f64 {
+    if x.is_infinite() || y.is_infinite() {
+        return f64::INFINITY;
+    }
+    if x.is_nan() || y.is_nan() {
+        return f64::NAN;
+    }
+    let (a, b) = if x.abs() < y.abs() { (y.abs(), x.abs()) } else { (x.abs(), y.abs()) };
+    // When b is this small, the result rounds to a.
+    if b == 0.0 || b < a * 2f64.powi(-60) {
+        return a;
+    }
+    // A power of two keeps the squares away from overflow and underflow. The scale is exact.
+    let scale = if a > 2f64.powi(500) {
+        2f64.powi(-600)
+    } else if a < 2f64.powi(-500) {
+        2f64.powi(600)
+    } else {
+        1.0
+    };
+    let (a, b) = (a * scale, b * scale);
+    let (p, q) = (a * a, b * b);
+    let low = a.mul_add(a, -p) + b.mul_add(b, -q);
+    let sum = p + q;
+    let low = low + (q - (sum - p));
+    let root = sum.sqrt();
+    let rest = (-root).mul_add(root, sum) + low;
+    (root + rest / (2.0 * root)) / scale
 }
 
 /// `point_sl`: the slope of the line through two points, which is infinity for a vertical line.
@@ -783,7 +814,7 @@ fn line_distance(_: &Call<'_>, args: &[Value]) -> Result<Value> {
         1.0
     };
     let gap = float8_mi(l1.c, float8_mul(ratio, l2.c)?)?.abs();
-    Ok(Value::Float8(float8_div(gap, l1.a.hypot(l1.b))?))
+    Ok(Value::Float8(float8_div(gap, hypot(l1.a, l1.b))?))
 }
 
 /// `lseg_sl`.
@@ -1575,6 +1606,21 @@ mod tests {
         let (d, c) =
             box_closept_point(Rect { high: p(2.0, 2.0), low: p(0.0, 0.0) }, p(5.0, 5.0)).unwrap();
         assert_eq!((d.to_bits(), c.x, c.y), (18f64.sqrt().to_bits(), 2.0, 2.0));
+    }
+
+    /// The results of PostgreSQL 19 on x86-64, which the C library of arm64 does not give for each one.
+    #[test]
+    fn hypot_is_correctly_rounded() {
+        assert_eq!(hypot(3.0, 3.0).to_bits(), 18f64.sqrt().to_bits());
+        let d = point_dt(p(2.0, 7.0), p(2.8620689655172415, 6.655172413793103)).unwrap();
+        assert_eq!(d, 0.9284766908852595);
+        assert_eq!(hypot(1e308, 1e308), 1.4142135623730951e308);
+        assert_eq!(hypot(1.5e308, 1.5e308), f64::INFINITY);
+        assert_eq!(hypot(1e-200, -1e-200), 1.414213562373095e-200);
+        assert_eq!(hypot(3e-320, 4e-320), 5e-320);
+        assert_eq!(hypot(-4.0, 0.0), 4.0);
+        assert!(hypot(f64::NAN, 1.0).is_nan());
+        assert_eq!(hypot(f64::NAN, f64::NEG_INFINITY), f64::INFINITY);
     }
 
     /// The results of PostgreSQL 19 for the same polygons and circles.

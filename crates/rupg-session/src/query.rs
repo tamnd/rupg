@@ -522,7 +522,7 @@ pub(crate) fn param(
             let text = Recv::new(value.unwrap_or_default()).text().map_err(type_error)?;
             rupg_func::input(ty, text, -1, reader)
         }
-        1 => rupg_func::receive(ty, value.unwrap_or_default(), -1, number),
+        1 => rupg_func::receive(ty, value.unwrap_or_default(), -1, number, reader),
         _ => Err(Error::new(
             SqlState::INVALID_PARAMETER_VALUE,
             format!("unsupported format code: {format}"),
