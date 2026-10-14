@@ -1735,7 +1735,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/reg_names.test")));
     }
 
-    /// The deparse functions `pg_get_expr`, `pg_get_constraintdef` and `pg_get_indexdef`. `connection/deparse.test` is the output of PostgreSQL 19 for the same script in a new database. A value with a newline takes more than one line.
+    /// The deparse functions `pg_get_expr`, `pg_get_constraintdef` and `pg_get_indexdef`, also for the indexes and the constraints of the system catalogs. `connection/deparse.test` is the output of PostgreSQL 19 for the same script in a new database. A value with a newline takes more than one line.
     #[test]
     fn deparse() {
         big_stack(|| script(include_str!("connection/deparse.test")));
