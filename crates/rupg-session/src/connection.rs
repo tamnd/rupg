@@ -1894,6 +1894,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/describe.test")));
     }
 
+    /// `pg_get_serial_sequence` for serial and bigserial columns, quoted and qualified names, `search_path`, a system column, a column of a catalog and of a sequence, and the errors for a column, a relation and a schema that do not exist. `connection/serial_sequence.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn serial_sequence() {
+        big_stack(|| script(include_str!("connection/serial_sequence.test")));
+    }
+
     /// `PREPARE`, `EXECUTE` and `DEALLOCATE`: the types of the parameters, the coercion of the values of `EXECUTE` and their errors, the statements of `Parse` that `EXECUTE` runs, the errors in a failed transaction, the count of the plans, a query string with more than one statement, the three statements in a `Parse`, and a statement of `Parse` that runs `EXECUTE` of itself. `connection/sql_prepare.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn sql_prepare() {

@@ -1,0 +1,42 @@
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TABLE s.t (id serial, big bigserial, n int)
+CREATE TABLE
+> CREATE TABLE "Mixed" ("Id" serial)
+CREATE TABLE
+> SELECT pg_get_serial_sequence('s.t', 'id'), pg_get_serial_sequence('s.t', 'big'), pg_get_serial_sequence('s.t', 'n')
+fields pg_get_serial_sequence:25:-1:-1,pg_get_serial_sequence:25:-1:-1,pg_get_serial_sequence:25:-1:-1
+row s.t_id_seq,s.t_big_seq,NULL
+SELECT 1
+> SELECT pg_get_serial_sequence('"Mixed"', 'Id'), pg_get_serial_sequence('public."Mixed"', 'Id')
+fields pg_get_serial_sequence:25:-1:-1,pg_get_serial_sequence:25:-1:-1
+row public."Mixed_Id_seq",public."Mixed_Id_seq"
+SELECT 1
+> SELECT pg_get_serial_sequence('s.t', 'ctid'), pg_get_serial_sequence('pg_class', 'oid')
+fields pg_get_serial_sequence:25:-1:-1,pg_get_serial_sequence:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT pg_get_serial_sequence('s.t', NULL), pg_get_serial_sequence(NULL, 'id')
+fields pg_get_serial_sequence:25:-1:-1,pg_get_serial_sequence:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SET search_path = s
+SET
+search_path=s
+> SELECT pg_get_serial_sequence('t', 'id')
+fields pg_get_serial_sequence:25:-1:-1
+row s.t_id_seq
+SELECT 1
+> SELECT pg_get_serial_sequence('t', 'ID')
+fields pg_get_serial_sequence:25:-1:-1
+ERROR 42703 column "ID" of relation "t" does not exist
+> SELECT pg_get_serial_sequence('Mixed', 'Id')
+fields pg_get_serial_sequence:25:-1:-1
+ERROR 42P01 relation "mixed" does not exist
+> SELECT pg_get_serial_sequence('nope.t', 'id')
+fields pg_get_serial_sequence:25:-1:-1
+ERROR 3F000 schema "nope" does not exist
+> SELECT pg_get_serial_sequence('s.t_id_seq', 'last_value')
+fields pg_get_serial_sequence:25:-1:-1
+row NULL
+SELECT 1

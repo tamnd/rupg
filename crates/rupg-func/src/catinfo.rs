@@ -1,14 +1,14 @@
-//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_sequence_last_value`, `pg_get_sequence_data`, the functions of the partition trees, `pg_relation_is_publishable`, and the comments of `obj_description`, `col_description` and `shobj_description`.
+//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_sequence_last_value`, `pg_get_sequence_data`, `pg_get_serial_sequence`, the functions of the partition trees, `pg_relation_is_publishable`, and the comments of `obj_description`, `col_description` and `shobj_description`.
 //!
 //! The visibility functions are a port of the `*IsVisible` functions of `namespace.c`. Each one gives null for an OID that no object has, as the `is_missing` form of PostgreSQL does.
 
-use rupg_catalog::{ObjRef, RelKind};
+use rupg_catalog::{DepKind, ObjRef, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
-use rupg_types::{Record, Value, oid};
+use rupg_types::{Record, Value, oid, qualified_name_list};
 
 use crate::reg;
-use crate::{Call, Kernel, bad_value};
+use crate::{Call, Kernel, bad_value, type_error};
 
 /// The OID of `pg_catalog`.
 const PG_CATALOG: u32 = 11;
@@ -185,6 +185,36 @@ fn relation_is_publishable(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(matches!(kind, Some(RelKind::Table | RelKind::Sequence))))
 }
 
+/// `pg_get_serial_sequence(text, text)`: the sequence of a serial or identity column, with its schema. The table is a name that `search_path` finds, and the column is a name as it is. A sequence of a serial column has an automatic dependency on the column, and a sequence of an identity column has an internal one. The result is null for a column without a sequence.
+fn serial_sequence(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (Some(table), Some(column)) = (args[0].as_str(), args[1].as_str()) else {
+        return Err(bad_value());
+    };
+    let names = qualified_name_list(table).map_err(type_error)?;
+    let relid = reg::relation_oid(&names, call.session)?;
+    let Some(attnum) = crate::acl::attnum(relid, column, call.session) else {
+        let relname = names.last().map_or("", |n| &**n);
+        return Err(Error::new(
+            SqlState::UNDEFINED_COLUMN,
+            format!("column \"{column}\" of relation \"{relname}\" does not exist"),
+        ));
+    };
+    let Some(catalog) = call.session.catalog() else { return Ok(Value::Null) };
+    let column = ObjRef::column(relid, attnum);
+    let sequence = catalog.depends().iter().find(|d| {
+        d.referenced == column
+            && d.object.class == PG_CLASS
+            && d.object.sub == 0
+            && matches!(d.kind, DepKind::Auto | DepKind::Internal)
+            && catalog.relation(d.object.oid).is_some_and(|r| r.kind == RelKind::Sequence)
+    });
+    let Some(sequence) = sequence else { return Ok(Value::Null) };
+    let Some((name, namespace)) = reg::class_name(sequence.object.oid, call.session) else {
+        return Ok(Value::Null);
+    };
+    Ok(Value::Text(reg::qualified(reg::namespace_name(namespace, call.session), name)))
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
@@ -209,6 +239,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_sequence_data" => get_sequence_data,
         "pg_partition_root" => partition_root,
         "pg_relation_is_publishable" => relation_is_publishable,
+        "pg_get_serial_sequence" => serial_sequence,
         _ => return None,
     };
     Some(kernel)
