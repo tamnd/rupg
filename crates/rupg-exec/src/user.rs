@@ -137,6 +137,8 @@ pub(crate) fn rows(
         "pg_index" => indexes(table, catalog),
         "pg_sequence" => sequences(table, catalog),
         "pg_proc" => functions(table, catalog),
+        "pg_language" => languages(table, catalog),
+        "pg_extension" => extensions(table, catalog),
         "pg_depend" => depends(table, catalog),
         "pg_description" => descriptions(table, catalog),
         "pg_rewrite" => rewrites(table, catalog),
@@ -620,10 +622,45 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("proargmodes", char_array(&f.argmodes))
                 .set("proargnames", names)
                 .set("prosrc", Value::text(f.src.clone()))
+                .set("probin", if f.bin.is_empty() { Value::Null } else { Value::text(f.bin.clone()) })
                 .set(
                     "prosqlbody",
                     tree(f.body.as_ref().filter(|_| f.src.is_empty()).map(|b| &b.text)),
                 );
+            row
+        })
+        .collect()
+}
+
+fn languages<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .languages()
+        .map(|l| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(l.oid))
+                .set("lanname", Value::text(l.name.clone()))
+                .set("lanowner", oid(l.owner))
+                .set("lanispl", Value::Bool(true))
+                .set("lanpltrusted", Value::Bool(l.trusted))
+                .set("lanplcallfoid", oid(l.handler))
+                .set("laninline", oid(l.inline))
+                .set("lanvalidator", oid(l.validator));
+            row
+        })
+        .collect()
+}
+
+fn extensions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .extensions()
+        .map(|e| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(e.oid))
+                .set("extname", Value::text(e.name.clone()))
+                .set("extowner", oid(e.owner))
+                .set("extnamespace", oid(e.namespace))
+                .set("extrelocatable", Value::Bool(e.relocatable))
+                .set("extversion", Value::text(e.version.clone()));
             row
         })
         .collect()

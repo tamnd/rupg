@@ -454,6 +454,7 @@ impl Definer<'_, '_> {
             argmodes,
             argnames,
             src: options.src.clone().unwrap_or_default(),
+            bin: String::new(),
             body: Some(FunctionBody { text: text.to_string(), path: self.an.path.clone() }),
         };
         let stmts = statements(stmt, options.src.as_deref())?;

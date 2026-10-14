@@ -8,12 +8,17 @@
 //!
 //! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges, the five domains and the eleven functions in SQL, with the OIDs of PostgreSQL 19. The tables and the views of the script are not done yet.
 //!
+//! Last, `initdb` runs `CREATE EXTENSION plpgsql`. rupg makes the extension, the three functions in C of `plpgsql--1.0.sql`, the language and their comments, with the OIDs of PostgreSQL 19.
+//!
 //! These parts of `system_views.sql` are not done yet: the rules `pg_settings_u` and `pg_settings_n` on `pg_settings`. Their OIDs stay unused.
 
 use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
-use rupg_catalog::{Catalog, FIRST_NORMAL_OID, FIRST_UNPINNED_OID, RelKind};
+use rupg_catalog::{
+    Catalog, Extension, FIRST_NORMAL_OID, FIRST_UNPINNED_OID, Function, Language, ObjRef, PG_EXTENSION,
+    PG_LANGUAGE, PG_PROC, RelKind,
+};
 use rupg_common::{Error, Result};
 use rupg_pgcatalog::builtin;
 use rupg_platform::os::OsClock;
@@ -32,6 +37,12 @@ const BOOTSTRAP_SUPERUSER: u32 = 10;
 
 /// The privilege letters of a relation, in the order of `aclitemout`.
 const RIGHTS: &str = "arwdDxtm";
+
+/// The OID of the extension `plpgsql` in PostgreSQL 19. Its three functions and its language take the next four OIDs.
+const PLPGSQL: u32 = 13704;
+
+/// `ClanguageId`, the OID of the language `c`.
+const C_LANGUAGE: u32 = 13;
 
 /// The OID of each system view in PostgreSQL 19, in the order of `system_views.sql`.
 const VIEW_OIDS: [(&str, u32); 86] = [
@@ -309,6 +320,9 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
         }
     }
     information_schema(&mut catalog, &mut failed, &clock, &user);
+    if let Err(error) = plpgsql(&mut catalog) {
+        failed.push(("CREATE EXTENSION plpgsql".to_string(), error));
+    }
     catalog.set_next_oid(FIRST_NORMAL_OID);
     (catalog, failed)
 }
@@ -408,6 +422,68 @@ fn information_schema(
     }
 }
 
+/// `load_plpgsql` of `initdb`: `CREATE EXTENSION plpgsql`. The extension gets the comment of its control file. Then `plpgsql--1.0.sql` makes the call handler, the handler of `DO`, the validator and the trusted language, each as a member of the extension, and gives the language the same comment.
+fn plpgsql(catalog: &mut Catalog) -> Result<()> {
+    const COMMENT: &str = "PL/pgSQL procedural language";
+    catalog.set_next_oid(PLPGSQL);
+    let extension = catalog.create_extension(Extension {
+        oid: 0,
+        name: "plpgsql".to_string(),
+        owner: BOOTSTRAP_SUPERUSER,
+        namespace: PG_CATALOG,
+        relocatable: false,
+        version: "1.0".to_string(),
+    })?;
+    catalog.set_description(ObjRef::new(PG_EXTENSION, extension), Some(COMMENT.to_string()));
+    // The result types `language_handler` and `void`, and the argument types `internal` and `oid`.
+    let mut handlers = [0; 3];
+    for (slot, (name, rettype, argtypes, strict)) in handlers.iter_mut().zip([
+        ("plpgsql_call_handler", 2280, vec![], false),
+        ("plpgsql_inline_handler", 2278, vec![2281], true),
+        ("plpgsql_validator", 2278, vec![26], true),
+    ]) {
+        let function = Function {
+            oid: 0,
+            name: name.to_string(),
+            namespace: PG_CATALOG,
+            owner: BOOTSTRAP_SUPERUSER,
+            lang: C_LANGUAGE,
+            cost: 1,
+            rows: 0,
+            support: 0,
+            strict,
+            volatile: b'v',
+            parallel: b'u',
+            rettype,
+            retset: false,
+            argtypes,
+            allargtypes: Vec::new(),
+            argmodes: Vec::new(),
+            argnames: Vec::new(),
+            src: name.to_string(),
+            bin: "$libdir/plpgsql".to_string(),
+            body: None,
+        };
+        *slot = catalog.create_function(function, &[])?;
+        catalog.add_to_extension(ObjRef::new(PG_PROC, *slot), extension);
+        // The casts to `regproc` and `regprocedure` find the handlers by the rows of `rupg-pgcatalog`.
+        add_system_proc(catalog, *slot)?;
+    }
+    let [handler, inline, validator] = handlers;
+    let language = catalog.create_language(Language {
+        oid: 0,
+        name: "plpgsql".to_string(),
+        owner: BOOTSTRAP_SUPERUSER,
+        trusted: true,
+        handler,
+        inline,
+        validator,
+    })?;
+    catalog.add_to_extension(ObjRef::new(PG_LANGUAGE, language), extension);
+    catalog.set_description(ObjRef::new(PG_LANGUAGE, language), Some(COMMENT.to_string()));
+    Ok(())
+}
+
 /// Runs a statement of the script that defines an object, as the bootstrap superuser. The catalog changes only when the statement succeeds.
 fn define(
     catalog: &mut Catalog,
@@ -424,7 +500,7 @@ fn define(
     Ok(())
 }
 
-/// Adds the row of a function of `information_schema` to the rows of `rupg-pgcatalog`, so that the analyzer finds the function.
+/// Adds the row of a function of `information_schema` or of `plpgsql` to the rows of `rupg-pgcatalog`, so that the analyzer and the casts to `regproc` find the function.
 fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
     let f = catalog.function(oid).ok_or_else(|| Error::internal(format!("no function {oid}")))?;
     // The rows live as long as the process, as the built-in rows do.
