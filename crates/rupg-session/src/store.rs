@@ -10,6 +10,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_func::Backend;
 use rupg_platform::Tasks;
 
+use crate::advisory::Locks;
 use crate::auth::AuthFiles;
 
 /// How long a session waits for the lock before it looks at its cancel flag again.
@@ -33,6 +34,8 @@ pub struct Store {
     stats_reset: AtomicI64,
     /// The authentication files of the server, which the views `pg_hba_file_rules` and `pg_ident_file_mappings` read.
     auth: Option<Arc<dyn AuthFiles>>,
+    /// The advisory locks of the sessions.
+    locks: Locks,
 }
 
 /// A slot of the table of the sessions.
@@ -312,6 +315,16 @@ impl Store {
             return;
         }
         drop(self.free.wait_timeout(self.state(), time).unwrap_or_else(PoisonError::into_inner));
+    }
+
+    /// The advisory locks of the sessions.
+    pub(crate) fn locks(&self) -> &Locks {
+        &self.locks
+    }
+
+    /// The tasks of the server, or `None` for sessions that run on threads.
+    pub(crate) fn tasks(&self) -> Option<&dyn Tasks> {
+        self.tasks.as_deref()
     }
 
     fn backends_mut(&self) -> MutexGuard<'_, Vec<Option<Slot>>> {

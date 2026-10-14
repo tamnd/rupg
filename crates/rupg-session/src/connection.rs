@@ -2224,6 +2224,80 @@ mod tests {
         a.join().unwrap();
     }
 
+    /// The advisory lock functions in one session: the counts of each mode and level, the warning of an unlock of a lock that the session does not hold, and the release of the locks of the transaction level at the end of the transaction and at an error. `connection/advisory.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn advisory() {
+        big_stack(|| script(include_str!("connection/advisory.test")));
+    }
+
+    /// Advisory locks in two sessions: a wait with the wait event `advisory` that ends at the release, a deadlock that the session with the shorter `deadlock_timeout` finds, and the end of `lock_timeout`.
+    #[test]
+    fn advisory_wait() {
+        big_stack(advisory_wait_cases);
+    }
+
+    #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
+    fn advisory_wait_cases() {
+        let store = Arc::new(Store::new());
+        let (cmds, cmd) = std::sync::mpsc::channel::<String>();
+        let (outs, out) = std::sync::mpsc::channel();
+        let waiter = Arc::clone(&store);
+        let b = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let (mut b, _) = connect_to(&waiter, 1235);
+                while let Ok(text) = cmd.recv() {
+                    outs.send(send(&mut b, &query(&text))).unwrap();
+                }
+            })
+            .unwrap();
+        let (mut a, _) = connect_to(&store, 1234);
+        let look = query(
+            "SELECT state, wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = 1235",
+        );
+        let wait_for_b = |a: &mut Connection| {
+            let mut lines = Vec::new();
+            for _ in 0..2000 {
+                lines = send(a, &look);
+                if lines.iter().any(|l| l.contains("advisory")) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            lines.swap_remove(1)
+        };
+        send(&mut a, &query("SELECT pg_advisory_lock(1), pg_advisory_lock(2)"));
+        cmds.send("SELECT pg_advisory_lock(1)".into()).unwrap();
+        assert_eq!(wait_for_b(&mut a), "row active,Lock,advisory,SELECT pg_advisory_lock(1)");
+        let lines = send(&mut a, &query("SELECT pg_try_advisory_lock(1)"));
+        assert_eq!(lines[1], "row t");
+        send(&mut a, &query("SELECT pg_advisory_unlock(1), pg_advisory_unlock(1)"));
+        let lines = out.recv().unwrap();
+        assert_eq!(lines[1..], ["row ", "SELECT 1", "ready I"]);
+
+        cmds.send("SELECT pg_advisory_lock(2)".into()).unwrap();
+        assert_eq!(wait_for_b(&mut a), "row active,Lock,advisory,SELECT pg_advisory_lock(2)");
+        send(&mut a, &query("SET deadlock_timeout = 10"));
+        let lines = send(&mut a, &query("SELECT pg_advisory_lock(1)"));
+        assert!(lines.iter().any(|l| l == "ERROR 40P01 deadlock detected"), "{lines:?}");
+        send(&mut a, &query("SELECT pg_advisory_unlock_all()"));
+        let lines = out.recv().unwrap();
+        assert_eq!(lines[1..], ["row ", "SELECT 1", "ready I"]);
+
+        send(&mut a, &query("SET lock_timeout = 20"));
+        let lines = send(&mut a, &query("SELECT pg_advisory_xact_lock(2)"));
+        assert!(
+            lines.iter().any(|l| l == "ERROR 55P03 canceling statement due to lock timeout"),
+            "{lines:?}"
+        );
+        let lines = send(&mut a, &query("SELECT pg_try_advisory_lock(1), pg_try_advisory_lock(3)"));
+        assert_eq!(lines[1], "row f,t");
+        drop(cmds);
+        b.join().unwrap();
+        let lines = send(&mut a, &query("SELECT pg_try_advisory_lock(1), pg_try_advisory_lock(2)"));
+        assert_eq!(lines[1], "row t,t");
+    }
+
     /// The fold of the constant parts of the expressions, as `eval_const_expressions` does it. An error of the fold comes before the description of the rows, and a part that the fold drops gives no error. `connection/fold.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn fold() {
