@@ -5,6 +5,7 @@
 #![forbid(unsafe_code)]
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::rc::Rc;
 
 use rupg_analyze::{
@@ -479,6 +480,8 @@ struct Cache {
     tables: RefCell<Vec<(*const Query, Rc<scan::Tables>)>>,
     /// The rows of each subquery that reads no column of an outer query, as an `InitPlan` keeps them. It runs once, when the query first needs it.
     rows: RefCell<Vec<(*const Query, Rc<Rows>)>>,
+    /// The hash table of each such subquery of `ANY`, as a hashed `SubPlan` keeps it, or `None` when a value of the subquery has no key.
+    hashed: RefCell<Vec<(*const Query, Kept)>>,
     /// The name and the expression of each check constraint of a domain, by the OID of the domain, as the type cache keeps them.
     domains: RefCell<Vec<(u32, Checks)>>,
     /// The body of each function in SQL that the run calls. The run of a body shares them.
@@ -552,6 +555,73 @@ impl Cache {
         }
         Ok(rows)
     }
+}
+
+/// The hash table of a subquery of `ANY`, or `None` when a value of the subquery has no key.
+type Kept = Option<Rc<Hashed>>;
+
+/// The keys of the rows of a subquery of `ANY`, for the columns that the test compares.
+struct Hashed {
+    keys: BTreeSet<Vec<scan::Key>>,
+    /// True when a row has a null in a compared column, so that a value that matches no key can give null.
+    nulls: bool,
+}
+
+/// The pairs of a test of `ANY` that a hash table can do: the test is an `=` of a value and a column of the subquery, or an `AND` of such tests, as a row comparison gives. Each pair is the value and the column number.
+fn hash_pairs(test: &Expr) -> Option<Vec<(&Expr, usize)>> {
+    fn column(e: &Expr) -> Option<usize> {
+        match &e.kind {
+            ExprKind::SubColumn(n) => Some(*n),
+            ExprKind::Relabel(arg, _) => column(arg),
+            _ => None,
+        }
+    }
+    fn walk<'e>(e: &'e Expr, pairs: &mut Vec<(&'e Expr, usize)>) -> Option<()> {
+        match &e.kind {
+            ExprKind::Bool(BoolOp::And, args) => args.iter().try_for_each(|a| walk(a, pairs)),
+            ExprKind::Func(f) if scan::HASH_EQUALS.contains(&f.oid) && f.args.len() == 2 => {
+                let (value, n) = match (column(&f.args[0]), column(&f.args[1])) {
+                    (None, Some(n)) => (&f.args[0], n),
+                    (Some(n), None) => (&f.args[1], n),
+                    _ => return None,
+                };
+                let inner = value
+                    .find(0, &mut |e, _| matches!(e.kind, ExprKind::SubColumn(_)).then_some(()));
+                inner.is_none().then(|| pairs.push((value, n)))
+            }
+            _ => None,
+        }
+    }
+    let mut pairs = Vec::new();
+    walk(test, &mut pairs)?;
+    Some(pairs)
+}
+
+/// The key of a value of a subquery: `Ok(None)` for a null, and an error when the value has no key.
+fn hash_key(value: Value) -> std::result::Result<Option<scan::Key>, ()> {
+    if value.is_null() {
+        return Ok(None);
+    }
+    scan::key(value).map(Some).ok_or(())
+}
+
+/// The hash table of the rows of a subquery for the columns of the pairs, or `None` when a value has no key.
+fn hash_rows(rows: &Rows, pairs: &[(&Expr, usize)]) -> Option<Hashed> {
+    let mut hashed = Hashed { keys: BTreeSet::new(), nulls: false };
+    'row: for row in rows.iter() {
+        let mut keys = Vec::with_capacity(pairs.len());
+        for &(_, n) in pairs {
+            match hash_key(row.get(n)?.clone()).ok()? {
+                Some(k) => keys.push(k),
+                None => {
+                    hashed.nulls = true;
+                    continue 'row;
+                }
+            }
+        }
+        hashed.keys.insert(keys);
+    }
+    Some(hashed)
 }
 
 /// The row of a query outside a subquery, which the columns of an outer query in the subquery read.
@@ -1333,6 +1403,9 @@ impl<'a> Eval<'a> {
                 let test =
                     sub.test.as_ref().ok_or_else(|| Error::internal("ANY and ALL need a test"))?;
                 let any = sub.kind == SubLinkKind::Any;
+                if any && let Some(found) = self.hashed_any(query, test, &rows)? {
+                    return Ok(Value::Bool(found));
+                }
                 let mut unknown = false;
                 for row in rows.iter() {
                     self.sub.push(row.clone());
@@ -1346,6 +1419,50 @@ impl<'a> Eval<'a> {
                 }
                 Ok(if unknown { Value::Null } else { Value::Bool(!any) })
             }
+        }
+    }
+
+    /// `ExecHashSubPlan`: the result of `ANY` through the hash table of a subquery that runs once. `None` when the test or a value has no key, or when the result can be null, so that the test of each row must decide.
+    fn hashed_any(&mut self, query: &Query, test: &Expr, rows: &Rc<Rows>) -> Result<Option<bool>> {
+        let kept = self
+            .cache
+            .rows
+            .borrow()
+            .iter()
+            .any(|(q, r)| std::ptr::eq(*q, query) && Rc::ptr_eq(r, rows));
+        if !kept {
+            return Ok(None);
+        }
+        let Some(pairs) = hash_pairs(test) else { return Ok(None) };
+        let found = self
+            .cache
+            .hashed
+            .borrow()
+            .iter()
+            .find(|(q, _)| std::ptr::eq(*q, query))
+            .map(|(_, h)| h.clone());
+        let hashed = match found {
+            Some(hashed) => hashed,
+            None => {
+                let hashed = hash_rows(rows, &pairs).map(Rc::new);
+                self.cache.hashed.borrow_mut().push((query, hashed.clone()));
+                hashed
+            }
+        };
+        let Some(hashed) = hashed else { return Ok(None) };
+        let mut keys = Vec::with_capacity(pairs.len());
+        for (value, _) in &pairs {
+            match hash_key(self.eval(value)?) {
+                Ok(Some(k)) => keys.push(k),
+                _ => return Ok(None),
+            }
+        }
+        if hashed.keys.contains(&keys) {
+            Ok(Some(true))
+        } else if hashed.nulls {
+            Ok(None)
+        } else {
+            Ok(Some(false))
         }
     }
 
