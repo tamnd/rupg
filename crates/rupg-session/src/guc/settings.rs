@@ -940,6 +940,19 @@ mod tests {
     }
 
     #[test]
+    fn the_compat_version_is_19_and_is_not_in_show_all() {
+        let mut s = Settings::new(true);
+        assert_eq!(s.show("rupg.compat_version").unwrap().1, "19");
+        s.set("rupg.compat_version", Some("19"), Action::Set, Origin::Startup).unwrap();
+        assert_eq!(s.show("RUPG.COMPAT_VERSION").unwrap().1, "19");
+        let state = |r: Result<(), Error>| r.unwrap_err().state().as_str().to_owned();
+        let at_startup = |s: &mut Settings, v| s.set("rupg.compat_version", Some(v), Action::Set, Origin::Startup);
+        assert_eq!(state(at_startup(&mut s, "16")), "0A000");
+        assert_eq!(state(at_startup(&mut s, "13")), "22023");
+        assert!(super::super::all().iter().all(|p| !p.name.starts_with("rupg.")));
+    }
+
+    #[test]
     fn placeholders_and_errors() {
         let mut s = startup();
         set(&mut s, "myapp.user_id", "42").unwrap();
@@ -952,6 +965,7 @@ mod tests {
         assert_eq!(s.show("myapp.none").unwrap_err().state(), SqlState::UNDEFINED_OBJECT);
         assert_eq!(state(set(&mut s, "nodots", "1")), "42704");
         assert_eq!(state(set(&mut s, "rupg.x", "1")), "42602");
+        assert_eq!(state(set(&mut s, "rupg.compat_version", "19")), "55P02");
         assert_eq!(state(set(&mut s, "server_version_num", "1")), "55P02");
         assert_eq!(state(set(&mut s, "log_connections", "on")), "55P02");
         assert_eq!(state(set(&mut s, "standard_conforming_strings", "off")), "0A000");
