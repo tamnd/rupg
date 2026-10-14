@@ -1,0 +1,535 @@
+> DECLARE c CURSOR FOR SELECT 1;
+ERROR 25P01 DECLARE CURSOR can only be used in transaction blocks
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT g, g * 10 AS ten FROM generate_series(1, 5) g;
+DECLARE CURSOR
+> FETCH c;
+fields g:23:4:-1,ten:23:4:-1
+row 1,10
+FETCH 1
+> FETCH 2 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 2,20
+row 3,30
+FETCH 2
+> FETCH NEXT IN c;
+fields g:23:4:-1,ten:23:4:-1
+row 4,40
+FETCH 1
+> FETCH PRIOR FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 3,30
+FETCH 1
+> FETCH FIRST FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 1,10
+FETCH 1
+> FETCH LAST FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 5,50
+FETCH 1
+> FETCH ABSOLUTE 2 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 2,20
+FETCH 1
+> FETCH ABSOLUTE -2 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 4,40
+FETCH 1
+> FETCH RELATIVE 0 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 4,40
+FETCH 1
+> FETCH RELATIVE 2 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+FETCH 0
+> FETCH RELATIVE -1 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 5,50
+FETCH 1
+> FETCH FORWARD 10 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+FETCH 0
+> FETCH c;
+fields g:23:4:-1,ten:23:4:-1
+FETCH 0
+> FETCH BACKWARD 2 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 5,50
+row 4,40
+FETCH 2
+> FETCH BACKWARD ALL FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 3,30
+row 2,20
+row 1,10
+FETCH 3
+> FETCH FORWARD ALL FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 1,10
+row 2,20
+row 3,30
+row 4,40
+row 5,50
+FETCH 5
+> FETCH ABSOLUTE 0 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+FETCH 0
+> FETCH ABSOLUTE 9 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+FETCH 0
+> FETCH ABSOLUTE -9 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+FETCH 0
+> MOVE c;
+MOVE 1
+> MOVE ABSOLUTE 3 IN c;
+MOVE 1
+> MOVE FORWARD ALL IN c;
+MOVE 2
+> MOVE BACKWARD 2 IN c;
+MOVE 2
+> MOVE RELATIVE 0 IN c;
+MOVE 1
+> MOVE LAST IN c;
+MOVE 1
+> MOVE ABSOLUTE 9 IN c;
+MOVE 0
+> FETCH 0 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+FETCH 0
+> FETCH -1 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 5,50
+FETCH 1
+> FETCH FORWARD 0 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 5,50
+FETCH 1
+> FETCH BACKWARD 0 FROM c;
+fields g:23:4:-1,ten:23:4:-1
+row 5,50
+FETCH 1
+> SELECT name, statement, is_holdable, is_binary, is_scrollable FROM pg_cursors;
+fields name@pg_cursors.1:25:-1:-1,statement@pg_cursors.2:25:-1:-1,is_holdable@pg_cursors.3:16:1:-1,is_binary@pg_cursors.4:16:1:-1,is_scrollable@pg_cursors.5:16:1:-1
+row c,DECLARE c CURSOR FOR SELECT g, g * 10 AS ten FROM generate_series(1, 5) g;,f,f,t
+SELECT 1
+> CLOSE c;
+CLOSE CURSOR
+> CLOSE c;
+ERROR 34000 cursor "c" does not exist
+> FETCH c;
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT 1;
+DECLARE CURSOR
+> DECLARE c CURSOR FOR SELECT 2;
+ERROR 42P03 cursor "c" already exists
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT 1;
+DECLARE CURSOR
+> CLOSE c;
+CLOSE CURSOR
+> MOVE c;
+ERROR 34000 cursor "c" does not exist
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE n NO SCROLL CURSOR FOR SELECT g FROM generate_series(1, 3) g;
+DECLARE CURSOR
+> FETCH 2 FROM n;
+fields g:23:4:-1
+row 1
+row 2
+FETCH 2
+> FETCH PRIOR FROM n;
+ERROR 55000 cursor can only scan forward
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE n NO SCROLL CURSOR FOR SELECT g FROM generate_series(1, 3) g;
+DECLARE CURSOR
+> FETCH 2 FROM n;
+fields g:23:4:-1
+row 1
+row 2
+FETCH 2
+> FETCH ABSOLUTE 3 FROM n;
+fields g:23:4:-1
+row 3
+FETCH 1
+> FETCH ABSOLUTE 1 FROM n;
+ERROR 55000 cursor can only scan forward
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE s SCROLL CURSOR FOR SELECT 1 AS a;
+DECLARE CURSOR
+> DECLARE b BINARY CURSOR FOR SELECT 1::int4 AS a, 'x'::text AS t;
+DECLARE CURSOR
+> DECLARE h CURSOR WITH HOLD FOR SELECT 3 AS h;
+DECLARE CURSOR
+> DECLARE i INSENSITIVE CURSOR WITHOUT HOLD FOR SELECT 4;
+DECLARE CURSOR
+> DECLARE "Q x" CURSOR FOR VALUES (1), (2);
+DECLARE CURSOR
+> SELECT name, statement, is_holdable, is_binary, is_scrollable, creation_time = now() FROM pg_cursors ORDER BY name;
+fields name@pg_cursors.1:25:-1:-1,statement@pg_cursors.2:25:-1:-1,is_holdable@pg_cursors.3:16:1:-1,is_binary@pg_cursors.4:16:1:-1,is_scrollable@pg_cursors.5:16:1:-1,?column?:16:1:-1
+row Q x,DECLARE "Q x" CURSOR FOR VALUES (1), (2);,f,f,t,f
+row b,DECLARE b BINARY CURSOR FOR SELECT 1::int4 AS a, 'x'::text AS t;,f,t,f,f
+row h,DECLARE h CURSOR WITH HOLD FOR SELECT 3 AS h;,t,f,f,f
+row i,DECLARE i INSENSITIVE CURSOR WITHOUT HOLD FOR SELECT 4;,f,f,f,f
+row s,DECLARE s SCROLL CURSOR FOR SELECT 1 AS a;,f,f,t,f
+SELECT 5
+> FETCH ALL FROM "Q x";
+fields column1:23:4:-1
+row 1
+row 2
+FETCH 2
+> CLOSE ALL;
+CLOSE CURSOR ALL
+> SELECT count(*) FROM pg_cursors;
+fields count:20:8:-1
+row 0
+SELECT 1
+> COMMIT;
+COMMIT
+> BEGIN;
+BEGIN
+> DECLARE h CURSOR WITH HOLD FOR SELECT g FROM generate_series(1, 3) g;
+DECLARE CURSOR
+> FETCH h;
+fields g:23:4:-1
+row 1
+FETCH 1
+> COMMIT;
+COMMIT
+> SELECT name, is_holdable FROM pg_cursors;
+fields name@pg_cursors.1:25:-1:-1,is_holdable@pg_cursors.3:16:1:-1
+row h,t
+SELECT 1
+> FETCH h;
+fields g:23:4:-1
+row 2
+FETCH 1
+> FETCH PRIOR FROM h;
+fields g:23:4:-1
+row 1
+FETCH 1
+> MOVE ABSOLUTE 0 IN h;
+MOVE 0
+> FETCH ALL FROM h;
+fields g:23:4:-1
+row 1
+row 2
+row 3
+FETCH 3
+> CLOSE h;
+CLOSE CURSOR
+> DECLARE h2 CURSOR WITH HOLD FOR SELECT 1;
+DECLARE CURSOR
+> FETCH h2;
+fields ?column?:23:4:-1
+row 1
+FETCH 1
+> CLOSE h2;
+CLOSE CURSOR
+> BEGIN;
+BEGIN
+> DECLARE h CURSOR WITH HOLD FOR SELECT 1;
+DECLARE CURSOR
+> ROLLBACK;
+ROLLBACK
+> FETCH h;
+ERROR 34000 cursor "h" does not exist
+> BEGIN;
+BEGIN
+> DECLARE e CURSOR FOR SELECT 1/0;
+ERROR 22012 division by zero
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT 1 AS one;
+DECLARE CURSOR
+P f|FETCH 1 FROM c
+D S f
+params 
+fields one:23:4:-1
+X f
+row 1
+FETCH 1
+D S f
+params 
+fields one:23:4:-1
+> CLOSE c;
+CLOSE CURSOR
+D S f
+params 
+ERROR 34000 cursor "c" does not exist
+X f
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE cursor_one CURSOR FOR SELECT 1;
+DECLARE CURSOR
+D P cursor_one
+fields ?column?:23:4:-1
+C P cursor_one
+close
+D P cursor_one
+ERROR 34000 portal "cursor_one" does not exist
+C P cursor_one
+close
+> ROLLBACK;
+ROLLBACK
+> FETCH ALL FROM nosuch;
+ERROR 34000 cursor "nosuch" does not exist
+> CLOSE nosuch;
+ERROR 34000 cursor "nosuch" does not exist
+> CLOSE ALL;
+CLOSE CURSOR ALL
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT 1;
+DECLARE CURSOR
+> DECLARE d CURSOR FOR VALUES (1) FOR UPDATE;
+ERROR 0A000 FOR UPDATE cannot be applied to VALUES
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT 1;
+DECLARE CURSOR
+> SELECT 1/0;
+ERROR 22012 division by zero
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT 1 AS x;
+DECLARE CURSOR
+> FETCH FROM c;
+fields x:23:4:-1
+row 1
+FETCH 1
+> FETCH c;
+fields x:23:4:-1
+FETCH 0
+> FETCH ALL c;
+fields x:23:4:-1
+FETCH 0
+> FETCH 2 c;
+fields x:23:4:-1
+FETCH 0
+> FETCH NEXT c;
+fields x:23:4:-1
+FETCH 0
+> FETCH -0 c;
+fields x:23:4:-1
+FETCH 0
+> MOVE NEXT FROM c;
+MOVE 0
+> FETCH FORWARD -1 FROM c;
+ERROR 55000 cursor can only scan forward
+> FETCH BACKWARD -1 FROM c;
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> FETCH ABSOLUTE 1 c;
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> FETCH ABSOLUTE 1.5 c;
+ERROR 42601 syntax error at or near "1.5" at 16
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT g FROM generate_series(1, 3) g ORDER BY 1;
+DECLARE CURSOR
+> FETCH 9223372036854775807 FROM c;
+ERROR 42601 syntax error at or near "9223372036854775807" at 7
+> FETCH -9223372036854775807 FROM c;
+ERROR 42601 syntax error at or near "9223372036854775807" at 8
+> FETCH FORWARD 2147483648 FROM c;
+ERROR 42601 syntax error at or near "2147483648" at 15
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT g FROM generate_series(1, 3) g;
+DECLARE CURSOR
+> SELECT name FROM pg_cursors;
+fields name@pg_cursors.1:25:-1:-1
+row c
+SELECT 1
+> COMMIT;
+COMMIT
+> SELECT name FROM pg_cursors;
+fields name@pg_cursors.1:25:-1:-1
+SELECT 0
+> BEGIN;
+BEGIN
+> DECLARE "" CURSOR FOR SELECT 1;
+ERROR 42601 zero-length delimited identifier at or near """" at 9
+> ROLLBACK;
+ROLLBACK
+> PREPARE p AS SELECT 1;
+PREPARE
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR EXECUTE p;
+ERROR 42601 syntax error at or near "EXECUTE" at 22
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT $1::int;
+ERROR 42P02 there is no parameter $1 at 29
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c SCROLL NO SCROLL CURSOR FOR SELECT 1;
+ERROR 42P11 cannot specify both SCROLL and NO SCROLL
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c ASENSITIVE INSENSITIVE CURSOR FOR SELECT 1;
+ERROR 42P11 cannot specify both ASENSITIVE and INSENSITIVE
+> ROLLBACK;
+ROLLBACK
+> DECLARE c CURSOR FOR SELECT 1 AS a; FETCH c; CLOSE c
+DECLARE CURSOR
+fields a:23:4:-1
+row 1
+FETCH 1
+CLOSE CURSOR
+> CREATE TABLE t (a int, b text)
+CREATE TABLE
+> CREATE TABLE u (x int)
+CREATE TABLE
+> BEGIN;
+BEGIN
+> DECLARE t1 CURSOR FOR SELECT * FROM t;
+DECLARE CURSOR
+> DECLARE t2 CURSOR FOR SELECT * FROM t, u;
+DECLARE CURSOR
+> DECLARE t3 CURSOR FOR SELECT a, count(*) FROM t GROUP BY a;
+DECLARE CURSOR
+> DECLARE t4 CURSOR FOR SELECT a, count(*) FROM t GROUP BY a ORDER BY a;
+DECLARE CURSOR
+> DECLARE t5 CURSOR FOR SELECT g FROM generate_series(1, 3) g UNION ALL SELECT a FROM t;
+DECLARE CURSOR
+> DECLARE t6 CURSOR FOR SELECT g FROM generate_series(1, 3) g UNION SELECT a FROM t;
+DECLARE CURSOR
+> DECLARE t7 CURSOR FOR SELECT DISTINCT a FROM t;
+DECLARE CURSOR
+> DECLARE t8 CURSOR FOR SELECT * FROM (SELECT a FROM t LIMIT 2) s;
+DECLARE CURSOR
+> DECLARE t9 CURSOR FOR SELECT generate_series(1, 3);
+DECLARE CURSOR
+> DECLARE t10 CURSOR FOR WITH w AS MATERIALIZED (SELECT 1 AS a) SELECT * FROM w;
+DECLARE CURSOR
+> DECLARE t11 CURSOR FOR WITH w AS (SELECT a FROM t) SELECT * FROM w;
+DECLARE CURSOR
+> DECLARE t12 CURSOR FOR SELECT a, row_number() OVER () FROM t;
+DECLARE CURSOR
+> DECLARE t13 CURSOR FOR SELECT 1 UNION ALL SELECT 2;
+DECLARE CURSOR
+> DECLARE t14 CURSOR FOR VALUES (1);
+DECLARE CURSOR
+> DECLARE t15 CURSOR FOR SELECT * FROM t WHERE a > 1 OFFSET 1;
+DECLARE CURSOR
+> SELECT name, is_scrollable FROM pg_cursors ORDER BY name;
+fields name@pg_cursors.1:25:-1:-1,is_scrollable@pg_cursors.5:16:1:-1
+row t1,t
+row t10,t
+row t11,t
+row t12,f
+row t13,f
+row t14,f
+row t15,t
+row t2,f
+row t3,f
+row t4,t
+row t5,t
+row t6,f
+row t7,f
+row t8,t
+row t9,f
+SELECT 15
+> FETCH ALL FROM t1;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+FETCH 0
+> MOVE BACKWARD ALL IN t1;
+MOVE 0
+> FETCH t2;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,x@u.1:23:4:-1
+FETCH 0
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+P d|DECLARE c CURSOR FOR SELECT $1::int + 1 AS n, g FROM generate_series(1, 3) g
+D S d
+params 23
+nodata
+X d|41
+DECLARE CURSOR
+> SELECT name, statement, is_scrollable FROM pg_cursors;
+fields name@pg_cursors.1:25:-1:-1,statement@pg_cursors.2:25:-1:-1,is_scrollable@pg_cursors.5:16:1:-1
+row c,DECLARE c CURSOR FOR SELECT $1::int + 1 AS n, g FROM generate_series(1, 3) g,t
+SELECT 1
+P f2|FETCH 2 FROM c
+D S f2
+params 
+fields n:23:4:-1,g:23:4:-1
+X f2
+row 42,1
+row 42,2
+FETCH 2
+X f2
+row 42,3
+FETCH 1
+X f2
+FETCH 0
+P m|MOVE BACKWARD ALL IN c
+D S m
+params 
+nodata
+X m
+MOVE 3
+P k|CLOSE c
+D S k
+params 
+nodata
+X k
+CLOSE CURSOR
+X k
+ERROR 34000 cursor "c" does not exist
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> DECLARE c CURSOR FOR SELECT 1;
+DECLARE CURSOR
+P a|CLOSE ALL
+X a
+CLOSE CURSOR ALL
+> SELECT count(*) FROM pg_cursors;
+fields count:20:8:-1
+row 0
+SELECT 1
+> COMMIT;
+COMMIT

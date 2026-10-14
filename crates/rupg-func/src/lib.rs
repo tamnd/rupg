@@ -131,6 +131,10 @@ pub trait Session {
     fn prepared_statements(&self) -> Vec<Vec<Value>> {
         Vec::new()
     }
+    /// The rows of `pg_cursor`, one for each cursor of `DECLARE` that is open in the session, in the 6 columns of the function. The order is not defined.
+    fn cursors(&self) -> Vec<Vec<Value>> {
+        Vec::new()
+    }
     /// The rows of `pg_hba_file_rules`, one for each line of the host rules, in the 11 columns of the function. A session with no server has no rules and no rows.
     ///
     /// # Errors

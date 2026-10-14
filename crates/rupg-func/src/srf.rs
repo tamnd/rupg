@@ -1,4 +1,4 @@
-//! The set-returning functions that a query can call in `FROM` or in its target list: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `regexp_matches`, `regexp_split_to_table`, `pg_options_to_table`, `aclexplode`, `range_minus_multi`, `multirange_unnest`, `multirange_minus_multi`, `unnest` of a `tsvector`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, `pg_prepared_statement`, `pg_hba_file_rules`, `pg_ident_file_mappings`, the functions of the views of replication, of progress and of the prepared transactions, the functions of the statistics of the whole server that give rows, the functions of the views of asynchronous I/O, shared memory, extended statistics, replication origins, recovery, publications and cursors, and the functions of the views of the time zones.
+//! The set-returning functions that a query can call in `FROM` or in its target list: `generate_series` of the integer types, `unnest`, `generate_subscripts`, `string_to_table`, `regexp_matches`, `regexp_split_to_table`, `pg_options_to_table`, `aclexplode`, `range_minus_multi`, `multirange_unnest`, `multirange_minus_multi`, `unnest` of a `tsvector`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, `pg_prepared_statement`, `pg_hba_file_rules`, `pg_ident_file_mappings`, the functions of the views of replication, of progress and of the prepared transactions, the functions of the statistics of the whole server that give rows, the functions of the views of asynchronous I/O, shared memory, extended statistics, replication origins, recovery and publications, `pg_cursor`, and the functions of the views of the time zones.
 //!
 //! A set kernel gives all the rows of the call at once, as a function of PostgreSQL in the materialize mode gives a tuplestore. Each row has one value for each column of the result: one value for a function of a scalar type, or one value for each `OUT` parameter.
 
@@ -39,6 +39,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_get_wait_events" => wait_events,
         "show_all_settings" => all_settings,
         "pg_prepared_statement" => prepared_statements,
+        "pg_cursor" => cursors,
         "pg_hba_file_rules" => hba_rules,
         "pg_ident_file_mappings" => ident_mappings,
         "pg_stat_get_activity" => crate::activity::activity,
@@ -51,10 +52,9 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_stat_get_wal_receiver" => crate::replication::wal_receiver,
         "pg_stat_get_subscription_stats" => crate::replication::subscription_stats,
         "pg_stat_get_replication_slot" => crate::replication::replication_slot,
-        "pg_get_aios"
-        | "pg_get_dsm_registry_allocations"
-        | "pg_show_replication_origin_status"
-        | "pg_cursor" => crate::absent::none,
+        "pg_get_aios" | "pg_get_dsm_registry_allocations" | "pg_show_replication_origin_status" => {
+            crate::absent::none
+        }
         "pg_available_extensions" | "pg_available_extension_versions" => crate::absent::extensions,
         "show_all_file_settings" => crate::absent::file_settings,
         "pg_config" => crate::absent::config,
@@ -167,6 +167,11 @@ fn all_settings(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
 /// `pg_prepared_statement`: the named prepared statements of the session, which the view `pg_prepared_statements` reads.
 fn prepared_statements(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(call.session.prepared_statements())
+}
+
+/// `pg_cursor`: the open cursors of the session, which the view `pg_cursors` reads.
+fn cursors(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(call.session.cursors())
 }
 
 /// `pg_hba_file_rules`: the lines of the host rules, which the view `pg_hba_file_rules` reads.

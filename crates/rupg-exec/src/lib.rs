@@ -935,6 +935,11 @@ impl Plan {
         Ok(Plan { query: fold::query(&self.query, params, session)? })
     }
 
+    /// `ExecSupportsBackwardScan` on the plan that PostgreSQL makes for the query, which decides if a cursor with neither `SCROLL` nor `NO SCROLL` can scan backward.
+    pub fn backward_scan(&self) -> bool {
+        backward(&self.query)
+    }
+
     /// Runs the query and gives its rows.
     ///
     /// # Errors
@@ -942,6 +947,60 @@ impl Plan {
     /// The error of a function, such as a division by zero.
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         run_query(&self.query, params, session, &Cache::default(), &[], false)
+    }
+}
+
+/// True when the top node of the plan of a query can scan backward. `Sort`, the scans of a table, a function, a `VALUES` list and a query of `WITH` can, and `Limit` and `SubqueryScan` can when the node below them can. `Append` for `UNION ALL` can when each part can. `Result` with no `FROM`, the joins, the aggregates, `Unique`, `WindowAgg` and `ProjectSet` cannot.
+fn backward(query: &Query) -> bool {
+    fn append(query: &Query, op: &SetOp) -> bool {
+        let part = |part: &SetTree| match part {
+            SetTree::Leaf(index) => {
+                query.relations[*index].subquery.as_deref().is_some_and(backward)
+            }
+            SetTree::Op(op) => append(query, op),
+        };
+        op.kind == SetKind::Union && op.all && part(&op.left) && part(&op.right)
+    }
+    if query.has_target_srfs() {
+        return false;
+    }
+    if !query.sort.is_empty() && query.distinct.is_empty() && query.windows.is_empty() {
+        return true;
+    }
+    if let Some(op) = &query.set_op {
+        return append(query, op);
+    }
+    if query.grouped || !query.distinct.is_empty() || !query.windows.is_empty() {
+        return false;
+    }
+    let [relation] = query.relations.as_slice() else { return false };
+    if query.from.len() != 1 || !matches!(query.from[0], FromItem::Relation(_)) {
+        return false;
+    }
+    if relation.function.is_some() {
+        return true;
+    }
+    if let Some(rows) = &relation.values {
+        // A `VALUES` list of one row is a `Result`.
+        return rows.len() > 1;
+    }
+    if let Some(cte) = &relation.cte {
+        if cte.work.is_some() {
+            return false;
+        }
+        // A query of `WITH` that the planner does not put in place of its reference is a `CteScan`.
+        let scanned = query
+            .ctes
+            .iter()
+            .find(|c| c.name == cte.name)
+            .is_some_and(|c| c.recursive || c.materialized == Some(true));
+        if scanned {
+            return true;
+        }
+    }
+    match &relation.subquery {
+        Some(sub) => backward(sub),
+        None => true,
     }
 }
 
