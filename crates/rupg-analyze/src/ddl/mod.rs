@@ -1,8 +1,9 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION` and `COMMENT`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction` and `CommentObject` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT` and `DROP`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction`, `CommentObject` and `ExecDropStmt` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod comment;
 mod copy;
 mod domain;
+mod drop;
 mod fkey;
 mod function;
 mod index;
@@ -20,7 +21,7 @@ pub(crate) use table::check_attribute_type;
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, Owned};
-use rupg_sql::nodes::{CreateSchemaStmt, Node, RangeVar, RoleSpecType};
+use rupg_sql::nodes::{CreateSchemaStmt, Node, ObjectType, RangeVar, RoleSpecType};
 use rupg_types::{Value, oid};
 
 use crate::coerce::AtOpt;
@@ -58,6 +59,18 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateSchemaStmt(_)
             | Node::ViewStmt(_)
             | Node::CommentStmt(_)
+    ) || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
+}
+
+/// True for the kinds of objects that `DROP` can remove.
+fn is_drop_kind(kind: ObjectType) -> bool {
+    matches!(
+        kind,
+        ObjectType::OBJECT_TABLE
+            | ObjectType::OBJECT_VIEW
+            | ObjectType::OBJECT_INDEX
+            | ObjectType::OBJECT_SEQUENCE
+            | ObjectType::OBJECT_SCHEMA
     )
 }
 
@@ -78,6 +91,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
         Node::CommentStmt(comment) => definer.comment(comment),
+        Node::DropStmt(drop) => definer.drop(drop),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }

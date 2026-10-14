@@ -1,0 +1,375 @@
+> CREATE TABLE t (id serial PRIMARY KEY, a int DEFAULT 1 CHECK (a > 0), b text)
+CREATE TABLE
+> CREATE INDEX t_b ON t (b)
+CREATE INDEX
+> CREATE VIEW v AS SELECT id, b FROM t
+CREATE VIEW
+> CREATE VIEW w AS SELECT * FROM v
+CREATE VIEW
+> COMMENT ON TABLE t IS 'a table'
+COMMENT
+> COMMENT ON COLUMN t.a IS 'a column'
+COMMENT
+!details
+> DROP TABLE t
+ERROR 2BP01 cannot drop table t because other objects depend on it
+DETAIL view v depends on table t
+view w depends on view v
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE t RESTRICT
+ERROR 2BP01 cannot drop table t because other objects depend on it
+DETAIL view v depends on table t
+view w depends on view v
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE t, v
+ERROR 42809 "v" is not a table
+HINT Use DROP VIEW to remove a view.
+> DROP TABLE nosuch
+ERROR 42P01 table "nosuch" does not exist
+> DROP TABLE IF EXISTS nosuch, nosuch2
+NOTICE 00000 table "nosuch" does not exist, skipping
+NOTICE 00000 table "nosuch2" does not exist, skipping
+DROP TABLE
+> DROP TABLE nosuch.t
+ERROR 3F000 schema "nosuch" does not exist
+> DROP TABLE IF EXISTS nosuch.t
+NOTICE 00000 schema "nosuch" does not exist, skipping
+DROP TABLE
+> DROP TABLE public.nosuch
+ERROR 42P01 table "nosuch" does not exist
+> DROP TABLE a.b.c
+ERROR 0A000 cross-database references are not implemented: "a.b.c"
+> DROP TABLE a.b.c.d
+ERROR 42601 improper relation name (too many dotted names): a.b.c.d
+> DROP VIEW t
+ERROR 42809 "t" is not a view
+HINT Use DROP TABLE to remove a table.
+> DROP TABLE v
+ERROR 42809 "v" is not a table
+HINT Use DROP VIEW to remove a view.
+> DROP INDEX t
+ERROR 42809 "t" is not an index
+HINT Use DROP TABLE to remove a table.
+> DROP SEQUENCE t
+ERROR 42809 "t" is not a sequence
+HINT Use DROP TABLE to remove a table.
+> DROP TABLE t_id_seq
+ERROR 42809 "t_id_seq" is not a table
+HINT Use DROP SEQUENCE to remove a sequence.
+> DROP VIEW t_b
+ERROR 42809 "t_b" is not a view
+HINT Use DROP INDEX to remove an index.
+> DROP TABLE IF EXISTS v
+ERROR 42809 "v" is not a table
+HINT Use DROP VIEW to remove a view.
+> DROP SEQUENCE t_id_seq
+ERROR 2BP01 cannot drop sequence t_id_seq because other objects depend on it
+DETAIL default value for column id of table t depends on sequence t_id_seq
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP INDEX t_pkey
+ERROR 2BP01 cannot drop index t_pkey because constraint t_pkey on table t requires it
+HINT You can drop constraint t_pkey on table t instead.
+> DROP TABLE pg_class
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> DROP TABLE pg_catalog.pg_class
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> DROP INDEX pg_class_oid_index
+ERROR 42501 permission denied: "pg_class_oid_index" is a system catalog
+> DROP SCHEMA pg_catalog
+ERROR 2BP01 cannot drop schema pg_catalog because it is required by the database system
+> DROP SCHEMA nosuch
+ERROR 3F000 schema "nosuch" does not exist
+> DROP SCHEMA IF EXISTS nosuch
+NOTICE 00000 schema "nosuch" does not exist, skipping
+DROP SCHEMA
+> DROP INDEX CONCURRENTLY t_b, t_pkey
+ERROR 0A000 DROP INDEX CONCURRENTLY does not support dropping multiple objects
+> DROP INDEX CONCURRENTLY t_b CASCADE
+ERROR 0A000 DROP INDEX CONCURRENTLY does not support CASCADE
+> BEGIN
+BEGIN
+> DROP INDEX CONCURRENTLY t_b
+ERROR 25001 DROP INDEX CONCURRENTLY cannot run inside a transaction block
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> DROP VIEW w
+DROP VIEW
+> SELECT count(*) FROM pg_class WHERE relname = 'w'
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT relname FROM pg_class WHERE relname IN ('v', 'w') ORDER BY 1
+fields relname@pg_class.2:19:64:-1
+row v
+row w
+SELECT 2
+> DROP VIEW v CASCADE
+NOTICE 00000 drop cascades to view w
+DROP VIEW
+> SELECT relname FROM pg_class WHERE relname IN ('v', 'w') ORDER BY 1
+fields relname@pg_class.2:19:64:-1
+SELECT 0
+> SELECT * FROM v
+ERROR 42P01 relation "v" does not exist at 15
+> DROP INDEX CONCURRENTLY t_b
+DROP INDEX
+> DROP INDEX IF EXISTS t_b
+NOTICE 00000 index "t_b" does not exist, skipping
+DROP INDEX
+> SELECT relhasindex FROM pg_class WHERE relname = 't'
+fields relhasindex@pg_class.15:16:1:-1
+row t
+SELECT 1
+> DROP SEQUENCE t_id_seq CASCADE
+NOTICE 00000 drop cascades to default value for column id of table t
+DROP SEQUENCE
+> SELECT attname, atthasdef FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atthasdef@pg_attribute.13:16:1:-1
+row id,f
+row a,t
+row b,f
+SELECT 3
+> SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 't'::regclass
+fields pg_get_expr:25:-1:-1
+row 1
+SELECT 1
+> SELECT count(*) FROM pg_class WHERE relname = 't_id_seq'
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE p (x int)
+CREATE TABLE
+> CREATE TABLE q (y p)
+CREATE TABLE
+> DROP TABLE p
+ERROR 2BP01 cannot drop table p because other objects depend on it
+DETAIL column y of table q depends on type p
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE q, p
+DROP TABLE
+> SELECT count(*) FROM pg_type WHERE typname IN ('p', '_p', 'q', '_q')
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP TABLE t CASCADE
+DROP TABLE
+> SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_type WHERE typnamespace = 'public'::regnamespace
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_depend WHERE objid >= 16384 OR refobjid >= 16384
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_description WHERE objoid >= 16384
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_constraint WHERE connamespace = 'public'::regnamespace
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_attrdef
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT * FROM t
+ERROR 42P01 relation "t" does not exist at 15
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TABLE s.a (x int PRIMARY KEY, z text)
+CREATE TABLE
+> CREATE TABLE s.b (y int REFERENCES s.a)
+CREATE TABLE
+> CREATE VIEW s.c AS SELECT * FROM s.b
+CREATE VIEW
+> CREATE VIEW d AS SELECT x FROM s.a
+CREATE VIEW
+> CREATE INDEX a_z ON s.a (z)
+CREATE INDEX
+> DROP SCHEMA s
+ERROR 2BP01 cannot drop schema s because other objects depend on it
+DETAIL table s.a depends on schema s
+view d depends on table s.a
+table s.b depends on schema s
+view s.c depends on schema s
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE s.a
+ERROR 2BP01 cannot drop table s.a because other objects depend on it
+DETAIL constraint b_y_fkey on table s.b depends on table s.a
+view d depends on table s.a
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP INDEX s.a_pkey
+ERROR 2BP01 cannot drop index s.a_pkey because constraint a_pkey on table s.a requires it
+HINT You can drop constraint a_pkey on table s.a instead.
+> DROP SCHEMA s, nosuch
+ERROR 3F000 schema "nosuch" does not exist
+> DROP SCHEMA IF EXISTS nosuch, s
+NOTICE 00000 schema "nosuch" does not exist, skipping
+ERROR 2BP01 cannot drop schema s because other objects depend on it
+DETAIL table s.a depends on schema s
+view d depends on table s.a
+table s.b depends on schema s
+view s.c depends on schema s
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE s.a CASCADE
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to constraint b_y_fkey on table s.b
+drop cascades to view d
+DROP TABLE
+> SELECT conname FROM pg_constraint WHERE connamespace = 's'::regnamespace ORDER BY 1
+fields conname@pg_constraint.2:19:64:-1
+SELECT 0
+> SELECT relname FROM pg_class WHERE relnamespace = 's'::regnamespace ORDER BY 1
+fields relname@pg_class.2:19:64:-1
+row b
+row c
+SELECT 2
+> SELECT relhastriggers FROM pg_class WHERE oid = 's.b'::regclass
+fields relhastriggers@pg_class.22:16:1:-1
+row t
+SELECT 1
+> SET search_path = s, public
+SET
+search_path=s, public
+> CREATE TABLE e (k int)
+CREATE TABLE
+> CREATE INDEX e_k ON e (k)
+CREATE INDEX
+> DROP SCHEMA s CASCADE
+NOTICE 00000 drop cascades to 3 other objects
+DETAIL drop cascades to table b
+drop cascades to view c
+drop cascades to table e
+DROP SCHEMA
+> SELECT count(*) FROM pg_namespace WHERE nspname = 's'
+fields count:20:8:-1
+row 0
+SELECT 1
+> SHOW search_path
+fields search_path:25:-1:-1
+row s, public
+SHOW
+> RESET search_path
+RESET
+search_path="$user", public
+> CREATE SCHEMA r
+CREATE SCHEMA
+> CREATE TABLE r.x (i int)
+CREATE TABLE
+> CREATE VIEW r.y AS SELECT i FROM r.x
+CREATE VIEW
+> CREATE VIEW r.z AS SELECT i FROM r.y
+CREATE VIEW
+> CREATE TABLE r.m (j int)
+CREATE TABLE
+> DROP TABLE r.x, r.m CASCADE
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to view r.y
+drop cascades to view r.z
+DROP TABLE
+> DROP SCHEMA r
+DROP SCHEMA
+> CREATE SCHEMA r2
+CREATE SCHEMA
+> DROP SCHEMA r, r2
+ERROR 3F000 schema "r" does not exist
+> SELECT count(*) FROM pg_namespace WHERE nspname LIKE 'r%'
+fields count:20:8:-1
+row 1
+SELECT 1
+> CREATE TABLE g (i int, j int)
+CREATE TABLE
+> CREATE VIEW g1 AS SELECT i FROM g
+CREATE VIEW
+> CREATE VIEW g2 AS SELECT j FROM g
+CREATE VIEW
+> CREATE VIEW g3 AS SELECT g1.i FROM g1, g2
+CREATE VIEW
+> DROP TABLE g
+ERROR 2BP01 cannot drop table g because other objects depend on it
+DETAIL view g1 depends on table g
+view g2 depends on table g
+view g3 depends on view g2
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE g CASCADE
+NOTICE 00000 drop cascades to 3 other objects
+DETAIL drop cascades to view g1
+drop cascades to view g2
+drop cascades to view g3
+DROP TABLE
+> DROP TABLE g
+ERROR 42P01 table "g" does not exist
+> DROP TABLE IF EXISTS g
+NOTICE 00000 table "g" does not exist, skipping
+DROP TABLE
+> BEGIN
+BEGIN
+> CREATE TABLE h (i int)
+CREATE TABLE
+> DROP TABLE h
+DROP TABLE
+> CREATE TABLE h (j text)
+CREATE TABLE
+> SELECT attname FROM pg_attribute WHERE attrelid = 'h'::regclass AND attnum > 0
+fields attname@pg_attribute.2:19:64:-1
+row j
+SELECT 1
+> COMMIT
+COMMIT
+> DROP TABLE h
+DROP TABLE
+> CREATE TABLE h (i int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE k (i int REFERENCES h)
+CREATE TABLE
+> CREATE VIEW kv AS SELECT * FROM k
+CREATE VIEW
+> DROP TABLE h, k
+ERROR 2BP01 cannot drop desired object(s) because other objects depend on them
+DETAIL view kv depends on table k
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE h, k CASCADE
+NOTICE 00000 drop cascades to view kv
+DROP TABLE
+> SELECT count(*) FROM pg_class WHERE relname IN ('h', 'k', 'kv')
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE SCHEMA cs
+CREATE SCHEMA
+> COMMENT ON SCHEMA cs IS 'a schema'
+COMMENT
+> DROP SCHEMA cs
+DROP SCHEMA
+> SELECT count(*) FROM pg_description WHERE objoid >= 16384
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE u1 (a int UNIQUE)
+CREATE TABLE
+> CREATE TABLE u2 (b int REFERENCES u1 (a))
+CREATE TABLE
+> DROP INDEX u1_a_key
+ERROR 2BP01 cannot drop index u1_a_key because constraint u1_a_key on table u1 requires it
+HINT You can drop constraint u1_a_key on table u1 instead.
+> DROP INDEX u1_a_key CASCADE
+ERROR 2BP01 cannot drop index u1_a_key because constraint u1_a_key on table u1 requires it
+HINT You can drop constraint u1_a_key on table u1 instead.
+> DROP TABLE u1
+ERROR 2BP01 cannot drop table u1 because other objects depend on it
+DETAIL constraint u2_b_fkey on table u2 depends on table u1
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE u1 CASCADE
+NOTICE 00000 drop cascades to constraint u2_b_fkey on table u2
+DROP TABLE
+> DROP TABLE u2
+DROP TABLE

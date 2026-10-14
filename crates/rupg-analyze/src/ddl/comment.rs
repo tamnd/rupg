@@ -15,7 +15,7 @@ fn builtin_object() -> Error {
 }
 
 /// The names of a node that is a list of names.
-fn name_list(object: Option<&Node>) -> Vec<&str> {
+pub(super) fn name_list(object: Option<&Node>) -> Vec<&str> {
     match object {
         Some(Node::List(list)) => names(list),
         _ => Vec::new(),
@@ -23,7 +23,7 @@ fn name_list(object: Option<&Node>) -> Vec<&str> {
 }
 
 /// `makeRangeVarFromNameList`.
-fn range_var(names: &[&str]) -> Result<RangeVar> {
+pub(super) fn range_var(names: &[&str]) -> Result<RangeVar> {
     let text = |s: &str| Some(s.into());
     let (catalog, schema, name) = match names {
         [name] => (None, None, text(name)),
@@ -51,7 +51,7 @@ fn owner_word(objtype: ObjectType) -> &'static str {
 }
 
 /// The error of `aclcheck_error` with `ACLCHECK_NOT_OWNER`.
-fn not_owner(word: &str, name: &str) -> Error {
+pub(super) fn not_owner(word: &str, name: &str) -> Error {
     Error::new(SqlState::INSUFFICIENT_PRIVILEGE, format!("must be owner of {word} {name}"))
 }
 
