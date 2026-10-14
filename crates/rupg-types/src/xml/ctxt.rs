@@ -736,7 +736,7 @@ impl Ctxt {
         input.at(input.cur + n)
     }
 
-    /// `CMPn`: the next bytes are `s`.
+    /// The CMP macros of libxml2: the next bytes are `s`.
     #[inline]
     pub(super) fn looking_at(&self, s: &[u8]) -> bool {
         let input = self.input();
