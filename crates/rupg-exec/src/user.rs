@@ -141,6 +141,7 @@ pub(crate) fn rows(
         "pg_description" => descriptions(table, catalog),
         "pg_rewrite" => rewrites(table, catalog),
         "pg_init_privs" => init_privs(table, catalog, session)?,
+        "pg_database" => databases(table, session),
         _ => Vec::new(),
     };
     Ok(rows.into_iter().map(|row| row.values).collect())
@@ -224,6 +225,37 @@ fn init_privs<'a>(
         }
     }
     Ok(rows)
+}
+
+/// The rows of `pg_database` of the databases that `CREATE DATABASE` made.
+fn databases<'a>(table: &'a Table, session: &dyn Session) -> Vec<Row<'a>> {
+    let text = |value: &Option<String>| value.clone().map_or(Value::Null, Value::text);
+    session
+        .databases()
+        .iter()
+        .map(|database| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(database.oid))
+                .set("datname", Value::text(database.name.clone()))
+                .set("datdba", oid(database.owner))
+                .set("encoding", Value::Int4(database.encoding))
+                .set("datlocprovider", Value::Char(database.locale_provider))
+                .set("datistemplate", Value::Bool(database.is_template))
+                .set("datallowconn", Value::Bool(database.allow_connections))
+                .set("dathasloginevt", Value::Bool(false))
+                .set("datconnlimit", Value::Int4(database.connection_limit))
+                .set("datfrozenxid", oid(database.frozen_xid))
+                .set("datminmxid", oid(database.min_mxid))
+                .set("dattablespace", oid(database.tablespace))
+                .set("datcollate", Value::text(database.collate.clone()))
+                .set("datctype", Value::text(database.ctype.clone()))
+                .set("datlocale", text(&database.locale))
+                .set("daticurules", text(&database.icu_rules))
+                .set("datcollversion", text(&database.collation_version))
+                .set("datacl", database.acl.as_deref().map_or(Value::Null, text_array));
+            row
+        })
+        .collect()
 }
 
 fn namespaces<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {

@@ -6,7 +6,6 @@ use std::cell::RefCell;
 use std::sync::Arc;
 
 use rupg_func::{Backend, BackendState, Client, Ssl};
-use rupg_pgcatalog::builtin::{self, Named};
 use rupg_wire::TransactionStatus;
 
 use super::Connection;
@@ -21,7 +20,7 @@ const NAME_BYTES: usize = 63;
 #[derive(Debug, Default)]
 pub(crate) struct Activity {
     /// The number of the session in the table, after [`Connection::greet`].
-    number: Option<i32>,
+    pub(super) number: Option<i32>,
     /// The two ends of the connection.
     pub(crate) client: Client,
     pub(crate) server: Client,
@@ -110,13 +109,9 @@ impl Connection {
 
     /// `pgstat_bestart`: puts the session in the table of its store.
     pub(super) fn join(&mut self) {
-        let database = builtin::named(Named::Database)
-            .iter()
-            .find(|row| row.name == self.database)
-            .map_or(0, |row| row.oid);
         let backend = Backend {
             pid: self.pid,
-            database,
+            database: self.database_oid,
             role: self.role,
             application: application_name(self.settings.get_mut()),
             backend_start: query::now(&*self.clock),
@@ -124,7 +119,7 @@ impl Connection {
             ssl: self.activity.ssl.clone(),
             ..Backend::default()
         };
-        self.activity.number = Some(self.store.join(backend));
+        self.activity.number = Some(self.store.join(backend, Arc::clone(&self.end)));
     }
 
     /// `pgstat_report_activity`: the state of the session, and the text of the statement that starts when `text` is `Some`.

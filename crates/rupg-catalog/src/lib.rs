@@ -8,6 +8,7 @@
 
 #![forbid(unsafe_code)]
 
+pub mod database;
 pub mod names;
 pub mod toast;
 
@@ -15,6 +16,7 @@ use std::collections::BTreeMap;
 
 use rupg_common::{Error, Result, SqlState};
 
+pub use database::Database;
 use names::{index_column_names, make_object_name, name_addition};
 
 /// The first OID for a user object, `FirstNormalObjectId`.

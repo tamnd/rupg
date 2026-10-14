@@ -521,10 +521,18 @@ fn column_check(relid: u32, attnum: i16, role: u32, mask: u32, session: &dyn Ses
     class_check(relid, role, mask, session)
 }
 
-/// The privileges of a database.
-fn database_acl(oid: u32) -> Result<Option<Vec<(u32, u32)>>> {
-    let Some(row) = builtin::owned_by_oid(Owned::Database, oid) else { return Ok(None) };
-    acl_of(row.acl, AclKind::Database, row.owner).map(Some)
+/// The privileges and the owner of a database: a static row, or a database that `CREATE DATABASE` made.
+fn database_acl(oid: u32, session: &dyn Session) -> Result<Option<Privileges>> {
+    if let Some(row) = builtin::owned_by_oid(Owned::Database, oid) {
+        return Ok(Some((acl_of(row.acl, AclKind::Database, row.owner)?, row.owner)));
+    }
+    let created = session.databases();
+    let Some(database) = created.iter().find(|d| d.oid == oid) else { return Ok(None) };
+    let acl = match &database.acl {
+        Some(items) => parse_acl(&items.iter().map(String::as_str).collect::<Vec<_>>())?,
+        None => acl_default(AclKind::Database, database.owner),
+    };
+    Ok(Some((acl, database.owner)))
 }
 
 /// The kind of `acldefault` of an object kind.
@@ -590,8 +598,8 @@ fn object_check(kind: Owned, oid: u32, role: u32, mask: u32, session: &dyn Sessi
         }
     }
     let (acl, owner) = if kind == Owned::Database {
-        let Some(acl) = database_acl(oid)? else { return Ok(None) };
-        (acl, BOOTSTRAP_SUPERUSER)
+        let Some(found) = database_acl(oid, session)? else { return Ok(None) };
+        found
     } else if let Some(row) = builtin::owned_by_oid(kind, oid) {
         (acl_of(row.acl, owned_kind(kind), row.owner)?, row.owner)
     } else {
@@ -666,6 +674,9 @@ fn simple_name(kind: Owned, name: &str, session: &dyn Session) -> Result<u32> {
     let mut found = builtin::owned(kind).iter().find(|r| r.name == name).map(|r| r.oid);
     if found.is_none() && kind == Owned::Namespace {
         found = session.catalog().and_then(|c| c.schema_by_name(name)).map(|s| s.oid);
+    }
+    if found.is_none() && kind == Owned::Database {
+        found = session.databases().iter().find(|d| d.name == name).map(|d| d.oid);
     }
     found.ok_or_else(|| {
         let (state, what) = match kind {

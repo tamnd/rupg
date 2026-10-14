@@ -404,9 +404,12 @@ fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
         RegKind::Dictionary => named(Named::Dictionary),
         RegKind::Namespace => namespace_name(oid, session).map(quote_identifier),
         RegKind::Role => builtin::named_by_oid(Named::Role, oid).map(|r| quote_identifier(r.name)),
-        RegKind::Database => {
-            builtin::named_by_oid(Named::Database, oid).map(|r| quote_identifier(r.name))
-        }
+        RegKind::Database => match builtin::named_by_oid(Named::Database, oid) {
+            Some(row) => Some(quote_identifier(row.name)),
+            None => {
+                session.databases().iter().find(|d| d.oid == oid).map(|d| quote_identifier(&d.name))
+            }
+        },
         RegKind::Type => {
             type_name(oid, session)?;
             Some(type_text(oid, None, session).ok()?)
@@ -508,7 +511,12 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
         RegKind::Class => class_in(names, session, false),
         RegKind::Namespace => simple(&schemas, SqlState::UNDEFINED_SCHEMA, "schema"),
         RegKind::Role => simple(&rows(Named::Role), SqlState::UNDEFINED_OBJECT, "role"),
-        RegKind::Database => simple(&rows(Named::Database), SqlState::UNDEFINED_OBJECT, "database"),
+        RegKind::Database => {
+            let created = session.databases();
+            let mut databases = rows(Named::Database);
+            databases.extend(created.iter().map(|d| (d.name.as_str(), d.oid)));
+            simple(&databases, SqlState::UNDEFINED_OBJECT, "database")
+        }
         RegKind::Collation => in_schema(
             Named::Collation,
             SqlState::UNDEFINED_OBJECT,

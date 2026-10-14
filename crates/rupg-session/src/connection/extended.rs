@@ -462,6 +462,24 @@ impl Connection {
                     copy::copy_out_response(out, binary, columns);
                 }
                 result?
+            } else if let Node::CreatedbStmt(stmt) = node {
+                let mut notices = Vec::new();
+                let result = self.create_database(stmt, &mut notices);
+                self.notices(&mut notices, &statement.text, &[], out);
+                immediate_commit = true;
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
+            } else if let Node::DropdbStmt(stmt) = node {
+                let mut notices = Vec::new();
+                let result = self.drop_database(stmt, &mut notices);
+                self.notices(&mut notices, &statement.text, &[], out);
+                immediate_commit = true;
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
             } else {
                 let mut notices = Vec::new();
                 let mut cx = Context {

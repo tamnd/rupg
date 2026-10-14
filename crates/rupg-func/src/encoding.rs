@@ -150,7 +150,8 @@ pub fn encoding(name: &str) -> Option<&'static str> {
 }
 
 /// `pg_char_to_encoding`: the number of an encoding name or alias, or -1.
-fn char_to_encoding(name: &str) -> i32 {
+#[must_use]
+pub fn char_to_encoding(name: &str) -> i32 {
     encoding(name)
         .and_then(|name| NAMES.iter().position(|n| *n == name))
         .and_then(|n| i32::try_from(n).ok())
@@ -158,7 +159,8 @@ fn char_to_encoding(name: &str) -> i32 {
 }
 
 /// `pg_encoding_to_char`: the name of an encoding by its number, or an empty string for a number that has no encoding.
-fn encoding_to_char(number: i64) -> &'static str {
+#[must_use]
+pub fn encoding_to_char(number: i64) -> &'static str {
     usize::try_from(number).ok().and_then(|n| NAMES.get(n)).copied().unwrap_or_default()
 }
 

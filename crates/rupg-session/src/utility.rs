@@ -80,7 +80,9 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         | Node::LockStmt(_)
         | Node::CopyStmt(_)
         | Node::PrepareStmt(_)
-        | Node::DeallocateStmt(_) => Ok(()),
+        | Node::DeallocateStmt(_)
+        | Node::CreatedbStmt(_)
+        | Node::DropdbStmt(_) => Ok(()),
         _ => Err(not_supported(text)),
     }
 }

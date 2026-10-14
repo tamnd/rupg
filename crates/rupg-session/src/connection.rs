@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rupg_analyze::{Message, Params};
-use rupg_catalog::Catalog;
+use rupg_catalog::{Catalog, database};
 use rupg_common::{Error, SqlState};
 use rupg_func::BackendState;
 pub use rupg_func::{Client, Ssl};
@@ -29,6 +29,7 @@ use crate::utility::{self, Context, Notice, Outcome};
 
 mod activity;
 mod copy;
+mod databases;
 mod extended;
 mod prepare;
 
@@ -275,6 +276,8 @@ pub struct Connection {
     session: Session,
     user: String,
     database: String,
+    /// The OID of the database of the session.
+    database_oid: u32,
     protocol: u32,
     statements: Statements<Arc<Prepared>>,
     portals: Portals<Portal>,
@@ -284,6 +287,8 @@ pub struct Connection {
     pipelining: bool,
     /// `QueryCancelPending`. The server sets it when a `CancelRequest` with the key of this session arrives.
     cancel: Arc<AtomicBool>,
+    /// `ProcDiePending`. `DROP DATABASE` with `FORCE` sets it in another session, and the session ends at its next message.
+    end: Arc<AtomicBool>,
     clock: Arc<dyn Clock>,
     /// The process ID of the cancel key, which `pg_backend_pid()` gives.
     pid: i32,
@@ -312,12 +317,14 @@ impl Connection {
             session: Session::new(),
             user: start.user.clone(),
             database: start.database.clone(),
+            database_oid: database::POSTGRES,
             protocol,
             statements: Statements::new(),
             portals: Portals::new(),
             xact_started: false,
             pipelining: false,
             cancel: Arc::new(AtomicBool::new(false)),
+            end: Arc::new(AtomicBool::new(false)),
             clock: Arc::new(OsClock::new()),
             pid: 0,
             transaction_start: 0,
@@ -338,6 +345,8 @@ impl Connection {
 
     /// Sets the catalog and the table of the sessions that the sessions of the server share, before [`Connection::greet`]. A new session has a store of its own.
     pub fn set_store(&mut self, store: Arc<Store>) {
+        self.database_oid =
+            store.database(&self.database).map_or(database::POSTGRES, |row| row.oid);
         self.store = store;
     }
 
@@ -366,7 +375,7 @@ impl Connection {
     fn catalog(&self) -> Arc<Catalog> {
         match &self.lease {
             Some(lease) => Arc::clone(&lease.catalog),
-            None => self.store.committed(),
+            None => self.store.committed(self.database_oid),
         }
     }
 
@@ -378,7 +387,7 @@ impl Connection {
         notices: &mut Vec<Notice>,
     ) -> Result<Done, Error> {
         if self.lease.is_none() {
-            self.lease = Some(self.store.lease(&self.cancel)?);
+            self.lease = Some(self.store.lease(self.database_oid, &self.cancel)?);
         }
         let mut work = Catalog::clone(&self.catalog());
         let defined = rupg_analyze::define(node, text, &self.reader(), &mut work, self.role);
@@ -456,6 +465,15 @@ impl Connection {
 
     /// Reads at most one message from `input` and writes the answer to `out`.
     pub fn step(&mut self, input: &[u8], out: &mut OutBuf) -> Step {
+        // `ProcessInterrupts` with `ProcDiePending`: `DROP DATABASE` with `FORCE` in another session ended this session.
+        if self.end.load(Ordering::Relaxed) {
+            let error = Error::new(
+                SqlState::ADMIN_SHUTDOWN,
+                "terminating connection due to administrator command",
+            );
+            write_error(out, "FATAL", &error, None, false);
+            return Step { used: 0, next: Next::Close };
+        }
         if self.session.wants_ready() {
             self.ready_for_query(out);
             return Step { used: 0, next: Next::Flush };
@@ -669,6 +687,12 @@ impl Connection {
             } else if let Node::CopyStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.copy(stmt, &mut copying)
+            } else if let Node::CreatedbStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.create_database(stmt, &mut notices)
+            } else if let Node::DropdbStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.drop_database(stmt, &mut notices)
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
@@ -1518,7 +1542,7 @@ mod tests {
             send(&mut c, &query("CREATE TABLE u (a int); CREATE INDEX ON u (a)")),
             ["CREATE TABLE", "CREATE INDEX", "ready I"]
         );
-        let catalog = c.store.committed();
+        let catalog = c.store.committed(c.database_oid);
         let names: Vec<&str> =
             catalog.relations().filter(|r| r.oid >= 16384).map(|r| r.name.as_str()).collect();
         assert_eq!(names, ["t", "t_pkey", "u", "u_a_idx"]);
@@ -1955,6 +1979,130 @@ mod tests {
     #[test]
     fn activity() {
         big_stack(|| script(include_str!("connection/activity.test")));
+    }
+
+    /// `CREATE DATABASE` and `DROP DATABASE`: the checks of the options, the rows of `pg_database`, the transaction blocks and the extended protocol. `connection/create_database.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn create_database() {
+        big_stack(|| script(include_str!("connection/create_database.test")));
+    }
+
+    /// A session of a database other than `postgres`.
+    fn connect_database(store: &Arc<Store>, pid: i32, database: &str) -> Connection {
+        let start = Start { database: database.into(), ..start(None, &[]) };
+        let settings = session_settings(&base_settings(&[]).unwrap(), &start).unwrap();
+        let mut connection = Connection::new(&start, settings, PROTOCOL_3_0);
+        connection.set_store(Arc::clone(store));
+        let mut out = OutBuf::new();
+        connection.greet(&CancelKey::new(pid, PROTOCOL_3_0, [7; CANCEL_KEY_LEN]), &mut out);
+        send(&mut connection, &[]);
+        connection
+    }
+
+    /// The first line of the result of a query that starts with `prefix`.
+    fn line_of(c: &mut Connection, sql: &str, prefix: &str) -> String {
+        let lines = send(c, &query(sql));
+        lines
+            .iter()
+            .find(|l| l.starts_with(prefix))
+            .cloned()
+            .unwrap_or_else(|| panic!("{sql}: {lines:?}"))
+    }
+
+    /// The encodings and the locales that the engine does not have, the catalog of each database, and `DROP DATABASE` of a database that another session uses, with and without `FORCE`.
+    #[test]
+    fn database_sessions() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            for (sql, message) in [
+                (
+                    "CREATE DATABASE x LOCALE 'en_US.utf8' TEMPLATE template0",
+                    "locale \"en_US.utf8\" is not supported yet",
+                ),
+                (
+                    "CREATE DATABASE x LC_CTYPE 'C.UTF-8' TEMPLATE template0",
+                    "locale \"C.UTF-8\" is not supported yet",
+                ),
+                (
+                    "CREATE DATABASE x ENCODING 'LATIN1' TEMPLATE template0",
+                    "encoding \"LATIN1\" is not supported yet",
+                ),
+                (
+                    "CREATE DATABASE x LOCALE_PROVIDER icu ICU_LOCALE 'en' TEMPLATE template0",
+                    "the ICU locale provider is not supported yet",
+                ),
+                (
+                    "CREATE DATABASE x LOCALE_PROVIDER builtin LOCALE 'C.UTF-8' TEMPLATE template0",
+                    "locale \"C.UTF-8\" is not supported yet",
+                ),
+                (
+                    "CREATE DATABASE x LOCALE_PROVIDER builtin BUILTIN_LOCALE 'C.UTF8' TEMPLATE template0",
+                    "builtin locale \"C.UTF-8\" is not supported yet",
+                ),
+            ] {
+                assert_eq!(
+                    line_of(&mut a, sql, "ERROR"),
+                    format!("ERROR 0A000 {message}"),
+                    "{sql}"
+                );
+            }
+            assert_eq!(line_of(&mut a, "CREATE TABLE t1 (a int)", "CREATE"), "CREATE TABLE");
+            assert_eq!(
+                line_of(&mut a, "CREATE DATABASE x TEMPLATE postgres", "CREATE"),
+                "CREATE DATABASE"
+            );
+            assert_eq!(line_of(&mut a, "CREATE DATABASE y", "CREATE"), "CREATE DATABASE");
+            let mut b = connect_database(&store, 1235, "x");
+            assert_eq!(
+                line_of(&mut b, "SELECT current_database(), to_regclass('t1') IS NOT NULL", "row"),
+                "row x,t"
+            );
+            assert_eq!(line_of(&mut b, "CREATE TABLE t2 (a int)", "CREATE"), "CREATE TABLE");
+            assert_eq!(line_of(&mut a, "SELECT to_regclass('t2') IS NULL", "row"), "row t");
+            assert_eq!(
+                line_of(&mut a, "SELECT datname FROM pg_stat_activity WHERE pid = 1235", "row"),
+                "row x"
+            );
+            assert_eq!(
+                line_of(&mut b, "DROP DATABASE postgres", "ERROR"),
+                "ERROR 0A000 DROP DATABASE of the database \"postgres\" of initdb is not supported yet"
+            );
+            let mut c = connect_database(&store, 1236, "y");
+            assert_eq!(line_of(&mut c, "SELECT to_regclass('t1') IS NULL", "row"), "row t");
+            assert_eq!(
+                line_of(&mut b, "DROP DATABASE x", "ERROR"),
+                "ERROR 55006 cannot drop the currently open database"
+            );
+            assert_eq!(
+                line_of(&mut b, "CREATE DATABASE z TEMPLATE y", "ERROR"),
+                "ERROR 55006 source database \"y\" is being accessed by other users"
+            );
+            assert_eq!(
+                line_of(&mut c, "CREATE DATABASE z TEMPLATE y", "CREATE"),
+                "CREATE DATABASE"
+            );
+            assert_eq!(
+                line_of(&mut a, "DROP DATABASE x", "ERROR"),
+                "ERROR 55006 database \"x\" is being accessed by other users"
+            );
+            assert_eq!(line_of(&mut a, "DROP DATABASE x WITH (FORCE)", "DROP"), "DROP DATABASE");
+            let mut out = OutBuf::new();
+            let step = b.step(&query("SELECT 1"), &mut out);
+            assert!(matches!(step.next, Next::Close));
+            assert_eq!(
+                render(&out, false),
+                ["FATAL 57P01 terminating connection due to administrator command"]
+            );
+            assert_eq!(
+                line_of(
+                    &mut a,
+                    "SELECT count(*) FROM pg_database WHERE datname IN ('x', 'y', 'z')",
+                    "row"
+                ),
+                "row 2"
+            );
+        });
     }
 
     /// Two sessions that look at each other in `pg_stat_activity`: the idle states, the wait for the client, the end of `xact_start` in a failed block, the snapshot of a transaction and `application_name`. `connection/two_sessions.test` is the output of PostgreSQL 19 for the same script on two connections to a new database.
