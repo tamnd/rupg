@@ -16,8 +16,8 @@ use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
 use rupg_catalog::{
-    Catalog, Extension, FIRST_NORMAL_OID, FIRST_UNPINNED_OID, Function, Language, ObjRef, PG_EXTENSION,
-    PG_LANGUAGE, PG_PROC, RelKind,
+    Catalog, Extension, FIRST_NORMAL_OID, FIRST_UNPINNED_OID, Function, Language, ObjRef,
+    PG_EXTENSION, PG_LANGUAGE, PG_PROC, RelKind,
 };
 use rupg_common::{Error, Result};
 use rupg_pgcatalog::builtin;

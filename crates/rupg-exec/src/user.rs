@@ -622,7 +622,10 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("proargmodes", char_array(&f.argmodes))
                 .set("proargnames", names)
                 .set("prosrc", Value::text(f.src.clone()))
-                .set("probin", if f.bin.is_empty() { Value::Null } else { Value::text(f.bin.clone()) })
+                .set(
+                    "probin",
+                    if f.bin.is_empty() { Value::Null } else { Value::text(f.bin.clone()) },
+                )
                 .set(
                     "prosqlbody",
                     tree(f.body.as_ref().filter(|_| f.src.is_empty()).map(|b| &b.text)),
