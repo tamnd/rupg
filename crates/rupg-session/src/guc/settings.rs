@@ -946,7 +946,9 @@ mod tests {
         s.set("rupg.compat_version", Some("19"), Action::Set, Origin::Startup).unwrap();
         assert_eq!(s.show("RUPG.COMPAT_VERSION").unwrap().1, "19");
         let state = |r: Result<(), Error>| r.unwrap_err().state().as_str().to_owned();
-        let at_startup = |s: &mut Settings, v| s.set("rupg.compat_version", Some(v), Action::Set, Origin::Startup);
+        let at_startup = |s: &mut Settings, v| {
+            s.set("rupg.compat_version", Some(v), Action::Set, Origin::Startup)
+        };
         assert_eq!(state(at_startup(&mut s, "16")), "0A000");
         assert_eq!(state(at_startup(&mut s, "13")), "22023");
         assert!(super::super::all().iter().all(|p| !p.name.starts_with("rupg.")));
