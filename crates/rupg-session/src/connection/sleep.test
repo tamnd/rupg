@@ -1,0 +1,36 @@
+> SELECT pg_sleep(0.01);
+fields pg_sleep:2278:4:-1
+row 
+SELECT 1
+> SELECT pg_sleep('NaN'), pg_sleep(-1), pg_sleep(0);
+fields pg_sleep:2278:4:-1,pg_sleep:2278:4:-1,pg_sleep:2278:4:-1
+row ,,
+SELECT 1
+> SELECT pg_typeof(pg_sleep(0)), pg_sleep(0) IS NULL;
+fields pg_typeof:2206:4:-1,?column?:16:1:-1
+row void,f
+SELECT 1
+> SELECT ''::void, 'abc'::void, pg_typeof('x'::void);
+fields void:2278:4:-1,void:2278:4:-1,pg_typeof:2206:4:-1
+row ,,void
+SELECT 1
+> SELECT pg_sleep_until('-infinity');
+fields pg_sleep_until:2278:4:-1
+row 
+SELECT 1
+> SELECT pg_sleep_until('2000-01-01 00:00:00+00');
+fields pg_sleep_until:2278:4:-1
+row 
+SELECT 1
+> SELECT pg_sleep_until(clock_timestamp());
+fields pg_sleep_until:2278:4:-1
+row 
+SELECT 1
+> SELECT pg_sleep('1e-300');
+fields pg_sleep:2278:4:-1
+row 
+SELECT 1
+> SELECT pg_sleep(NULL);
+fields pg_sleep:2278:4:-1
+row NULL
+SELECT 1

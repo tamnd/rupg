@@ -135,7 +135,7 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some(range) = builtin::multirange_range(ty) {
         return input_supported(range);
     }
-    output_supported(ty) && !matches!(ty, oid::ANYARRAY | oid::VOID) && !is_row_type(ty)
+    output_supported(ty) && ty != oid::ANYARRAY && !is_row_type(ty)
 }
 
 /// The name of a type for an error.
@@ -637,6 +637,8 @@ fn input_value(
         CID => Value::Oid(types::uint32_in(text, "cid")?),
         oid::ACLITEM => Value::Text(crate::acl::aclitem_in(text, session).map_err(Failed::Soft)?),
         oid::TEXT | oid::UNKNOWN | oid::CSTRING | oid::REFCURSOR => Value::text(text),
+        // `void_in` takes any text. A `void` value is an empty text, which `void_out` and `void_send` give.
+        oid::VOID => Value::Text(String::new()),
         oid::VARCHAR => Value::text(types::varchar_in(text, typmod)?),
         oid::BPCHAR => Value::text(types::bpchar_in(text, typmod)?),
         oid::JSON => Value::text(types::json_in(text)?),
@@ -881,6 +883,8 @@ fn receive_from(
         oid::INT2 => Value::Int2(recv.i16()?),
         oid::INT4 => Value::Int4(recv.i32()?),
         oid::INT8 | oid::MONEY | oid::XID8 | oid::OID8 | oid::PG_LSN => Value::Int8(recv.i64()?),
+        // `void_recv` reads no bytes, so a value with bytes is an error.
+        oid::VOID => Value::Text(String::new()),
         XID | CID => Value::Oid(recv.u32()?),
         oid::PG_SNAPSHOT | oid::TXID_SNAPSHOT => {
             Value::Bytea(types::snapshot_recv(recv)?.to_bytes())

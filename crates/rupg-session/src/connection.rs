@@ -2111,6 +2111,59 @@ mod tests {
         big_stack(|| two_sessions(include_str!("connection/two_sessions.test")));
     }
 
+    /// `pg_sleep`, its sibling `pg_sleep_until` and the type `void`. `connection/sleep.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sleep() {
+        big_stack(|| script(include_str!("connection/sleep.test")));
+    }
+
+    /// A session in `pg_sleep` while a second session looks at it, as the test `cancel` of `libpq_pipeline` does: the wait event `PgSleep` in `pg_stat_activity`, then a cancel that ends the wait with `57014` and clears the wait event.
+    #[test]
+    fn sleep_cancel() {
+        big_stack(sleep_cancel_cases);
+    }
+
+    #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
+    fn sleep_cancel_cases() {
+        let store = Arc::new(Store::new());
+        let (flags, flag) = std::sync::mpsc::channel();
+        let (outs, out) = std::sync::mpsc::channel();
+        let (ends, end) = std::sync::mpsc::channel::<()>();
+        let sleeper = Arc::clone(&store);
+        // The session stays in the table until the end of the test.
+        let a = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let (mut a, _) = connect_to(&sleeper, 1234);
+                flags.send(a.cancel_flag()).unwrap();
+                outs.send(send(&mut a, &query("SELECT pg_sleep(60)"))).unwrap();
+                end.recv().unwrap();
+            })
+            .unwrap();
+        let flag = flag.recv().unwrap();
+        let (mut b, _) = connect_to(&store, 1235);
+        let look = query(
+            "SELECT state, wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = 1234",
+        );
+        let mut lines = Vec::new();
+        for _ in 0..2000 {
+            lines = send(&mut b, &look);
+            if lines.iter().any(|l| l.contains("PgSleep")) {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(5));
+        }
+        assert_eq!(lines[1], "row active,Timeout,PgSleep,SELECT pg_sleep(60)");
+        flag.store(true, Ordering::Relaxed);
+        let out = out.recv().unwrap();
+        assert_eq!(out.last().map(String::as_str), Some("ready I"));
+        assert!(out.iter().any(|l| l == "ERROR 57014 canceling statement due to user request"));
+        let lines = send(&mut b, &look);
+        assert_eq!(lines[1], "row idle,Client,ClientRead,SELECT pg_sleep(60)");
+        ends.send(()).unwrap();
+        a.join().unwrap();
+    }
+
     /// The fold of the constant parts of the expressions, as `eval_const_expressions` does it. An error of the fold comes before the description of the rows, and a part that the fold drops gives no error. `connection/fold.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn fold() {

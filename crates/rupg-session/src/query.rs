@@ -6,6 +6,7 @@ use std::cell::{Ref, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
+use std::time::Duration;
 
 use rupg_analyze::{Env, Params};
 use rupg_catalog::Catalog;
@@ -31,6 +32,10 @@ const SCHEMAS: [(&str, u32); 3] = [("pg_catalog", 11), ("pg_toast", 99), ("publi
 
 /// The microseconds from 1970-01-01 to 2000-01-01, the epoch of the timestamps of PostgreSQL.
 const EPOCH_SHIFT_US: i64 = 946_684_800_000_000;
+/// The wait event of `pg_sleep`.
+const PG_SLEEP: (&str, &str) = ("Timeout", "PgSleep");
+/// How long a session in `pg_sleep` waits before it looks at its cancel flag again.
+const SLEEP_SLICE_US: i64 = 10_000;
 
 /// A column of a result.
 #[derive(Clone, Debug)]
@@ -219,6 +224,26 @@ impl rupg_func::Session for Reader<'_> {
                 "canceling statement due to user request",
             ));
         }
+        Ok(())
+    }
+
+    fn sleep(&self, micros: i64) -> Result<()> {
+        let Some((activity, store)) = self.activity else {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a wait in a session with no server is not supported yet",
+            ));
+        };
+        activity.report_wait(store, Some(PG_SLEEP));
+        let end = now(self.clock).saturating_add(micros);
+        while !self.cancel.is_some_and(|c| c.load(Ordering::Relaxed)) {
+            let left = end.saturating_sub(now(self.clock));
+            if left <= 0 {
+                break;
+            }
+            store.nap(Duration::from_micros(left.min(SLEEP_SLICE_US).cast_unsigned()));
+        }
+        activity.report_wait(store, None);
         Ok(())
     }
 

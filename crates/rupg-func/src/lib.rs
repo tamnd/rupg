@@ -123,6 +123,15 @@ pub trait Session {
     fn interrupted(&self) -> Result<()> {
         Ok(())
     }
+    /// `WaitLatch` with the wait event `PgSleep`: the session waits for at most `micros` microseconds. A cancel ends the wait early, and the next call of [`Session::interrupted`] gives its error.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` for a session with no server, which cannot wait.
+    fn sleep(&self, micros: i64) -> Result<()> {
+        let _ = micros;
+        Err(not_yet("a wait in a session with no server"))
+    }
     /// The rows of `pg_show_all_settings`, one for each parameter that `SHOW ALL` lists, in the 17 columns of the function.
     fn all_settings(&self) -> Vec<Vec<Value>> {
         Vec::new()
