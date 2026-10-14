@@ -2236,6 +2236,34 @@ mod tests {
         big_stack(advisory_wait_cases);
     }
 
+    /// The warning of a function in an `Execute` comes after the description and before the rows, as in the test `pipeline_idle` of `libpq_pipeline`.
+    #[test]
+    fn advisory_extended() {
+        big_stack(|| {
+            let (mut c, _) = connect();
+            let input = [
+                parse("", "SELECT pg_catalog.pg_advisory_unlock(1,1)", &[]),
+                bind("", "", &[], &[], &[]),
+                describe('P', ""),
+                execute("", 0),
+                sync(),
+            ]
+            .concat();
+            assert_eq!(
+                send(&mut c, &input),
+                [
+                    "ParseComplete",
+                    "BindComplete",
+                    "columns pg_advisory_unlock",
+                    "WARNING 01000 you don't own a lock of type ExclusiveLock",
+                    "row f",
+                    "SELECT 1",
+                    "ready I"
+                ]
+            );
+        });
+    }
+
     #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
     fn advisory_wait_cases() {
         let store = Arc::new(Store::new());
