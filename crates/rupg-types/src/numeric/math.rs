@@ -4,7 +4,9 @@ use std::cmp::Ordering;
 
 use rupg_common::SqlState;
 
-use super::{DEC_DIGITS, MIN_SIG_DIGITS, NBASE, Numeric, NumericSign, Var, overflow};
+use super::{
+    DEC_DIGITS, MIN_SIG_DIGITS, NBASE, Numeric, NumericSign, Var, overflow, select_div_scale,
+};
 use crate::error::TypeError;
 use crate::prng::Prng;
 
@@ -650,6 +652,34 @@ impl Numeric {
         let sweight = arg.weight * DEC_DIGITS / 2 + 1;
         let rscale = result_scale(sweight, &[arg.dscale]);
         arg.sqrt(rscale).make()
+    }
+
+    /// The end of `numeric_stddev_internal` for finite values: the variance or, when `root` is set, the standard deviation of `n` values with the sum `sum` and the sum of squares `squares`. The variance of a sample divides by `n * (n - 1)` and the variance of the population by `n * n`. The caller makes sure that `n` is above 0, and above 1 for a sample.
+    pub fn moment(
+        n: i64,
+        sum: &Numeric,
+        squares: &Numeric,
+        sample: bool,
+        root: bool,
+    ) -> Result<Numeric, TypeError> {
+        let count = Var::int(n);
+        let sum = sum.var();
+        // The products are exact, because the scale of the squares is twice the scale of the values.
+        let rscale = sum.dscale * 2;
+        let mut sum_sq = sum.mul(&sum);
+        sum_sq.dscale = rscale;
+        let mut scaled = count.mul(&squares.var());
+        scaled.dscale = rscale;
+        let numerator = scaled.sub(&sum_sq);
+        if numerator.cmp(&Var::zero(0)) != Ordering::Greater {
+            // The rounding of the inputs can make the numerator negative.
+            return Ok(Numeric::from_integer(0));
+        }
+        let mut denominator = count.mul(&Var::int(if sample { n - 1 } else { n }));
+        denominator.dscale = 0;
+        let rscale = select_div_scale(&numerator, &denominator);
+        let variance = numerator.div(&denominator, rscale, true);
+        if root { variance.sqrt(rscale).make() } else { variance.make() }
     }
 
     /// `numeric_exp`.
