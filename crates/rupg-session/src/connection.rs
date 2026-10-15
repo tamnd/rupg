@@ -2889,6 +2889,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/jsonpath_exec.test")));
     }
 
+    /// The datetime methods of `jsonpath`: `.datetime()` with the ISO formats and with a template, the errors of a template in the strict mode, `.date()`, `.time()`, `.time_tz()`, `.timestamp()` and `.timestamp_tz()` with a precision, the warnings for a precision that is too large, the casts between the types and the errors without the time zone, the `_tz` functions, `.type()` and `.string()` of a datetime, the comparisons of the datetime types, and the silent calls. `connection/jsonpath_datetime.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn jsonpath_datetime() {
+        big_stack(|| script(include_str!("connection/jsonpath_datetime.test")));
+    }
+
     /// A row on the left of `IN`, `ANY` and `ALL` with a subquery: one operator for each column of the subquery that `AND` or `OR` combines, the NULL results, the errors for a wrong number of columns and for an operator that does not give `boolean`, a view with these tests in `pg_get_viewdef`, and the same results when a hash table of the subquery gives them. `connection/row_in_subquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn row_in_subquery() {

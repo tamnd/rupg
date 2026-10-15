@@ -2,32 +2,61 @@
 //!
 //! A path runs on the items of a `jsonb` value. An item is a scalar, or an array or an object in a parsed document. In the lax mode, a step unwraps an array and wraps a scalar, and the structural errors are not errors. A call that is not silent gives the error of a step to the caller. In a silent call, a step gives the result "error", and a predicate takes that result as unknown.
 //!
+//! The datetime methods parse a string in the standard mode of `to_timestamp`. The value of a datetime item has its type, and the text of the item is in the XSD style. The `_tz` functions can cast between the types with and without a zone, with the zone of the session. The other functions give an error for these casts.
+//!
 //! `.keyvalue()` gives each pair an `id` from the place of the object in the binary form of its document, as PostgreSQL does. Thus [`Doc::layout`] computes the layout of `convertToJsonb`.
 
 use std::cell::OnceCell;
 use std::cmp::Ordering;
+use std::io::Write;
 use std::rc::Rc;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{
-    JSONPATH_LAST, JsonItem, JsonNode, JsonTree, Numeric, NumericSign, PathItem, PathOp, Value,
-    bool_in, float8_in, int4_in, int8_in, json_escape, jsonpath_regex_flags, numeric_in,
-    numeric_out,
+    DateFormat, DateOrder, DateStyle, FixedZone, JSONPATH_LAST, JsonItem, JsonNode, JsonTree,
+    Numeric, NumericSign, PathItem, PathOp, UNIX_TO_POSTGRES_USECS, USECS_PER_SEC, Value,
+    adjust_time, adjust_timestamp, bool_in, date_out, float8_in, int4_in, int8_in, json_escape,
+    jsonpath_regex_flags, local_offset, numeric_in, numeric_out, time_out, timestamp_out,
+    timestamptz_out,
 };
 
+use crate::cast::midnight;
+use crate::compare::{compare, datetime_order};
+use crate::formatting::parse_datetime;
 use crate::json::text;
 use crate::{Call, Kernel, bad_value, type_error};
 
 /// The kernel of a `jsonpath` function by its `prosrc`. The `_tz` forms differ only in the casts of the datetime values.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
-        "jsonb_path_exists" | "jsonb_path_exists_tz" | "jsonb_path_exists_opr" => jsonb_path_exists,
-        "jsonb_path_match" | "jsonb_path_match_tz" | "jsonb_path_match_opr" => jsonb_path_match,
-        "jsonb_path_query_array" | "jsonb_path_query_array_tz" => jsonb_path_query_array,
-        "jsonb_path_query_first" | "jsonb_path_query_first_tz" => jsonb_path_query_first,
+        "jsonb_path_exists" | "jsonb_path_exists_opr" => |call, args| exists(call, args, false),
+        "jsonb_path_exists_tz" => |call, args| exists(call, args, true),
+        "jsonb_path_match" | "jsonb_path_match_opr" => |call, args| path_match(call, args, false),
+        "jsonb_path_match_tz" => |call, args| path_match(call, args, true),
+        "jsonb_path_query_array" => |call, args| query_array(call, args, false),
+        "jsonb_path_query_array_tz" => |call, args| query_array(call, args, true),
+        "jsonb_path_query_first" => |call, args| query_first(call, args, false),
+        "jsonb_path_query_first_tz" => |call, args| query_first(call, args, true),
         _ => return None,
     })
 }
+
+/// The ISO formats that the datetime methods with no template try in order: `date`, `timetz`, `time`, `timestamptz` and `timestamp`, and the timestamps with `T` that `to_json` gives.
+const ISO_FORMATS: [&str; 13] = [
+    "yyyy-mm-dd",
+    "HH24:MI:SS.USTZ",
+    "HH24:MI:SSTZ",
+    "HH24:MI:SS.US",
+    "HH24:MI:SS",
+    "yyyy-mm-dd HH24:MI:SS.USTZ",
+    "yyyy-mm-dd HH24:MI:SSTZ",
+    "yyyy-mm-dd\"T\"HH24:MI:SS.USTZ",
+    "yyyy-mm-dd\"T\"HH24:MI:SSTZ",
+    "yyyy-mm-dd HH24:MI:SS.US",
+    "yyyy-mm-dd HH24:MI:SS",
+    "yyyy-mm-dd\"T\"HH24:MI:SS.US",
+    "yyyy-mm-dd\"T\"HH24:MI:SS",
+];
 
 /// The depth of the steps that a path takes before it stops with the error of `check_stack_depth`.
 const MAX_DEPTH: usize = 2_000;
@@ -156,6 +185,8 @@ enum Item {
     String(String),
     /// An array or an object in a document.
     Node(Rc<Doc>, usize),
+    /// A `date`, `time`, `timetz`, `timestamp` or `timestamptz` value, and its text.
+    Datetime(Value, String),
 }
 
 impl Item {
@@ -191,6 +222,13 @@ impl Item {
             Item::String(_) => "string",
             Item::Node(..) if self.is_array() => "array",
             Item::Node(..) => "object",
+            Item::Datetime(value, _) => match value {
+                Value::Date(_) => "date",
+                Value::Time(_) => "time without time zone",
+                Value::TimeTz(..) => "time with time zone",
+                Value::Timestamp(_) => "timestamp without time zone",
+                _ => "timestamp with time zone",
+            },
         }
     }
 
@@ -200,7 +238,7 @@ impl Item {
             Item::Null => out.push_str("null"),
             Item::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
             Item::Numeric(n) => out.push_str(&numeric_text(n)),
-            Item::String(s) => json_escape(s, out),
+            Item::String(s) | Item::Datetime(_, s) => json_escape(s, out),
             Item::Node(doc, at) => out.push_str(doc.text(*at)),
         }
     }
@@ -301,6 +339,8 @@ struct Exec<'a> {
     /// The size of the innermost array of a subscript, for `last`.
     innermost: Option<usize>,
     depth: usize,
+    /// True for the `_tz` functions, which can cast a datetime value with the zone of the session.
+    use_tz: bool,
 }
 
 impl Exec<'_> {
@@ -769,9 +809,10 @@ impl Exec<'_> {
                 l,
                 r,
             ) => {
-                let op = *op;
-                let mut test = |a: &Item, b: Option<&Item>| {
-                    Ok(b.map_or(Truth::Unknown, |b| compare_items(op, a, b)))
+                let (op, call, use_tz) = (*op, self.call, self.use_tz);
+                let mut test = |a: &Item, b: Option<&Item>| match b {
+                    Some(b) => compare_items(call, use_tz, op, a, b),
+                    None => Ok(Truth::Unknown),
                 };
                 self.predicate(l, Some(r), jb, true, &mut test)?
             }
@@ -1134,6 +1175,7 @@ impl Exec<'_> {
                     Item::String(s) => s.clone(),
                     Item::Numeric(n) => numeric_text(n),
                     Item::Bool(b) => b.to_string(),
+                    Item::Datetime(_, text) => text.clone(),
                     _ => {
                         return self.method_fail(
                             SqlState::NON_NUMERIC_SQL_JSON_ITEM,
@@ -1158,10 +1200,7 @@ impl Exec<'_> {
             | PathOp::Time
             | PathOp::TimeTz
             | PathOp::Timestamp
-            | PathOp::TimestampTz => Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                format!("jsonpath item method .{}() is not supported yet", op.name()),
-            )),
+            | PathOp::TimestampTz => self.datetime_method(op, args, rest, jb, found),
             _ => Err(Error::internal("unrecognized jsonpath item type")),
         }
     }
@@ -1319,6 +1358,136 @@ impl Exec<'_> {
         self.next(rest, Item::String(v), found)
     }
 
+    /// `executeDateTimeMethod`: `.datetime()` and the methods of the datetime types on a string. With no template, the string must have one of the ISO formats. A method of a type casts the value to the type.
+    #[allow(clippy::too_many_lines)]
+    fn datetime_method(
+        &mut self,
+        op: PathOp,
+        args: &[PathItem],
+        rest: &[PathItem],
+        jb: &Item,
+        found: Found<'_>,
+    ) -> Result<Res> {
+        use Value as V;
+        let invalid = SqlState::INVALID_ARGUMENT_FOR_SQL_JSON_DATETIME_FUNCTION;
+        let Item::String(s) = jb else { return self.method_fail(invalid, op, "a string") };
+        let not_recognized =
+            |name: &str| Error::new(invalid, format!("{name} format is not recognized: \"{s}\""));
+        let mut precision = None;
+        let (mut value, mut tz) = match (op, args.first()) {
+            (PathOp::Datetime, Some(template)) => {
+                let PathItem::String(template) = template else {
+                    return Err(Error::internal(
+                        "invalid jsonpath item type for .datetime() argument",
+                    ));
+                };
+                match parse_datetime(self.call, s, template)? {
+                    Ok(v) => v,
+                    Err(error) => return self.fail(error),
+                }
+            }
+            _ => {
+                if op != PathOp::Datetime
+                    && op != PathOp::Date
+                    && let Some(arg) = args.first()
+                {
+                    let PathItem::Numeric(n) = arg else {
+                        return Err(Error::internal(format!(
+                            "invalid jsonpath item type for {} argument",
+                            op.name()
+                        )));
+                    };
+                    let Some(n) = int4(n) else {
+                        return self.fail(Error::new(
+                            invalid,
+                            format!(
+                                "time precision of jsonpath item method .{}() is out of range for type integer",
+                                op.name()
+                            ),
+                        ));
+                    };
+                    precision = Some(n);
+                }
+                let iso = ISO_FORMATS.iter().find_map(|format| {
+                    parse_datetime(self.call, s, format).ok().and_then(Result::ok)
+                });
+                match iso {
+                    Some(v) => v,
+                    None if op == PathOp::Datetime => {
+                        return self.fail(not_recognized("datetime").with_hint(
+                            "Use a datetime template argument to specify the input data format.",
+                        ));
+                    }
+                    None => return self.fail(not_recognized(op.name())),
+                }
+            }
+        };
+        let call = self.call;
+        let use_tz = self.use_tz;
+        value = match (op, &value) {
+            (PathOp::Datetime, _)
+            | (PathOp::Date, V::Date(_))
+            | (PathOp::Time, V::Time(_))
+            | (PathOp::TimeTz, V::TimeTz(..))
+            | (PathOp::Timestamp, V::Timestamp(_))
+            | (PathOp::TimestampTz, V::TimestampTz(_)) => value,
+            (PathOp::Date, V::Timestamp(_)) => convert(call, "timestamp_date", &value)?,
+            (PathOp::Date, V::TimestampTz(_)) => {
+                need_tz(use_tz, "timestamptz", "date")?;
+                convert(call, "timestamptz_date", &value)?
+            }
+            (PathOp::Time, V::TimeTz(..)) => {
+                need_tz(use_tz, "timetz", "time")?;
+                convert(call, "timetz_time", &value)?
+            }
+            (PathOp::Time, V::Timestamp(_)) => convert(call, "timestamp_time", &value)?,
+            (PathOp::Time, V::TimestampTz(_)) => {
+                need_tz(use_tz, "timestamptz", "time")?;
+                convert(call, "timestamptz_time", &value)?
+            }
+            (PathOp::TimeTz, V::Time(_)) => {
+                need_tz(use_tz, "time", "timetz")?;
+                convert(call, "time_timetz", &value)?
+            }
+            (PathOp::TimeTz, V::TimestampTz(_)) => convert(call, "timestamptz_timetz", &value)?,
+            (PathOp::Timestamp, V::Date(_)) => convert(call, "date_timestamp", &value)?,
+            (PathOp::Timestamp, V::TimestampTz(_)) => {
+                need_tz(use_tz, "timestamptz", "timestamp")?;
+                convert(call, "timestamptz_timestamp", &value)?
+            }
+            (PathOp::TimestampTz, V::Date(date)) => {
+                need_tz(use_tz, "date", "timestamptz")?;
+                tz = session_west(call, midnight(*date)?)?;
+                convert(call, "date_timestamptz", &value)?
+            }
+            (PathOp::TimestampTz, V::Timestamp(ts)) => {
+                need_tz(use_tz, "timestamp", "timestamptz")?;
+                tz = session_west(call, *ts)?;
+                convert(call, "timestamp_timestamptz", &value)?
+            }
+            _ => return self.fail(not_recognized(op.name())),
+        };
+        if let Some(precision) = precision {
+            let precision = typmod_check(call, op, precision)?;
+            value = match value {
+                V::Time(time) => V::Time(adjust_time(time, precision)),
+                V::TimeTz(time, zone) => V::TimeTz(adjust_time(time, precision), zone),
+                V::Timestamp(ts) => {
+                    V::Timestamp(adjust_timestamp(ts, precision).map_err(type_error)?)
+                }
+                V::TimestampTz(ts) => {
+                    V::TimestampTz(adjust_timestamp(ts, precision).map_err(type_error)?)
+                }
+                v => v,
+            };
+        }
+        if rest.is_empty() && found.is_none() {
+            return Ok(Res::Ok);
+        }
+        let text = datetime_text(&value, tz)?;
+        self.next(rest, Item::Datetime(value, text), found)
+    }
+
     /// `executeKeyValueMethod`: an object `{"id": id, "key": key, "value": value}` for each pair. Each object becomes the base object of the steps after it.
     fn keyvalue(&mut self, rest: &[PathItem], jb: &Item, mut found: Found<'_>) -> Result<Res> {
         let Some((doc, at)) = jb.object() else {
@@ -1365,6 +1534,113 @@ impl Exec<'_> {
     }
 }
 
+/// The error of `checkTimezoneIsUsedForCast` for a cast that needs the zone of the session in a function that is not `_tz`.
+fn need_tz(use_tz: bool, from: &str, to: &str) -> Result<()> {
+    if use_tz {
+        return Ok(());
+    }
+    Err(Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        format!("cannot convert value from {from} to {to} without time zone usage"),
+    )
+    .with_hint("Use *_tz() function for time zone support."))
+}
+
+/// A cast between the datetime types by the `prosrc` of its function.
+fn convert(call: &Call<'_>, src: &str, value: &Value) -> Result<Value> {
+    let kernel =
+        crate::cast::by_src(src).or_else(|| crate::calendar::by_src(src)).ok_or_else(bad_value)?;
+    kernel(call, std::slice::from_ref(value))
+}
+
+/// `DetermineTimeZoneOffset`: the offset west of UTC of the zone of the session at a local time.
+fn session_west(call: &Call<'_>, local: i64) -> Result<i32> {
+    let zone = call.session.zone()?;
+    let seconds = local.div_euclid(USECS_PER_SEC) - UNIX_TO_POSTGRES_USECS / USECS_PER_SEC;
+    Ok(local_offset(seconds, zone.as_ref()).0)
+}
+
+/// `anytime_typmod_check` and `anytimestamp_typmod_check`: an error for a precision below zero, and a warning and the largest precision for a precision above it.
+fn typmod_check(call: &Call<'_>, op: PathOp, precision: i32) -> Result<i32> {
+    let (kind, zone) = match op {
+        PathOp::Time => ("TIME", ""),
+        PathOp::TimeTz => ("TIME", " WITH TIME ZONE"),
+        PathOp::Timestamp => ("TIMESTAMP", ""),
+        _ => ("TIMESTAMP", " WITH TIME ZONE"),
+    };
+    if precision < 0 {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("{kind}({precision}){zone} precision must not be negative"),
+        ));
+    }
+    if precision > 6 {
+        call.session.warn(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("{kind}({precision}){zone} precision reduced to maximum allowed, 6"),
+        ));
+        return Ok(6);
+    }
+    Ok(precision)
+}
+
+/// `JsonEncodeDateTime`: the text of a datetime value in the XSD style. A `timestamptz` shows the time at the offset `tz` west of UTC.
+fn datetime_text(value: &Value, tz: i32) -> Result<String> {
+    const XSD: DateFormat = DateFormat { style: DateStyle::Xsd, order: DateOrder::Mdy };
+    let mut out = Vec::new();
+    match *value {
+        Value::Date(date) => date_out(date, XSD, &mut out),
+        Value::Time(time) => time_out(time, &mut out),
+        Value::TimeTz(time, zone) => {
+            time_out(time, &mut out);
+            // `EncodeTimezone` in the XSD style always shows the minutes.
+            let total = zone.unsigned_abs();
+            let sign = if zone <= 0 { '+' } else { '-' };
+            write!(out, "{sign}{:02}:{:02}", total / 3600, total / 60 % 60)
+                .map_err(|_| bad_value())?;
+            if total % 60 != 0 {
+                write!(out, ":{:02}", total % 60).map_err(|_| bad_value())?;
+            }
+        }
+        Value::Timestamp(ts) => timestamp_out(ts, XSD, &mut out).map_err(type_error)?,
+        Value::TimestampTz(ts) => {
+            let zone = FixedZone { offset: -tz, abbrev: String::new() };
+            timestamptz_out(ts, XSD, &zone, &mut out).map_err(type_error)?;
+        }
+        _ => return Err(bad_value()),
+    }
+    String::from_utf8(out).map_err(|_| bad_value())
+}
+
+/// `compareDatetime`: the order of two datetime values, or `None` when their types do not compare. A cast that needs the zone of the session is an error when `use_tz` is false.
+fn compare_datetime(
+    call: &Call<'_>,
+    use_tz: bool,
+    a: &Value,
+    b: &Value,
+) -> Result<Option<Ordering>> {
+    use Value as V;
+    let timetz = |v: &Value| {
+        need_tz(use_tz, "time", "timetz")?;
+        convert(call, "time_timetz", v)
+    };
+    Ok(Some(match (a, b) {
+        (V::Time(_), V::TimeTz(..)) => compare(0, &timetz(a)?, 0, b)?,
+        (V::TimeTz(..), V::Time(_)) => compare(0, a, 0, &timetz(b)?)?,
+        (V::Time(_), V::Time(_)) | (V::TimeTz(..), V::TimeTz(..)) => compare(0, a, 0, b)?,
+        (V::Time(_) | V::TimeTz(..), _) | (_, V::Time(_) | V::TimeTz(..)) => return Ok(None),
+        (V::Date(_), V::TimestampTz(_)) | (V::TimestampTz(_), V::Date(_)) => {
+            need_tz(use_tz, "date", "timestamptz")?;
+            datetime_order(call, a, b)?
+        }
+        (V::Timestamp(_), V::TimestampTz(_)) | (V::TimestampTz(_), V::Timestamp(_)) => {
+            need_tz(use_tz, "timestamp", "timestamptz")?;
+            datetime_order(call, a, b)?
+        }
+        _ => datetime_order(call, a, b)?,
+    }))
+}
+
 /// `parse_bool`: the words of `bool` with no white space around them.
 fn parse_bool(s: &str) -> Option<bool> {
     let space = |c: char| c.is_ascii_whitespace() || c == '\u{b}';
@@ -1375,27 +1651,38 @@ fn parse_bool(s: &str) -> Option<bool> {
 }
 
 /// `compareItems`: a comparison of two items. A null is equal only to a null, and items of other different types do not compare.
-fn compare_items(op: PathOp, a: &Item, b: &Item) -> Truth {
+fn compare_items(call: &Call<'_>, use_tz: bool, op: PathOp, a: &Item, b: &Item) -> Result<Truth> {
     let order = match (a, b) {
         (Item::Null, Item::Null) => Ordering::Equal,
-        (Item::Null, _) | (_, Item::Null) => return Truth::of(op == PathOp::NotEqual),
+        (Item::Null, _) | (_, Item::Null) => return Ok(Truth::of(op == PathOp::NotEqual)),
         (Item::Bool(x), Item::Bool(y)) => x.cmp(y),
         (Item::Numeric(x), Item::Numeric(y)) => x.compare(y),
         (Item::String(x), Item::String(y)) => x.as_bytes().cmp(y.as_bytes()),
-        _ => return Truth::Unknown,
+        (Item::Datetime(x, _), Item::Datetime(y, _)) => {
+            match compare_datetime(call, use_tz, x, y)? {
+                Some(order) => order,
+                None => return Ok(Truth::Unknown),
+            }
+        }
+        _ => return Ok(Truth::Unknown),
     };
-    Truth::of(match op {
+    Ok(Truth::of(match op {
         PathOp::Equal => order.is_eq(),
         PathOp::NotEqual => order.is_ne(),
         PathOp::Less => order.is_lt(),
         PathOp::Greater => order.is_gt(),
         PathOp::LessOrEqual => order.is_le(),
         _ => order.is_ge(),
-    })
+    }))
 }
 
 /// `executeJsonPath`: the result and the items of the path on the value. With `want` false, the caller wants only to know if there is an item.
-fn execute(call: &Call<'_>, args: &[Value], want: bool) -> Result<(Res, Vec<Item>, bool)> {
+fn execute(
+    call: &Call<'_>,
+    args: &[Value],
+    want: bool,
+    use_tz: bool,
+) -> Result<(Res, Vec<Item>, bool)> {
     let target = Doc::parse(text(args, 0)?.to_string())?;
     let Some(Value::JsonPath(path)) = args.get(1) else { return Err(bad_value()) };
     let (vars, silent) = match args {
@@ -1429,6 +1716,7 @@ fn execute(call: &Call<'_>, args: &[Value], want: bool) -> Result<(Res, Vec<Item
         base: Base { node: None, id: 0 },
         innermost: None,
         depth: 0,
+        use_tz,
     };
     let mut items = Vec::new();
     let res = if !want && !path.lax {
@@ -1445,16 +1733,16 @@ fn execute(call: &Call<'_>, args: &[Value], want: bool) -> Result<(Res, Vec<Item
 }
 
 /// `jsonb_path_exists` and `@?`: null for an error in a silent call.
-fn jsonb_path_exists(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(match execute(call, args, false)?.0 {
+fn exists(call: &Call<'_>, args: &[Value], use_tz: bool) -> Result<Value> {
+    Ok(match execute(call, args, false, use_tz)?.0 {
         Res::Error => Value::Null,
         res => Value::Bool(res == Res::Ok),
     })
 }
 
 /// `jsonb_path_match` and `@@`: the result of a path that gives one boolean.
-fn jsonb_path_match(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let (_, items, silent) = execute(call, args, true)?;
+fn path_match(call: &Call<'_>, args: &[Value], use_tz: bool) -> Result<Value> {
+    let (_, items, silent) = execute(call, args, true, use_tz)?;
     match items.as_slice() {
         [Item::Bool(b)] => Ok(Value::Bool(*b)),
         [Item::Null] => Ok(Value::Null),
@@ -1468,13 +1756,22 @@ fn jsonb_path_match(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 /// `jsonb_path_query`: a row for each item.
 pub(crate) fn jsonb_path_query(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
-    let (_, items, _) = execute(call, args, true)?;
+    query(call, args, false)
+}
+
+/// `jsonb_path_query_tz`.
+pub(crate) fn jsonb_path_query_tz(call: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    query(call, args, true)
+}
+
+fn query(call: &Call<'_>, args: &[Value], use_tz: bool) -> Result<Vec<Vec<Value>>> {
+    let (_, items, _) = execute(call, args, true, use_tz)?;
     Ok(items.iter().map(|item| vec![item.to_value()]).collect())
 }
 
 /// `jsonb_path_query_array`: the items in an array.
-fn jsonb_path_query_array(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let (_, items, _) = execute(call, args, true)?;
+fn query_array(call: &Call<'_>, args: &[Value], use_tz: bool) -> Result<Value> {
+    let (_, items, _) = execute(call, args, true, use_tz)?;
     let mut out = String::from("[");
     for (i, item) in items.iter().enumerate() {
         if i > 0 {
@@ -1487,7 +1784,7 @@ fn jsonb_path_query_array(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `jsonb_path_query_first`: the first item, or null.
-fn jsonb_path_query_first(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let (_, items, _) = execute(call, args, true)?;
+fn query_first(call: &Call<'_>, args: &[Value], use_tz: bool) -> Result<Value> {
+    let (_, items, _) = execute(call, args, true, use_tz)?;
     Ok(items.first().map_or(Value::Null, Item::to_value))
 }
