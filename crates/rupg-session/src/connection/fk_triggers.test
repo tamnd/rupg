@@ -1,0 +1,140 @@
+> CREATE TABLE p (id int PRIMARY KEY, code text UNIQUE)
+CREATE TABLE
+> CREATE TABLE c (id int PRIMARY KEY, p int REFERENCES p, code text REFERENCES p (code) ON DELETE CASCADE ON UPDATE SET NULL)
+CREATE TABLE
+> CREATE TABLE d (id int PRIMARY KEY, p int, q int, r int)
+CREATE TABLE
+> ALTER TABLE d ADD FOREIGN KEY (p) REFERENCES p ON DELETE RESTRICT ON UPDATE CASCADE DEFERRABLE
+ALTER TABLE
+> ALTER TABLE d ADD CONSTRAINT d_q FOREIGN KEY (q) REFERENCES p ON DELETE SET DEFAULT ON UPDATE NO ACTION DEFERRABLE INITIALLY DEFERRED
+ALTER TABLE
+> ALTER TABLE d ADD CONSTRAINT d_r FOREIGN KEY (r) REFERENCES d ON DELETE SET NULL ON UPDATE RESTRICT
+ALTER TABLE
+> CREATE TABLE e (id int REFERENCES p MATCH FULL ON DELETE NO ACTION ON UPDATE SET DEFAULT INITIALLY DEFERRED)
+CREATE TABLE
+> SELECT t.oid::int8 - c.oid::int8 AS since, t.tgrelid::regclass, t.tgparentid, t.tgfoid::regproc, t.tgtype, t.tgenabled, t.tgisinternal, t.tgconstrrelid::regclass, t.tgconstrindid::regclass, c.conname, t.tgdeferrable, t.tginitdeferred, t.tgnargs, t.tgattr, t.tgargs, t.tgqual, t.tgoldtable, t.tgnewtable, t.tgname = 'RI_ConstraintTrigger_' || CASE WHEN t.tgfoid::regproc::text LIKE '%check%' THEN 'c' ELSE 'a' END || '_' || t.oid AS name_ok FROM pg_trigger t JOIN pg_constraint c ON c.oid = t.tgconstraint ORDER BY t.oid
+fields since:20:8:-1,tgrelid:2205:4:-1,tgparentid@pg_trigger.3:26:4:-1,tgfoid:24:4:-1,tgtype@pg_trigger.6:21:2:-1,tgenabled@pg_trigger.7:18:1:-1,tgisinternal@pg_trigger.8:16:1:-1,tgconstrrelid:2205:4:-1,tgconstrindid:2205:4:-1,conname@pg_constraint.2:19:64:-1,tgdeferrable@pg_trigger.12:16:1:-1,tginitdeferred@pg_trigger.13:16:1:-1,tgnargs@pg_trigger.14:21:2:-1,tgattr@pg_trigger.15:22:-1:-1,tgargs@pg_trigger.16:17:-1:-1,tgqual@pg_trigger.17:194:-1:-1,tgoldtable@pg_trigger.18:19:64:-1,tgnewtable@pg_trigger.19:19:64:-1,name_ok:16:1:-1
+row 1,p,0,"RI_FKey_noaction_del",9,O,t,c,p_pkey,c_p_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 2,p,0,"RI_FKey_noaction_upd",17,O,t,c,p_pkey,c_p_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 3,c,0,"RI_FKey_check_ins",5,O,t,p,p_pkey,c_p_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 4,c,0,"RI_FKey_check_upd",17,O,t,p,p_pkey,c_p_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 1,p,0,"RI_FKey_cascade_del",9,O,t,c,p_code_key,c_code_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 2,p,0,"RI_FKey_setnull_upd",17,O,t,c,p_code_key,c_code_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 3,c,0,"RI_FKey_check_ins",5,O,t,p,p_code_key,c_code_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 4,c,0,"RI_FKey_check_upd",17,O,t,p,p_code_key,c_code_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 1,p,0,"RI_FKey_restrict_del",9,O,t,d,p_pkey,d_p_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 2,p,0,"RI_FKey_cascade_upd",17,O,t,d,p_pkey,d_p_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 3,d,0,"RI_FKey_check_ins",5,O,t,p,p_pkey,d_p_fkey,t,f,0,,\x,NULL,NULL,NULL,t
+row 4,d,0,"RI_FKey_check_upd",17,O,t,p,p_pkey,d_p_fkey,t,f,0,,\x,NULL,NULL,NULL,t
+row 1,p,0,"RI_FKey_setdefault_del",9,O,t,d,p_pkey,d_q,f,f,0,,\x,NULL,NULL,NULL,t
+row 2,p,0,"RI_FKey_noaction_upd",17,O,t,d,p_pkey,d_q,t,t,0,,\x,NULL,NULL,NULL,t
+row 3,d,0,"RI_FKey_check_ins",5,O,t,p,p_pkey,d_q,t,t,0,,\x,NULL,NULL,NULL,t
+row 4,d,0,"RI_FKey_check_upd",17,O,t,p,p_pkey,d_q,t,t,0,,\x,NULL,NULL,NULL,t
+row 1,d,0,"RI_FKey_setnull_del",9,O,t,d,d_pkey,d_r,f,f,0,,\x,NULL,NULL,NULL,t
+row 2,d,0,"RI_FKey_restrict_upd",17,O,t,d,d_pkey,d_r,f,f,0,,\x,NULL,NULL,NULL,t
+row 3,d,0,"RI_FKey_check_ins",5,O,t,d,d_pkey,d_r,f,f,0,,\x,NULL,NULL,NULL,t
+row 4,d,0,"RI_FKey_check_upd",17,O,t,d,d_pkey,d_r,f,f,0,,\x,NULL,NULL,NULL,t
+row 1,p,0,"RI_FKey_noaction_del",9,O,t,e,p_pkey,e_id_fkey,t,t,0,,\x,NULL,NULL,NULL,t
+row 2,p,0,"RI_FKey_setdefault_upd",17,O,t,e,p_pkey,e_id_fkey,f,f,0,,\x,NULL,NULL,NULL,t
+row 3,e,0,"RI_FKey_check_ins",5,O,t,p,p_pkey,e_id_fkey,t,t,0,,\x,NULL,NULL,NULL,t
+row 4,e,0,"RI_FKey_check_upd",17,O,t,p,p_pkey,e_id_fkey,t,t,0,,\x,NULL,NULL,NULL,t
+SELECT 24
+> SELECT classid::regclass, objid::int8 - refobjid::int8 AS since, objsubid, refclassid::regclass, refobjsubid, deptype FROM pg_depend WHERE classid = 'pg_trigger'::regclass ORDER BY objid
+fields classid:2205:4:-1,since:20:8:-1,objsubid@pg_depend.3:23:4:-1,refclassid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_trigger,1,0,pg_constraint,0,i
+row pg_trigger,2,0,pg_constraint,0,i
+row pg_trigger,3,0,pg_constraint,0,i
+row pg_trigger,4,0,pg_constraint,0,i
+row pg_trigger,1,0,pg_constraint,0,i
+row pg_trigger,2,0,pg_constraint,0,i
+row pg_trigger,3,0,pg_constraint,0,i
+row pg_trigger,4,0,pg_constraint,0,i
+row pg_trigger,1,0,pg_constraint,0,i
+row pg_trigger,2,0,pg_constraint,0,i
+row pg_trigger,3,0,pg_constraint,0,i
+row pg_trigger,4,0,pg_constraint,0,i
+row pg_trigger,1,0,pg_constraint,0,i
+row pg_trigger,2,0,pg_constraint,0,i
+row pg_trigger,3,0,pg_constraint,0,i
+row pg_trigger,4,0,pg_constraint,0,i
+row pg_trigger,1,0,pg_constraint,0,i
+row pg_trigger,2,0,pg_constraint,0,i
+row pg_trigger,3,0,pg_constraint,0,i
+row pg_trigger,4,0,pg_constraint,0,i
+row pg_trigger,1,0,pg_constraint,0,i
+row pg_trigger,2,0,pg_constraint,0,i
+row pg_trigger,3,0,pg_constraint,0,i
+row pg_trigger,4,0,pg_constraint,0,i
+SELECT 24
+> SELECT relname, relhastriggers FROM pg_class WHERE relname IN ('p', 'c', 'd', 'e') ORDER BY relname
+fields relname@pg_class.2:19:64:-1,relhastriggers@pg_class.22:16:1:-1
+row c,t
+row d,t
+row e,t
+row p,t
+SELECT 4
+> SELECT count(*) FROM pg_trigger WHERE tgrelid = 'p'::regclass
+fields count:20:8:-1
+row 10
+SELECT 1
+> SELECT tgname LIKE 'RI_ConstraintTrigger_a_%' AS action, count(*) FROM pg_trigger WHERE NOT tgisinternal OR tgrelid = 'd'::regclass GROUP BY 1 ORDER BY 1
+fields action:16:1:-1,count:20:8:-1
+row f,6
+row t,2
+SELECT 2
+!details
+> DROP TABLE e
+DROP TABLE
+> SELECT count(*) FROM pg_trigger
+fields count:20:8:-1
+row 20
+SELECT 1
+> SELECT count(*) FROM pg_depend WHERE classid = 'pg_trigger'::regclass
+fields count:20:8:-1
+row 20
+SELECT 1
+> DROP TABLE p
+ERROR 2BP01 cannot drop table p because other objects depend on it
+DETAIL constraint c_p_fkey on table c depends on table p
+constraint c_code_fkey on table c depends on table p
+constraint d_p_fkey on table d depends on table p
+constraint d_q on table d depends on table p
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE p CASCADE
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to constraint c_p_fkey on table c
+drop cascades to constraint c_code_fkey on table c
+drop cascades to constraint d_p_fkey on table d
+drop cascades to constraint d_q on table d
+DROP TABLE
+> SELECT tgrelid::regclass, tgfoid::regproc FROM pg_trigger ORDER BY oid
+fields tgrelid:2205:4:-1,tgfoid:24:4:-1
+row d,"RI_FKey_setnull_del"
+row d,"RI_FKey_restrict_upd"
+row d,"RI_FKey_check_ins"
+row d,"RI_FKey_check_upd"
+SELECT 4
+> SELECT count(*) FROM pg_depend WHERE classid = 'pg_trigger'::regclass
+fields count:20:8:-1
+row 4
+SELECT 1
+> BEGIN
+BEGIN
+> DROP TABLE d
+DROP TABLE
+> SELECT count(*) FROM pg_trigger
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT count(*) FROM pg_trigger
+fields count:20:8:-1
+row 4
+SELECT 1
+> DROP TABLE c, d
+DROP TABLE
+> SELECT count(*) FROM pg_trigger
+fields count:20:8:-1
+row 0
+SELECT 1

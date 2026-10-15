@@ -2029,6 +2029,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/drop.test")));
     }
 
+    /// The internal triggers of the foreign keys in `pg_trigger`: the function of each action, the triggers that can wait to the end of the transaction, the names from the OIDs, the rows of `pg_depend`, and the removal of the triggers with their constraint, with `CASCADE` and in a block that rolls back. `connection/fk_triggers.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_triggers() {
+        big_stack(|| script(include_str!("connection/fk_triggers.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

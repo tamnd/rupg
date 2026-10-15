@@ -6,7 +6,7 @@ use rupg_common::{Error, Result, SqlState};
 
 use super::{
     Catalog, DepKind, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
-    PG_REWRITE, PG_TYPE, is_pinned,
+    PG_REWRITE, PG_TRIGGER, PG_TYPE, is_pinned,
 };
 
 /// The reasons that the walk reached an object, the bits `DEPFLAG_*` of `dependency.c`.
@@ -238,6 +238,9 @@ impl Catalog {
             }
             PG_PROC => {
                 self.functions.remove(&object.oid);
+            }
+            PG_TRIGGER => {
+                self.triggers.remove(&object.oid);
             }
             PG_REWRITE => {}
             class => {

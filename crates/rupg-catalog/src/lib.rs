@@ -2,7 +2,7 @@
 //!
 //! At M2 the catalog holds the schemas, tables, sequences, indexes, views, column defaults and constraints that DDL makes. Each object gets its OID in the order that PostgreSQL 19 gives OIDs, and each object without a name in the statement gets the name that PostgreSQL gives it. Thus after the same statements on a new cluster, the OIDs and the names are the same as in PostgreSQL.
 //!
-//! The catalog does not read SQL. The analyzer turns a statement into calls of this crate in the order of `DefineRelation`, `DefineIndex` and `ATAddForeignKeyConstraint`, and it gives each expression as text that only the analyzer reads back. The catalog makes the TOAST tables that PostgreSQL makes, with their indexes, but they hold no data. It does not make the triggers of foreign keys, but it uses their OIDs, so the OIDs of later objects agree with PostgreSQL. It records no `pg_depend` rows for these triggers. The catalog also records the rows of `pg_depend` in the order that PostgreSQL inserts them.
+//! The catalog does not read SQL. The analyzer turns a statement into calls of this crate in the order of `DefineRelation`, `DefineIndex` and `ATAddForeignKeyConstraint`, and it gives each expression as text that only the analyzer reads back. The catalog makes the TOAST tables that PostgreSQL makes, with their indexes, but they hold no data. It also makes the four internal triggers of each foreign key, which have no work to do because the tables have no rows. The catalog also records the rows of `pg_depend` in the order that PostgreSQL inserts them.
 //!
 //! This crate first ships in milestone M2. See `spec/22-crate-layout.md` section 22.4 and `spec/23-milestones.md`.
 
@@ -73,8 +73,18 @@ pub const PG_LANGUAGE: u32 = 2612;
 pub const PG_EXTENSION: u32 = 3079;
 /// The OID of the `btree` access method.
 pub const BTREE: u32 = 403;
-/// The number of triggers that PostgreSQL makes for one foreign key.
-const FOREIGN_KEY_TRIGGERS: u32 = 4;
+/// The OID of the catalog `pg_trigger`.
+pub const PG_TRIGGER: u32 = 2620;
+/// The OID of `RI_FKey_check_ins`. The other functions of the foreign keys follow it in the order of `ri_triggers.c`.
+const RI_FKEY_CHECK_INS: u32 = 1644;
+/// `TRIGGER_TYPE_ROW`.
+const TRIGGER_ROW: i16 = 1;
+/// `TRIGGER_TYPE_INSERT`.
+const TRIGGER_INSERT: i16 = 4;
+/// `TRIGGER_TYPE_DELETE`.
+const TRIGGER_DELETE: i16 = 8;
+/// `TRIGGER_TYPE_UPDATE`.
+const TRIGGER_UPDATE: i16 = 16;
 
 /// A schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -448,6 +458,31 @@ pub struct Constraint {
     pub foreign: Option<ForeignKey>,
 }
 
+/// A trigger, one row of `pg_trigger`. Only the internal triggers of the foreign keys exist.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Trigger {
+    /// The OID.
+    pub oid: u32,
+    /// The OID of the table of the trigger.
+    pub relation: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the function.
+    pub function: u32,
+    /// `tgtype`: the bits of the level, the time and the events.
+    pub kind: i16,
+    /// `tgconstrrelid`: the other table of the foreign key.
+    pub constraint_relation: u32,
+    /// `tgconstrindid`: the unique index of the referenced table.
+    pub constraint_index: u32,
+    /// `tgconstraint`: the OID of the foreign key.
+    pub constraint: u32,
+    /// `tgdeferrable`.
+    pub deferrable: bool,
+    /// `tginitdeferred`.
+    pub deferred: bool,
+}
+
 /// An object as `pg_depend` names it: the OID of its catalog, its OID and a column number or 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjRef {
@@ -650,6 +685,7 @@ pub struct Catalog {
     functions: BTreeMap<u32, Function>,
     languages: BTreeMap<u32, Language>,
     extensions: BTreeMap<u32, Extension>,
+    triggers: BTreeMap<u32, Trigger>,
     depends: Vec<Depend>,
     descriptions: BTreeMap<ObjRef, String>,
 }
@@ -699,6 +735,7 @@ impl Catalog {
             functions: BTreeMap::new(),
             languages: BTreeMap::new(),
             extensions: BTreeMap::new(),
+            triggers: BTreeMap::new(),
             depends: Vec::new(),
             descriptions: BTreeMap::new(),
         }
@@ -719,7 +756,7 @@ impl Catalog {
         self.next_oid = oid;
     }
 
-    /// Uses `count` OIDs for objects that PostgreSQL makes and rupg does not, such as the triggers of a foreign key.
+    /// Uses `count` OIDs that PostgreSQL uses and rupg does not, such as the OID of a table that a check refuses after the OID was given.
     pub fn skip_oids(&mut self, count: u32) {
         for _ in 0..count {
             self.new_oid();
@@ -828,6 +865,16 @@ impl Catalog {
     /// The constraints of a relation, in the order of their OIDs.
     pub fn constraints_of(&self, relation: u32) -> impl Iterator<Item = &Constraint> {
         self.constraints.values().filter(move |c| c.relation == relation)
+    }
+
+    /// The triggers in the order of their OIDs.
+    pub fn triggers(&self) -> impl Iterator<Item = &Trigger> {
+        self.triggers.values()
+    }
+
+    /// The trigger with the OID.
+    pub fn trigger(&self, oid: u32) -> Option<&Trigger> {
+        self.triggers.get(&oid)
     }
 
     /// The check constraints of a domain.
@@ -1635,7 +1682,7 @@ impl Catalog {
         Ok((oid, constraint_oid))
     }
 
-    /// `ATAddForeignKeyConstraint`: a foreign key. The four triggers of PostgreSQL use the next four OIDs. Without a name, the name is `table_columns_fkey`.
+    /// `ATAddForeignKeyConstraint`: a foreign key with its four triggers. Without a name, the name is `table_columns_fkey`.
     pub fn add_foreign_key(&mut self, new: NewForeignKey) -> Result<u32> {
         let (relname, namespace) = self.relation_facts(new.table)?;
         let name = match &new.name {
@@ -1667,6 +1714,7 @@ impl Catalog {
         let oid = constraint.oid;
         let referenced = new.foreign.table;
         let referenced_keys = new.foreign.keys.clone();
+        let (delete, update) = (new.foreign.delete, new.foreign.update);
         constraint.foreign = Some(new.foreign);
         self.insert_constraint(constraint);
         let me = ObjRef::new(PG_CONSTRAINT, oid);
@@ -1674,10 +1722,59 @@ impl Catalog {
             self.depend(me, ObjRef::column(referenced, key), DepKind::Normal);
         }
         self.depend(me, ObjRef::new(PG_CLASS, new.index), DepKind::Normal);
-        self.skip_oids(FOREIGN_KEY_TRIGGERS);
+        let mut trigger = Trigger {
+            oid: 0,
+            relation: referenced,
+            name: String::new(),
+            function: 0,
+            kind: 0,
+            constraint_relation: new.table,
+            constraint_index: new.index,
+            constraint: oid,
+            deferrable: false,
+            deferred: false,
+        };
+        // `createForeignKeyActionTriggers`: the triggers of the actions on the referenced table. Only `NO ACTION` can wait to the end of the transaction.
+        for (event, action, offset) in [(TRIGGER_DELETE, delete, 0), (TRIGGER_UPDATE, update, 1)] {
+            let function = match action {
+                'r' => 4,
+                'c' => 2,
+                'n' => 6,
+                'd' => 8,
+                _ => 10,
+            };
+            let no_action = function == 10;
+            trigger.function = RI_FKEY_CHECK_INS + function + offset;
+            trigger.kind = TRIGGER_ROW | event;
+            trigger.deferrable = no_action && new.deferrable;
+            trigger.deferred = no_action && new.deferred;
+            self.add_trigger(&mut trigger, "RI_ConstraintTrigger_a");
+        }
+        // `createForeignKeyCheckTriggers`: the checks on the referencing table.
+        trigger.relation = new.table;
+        trigger.constraint_relation = referenced;
+        trigger.deferrable = new.deferrable;
+        trigger.deferred = new.deferred;
+        for (event, offset) in [(TRIGGER_INSERT, 0), (TRIGGER_UPDATE, 1)] {
+            trigger.function = RI_FKEY_CHECK_INS + offset;
+            trigger.kind = TRIGGER_ROW | event;
+            self.add_trigger(&mut trigger, "RI_ConstraintTrigger_c");
+        }
         self.relation_mut(new.table)?.has_triggers = true;
         self.relation_mut(referenced)?.has_triggers = true;
         Ok(oid)
+    }
+
+    /// `CreateTrigger` for an internal trigger of a constraint: a new OID, the name `prefix_OID`, and an internal dependency on the constraint. The dependency on the function is not recorded, because the function is pinned.
+    fn add_trigger(&mut self, trigger: &mut Trigger, prefix: &str) {
+        trigger.oid = self.new_oid();
+        trigger.name = format!("{prefix}_{}", trigger.oid);
+        self.triggers.insert(trigger.oid, trigger.clone());
+        self.depend(
+            ObjRef::new(PG_TRIGGER, trigger.oid),
+            ObjRef::new(PG_CONSTRAINT, trigger.constraint),
+            DepKind::Internal,
+        );
     }
 
     /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`. The TOAST table gets an OID, then its index. They have no row type.

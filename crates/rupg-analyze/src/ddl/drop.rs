@@ -2,7 +2,7 @@
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
-    PG_REWRITE, PG_TYPE, Refusal, RelKind, Target, flag, is_pinned,
+    PG_REWRITE, PG_TRIGGER, PG_TYPE, Refusal, RelKind, Target, flag, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -371,6 +371,16 @@ impl Definer<'_, '_> {
                     self.describe(ObjRef::column(def.relation, def.column))
                 ),
                 None => format!("default value {}", object.oid),
+            },
+            PG_TRIGGER => match self.catalog.trigger(object.oid) {
+                Some(trigger) => {
+                    format!(
+                        "trigger {} on {}",
+                        trigger.name,
+                        self.describe_relation(trigger.relation)
+                    )
+                }
+                None => format!("trigger {}", object.oid),
             },
             PG_REWRITE => match self.catalog.view_of_rule(object.oid) {
                 Some(view) => format!("rule _RETURN on {}", self.describe_relation(view.oid)),
