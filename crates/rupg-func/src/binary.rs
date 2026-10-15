@@ -135,8 +135,8 @@ fn base64_encode(data: &[u8], url: bool) -> String {
     let sym = |buf: u32, shift: u32| char::from(alphabet[((buf >> shift) & 0x3f) as usize]);
     let mut out = String::with_capacity(data.len().div_ceil(3) * 4 + data.len() / 57);
     let mut line = 76;
-    let mut chunks = data.chunks_exact(3);
-    for c in &mut chunks {
+    let (groups, rest) = data.as_chunks::<3>();
+    for c in groups {
         let buf = (u32::from(c[0]) << 16) | (u32::from(c[1]) << 8) | u32::from(c[2]);
         for shift in [18, 12, 6, 0] {
             out.push(sym(buf, shift));
@@ -146,7 +146,7 @@ fn base64_encode(data: &[u8], url: bool) -> String {
             line = out.len() + 76;
         }
     }
-    match *chunks.remainder() {
+    match *rest {
         [a] => {
             let buf = u32::from(a) << 16;
             out.push(sym(buf, 18));
@@ -260,7 +260,7 @@ fn base32hex_encode(data: &[u8]) -> String {
     if bits > 0 {
         out.push(char::from(ALPHABET[((buf << (5 - bits)) & 0x1f) as usize]));
     }
-    while out.len() % 8 != 0 {
+    while !out.len().is_multiple_of(8) {
         out.push('=');
     }
     out
