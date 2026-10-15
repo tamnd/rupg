@@ -10,6 +10,8 @@ larg = "larg"
 selec = "selec"
 # The `prosrc` of the casts `i2toi4` and `i4toi2`.
 toi = "toi"
+# The index `pg_amop_fam_strat_index` of `pg_amop`.
+strat = "strat"
 
 # Test inputs that are wrong on purpose.
 [default]

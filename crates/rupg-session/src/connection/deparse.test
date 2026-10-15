@@ -254,3 +254,42 @@ row NULL,NULL,NULL,NULL,NULL
 SELECT 1
 > SELECT pg_get_expr('x', 0)
 ERROR 0A000 cannot accept a value of type pg_node_tree at 20
+> SELECT count(*), count(*) FILTER (WHERE indexdef LIKE 'CREATE UNIQUE INDEX %') FROM pg_indexes
+fields count:20:8:-1,count:20:8:-1
+row 142,119
+SELECT 1
+> SELECT indexname, indexdef FROM pg_indexes WHERE tablename IN ('pg_class', 'pg_proc', 'pg_depend') ORDER BY 1
+fields indexname@pg_indexes.3:19:64:-1,indexdef@pg_indexes.5:25:-1:-1
+row pg_class_oid_index,CREATE UNIQUE INDEX pg_class_oid_index ON pg_catalog.pg_class USING btree (oid)
+row pg_class_relname_nsp_index,CREATE UNIQUE INDEX pg_class_relname_nsp_index ON pg_catalog.pg_class USING btree (relname, relnamespace)
+row pg_class_tblspc_relfilenode_index,CREATE INDEX pg_class_tblspc_relfilenode_index ON pg_catalog.pg_class USING btree (reltablespace, relfilenode)
+row pg_depend_depender_index,CREATE INDEX pg_depend_depender_index ON pg_catalog.pg_depend USING btree (classid, objid, objsubid)
+row pg_depend_reference_index,CREATE INDEX pg_depend_reference_index ON pg_catalog.pg_depend USING btree (refclassid, refobjid, refobjsubid)
+row pg_proc_oid_index,CREATE UNIQUE INDEX pg_proc_oid_index ON pg_catalog.pg_proc USING btree (oid)
+row pg_proc_proname_args_nsp_index,CREATE UNIQUE INDEX pg_proc_proname_args_nsp_index ON pg_catalog.pg_proc USING btree (proname, proargtypes, pronamespace)
+SELECT 7
+> SELECT pg_get_indexdef(2662, 1, false), pg_get_indexdef(2663, 2, true), pg_get_indexdef(2663, 3, true), pg_get_indexdef(2663, 0, true)
+fields pg_get_indexdef:25:-1:-1,pg_get_indexdef:25:-1:-1,pg_get_indexdef:25:-1:-1,pg_get_indexdef:25:-1:-1
+row oid,relnamespace,,CREATE UNIQUE INDEX pg_class_relname_nsp_index ON pg_class USING btree (relname, relnamespace)
+SELECT 1
+> SELECT i.indexrelid::regclass, pg_get_indexdef(i.indexrelid) FROM pg_index i WHERE i.indrelid = 'pg_toast.pg_toast_1255'::regclass
+fields indexrelid:2205:4:-1,pg_get_indexdef:25:-1:-1
+row pg_toast.pg_toast_1255_index,CREATE UNIQUE INDEX pg_toast_1255_index ON pg_toast.pg_toast_1255 USING btree (chunk_id, chunk_seq)
+SELECT 1
+> SELECT contype, count(*) FROM pg_constraint WHERE oid < 16384 AND pg_get_constraintdef(oid) IS NOT NULL GROUP BY 1 ORDER BY 1
+fields contype@pg_constraint.4:18:1:-1,count:20:8:-1
+row c,2
+row n,82
+row p,62
+row u,48
+SELECT 4
+> SELECT conname, pg_get_constraintdef(oid), pg_get_constraintdef(oid, true) FROM pg_constraint WHERE conrelid IN ('pg_class'::regclass, 'pg_depend'::regclass, 'pg_amop'::regclass) ORDER BY 1
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1,pg_get_constraintdef:25:-1:-1
+row pg_amop_fam_strat_index,UNIQUE (amopfamily, amoplefttype, amoprighttype, amopstrategy),UNIQUE (amopfamily, amoplefttype, amoprighttype, amopstrategy)
+row pg_amop_oid_index,PRIMARY KEY (oid),PRIMARY KEY (oid)
+row pg_amop_oid_not_null,NOT NULL oid,NOT NULL oid
+row pg_amop_opr_fam_index,UNIQUE (amopopr, amoppurpose, amopfamily),UNIQUE (amopopr, amoppurpose, amopfamily)
+row pg_class_oid_index,PRIMARY KEY (oid),PRIMARY KEY (oid)
+row pg_class_oid_not_null,NOT NULL oid,NOT NULL oid
+row pg_class_relname_nsp_index,UNIQUE (relname, relnamespace),UNIQUE (relname, relnamespace)
+SELECT 7

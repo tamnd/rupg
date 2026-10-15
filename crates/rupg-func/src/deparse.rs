@@ -932,19 +932,99 @@ fn get_constraintdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let paren = pretty_arg(args, 1)?;
     match call.session.catalog().and_then(|c| c.constraint(oid)) {
         Some(con) => Ok(Value::text(constraint_def(con, paren, call.session)?)),
-        None if oid < FIRST_USER_OID && builtin_row("pg_constraint", oid) => {
-            Err(system_object("pg_get_constraintdef"))
+        None if oid < FIRST_USER_OID => {
+            Ok(builtin_constraint_def(oid)?.map_or(Value::Null, Value::text))
         }
         None => Ok(Value::Null),
     }
 }
 
-/// True when the static rows of the catalog have a row with this OID.
-fn builtin_row(catalog: &str, oid: u32) -> bool {
-    let Some(cat) = rupg_pgcatalog::catalog(catalog) else { return false };
+/// The catalog and the row number of a static row, by its OID, or by `indexrelid` for `pg_index`.
+fn builtin_position(catalog: &str, oid: u32) -> Option<(&'static rupg_pgcatalog::Catalog, usize)> {
+    let cat = rupg_pgcatalog::catalog(catalog)?;
     let column = if catalog == "pg_index" { "indexrelid" } else { "oid" };
-    let Some(at) = cat.column(column) else { return false };
-    matches!(&cat.rows.get(at).map(|b| &b.values), Some(rupg_pgcatalog::Values::Oid(v)) if v.contains(&oid))
+    match &cat.rows.get(cat.column(column)?)?.values {
+        rupg_pgcatalog::Values::Oid(v) => Some((cat, v.iter().position(|&o| o == oid)?)),
+        _ => None,
+    }
+}
+
+/// The text form of a column of a static row.
+fn builtin_field(cat: &rupg_pgcatalog::Catalog, row: usize, column: &str) -> Result<String> {
+    cat.column(column)
+        .and_then(|at| cat.rows.get(at)?.text(row))
+        .ok_or_else(|| Error::internal(format!("no column {column} in {}", cat.name)))
+}
+
+/// The quoted names of columns of a built-in relation, with `, ` between them.
+fn builtin_columns(relid: u32, keys: &[i16]) -> Result<String> {
+    let names: Result<Vec<String>> = keys
+        .iter()
+        .map(|&k| {
+            builtin::attributes(relid)
+                .iter()
+                .find(|a| a.num == k)
+                .map(|a| quote_identifier(a.name))
+                .ok_or_else(|| {
+                    Error::internal(format!(
+                        "cache lookup failed for attribute {k} of relation {relid}"
+                    ))
+                })
+        })
+        .collect();
+    Ok(names?.join(", "))
+}
+
+/// The numbers in the text form of an `int2vector` or an `int2[]`.
+fn int2_list(text: &str) -> Vec<i16> {
+    text.trim_matches(['{', '}']).split([' ', ',']).filter_map(|n| n.parse().ok()).collect()
+}
+
+/// `pg_get_constraintdef` of a constraint of a system catalog: a primary key, a unique constraint or a `NOT NULL` constraint.
+fn builtin_constraint_def(oid: u32) -> Result<Option<String>> {
+    let Some((cat, row)) = builtin_position("pg_constraint", oid) else { return Ok(None) };
+    let relid: u32 = builtin_field(cat, row, "conrelid")?.parse().map_err(|_| bad_value())?;
+    let keys = int2_list(&builtin_field(cat, row, "conkey")?);
+    let columns = builtin_columns(relid, &keys)?;
+    Ok(Some(match builtin_field(cat, row, "contype")?.as_str() {
+        "p" => format!("PRIMARY KEY ({columns})"),
+        "u" => format!("UNIQUE ({columns})"),
+        "n" => format!("NOT NULL {columns}"),
+        _ => return Err(system_object("pg_get_constraintdef")),
+    }))
+}
+
+/// `pg_get_indexdef` of an index of a system catalog. Each one is a B-tree on columns, with the default operator classes and no options.
+fn builtin_index_def(
+    oid: u32,
+    colno: i32,
+    paren: bool,
+    session: &dyn Session,
+) -> Result<Option<String>> {
+    let Some((cat, row)) = builtin_position("pg_index", oid) else { return Ok(None) };
+    let relid: u32 = builtin_field(cat, row, "indrelid")?.parse().map_err(|_| bad_value())?;
+    let keys = int2_list(&builtin_field(cat, row, "indkey")?);
+    if colno != 0 {
+        let key = usize::try_from(colno - 1).ok().and_then(|at| keys.get(at));
+        return Ok(Some(match key {
+            Some(&key) => builtin_columns(relid, &[key])?,
+            None => String::new(),
+        }));
+    }
+    let index = builtin::class_by_oid(oid)
+        .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {oid}")))?;
+    let table = if paren {
+        relation_name(relid, session)?
+    } else {
+        qualified_relation_name(relid, session)?
+    };
+    let unique = builtin_field(cat, row, "indisunique")? == "t";
+    Ok(Some(format!(
+        "CREATE {}INDEX {} ON {table} USING btree ({})",
+        if unique { "UNIQUE " } else { "" },
+        quote_identifier(index.name),
+        builtin_columns(relid, &keys)?
+    )))
 }
 
 /// The collation of an index expression, as `exprCollation` gives it: the collation of the columns in it when they agree, else the default collation for a type that has collations.
@@ -1140,8 +1220,8 @@ fn get_indexdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         .and_then(|r| Some((r, r.index.as_ref()?)));
     match found {
         Some((index, info)) => Ok(Value::text(index_def(index, info, colno, paren, call.session)?)),
-        None if oid < FIRST_USER_OID && builtin_row("pg_index", oid) => {
-            Err(system_object("pg_get_indexdef"))
+        None if oid < FIRST_USER_OID => {
+            Ok(builtin_index_def(oid, colno, paren, call.session)?.map_or(Value::Null, Value::text))
         }
         None => Ok(Value::Null),
     }

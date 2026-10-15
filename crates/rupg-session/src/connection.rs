@@ -1735,7 +1735,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/reg_names.test")));
     }
 
-    /// The deparse functions `pg_get_expr`, `pg_get_constraintdef` and `pg_get_indexdef`. `connection/deparse.test` is the output of PostgreSQL 19 for the same script in a new database. A value with a newline takes more than one line.
+    /// The deparse functions `pg_get_expr`, `pg_get_constraintdef` and `pg_get_indexdef`, also for the indexes and the constraints of the system catalogs. `connection/deparse.test` is the output of PostgreSQL 19 for the same script in a new database. A value with a newline takes more than one line.
     #[test]
     fn deparse() {
         big_stack(|| script(include_str!("connection/deparse.test")));
@@ -2101,7 +2101,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/windows.test")));
     }
 
-    /// A row on the left of `IN`, `ANY` and `ALL` with a subquery: one operator for each column of the subquery that `AND` or `OR` combines, the NULL results, the errors for a wrong number of columns and for an operator that does not give `boolean`, and a view with these tests in `pg_get_viewdef`. `connection/row_in_subquery.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// A row on the left of `IN`, `ANY` and `ALL` with a subquery: one operator for each column of the subquery that `AND` or `OR` combines, the NULL results, the errors for a wrong number of columns and for an operator that does not give `boolean`, a view with these tests in `pg_get_viewdef`, and the same results when a hash table of the subquery gives them. `connection/row_in_subquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn row_in_subquery() {
         big_stack(|| script(include_str!("connection/row_in_subquery.test")));
