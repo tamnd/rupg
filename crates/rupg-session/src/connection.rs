@@ -2093,6 +2093,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/random.test")));
     }
 
+    /// `array_position`, `array_positions`, `array_fill`, `array_reverse`, `array_sort`, `trim_array`, `array_shuffle`, `array_sample`, the operators `@>`, `<@` and `&&`, and `width_bucket` with an array of thresholds, with their errors. `connection/array_more.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn array_more_functions() {
+        big_stack(|| script(include_str!("connection/array_more.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
