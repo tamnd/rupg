@@ -29,6 +29,7 @@ use crate::utility::{self, Context, Notice, Outcome};
 
 mod activity;
 mod copy;
+mod copy_from;
 mod cursor;
 mod databases;
 mod extended;
@@ -312,6 +313,8 @@ pub struct Connection {
     activity: Activity,
     /// The cache of the sequences of the session, with the state of `currval` and `lastval`.
     sequences: RefCell<Sequences>,
+    /// The `COPY ... FROM STDIN` that reads its data.
+    copy_in: Option<copy_from::CopyIn>,
 }
 
 /// The OID of the bootstrap superuser, which owns the objects of initdb.
@@ -343,6 +346,7 @@ impl Connection {
             lease: None,
             activity: Activity::default(),
             sequences: RefCell::new(Sequences::default()),
+            copy_in: None,
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -537,12 +541,19 @@ impl Connection {
             None => Next::Read,
             Some(Err(error)) => {
                 out.protocol_error(&error, self.protocol);
+                if self.copy_in.take().is_some() {
+                    self.abort();
+                }
                 if error.level == Level::Error { self.recover(out) } else { Next::Close }
             }
             Some(Ok(Frontend::Query(sql))) => {
                 let text = String::from_utf8_lossy(sql);
-                if self.simple_query(&text, out) { self.recover(out) } else { Next::Continue }
+                let failed = self.simple_query(&text, out);
+                self.after_query(failed, out)
             }
+            Some(Ok(
+                message @ (Frontend::CopyData(_) | Frontend::CopyDone | Frontend::CopyFail(_)),
+            )) if self.copy_in.is_some() => self.copy_message(message, out),
             Some(Ok(Frontend::Parse { name, sql, types })) => {
                 let result = self.parse(name, sql, types, out);
                 self.after(result, out)
@@ -580,6 +591,37 @@ impl Connection {
             }
         };
         Step { used, next }
+    }
+
+    /// The end of a `Query` message, or of the part of it after a `COPY ... FROM STDIN`. A copy that waits for its data sends `CopyInResponse` at once.
+    fn after_query(&mut self, failed: bool, out: &mut OutBuf) -> Next {
+        if failed {
+            self.recover(out)
+        } else if self.copy_in.is_some() {
+            Next::Flush
+        } else {
+            Next::Continue
+        }
+    }
+
+    /// `CopyData`, `CopyDone` or `CopyFail` of a `COPY ... FROM STDIN`. After `CopyDone` the session runs the rest of the statements of the `Query` message.
+    fn copy_message(&mut self, message: Frontend<'_>, out: &mut OutBuf) -> Next {
+        let Some(copy) = self.copy_in.as_mut() else { return Next::Continue };
+        let result = match message {
+            Frontend::CopyData(data) => match copy.data(data) {
+                Ok(()) => return Next::Continue,
+                Err(error) => Err(error),
+            },
+            Frontend::CopyFail(message) => Err(copy.fail(message)),
+            _ => copy.done(),
+        };
+        let Some(copy) = self.copy_in.take() else { return Next::Continue };
+        if let Err(error) = result {
+            self.fail(&error, None, out);
+            return self.recover(out);
+        }
+        let failed = self.resume_query(&copy.text, copy.index, out);
+        self.after_query(failed, out)
     }
 
     /// The end of a message of the extended protocol. After an error the session drops the messages until `Sync`.
@@ -670,31 +712,39 @@ impl Connection {
             .map(|n| Notice { severity: n.severity, error: Error::new(n.code, n.message) })
             .collect();
         self.notices(&mut notices, text, &locations, out);
-        let statements: Vec<(&Node, &str)> = list
-            .iter()
-            .flatten()
-            .filter_map(|node| match node {
-                Node::RawStmt(raw) => {
-                    let start = usize::try_from(raw.stmt_location).unwrap_or(0).min(text.len());
-                    let end = match usize::try_from(raw.stmt_len) {
-                        Ok(0) | Err(_) => text.len(),
-                        Ok(len) => (start + len).min(text.len()),
-                    };
-                    raw.stmt.as_ref().map(|stmt| (stmt, text.get(start..end).unwrap_or(text)))
-                }
-                _ => None,
-            })
-            .collect();
+        let statements = statements(&list, text);
         if statements.is_empty() {
             out.empty_query_response();
             self.finish_xact();
             return false;
         }
+        self.run_statements(text, &statements, 0, None, out)
+    }
+
+    /// The rest of a `Query` message after the `COPY ... FROM STDIN` at `index` ended. The text parsed before, so the parse gives no error and its notices went to the client.
+    fn resume_query(&mut self, text: &str, index: usize, out: &mut OutBuf) -> bool {
+        let Ok((list, _)) = rupg_sql::parse(text) else { return false };
+        let statements = statements(&list, text);
+        self.run_statements(text, &statements, index, Some(Done::Count(CommandTag::Copy, 0)), out)
+    }
+
+    /// The loop of `exec_simple_query` over the statements from `from`. `copied` is the result of a `COPY ... FROM STDIN` at `from` that ended. A `COPY ... FROM STDIN` stops the loop until its data ends. It gives true when a statement failed.
+    fn run_statements(
+        &mut self,
+        text: &str,
+        statements: &[(&Node, &str)],
+        from: usize,
+        mut copied: Option<Done>,
+        out: &mut OutBuf,
+    ) -> bool {
+        let mut notices = Vec::new();
         let many = statements.len() > 1;
-        for (i, (node, statement)) in statements.iter().enumerate() {
-            self.start_xact();
-            if many {
-                self.transaction.begin_implicit();
+        for (i, &(node, statement)) in statements.iter().enumerate().skip(from) {
+            if copied.is_none() {
+                self.start_xact();
+                if many {
+                    self.transaction.begin_implicit();
+                }
             }
             // The columns of a query that failed at run time. PostgreSQL sends `RowDescription` when the executor starts, so the error comes after it.
             let mut described = None;
@@ -702,7 +752,9 @@ impl Connection {
             let mut copying = None;
             // The warnings of the run of a query. PostgreSQL sends them after `RowDescription`.
             let mut late = Vec::new();
-            let result = if let Err(error) = self.interrupted() {
+            let result = if let Some(done) = copied.take() {
+                Ok(done)
+            } else if let Err(error) = self.interrupted() {
                 Err(error)
             } else if self.transaction.failed() && !utility::exits_transaction(node) {
                 Err(Error::new(
@@ -721,6 +773,20 @@ impl Connection {
             } else if let Node::LockStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.lock(stmt)
+            } else if let Node::CopyStmt(stmt) = node
+                && stmt.is_from
+            {
+                drop(self.portals.close(b""));
+                match self.copy_from(stmt, out) {
+                    Ok(mut copy) => {
+                        copy.text = text.to_string();
+                        copy.index = i;
+                        self.copy_in = Some(copy);
+                        self.session.copy_in();
+                        return false;
+                    }
+                    Err(error) => Err(error),
+                }
             } else if let Node::CopyStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.copy(stmt, &mut copying)
@@ -900,6 +966,11 @@ impl Connection {
     /// Writes the error of a statement and aborts its transaction. In a failed block the portals stay, but they cannot run.
     fn fail(&mut self, error: &Error, position: Option<usize>, out: &mut OutBuf) {
         write_error(out, "ERROR", error, position, false);
+        self.abort();
+    }
+
+    /// The part of `AbortCurrentTransaction` of [`Connection::fail`] after the error went to the client.
+    fn abort(&mut self) {
         self.xact_started = false;
         if self.transaction.abort_current() == Ending::Rollback {
             self.settings.get_mut().end(false);
@@ -929,6 +1000,24 @@ fn role_oid(start: &Start) -> u32 {
         return BOOTSTRAP_SUPERUSER;
     }
     builtin::roles().iter().find(|role| role.name == start.user).map_or(0, |role| role.oid)
+}
+
+/// The statements of a parsed `Query` message, each with its part of the text.
+fn statements<'a>(list: &'a rupg_sql::nodes::List, text: &'a str) -> Vec<(&'a Node, &'a str)> {
+    list.iter()
+        .flatten()
+        .filter_map(|node| match node {
+            Node::RawStmt(raw) => {
+                let start = usize::try_from(raw.stmt_location).unwrap_or(0).min(text.len());
+                let end = match usize::try_from(raw.stmt_len) {
+                    Ok(0) | Err(_) => text.len(),
+                    Ok(len) => (start + len).min(text.len()),
+                };
+                raw.stmt.as_ref().map(|stmt| (stmt, text.get(start..end).unwrap_or(text)))
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The position of a byte offset in characters, from 1, as the field `P` gives it.
@@ -1127,6 +1216,10 @@ mod tests {
                     let values: Vec<String> =
                         values.iter().map(|v| text(v.unwrap_or(b"NULL"))).collect();
                     format!("row {}", values.join(","))
+                }
+                Backend::CopyInResponse { format, columns } => {
+                    let columns: Vec<String> = columns.iter().map(i16::to_string).collect();
+                    format!("copy in {format} {}", columns.join(","))
                 }
                 Backend::CopyOutResponse { format, columns } => {
                     let columns: Vec<String> = columns.iter().map(i16::to_string).collect();
@@ -1755,7 +1848,7 @@ mod tests {
         big_stack(catalog_rows_cases);
     }
 
-    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database. After a line `!details`, an error or a notice also has its detail and its hint.
+    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database. After a line `!details`, an error or a notice also has its detail and its hint. The lines `< text`, `<hex HEX`, `<done` and `<fail message` right after a simple query are the messages of `COPY ... FROM STDIN` that go with the query: `CopyData` of the text and a newline, `CopyData` of the bytes, `CopyDone` and `CopyFail`.
     fn script(text: &str) {
         let (mut c, _) = connect();
         let starts = |l: &str| {
@@ -1769,12 +1862,37 @@ mod tests {
                 details = true;
                 continue;
             }
+            let mut copy = Vec::new();
+            while let Some(next) = lines.next_if(|l| l.starts_with('<')) {
+                copy.push(next);
+            }
             let mut want = Vec::new();
             while let Some(next) = lines.next_if(|l| !starts(l)) {
                 want.push(next);
             }
-            assert_eq!(script_details(&mut c, line, details), want, "{line}");
+            assert_eq!(script_copy(&mut c, line, &copy, details), want, "{line}");
         }
+    }
+
+    /// The messages of `COPY ... FROM STDIN` of the lines `<` of a script.
+    fn copy_input(lines: &[&str]) -> Vec<u8> {
+        let mut input = Vec::new();
+        for line in lines {
+            input.extend(if *line == "<done" {
+                message(b'c', b"")
+            } else if let Some(text) = line.strip_prefix("<fail ") {
+                message(b'f', &[text.as_bytes(), b"\0"].concat())
+            } else if let Some(hex) = line.strip_prefix("<hex ") {
+                let bytes: Vec<u8> = (0..hex.len() / 2)
+                    .map(|i| u8::from_str_radix(&hex[2 * i..2 * i + 2], 16).unwrap())
+                    .collect();
+                message(b'd', &bytes)
+            } else {
+                let text = line.strip_prefix("< ").unwrap_or_default();
+                message(b'd', &[text.as_bytes(), b"\n"].concat())
+            });
+        }
+        input
     }
 
     /// The lines of a statement of a script. A line `> sql` is a simple query. A line `P name|sql` is `Parse` of a statement and `Sync`, and a line `X name|value|value` is `Bind` of the statement to the unnamed portal with values in the text format, `Execute` and `Sync`. A line `D S name` or `D P name` is `Describe` of a statement or a portal and `Sync`, and a line `C S name` or `C P name` is `Close` and `Sync`.
@@ -1784,6 +1902,11 @@ mod tests {
 
     /// [`script_lines`], with the details of [`render_details`] when `details` is true.
     fn script_details(c: &mut Connection, line: &str, details: bool) -> Vec<String> {
+        script_copy(c, line, &[], details)
+    }
+
+    /// [`script_details`], with the messages of `COPY ... FROM STDIN` of the lines `copy` after a simple query.
+    fn script_copy(c: &mut Connection, line: &str, copy: &[&str], details: bool) -> Vec<String> {
         let target = |rest: &str| {
             let (target, name) = rest.split_once(' ').unwrap();
             (target.chars().next().unwrap(), name.to_string())
@@ -1807,7 +1930,7 @@ mod tests {
                 let values: Vec<Option<&[u8]>> = parts.map(|v| Some(v.as_bytes())).collect();
                 [bind("", name, &[], &values, &[]), execute("", 0), sync()].concat()
             }
-            (_, sql) => query(sql),
+            (_, sql) => [query(sql), copy_input(copy)].concat(),
         };
         render_details(&exchange(c, &input), true, details)
             .into_iter()
@@ -2612,14 +2735,15 @@ mod tests {
         big_stack(|| script(include_str!("connection/copy_to.test")));
     }
 
-    /// `COPY FROM`, the JSON format, an encoding other than `UTF8` and a file give `0A000`.
+    /// `COPY FROM` a file or a program, the JSON format, an encoding other than `UTF8` and `COPY TO` a file or a program give `0A000`.
     #[test]
     fn copy_not_supported() {
         big_stack(|| {
             let (mut c, _) = connect();
             assert_eq!(script_lines(&mut c, "> CREATE TABLE t (a int)"), ["CREATE TABLE"]);
             for (sql, error) in [
-                ("COPY t FROM stdin", "COPY FROM is not supported yet"),
+                ("COPY t FROM '/tmp/rupg-copy.txt'", "COPY FROM a file is not supported yet"),
+                ("COPY t FROM PROGRAM 'cat'", "COPY FROM a program is not supported yet"),
                 ("COPY t TO stdout (FORMAT json)", "COPY FORMAT JSON is not supported yet"),
                 (
                     "COPY t TO stdout (ENCODING 'latin1')",
@@ -2765,6 +2889,12 @@ mod tests {
     #[test]
     fn sequence() {
         big_stack(|| script(include_str!("connection/sequence.test")));
+    }
+
+    /// `COPY ... FROM STDIN` with no rows: the checks before `CopyInResponse` and after it, the header lines with `HEADER MATCH`, the end-of-copy marker, the header of the binary format, `CopyFail`, and the statements after a `COPY` in one `Query` message. `connection/copy_from.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn copy_from() {
+        big_stack(|| script(include_str!("connection/copy_from.test")));
     }
 
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
