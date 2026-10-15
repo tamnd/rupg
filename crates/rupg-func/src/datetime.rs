@@ -13,6 +13,7 @@ use crate::cast::{
     TIMESTAMP_END_JULIAN, infinite, local, midnight, timestamp_range, valid_timestamp,
 };
 use crate::compare::{compare, span};
+use crate::timezone::lookup_timezone;
 use crate::{Call, Kernel, bad_value};
 
 /// `DAYS_PER_MONTH`.
@@ -363,7 +364,7 @@ fn is_leap(year: i32) -> bool {
 }
 
 /// `day_tab`: the days of a month.
-fn days_of_month(year: i32, mon: i32) -> i32 {
+pub(crate) fn days_of_month(year: i32, mon: i32) -> i32 {
     const DAYS: [i32; 12] = [31, 28, 31, 30, 31, 30, 31, 31, 30, 31, 30, 31];
     if mon == 2 && is_leap(year) { 29 } else { DAYS[(mon - 1) as usize] }
 }
@@ -382,6 +383,14 @@ impl Tm {
     fn of_local(call: &Call<'_>, ts: i64) -> Result<Tm> {
         Tm::of(ts)?;
         Tm::of(local(call.session, ts)?)
+    }
+
+    /// `timestamp2tm` in a zone: the fields of the local time.
+    fn of_zone(zone: &dyn TimeZone, ts: i64) -> Result<Tm> {
+        Tm::of(ts)?;
+        let unix = ts.div_euclid(USECS_PER_SEC) - UNIX_TO_POSTGRES_USECS / USECS_PER_SEC;
+        let east = i64::from(zone.at(unix).0);
+        Tm::of(ts.checked_add(east * USECS_PER_SEC).ok_or_else(timestamp_range)?)
     }
 
     /// `tm2timestamp`. With a zone, the offset is the one that `DetermineTimeZoneOffset` gives for the fields.
@@ -422,8 +431,12 @@ impl Tm {
     }
 }
 
-/// `timestamp_pl_interval`, and `timestamptz_pl_interval_internal` when `call` is given: the months and the days are added to the fields of the local time, and then the time is added.
-fn timestamp_plus(ts: i64, interval: &Interval, call: Option<&Call<'_>>) -> Result<i64> {
+/// `timestamp_pl_interval`, and `timestamptz_pl_interval_internal` when `zone` is given: the months and the days are added to the fields of the local time, and then the time is added.
+pub(crate) fn timestamp_plus(
+    ts: i64,
+    interval: &Interval,
+    zone: Option<&dyn TimeZone>,
+) -> Result<i64> {
     if is_nobegin(interval) {
         if ts == TIMESTAMP_INFINITY {
             return Err(timestamp_range());
@@ -439,12 +452,8 @@ fn timestamp_plus(ts: i64, interval: &Interval, call: Option<&Call<'_>>) -> Resu
     if infinite(ts) {
         return Ok(ts);
     }
-    let zone = match call {
-        Some(call) => Some(call.session.zone()?),
-        None => None,
-    };
-    let fields = |ts: i64| match call {
-        Some(call) => Tm::of_local(call, ts),
+    let fields = |ts: i64| match zone {
+        Some(zone) => Tm::of_zone(zone, ts),
         None => Tm::of(ts),
     };
     let mut ts = ts;
@@ -459,18 +468,18 @@ fn timestamp_plus(ts: i64, interval: &Interval, call: Option<&Call<'_>>) -> Resu
             tm.mon = tm.mon % MONTHS_PER_YEAR + MONTHS_PER_YEAR;
         }
         tm.mday = tm.mday.min(days_of_month(tm.year, tm.mon));
-        ts = tm.timestamp(zone.as_deref())?;
+        ts = tm.timestamp(zone)?;
     }
     if interval.day != 0 {
         let mut tm = fields(ts)?;
-        let lowest = if call.is_some() { -1 } else { 0 };
+        let lowest = if zone.is_some() { -1 } else { 0 };
         let julian = date2j(tm.year, tm.mon, tm.mday)
             .checked_add(interval.day)
             .filter(|&j| j >= lowest)
             .ok_or_else(timestamp_range)?;
         let (year, mon, mday) = j2date(julian);
         (tm.year, tm.mon, tm.mday) = (year, mon as i32, mday as i32);
-        ts = tm.timestamp(zone.as_deref())?;
+        ts = tm.timestamp(zone)?;
     }
     let ts = ts.checked_add(interval.time).ok_or_else(timestamp_range)?;
     if !valid_timestamp(ts) {
@@ -491,13 +500,32 @@ fn timestamp_mi_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 fn timestamptz_pl_interval(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [a, b] = args else { return Err(bad_value()) };
-    timestamp_plus(timestamp_arg(a)?, &interval_arg(b)?, Some(call)).map(Value::TimestampTz)
+    let zone = call.session.zone()?;
+    timestamp_plus(timestamp_arg(a)?, &interval_arg(b)?, Some(zone.as_ref()))
+        .map(Value::TimestampTz)
 }
 
 fn timestamptz_mi_interval(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [a, b] = args else { return Err(bad_value()) };
     let interval = negate(&interval_arg(b)?)?;
-    timestamp_plus(timestamp_arg(a)?, &interval, Some(call)).map(Value::TimestampTz)
+    let zone = call.session.zone()?;
+    timestamp_plus(timestamp_arg(a)?, &interval, Some(zone.as_ref())).map(Value::TimestampTz)
+}
+
+/// `timestamptz_pl_interval_at_zone`: `date_add` with the arithmetic in a zone that a name gives.
+fn timestamptz_pl_interval_at_zone(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [a, b, zone] = args else { return Err(bad_value()) };
+    let zone = lookup_timezone(call, zone)?;
+    timestamp_plus(timestamp_arg(a)?, &interval_arg(b)?, Some(zone.as_ref()))
+        .map(Value::TimestampTz)
+}
+
+/// `timestamptz_mi_interval_at_zone`: `date_subtract` with the arithmetic in a zone that a name gives.
+fn timestamptz_mi_interval_at_zone(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [a, b, zone] = args else { return Err(bad_value()) };
+    let interval = negate(&interval_arg(b)?)?;
+    let zone = lookup_timezone(call, zone)?;
+    timestamp_plus(timestamp_arg(a)?, &interval, Some(zone.as_ref())).map(Value::TimestampTz)
 }
 
 /// `timestamp_mi`, also for `timestamptz`: the difference in microseconds, with the whole days in the days.
@@ -767,6 +795,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "timestamp_mi_interval" => timestamp_mi_interval,
         "timestamptz_pl_interval" => timestamptz_pl_interval,
         "timestamptz_mi_interval" => timestamptz_mi_interval,
+        "timestamptz_pl_interval_at_zone" => timestamptz_pl_interval_at_zone,
+        "timestamptz_mi_interval_at_zone" => timestamptz_mi_interval_at_zone,
         "timestamp_mi" => timestamp_mi,
         "timestamp_age" => timestamp_age,
         "timestamptz_age" => timestamptz_age,

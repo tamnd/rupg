@@ -938,6 +938,26 @@ pub fn decode_timezone_name(name: &str, cx: &DateTimeInput<'_>) -> Result<ZoneNa
     }
 }
 
+/// `DecodeTimezone` as `parse_sane_timezone` uses it: the offset in seconds west of UTC of a numeric zone, or `None` for a name that is not a numeric zone.
+///
+/// # Errors
+///
+/// `22023` when the hours, the minutes or the seconds of a numeric zone are out of range.
+pub fn decode_numeric_timezone(name: &str) -> Result<Option<i32>, TypeError> {
+    match decode_timezone(name.as_bytes()) {
+        Ok(west) => Ok(Some(west)),
+        Err(BadFormat) => Ok(None),
+        Err(DtErr::TzDispOverflow) => Err(TypeError::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("numeric time zone \"{name}\" out of range"),
+        )),
+        Err(_) => Err(TypeError::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("time zone \"{name}\" not recognized"),
+        )),
+    }
+}
+
 /// `DecodeTimezone`: a numeric zone such as `+05`, `-0530` or `+05:30:15`, in seconds west of UTC.
 fn decode_timezone(s: &[u8]) -> Result<i32, DtErr> {
     let sign = at(s, 0);

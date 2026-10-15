@@ -2071,6 +2071,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/numeric_functions.test")));
     }
 
+    /// `make_date`, `make_time`, `make_timestamp` and `make_timestamptz` with the years BC, the ends of the range, the zones of the seventh argument and the errors with their messages. Also `isfinite`, the cast of a time to a `timetz`, `timeofday`, `to_timestamp` of a number of seconds, and `generate_series` of the timestamps in the zone of the session and in a named zone, and of `numeric`, with the errors of the step. `connection/calendar.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn calendar() {
+        big_stack(|| script(include_str!("connection/calendar.test")));
+    }
+
+    /// The comparisons of a date, a timestamp and a `timestamptz` with each other, with the infinities and the values that are out of the range of the other type. Also the support functions `date_cmp`, `time_cmp`, `timetz_cmp`, `interval_cmp`, `numeric_cmp`, `bpcharcmp`, `byteacmp` and `uuid_cmp`, the operators of the pattern classes, and `date_add` and `date_subtract` in a named zone. `connection/datetime_compare.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn datetime_compare() {
+        big_stack(|| script(include_str!("connection/datetime_compare.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

@@ -1,0 +1,315 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT make_date(2024, 2, 29), make_date(-44, 3, 15), make_date(1, 1, 1), make_date(5874897, 12, 31), make_date(-4713, 11, 24)
+fields make_date:1082:4:-1,make_date:1082:4:-1,make_date:1082:4:-1,make_date:1082:4:-1,make_date:1082:4:-1
+row 2024-02-29,0044-03-15 BC,0001-01-01,5874897-12-31,4713-11-24 BC
+SELECT 1
+> SELECT make_date(2023, 2, 29)
+ERROR 22008 date field value out of range: 2023-02-29
+> SELECT make_date(0, 1, 1)
+ERROR 22008 date field value out of range: 0-01-01
+> SELECT make_date(-44, 13, 1)
+ERROR 22008 date field value out of range: -43-13-01
+> SELECT make_date(-2147483648, 1, 1)
+ERROR 22008 date field value out of range: -2147483648-01-01
+> SELECT make_date(2024, -5, 3)
+ERROR 22008 date field value out of range: 2024--5-03
+> SELECT make_date(5874898, 1, 1)
+ERROR 22008 date out of range: 5874898-01-01
+> SELECT make_date(-4713, 11, 23)
+fields make_date:1082:4:-1
+row 4713-11-23 BC
+SELECT 1
+> SELECT make_date(-4714, 1, 1)
+ERROR 22008 date out of range: -4713-01-01
+> SELECT make_time(8, 15, 23.5), make_time(24, 0, 0), make_time(0, 0, 59.9999995), make_time(23, 59, 60), make_time(12, 30, 0.0000004)
+fields make_time:1083:8:-1,make_time:1083:8:-1,make_time:1083:8:-1,make_time:1083:8:-1,make_time:1083:8:-1
+row 08:15:23.5,24:00:00,00:01:00,24:00:00,12:30:00
+SELECT 1
+> SELECT make_time(24, 0, 0.5)
+ERROR 22008 time field value out of range: 24:00:0.5
+> SELECT make_time(25, 0, 0)
+ERROR 22008 time field value out of range: 25:00:00
+> SELECT make_time(10, 60, 0)
+ERROR 22008 time field value out of range: 10:60:00
+> SELECT make_time(10, -1, 0)
+ERROR 22008 time field value out of range: 10:-1:00
+> SELECT make_time(10, 5, 60.0000006)
+ERROR 22008 time field value out of range: 10:05:60
+> SELECT make_time(10, 5, -1)
+ERROR 22008 time field value out of range: 10:05:-1
+> SELECT make_time(10, 5, 'NaN')
+ERROR 22008 time field value out of range: 10:05:NaN
+> SELECT make_time(10, 5, 'Infinity')
+ERROR 22008 time field value out of range: 10:05:Infinity
+> SELECT make_time(10, 5, '-Infinity')
+ERROR 22008 time field value out of range: 10:05:-Infinity
+> SELECT make_time(10, 5, 1e20)
+ERROR 22008 time field value out of range: 10:05:1e+20
+> SELECT make_time(-1, 5, 0.25)
+ERROR 22008 time field value out of range: -1:05:0.25
+> SELECT make_timestamp(2024, 2, 29, 13, 45, 56.789012), make_timestamp(-44, 3, 15, 12, 0, 0), make_timestamp(2024, 1, 1, 24, 0, 0), make_timestamp(294276, 12, 31, 23, 59, 59.999999)
+fields make_timestamp:1114:8:-1,make_timestamp:1114:8:-1,make_timestamp:1114:8:-1,make_timestamp:1114:8:-1
+row 2024-02-29 13:45:56.789012,0044-03-15 12:00:00 BC,2024-01-02 00:00:00,294276-12-31 23:59:59.999999
+SELECT 1
+> SELECT make_timestamp(-44, 13, 15, 12, 0, 0)
+ERROR 22008 date field value out of range: -44-13-15
+> SELECT make_timestamp(-2147483648, 1, 1, 0, 0, 0)
+ERROR 22008 date field value out of range: -2147483648-01-01
+> SELECT make_timestamp(294277, 1, 1, 0, 0, 0)
+ERROR 22008 timestamp out of range: 294277-01-01 0:00:00
+> SELECT make_timestamp(5874897, 1, 1, 0, 0, 0)
+ERROR 22008 timestamp out of range: 5874897-01-01 0:00:00
+> SELECT make_timestamp(5874898, 6, 1, 0, 0, 0)
+ERROR 22008 date out of range: 5874898-06-01
+> SELECT make_timestamp(2024, 1, 1, 10, 61, 0)
+ERROR 22008 time field value out of range: 10:61:00
+> SELECT make_timestamp(2024, 1, 1, 10, 6, 7.5)
+fields make_timestamp:1114:8:-1
+row 2024-01-01 10:06:07.5
+SELECT 1
+> SELECT make_timestamp(2024, 1, 1, 30, 6, 7.5)
+ERROR 22008 time field value out of range: 30:06:7.5
+> SELECT make_timestamp(-4713, 11, 23, 0, 0, 0)
+fields make_timestamp:1114:8:-1
+row 4713-11-23 00:00:00 BC
+SELECT 1
+> SELECT make_timestamp(-4713, 11, 24, 0, 0, 0)
+fields make_timestamp:1114:8:-1
+row 4713-11-24 00:00:00 BC
+SELECT 1
+> SET TimeZone TO 'America/New_York'
+SET
+TimeZone=America/New_York
+> SELECT make_timestamptz(2024, 7, 1, 12, 0, 0), make_timestamptz(2024, 1, 1, 12, 0, 0), make_timestamptz(2024, 3, 10, 2, 30, 0), make_timestamptz(2024, 11, 3, 1, 30, 0)
+fields make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1
+row 2024-07-01 12:00:00-04,2024-01-01 12:00:00-05,2024-03-10 03:30:00-04,2024-11-03 01:30:00-05
+SELECT 1
+> SELECT make_timestamptz(2024, 7, 1, 12, 0, 0, 'Europe/London'), make_timestamptz(2024, 7, 1, 12, 0, 0, '+05'), make_timestamptz(2024, 7, 1, 12, 0, 0, '-03:30'), make_timestamptz(2024, 7, 1, 12, 0, 0, 'EST'), make_timestamptz(2024, 7, 1, 12, 0, 0, 'UTC')
+fields make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1
+row 2024-07-01 07:00:00-04,2024-07-01 03:00:00-04,2024-07-01 11:30:00-04,2024-07-01 13:00:00-04,2024-07-01 08:00:00-04
+SELECT 1
+> SELECT make_timestamptz(2012, 7, 1, 12, 0, 0, 'MSK'), make_timestamptz(1950, 7, 1, 12, 0, 0, 'MSK'), make_timestamptz(2024, 7, 1, 12, 0, 0, 'EDT'), make_timestamptz(2024, 7, 1, 12, 0, 0, 'Asia/Kolkata')
+fields make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1,make_timestamptz:1184:8:-1
+row 2012-07-01 04:00:00-04,1950-07-01 05:00:00-04,2024-07-01 12:00:00-04,2024-07-01 02:30:00-04
+SELECT 1
+> SELECT make_timestamptz(2024, 7, 1, 12, 0, 0, '5')
+fields make_timestamptz:1184:8:-1
+ERROR 22023 invalid input syntax for type numeric time zone: "5"
+> SELECT make_timestamptz(2024, 7, 1, 12, 0, 0, 'Mars/Olympus')
+fields make_timestamptz:1184:8:-1
+ERROR 22023 time zone "Mars/Olympus" not recognized
+> SELECT make_timestamptz(2024, 7, 1, 12, 0, 0, '+99')
+fields make_timestamptz:1184:8:-1
+ERROR 22023 numeric time zone "+99" out of range
+> SELECT make_timestamptz(294276, 12, 31, 23, 0, 0, '-05')
+fields make_timestamptz:1184:8:-1
+ERROR 22008 timestamp out of range
+> SELECT make_timestamptz(-4713, 11, 24, 0, 0, 0)
+fields make_timestamptz:1184:8:-1
+row 4713-11-24 00:00:00-04:56:02 BC
+SELECT 1
+> SELECT make_timestamptz(-4713, 11, 24, 0, 0, 0, '+05')
+fields make_timestamptz:1184:8:-1
+row 4713-11-23 14:03:58-04:56:02 BC
+SELECT 1
+> SELECT make_timestamptz(-4713, 11, 24, 0, 0, 0, '-05')
+fields make_timestamptz:1184:8:-1
+row 4713-11-24 00:03:58-04:56:02 BC
+SELECT 1
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT isfinite(date '2024-01-01'), isfinite(date 'infinity'), isfinite(date '-infinity'), isfinite(timestamp '2024-01-01'), isfinite(timestamp 'infinity'), isfinite(timestamptz '-infinity'), isfinite(interval '1 day'), isfinite(interval 'infinity'), isfinite(interval '-infinity')
+fields isfinite:16:1:-1,isfinite:16:1:-1,isfinite:16:1:-1,isfinite:16:1:-1,isfinite:16:1:-1,isfinite:16:1:-1,isfinite:16:1:-1,isfinite:16:1:-1,isfinite:16:1:-1
+row t,f,f,t,f,f,t,f,f
+SELECT 1
+> SET TimeZone TO 'Asia/Kolkata'
+SET
+TimeZone=Asia/Kolkata
+> SELECT time '12:00'::timetz, time '23:59:59.999999'::timetz, time '24:00'::timetz, CAST(time '00:00' AS timetz)
+fields timetz:1266:12:-1,timetz:1266:12:-1,timetz:1266:12:-1,timetz:1266:12:-1
+row 12:00:00+05:30,23:59:59.999999+05:30,24:00:00+05:30,00:00:00+05:30
+SELECT 1
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT to_timestamp(0), to_timestamp(1700000000.123456), to_timestamp(-1e10), to_timestamp('Infinity'), to_timestamp('-Infinity'), to_timestamp(0.0000005), to_timestamp(0.0000015)
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 1970-01-01 00:00:00+00,2023-11-14 22:13:20.123456+00,1653-02-10 06:13:20+00,infinity,-infinity,1970-01-01 00:00:00+00,1970-01-01 00:00:00.000002+00
+SELECT 1
+> SELECT to_timestamp('NaN')
+ERROR 22008 timestamp cannot be NaN
+> SELECT to_timestamp(1e20)
+ERROR 22008 timestamp out of range: "1e+20"
+> SELECT to_timestamp(-210866803200)
+fields to_timestamp:1184:8:-1
+row 4714-11-24 00:00:00+00 BC
+SELECT 1
+> SELECT to_timestamp(-210866803200.0000001)
+fields to_timestamp:1184:8:-1
+row 4714-11-24 00:00:00+00 BC
+SELECT 1
+> SELECT to_timestamp(9224318016000)
+ERROR 22008 timestamp out of range: "9.22432e+12"
+> SELECT to_timestamp(9224318015999.9999999)
+ERROR 22008 timestamp out of range: "9.22432e+12"
+> SELECT length(timeofday()) > 30, abs(extract(epoch FROM timeofday()::timestamptz - clock_timestamp())) < 60
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT * FROM generate_series(timestamp '2024-01-29', timestamp '2024-06-01', interval '1 month')
+fields generate_series:1114:8:-1
+row 2024-01-29 00:00:00
+row 2024-02-29 00:00:00
+row 2024-03-29 00:00:00
+row 2024-04-29 00:00:00
+row 2024-05-29 00:00:00
+SELECT 5
+> SELECT * FROM generate_series(timestamp '2024-01-01 00:00', timestamp '2024-01-01 03:00', interval '50 minutes')
+fields generate_series:1114:8:-1
+row 2024-01-01 00:00:00
+row 2024-01-01 00:50:00
+row 2024-01-01 01:40:00
+row 2024-01-01 02:30:00
+SELECT 4
+> SELECT * FROM generate_series(timestamp '2024-01-03', timestamp '2024-01-01', interval '-1 day')
+fields generate_series:1114:8:-1
+row 2024-01-03 00:00:00
+row 2024-01-02 00:00:00
+row 2024-01-01 00:00:00
+SELECT 3
+> SELECT * FROM generate_series(timestamp '2024-01-03', timestamp '2024-01-01', interval '1 day')
+fields generate_series:1114:8:-1
+SELECT 0
+> SELECT generate_series(timestamp '2024-01-01', timestamp '2024-01-02', interval '1 month -30 days')
+fields generate_series:1114:8:-1
+ERROR 22023 step size cannot equal zero
+> SELECT * FROM generate_series(timestamp '2024-01-01', timestamp '2024-01-02', interval '0 days')
+fields generate_series:1114:8:-1
+ERROR 22023 step size cannot equal zero
+> SELECT * FROM generate_series(timestamp '2024-01-01', timestamp '2024-01-02', interval 'infinity')
+fields generate_series:1114:8:-1
+ERROR 22023 step size cannot be infinite
+> SELECT * FROM generate_series(timestamp '2024-01-01', timestamp '2024-01-02', interval '-infinity')
+fields generate_series:1114:8:-1
+ERROR 22023 step size cannot be infinite
+> SELECT * FROM generate_series(timestamp '294276-12-29', timestamp 'infinity', interval '1 day')
+fields generate_series:1114:8:-1
+ERROR 22008 timestamp out of range
+> SELECT count(*) FROM generate_series(timestamp '294276-12-29', timestamp '294276-12-31', interval '1 day')
+fields count:20:8:-1
+ERROR 22008 timestamp out of range
+> SET TimeZone TO 'America/New_York'
+SET
+TimeZone=America/New_York
+> SELECT * FROM generate_series(timestamptz '2024-03-09 12:00', timestamptz '2024-03-12 12:00', interval '1 day')
+fields generate_series:1184:8:-1
+row 2024-03-09 12:00:00-05
+row 2024-03-10 12:00:00-04
+row 2024-03-11 12:00:00-04
+row 2024-03-12 12:00:00-04
+SELECT 4
+> SELECT * FROM generate_series(timestamptz '2024-03-09 12:00', timestamptz '2024-03-12 12:00', interval '1 day', 'UTC')
+fields generate_series:1184:8:-1
+row 2024-03-09 12:00:00-05
+row 2024-03-10 13:00:00-04
+row 2024-03-11 13:00:00-04
+SELECT 3
+> SELECT * FROM generate_series(timestamptz '2024-03-09 12:00', timestamptz '2024-03-12 12:00', interval '1 day', 'Europe/Paris')
+fields generate_series:1184:8:-1
+row 2024-03-09 12:00:00-05
+row 2024-03-10 13:00:00-04
+row 2024-03-11 13:00:00-04
+SELECT 3
+> SELECT * FROM generate_series(timestamptz '2024-11-02 00:00', timestamptz '2024-11-04 00:00', interval '12 hours')
+fields generate_series:1184:8:-1
+row 2024-11-02 00:00:00-04
+row 2024-11-02 12:00:00-04
+row 2024-11-03 00:00:00-04
+row 2024-11-03 11:00:00-05
+row 2024-11-03 23:00:00-05
+SELECT 5
+> SELECT * FROM generate_series(timestamptz '2024-01-31', timestamptz '2024-05-01', interval '1 month')
+fields generate_series:1184:8:-1
+row 2024-01-31 00:00:00-05
+row 2024-02-29 00:00:00-05
+row 2024-03-29 00:00:00-04
+row 2024-04-29 00:00:00-04
+SELECT 4
+> SELECT * FROM generate_series(timestamptz '2024-01-01', timestamptz '2024-01-02', interval '1 day', 'Mars/Olympus')
+fields generate_series:1184:8:-1
+ERROR 22023 time zone "Mars/Olympus" not recognized
+> SELECT * FROM generate_series(timestamptz '2024-01-01', timestamptz '2024-01-02', interval '0 days', 'UTC')
+fields generate_series:1184:8:-1
+ERROR 22023 step size cannot equal zero
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT * FROM generate_series(1.5, 4)
+fields generate_series:1700:-1:-1
+row 1.5
+row 2.5
+row 3.5
+SELECT 3
+> SELECT * FROM generate_series(1, 2, 0.25)
+fields generate_series:1700:-1:-1
+row 1
+row 1.25
+row 1.50
+row 1.75
+row 2.00
+SELECT 5
+> SELECT * FROM generate_series(0.1, -0.35, -0.1)
+fields generate_series:1700:-1:-1
+row 0.1
+row 0.0
+row -0.1
+row -0.2
+row -0.3
+SELECT 5
+> SELECT * FROM generate_series(1.000, 1.0001, 0.00002)
+fields generate_series:1700:-1:-1
+row 1.000
+row 1.00002
+row 1.00004
+row 1.00006
+row 1.00008
+row 1.00010
+SELECT 6
+> SELECT * FROM generate_series(5::numeric, 1)
+fields generate_series:1700:-1:-1
+SELECT 0
+> SELECT generate_series(-1::numeric, 1::numeric)
+fields generate_series:1700:-1:-1
+row -1
+row 0
+row 1
+SELECT 3
+> SELECT * FROM generate_series('NaN'::numeric, 1)
+fields generate_series:1700:-1:-1
+ERROR 22023 start value cannot be NaN
+> SELECT * FROM generate_series('Infinity'::numeric, 1)
+fields generate_series:1700:-1:-1
+ERROR 22023 start value cannot be infinity
+> SELECT * FROM generate_series(1, 'NaN'::numeric)
+fields generate_series:1700:-1:-1
+ERROR 22023 stop value cannot be NaN
+> SELECT * FROM generate_series(1, '-Infinity'::numeric)
+fields generate_series:1700:-1:-1
+ERROR 22023 stop value cannot be infinity
+> SELECT * FROM generate_series(1, 2, 'NaN'::numeric)
+fields generate_series:1700:-1:-1
+ERROR 22023 step size cannot be NaN
+> SELECT * FROM generate_series(1, 2, 'Infinity'::numeric)
+fields generate_series:1700:-1:-1
+ERROR 22023 step size cannot be infinity
+> SELECT * FROM generate_series(1, 2, 0::numeric)
+fields generate_series:1700:-1:-1
+ERROR 22023 step size cannot equal zero
+> SELECT * FROM generate_series(1, 2, 0.000::numeric)
+fields generate_series:1700:-1:-1
+ERROR 22023 step size cannot equal zero
+> SELECT * FROM generate_series('NaN'::numeric, 'NaN'::numeric, 0::numeric)
+fields generate_series:1700:-1:-1
+ERROR 22023 start value cannot be NaN
