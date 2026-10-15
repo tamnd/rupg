@@ -70,6 +70,7 @@ mod network;
 mod number;
 mod numeric;
 pub mod numeric_layout;
+pub mod prng;
 mod range;
 mod reg;
 mod scalar;

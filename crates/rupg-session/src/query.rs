@@ -12,9 +12,10 @@ use rupg_analyze::{Env, Params};
 use rupg_catalog::{Catalog, SequenceData};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
-use rupg_func::{AdvisoryLock, Backend, Client, Sequences};
+use rupg_func::{AdvisoryLock, Backend, Client, Randomness, Sequences};
 use rupg_pgcatalog::builtin;
-use rupg_platform::Clock;
+use rupg_platform::os::OsEntropy;
+use rupg_platform::{Clock, Entropy};
 use rupg_sql::nodes::Node;
 use rupg_types::{
     Array, ByteaOutput, DateFormat, DateOrder, DateStyle, IntervalStyle, Recv, TimeZone, Value,
@@ -110,6 +111,8 @@ pub(crate) struct Reader<'a> {
     cancel: Option<&'a AtomicBool>,
     /// The cache of the sequences of the session, or `None` for a reader that is not a session.
     sequences: Option<&'a RefCell<Sequences>>,
+    /// The state of `random` and `uuidv7` of the session, or `None` for a reader that is not a session.
+    randomness: Option<&'a RefCell<Randomness>>,
     /// The warnings of the functions that the statement called, such as the input function of `aclitem`. The session sends them before the result.
     warnings: RefCell<Vec<Error>>,
 }
@@ -144,6 +147,7 @@ impl<'a> Reader<'a> {
             portals: None,
             cancel: None,
             sequences: None,
+            randomness: None,
             warnings: RefCell::new(Vec::new()),
         }
     }
@@ -162,6 +166,12 @@ impl<'a> Reader<'a> {
     /// The reader of a session with a cache of sequences.
     pub(crate) fn with_sequences(mut self, sequences: &'a RefCell<Sequences>) -> Reader<'a> {
         self.sequences = Some(sequences);
+        self
+    }
+
+    /// The reader of a session with a state of `random`.
+    pub(crate) fn with_randomness(mut self, randomness: &'a RefCell<Randomness>) -> Reader<'a> {
+        self.randomness = Some(randomness);
         self
     }
 
@@ -400,6 +410,14 @@ impl rupg_func::Session for Reader<'_> {
 
     fn local_sequences(&self) -> Option<&RefCell<Sequences>> {
         self.sequences
+    }
+
+    fn randomness(&self) -> Option<&RefCell<Randomness>> {
+        self.randomness
+    }
+
+    fn strong_random(&self, buf: &mut [u8]) {
+        OsEntropy.fill(buf);
     }
 
     fn date_format(&self) -> DateFormat {

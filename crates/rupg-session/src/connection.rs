@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rupg_analyze::{Message, Params};
 use rupg_catalog::{Catalog, database};
 use rupg_common::{Error, SqlState};
-use rupg_func::{BackendState, Sequences};
+use rupg_func::{BackendState, Randomness, Sequences};
 pub use rupg_func::{Client, Ssl};
 use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
@@ -313,6 +313,8 @@ pub struct Connection {
     activity: Activity,
     /// The cache of the sequences of the session, with the state of `currval` and `lastval`.
     sequences: RefCell<Sequences>,
+    /// The state of `random` and `uuidv7`, which lasts as long as the session.
+    randomness: RefCell<Randomness>,
     /// The `COPY ... FROM STDIN` that reads its data.
     copy_in: Option<copy_from::CopyIn>,
 }
@@ -346,6 +348,7 @@ impl Connection {
             lease: None,
             activity: Activity::default(),
             sequences: RefCell::new(Sequences::default()),
+            randomness: RefCell::new(Randomness::default()),
             copy_in: None,
         };
         connection.session.set_utf8(connection.utf8());
@@ -382,6 +385,7 @@ impl Connection {
         )
         .with_activity(&self.activity, &self.store)
         .with_sequences(&self.sequences)
+        .with_randomness(&self.randomness)
         .with_statements(&self.statements)
         .with_portals(&self.portals)
         .with_cancel(&self.cancel)
@@ -2081,6 +2085,12 @@ mod tests {
     #[test]
     fn datetime_compare() {
         big_stack(|| script(include_str!("connection/datetime_compare.test")));
+    }
+
+    /// `setseed` and `random` of each type, `random_normal`, `gen_random_uuid`, `uuidv7`, `uuid_extract_version`, `uuid_extract_timestamp` and the casts between `uuid` and `bytea`. The numbers after `setseed` are those of PostgreSQL. `connection/random.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn random() {
+        big_stack(|| script(include_str!("connection/random.test")));
     }
 
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.

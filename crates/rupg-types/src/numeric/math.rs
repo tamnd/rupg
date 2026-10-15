@@ -6,6 +6,7 @@ use rupg_common::SqlState;
 
 use super::{DEC_DIGITS, MIN_SIG_DIGITS, NBASE, Numeric, NumericSign, Var, overflow};
 use crate::error::TypeError;
+use crate::prng::Prng;
 
 /// `NBASE * NBASE`: the base of the digit pairs of `mul_var` and `div_var`.
 const NBASE_SQR: i64 = 100_000_000;
@@ -899,6 +900,93 @@ impl Numeric {
         i32::try_from(bucket).map_err(|_| {
             TypeError::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "integer out of range".to_string())
         })
+    }
+}
+
+fn parameter_error(message: &str) -> TypeError {
+    TypeError::new(SqlState::INVALID_PARAMETER_VALUE, message.to_string())
+}
+
+impl Numeric {
+    /// `random_numeric`: a value from `rmin` to `rmax` with the larger of the two display scales, from the generator `prng`.
+    pub fn random(prng: &mut Prng, rmin: &Numeric, rmax: &Numeric) -> Result<Numeric, TypeError> {
+        for (bound, name) in [(rmin, "lower"), (rmax, "upper")] {
+            match bound.sign {
+                NumericSign::NaN => {
+                    return Err(parameter_error(&format!("{name} bound cannot be NaN")));
+                }
+                NumericSign::Infinity | NumericSign::NegativeInfinity => {
+                    return Err(parameter_error(&format!("{name} bound cannot be infinity")));
+                }
+                _ => {}
+            }
+        }
+        random_var(prng, &rmin.var(), &rmax.var())?.make()
+    }
+}
+
+/// `random_var`: a random value from `rmin` to `rmax`. It takes a value from 0 to `rmax - rmin` and adds `rmin`.
+#[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_possible_wrap)]
+fn random_var(prng: &mut Prng, rmin: &Var, rmax: &Var) -> Result<Var, TypeError> {
+    let rscale = rmin.dscale.max(rmax.dscale);
+    let rlen = rmax.sub(rmin);
+    if !rlen.is_zero() && rlen.sign == NumericSign::Negative {
+        return Err(parameter_error("lower bound must be less than or equal to upper bound"));
+    }
+    if rlen.is_zero() {
+        let mut result = rmin.clone();
+        result.dscale = rscale;
+        return Ok(result);
+    }
+    let frac_ndigits = ((rscale + DEC_DIGITS - 1) / DEC_DIGITS) as usize;
+    let res_ndigits = (rlen.weight + 1 + frac_ndigits as i64) as usize;
+    // The last digit is a multiple of `pow10` to give the scale `rscale`.
+    let pow10 = 10u64.pow((frac_ndigits as i64 * DEC_DIGITS - rscale) as u32);
+    let nbase = NBASE as u64;
+    // The first four digits of `rlen`. The range from 0 to `rlen64` followed by nines is a little larger than the range from 0 to `rlen`, and a value above `rlen` is taken again.
+    let mut rlen64 = rlen.digits[0] as u64;
+    let mut rlen64_ndigits = 1;
+    while rlen64_ndigits < res_ndigits && rlen64_ndigits < 4 {
+        rlen64 *= nbase;
+        if let Some(&d) = rlen.digits.get(rlen64_ndigits) {
+            rlen64 += d as u64;
+        }
+        rlen64_ndigits += 1;
+    }
+    let whole_ndigits = if pow10 == 1 { res_ndigits } else { res_ndigits - 1 };
+    loop {
+        let mut digits = vec![0i32; res_ndigits];
+        let mut rand = if rlen64_ndigits == res_ndigits && pow10 != 1 {
+            prng.uint64_range(0, rlen64 / pow10) * pow10
+        } else {
+            prng.uint64_range(0, rlen64)
+        };
+        for d in digits[..rlen64_ndigits].iter_mut().rev() {
+            *d = (rand % nbase) as i32;
+            rand /= nbase;
+        }
+        let mut i = rlen64_ndigits;
+        while i + 3 < whole_ndigits {
+            let mut rand = prng.uint64_range(0, nbase * nbase * nbase * nbase - 1);
+            for d in &mut digits[i..i + 4] {
+                *d = (rand % nbase) as i32;
+                rand /= nbase;
+            }
+            i += 4;
+        }
+        while i < whole_ndigits {
+            digits[i] = prng.uint64_range(0, nbase - 1) as i32;
+            i += 1;
+        }
+        if i < res_ndigits {
+            digits[i] = (prng.uint64_range(0, nbase / pow10 - 1) * pow10) as i32;
+        }
+        let mut result =
+            Var { sign: NumericSign::Positive, weight: rlen.weight, dscale: rscale, digits };
+        result.strip();
+        if result.cmp(&rlen) != Ordering::Greater {
+            return Ok(result.add(rmin));
+        }
     }
 }
 
