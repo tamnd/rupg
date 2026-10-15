@@ -2171,6 +2171,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/to_timestamp.test")));
     }
 
+    /// `to_char` of `int2`, `int4`, `int8`, `float4`, `float8` and `numeric`, and `to_number`: each number pattern of `formatting.c`, the `FM` mode, the signs of `S`, `MI`, `PL`, `SG` and `PR`, the Roman numerals, `EEEE`, `V`, the ordinal suffixes, the overflows, `NaN` and the infinities, the quoted text, and the errors of the format and of the input. `connection/to_number.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn to_number() {
+        big_stack(|| script(include_str!("connection/to_number.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

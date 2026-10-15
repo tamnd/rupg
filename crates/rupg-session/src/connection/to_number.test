@@ -1,0 +1,407 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT to_char(v, '9999') AS a, to_char(v, 'FM9999') AS b, to_char(v, '0000') AS c, to_char(v, 'S9999') AS d, to_char(v, '9999MI') AS e, to_char(v, 'PL9999') AS f, to_char(v, 'SG9999') AS g, to_char(v, '9999PR') AS h FROM (VALUES (0), (5), (-5), (123), (-123), (9999), (-9999), (12345)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1,f:25:-1:-1,g:25:-1:-1,h:25:-1:-1
+row     0,0, 0000,   +0,   0 ,+    0,+   0,    0 
+row     5,5, 0005,   +5,   5 ,+    5,+   5,    5 
+row    -5,-5,-0005,   -5,   5-,    -5,-   5,   <5>
+row   123,123, 0123, +123, 123 ,+  123,+ 123,  123 
+row  -123,-123,-0123, -123, 123-,  -123,- 123, <123>
+row  9999,9999, 9999,+9999,9999 ,+ 9999,+9999, 9999 
+row -9999,-9999,-9999,-9999,9999-, -9999,-9999,<9999>
+row  ####,####, ####,+####,#### ,+ ####,+####, #### 
+SELECT 8
+> SELECT to_char(v, '9,999.99') AS a, to_char(v, 'FM9,999.99') AS b, to_char(v, '9G999D99') AS c, to_char(v, '0,000.00') AS d, to_char(v, 'FM0,000.00') AS e, to_char(v, '9999.9') AS f FROM (VALUES (0::numeric), (0.5), (-0.5), (1.005), (12.345), (-1234.567), (9999.995), (123456)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1,f:25:-1:-1
+row       .00,0.,      .00, 0,000.00,0,000.00,     .0
+row       .50,.5,      .50, 0,000.50,0,000.50,     .5
+row      -.50,-.5,     -.50,-0,000.50,-0,000.50,    -.5
+row      1.01,1.01,     1.01, 0,001.01,0,001.01,    1.0
+row     12.35,12.35,    12.35, 0,012.35,0,012.35,   12.3
+row -1,234.57,-1,234.57,-1,234.57,-1,234.57,-1,234.57,-1234.6
+row  #,###.##,#,###.##, #,###.##, #,###.##,#,###.##, ####.#
+row  #,###.##,#,###.##, #,###.##, #,###.##,#,###.##, ####.#
+SELECT 8
+> SELECT to_char(v, '999.999') AS a, to_char(v, 'FM999.999') AS b, to_char(v, 'FM999.990') AS c, to_char(v, 'FM990.009') AS d, to_char(v, '.999') AS e, to_char(v, 'FM.999') AS f, to_char(v, '9.') AS g, to_char(v, 'FM9.') AS h FROM (VALUES (0::numeric), (0.1), (1.5), (12.05), (-0.25), (100)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1,f:25:-1:-1,g:25:-1:-1,h:25:-1:-1
+row     .000,0.,.000,0.00, .###,.###, 0,0
+row     .100,.1,.100,0.10, .###,.###, 0,0
+row    1.500,1.5,1.500,1.50, .###,.###, 2,2
+row   12.050,12.05,12.050,12.05, .###,.###, #.,#.
+row    -.250,-.25,-.250,-0.25,-.###,-.###, 0,0
+row  100.000,100.,100.000,100.00, .###,.###, #.,#.
+SELECT 6
+> SELECT to_char(v, 'S9999.99') AS a, to_char(v, '9999.99S') AS b, to_char(v, 'FMS9999.99') AS c, to_char(v, 'FM9999.99S') AS d, to_char(v, '99S99') AS e, to_char(v, 'FM9999.99PR') AS f, to_char(v, '9999.99PR') AS g FROM (VALUES (1.5::numeric), (-1.5), (0), (-1234.5)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1,f:25:-1:-1,g:25:-1:-1
+row    +1.50,   1.50+,+1.5,1.5+,   +2,1.5,    1.50 
+row    -1.50,   1.50-,-1.5,1.5-,   -2,<1.5>,   <1.50>
+row     +.00,    .00+,+0.,0.+,   +0,0.,     .00 
+row -1234.50,1234.50-,-1234.5,1234.5-,-1235,<1234.5>,<1234.50>
+SELECT 4
+> SELECT to_char(v, 'MI9999.99') AS a, to_char(v, 'FMMI9999.99') AS b, to_char(v, '9999.99MI') AS c, to_char(v, 'PL9999.99') AS d, to_char(v, 'FMPL9999.99') AS e, to_char(v, 'SG9999.99') AS f, to_char(v, 'FMSG9999.99') AS g FROM (VALUES (12.5::numeric), (-12.5), (0)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1,f:25:-1:-1,g:25:-1:-1
+row    12.50,12.5,  12.50 ,+   12.50,+12.5,+  12.50,+12.5
+row -  12.50,-12.5,  12.50-,   -12.50,-12.5,-  12.50,-12.5
+row      .00,0.,    .00 ,+     .00,+0.,+    .00,+0.
+SELECT 3
+> SELECT to_char(v, 'RN') AS a, to_char(v, 'rn') AS b, to_char(v, 'FMRN') AS c, to_char(v, 'FMrn') AS d FROM (VALUES (1), (4), (9), (14), (40), (90), (400), (1994), (2026), (3888), (3999), (0), (4000), (-5)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1
+row               I,              i,I,i
+row              IV,             iv,IV,iv
+row              IX,             ix,IX,ix
+row             XIV,            xiv,XIV,xiv
+row              XL,             xl,XL,xl
+row              XC,             xc,XC,xc
+row              CD,             cd,CD,cd
+row         MCMXCIV,        mcmxciv,MCMXCIV,mcmxciv
+row          MMXXVI,         mmxxvi,MMXXVI,mmxxvi
+row MMMDCCCLXXXVIII,mmmdccclxxxviii,MMMDCCCLXXXVIII,mmmdccclxxxviii
+row       MMMCMXCIX,      mmmcmxcix,MMMCMXCIX,mmmcmxcix
+row ###############,###############,###############,###############
+row ###############,###############,###############,###############
+row ###############,###############,###############,###############
+SELECT 14
+> SELECT to_char(v, '999th') AS a, to_char(v, 'FM999TH') AS b, to_char(v, 'FM999th') AS c FROM (VALUES (1), (2), (3), (4), (11), (12), (13), (21), (22), (23), (101), (111), (-1), (1000)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1
+row    1st,1ST,1st
+row    2nd,2ND,2nd
+row    3rd,3RD,3rd
+row    4th,4TH,4th
+row   11th,11TH,11th
+row   12th,12TH,12th
+row   13th,13TH,13th
+row   21st,21ST,21st
+row   22nd,22ND,22nd
+row   23rd,23RD,23rd
+row  101st,101ST,101st
+row  111th,111TH,111th
+row   -1,-1,-1
+row  ###,###,###
+SELECT 14
+> SELECT to_char(v, '9.99EEEE') AS a, to_char(v, '9.9999EEEE') AS b, to_char(v, '9EEEE') AS c, to_char(v, '.99EEEE') AS d FROM (VALUES (0::numeric), (1), (-1), (123.456), (0.000123456), (9.996), (-99999999999999999999), (1e100)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1
+row  0.00e+00, 0.0000e+00, 0e+00, 0.00e+00
+row  1.00e+00, 1.0000e+00, 1e+00, 1.00e+00
+row -1.00e+00,-1.0000e+00,-1e+00,-1.00e+00
+row  1.23e+02, 1.2346e+02, 1e+02, 1.23e+02
+row  1.23e-04, 1.2346e-04, 1e-04, 1.23e-04
+row  10.00e+00, 9.9960e+00, 10e+00, 10.00e+00
+row -10.00e+19,-10.0000e+19,-10e+19,-10.00e+19
+row  1.00e+100, 1.0000e+100, 1e+100, 1.00e+100
+SELECT 8
+> SELECT to_char(v, '9.99EEEE') AS a, to_char(v, '9.99eeee') AS b FROM (VALUES (0::float8), (1.5), (-1234.5678), (1e-300), (1.7976931348623157e308), ('NaN'), ('Infinity'), ('-Infinity')) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1
+row  0.00e+00, 0.00e+00
+row  1.50e+00, 1.50e+00
+row -1.23e+03,-1.23e+03
+row  1.00e-300, 1.00e-300
+row  1.80e+308, 1.80e+308
+row  #.######, #.######
+row  #.######, #.######
+row  #.######, #.######
+SELECT 8
+> SELECT to_char(v, '9.99EEEE') AS a, to_char(v, '9999') AS b, to_char(v, '9999.9999') AS c FROM (VALUES (0::float4), (1.5), (-1234.5678), (1e-30), ('NaN'), ('Infinity'), ('-Infinity')) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1
+row  0.00e+00,    0,     .0000
+row  1.50e+00,    2,    1.5000
+row -1.23e+03,-1235,-1234.57
+row  1.00e-30,    0,     .0000
+row  #.######,  NaN,  NaN
+row  #.######, ####, ####.
+row  #.######,-####,-####.
+SELECT 7
+> SELECT to_char(v, '9999') AS a, to_char(v, '9999.99') AS b, to_char(v, 'FM9999.99') AS c, to_char(v, '9.99999999999999999') AS d, to_char(v, '999999999999999999999.99') AS e FROM (VALUES (0::float8), (0.5), (1.5), (2.5), (-0.4), (123.456), (1234567.891), (0.1), (1e20), ('NaN'), ('Infinity'), ('-Infinity')) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1
+row     0,     .00,0.,  .00000000000000,                      .00
+row     0,     .50,.5,  .50000000000000,                      .50
+row     2,    1.50,1.5, 1.50000000000000,                     1.50
+row     2,    2.50,2.5, 2.50000000000000,                     2.50
+row    -0,    -.40,-.4, -.40000000000000,                     -.40
+row   123,  123.46,123.46, #.############,                   123.46
+row  ####, ####.##,####.##, #.########,               1234567.89
+row     0,     .10,.1,  .10000000000000,                      .10
+row  ####, ####.,####., #., 100000000000000000000
+row   NaN,  NaN,NaN, #.############,                   NaN
+row  ####, ####.##,####.##, #.#######,              Infinity
+row -####,-####.##,-####.##,-#.#######,             -Infinity
+SELECT 12
+> SELECT to_char(v, '9999') AS a, to_char(v, '9999.99') AS b, to_char(v, '9.99999999') AS c, to_char(v, 'FM99999999.99') AS d FROM (VALUES (0::float4), (0.5), (1.5), (2.5), (123.456), (1234567.891), (0.1)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1
+row     0,     .00,  .00000,0.
+row     0,     .50,  .50000,.5
+row     2,    1.50, 1.50000,1.5
+row     2,    2.50, 2.50000,2.5
+row   123,  123.46, #.###,123.46
+row  ####, ####., #.,1234568
+row     0,     .10,  .10000,.1
+SELECT 7
+> SELECT to_char(v, '9999V99') AS a, to_char(v, '99V9') AS b, to_char(v, 'FM9V999') AS c FROM (VALUES (0), (1), (12), (-12), (123)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1
+row       0,   0,0
+row     100,  10,1000
+row    1200, 120,####
+row   -1200,-120,-####
+row   12300, ###,####
+SELECT 5
+> SELECT to_char(12.345::numeric, '99V999') AS a, to_char(12.345::float8, '99V999') AS b, to_char(12.345::float4, '99V999') AS c, to_char(12::int8, '99V999') AS d, to_char(-12.3456::numeric, '99V99') AS e
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1
+row  12345, 12345, 12345, 12000,-1235
+SELECT 1
+> SELECT to_char(v, '9999') AS a, to_char(v, 'FM9,999,999,999,999,999,999') AS b, to_char(v, '9.99EEEE') AS c, to_char(v, 'RN') AS d FROM (VALUES (0::int8), (1234), (-9223372036854775808), (9223372036854775807)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1
+row     0,0, 0.00e+00,###############
+row  1234,1,234, 1.23e+03,       MCCXXXIV
+row -####,-9,223,372,036,854,775,808,-9.22e+18,###############
+row  ####,9,223,372,036,854,775,807, 9.22e+18,###############
+SELECT 4
+> SELECT to_char(v::int2, '999') AS a, to_char(v::int2, 'FMRN') AS b FROM (VALUES (12), (-7)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1
+row   12,XII
+row   -7,###############
+SELECT 2
+> SELECT to_char(1234, '"Total: "9999') AS a, to_char(1234, '9999" units"') AS b, to_char(1234, 'L9999') AS c, to_char(1234, '9 9 9 9') AS d, to_char(1234, '9x9y9z9') AS e, to_char(1234, 'B9999') AS f, to_char(1234, '9999C') AS g, to_char(1234, 'SP9999') AS h
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1,f:25:-1:-1,g:25:-1:-1,h:25:-1:-1
+row Total:  1234, 1234 units,  1234, 1 2 3 4, 1x2y3z4, 1234, 1234, 1234
+SELECT 1
+> SELECT to_char(1234, '"a\"b"9999') AS a, to_char(1234, '\"9999') AS b, to_char(1234, 'é9999ü') AS c, to_char(1234, '') AS d, to_char(1234, 'abc') AS e, to_char(1234, 'Fm9999') AS f
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1,f:25:-1:-1
+row a"b 1234," 1234,é 1234ü,,a,Fm 1234
+SELECT 1
+> SELECT to_char(v, '0099') AS a, to_char(v, '9909') AS b, to_char(v, '9990.99') AS c, to_char(v, 'FM0.00') AS d, to_char(v, 'FM9990.0099') AS e, to_char(v, '0.9') AS f FROM (VALUES (0::numeric), (1), (0.5), (12.3), (-1.25)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1,f:25:-1:-1
+row  0000,   00,    0.00,0.00,0.00, 0.0
+row  0001,   01,    1.00,1.00,1.00, 1.0
+row  0001,   01,    0.50,0.50,0.50, 0.5
+row  0012,   12,   12.30,#.##,12.30, #.#
+row -0001,  -01,   -1.25,-1.25,-1.25,-1.3
+SELECT 5
+> SELECT to_char(v, '999') AS a, to_char(v, 'FM999.99') AS b, to_char(v, '99.9') AS c FROM (VALUES ('NaN'::numeric), ('Infinity'), ('-Infinity')) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1
+row  NaN,NaN, ##.#
+row  ###,###.##, ##.#
+row -###,-###.##,-##.#
+SELECT 3
+> SELECT to_char(v, '99.99') AS a, to_char(v, 'FM99.99') AS b, to_char(v, '99') AS c FROM (VALUES (99.995::numeric), (-99.995), (999), (0.001)) AS t(v)
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1
+row  ##.##,##.##, ##
+row -##.##,-##.##,-##
+row  ##.##,##.##, ##
+row    .00,0.,  0
+SELECT 4
+> SELECT to_char(123.456::numeric, '999.999999999') AS a, to_char(123.456::numeric, 'FM999.999999999') AS b, to_char(123.456::numeric, 'FM999.000999') AS c, to_char(1.5::numeric, '9.9MI') AS d, to_char(-1.5::numeric, '9.9MI') AS e
+fields a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1,e:25:-1:-1
+row  123.456000000,123.456,123.456,1.5 ,1.5-
+SELECT 1
+> SELECT to_char(1, '9.9.9')
+fields to_char:25:-1:-1
+ERROR 42601 multiple decimal points
+> SELECT to_char(1, '9PR9')
+fields to_char:25:-1:-1
+ERROR 42601 "9" must be ahead of "PR"
+> SELECT to_char(1, '0PR')
+fields to_char:25:-1:-1
+row  1 
+SELECT 1
+> SELECT to_char(1, '0PR0')
+fields to_char:25:-1:-1
+ERROR 42601 "0" must be ahead of "PR"
+> SELECT to_char(1, 'S9S')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "S" twice
+> SELECT to_char(1, 'S9PL')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "S" and "PL" together
+> SELECT to_char(1, 'MI9S')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "S" and "PL"/"MI"/"SG"/"PR" together
+> SELECT to_char(1, 'PL9S')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "S" and "PL"/"MI"/"SG"/"PR" together
+> SELECT to_char(1, 'SG9S')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "S" and "PL"/"MI"/"SG"/"PR" together
+> SELECT to_char(1, 'PR9S')
+fields to_char:25:-1:-1
+ERROR 42601 "9" must be ahead of "PR"
+> SELECT to_char(1, 'S9PR')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "PR" and "S"/"PL"/"MI"/"SG" together
+> SELECT to_char(1, 'RNRN')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "RN" twice
+> SELECT to_char(1, '9RN')
+fields to_char:25:-1:-1
+row               I
+SELECT 1
+> SELECT to_char(1, 'RN9')
+fields to_char:25:-1:-1
+row               I
+SELECT 1
+> SELECT to_char(1, 'RN.')
+fields to_char:25:-1:-1
+ERROR 42601 "RN" is incompatible with other formats
+> SELECT to_char(1, '9V9.9')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "V" and decimal point together
+> SELECT to_char(1, '9.9V9')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "V" and decimal point together
+> SELECT to_char(1, '9.9EEEE9')
+fields to_char:25:-1:-1
+ERROR 42601 "EEEE" must be the last pattern used
+> SELECT to_char(1, '9.9EEEEEEEE')
+fields to_char:25:-1:-1
+ERROR 42601 cannot use "EEEE" twice
+> SELECT to_char(1, 'FM9.9EEEE')
+fields to_char:25:-1:-1
+ERROR 42601 "EEEE" is incompatible with other formats
+> SELECT to_char(1, 'S9.9EEEE')
+fields to_char:25:-1:-1
+ERROR 42601 "EEEE" is incompatible with other formats
+> SELECT to_char(1, 'RNEEEE')
+fields to_char:25:-1:-1
+ERROR 42601 "EEEE" is incompatible with other formats
+> SELECT to_char(1, '"x"9.99EEEE"y"')
+fields to_char:25:-1:-1
+row  1.00e+00
+SELECT 1
+> SELECT to_char(1, '9V99999999999')
+fields to_char:25:-1:-1
+ERROR 22003 integer out of range
+> SELECT to_char(123456789::int8, '9V99999999999')
+fields to_char:25:-1:-1
+ERROR 22003 bigint out of range
+> SELECT to_char(12::int8, '9V9999999999999999999')
+fields to_char:25:-1:-1
+ERROR 22003 bigint out of range
+> SELECT to_char(1.5::numeric, '9th')
+fields to_char:25:-1:-1
+row  2nd
+SELECT 1
+> SELECT to_char('NaN'::numeric, '999th')
+fields to_char:25:-1:-1
+ERROR 22P02 "NaN" is not a number
+> SELECT to_number(v, '9999') AS a, to_number(v, '9999.99') AS b, to_number(v, 'FM9999.99') AS c, to_number(v, 'S9999.99') AS d FROM (VALUES ('123'), ('-123'), ('+123'), ('12.34'), ('-12.345'), (' 12'), ('1234.5'), ('12-'), ('.5')) AS t(v)
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1,d:1700:-1:-1
+row 123,123,123,123
+row -123,-123,-123,-123
+row 123,123,123,123
+row 123,12.34,12.34,12.34
+row -123,-12.34,-12.34,-12.34
+row 12,12,12,12
+row 1234,1234.5,1234.5,1234.5
+row 12,12,12,-12
+row 5,0.5,0.5,0.5
+SELECT 9
+> SELECT to_number(v, '9,999.99') AS a, to_number(v, 'FM9,999.99') AS b, to_number(v, '9G999D99') AS c FROM (VALUES ('1,234.56'), ('1234.56'), ('  1,234.5'), ('-1,234.56')) AS t(v)
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1
+row 1234.56,1234.5,1234.56
+row 1234.56,1234.56,1234.56
+row 1234,1234,1234
+row -1234.56,-1234.5,-1234.56
+SELECT 4
+> SELECT to_number(v, '9999MI') AS a, to_number(v, 'MI9999') AS b, to_number(v, '9999PL') AS c, to_number(v, 'SG9999') AS d, to_number(v, '9999PR') AS e FROM (VALUES ('123-'), ('-123'), ('123+'), ('<123>'), ('123')) AS t(v)
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1,d:1700:-1:-1,e:1700:-1:-1
+row -123,-123,-123,-123,123
+row -123,-123,-123,-123,-123
+row 123,123,123,123,123
+row 123,123,123,123,-123
+row 123,123,123,123,123
+SELECT 5
+> SELECT to_number(v, '9999.99S') AS a, to_number(v, 'FM9999.999999S') AS b, to_number(v, 'FM9.999999MI') AS c FROM (VALUES ('5.01-'), ('5.01+'), ('.5-'), ('1.5')) AS t(v)
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1
+row -5.01,-5.01,-5.01
+row 5.01,5.01,5.01
+row -0.5,-0.5,-0.5
+row 1.5,1.5,1.5
+SELECT 4
+> SELECT to_number('123.001-', 'FM9999.999999S') AS a, to_number('123.001-', '9999.99S') AS b
+fields a:1700:-1:-1,b:1700:-1:-1
+row -123.001,123.00
+SELECT 1
+> SELECT to_number(v, 'RN') AS a, to_number(v, 'FMRN') AS b, to_number(v, 'rn') AS c FROM (VALUES ('I'), ('iv'), ('  MMXXVI'), ('MMMDCCCLXXXVIII'), ('MCMXCIV'), ('XLII'), ('cdxliv')) AS t(v)
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1
+row 1,1,1
+row 4,4,4
+row 2026,2026,2026
+row 3888,3888,3888
+row 1994,1994,1994
+row 42,42,42
+row 444,444,444
+SELECT 7
+> SELECT to_number('IIII', 'RN')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid Roman numeral
+> SELECT to_number('IL', 'RN')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid Roman numeral
+> SELECT to_number('VV', 'RN')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid Roman numeral
+> SELECT to_number('MCCM', 'RN')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid Roman numeral
+> SELECT to_number('IXI', 'RN')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid Roman numeral
+> SELECT to_number('abc', 'RN')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid Roman numeral
+> SELECT to_number('XCX', 'RN')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid Roman numeral
+> SELECT to_number(v, '99V99') AS a, to_number(v, '9V999') AS b FROM (VALUES ('1234'), ('12'), ('-5')) AS t(v)
+fields a:1700:-1:-1,b:1700:-1:-1
+row 12.340000000000000000,1.2340000000000000000
+row 0.120000000000000000,0.0120000000000000000
+row -0.050000000000000000,-0.0050000000000000000
+SELECT 3
+> SELECT to_number(v, 'L9999') AS a, to_number(v, '"$"9999') AS b, to_number(v, '9999th') AS c, to_number(v, '9x9y9z9') AS d FROM (VALUES ('$123'), ('1234'), ('12th'), ('1a2b3c4')) AS t(v)
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1,d:1700:-1:-1
+row 123,123,123,2
+row 1234,234,1234,13
+row 12,2,12,1
+row 12,23,12,1234
+SELECT 4
+> SELECT to_number('12,454.8-', '99G999D9S') AS a, to_number('-34,338,492', '99G999G999') AS b, to_number('-34,338,492.654,878', '99G999G999D999G999') AS c, to_number('0.00001-', '9.999999S') AS d, to_number('5.01-', 'FM9.999999S') AS e, to_number('5.01-', 'FM9.999999MI') AS f
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1,d:1700:-1:-1,e:1700:-1:-1,f:1700:-1:-1
+row -12454.8,-34338492,-34338492.654878,-0.00001,-5.01,-5.01
+SELECT 1
+> SELECT to_number('5 4 4 4 4 8 . 7 8', '9 9 9 9 9 9 . 9 9') AS a, to_number('.01', 'FM9.99') AS b, to_number('.0', '99999999.99999999') AS c, to_number('0', '99.99') AS d, to_number('.-01', 'S99.99') AS e, to_number('.01-', '99.99S') AS f, to_number(' . 0 1-', ' 9 9 . 9 9 S') AS g
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1,d:1700:-1:-1,e:1700:-1:-1,f:1700:-1:-1,g:1700:-1:-1
+row 544448.78,0.01,0.0,0,-0.01,-0.01,-0.01
+SELECT 1
+> SELECT to_number('34,50','999,99') AS a, to_number('123,000','999G') AS b, to_number('123456','999G999') AS c, to_number('$1234.56','L9,999.99') AS d, to_number('$1234.56','L99,999.99') AS e, to_number('$1,234.56','L99,999.99') AS f, to_number('1234.56','L99,999.99') AS g, to_number('1,234.56','L99,999.99') AS h, to_number('42nd', '99th') AS i
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1,d:1700:-1:-1,e:1700:-1:-1,f:1700:-1:-1,g:1700:-1:-1,h:1700:-1:-1,i:1700:-1:-1
+row 3450,123,123456,1234.56,1234.56,1234.56,1234.56,1234.56,42
+SELECT 1
+> SELECT to_number('123456', '99999') 
+fields to_number:1700:-1:-1
+row 12345
+SELECT 1
+> SELECT to_number('12345', '999.99')
+fields to_number:1700:-1:-1
+ERROR 22003 numeric field overflow
+> SELECT to_number('', '999')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid input syntax for type numeric: " "
+> SELECT to_number('abc', '999')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid input syntax for type numeric: " "
+> SELECT to_number('-', '999')
+fields to_number:1700:-1:-1
+ERROR 22P02 invalid input syntax for type numeric: "-"
+> SELECT to_number('1', '') IS NULL AS a
+fields a:16:1:-1
+row t
+SELECT 1
+> SELECT to_number('1.5', '9.9EEEE')
+fields to_number:1700:-1:-1
+ERROR 0A000 "EEEE" not supported for input
+> SELECT to_number('1', '9.9.9')
+fields to_number:1700:-1:-1
+ERROR 42601 multiple decimal points
+> SELECT to_number('1é2', '9é9') AS a, to_number('1é2', '999') AS b, to_number('12', '9"ab"9') AS c
+fields a:1700:-1:-1,b:1700:-1:-1,c:1700:-1:-1
+row 12,1,1
+SELECT 1

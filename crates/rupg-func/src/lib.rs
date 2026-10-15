@@ -35,6 +35,7 @@ mod math;
 mod misc;
 mod multirange;
 mod network;
+mod numformat;
 mod random;
 mod range;
 mod reg;
@@ -387,6 +388,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| datetime::by_src(src))
         .or_else(|| extract::by_src(src))
         .or_else(|| formatting::by_src(src))
+        .or_else(|| numformat::by_src(src))
         .or_else(|| timezone::by_src(src))
         .or_else(|| calendar::by_src(src))
         .or_else(|| random::by_src(src))

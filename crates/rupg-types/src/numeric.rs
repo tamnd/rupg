@@ -1076,6 +1076,36 @@ pub fn numeric_out(v: &Numeric, out: &mut Vec<u8>) {
     }
 }
 
+/// `numeric_out_sci`: the value as a significand with `scale` digits after the point, `e`, a sign and at least two digits of the exponent, as `to_char` with `EEEE` writes it. The exponent is the power of ten of the first digit. The significand is the value divided by that power and rounded half away from zero, so it can be `10.0` after the rounding, as in `get_str_from_var_sci`.
+pub fn numeric_out_sci(v: &Numeric, scale: i32) -> String {
+    match v.sign {
+        NumericSign::NaN => return "NaN".to_string(),
+        NumericSign::Infinity => return "Infinity".to_string(),
+        NumericSign::NegativeInfinity => return "-Infinity".to_string(),
+        _ => {}
+    }
+    let rscale = i64::from(scale.max(0));
+    let (exponent, significand) = match v.digits.first() {
+        Some(&first) => {
+            let exponent = i64::from(v.weight) * DEC_DIGITS + i64::from(first.ilog10());
+            let power = Var::from_decimal_digits(&[1], exponent, 0);
+            (exponent, Var::from(v).div(&power, rscale, true))
+        }
+        None => {
+            (0, Var { sign: NumericSign::Positive, weight: 0, dscale: rscale, digits: Vec::new() })
+        }
+    };
+    let significand = Numeric {
+        sign: significand.sign,
+        weight: significand.weight as i16,
+        dscale: significand.dscale as u16,
+        digits: significand.digits.iter().map(|&d| d as i16).collect(),
+    };
+    let mut out = Vec::new();
+    numeric_out(&significand, &mut out);
+    format!("{}e{exponent:+03}", String::from_utf8_lossy(&out))
+}
+
 /// `numeric_send`. PostgreSQL reads the display scale of an infinity from bits of the header that the short format uses for the scale, so it sends 32 there. Clients do not look at it, but the bytes are the same.
 pub fn numeric_send(v: &Numeric, out: &mut Vec<u8>) {
     let dscale = match v.sign {
