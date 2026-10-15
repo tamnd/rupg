@@ -1,14 +1,13 @@
 //! The functions of `ruleutils.c` that show the arguments and the result of a function: `pg_get_function_arguments`, `pg_get_function_identity_arguments`, `pg_get_function_result` and `pg_get_function_arg_default`.
 //!
-//! All the functions are built in, so the arguments come from the static rows of `pg_proc`. Each default of an argument in `proargdefaults` is a `Const` node, which this module reads from the text of the node tree.
+//! All the functions are built in, so the arguments come from the static rows of `pg_proc`. Each default of an argument in `proargdefaults` is a `Const` node, which [`arg_defaults`] reads from the text of the node tree.
 
-use rupg_analyze::Expr;
+use rupg_analyze::{Expr, ExprKind, arg_defaults};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ProcRow};
-use rupg_types::{Value, oid};
+use rupg_types::Value;
 
 use super::Deparser;
-use crate::io::input;
 use crate::reg;
 use crate::text::quote_identifier;
 use crate::{Call, Session, bad_value};
@@ -20,97 +19,16 @@ const INOUT: u8 = b'b';
 const VARIADIC: u8 = b'v';
 const TABLE: u8 = b't';
 
-/// `JB_FOBJECT` and `JB_FARRAY`: the flags of the root container of a `jsonb` value. The low bits hold the number of the items.
-const JSONB_OBJECT: u32 = 0x2000_0000;
-const JSONB_ARRAY: u32 = 0x4000_0000;
-const JSONB_COUNT: u32 = 0x0FFF_FFFF;
-
-/// One `Const` node of `proargdefaults`: its type, and its value as the bytes of the datum, or `None` for a null.
-#[derive(Debug)]
-struct Const {
-    ty: u32,
-    typmod: i32,
-    bytes: Option<Vec<u8>>,
+/// `deparse_expression` of a `Const` default.
+fn default_text(c: &Expr, session: &dyn Session) -> Result<String> {
+    let ExprKind::Const(value) = &c.kind else { return Err(bad_node()) };
+    let mut d = Deparser::new(session, false, 0);
+    d.constant(c, value, 0)?;
+    Ok(d.buf)
 }
 
 fn bad_node() -> Error {
     Error::new(SqlState::INTERNAL_ERROR, "unrecognized node in proargdefaults")
-}
-
-/// The value of a field `:name value` of a node.
-fn field<'t>(node: &'t str, name: &str) -> Result<&'t str> {
-    let key = format!(":{name} ");
-    let at = node.find(&key).ok_or_else(bad_node)? + key.len();
-    let rest = &node[at..];
-    Ok(rest.split(' ').next().unwrap_or(""))
-}
-
-/// `stringToNode` for a list of `Const` nodes, which is the form of each `proargdefaults` of the built-in functions.
-fn consts(text: &str) -> Result<Vec<Const>> {
-    let inner = text.strip_prefix('(').and_then(|t| t.strip_suffix(')')).ok_or_else(bad_node)?;
-    let mut out = Vec::new();
-    for node in inner.split('}').map(str::trim).filter(|n| !n.is_empty()) {
-        let node = node.strip_prefix("{CONST ").ok_or_else(bad_node)?;
-        let ty = field(node, "consttype")?.parse().map_err(|_| bad_node())?;
-        let typmod = field(node, "consttypmod")?.parse().map_err(|_| bad_node())?;
-        let bytes = if field(node, "constisnull")? == "true" {
-            None
-        } else {
-            let at = node.find('[').ok_or_else(bad_node)?;
-            let end = node.rfind(']').ok_or_else(bad_node)?;
-            // `outDatum` writes each byte as a signed `char`.
-            #[allow(clippy::cast_sign_loss)]
-            let bytes = node[at + 1..end]
-                .split_whitespace()
-                .map(|b| b.parse::<i8>().map(|b| b as u8).map_err(|_| bad_node()))
-                .collect::<Result<Vec<u8>>>()?;
-            Some(bytes)
-        };
-        out.push(Const { ty, typmod, bytes });
-    }
-    Ok(out)
-}
-
-/// The text form of the value of a `Const`, for the types that the defaults of the built-in functions have.
-fn const_text(c: &Const, bytes: &[u8]) -> Result<String> {
-    let word = |n: usize| -> Result<[u8; 4]> {
-        bytes.get(n..n + 4).and_then(|b| b.try_into().ok()).ok_or_else(bad_node)
-    };
-    let datum = || -> Result<[u8; 8]> { bytes.try_into().map_err(|_| bad_node()) };
-    Ok(match c.ty {
-        oid::BOOL => (bytes.first() != Some(&0)).to_string(),
-        oid::INT2 | oid::INT4 | oid::INT8 => i64::from_le_bytes(datum()?).to_string(),
-        oid::FLOAT8 => f64::from_le_bytes(datum()?).to_string(),
-        oid::TEXT => {
-            // A varlena with a 4-byte header: the size in the upper 30 bits, with the header.
-            let size = (u32::from_le_bytes(word(0)?) >> 2) as usize;
-            let data = bytes.get(4..size).ok_or_else(bad_node)?;
-            String::from_utf8(data.to_vec()).map_err(|_| bad_node())?
-        }
-        oid::JSONB => {
-            let root = u32::from_le_bytes(word(4)?);
-            match (root & JSONB_COUNT, root & (JSONB_OBJECT | JSONB_ARRAY)) {
-                (0, JSONB_OBJECT) => "{}".to_owned(),
-                (0, JSONB_ARRAY) => "[]".to_owned(),
-                _ => return Err(bad_node()),
-            }
-        }
-        // An array with no dimensions.
-        _ if u32::from_le_bytes(word(4)?) == 0 => "{}".to_owned(),
-        _ => return Err(bad_node()),
-    })
-}
-
-/// `deparse_expression` of a `Const` default.
-fn default_text(c: &Const, session: &dyn Session) -> Result<String> {
-    let value = match &c.bytes {
-        Some(bytes) => input(c.ty, &const_text(c, bytes)?, c.typmod, session)?,
-        None => Value::Null,
-    };
-    let expr = Expr::constant(value.clone(), c.ty, c.typmod, None);
-    let mut d = Deparser::new(session, false, 0);
-    d.constant(&expr, &value, 0)?;
-    Ok(d.buf)
 }
 
 /// The built-in function of the first argument, or `None` for an OID that is not a function.
@@ -143,11 +61,8 @@ fn print_arguments(
     let args = arg_info(proc);
     let mut nlackdefaults = args.len();
     let mut argdefaults = Vec::new();
-    if defaults
-        && proc.nargdefaults > 0
-        && let Some(text) = proc.argdefaults
-    {
-        argdefaults = consts(text)?;
+    if defaults && proc.nargdefaults > 0 && proc.argdefaults.is_some() {
+        argdefaults = arg_defaults(proc)?;
         nlackdefaults = usize::try_from(proc.nargs).unwrap_or(0).saturating_sub(argdefaults.len());
     }
     let mut next_default = argdefaults.iter();
@@ -251,9 +166,11 @@ pub(super) fn get_function_arg_default(call: &Call<'_>, args: &[Value]) -> Resul
     if !is_input(info[nth - 1].2) {
         return Ok(Value::Null);
     }
-    let Some(text) = proc.argdefaults else { return Ok(Value::Null) };
+    if proc.argdefaults.is_none() {
+        return Ok(Value::Null);
+    }
     let input_no = info[..nth].iter().filter(|(_, _, mode)| is_input(*mode)).count();
-    let defaults = consts(text)?;
+    let defaults = arg_defaults(proc)?;
     let lacking = i64::from(proc.nargs) - i64::from(proc.nargdefaults);
     let index = i64::try_from(input_no).unwrap_or(i64::MAX) - 1 - lacking;
     match usize::try_from(index).ok().and_then(|i| defaults.get(i)) {

@@ -25,6 +25,8 @@ pub enum ExprKind {
     Param(usize),
     /// `FuncExpr` and `OpExpr`: a call of the function with this `pg_proc` OID.
     Func(Func),
+    /// `NamedArgExpr`: an argument of a call that the call gives by its name, as `name => value`. The planner puts the arguments in the order of the function.
+    NamedArg(Box<NamedArg>),
     /// `RelabelType`: the value of the argument with another type that has the same binary form.
     Relabel(Box<Expr>, CastForm),
     /// `CoerceViaIO`: the output function of the type of the argument, then the input function of the type of the expression.
@@ -140,6 +142,15 @@ pub struct Func {
     pub variadic: bool,
     /// `funcretset`: true when the function gives a set.
     pub retset: bool,
+}
+
+/// An argument by its name, as `NamedArgExpr`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct NamedArg {
+    pub arg: Expr,
+    pub name: String,
+    /// `argnumber`: the position of the argument in the input arguments of the function, from 0.
+    pub number: usize,
 }
 
 /// A call of an aggregate function, as `Aggref`.
@@ -284,6 +295,7 @@ impl Expr {
             | ExprKind::SubColumn(_) => Vec::new(),
             ExprKind::SubLink(sub) => sub.test.iter().collect(),
             ExprKind::Func(f) => f.args.iter().collect(),
+            ExprKind::NamedArg(na) => vec![&na.arg],
             ExprKind::Agg(agg) => agg.args.iter().chain(agg.filter.as_deref()).collect(),
             ExprKind::Window(w) => w.args.iter().collect(),
             ExprKind::Relabel(arg, _)
@@ -324,6 +336,7 @@ impl Expr {
             | ExprKind::SubColumn(_) => Vec::new(),
             ExprKind::SubLink(sub) => sub.test.iter_mut().collect(),
             ExprKind::Func(f) => f.args.iter_mut().collect(),
+            ExprKind::NamedArg(na) => vec![&mut na.arg],
             ExprKind::Agg(agg) => {
                 let Aggref { args, filter, .. } = &mut **agg;
                 args.iter_mut().chain(filter.as_deref_mut()).collect()
@@ -484,6 +497,7 @@ impl Expr {
             | ExprKind::FieldSelect(arg, _) => Some(&**arg),
             ExprKind::Subscript(sub) => Some(&sub.container),
             ExprKind::SubLink(sub) => sub.test.as_ref(),
+            ExprKind::NamedArg(na) => Some(&na.arg),
             _ => None,
         };
         match (self.location, first.and_then(Expr::place)) {

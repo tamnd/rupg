@@ -135,6 +135,7 @@ fn check(expr: &Expr) -> Result<()> {
             }
             f.args.iter().try_for_each(check)?;
         }
+        ExprKind::NamedArg(na) => check(&na.arg)?,
         ExprKind::Relabel(arg, _)
         | ExprKind::CoerceToDomain(arg, _)
         | ExprKind::NullTest(arg, _)
@@ -1166,12 +1167,13 @@ impl<'a> Eval<'a> {
         if !table_function(f.oid, width) {
             return Ok(vec![vec![self.eval(call)?]]);
         }
-        let args = f.args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
+        let exprs = rupg_analyze::expand_arguments(f)?;
+        let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
         if strict(f.oid) && args.iter().any(Value::is_null) {
             let retset = builtin::proc_by_oid(f.oid).is_some_and(|p| p.retset);
             return Ok(if retset { Vec::new() } else { vec![vec![Value::Null; width]] });
         }
-        let types: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
+        let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
         if let Some(body) = self.cache.body(f.oid, &types, self.session)? {
             let Body::Query(query) = &*body else {
                 return Err(Error::internal("a function that returns a set with no query"));
@@ -1307,6 +1309,7 @@ impl<'a> Eval<'a> {
                 })
             }
             ExprKind::Func(f) => self.func(f, expr),
+            ExprKind::NamedArg(na) => self.eval(&na.arg),
             ExprKind::Relabel(arg, _) => Ok(relabel(self.eval(arg)?, expr.ty)),
             ExprKind::CoerceViaIo(arg, _) => {
                 let value = self.eval(arg)?;
@@ -1562,8 +1565,10 @@ impl<'a> Eval<'a> {
     }
 
     fn func(&mut self, f: &Func, expr: &Expr) -> Result<Value> {
-        let args = f.args.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
-        let types: Vec<u32> = f.args.iter().map(|a| a.ty).collect();
+        // The planner adds the defaults, so this is for an expression that the planner did not see.
+        let exprs = rupg_analyze::expand_arguments(f)?;
+        let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
+        let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
         self.call(f.oid, &types, expr.ty, f.variadic, &args)
     }
 

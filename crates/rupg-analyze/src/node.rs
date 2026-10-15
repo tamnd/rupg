@@ -6,7 +6,8 @@ use rupg_common::{Error, Result};
 use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value};
 
 use crate::expr::{
-    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, Subscript, Var,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, SqlValue,
+    Subscript, Var,
 };
 
 /// The stored form of an expression.
@@ -94,6 +95,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::SqlValue(_) => "SQLVALUE",
         ExprKind::Var(_) => "VAR",
         ExprKind::FieldSelect(..) => "FIELDSELECT",
+        ExprKind::NamedArg(_) => "NAMEDARG",
         ExprKind::Param(_)
         | ExprKind::Agg(_)
         | ExprKind::Window(_)
@@ -227,6 +229,12 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::FieldSelect(arg, field) => {
             out.push_str(&format!(" :field {field}"));
             write_field("arg", arg, out)?;
+        }
+        ExprKind::NamedArg(na) => {
+            out.push_str(" :name ");
+            hex(na.name.as_bytes(), out);
+            out.push_str(&format!(" :number {}", na.number));
+            write_field("arg", &na.arg, out)?;
         }
         ExprKind::Param(_)
         | ExprKind::Agg(_)
@@ -748,6 +756,12 @@ fn expr_of(item: &Item) -> Result<Expr> {
             levels_up: f.number("levelsup")?,
         }),
         "FIELDSELECT" => ExprKind::FieldSelect(f.expr("arg")?, f.number("field")?),
+        "NAMEDARG" => {
+            let name = String::from_utf8(bytes_of(f.atom("name")?)?)
+                .map_err(|_| bad("a name that is not UTF-8"))?;
+            let number = f.number("number")?;
+            ExprKind::NamedArg(Box::new(NamedArg { arg: *f.expr("arg")?, name, number }))
+        }
         _ => return Err(bad(&format!("the node {name}"))),
     };
     Ok(Expr { kind, ty, typmod, location })
@@ -1045,6 +1059,14 @@ mod tests {
                 oid::INT4,
             ),
             Expr::new(ExprKind::Coalesce(vec![var(1), var(2)]), oid::INT4),
+            Expr::new(
+                ExprKind::NamedArg(Box::new(NamedArg {
+                    arg: var(1),
+                    name: "a b".to_owned(),
+                    number: 2,
+                })),
+                oid::INT4,
+            ),
             Expr::new(ExprKind::MinMax { greatest: true, less: 66, args: vec![var(1)] }, oid::INT4),
             Expr::new(ExprKind::NullIf { equal: 65, args: vec![var(1), var(2)] }, oid::INT4),
             Expr::new(

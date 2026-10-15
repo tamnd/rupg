@@ -11,7 +11,7 @@ use rupg_types::{Value, oid};
 use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, can_coerce, common_of};
-use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, SqlValue};
+use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, NamedArg, SqlValue};
 use crate::typename::{names, place};
 use crate::types;
 
@@ -99,6 +99,14 @@ impl Analyzer<'_> {
             Node::A_Expr(a) => self.transform_a_expr(a),
             Node::BoolExpr(b) => self.transform_bool(b),
             Node::FuncCall(f) => self.transform_func(f),
+            // `transformExprRecurse` keeps the name above the value. `ParseFuncOrColumn` sets the number.
+            Node::NamedArgExpr(na) => {
+                let arg = self.transform(na.arg.as_ref())?;
+                let (ty, typmod) = (arg.ty, arg.typmod);
+                let name = na.name.as_deref().unwrap_or_default().to_owned();
+                let kind = ExprKind::NamedArg(Box::new(NamedArg { arg, name, number: 0 }));
+                Ok(Expr { kind, ty, typmod, location: place(na.location) })
+            }
             Node::TypeCast(t) => self.transform_cast(t),
             Node::CaseExpr(c) => {
                 let before = self.srfs.0;
@@ -591,9 +599,6 @@ impl Analyzer<'_> {
     fn transform_func(&mut self, f: &FuncCall) -> Result<Expr> {
         let at = place(f.location);
         let func_names = names(&f.funcname);
-        if f.args.iter().any(|a| matches!(a, Some(Node::NamedArgExpr(_)))) {
-            return Err(not_yet("a call with named arguments", at));
-        }
         let srfs = self.srfs.0;
         let mut args = self.transform_list(&f.args)?;
         // transformFuncCall: the items of WITHIN GROUP come after the direct arguments.

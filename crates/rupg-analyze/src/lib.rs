@@ -14,6 +14,7 @@ mod cte;
 mod ddl;
 mod expr;
 mod from;
+mod funcargs;
 pub mod node;
 mod poly;
 mod prepare;
@@ -46,10 +47,11 @@ pub use ddl::{
     is_definition, lock_table,
 };
 pub use expr::{
-    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SqlValue, SubLink,
-    SubLinkKind, Subscript, Var, WindowFunc,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, SqlValue,
+    SubLink, SubLinkKind, Subscript, Var, WindowFunc,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
+pub use funcargs::{arg_defaults, expand_arguments};
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use select::{Query, Target};

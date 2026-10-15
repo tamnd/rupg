@@ -1,8 +1,8 @@
 //! `eval_const_expressions` of `clauses.c`: the planner computes each part of an expression whose arguments are constants and whose function is immutable. An error of such a part, such as a division by zero, comes when the query is planned, before the server sends the description of the rows. The plan then runs the folded expressions, so a part that the fold drops does not run.
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Join, JoinKind, Query, Relation,
-    SubLink, SubLinkKind, Subscript, Var,
+    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Join, JoinKind, NamedArg, Query,
+    Relation, SubLink, SubLinkKind, Subscript, Var,
 };
 use rupg_common::Result;
 use rupg_func::Session;
@@ -332,6 +332,7 @@ impl<'a> Fold<'a> {
             | ExprKind::Var(_)
             | ExprKind::SubColumn(_) => Ok(()),
             ExprKind::Func(f) => self.all(&mut f.args),
+            ExprKind::NamedArg(na) => self.subqueries(&mut na.arg),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
@@ -409,9 +410,21 @@ impl<'a> Fold<'a> {
                 Ok(given.map_or_else(|| expr.clone(), |v| with(expr, ExprKind::Const(v.clone()))))
             }
             ExprKind::Func(f) => {
-                let args = self.list(&f.args)?;
+                // `simplify_function`: the arguments in the order of the function, with the defaults.
+                let args = self.list(&rupg_analyze::expand_arguments(f)?)?;
                 let func = Func { args, ..f.clone() };
                 self.function(with(expr, ExprKind::Func(func)))
+            }
+            ExprKind::NamedArg(na) => {
+                let arg = self.expr(&na.arg)?;
+                Ok(with(
+                    expr,
+                    ExprKind::NamedArg(Box::new(NamedArg {
+                        arg,
+                        name: na.name.clone(),
+                        number: na.number,
+                    })),
+                ))
             }
             ExprKind::Relabel(arg, form) => {
                 let arg = self.expr(arg)?;
