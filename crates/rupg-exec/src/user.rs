@@ -1,4 +1,4 @@
-//! The rows of the catalog for the user objects: the schemas, the relations, their row types and columns, the column defaults, the constraints, the indexes, the sequences, the functions, the dependencies between them and their comments. A scan of a table of the catalog gives these rows after the static rows.
+//! The rows of the catalog for the user objects: the schemas, the relations, their row types and columns, the column defaults, the constraints, the triggers of the foreign keys, the indexes, the sequences, the functions, the dependencies between them and their comments. A scan of a table of the catalog gives these rows after the static rows.
 //!
 //! The columns of `pg_node_tree` hold the expressions in the form of the analyzer, not in the form of `nodeToString`.
 
@@ -134,6 +134,7 @@ pub(crate) fn rows(
         "pg_attribute" => attributes(table, catalog, session)?,
         "pg_attrdef" => defaults(table, catalog),
         "pg_constraint" => constraints(table, catalog),
+        "pg_trigger" => triggers(table, catalog),
         "pg_index" => indexes(table, catalog),
         "pg_sequence" => sequences(table, catalog),
         "pg_proc" => functions(table, catalog),
@@ -523,6 +524,33 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
             .set("conffeqop", oid_array(&f.ff_eq));
     }
     row
+}
+
+/// The internal triggers of the foreign keys. They fire after each row and have no arguments and no columns.
+fn triggers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .triggers()
+        .map(|trigger| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(trigger.oid))
+                .set("tgrelid", oid(trigger.relation))
+                .set("tgparentid", oid(0))
+                .set("tgname", Value::text(trigger.name.clone()))
+                .set("tgfoid", oid(trigger.function))
+                .set("tgtype", Value::Int2(trigger.kind))
+                .set("tgenabled", code('O'))
+                .set("tgisinternal", Value::Bool(true))
+                .set("tgconstrrelid", oid(trigger.constraint_relation))
+                .set("tgconstrindid", oid(trigger.constraint_index))
+                .set("tgconstraint", oid(trigger.constraint))
+                .set("tgdeferrable", Value::Bool(trigger.deferrable))
+                .set("tginitdeferred", Value::Bool(trigger.deferred))
+                .set("tgnargs", Value::Int2(0))
+                .set("tgattr", int2_vector(&[]))
+                .set("tgargs", Value::Bytea(Vec::new()));
+            row
+        })
+        .collect()
 }
 
 fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
