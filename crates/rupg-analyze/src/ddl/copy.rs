@@ -1,4 +1,4 @@
-//! The relation of `COPY ... TO`, as `DoCopy`, `CopyGetAttnums` and `BeginCopyTo` in `copy.c` and `copyto.c` check it: the name, the columns and the kind of the relation. The session reads the rows with a query of the columns, as `DoCopy` does for a table with row security.
+//! The relation of `COPY`, as `DoCopy`, `CopyGetAttnums` and `BeginCopyTo` in `copy.c` and `copyto.c` check it: the name, the columns and the kind of the relation. The session reads the rows with a query of the columns, as `DoCopy` does for a table with row security.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -21,12 +21,27 @@ pub struct CopyRelation {
     pub query: Node,
 }
 
-/// The checks of `DoCopy` and `BeginCopyTo` for the relation of `COPY ... TO`: `table_openrv`, `CopyGetAttnums` and the kind of the relation.
+/// The table of a `COPY ... FROM`, as `DoCopy` and `BeginCopyFrom` open it.
+#[derive(Debug)]
+pub struct CopyTarget {
+    /// The OID of the relation.
+    pub relid: u32,
+    /// The name of the relation, for the errors.
+    pub name: String,
+    /// `relkind`. `CopyFrom` checks it after `CopyInResponse`.
+    pub kind: u8,
+    /// The names of the user columns of the relation, in the order of the catalog.
+    pub columns: Vec<String>,
+    /// The columns that the data gives, as indexes into `columns`.
+    pub selected: Vec<usize>,
+}
+
+/// The checks of `table_openrv` and `CopyGetAttnums` for the relation of `COPY`.
 ///
 /// # Errors
 ///
-/// The errors of `RangeVarGetRelid` for the name, `42809` for an index or a relation that is not a table, `42703` and `42701` for the list of columns.
-pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<CopyRelation> {
+/// The errors of `RangeVarGetRelid` for the name, `42809` for an index or a composite type, `42703` and `42701` for the list of columns.
+pub fn copy_target(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<CopyTarget> {
     let params = Params::default();
     let an = Analyzer::new(env, &params);
     let relid = lookup(&an, rv)?;
@@ -43,6 +58,16 @@ pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Co
     let names: Vec<String> =
         stmt.attlist.iter().flatten().filter_map(string).map(str::to_string).collect();
     let selected = attnums(&columns, &names, Some(&name))?;
+    Ok(CopyTarget { relid, name, kind, columns, selected })
+}
+
+/// The checks of `DoCopy` and `BeginCopyTo` for the relation of `COPY ... TO`: `table_openrv`, `CopyGetAttnums` and the kind of the relation.
+///
+/// # Errors
+///
+/// The errors of `RangeVarGetRelid` for the name, `42809` for an index or a relation that is not a table, `42703` and `42701` for the list of columns.
+pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<CopyRelation> {
+    let CopyTarget { name, kind, columns, selected, .. } = copy_target(stmt, rv, env)?;
     match kind {
         b'r' => {}
         b'v' => {

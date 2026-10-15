@@ -1,0 +1,384 @@
+!details
+> CREATE TABLE t (id int NOT NULL, b text, c numeric DEFAULT 1)
+CREATE TABLE
+> COPY t FROM STDIN
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM stdin
+< \.
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t (id, b) FROM STDIN WITH (FORMAT csv, HEADER true)
+< id,b
+<done
+copy in 0 0,0
+COPY 0
+> COPY t (id, b) FROM STDIN WITH (FORMAT csv, HEADER match)
+< id,b
+<done
+copy in 0 0,0
+COPY 0
+> COPY t (id) FROM STDIN WITH (FORMAT binary)
+<done
+copy in 1 1
+ERROR 22P04 COPY file signature not recognized
+> COPY t FROM STDIN WITH (FORMAT text, HEADER 2)
+< a
+< b
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN WHERE id > 0
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t (id, id) FROM STDIN
+<done
+ERROR 42701 column "id" specified more than once
+> COPY t (nosuch) FROM STDIN
+<done
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> COPY nosuch FROM STDIN
+<done
+ERROR 42P01 relation "nosuch" does not exist
+> COPY t FROM STDIN
+<fail client gave up
+copy in 0 0,0,0
+ERROR 57014 COPY from stdin failed: client gave up (COPY t, line 1)
+> SELECT 1
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> COPY t FROM STDIN; SELECT 2
+<done
+copy in 0 0,0,0
+COPY 0
+fields ?column?:23:4:-1
+row 2
+SELECT 1
+> SELECT 3; COPY t FROM STDIN; SELECT 4
+< \.
+<done
+fields ?column?:23:4:-1
+row 3
+SELECT 1
+copy in 0 0,0,0
+COPY 0
+fields ?column?:23:4:-1
+row 4
+SELECT 1
+> COPY t FROM STDIN (FORMAT json)
+<done
+ERROR 22023 COPY FORMAT JSON is not supported for COPY FROM
+> COPY t FROM STDIN (FORCE_QUOTE (b))
+<done
+ERROR 0A000 COPY FORCE_QUOTE requires CSV mode
+> COPY t FROM STDIN (FORMAT csv, FORCE_QUOTE *)
+<done
+ERROR 0A000 COPY FORCE_QUOTE cannot be used with COPY FROM
+> COPY t FROM STDIN (FORMAT csv, FORCE_NOT_NULL (b), FORCE_NULL (b))
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN (FORMAT csv, FORCE_NOT_NULL (nosuch))
+<done
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> COPY t (id) FROM STDIN (FORMAT csv, FORCE_NULL (b))
+<done
+ERROR 42P10 FORCE_NULL column "b" not referenced by COPY
+> COPY t FROM STDIN (FORCE_NOT_NULL *)
+<done
+ERROR 0A000 COPY FORCE_NOT_NULL requires CSV mode
+> COPY t FROM STDIN (DEFAULT 'd')
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN (DEFAULT '\N')
+<done
+ERROR 0A000 NULL specification and DEFAULT specification cannot be the same
+> COPY t FROM STDIN (ON_ERROR ignore, LOG_VERBOSITY verbose)
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN (ON_ERROR bad)
+<done
+ERROR 22023 COPY ON_ERROR "bad" not recognized at 20
+> COPY t FROM STDIN (REJECT_LIMIT 3)
+<done
+ERROR 22023 COPY REJECT_LIMIT requires ON_ERROR to be set to IGNORE
+> COPY t FROM STDIN (ON_ERROR ignore, REJECT_LIMIT 3)
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN (HEADER -1)
+<done
+ERROR 22023 a negative integer value cannot be specified for header
+> COPY t FROM STDIN (FORMAT binary, HEADER)
+<done
+ERROR 0A000 cannot specify HEADER in BINARY mode
+> CREATE VIEW v AS SELECT id FROM t
+CREATE VIEW
+> COPY v FROM STDIN
+<done
+copy in 0 0
+ERROR 42809 cannot copy to view "v"
+HINT To enable copying to a view, provide an INSTEAD OF INSERT trigger.
+> SELECT 5
+fields ?column?:23:4:-1
+row 5
+SELECT 1
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> COPY s FROM STDIN
+<done
+copy in 0 0,0,0
+ERROR 42809 cannot copy to sequence "s"
+> CREATE INDEX ti ON t (id)
+CREATE INDEX
+> COPY ti FROM STDIN
+<done
+ERROR 42809 cannot open relation "ti"
+DETAIL This operation is not supported for indexes.
+> BEGIN READ ONLY
+BEGIN
+> COPY t FROM STDIN
+<done
+ERROR 25006 cannot execute COPY FROM in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SELECT 1/0
+ERROR 22012 division by zero
+> COPY t FROM STDIN
+<done
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> COPY t FROM STDIN
+<done
+copy in 0 0,0,0
+COPY 0
+> COMMIT
+COMMIT
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000000000000000000ffff
+<done
+copy in 1 1
+COPY 0
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a0000000000
+<hex 00000000ffff
+<done
+copy in 1 1
+COPY 0
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a0000000000000000
+<done
+copy in 1 1
+ERROR 22P04 invalid COPY file header (missing length)
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a0000
+<done
+copy in 1 1
+ERROR 22P04 invalid COPY file header (missing flags)
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000001000000000000ffff
+<done
+copy in 1 1
+ERROR 22P04 invalid COPY file header (WITH OIDS)
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000000800000000000ffff
+<done
+copy in 1 1
+COPY 0
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000000000000000004ffff
+<done
+copy in 1 1
+ERROR 22P04 invalid COPY file header (wrong length)
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000000000000000002abcdffff
+<done
+copy in 1 1
+COPY 0
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000000000000000000ffff00
+<done
+copy in 1 1
+ERROR 22P04 received copy data after EOF marker (COPY t, line 1)
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000000000000000000ff
+<done
+copy in 1 1
+COPY 0
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a01
+<done
+copy in 1 1
+ERROR 22P04 COPY file signature not recognized
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000000000000000000
+<done
+copy in 1 1
+COPY 0
+> COPY t (id, b) FROM STDIN WITH (FORMAT csv, HEADER match)
+< id,c
+<done
+copy in 0 0,0
+ERROR 22P04 column name mismatch in header line field 2: got "c", expected "b" (COPY t, line 1: "id,c")
+> COPY t (id, b) FROM STDIN WITH (FORMAT csv, HEADER match)
+< id
+<done
+copy in 0 0,0
+ERROR 22P04 wrong number of fields in header line: got 1, expected 2 (COPY t, line 1: "id")
+> COPY t (id, b) FROM STDIN WITH (FORMAT text, HEADER match)
+< id	b
+<done
+copy in 0 0,0
+COPY 0
+> COPY t (id, b) FROM STDIN WITH (FORMAT csv, HEADER match)
+< "id","b"
+<done
+copy in 0 0,0
+COPY 0
+> COPY t FROM STDIN
+< \.
+< 1	x	2
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN
+< \.x
+<done
+copy in 0 0,0,0
+ERROR 22P04 end-of-copy marker is not alone on its line (COPY t, line 1)
+> COPY t FROM STDIN WITH (FORMAT csv, HEADER true)
+<hex 69642c622c630d0a
+<done
+copy in 0 0,0,0
+COPY 0
+> BEGIN
+BEGIN
+> COPY t FROM STDIN
+<fail stop
+copy in 0 0,0,0
+ERROR 57014 COPY from stdin failed: stop (COPY t, line 1)
+> COMMIT
+ROLLBACK
+> COPY t FROM STDIN
+<hex 
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a000002000000000000ffff
+<done
+copy in 1 1
+ERROR 22P04 unrecognized critical flags in COPY file header
+> COPY t (id) FROM STDIN (FORMAT binary)
+<hex 5047434f50590aff0d0a0000000000
+<fail stop
+copy in 1 1
+ERROR 57014 COPY from stdin failed: stop
+> COPY t FROM STDIN WITH (FORMAT csv, HEADER true)
+< id,b,c
+<fail stop
+copy in 0 0,0,0
+ERROR 57014 COPY from stdin failed: stop (COPY t, line 2)
+> COPY t FROM STDIN WITH (FORMAT text, HEADER 2)
+< a
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN
+<hex 5c2e0d0a
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN
+<hex 5c2e
+<done
+copy in 0 0,0,0
+ERROR 22P04 end-of-copy marker is not alone on its line (COPY t, line 1)
+> COPY t FROM STDIN (HEADER match)
+<done
+copy in 0 0,0,0
+ERROR 22P04 wrong number of fields in header line: got 1, expected 3 (COPY t, line 1: "")
+> COPY t FROM STDIN (HEADER match)
+< \.
+<done
+copy in 0 0,0,0
+ERROR 22P04 wrong number of fields in header line: got 1, expected 3 (COPY t, line 1: "")
+> COPY t FROM STDIN (HEADER match)
+< 
+<done
+copy in 0 0,0,0
+ERROR 22P04 wrong number of fields in header line: got 1, expected 3 (COPY t, line 1: "")
+> COPY t FROM STDIN (FORMAT csv, HEADER match)
+<done
+copy in 0 0,0,0
+ERROR 22P04 wrong number of fields in header line: got 1, expected 3 (COPY t, line 1: "")
+> COPY t FROM STDIN (HEADER match)
+< id	\N	c
+<done
+copy in 0 0,0,0
+ERROR 22P04 column name mismatch in header line field 2: got null value ("\N"), expected "b" (COPY t, line 1: "id	\N	c")
+> COPY t FROM STDIN (HEADER match)
+< id	\x62	c
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN (HEADER match)
+< ID	b	c
+<done
+copy in 0 0,0,0
+ERROR 22P04 column name mismatch in header line field 1: got "ID", expected "id" (COPY t, line 1: "ID	b	c")
+> COPY t FROM STDIN (FORMAT csv, HEADER match, NULL 'b')
+< id,b,c
+<done
+copy in 0 0,0,0
+ERROR 22P04 column name mismatch in header line field 2: got null value ("b"), expected "b" (COPY t, line 1: "id,b,c")
+> COPY t FROM STDIN (FORMAT csv, HEADER match)
+< id,"b
+< ",c
+<done
+copy in 0 0,0,0
+ERROR 22P04 column name mismatch in header line field 2: got "b
+", expected "b" (COPY t, line 1: "id,"b
+",c")
+> COPY t FROM STDIN (HEADER 1)
+<hex 610d0a620a
+<done
+copy in 0 0,0,0
+ERROR 22P04 literal newline found in data (COPY t, line 2)
+HINT Use "\n" to represent newline.
+> COPY t FROM STDIN (HEADER 1)
+<hex 610a5c2e0d0a
+<done
+copy in 0 0,0,0
+ERROR 22P04 end-of-copy marker does not match previous newline style (COPY t, line 2)
+> COPY t FROM STDIN (HEADER 1)
+<hex 610d0a5c2e0a
+<done
+copy in 0 0,0,0
+ERROR 22P04 end-of-copy marker does not match previous newline style (COPY t, line 2)
+> COPY t FROM STDIN (HEADER 1)
+<hex 61205c2e0a
+<done
+copy in 0 0,0,0
+ERROR 22P04 end-of-copy marker is not alone on its line (COPY t, line 1)
+> COPY t FROM STDIN (HEADER 1)
+<hex 615c5c2e0a
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN (HEADER 1, DELIMITER ',')
+<hex 61
+<fail x
+copy in 0 0,0,0
+ERROR 57014 COPY from stdin failed: x (COPY t, line 1)

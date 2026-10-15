@@ -740,6 +740,31 @@ pub fn lock_table_allowed(relid: u32, role: u32, mode: i32, session: &dyn Sessio
     Ok(class_check(relid, role, mask, session)?.unwrap_or(false))
 }
 
+/// `ExecCheckOneRelPerms` for `INSERT` into the columns `attnums`: true when the role has `INSERT` on the table, or on each of the columns. With no columns, `INSERT` on any column is enough.
+///
+/// # Errors
+///
+/// The error of an ACL that is not correct.
+pub fn insert_allowed(
+    relid: u32,
+    role: u32,
+    attnums: &[i16],
+    session: &dyn Session,
+) -> Result<bool> {
+    if class_check(relid, role, ACL_INSERT, session)?.unwrap_or(false) {
+        return Ok(true);
+    }
+    if attnums.is_empty() {
+        return Ok(all_attributes_check(relid, role, ACL_INSERT, session)?.unwrap_or(false));
+    }
+    for &attnum in attnums {
+        if !attribute_check(relid, attnum, role, ACL_INSERT, session)?.unwrap_or(false) {
+            return Ok(false);
+        }
+    }
+    Ok(true)
+}
+
 /// The privileges that `nextval` needs: `USAGE` or `UPDATE`.
 pub(crate) const USAGE_UPDATE: u32 = ACL_USAGE | ACL_UPDATE;
 /// The privileges that `currval` and `lastval` need: `SELECT` or `USAGE`.

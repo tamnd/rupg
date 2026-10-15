@@ -1,4 +1,4 @@
-//! `COPY ... TO STDOUT`, as `DoCopy`, `ProcessCopyOptions`, `BeginCopyTo` and `DoCopyTo` in `copy.c` and `copyto.c` run it. The rows go to the client in the text, CSV or binary format. `COPY FROM`, a file, a program and the JSON format give `0A000`.
+//! `COPY ... TO STDOUT`, as `DoCopy`, `ProcessCopyOptions`, `BeginCopyTo` and `DoCopyTo` in `copy.c` and `copyto.c` run it. The rows go to the client in the text, CSV or binary format. A file, a program and the JSON format give `0A000`. `COPY FROM` of the extended protocol gives `0A000` too.
 
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
@@ -10,7 +10,7 @@ use crate::guc::encoding;
 use crate::query;
 
 /// `PGCOPY\n\377\r\n\0`, the signature of the binary format.
-const BINARY_SIGNATURE: &[u8; 11] = b"PGCOPY\n\xff\r\n\0";
+pub(super) const BINARY_SIGNATURE: &[u8; 11] = b"PGCOPY\n\xff\r\n\0";
 
 /// The rows of a `COPY ... TO STDOUT` as the session sends them.
 #[derive(Debug)]
@@ -27,7 +27,7 @@ pub(super) struct CopyOut {
 
 /// `CopyFormat`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Format {
+pub(super) enum Format {
     Text,
     Csv,
     Binary,
@@ -41,26 +41,34 @@ impl Format {
     }
 }
 
-/// The columns of `FORCE_QUOTE`.
+/// The columns of `FORCE_QUOTE`, `FORCE_NOT_NULL` or `FORCE_NULL`.
 #[derive(Debug)]
-enum ForceQuote {
+pub(super) enum ForceQuote {
     None,
     All,
     Names(Vec<String>),
 }
 
-/// `CopyFormatOptions` for `COPY ... TO`.
+/// `CopyFormatOptions`.
 #[derive(Debug)]
-struct Options {
-    format: Format,
-    delimiter: u8,
-    null: String,
-    quote: u8,
-    escape: u8,
-    header: bool,
+pub(super) struct Options {
+    pub(super) format: Format,
+    pub(super) delimiter: u8,
+    pub(super) null: String,
+    pub(super) quote: u8,
+    pub(super) escape: u8,
+    /// The number of header lines. `COPY ... TO` writes at most one.
+    pub(super) header: i32,
+    /// `HEADER MATCH`: `COPY ... FROM` checks the names of the header line.
+    pub(super) header_match: bool,
     force_quote: ForceQuote,
+    /// The columns of `FORCE_NOT_NULL` and `FORCE_NULL`, for `COPY ... FROM`.
+    pub(super) force_not_null: ForceQuote,
+    pub(super) force_null: ForceQuote,
+    /// `FREEZE`.
+    pub(super) freeze: bool,
     /// The canonical name of the encoding of `ENCODING`.
-    encoding: Option<&'static str>,
+    pub(super) encoding: Option<&'static str>,
 }
 
 impl CopyOut {
@@ -102,11 +110,11 @@ impl Connection {
         let reader = self.reader();
         let (options, plan, columns, selected, rel) = if let Some(rv) = &stmt.relation {
             let rel = rupg_analyze::copy_relation(stmt, rv, &reader)?;
-            let options = options(&stmt.options)?;
+            let options = options(&stmt.options, false)?;
             let plan = query::plan(&rel.query, &reader, &Params::default())?;
             (options, plan, rel.columns, rel.selected, Some(rel.name))
         } else {
-            let options = options(&stmt.options)?;
+            let options = options(&stmt.options, false)?;
             let Some(node) = &stmt.query else {
                 return Err(Error::internal("a COPY with no relation and no query"));
             };
@@ -184,8 +192,8 @@ fn statement_name(node: &Node) -> &'static str {
     }
 }
 
-/// `ProcessCopyOptions` for `COPY ... TO`.
-fn options(list: &[Option<Node>]) -> Result<Options, Error> {
+/// `ProcessCopyOptions`. `is_from` is true for `COPY ... FROM`.
+pub(super) fn options(list: &[Option<Node>], is_from: bool) -> Result<Options, Error> {
     let mut format = None;
     let mut freeze = None;
     let mut delimiter: Option<String> = None;
@@ -195,13 +203,14 @@ fn options(list: &[Option<Node>]) -> Result<Options, Error> {
     let mut quote: Option<String> = None;
     let mut escape: Option<String> = None;
     let mut force_quote = ForceQuote::None;
-    let mut force_not_null = false;
-    let mut force_null = false;
+    let mut force_not_null = ForceQuote::None;
+    let mut force_null = ForceQuote::None;
     let mut convert_selectively = false;
     let mut encoding_name = None;
     let mut force_array = None;
     let mut log_verbosity = false;
     let mut reject = None;
+    let mut on_error = None;
     for node in list.iter().flatten() {
         let Node::DefElem(def) = node else { continue };
         let name = def.defname.as_deref().unwrap_or_default();
@@ -259,29 +268,24 @@ fn options(list: &[Option<Node>]) -> Result<Options, Error> {
                 if header.is_some() {
                     return Err(conflict());
                 }
-                header = Some(header_option(def)?);
+                header = Some(header_option(def, is_from)?);
             }
-            "force_quote" => {
-                if !matches!(force_quote, ForceQuote::None) {
+            "force_quote" | "force_not_null" | "force_null" => {
+                let slot = match name {
+                    "force_quote" => &mut force_quote,
+                    "force_null" => &mut force_null,
+                    _ => &mut force_not_null,
+                };
+                if !matches!(slot, ForceQuote::None) {
                     return Err(conflict());
                 }
-                force_quote = match &def.arg {
+                *slot = match &def.arg {
                     Some(Node::A_Star(_)) => ForceQuote::All,
                     Some(Node::List(names)) => ForceQuote::Names(
                         names.iter().flatten().map(name_text).collect::<Result<_, _>>()?,
                     ),
                     _ => return Err(column_list()),
                 };
-            }
-            "force_not_null" | "force_null" => {
-                let seen = if name == "force_null" { &mut force_null } else { &mut force_not_null };
-                if *seen {
-                    return Err(conflict());
-                }
-                if !matches!(&def.arg, Some(Node::A_Star(_) | Node::List(_))) {
-                    return Err(column_list());
-                }
-                *seen = true;
             }
             "convert_selectively" => {
                 if convert_selectively {
@@ -312,12 +316,29 @@ fn options(list: &[Option<Node>]) -> Result<Options, Error> {
                 force_array = Some(def_boolean(def)?);
             }
             "on_error" => {
-                def_string(def)?;
-                return Err(Error::new(
-                    SqlState::INVALID_PARAMETER_VALUE,
-                    "COPY ON_ERROR cannot be used with COPY TO",
-                )
-                .with_position(at));
+                if on_error.is_some() {
+                    return Err(conflict());
+                }
+                let text = def_string(def)?;
+                if !is_from {
+                    return Err(Error::new(
+                        SqlState::INVALID_PARAMETER_VALUE,
+                        "COPY ON_ERROR cannot be used with COPY TO",
+                    )
+                    .with_position(at));
+                }
+                on_error = Some(
+                    ["stop", "ignore", "set_null"]
+                        .into_iter()
+                        .find(|v| text.eq_ignore_ascii_case(v))
+                        .ok_or_else(|| {
+                            Error::new(
+                                SqlState::INVALID_PARAMETER_VALUE,
+                                format!("COPY ON_ERROR \"{text}\" not recognized"),
+                            )
+                            .with_position(at)
+                        })?,
+                );
             }
             "log_verbosity" => {
                 if log_verbosity {
@@ -393,8 +414,8 @@ fn options(list: &[Option<Node>]) -> Result<Options, Error> {
     if !csv && b"\\.abcdefghijklmnopqrstuvwxyz0123456789".contains(&delim) {
         return Err(invalid(format!("COPY delimiter cannot be \"{delimiter}\"")));
     }
-    let header = header.unwrap_or(false);
-    if header && binary_like {
+    let (header, header_match) = header.unwrap_or((0, false));
+    if (header > 0 || header_match) && binary_like {
         return Err(not_supported(&format!("cannot specify HEADER in {} mode", format.mode())));
     }
     if !csv && given_quote {
@@ -419,11 +440,15 @@ fn options(list: &[Option<Node>]) -> Result<Options, Error> {
     if !csv && !matches!(force_quote, ForceQuote::None) {
         return Err(not_supported("COPY FORCE_QUOTE requires CSV mode"));
     }
-    for (given, option) in [(force_not_null, "FORCE_NOT_NULL"), (force_null, "FORCE_NULL")] {
+    if is_from && !matches!(force_quote, ForceQuote::None) {
+        return Err(not_supported("COPY FORCE_QUOTE cannot be used with COPY FROM"));
+    }
+    for (force, option) in [(&force_not_null, "FORCE_NOT_NULL"), (&force_null, "FORCE_NULL")] {
+        let given = !matches!(force, ForceQuote::None);
         if given && !csv {
             return Err(not_supported(&format!("COPY {option} requires CSV mode")));
         }
-        if given {
+        if given && !is_from {
             return Err(invalid(format!("COPY {option} cannot be used with COPY TO")));
         }
     }
@@ -437,16 +462,44 @@ fn options(list: &[Option<Node>]) -> Result<Options, Error> {
             "CSV quote character must not appear in the NULL specification".to_string(),
         ));
     }
-    if freeze == Some(true) {
+    let freeze = freeze == Some(true);
+    if freeze && !is_from {
         return Err(invalid("COPY FREEZE cannot be used with COPY TO".to_string()));
+    }
+    if format == Format::Json && is_from {
+        return Err(invalid("COPY FORMAT JSON is not supported for COPY FROM".to_string()));
     }
     if format != Format::Json && force_array == Some(true) {
         return Err(invalid("COPY FORCE_ARRAY can only be used with JSON mode".to_string()));
     }
-    if default.is_some() {
-        return Err(not_supported("COPY DEFAULT cannot be used with COPY TO"));
+    if let Some(default) = &default {
+        if !is_from {
+            return Err(not_supported("COPY DEFAULT cannot be used with COPY TO"));
+        }
+        if default.as_bytes().contains(&delim) {
+            return Err(not_supported(
+                "COPY delimiter character must not appear in the DEFAULT specification",
+            ));
+        }
+        if csv && default.as_bytes().contains(&quote_byte) {
+            return Err(not_supported(
+                "CSV quote character must not appear in the DEFAULT specification",
+            ));
+        }
+        if *default == null {
+            return Err(not_supported(
+                "NULL specification and DEFAULT specification cannot be the same",
+            ));
+        }
     }
-    if reject.is_some() {
+    let on_error = on_error.unwrap_or("stop");
+    if format == Format::Binary && on_error != "stop" {
+        return Err(Error::new(
+            SqlState::SYNTAX_ERROR,
+            "only ON_ERROR STOP is allowed in BINARY mode",
+        ));
+    }
+    if reject.is_some() && on_error != "ignore" {
         return Err(invalid("COPY REJECT_LIMIT requires ON_ERROR to be set to IGNORE".to_string()));
     }
     Ok(Options {
@@ -456,7 +509,11 @@ fn options(list: &[Option<Node>]) -> Result<Options, Error> {
         quote: quote_byte,
         escape: escape_byte,
         header,
+        header_match,
         force_quote,
+        force_not_null,
+        force_null,
+        freeze,
         encoding: encoding_name,
     })
 }
@@ -515,18 +572,21 @@ fn boolean_word(text: &str) -> Option<bool> {
     }
 }
 
-/// `defGetCopyHeaderOption` for `COPY ... TO`: true for a header line.
-fn header_option(def: &DefElem) -> Result<bool, Error> {
+/// `defGetCopyHeaderOption`: the number of header lines, and true for `MATCH`.
+fn header_option(def: &DefElem, is_from: bool) -> Result<(i32, bool), Error> {
     let name = def.defname.as_deref().unwrap_or_default();
     let value = match &def.arg {
-        None => return Ok(true),
+        None => return Ok((1, false)),
         Some(Node::Integer(n)) => *n,
         Some(_) => {
             let text = def_string(def)?;
             if let Some(value) = boolean_word(&text) {
-                return Ok(value);
+                return Ok((i32::from(value), false));
             }
             if text.eq_ignore_ascii_case("match") {
+                if is_from {
+                    return Ok((1, true));
+                }
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
                     format!("cannot use \"{text}\" with HEADER in COPY TO"),
@@ -548,13 +608,13 @@ fn header_option(def: &DefElem) -> Result<bool, Error> {
             format!("a negative integer value cannot be specified for {name}"),
         ));
     }
-    if value > 1 {
+    if value > 1 && !is_from {
         return Err(Error::new(
             SqlState::FEATURE_NOT_SUPPORTED,
             "cannot use multi-line header in COPY TO",
         ));
     }
-    Ok(value == 1)
+    Ok((value, false))
 }
 
 /// `defGetCopyRejectLimitOption`: the value of `REJECT_LIMIT`. A string or a number that is not an integer goes through the input function of `bigint`.
@@ -606,7 +666,7 @@ fn text_rows(
     let csv = options.format == Format::Csv;
     let single = names.len() == 1;
     let mut data = Vec::with_capacity(rows.len() + 1);
-    if options.header {
+    if options.header > 0 {
         let mut line = Vec::new();
         for (i, name) in names.iter().enumerate() {
             if i > 0 {

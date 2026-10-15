@@ -15,7 +15,7 @@ mod table;
 mod tests;
 mod view;
 
-pub use copy::{CopyRelation, attnums, copy_relation};
+pub use copy::{CopyRelation, CopyTarget, attnums, copy_relation, copy_target};
 pub use function::{Body, function_body};
 pub use lock::{Allowed, lock_table};
 pub(crate) use table::check_attribute_type;
