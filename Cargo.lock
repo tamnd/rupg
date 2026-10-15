@@ -383,6 +383,7 @@ dependencies = [
  "rupg-pgcatalog",
  "rupg-sql",
  "rupg-types",
+ "sha2",
 ]
 
 [[package]]

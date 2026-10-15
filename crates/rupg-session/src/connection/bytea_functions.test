@@ -1,0 +1,108 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT '\x0102'::bytea || '\x0304'::bytea, ''::bytea || '\xff'::bytea
+fields ?column?:17:-1:-1,?column?:17:-1:-1
+row \x01020304,\xff
+SELECT 1
+> SELECT substring('\x0102030405'::bytea from 2 for 3), substring('\x0102030405'::bytea from 3), substr('\x0102030405'::bytea, 0, 3), substr('\x0102030405'::bytea, -5, 3), substr('\x0102030405'::bytea, 10)
+fields substring:17:-1:-1,substring:17:-1:-1,substr:17:-1:-1,substr:17:-1:-1,substr:17:-1:-1
+row \x020304,\x030405,\x0102,\x,\x
+SELECT 1
+> SELECT substr('\x0102'::bytea, 1, -1)
+ERROR 22011 negative substring length not allowed
+> SELECT substr('\x0102030405'::bytea, 2, 2147483647)
+fields substr:17:-1:-1
+row \x02030405
+SELECT 1
+> SELECT overlay('\x0102030405'::bytea placing '\xaabb'::bytea from 2), overlay('\x0102030405'::bytea placing '\xaabb'::bytea from 2 for 0), overlay('\x0102030405'::bytea placing '\xaa'::bytea from 4 for 10), overlay('\x0102'::bytea placing '\xaa'::bytea from 9)
+fields overlay:17:-1:-1,overlay:17:-1:-1,overlay:17:-1:-1,overlay:17:-1:-1
+row \x01aabb0405,\x01aabb02030405,\x010203aa,\x0102aa
+SELECT 1
+> SELECT overlay('\x0102'::bytea placing '\xaa'::bytea from 0)
+ERROR 22011 negative substring length not allowed
+> SELECT overlay('\x0102'::bytea placing '\xaa'::bytea from 2 for 2147483647)
+ERROR 22003 integer out of range
+> SELECT bit_count('\x0fff'::bytea), bit_count(''::bytea)
+fields bit_count:20:8:-1,bit_count:20:8:-1
+row 12,0
+SELECT 1
+> SELECT position('\x03'::bytea in '\x01020304'::bytea), position(''::bytea in '\x01'::bytea), position('\x05'::bytea in '\x0102'::bytea), position('\x0304'::bytea in '\x0103030405'::bytea)
+fields position:23:4:-1,position:23:4:-1,position:23:4:-1,position:23:4:-1
+row 3,1,0,3
+SELECT 1
+> SELECT get_byte('\x1234'::bytea, 1), get_bit('\x0102'::bytea, 0), get_bit('\x0102'::bytea, 9), get_bit('\x0102'::bytea, 15)
+fields get_byte:23:4:-1,get_bit:23:4:-1,get_bit:23:4:-1,get_bit:23:4:-1
+row 52,1,1,0
+SELECT 1
+> SELECT get_byte('\x1234'::bytea, 2)
+ERROR 2202E index 2 out of valid range, 0..1
+> SELECT get_byte('\x1234'::bytea, -1)
+ERROR 2202E index -1 out of valid range, 0..1
+> SELECT get_bit('\x12'::bytea, 8)
+ERROR 2202E index 8 out of valid range, 0..7
+> SELECT set_byte('\x1234'::bytea, 0, 255), set_byte('\x1234'::bytea, 1, 256 + 7), set_bit('\x00'::bytea, 3, 1), set_bit('\xff'::bytea, 7, 0)
+fields set_byte:17:-1:-1,set_byte:17:-1:-1,set_bit:17:-1:-1,set_bit:17:-1:-1
+row \xff34,\x1207,\x08,\x7f
+SELECT 1
+> SELECT set_byte('\x12'::bytea, 1, 0)
+ERROR 2202E index 1 out of valid range, 0..0
+> SELECT set_bit('\x12'::bytea, 0, 2)
+ERROR 22023 new bit must be 0 or 1
+> SELECT set_bit('\x12'::bytea, 9, 2)
+ERROR 2202E index 9 out of valid range, 0..7
+> SELECT reverse('\x010203'::bytea), reverse(''::bytea)
+fields reverse:17:-1:-1,reverse:17:-1:-1
+row \x030201,\x
+SELECT 1
+> SELECT '\x7fff'::bytea::int2, '\xffff'::bytea::int2, '\x01'::bytea::int4, '\xffffffff'::bytea::int4, '\x0102030405060708'::bytea::int8, ''::bytea::int8
+fields int2:21:2:-1,int2:21:2:-1,int4:23:4:-1,int4:23:4:-1,int8:20:8:-1,int8:20:8:-1
+row 32767,-1,1,-1,72623859790382856,0
+SELECT 1
+> SELECT '\x010203'::bytea::int2
+ERROR 22003 smallint out of range
+> SELECT '\x0102030405'::bytea::int4
+ERROR 22003 integer out of range
+> SELECT '\x010203040506070809'::bytea::int8
+ERROR 22003 bigint out of range
+> SELECT 258::int2::bytea, (-1)::int4::bytea, 1::int8::bytea
+fields bytea:17:-1:-1,bytea:17:-1:-1,bytea:17:-1:-1
+row \x0102,\xffffffff,\x0000000000000001
+SELECT 1
+> SELECT '\x616263'::bytea LIKE 'a%', '\x616263'::bytea LIKE '_b_', '\x616263'::bytea NOT LIKE '%d', '\xe282ac'::bytea LIKE '_'::bytea, '\xe282ac'::bytea LIKE '___'::bytea
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f,t
+SELECT 1
+> SELECT 'a%c'::bytea LIKE 'a#%c'::bytea ESCAPE '#'::bytea, 'abc'::bytea LIKE 'a#%c'::bytea ESCAPE '#'::bytea, 'a\\c'::bytea LIKE 'a\\c'::bytea ESCAPE ''::bytea
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT 'abc'::bytea LIKE 'a'::bytea ESCAPE 'ab'::bytea
+ERROR 22025 invalid escape string
+> SELECT trim('\x01'::bytea from '\x0102030201'::bytea), trim(leading '\x01'::bytea from '\x0102030201'::bytea), trim(trailing '\x0201'::bytea from '\x0102030201'::bytea), btrim('\x0102'::bytea, ''::bytea), ltrim('\x010101'::bytea, '\x01'::bytea), rtrim('\x0102'::bytea, '\x02'::bytea)
+fields btrim:17:-1:-1,ltrim:17:-1:-1,rtrim:17:-1:-1,btrim:17:-1:-1,ltrim:17:-1:-1,rtrim:17:-1:-1
+row \x020302,\x02030201,\x010203,\x0102,\x,\x01
+SELECT 1
+> SELECT md5('abc'::bytea), md5(''::bytea)
+fields md5:25:-1:-1,md5:25:-1:-1
+row 900150983cd24fb0d6963f7d28e17f72,d41d8cd98f00b204e9800998ecf8427e
+SELECT 1
+> SELECT sha224('abc'::bytea), sha256('abc'::bytea)
+fields sha224:17:-1:-1,sha256:17:-1:-1
+row \x23097d223405d8228642a477bda255b32aadbce4bda0b3f7e36c9da7,\xba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad
+SELECT 1
+> SELECT sha384('abc'::bytea), sha512(''::bytea)
+fields sha384:17:-1:-1,sha512:17:-1:-1
+row \xcb00753f45a35e8bb5a03d699ac65007272c32ab0eded1631a8b605a43ff5bed8086072ba1e7cc2358baeca134c825a7,\xcf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce47d0d13c5d85f2b0ff8318d2877eec2f63b931bd47417a81a538327af927da3e
+SELECT 1
+> SELECT crc32('abc'::bytea), crc32c('abc'::bytea), crc32(''::bytea), crc32c(''::bytea), crc32('The quick brown fox jumps over the lazy dog'::bytea)
+fields crc32:20:8:-1,crc32c:20:8:-1,crc32:20:8:-1,crc32c:20:8:-1,crc32:20:8:-1
+row 891568578,910901175,0,0,1095738169
+SELECT 1
+> SELECT greatest('\x01'::bytea, '\x0102'::bytea), least('\x01'::bytea, '\x0102'::bytea), max(b), min(b) FROM (VALUES ('\x02'::bytea), ('\x0101'::bytea)) v(b)
+fields greatest:17:-1:-1,least:17:-1:-1,max:17:-1:-1,min:17:-1:-1
+row \x0102,\x01,\x02,\x0101
+SELECT 1
+> SELECT string_agg(b, '\x00'::bytea) FROM (VALUES ('\x01'::bytea), ('\x02'::bytea)) v(b)
+fields string_agg:17:-1:-1
+row \x010002
+SELECT 1
