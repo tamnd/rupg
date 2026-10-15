@@ -1,0 +1,104 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT var_pop(x), var_samp(x), variance(x), stddev_pop(x), stddev_samp(x), stddev(x) FROM (VALUES (1), (2), (3), (4), (NULL)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,variance:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1,stddev:1700:-1:-1
+row 1.2500000000000000,1.6666666666666667,1.6666666666666667,1.1180339887498948,1.2909944487358056,1.2909944487358056
+SELECT 1
+> SELECT var_pop(x::int2), var_samp(x::int2), stddev_pop(x::int2), stddev_samp(x::int2) FROM (VALUES (1), (2), (3), (4), (10)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 10.0000000000000000,12.5000000000000000,3.1622776601683793,3.5355339059327376
+SELECT 1
+> SELECT var_pop(x::int8), var_samp(x::int8), stddev_pop(x::int8), stddev_samp(x::int8) FROM (VALUES (1), (2), (3), (4), (10)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 10.0000000000000000,12.5000000000000000,3.1622776601683793,3.5355339059327376
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_pop(x), stddev_samp(x) FROM (VALUES (1.5), (2.25), (3.125), (NULL)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 0.44097222222222222222,0.66145833333333333333,0.66405739377121780694,0.81330088733096395985
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_pop(x), stddev_samp(x) FROM (VALUES (5)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 0,NULL,0,NULL
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_pop(x), stddev_samp(x) FROM (VALUES (5.0)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 0,NULL,0,NULL
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_pop(x), stddev_samp(x) FROM (VALUES (1), (2)) v(x) WHERE false
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_pop(x), stddev_samp(x) FROM (VALUES (7), (7), (7)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 0,0,0,0
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_pop(x), stddev_samp(x) FROM (VALUES (7.000), (7.0), (7)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 0,0,0,0
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_samp(x) FROM (VALUES (1.0), ('NaN'::numeric), (3.0)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_samp:1700:-1:-1
+row NaN,NaN,NaN
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_samp(x) FROM (VALUES (1.0), ('Infinity'::numeric)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_samp:1700:-1:-1
+row NaN,NaN,NaN
+SELECT 1
+> SELECT var_pop(x), var_samp(x) FROM (VALUES ('-Infinity'::numeric)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1
+row NaN,NULL
+SELECT 1
+> SELECT var_samp(x), var_pop(x) FROM (VALUES ('NaN'::numeric)) v(x)
+fields var_samp:1700:-1:-1,var_pop:1700:-1:-1
+row NULL,NaN
+SELECT 1
+> SELECT var_pop(x), var_samp(x), stddev_pop(x), stddev_samp(x) FROM (VALUES (9000000000000000000), (9100000000000000000), (9200000000000000000), (-9223372036854775808), (9223372036854775807)) v(x)
+fields var_pop:1700:-1:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 53906636692093846344832111928434910823,67383295865117307931040139910543638528,7342113911680603062,8208732902532357821
+SELECT 1
+> SELECT var_pop(x), stddev_samp(x) FROM (VALUES (2147483647), (-2147483648), (0)) v(x)
+fields var_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 3074457344186602838,2147483647
+SELECT 1
+> SELECT var_pop(x::int2), stddev_samp(x::int2) FROM (VALUES (32767), (-32768)) v(x)
+fields var_pop:1700:-1:-1,stddev_samp:1700:-1:-1
+row 1073709056.25000000,46340.24290506
+SELECT 1
+> SELECT var_samp(x), stddev_samp(x) FROM (VALUES (0.000001), (0.000002), (0.000004)) v(x)
+fields var_samp:1700:-1:-1,stddev_samp:1700:-1:-1
+row 0.0000000000023333333333333333,0.0000015275252316519466579518
+SELECT 1
+> SELECT var_samp(x), stddev_samp(x) FROM (VALUES (123456789012345678901234567890.123), (-98765432109876543210.5), (1)) v(x)
+fields var_samp:1700:-1:-1,stddev_samp:1700:-1:-1
+row 5080526255144033291317380554950681310405800132897878001364.157876,71277810398075734459666270536.005168
+SELECT 1
+> SELECT var_pop(x), stddev_pop(x) FROM (VALUES (1e-20), (3e-20)) v(x)
+fields var_pop:1700:-1:-1,stddev_pop:1700:-1:-1
+row 0.000000000000000000000000000000000000000100000000000000000000,0.000000000000000000010000000000000000000000000000000000000000
+SELECT 1
+> SELECT var_samp(x), stddev_samp(x), var_pop(x) FROM generate_series(1, 1000) x
+fields var_samp:1700:-1:-1,stddev_samp:1700:-1:-1,var_pop:1700:-1:-1
+row 83416.666666666667,288.819436095749,83333.250000000000
+SELECT 1
+> SELECT var_samp(x), stddev_samp(x) FROM generate_series(1::bigint, 100000::bigint) x
+fields var_samp:1700:-1:-1,stddev_samp:1700:-1:-1
+row 833341666.66666667,28867.65779669
+SELECT 1
+> SELECT var_samp(x::numeric / 7), stddev_pop(x::numeric / 7) FROM generate_series(1, 50) x
+fields var_samp:1700:-1:-1,stddev_pop:1700:-1:-1
+row 4.3367346938775510195335276967930036518950,2.0615528128088302747028172493844675674455
+SELECT 1
+> SELECT g, var_samp(x), stddev_pop(x) FROM (VALUES (1, 2), (1, 4), (2, 5), (2, 5), (3, 1)) v(g, x) GROUP BY g ORDER BY g
+fields g:23:4:-1,var_samp:1700:-1:-1,stddev_pop:1700:-1:-1
+row 1,2.0000000000000000,1.00000000000000000000
+row 2,0,0
+row 3,NULL,0
+SELECT 3
+> SELECT var_pop(x)::text, pg_typeof(var_pop(x)), pg_typeof(stddev(x::int8)), pg_typeof(variance(x::numeric)) FROM (VALUES (1), (3)) v(x)
+fields var_pop:25:-1:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row 1.00000000000000000000,numeric,numeric,numeric
+SELECT 1
+> SELECT var_samp(DISTINCT x), stddev_samp(x ORDER BY x) FROM (VALUES (1), (1), (5)) v(x)
+fields var_samp:1700:-1:-1,stddev_samp:1700:-1:-1
+row 8.0000000000000000,2.3094010767585031
+SELECT 1

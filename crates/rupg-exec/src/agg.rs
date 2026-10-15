@@ -35,6 +35,8 @@ pub(crate) enum Method {
     ArrayAggArray,
     /// `range_agg` of ranges or of multiranges, which makes a multirange.
     RangeAgg,
+    /// `int2_accum`, `int4_accum`, `int8_accum` and `numeric_accum`: the count, the sum and the sum of squares, for the variance of a sample or of the population, or for its square root when `root` is set.
+    Moments { sample: bool, root: bool },
 }
 
 /// True for a pseudo-type that takes the type of the arguments.
@@ -76,6 +78,17 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
         ("array_agg_transfn", "array_agg_finalfn") => Method::ArrayAgg,
         ("array_agg_array_transfn", "array_agg_array_finalfn") => Method::ArrayAggArray,
         ("range_agg_transfn" | "multirange_agg_transfn", "range_agg_finalfn") => Method::RangeAgg,
+        ("int2_accum" | "int4_accum" | "int8_accum" | "numeric_accum", last) => {
+            let last = last.strip_prefix("numeric_").unwrap_or(last);
+            let last = last.strip_prefix("poly_").unwrap_or(last);
+            match last {
+                "var_pop" => Method::Moments { sample: false, root: false },
+                "var_samp" => Method::Moments { sample: true, root: false },
+                "stddev_pop" => Method::Moments { sample: false, root: true },
+                "stddev_samp" => Method::Moments { sample: true, root: true },
+                _ => return Err(unsupported()),
+            }
+        }
         _ => {
             let state =
                 if polymorphic(row.transtype) && row.finalfn == 0 { ty } else { row.transtype };
@@ -137,6 +150,81 @@ enum State {
     RangeAgg {
         ranges: Vec<Range>,
     },
+    Moments(Moments),
+}
+
+/// The state of [`Method::Moments`], as `NumericAggState` has it. The sums of integers are in `small` until they do not fit, and then they go into `big`.
+#[derive(Default)]
+struct Moments {
+    count: i64,
+    nan: i64,
+    pinf: i64,
+    ninf: i64,
+    /// The sum and the sum of squares of the integers.
+    small: (i128, i128),
+    /// The sum and the sum of squares of the values of `numeric` and of the integers that did not fit in `small`.
+    big: Option<(Numeric, Numeric)>,
+}
+
+impl Moments {
+    fn add_big(&mut self, value: &Numeric, square: &Numeric) -> Result<()> {
+        self.big = Some(match self.big.take() {
+            Some((sum, squares)) => (
+                sum.add(value).map_err(rupg_func::type_error)?,
+                squares.add(square).map_err(rupg_func::type_error)?,
+            ),
+            None => (value.clone(), square.clone()),
+        });
+        Ok(())
+    }
+
+    fn add_integer(&mut self, value: i64) -> Result<()> {
+        let value = i128::from(value);
+        let square = value * value;
+        self.count += 1;
+        let (sum, squares) = self.small;
+        if let (Some(sum), Some(squares)) = (sum.checked_add(value), squares.checked_add(square)) {
+            self.small = (sum, squares);
+            return Ok(());
+        }
+        self.small = (0, 0);
+        self.add_big(&Numeric::from_integer(sum), &Numeric::from_integer(squares))?;
+        self.add_big(&Numeric::from_integer(value), &Numeric::from_integer(square))
+    }
+
+    fn add_numeric(&mut self, value: &Numeric) -> Result<()> {
+        match value.sign() {
+            NumericSign::NaN => self.nan += 1,
+            NumericSign::Infinity => self.pinf += 1,
+            NumericSign::NegativeInfinity => self.ninf += 1,
+            _ => {
+                self.count += 1;
+                let square = value.mul(value).map_err(rupg_func::type_error)?;
+                self.add_big(value, &square)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `numeric_stddev_internal`: null for no values and for one value of a sample, and `NaN` when a value is not finite.
+    fn finish(self, sample: bool, root: bool) -> Result<Value> {
+        let total = self.count + self.nan + self.pinf + self.ninf;
+        if total == 0 || (sample && total <= 1) {
+            return Ok(Value::Null);
+        }
+        if total > self.count {
+            return Ok(Value::Numeric(Numeric::NAN));
+        }
+        let (mut sum, mut squares) =
+            (Numeric::from_integer(self.small.0), Numeric::from_integer(self.small.1));
+        if let Some((big_sum, big_squares)) = &self.big {
+            sum = sum.add(big_sum).map_err(rupg_func::type_error)?;
+            squares = squares.add(big_squares).map_err(rupg_func::type_error)?;
+        }
+        Numeric::moment(self.count, &sum, &squares, sample, root)
+            .map(Value::Numeric)
+            .map_err(rupg_func::type_error)
+    }
 }
 
 /// An aggregate call of the query with its method.
@@ -168,6 +256,7 @@ impl Agg<'_> {
                 State::ArrayAggArray { dims: Vec::new(), count: 0, values: Vec::new() }
             }
             Method::RangeAgg => State::RangeAgg { ranges: Vec::new() },
+            Method::Moments { .. } => State::Moments(Moments::default()),
         })
     }
 
@@ -270,6 +359,13 @@ impl Agg<'_> {
                 Some(Value::Null) | None => {}
                 _ => return Err(Error::internal("range_agg got a value of the wrong kind")),
             },
+            (Method::Moments { .. }, State::Moments(moments)) => match args.first() {
+                Some(Value::Null) | None => {}
+                Some(Value::Numeric(v)) => moments.add_numeric(v)?,
+                Some(v) => moments.add_integer(v.as_i64().ok_or_else(|| {
+                    Error::internal("a variance of integers got a value of the wrong kind")
+                })?)?,
+            },
             _ => return Err(Error::internal("an aggregate state of the wrong kind")),
         }
         Ok(())
@@ -338,6 +434,9 @@ impl Agg<'_> {
                 Ok(Value::Array(Box::new(Array { dims: all, values })))
             }
             (Method::RangeAgg, State::RangeAgg { ranges }) => rupg_func::range_agg(self.ty, ranges),
+            (Method::Moments { sample, root }, State::Moments(moments)) => {
+                moments.finish(*sample, *root)
+            }
             _ => Err(Error::internal("an aggregate state of the wrong kind")),
         }
     }
