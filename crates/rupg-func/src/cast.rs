@@ -284,8 +284,8 @@ fn time_typmod(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 /// `interval_scale`.
 fn interval_typmod(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let Value::Interval(iv) = first(args)? else { return Err(bad_value()) };
-    types::adjust_interval(*iv, typmod(args)?).map(Value::Interval).map_err(type_error)
+    let Value::Interval(period) = first(args)? else { return Err(bad_value()) };
+    types::adjust_interval(*period, typmod(args)?).map(Value::Interval).map_err(type_error)
 }
 
 /// The offset east of UTC in seconds of the zone of the session at an instant in microseconds since 2000-01-01 UTC.

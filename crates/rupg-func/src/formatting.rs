@@ -714,22 +714,22 @@ fn timestamptz_to_char(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// `interval_to_char`: the fields of `interval2itm`. The day of the year is an approximate count of the days of the interval, with 30 days in a month.
 #[allow(clippy::cast_possible_truncation)]
 fn interval_to_char(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let Some(&Value::Interval(iv)) = args.first() else { return Err(bad_value()) };
+    let Some(&Value::Interval(period)) = args.first() else { return Err(bad_value()) };
     let Some(format) = format(args)? else { return Ok(Value::Null) };
-    if iv == Interval::INFINITY || iv == Interval::NEGATIVE_INFINITY {
+    if period == Interval::INFINITY || period == Interval::NEGATIVE_INFINITY {
         return Ok(Value::Null);
     }
-    let (year, mon) = (iv.month / 12, iv.month % 12);
+    let (year, mon) = (period.month / 12, period.month % 12);
     let tm = Fields {
         year,
         mon,
-        mday: iv.day,
-        hour: iv.time / USECS_PER_HOUR,
-        min: (iv.time % USECS_PER_HOUR / USECS_PER_MINUTE) as i32,
-        sec: (iv.time % USECS_PER_MINUTE / USECS_PER_SEC) as i32,
-        fsec: (iv.time % USECS_PER_SEC) as i32,
+        mday: period.day,
+        hour: period.time / USECS_PER_HOUR,
+        min: (period.time % USECS_PER_HOUR / USECS_PER_MINUTE) as i32,
+        sec: (period.time % USECS_PER_MINUTE / USECS_PER_SEC) as i32,
+        fsec: (period.time % USECS_PER_SEC) as i32,
         wday: 0,
-        yday: (year * 12 + mon) * 30 + iv.day,
+        yday: (year * 12 + mon) * 30 + period.day,
         gmtoff: 0,
         zone: None,
     };
