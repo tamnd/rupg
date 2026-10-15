@@ -20,6 +20,19 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "float8_var_samp" => float8_var_samp,
         "float8_stddev_pop" => float8_stddev_pop,
         "float8_stddev_samp" => float8_stddev_samp,
+        "float8_regr_accum" => regr_accum,
+        "float8_regr_combine" => regr_combine,
+        "float8_regr_sxx" => regr_sxx,
+        "float8_regr_syy" => regr_syy,
+        "float8_regr_sxy" => regr_sxy,
+        "float8_regr_avgx" => regr_avgx,
+        "float8_regr_avgy" => regr_avgy,
+        "float8_covar_pop" => covar_pop,
+        "float8_covar_samp" => covar_samp,
+        "float8_corr" => corr,
+        "float8_regr_r2" => regr_r2,
+        "float8_regr_slope" => regr_slope,
+        "float8_regr_intercept" => regr_intercept,
         "any_value_transfn" => any_value,
         _ => return None,
     })
@@ -156,6 +169,287 @@ fn float8_stddev_pop(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 fn float8_stddev_samp(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     float_final(args, 1.0, |n, _, sxx| (sxx / (n - 1.0)).sqrt())
+}
+
+/// The state of the regression aggregates: `N`, `Sx`, `Sxx`, `Sy`, `Syy`, `Sxy`, and the `X` and the `Y` that all inputs had so far, or NaN when the inputs were not all the same.
+#[derive(Clone, Copy)]
+struct Regr {
+    n: f64,
+    sx: f64,
+    sxx: f64,
+    sy: f64,
+    syy: f64,
+    sxy: f64,
+    common_x: f64,
+    common_y: f64,
+}
+
+impl Regr {
+    fn of(state: &Value) -> Result<Regr> {
+        let values: [&Value; 8] = elements(state)?;
+        let mut f = [0.0; 8];
+        for (to, value) in f.iter_mut().zip(values) {
+            let Value::Float8(v) = value else { return Err(bad_value()) };
+            *to = *v;
+        }
+        let [n, sx, sxx, sy, syy, sxy, common_x, common_y] = f;
+        Ok(Regr { n, sx, sxx, sy, syy, sxy, common_x, common_y })
+    }
+
+    fn value(self) -> Value {
+        let Regr { n, sx, sxx, sy, syy, sxy, common_x, common_y } = self;
+        array([n, sx, sxx, sy, syy, sxy, common_x, common_y].map(Value::Float8).to_vec())
+    }
+}
+
+fn float_overflow() -> Error {
+    Error::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "value out of range: overflow")
+}
+
+/// `float8_regr_accum`: adds a pair of `Y` and `X` to the state with the algorithm of Youngs and Cramer. While all the inputs of `X` are the same, `Sxx` stays exactly 0, and the same is true for `Y`. Only finite values that give an infinite result are an overflow.
+fn regr_accum(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [state, Value::Float8(y), Value::Float8(x)] = args else { return Err(bad_value()) };
+    let (x, y) = (*x, *y);
+    let old = Regr::of(state)?;
+    let mut r = old;
+    r.n += 1.0;
+    r.sx += x;
+    r.sy += y;
+    let bad = |v: f64| v.is_nan() || v.is_infinite();
+    if old.n > 0.0 {
+        if x != r.common_x || x.is_nan() {
+            r.common_x = f64::NAN;
+        }
+        if y != r.common_y || y.is_nan() {
+            r.common_y = f64::NAN;
+        }
+        let tmp_x = x * r.n - r.sx;
+        let tmp_y = y * r.n - r.sy;
+        let scale = 1.0 / (r.n * old.n);
+        if r.common_x.is_nan() {
+            r.sxx += tmp_x * tmp_x * scale;
+        }
+        if r.common_y.is_nan() {
+            r.syy += tmp_y * tmp_y * scale;
+        }
+        if r.common_x.is_nan() && r.common_y.is_nan() {
+            r.sxy += tmp_x * tmp_y * scale;
+        } else if bad(x) || bad(y) {
+            r.sxy = f64::NAN;
+        }
+        if r.sx.is_infinite()
+            || r.sxx.is_infinite()
+            || r.sy.is_infinite()
+            || r.syy.is_infinite()
+            || r.sxy.is_infinite()
+        {
+            let finite_x = !old.sx.is_infinite() && !x.is_infinite();
+            let finite_y = !old.sy.is_infinite() && !y.is_infinite();
+            if ((r.sx.is_infinite() || r.sxx.is_infinite()) && finite_x)
+                || ((r.sy.is_infinite() || r.syy.is_infinite()) && finite_y)
+                || (r.sxy.is_infinite() && finite_x && finite_y)
+            {
+                return Err(float_overflow());
+            }
+            for v in [&mut r.sxx, &mut r.syy, &mut r.sxy] {
+                if v.is_infinite() {
+                    *v = f64::NAN;
+                }
+            }
+        }
+    } else {
+        if bad(x) {
+            r.sxx = f64::NAN;
+            r.sxy = f64::NAN;
+        }
+        if bad(y) {
+            r.syy = f64::NAN;
+            r.sxy = f64::NAN;
+        }
+        r.common_x = x;
+        r.common_y = y;
+    }
+    Ok(r.value())
+}
+
+/// `float8_regr_combine`: the state of the inputs of two states.
+#[allow(clippy::float_cmp)]
+fn regr_combine(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [a, b] = args else { return Err(bad_value()) };
+    let (a, b) = (Regr::of(a)?, Regr::of(b)?);
+    if a.n == 0.0 {
+        return Ok(b.value());
+    }
+    if b.n == 0.0 {
+        return Ok(a.value());
+    }
+    let n = a.n + b.n;
+    let sx = a.sx + b.sx;
+    if sx.is_infinite() && !a.sx.is_infinite() && !b.sx.is_infinite() {
+        return Err(float_overflow());
+    }
+    let tmp1 = a.sx / a.n - b.sx / b.n;
+    let sxx = a.sxx + b.sxx + a.n * b.n * tmp1 * tmp1 / n;
+    if sxx.is_infinite() && !a.sxx.is_infinite() && !b.sxx.is_infinite() {
+        return Err(float_overflow());
+    }
+    let sy = a.sy + b.sy;
+    if sy.is_infinite() && !a.sy.is_infinite() && !b.sy.is_infinite() {
+        return Err(float_overflow());
+    }
+    let tmp2 = a.sy / a.n - b.sy / b.n;
+    let syy = a.syy + b.syy + a.n * b.n * tmp2 * tmp2 / n;
+    if syy.is_infinite() && !a.syy.is_infinite() && !b.syy.is_infinite() {
+        return Err(float_overflow());
+    }
+    let sxy = a.sxy + b.sxy + a.n * b.n * tmp1 * tmp2 / n;
+    if sxy.is_infinite() && !a.sxy.is_infinite() && !b.sxy.is_infinite() {
+        return Err(float_overflow());
+    }
+    // `float8_eq` makes NaN equal to NaN.
+    let same = |p: f64, q: f64| p == q || p.is_nan() && q.is_nan();
+    let common_x = if same(a.common_x, b.common_x) { a.common_x } else { f64::NAN };
+    let common_y = if same(a.common_y, b.common_y) { a.common_y } else { f64::NAN };
+    Ok(Regr { n, sx, sxx, sy, syy, sxy, common_x, common_y }.value())
+}
+
+/// The result of a final function of the regression aggregates, which is null when `N` is less than `min`, or when `f` gives `None`.
+fn regr_final(args: &[Value], min: f64, f: impl Fn(Regr) -> Option<f64>) -> Result<Value> {
+    let [state] = args else { return Err(bad_value()) };
+    let r = Regr::of(state)?;
+    if r.n < min {
+        return Ok(Value::Null);
+    }
+    Ok(f(r).map_or(Value::Null, Value::Float8))
+}
+
+fn regr_sxx(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| Some(r.sxx))
+}
+
+fn regr_syy(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| Some(r.syy))
+}
+
+fn regr_sxy(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| Some(r.sxy))
+}
+
+/// `float8_regr_avgx`: the common value when all the inputs were the same, so that the result has no error of rounding.
+fn regr_avgx(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| Some(if r.common_x.is_nan() { r.sx / r.n } else { r.common_x }))
+}
+
+fn regr_avgy(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| Some(if r.common_y.is_nan() { r.sy / r.n } else { r.common_y }))
+}
+
+fn covar_pop(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| Some(r.sxy / r.n))
+}
+
+fn covar_samp(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 2.0, |r| Some(r.sxy / (r.n - 1.0)))
+}
+
+/// `float8_corr`: null for a horizontal or a vertical line. The result is clamped to the range from -1 to 1.
+fn corr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| {
+        if r.sxx == 0.0 || r.syy == 0.0 {
+            return None;
+        }
+        let product = r.sxx * r.syy;
+        let root = if product == 0.0 || product.is_infinite() {
+            r.sxx.sqrt() * r.syy.sqrt()
+        } else {
+            product.sqrt()
+        };
+        Some((r.sxy / root).clamp(-1.0, 1.0))
+    })
+}
+
+/// `float8_regr_r2`: null for a vertical line and 1 for a horizontal line. The result is not more than 1.
+fn regr_r2(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| {
+        if r.sxx == 0.0 {
+            return None;
+        }
+        if r.syy == 0.0 {
+            return Some(1.0);
+        }
+        let numerator = r.sxy * r.sxy;
+        let denominator = r.sxx * r.syy;
+        let result = if numerator == 0.0
+            || numerator.is_infinite()
+            || denominator == 0.0
+            || denominator.is_infinite()
+        {
+            let root = r.sxy / (r.sxx.sqrt() * r.syy.sqrt());
+            root * root
+        } else {
+            numerator / denominator
+        };
+        Some(result.min(1.0))
+    })
+}
+
+/// `float8_regr_slope`: null for a vertical line.
+fn regr_slope(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| if r.sxx == 0.0 { None } else { Some(r.sxy / r.sxx) })
+}
+
+/// `frexp`: the mantissa from 0.5 up to but not including 1, and the exponent of 2. Zero, the infinities and NaN have the exponent 0.
+fn frexp(x: f64) -> (f64, i32) {
+    let bits = x.to_bits();
+    let exponent = i32::try_from((bits >> 52) & 0x7ff).unwrap_or(0);
+    match exponent {
+        0 if x == 0.0 => (x, 0),
+        0 => {
+            let (m, e) = frexp(x * f64::from_bits(0x43f0_0000_0000_0000));
+            (m, e - 64)
+        }
+        0x7ff => (x, 0),
+        _ => (f64::from_bits(bits & !(0x7ff << 52) | 0x3fe << 52), exponent - 0x3fe),
+    }
+}
+
+/// `ldexp`: `x` times 2 to the power `n`, with one rounding.
+fn ldexp(x: f64, mut n: i32) -> f64 {
+    let pow2 = |e: i32| f64::from_bits(u64::try_from(0x3ff + e).unwrap_or(0) << 52);
+    let mut y = x;
+    if n > 1023 {
+        y *= pow2(1023);
+        n -= 1023;
+        if n > 1023 {
+            y *= pow2(1023);
+            n = (n - 1023).min(1023);
+        }
+    } else if n < -1022 {
+        // 2 to the power -969 keeps the value normal, so that only the last product rounds.
+        y *= pow2(-1022 + 53);
+        n += 1022 - 53;
+        if n < -1022 {
+            y *= pow2(-1022 + 53);
+            n = (n + 1022 - 53).max(-1022);
+        }
+    }
+    y * pow2(n)
+}
+
+/// `float8_regr_intercept`: null for a vertical line. When `Sx * Sxy` underflows or overflows, the quotient `Sx * Sxy / Sxx` is computed from the mantissas and the exponents.
+fn regr_intercept(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    regr_final(args, 1.0, |r| {
+        if r.sxx == 0.0 {
+            return None;
+        }
+        let mut dy = r.sx * r.sxy / r.sxx;
+        if (dy == 0.0 || dy.is_infinite()) && [r.sx, r.sxy, r.sxx].iter().all(|v| v.is_finite()) {
+            let ((m_sx, n_sx), (m_sxy, n_sxy), (m_sxx, n_sxx)) =
+                (frexp(r.sx), frexp(r.sxy), frexp(r.sxx));
+            dy = ldexp(m_sx * m_sxy / m_sxx, n_sx + n_sxy - n_sxx);
+        }
+        Some((r.sy - dy) / r.n)
+    })
 }
 
 /// `any_value_transfn`: keeps the state, which is the first value that is not null.

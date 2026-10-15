@@ -2117,6 +2117,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/text_more.test")));
     }
 
+    /// The regression aggregates `regr_sxx`, `regr_slope`, `regr_intercept`, `covar_pop`, `corr` and the others, with constant inputs, `Infinity`, `NaN`, values near the limits of `float8` and the overflow errors, and their transition, combine and final functions as functions. `connection/regression_aggregates.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn regression_aggregates() {
+        big_stack(|| script(include_str!("connection/regression_aggregates.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
