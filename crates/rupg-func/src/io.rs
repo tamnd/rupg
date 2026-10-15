@@ -144,7 +144,7 @@ fn type_name(ty: u32) -> String {
 }
 
 /// The state that the input of the date and time types reads.
-fn datetime_input<'a>(
+pub(crate) fn datetime_input<'a>(
     session: &'a dyn Session,
     zone: &'a dyn types::TimeZone,
 ) -> DateTimeInput<'a> {
