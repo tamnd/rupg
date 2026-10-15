@@ -11,8 +11,9 @@ mod decode;
 use rupg_common::SqlState;
 
 pub use decode::{
-    Abbrev, DateTimeInput, DateUnit, NoZones, ZoneAbbrevs, ZoneLookup, date_in, interval_in,
-    local_offset, time_in, timestamp_in, timestamptz_in, timetz_in,
+    Abbrev, DateTimeInput, DateUnit, NoZones, ZoneAbbrevs, ZoneLookup, ZoneName, date_in,
+    decode_timezone_name, interval_in, local_offset, time_in, timestamp_in, timestamptz_in,
+    timetz_in,
 };
 
 use crate::binary::Recv;

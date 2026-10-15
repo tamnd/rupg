@@ -892,6 +892,52 @@ fn decode_timezone_abbrev(
     }
 }
 
+/// What `DecodeTimezoneName` makes of the name of a zone.
+pub enum ZoneName {
+    /// An abbreviation with one offset, in seconds east of UTC.
+    Fixed(i32),
+    /// An abbreviation whose offset changed over time, and its zone. `None` is the zone of the session.
+    Dynamic(Option<Arc<dyn TimeZone + Send + Sync>>),
+    /// A zone of the data.
+    Zone(Arc<dyn TimeZone + Send + Sync>),
+}
+
+impl std::fmt::Debug for ZoneName {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            ZoneName::Fixed(offset) => f.debug_tuple("Fixed").field(offset).finish(),
+            ZoneName::Dynamic(zone) => f.debug_tuple("Dynamic").field(&zone.is_some()).finish(),
+            ZoneName::Zone(_) => f.write_str("Zone"),
+        }
+    }
+}
+
+/// `DecodeTimezoneName`: the abbreviations first, as `DecodeTimezoneAbbrev` finds them, and then the zones of the data. The abbreviations use the first 63 bytes of the name in lower case.
+///
+/// # Errors
+///
+/// `22023` when the name is not a zone, and `F0000` when the zone of an abbreviation is not in the data.
+pub fn decode_timezone_name(name: &str, cx: &DateTimeInput<'_>) -> Result<ZoneName, TypeError> {
+    let mut end = name.len().min(63);
+    while !name.is_char_boundary(end) {
+        end -= 1;
+    }
+    let low = name[..end].to_ascii_lowercase();
+    let (ty, offset, zone) =
+        decode_timezone_abbrev(low.as_bytes(), cx).map_err(|e| e.into_error(name, "text"))?;
+    match (ty, zone) {
+        (TZ | DTZ, _) => Ok(ZoneName::Fixed(offset)),
+        (DYNTZ, Some(ZoneRef::Other(zone))) => Ok(ZoneName::Dynamic(Some(zone))),
+        (DYNTZ, _) => Ok(ZoneName::Dynamic(None)),
+        _ => cx.zones.zone(name).map(ZoneName::Zone).ok_or_else(|| {
+            TypeError::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!("time zone \"{name}\" not recognized"),
+            )
+        }),
+    }
+}
+
 /// `DecodeTimezone`: a numeric zone such as `+05`, `-0530` or `+05:30:15`, in seconds west of UTC.
 fn decode_timezone(s: &[u8]) -> Result<i32, DtErr> {
     let sign = at(s, 0);

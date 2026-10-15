@@ -39,6 +39,7 @@ mod snapshot;
 mod srf;
 mod stat;
 mod text;
+mod timezone;
 mod tsmatch;
 mod tsquery;
 mod tsvector;
@@ -354,6 +355,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| math::by_src(src))
         .or_else(|| datetime::by_src(src))
         .or_else(|| extract::by_src(src))
+        .or_else(|| timezone::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))

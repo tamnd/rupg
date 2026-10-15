@@ -3,12 +3,13 @@
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{
     DATE_INFINITY, DATE_NEGATIVE_INFINITY, DateUnit, Interval, Numeric, POSTGRES_EPOCH_JDATE,
-    TIMESTAMP_NEGATIVE_INFINITY, UNIX_EPOCH_JDATE, UNIX_TO_POSTGRES_USECS, USECS_PER_DAY,
+    TIMESTAMP_NEGATIVE_INFINITY, TimeZone, UNIX_EPOCH_JDATE, UNIX_TO_POSTGRES_USECS, USECS_PER_DAY,
     USECS_PER_SEC, Value, date2j, j2date, numeric_in,
 };
 
-use crate::cast::{infinite, local_time, valid_timestamp};
+use crate::cast::{infinite, local_time, timestamp_range, valid_timestamp};
 use crate::datetime::Tm;
+use crate::timezone::lookup_timezone;
 use crate::{Call, Kernel, bad_value, type_error};
 
 /// `NAMEDATALEN`: the units are cut to fewer bytes than this.
@@ -587,29 +588,39 @@ fn timestamp_trunc(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 /// `timestamptz_trunc`: the fields of the local time in the zone of the session are cut.
 fn timestamptz_trunc(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    const TYPE: &str = "timestamp with time zone";
     let [units, Value::TimestampTz(ts)] = args else { return Err(bad_value()) };
+    trunc_in_zone(units, *ts, call.session.zone()?.as_ref())
+}
+
+/// `timestamptz_trunc_zone`: the fields of the local time in a zone that a name gives are cut.
+fn timestamptz_trunc_zone(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [units, Value::TimestampTz(ts), zone] = args else { return Err(bad_value()) };
+    let zone = lookup_timezone(call, zone)?;
+    trunc_in_zone(units, *ts, zone.as_ref())
+}
+
+/// `timestamptz_trunc_internal`.
+fn trunc_in_zone(units: &Value, ts: i64, zone: &dyn TimeZone) -> Result<Value> {
+    const TYPE: &str = "timestamp with time zone";
     let lowunits = lower_units(units)?;
     let unit = DateUnit::decode_units(&lowunits);
     if !unit.is_units() {
         return Err(not_recognized(&lowunits, TYPE));
     }
-    if infinite(*ts) {
+    if infinite(ts) {
         return if truncates(unit) {
-            Ok(Value::TimestampTz(*ts))
+            Ok(Value::TimestampTz(ts))
         } else {
             Err(not_supported(&lowunits, TYPE))
         };
     }
-    Tm::of(*ts)?;
-    let (local, east) = local_time(call.session, *ts)?;
+    Tm::of(ts)?;
+    let unix = ts.div_euclid(USECS_PER_SEC) - EPOCH / USECS_PER_SEC;
+    let east = zone.at(unix).0;
+    let local = ts.checked_add(i64::from(east) * USECS_PER_SEC).ok_or_else(timestamp_range)?;
     let mut tm = Tm::of(local)?;
     let redo = trunc_tm(&mut tm, unit).ok_or_else(|| not_supported(&lowunits, TYPE))?;
-    let result = if redo {
-        tm.timestamp(Some(call.session.zone()?.as_ref()))?
-    } else {
-        tm.timestamp_west(-east)?
-    };
+    let result = if redo { tm.timestamp(Some(zone))? } else { tm.timestamp_west(-east)? };
     Ok(Value::TimestampTz(result))
 }
 
@@ -753,6 +764,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "timetz_part" => timetz_part_float,
         "timestamp_trunc" => timestamp_trunc,
         "timestamptz_trunc" => timestamptz_trunc,
+        "timestamptz_trunc_zone" => timestamptz_trunc_zone,
         "interval_trunc" => interval_trunc,
         "timestamp_bin" => timestamp_bin,
         "timestamptz_bin" => timestamptz_bin,

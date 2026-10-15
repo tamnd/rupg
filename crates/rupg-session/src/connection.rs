@@ -2053,6 +2053,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/extract.test")));
     }
 
+    /// `AT TIME ZONE` and `AT LOCAL` for a timestamp, a `timestamptz` and a `timetz`, with a zone of the data, an abbreviation with one offset, an abbreviation whose offset changed, a POSIX zone, an abbreviation of the zone of the session and an interval, with the changes of daylight saving time, the ends of the range and the errors. Also `date_trunc` in a zone that a name gives. `connection/at_time_zone.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn at_time_zone() {
+        big_stack(|| script(include_str!("connection/at_time_zone.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
