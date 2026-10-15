@@ -13,8 +13,10 @@ pub mod names;
 pub mod toast;
 
 mod drop;
+mod owner;
 
 pub use drop::{Refusal, Target, flag};
+pub use owner::acl_new_owner;
 
 use std::collections::BTreeMap;
 
@@ -1389,6 +1391,17 @@ impl Catalog {
         self.depend(me, ObjRef::column(relation, column), DepKind::Auto);
         self.depend_on_expr(me, refs, relation, DepKind::Normal);
         Ok(oid)
+    }
+
+    /// `RemoveAttrDefault`: removes the default of a column with its rows of `pg_depend`. A column with no default is not an error.
+    pub fn remove_default(&mut self, relation: u32, column: i16) {
+        let Some(oid) = self.default_of(relation, column).map(|d| d.oid) else { return };
+        self.defaults.remove(&oid);
+        if let Ok(column) = self.column_mut(relation, column) {
+            column.has_default = false;
+        }
+        let me = ObjRef::new(PG_ATTRDEF, oid);
+        self.depends.retain(|d| d.object != me);
     }
 
     fn relation_facts(&self, relation: u32) -> Result<(String, u32)> {

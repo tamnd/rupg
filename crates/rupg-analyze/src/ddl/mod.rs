@@ -1,5 +1,6 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT` and `DROP`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction`, `CommentObject` and `ExecDropStmt` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE` and `ALTER SCHEMA ... OWNER TO`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable` and `AlterSchemaOwner` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
+mod alter;
 mod comment;
 mod copy;
 mod domain;
@@ -21,7 +22,7 @@ pub(crate) use table::check_attribute_type;
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ClassRow, Named, Owned};
-use rupg_sql::nodes::{CreateSchemaStmt, Node, ObjectType, RangeVar, RoleSpecType};
+use rupg_sql::nodes::{CreateSchemaStmt, Node, ObjectType, RangeVar};
 use rupg_types::{Value, oid};
 
 use crate::coerce::AtOpt;
@@ -60,6 +61,21 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::ViewStmt(_)
             | Node::CommentStmt(_)
     ) || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
+        || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype))
+        || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA)
+}
+
+/// True for the kinds of relations of `AlterTableStmt` that [`define`] runs. `ALTER TYPE` of a composite type is not one of them.
+fn is_alter_kind(kind: ObjectType) -> bool {
+    matches!(
+        kind,
+        ObjectType::OBJECT_TABLE
+            | ObjectType::OBJECT_VIEW
+            | ObjectType::OBJECT_INDEX
+            | ObjectType::OBJECT_SEQUENCE
+            | ObjectType::OBJECT_MATVIEW
+            | ObjectType::OBJECT_FOREIGN_TABLE
+    )
 }
 
 /// True for the kinds of objects that `DROP` can remove.
@@ -85,13 +101,15 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
     };
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
-        Node::IndexStmt(index) => definer.create_index(index),
+        Node::IndexStmt(index) => definer.create_index(index, false),
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
         Node::ViewStmt(view) => definer.create_view(view, text),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
         Node::CommentStmt(comment) => definer.comment(comment),
         Node::DropStmt(drop) => definer.drop(drop),
+        Node::AlterTableStmt(alter) => definer.alter_table(alter),
+        Node::AlterOwnerStmt(alter) => definer.alter_owner(alter),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
@@ -292,9 +310,15 @@ impl Definer<'_, '_> {
         }
     }
 
-    /// `object_aclcheck` of `CREATE` on a schema: a superuser or the owner of the schema can create objects in it.
+    /// `object_aclcheck` of `CREATE` on a schema for a role: a superuser or the owner of the schema can create objects in it.
+    fn may_create_in(&self, namespace: u32, role: u32) -> bool {
+        builtin::roles().iter().any(|r| r.oid == role && r.superuser)
+            || self.schema_owner(namespace) == Some(role)
+    }
+
+    /// The check of `CREATE` on a schema for the role of the statement.
     fn check_create_in(&self, namespace: u32, at: Option<usize>) -> Result<()> {
-        if self.is_superuser() || self.schema_owner(namespace) == Some(self.user) {
+        if self.may_create_in(namespace, self.user) {
             return Ok(());
         }
         Err(Error::new(
@@ -411,26 +435,7 @@ impl Definer<'_, '_> {
     fn create_schema(&mut self, stmt: &CreateSchemaStmt) -> Result<()> {
         let owner = match &stmt.authrole {
             None => self.user,
-            Some(role) => match role.roletype {
-                RoleSpecType::ROLESPEC_CSTRING => {
-                    let name = role.rolename.as_deref().unwrap_or_default();
-                    builtin::roles().iter().find(|r| r.name == name).map(|r| r.oid).ok_or_else(
-                        || {
-                            Error::new(
-                                SqlState::UNDEFINED_OBJECT,
-                                format!("role \"{name}\" does not exist"),
-                            )
-                        },
-                    )?
-                }
-                RoleSpecType::ROLESPEC_PUBLIC => {
-                    return Err(Error::new(
-                        SqlState::UNDEFINED_OBJECT,
-                        "role \"public\" does not exist",
-                    ));
-                }
-                _ => self.user,
-            },
+            Some(role) => self.role_oid(role)?,
         };
         let owner_name = builtin::roles().iter().find(|r| r.oid == owner).map(|r| r.name);
         let name = match stmt.schemaname.as_deref() {

@@ -59,7 +59,7 @@ struct Plan {
 }
 
 /// `makeNotNullConstraint`: an unnamed not-null constraint on the column.
-fn make_not_null(column: &str) -> Constraint {
+pub(super) fn make_not_null(column: &str) -> Constraint {
     Constraint {
         contype: ConstrType::CONSTR_NOTNULL,
         keys: vec![Some(Node::String(column.into()))],
@@ -71,7 +71,7 @@ fn make_not_null(column: &str) -> Constraint {
 }
 
 /// The column of a not-null constraint.
-fn not_null_column(con: &Constraint) -> &str {
+pub(super) fn not_null_column(con: &Constraint) -> &str {
     names(&con.keys).first().copied().unwrap_or_default()
 }
 
@@ -258,7 +258,7 @@ impl Definer<'_, '_> {
         }
         let table = self.define_relation(&plan)?;
         for index in &indexes {
-            self.create_index(index)?;
+            self.create_index(index, false)?;
         }
         for fk in &plan.foreign {
             self.add_foreign_key(table, fk)?;
@@ -602,7 +602,7 @@ impl Definer<'_, '_> {
             let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
             self.catalog.add_default(table, attnum, crate::node::write(&expr)?, &refs)?;
         }
-        self.add_checks(table, plan)?;
+        self.add_checks(table, &plan.checks)?;
         self.add_not_nulls(table, plan)?;
         if needs_toast(&shapes) {
             self.catalog.create_toast(table)?;
@@ -611,9 +611,9 @@ impl Definer<'_, '_> {
     }
 
     /// The check constraints of `AddRelationNewConstraints`.
-    fn add_checks(&mut self, table: u32, plan: &Plan) -> Result<()> {
+    pub(super) fn add_checks(&mut self, table: u32, checks: &[Constraint]) -> Result<()> {
         let mut names: Vec<String> = Vec::new();
-        for con in &plan.checks {
+        for con in checks {
             if !con.is_enforced {
                 return Err(not_yet("NOT ENFORCED", place(con.location)));
             }
@@ -814,7 +814,7 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
         )
         .at_opt(at)
     };
-    let mut params: Vec<IndexElem> = Vec::new();
+    let mut params: Vec<&str> = Vec::new();
     for key in names(&con.keys) {
         let found = match plan.columns.iter_mut().find(|c| c.name == key) {
             Some(column) => {
@@ -841,7 +841,7 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
         if !found {
             return Err(missing(key));
         }
-        if params.iter().any(|p| p.name.as_deref() == Some(key)) {
+        if params.contains(&key) {
             let what = if primary { "primary key" } else { "unique" };
             return Err(Error::new(
                 SqlState::DUPLICATE_COLUMN,
@@ -849,35 +849,50 @@ fn index_constraint(plan: &mut Plan, con: &Constraint, rv: &RangeVar) -> Result<
             )
             .at_opt(at));
         }
-        params.push(IndexElem { name: Some(key.into()), location: -1, ..IndexElem::default() });
+        params.push(key);
     }
-    let mut including = Vec::new();
-    for key in names(&con.including) {
-        if !plan.columns.iter().any(|c| c.name == key) && !SYSTEM_COLUMNS.contains(&key) {
+    let including = names(&con.including);
+    for key in &including {
+        if !plan.columns.iter().any(|c| c.name == *key) && !SYSTEM_COLUMNS.contains(key) {
             return Err(missing(key));
         }
-        including.push(IndexElem { name: Some(key.into()), location: -1, ..IndexElem::default() });
     }
-    let elems = |list: Vec<IndexElem>| -> Vec<Option<Node>> {
-        list.into_iter().map(|e| Some(Node::IndexElem(Box::new(e)))).collect()
+    Ok(constraint_index(con, rv, &params, &including))
+}
+
+/// The index statement of a primary key or a unique constraint on the key columns and the included columns.
+pub(super) fn constraint_index(
+    con: &Constraint,
+    rv: &RangeVar,
+    keys: &[&str],
+    including: &[&str],
+) -> IndexStmt {
+    let elems = |list: &[&str]| -> Vec<Option<Node>> {
+        list.iter()
+            .map(|key| {
+                let elem =
+                    IndexElem { name: Some((*key).into()), location: -1, ..IndexElem::default() };
+                Some(Node::IndexElem(Box::new(elem)))
+            })
+            .collect()
     };
-    Ok(IndexStmt {
+    IndexStmt {
         idxname: con.conname.clone(),
         relation: Some(Box::new(rv.clone())),
         accessMethod: Some(con.access_method.clone().unwrap_or_else(|| "btree".into())),
         tableSpace: con.indexspace.clone(),
-        indexParams: elems(params),
+        indexParams: elems(keys),
         indexIncludingParams: elems(including),
         options: con.options.clone(),
         whereClause: con.where_clause.clone(),
         unique: true,
         nulls_not_distinct: con.nulls_not_distinct,
-        primary,
+        primary: con.contype == ConstrType::CONSTR_PRIMARY,
         isconstraint: true,
         deferrable: con.deferrable,
         initdeferred: con.initdeferred,
         ..IndexStmt::default()
-    })
+    }
 }
 
 /// `CheckAttributeType`: a column cannot have a pseudo-type, also as the base type of a domain or the element type of an array. `anyarray` allows the type `anyarray`, as `CHKATYPE_ANYARRAY` does when `allow_system_table_mods` is on.

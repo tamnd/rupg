@@ -1,0 +1,246 @@
+!details
+> CREATE TABLE t (id int NOT NULL, a int, b text)
+CREATE TABLE
+> ALTER TABLE t ALTER COLUMN a SET DEFAULT 5
+ALTER TABLE
+> SELECT adnum, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 't'::regclass
+fields adnum@pg_attrdef.3:21:2:-1,pg_get_expr:25:-1:-1
+row 2,5
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a SET DEFAULT 'x'
+ERROR 22P02 invalid input syntax for type integer: "x"
+> ALTER TABLE t ALTER COLUMN a SET DEFAULT now()
+ERROR 42804 column "a" is of type integer but default expression is of type timestamp with time zone
+HINT You will need to rewrite or cast the expression.
+> ALTER TABLE t ALTER COLUMN a SET DEFAULT id
+ERROR 0A000 cannot use column reference in DEFAULT expression
+> ALTER TABLE t ALTER COLUMN a SET DEFAULT NULL
+ALTER TABLE
+> SELECT count(*) FROM pg_attrdef WHERE adrelid = 't'::regclass
+fields count:20:8:-1
+row 0
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a SET DEFAULT 7, ALTER COLUMN b SET DEFAULT 'x'
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN b DROP DEFAULT
+ALTER TABLE
+> SELECT adnum, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 't'::regclass
+fields adnum@pg_attrdef.3:21:2:-1,pg_get_expr:25:-1:-1
+row 2,7
+SELECT 1
+> ALTER TABLE t ALTER COLUMN b DROP DEFAULT
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN nosuch SET DEFAULT 1
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> ALTER TABLE t ALTER COLUMN xmin DROP DEFAULT
+ERROR 0A000 cannot alter system column "xmin"
+> ALTER TABLE ONLY t ADD CONSTRAINT t_pkey PRIMARY KEY (id)
+ALTER TABLE
+> SELECT conname, contype, conkey FROM pg_constraint WHERE conrelid = 't'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conkey@pg_constraint.21:1005:-1:-1
+row t_id_not_null,n,{1}
+row t_pkey,p,{1}
+SELECT 2
+> ALTER TABLE t ADD PRIMARY KEY (a)
+ERROR 42P16 multiple primary keys for table "t" are not allowed
+> SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1
+row id,t
+row a,f
+row b,f
+SELECT 3
+> ALTER TABLE t ADD CONSTRAINT u UNIQUE (b)
+ALTER TABLE
+> ALTER TABLE t ADD UNIQUE (a, a)
+ERROR 42701 column "a" appears twice in unique constraint at 19
+> ALTER TABLE t ADD UNIQUE (nosuch)
+ERROR 42703 column "nosuch" named in key does not exist
+> ALTER TABLE t ADD CONSTRAINT c1 CHECK (a > 0)
+ALTER TABLE
+> ALTER TABLE t ADD CHECK (a < 100)
+ALTER TABLE
+> ALTER TABLE t ADD CONSTRAINT c1 CHECK (a > 1)
+ERROR 42710 constraint "c1" for relation "t" already exists
+> ALTER TABLE t ADD CONSTRAINT u CHECK (a > 1)
+ERROR 42710 constraint "u" for relation "t" already exists
+> SELECT conname, contype, conkey, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 't'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conkey@pg_constraint.21:1005:-1:-1,pg_get_constraintdef:25:-1:-1
+row c1,c,{2},CHECK ((a > 0))
+row t_a_check,c,{2},CHECK ((a < 100))
+row t_id_not_null,n,{1},NOT NULL id
+row t_pkey,p,{1},PRIMARY KEY (id)
+row u,u,{3},UNIQUE (b)
+SELECT 5
+> SELECT indexrelid::regclass, indisprimary, indisunique, indkey FROM pg_index WHERE indrelid = 't'::regclass ORDER BY 1
+fields indexrelid:2205:4:-1,indisprimary@pg_index.7:16:1:-1,indisunique@pg_index.5:16:1:-1,indkey@pg_index.16:22:-1:-1
+row t_pkey,t,t,1
+row u,f,t,3
+SELECT 2
+> CREATE TABLE r (x int REFERENCES t, y int)
+CREATE TABLE
+> ALTER TABLE ONLY r ADD CONSTRAINT r_y_fkey FOREIGN KEY (y) REFERENCES t (id)
+ALTER TABLE
+> ALTER TABLE r ADD FOREIGN KEY (y) REFERENCES t (b)
+ERROR 42804 foreign key constraint "r_y_fkey1" cannot be implemented
+DETAIL Key columns "y" of the referencing table and "b" of the referenced table are of incompatible types: integer and text.
+> SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'r'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1
+row r_x_fkey,FOREIGN KEY (x) REFERENCES t(id)
+row r_y_fkey,FOREIGN KEY (y) REFERENCES t(id)
+SELECT 2
+> CREATE TABLE p (k int, j int)
+CREATE TABLE
+> ALTER TABLE p ADD PRIMARY KEY (k, j)
+ALTER TABLE
+> SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 'p'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1
+row k,t
+row j,t
+SELECT 2
+> SELECT conname, contype, conkey FROM pg_constraint WHERE conrelid = 'p'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conkey@pg_constraint.21:1005:-1:-1
+row p_j_not_null,n,{2}
+row p_k_not_null,n,{1}
+row p_pkey,p,{1,2}
+SELECT 3
+> CREATE TABLE p2 (k int)
+CREATE TABLE
+> ALTER TABLE p2 ADD PRIMARY KEY (nosuch)
+ERROR 42703 column "nosuch" of relation "p2" does not exist
+> ALTER TABLE p2 ADD PRIMARY KEY (k, k)
+ERROR 42701 column "k" appears twice in primary key constraint at 20
+> ALTER TABLE p2 ADD PRIMARY KEY (k), ADD PRIMARY KEY (k)
+ERROR 42P16 multiple primary keys for table "p2" are not allowed
+> ALTER TABLE p2 ADD CONSTRAINT k_nn NOT NULL k, ADD CONSTRAINT p2_c CHECK (k > 0)
+ALTER TABLE
+> ALTER TABLE p2 ADD CONSTRAINT k_nn NOT NULL k
+ALTER TABLE
+> ALTER TABLE p2 ADD CONSTRAINT other NOT NULL k
+ERROR 55000 cannot create not-null constraint "other" on column "k" of table "p2"
+DETAIL A not-null constraint named "k_nn" already exists for this column.
+> ALTER TABLE p2 ADD NOT NULL k NO INHERIT
+ERROR 55000 cannot change NO INHERIT status of NOT NULL constraint "k_nn" on relation "p2"
+HINT You might need to make the existing constraint inheritable using ALTER TABLE ... ALTER CONSTRAINT ... INHERIT.
+> ALTER TABLE p2 ADD NOT NULL xmin
+ERROR 0A000 cannot add not-null constraint on system column "xmin"
+> SELECT conname, contype, conkey FROM pg_constraint WHERE conrelid = 'p2'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conkey@pg_constraint.21:1005:-1:-1
+row k_nn,n,{1}
+row p2_c,c,{1}
+SELECT 2
+> CREATE TABLE q (k int CONSTRAINT k_nn NOT NULL NO INHERIT)
+CREATE TABLE
+> ALTER TABLE q ADD PRIMARY KEY (k)
+ERROR 55000 cannot create primary key on column "k"
+DETAIL The constraint "k_nn" on column "k" of table "q", marked NO INHERIT, is incompatible with a primary key.
+HINT You might need to make the existing constraint inheritable using ALTER TABLE ... ALTER CONSTRAINT ... INHERIT.
+> ALTER TABLE nosuch ADD PRIMARY KEY (a)
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TABLE IF EXISTS nosuch ADD PRIMARY KEY (a)
+NOTICE 00000 relation "nosuch" does not exist, skipping
+ALTER TABLE
+> ALTER TABLE IF EXISTS nosuch.t OWNER TO postgres
+NOTICE 00000 relation "t" does not exist, skipping
+ALTER TABLE
+> ALTER TABLE nosuch.t OWNER TO postgres
+ERROR 3F000 schema "nosuch" does not exist
+> ALTER TABLE pg_class ALTER COLUMN relname SET DEFAULT 'x'
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> CREATE VIEW v AS SELECT id, a FROM t
+CREATE VIEW
+> ALTER VIEW v ALTER COLUMN a SET DEFAULT 3
+ALTER VIEW
+> SELECT adnum, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 'v'::regclass
+fields adnum@pg_attrdef.3:21:2:-1,pg_get_expr:25:-1:-1
+row 2,3
+SELECT 1
+> ALTER TABLE v ADD CHECK (a > 0)
+ERROR 42809 ALTER action ADD CONSTRAINT cannot be performed on relation "v"
+DETAIL This operation is not supported for views.
+> ALTER VIEW t OWNER TO postgres
+ERROR 42809 "t" is not a view
+> ALTER SEQUENCE t OWNER TO postgres
+ERROR 42809 "t" is not a sequence
+> ALTER INDEX t OWNER TO postgres
+ERROR 42809 "t" is not an index
+> ALTER INDEX t_pkey OWNER TO pg_monitor
+WARNING 42809 cannot change owner of index "t_pkey"
+HINT Change the ownership of the index's table instead.
+ALTER INDEX
+> ALTER INDEX t_pkey OWNER TO postgres
+ALTER INDEX
+> ALTER TABLE t_pkey ALTER COLUMN id SET DEFAULT 1
+ERROR 42809 ALTER action ALTER COLUMN ... SET DEFAULT cannot be performed on relation "t_pkey"
+DETAIL This operation is not supported for indexes.
+> CREATE TABLE s (id serial, big text)
+CREATE TABLE
+> ALTER TABLE s ALTER COLUMN id SET DEFAULT nextval('s_id_seq'::regclass)
+ALTER TABLE
+> SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 's'::regclass
+fields pg_get_expr:25:-1:-1
+row nextval('s_id_seq'::regclass)
+SELECT 1
+> CREATE INDEX s_big ON s (big)
+CREATE INDEX
+> ALTER SEQUENCE s_id_seq OWNER TO pg_monitor
+ERROR 0A000 cannot change owner of sequence "s_id_seq"
+DETAIL Sequence "s_id_seq" is linked to table "s".
+> ALTER SEQUENCE s_id_seq OWNER TO postgres
+ALTER SEQUENCE
+> ALTER TABLE s OWNER TO pg_monitor
+ALTER TABLE
+> SELECT relname, pg_get_userbyid(relowner) FROM pg_class WHERE oid IN ('s'::regclass, 's_id_seq'::regclass, 's_big'::regclass) ORDER BY 1
+fields relname@pg_class.2:19:64:-1,pg_get_userbyid:19:64:-1
+row s,pg_monitor
+row s_big,pg_monitor
+row s_id_seq,pg_monitor
+SELECT 3
+> SELECT pg_get_userbyid(t.relowner) FROM pg_class c JOIN pg_class t ON t.oid = c.reltoastrelid WHERE c.oid = 's'::regclass
+fields pg_get_userbyid:19:64:-1
+row pg_monitor
+SELECT 1
+> SELECT pg_get_userbyid(i.relowner) FROM pg_class c JOIN pg_index x ON x.indrelid = c.reltoastrelid JOIN pg_class i ON i.oid = x.indexrelid WHERE c.oid = 's'::regclass
+fields pg_get_userbyid:19:64:-1
+row pg_monitor
+SELECT 1
+> SELECT typname, pg_get_userbyid(typowner) FROM pg_type WHERE typname IN ('s', '_s') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,pg_get_userbyid:19:64:-1
+row _s,pg_monitor
+row s,pg_monitor
+SELECT 2
+> ALTER TABLE s OWNER TO nosuch
+ERROR 42704 role "nosuch" does not exist
+> ALTER TABLE s OWNER TO public
+ERROR 42704 role "public" does not exist
+> ALTER TABLE s OWNER TO CURRENT_USER
+ALTER TABLE
+> SELECT relname, pg_get_userbyid(relowner) FROM pg_class WHERE oid IN ('s'::regclass, 's_id_seq'::regclass, 's_big'::regclass) ORDER BY 1
+fields relname@pg_class.2:19:64:-1,pg_get_userbyid:19:64:-1
+row s,postgres
+row s_big,postgres
+row s_id_seq,postgres
+SELECT 3
+> ALTER TABLE v OWNER TO pg_monitor
+ALTER TABLE
+> SELECT pg_get_userbyid(relowner) FROM pg_class WHERE oid = 'v'::regclass
+fields pg_get_userbyid:19:64:-1
+row pg_monitor
+SELECT 1
+> CREATE SCHEMA sch
+CREATE SCHEMA
+> ALTER SCHEMA sch OWNER TO pg_monitor
+ALTER SCHEMA
+> SELECT pg_get_userbyid(nspowner) FROM pg_namespace WHERE nspname = 'sch'
+fields pg_get_userbyid:19:64:-1
+row pg_monitor
+SELECT 1
+> ALTER SCHEMA sch OWNER TO pg_monitor
+ALTER SCHEMA
+> ALTER SCHEMA nosuch OWNER TO postgres
+ERROR 3F000 schema "nosuch" does not exist
+> ALTER SCHEMA sch OWNER TO nosuch
+ERROR 42704 role "nosuch" does not exist
+> ALTER SCHEMA nosuch OWNER TO nosuch
+ERROR 42704 role "nosuch" does not exist
+> ALTER SCHEMA public OWNER TO pg_database_owner
+ALTER SCHEMA

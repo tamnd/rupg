@@ -48,8 +48,8 @@ struct Element {
 }
 
 impl Definer<'_, '_> {
-    /// `transformIndexStmt` and `DefineIndex`.
-    pub(super) fn create_index(&mut self, stmt: &IndexStmt) -> Result<()> {
+    /// `transformIndexStmt` and `DefineIndex`. `alter` is true for the index of a constraint of `ALTER TABLE`, as `is_alter_table` is.
+    pub(super) fn create_index(&mut self, stmt: &IndexStmt, alter: bool) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let found = self.lookup_relation(&rv)?;
         let kind = self.kind_of(found);
@@ -148,7 +148,7 @@ impl Definer<'_, '_> {
         let Some(rel) = self.catalog.relation(table) else {
             return Err(not_yet("an index on a built-in relation", None));
         };
-        let namespace = rel.namespace;
+        let (namespace, rel_name) = (rel.namespace, rel.name.clone());
         self.check_create_in(namespace, None)?;
         let method_name = stmt.accessMethod.as_deref().unwrap_or("btree");
         let method = match method_name {
@@ -218,6 +218,9 @@ impl Definer<'_, '_> {
             }
             columns.push(column);
         }
+        if stmt.primary {
+            self.check_primary_key(table, &rel_name, &columns[..key_count], alter)?;
+        }
         let system_var = |e: &Expr| {
             e.find(0, &mut |e, _| match &e.kind {
                 ExprKind::Var(var) if var.attnum < 0 => Some(()),
@@ -266,6 +269,40 @@ impl Definer<'_, '_> {
             refs,
         };
         self.catalog.create_index(new)?;
+        Ok(())
+    }
+
+    /// `index_check_primary_key`: `ALTER TABLE` cannot add a second primary key, and the columns of a primary key must be not null.
+    fn check_primary_key(
+        &self,
+        table: u32,
+        name: &str,
+        keys: &[NewIndexColumn],
+        alter: bool,
+    ) -> Result<()> {
+        let invalid = |message: String| Error::new(SqlState::INVALID_TABLE_DEFINITION, message);
+        if alter && self.catalog.constraints_of(table).any(|c| c.kind == ConKind::Primary) {
+            return Err(invalid(format!(
+                "multiple primary keys for table \"{name}\" are not allowed"
+            )));
+        }
+        for key in keys {
+            if key.key == 0 {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "primary keys cannot be expressions",
+                ));
+            }
+            let column = self.catalog.relation(table).and_then(|r| r.column(key.key));
+            if let Some(column) = column
+                && !column.not_null
+            {
+                return Err(invalid(format!(
+                    "primary key column \"{}\" is not marked NOT NULL",
+                    column.name
+                )));
+            }
+        }
         Ok(())
     }
 

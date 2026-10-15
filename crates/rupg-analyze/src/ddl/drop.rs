@@ -68,7 +68,7 @@ fn kind(code: u8) -> Option<&'static Kind> {
 }
 
 /// The word of `get_relkind_objtype` in the error of `aclcheck_error` with `ACLCHECK_NOT_OWNER`.
-fn owner_word(code: u8) -> &'static str {
+pub(super) fn owner_word(code: u8) -> &'static str {
     match code {
         b'i' | b'I' => "index",
         b'S' => "sequence",

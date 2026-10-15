@@ -430,6 +430,15 @@ impl Connection {
                         ObjectType::OBJECT_SEQUENCE => CommandTag::DropSequence,
                         _ => CommandTag::DropTable,
                     },
+                    Node::AlterTableStmt(stmt) => match stmt.objtype {
+                        ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
+                        ObjectType::OBJECT_SEQUENCE => CommandTag::AlterSequence,
+                        ObjectType::OBJECT_VIEW => CommandTag::AlterView,
+                        ObjectType::OBJECT_MATVIEW => CommandTag::AlterMaterializedView,
+                        ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::AlterForeignTable,
+                        _ => CommandTag::AlterTable,
+                    },
+                    Node::AlterOwnerStmt(_) => CommandTag::AlterSchema,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -2735,6 +2744,12 @@ mod tests {
     #[test]
     fn object_privileges() {
         big_stack(|| script(include_str!("connection/object_privileges.test")));
+    }
+
+    /// `ALTER TABLE` with `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT` and `OWNER TO` on tables, views, indexes and sequences, and `ALTER SCHEMA ... OWNER TO`. The script checks the rows of `pg_attrdef`, `pg_constraint`, `pg_index`, `pg_class` and `pg_type` after each change, with the errors of a bad column, a bad role, a second primary key, a relation of the wrong kind and a system catalog. `connection/alter_table.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_table() {
+        big_stack(|| script(include_str!("connection/alter_table.test")));
     }
 
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
