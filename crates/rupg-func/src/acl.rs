@@ -19,9 +19,9 @@ const ACL_REFERENCES: u32 = 1 << 5;
 const ACL_TRIGGER: u32 = 1 << 6;
 const ACL_EXECUTE: u32 = 1 << 7;
 const ACL_USAGE: u32 = 1 << 8;
-const ACL_CREATE: u32 = 1 << 9;
+pub(crate) const ACL_CREATE: u32 = 1 << 9;
 const ACL_CREATE_TEMP: u32 = 1 << 10;
-const ACL_CONNECT: u32 = 1 << 11;
+pub(crate) const ACL_CONNECT: u32 = 1 << 11;
 const ACL_SET: u32 = 1 << 12;
 const ACL_ALTER_SYSTEM: u32 = 1 << 13;
 const ACL_MAINTAIN: u32 = 1 << 14;
@@ -246,9 +246,23 @@ fn has_privs_of_role(member: u32, role: u32) -> bool {
 
 /// `HAS_PGSTAT_PERMISSIONS`: the current user has the privileges of `pg_read_all_stats` or of `role`, so it sees all the columns of a session of `role`.
 pub(crate) fn has_pgstat_permissions(session: &dyn Session, role: u32) -> bool {
+    reads_all_stats(session) || has_privs_of_role(current_user(session), role)
+}
+
+/// True when the current user has the privileges of `pg_read_all_stats`.
+pub(crate) fn reads_all_stats(session: &dyn Session) -> bool {
     let user = current_user(session);
     role_oid("pg_read_all_stats", session).is_some_and(|stats| has_privs_of_role(user, stats))
-        || has_privs_of_role(user, role)
+}
+
+/// `object_aclcheck` for the current user: true when the user has a privilege of `mask` on the object.
+pub(crate) fn current_user_has(
+    kind: Owned,
+    oid: u32,
+    mask: u32,
+    session: &dyn Session,
+) -> Result<bool> {
+    Ok(object_check(kind, oid, current_user(session), mask, session)?.unwrap_or(false))
 }
 
 /// `is_admin_of_role`: true when `member` is a superuser, or when a role that `member` is a member of has the admin option on `role`. A role is not an admin of itself.
@@ -670,7 +684,7 @@ fn reg_name(kind: RegKind, text: &str, session: &dyn Session, what: &str) -> Res
 }
 
 /// The OID of an object of a kind without a schema by its name, with the error of `get_*_oid`.
-fn simple_name(kind: Owned, name: &str, session: &dyn Session) -> Result<u32> {
+pub(crate) fn simple_name(kind: Owned, name: &str, session: &dyn Session) -> Result<u32> {
     let mut found = builtin::owned(kind).iter().find(|r| r.name == name).map(|r| r.oid);
     if found.is_none() && kind == Owned::Namespace {
         found = session.catalog().and_then(|c| c.schema_by_name(name)).map(|s| s.oid);

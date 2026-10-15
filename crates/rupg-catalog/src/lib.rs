@@ -10,6 +10,7 @@
 
 pub mod database;
 pub mod names;
+pub mod size;
 pub mod toast;
 
 mod drop;
@@ -190,6 +191,8 @@ pub struct IndexInfo {
     pub exprs: Option<String>,
     /// The predicate of a partial index, in the form of the analyzer.
     pub predicate: Option<String>,
+    /// `relpages` of the index: the pages of the main fork when the index is new.
+    pub pages: i32,
 }
 
 /// The facts of a sequence, one row of `pg_sequence`.
@@ -652,6 +655,8 @@ pub struct NewIndex {
     pub predicate: Option<String>,
     /// The objects that the expressions and the predicate refer to.
     pub refs: Vec<ObjRef>,
+    /// The pages of the main fork of the new index, from [`size::empty_index_pages`].
+    pub pages: i32,
 }
 
 /// A new foreign key before it has an OID.
@@ -1621,6 +1626,7 @@ impl Catalog {
             options: key_columns.iter().map(|c| c.option).collect(),
             exprs: new.exprs,
             predicate: new.predicate,
+            pages: new.pages,
         };
         let table_columns = self.relations.get(&new.table).map_or(&[][..], |r| &r.columns[..]);
         let columns = new
@@ -1820,6 +1826,7 @@ impl Catalog {
             options: vec![0, 0],
             exprs: None,
             predicate: None,
+            pages: 1,
         };
         self.relations.insert(
             index,

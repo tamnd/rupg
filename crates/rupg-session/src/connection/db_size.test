@@ -1,0 +1,199 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT v, pg_size_pretty(v) AS a, pg_size_pretty(-v) AS b, pg_size_pretty(v::numeric) AS c, pg_size_pretty(-v::numeric) AS d FROM (VALUES (0::int8), (1), (1023), (10239), (10240), (10752), (20971519), (20971520), (21474836479), (21474836480), (1099511627775), (1099511627776), (22517998136852479), (22517998136852480), (9223372036854775807)) AS t(v)
+fields v:20:8:-1,a:25:-1:-1,b:25:-1:-1,c:25:-1:-1,d:25:-1:-1
+row 0,0 bytes,0 bytes,0 bytes,0 bytes
+row 1,1 bytes,-1 bytes,1 bytes,-1 bytes
+row 1023,1023 bytes,-1023 bytes,1023 bytes,-1023 bytes
+row 10239,10239 bytes,-10239 bytes,10239 bytes,-10239 bytes
+row 10240,10 kB,-10 kB,10 kB,-10 kB
+row 10752,11 kB,-11 kB,11 kB,-11 kB
+row 20971519,20 MB,-20 MB,20 MB,-20 MB
+row 20971520,20 MB,-20 MB,20 MB,-20 MB
+row 21474836479,20 GB,-20 GB,20 GB,-20 GB
+row 21474836480,20 GB,-20 GB,20 GB,-20 GB
+row 1099511627775,1024 GB,-1024 GB,1024 GB,-1024 GB
+row 1099511627776,1024 GB,-1024 GB,1024 GB,-1024 GB
+row 22517998136852479,20 PB,-20 PB,20 PB,-20 PB
+row 22517998136852480,20 PB,-20 PB,20 PB,-20 PB
+row 9223372036854775807,8192 PB,-8192 PB,8192 PB,-8192 PB
+SELECT 15
+> SELECT pg_size_pretty('-9223372036854775808'::int8), pg_size_pretty(1023.5::numeric), pg_size_pretty(10239.5::numeric), pg_size_pretty(10240.5), pg_size_pretty(123456789012345678901234567890::numeric), pg_size_pretty('NaN'::numeric), pg_size_pretty('Infinity'::numeric), pg_size_pretty('-Infinity'::numeric)
+fields pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1
+row -8192 PB,1023.5 bytes,10239.5 bytes,10 kB,109651655766237 PB,NaN PB,Infinity PB,-Infinity PB
+SELECT 1
+> SELECT s, pg_size_bytes(s) FROM (VALUES ('1'), ('123bytes'), ('1kB'), ('1MB'), (' 1 GB'), ('1.5 GB '), ('1TB'), ('3000 TB'), ('1e6 MB'), ('-1e-3 kB'), ('+.5 kb'), ('5.'), ('.5 b'), ('1 B'), ('1 BYTES'), ('1E+2 pb'), ('8191 PB'), ('-8192 PB'), ('0.4'), ('0.5'), ('-0.5')) AS t(s)
+fields s:25:-1:-1,pg_size_bytes:20:8:-1
+row 1,1
+row 123bytes,123
+row 1kB,1024
+row 1MB,1048576
+row  1 GB,1073741824
+row 1.5 GB ,1610612736
+row 1TB,1099511627776
+row 3000 TB,3298534883328000
+row 1e6 MB,1048576000000
+row -1e-3 kB,-1
+row +.5 kb,512
+row 5.,5
+row .5 b,1
+row 1 B,1
+row 1 BYTES,1
+row 1E+2 pb,112589990684262400
+row 8191 PB,9222246136947933184
+row -8192 PB,-9223372036854775808
+row 0.4,0
+row 0.5,1
+row -0.5,-1
+SELECT 21
+> SELECT pg_size_bytes('1 KiB')
+ERROR 22023 invalid size: "1 KiB"
+> SELECT pg_size_bytes('1e')
+ERROR 22023 invalid size: "1e"
+> SELECT pg_size_bytes('1e+')
+ERROR 22023 invalid size: "1e+"
+> SELECT pg_size_bytes('1 e 3')
+ERROR 22023 invalid size: "1 e 3"
+> SELECT pg_size_bytes('1e 3')
+ERROR 22P02 invalid input syntax for type numeric: "1e 3"
+> SELECT pg_size_bytes('kB')
+ERROR 22023 invalid size: "kB"
+> SELECT pg_size_bytes('.')
+ERROR 22023 invalid size: "."
+> SELECT pg_size_bytes('-')
+ERROR 22023 invalid size: "-"
+> SELECT pg_size_bytes('')
+ERROR 22023 invalid size: ""
+> SELECT pg_size_bytes('1 kB 2')
+ERROR 22023 invalid size: "1 kB 2"
+> SELECT pg_size_bytes('8192 PB')
+ERROR 22003 bigint out of range
+> SELECT pg_size_bytes('1e100')
+ERROR 22003 bigint out of range
+> SELECT pg_size_bytes('1..2')
+ERROR 22023 invalid size: "1..2"
+> CREATE TABLE sz_a (a int PRIMARY KEY, b text, f int UNIQUE)
+CREATE TABLE
+> CREATE INDEX sz_a_hash ON sz_a USING hash (b)
+CREATE INDEX
+> CREATE TABLE sz_b (a int, b int)
+CREATE TABLE
+> CREATE TABLE sz_c (a bool)
+CREATE TABLE
+> CREATE INDEX ON sz_c USING hash (a)
+CREATE INDEX
+> CREATE TABLE sz_d (a int2)
+CREATE TABLE
+> CREATE INDEX ON sz_d USING hash (a)
+CREATE INDEX
+> CREATE TABLE sz_e (a varchar(10), b char(20), c numeric(10, 2))
+CREATE TABLE
+> CREATE INDEX ON sz_e USING hash (a)
+CREATE INDEX
+> CREATE TABLE sz_g (a varchar(2000), b varchar(300))
+CREATE TABLE
+> CREATE INDEX ON sz_g USING hash (a)
+CREATE INDEX
+> SELECT c.relname, c.relpages, pg_relation_size(c.oid) FROM pg_class c WHERE c.relname ~ '^sz_[c-g]_a_idx' ORDER BY 1
+fields relname@pg_class.2:19:64:-1,relpages@pg_class.10:23:4:-1,pg_relation_size:20:8:-1
+row sz_c_a_idx,18,147456
+row sz_d_a_idx,10,81920
+row sz_e_a_idx,4,32768
+row sz_g_a_idx,4,32768
+SELECT 4
+> CREATE SEQUENCE sz_seq
+CREATE SEQUENCE
+> CREATE VIEW sz_v AS SELECT * FROM sz_b
+CREATE VIEW
+> SELECT regexp_replace(c.relname, '[0-9]+', 'N') AS relname, c.relkind, c.relpages, pg_relation_size(c.oid) AS main, pg_relation_size(c.oid, 'fsm') AS fsm, pg_relation_size(c.oid, 'vm') AS vm, pg_relation_size(c.oid, 'init') AS init, pg_table_size(c.oid) AS t, pg_indexes_size(c.oid) AS i, pg_total_relation_size(c.oid) AS total, pg_relation_filenode(c.oid) IS NOT NULL AS has_file FROM pg_class c WHERE c.relname LIKE 'sz\_%' OR c.oid = (SELECT reltoastrelid FROM pg_class WHERE relname = 'sz_a') OR c.oid IN (SELECT indexrelid FROM pg_index WHERE indrelid = (SELECT reltoastrelid FROM pg_class WHERE relname = 'sz_a')) ORDER BY 1
+fields relname:25:-1:-1,relkind@pg_class.18:18:1:-1,relpages@pg_class.10:23:4:-1,main:20:8:-1,fsm:20:8:-1,vm:20:8:-1,init:20:8:-1,t:20:8:-1,i:20:8:-1,total:20:8:-1,has_file:16:1:-1
+row pg_toast_N,t,0,0,0,0,0,0,8192,8192,t
+row pg_toast_N_index,i,1,8192,0,0,0,8192,0,8192,t
+row sz_a,r,0,0,0,0,0,8192,65536,73728,t
+row sz_a_f_key,i,1,8192,0,0,0,8192,0,8192,t
+row sz_a_hash,i,6,49152,0,0,0,49152,0,49152,t
+row sz_a_pkey,i,1,8192,0,0,0,8192,0,8192,t
+row sz_b,r,0,0,0,0,0,0,0,0,t
+row sz_c,r,0,0,0,0,0,0,147456,147456,t
+row sz_c_a_idx,i,18,147456,0,0,0,147456,0,147456,t
+row sz_d,r,0,0,0,0,0,0,81920,81920,t
+row sz_d_a_idx,i,10,81920,0,0,0,81920,0,81920,t
+row sz_e,r,0,0,0,0,0,0,32768,32768,t
+row sz_e_a_idx,i,4,32768,0,0,0,32768,0,32768,t
+row sz_g,r,0,0,0,0,0,8192,32768,40960,t
+row sz_g_a_idx,i,4,32768,0,0,0,32768,0,32768,t
+row sz_seq,S,1,8192,0,0,0,8192,0,8192,t
+row sz_v,v,0,0,0,0,0,0,0,0,f
+SELECT 17
+> SELECT pg_size_pretty(pg_total_relation_size('sz_a')), pg_size_pretty(pg_table_size('sz_b')), pg_size_pretty(pg_relation_size('sz_seq'))
+fields pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1,pg_size_pretty:25:-1:-1
+row 72 kB,0 bytes,8192 bytes
+SELECT 1
+> SELECT pg_relation_filenode('pg_class'), pg_relation_filepath('pg_class'), pg_relation_filenode('pg_proc'), pg_relation_filepath('pg_database'), pg_relation_filenode('pg_authid'), pg_relation_filenode('pg_type_oid_index'), pg_relation_filepath('pg_toast.pg_toast_1255')
+fields pg_relation_filenode:26:4:-1,pg_relation_filepath:25:-1:-1,pg_relation_filenode:26:4:-1,pg_relation_filepath:25:-1:-1,pg_relation_filenode:26:4:-1,pg_relation_filenode:26:4:-1,pg_relation_filepath:25:-1:-1
+row 1259,base/5/1259,1255,global/1262,1260,2703,base/5/2836
+SELECT 1
+> SELECT pg_relation_filenode('sz_v'), pg_relation_filepath('sz_v'), pg_relation_filenode(0), pg_relation_filepath(0), pg_relation_size(0, 'xx'), pg_relation_size(0), pg_table_size(0), pg_indexes_size(0), pg_total_relation_size(0)
+fields pg_relation_filenode:26:4:-1,pg_relation_filepath:25:-1:-1,pg_relation_filenode:26:4:-1,pg_relation_filepath:25:-1:-1,pg_relation_size:20:8:-1,pg_relation_size:20:8:-1,pg_table_size:20:8:-1,pg_indexes_size:20:8:-1,pg_total_relation_size:20:8:-1
+row NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_relation_filepath(c.oid) = 'base/' || (SELECT oid FROM pg_database WHERE datname = current_database()) || '/' || c.oid AS path, pg_relation_filenode(c.oid) = c.oid AS node, pg_filenode_relation(0, c.oid) = c.oid AS rel0, pg_filenode_relation(1663, c.oid) = c.oid AS rel1663, pg_filenode_relation(1664, c.oid) AS rel1664 FROM pg_class c WHERE c.relname IN ('sz_a', 'sz_a_pkey', 'sz_b', 'sz_seq') ORDER BY c.relname
+fields path:16:1:-1,node:16:1:-1,rel0:16:1:-1,rel1663:16:1:-1,rel1664:2205:4:-1
+row t,t,t,t,NULL
+row t,t,t,t,NULL
+row t,t,t,t,NULL
+row t,t,t,t,NULL
+SELECT 4
+> SELECT pg_filenode_relation(0, 1259), pg_filenode_relation(1663, 1255), pg_filenode_relation(1664, 1262), pg_filenode_relation(0, 1262), pg_filenode_relation(1664, 1259), pg_filenode_relation(0, 0), pg_filenode_relation(0, 4294967295), pg_filenode_relation(12345, 1259), pg_filenode_relation(0, 2662), pg_filenode_relation(0, 2836), pg_filenode_relation(12345, 2836), pg_filenode_relation(12345, 2662), pg_filenode_relation(1664, 2836)
+fields pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1,pg_filenode_relation:2205:4:-1
+row pg_class,pg_proc,pg_database,NULL,NULL,NULL,NULL,pg_class,pg_class_oid_index,pg_toast.pg_toast_1255,pg_toast.pg_toast_1255,pg_class_oid_index,NULL
+SELECT 1
+> SELECT pg_relation_size('sz_a', 'xx')
+fields pg_relation_size:20:8:-1
+ERROR 22023 invalid fork name
+> SELECT pg_relation_size('sz_a', 'MAIN')
+fields pg_relation_size:20:8:-1
+ERROR 22023 invalid fork name
+> SELECT pg_tablespace_location(0), pg_tablespace_location(1663), pg_tablespace_location(1664)
+fields pg_tablespace_location:25:-1:-1,pg_tablespace_location:25:-1:-1,pg_tablespace_location:25:-1:-1
+row ,,
+SELECT 1
+> SELECT pg_tablespace_location(12345)
+fields pg_tablespace_location:25:-1:-1
+ERROR 58P01 could not stat file "pg_tblspc/12345": No such file or directory
+> SELECT d FROM pg_tablespace_databases(1663) AS d WHERE d < 16384 ORDER BY 1
+fields d:26:4:-1
+row 1
+row 4
+row 5
+SELECT 3
+> SELECT * FROM pg_tablespace_databases(1664)
+fields pg_tablespace_databases:26:4:-1
+WARNING 01000 global tablespace never has databases
+SELECT 0
+> SELECT * FROM pg_tablespace_databases(12345)
+fields pg_tablespace_databases:26:4:-1
+WARNING 01000 12345 is not a tablespace OID
+SELECT 0
+> SELECT pg_database_size(current_database()) > 0, pg_database_size((SELECT oid FROM pg_database WHERE datname = current_database())) > 0, pg_tablespace_size('pg_default') > 0, pg_tablespace_size(1663) > 0
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t
+SELECT 1
+> SELECT pg_database_size(12345)
+fields pg_database_size:20:8:-1
+ERROR 42704 database with OID 12345 does not exist
+> SELECT pg_database_size('nosuch')
+fields pg_database_size:20:8:-1
+ERROR 3D000 database "nosuch" does not exist
+> SELECT pg_tablespace_size(12345)
+fields pg_tablespace_size:20:8:-1
+ERROR 42704 tablespace with OID 12345 does not exist
+> SELECT pg_tablespace_size('nosuch')
+fields pg_tablespace_size:20:8:-1
+ERROR 42704 tablespace "nosuch" does not exist
+> DROP VIEW sz_v
+DROP VIEW
+> DROP SEQUENCE sz_seq
+DROP SEQUENCE
+> DROP TABLE sz_a, sz_b, sz_c, sz_d, sz_e, sz_g
+DROP TABLE

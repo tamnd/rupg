@@ -239,7 +239,7 @@ impl Named {
     ];
 }
 
-/// A row of `pg_class`, with the columns that the privilege checks read.
+/// A row of `pg_class`, with the columns that the privilege checks and the functions of the files of the relations read.
 #[derive(Debug)]
 pub struct ClassRow {
     pub oid: u32,
@@ -252,6 +252,10 @@ pub struct ClassRow {
     pub owner: u32,
     /// `relacl`, or `None` for the default privileges of the owner.
     pub acl: Option<&'static [&'static str]>,
+    /// `relfilenode`, or 0 for a mapped catalog and a relation with no storage.
+    pub filenode: u32,
+    /// `relisshared`.
+    pub shared: bool,
 }
 
 /// A row of `pg_attribute`, with the columns that the privilege checks read.
@@ -766,6 +770,7 @@ fn load_classes() -> Vec<ClassRow> {
     let r = Rows::new("pg_class");
     let (oid, name, namespace) = (r.oid("oid"), r.text("relname"), r.oid("relnamespace"));
     let (kind, natts, owner) = (r.char("relkind"), r.int2("relnatts"), r.oid("relowner"));
+    let (filenode, shared) = (r.oid("relfilenode"), r.bool("relisshared"));
     (0..r.catalog.len)
         .map(|i| ClassRow {
             oid: oid[i],
@@ -775,6 +780,8 @@ fn load_classes() -> Vec<ClassRow> {
             natts: natts[i],
             owner: owner[i],
             acl: r.optional("relacl", i, text_array),
+            filenode: filenode[i],
+            shared: shared[i],
         })
         .collect()
 }
@@ -1148,6 +1155,11 @@ pub fn shared_description(objoid: u32, classoid: u32) -> Option<&'static str> {
 /// The attribute numbers of the primary key of the table, when the key is not deferrable, as `check_functional_grouping` finds them.
 pub fn primary_key(relid: u32) -> Option<&'static [i16]> {
     BUILTIN.primary_keys.get(&relid).map(Vec::as_slice)
+}
+
+/// The built-in relations, in the order of the catalog.
+pub fn classes() -> &'static [ClassRow] {
+    &BUILTIN.classes
 }
 
 /// The relation with this OID.

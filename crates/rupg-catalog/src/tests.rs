@@ -95,6 +95,7 @@ fn index(
         exprs: None,
         predicate: None,
         refs: Vec::new(),
+        pages: 1,
     }
 }
 
@@ -509,6 +510,37 @@ fn toast_decision() {
     for (name, shapes, toast) in cases {
         assert_eq!(needs_toast(&shapes), toast, "{name}");
     }
+}
+
+#[test]
+fn new_index_pages() {
+    // A hash index has the metapage, the bitmap page and the buckets of a split point. The fill factor is 307 rows for each bucket.
+    let cases = [
+        (0.0, 4),
+        (614.0, 4),
+        (920.0, 4),
+        (921.0, 6),
+        (2810.0, 18),
+        (307.0 * 600.0, 642),
+        (307.0 * 1000.0, 1026),
+        (307.0 * 1100.0, 1282),
+        (1e12, 0x4000_0002),
+    ];
+    for (tuples, pages) in cases {
+        assert_eq!(size::empty_index_pages(405, tuples), pages, "{tuples}");
+    }
+    assert_eq!(size::empty_index_pages(BTREE, 1e6), 1);
+    // The rows of a table that was never vacuumed: ten pages of 8168 bytes, with 28 bytes for the header of each row.
+    assert_eq!(size::new_table_tuples([4, size::typavgwidth(-1, 25, -1), 4], 100), 1200.0);
+    assert_eq!(
+        size::new_table_tuples(
+            [size::typavgwidth(-1, 1043, 14), size::typavgwidth(-1, 1042, 24)],
+            100
+        ),
+        540.0
+    );
+    assert_eq!(size::new_table_tuples([], 100), 2910.0);
+    assert_eq!(size::new_table_tuples([size::typavgwidth(-1, 1043, 100_004)], 1), 10.0);
 }
 
 #[test]

@@ -2357,6 +2357,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/databases.test")));
     }
 
+    /// The functions of the size of an object: `pg_size_pretty` of a `bigint` and of a `numeric`, `pg_size_bytes` with its errors, the size of each fork of an empty table, an index of each access method, a sequence and a view, the file of a relation and the relation of a file, the location of a tablespace, `pg_tablespace_databases` and the size of a database and of a tablespace. `connection/db_size.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn db_size() {
+        big_stack(|| script(include_str!("connection/db_size.test")));
+    }
+
     /// The wait events of `pg_wait_events`, which `cargo xtask waitevents` makes from the vendored `wait_event_names.txt`: the count of each type, all the rows of `pg_get_wait_events` in their order, and the join with `pg_stat_activity`, which has no row because the session that runs the statement waits for nothing. `connection/wait_events.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn wait_events() {

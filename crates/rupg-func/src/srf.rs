@@ -82,6 +82,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "pg_stat_get_slru" => crate::shared::slru,
         "pg_stat_get_recovery_prefetch" => crate::shared::recovery_prefetch,
         "pg_stat_get_lock" => crate::shared::lock,
+        "pg_tablespace_databases" => crate::dbsize::tablespace_databases,
         "pg_timezone_names" => crate::zones::names,
         "pg_timezone_abbrevs_zone" => crate::zones::abbrevs_zone,
         "pg_timezone_abbrevs_abbrevs" => crate::zones::abbrevs_abbrevs,
