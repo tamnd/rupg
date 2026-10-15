@@ -102,10 +102,10 @@ pub use datetime::{
     TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, TimeZone, UNIX_EPOCH_JDATE,
     UNIX_TO_POSTGRES_DAYS, UNIX_TO_POSTGRES_USECS, USECS_PER_DAY, USECS_PER_SEC, ZoneAbbrevs,
     ZoneLookup, ZoneName, adjust_interval, adjust_time, adjust_timestamp, date_from_unix, date_in,
-    date_out, date_recv, date2j, decode_numeric_timezone, decode_timezone_name, interval_in,
-    interval_out, interval_recv, interval_send, j2date, local_offset, time_in, time_out, time_recv,
-    timestamp_from_unix, timestamp_in, timestamp_out, timestamp_recv, timestamptz_in,
-    timestamptz_out, timetz_in, timetz_out, timetz_recv,
+    date_out, date_recv, date2j, decode_numeric_timezone, decode_timezone_abbrev_prefix,
+    decode_timezone_name, interval_in, interval_out, interval_recv, interval_send, j2date,
+    local_offset, time_in, time_out, time_recv, timestamp_from_unix, timestamp_in, timestamp_out,
+    timestamp_recv, timestamptz_in, timestamptz_out, timetz_in, timetz_out, timetz_recv,
 };
 pub use datum::Datum;
 pub use error::TypeError;

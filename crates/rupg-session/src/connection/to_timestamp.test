@@ -1,0 +1,338 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT to_timestamp('2024-03-15 13:45:30', 'YYYY-MM-DD HH24:MI:SS')
+fields to_timestamp:1184:8:-1
+row 2024-03-15 13:45:30+00
+SELECT 1
+> SELECT to_timestamp('15 Mar 2024', 'DD Mon YYYY'), to_timestamp('MARCH 5, 2024', 'MONTH DD, YYYY')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 00:00:00+00,2024-03-05 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 01:45:30 PM', 'YYYY-MM-DD HH:MI:SS AM'), to_timestamp('2024-03-15 12:05 a.m.', 'YYYY-MM-DD HH12:MI a.m.')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 13:45:30+00,2024-03-15 00:05:00+00
+SELECT 1
+> SELECT to_timestamp('20240315134530', 'YYYYMMDDHH24MISS')
+fields to_timestamp:1184:8:-1
+row 2024-03-15 13:45:30+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45:30.123456', 'YYYY-MM-DD HH24:MI:SS.US'), to_timestamp('2024-03-15 13:45:30.12', 'YYYY-MM-DD HH24:MI:SS.MS')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 13:45:30.123456+00,2024-03-15 13:45:30.12+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45:30.123456', 'YYYY-MM-DD HH24:MI:SS.FF3'), to_timestamp('2024-03-15 13:45:30.987654', 'YYYY-MM-DD HH24:MI:SS.FF2')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 13:45:30.123+00,2024-03-15 13:45:30.99+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45:30.5', 'YYYY-MM-DD HH24:MI:SS.FF1'), to_timestamp('13:45:30.1234', 'HH24:MI:SS.FF4')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 13:45:30.5+00,0001-01-01 13:45:30.1234+00 BC
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45 +05:30', 'YYYY-MM-DD HH24:MI TZH:TZM'), to_timestamp('2024-03-15 13:45 -08', 'YYYY-MM-DD HH24:MI TZH')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 08:15:00+00,2024-03-15 21:45:00+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45 +0530', 'YYYY-MM-DD HH24:MI TZHTZM'), to_timestamp('2024-03-15 13:45 -03:30', 'YYYY-MM-DD HH24:MI OF')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 08:15:00+00,2024-03-15 17:15:00+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45-08', 'YYYY-MM-DD HH24:MI-TZH'), to_timestamp('2024-03-15 13:45 EST', 'YYYY-MM-DD HH24:MI TZ')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 05:45:00+00,2024-03-15 18:45:00+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45 pst', 'YYYY-MM-DD HH24:MI tz'), to_timestamp('2024-07-15 13:45 MSK', 'YYYY-MM-DD HH24:MI TZ')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 21:45:00+00,2024-07-15 10:45:00+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45 +02', 'YYYY-MM-DD HH24:MI TZ'), to_timestamp('2024-03-15 13:45 UTC', 'YYYY-MM-DD HH24:MI TZ')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 11:45:00+00,2024-03-15 13:45:00+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45 XYZ', 'YYYY-MM-DD HH24:MI TZ')
+fields to_timestamp:1184:8:-1
+ERROR 22007 invalid value "XYZ" for "TZ"
+> SELECT to_timestamp('2024-03-15 13:45 +16', 'YYYY-MM-DD HH24:MI TZH')
+fields to_timestamp:1184:8:-1
+ERROR 22009 time zone displacement out of range: "2024-03-15 13:45 +16"
+> SELECT to_timestamp('2024-03-15 13:45 +05:60', 'YYYY-MM-DD HH24:MI TZH:TZM')
+fields to_timestamp:1184:8:-1
+ERROR 22009 time zone displacement out of range: "2024-03-15 13:45 +05:60"
+> SELECT to_timestamp('97', 'YY'), to_timestamp('05', 'YY'), to_timestamp('5', 'Y'), to_timestamp('520', 'YYY'), to_timestamp('519', 'YYY')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 1997-01-01 00:00:00+00,2005-01-01 00:00:00+00,2005-01-01 00:00:00+00,1520-01-01 00:00:00+00,2519-01-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2,024', 'Y,YYY'), to_timestamp('12,345', 'Y,YYY')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-01-01 00:00:00+00,12345-01-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('x', 'Y,YYY')
+fields to_timestamp:1184:8:-1
+ERROR 22007 invalid value "x" for "Y,YYY"
+> SELECT to_timestamp('21 05', 'CC YY'), to_timestamp('21', 'CC'), to_timestamp('21 00', 'CC YY'), to_timestamp('6 05 BC', 'CC YY BC')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2005-01-01 00:00:00+00,2001-01-01 00:00:00+00,2100-01-01 00:00:00+00,0505-01-01 00:00:00+00 BC
+SELECT 1
+> SELECT to_timestamp('2024 BC', 'YYYY BC'), to_timestamp('44 B.C.', 'YYYY B.C.'), to_timestamp('2024 ad', 'YYYY AD')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-01-01 00:00:00+00 BC,0044-01-01 00:00:00+00 BC,2024-01-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2460385', 'J'), to_date('2460385', 'J')
+fields to_timestamp:1184:8:-1,to_date:1082:4:-1
+row 2024-03-15 00:00:00+00,2024-03-15
+SELECT 1
+> SELECT to_date('2024 075', 'YYYY DDD'), to_date('2024 366', 'YYYY DDD'), to_date('2023 060', 'YYYY DDD')
+fields to_date:1082:4:-1,to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-03-15,2024-12-31,2023-03-01
+SELECT 1
+> SELECT to_date('2024 400', 'YYYY DDD')
+fields to_date:1082:4:-1
+ERROR 22008 date/time field value out of range: "2024 400"
+> SELECT to_date('075', 'DDD')
+fields to_date:1082:4:-1
+ERROR 22007 cannot calculate day of year without year information
+> SELECT to_date('2024 11', 'YYYY WW'), to_date('2024-03 3', 'YYYY-MM W')
+fields to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-03-11,2024-03-15
+SELECT 1
+> SELECT to_date('2024 11 3', 'IYYY IW ID'), to_date('2024 11', 'IYYY IW'), to_date('2024 075', 'IYYY IDDD'), to_date('2020 53 7', 'IYYY IW ID')
+fields to_date:1082:4:-1,to_date:1082:4:-1,to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-03-13,2024-03-11,2024-03-15,2021-01-03
+SELECT 1
+> SELECT to_date('2024 11 3', 'YYYY IW ID')
+fields to_date:1082:4:-1
+ERROR 22007 invalid combination of date conventions
+> SELECT to_date('XII 2024', 'RM YYYY'), to_date('iv 2024', 'rm YYYY'), to_date('viii-2024', 'RM-YYYY')
+fields to_date:1082:4:-1,to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-12-01,2024-04-01,2024-08-01
+SELECT 1
+> SELECT to_date('Friday 15 March 2024', 'Day DD Month YYYY'), to_date('fri 15 mar 2024', 'dy dd mon yyyy')
+fields to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-03-15,2024-03-15
+SELECT 1
+> SELECT to_date('2024-03-15', 'YYYY-MM-DD'), to_date('15/03/2024', 'DD/MM/YYYY'), to_date('2024.3.5', 'YYYY.MM.DD')
+fields to_date:1082:4:-1,to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-03-15,2024-03-15,2024-03-05
+SELECT 1
+> SELECT to_date('2024-02-30', 'YYYY-MM-DD')
+fields to_date:1082:4:-1
+ERROR 22008 date/time field value out of range: "2024-02-30"
+> SELECT to_date('2024-13-01', 'YYYY-MM-DD')
+fields to_date:1082:4:-1
+ERROR 22008 date/time field value out of range: "2024-13-01"
+> SELECT to_date('2023-02-29', 'YYYY-MM-DD'), 1
+fields to_date:1082:4:-1,?column?:23:4:-1
+ERROR 22008 date/time field value out of range: "2023-02-29"
+> SELECT to_date('2024-02-29', 'YYYY-MM-DD'), to_date('2024-00-10', 'YYYY-MM-DD')
+fields to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-02-29,2024-01-10
+SELECT 1
+> SELECT to_timestamp('2024-03-15 25:00', 'YYYY-MM-DD HH24:MI')
+fields to_timestamp:1184:8:-1
+ERROR 22008 date/time field value out of range: "2024-03-15 25:00"
+> SELECT to_timestamp('2024-03-15 13:00', 'YYYY-MM-DD HH:MI')
+fields to_timestamp:1184:8:-1
+ERROR 22007 hour "13" is invalid for the 12-hour clock
+> SELECT to_timestamp('2024-03-15 00:00 AM', 'YYYY-MM-DD HH:MI AM')
+fields to_timestamp:1184:8:-1
+ERROR 22007 hour "0" is invalid for the 12-hour clock
+> SELECT to_timestamp('2024-03-15 13:60', 'YYYY-MM-DD HH24:MI')
+fields to_timestamp:1184:8:-1
+ERROR 22008 date/time field value out of range: "2024-03-15 13:60"
+> SELECT to_timestamp('2024-03-15 xx:00', 'YYYY-MM-DD HH24:MI')
+fields to_timestamp:1184:8:-1
+ERROR 22007 invalid value "xx" for "HH24"
+> SELECT to_timestamp('2024-3-15', 'YYYY-MM-DD'), to_timestamp('2024-3-5 1:2:3', 'YYYY-MM-DD HH24:MI:SS')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 00:00:00+00,2024-03-05 01:02:03+00
+SELECT 1
+> SELECT to_timestamp('20243', 'YYYYMM')
+fields to_timestamp:1184:8:-1
+row 2024-03-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024031', 'YYYYMMDD')
+fields to_timestamp:1184:8:-1
+row 2024-03-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024 3 15', 'FMYYYY FMMM FMDD'), to_timestamp('2024-03-15', 'FXYYYY-MM-DD')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 00:00:00+00,2024-03-15 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024  03 15', 'FXYYYY MM DD')
+fields to_timestamp:1184:8:-1
+row 2024-03-15 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024 03 15', 'FXYYYY-MM-DD'), to_timestamp('2024x03x15', 'FXYYYY-MM-DD')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 00:00:00+00,2024-03-15 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('   2024-03-15', 'YYYY-MM-DD'), to_timestamp('2024   -  03-15', 'YYYY-MM-DD'), to_timestamp('2024/03/15', 'YYYY-MM-DD')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 00:00:00+00,2024-03-15 00:00:00+00,2024-03-15 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024 03 15', 'YYYY-MM-DD'), to_timestamp('2024--03--15', 'YYYY-MM-DD'), to_timestamp('2024-03-15', 'YYYY MM DD')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+ERROR 22008 date/time field value out of range: "2024--03--15"
+> SELECT to_timestamp('2024-03-15', 'YYYYMMDD')
+fields to_timestamp:1184:8:-1
+row 2024-01-03 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('year 2024', '"year" YYYY'), to_timestamp('2024y03m', 'YYYY"y"MM"m"'), to_timestamp('2024abc03', 'YYYYxxxMM')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-01-01 00:00:00+00,2024-03-01 00:00:00+00,2024-03-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('1st 2024', 'DDth YYYY'), to_timestamp('3RD of 03 2024', 'DDTH "of" MM YYYY'), to_timestamp('15th', 'DDth')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-01-01 00:00:00+00,2024-03-03 00:00:00+00,0001-01-15 00:00:00+00 BC
+SELECT 1
+> SELECT to_timestamp('2024 Q1 03', 'YYYY "Q"Q MM'), to_timestamp('86399', 'SSSSS'), to_timestamp('3600', 'SSSS')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-01 00:00:00+00,0001-01-01 23:59:59+00 BC,0001-01-01 01:00:00+00 BC
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45:30', 'YYYY-MM-DD HH24:MI:SS') AT TIME ZONE 'UTC'
+fields timezone:1114:8:-1
+row 2024-03-15 13:45:30
+SELECT 1
+> SET TimeZone TO 'America/New_York'
+SET
+TimeZone=America/New_York
+> SELECT to_timestamp('2024-03-10 02:30', 'YYYY-MM-DD HH24:MI'), to_timestamp('2024-11-03 01:30', 'YYYY-MM-DD HH24:MI'), to_timestamp('2024-07-01 12:00', 'YYYY-MM-DD HH24:MI')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-10 03:30:00-04,2024-11-03 01:30:00-05,2024-07-01 12:00:00-04
+SELECT 1
+> SELECT to_timestamp('2024-07-01 12:00 EDT', 'YYYY-MM-DD HH24:MI TZ'), to_timestamp('2024-01-01 12:00 EST', 'YYYY-MM-DD HH24:MI TZ'), to_timestamp('2024-07-01 12:00 +00', 'YYYY-MM-DD HH24:MI TZH')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-07-01 12:00:00-04,2024-01-01 12:00:00-05,2024-07-01 08:00:00-04
+SELECT 1
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT to_timestamp('', ''), to_timestamp('2024', ''), to_date('', ''), to_timestamp('', 'YYYY')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_date:1082:4:-1,to_timestamp:1184:8:-1
+row 0001-01-01 00:00:00+00 BC,0001-01-01 00:00:00+00 BC,0001-01-01 BC,0001-01-01 00:00:00+00 BC
+SELECT 1
+> SELECT to_timestamp('15 Foo 2024', 'DD Mon YYYY')
+fields to_timestamp:1184:8:-1
+ERROR 22007 invalid value "Foo" for "Mon"
+> SELECT to_timestamp('2024 13 PM', 'YYYY HH PM')
+fields to_timestamp:1184:8:-1
+ERROR 22007 hour "13" is invalid for the 12-hour clock
+> SELECT to_timestamp('2024 Friday', 'YYYY Day'), to_timestamp('2024 3', 'YYYY D')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-01-01 00:00:00+00,2024-01-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024 2025', 'YYYY YYYY')
+fields to_timestamp:1184:8:-1
+ERROR 22007 conflicting values for "YYYY" field in formatting string
+> SELECT to_timestamp('2024 2024', 'YYYY YYYY'), to_timestamp('03 March', 'MM Month')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-01-01 00:00:00+00,0001-03-01 00:00:00+00 BC
+SELECT 1
+> SELECT to_timestamp('03 April', 'MM Month')
+fields to_timestamp:1184:8:-1
+ERROR 22007 conflicting values for "Month" field in formatting string
+> SELECT to_timestamp('99999999999', 'J')
+fields to_timestamp:1184:8:-1
+ERROR 22008 value for "J" in source string is out of range
+> SELECT to_timestamp('2147483648', 'FMJ')
+fields to_timestamp:1184:8:-1
+ERROR 22008 value for "J" in source string is out of range
+> SELECT to_timestamp('9999999', 'YYYY')
+fields to_timestamp:1184:8:-1
+ERROR 22008 timestamp out of range
+> SELECT to_timestamp('9999999', 'FMYYYY')
+fields to_timestamp:1184:8:-1
+ERROR 22008 timestamp out of range
+> SELECT to_timestamp('294277', 'YYYY')
+fields to_timestamp:1184:8:-1
+ERROR 22008 timestamp out of range
+> SELECT to_date('5874897-12-31', 'YYYY-MM-DD'), to_date('4714-11-24 BC', 'YYYY-MM-DD BC')
+fields to_date:1082:4:-1,to_date:1082:4:-1
+row 5874897-12-31,4714-11-24 BC
+SELECT 1
+> SELECT to_date('5874898-01-01', 'YYYY-MM-DD')
+fields to_date:1082:4:-1
+ERROR 22008 date out of range: "5874898-01-01"
+> SELECT to_date('4714-11-23 BC', 'YYYY-MM-DD BC')
+fields to_date:1082:4:-1
+ERROR 22008 date out of range: "4714-11-23 BC"
+> SELECT to_timestamp('2024-03-15 1:2:3.4567890', 'YYYY-MM-DD HH24:MI:SS.US')
+fields to_timestamp:1184:8:-1
+ERROR 22008 date/time field value out of range: "2024-03-15 1:2:3.4567890"
+> SELECT to_timestamp('2024-03-15 13:45:30.5', 'YYYY-MM-DD HH24:MI:SS.FF1') = to_timestamp('2024-03-15 13:45:30.5', 'YYYY-MM-DD HH24:MI:SS.MS')
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45:30.999999', 'YYYY-MM-DD HH24:MI:SS.FF5'), to_timestamp('2024-12-31 23:59:59.95', 'YYYY-MM-DD HH24:MI:SS.FF1')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 13:45:31+00,2025-01-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('-5', 'MM')
+fields to_timestamp:1184:8:-1
+ERROR 22008 date/time field value out of range: "-5"
+> SELECT to_timestamp(' 2024 03', 'YYYY MM'), to_timestamp('2024 -05', 'YYYY TZH'), to_timestamp('2024 - 05', 'YYYY TZH')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-01 00:00:00+00,2024-01-01 05:00:00+00,2023-12-31 19:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45 -05', 'YYYY-MM-DD HH24:MI TZH'), to_timestamp('2024-03-15 13:45 05', 'YYYY-MM-DD HH24:MI TZH')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 18:45:00+00,2024-03-15 08:45:00+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15T13:45:30', 'YYYY-MM-DD"T"HH24:MI:SS'), to_timestamp('2024-03-15T13:45:30', 'YYYY-MM-DDTHH24:MI:SS')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 13:45:30+00,2024-03-15 00:05:30+00
+SELECT 1
+> SELECT to_timestamp('2024-03-15 13:45:30Z', 'YYYY-MM-DD HH24:MI:SS"Z"'), to_timestamp('Mon 2024', 'Dy YYYY'), to_timestamp('2024 3 4', 'YYYY MM D')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-15 13:45:30+00,2024-01-01 00:00:00+00,2024-03-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024-', 'YYYY-MM')
+fields to_timestamp:1184:8:-1
+row 2024-01-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024-  ', 'YYYY-MM')
+fields to_timestamp:1184:8:-1
+ERROR 22007 invalid value "" for "MM"
+> SELECT to_timestamp('2024 03', 'YYYY IW')
+fields to_timestamp:1184:8:-1
+ERROR 22007 invalid combination of date conventions
+> SELECT to_timestamp('12 2024', 'MM IYYY')
+fields to_timestamp:1184:8:-1
+ERROR 22007 invalid combination of date conventions
+> SELECT to_timestamp('2024 abc', 'YYYY MM')
+fields to_timestamp:1184:8:-1
+ERROR 22007 invalid value "ab" for "MM"
+> SELECT to_timestamp('2024 0x', 'YYYY MM')
+fields to_timestamp:1184:8:-1
+row 2024-01-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024 +3', 'YYYY MM'), to_timestamp('2024 3', 'YYYY MM'), to_timestamp('2024 03 ', 'YYYY MM ')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 2024-03-01 00:00:00+00,2024-03-01 00:00:00+00,2024-03-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024 11 3 15', 'YYYY MM W DD')
+fields to_timestamp:1184:8:-1
+row 2024-11-15 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('a.m. 10', 'a.m. HH'), to_timestamp('PM 10', 'AM HH'), to_timestamp('2024 Ad', 'YYYY bc')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 0001-01-01 10:00:00+00 BC,0001-01-01 22:00:00+00 BC,2024-01-01 00:00:00+00
+SELECT 1
+> SELECT to_timestamp('2024 AM', 'YYYY AM')
+fields to_timestamp:1184:8:-1
+ERROR 22007 hour "0" is invalid for the 12-hour clock
+> SELECT to_timestamp('5 4 BC', 'CC YY BC'), to_timestamp('5 BC', 'CC BC'), to_timestamp('19 70', 'CC YY'), to_timestamp('20 70', 'CC YYYY'), to_timestamp('20 170', 'CC YYY')
+fields to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1,to_timestamp:1184:8:-1
+row 0404-01-01 00:00:00+00 BC,0500-01-01 00:00:00+00 BC,1870-01-01 00:00:00+00,0070-01-01 00:00:00+00,2170-01-01 00:00:00+00
+SELECT 1
+> SELECT to_date('2024 001', 'IYYY IDDD'), to_date('2021 001', 'IYYY IDDD'), to_date('2024 10', 'IYYY IW'), to_date('2024 10 7', 'IYYY IW ID')
+fields to_date:1082:4:-1,to_date:1082:4:-1,to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-01-01,2021-01-04,2024-03-04,2024-03-10
+SELECT 1
+> SELECT to_date('2024 060', 'YYYY DDD'), to_date('2024 3 060', 'YYYY MM DDD'), to_date('2024 3 2 060', 'YYYY MM DD DDD')
+fields to_date:1082:4:-1,to_date:1082:4:-1,to_date:1082:4:-1
+row 2024-02-29,2024-03-29,2024-03-02
+SELECT 1
+> SELECT to_char(to_timestamp('2024-03-15 13:45', 'YYYY-MM-DD HH24:MI'), 'YYYY-MM-DD HH24:MI:SS TZ')
+fields to_char:25:-1:-1
+row 2024-03-15 13:45:00 UTC
+SELECT 1
