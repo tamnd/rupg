@@ -51,7 +51,7 @@ fn format_02g(v: f64) -> String {
 }
 
 /// `IS_VALID_JULIAN`.
-fn valid_julian(year: i32, mon: i32) -> bool {
+pub(crate) fn valid_julian(year: i32, mon: i32) -> bool {
     (year > -4713 || (year == -4713 && mon >= 11))
         && (year < 5_874_898 || (year == 5_874_898 && mon < 6))
 }

@@ -912,6 +912,21 @@ impl std::fmt::Debug for ZoneName {
     }
 }
 
+/// `DecodeTimezoneAbbrevPrefix`: the longest abbreviation at the start of the text, in up to 10 letters of any case, as `DecodeTimezoneAbbrev` finds it, and its length in bytes. A dynamic abbreviation whose zone is not in the data does not match.
+pub fn decode_timezone_abbrev_prefix(
+    text: &str,
+    cx: &DateTimeInput<'_>,
+) -> Option<(usize, ZoneName)> {
+    let low = text.bytes().take(TOKMAXLEN).take_while(u8::is_ascii_alphabetic).collect::<Vec<_>>();
+    let low = low.to_ascii_lowercase();
+    (1..=low.len()).rev().find_map(|len| match decode_timezone_abbrev(&low[..len], cx) {
+        Ok((TZ | DTZ, offset, _)) => Some((len, ZoneName::Fixed(offset))),
+        Ok((DYNTZ, _, Some(ZoneRef::Other(zone)))) => Some((len, ZoneName::Dynamic(Some(zone)))),
+        Ok((DYNTZ, _, _)) => Some((len, ZoneName::Dynamic(None))),
+        _ => None,
+    })
+}
+
 /// `DecodeTimezoneName`: the abbreviations first, as `DecodeTimezoneAbbrev` finds them, and then the zones of the data. The abbreviations use the first 63 bytes of the name in lower case.
 ///
 /// # Errors

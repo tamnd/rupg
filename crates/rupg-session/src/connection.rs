@@ -2165,6 +2165,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/to_char.test")));
     }
 
+    /// `to_timestamp` and `to_date`: each pattern of `formatting.c` in the input, the `FM` and `FX` modes, the spaces and the separators that the input skips, the zone offsets and the abbreviations, the years of fewer than 4 digits, the centuries, the Julian days, the ISO weeks, the days of the year, the fractions of the second and the errors of each check. `connection/to_timestamp.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn to_timestamp() {
+        big_stack(|| script(include_str!("connection/to_timestamp.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
