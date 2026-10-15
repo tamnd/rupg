@@ -282,7 +282,9 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             let heap = matches!(rel.kind, RelKind::Table | RelKind::Toast);
             let (am, pages, tuples) = match rel.kind {
                 RelKind::Table | RelKind::Toast => (HEAP, 0, -1.0),
-                RelKind::Index => (rel.index.as_ref().map_or(0, |i| i.method), 1, 0.0),
+                RelKind::Index => {
+                    rel.index.as_ref().map_or((0, 1, 0.0), |i| (i.method, i.pages, 0.0))
+                }
                 RelKind::Sequence => (0, 1, 1.0),
                 RelKind::View => (0, 0, -1.0),
             };

@@ -19,6 +19,7 @@ mod cast;
 mod catinfo;
 mod compare;
 mod datetime;
+mod dbsize;
 mod deparse;
 mod encoding;
 mod extract;
@@ -389,6 +390,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| extract::by_src(src))
         .or_else(|| formatting::by_src(src))
         .or_else(|| numformat::by_src(src))
+        .or_else(|| dbsize::by_src(src))
         .or_else(|| timezone::by_src(src))
         .or_else(|| calendar::by_src(src))
         .or_else(|| random::by_src(src))

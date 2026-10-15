@@ -1,5 +1,6 @@
 //! `CREATE INDEX`, as `transformIndexStmt`, `DefineIndex` and `ComputeIndexAttrs` run it.
 
+use rupg_catalog::size::{empty_index_pages, new_table_tuples, typavgwidth};
 use rupg_catalog::{ConKind, NewIndex, NewIndexColumn};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -253,6 +254,18 @@ impl Definer<'_, '_> {
         if exprs.is_empty() && predicate.is_none() {
             refs.clear();
         }
+        let pages = self.catalog.relation(table).map_or(1, |rel| {
+            let widths = rel
+                .columns
+                .iter()
+                .map(|c| typavgwidth(types::row(c.ty).map_or(-1, |t| t.len), c.ty, c.typmod));
+            let fillfactor = rel
+                .options
+                .iter()
+                .find_map(|o| o.strip_prefix("fillfactor=")?.parse().ok())
+                .unwrap_or(100);
+            empty_index_pages(method, new_table_tuples(widths, fillfactor))
+        });
         let new = NewIndex {
             table,
             name: stmt.idxname.as_deref().map(str::to_string),
@@ -267,6 +280,7 @@ impl Definer<'_, '_> {
             exprs: if exprs.is_empty() { None } else { Some(crate::node::write_list(&exprs)?) },
             predicate: predicate.as_ref().map(crate::node::write).transpose()?,
             refs,
+            pages,
         };
         self.catalog.create_index(new)?;
         Ok(())

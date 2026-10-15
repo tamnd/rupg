@@ -1132,6 +1132,7 @@ fn user_rows_have_the_column_types() {
         exprs: None,
         predicate: Some("a > 1".into()),
         refs: Vec::new(),
+        pages: 1,
     };
     let (pkey, _) = catalog.create_index(index).unwrap();
     let foreign = ForeignKey {
