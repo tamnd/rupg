@@ -26,6 +26,10 @@ fn int_arg(args: &[Value], at: usize) -> Result<i64> {
     args.get(at).and_then(Value::as_i64).ok_or_else(bad_value)
 }
 
+fn negative_length() -> Error {
+    Error::new(SqlState::SUBSTRING_ERROR, "negative substring length not allowed")
+}
+
 fn too_large() -> Error {
     Error::new(SqlState::PROGRAM_LIMIT_EXCEEDED, "requested length too large")
 }
@@ -75,7 +79,7 @@ fn byteaoctetlen(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(count(b.len()))
 }
 
-/// `lower` in the C locale: only the ASCII letters change.
+/// `lower` and `casefold` in the C locale: only the ASCII letters change.
 fn lower(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Text(arg(args, 0)?.to_ascii_lowercase()))
 }
@@ -138,10 +142,7 @@ fn substr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let end = if args.len() > 2 {
         let length = int_arg(args, 2)?;
         if length < 0 {
-            return Err(Error::new(
-                SqlState::SUBSTRING_ERROR,
-                "negative substring length not allowed",
-            ));
+            return Err(negative_length());
         }
         start + length
     } else {
@@ -159,6 +160,42 @@ fn substr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 fn textpos(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let (s, needle) = (arg(args, 0)?, arg(args, 1)?);
     Ok(count(s.find(needle).map_or(0, |at| char_count(&s[..at]) + 1)))
+}
+
+/// `textoverlay` and `textoverlay_no_len`: `overlay`. The positions count characters, and the length is the length of the new text when it is not given.
+fn overlay(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (s, placing, from) = (arg(args, 0)?, arg(args, 1)?, int_arg(args, 2)?);
+    let length = if args.len() > 3 {
+        int_arg(args, 3)?
+    } else {
+        i64::try_from(char_count(placing)).unwrap_or(i64::MAX)
+    };
+    if from <= 0 {
+        return Err(negative_length());
+    }
+    let tail = i32::try_from(from + length)
+        .map_err(|_| Error::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "integer out of range"))?;
+    let head = prefix(s, usize::try_from(from - 1).unwrap_or(usize::MAX));
+    let rest = after(s, usize::try_from(tail.max(1) - 1).unwrap_or(0));
+    Ok(Value::Text(format!("{head}{placing}{rest}")))
+}
+
+/// `translate`: each character of the string that is in `from` becomes the character at the same place in `to`, or goes away when `to` is shorter. The first match in `from` is the one that counts.
+fn translate(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (s, from, to) = (arg(args, 0)?, arg(args, 1)?, arg(args, 2)?);
+    let bytes = i64::try_from(s.len()).unwrap_or(i64::MAX);
+    if bytes.saturating_mul(MAX_CHAR_BYTES).saturating_add(VARHDRSZ) > MAX_ALLOC_SIZE {
+        return Err(too_large());
+    }
+    let to: Vec<char> = to.chars().collect();
+    let mut out = String::with_capacity(s.len());
+    for c in s.chars() {
+        match from.chars().position(|f| f == c) {
+            Some(at) => out.extend(to.get(at)),
+            None => out.push(c),
+        }
+    }
+    Ok(Value::Text(out))
 }
 
 /// `replace_text`.
@@ -190,14 +227,29 @@ fn split_part(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::text(field))
 }
 
-/// `to_hex32` and `to_hex64`: the bits of the number in hexadecimal.
+/// The bits of an `int4` or `int8` argument as an unsigned number, as `convert_to_base` takes them.
 #[allow(clippy::cast_sign_loss)]
+fn unsigned_arg(args: &[Value]) -> Result<u64> {
+    match args.first() {
+        Some(Value::Int4(v)) => Ok(u64::from(*v as u32)),
+        Some(Value::Int8(v)) => Ok(*v as u64),
+        _ => Err(bad_value()),
+    }
+}
+
+/// `to_hex32` and `to_hex64`: the bits of the number in hexadecimal.
 fn to_hex(_: &Call<'_>, args: &[Value]) -> Result<Value> {
-    Ok(Value::Text(match args.first() {
-        Some(Value::Int4(v)) => format!("{:x}", *v as u32),
-        Some(Value::Int8(v)) => format!("{:x}", *v as u64),
-        _ => return Err(bad_value()),
-    }))
+    Ok(Value::Text(format!("{:x}", unsigned_arg(args)?)))
+}
+
+/// `to_oct32` and `to_oct64`: the bits of the number in octal.
+fn to_oct(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Text(format!("{:o}", unsigned_arg(args)?)))
+}
+
+/// `to_bin32` and `to_bin64`: the bits of the number in binary.
+fn to_bin(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Text(format!("{:b}", unsigned_arg(args)?)))
 }
 
 /// `repeat`: a negative count is 0.
@@ -520,6 +572,83 @@ pub(crate) fn quote_any(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     }
 }
 
+/// The value of the first `n` bytes of `s` as hexadecimal digits, or `None` when they are not all hexadecimal digits.
+fn hex_digits(s: &[u8], n: usize) -> Option<u32> {
+    let digits = s.get(..n)?;
+    digits.iter().try_fold(0u32, |acc, &d| Some(acc << 4 | char::from(d).to_digit(16)?))
+}
+
+fn bad_surrogate_pair() -> Error {
+    Error::new(SqlState::SYNTAX_ERROR, "invalid Unicode surrogate pair")
+}
+
+/// `unistr`: the string with each escape `\XXXX`, `\+XXXXXX`, `\uXXXX` or `\UXXXXXXXX` replaced by its character, and `\\` replaced by `\`. Two escapes can be a surrogate pair of UTF-16.
+fn unistr(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let mut s = arg(args, 0)?.as_bytes();
+    let mut out = Vec::with_capacity(s.len());
+    let mut first: Option<u32> = None;
+    while let Some(&c) = s.first() {
+        if c != b'\\' {
+            if first.is_some() {
+                return Err(bad_surrogate_pair());
+            }
+            out.push(c);
+            s = &s[1..];
+            continue;
+        }
+        if s.get(1) == Some(&b'\\') {
+            if first.is_some() {
+                return Err(bad_surrogate_pair());
+            }
+            out.push(b'\\');
+            s = &s[2..];
+            continue;
+        }
+        let (code, used) = if let Some(code) = hex_digits(&s[1..], 4) {
+            (code, 5)
+        } else if let Some(code) =
+            (s.get(1) == Some(&b'u')).then(|| hex_digits(&s[2..], 4)).flatten()
+        {
+            (code, 6)
+        } else if let Some(code) =
+            (s.get(1) == Some(&b'+')).then(|| hex_digits(&s[2..], 6)).flatten()
+        {
+            (code, 8)
+        } else if let Some(code) =
+            (s.get(1) == Some(&b'U')).then(|| hex_digits(&s[2..], 8)).flatten()
+        {
+            (code, 10)
+        } else {
+            return Err(Error::new(SqlState::SYNTAX_ERROR, "invalid Unicode escape")
+                .with_hint("Unicode escapes must be \\XXXX, \\+XXXXXX, \\uXXXX, or \\UXXXXXXXX."));
+        };
+        if code == 0 || code > 0x10_FFFF {
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!("invalid Unicode code point: {code:04X}"),
+            ));
+        }
+        let second = (0xDC00..=0xDFFF).contains(&code);
+        let code = match first.take() {
+            Some(high) if second => 0x1_0000 + ((high - 0xD800) << 10) + (code - 0xDC00),
+            Some(_) => return Err(bad_surrogate_pair()),
+            None if second => return Err(bad_surrogate_pair()),
+            None => code,
+        };
+        if (0xD800..=0xDBFF).contains(&code) {
+            first = Some(code);
+        } else {
+            let c = char::from_u32(code).ok_or_else(bad_value)?;
+            out.extend_from_slice(c.encode_utf8(&mut [0; 4]).as_bytes());
+        }
+        s = &s[used..];
+    }
+    if first.is_some() {
+        return Err(bad_surrogate_pair());
+    }
+    String::from_utf8(out).map(Value::Text).map_err(|_| bad_value())
+}
+
 /// `md5_text`: the MD5 hash of the bytes in lower case hexadecimal.
 fn md5_text(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let digest = Md5::digest(arg(args, 0)?.as_bytes());
@@ -834,7 +963,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "bpcharlen" => bpcharlen,
         "textoctetlen" | "bpcharoctetlen" => octetlen,
         "byteaoctetlen" => byteaoctetlen,
-        "lower" => lower,
+        "lower" | "casefold" => lower,
         "upper" => upper,
         "initcap" => initcap,
         "ltrim1" | "ltrim" => ltrim,
@@ -845,6 +974,11 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "replace_text" => replace,
         "split_part" => split_part,
         "to_hex32" | "to_hex64" => to_hex,
+        "to_oct32" | "to_oct64" => to_oct,
+        "to_bin32" | "to_bin64" => to_bin,
+        "textoverlay" | "textoverlay_no_len" => overlay,
+        "translate" => translate,
+        "unistr" => unistr,
         "repeat" => repeat,
         "text_reverse" => reverse,
         "text_left" => left,

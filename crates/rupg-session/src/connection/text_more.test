@@ -1,0 +1,66 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT translate('12345', '143', 'ax'), translate('hello', 'l', ''), translate('héllo wörld', 'éö', 'eo'), translate('abc', 'aa', 'xy'), translate('', 'a', 'b'), translate('abc', '', 'x')
+fields translate:25:-1:-1,translate:25:-1:-1,translate:25:-1:-1,translate:25:-1:-1,translate:25:-1:-1,translate:25:-1:-1
+row a2x5,heo,hello world,xbc,,abc
+SELECT 1
+> SELECT overlay('Txxxxas' placing 'hom' from 2 for 4), overlay('Txxxxas' placing 'hom' from 2), overlay('héllo' placing 'ö' from 2 for 1), overlay('abc' placing 'X' from 10), overlay('abcdef' placing '' from 3 for 2), overlay('abc' placing 'X' from 2 for -1)
+fields overlay:25:-1:-1,overlay:25:-1:-1,overlay:25:-1:-1,overlay:25:-1:-1,overlay:25:-1:-1,overlay:25:-1:-1
+row Thomas,Thomxas,höllo,abcX,abef,aXabc
+SELECT 1
+> SELECT overlay('abc' placing 'X' from 0)
+ERROR 22011 negative substring length not allowed
+> SELECT overlay('abc' placing 'X' from 2 for 2147483647)
+ERROR 22003 integer out of range
+> SELECT to_bin(10), to_bin(0), to_bin(-1), to_bin(-1::bigint), to_bin(9223372036854775807), to_oct(8), to_oct(-8), to_oct(-8::bigint), to_hex(-1), to_hex(255::bigint)
+fields to_bin:25:-1:-1,to_bin:25:-1:-1,to_bin:25:-1:-1,to_bin:25:-1:-1,to_bin:25:-1:-1,to_oct:25:-1:-1,to_oct:25:-1:-1,to_oct:25:-1:-1,to_hex:25:-1:-1,to_hex:25:-1:-1
+row 1010,0,11111111111111111111111111111111,1111111111111111111111111111111111111111111111111111111111111111,111111111111111111111111111111111111111111111111111111111111111,10,37777777770,1777777777777777777770,ffffffff,ff
+SELECT 1
+> SELECT unistr('d\0061t\+000061'), unistr('dat\U00000061'), unistr('\\'), unistr('a\\b'), unistr('\D83D\DE00'), unistr('😀'), unistr('\+01F600'), unistr('caf\00e9')
+fields unistr:25:-1:-1,unistr:25:-1:-1,unistr:25:-1:-1,unistr:25:-1:-1,unistr:25:-1:-1,unistr:25:-1:-1,unistr:25:-1:-1,unistr:25:-1:-1
+row data,data,\,a\b,😀,😀,😀,café
+SELECT 1
+> SELECT unistr('wrong: \db99')
+ERROR 42601 invalid Unicode surrogate pair
+> SELECT unistr('wrong: \db99\0061')
+ERROR 42601 invalid Unicode surrogate pair
+> SELECT unistr('wrong: \+00db99\+000061')
+ERROR 42601 invalid Unicode surrogate pair
+> SELECT unistr('wrong: \+2FFFFF')
+ERROR 22023 invalid Unicode code point: 2FFFFF
+> SELECT unistr('wrong: \udb99a')
+ERROR 42601 invalid Unicode surrogate pair
+> SELECT unistr('wrong: \U0000db99\U00000061')
+ERROR 42601 invalid Unicode surrogate pair
+> SELECT unistr('wrong: \U002FFFFF')
+ERROR 22023 invalid Unicode code point: 2FFFFF
+> SELECT unistr('wrong: \xyz')
+ERROR 42601 invalid Unicode escape
+> SELECT unistr('wrong: \0000')
+ERROR 22023 invalid Unicode code point: 0000
+> SELECT unistr('wrong: \DE00')
+ERROR 42601 invalid Unicode surrogate pair
+> SELECT unistr('\D83D\\')
+ERROR 42601 invalid Unicode surrogate pair
+> SELECT casefold('Hello World ÀÉ'), casefold('')
+fields casefold:25:-1:-1,casefold:25:-1:-1
+row hello world ÀÉ,
+SELECT 1
+> SELECT gcd(12, 18), gcd(-12, 18), gcd(0, 0), gcd(0, -5), gcd(-2147483648, 1), gcd(-2147483648, -1), gcd(12::bigint, 18), gcd(-9223372036854775808, 2), lcm(4, 6), lcm(-4, 6), lcm(0, 5), lcm(5, 0), lcm(4::bigint, 6)
+fields gcd:23:4:-1,gcd:23:4:-1,gcd:23:4:-1,gcd:23:4:-1,gcd:23:4:-1,gcd:23:4:-1,gcd:20:8:-1,gcd:20:8:-1,lcm:23:4:-1,lcm:23:4:-1,lcm:23:4:-1,lcm:23:4:-1,lcm:20:8:-1
+row 6,6,0,5,1,1,6,2,12,12,0,0,12
+SELECT 1
+> SELECT gcd(-2147483648, 0)
+ERROR 22003 integer out of range
+> SELECT gcd(-2147483648, -2147483648)
+ERROR 22003 integer out of range
+> SELECT gcd(-9223372036854775808, 0)
+ERROR 22003 bigint out of range
+> SELECT lcm(2147483647, 2147483646)
+ERROR 22003 integer out of range
+> SELECT lcm(-2147483648, -2147483648)
+ERROR 22003 integer out of range
+> SELECT lcm(-2147483648, 1)
+ERROR 22003 integer out of range
+> SELECT lcm(9223372036854775807, 9223372036854775806)
+ERROR 22003 bigint out of range

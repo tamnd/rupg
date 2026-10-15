@@ -17,7 +17,8 @@ ser = "ser"
 
 # Test inputs that are wrong on purpose.
 [default]
-extend-ignore-re = ['"infinit"', '"onn"']
+# The strings `'hom'` and `caf\00e9` are inputs of the tests of overlay and unistr in `text_more.test`.
+extend-ignore-re = ['"infinit"', '"onn"', "'hom'", 'caf\\00e9']
 
 [files]
 # The list of glibc encoding names in xml/encodings.rs has names such as `GOST_19768` and `CSISO16PORTUGESE`. The catalog rows hold the names and descriptions of the vendored .dat files, such as `box_overright` and `dispell_init`.

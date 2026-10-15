@@ -68,6 +68,29 @@ fn one_integer(args: &[Value]) -> Result<i128> {
     args.first().and_then(Value::as_i64).map(i128::from).ok_or_else(bad_value)
 }
 
+/// The greatest common divisor of the absolute values, by the algorithm of Euclid. It is 0 when both are 0.
+fn gcd(mut a: i128, mut b: i128) -> i128 {
+    while b != 0 {
+        (a, b) = (b, a % b);
+    }
+    a.abs()
+}
+
+/// `int4gcd` and `int8gcd`. The result is out of range when it is the absolute value of the smallest integer.
+fn int_gcd(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (a, b) = integers(args)?;
+    integer(call.ret, gcd(a, b))
+}
+
+/// `int4lcm` and `int8lcm`: 0 when one argument is 0.
+fn int_lcm(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (a, b) = integers(args)?;
+    if a == 0 || b == 0 {
+        return integer(call.ret, 0);
+    }
+    integer(call.ret, (a / gcd(a, b) * b).abs())
+}
+
 fn int_add(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let (a, b) = integers(args)?;
     integer(call.ret, a + b)
@@ -694,6 +717,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "numeric_power" => numeric_power,
         "numeric_div_trunc" => numeric_div_trunc,
         "numeric_gcd" => numeric_gcd,
+        "int4gcd" | "int8gcd" => int_gcd,
+        "int4lcm" | "int8lcm" => int_lcm,
         "numeric_lcm" => numeric_lcm,
         "numeric_fac" => numeric_fac,
         "numeric_scale" => numeric_scale,
