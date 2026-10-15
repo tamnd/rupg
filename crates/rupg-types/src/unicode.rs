@@ -1,10 +1,13 @@
-//! The Unicode normalization forms NFC, NFD, NFKC and NFKD (Unicode Standard Annex 15).
+//! The Unicode normalization forms NFC, NFD, NFKC and NFKD (Unicode Standard Annex 15), and the code points that Unicode assigns.
 //!
 //! PostgreSQL uses them in `normalize`, in `IS NORMALIZED` and in SASLprep. The tables come from the vendored Unicode data of the PostgreSQL pin, so the result is the same as in PostgreSQL. See `spec/07-sql-types-and-catalog.md` and `spec/22-crate-layout.md` section 22.8.
 
 use crate::generated::unicode_norm::{
-    COMBINING_CLASS, COMPOSITION, DECOMPOSITION, DECOMPOSITION_CHARS,
+    ASSIGNED, COMBINING_CLASS, COMPOSITION, DECOMPOSITION, DECOMPOSITION_CHARS,
 };
+
+/// The version of Unicode of the tables in the form major.minor, which `unicode_version` gives.
+pub const VERSION: &str = crate::generated::unicode_norm::VERSION;
 
 /// A Unicode normalization form.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -32,6 +35,12 @@ pub fn combining_class(c: u32) -> u8 {
         Ok(i) => COMBINING_CLASS[i].1,
         Err(_) => 0,
     }
+}
+
+/// True when the code point is assigned, that is, its general category is not Cn.
+pub fn is_assigned(c: u32) -> bool {
+    let i = ASSIGNED.partition_point(|range| range.1 < c);
+    ASSIGNED.get(i).is_some_and(|range| range.0 <= c)
 }
 
 /// Normalizes a string of code points to a form. The input can hold any `u32`, as `unicode_normalize` of PostgreSQL can.

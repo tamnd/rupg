@@ -484,6 +484,14 @@ impl rupg_func::Session for Reader<'_> {
         self.user
     }
 
+    fn system_user(&self) -> Option<String> {
+        self.activity.and_then(|(activity, _)| activity.system_user.clone())
+    }
+
+    fn query(&self) -> Option<String> {
+        self.activity.and_then(|(activity, _)| activity.query.clone())
+    }
+
     fn database(&self) -> &str {
         self.database
     }

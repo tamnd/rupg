@@ -2153,6 +2153,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/json_agg.test")));
     }
 
+    /// `normalize`, `IS NORMALIZED`, `is_normalized`, `unicode_assigned` and `unicode_version`, with `num_nulls`, `num_nonnulls`, `error_on_null`, `oidvectortypes`, `current_query` and `system_user`. The script has the four forms, the Hangul syllables, the code points that Unicode does not assign, the `VARIADIC` calls with a null array and with an array of two dimensions, the types that do not exist, a message of two statements and a view. `connection/normalize.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn normalize() {
+        big_stack(|| script(include_str!("connection/normalize.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

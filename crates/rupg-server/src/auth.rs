@@ -42,13 +42,21 @@ enum Step {
     Ended,
 }
 
-/// Runs the authentication of a new connection. `Some` holds the warnings for the end of the startup, and then the caller sends `AuthenticationOk`. `None` means that the connection ends, and the error, if any, already went out.
+/// What a successful authentication gives the session.
+pub(crate) struct Admitted {
+    /// The warnings for the end of the startup.
+    pub(crate) notices: Vec<Notice>,
+    /// `SYSTEM_USER`: `auth_method:authn_id`, or `None` for a method that checks no identity.
+    pub(crate) system_user: Option<String>,
+}
+
+/// Runs the authentication of a new connection. After `Some`, the caller sends `AuthenticationOk`. `None` means that the connection ends, and the error, if any, already went out.
 pub(crate) fn authenticate(
     shared: &Shared,
     wire: &mut Wire,
     start: &Start,
     protocol: u32,
-) -> Option<Vec<Notice>> {
+) -> Option<Admitted> {
     let address = if wire.stream.is_local() {
         None
     } else {
@@ -99,7 +107,7 @@ pub(crate) fn authenticate(
         return None;
     }
     let mut notices = Vec::new();
-    let mut run = Run { shared, start, protocol, wire };
+    let mut run = Run { shared, start, protocol, wire, authn: None };
     let step = match line.method {
         // `cert` is `trust` with the check of the certificate below.
         Method::Trust | Method::Cert => Step::Ok,
@@ -125,7 +133,15 @@ pub(crate) fn authenticate(
         step => step,
     };
     match step {
-        Step::Ok => Some(notices),
+        Step::Ok => {
+            // `set_authn_id`: the password methods check the name of the user, and `peer` and `cert` set the name that they checked.
+            let authn = match line.method {
+                Method::Password | Method::Md5 | Method::Scram => Some(start.user.clone()),
+                _ => run.authn.take(),
+            };
+            let system_user = authn.map(|id| format!("{}:{id}", line.method.name()));
+            Some(Admitted { notices, system_user })
+        }
         Step::Ended => None,
         Step::Failed(detail) => {
             failed(shared, run.wire, line, &start.user, detail);
@@ -161,6 +177,8 @@ struct Run<'a> {
     start: &'a Start,
     protocol: u32,
     wire: &'a mut Wire,
+    /// The identity that `peer` or `cert` checked, `port->authn_id`.
+    authn: Option<String>,
 }
 
 impl Run<'_> {
@@ -344,6 +362,10 @@ impl Run<'_> {
             self.shared.log("LOG", &format!("certificate authentication failed for user \"{user}\": client certificate contains no user name"));
             return Step::Failed(None);
         };
+        // For the `cert` method, the subject DN is the identity, also when the map checks the CN.
+        if line.method == Method::Cert {
+            self.authn = peer.map(|peer| peer.dn.clone());
+        }
         let mut lines = Vec::new();
         let ok = self.shared.ident.check(
             line.map.as_deref(),
@@ -375,6 +397,7 @@ impl Run<'_> {
                 return Step::Failed(None);
             }
         };
+        self.authn = Some(name.clone());
         let mut lines = Vec::new();
         let ok = self.shared.ident.check(
             line.map.as_deref(),

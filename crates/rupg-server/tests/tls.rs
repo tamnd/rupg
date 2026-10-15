@@ -452,6 +452,11 @@ fn the_cert_method() {
     let (server, log) = server("hostssl all all 127.0.0.1/32 cert\n");
     let mut stream = ssl_request(&server, client(Some("postgres"), false));
     assert_eq!(talk(&mut stream, &startup(), None), ["ok", "ready I"]);
+    // The identity of `cert` is the subject DN of the certificate, in the form of RFC 2253.
+    assert_eq!(
+        talk(&mut stream, &query("SELECT system_user, current_query()"), None),
+        ["row cert:CN=postgres,O=rupg,SELECT system_user, current_query()", "SELECT 1", "ready I"]
+    );
     drop(stream);
     let mut stream = direct(&server, client(Some("alice"), true));
     assert_eq!(
@@ -483,6 +488,11 @@ fn clientcert_verify_full() {
     let mut stream = ssl_request(&server, client(Some("postgres"), false));
     let lines = talk(&mut stream, &startup(), None);
     assert_eq!(lines.last().unwrap(), "ready I");
+    // SCRAM checks the user name, and the check of the certificate does not change the identity.
+    assert_eq!(
+        talk(&mut stream, &query("SELECT system_user"), None),
+        ["row scram-sha-256:postgres", "SELECT 1", "ready I"]
+    );
     drop(stream);
     let mut stream = ssl_request(&server, client(Some("alice"), false));
     assert_eq!(
@@ -630,6 +640,14 @@ fn pg_stat_ssl() {
         row(&server, None),
         ["row t,TLSv1.3,TLS_AES_256_GCM_SHA384,256,NULL,NULL,NULL", "SELECT 1", "ready I"]
     );
+    // `trust` checks no identity.
+    let mut stream = ssl_request(&server, client(None, false));
+    assert_eq!(talk(&mut stream, &startup(), None), ["ok", "ready I"]);
+    assert_eq!(
+        talk(&mut stream, &query("SELECT system_user"), None),
+        ["row NULL", "SELECT 1", "ready I"]
+    );
+    drop(stream);
     assert_eq!(
         row(&server, Some("bob")),
         [
