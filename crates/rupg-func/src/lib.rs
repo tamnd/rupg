@@ -38,10 +38,12 @@ mod replication;
 mod sequence;
 mod shared;
 mod snapshot;
+mod special;
 mod srf;
 mod stat;
 mod text;
 mod timezone;
+mod trig;
 mod tsmatch;
 mod tsquery;
 mod tsvector;
@@ -369,6 +371,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| timezone::by_src(src))
         .or_else(|| calendar::by_src(src))
         .or_else(|| random::by_src(src))
+        .or_else(|| trig::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))
