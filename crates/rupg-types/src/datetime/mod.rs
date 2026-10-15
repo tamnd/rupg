@@ -62,6 +62,8 @@ pub enum DateStyle {
     Sql,
     Postgres,
     German,
+    /// `USE_XSD_DATES`: the ISO style with `T` between the date and the time and the minutes of the zone always shown. The functions of `json` use it, and `DateStyle` does not take it.
+    Xsd,
 }
 
 /// The field order part of `DateStyle`. The output uses it only to put the day before the month.
@@ -344,12 +346,12 @@ fn seconds(sec: i64, usec: i64, fill: bool, out: &mut Vec<u8>) {
 }
 
 /// `EncodeTimezone`: the offset east of UTC, with minutes and seconds only when they are not zero.
-fn zone_offset(offset: i32, out: &mut Vec<u8>) {
+fn zone_offset(offset: i32, minutes: bool, out: &mut Vec<u8>) {
     out.push(if offset >= 0 { b'+' } else { b'-' });
     let total = offset.unsigned_abs();
     let (hour, min, sec) = (total / 3600, total / 60 % 60, total % 60);
     zeropad(u64::from(hour), 2, out);
-    if min != 0 || sec != 0 {
+    if min != 0 || sec != 0 || minutes {
         out.push(b':');
         two(min, out);
     }
@@ -362,7 +364,7 @@ fn zone_offset(offset: i32, out: &mut Vec<u8>) {
 /// The date part in the order and with the separator of the style.
 fn date_part(f: &Fields, format: DateFormat, out: &mut Vec<u8>) {
     let (first, second, sep) = match (format.style, format.day_first()) {
-        (DateStyle::Iso, _) => {
+        (DateStyle::Iso | DateStyle::Xsd, _) => {
             year(f.year, out);
             out.push(b'-');
             two(f.month, out);
@@ -430,7 +432,7 @@ pub fn time_out(time: i64, out: &mut Vec<u8>) {
 /// The text output of `timetz`. The zone is in seconds west of UTC, as PostgreSQL stores it.
 pub fn timetz_out(time: i64, zone: i32, out: &mut Vec<u8>) {
     time_out(time, out);
-    zone_offset(-zone, out);
+    zone_offset(-zone, false, out);
 }
 
 /// `AdjustTimeForTypmod` and the rounding of `AdjustTimestampForTypmod`: rounds half away from zero to `precision` digits after the point.
@@ -478,12 +480,13 @@ fn date_time(f: &Fields, zone: Option<(i32, &str)>, format: DateFormat, out: &mu
         out.extend_from_slice(&abbrev.as_bytes()[..abbrev.len().min(MAX_TZ_LEN)]);
     };
     match format.style {
-        DateStyle::Iso => {
+        DateStyle::Iso | DateStyle::Xsd => {
+            let xsd = format.style == DateStyle::Xsd;
             date_part(f, format, out);
-            out.push(b' ');
+            out.push(if xsd { b'T' } else { b' ' });
             time_part(f.hour, f.minute, f.second, f.usec, out);
             if let Some((offset, _)) = zone {
-                zone_offset(offset, out);
+                zone_offset(offset, xsd, out);
             }
         }
         DateStyle::Sql | DateStyle::German => {

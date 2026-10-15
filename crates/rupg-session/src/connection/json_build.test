@@ -1,0 +1,193 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT to_json(1), to_json(-1.50), to_json('NaN'::numeric), to_json('-Infinity'::float8), to_json(1e300::float8), to_json(-0::float8)
+fields to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1
+row 1,-1.50,"NaN","-Infinity",1e+300,-0
+SELECT 1
+> SELECT to_json(true), to_json('a"b\c'::text), to_json(E'x\ty\n'::text), to_json('abc'::varchar), to_json('x'::name)
+fields to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1
+row true,"a\"b\\c","x\ty\n","abc","x"
+SELECT 1
+> SELECT to_json('2024-01-02'::date), to_json('infinity'::date), to_json('2024-01-02 03:04:05.5'::timestamp), to_json('2024-01-02 03:04:05+05:30'::timestamptz)
+fields to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1
+row "2024-01-02","infinity","2024-01-02T03:04:05.5","2024-01-01T21:34:05+00:00"
+SELECT 1
+> SELECT to_json('0044-03-15 BC'::date), to_json('03:04:05'::time), to_json('1 day 2 hours'::interval), to_json('{"a":1, "a":2}'::json), to_json('{"a":1, "a":2}'::jsonb)
+fields to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1
+row "0044-03-15 BC","03:04:05","1 day 02:00:00",{"a":1, "a":2},{"a": 2}
+SELECT 1
+> SELECT to_json(ARRAY[1,2,NULL]), to_json(ARRAY[[1,2],[3,4]]), to_json('{}'::int[]), to_json(ARRAY['a','b"']), to_json(ARRAY[true,false])
+fields to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1
+row [1,2,null],[[1,2],[3,4]],[],["a","b\""],[true,false]
+SELECT 1
+> SELECT to_json(ROW(1,'a',NULL)), to_json(ROW(1, ROW(2, ARRAY[3]))), to_json(ARRAY[ROW(1,2), ROW(3,4)])
+fields to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1
+row {"f1":1,"f2":"a","f3":null},{"f1":1,"f2":{"f1":2,"f2":[3]}},[{"f1":1,"f2":2},{"f1":3,"f2":4}]
+SELECT 1
+> SELECT to_jsonb(1), to_jsonb(-1.50), to_jsonb('NaN'::numeric), to_jsonb('-Infinity'::float8), to_jsonb(1e30::float8), to_jsonb(-0::float8), to_jsonb(true)
+fields to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1
+row 1,-1.50,"NaN","-Infinity",1000000000000000000000000000000,0,true
+SELECT 1
+> SELECT to_jsonb('a"b'::text), to_jsonb('2024-01-02'::date), to_jsonb('2024-01-02 03:04:05+05:30'::timestamptz), to_jsonb('{"b":1, "a":2, "b":3}'::json), to_jsonb(ARRAY[[1,2],[3,4]])
+fields to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1
+row "a\"b","2024-01-02","2024-01-01T21:34:05+00:00",{"a": 2, "b": 3},[[1, 2], [3, 4]]
+SELECT 1
+> SELECT to_jsonb(ROW(1,'a',NULL)), to_jsonb('[1, 2.50, {"x" : null}]'::json), to_jsonb(1.0::float4)
+fields to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1,to_jsonb:3802:-1:-1
+row {"f1": 1, "f2": "a", "f3": null},[1, 2.50, {"x": null}],1
+SELECT 1
+> SELECT array_to_json(ARRAY[1,2,3]), array_to_json(ARRAY[[1,2],[3,4]], true), array_to_json(ARRAY[1,2], false), array_to_json('{}'::text[], true)
+fields array_to_json:114:-1:-1,array_to_json:114:-1:-1,array_to_json:114:-1:-1,array_to_json:114:-1:-1
+row [1,2,3],[[1,2],
+ [3,4]],[1,2],[]
+SELECT 1
+> SELECT array_to_json(ARRAY[ROW(1,2), ROW(3,4)], true)
+fields array_to_json:114:-1:-1
+row [{"f1":1,"f2":2},
+ {"f1":3,"f2":4}]
+SELECT 1
+> SELECT row_to_json(t) FROM (SELECT 1 AS a, 'x' AS b, NULL::int AS c) t
+fields row_to_json:114:-1:-1
+row {"a":1,"b":"x","c":null}
+SELECT 1
+> SELECT row_to_json(t, true) FROM (SELECT 1 AS a, ARRAY[1,2] AS b) t
+fields row_to_json:114:-1:-1
+row {"a":1,
+ "b":[1,2]}
+SELECT 1
+> SELECT row_to_json(t) FROM (VALUES (1, 'a'), (2, 'b')) t
+fields row_to_json:114:-1:-1
+row {"column1":1,"column2":"a"}
+row {"column1":2,"column2":"b"}
+SELECT 2
+> SELECT row_to_json(t) FROM (VALUES (1, 'a'), (2, 'b')) t(x, y)
+fields row_to_json:114:-1:-1
+row {"x":1,"y":"a"}
+row {"x":2,"y":"b"}
+SELECT 2
+> SELECT row_to_json(t) FROM (SELECT 1 AS a, 2 AS b) t(x)
+fields row_to_json:114:-1:-1
+row {"x":1,"b":2}
+SELECT 1
+> SELECT row_to_json(ROW(1, 2)), row_to_json(ROW(1, 2), false)
+fields row_to_json:114:-1:-1,row_to_json:114:-1:-1
+row {"f1":1,"f2":2},{"f1":1,"f2":2}
+SELECT 1
+> SELECT row_to_json(t) FROM pg_type t WHERE typname = 'bool'
+fields row_to_json:114:-1:-1
+row {"oid":"16","typname":"bool","typnamespace":"11","typowner":"10","typlen":1,"typbyval":true,"typtype":"b","typcategory":"B","typispreferred":true,"typisdefined":true,"typdelim":",","typrelid":"0","typsubscript":"-","typelem":"0","typarray":"1000","typinput":"boolin","typoutput":"boolout","typreceive":"boolrecv","typsend":"boolsend","typmodin":"-","typmodout":"-","typanalyze":"-","typalign":"c","typstorage":"p","typnotnull":false,"typbasetype":"0","typtypmod":-1,"typndims":0,"typcollation":"0","typdefaultbin":null,"typdefault":null,"typacl":null}
+SELECT 1
+> SELECT row_to_json(t) FROM pg_type t(x, y) WHERE y = 'int4'
+fields row_to_json:114:-1:-1
+row {"oid":"23","typname":"int4","typnamespace":"11","typowner":"10","typlen":4,"typbyval":true,"typtype":"b","typcategory":"N","typispreferred":false,"typisdefined":true,"typdelim":",","typrelid":"0","typsubscript":"-","typelem":"0","typarray":"1007","typinput":"int4in","typoutput":"int4out","typreceive":"int4recv","typsend":"int4send","typmodin":"-","typmodout":"-","typanalyze":"-","typalign":"i","typstorage":"p","typnotnull":false,"typbasetype":"0","typtypmod":-1,"typndims":0,"typcollation":"0","typdefaultbin":null,"typdefault":null,"typacl":null}
+SELECT 1
+> SELECT to_json(t) FROM json_each('{"a":1}') t
+fields to_json:114:-1:-1
+row {"key":"a","value":1}
+SELECT 1
+> SELECT to_jsonb(t) FROM (SELECT 1 AS b, 2 AS a, 3 AS b) t
+fields to_jsonb:3802:-1:-1
+row {"a": 2, "b": 3}
+SELECT 1
+> SELECT json_build_object('a', 1, 'b', true, 'c', NULL, 'd', ARRAY[1,2], 'e', ROW(1, 'x'))
+fields json_build_object:114:-1:-1
+row {"a" : 1, "b" : true, "c" : null, "d" : [1,2], "e" : {"f1":1,"f2":"x"}}
+SELECT 1
+> SELECT json_build_object(1, 2, 2.5, 'x', true, 'y', '2024-01-01'::date, 'z')
+fields json_build_object:114:-1:-1
+row {"1" : 2, "2.5" : "x", "true" : "y", "2024-01-01" : "z"}
+SELECT 1
+> SELECT json_build_object('a', 1, 'a', 2), jsonb_build_object('a', 1, 'a', 2, 'b', 3)
+fields json_build_object:114:-1:-1,jsonb_build_object:3802:-1:-1
+row {"a" : 1, "a" : 2},{"a": 2, "b": 3}
+SELECT 1
+> SELECT json_build_object(), jsonb_build_object(), json_build_array(), jsonb_build_array()
+fields json_build_object:114:-1:-1,jsonb_build_object:3802:-1:-1,json_build_array:114:-1:-1,jsonb_build_array:3802:-1:-1
+row {},{},[],[]
+SELECT 1
+> SELECT json_build_object('a')
+fields json_build_object:114:-1:-1
+ERROR 22023 argument list must have even number of elements
+> SELECT jsonb_build_object('a', 1, 'b')
+fields jsonb_build_object:3802:-1:-1
+ERROR 22023 argument list must have even number of elements
+> SELECT json_build_object(NULL, 1)
+fields json_build_object:114:-1:-1
+ERROR 22004 null value not allowed for object key
+> SELECT jsonb_build_object('a', 1, NULL, 1)
+fields jsonb_build_object:3802:-1:-1
+ERROR 22023 argument 3: key must not be null
+> SELECT json_build_object(ARRAY[1], 1)
+fields json_build_object:114:-1:-1
+ERROR 22023 key value must be scalar, not array, composite, or json
+> SELECT json_build_object('{}'::json, 1)
+fields json_build_object:114:-1:-1
+ERROR 22023 key value must be scalar, not array, composite, or json
+> SELECT jsonb_build_object('{}'::jsonb, 1)
+fields jsonb_build_object:3802:-1:-1
+ERROR 22023 key value must be scalar, not array, composite, or json
+> SELECT json_build_object(ROW(1), 1)
+fields json_build_object:114:-1:-1
+ERROR 22023 key value must be scalar, not array, composite, or json
+> SELECT json_build_object(VARIADIC ARRAY['a', 'b', 'c', 'd']), json_build_object(VARIADIC NULL::text[]) IS NULL
+fields json_build_object:114:-1:-1,?column?:16:1:-1
+row {"a" : "b", "c" : "d"},t
+SELECT 1
+> SELECT json_build_array(1, 'a', NULL, true, ARRAY[1], '{"a":1}'::json, '{"b": 2}'::jsonb), jsonb_build_array(1, 'a', NULL, 1.50, '{"a":1,"a":2}'::json)
+fields json_build_array:114:-1:-1,jsonb_build_array:3802:-1:-1
+row [1, "a", null, true, [1], {"a":1}, {"b": 2}],[1, "a", null, 1.50, {"a": 2}]
+SELECT 1
+> SELECT json_build_array(VARIADIC ARRAY[1, 2]), jsonb_build_array(VARIADIC NULL::int[]) IS NULL
+fields json_build_array:114:-1:-1,?column?:16:1:-1
+row [1, 2],t
+SELECT 1
+> SELECT json_object('{a,1,b,2,c,NULL}'), json_object('{{a,1},{b,2}}'), json_object('{}'), jsonb_object('{b,1,a,2,b,3}'), jsonb_object('{}')
+fields json_object:114:-1:-1,json_object:114:-1:-1,json_object:114:-1:-1,jsonb_object:3802:-1:-1,jsonb_object:3802:-1:-1
+row {"a" : "1", "b" : "2", "c" : null},{"a" : "1", "b" : "2"},{},{"a": "2", "b": "3"},{}
+SELECT 1
+> SELECT json_object('{a,b,c}')
+ERROR 2202E array must have even number of elements
+> SELECT jsonb_object('{{a,b,c}}')
+ERROR 2202E array must have two columns
+> SELECT json_object('{{{a,b}}}')
+ERROR 2202E wrong number of array subscripts
+> SELECT json_object('{NULL,b}')
+ERROR 22004 null value not allowed for object key
+> SELECT json_object('{a,b}', '{1,NULL}'), jsonb_object('{a,b,a}', '{1,2,3}'), json_object('{}', '{}')
+fields json_object:114:-1:-1,jsonb_object:3802:-1:-1,json_object:114:-1:-1
+row {"a" : "1", "b" : null},{"a": "3", "b": "2"},{}
+SELECT 1
+> SELECT json_object('{a,b}', '{1}')
+ERROR 2202E mismatched array dimensions
+> SELECT jsonb_object('{a}', '{{1}}')
+ERROR 2202E wrong number of array subscripts
+> SELECT json_object('{{a}}', '{{1}}')
+ERROR 2202E wrong number of array subscripts
+> SELECT jsonb_object('{a,NULL}', '{1,2}')
+ERROR 22004 null value not allowed for object key
+> SELECT to_json(NULL::int) IS NULL, json_build_object('a', NULL::text), to_json('a'::"char"), to_json(1::oid), to_json('\x01'::bytea)
+fields ?column?:16:1:-1,json_build_object:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1,to_json:114:-1:-1
+row t,{"a" : null},"a","1","\\x01"
+SELECT 1
+> SELECT to_json('[1,2]'::int4range), to_json('{1,NULL}'::text[]), to_jsonb('{"a":"é"}'::json)
+fields to_json:114:-1:-1,to_json:114:-1:-1,to_jsonb:3802:-1:-1
+row "[1,3)",["1",null],{"a": "é"}
+SELECT 1
+> SELECT ROW(1, 'a', NULL), ROW(), ROW(1, ROW(2, 3)), ROW(NULL, NULL) IS NULL, ROW(1, NULL) IS NULL, ROW(1, NULL) IS NOT NULL
+fields row:2249:-1:-1,row:2249:-1:-1,row:2249:-1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row (1,a,),(),(1,"(2,3)"),t,f,f
+SELECT 1
+> CREATE VIEW json_build_v AS SELECT row_to_json(ROW(1, 'a'::text)) AS j, ROW(1, 2) IS NULL AS n, to_json(ROW(1, ROW(2))) AS k
+CREATE VIEW
+> SELECT pg_get_viewdef('json_build_v'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT row_to_json(ROW(1, 'a'::text)) AS j,
+    (ROW(1, 2) IS NULL) AS n,
+    to_json(ROW(1, ROW(2))) AS k;
+SELECT 1
+> SELECT * FROM json_build_v
+fields j@json_build_v.1:114:-1:-1,n@json_build_v.2:16:1:-1,k@json_build_v.3:114:-1:-1
+row {"f1":1,"f2":"a"},f,{"f1":1,"f2":{"f1":2}}
+SELECT 1
+> DROP VIEW json_build_v
+DROP VIEW

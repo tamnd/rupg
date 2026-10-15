@@ -27,7 +27,7 @@ pub fn base_type(ty: u32) -> u32 {
 }
 
 /// The element type and the delimiter of an array type, or `None` for a type that is not an array. `int2vector` and `oidvector` are not arrays here, because they have their own functions.
-fn array_of(ty: u32) -> Option<(u32, u8)> {
+pub(crate) fn array_of(ty: u32) -> Option<(u32, u8)> {
     if ty == oid::INT2VECTOR || ty == oid::OIDVECTOR {
         return None;
     }

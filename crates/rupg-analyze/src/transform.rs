@@ -182,7 +182,10 @@ impl Analyzer<'_> {
                 self.collation_oid(&c.collname, at)?;
                 Ok(arg)
             }
-            Node::RowExpr(r) => Err(not_yet("ROW()", place(r.location))),
+            Node::RowExpr(r) => {
+                let args = self.transform_list(&r.args)?;
+                Ok(Expr::new(ExprKind::Row(args), oid::RECORD).at(place(r.location)))
+            }
             Node::SubLink(s) => self.transform_sublink(s),
             Node::A_Indirection(i) => self.transform_indirection(i),
             Node::GroupingFunc(g) => Err(Error::new(

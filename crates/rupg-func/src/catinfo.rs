@@ -143,7 +143,7 @@ fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         }
         _ => vec![Value::Null; 3],
     };
-    Ok(Value::Record(Box::new(Record { types: vec![oid::INT8, oid::BOOL, oid::PG_LSN], values })))
+    Ok(Value::Record(Box::new(Record::new(vec![oid::INT8, oid::BOOL, oid::PG_LSN], values))))
 }
 
 /// `pg_partition_root(regclass)`: the top parent of the partition tree of a relation. rupg has no partitioned tables yet, so `check_rel_can_be_partition` is false for each relation, and the result is null.

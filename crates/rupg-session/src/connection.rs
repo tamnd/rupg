@@ -2141,6 +2141,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/json_modify.test")));
     }
 
+    /// `to_json`, `to_jsonb`, `array_to_json`, `row_to_json`, `json_build_object`, `json_build_array` and `json_object`, and the same functions of `jsonb`. The script has the numbers that are not finite, the dates in the XSD form, the arrays of two dimensions, the pretty form, the names of the fields of a subquery, a `VALUES` list with an alias and a table with an alias, the keys that are not scalars, the null keys and the arrays of the wrong shape. `connection/json_build.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn json_build() {
+        big_stack(|| script(include_str!("connection/json_build.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

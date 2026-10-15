@@ -656,7 +656,7 @@ fn md5_text(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// The arguments of `concat` and `concat_ws` with their types: the elements of the array of a `VARIADIC` call, or the arguments. `None` when the array is null.
-fn variadic_values<'a>(
+pub(crate) fn variadic_values<'a>(
     call: &Call<'_>,
     args: &'a [Value],
     skip: usize,

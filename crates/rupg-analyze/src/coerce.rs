@@ -96,6 +96,12 @@ pub fn can_coerce(inputs: &[u32], targets: &[u32], context: Context) -> bool {
         if input == oid::UNKNOWN {
             continue;
         }
+        // A composite type is a `record`, and an array of a composite type is a `record[]`.
+        if (target == oid::RECORD && types::is_complex(input))
+            || (target == oid::RECORD_ARRAY && types::is_complex(types::element(input)))
+        {
+            continue;
+        }
         if find_path(target, input, context) != Path::None {
             continue;
         }
@@ -192,6 +198,12 @@ impl Analyzer<'_> {
             return Ok(expr);
         }
         if types::is_polymorphic(target) && input != oid::UNKNOWN {
+            return Ok(expr);
+        }
+        // `coerce_type` keeps the type of a composite value for `record` and for `record[]`, with no `RelabelType`.
+        if (target == oid::RECORD && types::is_complex(input))
+            || (target == oid::RECORD_ARRAY && types::is_complex(types::element(input)))
+        {
             return Ok(expr);
         }
         if input == oid::UNKNOWN {

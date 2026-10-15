@@ -319,6 +319,11 @@ impl<'a> Deparser<'a> {
                 self.list(args, true)?;
                 self.buf.push(')');
             }
+            ExprKind::Row(args) => {
+                self.buf.push_str("ROW(");
+                self.list(args, true)?;
+                self.buf.push(')');
+            }
             ExprKind::MinMax { greatest, args, .. } => {
                 self.buf.push_str(if *greatest { "GREATEST(" } else { "LEAST(" });
                 self.list(args, true)?;
@@ -603,6 +608,7 @@ fn own_syntax(parent: &Expr) -> bool {
         ExprKind::Bool(..)
         | ExprKind::Subscript(_)
         | ExprKind::Array { .. }
+        | ExprKind::Row(_)
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }
         | ExprKind::NullIf { .. }
@@ -638,6 +644,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         // The `.` binds the most, but a field of a field needs parentheses.
         ExprKind::FieldSelect(..) => !matches!(parent.kind, ExprKind::FieldSelect(..)),
         ExprKind::Array { .. }
+        | ExprKind::Row(_)
         | ExprKind::Subscript(_)
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }
@@ -710,6 +717,13 @@ impl Deparser<'_> {
 
 /// `get_name_for_var_field` for a value of a composite type: the name of the field with the index from 0.
 fn row_field_name(ty: u32, field: usize, session: &dyn Session) -> Result<String> {
+    row_names(ty, session).and_then(|names| names.get(field).cloned()).ok_or_else(|| {
+        Error::internal(format!("could not identify column {} in a record", field + 1))
+    })
+}
+
+/// The names of the fields of a composite type, or `None` when the type is not the row type of a relation.
+pub(crate) fn row_names(ty: u32, session: &dyn Session) -> Option<Vec<String>> {
     let relid = match builtin::type_by_oid(ty) {
         Some(row) => row.relid,
         None => session
@@ -717,9 +731,7 @@ fn row_field_name(ty: u32, field: usize, session: &dyn Session) -> Result<String
             .and_then(|c| c.relations().find(|r| r.row_type == ty))
             .map_or(0, |r| r.oid),
     };
-    column_names(relid, session).and_then(|names| names.get(field).cloned()).ok_or_else(|| {
-        Error::internal(format!("could not identify column {} in a record", field + 1))
-    })
+    column_names(relid, session)
 }
 
 /// The names of the columns of a relation, by the column number from 1, or `None` when no relation has the OID.
