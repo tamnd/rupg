@@ -15,6 +15,7 @@ use rupg_sql::nodes::Node;
 use rupg_types::{Array, Value, oid};
 use rupg_wire::{Bind, CommandTag, Field, Oids, OutBuf, ProtocolError, Target};
 
+use super::cursor::{self, Cursor};
 use super::{Connection, Done, character_position, copy, prepare};
 use crate::guc::{self, Setting};
 use crate::param;
@@ -107,28 +108,58 @@ impl Prepared {
 
 /// What a portal did so far.
 #[derive(Debug)]
-enum Run {
+pub(super) enum Run {
     /// The statement did not run yet.
     Ready,
     /// The statement ran and gave rows. `at` is the first row that the client did not fetch, and `tag` is the tag of `CommandComplete`.
     Rows { rows: Vec<Row>, at: usize, tag: CommandTag },
     /// The statement ran and gave no rows, so it cannot run again.
     Done,
+    /// The portal is a cursor of `DECLARE`.
+    Cursor(Box<Cursor>),
 }
 
 /// A portal.
 #[derive(Debug)]
-pub(super) struct Portal {
-    statement: Arc<Prepared>,
+pub(crate) struct Portal {
+    pub(super) statement: Arc<Prepared>,
     /// The plan of the query of the statement with the values of the parameters, which `Bind` makes.
     plan: Option<Plan>,
     /// The result format of each column.
     formats: Vec<i16>,
     /// The values of the parameters of a statement that the engine runs.
     params: Vec<Value>,
-    run: Run,
+    pub(super) run: Run,
     /// The transaction block failed after the portal was made, so the portal cannot run.
     pub(super) failed: bool,
+}
+
+impl Portal {
+    /// The portal of a cursor of `DECLARE`. `statement` has the query of the cursor and its columns.
+    pub(super) fn cursor(statement: Arc<Prepared>, cursor: Cursor) -> Portal {
+        let run = Run::Cursor(Box::new(cursor));
+        Portal {
+            statement,
+            plan: None,
+            formats: Vec::new(),
+            params: Vec::new(),
+            run,
+            failed: false,
+        }
+    }
+
+    /// The cursor of the portal, or `None` for a portal of `Bind`.
+    pub(super) fn as_cursor(&self) -> Option<&Cursor> {
+        match &self.run {
+            Run::Cursor(cursor) => Some(cursor),
+            _ => None,
+        }
+    }
+
+    /// The row of a cursor in `pg_cursor`, or `None` for a portal of `Bind`.
+    pub(crate) fn cursor_row(&self, name: &[u8]) -> Option<Vec<Value>> {
+        self.as_cursor().map(|cursor| cursor.row(name))
+    }
 }
 
 /// The error of a message, with the position in the query for an error of `Parse`.
@@ -247,6 +278,20 @@ impl Connection {
                 plan = Some(made);
             } else if let Node::ExecuteStmt(stmt) = node {
                 columns = self.execute_columns(stmt);
+            } else if let Node::DeclareCursorStmt(stmt) = node {
+                let given = Params { types: params.clone(), variable: true };
+                let mut notices = Vec::new();
+                let made = self.plan_cursor(stmt, &given, &mut notices);
+                self.notices(&mut notices, &text, &[], out);
+                let made = made.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&text, at)),
+                    error,
+                })?;
+                params = made.params().to_vec();
+                plan = Some(made);
+            } else if let Node::FetchStmt(stmt) = node {
+                columns = self.fetch_columns(stmt);
+            } else if matches!(node, Node::ClosePortalStmt(_)) {
             } else if !rupg_analyze::is_definition(node) {
                 utility::check(node, &text)?;
                 columns = utility::columns(node, &self.settings.borrow())?
@@ -384,6 +429,17 @@ impl Connection {
                     return Err(aborted().into());
                 }
                 out.parameter_description(&statement.params);
+                // `FetchStatementTargetList` reads the columns of the cursor again.
+                if let Some(Node::FetchStmt(stmt)) = &statement.stmt
+                    && statement.columns.is_some()
+                {
+                    let Some(columns) = self.fetch_columns(stmt) else {
+                        let name = stmt.portalname.as_deref().unwrap_or_default();
+                        return Err(cursor::no_cursor(name).into());
+                    };
+                    describe_rows(Some(&columns), &[], out);
+                    return Ok(());
+                }
                 describe_rows(statement.columns.as_deref(), &[], out);
             }
             Target::Portal => {
@@ -431,7 +487,19 @@ impl Connection {
         let mut immediate_commit = false;
         let mut tag = None;
         if ready {
-            let done = if let Some(plan) = &plan {
+            let done = if let Node::DeclareCursorStmt(stmt) = node {
+                let mut notices = Vec::new();
+                let result = self.declare(stmt, &statement.text, plan, &params, &mut notices);
+                self.notices(&mut notices, &statement.text, &[], out);
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
+            } else if let Node::FetchStmt(stmt) = node {
+                self.fetch_cursor(stmt, Some(&formats))?
+            } else if let Node::ClosePortalStmt(stmt) = node {
+                self.close_cursor(stmt, name)?
+            } else if let Some(plan) = &plan {
                 self.settings.borrow_mut().take_snapshot();
                 let rows = query::run(plan, &params, &self.reader(), &formats)?;
                 Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
@@ -509,6 +577,17 @@ impl Connection {
                         portal.run = Run::Rows { rows, at: 0, tag };
                     }
                 }
+                Done::Fetch { rows, .. } => {
+                    if let Some(portal) = self.portals.find_mut(name) {
+                        portal.run = Run::Rows { rows, at: 0, tag: CommandTag::Fetch };
+                    }
+                }
+                Done::Count(done, count) => {
+                    if let Some(portal) = self.portals.find_mut(name) {
+                        portal.run = Run::Done;
+                    }
+                    tag = Some((done, count));
+                }
                 Done::Copy(copy) => {
                     if let Some(portal) = self.portals.find_mut(name) {
                         portal.run = Run::Done;
@@ -546,6 +625,18 @@ impl Connection {
         out: &mut OutBuf,
     ) -> Result<(CommandTag, u64, bool), Failed> {
         let portal = self.portals.get_mut(name)?;
+        // `PortalRunSelect` forward on a cursor, with the tag of its query.
+        if let Run::Cursor(cursor) = &mut portal.run {
+            let (values, end) = cursor.forward(max_rows)?;
+            let types = cursor.types().to_vec();
+            let reader = self.reader();
+            for values in &values {
+                let row = query::encode(&types, values, &reader, &[])?;
+                let row: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
+                out.data_row(&row);
+            }
+            return Ok((CommandTag::Select, values.len() as u64, end));
+        }
         let Run::Rows { rows, at, tag } = &mut portal.run else {
             return Err(Error::internal("a portal with no rows to fetch").into());
         };

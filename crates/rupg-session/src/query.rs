@@ -19,9 +19,9 @@ use rupg_types::{
     Array, ByteaOutput, DateFormat, DateOrder, DateStyle, IntervalStyle, Recv, TimeZone, Value,
     oid, tz,
 };
-use rupg_wire::{Field, Statements};
+use rupg_wire::{Field, Portals, Statements};
 
-use crate::connection::{Activity, Prepared};
+use crate::connection::{Activity, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
 use crate::param::type_error;
 use crate::store::Store;
@@ -100,6 +100,8 @@ pub(crate) struct Reader<'a> {
     activity: Option<(&'a Activity, &'a Store)>,
     /// The prepared statements of the session, or `None` for a reader that is not a session.
     statements: Option<&'a Statements<Arc<Prepared>>>,
+    /// The portals of the session, or `None` for a reader that is not a session.
+    portals: Option<&'a Portals<Portal>>,
     /// The flag that a `CancelRequest` sets, or `None` for a reader that is not a session.
     cancel: Option<&'a AtomicBool>,
     /// The warnings of the functions that the statement called, such as the input function of `aclitem`. The session sends them before the result.
@@ -133,6 +135,7 @@ impl<'a> Reader<'a> {
             zone: RefCell::new((name, zone)),
             activity: None,
             statements: None,
+            portals: None,
             cancel: None,
             warnings: RefCell::new(Vec::new()),
         }
@@ -161,6 +164,12 @@ impl<'a> Reader<'a> {
         statements: &'a Statements<Arc<Prepared>>,
     ) -> Reader<'a> {
         self.statements = Some(statements);
+        self
+    }
+
+    /// The reader of a session with portals.
+    pub(crate) fn with_portals(mut self, portals: &'a Portals<Portal>) -> Reader<'a> {
+        self.portals = Some(portals);
         self
     }
 
@@ -394,6 +403,12 @@ impl rupg_func::Session for Reader<'_> {
         })
     }
 
+    fn cursors(&self) -> Vec<Vec<Value>> {
+        self.portals.map_or_else(Vec::new, |portals| {
+            portals.iter().filter_map(|(name, portal)| portal.cursor_row(name)).collect()
+        })
+    }
+
     fn all_settings(&self) -> Vec<Vec<Value>> {
         let text = |text: Option<String>| text.map_or(Value::Null, Value::text);
         let settings = self.settings();
@@ -515,25 +530,36 @@ pub(crate) fn run(
     reader: &Reader<'_>,
     formats: &[i16],
 ) -> Result<Vec<Row>> {
-    let mut rows = Vec::new();
-    for values in plan.run(params, reader)? {
-        let mut row = Vec::with_capacity(values.len());
-        for (i, (target, value)) in plan.columns().iter().zip(&values).enumerate() {
-            if matches!(value, Value::Null) {
-                row.push(None);
-                continue;
-            }
-            let mut bytes = Vec::new();
-            if formats.get(i) == Some(&1) {
-                rupg_func::send(target.expr.ty, value, &mut bytes)?;
-            } else {
-                rupg_func::output(target.expr.ty, value, reader, &mut bytes)?;
-            }
-            row.push(Some(bytes));
+    let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+    plan.run(params, reader)?.iter().map(|values| encode(&types, values, reader, formats)).collect()
+}
+
+/// The bytes of the values of a row of the types `types` in the result format of each column: 1 is binary and any other code is text.
+///
+/// # Errors
+///
+/// The errors of the output functions.
+pub(crate) fn encode(
+    types: &[u32],
+    values: &[Value],
+    reader: &Reader<'_>,
+    formats: &[i16],
+) -> Result<Row> {
+    let mut row = Vec::with_capacity(values.len());
+    for (i, (&ty, value)) in types.iter().zip(values).enumerate() {
+        if matches!(value, Value::Null) {
+            row.push(None);
+            continue;
         }
-        rows.push(row);
+        let mut bytes = Vec::new();
+        if formats.get(i) == Some(&1) {
+            rupg_func::send(ty, value, &mut bytes)?;
+        } else {
+            rupg_func::output(ty, value, reader, &mut bytes)?;
+        }
+        row.push(Some(bytes));
     }
-    Ok(rows)
+    Ok(row)
 }
 
 /// The value of parameter `number`, from 1, of a `Bind`: the input function of the type for the text format and the receive function for the binary format.

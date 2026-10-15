@@ -10,7 +10,7 @@ use crate::{Call, bad_value};
 /// The 9 columns of `pg_stat_get_recovery`.
 const RECOVERY_COLUMNS: usize = 9;
 
-/// A set function with no rows: `pg_get_aios`, `pg_get_dsm_registry_allocations`, `pg_show_replication_origin_status` and `pg_cursor`.
+/// A set function with no rows: `pg_get_aios`, `pg_get_dsm_registry_allocations` and `pg_show_replication_origin_status`.
 pub(crate) fn none(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(Vec::new())
 }

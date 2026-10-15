@@ -29,13 +29,14 @@ use crate::utility::{self, Context, Notice, Outcome};
 
 mod activity;
 mod copy;
+mod cursor;
 mod databases;
 mod extended;
 mod prepare;
 
 pub(crate) use activity::Activity;
-pub(crate) use extended::Prepared;
-use extended::{Failed, Portal};
+use extended::Failed;
+pub(crate) use extended::{Portal, Prepared};
 
 /// The version of rupg, which `server_version` and the parameter `rupg.version` report.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -75,6 +76,10 @@ enum Done {
     Tag(CommandTag),
     /// `RowDescription`, the rows, then `CommandComplete` with the tag and the number of rows.
     Rows { columns: Vec<Column>, rows: Vec<Row>, tag: CommandTag },
+    /// The rows of a `FETCH`: `RowDescription` in the format, the rows, then `CommandComplete` with `FETCH` and the number of rows.
+    Fetch { columns: Vec<Column>, rows: Vec<Row>, format: i16 },
+    /// `CommandComplete` with this tag and a count, as `MOVE` gives.
+    Count(CommandTag, u64),
     /// `CopyOutResponse`, the `CopyData` messages, `CopyDone`, then `CommandComplete` with `COPY` and the number of rows.
     Copy(copy::CopyOut),
 }
@@ -368,6 +373,7 @@ impl Connection {
         )
         .with_activity(&self.activity, &self.store)
         .with_statements(&self.statements)
+        .with_portals(&self.portals)
         .with_cancel(&self.cancel)
     }
 
@@ -693,6 +699,15 @@ impl Connection {
             } else if let Node::DropdbStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.drop_database(stmt, &mut notices)
+            } else if let Node::DeclareCursorStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.declare(stmt, text, None, &[], &mut notices)
+            } else if let Node::FetchStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.fetch_cursor(stmt, None)
+            } else if let Node::ClosePortalStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.close_cursor(stmt, b"")
             } else {
                 drop(self.portals.close(b""));
                 let mut cx = Context {
@@ -747,6 +762,18 @@ impl Connection {
                     }
                     out.command_tag(tag, rows.len() as u64);
                 }
+                Done::Fetch { columns, rows, format } => {
+                    let fields: Vec<Field<'_>> =
+                        columns.iter().map(|column| column.field(format)).collect();
+                    out.row_description(&fields);
+                    self.notices(&mut late, text, &[], out);
+                    for row in &rows {
+                        let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
+                        out.data_row(&values);
+                    }
+                    out.command_tag(CommandTag::Fetch, rows.len() as u64);
+                }
+                Done::Count(tag, count) => out.command_tag(tag, count),
                 Done::Copy(copy) => copy.send(out),
             }
         }
@@ -819,13 +846,20 @@ impl Connection {
             self.transaction_started();
         }
         if chained || self.transaction.block() == Block::Default {
-            self.ended();
+            self.ended(ending != Ending::Rollback);
         }
     }
 
-    /// The end of a transaction, which removes the portals.
-    fn ended(&mut self) {
-        self.portals.clear();
+    /// The end of a transaction, which removes the portals. A cursor `WITH HOLD` stays after a commit, and a cursor `WITH HOLD` of a transaction before this one stays after a rollback, as `PreCommit_Portals` and `AtCleanup_Portals` keep them.
+    fn ended(&mut self, commit: bool) {
+        self.portals.retain(|_, portal| match &mut portal.run {
+            extended::Run::Cursor(cursor) if commit && cursor.holdable() => {
+                cursor.fresh = false;
+                true
+            }
+            extended::Run::Cursor(cursor) => cursor.held(),
+            _ => false,
+        });
         self.pipelining = false;
     }
 
@@ -840,11 +874,11 @@ impl Connection {
         self.transaction_ended();
         if self.transaction.failed() {
             self.portals.retain(|_, portal| {
-                portal.failed = true;
+                portal.failed |= !portal.as_cursor().is_some_and(cursor::Cursor::held);
                 true
             });
         } else {
-            self.ended();
+            self.ended(false);
         }
     }
 }
@@ -1679,7 +1713,7 @@ mod tests {
     /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database.
     fn script(text: &str) {
         let (mut c, _) = connect();
-        let starts = |l: &str| ["> ", "P ", "X "].iter().any(|prefix| l.starts_with(prefix));
+        let starts = |l: &str| ["> ", "P ", "X ", "D ", "C "].iter().any(|p| l.starts_with(p));
         let mut lines = text.lines().peekable();
         while let Some(line) = lines.next() {
             assert!(starts(line), "not a statement: {line}");
@@ -1691,9 +1725,21 @@ mod tests {
         }
     }
 
-    /// The lines of a statement of a script. A line `> sql` is a simple query. A line `P name|sql` is `Parse` of a statement and `Sync`, and a line `X name|value|value` is `Bind` of the statement to the unnamed portal with values in the text format, `Execute` and `Sync`.
+    /// The lines of a statement of a script. A line `> sql` is a simple query. A line `P name|sql` is `Parse` of a statement and `Sync`, and a line `X name|value|value` is `Bind` of the statement to the unnamed portal with values in the text format, `Execute` and `Sync`. A line `D S name` or `D P name` is `Describe` of a statement or a portal and `Sync`, and a line `C S name` or `C P name` is `Close` and `Sync`.
     fn script_lines(c: &mut Connection, line: &str) -> Vec<String> {
+        let target = |rest: &str| {
+            let (target, name) = rest.split_once(' ').unwrap();
+            (target.chars().next().unwrap(), name.to_string())
+        };
         let input = match line.split_at(2) {
+            ("D ", rest) => {
+                let (target, name) = target(rest);
+                [describe(target, &name), sync()].concat()
+            }
+            ("C ", rest) => {
+                let (target, name) = target(rest);
+                [close(target, &name), sync()].concat()
+            }
             ("P ", rest) => {
                 let (name, sql) = rest.split_once('|').unwrap();
                 [parse(name, sql, &[]), sync()].concat()
@@ -1711,6 +1757,8 @@ mod tests {
             .filter(|l| !l.starts_with("ready ") && l != "ParseComplete" && l != "BindComplete")
             .map(|l| match l.strip_prefix("fields ") {
                 Some(fields) => format!("fields {}", table_names(c, fields)),
+                None if l == "CloseComplete" => "close".to_string(),
+                None if l == "NoData" => "nodata".to_string(),
                 None => l,
             })
             .flat_map(|l| l.split('\n').map(str::to_string).collect::<Vec<_>>())
@@ -1787,6 +1835,12 @@ mod tests {
     #[test]
     fn prepared_statements() {
         big_stack(|| script(include_str!("connection/prepared_statements.test")));
+    }
+
+    /// Cursors: `DECLARE` with each option, `FETCH` and `MOVE` in each direction on cursors that can and cannot scan backward, `CLOSE` and `CLOSE ALL`, the view `pg_cursors`, a cursor `WITH HOLD` after a commit and after a rollback, the errors of the statements and of the grammar, `Describe` of a statement of `FETCH` and of the portal of a cursor, and `Close` of the portal. `connection/cursors.test` is the output of PostgreSQL 19 for the same script in a new database, without the rows of a `BINARY` cursor and without a query that fails after the first row.
+    #[test]
+    fn cursors() {
+        big_stack(|| script(include_str!("connection/cursors.test")));
     }
 
     /// `PREPARE`, `EXECUTE` and `DEALLOCATE`: the types of the parameters, the coercion of the values of `EXECUTE` and their errors, the statements of `Parse` that `EXECUTE` runs, the errors in a failed transaction, the count of the plans, a query string with more than one statement, the three statements in a `Parse`, and a statement of `Parse` that runs `EXECUTE` of itself. `connection/sql_prepare.test` is the output of PostgreSQL 19 for the same script in a new database.
