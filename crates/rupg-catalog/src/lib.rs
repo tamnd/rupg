@@ -59,6 +59,10 @@ pub const PG_CONSTRAINT: u32 = 2606;
 pub const PG_ATTRDEF: u32 = 2604;
 /// The OID of the catalog `pg_collation`.
 pub const PG_COLLATION: u32 = 3456;
+/// The OID of the catalog `pg_language`.
+pub const PG_LANGUAGE: u32 = 2612;
+/// The OID of the catalog `pg_extension`.
+pub const PG_EXTENSION: u32 = 3079;
 /// The OID of the `btree` access method.
 pub const BTREE: u32 = 403;
 /// The number of triggers that PostgreSQL makes for one foreign key.
@@ -322,6 +326,8 @@ pub struct Function {
     pub argnames: Vec<String>,
     /// `prosrc`: the body in a string, or empty for a body in SQL.
     pub src: String,
+    /// `probin`: the file of a function in C, or empty for another function.
+    pub bin: String,
     /// The text of the statement that made the function, or `None`.
     pub body: Option<FunctionBody>,
 }
@@ -462,6 +468,8 @@ pub enum DepKind {
     Auto,
     /// `i`: the dependent object is a part of the referenced object.
     Internal,
+    /// `e`: the dependent object is a member of the referenced extension.
+    Extension,
 }
 
 impl DepKind {
@@ -471,8 +479,45 @@ impl DepKind {
             DepKind::Normal => 'n',
             DepKind::Auto => 'a',
             DepKind::Internal => 'i',
+            DepKind::Extension => 'e',
         }
     }
+}
+
+/// A procedural language, one row of `pg_language`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Language {
+    /// The OID. [`Catalog::create_language`] sets it.
+    pub oid: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the owner role.
+    pub owner: u32,
+    /// `lanpltrusted`: true when a user without the superuser attribute can make functions in the language.
+    pub trusted: bool,
+    /// `lanplcallfoid`: the OID of the call handler.
+    pub handler: u32,
+    /// `laninline`: the OID of the handler of `DO`, or 0.
+    pub inline: u32,
+    /// `lanvalidator`: the OID of the validator, or 0.
+    pub validator: u32,
+}
+
+/// An extension, one row of `pg_extension`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Extension {
+    /// The OID. [`Catalog::create_extension`] sets it.
+    pub oid: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the owner role.
+    pub owner: u32,
+    /// The OID of the schema of the objects of the extension.
+    pub namespace: u32,
+    /// `extrelocatable`: true when the objects can move to another schema.
+    pub relocatable: bool,
+    /// `extversion`: the version.
+    pub version: String,
 }
 
 /// One row of `pg_depend`.
@@ -591,6 +636,8 @@ pub struct Catalog {
     defaults: BTreeMap<u32, AttrDefault>,
     constraints: BTreeMap<u32, Constraint>,
     functions: BTreeMap<u32, Function>,
+    languages: BTreeMap<u32, Language>,
+    extensions: BTreeMap<u32, Extension>,
     depends: Vec<Depend>,
     descriptions: BTreeMap<ObjRef, String>,
 }
@@ -638,6 +685,8 @@ impl Catalog {
             defaults: BTreeMap::new(),
             constraints: BTreeMap::new(),
             functions: BTreeMap::new(),
+            languages: BTreeMap::new(),
+            extensions: BTreeMap::new(),
             depends: Vec::new(),
             descriptions: BTreeMap::new(),
         }
@@ -1162,6 +1211,68 @@ impl Catalog {
         }
         self.functions.insert(oid, new);
         Ok(oid)
+    }
+
+    /// `CreateExtensionInternal`: a new extension, which gets the next OID.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when an extension has the name.
+    pub fn create_extension(&mut self, mut new: Extension) -> Result<u32> {
+        if self.extensions.values().any(|e| e.name == new.name) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("extension \"{}\" already exists", new.name),
+            ));
+        }
+        let oid = self.new_oid();
+        new.oid = oid;
+        self.depend(
+            ObjRef::new(PG_EXTENSION, oid),
+            ObjRef::new(PG_NAMESPACE, new.namespace),
+            DepKind::Normal,
+        );
+        self.extensions.insert(oid, new);
+        Ok(oid)
+    }
+
+    /// `recordDependencyOnCurrentExtension`: makes an object a member of an extension, as a statement of the script of the extension does.
+    pub fn add_to_extension(&mut self, object: ObjRef, extension: u32) {
+        self.depend(object, ObjRef::new(PG_EXTENSION, extension), DepKind::Extension);
+    }
+
+    /// `create_proc_lang`: a new procedural language, which gets the next OID. It depends on its handlers.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when a language has the name.
+    pub fn create_language(&mut self, mut new: Language) -> Result<u32> {
+        if self.languages.values().any(|l| l.name == new.name) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("language \"{}\" already exists", new.name),
+            ));
+        }
+        let oid = self.new_oid();
+        new.oid = oid;
+        let me = ObjRef::new(PG_LANGUAGE, oid);
+        for handler in [new.handler, new.inline, new.validator] {
+            if handler != 0 {
+                self.depend(me, ObjRef::new(PG_PROC, handler), DepKind::Normal);
+            }
+        }
+        self.languages.insert(oid, new);
+        Ok(oid)
+    }
+
+    /// The procedural languages, in the order of their OIDs.
+    pub fn languages(&self) -> impl Iterator<Item = &Language> {
+        self.languages.values()
+    }
+
+    /// The extensions, in the order of their OIDs.
+    pub fn extensions(&self) -> impl Iterator<Item = &Extension> {
+        self.extensions.values()
     }
 
     /// `domainAddCheckConstraint`: a check constraint of a domain. Without a name, the name is `domain_check`. `refs` are the objects that the expression refers to.
