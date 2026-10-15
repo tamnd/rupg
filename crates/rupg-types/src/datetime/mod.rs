@@ -642,21 +642,21 @@ impl Parts {
 }
 
 /// The text output of `interval`.
-pub fn interval_out(iv: &Interval, style: IntervalStyle, out: &mut Vec<u8>) {
-    if *iv == Interval::NEGATIVE_INFINITY {
+pub fn interval_out(period: &Interval, style: IntervalStyle, out: &mut Vec<u8>) {
+    if *period == Interval::NEGATIVE_INFINITY {
         return out.extend_from_slice(b"-infinity");
     }
-    if *iv == Interval::INFINITY {
+    if *period == Interval::INFINITY {
         return out.extend_from_slice(b"infinity");
     }
     // `interval2itm`. Each field has the sign of its source, as C division gives it.
-    let mut year = i64::from(iv.month / 12);
-    let mut mon = i64::from(iv.month % 12);
-    let mut mday = i64::from(iv.day);
-    let mut hour = iv.time / 3_600_000_000;
-    let mut min = iv.time / 60_000_000 % 60;
-    let mut sec = iv.time / USECS_PER_SEC % 60;
-    let mut usec = iv.time % USECS_PER_SEC;
+    let mut year = i64::from(period.month / 12);
+    let mut mon = i64::from(period.month % 12);
+    let mut mday = i64::from(period.day);
+    let mut hour = period.time / 3_600_000_000;
+    let mut min = period.time / 60_000_000 % 60;
+    let mut sec = period.time / USECS_PER_SEC % 60;
+    let mut usec = period.time % USECS_PER_SEC;
     let time_negative = hour < 0 || min < 0 || sec < 0 || usec < 0;
     let time_nonzero = hour != 0 || min != 0 || sec != 0 || usec != 0;
     let mut parts = Parts { zero: true, before: false };
@@ -782,14 +782,14 @@ pub fn interval_out(iv: &Interval, style: IntervalStyle, out: &mut Vec<u8>) {
 
 /// `interval_recv`: the fields after the last field of the typmod are cleared, and the microseconds are rounded to the precision.
 pub fn interval_recv(recv: &mut Recv<'_>, typmod: i32) -> Result<Interval, TypeError> {
-    let iv = Interval { time: recv.i64()?, day: recv.i32()?, month: recv.i32()? };
-    adjust_interval(iv, typmod)
+    let period = Interval { time: recv.i64()?, day: recv.i32()?, month: recv.i32()? };
+    adjust_interval(period, typmod)
 }
 
 /// `AdjustIntervalForTypmod`: the interval with the fields and the precision of the typmod.
-pub fn adjust_interval(mut iv: Interval, typmod: i32) -> Result<Interval, TypeError> {
-    if typmod < 0 || iv == Interval::INFINITY || iv == Interval::NEGATIVE_INFINITY {
-        return Ok(iv);
+pub fn adjust_interval(mut period: Interval, typmod: i32) -> Result<Interval, TypeError> {
+    if typmod < 0 || period == Interval::INFINITY || period == Interval::NEGATIVE_INFINITY {
+        return Ok(period);
     }
     let (range, precision) = ((typmod >> 16) & 0x7fff, typmod & 0xffff);
     let mask = |fields: &[IntervalField]| crate::typmod::interval_range(fields);
@@ -804,15 +804,17 @@ pub fn adjust_interval(mut iv: Interval, typmod: i32) -> Result<Interval, TypeEr
             || r == mask(&[Day, Hour, Minute, Second])
             || r == mask(&[Hour, Minute, Second])
             || r == mask(&[Minute, Second]) => {}
-        r if r == mask(&[Year]) => iv = Interval { time: 0, day: 0, month: iv.month / 12 * 12 },
-        r if r == mask(&[Month]) || r == mask(&[Year, Month]) => (iv.day, iv.time) = (0, 0),
-        r if r == mask(&[Day]) => iv.time = 0,
-        r if r == mask(&[Hour]) || r == mask(&[Day, Hour]) => iv.time = hours(iv.time),
+        r if r == mask(&[Year]) => {
+            period = Interval { time: 0, day: 0, month: period.month / 12 * 12 }
+        }
+        r if r == mask(&[Month]) || r == mask(&[Year, Month]) => (period.day, period.time) = (0, 0),
+        r if r == mask(&[Day]) => period.time = 0,
+        r if r == mask(&[Hour]) || r == mask(&[Day, Hour]) => period.time = hours(period.time),
         r if r == mask(&[Minute])
             || r == mask(&[Day, Hour, Minute])
             || r == mask(&[Hour, Minute]) =>
         {
-            iv.time = minutes(iv.time)
+            period.time = minutes(period.time)
         }
         _ => {
             return Err(TypeError::new(
@@ -832,18 +834,22 @@ pub fn adjust_interval(mut iv: Interval, typmod: i32) -> Result<Interval, TypeEr
         }
         let scale = 10i64.pow((MAX_TIME_PRECISION - precision) as u32);
         let half = scale / 2;
-        let time = if iv.time >= 0 { iv.time.checked_add(half) } else { iv.time.checked_sub(half) };
+        let time = if period.time >= 0 {
+            period.time.checked_add(half)
+        } else {
+            period.time.checked_sub(half)
+        };
         let time = time.ok_or_else(|| out_of_range("interval"))?;
-        iv.time = time - time % scale;
+        period.time = time - time % scale;
     }
-    Ok(iv)
+    Ok(period)
 }
 
 /// The binary output of `interval`.
-pub fn interval_send(iv: &Interval, out: &mut Vec<u8>) {
-    out.extend_from_slice(&iv.time.to_be_bytes());
-    out.extend_from_slice(&iv.day.to_be_bytes());
-    out.extend_from_slice(&iv.month.to_be_bytes());
+pub fn interval_send(period: &Interval, out: &mut Vec<u8>) {
+    out.extend_from_slice(&period.time.to_be_bytes());
+    out.extend_from_slice(&period.day.to_be_bytes());
+    out.extend_from_slice(&period.month.to_be_bytes());
 }
 
 #[cfg(test)]
@@ -921,15 +927,15 @@ mod tests {
 
     #[test]
     fn an_interval_typmod_clears_the_small_fields() {
-        let iv = Interval { time: 90_061_500_000, day: 3, month: 14 };
+        let period = Interval { time: 90_061_500_000, day: 3, month: 14 };
         let mut bytes = Vec::new();
-        interval_send(&iv, &mut bytes);
+        interval_send(&period, &mut bytes);
         let recv = |typmod| interval_recv(&mut Recv::new(&bytes), typmod).unwrap();
         let typmod = |fields: &[IntervalField], precision| {
             crate::typmod::interval_typmod(precision, crate::typmod::interval_range(fields))
         };
         use IntervalField::*;
-        assert_eq!(recv(-1), iv);
+        assert_eq!(recv(-1), period);
         assert_eq!(
             recv(typmod(&[Year], INTERVAL_FULL_PRECISION)),
             Interval { time: 0, day: 0, month: 12 }

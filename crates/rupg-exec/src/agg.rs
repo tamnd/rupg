@@ -844,13 +844,13 @@ pub(crate) fn window_aggref(call: &WindowFunc) -> Aggref {
     }
 }
 
-/// `eval_windowaggregates` with the default frame: the value of an aggregate function with `OVER` for each row of one partition, which is the result of the rows from the start of the partition to the last peer of the row. `groups` has the start and the end of the peer group of each row.
+/// `eval_windowaggregates`: the value of an aggregate function with `OVER` for each row of one partition, which is the result of the rows of the frame of the row. `frames` has the frame of each row.
 pub(crate) fn window_values(
     eval: &Eval<'_>,
     call: &WindowFunc,
     ty: u32,
     part: &[usize],
-    groups: &[(usize, usize)],
+    frames: &[window::Bounds],
     input: window::Input<'_>,
 ) -> Result<Vec<Value>> {
     let aggref = window_aggref(call);
@@ -860,27 +860,49 @@ pub(crate) fn window_values(
         method: method(&aggref, ty, None)?,
         types: aggref.args.iter().map(|a| a.ty).collect(),
     };
+    let feed = |state: &mut State, at: usize| -> Result<()> {
+        // The arguments of the call, and not their copies in `aggref`, have the aggregate calls that the group computed.
+        let mut e = input.at(eval, part[at]);
+        if let Some(filter) = &call.filter
+            && e.eval(filter)? != Value::Bool(true)
+        {
+            return Ok(());
+        }
+        let args = call.args.iter().map(|a| e.eval(a)).collect::<Result<Vec<_>>>()?;
+        agg.advance(state, &args, eval)
+    };
+    // The state has the rows of the partition from `base` to `upto`. A frame with the same start and more rows at the end adds the new rows, as `eval_windowaggregates` does it. A frame with an other start, or with an exclusion, starts again.
     let mut state = agg.start(eval)?;
-    let mut out = Vec::with_capacity(part.len());
-    let mut done = 0;
-    for &(_, end) in groups {
-        if end <= done {
+    let (mut base, mut upto) = (0, 0);
+    let mut out: Vec<Value> = Vec::with_capacity(part.len());
+    let mut last: Option<&window::Bounds> = None;
+    for bounds in frames {
+        if let (Some(previous), Some(value)) = (last, out.last())
+            && previous == bounds
+            && !bounds.excludes()
+        {
+            out.push(value.clone());
             continue;
         }
-        for &row in &part[done..end] {
-            // The arguments of the call, and not their copies in `aggref`, have the aggregate calls that the group computed.
-            let mut e = input.at(eval, row);
-            if let Some(filter) = &call.filter
-                && e.eval(filter)? != Value::Bool(true)
-            {
-                continue;
+        last = Some(bounds);
+        let value = if bounds.excludes() {
+            let mut fresh = agg.start(eval)?;
+            for at in bounds.rows() {
+                feed(&mut fresh, at)?;
             }
-            let args = call.args.iter().map(|a| e.eval(a)).collect::<Result<Vec<_>>>()?;
-            agg.advance(&mut state, &args, eval)?;
-        }
-        let value = agg.finish(state.clone(), eval)?;
-        out.extend(std::iter::repeat_n(value, end - done));
-        done = end;
+            agg.finish(fresh, eval)?
+        } else {
+            if bounds.head != base || bounds.tail < upto {
+                state = agg.start(eval)?;
+                (base, upto) = (bounds.head, bounds.head);
+            }
+            for at in upto..bounds.tail {
+                feed(&mut state, at)?;
+            }
+            upto = upto.max(bounds.tail);
+            agg.finish(state.clone(), eval)?
+        };
+        out.push(value);
     }
     Ok(out)
 }

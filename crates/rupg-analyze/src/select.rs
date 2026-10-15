@@ -69,7 +69,7 @@ pub struct Target {
 }
 
 impl Query {
-    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET`, `LIMIT`, the calls of the functions in `FROM` and the rows of the `VALUES` lists.
+    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET`, `LIMIT`, the offsets of the frames of the windows, the calls of the functions in `FROM` and the rows of the `VALUES` lists.
     pub fn exprs(&self) -> Vec<&Expr> {
         fn joins<'a>(item: &'a FromItem, out: &mut Vec<&'a Expr>) {
             if let FromItem::Join(j) = item {
@@ -83,6 +83,9 @@ impl Query {
             joins(item, &mut out);
         }
         out.extend(self.filter.iter().chain(&self.having).chain(&self.offset).chain(&self.limit));
+        for window in &self.windows {
+            out.extend(window.frame.start.iter().chain(&window.frame.end));
+        }
         for relation in &self.relations {
             if let Some(function) = &relation.function {
                 out.extend(function.calls.iter().map(|(call, _)| call));
@@ -113,6 +116,9 @@ impl Query {
                 .chain(&mut self.offset)
                 .chain(&mut self.limit),
         );
+        for window in &mut self.windows {
+            out.extend(window.frame.start.iter_mut().chain(&mut window.frame.end));
+        }
         for relation in &mut self.relations {
             if let Some(function) = &mut relation.function {
                 out.extend(function.calls.iter_mut().map(|(call, _)| call));

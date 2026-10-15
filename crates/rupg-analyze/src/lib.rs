@@ -59,7 +59,10 @@ pub use setop::{SetKind, SetOp, SetTree};
 pub use sort::SortGroup;
 pub use typcache::{default_opclass, sort_operators};
 pub use typename::parse_type;
-pub use window::WindowClause;
+pub use window::{
+    FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_OFFSET_FOLLOWING, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
+    FRAMEOPTION_START_OFFSET, Frame, FrameBound, FrameExclusion, FrameMode, WindowClause,
+};
 
 /// The OID of the schema `pg_catalog`.
 pub const PG_CATALOG_NAMESPACE: u32 = 11;

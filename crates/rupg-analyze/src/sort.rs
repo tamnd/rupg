@@ -74,7 +74,7 @@ pub(crate) fn raw_location(node: Option<&Node>) -> Option<usize> {
 }
 
 /// The error of a clause that names a column that is not in the select list.
-fn invalid_reference(message: String, at: Option<usize>) -> Error {
+pub(crate) fn invalid_reference(message: String, at: Option<usize>) -> Error {
     Error::new(SqlState::INVALID_COLUMN_REFERENCE, message).at_opt(at)
 }
 
