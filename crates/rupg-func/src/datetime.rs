@@ -231,6 +231,11 @@ fn interval_times(interval: &Interval, factor: f64) -> Result<Interval> {
     scale(interval, |x| x * factor)
 }
 
+/// `interval_lerp` of `orderedsetaggs.c`: the interval at the fraction `pct` of the way from `lo` to `hi`, for `percentile_cont`.
+pub fn interval_lerp(lo: &Interval, hi: &Interval, pct: f64) -> Result<Interval> {
+    interval_plus(&interval_times(&interval_minus(hi, lo)?, pct)?, lo)
+}
+
 fn interval_mul(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [a, b] = args else { return Err(bad_value()) };
     interval_times(&interval_arg(a)?, float_arg(b)?).map(Value::Interval)

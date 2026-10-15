@@ -5,6 +5,17 @@ use rupg_types::{Array, Numeric, Value};
 
 use crate::{Call, Kernel, bad_value, type_error};
 
+/// The check of a percentile of `percentile_disc` and `percentile_cont`, as `percentile_disc_final` and `setup_pct_info` do it.
+pub fn check_percentile(p: f64) -> Result<()> {
+    if (0.0..=1.0).contains(&p) {
+        return Ok(());
+    }
+    Err(Error::new(
+        SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+        format!("percentile value {} is not between 0 and 1", crate::calendar::format_g(p)),
+    ))
+}
+
 /// The kernel of a transition or final function by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {

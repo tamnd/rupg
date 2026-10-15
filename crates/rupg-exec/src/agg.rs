@@ -41,6 +41,47 @@ pub(crate) enum Method {
     Moments { sample: bool, root: bool },
     /// `json_agg`, `json_object_agg` and the forms of `jsonb`. `strict` skips the null values, and `unique` makes a key that comes twice an error.
     Json { object: bool, jsonb: bool, strict: bool, unique: bool },
+    /// An ordered-set or a hypothetical-set aggregate, which reads the sorted rows of the group and its direct arguments.
+    OrderedSet(Ordered),
+}
+
+/// The final function of an ordered-set or a hypothetical-set aggregate, from `orderedsetaggs.c`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Ordered {
+    /// `percentile_disc`, of an array of percentiles when `multi` is set.
+    Disc { multi: bool },
+    /// `percentile_cont` of `double precision`, or of `interval` when `interval` is set.
+    Cont { multi: bool, interval: bool },
+    /// `mode`.
+    Mode,
+    /// `rank` of a hypothetical row.
+    Rank,
+    /// `percent_rank` of a hypothetical row.
+    PercentRank,
+    /// `cume_dist` of a hypothetical row.
+    CumeDist,
+    /// `dense_rank` of a hypothetical row.
+    DenseRank,
+}
+
+impl Ordered {
+    /// The final function of an ordered-set aggregate by its `prosrc`.
+    fn by_src(src: &str) -> Option<Ordered> {
+        Some(match src {
+            "percentile_disc_final" => Ordered::Disc { multi: false },
+            "percentile_disc_multi_final" => Ordered::Disc { multi: true },
+            "percentile_cont_float8_final" => Ordered::Cont { multi: false, interval: false },
+            "percentile_cont_float8_multi_final" => Ordered::Cont { multi: true, interval: false },
+            "percentile_cont_interval_final" => Ordered::Cont { multi: false, interval: true },
+            "percentile_cont_interval_multi_final" => Ordered::Cont { multi: true, interval: true },
+            "mode_final" => Ordered::Mode,
+            "hypothetical_rank_final" => Ordered::Rank,
+            "hypothetical_percent_rank_final" => Ordered::PercentRank,
+            "hypothetical_cume_dist_final" => Ordered::CumeDist,
+            "hypothetical_dense_rank_final" => Ordered::DenseRank,
+            _ => return None,
+        })
+    }
 }
 
 /// True for a pseudo-type that takes the type of the arguments.
@@ -72,6 +113,9 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
     };
     let row = builtin::aggregate(agg.oid).ok_or_else(unsupported)?;
     let src = |func: u32| builtin::proc_by_oid(func).map_or("", |p| p.src);
+    if let Some(ordered) = Ordered::by_src(src(row.finalfn)) {
+        return Ok(Method::OrderedSet(ordered));
+    }
     Ok(match (src(row.transfn), src(row.finalfn)) {
         ("int8_avg_accum", "numeric_poly_sum") => Method::Int128 { avg: false },
         ("int8_avg_accum", "numeric_poly_avg") => Method::Int128 { avg: true },
@@ -142,6 +186,8 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
 
 /// The state of an aggregate in a group.
 enum State {
+    /// The state of [`Method::OrderedSet`], which keeps the rows of the group outside of the state.
+    Sorted,
     /// The state of [`Method::Kernel`]. `empty` is `noTransValue`: the state is null and the first value that is not null becomes the state.
     Value {
         value: Value,
@@ -289,6 +335,7 @@ impl Agg<'_> {
             Method::RangeAgg => State::RangeAgg { ranges: Vec::new() },
             Method::Moments { .. } => State::Moments(Moments::default()),
             Method::Json { .. } => State::Json { text: None, keys: HashSet::new() },
+            Method::OrderedSet(_) => State::Sorted,
         })
     }
 
@@ -463,6 +510,101 @@ impl Agg<'_> {
         Ok(())
     }
 
+    /// The result of an ordered-set aggregate from the rows of the group, which have the values of the items of `WITHIN GROUP`, and from the values of the direct arguments.
+    fn ordered_set(
+        &self,
+        ordered: Ordered,
+        direct: &[Value],
+        mut rows: Vec<Vec<Value>>,
+        eval: &Eval<'_>,
+    ) -> Result<Value> {
+        let types: Vec<u32> = self.agg.args.iter().map(|a| a.ty).collect();
+        let keys = sort::Keys::new(&self.agg.order, &types, eval.session)?;
+        let hypothetical = matches!(
+            ordered,
+            Ordered::Rank | Ordered::PercentRank | Ordered::CumeDist | Ordered::DenseRank
+        );
+        if hypothetical {
+            return hypothetical_rank(ordered, direct, rows, &keys);
+        }
+        let percentile = direct.first().unwrap_or(&Value::Null);
+        let multi =
+            matches!(ordered, Ordered::Disc { multi: true } | Ordered::Cont { multi: true, .. });
+        if !multi && ordered != Ordered::Mode {
+            // `percentile_disc_final` and `percentile_cont_final_common` check the percentile first.
+            let Some(p) = float(percentile) else { return Ok(Value::Null) };
+            rupg_func::check_percentile(p)?;
+        }
+        // `ordered_set_transition` skips the null values.
+        rows.retain(|r| !r[0].is_null());
+        if rows.is_empty() {
+            return Ok(Value::Null);
+        }
+        sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?;
+        let values: Vec<Value> = rows.into_iter().map(|mut r| r.swap_remove(0)).collect();
+        let count = values.len();
+        let interval = matches!(ordered, Ordered::Cont { interval: true, .. });
+        match ordered {
+            Ordered::Mode => {
+                let equal = |a: &Value, b: &Value| {
+                    keys.equal(std::slice::from_ref(a), std::slice::from_ref(b))
+                };
+                let (mut mode, mut mode_freq) = (0, 0);
+                let (mut last, mut last_freq) = (0, 0);
+                for i in 0..count {
+                    if last_freq > 0 && equal(&values[i], &values[last])? {
+                        last_freq += 1;
+                    } else {
+                        last = i;
+                        last_freq = 1;
+                    }
+                    if last_freq > mode_freq {
+                        mode = last;
+                        mode_freq = last_freq;
+                    }
+                }
+                Ok(values[mode].clone())
+            }
+            Ordered::Disc { multi: false } => {
+                let p = float(percentile).unwrap_or(0.0);
+                Ok(values[disc_row(p, count) - 1].clone())
+            }
+            Ordered::Cont { multi: false, .. } => {
+                let p = float(percentile).unwrap_or(0.0);
+                cont(&values, p, interval)
+            }
+            _ => {
+                let Value::Array(array) = percentile else { return Ok(Value::Null) };
+                if array.values.is_empty() {
+                    return Ok(Value::Array(Box::new(Array::empty())));
+                }
+                let percentiles = array
+                    .values
+                    .iter()
+                    .map(|v| {
+                        let p = v.as_ref().and_then(float);
+                        if let Some(p) = p {
+                            rupg_func::check_percentile(p)?;
+                        }
+                        Ok(p)
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                let result = percentiles
+                    .into_iter()
+                    .map(|p| {
+                        let Some(p) = p else { return Ok(None) };
+                        if matches!(ordered, Ordered::Disc { .. }) {
+                            Ok(Some(values[disc_row(p, count) - 1].clone()))
+                        } else {
+                            cont(&values, p, interval).map(Some)
+                        }
+                    })
+                    .collect::<Result<Vec<_>>>()?;
+                Ok(Value::Array(Box::new(Array { dims: array.dims.clone(), values: result })))
+            }
+        }
+    }
+
     /// `finalize_aggregate`: the result of the aggregate from its state.
     fn finish(&self, state: State, eval: &Eval<'_>) -> Result<Value> {
         let numeric = |v: i128| Numeric::from_integer(v);
@@ -583,6 +725,90 @@ fn accumulate_array(
         .ok_or_else(|| Error::internal("array_agg has too many input arrays"))?;
     values.extend(array.values.iter().cloned());
     Ok(())
+}
+
+/// The value of a `double precision` percentile, or `None` for null.
+fn float(value: &Value) -> Option<f64> {
+    match value {
+        Value::Float8(p) => Some(*p),
+        _ => None,
+    }
+}
+
+/// The row of `percentile_disc` from 1: the smallest K such that K / N is at least the percentile, and at least 1.
+fn disc_row(p: f64, count: usize) -> usize {
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss, clippy::cast_precision_loss)]
+    let row = (p * count as f64).ceil() as usize;
+    row.clamp(1, count)
+}
+
+/// `percentile_cont` of sorted values with no nulls: the value at the fraction `p` of the way from the first value to the last, by `float8_lerp` or `interval_lerp`.
+fn cont(values: &[Value], p: f64, interval: bool) -> Result<Value> {
+    #[allow(clippy::cast_precision_loss)]
+    let at = p * (values.len() - 1) as f64;
+    #[allow(clippy::cast_possible_truncation, clippy::cast_sign_loss)]
+    let (first, second) = (at.floor() as usize, at.ceil() as usize);
+    if first == second {
+        return Ok(values[first].clone());
+    }
+    let proportion = at - at.floor();
+    match (&values[first], &values[second]) {
+        (Value::Float8(lo), Value::Float8(hi)) if !interval => {
+            Ok(Value::Float8(lo + proportion * (hi - lo)))
+        }
+        (Value::Interval(lo), Value::Interval(hi)) if interval => {
+            rupg_func::interval_lerp(lo, hi, proportion).map(Value::Interval)
+        }
+        _ => Err(Error::internal("percentile_cont got a value of the wrong type")),
+    }
+}
+
+/// `hypothetical_rank_common` and `hypothetical_dense_rank_final`: the rank of the hypothetical row of the direct arguments among the rows of the group. The hypothetical row comes before the rows that are equal to it, and after them for `cume_dist`.
+fn hypothetical_rank(
+    ordered: Ordered,
+    direct: &[Value],
+    rows: Vec<Vec<Value>>,
+    keys: &sort::Keys<'_>,
+) -> Result<Value> {
+    let count = rows.len();
+    if count == 0 {
+        return Ok(match ordered {
+            Ordered::PercentRank => Value::Float8(0.0),
+            Ordered::CumeDist => Value::Float8(1.0),
+            _ => Value::Int8(1),
+        });
+    }
+    let hypothetical = &direct[direct.len() - rows[0].len()..];
+    let mut rank = 1_usize;
+    if ordered == Ordered::DenseRank {
+        let mut before = Vec::new();
+        for row in rows {
+            if keys.compare(&row, hypothetical)?.is_lt() {
+                before.push(row);
+            }
+        }
+        let mut rows = before;
+        sort::qsort(&mut rows, &mut |a, b| keys.compare(a, b))?;
+        for (i, row) in rows.iter().enumerate() {
+            if i == 0 || !keys.equal(&rows[i - 1], row)? {
+                rank += 1;
+            }
+        }
+    } else {
+        for row in &rows {
+            let order = keys.compare(row, hypothetical)?;
+            if order.is_lt() || (ordered == Ordered::CumeDist && order.is_eq()) {
+                rank += 1;
+            }
+        }
+    }
+    #[allow(clippy::cast_precision_loss)]
+    let (rank_f, count_f) = (rank as f64, count as f64);
+    Ok(match ordered {
+        Ordered::PercentRank => Value::Float8((rank_f - 1.0) / count_f),
+        Ordered::CumeDist => Value::Float8(rank_f / (count_f + 1.0)),
+        _ => Value::Int8(i64::try_from(rank).unwrap_or(i64::MAX)),
+    })
 }
 
 /// The aggregate calls of an expression. An aggregate call has no other aggregate call in it.
@@ -717,8 +943,17 @@ pub(crate) fn rows<'a>(
                 }
             }
         }
+        // The direct arguments of an ordered-set aggregate read the first row of the group.
+        eval.tuple = group.first().map_or(none, |&i| &tuples[i]);
         let mut values = Vec::with_capacity(aggs.len());
         for ((agg, mut state), mut inputs) in aggs.iter().zip(states).zip(sorted) {
+            if let Method::OrderedSet(ordered) = agg.method {
+                let direct =
+                    agg.agg.direct.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?;
+                let value = agg.ordered_set(ordered, &direct, inputs, eval)?;
+                values.push((std::ptr::from_ref(agg.agg), value));
+                continue;
+            }
             if !agg.agg.order.is_empty() || !agg.agg.distinct.is_empty() {
                 // `process_ordered_aggregate_multi`: a `DISTINCT` sorts on its own items, which start with the items of `ORDER BY`.
                 let list =
@@ -742,7 +977,6 @@ pub(crate) fn rows<'a>(
             values.push((std::ptr::from_ref(agg.agg), agg.finish(state, eval)?));
         }
         eval.aggs = values;
-        eval.tuple = group.first().map_or(none, |&i| &tuples[i]);
         if let Some(having) = &query.having
             && eval.eval(having)? != Value::Bool(true)
         {
