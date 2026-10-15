@@ -74,6 +74,8 @@ pub struct ProcRow {
     pub argdefaults: Option<&'static str>,
     /// `prosrc`: for an internal function, the name of the C function, which is the name of its kernel.
     pub src: &'static str,
+    /// `prosqlbody`: for a function in SQL with a body in SQL, the text of the statement that made it.
+    pub sqlbody: Option<&'static str>,
 }
 
 /// A row of `pg_operator`.
@@ -631,6 +633,10 @@ fn load_procs() -> Vec<ProcRow> {
                 _ => None,
             }),
             src: src[i],
+            sqlbody: r.optional("prosqlbody", i, |v| match v {
+                Values::Text(v) => Some(*v),
+                _ => None,
+            }),
         })
         .collect()
 }

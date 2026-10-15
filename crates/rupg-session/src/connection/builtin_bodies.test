@@ -1,0 +1,37 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT lpad('ab', 4), rpad('ab', 4), substring('Thomas', '%#"o_a#"_', '#')
+fields lpad:25:-1:-1,rpad:25:-1:-1,substring:25:-1:-1
+row   ab,ab  ,oma
+SELECT 1
+> SELECT bit_length(B'10101'), bit_length('\x0102'::bytea), bit_length('héllo'::text)
+fields bit_length:23:4:-1,bit_length:23:4:-1,bit_length:23:4:-1
+row 5,16,48
+SELECT 1
+> SELECT '0/16'::pg_lsn + 16::numeric AS lsn
+fields lsn:3220:8:-1
+row 0/00000026
+SELECT 1
+> SELECT path_contain_pt('((0,0),(2,0),(2,2))'::path, '(1,1)'::point)
+fields path_contain_pt:16:1:-1
+row t
+SELECT 1
+> SELECT 7 + date '2020-03-04', 1::int8 + inet '10.0.0.1'
+fields ?column?:1082:4:-1,?column?:869:-1:-1
+row 2020-03-11,10.0.0.2
+SELECT 1
+> SELECT obj_description('pg_class'::regclass, 'pg_class'), obj_description(11), col_description('pg_class'::regclass, 1), shobj_description(10, 'pg_authid')
+fields obj_description:25:-1:-1,obj_description:25:-1:-1,col_description:25:-1:-1,shobj_description:25:-1:-1
+row NULL,system catalog schema,NULL,NULL
+SELECT 1
+> SELECT lpad(NULL, 3) IS NULL, log(NULL::numeric) IS NULL
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT proname, prosrc, procost, prosqlbody IS NOT NULL FROM pg_proc WHERE oid IN (879, 1215, 1305, 6183) ORDER BY oid
+fields proname@pg_proc.2:19:64:-1,prosrc@pg_proc.26:25:-1:-1,procost@pg_proc.6:700:4:-1,?column?:16:1:-1
+row lpad,,1,t
+row obj_description,,100,t
+row overlaps,,1,t
+row ts_debug,,100,t
+SELECT 4

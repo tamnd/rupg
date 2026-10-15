@@ -320,7 +320,15 @@ impl Analyzer<'_> {
 ///
 /// The errors of the analysis of the body.
 pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<Body>> {
-    let Some(function) = env.catalog().and_then(|c| c.function(oid)) else { return Ok(None) };
+    let built_in;
+    let function = match env.catalog().and_then(|c| c.function(oid)) {
+        Some(function) => function,
+        None => {
+            let Some(function) = builtin_function(oid) else { return Ok(None) };
+            built_in = function;
+            &built_in
+        }
+    };
     let Some(body) = &function.body else { return Ok(None) };
     let (list, _) = rupg_sql::parse(&body.text).map_err(Error::from)?;
     let stmt = list.iter().flatten().find_map(|node| match node {
@@ -338,6 +346,35 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
     let mut an = Analyzer::new(env, &params);
     an.path.clone_from(&body.path);
     an.body(function, &stmts, inputs).map(Some)
+}
+
+/// A built-in function with a body in SQL, which `system_functions.sql` gives it. `initdb` runs that script with `search_path` set to `pg_catalog`.
+fn builtin_function(oid: u32) -> Option<Function> {
+    let proc = builtin::proc_by_oid(oid)?;
+    let text = proc.sqlbody?;
+    Some(Function {
+        oid,
+        name: proc.name.into(),
+        namespace: proc.namespace,
+        // The bootstrap superuser.
+        owner: 10,
+        lang: proc.lang,
+        cost: DEFAULT_COST,
+        rows: 0,
+        support: 0,
+        strict: proc.strict,
+        volatile: proc.volatile,
+        parallel: b's',
+        rettype: proc.rettype,
+        retset: proc.retset,
+        argtypes: proc.argtypes.to_vec(),
+        allargtypes: proc.allargtypes.unwrap_or_default().to_vec(),
+        argmodes: proc.argmodes.unwrap_or_default().to_vec(),
+        argnames: proc.argnames.unwrap_or_default().iter().map(|n| (*n).into()).collect(),
+        src: String::new(),
+        bin: String::new(),
+        body: Some(FunctionBody { text: text.into(), path: vec![crate::PG_CATALOG_NAMESPACE] }),
+    })
 }
 
 impl Definer<'_, '_> {
