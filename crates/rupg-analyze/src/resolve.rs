@@ -1,13 +1,14 @@
 //! The choice of a function or an operator for the types of the arguments, as `parse_func.c` and `parse_oper.c` make it, with the errors of PostgreSQL when no function fits or when more than one fits.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_pgcatalog::builtin::{self, AggregateRow, OperatorRow};
+use rupg_pgcatalog::builtin::{self, AggregateRow, OperatorRow, ProcRow};
 use rupg_types::oid;
 
 use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, Path, can_coerce, find_path};
-use crate::expr::{Expr, ExprKind, Func, FuncForm};
+use crate::expr::{Expr, ExprKind, Func, FuncForm, NamedArg};
+use crate::funcargs::arg_defaults;
 use crate::poly;
 use crate::types;
 
@@ -22,6 +23,16 @@ const NAME_EXISTS: u32 = 0x4;
 const NAME_VISIBLE: u32 = 0x8;
 /// `FGC_ARGCOUNT_MATCH`: a function of the name takes the number of arguments.
 const ARGCOUNT_MATCH: u32 = 0x10;
+/// `FGC_ARGNAMES_MATCH`: a function has all the names of the named arguments.
+const ARGNAMES_MATCH: u32 = 0x20;
+/// `FGC_ARGNAMES_NONDUP`: no named argument is also a positional argument.
+const ARGNAMES_NONDUP: u32 = 0x40;
+/// `FGC_ARGNAMES_ALL`: the call gives all the arguments that have no default.
+const ARGNAMES_ALL: u32 = 0x80;
+/// `FGC_ARGNAMES_VALID`: a function fits the call with named arguments.
+const ARGNAMES_VALID: u32 = 0x100;
+/// `FGC_VARIADIC_FAIL`: `VARIADIC` with named arguments is not at the variadic argument.
+const VARIADIC_FAIL: u32 = 0x200;
 
 /// `FuncCandidateList`: a function or an operator that the name gives, with the argument types after the expansion of a variadic argument.
 #[derive(Clone, Debug)]
@@ -31,7 +42,18 @@ struct Candidate {
     args: Vec<u32>,
     /// The number of arguments that the variadic argument takes, or 0.
     nvargs: usize,
+    /// The number of defaults at the end of `args`, which the call does not give.
+    ndargs: usize,
+    /// For a call with named arguments, the number of the argument of the function for each argument of the call, then for each default.
+    argnumbers: Option<Vec<usize>>,
     pathpos: usize,
+}
+
+impl Candidate {
+    /// The argument types without the defaults, which decide if two candidates are the same.
+    fn given(&self) -> &[u32] {
+        &self.args[..self.args.len() - self.ndargs]
+    }
 }
 
 /// The result of `func_get_detail`.
@@ -43,7 +65,6 @@ enum Detail {
     Normal(Candidate),
 }
 
-/// `funcname_signature_string`: the name and the argument types, such as `lower(integer)`.
 /// The checks of `ParseFuncOrColumn` of the parts of a call that only an aggregate or a window function can have.
 fn check_parts(
     parts: &Parts<'_>,
@@ -118,9 +139,64 @@ fn check_parts(
     Ok(())
 }
 
-fn signature(name: &str, args: &[u32]) -> String {
-    let args: Vec<String> = args.iter().map(|&t| types::name(t)).collect();
+/// `funcname_signature_string`: the name and the argument types, such as `lower(integer)`. The names of the named arguments, which are the last arguments, come before their types, as `f(integer, b => text)`.
+fn signature(name: &str, args: &[u32], argnames: &[&str]) -> String {
+    let positional = args.len() - argnames.len();
+    let args: Vec<String> = args
+        .iter()
+        .enumerate()
+        .map(|(i, &t)| match i.checked_sub(positional) {
+            Some(n) => format!("{} => {}", argnames[n], types::name(t)),
+            None => types::name(t),
+        })
+        .collect();
     format!("{name}({})", args.join(", "))
+}
+
+/// `MatchNamedCall`: the number of the argument of the function for each argument of the call, then for each default that the call needs. `None` when the names do not fit the function, with the flags that tell how far the match got.
+fn match_named_call(
+    proc: &ProcRow,
+    nargs: usize,
+    argnames: &[&str],
+    flags: &mut u32,
+) -> Option<Vec<usize>> {
+    let names = proc.argnames?;
+    let pronargs = proc.argtypes.len();
+    let positional = nargs - argnames.len();
+    let mut argnumbers: Vec<usize> = (0..positional).collect();
+    let mut given = vec![false; names.len().max(pronargs)];
+    given[..positional].fill(true);
+    let mut twice = false;
+    for &argname in argnames {
+        // The number counts only the input arguments.
+        let inputs = names.iter().enumerate().filter(|&(i, _)| {
+            let mode = proc.argmodes.and_then(|m| m.get(i).copied()).unwrap_or(b'i');
+            matches!(mode, b'i' | b'b' | b'v')
+        });
+        let pp = inputs.map(|(_, &name)| name).position(|name| name == argname)?;
+        twice |= given[pp];
+        given[pp] = true;
+        argnumbers.push(pp);
+    }
+    *flags |= ARGNAMES_MATCH;
+    if twice {
+        return None;
+    }
+    *flags |= ARGNAMES_NONDUP;
+    if nargs < pronargs {
+        let first = pronargs.saturating_sub(usize::try_from(proc.nargdefaults).unwrap_or(0));
+        for (pp, &done) in given.iter().enumerate().take(pronargs).skip(positional) {
+            if done {
+                continue;
+            }
+            if pp < first {
+                return None;
+            }
+            argnumbers.push(pp);
+        }
+    }
+    *flags |= ARGNAMES_ALL;
+    Some(argnumbers)
 }
 
 /// `op_signature_string`: such as `integer + text` or `- text`.
@@ -290,11 +366,12 @@ impl Analyzer<'_> {
         }
     }
 
-    /// `FuncnameGetCandidates` with positional arguments and no defaults.
+    /// `FuncnameGetCandidates` with the defaults of the arguments. `argnames` has the names of the named arguments, which are the last arguments.
     fn func_candidates(
         &self,
         names: &[&str],
         nargs: usize,
+        argnames: &[&str],
         expand_variadic: bool,
         at: Option<usize>,
     ) -> Result<(Vec<Candidate>, u32)> {
@@ -313,20 +390,48 @@ impl Analyzer<'_> {
             };
             flags |= NAME_VISIBLE;
             let pronargs = proc.argtypes.len();
-            let variadic = pronargs <= nargs && expand_variadic && proc.variadic != 0;
-            if pronargs != nargs && !variadic {
+            let defaults = usize::try_from(proc.nargdefaults).unwrap_or(0);
+            let use_defaults = pronargs > nargs;
+            if use_defaults && nargs + defaults < pronargs {
                 continue;
             }
-            flags |= ARGCOUNT_MATCH;
-            let mut args = proc.argtypes.to_vec();
+            let mut variadic = false;
+            let mut argnumbers = None;
+            if argnames.is_empty() {
+                variadic = pronargs <= nargs && expand_variadic && proc.variadic != 0;
+                if pronargs != nargs && !variadic && !use_defaults {
+                    continue;
+                }
+                flags |= ARGCOUNT_MATCH;
+            } else {
+                if pronargs != nargs && !use_defaults {
+                    continue;
+                }
+                flags |= ARGCOUNT_MATCH;
+                let Some(numbers) = match_named_call(proc, nargs, argnames, &mut flags) else {
+                    continue;
+                };
+                // Named arguments cannot fit the arguments that a variadic array would have, so a variadic function fits only with `VARIADIC`.
+                if proc.variadic != 0 && expand_variadic {
+                    continue;
+                }
+                flags |= ARGNAMES_VALID;
+                argnumbers = Some(numbers);
+            }
+            let mut args = match &argnumbers {
+                Some(numbers) => numbers.iter().map(|&n| proc.argtypes[n]).collect(),
+                None => proc.argtypes.to_vec(),
+            };
             let mut nvargs = 0;
             if variadic {
                 nvargs = nargs - pronargs + 1;
                 args.truncate(pronargs - 1);
                 args.resize(nargs, proc.variadic);
             }
-            let new = Candidate { oid: proc.oid, args, nvargs, pathpos };
-            if let Some(prev) = list.iter_mut().find(|p| p.args == new.args) {
+            let ndargs = if use_defaults { pronargs - nargs } else { 0 };
+            let new = Candidate { oid: proc.oid, args, nvargs, ndargs, argnumbers, pathpos };
+            // The defaults do not count in the choice between two candidates with the same arguments.
+            if let Some(prev) = list.iter_mut().find(|p| p.given() == new.given()) {
                 let preference = if new.pathpos != prev.pathpos {
                     new.pathpos.cmp(&prev.pathpos) as i32
                 } else if variadic && prev.nvargs == 0 {
@@ -358,21 +463,24 @@ impl Analyzer<'_> {
         (row.relid == 0).then_some(row.oid)
     }
 
-    /// `func_get_detail` for positional arguments.
+    /// `func_get_detail`. Only the arguments that the call gives decide the match, and not the defaults.
     fn func_detail(
         &self,
         names: &[&str],
         args: &[Expr],
         inputs: &[u32],
+        argnames: &[&str],
         expand_variadic: bool,
         at: Option<usize>,
     ) -> Result<(Detail, u32)> {
-        let (candidates, flags) = self.func_candidates(names, inputs.len(), expand_variadic, at)?;
-        let exact = candidates.iter().find(|c| inputs.is_empty() || c.args == inputs);
+        let nargs = inputs.len();
+        let (candidates, mut flags) =
+            self.func_candidates(names, nargs, argnames, expand_variadic, at)?;
+        let exact = candidates.iter().find(|c| nargs == 0 || c.args[..nargs] == *inputs);
         let best = match exact {
             Some(c) => Some(c.clone()),
             None => {
-                if let ([arg], Some(target)) = (args, self.func_name_as_type(names)) {
+                if let ([arg], [], Some(target)) = (args, argnames, self.func_name_as_type(names)) {
                     let source = inputs[0];
                     let coercion =
                         if source == oid::UNKNOWN && matches!(arg.kind, ExprKind::Const(_)) {
@@ -405,16 +513,51 @@ impl Analyzer<'_> {
         };
         Ok(match best {
             Some(c) if c.oid == 0 => (Detail::Multiple, flags),
+            // `VARIADIC` with named arguments must be at the variadic argument.
+            Some(c)
+                if !argnames.is_empty()
+                    && !expand_variadic
+                    && nargs > 0
+                    && c.argnumbers.as_ref().is_some_and(|n| n[nargs - 1] != nargs - 1) =>
+            {
+                flags |= VARIADIC_FAIL;
+                (Detail::NotFound, flags)
+            }
             Some(c) => (Detail::Normal(c), flags),
             None => (Detail::NotFound, flags),
         })
     }
 
-    /// `ParseFuncOrColumn` for a call of a plain function with positional arguments.
+    /// The types of the defaults that a candidate takes, in the order of `args` of the candidate.
+    fn default_types(proc: &ProcRow, candidate: &Candidate) -> Result<Vec<u32>> {
+        if candidate.ndargs == 0 {
+            return Ok(Vec::new());
+        }
+        let defaults = arg_defaults(proc)?;
+        if candidate.ndargs > defaults.len() {
+            return Err(Error::internal("not enough default arguments"));
+        }
+        Ok(match &candidate.argnumbers {
+            // The defaults of the arguments that the call does not name, in the order of the arguments.
+            Some(numbers) => {
+                let defaulted = &numbers[numbers.len() - candidate.ndargs..];
+                let first = proc.argtypes.len() - defaults.len();
+                defaults
+                    .iter()
+                    .enumerate()
+                    .filter(|&(i, _)| defaulted.contains(&(first + i)))
+                    .map(|(_, d)| d.ty)
+                    .collect()
+            }
+            None => defaults[defaults.len() - candidate.ndargs..].iter().map(|d| d.ty).collect(),
+        })
+    }
+
+    /// `ParseFuncOrColumn` for a call of a function. The named arguments come after the positional arguments.
     pub(crate) fn make_func(
         &mut self,
         names: &[&str],
-        args: Vec<Expr>,
+        mut args: Vec<Expr>,
         variadic_keyword: bool,
         parts: Option<Parts<'_>>,
         at: Option<usize>,
@@ -426,8 +569,29 @@ impl Analyzer<'_> {
             )
             .at_opt(at));
         }
+        let mut owned_names: Vec<String> = Vec::new();
+        for arg in &args {
+            if let ExprKind::NamedArg(na) = &arg.kind {
+                if owned_names.contains(&na.name) {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        format!("argument name \"{}\" used more than once", na.name),
+                    )
+                    .at_opt(arg.location));
+                }
+                owned_names.push(na.name.clone());
+            } else if !owned_names.is_empty() {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "positional argument cannot follow named argument",
+                )
+                .at_opt(arg.place()));
+            }
+        }
+        let argnames: Vec<&str> = owned_names.iter().map(String::as_str).collect();
         let inputs: Vec<u32> = args.iter().map(|a| a.ty).collect();
-        let (detail, flags) = self.func_detail(names, &args, &inputs, !variadic_keyword, at)?;
+        let (detail, flags) =
+            self.func_detail(names, &args, &inputs, &argnames, !variadic_keyword, at)?;
         let name = names.join(".");
         let proc = match &detail {
             Detail::Normal(c) => builtin::proc_by_oid(c.oid),
@@ -437,7 +601,7 @@ impl Analyzer<'_> {
         if prokind == b'p' {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
-                format!("{} is a procedure", signature(&name, &inputs)),
+                format!("{} is a procedure", signature(&name, &inputs, &argnames)),
             )
             .with_hint("To call a procedure, use CALL.")
             .at_opt(at));
@@ -457,7 +621,7 @@ impl Analyzer<'_> {
             Detail::Multiple => {
                 return Err(Error::new(
                     SqlState::AMBIGUOUS_FUNCTION,
-                    format!("function {} is not unique", signature(&name, &inputs)),
+                    format!("function {} is not unique", signature(&name, &inputs, &argnames)),
                 )
                 .with_detail("Could not choose a best candidate function.")
                 .with_hint("You might need to add explicit type casts.")
@@ -470,7 +634,7 @@ impl Analyzer<'_> {
                 {
                     return Err(Error::new(
                         SqlState::UNDEFINED_FUNCTION,
-                        format!("function {} does not exist", signature(&name, &inputs)),
+                        format!("function {} does not exist", signature(&name, &inputs, &argnames)),
                     )
                     .with_detail("No aggregate function matches the given name and argument types.")
                     .with_hint("Perhaps you misplaced ORDER BY; ORDER BY must appear after all regular arguments of the aggregate.")
@@ -478,7 +642,7 @@ impl Analyzer<'_> {
                 }
                 let error = Error::new(
                     SqlState::UNDEFINED_FUNCTION,
-                    format!("function {} does not exist", signature(&name, &inputs)),
+                    format!("function {} does not exist", signature(&name, &inputs, &argnames)),
                 );
                 let error = if flags & NAME_VISIBLE == 0 {
                     if flags & SCHEMA_GIVEN != 0 {
@@ -494,6 +658,20 @@ impl Analyzer<'_> {
                     error.with_detail(
                         "No function of that name accepts the given number of arguments.",
                     )
+                } else if !argnames.is_empty() && flags & ARGNAMES_MATCH == 0 {
+                    error.with_detail("No function of that name accepts the given argument names.")
+                } else if !argnames.is_empty() && flags & ARGNAMES_NONDUP == 0 {
+                    error.with_detail("In the closest available match, an argument was specified both positionally and by name.")
+                } else if !argnames.is_empty() && flags & ARGNAMES_ALL == 0 {
+                    error.with_detail(
+                        "In the closest available match, not all required arguments were supplied.",
+                    )
+                } else if !argnames.is_empty() && flags & ARGNAMES_VALID == 0 {
+                    error.with_hint("This call would be correct if the variadic array were labeled VARIADIC and placed last.")
+                } else if flags & VARIADIC_FAIL != 0 {
+                    error.with_hint(
+                        "The VARIADIC parameter must be placed last, even when using argument names.",
+                    )
                 } else {
                     error
                         .with_detail("No function of that name accepts the given argument types.")
@@ -504,8 +682,18 @@ impl Analyzer<'_> {
             Detail::Normal(c) => c,
         };
         let proc = builtin::proc_by_oid(candidate.oid).expect("candidate in pg_proc");
+        if let Some(numbers) = &candidate.argnumbers {
+            for (arg, &number) in args.iter_mut().zip(numbers) {
+                if let ExprKind::NamedArg(na) = &mut arg.kind {
+                    na.number = number;
+                }
+            }
+        }
+        // The types of the defaults count for the polymorphic types, but the call does not keep the defaults. The planner adds them.
+        let mut actual = inputs.clone();
+        actual.extend(Self::default_types(proc, &candidate)?);
         let mut declared = candidate.args.clone();
-        let result = poly::resolve(&inputs, &mut declared, proc.rettype)?;
+        let result = poly::resolve(&actual, &mut declared, proc.rettype)?;
         self.check_internal(&declared, result, at)?;
         let mut args = self.make_arguments(args, &declared)?;
         let mut variadic = variadic_keyword;
@@ -540,9 +728,16 @@ impl Analyzer<'_> {
             }
         }
         if proc.retset {
-            self.check_srf_placement(&signature(&name, &inputs), at)?;
+            self.check_srf_placement(&signature(&name, &inputs, &argnames), at)?;
         }
         let over = parts.as_ref().is_some_and(|p| p.over.is_some());
+        if over && !argnames.is_empty() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a window function call with named arguments is not supported yet",
+            )
+            .at_opt(at));
+        }
         if over && let Some(parts) = parts {
             return self.window_call(
                 proc,
@@ -565,6 +760,13 @@ impl Analyzer<'_> {
                 return Err(Error::new(
                     SqlState::WRONG_OBJECT_TYPE,
                     format!("{name}(*) must be used to call a parameterless aggregate function"),
+                )
+                .at_opt(at));
+            }
+            if !argnames.is_empty() {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "aggregates cannot use named arguments",
                 )
                 .at_opt(at));
             }
@@ -665,15 +867,24 @@ impl Analyzer<'_> {
         Ok(())
     }
 
-    /// `make_fn_arguments`: each argument cast to its declared type.
+    /// `make_fn_arguments`: each argument cast to its declared type. A named argument keeps its name above the cast.
     fn make_arguments(&mut self, args: Vec<Expr>, declared: &[u32]) -> Result<Vec<Expr>> {
         args.into_iter()
             .zip(declared)
             .map(|(arg, &ty)| {
                 if arg.ty == ty {
-                    Ok(arg)
-                } else {
-                    self.coerce(arg, ty, -1, Context::Implicit, None)
+                    return Ok(arg);
+                }
+                match arg.kind {
+                    ExprKind::NamedArg(na) => {
+                        let NamedArg { arg: inner, name, number } = *na;
+                        let inner = self.coerce(inner, ty, -1, Context::Implicit, None)?;
+                        let (ty, typmod) = (inner.ty, inner.typmod);
+                        let kind =
+                            ExprKind::NamedArg(Box::new(NamedArg { arg: inner, name, number }));
+                        Ok(Expr { kind, ty, typmod, location: arg.location })
+                    }
+                    kind => self.coerce(Expr { kind, ..arg }, ty, -1, Context::Implicit, None),
                 }
             })
             .collect()
@@ -744,6 +955,8 @@ impl Analyzer<'_> {
                     oid: op.oid,
                     args: if left == 0 { vec![op.right] } else { vec![op.left, op.right] },
                     nvargs: 0,
+                    ndargs: 0,
+                    argnumbers: None,
                     pathpos,
                 })
                 .collect();
@@ -878,7 +1091,7 @@ mod tests {
     use super::*;
 
     fn candidate(oid: u32, args: &[u32]) -> Candidate {
-        Candidate { oid, args: args.to_vec(), nvargs: 0, pathpos: 0 }
+        Candidate { oid, args: args.to_vec(), nvargs: 0, ndargs: 0, argnumbers: None, pathpos: 0 }
     }
 
     #[test]
@@ -900,7 +1113,7 @@ mod tests {
             candidate(2, &[oid::NUMERIC, oid::NUMERIC]),
         ];
         assert!(select_candidate(&[oid::INT4, oid::INT2], list).is_none());
-        assert_eq!(signature("f", &[oid::INT4, oid::TEXT]), "f(integer, text)");
+        assert_eq!(signature("f", &[oid::INT4, oid::TEXT], &[]), "f(integer, text)");
         assert_eq!(op_signature("-", 0, oid::TEXT), "- text");
     }
 }

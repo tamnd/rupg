@@ -238,6 +238,11 @@ impl<'a> Deparser<'a> {
                 self.buf.push_str(&quote_identifier(&name));
             }
             ExprKind::Func(f) => self.func(e, f, implicit)?,
+            ExprKind::NamedArg(na) => {
+                self.buf.push_str(&quote_identifier(&na.name));
+                self.buf.push_str(" => ");
+                self.expr(&na.arg, implicit)?;
+            }
             ExprKind::Relabel(arg, form) => self.cast_node(e, arg, *form, e.typmod, implicit)?,
             ExprKind::CoerceViaIo(arg, form) => self.cast_node(e, arg, *form, -1, implicit)?,
             ExprKind::ArrayCoerce { arg, form, .. } => {
@@ -678,7 +683,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         ExprKind::Distinct { not: false, .. } => own_syntax(parent),
         ExprKind::Distinct { not: true, .. } => bool_simple(BoolOp::Not, parent, paren),
         ExprKind::Bool(op, _) => bool_simple(*op, parent, paren),
-        ExprKind::ScalarArrayOp { .. } | ExprKind::CaseTest => false,
+        ExprKind::ScalarArrayOp { .. } | ExprKind::CaseTest | ExprKind::NamedArg(_) => false,
     }
 }
 

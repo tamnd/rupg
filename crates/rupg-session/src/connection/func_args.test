@@ -1,0 +1,96 @@
+!details
+> select make_interval(days => 2)
+fields make_interval:1186:16:-1
+row 2 days
+SELECT 1
+> select make_interval(1, 2, hours => 3)
+fields make_interval:1186:16:-1
+row 1 year 2 mons 03:00:00
+SELECT 1
+> select make_interval()
+fields make_interval:1186:16:-1
+row 00:00:00
+SELECT 1
+> select make_interval(secs => 1.5, days => 1)
+fields make_interval:1186:16:-1
+row 1 day 00:00:01.5
+SELECT 1
+> select parse_ident('a.b')
+fields parse_ident:1009:-1:-1
+row {a,b}
+SELECT 1
+> select parse_ident('a.b', strict => false)
+fields parse_ident:1009:-1:-1
+row {a,b}
+SELECT 1
+> select parse_ident(str => 'A.b', strict => true)
+fields parse_ident:1009:-1:-1
+row {a,b}
+SELECT 1
+> select make_interval(days => 1, days => 2)
+ERROR 42601 argument name "days" used more than once at 33
+> select make_interval(days => 1, 2)
+ERROR 42601 positional argument cannot follow named argument at 33
+> select make_interval(nope => 1)
+ERROR 42883 function make_interval(nope => integer) does not exist at 8
+DETAIL No function of that name accepts the given argument names.
+> select parse_ident(strict => true)
+ERROR 42883 function parse_ident(strict => boolean) does not exist at 8
+DETAIL In the closest available match, not all required arguments were supplied.
+> select count(x => 1)
+ERROR 42883 function count(x => integer) does not exist at 8
+DETAIL No function of that name accepts the given argument names.
+> select pg_get_function_arguments('make_interval'::regproc)
+fields pg_get_function_arguments:25:-1:-1
+row years integer DEFAULT 0, months integer DEFAULT 0, weeks integer DEFAULT 0, days integer DEFAULT 0, hours integer DEFAULT 0, mins integer DEFAULT 0, secs double precision DEFAULT '0'::double precision
+SELECT 1
+> select pg_get_function_arg_default('jsonb_set'::regproc, 4)
+fields pg_get_function_arg_default:25:-1:-1
+row true
+SELECT 1
+> select pg_get_function_arguments('jsonb_path_query'::regproc)
+fields pg_get_function_arguments:25:-1:-1
+row target jsonb, path jsonpath, vars jsonb DEFAULT '{}'::jsonb, silent boolean DEFAULT false
+SELECT 1
+> create view v as select make_interval(days => 2) as i, parse_ident('a.b') as p
+CREATE VIEW
+> select replace(pg_get_viewdef('v'), chr(10), '|')
+fields replace:25:-1:-1
+row  SELECT make_interval(days => 2) AS i,|    parse_ident('a.b'::text) AS p;
+SELECT 1
+> select * from v
+fields i@v.1:1186:16:-1,p@v.2:1009:-1:-1
+row 2 days,{a,b}
+SELECT 1
+> select parse_ident('  "My ""Sch"" " . Tab$1 ')
+fields parse_ident:1009:-1:-1
+row {"My \"Sch\" ",tab$1}
+SELECT 1
+> select parse_ident('a.b c', false)
+fields parse_ident:1009:-1:-1
+row {a,b}
+SELECT 1
+> select parse_ident('a.b c')
+ERROR 22023 string is not a valid identifier: "a.b c"
+> select parse_ident('a.')
+ERROR 22023 string is not a valid identifier: "a."
+DETAIL No valid identifier after ".".
+> select parse_ident('.a')
+ERROR 22023 string is not a valid identifier: ".a"
+DETAIL No valid identifier before ".".
+> select parse_ident('"a')
+ERROR 22023 string is not a valid identifier: ""a"
+DETAIL String has unclosed double quotes.
+> select parse_ident('""')
+ERROR 22023 string is not a valid identifier: """"
+DETAIL Quoted identifier must not be empty.
+> select parse_ident('1a')
+ERROR 22023 string is not a valid identifier: "1a"
+> select make_interval(years => 2147483647)
+ERROR 22008 interval out of range
+> select make_interval(secs => 'infinity')
+ERROR 22008 interval out of range
+> select make_interval(weeks => 2, mins => -5, secs => 0.0000005)
+fields make_interval:1186:16:-1
+row 14 days -00:05:00
+SELECT 1

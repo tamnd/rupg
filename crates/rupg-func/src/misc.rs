@@ -1,7 +1,7 @@
 //! The functions that read the session: `version()`, `now()`, `current_user`, `current_setting` and others, and the kernels of the functions in SQL.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_types::{Array, Value};
+use rupg_types::{Array, Interval, USECS_PER_SEC, Value};
 
 use crate::math;
 use crate::text::{any_concat, bit_length, lpad_space, quote_any, rpad_space};
@@ -237,6 +237,123 @@ fn set_config(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Text(call.session.set_setting(name, value, local)?))
 }
 
+/// `make_interval`: an interval of years, months, weeks, days, hours, minutes and seconds. A field that does not fit, and an infinite result, are errors.
+fn make_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let int = |i: usize| args.get(i).and_then(Value::as_i64).and_then(|v| i32::try_from(v).ok());
+    let (Some(years), Some(months), Some(weeks), Some(days), Some(hours), Some(mins)) =
+        (int(0), int(1), int(2), int(3), int(4), int(5))
+    else {
+        return Err(bad_value());
+    };
+    let Some(Value::Float8(secs)) = args.get(6) else { return Err(bad_value()) };
+    let out_of_range =
+        || Error::new(SqlState::DATETIME_VALUE_OUT_OF_RANGE, "interval out of range");
+    if !secs.is_finite() {
+        return Err(out_of_range());
+    }
+    let month =
+        years.checked_mul(12).and_then(|m| m.checked_add(months)).ok_or_else(out_of_range)?;
+    let day = weeks.checked_mul(7).and_then(|d| d.checked_add(days)).ok_or_else(out_of_range)?;
+    let time = i64::from(hours) * 3600 * USECS_PER_SEC + i64::from(mins) * 60 * USECS_PER_SEC;
+    // `FLOAT8_FITS_IN_INT64`: the range of `i64` as a `float8`, with the upper end out.
+    #[allow(clippy::cast_precision_loss, clippy::cast_possible_truncation)]
+    let usecs = {
+        let usecs = (secs * USECS_PER_SEC as f64).round_ties_even();
+        if !(usecs >= i64::MIN as f64 && usecs < -(i64::MIN as f64)) {
+            return Err(out_of_range());
+        }
+        usecs as i64
+    };
+    let time = time.checked_add(usecs).ok_or_else(out_of_range)?;
+    let interval = Interval { time, day, month };
+    if interval == Interval::INFINITY || interval == Interval::NEGATIVE_INFINITY {
+        return Err(out_of_range());
+    }
+    Ok(Value::Interval(interval))
+}
+
+/// `parse_ident`: the parts of a qualified identifier, with the case of each part that has no quotes folded to lower case. With `strict` false, the text after the last identifier can be anything.
+fn parse_ident(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (Some(Value::Text(qualname)), Some(strict)) =
+        (args.first(), args.get(1).and_then(Value::as_bool))
+    else {
+        return Err(bad_value());
+    };
+    let invalid = |detail: Option<&str>| {
+        let error = Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("string is not a valid identifier: \"{qualname}\""),
+        );
+        match detail {
+            Some(detail) => error.with_detail(detail),
+            None => error,
+        }
+    };
+    // `scanner_isspace`, `is_ident_start` and `is_ident_cont` of the scanner.
+    let space = |c: u8| matches!(c, b' ' | b'\t' | b'\n' | b'\r' | 0x0b | 0x0c);
+    let start = |c: u8| c.is_ascii_alphabetic() || c == b'_' || c >= 0x80;
+    let cont = |c: u8| start(c) || c.is_ascii_digit() || c == b'$';
+    let src = qualname.as_bytes();
+    let at = |i: usize| src.get(i).copied().unwrap_or(0);
+    let mut parts = Vec::new();
+    let mut i = 0;
+    let mut after_dot = false;
+    while space(at(i)) {
+        i += 1;
+    }
+    loop {
+        if at(i) == b'"' {
+            let mut part = Vec::new();
+            i += 1;
+            loop {
+                let Some(end) = src[i..].iter().position(|&c| c == b'"') else {
+                    return Err(invalid(Some("String has unclosed double quotes.")));
+                };
+                part.extend_from_slice(&src[i..i + end]);
+                i += end + 1;
+                if at(i) != b'"' {
+                    break;
+                }
+                part.push(b'"');
+                i += 1;
+            }
+            if part.is_empty() {
+                return Err(invalid(Some("Quoted identifier must not be empty.")));
+            }
+            parts.push(Some(Value::Text(String::from_utf8_lossy(&part).into_owned())));
+        } else if start(at(i)) {
+            let begin = i;
+            i += 1;
+            while cont(at(i)) {
+                i += 1;
+            }
+            // `downcase_identifier` folds only ASCII letters in a multibyte encoding.
+            parts.push(Some(Value::Text(qualname[begin..i].to_ascii_lowercase())));
+        } else if at(i) == b'.' {
+            return Err(invalid(Some("No valid identifier before \".\".")));
+        } else if after_dot {
+            return Err(invalid(Some("No valid identifier after \".\".")));
+        } else {
+            return Err(invalid(None));
+        }
+        while space(at(i)) {
+            i += 1;
+        }
+        match src.get(i) {
+            Some(b'.') => {
+                after_dot = true;
+                i += 1;
+                while space(at(i)) {
+                    i += 1;
+                }
+            }
+            Some(_) if strict => return Err(invalid(None)),
+            _ => break,
+        }
+    }
+    Ok(Value::Array(Box::new(Array::one(parts))))
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
@@ -270,6 +387,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "format_type" => format_type,
         "show_config_by_name" | "show_config_by_name_missing_ok" => current_setting,
         "set_config_by_name" => set_config,
+        "make_interval" => make_interval,
+        "parse_ident" => parse_ident,
         _ => return None,
     })
 }

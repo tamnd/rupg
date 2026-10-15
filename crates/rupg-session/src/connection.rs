@@ -1912,6 +1912,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/encode.test")));
     }
 
+    /// The defaults of the arguments of the built-in functions and the calls with named arguments: a call with only defaults, the named arguments after the positional arguments in any order, a view that keeps the names, the text of the defaults, and the errors of a name used twice, a positional argument after a named argument, a name that no function has, a required argument that the call does not give, an aggregate with a named argument, and the errors of `make_interval` and `parse_ident`. `connection/func_args.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn func_args() {
+        big_stack(|| script(include_str!("connection/func_args.test")));
+    }
+
     /// `PREPARE`, `EXECUTE` and `DEALLOCATE`: the types of the parameters, the coercion of the values of `EXECUTE` and their errors, the statements of `Parse` that `EXECUTE` runs, the errors in a failed transaction, the count of the plans, a query string with more than one statement, the three statements in a `Parse`, and a statement of `Parse` that runs `EXECUTE` of itself. `connection/sql_prepare.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn sql_prepare() {
