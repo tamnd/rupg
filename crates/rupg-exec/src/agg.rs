@@ -4,7 +4,7 @@
 
 use std::collections::HashSet;
 
-use rupg_analyze::{Aggref, Expr, ExprKind, Query, SortGroup};
+use rupg_analyze::{Aggref, Expr, ExprKind, Query, SortGroup, WindowFunc};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel};
 use rupg_pgcatalog::builtin;
@@ -189,6 +189,7 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
 }
 
 /// The state of an aggregate in a group.
+#[derive(Clone)]
 enum State {
     /// The state of [`Method::Interval`].
     Interval(rupg_func::IntervalSum),
@@ -237,7 +238,7 @@ enum State {
 }
 
 /// The state of [`Method::Moments`], as `NumericAggState` has it. The sums of integers are in `small` until they do not fit, and then they go into `big`.
-#[derive(Default)]
+#[derive(Clone, Default)]
 struct Moments {
     count: i64,
     nan: i64,
@@ -825,6 +826,62 @@ fn hypothetical_rank(
         Ordered::CumeDist => Value::Float8(rank_f / (count_f + 1.0)),
         _ => Value::Int8(i64::try_from(rank).unwrap_or(i64::MAX)),
     })
+}
+
+/// The aggregate call of a call of an aggregate function with `OVER`, as the executor reads it.
+pub(crate) fn window_aggref(call: &WindowFunc) -> Aggref {
+    Aggref {
+        oid: call.oid,
+        kind: b'n',
+        direct: Vec::new(),
+        args: call.args.clone(),
+        nargs: call.args.len(),
+        order: Vec::new(),
+        distinct: Vec::new(),
+        star: call.star,
+        variadic: false,
+        filter: call.filter.clone(),
+    }
+}
+
+/// `eval_windowaggregates` with the default frame: the value of an aggregate function with `OVER` for each row of one partition, which is the result of the rows from the start of the partition to the last peer of the row. `groups` has the start and the end of the peer group of each row.
+pub(crate) fn window_values(
+    eval: &Eval<'_>,
+    call: &WindowFunc,
+    ty: u32,
+    part: &[usize],
+    groups: &[(usize, usize)],
+    tuples: &[Vec<usize>],
+) -> Result<Vec<Value>> {
+    let aggref = window_aggref(call);
+    let agg = Agg {
+        agg: &aggref,
+        ty,
+        method: method(&aggref, ty, None)?,
+        types: aggref.args.iter().map(|a| a.ty).collect(),
+    };
+    let mut state = agg.start(eval)?;
+    let mut out = Vec::with_capacity(part.len());
+    let mut done = 0;
+    for &(_, end) in groups {
+        if end <= done {
+            continue;
+        }
+        for &row in &part[done..end] {
+            let mut e = eval.at(&tuples[row]);
+            if let Some(filter) = &aggref.filter
+                && e.eval(filter)? != Value::Bool(true)
+            {
+                continue;
+            }
+            let args = aggref.args.iter().map(|a| e.eval(a)).collect::<Result<Vec<_>>>()?;
+            agg.advance(&mut state, &args, eval)?;
+        }
+        let value = agg.finish(state.clone(), eval)?;
+        out.extend(std::iter::repeat_n(value, end - done));
+        done = end;
+    }
+    Ok(out)
 }
 
 /// The aggregate calls of an expression. An aggregate call has no other aggregate call in it.

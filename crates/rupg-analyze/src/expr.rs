@@ -190,6 +190,10 @@ pub struct WindowFunc {
     pub winref: usize,
     /// `winstar`: true for `f(*)`.
     pub star: bool,
+    /// `winagg`: true for an aggregate function.
+    pub agg: bool,
+    /// `aggfilter`: the condition of `FILTER (WHERE ...)` of an aggregate.
+    pub filter: Option<Box<Expr>>,
 }
 
 /// The way a call was written, which a deparse function shows.
@@ -305,7 +309,7 @@ impl Expr {
             ExprKind::Agg(agg) => {
                 agg.direct.iter().chain(&agg.args).chain(agg.filter.as_deref()).collect()
             }
-            ExprKind::Window(w) => w.args.iter().collect(),
+            ExprKind::Window(w) => w.args.iter().chain(w.filter.as_deref()).collect(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
@@ -350,7 +354,10 @@ impl Expr {
                 let Aggref { direct, args, filter, .. } = &mut **agg;
                 direct.iter_mut().chain(args.iter_mut()).chain(filter.as_deref_mut()).collect()
             }
-            ExprKind::Window(w) => w.args.iter_mut().collect(),
+            ExprKind::Window(w) => {
+                let WindowFunc { args, filter, .. } = &mut **w;
+                args.iter_mut().chain(filter.as_deref_mut()).collect()
+            }
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)

@@ -195,8 +195,15 @@ fn check(expr: &Expr) -> Result<()> {
             }
         }
         ExprKind::Window(w) => {
-            window::method(w.oid, expr.location)?;
+            if w.agg {
+                agg::method(&agg::window_aggref(w), expr.ty, expr.location)?;
+            } else {
+                window::method(w.oid, expr.location)?;
+            }
             w.args.iter().try_for_each(check)?;
+            if let Some(filter) = &w.filter {
+                check(filter)?;
+            }
         }
     }
     Ok(())
