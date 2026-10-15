@@ -1,0 +1,104 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT div(7::numeric, 2::numeric), div(-7.5, 2), div(7.5, -2.25), div(1e30, 7), div(0.001, 3), div(0, 5.5)
+fields div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1
+row 3,-3,-3,142857142857142857142857142857,0,0
+SELECT 1
+> SELECT div(10, 0::numeric)
+ERROR 22012 division by zero
+> SELECT div('NaN'::numeric, 1), div(1, 'NaN'::numeric), div('Infinity'::numeric, 2), div('Infinity'::numeric, -2), div('-Infinity'::numeric, 2), div('-Infinity'::numeric, -2)
+fields div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1
+row NaN,NaN,Infinity,-Infinity,-Infinity,Infinity
+SELECT 1
+> SELECT div('Infinity'::numeric, 'Infinity'::numeric), div(5, 'Infinity'::numeric), div(-5, '-Infinity'::numeric)
+fields div:1700:-1:-1,div:1700:-1:-1,div:1700:-1:-1
+row NaN,0,0
+SELECT 1
+> SELECT div('Infinity'::numeric, 0)
+ERROR 22012 division by zero
+> SELECT div('-Infinity'::numeric, 0::numeric)
+ERROR 22012 division by zero
+> SELECT div(123456789012345678901234567890.123, 0.000000000000000000013)
+fields div:1700:-1:-1
+row 9496676077872744530864197530009461538461538461538
+SELECT 1
+> SELECT gcd(12::numeric, 18::numeric), gcd(-12.5, 7.50), gcd(0::numeric, -5.00), gcd(0::numeric, 0::numeric), gcd(3::numeric, 3::numeric), gcd(1e40, 1e20 + 7)
+fields gcd:1700:-1:-1,gcd:1700:-1:-1,gcd:1700:-1:-1,gcd:1700:-1:-1,gcd:1700:-1:-1,gcd:1700:-1:-1
+row 6,2.50,5.00,0,3,1
+SELECT 1
+> SELECT gcd('NaN'::numeric, 1::numeric), gcd(1::numeric, 'Infinity'::numeric), gcd(0.5, 0.75), gcd(-0.0001, 0.00025)
+fields gcd:1700:-1:-1,gcd:1700:-1:-1,gcd:1700:-1:-1,gcd:1700:-1:-1
+row NaN,NaN,0.25,0.00005
+SELECT 1
+> SELECT lcm(12::numeric, 18::numeric), lcm(-12.5, 7.50), lcm(0::numeric, 5.00), lcm(0.5, 0.75), lcm(1e10, 3)
+fields lcm:1700:-1:-1,lcm:1700:-1:-1,lcm:1700:-1:-1,lcm:1700:-1:-1,lcm:1700:-1:-1
+row 36,37.50,0.00,1.50,30000000000
+SELECT 1
+> SELECT lcm('NaN'::numeric, 1::numeric), lcm(1::numeric, '-Infinity'::numeric)
+fields lcm:1700:-1:-1,lcm:1700:-1:-1
+row NaN,NaN
+SELECT 1
+> SELECT lcm(9e131071::numeric, 7e131071::numeric) IS NULL
+ERROR 22003 value overflows numeric format
+> SELECT factorial(0), factorial(1), factorial(5), factorial(20), factorial(25), factorial(50)
+fields factorial:1700:-1:-1,factorial:1700:-1:-1,factorial:1700:-1:-1,factorial:1700:-1:-1,factorial:1700:-1:-1,factorial:1700:-1:-1
+row 1,1,120,2432902008176640000,15511210043330985984000000,30414093201713378043612608166064768844377641568960512000000000000
+SELECT 1
+> SELECT length(factorial(3000)::text)
+fields length:23:4:-1
+row 9131
+SELECT 1
+> SELECT factorial(-1)
+ERROR 22003 factorial of a negative number is undefined
+> SELECT factorial(32178)
+ERROR 22003 value overflows numeric format
+> SELECT scale(1.230::numeric), scale(0::numeric), scale(10::numeric), scale('NaN'::numeric), scale('Infinity'::numeric), scale(1e-20::numeric)
+fields scale:23:4:-1,scale:23:4:-1,scale:23:4:-1,scale:23:4:-1,scale:23:4:-1,scale:23:4:-1
+row 3,0,0,NULL,NULL,20
+SELECT 1
+> SELECT min_scale(1.230::numeric), min_scale(0.000::numeric), min_scale(100::numeric), min_scale(1.23456789::numeric), min_scale('NaN'::numeric), min_scale(1e-20::numeric), min_scale(0.1000::numeric)
+fields min_scale:23:4:-1,min_scale:23:4:-1,min_scale:23:4:-1,min_scale:23:4:-1,min_scale:23:4:-1,min_scale:23:4:-1,min_scale:23:4:-1
+row 2,0,0,8,NULL,20,1
+SELECT 1
+> SELECT trim_scale(1.230::numeric), trim_scale(0.000::numeric), trim_scale(100.00::numeric), trim_scale('NaN'::numeric), trim_scale('-Infinity'::numeric), trim_scale(-1.0000500::numeric)
+fields trim_scale:1700:-1:-1,trim_scale:1700:-1:-1,trim_scale:1700:-1:-1,trim_scale:1700:-1:-1,trim_scale:1700:-1:-1,trim_scale:1700:-1:-1
+row 1.23,0,100,NaN,-Infinity,-1.00005
+SELECT 1
+> SELECT numeric_larger(1.0, 1.00), numeric_smaller(1.0, 1.00), numeric_larger(2, 'NaN'::numeric), numeric_smaller(2, 'NaN'::numeric), numeric_larger('-Infinity'::numeric, -1e100)
+fields numeric_larger:1700:-1:-1,numeric_smaller:1700:-1:-1,numeric_larger:1700:-1:-1,numeric_smaller:1700:-1:-1,numeric_larger:1700:-1:-1
+row 1.00,1.00,NaN,2,-10000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000
+SELECT 1
+> SELECT numeric_uplus(-1.50), numeric_uminus(-1.50), numeric_uminus(0.00), numeric_uminus('Infinity'::numeric), numeric_uminus('NaN'::numeric)
+fields numeric_uplus:1700:-1:-1,numeric_uminus:1700:-1:-1,numeric_uminus:1700:-1:-1,numeric_uminus:1700:-1:-1,numeric_uminus:1700:-1:-1
+row -1.50,1.50,0.00,-Infinity,NaN
+SELECT 1
+> SELECT width_bucket(5.35, 0.024, 10.06, 5), width_bucket(-1::numeric, 0, 10, 5), width_bucket(10::numeric, 0, 10, 5), width_bucket(0::numeric, 0, 10, 5)
+fields width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1
+row 3,0,6,1
+SELECT 1
+> SELECT width_bucket(5::numeric, 10, 0, 5), width_bucket(11::numeric, 10, 0, 5), width_bucket(0::numeric, 10, 0, 5), width_bucket(10::numeric, 10, 0, 5)
+fields width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1
+row 3,0,6,1
+SELECT 1
+> SELECT width_bucket('NaN'::numeric, 0, 10, 5), width_bucket('Infinity'::numeric, 0, 10, 5), width_bucket('-Infinity'::numeric, 0, 10, 5), width_bucket('NaN'::numeric, 10, 0, 5)
+fields width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1
+row 6,6,0,0
+SELECT 1
+> SELECT width_bucket(3.33333333333333333333::numeric, 0, 10, 3), width_bucket(6.666666666666666666666::numeric, 0, 20, 6)
+fields width_bucket:23:4:-1,width_bucket:23:4:-1
+row 1,2
+SELECT 1
+> SELECT width_bucket(5::numeric, 0, 10, 0)
+ERROR 2201G count must be greater than zero
+> SELECT width_bucket(5::numeric, 'NaN', 10, 5)
+ERROR 2201G lower and upper bounds cannot be NaN
+> SELECT width_bucket(5::numeric, 0, 'Infinity', 5)
+ERROR 2201G lower and upper bounds must be finite
+> SELECT width_bucket(5::numeric, 3, 3, 5)
+ERROR 2201G lower bound cannot equal upper bound
+> SELECT width_bucket(20::numeric, 0, 10, 2147483647)
+ERROR 22003 integer out of range
+> SELECT width_bucket(5::numeric, 0, 10, 2147483647)
+fields width_bucket:23:4:-1
+row 1073741824
+SELECT 1

@@ -541,6 +541,66 @@ fn numeric_power(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     num(base.power(exp))
 }
 
+/// `numeric_div_trunc`: `div`, the quotient cut to an integer.
+fn numeric_div_trunc(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (a, b) = numerics(args)?;
+    num(a.div_trunc(b))
+}
+
+fn numeric_gcd(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (a, b) = numerics(args)?;
+    num(a.gcd(b))
+}
+
+fn numeric_lcm(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (a, b) = numerics(args)?;
+    num(a.lcm(b))
+}
+
+/// `numeric_fac`: `factorial` of a `bigint`.
+fn numeric_fac(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Int8(n)] = args else { return Err(bad_value()) };
+    num(Numeric::factorial(*n))
+}
+
+/// `numeric_scale`: null for `NaN` and the infinities.
+fn numeric_scale(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(one_numeric(args)?.scale().map_or(Value::Null, Value::Int4))
+}
+
+fn numeric_min_scale(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(one_numeric(args)?.min_scale().map_or(Value::Null, Value::Int4))
+}
+
+fn numeric_trim_scale(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Numeric(one_numeric(args)?.trim_scale()))
+}
+
+/// `numeric_larger`: the second argument when the two are equal, so its display scale is the one that shows.
+fn numeric_larger(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (a, b) = numerics(args)?;
+    Ok(Value::Numeric(if a.compare(b).is_gt() { a.clone() } else { b.clone() }))
+}
+
+/// `numeric_smaller`: the second argument when the two are equal.
+fn numeric_smaller(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (a, b) = numerics(args)?;
+    Ok(Value::Numeric(if a.compare(b).is_lt() { a.clone() } else { b.clone() }))
+}
+
+fn numeric_uplus(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Numeric(one_numeric(args)?.clone()))
+}
+
+/// `width_bucket_numeric`.
+fn width_bucket_numeric(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Numeric(x), Value::Numeric(low), Value::Numeric(high), Value::Int4(count)] = args
+    else {
+        return Err(bad_value());
+    };
+    x.width_bucket(low, high, *count).map(Value::Int4).map_err(type_error)
+}
+
 /// `numeric_sign`: NaN, or -1, 0 or 1 with a display scale of 0.
 fn numeric_sign(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let a = one_numeric(args)?;
@@ -632,6 +692,18 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "numeric_ln" => numeric_ln,
         "numeric_log" => numeric_log,
         "numeric_power" => numeric_power,
+        "numeric_div_trunc" => numeric_div_trunc,
+        "numeric_gcd" => numeric_gcd,
+        "numeric_lcm" => numeric_lcm,
+        "numeric_fac" => numeric_fac,
+        "numeric_scale" => numeric_scale,
+        "numeric_min_scale" => numeric_min_scale,
+        "numeric_trim_scale" => numeric_trim_scale,
+        "numeric_larger" => numeric_larger,
+        "numeric_smaller" => numeric_smaller,
+        "numeric_uplus" => numeric_uplus,
+        "numeric_uminus" => numeric_neg,
+        "width_bucket_numeric" => width_bucket_numeric,
         "date_pli" => date_pli,
         "date_mii" => date_mii,
         "date_mi" => date_mi,

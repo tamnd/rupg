@@ -767,3 +767,170 @@ impl Numeric {
         self.var().power(&exp.var())?.make()
     }
 }
+
+/// `numeric_fac` fails above this number, whose factorial has the most digits that the format holds.
+const FACTORIAL_MAX: i64 = 32177;
+
+impl Numeric {
+    /// `numeric_div_trunc`: the quotient cut to an integer.
+    pub fn div_trunc(&self, other: &Numeric) -> Result<Numeric, TypeError> {
+        use NumericSign::{Infinity, NaN, NegativeInfinity};
+        if !self.sign.is_finite() || !other.sign.is_finite() {
+            if self.sign == NaN || other.sign == NaN {
+                return Ok(Numeric::NAN);
+            }
+            if !self.sign.is_finite() {
+                if !other.sign.is_finite() {
+                    return Ok(Numeric::NAN);
+                }
+                let negative = (self.sign == NegativeInfinity) != (other.signum() < 0);
+                return match other.signum() {
+                    0 => Err(division_by_zero()),
+                    _ if negative => Ok(Numeric::NEGATIVE_INFINITY),
+                    _ => Ok(Numeric::special(Infinity)),
+                };
+            }
+            return Var::zero(0).make();
+        }
+        self.var().div_round(&other.var(), 0, false, true)?.make()
+    }
+
+    /// `numeric_gcd`: the greatest common divisor, with the larger of the two display scales. `NaN` and the infinities give `NaN`.
+    pub fn gcd(&self, other: &Numeric) -> Result<Numeric, TypeError> {
+        if !self.sign.is_finite() || !other.sign.is_finite() {
+            return Ok(Numeric::NAN);
+        }
+        gcd(&self.var(), &other.var()).make()
+    }
+
+    /// `numeric_lcm`: the least common multiple, which is zero when one of the two is zero.
+    pub fn lcm(&self, other: &Numeric) -> Result<Numeric, TypeError> {
+        if !self.sign.is_finite() || !other.sign.is_finite() {
+            return Ok(Numeric::NAN);
+        }
+        let (x, y) = (self.var(), other.var());
+        let mut result = if x.is_zero() || y.is_zero() {
+            Var::zero(0)
+        } else {
+            let mut result = y.mul(&x.div(&gcd(&x, &y), 0, false));
+            result.sign = NumericSign::Positive;
+            result
+        };
+        result.dscale = x.dscale.max(y.dscale);
+        result.make()
+    }
+
+    /// `numeric_fac`: the factorial of an integer.
+    pub fn factorial(n: i64) -> Result<Numeric, TypeError> {
+        if n < 0 {
+            return Err(TypeError::new(
+                SqlState::NUMERIC_VALUE_OUT_OF_RANGE,
+                "factorial of a negative number is undefined".to_string(),
+            ));
+        }
+        if n > FACTORIAL_MAX {
+            return Err(overflow());
+        }
+        let mut result = Var::int(n.max(1));
+        for k in (2..n).rev() {
+            result = result.mul(&Var::int(k));
+        }
+        result.dscale = 0;
+        result.make()
+    }
+
+    /// `numeric_scale`: the display scale, or `None` for `NaN` and the infinities.
+    pub fn scale(&self) -> Option<i32> {
+        self.sign.is_finite().then_some(i32::from(self.dscale))
+    }
+
+    /// `numeric_min_scale`: the fewest digits after the point that hold the value, or `None` for `NaN` and the infinities.
+    pub fn min_scale(&self) -> Option<i32> {
+        self.sign.is_finite().then(|| min_scale(&self.var()) as i32)
+    }
+
+    /// `numeric_trim_scale`: the value with the display scale of `numeric_min_scale`.
+    pub fn trim_scale(&self) -> Numeric {
+        if !self.sign.is_finite() {
+            return self.clone();
+        }
+        let mut var = self.var();
+        var.dscale = min_scale(&var);
+        var.make().unwrap_or_else(|_| self.clone())
+    }
+
+    /// `width_bucket_numeric`: the bucket of `self` among `count` buckets of the same width from `low` to `high`.
+    pub fn width_bucket(
+        &self,
+        low: &Numeric,
+        high: &Numeric,
+        count: i32,
+    ) -> Result<i32, TypeError> {
+        let bucket_error = |message: &str| {
+            TypeError::new(
+                SqlState::INVALID_ARGUMENT_FOR_WIDTH_BUCKET_FUNCTION,
+                message.to_string(),
+            )
+        };
+        if count <= 0 {
+            return Err(bucket_error("count must be greater than zero"));
+        }
+        if !low.sign.is_finite() || !high.sign.is_finite() {
+            if low.sign == NumericSign::NaN || high.sign == NumericSign::NaN {
+                return Err(bucket_error("lower and upper bounds cannot be NaN"));
+            }
+            return Err(bucket_error("lower and upper bounds must be finite"));
+        }
+        let past = i64::from(count) + 1;
+        let bucket = match low.compare(high) {
+            Ordering::Equal => return Err(bucket_error("lower bound cannot equal upper bound")),
+            Ordering::Less if self.compare(low) == Ordering::Less => 0,
+            Ordering::Less if self.compare(high) != Ordering::Less => past,
+            Ordering::Greater if self.compare(low) == Ordering::Greater => 0,
+            Ordering::Greater if self.compare(high) != Ordering::Greater => past,
+            _ => {
+                // Multiply by the count before the division, so that the bucket is exact.
+                let (x, a, b) = (self.var(), low.var(), high.var());
+                let offset = x.sub(&a).mul(&Var::int(i64::from(count)));
+                let bucket = offset.div(&b.sub(&a), 0, false).add(&Var::int(1));
+                bucket.to_i64().unwrap_or(i64::MAX)
+            }
+        };
+        i32::try_from(bucket).map_err(|_| {
+            TypeError::new(SqlState::NUMERIC_VALUE_OUT_OF_RANGE, "integer out of range".to_string())
+        })
+    }
+}
+
+/// `gcd_var`: the greatest common divisor by the algorithm of Euclid, with the larger of the two display scales.
+fn gcd(x: &Var, y: &Var) -> Var {
+    let dscale = x.dscale.max(y.dscale);
+    let (mut a, mut b) = if x.cmp_abs(y) == Ordering::Less {
+        (y.clone(), x.clone())
+    } else {
+        (x.clone(), y.clone())
+    };
+    while !b.is_zero() && a.cmp_abs(&b) != Ordering::Equal {
+        let rest = a.rem(&b);
+        a = b;
+        b = rest;
+    }
+    a.sign = NumericSign::Positive;
+    a.dscale = dscale;
+    a
+}
+
+/// `get_min_scale`: the digits after the point up to the last digit that is not zero.
+fn min_scale(var: &Var) -> i64 {
+    let Some(last) = var.digits.iter().rposition(|&d| d != 0) else { return 0 };
+    let mut scale = (last as i64 - var.weight) * DEC_DIGITS;
+    if scale <= 0 {
+        return 0;
+    }
+    let mut digit = var.digits[last];
+    while digit % 10 == 0 {
+        scale -= 1;
+        digit /= 10;
+    }
+    scale
+}
