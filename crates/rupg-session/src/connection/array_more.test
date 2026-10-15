@@ -1,0 +1,125 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT array_position(ARRAY[1, 2, 3, 2], 2), array_position(ARRAY[1, 2, 3, 2], 2, 3), array_position(ARRAY[1, 2, 3], 4), array_position(ARRAY[1, NULL, 3], NULL), array_position(ARRAY[1, 2, 3], NULL)
+fields array_position:23:4:-1,array_position:23:4:-1,array_position:23:4:-1,array_position:23:4:-1,array_position:23:4:-1
+row 2,4,NULL,2,NULL
+SELECT 1
+> SELECT array_position('[0:3]={a,b,c,b}'::text[], 'b'), array_position('[0:3]={a,b,c,b}'::text[], 'b', 2), array_position('{}'::int[], 1), array_position(NULL::int[], 1), array_position(ARRAY[1.0, 2.00], 2)
+fields array_position:23:4:-1,array_position:23:4:-1,array_position:23:4:-1,array_position:23:4:-1,array_position:23:4:-1
+row 1,3,NULL,NULL,2
+SELECT 1
+> SELECT array_position(ARRAY[1, 2], 1, NULL)
+ERROR 22004 initial position must not be null
+> SELECT array_position('{}'::int[], 1, NULL), array_position(ARRAY[1, 2], NULL, NULL)
+fields array_position:23:4:-1,array_position:23:4:-1
+row NULL,NULL
+SELECT 1
+> SELECT array_position(ARRAY[[1, 2], [3, 4]], 3)
+ERROR 0A000 searching for elements in multidimensional arrays is not supported
+> SELECT array_positions(ARRAY[1, 2, 3, 2, NULL, 2], 2), array_positions(ARRAY[1, NULL, NULL], NULL), array_positions(ARRAY[1, 2], 5), array_positions('{}'::int[], 1), array_positions(NULL::int[], 1), array_positions('[5:7]={x,y,x}'::text[], 'x')
+fields array_positions:1007:-1:-1,array_positions:1007:-1:-1,array_positions:1007:-1:-1,array_positions:1007:-1:-1,array_positions:1007:-1:-1,array_positions:1007:-1:-1
+row {2,4,6},{2,3},{},{},NULL,{5,7}
+SELECT 1
+> SELECT array_positions(ARRAY[[1, 2], [3, 4]], 3)
+ERROR 0A000 searching for elements in multidimensional arrays is not supported
+> SELECT array_fill(7, ARRAY[3]), array_fill('x'::text, ARRAY[2, 3]), array_fill(1, ARRAY[2], ARRAY[0]), array_fill(NULL::int, ARRAY[2]), array_fill(1, '{}'), array_fill(1, ARRAY[0]), array_fill(2, ARRAY[2, 2], ARRAY[-1, 5])
+fields array_fill:1007:-1:-1,array_fill:1009:-1:-1,array_fill:1007:-1:-1,array_fill:1007:-1:-1,array_fill:1007:-1:-1,array_fill:1007:-1:-1,array_fill:1007:-1:-1
+row {7,7,7},{{x,x,x},{x,x,x}},[0:1]={1,1},{NULL,NULL},{},{},[-1:0][5:6]={{2,2},{2,2}}
+SELECT 1
+> SELECT array_fill(1, NULL)
+ERROR 22004 dimension array or low bound array cannot be null
+> SELECT array_fill(1, ARRAY[2], NULL)
+ERROR 22004 dimension array or low bound array cannot be null
+> SELECT array_fill(1, ARRAY[2, NULL])
+ERROR 22004 dimension values cannot be null
+> SELECT array_fill(1, ARRAY[[2]])
+ERROR 2202E wrong number of array subscripts
+> SELECT array_fill(1, ARRAY[2], ARRAY[1, 2])
+ERROR 2202E wrong number of array subscripts
+> SELECT array_fill(1, ARRAY[-1])
+ERROR 54000 array size exceeds the maximum allowed (134217727)
+> SELECT array_fill(1, ARRAY[1, 1, 1, 1, 1, 1, 1])
+ERROR 54000 number of array dimensions (7) exceeds the maximum allowed (6)
+> SELECT array_fill(1, ARRAY[2], ARRAY[2147483647])
+ERROR 54000 array lower bound is too large: 2147483647
+> SELECT array_fill(1, ARRAY[100000, 100000])
+ERROR 54000 array size exceeds the maximum allowed (134217727)
+> SELECT array_reverse(ARRAY[1, 2, 3]), array_reverse(ARRAY[[1, 2], [3, 4], [5, 6]]), array_reverse('[3:5]={a,NULL,c}'::text[]), array_reverse('{}'::int[]), array_reverse(ARRAY[1])
+fields array_reverse:1007:-1:-1,array_reverse:1007:-1:-1,array_reverse:1009:-1:-1,array_reverse:1007:-1:-1,array_reverse:1007:-1:-1
+row {3,2,1},{{5,6},{3,4},{1,2}},[3:5]={c,NULL,a},{},{1}
+SELECT 1
+> SELECT array_sort(ARRAY[3, 1, NULL, 2]), array_sort(ARRAY[3, 1, NULL, 2], true), array_sort(ARRAY[3, 1, NULL, 2], false, true), array_sort(ARRAY[3, 1, NULL, 2], true, false), array_sort('[0:2]={c,a,b}'::text[])
+fields array_sort:1007:-1:-1,array_sort:1007:-1:-1,array_sort:1007:-1:-1,array_sort:1007:-1:-1,array_sort:1009:-1:-1
+row {1,2,3,NULL},{NULL,3,2,1},{NULL,1,2,3},{3,2,1,NULL},[0:2]={a,b,c}
+SELECT 1
+> SELECT array_sort(ARRAY[[3, 4], [1, 2], [1, 1]]), array_sort(ARRAY[[3, 4], [1, 2]], true), array_sort('{}'::int[]), array_sort(ARRAY[1.5, 1.50, 0.5]), array_sort(ARRAY['b', 'a']::varchar[])
+fields array_sort:1007:-1:-1,array_sort:1007:-1:-1,array_sort:1007:-1:-1,array_sort:1231:-1:-1,array_sort:1015:-1:-1
+row {{1,1},{1,2},{3,4}},{{3,4},{1,2}},{},{0.5,1.5,1.50},{a,b}
+SELECT 1
+> SELECT array_sort(ARRAY['2000-01-02'::date, '2000-01-01'::date, 'infinity'::date, '-infinity'::date]), array_sort(ARRAY[2.5::float8, 'NaN', '-Infinity', 1])
+fields array_sort:1182:-1:-1,array_sort:1022:-1:-1
+row {-infinity,2000-01-01,2000-01-02,infinity},{-Infinity,1,2.5,NaN}
+SELECT 1
+> SELECT array_sort(ARRAY[point(1, 2)])
+fields array_sort:1017:-1:-1
+row {"(1,2)"}
+SELECT 1
+> SELECT trim_array(ARRAY[1, 2, 3, 4], 2), trim_array(ARRAY[1, 2], 2), trim_array(ARRAY[1, 2], 0), trim_array('[0:3]={1,2,3,4}'::int[], 1), trim_array(ARRAY[[1, 2], [3, 4], [5, 6]], 1), trim_array('{}'::int[], 0)
+fields trim_array:1007:-1:-1,trim_array:1007:-1:-1,trim_array:1007:-1:-1,trim_array:1007:-1:-1,trim_array:1007:-1:-1,trim_array:1007:-1:-1
+row {1,2},{},{1,2},{1,2,3},{{1,2},{3,4}},{}
+SELECT 1
+> SELECT trim_array(ARRAY[1, 2], 3)
+ERROR 2202E number of elements to trim must be between 0 and 2
+> SELECT trim_array(ARRAY[1, 2], -1)
+ERROR 2202E number of elements to trim must be between 0 and 2
+> SELECT ARRAY[1, 2, 3] @> ARRAY[2, 3], ARRAY[1, 2] @> ARRAY[2, 5], ARRAY[1, 2] @> '{}', ARRAY[1, NULL] @> ARRAY[1], ARRAY[1, 2] @> ARRAY[NULL::int], ARRAY[[1, 2], [3, 4]] @> ARRAY[4, 1]
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f,t
+SELECT 1
+> SELECT ARRAY[2] <@ ARRAY[1, 2], ARRAY[3] <@ ARRAY[1, 2], '{}' <@ ARRAY[1], ARRAY[1, 2] && ARRAY[2, 3], ARRAY[1, 2] && ARRAY[3], ARRAY[NULL::int] && ARRAY[NULL::int], ARRAY['a', 'b'] && ARRAY['b']
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f,f,t
+SELECT 1
+> SELECT ARRAY[1, 2] @> ARRAY[1.0]
+ERROR 42883 operator does not exist: integer[] @> numeric[] at 20
+> SELECT ARRAY[1.0, 2.00] @> ARRAY[2.0], ARRAY['a'::varchar] @> ARRAY['a'::varchar], arraycontains(ARRAY[1, 2], ARRAY[1]), arraycontained(ARRAY[1], ARRAY[1, 2]), arrayoverlap(ARRAY[1], ARRAY[2])
+fields ?column?:16:1:-1,?column?:16:1:-1,arraycontains:16:1:-1,arraycontained:16:1:-1,arrayoverlap:16:1:-1
+row t,t,t,t,f
+SELECT 1
+> SELECT width_bucket(5, ARRAY[1, 3, 5, 10]), width_bucket(0, ARRAY[1, 3, 5, 10]), width_bucket(20, ARRAY[1, 3, 5, 10]), width_bucket(5.5, ARRAY[1, 3, 5, 10]::numeric[]), width_bucket(2.5::float8, ARRAY[1, 2, 3, 'NaN']::float8[]), width_bucket('NaN'::float8, ARRAY[1, 2]::float8[]), width_bucket('c'::text, ARRAY['a', 'b', 'd']), width_bucket(1, '{}'::int[])
+fields width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1
+row 3,0,4,3,2,2,2,0
+SELECT 1
+> SELECT width_bucket(now(), ARRAY['2000-01-01'::timestamptz, '2100-01-01'::timestamptz]), width_bucket('2020-01-01'::date, ARRAY['2019-01-01'::date, '2021-01-01'::date])
+fields width_bucket:23:4:-1,width_bucket:23:4:-1
+row 1,1
+SELECT 1
+> SELECT width_bucket(1, ARRAY[[1, 2], [3, 4]])
+ERROR 2202E thresholds must be one-dimensional array
+> SELECT width_bucket(1, ARRAY[1, NULL])
+ERROR 22004 thresholds array must not contain NULLs
+> SELECT cardinality(array_shuffle(ARRAY[1, 2, 3, 4, 5])), array_sort(array_shuffle(ARRAY[5, 3, 1, 4, 2])), array_lower(array_shuffle('[3:5]={1,2,3}'::int[]), 1), array_sort(array_shuffle(ARRAY[[2, 2], [1, 1]])), array_shuffle('{}'::int[]), array_shuffle(ARRAY[7])
+fields cardinality:23:4:-1,array_sort:1007:-1:-1,array_lower:23:4:-1,array_sort:1007:-1:-1,array_shuffle:1007:-1:-1,array_shuffle:1007:-1:-1
+row 5,{1,2,3,4,5},3,{{1,1},{2,2}},{},{7}
+SELECT 1
+> SELECT cardinality(array_sample(ARRAY[1, 2, 3, 4, 5], 3)), array_sample(ARRAY[1, 2, 3], 3) <@ ARRAY[1, 2, 3], array_sample(ARRAY[1, 2], 0), array_lower(array_sample('[3:5]={1,2,3}'::int[], 2), 1), array_dims(array_sample(ARRAY[[1, 1], [2, 2], [3, 3]], 2))
+fields cardinality:23:4:-1,?column?:16:1:-1,array_sample:1007:-1:-1,array_lower:23:4:-1,array_dims:25:-1:-1
+row 3,t,{},1,[1:2][1:2]
+SELECT 1
+> SELECT array_sample(ARRAY[1, 2], 3)
+fields array_sample:1007:-1:-1
+ERROR 22023 sample size must be between 0 and 2
+> SELECT array_sample(ARRAY[1, 2], -1)
+fields array_sample:1007:-1:-1
+ERROR 22023 sample size must be between 0 and 2
+> SELECT array_sample('{}'::int[], 1)
+fields array_sample:1007:-1:-1
+ERROR 22023 sample size must be between 0 and 0
+> SELECT setseed(0.5)
+fields setseed:2278:4:-1
+row 
+SELECT 1
+> SELECT count(DISTINCT array_shuffle(ARRAY[1, 2, 3])) > 1 FROM generate_series(1, 100)
+fields ?column?:16:1:-1
+row t
+SELECT 1

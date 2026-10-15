@@ -27,6 +27,8 @@ const GREGORIAN_EPOCH_JDATE: i64 = 2_299_161;
 #[derive(Debug, Default)]
 pub struct Randomness {
     prng: Option<Prng>,
+    /// `pg_global_prng_state`, the generator of `array_shuffle` and `array_sample`, which `setseed` does not change.
+    global: Option<Prng>,
     previous_ns: i64,
 }
 
@@ -56,15 +58,22 @@ fn with_state<T>(session: &dyn Session, f: impl FnOnce(&mut Randomness) -> T) ->
     }
 }
 
+/// `pg_prng_strong_seed`.
+fn strong_seed(session: &dyn Session) -> Prng {
+    let mut bytes = [0; 16];
+    session.strong_random(&mut bytes);
+    Prng::from_bytes(bytes)
+}
+
 /// `initialize_prng` and then `f` with the generator.
 fn with_prng<T>(session: &dyn Session, f: impl FnOnce(&mut Prng) -> T) -> T {
+    with_state(session, |state| f(state.prng.get_or_insert_with(|| strong_seed(session))))
+}
+
+/// `pg_prng_uint64_range` with `pg_global_prng_state`.
+pub(crate) fn global_range(session: &dyn Session, rmin: u64, rmax: u64) -> u64 {
     with_state(session, |state| {
-        let prng = state.prng.get_or_insert_with(|| {
-            let mut bytes = [0; 16];
-            session.strong_random(&mut bytes);
-            Prng::from_bytes(bytes)
-        });
-        f(prng)
+        state.global.get_or_insert_with(|| strong_seed(session)).uint64_range(rmin, rmax)
     })
 }
 

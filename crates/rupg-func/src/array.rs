@@ -1,8 +1,8 @@
-//! The functions of the arrays in `array_userfuncs.c`, `arrayfuncs.c` and `varlena.c`: `string_to_array`, `array_to_string`, the functions that read the dimensions, `array_append`, `array_prepend` and `array_cat`, and `array_remove` and `array_replace`.
+//! The functions of the arrays in `array_userfuncs.c`, `arrayfuncs.c` and `varlena.c`: `string_to_array`, `array_to_string`, the functions that read the dimensions, `array_append`, `array_prepend` and `array_cat`, `array_remove` and `array_replace`, `array_position` and `array_positions`, `array_fill`, `array_reverse`, `array_shuffle`, `array_sample`, `array_sort`, `trim_array`, the operators `@>`, `<@` and `&&`, and `width_bucket` with an array of thresholds.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_types::{Array, ArrayDim, Value};
+use rupg_types::{Array, ArrayDim, MAX_ARRAY_SIZE, MAXDIM, Value};
 
 use crate::io::{base_type, output};
 use crate::{Call, Kernel, bad_value};
@@ -321,6 +321,415 @@ fn array_replace(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     replace_elements(call, args, Some(element(args, 2)?))
 }
 
+/// The error of a search in an array with more than one dimension.
+fn multidimensional_search() -> Error {
+    Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        "searching for elements in multidimensional arrays is not supported",
+    )
+}
+
+/// The array of `array_position` and `array_positions`, or `None` for a null array.
+fn search_array(args: &[Value]) -> Result<Option<&Array<Value>>> {
+    let array = match args.first() {
+        Some(Value::Null) => return Ok(None),
+        Some(Value::Array(array)) => array,
+        _ => return Err(bad_value()),
+    };
+    if array.dims.len() > 1 {
+        return Err(multidimensional_search());
+    }
+    Ok(Some(array))
+}
+
+/// The subscripts of the elements from `from` that are not distinct from `search`: all of them, or only the first one.
+fn find(
+    call: &Call<'_>,
+    array: &Array<Value>,
+    search: Option<&Value>,
+    from: i32,
+    all: bool,
+) -> Result<Vec<Option<Value>>> {
+    let types = (
+        call.args.get(1).copied().unwrap_or(0),
+        element_type(call.args.first().copied().unwrap_or(0))?,
+    );
+    let lower = array.dims.first().map_or(1, |d| d.lower);
+    let mut found = Vec::new();
+    for (position, item) in (lower..).zip(&array.values) {
+        if position < from {
+            continue;
+        }
+        let hit = match (search, item) {
+            (None, None) => true,
+            (Some(a), Some(b)) => crate::compare::equal(types.0, a, types.1, b)?,
+            _ => false,
+        };
+        if hit {
+            found.push(Some(Value::Int4(position)));
+            if !all {
+                break;
+            }
+        }
+    }
+    Ok(found)
+}
+
+/// `array_position` and `array_position_start`: the subscript of the first element that is not distinct from the search value, or null. It is not strict.
+fn array_position(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(array) = search_array(args)? else { return Ok(Value::Null) };
+    let search = element(args, 1)?;
+    if array.dims.is_empty() || (search.is_none() && array.values.iter().all(Option::is_some)) {
+        return Ok(Value::Null);
+    }
+    let from = match args.get(2) {
+        None => array.dims[0].lower,
+        Some(Value::Int4(n)) => *n,
+        Some(Value::Null) => {
+            return Err(Error::new(
+                SqlState::NULL_VALUE_NOT_ALLOWED,
+                "initial position must not be null",
+            ));
+        }
+        Some(_) => return Err(bad_value()),
+    };
+    Ok(find(call, array, search.as_ref(), from, false)?.pop().flatten().unwrap_or(Value::Null))
+}
+
+/// `array_positions`: the subscripts of the elements that are not distinct from the search value, or an empty array. It is not strict.
+fn array_positions(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(array) = search_array(args)? else { return Ok(Value::Null) };
+    let search = element(args, 1)?;
+    if array.dims.is_empty() || (search.is_none() && array.values.iter().all(Option::is_some)) {
+        return Ok(value(Array::empty()));
+    }
+    Ok(value(Array::one(find(call, array, search.as_ref(), i32::MIN, true)?)))
+}
+
+/// The values of an `int4[]` argument of `array_fill`, with its errors.
+fn fill_dims(array: &Array<Value>) -> Result<Vec<i32>> {
+    if array.dims.len() > 1 {
+        return Err(Error::new(
+            SqlState::ARRAY_SUBSCRIPT_ERROR,
+            "wrong number of array subscripts",
+        )
+        .with_detail("Dimension array must be one dimensional."));
+    }
+    array
+        .values
+        .iter()
+        .map(|v| match v {
+            Some(Value::Int4(n)) => Ok(*n),
+            None => {
+                Err(Error::new(SqlState::NULL_VALUE_NOT_ALLOWED, "dimension values cannot be null"))
+            }
+            Some(_) => Err(bad_value()),
+        })
+        .collect()
+}
+
+/// `array_fill` and `array_fill_with_lower_bounds`: an array of the given dimensions with each element the value. It is not strict, so the value can be null.
+fn array_fill(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let null_dims = || {
+        Error::new(
+            SqlState::NULL_VALUE_NOT_ALLOWED,
+            "dimension array or low bound array cannot be null",
+        )
+    };
+    let arg = |at: usize| match args.get(at) {
+        Some(Value::Array(array)) => Ok(Some(&**array)),
+        Some(Value::Null) => Err(null_dims()),
+        None => Ok(None),
+        Some(_) => Err(bad_value()),
+    };
+    let (dims, lbs) = (arg(1)?.ok_or_else(bad_value)?, arg(2)?);
+    let lens = fill_dims(dims)?;
+    if lens.len() > MAXDIM {
+        return Err(Error::new(
+            SqlState::PROGRAM_LIMIT_EXCEEDED,
+            format!(
+                "number of array dimensions ({}) exceeds the maximum allowed ({MAXDIM})",
+                lens.len()
+            ),
+        ));
+    }
+    let lowers = match lbs {
+        Some(lbs) => {
+            let lowers = fill_dims(lbs)?;
+            if lowers.len() != lens.len() {
+                return Err(Error::new(
+                    SqlState::ARRAY_SUBSCRIPT_ERROR,
+                    "wrong number of array subscripts",
+                )
+                .with_detail("Low bound array has different size than dimensions array."));
+            }
+            lowers
+        }
+        None => vec![1; lens.len()],
+    };
+    let too_large = || {
+        Error::new(
+            SqlState::PROGRAM_LIMIT_EXCEEDED,
+            format!("array size exceeds the maximum allowed ({MAX_ARRAY_SIZE})"),
+        )
+    };
+    let mut count: i32 = if lens.is_empty() { 0 } else { 1 };
+    for &len in &lens {
+        if len < 0 {
+            return Err(too_large());
+        }
+        count = count.checked_mul(len).ok_or_else(too_large)?;
+    }
+    if count as usize > MAX_ARRAY_SIZE {
+        return Err(too_large());
+    }
+    for (&len, &lower) in lens.iter().zip(&lowers) {
+        if len.checked_add(lower).is_none() {
+            return Err(Error::new(
+                SqlState::PROGRAM_LIMIT_EXCEEDED,
+                format!("array lower bound is too large: {lower}"),
+            ));
+        }
+    }
+    if count == 0 {
+        return Ok(value(Array::empty()));
+    }
+    let item = element(args, 0)?;
+    let dims = lens.iter().zip(&lowers).map(|(&len, &lower)| ArrayDim { len, lower }).collect();
+    Ok(value(Array { dims, values: vec![item; count as usize] }))
+}
+
+/// The number of elements in each index of the first dimension.
+fn item_len(array: &Array<Value>) -> usize {
+    match array.dims.first() {
+        Some(d) if d.len > 0 => array.values.len() / d.len as usize,
+        _ => 0,
+    }
+}
+
+/// `array_reverse`: the indexes of the first dimension in the reverse order.
+fn array_reverse(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let array = array(args, 0)?;
+    let step = item_len(array);
+    if step == 0 {
+        return Ok(value(array.clone()));
+    }
+    let values = array.values.rchunks(step).flatten().cloned().collect();
+    Ok(value(Array { dims: array.dims.clone(), values }))
+}
+
+/// `array_shuffle_n`: `n` indexes of the first dimension in a random order, by the algorithm of Fisher and Yates with `pg_global_prng_state`. The lower bound of the first dimension stays when `keep_lower` is true, and is 1 if not.
+fn shuffle(call: &Call<'_>, array: &Array<Value>, n: usize, keep_lower: bool) -> Value {
+    let step = item_len(array);
+    if step == 0 || n == 0 {
+        return value(Array::empty());
+    }
+    let nitem = array.values.len() / step;
+    let mut values = array.values.clone();
+    for i in 0..n {
+        let j = crate::random::global_range(call.session, i as u64, nitem as u64 - 1) as usize;
+        for k in 0..step {
+            values.swap(i * step + k, j * step + k);
+        }
+    }
+    values.truncate(n * step);
+    let mut dims = array.dims.clone();
+    dims[0].len = n as i32;
+    if !keep_lower {
+        dims[0].lower = 1;
+    }
+    value(Array { dims, values })
+}
+
+/// `array_shuffle`: the indexes of the first dimension in a random order.
+fn array_shuffle(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let array = array(args, 0)?;
+    match array.dims.first() {
+        Some(d) if d.len >= 2 => Ok(shuffle(call, array, d.len as usize, true)),
+        _ => Ok(value(array.clone())),
+    }
+}
+
+/// `array_sample`: `n` indexes of the first dimension chosen at random, with the lower bound 1.
+fn array_sample(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let array = array(args, 0)?;
+    let n = dimension(args, 1)?;
+    let nitem = array.dims.first().map_or(0, |d| d.len);
+    if n < 0 || n > nitem {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("sample size must be between 0 and {nitem}"),
+        ));
+    }
+    Ok(shuffle(call, array, n as usize, false))
+}
+
+/// `array_sort`, `array_sort_order` and `array_sort_order_nulls_first`: the indexes of the first dimension in order. The indexes of an array with more than one dimension are arrays, which sort as `array_lt` orders them. The lower bounds stay.
+fn array_sort(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let array = array(args, 0)?;
+    let flag = |at: usize| match args.get(at) {
+        Some(Value::Bool(b)) => Ok(Some(*b)),
+        None => Ok(None),
+        Some(_) => Err(bad_value()),
+    };
+    let descending = flag(1)?.unwrap_or(false);
+    let nulls_first = flag(2)?.unwrap_or(descending);
+    let step = item_len(array);
+    if array.dims.first().is_none_or(|d| d.len < 2) {
+        return Ok(value(array.clone()));
+    }
+    let ty = call.args.first().copied().unwrap_or(0);
+    let mut items: Vec<Option<Value>> = if array.dims.len() == 1 {
+        array.values.clone()
+    } else {
+        let sub = array.dims[1..].to_vec();
+        array
+            .values
+            .chunks(step)
+            .map(|chunk| Some(value(Array { dims: sub.clone(), values: chunk.to_vec() })))
+            .collect()
+    };
+    let elem = if array.dims.len() == 1 { element_type(ty)? } else { ty };
+    let mut failed = None;
+    items.sort_by(|a, b| match (a, b) {
+        (None, None) => std::cmp::Ordering::Equal,
+        (None, Some(_)) if nulls_first => std::cmp::Ordering::Less,
+        (None, Some(_)) => std::cmp::Ordering::Greater,
+        (Some(_), None) if nulls_first => std::cmp::Ordering::Greater,
+        (Some(_), None) => std::cmp::Ordering::Less,
+        (Some(x), Some(y)) => match crate::compare::compare(elem, x, elem, y) {
+            Ok(order) if descending => order.reverse(),
+            Ok(order) => order,
+            Err(e) => {
+                failed.get_or_insert(e);
+                std::cmp::Ordering::Equal
+            }
+        },
+    });
+    if let Some(e) = failed {
+        return Err(e);
+    }
+    let values = if array.dims.len() == 1 {
+        items
+    } else {
+        items
+            .into_iter()
+            .flat_map(|item| match item {
+                Some(Value::Array(sub)) => sub.values,
+                _ => Vec::new(),
+            })
+            .collect()
+    };
+    Ok(value(Array { dims: array.dims.clone(), values }))
+}
+
+/// `trim_array`: the array without the last `n` indexes of the first dimension. The result is a slice, so each lower bound is 1.
+fn trim_array(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let array = array(args, 0)?;
+    let n = dimension(args, 1)?;
+    let len = array.dims.first().map_or(0, |d| d.len);
+    if n < 0 || n > len {
+        return Err(Error::new(
+            SqlState::ARRAY_ELEMENT_ERROR,
+            format!("number of elements to trim must be between 0 and {len}"),
+        ));
+    }
+    if n == len {
+        return Ok(value(Array::empty()));
+    }
+    let step = item_len(array);
+    let mut dims: Vec<ArrayDim> =
+        array.dims.iter().map(|d| ArrayDim { len: d.len, lower: 1 }).collect();
+    dims[0].len = len - n;
+    let values = array.values[..(len - n) as usize * step].to_vec();
+    Ok(value(Array { dims, values }))
+}
+
+/// `array_contain_compare`: true when each element of `a` that is not null equals an element of `b`, when `all` is true, or when some element of `a` equals an element of `b`, when `all` is false. A null element of `a` makes `all` false.
+fn contain(a: (u32, &Array<Value>), b: (u32, &Array<Value>), all: bool) -> Result<bool> {
+    let (ta, tb) = (element_type(a.0)?, element_type(b.0)?);
+    if base_type(ta) != base_type(tb) {
+        return Err(Error::new(
+            SqlState::DATATYPE_MISMATCH,
+            "cannot compare arrays of different element types",
+        ));
+    }
+    for x in &a.1.values {
+        let Some(x) = x else {
+            if all {
+                return Ok(false);
+            }
+            continue;
+        };
+        let mut hit = false;
+        for y in b.1.values.iter().flatten() {
+            if crate::compare::equal(ta, x, tb, y)? {
+                hit = true;
+                break;
+            }
+        }
+        if hit != all {
+            return Ok(hit);
+        }
+    }
+    Ok(all)
+}
+
+/// The two arrays of `arraycontains`, `arraycontained` and `arrayoverlap`, with their types.
+fn two_arrays<'v>(call: &Call<'_>, args: &'v [Value]) -> Result<[(u32, &'v Array<Value>); 2]> {
+    let ty = |at: usize| call.args.get(at).copied().unwrap_or(0);
+    Ok([(ty(0), array(args, 0)?), (ty(1), array(args, 1)?)])
+}
+
+/// `arraycontains`: `@>`.
+fn arraycontains(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [a, b] = two_arrays(call, args)?;
+    Ok(Value::Bool(contain(b, a, true)?))
+}
+
+/// `arraycontained`: `<@`.
+fn arraycontained(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [a, b] = two_arrays(call, args)?;
+    Ok(Value::Bool(contain(a, b, true)?))
+}
+
+/// `arrayoverlap`: `&&`.
+fn arrayoverlap(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [a, b] = two_arrays(call, args)?;
+    Ok(Value::Bool(contain(a, b, false)?))
+}
+
+/// `width_bucket_array`: the number of thresholds that are less than or equal to the operand, by a binary search. The thresholds must be in order.
+fn width_bucket_array(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [operand, _] = args else { return Err(bad_value()) };
+    let thresholds = array(args, 1)?;
+    if thresholds.dims.len() > 1 {
+        return Err(Error::new(
+            SqlState::ARRAY_SUBSCRIPT_ERROR,
+            "thresholds must be one-dimensional array",
+        ));
+    }
+    if thresholds.values.iter().any(Option::is_none) {
+        return Err(Error::new(
+            SqlState::NULL_VALUE_NOT_ALLOWED,
+            "thresholds array must not contain NULLs",
+        ));
+    }
+    let left_type = call.args.first().copied().unwrap_or(0);
+    let right_type = element_type(call.args.get(1).copied().unwrap_or(0))?;
+    let (mut left, mut right) = (0, thresholds.values.len());
+    while left < right {
+        let mid = (left + right) / 2;
+        let Some(threshold) = &thresholds.values[mid] else { return Err(bad_value()) };
+        if crate::compare::compare(left_type, operand, right_type, threshold)?.is_lt() {
+            right = mid;
+        } else {
+            left = mid + 1;
+        }
+    }
+    Ok(int4(left))
+}
+
 /// The kernel of an array function by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
@@ -337,6 +746,18 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "array_cat" => array_cat,
         "array_remove" => array_remove,
         "array_replace" => array_replace,
+        "array_position" | "array_position_start" => array_position,
+        "array_positions" => array_positions,
+        "array_fill" | "array_fill_with_lower_bounds" => array_fill,
+        "array_reverse" => array_reverse,
+        "array_shuffle" => array_shuffle,
+        "array_sample" => array_sample,
+        "array_sort" | "array_sort_order" | "array_sort_order_nulls_first" => array_sort,
+        "trim_array" => trim_array,
+        "arraycontains" => arraycontains,
+        "arraycontained" => arraycontained,
+        "arrayoverlap" => arrayoverlap,
+        "width_bucket_array" => width_bucket_array,
         _ => return None,
     })
 }
