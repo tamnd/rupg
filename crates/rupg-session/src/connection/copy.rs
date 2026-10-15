@@ -462,7 +462,7 @@ fn options(list: &[Option<Node>]) -> Result<Options, Error> {
 }
 
 /// `defGetString`.
-fn def_string(def: &DefElem) -> Result<String, Error> {
+pub(super) fn def_string(def: &DefElem) -> Result<String, Error> {
     let name = def.defname.as_deref().unwrap_or_default();
     match &def.arg {
         None => Err(Error::new(SqlState::SYNTAX_ERROR, format!("{name} requires a parameter"))),
@@ -488,7 +488,7 @@ fn name_text(node: &Node) -> Result<String, Error> {
 }
 
 /// `defGetBoolean`.
-fn def_boolean(def: &DefElem) -> Result<bool, Error> {
+pub(super) fn def_boolean(def: &DefElem) -> Result<bool, Error> {
     let value = match &def.arg {
         None => Some(true),
         Some(Node::Integer(n)) => match n {

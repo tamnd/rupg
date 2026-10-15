@@ -1,0 +1,214 @@
+> CREATE DATABASE dbx1
+CREATE DATABASE
+> SELECT datname, datdba, encoding, datlocprovider, datistemplate, datallowconn, dathasloginevt, datconnlimit, datminmxid, dattablespace, datcollate, datctype, datlocale, daticurules, datcollversion, datacl FROM pg_database WHERE datname = 'dbx1'
+fields datname@pg_database.2:19:64:-1,datdba@pg_database.3:26:4:-1,encoding@pg_database.4:23:4:-1,datlocprovider@pg_database.5:18:1:-1,datistemplate@pg_database.6:16:1:-1,datallowconn@pg_database.7:16:1:-1,dathasloginevt@pg_database.8:16:1:-1,datconnlimit@pg_database.9:23:4:-1,datminmxid@pg_database.11:28:4:-1,dattablespace@pg_database.12:26:4:-1,datcollate@pg_database.13:25:-1:-1,datctype@pg_database.14:25:-1:-1,datlocale@pg_database.15:25:-1:-1,daticurules@pg_database.16:25:-1:-1,datcollversion@pg_database.17:25:-1:-1,datacl@pg_database.18:1034:-1:-1
+row dbx1,10,6,c,f,t,f,-1,1,1663,C,C,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT 'dbx1'::regdatabase::oid = (SELECT oid FROM pg_database WHERE datname = 'dbx1'), 'dbx1'::regdatabase, has_database_privilege('dbx1', 'CONNECT'), has_database_privilege('pg_monitor', 'dbx1', 'TEMPORARY'), has_database_privilege('pg_monitor', 'dbx1', 'CREATE')
+fields ?column?:16:1:-1,regdatabase:6490:4:-1,has_database_privilege:16:1:-1,has_database_privilege:16:1:-1,has_database_privilege:16:1:-1
+row t,dbx1,t,t,f
+SELECT 1
+> SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname = 'dbx1'
+fields pg_get_userbyid:19:64:-1
+row postgres
+SELECT 1
+> CREATE DATABASE dbx1
+ERROR 42P04 database "dbx1" already exists
+> BEGIN
+BEGIN
+> CREATE DATABASE dbx2
+ERROR 25001 CREATE DATABASE cannot run inside a transaction block
+> ROLLBACK
+ROLLBACK
+> SELECT 1; CREATE DATABASE dbx2
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+ERROR 25001 CREATE DATABASE cannot run inside a transaction block
+> SELECT 1; DROP DATABASE dbx1
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+ERROR 25001 DROP DATABASE cannot run inside a transaction block
+> CREATE DATABASE dbx2 WITH OWNER = postgres TEMPLATE = template0 ENCODING = 'UTF8' LC_COLLATE = 'C' LC_CTYPE = 'POSIX' IS_TEMPLATE = true ALLOW_CONNECTIONS = false CONNECTION LIMIT = 5 STRATEGY = 'FILE_COPY' TABLESPACE = pg_default
+CREATE DATABASE
+> SELECT datname, datistemplate, datallowconn, datconnlimit, datcollate, datctype FROM pg_database WHERE datname = 'dbx2'
+fields datname@pg_database.2:19:64:-1,datistemplate@pg_database.6:16:1:-1,datallowconn@pg_database.7:16:1:-1,datconnlimit@pg_database.9:23:4:-1,datcollate@pg_database.13:25:-1:-1,datctype@pg_database.14:25:-1:-1
+row dbx2,t,f,5,C,C
+SELECT 1
+> DROP DATABASE dbx2
+ERROR 42809 cannot drop a template database
+> CREATE DATABASE dbx3 TEMPLATE dbx2
+CREATE DATABASE
+> SELECT datname, datistemplate, datallowconn, datconnlimit FROM pg_database WHERE datname = 'dbx3'
+fields datname@pg_database.2:19:64:-1,datistemplate@pg_database.6:16:1:-1,datallowconn@pg_database.7:16:1:-1,datconnlimit@pg_database.9:23:4:-1
+row dbx3,f,t,-1
+SELECT 1
+> DROP DATABASE dbx3
+DROP DATABASE
+> CREATE DATABASE dbx3 nosuch = 1
+ERROR 42601 option "nosuch" not recognized at 22
+> CREATE DATABASE dbx3 OWNER a OWNER b
+ERROR 42601 conflicting or redundant options at 30
+> CREATE DATABASE dbx3 LOCATION = 'x'
+WARNING 0A000 LOCATION is not supported anymore at 22
+CREATE DATABASE
+> DROP DATABASE dbx3
+DROP DATABASE
+> CREATE DATABASE dbx3 OID = 100
+ERROR 22023 OIDs less than 16384 are reserved for system objects
+> CREATE DATABASE dbx3 ENCODING = 'nosuch'
+ERROR 42704 nosuch is not a valid encoding name at 22
+> CREATE DATABASE dbx3 ENCODING = 99
+ERROR 42704 99 is not a valid encoding code at 22
+> CREATE DATABASE dbx3 ENCODING = 7
+ERROR 42704 7 is not a valid encoding code at 22
+> CREATE DATABASE dbx3 ENCODING = 'SJIS'
+ERROR 42704 SJIS is not a valid encoding name at 22
+> CREATE DATABASE dbx3 ENCODING = 'LATIN1'
+ERROR 22023 new encoding (LATIN1) is incompatible with the encoding of the template database (UTF8)
+> CREATE DATABASE dbx3 ENCODING = 'utf-8' LOCALE 'POSIX'
+CREATE DATABASE
+> SELECT datname, encoding, datcollate, datctype FROM pg_database WHERE datname = 'dbx3'
+fields datname@pg_database.2:19:64:-1,encoding@pg_database.4:23:4:-1,datcollate@pg_database.13:25:-1:-1,datctype@pg_database.14:25:-1:-1
+row dbx3,6,C,C
+SELECT 1
+> DROP DATABASE dbx3
+DROP DATABASE
+> CREATE DATABASE dbx3 ENCODING = 6
+CREATE DATABASE
+> DROP DATABASE dbx3
+DROP DATABASE
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = 'nosuch'
+ERROR 42P17 unrecognized locale provider: nosuch
+> CREATE DATABASE dbx3 CONNECTION LIMIT = -2
+ERROR 22023 invalid connection limit: -2
+> CREATE DATABASE dbx3 CONNECTION LIMIT = -1
+CREATE DATABASE
+> DROP DATABASE dbx3
+DROP DATABASE
+> CREATE DATABASE dbx3 TEMPLATE nosuch
+ERROR 3D000 template database "nosuch" does not exist
+> CREATE DATABASE dbx3 STRATEGY = 'x'
+ERROR 22023 invalid create database strategy "x"
+> CREATE DATABASE dbx3 LC_COLLATE = 'nosuch'
+ERROR 42809 invalid LC_COLLATE locale name: "nosuch"
+> CREATE DATABASE dbx3 LC_CTYPE = 'nosuch'
+ERROR 42809 invalid LC_CTYPE locale name: "nosuch"
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = builtin LC_COLLATE = 'nosuch'
+ERROR 42809 invalid LC_COLLATE locale name: "nosuch"
+> CREATE DATABASE dbx3 LOCALE = 'en_US.utf8'
+ERROR 22023 new collation (en_US.utf8) is incompatible with the collation of the template database (C)
+> CREATE DATABASE dbx3 LC_CTYPE = 'C.utf8'
+ERROR 22023 new LC_CTYPE (C.utf8) is incompatible with the LC_CTYPE of the template database (C)
+> CREATE DATABASE dbx3 ENCODING 'LATIN1' LOCALE 'en_US.utf8' TEMPLATE template0
+ERROR 22023 encoding "LATIN1" does not match locale "en_US.utf8"
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = builtin
+ERROR 22023 LOCALE or BUILTIN_LOCALE must be specified
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = builtin TEMPLATE template0
+ERROR 22023 LOCALE or BUILTIN_LOCALE must be specified
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = builtin LOCALE = 'C'
+ERROR 22023 new locale provider (builtin) does not match locale provider of the template database (libc)
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = builtin LOCALE = 'C' TEMPLATE template0
+CREATE DATABASE
+> SELECT datname, datlocprovider, datcollate, datctype, datlocale, datcollversion FROM pg_database WHERE datname = 'dbx3'
+fields datname@pg_database.2:19:64:-1,datlocprovider@pg_database.5:18:1:-1,datcollate@pg_database.13:25:-1:-1,datctype@pg_database.14:25:-1:-1,datlocale@pg_database.15:25:-1:-1,datcollversion@pg_database.17:25:-1:-1
+row dbx3,b,C,C,C,1
+SELECT 1
+> CREATE DATABASE dbx4 TEMPLATE dbx3
+CREATE DATABASE
+> CREATE DATABASE dbx4 TEMPLATE dbx3 LOCALE_PROVIDER = libc
+ERROR 22023 new locale provider (libc) does not match locale provider of the template database (builtin)
+> SELECT datname, datlocprovider, datlocale, datcollversion FROM pg_database WHERE datname = 'dbx4'
+fields datname@pg_database.2:19:64:-1,datlocprovider@pg_database.5:18:1:-1,datlocale@pg_database.15:25:-1:-1,datcollversion@pg_database.17:25:-1:-1
+row dbx4,b,C,1
+SELECT 1
+> DROP DATABASE dbx4
+DROP DATABASE
+> DROP DATABASE dbx3
+DROP DATABASE
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = builtin BUILTIN_LOCALE = 'nosuch' TEMPLATE template0
+ERROR 42809 invalid locale name "nosuch" for builtin provider
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = builtin BUILTIN_LOCALE = 'C.UTF-8' ENCODING 'SQL_ASCII' TEMPLATE template0
+ERROR 42809 encoding "SQL_ASCII" does not match locale "C.UTF-8"
+> CREATE DATABASE dbx3 BUILTIN_LOCALE = 'C'
+ERROR 42P17 BUILTIN_LOCALE cannot be specified unless locale provider is builtin
+> CREATE DATABASE dbx3 ICU_LOCALE = 'en'
+ERROR 42P17 ICU locale cannot be specified unless locale provider is ICU
+> CREATE DATABASE dbx3 ICU_RULES = 'x'
+ERROR 42P17 ICU rules cannot be specified unless locale provider is ICU
+> CREATE DATABASE dbx3 LOCALE_PROVIDER = icu TEMPLATE template0
+ERROR 22023 LOCALE or ICU_LOCALE must be specified
+> CREATE DATABASE dbx3 TABLESPACE nosuch
+ERROR 42704 tablespace "nosuch" does not exist
+> CREATE DATABASE dbx3 TABLESPACE pg_global
+ERROR 22023 pg_global cannot be used as default tablespace
+> CREATE DATABASE dbx3 OWNER nosuch
+ERROR 42704 role "nosuch" does not exist
+> CREATE DATABASE dbx3 IS_TEMPLATE = 'maybe'
+ERROR 42601 is_template requires a Boolean value
+> CREATE DATABASE dbx3 CONNECTION LIMIT = 'x'
+ERROR 42601 connection_limit requires an integer value
+> CREATE DATABASE dbx3 OID = 'x'
+ERROR 42601 oid requires a numeric value
+> CREATE DATABASE dbx3 OID = 99999
+CREATE DATABASE
+> CREATE DATABASE dbx4 OID = 99999
+ERROR 22023 database OID 99999 is already in use by database "dbx3"
+> SELECT oid, datname FROM pg_database WHERE datname = 'dbx3'
+fields oid@pg_database.1:26:4:-1,datname@pg_database.2:19:64:-1
+row 99999,dbx3
+SELECT 1
+> DROP DATABASE dbx3
+DROP DATABASE
+> CREATE DATABASE dbx3 OID = 3000000000
+CREATE DATABASE
+> SELECT oid, datname FROM pg_database WHERE datname = 'dbx3'
+fields oid@pg_database.1:26:4:-1,datname@pg_database.2:19:64:-1
+row 3000000000,dbx3
+SELECT 1
+> DROP DATABASE dbx3
+DROP DATABASE
+> CREATE DATABASE dbx3 COLLATION_VERSION = '1.0' TEMPLATE = DEFAULT ENCODING DEFAULT
+CREATE DATABASE
+> SELECT datname, datcollversion FROM pg_database WHERE datname = 'dbx3'
+fields datname@pg_database.2:19:64:-1,datcollversion@pg_database.17:25:-1:-1
+row dbx3,1.0
+SELECT 1
+> DROP DATABASE dbx3 WITH (FORCE)
+DROP DATABASE
+> DROP DATABASE dbx3
+ERROR 3D000 database "dbx3" does not exist
+> DROP DATABASE IF EXISTS dbx3
+NOTICE 00000 database "dbx3" does not exist, skipping
+DROP DATABASE
+> DROP DATABASE template1
+ERROR 42809 cannot drop a template database
+> DROP DATABASE dbx1 (FORCE, FORCE)
+DROP DATABASE
+> SELECT count(*) FROM pg_database WHERE datname = 'dbx1'
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE DATABASE "a""b" OWNER pg_monitor ALLOW_CONNECTIONS false CONNECTION_LIMIT 3
+CREATE DATABASE
+> SELECT datname, datdba::regrole, datallowconn, datconnlimit FROM pg_database WHERE datname = 'a"b'
+fields datname@pg_database.2:19:64:-1,datdba:4096:4:-1,datallowconn@pg_database.7:16:1:-1,datconnlimit@pg_database.9:23:4:-1
+row a"b,pg_monitor,f,3
+SELECT 1
+> DROP DATABASE "a""b"
+DROP DATABASE
+P s1|CREATE DATABASE dbx6
+X s1
+CREATE DATABASE
+> SELECT count(*) FROM pg_database WHERE datname = 'dbx6'
+fields count:20:8:-1
+row 1
+SELECT 1
+P s2|DROP DATABASE dbx6
+X s2
+DROP DATABASE
+> SELECT count(*) FROM pg_database WHERE datname = 'dbx6'
+fields count:20:8:-1
+row 0
+SELECT 1

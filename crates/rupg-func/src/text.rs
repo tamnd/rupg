@@ -457,7 +457,8 @@ fn starts_with(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `quote_identifier` of `ruleutils.c`: the name in double quotes unless it is a simple name in lower case that is not a key word, or that is an unreserved key word.
-pub(crate) fn quote_identifier(name: &str) -> String {
+#[must_use]
+pub fn quote_identifier(name: &str) -> String {
     let simple = name.bytes().next().is_some_and(|c| c.is_ascii_lowercase() || c == b'_')
         && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
         && rupg_sql::keyword(name).is_none_or(|k| k.category == Category::Unreserved);

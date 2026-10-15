@@ -768,17 +768,7 @@ fn admit(shared: &Shared, start: &Start) -> std::result::Result<(), Error> {
             format!("role \"{}\" does not exist", start.user),
         ));
     }
-    match start.database.as_str() {
-        "postgres" | "template1" => Ok(()),
-        "template0" => Err(Error::new(
-            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
-            "database \"template0\" is not currently accepting connections",
-        )),
-        name => Err(Error::new(
-            SqlState::INVALID_CATALOG_NAME,
-            format!("database \"{name}\" does not exist"),
-        )),
-    }
+    shared.store.admit(&start.database).map(drop)
 }
 
 /// A session in the cancel registry.

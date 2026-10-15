@@ -53,7 +53,7 @@ pub use activity::{Backend, BackendState, Client, Ssl};
 pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use deparse::deparse_expression;
-pub use encoding::encoding;
+pub use encoding::{char_to_encoding, encoding, encoding_to_char};
 pub use io::{
     base_type, input, input_supported, is_row_type, output, output_supported, receive, send,
     to_text,
@@ -61,6 +61,7 @@ pub use io::{
 pub use multirange::range_agg;
 pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use srf::{SetKernel, set_kernel};
+pub use text::quote_identifier;
 
 /// `format_type_be`: the name of a type for a message, with its schema when the search path does not find it.
 pub fn type_message_name(ty: u32, session: &dyn Session) -> String {
@@ -149,6 +150,10 @@ pub trait Session {
     /// The catalog of the user objects that the statement sees, or `None` when the session has no catalog.
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
+    }
+    /// The rows of `pg_database` of the databases that `CREATE DATABASE` made, in the order of their OIDs. The rows of `initdb` are static rows. A session with no server has no other databases.
+    fn databases(&self) -> Arc<[rupg_catalog::Database]> {
+        Arc::from(Vec::new())
     }
     /// The rows of the table of the sessions in the order of their numbers, from the snapshot of the transaction. The first call of a transaction takes the snapshot.
     fn backends(&self) -> Arc<[Backend]> {

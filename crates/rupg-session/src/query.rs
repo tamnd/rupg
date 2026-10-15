@@ -302,6 +302,13 @@ impl rupg_func::Session for Reader<'_> {
         self.pid
     }
 
+    fn databases(&self) -> Arc<[rupg_catalog::Database]> {
+        match self.activity {
+            Some((_, store)) => store.created(),
+            None => Arc::from(Vec::new()),
+        }
+    }
+
     fn backends(&self) -> Arc<[Backend]> {
         match self.activity {
             Some((activity, store)) => activity.backends(store, &self.settings()),
