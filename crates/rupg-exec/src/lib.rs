@@ -188,6 +188,7 @@ fn check(expr: &Expr) -> Result<()> {
             elements.iter().try_for_each(check)?;
         }
         ExprKind::Agg(agg) => {
+            agg.direct.iter().try_for_each(check)?;
             agg.args.iter().try_for_each(check)?;
             if let Some(filter) = &agg.filter {
                 check(filter)?;

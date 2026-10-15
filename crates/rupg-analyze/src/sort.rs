@@ -272,7 +272,7 @@ impl Analyzer<'_> {
     }
 
     /// `addTargetToSortList`.
-    fn add_sort(
+    pub(crate) fn add_sort(
         &mut self,
         by: &SortBy,
         target: usize,

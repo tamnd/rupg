@@ -2,7 +2,7 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_sql::nodes::{List, WindowDef};
+use rupg_sql::nodes::{List, Node, WindowDef};
 
 use crate::Analyzer;
 use crate::coerce::AtOpt;
@@ -149,23 +149,42 @@ impl Analyzer<'_> {
         result
     }
 
-    /// `transformAggregateCall` of a normal aggregate: the items of `ORDER BY` and `DISTINCT`, then the checks of `check_agglevels_and_constraints`.
+    /// `transformAggregateCall`: the items of `ORDER BY` and `DISTINCT`, or the direct arguments and the items of `WITHIN GROUP` of an ordered-set aggregate, then the checks of `check_agglevels_and_constraints`.
+    #[allow(clippy::too_many_arguments)]
     pub(crate) fn aggregate_call(
         &mut self,
         oid: u32,
-        args: Vec<Expr>,
+        kind: u8,
+        mut args: Vec<Expr>,
         parts: Parts<'_>,
         variadic: bool,
         ty: u32,
         at: Option<usize>,
     ) -> Result<Expr> {
+        let ordered_set = kind != b'n';
+        // The items of WITHIN GROUP are the last arguments.
+        let direct = if ordered_set {
+            args.drain(..args.len() - parts.order.len()).collect()
+        } else {
+            Vec::new()
+        };
         let nargs = args.len();
         let mut targets: Vec<Target> = args
             .into_iter()
             .map(|expr| Target { name: String::new(), expr, origin: None, junk: false })
             .collect();
-        let order =
-            self.with_kind(Kind::OrderBy, |a| a.sort_clause_sql99(parts.order, &mut targets))?;
+        let order = if ordered_set {
+            let mut order = Vec::with_capacity(nargs);
+            for (target, item) in parts.order.iter().enumerate() {
+                let Some(Node::SortBy(by)) = item else {
+                    return Err(Error::internal("an item of WITHIN GROUP that is not SortBy"));
+                };
+                self.add_sort(by, target, &mut targets, &mut order)?;
+            }
+            order
+        } else {
+            self.with_kind(Kind::OrderBy, |a| a.sort_clause_sql99(parts.order, &mut targets))?
+        };
         let distinct = if parts.distinct {
             let list = self.distinct_clause(&mut targets, &order, true)?;
             for item in &list {
@@ -188,8 +207,9 @@ impl Analyzer<'_> {
         };
         let args: Vec<Expr> = targets.into_iter().map(|t| t.expr).collect();
         let filter = parts.filter.map(Box::new);
-        // check_agg_arguments: an aggregate call in the arguments is of the same level, and a set cannot be an argument.
-        if let Some(inner) = args.iter().chain(filter.as_deref()).find_map(nested) {
+        // check_agg_arguments: an aggregate call in the arguments is of the same level, and a set cannot be an argument. The direct arguments come last.
+        let inner = args.iter().chain(filter.as_deref()).find_map(nested);
+        if let Some(inner) = inner.or_else(|| direct.iter().find_map(nested)) {
             if let ExprKind::Agg(_) = inner.kind {
                 return Err(grouping_error(
                     "aggregate function calls cannot be nested".into(),
@@ -256,7 +276,18 @@ impl Analyzer<'_> {
             _ => {}
         }
         self.has_aggs = true;
-        let agg = Aggref { oid, args, nargs, order, distinct, star: parts.star, variadic, filter };
+        let agg = Aggref {
+            oid,
+            kind,
+            direct,
+            args,
+            nargs,
+            order,
+            distinct,
+            star: parts.star,
+            variadic,
+            filter,
+        };
         Ok(Expr { kind: ExprKind::Agg(Box::new(agg)), ty, typmod: -1, location: at })
     }
 
@@ -312,10 +343,11 @@ struct Check<'a, 'b> {
 impl Check<'_, '_> {
     /// Checks an expression of the query, or of a subquery `depth` levels down.
     fn expr(&mut self, expr: &Expr, depth: usize) -> Result<()> {
-        if let ExprKind::Agg(_) = expr.kind
+        // The direct arguments of an ordered-set aggregate are outside of the aggregate.
+        if let ExprKind::Agg(agg) = &expr.kind
             && depth == 0
         {
-            return Ok(());
+            return agg.direct.iter().try_for_each(|e| self.expr(e, depth));
         }
         if self.non_var && self.is_grouped(expr, depth) {
             return Ok(());

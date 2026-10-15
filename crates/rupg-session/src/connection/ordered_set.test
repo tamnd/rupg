@@ -1,0 +1,188 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW osa_t AS SELECT * FROM (VALUES (1, 1.5::float8, 'b'::text, interval '1 day', 10), (1, 3.0, 'a', interval '3 hours', 20), (1, NULL, 'b', NULL, 20), (2, 7.25, 'c', interval '2 days 4 hours', 30), (2, -1.0, 'c', interval '-5 minutes', NULL), (2, 0.0, 'd', interval '1 mon', 30), (3, NULL, NULL, NULL, NULL)) AS v(g, x, s, i, n)
+CREATE VIEW
+> SELECT g, percentile_disc(0.5) WITHIN GROUP (ORDER BY x), percentile_cont(0.5) WITHIN GROUP (ORDER BY x), mode() WITHIN GROUP (ORDER BY s) FROM osa_t GROUP BY g ORDER BY g
+fields g@osa_t.1:23:4:-1,percentile_disc:701:8:-1,percentile_cont:701:8:-1,mode:25:-1:-1
+row 1,1.5,2.25,b
+row 2,0,0,c
+row 3,NULL,NULL,NULL
+SELECT 3
+> SELECT g, percentile_disc(0) WITHIN GROUP (ORDER BY x), percentile_disc(1) WITHIN GROUP (ORDER BY x), percentile_cont(0.25) WITHIN GROUP (ORDER BY x), percentile_cont(1) WITHIN GROUP (ORDER BY x DESC) FROM osa_t GROUP BY g ORDER BY g
+fields g@osa_t.1:23:4:-1,percentile_disc:701:8:-1,percentile_disc:701:8:-1,percentile_cont:701:8:-1,percentile_cont:701:8:-1
+row 1,1.5,3,1.875,1.5
+row 2,-1,7.25,-0.5,-1
+row 3,NULL,NULL,NULL,NULL
+SELECT 3
+> SELECT g, percentile_cont(0.3) WITHIN GROUP (ORDER BY i), percentile_disc(0.3) WITHIN GROUP (ORDER BY i), percentile_cont(0.75) WITHIN GROUP (ORDER BY i DESC) FROM osa_t GROUP BY g ORDER BY g
+fields g@osa_t.1:23:4:-1,percentile_cont:1186:16:-1,percentile_disc:1186:16:-1,percentile_cont:1186:16:-1
+row 1,09:18:00,03:00:00,1 day -15:45:00
+row 2,1 day 07:10:00,-00:05:00,1 day 01:57:30
+row 3,NULL,NULL,NULL
+SELECT 3
+> SELECT percentile_disc(array[0, 0.1, 0.5, NULL, 1]) WITHIN GROUP (ORDER BY x), percentile_cont(array[0, 0.1, 0.5, NULL, 1]) WITHIN GROUP (ORDER BY x) FROM osa_t
+fields percentile_disc:1022:-1:-1,percentile_cont:1022:-1:-1
+row {-1,-1,1.5,NULL,7.25},{-1,-0.6,1.5,NULL,7.25}
+SELECT 1
+> SELECT percentile_cont(array[[0.25, 0.5], [0.75, 1]]) WITHIN GROUP (ORDER BY i), percentile_disc('[3:4]={0.2,0.9}'::float8[]) WITHIN GROUP (ORDER BY s) FROM osa_t
+fields percentile_cont:1187:-1:-1,percentile_disc:1009:-1:-1
+row {{03:00:00,"1 day"},{"2 days 04:00:00","1 mon"}},[3:4]={b,d}
+SELECT 1
+> SELECT percentile_cont('{}'::float8[]) WITHIN GROUP (ORDER BY x), percentile_disc('{}'::float8[]) WITHIN GROUP (ORDER BY s), percentile_disc(NULL::float8[]) WITHIN GROUP (ORDER BY s), percentile_disc(NULL::float8) WITHIN GROUP (ORDER BY s) FROM osa_t
+fields percentile_cont:1022:-1:-1,percentile_disc:1009:-1:-1,percentile_disc:1009:-1:-1,percentile_disc:25:-1:-1
+row {},{},NULL,NULL
+SELECT 1
+> SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x), percentile_cont(array[0.5]) WITHIN GROUP (ORDER BY x), mode() WITHIN GROUP (ORDER BY x), rank(1) WITHIN GROUP (ORDER BY x), percent_rank(1) WITHIN GROUP (ORDER BY x), cume_dist(1) WITHIN GROUP (ORDER BY x), dense_rank(1) WITHIN GROUP (ORDER BY x) FROM osa_t WHERE false
+fields percentile_disc:701:8:-1,percentile_cont:1022:-1:-1,mode:701:8:-1,rank:20:8:-1,percent_rank:701:8:-1,cume_dist:701:8:-1,dense_rank:20:8:-1
+row NULL,NULL,NULL,1,0,1,1
+SELECT 1
+> SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x), mode() WITHIN GROUP (ORDER BY x), percentile_cont(array[0.5]) WITHIN GROUP (ORDER BY x) FROM osa_t WHERE x IS NULL
+fields percentile_disc:701:8:-1,mode:701:8:-1,percentile_cont:1022:-1:-1
+row NULL,NULL,NULL
+SELECT 1
+> SELECT g, rank(20) WITHIN GROUP (ORDER BY n), dense_rank(20) WITHIN GROUP (ORDER BY n), percent_rank(20) WITHIN GROUP (ORDER BY n), cume_dist(20) WITHIN GROUP (ORDER BY n) FROM osa_t GROUP BY g ORDER BY g
+fields g@osa_t.1:23:4:-1,rank:20:8:-1,dense_rank:20:8:-1,percent_rank:701:8:-1,cume_dist:701:8:-1
+row 1,2,2,0.3333333333333333,1
+row 2,1,1,0,0.25
+row 3,1,1,0,0.5
+SELECT 3
+> SELECT rank(20) WITHIN GROUP (ORDER BY n), dense_rank(20) WITHIN GROUP (ORDER BY n), percent_rank(20) WITHIN GROUP (ORDER BY n), cume_dist(20) WITHIN GROUP (ORDER BY n) FROM osa_t
+fields rank:20:8:-1,dense_rank:20:8:-1,percent_rank:701:8:-1,cume_dist:701:8:-1
+row 2,2,0.14285714285714285,0.5
+SELECT 1
+> SELECT rank(NULL::int) WITHIN GROUP (ORDER BY n), dense_rank(NULL::int) WITHIN GROUP (ORDER BY n), rank(NULL::int) WITHIN GROUP (ORDER BY n NULLS FIRST), cume_dist(NULL::int) WITHIN GROUP (ORDER BY n DESC) FROM osa_t
+fields rank:20:8:-1,dense_rank:20:8:-1,rank:20:8:-1,cume_dist:701:8:-1
+row 6,4,1,0.375
+SELECT 1
+> SELECT rank(1, 'b') WITHIN GROUP (ORDER BY g, s), dense_rank(2, 'c') WITHIN GROUP (ORDER BY g DESC, s), cume_dist(1, 'b') WITHIN GROUP (ORDER BY g, s), percent_rank(3, NULL) WITHIN GROUP (ORDER BY g, s) FROM osa_t
+fields rank:20:8:-1,dense_rank:20:8:-1,cume_dist:701:8:-1,percent_rank:701:8:-1
+row 2,2,0.5,0.8571428571428571
+SELECT 1
+> SELECT rank(2.5) WITHIN GROUP (ORDER BY n), rank(25) WITHIN GROUP (ORDER BY x), rank('b') WITHIN GROUP (ORDER BY s), pg_typeof(rank(1) WITHIN GROUP (ORDER BY x)), pg_typeof(percent_rank(1) WITHIN GROUP (ORDER BY x)) FROM osa_t
+fields rank:20:8:-1,rank:20:8:-1,rank:20:8:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row 1,6,2,bigint,double precision
+SELECT 1
+> SELECT mode() WITHIN GROUP (ORDER BY n), mode() WITHIN GROUP (ORDER BY n DESC), mode() WITHIN GROUP (ORDER BY s DESC), mode() WITHIN GROUP (ORDER BY g) FROM osa_t
+fields mode:23:4:-1,mode:23:4:-1,mode:25:-1:-1,mode:23:4:-1
+row 20,30,c,1
+SELECT 1
+> SELECT mode() WITHIN GROUP (ORDER BY v) FROM (VALUES (1.0::numeric), (1.00), (2), (2.0), (1)) AS t(v)
+fields mode:1700:-1:-1
+row 1.0
+SELECT 1
+> SELECT g, percentile_disc(0.5) WITHIN GROUP (ORDER BY x) FILTER (WHERE x > 0), mode() WITHIN GROUP (ORDER BY s) FILTER (WHERE s <> 'b') FROM osa_t GROUP BY g ORDER BY g
+fields g@osa_t.1:23:4:-1,percentile_disc:701:8:-1,mode:25:-1:-1
+row 1,1.5,a
+row 2,7.25,c
+row 3,NULL,NULL
+SELECT 3
+> SELECT g, percentile_cont(g / 4.0) WITHIN GROUP (ORDER BY x), rank(g * 10) WITHIN GROUP (ORDER BY n) FROM osa_t GROUP BY g ORDER BY g
+fields g@osa_t.1:23:4:-1,percentile_cont:701:8:-1,rank:20:8:-1
+row 1,1.875,1
+row 2,0,1
+row 3,NULL,1
+SELECT 3
+> SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (1::float8), ('Infinity'), ('-Infinity')) AS t(v)
+fields percentile_cont:701:8:-1
+row 1
+SELECT 1
+> SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v), percentile_cont(0.25) WITHIN GROUP (ORDER BY v) FROM (VALUES (1::int), (2), (4), (8)) AS t(v)
+fields percentile_cont:701:8:-1,percentile_cont:701:8:-1
+row 3,1.75
+SELECT 1
+> SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY v), pg_typeof(percentile_disc(0.5) WITHIN GROUP (ORDER BY v)) FROM (VALUES (1::int), (2), (4), (8)) AS t(v)
+fields percentile_disc:23:4:-1,pg_typeof:2206:4:-1
+row 2,integer
+SELECT 1
+> SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (interval 'infinity'), (interval '1 day')) AS t(v)
+fields percentile_cont:1186:16:-1
+row infinity
+SELECT 1
+> SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY v) FROM (VALUES (interval 'infinity'), (interval '-infinity')) AS t(v)
+fields percentile_cont:1186:16:-1
+ERROR 22008 interval out of range
+> SELECT percentile_disc(1.5) WITHIN GROUP (ORDER BY x) FROM osa_t
+fields percentile_disc:701:8:-1
+ERROR 22003 percentile value 1.5 is not between 0 and 1
+> SELECT percentile_disc(-0.001) WITHIN GROUP (ORDER BY x) FROM osa_t WHERE false
+fields percentile_disc:701:8:-1
+ERROR 22003 percentile value -0.001 is not between 0 and 1
+> SELECT percentile_cont('NaN') WITHIN GROUP (ORDER BY x) FROM osa_t
+fields percentile_cont:701:8:-1
+ERROR 22003 percentile value NaN is not between 0 and 1
+> SELECT percentile_cont('Infinity') WITHIN GROUP (ORDER BY x) FROM osa_t
+fields percentile_cont:701:8:-1
+ERROR 22003 percentile value Infinity is not between 0 and 1
+> SELECT percentile_cont(array[0.5, 2, -1]) WITHIN GROUP (ORDER BY x) FROM osa_t
+fields percentile_cont:1022:-1:-1
+ERROR 22003 percentile value 2 is not between 0 and 1
+> SELECT percentile_disc(array[0.5, 2]) WITHIN GROUP (ORDER BY x) FROM osa_t WHERE false
+fields percentile_disc:1022:-1:-1
+row NULL
+SELECT 1
+> SELECT percentile_cont(1e-7 - 1) WITHIN GROUP (ORDER BY x) FROM osa_t
+fields percentile_cont:701:8:-1
+ERROR 22003 percentile value -1 is not between 0 and 1
+> SELECT percentile_cont(0.5) FROM osa_t
+ERROR 42883 function percentile_cont(numeric) does not exist at 8
+> SELECT percentile_cont(0.5 ORDER BY x) FROM osa_t
+ERROR 42883 function percentile_cont(numeric) does not exist at 8
+> SELECT sum(x) WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 42883 function sum(double precision, double precision) does not exist at 8
+> SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY x) OVER () FROM osa_t
+ERROR 0A000 OVER is not supported for ordered-set aggregate percentile_cont at 8
+> SELECT percentile_disc() WITHIN GROUP (ORDER BY 0.5, x) FROM osa_t
+ERROR 42883 function percentile_disc(numeric, double precision) does not exist at 8
+> SELECT percentile_disc(0.5, 1) WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 42883 function percentile_disc(numeric, integer, double precision) does not exist at 8
+> SELECT rank() WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 42883 function rank(double precision) does not exist at 8
+> SELECT rank(1, 2) WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 42883 function rank(integer, integer, double precision) does not exist at 8
+> SELECT rank('a') WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 22P02 invalid input syntax for type double precision: "a" at 13
+> SELECT rank(1) WITHIN GROUP (ORDER BY s) FROM osa_t
+ERROR 42804 WITHIN GROUP types text and integer cannot be matched at 13
+> SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY s) FROM osa_t
+ERROR 42883 function percentile_cont(numeric, text) does not exist at 8
+> SELECT percentile_cont(sum(x)) WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 42803 aggregate function calls cannot be nested at 24
+> SELECT percentile_cont(x) WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 42803 column "osa_t.x" must appear in the GROUP BY clause or be used in an aggregate function at 24
+> SELECT g, percentile_cont(x) WITHIN GROUP (ORDER BY x) FROM osa_t GROUP BY g
+ERROR 42803 column "osa_t.x" must appear in the GROUP BY clause or be used in an aggregate function at 27
+> SELECT percentile_cont(0.5) WITHIN GROUP (ORDER BY sum(x)) FROM osa_t
+ERROR 42803 aggregate function calls cannot be nested at 52
+> SELECT percentile_cont(generate_series(1, 2) / 4.0) WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 0A000 aggregate function calls cannot contain set-returning function calls at 24
+> SELECT mode(1) WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 42883 function mode(integer, double precision) does not exist at 8
+> SELECT mode() WITHIN GROUP (ORDER BY x, g) FROM osa_t
+ERROR 42883 function mode(double precision, integer) does not exist at 8
+> SELECT percentile_disc(DISTINCT 0.5) WITHIN GROUP (ORDER BY x) FROM osa_t
+ERROR 42601 cannot use DISTINCT with WITHIN GROUP at 38
+> SELECT x FROM osa_t WHERE percentile_disc(0.5) WITHIN GROUP (ORDER BY x) > 0
+ERROR 42803 aggregate functions are not allowed in WHERE at 27
+> CREATE VIEW osa_v AS SELECT g, percentile_disc(0.5) WITHIN GROUP (ORDER BY x DESC NULLS LAST) AS a, percentile_cont(array[0.1, 0.9]) WITHIN GROUP (ORDER BY i) FILTER (WHERE g > 1) AS b, mode() WITHIN GROUP (ORDER BY s USING >) AS c, rank(1, 'z') WITHIN GROUP (ORDER BY g, s) AS d, dense_rank(2.5) WITHIN GROUP (ORDER BY n) AS e FROM osa_t GROUP BY g
+CREATE VIEW
+> SELECT pg_get_viewdef('osa_v'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT g,
+    percentile_disc((0.5)::double precision) WITHIN GROUP (ORDER BY x DESC NULLS LAST) AS a,
+    percentile_cont((ARRAY[0.1, 0.9])::double precision[]) WITHIN GROUP (ORDER BY i) FILTER (WHERE (g > 1)) AS b,
+    mode() WITHIN GROUP (ORDER BY s DESC) AS c,
+    rank(1, 'z'::text) WITHIN GROUP (ORDER BY g, s) AS d,
+    dense_rank(2.5) WITHIN GROUP (ORDER BY ((n)::numeric)) AS e
+   FROM osa_t
+  GROUP BY g;
+SELECT 1
+> SELECT * FROM osa_v ORDER BY g
+fields g@osa_v.1:23:4:-1,a@osa_v.2:701:8:-1,b@osa_v.3:1187:-1:-1,c@osa_v.4:25:-1:-1,d@osa_v.5:20:8:-1,e@osa_v.6:20:8:-1
+row 1,3,NULL,b,4,1
+row 2,0,{10:20:00,"25 days -13:36:00"},c,1,1
+row 3,NULL,NULL,NULL,1,1
+SELECT 3
+> DROP VIEW osa_v
+DROP VIEW
+> DROP VIEW osa_t
+DROP VIEW

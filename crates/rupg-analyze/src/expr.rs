@@ -160,6 +160,10 @@ pub struct NamedArg {
 pub struct Aggref {
     /// `aggfnoid`: the OID of the aggregate function in `pg_proc`.
     pub oid: u32,
+    /// `aggkind`: `n` for a normal aggregate, `o` for an ordered-set aggregate or `h` for a hypothetical-set aggregate.
+    pub kind: u8,
+    /// `aggdirectargs`: the direct arguments of an ordered-set aggregate, which the aggregate reads once for each group.
+    pub direct: Vec<Expr>,
     /// The arguments, then the expressions that only the `ORDER BY` of the call reads.
     pub args: Vec<Expr>,
     /// The number of arguments at the start of `args`.
@@ -298,7 +302,9 @@ impl Expr {
             ExprKind::SubLink(sub) => sub.test.iter().collect(),
             ExprKind::Func(f) => f.args.iter().collect(),
             ExprKind::NamedArg(na) => vec![&na.arg],
-            ExprKind::Agg(agg) => agg.args.iter().chain(agg.filter.as_deref()).collect(),
+            ExprKind::Agg(agg) => {
+                agg.direct.iter().chain(&agg.args).chain(agg.filter.as_deref()).collect()
+            }
             ExprKind::Window(w) => w.args.iter().collect(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
@@ -341,8 +347,8 @@ impl Expr {
             ExprKind::Func(f) => f.args.iter_mut().collect(),
             ExprKind::NamedArg(na) => vec![&mut na.arg],
             ExprKind::Agg(agg) => {
-                let Aggref { args, filter, .. } = &mut **agg;
-                args.iter_mut().chain(filter.as_deref_mut()).collect()
+                let Aggref { direct, args, filter, .. } = &mut **agg;
+                direct.iter_mut().chain(args.iter_mut()).chain(filter.as_deref_mut()).collect()
             }
             ExprKind::Window(w) => w.args.iter_mut().collect(),
             ExprKind::Relabel(arg, _)

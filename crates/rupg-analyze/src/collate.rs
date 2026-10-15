@@ -78,6 +78,12 @@ fn state(expr: &Expr, levels: &[&Query], catalog: Option<&Catalog>) -> State {
         ExprKind::Case(case) => {
             case.whens.iter().map(|(_, then)| then).chain([&*case.default]).collect()
         }
+        // `assign_ordered_set_collations`: the items of `WITHIN GROUP` count only when there can be one item.
+        ExprKind::Agg(agg) if agg.kind != b'n' => {
+            let variadic = rupg_pgcatalog::builtin::proc_by_oid(agg.oid).map_or(0, |p| p.variadic);
+            let one = agg.args.len() == 1 && variadic == 0;
+            agg.direct.iter().chain(agg.args.iter().filter(|_| one)).collect()
+        }
         ExprKind::Agg(agg) => agg.args.iter().take(agg.nargs).collect(),
         // A domain with a collation that is not the default gives its own collation. Any other domain takes the collation of its input.
         ExprKind::CoerceToDomain(..) if own != DEFAULT_COLLATION => {

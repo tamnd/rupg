@@ -752,7 +752,7 @@ impl Deparser<'_> {
         }
     }
 
-    /// `get_agg_expr`: a call of an aggregate function, with `DISTINCT`, `ORDER BY` and `FILTER`.
+    /// `get_agg_expr`: a call of an aggregate function, with `DISTINCT`, `ORDER BY`, `WITHIN GROUP` and `FILTER`.
     pub(super) fn aggregate(&mut self, agg: &Aggref) -> Result<()> {
         let proc = builtin::proc_by_oid(agg.oid).ok_or_else(|| {
             Error::internal(format!("cache lookup failed for function {}", agg.oid))
@@ -762,7 +762,18 @@ impl Deparser<'_> {
         if !agg.distinct.is_empty() {
             self.buf.push_str("DISTINCT ");
         }
-        if agg.star {
+        if agg.kind != b'n' {
+            // An ordered-set aggregate has no `*` and no `VARIADIC`.
+            for (i, arg) in agg.direct.iter().enumerate() {
+                if i > 0 {
+                    self.buf.push_str(", ");
+                }
+                self.expr(arg, true)?;
+            }
+            self.buf.push_str(") WITHIN GROUP (ORDER BY ");
+            let exprs: Vec<&Expr> = agg.args.iter().collect();
+            self.order_by(&agg.order, &exprs, false)?;
+        } else if agg.star {
             self.buf.push('*');
         } else {
             let variadic = agg.variadic && proc.variadic != 0;
@@ -776,7 +787,7 @@ impl Deparser<'_> {
                 self.expr(arg, true)?;
             }
         }
-        if !agg.order.is_empty() {
+        if agg.kind == b'n' && !agg.order.is_empty() {
             self.buf.push_str(" ORDER BY ");
             let exprs: Vec<&Expr> = agg.args.iter().collect();
             self.order_by(&agg.order, &exprs, false)?;

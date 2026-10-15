@@ -528,6 +528,38 @@ impl Analyzer<'_> {
         })
     }
 
+    /// `unify_hypothetical_args`: each hypothetical direct argument of type `"any"` and its item of `WITHIN GROUP` get their common type. The type of the item wins when both are good, so that the aggregate casts one value and not all the rows.
+    fn unify_hypothetical_args(
+        &mut self,
+        args: &mut [Expr],
+        aggregated: usize,
+        declared: &[u32],
+    ) -> Result<()> {
+        let direct = args.len() - aggregated;
+        let Some(first) = direct.checked_sub(aggregated) else {
+            return Err(Error::internal(
+                "incorrect number of arguments to hypothetical-set aggregate",
+            ));
+        };
+        for harg in first..direct {
+            let aarg = direct + harg - first;
+            if declared.get(harg) != declared.get(aarg) {
+                return Err(Error::internal(
+                    "hypothetical-set aggregate has inconsistent declared argument types",
+                ));
+            }
+            if declared.get(harg) != Some(&oid::ANY) {
+                continue;
+            }
+            let pair = [args[aarg].clone(), args[harg].clone()];
+            let ty = self.common_type(&pair, "WITHIN GROUP")?;
+            let [a, h] = pair;
+            args[harg] = self.coerce_to_common(h, ty, "WITHIN GROUP")?;
+            args[aarg] = self.coerce_to_common(a, ty, "WITHIN GROUP")?;
+        }
+        Ok(())
+    }
+
     /// The types of the defaults that a candidate takes, in the order of `args` of the candidate.
     fn default_types(proc: &ProcRow, candidate: &Candidate) -> Result<Vec<u32>> {
         if candidate.ndargs == 0 {
@@ -689,8 +721,45 @@ impl Analyzer<'_> {
                 }
             }
         }
+        if let (Some(row), Some(parts)) = (aggregate, &parts)
+            && (row.kind == b'o' || row.kind == b'h')
+        {
+            let aggregated = parts.order.len();
+            let direct = args.len() - aggregated;
+            let wrong = |hint: String| {
+                Err(Error::new(
+                    SqlState::UNDEFINED_FUNCTION,
+                    format!("function {} does not exist", signature(&name, &inputs, &argnames)),
+                )
+                .with_hint(hint)
+                .at_opt(at))
+            };
+            let need = usize::try_from(row.ndirect).unwrap_or(0);
+            let plural = if need == 1 { "" } else { "s" };
+            if proc.variadic == 0 {
+                if direct != need {
+                    return wrong(format!(
+                        "There is an ordered-set aggregate {name}, but it requires {need} direct argument{plural}, not {direct}."
+                    ));
+                }
+            } else if row.kind == b'h' {
+                if candidate.nvargs != 2 * aggregated {
+                    return wrong(format!(
+                        "To use the hypothetical-set aggregate {name}, the number of hypothetical direct arguments (here {}) must match the number of ordering columns (here {aggregated}).",
+                        candidate.nvargs.saturating_sub(aggregated)
+                    ));
+                }
+            } else if candidate.nvargs <= aggregated {
+                return wrong(format!(
+                    "There is an ordered-set aggregate {name}, but it requires at least {need} direct argument{plural}."
+                ));
+            }
+            if row.kind == b'h' {
+                self.unify_hypothetical_args(&mut args, aggregated, &candidate.args)?;
+            }
+        }
         // The types of the defaults count for the polymorphic types, but the call does not keep the defaults. The planner adds them.
-        let mut actual = inputs.clone();
+        let mut actual: Vec<u32> = args.iter().map(|a| a.ty).collect();
         actual.extend(Self::default_types(proc, &candidate)?);
         let mut declared = candidate.args.clone();
         let result = poly::resolve(&actual, &mut declared, proc.rettype)?;
@@ -770,14 +839,7 @@ impl Analyzer<'_> {
                 )
                 .at_opt(at));
             }
-            if row.kind != b'n' {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    format!("ordered-set aggregate {name} is not supported yet"),
-                )
-                .at_opt(at));
-            }
-            return self.aggregate_call(proc.oid, args, parts, variadic, result, at);
+            return self.aggregate_call(proc.oid, row.kind, args, parts, variadic, result, at);
         }
         if prokind != b'f' {
             return Err(Error::new(

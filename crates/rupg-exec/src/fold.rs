@@ -368,6 +368,7 @@ impl<'a> Fold<'a> {
                 self.subqueries(&mut case.default)
             }
             ExprKind::Agg(agg) => {
+                self.all(&mut agg.direct)?;
                 self.all(&mut agg.args)?;
                 match &mut agg.filter {
                     Some(filter) => self.subqueries(filter),
@@ -585,6 +586,7 @@ impl<'a> Fold<'a> {
             }
             ExprKind::Agg(agg) => {
                 let mut agg = agg.clone();
+                agg.direct = self.list(&agg.direct)?;
                 agg.args = self.list(&agg.args)?;
                 if let Some(filter) = &agg.filter {
                     agg.filter = Some(Box::new(self.expr(filter)?));
