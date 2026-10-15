@@ -1,4 +1,4 @@
-//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_sequence_last_value`, `pg_get_sequence_data`, and the comments of `obj_description`, `col_description` and `shobj_description`.
+//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_sequence_last_value`, `pg_get_sequence_data`, the functions of the partition trees, `pg_relation_is_publishable`, and the comments of `obj_description`, `col_description` and `shobj_description`.
 //!
 //! The visibility functions are a port of the `*IsVisible` functions of `namespace.c`. Each one gives null for an OID that no object has, as the `is_missing` form of PostgreSQL does.
 
@@ -165,6 +165,26 @@ fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Record(Box::new(Record { types: vec![oid::INT8, oid::BOOL, oid::PG_LSN], values })))
 }
 
+/// `pg_partition_root(regclass)`: the top parent of the partition tree of a relation. rupg has no partitioned tables yet, so `check_rel_can_be_partition` is false for each relation, and the result is null.
+fn partition_root(_: &Call<'_>, _: &[Value]) -> Result<Value> {
+    Ok(Value::Null)
+}
+
+/// `pg_partition_tree(regclass)` and `pg_partition_ancestors(regclass)`: the members of the partition tree of a relation. rupg has no partitioned tables yet, so the result has no rows, as for a relation that is not in a partition tree.
+pub(crate) fn partition_members(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(Vec::new())
+}
+
+/// `pg_relation_is_publishable(regclass)`: `is_publishable_class`, true for a permanent table or sequence that is not a part of the catalog. Each relation of the catalog of the session has an OID from `FirstNormalObjectId` and is permanent, so a table or a sequence of the catalog is publishable, and a built-in relation is not. The result is null for an OID that no relation has.
+fn relation_is_publishable(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let relid = oid_arg(args, 0)?;
+    if reg::class_name(relid, call.session).is_none() {
+        return Ok(Value::Null);
+    }
+    let kind = call.session.catalog().and_then(|c| c.relation(relid)).map(|r| r.kind);
+    Ok(Value::Bool(matches!(kind, Some(RelKind::Table | RelKind::Sequence))))
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     let kernel: Kernel = match src {
@@ -187,6 +207,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_is_other_temp_schema" => is_other_temp_schema,
         "pg_sequence_last_value" => sequence_last_value,
         "pg_get_sequence_data" => get_sequence_data,
+        "pg_partition_root" => partition_root,
+        "pg_relation_is_publishable" => relation_is_publishable,
         _ => return None,
     };
     Some(kernel)
