@@ -1,9 +1,12 @@
-//! The names and the numbers of the encodings, as `encnames.c` gives them: `pg_char_to_encoding` and `pg_encoding_to_char`, and the SQL functions with these names.
+//! The names and the numbers of the encodings, as `encnames.c` gives them: `pg_char_to_encoding` and `pg_encoding_to_char`, and the SQL functions with these names. The conversions of `mbutils.c` and `conv.c` between UTF8 and the single-byte encodings: `convert`, `convert_from`, `convert_to` and `length(bytea, name)`. The function `to_ascii` of `ascii.c`.
 
-use rupg_common::Result;
+use std::borrow::Cow;
+
+use rupg_common::{Error, Result, SqlState};
 use rupg_types::Value;
 
-use crate::{Call, Kernel, bad_value};
+use crate::generated::single_byte::TABLES;
+use crate::{Call, Kernel, bad_value, not_yet};
 
 /// `NAMEDATALEN`: a name of this length or longer is not in the table.
 const NAMEDATALEN: usize = 64;
@@ -164,6 +167,268 @@ pub fn encoding_to_char(number: i64) -> &'static str {
     usize::try_from(number).ok().and_then(|n| NAMES.get(n)).copied().unwrap_or_default()
 }
 
+/// The encoding of each database, which is always UTF8.
+const DATABASE: &str = "UTF8";
+
+/// The conversions of `pg_conversion` between two encodings that are not UTF8. rupg does not have them yet.
+const DIRECT: [(&str, &str); 10] = [
+    ("KOI8R", "WIN1251"),
+    ("KOI8R", "WIN866"),
+    ("WIN866", "WIN1251"),
+    ("ISO_8859_5", "KOI8R"),
+    ("ISO_8859_5", "WIN1251"),
+    ("ISO_8859_5", "WIN866"),
+    ("EUC_JP", "SJIS"),
+    ("EUC_TW", "BIG5"),
+    ("LATIN2", "WIN1250"),
+    ("EUC_JIS_2004", "SHIFT_JIS_2004"),
+];
+
+/// The code points of the bytes from 0x80 to 0xFF of a single-byte encoding. LATIN1 has no table, because each of its bytes is the code point with the same number.
+fn table(encoding: &str) -> Option<&'static [u16; 128]> {
+    TABLES.iter().find(|(name, _)| *name == encoding).map(|(_, table)| table)
+}
+
+/// True for an encoding in which each character is one byte.
+fn single_byte(encoding: &str) -> bool {
+    matches!(encoding, "SQL_ASCII" | "LATIN1") || table(encoding).is_some()
+}
+
+/// The code point of a byte of a single-byte encoding, or None for a byte with no character.
+fn decode_byte(encoding: &str, b: u8) -> Option<char> {
+    if b < 0x80 || encoding == "LATIN1" {
+        return Some(char::from(b));
+    }
+    let c = table(encoding)?[usize::from(b - 0x80)];
+    if c == 0 { None } else { char::from_u32(u32::from(c)) }
+}
+
+/// The byte of a character in a single-byte encoding, or None for a character that the encoding does not have.
+fn encode_char(encoding: &str, c: char) -> Option<u8> {
+    if let Ok(b) = u8::try_from(c)
+        && (b < 0x80 || encoding == "LATIN1")
+    {
+        return Some(b);
+    }
+    let c = u16::try_from(u32::from(c)).ok().filter(|c| *c != 0)?;
+    let at = table(encoding)?.iter().position(|x| *x == c)?;
+    u8::try_from(at + 0x80).ok()
+}
+
+/// `pg_utf_mblen`: the length of a UTF-8 character from its first byte.
+fn utf8_length(b: u8) -> usize {
+    match b {
+        0x00..=0x7f => 1,
+        0xc0..=0xdf => 2,
+        0xe0..=0xef => 3,
+        0xf0..=0xf7 => 4,
+        _ => 1,
+    }
+}
+
+/// The bytes of a character as the error messages give them: at most 8 bytes, each as `0x` and two hex digits.
+fn byte_text(bytes: &[u8]) -> String {
+    bytes.iter().take(8).map(|b| format!("0x{b:02x}")).collect::<Vec<_>>().join(" ")
+}
+
+/// The length of the character at the start of `rest` in an encoding, as `pg_encoding_mblen_or_incomplete` gives it, but not more than the bytes in `rest`.
+fn char_length(encoding: &str, rest: &[u8]) -> usize {
+    let length = if encoding == "UTF8" { rest.first().map_or(1, |b| utf8_length(*b)) } else { 1 };
+    length.min(rest.len())
+}
+
+/// `report_invalid_encoding`: the error of the bad character at the start of `rest`.
+fn invalid(encoding: &str, rest: &[u8]) -> Error {
+    let bytes = &rest[..char_length(encoding, rest)];
+    Error::new(
+        SqlState::CHARACTER_NOT_IN_REPERTOIRE,
+        format!("invalid byte sequence for encoding \"{encoding}\": {}", byte_text(bytes)),
+    )
+}
+
+/// `report_untranslatable_char`: the error of the character at the start of `rest`, which the destination encoding does not have.
+fn untranslatable(from: &str, to: &str, rest: &[u8]) -> Error {
+    let bytes = &rest[..char_length(from, rest)];
+    Error::new(
+        SqlState::UNTRANSLATABLE_CHARACTER,
+        format!(
+            "character with byte sequence {} in encoding \"{from}\" has no equivalent in encoding \"{to}\"",
+            byte_text(bytes)
+        ),
+    )
+}
+
+/// The length of the valid UTF-8 at the start of `bytes`. A zero byte is not valid.
+fn utf8_valid_length(bytes: &[u8]) -> usize {
+    let end = bytes.iter().position(|b| *b == 0).unwrap_or(bytes.len());
+    match std::str::from_utf8(&bytes[..end]) {
+        Ok(_) => end,
+        Err(e) => e.valid_up_to(),
+    }
+}
+
+/// `pg_verify_mbstr_len`: the number of characters of a string in an encoding, or the error of its first bad character.
+fn verify(encoding: &str, bytes: &[u8]) -> Result<usize> {
+    if encoding == "UTF8" {
+        let ok = utf8_valid_length(bytes);
+        if ok < bytes.len() {
+            return Err(invalid(encoding, &bytes[ok..]));
+        }
+        return Ok(bytes.iter().filter(|b| (**b & 0xc0) != 0x80).count());
+    }
+    // Each encoding has the ASCII characters as single bytes.
+    if !single_byte(encoding) && !bytes.is_ascii() {
+        return Err(not_yet(format_args!("a string in the encoding {encoding}")));
+    }
+    match bytes.iter().position(|b| *b == 0) {
+        Some(at) => Err(invalid(encoding, &bytes[at..])),
+        None => Ok(bytes.len()),
+    }
+}
+
+/// `pg_do_encoding_conversion`: a string that `verify` checked in the encoding `from`, in the encoding `to`.
+fn conversion<'a>(bytes: &'a [u8], from: &str, to: &str) -> Result<Cow<'a, [u8]>> {
+    if bytes.is_empty() || from == to || to == "SQL_ASCII" {
+        return Ok(Cow::Borrowed(bytes));
+    }
+    if from == "SQL_ASCII" {
+        verify(to, bytes)?;
+        return Ok(Cow::Borrowed(bytes));
+    }
+    if from == "UTF8" && single_byte(to) {
+        let text = std::str::from_utf8(bytes).map_err(|_| invalid(from, bytes))?;
+        let mut out = Vec::with_capacity(bytes.len());
+        for (at, c) in text.char_indices() {
+            out.push(encode_char(to, c).ok_or_else(|| untranslatable(from, to, &bytes[at..]))?);
+        }
+        return Ok(Cow::Owned(out));
+    }
+    if to == "UTF8" && single_byte(from) {
+        let mut out = String::with_capacity(bytes.len());
+        for (at, b) in bytes.iter().enumerate() {
+            out.push(decode_byte(from, *b).ok_or_else(|| untranslatable(from, to, &bytes[at..]))?);
+        }
+        return Ok(Cow::Owned(out.into_bytes()));
+    }
+    let direct = DIRECT.iter().any(|&(a, b)| (a, b) == (from, to) || (b, a) == (from, to));
+    if direct || from == "UTF8" || to == "UTF8" {
+        // Each conversion keeps the ASCII characters as they are.
+        if bytes.is_ascii() {
+            return Ok(Cow::Borrowed(bytes));
+        }
+        return Err(not_yet(format_args!("the conversion from {from} to {to}")));
+    }
+    Err(Error::new(
+        SqlState::UNDEFINED_FUNCTION,
+        format!("default conversion function for encoding \"{from}\" to \"{to}\" does not exist"),
+    ))
+}
+
+/// `pg_convert`: a string in the encoding `from` in the encoding `to`, with the names of the encodings.
+fn convert_bytes<'a>(bytes: &'a [u8], from: &str, to: &str) -> Result<Cow<'a, [u8]>> {
+    let source = encoding(from).ok_or_else(|| {
+        Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("invalid source encoding name \"{from}\""),
+        )
+    })?;
+    let destination = encoding(to).ok_or_else(|| {
+        Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("invalid destination encoding name \"{to}\""),
+        )
+    })?;
+    verify(source, bytes)?;
+    conversion(bytes, source, destination)
+}
+
+/// The SQL function `convert(bytea, name, name)`.
+fn pg_convert(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Bytea(bytes), from, to] = args else { return Err(bad_value()) };
+    let (from, to) = (from.as_str().ok_or_else(bad_value)?, to.as_str().ok_or_else(bad_value)?);
+    Ok(Value::Bytea(convert_bytes(bytes, from, to)?.into_owned()))
+}
+
+/// The SQL function `convert_from(bytea, name)`: a string in an encoding as text of the database.
+fn pg_convert_from(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Bytea(bytes), from] = args else { return Err(bad_value()) };
+    let out = convert_bytes(bytes, from.as_str().ok_or_else(bad_value)?, DATABASE)?;
+    let text = String::from_utf8(out.into_owned()).map_err(|_| bad_value())?;
+    Ok(Value::Text(text))
+}
+
+/// The SQL function `convert_to(text, name)`: text of the database in an encoding.
+fn pg_convert_to(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Text(text), to] = args else { return Err(bad_value()) };
+    let out = convert_bytes(text.as_bytes(), DATABASE, to.as_str().ok_or_else(bad_value)?)?;
+    Ok(Value::Bytea(out.into_owned()))
+}
+
+/// The SQL function `length(bytea, name)`: the number of characters of a string in an encoding.
+fn length_in_encoding(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Bytea(bytes), name] = args else { return Err(bad_value()) };
+    let name = name.as_str().ok_or_else(bad_value)?;
+    let encoding = encoding(name).ok_or_else(|| {
+        Error::new(SqlState::INVALID_PARAMETER_VALUE, format!("invalid encoding name \"{name}\""))
+    })?;
+    let count = verify(encoding, bytes)?;
+    Ok(Value::Int4(i32::try_from(count).map_err(|_| bad_value())?))
+}
+
+/// `pg_to_ascii`: the text with each byte that is not ASCII changed to the ASCII character of the encoding for it. Only LATIN1, LATIN2, LATIN9 and WIN1250 have such characters.
+fn to_ascii(text: &str, encoding: &str) -> Result<Value> {
+    let (ascii, start): (&[u8], u8) = match encoding {
+        "LATIN1" => (b"  cL Y  \"Ca  -R     'u .,      ?AAAAAAACEEEEIIII NOOOOOxOUUUUYTBaaaaaaaceeeeiiii nooooo/ouuuuyty", 160),
+        "LATIN2" => (b" A L LS \"SSTZ-ZZ a,l'ls ,sstz\"zzRAAAALCCCEEEEIIDDNNOOOOxRUUUUYTBraaaalccceeeeiiddnnoooo/ruuuuyt.", 160),
+        "LATIN9" => (b"  cL YS sCa  -R     Zu .z   EeY?AAAAAAACEEEEIIII NOOOOOxOUUUUYTBaaaaaaaceeeeiiii nooooo/ouuuuyty", 160),
+        "WIN1250" => (b"  ' \"    %S<STZZ `'\"\".--  s>stzz   L A  \"CS  -RZ  ,l'u .,as L\"lzRAAAALCCCEEEEIIDDNNOOOOxRUUUUYTBraaaalccceeeeiiddnnoooo/ruuuuyt ", 128),
+        _ => {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("encoding conversion from {encoding} to ASCII not supported"),
+            ));
+        }
+    };
+    let out: String = text
+        .bytes()
+        .map(|b| match b {
+            0..0x80 => char::from(b),
+            b if b < start => ' ',
+            b => char::from(ascii[usize::from(b - start)]),
+        })
+        .collect();
+    Ok(Value::Text(out))
+}
+
+/// The SQL function `to_ascii(text)`, for the encoding of the database.
+fn to_ascii_default(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    to_ascii(args.first().and_then(Value::as_str).ok_or_else(bad_value)?, DATABASE)
+}
+
+/// The SQL function `to_ascii(text, name)`.
+fn to_ascii_encname(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [text, name] = args else { return Err(bad_value()) };
+    let name = name.as_str().ok_or_else(bad_value)?;
+    let encoding = encoding(name).ok_or_else(|| {
+        Error::new(SqlState::UNDEFINED_OBJECT, format!("{name} is not a valid encoding name"))
+    })?;
+    to_ascii(text.as_str().ok_or_else(bad_value)?, encoding)
+}
+
+/// The SQL function `to_ascii(text, integer)`.
+fn to_ascii_enc(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [text, number] = args else { return Err(bad_value()) };
+    let number = number.as_i64().ok_or_else(bad_value)?;
+    let encoding = encoding_to_char(number);
+    if encoding.is_empty() {
+        return Err(Error::new(
+            SqlState::UNDEFINED_OBJECT,
+            format!("{number} is not a valid encoding code"),
+        ));
+    }
+    to_ascii(text.as_str().ok_or_else(bad_value)?, encoding)
+}
+
 /// The SQL function `pg_char_to_encoding(name)`.
 fn pg_char_to_encoding(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let name = args.first().and_then(Value::as_str).ok_or_else(bad_value)?;
@@ -181,6 +446,13 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
         "PG_char_to_encoding" => pg_char_to_encoding,
         "PG_encoding_to_char" => pg_encoding_to_char,
+        "pg_convert" => pg_convert,
+        "pg_convert_from" => pg_convert_from,
+        "pg_convert_to" => pg_convert_to,
+        "length_in_encoding" => length_in_encoding,
+        "to_ascii_default" => to_ascii_default,
+        "to_ascii_encname" => to_ascii_encname,
+        "to_ascii_enc" => to_ascii_enc,
         _ => return None,
     })
 }
@@ -203,5 +475,34 @@ mod tests {
         for (number, name) in NAMES.iter().enumerate().filter(|(_, n)| !n.is_empty()) {
             assert_eq!(usize::try_from(char_to_encoding(name)).ok(), Some(number));
         }
+    }
+
+    #[test]
+    fn single_byte_tables() {
+        for (name, table) in &TABLES {
+            assert!(NAMES.contains(name), "{name}");
+            for (n, c) in table.iter().enumerate().filter(|(_, c)| **c != 0) {
+                let b = u8::try_from(n + 0x80).unwrap();
+                let c = char::from_u32(u32::from(*c)).unwrap();
+                assert_eq!(decode_byte(name, b), Some(c));
+                assert_eq!(encode_char(name, c), Some(b), "{name} {c}");
+            }
+        }
+    }
+
+    #[test]
+    fn conversions() {
+        let to = |s: &str, e: &str| convert_bytes(s.as_bytes(), "UTF8", e).map(Cow::into_owned);
+        assert_eq!(to("aé€", "LATIN9").unwrap(), b"a\xe9\xa4");
+        assert_eq!(to("é", "latin1").unwrap(), b"\xe9");
+        let message = to("€", "LATIN1").unwrap_err().to_string();
+        assert!(message.contains("0xe2 0x82 0xac in encoding \"UTF8\" has no"), "{message}");
+        let from = |b: &[u8], e: &str| convert_bytes(b, e, "UTF8").map(Cow::into_owned);
+        assert_eq!(from(b"\xa4", "LATIN9").unwrap(), "€".as_bytes());
+        assert!(from(b"\x81", "WIN1252").is_err());
+        assert!(from(b"a\x00", "LATIN1").is_err());
+        assert_eq!(utf8_valid_length(b"ab\xc3\x28"), 2);
+        assert_eq!(utf8_valid_length(b"a\x00b"), 1);
+        assert_eq!(verify("UTF8", "aé€".as_bytes()).unwrap(), 3);
     }
 }

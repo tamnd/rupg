@@ -1,4 +1,4 @@
-# PostgreSQL 19beta4 on REL_19_STABLE. Used by the engine: rupg-wire, rupg-sql, rupg-plpgsql, rupg-pgcatalog, rupg-common and rupg-session. See spec/22-crate-layout.md section 22.8.
+# PostgreSQL 19beta4 on REL_19_STABLE. Used by the engine: rupg-wire, rupg-sql, rupg-plpgsql, rupg-pgcatalog, rupg-common, rupg-func and rupg-session. See spec/22-crate-layout.md section 22.8.
 source https://github.com/postgres/postgres
 rev 7d3d2db7d5e533fa42a4202c7d308cbb0cbf9333
 url https://raw.githubusercontent.com/postgres/postgres/{rev}/{path}
@@ -126,3 +126,29 @@ b788044e274f4bb12c35c7768cdb45931d6625cb60cb1400615d8a6f6c0057d0  src/include/ca
 662fa2610f5361f372827dd3ea46ed3ff2949e6357c5194d8583ce816ac6d5de  src/include/catalog/genbki.h
 49967b65d8b0ab1a934f06801ef942adf3b4091e92a3e96ebb703ed3c5267be1  src/include/access/transam.h
 25f56667fc0be98e11d2981974a2793fb3057814154d07c7f1fe5d07e5dbfc93  src/include/mb/pg_wchar.h
+fd17485ba63011d01a092880becbf84e3112d7de95a64a02396f3d6bbc986f11  src/backend/utils/mb/Unicode/iso8859_2_to_utf8.map
+e584a38d25ac571cab46a404334a6eedc4e8197db1d8d7e39b861f7a2e5a4c55  src/backend/utils/mb/Unicode/iso8859_3_to_utf8.map
+9e71da9c7180539a37e5158b9d45eb167d7b65dd065b8af28d52ad82c2fff360  src/backend/utils/mb/Unicode/iso8859_4_to_utf8.map
+167930d504b27764d3e1c58a130d49c13e8c6ee9b2e2c8511d408bec1e3ad150  src/backend/utils/mb/Unicode/iso8859_5_to_utf8.map
+2c9c9fd02f0ecc5f3ea7e85942f30b439a6a6bb658eb75151d54e5b1648114c8  src/backend/utils/mb/Unicode/iso8859_6_to_utf8.map
+0bebe3427445d9c1a1a8c27efe21ba6f751c8f83d1b4e5a2fae8545e149e458a  src/backend/utils/mb/Unicode/iso8859_7_to_utf8.map
+fb34e19159a4bb310afbcadff5720b331ffc6b262cd7a4e88199d64c9f32fc02  src/backend/utils/mb/Unicode/iso8859_8_to_utf8.map
+46530cf58e9386df858db60b1335d3712218853e755a772579df3dd655dffad4  src/backend/utils/mb/Unicode/iso8859_9_to_utf8.map
+1aff90ab71487d5ff9dbdcf9605fb089eeb04763b5cf59063b8879d6612c5cb8  src/backend/utils/mb/Unicode/iso8859_10_to_utf8.map
+42d5db8a22029a125c065e330eee41ca55573f27a42308574b8474656537a751  src/backend/utils/mb/Unicode/iso8859_13_to_utf8.map
+b0856f47ca6c28e60d051dcae41df3fe8764194df1af27f92cf20a347d835cd0  src/backend/utils/mb/Unicode/iso8859_14_to_utf8.map
+7d6a36fd889cd666aa9b07be49d4f99e2cd14e2b1fbfca259216a77a79aea0ef  src/backend/utils/mb/Unicode/iso8859_15_to_utf8.map
+433617fc7fa77bda64f6a353f46968d500308d5266d59bf7689e10d91a331e99  src/backend/utils/mb/Unicode/iso8859_16_to_utf8.map
+a4c723895f3284f6c5daf92b2a36aefbe40aa114a45af1b5e7c4c93a521ea1b5  src/backend/utils/mb/Unicode/koi8r_to_utf8.map
+dcd6d99f8a13aa2fa169857705ac23d866323242c2546d37e1e092cba9916faa  src/backend/utils/mb/Unicode/koi8u_to_utf8.map
+9a83635adfab4c9b4a2e22615e9773fe30ae53684daecea9b370cf8a852c9813  src/backend/utils/mb/Unicode/win866_to_utf8.map
+0d3b7ec016f3a82d8d98d1655bb26f3445d8fe81299155f66e5847e823085799  src/backend/utils/mb/Unicode/win874_to_utf8.map
+3505dd7dc3576f5a32d38ece7c1ef007a7d43227b2968cd7e636f79341c83ab3  src/backend/utils/mb/Unicode/win1250_to_utf8.map
+64248427cd199df442e1d50e3b78fe4b86dac566b3c94664e12565cdbc7b9508  src/backend/utils/mb/Unicode/win1251_to_utf8.map
+ba801eae90eb7b5d1df08fe95baca077b3ee4a82eca6d6e8c8311e648ad4ea9b  src/backend/utils/mb/Unicode/win1252_to_utf8.map
+f9f599e94d61eb2c192e37bc64051f4bb6c65514c4cf01db975816460f7348a3  src/backend/utils/mb/Unicode/win1253_to_utf8.map
+fc93c3d29d12cf943378d39088af4be720a6cf2191d7cfe4df294bf663ce0368  src/backend/utils/mb/Unicode/win1254_to_utf8.map
+40ba7449a6434a35bf66df3fed3aa81fd1c9540fda4a63404371664a22c779b6  src/backend/utils/mb/Unicode/win1255_to_utf8.map
+5ba54afcf59b79b9ab2595ffe207b3aaf74d906d3999e0b315dfaa37a9801742  src/backend/utils/mb/Unicode/win1256_to_utf8.map
+da3df66c4e67d9dd4a38d61d527879264c53df0fa7e5240252baf302719fd97d  src/backend/utils/mb/Unicode/win1257_to_utf8.map
+89ccc11ce72795b67b55454a6c04124ec946f94481819355cb39b8c6c130ba29  src/backend/utils/mb/Unicode/win1258_to_utf8.map
