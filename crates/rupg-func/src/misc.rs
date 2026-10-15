@@ -73,6 +73,45 @@ fn pg_backend_pid(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Int4(call.session.backend_pid()))
 }
 
+/// The longest wait of one call of [`crate::Session::sleep`], 10 minutes, as in `pg_sleep`.
+const LONGEST_WAIT_US: i64 = 600_000_000;
+
+/// `pg_sleep`: waits for the seconds, rounded up to a microsecond, or until a cancel. NaN and a value of zero or less give no wait. A wait longer than `i64::MAX / 2` microseconds stops there, as in PostgreSQL.
+fn pg_sleep(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::Float8(secs)] = args else { return Err(bad_value()) };
+    sleep(call, *secs)
+}
+
+/// `pg_sleep_until`: `pg_sleep(extract(epoch from $1) - extract(epoch from clock_timestamp()))`. `infinity` waits with no end, and `-infinity` gives no wait.
+#[allow(clippy::cast_precision_loss)]
+fn pg_sleep_until(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::TimestampTz(at)] = args else { return Err(bad_value()) };
+    let secs = match *at {
+        i64::MAX => f64::INFINITY,
+        i64::MIN => f64::NEG_INFINITY,
+        at => at.saturating_sub(call.session.clock()) as f64 / 1e6,
+    };
+    sleep(call, secs)
+}
+
+/// The loop of `pg_sleep`, which looks for a cancel before each wait.
+#[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
+fn sleep(call: &Call<'_>, secs: f64) -> Result<Value> {
+    if secs.is_nan() || secs <= 0.0 {
+        return Ok(Value::Text(String::new()));
+    }
+    let micros = (secs * 1e6).ceil().min((i64::MAX / 2) as f64) as i64;
+    let end = call.session.clock().saturating_add(micros);
+    loop {
+        call.session.interrupted()?;
+        let delay = end.saturating_sub(call.session.clock());
+        if delay <= 0 {
+            return Ok(Value::Text(String::new()));
+        }
+        call.session.sleep(delay.min(LONGEST_WAIT_US))?;
+    }
+}
+
 fn pg_client_encoding(_: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::text("UTF8"))
 }
@@ -208,6 +247,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "tid_block" => tid_block,
         "tid_offset" => tid_offset,
         "pg_backend_pid" => pg_backend_pid,
+        "pg_sleep" => pg_sleep,
         "pg_client_encoding" => pg_client_encoding,
         "getdatabaseencoding" => getdatabaseencoding,
         "pg_is_in_recovery" => pg_is_in_recovery,
@@ -225,6 +265,7 @@ pub(crate) fn sql_function(func: u32) -> Option<Kernel> {
         879 => lpad_space,
         880 => rpad_space,
         1810 | 1811 => bit_length,
+        3936 => pg_sleep_until,
         1812 => crate::bit::bit_length,
         1426 => crate::geo::path_contain_pt,
         2003 | 2004 => any_concat,

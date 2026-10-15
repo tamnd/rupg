@@ -126,6 +126,8 @@ pub struct Backend {
     pub state_change: Option<i64>,
     /// True when the session waits for a message of the client, the wait event `ClientRead`.
     pub reading: bool,
+    /// The type and the name of the wait event of a wait in a statement, such as `Timeout` and `PgSleep` in `pg_sleep`.
+    pub waiting: Option<(&'static str, &'static str)>,
     pub client: Client,
     /// The TLS of the session, or `None` for a session with no TLS.
     pub ssl: Option<Ssl>,
@@ -158,7 +160,11 @@ fn valid_oid(oid: u32) -> Value {
 
 /// The wait event of a row as its type and its name.
 fn wait_event(backend: &Backend) -> (Option<&'static str>, Option<&'static str>) {
-    if backend.reading { (Some("Client"), Some("ClientRead")) } else { (None, None) }
+    match backend.waiting {
+        Some((kind, name)) => (Some(kind), Some(name)),
+        None if backend.reading => (Some("Client"), Some("ClientRead")),
+        None => (None, None),
+    }
 }
 
 /// The 31 columns of `pg_stat_get_activity` for a row.

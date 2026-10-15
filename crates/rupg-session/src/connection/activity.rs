@@ -46,6 +46,13 @@ impl Activity {
         rows
     }
 
+    /// `pgstat_report_wait_start` and `pgstat_report_wait_end`: the type and the name of the wait event of a wait in a statement, or `None` at the end of the wait.
+    pub(crate) fn report_wait(&self, store: &Store, event: Option<(&'static str, &'static str)>) {
+        if let Some(number) = self.number {
+            store.report(number, |backend| backend.waiting = event);
+        }
+    }
+
     /// `pgstat_clear_backend_activity_snapshot`.
     pub(crate) fn clear(&self) {
         self.snapshot.borrow_mut().take();

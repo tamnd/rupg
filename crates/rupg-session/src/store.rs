@@ -305,6 +305,15 @@ impl Store {
         count(&backends)
     }
 
+    /// A wait of a session for `time`, which lets the other tasks run. A store with no tasks waits on the release of the lock, and a spurious wake ends the wait early.
+    pub(crate) fn nap(&self, time: Duration) {
+        if let Some(tasks) = &self.tasks {
+            tasks.sleep(time);
+            return;
+        }
+        drop(self.free.wait_timeout(self.state(), time).unwrap_or_else(PoisonError::into_inner));
+    }
+
     fn backends_mut(&self) -> MutexGuard<'_, Vec<Option<Slot>>> {
         self.backends.lock().unwrap_or_else(PoisonError::into_inner)
     }
