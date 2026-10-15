@@ -783,6 +783,11 @@ fn column_number(relid: u32, name: &str, session: &dyn Session) -> Result<i16> {
     }
 }
 
+/// `get_attnum`: the number of a column of a relation by name, with the system columns. A dropped column has no number.
+pub(crate) fn attnum(relid: u32, name: &str, session: &dyn Session) -> Option<i16> {
+    attributes_of(relid, session).iter().find(|a| a.name == name && !a.dropped).map(|a| a.num)
+}
+
 /// `has_column_privilege`: the role, the relation, the column, then the privileges.
 fn has_column_privilege(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let with_role = args.len() == 4;
