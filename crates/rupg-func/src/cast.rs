@@ -312,7 +312,7 @@ pub fn local_time(session: &dyn Session, utc: i64) -> Result<(i64, i32)> {
 }
 
 /// The instant of a local time of the session, with the offset that `DetermineTimeZoneOffset` gives for the time.
-fn instant(session: &dyn Session, local: i64) -> Result<i64> {
+pub(crate) fn instant(session: &dyn Session, local: i64) -> Result<i64> {
     let zone = session.zone()?;
     let seconds = local.div_euclid(USECS_PER_SEC) - UNIX_TO_POSTGRES_USECS / USECS_PER_SEC;
     let (west, _) = types::local_offset(seconds, zone.as_ref());

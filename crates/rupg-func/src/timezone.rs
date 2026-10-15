@@ -5,7 +5,7 @@ use std::rc::Rc;
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{
     FixedZone, Interval, TimeZone, USECS_PER_DAY, USECS_PER_SEC, Value, ZoneName,
-    decode_timezone_name, interval_out, local_offset,
+    decode_numeric_timezone, decode_timezone_name, interval_out, local_offset,
 };
 
 use crate::cast::{infinite, timestamp_range, valid_timestamp};
@@ -55,6 +55,26 @@ pub(crate) fn lookup_timezone(call: &Call<'_>, zone: &Value) -> Result<Rc<dyn Ti
     Ok(match decode(call, zone_name(zone)?)? {
         Named::Fixed(offset) => Rc::new(FixedZone { offset, abbrev: String::new() }),
         Named::Dynamic(zone) | Named::Zone(zone) => zone,
+    })
+}
+
+/// `parse_sane_timezone`: the offset in seconds west of UTC of a zone at a local time. A numeric zone comes first, then the abbreviations and the zones of the data.
+pub(crate) fn parse_sane_timezone(call: &Call<'_>, local: i64, zone: &Value) -> Result<i32> {
+    let name = zone_name(zone)?;
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("invalid input syntax for type numeric time zone: \"{name}\""),
+        )
+        .with_hint("Numeric time zones must have \"-\" or \"+\" as first character."));
+    }
+    if let Some(west) = decode_numeric_timezone(name).map_err(type_error)? {
+        return Ok(west);
+    }
+    Ok(match decode(call, name)? {
+        Named::Fixed(east) => -east,
+        Named::Dynamic(zone) => abbrev_offset(local, name, zone.as_ref()),
+        Named::Zone(zone) => local_offset(whole_seconds(local), zone.as_ref()).0,
     })
 }
 

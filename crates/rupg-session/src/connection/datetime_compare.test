@@ -1,0 +1,49 @@
+> SET TimeZone TO 'UTC'
+SET
+> SET TimeZone TO 'America/New_York'
+SET
+TimeZone=America/New_York
+> SELECT date '2024-01-01' = timestamp '2024-01-01', date '2024-01-01' < timestamp '2024-01-01 00:00:01', date '2024-01-02' > timestamp '2024-01-01 23:59:59', timestamp '2024-01-01' <> date '2024-01-01', timestamp '2024-01-01 12:00' >= date '2024-01-01', timestamp '2024-01-01 12:00' <= date '2024-01-01'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f,t,f
+SELECT 1
+> SELECT date '2024-07-01' = timestamptz '2024-07-01 04:00+00', date '2024-07-01' < timestamptz '2024-07-01 04:00+00', timestamptz '2024-07-01 03:59+00' < date '2024-07-01', timestamp '2024-07-01 12:00' = timestamptz '2024-07-01 16:00+00', timestamptz '2024-07-01 16:00+00' > timestamp '2024-07-01 11:00'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,t
+SELECT 1
+> SELECT date_cmp_timestamp(date '2024-01-01', timestamp '2024-01-01'), date_cmp_timestamptz(date '2024-01-01', timestamptz '2024-01-01 06:00+00'), timestamp_cmp_date(timestamp '2024-01-01 00:00:01', date '2024-01-01'), timestamp_cmp_timestamptz(timestamp '2024-01-01', timestamptz '2024-01-01 05:00+00'), timestamptz_cmp_date(timestamptz '2024-01-01 04:59+00', date '2024-01-01'), timestamptz_cmp_timestamp(timestamptz '2024-01-01', timestamp '2024-01-01')
+fields date_cmp_timestamp:23:4:-1,date_cmp_timestamptz:23:4:-1,timestamp_cmp_date:23:4:-1,timestamp_cmp_timestamptz:23:4:-1,timestamptz_cmp_date:23:4:-1,timestamptz_cmp_timestamp:23:4:-1
+row 0,-1,1,0,-1,0
+SELECT 1
+> SELECT date 'infinity' = timestamp 'infinity', date '-infinity' = timestamptz '-infinity', date 'infinity' > timestamp '294276-12-31', date '5874897-12-31' > timestamp 'infinity', date '5874897-12-31' < timestamp 'infinity', date '5874897-12-31' = timestamp 'infinity', date '4713-11-24 BC' < timestamptz '4713-11-24 12:00+00 BC', date '300000-01-01' = timestamptz 'infinity'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,f,t,f,t,f
+SELECT 1
+> SELECT timestamp '294276-12-31 23:59:59' < timestamptz 'infinity', timestamp '294276-12-31 23:59:59' = timestamptz 'infinity', timestamp '294276-12-31 23:59:59' > timestamptz '294276-12-31 23:00:00+00', timestamp '4713-11-24 00:00:00 BC' < timestamptz '4713-11-24 00:00:00+00 BC', timestamp '4713-11-24 00:00:00 BC' > timestamptz '-infinity'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t
+SELECT 1
+> SELECT date_cmp(date '2024-01-01', date '2024-01-02'), time_cmp(time '12:00', time '11:00'), timetz_cmp(timetz '12:00+01', timetz '11:00+00'), timestamp_cmp(timestamp '2024-01-01', timestamp '2024-01-01'), timestamptz_cmp(timestamptz '2024-01-01 00:00+00', timestamptz '2024-01-01 00:00+01'), interval_cmp(interval '1 month', interval '30 days'), interval_cmp(interval '1 day', interval '23 hours')
+fields date_cmp:23:4:-1,time_cmp:23:4:-1,timetz_cmp:23:4:-1,timestamp_cmp:23:4:-1,timestamptz_cmp:23:4:-1,interval_cmp:23:4:-1,interval_cmp:23:4:-1
+row -1,1,-1,0,1,0,1
+SELECT 1
+> SELECT numeric_cmp(1.5, 1.50), numeric_cmp('NaN', 'Infinity'), bpcharcmp('a'::bpchar, 'a  '::bpchar), byteacmp('\x01', '\x0102'), uuid_cmp('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11', 'a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a12')
+fields numeric_cmp:23:4:-1,numeric_cmp:23:4:-1,bpcharcmp:23:4:-1,byteacmp:23:4:-1,uuid_cmp:23:4:-1
+row 0,1,0,-1,-1
+SELECT 1
+> SELECT 'abc' ~<~ 'abe', 'abc' ~<=~ 'abc', 'b' ~>=~ 'abc', 'b' ~>~ 'B', 'a'::bpchar ~<~ 'b'::bpchar, 'a '::bpchar ~>=~ 'a'::bpchar
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,t,t
+SELECT 1
+> SELECT d FROM (VALUES (date '2024-01-02'), (date '2024-01-01')) v (d) WHERE d < timestamp '2024-01-01 12:00'
+fields d:1082:4:-1
+row 2024-01-01
+SELECT 1
+> SELECT date_add(timestamptz '2024-03-09 12:00-05', interval '1 day', 'UTC'), date_add(timestamptz '2024-03-09 12:00-05', interval '1 day', 'America/New_York'), date_subtract(timestamptz '2024-03-11 12:00-04', interval '1 day', 'Europe/Paris'), date_add(timestamptz '2024-01-31 00:00+00', interval '1 month', 'Asia/Tokyo')
+fields date_add:1184:8:-1,date_add:1184:8:-1,date_subtract:1184:8:-1,date_add:1184:8:-1
+row 2024-03-10 13:00:00-04,2024-03-10 12:00:00-04,2024-03-10 12:00:00-04,2024-02-28 19:00:00-05
+SELECT 1
+> SELECT date_add(timestamptz '2024-01-01', interval '1 day', 'Mars/Olympus')
+ERROR 22023 time zone "Mars/Olympus" not recognized
+> SELECT date_add(timestamptz 'infinity', interval '-infinity', 'UTC')
+ERROR 22008 timestamp out of range

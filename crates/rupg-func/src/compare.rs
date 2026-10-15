@@ -4,8 +4,13 @@ use std::cmp::Ordering;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ProcRow};
-use rupg_types::{Array, RegKind, USECS_PER_DAY, USECS_PER_SEC, Value, oid};
+use rupg_types::{
+    Array, DATE_INFINITY, DATE_NEGATIVE_INFINITY, POSTGRES_EPOCH_JDATE, RegKind,
+    TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, UNIX_TO_POSTGRES_USECS, USECS_PER_DAY,
+    USECS_PER_SEC, Value, oid,
+};
 
+use crate::cast::{TIMESTAMP_END_JULIAN, infinite, valid_timestamp};
 use crate::io::base_type;
 use crate::{Call, Kernel, bad_value, multirange, range};
 
@@ -223,6 +228,12 @@ fn array_order(left: u32, a: &Array<Value>, right: u32, b: &Array<Value>) -> Res
 /// The order of the two arguments of a call.
 fn order(call: &Call<'_>, args: &[Value]) -> Result<Ordering> {
     let [a, b] = args else { return Err(bad_value()) };
+    if let (Some(x), Some(y)) = (datetime_rank(a), datetime_rank(b))
+        && x != y
+    {
+        let rank = x.max(y);
+        return Ok(promote(call, a, rank)?.cmp(&promote(call, b, rank)?));
+    }
     let left = call.args.first().copied().unwrap_or(0);
     let right = call.args.get(1).copied().unwrap_or(0);
     if family(left) == Some(Family::Array)
@@ -356,7 +367,51 @@ fn oidvector_by_src(src: &str) -> Option<Kernel> {
 
 /// True when both arguments of the function are of one family that compares here.
 fn comparable(left: u32, right: u32) -> bool {
-    family(left).is_some() && family(left) == family(right)
+    let (left, right) = (family(left), family(right));
+    left.is_some() && (left == right || datetime(left) && datetime(right))
+}
+
+/// True for the families of `date`, `timestamp` and `timestamptz`, which compare with each other.
+fn datetime(family: Option<Family>) -> bool {
+    matches!(family, Some(Family::Date | Family::Timestamp | Family::TimestampTz))
+}
+
+/// The rank of a date, a timestamp and a `timestamptz` for the comparisons across these types: the value of the lower rank is promoted to the type of the higher rank.
+fn datetime_rank(value: &Value) -> Option<u8> {
+    match value {
+        Value::Date(_) => Some(0),
+        Value::Timestamp(_) => Some(1),
+        Value::TimestampTz(_) => Some(2),
+        _ => None,
+    }
+}
+
+/// A date, a timestamp or a `timestamptz` promoted to the type of a rank, as `date2timestamp_safe`, `date2timestamptz_safe` and `timestamp2timestamptz_safe` give it with a soft error. The result is twice the microseconds. A value above the range is one less than twice infinity and a value below the range is one more than twice minus infinity, so it is above or below each finite value and not equal to an infinity, as `date_cmp_timestamp_internal`, `date_cmp_timestamptz_internal` and `timestamp_cmp_timestamptz_internal` give it.
+fn promote(call: &Call<'_>, value: &Value, rank: u8) -> Result<i128> {
+    let above = 2 * i128::from(TIMESTAMP_INFINITY) - 1;
+    let below = 2 * i128::from(TIMESTAMP_NEGATIVE_INFINITY) + 1;
+    let ts = match *value {
+        Value::Date(DATE_NEGATIVE_INFINITY) => TIMESTAMP_NEGATIVE_INFINITY,
+        Value::Date(DATE_INFINITY) => TIMESTAMP_INFINITY,
+        Value::Date(d) if d >= TIMESTAMP_END_JULIAN - POSTGRES_EPOCH_JDATE => return Ok(above),
+        Value::Date(d) => i64::from(d) * USECS_PER_DAY,
+        Value::Timestamp(t) | Value::TimestampTz(t) => t,
+        _ => return Err(bad_value()),
+    };
+    if infinite(ts) || rank < 2 || matches!(value, Value::TimestampTz(_)) {
+        return Ok(2 * i128::from(ts));
+    }
+    let zone = call.session.zone()?;
+    let seconds = ts.div_euclid(USECS_PER_SEC) - UNIX_TO_POSTGRES_USECS / USECS_PER_SEC;
+    let (west, _) = rupg_types::local_offset(seconds, zone.as_ref());
+    let utc = ts + i64::from(west) * USECS_PER_SEC;
+    Ok(if valid_timestamp(utc) {
+        2 * i128::from(utc)
+    } else if ts < 0 {
+        below
+    } else {
+        above
+    })
 }
 
 /// The kernel of a comparison operator for its argument types.
@@ -407,6 +462,14 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     if !comparable(*left, *right) {
         return None;
     }
+    // The operators `~<~`, `~<=~`, `~>=~` and `~>~` compare the bytes, as the comparison of text does here.
+    match src {
+        "text_pattern_lt" | "bpchar_pattern_lt" => return Some(lt),
+        "text_pattern_le" | "bpchar_pattern_le" => return Some(le),
+        "text_pattern_ge" | "bpchar_pattern_ge" => return Some(ge),
+        "text_pattern_gt" | "bpchar_pattern_gt" => return Some(gt),
+        _ => {}
+    }
     if let Some(kernel) = oidvector_by_src(src) {
         Some(kernel)
     } else if src == "bpchar_larger" || src == "tidlarger" {
@@ -428,6 +491,21 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
                 | "pg_lsn_cmp"
                 | "range_cmp"
                 | "multirange_cmp"
+                | "bpcharcmp"
+                | "byteacmp"
+                | "date_cmp"
+                | "date_cmp_timestamp"
+                | "date_cmp_timestamptz"
+                | "interval_cmp"
+                | "numeric_cmp"
+                | "time_cmp"
+                | "timestamp_cmp"
+                | "timestamp_cmp_date"
+                | "timestamp_cmp_timestamptz"
+                | "timestamptz_cmp_date"
+                | "timestamptz_cmp_timestamp"
+                | "timetz_cmp"
+                | "uuid_cmp"
         )
     {
         Some(cmp)

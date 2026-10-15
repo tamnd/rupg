@@ -12,6 +12,7 @@ mod agg;
 mod array;
 mod binary;
 mod bit;
+mod calendar;
 mod cash;
 mod cast;
 mod catinfo;
@@ -356,6 +357,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| datetime::by_src(src))
         .or_else(|| extract::by_src(src))
         .or_else(|| timezone::by_src(src))
+        .or_else(|| calendar::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))
