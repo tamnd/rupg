@@ -6,6 +6,8 @@
 
 use std::cmp::Ordering;
 
+use rupg_common::SqlState;
+
 use crate::error::TypeError;
 use crate::json::{self, Kind, Open, Sink, Stop};
 use crate::jsonb::escape;
@@ -388,6 +390,164 @@ impl<'a> JsonTree<'a> {
         }
     }
 
+    /// `setPath`: the text of the value with the part at `path` replaced, created, deleted or inserted. `new` is the text of the new part, which [`PathOp::Delete`] does not use. The keys of a new field are not in their sorted place, so give the text to `jsonb_in`. The root must be an array or an object, and `path` must not be empty.
+    ///
+    /// # Errors
+    ///
+    /// A null element or an element that is not an integer in the path where the value has an array, `cannot replace existing key` for an insert into an object, and `stack depth limit exceeded`.
+    pub fn set_path(
+        &self,
+        path: &[Option<&str>],
+        new: &str,
+        op: PathOp,
+    ) -> Result<String, TypeError> {
+        let mut out = String::with_capacity(self.text.len() + new.len());
+        self.set_at(0, path, 0, new, op, &mut out)?;
+        Ok(out)
+    }
+
+    /// `setPath` for the node `at` at the level `level` of the path.
+    fn set_at(
+        &self,
+        at: usize,
+        path: &[Option<&str>],
+        level: usize,
+        new: &str,
+        op: PathOp,
+        out: &mut String,
+    ) -> Result<(), TypeError> {
+        if level > MAX_DEPTH {
+            return Err(too_deep());
+        }
+        let Some(step) = path[level] else {
+            return Err(TypeError::new(
+                SqlState::NULL_VALUE_NOT_ALLOWED,
+                format!("path element at position {} is null", level + 1),
+            ));
+        };
+        match self.item(at) {
+            JsonItem::Object(fields) => self.set_object(fields, step, path, level, new, op, out),
+            JsonItem::Array(items) => self.set_array(items, step, path, level, new, op, out),
+            _ => {
+                out.push_str(self.text(at));
+                Ok(())
+            }
+        }
+    }
+
+    /// `setPathObject`.
+    #[allow(clippy::too_many_arguments)]
+    fn set_object(
+        &self,
+        fields: &[(String, usize)],
+        step: &str,
+        path: &[Option<&str>],
+        level: usize,
+        new: &str,
+        op: PathOp,
+        out: &mut String,
+    ) -> Result<(), TypeError> {
+        let last = level + 1 == path.len();
+        let mut first = true;
+        out.push('{');
+        if fields.is_empty() && op.creates() && last {
+            put_field(out, &mut first, step, new);
+        }
+        let mut done = false;
+        for (i, (name, value)) in fields.iter().enumerate() {
+            if !done && name == step {
+                done = true;
+                if !last {
+                    put_key(out, &mut first, name);
+                    self.set_at(*value, path, level + 1, new, op, out)?;
+                } else if op.inserts() {
+                    let mut error = TypeError::new(
+                        SqlState::INVALID_PARAMETER_VALUE,
+                        "cannot replace existing key".to_string(),
+                    );
+                    error.hint =
+                        Some("Try using the function jsonb_set to replace key value.".to_string());
+                    return Err(error);
+                } else if op != PathOp::Delete {
+                    put_field(out, &mut first, name, new);
+                }
+                continue;
+            }
+            if op.creates() && !done && last && i + 1 == fields.len() {
+                put_field(out, &mut first, step, new);
+            }
+            put_field(out, &mut first, name, self.text(*value));
+        }
+        out.push('}');
+        Ok(())
+    }
+
+    /// `setPathArray`. An index before the first element puts a new element at the start.
+    #[allow(clippy::too_many_arguments)]
+    fn set_array(
+        &self,
+        items: &[usize],
+        step: &str,
+        path: &[Option<&str>],
+        level: usize,
+        new: &str,
+        op: PathOp,
+        out: &mut String,
+    ) -> Result<(), TypeError> {
+        let Some(index) = json_index(step) else {
+            return Err(TypeError::new(
+                SqlState::INVALID_TEXT_REPRESENTATION,
+                format!("path element at position {} is not an integer: \"{step}\"", level + 1),
+            ));
+        };
+        let count = items.len() as i64;
+        let mut index = i64::from(index);
+        // True for the index `INT_MIN` of `setPathArray`, which is before the first element.
+        let mut front = false;
+        if index < 0 {
+            if -index > count {
+                front = true;
+            } else {
+                index += count;
+            }
+        }
+        index = index.min(count);
+        let last = level + 1 == path.len();
+        let mut first = true;
+        let mut done = false;
+        out.push('[');
+        if (front || items.is_empty()) && last && op.creates() {
+            put_element(out, &mut first, new);
+            done = true;
+        }
+        for (i, &item) in items.iter().enumerate() {
+            if front || i as i64 != index {
+                put_element(out, &mut first, self.text(item));
+                continue;
+            }
+            done = true;
+            if !last {
+                put_element(out, &mut first, "");
+                self.set_at(item, path, level + 1, new, op, out)?;
+                continue;
+            }
+            if matches!(op, PathOp::InsertBefore | PathOp::Create) {
+                put_element(out, &mut first, new);
+            }
+            if op.inserts() {
+                put_element(out, &mut first, self.text(item));
+            }
+            if matches!(op, PathOp::InsertAfter | PathOp::Replace) {
+                put_element(out, &mut first, new);
+            }
+        }
+        if op.creates() && !done && last {
+            put_element(out, &mut first, new);
+        }
+        out.push(']');
+        Ok(())
+    }
+
     /// The elements of an array. A scalar at the root is the one element of its array.
     fn members(&self, at: usize) -> &[usize] {
         match self.item(at) {
@@ -527,6 +687,68 @@ impl<'a> JsonTree<'a> {
 
 /// The elements of the array around a scalar at the root.
 const ROOT: &[usize] = &[0];
+
+/// An operation of [`JsonTree::set_path`], as the flags `JB_PATH_*` of `jsonfuncs.c` give it.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum PathOp {
+    /// Replace the part, or add it when the last step of the path is not in the value: `jsonb_set` with `create`.
+    Create,
+    /// Replace the part only: `jsonb_set` without `create`.
+    Replace,
+    /// Remove the part: `#-`.
+    Delete,
+    /// `jsonb_insert` before the element.
+    InsertBefore,
+    /// `jsonb_insert` after the element.
+    InsertAfter,
+}
+
+impl PathOp {
+    /// `JB_PATH_CREATE_OR_INSERT`.
+    fn creates(self) -> bool {
+        matches!(self, PathOp::Create | PathOp::InsertBefore | PathOp::InsertAfter)
+    }
+
+    fn inserts(self) -> bool {
+        matches!(self, PathOp::InsertBefore | PathOp::InsertAfter)
+    }
+}
+
+/// `strtoint` in base 10 with nothing after the number, as the functions of `jsonfuncs.c` read an index in a path. The leading white space of `isspace` and a sign are permitted.
+pub fn json_index(s: &str) -> Option<i32> {
+    let s = s.trim_start_matches([' ', '\t', '\n', '\u{b}', '\u{c}', '\r']);
+    let digits = s.strip_prefix(['+', '-']).unwrap_or(s);
+    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
+        return None;
+    }
+    s.parse().ok()
+}
+
+/// Puts the separator before an element or a field when it is not the first one.
+fn put_comma(out: &mut String, first: &mut bool) {
+    if !std::mem::take(first) {
+        out.push_str(", ");
+    }
+}
+
+/// Puts the separator and the text of an element.
+fn put_element(out: &mut String, first: &mut bool, text: &str) {
+    put_comma(out, first);
+    out.push_str(text);
+}
+
+/// Puts the separator and a key with its colon.
+fn put_key(out: &mut String, first: &mut bool, name: &str) {
+    put_comma(out, first);
+    escape(name, out);
+    out.push_str(": ");
+}
+
+/// Puts the separator and a field.
+fn put_field(out: &mut String, first: &mut bool, name: &str, value: &str) {
+    put_key(out, first, name);
+    out.push_str(value);
+}
 
 /// A token of [`JsonTree::tokens`].
 #[derive(Debug, Clone, Copy)]

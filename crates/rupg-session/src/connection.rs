@@ -2135,6 +2135,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/json_access.test")));
     }
 
+    /// `||`, `-` and `#-` of `jsonb`, `jsonb_set`, `jsonb_insert`, `jsonb_set_lax`, and the set functions `each`, `each_text`, `object_keys`, `array_elements` and `array_elements_text` of `json` and `jsonb`. The script has the indexes before the first element and after the last one, the paths with a null element or a step that is not an integer, a scalar at the root, and the keys that come twice in a `json` object. `connection/json_modify.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn json_modify() {
+        big_stack(|| script(include_str!("connection/json_modify.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

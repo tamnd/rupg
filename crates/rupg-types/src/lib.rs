@@ -119,7 +119,10 @@ pub use jsonpath::{
     JSONPATH_REGEX_QUOTE, JSONPATH_REGEX_WSPACE, JsonPath, PathItem, PathOp, RegexCheck,
     jsonpath_deparse, jsonpath_parse, jsonpath_recv, jsonpath_regex_flags, jsonpath_send,
 };
-pub use jsontree::{JsonItem, JsonNode, JsonTree, Token as JsonToken, Tokens as JsonTokens};
+pub use jsontree::{
+    JsonItem, JsonNode, JsonTree, PathOp as JsonPathOp, Token as JsonToken, Tokens as JsonTokens,
+    json_index,
+};
 pub use lsn::{pg_lsn_in, pg_lsn_out};
 pub use mac::{
     macaddr_in, macaddr_out, macaddr_recv, macaddr_to_macaddr8, macaddr8_in, macaddr8_out,
