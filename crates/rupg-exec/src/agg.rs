@@ -2,6 +2,8 @@
 //!
 //! The rows of each group come in the order of the scan, as with the hash table of `HashAggregate`. When every key of `GROUP BY` has an order, the groups come in the order of the keys. Else they come in the order of their first rows. A query with no `GROUP BY` has one group, also when it has no rows.
 
+use std::collections::HashSet;
+
 use rupg_analyze::{Aggref, Expr, ExprKind, Query, SortGroup};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel};
@@ -37,6 +39,8 @@ pub(crate) enum Method {
     RangeAgg,
     /// `int2_accum`, `int4_accum`, `int8_accum` and `numeric_accum`: the count, the sum and the sum of squares, for the variance of a sample or of the population, or for its square root when `root` is set.
     Moments { sample: bool, root: bool },
+    /// `json_agg`, `json_object_agg` and the forms of `jsonb`. `strict` skips the null values, and `unique` makes a key that comes twice an error.
+    Json { object: bool, jsonb: bool, strict: bool, unique: bool },
 }
 
 /// True for a pseudo-type that takes the type of the arguments.
@@ -78,6 +82,28 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
         ("array_agg_transfn", "array_agg_finalfn") => Method::ArrayAgg,
         ("array_agg_array_transfn", "array_agg_array_finalfn") => Method::ArrayAggArray,
         ("range_agg_transfn" | "multirange_agg_transfn", "range_agg_finalfn") => Method::RangeAgg,
+        (
+            trans,
+            "json_agg_finalfn"
+            | "jsonb_agg_finalfn"
+            | "json_object_agg_finalfn"
+            | "jsonb_object_agg_finalfn",
+        ) => {
+            let (jsonb, trans) = match trans.strip_prefix("jsonb_") {
+                Some(rest) => (true, rest),
+                None => (false, trans.strip_prefix("json_").unwrap_or(trans)),
+            };
+            let (object, strict, unique) = match trans {
+                "agg_transfn" => (false, false, false),
+                "agg_strict_transfn" => (false, true, false),
+                "object_agg_transfn" => (true, false, false),
+                "object_agg_strict_transfn" => (true, true, false),
+                "object_agg_unique_transfn" => (true, false, true),
+                "object_agg_unique_strict_transfn" => (true, true, true),
+                _ => return Err(unsupported()),
+            };
+            Method::Json { object, jsonb, strict, unique }
+        }
         ("int2_accum" | "int4_accum" | "int8_accum" | "numeric_accum", last) => {
             let last = last.strip_prefix("numeric_").unwrap_or(last);
             let last = last.strip_prefix("poly_").unwrap_or(last);
@@ -151,6 +177,11 @@ enum State {
         ranges: Vec<Range>,
     },
     Moments(Moments),
+    /// The state of [`Method::Json`]: the text so far, or `None` before the first row, and the keys of an object for `unique`.
+    Json {
+        text: Option<String>,
+        keys: HashSet<String>,
+    },
 }
 
 /// The state of [`Method::Moments`], as `NumericAggState` has it. The sums of integers are in `small` until they do not fit, and then they go into `big`.
@@ -257,6 +288,7 @@ impl Agg<'_> {
             }
             Method::RangeAgg => State::RangeAgg { ranges: Vec::new() },
             Method::Moments { .. } => State::Moments(Moments::default()),
+            Method::Json { .. } => State::Json { text: None, keys: HashSet::new() },
         })
     }
 
@@ -366,6 +398,66 @@ impl Agg<'_> {
                     Error::internal("a variance of integers got a value of the wrong kind")
                 })?)?,
             },
+            (Method::Json { object: false, jsonb, strict, .. }, State::Json { text, .. }) => {
+                let value = args.first().unwrap_or(&Value::Null);
+                let ty = self.types.first().copied().unwrap_or(oid::UNKNOWN);
+                let first = text.is_none();
+                let out = text.get_or_insert_with(|| String::from("["));
+                if *strict && value.is_null() {
+                    return Ok(());
+                }
+                if out.len() > 1 {
+                    out.push_str(", ");
+                    // `json_agg_transfn` puts a new line before an array or a record that is not the first value.
+                    if !first && !jsonb && !value.is_null() && rupg_func::json_structured(ty) {
+                        out.push_str("\n ");
+                    }
+                }
+                rupg_func::json_value(ty, value, false, eval.session, out)?;
+            }
+            (Method::Json { jsonb, strict, unique, .. }, State::Json { text, keys }) => {
+                let [key, value] = args else {
+                    return Err(Error::internal("json_object_agg needs two arguments"));
+                };
+                let out = text.get_or_insert_with(|| String::from("{ "));
+                if key.is_null() {
+                    return Err(if *jsonb {
+                        Error::new(SqlState::INVALID_PARAMETER_VALUE, "field name must not be null")
+                    } else {
+                        Error::new(
+                            SqlState::NULL_VALUE_NOT_ALLOWED,
+                            "null value not allowed for object key",
+                        )
+                    });
+                }
+                let skip = *strict && value.is_null();
+                if skip && !unique {
+                    return Ok(());
+                }
+                let (key_ty, value_ty) = match self.types[..] {
+                    [k, v, ..] => (k, v),
+                    _ => (oid::UNKNOWN, oid::UNKNOWN),
+                };
+                let mut name = String::new();
+                rupg_func::json_value(key_ty, key, true, eval.session, &mut name)?;
+                if *unique && !keys.insert(name.clone()) {
+                    let message = if *jsonb {
+                        "duplicate JSON object key value".to_owned()
+                    } else {
+                        format!("duplicate JSON object key value: {name}")
+                    };
+                    return Err(Error::new(SqlState::DUPLICATE_JSON_OBJECT_KEY_VALUE, message));
+                }
+                if skip {
+                    return Ok(());
+                }
+                if out.len() > 2 {
+                    out.push_str(", ");
+                }
+                out.push_str(&name);
+                out.push_str(" : ");
+                rupg_func::json_value(value_ty, value, false, eval.session, out)?;
+            }
             _ => return Err(Error::internal("an aggregate state of the wrong kind")),
         }
         Ok(())
@@ -436,6 +528,15 @@ impl Agg<'_> {
             (Method::RangeAgg, State::RangeAgg { ranges }) => rupg_func::range_agg(self.ty, ranges),
             (Method::Moments { sample, root }, State::Moments(moments)) => {
                 moments.finish(*sample, *root)
+            }
+            (Method::Json { object, jsonb, .. }, State::Json { text, .. }) => {
+                let Some(mut text) = text else { return Ok(Value::Null) };
+                text.push_str(if *object { " }" } else { "]" });
+                if *jsonb {
+                    rupg_types::jsonb_in(&text).map(Value::Text).map_err(rupg_func::type_error)
+                } else {
+                    Ok(Value::Text(text))
+                }
             }
             _ => Err(Error::internal("an aggregate state of the wrong kind")),
         }

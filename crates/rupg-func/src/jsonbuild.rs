@@ -10,7 +10,7 @@ use rupg_types::{
 };
 
 use crate::deparse::row_names;
-use crate::io::{array_of, base_type, output};
+use crate::io::{array_of, base_type, is_row_type, output};
 use crate::json::invalid;
 use crate::text::variadic_values;
 use crate::{Call, Kernel, Session, bad_value, type_error};
@@ -45,8 +45,14 @@ fn jsonb(text: &str) -> Result<Value> {
     jsonb_in(text).map(Value::Text).map_err(type_error)
 }
 
+/// True when the category of the type is an array or a composite, after which `json_agg` puts a new line between the values.
+pub fn json_structured(ty: u32) -> bool {
+    let ty = base_type(ty);
+    array_of(ty).is_some() || is_row_type(ty) || ty == oid::RECORD_ARRAY || ty == oid::ANYARRAY
+}
+
 /// The text of a value, as `datum_to_json_internal` writes it. A key is always a string, and a key of an array, a composite or a `json` type is an error.
-fn put_value(
+pub fn json_value(
     ty: u32,
     value: &Value,
     key: bool,
@@ -144,7 +150,7 @@ fn put_record(
             None => json_escape(&format!("f{}", i + 1), out),
         }
         out.push(':');
-        put_value(field_ty, value, false, session, out)?;
+        json_value(field_ty, value, false, session, out)?;
     }
     out.push('}');
     Ok(())
@@ -190,7 +196,7 @@ fn put_dim(
         }
         if inner.is_empty() {
             let value = values.get(*next).ok_or_else(bad_value)?;
-            put_value(element, value.as_ref().unwrap_or(&Value::Null), false, session, out)?;
+            json_value(element, value.as_ref().unwrap_or(&Value::Null), false, session, out)?;
             *next += 1;
         } else {
             put_dim(element, values, inner, false, next, session, out)?;
@@ -204,7 +210,7 @@ fn put_dim(
 fn value_text(call: &Call<'_>, args: &[Value]) -> Result<String> {
     let ty = call.args.first().copied().ok_or_else(bad_value)?;
     let mut out = String::new();
-    put_value(ty, args.first().ok_or_else(bad_value)?, false, call.session, &mut out)?;
+    json_value(ty, args.first().ok_or_else(bad_value)?, false, call.session, &mut out)?;
     Ok(out)
 }
 
@@ -274,9 +280,9 @@ fn build_object(call: &Call<'_>, args: &[Value], is_jsonb: bool) -> Result<Optio
                 )
             });
         }
-        put_value(*key_ty, key, true, call.session, &mut out)?;
+        json_value(*key_ty, key, true, call.session, &mut out)?;
         out.push_str(" : ");
-        put_value(*ty, value, false, call.session, &mut out)?;
+        json_value(*ty, value, false, call.session, &mut out)?;
     }
     out.push('}');
     Ok(Some(out))
@@ -298,7 +304,7 @@ fn build_array(call: &Call<'_>, args: &[Value]) -> Result<Option<String>> {
         if i > 0 {
             out.push_str(", ");
         }
-        put_value(*ty, value, false, call.session, &mut out)?;
+        json_value(*ty, value, false, call.session, &mut out)?;
     }
     out.push(']');
     Ok(Some(out))

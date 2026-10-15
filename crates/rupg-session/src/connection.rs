@@ -2147,6 +2147,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/json_build.test")));
     }
 
+    /// `json_agg`, `jsonb_agg`, `json_object_agg`, `jsonb_object_agg` and their `strict` and `unique` forms. The script has the null values and the null keys, the groups with no rows, the records and the arrays that `json_agg` puts on new lines, the keys that come twice, `ORDER BY`, `DISTINCT` and `FILTER`. `connection/json_agg.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn json_agg() {
+        big_stack(|| script(include_str!("connection/json_agg.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
