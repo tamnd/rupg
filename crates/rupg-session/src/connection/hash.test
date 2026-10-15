@@ -1,0 +1,142 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT hashint4(0), hashint4(1), hashint4(-1), hashint4(2147483647), hashint4(-2147483648)
+fields hashint4:23:4:-1,hashint4:23:4:-1,hashint4:23:4:-1,hashint4:23:4:-1,hashint4:23:4:-1
+row -272711505,-1905060026,385747274,-96758253,-1524351049
+SELECT 1
+> SELECT hashint4extended(0, 0), hashint4extended(1, 0), hashint4extended(1, 42), hashint4extended(-1, -1)
+fields hashint4extended:20:8:-1,hashint4extended:20:8:-1,hashint4extended:20:8:-1,hashint4extended:20:8:-1
+row 4154612158245552303,-3670598878359251130,2207685931686633351,6481520839006961279
+SELECT 1
+> SELECT hashint2(1::int2), hashint2(-5::int2), hashint2extended(-5::int2, 7)
+fields hashint2:23:4:-1,hashint2:23:4:-1,hashint2extended:20:8:-1
+row -1905060026,1412886042,-1153735631166043584
+SELECT 1
+> SELECT hashint8(1), hashint8(-1), hashint8(4294967296), hashint8(-4294967297), hashint8(9223372036854775807), hashint8extended(-4294967297, 3)
+fields hashint8:23:4:-1,hashint8:23:4:-1,hashint8:23:4:-1,hashint8:23:4:-1,hashint8:23:4:-1,hashint8extended:20:8:-1
+row -1905060026,385747274,-1905060026,-1242090879,-1524351049,-6613458716714949279
+SELECT 1
+> SELECT hashbool(true), hashbool(false), hashboolextended(true, 1)
+fields hashbool:23:4:-1,hashbool:23:4:-1,hashboolextended:20:8:-1
+row -1905060026,-272711505,-7620678293940249823
+SELECT 1
+> SELECT hashchar('a'::"char"), hashchar(E'\\377'::"char"), hashcharextended('z'::"char", 99)
+fields hashchar:23:4:-1,hashchar:23:4:-1,hashcharextended:20:8:-1
+row 463612535,385747274,55092062793630526
+SELECT 1
+> SELECT hashoid(0::oid), hashoid(4294967295::oid), hashoidextended(1259::oid, 5), hashoid('pg_class'::regclass)
+fields hashoid:23:4:-1,hashoid:23:4:-1,hashoidextended:20:8:-1,hashoid:23:4:-1
+row -272711505,385747274,-3020827891405127060,-215855226
+SELECT 1
+> SELECT hashtext(''), hashtext('a'), hashtext('abc'), hashtext('abcdefghijkl'), hashtext('abcdefghijklm'), hashtext('the quick brown fox jumps over the lazy dog')
+fields hashtext:23:4:-1,hashtext:23:4:-1,hashtext:23:4:-1,hashtext:23:4:-1,hashtext:23:4:-1,hashtext:23:4:-1
+row -1477818771,1075015857,-785388649,-1586087212,405849808,146440145
+SELECT 1
+> SELECT hashtextextended('', 0), hashtextextended('abc', 0), hashtextextended('abc', 1), hashtextextended('abcdefghijklmnopqrstuvwxyz', -9223372036854775808)
+fields hashtextextended:20:8:-1,hashtextextended:20:8:-1,hashtextextended:20:8:-1,hashtextextended:20:8:-1
+row -6939563903564495251,-6747756470228489321,2125675926272891485,-7804498453276637438
+SELECT 1
+> SELECT hashtext('héllo wörld'), hashname('pg_class'), hashnameextended('pg_class', 2)
+fields hashtext:23:4:-1,hashname:23:4:-1,hashnameextended:20:8:-1
+row 1823351448,-267801108,-6573962830474372876
+SELECT 1
+> SELECT hashbpchar('ab   '::bpchar), hashbpchar('ab'::bpchar), hashbpcharextended('ab  '::char(5), 4)
+fields hashbpchar:23:4:-1,hashbpchar:23:4:-1,hashbpcharextended:20:8:-1
+row 1718550461,1718550461,-5955540148631605939
+SELECT 1
+> SELECT hashbytea('\x'::bytea), hashbytea('\x00ff10'::bytea), hashbyteaextended('\xdeadbeef'::bytea, 11)
+fields hashbytea:23:4:-1,hashbytea:23:4:-1,hashbyteaextended:20:8:-1
+row -1477818771,-1343120590,-308788768350837484
+SELECT 1
+> SELECT hashfloat8(0), hashfloat8(-0.0::float8), hashfloat8(1.5), hashfloat8('NaN'), hashfloat8('Infinity'), hashfloat8('-Infinity')
+fields hashfloat8:23:4:-1,hashfloat8:23:4:-1,hashfloat8:23:4:-1,hashfloat8:23:4:-1,hashfloat8:23:4:-1,hashfloat8:23:4:-1
+row 0,0,630860146,-1275764840,-2133226302,-1377680656
+SELECT 1
+> SELECT hashfloat4(1.5::float4), hashfloat4(-0.0::float4), hashfloat4('NaN'::float4), hashfloat4(0.1::float4), hashfloat8extended(1.5, 8), hashfloat4extended(0, 8)
+fields hashfloat4:23:4:-1,hashfloat4:23:4:-1,hashfloat4:23:4:-1,hashfloat4:23:4:-1,hashfloat8extended:20:8:-1,hashfloat4extended:20:8:-1
+row 630860146,0,-1275764840,-222057114,288336978830782803,8
+SELECT 1
+> SELECT hash_numeric(0), hash_numeric(1), hash_numeric(1.0), hash_numeric(1.5), hash_numeric(-1.5), hash_numeric(10000), hash_numeric(0.0001), hash_numeric(123456789.123456789)
+fields hash_numeric:23:4:-1,hash_numeric:23:4:-1,hash_numeric:23:4:-1,hash_numeric:23:4:-1,hash_numeric:23:4:-1,hash_numeric:23:4:-1,hash_numeric:23:4:-1,hash_numeric:23:4:-1
+row -1,1324868424,1324868424,692967894,692967894,1324868425,-1324868425,-1990724393
+SELECT 1
+> SELECT hash_numeric('NaN'), hash_numeric('Infinity'), hash_numeric_extended(0, 5), hash_numeric_extended(1.5, 5), hash_numeric_extended(0.0001, 5), hash_numeric_extended('NaN', 5)
+fields hash_numeric:23:4:-1,hash_numeric:23:4:-1,hash_numeric_extended:20:8:-1,hash_numeric_extended:20:8:-1,hash_numeric_extended:20:8:-1,hash_numeric_extended:20:8:-1
+row 0,0,4,-1161864878819361451,-7699580310696997970,5
+SELECT 1
+> SELECT hashdate('2024-02-29'), hashdateextended('2000-01-01', 1), time_hash('12:34:56.789'), time_hash_extended('00:00', 2)
+fields hashdate:23:4:-1,hashdateextended:20:8:-1,time_hash:23:4:-1,time_hash_extended:20:8:-1
+row 1456914585,434346878670890809,1053370306,4209958306721839642
+SELECT 1
+> SELECT timestamp_hash('2024-01-01 12:00'), timestamptz_hash('2024-01-01 12:00+00'), timestamp_hash_extended('infinity', 3), timestamptz_hash_extended('-infinity', 0)
+fields timestamp_hash:23:4:-1,timestamptz_hash:23:4:-1,timestamp_hash_extended:20:8:-1,timestamptz_hash_extended:20:8:-1
+row -129171135,-129171135,-124990060218659787,-9109110466470504941
+SELECT 1
+> SELECT timetz_hash('12:00+05'), timetz_hash('12:00-03:30'), timetz_hash_extended('01:02:03+00', 6)
+fields timetz_hash:23:4:-1,timetz_hash:23:4:-1,timetz_hash_extended:20:8:-1
+row 1826013116,1065071070,-2139245721488713576
+SELECT 1
+> SELECT interval_hash('1 day'), interval_hash('24 hours'), interval_hash('1 mon'), interval_hash('30 days'), interval_hash('-1 year 2 days 03:04:05.6'), interval_hash('infinity'), interval_hash_extended('1 day', 7)
+fields interval_hash:23:4:-1,interval_hash:23:4:-1,interval_hash:23:4:-1,interval_hash:23:4:-1,interval_hash:23:4:-1,interval_hash:23:4:-1,interval_hash_extended:20:8:-1
+row -2053980660,-2053980660,1574789525,1574789525,1648532387,-523051888,4955291801159021330
+SELECT 1
+> SELECT uuid_hash('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'), uuid_hash_extended('00000000-0000-0000-0000-000000000000', 1)
+fields uuid_hash:23:4:-1,uuid_hash_extended:20:8:-1
+row 1154666245,-865649419113463301
+SELECT 1
+> SELECT hashmacaddr('08:00:2b:01:02:03'), hashmacaddrextended('08:00:2b:01:02:03', 1), hashmacaddr8('08:00:2b:01:02:03:04:05'), hashmacaddr8extended('08:00:2b:01:02:03:04:05', 1)
+fields hashmacaddr:23:4:-1,hashmacaddrextended:20:8:-1,hashmacaddr8:23:4:-1,hashmacaddr8extended:20:8:-1
+row 294987870,2635082552597223121,-445665214,-7979672087690142493
+SELECT 1
+> SELECT hashinet('192.168.1.1'), hashinet('192.168.1.0/24'), hashinet('192.168.1.0/24'::cidr), hashinet('::1'), hashinet('2001:db8::/32'), hashinetextended('10.0.0.1/8', 9)
+fields hashinet:23:4:-1,hashinet:23:4:-1,hashinet:23:4:-1,hashinet:23:4:-1,hashinet:23:4:-1,hashinetextended:20:8:-1
+row -184492679,1369168648,1369168648,1984372031,616351084,-8750714978812537476
+SELECT 1
+> SELECT pg_lsn_hash('16/B374D848'), pg_lsn_hash_extended('0/0', 1), hashxid('123'::xid), hashxidextended('123'::xid, 2), hashxid8('123'::xid8), hashcid('5'::cid), hashtid('(1,2)'::tid), hashtid('(70000,65535)'::tid), hashtidextended('(0,1)', 3)
+fields pg_lsn_hash:23:4:-1,pg_lsn_hash_extended:20:8:-1,hashxid:23:4:-1,hashxidextended:20:8:-1,hashxid8:23:4:-1,hashcid:23:4:-1,hashtid:23:4:-1,hashtid:23:4:-1,hashtidextended:20:8:-1
+row -570699069,434346878670890809,-205084363,4199666260102359930,-205084363,-1330264708,-1827449972,-186900897,-2760216066620638911
+SELECT 1
+> SELECT hashoidvector('1 2 3'::oidvector), hashoidvector(''::oidvector), hashoidvectorextended('23 25'::oidvector, 4)
+fields hashoidvector:23:4:-1,hashoidvector:23:4:-1,hashoidvectorextended:20:8:-1
+row 1738594973,-1477818771,-2345332961975640825
+SELECT 1
+> SELECT hash_array('{}'::int[]), hash_array('{1}'::int[]), hash_array('{1,2,3}'::int[]), hash_array('{1,NULL,3}'::int[]), hash_array('{{1,2},{3,4}}'::int[]), hash_array('{a,b}'::text[]), hash_array('{1.5,2}'::numeric[])
+fields hash_array:23:4:-1,hash_array:23:4:-1,hash_array:23:4:-1,hash_array:23:4:-1,hash_array:23:4:-1,hash_array:23:4:-1,hash_array:23:4:-1
+row 1,-1905059995,-325393530,-1134681668,1786625125,-1103066928,-151100027
+SELECT 1
+> SELECT hash_array_extended('{1,2,3}'::int[], 0), hash_array_extended('{1,2,3}'::int[], 1), hash_array_extended('{"ab ","cd"}'::bpchar[], 2)
+fields hash_array_extended:20:8:-1,hash_array_extended:20:8:-1,hash_array_extended:20:8:-1
+row -8286617039739886714,-2630836081351614999,-407709800638910067
+SELECT 1
+> SELECT hash_range('[1,10)'::int4range), hash_range('empty'::int4range), hash_range('(,5]'::int4range), hash_range('[5,)'::int4range), hash_range('(,)'::int4range), hash_range('[1.5,2.5]'::numrange), hash_range('[2024-01-01,2024-02-01)'::daterange)
+fields hash_range:23:4:-1,hash_range:23:4:-1,hash_range:23:4:-1,hash_range:23:4:-1,hash_range:23:4:-1,hash_range:23:4:-1,hash_range:23:4:-1
+row 946188198,484847245,710199033,-1641327761,1061745599,-732823239,-456014438
+SELECT 1
+> SELECT hash_range_extended('[1,10)'::int4range, 0), hash_range_extended('[1,10)'::int4range, 1), hash_range_extended('empty'::int8range, 1), hash_range_extended('[2024-01-01 00:00,2024-01-02 00:00)'::tsrange, 3)
+fields hash_range_extended:20:8:-1,hash_range_extended:20:8:-1,hash_range_extended:20:8:-1,hash_range_extended:20:8:-1
+row 4502047092128460710,3614615599613784082,3205387485829051971,7926441096876747254
+SELECT 1
+> SELECT hash_multirange('{}'::int4multirange), hash_multirange('{[1,3),[5,7)}'::int4multirange), hash_multirange_extended('{[1,3),[5,7)}'::int4multirange, 2)
+fields hash_multirange:23:4:-1,hash_multirange:23:4:-1,hash_multirange_extended:20:8:-1
+row 1,1871790709,4184894545687309269
+SELECT 1
+> SELECT hash_record(ROW(1, 'a'::text)), hash_record(ROW(1, NULL::int)), hash_record(ROW()), hash_record_extended(ROW(1, 'a'::text, 2.5), 3)
+fields hash_record:23:4:-1,hash_record:23:4:-1,hash_record:23:4:-1,hash_record_extended:20:8:-1
+row -2147270101,1072681338,0,-6306474878488880511
+SELECT 1
+> SELECT hash_array(ARRAY[ROW(1, 'a'::text), ROW(2, 'b'::text)]), hash_array('{"[1,2)","[3,4)"}'::int4range[])
+fields hash_array:23:4:-1,hash_array:23:4:-1
+row -1400395680,-393530126
+SELECT 1
+> SELECT hash_array('{1}'::money[])
+ERROR 42883 could not identify a hash function for type money
+> SELECT hash_array('{}'::money[])
+ERROR 42883 could not identify a hash function for type money
+> SELECT hashint4(NULL), hash_array(NULL::int[]), hashtextextended('a', NULL)
+fields hashint4:23:4:-1,hash_array:23:4:-1,hashtextextended:20:8:-1
+row NULL,NULL,NULL
+SELECT 1
+> SELECT hashint4(5::int2), hashint8(5), hashint4(5), hash_numeric(5)
+fields hashint4:23:4:-1,hashint8:23:4:-1,hashint4:23:4:-1,hash_numeric:23:4:-1
+row -1330264708,-1330264708,-1330264708,-1554860272
+SELECT 1

@@ -2375,6 +2375,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/interval_sum.test")));
     }
 
+    /// The hash support functions of the types, plain and extended: the integer types, `bool`, `"char"`, the OID types, the text types, `bytea`, the float types with zeros and `NaN`, `numeric`, the date and time types, `uuid`, the network types, `pg_lsn`, `xid`, `tid`, `oidvector`, arrays, ranges, multiranges and rows, with nulls and the error of a type with no hash function. `connection/hash.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn hash() {
+        big_stack(|| script(include_str!("connection/hash.test")));
+    }
+
     /// The wait events of `pg_wait_events`, which `cargo xtask waitevents` makes from the vendored `wait_event_names.txt`: the count of each type, all the rows of `pg_get_wait_events` in their order, and the join with `pg_stat_activity`, which has no row because the session that runs the statement waits for nothing. `connection/wait_events.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn wait_events() {
