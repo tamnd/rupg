@@ -279,10 +279,10 @@ fn timestamp_part(call: &Call<'_>, args: &[Value], tz: bool) -> Result<Field> {
 /// `interval_part_common`.
 fn interval_part(args: &[Value]) -> Result<Field> {
     const TYPE: &str = "interval";
-    let [units, Value::Interval(iv)] = args else { return Err(bad_value()) };
+    let [units, Value::Interval(interval)] = args else { return Err(bad_value()) };
     let lowunits = lower_units(units)?;
     let unit = DateUnit::decode(&lowunits);
-    if *iv == Interval::INFINITY || *iv == Interval::NEGATIVE_INFINITY {
+    if *interval == Interval::INFINITY || *interval == Interval::NEGATIVE_INFINITY {
         // `NonFiniteIntervalPart`.
         return match unit {
             DateUnit::Unknown => Err(not_recognized(&lowunits, TYPE)),
@@ -299,24 +299,24 @@ fn interval_part(args: &[Value]) -> Result<Field> {
             | DateUnit::Decade
             | DateUnit::Century
             | DateUnit::Millennium
-            | DateUnit::Epoch => Ok(Field::Infinite(*iv == Interval::NEGATIVE_INFINITY)),
+            | DateUnit::Epoch => Ok(Field::Infinite(*interval == Interval::NEGATIVE_INFINITY)),
             _ => Err(not_supported(&lowunits, TYPE)),
         };
     }
     if unit.is_units() {
         // `interval2itm`.
-        let year = iv.month / 12;
-        let mon = iv.month % 12;
-        if let Some(field) = time_field(unit, iv.time) {
+        let year = interval.month / 12;
+        let mon = interval.month % 12;
+        if let Some(field) = time_field(unit, interval.time) {
             return Ok(field);
         }
         let v = match unit {
-            DateUnit::Day => iv.day,
-            DateUnit::Week => iv.day / 7,
+            DateUnit::Day => interval.day,
+            DateUnit::Week => interval.day / 7,
             DateUnit::Month => mon,
             // A field of a negative interval is the negative of the field of the interval with the other sign.
-            DateUnit::Quarter if iv.month >= 0 => mon / 3 + 1,
-            DateUnit::Quarter => -((iv.month.wrapping_neg() % 12) / 3 + 1),
+            DateUnit::Quarter if interval.month >= 0 => mon / 3 + 1,
+            DateUnit::Quarter => -((interval.month.wrapping_neg() % 12) / 3 + 1),
             DateUnit::Year => year,
             DateUnit::Decade => year / 10,
             DateUnit::Century => year / 100,
@@ -329,15 +329,16 @@ fn interval_part(args: &[Value]) -> Result<Field> {
         return Err(not_recognized(&lowunits, TYPE));
     }
     // A year is 365.25 days and a month is 30 days. Four times the days is an integer.
-    let secs =
-        (1461 * i64::from(iv.month / 12) + 120 * i64::from(iv.month % 12) + 4 * i64::from(iv.day))
-            * (86_400 / 4);
+    let secs = (1461 * i64::from(interval.month / 12)
+        + 120 * i64::from(interval.month % 12)
+        + 4 * i64::from(interval.day))
+        * (86_400 / 4);
     #[allow(clippy::cast_precision_loss)]
-    let mut float = iv.time as f64 / 1_000_000.0;
-    float += 365.25 * 86_400.0 * f64::from(iv.month / 12);
-    float += 30.0 * 86_400.0 * f64::from(iv.month % 12);
-    float += 86_400.0 * f64::from(iv.day);
-    let value = i128::from(secs) * i128::from(USECS_PER_SEC) + i128::from(iv.time);
+    let mut float = interval.time as f64 / 1_000_000.0;
+    float += 365.25 * 86_400.0 * f64::from(interval.month / 12);
+    float += 30.0 * 86_400.0 * f64::from(interval.month % 12);
+    float += 86_400.0 * f64::from(interval.day);
+    let value = i128::from(secs) * i128::from(USECS_PER_SEC) + i128::from(interval.time);
     Ok(Field::Fixed { value, scale: 6, float })
 }
 
@@ -615,7 +616,7 @@ fn timestamptz_trunc(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// `interval_trunc`.
 fn interval_trunc(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     const TYPE: &str = "interval";
-    let [units, Value::Interval(iv)] = args else { return Err(bad_value()) };
+    let [units, Value::Interval(interval)] = args else { return Err(bad_value()) };
     let lowunits = lower_units(units)?;
     let unit = DateUnit::decode_units(&lowunits);
     if !unit.is_units() {
@@ -644,13 +645,13 @@ fn interval_trunc(_: &Call<'_>, args: &[Value]) -> Result<Value> {
         DateUnit::Microsecond => 11,
         _ => return Err(unsupported()),
     };
-    if *iv == Interval::INFINITY || *iv == Interval::NEGATIVE_INFINITY {
-        return Ok(Value::Interval(*iv));
+    if *interval == Interval::INFINITY || *interval == Interval::NEGATIVE_INFINITY {
+        return Ok(Value::Interval(*interval));
     }
     // `interval2itm`, the cases that fall through, and `itm2interval`. The divisions go to zero, so a negative field stays negative.
-    let mut year = iv.month / 12;
-    let mut mon = iv.month % 12;
-    let mut day = iv.day;
+    let mut year = interval.month / 12;
+    let mut mon = interval.month % 12;
+    let mut day = interval.day;
     if rank == 0 {
         year = year / 1000 * 1000;
     }
@@ -677,7 +678,7 @@ fn interval_trunc(_: &Call<'_>, args: &[Value]) -> Result<Value> {
         10 => 1000,
         _ => 1,
     };
-    let time = if keep > 0 { iv.time / keep * keep } else { 0 };
+    let time = if keep > 0 { interval.time / keep * keep } else { 0 };
     let result = Interval { time, day, month: year * 12 + mon };
     if result == Interval::INFINITY || result == Interval::NEGATIVE_INFINITY {
         return Err(Error::new(SqlState::DATETIME_VALUE_OUT_OF_RANGE, "interval out of range"));
