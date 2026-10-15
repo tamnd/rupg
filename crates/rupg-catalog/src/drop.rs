@@ -19,6 +19,8 @@ pub mod flag {
     pub const AUTO: u32 = 0x0004;
     /// `DEPFLAG_INTERNAL`: an internal dependency reached the object.
     pub const INTERNAL: u32 = 0x0008;
+    /// `DEPFLAG_EXTENSION`: the object is a member of an extension that the walk removes.
+    pub const EXTENSION: u32 = 0x0010;
     /// `DEPFLAG_REVERSE`: the walk came to the object from a part of it.
     pub const REVERSE: u32 = 0x0040;
     /// `DEPFLAG_SUBOBJECT`: the object is a column of a relation that the walk also removes.
@@ -141,7 +143,9 @@ impl Catalog {
         let owners: Vec<ObjRef> = self
             .depends
             .iter()
-            .filter(|d| covers(object, d.object) && d.kind == DepKind::Internal)
+            .filter(|d| {
+                covers(object, d.object) && matches!(d.kind, DepKind::Internal | DepKind::Extension)
+            })
             .map(|d| d.referenced)
             .filter(|r| !is_self(object, *r))
             .collect();
@@ -173,6 +177,7 @@ impl Catalog {
                     DepKind::Normal => flag::NORMAL,
                     DepKind::Auto => flag::AUTO,
                     DepKind::Internal => flag::INTERNAL,
+                    DepKind::Extension => flag::EXTENSION,
                 };
                 (d.object, flags)
             })

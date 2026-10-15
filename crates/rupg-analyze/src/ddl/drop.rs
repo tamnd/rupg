@@ -287,14 +287,14 @@ impl Definer<'_, '_> {
         self.catalog.remove(&targets)
     }
 
-    /// `reportDependentObjects`: the error of `RESTRICT` when other objects depend on the objects, or the notice of `CASCADE` with the objects that also go. The objects that go by an automatic or an internal dependency are not in the report.
+    /// `reportDependentObjects`: the error of `RESTRICT` when other objects depend on the objects, or the notice of `CASCADE` with the objects that also go. The objects that go by an automatic, an internal or an extension dependency are not in the report.
     fn report(&mut self, targets: &[Target], cascade: bool, objects: &[ObjRef]) -> Result<()> {
         let mut lines = Vec::new();
         let mut hidden = 0;
         let mut ok = true;
         for target in targets.iter().rev() {
             if target.flags & (flag::ORIGINAL | flag::SUBOBJECT) != 0
-                || target.flags & (flag::AUTO | flag::INTERNAL) != 0
+                || target.flags & (flag::AUTO | flag::INTERNAL | flag::EXTENSION) != 0
             {
                 continue;
             }
