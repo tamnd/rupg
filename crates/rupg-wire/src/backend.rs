@@ -6,7 +6,7 @@
 //!
 //! Lifted from `crates/rudb-pgwire/src/backend.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
-use crate::error::{Level, ProtocolError};
+use crate::error::{Level, ProtocolError, source_fields};
 use crate::reader::Reader;
 
 /// The transaction status in `ReadyForQuery`.
@@ -330,6 +330,12 @@ impl OutBuf {
         if let Some(hint) = error.hint {
             fields.push((b'H', hint.as_bytes()));
         }
+        let (file, line, routine) = source_fields(error.place);
+        fields.extend([
+            (b'F', file.as_bytes()),
+            (b'L', line.as_bytes()),
+            (b'R', routine.as_bytes()),
+        ]);
         self.error_response(&fields);
     }
 

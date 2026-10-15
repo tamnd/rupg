@@ -367,15 +367,18 @@ mod tests {
         let error = request.unwrap_err();
         assert_eq!(error.sqlstate, "0A000");
         assert_eq!(error.message, "unsupported frontend protocol 4.0: server supports 3.0 to 3.2");
+        let messages = messages(&out);
+        let [Backend::ErrorResponse(fields)] = &messages[..] else { panic!("{messages:?}") };
         assert_eq!(
-            messages(&out),
-            vec![Backend::ErrorResponse(vec![
-                (b'S', b"FATAL"),
+            fields[..4],
+            [
+                (b'S', &b"FATAL"[..]),
                 (b'V', b"FATAL"),
                 (b'C', b"0A000"),
                 (b'M', b"unsupported frontend protocol 4.0: server supports 3.0 to 3.2"),
-            ])]
+            ]
         );
+        assert_eq!(fields[4..].iter().map(|f| f.0).collect::<Vec<u8>>(), b"FLR");
     }
 
     #[test]

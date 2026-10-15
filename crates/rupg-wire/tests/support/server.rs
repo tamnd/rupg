@@ -297,13 +297,7 @@ fn contains(haystack: &[u8], needle: &[u8]) -> bool {
 
 /// An error of a statement, which the server sends as it sends an error of the codec.
 fn failed(message: &str) -> ProtocolError {
-    ProtocolError {
-        level: Level::Error,
-        sqlstate: "XX000",
-        message: message.to_owned(),
-        detail: None,
-        hint: None,
-    }
+    ProtocolError::new(Level::Error, "XX000", message)
 }
 
 /// A message that the session gave must come back the same from its own bytes.
