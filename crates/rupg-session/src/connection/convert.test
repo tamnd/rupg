@@ -1,0 +1,259 @@
+> select 'LATIN2' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN2')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN2'), 'LATIN2') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN2') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN2,60d76ca489c0230d966bb052593aed07,t,128
+SELECT 1
+> select 'LATIN3' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a6a7a8a9aaabacadafb0b1b2b3b4b5b6b7b8b9babbbcbdbfc0c1c2c4c5c6c7c8c9cacbcccdcecfd1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e4e5e6e7e8e9eaebecedeeeff1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN3')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a6a7a8a9aaabacadafb0b1b2b3b4b5b6b7b8b9babbbcbdbfc0c1c2c4c5c6c7c8c9cacbcccdcecfd1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e4e5e6e7e8e9eaebecedeeeff1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN3'), 'LATIN3') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a6a7a8a9aaabacadafb0b1b2b3b4b5b6b7b8b9babbbcbdbfc0c1c2c4c5c6c7c8c9cacbcccdcecfd1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e4e5e6e7e8e9eaebecedeeeff1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a6a7a8a9aaabacadafb0b1b2b3b4b5b6b7b8b9babbbcbdbfc0c1c2c4c5c6c7c8c9cacbcccdcecfd1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e4e5e6e7e8e9eaebecedeeeff1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN3') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN3,fb986187a0e6b4d67933dfd4980eb0b4,t,121
+SELECT 1
+> select convert_from('\x41a5'::bytea, 'LATIN3')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0xa5 in encoding "LATIN3" has no equivalent in encoding "UTF8"
+> select 'LATIN4' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN4')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN4'), 'LATIN4') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN4') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN4,3ac4ed04bc3293d2b31fc2a882db0719,t,128
+SELECT 1
+> select 'LATIN5' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN5')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN5'), 'LATIN5') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN5') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN5,97defe0c7774f4bd47a988f57d2acaed,t,128
+SELECT 1
+> select 'LATIN6' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN6')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN6'), 'LATIN6') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN6') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN6,a457df86b79c90784f1e020e83ea29c2,t,128
+SELECT 1
+> select 'LATIN7' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN7')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN7'), 'LATIN7') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN7') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN7,81149febfa34fddef53789f41d607518,t,128
+SELECT 1
+> select 'LATIN8' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN8')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN8'), 'LATIN8') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN8') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN8,da4212183f91b490986a5dd52baae2ab,t,128
+SELECT 1
+> select 'LATIN9' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN9')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN9'), 'LATIN9') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN9') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN9,6e77aa3318056a1190ee6dc6de809e1b,t,128
+SELECT 1
+> select 'LATIN10' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN10')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN10'), 'LATIN10') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN10') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN10,46f6978a6a1af747446ce8caf371c0ca,t,128
+SELECT 1
+> select 'WIN1256' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1256')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1256'), 'WIN1256') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1256') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1256,f91eeb27bac87d493f44a29e3acb1033,t,128
+SELECT 1
+> select 'WIN1258' e, md5(convert_from('\x8082838485868788898b8c9192939495969798999b9c9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1258')) m, convert_to(convert_from('\x8082838485868788898b8c9192939495969798999b9c9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1258'), 'WIN1258') = '\x8082838485868788898b8c9192939495969798999b9c9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x8082838485868788898b8c9192939495969798999b9c9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1258') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1258,42c077286466f4448ef3098478b599a9,t,119
+SELECT 1
+> select convert_from('\x4181'::bytea, 'WIN1258')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x81 in encoding "WIN1258" has no equivalent in encoding "UTF8"
+> select 'WIN866' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN866')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN866'), 'WIN866') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN866') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN866,a4435c2b6cbb3ec10a157249b5abaf8b,t,128
+SELECT 1
+> select 'WIN874' e, md5(convert_from('\x808591929394959697a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafb'::bytea, 'WIN874')) m, convert_to(convert_from('\x808591929394959697a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafb'::bytea, 'WIN874'), 'WIN874') = '\x808591929394959697a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafb'::bytea r, length('\x808591929394959697a0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafb'::bytea, 'WIN874') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN874,6f2b724beb2719210aff277e2d6108ce,t,97
+SELECT 1
+> select convert_from('\x4181'::bytea, 'WIN874')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x81 in encoding "WIN874" has no equivalent in encoding "UTF8"
+> select 'KOI8R' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'KOI8R')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'KOI8R'), 'KOI8R') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'KOI8R') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row KOI8R,6ebc2243093d5ac35ce537d12ac568db,t,128
+SELECT 1
+> select 'WIN1251' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f9091929394959697999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1251')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f9091929394959697999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1251'), 'WIN1251') = '\x808182838485868788898a8b8c8d8e8f9091929394959697999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f9091929394959697999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1251') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1251,dd6196fee4575d1c3625a5cbf5874d5c,t,127
+SELECT 1
+> select convert_from('\x4198'::bytea, 'WIN1251')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x98 in encoding "WIN1251" has no equivalent in encoding "UTF8"
+> select 'WIN1252' e, md5(convert_from('\x8082838485868788898a8b8c8e9192939495969798999a9b9c9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1252')) m, convert_to(convert_from('\x8082838485868788898a8b8c8e9192939495969798999a9b9c9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1252'), 'WIN1252') = '\x8082838485868788898a8b8c8e9192939495969798999a9b9c9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x8082838485868788898a8b8c8e9192939495969798999a9b9c9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1252') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1252,cbf2de71ca087ecc2190e8912dcf9c4c,t,123
+SELECT 1
+> select convert_from('\x4181'::bytea, 'WIN1252')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x81 in encoding "WIN1252" has no equivalent in encoding "UTF8"
+> select 'ISO_8859_5' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'ISO_8859_5')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'ISO_8859_5'), 'ISO_8859_5') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'ISO_8859_5') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row ISO_8859_5,9c25bb277d203c81f14c1a5d039fc9f9,t,128
+SELECT 1
+> select 'ISO_8859_6' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a4acadbbbfc1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dae0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2'::bytea, 'ISO_8859_6')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a4acadbbbfc1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dae0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2'::bytea, 'ISO_8859_6'), 'ISO_8859_6') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a4acadbbbfc1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dae0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a4acadbbbfc1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dae0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2'::bytea, 'ISO_8859_6') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row ISO_8859_6,ff402d7a8a7130be8849dfb7cc82ae47,t,83
+SELECT 1
+> select convert_from('\x41a1'::bytea, 'ISO_8859_6')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0xa1 in encoding "ISO_8859_6" has no equivalent in encoding "UTF8"
+> select 'ISO_8859_7' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe'::bytea, 'ISO_8859_7')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe'::bytea, 'ISO_8859_7'), 'ISO_8859_7') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe'::bytea, 'ISO_8859_7') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row ISO_8859_7,d2e60dcd738e574258a0a8cfd0c653fc,t,125
+SELECT 1
+> select convert_from('\x41ae'::bytea, 'ISO_8859_7')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0xae in encoding "ISO_8859_7" has no equivalent in encoding "UTF8"
+> select 'ISO_8859_8' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafdfe'::bytea, 'ISO_8859_8')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafdfe'::bytea, 'ISO_8859_8'), 'ISO_8859_8') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafdfe'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafdfe'::bytea, 'ISO_8859_8') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row ISO_8859_8,93c7641445c0016a3bc75678dacd6927,t,92
+SELECT 1
+> select convert_from('\x41a1'::bytea, 'ISO_8859_8')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0xa1 in encoding "ISO_8859_8" has no equivalent in encoding "UTF8"
+> select 'WIN1250' e, md5(convert_from('\x808284858687898a8b8c8d8e8f91929394959697999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1250')) m, convert_to(convert_from('\x808284858687898a8b8c8d8e8f91929394959697999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1250'), 'WIN1250') = '\x808284858687898a8b8c8d8e8f91929394959697999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808284858687898a8b8c8d8e8f91929394959697999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1250') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1250,f67f2f1ae35fc1df8d703c9cfde874d7,t,123
+SELECT 1
+> select convert_from('\x4181'::bytea, 'WIN1250')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x81 in encoding "WIN1250" has no equivalent in encoding "UTF8"
+> select 'WIN1253' e, md5(convert_from('\x80828384858687898b91929394959697999ba0a1a2a3a4a5a6a7a8a9abacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe'::bytea, 'WIN1253')) m, convert_to(convert_from('\x80828384858687898b91929394959697999ba0a1a2a3a4a5a6a7a8a9abacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe'::bytea, 'WIN1253'), 'WIN1253') = '\x80828384858687898b91929394959697999ba0a1a2a3a4a5a6a7a8a9abacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe'::bytea r, length('\x80828384858687898b91929394959697999ba0a1a2a3a4a5a6a7a8a9abacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfe'::bytea, 'WIN1253') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1253,ed7679c0f3dfce97e0dc89d834a803fb,t,111
+SELECT 1
+> select convert_from('\x4181'::bytea, 'WIN1253')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x81 in encoding "WIN1253" has no equivalent in encoding "UTF8"
+> select 'WIN1254' e, md5(convert_from('\x8082838485868788898a8b8c9192939495969798999a9b9c9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1254')) m, convert_to(convert_from('\x8082838485868788898a8b8c9192939495969798999a9b9c9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1254'), 'WIN1254') = '\x8082838485868788898a8b8c9192939495969798999a9b9c9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x8082838485868788898a8b8c9192939495969798999a9b9c9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1254') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1254,5cba00504cf4438b1b76ff830ac0b676,t,121
+SELECT 1
+> select convert_from('\x4181'::bytea, 'WIN1254')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x81 in encoding "WIN1254" has no equivalent in encoding "UTF8"
+> select 'WIN1255' e, md5(convert_from('\x8082838485868788898b9192939495969798999ba0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cbcccdcecfd0d1d2d3d4d5d6d7d8e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafdfe'::bytea, 'WIN1255')) m, convert_to(convert_from('\x8082838485868788898b9192939495969798999ba0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cbcccdcecfd0d1d2d3d4d5d6d7d8e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafdfe'::bytea, 'WIN1255'), 'WIN1255') = '\x8082838485868788898b9192939495969798999ba0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cbcccdcecfd0d1d2d3d4d5d6d7d8e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafdfe'::bytea r, length('\x8082838485868788898b9192939495969798999ba0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cbcccdcecfd0d1d2d3d4d5d6d7d8e0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafdfe'::bytea, 'WIN1255') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1255,eb6e2e39e4d26a55e925a2d4db8c5d8c,t,105
+SELECT 1
+> select convert_from('\x4181'::bytea, 'WIN1255')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x81 in encoding "WIN1255" has no equivalent in encoding "UTF8"
+> select 'WIN1257' e, md5(convert_from('\x808284858687898b8d8e8f91929394959697999b9d9ea0a2a3a4a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1257')) m, convert_to(convert_from('\x808284858687898b8d8e8f91929394959697999b9d9ea0a2a3a4a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1257'), 'WIN1257') = '\x808284858687898b8d8e8f91929394959697999b9d9ea0a2a3a4a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808284858687898b8d8e8f91929394959697999b9d9ea0a2a3a4a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'WIN1257') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row WIN1257,67cd78bd0baac877d036d91b2b5fc699,t,116
+SELECT 1
+> select convert_from('\x4181'::bytea, 'WIN1257')
+fields convert_from:25:-1:-1
+ERROR 22P05 character with byte sequence 0x81 in encoding "WIN1257" has no equivalent in encoding "UTF8"
+> select 'KOI8U' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'KOI8U')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'KOI8U'), 'KOI8U') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'KOI8U') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row KOI8U,0c8b1756fcfa9d1faf9135c5f2156a9d,t,128
+SELECT 1
+> select 'LATIN1' e, md5(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN1')) m, convert_to(convert_from('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN1'), 'LATIN1') = '\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea r, length('\x808182838485868788898a8b8c8d8e8f909192939495969798999a9b9c9d9e9fa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebfc0c1c2c3c4c5c6c7c8c9cacbcccdcecfd0d1d2d3d4d5d6d7d8d9dadbdcdddedfe0e1e2e3e4e5e6e7e8e9eaebecedeeeff0f1f2f3f4f5f6f7f8f9fafbfcfdfeff'::bytea, 'LATIN1') n
+fields e:25:-1:-1,m:25:-1:-1,r:16:1:-1,n:23:4:-1
+row LATIN1,946c295284edb33cb8a62bed8120c9f1,t,128
+SELECT 1
+> select convert_to('aé€', 'LATIN9'), convert_to('aé', 'latin-1'), convert_to('aé€', 'utf8'), convert_to('aé€', 'SQL_ASCII')
+fields convert_to:17:-1:-1,convert_to:17:-1:-1,convert_to:17:-1:-1,convert_to:17:-1:-1
+row \x61e9a4,\x61e9,\x61c3a9e282ac,\x61c3a9e282ac
+SELECT 1
+> select convert_from('\x61e9a4'::bytea, 'LATIN9'), convert_from('\x61c3a9'::bytea, 'UNICODE'), convert_from('\x61c3a9'::bytea, 'SQL_ASCII')
+fields convert_from:25:-1:-1,convert_from:25:-1:-1,convert_from:25:-1:-1
+row aé€,aé,aé
+SELECT 1
+> select convert('\x61e9'::bytea, 'LATIN1', 'UTF8'), convert('\x61c3a9'::bytea, 'UTF8', 'WIN1252'), convert('\x80'::bytea, 'WIN1252', 'SQL_ASCII'), convert('\x80'::bytea, 'SQL_ASCII', 'LATIN1'), convert('\x80'::bytea, 'LATIN1', 'LATIN1')
+fields convert:17:-1:-1,convert:17:-1:-1,convert:17:-1:-1,convert:17:-1:-1,convert:17:-1:-1
+row \x61c3a9,\x61e9,\x80,\x80,\x80
+SELECT 1
+> select convert(''::bytea, 'LATIN1', 'EUC_JP'), convert_from(''::bytea, 'SJIS'), length(''::bytea, 'UTF8')
+fields convert:17:-1:-1,convert_from:25:-1:-1,length:23:4:-1
+row \x,,0
+SELECT 1
+> select convert_to('€', 'LATIN1')
+fields convert_to:17:-1:-1
+ERROR 22P05 character with byte sequence 0xe2 0x82 0xac in encoding "UTF8" has no equivalent in encoding "LATIN1"
+> select convert_to('a😀', 'WIN1252')
+fields convert_to:17:-1:-1
+ERROR 22P05 character with byte sequence 0xf0 0x9f 0x98 0x80 in encoding "UTF8" has no equivalent in encoding "WIN1252"
+> select convert_to('aé', 'nope')
+fields convert_to:17:-1:-1
+ERROR 22023 invalid destination encoding name "nope"
+> select convert_from('\x61'::bytea, 'nope')
+fields convert_from:25:-1:-1
+ERROR 22023 invalid source encoding name "nope"
+> select convert('\x61'::bytea, 'nope', 'UTF8')
+fields convert:17:-1:-1
+ERROR 22023 invalid source encoding name "nope"
+> select convert('\x61'::bytea, 'UTF8', 'nope')
+fields convert:17:-1:-1
+ERROR 22023 invalid destination encoding name "nope"
+> select convert('\x61'::bytea, 'nope', 'nope2')
+fields convert:17:-1:-1
+ERROR 22023 invalid source encoding name "nope"
+> select convert_from('\x61c328'::bytea, 'UTF8')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0xc3 0x28
+> select convert_from('\x61e282'::bytea, 'UTF8')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0xe2 0x82
+> select convert_from('\x61f09f98'::bytea, 'UTF8')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0xf0 0x9f 0x98
+> select convert_from('\x61ff62'::bytea, 'UTF8')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0xff
+> select convert_from('\x61eda080'::bytea, 'UTF8')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0xed 0xa0 0x80
+> select convert_from('\x6100'::bytea, 'UTF8')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0x00
+> select convert_from('\x6100'::bytea, 'LATIN1')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "LATIN1": 0x00
+> select convert_from('\x6100'::bytea, 'SQL_ASCII')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "SQL_ASCII": 0x00
+> select convert('\x61c3'::bytea, 'SQL_ASCII', 'UTF8')
+fields convert:17:-1:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0xc3
+> select convert('\x6100'::bytea, 'SQL_ASCII', 'WIN1251')
+fields convert:17:-1:-1
+ERROR 22021 invalid byte sequence for encoding "SQL_ASCII": 0x00
+> select convert('\x61'::bytea, 'LATIN1', 'LATIN2')
+fields convert:17:-1:-1
+ERROR 42883 default conversion function for encoding "LATIN1" to "LATIN2" does not exist
+> select convert('\x61'::bytea, 'WIN1252', 'KOI8U')
+fields convert:17:-1:-1
+ERROR 42883 default conversion function for encoding "WIN1252" to "KOI8U" does not exist
+> select length('\x61c3a9e282ac'::bytea, 'UTF8'), length('\x61c3a9e282ac'::bytea, 'LATIN1'), length('\x61c3a9'::bytea, 'sql_ascii')
+fields length:23:4:-1,length:23:4:-1,length:23:4:-1
+row 3,6,3
+SELECT 1
+> select length('\x61c3'::bytea, 'UTF8')
+fields length:23:4:-1
+ERROR 22021 invalid byte sequence for encoding "UTF8": 0xc3
+> select length('\x61'::bytea, 'nope')
+fields length:23:4:-1
+ERROR 22023 invalid encoding name "nope"
+> select to_ascii('abc'), to_ascii('abc', 'LATIN1'), to_ascii('abc', 8)
+ERROR 0A000 encoding conversion from UTF8 to ASCII not supported
+> select to_ascii('aé€')
+ERROR 0A000 encoding conversion from UTF8 to ASCII not supported
+> select to_ascii('aé€ ŁŽ', 'LATIN1'), to_ascii('aé€ ŁŽ', 'LATIN2'), to_ascii('aé€ ŁŽ', 'LATIN9'), to_ascii('aé€ ŁŽ', 'WIN1250'), to_ascii('aé€ ŁŽ', 16), to_ascii('aé€ ŁŽ', 29)
+fields to_ascii:25:-1:-1,to_ascii:25:-1:-1,to_ascii:25:-1:-1,to_ascii:25:-1:-1,to_ascii:25:-1:-1,to_ascii:25:-1:-1
+row aACa   A A ,aASa Z L L",aACa   A Ae,aACa'  L L",aACa   A Ae,aACa'  L L"
+SELECT 1
+> select to_ascii('a', 'KOI8R')
+ERROR 0A000 encoding conversion from KOI8R to ASCII not supported
+> select to_ascii('a', 'nope')
+ERROR 42704 nope is not a valid encoding name
+> select to_ascii('a', 7)
+ERROR 42704 7 is not a valid encoding code
+> select to_ascii('a', 42)
+ERROR 42704 42 is not a valid encoding code
+> select to_ascii('a', -1)
+ERROR 42704 -1 is not a valid encoding code
+> select to_ascii(convert_from('\xa0a1a2a3a4a5a6a7a8a9aaabacadaeafb0b1b2b3b4b5b6b7b8b9babbbcbdbebf'::bytea, 'LATIN1'), 'LATIN1')
+fields to_ascii:25:-1:-1
+row A A AcALA AYA A A"ACAaA A A-ARA A A A A A'AuA A.A,A A A A A A A?
+SELECT 1
+> select convert_to('abc', 'SJIS'), convert_from('\x616263'::bytea, 'EUC_JP'), convert('\x616263'::bytea, 'EUC_JP', 'SJIS'), length('\x616263'::bytea, 'GB18030')
+fields convert_to:17:-1:-1,convert_from:25:-1:-1,convert:17:-1:-1,length:23:4:-1
+row \x616263,abc,\x616263,3
+SELECT 1
+> select convert_from('\x6100'::bytea, 'EUC_KR')
+fields convert_from:25:-1:-1
+ERROR 22021 invalid byte sequence for encoding "EUC_KR": 0x00

@@ -2074,6 +2074,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/wait_events.test")));
     }
 
+    /// `convert`, `convert_from`, `convert_to`, `length(bytea, name)` and `to_ascii`: each byte from 0x80 to 0xFF that a single-byte encoding maps, to UTF8 and back, the first byte that it does not map, the names of the encodings and their aliases, SQL_ASCII, the bad UTF-8 sequences, the zero byte, the pairs of encodings with no conversion, ASCII text in the multibyte encodings, and the four encodings of `to_ascii`. `connection/convert.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn convert() {
+        big_stack(|| script(include_str!("connection/convert.test")));
+    }
+
     /// The five domains of `information_schema`: the schema and its privileges, the rows of `pg_type`, `pg_constraint` and `pg_depend` with the OIDs of PostgreSQL, `format_type`, the casts to a domain with the check constraints in a constant, in a column and in each element of an array, and the type of a domain in `RowDescription`, which is the base type. `connection/domains.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn domains() {
