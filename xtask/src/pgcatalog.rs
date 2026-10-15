@@ -1,6 +1,6 @@
 //! The schemas and the static rows of the system catalogs.
 //!
-//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. It adds the rows of `template0` and `postgres`, which `initdb` copies from `template1`. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`. Last, it gives the static rows the privileges that `initdb` gives them, from the steps of `initdb.c` and the `GRANT` and `REVOKE` statements of `system_views.sql`.
+//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. It adds the rows of `template0` and `postgres`, which `initdb` copies from `template1`. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`. It gives the functions that `system_functions.sql` replaces their body in SQL. Last, it gives the static rows the privileges that `initdb` gives them, from the steps of `initdb.c` and the `GRANT` and `REVOKE` statements of `system_views.sql`.
 //!
 //! `cargo xtask pgcatalog --check` writes nothing. It fails if a file is not the same as the file that the task makes. See `spec/07-sql-types-and-catalog.md` section 7.13.2.
 
@@ -310,6 +310,7 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
     proc_arg_defaults(&catalogs, &mut rows_out)?;
     operator_descriptions(&catalogs, &mut rows_out)?;
     let src = include.parent().ok_or("the include directory has no parent")?;
+    sql_bodies(&catalogs, &read(&src.join(SYSTEM_FUNCTIONS))?, &mut rows_out)?;
     let system_views = read(&src.join(SYSTEM_VIEWS))?;
     initdb_privileges(&catalogs, &system_views, &mut rows_out)?;
 
@@ -1419,6 +1420,83 @@ fn operator_descriptions(
     Ok(())
 }
 
+/// The `CREATE OR REPLACE FUNCTION` statements of `system_functions.sql`, which `initdb` runs after the bootstrap. Each one gives a function of `pg_proc.dat` a body in SQL: `prosrc` becomes empty, `prosqlbody` gets the body, and `procost` gets the `COST` of the statement, 100 when it has none. `prosqlbody` keeps the text of the statement, as for a function that a user makes, and not the tree of `nodeToString`.
+///
+/// The script is read in the single-user mode, so a statement ends at a semicolon followed by an empty line.
+fn sql_bodies(
+    catalogs: &[Catalog],
+    script: &str,
+    rows: &mut BTreeMap<String, Vec<Vec<Option<String>>>>,
+) -> Result<(), String> {
+    let index = |catalog: &str, column: &str| -> Result<usize, String> {
+        catalogs
+            .iter()
+            .find(|c| c.name == catalog)
+            .and_then(|c| c.columns.iter().position(|col| col.name == column))
+            .ok_or_else(|| format!("no column {catalog}.{column}"))
+    };
+    let (t_oid, t_name) = (index("pg_type", "oid")?, index("pg_type", "typname")?);
+    let types: BTreeMap<String, String> = rows["pg_type"]
+        .iter()
+        .filter_map(|r| Some((r[t_name].clone()?, r[t_oid].clone()?)))
+        .collect();
+    let (name, args, src, body, cost) = (
+        index("pg_proc", "proname")?,
+        index("pg_proc", "proargtypes")?,
+        index("pg_proc", "prosrc")?,
+        index("pg_proc", "prosqlbody")?,
+        index("pg_proc", "procost")?,
+    );
+    for statement in script.split(";\n\n") {
+        let Some(at) = statement.find("CREATE OR REPLACE FUNCTION ") else { continue };
+        let text = statement[at..].trim_end().trim_end_matches(';');
+        let bad = || format!("{SYSTEM_FUNCTIONS}: a statement that the task cannot read: {text}");
+        let rest = &text["CREATE OR REPLACE FUNCTION ".len()..];
+        let (proname, rest) = rest.split_once('(').ok_or_else(bad)?;
+        let (params, rest) = rest.split_once(')').ok_or_else(bad)?;
+        let proname = proname.trim().trim_matches('"');
+        let mut oids = Vec::new();
+        for param in params.split(',') {
+            let words: Vec<&str> = param.split_whitespace().collect();
+            match words.first() {
+                Some(&"OUT") => continue,
+                Some(_) => {}
+                None => return Err(bad()),
+            }
+            let ty = match words[words.len() - 1] {
+                "integer" => "int4",
+                "bigint" => "int8",
+                ty => ty,
+            };
+            oids.push(types.get(ty).ok_or_else(bad)?.as_str());
+        }
+        let oids = oids.join(" ");
+        let words: Vec<&str> = rest.split_whitespace().collect();
+        let procost = match words.iter().position(|w| *w == "COST") {
+            Some(i) => words.get(i + 1).ok_or_else(bad)?.to_string(),
+            None => "100".into(),
+        };
+        let row = rows
+            .get_mut("pg_proc")
+            .into_iter()
+            .flatten()
+            .find(|r| {
+                r[name].as_deref() == Some(proname) && r[args].as_deref().unwrap_or("") == oids
+            })
+            .ok_or_else(|| format!("{SYSTEM_FUNCTIONS}: no function {proname}({oids})"))?;
+        if row[src].as_deref() != Some(SQL_BODY) {
+            return Err(format!("{SYSTEM_FUNCTIONS}: {proname}({oids}) has no {SQL_BODY:?}"));
+        }
+        row[src] = Some(String::new());
+        row[body] = Some(text.to_string());
+        row[cost] = Some(procost);
+    }
+    if let Some(row) = rows["pg_proc"].iter().find(|r| r[src].as_deref() == Some(SQL_BODY)) {
+        return Err(format!("{SYSTEM_FUNCTIONS} does not replace {:?}", row[name]));
+    }
+    Ok(())
+}
+
 fn defined_symbol(header: &str, symbol: &str) -> Result<u32, String> {
     header
         .lines()
@@ -1612,6 +1690,10 @@ fn array_items(text: &str) -> Option<Vec<Option<String>>> {
 /// The script that `setup_run_file` of `initdb` runs after the bootstrap. Its `GRANT` and `REVOKE` statements change the privileges of some catalogs.
 const SYSTEM_VIEWS: &str = "backend/catalog/system_views.sql";
 const INFORMATION_SCHEMA: &str = "backend/catalog/information_schema.sql";
+/// The script that gives some functions of `pg_proc.dat` a body in SQL.
+const SYSTEM_FUNCTIONS: &str = "backend/catalog/system_functions.sql";
+/// The `prosrc` of such a function in `pg_proc.dat`.
+const SQL_BODY: &str = "see system_functions.sql";
 
 /// An `aclitem` as `aclitemout` writes it: the grantee (empty for PUBLIC), the privilege bits in the order of [`ACL_RIGHTS`] with the grant option bits 16 places higher, and the grantor.
 type AclItem = (String, u32, String);

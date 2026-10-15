@@ -29,9 +29,8 @@ const INITDB_COLUMNS: [(&str, &[&str]); 6] = [
     ("pg_namespace", &["nspacl"]),
 ];
 
-/// The `prosrc` of a function that `system_functions.sql` replaces with a SQL body. The replacement sets `prosrc`, `prosqlbody` and `procost`.
-const SQL_BODY: &str = "see system_functions.sql";
-const SQL_BODY_COLUMNS: [&str; 3] = ["prosrc", "prosqlbody", "procost"];
+/// The `prosrc` of a function that `system_functions.sql` gives a body in SQL. The oracle keeps the tree of `nodeToString` in `prosqlbody`, and the static rows keep the text of the statement, so the test only checks that both have a body.
+const SQL_BODY: &str = "";
 
 /// The rows of each catalog, as lists of fields.
 type Rows = BTreeMap<&'static str, Vec<Vec<String>>>;
@@ -75,15 +74,19 @@ fn normalize(ours: &mut Rows, theirs: &mut Rows) {
             }
         }
     }
-    let prosrc = catalog("pg_proc").unwrap().column("prosrc").unwrap();
+    let pg_proc = catalog("pg_proc").unwrap();
+    let (prosrc, prosqlbody) =
+        (pg_proc.column("prosrc").unwrap(), pg_proc.column("prosqlbody").unwrap());
     let replaced: BTreeSet<String> = ours["pg_proc"]
         .iter()
         .filter(|row| row[prosrc] == SQL_BODY)
         .map(|row| row[0].clone())
         .collect();
+    assert_eq!(replaced.len(), 45);
     for rows in [ours.get_mut("pg_proc"), theirs.get_mut("pg_proc")].into_iter().flatten() {
         for row in rows.iter_mut().filter(|row| replaced.contains(&row[0])) {
-            blank("pg_proc", row, &SQL_BODY_COLUMNS);
+            assert_ne!(row[prosqlbody], "\\N", "the function {} has no body", row[0]);
+            blank("pg_proc", row, &["prosqlbody"]);
         }
     }
 }
