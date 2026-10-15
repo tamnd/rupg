@@ -10,7 +10,7 @@ use rupg_func::{Call, Kernel};
 use rupg_pgcatalog::builtin;
 use rupg_types::{Array, ArrayDim, MAXDIM, Numeric, NumericSign, Range, Value, oid};
 
-use crate::{Eval, kernel, not_yet, signature, sort, strict};
+use crate::{AggValues, Eval, kernel, not_yet, signature, sort, strict, window};
 
 /// The way the engine computes an aggregate.
 pub(crate) enum Method {
@@ -851,7 +851,7 @@ pub(crate) fn window_values(
     ty: u32,
     part: &[usize],
     groups: &[(usize, usize)],
-    tuples: &[Vec<usize>],
+    input: window::Input<'_>,
 ) -> Result<Vec<Value>> {
     let aggref = window_aggref(call);
     let agg = Agg {
@@ -868,13 +868,14 @@ pub(crate) fn window_values(
             continue;
         }
         for &row in &part[done..end] {
-            let mut e = eval.at(&tuples[row]);
-            if let Some(filter) = &aggref.filter
+            // The arguments of the call, and not their copies in `aggref`, have the aggregate calls that the group computed.
+            let mut e = input.at(eval, row);
+            if let Some(filter) = &call.filter
                 && e.eval(filter)? != Value::Bool(true)
             {
                 continue;
             }
-            let args = aggref.args.iter().map(|a| e.eval(a)).collect::<Result<Vec<_>>>()?;
+            let args = call.args.iter().map(|a| e.eval(a)).collect::<Result<Vec<_>>>()?;
             agg.advance(&mut state, &args, eval)?;
         }
         let value = agg.finish(state.clone(), eval)?;
@@ -995,6 +996,9 @@ pub(crate) fn rows<'a>(
         })
         .collect::<Result<_>>()?;
     let levels = super::set_levels(&query.targets);
+    let calls = window::calls(query);
+    // With window function calls, the windows read the groups that `HAVING` keeps: the first row of each group and the results of its aggregate calls.
+    let mut kept: Vec<(&[usize], AggValues)> = Vec::new();
     let mut rows = Vec::new();
     for group in groups(eval, query, tuples)? {
         let mut states = aggs.iter().map(|a| a.start(eval)).collect::<Result<Vec<_>>>()?;
@@ -1055,7 +1059,23 @@ pub(crate) fn rows<'a>(
         {
             continue;
         }
-        eval.project(&query.targets, &levels, &mut rows)?;
+        if calls.is_empty() {
+            eval.project(&query.targets, &levels, &mut rows)?;
+        } else {
+            kept.push((eval.tuple, std::mem::take(&mut eval.aggs)));
+        }
+    }
+    if !calls.is_empty() {
+        let (firsts, mut aggs): (Vec<&[usize]>, Vec<_>) = kept.into_iter().unzip();
+        let input = window::Input { tuples: &firsts, aggs: &aggs };
+        let (sequence, mut values) = window::compute(eval, query, &calls, input, eval.session)?;
+        for i in sequence {
+            eval.tuple = firsts[i];
+            eval.aggs = std::mem::take(&mut aggs[i]);
+            eval.windows = std::mem::take(&mut values[i]);
+            eval.project(&query.targets, &levels, &mut rows)?;
+        }
+        eval.windows.clear();
     }
     eval.aggs.clear();
     Ok(rows)

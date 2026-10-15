@@ -122,12 +122,20 @@ pub(crate) struct Parts<'a> {
 pub(crate) const SRF_HINT: &str =
     "You might be able to move the set-returning function into a LATERAL FROM item.";
 
-/// `check_agg_arguments_walker`: the first aggregate call or call of a function that gives a set in the arguments of an aggregate, outside their subqueries.
-fn nested(expr: &Expr) -> Option<&Expr> {
+/// `check_agg_arguments_walker`: the first call of a function that gives a set or of a window function in the arguments of an aggregate, outside their subqueries.
+fn nested_set(expr: &Expr) -> Option<&Expr> {
+    match &expr.kind {
+        ExprKind::Window(_) => Some(expr),
+        ExprKind::Func(f) if f.retset => Some(expr),
+        _ => expr.children().into_iter().find_map(nested_set),
+    }
+}
+
+/// The first aggregate call in the arguments of an aggregate, outside their subqueries.
+fn nested_agg(expr: &Expr) -> Option<&Expr> {
     match &expr.kind {
         ExprKind::Agg(_) => Some(expr),
-        ExprKind::Func(f) if f.retset => Some(expr),
-        _ => expr.children().into_iter().find_map(nested),
+        _ => expr.children().into_iter().find_map(nested_agg),
     }
 }
 
@@ -207,14 +215,29 @@ impl Analyzer<'_> {
         };
         let args: Vec<Expr> = targets.into_iter().map(|t| t.expr).collect();
         let filter = parts.filter.map(Box::new);
-        // check_agg_arguments: an aggregate call in the arguments is of the same level, and a set cannot be an argument. The direct arguments come last.
-        let inner = args.iter().chain(filter.as_deref()).find_map(nested);
-        if let Some(inner) = inner.or_else(|| direct.iter().find_map(nested)) {
-            if let ExprKind::Agg(_) = inner.kind {
-                return Err(grouping_error(
-                    "aggregate function calls cannot be nested".into(),
-                    inner.location,
-                ));
+        // check_agg_arguments: an aggregate call in the arguments is of the same level, and a set or a window function cannot be an argument. The walk gives the error of a set or a window function at once and the error of an aggregate call after the walk. The direct arguments come last.
+        let inner = args
+            .iter()
+            .chain(filter.as_deref())
+            .find_map(nested_set)
+            .or_else(|| args.iter().chain(filter.as_deref()).find_map(nested_agg))
+            .or_else(|| direct.iter().find_map(nested_set))
+            .or_else(|| direct.iter().find_map(nested_agg));
+        if let Some(inner) = inner {
+            match inner.kind {
+                ExprKind::Agg(_) => {
+                    return Err(grouping_error(
+                        "aggregate function calls cannot be nested".into(),
+                        inner.location,
+                    ));
+                }
+                ExprKind::Window(_) => {
+                    return Err(grouping_error(
+                        "aggregate function calls cannot contain window function calls".into(),
+                        inner.location,
+                    ));
+                }
+                _ => {}
             }
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,

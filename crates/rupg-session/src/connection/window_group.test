@@ -1,0 +1,94 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW wgrp_t AS SELECT * FROM (VALUES (1, 'a', 10), (1, 'b', 20), (1, 'b', NULL), (2, 'c', 5), (2, 'c', 5), (2, 'd', 7), (3, 'e', NULL), (4, 'a', 1)) AS t(p, k, v)
+CREATE VIEW
+> SELECT p, sum(v), rank() OVER (ORDER BY sum(v) DESC NULLS LAST), sum(sum(v)) OVER (), sum(v) * 100 / sum(sum(v)) OVER () FROM wgrp_t GROUP BY p ORDER BY p
+fields p@wgrp_t.1:23:4:-1,sum:20:8:-1,rank:20:8:-1,sum:1700:-1:-1,?column?:1700:-1:-1
+row 1,30,1,48,62.5000000000000000
+row 2,17,2,48,35.4166666666666667
+row 3,NULL,4,48,NULL
+row 4,1,3,48,2.0833333333333333
+SELECT 4
+> SELECT p, k, count(*), row_number() OVER (PARTITION BY p ORDER BY k), sum(count(*)) OVER (PARTITION BY p ORDER BY k), first_value(k) OVER (PARTITION BY p ORDER BY count(*) DESC, k) FROM wgrp_t GROUP BY p, k ORDER BY p, k
+fields p@wgrp_t.1:23:4:-1,k@wgrp_t.2:25:-1:-1,count:20:8:-1,row_number:20:8:-1,sum:1700:-1:-1,first_value:25:-1:-1
+row 1,a,1,1,1,b
+row 1,b,2,2,3,b
+row 2,c,2,1,2,c
+row 2,d,1,2,3,c
+row 3,e,1,1,1,e
+row 4,a,1,1,1,a
+SELECT 6
+> SELECT k, max(v), lag(max(v)) OVER (ORDER BY k), lead(k) OVER (ORDER BY k), count(*) OVER () FROM wgrp_t GROUP BY k ORDER BY k
+fields k@wgrp_t.2:25:-1:-1,max:23:4:-1,lag:23:4:-1,lead:25:-1:-1,count:20:8:-1
+row a,10,NULL,b,5
+row b,20,10,c,5
+row c,5,20,d,5
+row d,7,5,e,5
+row e,NULL,7,NULL,5
+SELECT 5
+> SELECT p, sum(v), avg(sum(v)) OVER (ORDER BY p), dense_rank() OVER (ORDER BY count(v)) FROM wgrp_t GROUP BY p HAVING count(*) > 1 ORDER BY p
+fields p@wgrp_t.1:23:4:-1,sum:20:8:-1,avg:1700:-1:-1,dense_rank:20:8:-1
+row 1,30,30.0000000000000000,1
+row 2,17,23.5000000000000000,2
+SELECT 2
+> SELECT count(*), sum(count(*)) OVER (), row_number() OVER () FROM wgrp_t
+fields count:20:8:-1,sum:1700:-1:-1,row_number:20:8:-1
+row 8,8,1
+SELECT 1
+> SELECT sum(v), count(*) OVER () FROM wgrp_t WHERE false
+fields sum:20:8:-1,count:20:8:-1
+row NULL,1
+SELECT 1
+> SELECT p + 1 AS q, sum(v), ntile(2) OVER (ORDER BY p + 1) FROM wgrp_t GROUP BY p + 1 ORDER BY q
+fields q:23:4:-1,sum:20:8:-1,ntile:23:4:-1
+row 2,30,1
+row 3,17,1
+row 4,NULL,2
+row 5,1,2
+SELECT 4
+> SELECT p, string_agg(k, ',' ORDER BY k), array_agg(max(v)) OVER (ORDER BY p) FROM wgrp_t GROUP BY p ORDER BY p
+fields p@wgrp_t.1:23:4:-1,string_agg:25:-1:-1,array_agg:1007:-1:-1
+row 1,a,b,b,{20}
+row 2,c,c,d,{20,7}
+row 3,e,{20,7,NULL}
+row 4,a,{20,7,NULL,1}
+SELECT 4
+> SELECT 1, count(*) OVER () HAVING true
+fields ?column?:23:4:-1,count:20:8:-1
+row 1,1
+SELECT 1
+> CREATE VIEW wgrp_v AS SELECT p, sum(v) AS s, rank() OVER (ORDER BY sum(v)) AS r, sum(sum(v)) OVER w AS t FROM wgrp_t GROUP BY p WINDOW w AS (ORDER BY p)
+CREATE VIEW
+> SELECT pg_get_viewdef('wgrp_v'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT p,
+    sum(v) AS s,
+    rank() OVER (ORDER BY (sum(v))) AS r,
+    sum(sum(v)) OVER w AS t
+   FROM wgrp_t
+  GROUP BY p
+  WINDOW w AS (ORDER BY p);
+SELECT 1
+> SELECT * FROM wgrp_v ORDER BY p
+fields p@wgrp_v.1:23:4:-1,s@wgrp_v.2:20:8:-1,r@wgrp_v.3:20:8:-1,t@wgrp_v.4:1700:-1:-1
+row 1,30,3,30
+row 2,17,2,47
+row 3,NULL,4,47
+row 4,1,1,48
+SELECT 4
+> DROP VIEW wgrp_v
+DROP VIEW
+> SELECT p, sum(v) OVER (PARTITION BY p) FROM wgrp_t GROUP BY p
+ERROR 42803 column "wgrp_t.v" must appear in the GROUP BY clause or be used in an aggregate function at 15
+> SELECT p, rank() OVER (ORDER BY v) FROM wgrp_t GROUP BY p
+ERROR 42803 column "wgrp_t.v" must appear in the GROUP BY clause or be used in an aggregate function at 33
+> SELECT p, count(*) OVER (PARTITION BY k) FROM wgrp_t GROUP BY p
+ERROR 42803 column "wgrp_t.k" must appear in the GROUP BY clause or be used in an aggregate function at 39
+> SELECT sum(rank() OVER (ORDER BY p)) FROM wgrp_t GROUP BY p
+ERROR 42803 aggregate function calls cannot contain window function calls at 12
+> SELECT p FROM wgrp_t GROUP BY p HAVING rank() OVER (ORDER BY p) > 1
+ERROR 42P20 window functions are not allowed in HAVING at 40
+> SELECT p, count(*) FROM wgrp_t GROUP BY p, rank() OVER (ORDER BY p)
+ERROR 42P20 window functions are not allowed in GROUP BY at 44
+> DROP VIEW wgrp_t
+DROP VIEW
