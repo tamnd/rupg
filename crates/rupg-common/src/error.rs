@@ -3,14 +3,17 @@
 //! Every error carries a SQLSTATE from the layer where it starts (spec/04 section 4.8). A storage error that reaches a client is then the SQLSTATE that PostgreSQL sends for the same cause, for example `53100` for a full disk and `XX001` for a page with a bad checksum.
 
 use std::fmt;
+use std::panic::Location;
 
 use crate::sqlstate::SqlState;
 
-#[derive(Clone, Debug, PartialEq, Eq)]
+#[derive(Clone, Debug)]
 pub struct Error {
     state: SqlState,
     message: String,
     position: Option<usize>,
+    /// The place in the source of rupg where the error was made. The session sends it in the fields `F`, `L` and `R`, as PostgreSQL sends the place in its C source.
+    place: &'static Location<'static>,
     /// The fields that few errors have, in a box, so that a `Result` with an `Error` stays small.
     more: Option<Box<More>>,
 }
@@ -25,16 +28,25 @@ struct More {
 
 impl Error {
     /// An error with a SQLSTATE and a primary message.
+    #[track_caller]
     pub fn new(state: SqlState, message: impl Into<String>) -> Error {
-        Error { state, message: message.into(), position: None, more: None }
+        Error {
+            state,
+            message: message.into(),
+            position: None,
+            place: Location::caller(),
+            more: None,
+        }
     }
 
     /// An `XX001` error. A check found damaged data.
+    #[track_caller]
     pub fn corrupted(message: impl Into<String>) -> Error {
         Error::new(SqlState::DATA_CORRUPTED, message)
     }
 
     /// An `XX000` error. rupg found a state that its own rules do not allow.
+    #[track_caller]
     pub fn internal(message: impl Into<String>) -> Error {
         Error::new(SqlState::INTERNAL_ERROR, message)
     }
@@ -112,7 +124,22 @@ impl Error {
     pub fn context(&self) -> Option<&str> {
         self.more.as_ref()?.context.as_deref()
     }
+
+    /// The place in the source of rupg where the error was made.
+    pub fn place(&self) -> &'static Location<'static> {
+        self.place
+    }
 }
+
+/// Two errors are equal when they give the same fields to the client. The place in the source is not compared.
+impl PartialEq for Error {
+    fn eq(&self, other: &Error) -> bool {
+        (self.state, &self.message, self.position, &self.more)
+            == (other.state, &other.message, other.position, &other.more)
+    }
+}
+
+impl Eq for Error {}
 
 impl fmt::Display for Error {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
@@ -141,5 +168,12 @@ mod tests {
         let e = Error::corrupted("bad checksum").with_detail("page 7").with_hint("run rupg verify");
         assert_eq!(e.to_string(), "XX001: bad checksum\nDETAIL: page 7\nHINT: run rupg verify");
         assert_eq!((e.position(), e.clone().at(7).at(9).position()), (None, Some(7)));
+    }
+
+    #[test]
+    fn the_place_is_where_the_error_is_made() {
+        let (e, line) = (Error::internal("bad state"), line!());
+        assert_eq!((e.place().file(), e.place().line()), (file!(), line));
+        assert_eq!(e, Error::internal("bad state"));
     }
 }

@@ -55,7 +55,7 @@ pub use backend::{Authentication, Backend, Field, Mark, OutBuf, TransactionStatu
 pub use cancel::{CANCEL_KEY_LEN, CancelKey, QUERY_CANCELED, cancel_target};
 pub use cmdtag::CommandTag;
 pub use crypto::{Crypto, Hashes, md5};
-pub use error::{Level, PROTOCOL_VIOLATION, ProtocolError};
+pub use error::{Level, PROTOCOL_VIOLATION, ProtocolError, source_fields};
 pub use frame::{
     AUTH_MESSAGE_LIMIT, CANCEL_KEY_LIMIT, CANCEL_REQUEST_CODE, Cancel, Frame, GSSENC_REQUEST_CODE,
     LARGE_MESSAGE_LIMIT, Mode, PROTOCOL_3_0, PROTOCOL_3_2, Packet, Param, SMALL_MESSAGE_LIMIT,

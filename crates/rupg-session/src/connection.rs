@@ -18,7 +18,7 @@ use rupg_sql::Severity;
 use rupg_sql::nodes::{LockStmt, Node, ObjectType};
 use rupg_wire::{
     CancelKey, CommandTag, Field, Frontend, Level, OutBuf, Portals, ProtocolError, Session,
-    Statements,
+    Statements, source_fields,
 };
 
 use crate::block::{Block, Ending, Transaction};
@@ -217,7 +217,7 @@ pub fn session_settings(base: &Settings, start: &Start) -> Result<Settings, Erro
     Ok(settings)
 }
 
-/// Writes an `ErrorResponse` or a `NoticeResponse` with the severity, the SQLSTATE, the message, the detail, the hint and the position in the query.
+/// Writes an `ErrorResponse` or a `NoticeResponse` with the severity, the SQLSTATE, the message, the detail, the hint, the position in the query, the context and the place in the source.
 pub fn write_error(
     out: &mut OutBuf,
     severity: &str,
@@ -245,6 +245,8 @@ pub fn write_error(
     if let Some(context) = error.context() {
         fields.push((b'W', context.as_bytes()));
     }
+    let (file, line, routine) = source_fields(error.place());
+    fields.extend([(b'F', file.as_bytes()), (b'L', line.as_bytes()), (b'R', routine.as_bytes())]);
     if notice {
         out.notice_response(&fields);
     } else {
@@ -553,13 +555,11 @@ impl Connection {
             Some(Ok(Frontend::Flush)) => Next::Flush,
             Some(Ok(Frontend::Terminate)) => Next::Close,
             Some(Ok(_)) => {
-                let error = ProtocolError {
-                    level: Level::Error,
-                    sqlstate: "0A000",
-                    message: "the function call protocol is not supported yet".to_owned(),
-                    detail: None,
-                    hint: None,
-                };
+                let error = ProtocolError::new(
+                    Level::Error,
+                    "0A000",
+                    "the function call protocol is not supported yet",
+                );
                 out.protocol_error(&error, self.protocol);
                 self.recover(out)
             }

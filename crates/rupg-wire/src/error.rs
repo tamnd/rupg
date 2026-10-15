@@ -3,6 +3,7 @@
 //! Lifted from `crates/rudb-pgwire/src/error.rs` of tamnd/rudb at f5f7065a (spec/04 section 4.9).
 
 use std::fmt;
+use std::panic::Location;
 
 /// SQLSTATE `08P01`, `protocol_violation`. Most errors of this crate have it. The checks of the startup packet use three more codes, as PostgreSQL does.
 pub const PROTOCOL_VIOLATION: &str = "08P01";
@@ -23,7 +24,7 @@ pub enum Level {
 /// Bytes from the client that break the protocol.
 ///
 /// The message is the text that PostgreSQL gives for the same bytes, so that a client sees the same failure from rupg.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub struct ProtocolError {
     pub level: Level,
     pub sqlstate: &'static str,
@@ -32,25 +33,35 @@ pub struct ProtocolError {
     pub detail: Option<String>,
     /// The `H` field of the error, if PostgreSQL sends one for the same bytes.
     pub hint: Option<&'static str>,
+    /// The place in the source of rupg where the error was made, for the fields `F`, `L` and `R`.
+    pub place: &'static Location<'static>,
 }
 
 impl ProtocolError {
-    pub(crate) fn new(
-        level: Level,
-        sqlstate: &'static str,
-        message: impl Into<String>,
-    ) -> ProtocolError {
-        ProtocolError { level, sqlstate, message: message.into(), detail: None, hint: None }
+    /// An error at a level with a SQLSTATE and a message, with no detail and no hint.
+    #[track_caller]
+    pub fn new(level: Level, sqlstate: &'static str, message: impl Into<String>) -> ProtocolError {
+        ProtocolError {
+            level,
+            sqlstate,
+            message: message.into(),
+            detail: None,
+            hint: None,
+            place: Location::caller(),
+        }
     }
 
+    #[track_caller]
     pub(crate) fn error(message: impl Into<String>) -> ProtocolError {
         ProtocolError::new(Level::Error, PROTOCOL_VIOLATION, message)
     }
 
+    #[track_caller]
     pub(crate) fn fatal(message: impl Into<String>) -> ProtocolError {
         ProtocolError::new(Level::Fatal, PROTOCOL_VIOLATION, message)
     }
 
+    #[track_caller]
     pub(crate) fn log(message: impl Into<String>) -> ProtocolError {
         ProtocolError::new(Level::Log, PROTOCOL_VIOLATION, message)
     }
@@ -68,9 +79,40 @@ impl ProtocolError {
     /// The error that follows a [`Level::Error`] from [`split`](crate::split) for a type byte in [`Mode::CopyIn`](crate::Mode::CopyIn).
     ///
     /// PostgreSQL reads the type byte, rejects it and recovers from the error without the rest of the message. The error handler then finds that a message was not read to its end, and it sends this error before `ReadyForQuery`. [`Session::recover`](crate::Session::recover) gives it.
+    #[track_caller]
     pub fn lost_sync() -> ProtocolError {
         ProtocolError::fatal("terminating connection because protocol synchronization was lost")
     }
+}
+
+/// Two errors are equal when they give the same fields to the client. The place in the source is not compared.
+impl PartialEq for ProtocolError {
+    fn eq(&self, other: &ProtocolError) -> bool {
+        (self.level, self.sqlstate, &self.message, &self.detail, self.hint)
+            == (other.level, other.sqlstate, &other.message, &other.detail, other.hint)
+    }
+}
+
+impl Eq for ProtocolError {}
+
+/// The fields `F`, `L` and `R` for a place in the source of rupg: the name of the file, the line, and the path of the module, for example `extended.rs`, `186` and `rupg_session::connection::extended`. PostgreSQL gives the name of its C file, the line and the name of the function, and libpq and psql show them as the location of the error.
+pub fn source_fields(place: &Location<'_>) -> (String, String, String) {
+    let path = place.file().replace('\\', "/");
+    let file = path.rsplit('/').next().unwrap_or_default().to_owned();
+    let routine = match path.rsplit_once("/src/") {
+        Some((root, rest)) => {
+            let krate = root.rsplit('/').next().unwrap_or_default().replace('-', "_");
+            let rest = rest.strip_suffix(".rs").unwrap_or(rest);
+            let rest = rest.strip_suffix("/mod").unwrap_or(rest);
+            let mut parts = vec![krate];
+            parts.extend(
+                rest.split('/').filter(|p| !matches!(*p, "lib" | "main")).map(str::to_owned),
+            );
+            parts.join("::")
+        }
+        None => file.strip_suffix(".rs").unwrap_or(&file).to_owned(),
+    };
+    (file, place.line().to_string(), routine)
 }
 
 impl fmt::Display for ProtocolError {
@@ -80,3 +122,17 @@ impl fmt::Display for ProtocolError {
 }
 
 impl std::error::Error for ProtocolError {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn the_source_fields_give_the_file_the_line_and_the_module() {
+        let (error, line) = (ProtocolError::error("bad message"), line!());
+        let (file, at, routine) = source_fields(error.place);
+        assert_eq!((file.as_str(), routine.as_str()), ("error.rs", "rupg_wire::error"));
+        assert_eq!(at, line.to_string());
+        assert_eq!(error, ProtocolError::error("bad message"));
+    }
+}
