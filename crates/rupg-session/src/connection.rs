@@ -2381,6 +2381,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/hash.test")));
     }
 
+    /// The comparison of `record` values: the operators, `btrecordcmp`, `ORDER BY`, `DISTINCT`, `max` and `min`, `GREATEST` and `LEAST`, `record_larger` and `record_smaller`, `IN`, nulls in the columns, nested rows, and the errors of rows with other numbers of columns, of other column types and of a column type with no comparison. `connection/record_compare.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn record_compare() {
+        big_stack(|| script(include_str!("connection/record_compare.test")));
+    }
+
     /// The wait events of `pg_wait_events`, which `cargo xtask waitevents` makes from the vendored `wait_event_names.txt`: the count of each type, all the rows of `pg_get_wait_events` in their order, and the join with `pg_stat_activity`, which has no row because the session that runs the statement waits for nothing. `connection/wait_events.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn wait_events() {

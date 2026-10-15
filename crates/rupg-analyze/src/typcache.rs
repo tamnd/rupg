@@ -20,10 +20,8 @@ const HASH_EQUAL: i16 = 1;
 const ARRAY_EQ_OP: u32 = 1070;
 const ARRAY_LT_OP: u32 = 1072;
 const ARRAY_GT_OP: u32 = 1073;
-/// `RECORD_EQ_OP`, `RECORD_LT_OP` and `RECORD_GT_OP`.
+/// `RECORD_EQ_OP`.
 const RECORD_EQ_OP: u32 = 2988;
-const RECORD_LT_OP: u32 = 2990;
-const RECORD_GT_OP: u32 = 2991;
 
 /// The `<`, `=` and `>` operators of a type, or 0 for an operator that the type does not have.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -98,7 +96,7 @@ pub fn sort_operators(ty: u32) -> (u32, u32) {
     (ops.lt, ops.gt)
 }
 
-/// The operators of the type, as `lookup_type_cache` gives `lt_opr`, `eq_opr` and `gt_opr`. An array has the operators only when its element type has them, and the same for a record.
+/// The operators of the type, as `lookup_type_cache` gives `lt_opr`, `eq_opr` and `gt_opr`. An array has the operators only when its element type has them. An anonymous record has the operators, as in PostgreSQL, because the type does not tell the columns.
 pub(crate) fn operators(ty: u32) -> Operators {
     let btree = default_opclass(ty, BTREE);
     let member = |strategy| {
@@ -118,16 +116,6 @@ pub(crate) fn operators(ty: u32) -> Operators {
         lt = None;
     }
     if gt == Some(ARRAY_GT_OP) && element_ops().is_none_or(|e| e.gt == 0) {
-        gt = None;
-    }
-    // A record compares its columns, which the engine does not know for an anonymous record.
-    if eq == Some(RECORD_EQ_OP) {
-        eq = None;
-    }
-    if lt == Some(RECORD_LT_OP) {
-        lt = None;
-    }
-    if gt == Some(RECORD_GT_OP) {
         gt = None;
     }
     Operators { lt: lt.unwrap_or(0), eq: eq.unwrap_or(0), gt: gt.unwrap_or(0) }

@@ -5,9 +5,9 @@ use std::cmp::Ordering;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ProcRow};
 use rupg_types::{
-    Array, DATE_INFINITY, DATE_NEGATIVE_INFINITY, POSTGRES_EPOCH_JDATE, RegKind,
+    Array, DATE_INFINITY, DATE_NEGATIVE_INFINITY, POSTGRES_EPOCH_JDATE, Record, RegKind,
     TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, UNIX_TO_POSTGRES_USECS, USECS_PER_DAY,
-    USECS_PER_SEC, Value, oid,
+    USECS_PER_SEC, Value, format_type, oid,
 };
 
 use crate::cast::{TIMESTAMP_END_JULIAN, infinite, valid_timestamp};
@@ -54,6 +54,8 @@ enum Family {
     TsVector,
     /// `tsquery`, which compares as `tsquery_cmp` does.
     TsQuery,
+    /// `record`, which compares as `record_cmp` does.
+    Record,
 }
 
 /// The family of a type, or `None` for a type that has no comparison here.
@@ -92,6 +94,7 @@ fn family(ty: u32) -> Option<Family> {
         ty if builtin::multirange_range(ty).is_some() => Family::Multirange,
         oid::TSVECTOR => Family::TsVector,
         oid::TSQUERY => Family::TsQuery,
+        oid::RECORD => Family::Record,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
             _ => return None,
@@ -164,8 +167,57 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
         }
         (Value::TsVector(x), Value::TsVector(y)) => rupg_types::tsvector_cmp(x, y).cmp(&0),
         (Value::TsQuery(x), Value::TsQuery(y)) => rupg_types::tsquery_cmp(x, y).cmp(&0),
+        (Value::Record(x), Value::Record(y)) => record_order(x, y, false)?,
         _ => return Err(bad_value()),
     })
+}
+
+/// `record_cmp`, or `record_eq` when `equality` is true, which has its own error for a column type with no comparison: the columns in order, with a null column above the others and two null columns equal. The types of the columns must be the same up to the first column that differs, and the records must have the same number of columns when no column differs.
+fn record_order(a: &Record, b: &Record, equality: bool) -> Result<Ordering> {
+    let columns = a.types.iter().zip(&a.values).zip(b.types.iter().zip(&b.values));
+    for (n, ((&left, x), (&right, y))) in columns.enumerate() {
+        if left != right {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "cannot compare dissimilar column types {} and {} at record column {}",
+                    format_type(left),
+                    format_type(right),
+                    n + 1
+                ),
+            ));
+        }
+        if family(left).is_none() && !matches!(x, Value::Record(_)) {
+            let message = if equality {
+                format!("could not identify an equality operator for type {}", format_type(left))
+            } else {
+                format!("could not identify a comparison function for type {}", format_type(left))
+            };
+            return Err(Error::new(SqlState::UNDEFINED_FUNCTION, message));
+        }
+        let order = match (x.is_null(), y.is_null()) {
+            (true, true) => Ordering::Equal,
+            (true, false) => Ordering::Greater,
+            (false, true) => Ordering::Less,
+            (false, false) => compare(left, x, right, y)?,
+        };
+        if order.is_ne() {
+            return Ok(order);
+        }
+    }
+    if a.values.len() != b.values.len() {
+        return Err(Error::new(
+            SqlState::DATATYPE_MISMATCH,
+            "cannot compare record types with different numbers of columns",
+        ));
+    }
+    Ok(Ordering::Equal)
+}
+
+/// `record_eq` and `record_ne`, which have the error of `record_eq` for a column type with no equality.
+fn record_equal(args: &[Value]) -> Result<bool> {
+    let [Value::Record(a), Value::Record(b)] = args else { return Err(bad_value()) };
+    Ok(record_order(a, b, true)?.is_eq())
 }
 
 /// True when two values that are not null are equal.
@@ -457,6 +509,8 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
     match src {
         "xideq" | "cideq" => return Some(xid_eq),
         "xidneq" => return Some(xid_ne),
+        "record_eq" => return Some(|_, args| record_equal(args).map(Value::Bool)),
+        "record_ne" => return Some(|_, args| record_equal(args).map(|eq| Value::Bool(!eq))),
         _ => {}
     }
     if !comparable(*left, *right) {

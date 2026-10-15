@@ -124,6 +124,8 @@ SELECT 1
 fields hash_record:23:4:-1,hash_record:23:4:-1,hash_record:23:4:-1,hash_record_extended:20:8:-1
 row -2147270101,1072681338,0,-6306474878488880511
 SELECT 1
+> SELECT hash_record(ROW(1, 'a'))
+ERROR 42883 could not identify a hash function for type unknown
 > SELECT hash_array(ARRAY[ROW(1, 'a'::text), ROW(2, 'b'::text)]), hash_array('{"[1,2)","[3,4)"}'::int4range[])
 fields hash_array:23:4:-1,hash_array:23:4:-1
 row -1400395680,-393530126

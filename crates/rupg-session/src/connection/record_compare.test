@@ -1,0 +1,88 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW rec_t AS SELECT * FROM (VALUES (1, 1, 'a'::text, 1, 'b'::text), (2, 1, 'b', 1, 'b'), (3, 2, NULL, 2, 'z'), (4, NULL, NULL, NULL, NULL), (5, 3, 'x', NULL, 'x')) AS t(n, x1, y1, x2, y2)
+CREATE VIEW
+> SELECT n, a = b, a <> b, a < b, a <= b, a > b, a >= b, btrecordcmp(a, b) FROM (SELECT n, ROW(x1, y1) AS a, ROW(x2, y2) AS b FROM rec_t) s ORDER BY n
+fields n@rec_t.1:23:4:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,btrecordcmp:23:4:-1
+row 1,f,t,t,t,f,f,-1
+row 2,t,f,f,t,f,t,0
+row 3,f,t,f,f,t,t,1
+row 4,t,f,f,t,f,t,0
+row 5,f,t,t,t,f,f,-1
+SELECT 5
+> SELECT n, a FROM (SELECT n, ROW(x1, y1) AS a, ROW(x2, y2) AS b FROM rec_t) s ORDER BY a, n
+fields n@rec_t.1:23:4:-1,a:2249:-1:-1
+row 1,(1,a)
+row 2,(1,b)
+row 3,(2,)
+row 5,(3,x)
+row 4,(,)
+SELECT 5
+> SELECT n, a FROM (SELECT n, ROW(x1, y1) AS a, ROW(x2, y2) AS b FROM rec_t) s ORDER BY a DESC, n
+fields n@rec_t.1:23:4:-1,a:2249:-1:-1
+row 4,(,)
+row 5,(3,x)
+row 3,(2,)
+row 2,(1,b)
+row 1,(1,a)
+SELECT 5
+> SELECT DISTINCT b FROM (SELECT n, ROW(x1, y1) AS a, ROW(x2, y2) AS b FROM rec_t) s ORDER BY b
+fields b:2249:-1:-1
+row (1,b)
+row (2,z)
+row (,x)
+row (,)
+SELECT 4
+> SELECT max(a), min(a) FROM (SELECT n, ROW(x1, y1) AS a, ROW(x2, y2) AS b FROM rec_t) s
+fields max:2249:-1:-1,min:2249:-1:-1
+row (,),(1,a)
+SELECT 1
+> SELECT GREATEST(ROW(1, 2), ROW(1, 3)), LEAST(ROW(1, 2), ROW(1, 3))
+fields greatest:2249:-1:-1,least:2249:-1:-1
+row (1,3),(1,2)
+SELECT 1
+> SELECT record_larger(ROW(1, 'q'::text), ROW(1, 'r'::text)), record_smaller(ROW(1, 'q'::text), ROW(1, 'r'::text))
+fields record_larger:2249:-1:-1,record_smaller:2249:-1:-1
+row (1,r),(1,q)
+SELECT 1
+> SELECT record_eq(ROW(1.0::numeric), ROW(1.00::numeric)), record_eq(ROW('NaN'::float8), ROW('NaN'::float8)), record_lt(ROW('ab '::bpchar), ROW('ab'::bpchar)), record_eq(ROW(ARRAY[1,2]), ROW(ARRAY[1,2]))
+fields record_eq:16:1:-1,record_eq:16:1:-1,record_lt:16:1:-1,record_eq:16:1:-1
+row t,t,f,t
+SELECT 1
+> SELECT record_lt(ROW(1, ROW(2, 3)), ROW(1, ROW(2, 4))), record_eq(ROW(1, ROW(2, NULL::int)), ROW(1, ROW(2, NULL::int)))
+fields record_lt:16:1:-1,record_eq:16:1:-1
+row t,t
+SELECT 1
+> SELECT a FROM (SELECT n, ROW(x1, y1) AS a, ROW(x2, y2) AS b FROM rec_t) s WHERE a IN (SELECT ROW(x2, y2) FROM rec_t) ORDER BY a
+fields a:2249:-1:-1
+row (1,b)
+row (,)
+SELECT 2
+> SELECT record_eq(ROW(1, 'a'::text), ROW(2))
+fields record_eq:16:1:-1
+row f
+SELECT 1
+> SELECT record_eq(ROW(1, 'a'::text), ROW(1))
+ERROR 42804 cannot compare record types with different numbers of columns
+> SELECT record_lt(ROW(1, 'a'::text), ROW(1))
+ERROR 42804 cannot compare record types with different numbers of columns
+> SELECT record_lt(ROW(1, 2), ROW(1, 2, 3))
+ERROR 42804 cannot compare record types with different numbers of columns
+> SELECT record_eq(ROW(1, 2), ROW(1, 2::int8))
+ERROR 42804 cannot compare dissimilar column types integer and bigint at record column 2
+> SELECT record_lt(ROW(1, 2), ROW(2, 2::int8))
+fields record_lt:16:1:-1
+row t
+SELECT 1
+> SELECT record_lt(ROW(1, 2::int8), ROW(1, 2))
+ERROR 42804 cannot compare dissimilar column types bigint and integer at record column 2
+> SELECT record_eq(ROW('{}'::json), ROW('{}'::json))
+ERROR 42883 could not identify an equality operator for type json
+> SELECT btrecordcmp(ROW('{}'::json), ROW('{}'::json))
+ERROR 42883 could not identify a comparison function for type json
+> SELECT record_eq(ROW(1, '{}'::json), ROW(2, '{}'::json)), record_lt(ROW(1, '{}'::json), ROW(2, '{}'::json))
+fields record_eq:16:1:-1,record_lt:16:1:-1
+row f,t
+SELECT 1
+> DROP VIEW rec_t
+DROP VIEW

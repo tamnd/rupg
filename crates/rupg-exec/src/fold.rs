@@ -548,8 +548,13 @@ impl<'a> Fold<'a> {
                     with(expr, ExprKind::MinMax { greatest: *greatest, less: *less, args });
                 if all { self.evaluate(folded) } else { Ok(folded) }
             }
-            // As in `eval_const_expressions`, a `ROW()` stays an expression, so that a view shows it as it is written.
-            ExprKind::Row(args) => Ok(with(expr, ExprKind::Row(self.list(args)?))),
+            // As in `eval_const_expressions`, a `ROW()` of constants is a constant. A view keeps the `ROW()` as it is written, because the fold is only for the plan.
+            ExprKind::Row(args) => {
+                let args = self.list(args)?;
+                let all = args.iter().all(|a| value(a).is_some());
+                let folded = with(expr, ExprKind::Row(args));
+                if all { self.evaluate(folded) } else { Ok(folded) }
+            }
             ExprKind::Array { element, multidims, elements } => {
                 let elements = self.list(elements)?;
                 let all = elements.iter().all(|a| value(a).is_some());
