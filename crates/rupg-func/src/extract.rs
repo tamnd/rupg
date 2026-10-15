@@ -109,13 +109,13 @@ fn j2day(julian: i32) -> i32 {
 }
 
 /// The Julian day of the Monday of the first ISO week of `year`.
-fn iso_week_start(year: i32) -> i32 {
+pub(crate) fn iso_week_start(year: i32) -> i32 {
     let day4 = date2j(year, 1, 4);
     day4 - j2day(day4 - 1)
 }
 
 /// `date2isoweek` and `date2isoyear`: the ISO week and the ISO year of a date.
-fn iso_week(year: i32, mon: i32, mday: i32) -> (i32, i32) {
+pub(crate) fn iso_week(year: i32, mon: i32, mday: i32) -> (i32, i32) {
     let dayn = date2j(year, mon, mday);
     let mut year = year;
     let mut start = iso_week_start(year);
