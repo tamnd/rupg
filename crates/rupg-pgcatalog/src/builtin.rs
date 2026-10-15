@@ -139,6 +139,18 @@ pub struct AmopRow {
     pub method: u32,
 }
 
+/// A row of `pg_amproc`.
+#[derive(Debug)]
+pub struct AmprocRow {
+    pub family: u32,
+    pub left: u32,
+    pub right: u32,
+    /// `amprocnum`: the number of the support function in the family, as `BTINRANGE_PROC` is 3 for `in_range`.
+    pub number: i16,
+    /// `amproc`: the function.
+    pub proc: u32,
+}
+
 /// A row of `pg_aggregate`.
 #[derive(Debug)]
 pub struct AggregateRow {
@@ -380,6 +392,8 @@ struct Builtin {
     cast_pair: HashMap<(u32, u32), usize>,
     amop_member: HashMap<(u32, u32, u32, i16), usize>,
     amop_operator: HashMap<u32, Vec<usize>>,
+    /// The rows of `pg_amproc` by the family and the left type.
+    amprocs: HashMap<(u32, u32), Vec<AmprocRow>>,
     aggregates: Vec<AggregateRow>,
     aggregate_fn: HashMap<u32, usize>,
     primary_keys: HashMap<u32, Vec<i16>>,
@@ -516,6 +530,7 @@ impl Builtin {
             cast_pair: casts.iter().enumerate().map(|(i, c)| ((c.source, c.target), i)).collect(),
             amop_member,
             amop_operator,
+            amprocs: load_amprocs(),
             aggregate_fn: aggregates.iter().enumerate().map(|(i, a)| (a.fnoid, i)).collect(),
             aggregates,
             primary_keys: load_primary_keys(),
@@ -720,6 +735,25 @@ fn load_amops() -> Vec<AmopRow> {
             method: method[i],
         })
         .collect()
+}
+
+fn load_amprocs() -> HashMap<(u32, u32), Vec<AmprocRow>> {
+    let r = Rows::new("pg_amproc");
+    let (family, left, right) =
+        (r.oid("amprocfamily"), r.oid("amproclefttype"), r.oid("amprocrighttype"));
+    let (number, proc) = (r.int2("amprocnum"), r.oid("amproc"));
+    let mut out: HashMap<(u32, u32), Vec<AmprocRow>> = HashMap::new();
+    for i in 0..r.catalog.len {
+        let row = AmprocRow {
+            family: family[i],
+            left: left[i],
+            right: right[i],
+            number: number[i],
+            proc: proc[i],
+        };
+        out.entry((row.family, row.left)).or_default().push(row);
+    }
+    out
 }
 
 fn load_aggregates() -> Vec<AggregateRow> {
@@ -1115,6 +1149,11 @@ pub fn amops_of_operator(operator: u32) -> impl Iterator<Item = &'static AmopRow
     b.amop_operator.get(&operator).into_iter().flatten().map(|&i| &b.amops[i])
 }
 
+/// The rows of `pg_amproc` of the family for the left type, as `SearchSysCacheList2(AMPROCNUM, ...)` finds them.
+pub fn amprocs(family: u32, left: u32) -> &'static [AmprocRow] {
+    BUILTIN.amprocs.get(&(family, left)).map_or(&[], Vec::as_slice)
+}
+
 /// The row of `pg_aggregate` of the aggregate function with this OID.
 pub fn aggregate(fnoid: u32) -> Option<&'static AggregateRow> {
     BUILTIN.aggregate_fn.get(&fnoid).map(|&i| &BUILTIN.aggregates[i])
@@ -1230,6 +1269,10 @@ mod tests {
         assert_eq!(opfamily_member(family, 23, 23, 1), Some(97));
         assert_eq!(opfamily_member(family, 23, 23, 5), Some(521));
         assert!(amops_of_operator(97).any(|a| a.method == 403 && a.strategy == 1));
+        // in_range_int4_int8 of integer_ops.
+        assert!(
+            amprocs(family, 23).iter().any(|a| a.number == 3 && a.right == 20 && a.proc == 4127)
+        );
         let set_config = procs_named("set_config").next().unwrap();
         assert_eq!(set_config.volatile, b'v');
         let keywords = procs_named("pg_get_keywords").next().unwrap().argnames.unwrap().to_vec();

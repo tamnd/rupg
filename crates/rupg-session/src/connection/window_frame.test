@@ -1,0 +1,298 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW wf_t AS SELECT * FROM (VALUES (1, 1, 10, 1.5::numeric, 1.5::float8, date '2024-01-01'), (1, 2, 20, 2.5, 2.5, date '2024-01-03'), (1, 2, NULL, 3.5, NULL, date '2024-01-04'), (1, 4, 40, NULL, 4.0, NULL), (1, NULL, 50, 5.0, 'NaN', date '2024-02-01'), (2, 1, 5, 1.0, 'Infinity', date '2024-01-01'), (2, 3, 7, 'Infinity', '-Infinity', date '2024-01-02'), (2, 6, 9, '-Infinity', 6.0, date '2024-01-10'), (3, 1, 1, 1, 1, date '2024-01-01')) AS t(p, o, v, n, f, d)
+CREATE VIEW
+> SELECT p, o, v, sum(v) OVER (PARTITION BY p ORDER BY o, v ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING), count(*) OVER (PARTITION BY p ORDER BY o, v ROWS 2 PRECEDING), sum(v) OVER (PARTITION BY p ORDER BY o, v ROWS BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM wf_t ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,sum:20:8:-1,count:20:8:-1,sum:20:8:-1
+row 1,1,10,30,1,120
+row 1,2,20,30,2,110
+row 1,2,NULL,60,3,90
+row 1,4,40,90,3,90
+row 1,NULL,50,90,3,50
+row 2,1,5,12,1,21
+row 2,3,7,21,2,16
+row 2,6,9,16,3,9
+row 3,1,1,1,1,1
+SELECT 9
+> SELECT p, o, v, sum(v) OVER (PARTITION BY p ORDER BY o, v ROWS BETWEEN 2 FOLLOWING AND 3 FOLLOWING), sum(v) OVER (PARTITION BY p ORDER BY o, v ROWS BETWEEN 3 PRECEDING AND 2 PRECEDING), sum(v) OVER (PARTITION BY p ORDER BY o, v ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM wf_t ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 1,1,10,40,NULL,120
+row 1,2,20,90,NULL,120
+row 1,2,NULL,50,10,120
+row 1,4,40,NULL,30,120
+row 1,NULL,50,NULL,20,120
+row 2,1,5,9,NULL,21
+row 2,3,7,NULL,NULL,21
+row 2,6,9,NULL,5,21
+row 3,1,1,NULL,NULL,1
+SELECT 9
+> SELECT p, o, v, sum(v) OVER (PARTITION BY p ORDER BY o RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), count(*) OVER (PARTITION BY p ORDER BY o RANGE BETWEEN CURRENT ROW AND 2 FOLLOWING), sum(v) OVER (PARTITION BY p ORDER BY o RANGE 2 PRECEDING) FROM wf_t ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,sum:20:8:-1,count:20:8:-1,sum:20:8:-1
+row 1,1,10,30,3,10
+row 1,2,20,30,3,30
+row 1,2,NULL,30,3,30
+row 1,4,40,40,1,60
+row 1,NULL,50,50,1,50
+row 2,1,5,5,2,5
+row 2,3,7,7,1,12
+row 2,6,9,9,1,9
+row 3,1,1,1,1,1
+SELECT 9
+> SELECT p, o, v, sum(v) OVER (PARTITION BY p ORDER BY o DESC RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING), sum(v) OVER (PARTITION BY p ORDER BY o NULLS FIRST RANGE BETWEEN 1 PRECEDING AND CURRENT ROW), sum(v) OVER (PARTITION BY p ORDER BY o DESC NULLS LAST RANGE BETWEEN UNBOUNDED PRECEDING AND 1 PRECEDING) FROM wf_t ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 1,1,10,30,10,60
+row 1,2,20,30,30,40
+row 1,2,NULL,30,30,40
+row 1,4,40,40,40,NULL
+row 1,NULL,50,50,50,120
+row 2,1,5,5,5,16
+row 2,3,7,7,7,9
+row 2,6,9,9,9,NULL
+row 3,1,1,1,1,NULL
+SELECT 9
+> SELECT p, o, v, sum(v) OVER (PARTITION BY p ORDER BY o GROUPS BETWEEN 1 PRECEDING AND 1 FOLLOWING), count(*) OVER (PARTITION BY p ORDER BY o GROUPS BETWEEN CURRENT ROW AND 1 FOLLOWING), sum(v) OVER (PARTITION BY p ORDER BY o GROUPS BETWEEN 2 PRECEDING AND 1 PRECEDING) FROM wf_t ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,sum:20:8:-1,count:20:8:-1,sum:20:8:-1
+row 1,1,10,30,3,NULL
+row 1,2,20,70,3,10
+row 1,2,NULL,70,3,10
+row 1,4,40,110,2,30
+row 1,NULL,50,90,1,60
+row 2,1,5,12,2,NULL
+row 2,3,7,21,2,5
+row 2,6,9,16,1,12
+row 3,1,1,1,1,NULL
+SELECT 9
+> SELECT p, o, v, sum(v) OVER w1, sum(v) OVER w2, sum(v) OVER w3, sum(v) OVER w4 FROM wf_t WINDOW w1 AS (PARTITION BY p ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE CURRENT ROW), w2 AS (PARTITION BY p ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE GROUP), w3 AS (PARTITION BY p ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE TIES), w4 AS (PARTITION BY p ORDER BY o RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW EXCLUDE NO OTHERS) ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 1,1,10,110,110,120,10
+row 1,2,20,100,100,120,30
+row 1,2,NULL,120,100,100,30
+row 1,4,40,80,80,120,70
+row 1,NULL,50,70,70,120,120
+row 2,1,5,16,16,21,5
+row 2,3,7,14,14,21,12
+row 2,6,9,12,12,21,21
+row 3,1,1,NULL,NULL,1,1
+SELECT 9
+> SELECT p, v, sum(v) OVER (PARTITION BY p ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE GROUP), sum(v) OVER (PARTITION BY p ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE TIES), sum(v) OVER (PARTITION BY p RANGE BETWEEN CURRENT ROW AND UNBOUNDED FOLLOWING) FROM wf_t ORDER BY p, v
+fields p@wf_t.1:23:4:-1,v@wf_t.3:23:4:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 1,10,NULL,10,120
+row 1,20,NULL,20,120
+row 1,40,NULL,40,120
+row 1,50,NULL,50,120
+row 1,NULL,NULL,NULL,120
+row 2,5,NULL,5,21
+row 2,7,NULL,7,21
+row 2,9,NULL,9,21
+row 3,1,NULL,1,1
+SELECT 9
+> SELECT p, o, v, first_value(v) OVER w, last_value(v) OVER w, nth_value(v, 2) OVER w FROM wf_t WINDOW w AS (PARTITION BY p ORDER BY o, v ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,first_value:23:4:-1,last_value:23:4:-1,nth_value:23:4:-1
+row 1,1,10,10,20,20
+row 1,2,20,10,NULL,20
+row 1,2,NULL,20,40,NULL
+row 1,4,40,NULL,50,40
+row 1,NULL,50,40,50,50
+row 2,1,5,5,7,7
+row 2,3,7,5,9,7
+row 2,6,9,7,9,9
+row 3,1,1,1,1,NULL
+SELECT 9
+> SELECT p, o, v, first_value(v) OVER w, last_value(v) OVER w, nth_value(v, 2) OVER w FROM wf_t WINDOW w AS (PARTITION BY p ORDER BY o ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE CURRENT ROW) ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,first_value:23:4:-1,last_value:23:4:-1,nth_value:23:4:-1
+row 1,1,10,20,50,NULL
+row 1,2,20,10,50,NULL
+row 1,2,NULL,10,50,20
+row 1,4,40,10,50,20
+row 1,NULL,50,10,40,20
+row 2,1,5,7,9,9
+row 2,3,7,5,9,9
+row 2,6,9,5,7,7
+row 3,1,1,NULL,NULL,NULL
+SELECT 9
+> SELECT p, o, v, first_value(v) OVER w, last_value(v) OVER w, nth_value(v, 3) OVER w FROM wf_t WINDOW w AS (PARTITION BY p ORDER BY o RANGE BETWEEN 1 FOLLOWING AND 3 FOLLOWING) ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,first_value:23:4:-1,last_value:23:4:-1,nth_value:23:4:-1
+row 1,1,10,20,40,40
+row 1,2,20,40,40,NULL
+row 1,2,NULL,40,40,NULL
+row 1,4,40,NULL,NULL,NULL
+row 1,NULL,50,50,50,NULL
+row 2,1,5,7,7,NULL
+row 2,3,7,9,9,NULL
+row 2,6,9,NULL,NULL,NULL
+row 3,1,1,NULL,NULL,NULL
+SELECT 9
+> SELECT p, o, v, last_value(v) OVER (PARTITION BY p ORDER BY o GROUPS BETWEEN CURRENT ROW AND 1 FOLLOWING EXCLUDE TIES) FROM wf_t ORDER BY p, o, v
+fields p@wf_t.1:23:4:-1,o@wf_t.2:23:4:-1,v@wf_t.3:23:4:-1,last_value:23:4:-1
+row 1,1,10,NULL
+row 1,2,20,40
+row 1,2,NULL,40
+row 1,4,40,50
+row 1,NULL,50,50
+row 2,1,5,7
+row 2,3,7,9
+row 2,6,9,9
+row 3,1,1,1
+SELECT 9
+> SELECT p, n, sum(v) OVER (PARTITION BY p ORDER BY n RANGE BETWEEN 1 PRECEDING AND 1.5 FOLLOWING), count(*) OVER (PARTITION BY p ORDER BY n RANGE BETWEEN 'Infinity' PRECEDING AND CURRENT ROW), count(*) OVER (PARTITION BY p ORDER BY n DESC RANGE BETWEEN CURRENT ROW AND 'Infinity' FOLLOWING) FROM wf_t ORDER BY p, n, v
+fields p@wf_t.1:23:4:-1,n@wf_t.4:1700:-1:-1,sum:20:8:-1,count:20:8:-1,count:20:8:-1
+row 1,1.5,30,1,1
+row 1,2.5,30,2,2
+row 1,3.5,70,3,3
+row 1,5.0,50,4,4
+row 1,NULL,40,1,1
+row 2,-Infinity,9,1,1
+row 2,1.0,5,2,2
+row 2,Infinity,7,3,3
+row 3,1,1,1,1
+SELECT 9
+> SELECT p, f, sum(v) OVER (PARTITION BY p ORDER BY f RANGE BETWEEN 1 PRECEDING AND 1.5 FOLLOWING), count(*) OVER (PARTITION BY p ORDER BY f RANGE BETWEEN 'Infinity' PRECEDING AND 'Infinity' FOLLOWING), count(*) OVER (PARTITION BY p ORDER BY f::float4 DESC RANGE BETWEEN CURRENT ROW AND 1 FOLLOWING) FROM wf_t ORDER BY p, f, v
+fields p@wf_t.1:23:4:-1,f@wf_t.5:701:8:-1,sum:20:8:-1,count:20:8:-1,count:20:8:-1
+row 1,1.5,30,3,1
+row 1,2.5,70,3,2
+row 1,4,40,3,1
+row 1,NaN,50,1,1
+row 1,NULL,NULL,1,1
+row 2,-Infinity,7,3,1
+row 2,6,9,3,1
+row 2,Infinity,5,3,1
+row 3,1,1,1,1
+SELECT 9
+> SELECT p, d, sum(v) OVER (PARTITION BY p ORDER BY d RANGE BETWEEN interval '1 day' PRECEDING AND interval '2 days' FOLLOWING), count(*) OVER (ORDER BY d::timestamp RANGE BETWEEN interval '1 week' PRECEDING AND CURRENT ROW), count(*) OVER (ORDER BY d::timestamptz DESC RANGE interval '1 month' PRECEDING) FROM wf_t ORDER BY p, d, v
+fields p@wf_t.1:23:4:-1,d@wf_t.6:1082:4:-1,sum:20:8:-1,count:20:8:-1,count:20:8:-1
+row 1,2024-01-01,30,3,8
+row 1,2024-01-03,20,5,4
+row 1,2024-01-04,20,6,3
+row 1,2024-02-01,50,1,1
+row 1,NULL,40,1,1
+row 2,2024-01-01,12,3,8
+row 2,2024-01-02,12,4,5
+row 2,2024-01-10,9,3,2
+row 3,2024-01-01,1,3,8
+SELECT 9
+> SELECT g, sum(g) OVER (ORDER BY (g % 3)::int2 RANGE BETWEEN 1::int2 PRECEDING AND 1::int8 FOLLOWING), sum(g) OVER (ORDER BY g::int8 RANGE BETWEEN 2 PRECEDING AND CURRENT ROW), sum(g) OVER (ORDER BY g RANGE BETWEEN 2147483647 PRECEDING AND 2147483647 FOLLOWING) FROM generate_series(-2147483647, -2147483643) AS g ORDER BY g
+fields g:23:4:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row -2147483647,-10737418225,-2147483647,-10737418225
+row -2147483646,-8589934580,-4294967293,-10737418225
+row -2147483645,-6442450936,-6442450938,-10737418225
+row -2147483644,-10737418225,-6442450935,-10737418225
+row -2147483643,-8589934580,-6442450932,-10737418225
+SELECT 5
+> SELECT g, count(*) OVER (ORDER BY t RANGE BETWEEN interval '1 hour' PRECEDING AND interval '30 minutes' FOLLOWING), count(*) OVER (ORDER BY t::timetz RANGE BETWEEN interval '2 hours' PRECEDING AND CURRENT ROW), count(*) OVER (ORDER BY i RANGE BETWEEN interval '1 day' PRECEDING AND interval '1 day' FOLLOWING) FROM (VALUES (1, time '01:00', interval '1 day'), (2, time '01:30', interval '2 days'), (3, time '03:00', interval '1 hour'), (4, time '23:59', 'infinity')) AS x(g, t, i) ORDER BY g
+fields g:23:4:-1,count:20:8:-1,count:20:8:-1,count:20:8:-1
+row 1,2,1,3
+row 2,2,2,2
+row 3,1,3,2
+row 4,1,1,1
+SELECT 4
+> SELECT g, sum(g) OVER (ORDER BY g ROWS BETWEEN 1 + 1 PRECEDING AND CURRENT ROW), sum(g) OVER (ORDER BY g GROUPS 9223372036854775807 PRECEDING), sum(g) OVER (ORDER BY g ROWS BETWEEN CURRENT ROW AND 9223372036854775807 FOLLOWING) FROM generate_series(1, 4) AS g ORDER BY g
+fields g:23:4:-1,sum:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 1,1,1,10
+row 2,3,3,9
+row 3,6,6,7
+row 4,9,10,4
+SELECT 4
+> SELECT sum(g) OVER (ORDER BY g ROWS BETWEEN NULL PRECEDING AND CURRENT ROW) FROM generate_series(1, 4) AS g
+fields sum:20:8:-1
+ERROR 22004 frame starting offset must not be null
+> SELECT sum(g) OVER (ORDER BY g ROWS BETWEEN CURRENT ROW AND NULL FOLLOWING) FROM generate_series(1, 4) AS g
+fields sum:20:8:-1
+ERROR 22004 frame ending offset must not be null
+> SELECT sum(g) OVER (ORDER BY g ROWS BETWEEN -1 PRECEDING AND CURRENT ROW) FROM generate_series(1, 4) AS g
+fields sum:20:8:-1
+ERROR 22013 frame starting offset must not be negative
+> SELECT sum(g) OVER (ORDER BY g GROUPS BETWEEN CURRENT ROW AND -1 FOLLOWING) FROM generate_series(1, 4) AS g
+fields sum:20:8:-1
+ERROR 22013 frame ending offset must not be negative
+> SELECT sum(g) OVER (ORDER BY g ROWS BETWEEN -1 PRECEDING AND CURRENT ROW) FROM generate_series(1, 4) AS g WHERE false
+fields sum:20:8:-1
+ERROR 22013 frame starting offset must not be negative
+> SELECT sum(g) OVER (ORDER BY g RANGE BETWEEN -1 PRECEDING AND CURRENT ROW) FROM generate_series(1, 4) AS g
+fields sum:20:8:-1
+ERROR 22013 invalid preceding or following size in window function
+> SELECT sum(g) OVER (ORDER BY g RANGE BETWEEN -1 PRECEDING AND CURRENT ROW) FROM generate_series(1, 4) AS g WHERE false
+fields sum:20:8:-1
+SELECT 0
+> SELECT sum(g) OVER (ORDER BY g RANGE BETWEEN NULL PRECEDING AND CURRENT ROW) FROM generate_series(1, 4) AS g
+fields sum:20:8:-1
+ERROR 22004 frame starting offset must not be null
+> SELECT sum(f) OVER (ORDER BY f RANGE BETWEEN 'NaN' PRECEDING AND CURRENT ROW) FROM wf_t
+fields sum:701:8:-1
+ERROR 22013 invalid preceding or following size in window function
+> SELECT sum(v) OVER (ORDER BY n RANGE BETWEEN '-Infinity' PRECEDING AND CURRENT ROW) FROM wf_t
+fields sum:20:8:-1
+ERROR 22013 invalid preceding or following size in window function
+> SELECT sum(v) OVER (ORDER BY d RANGE BETWEEN interval '-1 day' PRECEDING AND CURRENT ROW) FROM wf_t
+fields sum:20:8:-1
+ERROR 22013 invalid preceding or following size in window function
+> SELECT count(*) OVER (ORDER BY g RANGE BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM (VALUES ('a'), ('b')) AS x(g)
+ERROR 0A000 RANGE with offset PRECEDING/FOLLOWING is not supported for column type text at 48
+> SELECT sum(v) OVER (ORDER BY p, o RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM wf_t
+ERROR 42P20 RANGE with offset PRECEDING/FOLLOWING requires exactly one ORDER BY column at 20
+> SELECT sum(v) OVER (RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM wf_t
+ERROR 42P20 RANGE with offset PRECEDING/FOLLOWING requires exactly one ORDER BY column at 20
+> SELECT sum(v) OVER (GROUPS BETWEEN 1 PRECEDING AND CURRENT ROW) FROM wf_t
+ERROR 42P20 GROUPS mode requires an ORDER BY clause at 20
+> SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN v PRECEDING AND CURRENT ROW) FROM wf_t
+ERROR 42P10 argument of ROWS must not contain variables at 45
+> SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN sum(v) PRECEDING AND CURRENT ROW) FROM wf_t
+ERROR 42803 aggregate functions are not allowed in window ROWS at 45
+> SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN row_number() OVER () PRECEDING AND CURRENT ROW) FROM wf_t
+ERROR 42P20 window functions are not allowed in window definitions at 45
+> SELECT sum(v) OVER (ORDER BY o ROWS BETWEEN 'x' PRECEDING AND CURRENT ROW) FROM wf_t
+ERROR 22P02 invalid input syntax for type bigint: "x" at 45
+> SELECT sum(v) OVER (ORDER BY d RANGE BETWEEN 1 PRECEDING AND CURRENT ROW) FROM wf_t
+ERROR 0A000 RANGE with offset PRECEDING/FOLLOWING is not supported for column type date and offset type integer at 46
+> SELECT sum(v) OVER (w ROWS 1 PRECEDING) FROM wf_t WINDOW w AS (ORDER BY o)
+fields sum:20:8:-1
+row 10
+row 15
+row 6
+row 21
+row 20
+row 7
+row 47
+row 49
+row 59
+SELECT 9
+> SELECT sum(v) OVER (w) FROM wf_t WINDOW w AS (ORDER BY o ROWS 1 PRECEDING)
+ERROR 42P20 cannot copy window "w" because it has a frame clause at 20
+> SELECT sum(v) OVER (w ORDER BY o) FROM wf_t WINDOW w AS (PARTITION BY p ROWS 1 PRECEDING)
+ERROR 42P20 cannot copy window "w" because it has a frame clause at 20
+> SELECT o, sum(v) OVER w FROM wf_t WHERE p = 1 WINDOW w AS (ORDER BY o ROWS 1 PRECEDING) ORDER BY o
+fields o@wf_t.2:23:4:-1,sum:20:8:-1
+row 1,10
+row 2,30
+row 2,20
+row 4,40
+row NULL,90
+SELECT 5
+> CREATE VIEW wf_v AS SELECT p, sum(v) OVER (PARTITION BY p ORDER BY o ROWS BETWEEN 1 PRECEDING AND 2 FOLLOWING EXCLUDE CURRENT ROW) AS a, sum(v) OVER (ORDER BY o RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS b, sum(v) OVER (ORDER BY n RANGE BETWEEN 1.5 PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE TIES) AS c, count(*) OVER (ORDER BY o GROUPS 2 PRECEDING EXCLUDE GROUP) AS e, first_value(v) OVER (ORDER BY d RANGE BETWEEN interval '1 day' FOLLOWING AND interval '3 days' FOLLOWING) AS f, sum(v) OVER (ROWS UNBOUNDED PRECEDING) AS h FROM wf_t
+CREATE VIEW
+> SELECT pg_get_viewdef('wf_v'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT p,
+    sum(v) OVER (PARTITION BY p ORDER BY o ROWS BETWEEN 1 PRECEDING AND 2 FOLLOWING EXCLUDE CURRENT ROW) AS a,
+    sum(v) OVER (ORDER BY o RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW) AS b,
+    sum(v) OVER (ORDER BY n RANGE BETWEEN 1.5 PRECEDING AND UNBOUNDED FOLLOWING EXCLUDE TIES) AS c,
+    count(*) OVER (ORDER BY o GROUPS 2 PRECEDING EXCLUDE GROUP) AS e,
+    first_value(v) OVER (ORDER BY d RANGE BETWEEN '1 day'::interval FOLLOWING AND '3 days'::interval FOLLOWING) AS f,
+    sum(v) OVER (ROWS UNBOUNDED PRECEDING) AS h
+   FROM wf_t;
+SELECT 1
+> SELECT * FROM wf_v ORDER BY 1, 2, 3, 4, 5, 6, 7
+fields p@wf_v.1:23:4:-1,a@wf_v.2:20:8:-1,b@wf_v.3:20:8:-1,c@wf_v.4:20:8:-1,e@wf_v.5:20:8:-1,f@wf_v.6:23:4:-1,h@wf_v.7:20:8:-1
+row 1,20,16,133,0,7,10
+row 1,40,142,97,2,NULL,142
+row 1,70,36,117,3,NULL,16
+row 1,70,83,40,3,40,83
+row 1,90,36,133,3,NULL,36
+row 2,7,92,142,2,NULL,92
+row 2,14,43,47,5,20,43
+row 2,16,16,132,0,7,15
+row 3,NULL,16,128,0,7,16
+SELECT 9
+> DROP VIEW wf_v
+DROP VIEW
+> DROP VIEW wf_t
+DROP VIEW

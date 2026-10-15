@@ -1,12 +1,15 @@
-//! `WindowAgg` and the window functions of `windowfuncs.c`. Each window that a call uses sorts the rows on its items of `PARTITION BY` and `ORDER BY`, in the order of `select_active_windows`, and a window whose items are the first keys of the order before it does not sort again. The frame of each window is the default frame: from the start of the partition to the last peer of the row. An aggregate function with `OVER` gives the result of the rows of the frame.
+//! `WindowAgg` and the window functions of `windowfuncs.c`. Each window that a call uses sorts the rows on its items of `PARTITION BY` and `ORDER BY`, in the order of `select_active_windows`, and a window whose items are the first keys of the order before it does not sort again. The frame of a row has the rows from its start to its end in `ROWS`, `RANGE` or `GROUPS` mode, without the rows of the clause `EXCLUDE`. An aggregate function with `OVER`, `first_value`, `last_value` and `nth_value` use the rows of the frame.
 
 use std::cmp::Ordering;
 
-use rupg_analyze::{Expr, ExprKind, Query, SortGroup, WindowClause, WindowFunc};
+use rupg_analyze::{
+    Expr, ExprKind, Frame, FrameBound, FrameExclusion, FrameMode, Query, SortGroup, WindowClause,
+    WindowFunc,
+};
 use rupg_common::{Error, Result, SqlState};
-use rupg_func::Session;
+use rupg_func::{Call, Kernel, Session};
 use rupg_pgcatalog::builtin;
-use rupg_types::Value;
+use rupg_types::{Value, oid};
 
 use crate::{AggValues, Eval, agg, kernel, not_yet, signature, sort};
 
@@ -166,6 +169,13 @@ pub(crate) fn check(query: &Query) -> Result<()> {
         for item in window.partition.iter().chain(&window.order) {
             kernel(item.equal, None)?;
         }
+        let frame = &window.frame;
+        frame.start.iter().chain(&frame.end).try_for_each(crate::check)?;
+        for func in [frame.start_in_range, frame.end_in_range] {
+            if func != 0 {
+                kernel(func, None)?;
+            }
+        }
     }
     Ok(())
 }
@@ -204,6 +214,11 @@ pub(crate) fn compute(
 ) -> Result<(Vec<usize>, Values)> {
     let count = input.tuples.len();
     let actives = active(query, calls)?;
+    // Each `WindowAgg` node computes the offsets of its frame before it reads a row, and the node of the last window is at the top of the plan.
+    let mut offsets = vec![[Value::Null, Value::Null]; actives.len()];
+    for (slot, (_, window)) in offsets.iter_mut().zip(&actives).rev() {
+        *slot = frame_offsets(eval, &window.frame)?;
+    }
     // The values of the targets that the windows sort on, for each row.
     let mut used = vec![false; query.targets.len()];
     for (_, window) in &actives {
@@ -226,7 +241,7 @@ pub(crate) fn compute(
     let mut order: Vec<usize> = (0..count).collect();
     let mut current: Vec<SortGroup> = Vec::new();
     let mut values: Values = vec![Vec::new(); count];
-    for (winref, window) in actives {
+    for ((winref, window), offsets) in actives.into_iter().zip(&offsets) {
         let wanted = keys(window)?;
         // pathkeys_count_contained_in: the rows need no sort when the keys of the window start the keys of the order.
         let same = |a: &SortGroup, b: &SortGroup| {
@@ -259,11 +274,30 @@ pub(crate) fn compute(
                     first = i;
                 }
             }
+            // The frame of each row, when a call uses it.
+            let framed = |(call, _): &&(&WindowFunc, u32)| {
+                call.agg
+                    || matches!(
+                        method(call.oid, None),
+                        Ok(Method::FirstValue | Method::LastValue | Method::NthValue)
+                    )
+            };
+            let bounds = if mine.iter().any(|c| framed(&c)) {
+                let ranged = Ranged::new(query, window, session)?;
+                let keys: Vec<&Value> = match &ranged {
+                    Some(ranged) => part.iter().map(|&row| &rows[row][ranged.target]).collect(),
+                    None => Vec::new(),
+                };
+                frames(&window.frame, offsets, &groups, ranged.as_ref(), &keys)?
+            } else {
+                Vec::new()
+            };
             for &(call, ty) in &mine {
                 let results = if call.agg {
-                    agg::window_values(eval, call, ty, part, &groups, input)?
+                    agg::window_values(eval, call, ty, part, &bounds, input)?
                 } else {
-                    partition_values(eval, call, method(call.oid, None)?, part, &groups, input)?
+                    let method = method(call.oid, None)?;
+                    partition_values(eval, call, method, part, &groups, &bounds, input)?
                 };
                 for (&row, value) in part.iter().zip(results) {
                     values[row].push((std::ptr::from_ref(call), value));
@@ -308,13 +342,14 @@ fn int4_arg(
     }
 }
 
-/// The values of a call for the rows of one partition. `groups` has the start and the end of the peer group of each row.
+/// The values of a call for the rows of one partition. `groups` has the start and the end of the peer group of each row, and `frames` the frame of each row for `first_value`, `last_value` and `nth_value`.
 fn partition_values(
     eval: &Eval<'_>,
     call: &WindowFunc,
     method: Method,
     part: &[usize],
     groups: &[(usize, usize)],
+    frames: &[Bounds],
     input: Input<'_>,
 ) -> Result<Vec<Value>> {
     let n = part.len();
@@ -407,17 +442,23 @@ fn partition_values(
             }
         }
         Method::FirstValue => {
-            for _ in 0..n {
-                out.push(arg(eval, call, 0, input, part[0])?);
+            for bounds in frames {
+                out.push(match bounds.rows().next() {
+                    Some(at) => arg(eval, call, 0, input, part[at])?,
+                    None => Value::Null,
+                });
             }
         }
         Method::LastValue => {
-            for g in groups {
-                out.push(arg(eval, call, 0, input, part[g.1 - 1])?);
+            for bounds in frames {
+                out.push(match bounds.rows().last() {
+                    Some(at) => arg(eval, call, 0, input, part[at])?,
+                    None => Value::Null,
+                });
             }
         }
         Method::NthValue => {
-            for (i, g) in groups.iter().enumerate() {
+            for (i, bounds) in frames.iter().enumerate() {
                 let Some(nth) = int4_arg(eval, call, 1, input, part[i])? else {
                     out.push(Value::Null);
                     continue;
@@ -429,9 +470,255 @@ fn partition_values(
                     ));
                 }
                 let at = usize::try_from(nth - 1).unwrap_or(usize::MAX);
-                out.push(if at < g.1 { arg(eval, call, 0, input, part[at])? } else { Value::Null });
+                out.push(match bounds.rows().nth(at) {
+                    Some(at) => arg(eval, call, 0, input, part[at])?,
+                    None => Value::Null,
+                });
             }
         }
+    }
+    Ok(out)
+}
+
+/// The rows of the frame of a row, as indexes in the partition: the rows from `head` to `tail` that the clause `EXCLUDE` does not remove.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) struct Bounds {
+    pub(crate) head: usize,
+    pub(crate) tail: usize,
+    /// The first row and the end of the rows that the exclusion removes.
+    skip: (usize, usize),
+    /// The current row with `EXCLUDE TIES`, which stays in the frame.
+    keep: Option<usize>,
+}
+
+impl Bounds {
+    /// True when the exclusion removes rows.
+    pub(crate) fn excludes(&self) -> bool {
+        self.skip.0 < self.skip.1
+    }
+
+    /// The rows of the frame in their order.
+    pub(crate) fn rows(&self) -> impl Iterator<Item = usize> {
+        let b = *self;
+        (b.head..b.tail).filter(move |&at| at < b.skip.0 || at >= b.skip.1 || b.keep == Some(at))
+    }
+}
+
+/// `calculate_frame_offsets`: the offsets of the start and the end of a frame, or nulls for the bounds with no offset.
+fn frame_offsets(eval: &Eval<'_>, frame: &Frame) -> Result<[Value; 2]> {
+    let mut out = [Value::Null, Value::Null];
+    for (slot, (expr, which)) in
+        out.iter_mut().zip([(&frame.start, "starting"), (&frame.end, "ending")])
+    {
+        let Some(expr) = expr else { continue };
+        let value = eval.at(&[]).eval(expr)?;
+        if value == Value::Null {
+            return Err(Error::new(
+                SqlState::NULL_VALUE_NOT_ALLOWED,
+                format!("frame {which} offset must not be null"),
+            ));
+        }
+        if frame.mode() != FrameMode::Range && value.as_i64().is_some_and(|v| v < 0) {
+            return Err(Error::new(
+                SqlState::INVALID_PRECEDING_OR_FOLLOWING_SIZE,
+                format!("frame {which} offset must not be negative"),
+            ));
+        }
+        *slot = value;
+    }
+    Ok(out)
+}
+
+/// The `in_range` function of a bound of a frame in `RANGE` mode with an offset, and the type of the offset.
+type InRange = Option<(Kernel, u32)>;
+
+/// The `in_range` functions of a frame in `RANGE` mode with an offset, and the column of `ORDER BY` that they compare.
+struct Ranged<'s> {
+    target: usize,
+    ty: u32,
+    start: InRange,
+    end: InRange,
+    asc: bool,
+    nulls_first: bool,
+    session: &'s dyn Session,
+}
+
+impl<'s> Ranged<'s> {
+    fn new(query: &Query, window: &WindowClause, session: &'s dyn Session) -> Result<Option<Self>> {
+        let frame = &window.frame;
+        if frame.mode() != FrameMode::Range || (frame.start.is_none() && frame.end.is_none()) {
+            return Ok(None);
+        }
+        let Some(item) = window.order.first() else {
+            return Err(Error::internal("a frame in RANGE mode with no column to order"));
+        };
+        let func = |f: u32, offset: &Option<Expr>| -> Result<InRange> {
+            match offset {
+                Some(offset) if f != 0 => Ok(Some((kernel(f, None)?, offset.ty))),
+                _ => Ok(None),
+            }
+        };
+        Ok(Some(Ranged {
+            target: item.target,
+            ty: query.targets[item.target].expr.ty,
+            start: func(frame.start_in_range, &frame.start)?,
+            end: func(frame.end_in_range, &frame.end)?,
+            asc: frame.in_range_asc,
+            nulls_first: frame.in_range_nulls_first,
+            session,
+        }))
+    }
+
+    /// The call of an `in_range` function on the value of a row, the value of the current row and the offset.
+    fn test(
+        &self,
+        func: InRange,
+        val: &Value,
+        base: &Value,
+        offset: &Value,
+        sub: bool,
+        less: bool,
+    ) -> Result<bool> {
+        let (func, ty) =
+            func.ok_or_else(|| Error::internal("a frame with no in_range function"))?;
+        let types = [self.ty, self.ty, ty, oid::BOOL, oid::BOOL];
+        let call = Call { session: self.session, args: &types, ret: oid::BOOL, variadic: false };
+        let args = [val.clone(), base.clone(), offset.clone(), Value::Bool(sub), Value::Bool(less)];
+        Ok(func(&call, &args)? == Value::Bool(true))
+    }
+}
+
+/// The frame of each row of a partition, as `update_frameheadpos`, `update_frametailpos` and `row_is_in_frame` find it. `groups` has the peer group of each row, and `keys` the value of the column of `ORDER BY` of each row in `RANGE` mode with an offset.
+fn frames(
+    frame: &Frame,
+    offsets: &[Value; 2],
+    groups: &[(usize, usize)],
+    ranged: Option<&Ranged<'_>>,
+    keys: &[&Value],
+) -> Result<Vec<Bounds>> {
+    let n = groups.len();
+    // The number of the peer group of each row, and the first row of each group.
+    let mut starts: Vec<usize> = Vec::new();
+    let mut number: Vec<usize> = Vec::with_capacity(n);
+    for (i, g) in groups.iter().enumerate() {
+        if g.0 == i {
+            starts.push(i);
+        }
+        number.push(starts.len() - 1);
+    }
+    let int8 = |v: &Value| i128::from(v.as_i64().unwrap_or(0));
+    let clamp = |v: i128| usize::try_from(v.clamp(0, n as i128)).unwrap_or(n);
+    // The first row of the first group after the group `g`, or of the group `g`, as a number of a group.
+    let group_start = |g: i128| match usize::try_from(g) {
+        Ok(g) => starts.get(g).copied().unwrap_or(n),
+        Err(_) => 0,
+    };
+    let mode = frame.mode();
+    let (mut head, mut tail) = (0, 0);
+    let mut out = Vec::with_capacity(n);
+    for i in 0..n {
+        let current = i as i128;
+        let start = frame.start_bound();
+        let first = match (start, mode) {
+            (FrameBound::UnboundedPreceding, _) => 0,
+            (FrameBound::UnboundedFollowing, _) => n,
+            (FrameBound::CurrentRow, FrameMode::Rows) => i,
+            (FrameBound::CurrentRow, _) => groups[i].0,
+            (_, FrameMode::Rows) => {
+                let offset = int8(&offsets[0]);
+                clamp(if start == FrameBound::Preceding {
+                    current - offset
+                } else {
+                    current + offset
+                })
+            }
+            (_, FrameMode::Groups) => {
+                let (group, offset) = (number[i] as i128, int8(&offsets[0]));
+                group_start(if start == FrameBound::Preceding {
+                    group - offset
+                } else {
+                    group + offset
+                })
+            }
+            (_, FrameMode::Range) => {
+                let ranged =
+                    ranged.ok_or_else(|| Error::internal("a frame with no in_range function"))?;
+                let (mut sub, mut less) = (start == FrameBound::Preceding, false);
+                if !ranged.asc {
+                    (sub, less) = (!sub, true);
+                }
+                while head < n {
+                    let (value, base) = (keys[head], keys[i]);
+                    let (null, base_null) = (*value == Value::Null, *base == Value::Null);
+                    if null || base_null {
+                        let stop = if ranged.nulls_first {
+                            !null || base_null
+                        } else {
+                            null || !base_null
+                        };
+                        if stop {
+                            break;
+                        }
+                    } else if ranged.test(ranged.start, value, base, &offsets[0], sub, less)? {
+                        break;
+                    }
+                    head += 1;
+                }
+                head
+            }
+        };
+        let end = frame.end_bound();
+        let last = match (end, mode) {
+            (FrameBound::UnboundedFollowing, _) => n,
+            (FrameBound::UnboundedPreceding, _) => 0,
+            (FrameBound::CurrentRow, FrameMode::Rows) => i + 1,
+            (FrameBound::CurrentRow, _) => groups[i].1,
+            (_, FrameMode::Rows) => {
+                let offset = int8(&offsets[1]);
+                clamp(if end == FrameBound::Preceding {
+                    current - offset + 1
+                } else {
+                    current + offset + 1
+                })
+            }
+            (_, FrameMode::Groups) => {
+                let (group, offset) = (number[i] as i128, int8(&offsets[1]));
+                group_start(if end == FrameBound::Preceding {
+                    group - offset + 1
+                } else {
+                    group + offset + 1
+                })
+            }
+            (_, FrameMode::Range) => {
+                let ranged =
+                    ranged.ok_or_else(|| Error::internal("a frame with no in_range function"))?;
+                let (mut sub, mut less) = (end == FrameBound::Preceding, true);
+                if !ranged.asc {
+                    (sub, less) = (!sub, false);
+                }
+                while tail < n {
+                    let (value, base) = (keys[tail], keys[i]);
+                    let (null, base_null) = (*value == Value::Null, *base == Value::Null);
+                    if null || base_null {
+                        let stop = if ranged.nulls_first { !null } else { !base_null };
+                        if stop {
+                            break;
+                        }
+                    } else if !ranged.test(ranged.end, value, base, &offsets[1], sub, less)? {
+                        break;
+                    }
+                    tail += 1;
+                }
+                tail
+            }
+        };
+        let (skip, keep) = match frame.exclusion() {
+            FrameExclusion::NoOthers => ((0, 0), None),
+            FrameExclusion::CurrentRow => ((i, i + 1), None),
+            FrameExclusion::Group => (groups[i], None),
+            FrameExclusion::Ties => (groups[i], Some(i)),
+        };
+        out.push(Bounds { head: first, tail: last, skip, keep });
     }
     Ok(out)
 }

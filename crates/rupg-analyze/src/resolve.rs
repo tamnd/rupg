@@ -874,7 +874,11 @@ impl Analyzer<'_> {
             | Kind::DistinctOn
             | Kind::FromFunction => return Ok(()),
             Kind::JoinOn => "set-returning functions are not allowed in JOIN conditions".to_owned(),
-            Kind::WindowPartition | Kind::WindowOrder => {
+            Kind::WindowPartition
+            | Kind::WindowOrder
+            | Kind::WindowRange
+            | Kind::WindowRows
+            | Kind::WindowGroups => {
                 "set-returning functions are not allowed in window definitions".to_owned()
             }
             Kind::Where

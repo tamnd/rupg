@@ -27,6 +27,7 @@ mod formatting;
 mod generated;
 mod geo;
 mod hash;
+mod inrange;
 mod io;
 mod json;
 mod jsonbuild;
@@ -395,6 +396,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| numformat::by_src(src))
         .or_else(|| dbsize::by_src(src))
         .or_else(|| hash::by_src(src))
+        .or_else(|| inrange::by_src(src))
         .or_else(|| timezone::by_src(src))
         .or_else(|| calendar::by_src(src))
         .or_else(|| random::by_src(src))

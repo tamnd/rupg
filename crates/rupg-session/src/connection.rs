@@ -2877,6 +2877,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/window_group.test")));
     }
 
+    /// The frames of the windows: `ROWS`, `RANGE` and `GROUPS` mode with offsets, the clause `EXCLUDE`, `first_value`, `last_value` and `nth_value` in a frame, the `in_range` functions of the integer, float, numeric, date, time and interval types with their infinite values, the errors of the offsets, a view with `pg_get_viewdef`, and the errors of the analyzer. `connection/window_frame.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn window_frame() {
+        big_stack(|| script(include_str!("connection/window_frame.test")));
+    }
+
     /// A row on the left of `IN`, `ANY` and `ALL` with a subquery: one operator for each column of the subquery that `AND` or `OR` combines, the NULL results, the errors for a wrong number of columns and for an operator that does not give `boolean`, a view with these tests in `pg_get_viewdef`, and the same results when a hash table of the subquery gives them. `connection/row_in_subquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn row_in_subquery() {

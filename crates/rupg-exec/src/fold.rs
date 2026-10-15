@@ -68,6 +68,11 @@ fn plan(
     if !simple {
         out.limit = fold.one(query.limit.as_ref())?;
     }
+    // `preprocess_expression` folds the offsets of the frames as it folds `LIMIT`.
+    for (window, old) in out.windows.iter_mut().zip(&query.windows) {
+        window.frame.start = fold.one(old.frame.start.as_ref())?;
+        window.frame.end = fold.one(old.frame.end.as_ref())?;
+    }
     // The rows of a `VALUES` list fold after the clauses, as the range table does in `subquery_planner`.
     for (relation, old) in out.relations.iter_mut().zip(&query.relations) {
         let (Some(rows), Some(old)) = (&mut relation.values, &old.values) else { continue };

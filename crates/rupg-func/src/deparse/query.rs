@@ -5,7 +5,14 @@
 use std::collections::HashMap;
 
 use rupg_analyze::{
-    Column, FromFunction, FromItem, Join, JoinKind, Query, SetKind, SetOp, SetTree,
+    Column, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING, FRAMEOPTION_START_OFFSET,
+    Frame, FromFunction, FromItem, Join, JoinKind, Query, SetKind, SetOp, SetTree,
+};
+use rupg_sql::nodes::{
+    FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
+    FRAMEOPTION_EXCLUDE_CURRENT_ROW, FRAMEOPTION_EXCLUDE_GROUP, FRAMEOPTION_EXCLUDE_TIES,
+    FRAMEOPTION_NONDEFAULT, FRAMEOPTION_RANGE, FRAMEOPTION_ROWS, FRAMEOPTION_START_CURRENT_ROW,
+    FRAMEOPTION_START_OFFSET_PRECEDING, FRAMEOPTION_START_UNBOUNDED_PRECEDING,
 };
 use rupg_types::qualified_name_list;
 
@@ -319,8 +326,75 @@ impl Deparser<'_> {
             }
             self.buf.push_str("ORDER BY ");
             self.order_by(&window.order, exprs, false)?;
+            space = true;
+        }
+        if window.frame.options & FRAMEOPTION_NONDEFAULT != 0 {
+            if space {
+                self.buf.push(' ');
+            }
+            self.frame(&window.frame)?;
         }
         self.buf.push(')');
+        Ok(())
+    }
+
+    /// `get_window_frame_options`: the mode of the frame, its bounds and its exclusion.
+    fn frame(&mut self, frame: &Frame) -> Result<()> {
+        let options = frame.options;
+        self.buf.push_str(if options & FRAMEOPTION_RANGE != 0 {
+            "RANGE "
+        } else if options & FRAMEOPTION_ROWS != 0 {
+            "ROWS "
+        } else {
+            "GROUPS "
+        });
+        if options & FRAMEOPTION_BETWEEN != 0 {
+            self.buf.push_str("BETWEEN ");
+        }
+        if options & FRAMEOPTION_START_UNBOUNDED_PRECEDING != 0 {
+            self.buf.push_str("UNBOUNDED PRECEDING ");
+        } else if options & FRAMEOPTION_START_CURRENT_ROW != 0 {
+            self.buf.push_str("CURRENT ROW ");
+        } else if options & FRAMEOPTION_START_OFFSET != 0 {
+            let offset = frame
+                .start
+                .as_ref()
+                .ok_or_else(|| Error::internal("a frame start with no offset"))?;
+            self.expr(offset, false)?;
+            self.buf.push_str(if options & FRAMEOPTION_START_OFFSET_PRECEDING != 0 {
+                " PRECEDING "
+            } else {
+                " FOLLOWING "
+            });
+        }
+        if options & FRAMEOPTION_BETWEEN != 0 {
+            self.buf.push_str("AND ");
+            if options & FRAMEOPTION_END_UNBOUNDED_FOLLOWING != 0 {
+                self.buf.push_str("UNBOUNDED FOLLOWING ");
+            } else if options & FRAMEOPTION_END_CURRENT_ROW != 0 {
+                self.buf.push_str("CURRENT ROW ");
+            } else if options & FRAMEOPTION_END_OFFSET != 0 {
+                let offset = frame
+                    .end
+                    .as_ref()
+                    .ok_or_else(|| Error::internal("a frame end with no offset"))?;
+                self.expr(offset, false)?;
+                self.buf.push_str(if options & FRAMEOPTION_END_OFFSET_PRECEDING != 0 {
+                    " PRECEDING "
+                } else {
+                    " FOLLOWING "
+                });
+            }
+        }
+        if options & FRAMEOPTION_EXCLUDE_CURRENT_ROW != 0 {
+            self.buf.push_str("EXCLUDE CURRENT ROW ");
+        } else if options & FRAMEOPTION_EXCLUDE_GROUP != 0 {
+            self.buf.push_str("EXCLUDE GROUP ");
+        } else if options & FRAMEOPTION_EXCLUDE_TIES != 0 {
+            self.buf.push_str("EXCLUDE TIES ");
+        }
+        // Each part ends with a space, and the last one does not keep it.
+        self.buf.pop();
         Ok(())
     }
 

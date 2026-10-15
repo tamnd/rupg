@@ -29,6 +29,12 @@ pub(crate) enum Kind {
     WindowPartition,
     /// `EXPR_KIND_WINDOW_ORDER`: the `ORDER BY` of a window.
     WindowOrder,
+    /// `EXPR_KIND_WINDOW_FRAME_RANGE`: an offset of a frame in `RANGE` mode.
+    WindowRange,
+    /// `EXPR_KIND_WINDOW_FRAME_ROWS`: an offset of a frame in `ROWS` mode.
+    WindowRows,
+    /// `EXPR_KIND_WINDOW_FRAME_GROUPS`: an offset of a frame in `GROUPS` mode.
+    WindowGroups,
     /// `EXPR_KIND_COLUMN_DEFAULT`.
     ColumnDefault,
     /// `EXPR_KIND_CHECK_CONSTRAINT`.
@@ -64,6 +70,9 @@ impl Kind {
             Kind::Offset => "OFFSET",
             Kind::WindowPartition => "window PARTITION BY",
             Kind::WindowOrder => "window ORDER BY",
+            Kind::WindowRange => "window RANGE",
+            Kind::WindowRows => "window ROWS",
+            Kind::WindowGroups => "window GROUPS",
             Kind::ColumnDefault => "DEFAULT expressions",
             Kind::Check => "check constraints",
             Kind::IndexExpression => "index expressions",
@@ -283,6 +292,9 @@ impl Analyzer<'_> {
             | Kind::GroupBy
             | Kind::Limit
             | Kind::Offset
+            | Kind::WindowRange
+            | Kind::WindowRows
+            | Kind::WindowGroups
             | Kind::ColumnDefault
             | Kind::Check
             | Kind::IndexExpression

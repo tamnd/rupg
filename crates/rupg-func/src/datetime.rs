@@ -31,11 +31,11 @@ fn date_range() -> Error {
     Error::new(SqlState::DATETIME_VALUE_OUT_OF_RANGE, "date out of range for timestamp")
 }
 
-fn is_nobegin(interval: &Interval) -> bool {
+pub(crate) fn is_nobegin(interval: &Interval) -> bool {
     *interval == Interval::NEGATIVE_INFINITY
 }
 
-fn is_noend(interval: &Interval) -> bool {
+pub(crate) fn is_noend(interval: &Interval) -> bool {
     *interval == Interval::INFINITY
 }
 
@@ -44,12 +44,12 @@ fn not_finite(interval: &Interval) -> bool {
     is_nobegin(interval) || is_noend(interval)
 }
 
-fn interval_arg(v: &Value) -> Result<Interval> {
+pub(crate) fn interval_arg(v: &Value) -> Result<Interval> {
     let Value::Interval(interval) = v else { return Err(bad_value()) };
     Ok(*interval)
 }
 
-fn timestamp_arg(v: &Value) -> Result<i64> {
+pub(crate) fn timestamp_arg(v: &Value) -> Result<i64> {
     match v {
         Value::Timestamp(t) | Value::TimestampTz(t) => Ok(*t),
         _ => Err(bad_value()),
@@ -62,7 +62,7 @@ fn float_arg(v: &Value) -> Result<f64> {
 }
 
 /// `interval_um_internal`.
-fn negate(interval: &Interval) -> Result<Interval> {
+pub(crate) fn negate(interval: &Interval) -> Result<Interval> {
     if is_nobegin(interval) {
         return Ok(Interval::INFINITY);
     }
@@ -81,7 +81,7 @@ fn negate(interval: &Interval) -> Result<Interval> {
 }
 
 /// The sum of two intervals, as `interval_pl` gives it.
-fn interval_plus(a: &Interval, b: &Interval) -> Result<Interval> {
+pub(crate) fn interval_plus(a: &Interval, b: &Interval) -> Result<Interval> {
     if is_nobegin(a) {
         if is_noend(b) {
             return Err(interval_range());
@@ -109,7 +109,7 @@ fn interval_plus(a: &Interval, b: &Interval) -> Result<Interval> {
 }
 
 /// The difference of two intervals, as `interval_mi` gives it.
-fn interval_minus(a: &Interval, b: &Interval) -> Result<Interval> {
+pub(crate) fn interval_minus(a: &Interval, b: &Interval) -> Result<Interval> {
     if is_nobegin(a) {
         if is_nobegin(b) {
             return Err(interval_range());
