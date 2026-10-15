@@ -412,6 +412,88 @@ fn delta_token(key: &[u8]) -> Option<(i32, i32)> {
     Some((UNITS, unit))
 }
 
+/// A unit of `EXTRACT`, `date_part` and `date_trunc`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DateUnit {
+    Microsecond,
+    Millisecond,
+    Second,
+    Minute,
+    Hour,
+    Day,
+    Week,
+    Month,
+    Quarter,
+    Year,
+    Decade,
+    Century,
+    Millennium,
+    Julian,
+    IsoYear,
+    Dow,
+    IsoDow,
+    Doy,
+    Timezone,
+    TimezoneHour,
+    TimezoneMinute,
+    /// The reserved word `epoch`.
+    Epoch,
+    /// Another reserved word, for example `now`.
+    Reserved,
+    /// A token of another type, or no token.
+    Unknown,
+}
+
+impl DateUnit {
+    /// `DecodeUnits`, and then `DecodeSpecial` when `DecodeUnits` finds no token. `lowunits` is in lower case.
+    pub fn decode(lowunits: &str) -> DateUnit {
+        let key = lowunits.as_bytes();
+        DateUnit::of(delta_token(key).or_else(|| date_token(key)))
+    }
+
+    /// `DecodeUnits` alone, as `date_trunc` calls it. `lowunits` is in lower case.
+    pub fn decode_units(lowunits: &str) -> DateUnit {
+        DateUnit::of(delta_token(lowunits.as_bytes()))
+    }
+
+    fn of(token: Option<(i32, i32)>) -> DateUnit {
+        match token {
+            Some((UNITS, unit)) => match unit {
+                DTK_MICROSEC => DateUnit::Microsecond,
+                DTK_MILLISEC => DateUnit::Millisecond,
+                DTK_SECOND => DateUnit::Second,
+                DTK_MINUTE => DateUnit::Minute,
+                DTK_HOUR => DateUnit::Hour,
+                DTK_DAY => DateUnit::Day,
+                DTK_WEEK => DateUnit::Week,
+                DTK_MONTH => DateUnit::Month,
+                DTK_QUARTER => DateUnit::Quarter,
+                DTK_YEAR => DateUnit::Year,
+                DTK_DECADE => DateUnit::Decade,
+                DTK_CENTURY => DateUnit::Century,
+                DTK_MILLENNIUM => DateUnit::Millennium,
+                DTK_JULIAN => DateUnit::Julian,
+                DTK_ISOYEAR => DateUnit::IsoYear,
+                DTK_DOW => DateUnit::Dow,
+                DTK_ISODOW => DateUnit::IsoDow,
+                DTK_DOY => DateUnit::Doy,
+                DTK_TZ_VALUE => DateUnit::Timezone,
+                DTK_TZ_HOUR => DateUnit::TimezoneHour,
+                DTK_TZ_MINUTE => DateUnit::TimezoneMinute,
+                _ => DateUnit::Unknown,
+            },
+            Some((RESERV, DTK_EPOCH)) => DateUnit::Epoch,
+            Some((RESERV, _)) => DateUnit::Reserved,
+            _ => DateUnit::Unknown,
+        }
+    }
+
+    /// Whether the token has the type `UNITS`.
+    pub fn is_units(self) -> bool {
+        !matches!(self, DateUnit::Epoch | DateUnit::Reserved | DateUnit::Unknown)
+    }
+}
+
 /// The byte at `i`, or 0 at the end, as a C string reads.
 fn at(s: &[u8], i: usize) -> u8 {
     s.get(i).copied().unwrap_or(0)

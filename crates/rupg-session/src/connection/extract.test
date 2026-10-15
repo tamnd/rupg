@@ -1,0 +1,269 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT extract(year FROM timestamp '2024-02-29 13:45:56.789012'), extract(month FROM timestamp '2024-02-29 13:45:56.789012'), extract(day FROM timestamp '2024-02-29 13:45:56.789012'), extract(hour FROM timestamp '2024-02-29 13:45:56.789012'), extract(minute FROM timestamp '2024-02-29 13:45:56.789012'), extract(second FROM timestamp '2024-02-29 13:45:56.789012')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1
+row 2024,2,29,13,45,56.789012
+SELECT 1
+> SELECT extract(microseconds FROM timestamp '2024-02-29 13:45:56.789012'), extract(milliseconds FROM timestamp '2024-02-29 13:45:56.789012'), extract(epoch FROM timestamp '2024-02-29 13:45:56.789012'), extract(julian FROM timestamp '2024-02-29 13:45:56.789012'), extract(quarter FROM timestamp '2024-02-29 13:45:56.789012')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1
+row 56789012,56789.012,1709214356.789012,2460370.57357394689814814815,1
+SELECT 1
+> SELECT extract(week FROM d), extract(isoyear FROM d), extract(dow FROM d), extract(isodow FROM d), extract(doy FROM d), extract(decade FROM d), extract(century FROM d), extract(millennium FROM d) FROM (VALUES (timestamp '2021-01-03'), (timestamp '2020-12-31'), (timestamp '2018-12-31'), (timestamp '2000-01-01'), (timestamp '2001-01-01'), (timestamp '0001-01-01 BC'), (timestamp '0010-06-01 BC'), (timestamp '0100-06-01 BC'), (timestamp '4713-11-24 BC')) v (d)
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1
+row 53,2020,0,7,3,202,21,3
+row 53,2020,4,4,366,202,21,3
+row 1,2019,1,1,365,201,21,3
+row 52,1999,6,6,1,200,20,2
+row 1,2001,1,1,1,200,21,3
+row 52,-2,6,6,1,0,-1,-1
+row 22,-10,6,6,152,-1,-1,-1
+row 22,-100,6,6,152,-10,-1,-1
+row 48,-4713,3,3,329,-472,-48,-5
+SELECT 9
+> SELECT extract(year FROM timestamp 'infinity'), extract(epoch FROM timestamp '-infinity'), extract(julian FROM timestamp 'infinity'), extract(isoyear FROM timestamp '-infinity'), extract(day FROM timestamp 'infinity'), extract(timezone FROM timestamptz 'infinity')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1
+row Infinity,-Infinity,Infinity,-Infinity,NULL,NULL
+SELECT 1
+> SELECT extract(timezone FROM timestamp '2024-01-01')
+ERROR 0A000 unit "timezone" not supported for type timestamp without time zone
+> SELECT extract(foo FROM timestamp '2024-01-01')
+ERROR 22023 unit "foo" not recognized for type timestamp without time zone
+> SELECT extract(now FROM timestamp '2024-01-01')
+ERROR 0A000 unit "now" not supported for type timestamp without time zone
+> SELECT extract(now FROM timestamp 'infinity')
+ERROR 0A000 unit "now" not supported for type timestamp without time zone
+> SELECT extract(foo FROM timestamp 'infinity')
+ERROR 22023 unit "foo" not recognized for type timestamp without time zone
+> SELECT date_part('year', timestamp '2024-02-29 13:45:56.789012'), date_part('second', timestamp '2024-02-29 13:45:56.789012'), date_part('milliseconds', timestamp '2024-02-29 13:45:56.789012'), date_part('epoch', timestamp '2024-02-29 13:45:56.789012'), date_part('julian', timestamp '2024-02-29 13:45:56.789012'), date_part('year', timestamp 'infinity'), date_part('day', timestamp 'infinity')
+fields date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1
+row 2024,56.789012,56789.012,1709214356.789012,2460370.573573947,Infinity,NULL
+SELECT 1
+> SELECT date_part('epoch', timestamp '294276-12-31 23:59:59.999999'), extract(epoch FROM timestamp '294276-12-31 23:59:59.999999'), extract(epoch FROM timestamp '4713-11-24 00:00:00 BC')
+fields date_part:701:8:-1,extract:1700:-1:-1,extract:1700:-1:-1
+row 9224318016000,9224318016000.000000,-210835180800.000000
+SELECT 1
+> SELECT date_part('YEAR', timestamp '2024-02-29'), date_part('Microseconds', timestamp '2024-02-29'), date_part('mins', timestamp '2024-02-29 01:02:03'), date_part('hrs', timestamp '2024-02-29 01:02:03'), date_part('msecs', timestamp '2024-02-29 01:02:03.5'), date_part('y', timestamp '2024-02-29'), date_part('mm', timestamp '2024-02-29 01:02:03'), date_part('j', timestamp '2024-02-29'), date_part('millisecondsxyz', timestamp '2024-02-29 01:02:03.25')
+fields date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1
+row 2024,0,2,1,3500,2024,2,2460370,3250
+SELECT 1
+> SELECT date_part('ago', timestamp '2024-02-29')
+ERROR 22023 unit "ago" not recognized for type timestamp without time zone
+> SELECT date_part('jan', timestamp '2024-02-29')
+ERROR 22023 unit "jan" not recognized for type timestamp without time zone
+> SELECT date_part('ÄÖÜ', timestamp '2024-02-29')
+ERROR 22023 unit "ÄÖÜ" not recognized for type timestamp without time zone
+> SET TimeZone TO 'America/New_York'
+SET
+TimeZone=America/New_York
+> SELECT extract(hour FROM timestamptz '2024-07-01 12:30:00+00'), extract(timezone FROM timestamptz '2024-07-01 12:30:00+00'), extract(timezone_hour FROM timestamptz '2024-07-01 12:30:00+00'), extract(timezone_minute FROM timestamptz '2024-07-01 12:30:00+00'), extract(day FROM timestamptz '2024-01-01 03:00:00+00'), extract(epoch FROM timestamptz '2024-01-01 03:00:00+00'), date_part('timezone', timestamptz '2024-01-01 03:00:00+00')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,date_part:701:8:-1
+row 8,-14400,-4,0,31,1704078000.000000,-18000
+SELECT 1
+> SET TimeZone TO 'Asia/Kolkata'
+SET
+TimeZone=Asia/Kolkata
+> SELECT extract(timezone FROM timestamptz '2024-07-01 12:30:00+00'), extract(timezone_hour FROM timestamptz '2024-07-01 12:30:00+00'), extract(timezone_minute FROM timestamptz '2024-07-01 12:30:00+00'), extract(julian FROM timestamptz '2024-07-01 20:00:00+00'), date_part('julian', timestamptz '2024-07-01 20:00:00+00')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,date_part:701:8:-1
+row 19800,5,30,2460494.06250000000000000000,2460494.0625
+SELECT 1
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT extract(now FROM timestamptz '2024-01-01')
+fields extract:1700:-1:-1
+ERROR 0A000 unit "now" not supported for type timestamp with time zone
+> SELECT extract(foo FROM timestamptz '2024-01-01')
+fields extract:1700:-1:-1
+ERROR 22023 unit "foo" not recognized for type timestamp with time zone
+> SELECT extract(year FROM date '2024-02-29'), extract(month FROM date '2024-02-29'), extract(day FROM date '2024-02-29'), extract(epoch FROM date '2024-02-29'), extract(julian FROM date '2024-02-29'), extract(week FROM date '2024-02-29'), extract(dow FROM date '2024-02-29'), extract(doy FROM date '2024-02-29'), extract(century FROM date '0050-01-01 BC'), extract(isoyear FROM date '0001-01-01')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1
+row 2024,2,29,1709164800,2460370,9,4,60,-1,1
+SELECT 1
+> SELECT extract(year FROM date 'infinity'), extract(epoch FROM date '-infinity'), extract(day FROM date 'infinity'), date_part('year', date '2024-02-29'), date_part('epoch', date '2024-02-29'), date_part('year', date 'infinity')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1
+row Infinity,-Infinity,NULL,2024,1709164800,Infinity
+SELECT 1
+> SELECT extract(hour FROM date '2024-02-29')
+ERROR 0A000 unit "hour" not supported for type date
+> SELECT extract(hour FROM date 'infinity')
+ERROR 0A000 unit "hour" not supported for type date
+> SELECT extract(now FROM date '2024-02-29')
+ERROR 0A000 unit "now" not supported for type date
+> SELECT extract(foo FROM date 'infinity')
+ERROR 22023 unit "foo" not recognized for type date
+> SELECT extract(hour FROM time '13:45:56.789012'), extract(minute FROM time '13:45:56.789012'), extract(second FROM time '13:45:56.789012'), extract(milliseconds FROM time '13:45:56.789012'), extract(microseconds FROM time '13:45:56.789012'), extract(epoch FROM time '13:45:56.789012'), date_part('second', time '13:45:56.789012'), date_part('epoch', time '24:00:00')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,date_part:701:8:-1,date_part:701:8:-1
+row 13,45,56.789012,56789.012,56789012,49556.789012,56.789012,86400
+SELECT 1
+> SELECT extract(day FROM time '13:45')
+ERROR 0A000 unit "day" not supported for type time without time zone
+> SELECT extract(now FROM time '13:45')
+ERROR 22023 unit "now" not recognized for type time without time zone
+> SELECT extract(hour FROM timetz '13:45:56.5+05:30'), extract(timezone FROM timetz '13:45:56.5+05:30'), extract(timezone_hour FROM timetz '13:45:56.5-05:30'), extract(timezone_minute FROM timetz '13:45:56.5-05:30'), extract(epoch FROM timetz '13:45:56.5+05:30'), date_part('epoch', timetz '13:45:56.5-05:30'), date_part('second', timetz '13:45:56.5+05:30')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,date_part:701:8:-1,date_part:701:8:-1
+row 13,19800,-5,-30,29756.500000,69356.5,56.5
+SELECT 1
+> SELECT extract(year FROM timetz '13:45+00')
+ERROR 0A000 unit "year" not supported for type time with time zone
+> SELECT extract(epoch FROM i), extract(year FROM i), extract(month FROM i), extract(quarter FROM i), extract(day FROM i), extract(week FROM i), extract(hour FROM i), extract(minute FROM i), extract(second FROM i), extract(milliseconds FROM i), extract(decade FROM i), extract(century FROM i), extract(millennium FROM i) FROM (VALUES (interval '1234 years 5 months 17 days 25:01:59.123456'), (interval '-1234 years -5 months -17 days -25:01:59.123456'), (interval '7 months'), (interval '-7 months'), (interval '0')) v (i)
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1
+row 38956597319.123456,1234,5,2,17,2,25,1,59.123456,59123.456,123,12,1
+row -38956597319.123456,-1234,-5,-2,-17,-2,-25,-1,-59.123456,-59123.456,-123,-12,-1
+row 18144000.000000,0,7,3,0,0,0,0,0.000000,0.000,0,0,0
+row -18144000.000000,0,-7,-3,0,0,0,0,0.000000,0.000,0,0,0
+row 0.000000,0,0,1,0,0,0,0,0.000000,0.000,0,0,0
+SELECT 5
+> SELECT date_part('epoch', i), date_part('second', i), date_part('milliseconds', i), date_part('quarter', i) FROM (VALUES (interval '1234 years 5 months 17 days 25:01:59.123456'), (interval '-2 months -3 seconds'), (interval '178000000 years')) v (i)
+fields date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1,date_part:701:8:-1
+row 38956597319.12346,59.123456,59123.456,2
+row -5184003,-3,-3000,-1
+row 5.6172528e+15,0,0,1
+SELECT 3
+> SELECT extract(epoch FROM interval 'infinity'), extract(hour FROM interval '-infinity'), extract(month FROM interval 'infinity'), date_part('epoch', interval '-infinity'), date_part('second', interval 'infinity')
+fields extract:1700:-1:-1,extract:1700:-1:-1,extract:1700:-1:-1,date_part:701:8:-1,date_part:701:8:-1
+row Infinity,-Infinity,NULL,-Infinity,NULL
+SELECT 1
+> SELECT extract(dow FROM interval '1 day')
+ERROR 0A000 unit "dow" not supported for type interval
+> SELECT extract(dow FROM interval 'infinity')
+ERROR 0A000 unit "dow" not supported for type interval
+> SELECT extract(now FROM interval '1 day')
+ERROR 22023 unit "now" not recognized for type interval
+> SELECT extract(now FROM interval 'infinity')
+ERROR 0A000 unit "now" not supported for type interval
+> SELECT extract(foo FROM interval 'infinity')
+ERROR 22023 unit "foo" not recognized for type interval
+> SELECT pg_typeof(extract(year FROM timestamp '2024-01-01')), pg_typeof(date_part('year', timestamp '2024-01-01')), pg_typeof(extract(year FROM date '2024-01-01')), pg_typeof(date_part('year', date '2024-01-01'))
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row numeric,double precision,numeric,double precision
+SELECT 1
+> SELECT date_trunc(u, timestamp '2024-05-17 13:45:56.789012') FROM (VALUES ('microseconds'), ('milliseconds'), ('second'), ('minute'), ('hour'), ('day'), ('week'), ('month'), ('quarter'), ('year'), ('decade'), ('century'), ('millennium')) v (u)
+fields date_trunc:1114:8:-1
+row 2024-05-17 13:45:56.789012
+row 2024-05-17 13:45:56.789
+row 2024-05-17 13:45:56
+row 2024-05-17 13:45:00
+row 2024-05-17 13:00:00
+row 2024-05-17 00:00:00
+row 2024-05-13 00:00:00
+row 2024-05-01 00:00:00
+row 2024-04-01 00:00:00
+row 2024-01-01 00:00:00
+row 2020-01-01 00:00:00
+row 2001-01-01 00:00:00
+row 2001-01-01 00:00:00
+SELECT 13
+> SELECT date_trunc('week', d), date_trunc('decade', d), date_trunc('century', d), date_trunc('millennium', d) FROM (VALUES (timestamp '2021-01-03'), (timestamp '2019-12-30'), (timestamp '2000-06-01'), (timestamp '2001-06-01'), (timestamp '0001-06-01 BC'), (timestamp '0011-06-01 BC'), (timestamp '1001-06-01 BC')) v (d)
+fields date_trunc:1114:8:-1,date_trunc:1114:8:-1,date_trunc:1114:8:-1,date_trunc:1114:8:-1
+row 2020-12-28 00:00:00,2020-01-01 00:00:00,2001-01-01 00:00:00,2001-01-01 00:00:00
+row 2019-12-30 00:00:00,2010-01-01 00:00:00,2001-01-01 00:00:00,2001-01-01 00:00:00
+row 2000-05-29 00:00:00,2000-01-01 00:00:00,1901-01-01 00:00:00,1001-01-01 00:00:00
+row 2001-05-28 00:00:00,2000-01-01 00:00:00,2001-01-01 00:00:00,2001-01-01 00:00:00
+row 0001-05-29 00:00:00 BC,0001-01-01 00:00:00 BC,0100-01-01 00:00:00 BC,1000-01-01 00:00:00 BC
+row 0011-05-28 00:00:00 BC,0011-01-01 00:00:00 BC,0100-01-01 00:00:00 BC,1000-01-01 00:00:00 BC
+row 1001-05-26 00:00:00 BC,1001-01-01 00:00:00 BC,1100-01-01 00:00:00 BC,2000-01-01 00:00:00 BC
+SELECT 7
+> SELECT date_trunc('day', timestamp 'infinity'), date_trunc('week', timestamp '-infinity')
+fields date_trunc:1114:8:-1,date_trunc:1114:8:-1
+row infinity,-infinity
+SELECT 1
+> SELECT date_trunc('timezone', timestamp 'infinity')
+ERROR 0A000 unit "timezone" not supported for type timestamp without time zone
+> SELECT date_trunc('epoch', timestamp '2024-01-01')
+ERROR 22023 unit "epoch" not recognized for type timestamp without time zone
+> SELECT date_trunc('dow', timestamp '2024-01-01')
+ERROR 22023 unit "dow" not recognized for type timestamp without time zone
+> SELECT date_trunc('mm', timestamp '2024-01-01')
+ERROR 22023 unit "mm" not recognized for type timestamp without time zone
+> SELECT date_trunc('timezone', timestamp '2024-01-01')
+ERROR 0A000 unit "timezone" not supported for type timestamp without time zone
+> SET TimeZone TO 'America/New_York'
+SET
+TimeZone=America/New_York
+> SELECT date_trunc(u, timestamptz '2024-03-10 12:34:56.789+00') FROM (VALUES ('second'), ('minute'), ('hour'), ('day'), ('week'), ('month'), ('year')) v (u)
+fields date_trunc:1184:8:-1
+row 2024-03-10 08:34:56-04
+row 2024-03-10 08:34:00-04
+row 2024-03-10 08:00:00-04
+row 2024-03-10 00:00:00-05
+row 2024-03-04 00:00:00-05
+row 2024-03-01 00:00:00-05
+row 2024-01-01 00:00:00-05
+SELECT 7
+> SELECT date_trunc('day', timestamptz '2024-03-10 06:30:00+00'), date_trunc('hour', timestamptz '2024-11-03 05:30:00+00'), date_trunc('hour', timestamptz '2024-11-03 06:30:00+00'), date_trunc('day', timestamptz 'infinity')
+fields date_trunc:1184:8:-1,date_trunc:1184:8:-1,date_trunc:1184:8:-1,date_trunc:1184:8:-1
+row 2024-03-10 00:00:00-05,2024-11-03 01:00:00-04,2024-11-03 01:00:00-05,infinity
+SELECT 1
+> SET TimeZone TO 'Asia/Kolkata'
+SET
+TimeZone=Asia/Kolkata
+> SELECT date_trunc('hour', timestamptz '2024-07-01 12:50:00+00'), date_trunc('minute', timestamptz '1880-07-01 12:50:30+00'), date_trunc('day', timestamptz '1880-07-01 12:50:30+00')
+fields date_trunc:1184:8:-1,date_trunc:1184:8:-1,date_trunc:1184:8:-1
+row 2024-07-01 18:00:00+05:30,1880-07-01 18:11:00+05:21:10,1880-07-01 00:00:00+05:21:10
+SELECT 1
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT date_trunc('timezone', timestamptz '2024-01-01')
+fields date_trunc:1184:8:-1
+ERROR 0A000 unit "timezone" not supported for type timestamp with time zone
+> SELECT date_trunc(u, i) FROM (VALUES ('microseconds'), ('milliseconds'), ('second'), ('minute'), ('hour'), ('day'), ('month'), ('quarter'), ('year'), ('decade'), ('century'), ('millennium')) v (u), (VALUES (interval '1234 years 11 months 17 days 25:01:59.123456'), (interval '-1234 years -11 months -17 days -25:01:59.123456')) w (i) ORDER BY u, i
+fields date_trunc:1186:16:-1
+row -1200 years
+row 1200 years
+row -1234 years -11 mons -17 days
+row 1234 years 11 mons 17 days
+row -1230 years
+row 1230 years
+row -1234 years -11 mons -17 days -25:00:00
+row 1234 years 11 mons 17 days 25:00:00
+row -1234 years -11 mons -17 days -25:01:59.123456
+row 1234 years 11 mons 17 days 25:01:59.123456
+row -1000 years
+row 1000 years
+row -1234 years -11 mons -17 days -25:01:59.123
+row 1234 years 11 mons 17 days 25:01:59.123
+row -1234 years -11 mons -17 days -25:01:00
+row 1234 years 11 mons 17 days 25:01:00
+row -1234 years -11 mons
+row 1234 years 11 mons
+row -1234 years -9 mons
+row 1234 years 9 mons
+row -1234 years -11 mons -17 days -25:01:59
+row 1234 years 11 mons 17 days 25:01:59
+row -1234 years
+row 1234 years
+SELECT 24
+> SELECT date_trunc('year', interval 'infinity'), date_trunc('second', interval '-infinity')
+fields date_trunc:1186:16:-1,date_trunc:1186:16:-1
+row infinity,-infinity
+SELECT 1
+!details
+> SELECT date_trunc('week', interval '1 day')
+ERROR 0A000 unit "week" not supported for type interval
+DETAIL Months usually have fractional weeks.
+> SELECT date_trunc('week', interval 'infinity')
+ERROR 0A000 unit "week" not supported for type interval
+DETAIL Months usually have fractional weeks.
+> SELECT date_trunc('dow', interval '1 day')
+ERROR 22023 unit "dow" not recognized for type interval
+> SELECT date_bin(interval '15 minutes', timestamp '2024-01-01 12:38:00', timestamp '2024-01-01'), date_bin(interval '15 minutes', timestamp '2023-12-31 23:52:00', timestamp '2024-01-01'), date_bin(interval '1 day 2 hours', timestamp '2024-01-10 00:00', timestamp '2000-01-01'), date_bin(interval '10 minutes', timestamp 'infinity', timestamp '2024-01-01'), date_bin(interval '7 minutes', timestamptz '2024-01-01 12:38:00+00', timestamptz '2024-01-01 00:00:00+00')
+fields date_bin:1114:8:-1,date_bin:1114:8:-1,date_bin:1114:8:-1,date_bin:1114:8:-1,date_bin:1184:8:-1
+row 2024-01-01 12:30:00,2023-12-31 23:45:00,2024-01-10 00:00:00,infinity,2024-01-01 12:36:00+00
+SELECT 1
+> SELECT date_bin(interval '1 month', timestamp '2024-01-01', timestamp '2024-01-01')
+ERROR 0A000 timestamps cannot be binned into intervals containing months or years
+> SELECT date_bin(interval 'infinity', timestamp '2024-01-01', timestamp '2024-01-01')
+ERROR 22008 timestamps cannot be binned into infinite intervals
+> SELECT date_bin(interval '1 day', timestamp '2024-01-01', timestamp '-infinity')
+ERROR 22008 origin out of range
+> SELECT date_bin(interval '-1 day', timestamp '2024-01-01', timestamp '2024-01-01')
+ERROR 22008 stride must be greater than zero
+> SELECT date_bin(interval '0', timestamp '2024-01-01', timestamp '2024-01-01')
+ERROR 22008 stride must be greater than zero
+> SELECT date_bin(interval '1 day', timestamp '294276-12-31', timestamp '4713-11-24 BC')
+ERROR 22008 interval out of range
+> SELECT date_bin(interval '100 days', timestamp '4713-11-25 BC', timestamp '2000-01-01')
+fields date_bin:1114:8:-1
+row 4713-11-03 00:00:00 BC
+SELECT 1

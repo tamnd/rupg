@@ -349,12 +349,12 @@ fn interval_justify_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// The date fields and the time of day of a timestamp, as `struct pg_tm` and `fsec_t` hold them.
-struct Tm {
-    year: i32,
-    mon: i32,
-    mday: i32,
+pub(crate) struct Tm {
+    pub(crate) year: i32,
+    pub(crate) mon: i32,
+    pub(crate) mday: i32,
     /// The microseconds since midnight.
-    time: i64,
+    pub(crate) time: i64,
 }
 
 /// `isleap`.
@@ -371,7 +371,7 @@ fn days_of_month(year: i32, mon: i32) -> i32 {
 impl Tm {
     /// `timestamp2tm` with no zone, with the error of its callers.
     #[allow(clippy::cast_possible_truncation, clippy::cast_possible_wrap)]
-    fn of(ts: i64) -> Result<Tm> {
+    pub(crate) fn of(ts: i64) -> Result<Tm> {
         let julian = ts.div_euclid(USECS_PER_DAY) + i64::from(POSTGRES_EPOCH_JDATE);
         let julian = i32::try_from(julian).ok().filter(|&j| j >= 0).ok_or_else(timestamp_range)?;
         let (year, mon, mday) = j2date(julian);
@@ -385,22 +385,36 @@ impl Tm {
     }
 
     /// `tm2timestamp`. With a zone, the offset is the one that `DetermineTimeZoneOffset` gives for the fields.
-    fn timestamp(&self, zone: Option<&dyn TimeZone>) -> Result<i64> {
+    pub(crate) fn timestamp(&self, zone: Option<&dyn TimeZone>) -> Result<i64> {
+        let local = self.local()?;
+        let west = zone.map_or(0, |zone| {
+            let seconds = local.div_euclid(USECS_PER_SEC) - UNIX_TO_POSTGRES_USECS / USECS_PER_SEC;
+            rupg_types::local_offset(seconds, zone).0
+        });
+        Tm::shift(local, west)
+    }
+
+    /// `tm2timestamp` with an offset in seconds west of UTC.
+    pub(crate) fn timestamp_west(&self, west: i32) -> Result<i64> {
+        Tm::shift(self.local()?, west)
+    }
+
+    /// The fields as a timestamp with no zone, with the checks of `tm2timestamp` before it applies the offset.
+    fn local(&self) -> Result<i64> {
         let valid = (self.year > -4713 || (self.year == -4713 && self.mon >= 11))
             && (self.year < 5_874_898 || (self.year == 5_874_898 && self.mon < 6));
         if !valid {
             return Err(timestamp_range());
         }
         let date = i64::from(date2j(self.year, self.mon, self.mday) - POSTGRES_EPOCH_JDATE);
-        let mut result = date
-            .checked_mul(USECS_PER_DAY)
+        date.checked_mul(USECS_PER_DAY)
             .and_then(|t| t.checked_add(self.time))
-            .ok_or_else(timestamp_range)?;
-        if let Some(zone) = zone {
-            let seconds = result.div_euclid(USECS_PER_SEC) - UNIX_TO_POSTGRES_USECS / USECS_PER_SEC;
-            let (west, _) = rupg_types::local_offset(seconds, zone);
-            result = result.wrapping_add(i64::from(west) * USECS_PER_SEC);
-        }
+            .ok_or_else(timestamp_range)
+    }
+
+    /// `dt2local` with the offset, and the range check of `tm2timestamp`.
+    fn shift(local: i64, west: i32) -> Result<i64> {
+        let result = local.wrapping_add(i64::from(west) * USECS_PER_SEC);
         if !valid_timestamp(result) {
             return Err(timestamp_range());
         }

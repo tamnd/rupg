@@ -2047,6 +2047,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/datetime_arith.test")));
     }
 
+    /// `EXTRACT` and `date_part` for a timestamp, a `timestamptz` in two zones, a date, a time, a `timetz` and an interval: each unit, the short names of the units, the years before 1 AD, the ISO weeks, the infinities and the errors for a unit that a type does not support or that is not a unit. Also `date_trunc` for a timestamp, a `timestamptz` across the changes of daylight saving time and in a zone with an offset of seconds, and an interval, and `date_bin` with its errors. `connection/extract.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn extract() {
+        big_stack(|| script(include_str!("connection/extract.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
