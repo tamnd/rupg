@@ -13,6 +13,8 @@ use crate::error::TypeError;
 use crate::number::{digit, is_space, u64_out};
 use crate::typmod::numeric_precision_scale;
 
+mod math;
+
 const NBASE: i32 = 10000;
 const HALF_NBASE: i32 = 5000;
 const DEC_DIGITS: i64 = 4;
@@ -365,14 +367,7 @@ impl Numeric {
         if other.digits.is_empty() {
             return Err(TypeError::new(SqlState::DIVISION_BY_ZERO, "division by zero".to_string()));
         }
-        let (x, y) = (Var::from(self), Var::from(other));
-        let mut product = y.mul(&x.div(&y, 0, false));
-        product.dscale = y.dscale;
-        product.sign = match product.sign {
-            NumericSign::Positive if !product.digits.is_empty() => NumericSign::Negative,
-            _ => NumericSign::Positive,
-        };
-        x.add(&product).make()
+        Var::from(self).rem(&Var::from(other)).make()
     }
 
     /// `cmp_numerics`: `NaN` is equal to itself and above every other value, and the display scale does not count.
@@ -660,6 +655,17 @@ impl Var {
             std::cmp::Ordering::Less => other.add_abs(self, true, other.sign),
             _ => self.add_abs(other, true, self.sign),
         }
+    }
+
+    /// `mod_var`: the remainder of the quotient cut to an integer, with the sign of `self`. The divisor is not zero.
+    fn rem(&self, other: &Var) -> Var {
+        let mut product = other.mul(&self.div(other, 0, false));
+        product.dscale = other.dscale;
+        product.sign = match product.sign {
+            NumericSign::Positive if !product.digits.is_empty() => NumericSign::Negative,
+            _ => NumericSign::Positive,
+        };
+        self.add(&product)
     }
 
     /// The exact product, with no rounding. The display scale is set by the caller.
