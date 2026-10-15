@@ -1906,6 +1906,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/system_columns.test")));
     }
 
+    /// `encode` and `decode` in the forms `hex`, `base64`, `base64url`, `base32hex` and `escape`: the padding and the new lines of the output, the white space of the input, the end of a value without padding, and the errors of a bad symbol, a bad end and a bad name. `connection/encode.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn encode() {
+        big_stack(|| script(include_str!("connection/encode.test")));
+    }
+
     /// `PREPARE`, `EXECUTE` and `DEALLOCATE`: the types of the parameters, the coercion of the values of `EXECUTE` and their errors, the statements of `Parse` that `EXECUTE` runs, the errors in a failed transaction, the count of the plans, a query string with more than one statement, the three statements in a `Parse`, and a statement of `Parse` that runs `EXECUTE` of itself. `connection/sql_prepare.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn sql_prepare() {
