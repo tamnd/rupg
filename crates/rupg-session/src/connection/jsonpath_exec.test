@@ -105,9 +105,9 @@ SELECT 1
 fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
 row [null],[1, "1", true, false],[true],["a", "ab", "B"]
 SELECT 1
-> SELECT jsonb_path_query_array('["abc", "abd", "bc", 1]', '$[*] ? (@ starts with "ab")'), jsonb_path_query_array('["abc", "ABD", "bc"]', '$[*] ? (@ like_regex "^ab" flag "i")'), jsonb_path_query_array('["a.c", "abc"]', '$[*] ? (@ like_regex "a.c" flag "q")'), jsonb_path_query_array('["a\nb", "ab"]', '$[*] ? (@ like_regex "a.b" flag "s")')
+> SELECT jsonb_path_query_array('["abc", "abz", "bc", 1]', '$[*] ? (@ starts with "ab")'), jsonb_path_query_array('["abc", "ABZ", "bc"]', '$[*] ? (@ like_regex "^ab" flag "i")'), jsonb_path_query_array('["a.c", "abc"]', '$[*] ? (@ like_regex "a.c" flag "q")'), jsonb_path_query_array('["a\nb", "ab"]', '$[*] ? (@ like_regex "a.b" flag "s")')
 fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
-row ["abc", "abd"],["abc", "ABD"],["a.c"],["a\nb"]
+row ["abc", "abz"],["abc", "ABZ"],["a.c"],["a\nb"]
 SELECT 1
 > SELECT jsonb_path_query_array('{"x": [1, 2], "y": 3}', '$.x[*] ? (@ < $.y)'), jsonb_path_query_array('[1, 5, 10]', '$[*] ? (@ > $min && @ < $max)', '{"min": 2, "max": 9}'), jsonb_path_query_array('{"a": 1}', '$var', '{"var": [1, {"b": 2}]}')
 fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
