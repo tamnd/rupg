@@ -1,0 +1,111 @@
+> SELECT pg_advisory_lock(1), pg_try_advisory_lock(1), pg_typeof(pg_advisory_lock(2));
+fields pg_advisory_lock:2278:4:-1,pg_try_advisory_lock:16:1:-1,pg_typeof:2206:4:-1
+row ,t,void
+SELECT 1
+> SELECT pg_advisory_unlock(1), pg_advisory_unlock(1), pg_advisory_unlock(2);
+fields pg_advisory_unlock:16:1:-1,pg_advisory_unlock:16:1:-1,pg_advisory_unlock:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT pg_advisory_unlock(1);
+fields pg_advisory_unlock:16:1:-1
+WARNING 01000 you don't own a lock of type ExclusiveLock
+row f
+SELECT 1
+> SELECT pg_advisory_unlock_shared(1);
+fields pg_advisory_unlock_shared:16:1:-1
+WARNING 01000 you don't own a lock of type ShareLock
+row f
+SELECT 1
+> SELECT pg_advisory_lock_shared(1), pg_try_advisory_lock_shared(1), pg_advisory_lock(1);
+fields pg_advisory_lock_shared:2278:4:-1,pg_try_advisory_lock_shared:16:1:-1,pg_advisory_lock:2278:4:-1
+row ,t,
+SELECT 1
+> SELECT pg_advisory_unlock_shared(1), pg_advisory_unlock(1), pg_advisory_unlock_shared(1), pg_advisory_unlock_shared(1);
+fields pg_advisory_unlock_shared:16:1:-1,pg_advisory_unlock:16:1:-1,pg_advisory_unlock_shared:16:1:-1,pg_advisory_unlock_shared:16:1:-1
+WARNING 01000 you don't own a lock of type ShareLock
+row t,t,t,f
+SELECT 1
+> SELECT pg_advisory_lock(1, 2), pg_try_advisory_lock(-1, -2), pg_advisory_lock_shared(3, 4), pg_try_advisory_lock_shared(5, 6);
+fields pg_advisory_lock:2278:4:-1,pg_try_advisory_lock:16:1:-1,pg_advisory_lock_shared:2278:4:-1,pg_try_advisory_lock_shared:16:1:-1
+row ,t,,t
+SELECT 1
+> SELECT pg_advisory_unlock(1, 2), pg_advisory_unlock(-1, -2), pg_advisory_unlock_shared(3, 4), pg_advisory_unlock_shared(5, 6), pg_advisory_unlock(1, 2);
+fields pg_advisory_unlock:16:1:-1,pg_advisory_unlock:16:1:-1,pg_advisory_unlock_shared:16:1:-1,pg_advisory_unlock_shared:16:1:-1,pg_advisory_unlock:16:1:-1
+WARNING 01000 you don't own a lock of type ExclusiveLock
+row t,t,t,t,f
+SELECT 1
+> SELECT pg_advisory_lock(-9223372036854775808), pg_advisory_lock(7), pg_advisory_lock(7), pg_advisory_unlock_all();
+fields pg_advisory_lock:2278:4:-1,pg_advisory_lock:2278:4:-1,pg_advisory_lock:2278:4:-1,pg_advisory_unlock_all:2278:4:-1
+row ,,,
+SELECT 1
+> SELECT pg_advisory_unlock(7);
+fields pg_advisory_unlock:16:1:-1
+WARNING 01000 you don't own a lock of type ExclusiveLock
+row f
+SELECT 1
+> SELECT pg_advisory_lock(NULL), pg_try_advisory_lock(NULL, 1), pg_advisory_unlock(NULL::bigint) IS NULL;
+fields pg_advisory_lock:2278:4:-1,pg_try_advisory_lock:16:1:-1,?column?:16:1:-1
+row NULL,NULL,t
+SELECT 1
+> BEGIN;
+BEGIN
+> SELECT pg_advisory_xact_lock(5), pg_try_advisory_xact_lock(5), pg_advisory_xact_lock_shared(5), pg_try_advisory_xact_lock_shared(6, 7);
+fields pg_advisory_xact_lock:2278:4:-1,pg_try_advisory_xact_lock:16:1:-1,pg_advisory_xact_lock_shared:2278:4:-1,pg_try_advisory_xact_lock_shared:16:1:-1
+row ,t,,t
+SELECT 1
+> SELECT pg_advisory_unlock(5);
+fields pg_advisory_unlock:16:1:-1
+WARNING 01000 you don't own a lock of type ExclusiveLock
+row f
+SELECT 1
+> SELECT pg_advisory_unlock_shared(5);
+fields pg_advisory_unlock_shared:16:1:-1
+WARNING 01000 you don't own a lock of type ShareLock
+row f
+SELECT 1
+> SELECT pg_advisory_unlock_all();
+fields pg_advisory_unlock_all:2278:4:-1
+row 
+SELECT 1
+> COMMIT;
+COMMIT
+> SELECT pg_try_advisory_xact_lock(5), pg_advisory_xact_lock(6, 7);
+fields pg_try_advisory_xact_lock:16:1:-1,pg_advisory_xact_lock:2278:4:-1
+row t,
+SELECT 1
+> SELECT pg_advisory_unlock(5);
+fields pg_advisory_unlock:16:1:-1
+WARNING 01000 you don't own a lock of type ExclusiveLock
+row f
+SELECT 1
+> BEGIN;
+BEGIN
+> SELECT pg_advisory_lock(8), pg_advisory_xact_lock(8);
+fields pg_advisory_lock:2278:4:-1,pg_advisory_xact_lock:2278:4:-1
+row ,
+SELECT 1
+> SELECT 1/0;
+ERROR 22012 division by zero
+> ROLLBACK;
+ROLLBACK
+> SELECT pg_advisory_unlock(8), pg_advisory_unlock(8);
+fields pg_advisory_unlock:16:1:-1,pg_advisory_unlock:16:1:-1
+WARNING 01000 you don't own a lock of type ExclusiveLock
+row t,f
+SELECT 1
+> SELECT k, pg_try_advisory_lock(k), pg_try_advisory_lock_shared(k::int4, 0) FROM generate_series(1, 3) k;
+fields k:23:4:-1,pg_try_advisory_lock:16:1:-1,pg_try_advisory_lock_shared:16:1:-1
+row 1,t,t
+row 2,t,t
+row 3,t,t
+SELECT 3
+> SELECT pg_advisory_unlock_all();
+fields pg_advisory_unlock_all:2278:4:-1
+row 
+SELECT 1
+> SELECT pg_advisory_unlock(2), pg_advisory_unlock_shared(2, 0);
+fields pg_advisory_unlock:16:1:-1,pg_advisory_unlock_shared:16:1:-1
+WARNING 01000 you don't own a lock of type ExclusiveLock
+WARNING 01000 you don't own a lock of type ShareLock
+row f,f
+SELECT 1

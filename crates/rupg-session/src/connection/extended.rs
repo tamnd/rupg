@@ -501,8 +501,14 @@ impl Connection {
                 self.close_cursor(stmt, name)?
             } else if let Some(plan) = &plan {
                 self.settings.borrow_mut().take_snapshot();
-                let rows = query::run(plan, &params, &self.reader(), &formats)?;
-                Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
+                let reader = self.reader();
+                let rows = query::run(plan, &params, &reader, &formats);
+                // The warnings of the run, such as the warning of `pg_advisory_unlock`, come before the rows.
+                let mut notices: Vec<Notice> =
+                    reader.take_warnings().into_iter().map(Notice::of_function).collect();
+                drop(reader);
+                self.notices(&mut notices, &statement.text, &[], out);
+                Done::Rows { columns: Vec::new(), rows: rows?, tag: CommandTag::Select }
             } else if prepare::is_prepare(node) {
                 let mut notices = Vec::new();
                 let result = self.run_prepare(node, &statement.text, &formats, &mut notices, 0);

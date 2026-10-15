@@ -12,7 +12,8 @@ use rupg_analyze::{Env, Params};
 use rupg_catalog::Catalog;
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
-use rupg_func::{Backend, Client};
+use rupg_func::{AdvisoryLock, Backend, Client};
+use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
 use rupg_sql::nodes::Node;
 use rupg_types::{
@@ -21,6 +22,7 @@ use rupg_types::{
 };
 use rupg_wire::{Field, Portals, Statements};
 
+use crate::advisory::{Edge, Request, Tag, mode_name};
 use crate::connection::{Activity, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
 use crate::param::type_error;
@@ -36,6 +38,8 @@ const EPOCH_SHIFT_US: i64 = 946_684_800_000_000;
 const PG_SLEEP: (&str, &str) = ("Timeout", "PgSleep");
 /// How long a session in `pg_sleep` waits before it looks at its cancel flag again.
 const SLEEP_SLICE_US: i64 = 10_000;
+/// The wait event of a wait for an advisory lock.
+const ADVISORY: (&str, &str) = ("Lock", "advisory");
 
 /// A column of a result.
 #[derive(Clone, Debug)]
@@ -173,6 +177,60 @@ impl<'a> Reader<'a> {
         self
     }
 
+    /// The row of the session and its store, or `0A000` for a reader that is not a session, which has no locks and cannot wait.
+    fn server(&self) -> Result<(&'a Activity, &'a Store)> {
+        self.activity.ok_or_else(|| {
+            Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a lock in a session with no server is not supported yet",
+            )
+        })
+    }
+
+    /// A timeout setting in milliseconds.
+    fn timeout(&self, name: &str) -> i64 {
+        match guc::find(name).map(|parameter| self.settings().setting(parameter)) {
+            Some(guc::Setting::Int(ms)) => i64::from(ms),
+            _ => 0,
+        }
+    }
+
+    /// `ProcSleep` for the request of the session in the queue of `tag`. After `deadlock_timeout`, the session looks once for a cycle of waits, as `CheckDeadLock` does. A cancel and the end of `lock_timeout` stop the wait.
+    fn wait_lock(&self, store: &Store, tag: Tag, session: bool) -> Result<()> {
+        let locks = store.locks();
+        let start = now(self.clock);
+        let mut check = Some(start.saturating_add(self.timeout("deadlock_timeout") * 1000));
+        let limit = match self.timeout("lock_timeout") {
+            0 => None,
+            ms => Some(start.saturating_add(ms * 1000)),
+        };
+        let slice = Duration::from_micros(SLEEP_SLICE_US.cast_unsigned());
+        loop {
+            if locks.wait(tag, self.pid, session, slice, store.tasks()) {
+                return Ok(());
+            }
+            if self.cancel.is_some_and(|c| c.swap(false, Ordering::Relaxed)) {
+                return Err(Error::new(
+                    SqlState::QUERY_CANCELED,
+                    "canceling statement due to user request",
+                ));
+            }
+            let time = now(self.clock);
+            if limit.is_some_and(|limit| time >= limit) {
+                return Err(Error::new(
+                    SqlState::LOCK_NOT_AVAILABLE,
+                    "canceling statement due to lock timeout",
+                ));
+            }
+            if check.is_some_and(|check| time >= check) {
+                check = None;
+                if let Some(cycle) = locks.deadlock(self.pid) {
+                    return Err(deadlock(&cycle));
+                }
+            }
+        }
+    }
+
     /// The settings of the session.
     pub(crate) fn settings(&self) -> Ref<'_, Settings> {
         self.settings.borrow()
@@ -201,6 +259,31 @@ impl<'a> Reader<'a> {
             .map(|(_, oid)| *oid)
             .or_else(|| self.catalog.schema_by_name(name).map(|s| s.oid))
     }
+}
+
+/// The OID of a database, or 0 for a name that is not a database. The name of a database does not change while a session uses it.
+fn database_oid(store: &Store, name: &str) -> u32 {
+    store.database(name).map_or(0, |db| db.oid)
+}
+
+/// `DeadLockReport`: the error of a cycle of waits, with a line for each wait.
+fn deadlock(cycle: &[Edge]) -> Error {
+    let lines: Vec<String> = cycle
+        .iter()
+        .enumerate()
+        .map(|(i, edge)| {
+            let next = cycle[(i + 1) % cycle.len()].pid;
+            format!(
+                "Process {} waits for {} on {}; blocked by process {next}.",
+                edge.pid,
+                mode_name(edge.share),
+                edge.tag
+            )
+        })
+        .collect();
+    Error::new(SqlState::T_R_DEADLOCK_DETECTED, "deadlock detected")
+        .with_detail(lines.join("\n"))
+        .with_hint("See server log for query details.")
 }
 
 /// The zone of a `TimeZone` value that the setting accepted. The setting keeps the canonical name, which `pg_tzset` takes again.
@@ -253,6 +336,37 @@ impl rupg_func::Session for Reader<'_> {
             store.nap(Duration::from_micros(left.min(SLEEP_SLICE_US).cast_unsigned()));
         }
         activity.report_wait(store, None);
+        Ok(())
+    }
+
+    fn advisory_lock(&self, lock: AdvisoryLock, wait: bool) -> Result<bool> {
+        let (activity, store) = self.server()?;
+        let tag = Tag { database: database_oid(store, self.database), key: lock.key };
+        let locks = store.locks();
+        match locks.request(tag, self.pid, lock.share, lock.session, wait) {
+            Request::Granted => return Ok(true),
+            Request::Busy => return Ok(false),
+            Request::Deadlock(cycle) => return Err(deadlock(&cycle)),
+            Request::Queued => {}
+        }
+        activity.report_wait(store, Some(ADVISORY));
+        let result = self.wait_lock(store, tag, lock.session);
+        activity.report_wait(store, None);
+        if result.is_err() {
+            locks.leave_queue(tag, self.pid);
+        }
+        result.map(|()| true)
+    }
+
+    fn advisory_unlock(&self, lock: AdvisoryLock) -> Result<bool> {
+        let (_, store) = self.server()?;
+        let tag = Tag { database: database_oid(store, self.database), key: lock.key };
+        Ok(store.locks().release(tag, self.pid, lock.share))
+    }
+
+    fn advisory_unlock_all(&self) -> Result<()> {
+        let (_, store) = self.server()?;
+        store.locks().release_all(self.pid, true);
         Ok(())
     }
 
@@ -511,7 +625,7 @@ pub(crate) fn columns(plan: &Plan) -> Vec<Column> {
             Column {
                 name: target.name.clone(),
                 ty,
-                size: rupg_pgcatalog::builtin::type_by_oid(ty).map_or(-1, |row| row.len),
+                size: builtin::type_by_oid(ty).map_or(-1, |row| row.len),
                 typmod,
                 origin: target.origin.unwrap_or_default(),
             }

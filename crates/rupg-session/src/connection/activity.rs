@@ -187,14 +187,18 @@ impl Connection {
         self.report_transaction(Some(self.transaction_start));
     }
 
-    /// The end of a transaction, at a commit or at an abort: `AtEOXact_PgStat` drops the snapshot of the table.
+    /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, and `AtEOXact_PgStat` drops the snapshot of the table.
     pub(super) fn transaction_ended(&mut self) {
+        self.store.locks().release_all(self.pid, false);
         self.activity.clear();
         self.report_transaction(None);
     }
 
-    /// The end of the session, which frees its row of the table.
+    /// The end of the session, which releases its advisory locks and frees its row of the table.
     pub(super) fn leave(&mut self) {
+        let locks = self.store.locks();
+        locks.release_all(self.pid, false);
+        locks.release_all(self.pid, true);
         if let Some(number) = self.activity.number.take() {
             self.store.leave(number);
         }

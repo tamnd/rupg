@@ -7,6 +7,7 @@
 mod absent;
 mod acl;
 mod activity;
+mod advisory;
 mod agg;
 mod array;
 mod bit;
@@ -71,6 +72,22 @@ pub fn type_message_name(ty: u32, session: &dyn Session) -> String {
 /// The OID of `internal`, the language of the functions in C.
 const INTERNAL_LANGUAGE: u32 = 12;
 
+/// The key of an advisory lock, the fields 2 to 4 of its tag: the two halves of a `bigint` key with `kind` 1, or two `integer` keys with `kind` 2. The database of the session is the field 1.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub struct AdvisoryKey {
+    pub high: u32,
+    pub low: u32,
+    pub kind: u16,
+}
+
+/// A request for an advisory lock: the key, the mode, which is `ShareLock` when `share` is true and `ExclusiveLock` when it is false, and the level, which is the session when `session` is true and the transaction when it is false.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct AdvisoryLock {
+    pub key: AdvisoryKey,
+    pub share: bool,
+    pub session: bool,
+}
+
 /// The state of the session that the functions read.
 pub trait Session {
     /// The `DateStyle` setting.
@@ -131,6 +148,32 @@ pub trait Session {
     fn sleep(&self, micros: i64) -> Result<()> {
         let _ = micros;
         Err(not_yet("a wait in a session with no server"))
+    }
+    /// `LockAcquire` of an advisory lock in the database of the session. With `wait`, the session waits while another session holds or waits for a lock that conflicts, and then gives true. Without `wait`, it gives false at once.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `40P01` for a deadlock, `55P03` for the end of `lock_timeout`, and `0A000` for a session with no server.
+    fn advisory_lock(&self, lock: AdvisoryLock, wait: bool) -> Result<bool> {
+        let _ = (lock, wait);
+        Err(not_yet("an advisory lock in a session with no server"))
+    }
+    /// `LockRelease` of an advisory lock of the session level. It gives false when the session does not hold the lock in this mode at the session level.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` for a session with no server.
+    fn advisory_unlock(&self, lock: AdvisoryLock) -> Result<bool> {
+        let _ = lock;
+        Err(not_yet("an advisory lock in a session with no server"))
+    }
+    /// `LockReleaseSession`: releases all the advisory locks of the session level.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` for a session with no server.
+    fn advisory_unlock_all(&self) -> Result<()> {
+        Err(not_yet("an advisory lock in a session with no server"))
     }
     /// The rows of `pg_show_all_settings`, one for each parameter that `SHOW ALL` lists, in the 17 columns of the function.
     fn all_settings(&self) -> Vec<Vec<Value>> {
@@ -307,6 +350,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))
+        .or_else(|| advisory::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.
