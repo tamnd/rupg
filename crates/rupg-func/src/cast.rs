@@ -103,7 +103,7 @@ fn int_to_numeric(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `numeric_int4` and the others: round half away from zero, then the range check.
-fn numeric_to_int(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+pub(crate) fn numeric_to_int(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let Value::Numeric(n) = first(args)? else { return Err(bad_value()) };
     let name = match base_type(call.ret) {
         oid::INT2 => "smallint",

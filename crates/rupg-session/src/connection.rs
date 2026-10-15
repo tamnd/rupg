@@ -2129,6 +2129,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/variance_aggregates.test")));
     }
 
+    /// The operators `->`, `->>`, `#>` and `#>>` of `json` and `jsonb`, the `extract_path` functions, `typeof`, `array_length`, `strip_nulls`, `jsonb_pretty`, the casts of `jsonb`, `?`, `?|`, `?&`, `@>`, `<@` and the order of `jsonb`. The script has the keys that come twice, the negative indexes, the paths with a null element, the escapes that `json` takes and the operators refuse, and the white space around a scalar at the root. `connection/json_access.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn json_access() {
+        big_stack(|| script(include_str!("connection/json_access.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
