@@ -126,6 +126,12 @@ fn pg_is_in_recovery(_: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Bool(false))
 }
 
+/// The recovery control functions `pg_is_wal_replay_paused`, `pg_get_wal_replay_pause_state`, `pg_wal_replay_pause`, `pg_wal_replay_resume` and `pg_promote`. A rupg server is never in recovery, so each one gives the error of PostgreSQL for a server that is not in recovery.
+fn not_in_recovery(_: &Call<'_>, _: &[Value]) -> Result<Value> {
+    Err(Error::new(SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE, "recovery is not in progress")
+        .with_hint("Recovery control functions can only be executed during recovery."))
+}
+
 /// `format_type(oid, int4)`. It is not strict: a null type gives null, and a null typmod gives the name without a typmod.
 fn format_type(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let ty = match args.first() {
@@ -251,6 +257,15 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_client_encoding" => pg_client_encoding,
         "getdatabaseencoding" => getdatabaseencoding,
         "pg_is_in_recovery" => pg_is_in_recovery,
+        "pg_is_wal_replay_paused"
+        | "pg_get_wal_replay_pause_state"
+        | "pg_wal_replay_pause"
+        | "pg_wal_replay_resume"
+        | "pg_promote" => not_in_recovery,
+        // A server that is not a standby has received and replayed no WAL from a primary.
+        "pg_last_wal_receive_lsn" | "pg_last_wal_replay_lsn" | "pg_last_xact_replay_timestamp" => {
+            |_, _| Ok(Value::Null)
+        }
         "pg_encoding_max_length_sql" => pg_encoding_max_length,
         "format_type" => format_type,
         "show_config_by_name" | "show_config_by_name_missing_ok" => current_setting,

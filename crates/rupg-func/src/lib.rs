@@ -10,6 +10,7 @@ mod activity;
 mod advisory;
 mod agg;
 mod array;
+mod binary;
 mod bit;
 mod cash;
 mod cast;
@@ -330,6 +331,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| cash::by_src(src))
         .or_else(|| mac::by_src(src))
         .or_else(|| bit::by_src(src))
+        .or_else(|| binary::by_src(src))
         .or_else(|| geo::by_src(src))
         .or_else(|| lsn::by_src(src))
         .or_else(|| snapshot::by_src(src))

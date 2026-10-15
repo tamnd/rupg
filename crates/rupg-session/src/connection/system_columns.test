@@ -1,0 +1,75 @@
+> CREATE TABLE t (a int)
+CREATE TABLE
+> SELECT a, xmin::text <> '0' AS xmin_set, cmin, xmax, cmax FROM t ORDER BY a
+fields a@t.1:23:4:-1,xmin_set:16:1:-1,cmin@t.-3:29:4:-1,xmax@t.-4:28:4:-1,cmax@t.-5:29:4:-1
+SELECT 0
+> SELECT pg_typeof(xmin), pg_typeof(cmin), pg_typeof(xmax), pg_typeof(cmax), pg_typeof(tableoid) FROM t LIMIT 1
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+SELECT 0
+> SELECT a, t.xmin IS NOT NULL, x.xmax FROM t AS x JOIN t USING (a) ORDER BY a
+fields a@t.1:23:4:-1,?column?:16:1:-1,xmax@t.-4:28:4:-1
+SELECT 0
+> SELECT amname, xmin::text <> '0' AS xmin_set, cmin, xmax, cmax FROM pg_am ORDER BY amname
+fields amname@pg_am.2:19:64:-1,xmin_set:16:1:-1,cmin@pg_am.-3:29:4:-1,xmax@pg_am.-4:28:4:-1,cmax@pg_am.-5:29:4:-1
+row brin,t,0,0,0
+row btree,t,0,0,0
+row gin,t,0,0,0
+row gist,t,0,0,0
+row hash,t,0,0,0
+row heap,t,0,0,0
+row spgist,t,0,0,0
+SELECT 7
+> SELECT n.nspname, n.xmax, c.relname, c.cmax FROM pg_namespace n JOIN pg_class c ON c.relnamespace = n.oid WHERE c.relname IN ('pg_class', 't') ORDER BY 3
+fields nspname@pg_namespace.2:19:64:-1,xmax@pg_namespace.-4:28:4:-1,relname@pg_class.2:19:64:-1,cmax@pg_class.-5:29:4:-1
+row pg_catalog,0,pg_class,0
+row public,0,t,0
+SELECT 2
+> SELECT c.xmin::text <> '0', c.xmax, c.relname FROM pg_class c WHERE c.relname = 'pg_class'
+fields ?column?:16:1:-1,xmax@pg_class.-4:28:4:-1,relname@pg_class.2:19:64:-1
+row t,0,pg_class
+SELECT 1
+> SELECT count(*) FROM pg_attribute WHERE xmin::text = '0'
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE VIEW v AS SELECT a FROM t
+CREATE VIEW
+> SELECT xmin FROM v
+ERROR 42703 column "xmin" does not exist at 8
+> SELECT xmin FROM (SELECT a FROM t) s
+ERROR 42703 column "xmin" does not exist at 8
+> CREATE TABLE ck (a int CHECK (xmin::text <> '0'))
+ERROR 42P10 system column "xmin" reference in check constraint is invalid at 31
+> SELECT pg_get_partkeydef('t'::regclass), pg_get_partkeydef(0), pg_get_partition_constraintdef('t'::regclass), pg_get_partition_constraintdef(0)
+fields pg_get_partkeydef:25:-1:-1,pg_get_partkeydef:25:-1:-1,pg_get_partition_constraintdef:25:-1:-1,pg_get_partition_constraintdef:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_last_wal_receive_lsn(), pg_last_wal_replay_lsn(), pg_last_xact_replay_timestamp()
+fields pg_last_wal_receive_lsn:3220:8:-1,pg_last_wal_replay_lsn:3220:8:-1,pg_last_xact_replay_timestamp:1184:8:-1
+row NULL,NULL,NULL
+SELECT 1
+!details
+> SELECT pg_is_wal_replay_paused()
+fields pg_is_wal_replay_paused:16:1:-1
+ERROR 55000 recovery is not in progress
+HINT Recovery control functions can only be executed during recovery.
+> SELECT pg_get_wal_replay_pause_state()
+fields pg_get_wal_replay_pause_state:25:-1:-1
+ERROR 55000 recovery is not in progress
+HINT Recovery control functions can only be executed during recovery.
+> SELECT pg_wal_replay_pause()
+fields pg_wal_replay_pause:2278:4:-1
+ERROR 55000 recovery is not in progress
+HINT Recovery control functions can only be executed during recovery.
+> SELECT pg_wal_replay_resume()
+fields pg_wal_replay_resume:2278:4:-1
+ERROR 55000 recovery is not in progress
+HINT Recovery control functions can only be executed during recovery.
+> SELECT pg_promote(true, 60)
+fields pg_promote:16:1:-1
+ERROR 55000 recovery is not in progress
+HINT Recovery control functions can only be executed during recovery.
+> SELECT CASE WHEN pg_is_in_recovery() THEN pg_is_wal_replay_paused() ELSE false END
+fields case:16:1:-1
+row f
+SELECT 1

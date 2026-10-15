@@ -1,0 +1,109 @@
+> SELECT encode('\x00017f80ff5c41'::bytea, 'hex')
+fields encode:25:-1:-1
+row 00017f80ff5c41
+SELECT 1
+> SELECT encode('\x00017f80ff5c41'::bytea, 'HEX')
+fields encode:25:-1:-1
+row 00017f80ff5c41
+SELECT 1
+> SELECT encode('\x00017f80ff5c41'::bytea, 'escape')
+fields encode:25:-1:-1
+row \000\200\377\\A
+SELECT 1
+> SELECT encode('abc'::bytea, 'base64'), encode('ab'::bytea, 'base64'), encode('a'::bytea, 'base64'), encode(''::bytea, 'base64')
+fields encode:25:-1:-1,encode:25:-1:-1,encode:25:-1:-1,encode:25:-1:-1
+row YWJj,YWI=,YQ==,
+SELECT 1
+> SELECT encode('\xfbff'::bytea, 'base64'), encode('\xfbff'::bytea, 'base64url'), encode('a'::bytea, 'base64url')
+fields encode:25:-1:-1,encode:25:-1:-1,encode:25:-1:-1
+row +/8=,-_8,YQ
+SELECT 1
+> SELECT replace(encode(repeat('x', 57)::bytea, 'base64'), chr(10), '|')
+fields replace:25:-1:-1
+row eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4|
+SELECT 1
+> SELECT replace(encode(repeat('x', 60)::bytea, 'base64'), chr(10), '|')
+fields replace:25:-1:-1
+row eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4|eHh4
+SELECT 1
+> SELECT encode(repeat('x', 60)::bytea, 'base64url')
+fields encode:25:-1:-1
+row eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4eHh4
+SELECT 1
+> SELECT encode('a'::bytea, 'base32hex'), encode('ab'::bytea, 'base32hex'), encode('abc'::bytea, 'base32hex'), encode('abcd'::bytea, 'base32hex'), encode('abcde'::bytea, 'base32hex'), encode('abcdef'::bytea, 'base32hex')
+fields encode:25:-1:-1,encode:25:-1:-1,encode:25:-1:-1,encode:25:-1:-1,encode:25:-1:-1,encode:25:-1:-1
+row C4======,C5H0====,C5H66===,C5H66P0=,C5H66P35,C5H66P35CO======
+SELECT 1
+> SELECT decode('00017F80ff5c41', 'hex'), decode(' 00 01 '||chr(10)||'7f', 'hex')
+fields decode:17:-1:-1,decode:17:-1:-1
+row \x00017f80ff5c41,\x00017f
+SELECT 1
+> SELECT decode('0', 'hex')
+ERROR 22023 invalid hexadecimal data: odd number of digits
+> SELECT decode('0g', 'hex')
+ERROR 22023 invalid hexadecimal digit: "g"
+> SELECT decode('0 1', 'hex')
+ERROR 22023 invalid hexadecimal digit: " "
+> SELECT decode('é0', 'hex')
+ERROR 22023 invalid hexadecimal digit: "é"
+> SELECT decode('YWJj', 'base64'), decode('YWI=', 'base64'), decode('YQ==', 'base64'), decode('Y W J j', 'base64')
+fields decode:17:-1:-1,decode:17:-1:-1,decode:17:-1:-1,decode:17:-1:-1
+row \x616263,\x6162,\x61,\x616263
+SELECT 1
+> SELECT decode('-_8', 'base64url'), decode('YQ', 'base64url'), decode('YWI', 'base64url'), decode('YWI=', 'base64url')
+fields decode:17:-1:-1,decode:17:-1:-1,decode:17:-1:-1,decode:17:-1:-1
+row \xfbff,\x61,\x6162,\x6162
+SELECT 1
+> SELECT decode('YQ', 'base64')
+ERROR 22023 invalid base64 end sequence
+> SELECT decode('Y===', 'base64')
+ERROR 22023 unexpected "=" while decoding base64 sequence
+> SELECT decode('Y*==', 'base64')
+ERROR 22023 invalid symbol "*" found while decoding base64 sequence
+> SELECT decode('Yé==', 'base64url')
+ERROR 22023 invalid symbol "é" found while decoding base64url sequence
+> SELECT decode('Y', 'base64url')
+ERROR 22023 invalid base64url end sequence
+> SELECT decode('C4======', 'base32hex'), decode('c5h0====', 'base32hex'), decode('C5H66===', 'base32hex'), decode('C5H66P0=', 'base32hex'), decode('C5H66P35', 'base32hex'), decode('C5H66P35CO======', 'base32hex')
+fields decode:17:-1:-1,decode:17:-1:-1,decode:17:-1:-1,decode:17:-1:-1,decode:17:-1:-1,decode:17:-1:-1
+row \x61,\x6162,\x616263,\x61626364,\x6162636465,\x616263646566
+SELECT 1
+> SELECT decode('C4', 'base32hex'), decode('C 4 = =', 'base32hex')
+fields decode:17:-1:-1,decode:17:-1:-1
+row \x61,\x61
+SELECT 1
+> SELECT decode('C=======', 'base32hex')
+ERROR 22023 unexpected "=" while decoding base32hex sequence
+> SELECT decode('C4=====A', 'base32hex')
+ERROR 22023 invalid symbol "A" found while decoding base32hex sequence
+> SELECT decode('W4======', 'base32hex')
+ERROR 22023 invalid symbol "W" found while decoding base32hex sequence
+> SELECT decode('a\\b\000\377c', 'escape'), decode('\101', 'escape')
+fields decode:17:-1:-1,decode:17:-1:-1
+row \x615c6200ff63,\x41
+SELECT 1
+> SELECT decode('a\b', 'escape')
+ERROR 22P02 invalid input syntax for type bytea
+> SELECT decode('a\', 'escape')
+ERROR 22P02 invalid input syntax for type bytea
+> SELECT decode('a\400', 'escape')
+ERROR 22P02 invalid input syntax for type bytea
+> SELECT encode('a'::bytea, 'base32')
+ERROR 22023 unrecognized encoding: "base32"
+> SELECT decode('a', 'rot13')
+ERROR 22023 unrecognized encoding: "rot13"
+> SELECT encode(decode('cGdBZG1pbg==', 'base64'), 'escape')
+fields encode:25:-1:-1
+row pgAdmin
+SELECT 1
+> SELECT encode(NULL::bytea, 'hex'), decode(NULL, 'hex') IS NULL
+fields encode:25:-1:-1,?column?:16:1:-1
+row NULL,t
+SELECT 1
+!details
+> SELECT decode('YQ', 'base64')
+ERROR 22023 invalid base64 end sequence
+HINT Input data is missing padding, is truncated, or is otherwise corrupted.
+> SELECT decode('a', 'rot13')
+ERROR 22023 unrecognized encoding: "rot13"
+HINT Valid encodings are "base32hex", "base64", "base64url", "escape", and "hex".
