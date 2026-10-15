@@ -4,6 +4,40 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.25 (2026-10-15)
+
+A patch release on the way to M2. Gate G1 now passes for all seven clients: psql, pgAdmin 4, pgjdbc, psycopg, node-postgres, pgx and asyncpg show the gate schema on rupg as on PostgreSQL 19. rupg also adds cursors, CREATE DATABASE, DROP, the advisory locks and the encoding conversions.
+
+### Added
+
+- The type `jsonpath` (#286).
+- The type `xml`, with input, output, send and receive as in PostgreSQL 19 built with libxml2 (#287).
+- `pg_get_indexdef` and `pg_get_constraintdef` for the indexes and the constraints of the system catalogs (#288).
+- The rows of the extension `plpgsql` in `pg_extension`, `pg_language`, `pg_proc`, `pg_depend` and `pg_description`, with the OIDs of PostgreSQL 19 (#289).
+- The setting `rupg.compat_version` (#290).
+- CREATE DATABASE and DROP DATABASE, with `FORCE` (#291).
+- `pg_sleep`, `pg_sleep_until` and the type `void`. A cancel request ends the wait (#292).
+- The advisory lock functions, with a `bigint` key and with two `integer` keys (#293).
+- Cursors: `DECLARE`, `FETCH`, `MOVE` and `CLOSE` in the simple and the extended protocol, and the view `pg_cursors` (#294).
+- DROP TABLE, VIEW, INDEX, SEQUENCE and SCHEMA, with `CASCADE` and the messages of PostgreSQL for the objects that depend on them (#295).
+- `pg_partition_tree`, `pg_partition_ancestors`, `pg_partition_root` and `pg_relation_is_publishable`, so `\d` of psql works for a table (#296).
+- `pg_get_serial_sequence` (#297).
+- The system columns `xmin`, `cmin`, `xmax` and `cmax`, `encode`, `decode` and the recovery control functions that pgAdmin 4 calls (#298).
+- The defaults of the arguments and the calls with named arguments for the built-in functions, and the kernels of `make_interval` and `parse_ident` (#300).
+- `convert`, `convert_from`, `convert_to`, `length(bytea, name)` and `to_ascii`, with the conversions between UTF8 and the 27 single-byte encodings (#301).
+
+### Changed
+
+- A join on an `=` of expressions is now a hash join, and `IN` or `= ANY` with a subquery that reads no column of an outer query runs the subquery one time. The queries of the clients on the catalogs are much faster (#288).
+
+### Fixed
+
+- A startup packet with `rupg.compat_version` is now accepted. Before, rupg refused it with 42602 (#290).
+
+### Security
+
+- rustls is now 0.23.46, for RUSTSEC-2026-0346, 0347, 0348 and 0349 (#299).
+
 ## 0.1.24 (2026-10-13)
 
 A patch release on the way to M2. rupg now runs the operators and aggregates of the multirange types, and reads and writes the text search types `tsvector` and `tsquery` with their operators and the match operator `@@`.
