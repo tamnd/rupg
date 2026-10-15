@@ -231,6 +231,67 @@ fn interval_times(interval: &Interval, factor: f64) -> Result<Interval> {
     scale(interval, |x| x * factor)
 }
 
+/// `IntervalAggState`: the state of `sum` and `avg` of `interval`. The infinite values do not count in `count` and `sum`.
+#[derive(Clone, Debug)]
+pub struct IntervalSum {
+    count: i64,
+    sum: Interval,
+    pinf: i64,
+    ninf: i64,
+}
+
+impl Default for IntervalSum {
+    fn default() -> Self {
+        IntervalSum { count: 0, sum: Interval { time: 0, day: 0, month: 0 }, pinf: 0, ninf: 0 }
+    }
+}
+
+impl IntervalSum {
+    /// `do_interval_accum`: adds one value.
+    pub fn add(&mut self, value: &Interval) -> Result<()> {
+        if is_nobegin(value) {
+            self.ninf += 1;
+        } else if is_noend(value) {
+            self.pinf += 1;
+        } else {
+            self.sum = interval_plus(&self.sum, value)?;
+            self.count += 1;
+        }
+        Ok(())
+    }
+
+    /// The infinite result when the values have infinities of one sign, or the error when they have both signs. `None` when all the values are finite.
+    fn infinite(&self) -> Result<Option<Interval>> {
+        match (self.pinf > 0, self.ninf > 0) {
+            (true, true) => Err(interval_range()),
+            (true, false) => Ok(Some(Interval::INFINITY)),
+            (false, true) => Ok(Some(Interval::NEGATIVE_INFINITY)),
+            (false, false) => Ok(None),
+        }
+    }
+
+    /// `interval_sum`: the sum, or `None` when there were no values.
+    pub fn sum(&self) -> Result<Option<Interval>> {
+        if self.count + self.pinf + self.ninf == 0 {
+            return Ok(None);
+        }
+        Ok(Some(self.infinite()?.unwrap_or(self.sum)))
+    }
+
+    /// `interval_avg`: the average, or `None` when there were no values.
+    pub fn avg(&self) -> Result<Option<Interval>> {
+        if self.count + self.pinf + self.ninf == 0 {
+            return Ok(None);
+        }
+        if let Some(infinite) = self.infinite()? {
+            return Ok(Some(infinite));
+        }
+        #[allow(clippy::cast_precision_loss)]
+        let count = self.count as f64;
+        scale(&self.sum, |x| x / count).map(Some)
+    }
+}
+
 /// `interval_lerp` of `orderedsetaggs.c`: the interval at the fraction `pct` of the way from `lo` to `hi`, for `percentile_cont`.
 pub fn interval_lerp(lo: &Interval, hi: &Interval, pct: f64) -> Result<Interval> {
     interval_plus(&interval_times(&interval_minus(hi, lo)?, pct)?, lo)

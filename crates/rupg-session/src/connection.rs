@@ -2369,6 +2369,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/ordered_set.test")));
     }
 
+    /// `sum` and `avg` of `interval`: groups, nulls, no rows, infinities, an overflow, the rounding of the average and `DISTINCT`. `connection/interval_sum.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn interval_sum() {
+        big_stack(|| script(include_str!("connection/interval_sum.test")));
+    }
+
     /// The wait events of `pg_wait_events`, which `cargo xtask waitevents` makes from the vendored `wait_event_names.txt`: the count of each type, all the rows of `pg_get_wait_events` in their order, and the join with `pg_stat_activity`, which has no row because the session that runs the statement waits for nothing. `connection/wait_events.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn wait_events() {

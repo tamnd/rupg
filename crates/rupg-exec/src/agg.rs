@@ -41,6 +41,8 @@ pub(crate) enum Method {
     Moments { sample: bool, root: bool },
     /// `json_agg`, `json_object_agg` and the forms of `jsonb`. `strict` skips the null values, and `unique` makes a key that comes twice an error.
     Json { object: bool, jsonb: bool, strict: bool, unique: bool },
+    /// `interval_avg_accum`: the sum of `interval` values, for `sum` or for `avg`.
+    Interval { avg: bool },
     /// An ordered-set or a hypothetical-set aggregate, which reads the sorted rows of the group and its direct arguments.
     OrderedSet(Ordered),
 }
@@ -118,6 +120,8 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
     }
     Ok(match (src(row.transfn), src(row.finalfn)) {
         ("int8_avg_accum", "numeric_poly_sum") => Method::Int128 { avg: false },
+        ("interval_avg_accum", "interval_sum") => Method::Interval { avg: false },
+        ("interval_avg_accum", "interval_avg") => Method::Interval { avg: true },
         ("int8_avg_accum", "numeric_poly_avg") => Method::Int128 { avg: true },
         ("numeric_avg_accum", "numeric_sum") => Method::Numeric { avg: false },
         ("numeric_avg_accum", "numeric_avg") => Method::Numeric { avg: true },
@@ -186,6 +190,8 @@ pub(crate) fn method(agg: &Aggref, ty: u32, location: Option<usize>) -> Result<M
 
 /// The state of an aggregate in a group.
 enum State {
+    /// The state of [`Method::Interval`].
+    Interval(rupg_func::IntervalSum),
     /// The state of [`Method::OrderedSet`], which keeps the rows of the group outside of the state.
     Sorted,
     /// The state of [`Method::Kernel`]. `empty` is `noTransValue`: the state is null and the first value that is not null becomes the state.
@@ -334,6 +340,7 @@ impl Agg<'_> {
             }
             Method::RangeAgg => State::RangeAgg { ranges: Vec::new() },
             Method::Moments { .. } => State::Moments(Moments::default()),
+            Method::Interval { .. } => State::Interval(rupg_func::IntervalSum::default()),
             Method::Json { .. } => State::Json { text: None, keys: HashSet::new() },
             Method::OrderedSet(_) => State::Sorted,
         })
@@ -437,6 +444,11 @@ impl Agg<'_> {
                 Some(Value::Multirange(input)) => ranges.extend(input.iter().cloned()),
                 Some(Value::Null) | None => {}
                 _ => return Err(Error::internal("range_agg got a value of the wrong kind")),
+            },
+            (Method::Interval { .. }, State::Interval(sum)) => match args.first() {
+                Some(Value::Interval(v)) => sum.add(v)?,
+                Some(Value::Null) | None => {}
+                _ => return Err(Error::internal("an interval sum got a value of the wrong kind")),
             },
             (Method::Moments { .. }, State::Moments(moments)) => match args.first() {
                 Some(Value::Null) | None => {}
@@ -668,6 +680,10 @@ impl Agg<'_> {
                 Ok(Value::Array(Box::new(Array { dims: all, values })))
             }
             (Method::RangeAgg, State::RangeAgg { ranges }) => rupg_func::range_agg(self.ty, ranges),
+            (Method::Interval { avg }, State::Interval(sum)) => {
+                let result = if *avg { sum.avg()? } else { sum.sum()? };
+                Ok(result.map_or(Value::Null, Value::Interval))
+            }
             (Method::Moments { sample, root }, State::Moments(moments)) => {
                 moments.finish(*sample, *root)
             }

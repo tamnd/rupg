@@ -1,0 +1,58 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW iavg_t AS SELECT * FROM (VALUES (1, interval '1 day'), (1, interval '2 hours'), (1, NULL), (2, interval '1 month 3 days'), (2, interval '-5 minutes'), (2, interval '1 year'), (3, NULL), (4, interval 'infinity'), (4, interval '1 day'), (5, interval '-infinity'), (5, interval '-infinity')) AS t(g, v)
+CREATE VIEW
+> SELECT g, sum(v), avg(v), count(v) FROM iavg_t GROUP BY g ORDER BY g
+fields g@iavg_t.1:23:4:-1,sum:1186:16:-1,avg:1186:16:-1,count:20:8:-1
+row 1,1 day 02:00:00,13:00:00,2
+row 2,1 year 1 mon 3 days -00:05:00,4 mons 11 days -00:01:40,3
+row 3,NULL,NULL,0
+row 4,infinity,infinity,2
+row 5,-infinity,-infinity,2
+SELECT 5
+> SELECT sum(v), avg(v) FROM iavg_t WHERE g < 4
+fields sum:1186:16:-1,avg:1186:16:-1
+row 1 year 1 mon 4 days 01:55:00,2 mons 18 days 19:35:00
+SELECT 1
+> SELECT sum(v), avg(v) FROM iavg_t WHERE false
+fields sum:1186:16:-1,avg:1186:16:-1
+row NULL,NULL
+SELECT 1
+> SELECT sum(v) FROM iavg_t
+fields sum:1186:16:-1
+ERROR 22008 interval out of range
+> SELECT avg(v) FROM iavg_t
+fields avg:1186:16:-1
+ERROR 22008 interval out of range
+> SELECT avg(v) FROM (VALUES (interval '1 month'), (interval '1 month'), (interval '1 day')) AS t(v)
+fields avg:1186:16:-1
+row 20 days 08:00:00
+SELECT 1
+> SELECT avg(v) FROM (VALUES (interval '1 month'), (interval '0'), (interval '0')) AS t(v)
+fields avg:1186:16:-1
+row 10 days
+SELECT 1
+> SELECT avg(v) FROM (VALUES (interval '1 second'), (interval '0'), (interval '0')) AS t(v)
+fields avg:1186:16:-1
+row 00:00:00.333333
+SELECT 1
+> SELECT avg(v) FROM (VALUES (interval '1 microsecond'), (interval '0'), (interval '0'), (interval '0')) AS t(v)
+fields avg:1186:16:-1
+row 00:00:00
+SELECT 1
+> SELECT sum(v) FROM (VALUES (interval '2000000000 months'), (interval '2000000000 months')) AS t(v)
+fields sum:1186:16:-1
+ERROR 22008 interval out of range
+> SELECT sum(v) FROM (VALUES (interval '2000000000 days'), (interval '1 day'), (interval '-2000000000 days')) AS t(v)
+fields sum:1186:16:-1
+row 1 day
+SELECT 1
+> SELECT sum(DISTINCT v), avg(DISTINCT v) FROM (VALUES (interval '1 hour'), (interval '1 hour'), (interval '3 hours')) AS t(v)
+fields sum:1186:16:-1,avg:1186:16:-1
+row 04:00:00,02:00:00
+SELECT 1
+> SELECT pg_typeof(sum(v)), pg_typeof(avg(v)) FROM iavg_t
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+ERROR 22008 interval out of range
+> DROP VIEW iavg_t
+DROP VIEW
