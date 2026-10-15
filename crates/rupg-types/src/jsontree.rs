@@ -156,6 +156,11 @@ impl<'a> JsonTree<'a> {
         self.text
     }
 
+    /// The nodes, for a caller that keeps them with its own copy of the text.
+    pub fn into_nodes(self) -> Vec<JsonNode> {
+        self.nodes
+    }
+
     pub fn node(&self, at: usize) -> &JsonNode {
         &self.nodes[at]
     }

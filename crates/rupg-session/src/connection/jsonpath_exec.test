@@ -1,0 +1,270 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT jsonb_path_exists('{"a": 12}', '$.a'), jsonb_path_exists('{"a": 12}', '$.b'), jsonb_path_exists('{"a": 12}', 'strict $.b', silent => true), jsonb_path_exists('[1]', 'strict $[1]', silent => true)
+fields jsonb_path_exists:16:1:-1,jsonb_path_exists:16:1:-1,jsonb_path_exists:16:1:-1,jsonb_path_exists:16:1:-1
+row t,f,NULL,NULL
+SELECT 1
+> SELECT jsonb_path_exists('{"a": 12}', 'strict $.b')
+ERROR 2203A JSON object does not contain key "b"
+> SELECT jsonb_path_exists('[1]', 'strict $[1]')
+ERROR 22033 jsonpath array subscript is out of bounds
+> SELECT jsonb_path_exists('[1]', 'lax $[1]'), jsonb_path_exists('[1]', 'lax $[0]'), jsonb_path_exists('1', 'lax $[0]'), jsonb_path_exists('1', 'strict $[0]', silent => true)
+fields jsonb_path_exists:16:1:-1,jsonb_path_exists:16:1:-1,jsonb_path_exists:16:1:-1,jsonb_path_exists:16:1:-1
+row f,t,t,NULL
+SELECT 1
+> SELECT '{"a": [1, 2, 3]}'::jsonb @? '$.a[*] ? (@ > 2)', '{"a": [1, 2, 3]}'::jsonb @? '$.a[*] ? (@ > 3)', '{"a": 1}'::jsonb @? 'strict $.b', '[1, "a"]'::jsonb @@ '$[*] > 0'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,NULL,t
+SELECT 1
+> SELECT jsonb_path_query('{"a": {"b": [1, 2, {"c": 3}]}}', '$.a.b[*]') ORDER BY 1
+fields jsonb_path_query:3802:-1:-1
+row 1
+row 2
+row {"c": 3}
+SELECT 3
+> SELECT x FROM jsonb_path_query('[1, [2, [3, [4]]], {"a": [5]}]', 'lax $.**') WITH ORDINALITY AS t(x, n) ORDER BY n
+fields x:3802:-1:-1
+row [1, [2, [3, [4]]], {"a": [5]}]
+row 1
+row [2, [3, [4]]]
+row 2
+row [3, [4]]
+row 3
+row [4]
+row 4
+row {"a": [5]}
+row [5]
+row 5
+SELECT 11
+> SELECT x FROM jsonb_path_query('[1, [2, [3, [4]]], {"a": [5]}]', 'strict $.**{2 to last}') WITH ORDINALITY AS t(x, n) ORDER BY n
+fields x:3802:-1:-1
+row 2
+row [3, [4]]
+row 3
+row [4]
+row 4
+row [5]
+row 5
+SELECT 7
+> SELECT x FROM jsonb_path_query('{"a": {"b": {"c": 1}}, "d": 2}', '$.**{1}') WITH ORDINALITY AS t(x, n) ORDER BY n
+fields x:3802:-1:-1
+row {"b": {"c": 1}}
+row 2
+SELECT 2
+> SELECT x FROM jsonb_path_query('{"a": {"b": {"c": 1}}, "d": [2, {"e": 3}]}', 'lax $.**{last}') WITH ORDINALITY AS t(x, n) ORDER BY n
+fields x:3802:-1:-1
+row 1
+row 2
+row 3
+SELECT 3
+> SELECT x FROM jsonb_path_query('{"a": {"b": {"c": 1}}, "d": [2, {"e": 3}]}', 'lax $.**.c') WITH ORDINALITY AS t(x, n) ORDER BY n
+fields x:3802:-1:-1
+row 1
+SELECT 1
+> SELECT jsonb_path_query_array('[0, 1, 2, 3, 4, 5]', '$[1 to 3, last, 0]'), jsonb_path_query_array('[0, 1, 2, 3, 4, 5]', '$[last - 1 to last]'), jsonb_path_query_array('[0, 1, 2]', 'lax $[1 to 10]'), jsonb_path_query_array('[0, 1, 2]', '$[2.7]')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1, 2, 3, 5, 0],[4, 5],[1, 2],[2]
+SELECT 1
+> SELECT jsonb_path_query_array('[0, 1, 2]', 'strict $[1 to 10]')
+ERROR 22033 jsonpath array subscript is out of bounds
+> SELECT jsonb_path_query_array('[0, 1, 2]', '$["a"]')
+ERROR 22033 jsonpath array subscript is not a single numeric value
+> SELECT jsonb_path_query_array('[0, 1, 2]', '$[1e10]')
+ERROR 22033 jsonpath array subscript is out of integer range
+> SELECT jsonb_path_query_array('[0, 1, 2]', 'strict $[last]'), jsonb_path_query_array('7', 'lax $[last]'), jsonb_path_query_array('{"a": 1}', 'lax $[0]'), jsonb_path_query_array('[]', 'lax $[last]')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [2],[7],[{"a": 1}],[]
+SELECT 1
+> SELECT jsonb_path_query_array('{"a": 1, "b": [2, 3], "c": {"d": 4}}', '$.*'), jsonb_path_query_array('[{"a": 1}, {"a": 2}, 3]', 'lax $.a'), jsonb_path_query_array('[{"a": 1}, {"a": 2}, 3]', 'lax $[*].*')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1, [2, 3], {"d": 4}],[1, 2],[1, 2]
+SELECT 1
+> SELECT jsonb_path_query_array('[{"a": 1}, {"b": 2}]', 'strict $[*].a')
+ERROR 2203A JSON object does not contain key "a"
+> SELECT jsonb_path_query_array('[{"a": 1}, {"b": 2}]', 'strict $[*].a', silent => true), jsonb_path_query_array('1', 'strict $.*', silent => true), jsonb_path_query_array('1', 'lax $.*')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1],[],[]
+SELECT 1
+> SELECT jsonb_path_query_array('1', 'strict $.*')
+ERROR 2203C jsonpath wildcard member accessor can only be applied to an object
+> SELECT jsonb_path_query_array('1', 'strict $[*]')
+ERROR 22039 jsonpath wildcard array accessor can only be applied to an array
+> SELECT jsonb_path_query_array('1', 'strict $.a')
+ERROR 2203A jsonpath member accessor can only be applied to an object
+> SELECT jsonb_path_query_array('{"a": 1}', 'strict $.b')
+ERROR 2203A JSON object does not contain key "b"
+> SELECT jsonb_path_query_array('[1, 2, 3, 4, 5]', '$[*] ? (@ >= 2 && @ < 5)'), jsonb_path_query_array('[1, 2, 3, 4, 5]', '$[*] ? (@ == 1 || @ == 5)'), jsonb_path_query_array('[1, 2, 3]', '$[*] ? (!(@ == 2))'), jsonb_path_query_array('[1, "a", null, true]', '$[*] ? ((@ > 0) is unknown)')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [2, 3, 4],[1, 5],[1, 3],["a", true]
+SELECT 1
+> SELECT jsonb_path_query_array('[{"a": 1, "b": "x"}, {"a": 2}, {"a": 3, "b": "y"}]', '$[*] ? (exists (@.b)).a'), jsonb_path_query_array('[{"a": 1, "b": "x"}, {"a": 2}]', 'strict $[*] ? (exists (@.b)).a'), jsonb_path_query_array('[{"a": [1, 2]}, {"a": [3]}]', '$[*] ? (@.a[*] > 2)')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1, 3],[1],[{"a": [3]}]
+SELECT 1
+> SELECT jsonb_path_query_array('[null, 1, "1", true, false, [1], {"a": 1}]', '$[*] ? (@ == null)'), jsonb_path_query_array('[null, 1, "1", true, false]', '$[*] ? (@ != null)'), jsonb_path_query_array('[null, 1, "1", true, false]', '$[*] ? (@ == true)'), jsonb_path_query_array('["a", "b", "ab", "B"]', '$[*] ? (@ < "b")')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [null],[1, "1", true, false],[true],["a", "ab", "B"]
+SELECT 1
+> SELECT jsonb_path_query_array('["abc", "abd", "bc", 1]', '$[*] ? (@ starts with "ab")'), jsonb_path_query_array('["abc", "ABD", "bc"]', '$[*] ? (@ like_regex "^ab" flag "i")'), jsonb_path_query_array('["a.c", "abc"]', '$[*] ? (@ like_regex "a.c" flag "q")'), jsonb_path_query_array('["a\nb", "ab"]', '$[*] ? (@ like_regex "a.b" flag "s")')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row ["abc", "abd"],["abc", "ABD"],["a.c"],["a\nb"]
+SELECT 1
+> SELECT jsonb_path_query_array('{"x": [1, 2], "y": 3}', '$.x[*] ? (@ < $.y)'), jsonb_path_query_array('[1, 5, 10]', '$[*] ? (@ > $min && @ < $max)', '{"min": 2, "max": 9}'), jsonb_path_query_array('{"a": 1}', '$var', '{"var": [1, {"b": 2}]}')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1, 2],[5],[[1, {"b": 2}]]
+SELECT 1
+> SELECT jsonb_path_query_array('{"a": 1}', '$x')
+ERROR 42704 could not find jsonpath variable "x"
+> SELECT jsonb_path_query_array('{"a": 1}', '$x', '[1]')
+ERROR 22023 "vars" argument is not an object
+> SELECT jsonb_path_query_array('{"a": 1}', '$.a', 'null')
+ERROR 22023 "vars" argument is not an object
+> SELECT jsonb_path_query_array('{"a": 7, "b": [2, 3]}', '$.a + 3'), jsonb_path_query_array('{"a": 7}', '$.a - 10'), jsonb_path_query_array('{"a": 7}', '$.a * 1.5'), jsonb_path_query_array('{"a": 7}', '$.a / 2'), jsonb_path_query_array('{"a": 7}', '$.a % 4'), jsonb_path_query_array('[1, 2]', 'lax $[0] + $[1]'), jsonb_path_query_array('[[3]]', 'lax $[0] * 2')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [10],[-3],[10.5],[3.5000000000000000],[3],[3],[6]
+SELECT 1
+> SELECT jsonb_path_query_array('{"a": 7}', '$.a / 0')
+ERROR 22012 division by zero
+> SELECT jsonb_path_query_array('{"a": 7}', '$.a / 0', silent => true), jsonb_path_exists('{"a": 7}', '$.a / 0', silent => true), jsonb_path_query_array('[1, 2]', '$[*] + 1', silent => true)
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_exists:16:1:-1,jsonb_path_query_array:3802:-1:-1
+row [],NULL,[]
+SELECT 1
+> SELECT jsonb_path_query_array('[1, 2]', '$[*] + 1')
+ERROR 22038 left operand of jsonpath operator + is not a single numeric value
+> SELECT jsonb_path_query_array('[1, 2]', '1 + $[*]')
+ERROR 22038 right operand of jsonpath operator + is not a single numeric value
+> SELECT jsonb_path_query_array('"a"', '$ + 1')
+ERROR 22038 left operand of jsonpath operator + is not a single numeric value
+> SELECT jsonb_path_query_array('[1, -2, 3.5]', '-$[*]'), jsonb_path_query_array('[1, -2, 3.5]', '+$[*]'), jsonb_path_query_array('[1, "a", 2]', 'lax -$[*] ? (@ < 0)', silent => true)
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [-1, 2, -3.5],[1, -2, 3.5],[]
+SELECT 1
+> SELECT jsonb_path_query_array('[1, "a"]', '-$[*]')
+ERROR 2203B operand of unary jsonpath operator - is not a numeric value
+> SELECT jsonb_path_query_array('[1, "a", null, true, [1], {"a": 1}]', '$[*].type()'), jsonb_path_query_array('[1, [1, 2], {}]', 'lax $[*].size()'), jsonb_path_query_array('[[1, 2], [], [3]]', 'strict $[*].size()')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row ["number", "string", "null", "boolean", "array", "object"],[1, 2, 1],[2, 0, 1]
+SELECT 1
+> SELECT jsonb_path_query_array('[1, [1, 2]]', 'strict $[*].size()')
+ERROR 22039 jsonpath item method .size() can only be applied to an array
+> SELECT jsonb_path_query_array('[1.5, -1.5, -2, 0.1]', '$[*].abs()'), jsonb_path_query_array('[1.5, -1.5, -2, 0.1]', '$[*].floor()'), jsonb_path_query_array('[1.5, -1.5, -2, 0.1]', '$[*].ceiling()')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1.5, 1.5, 2, 0.1],[1, -2, -2, 0],[2, -1, -2, 1]
+SELECT 1
+> SELECT jsonb_path_query_array('["a"]', '$[*].abs()')
+ERROR 22036 jsonpath item method .abs() can only be applied to a numeric value
+> SELECT jsonb_path_query_array('[1, "1.5", "1e3", 2.25]', '$[*].double()'), jsonb_path_query_array('["-0", "0.1"]', '$[*].double()')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1, 1.5, 1000, 2.25],[0, 0.1]
+SELECT 1
+> SELECT jsonb_path_query_array('["abc"]', '$[*].double()')
+ERROR 22036 argument "abc" of jsonpath item method .double() is invalid for type double precision
+> SELECT jsonb_path_query_array('["nan"]', '$[*].double()')
+ERROR 22036 NaN or Infinity is not allowed for jsonpath item method .double()
+> SELECT jsonb_path_query_array('[true]', '$[*].double()')
+ERROR 22036 jsonpath item method .double() can only be applied to a string or numeric value
+> SELECT jsonb_path_query_array('[1, "12", 2.5, -2.5, "-7"]', '$[*].integer()'), jsonb_path_query_array('[1, "9876543210", 2.5]', '$[*].bigint()')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1, 12, 3, -3, -7],[1, 9876543210, 3]
+SELECT 1
+> SELECT jsonb_path_query_array('["1.5"]', '$[*].integer()')
+ERROR 22036 argument "1.5" of jsonpath item method .integer() is invalid for type integer
+> SELECT jsonb_path_query_array('[9876543210]', '$[*].integer()')
+ERROR 22036 argument "9876543210" of jsonpath item method .integer() is invalid for type integer
+> SELECT jsonb_path_query_array('["9876543210"]', '$[*].integer()')
+ERROR 22036 argument "9876543210" of jsonpath item method .integer() is invalid for type integer
+> SELECT jsonb_path_query_array('[1, 0, -3, true, false, "t", "no", "TRUE", "off", "y"]', '$[*].boolean()')
+fields jsonb_path_query_array:3802:-1:-1
+row [true, false, true, true, false, true, false, true, false, true]
+SELECT 1
+> SELECT jsonb_path_query_array('[1.5]', '$[*].boolean()')
+ERROR 22036 argument "1.5" of jsonpath item method .boolean() is invalid for type boolean
+> SELECT jsonb_path_query_array('[" t"]', '$[*].boolean()')
+ERROR 22036 argument " t" of jsonpath item method .boolean() is invalid for type boolean
+> SELECT jsonb_path_query_array('[null]', '$[*].boolean()')
+ERROR 22036 jsonpath item method .boolean() can only be applied to a boolean, string, or numeric value
+> SELECT jsonb_path_query_array('[1, "1.50", 1.2345e2, "-0.5"]', '$[*].decimal()'), jsonb_path_query_array('[1, "1.50", 1.2345e2, "-0.5"]', '$[*].number()'), jsonb_path_query_array('[1.236, "12.5"]', '$[*].decimal(4, 2)'), jsonb_path_query_array('[1234.5]', '$[*].decimal(6)'), jsonb_path_query_array('[1234.5]', '$[*].decimal(4, -2)')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1, 1.50, 123.45, -0.5],[1, 1.50, 123.45, -0.5],[1.24, 12.50],[1235],[1200]
+SELECT 1
+> SELECT jsonb_path_query_array('[1234.5]', '$[*].decimal(3, 2)')
+ERROR 22036 argument "1234.5" of jsonpath item method .decimal() is invalid for type numeric
+> SELECT jsonb_path_query_array('[1234.5]', '$[*].decimal(0)')
+ERROR 22023 NUMERIC precision 0 must be between 1 and 1000
+> SELECT jsonb_path_query_array('[1234.5]', '$[*].decimal(5, 2000)')
+ERROR 22023 NUMERIC scale 2000 must be between -1000 and 1000
+> SELECT jsonb_path_query_array('[1234.5]', '$[*].decimal(0)', silent => true), jsonb_path_query_array('["x"]', '$[*].number()', silent => true)
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [],[]
+SELECT 1
+> SELECT jsonb_path_query_array('["x"]', '$[*].number()')
+ERROR 22036 argument "x" of jsonpath item method .number() is invalid for type numeric
+> SELECT jsonb_path_query_array('[1, "a", true, false, 1.50]', '$[*].string()'), jsonb_path_query_array('["1", 2]', '$[*].string().type()')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row ["1", "a", "true", "false", "1.50"],["string", "string"]
+SELECT 1
+> SELECT jsonb_path_query_array('[null]', '$[*].string()')
+ERROR 22036 jsonpath item method .string() can only be applied to a boolean, string, numeric, or datetime value
+> SELECT jsonb_path_query_array('[{"a": 1, "b": [1, 2]}, {}]', '$[*].keyvalue()'), jsonb_path_query_array('{"a": {"x": 1}, "b": {"y": 2}}', '$.*.keyvalue()'), jsonb_path_query_array('[{"a": 1}, {"b": 2}]', '$[*].keyvalue().key')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [{"id": 12, "key": "a", "value": 1}, {"id": 12, "key": "b", "value": [1, 2]}],[{"id": 24, "key": "x", "value": 1}, {"id": 48, "key": "y", "value": 2}],["a", "b"]
+SELECT 1
+> SELECT jsonb_path_query_array('{"a": {"b": 1}}', '$.keyvalue().value.keyvalue()'), jsonb_path_query_array('{"a": 1}', '$x.keyvalue()', '{"x": {"q": 5}}'), jsonb_path_query_array('[{"a": 1}, {"b": 2.5, "c": "long string here"}, {"d": null, "e": 123456789012345678901234567890}, [{"f": true}, {"g": 1e-100}], {"h": [1, "xy"]}]', '$[*].keyvalue().id')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [{"id": 20000000048, "key": "b", "value": 1}],[{"id": 10000000016, "key": "q", "value": 5}],[24, 48, 48, 100, 100, 160, 176, 204]
+SELECT 1
+> SELECT jsonb_path_query_array('[1]', 'strict $[*].keyvalue()')
+ERROR 2203C jsonpath item method .keyvalue() can only be applied to an object
+> SELECT jsonb_path_query_array('[" a ", "xxaxx"]', '$[*].ltrim()'), jsonb_path_query_array('[" a ", "xxaxx"]', '$[*].rtrim("x")'), jsonb_path_query_array('[" a ", "xxaxx"]', '$[*].btrim("x")'), jsonb_path_query_array('["aBc dEf"]', '$[*].lower()'), jsonb_path_query_array('["aBc dEf"]', '$[*].upper()'), jsonb_path_query_array('["aBc dEf"]', '$[*].initcap()')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row ["a ", "xxaxx"],[" a ", "xxa"],[" a ", "a"],["abc def"],["ABC DEF"],["Abc Def"]
+SELECT 1
+> SELECT jsonb_path_query_array('["a-b-c"]', '$[*].replace("-", "+")'), jsonb_path_query_array('["a-b-c"]', '$[*].split_part("-", 2)'), jsonb_path_query_array('["a-b-c"]', '$[*].split_part("-", -1)')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row ["a+b+c"],["b"],["c"]
+SELECT 1
+> SELECT jsonb_path_query_array('["a-b-c"]', '$[*].split_part("-", 0)')
+ERROR 22023 field position of jsonpath item method .split_part() must not be zero
+> SELECT jsonb_path_query_array('[1]', '$[*].lower()')
+ERROR 22023 jsonpath item method .lower() can only be applied to a string
+> SELECT jsonb_path_query_first('[1, 2, 3]', '$[*] ? (@ > 1)'), jsonb_path_query_first('[1, 2, 3]', '$[*] ? (@ > 5)'), jsonb_path_query_first('{"a": [{"b": 1}]}', '$.a'), jsonb_path_query_first('[]', '$[*]')
+fields jsonb_path_query_first:3802:-1:-1,jsonb_path_query_first:3802:-1:-1,jsonb_path_query_first:3802:-1:-1,jsonb_path_query_first:3802:-1:-1
+row 2,NULL,[{"b": 1}],NULL
+SELECT 1
+> SELECT jsonb_path_match('[1, 2]', '$[*] > 1'), jsonb_path_match('[1, 2]', '$[*] > 5'), jsonb_path_match('[1, "a"]', 'strict $[*] > 1'), jsonb_path_match('{"a": 1}', '$.a == 1'), jsonb_path_match('1', 'exists($.a)'), jsonb_path_match('{"a": 1}', '$.b', silent => true)
+fields jsonb_path_match:16:1:-1,jsonb_path_match:16:1:-1,jsonb_path_match:16:1:-1,jsonb_path_match:16:1:-1,jsonb_path_match:16:1:-1,jsonb_path_match:16:1:-1
+row t,f,NULL,t,f,NULL
+SELECT 1
+> SELECT jsonb_path_match('{"a": 1}', '$.a')
+ERROR 22038 single boolean result is expected
+> SELECT jsonb_path_match('[true, true]', '$[*]')
+ERROR 22038 single boolean result is expected
+> SELECT '{"a": 1}'::jsonb @@ '$.a', '[1, 2]'::jsonb @@ '$[*] == 2', '{"a": true}'::jsonb @@ '$.a', 'null'::jsonb @@ '$'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row NULL,t,t,NULL
+SELECT 1
+> SELECT jsonb_path_query_array('[1, 2, 3]', '$[*] ? (@ == $[0])'), jsonb_path_query_array('[{"a": 1, "b": 1}, {"a": 1, "b": 2}]', '$[*] ? (@.a == @.b)'), jsonb_path_query_array('{"a": [1, 2], "b": [2, 3]}', '$.a[*] ? (@ == $.b[*])')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1],[{"a": 1, "b": 1}],[2]
+SELECT 1
+> SELECT jsonb_path_query_array('[1, 2, "a"]', 'strict $[*] ? (@ > 1)'), jsonb_path_query_array('[{"x": 1}, {"y": 2}]', '$[*] ? (@.x == 1)'), jsonb_path_query_array('[{"x": 1}, {"y": 2}]', 'strict $[*] ? (@.x == 1)')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [2],[{"x": 1}],[{"x": 1}]
+SELECT 1
+> SELECT jsonb_path_query_array('[1, 2, 3]', '$.size()'), jsonb_path_query_array('[1, 2, 3]', '$[$.size() - 1]'), jsonb_path_query_array('{"a": [1, 2]}', '$.a.size() + 10'), jsonb_path_query_array('"abc"', '$.type()'), jsonb_path_query_array('[1]', '$.a', silent => true)
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [3],[3],[12],["string"],[]
+SELECT 1
+> SELECT jsonb_path_query_array('{"a": 1, "aa": 2, "b": {"a": 3}}', '$.**.a'), jsonb_path_query_array('{"a": 1, "aa": 2, "b": {"a": 3}}', 'strict $.**.a', silent => true), jsonb_path_query_array('[1, 2]', '$ ? (@[*] > 1)'), jsonb_path_query_array('1', '$ ? (@ like_regex "1")')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [1, 3],[1, 3],[2],[]
+SELECT 1
+> SELECT jsonb_path_query_array('[1, 2, 3]', '1 + 2'), jsonb_path_query_array('null', 'null'), jsonb_path_query_array('{}', '"x" starts with "x"'), jsonb_path_query_array('{}', '1 == 1 && 1 == "a"'), jsonb_path_query_array('{}', '(1 == "a") || 1 == 1')
+fields jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1,jsonb_path_query_array:3802:-1:-1
+row [3],[null],[true],[null],[true]
+SELECT 1
+> SELECT jsonb_path_query('{"a": [1, {"b": 2}]}', '$.a[*]', '{}', true), jsonb_path_query_tz('[1, 2]', '$[*]') ORDER BY 1, 2
+fields jsonb_path_query:3802:-1:-1,jsonb_path_query_tz:3802:-1:-1
+row 1,1
+row {"b": 2},2
+SELECT 2

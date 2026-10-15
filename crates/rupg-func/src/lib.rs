@@ -32,6 +32,7 @@ mod io;
 mod json;
 mod jsonbuild;
 mod jsonedit;
+mod jsonpath;
 mod lsn;
 mod mac;
 mod math;
@@ -405,6 +406,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| json::by_src(src))
         .or_else(|| jsonedit::by_src(src))
         .or_else(|| jsonbuild::by_src(src))
+        .or_else(|| jsonpath::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| unicode::by_src(src))
         .or_else(|| misc::by_src(src))
