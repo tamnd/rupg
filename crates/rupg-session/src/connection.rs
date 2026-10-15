@@ -1900,6 +1900,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/serial_sequence.test")));
     }
 
+    /// The system columns `xmin`, `cmin`, `xmax` and `cmax` of a table and of a catalog, their types and their errors in a view, a subquery and a check constraint, the partition key functions for a table that is not partitioned, and the recovery functions on a server that is not in recovery. The script does not show the value of `xmin`, because rupg has no row versions yet. `connection/system_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn system_columns() {
+        big_stack(|| script(include_str!("connection/system_columns.test")));
+    }
+
     /// `PREPARE`, `EXECUTE` and `DEALLOCATE`: the types of the parameters, the coercion of the values of `EXECUTE` and their errors, the statements of `Parse` that `EXECUTE` runs, the errors in a failed transaction, the count of the plans, a query string with more than one statement, the three statements in a `Parse`, and a statement of `Parse` that runs `EXECUTE` of itself. `connection/sql_prepare.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn sql_prepare() {

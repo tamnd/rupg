@@ -25,8 +25,19 @@ const MAX_FUZZY_DISTANCE: usize = 3;
 /// The attribute number of the system column `tableoid`.
 pub const TABLE_OID_ATTNUM: i16 = -6;
 
-/// The system columns other than `tableoid`, which rupg does not have yet.
-const OTHER_SYSTEM_COLUMNS: [&str; 5] = ["ctid", "xmin", "cmin", "xmax", "cmax"];
+/// The system columns other than `tableoid`, with their numbers and types.
+const OTHER_SYSTEM_COLUMNS: [(&str, i16, u32); 5] = [
+    ("ctid", -1, oid::TID),
+    ("xmin", -2, oid::XID),
+    ("cmin", -3, oid::CID),
+    ("xmax", -4, oid::XID),
+    ("cmax", -5, oid::CID),
+];
+
+/// True when `name` is the name of a system column.
+fn is_system_column(name: &str) -> bool {
+    name == "tableoid" || OTHER_SYSTEM_COLUMNS.iter().any(|c| c.0 == name)
+}
 
 /// A relation of `FROM`, as a `RangeTblEntry` of the kind `RTE_RELATION` or `RTE_SUBQUERY`.
 #[derive(Clone, Debug, PartialEq)]
@@ -1359,17 +1370,21 @@ impl Analyzer<'_> {
             let var = Var { relation, attnum: TABLE_OID_ATTNUM, levels_up: level };
             return Ok(Some(Expr::new(ExprKind::Var(var), oid::OID).at(at)));
         }
-        if OTHER_SYSTEM_COLUMNS.contains(&name) {
-            if self.kind == Kind::Check {
-                return Err(Error::new(
-                    SqlState::INVALID_COLUMN_REFERENCE,
-                    format!("system column \"{name}\" reference in check constraint is invalid"),
-                )
-                .at_opt(at));
-            }
-            return Err(not_yet(&format!("the system column \"{name}\""), at));
+        let Some(&(_, attnum, type_oid)) = OTHER_SYSTEM_COLUMNS.iter().find(|c| c.0 == name) else {
+            return Ok(None);
+        };
+        if self.kind == Kind::Check {
+            return Err(Error::new(
+                SqlState::INVALID_COLUMN_REFERENCE,
+                format!("system column \"{name}\" reference in check constraint is invalid"),
+            )
+            .at_opt(at));
         }
-        Ok(None)
+        if name == "ctid" {
+            return Err(not_yet("the system column \"ctid\"", at));
+        }
+        let var = Var { relation, attnum, levels_up: level };
+        Ok(Some(Expr::new(ExprKind::Var(var), type_oid).at(at)))
     }
 
     /// The name of the relation and the name of the column of a `Var`, as `eref->aliasname` and `get_rte_attribute_name` give them for an error.
@@ -1380,7 +1395,11 @@ impl Analyzer<'_> {
         };
         let column = match usize::try_from(var.attnum) {
             Ok(n) if n > 0 => entry.columns.get(n - 1).cloned().unwrap_or_default(),
-            _ => "tableoid".to_string(),
+            _ => OTHER_SYSTEM_COLUMNS
+                .iter()
+                .find(|c| c.1 == var.attnum)
+                .map_or("tableoid", |c| c.0)
+                .to_string(),
         };
         (entry.name.clone(), column)
     }
@@ -1555,7 +1574,7 @@ impl Analyzer<'_> {
                 }
                 fuzzy.update(penalty, index, name, column, i);
             }
-            if (exact || (column == "tableoid" && entry.oid != 0)) && penalty == 0 {
+            if (exact || (is_system_column(column) && entry.oid != 0)) && penalty == 0 {
                 fuzzy.exact.push(index);
             }
         }

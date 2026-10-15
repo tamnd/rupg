@@ -14,6 +14,12 @@ use rupg_func::Session;
 use rupg_pgcatalog::{Batch, Values};
 use rupg_types::{Array, Record, Value, oid};
 
+/// The attribute number of the system column `xmin`.
+const XMIN_ATTNUM: i16 = -2;
+
+/// `FrozenTransactionId`: the transaction ID of a row that each snapshot sees.
+const FROZEN_TRANSACTION_ID: u32 = 2;
+
 /// The row number of a relation that is null in a tuple.
 pub(crate) const NONE: usize = usize::MAX;
 
@@ -103,6 +109,13 @@ impl Tables {
         }
         if var.attnum == TABLE_OID_ATTNUM {
             return Value::Oid(self.oids[var.relation]);
+        }
+        // rupg has no row versions yet, so each row shows `xmin`, `cmin`, `xmax` and `cmax` of a frozen row that no transaction deleted.
+        if var.attnum == XMIN_ATTNUM {
+            return Value::Oid(FROZEN_TRANSACTION_ID);
+        }
+        if var.attnum < 0 {
+            return Value::Oid(0);
         }
         if var.attnum == 0 {
             let values = if self.needs[var.relation].is_empty() {
