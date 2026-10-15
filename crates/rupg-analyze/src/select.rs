@@ -291,9 +291,6 @@ impl Analyzer<'_> {
             }
         }
         let grouped = self.has_aggs || !group.is_empty() || empty_set || having.is_some();
-        if grouped && self.has_windows {
-            return Err(not_yet("a window function in a query with GROUP BY or an aggregate"));
-        }
         if grouped {
             self.check_grouping(&targets, having.as_ref(), &group)?;
         }

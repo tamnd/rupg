@@ -2871,6 +2871,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/window_agg.test")));
     }
 
+    /// The window functions in a query with `GROUP BY`, `HAVING` or an aggregate call: windows that read the groups after `HAVING`, window functions of aggregate calls, windows that sort on aggregate calls, a view with `pg_get_viewdef`, and the errors of the analyzer. `connection/window_group.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn window_group() {
+        big_stack(|| script(include_str!("connection/window_group.test")));
+    }
+
     /// A row on the left of `IN`, `ANY` and `ALL` with a subquery: one operator for each column of the subquery that `AND` or `OR` combines, the NULL results, the errors for a wrong number of columns and for an operator that does not give `boolean`, a view with these tests in `pg_get_viewdef`, and the same results when a hash table of the subquery gives them. `connection/row_in_subquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn row_in_subquery() {

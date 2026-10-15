@@ -8,7 +8,7 @@ use rupg_func::Session;
 use rupg_pgcatalog::builtin;
 use rupg_types::Value;
 
-use crate::{Eval, agg, kernel, not_yet, signature, sort};
+use crate::{AggValues, Eval, agg, kernel, not_yet, signature, sort};
 
 /// The window functions that the engine has, by the name of their C function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -170,28 +170,50 @@ pub(crate) fn check(query: &Query) -> Result<()> {
     Ok(())
 }
 
-/// The value of each window function call for each tuple, by the address of the call, and the order of the tuples after the last sort of the windows.
+/// The rows that the windows read: a tuple of the scan for each row and, in a query with groups, the results of the aggregate calls of the group of each row.
+#[derive(Clone, Copy)]
+pub(crate) struct Input<'t> {
+    pub(crate) tuples: &'t [&'t [usize]],
+    pub(crate) aggs: &'t [AggValues],
+}
+
+impl<'t> Input<'t> {
+    /// The state that evaluates an expression on a row.
+    pub(crate) fn at<'b>(&self, eval: &'b Eval<'_>, row: usize) -> Eval<'b>
+    where
+        't: 'b,
+    {
+        let mut e = eval.at(self.tuples[row]);
+        if let Some(aggs) = self.aggs.get(row) {
+            e.aggs.clone_from(aggs);
+        }
+        e
+    }
+}
+
+/// The value of each window function call for each row, by the address of the call, and the order of the rows after the last sort of the windows.
 pub(crate) type Values = Vec<Vec<(*const WindowFunc, Value)>>;
 
-/// Computes the window function calls of a query for its tuples, as the `WindowAgg` nodes do. The result has the order of the tuples after the windows, and the values of the calls for each tuple.
+/// Computes the window function calls of a query for its rows, as the `WindowAgg` nodes do. The result has the order of the rows after the windows, and the values of the calls for each row.
 pub(crate) fn compute(
     eval: &Eval<'_>,
     query: &Query,
     calls: &[(&WindowFunc, u32)],
-    tuples: &[Vec<usize>],
+    input: Input<'_>,
     session: &dyn Session,
 ) -> Result<(Vec<usize>, Values)> {
+    let count = input.tuples.len();
     let actives = active(query, calls)?;
-    // The values of the targets that the windows sort on, for each tuple.
+    // The values of the targets that the windows sort on, for each row.
     let mut used = vec![false; query.targets.len()];
     for (_, window) in &actives {
         for item in window.partition.iter().chain(&window.order) {
             used[item.target] = true;
         }
     }
-    let mut rows = Vec::with_capacity(tuples.len());
-    for tuple in tuples {
-        let mut e = eval.at(tuple);
+    let mut rows = Vec::with_capacity(count);
+    for row in 0..count {
+        let mut e = input.at(eval, row);
         let row = query
             .targets
             .iter()
@@ -201,9 +223,9 @@ pub(crate) fn compute(
         rows.push(row);
     }
     let types: Vec<u32> = query.targets.iter().map(|t| t.expr.ty).collect();
-    let mut order: Vec<usize> = (0..tuples.len()).collect();
+    let mut order: Vec<usize> = (0..count).collect();
     let mut current: Vec<SortGroup> = Vec::new();
-    let mut values: Values = vec![Vec::new(); tuples.len()];
+    let mut values: Values = vec![Vec::new(); count];
     for (winref, window) in actives {
         let wanted = keys(window)?;
         // pathkeys_count_contained_in: the rows need no sort when the keys of the window start the keys of the order.
@@ -239,12 +261,12 @@ pub(crate) fn compute(
             }
             for &(call, ty) in &mine {
                 let results = if call.agg {
-                    agg::window_values(eval, call, ty, part, &groups, tuples)?
+                    agg::window_values(eval, call, ty, part, &groups, input)?
                 } else {
-                    partition_values(eval, call, method(call.oid, None)?, part, &groups, tuples)?
+                    partition_values(eval, call, method(call.oid, None)?, part, &groups, input)?
                 };
-                for (&tuple, value) in part.iter().zip(results) {
-                    values[tuple].push((std::ptr::from_ref(call), value));
+                for (&row, value) in part.iter().zip(results) {
+                    values[row].push((std::ptr::from_ref(call), value));
                 }
             }
             start = end;
@@ -258,16 +280,28 @@ fn int8(n: usize) -> Value {
     Value::Int8(i64::try_from(n).unwrap_or(i64::MAX))
 }
 
-/// The value of an argument of a call on a tuple.
-fn arg(eval: &Eval<'_>, call: &WindowFunc, n: usize, tuple: &[usize]) -> Result<Value> {
+/// The value of an argument of a call on a row.
+fn arg(
+    eval: &Eval<'_>,
+    call: &WindowFunc,
+    n: usize,
+    input: Input<'_>,
+    row: usize,
+) -> Result<Value> {
     let expr =
         call.args.get(n).ok_or_else(|| Error::internal("a window function with no argument"))?;
-    eval.at(tuple).eval(expr)
+    input.at(eval, row).eval(expr)
 }
 
-/// The value of an argument of type `integer` on a tuple, or `None` for a null.
-fn int4_arg(eval: &Eval<'_>, call: &WindowFunc, n: usize, tuple: &[usize]) -> Result<Option<i32>> {
-    match arg(eval, call, n, tuple)? {
+/// The value of an argument of type `integer` on a row, or `None` for a null.
+fn int4_arg(
+    eval: &Eval<'_>,
+    call: &WindowFunc,
+    n: usize,
+    input: Input<'_>,
+    row: usize,
+) -> Result<Option<i32>> {
+    match arg(eval, call, n, input, row)? {
         Value::Null => Ok(None),
         Value::Int4(v) => Ok(Some(v)),
         _ => Err(Error::internal("an argument of a window function that is not integer")),
@@ -281,10 +315,9 @@ fn partition_values(
     method: Method,
     part: &[usize],
     groups: &[(usize, usize)],
-    tuples: &[Vec<usize>],
+    input: Input<'_>,
 ) -> Result<Vec<Value>> {
     let n = part.len();
-    let tuple = |i: usize| tuples[part[i]].as_slice();
     let mut out = Vec::with_capacity(n);
     match method {
         Method::RowNumber => out.extend((1..=n).map(int8)),
@@ -310,9 +343,9 @@ fn partition_values(
             // window_ntile: the first row that has a value of the argument sets the size of the buckets, and the first buckets take one more row when the rows do not divide.
             let total = i64::try_from(n).unwrap_or(i64::MAX);
             let mut state: Option<(i32, i64, i64, i64)> = None;
-            for i in 0..n {
+            for &row in part {
                 if state.is_none() {
-                    let Some(buckets) = int4_arg(eval, call, 0, tuple(i))? else {
+                    let Some(buckets) = int4_arg(eval, call, 0, input, row)? else {
                         out.push(Value::Null);
                         continue;
                     };
@@ -353,7 +386,7 @@ fn partition_values(
         Method::LeadLag(forward) => {
             for i in 0..n {
                 let offset = if call.args.len() > 1 {
-                    match int4_arg(eval, call, 1, tuple(i))? {
+                    match int4_arg(eval, call, 1, input, part[i])? {
                         Some(offset) => i64::from(offset),
                         None => {
                             out.push(Value::Null);
@@ -366,8 +399,8 @@ fn partition_values(
                 let at = i64::try_from(i).unwrap_or(i64::MAX);
                 let target = if forward { at + offset } else { at - offset };
                 let value = match usize::try_from(target).ok().filter(|t| *t < n) {
-                    Some(t) => arg(eval, call, 0, tuple(t))?,
-                    None if call.args.len() > 2 => arg(eval, call, 2, tuple(i))?,
+                    Some(t) => arg(eval, call, 0, input, part[t])?,
+                    None if call.args.len() > 2 => arg(eval, call, 2, input, part[i])?,
                     None => Value::Null,
                 };
                 out.push(value);
@@ -375,17 +408,17 @@ fn partition_values(
         }
         Method::FirstValue => {
             for _ in 0..n {
-                out.push(arg(eval, call, 0, tuple(0))?);
+                out.push(arg(eval, call, 0, input, part[0])?);
             }
         }
         Method::LastValue => {
             for g in groups {
-                out.push(arg(eval, call, 0, tuple(g.1 - 1))?);
+                out.push(arg(eval, call, 0, input, part[g.1 - 1])?);
             }
         }
         Method::NthValue => {
             for (i, g) in groups.iter().enumerate() {
-                let Some(nth) = int4_arg(eval, call, 1, tuple(i))? else {
+                let Some(nth) = int4_arg(eval, call, 1, input, part[i])? else {
                     out.push(Value::Null);
                     continue;
                 };
@@ -396,7 +429,7 @@ fn partition_values(
                     ));
                 }
                 let at = usize::try_from(nth - 1).unwrap_or(usize::MAX);
-                out.push(if at < g.1 { arg(eval, call, 0, tuple(at))? } else { Value::Null });
+                out.push(if at < g.1 { arg(eval, call, 0, input, part[at])? } else { Value::Null });
             }
         }
     }

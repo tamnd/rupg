@@ -902,7 +902,14 @@ fn run_query(
         let (sequence, mut values) = if calls.is_empty() {
             ((0..tuples.len()).collect(), Vec::new())
         } else {
-            window::compute(&eval, query, &calls, &tuples, session)?
+            let refs: Vec<&[usize]> = tuples.iter().map(Vec::as_slice).collect();
+            window::compute(
+                &eval,
+                query,
+                &calls,
+                window::Input { tuples: &refs, aggs: &[] },
+                session,
+            )?
         };
         let mut rows = Vec::with_capacity(tuples.len().min(needed));
         for i in sequence {
@@ -1101,6 +1108,9 @@ fn order(
     Ok(rows)
 }
 
+/// The result of each aggregate call of a group, by the address of the call in the query.
+type AggValues = Vec<(*const Aggref, Value)>;
+
 /// The state of the evaluation of the expressions of one row.
 struct Eval<'a> {
     params: &'a [Value],
@@ -1112,7 +1122,7 @@ struct Eval<'a> {
     /// The row of each relation. In a query with groups it is the first row of the group.
     tuple: &'a [usize],
     /// The result of each aggregate call for the group, by the address of the call in the query.
-    aggs: Vec<(*const Aggref, Value)>,
+    aggs: AggValues,
     cache: &'a Cache,
     /// The rows of the queries outside the query, with the query just outside it last.
     outer: &'a [Frame<'a>],
