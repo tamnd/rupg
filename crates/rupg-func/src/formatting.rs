@@ -321,7 +321,7 @@ enum Node {
 }
 
 /// `isspace` in the C locale.
-fn is_space(b: u8) -> bool {
+pub(crate) fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | 0x0b | 0x0c | b'\r')
 }
 

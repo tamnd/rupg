@@ -138,8 +138,8 @@ pub use number::{
     int_out, int2_in, int4_in, int8_in, oid_in, oid_out, u64_out, uint32_in, uint64_in,
 };
 pub use numeric::{
-    Numeric, NumericSign, decimal_out, decimal_send, numeric_in, numeric_out, numeric_recv,
-    numeric_send,
+    Numeric, NumericSign, decimal_out, decimal_send, numeric_in, numeric_out, numeric_out_sci,
+    numeric_recv, numeric_send,
 };
 pub use range::{
     RANGE_EMPTY, RANGE_LB_INC, RANGE_LB_INF, RANGE_UB_INC, RANGE_UB_INF, Range, RangeBytes,
