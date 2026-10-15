@@ -2,6 +2,8 @@
 //!
 //! A value does not carry its type. The expression that gives the value has the type OID and the typmod, as a `Datum` of PostgreSQL has no type and the plan node has it. So one variant holds the values of many types: `Text` holds `text`, `name`, `varchar`, `bpchar`, `unknown` and the other types whose value is a string, and `Oid` holds `oid`, `xid`, `cid` and the OID alias types such as `regclass`. [`Datum`](crate::Datum) is the value of the M1 storage, which stores fewer types.
 
+use std::sync::Arc;
+
 use crate::array::Array;
 use crate::datetime::Interval;
 use crate::jsonpath::JsonPath;
@@ -61,12 +63,28 @@ pub enum Value {
 }
 
 /// The value of a composite type or of `record`, as a `HeapTupleHeader` datum. As that datum keeps the type of the row, a record keeps the type of each field, so that the output of an anonymous `record` can show the fields.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug)]
 pub struct Record {
     /// The type of each field.
     pub types: Vec<u32>,
     /// The value of each field, with `Null` for a null field.
     pub values: Vec<Value>,
+    /// The names of the fields of an anonymous `record`, as the row descriptor that `BlessTupleDesc` keeps for the typmod of the value. `None` when the type of the value gives the names, or when the fields are `f1`, `f2` and so on.
+    pub names: Option<Arc<[String]>>,
+}
+
+impl Record {
+    /// A record with no names for its fields.
+    pub fn new(types: Vec<u32>, values: Vec<Value>) -> Record {
+        Record { types, values, names: None }
+    }
+}
+
+/// Two records are equal when their fields are equal. The names of the fields are not part of the value.
+impl PartialEq for Record {
+    fn eq(&self, other: &Record) -> bool {
+        self.types == other.types && self.values == other.values
+    }
 }
 
 impl Value {

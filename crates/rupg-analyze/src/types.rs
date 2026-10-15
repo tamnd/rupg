@@ -17,6 +17,11 @@ pub fn row(ty: u32) -> Option<&'static TypeRow> {
     builtin::type_by_oid(ty)
 }
 
+/// `ISCOMPLEX`: true for a composite type, which is the row type of a relation.
+pub fn is_complex(ty: u32) -> bool {
+    row(ty).is_some_and(|t| t.kind == b'c')
+}
+
 /// `get_type_category_preferred`: the category and the preferred flag.
 pub fn category_preferred(ty: u32) -> (u8, bool) {
     row(ty).map_or((INVALID, false), |t| (t.category, t.preferred))

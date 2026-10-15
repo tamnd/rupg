@@ -807,7 +807,7 @@ fn input_error_info(call: &Call<'_>, args: &[Value]) -> Result<Value> {
             ]
         }
     };
-    Ok(Value::Record(Box::new(Record { types: vec![oid::TEXT; 4], values })))
+    Ok(Value::Record(Box::new(Record::new(vec![oid::TEXT; 4], values))))
 }
 
 /// The relation of a list of names, as `RangeVarGetRelid` finds it for `text_regclass`.

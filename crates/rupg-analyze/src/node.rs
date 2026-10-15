@@ -92,6 +92,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Distinct { .. } => "DISTINCT",
         ExprKind::ScalarArrayOp { .. } => "SCALARARRAYOP",
         ExprKind::Array { .. } => "ARRAY",
+        ExprKind::Row(_) => "ROW",
         ExprKind::SqlValue(_) => "SQLVALUE",
         ExprKind::Var(_) => "VAR",
         ExprKind::FieldSelect(..) => "FIELDSELECT",
@@ -191,7 +192,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             write_field("default", &case.default, out)?;
         }
         ExprKind::CaseTest | ExprKind::DomainValue => {}
-        ExprKind::Coalesce(args) => write_args(args, out)?,
+        ExprKind::Coalesce(args) | ExprKind::Row(args) => write_args(args, out)?,
         ExprKind::MinMax { greatest, less, args } => {
             out.push_str(&format!(" :greatest {greatest} :less {less}"));
             write_args(args, out)?;
@@ -720,6 +721,7 @@ fn expr_of(item: &Item) -> Result<Expr> {
         }
         "CASETEST" => ExprKind::CaseTest,
         "COALESCE" => ExprKind::Coalesce(f.exprs("args")?),
+        "ROW" => ExprKind::Row(f.exprs("args")?),
         "MINMAX" => ExprKind::MinMax {
             greatest: f.flag("greatest")?,
             less: f.number("less")?,
@@ -892,7 +894,7 @@ fn value_of(item: &Item) -> Result<Value> {
             let [types, values] = parts else { return Err(bad("a record value")) };
             let types = list(types)?.iter().map(|t| number(atom(t)?)).collect::<Result<_>>()?;
             let values = list(values)?.iter().map(value_of).collect::<Result<_>>()?;
-            Value::Record(Box::new(Record { types, values }))
+            Value::Record(Box::new(Record::new(types, values)))
         }
         "range" => {
             let [flags, lower, upper] = parts else { return Err(bad("a range value")) };

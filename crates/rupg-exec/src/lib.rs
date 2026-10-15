@@ -7,6 +7,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeSet;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use rupg_analyze::{
     Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query,
@@ -183,7 +184,9 @@ fn check(expr: &Expr) -> Result<()> {
             kernel(*func, expr.location)?;
             args.iter().try_for_each(check)?;
         }
-        ExprKind::Array { elements, .. } => elements.iter().try_for_each(check)?,
+        ExprKind::Array { elements, .. } | ExprKind::Row(elements) => {
+            elements.iter().try_for_each(check)?;
+        }
         ExprKind::Agg(agg) => {
             agg.args.iter().try_for_each(check)?;
             if let Some(filter) = &agg.filter {
@@ -1236,14 +1239,17 @@ impl<'a> Eval<'a> {
         let rows = self.function_set(call, 1)?;
         // The types of the `OUT` parameters, with the actual types of the call for a polymorphic type.
         let columns = rupg_analyze::out_columns(f)?.unwrap_or_default();
-        let types: Vec<u32> = columns.into_iter().map(|c| c.ty).collect();
+        let types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
+        let names: Option<Arc<[String]>> =
+            (!columns.is_empty()).then(|| columns.into_iter().map(|c| c.name).collect());
         Ok(rows
             .into_iter()
             .map(|mut row| {
                 if row.len() == 1 && call.ty != oid::RECORD {
                     row.pop().unwrap_or(Value::Null)
                 } else {
-                    Value::Record(Box::new(Record { types: types.clone(), values: row }))
+                    let (types, names) = (types.clone(), names.clone());
+                    Value::Record(Box::new(Record { types, values: row, names }))
                 }
             })
             .collect())
@@ -1409,6 +1415,11 @@ impl<'a> Eval<'a> {
             }
             ExprKind::ScalarArrayOp { func, any, args } => self.scalar_array_op(*func, *any, args),
             ExprKind::Array { multidims, elements, .. } => self.array(*multidims, elements),
+            ExprKind::Row(args) => {
+                let values = args.iter().map(|e| self.eval(e)).collect::<Result<Vec<_>>>()?;
+                let types = args.iter().map(|e| e.ty).collect();
+                Ok(Value::Record(Box::new(Record::new(types, values))))
+            }
             ExprKind::SqlValue(v) => self.sql_value(*v),
             ExprKind::Var(var) if var.levels_up == 0 => Ok(self.tables.var(self.tuple, *var)),
             ExprKind::Var(var) => {

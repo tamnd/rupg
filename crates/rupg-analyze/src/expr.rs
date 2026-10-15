@@ -59,6 +59,8 @@ pub enum ExprKind {
     Distinct { equal: u32, not: bool, args: Vec<Expr> },
     /// `ScalarArrayOpExpr`: `x op ANY (array)` when `any` is true, or `x op ALL (array)`.
     ScalarArrayOp { func: u32, any: bool, args: Vec<Expr> },
+    /// `RowExpr`: `ROW(...)`, a value of `record` with a field for each argument.
+    Row(Vec<Expr>),
     /// `ArrayExpr`: `ARRAY[...]`. The elements of a multidimensional array are arrays.
     Array { element: u32, multidims: bool, elements: Vec<Expr> },
     /// `SQLValueFunction`, such as `CURRENT_USER` and `CURRENT_TIMESTAMP(3)`.
@@ -308,6 +310,7 @@ impl Expr {
             ExprKind::Subscript(sub) => sub.bounds().chain([&sub.container]).collect(),
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
+            | ExprKind::Row(args)
             | ExprKind::MinMax { args, .. }
             | ExprKind::NullIf { args, .. }
             | ExprKind::Distinct { args, .. }
@@ -356,6 +359,7 @@ impl Expr {
             }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
+            | ExprKind::Row(args)
             | ExprKind::MinMax { args, .. }
             | ExprKind::NullIf { args, .. }
             | ExprKind::Distinct { args, .. }

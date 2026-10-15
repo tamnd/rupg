@@ -5,6 +5,7 @@
 use std::cell::RefCell;
 use std::collections::BTreeMap;
 use std::rc::Rc;
+use std::sync::Arc;
 
 use rupg_analyze::{
     Expr, ExprKind, FromFunction, FromItem, JoinKind, Query, TABLE_OID_ATTNUM, Var,
@@ -35,6 +36,8 @@ pub(crate) struct Tables {
     pub(crate) oids: Vec<u32>,
     /// The types of the columns of each relation, for the value of a whole-row reference.
     types: Vec<Vec<u32>>,
+    /// The names of the columns of each relation, for the value of a whole-row reference.
+    names: Vec<Option<Arc<[String]>>>,
     /// For each relation, the other relations of the query that it reads, as [`lateral`] finds them.
     pub(crate) needs: Vec<Vec<usize>>,
     /// The rows of each relation that reads other relations. The scan adds the rows of each run.
@@ -124,7 +127,8 @@ impl Tables {
                 self.grown[var.relation].borrow()[row].clone()
             };
             let types = self.types[var.relation].clone();
-            return Value::Record(Box::new(Record { types, values }));
+            let names = self.names[var.relation].clone();
+            return Value::Record(Box::new(Record { types, values, names }));
         }
         let column = usize::try_from(var.attnum - 1).unwrap_or(usize::MAX);
         if self.needs[var.relation].is_empty() {
@@ -278,10 +282,18 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
         rows,
         oids: query.relations.iter().map(|r| r.oid).collect(),
         types: query.relations.iter().map(|r| r.columns.iter().map(|c| c.ty).collect()).collect(),
+        names: query.relations.iter().map(row_names).collect(),
         needs: lateral(query),
         grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
     })
+}
+
+/// The names of the fields of a whole row of a relation. A subquery, a function or a `VALUES` list takes the names of the alias, then the names of its columns. A table takes the names of the columns of its row type, as the alias does not change the row type.
+fn row_names(relation: &rupg_analyze::Relation) -> Option<Arc<[String]>> {
+    let alias = if relation.oid == 0 { relation.alias.as_deref().unwrap_or_default() } else { &[] };
+    let names = relation.columns.iter().enumerate();
+    Some(names.map(|(i, c)| alias.get(i).unwrap_or(&c.name).clone()).collect())
 }
 
 /// The rows of a relation of the user. A session cannot add rows yet, so a table has no rows. A sequence has its one row, the row of its file.

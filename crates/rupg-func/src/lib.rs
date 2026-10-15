@@ -26,6 +26,7 @@ mod generated;
 mod geo;
 mod io;
 mod json;
+mod jsonbuild;
 mod jsonedit;
 mod lsn;
 mod mac;
@@ -381,6 +382,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| bytea::by_src(src))
         .or_else(|| json::by_src(src))
         .or_else(|| jsonedit::by_src(src))
+        .or_else(|| jsonbuild::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))

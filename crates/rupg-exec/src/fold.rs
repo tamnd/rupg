@@ -356,7 +356,7 @@ impl<'a> Fold<'a> {
             | ExprKind::NullIf { args, .. }
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. } => self.all(args),
-            ExprKind::Array { elements, .. } => self.all(elements),
+            ExprKind::Array { elements, .. } | ExprKind::Row(elements) => self.all(elements),
             ExprKind::Case(case) => {
                 if let Some(arg) = &mut case.arg {
                     self.subqueries(arg)?;
@@ -547,6 +547,8 @@ impl<'a> Fold<'a> {
                     with(expr, ExprKind::MinMax { greatest: *greatest, less: *less, args });
                 if all { self.evaluate(folded) } else { Ok(folded) }
             }
+            // As in `eval_const_expressions`, a `ROW()` stays an expression, so that a view shows it as it is written.
+            ExprKind::Row(args) => Ok(with(expr, ExprKind::Row(self.list(args)?))),
             ExprKind::Array { element, multidims, elements } => {
                 let elements = self.list(elements)?;
                 let all = elements.iter().all(|a| value(a).is_some());
