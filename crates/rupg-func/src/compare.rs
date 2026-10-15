@@ -192,7 +192,7 @@ fn float_order(x: f64, y: f64) -> Ordering {
 }
 
 /// `interval_cmp_value`: the length of an interval in microseconds, with 30 days in a month and 24 hours in a day.
-fn span(iv: &rupg_types::Interval) -> i128 {
+pub(crate) fn span(iv: &rupg_types::Interval) -> i128 {
     let days = i128::from(iv.month) * 30 + i128::from(iv.day);
     i128::from(iv.time) + days * i128::from(USECS_PER_DAY)
 }

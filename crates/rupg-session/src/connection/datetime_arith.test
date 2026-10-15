@@ -1,0 +1,168 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT interval '1 day 2 hours' + interval '3 months 4 minutes', interval '1 day' - interval '2 hours', - interval '1 year 2 days 3 seconds'
+fields ?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1
+row 3 mons 1 day 02:04:00,1 day -02:00:00,-1 years -2 days -00:00:03
+SELECT 1
+> SELECT interval 'infinity' + interval '1 day', interval '-infinity' - interval '1 day', interval '1 day' - interval 'infinity', - interval 'infinity', - interval '-infinity'
+fields ?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1
+row infinity,-infinity,-infinity,-infinity,infinity
+SELECT 1
+> SELECT interval 'infinity' + interval '-infinity'
+ERROR 22008 interval out of range
+> SELECT interval 'infinity' - interval 'infinity'
+ERROR 22008 interval out of range
+> SELECT interval '2147483647 days' + interval '1 day'
+ERROR 22008 interval out of range
+> SELECT - interval '-2147483648 months'
+ERROR 22008 interval out of range
+> SELECT interval '1 month 1 day 1 hour' * 2.5, 0.3 * interval '1 month', interval '1 day' * -1, interval '10 days' * 0.5, interval '1 month' * 1.0e-7
+fields ?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1
+row 2 mons 17 days 14:30:00,9 days,-1 days,5 days,00:00:00.2592
+SELECT 1
+> SELECT interval '1 month 1 day 1 hour' / 3, interval '1 year' / 7, interval '-1 day' / 2.0, interval '1 hour' / 'infinity'::float8
+fields ?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1
+row 10 days 08:20:00,1 mon 21 days 10:17:08.5344,-12:00:00,00:00:00
+SELECT 1
+> SELECT interval 'infinity' * 2, interval 'infinity' * -2, interval '1 day' * 'infinity'::float8, interval '-1 day' * 'infinity'::float8, interval 'infinity' / -3
+fields ?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1
+row infinity,-infinity,infinity,-infinity,-infinity
+SELECT 1
+> SELECT interval 'infinity' * 0
+ERROR 22008 interval out of range
+> SELECT interval '1 day' * 'nan'::float8
+ERROR 22008 interval out of range
+> SELECT interval '0' * 'infinity'::float8
+ERROR 22008 interval out of range
+> SELECT interval '1 day' / 0
+ERROR 22012 division by zero
+> SELECT interval 'infinity' / 'infinity'::float8
+ERROR 22008 interval out of range
+> SELECT interval '1000000000 months' * 3
+ERROR 22008 interval out of range
+> SELECT justify_hours(interval '50 hours'), justify_hours(interval '1 day -49 hours'), justify_days(interval '65 days'), justify_days(interval '1 month -35 days'), justify_interval(interval '1 month -1 hour'), justify_interval(interval '-1 month 40 days 30 hours'), justify_interval(interval 'infinity')
+fields justify_hours:1186:16:-1,justify_hours:1186:16:-1,justify_days:1186:16:-1,justify_days:1186:16:-1,justify_interval:1186:16:-1,justify_interval:1186:16:-1,justify_interval:1186:16:-1
+row 2 days 02:00:00,-1 days -01:00:00,2 mons 5 days,-5 days,29 days 23:00:00,11 days 06:00:00,infinity
+SELECT 1
+> SELECT timestamp '2020-01-31 10:00' + interval '1 month', timestamp '2020-03-31' - interval '1 month', timestamp '2019-02-28' + interval '1 year', timestamp '2020-02-29' + interval '1 year', timestamp '2020-12-15' + interval '14 months 3 days 2 hours'
+fields ?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1
+row 2020-02-29 10:00:00,2020-02-29 00:00:00,2020-02-28 00:00:00,2021-02-28 00:00:00,2022-02-18 02:00:00
+SELECT 1
+> SELECT timestamp '2020-01-01' - interval '13 months', timestamp '2020-01-01' + interval '-1 month -1 day', timestamp '0001-01-01' - interval '1 day', timestamp '2020-06-15 12:00' + interval '1.5 days'
+fields ?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1
+row 2018-12-01 00:00:00,2019-11-30 00:00:00,0001-12-31 00:00:00 BC,2020-06-17 00:00:00
+SELECT 1
+> SELECT timestamp 'infinity' + interval '1 day', timestamp '-infinity' - interval '1 day', timestamp '2020-01-01' + interval 'infinity', timestamp '2020-01-01' - interval 'infinity'
+fields ?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1
+row infinity,-infinity,infinity,-infinity
+SELECT 1
+> SELECT timestamp 'infinity' + interval '-infinity'
+ERROR 22008 timestamp out of range
+> SELECT timestamp '294276-12-31 23:00' + interval '1 hour'
+ERROR 22008 timestamp out of range
+> SELECT timestamp '4714-11-24 00:00 BC' - interval '1 day'
+ERROR 22008 timestamp out of range
+> SELECT timestamp '2020-03-04 10:00' - timestamp '2020-03-01 08:30', timestamp '2020-03-01' - timestamp '2020-03-04 10:00', timestamp 'infinity' - timestamp '2020-01-01', timestamp '2020-01-01' - timestamp 'infinity', timestamp '-infinity' - timestamp 'infinity'
+fields ?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1,?column?:1186:16:-1
+row 3 days 01:30:00,-3 days -10:00:00,infinity,-infinity,-infinity
+SELECT 1
+> SELECT timestamp 'infinity' - timestamp 'infinity'
+ERROR 22008 interval out of range
+> SELECT timestamptz '2020-01-31 10:00+00' + interval '1 month', timestamptz '2020-03-04 10:00+00' - interval '1 day 1 hour', timestamptz '2020-03-04 10:00+00' - timestamptz '2020-03-01 08:30+00'
+fields ?column?:1184:8:-1,?column?:1184:8:-1,?column?:1186:16:-1
+row 2020-02-29 10:00:00+00,2020-03-03 09:00:00+00,3 days 01:30:00
+SELECT 1
+> SET TimeZone TO 'America/New_York'
+SET
+TimeZone=America/New_York
+> SELECT timestamptz '2020-03-07 12:00' + interval '1 day', timestamptz '2020-03-07 12:00' + interval '24 hours', timestamptz '2020-02-08 12:00' + interval '1 month', timestamptz '2020-11-01 00:30' + interval '1 day'
+fields ?column?:1184:8:-1,?column?:1184:8:-1,?column?:1184:8:-1,?column?:1184:8:-1
+row 2020-03-08 12:00:00-04,2020-03-08 13:00:00-04,2020-03-08 12:00:00-04,2020-11-02 00:30:00-05
+SELECT 1
+> SELECT timestamptz '2020-03-08 12:00' - interval '1 day', timestamptz '2020-03-08 12:00' - timestamptz '2020-03-07 12:00', timestamptz '2020-03-08 01:30' + interval '1 hour'
+fields ?column?:1184:8:-1,?column?:1186:16:-1,?column?:1184:8:-1
+row 2020-03-07 12:00:00-05,23:00:00,2020-03-08 03:30:00-04
+SELECT 1
+> SELECT age(timestamptz '2020-03-08 12:00', timestamptz '2020-01-31 18:00'), age(timestamptz '2020-01-31 18:00', timestamptz '2020-03-08 12:00')
+fields age:1186:16:-1,age:1186:16:-1
+row 1 mon 7 days 18:00:00,-1 mons -7 days -18:00:00
+SELECT 1
+> SELECT timestamptz 'infinity' + interval '1 day', timestamptz '2020-01-01' + interval '-infinity'
+fields ?column?:1184:8:-1,?column?:1184:8:-1
+row infinity,-infinity
+SELECT 1
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT age(timestamp '2020-03-04 10:00', timestamp '2019-01-31 12:30:15.5'), age(timestamp '2019-01-31 12:30:15.5', timestamp '2020-03-04 10:00'), age(timestamp '2020-03-01', timestamp '2020-01-31'), age(timestamp '2020-01-31', timestamp '2020-03-01'), age(timestamp '2020-01-01', timestamp '2020-01-01')
+fields age:1186:16:-1,age:1186:16:-1,age:1186:16:-1,age:1186:16:-1,age:1186:16:-1
+row 1 year 1 mon 3 days 21:29:44.5,-1 years -1 mons -3 days -21:29:44.5,1 mon 1 day,-1 mons -1 days,00:00:00
+SELECT 1
+> SELECT age(timestamp 'infinity', timestamp '2020-01-01'), age(timestamp '2020-01-01', timestamp 'infinity'), age(timestamp '-infinity', timestamp '2020-01-01'), age(timestamptz '2021-05-06 07:08', timestamptz '2020-01-01')
+fields age:1186:16:-1,age:1186:16:-1,age:1186:16:-1,age:1186:16:-1
+row infinity,-infinity,-infinity,1 year 4 mons 5 days 07:08:00
+SELECT 1
+> SELECT age(timestamp 'infinity', timestamp 'infinity')
+ERROR 22008 interval out of range
+> SELECT time '10:00' + interval '1 hour 30 minutes', time '10:00' - interval '11 hours', time '23:30' + interval '1 day 1 hour', interval '2 hours' + time '23:00', time '10:00' - time '12:30:15', time '10:00' - interval '3 months'
+fields ?column?:1083:8:-1,?column?:1083:8:-1,?column?:1083:8:-1,?column?:1083:8:-1,?column?:1186:16:-1,?column?:1083:8:-1
+row 11:30:00,23:00:00,00:30:00,01:00:00,-02:30:15,10:00:00
+SELECT 1
+> SELECT time '10:00' + interval 'infinity'
+ERROR 22008 cannot add infinite interval to time
+> SELECT time '10:00' - interval '-infinity'
+ERROR 22008 cannot subtract infinite interval from time
+> SELECT timetz '10:00+02' + interval '15 hours', timetz '10:00-05' - interval '11 hours', interval '1 minute' + timetz '23:59:30+00'
+fields ?column?:1266:12:-1,?column?:1266:12:-1,?column?:1266:12:-1
+row 01:00:00+02,23:00:00-05,00:00:30+00
+SELECT 1
+> SELECT timetz '10:00+02' + interval 'infinity'
+ERROR 22008 cannot add infinite interval to time
+> SELECT timetz '10:00+02' - interval 'infinity'
+ERROR 22008 cannot subtract infinite interval from time
+> SELECT date '2020-01-31' + interval '1 month', date '2020-03-04' - interval '1 day 2 hours', interval '1 year' + date '2020-02-29', date 'infinity' + interval '1 day', date '2020-03-04' + time '10:11:12', time '10:11:12' + date '2020-03-04', date '2020-03-04' + timetz '10:11:12+03', timetz '10:11:12-03' + date '2020-03-04'
+fields ?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1,?column?:1114:8:-1,?column?:1184:8:-1,?column?:1184:8:-1
+row 2020-02-29 00:00:00,2020-03-02 22:00:00,2021-02-28 00:00:00,infinity,2020-03-04 10:11:12,2020-03-04 10:11:12,2020-03-04 07:11:12+00,2020-03-04 13:11:12+00
+SELECT 1
+> SELECT date 'infinity' + time '10:00', date '-infinity' + timetz '10:00+01', date '2020-03-04' - date '2020-01-01'
+fields ?column?:1114:8:-1,?column?:1184:8:-1,?column?:23:4:-1
+row infinity,-infinity,63
+SELECT 1
+> SELECT date '294276-12-31' + time '23:59'
+fields ?column?:1114:8:-1
+row 294276-12-31 23:59:00
+SELECT 1
+> SELECT date '5874897-12-31' + time '10:00'
+ERROR 22008 date out of range for timestamp
+> SELECT date '294276-12-31' + timetz '23:00-02'
+ERROR 22008 date out of range for timestamp
+> SELECT (timestamp '2020-01-01', timestamp '2020-01-03') OVERLAPS (timestamp '2020-01-02', timestamp '2020-01-04'), (timestamp '2020-01-03', timestamp '2020-01-01') OVERLAPS (timestamp '2020-01-03', timestamp '2020-01-05'), (timestamp '2020-01-01', NULL::timestamp) OVERLAPS (timestamp '2020-01-01', timestamp '2020-01-02'), (timestamp '2020-01-01', NULL::timestamp) OVERLAPS (timestamp '2020-01-02', timestamp '2020-01-03')
+fields overlaps:16:1:-1,overlaps:16:1:-1,overlaps:16:1:-1,overlaps:16:1:-1
+row t,f,NULL,NULL
+SELECT 1
+> SELECT (timestamptz '2020-01-01', timestamptz '2020-01-03') OVERLAPS (timestamptz '2020-01-02', interval '1 day'), (timestamptz '2020-01-01', interval '1 day') OVERLAPS (timestamptz '2020-01-02', interval '1 day'), (timestamptz '2020-01-01', interval '1 day') OVERLAPS (timestamptz '2020-01-03', timestamptz '2020-01-04')
+fields overlaps:16:1:-1,overlaps:16:1:-1,overlaps:16:1:-1
+row t,f,f
+SELECT 1
+> SELECT (timestamp '2020-01-01', timestamp '2020-01-03') OVERLAPS (timestamp '2020-01-02', interval '1 day'), (timestamp '2020-01-01', interval '1 day') OVERLAPS (timestamp '2020-01-02', interval '1 day'), (timestamp '2020-01-01', interval '3 days') OVERLAPS (timestamp '2020-01-02', timestamp '2020-01-03')
+fields overlaps:16:1:-1,overlaps:16:1:-1,overlaps:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT (time '10:00', interval '1 hour') OVERLAPS (time '10:30', interval '1 hour'), (time '10:00', time '11:00') OVERLAPS (time '10:30', interval '1 hour'), (time '10:00', interval '1 hour') OVERLAPS (time '12:00', time '13:00'), (time '10:00', time '11:00') OVERLAPS (time '11:00', time '12:00'), (timetz '10:00+00', timetz '11:00+00') OVERLAPS (timetz '10:30+00', timetz '12:00+00')
+fields overlaps:16:1:-1,overlaps:16:1:-1,overlaps:16:1:-1,overlaps:16:1:-1,overlaps:16:1:-1
+row t,t,f,f,t
+SELECT 1
+> SELECT (date '2020-01-01', date '2020-01-05') OVERLAPS (date '2020-01-05', date '2020-01-06'), (date '2020-01-01', interval '5 days') OVERLAPS (date '2020-01-03', interval '1 day'), (NULL::time, interval '1 hour') OVERLAPS (time '10:30', interval '1 hour')
+fields overlaps:16:1:-1,overlaps:16:1:-1,overlaps:16:1:-1
+row f,t,NULL
+SELECT 1
+> SELECT interval '1 day 10 hours'::time, interval '-2 hours'::time, time '10:11:12'::interval, pg_catalog.timestamp(date '2020-03-04', time '10:11'), pg_catalog.timestamptz(date '2020-03-04', timetz '10:11+05')
+fields time:1083:8:-1,time:1083:8:-1,interval:1186:16:-1,timestamp:1114:8:-1,timestamptz:1184:8:-1
+row 10:00:00,22:00:00,10:11:12,2020-03-04 10:11:00,2020-03-04 05:11:00+00
+SELECT 1
+> SELECT interval 'infinity'::time
+ERROR 22008 cannot convert infinite interval to time
+> SELECT age(timestamp '2001-04-10') > interval '0', age(timestamptz '2001-04-10') > interval '0', timestamp '2020-01-01' + (timestamp '2020-03-04' - timestamp '2020-01-01') = timestamp '2020-03-04'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t
+SELECT 1

@@ -2041,6 +2041,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/builtin_bodies.test")));
     }
 
+    /// The arithmetic of the date and time types: the operators of `interval`, an interval added to and subtracted from a timestamp, a `timestamptz` in a zone with daylight saving time, a time, a `timetz` and a date, the difference of two timestamps, `age`, the `justify` functions, a date with a time and `OVERLAPS`, also with the infinities and the errors of the range. `connection/datetime_arith.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn datetime_arith() {
+        big_stack(|| script(include_str!("connection/datetime_arith.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

@@ -16,6 +16,7 @@ mod cash;
 mod cast;
 mod catinfo;
 mod compare;
+mod datetime;
 mod deparse;
 mod encoding;
 mod generated;
@@ -350,6 +351,7 @@ fn by_src(src: &str) -> Option<Kernel> {
     cast::by_src(src)
         .or_else(|| agg::by_src(src))
         .or_else(|| math::by_src(src))
+        .or_else(|| datetime::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))

@@ -13,7 +13,7 @@ use crate::math::{float_value, integer};
 use crate::{Call, Kernel, Session, bad_value, type_error};
 
 /// `TIMESTAMP_END_JULIAN`: the first Julian day after the last timestamp.
-const TIMESTAMP_END_JULIAN: i32 = 109_203_528;
+pub(crate) const TIMESTAMP_END_JULIAN: i32 = 109_203_528;
 /// `MIN_TIMESTAMP`.
 const MIN_TIMESTAMP: i64 = -211_813_488_000_000_000;
 /// `END_TIMESTAMP`.
@@ -320,16 +320,16 @@ fn instant(session: &dyn Session, local: i64) -> Result<i64> {
 }
 
 /// `IS_VALID_TIMESTAMP`.
-fn valid_timestamp(t: i64) -> bool {
+pub(crate) fn valid_timestamp(t: i64) -> bool {
     (MIN_TIMESTAMP..END_TIMESTAMP).contains(&t)
 }
 
-fn timestamp_range() -> Error {
+pub(crate) fn timestamp_range() -> Error {
     Error::new(SqlState::DATETIME_VALUE_OUT_OF_RANGE, "timestamp out of range")
 }
 
 /// `date2timestamp`: midnight of the date.
-fn midnight(date: i32) -> Result<i64> {
+pub(crate) fn midnight(date: i32) -> Result<i64> {
     match date {
         DATE_NEGATIVE_INFINITY => Ok(TIMESTAMP_NEGATIVE_INFINITY),
         DATE_INFINITY => Ok(TIMESTAMP_INFINITY),
@@ -351,7 +351,7 @@ fn date_of(local: i64) -> i32 {
     }
 }
 
-fn infinite(t: i64) -> bool {
+pub(crate) fn infinite(t: i64) -> bool {
     t == TIMESTAMP_NEGATIVE_INFINITY || t == TIMESTAMP_INFINITY
 }
 
