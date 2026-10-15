@@ -151,7 +151,7 @@ fn unique(fields: &mut Vec<(String, usize)>) {
 }
 
 /// `escape_json`: a string in quotes, with the escapes that PostgreSQL writes.
-pub(crate) fn escape(text: &str, out: &mut String) {
+pub fn escape(text: &str, out: &mut String) {
     out.push('"');
     for c in text.chars() {
         match c {

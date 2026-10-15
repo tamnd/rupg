@@ -25,6 +25,7 @@ mod extract;
 mod generated;
 mod geo;
 mod io;
+mod json;
 mod lsn;
 mod mac;
 mod math;
@@ -316,6 +317,9 @@ pub fn type_error(error: TypeError) -> Error {
     if let Some(hint) = error.hint {
         out = out.with_hint(hint);
     }
+    if let Some(context) = error.context {
+        out = out.with_context(context);
+    }
     out
 }
 
@@ -374,6 +378,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| random::by_src(src))
         .or_else(|| trig::by_src(src))
         .or_else(|| bytea::by_src(src))
+        .or_else(|| json::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))

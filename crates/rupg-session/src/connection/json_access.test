@@ -1,0 +1,199 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT '{"a":"\u0000", "b": 1}'::json -> 'b'
+ERROR 22P05 unsupported Unicode escape sequence (JSON data, line 1: {"a":"\u0000...)
+> SELECT '{"a":"\ud800", "b": 1}'::json -> 'b'
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: {"a":"\ud800"...)
+> SELECT '{"a":  [1,   2 ] , "a": 3}'::json -> 'a', '{"a":  [1,   2 ] , "b": 3}'::json -> 'a', '[1, [2,  3]]'::json -> -1, '[1,2]'::json -> -3, '[1,2]'::json -> 5, '[1,2]'::json -> -2
+fields ?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1
+row 3,[1,   2 ],[2,  3],NULL,NULL,1
+SELECT 1
+> SELECT '{"aA": 1}'::json -> 'aA', '{"a": "x\ty"}'::json ->> 'a', '{"a": null}'::json ->> 'a', '{"a": null}'::json -> 'a', '"str"'::json -> 0, '5'::json ->> 'a', '[1]'::json -> 'a', '{"0": 1}'::json -> 0
+fields ?column?:114:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:25:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1
+row 1,x	y,NULL,null,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT '{"a": "é\n"}'::json ->> 'a', '{"a": "é\n"}'::json -> 'a', '["x\"y", true, 1.50, {"k": [ ]}]'::json ->> 0, '["x\"y", true, 1.50, {"k": [ ]}]'::json ->> 1, '["x\"y", true, 1.50, {"k": [ ]}]'::json ->> 2, '["x\"y", true, 1.50, {"k": [ ]}]'::json ->> 3
+fields ?column?:25:-1:-1,?column?:114:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1
+row é
+,"é\n",x"y,true,1.50,{"k": [ ]}
+SELECT 1
+> SELECT '{"a": {"b": [10, {"c": "d"}]}}'::json #> '{a,b,1,c}', '{"a": {"b": [10, {"c": "d"}]}}'::json #>> '{a,b,1,c}', '{"a": {"b": [10, {"c": "d"}]}}'::json #> '{a,b}', '{"a": 1}'::json #> '{}', '{"a": 1}'::json #> '{a,NULL}', '[1,2]'::json #> '{-1}', '[1,2]'::json #> '{x}', '[1,2]'::json #> '{" 1"}', '[1,2]'::json #> '{"1 "}', '[1,2]'::json #> '{+1}'
+fields ?column?:114:-1:-1,?column?:25:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1
+row "d",d,[10, {"c": "d"}],{"a": 1},NULL,2,NULL,2,NULL,2
+SELECT 1
+> SELECT '{"a": {"b": 1}, "a": {"c": 2}}'::json #> '{a,b}', '{"a": {"b": 1}, "a": {"b": null}}'::json #>> '{a,b}', '{"a": {"b": 1}, "a": {"b": null}}'::json #> '{a,b}', '{"": 5}'::json #> '{""}', '[[1,2],[3,4]]'::json #> '{1,-1}', '[[1,2],[3,4]]'::json #> '{-3}'
+fields ?column?:114:-1:-1,?column?:25:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1
+row 1,NULL,null,5,4,NULL
+SELECT 1
+> SELECT ' 7 '::json #> '{}', ' 7 '::json #>> '{}', '"a\"b"'::json #>> '{}', '"a\"b"'::json #> '{}', ' {"a":1} '::json #>> '{}', ' null '::json #>> '{}', ' null '::json #> '{}', ' [1, 2] '::json #> '{}'
+fields ?column?:114:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:114:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:114:-1:-1,?column?:114:-1:-1
+row  7, 7,a"b,"a\"b",{"a":1},NULL, null,[1, 2]
+SELECT 1
+> SELECT json_extract_path('{"a": {"b": 2}}', 'a', 'b'), json_extract_path_text('{"a": {"b": "x"}}', 'a', 'b'), json_extract_path('{"a": 1}', 'a', NULL), json_extract_path_text('[5, 6]', '1')
+fields json_extract_path:114:-1:-1,json_extract_path_text:25:-1:-1,json_extract_path:114:-1:-1,json_extract_path_text:25:-1:-1
+row 2,x,NULL,6
+SELECT 1
+> SELECT json_typeof('1'), json_typeof(' "x" '), json_typeof('[]'), json_typeof('{}'), json_typeof('null'), json_typeof('true'), json_typeof(' false'), json_typeof('-2.5e3')
+fields json_typeof:25:-1:-1,json_typeof:25:-1:-1,json_typeof:25:-1:-1,json_typeof:25:-1:-1,json_typeof:25:-1:-1,json_typeof:25:-1:-1,json_typeof:25:-1:-1,json_typeof:25:-1:-1
+row number,string,array,object,null,boolean,boolean,number
+SELECT 1
+> SELECT json_array_length('[1,[2],3]'), json_array_length('[]'), json_array_length('["\u0000"]'), json_array_length(' [ {"a": 1}, null ] ')
+fields json_array_length:23:4:-1,json_array_length:23:4:-1,json_array_length:23:4:-1,json_array_length:23:4:-1
+row 3,0,1,2
+SELECT 1
+> SELECT json_array_length('{}')
+ERROR 22023 cannot get array length of a non-array
+> SELECT json_array_length('5')
+ERROR 22023 cannot get array length of a scalar
+> SELECT '{"a": "\u0000"}'::json ->> 'a'
+ERROR 22P05 unsupported Unicode escape sequence (JSON data, line 1: {"a": "\u0000...)
+> SELECT '{"a": 1, "b": "\ud83d"}'::json -> 'a'
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: {"a": 1, "b": "\ud83d"...)
+> SELECT json_strip_nulls('{"a": null, "b": [1, null, {"c": null, "d": 2}], "e": {"f": null}}'), json_strip_nulls('[null, {"a": null}]'), json_strip_nulls(' null '), json_strip_nulls('  1.50  '), json_strip_nulls('"é\/"'), json_strip_nulls('{"ké": 1e5, "x": "a\tb"}')
+fields json_strip_nulls:114:-1:-1,json_strip_nulls:114:-1:-1,json_strip_nulls:114:-1:-1,json_strip_nulls:114:-1:-1,json_strip_nulls:114:-1:-1,json_strip_nulls:114:-1:-1
+row {"b":[1,null,{"d":2}],"e":{}},[null,{}],null,1.50,"é/",{"ké":1e5,"x":"a\tb"}
+SELECT 1
+> SELECT json_strip_nulls('[null, 1, [null], {"a": null}]', true), json_strip_nulls('null', true), json_strip_nulls('[null]', true), json_strip_nulls('{"a": [null, null], "b": null}', true)
+fields json_strip_nulls:114:-1:-1,json_strip_nulls:114:-1:-1,json_strip_nulls:114:-1:-1,json_strip_nulls:114:-1:-1
+row [1,[],{}],null,[],{"a":[]}
+SELECT 1
+> SELECT '{"a":  [1,   2 ]}'::jsonb -> 'a', '[1,2,3]'::jsonb -> -1, '[1,2,3]'::jsonb ->> -4, '{"a": 1.50}'::jsonb ->> 'a', '"x"'::jsonb -> 0, '"x"'::jsonb -> -1, '"x"'::jsonb -> 1, '"x"'::jsonb ->> 0, '{"a": 1}'::jsonb -> 0, '[1]'::jsonb -> 'a'
+fields ?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:25:-1:-1,?column?:3802:-1:-1,?column?:3802:-1:-1
+row [1, 2],3,NULL,1.50,"x","x",NULL,x,NULL,NULL
+SELECT 1
+> SELECT '"x"'::jsonb #> '{}', '"x"'::jsonb #>> '{}', '1'::jsonb #> '{a}', '1'::jsonb #> '{0}', 'null'::jsonb #>> '{}', 'null'::jsonb #> '{}', '{"a": [1, {"b": "c"}]}'::jsonb #> '{}', '{"a": [1, {"b": "c"}]}'::jsonb #>> '{}', '{"a": [1, {"b": "c"}]}'::jsonb #>> '{a,1,b}', '{"a": [1, {"b": "c"}]}'::jsonb #> '{a,-1}'
+fields ?column?:3802:-1:-1,?column?:25:-1:-1,?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:25:-1:-1,?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1,?column?:3802:-1:-1
+row "x",x,NULL,NULL,NULL,null,{"a": [1, {"b": "c"}]},{"a": [1, {"b": "c"}]},c,{"b": "c"}
+SELECT 1
+> SELECT '[1, 2]'::jsonb #> '{x}', '[1, 2]'::jsonb #> '{" 1"}', '[1, 2]'::jsonb #> '{"1 "}', '[1, 2]'::jsonb #> '{-3}', '[1, 2]'::jsonb #> '{a,NULL}', '{"a": null}'::jsonb ->> 'a', '{"a": null}'::jsonb -> 'a', '{"a": {"b": true}}'::jsonb #>> '{a}', '{"a": {"b": true}}'::jsonb #>> '{a,b}'
+fields ?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:3802:-1:-1,?column?:25:-1:-1,?column?:3802:-1:-1,?column?:25:-1:-1,?column?:25:-1:-1
+row NULL,2,NULL,NULL,NULL,NULL,null,{"b": true},true
+SELECT 1
+> SELECT jsonb_extract_path('{"a": {"b": 2}}', 'a', 'b'), jsonb_extract_path_text('{"a": {"b": "x"}}', 'a', 'b'), jsonb_extract_path('{"a": 1}', 'a', NULL), jsonb_extract_path_text('[5, 6]', '1')
+fields jsonb_extract_path:3802:-1:-1,jsonb_extract_path_text:25:-1:-1,jsonb_extract_path:3802:-1:-1,jsonb_extract_path_text:25:-1:-1
+row 2,x,NULL,6
+SELECT 1
+> SELECT jsonb_typeof('1'), jsonb_typeof('"x"'), jsonb_typeof('[]'), jsonb_typeof('{}'), jsonb_typeof('null'), jsonb_typeof('false'), jsonb_array_length('[1, [2, 3], {}]'), jsonb_array_length('[]')
+fields jsonb_typeof:25:-1:-1,jsonb_typeof:25:-1:-1,jsonb_typeof:25:-1:-1,jsonb_typeof:25:-1:-1,jsonb_typeof:25:-1:-1,jsonb_typeof:25:-1:-1,jsonb_array_length:23:4:-1,jsonb_array_length:23:4:-1
+row number,string,array,object,null,boolean,3,0
+SELECT 1
+> SELECT jsonb_array_length('{}')
+ERROR 22023 cannot get array length of a non-array
+> SELECT jsonb_array_length('"a"')
+ERROR 22023 cannot get array length of a scalar
+> SELECT jsonb_strip_nulls('{"a": null, "b": [1, null, {"c": null, "d": 2}], "e": {"f": null}}'), jsonb_strip_nulls('null'), jsonb_strip_nulls('[null, {"a": null}]', true), jsonb_strip_nulls('{"a": null}'), jsonb_strip_nulls('"x"', true)
+fields jsonb_strip_nulls:3802:-1:-1,jsonb_strip_nulls:3802:-1:-1,jsonb_strip_nulls:3802:-1:-1,jsonb_strip_nulls:3802:-1:-1,jsonb_strip_nulls:3802:-1:-1
+row {"b": [1, null, {"d": 2}], "e": {}},null,[{}],{},"x"
+SELECT 1
+> SELECT jsonb_pretty('{"a": 1, "b": [1, 2, {"c": [], "d": {}}], "e": {"f": "g"}}')
+fields jsonb_pretty:25:-1:-1
+row {
+    "a": 1,
+    "b": [
+        1,
+        2,
+        {
+            "c": [
+            ],
+            "d": {
+            }
+        }
+    ],
+    "e": {
+        "f": "g"
+    }
+}
+SELECT 1
+> SELECT jsonb_pretty('[]'), jsonb_pretty('{}'), jsonb_pretty('1'), jsonb_pretty('"x"'), jsonb_pretty('[[], {}]'), jsonb_pretty('[1, [2]]'), jsonb_pretty('{"a": []}')
+fields jsonb_pretty:25:-1:-1,jsonb_pretty:25:-1:-1,jsonb_pretty:25:-1:-1,jsonb_pretty:25:-1:-1,jsonb_pretty:25:-1:-1,jsonb_pretty:25:-1:-1,jsonb_pretty:25:-1:-1
+row [
+],{
+},1,"x",[
+    [
+    ],
+    {
+    }
+],[
+    1,
+    [
+        2
+    ]
+],{
+    "a": [
+    ]
+}
+SELECT 1
+> SELECT 'true'::jsonb::bool, 'null'::jsonb::bool, '1.5'::jsonb::numeric, '1.5'::jsonb::int4, '2.5'::jsonb::int2, '-2.5'::jsonb::int8, '1e3'::jsonb::float8, '0.1'::jsonb::float4, 'null'::jsonb::int4, 'null'::jsonb::numeric
+fields bool:16:1:-1,bool:16:1:-1,numeric:1700:-1:-1,int4:23:4:-1,int2:21:2:-1,int8:20:8:-1,float8:701:8:-1,float4:700:4:-1,int4:23:4:-1,numeric:1700:-1:-1
+row t,NULL,1.5,2,3,-3,1000,0.1,NULL,NULL
+SELECT 1
+> SELECT '"x"'::jsonb::bool
+ERROR 22023 cannot cast jsonb string to type boolean
+> SELECT '1'::jsonb::bool
+ERROR 22023 cannot cast jsonb numeric to type boolean
+> SELECT '[1]'::jsonb::int4
+ERROR 22023 cannot cast jsonb array to type integer
+> SELECT '{}'::jsonb::numeric
+ERROR 22023 cannot cast jsonb object to type numeric
+> SELECT 'true'::jsonb::float8
+ERROR 22023 cannot cast jsonb boolean to type double precision
+> SELECT 'null'::jsonb::float4, '"1"'::jsonb::text
+fields float4:700:4:-1,text:25:-1:-1
+row NULL,"1"
+SELECT 1
+> SELECT '"1"'::jsonb::int2
+ERROR 22023 cannot cast jsonb string to type smallint
+> SELECT '40000'::jsonb::int2
+ERROR 22003 smallint out of range
+> SELECT '1e40'::jsonb::float4
+ERROR 22003 "10000000000000000000000000000000000000000" is out of range for type real
+> SELECT '{"a": 1, "b": 2}'::jsonb ? 'a', '{"a": 1}'::jsonb ? 'b', '["a", "b"]'::jsonb ? 'b', '["a", ["b"]]'::jsonb ? 'b', '"a"'::jsonb ? 'a', '1'::jsonb ? '1', '[1]'::jsonb ? '1', '{"a": {"b": 1}}'::jsonb ? 'b'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f,t,f,f,f
+SELECT 1
+> SELECT '{"a": 1, "b": 2}'::jsonb ?| '{b,c}', '{"a": 1}'::jsonb ?| '{c,NULL}', '{"a": 1}'::jsonb ?| '{}', '{"a": 1, "b": 2}'::jsonb ?& '{a,b}', '{"a": 1}'::jsonb ?& '{a,c}', '{"a": 1}'::jsonb ?& '{NULL}', '{"a": 1}'::jsonb ?& '{}', '["a"]'::jsonb ?& '{a,a}'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,t,f,t,t,t
+SELECT 1
+> SELECT '{"a": 1, "b": [1, 2, {"c": 3}]}'::jsonb @> '{"b": [{"c": 3}]}', '{"a": 1}'::jsonb @> '{"a": 1.0}', '{"a": 1}'::jsonb @> '{"a": "1"}', '{"a": 1}'::jsonb @> '{}', '[1, 2, 3]'::jsonb @> '[3, 1]', '[1, 2, 3]'::jsonb @> '[]', '[1, [2, 3]]'::jsonb @> '[[3]]', '[1, [2, 3]]'::jsonb @> '[3]'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,t,t,t,f
+SELECT 1
+> SELECT '[1, 2]'::jsonb @> '1', '1'::jsonb @> '[1]', '1'::jsonb @> '1', '"a"'::jsonb @> '"a"', '{"a": 1}'::jsonb @> '[]', '[]'::jsonb @> '{}', '[{"a": 1, "b": 2}]'::jsonb @> '[{"a": 1}]', '{"a": [1, 2]}'::jsonb @> '{"a": [2]}', '{"a": [1, 2]}'::jsonb @> '{"a": 2}'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f,f,t,t,f
+SELECT 1
+> SELECT '{"a": {"b": 1}}'::jsonb @> '{"a": {}}', '{"a": {"b": 1}}'::jsonb @> '{"a": []}', '[[1, 2], [3]]'::jsonb @> '[[1, 3]]', '[[1, 2], [3]]'::jsonb @> '[[1], [3]]', '[null]'::jsonb @> '[null]', '[null]'::jsonb @> 'null', '{"a": 1}'::jsonb <@ '{"a": 1, "b": 2}', '[1]'::jsonb <@ '[1, 2]', '[1, 1]'::jsonb @> '[1, 1, 1]'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,t,t,t,t,t,t
+SELECT 1
+> SELECT '1'::jsonb = '1.00', '{"a": 1, "b": 2}'::jsonb = '{"b": 2, "a": 1}', '[1, 2]'::jsonb = '[2, 1]', 'null'::jsonb < '"a"', '"a"'::jsonb < '1', '1'::jsonb < 'true', 'true'::jsonb < '[]', '[]'::jsonb < '{}', '[]'::jsonb < 'null'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,t,t,f,t,t
+SELECT 1
+> SELECT '[1]'::jsonb > '1', '[1, 2]'::jsonb > '[3]', '{"b": 1}'::jsonb > '{"aa": 1}', '{"a": 1, "b": 1}'::jsonb > '{"z": 1}', '"ab"'::jsonb > '"b"', 'false'::jsonb < 'true', '[[1]]'::jsonb > '[2]', '{"a": [1]}'::jsonb > '{"a": 1}', '"é"'::jsonb > '"z"'
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,f,t,t,t,t
+SELECT 1
+> SELECT jsonb_cmp('1', '2'), jsonb_cmp('2', '1'), jsonb_cmp('[1, 2]', '[1, 2]'), jsonb_cmp('{"a": 1}', '{"b": 1}'), '1'::jsonb <> '1.0', '1'::jsonb <= '1.0', '2'::jsonb >= '10', '1e2'::jsonb = '100'
+fields jsonb_cmp:23:4:-1,jsonb_cmp:23:4:-1,jsonb_cmp:23:4:-1,jsonb_cmp:23:4:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row -1,1,0,-1,f,t,f,t
+SELECT 1
+> SELECT j FROM (VALUES ('null'::jsonb), ('[]'), ('{}'), ('1'), ('"a"'), ('true'), ('[1]'), ('{"a": 1}'), ('[1, 2]'), ('-1'), ('"B"'), ('false'), ('[[]]'), ('{"a": null}'), ('{"b": 0, "c": 1}')) v(j) ORDER BY j
+fields j:3802:-1:-1
+row []
+row null
+row "B"
+row "a"
+row -1
+row 1
+row false
+row true
+row [1]
+row [[]]
+row [1, 2]
+row {}
+row {"a": null}
+row {"a": 1}
+row {"b": 0, "c": 1}
+SELECT 15

@@ -350,6 +350,39 @@ pub(crate) trait Sink {
     ///
     /// The error of the action, which stops the parse.
     fn scalar(&mut self, kind: Kind, token: &str, text: &str) -> Result<(), TypeError>;
+    /// [`Sink::open`] with the place of the bracket in the input.
+    ///
+    /// # Errors
+    ///
+    /// The error of the action, which stops the parse.
+    fn open_at(&mut self, open: Open, start: usize) -> Result<(), TypeError> {
+        let _ = start;
+        self.open(open)
+    }
+    /// [`Sink::close`] with the place just after the bracket in the input.
+    ///
+    /// # Errors
+    ///
+    /// The error of the action, which stops the parse.
+    fn close_at(&mut self, open: Open, end: usize) -> Result<(), TypeError> {
+        let _ = end;
+        self.close(open)
+    }
+    /// [`Sink::scalar`] with the place of the token in the input.
+    ///
+    /// # Errors
+    ///
+    /// The error of the action, which stops the parse.
+    fn scalar_at(
+        &mut self,
+        kind: Kind,
+        start: usize,
+        token: &str,
+        text: &str,
+    ) -> Result<(), TypeError> {
+        let _ = start;
+        self.scalar(kind, token, text)
+    }
 }
 
 /// Why a parse stopped.
@@ -403,25 +436,27 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                 match token.kind {
                     Kind::ObjectStart => {
                         stack.push(Open::Object);
-                        sink.open(Open::Object).map_err(Stop::Action)?;
+                        sink.open_at(Open::Object, token.start).map_err(Stop::Action)?;
                         token = lexer.next()?;
                         match token.kind {
                             Kind::String => Step::Field,
                             Kind::ObjectEnd => {
                                 stack.pop();
+                                let end = token.end;
                                 token = lexer.next()?;
-                                sink.close(Open::Object).map_err(Stop::Action)?;
+                                sink.close_at(Open::Object, end).map_err(Stop::Action)?;
                                 Step::After
                             }
                             _ => return Err(unexpected(token, Error::ExpectedObjectFirst).into()),
                         }
                     }
                     Kind::ArrayStart => {
-                        sink.open(Open::Array).map_err(Stop::Action)?;
+                        sink.open_at(Open::Array, token.start).map_err(Stop::Action)?;
                         token = lexer.next()?;
                         if token.kind == Kind::ArrayEnd {
+                            let end = token.end;
                             token = lexer.next()?;
-                            sink.close(Open::Array).map_err(Stop::Action)?;
+                            sink.close_at(Open::Array, end).map_err(Stop::Action)?;
                             Step::After
                         } else {
                             stack.push(Open::Array);
@@ -433,7 +468,8 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                         let scalar = token;
                         std::mem::swap(&mut lexer.text, &mut decoded);
                         token = lexer.next()?;
-                        sink.scalar(scalar.kind, text(scalar), &decoded).map_err(Stop::Action)?;
+                        sink.scalar_at(scalar.kind, scalar.start, text(scalar), &decoded)
+                            .map_err(Stop::Action)?;
                         Step::After
                     }
                     _ => return Err(unexpected(token, Error::ExpectedJson).into()),
@@ -469,8 +505,9 @@ pub(crate) fn parse(input: &str, escapes: bool, sink: &mut impl Sink) -> Result<
                     next
                 } else if token.kind == close {
                     stack.pop();
+                    let end = token.end;
                     token = lexer.next()?;
-                    sink.close(open).map_err(Stop::Action)?;
+                    sink.close_at(open, end).map_err(Stop::Action)?;
                     Step::After
                 } else {
                     return Err(unexpected(token, error).into());

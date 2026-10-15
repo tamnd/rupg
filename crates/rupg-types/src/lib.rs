@@ -62,6 +62,7 @@ mod geo;
 mod json;
 mod jsonb;
 mod jsonpath;
+mod jsontree;
 mod lsn;
 mod mac;
 mod money;
@@ -112,12 +113,13 @@ pub use float::{float4_in, float4_out, float8_in, float8_out};
 pub use generated::oids as oid;
 pub use geo::{GeoKind, geo_in, geo_out, geo_recv};
 pub use json::json_in;
-pub use jsonb::{jsonb_in, jsonb_recv, jsonb_send};
+pub use jsonb::{escape as json_escape, jsonb_in, jsonb_recv, jsonb_send};
 pub use jsonpath::{
     Chain, JSONPATH_LAST, JSONPATH_REGEX_DOTALL, JSONPATH_REGEX_ICASE, JSONPATH_REGEX_MLINE,
     JSONPATH_REGEX_QUOTE, JSONPATH_REGEX_WSPACE, JsonPath, PathItem, PathOp, RegexCheck,
     jsonpath_deparse, jsonpath_parse, jsonpath_recv, jsonpath_regex_flags, jsonpath_send,
 };
+pub use jsontree::{JsonItem, JsonNode, JsonTree, Token as JsonToken, Tokens as JsonTokens};
 pub use lsn::{pg_lsn_in, pg_lsn_out};
 pub use mac::{
     macaddr_in, macaddr_out, macaddr_recv, macaddr_to_macaddr8, macaddr8_in, macaddr8_out,
