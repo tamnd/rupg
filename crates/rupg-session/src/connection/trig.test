@@ -1,0 +1,214 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT acos(0.5), acos(-1), acos(1), asin(0.5), asin(-0.25), atan(1), atan('Infinity'), atan('-Infinity')
+fields acos:701:8:-1,acos:701:8:-1,acos:701:8:-1,asin:701:8:-1,asin:701:8:-1,atan:701:8:-1,atan:701:8:-1,atan:701:8:-1
+row 1.0471975511965979,3.141592653589793,0,0.5235987755982989,-0.25268025514207865,0.7853981633974483,1.5707963267948966,-1.5707963267948966
+SELECT 1
+> SELECT atan2(1, 2), atan2(-1, -2), atan2(0, -1), atan2('NaN', 1), acos('NaN'), asin('NaN')
+fields atan2:701:8:-1,atan2:701:8:-1,atan2:701:8:-1,atan2:701:8:-1,acos:701:8:-1,asin:701:8:-1
+row 0.4636476090008061,-2.677945044588987,3.141592653589793,NaN,NaN,NaN
+SELECT 1
+> SELECT acos(1.5)
+ERROR 22003 input is out of range
+> SELECT asin(-1.0000001)
+ERROR 22003 input is out of range
+> SELECT cos(0), cos(1), cos(-3.5), sin(1), sin(1e10), tan(1), tan(-0.5), cot(1), cot(0), cot(-0.0::float8)
+fields cos:701:8:-1,cos:701:8:-1,cos:701:8:-1,sin:701:8:-1,sin:701:8:-1,tan:701:8:-1,tan:701:8:-1,cot:701:8:-1,cot:701:8:-1,cot:701:8:-1
+row 1,0.5403023058681398,-0.9364566872907963,0.8414709848078965,-0.4875060250875107,1.5574077246549023,-0.5463024898437905,0.6420926159343306,Infinity,-Infinity
+SELECT 1
+> SELECT cos('Infinity')
+ERROR 22003 input is out of range
+> SELECT sin('-Infinity')
+ERROR 22003 input is out of range
+> SELECT tan('Infinity')
+ERROR 22003 input is out of range
+> SELECT cot('Infinity')
+ERROR 22003 input is out of range
+> SELECT sin('NaN'), cos('NaN'), tan('NaN'), cot('NaN')
+fields sin:701:8:-1,cos:701:8:-1,tan:701:8:-1,cot:701:8:-1
+row NaN,NaN,NaN,NaN
+SELECT 1
+> SELECT x, sind(x), cosd(x), tand(x), cotd(x) FROM (VALUES (-720), (-450), (-360), (-270), (-180), (-135), (-90), (-60), (-45), (-30), (0), (15), (30), (45), (60), (75), (90), (120), (135), (150), (180), (210), (225), (240), (270), (300), (315), (330), (360), (405), (1e20)) AS t(x)
+fields x:1700:-1:-1,sind:701:8:-1,cosd:701:8:-1,tand:701:8:-1,cotd:701:8:-1
+row -720,-0,1,0,-Infinity
+row -450,-1,0,-Infinity,0
+row -360,-0,1,0,-Infinity
+row -270,1,0,Infinity,0
+row -180,-0,-1,0,Infinity
+row -135,-0.7071067811865475,-0.7071067811865475,1,1
+row -90,-1,0,-Infinity,0
+row -60,-0.8660254037844387,0.5,-1.7320508075688774,-0.5773502691896257
+row -45,-0.7071067811865475,0.7071067811865475,-1,-1
+row -30,-0.5,0.8660254037844387,-0.5773502691896257,-1.7320508075688774
+row 0,0,1,0,Infinity
+row 15,0.2588190451025208,0.9659258262890683,0.26794919243112275,3.7320508075688767
+row 30,0.5,0.8660254037844387,0.5773502691896257,1.7320508075688774
+row 45,0.7071067811865475,0.7071067811865475,1,1
+row 60,0.8660254037844387,0.5,1.7320508075688774,0.5773502691896257
+row 75,0.9659258262890683,0.2588190451025208,3.7320508075688767,0.26794919243112275
+row 90,1,0,Infinity,0
+row 120,0.8660254037844387,-0.5,-1.7320508075688774,-0.5773502691896257
+row 135,0.7071067811865475,-0.7071067811865475,-1,-1
+row 150,0.5,-0.8660254037844387,-0.5773502691896257,-1.7320508075688774
+row 180,0,-1,0,-Infinity
+row 210,-0.5,-0.8660254037844387,0.5773502691896257,1.7320508075688774
+row 225,-0.7071067811865475,-0.7071067811865475,1,1
+row 240,-0.8660254037844387,-0.5,1.7320508075688774,0.5773502691896257
+row 270,-1,0,-Infinity,0
+row 300,-0.8660254037844387,0.5,-1.7320508075688774,-0.5773502691896257
+row 315,-0.7071067811865475,0.7071067811865475,-1,-1
+row 330,-0.5,0.8660254037844387,-0.5773502691896257,-1.7320508075688774
+row 360,0,1,0,Infinity
+row 405,0.7071067811865475,0.7071067811865475,1,1
+row 100000000000000000000,-0.984807753012208,0.17364817766693036,-5.671281819617709,-0.176326980708465
+SELECT 31
+> SELECT sind(17.25), cosd(-123.4), tand(89.9), cotd(0.1), sind('NaN'), cosd('NaN'), tand('NaN'), cotd('NaN')
+fields sind:701:8:-1,cosd:701:8:-1,tand:701:8:-1,cotd:701:8:-1,sind:701:8:-1,cosd:701:8:-1,tand:701:8:-1,cotd:701:8:-1
+row 0.296541574975571,-0.5504807400849955,572.9572133543203,572.9572133542877,NaN,NaN,NaN,NaN
+SELECT 1
+> SELECT sind('Infinity')
+ERROR 22003 input is out of range
+> SELECT cosd('-Infinity')
+ERROR 22003 input is out of range
+> SELECT tand('Infinity')
+ERROR 22003 input is out of range
+> SELECT cotd('Infinity')
+ERROR 22003 input is out of range
+> SELECT x, asind(x), acosd(x), atand(x) FROM (VALUES (-1), (-0.75), (-0.5), (-0.25), (0), (0.1), (0.25), (0.5), (0.6), (0.75), (1)) AS t(x)
+fields x:1700:-1:-1,asind:701:8:-1,acosd:701:8:-1,atand:701:8:-1
+row -1,-90,180,-45
+row -0.75,-48.59037789072914,138.59037789072914,-36.86989764584402
+row -0.5,-30,120,-26.565051177077986
+row -0.25,-14.477512185929923,104.47751218592992,-14.036243467926479
+row 0,0,90,0
+row 0.1,5.739170477266786,84.26082952273322,5.710593137499643
+row 0.25,14.477512185929923,75.52248781407008,14.036243467926479
+row 0.5,30,60,26.565051177077986
+row 0.6,36.86989764584403,53.13010235415597,30.963756532073525
+row 0.75,48.59037789072914,41.40962210927086,36.86989764584402
+row 1,90,0,45
+SELECT 11
+> SELECT atand('Infinity'), atand('-Infinity'), atand(3), asind('NaN'), acosd('NaN'), atand('NaN')
+fields atand:701:8:-1,atand:701:8:-1,atand:701:8:-1,asind:701:8:-1,acosd:701:8:-1,atand:701:8:-1
+row 90,-90,71.56505117707799,NaN,NaN,NaN
+SELECT 1
+> SELECT acosd(1.1)
+ERROR 22003 input is out of range
+> SELECT asind(-2)
+ERROR 22003 input is out of range
+> SELECT y, x, atan2d(y, x) FROM (VALUES (1, 1), (1, 0), (0, -1), (-1, -1), (-1, 0), (0, 1), (1, -1), (2, 3), (0, 0), ('Infinity'::float8, 'Infinity'::float8), ('NaN', 1)) AS t(y, x)
+fields y:701:8:-1,x:701:8:-1,atan2d:701:8:-1
+row 1,1,45
+row 1,0,90
+row 0,-1,180
+row -1,-1,-135
+row -1,0,-90
+row 0,1,0
+row 1,-1,135
+row 2,3,33.690067525979785
+row 0,0,0
+row Infinity,Infinity,45
+row NaN,1,NaN
+SELECT 11
+> SELECT degrees(1), degrees(pi()), degrees(-0.5), degrees('Infinity'), degrees('NaN'), radians(180), radians(45), radians(-30.5), radians('-Infinity'), radians('NaN')
+fields degrees:701:8:-1,degrees:701:8:-1,degrees:701:8:-1,degrees:701:8:-1,degrees:701:8:-1,radians:701:8:-1,radians:701:8:-1,radians:701:8:-1,radians:701:8:-1,radians:701:8:-1
+row 57.29577951308232,180,-28.64788975654116,Infinity,NaN,3.141592653589793,0.7853981633974483,-0.5323254218582705,-Infinity,NaN
+SELECT 1
+> SELECT degrees(1.7976931348623157e308)
+ERROR 22003 value out of range: overflow
+> SELECT radians(1e-320)
+fields radians:701:8:-1
+row 1.73e-322
+SELECT 1
+> SELECT sinh(1), sinh(-2.5), sinh(0), sinh(800), sinh(-800), sinh('NaN'), cosh(1), cosh(-3), cosh(800), cosh('NaN')
+fields sinh:701:8:-1,sinh:701:8:-1,sinh:701:8:-1,sinh:701:8:-1,sinh:701:8:-1,sinh:701:8:-1,cosh:701:8:-1,cosh:701:8:-1,cosh:701:8:-1,cosh:701:8:-1
+row 1.1752011936438014,-6.0502044810397875,0,Infinity,-Infinity,NaN,1.5430806348152437,10.067661995777765,Infinity,NaN
+SELECT 1
+> SELECT tanh(0.5), tanh(-30), tanh('Infinity'), tanh('NaN'), asinh(1), asinh(-1e-10), asinh(1e300), asinh('NaN'), acosh(1), acosh(2), acosh(1e200), acosh('Infinity')
+fields tanh:701:8:-1,tanh:701:8:-1,tanh:701:8:-1,tanh:701:8:-1,asinh:701:8:-1,asinh:701:8:-1,asinh:701:8:-1,asinh:701:8:-1,acosh:701:8:-1,acosh:701:8:-1,acosh:701:8:-1,acosh:701:8:-1
+row 0.46211715726000974,-1,1,NaN,0.881373587019543,-1e-10,691.4686750787736,NaN,0,1.3169578969248166,461.2101657793691,Infinity
+SELECT 1
+> SELECT acosh(0.5)
+ERROR 22003 input is out of range
+> SELECT atanh(0.5), atanh(-0.999), atanh(1), atanh(-1), atanh(1e-20), atanh('NaN')
+fields atanh:701:8:-1,atanh:701:8:-1,atanh:701:8:-1,atanh:701:8:-1,atanh:701:8:-1,atanh:701:8:-1
+row 0.5493061443340548,-3.8002011672501994,Infinity,-Infinity,1e-20,NaN
+SELECT 1
+> SELECT acosh('NaN')
+fields acosh:701:8:-1
+row NaN
+SELECT 1
+> SELECT atanh(1.5)
+ERROR 22003 input is out of range
+> SELECT erf(0), erf(0.1), erf(0.5), erf(1), erf(1.2), erf(2), erf(-3), erf(6), erf(30), erf('Infinity'), erf('-Infinity'), erf('NaN')
+fields erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1,erf:701:8:-1
+row 0,0.1124629160182849,0.5204998778130465,0.8427007929497149,0.9103139782296353,0.9953222650189527,-0.9999779095030014,1,1,1,-1,NaN
+SELECT 1
+> SELECT erfc(0), erfc(0.1), erfc(0.5), erfc(1), erfc(-1.2), erfc(2), erfc(-3), erfc(10), erfc(27), erfc(30), erfc('Infinity'), erfc('-Infinity'), erfc('NaN')
+fields erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1,erfc:701:8:-1
+row 1,0.8875370839817152,0.4795001221869535,0.15729920705028513,1.9103139782296354,0.004677734981047265,1.9999779095030015,2.088487583762545e-45,5.23705e-319,0,0,2,NaN
+SELECT 1
+> SELECT gamma(1), gamma(2), gamma(3), gamma(5), gamma(10), gamma(100)
+fields gamma:701:8:-1,gamma:701:8:-1,gamma:701:8:-1,gamma:701:8:-1,gamma:701:8:-1,gamma:701:8:-1
+row 1,1,2,24,362880,9.332621544394415e+155
+SELECT 1
+> SELECT gamma('NaN'), gamma('Infinity'), gamma(1e-300), gamma(-1e-300)
+fields gamma:701:8:-1,gamma:701:8:-1,gamma:701:8:-1,gamma:701:8:-1
+row NaN,Infinity,9.999999999999999e+299,-9.999999999999999e+299
+SELECT 1
+> SELECT gamma('-Infinity')
+ERROR 22003 value out of range: overflow
+> SELECT gamma(0)
+ERROR 22003 value out of range: overflow
+> SELECT gamma(-0.0::float8)
+ERROR 22003 value out of range: overflow
+> SELECT gamma(-1)
+ERROR 22003 value out of range: overflow
+> SELECT gamma(-2.5e8)
+ERROR 22003 value out of range: overflow
+> SELECT gamma(172)
+ERROR 22003 value out of range: overflow
+> SELECT gamma(-175.5)
+fields gamma:701:8:-1
+row 2.1075e-319
+SELECT 1
+> SELECT gamma(-190.5)
+ERROR 22003 value out of range: underflow
+> SELECT lgamma(1), lgamma(2), lgamma(3), lgamma(0.5), lgamma(1.5), lgamma(10), lgamma(100), lgamma(1e10), lgamma(1e300), lgamma(1e-300), lgamma(-1.5), lgamma(-0.5), lgamma(-30.5), lgamma(-1e10 - 0.5)
+fields lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1
+row 0,0,0.6931471805599453,0.5723649429247001,-0.12078223763524522,12.80182748008147,359.13420536957545,220258509288.81058,6.897755278982137e+302,690.7755278982137,0.8600470153764809,1.2655121234846454,-75.22646798193337,-220258509322.20465
+SELECT 1
+> SELECT lgamma('NaN'), lgamma('Infinity'), lgamma('-Infinity')
+fields lgamma:701:8:-1,lgamma:701:8:-1,lgamma:701:8:-1
+row NaN,Infinity,Infinity
+SELECT 1
+> SELECT lgamma(0)
+ERROR 22003 value out of range: overflow
+> SELECT lgamma(-3)
+ERROR 22003 value out of range: overflow
+> SELECT lgamma(1.7976931348623157e308)
+ERROR 22003 value out of range: overflow
+> SELECT width_bucket(5.35, 0.024, 10.06, 5), width_bucket(-1, 0, 10, 5), width_bucket(10, 0, 10, 5), width_bucket(0, 0, 10, 5), width_bucket(9.999999999, 0, 10, 5)
+fields width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1
+row 3,0,6,1,5
+SELECT 1
+> SELECT width_bucket(5.35::float8, 10.06, 0.024, 5), width_bucket(11::float8, 10, 0, 5), width_bucket(0::float8, 10, 0, 5), width_bucket('NaN', 0, 10, 5), width_bucket('NaN', 10, 0, 5)
+fields width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1,width_bucket:23:4:-1
+row 3,0,6,6,0
+SELECT 1
+> SELECT width_bucket(0::float8, -1.7976931348623157e308, 1.7976931348623157e308, 10), width_bucket(1e308::float8, 1.7976931348623157e308, -1.7976931348623157e308, 4)
+fields width_bucket:23:4:-1,width_bucket:23:4:-1
+row 6,1
+SELECT 1
+> SELECT width_bucket(1::float8, 0, 1, 2147483647)
+ERROR 22003 integer out of range
+> SELECT width_bucket(1::float8, 0, 2, 0)
+ERROR 2201G count must be greater than zero
+> SELECT width_bucket(1::float8, 'NaN', 2, 3)
+ERROR 2201G lower and upper bounds cannot be NaN
+> SELECT width_bucket(1::float8, 0, 'Infinity', 3)
+ERROR 2201G lower and upper bounds must be finite
+> SELECT width_bucket(1::float8, 2, 2, 3)
+ERROR 2201G lower bound cannot equal upper bound
+> SELECT width_bucket(1::float8, 0, 2, -1)
+ERROR 2201G count must be greater than zero

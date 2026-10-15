@@ -2099,6 +2099,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_more.test")));
     }
 
+    /// The trigonometric functions in radians and in degrees, `degrees`, `radians`, the hyperbolic functions, `erf`, `erfc`, `gamma`, `lgamma` and `width_bucket` of `float8`, with the special values and the errors. `connection/trig.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn float_math() {
+        big_stack(|| script(include_str!("connection/trig.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
