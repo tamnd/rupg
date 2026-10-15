@@ -51,6 +51,7 @@ mod trig;
 mod tsmatch;
 mod tsquery;
 mod tsvector;
+mod unicode;
 mod updatable;
 mod zones;
 
@@ -132,6 +133,14 @@ pub trait Session {
     fn user(&self) -> &str;
     /// The session user.
     fn session_user(&self) -> &str;
+    /// `SYSTEM_USER`: the method of the authentication and the identity that it checked, as `auth_method:authn_id`, or `None` when the method checked no identity, as for `trust`.
+    fn system_user(&self) -> Option<String> {
+        None
+    }
+    /// `debug_query_string`: the text of the message of the client that runs the statement, which `current_query` gives.
+    fn query(&self) -> Option<String> {
+        None
+    }
     /// The current database.
     fn database(&self) -> &str;
     /// The schemas of `search_path` that exist, in order, without the implicit schemas.
@@ -385,6 +394,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| jsonedit::by_src(src))
         .or_else(|| jsonbuild::by_src(src))
         .or_else(|| text::by_src(src))
+        .or_else(|| unicode::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))
         .or_else(|| cash::by_src(src))

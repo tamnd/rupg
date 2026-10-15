@@ -147,6 +147,46 @@ fn format_type(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Text(crate::reg::type_text(ty, typmod, call.session)?))
 }
 
+/// `count_nulls`: the number of the arguments and the number of the null arguments, or `None` for a null array of a `VARIADIC` call.
+fn count_nulls(call: &Call<'_>, args: &[Value]) -> Result<Option<(i32, i32)>> {
+    let Some(values) = crate::text::variadic_values(call, args, 0)? else { return Ok(None) };
+    let nulls = values.iter().filter(|(_, v)| matches!(v, Value::Null)).count();
+    let count = |n: usize| i32::try_from(n).map_err(|_| bad_value());
+    Ok(Some((count(values.len())?, count(nulls)?)))
+}
+
+/// `num_nulls(VARIADIC "any")`.
+fn num_nulls(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(count_nulls(call, args)?.map_or(Value::Null, |(_, nulls)| Value::Int4(nulls)))
+}
+
+/// `num_nonnulls(VARIADIC "any")`.
+fn num_nonnulls(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(count_nulls(call, args)?.map_or(Value::Null, |(all, nulls)| Value::Int4(all - nulls)))
+}
+
+/// `error_on_null(anyelement)`: the argument, or an error when it is null.
+fn error_on_null(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    match args.first() {
+        Some(Value::Null) => {
+            Err(Error::new(SqlState::NULL_VALUE_NOT_ALLOWED, "null value not allowed"))
+        }
+        Some(value) => Ok(value.clone()),
+        None => Err(bad_value()),
+    }
+}
+
+/// `oidvectortypes(oidvector)`: the names of the types, as `format_type` gives them, with `, ` between them.
+fn oidvectortypes(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let Some(Value::Array(array)) = args.first() else { return Err(bad_value()) };
+    let mut names = Vec::with_capacity(array.values.len());
+    for value in &array.values {
+        let ty = value.as_ref().and_then(Value::as_oid).ok_or_else(bad_value)?;
+        names.push(crate::reg::type_text(ty, None, call.session)?);
+    }
+    Ok(Value::Text(names.join(", ")))
+}
+
 /// `show_config_by_name` and `show_config_by_name_missing_ok`: `current_setting`.
 fn current_setting(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let name = args.first().and_then(Value::as_str).ok_or_else(bad_value)?;
@@ -389,6 +429,12 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "set_config_by_name" => set_config,
         "make_interval" => make_interval,
         "parse_ident" => parse_ident,
+        "pg_num_nulls" => num_nulls,
+        "pg_num_nonnulls" => num_nonnulls,
+        "pg_error_on_null" => error_on_null,
+        "oidvectortypes" => oidvectortypes,
+        "current_query" => |call, _| Ok(call.session.query().map_or(Value::Null, Value::Text)),
+        "system_user" => |call, _| Ok(call.session.system_user().map_or(Value::Null, Value::Text)),
         _ => return None,
     })
 }

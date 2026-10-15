@@ -28,6 +28,10 @@ pub(crate) struct Activity {
     ssl: Option<Ssl>,
     /// The snapshot of the table that the transaction reads, after its first read.
     snapshot: RefCell<Option<Arc<[Backend]>>>,
+    /// `debug_query_string`: the text of the message that runs, in full. It is `None` while the session waits for the client.
+    pub(crate) query: Option<String>,
+    /// `SYSTEM_USER`, as `auth_method:authn_id`, or `None` for a method that checks no identity.
+    pub(crate) system_user: Option<String>,
 }
 
 impl Activity {
@@ -109,6 +113,11 @@ impl Connection {
         self.activity.server = server;
     }
 
+    /// Sets `SYSTEM_USER` after the authentication, before [`Connection::greet`].
+    pub fn set_system_user(&mut self, system_user: Option<String>) {
+        self.activity.system_user = system_user;
+    }
+
     /// Sets the TLS of the connection, before [`Connection::greet`].
     pub fn set_ssl(&mut self, ssl: Ssl) {
         self.activity.ssl = Some(clipped(ssl));
@@ -131,6 +140,9 @@ impl Connection {
 
     /// `pgstat_report_activity`: the state of the session, and the text of the statement that starts when `text` is `Some`.
     pub(super) fn report(&mut self, state: BackendState, text: Option<&str>) {
+        if let Some(text) = text {
+            self.activity.query = Some(text.to_owned());
+        }
         let Some(number) = self.activity.number else { return };
         let settings = self.settings.get_mut();
         let application = application_name(settings);
@@ -171,6 +183,7 @@ impl Connection {
             TransactionStatus::Block => BackendState::IdleInTransaction,
             TransactionStatus::Failed => BackendState::IdleInTransactionAborted,
         };
+        self.activity.query = None;
         self.report(state, None);
     }
 

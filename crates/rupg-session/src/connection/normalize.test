@@ -1,0 +1,68 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT num_nulls(1, NULL, 'a'::text), num_nonnulls(1, NULL, 'a'::text), num_nulls(VARIADIC ARRAY[1, NULL, NULL]), num_nonnulls(VARIADIC ARRAY[1, NULL, NULL]), num_nulls(VARIADIC NULL::int[]), num_nonnulls(VARIADIC '{}'::int[]), num_nulls(NULL::int), num_nonnulls(NULL, NULL)
+fields num_nulls:23:4:-1,num_nonnulls:23:4:-1,num_nulls:23:4:-1,num_nonnulls:23:4:-1,num_nulls:23:4:-1,num_nonnulls:23:4:-1,num_nulls:23:4:-1,num_nonnulls:23:4:-1
+row 1,2,2,1,NULL,0,1,0
+SELECT 1
+> SELECT num_nulls()
+ERROR 42883 function num_nulls() does not exist at 8
+> SELECT num_nulls(VARIADIC '{{1,NULL},{NULL,4}}'::int[]), num_nonnulls(ARRAY[NULL, NULL]::int[])
+fields num_nulls:23:4:-1,num_nonnulls:23:4:-1
+row 2,1
+SELECT 1
+> SELECT oidvectortypes('23 25 0 1043 1007 99999'::oidvector), oidvectortypes(''::oidvector), oidvectortypes(proargtypes) FROM pg_proc WHERE oid = 'substr(text, int, int)'::regprocedure
+fields oidvectortypes:25:-1:-1,oidvectortypes:25:-1:-1,oidvectortypes:25:-1:-1
+row integer, text, -, character varying, integer[], ???,,text, integer, integer
+SELECT 1
+> SELECT error_on_null(1), error_on_null('a'::text), error_on_null(ARRAY[1, 2])
+fields error_on_null:23:4:-1,error_on_null:25:-1:-1,error_on_null:1007:-1:-1
+row 1,a,{1,2}
+SELECT 1
+> SELECT error_on_null(NULL::int)
+ERROR 22004 null value not allowed
+> SELECT error_on_null(NULL)
+ERROR 42804 could not determine polymorphic type because input has type unknown
+> SELECT unicode_version(), system_user, current_query()
+fields unicode_version:25:-1:-1,system_user:25:-1:-1,current_query:25:-1:-1
+row 17.0,NULL,SELECT unicode_version(), system_user, current_query()
+SELECT 1
+> SELECT 1; SELECT current_query()
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+fields current_query:25:-1:-1
+row SELECT 1; SELECT current_query()
+SELECT 1
+> SELECT unicode_assigned(U&'abc\+10FFFF'), unicode_assigned(U&'\0378'), unicode_assigned(''), unicode_assigned(U&'\4E00\9FFF\AC00\D7A3'), unicode_assigned(U&'\+0F0000'), unicode_assigned(U&'\FFFE')
+fields unicode_assigned:16:1:-1,unicode_assigned:16:1:-1,unicode_assigned:16:1:-1,unicode_assigned:16:1:-1,unicode_assigned:16:1:-1,unicode_assigned:16:1:-1
+row f,f,t,t,t,f
+SELECT 1
+> SELECT normalize(U&'\0061\0308\24D1c'), normalize(U&'\0061\0308\24D1c', NFD), normalize(U&'\00E4\24D1c', NFKC), normalize(U&'\00E4\24D1c', NFKD), normalize(U&'\AC00\1100\1161\11A8', NFC), normalize(U&'\AC01', NFD)
+fields normalize:25:-1:-1,normalize:25:-1:-1,normalize:25:-1:-1,normalize:25:-1:-1,normalize:25:-1:-1,normalize:25:-1:-1
+row äⓑc,äⓑc,äbc,äbc,가각,각
+SELECT 1
+> SELECT is_normalized('abc', 'nfkd'), normalize(NULL::text), is_normalized(NULL, 'NFC')
+fields is_normalized:16:1:-1,normalize:25:-1:-1,is_normalized:16:1:-1
+row t,NULL,NULL
+SELECT 1
+> SELECT U&'\00E4' IS NORMALIZED, U&'\0061\0308' IS NORMALIZED, U&'\0061\0308' IS NFD NORMALIZED, U&'\24D1' IS NOT NFKC NORMALIZED, is_normalized(U&'\00E4', 'NFD'), is_normalized('abc', 'NFKC'), NULL::text IS NORMALIZED
+fields is_normalized:16:1:-1,is_normalized:16:1:-1,is_normalized:16:1:-1,?column?:16:1:-1,is_normalized:16:1:-1,is_normalized:16:1:-1,is_normalized:16:1:-1
+row t,f,t,t,f,t,NULL
+SELECT 1
+> SELECT is_normalized('abc', 'x')
+ERROR 22023 invalid normalization form: x
+> CREATE VIEW nv AS SELECT normalize('a'::text, NFKC) AS n, 'a'::text IS NFD NORMALIZED AS d, 'b'::text IS NOT NORMALIZED AS e, num_nulls(1, 2) AS c
+CREATE VIEW
+> SELECT pg_get_viewdef('nv'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT NORMALIZE('a'::text, NFKC) AS n,
+    ('a'::text IS NFD NORMALIZED) AS d,
+    (NOT ('b'::text IS NORMALIZED)) AS e,
+    num_nulls(1, 2) AS c;
+SELECT 1
+> SELECT * FROM nv
+fields n@nv.1:25:-1:-1,d@nv.2:16:1:-1,e@nv.3:16:1:-1,c@nv.4:23:4:-1
+row a,t,f,0
+SELECT 1
+> DROP VIEW nv
+DROP VIEW

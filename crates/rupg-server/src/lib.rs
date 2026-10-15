@@ -822,7 +822,9 @@ fn address(wire: &Wire, text: &str) -> Client {
 
 /// The authentication, the start of the session, and the main loop.
 fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
-    let Some(notices) = auth::authenticate(shared, wire, start, protocol) else {
+    let Some(auth::Admitted { notices, system_user }) =
+        auth::authenticate(shared, wire, start, protocol)
+    else {
         return;
     };
     wire.out.authentication_ok();
@@ -855,6 +857,7 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
     if let Some(secured) = &wire.secured {
         connection.set_ssl(secured.status.clone());
     }
+    connection.set_system_user(system_user);
     let (_registered, key) = register(shared, protocol, connection.cancel_flag());
     connection.greet(&key, &mut wire.out);
     loop {

@@ -1,6 +1,6 @@
 //! The Unicode tables.
 //!
-//! `cargo xtask unicode` makes two files from the vendored data. `crates/rupg-types/src/generated/unicode_norm.rs` holds the tables of the four normalization forms. It comes from `UnicodeData.txt` and `DerivedNormalizationProps.txt` in `vendor/unicode`. `crates/rupg-wire/src/generated/saslprep.rs` holds the stringprep tables of SASLprep. It comes from `vendor/postgres-19/src/common/saslprep.c`, so it has the same ranges as PostgreSQL.
+//! `cargo xtask unicode` makes two files from the vendored data. `crates/rupg-types/src/generated/unicode_norm.rs` holds the tables of the four normalization forms, the ranges of the assigned code points and the version of Unicode. It comes from `UnicodeData.txt` and `DerivedNormalizationProps.txt` in `vendor/unicode`. `crates/rupg-wire/src/generated/saslprep.rs` holds the stringprep tables of SASLprep. It comes from `vendor/postgres-19/src/common/saslprep.c`, so it has the same ranges as PostgreSQL.
 //!
 //! `cargo xtask unicode --check` writes nothing. It fails if a file is not the same as the file that the task makes. See `spec/22-crate-layout.md` section 22.8.
 
@@ -108,12 +108,18 @@ fn norm_tables(rev: &str, data: &str, props: &str) -> Result<String, String> {
     let mut mappings = Vec::new();
     let mut chars = Vec::new();
     let mut pairs = Vec::new();
+    let mut assigned: Vec<(u32, u32)> = Vec::new();
     for line in data.lines().filter(|l| !l.is_empty()) {
         let field: Vec<&str> = line.split(';').collect();
         if field.len() < 6 {
             return Err(format!("UnicodeData.txt: short line {line:?}"));
         }
         let code = hex(field[0])?;
+        // The two lines `<..., First>` and `<..., Last>` give a range of code points.
+        match assigned.last_mut() {
+            Some(last) if field[1].ends_with(", Last>") || last.1 + 1 == code => last.1 = code,
+            _ => assigned.push((code, code)),
+        }
         let class: u8 =
             field[3].parse().map_err(|e| format!("UnicodeData.txt: bad class in {line:?}: {e}"))?;
         if class != 0 {
@@ -137,8 +143,11 @@ fn norm_tables(rev: &str, data: &str, props: &str) -> Result<String, String> {
     pairs.sort_unstable();
 
     let mut out = String::new();
-    writeln!(out, "//! The tables of the Unicode normalization forms, for Unicode {rev}.").unwrap();
+    writeln!(out, "//! The tables of the Unicode normalization forms and the assigned code points, for Unicode {rev}.").unwrap();
     out.push_str("//!\n//! `cargo xtask unicode` makes this file from `vendor/unicode/UnicodeData.txt` and `vendor/unicode/DerivedNormalizationProps.txt`. Do not edit it.\n\n");
+    let version = rev.split('.').take(2).collect::<Vec<_>>().join(".");
+    out.push_str("/// The version of Unicode in the form major.minor, as `PG_UNICODE_VERSION`.\n");
+    writeln!(out, "pub(crate) const VERSION: &str = \"{version}\";\n").unwrap();
     out.push_str("/// The canonical combining class of each code point where it is not zero, sorted by code point.\n");
     table(&mut out, "COMBINING_CLASS", "(u32, u8)", &classes, |(c, k)| format!("(0x{c:04X}, {k})"));
     out.push_str("\n/// The decomposition mapping of each code point that has one, sorted by code point. The fields are the code point, `true` for a compatibility mapping, and the start and the length of the mapping in `DECOMPOSITION_CHARS`.\n");
@@ -150,6 +159,10 @@ fn norm_tables(rev: &str, data: &str, props: &str) -> Result<String, String> {
     out.push_str("\n/// The primary composites, sorted by the pair. The fields are the first character, the second character and the composite. A canonical mapping of two characters is a primary composite if the code point does not have the property Full_Composition_Exclusion.\n");
     table(&mut out, "COMPOSITION", "(u32, u32, u32)", &pairs, |(a, b, c)| {
         format!("(0x{a:04X}, 0x{b:04X}, 0x{c:04X})")
+    });
+    out.push_str("\n/// The ranges of the code points that `UnicodeData.txt` lists, first and last, sorted. The other code points have the general category Cn, unassigned.\n");
+    table(&mut out, "ASSIGNED", "(u32, u32)", &assigned, |(a, b)| {
+        format!("(0x{a:04X}, 0x{b:04X})")
     });
     Ok(out)
 }
