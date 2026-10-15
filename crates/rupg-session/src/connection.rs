@@ -2861,7 +2861,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/soft_input.test")));
     }
 
-    /// The views `pg_config`, `pg_file_settings`, `pg_available_extensions` and `pg_available_extension_versions` and their functions: the names of `pg_config` in order, the columns of each view, and the errors of a call with a bad argument. The values of `pg_config` are not in the script, because they come from the build. `connection/state_views.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// The views `pg_config`, `pg_file_settings`, `pg_available_extensions` and `pg_available_extension_versions` and their functions: the names of `pg_config` in order, the columns of each view, the errors of a call with a bad argument and the row of `plpgsql`. The values of `pg_config` are not in the script, because they come from the build. `connection/state_views.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn state_views() {
         big_stack(|| script(include_str!("connection/state_views.test")));

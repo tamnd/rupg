@@ -1,6 +1,6 @@
-//! The functions of the views of the parts of the server that rupg does not have: asynchronous I/O, the registry of dynamic shared memory, the NUMA nodes, the replication origins, recovery, the publications, the cursors of `DECLARE`, the lists of the most common values of the extended statistics, the extensions, the configuration file and the install tree of a C build.
+//! The functions of the views of the parts of the server that rupg does not have: asynchronous I/O, the registry of dynamic shared memory, the NUMA nodes, the replication origins, recovery, the publications, the cursors of `DECLARE`, the lists of the most common values of the extended statistics, the extensions other than `plpgsql`, the configuration file and the install tree of a C build.
 //!
-//! These functions give what PostgreSQL gives on a primary server with none of these objects: no rows, one row of nulls for `pg_stat_get_recovery`, and the error of a build with no NUMA support for `pg_get_shmem_allocations_numa`. A publication name is always unknown, because rupg has no publications. `pg_config` gives its 23 names, with `not recorded` for each value that rupg does not have.
+//! These functions give what PostgreSQL gives on a primary server with none of these objects and with no contrib modules: no rows, the row of `plpgsql` for the extensions, one row of nulls for `pg_stat_get_recovery`, and the error of a build with no NUMA support for `pg_get_shmem_allocations_numa`. A publication name is always unknown, because rupg has no publications. `pg_config` gives its 23 names, with `not recorded` for each value that rupg does not have.
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::Value;
@@ -15,9 +15,35 @@ pub(crate) fn none(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(Vec::new())
 }
 
-/// `pg_available_extensions` and `pg_available_extension_versions`: rupg has no extensions yet, so no extension is available.
+/// The values of `plpgsql.control`, the one extension of rupg. `$system` is the location of an extension in the directory of the install tree.
+const PLPGSQL: (&str, &str, &str, &str) =
+    ("plpgsql", "1.0", "$system", "PL/pgSQL procedural language");
+
+/// `pg_available_extensions`: the row of `plpgsql`, the one extension that rupg has. A build of PostgreSQL with no contrib modules gives the same row.
 pub(crate) fn extensions(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
-    Ok(Vec::new())
+    let (name, version, location, comment) = PLPGSQL;
+    Ok(vec![vec![
+        Value::text(name),
+        Value::text(version),
+        Value::text(location),
+        Value::text(comment),
+    ]])
+}
+
+/// `pg_available_extension_versions`: the row of the one version of `plpgsql`. It needs a superuser, it is trusted, it is not relocatable, its schema is `pg_catalog` and it requires no other extension.
+pub(crate) fn extension_versions(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    let (name, version, location, comment) = PLPGSQL;
+    Ok(vec![vec![
+        Value::text(name),
+        Value::text(version),
+        Value::Bool(true),
+        Value::Bool(true),
+        Value::Bool(false),
+        Value::text("pg_catalog"),
+        Value::Null,
+        Value::text(location),
+        Value::text(comment),
+    ]])
 }
 
 /// `pg_show_all_file_settings`: rupg reads no configuration file, so no line of a file gives a setting. The setting `config_file` is empty for the same reason.

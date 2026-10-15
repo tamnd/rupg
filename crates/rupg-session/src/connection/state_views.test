@@ -107,3 +107,19 @@ SELECT 3
 ERROR 42883 function pg_show_all_file_settings(integer) does not exist at 8
 > SELECT * FROM pg_config(1)
 ERROR 42883 function pg_config(integer) does not exist at 15
+> SELECT * FROM pg_available_extensions WHERE name = 'plpgsql'
+fields name@pg_available_extensions.1:19:64:-1,default_version@pg_available_extensions.2:25:-1:-1,installed_version@pg_available_extensions.3:25:-1:-1,location@pg_available_extensions.4:25:-1:-1,comment@pg_available_extensions.5:25:-1:-1
+row plpgsql,1.0,1.0,$system,PL/pgSQL procedural language
+SELECT 1
+> SELECT * FROM pg_available_extension_versions WHERE name = 'plpgsql'
+fields name@pg_available_extension_versions.1:19:64:-1,version@pg_available_extension_versions.2:25:-1:-1,installed@pg_available_extension_versions.3:16:1:-1,superuser@pg_available_extension_versions.4:16:1:-1,trusted@pg_available_extension_versions.5:16:1:-1,relocatable@pg_available_extension_versions.6:16:1:-1,schema@pg_available_extension_versions.7:19:64:-1,requires@pg_available_extension_versions.8:1003:-1:-1,location@pg_available_extension_versions.9:25:-1:-1,comment@pg_available_extension_versions.10:25:-1:-1
+row plpgsql,1.0,t,t,t,f,pg_catalog,NULL,$system,PL/pgSQL procedural language
+SELECT 1
+> SELECT * FROM pg_available_extensions() WHERE name = 'plpgsql'
+fields name:19:64:-1,default_version:25:-1:-1,location:25:-1:-1,comment:25:-1:-1
+row plpgsql,1.0,$system,PL/pgSQL procedural language
+SELECT 1
+> SELECT * FROM pg_available_extension_versions() WHERE name = 'plpgsql'
+fields name:19:64:-1,version:25:-1:-1,superuser:16:1:-1,trusted:16:1:-1,relocatable:16:1:-1,schema:19:64:-1,requires:1003:-1:-1,location:25:-1:-1,comment:25:-1:-1
+row plpgsql,1.0,t,t,f,pg_catalog,NULL,$system,PL/pgSQL procedural language
+SELECT 1

@@ -12,6 +12,8 @@ selec = "selec"
 toi = "toi"
 # The index `pg_amop_fam_strat_index` of `pg_amop`.
 strat = "strat"
+# The table `ser` of the test of the serial columns in `sequence.test`.
+ser = "ser"
 
 # Test inputs that are wrong on purpose.
 [default]
