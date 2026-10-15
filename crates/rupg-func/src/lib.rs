@@ -30,6 +30,7 @@ mod math;
 mod misc;
 mod multirange;
 mod network;
+mod random;
 mod range;
 mod reg;
 mod regex;
@@ -66,6 +67,7 @@ pub use io::{
     to_text,
 };
 pub use multirange::range_agg;
+pub use random::Randomness;
 pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use sequence::Sequences;
 pub use srf::{SetKernel, set_kernel};
@@ -233,6 +235,14 @@ pub trait Session {
     fn local_sequences(&self) -> Option<&std::cell::RefCell<Sequences>> {
         None
     }
+    /// The state of `random` and `uuidv7` of the session, or `None` for a session with no server, which uses a state of its thread.
+    fn randomness(&self) -> Option<&std::cell::RefCell<Randomness>> {
+        None
+    }
+    /// `pg_strong_random`: fills `buf` with random bytes. A session with no server takes them from a generator with a seed from the clock.
+    fn strong_random(&self, buf: &mut [u8]) {
+        random::clock_random(self.clock(), buf);
+    }
     /// The catalog of the user objects that the statement sees, or `None` when the session has no catalog.
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
@@ -358,6 +368,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| extract::by_src(src))
         .or_else(|| timezone::by_src(src))
         .or_else(|| calendar::by_src(src))
+        .or_else(|| random::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))

@@ -38,7 +38,7 @@ fn float_arg(args: &[Value], at: usize) -> Result<f64> {
 }
 
 /// `%g` of the `snprintf` of PostgreSQL.
-fn format_g(v: f64) -> String {
+pub(crate) fn format_g(v: f64) -> String {
     let mut out = Vec::new();
     float8_out(v, -9, &mut out);
     String::from_utf8(out).unwrap_or_default()
