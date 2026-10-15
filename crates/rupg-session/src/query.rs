@@ -9,10 +9,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rupg_analyze::{Env, Params};
-use rupg_catalog::Catalog;
+use rupg_catalog::{Catalog, SequenceData};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
-use rupg_func::{AdvisoryLock, Backend, Client};
+use rupg_func::{AdvisoryLock, Backend, Client, Sequences};
 use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
 use rupg_sql::nodes::Node;
@@ -108,6 +108,8 @@ pub(crate) struct Reader<'a> {
     portals: Option<&'a Portals<Portal>>,
     /// The flag that a `CancelRequest` sets, or `None` for a reader that is not a session.
     cancel: Option<&'a AtomicBool>,
+    /// The cache of the sequences of the session, or `None` for a reader that is not a session.
+    sequences: Option<&'a RefCell<Sequences>>,
     /// The warnings of the functions that the statement called, such as the input function of `aclitem`. The session sends them before the result.
     warnings: RefCell<Vec<Error>>,
 }
@@ -141,6 +143,7 @@ impl<'a> Reader<'a> {
             statements: None,
             portals: None,
             cancel: None,
+            sequences: None,
             warnings: RefCell::new(Vec::new()),
         }
     }
@@ -153,6 +156,12 @@ impl<'a> Reader<'a> {
     /// The reader of a session, which reads the table of the sessions in `store`.
     pub(crate) fn with_activity(mut self, activity: &'a Activity, store: &'a Store) -> Reader<'a> {
         self.activity = Some((activity, store));
+        self
+    }
+
+    /// The reader of a session with a cache of sequences.
+    pub(crate) fn with_sequences(mut self, sequences: &'a RefCell<Sequences>) -> Reader<'a> {
+        self.sequences = Some(sequences);
         self
     }
 
@@ -368,6 +377,29 @@ impl rupg_func::Session for Reader<'_> {
         let (_, store) = self.server()?;
         store.locks().release_all(self.pid, true);
         Ok(())
+    }
+
+    fn sequence_row(&self, file: u32) -> Option<SequenceData> {
+        self.activity.and_then(|(_, store)| store.sequence_row(file))
+    }
+
+    fn change_sequence(
+        &self,
+        file: u32,
+        initial: SequenceData,
+        change: &mut dyn FnMut(&mut SequenceData) -> Result<()>,
+    ) -> Result<()> {
+        let Some((_, store)) = self.activity else {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a sequence in a session with no server is not supported yet",
+            ));
+        };
+        store.change_sequence(file, initial, change)
+    }
+
+    fn local_sequences(&self) -> Option<&RefCell<Sequences>> {
+        self.sequences
     }
 
     fn date_format(&self) -> DateFormat {
@@ -604,6 +636,10 @@ impl Env for Reader<'_> {
 
     fn allow_system_table_mods(&self) -> bool {
         self.settings().get("allow_system_table_mods").as_deref() == Some("on")
+    }
+
+    fn sequence_row(&self, file: u32) -> Option<SequenceData> {
+        rupg_func::Session::sequence_row(self, file)
     }
 }
 

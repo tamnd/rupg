@@ -1,11 +1,11 @@
 //! The catalogs that the sessions of a server share, one for each database, the lock of the statements that change a catalog, the rows of `pg_database`, and the table of the sessions.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::atomic::{AtomicBool, AtomicI64, Ordering};
 use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::time::Duration;
 
-use rupg_catalog::{Catalog, Database};
+use rupg_catalog::{Catalog, Database, SequenceData};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::Backend;
 use rupg_platform::Tasks;
@@ -36,6 +36,8 @@ pub struct Store {
     auth: Option<Arc<dyn AuthFiles>>,
     /// The advisory locks of the sessions.
     locks: Locks,
+    /// The rows of the files of the sequences that the sessions changed, by the number of the file. The rows are not in a transaction, so a rollback does not undo a change, as in PostgreSQL.
+    sequences: Mutex<HashMap<u32, SequenceData>>,
 }
 
 /// A slot of the table of the sessions.
@@ -320,6 +322,25 @@ impl Store {
     /// The advisory locks of the sessions.
     pub(crate) fn locks(&self) -> &Locks {
         &self.locks
+    }
+
+    /// The row of the file of a sequence, or `None` when no session changed it.
+    pub(crate) fn sequence_row(&self, file: u32) -> Option<SequenceData> {
+        self.sequences.lock().unwrap_or_else(PoisonError::into_inner).get(&file).copied()
+    }
+
+    /// `read_seq_tuple` and the change of the row under the lock of the buffer: the row of the file of a sequence changes only when `change` gives no error. `initial` is the row when no session changed it yet.
+    pub(crate) fn change_sequence(
+        &self,
+        file: u32,
+        initial: SequenceData,
+        change: &mut dyn FnMut(&mut SequenceData) -> Result<()>,
+    ) -> Result<()> {
+        let mut rows = self.sequences.lock().unwrap_or_else(PoisonError::into_inner);
+        let mut row = rows.get(&file).copied().unwrap_or(initial);
+        change(&mut row)?;
+        rows.insert(file, row);
+        Ok(())
     }
 
     /// The tasks of the server, or `None` for sessions that run on threads.

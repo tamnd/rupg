@@ -1,0 +1,320 @@
+!details
+> CREATE SEQUENCE s1
+CREATE SEQUENCE
+> SELECT seqtypid::regtype, seqstart, seqincrement, seqmax, seqmin, seqcache, seqcycle FROM pg_sequence WHERE seqrelid = 's1'::regclass
+fields seqtypid:2206:4:-1,seqstart@pg_sequence.3:20:8:-1,seqincrement@pg_sequence.4:20:8:-1,seqmax@pg_sequence.5:20:8:-1,seqmin@pg_sequence.6:20:8:-1,seqcache@pg_sequence.7:20:8:-1,seqcycle@pg_sequence.8:16:1:-1
+row bigint,1,1,9223372036854775807,1,1,f
+SELECT 1
+> SELECT * FROM s1
+fields last_value@s1.1:20:8:-1,log_cnt@s1.2:20:8:-1,is_called@s1.3:16:1:-1
+row 1,0,f
+SELECT 1
+> SELECT nextval('s1'), nextval('s1'), currval('s1'), lastval()
+fields nextval:20:8:-1,nextval:20:8:-1,currval:20:8:-1,lastval:20:8:-1
+row 1,2,2,2
+SELECT 1
+> SELECT * FROM s1
+fields last_value@s1.1:20:8:-1,log_cnt@s1.2:20:8:-1,is_called@s1.3:16:1:-1
+row 2,31,t
+SELECT 1
+> SELECT setval('s1', 10), currval('s1'), nextval('s1')
+fields setval:20:8:-1,currval:20:8:-1,nextval:20:8:-1
+row 10,10,11
+SELECT 1
+> SELECT setval('s1', 20, false), currval('s1'), nextval('s1'), nextval('s1')
+fields setval:20:8:-1,currval:20:8:-1,nextval:20:8:-1,nextval:20:8:-1
+row 20,11,20,21
+SELECT 1
+> SELECT last_value, is_called FROM s1
+fields last_value@s1.1:20:8:-1,is_called@s1.3:16:1:-1
+row 21,t
+SELECT 1
+> SELECT pg_sequence_last_value('s1'), (pg_get_sequence_data('s1')).last_value, (pg_get_sequence_data('s1')).is_called
+fields pg_sequence_last_value:20:8:-1,last_value:20:8:-1,is_called:16:1:-1
+row 21,21,t
+SELECT 1
+> CREATE SEQUENCE s2 AS integer INCREMENT BY -2 START WITH 5 MINVALUE -3 MAXVALUE 5 CACHE 4 CYCLE
+CREATE SEQUENCE
+> SELECT seqtypid::regtype, seqstart, seqincrement, seqmax, seqmin, seqcache, seqcycle FROM pg_sequence WHERE seqrelid = 's2'::regclass
+fields seqtypid:2206:4:-1,seqstart@pg_sequence.3:20:8:-1,seqincrement@pg_sequence.4:20:8:-1,seqmax@pg_sequence.5:20:8:-1,seqmin@pg_sequence.6:20:8:-1,seqcache@pg_sequence.7:20:8:-1,seqcycle@pg_sequence.8:16:1:-1
+row integer,5,-2,5,-3,4,t
+SELECT 1
+> SELECT nextval('s2'), nextval('s2'), nextval('s2'), nextval('s2'), nextval('s2'), nextval('s2')
+fields nextval:20:8:-1,nextval:20:8:-1,nextval:20:8:-1,nextval:20:8:-1,nextval:20:8:-1,nextval:20:8:-1
+row 5,3,1,-1,-3,5
+SELECT 1
+> SELECT pg_sequence_last_value('s2'), lastval()
+fields pg_sequence_last_value:20:8:-1,lastval:20:8:-1
+row -1,5
+SELECT 1
+> CREATE SEQUENCE s3 INCREMENT -1
+CREATE SEQUENCE
+> SELECT seqstart, seqmax, seqmin FROM pg_sequence WHERE seqrelid = 's3'::regclass
+fields seqstart@pg_sequence.3:20:8:-1,seqmax@pg_sequence.5:20:8:-1,seqmin@pg_sequence.6:20:8:-1
+row -1,-1,-9223372036854775808
+SELECT 1
+> CREATE SEQUENCE s4 AS smallint MAXVALUE 3
+CREATE SEQUENCE
+> SELECT nextval('s4'), nextval('s4'), nextval('s4')
+fields nextval:20:8:-1,nextval:20:8:-1,nextval:20:8:-1
+row 1,2,3
+SELECT 1
+> SELECT nextval('s4')
+fields nextval:20:8:-1
+ERROR 2200H nextval: reached maximum value of sequence "s4" (3)
+> SELECT currval('s4')
+fields currval:20:8:-1
+row 3
+SELECT 1
+> SELECT setval('s4', 0)
+fields setval:20:8:-1
+ERROR 22003 setval: value 0 is out of bounds for sequence "s4" (1..3)
+> SELECT setval('s4', 4)
+fields setval:20:8:-1
+ERROR 22003 setval: value 4 is out of bounds for sequence "s4" (1..3)
+> CREATE SEQUENCE s5 START 7 NO MINVALUE NO MAXVALUE NO CYCLE
+CREATE SEQUENCE
+> SELECT seqstart, seqmax, seqmin, seqcycle FROM pg_sequence WHERE seqrelid = 's5'::regclass
+fields seqstart@pg_sequence.3:20:8:-1,seqmax@pg_sequence.5:20:8:-1,seqmin@pg_sequence.6:20:8:-1,seqcycle@pg_sequence.8:16:1:-1
+row 7,9223372036854775807,1,f
+SELECT 1
+> CREATE SEQUENCE IF NOT EXISTS s5
+NOTICE 42P07 relation "s5" already exists, skipping
+CREATE SEQUENCE
+> CREATE SEQUENCE s5
+ERROR 42P07 relation "s5" already exists
+> CREATE SEQUENCE bad AS text
+ERROR 22023 sequence type must be smallint, integer, or bigint
+> CREATE SEQUENCE bad INCREMENT 0
+ERROR 22023 INCREMENT must not be zero
+> CREATE SEQUENCE bad AS smallint MAXVALUE 40000
+ERROR 22023 MAXVALUE (40000) is out of range for sequence data type smallint
+> CREATE SEQUENCE bad AS integer MINVALUE -3000000000
+ERROR 22023 MINVALUE (-3000000000) is out of range for sequence data type integer
+> CREATE SEQUENCE bad MINVALUE 5 MAXVALUE 5
+ERROR 22023 MINVALUE (5) must be less than MAXVALUE (5)
+> CREATE SEQUENCE bad START 0
+ERROR 22023 START value (0) cannot be less than MINVALUE (1)
+> CREATE SEQUENCE bad START 10 MAXVALUE 5
+ERROR 22023 START value (10) cannot be greater than MAXVALUE (5)
+> CREATE SEQUENCE bad CACHE 0
+ERROR 22023 CACHE (0) must be greater than zero
+> CREATE SEQUENCE bad INCREMENT 1 INCREMENT 2
+ERROR 42601 conflicting or redundant options at 33
+> CREATE SEQUENCE bad SEQUENCE NAME x
+ERROR 42601 invalid sequence option SEQUENCE NAME at 21
+> CREATE SEQUENCE bad OWNED BY x
+ERROR 42601 invalid OWNED BY option
+HINT Specify OWNED BY table.column or OWNED BY NONE.
+> CREATE SEQUENCE bad OWNED BY nosuch.c
+ERROR 42P01 relation "nosuch" does not exist
+> CREATE TABLE t (id int, b text)
+CREATE TABLE
+> CREATE SEQUENCE bad OWNED BY t.nosuch
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> CREATE SEQUENCE t_seq OWNED BY t.id
+CREATE SEQUENCE
+> SELECT classid::regclass, objid::regclass, refobjid::regclass, refobjsubid, deptype FROM pg_depend WHERE objid = 't_seq'::regclass AND refclassid = 'pg_class'::regclass
+fields classid:2205:4:-1,objid:2205:4:-1,refobjid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_class,t_seq,t,1,a
+SELECT 1
+> SELECT pg_get_serial_sequence('t', 'id')
+fields pg_get_serial_sequence:25:-1:-1
+row public.t_seq
+SELECT 1
+> ALTER SEQUENCE t_seq OWNED BY NONE
+ALTER SEQUENCE
+> SELECT count(*) FROM pg_depend WHERE objid = 't_seq'::regclass AND refclassid = 'pg_class'::regclass
+fields count:20:8:-1
+row 0
+SELECT 1
+> ALTER SEQUENCE s1 OWNED BY t.b
+ALTER SEQUENCE
+> SELECT refobjid::regclass, refobjsubid, deptype FROM pg_depend WHERE objid = 's1'::regclass AND refclassid = 'pg_class'::regclass
+fields refobjid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row t,2,a
+SELECT 1
+> ALTER SEQUENCE s1 OWNED BY t.id
+ALTER SEQUENCE
+> SELECT refobjid::regclass, refobjsubid, deptype FROM pg_depend WHERE objid = 's1'::regclass AND refclassid = 'pg_class'::regclass
+fields refobjid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row t,1,a
+SELECT 1
+> CREATE VIEW v AS SELECT 1 AS x
+CREATE VIEW
+> ALTER SEQUENCE s1 OWNED BY v.x
+ALTER SEQUENCE
+> CREATE INDEX ti ON t (id)
+CREATE INDEX
+> ALTER SEQUENCE s1 OWNED BY ti.id
+ERROR 42809 sequence cannot be owned by relation "ti"
+DETAIL This operation is not supported for indexes.
+> ALTER SEQUENCE s1 OWNED BY s2.last_value
+ERROR 42809 sequence cannot be owned by relation "s2"
+DETAIL This operation is not supported for sequences.
+> CREATE SCHEMA o
+CREATE SCHEMA
+> CREATE TABLE o.t (id int)
+CREATE TABLE
+> ALTER SEQUENCE s1 OWNED BY o.t.id
+ERROR 55000 sequence must be in same schema as table it is linked to
+> ALTER SEQUENCE s1 INCREMENT BY 5 MAXVALUE 100
+ALTER SEQUENCE
+> SELECT seqincrement, seqmax FROM pg_sequence WHERE seqrelid = 's1'::regclass
+fields seqincrement@pg_sequence.4:20:8:-1,seqmax@pg_sequence.5:20:8:-1
+row 5,100
+SELECT 1
+> SELECT last_value, is_called FROM s1
+fields last_value@s1.1:20:8:-1,is_called@s1.3:16:1:-1
+row 21,t
+SELECT 1
+> SELECT nextval('s1')
+fields nextval:20:8:-1
+row 26
+SELECT 1
+> ALTER SEQUENCE s1 RESTART
+ALTER SEQUENCE
+> SELECT last_value, is_called FROM s1
+fields last_value@s1.1:20:8:-1,is_called@s1.3:16:1:-1
+row 1,f
+SELECT 1
+> SELECT nextval('s1')
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> ALTER SEQUENCE s1 RESTART WITH 50
+ALTER SEQUENCE
+> SELECT nextval('s1'), nextval('s1')
+fields nextval:20:8:-1,nextval:20:8:-1
+row 50,55
+SELECT 1
+> ALTER SEQUENCE s1 START 3 RESTART WITH 200
+ERROR 22023 RESTART value (200) cannot be greater than MAXVALUE (100)
+> ALTER SEQUENCE s1 MAXVALUE 10
+ERROR 22023 RESTART value (55) cannot be greater than MAXVALUE (10)
+> ALTER SEQUENCE s1 AS smallint
+ALTER SEQUENCE
+> SELECT seqtypid::regtype, seqmax, seqmin FROM pg_sequence WHERE seqrelid = 's1'::regclass
+fields seqtypid:2206:4:-1,seqmax@pg_sequence.5:20:8:-1,seqmin@pg_sequence.6:20:8:-1
+row smallint,100,1
+SELECT 1
+> ALTER SEQUENCE s1 AS int
+ALTER SEQUENCE
+> SELECT seqtypid::regtype, seqmax, seqmin FROM pg_sequence WHERE seqrelid = 's1'::regclass
+fields seqtypid:2206:4:-1,seqmax@pg_sequence.5:20:8:-1,seqmin@pg_sequence.6:20:8:-1
+row integer,100,1
+SELECT 1
+> ALTER SEQUENCE nosuch RESTART
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER SEQUENCE IF EXISTS nosuch RESTART
+NOTICE 00000 relation "nosuch" does not exist, skipping
+ALTER SEQUENCE
+> ALTER SEQUENCE t RESTART
+ERROR 42809 "t" is not a sequence
+> SELECT nextval('t')
+fields nextval:20:8:-1
+ERROR 42809 "t" is not a sequence
+> SELECT nextval('nosuch')
+ERROR 42P01 relation "nosuch" does not exist at 16
+> SELECT currval('s3')
+fields currval:20:8:-1
+ERROR 55000 currval of sequence "s3" is not yet defined in this session
+> SELECT setval('s3', 5)
+fields setval:20:8:-1
+ERROR 22003 setval: value 5 is out of bounds for sequence "s3" (-9223372036854775808..-1)
+> SELECT nextval('s3'), currval('s3')
+fields nextval:20:8:-1,currval:20:8:-1
+row -1,-1
+SELECT 1
+> SELECT setval('s1', NULL)
+fields setval:20:8:-1
+row NULL
+SELECT 1
+> SELECT nextval(NULL::regclass)
+fields nextval:20:8:-1
+row NULL
+SELECT 1
+> SELECT setval('s1', 30, NULL)
+fields setval:20:8:-1
+row NULL
+SELECT 1
+> SELECT nextval('s1'::regclass), nextval('public.s1'::text)
+fields nextval:20:8:-1,nextval:20:8:-1
+row 60,65
+SELECT 1
+> SELECT pg_catalog.setval('public.s1', 1, false)
+fields setval:20:8:-1
+row 1
+SELECT 1
+> SELECT * FROM s1
+fields last_value@s1.1:20:8:-1,log_cnt@s1.2:20:8:-1,is_called@s1.3:16:1:-1
+row 1,0,f
+SELECT 1
+> CREATE TABLE ser (id serial, b bigserial)
+CREATE TABLE
+> SELECT nextval('ser_id_seq'), nextval('ser_b_seq'), lastval()
+fields nextval:20:8:-1,nextval:20:8:-1,lastval:20:8:-1
+row 1,1,1
+SELECT 1
+> SELECT sequencename, start_value, min_value, max_value, increment_by, cycle, cache_size, last_value FROM pg_sequences ORDER BY 1
+fields sequencename@pg_sequences.2:19:64:-1,start_value@pg_sequences.5:20:8:-1,min_value@pg_sequences.6:20:8:-1,max_value@pg_sequences.7:20:8:-1,increment_by@pg_sequences.8:20:8:-1,cycle@pg_sequences.9:16:1:-1,cache_size@pg_sequences.10:20:8:-1,last_value@pg_sequences.11:20:8:-1
+row s1,1,1,100,5,f,1,NULL
+row s2,5,-3,5,-2,t,4,-1
+row s3,-1,-9223372036854775808,-1,-1,f,1,-1
+row s4,1,1,3,1,f,1,3
+row s5,7,1,9223372036854775807,1,f,1,NULL
+row ser_b_seq,1,1,9223372036854775807,1,f,1,1
+row ser_id_seq,1,1,2147483647,1,f,1,1
+row t_seq,1,1,9223372036854775807,1,f,1,NULL
+SELECT 8
+> BEGIN
+BEGIN
+> SELECT nextval('s5')
+fields nextval:20:8:-1
+row 7
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT currval('s5'), nextval('s5')
+fields currval:20:8:-1,nextval:20:8:-1
+row 7,8
+SELECT 1
+> BEGIN
+BEGIN
+> CREATE SEQUENCE s6
+CREATE SEQUENCE
+> SELECT nextval('s6')
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT nextval('s6')
+ERROR 42P01 relation "s6" does not exist at 16
+> BEGIN
+BEGIN
+> ALTER SEQUENCE s2 RESTART
+ALTER SEQUENCE
+> SELECT nextval('s2'), nextval('s2')
+fields nextval:20:8:-1,nextval:20:8:-1
+row 5,3
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT nextval('s2'), last_value, log_cnt, is_called FROM s2
+fields nextval:20:8:-1,last_value@s2.1:20:8:-1,log_cnt@s2.2:20:8:-1,is_called@s2.3:16:1:-1
+row -3,-1,1,t
+SELECT 1
+> DISCARD SEQUENCES
+DISCARD SEQUENCES
+> SELECT lastval()
+fields lastval:20:8:-1
+ERROR 55000 lastval is not yet defined in this session
+> SELECT currval('s5')
+fields currval:20:8:-1
+ERROR 55000 currval of sequence "s5" is not yet defined in this session
+> DROP SEQUENCE s5
+DROP SEQUENCE
+> SELECT lastval()
+fields lastval:20:8:-1
+ERROR 55000 lastval is not yet defined in this session

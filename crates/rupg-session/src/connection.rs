@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use rupg_analyze::{Message, Params};
 use rupg_catalog::{Catalog, database};
 use rupg_common::{Error, SqlState};
-use rupg_func::BackendState;
+use rupg_func::{BackendState, Sequences};
 pub use rupg_func::{Client, Ssl};
 use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
@@ -310,6 +310,8 @@ pub struct Connection {
     lease: Option<Lease>,
     /// The row of the session in the table of the sessions of the store.
     activity: Activity,
+    /// The cache of the sequences of the session, with the state of `currval` and `lastval`.
+    sequences: RefCell<Sequences>,
 }
 
 /// The OID of the bootstrap superuser, which owns the objects of initdb.
@@ -340,6 +342,7 @@ impl Connection {
             store: Arc::new(Store::new()),
             lease: None,
             activity: Activity::default(),
+            sequences: RefCell::new(Sequences::default()),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -374,6 +377,7 @@ impl Connection {
             self.catalog(),
         )
         .with_activity(&self.activity, &self.store)
+        .with_sequences(&self.sequences)
         .with_statements(&self.statements)
         .with_portals(&self.portals)
         .with_cancel(&self.cancel)
@@ -439,6 +443,8 @@ impl Connection {
                         _ => CommandTag::AlterTable,
                     },
                     Node::AlterOwnerStmt(_) => CommandTag::AlterSchema,
+                    Node::CreateSeqStmt(_) => CommandTag::CreateSequence,
+                    Node::AlterSeqStmt(_) => CommandTag::AlterSequence,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -765,6 +771,9 @@ impl Connection {
             if matches!(outcome, Done::Tag(CommandTag::DiscardAll)) {
                 self.statements.deallocate_all();
                 self.portals.clear();
+            }
+            if matches!(outcome, Done::Tag(CommandTag::DiscardAll | CommandTag::DiscardSequences)) {
+                self.sequences.get_mut().discard();
             }
             if i + 1 == statements.len() {
                 if many {
@@ -2750,6 +2759,12 @@ mod tests {
     #[test]
     fn alter_table() {
         big_stack(|| script(include_str!("connection/alter_table.test")));
+    }
+
+    /// `CREATE SEQUENCE` and `ALTER SEQUENCE` with their options and their errors, `OWNED BY`, and `nextval`, `currval`, `lastval` and `setval` with the cache of the session. The script checks that a value stays used after a rollback, that a rollback of `ALTER SEQUENCE` gives back the old row, and that `DISCARD SEQUENCES` drops the state of the session. `connection/sequence.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sequence() {
+        big_stack(|| script(include_str!("connection/sequence.test")));
     }
 
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.

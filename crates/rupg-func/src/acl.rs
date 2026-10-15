@@ -740,10 +740,21 @@ pub fn lock_table_allowed(relid: u32, role: u32, mode: i32, session: &dyn Sessio
     Ok(class_check(relid, role, mask, session)?.unwrap_or(false))
 }
 
+/// The privileges that `nextval` needs: `USAGE` or `UPDATE`.
+pub(crate) const USAGE_UPDATE: u32 = ACL_USAGE | ACL_UPDATE;
+/// The privileges that `currval` and `lastval` need: `SELECT` or `USAGE`.
+pub(crate) const SELECT_USAGE: u32 = ACL_SELECT | ACL_USAGE;
+/// The privilege that `setval` needs.
+pub(crate) const UPDATE: u32 = ACL_UPDATE;
+
 /// `pg_class_aclcheck` for `SELECT` or `USAGE` on a sequence as the current user, as `pg_get_sequence_data` does it.
 pub(crate) fn sequence_readable(relid: u32, session: &dyn Session) -> Result<bool> {
-    let check = class_check(relid, current_user(session), ACL_SELECT | ACL_USAGE, session)?;
-    Ok(check.unwrap_or(false))
+    sequence_allowed(relid, SELECT_USAGE, session)
+}
+
+/// `pg_class_aclcheck` on a sequence as the current user: true when the user has one of the privileges of `mask`.
+pub(crate) fn sequence_allowed(relid: u32, mask: u32, session: &dyn Session) -> Result<bool> {
+    Ok(class_check(relid, current_user(session), mask, session)?.unwrap_or(false))
 }
 
 /// `has_sequence_privilege`: the privileges come before the relation. A relation that is not a sequence is an error.

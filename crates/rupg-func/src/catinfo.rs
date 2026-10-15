@@ -1,4 +1,4 @@
-//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_sequence_last_value`, `pg_get_sequence_data`, `pg_get_serial_sequence`, the functions of the partition trees, `pg_relation_is_publishable`, and the comments of `obj_description`, `col_description` and `shobj_description`.
+//! The catalog information functions: the `pg_*_is_visible` functions, `pg_get_userbyid`, `pg_my_temp_schema`, `pg_is_other_temp_schema`, `pg_get_sequence_data`, `pg_get_serial_sequence`, the functions of the partition trees, `pg_relation_is_publishable`, and the comments of `obj_description`, `col_description` and `shobj_description`.
 //!
 //! The visibility functions are a port of the `*IsVisible` functions of `namespace.c`. Each one gives null for an OID that no object has, as the `is_missing` form of PostgreSQL does.
 
@@ -127,27 +127,7 @@ fn is_other_temp_schema(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(temp))
 }
 
-/// `pg_sequence_last_value(regclass)`: the last value of a sequence when `is_called` is true, else null. A session cannot call `nextval` yet, so each sequence keeps `is_called` false and the value is null. The errors are those of `init_sequence`.
-fn sequence_last_value(call: &Call<'_>, args: &[Value]) -> Result<Value> {
-    let oid = oid_arg(args, 0)?;
-    let Some((name, _)) = reg::class_name(oid, call.session) else {
-        return Err(Error::internal(format!("could not open relation with OID {oid}")));
-    };
-    let sequence = call
-        .session
-        .catalog()
-        .and_then(|c| c.relation(oid))
-        .is_some_and(|r| r.kind == RelKind::Sequence);
-    if !sequence {
-        return Err(Error::new(
-            SqlState::WRONG_OBJECT_TYPE,
-            format!("\"{name}\" is not a sequence"),
-        ));
-    }
-    Ok(Value::Null)
-}
-
-/// `pg_get_sequence_data(regclass)`: the last value, `is_called` and the LSN of the page of a sequence, which `pg_dump` reads. A session cannot call `nextval` yet, so the last value is the first value and `is_called` is false. rupg keeps no pages with an LSN, so the LSN is 0/00000000. Each field is null for an OID that no relation has, for a relation that is not a sequence, and for a sequence on which the current user has no `SELECT` and no `USAGE`.
+/// `pg_get_sequence_data(regclass)`: the last value, `is_called` and the LSN of the page of a sequence, which `pg_dump` reads. rupg keeps no pages with an LSN, so the LSN is 0/00000000. Each field is null for an OID that no relation has, for a relation that is not a sequence, and for a sequence on which the current user has no `SELECT` and no `USAGE`.
 fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let relid = oid_arg(args, 0)?;
     let sequence = call
@@ -158,7 +138,8 @@ fn get_sequence_data(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         .and_then(|r| r.sequence.as_ref());
     let values = match sequence {
         Some(info) if crate::acl::sequence_readable(relid, call.session)? => {
-            vec![Value::Int8(info.start), Value::Bool(false), Value::Int8(0)]
+            let row = crate::sequence::row(info, call.session);
+            vec![Value::Int8(row.last_value), Value::Bool(row.is_called), Value::Int8(0)]
         }
         _ => vec![Value::Null; 3],
     };
@@ -235,7 +216,6 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         // A session has no temporary schema yet, so `myTempNamespace` is 0.
         "pg_my_temp_schema" => |_, _| Ok(Value::Oid(0)),
         "pg_is_other_temp_schema" => is_other_temp_schema,
-        "pg_sequence_last_value" => sequence_last_value,
         "pg_get_sequence_data" => get_sequence_data,
         "pg_partition_root" => partition_root,
         "pg_relation_is_publishable" => relation_is_publishable,

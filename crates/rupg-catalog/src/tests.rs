@@ -57,6 +57,8 @@ fn serial_sequence(namespace: u32, name: &str) -> (NewRelation, SequenceInfo) {
         min: 1,
         cache: 1,
         cycle: false,
+        file: 0,
+        data: SequenceData::new(1),
     };
     (new, info)
 }

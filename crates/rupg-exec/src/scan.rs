@@ -284,7 +284,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     })
 }
 
-/// The rows of a relation of the user. A session cannot add rows yet, so a table has no rows. A sequence has its one row, with the start value as `last_value`, because a session cannot call `nextval` yet.
+/// The rows of a relation of the user. A session cannot add rows yet, so a table has no rows. A sequence has its one row, the row of its file.
 fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
     let relation = session
         .catalog()
@@ -292,7 +292,12 @@ fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         .ok_or_else(|| Error::internal(format!("no relation has the OID {oid}")))?;
     Ok(match &relation.sequence {
         Some(sequence) => {
-            vec![vec![Value::Int8(sequence.start), Value::Int8(0), Value::Bool(false)]]
+            let row = session.sequence_row(sequence.file).unwrap_or(sequence.data);
+            vec![vec![
+                Value::Int8(row.last_value),
+                Value::Int8(row.log_cnt),
+                Value::Bool(row.is_called),
+            ]]
         }
         None => Vec::new(),
     })

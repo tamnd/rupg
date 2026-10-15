@@ -570,6 +570,9 @@ impl Connection {
             };
             match done {
                 Done::Tag(done) => {
+                    if matches!(done, CommandTag::DiscardAll | CommandTag::DiscardSequences) {
+                        self.sequences.get_mut().discard();
+                    }
                     if done == CommandTag::DiscardAll {
                         self.statements.deallocate_all();
                         self.portals.clear();

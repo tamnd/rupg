@@ -9,6 +9,7 @@ mod fkey;
 mod function;
 mod index;
 mod lock;
+mod sequence;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -60,6 +61,8 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateSchemaStmt(_)
             | Node::ViewStmt(_)
             | Node::CommentStmt(_)
+            | Node::CreateSeqStmt(_)
+            | Node::AlterSeqStmt(_)
     ) || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype))
         || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA)
@@ -110,6 +113,8 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::DropStmt(drop) => definer.drop(drop),
         Node::AlterTableStmt(alter) => definer.alter_table(alter),
         Node::AlterOwnerStmt(alter) => definer.alter_owner(alter),
+        Node::CreateSeqStmt(create) => definer.create_sequence(create),
+        Node::AlterSeqStmt(alter) => definer.alter_sequence(alter),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
@@ -158,6 +163,10 @@ impl Env for SchemaEnv<'_> {
 
     fn allow_system_table_mods(&self) -> bool {
         self.env.allow_system_table_mods()
+    }
+
+    fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
+        self.env.sequence_row(file)
     }
 }
 
