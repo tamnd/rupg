@@ -12,6 +12,10 @@ pub mod database;
 pub mod names;
 pub mod toast;
 
+mod drop;
+
+pub use drop::{Refusal, Target, flag};
+
 use std::collections::BTreeMap;
 
 use rupg_common::{Error, Result, SqlState};

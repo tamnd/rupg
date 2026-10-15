@@ -15,7 +15,7 @@ use rupg_pgcatalog::builtin;
 use rupg_platform::Clock;
 use rupg_platform::os::OsClock;
 use rupg_sql::Severity;
-use rupg_sql::nodes::{LockStmt, Node};
+use rupg_sql::nodes::{LockStmt, Node, ObjectType};
 use rupg_wire::{
     CancelKey, CommandTag, Field, Frontend, Level, OutBuf, Portals, ProtocolError, Session,
     Statements,
@@ -392,6 +392,15 @@ impl Connection {
         text: &str,
         notices: &mut Vec<Notice>,
     ) -> Result<Done, Error> {
+        if let Node::DropStmt(stmt) = node
+            && stmt.concurrent
+            && self.transaction.in_block()
+        {
+            return Err(Error::new(
+                SqlState::ACTIVE_SQL_TRANSACTION,
+                "DROP INDEX CONCURRENTLY cannot run inside a transaction block",
+            ));
+        }
         if self.lease.is_none() {
             self.lease = Some(self.store.lease(self.database_oid, &self.cancel)?);
         }
@@ -412,6 +421,13 @@ impl Connection {
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::CommentStmt(_) => CommandTag::Comment,
+                    Node::DropStmt(stmt) => match stmt.removeType {
+                        ObjectType::OBJECT_SCHEMA => CommandTag::DropSchema,
+                        ObjectType::OBJECT_VIEW => CommandTag::DropView,
+                        ObjectType::OBJECT_INDEX => CommandTag::DropIndex,
+                        ObjectType::OBJECT_SEQUENCE => CommandTag::DropSequence,
+                        _ => CommandTag::DropTable,
+                    },
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -1035,6 +1051,11 @@ mod tests {
 
     /// One short line for each message. With `full`, a `RowDescription` is a line `fields` with the name, the table OID, the column number, the type, the size and the typmod of each column, and else a line `columns` with the names.
     fn render(out: &OutBuf, full: bool) -> Vec<String> {
+        render_details(out, full, false)
+    }
+
+    /// [`render`], and with `details` a line `DETAIL` and a line `HINT` after an error or a notice that has them.
+    fn render_details(out: &OutBuf, full: bool, details: bool) -> Vec<String> {
         let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
         let field = |fields: &[(u8, &[u8])], code: u8| {
             fields.iter().find(|(c, _)| *c == code).map_or(String::new(), |(_, v)| text(v))
@@ -1109,6 +1130,12 @@ mod tests {
                     let context = field(&fields, b'W');
                     if !context.is_empty() {
                         line.push_str(&format!(" ({context})"));
+                    }
+                    for (code, word) in [(b'D', "DETAIL"), (b'H', "HINT")] {
+                        let value = field(&fields, code);
+                        if details && !value.is_empty() {
+                            line.push_str(&format!("\n{word} {value}"));
+                        }
                     }
                     line
                 }
@@ -1710,23 +1737,35 @@ mod tests {
         big_stack(catalog_rows_cases);
     }
 
-    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database.
+    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database. After a line `!details`, an error or a notice also has its detail and its hint.
     fn script(text: &str) {
         let (mut c, _) = connect();
-        let starts = |l: &str| ["> ", "P ", "X ", "D ", "C "].iter().any(|p| l.starts_with(p));
+        let starts = |l: &str| {
+            l == "!details" || ["> ", "P ", "X ", "D ", "C "].iter().any(|p| l.starts_with(p))
+        };
+        let mut details = false;
         let mut lines = text.lines().peekable();
         while let Some(line) = lines.next() {
             assert!(starts(line), "not a statement: {line}");
+            if line == "!details" {
+                details = true;
+                continue;
+            }
             let mut want = Vec::new();
             while let Some(next) = lines.next_if(|l| !starts(l)) {
                 want.push(next);
             }
-            assert_eq!(script_lines(&mut c, line), want, "{line}");
+            assert_eq!(script_details(&mut c, line, details), want, "{line}");
         }
     }
 
     /// The lines of a statement of a script. A line `> sql` is a simple query. A line `P name|sql` is `Parse` of a statement and `Sync`, and a line `X name|value|value` is `Bind` of the statement to the unnamed portal with values in the text format, `Execute` and `Sync`. A line `D S name` or `D P name` is `Describe` of a statement or a portal and `Sync`, and a line `C S name` or `C P name` is `Close` and `Sync`.
     fn script_lines(c: &mut Connection, line: &str) -> Vec<String> {
+        script_details(c, line, false)
+    }
+
+    /// [`script_lines`], with the details of [`render_details`] when `details` is true.
+    fn script_details(c: &mut Connection, line: &str, details: bool) -> Vec<String> {
         let target = |rest: &str| {
             let (target, name) = rest.split_once(' ').unwrap();
             (target.chars().next().unwrap(), name.to_string())
@@ -1752,7 +1791,7 @@ mod tests {
             }
             (_, sql) => query(sql),
         };
-        render(&exchange(c, &input), true)
+        render_details(&exchange(c, &input), true, details)
             .into_iter()
             .filter(|l| !l.starts_with("ready ") && l != "ParseComplete" && l != "BindComplete")
             .map(|l| match l.strip_prefix("fields ") {
@@ -1841,6 +1880,12 @@ mod tests {
     #[test]
     fn cursors() {
         big_stack(|| script(include_str!("connection/cursors.test")));
+    }
+
+    /// `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE` and `DROP SCHEMA`: the errors of the lookup and of the checks, the objects that depend on others with `RESTRICT` and with `CASCADE` in the detail of the error and of the notice, the names with and without the schema, the rows of the catalogs after the removal and a removal in a block that rolls back. `connection/drop.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn drop_objects() {
+        big_stack(|| script(include_str!("connection/drop.test")));
     }
 
     /// `PREPARE`, `EXECUTE` and `DEALLOCATE`: the types of the parameters, the coercion of the values of `EXECUTE` and their errors, the statements of `Parse` that `EXECUTE` runs, the errors in a failed transaction, the count of the plans, a query string with more than one statement, the three statements in a `Parse`, and a statement of `Parse` that runs `EXECUTE` of itself. `connection/sql_prepare.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -504,3 +504,48 @@ fn toast_decision() {
         assert_eq!(needs_toast(&shapes), toast, "{name}");
     }
 }
+
+#[test]
+fn deletions_and_removal() {
+    let mut cat = Catalog::new();
+    let t = cat.create_table(table(PUBLIC, "t", &[("a", INT4, -1), ("b", TEXT, -1)])).unwrap();
+    cat.add_default(t, 1, "1".to_string(), &[]).unwrap();
+    let (key, constraint) =
+        cat.create_index(index(t, None, &[("a", 1, INT4)], Some(ConKind::Primary))).unwrap();
+    let constraint = constraint.unwrap();
+    cat.set_description(ObjRef::column(t, 2), Some("b".to_string()));
+    let me = ObjRef::new(PG_CLASS, t);
+    let row_type = cat.relation(t).unwrap().row_type;
+
+    // The statement names the table, so the walk ends with it, after the objects that depend on it.
+    let targets = cat.deletions(&[me]).unwrap();
+    let last = targets.last().unwrap();
+    assert_eq!((last.object, last.flags, last.dependee), (me, flag::ORIGINAL, None));
+    for object in [ObjRef::new(PG_CLASS, key), ObjRef::new(PG_CONSTRAINT, constraint)] {
+        let target = targets.iter().find(|x| x.object == object).unwrap();
+        assert_ne!(target.flags & (flag::AUTO | flag::INTERNAL), 0, "{object:?}");
+    }
+
+    // A part of an object goes only with the object.
+    assert_eq!(
+        cat.deletions(&[ObjRef::new(PG_CLASS, key)]),
+        Err(Refusal::Owned {
+            object: ObjRef::new(PG_CLASS, key),
+            owner: ObjRef::new(PG_CONSTRAINT, constraint)
+        })
+    );
+    assert_eq!(
+        cat.deletions(&[ObjRef::new(PG_TYPE, row_type)]),
+        Err(Refusal::Owned { object: ObjRef::new(PG_TYPE, row_type), owner: me })
+    );
+    let pg_catalog = ObjRef::new(PG_NAMESPACE, 11);
+    assert_eq!(cat.deletions(&[pg_catalog]), Err(Refusal::Pinned(pg_catalog)));
+
+    cat.remove(&targets).unwrap();
+    assert_eq!(cat.relations().count(), 0);
+    assert_eq!(cat.types().count(), 0);
+    assert_eq!(cat.constraints().count(), 0);
+    assert_eq!(cat.defaults().count(), 0);
+    assert!(cat.depends().is_empty());
+    assert_eq!(cat.descriptions().count(), 0);
+}

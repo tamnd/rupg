@@ -1,0 +1,439 @@
+//! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE` and `DROP SCHEMA`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
+
+use rupg_catalog::{
+    FIRST_NORMAL_OID, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
+    PG_REWRITE, PG_TYPE, Refusal, RelKind, Target, flag, is_pinned,
+};
+use rupg_common::{Error, Result, SqlState};
+use rupg_pgcatalog::builtin::{self, Named};
+use rupg_sql::nodes::{DropBehavior, DropStmt, Node, ObjectType, RangeVar};
+use rupg_sql::{Category, keyword};
+use rupg_types::{TypeInfo, format_type};
+
+use super::comment::{name_list, not_owner, range_var};
+use super::{Definer, Found, PG_TOAST_NAMESPACE, not_yet, qualified, relname};
+
+/// `MAX_REPORTED_DEPS`: the number of objects that the detail of the report names.
+const MAX_REPORTED: usize = 100;
+
+/// A line of `dropmsgstringarray`: the messages of `DropErrorMsgNonExistent` and `DropErrorMsgWrongType` for one `relkind`.
+struct Kind {
+    code: u8,
+    missing_state: SqlState,
+    word: &'static str,
+    article: &'static str,
+    hint: &'static str,
+}
+
+/// `dropmsgstringarray`, without the kinds that rupg does not have.
+const KINDS: [Kind; 4] = [
+    Kind {
+        code: b'r',
+        missing_state: SqlState::UNDEFINED_TABLE,
+        word: "table",
+        article: "a table",
+        hint: "Use DROP TABLE to remove a table.",
+    },
+    Kind {
+        code: b'S',
+        missing_state: SqlState::UNDEFINED_TABLE,
+        word: "sequence",
+        article: "a sequence",
+        hint: "Use DROP SEQUENCE to remove a sequence.",
+    },
+    Kind {
+        code: b'v',
+        missing_state: SqlState::UNDEFINED_TABLE,
+        word: "view",
+        article: "a view",
+        hint: "Use DROP VIEW to remove a view.",
+    },
+    Kind {
+        code: b'i',
+        missing_state: SqlState::UNDEFINED_OBJECT,
+        word: "index",
+        article: "an index",
+        hint: "Use DROP INDEX to remove an index.",
+    },
+];
+
+/// The line of [`KINDS`] for a `relkind`. A partitioned table counts as a table and a partitioned index as an index.
+fn kind(code: u8) -> Option<&'static Kind> {
+    let code = match code {
+        b'p' => b'r',
+        b'I' => b'i',
+        code => code,
+    };
+    KINDS.iter().find(|k| k.code == code)
+}
+
+/// The word of `get_relkind_objtype` in the error of `aclcheck_error` with `ACLCHECK_NOT_OWNER`.
+fn owner_word(code: u8) -> &'static str {
+    match code {
+        b'i' | b'I' => "index",
+        b'S' => "sequence",
+        b'v' => "view",
+        b'm' => "materialized view",
+        b'c' => "type",
+        b'f' => "foreign table",
+        _ => "table",
+    }
+}
+
+/// The word of `getRelationDescription` for a `relkind`.
+fn relation_word(code: u8) -> &'static str {
+    match code {
+        b'i' => "index",
+        b'S' => "sequence",
+        b't' => "toast table",
+        b'v' => "view",
+        b'm' => "materialized view",
+        b'c' => "composite type",
+        b'f' => "foreign table",
+        b'p' => "partitioned table",
+        b'I' => "partitioned index",
+        _ => "table",
+    }
+}
+
+/// `quote_identifier` of `ruleutils.c`: the name in double quotes unless it is a simple name in lower case that is not a key word, or that is an unreserved key word.
+fn quote_identifier(name: &str) -> String {
+    let simple = name.bytes().next().is_some_and(|c| c.is_ascii_lowercase() || c == b'_')
+        && name.bytes().all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == b'_')
+        && keyword(name).is_none_or(|k| k.category == Category::Unreserved);
+    if simple { name.to_owned() } else { format!("\"{}\"", name.replace('"', "\"\"")) }
+}
+
+/// The error for a built-in object that is not pinned, which rupg cannot remove.
+fn builtin_object() -> Error {
+    not_yet("DROP of a built-in object", None)
+}
+
+impl Definer<'_, '_> {
+    /// `ExecDropStmt` for the kinds of objects that rupg can remove. The caller runs `PreventInTransactionBlock` for `DROP INDEX CONCURRENTLY`.
+    pub(super) fn drop(&mut self, stmt: &DropStmt) -> Result<()> {
+        let objects = match stmt.removeType {
+            ObjectType::OBJECT_SCHEMA => self.find_schemas(stmt)?,
+            ObjectType::OBJECT_TABLE
+            | ObjectType::OBJECT_VIEW
+            | ObjectType::OBJECT_INDEX
+            | ObjectType::OBJECT_SEQUENCE => self.find_relations(stmt)?,
+            _ => return Err(not_yet("DROP of this kind of object", None)),
+        };
+        self.perform(&objects, stmt.behavior == DropBehavior::DROP_CASCADE)
+    }
+
+    /// The relations of `RemoveRelations`, with the checks of `RangeVarCallbackForDropRelation`.
+    fn find_relations(&mut self, stmt: &DropStmt) -> Result<Vec<ObjRef>> {
+        if stmt.concurrent {
+            if stmt.objects.len() != 1 {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "DROP INDEX CONCURRENTLY does not support dropping multiple objects",
+                ));
+            }
+            if stmt.behavior == DropBehavior::DROP_CASCADE {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "DROP INDEX CONCURRENTLY does not support CASCADE",
+                ));
+            }
+        }
+        let expected = match stmt.removeType {
+            ObjectType::OBJECT_INDEX => &KINDS[3],
+            ObjectType::OBJECT_SEQUENCE => &KINDS[1],
+            ObjectType::OBJECT_VIEW => &KINDS[2],
+            _ => &KINDS[0],
+        };
+        let mut objects = Vec::new();
+        for item in stmt.objects.iter().flatten() {
+            let rv = range_var(&name_list(Some(item)))?;
+            let Some(found) = self.find_relation(&rv)? else {
+                self.missing_relation(&rv, expected, stmt.missing_ok)?;
+                continue;
+            };
+            let name = relname(&rv);
+            let code = self.kind_of(found);
+            if kind(code).is_none_or(|k| k.code != expected.code) {
+                let error = Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("\"{name}\" is not {}", expected.article),
+                );
+                return Err(match kind(code) {
+                    Some(actual) => error.with_hint(actual.hint),
+                    None => error,
+                });
+            }
+            let (owner, namespace) = match found {
+                Found::User(oid) => {
+                    self.catalog.relation(oid).map_or((0, 0), |r| (r.owner, r.namespace))
+                }
+                Found::Builtin(row) => (row.owner, row.namespace),
+            };
+            if !self.is_superuser()
+                && owner != self.user
+                && self.schema_owner(namespace) != Some(self.user)
+            {
+                return Err(not_owner(owner_word(code), name));
+            }
+            if self.is_system(found) && !self.an.env.allow_system_table_mods() {
+                return Err(Error::new(
+                    SqlState::INSUFFICIENT_PRIVILEGE,
+                    format!("permission denied: \"{name}\" is a system catalog"),
+                ));
+            }
+            match found {
+                Found::User(oid) if oid >= FIRST_NORMAL_OID => {
+                    objects.push(ObjRef::new(PG_CLASS, oid));
+                }
+                _ => return Err(builtin_object()),
+            }
+        }
+        Ok(objects)
+    }
+
+    /// `RangeVarGetRelidExtended` with `RVR_MISSING_OK`: the relation of a name, or `None` when the schema or the relation does not exist.
+    fn find_relation(&self, rv: &RangeVar) -> Result<Option<Found>> {
+        if let Some(catalog) = rv.catalogname.as_deref()
+            && catalog != self.an.env.database()
+        {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("cross-database references are not implemented: \"{}\"", qualified(rv)),
+            ));
+        }
+        let name = relname(rv);
+        Ok(match rv.schemaname.as_deref() {
+            Some(schema) => self.an.schema(schema).and_then(|ns| self.relation_in(ns, name)),
+            None => self.an.path.iter().find_map(|&ns| self.relation_in(ns, name)),
+        })
+    }
+
+    /// `DropErrorMsgNonExistent`: the error, or with `IF EXISTS` the notice, for a name that gives no relation.
+    fn missing_relation(&mut self, rv: &RangeVar, expected: &Kind, missing_ok: bool) -> Result<()> {
+        let (state, message) = match rv.schemaname.as_deref() {
+            Some(schema) if self.an.schema(schema).is_none() => {
+                (SqlState::UNDEFINED_SCHEMA, format!("schema \"{schema}\" does not exist"))
+            }
+            _ => (
+                expected.missing_state,
+                format!("{} \"{}\" does not exist", expected.word, relname(rv)),
+            ),
+        };
+        if !missing_ok {
+            return Err(Error::new(state, message));
+        }
+        self.notice(SqlState::SUCCESSFUL_COMPLETION, format!("{message}, skipping"));
+        Ok(())
+    }
+
+    /// The schemas of `RemoveObjects`, with the check of `check_object_ownership`.
+    fn find_schemas(&mut self, stmt: &DropStmt) -> Result<Vec<ObjRef>> {
+        let mut objects = Vec::new();
+        for item in stmt.objects.iter().flatten() {
+            let name = match item {
+                Node::String(name) => name.as_ref(),
+                _ => "",
+            };
+            let oid = match self.catalog.schema_by_name(name) {
+                Some(schema) => Some(schema.oid),
+                None => {
+                    builtin::named(Named::Namespace).iter().find(|n| n.name == name).map(|n| n.oid)
+                }
+            };
+            let Some(oid) = oid else {
+                let message = format!("schema \"{name}\" does not exist");
+                if !stmt.missing_ok {
+                    return Err(Error::new(SqlState::UNDEFINED_SCHEMA, message));
+                }
+                self.notice(SqlState::SUCCESSFUL_COMPLETION, format!("{message}, skipping"));
+                continue;
+            };
+            if !self.is_superuser() && self.schema_owner(oid) != Some(self.user) {
+                return Err(not_owner("schema", name));
+            }
+            let object = ObjRef::new(PG_NAMESPACE, oid);
+            if oid < FIRST_NORMAL_OID && !is_pinned(object) {
+                return Err(builtin_object());
+            }
+            objects.push(object);
+        }
+        Ok(objects)
+    }
+
+    /// `performMultipleDeletions`: the walk of the dependencies, the report and the removal.
+    fn perform(&mut self, objects: &[ObjRef], cascade: bool) -> Result<()> {
+        let targets = match self.catalog.deletions(objects) {
+            Ok(targets) => targets,
+            Err(Refusal::Pinned(object)) => {
+                return Err(Error::new(
+                    SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+                    format!(
+                        "cannot drop {} because it is required by the database system",
+                        self.describe(object)
+                    ),
+                ));
+            }
+            Err(Refusal::Owned { object, owner }) => {
+                let owner = self.describe(owner);
+                return Err(Error::new(
+                    SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+                    format!("cannot drop {} because {owner} requires it", self.describe(object)),
+                )
+                .with_hint(format!("You can drop {owner} instead.")));
+            }
+        };
+        self.report(&targets, cascade, objects)?;
+        self.catalog.remove(&targets)
+    }
+
+    /// `reportDependentObjects`: the error of `RESTRICT` when other objects depend on the objects, or the notice of `CASCADE` with the objects that also go. The objects that go by an automatic, an internal or an extension dependency are not in the report.
+    fn report(&mut self, targets: &[Target], cascade: bool, objects: &[ObjRef]) -> Result<()> {
+        let mut lines = Vec::new();
+        let mut hidden = 0;
+        let mut ok = true;
+        for target in targets.iter().rev() {
+            if target.flags & (flag::ORIGINAL | flag::SUBOBJECT) != 0
+                || target.flags & (flag::AUTO | flag::INTERNAL | flag::EXTENSION) != 0
+            {
+                continue;
+            }
+            let line = if cascade {
+                Some(format!("drop cascades to {}", self.describe(target.object)))
+            } else {
+                ok = false;
+                target.dependee.map(|other| {
+                    format!("{} depends on {}", self.describe(target.object), self.describe(other))
+                })
+            };
+            match line {
+                Some(line) if lines.len() < MAX_REPORTED => lines.push(line),
+                _ => hidden += 1,
+            }
+        }
+        let shown = lines.len();
+        let mut detail = lines.join("\n");
+        if hidden > 0 {
+            let s = if hidden == 1 { "" } else { "s" };
+            detail.push_str(&format!("\nand {hidden} other object{s} (see server log for list)"));
+        }
+        if !ok {
+            let message = match objects {
+                [object] => format!(
+                    "cannot drop {} because other objects depend on it",
+                    self.describe(*object)
+                ),
+                _ => "cannot drop desired object(s) because other objects depend on them".into(),
+            };
+            return Err(Error::new(SqlState::DEPENDENT_OBJECTS_STILL_EXIST, message)
+                .with_detail(detail)
+                .with_hint("Use DROP ... CASCADE to drop the dependent objects too."));
+        }
+        if shown > 1 {
+            let count = shown + hidden;
+            let s = if count == 1 { "" } else { "s" };
+            let notice = Error::new(
+                SqlState::SUCCESSFUL_COMPLETION,
+                format!("drop cascades to {count} other object{s}"),
+            )
+            .with_detail(detail);
+            self.flush();
+            self.messages.push(super::Message::Notice(notice));
+        } else if shown == 1 {
+            self.notice(SqlState::SUCCESSFUL_COMPLETION, detail);
+        }
+        Ok(())
+    }
+
+    /// `getObjectDescription`.
+    fn describe(&self, object: ObjRef) -> String {
+        match object.class {
+            PG_CLASS if object.sub != 0 => {
+                let column = self
+                    .catalog
+                    .relation(object.oid)
+                    .and_then(|r| r.column(i16::try_from(object.sub).ok()?))
+                    .map_or_else(String::new, |c| c.name.clone());
+                format!("column {column} of {}", self.describe_relation(object.oid))
+            }
+            PG_CLASS => self.describe_relation(object.oid),
+            PG_TYPE => format!("type {}", self.type_text(object.oid)),
+            PG_CONSTRAINT => match self.catalog.constraint(object.oid) {
+                Some(con) if con.relation != 0 => {
+                    format!("constraint {} on {}", con.name, self.describe_relation(con.relation))
+                }
+                Some(con) => format!("constraint {}", con.name),
+                None => format!("constraint {}", object.oid),
+            },
+            PG_ATTRDEF => match self.catalog.defaults().find(|d| d.oid == object.oid) {
+                Some(def) => format!(
+                    "default value for {}",
+                    self.describe(ObjRef::column(def.relation, def.column))
+                ),
+                None => format!("default value {}", object.oid),
+            },
+            PG_REWRITE => match self.catalog.view_of_rule(object.oid) {
+                Some(view) => format!("rule _RETURN on {}", self.describe_relation(view.oid)),
+                None => format!("rule {}", object.oid),
+            },
+            PG_NAMESPACE => format!("schema {}", self.schema_name(object.oid)),
+            PG_PROC => match self.catalog.function(object.oid) {
+                Some(function) => {
+                    let args: Vec<String> =
+                        function.argtypes.iter().map(|&t| self.type_text(t)).collect();
+                    let name = self.qualify(function.namespace, &function.name, |ns| {
+                        self.catalog
+                            .functions()
+                            .any(|f| f.namespace == ns && f.name == function.name)
+                    });
+                    format!("function {name}({})", args.join(","))
+                }
+                None => format!("function {}", object.oid),
+            },
+            class => format!("object {class} {}", object.oid),
+        }
+    }
+
+    /// `getRelationDescription`: the kind and the name, with the schema when the search path does not find the relation by its name.
+    fn describe_relation(&self, oid: u32) -> String {
+        let (code, namespace, name) = match self.catalog.relation(oid) {
+            Some(rel) => {
+                let code = match rel.kind {
+                    RelKind::Index => b'i',
+                    RelKind::Sequence => b'S',
+                    RelKind::Toast => b't',
+                    RelKind::View => b'v',
+                    RelKind::Table => b'r',
+                };
+                (code, rel.namespace, rel.name.as_str())
+            }
+            None => match builtin::class_by_oid(oid) {
+                Some(row) => (row.kind, row.namespace, row.name),
+                None => return format!("relation {oid}"),
+            },
+        };
+        let name = self.qualify(namespace, name, |ns| self.relation_in(ns, name).is_some());
+        format!("{} {name}", relation_word(code))
+    }
+
+    /// `format_type_be` for a type of the catalog or a built-in type: the name with the schema when the search path does not find the type by its name, and the element type with `[]` for an array.
+    fn type_text(&self, oid: u32) -> String {
+        let Some(ty) = self.catalog.type_by_oid(oid) else { return format_type(oid).into_owned() };
+        if ty.element != 0 && ty.relation == 0 && ty.domain.is_none() {
+            return format!("{}[]", self.type_text(ty.element));
+        }
+        self.qualify(ty.namespace, &ty.name, |ns| {
+            self.catalog.type_by_name(ns, &ty.name).is_some()
+                || (ns == crate::PG_CATALOG_NAMESPACE && TypeInfo::by_name(&ty.name).is_some())
+        })
+    }
+
+    /// `quote_qualified_identifier`: the quoted name, after the quoted schema when the object is not visible. `exists(ns)` is true when the schema `ns` has an object with the name. The object is visible when its schema is the first schema of the search path that has an object with the name.
+    fn qualify(&self, namespace: u32, name: &str, exists: impl Fn(u32) -> bool) -> String {
+        let first = self.an.path.iter().copied().find(|&ns| ns == namespace || exists(ns));
+        if first == Some(namespace) && namespace != PG_TOAST_NAMESPACE {
+            return quote_identifier(name);
+        }
+        format!("{}.{}", quote_identifier(&self.schema_name(namespace)), quote_identifier(name))
+    }
+}
