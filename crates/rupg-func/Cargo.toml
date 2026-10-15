@@ -21,6 +21,7 @@ rupg-common.workspace = true
 rupg-pgcatalog.workspace = true
 rupg-sql.workspace = true
 rupg-types.workspace = true
+sha2.workspace = true
 
 [lints]
 workspace = true

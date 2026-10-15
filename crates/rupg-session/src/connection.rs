@@ -2105,6 +2105,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/trig.test")));
     }
 
+    /// The functions and the operators of `bytea`: `||`, `substring`, `overlay`, `position`, `get_byte`, `set_bit` and the other functions of the bytes and the bits, `reverse`, the casts to and from the integer types, `LIKE` with `ESCAPE`, `trim`, `md5`, the SHA-2 hashes, `crc32` and `crc32c`, with the errors. `connection/bytea_functions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn bytea_functions() {
+        big_stack(|| script(include_str!("connection/bytea_functions.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

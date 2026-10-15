@@ -12,6 +12,7 @@ mod agg;
 mod array;
 mod binary;
 mod bit;
+mod bytea;
 mod calendar;
 mod cash;
 mod cast;
@@ -372,6 +373,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| calendar::by_src(src))
         .or_else(|| random::by_src(src))
         .or_else(|| trig::by_src(src))
+        .or_else(|| bytea::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))

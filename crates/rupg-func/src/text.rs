@@ -329,8 +329,13 @@ fn char_len(first: u8) -> usize {
     }
 }
 
-/// `MatchText` of `like_match.c` with `\` as the escape character, byte by byte as PostgreSQL does it for a deterministic collation.
-fn match_text(mut t: &[u8], mut p: &[u8]) -> Result<Like> {
+/// The bytes of the first character of `t`: one byte for `bytea`, or the length of the UTF8 character for `text`.
+fn first_len(t: &[u8], utf8: bool) -> usize {
+    if utf8 { char_len(t[0]).min(t.len()) } else { 1 }
+}
+
+/// `MatchText` of `like_match.c` with `\` as the escape character, byte by byte as PostgreSQL does it for a deterministic collation. `_` matches one UTF8 character when `utf8` is true, else one byte, as `SB_MatchText` does it for `bytea`.
+fn match_text(mut t: &[u8], mut p: &[u8], utf8: bool) -> Result<Like> {
     if p == b"%" {
         return Ok(Like::True);
     }
@@ -345,7 +350,7 @@ fn match_text(mut t: &[u8], mut p: &[u8]) -> Result<Like> {
                         if t.is_empty() {
                             return Ok(Like::Abort);
                         }
-                        t = &t[char_len(t[0]).min(t.len())..];
+                        t = &t[first_len(t, utf8)..];
                         p = &p[1..];
                     } else {
                         break;
@@ -357,17 +362,17 @@ fn match_text(mut t: &[u8], mut p: &[u8]) -> Result<Like> {
                 let first = if p[0] == b'\\' { *p.get(1).ok_or_else(escape_at_end)? } else { p[0] };
                 while !t.is_empty() {
                     if t[0] == first {
-                        let matched = match_text(t, p)?;
+                        let matched = match_text(t, p, utf8)?;
                         if matched != Like::False {
                             return Ok(matched);
                         }
                     }
-                    t = &t[char_len(t[0]).min(t.len())..];
+                    t = &t[first_len(t, utf8)..];
                 }
                 return Ok(Like::Abort);
             }
             b'_' => {
-                t = &t[char_len(t[0]).min(t.len())..];
+                t = &t[first_len(t, utf8)..];
                 p = &p[1..];
                 continue;
             }
@@ -393,9 +398,14 @@ fn match_text(mut t: &[u8], mut p: &[u8]) -> Result<Like> {
     Ok(if p.is_empty() { Like::True } else { Like::Abort })
 }
 
+/// True when the `bytea` value matches the pattern of `LIKE`, byte by byte.
+pub(crate) fn like_bytes(value: &[u8], pattern: &[u8]) -> Result<bool> {
+    Ok(match_text(value, pattern, false)? == Like::True)
+}
+
 /// True when the text matches the pattern of `LIKE`.
 pub(crate) fn like(text: &str, pattern: &str) -> Result<bool> {
-    Ok(match_text(text.as_bytes(), pattern.as_bytes())? == Like::True)
+    Ok(match_text(text.as_bytes(), pattern.as_bytes(), true)? == Like::True)
 }
 
 fn textlike(_: &Call<'_>, args: &[Value]) -> Result<Value> {
