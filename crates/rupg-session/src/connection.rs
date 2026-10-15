@@ -2059,6 +2059,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/at_time_zone.test")));
     }
 
+    /// `sqrt`, `exp`, `ln`, `log` and `power` of `numeric` and the operator `^`, with the scales that PostgreSQL picks, long arguments, the results near the limits of the format, `NaN`, the infinities and the errors. `connection/numeric_math.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn numeric_math() {
+        big_stack(|| script(include_str!("connection/numeric_math.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {

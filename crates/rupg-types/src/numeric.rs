@@ -13,6 +13,8 @@ use crate::error::TypeError;
 use crate::number::{digit, is_space, u64_out};
 use crate::typmod::numeric_precision_scale;
 
+mod math;
+
 const NBASE: i32 = 10000;
 const HALF_NBASE: i32 = 5000;
 const DEC_DIGITS: i64 = 4;

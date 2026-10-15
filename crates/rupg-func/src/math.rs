@@ -518,6 +518,29 @@ fn numeric_floor(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     num(one_numeric(args)?.whole(false))
 }
 
+fn numeric_sqrt(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    num(one_numeric(args)?.sqrt())
+}
+
+fn numeric_exp(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    num(one_numeric(args)?.exp())
+}
+
+fn numeric_ln(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    num(one_numeric(args)?.ln())
+}
+
+/// `numeric_log`: the logarithm of the second argument in the base of the first.
+fn numeric_log(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (base, x) = numerics(args)?;
+    num(base.log(x))
+}
+
+fn numeric_power(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (base, exp) = numerics(args)?;
+    num(base.power(exp))
+}
+
 /// `numeric_sign`: NaN, or -1, 0 or 1 with a display scale of 0.
 fn numeric_sign(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let a = one_numeric(args)?;
@@ -604,6 +627,11 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "numeric_ceil" => numeric_ceil,
         "numeric_floor" => numeric_floor,
         "numeric_sign" => numeric_sign,
+        "numeric_sqrt" => numeric_sqrt,
+        "numeric_exp" => numeric_exp,
+        "numeric_ln" => numeric_ln,
+        "numeric_log" => numeric_log,
+        "numeric_power" => numeric_power,
         "date_pli" => date_pli,
         "date_mii" => date_mii,
         "date_mi" => date_mi,
