@@ -2319,7 +2319,7 @@ pub fn interval_in(input: &str, typmod: i32, style: IntervalStyle) -> Result<Int
         let e = if e == FieldOverflow { DtErr::IntervalOverflow } else { e };
         e.into_error(input, "interval")
     })?;
-    let span = match dtype {
+    let iv = match dtype {
         DTK_LATE => Interval::INFINITY,
         DTK_EARLY => Interval::NEGATIVE_INFINITY,
         _ => {
@@ -2328,7 +2328,7 @@ pub fn interval_in(input: &str, typmod: i32, style: IntervalStyle) -> Result<Int
             Interval { time: itm.usec, day: itm.mday, month }
         }
     };
-    adjust_interval(span, typmod)
+    adjust_interval(iv, typmod)
 }
 
 #[cfg(test)]

@@ -30,22 +30,22 @@ fn date_range() -> Error {
     Error::new(SqlState::DATETIME_VALUE_OUT_OF_RANGE, "date out of range for timestamp")
 }
 
-fn is_nobegin(iv: &Interval) -> bool {
-    *iv == Interval::NEGATIVE_INFINITY
+fn is_nobegin(interval: &Interval) -> bool {
+    *interval == Interval::NEGATIVE_INFINITY
 }
 
-fn is_noend(iv: &Interval) -> bool {
-    *iv == Interval::INFINITY
+fn is_noend(interval: &Interval) -> bool {
+    *interval == Interval::INFINITY
 }
 
 /// `INTERVAL_NOT_FINITE`.
-fn not_finite(iv: &Interval) -> bool {
-    is_nobegin(iv) || is_noend(iv)
+fn not_finite(interval: &Interval) -> bool {
+    is_nobegin(interval) || is_noend(interval)
 }
 
 fn interval_arg(v: &Value) -> Result<Interval> {
-    let Value::Interval(iv) = v else { return Err(bad_value()) };
-    Ok(*iv)
+    let Value::Interval(interval) = v else { return Err(bad_value()) };
+    Ok(*interval)
 }
 
 fn timestamp_arg(v: &Value) -> Result<i64> {
@@ -61,17 +61,17 @@ fn float_arg(v: &Value) -> Result<f64> {
 }
 
 /// `interval_um_internal`.
-fn negate(iv: &Interval) -> Result<Interval> {
-    if is_nobegin(iv) {
+fn negate(interval: &Interval) -> Result<Interval> {
+    if is_nobegin(interval) {
         return Ok(Interval::INFINITY);
     }
-    if is_noend(iv) {
+    if is_noend(interval) {
         return Ok(Interval::NEGATIVE_INFINITY);
     }
     let result = Interval {
-        time: 0i64.checked_sub(iv.time).ok_or_else(interval_range)?,
-        day: 0i32.checked_sub(iv.day).ok_or_else(interval_range)?,
-        month: 0i32.checked_sub(iv.month).ok_or_else(interval_range)?,
+        time: 0i64.checked_sub(interval.time).ok_or_else(interval_range)?,
+        day: 0i32.checked_sub(interval.day).ok_or_else(interval_range)?,
+        month: 0i32.checked_sub(interval.month).ok_or_else(interval_range)?,
     };
     if not_finite(&result) {
         return Err(interval_range());
@@ -171,13 +171,13 @@ fn fits_i64(x: f64) -> bool {
 
 /// The finite part of `interval_mul` and `interval_div`: `op` multiplies or divides each field by the factor. The fractions of the months and the days go down into the days and the time.
 #[allow(clippy::cast_possible_truncation, clippy::cast_precision_loss)]
-fn scale(iv: &Interval, op: impl Fn(f64) -> f64) -> Result<Interval> {
-    let months = op(f64::from(iv.month));
+fn scale(interval: &Interval, op: impl Fn(f64) -> f64) -> Result<Interval> {
+    let months = op(f64::from(interval.month));
     if months.is_nan() || !fits_i32(months) {
         return Err(interval_range());
     }
     let month = months as i32;
-    let days = op(f64::from(iv.day));
+    let days = op(f64::from(interval.day));
     if days.is_nan() || !fits_i32(days) {
         return Err(interval_range());
     }
@@ -193,7 +193,7 @@ fn scale(iv: &Interval, op: impl Fn(f64) -> f64) -> Result<Interval> {
         sec_remainder -= f64::from(whole * SECS_PER_DAY);
     }
     day = day.checked_add(month_remainder_days as i32).ok_or_else(interval_range)?;
-    let time = (op(iv.time as f64) + sec_remainder * USECS_PER_SEC as f64).round_ties_even();
+    let time = (op(interval.time as f64) + sec_remainder * USECS_PER_SEC as f64).round_ties_even();
     if time.is_nan() || !fits_i64(time) {
         return Err(interval_range());
     }
@@ -205,18 +205,18 @@ fn scale(iv: &Interval, op: impl Fn(f64) -> f64) -> Result<Interval> {
 }
 
 /// `interval_mul`.
-fn interval_times(iv: &Interval, factor: f64) -> Result<Interval> {
+fn interval_times(interval: &Interval, factor: f64) -> Result<Interval> {
     if factor.is_nan() {
         return Err(interval_range());
     }
-    if not_finite(iv) {
+    if not_finite(interval) {
         if factor == 0.0 {
             return Err(interval_range());
         }
-        return if factor < 0.0 { negate(iv) } else { Ok(*iv) };
+        return if factor < 0.0 { negate(interval) } else { Ok(*interval) };
     }
     if factor.is_infinite() {
-        let sign = match span(iv).cmp(&0) {
+        let sign = match span(interval).cmp(&0) {
             Ordering::Less => -1.0,
             Ordering::Equal => return Err(interval_range()),
             Ordering::Greater => 1.0,
@@ -227,7 +227,7 @@ fn interval_times(iv: &Interval, factor: f64) -> Result<Interval> {
             Interval::INFINITY
         });
     }
-    scale(iv, |x| x * factor)
+    scale(interval, |x| x * factor)
 }
 
 fn interval_mul(_: &Call<'_>, args: &[Value]) -> Result<Value> {
@@ -242,29 +242,29 @@ fn mul_d_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 fn interval_div(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [a, b] = args else { return Err(bad_value()) };
-    let (iv, factor) = (interval_arg(a)?, float_arg(b)?);
+    let (interval, factor) = (interval_arg(a)?, float_arg(b)?);
     if factor == 0.0 {
         return Err(Error::new(SqlState::DIVISION_BY_ZERO, "division by zero"));
     }
     if factor.is_nan() {
         return Err(interval_range());
     }
-    if not_finite(&iv) {
+    if not_finite(&interval) {
         if factor.is_infinite() {
             return Err(interval_range());
         }
-        let result = if factor < 0.0 { negate(&iv)? } else { iv };
+        let result = if factor < 0.0 { negate(&interval)? } else { interval };
         return Ok(Value::Interval(result));
     }
-    scale(&iv, |x| x / factor).map(Value::Interval)
+    scale(&interval, |x| x / factor).map(Value::Interval)
 }
 
 /// `interval_justify_hours`: the whole days of the time go into the days.
-fn justify_hours(iv: &Interval) -> Result<Interval> {
-    if not_finite(iv) {
-        return Ok(*iv);
+fn justify_hours(interval: &Interval) -> Result<Interval> {
+    if not_finite(interval) {
+        return Ok(*interval);
     }
-    let mut result = *iv;
+    let mut result = *interval;
     let whole = result.time / USECS_PER_DAY;
     result.time -= whole * USECS_PER_DAY;
     let whole = i32::try_from(whole).map_err(|_| interval_range())?;
@@ -280,11 +280,11 @@ fn justify_hours(iv: &Interval) -> Result<Interval> {
 }
 
 /// `interval_justify_days`: each 30 days go into the months.
-fn justify_days(iv: &Interval) -> Result<Interval> {
-    if not_finite(iv) {
-        return Ok(*iv);
+fn justify_days(interval: &Interval) -> Result<Interval> {
+    if not_finite(interval) {
+        return Ok(*interval);
     }
-    let mut result = *iv;
+    let mut result = *interval;
     let whole = result.day / DAYS_PER_MONTH;
     result.day -= whole * DAYS_PER_MONTH;
     result.month = result.month.checked_add(whole).ok_or_else(interval_range)?;
@@ -300,11 +300,11 @@ fn justify_days(iv: &Interval) -> Result<Interval> {
 
 /// `interval_justify_interval`: the two justifications, and one sign for the three fields.
 #[allow(clippy::cast_possible_truncation)]
-fn justify_interval(iv: &Interval) -> Result<Interval> {
-    if not_finite(iv) {
-        return Ok(*iv);
+fn justify_interval(interval: &Interval) -> Result<Interval> {
+    if not_finite(interval) {
+        return Ok(*interval);
     }
-    let mut result = *iv;
+    let mut result = *interval;
     if (result.day > 0 && result.time > 0) || (result.day < 0 && result.time < 0) {
         let whole = result.day / DAYS_PER_MONTH;
         result.day -= whole * DAYS_PER_MONTH;
@@ -409,14 +409,14 @@ impl Tm {
 }
 
 /// `timestamp_pl_interval`, and `timestamptz_pl_interval_internal` when `call` is given: the months and the days are added to the fields of the local time, and then the time is added.
-fn timestamp_plus(ts: i64, iv: &Interval, call: Option<&Call<'_>>) -> Result<i64> {
-    if is_nobegin(iv) {
+fn timestamp_plus(ts: i64, interval: &Interval, call: Option<&Call<'_>>) -> Result<i64> {
+    if is_nobegin(interval) {
         if ts == TIMESTAMP_INFINITY {
             return Err(timestamp_range());
         }
         return Ok(TIMESTAMP_NEGATIVE_INFINITY);
     }
-    if is_noend(iv) {
+    if is_noend(interval) {
         if ts == TIMESTAMP_NEGATIVE_INFINITY {
             return Err(timestamp_range());
         }
@@ -434,9 +434,9 @@ fn timestamp_plus(ts: i64, iv: &Interval, call: Option<&Call<'_>>) -> Result<i64
         None => Tm::of(ts),
     };
     let mut ts = ts;
-    if iv.month != 0 {
+    if interval.month != 0 {
         let mut tm = fields(ts)?;
-        tm.mon = tm.mon.checked_add(iv.month).ok_or_else(timestamp_range)?;
+        tm.mon = tm.mon.checked_add(interval.month).ok_or_else(timestamp_range)?;
         if tm.mon > MONTHS_PER_YEAR {
             tm.year = tm.year.wrapping_add((tm.mon - 1) / MONTHS_PER_YEAR);
             tm.mon = (tm.mon - 1) % MONTHS_PER_YEAR + 1;
@@ -447,18 +447,18 @@ fn timestamp_plus(ts: i64, iv: &Interval, call: Option<&Call<'_>>) -> Result<i64
         tm.mday = tm.mday.min(days_of_month(tm.year, tm.mon));
         ts = tm.timestamp(zone.as_deref())?;
     }
-    if iv.day != 0 {
+    if interval.day != 0 {
         let mut tm = fields(ts)?;
         let lowest = if call.is_some() { -1 } else { 0 };
         let julian = date2j(tm.year, tm.mon, tm.mday)
-            .checked_add(iv.day)
+            .checked_add(interval.day)
             .filter(|&j| j >= lowest)
             .ok_or_else(timestamp_range)?;
         let (year, mon, mday) = j2date(julian);
         (tm.year, tm.mon, tm.mday) = (year, mon as i32, mday as i32);
         ts = tm.timestamp(zone.as_deref())?;
     }
-    let ts = ts.checked_add(iv.time).ok_or_else(timestamp_range)?;
+    let ts = ts.checked_add(interval.time).ok_or_else(timestamp_range)?;
     if !valid_timestamp(ts) {
         return Err(timestamp_range());
     }
@@ -482,8 +482,8 @@ fn timestamptz_pl_interval(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 fn timestamptz_mi_interval(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [a, b] = args else { return Err(bad_value()) };
-    let iv = negate(&interval_arg(b)?)?;
-    timestamp_plus(timestamp_arg(a)?, &iv, Some(call)).map(Value::TimestampTz)
+    let interval = negate(&interval_arg(b)?)?;
+    timestamp_plus(timestamp_arg(a)?, &interval, Some(call)).map(Value::TimestampTz)
 }
 
 /// `timestamp_mi`, also for `timestamptz`: the difference in microseconds, with the whole days in the days.
@@ -603,38 +603,38 @@ fn infinite_time(add: bool) -> Error {
 
 fn time_pl_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [Value::Time(t), b] = args else { return Err(bad_value()) };
-    let iv = interval_arg(b)?;
-    if not_finite(&iv) {
+    let interval = interval_arg(b)?;
+    if not_finite(&interval) {
         return Err(infinite_time(true));
     }
-    Ok(Value::Time(wrap_time(*t, iv.time)))
+    Ok(Value::Time(wrap_time(*t, interval.time)))
 }
 
 fn time_mi_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [Value::Time(t), b] = args else { return Err(bad_value()) };
-    let iv = interval_arg(b)?;
-    if not_finite(&iv) {
+    let interval = interval_arg(b)?;
+    if not_finite(&interval) {
         return Err(infinite_time(false));
     }
-    Ok(Value::Time(wrap_time(*t, iv.time.wrapping_neg())))
+    Ok(Value::Time(wrap_time(*t, interval.time.wrapping_neg())))
 }
 
 fn timetz_pl_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [Value::TimeTz(t, zone), b] = args else { return Err(bad_value()) };
-    let iv = interval_arg(b)?;
-    if not_finite(&iv) {
+    let interval = interval_arg(b)?;
+    if not_finite(&interval) {
         return Err(infinite_time(true));
     }
-    Ok(Value::TimeTz(wrap_time(*t, iv.time), *zone))
+    Ok(Value::TimeTz(wrap_time(*t, interval.time), *zone))
 }
 
 fn timetz_mi_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [Value::TimeTz(t, zone), b] = args else { return Err(bad_value()) };
-    let iv = interval_arg(b)?;
-    if not_finite(&iv) {
+    let interval = interval_arg(b)?;
+    if not_finite(&interval) {
         return Err(infinite_time(false));
     }
-    Ok(Value::TimeTz(wrap_time(*t, iv.time.wrapping_neg()), *zone))
+    Ok(Value::TimeTz(wrap_time(*t, interval.time.wrapping_neg()), *zone))
 }
 
 fn time_mi_time(_: &Call<'_>, args: &[Value]) -> Result<Value> {
@@ -645,14 +645,14 @@ fn time_mi_time(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// `interval_time`: the part of the interval after the whole days, with the floor for a negative interval.
 fn interval_time(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [a] = args else { return Err(bad_value()) };
-    let iv = interval_arg(a)?;
-    if not_finite(&iv) {
+    let interval = interval_arg(a)?;
+    if not_finite(&interval) {
         return Err(Error::new(
             SqlState::DATETIME_VALUE_OUT_OF_RANGE,
             "cannot convert infinite interval to time",
         ));
     }
-    Ok(Value::Time(iv.time.rem_euclid(USECS_PER_DAY)))
+    Ok(Value::Time(interval.time.rem_euclid(USECS_PER_DAY)))
 }
 
 fn time_interval(_: &Call<'_>, args: &[Value]) -> Result<Value> {
