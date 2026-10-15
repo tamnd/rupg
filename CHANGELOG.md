@@ -4,6 +4,21 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.26 (2026-10-15)
+
+A patch release on the way to M2. The `pg_dump` round trip now passes: a dump of rupg restores into PostgreSQL 19, and a dump of PostgreSQL 19 restores into rupg.
+
+### Added
+
+- The fields `F`, `L` and `R` in errors and notices, with the place in the source of rupg (#303).
+- `ALTER TABLE ... ALTER COLUMN ... SET DEFAULT` and `DROP DEFAULT`, `ALTER TABLE ... ADD CONSTRAINT`, `OWNER TO` for tables, views, sequences and indexes, and `ALTER SCHEMA ... OWNER TO` (#304).
+- `CREATE SEQUENCE`, `ALTER SEQUENCE`, `nextval`, `currval`, `lastval`, `setval` and `pg_sequence_last_value` (#305).
+- `COPY FROM STDIN` with no rows, with the checks of the options, the header and the end of the data as in PostgreSQL 19. A data row gives `0A000` (#306).
+
+### Changed
+
+- `COPY FROM STDIN` no longer gives `0A000` at the start. It sends CopyInResponse and reads the data (#306).
+
 ## 0.1.25 (2026-10-15)
 
 A patch release on the way to M2. Gate G1 now passes for all seven clients: psql, pgAdmin 4, pgjdbc, psycopg, node-postgres, pgx and asyncpg show the gate schema on rupg as on PostgreSQL 19. rupg also adds cursors, CREATE DATABASE, DROP, the advisory locks and the encoding conversions.
