@@ -1,4 +1,4 @@
-//! `WindowAgg` and the window functions of `windowfuncs.c`. Each window that a call uses sorts the rows on its items of `PARTITION BY` and `ORDER BY`, in the order of `select_active_windows`, and a window whose items are the first keys of the order before it does not sort again. The frame of each window is the default frame: from the start of the partition to the last peer of the row.
+//! `WindowAgg` and the window functions of `windowfuncs.c`. Each window that a call uses sorts the rows on its items of `PARTITION BY` and `ORDER BY`, in the order of `select_active_windows`, and a window whose items are the first keys of the order before it does not sort again. The frame of each window is the default frame: from the start of the partition to the last peer of the row. An aggregate function with `OVER` gives the result of the rows of the frame.
 
 use std::cmp::Ordering;
 
@@ -8,7 +8,7 @@ use rupg_func::Session;
 use rupg_pgcatalog::builtin;
 use rupg_types::Value;
 
-use crate::{Eval, kernel, not_yet, signature, sort};
+use crate::{Eval, agg, kernel, not_yet, signature, sort};
 
 /// The window functions that the engine has, by the name of their C function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,10 +55,10 @@ pub(crate) fn method(func: u32, location: Option<usize>) -> Result<Method> {
     })
 }
 
-/// The window function calls of an expression, outside its subqueries.
-fn collect<'q>(expr: &'q Expr, out: &mut Vec<&'q WindowFunc>) {
+/// The window function calls of an expression, outside its subqueries, with the types of their results.
+fn collect<'q>(expr: &'q Expr, out: &mut Vec<(&'q WindowFunc, u32)>) {
     if let ExprKind::Window(w) = &expr.kind {
-        out.push(w);
+        out.push((w, expr.ty));
         return;
     }
     for child in expr.children() {
@@ -67,7 +67,7 @@ fn collect<'q>(expr: &'q Expr, out: &mut Vec<&'q WindowFunc>) {
 }
 
 /// The window function calls of the select list.
-pub(crate) fn calls(query: &Query) -> Vec<&WindowFunc> {
+pub(crate) fn calls(query: &Query) -> Vec<(&WindowFunc, u32)> {
     let mut out = Vec::new();
     for target in &query.targets {
         collect(&target.expr, &mut out);
@@ -76,11 +76,14 @@ pub(crate) fn calls(query: &Query) -> Vec<&WindowFunc> {
 }
 
 /// `select_active_windows`: the windows that a call uses, with their number from 1, in the order that the plan computes them.
-fn active<'q>(query: &'q Query, calls: &[&WindowFunc]) -> Result<Vec<(usize, &'q WindowClause)>> {
+fn active<'q>(
+    query: &'q Query,
+    calls: &[(&WindowFunc, u32)],
+) -> Result<Vec<(usize, &'q WindowClause)>> {
     let refs = sort_group_refs(query);
     let mut actives: Vec<(usize, &WindowClause, Vec<&SortGroup>)> = Vec::new();
     for (i, window) in query.windows.iter().enumerate() {
-        if !calls.iter().any(|c| c.winref == i + 1) {
+        if !calls.iter().any(|(c, _)| c.winref == i + 1) {
             continue;
         }
         let mut unique: Vec<&SortGroup> = window.partition.iter().collect();
@@ -174,7 +177,7 @@ pub(crate) type Values = Vec<Vec<(*const WindowFunc, Value)>>;
 pub(crate) fn compute(
     eval: &Eval<'_>,
     query: &Query,
-    calls: &[&WindowFunc],
+    calls: &[(&WindowFunc, u32)],
     tuples: &[Vec<usize>],
     session: &dyn Session,
 ) -> Result<(Vec<usize>, Values)> {
@@ -216,7 +219,8 @@ pub(crate) fn compute(
         }
         let partition = sort::Keys::new(&window.partition, &types, session)?;
         let peers = sort::Keys::new(&window.order, &types, session)?;
-        let mine: Vec<&WindowFunc> = calls.iter().copied().filter(|c| c.winref == winref).collect();
+        let mine: Vec<(&WindowFunc, u32)> =
+            calls.iter().copied().filter(|(c, _)| c.winref == winref).collect();
         let mut start = 0;
         while start < order.len() {
             let mut end = start + 1;
@@ -233,11 +237,14 @@ pub(crate) fn compute(
                     first = i;
                 }
             }
-            for call in &mine {
-                let method = method(call.oid, None)?;
-                let results = partition_values(eval, call, method, part, &groups, tuples)?;
+            for &(call, ty) in &mine {
+                let results = if call.agg {
+                    agg::window_values(eval, call, ty, part, &groups, tuples)?
+                } else {
+                    partition_values(eval, call, method(call.oid, None)?, part, &groups, tuples)?
+                };
                 for (&tuple, value) in part.iter().zip(results) {
-                    values[tuple].push((std::ptr::from_ref(*call), value));
+                    values[tuple].push((std::ptr::from_ref(call), value));
                 }
             }
             start = end;

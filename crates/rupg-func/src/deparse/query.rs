@@ -341,6 +341,10 @@ impl Deparser<'_> {
                 self.expr(arg, true)?;
             }
         }
+        if let Some(filter) = &w.filter {
+            self.buf.push_str(") FILTER (WHERE ");
+            self.expr(filter, false)?;
+        }
         self.buf.push_str(") OVER ");
         let window = w.winref.checked_sub(1).and_then(|i| self.windows.get(i)).cloned();
         let Some(window) = window else {

@@ -1,0 +1,227 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW wagg_t AS SELECT * FROM (VALUES (1, 'a', 10, 1.5::numeric, 'x'), (1, 'b', 20, 2.5, 'y'), (1, 'c', NULL, 3.5, 'z'), (2, 'd', 5, NULL, 'x'), (2, 'e', 5, 4.0, NULL), (2, 'f', 7, 1.0, 'w'), (3, 'g', NULL, NULL, NULL)) AS t(p, k, v, n, s)
+CREATE VIEW
+> SELECT p, k, v, sum(v) OVER (PARTITION BY p ORDER BY k), count(*) OVER (PARTITION BY p ORDER BY k), count(v) OVER (PARTITION BY p ORDER BY k) FROM wagg_t ORDER BY p, k
+fields p@wagg_t.1:23:4:-1,k@wagg_t.2:25:-1:-1,v@wagg_t.3:23:4:-1,sum:20:8:-1,count:20:8:-1,count:20:8:-1
+row 1,a,10,10,1,1
+row 1,b,20,30,2,2
+row 1,c,NULL,30,3,2
+row 2,d,5,5,1,1
+row 2,e,5,10,2,2
+row 2,f,7,17,3,3
+row 3,g,NULL,NULL,1,0
+SELECT 7
+> SELECT p, k, v, sum(v) OVER (PARTITION BY p), avg(v) OVER (PARTITION BY p), min(v) OVER (PARTITION BY p), max(v) OVER (PARTITION BY p) FROM wagg_t ORDER BY p, k
+fields p@wagg_t.1:23:4:-1,k@wagg_t.2:25:-1:-1,v@wagg_t.3:23:4:-1,sum:20:8:-1,avg:1700:-1:-1,min:23:4:-1,max:23:4:-1
+row 1,a,10,30,15.0000000000000000,10,20
+row 1,b,20,30,15.0000000000000000,10,20
+row 1,c,NULL,30,15.0000000000000000,10,20
+row 2,d,5,17,5.6666666666666667,5,7
+row 2,e,5,17,5.6666666666666667,5,7
+row 2,f,7,17,5.6666666666666667,5,7
+row 3,g,NULL,NULL,NULL,NULL,NULL
+SELECT 7
+> SELECT p, k, v, sum(v) OVER (ORDER BY v), count(*) OVER (ORDER BY v) FROM wagg_t ORDER BY v, p, k
+fields p@wagg_t.1:23:4:-1,k@wagg_t.2:25:-1:-1,v@wagg_t.3:23:4:-1,sum:20:8:-1,count:20:8:-1
+row 2,d,5,10,2
+row 2,e,5,10,2
+row 2,f,7,17,3
+row 1,a,10,27,4
+row 1,b,20,47,5
+row 1,c,NULL,47,7
+row 3,g,NULL,47,7
+SELECT 7
+> SELECT p, k, v, sum(v) OVER (ORDER BY v DESC NULLS LAST), count(v) OVER (ORDER BY v DESC NULLS LAST) FROM wagg_t ORDER BY p, k
+fields p@wagg_t.1:23:4:-1,k@wagg_t.2:25:-1:-1,v@wagg_t.3:23:4:-1,sum:20:8:-1,count:20:8:-1
+row 1,a,10,30,2
+row 1,b,20,20,1
+row 1,c,NULL,47,5
+row 2,d,5,47,5
+row 2,e,5,47,5
+row 2,f,7,37,3
+row 3,g,NULL,47,5
+SELECT 7
+> SELECT k, sum(n) OVER w, avg(n) OVER w, stddev_samp(n) OVER w, variance(n) OVER w FROM wagg_t WINDOW w AS (ORDER BY k) ORDER BY k
+fields k@wagg_t.2:25:-1:-1,sum:1700:-1:-1,avg:1700:-1:-1,stddev_samp:1700:-1:-1,variance:1700:-1:-1
+row a,1.5,1.50000000000000000000,NULL,NULL
+row b,4.0,2.0000000000000000,0.70710678118654752440,0.50000000000000000000
+row c,7.5,2.5000000000000000,1.00000000000000000000,1.00000000000000000000
+row d,7.5,2.5000000000000000,1.00000000000000000000,1.00000000000000000000
+row e,11.5,2.8750000000000000,1.1086778913041726,1.2291666666666667
+row f,12.5,2.5000000000000000,1.2747548783981962,1.6250000000000000
+row g,12.5,2.5000000000000000,1.2747548783981962,1.6250000000000000
+SELECT 7
+> SELECT k, string_agg(s, ',') OVER (PARTITION BY p ORDER BY k), array_agg(s) OVER (PARTITION BY p ORDER BY k) FROM wagg_t ORDER BY k
+fields k@wagg_t.2:25:-1:-1,string_agg:25:-1:-1,array_agg:1009:-1:-1
+row a,x,{x}
+row b,x,y,{x,y}
+row c,x,y,z,{x,y,z}
+row d,x,{x}
+row e,x,{x,NULL}
+row f,x,w,{x,NULL,w}
+row g,NULL,{NULL}
+SELECT 7
+> SELECT k, bool_and(v > 6) OVER (ORDER BY k), bool_or(v > 15) OVER (ORDER BY k), every(v > 0) OVER () FROM wagg_t ORDER BY k
+fields k@wagg_t.2:25:-1:-1,bool_and:16:1:-1,bool_or:16:1:-1,every:16:1:-1
+row a,t,f,t
+row b,t,t,t
+row c,t,t,t
+row d,f,t,t
+row e,f,t,t
+row f,f,t,t
+row g,f,t,t
+SELECT 7
+> SELECT k, sum(v) FILTER (WHERE v > 5) OVER (ORDER BY k), count(*) FILTER (WHERE s IS NOT NULL) OVER (ORDER BY k) FROM wagg_t ORDER BY k
+fields k@wagg_t.2:25:-1:-1,sum:20:8:-1,count:20:8:-1
+row a,10,1
+row b,30,2
+row c,30,3
+row d,30,4
+row e,30,4
+row f,37,5
+row g,37,5
+SELECT 7
+> SELECT k, json_agg(v) OVER (PARTITION BY p ORDER BY k), jsonb_agg(s) OVER (PARTITION BY p) FROM wagg_t ORDER BY k
+fields k@wagg_t.2:25:-1:-1,json_agg:114:-1:-1,jsonb_agg:3802:-1:-1
+row a,[10],["x", "y", "z"]
+row b,[10, 20],["x", "y", "z"]
+row c,[10, 20, null],["x", "y", "z"]
+row d,[5],["x", null, "w"]
+row e,[5, 5],["x", null, "w"]
+row f,[5, 5, 7],["x", null, "w"]
+row g,[null],[null]
+SELECT 7
+> SELECT k, sum(v) OVER (ORDER BY k), row_number() OVER (ORDER BY k), rank() OVER (PARTITION BY p ORDER BY v), sum(v) OVER (PARTITION BY p ORDER BY v) FROM wagg_t ORDER BY k
+fields k@wagg_t.2:25:-1:-1,sum:20:8:-1,row_number:20:8:-1,rank:20:8:-1,sum:20:8:-1
+row a,10,1,1,10
+row b,30,2,2,30
+row c,30,3,3,30
+row d,35,4,1,10
+row e,40,5,1,10
+row f,47,6,3,17
+row g,47,7,1,NULL
+SELECT 7
+> SELECT k, v, sum(v) OVER (), v * 100 / sum(v) OVER () FROM wagg_t ORDER BY k
+fields k@wagg_t.2:25:-1:-1,v@wagg_t.3:23:4:-1,sum:20:8:-1,?column?:20:8:-1
+row a,10,47,21
+row b,20,47,42
+row c,NULL,47,NULL
+row d,5,47,10
+row e,5,47,10
+row f,7,47,14
+row g,NULL,47,NULL
+SELECT 7
+> SELECT g, sum(g) OVER (ORDER BY g), sum(g::int8) OVER (ORDER BY g), sum(g::float8) OVER (ORDER BY g), avg(g) OVER (ORDER BY g) FROM generate_series(1, 5) AS g ORDER BY g
+fields g:23:4:-1,sum:20:8:-1,sum:1700:-1:-1,sum:701:8:-1,avg:1700:-1:-1
+row 1,1,1,1,1.00000000000000000000
+row 2,3,3,3,1.5000000000000000
+row 3,6,6,6,2.0000000000000000
+row 4,10,10,10,2.5000000000000000
+row 5,15,15,15,3.0000000000000000
+SELECT 5
+> SELECT g, sum(x) OVER (ORDER BY g), avg(x) OVER (ORDER BY g) FROM (VALUES (1, interval '1 day'), (2, interval '2 hours'), (3, NULL), (4, interval '-3 days')) AS t(g, x) ORDER BY g
+fields g:23:4:-1,sum:1186:16:-1,avg:1186:16:-1
+row 1,1 day,1 day
+row 2,1 day 02:00:00,13:00:00
+row 3,1 day 02:00:00,13:00:00
+row 4,-2 days +02:00:00,-15:20:00
+SELECT 4
+> SELECT g, bit_and(g) OVER (ORDER BY g), bit_or(g) OVER (ORDER BY g), bit_xor(g) OVER (ORDER BY g) FROM generate_series(1, 6) AS g ORDER BY g
+fields g:23:4:-1,bit_and:23:4:-1,bit_or:23:4:-1,bit_xor:23:4:-1
+row 1,1,1,1
+row 2,0,3,3
+row 3,0,3,0
+row 4,0,7,4
+row 5,0,7,1
+row 6,0,7,7
+SELECT 6
+> SELECT g, max(t) OVER (ORDER BY g), min(t) OVER (ORDER BY g) FROM (VALUES (1, 'pear'), (2, 'apple'), (3, 'zebra')) AS x(g, t) ORDER BY g
+fields g:23:4:-1,max:25:-1:-1,min:25:-1:-1
+row 1,pear,pear
+row 2,pear,apple
+row 3,zebra,apple
+SELECT 3
+> SELECT sum(v) OVER () FROM wagg_t WHERE false
+fields sum:20:8:-1
+SELECT 0
+> SELECT count(*) OVER (), count(1) OVER (PARTITION BY p) FROM wagg_t ORDER BY 1, 2
+fields count:20:8:-1,count:20:8:-1
+row 7,1
+row 7,3
+row 7,3
+row 7,3
+row 7,3
+row 7,3
+row 7,3
+SELECT 7
+> SELECT g, range_agg(r) OVER (ORDER BY g) FROM (VALUES (1, int4range(1, 3)), (2, int4range(5, 7)), (3, int4range(2, 6))) AS x(g, r) ORDER BY g
+fields g:23:4:-1,range_agg:4451:-1:-1
+row 1,{[1,3)}
+row 2,{[1,3),[5,7)}
+row 3,{[1,7)}
+SELECT 3
+> SELECT k, sum(v) OVER (PARTITION BY p ORDER BY k) AS running FROM wagg_t WHERE p < 3 ORDER BY running DESC NULLS LAST, k
+fields k@wagg_t.2:25:-1:-1,running:20:8:-1
+row b,30
+row c,30
+row f,17
+row a,10
+row e,10
+row d,5
+SELECT 6
+> SELECT * FROM (SELECT k, sum(v) OVER (ORDER BY k) AS s FROM wagg_t) q WHERE s > 30 ORDER BY k
+fields k@wagg_t.2:25:-1:-1,s:20:8:-1
+row d,35
+row e,40
+row f,47
+row g,47
+SELECT 4
+> CREATE VIEW wagg_v AS SELECT k, sum(v) FILTER (WHERE v > 5) OVER (PARTITION BY p ORDER BY k), count(*) OVER w, avg(n) OVER w FROM wagg_t WINDOW w AS (PARTITION BY p)
+CREATE VIEW
+> SELECT pg_get_viewdef('wagg_v'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT k,
+    sum(v) FILTER (WHERE (v > 5)) OVER (PARTITION BY p ORDER BY k) AS sum,
+    count(*) OVER w AS count,
+    avg(n) OVER w AS avg
+   FROM wagg_t
+  WINDOW w AS (PARTITION BY p);
+SELECT 1
+> SELECT * FROM wagg_v ORDER BY k
+fields k@wagg_v.1:25:-1:-1,sum@wagg_v.2:20:8:-1,count@wagg_v.3:20:8:-1,avg@wagg_v.4:1700:-1:-1
+row a,10,3,2.5000000000000000
+row b,30,3,2.5000000000000000
+row c,30,3,2.5000000000000000
+row d,NULL,3,2.5000000000000000
+row e,NULL,3,2.5000000000000000
+row f,7,3,2.5000000000000000
+row g,NULL,1,NULL
+SELECT 7
+> DROP VIEW wagg_v
+DROP VIEW
+> SELECT sum(DISTINCT v) OVER () FROM wagg_t
+ERROR 0A000 DISTINCT is not implemented for window functions at 8
+> SELECT sum(v ORDER BY v) OVER () FROM wagg_t
+ERROR 0A000 aggregate ORDER BY is not implemented for window functions at 8
+> SELECT count() OVER () FROM wagg_t
+ERROR 42809 count(*) must be used to call a parameterless aggregate function at 8
+> SELECT row_number() FILTER (WHERE v > 1) OVER () FROM wagg_t
+ERROR 0A000 FILTER is not implemented for non-aggregate window functions at 8
+> SELECT sum(sum(v) OVER ()) OVER () FROM wagg_t
+ERROR 42P20 window function calls cannot be nested at 12
+> SELECT k FROM wagg_t WHERE sum(v) OVER () > 1
+ERROR 42P20 window functions are not allowed in WHERE at 28
+> SELECT sum(v) FILTER (WHERE sum(v) OVER () > 1) OVER () FROM wagg_t
+ERROR 42P20 window functions are not allowed in FILTER at 29
+> SELECT sum(v) FILTER (WHERE count(*) > 1) OVER () FROM wagg_t
+ERROR 42803 aggregate functions are not allowed in FILTER at 29
+> SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY v) OVER () FROM wagg_t
+ERROR 0A000 OVER is not supported for ordered-set aggregate percentile_disc at 8
+> SELECT sum(i) OVER (ORDER BY i) FROM (VALUES (9223372036854775807::int8), (1)) AS t(i)
+fields sum:1700:-1:-1
+row 1
+row 9223372036854775808
+SELECT 2
+> DROP VIEW wagg_t
+DROP VIEW

@@ -375,7 +375,13 @@ impl<'a> Fold<'a> {
                     None => Ok(()),
                 }
             }
-            ExprKind::Window(w) => self.all(&mut w.args),
+            ExprKind::Window(w) => {
+                self.all(&mut w.args)?;
+                match &mut w.filter {
+                    Some(filter) => self.subqueries(filter),
+                    None => Ok(()),
+                }
+            }
             ExprKind::SubLink(sub) => {
                 if let Some(test) = &mut sub.test {
                     self.subqueries(test)?;
@@ -601,6 +607,9 @@ impl<'a> Fold<'a> {
             ExprKind::Window(w) => {
                 let mut w = w.clone();
                 w.args = self.list(&w.args)?;
+                if let Some(filter) = &w.filter {
+                    w.filter = Some(Box::new(self.expr(filter)?));
+                }
                 Ok(with(expr, ExprKind::Window(w)))
             }
             ExprKind::SubLink(sub) => {

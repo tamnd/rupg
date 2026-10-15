@@ -44,7 +44,7 @@ fn no_window(name: &str, at: Option<usize>) -> Error {
 }
 
 impl Analyzer<'_> {
-    /// The checks of `ParseFuncOrColumn` for a call with `OVER`, then `transformWindowFuncCall`: the place of the call and the number of its window. `aggregate` has the name of the function for an aggregate, which is not supported yet with `OVER`.
+    /// The checks of `ParseFuncOrColumn` for a call with `OVER`, then `transformWindowFuncCall`: the place of the call and the number of its window. `aggregate` has the name of the function for an aggregate.
     pub(crate) fn window_call(
         &mut self,
         proc: &ProcRow,
@@ -162,11 +162,15 @@ impl Analyzer<'_> {
                 }
             }
         };
-        if aggregate.is_some() {
-            return Err(not_yet("an aggregate function with OVER", at));
-        }
         self.has_windows = true;
-        let call = WindowFunc { oid: proc.oid, args, winref, star: parts.star };
+        let call = WindowFunc {
+            oid: proc.oid,
+            args,
+            winref,
+            star: parts.star,
+            agg: aggregate.is_some(),
+            filter: parts.filter.map(Box::new),
+        };
         Ok(Expr { kind: ExprKind::Window(Box::new(call)), ty, typmod: -1, location: at })
     }
 
