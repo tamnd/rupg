@@ -33,6 +33,12 @@ pub(super) fn check(
     reset: &str,
 ) -> Result<Setting, Error> {
     match (parameter.name, value) {
+        // The shims for 14 to 18 come in M9 (spec/23 section 23.12).
+        ("rupg.compat_version", Setting::Enum(version)) if version != 19 => Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("rupg.compat_version {version} is not supported yet"),
+        )
+        .with_detail("Only the version 19 is available.")),
         ("standard_conforming_strings", Setting::Bool(false)) => Err(Error::new(
             SqlState::FEATURE_NOT_SUPPORTED,
             "non-standard string literals are not supported",

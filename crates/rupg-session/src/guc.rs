@@ -208,18 +208,41 @@ const OLD_NAMES: [(&str, &str); 3] = [
 /// The block size of the oracle build, for the units `8kB`.
 const BLCKSZ: f64 = 8192.0;
 
-/// The parameter with this name, without regard to case, or `None` if PostgreSQL has none. An old name of a renamed parameter finds the new one.
+/// The values of `rupg.compat_version`. The option names are the major versions, and the value of each is its number.
+const COMPAT_VERSIONS: [EnumOption; 6] = [
+    EnumOption { name: "14", value: 14, hidden: false },
+    EnumOption { name: "15", value: 15, hidden: false },
+    EnumOption { name: "16", value: 16, hidden: false },
+    EnumOption { name: "17", value: 17, hidden: false },
+    EnumOption { name: "18", value: 18, hidden: false },
+    EnumOption { name: "19", value: 19, hidden: false },
+];
+
+/// The parameters of rupg with the prefix `rupg.` (spec/05 section 5.7). `find` finds them, so `SET`, `SHOW` and the startup packet take them. They are not in [`all`], so `SHOW ALL` and `pg_settings` give the parameters of PostgreSQL only.
+static EXTRA: [Parameter; 1] = [Parameter {
+    name: "rupg.compat_version",
+    context: Context::Backend,
+    category: "Customized Options",
+    short_desc: "Sets the PostgreSQL version that the session shows to the client.",
+    extra_desc: None,
+    flags: flag::NOT_IN_SAMPLE,
+    kind: Kind::Enum { boot: 19, options: &COMPAT_VERSIONS },
+}];
+
+/// The parameter with this name, without regard to case, or `None` if PostgreSQL and rupg have none. An old name of a renamed parameter finds the new one.
 #[must_use]
 pub fn find(name: &str) -> Option<&'static Parameter> {
     let search = |name: &str| {
         PARAMETERS.binary_search_by(|p| compare(p.name, name)).ok().map(|i| &PARAMETERS[i])
     };
-    search(name).or_else(|| {
-        OLD_NAMES
-            .iter()
-            .find(|(old, _)| old.eq_ignore_ascii_case(name))
-            .and_then(|(_, new)| search(new))
-    })
+    search(name)
+        .or_else(|| {
+            OLD_NAMES
+                .iter()
+                .find(|(old, _)| old.eq_ignore_ascii_case(name))
+                .and_then(|(_, new)| search(new))
+        })
+        .or_else(|| EXTRA.iter().find(|p| p.name.eq_ignore_ascii_case(name)))
 }
 
 /// Every parameter, in the order of the names without regard to case.
