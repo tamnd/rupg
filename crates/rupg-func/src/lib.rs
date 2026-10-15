@@ -19,6 +19,7 @@ mod compare;
 mod datetime;
 mod deparse;
 mod encoding;
+mod extract;
 mod generated;
 mod geo;
 mod io;
@@ -352,6 +353,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| agg::by_src(src))
         .or_else(|| math::by_src(src))
         .or_else(|| datetime::by_src(src))
+        .or_else(|| extract::by_src(src))
         .or_else(|| text::by_src(src))
         .or_else(|| misc::by_src(src))
         .or_else(|| encoding::by_src(src))

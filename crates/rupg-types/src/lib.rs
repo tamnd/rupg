@@ -96,7 +96,7 @@ pub use binary::{Recv, name_recv};
 pub use bit::{BIT_MAX_LEN, bit_bytes, bit_coerce, bit_in, bit_recv, bit_send};
 pub use datetime::{
     Abbrev, AbbrevMeaning, DATE_INFINITY, DATE_NEGATIVE_INFINITY, DateFormat, DateOrder, DateStyle,
-    DateTimeInput, FixedZone, Interval, IntervalStyle, NoZones, POSTGRES_EPOCH_JDATE,
+    DateTimeInput, DateUnit, FixedZone, Interval, IntervalStyle, NoZones, POSTGRES_EPOCH_JDATE,
     TIMESTAMP_INFINITY, TIMESTAMP_NEGATIVE_INFINITY, TimeZone, UNIX_EPOCH_JDATE,
     UNIX_TO_POSTGRES_DAYS, UNIX_TO_POSTGRES_USECS, USECS_PER_DAY, USECS_PER_SEC, ZoneAbbrevs,
     ZoneLookup, adjust_interval, adjust_time, adjust_timestamp, date_from_unix, date_in, date_out,
