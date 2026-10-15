@@ -2287,7 +2287,8 @@ mod tests {
             let mut lines = Vec::new();
             for _ in 0..2000 {
                 lines = send(a, &look);
-                if lines.iter().any(|l| l.contains("advisory")) {
+                // The query of the idle row also has the word "advisory", so the wait looks for the wait event.
+                if lines.iter().any(|l| l.contains(",Lock,advisory,")) {
                     break;
                 }
                 std::thread::sleep(std::time::Duration::from_millis(5));
