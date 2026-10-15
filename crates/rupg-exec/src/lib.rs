@@ -58,6 +58,13 @@ fn set_kernel(func: u32, location: Option<usize>) -> Result<rupg_func::SetKernel
     })
 }
 
+/// True for a built-in function with a body in SQL that has no kernel. The engine runs its body, as for a function that a user makes.
+fn runs_body(func: u32) -> bool {
+    builtin::proc_by_oid(func).is_some_and(|p| p.sqlbody.is_some())
+        && rupg_func::kernel(func).is_none()
+        && rupg_func::set_kernel(func).is_none()
+}
+
 /// True when a call in `FROM` needs the set kernel of the function: the function gives a set, or a row with `width` columns.
 fn table_function(func: u32, width: usize) -> bool {
     width > 1 || builtin::proc_by_oid(func).is_some_and(|p| p.retset)
@@ -123,14 +130,14 @@ fn check(expr: &Expr) -> Result<()> {
             check_query(&sub.query, false)?;
         }
         ExprKind::Func(f) if f.retset => {
-            if !builtin::is_system_proc(f.oid) {
+            if !builtin::is_system_proc(f.oid) && !runs_body(f.oid) {
                 set_kernel(f.oid, expr.location)?;
             }
             f.args.iter().try_for_each(check)?;
         }
         ExprKind::Func(f) => {
             // The engine runs the body of a function in SQL, so such a function needs no kernel.
-            if !builtin::is_system_proc(f.oid) {
+            if !builtin::is_system_proc(f.oid) && !runs_body(f.oid) {
                 kernel(f.oid, expr.location)?;
             }
             f.args.iter().try_for_each(check)?;
@@ -257,7 +264,8 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
         for (call, width) in relation.function.iter().flat_map(|f| &f.calls) {
             match &call.kind {
                 ExprKind::Func(f) if table_function(f.oid, *width) => {
-                    if !builtin::is_system_proc(f.oid) && !row_function(f.oid) {
+                    if !builtin::is_system_proc(f.oid) && !runs_body(f.oid) && !row_function(f.oid)
+                    {
                         set_kernel(f.oid, call.location)?;
                     }
                     f.args.iter().try_for_each(check)?;
@@ -509,9 +517,9 @@ impl Cache {
         Ok(checks)
     }
 
-    /// The body of a function in SQL of the catalog of the session for a call with arguments of the types `inputs`, which the analyzer reads once for each run, or `None` for another function.
+    /// The body of a function in SQL of the catalog of the session, or of a built-in function that [`runs_body`], for a call with arguments of the types `inputs`, which the analyzer reads once for each run, or `None` for another function.
     fn body(&self, func: u32, inputs: &[u32], session: &dyn Session) -> Result<Option<Rc<Body>>> {
-        if session.catalog().and_then(|c| c.function(func)).is_none() {
+        if session.catalog().and_then(|c| c.function(func)).is_none() && !runs_body(func) {
             return Ok(None);
         }
         let kept = self

@@ -531,6 +531,7 @@ fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
         argnames,
         argdefaults: None,
         src: "",
+        sqlbody: None,
     });
     Ok(())
 }
