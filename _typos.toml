@@ -14,6 +14,10 @@ toi = "toi"
 strat = "strat"
 # The table `ser` of the test of the serial columns in `sequence.test`.
 ser = "ser"
+# The patterns `IY` and `iy` of `formatting.c`, the ordinal suffix `nd`, and the pattern `W` with the suffix `th` in the tests.
+iy = "iy"
+nd = "nd"
+wth = "wth"
 
 # Test inputs that are wrong on purpose.
 [default]

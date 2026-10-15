@@ -1,0 +1,151 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT to_char(t, 'YYYY-MM-DD HH24:MI:SS.US'), to_char(t, 'Y,YYY YYYY YYY YY Y'), to_char(t, 'IYYY IYY IY I IW ID IDDD'), to_char(t, 'CC Q WW W J DDD DD D') FROM (VALUES (timestamp '2024-03-05 07:08:09.123456'), (timestamp '1999-12-31 23:59:59'), (timestamp '2021-01-01 00:00:00'), (timestamp '0044-03-15 12:00:00 BC'), (timestamp '0001-01-01 00:00:00 BC'), (timestamp '4713-11-24 00:00:00 BC'), (timestamp '294276-12-31 23:59:59.999999')) v(t)
+fields to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1
+row 2024-03-05 07:08:09.123456,2,024 2024 024 24 4,2024 024 24 4 10 2 065,21 1 10 1 2460375 065 05 3
+row 1999-12-31 23:59:59.000000,1,999 1999 999 99 9,1999 999 99 9 52 5 362,20 4 53 5 2451544 365 31 6
+row 2021-01-01 00:00:00.000000,2,021 2021 021 21 1,2020 020 20 0 53 5 369,21 1 01 1 2459216 001 01 6
+row 0044-03-15 12:00:00.000000,0,044 0044 044 44 4,0044 044 44 4 11 5 075,-01 1 11 3 1705428 074 15 6
+row 0001-01-01 00:00:00.000000,0,001 0001 001 01 1,0002 002 02 2 52 6 363,-01 1 01 1 1721060 001 01 7
+row 4713-11-24 00:00:00.000000,4,713 4713 713 13 3,4713 713 13 3 48 3 332,-48 4 47 4 366 329 24 4
+row 294276-12-31 23:59:59.999999,294,276 294276 276 76 6,294276 276 76 6 52 7 364,2943 4 53 5 109203527 366 31 1
+SELECT 7
+> SELECT to_char(t, 'Month Mon MONTH MON month mon'), to_char(t, 'Day Dy DAY DY day dy'), to_char(t, 'FMMonth FMDay FMDD FMMM FMHH24 FMYYYY') FROM (VALUES (timestamp '2024-09-01 00:00:00'), (timestamp '2024-05-15 13:00:00'), (timestamp '2023-02-28 01:02:03')) v(t)
+fields to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1
+row September Sep SEPTEMBER SEP september sep,Sunday    Sun SUNDAY    SUN sunday    sun,September Sunday 1 9 0 2024
+row May       May MAY       MAY may       may,Wednesday Wed WEDNESDAY WED wednesday wed,May Wednesday 15 5 13 2024
+row February  Feb FEBRUARY  FEB february  feb,Tuesday   Tue TUESDAY   TUE tuesday   tue,February Tuesday 28 2 1 2023
+SELECT 3
+> SELECT to_char(t, 'HH HH12 HH24 AM PM am pm A.M. P.M. a.m. p.m.'), to_char(t, 'AD BC ad bc A.D. B.C. a.d. b.c.') FROM (VALUES (timestamp '2024-01-01 00:30:00'), (timestamp '2024-01-01 11:59:00'), (timestamp '2024-01-01 12:00:00'), (timestamp '2024-01-01 23:00:00'), (timestamp '0100-01-01 01:00:00 BC')) v(t)
+fields to_char:25:-1:-1,to_char:25:-1:-1
+row 12 12 00 AM AM am am A.M. A.M. a.m. a.m.,AD AD ad ad A.D. A.D. a.d. a.d.
+row 11 11 11 AM AM am am A.M. A.M. a.m. a.m.,AD AD ad ad A.D. A.D. a.d. a.d.
+row 12 12 12 PM PM pm pm P.M. P.M. p.m. p.m.,AD AD ad ad A.D. A.D. a.d. a.d.
+row 11 11 23 PM PM pm pm P.M. P.M. p.m. p.m.,AD AD ad ad A.D. A.D. a.d. a.d.
+row 01 01 01 AM AM am am A.M. A.M. a.m. a.m.,BC BC bc bc B.C. B.C. b.c. b.c.
+SELECT 5
+> SELECT to_char(t, 'FF1 FF2 FF3 FF4 FF5 FF6 MS US SSSS SSSSS'), to_char(t, 'ff1 ff3 ff6 ms us ssss') FROM (VALUES (timestamp '2024-01-01 10:20:30.987654'), (timestamp '2024-01-01 00:00:00.000001'), (timestamp '2024-01-01 23:59:59')) v(t)
+fields to_char:25:-1:-1,to_char:25:-1:-1
+row 9 98 987 9876 98765 987654 987 987654 37230 37230,9 987 987654 987 987654 37230
+row 0 00 000 0000 00000 000001 000 000001 0 0,0 000 000001 000 000001 0
+row 0 00 000 0000 00000 000000 000 000000 86399 86399,0 000 000000 000 000000 86399
+SELECT 3
+> SELECT to_char(t, 'DDth DDTH Dth MMth HH24th MIth SSth YYYYth CCth Qth Wth WWth IWth Jth'), to_char(t, 'FMDDth FMDDTH FMMMth Y,YYYth') FROM (VALUES (timestamp '2024-01-01 01:02:03'), (timestamp '2024-02-02 02:12:13'), (timestamp '2024-03-03 03:22:23'), (timestamp '2024-11-11 11:11:11'), (timestamp '2024-12-21 21:21:21'), (timestamp '2024-04-24 04:04:04')) v(t)
+fields to_char:25:-1:-1,to_char:25:-1:-1
+row 01st 01ST 2nd 01st 01st 02nd 03rd 2024th 21st 1st 1st 01st 01st 2460311th,1st 1ST 1st 2,024th
+row 02nd 02ND 6th 02nd 02nd 12th 13th 2024th 21st 1st 1st 05th 05th 2460343rd,2nd 2ND 2nd 2,024th
+row 03rd 03RD 1st 03rd 03rd 22nd 23rd 2024th 21st 1st 1st 09th 09th 2460373rd,3rd 3RD 3rd 2,024th
+row 11th 11TH 2nd 11th 11th 11th 11th 2024th 21st 4th 2nd 46th 46th 2460626th,11th 11TH 11th 2,024th
+row 21st 21ST 7th 12th 21st 21st 21st 2024th 21st 4th 3rd 51st 51st 2460666th,21st 21ST 12th 2,024th
+row 24th 24TH 4th 04th 04th 04th 04th 2024th 21st 2nd 4th 17th 17th 2460425th,24th 24TH 4th 2,024th
+SELECT 6
+> SELECT to_char(t, 'RM rm FMRM FMrm'), to_char(t, '"RM is" RM') FROM (VALUES (timestamp '2024-01-10'), (timestamp '2024-04-10'), (timestamp '2024-08-10'), (timestamp '2024-09-10'), (timestamp '2024-12-10')) v(t)
+fields to_char:25:-1:-1,to_char:25:-1:-1
+row I    i    I i,RM is I   
+row IV   iv   IV iv,RM is IV  
+row VIII viii VIII viii,RM is VIII
+row IX   ix   IX ix,RM is IX  
+row XII  xii  XII xii,RM is XII 
+SELECT 5
+> SELECT to_char(timestamp '2024-03-05 07:08:09', 'TZ tz TZH TZM OF FMOF'), to_char(timestamp '2024-03-05 07:08:09', 'FXYYYY FX "quoted \" text" \"x\ ''lit'' YYYY "a\b" FMx SPx DDSP')
+fields to_char:25:-1:-1,to_char:25:-1:-1
+row   +00 00 +00 +0,2024  quoted " text "x\ 'l4t' 2024 ab x SPx 05
+SELECT 1
+> SELECT to_char(timestamp '2024-03-05 07:08:09', ''), to_char(timestamp 'infinity', 'YYYY'), to_char(timestamp '-infinity', 'YYYY'), to_char(NULL::timestamp, 'YYYY'), to_char(timestamp '2024-03-05', NULL)
+fields to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1
+row NULL,NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT to_char(timestamp '2024-03-05 07:08:09', 'TMMonth TMMon TMDay TMDy TMMONTH TMmonth TMDAY tmday FMTMMonth'), to_char(timestamp '2024-03-05 07:08:09', 'YYYY"年"MM"月"DD"日" é ü ¿')
+fields to_char:25:-1:-1,to_char:25:-1:-1
+row March Mar Tuesday Tue MARCH march TUESDAY tuesday T03onth,2024年03月05日 é ü ¿
+SELECT 1
+> SELECT to_char(timestamp '2024-03-05 07:08:09', 'HH24:MI:SS hh24:mi:ss yyyy-mm-dd iyyy-iw-id cc ddd j q w ww y,yyy month mon day dy rm')
+fields to_char:25:-1:-1
+row 07:08:09 07:08:09 2024-03-05 2024-10-2 21 065 2460375 1 1 10 2,024 march     mar tuesday   tue iii 
+SELECT 1
+> SELECT to_char(t, 'YYYY-MM-DD HH24:MI:SS TZ tz TZH:TZM OF') FROM (VALUES (timestamptz '2024-03-05 07:08:09+00'), (timestamptz '2024-07-01 12:00:00+00')) v(t)
+fields to_char:25:-1:-1
+row 2024-03-05 07:08:09 UTC utc +00:00 +00
+row 2024-07-01 12:00:00 UTC utc +00:00 +00
+SELECT 2
+> SET TimeZone TO 'America/New_York'
+SET
+TimeZone=America/New_York
+> SELECT to_char(t, 'YYYY-MM-DD HH24:MI:SS TZ tz TZH:TZM OF FMOF Day') FROM (VALUES (timestamptz '2024-03-05 07:08:09+00'), (timestamptz '2024-07-01 02:00:00+00'), (timestamptz '1900-01-01 00:00:00+00')) v(t)
+fields to_char:25:-1:-1
+row 2024-03-05 02:08:09 EST est -05:00 -05 -5 Tuesday  
+row 2024-06-30 22:00:00 EDT edt -04:00 -04 -4 Sunday   
+row 1899-12-31 19:00:00 EST est -05:00 -05 -5 Sunday   
+SELECT 3
+> SET TimeZone TO 'Asia/Kolkata'
+SET
+TimeZone=Asia/Kolkata
+> SELECT to_char(timestamptz '2024-03-05 07:08:09+00', 'YYYY-MM-DD HH24:MI:SS TZ TZH TZM OF FMOF')
+fields to_char:25:-1:-1
+row 2024-03-05 12:38:09 IST +05 30 +05:30 +5:30
+SELECT 1
+> SET TimeZone TO '+05:45'
+SET
+TimeZone=+05:45
+> SELECT to_char(timestamptz '2024-03-05 07:08:09+00', 'YYYY-MM-DD HH24:MI:SS TZ TZH TZM OF')
+fields to_char:25:-1:-1
+row 2024-03-05 01:23:09  -05 45 -05:45
+SELECT 1
+> SET TimeZone TO 'Europe/London'
+SET
+TimeZone=Europe/London
+> SELECT to_char(date '2024-07-04', 'YYYY-MM-DD HH24 TZ Day'), pg_typeof(to_char(date '2024-07-04', 'YYYY'))
+fields to_char:25:-1:-1,pg_typeof:2206:4:-1
+row 2024-07-04 00 BST Thursday ,text
+SELECT 1
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT to_char(i, 'YYYY MM DD HH24:MI:SS.US'), to_char(i, 'HH HH12 AM pm'), to_char(i, 'Y,YYY YYY YY Y CC Q RM rm'), to_char(i, 'DDD WW W J SSSS MS FF2') FROM (VALUES (interval '1 year 2 months 3 days 04:05:06.789'), (interval '-1 year -2 months -3 days -04:05:06.789'), (interval '25 hours'), (interval '-25 hours 30 minutes'), (interval '12 months'), (interval '-12 months'), (interval '0'), (interval '1234 years 5 months'), (interval '100000 hours')) v(i)
+fields to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1
+row 0001 02 03 04:05:06.789000,04 04 AM am,0,001 001 01 1 00 1 II   ii  ,423 61 1 1721459 14706 789 78
+row -0001 -02 -3 -04:-05:-06.-789000,-04 -04 AM am,0,-01 -001 -01 -1 00 0 XI   xi  ,-423 -59 1 1720599 -14706 -789 -78
+row 0000 00 00 25:00:00.000000,01 01 AM am,0,000 000 00 0 00   ,000 01 1 1721028 90000 000 00
+row 0000 00 00 -24:-30:00.000000,012 012 AM am,0,000 000 00 0 00   ,000 01 1 1721028 -88200 000 00
+row 0001 00 00 00:00:00.000000,12 12 AM am,0,001 001 01 1 00  XII  xii ,360 52 1 1721394 0 000 00
+row -0001 00 00 00:00:00.000000,12 12 AM am,0,-01 -001 -01 -1 00  I    i   ,-360 -50 1 1720663 0 000 00
+row 0000 00 00 00:00:00.000000,12 12 AM am,0,000 000 00 0 00   ,000 01 1 1721028 0 000 00
+row 1234 05 00 00:00:00.000000,12 12 AM am,1,234 234 34 4 12 2 V    v   ,444390 63485 1 2171889 0 000 00
+row 0000 00 00 100000:00:00.000000,04 04 PM pm,0,000 000 00 0 00   ,000 01 1 1721028 360000000 000 00
+SELECT 9
+> SELECT to_char(i, 'IYYY IW IDDD'), to_char(i, 'FMHH24 FMMI FMSS FMMM FMDD FMYYYY FMCC'), to_char(i, 'HH24th MIth DDth MMth') FROM (VALUES (interval '1 year 2 months 3 days 04:05:06'), (interval '-3 days -04:05:06'), (interval '11 hours 12 minutes 13 seconds')) v(i)
+fields to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1
+row 0001 05 034,4 5 6 2 3 1 0,04th 05th 03rd 02nd
+row -001 47 328,-4 -5 -6 0 -3 0 0,-04th -05th -3rd 00th
+row -001 48 331,11 12 13 0 0 0 0,11th 12th 00th 00th
+SELECT 3
+> SELECT to_char(interval '1 day', 'Day')
+fields to_char:25:-1:-1
+ERROR 22007 invalid format specification for an interval value
+> SELECT to_char(interval '1 day', 'Mon')
+fields to_char:25:-1:-1
+ERROR 22007 invalid format specification for an interval value
+> SELECT to_char(interval '1 day', 'TZ')
+fields to_char:25:-1:-1
+ERROR 22007 invalid format specification for an interval value
+> SELECT to_char(interval '1 day', 'AD')
+fields to_char:25:-1:-1
+ERROR 22007 invalid format specification for an interval value
+> SELECT to_char(interval '1 day', 'D')
+fields to_char:25:-1:-1
+ERROR 22007 invalid format specification for an interval value
+> SELECT to_char(interval '1 day', 'OF')
+fields to_char:25:-1:-1
+ERROR 22007 invalid format specification for an interval value
+> SELECT to_char(interval '1 day', ''), to_char(interval 'infinity', 'HH24'), to_char(interval '-infinity', 'HH24')
+fields to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1
+row NULL,NULL,NULL
+SELECT 1
+> SELECT to_char(time '13:14:15.5', 'HH12:MI:SS.MS AM'), pg_typeof(to_char(time '13:14:15', 'HH24'))
+fields to_char:25:-1:-1,pg_typeof:2206:4:-1
+row 01:14:15.500 PM,text
+SELECT 1
+> SELECT to_char(timestamp '2024-03-05 07:08:09', 'FM'), to_char(timestamp '2024-03-05 07:08:09', 'TM'), to_char(timestamp '2024-03-05 07:08:09', 'FMxyz'), to_char(timestamp '2024-03-05 07:08:09', 'yyyyTH ddth DDsp'), to_char(timestamp '2024-03-05 07:08:09', '"unterminated YYYY'), to_char(timestamp '2024-03-05 07:08:09', 'YYYY"\')
+fields to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1,to_char:25:-1:-1
+row ,,x4z,2024TH 05th 05sp,unterminated YYYY,2024\
+SELECT 1

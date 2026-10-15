@@ -2159,6 +2159,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/normalize.test")));
     }
 
+    /// `to_char` of a timestamp, a `timestamptz` and an interval: each pattern of `formatting.c` for these types, the `FM`, `TM`, `TH`, `th` and `SP` affixes, the quoted strings and the backslashes, the years before Christ, the zones with an offset that is not a whole hour, a date and a time that the call casts, and the patterns that are not valid for an interval. `connection/to_char.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn to_char() {
+        big_stack(|| script(include_str!("connection/to_char.test")));
+    }
+
     /// The functions that `\d` of psql calls for a table: `pg_partition_tree`, `pg_partition_ancestors` and `pg_partition_root` for relations that are not in a partition tree, `pg_relation_is_publishable`, and the query of psql for the foreign keys that reference a table. `connection/describe.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_functions() {
