@@ -14,9 +14,11 @@ pub mod toast;
 
 mod drop;
 mod owner;
+mod sequence;
 
 pub use drop::{Refusal, Target, flag};
 pub use owner::acl_new_owner;
+pub use sequence::SequenceData;
 
 use std::collections::BTreeMap;
 
@@ -197,6 +199,10 @@ pub struct SequenceInfo {
     pub cache: i64,
     /// True when the sequence starts again after its last value.
     pub cycle: bool,
+    /// The file of the sequence, `relfilenode`. [`Catalog::create_sequence`] sets it to the OID of the sequence, and a rewrite of `ALTER SEQUENCE` gives a new file.
+    pub file: u32,
+    /// The row of the file when the statement made the file. `nextval` and `setval` change the row outside of the transactions, so the session keeps the row of a file after the first change.
+    pub data: SequenceData,
 }
 
 /// A relation: a table, an index, a sequence or a TOAST table.
@@ -1325,12 +1331,13 @@ impl Catalog {
     }
 
     /// `DefineSequence`. A sequence has no row type, and each column of a sequence is not null.
-    pub fn create_sequence(&mut self, mut new: NewRelation, info: SequenceInfo) -> Result<u32> {
+    pub fn create_sequence(&mut self, mut new: NewRelation, mut info: SequenceInfo) -> Result<u32> {
         self.check_new_relation(new.namespace, &new.name, false)?;
         for column in &mut new.columns {
             column.not_null = true;
         }
         let oid = self.new_oid();
+        info.file = oid;
         self.relations.insert(
             oid,
             Relation {

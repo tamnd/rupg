@@ -294,7 +294,14 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("reloftype", oid(0))
                 .set("relowner", oid(rel.owner))
                 .set("relam", oid(am))
-                .set("relfilenode", oid(if rel.kind == RelKind::View { 0 } else { rel.oid }))
+                .set(
+                    "relfilenode",
+                    oid(match (&rel.sequence, rel.kind) {
+                        (Some(info), _) => info.file,
+                        (None, RelKind::View) => 0,
+                        (None, _) => rel.oid,
+                    }),
+                )
                 .set("reltablespace", oid(0))
                 .set("relpages", Value::Int4(pages))
                 .set("reltuples", Value::Float4(tuples))

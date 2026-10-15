@@ -1,7 +1,7 @@
 //! `CREATE TABLE`, as `transformCreateStmt` and `DefineRelation` run it. Then the statements that `transformCreateStmt` adds run in the same order as in PostgreSQL: the sequences of the `serial` columns before the table, then the indexes, the foreign keys and `OWNED BY` after it.
 
 use rupg_catalog::toast::{Shape, needs_toast};
-use rupg_catalog::{Column, MAX_COLUMNS, NewRelation, SequenceInfo};
+use rupg_catalog::{Column, MAX_COLUMNS, NewRelation, SequenceData, SequenceInfo};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
@@ -247,6 +247,8 @@ impl Definer<'_, '_> {
                 min: 1,
                 cache: 1,
                 cycle: false,
+                file: 0,
+                data: SequenceData::new(1),
             };
             serial.oid = self.catalog.create_sequence(new, info)?;
         }

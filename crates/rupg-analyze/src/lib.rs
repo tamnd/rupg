@@ -87,6 +87,11 @@ pub trait Env {
     fn allow_system_table_mods(&self) -> bool {
         false
     }
+    /// The row of the file of a sequence as the sessions changed it, or `None` when no session changed it.
+    fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
+        let _ = file;
+        None
+    }
 }
 
 /// The parameters of a statement.

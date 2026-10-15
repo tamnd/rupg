@@ -1049,7 +1049,7 @@ fn oid_alias_type_error_places() {
 fn user_rows_have_the_column_types() {
     use rupg_catalog::{
         Catalog, Column, ConKind, ForeignKey, NewForeignKey, NewIndex, NewIndexColumn, NewRelation,
-        ObjRef, SequenceInfo,
+        ObjRef, SequenceData, SequenceInfo,
     };
     use rupg_types::oid;
 
@@ -1092,6 +1092,8 @@ fn user_rows_have_the_column_types() {
         min: 1,
         cache: 1,
         cycle: false,
+        file: 0,
+        data: SequenceData::new(1),
     };
     let seq = catalog
         .create_sequence(new("t_a_seq", vec![int8("last_value"), int8("log_cnt")]), info)

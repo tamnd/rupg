@@ -31,6 +31,7 @@ mod range;
 mod reg;
 mod regex;
 mod replication;
+mod sequence;
 mod shared;
 mod snapshot;
 mod srf;
@@ -62,6 +63,7 @@ pub use io::{
 };
 pub use multirange::range_agg;
 pub use regex::{AuthMatch, auth_compile, auth_search};
+pub use sequence::Sequences;
 pub use srf::{SetKernel, set_kernel};
 pub use text::quote_identifier;
 
@@ -203,6 +205,29 @@ pub trait Session {
     /// The error of a file of the maps that does not open.
     fn ident_mappings(&self) -> Result<Vec<Vec<Value>>> {
         Ok(Vec::new())
+    }
+    /// The row of the file of a sequence as the sessions changed it, or `None` when no session changed it, so that the row is the one of the file when it was made.
+    fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
+        let _ = file;
+        None
+    }
+    /// The change of the row of the file of a sequence, outside of the transaction, so that a rollback does not undo it. `initial` is the row when no session changed it yet. The change stays only when `change` gives no error, and no other session changes the row at the same time.
+    ///
+    /// # Errors
+    ///
+    /// The error of `change`, and `0A000` for a session with no server.
+    fn change_sequence(
+        &self,
+        file: u32,
+        initial: rupg_catalog::SequenceData,
+        change: &mut dyn FnMut(&mut rupg_catalog::SequenceData) -> Result<()>,
+    ) -> Result<()> {
+        let _ = (file, initial, change);
+        Err(not_yet("a sequence in a session with no server"))
+    }
+    /// The cache of the sequences of the session, or `None` for a session with no server.
+    fn local_sequences(&self) -> Option<&std::cell::RefCell<Sequences>> {
+        None
     }
     /// The catalog of the user objects that the statement sees, or `None` when the session has no catalog.
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
@@ -353,6 +378,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))
         .or_else(|| advisory::by_src(src))
+        .or_else(|| sequence::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.
