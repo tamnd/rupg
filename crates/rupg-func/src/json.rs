@@ -5,7 +5,7 @@
 use std::cmp::Ordering;
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_types::{JsonItem, JsonTree, Value, numeric_in, oid};
+use rupg_types::{JsonItem, JsonTree, Value, json_index, numeric_in, oid};
 
 use crate::cast::{numeric_to_float, numeric_to_int};
 use crate::{Call, Kernel, bad_value, type_error};
@@ -53,12 +53,12 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
 }
 
 /// The text of an argument.
-fn text(args: &[Value], at: usize) -> Result<&str> {
+pub(crate) fn text(args: &[Value], at: usize) -> Result<&str> {
     args.get(at).and_then(Value::as_str).ok_or_else(bad_value)
 }
 
 /// The parsed value of an argument.
-fn tree(args: &[Value], at: usize) -> Result<JsonTree<'_>> {
+pub(crate) fn tree(args: &[Value], at: usize) -> Result<JsonTree<'_>> {
     JsonTree::parse(text(args, at)?).map_err(type_error)
 }
 
@@ -79,16 +79,6 @@ fn path(args: &[Value], at: usize) -> Result<Option<Vec<&str>>> {
 fn keys(args: &[Value], at: usize) -> Result<Vec<&str>> {
     let Some(Value::Array(array)) = args.get(at) else { return Err(bad_value()) };
     array.values.iter().flatten().map(|v| v.as_str().ok_or_else(bad_value)).collect()
-}
-
-/// `strtoint` in base 10 with nothing after the number: the leading white space of `isspace` and a sign are permitted.
-fn strtoint(s: &str) -> Option<i32> {
-    let s = s.trim_start_matches([' ', '\t', '\n', '\u{b}', '\u{c}', '\r']);
-    let digits = s.strip_prefix(['+', '-']).unwrap_or(s);
-    if digits.is_empty() || !digits.bytes().all(|b| b.is_ascii_digit()) {
-        return None;
-    }
-    s.parse().ok()
 }
 
 /// A `json` result, or null.
@@ -144,7 +134,7 @@ fn json_array_element_text(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 fn json_path(tree: &JsonTree<'_>, path: &[&str]) -> Option<usize> {
     let mut nodes = vec![0];
     for step in path {
-        let index = strtoint(step);
+        let index = json_index(step);
         let mut next = Vec::new();
         for &node in &nodes {
             match tree.item(node) {
@@ -210,7 +200,7 @@ fn json_typeof(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     }))
 }
 
-fn invalid(message: &str) -> Error {
+pub(crate) fn invalid(message: &str) -> Error {
     Error::new(SqlState::INVALID_PARAMETER_VALUE, message)
 }
 
@@ -277,7 +267,7 @@ fn jsonb_path(tree: &JsonTree<'_>, path: &[&str]) -> Option<usize> {
     for step in path {
         node = match tree.item(node) {
             JsonItem::Object(_) => tree.field(node, step)?,
-            JsonItem::Array(_) => tree.element(node, i64::from(strtoint(step)?))?,
+            JsonItem::Array(_) => tree.element(node, i64::from(json_index(step)?))?,
             _ => return None,
         };
     }
@@ -452,4 +442,145 @@ fn jsonb_ge(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// `jsonb_cmp`: -1, 0 or 1.
 fn jsonb_cmp(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Int4(order(args)? as i32))
+}
+
+/// The first byte of a `json` text after the white space.
+fn first_byte(s: &str) -> Option<u8> {
+    s.trim_start_matches([' ', '\t', '\n', '\r']).bytes().next()
+}
+
+/// Parses a `json` argument for a set function. The parser of PostgreSQL calls the semantic action of the root before it reads the rest, so an array or an object at the root gives the error of the function before a syntax error after it.
+fn json_root<'a>(
+    args: &'a [Value],
+    escapes: bool,
+    root_error: impl Fn(u8) -> Option<Error>,
+) -> Result<JsonTree<'a>> {
+    let s = text(args, 0)?;
+    JsonTree::parse_with(s, escapes)
+        .map_err(|error| first_byte(s).and_then(&root_error).unwrap_or_else(|| type_error(error)))
+}
+
+/// A row of `json_each` or `jsonb_each`: the key and the value as `json` or as text.
+fn each_rows(tree: &JsonTree<'_>, as_text: bool) -> Vec<Vec<Value>> {
+    let JsonItem::Object(fields) = tree.item(0) else { return Vec::new() };
+    fields
+        .iter()
+        .map(|(name, at)| {
+            let value =
+                if as_text { text_value(tree.as_text(*at)) } else { Value::text(tree.text(*at)) };
+            vec![Value::text(name), value]
+        })
+        .collect()
+}
+
+/// `json_each` and `json_each_text`. All the fields are in the rows, also when a key is in the object more than once.
+fn json_each_worker(args: &[Value], as_text: bool) -> Result<Vec<Vec<Value>>> {
+    let array = || invalid("cannot deconstruct an array as an object");
+    let tree = json_root(args, true, |b| (b == b'[').then(array))?;
+    match tree.item(0) {
+        JsonItem::Object(_) => Ok(each_rows(&tree, as_text)),
+        JsonItem::Array(_) => Err(array()),
+        _ => Err(invalid("cannot deconstruct a scalar")),
+    }
+}
+
+/// `json_each`.
+pub(crate) fn json_each(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    json_each_worker(args, false)
+}
+
+/// `json_each_text`.
+pub(crate) fn json_each_text(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    json_each_worker(args, true)
+}
+
+/// `jsonb_each` and `jsonb_each_text`.
+fn jsonb_each_worker(args: &[Value], name: &str, as_text: bool) -> Result<Vec<Vec<Value>>> {
+    let tree = tree(args, 0)?;
+    if !matches!(tree.item(0), JsonItem::Object(_)) {
+        return Err(invalid(&format!("cannot call {name} on a non-object")));
+    }
+    Ok(each_rows(&tree, as_text))
+}
+
+/// `jsonb_each`.
+pub(crate) fn jsonb_each(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    jsonb_each_worker(args, "jsonb_each", false)
+}
+
+/// `jsonb_each_text`.
+pub(crate) fn jsonb_each_text(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    jsonb_each_worker(args, "jsonb_each_text", true)
+}
+
+/// The keys of the object at the root, or the error of `json_object_keys` or `jsonb_object_keys`.
+fn object_keys(tree: &JsonTree<'_>, name: &str) -> Result<Vec<Vec<Value>>> {
+    match tree.item(0) {
+        JsonItem::Object(fields) => Ok(fields.iter().map(|f| vec![Value::text(&f.0)]).collect()),
+        JsonItem::Array(_) => Err(invalid(&format!("cannot call {name} on an array"))),
+        _ => Err(invalid(&format!("cannot call {name} on a scalar"))),
+    }
+}
+
+/// `json_object_keys`. A key is in the rows once for each field with it.
+pub(crate) fn json_object_keys(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    let array = || invalid("cannot call json_object_keys on an array");
+    object_keys(&json_root(args, true, |b| (b == b'[').then(array))?, "json_object_keys")
+}
+
+/// `jsonb_object_keys`.
+pub(crate) fn jsonb_object_keys(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    object_keys(&tree(args, 0)?, "jsonb_object_keys")
+}
+
+/// A row for each element of the array at the root, as `json` or as text.
+fn element_rows(tree: &JsonTree<'_>, as_text: bool) -> Vec<Vec<Value>> {
+    let JsonItem::Array(items) = tree.item(0) else { return Vec::new() };
+    items
+        .iter()
+        .map(|&at| {
+            vec![if as_text { text_value(tree.as_text(at)) } else { Value::text(tree.text(at)) }]
+        })
+        .collect()
+}
+
+/// `json_array_elements` and `json_array_elements_text`. Only the text variant decodes the escapes.
+fn json_elements_worker(args: &[Value], name: &str, as_text: bool) -> Result<Vec<Vec<Value>>> {
+    let object = || invalid(&format!("cannot call {name} on a non-array"));
+    let tree = json_root(args, as_text, |b| (b == b'{').then(object))?;
+    match tree.item(0) {
+        JsonItem::Array(_) => Ok(element_rows(&tree, as_text)),
+        JsonItem::Object(_) => Err(object()),
+        _ => Err(invalid(&format!("cannot call {name} on a scalar"))),
+    }
+}
+
+/// `json_array_elements`.
+pub(crate) fn json_array_elements(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    json_elements_worker(args, "json_array_elements", false)
+}
+
+/// `json_array_elements_text`.
+pub(crate) fn json_array_elements_text(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    json_elements_worker(args, "json_array_elements_text", true)
+}
+
+/// `jsonb_array_elements` and `jsonb_array_elements_text`.
+fn jsonb_elements_worker(args: &[Value], as_text: bool) -> Result<Vec<Vec<Value>>> {
+    let tree = tree(args, 0)?;
+    match tree.item(0) {
+        JsonItem::Array(_) => Ok(element_rows(&tree, as_text)),
+        JsonItem::Object(_) => Err(invalid("cannot extract elements from an object")),
+        _ => Err(invalid("cannot extract elements from a scalar")),
+    }
+}
+
+/// `jsonb_array_elements`.
+pub(crate) fn jsonb_array_elements(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    jsonb_elements_worker(args, false)
+}
+
+/// `jsonb_array_elements_text`.
+pub(crate) fn jsonb_array_elements_text(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
+    jsonb_elements_worker(args, true)
 }
