@@ -70,5 +70,6 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         windows: Vec::new(),
         ctes: Vec::new(),
         recursive: false,
+        row_marks: Vec::new(),
     })
 }

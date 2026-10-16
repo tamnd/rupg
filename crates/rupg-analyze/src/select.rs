@@ -54,6 +54,8 @@ pub struct Query {
     pub ctes: Vec<crate::Cte>,
     /// `hasRecursive`: the query has `WITH RECURSIVE`.
     pub recursive: bool,
+    /// `rowMarks`: the relations that `FOR UPDATE` or `FOR SHARE` locks.
+    pub row_marks: Vec<crate::RowMark>,
 }
 
 /// A column of the result.
@@ -247,9 +249,6 @@ impl Analyzer<'_> {
             }
             None => None,
         };
-        if !s.lockingClause.is_empty() {
-            return Err(not_yet("FOR UPDATE and FOR SHARE"));
-        }
         // markTargetListOrigins: a target that is a column of a relation names the table and the column, also for a column of a query outside this query. A column of a view is a column of the view. A column of a subquery in FROM has the origin of the column of the subquery, and a column of a function in FROM has no origin.
         for target in &mut targets {
             if let ExprKind::Var(var) = &target.expr.kind {
@@ -301,7 +300,7 @@ impl Analyzer<'_> {
             self.check_grouping(&targets, having.as_ref(), &group)?;
         }
         let relations = std::mem::take(&mut self.scope.relations);
-        Ok(Query {
+        let mut query = Query {
             relations,
             from,
             targets,
@@ -321,6 +320,13 @@ impl Analyzer<'_> {
             windows,
             ctes: Vec::new(),
             recursive: false,
-        })
+            row_marks: Vec::new(),
+        };
+        for clause in s.lockingClause.iter().flatten() {
+            if let Node::LockingClause(clause) = clause {
+                crate::locking::transform_locking_clause(&mut query, clause)?;
+            }
+        }
+        Ok(query)
     }
 }

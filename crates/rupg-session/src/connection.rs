@@ -931,6 +931,7 @@ impl Connection {
         let plan = plan.fold(None, &reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
+        plan.start(&reader)?;
         let columns = query::columns(&plan);
         let rows = query::run(&plan, &[], &reader, &[]);
         late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
@@ -2529,6 +2530,12 @@ mod tests {
     #[test]
     fn range_type() {
         big_stack(|| script(include_str!("connection/range_type.test")));
+    }
+
+    /// `FOR UPDATE`, `FOR NO KEY UPDATE`, `FOR SHARE` and `FOR KEY SHARE`: the clauses on all the relations and on the relations with a name, the errors of `transformLockingClause` and `CheckSelectLocking`, the locks on subqueries, joins, functions, queries of `WITH` and views, the nullable side of an outer join, a sequence, the cursors that lock rows, and a read-only transaction. `connection/for_update.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn for_update() {
+        big_stack(|| script(include_str!("connection/for_update.test")));
     }
 
     /// The functions in SQL of `information_schema` that have a `RETURN` body, such as `_pg_char_max_length`: the rows of `pg_proc` and `pg_depend` with the OIDs of PostgreSQL, `pg_get_function_arguments` and `pg_get_function_result`, the results for many types and type modifiers and for the columns of a table, a call with and without the schema in `search_path`, and the errors of a bad argument. Also the shift operators `<<` and `>>` of the integer types, which the bodies use. `connection/sql_functions.test` is the output of PostgreSQL 19 for the same script in a new database.

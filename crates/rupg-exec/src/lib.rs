@@ -231,6 +231,7 @@ const MIXED_KEYS: &str =
 ///
 /// `0A000` for a function or a type that the engine does not have yet.
 pub fn prepare(query: Query) -> Result<Plan> {
+    rupg_analyze::check_outer_joins(&query)?;
     check_query(&query, true)?;
     Ok(Plan { query })
 }
@@ -978,6 +979,11 @@ impl Plan {
         &self.query.params
     }
 
+    /// The locking clause of the first row mark of the query, such as `FOR UPDATE`, which `DECLARE CURSOR` checks, or `None` for a query with no row mark of its own.
+    pub fn lock_clause(&self) -> Option<&'static str> {
+        self.query.row_marks.first().map(|mark| rupg_analyze::strength_name(mark.strength))
+    }
+
     /// Folds the constant parts of the expressions as the planner does, and gives the plan that runs the folded expressions. `params` has the values of the parameters of `Bind`, which the fold takes as constants as a custom plan does.
     ///
     /// # Errors
@@ -992,14 +998,53 @@ impl Plan {
         backward(&self.query)
     }
 
+    /// The checks of `ExecutorStart`, which come before `RowDescription`: a read-only transaction cannot lock a row, and a sequence has no rows to lock.
+    ///
+    /// # Errors
+    ///
+    /// `25006` for `FOR UPDATE` or `FOR SHARE` in a read-only transaction, and `42809` for a lock on the rows of a sequence.
+    pub fn start(&self, session: &dyn Session) -> Result<()> {
+        check_row_marks(&self.query, session)
+    }
+
     /// Runs the query and gives its rows.
     ///
     /// # Errors
     ///
     /// The error of a function, such as a division by zero.
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
+        self.start(session)?;
         run_query(&self.query, params, session, &Cache::default(), &[], false)
     }
+}
+
+/// The checks of `ExecCheckXactReadOnly` and `CheckValidRowMarkRel` for the tables that `FOR UPDATE` or `FOR SHARE` locks: a read-only transaction cannot lock a row, and a sequence has no rows to lock.
+fn check_row_marks(query: &Query, session: &dyn Session) -> Result<()> {
+    let mut tables = Vec::new();
+    rupg_analyze::locked_tables(query, &mut tables);
+    if tables.is_empty() {
+        return Ok(());
+    }
+    if session.setting("transaction_read_only").as_deref() == Some("on") {
+        let strength = rupg_analyze::first_row_mark(query);
+        let clause = strength.map_or("FOR UPDATE", rupg_analyze::strength_name);
+        return Err(Error::new(
+            SqlState::READ_ONLY_SQL_TRANSACTION,
+            format!("cannot execute SELECT {clause} in a read-only transaction"),
+        ));
+    }
+    let catalog = session.catalog();
+    for oid in tables {
+        if let Some(relation) = catalog.and_then(|c| c.relation(oid))
+            && relation.kind == rupg_catalog::RelKind::Sequence
+        {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("cannot lock rows in sequence \"{}\"", relation.name),
+            ));
+        }
+    }
+    Ok(())
 }
 
 /// True when the top node of the plan of a query can scan backward. `Sort`, the scans of a table, a function, a `VALUES` list and a query of `WITH` can, and `Limit` and `SubqueryScan` can when the node below them can. `Append` for `UNION ALL` can when each part can. `Result` with no `FROM`, the joins, the aggregates, `Unique`, `WindowAgg` and `ProjectSet` cannot.
@@ -1013,7 +1058,8 @@ fn backward(query: &Query) -> bool {
         };
         op.kind == SetKind::Union && op.all && part(&op.left) && part(&op.right)
     }
-    if query.has_target_srfs() {
+    // `LockRows` cannot scan backward.
+    if query.has_target_srfs() || !query.row_marks.is_empty() {
         return false;
     }
     if !query.sort.is_empty() && query.distinct.is_empty() && query.windows.is_empty() {

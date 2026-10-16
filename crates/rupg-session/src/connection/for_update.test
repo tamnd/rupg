@@ -1,0 +1,223 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE TABLE t (a int, b text)
+CREATE TABLE
+> CREATE TABLE u (a int, c text)
+CREATE TABLE
+> CREATE VIEW v AS SELECT a, b FROM t
+CREATE VIEW
+> CREATE VIEW va AS SELECT a, count(*) AS n FROM t GROUP BY a
+CREATE VIEW
+> CREATE VIEW vu AS SELECT a FROM t UNION SELECT a FROM u
+CREATE VIEW
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> SELECT * FROM t FOR UPDATE
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t FOR NO KEY UPDATE
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t FOR SHARE
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t FOR KEY SHARE
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t FOR UPDATE NOWAIT
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t FOR UPDATE SKIP LOCKED
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t, u FOR UPDATE OF t FOR SHARE OF u
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,a@u.1:23:4:-1,c@u.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t x FOR UPDATE OF x
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t x FOR UPDATE OF t
+ERROR 42P01 relation "t" in FOR UPDATE clause not found in FROM clause at 33
+> SELECT * FROM t FOR UPDATE OF public.t
+ERROR 42601 FOR UPDATE must specify unqualified relation names at 31
+> SELECT * FROM t FOR UPDATE OF nope
+ERROR 42P01 relation "nope" in FOR UPDATE clause not found in FROM clause at 31
+> SELECT relname FROM pg_class WHERE oid = 1259 FOR UPDATE
+fields relname@pg_class.2:19:64:-1
+row pg_class
+SELECT 1
+> SELECT relname FROM pg_class WHERE oid = 1259 FOR SHARE OF pg_class
+fields relname@pg_class.2:19:64:-1
+row pg_class
+SELECT 1
+> SELECT count(*) FROM t FOR UPDATE
+ERROR 0A000 FOR UPDATE is not allowed with aggregate functions
+> SELECT DISTINCT a FROM t FOR UPDATE
+ERROR 0A000 FOR UPDATE is not allowed with DISTINCT clause
+> SELECT a FROM t GROUP BY a FOR UPDATE
+ERROR 0A000 FOR UPDATE is not allowed with GROUP BY clause
+> SELECT 1 FROM t HAVING true FOR SHARE
+ERROR 0A000 FOR SHARE is not allowed with HAVING clause
+> SELECT row_number() OVER () FROM t FOR UPDATE
+ERROR 0A000 FOR UPDATE is not allowed with window functions
+> SELECT generate_series(1, 2) FROM t FOR KEY SHARE
+ERROR 0A000 FOR KEY SHARE is not allowed with set-returning functions in the target list
+> SELECT generate_series(1, 2) FOR UPDATE
+ERROR 0A000 FOR UPDATE is not allowed with set-returning functions in the target list
+> SELECT 1 FOR UPDATE
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT a FROM t UNION SELECT a FROM u FOR UPDATE
+ERROR 0A000 FOR UPDATE is not allowed with UNION/INTERSECT/EXCEPT
+> VALUES (1) FOR UPDATE
+ERROR 0A000 FOR UPDATE cannot be applied to VALUES
+> SELECT * FROM (SELECT * FROM t) s FOR UPDATE
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM (SELECT * FROM t) s FOR UPDATE OF s
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM (SELECT count(*) FROM t) s FOR UPDATE
+ERROR 0A000 FOR UPDATE is not allowed with aggregate functions
+> SELECT * FROM (SELECT * FROM t FOR UPDATE) s
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM (SELECT DISTINCT a FROM t) s FOR SHARE OF s
+ERROR 0A000 FOR SHARE is not allowed with DISTINCT clause
+> SELECT * FROM t JOIN u USING (a) FOR UPDATE
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@u.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t JOIN u USING (a) AS j FOR UPDATE OF j
+ERROR 0A000 FOR UPDATE cannot be applied to a join at 53
+> SELECT * FROM (t JOIN u USING (a)) j FOR UPDATE OF j
+ERROR 0A000 FOR UPDATE cannot be applied to a join at 52
+> SELECT * FROM t LEFT JOIN u ON true FOR UPDATE
+ERROR 0A000 FOR UPDATE cannot be applied to the nullable side of an outer join
+> SELECT * FROM t LEFT JOIN u ON true FOR UPDATE OF t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,a@u.1:23:4:-1,c@u.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t LEFT JOIN u ON true FOR SHARE OF u
+ERROR 0A000 FOR SHARE cannot be applied to the nullable side of an outer join
+> SELECT * FROM t RIGHT JOIN u ON true FOR SHARE OF t
+ERROR 0A000 FOR SHARE cannot be applied to the nullable side of an outer join
+> SELECT * FROM t FULL JOIN u ON true FOR KEY SHARE OF u
+ERROR 0A000 FOR KEY SHARE cannot be applied to the nullable side of an outer join
+> SELECT * FROM generate_series(1, 2) g FOR UPDATE
+fields g:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT * FROM generate_series(1, 2) g FOR UPDATE OF g
+ERROR 0A000 FOR UPDATE cannot be applied to a function at 53
+> SELECT * FROM (VALUES (1)) w (x) FOR UPDATE OF w
+fields x:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM (VALUES (1)) w (x) FOR UPDATE
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH c AS (SELECT 1 AS x) SELECT * FROM c FOR UPDATE
+fields x:23:4:-1
+row 1
+SELECT 1
+> WITH c AS (SELECT 1 AS x) SELECT * FROM c FOR UPDATE OF c
+ERROR 0A000 FOR UPDATE cannot be applied to a WITH query at 57
+> WITH c AS (SELECT * FROM t) SELECT * FROM c, t FOR UPDATE OF t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM v FOR UPDATE
+fields a@v.1:23:4:-1,b@v.2:25:-1:-1
+SELECT 0
+> SELECT * FROM va FOR UPDATE
+ERROR 0A000 FOR UPDATE is not allowed with GROUP BY clause
+> SELECT * FROM va FOR SHARE OF va
+ERROR 0A000 FOR SHARE is not allowed with GROUP BY clause
+> SELECT * FROM vu FOR UPDATE
+fields a@vu.1:23:4:-1
+SELECT 0
+> SELECT * FROM s FOR UPDATE
+ERROR 42809 cannot lock rows in sequence "s"
+> SELECT * FROM t WHERE a IN (SELECT a FROM u FOR UPDATE)
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t WHERE a IN (SELECT count(*) FROM u FOR UPDATE)
+ERROR 0A000 FOR UPDATE is not allowed with aggregate functions
+> SELECT * FROM t ORDER BY a LIMIT 1 FOR UPDATE
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT * FROM t FOR UPDATE ORDER BY a
+ERROR 42601 syntax error at or near "ORDER" at 28
+> SELECT * FROM t FOR READ ONLY
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> BEGIN
+BEGIN
+> DECLARE c1 CURSOR FOR SELECT * FROM t FOR UPDATE
+DECLARE CURSOR
+> FETCH ALL FROM c1
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+FETCH 0
+> FETCH BACKWARD 1 FROM c1
+ERROR 55000 cursor can only scan forward
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> DECLARE c2 SCROLL CURSOR FOR SELECT * FROM t FOR UPDATE
+ERROR 0A000 DECLARE SCROLL CURSOR ... FOR UPDATE is not supported
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> DECLARE c3 INSENSITIVE CURSOR FOR SELECT * FROM t FOR SHARE
+ERROR 42P11 DECLARE INSENSITIVE CURSOR ... FOR SHARE is not valid
+> ROLLBACK
+ROLLBACK
+> DECLARE c4 CURSOR WITH HOLD FOR SELECT * FROM t FOR NO KEY UPDATE
+ERROR 0A000 DECLARE CURSOR WITH HOLD ... FOR NO KEY UPDATE is not supported
+> BEGIN
+BEGIN
+> DECLARE c5 SCROLL CURSOR FOR SELECT * FROM (SELECT * FROM t FOR UPDATE) s
+DECLARE CURSOR
+> CLOSE c5
+CLOSE CURSOR
+> ROLLBACK
+ROLLBACK
+> BEGIN READ ONLY
+BEGIN
+> SELECT * FROM t FOR SHARE
+ERROR 25006 cannot execute SELECT FOR SHARE in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> BEGIN READ ONLY
+BEGIN
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> SELECT 1 FOR UPDATE
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM (SELECT * FROM t FOR KEY SHARE) s
+ERROR 25006 cannot execute SELECT FOR KEY SHARE in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> BEGIN READ ONLY
+BEGIN
+> SELECT * FROM s FOR UPDATE
+ERROR 25006 cannot execute SELECT FOR UPDATE in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> PREPARE p AS SELECT * FROM t FOR UPDATE
+PREPARE
+> EXECUTE p
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+SELECT 0
+> BEGIN READ ONLY
+BEGIN
+> EXECUTE p
+ERROR 25006 cannot execute SELECT FOR UPDATE in a read-only transaction
+> ROLLBACK
+ROLLBACK
