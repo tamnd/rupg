@@ -1528,7 +1528,7 @@ impl<'a> Eval<'a> {
                     .ok_or_else(|| Error::internal("a column of an outer query has no row"))?;
                 Ok(frame.tables.var(frame.tuple, *var))
             }
-            ExprKind::SubLink(sub) => self.sublink(sub),
+            ExprKind::SubLink(sub) => self.sublink(sub, expr.ty),
             ExprKind::SubColumn(n) => self
                 .sub
                 .last()
@@ -1551,7 +1551,7 @@ impl<'a> Eval<'a> {
     }
 
     /// `ExecScanSubPlan`: the value of a subquery in an expression.
-    fn sublink(&mut self, sub: &SubLink) -> Result<Value> {
+    fn sublink(&mut self, sub: &SubLink, ty: u32) -> Result<Value> {
         let exists = sub.kind == SubLinkKind::Exists;
         let query = &sub.query;
         let mut frames = self.outer.to_vec();
@@ -1589,6 +1589,22 @@ impl<'a> Eval<'a> {
                     "more than one row returned by a subquery used as an expression",
                 )),
             },
+            SubLinkKind::Array
+                if query.targets.iter().find(|t| !t.junk).is_some_and(|t| t.expr.ty == ty) =>
+            {
+                // The column is an array, so the result has one more dimension, as `accumArrayResultArr`.
+                if rows.is_empty() {
+                    return Ok(Value::Array(Box::new(Array::empty())));
+                }
+                let (mut dims, mut count, mut values) = (Vec::new(), 0, Vec::new());
+                for row in rows.iter() {
+                    agg::accumulate_array(row.first(), &mut dims, &mut count, &mut values)?;
+                }
+                let mut all = Vec::with_capacity(dims.len() + 1);
+                all.push(ArrayDim { len: count, lower: 1 });
+                all.extend(dims);
+                Ok(Value::Array(Box::new(Array { dims: all, values })))
+            }
             SubLinkKind::Array => {
                 let values =
                     rows.iter().map(|row| row.first().filter(|v| !v.is_null()).cloned()).collect();

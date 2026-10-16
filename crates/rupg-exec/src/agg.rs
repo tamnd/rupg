@@ -703,7 +703,7 @@ impl Agg<'_> {
 }
 
 /// `accumulateArrayResultArr`: adds the elements of one input array of `array_agg` to the state. Each input array must have the dimensions and the lower bounds of the first input array.
-fn accumulate_array(
+pub(crate) fn accumulate_array(
     input: Option<&Value>,
     dims: &mut Vec<ArrayDim>,
     count: &mut i32,

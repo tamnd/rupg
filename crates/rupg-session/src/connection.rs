@@ -2562,6 +2562,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_distinct.test")));
     }
 
+    /// `ARRAY(SELECT ...)` of a column that is an array: rows of arrays with one and two dimensions, lower bounds that are not 1, no rows, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, a correlated subquery and the text of a view. `connection/array_sublink_array.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn array_sublink_array() {
+        big_stack(|| script(include_str!("connection/array_sublink_array.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

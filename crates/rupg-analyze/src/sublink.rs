@@ -72,10 +72,12 @@ impl Analyzer<'_> {
                 };
                 if kind == SubLinkKind::Expr {
                     (ty, typmod, None)
-                } else if types::element(ty) != 0 {
-                    return Err(not_yet("ARRAY() of an array", at));
                 } else {
-                    let array = types::array_of(ty);
+                    // `get_promoted_array_type`: an array column with no array type of its own gives arrays of one more dimension.
+                    let array = match types::array_of(ty) {
+                        0 if types::element(ty) != 0 => ty,
+                        array => array,
+                    };
                     if array == 0 {
                         return Err(Error::new(
                             SqlState::UNDEFINED_OBJECT,
