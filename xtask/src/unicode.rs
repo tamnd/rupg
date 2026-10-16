@@ -109,6 +109,9 @@ fn norm_tables(rev: &str, data: &str, props: &str) -> Result<String, String> {
     let mut chars = Vec::new();
     let mut pairs = Vec::new();
     let mut assigned: Vec<(u32, u32)> = Vec::new();
+    let mut nonspacing: Vec<(u32, u32)> = Vec::new();
+    // The code point of the line before, and true when it is in the last range of `nonspacing`.
+    let mut before = (0, false);
     for line in data.lines().filter(|l| !l.is_empty()) {
         let field: Vec<&str> = line.split(';').collect();
         if field.len() < 6 {
@@ -120,6 +123,18 @@ fn norm_tables(rev: &str, data: &str, props: &str) -> Result<String, String> {
             Some(last) if field[1].ends_with(", Last>") || last.1 + 1 == code => last.1 = code,
             _ => assigned.push((code, code)),
         }
+        // The ranges of `generate-unicode_nonspacing_table.pl`: the runs of lines with the general category Me, Mn or Cf. A run goes over the code points that the file does not list.
+        let spacing = !matches!(field[2], "Me" | "Mn" | "Cf");
+        match (before.1, spacing) {
+            (false, false) => nonspacing.push((code, code)),
+            (true, true) => {
+                if let Some(last) = nonspacing.last_mut() {
+                    last.1 = before.0;
+                }
+            }
+            _ => {}
+        }
+        before = (code, !spacing);
         let class: u8 =
             field[3].parse().map_err(|e| format!("UnicodeData.txt: bad class in {line:?}: {e}"))?;
         if class != 0 {
@@ -141,9 +156,14 @@ fn norm_tables(rev: &str, data: &str, props: &str) -> Result<String, String> {
         chars.extend(parts);
     }
     pairs.sort_unstable();
+    if before.1
+        && let Some(last) = nonspacing.last_mut()
+    {
+        last.1 = before.0;
+    }
 
     let mut out = String::new();
-    writeln!(out, "//! The tables of the Unicode normalization forms and the assigned code points, for Unicode {rev}.").unwrap();
+    writeln!(out, "//! The tables of the Unicode normalization forms, the assigned code points and the non-spacing characters, for Unicode {rev}.").unwrap();
     out.push_str("//!\n//! `cargo xtask unicode` makes this file from `vendor/unicode/UnicodeData.txt` and `vendor/unicode/DerivedNormalizationProps.txt`. Do not edit it.\n\n");
     let version = rev.split('.').take(2).collect::<Vec<_>>().join(".");
     out.push_str("/// The version of Unicode in the form major.minor, as `PG_UNICODE_VERSION`.\n");
@@ -162,6 +182,10 @@ fn norm_tables(rev: &str, data: &str, props: &str) -> Result<String, String> {
     });
     out.push_str("\n/// The ranges of the code points that `UnicodeData.txt` lists, first and last, sorted. The other code points have the general category Cn, unassigned.\n");
     table(&mut out, "ASSIGNED", "(u32, u32)", &assigned, |(a, b)| {
+        format!("(0x{a:04X}, 0x{b:04X})")
+    });
+    out.push_str("\n/// The ranges of the non-spacing characters of `unicode_nonspacing_table.h`, first and last, sorted. These are the characters with the general category Me, Mn or Cf, which have the display width 0 in `ucs_wcwidth`.\n");
+    table(&mut out, "NONSPACING", "(u32, u32)", &nonspacing, |(a, b)| {
         format!("(0x{a:04X}, 0x{b:04X})")
     });
     Ok(out)

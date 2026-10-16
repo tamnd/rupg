@@ -142,6 +142,7 @@ impl Connection {
                 user: &self.user,
                 notices,
                 immediate_commit: false,
+                ts_config: None,
             };
             utility::run(node, text, &mut cx).map(Done::from)
         }

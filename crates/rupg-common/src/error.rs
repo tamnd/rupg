@@ -24,6 +24,8 @@ struct More {
     detail: Option<String>,
     hint: Option<String>,
     context: Option<String>,
+    /// True for a message of `ereport(NOTICE)` with a SQLSTATE outside of class `00`.
+    notice: bool,
 }
 
 impl Error {
@@ -89,6 +91,18 @@ impl Error {
             None => line,
         });
         self
+    }
+
+    /// Marks a message for the client as a `NOTICE`, as `ereport(NOTICE)` with a SQLSTATE such as `54000` makes it. A message without the mark is a `NOTICE` only for a SQLSTATE of class `00`.
+    #[must_use]
+    pub fn as_notice(mut self) -> Error {
+        self.more().notice = true;
+        self
+    }
+
+    /// True for a message that [`Error::as_notice`] marked.
+    pub fn is_notice(&self) -> bool {
+        self.more.as_ref().is_some_and(|more| more.notice)
     }
 
     fn more(&mut self) -> &mut More {

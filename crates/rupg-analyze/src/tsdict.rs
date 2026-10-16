@@ -1,11 +1,11 @@
-//! The text search dictionaries of the templates `simple` and `snowball`: the init functions `dsimple_init` and `dsnowball_init`, which read the options of a dictionary, and the lexize functions `dsimple_lexize` and `dsnowball_lexize`. `CREATE TEXT SEARCH DICTIONARY` runs the init function to check the options, as `verify_dictoptions` does, and `ts_lexize` runs both.
+//! The text search dictionaries of the templates `simple` and `snowball`: the init functions `dsimple_init` and `dsnowball_init`, which read the options of a dictionary, and the lexize functions `dsimple_lexize` and `dsnowball_lexize`. `CREATE TEXT SEARCH DICTIONARY` runs the init function to check the options, as `verify_dictoptions` does, and `ts_lexize` runs both. It also has the configurations of `lookup_ts_config_cache`, with the dictionaries of their maps.
 //!
 //! The options of a dictionary are in `dictinitoption` in the form that `serialize_deflist` writes, and [`deserialize`] reads them back as `deserialize_deflist` does. The stop word files are the files of the share directory of PostgreSQL 19, which `rupg-pgcatalog` holds.
 
 use std::collections::{BTreeMap, HashSet};
 use std::sync::OnceLock;
 
-use rupg_catalog::Catalog;
+use rupg_catalog::{Catalog, TsMapping};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_snowball::Stemmer;
@@ -262,6 +262,63 @@ pub fn dictionary(catalog: Option<&Catalog>, oid: u32) -> Result<Dictionary> {
             format!("a dictionary of the template {name} is not supported yet"),
         )
     })
+}
+
+/// A text search configuration after `lookup_ts_config_cache`: the parser and the dictionaries of each token type.
+#[derive(Clone, Debug)]
+pub struct Config {
+    /// `cfgparser`: the OID of the parser.
+    pub parser: u32,
+    /// The dictionaries of each token type in the order of `mapseqno`, by the number of the token type. A token type with no row of `pg_ts_config_map` has no dictionaries.
+    pub map: Vec<Vec<Dictionary>>,
+}
+
+/// The rows of `pg_ts_config_map` of a configuration of the catalog or of a built-in configuration, in the order of the index on the configuration, the token type and the place.
+pub fn mappings(catalog: Option<&Catalog>, config: u32) -> Vec<TsMapping> {
+    if let Some(catalog) = catalog.filter(|c| c.ts_config(config).is_some()) {
+        let mut list: Vec<TsMapping> =
+            catalog.ts_mappings().iter().filter(|m| m.config == config).copied().collect();
+        list.sort_by_key(|m| (m.token, m.seqno));
+        return list;
+    }
+    let Some(rows) = rupg_pgcatalog::catalog("pg_ts_config_map") else { return Vec::new() };
+    static_rows("pg_ts_config_map", "mapcfg", config)
+        .into_iter()
+        .map(|row| {
+            let int = |column| i32::try_from(cell_oid(rows, row, column)).unwrap_or(0);
+            TsMapping {
+                config,
+                token: int("maptokentype"),
+                seqno: int("mapseqno"),
+                dict: cell_oid(rows, row, "mapdict"),
+            }
+        })
+        .collect()
+}
+
+/// `lookup_ts_config_cache`: the configuration with the OID, with each dictionary of its map after the init function.
+///
+/// # Errors
+///
+/// `XX000` when no configuration has the OID, and the errors of [`dictionary`].
+pub fn config(catalog: Option<&Catalog>, oid: u32) -> Result<Config> {
+    let parser = match catalog.and_then(|c| c.ts_config(oid)) {
+        Some(c) => c.parser,
+        None => static_row("pg_ts_config", oid)
+            .map(|(rows, row)| cell_oid(rows, row, "cfgparser"))
+            .ok_or_else(|| {
+                Error::internal(format!("cache lookup failed for text search configuration {oid}"))
+            })?,
+    };
+    let mut map: Vec<Vec<Dictionary>> = Vec::new();
+    for m in mappings(catalog, oid) {
+        let Ok(token) = usize::try_from(m.token) else { continue };
+        if map.len() <= token {
+            map.resize_with(token + 1, Vec::new);
+        }
+        map[token].push(dictionary(catalog, m.dict)?);
+    }
+    Ok(Config { parser, map })
 }
 
 /// `deserialize_deflist`: the options of `dictinitoption`. A key or a value in double quotes, a value in single quotes with or without `E`, and a value without quotes are all valid.

@@ -1,4 +1,4 @@
-//! The set-returning functions that a query can call in `FROM` or in its target list: `generate_series` of the integer types, of the timestamps and of `numeric`, `unnest`, `generate_subscripts`, `string_to_table`, `regexp_matches`, `regexp_split_to_table`, `pg_options_to_table`, `aclexplode`, `range_minus_multi`, `multirange_unnest`, `multirange_minus_multi`, `unnest` of a `tsvector`, `pg_partition_tree`, `pg_partition_ancestors`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, `pg_prepared_statement`, `pg_hba_file_rules`, `pg_ident_file_mappings`, the functions of the views of replication, of progress and of the prepared transactions, the functions of the statistics of the whole server that give rows, the functions of the views of asynchronous I/O, shared memory, extended statistics, replication origins, recovery and publications, `pg_cursor`, and the functions of the views of the time zones.
+//! The set-returning functions that a query can call in `FROM` or in its target list: `generate_series` of the integer types, of the timestamps and of `numeric`, `unnest`, `generate_subscripts`, `string_to_table`, `regexp_matches`, `regexp_split_to_table`, `pg_options_to_table`, `aclexplode`, `range_minus_multi`, `multirange_unnest`, `multirange_minus_multi`, `unnest` of a `tsvector`, `ts_parse`, `ts_token_type`, `pg_partition_tree`, `pg_partition_ancestors`, `pg_get_keywords`, `pg_show_all_settings`, `pg_stat_get_activity`, `pg_stat_get_backend_idset`, `pg_prepared_statement`, `pg_hba_file_rules`, `pg_ident_file_mappings`, the functions of the views of replication, of progress and of the prepared transactions, the functions of the statistics of the whole server that give rows, the functions of the views of asynchronous I/O, shared memory, extended statistics, replication origins, recovery and publications, `pg_cursor`, and the functions of the views of the time zones.
 //!
 //! A set kernel gives all the rows of the call at once, as a function of PostgreSQL in the materialize mode gives a tuplestore. Each row has one value for each column of the result: one value for a function of a scalar type, or one value for each `OUT` parameter.
 
@@ -35,6 +35,8 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "multirange_unnest" => crate::multirange::unnest,
         "multirange_minus_multi" => crate::multirange::minus_multi,
         "tsvector_unnest" => crate::tsvector::unnest,
+        "ts_parse_byid" | "ts_parse_byname" => crate::tsearch::parse,
+        "ts_token_type_byid" | "ts_token_type_byname" => crate::tsearch::token_types,
         "json_each" => crate::json::json_each,
         "json_each_text" => crate::json::json_each_text,
         "jsonb_each" => crate::json::jsonb_each,

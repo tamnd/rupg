@@ -15,7 +15,7 @@ use rupg_types::oid;
 use super::comment::{name_list, not_owner};
 use super::drop::quote_identifier;
 use super::{Definer, not_yet};
-use crate::tsdict::{Dictionary, cell_oid, static_rows, template_init};
+use crate::tsdict::{Dictionary, cell_oid, mappings, static_rows, template_init};
 use crate::typename::{names, type_name_text};
 
 /// The OID of the default parser of text search, `default`.
@@ -143,23 +143,6 @@ fn serialize(options: &[&DefElem]) -> Result<String> {
         out.push('\'');
     }
     Ok(out)
-}
-
-/// The built-in rows of `pg_ts_config_map` of a configuration, in the order of the index on the configuration, the token type and the place.
-fn builtin_mappings(config: u32) -> Vec<TsMapping> {
-    let Some(catalog) = rupg_pgcatalog::catalog("pg_ts_config_map") else { return Vec::new() };
-    static_rows("pg_ts_config_map", "mapcfg", config)
-        .into_iter()
-        .map(|row| {
-            let int = |column| i32::try_from(cell_oid(catalog, row, column)).unwrap_or(0);
-            TsMapping {
-                config,
-                token: int("maptokentype"),
-                seqno: int("mapseqno"),
-                dict: cell_oid(catalog, row, "mapdict"),
-            }
-        })
-        .collect()
 }
 
 impl Definer<'_, '_> {
@@ -377,13 +360,7 @@ impl Definer<'_, '_> {
 
     /// The rows of `pg_ts_config_map` of a configuration, in the order of the index on the configuration, the token type and the place.
     fn config_mappings(&self, config: u32) -> Vec<TsMapping> {
-        if self.catalog.ts_config(config).is_none() {
-            return builtin_mappings(config);
-        }
-        let mut list: Vec<TsMapping> =
-            self.catalog.ts_mappings().iter().filter(|m| m.config == config).copied().collect();
-        list.sort_by_key(|m| (m.token, m.seqno));
-        list
+        mappings(Some(self.catalog), config)
     }
 
     /// `DefineTSConfiguration`. With `COPY`, the new configuration gets the parser and the map of the old one.
