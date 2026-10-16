@@ -23,7 +23,7 @@ pub use owner::acl_new_owner;
 pub use sequence::SequenceData;
 pub use tsearch::{
     PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, TsConfig, TsDictionary, TsMapping,
-    TsTemplate,
+    TsParser, TsTemplate,
 };
 
 use std::collections::BTreeMap;
@@ -815,6 +815,7 @@ pub struct Catalog {
     extensions: BTreeMap<u32, Extension>,
     triggers: BTreeMap<u32, Trigger>,
     ts_templates: BTreeMap<u32, TsTemplate>,
+    ts_parsers: BTreeMap<u32, TsParser>,
     ts_dictionaries: BTreeMap<u32, TsDictionary>,
     ts_configs: BTreeMap<u32, TsConfig>,
     ts_mappings: Vec<TsMapping>,
@@ -870,6 +871,7 @@ impl Catalog {
             extensions: BTreeMap::new(),
             triggers: BTreeMap::new(),
             ts_templates: BTreeMap::new(),
+            ts_parsers: BTreeMap::new(),
             ts_dictionaries: BTreeMap::new(),
             ts_configs: BTreeMap::new(),
             ts_mappings: Vec::new(),

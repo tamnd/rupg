@@ -2550,6 +2550,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/drop_text_search.test")));
     }
 
+    /// `CREATE TEXT SEARCH PARSER`: the rows of `pg_ts_parser`, the errors of `DefineTSParser` and `get_ts_parser_func`, `ts_token_type` and `ts_parse` with a new parser, a configuration of a new parser, `ts_headline` with a parser that has no headline function, `COMMENT`, the dependencies and `DROP`. `connection/ts_parser.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_parser() {
+        big_stack(|| script(include_str!("connection/ts_parser.test")));
+    }
+
     /// The functions in SQL of `information_schema` that have a `RETURN` body, such as `_pg_char_max_length`: the rows of `pg_proc` and `pg_depend` with the OIDs of PostgreSQL, `pg_get_function_arguments` and `pg_get_function_result`, the results for many types and type modifiers and for the columns of a table, a call with and without the schema in `search_path`, and the errors of a bad argument. Also the shift operators `<<` and `>>` of the integer types, which the bodies use. `connection/sql_functions.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn sql_functions() {

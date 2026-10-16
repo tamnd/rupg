@@ -1,4 +1,4 @@
-//! The objects of text search: the templates of `pg_ts_template`, the dictionaries of `pg_ts_dict`, and the configurations of `pg_ts_config` with their rows of `pg_ts_config_map`. They change as `DefineTSTemplate`, `DefineTSDictionary`, `DefineTSConfiguration` and `AlterTSConfiguration` of `tsearchcmds.c` change them, with the same rows of `pg_depend`.
+//! The objects of text search: the templates of `pg_ts_template`, the parsers of `pg_ts_parser`, the dictionaries of `pg_ts_dict`, and the configurations of `pg_ts_config` with their rows of `pg_ts_config_map`. They change as `DefineTSTemplate`, `DefineTSParser`, `DefineTSDictionary`, `DefineTSConfiguration` and `AlterTSConfiguration` of `tsearchcmds.c` change them, with the same rows of `pg_depend`.
 
 use rupg_common::{Error, Result, SqlState};
 
@@ -26,6 +26,27 @@ pub struct TsTemplate {
     pub init: u32,
     /// `tmpllexize`: the OID of the lexize function.
     pub lexize: u32,
+}
+
+/// A text search parser, one row of `pg_ts_parser`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct TsParser {
+    /// The OID. [`Catalog::create_ts_parser`] sets it.
+    pub oid: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the schema.
+    pub namespace: u32,
+    /// `prsstart`: the OID of the start function.
+    pub start: u32,
+    /// `prstoken`: the OID of the function that gives the next token.
+    pub token: u32,
+    /// `prsend`: the OID of the end function.
+    pub end: u32,
+    /// `prsheadline`: the OID of the headline function, or 0.
+    pub headline: u32,
+    /// `prslextype`: the OID of the function that gives the token types.
+    pub lextype: u32,
 }
 
 /// A text search dictionary, one row of `pg_ts_dict`.
@@ -103,6 +124,28 @@ impl Catalog {
         }
         self.depend_all(ObjRef::new(PG_TS_TEMPLATE, oid), refs);
         self.ts_templates.insert(oid, new);
+        Ok(oid)
+    }
+
+    /// `DefineTSParser`: a new parser, which gets the next OID. It depends on its schema and its functions.
+    ///
+    /// # Errors
+    ///
+    /// `23505` when the schema has a parser with the name.
+    pub fn create_ts_parser(&mut self, mut new: TsParser) -> Result<u32> {
+        let oid = self.new_oid();
+        if self.ts_parser_by_name(new.namespace, &new.name).is_some() {
+            return Err(duplicate("pg_ts_parser", "prs", &new.name, new.namespace));
+        }
+        new.oid = oid;
+        let mut refs = vec![ObjRef::new(PG_NAMESPACE, new.namespace)];
+        for function in [new.start, new.token, new.end, new.lextype, new.headline] {
+            if function != 0 {
+                refs.push(ObjRef::new(PG_PROC, function));
+            }
+        }
+        self.depend_all(ObjRef::new(PG_TS_PARSER, oid), refs);
+        self.ts_parsers.insert(oid, new);
         Ok(oid)
     }
 
@@ -223,6 +266,21 @@ impl Catalog {
     /// The template with the name in the schema.
     pub fn ts_template_by_name(&self, namespace: u32, name: &str) -> Option<&TsTemplate> {
         self.ts_templates.values().find(|t| t.namespace == namespace && t.name == name)
+    }
+
+    /// The parsers, in the order of their OIDs.
+    pub fn ts_parsers(&self) -> impl Iterator<Item = &TsParser> {
+        self.ts_parsers.values()
+    }
+
+    /// The parser with the OID.
+    pub fn ts_parser(&self, oid: u32) -> Option<&TsParser> {
+        self.ts_parsers.get(&oid)
+    }
+
+    /// The parser with the name in the schema.
+    pub fn ts_parser_by_name(&self, namespace: u32, name: &str) -> Option<&TsParser> {
+        self.ts_parsers.values().find(|p| p.namespace == namespace && p.name == name)
     }
 
     /// The dictionaries, in the order of their OIDs.

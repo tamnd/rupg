@@ -621,7 +621,7 @@ fn option_list(opts: Option<&Value>) -> Result<Vec<DictOption>> {
     }
 }
 
-/// The configuration, the value, the query and the options of the arguments of a form of `ts_headline`. The forms without a configuration use the configuration of `default_text_search_config`.
+/// The configuration, the value, the query and the options of the arguments of a form of `ts_headline`. The forms without a configuration use the configuration of `default_text_search_config`. The parser of the configuration must have a headline function.
 fn headline_args<'a>(
     call: &Call<'_>,
     args: &'a [Value],
@@ -637,6 +637,17 @@ fn headline_args<'a>(
         _ => return Err(bad_value()),
     };
     let config = tsdict::config(call.session.catalog(), config)?;
+    if call
+        .session
+        .catalog()
+        .and_then(|c| c.ts_parser(config.parser))
+        .is_some_and(|p| p.headline == 0)
+    {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "text search parser does not support headline creation",
+        ));
+    }
     Ok((config, value.as_str().ok_or_else(bad_value)?, items, opts))
 }
 
