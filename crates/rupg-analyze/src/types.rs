@@ -114,7 +114,16 @@ pub fn is_polymorphic(ty: u32) -> bool {
 
 /// `format_type_be`: the name of a type in an error message.
 pub fn name(ty: u32) -> String {
-    rupg_types::format_type(ty).into_owned()
+    let name = rupg_types::format_type(ty);
+    if name != "???" {
+        return name.into_owned();
+    }
+    // A type of the catalog of the session has its name in its row.
+    match row(ty) {
+        Some(t) if t.category == b'A' && t.elem != 0 => format!("{}[]", self::name(t.elem)),
+        Some(t) => t.name.to_owned(),
+        None => name.into_owned(),
+    }
 }
 
 /// `format_type_with_typemod` for the types whose typmod the analyzer can show: the character types and `numeric`. Another type shows its name without the typmod.

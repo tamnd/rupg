@@ -102,6 +102,10 @@ pub fn can_coerce(inputs: &[u32], targets: &[u32], context: Context) -> bool {
         {
             continue;
         }
+        // `coerce_record_to_complex` casts a `record` to a composite type field by field.
+        if input == oid::RECORD && types::is_complex(types::base(target)) {
+            continue;
+        }
         if find_path(target, input, context) != Path::None {
             continue;
         }
@@ -205,6 +209,9 @@ impl Analyzer<'_> {
             || (target == oid::RECORD_ARRAY && types::is_complex(types::element(input)))
         {
             return Ok(expr);
+        }
+        if input == oid::RECORD && types::is_complex(types::base(target)) {
+            return self.coerce_record_to_complex(expr, target, context, location);
         }
         if input == oid::UNKNOWN {
             if let ExprKind::Const(value) = &expr.kind {
@@ -310,6 +317,61 @@ impl Analyzer<'_> {
                 })
             }
         }
+    }
+
+    /// `coerce_record_to_complex`: a `ROW` expression with each field cast to the type of the column of the composite type. The cast to a domain over a composite type then checks the domain.
+    fn coerce_record_to_complex(
+        &mut self,
+        expr: Expr,
+        target: u32,
+        context: Context,
+        location: Option<usize>,
+    ) -> Result<Expr> {
+        let at = location.or(expr.location);
+        let base = types::base(target);
+        let cannot = |detail: Option<String>| {
+            let error = Error::new(
+                SqlState::CANNOT_COERCE,
+                format!("cannot cast type record to {}", types::name(target)),
+            );
+            match detail {
+                Some(detail) => error.with_detail(detail),
+                None => error,
+            }
+            .at_opt(at)
+        };
+        let ExprKind::Row(args) = expr.kind else { return Err(cannot(None)) };
+        let columns = self.row_columns(base).ok_or_else(|| cannot(None))?;
+        if args.len() < columns.len() {
+            return Err(cannot(Some("Input has too few columns.".into())));
+        }
+        if args.len() > columns.len() {
+            return Err(cannot(Some("Input has too many columns.".into())));
+        }
+        let mut fields = Vec::with_capacity(args.len());
+        for (i, (arg, column)) in args.into_iter().zip(&columns).enumerate() {
+            let (from, arg_at) = (arg.ty, arg.location);
+            let field = self.coerce_to_target(arg, column.ty, column.typmod, context, None)?;
+            let Some(field) = field else {
+                return Err(Error::new(
+                    SqlState::CANNOT_COERCE,
+                    format!("cannot cast type {} to {}", types::name(from), types::name(column.ty)),
+                )
+                .with_detail(format!(
+                    "Cannot cast type record to {} in column {}.",
+                    types::name(target),
+                    i + 1
+                ))
+                .at_opt(location.or(arg_at)));
+            };
+            fields.push(field);
+        }
+        let row = Expr { kind: ExprKind::Row(fields), ty: base, typmod: -1, location };
+        Ok(if base == target {
+            row
+        } else {
+            coerce_to_domain(row, target, context, location, false)
+        })
     }
 
     /// `coerce_type_typmod`: the length cast of a type that has a typmod, or a relabel that shows the typmod. The cast shows as explicit in the explicit context.

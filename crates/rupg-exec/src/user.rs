@@ -290,7 +290,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     rel.index.as_ref().map_or((0, 1, 0.0), |i| (i.method, i.pages, 0.0))
                 }
                 RelKind::Sequence => (0, 1, 1.0),
-                RelKind::View => (0, 0, -1.0),
+                RelKind::View | RelKind::Composite => (0, 0, -1.0),
             };
             let checks = catalog.constraints_of(rel.oid).filter(|c| c.kind == ConKind::Check);
             let mut row = Row::new(table);
@@ -305,7 +305,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     "relfilenode",
                     oid(match (&rel.sequence, rel.kind) {
                         (Some(info), _) => info.file,
-                        (None, RelKind::View) => 0,
+                        (None, RelKind::View | RelKind::Composite) => 0,
                         (None, _) => rel.oid,
                     }),
                 )
@@ -446,7 +446,7 @@ fn attributes<'a>(
     }
     let mut rows = Vec::new();
     for rel in catalog.relations() {
-        if !matches!(rel.kind, RelKind::Index | RelKind::View) {
+        if !matches!(rel.kind, RelKind::Index | RelKind::View | RelKind::Composite) {
             for &template in &system {
                 let mut row = Row::copy(table, template, session)?;
                 row.set("attrelid", oid(rel.oid));

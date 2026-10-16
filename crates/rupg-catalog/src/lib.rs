@@ -118,6 +118,8 @@ pub enum RelKind {
     Toast,
     /// A view, `v`.
     View,
+    /// The relation of a composite type that `CREATE TYPE ... AS` makes, `c`.
+    Composite,
 }
 
 impl RelKind {
@@ -129,6 +131,7 @@ impl RelKind {
             RelKind::Sequence => 'S',
             RelKind::Toast => 't',
             RelKind::View => 'v',
+            RelKind::Composite => 'c',
         }
     }
 }
@@ -1128,17 +1131,29 @@ impl Catalog {
                 acl: None,
             },
         );
-        self.depend(ObjRef::new(PG_TYPE, row_type), ObjRef::new(PG_CLASS, oid), DepKind::Internal);
-        self.depend(ObjRef::new(PG_TYPE, array), ObjRef::new(PG_TYPE, row_type), DepKind::Internal);
+        let (class, ty) = (ObjRef::new(PG_CLASS, oid), ObjRef::new(PG_TYPE, row_type));
+        let namespace = ObjRef::new(PG_NAMESPACE, new.namespace);
+        // The type of `CREATE TYPE ... AS` is the main object, so the relation is part of the type and the type depends on the schema.
+        if kind == RelKind::Composite {
+            self.depend(ty, namespace, DepKind::Normal);
+            self.depend(class, ty, DepKind::Internal);
+        } else {
+            self.depend(ty, class, DepKind::Internal);
+        }
+        self.depend(ObjRef::new(PG_TYPE, array), ty, DepKind::Internal);
         for (column, found) in column_refs {
             self.depend(column, found, DepKind::Normal);
         }
-        self.depend(
-            ObjRef::new(PG_CLASS, oid),
-            ObjRef::new(PG_NAMESPACE, new.namespace),
-            DepKind::Normal,
-        );
+        if kind != RelKind::Composite {
+            self.depend(class, namespace, DepKind::Normal);
+        }
         Ok(oid)
+    }
+
+    /// `DefineCompositeType`: the relation of a composite type, with its row type and the array type, as a table gets them. The result is the OID of the row type.
+    pub fn create_composite_type(&mut self, new: NewRelation) -> Result<u32> {
+        let oid = self.create_relation(new, RelKind::Composite)?;
+        Ok(self.relation(oid).map_or(0, |r| r.row_type))
     }
 
     /// `DefineView`: the view gets its OID, its array type and its row type as a table does, then its `_RETURN` rule. The rule is part of the view, and it depends on the objects that the query reads.

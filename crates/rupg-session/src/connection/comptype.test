@@ -1,0 +1,170 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE TYPE pair AS (a int, b text)
+CREATE TYPE
+> CREATE TYPE pair AS (x int)
+ERROR 42710 type "pair" already exists
+> SELECT ROW(1, 'x')::pair::text, (ROW(1, 'x')::pair).b, pg_typeof(ROW(1, 'x')::pair)::text
+fields row:25:-1:-1,b:25:-1:-1,pg_typeof:25:-1:-1
+row (1,x),x,pair
+SELECT 1
+> SELECT '(2,yy)'::pair::text, ('(2,yy)'::pair).a
+fields text:25:-1:-1,a:23:4:-1
+row (2,yy),2
+SELECT 1
+> SELECT (ROW(3, 'z')::pair).*
+fields a:23:4:-1,b:25:-1:-1
+row 3,z
+SELECT 1
+> CREATE TYPE empty AS ()
+CREATE TYPE
+> SELECT ROW()::empty::text
+fields row:25:-1:-1
+row ()
+SELECT 1
+> CREATE TYPE named AS (n numeric(5,2), t varchar(3) COLLATE "C", d date)
+CREATE TYPE
+> SELECT ROW(1.234, 'ab', '2024-01-02')::named::text
+fields row:25:-1:-1
+row (1.23,ab,2024-01-02)
+SELECT 1
+> SELECT format_type('named'::regtype, NULL), format_type('_named'::regtype, NULL)
+fields format_type:25:-1:-1,format_type:25:-1:-1
+row named,named[]
+SELECT 1
+> SELECT typname, typtype, typlen, typbyval, typcategory, typinput::text, typoutput::text, typreceive::text, typsend::text, typalign, typstorage, typelem <> 0, typarray <> 0, typrelid <> 0 FROM pg_type WHERE typnamespace = 'public'::regnamespace ORDER BY typname
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typlen@pg_type.5:21:2:-1,typbyval@pg_type.6:16:1:-1,typcategory@pg_type.8:18:1:-1,typinput:25:-1:-1,typoutput:25:-1:-1,typreceive:25:-1:-1,typsend:25:-1:-1,typalign@pg_type.23:18:1:-1,typstorage@pg_type.24:18:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row _empty,b,-1,f,A,array_in,array_out,array_recv,array_send,d,x,t,f,f
+row _named,b,-1,f,A,array_in,array_out,array_recv,array_send,d,x,t,f,f
+row _pair,b,-1,f,A,array_in,array_out,array_recv,array_send,d,x,t,f,f
+row empty,c,-1,f,C,record_in,record_out,record_recv,record_send,d,x,f,t,t
+row named,c,-1,f,C,record_in,record_out,record_recv,record_send,d,x,f,t,t
+row pair,c,-1,f,C,record_in,record_out,record_recv,record_send,d,x,f,t,t
+SELECT 6
+> SELECT relname, relkind, relam, relfilenode, relpages, reltuples, relnatts, relhasindex, relpersistence, relreplident, relfrozenxid, relminmxid, reltype = (SELECT oid FROM pg_type WHERE typname = relname) FROM pg_class WHERE relnamespace = 'public'::regnamespace ORDER BY relname
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relam@pg_class.7:26:4:-1,relfilenode@pg_class.8:26:4:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1,relnatts@pg_class.19:21:2:-1,relhasindex@pg_class.15:16:1:-1,relpersistence@pg_class.17:18:1:-1,relreplident@pg_class.27:18:1:-1,relfrozenxid@pg_class.30:28:4:-1,relminmxid@pg_class.31:28:4:-1,?column?:16:1:-1
+row empty,c,0,0,0,-1,0,f,p,n,0,0,t
+row named,c,0,0,0,-1,3,f,p,n,0,0,t
+row pair,c,0,0,0,-1,2,f,p,n,0,0,t
+SELECT 3
+> SELECT c.relname, attname, attnum, atttypid::regtype, atttypmod, attnotnull, attcollation <> 0 FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relnamespace = 'public'::regnamespace ORDER BY 1, attnum
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,atttypid:2206:4:-1,atttypmod@pg_attribute.6:23:4:-1,attnotnull@pg_attribute.12:16:1:-1,?column?:16:1:-1
+row named,n,1,numeric,327686,f,f
+row named,t,2,character varying,7,f,t
+row named,d,3,date,-1,f,f
+row pair,a,1,integer,-1,f,f
+row pair,b,2,text,-1,f,t
+SELECT 5
+> SELECT classid::regclass, objsubid, refclassid::regclass, refobjsubid, deptype FROM pg_depend WHERE objid IN (SELECT oid FROM pg_class WHERE relnamespace = 'public'::regnamespace) OR refobjid IN (SELECT oid FROM pg_type WHERE typnamespace = 'public'::regnamespace) ORDER BY 1, 2, 3, 4, 5
+fields classid:2205:4:-1,objsubid@pg_depend.3:23:4:-1,refclassid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_type,0,pg_type,0,i
+row pg_type,0,pg_type,0,i
+row pg_type,0,pg_type,0,i
+row pg_class,0,pg_type,0,i
+row pg_class,0,pg_type,0,i
+row pg_class,0,pg_type,0,i
+SELECT 6
+> CREATE TYPE bad AS (a int, a text)
+ERROR 42701 column "a" specified more than once
+> CREATE TYPE bad2 AS (a nope)
+ERROR 42704 type "nope" does not exist
+> CREATE TYPE nope.bad3 AS (a int)
+ERROR 3F000 schema "nope" does not exist
+> CREATE TYPE bad4 AS (a int COLLATE "C")
+ERROR 42804 collations are not supported by type integer
+> CREATE TABLE tab (p pair, q named[])
+CREATE TABLE
+> SELECT ARRAY[ROW(1,'a')::pair, ROW(2,'b')::pair]::text
+fields array:25:-1:-1
+row {"(1,a)","(2,b)"}
+SELECT 1
+> SELECT ROW(1)::pair
+ERROR 42846 cannot cast type record to pair at 14
+> SELECT ROW(1, 'a', 2)::pair
+ERROR 42846 cannot cast type record to pair at 22
+> SELECT ROW('x', 'a')::pair
+ERROR 22P02 invalid input syntax for type integer: "x" at 12
+> SELECT ROW(1, 2)::pair::text
+fields row:25:-1:-1
+row (1,2)
+SELECT 1
+> SELECT ROW(1, NULL)::pair::text, (ROW(NULL, 'q')::pair).a IS NULL
+fields row:25:-1:-1,?column?:16:1:-1
+row (1,),t
+SELECT 1
+> SELECT '(,)'::pair::text, '( 3 , " a b " )'::pair::text, '(4,"x""y\\z")'::pair::text
+fields text:25:-1:-1,text:25:-1:-1,text:25:-1:-1
+row (,),(3,"  a b  "),(4,"x""y\\z")
+SELECT 1
+> SELECT '(1,2,3)'::pair
+ERROR 22P02 malformed record literal: "(1,2,3)" at 8
+> SELECT '(1)'::pair
+ERROR 22P02 malformed record literal: "(1)" at 8
+> SELECT 'x'::pair
+ERROR 22P02 malformed record literal: "x" at 8
+> SELECT '(1,a) x'::pair
+ERROR 22P02 malformed record literal: "(1,a) x" at 8
+> SELECT '(1,"a'::pair
+ERROR 22P02 malformed record literal: "(1,"a" at 8
+> SELECT '(z,a)'::pair
+ERROR 22P02 invalid input syntax for type integer: "z" at 8
+> SELECT '()'::empty::text
+fields text:25:-1:-1
+row ()
+SELECT 1
+> SELECT pg_input_is_valid('(1,a)', 'pair'), pg_input_is_valid('(1,a', 'pair')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f
+SELECT 1
+> CREATE TYPE outer_t AS (p pair, n int)
+CREATE TYPE
+> SELECT ROW(ROW(1, 'a')::pair, 2)::outer_t::text, '("(5,b)",6)'::outer_t::text, (('("(5,b)",6)'::outer_t).p).b
+fields row:25:-1:-1,text:25:-1:-1,b:25:-1:-1
+row ("(1,a)",2),("(5,b)",6),b
+SELECT 1
+> SELECT ROW(1, 'a')::pair = ROW(1, 'a')::pair, ROW(1, 'a')::pair < ROW(2, 'a')::pair
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT x::text FROM (VALUES (ROW(2, 'b')::pair), (ROW(1, 'c')::pair)) v(x) ORDER BY x
+fields x:25:-1:-1
+row (1,c)
+row (2,b)
+SELECT 2
+> SELECT (x).a, (x).b FROM (VALUES (ROW(7, 'h')::pair)) v(x)
+fields a:23:4:-1,b:25:-1:-1
+row 7,h
+SELECT 1
+> CREATE TABLE tab2 (a int, b text)
+CREATE TABLE
+> SELECT ROW(1, 'x')::tab2::text, '(2,y)'::tab2::text, (ROW(3, 'z')::tab2).b
+fields row:25:-1:-1,text:25:-1:-1,b:25:-1:-1
+row (1,x),(2,y),z
+SELECT 1
+> DROP TABLE tab2
+DROP TABLE
+> DROP TYPE outer_t
+DROP TYPE
+> DROP TYPE pair
+ERROR 2BP01 cannot drop type pair because other objects depend on it
+> DROP TABLE tab
+DROP TABLE
+> DROP TYPE pair CASCADE
+DROP TYPE
+> SELECT * FROM pair
+ERROR 42P01 relation "pair" does not exist at 15
+> DROP TABLE named
+ERROR 42809 "named" is not a table
+> DROP TYPE IF EXISTS pair, named
+NOTICE 00000 type "pair" does not exist, skipping
+DROP TYPE
+> DROP TYPE empty
+DROP TYPE
+> SELECT count(*) FROM pg_type WHERE typnamespace = 'public'::regnamespace
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_class WHERE relnamespace = 'public'::regnamespace
+fields count:20:8:-1
+row 0
+SELECT 1

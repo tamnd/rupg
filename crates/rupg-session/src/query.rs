@@ -120,14 +120,24 @@ pub(crate) struct Reader<'a> {
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
 type ZoneOf = std::result::Result<Rc<Arc<tz::Zone>>, String>;
 
-/// Gives the domains of the catalog to the thread, so that the lookups of the types by OID and by name find them, as the syscache of PostgreSQL finds the rows of `pg_type`.
-fn use_domains(catalog: &Catalog) {
-    let domains = catalog
+/// Gives the domains and the row types of the catalog to the thread, so that the lookups of the types by OID and by name find them, as the syscache of PostgreSQL finds the rows of `pg_type`.
+fn use_types(catalog: &Catalog) {
+    let types = catalog
         .types()
         .filter(|ty| ty.oid >= FIRST_NORMAL_OID)
         .filter_map(|ty| {
-            let domain = ty.domain.as_ref()?;
             let array = catalog.type_by_oid(ty.array)?;
+            if ty.relation != 0 {
+                return Some(builtin::SessionType::Row(builtin::SessionRowType {
+                    oid: ty.oid,
+                    name: ty.name.clone(),
+                    array: array.oid,
+                    array_name: array.name.clone(),
+                    namespace: ty.namespace,
+                    relation: ty.relation,
+                }));
+            }
+            let domain = ty.domain.as_ref()?;
             let checks = catalog
                 .constraints_of_domain(ty.oid)
                 .filter(|c| c.kind == ConKind::Check)
@@ -143,10 +153,14 @@ fn use_domains(catalog: &Catalog) {
                 typmod: domain.typmod,
                 collation: domain.collation,
             };
-            Some(builtin::SessionDomain { rows, not_null: domain.not_null, checks })
+            Some(builtin::SessionType::Domain(builtin::SessionDomain {
+                rows,
+                not_null: domain.not_null,
+                checks,
+            }))
         })
         .collect();
-    builtin::use_session_domains(domains);
+    builtin::use_session_types(types);
 }
 
 impl<'a> Reader<'a> {
@@ -161,7 +175,7 @@ impl<'a> Reader<'a> {
     ) -> Reader<'a> {
         let name = settings.borrow().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
         let zone = session_zone(&name);
-        use_domains(&catalog);
+        use_types(&catalog);
         Reader {
             settings,
             user,
