@@ -1,4 +1,4 @@
-//! `Error` with its `SqlState`, the identifiers `Oid`, `ShardId`, `RowId`, `Hlc`, `Xid` and `Lsn` of document 04 section 4.7, `CompatVersion`.
+//! `Error` with its `SqlState`, the identifiers `Oid`, `ShardId`, `RowId`, `Hlc`, `Xid` and `Lsn` of document 04 section 4.7, `CompatVersion`, and `qsort`, the sort of PostgreSQL.
 //!
 //! This crate first ships in milestone M1. See `spec/22-crate-layout.md` section 22.4 and `spec/23-milestones.md`.
 
@@ -7,10 +7,12 @@
 mod error;
 mod generated;
 mod ids;
+mod sort;
 mod sqlstate;
 
 pub use error::{Error, Result};
 pub use ids::{Hlc, Lsn, Oid, RowId, ShardId, Xid};
+pub use sort::qsort;
 pub use sqlstate::{Category, SqlState};
 
 use std::fmt;

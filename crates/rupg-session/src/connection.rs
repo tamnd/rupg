@@ -2375,6 +2375,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/ts_rank.test")));
     }
 
+    /// The function `ts_rewrite` with a target and a substitute: the operators `&`, `|`, `!` and `<N>`, a target that matches a part of the children of `&` or `|`, weights and prefixes, an empty query, target or substitute, and an operator that has no children after the rewrite. `connection/ts_rewrite.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_rewrite() {
+        big_stack(|| script(include_str!("connection/ts_rewrite.test")));
+    }
+
+    /// The function `ts_headline` with and without a configuration and options: the selection of the best part of the text, the fragments of `MaxFragments`, `HighlightAll` with tags, phrases, prefixes, `!`, an empty query and an empty text, the options `StartSel`, `StopSel` and `FragmentDelimiter`, and the errors of the options. `connection/ts_headline.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_headline() {
+        big_stack(|| script(include_str!("connection/ts_headline.test")));
+    }
+
     /// The type `tsquery`: the text input with its operators, weights and prefixes and its errors, the notice for a query with no lexemes, the output, the order, `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@`, the limits of the distance, the lexeme and the stack of operators, arrays of `tsquery`, `GROUP BY`, `pg_input_is_valid`, the text and binary forms of `COPY` and a query with parameters. `connection/tsquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn tsquery() {

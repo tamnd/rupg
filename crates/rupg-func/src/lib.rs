@@ -55,10 +55,12 @@ mod text;
 mod timezone;
 mod trig;
 mod tsearch;
+mod tsheadline;
 mod tsmatch;
 mod tsparser;
 mod tsquery;
 mod tsrank;
+mod tsrewrite;
 mod tsvector;
 mod unicode;
 mod updatable;
@@ -438,6 +440,8 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| tsearch::by_src(src))
         .or_else(|| tsmatch::by_src(src))
         .or_else(|| tsrank::by_src(src))
+        .or_else(|| tsrewrite::by_src(src))
+        .or_else(|| tsheadline::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))

@@ -321,6 +321,11 @@ pub fn config(catalog: Option<&Catalog>, oid: u32) -> Result<Config> {
     Ok(Config { parser, map })
 }
 
+/// `buildDefItem` and `defGetString` for a value without quotes: an integer becomes the text of `%d`, and another value stays the same.
+fn word_value(value: &str) -> String {
+    value.parse::<i32>().map_or_else(|_| value.to_string(), |v| v.to_string())
+}
+
 /// `deserialize_deflist`: the options of `dictinitoption`. A key or a value in double quotes, a value in single quotes with or without `E`, and a value without quotes are all valid.
 ///
 /// # Errors
@@ -417,7 +422,7 @@ pub fn deserialize(text: &str) -> Result<Vec<DictOption>> {
             }
             State::InWord => {
                 if c == ',' || c.is_ascii_whitespace() {
-                    out.push((key.clone(), value.clone()));
+                    out.push((key.clone(), word_value(&value)));
                     state = State::WaitKey;
                 } else {
                     value.push(c);
@@ -429,7 +434,7 @@ pub fn deserialize(text: &str) -> Result<Vec<DictOption>> {
     match state {
         State::WaitKey => Ok(out),
         State::InWord => {
-            out.push((key, value));
+            out.push((key, word_value(&value)));
             Ok(out)
         }
         _ => Err(bad()),
