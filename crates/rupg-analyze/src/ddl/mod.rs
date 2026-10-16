@@ -10,6 +10,7 @@ mod fkey;
 mod function;
 mod index;
 mod lock;
+mod rangetype;
 mod sequence;
 mod table;
 #[cfg(test)]
@@ -64,6 +65,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateDomainStmt(_)
             | Node::CompositeTypeStmt(_)
             | Node::CreateEnumStmt(_)
+            | Node::CreateRangeStmt(_)
             | Node::ViewStmt(_)
             | Node::CommentStmt(_)
             | Node::CreateSeqStmt(_)
@@ -119,6 +121,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CompositeTypeStmt(stmt) => definer.create_composite_type(stmt),
         Node::CreateEnumStmt(stmt) => definer.create_enum(stmt),
+        Node::CreateRangeStmt(stmt) => definer.create_range(stmt),
         Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
         Node::CommentStmt(comment) => definer.comment(comment),
         Node::DropStmt(drop) => definer.drop(drop),

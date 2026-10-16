@@ -103,7 +103,7 @@ fn def_string(def: &DefElem) -> Result<String> {
 }
 
 /// `defGetQualifiedName`.
-fn qualified_name(def: &DefElem) -> Result<Vec<&str>> {
+pub(super) fn qualified_name(def: &DefElem) -> Result<Vec<&str>> {
     match &def.arg {
         None => Err(no_parameter(def)),
         Some(Node::TypeName(name)) => Ok(names(&name.names)),

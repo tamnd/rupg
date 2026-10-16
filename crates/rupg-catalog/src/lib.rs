@@ -55,6 +55,16 @@ pub const PG_DATABASE: u32 = 1262;
 pub const PG_LARGEOBJECT: u32 = 2613;
 /// The OID of the schema `pg_toast`.
 pub const PG_TOAST_NAMESPACE: u32 = 99;
+/// The OID of the catalog `pg_cast`.
+pub const PG_CAST: u32 = 2605;
+/// The OID of the catalog `pg_opclass`.
+pub const PG_OPCLASS: u32 = 2616;
+/// The OID of the type `text`.
+const TEXT: u32 = 25;
+/// The OID of the language `internal`.
+const INTERNAL_LANGUAGE: u32 = 12;
+/// `BOOTSTRAP_SUPERUSERID`, the owner of the constructors of a range type.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
 /// The OID of the type `oid`.
 const OID: u32 = 26;
 /// The OID of the type `int4`.
@@ -307,6 +317,55 @@ pub struct Type {
     pub domain: Option<Domain>,
     /// The labels of an enum type in their sort order, as `pg_enum` holds them, or `None` for a type of another kind.
     pub labels: Option<Vec<EnumLabel>>,
+    /// The facts of a range type or of a multirange type, or `None` for a type of another kind.
+    pub range: Option<RangePart>,
+}
+
+/// The facts of a range type, one row of `pg_range`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct RangeInfo {
+    /// `rngsubtype`: the OID of the subtype.
+    pub subtype: u32,
+    /// `rngcollation`: the collation of the subtype, or 0 for a subtype that is not collatable.
+    pub collation: u32,
+    /// `rngsubopc`: the OID of the `btree` operator class of the subtype.
+    pub subopc: u32,
+    /// `rngcanonical`: the OID of the canonical function, or 0.
+    pub canonical: u32,
+    /// `rngsubdiff`: the OID of the difference function of the subtype, or 0.
+    pub subdiff: u32,
+    /// `rngmultitypid`: the OID of the multirange type. [`Catalog::create_range`] sets it.
+    pub multirange: u32,
+    /// `typalign` of the range type, of its multirange type and of their array types: `d` when the subtype has the alignment `d`, else `i`.
+    pub align: u8,
+    /// The OIDs of the constructors, in the order of their OIDs: two of the range type, then three of the multirange type. [`Catalog::create_range`] sets them.
+    pub constructors: [u32; 5],
+}
+
+/// The part of a type in a range type.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RangePart {
+    /// A range type, with its row of `pg_range`.
+    Range(RangeInfo),
+    /// The multirange type of the range type with the OID.
+    Multirange(u32),
+}
+
+/// A cast, one row of `pg_cast`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Cast {
+    /// The OID.
+    pub oid: u32,
+    /// `castsource`.
+    pub source: u32,
+    /// `casttarget`.
+    pub target: u32,
+    /// `castfunc`: the OID of the function, or 0.
+    pub func: u32,
+    /// `castcontext`: `e` explicit, `a` assignment or `i` implicit.
+    pub context: u8,
+    /// `castmethod`: `f` function, `i` input and output, or `b` binary.
+    pub method: u8,
 }
 
 /// A label of an enum type, one row of `pg_enum`.
@@ -640,6 +699,23 @@ pub struct NewEnum {
     pub labels: Vec<String>,
 }
 
+/// A new range type for [`Catalog::create_range`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewRange {
+    /// The OID of the schema.
+    pub namespace: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the owner role.
+    pub owner: u32,
+    /// The OID of the schema of the multirange type.
+    pub multirange_namespace: u32,
+    /// The name of the multirange type.
+    pub multirange_name: String,
+    /// The row of `pg_range`.
+    pub info: RangeInfo,
+}
+
 /// A new table, a new index or a new sequence before it has an OID.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewRelation {
@@ -734,6 +810,7 @@ pub struct Catalog {
     defaults: BTreeMap<u32, AttrDefault>,
     constraints: BTreeMap<u32, Constraint>,
     functions: BTreeMap<u32, Function>,
+    casts: BTreeMap<u32, Cast>,
     languages: BTreeMap<u32, Language>,
     extensions: BTreeMap<u32, Extension>,
     triggers: BTreeMap<u32, Trigger>,
@@ -788,6 +865,7 @@ impl Catalog {
             defaults: BTreeMap::new(),
             constraints: BTreeMap::new(),
             functions: BTreeMap::new(),
+            casts: BTreeMap::new(),
             languages: BTreeMap::new(),
             extensions: BTreeMap::new(),
             triggers: BTreeMap::new(),
@@ -949,6 +1027,11 @@ impl Catalog {
     /// The function with the OID.
     pub fn function(&self, oid: u32) -> Option<&Function> {
         self.functions.get(&oid)
+    }
+
+    /// The casts, in the order of their OIDs.
+    pub fn casts(&self) -> impl Iterator<Item = &Cast> {
+        self.casts.values()
     }
 
     /// The rows of `pg_depend` for user objects, in the order that PostgreSQL inserts them.
@@ -1133,6 +1216,7 @@ impl Catalog {
                 array,
                 domain: None,
                 labels: None,
+                range: None,
             },
         );
         self.types.insert(
@@ -1147,6 +1231,7 @@ impl Catalog {
                 array: 0,
                 domain: None,
                 labels: None,
+                range: None,
             },
         );
         self.relations.insert(
@@ -1292,6 +1377,7 @@ impl Catalog {
                 array,
                 domain: Some(new.domain),
                 labels: None,
+                range: None,
             },
         );
         self.types.insert(
@@ -1306,6 +1392,7 @@ impl Catalog {
                 array: 0,
                 domain: None,
                 labels: None,
+                range: None,
             },
         );
         // `record_object_address_dependencies` sorts the objects by the OID of their catalog.
@@ -1352,6 +1439,7 @@ impl Catalog {
                 array,
                 domain: None,
                 labels: Some(labels),
+                range: None,
             },
         );
         self.types.insert(
@@ -1366,12 +1454,173 @@ impl Catalog {
                 array: 0,
                 domain: None,
                 labels: None,
+                range: None,
             },
         );
         let me = ObjRef::new(PG_TYPE, oid);
         self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
         self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
         Ok(oid)
+    }
+
+    /// `DefineRange`: the range type, its multirange type, their array types, the constructors and the cast from the range type to the multirange type. The array type of the range type gets the first OID, then the multirange type, its array type and the range type. The constructors and the cast come after the types. The return value is the OID of the range type.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the schema has a type with the name of the range type or of the multirange type that is not an array type of another type.
+    pub fn create_range(&mut self, new: NewRange) -> Result<u32> {
+        self.check_new_type(new.namespace, &new.name)?;
+        let array = self.new_oid();
+        let multirange = self.new_oid();
+        let multirange_array = self.new_oid();
+        let oid = self.new_oid();
+        let mut info = new.info;
+        info.multirange = multirange;
+        let facts = info.clone();
+        let type_of = |oid: u32, name: String, namespace: u32| Type {
+            oid,
+            name,
+            namespace,
+            owner: new.owner,
+            relation: 0,
+            element: 0,
+            array: 0,
+            domain: None,
+            labels: None,
+            range: None,
+        };
+        let me = ObjRef::new(PG_TYPE, oid);
+        let multi = ObjRef::new(PG_TYPE, multirange);
+        let range = Type {
+            array,
+            range: Some(RangePart::Range(info)),
+            ..type_of(oid, new.name.clone(), new.namespace)
+        };
+        self.types.insert(oid, range);
+        self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
+        self.check_new_type(new.multirange_namespace, &new.multirange_name)?;
+        let multirange_type = Type {
+            array: multirange_array,
+            range: Some(RangePart::Multirange(oid)),
+            ..type_of(multirange, new.multirange_name.clone(), new.multirange_namespace)
+        };
+        self.types.insert(multirange, multirange_type);
+        self.depend(multi, ObjRef::new(PG_NAMESPACE, new.multirange_namespace), DepKind::Normal);
+        let array_name = self.array_type_name(&new.name, new.namespace);
+        self.types
+            .insert(array, Type { element: oid, ..type_of(array, array_name, new.namespace) });
+        self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
+        // `DefineRange` checks the name of the array type of the multirange type in the schema of the range type.
+        let multirange_array_name = self.array_type_name(&new.multirange_name, new.namespace);
+        let multirange_array_type = Type {
+            element: multirange,
+            ..type_of(multirange_array, multirange_array_name, new.multirange_namespace)
+        };
+        self.types.insert(multirange_array, multirange_array_type);
+        self.depend(ObjRef::new(PG_TYPE, multirange_array), multi, DepKind::Internal);
+        let constructor = |name: &str, src: &str, rettype: u32, argtypes: Vec<u32>| Function {
+            oid: 0,
+            name: name.to_string(),
+            namespace: new.namespace,
+            owner: BOOTSTRAP_SUPERUSER,
+            lang: INTERNAL_LANGUAGE,
+            cost: 1,
+            rows: 0,
+            support: 0,
+            // The constructors of a range type accept null bounds, which are infinite.
+            strict: rettype == multirange,
+            volatile: b'i',
+            parallel: b's',
+            rettype,
+            retset: false,
+            argtypes,
+            allargtypes: Vec::new(),
+            argmodes: Vec::new(),
+            argnames: Vec::new(),
+            src: src.to_string(),
+            bin: String::new(),
+            body: None,
+        };
+        let multirange_name = new.multirange_name.as_str();
+        let variadic = Function {
+            allargtypes: vec![array],
+            argmodes: vec![b'v'],
+            ..constructor(multirange_name, "multirange_constructor2", multirange, vec![array])
+        };
+        let functions = [
+            (constructor(&new.name, "range_constructor2", oid, vec![facts.subtype; 2]), me),
+            (
+                constructor(
+                    &new.name,
+                    "range_constructor3",
+                    oid,
+                    vec![facts.subtype, facts.subtype, TEXT],
+                ),
+                me,
+            ),
+            (
+                constructor(multirange_name, "multirange_constructor0", multirange, Vec::new()),
+                multi,
+            ),
+            (constructor(multirange_name, "multirange_constructor1", multirange, vec![oid]), multi),
+            (variadic, multi),
+        ];
+        let mut constructors = [0; 5];
+        for (slot, (function, owner)) in constructors.iter_mut().zip(functions) {
+            *slot = self.insert_constructor(function, owner);
+        }
+        // `RangeCreate`: the range type depends on the objects of its row of `pg_range`, and the multirange type is part of it.
+        let refs = [
+            ObjRef::new(PG_TYPE, facts.subtype),
+            ObjRef::new(PG_OPCLASS, facts.subopc),
+            ObjRef::new(PG_COLLATION, facts.collation),
+            ObjRef::new(PG_PROC, facts.canonical),
+            ObjRef::new(PG_PROC, facts.subdiff),
+        ];
+        for referenced in refs {
+            if referenced.oid != 0 {
+                self.depend(me, referenced, DepKind::Normal);
+            }
+        }
+        self.depend(multi, me, DepKind::Internal);
+        if let Some(Type { range: Some(RangePart::Range(info)), .. }) = self.types.get_mut(&oid) {
+            info.constructors = constructors;
+        }
+        let cast = self.new_oid();
+        let row = Cast {
+            oid: cast,
+            source: oid,
+            target: multirange,
+            func: constructors[3],
+            context: b'e',
+            method: b'f',
+        };
+        self.casts.insert(cast, row);
+        let object = ObjRef::new(PG_CAST, cast);
+        for referenced in [me, multi, ObjRef::new(PG_PROC, constructors[3])] {
+            self.depend(object, referenced, DepKind::Internal);
+        }
+        Ok(oid)
+    }
+
+    /// `ProcedureCreate` for a constructor of a range type or of a multirange type: the function depends on its schema and on the types of its result and its arguments, and it is part of the type `owner`. The return value is the OID of the function.
+    fn insert_constructor(&mut self, mut function: Function, owner: ObjRef) -> u32 {
+        let oid = self.new_oid();
+        function.oid = oid;
+        let me = ObjRef::new(PG_PROC, oid);
+        self.depend(me, ObjRef::new(PG_NAMESPACE, function.namespace), DepKind::Normal);
+        let mut types = vec![function.rettype];
+        for &ty in function.argtypes.iter().chain(&function.allargtypes) {
+            if !types.contains(&ty) {
+                types.push(ty);
+            }
+        }
+        for ty in types {
+            self.depend(me, ObjRef::new(PG_TYPE, ty), DepKind::Normal);
+        }
+        self.depend(me, owner, DepKind::Internal);
+        self.functions.insert(oid, function);
+        oid
     }
 
     /// `ProcedureCreate`: a new function, which gets the next OID. It depends on its schema and on the objects in `refs`, which are the objects that its body refers to.

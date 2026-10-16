@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rupg_analyze::{Env, Params};
-use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, SequenceData};
+use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RangePart, SequenceData};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::{AdvisoryLock, Backend, Client, Randomness, Sequences};
@@ -135,6 +135,31 @@ fn use_types(catalog: &Catalog) {
                     array_name: array.name.clone(),
                     namespace: ty.namespace,
                     relation: ty.relation,
+                }));
+            }
+            if let Some(RangePart::Range(info)) = &ty.range {
+                let multirange = catalog.type_by_oid(info.multirange)?;
+                let multirange_array = catalog.type_by_oid(multirange.array)?;
+                let cast = catalog
+                    .casts()
+                    .find(|c| c.source == ty.oid && c.target == multirange.oid)
+                    .map_or(0, |c| c.oid);
+                return Some(builtin::SessionType::Range(builtin::SessionRange {
+                    oid: ty.oid,
+                    name: ty.name.clone(),
+                    array: array.oid,
+                    array_name: array.name.clone(),
+                    namespace: ty.namespace,
+                    subtype: info.subtype,
+                    collation: info.collation,
+                    align: info.align,
+                    multirange: multirange.oid,
+                    multirange_name: multirange.name.clone(),
+                    multirange_namespace: multirange.namespace,
+                    multirange_array: multirange_array.oid,
+                    multirange_array_name: multirange_array.name.clone(),
+                    constructors: info.constructors,
+                    cast,
                 }));
             }
             if let Some(labels) = &ty.labels {
