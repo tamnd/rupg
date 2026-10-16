@@ -1,0 +1,104 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW t AS SELECT * FROM (VALUES (1, ARRAY[1, 2]), (2, ARRAY[3, NULL]), (3, ARRAY[5, 6])) AS v (a, b)
+CREATE VIEW
+> SELECT ARRAY(SELECT b FROM t ORDER BY a)
+fields array:1007:-1:-1
+row {{1,2},{3,NULL},{5,6}}
+SELECT 1
+> SELECT ARRAY(SELECT b FROM t ORDER BY a DESC)
+fields array:1007:-1:-1
+row {{5,6},{3,NULL},{1,2}}
+SELECT 1
+> SELECT ARRAY(SELECT ARRAY[a, a + 1] FROM t ORDER BY a)
+fields array:1007:-1:-1
+row {{1,2},{2,3},{3,4}}
+SELECT 1
+> SELECT pg_typeof(ARRAY(SELECT b FROM t))
+fields pg_typeof:2206:4:-1
+row integer[]
+SELECT 1
+> SELECT ARRAY(SELECT b FROM t WHERE a > 5)
+fields array:1007:-1:-1
+row {}
+SELECT 1
+> SELECT array_dims(ARRAY(SELECT b FROM t WHERE a > 5))
+fields array_dims:25:-1:-1
+row NULL
+SELECT 1
+> SELECT array_dims(ARRAY(SELECT b FROM t))
+fields array_dims:25:-1:-1
+row [1:3][1:2]
+SELECT 1
+> SELECT ARRAY(SELECT NULL::int[])
+fields array:1007:-1:-1
+ERROR 22004 cannot accumulate null arrays
+> SELECT ARRAY(SELECT '{}'::int[])
+fields array:1007:-1:-1
+ERROR 2202E cannot accumulate empty arrays
+> SELECT ARRAY(SELECT x FROM (VALUES (ARRAY[1]), (ARRAY[1, 2])) AS v (x))
+fields array:1007:-1:-1
+ERROR 2202E cannot accumulate arrays of different dimensionality
+> SELECT ARRAY(SELECT x FROM (VALUES (ARRAY[1, 2]), (NULL)) AS v (x))
+fields array:1007:-1:-1
+ERROR 22004 cannot accumulate null arrays
+> SELECT ARRAY(SELECT ARRAY[[a, a], [a, a]] FROM t ORDER BY a)
+fields array:1007:-1:-1
+row {{{1,1},{1,1}},{{2,2},{2,2}},{{3,3},{3,3}}}
+SELECT 1
+> SELECT array_dims(ARRAY(SELECT ARRAY[[a, a], [a, a]] FROM t))
+fields array_dims:25:-1:-1
+row [1:3][1:2][1:2]
+SELECT 1
+> SELECT ARRAY(SELECT '[2:3]={1,2}'::int[])
+fields array:1007:-1:-1
+row [1:1][2:3]={{1,2}}
+SELECT 1
+> SELECT array_dims(ARRAY(SELECT '[2:3]={1,2}'::int[]))
+fields array_dims:25:-1:-1
+row [1:1][2:3]
+SELECT 1
+> SELECT ARRAY(SELECT x FROM (VALUES ('[2:3]={1,2}'::int[]), ('{1,2}')) AS v (x))
+fields array:1007:-1:-1
+ERROR 2202E cannot accumulate arrays of different dimensionality
+> SELECT ARRAY(SELECT ARRAY['a', 'b'] UNION ALL SELECT ARRAY['c', NULL])
+fields array:1009:-1:-1
+row {{a,b},{c,NULL}}
+SELECT 1
+> SELECT ARRAY(SELECT ARRAY[1.5, 2]::numeric(4,1)[])
+fields array:1231:-1:262149
+row {{1.5,2.0}}
+SELECT 1
+> SELECT pg_typeof(ARRAY(SELECT ARRAY[1.5]::numeric[]))
+fields pg_typeof:2206:4:-1
+row numeric[]
+SELECT 1
+> SELECT a, ARRAY(SELECT ARRAY[a, u] FROM generate_series(1, 2) AS u) FROM t ORDER BY a
+fields a@t.1:23:4:-1,array:1007:-1:-1
+row 1,{{1,1},{1,2}}
+row 2,{{2,1},{2,2}}
+row 3,{{3,1},{3,2}}
+SELECT 3
+> SELECT ARRAY(SELECT '{{{{{{1}}}}}}'::int[])
+fields array:1007:-1:-1
+ERROR 54000 number of array dimensions (7) exceeds the maximum allowed (6)
+> CREATE VIEW w AS SELECT ARRAY(SELECT b FROM t ORDER BY a) AS c
+CREATE VIEW
+> SELECT * FROM w
+fields c@w.1:1007:-1:-1
+row {{1,2},{3,NULL},{5,6}}
+SELECT 1
+> SELECT pg_get_viewdef('w')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ARRAY( SELECT t.b
+           FROM t
+          ORDER BY t.a) AS c;
+SELECT 1
+> SELECT (ARRAY(SELECT b FROM t ORDER BY a))[2][1]
+fields array:23:4:-1
+row 3
+SELECT 1
+> SELECT ARRAY(SELECT b FROM t ORDER BY a) = ARRAY[[1, 2], [3, NULL], [5, 6]]
+fields ?column?:16:1:-1
+row t
+SELECT 1
