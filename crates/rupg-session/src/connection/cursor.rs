@@ -298,6 +298,25 @@ impl Connection {
         let plan = query::plan(node, &reader, params);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
+        // `transformDeclareCursorStmt`: a cursor that locks rows must be read-only.
+        if let Some(clause) = plan.lock_clause() {
+            let checks = [
+                (CURSOR_OPT_HOLD, "DECLARE CURSOR WITH HOLD", "not supported", "Holdable"),
+                (CURSOR_OPT_SCROLL, "DECLARE SCROLL CURSOR", "not supported", "Scrollable"),
+                (CURSOR_OPT_INSENSITIVE, "DECLARE INSENSITIVE CURSOR", "not valid", "Insensitive"),
+            ];
+            if let Some((option, command, verdict, kind)) =
+                checks.into_iter().find(|check| has(stmt.options, check.0))
+            {
+                let code = if option == CURSOR_OPT_INSENSITIVE {
+                    SqlState::INVALID_CURSOR_DEFINITION
+                } else {
+                    SqlState::FEATURE_NOT_SUPPORTED
+                };
+                return Err(Error::new(code, format!("{command} ... {clause} is {verdict}"))
+                    .with_detail(format!("{kind} cursors must be READ ONLY.")));
+            }
+        }
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
         Ok(plan)
     }

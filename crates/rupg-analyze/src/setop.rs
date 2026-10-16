@@ -70,7 +70,7 @@ impl SetTree {
 }
 
 /// `LCS_asString`.
-pub(crate) fn strength_name(strength: LockClauseStrength) -> &'static str {
+pub fn strength_name(strength: LockClauseStrength) -> &'static str {
     match strength {
         LockClauseStrength::LCS_FORKEYSHARE => "FOR KEY SHARE",
         LockClauseStrength::LCS_FORSHARE => "FOR SHARE",
@@ -175,6 +175,7 @@ impl Analyzer<'_> {
             windows: Vec::new(),
             ctes: Vec::new(),
             recursive: false,
+            row_marks: Vec::new(),
         })
     }
 
