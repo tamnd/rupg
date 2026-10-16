@@ -146,6 +146,7 @@ pub(crate) fn rows(
         "pg_init_privs" => init_privs(table, catalog, session)?,
         "pg_database" => databases(table, session),
         "pg_ts_template" => ts_templates(table, catalog),
+        "pg_ts_parser" => ts_parsers(table, catalog),
         "pg_ts_dict" => ts_dictionaries(table, catalog),
         "pg_ts_config" => ts_configs(table, catalog),
         "pg_ts_config_map" => ts_mappings(table, catalog),
@@ -803,6 +804,24 @@ fn ts_templates<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("tmplnamespace", oid(t.namespace))
                 .set("tmplinit", oid(t.init))
                 .set("tmpllexize", oid(t.lexize));
+            row
+        })
+        .collect()
+}
+
+fn ts_parsers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .ts_parsers()
+        .map(|p| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(p.oid))
+                .set("prsname", Value::text(p.name.clone()))
+                .set("prsnamespace", oid(p.namespace))
+                .set("prsstart", oid(p.start))
+                .set("prstoken", oid(p.token))
+                .set("prsend", oid(p.end))
+                .set("prsheadline", oid(p.headline))
+                .set("prslextype", oid(p.lextype));
             row
         })
         .collect()

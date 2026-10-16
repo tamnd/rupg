@@ -159,6 +159,7 @@ fn ts_name(kind: Named, oid: u32, session: &dyn Session) -> Option<(String, u32)
     let pair = |name: &str, namespace: u32| (name.to_string(), namespace);
     match kind {
         Named::Template => catalog.ts_template(oid).map(|t| pair(&t.name, t.namespace)),
+        Named::Parser => catalog.ts_parser(oid).map(|p| pair(&p.name, p.namespace)),
         Named::Dictionary => catalog.ts_dictionary(oid).map(|d| pair(&d.name, d.namespace)),
         Named::Config => catalog.ts_config(oid).map(|c| pair(&c.name, c.namespace)),
         _ => None,
@@ -171,6 +172,7 @@ fn ts_find(kind: Named, spaces: &[u32], name: &str, session: &dyn Session) -> Op
     spaces.iter().find_map(|&ns| {
         find(kind, &[ns], name, 0).map(|row| row.oid).or_else(|| match kind {
             Named::Template => catalog?.ts_template_by_name(ns, name).map(|t| t.oid),
+            Named::Parser => catalog?.ts_parser_by_name(ns, name).map(|p| p.oid),
             Named::Dictionary => catalog?.ts_dictionary_by_name(ns, name).map(|d| d.oid),
             Named::Config => catalog?.ts_config_by_name(ns, name).map(|c| c.oid),
             _ => None,

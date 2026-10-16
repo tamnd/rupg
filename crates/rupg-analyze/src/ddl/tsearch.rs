@@ -1,10 +1,10 @@
-//! The commands of text search of `tsearchcmds.c`: `CREATE TEXT SEARCH TEMPLATE`, `CREATE TEXT SEARCH DICTIONARY`, `CREATE TEXT SEARCH CONFIGURATION`, `ALTER TEXT SEARCH CONFIGURATION`, and `COMMENT ON` and `DROP` for these objects. The objects are found by name as `get_ts_template_oid`, `get_ts_parser_oid`, `get_ts_dict_oid` and `get_ts_config_oid` of `namespace.c` find them, in the catalog and in the built-in rows.
+//! The commands of text search of `tsearchcmds.c`: `CREATE TEXT SEARCH TEMPLATE`, `CREATE TEXT SEARCH PARSER`, `CREATE TEXT SEARCH DICTIONARY`, `CREATE TEXT SEARCH CONFIGURATION`, `ALTER TEXT SEARCH CONFIGURATION`, and `COMMENT ON` and `DROP` for these objects. The objects are found by name as `get_ts_template_oid`, `get_ts_parser_oid`, `get_ts_dict_oid` and `get_ts_config_oid` of `namespace.c` find them, in the catalog and in the built-in rows.
 //!
-//! `CREATE TEXT SEARCH DICTIONARY` runs the init function of the template on the options, as `verify_dictoptions` does. rupg has the init functions of the templates `simple` and `snowball`. A dictionary of another template gives `0A000`. `CREATE TEXT SEARCH PARSER` also gives `0A000`.
+//! `CREATE TEXT SEARCH DICTIONARY` runs the init function of the template on the options, as `verify_dictoptions` does. rupg has the init functions of the templates `simple` and `snowball`. A dictionary of another template gives `0A000`.
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, TsConfig,
-    TsDictionary, TsMapping, TsTemplate, is_pinned,
+    TsDictionary, TsMapping, TsParser, TsTemplate, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -12,7 +12,8 @@ use rupg_sql::nodes::ObjectType;
 use rupg_sql::nodes::{
     AlterTSConfigType, AlterTSConfigurationStmt, DefElem, DefineStmt, DropStmt, Node,
 };
-use rupg_types::oid;
+use rupg_types::format_type;
+use rupg_types::oid::{self, INTERNAL};
 
 use super::comment::{name_list, not_owner};
 use super::drop::{builtin_object, quote_identifier};
@@ -155,7 +156,7 @@ impl Definer<'_, '_> {
     fn ts_in(&self, kind: Kind, namespace: u32, name: &str) -> Option<u32> {
         let user = match kind {
             Kind::Template => self.catalog.ts_template_by_name(namespace, name).map(|t| t.oid),
-            Kind::Parser => None,
+            Kind::Parser => self.catalog.ts_parser_by_name(namespace, name).map(|p| p.oid),
             Kind::Dictionary => self.catalog.ts_dictionary_by_name(namespace, name).map(|d| d.oid),
             Kind::Config => self.catalog.ts_config_by_name(namespace, name).map(|c| c.oid),
         };
@@ -222,7 +223,8 @@ impl Definer<'_, '_> {
             Some(Kind::Template) => self.create_ts_template(&list, &defs),
             Some(Kind::Dictionary) => self.create_ts_dictionary(&list, &defs),
             Some(Kind::Config) => self.create_ts_config(&list, &defs),
-            _ => Err(not_yet("CREATE TEXT SEARCH PARSER", None)),
+            Some(Kind::Parser) => self.create_ts_parser(&list, &defs),
+            None => Err(Error::internal("not an object of text search")),
         }
     }
 
@@ -238,8 +240,8 @@ impl Definer<'_, '_> {
         let (mut init, mut lexize) = (0, 0);
         for def in defs {
             match def_name(def) {
-                "init" => init = self.template_function(def, 1)?,
-                "lexize" => lexize = self.template_function(def, 4)?,
+                "init" => init = self.ts_function(def, &[INTERNAL], INTERNAL)?,
+                "lexize" => lexize = self.ts_function(def, &[INTERNAL; 4], INTERNAL)?,
                 other => {
                     return Err(Error::new(
                         SqlState::SYNTAX_ERROR,
@@ -259,11 +261,63 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `get_ts_template_func`: the function of an option of a template, with `nargs` arguments of type `internal`, as `LookupFuncName` finds it. It must give `internal`.
-    fn template_function(&self, def: &DefElem, nargs: usize) -> Result<u32> {
+    /// `DefineTSParser`.
+    fn create_ts_parser(&mut self, list: &[&str], defs: &[&DefElem]) -> Result<()> {
+        if !self.is_superuser() {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "must be superuser to create text search parsers",
+            ));
+        }
+        let (namespace, name) = self.ts_creation(list)?;
+        let mut new = TsParser {
+            oid: 0,
+            name: name.to_string(),
+            namespace,
+            start: 0,
+            token: 0,
+            end: 0,
+            headline: 0,
+            lextype: 0,
+        };
+        for def in defs {
+            match def_name(def) {
+                "start" => new.start = self.ts_function(def, &[INTERNAL, oid::INT4], INTERNAL)?,
+                "gettoken" => new.token = self.ts_function(def, &[INTERNAL; 3], INTERNAL)?,
+                "end" => new.end = self.ts_function(def, &[INTERNAL], oid::VOID)?,
+                "headline" => {
+                    new.headline =
+                        self.ts_function(def, &[INTERNAL, INTERNAL, oid::TSQUERY], INTERNAL)?;
+                }
+                "lextypes" => new.lextype = self.ts_function(def, &[INTERNAL], INTERNAL)?,
+                other => {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        format!("text search parser parameter \"{other}\" not recognized"),
+                    ));
+                }
+            }
+        }
+        let methods = [
+            (new.start, "start"),
+            (new.token, "gettoken"),
+            (new.end, "end"),
+            (new.lextype, "lextypes"),
+        ];
+        if let Some((_, method)) = methods.iter().find(|(function, _)| *function == 0) {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                format!("text search parser {method} method is required"),
+            ));
+        }
+        self.catalog.create_ts_parser(new)?;
+        Ok(())
+    }
+
+    /// `get_ts_template_func` and `get_ts_parser_func`: the function of an option of a template or a parser with the argument types `args`, as `LookupFuncName` finds it. It must give the type `result`.
+    fn ts_function(&self, def: &DefElem, args: &[u32], result: u32) -> Result<u32> {
         let list = qualified_name(def)?;
         let (schema, name) = self.an.split_name(&list, None)?;
-        let args = vec![oid::INTERNAL; nargs];
         let schemas = match schema {
             Some(namespace) => vec![namespace],
             None => self.an.path.clone(),
@@ -276,16 +330,17 @@ impl Definer<'_, '_> {
                 .map(|f| (f.oid, f.rettype));
             user.or_else(|| {
                 builtin::procs_named(name)
-                    .find(|p| p.namespace == namespace && p.argtypes == args.as_slice())
+                    .find(|p| p.namespace == namespace && p.argtypes == args)
                     .map(|p| (p.oid, p.rettype))
             })
         });
-        let signature = format!("{}({})", list.join("."), vec!["internal"; nargs].join(", "));
+        let types: Vec<String> = args.iter().map(|&ty| format_type(ty).into_owned()).collect();
+        let signature = format!("{}({})", list.join("."), types.join(", "));
         match found {
-            Some((function, oid::INTERNAL)) => Ok(function),
+            Some((function, ty)) if ty == result => Ok(function),
             Some(_) => Err(Error::new(
                 SqlState::INVALID_OBJECT_DEFINITION,
-                format!("function {signature} should return type internal"),
+                format!("function {signature} should return type {}", format_type(result)),
             )),
             None => Err(Error::new(
                 SqlState::UNDEFINED_FUNCTION,
@@ -515,7 +570,7 @@ impl Definer<'_, '_> {
     fn check_ts_owner(&self, kind: Kind, object: u32, shown: &str) -> Result<()> {
         let (user, owner) = match kind {
             Kind::Template => (self.catalog.ts_template(object).is_some(), None),
-            Kind::Parser => (false, None),
+            Kind::Parser => (self.catalog.ts_parser(object).is_some(), None),
             Kind::Dictionary => {
                 let dict = self.catalog.ts_dictionary(object);
                 (dict.is_some(), dict.map(|d| d.owner))
@@ -545,7 +600,9 @@ impl Definer<'_, '_> {
             Kind::Template => {
                 self.catalog.ts_template(object).map(|t| (t.namespace, t.name.clone(), 0))
             }
-            Kind::Parser => None,
+            Kind::Parser => {
+                self.catalog.ts_parser(object).map(|p| (p.namespace, p.name.clone(), 0))
+            }
             Kind::Dictionary => {
                 self.catalog.ts_dictionary(object).map(|d| (d.namespace, d.name.clone(), d.owner))
             }

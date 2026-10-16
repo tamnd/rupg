@@ -1,0 +1,145 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE TEXT SEARCH PARSER p1 (START = prsd_start, GETTOKEN = prsd_nexttoken, END = prsd_end, LEXTYPES = prsd_lextype)
+CREATE TEXT SEARCH PARSER
+> CREATE TEXT SEARCH PARSER p2 (START = prsd_start, GETTOKEN = prsd_nexttoken, END = prsd_end, LEXTYPES = prsd_lextype, HEADLINE = prsd_headline)
+CREATE TEXT SEARCH PARSER
+> SELECT prsname, prsnamespace::regnamespace, prsstart, prstoken, prsend, prsheadline, prslextype FROM pg_ts_parser ORDER BY oid
+fields prsname@pg_ts_parser.2:19:64:-1,prsnamespace:4089:4:-1,prsstart@pg_ts_parser.4:24:4:-1,prstoken@pg_ts_parser.5:24:4:-1,prsend@pg_ts_parser.6:24:4:-1,prsheadline@pg_ts_parser.7:24:4:-1,prslextype@pg_ts_parser.8:24:4:-1
+row default,pg_catalog,prsd_start,prsd_nexttoken,prsd_end,prsd_headline,prsd_lextype
+row p1,public,prsd_start,prsd_nexttoken,prsd_end,-,prsd_lextype
+row p2,public,prsd_start,prsd_nexttoken,prsd_end,prsd_headline,prsd_lextype
+SELECT 3
+> CREATE TEXT SEARCH PARSER p1 (START = prsd_start, GETTOKEN = prsd_nexttoken, END = prsd_end, LEXTYPES = prsd_lextype)
+ERROR 23505 duplicate key value violates unique constraint "pg_ts_parser_prsname_index"
+> CREATE TEXT SEARCH PARSER p3 (GETTOKEN = prsd_nexttoken, END = prsd_end, LEXTYPES = prsd_lextype)
+ERROR 42P17 text search parser start method is required
+> CREATE TEXT SEARCH PARSER p3 (START = prsd_start, END = prsd_end, LEXTYPES = prsd_lextype)
+ERROR 42P17 text search parser gettoken method is required
+> CREATE TEXT SEARCH PARSER p3 (START = prsd_start, GETTOKEN = prsd_nexttoken, LEXTYPES = prsd_lextype)
+ERROR 42P17 text search parser end method is required
+> CREATE TEXT SEARCH PARSER p3 (START = prsd_start, GETTOKEN = prsd_nexttoken, END = prsd_end)
+ERROR 42P17 text search parser lextypes method is required
+> CREATE TEXT SEARCH PARSER p3 (START = prsd_start, GETTOKEN = prsd_nexttoken, END = prsd_end, LEXTYPES = prsd_lextype, FOO = bar)
+ERROR 42601 text search parser parameter "foo" not recognized
+> CREATE TEXT SEARCH PARSER p3 (START = nope)
+ERROR 42883 function nope(internal, integer) does not exist
+> CREATE TEXT SEARCH PARSER p3 (START = prsd_nexttoken)
+ERROR 42883 function prsd_nexttoken(internal, integer) does not exist
+> CREATE TEXT SEARCH PARSER p3 (END = prsd_lextype)
+ERROR 42P17 function prsd_lextype(internal) should return type void
+> CREATE TEXT SEARCH PARSER p3 (END = prsd_start)
+ERROR 42883 function prsd_start(internal) does not exist
+> CREATE TEXT SEARCH PARSER p3 (LEXTYPES = prsd_end)
+ERROR 42P17 function prsd_end(internal) should return type internal
+> CREATE TEXT SEARCH PARSER p3 (HEADLINE = prsd_start)
+ERROR 42883 function prsd_start(internal, internal, tsquery) does not exist
+> CREATE TEXT SEARCH PARSER p3 (START = pg_catalog.prsd_start, GETTOKEN = 'prsd_nexttoken', END = prsd_end, LEXTYPES = prsd_lextype)
+CREATE TEXT SEARCH PARSER
+> CREATE TEXT SEARCH PARSER p3 (START = nos.prsd_start)
+ERROR 3F000 schema "nos" does not exist
+> CREATE TEXT SEARCH PARSER nos.p3 (START = prsd_start)
+ERROR 3F000 schema "nos" does not exist
+> CREATE TEXT SEARCH PARSER p3 (START)
+ERROR 42601 start requires a parameter
+> SELECT count(*) FROM pg_ts_parser WHERE oid >= 16384
+fields count:20:8:-1
+row 3
+SELECT 1
+> SELECT * FROM ts_token_type('p1') LIMIT 3
+fields tokid:23:4:-1,alias:25:-1:-1,description:25:-1:-1
+row 1,asciiword,Word, all ASCII
+row 2,word,Word, all letters
+row 3,numword,Word, letters and digits
+SELECT 3
+> SELECT * FROM ts_parse('p2', 'hello world 42')
+fields tokid:23:4:-1,token:25:-1:-1
+row 1,hello
+row 12, 
+row 1,world
+row 12, 
+row 22,42
+SELECT 5
+> SELECT * FROM ts_parse('public.p2', 'a-b')
+fields tokid:23:4:-1,token:25:-1:-1
+row 16,a-b
+row 11,a
+row 12,-
+row 11,b
+SELECT 4
+> SELECT pg_ts_parser_is_visible(oid) FROM pg_ts_parser WHERE prsname = 'p1'
+fields pg_ts_parser_is_visible:16:1:-1
+row t
+SELECT 1
+> CREATE TEXT SEARCH CONFIGURATION c1 (PARSER = p1)
+CREATE TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION c1 ADD MAPPING FOR asciiword, word WITH simple
+ALTER TEXT SEARCH CONFIGURATION
+> SELECT cfgname, cfgparser = (SELECT oid FROM pg_ts_parser WHERE prsname = 'p1') FROM pg_ts_config WHERE oid >= 16384
+fields cfgname@pg_ts_config.2:19:64:-1,?column?:16:1:-1
+row c1,t
+SELECT 1
+> SELECT to_tsvector('c1', 'The Quick brown fox')
+fields to_tsvector:3614:-1:-1
+row 'brown':3 'fox':4 'quick':2 'the':1
+SELECT 1
+> SELECT alias, token, dictionaries, lexemes FROM ts_debug('c1', 'Hello there')
+fields alias:25:-1:-1,token:25:-1:-1,dictionaries:3770:-1:-1,lexemes:1009:-1:-1
+row asciiword,Hello,{simple},{hello}
+row blank, ,{},NULL
+row asciiword,there,{simple},{there}
+SELECT 3
+> SELECT ts_headline('c1', 'The quick brown fox jumps', to_tsquery('c1', 'fox'))
+ERROR 0A000 text search parser does not support headline creation
+> COMMENT ON TEXT SEARCH PARSER p1 IS 'my parser'
+COMMENT
+> SELECT d.description FROM pg_description d JOIN pg_ts_parser p ON p.oid = d.objoid WHERE p.prsname = 'p1'
+fields description@pg_description.4:25:-1:-1
+row my parser
+SELECT 1
+> SELECT classid::regclass, refclassid::regclass, deptype FROM pg_depend WHERE objid IN (SELECT oid FROM pg_ts_parser WHERE oid >= 16384) ORDER BY objid, refclassid
+fields classid:2205:4:-1,refclassid:2205:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_ts_parser,pg_namespace,n
+row pg_ts_parser,pg_namespace,n
+row pg_ts_parser,pg_namespace,n
+SELECT 3
+> DROP TEXT SEARCH PARSER p1
+ERROR 2BP01 cannot drop text search parser p1 because other objects depend on it
+> DROP TEXT SEARCH PARSER p1 CASCADE
+NOTICE 00000 drop cascades to text search configuration c1
+DROP TEXT SEARCH PARSER
+> DROP TEXT SEARCH PARSER p2
+DROP TEXT SEARCH PARSER
+> SELECT count(*) FROM pg_ts_parser WHERE oid >= 16384
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT count(*) FROM pg_ts_config WHERE oid >= 16384
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_description WHERE objoid >= 16384
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TEXT SEARCH PARSER s.p4 (START = prsd_start, GETTOKEN = prsd_nexttoken, END = prsd_end, LEXTYPES = prsd_lextype)
+CREATE TEXT SEARCH PARSER
+> SELECT prsname, prsnamespace::regnamespace FROM pg_ts_parser WHERE oid >= 16384
+fields prsname@pg_ts_parser.2:19:64:-1,prsnamespace:4089:4:-1
+row p3,public
+row p4,s
+SELECT 2
+> SELECT * FROM ts_parse('s.p4', 'x y') LIMIT 1
+fields tokid:23:4:-1,token:25:-1:-1
+row 1,x
+SELECT 1
+> SELECT * FROM ts_parse('p4', 'x y') LIMIT 1
+fields tokid:23:4:-1,token:25:-1:-1
+ERROR 42704 text search parser "p4" does not exist
+> DROP SCHEMA s
+ERROR 2BP01 cannot drop schema s because other objects depend on it
+> DROP SCHEMA s CASCADE
+NOTICE 00000 drop cascades to text search parser s.p4
+DROP SCHEMA

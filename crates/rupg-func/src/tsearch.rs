@@ -362,22 +362,23 @@ fn match_tt(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(crate::tsmatch::matches(&lexemes, &items)))
 }
 
-/// `lookup_ts_parser_cache`: the default parser is the only parser.
+/// `lookup_ts_parser_cache`: a built-in parser or a parser of the catalog. rupg runs the functions of the default parser for each parser.
 ///
 /// # Errors
 ///
 /// `XX000` when no parser has the OID.
-fn parser(oid: u32) -> Result<u32> {
-    match builtin::named_by_oid(Named::Parser, oid) {
-        Some(row) => Ok(row.oid),
-        None => Err(Error::internal(format!("cache lookup failed for text search parser {oid}"))),
+fn parser(oid: u32, session: &dyn Session) -> Result<u32> {
+    let user = session.catalog().is_some_and(|c| c.ts_parser(oid).is_some());
+    if user || builtin::named_by_oid(Named::Parser, oid).is_some() {
+        return Ok(oid);
     }
+    Err(Error::internal(format!("cache lookup failed for text search parser {oid}")))
 }
 
 /// The OID of the parser of the first argument of `ts_parse` and `ts_token_type`: an OID for the functions `_byid`, and a name for the functions `_byname`.
 fn parser_arg(call: &Call<'_>, arg: &Value) -> Result<u32> {
     match arg {
-        Value::Oid(oid) => parser(*oid),
+        Value::Oid(oid) => parser(*oid, call.session),
         _ => reg::ts_parser_oid(arg.as_str().ok_or_else(bad_value)?, call.session),
     }
 }
