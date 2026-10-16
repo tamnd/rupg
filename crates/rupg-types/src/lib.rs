@@ -30,7 +30,7 @@
 //!
 //! [`Recv`], the binary input of a `Bind` parameter, with the errors of PostgreSQL when the value is too short or too long. The binary output of the other types is the value in big-endian bytes.
 //!
-//! [`Lexeme`], one lexeme of a `tsvector` with its positions, with [`tsvector_parse`], [`tsvector_deparse`], [`tsvector_recv`] and [`tsvector_send`]. [`tsvector_cmp`] is the order of the B-tree operator class, and [`unique_positions`] puts positions in order as the input function does. [`QueryItem`], one operand or operator of a `tsquery`, with [`tsquery_parse`], [`tsquery_deparse`], [`tsquery_recv`] and [`tsquery_send`]. [`tsquery_cmp`] is the order of the B-tree operator class. [`JsonPath`], a value of `jsonpath`, with [`jsonpath_parse`], [`jsonpath_deparse`], [`jsonpath_recv`] and [`jsonpath_send`].
+//! [`Lexeme`], one lexeme of a `tsvector` with its positions, with [`tsvector_parse`], [`tsvector_deparse`], [`tsvector_recv`] and [`tsvector_send`]. [`tsvector_cmp`] is the order of the B-tree operator class, and [`unique_positions`] puts positions in order as the input function does. [`QueryItem`], one operand or operator of a `tsquery`, with [`tsquery_parse`], [`tsquery_parse_with`] for the functions of text search that make a query, [`tsquery_deparse`], [`tsquery_recv`] and [`tsquery_send`]. [`tsquery_cmp`] is the order of the B-tree operator class. [`JsonPath`], a value of `jsonpath`, with [`jsonpath_parse`], [`jsonpath_deparse`], [`jsonpath_recv`] and [`jsonpath_send`].
 //!
 //! [`xml_in`] checks that the text of an `xml` value is well formed, as libxml2 2.9.14 checks it for PostgreSQL, and gives the same errors and warnings. [`xml_out`] writes the value with the XML declaration of PostgreSQL, and [`xml_encoding`] reads the encoding in the declaration for the receive function.
 //!
@@ -158,8 +158,9 @@ pub use string::{bpchar_coerce, bpchar_in, varchar_coerce, varchar_in};
 pub use tid::{tid_in, tid_out};
 pub use tsquery::{
     QueryItem, TSQUERY_AND, TSQUERY_MAX_DISTANCE, TSQUERY_NOT, TSQUERY_OR, TSQUERY_PHRASE,
-    legacy_crc32, tsquery_bad_distance, tsquery_cmp, tsquery_contains, tsquery_deparse,
-    tsquery_join, tsquery_parse, tsquery_recv, tsquery_send, tsquery_tree,
+    TsQueryMode, TsQueryPush, TsQueryPushVal, legacy_crc32, tsquery_bad_distance, tsquery_cmp,
+    tsquery_contains, tsquery_deparse, tsquery_join, tsquery_parse, tsquery_parse_with,
+    tsquery_recv, tsquery_send, tsquery_tree,
 };
 pub use tsvector::{
     Lexeme, TSVECTOR_MAX_DATA, TSVECTOR_MAX_POSITIONS, TSVECTOR_MAX_WORD, limit_position,

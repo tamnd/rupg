@@ -2357,6 +2357,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/ts_parse.test")));
     }
 
+    /// The functions that make a query with a configuration: `to_tsquery`, `plainto_tsquery`, `phraseto_tsquery` and `websearch_to_tsquery`, with weights, prefixes, stop words and the distances of `<->` around them, the syntax of a web search with `-`, `or` and text in double quotes, the notices for an empty query, `text @@ text`, and the errors. `connection/ts_query.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_query() {
+        big_stack(|| script(include_str!("connection/ts_query.test")));
+    }
+
     /// The type `tsquery`: the text input with its operators, weights and prefixes and its errors, the notice for a query with no lexemes, the output, the order, `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@`, the limits of the distance, the lexeme and the stack of operators, arrays of `tsquery`, `GROUP BY`, `pg_input_is_valid`, the text and binary forms of `COPY` and a query with parameters. `connection/tsquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn tsquery() {
