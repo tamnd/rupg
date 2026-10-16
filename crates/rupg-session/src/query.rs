@@ -561,6 +561,48 @@ impl rupg_func::Session for Reader<'_> {
         self.warnings.borrow_mut().push(warning);
     }
 
+    fn run_query(&self, text: &str) -> Result<(Vec<u32>, Vec<Vec<Value>>)> {
+        let (list, _) = rupg_sql::parse(text)?;
+        let statements: Vec<&Node> = list
+            .iter()
+            .flatten()
+            .filter_map(|node| match node {
+                Node::RawStmt(raw) => raw.stmt.as_ref(),
+                _ => None,
+            })
+            .collect();
+        let prepare = |node: &Node| {
+            let start = self.warnings.borrow().len();
+            let plan = plan(node, self, &Params::default()).and_then(|plan| {
+                for warning in plan.notices() {
+                    self.warn(warning.clone());
+                }
+                plan.fold(None, self)
+            });
+            // The positions of the messages are in the text of the inner query, which the client does not have.
+            for warning in &mut self.warnings.borrow_mut()[start..] {
+                *warning = warning.clone().with_position(None);
+            }
+            plan.map_err(|error| inner_error(error, text))
+        };
+        let [node] = statements.as_slice() else {
+            // `SPI_prepare` plans all the statements before `SPI_cursor_open` looks at their number.
+            for node in statements.into_iter().filter(|node| is_query(node)) {
+                prepare(node)?;
+            }
+            return Err(Error::new(
+                SqlState::INVALID_CURSOR_DEFINITION,
+                "cannot open multi-query plan as cursor",
+            ));
+        };
+        if let Some(error) = cursor_error(node, text) {
+            return Err(error);
+        }
+        let plan = prepare(node)?;
+        let types = plan.columns().iter().map(|target| target.expr.ty).collect();
+        Ok((types, plan.run(&[], self)?))
+    }
+
     fn version(&self) -> String {
         crate::connection::version_text()
     }
@@ -683,6 +725,53 @@ impl Env for Reader<'_> {
 /// The errors of the analysis, and `0A000` for a part of the statement that the engine cannot run yet.
 pub(crate) fn plan(node: &Node, reader: &Reader<'_>, params: &Params) -> Result<Plan> {
     rupg_exec::prepare(rupg_analyze::analyze(node, reader, params)?)
+}
+
+/// `_SPI_error_callback` for an error of the plan of the query of a function: an error with a position loses it, because the position is in the text of the query and not in the text of the client, and another error gets the text of the query in its context.
+fn inner_error(error: Error, text: &str) -> Error {
+    if error.position().is_some() {
+        error.with_position(None)
+    } else {
+        error.with_context(format!("SQL statement \"{text}\""))
+    }
+}
+
+/// The checks of `SPI_cursor_open` for the statement of a query of a function: `42P11` for a statement that gives no rows, and `0A000` for a statement that changes the database, because the plan is read-only. A `SELECT` passes.
+fn cursor_error(node: &Node, text: &str) -> Option<Error> {
+    let changes = |returning: &Option<Box<rupg_sql::nodes::ReturningClause>>| {
+        returning.as_ref().is_some_and(|clause| !clause.exprs.is_empty())
+    };
+    let (tag, rows) = match node {
+        Node::SelectStmt(stmt) if stmt.intoClause.is_some() => ("SELECT INTO", false),
+        Node::SelectStmt(_) => return None,
+        Node::VariableSetStmt(stmt) => {
+            let reset = matches!(
+                stmt.kind,
+                rupg_sql::nodes::VariableSetKind::VAR_RESET
+                    | rupg_sql::nodes::VariableSetKind::VAR_RESET_ALL
+            );
+            (if reset { "RESET" } else { "SET" }, false)
+        }
+        Node::VariableShowStmt(_) => ("SHOW", true),
+        Node::ExplainStmt(_) => ("EXPLAIN", true),
+        Node::InsertStmt(stmt) => ("INSERT", changes(&stmt.returningClause)),
+        Node::UpdateStmt(stmt) => ("UPDATE", changes(&stmt.returningClause)),
+        Node::DeleteStmt(stmt) => ("DELETE", changes(&stmt.returningClause)),
+        Node::MergeStmt(stmt) => ("MERGE", changes(&stmt.returningClause)),
+        _ => return Some(utility::not_supported(text)),
+    };
+    Some(if rows {
+        Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("{tag} is not allowed in a non-volatile function"),
+        )
+        .with_context(format!("SQL statement \"{text}\""))
+    } else {
+        Error::new(
+            SqlState::INVALID_CURSOR_DEFINITION,
+            format!("cannot open {tag} query as cursor"),
+        )
+    })
 }
 
 /// The columns of the result of a plan. A column of a domain has the base type and the typmod of the domain, as `SendRowDescriptionMessage` gives them.

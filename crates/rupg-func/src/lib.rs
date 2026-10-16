@@ -61,6 +61,7 @@ mod tsparser;
 mod tsquery;
 mod tsrank;
 mod tsrewrite;
+mod tsstat;
 mod tsvector;
 mod unicode;
 mod updatable;
@@ -307,6 +308,15 @@ pub trait Session {
     /// `ereport(WARNING)` or `ereport(NOTICE)` in a function: a message for the client, such as the warning of the input of an `aclitem` value with no grantor. A message with a SQLSTATE of class `00` or with the mark of `Error::as_notice` is a `NOTICE`, and any other message is a `WARNING`. A session with no client drops it.
     fn warn(&self, warning: Error) {
         let _ = warning;
+    }
+    /// `SPI_cursor_open` of a read-only plan for `text` and the fetch of all its rows, for a function that runs a query, such as `ts_stat`. It gives the type of each column and the rows.
+    ///
+    /// # Errors
+    ///
+    /// `42P11` when the text is not one statement that gives rows, the errors of the query, and `0A000` for a session that cannot run a query.
+    fn run_query(&self, text: &str) -> Result<(Vec<u32>, Vec<Vec<Value>>)> {
+        let _ = text;
+        Err(not_yet("a query in a function"))
     }
 }
 

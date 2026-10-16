@@ -1,0 +1,176 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT * FROM ts_stat('SELECT ''a:1 b:2,3 c''::tsvector')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row c,1,1
+row b,1,2
+row a,1,1
+SELECT 3
+> SELECT * FROM ts_stat($$SELECT v::tsvector FROM (VALUES ('a:1A b:2B,3C c:4D'), ('a b c d'), (NULL), ('zz:1,2,3,4A')) t(v)$$)
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row zz,1,4
+row d,1,1
+row c,2,2
+row b,2,3
+row a,2,2
+SELECT 5
+> SELECT * FROM ts_stat($$SELECT v::tsvector FROM (VALUES ('a:1A b:2B,3C c:4D'), ('a b c d'), (NULL), ('zz:1,2,3,4A')) t(v)$$, 'ab')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row zz,1,1
+row b,1,1
+row a,1,1
+SELECT 3
+> SELECT * FROM ts_stat($$SELECT v::tsvector FROM (VALUES ('a:1A b:2B,3C c:4D'), ('a b c d')) t(v)$$, 'd')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row c,1,1
+SELECT 1
+> SELECT * FROM ts_stat($$SELECT v::tsvector FROM (VALUES ('a:1A b:2B,3C c:4D'), ('a b c d')) t(v)$$, 'x')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row d,1,1
+row c,2,2
+row b,2,3
+row a,2,2
+SELECT 4
+> SELECT * FROM ts_stat($$SELECT v::tsvector FROM (VALUES ('a:1A b:2B,3C c:4D'), ('a b c d')) t(v)$$, '')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row d,1,1
+row c,2,2
+row b,2,3
+row a,2,2
+SELECT 4
+> SELECT * FROM ts_stat($$SELECT v::tsvector FROM (VALUES ('a:1A b:2B,3C c:4D'), ('a b c d')) t(v)$$, 'AbCdq')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row c,1,1
+row b,1,2
+row a,1,1
+SELECT 3
+> SELECT * FROM ts_stat($$SELECT v::tsvector FROM (VALUES ('a:1A b:2B,3C c:4D'), ('a b c d')) t(v)$$, NULL)
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+SELECT 0
+> SELECT * FROM ts_stat(NULL)
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+SELECT 0
+> SELECT * FROM ts_stat($$SELECT to_tsvector('english', v) FROM (VALUES ('The quick brown fox jumps over the lazy dog'), ('A quick brown dog'), ('Foxes and dogs and cats'), ('')) t(v)$$) ORDER BY nentry DESC, ndoc DESC, word
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row dog,3,3
+row brown,2,2
+row fox,2,2
+row quick,2,2
+row cat,1,1
+row jump,1,1
+row lazi,1,1
+SELECT 7
+> SELECT * FROM ts_stat('SELECT 1')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22023 ts_stat query must return one tsvector column
+> SELECT * FROM ts_stat('SELECT ''a''::tsvector, ''b''::tsvector')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22023 ts_stat query must return one tsvector column
+> SELECT * FROM ts_stat('SELECT ''a''::text')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22023 ts_stat query must return one tsvector column
+> SELECT * FROM ts_stat('SELECT')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22023 ts_stat query must return one tsvector column
+> SELECT * FROM ts_stat('')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 42P11 cannot open multi-query plan as cursor
+> SELECT * FROM ts_stat('SELECT ''a''::tsvector; SELECT ''b''::tsvector')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 42P11 cannot open multi-query plan as cursor
+> SELECT * FROM ts_stat('VALUES (''a''::tsvector)')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row a,1,1
+SELECT 1
+> SELECT * FROM ts_stat('SHOW TimeZone')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 0A000 SHOW is not allowed in a non-volatile function (SQL statement "SHOW TimeZone")
+> SELECT * FROM ts_stat('SET TimeZone TO ''UTC''')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 42P11 cannot open SET query as cursor
+> SELECT * FROM ts_stat('SELEC 1')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 42601 syntax error at or near "SELEC"
+> SELECT * FROM ts_stat('SELECT nope')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 42703 column "nope" does not exist
+> SELECT * FROM ts_stat('SELECT 1/0')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22012 division by zero (SQL statement "SELECT 1/0")
+> SELECT * FROM ts_stat('SELECT ''a''::tsvector WHERE false')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+SELECT 0
+> SELECT * FROM ts_stat('SELECT ''''::tsvector')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+SELECT 0
+> SELECT count(*), sum(ndoc), sum(nentry) FROM ts_stat($$SELECT to_tsvector('simple', 'w' || g || ' w' || (g % 7) || ' x') FROM generate_series(1, 500) g$$)
+fields count:20:8:-1,sum:20:8:-1,sum:20:8:-1
+row 502,1494,1500
+SELECT 1
+> SELECT * FROM ts_stat($$SELECT to_tsvector('simple', 'w' || g || ' w' || (g % 7) || ' x') FROM generate_series(1, 30) g$$) LIMIT 12
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row x,30,30
+row w9,1,1
+row w8,1,1
+row w7,1,1
+row w6,4,5
+row w5,4,5
+row w4,4,5
+row w30,1,1
+row w3,4,5
+row w29,1,1
+row w28,1,1
+row w27,1,1
+SELECT 12
+> SELECT ts_stat('SELECT ''a b a''::tsvector')
+fields ts_stat:2249:-1:-1
+row (b,1,1)
+row (a,1,1)
+SELECT 2
+> SELECT * FROM ts_stat('SELECT ''é:1 ä ü:2A Z a''::tsvector')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row ü,1,1
+row é,1,1
+row ä,1,1
+row a,1,1
+row Z,1,1
+SELECT 5
+> SELECT * FROM ts_stat('SELECT ''a''::tsvector', 'a') AS s(w, d, e)
+fields w:25:-1:-1,d:23:4:-1,e:23:4:-1
+SELECT 0
+> SELECT * FROM ts_stat($$SELECT setweight('a:1,2 b:3'::tsvector, 'b')$$, 'b')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row b,1,1
+row a,1,2
+SELECT 2
+> SELECT * FROM ts_stat('SELECT strip(''a:1,2 b:3''::tsvector)', 'a')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+SELECT 0
+> SELECT * FROM ts_stat('TABLE pg_am')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22023 ts_stat query must return one tsvector column
+> SELECT * FROM ts_stat('SELECT (''a''||(1/g))::tsvector FROM generate_series(1,-1,-1) g')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22012 division by zero
+> SELECT * FROM ts_stat('SELECT (1/g)::text FROM generate_series(1,-1,-1) g')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22012 division by zero
+> SELECT * FROM ts_stat('SELECT 1 WHERE false')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+ERROR 22023 ts_stat query must return one tsvector column
+> SELECT * FROM ts_stat('SELECT ''a''::tsvector', 'a', 'b')
+ERROR 42883 function ts_stat(unknown, unknown, unknown) does not exist at 15
+> SELECT * FROM ts_stat('SELECT ''a:1'' :: tsvector FROM pg_am WHERE amname = ''zzz''')
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+SELECT 0
+> SELECT * FROM ts_stat('select ''a b''::tsvector') s, ts_stat('select ''c''::tsvector') t
+fields word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1,word:25:-1:-1,ndoc:23:4:-1,nentry:23:4:-1
+row b,1,1,c,1,1
+row a,1,1,c,1,1
+SELECT 2
+> SELECT proname, prosrc, provolatile, proretset FROM pg_proc WHERE prosrc IN ('ts_stat1', 'ts_stat2', 'tsquery_rewrite_query') ORDER BY prosrc
+fields proname@pg_proc.2:19:64:-1,prosrc@pg_proc.26:25:-1:-1,provolatile@pg_proc.15:18:1:-1,proretset@pg_proc.14:16:1:-1
+row ts_stat,ts_stat1,v,t
+row ts_stat,ts_stat2,v,t
+row ts_rewrite,tsquery_rewrite_query,v,f
+SELECT 3

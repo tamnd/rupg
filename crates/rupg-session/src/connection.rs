@@ -2393,6 +2393,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/ts_headline_json.test")));
     }
 
+    /// The function `ts_stat`: the counts of the lexemes and of their positions, the weights, the order of the rows, null values, the errors of a query that does not give one `tsvector` column, an empty text, two statements, a statement that gives no rows and a statement that is not read-only, and the errors of the query with and without a position. `connection/ts_stat.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_stat() {
+        big_stack(|| script(include_str!("connection/ts_stat.test")));
+    }
+
+    /// The function `ts_rewrite` with a query: the rewrite of each row from the result of the row before it, the rows with a null value or an empty target, the end of the rewrite at an empty query, an empty query that does not run the query, and the errors of a query that does not give two `tsquery` columns. `connection/ts_rewrite_query.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_rewrite_query() {
+        big_stack(|| script(include_str!("connection/ts_rewrite_query.test")));
+    }
+
     /// The type `tsquery`: the text input with its operators, weights and prefixes and its errors, the notice for a query with no lexemes, the output, the order, `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@`, the limits of the distance, the lexeme and the stack of operators, arrays of `tsquery`, `GROUP BY`, `pg_input_is_valid`, the text and binary forms of `COPY` and a query with parameters. `connection/tsquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn tsquery() {

@@ -1,11 +1,11 @@
-//! `ts_rewrite` of `tsquery_rewrite.c` with the tree of a query of `tsquery_util.c`: the form with a target and a substitute.
+//! `ts_rewrite` of `tsquery_rewrite.c` with the tree of a query of `tsquery_util.c`: the form with a target and a substitute, and the form with a query that gives the pairs of targets and substitutes.
 
 use std::cmp::Ordering;
 use std::convert::Infallible;
 
-use rupg_common::Result;
+use rupg_common::{Error, Result, SqlState};
 use rupg_types::{
-    QueryItem, TSQUERY_AND, TSQUERY_NOT, TSQUERY_OR, TSQUERY_PHRASE, Value, legacy_crc32,
+    QueryItem, TSQUERY_AND, TSQUERY_NOT, TSQUERY_OR, TSQUERY_PHRASE, Value, legacy_crc32, oid,
     ts_compare_string,
 };
 
@@ -105,6 +105,14 @@ impl Node {
             self.children = vec![Node { item, crc: 0, sign, fixed: false, children: pair }];
             self.children.extend(last);
             self.children.extend(rest);
+        }
+    }
+
+    /// `QTNClearFlags`: clears the mark of the copies of the substitute, so that the next search goes into them.
+    fn clear_flags(&mut self) {
+        self.fixed = false;
+        for child in &mut self.children {
+            child.clear_flags();
         }
     }
 
@@ -250,19 +258,61 @@ fn rewrite(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let tree = canonical(query);
     let ex = canonical(ex);
     let subs = (!subst.is_empty()).then(|| Node::build(subst, 0));
-    let Some(mut tree) = find(tree, &ex, subs.as_ref()) else {
-        return Ok(Value::TsQuery(Vec::new()));
-    };
+    Ok(Value::TsQuery(
+        find(tree, &ex, subs.as_ref()).map_or_else(Vec::new, |tree| items(tree, query.len())),
+    ))
+}
+
+/// The items of a tree after `QTNBinary`.
+fn items(mut tree: Node, size: usize) -> Vec<QueryItem> {
     tree.binary();
-    let mut out = Vec::with_capacity(query.len());
+    let mut out = Vec::with_capacity(size);
     tree.fill(&mut out);
-    Ok(Value::TsQuery(out))
+    out
+}
+
+/// `tsquery_rewrite_query`: `ts_rewrite(query, select)`. Each row of the query gives a target and a substitute, and the rewrite of each row starts from the result of the row before it. A row with a null value or with an empty target does nothing. The rewrite stops when the query becomes empty. An empty query does not run the query.
+fn rewrite_query(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [Value::TsQuery(query), text] = args else { return Err(bad_value()) };
+    let text = text.as_str().ok_or_else(bad_value)?;
+    if query.is_empty() {
+        return Ok(Value::TsQuery(query.clone()));
+    }
+    let mut tree = Some(canonical(query));
+    let (types, rows) = call.session.run_query(text)?;
+    if types != [oid::TSQUERY, oid::TSQUERY] {
+        return Err(Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "ts_rewrite query must return two tsquery columns",
+        ));
+    }
+    for row in &rows {
+        let Some(root) = tree.take() else { break };
+        let [Value::TsQuery(ex), Value::TsQuery(subst)] = row.as_slice() else {
+            tree = Some(root);
+            continue;
+        };
+        if ex.is_empty() {
+            tree = Some(root);
+            continue;
+        }
+        let ex = canonical(ex);
+        let subs = (!subst.is_empty()).then(|| Node::build(subst, 0));
+        tree = find(root, &ex, subs.as_ref()).map(|mut root| {
+            root.clear_flags();
+            root.ternary();
+            root.sort();
+            root
+        });
+    }
+    Ok(Value::TsQuery(tree.map_or_else(Vec::new, |tree| items(tree, query.len()))))
 }
 
 /// The kernel of `ts_rewrite` by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
         "tsquery_rewrite" => rewrite,
+        "tsquery_rewrite_query" => rewrite_query,
         _ => return None,
     })
 }
