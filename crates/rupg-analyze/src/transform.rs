@@ -377,6 +377,85 @@ impl Analyzer<'_> {
         }
     }
 
+    /// `transformAExprDistinct`: `IS DISTINCT FROM` and `IS NOT DISTINCT FROM`. A side that is a `NULL` literal makes a test for null of the other side, as `make_nulltest_from_distinct` does. Two rows make a test for each pair of fields, as `make_row_distinct_op` does.
+    fn transform_distinct(&mut self, a: &A_Expr, op_names: &[&str]) -> Result<Expr> {
+        let at = place(a.location);
+        let not = a.kind == A_Expr_Kind::AEXPR_NOT_DISTINCT;
+        let is_null = |node: &Option<Node>| matches!(node, Some(Node::A_Const(c)) if c.isnull);
+        if is_null(&a.rexpr) || is_null(&a.lexpr) {
+            let null_right = is_null(&a.rexpr);
+            let (other, null) =
+                if null_right { (&a.lexpr, &a.rexpr) } else { (&a.rexpr, &a.lexpr) };
+            let arg = self.transform(other.as_ref())?;
+            // The test of PostgreSQL has `argisrow` false, so that a row with null fields is not null. The test for null of rupg reads the fields of a row, so a row keeps the comparison.
+            if arg.ty != oid::RECORD && self.row_columns(arg.ty).is_none() {
+                return Ok(Expr::new(ExprKind::NullTest(Box::new(arg), not), oid::BOOL).at(at));
+            }
+            let null = self.transform(null.as_ref())?;
+            let (left, right) = if null_right { (arg, null) } else { (null, arg) };
+            return self.distinct_op(op_names, not, left, right, at);
+        }
+        let left = self.transform(a.lexpr.as_ref())?;
+        let right = self.transform(a.rexpr.as_ref())?;
+        let (ExprKind::Row(l), ExprKind::Row(r)) = (&left.kind, &right.kind) else {
+            return self.distinct_op(op_names, not, left, right, at);
+        };
+        if l.len() != r.len() {
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                "unequal number of entries in row expressions",
+            )
+            .at_opt(at));
+        }
+        let mut pairs = l.iter().cloned().zip(r.iter().cloned());
+        // One pair of fields is one test, and `IS NOT DISTINCT FROM` is the `NOT` of the test.
+        if l.len() == 1
+            && let Some((left, right)) = pairs.next()
+        {
+            return self.distinct_op(op_names, not, left, right, at);
+        }
+        let mut result: Option<Expr> = None;
+        for (left, right) in pairs {
+            let test = self.distinct_op(op_names, false, left, right, at)?;
+            result = Some(match result {
+                None => test,
+                Some(before) => {
+                    Expr::new(ExprKind::Bool(BoolOp::Or, vec![before, test]), oid::BOOL).at(at)
+                }
+            });
+        }
+        // Rows of no fields are not distinct.
+        let result =
+            result.unwrap_or_else(|| Expr::constant(Value::Bool(false), oid::BOOL, -1, None));
+        Ok(if not {
+            Expr::new(ExprKind::Bool(BoolOp::Not, vec![result]), oid::BOOL).at(at)
+        } else {
+            result
+        })
+    }
+
+    /// `make_distinct_op`: `IS DISTINCT FROM` with the `=` operator of the two inputs, or `IS NOT DISTINCT FROM` when `not` is true.
+    fn distinct_op(
+        &mut self,
+        op_names: &[&str],
+        not: bool,
+        left: Expr,
+        right: Expr,
+        at: Option<usize>,
+    ) -> Result<Expr> {
+        let name = op_names.last().copied().unwrap_or("=");
+        let (func, ty, left, right) = self.operator_function(name, left, right, at)?;
+        if ty != oid::BOOL {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                "IS DISTINCT FROM requires = operator to yield boolean",
+            )
+            .at_opt(at));
+        }
+        Ok(Expr::new(ExprKind::Distinct { equal: func, not, args: vec![left, right] }, oid::BOOL)
+            .at(at))
+    }
+
     /// The operators and the other forms of `A_Expr`.
     fn transform_a_expr(&mut self, a: &A_Expr) -> Result<Expr> {
         let at = place(a.location);
@@ -423,27 +502,7 @@ impl Analyzer<'_> {
                 )
             }
             A_Expr_Kind::AEXPR_DISTINCT | A_Expr_Kind::AEXPR_NOT_DISTINCT => {
-                if matches!((&a.lexpr, &a.rexpr), (Some(Node::RowExpr(_)), Some(Node::RowExpr(_))))
-                {
-                    return Err(not_yet("a row comparison", at));
-                }
-                let left = self.transform(a.lexpr.as_ref())?;
-                let right = self.transform(a.rexpr.as_ref())?;
-                let name = op_names.last().copied().unwrap_or("=");
-                let (func, ty, left, right) = self.operator_function(name, left, right, at)?;
-                if ty != oid::BOOL {
-                    return Err(Error::new(
-                        SqlState::DATATYPE_MISMATCH,
-                        "IS DISTINCT FROM requires = operator to yield boolean",
-                    )
-                    .at_opt(at));
-                }
-                let not = a.kind == A_Expr_Kind::AEXPR_NOT_DISTINCT;
-                Ok(Expr::new(
-                    ExprKind::Distinct { equal: func, not, args: vec![left, right] },
-                    oid::BOOL,
-                )
-                .at(at))
+                self.transform_distinct(a, &op_names)
             }
             A_Expr_Kind::AEXPR_NULLIF => {
                 let left = self.transform(a.lexpr.as_ref())?;

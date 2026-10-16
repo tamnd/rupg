@@ -1,0 +1,79 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW t AS SELECT * FROM (VALUES (1, 'x'), (2, NULL), (NULL, NULL)) AS v (a, b)
+CREATE VIEW
+> SELECT (1, 2) IS DISTINCT FROM (1, 2), (1, 2) IS DISTINCT FROM (1, 3), (1, NULL::int) IS DISTINCT FROM (1, NULL::int), (1, NULL::int) IS DISTINCT FROM (1, 2)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,f,t
+SELECT 1
+> SELECT (1, 2) IS NOT DISTINCT FROM (1, 2), (1, 2) IS NOT DISTINCT FROM (1, 3), (1, NULL::int) IS NOT DISTINCT FROM (1, NULL::int), (NULL::int, 1) IS NOT DISTINCT FROM (2, 1)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,f
+SELECT 1
+> SELECT (1, 2, 3) IS DISTINCT FROM (1, 2, 3), (1, 2, 3) IS DISTINCT FROM (1, 2, 4), (1, 2, 3) IS NOT DISTINCT FROM (1, 2, 3), ROW(1) IS DISTINCT FROM ROW(2), ROW(1) IS NOT DISTINCT FROM ROW(1)
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,t,t,t,t
+SELECT 1
+> SELECT ROW() IS DISTINCT FROM ROW(), ROW() IS NOT DISTINCT FROM ROW()
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,t
+SELECT 1
+> SELECT ('a', 1.5) IS DISTINCT FROM ('a'::text, 1.5::float8), (1::int2, 2::int8) IS NOT DISTINCT FROM (1, 2)
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,t
+SELECT 1
+> SELECT (1, 2) IS DISTINCT FROM (1, 2, 3)
+ERROR 42601 unequal number of entries in row expressions at 15
+> SELECT (1, 'a') IS DISTINCT FROM (2, 3)
+ERROR 22P02 invalid input syntax for type integer: "a" at 12
+> SELECT 1 IS DISTINCT FROM NULL, NULL IS DISTINCT FROM 1, NULL IS DISTINCT FROM NULL, NULL IS NOT DISTINCT FROM NULL, 1 IS NOT DISTINCT FROM NULL, NULL::int IS DISTINCT FROM NULL
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f,t,f,f
+SELECT 1
+> SELECT ROW(NULL, NULL) IS DISTINCT FROM NULL, ROW(NULL, NULL) IS NOT DISTINCT FROM NULL, ROW(1, NULL) IS DISTINCT FROM NULL
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t
+SELECT 1
+> SELECT a, b, (a, b) IS DISTINCT FROM (1, 'x') AS d, (a, b) IS NOT DISTINCT FROM (2, NULL) AS n FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,d:16:1:-1,n:16:1:-1
+row 1,x,f,f
+row 2,NULL,t,t
+row NULL,NULL,t,f
+SELECT 3
+> SELECT a, b FROM t WHERE (a, b) IS NOT DISTINCT FROM (NULL, NULL)
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT a FROM t WHERE a IS DISTINCT FROM NULL ORDER BY a
+fields a@t.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> CREATE VIEW v1 AS SELECT (a, b) IS DISTINCT FROM (1, 'x') AS d, (a, b, a) IS NOT DISTINCT FROM (2, NULL, 2) AS n, ROW(a) IS DISTINCT FROM ROW(1) AS one, a IS DISTINCT FROM NULL AS dn, NULL IS NOT DISTINCT FROM b AS nn, a IS NOT DISTINCT FROM 1 AS s FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v1')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ((a IS DISTINCT FROM 1) OR (b IS DISTINCT FROM 'x'::text)) AS d,
+    (NOT (((a IS DISTINCT FROM 2) OR (b IS DISTINCT FROM NULL::text)) OR (a IS DISTINCT FROM 2))) AS n,
+    (a IS DISTINCT FROM 1) AS one,
+    (a IS NOT NULL) AS dn,
+    (b IS NULL) AS nn,
+    (NOT (a IS DISTINCT FROM 1)) AS s
+   FROM t;
+SELECT 1
+> SELECT * FROM v1
+fields d@v1.1:16:1:-1,n@v1.2:16:1:-1,one@v1.3:16:1:-1,dn@v1.4:16:1:-1,nn@v1.5:16:1:-1,s@v1.6:16:1:-1
+row f,f,f,t,f,t
+row t,t,t,t,t,f
+row t,f,t,f,t,f
+SELECT 3
+> PREPARE p(int, text) AS SELECT a, b FROM t WHERE (a, b) IS NOT DISTINCT FROM ($1, $2)
+PREPARE
+> EXECUTE p(2, NULL)
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 2,NULL
+SELECT 1
+> EXECUTE p(1, 'x')
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 1,x
+SELECT 1

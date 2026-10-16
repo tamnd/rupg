@@ -2556,6 +2556,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_compare.test")));
     }
 
+    /// `IS DISTINCT FROM` and `IS NOT DISTINCT FROM` for rows and with a `NULL` literal: null fields, rows of one field and of no fields, fields of different types, the errors, a test in `WHERE`, a prepared statement and the text of a view. `connection/row_distinct.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_distinct() {
+        big_stack(|| script(include_str!("connection/row_distinct.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {
