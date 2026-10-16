@@ -330,6 +330,7 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
         "information_schema.rs".to_string(),
         script_file("information_schema.sql", &information_schema),
     ));
+    files.push(("snowball.rs".to_string(), snowball_file(src)?));
     files.push(("mod.rs".to_string(), mod_file(&catalogs, &rows_out)));
     Ok(files)
 }
@@ -2139,6 +2140,7 @@ fn mod_file(catalogs: &[Catalog], rows: &BTreeMap<String, Vec<Vec<Option<String>
     names.push("catalogs");
     names.push("system_views");
     names.push("information_schema");
+    names.push("snowball");
     names.sort_unstable();
     for name in names {
         writeln!(out, "#[rustfmt::skip]\npub(crate) mod {name};").unwrap();
@@ -2155,6 +2157,63 @@ fn script_file(name: &str, text: &str) -> String {
     format!(
         "//! The script `{name}` that `initdb` runs after the bootstrap.\n//!\n//! `cargo xtask pgcatalog` makes this file from `vendor/postgres-19/src/backend/catalog/{name}`. Do not edit it.\n\n/// The text of the script.\npub(crate) static TEXT: &str = r{marks}\"{text}\"{marks};\n"
     )
+}
+
+/// The languages of `snowball_create.pl` that have a stop word file in `src/backend/snowball/stopwords`.
+const STOP_WORDS: [&str; 15] = [
+    "danish",
+    "dutch",
+    "english",
+    "finnish",
+    "french",
+    "german",
+    "hungarian",
+    "italian",
+    "nepali",
+    "norwegian",
+    "portuguese",
+    "russian",
+    "spanish",
+    "swedish",
+    "turkish",
+];
+
+/// A raw string literal of the text, with enough `#` marks that no quote in the text ends it.
+fn raw_string(text: &str) -> String {
+    let mut marks = String::from("#");
+    while text.contains(&format!("\"{marks}")) {
+        marks.push('#');
+    }
+    format!("r{marks}\"{text}\"{marks}")
+}
+
+/// The file with the two scripts of `src/backend/snowball`, from which the session makes `snowball_create.sql` as `snowball_create.pl` makes it, and the stop word files of the languages.
+fn snowball_file(src: &Path) -> Result<String, String> {
+    let dir = src.join("backend/snowball");
+    let func = read(&dir.join("snowball_func.sql.in"))?;
+    let language = read(&dir.join("snowball.sql.in"))?;
+    let mut out = String::from(
+        "//! The scripts and the stop word files of the Snowball dictionaries, which `initdb` makes with `snowball_create.sql`.\n//!\n//! `cargo xtask pgcatalog` makes this file from `vendor/postgres-19/src/backend/snowball`. Do not edit it.\n\n",
+    );
+    writeln!(
+        out,
+        "/// The text of `snowball_func.sql.in`.\npub(crate) static FUNC: &str = {};\n",
+        raw_string(&func)
+    )
+    .unwrap();
+    writeln!(
+        out,
+        "/// The text of `snowball.sql.in`.\npub(crate) static LANGUAGE: &str = {};\n",
+        raw_string(&language)
+    )
+    .unwrap();
+    out.push_str("/// The name and the text of each file of `stopwords`.\npub(crate) static STOP_WORDS: [(&str, &str); 15] = [\n");
+    for name in STOP_WORDS {
+        let text = read(&dir.join(format!("stopwords/{name}.stop")))?;
+        writeln!(out, "    (\"{name}\", {}),", raw_string(&text)).unwrap();
+    }
+    out.push_str("];\n");
+    Ok(out)
 }
 
 /// Writes items with a comma after each, up to 100 columns on each line.

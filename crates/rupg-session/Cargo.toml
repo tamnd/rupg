@@ -21,6 +21,7 @@ rupg-exec.workspace = true
 rupg-func.workspace = true
 rupg-pgcatalog.workspace = true
 rupg-platform.workspace = true
+rupg-snowball.workspace = true
 rupg-sql.workspace = true
 rupg-types.workspace = true
 rupg-wire.workspace = true

@@ -277,6 +277,7 @@ dependencies = [
  "rupg-catalog",
  "rupg-common",
  "rupg-pgcatalog",
+ "rupg-snowball",
  "rupg-sql",
  "rupg-types",
 ]
@@ -480,6 +481,7 @@ dependencies = [
  "rupg-func",
  "rupg-pgcatalog",
  "rupg-platform",
+ "rupg-snowball",
  "rupg-sql",
  "rupg-types",
  "rupg-wire",
@@ -487,6 +489,10 @@ dependencies = [
 
 [[package]]
 name = "rupg-shim"
+version = "0.1.27"
+
+[[package]]
+name = "rupg-snowball"
 version = "0.1.27"
 
 [[package]]

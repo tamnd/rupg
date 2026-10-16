@@ -1,4 +1,4 @@
-//! The rows of the catalog for the user objects: the schemas, the relations, their row types and columns, the column defaults, the constraints, the triggers of the foreign keys, the indexes, the sequences, the functions, the dependencies between them and their comments. A scan of a table of the catalog gives these rows after the static rows.
+//! The rows of the catalog for the user objects: the schemas, the relations, their row types and columns, the column defaults, the constraints, the triggers of the foreign keys, the indexes, the sequences, the functions, the objects of text search, the dependencies between them and their comments. A scan of a table of the catalog gives these rows after the static rows.
 //!
 //! The columns of `pg_node_tree` hold the expressions in the form of the analyzer, not in the form of `nodeToString`.
 
@@ -145,6 +145,10 @@ pub(crate) fn rows(
         "pg_rewrite" => rewrites(table, catalog),
         "pg_init_privs" => init_privs(table, catalog, session)?,
         "pg_database" => databases(table, session),
+        "pg_ts_template" => ts_templates(table, catalog),
+        "pg_ts_dict" => ts_dictionaries(table, catalog),
+        "pg_ts_config" => ts_configs(table, catalog),
+        "pg_ts_config_map" => ts_mappings(table, catalog),
         _ => Vec::new(),
     };
     Ok(rows.into_iter().map(|row| row.values).collect())
@@ -701,6 +705,67 @@ fn extensions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("extnamespace", oid(e.namespace))
                 .set("extrelocatable", Value::Bool(e.relocatable))
                 .set("extversion", Value::text(e.version.clone()));
+            row
+        })
+        .collect()
+}
+
+fn ts_templates<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .ts_templates()
+        .map(|t| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(t.oid))
+                .set("tmplname", Value::text(t.name.clone()))
+                .set("tmplnamespace", oid(t.namespace))
+                .set("tmplinit", oid(t.init))
+                .set("tmpllexize", oid(t.lexize));
+            row
+        })
+        .collect()
+}
+
+fn ts_dictionaries<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .ts_dictionaries()
+        .map(|d| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(d.oid))
+                .set("dictname", Value::text(d.name.clone()))
+                .set("dictnamespace", oid(d.namespace))
+                .set("dictowner", oid(d.owner))
+                .set("dicttemplate", oid(d.template))
+                .set("dictinitoption", d.options.clone().map_or(Value::Null, Value::text));
+            row
+        })
+        .collect()
+}
+
+fn ts_configs<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .ts_configs()
+        .map(|c| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(c.oid))
+                .set("cfgname", Value::text(c.name.clone()))
+                .set("cfgnamespace", oid(c.namespace))
+                .set("cfgowner", oid(c.owner))
+                .set("cfgparser", oid(c.parser));
+            row
+        })
+        .collect()
+}
+
+fn ts_mappings<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .ts_mappings()
+        .iter()
+        .map(|m| {
+            let mut row = Row::new(table);
+            row.set("mapcfg", oid(m.config))
+                .set("maptokentype", Value::Int4(m.token))
+                .set("mapseqno", Value::Int4(m.seqno))
+                .set("mapdict", oid(m.dict));
             row
         })
         .collect()

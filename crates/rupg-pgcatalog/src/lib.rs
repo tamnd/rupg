@@ -143,6 +143,48 @@ pub fn information_schema() -> &'static str {
     generated::information_schema::TEXT
 }
 
+/// The text of `snowball_func.sql.in`, the first part of `snowball_create.sql`. It makes the functions and the template of the Snowball dictionaries.
+pub fn snowball_func() -> &'static str {
+    generated::snowball::FUNC
+}
+
+/// The text of `snowball.sql.in`, the part of `snowball_create.sql` for one language. `snowball_create.pl` replaces the words `_LANGNAME_`, `_DICTNAME_`, `_CFGNAME_`, `_ASCDICTNAME_`, `_NONASCDICTNAME_` and `_STOPWORDS_` in it.
+pub fn snowball_language() -> &'static str {
+    generated::snowball::LANGUAGE
+}
+
+/// The text of the stop word file `name.stop` of the share directory, or `None` when there is no such file. The files are the stop word files of the Snowball dictionaries.
+pub fn stop_words(name: &str) -> Option<&'static str> {
+    generated::snowball::STOP_WORDS.iter().find(|(n, _)| *n == name).map(|(_, text)| *text)
+}
+
+/// The token types of the default text search parser, from `tok_alias` and `lex_descr` of `wparser_def.c`. The token type with the number `n` is the item `n - 1`.
+pub const TOKEN_TYPES: [(&str, &str); 23] = [
+    ("asciiword", "Word, all ASCII"),
+    ("word", "Word, all letters"),
+    ("numword", "Word, letters and digits"),
+    ("email", "Email address"),
+    ("url", "URL"),
+    ("host", "Host"),
+    ("sfloat", "Scientific notation"),
+    ("version", "Version number"),
+    ("hword_numpart", "Hyphenated word part, letters and digits"),
+    ("hword_part", "Hyphenated word part, all letters"),
+    ("hword_asciipart", "Hyphenated word part, all ASCII"),
+    ("blank", "Space symbols"),
+    ("tag", "XML tag"),
+    ("protocol", "Protocol head"),
+    ("numhword", "Hyphenated word, letters and digits"),
+    ("asciihword", "Hyphenated word, all ASCII"),
+    ("hword", "Hyphenated word, all letters"),
+    ("url_path", "URL path"),
+    ("file", "File or path name"),
+    ("float", "Decimal notation"),
+    ("int", "Signed integer"),
+    ("uint", "Unsigned integer"),
+    ("entity", "XML entity"),
+];
+
 /// A system catalog by the OID of its `pg_class` row.
 pub fn catalog_by_oid(oid: u32) -> Option<&'static Catalog> {
     catalogs().iter().find(|c| c.oid == oid)

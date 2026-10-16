@@ -18,6 +18,10 @@ ser = "ser"
 iy = "iy"
 nd = "nd"
 wth = "wth"
+# The fields `bra` and `ket` and the tables `amongs` of the Snowball runtime, and the functions `dispell_init` and `dispell_lexize` of the template `ispell`.
+ket = "ket"
+amongs = "amongs"
+dispell = "dispell"
 
 # Test inputs that are wrong on purpose.
 [default]
@@ -25,5 +29,5 @@ wth = "wth"
 extend-ignore-re = ['"infinit"', '"onn"', "'hom'", 'caf\\00e9']
 
 [files]
-# The list of glibc encoding names in xml/encodings.rs has names such as `GOST_19768` and `CSISO16PORTUGESE`. The catalog rows hold the names and descriptions of the vendored .dat files, such as `box_overright` and `dispell_init`.
-extend-exclude = ["vendor/", "*.expected", "crates/rupg-types/tests/oracle.sql", "crates/rupg-types/tests/oracle.tsv", "crates/rupg-pgcatalog/src/generated/", "crates/rupg-func/src/generated/", "crates/rupg-pgcatalog/tests/oracle.tsv", "crates/rupg-types/src/xml/encodings.rs"]
+# The list of glibc encoding names in xml/encodings.rs has names such as `GOST_19768` and `CSISO16PORTUGESE`. The catalog rows hold the names and descriptions of the vendored .dat files, such as `box_overright` and `dispell_init`. The Snowball stemmers and their test words are in many languages.
+extend-exclude = ["vendor/", "*.expected", "crates/rupg-types/tests/oracle.sql", "crates/rupg-types/tests/oracle.tsv", "crates/rupg-pgcatalog/src/generated/", "crates/rupg-func/src/generated/", "crates/rupg-pgcatalog/tests/oracle.tsv", "crates/rupg-types/src/xml/encodings.rs", "crates/rupg-snowball/src/algorithms/", "crates/rupg-snowball/tests/oracle.tsv"]

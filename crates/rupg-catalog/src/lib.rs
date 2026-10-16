@@ -1,6 +1,6 @@
 //! The rupg catalog of user objects: schemas, tables, columns, constraints, indexes, roles, privileges.
 //!
-//! At M2 the catalog holds the schemas, tables, sequences, indexes, views, column defaults and constraints that DDL makes. Each object gets its OID in the order that PostgreSQL 19 gives OIDs, and each object without a name in the statement gets the name that PostgreSQL gives it. Thus after the same statements on a new cluster, the OIDs and the names are the same as in PostgreSQL.
+//! At M2 the catalog holds the schemas, tables, sequences, indexes, views, column defaults, constraints and text search objects that DDL makes. Each object gets its OID in the order that PostgreSQL 19 gives OIDs, and each object without a name in the statement gets the name that PostgreSQL gives it. Thus after the same statements on a new cluster, the OIDs and the names are the same as in PostgreSQL.
 //!
 //! The catalog does not read SQL. The analyzer turns a statement into calls of this crate in the order of `DefineRelation`, `DefineIndex` and `ATAddForeignKeyConstraint`, and it gives each expression as text that only the analyzer reads back. The catalog makes the TOAST tables that PostgreSQL makes, with their indexes, but they hold no data. It also makes the four internal triggers of each foreign key, which have no work to do because the tables have no rows. The catalog also records the rows of `pg_depend` in the order that PostgreSQL inserts them.
 //!
@@ -16,10 +16,15 @@ pub mod toast;
 mod drop;
 mod owner;
 mod sequence;
+mod tsearch;
 
 pub use drop::{Refusal, Target, flag};
 pub use owner::acl_new_owner;
 pub use sequence::SequenceData;
+pub use tsearch::{
+    PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, TsConfig, TsDictionary, TsMapping,
+    TsTemplate,
+};
 
 use std::collections::BTreeMap;
 
@@ -691,6 +696,10 @@ pub struct Catalog {
     languages: BTreeMap<u32, Language>,
     extensions: BTreeMap<u32, Extension>,
     triggers: BTreeMap<u32, Trigger>,
+    ts_templates: BTreeMap<u32, TsTemplate>,
+    ts_dictionaries: BTreeMap<u32, TsDictionary>,
+    ts_configs: BTreeMap<u32, TsConfig>,
+    ts_mappings: Vec<TsMapping>,
     depends: Vec<Depend>,
     descriptions: BTreeMap<ObjRef, String>,
 }
@@ -741,6 +750,10 @@ impl Catalog {
             languages: BTreeMap::new(),
             extensions: BTreeMap::new(),
             triggers: BTreeMap::new(),
+            ts_templates: BTreeMap::new(),
+            ts_dictionaries: BTreeMap::new(),
+            ts_configs: BTreeMap::new(),
+            ts_mappings: Vec::new(),
             depends: Vec::new(),
             descriptions: BTreeMap::new(),
         }

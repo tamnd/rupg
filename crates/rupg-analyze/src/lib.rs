@@ -26,6 +26,7 @@ mod sort;
 mod sublink;
 mod subscript;
 mod transform;
+pub mod tsdict;
 mod typcache;
 mod typename;
 pub mod types;

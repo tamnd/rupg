@@ -1,4 +1,4 @@
-//! `CommentObject`: `COMMENT ON`, as `comment.c` runs it, with the lookup of `get_object_address` and the checks of `check_object_ownership`. The objects are the schemas, the tables, the views, the indexes, the sequences, the columns, the constraints of the tables and the types of the catalog. A comment on a built-in object or on an object of another kind gives `0A000`.
+//! `CommentObject`: `COMMENT ON`, as `comment.c` runs it, with the lookup of `get_object_address` and the checks of `check_object_ownership`. The objects are the schemas, the tables, the views, the indexes, the sequences, the columns, the constraints of the tables, the types and the objects of text search of the catalog. A comment on a built-in object or on an object of another kind gives `0A000`.
 
 use rupg_catalog::{ObjRef, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_TYPE};
 use rupg_common::{Error, Result, SqlState};
@@ -70,6 +70,10 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => {
                 self.comment_type(stmt.objtype, object)?
             }
+            ObjectType::OBJECT_TSTEMPLATE
+            | ObjectType::OBJECT_TSPARSER
+            | ObjectType::OBJECT_TSDICTIONARY
+            | ObjectType::OBJECT_TSCONFIGURATION => self.comment_ts(stmt.objtype, object)?,
             _ => return Err(not_yet("COMMENT on this kind of object", None)),
         };
         let text = stmt.comment.as_deref().filter(|c| !c.is_empty()).map(str::to_string);

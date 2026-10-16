@@ -453,6 +453,16 @@ impl Connection {
                     Node::AlterOwnerStmt(_) => CommandTag::AlterSchema,
                     Node::CreateSeqStmt(_) => CommandTag::CreateSequence,
                     Node::AlterSeqStmt(_) => CommandTag::AlterSequence,
+                    Node::DefineStmt(stmt) => match stmt.kind {
+                        ObjectType::OBJECT_TSPARSER => CommandTag::CreateTextSearchParser,
+                        ObjectType::OBJECT_TSDICTIONARY => CommandTag::CreateTextSearchDictionary,
+                        ObjectType::OBJECT_TSTEMPLATE => CommandTag::CreateTextSearchTemplate,
+                        ObjectType::OBJECT_TSCONFIGURATION => {
+                            CommandTag::CreateTextSearchConfiguration
+                        }
+                        _ => CommandTag::CreateTable,
+                    },
+                    Node::AlterTSConfigurationStmt(_) => CommandTag::AlterTextSearchConfiguration,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -2319,6 +2329,12 @@ mod tests {
     #[test]
     fn tsvector() {
         big_stack(|| script(include_str!("connection/tsvector.test")));
+    }
+
+    /// The Snowball dictionaries and the text search DDL: `ts_lexize` with the built-in and new dictionaries, the rows of `pg_ts_template`, `pg_ts_dict`, `pg_ts_config` and `pg_ts_config_map`, the casts to `regdictionary` and `regconfig`, `CREATE TEXT SEARCH TEMPLATE`, `DICTIONARY` and `CONFIGURATION`, `ALTER TEXT SEARCH CONFIGURATION` with `ADD`, `ALTER` and `DROP MAPPING`, `COMMENT`, the visibility functions, the dependencies and the errors. `connection/ts_dict.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_dict() {
+        big_stack(|| script(include_str!("connection/ts_dict.test")));
     }
 
     /// The type `tsquery`: the text input with its operators, weights and prefixes and its errors, the notice for a query with no lexemes, the output, the order, `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@`, the limits of the distance, the lexeme and the stack of operators, arrays of `tsquery`, `GROUP BY`, `pg_input_is_valid`, the text and binary forms of `COPY` and a query with parameters. `connection/tsquery.test` is the output of PostgreSQL 19 for the same script in a new database.

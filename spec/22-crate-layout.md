@@ -29,7 +29,7 @@ rupg/
   clippy.toml             disallowed methods and types
   deny.toml               section 22.6
   crates/
-    rupg-common/ ... rupg-cluster/     the 41 crates of section 22.4
+    rupg-common/ ... rupg-cluster/     the 42 crates of section 22.4
   vendor/
     postgres/             files from the PostgreSQL pin, section 22.8
     tzdata/               the IANA time zone database
@@ -51,7 +51,7 @@ Document 04 gives thirteen layers, and the crates come in fourteen groups number
 
 | Group | layers.toml rank and crate | Layer of document 04 |
 |---|---|---|
-| 0 | 0 `rupg-common`, 1 `rupg-types` | shared by all |
+| 0 | 0 `rupg-common`, 1 `rupg-types`, 2 `rupg-snowball` | shared by all |
 | 1 | 10 `rupg-platform`, 11 `rupg-file`, 12 `rupg-wire` | file and platform |
 | 2 | 20 `rupg-kernels`, 21 `rupg-encode`, 22 `rupg-buffer`, 23 `rupg-tree` | pages |
 | 3 | 30 `rupg-log` | log |
@@ -82,6 +82,7 @@ The table gives each crate its group, what it owns, its main dependencies above 
 |---|---|---|---|---|---|---|
 | `rupg-common` | 0 | `Error` with its `SqlState`, the identifiers `Oid`, `ShardId`, `RowId`, `Hlc`, `Xid` and `Lsn` of document 04 section 4.7, `CompatVersion` | nothing | no | M1 | 8 |
 | `rupg-types` | 0 | the value model, `Datum`, `Vector` of 1024 values, `TypeId`, the text and binary forms of the 197 types, numeric, date and time, JSON, arrays, ranges | `rupg-common` | no | M1 | 45 |
+| `rupg-snowball` | 0 | the 33 Snowball stemmers of the template `snowball` of text search, from the Rust code that Snowball generates at the commit that PostgreSQL uses, under the BSD 3-clause license of Snowball | nothing | no | M2 | 30 |
 | `rupg-platform` | 1 | the traits `Io`, `Clock`, `Net`, `Tasks` and `Entropy`, their operating system and simulation implementations, memory accounting (`MemoryPool`), CPU feature detection | group 0 | yes | M1 | 12 |
 | `rupg-file` | 1 | the bytes of the `.rupg` file: the header slots, the page and extent formats, the free space map, the checksums, `PageId`, and the `PageAccess` trait | `rupg-platform` | no | M1 | 10 |
 | `rupg-wire` | 1 | the message codec of protocols 3.0 and 3.2, the SCRAM exchange, the `COPY` sub-protocol, the replication messages | group 0 | no | M2 | 8 |
@@ -304,11 +305,11 @@ On 7 October 2026, `gh repo view` returned "Could not resolve to a Repository" f
 
 ## 22.13 Crate names
 
-On 7 October 2026 the crates.io API returned 404 for all 41 names of section 22.4: `rupg` and the 40 `rupg-*` names. All 41 are free. The crates.io policy does not allow name squatting, so rupg publishes the crates when the first milestone with a public API ships (M1 for `rupg`, document 23) and not before. The names can be taken before then. If one is taken, the crate gets a new name, and the change is one line in each of this document, `Cargo.toml` and `layers.toml`.
+On 7 October 2026 the crates.io API returned 404 for all 41 names of section 22.4: `rupg` and the 40 `rupg-*` names. All 41 are free. The crates.io policy does not allow name squatting, so rupg publishes the crates when the first milestone with a public API ships (M1 for `rupg`, document 23) and not before. The names can be taken before then. If one is taken, the crate gets a new name, and the change is one line in each of this document, `Cargo.toml` and `layers.toml`. On 16 October 2026 the API also returned 404 for `rupg-snowball`, the 42nd crate.
 
 ## 22.14 Line budgets
 
-The budgets of section 22.4 add up to 913,000 lines. rudb has 421,288 lines in `crates/*/src` at `cd9f9676`, counted with `find crates -name '*.rs' -path '*/src/*' | xargs cat | wc -l`. That count includes comments and blank lines, and the rupg budgets use the same count. The generated tables of section 22.8 are not in the budgets.
+The budgets of section 22.4 add up to 943,000 lines. rudb has 421,288 lines in `crates/*/src` at `cd9f9676`, counted with `find crates -name '*.rs' -path '*/src/*' | xargs cat | wc -l`. That count includes comments and blank lines, and the rupg budgets use the same count. The generated tables of section 22.8 are not in the budgets.
 
 The three largest budgets are `rupg-func` at 120,000 lines, `rupg-exec` at 60,000 and `rupg-contrib` at 50,000. `rupg-func` is large because PostgreSQL has 3,414 built-in functions at the pin and each must give PostgreSQL's answer and error for every input. `rupg-contrib` is large because document 16 ports the contrib extensions to Rust and does not load C code.
 
