@@ -1,0 +1,48 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT int4in('5'), int4out(7), textin('abc'), textout('x'), pg_typeof(int4out(7))
+fields int4in:23:4:-1,int4out:2275:-2:-1,textin:25:-1:-1,textout:2275:-2:-1,pg_typeof:2206:4:-1
+row 5,7,abc,x,cstring
+SELECT 1
+> SELECT numeric_in('1.2345', 0, 393222), numeric_in('1.2345', 0, -1), numeric_out(1.50)
+fields numeric_in:1700:-1:-1,numeric_in:1700:-1:-1,numeric_out:2275:-2:-1
+row 1.23,1.2345,1.50
+SELECT 1
+> SELECT varcharin('abcdef', 0, 7), bpcharin('ab', 0, 9), date_in('2020-01-02'), timestamptz_in('2020-01-02 03:04', 0, -1)
+ERROR 22001 value too long for type character varying(3)
+> SELECT array_out(ARRAY[1,2]), range_out('[1,2)'::int4range), record_out(ROW(1,'a'))
+fields array_out:2275:-2:-1,range_out:2275:-2:-1,record_out:2275:-2:-1
+row {1,2},[1,2),(1,a)
+SELECT 1
+> SELECT boolin('yes'), boolout(true), byteain('\x0102'), byteaout('\x0102'::bytea), charout('a'), charin('b')
+fields boolin:16:1:-1,boolout:2275:-2:-1,byteain:17:-1:-1,byteaout:2275:-2:-1,charout:2275:-2:-1,charin:18:1:-1
+row t,t,\x0102,\x0102,a,b
+SELECT 1
+> SELECT int4in('abc')
+ERROR 22P02 invalid input syntax for type integer: "abc"
+> SELECT int4in(NULL), int4out(NULL)
+fields int4in:23:4:-1,int4out:2275:-2:-1
+row NULL,NULL
+SELECT 1
+> SELECT aclitemin('postgres=r/postgres'), aclitemout('postgres=r/postgres'::aclitem)
+fields aclitemin:1033:16:-1,aclitemout:2275:-2:-1
+row postgres=r/postgres,postgres=r/postgres
+SELECT 1
+> SELECT regclassin('pg_type'), regclassout('pg_type'::regclass), tsvectorin('b a'), tsvectorout('a b'::tsvector)
+fields regclassin:2205:4:-1,regclassout:2275:-2:-1,tsvectorin:3614:-1:-1,tsvectorout:2275:-2:-1
+row pg_type,pg_type,'a' 'b','a' 'b'
+SELECT 1
+> SELECT jsonb_in('{"b":1, "a":2}'), json_in('{ }'), jsonb_out('[1]'::jsonb)
+fields jsonb_in:3802:-1:-1,json_in:114:-1:-1,jsonb_out:2275:-2:-1
+row {"a": 2, "b": 1},{ },[1]
+SELECT 1
+> SELECT unknownin('u'), unknownout('u'::unknown), cstring_in('c'), cstring_out('d')
+ERROR XX000 failed to find conversion function from unknown to text
+> SELECT int4in('5'::text)
+ERROR 42883 function int4in(text) does not exist at 8
+> SELECT int4out(7) || 'x'
+fields ?column?:25:-1:-1
+row 7x
+SELECT 1
+> SELECT length(int4out(12345))
+ERROR 42883 function length(cstring) does not exist at 8

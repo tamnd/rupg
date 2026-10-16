@@ -391,6 +391,19 @@ pub fn kernel(func: u32) -> Option<Kernel> {
     if let Some(kernel) = by_src(proc.src).or_else(|| compare::by_src(proc.src, proc)) {
         return Some(kernel);
     }
+    // The functions of the types for input and output. An input function with a pseudo-type as its result, such as `array_in`, needs the type of the value from its arguments, which the engine does not have yet.
+    let pseudo = builtin::type_by_oid(proc.rettype).is_none_or(|row| row.kind == b'p');
+    for row in builtin::types() {
+        if row.send == func {
+            return Some(io::send_kernel);
+        }
+        if row.output == func {
+            return Some(io::output_kernel);
+        }
+        if row.input == func && !pseudo {
+            return Some(io::input_kernel);
+        }
+    }
     let operator = operator_of(func)?;
     let left = proc.argtypes.first().copied().unwrap_or(0);
     let right = proc.argtypes.get(1).copied().unwrap_or(0);
