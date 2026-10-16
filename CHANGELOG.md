@@ -4,6 +4,19 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.28 (2026-10-16)
+
+A patch release on the way to M2. rupg now has full text search with the default parser, the Snowball dictionaries and the functions of PostgreSQL 19 for `tsvector` and `tsquery`.
+
+### Added
+
+- The Snowball dictionaries, the statements `CREATE TEXT SEARCH DICTIONARY`, `CREATE TEXT SEARCH CONFIGURATION` and `ALTER TEXT SEARCH CONFIGURATION`, and `ts_lexize` (#343).
+- The default text search parser, `ts_parse`, `ts_token_type` and `to_tsvector` (#344).
+- `to_tsquery`, `plainto_tsquery`, `phraseto_tsquery` and `websearch_to_tsquery` (#345).
+- The `json` and `jsonb` forms of `to_tsvector`, `json_to_tsvector`, `jsonb_to_tsvector`, `ts_rank` and `ts_rank_cd` (#346).
+- `ts_rewrite` with a target and a substitute, and `ts_headline` for `text` (#347).
+- The `json` and `jsonb` forms of `ts_headline` (#348).
+
 ## 0.1.27 (2026-10-16)
 
 A patch release on the way to M2. rupg now has most of the built-in functions of the date and time, numeric, text, bytea, array, json and `jsonb` types, the aggregates of PostgreSQL 19, window functions with frames, and the executor of `jsonpath`.
