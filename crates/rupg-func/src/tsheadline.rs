@@ -1,8 +1,11 @@
-//! `ts_headline` of `wparser.c` for `text`: `hlparsetext` and `generateHeadline` of `ts_parse.c`, and `prsd_headline`, the headline function of the default parser in `wparser_def.c`. The function finds the shortest parts of the text that match the query, selects the best part or the best fragments, and puts the words of the query between `StartSel` and `StopSel`.
+//! `ts_headline` of `wparser.c` for `text`, `json` and `jsonb`: `hlparsetext` and `generateHeadline` of `ts_parse.c`, and `prsd_headline`, the headline function of the default parser in `wparser_def.c`. The function finds the shortest parts of the text that match the query, selects the best part or the best fragments, and puts the words of the query between `StartSel` and `StopSel`.
 
-use rupg_analyze::tsdict::{self, Config};
+use rupg_analyze::tsdict::{self, Config, DictOption};
 use rupg_common::{Error, Result, SqlState};
-use rupg_types::{QueryItem, TSVECTOR_MAX_WORD, Value, int4_in, limit_position};
+use rupg_types::{
+    JsonItem, JsonToken, JsonTree, QueryItem, TSVECTOR_MAX_WORD, Value, int4_in, json_escape,
+    jsonb_in, limit_position,
+};
 
 use crate::tsmatch::{self, Phrase, Ternary};
 use crate::tsparser::{
@@ -74,15 +77,15 @@ fn find_items(words: &mut Vec<Word<'_>>, items: &[QueryItem], pos: i32, lexeme: 
     }
 }
 
-/// `hlparsetext`: the tokens of the text, and for each token the operands that its lexemes match.
+/// `hlparsetext`: the tokens of the text, and for each token the operands that its lexemes match. `pos` is the position of the last word with lexemes. The forms of `json` and `jsonb` do not set it to 0 again for each string.
 fn parse<'t>(
     session: &dyn Session,
     config: &Config,
     items: &[QueryItem],
     text: &'t str,
+    pos: &mut i32,
 ) -> Vec<Word<'t>> {
     let mut words = Vec::new();
-    let mut pos = 0;
     for (kind, token) in tsparser::tokens(text) {
         if token.len() > TSVECTOR_MAX_WORD {
             session.warn(tsearch::too_long_word());
@@ -101,9 +104,9 @@ fn parse<'t>(
         });
         let Some(dicts) = config.map.get(usize::from(kind)) else { continue };
         let Some(lexemes) = dicts.iter().find_map(|dict| dict.lexize(token)) else { continue };
-        pos += 1;
+        *pos += 1;
         for lexeme in lexemes {
-            find_items(&mut words, items, pos, &lexeme);
+            find_items(&mut words, items, *pos, &lexeme);
         }
     }
     words
@@ -139,7 +142,7 @@ fn invalid(message: String) -> Error {
 }
 
 /// The options of `prsd_headline` with their defaults, and the checks of their values.
-fn options(text: Option<&str>) -> Result<Options> {
+fn options(list: &[DictOption]) -> Result<Options> {
     let mut out = Options {
         min_words: 15,
         max_words: 35,
@@ -150,20 +153,16 @@ fn options(text: Option<&str>) -> Result<Options> {
         stop_sel: "</b>".to_string(),
         delimiter: " ... ".to_string(),
     };
-    let list = match text {
-        Some(text) => tsdict::deserialize(text)?,
-        None => Vec::new(),
-    };
     let int = |value: &str| int4_in(value).map_err(type_error);
     for (name, value) in list {
         match name.to_ascii_lowercase().as_str() {
-            "maxwords" => out.max_words = int(&value)?,
-            "minwords" => out.min_words = int(&value)?,
-            "shortword" => out.short_word = int(&value)?,
-            "maxfragments" => out.max_fragments = int(&value)?,
-            "startsel" => out.start_sel = value,
-            "stopsel" => out.stop_sel = value,
-            "fragmentdelimiter" => out.delimiter = value,
+            "maxwords" => out.max_words = int(value)?,
+            "minwords" => out.min_words = int(value)?,
+            "shortword" => out.short_word = int(value)?,
+            "maxfragments" => out.max_fragments = int(value)?,
+            "startsel" => out.start_sel.clone_from(value),
+            "stopsel" => out.stop_sel.clone_from(value),
+            "fragmentdelimiter" => out.delimiter.clone_from(value),
             "highlightall" => {
                 out.highlight_all = ["1", "on", "true", "t", "y", "yes"]
                     .iter()
@@ -587,17 +586,9 @@ impl<'t> Headline<'t, '_> {
     }
 }
 
-/// `ts_headline_byid_opt`: the headline of a text for a query with a configuration and the options.
-fn headline_with(
-    session: &dyn Session,
-    config: u32,
-    text: &str,
-    items: &[QueryItem],
-    opts: Option<&str>,
-) -> Result<String> {
-    let config = tsdict::config(session.catalog(), config)?;
-    let words = parse(session, &config, items, text);
-    let opts = options(opts)?;
+/// `prsd_headline` and `generateHeadline`: the headline of the tokens of a text with the options.
+fn select(words: Vec<Word<'_>>, items: &[QueryItem], list: &[DictOption]) -> Result<String> {
+    let opts = options(list)?;
     let mut headline = Headline { words, items, short_word: opts.short_word };
     let locations = if items.is_empty() {
         Vec::new()
@@ -622,28 +613,116 @@ fn headline_with(
     Ok(headline.generate(&opts))
 }
 
-/// `ts_headline_byid_opt`, `ts_headline_byid`, `ts_headline_opt` and `ts_headline`: the forms with and without a configuration and with and without the options.
-fn headline(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+/// The options of the last argument, or no options.
+fn option_list(opts: Option<&Value>) -> Result<Vec<DictOption>> {
+    match opts {
+        Some(opts) => tsdict::deserialize(opts.as_str().ok_or_else(bad_value)?),
+        None => Ok(Vec::new()),
+    }
+}
+
+/// The configuration, the value, the query and the options of the arguments of a form of `ts_headline`. The forms without a configuration use the configuration of `default_text_search_config`.
+fn headline_args<'a>(
+    call: &Call<'_>,
+    args: &'a [Value],
+) -> Result<(Config, &'a str, &'a [QueryItem], Option<&'a Value>)> {
     let (config, rest) = match args {
         [_, Value::TsQuery(_), ..] => (tsearch::current_config(call.session)?, args),
         [config, rest @ ..] => (config.as_oid().ok_or_else(bad_value)?, rest),
         [] => return Err(bad_value()),
     };
-    let (text, items, opts) = match rest {
-        [text, Value::TsQuery(items)] => (text, items, None),
-        [text, Value::TsQuery(items), opts] => {
-            (text, items, Some(opts.as_str().ok_or_else(bad_value)?))
-        }
+    let (value, items, opts) = match rest {
+        [value, Value::TsQuery(items)] => (value, items, None),
+        [value, Value::TsQuery(items), opts] => (value, items, Some(opts)),
         _ => return Err(bad_value()),
     };
-    let text = text.as_str().ok_or_else(bad_value)?;
-    Ok(Value::Text(headline_with(call.session, config, text, items, opts)?))
+    let config = tsdict::config(call.session.catalog(), config)?;
+    Ok((config, value.as_str().ok_or_else(bad_value)?, items, opts))
+}
+
+/// `ts_headline_byid_opt`, `ts_headline_byid`, `ts_headline_opt` and `ts_headline`: the headline of a text.
+fn headline(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let (config, text, items, opts) = headline_args(call, args)?;
+    let words = parse(call.session, &config, items, text, &mut 0);
+    let list = option_list(opts)?;
+    Ok(Value::Text(select(words, items, &list)?))
+}
+
+/// `transform_json_string_values` and `transform_jsonb_string_values` with `headline_json_value`: the value with the headline of each string that is not a key. The text has no spaces, as the callbacks of `jsonfuncs.c` print it.
+fn headline_json_text(call: &Call<'_>, args: &[Value]) -> Result<String> {
+    let (config, json, items, opts) = headline_args(call, args)?;
+    let list = option_list(opts)?;
+    let tree = JsonTree::parse(json).map_err(type_error)?;
+    let mut out = String::with_capacity(json.len());
+    let mut first = true;
+    let mut pos = 0;
+    for token in tree.tokens() {
+        match token {
+            JsonToken::Key(name, _) => {
+                if !first {
+                    out.push(',');
+                }
+                json_escape(name, &mut out);
+                out.push(':');
+                first = true;
+            }
+            JsonToken::Scalar { node, elem } => {
+                if elem && !first {
+                    out.push(',');
+                }
+                if let JsonItem::String(text) = tree.item(node) {
+                    let words = parse(call.session, &config, items, text, &mut pos);
+                    json_escape(&select(words, items, &list)?, &mut out);
+                } else {
+                    let node = tree.node(node);
+                    out.push_str(&tree.source()[node.start..node.end]);
+                }
+                first = false;
+            }
+            JsonToken::Begin { node, raw, elem } => {
+                if raw {
+                    continue;
+                }
+                if elem && !first {
+                    out.push(',');
+                }
+                out.push(if matches!(tree.item(node), JsonItem::Array(_)) { '[' } else { '{' });
+                first = true;
+            }
+            JsonToken::End { node, raw } => {
+                if raw {
+                    continue;
+                }
+                out.push(if matches!(tree.item(node), JsonItem::Array(_)) { ']' } else { '}' });
+                first = false;
+            }
+        }
+    }
+    Ok(out)
+}
+
+/// `ts_headline_json_byid_opt` and the other forms for `json`.
+fn headline_json(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Text(headline_json_text(call, args)?))
+}
+
+/// `ts_headline_jsonb_byid_opt` and the other forms for `jsonb`. The text of the result is in the form of `jsonb` again.
+fn headline_jsonb(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Text(jsonb_in(&headline_json_text(call, args)?).map_err(type_error)?))
 }
 
 /// The kernel of a form of `ts_headline` by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
         "ts_headline_byid_opt" | "ts_headline_byid" | "ts_headline_opt" | "ts_headline" => headline,
+        "ts_headline_json_byid_opt"
+        | "ts_headline_json_byid"
+        | "ts_headline_json_opt"
+        | "ts_headline_json" => headline_json,
+        "ts_headline_jsonb_byid_opt"
+        | "ts_headline_jsonb_byid"
+        | "ts_headline_jsonb_opt"
+        | "ts_headline_jsonb" => headline_jsonb,
         _ => return None,
     })
 }
