@@ -4,6 +4,36 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.27 (2026-10-16)
+
+A patch release on the way to M2. rupg now has most of the built-in functions of the date and time, numeric, text, bytea, array, json and `jsonb` types, the aggregates of PostgreSQL 19, window functions with frames, and the executor of `jsonpath`.
+
+### Added
+
+- The row of `plpgsql` in `pg_available_extensions` (#308).
+- The internal triggers of the foreign keys in `pg_trigger` (#309).
+- The functions of `system_functions.sql` run from their body in SQL, as in PostgreSQL (#310, #311).
+- The kernels of the date and time arithmetic, `EXTRACT`, `date_part`, `date_trunc`, `date_bin`, `AT TIME ZONE` and `AT LOCAL` (#312, #313, #314).
+- The math functions of numeric (#315).
+- `make_date`, `make_timestamp`, `generate_series` of timestamps and the comparisons across the date types (#316).
+- `random`, `setseed`, `gen_random_uuid`, `uuidv7` and the other random and UUID functions (#317).
+- `array_position`, `array_fill`, `array_sort`, `trim_array`, the containment operators and the other array functions (#318).
+- The trigonometric, hyperbolic, error and gamma functions of `float8` (#319).
+- The `bytea` functions: `substring`, `overlay`, `position`, the bytes and the bits, `LIKE`, `trim`, the hashes and the CRC values (#320).
+- `translate`, `overlay`, `to_bin`, `to_oct`, `unistr`, `casefold`, and `gcd` and `lcm` of the integer types (#321).
+- The regression aggregates of `float8`, and `var_pop`, `var_samp`, `stddev_pop` and `stddev_samp` of the integer types and numeric (#322, #323).
+- The operators and the functions that read json and `jsonb` values, the functions that change `jsonb` values, the set functions of json and `jsonb`, and the functions that make json and `jsonb` values (#324, #325, #326).
+- `json_agg`, `jsonb_agg`, `json_object_agg`, `jsonb_object_agg` and their strict and unique forms (#327).
+- `normalize`, `is_normalized`, `unicode_assigned`, `num_nulls`, `current_query`, `system_user` and other small functions (#328).
+- `to_char` of timestamps, intervals and numbers, `to_timestamp`, `to_date` and `to_number` (#329, #330, #331).
+- The functions of the size of an object, such as `pg_relation_size` and `pg_size_pretty` (#332).
+- The ordered-set and hypothetical-set aggregates (#333).
+- `sum` and `avg` of `interval` (#334).
+- The hash support functions of the types (#335).
+- The comparison of record values (#336).
+- Aggregate functions with `OVER`, window functions in queries with groups, and the frames of the windows in `ROWS`, `RANGE` and `GROUPS` mode (#337, #338, #339).
+- The executor of `jsonpath` and its datetime methods (#340, #341).
+
 ## 0.1.26 (2026-10-15)
 
 A patch release on the way to M2. The `pg_dump` round trip now passes: a dump of rupg restores into PostgreSQL 19, and a dump of PostgreSQL 19 restores into rupg.
