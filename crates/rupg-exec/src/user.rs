@@ -149,6 +149,7 @@ pub(crate) fn rows(
         "pg_ts_dict" => ts_dictionaries(table, catalog),
         "pg_ts_config" => ts_configs(table, catalog),
         "pg_ts_config_map" => ts_mappings(table, catalog),
+        "pg_enum" => enum_labels(table, catalog),
         _ => Vec::new(),
     };
     Ok(rows.into_iter().map(|row| row.values).collect())
@@ -345,6 +346,17 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
 /// The OID of `_int4`, the template of the array type of a domain over a type with no array type.
 const INT4_ARRAY: u32 = 1007;
 
+/// The OID of `oid`, which an enum type copies, as `DefineEnum` gives it the length, the alignment and the storage of `oid`.
+const OID_TYPE: u32 = 26;
+
+/// The OID of `_oid`, which the array type of an enum type copies.
+const OID_ARRAY: u32 = 1028;
+
+/// The OID of a function of an enum type, such as `enum_in`.
+fn enum_function(name: &str) -> Value {
+    oid(builtin::procs_named(name).next().map_or(0, |p| p.oid))
+}
+
 /// The static row of `pg_type` with the OID.
 fn type_row(table: &Table, type_oid: u32, session: &dyn Session) -> Result<usize> {
     for row in 0..table.len {
@@ -355,7 +367,7 @@ fn type_row(table: &Table, type_oid: u32, session: &dyn Session) -> Result<usize
     Err(Error::internal(format!("cache lookup failed for type {type_oid}")))
 }
 
-/// The row types, the domains and their array types. The row of a row type copies the row of the row type of `pg_class`, which has the same form. The row of a domain copies the row of its base type, as `DefineDomain` takes the storage of the base type. An array type copies the array type of the row type of `pg_class` or of the base type of the domain.
+/// The row types, the domains and their array types. The row of a row type copies the row of the row type of `pg_class`, which has the same form. The row of a domain copies the row of its base type, as `DefineDomain` takes the storage of the base type. An enum type copies the row of `oid`, and its array type copies the row of `_oid`. Another array type copies the array type of the row type of `pg_class` or of the base type of the domain.
 fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Result<Vec<Row<'a>>> {
     let row_type = rupg_pgcatalog::catalog("pg_class").map_or(0, |c| c.rowtype_oid);
     let array_type = builtin::type_by_oid(row_type).map_or(0, |t| t.array);
@@ -369,9 +381,22 @@ fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Resu
             _ => Row::copy(table, type_row(table, type_oid, session)?, session),
         };
     for ty in catalog.types() {
-        let element_domain = catalog.type_by_oid(ty.element).and_then(|t| t.domain.as_ref());
+        let element = catalog.type_by_oid(ty.element);
+        let element_domain = element.and_then(|t| t.domain.as_ref());
         let mut row = if let Some(domain) = &ty.domain {
             copy(&rows, domain.base)?
+        } else if ty.labels.is_some() {
+            let mut row = Row::copy(table, type_row(table, OID_TYPE, session)?, session)?;
+            row.set("typtype", code('e'))
+                .set("typcategory", code('E'))
+                .set("typispreferred", Value::Bool(false))
+                .set("typinput", enum_function("enum_in"))
+                .set("typoutput", enum_function("enum_out"))
+                .set("typreceive", enum_function("enum_recv"))
+                .set("typsend", enum_function("enum_send"));
+            row
+        } else if element.is_some_and(|e| e.labels.is_some()) {
+            Row::copy(table, type_row(table, OID_ARRAY, session)?, session)?
         } else if let Some(domain) = element_domain {
             let base_array = match catalog.type_by_oid(domain.base) {
                 Some(base) => base.array,
@@ -773,6 +798,21 @@ fn ts_configs<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             row
         })
         .collect()
+}
+
+fn enum_labels<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    let mut rows = Vec::new();
+    for ty in catalog.types() {
+        for label in ty.labels.iter().flatten() {
+            let mut row = Row::new(table);
+            row.set("oid", oid(label.oid))
+                .set("enumtypid", oid(ty.oid))
+                .set("enumsortorder", Value::Float4(label.sort_order))
+                .set("enumlabel", Value::text(label.label.clone()));
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 fn ts_mappings<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {

@@ -116,6 +116,38 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::XML
     ) || RegKind::from_oid(ty).is_some()
         || is_row_type(ty)
+        || is_enum(ty)
+}
+
+/// True for an enum type.
+pub(crate) fn is_enum(ty: u32) -> bool {
+    builtin::type_by_oid(ty).is_some_and(|row| row.kind == b'e')
+}
+
+/// `enum_out`: the name of the label with this OID of the enum type.
+fn enum_label(ty: u32, label: u32) -> Result<&'static str> {
+    builtin::enum_labels(ty)
+        .and_then(|labels| labels.iter().find(|(oid, _)| *oid == label))
+        .map(|(_, name)| name.as_str())
+        .ok_or_else(|| {
+            Error::new(
+                SqlState::INVALID_BINARY_REPRESENTATION,
+                format!("invalid internal value for enum: {label}"),
+            )
+        })
+}
+
+/// `enum_in`: the OID of the label with this name of the enum type.
+fn enum_in(ty: u32, text: &str) -> std::result::Result<u32, Error> {
+    builtin::enum_labels(ty)
+        .and_then(|labels| labels.iter().find(|(_, name)| name == text))
+        .map(|(oid, _)| *oid)
+        .ok_or_else(|| {
+            Error::new(
+                SqlState::INVALID_TEXT_REPRESENTATION,
+                format!("invalid input value for enum {}: \"{text}\"", type_name(ty)),
+            )
+        })
 }
 
 /// True for `record` and for the row type of a system catalog, which `record_out` and `record_send` show. The output of each field needs the output of its type, which the engine checks when it shows the row.
@@ -138,9 +170,19 @@ pub fn input_supported(ty: u32) -> bool {
     output_supported(ty) && ty != oid::ANYARRAY && ty != oid::RECORD
 }
 
-/// The name of a type for an error.
-fn type_name(ty: u32) -> String {
-    types::format_type(ty).into_owned()
+/// The name of a type for an error. A type of the catalog of the session has its name in its row.
+pub(crate) fn type_name(ty: u32) -> String {
+    let name = types::format_type(ty);
+    if name != "???" {
+        return name.into_owned();
+    }
+    match builtin::type_by_oid(ty) {
+        Some(row) if row.category == ARRAY_CATEGORY && row.elem != 0 => {
+            format!("{}[]", type_name(row.elem))
+        }
+        Some(row) => row.name.to_owned(),
+        None => name.into_owned(),
+    }
 }
 
 /// The state that the input of the date and time types reads.
@@ -164,6 +206,12 @@ pub(crate) fn datetime_input<'a>(
 /// `0A000` for a type that has no output function here, and the error of the output function, such as a timestamp out of range.
 pub fn output(ty: u32, value: &Value, session: &dyn Session, out: &mut Vec<u8>) -> Result<()> {
     let ty = base_type(ty);
+    if is_enum(ty)
+        && let Value::Oid(label) = value
+    {
+        out.extend_from_slice(enum_label(ty, *label)?.as_bytes());
+        return Ok(());
+    }
     if let Some((elem, delim)) = array_of(ty) {
         let Value::Array(array) = value else { return Err(bad_value()) };
         let mut failed = None;
@@ -689,6 +737,9 @@ fn input_value(
     if is_row_type(ty) {
         return record_in(ty, text, session, noisy);
     }
+    if is_enum(ty) {
+        return enum_in(ty, text).map(Value::Oid).map_err(Failed::Soft);
+    }
     if let Some(kind) = RegKind::from_oid(ty) {
         return match reg::input(kind, text, session)? {
             Ok(oid) => Ok(Value::Oid(oid)),
@@ -969,6 +1020,9 @@ fn receive_from(
     if let Some(kind) = types::GeoKind::from_oid(ty) {
         return Ok(Value::Bytea(types::geo_recv(kind, recv)?));
     }
+    if is_enum(ty) {
+        return enum_in(ty, recv.text()?).map(Value::Oid).map_err(Received::Engine);
+    }
     let value = match ty {
         oid::BOOL => Value::Bool(recv.bool()?),
         oid::BYTEA => Value::Bytea(recv.rest().to_vec()),
@@ -1088,6 +1142,12 @@ pub fn send(ty: u32, value: &Value, out: &mut Vec<u8>) -> Result<()> {
             }
         });
         return failed.map_or(Ok(()), Err);
+    }
+    if is_enum(ty)
+        && let Value::Oid(label) = value
+    {
+        out.extend_from_slice(enum_label(ty, *label)?.as_bytes());
+        return Ok(());
     }
     match (ty, value) {
         (oid::ACLITEM, _) => return Err(no_binary(ty, "output")),

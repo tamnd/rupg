@@ -22,6 +22,7 @@ mod datetime;
 mod dbsize;
 mod deparse;
 mod encoding;
+mod enums;
 mod extract;
 mod formatting;
 mod generated;
@@ -470,6 +471,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| shared::by_src(src))
         .or_else(|| advisory::by_src(src))
         .or_else(|| sequence::by_src(src))
+        .or_else(|| enums::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.

@@ -1065,11 +1065,31 @@ pub struct SessionRowType {
     pub relation: u32,
 }
 
+/// An enum type of the catalog of a session, for [`use_session_types`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionEnum {
+    pub oid: u32,
+    pub name: String,
+    pub array: u32,
+    pub array_name: String,
+    pub namespace: u32,
+    /// The OID and the name of each label, in their sort order.
+    pub labels: Vec<(u32, String)>,
+}
+
+/// The labels of an enum type that [`use_session_types`] gave to the thread, for [`enum_labels`].
+#[derive(Debug)]
+struct EnumRow {
+    oid: u32,
+    labels: Vec<(u32, String)>,
+}
+
 /// A type of the catalog of a session that has rows in the overlay of the thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionType {
     Domain(SessionDomain),
     Row(SessionRowType),
+    Enum(SessionEnum),
 }
 
 /// The types of the catalog that the session of the thread uses now.
@@ -1079,6 +1099,7 @@ struct Session {
     given: Vec<SessionType>,
     types: Vec<&'static TypeRow>,
     domains: Vec<&'static DomainRow>,
+    enums: Vec<&'static EnumRow>,
 }
 
 thread_local! {
@@ -1086,8 +1107,9 @@ thread_local! {
     static SESSION: RefCell<Session> = RefCell::new(Session::default());
 }
 
-/// The rows of a type of [`INTERNED`]: the type, its array type and the constraints of a domain.
-type Interned = (&'static TypeRow, &'static TypeRow, Option<&'static DomainRow>);
+/// The rows of a type of [`INTERNED`]: the type, its array type, the constraints of a domain and the labels of an enum type.
+type Interned =
+    (&'static TypeRow, &'static TypeRow, Option<&'static DomainRow>, Option<&'static EnumRow>);
 
 /// The rows of each type that a session used, with the facts that made them. A type gets its rows once in the process, also when many sessions use it, so the rows live as long as the process, as the built-in rows do.
 static INTERNED: Mutex<Vec<(SessionType, Interned)>> = Mutex::new(Vec::new());
@@ -1103,11 +1125,16 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
                 not_null: domain.not_null,
                 checks: domain.checks.clone(),
             };
-            (leak(row), leak(array), Some(Box::leak(Box::new(constraints))))
+            (leak(row), leak(array), Some(Box::leak(Box::new(constraints))), None)
         }
         SessionType::Row(new) => {
             let (row, array) = row_type_rows(new.clone())?;
-            (leak(row), leak(array), None)
+            (leak(row), leak(array), None, None)
+        }
+        SessionType::Enum(new) => {
+            let (row, array) = enum_rows(new.clone())?;
+            let labels = EnumRow { oid: new.oid, labels: new.labels.clone() };
+            (leak(row), leak(array), None, Some(Box::leak(Box::new(labels))))
         }
     })
 }
@@ -1132,9 +1159,10 @@ pub fn use_session_types(types: Vec<SessionType>) {
             Some(rows)
         });
         SESSION.with_borrow_mut(|s| {
-            if let Some((row, array, constraints)) = rows {
+            if let Some((row, array, constraints, labels)) = rows {
                 s.types.extend([row, array]);
                 s.domains.extend(constraints);
+                s.enums.extend(labels);
             }
             s.given.push(ty);
         });
@@ -1160,6 +1188,42 @@ fn row_type_rows(new: SessionRowType) -> Option<(TypeRow, TypeRow)> {
         ..*type_by_oid(template.array)?
     };
     Some((row, array))
+}
+
+/// The OID of `oid`, the template of an enum type, which has the length, the alignment and the storage of `oid`.
+const OID_TYPE: u32 = 26;
+
+/// The rows of an enum type and of its array type, as `DefineEnum` makes them.
+fn enum_rows(new: SessionEnum) -> Option<(TypeRow, TypeRow)> {
+    let template = type_by_oid(OID_TYPE)?;
+    let function = |name: &str| procs_named(name).next().map(|p| p.oid);
+    let row = TypeRow {
+        oid: new.oid,
+        name: new.name.leak(),
+        namespace: new.namespace,
+        kind: b'e',
+        category: b'E',
+        preferred: false,
+        array: new.array,
+        input: function("enum_in")?,
+        output: function("enum_out")?,
+        receive: function("enum_recv")?,
+        send: function("enum_send")?,
+        ..*template
+    };
+    let array = TypeRow {
+        oid: new.array,
+        name: new.array_name.leak(),
+        namespace: new.namespace,
+        elem: new.oid,
+        ..*type_by_oid(template.array)?
+    };
+    Some((row, array))
+}
+
+/// The OID and the name of each label of an enum type that [`use_session_types`] gave to the thread, in their sort order. `None` for a type that is not such an enum type.
+pub fn enum_labels(ty: u32) -> Option<&'static [(u32, String)]> {
+    SESSION.with_borrow(|s| s.enums.iter().find(|e| e.oid == ty).map(|e| e.labels.as_slice()))
 }
 
 /// The OID of `_int4`, the template of the array type of a domain over a type with no array type.

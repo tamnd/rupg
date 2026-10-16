@@ -5,6 +5,7 @@ mod comment;
 mod copy;
 mod domain;
 mod drop;
+mod enumtype;
 mod fkey;
 mod function;
 mod index;
@@ -62,6 +63,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateSchemaStmt(_)
             | Node::CreateDomainStmt(_)
             | Node::CompositeTypeStmt(_)
+            | Node::CreateEnumStmt(_)
             | Node::ViewStmt(_)
             | Node::CommentStmt(_)
             | Node::CreateSeqStmt(_)
@@ -116,6 +118,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::ViewStmt(view) => definer.create_view(view, text),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CompositeTypeStmt(stmt) => definer.create_composite_type(stmt),
+        Node::CreateEnumStmt(stmt) => definer.create_enum(stmt),
         Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
         Node::CommentStmt(comment) => definer.comment(comment),
         Node::DropStmt(drop) => definer.drop(drop),

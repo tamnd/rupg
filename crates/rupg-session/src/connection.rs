@@ -442,7 +442,7 @@ impl Connection {
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
-                    Node::CompositeTypeStmt(_) => CommandTag::CreateType,
+                    Node::CompositeTypeStmt(_) | Node::CreateEnumStmt(_) => CommandTag::CreateType,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::CommentStmt(_) => CommandTag::Comment,
                     Node::DropStmt(stmt) => match stmt.removeType {
@@ -2515,6 +2515,12 @@ mod tests {
     #[test]
     fn comptype() {
         big_stack(|| script(include_str!("connection/comptype.test")));
+    }
+
+    /// `CREATE TYPE ... AS ENUM`: the errors of a type that exists, a label that is too long and a label that is there twice, the input and the output of the labels, `pg_input_is_valid`, the comparisons, `ORDER BY`, `max`, `min`, `DISTINCT` and `GROUP BY`, `enum_first`, `enum_last`, `enum_range` and `enum_cmp`, arrays of an enum type, the casts from and to text, the rows of `pg_enum`, `pg_type` and `pg_depend`, an enum type with no labels, and `DROP TYPE`. `connection/enum_type.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn enum_type() {
+        big_stack(|| script(include_str!("connection/enum_type.test")));
     }
 
     /// The functions in SQL of `information_schema` that have a `RETURN` body, such as `_pg_char_max_length`: the rows of `pg_proc` and `pg_depend` with the OIDs of PostgreSQL, `pg_get_function_arguments` and `pg_get_function_result`, the results for many types and type modifiers and for the columns of a table, a call with and without the schema in `search_path`, and the errors of a bad argument. Also the shift operators `<<` and `>>` of the integer types, which the bodies use. `connection/sql_functions.test` is the output of PostgreSQL 19 for the same script in a new database.

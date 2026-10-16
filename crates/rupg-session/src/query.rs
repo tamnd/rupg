@@ -137,6 +137,16 @@ fn use_types(catalog: &Catalog) {
                     relation: ty.relation,
                 }));
             }
+            if let Some(labels) = &ty.labels {
+                return Some(builtin::SessionType::Enum(builtin::SessionEnum {
+                    oid: ty.oid,
+                    name: ty.name.clone(),
+                    array: array.oid,
+                    array_name: array.name.clone(),
+                    namespace: ty.namespace,
+                    labels: labels.iter().map(|l| (l.oid, l.label.clone())).collect(),
+                }));
+            }
             let domain = ty.domain.as_ref()?;
             let checks = catalog
                 .constraints_of_domain(ty.oid)

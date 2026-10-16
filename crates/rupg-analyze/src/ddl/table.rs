@@ -478,20 +478,7 @@ impl Definer<'_, '_> {
         let rv = stmt.typevar.as_deref().cloned().unwrap_or_default();
         let namespace = self.creation_namespace(&rv).map_err(|e| e.with_position(None))?;
         let name = relname(&rv).to_string();
-        // `moveArrayTypeName` moves an array type that a type made out of the way, so only another type is a conflict.
-        let user = self.catalog.type_by_name(namespace, &name).map(|t| (t.oid, t.element));
-        let old = user.or_else(|| builtin::type_by_name(namespace, &name).map(|t| (t.oid, t.elem)));
-        let is_auto_array = |(ty, element): (u32, u32)| {
-            element != 0
-                && (self.catalog.type_by_oid(element).is_some_and(|e| e.array == ty)
-                    || types::row(element).is_some_and(|e| e.array == ty))
-        };
-        if old.is_some_and(|old| !is_auto_array(old)) {
-            return Err(Error::new(
-                SqlState::DUPLICATE_OBJECT,
-                format!("type \"{name}\" already exists"),
-            ));
-        }
+        self.check_type_name(namespace, &name)?;
         let defs: Vec<&ColumnDef> = stmt
             .coldeflist
             .iter()
@@ -545,6 +532,24 @@ impl Definer<'_, '_> {
         self.check_relation_name(namespace, &name)?;
         let new = NewRelation { namespace, name, owner: self.user, columns };
         self.catalog.create_composite_type(new)?;
+        Ok(())
+    }
+
+    /// `42710` when the schema has a type with the name. `moveArrayTypeName` moves an array type that a type made out of the way, so only another type is a conflict.
+    pub(super) fn check_type_name(&self, namespace: u32, name: &str) -> Result<()> {
+        let user = self.catalog.type_by_name(namespace, name).map(|t| (t.oid, t.element));
+        let old = user.or_else(|| builtin::type_by_name(namespace, name).map(|t| (t.oid, t.elem)));
+        let is_auto_array = |(ty, element): (u32, u32)| {
+            element != 0
+                && (self.catalog.type_by_oid(element).is_some_and(|e| e.array == ty)
+                    || types::row(element).is_some_and(|e| e.array == ty))
+        };
+        if old.is_some_and(|old| !is_auto_array(old)) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("type \"{name}\" already exists"),
+            ));
+        }
         Ok(())
     }
 
