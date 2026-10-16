@@ -32,7 +32,8 @@ pub(crate) fn array_of(ty: u32) -> Option<(u32, u8)> {
         return None;
     }
     let row = builtin::type_by_oid(ty)?;
-    if row.category != ARRAY_CATEGORY || row.elem == 0 {
+    // `record[]` is a pseudo-type, so its category is not the one of the arrays.
+    if (row.category != ARRAY_CATEGORY && ty != oid::RECORD_ARRAY) || row.elem == 0 {
         return None;
     }
     let delim = builtin::type_by_oid(row.elem).map_or(b',', |e| e.delim);
