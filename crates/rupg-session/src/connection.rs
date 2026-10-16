@@ -2568,6 +2568,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_sublink_array.test")));
     }
 
+    /// The output of `record[]`: rows with null fields, quoted fields, nested rows and arrays, rows of no fields, arrays of two dimensions, `ARRAY(SELECT ...)` of rows, a subscript, a cast to text, the error for the input and the error for a view. `connection/record_array.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn record_array() {
+        big_stack(|| script(include_str!("connection/record_array.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

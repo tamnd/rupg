@@ -1,0 +1,60 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT ARRAY[ROW(1, 'x')]
+fields array:2287:-1:-1
+row {"(1,x)"}
+SELECT 1
+> SELECT ARRAY[ROW(1, 'x'), ROW(2, NULL), NULL]
+fields array:2287:-1:-1
+row {"(1,x)","(2,)",NULL}
+SELECT 1
+> SELECT ARRAY[ROW(1, 'a b'), ROW(2, 'c,d')]
+fields array:2287:-1:-1
+row {"(1,\"a b\")","(2,\"c,d\")"}
+SELECT 1
+> SELECT pg_typeof(ARRAY[ROW(1, 'x')])
+fields pg_typeof:2206:4:-1
+row record[]
+SELECT 1
+> SELECT ARRAY[ROW()]
+fields array:2287:-1:-1
+row {()}
+SELECT 1
+> SELECT ARRAY[ROW(ARRAY[1, 2], 'x')]
+fields array:2287:-1:-1
+row {"(\"{1,2}\",x)"}
+SELECT 1
+> SELECT ARRAY[ROW(ROW(1, 2), '"q"')]
+fields array:2287:-1:-1
+row {"(\"(1,2)\",\"\"\"q\"\"\")"}
+SELECT 1
+> SELECT ARRAY[[ROW(1), ROW(2)], [ROW(3), ROW(4)]]
+fields array:2287:-1:-1
+row {{(1),(2)},{(3),(4)}}
+SELECT 1
+> SELECT ARRAY(SELECT ROW(a, a * 2) FROM generate_series(1, 3) AS a)
+fields array:2287:-1:-1
+row {"(1,2)","(2,4)","(3,6)"}
+SELECT 1
+> SELECT ARRAY(SELECT ARRAY[ROW(1, 'x')])
+fields array:2287:-1:-1
+row {{"(1,x)"}}
+SELECT 1
+> SELECT (ARRAY[ROW(1, 'x'), ROW(2, 'y')])[2]
+fields array:2249:-1:-1
+row (2,y)
+SELECT 1
+> SELECT array_length(ARRAY[ROW(1, 'x'), ROW(2, 'y')], 1)
+fields array_length:23:4:-1
+row 2
+SELECT 1
+> SELECT ARRAY[ROW(1, 'x')]::text
+fields array:25:-1:-1
+row {"(1,x)"}
+SELECT 1
+> SELECT '{"(1,x)"}'::record[]
+ERROR 0A000 input of anonymous composite types is not implemented at 8
+> CREATE VIEW v AS SELECT ARRAY[ROW(1, 'x'), ROW(2, 'y')] AS c
+ERROR 42P16 column "c" has pseudo-type record[]
+> SELECT * FROM v
+ERROR 42P01 relation "v" does not exist at 15
