@@ -621,6 +621,13 @@ impl rupg_func::Session for Reader<'_> {
         if let Some(value) = value {
             utility::check_role(name, value, self.user)?;
         }
+        let config = match value {
+            Some(value) if utility::is_ts_config(name) => {
+                Some(utility::check_ts_config(value, self)?)
+            }
+            _ => None,
+        };
+        let value = config.as_deref().or(value);
         let action = if local { Action::Local } else { Action::Set };
         let mut settings = self.settings.borrow_mut();
         settings.set(name, value, action, Origin::Statement)?;

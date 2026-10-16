@@ -178,6 +178,41 @@ fn ts_find(kind: Named, spaces: &[u32], name: &str, session: &dyn Session) -> Op
     })
 }
 
+/// `check_default_text_search_config`: the value that `default_text_search_config` keeps for the configuration with the name in `text`. The value is the name with its schema, so a later change of `search_path` does not change the configuration. `None` when no configuration has the name.
+///
+/// # Errors
+///
+/// The errors of the input of `regconfig` that are not soft.
+pub fn ts_config_setting(text: &str, session: &dyn Session) -> Result<Option<String>> {
+    let Ok(oid) = input(RegKind::Config, text, session)? else { return Ok(None) };
+    let Some((name, namespace)) = ts_name(Named::Config, oid, session) else { return Ok(None) };
+    Ok(Some(qualified(namespace_name(namespace, session), &name)))
+}
+
+/// `get_ts_parser_oid` of the name in a text, as `ts_parse` and `ts_token_type` find a parser by name.
+///
+/// # Errors
+///
+/// `42602` for a name that is not valid, `3F000` for a schema that does not exist, and `42704` for a parser that does not exist.
+pub(crate) fn ts_parser_oid(text: &str, session: &dyn Session) -> Result<u32> {
+    let names = qualified_name_list(text).map_err(type_error)?;
+    let (schema, name) = deconstruct(&names, session)?;
+    if let Some(schema) = schema
+        && namespace_oid(schema, session).is_none()
+    {
+        return Err(Error::new(
+            SqlState::UNDEFINED_SCHEMA,
+            format!("schema \"{schema}\" does not exist"),
+        ));
+    }
+    ts_find(Named::Parser, &spaces(schema, session), name, session).ok_or_else(|| {
+        Error::new(
+            SqlState::UNDEFINED_OBJECT,
+            format!("text search parser \"{}\" does not exist", name_list(&names)),
+        )
+    })
+}
+
 /// `TSParserIsVisible`, `TSDictionaryIsVisible`, `TSTemplateIsVisible` and `TSConfigIsVisible`: true when the unqualified name finds the object. `None` when no object has the OID.
 pub(crate) fn ts_visible(kind: Named, oid: u32, session: &dyn Session) -> Option<bool> {
     let (name, _) = ts_name(kind, oid, session)?;

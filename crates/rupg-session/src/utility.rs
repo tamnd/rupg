@@ -25,10 +25,13 @@ impl Notice {
         Notice { severity: Severity::Warning, error }
     }
 
-    /// A message of a function: a `NOTICE` for a SQLSTATE of class `00`, as `ereport(NOTICE)` gives it, and a `WARNING` for any other SQLSTATE.
+    /// A message of a function: a `NOTICE` for a SQLSTATE of class `00` and for a message that `Error::as_notice` marks, as `ereport(NOTICE)` gives them, and a `WARNING` for any other message.
     pub(crate) fn of_function(error: Error) -> Notice {
-        let severity =
-            if error.state().class() == "00" { Severity::Notice } else { Severity::Warning };
+        let severity = if error.state().class() == "00" || error.is_notice() {
+            Severity::Notice
+        } else {
+            Severity::Warning
+        };
         Notice { severity, error }
     }
 }
@@ -52,6 +55,8 @@ pub struct Context<'a> {
     pub notices: &'a mut Vec<Notice>,
     /// `XACT_FLAGS_NEEDIMMEDIATECOMMIT`: the statement must commit at once, also in the extended protocol, where a statement does not commit before `Sync`.
     pub immediate_commit: bool,
+    /// The value of `default_text_search_config` that the check hook gave for a `SET` of it, from `ts_config`.
+    pub ts_config: Option<String>,
 }
 
 /// `IsTransactionExitStmt`: the statements that run in a failed transaction block.
@@ -267,7 +272,53 @@ fn assign(
     if let Some(value) = value {
         check_role(name, value, cx.user)?;
     }
+    let value = match cx.ts_config.as_deref() {
+        Some(config) if value.is_some() && is_ts_config(name) => Some(config),
+        _ => value,
+    };
     cx.settings.set(name, value, action, Origin::Statement)
+}
+
+/// True when the name is the name of `default_text_search_config`.
+pub(crate) fn is_ts_config(name: &str) -> bool {
+    guc::find(name).is_some_and(|parameter| parameter.name == "default_text_search_config")
+}
+
+/// `check_default_text_search_config` for a value of `default_text_search_config`: the name of the configuration with its schema.
+///
+/// # Errors
+///
+/// `22023` when no configuration has the name.
+pub(crate) fn check_ts_config(
+    value: &str,
+    session: &dyn rupg_func::Session,
+) -> Result<String, Error> {
+    rupg_func::ts_config_setting(value, session)?.ok_or_else(|| {
+        Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            format!("invalid value for parameter \"default_text_search_config\": \"{value}\""),
+        )
+    })
+}
+
+/// The check hook of `default_text_search_config` for a `SET` statement, which needs the catalog and runs before [`run`]. `None` for another statement.
+///
+/// # Errors
+///
+/// The errors of [`check_ts_config`].
+pub(crate) fn ts_config(
+    node: &Node,
+    session: &dyn rupg_func::Session,
+) -> Result<Option<String>, Error> {
+    let Node::VariableSetStmt(stmt) = node else { return Ok(None) };
+    let name = stmt.name.as_deref().unwrap_or("");
+    if stmt.kind != VariableSetKind::VAR_SET_VALUE || !is_ts_config(name) {
+        return Ok(None);
+    }
+    match flatten(name, &stmt.args) {
+        Ok(Some(value)) => check_ts_config(&value, session).map(Some),
+        _ => Ok(None),
+    }
 }
 
 /// `check_role` and `check_session_authorization` for a value of `role` or `session_authorization`. The session user is the only role yet.
@@ -459,6 +510,7 @@ mod tests {
                 user: "postgres",
                 notices: &mut self.notices,
                 immediate_commit: false,
+                ts_config: None,
             };
             let outcome = run(node, text, &mut cx);
             match &outcome {

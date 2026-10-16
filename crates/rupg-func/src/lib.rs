@@ -54,7 +54,9 @@ mod stat;
 mod text;
 mod timezone;
 mod trig;
+mod tsearch;
 mod tsmatch;
+mod tsparser;
 mod tsquery;
 mod tsvector;
 mod unicode;
@@ -84,6 +86,7 @@ pub use io::{
 pub use jsonbuild::{json_structured, json_value};
 pub use multirange::range_agg;
 pub use random::Randomness;
+pub use reg::ts_config_setting;
 pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use sequence::Sequences;
 pub use srf::{SetKernel, set_kernel};
@@ -298,7 +301,7 @@ pub trait Session {
         let _ = (ty, value);
         Err(not_yet("the check constraints of a domain"))
     }
-    /// `ereport(WARNING)` or `ereport(NOTICE)` in a function: a message for the client, such as the warning of the input of an `aclitem` value with no grantor. A message with a SQLSTATE of class `00` is a `NOTICE`, and any other message is a `WARNING`. A session with no client drops it.
+    /// `ereport(WARNING)` or `ereport(NOTICE)` in a function: a message for the client, such as the warning of the input of an `aclitem` value with no grantor. A message with a SQLSTATE of class `00` or with the mark of `Error::as_notice` is a `NOTICE`, and any other message is a `WARNING`. A session with no client drops it.
     fn warn(&self, warning: Error) {
         let _ = warning;
     }
@@ -431,6 +434,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| multirange::by_src(src))
         .or_else(|| tsvector::by_src(src))
         .or_else(|| tsquery::by_src(src))
+        .or_else(|| tsearch::by_src(src))
         .or_else(|| tsmatch::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))

@@ -556,12 +556,14 @@ impl Connection {
                 })?
             } else {
                 let mut notices = Vec::new();
+                let ts_config = self.ts_config(node)?;
                 let mut cx = Context {
                     settings: self.settings.get_mut(),
                     transaction: &mut self.transaction,
                     user: &self.user,
                     notices: &mut notices,
                     immediate_commit: false,
+                    ts_config,
                 };
                 let result = utility::run(node, &statement.text, &mut cx);
                 immediate_commit = cx.immediate_commit;

@@ -391,6 +391,14 @@ impl Connection {
         .with_cancel(&self.cancel)
     }
 
+    /// The check hook of `default_text_search_config` for a `SET` of it, which reads the catalog.
+    fn ts_config(&self, node: &Node) -> Result<Option<String>, Error> {
+        if !matches!(node, Node::VariableSetStmt(_)) {
+            return Ok(None);
+        }
+        utility::ts_config(node, &self.reader())
+    }
+
     /// The catalog that a statement sees: the copy of the transaction when it changed the catalog, or the catalog of the last commit.
     fn catalog(&self) -> Arc<Catalog> {
         match &self.lease {
@@ -821,14 +829,20 @@ impl Connection {
                 self.close_cursor(stmt, b"")
             } else {
                 drop(self.portals.close(b""));
-                let mut cx = Context {
-                    settings: self.settings.get_mut(),
-                    transaction: &mut self.transaction,
-                    user: &self.user,
-                    notices: &mut notices,
-                    immediate_commit: false,
-                };
-                utility::run(node, statement, &mut cx).map(Done::from)
+                match self.ts_config(node) {
+                    Ok(ts_config) => {
+                        let mut cx = Context {
+                            settings: self.settings.get_mut(),
+                            transaction: &mut self.transaction,
+                            user: &self.user,
+                            notices: &mut notices,
+                            immediate_commit: false,
+                            ts_config,
+                        };
+                        utility::run(node, statement, &mut cx).map(Done::from)
+                    }
+                    Err(error) => Err(error),
+                }
             };
             self.notices(&mut notices, text, &[], out);
             let outcome = match result {
@@ -2335,6 +2349,12 @@ mod tests {
     #[test]
     fn ts_dict() {
         big_stack(|| script(include_str!("connection/ts_dict.test")));
+    }
+
+    /// The default text search parser and `to_tsvector`: the tokens of `ts_parse` for each token type, `ts_token_type`, `to_tsvector` with the built-in and new configurations, stop words, repeated words, the notice for a long word, `get_current_ts_config`, `text @@ tsquery`, the check of `default_text_search_config` in `SET` and `set_config`, and the errors. `connection/ts_parse.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_parse() {
+        big_stack(|| script(include_str!("connection/ts_parse.test")));
     }
 
     /// The type `tsquery`: the text input with its operators, weights and prefixes and its errors, the notice for a query with no lexemes, the output, the order, `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@`, the limits of the distance, the lexeme and the stack of operators, arrays of `tsquery`, `GROUP BY`, `pg_input_is_valid`, the text and binary forms of `COPY` and a query with parameters. `connection/tsquery.test` is the output of PostgreSQL 19 for the same script in a new database.
