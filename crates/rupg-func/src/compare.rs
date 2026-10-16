@@ -280,11 +280,8 @@ fn array_order(left: u32, a: &Array<Value>, right: u32, b: &Array<Value>) -> Res
 /// The order of the two arguments of a call.
 fn order(call: &Call<'_>, args: &[Value]) -> Result<Ordering> {
     let [a, b] = args else { return Err(bad_value()) };
-    if let (Some(x), Some(y)) = (datetime_rank(a), datetime_rank(b))
-        && x != y
-    {
-        let rank = x.max(y);
-        return Ok(promote(call, a, rank)?.cmp(&promote(call, b, rank)?));
+    if let Some(order) = mixed_datetime(call, a, b)? {
+        return Ok(order);
     }
     let left = call.args.first().copied().unwrap_or(0);
     let right = call.args.get(1).copied().unwrap_or(0);
@@ -464,6 +461,24 @@ fn promote(call: &Call<'_>, value: &Value, rank: u8) -> Result<i128> {
     } else {
         above
     })
+}
+
+/// The order of a date, a timestamp and a `timestamptz` of two different types, or `None` for other values.
+fn mixed_datetime(call: &Call<'_>, a: &Value, b: &Value) -> Result<Option<Ordering>> {
+    let (Some(x), Some(y)) = (datetime_rank(a), datetime_rank(b)) else { return Ok(None) };
+    if x == y {
+        return Ok(None);
+    }
+    let rank = x.max(y);
+    Ok(Some(promote(call, a, rank)?.cmp(&promote(call, b, rank)?)))
+}
+
+/// The order of two values of one type, or of two values of `date`, `timestamp` and `timestamptz`.
+pub(crate) fn datetime_order(call: &Call<'_>, a: &Value, b: &Value) -> Result<Ordering> {
+    match mixed_datetime(call, a, b)? {
+        Some(order) => Ok(order),
+        None => compare(0, a, 0, b),
+    }
 }
 
 /// The kernel of a comparison operator for its argument types.

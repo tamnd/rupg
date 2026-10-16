@@ -3,7 +3,7 @@
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{
     DateTimeInput, Interval, POSTGRES_EPOCH_JDATE, TimeZone, UNIX_EPOCH_JDATE,
-    UNIX_TO_POSTGRES_USECS, USECS_PER_SEC, Value, ZoneName, adjust_timestamp, date2j,
+    UNIX_TO_POSTGRES_USECS, USECS_PER_SEC, Value, ZoneName, adjust_time, adjust_timestamp, date2j,
     decode_timezone_abbrev_prefix, j2date, local_offset,
 };
 
@@ -330,8 +330,8 @@ fn is_separator(c: u32) -> bool {
     (0x21..0x7f).contains(&c) && !char::from_u32(c).is_some_and(|c| c.is_ascii_alphanumeric())
 }
 
-/// `parse_format` with `DCH_FLAG`.
-fn parse(format: &str) -> Vec<Node> {
+/// `parse_format` with `DCH_FLAG`, and with `STD_FLAG` when `std` is true. The standard mode of the SQL/JSON path takes only the separators `-./,':; ` outside a quoted string.
+fn parse(format: &str, std: bool) -> Result<Vec<Node>> {
     let mut nodes = Vec::new();
     let mut rest = format;
     while !rest.is_empty() {
@@ -378,6 +378,14 @@ fn parse(format: &str) -> Vec<Node> {
                 }
             }
             rest = chars.as_str();
+        } else if std {
+            let mut chars = rest.chars();
+            let c = chars.next().unwrap_or(' ');
+            if !"-./,':; ".contains(c) {
+                return Err(format_error(format!("invalid datetime format separator: \"{c}\"")));
+            }
+            nodes.push(Node::Char(c, if c == ' ' { Kind::Space } else { Kind::Separator }));
+            rest = chars.as_str();
         } else {
             // Outside a quoted string, a backslash is special only before a double quote.
             if rest.starts_with("\\\"") {
@@ -397,7 +405,7 @@ fn parse(format: &str) -> Vec<Node> {
             rest = chars.as_str();
         }
     }
-    nodes
+    Ok(nodes)
 }
 
 /// `struct fmt_tm` and the fraction and the zone of `TmToChar`.
@@ -680,7 +688,7 @@ fn to_char(nodes: &[Node], interval: bool, tm: &Fields<'_>) -> Result<String> {
 /// The format of the second argument, or `None` when it is empty: `datetime_to_char_body` then gives null.
 fn format(args: &[Value]) -> Result<Option<Vec<Node>>> {
     let format = args.get(1).and_then(Value::as_str).ok_or_else(bad_value)?;
-    Ok((!format.is_empty()).then(|| parse(format)))
+    (!format.is_empty()).then(|| parse(format, false)).transpose()
 }
 
 /// `timestamp_to_char`: null for an infinite timestamp.
@@ -979,17 +987,19 @@ fn adjust_partial_year(year: i32) -> i32 {
     }
 }
 
-/// `DCH_from_char` outside the standard mode of the SQL/JSON path.
+/// `DCH_from_char`. The standard mode of the SQL/JSON path is the `FX` mode, where each space, separator and quoted character of the format must be in the input, and the input must have all the fields and no more characters.
 #[allow(clippy::too_many_lines)]
-fn from_char(nodes: &[Node], text: &str, cx: &DateTimeInput<'_>) -> Result<FromChar> {
+fn from_char(nodes: &[Node], text: &str, cx: &DateTimeInput<'_>, std: bool) -> Result<FromChar> {
     let input = text.as_bytes();
     let mut out = FromChar::default();
-    let mut fx = false;
+    let mut fx = std;
     // The spaces and the separators of the input that the format does not give.
     let mut extra_skip = 0i32;
     let mut s = 0;
+    let mut short = false;
     for (at, node) in nodes.iter().enumerate() {
         if s >= input.len() {
+            short = true;
             break;
         }
         // Outside the `FX` mode, the spaces at the start and before a field are skipped.
@@ -1001,9 +1011,14 @@ fn from_char(nodes: &[Node], text: &str, cx: &DateTimeInput<'_>) -> Result<FromC
             }
         }
         let (name, pattern, fill, ordinal) = match *node {
-            Node::Char(_, Kind::Space | Kind::Separator) => {
-                // A space or a separator of the format matches one space or separator of the input, or nothing. In the `FX` mode it matches any character.
-                if fx {
+            Node::Char(c, Kind::Space | Kind::Separator) => {
+                // A space or a separator of the format matches one space or separator of the input, or nothing. In the `FX` mode it matches any character, and in the standard mode it matches only itself.
+                if std {
+                    if char::from(input[s]) != c {
+                        return Err(format_error(format!("unmatched format separator \"{c}\"")));
+                    }
+                    s += 1;
+                } else if fx {
                     s = next_char(input, s);
                 } else {
                     extra_skip -= 1;
@@ -1015,11 +1030,14 @@ fn from_char(nodes: &[Node], text: &str, cx: &DateTimeInput<'_>) -> Result<FromC
                 }
                 continue;
             }
-            Node::Char(_, Kind::Text) => {
-                // Other text matches any character. A character that the spaces skipped can be part of the next field.
+            Node::Char(c, Kind::Text) => {
+                // Other text matches any character, and in the standard mode only itself. A character that the spaces skipped can be part of the next field.
                 if !fx && extra_skip > 0 {
                     extra_skip -= 1;
-                } else if s < input.len() {
+                } else {
+                    if std && !text[s..].starts_with(c) {
+                        return Err(format_error(format!("unmatched format character \"{c}\"")));
+                    }
                     s = next_char(input, s);
                 }
                 continue;
@@ -1222,6 +1240,17 @@ fn from_char(nodes: &[Node], text: &str, cx: &DateTimeInput<'_>) -> Result<FromC
             }
         }
     }
+    if std {
+        if short {
+            return Err(format_error("input string is too short for datetime format".to_string()));
+        }
+        s += input[s..].iter().take_while(|&&b| is_space(b)).count();
+        if s < input.len() {
+            return Err(format_error(
+                "trailing characters remain in input string after datetime format".to_string(),
+            ));
+        }
+    }
     Ok(out)
 }
 
@@ -1248,17 +1277,29 @@ fn abbrev_offset(tm: &Tm, abbrev: &str, zone: &dyn TimeZone) -> i32 {
     zone.abbrev_at(&abbrev.to_ascii_uppercase(), instant).map_or(west, |(east, _)| -east)
 }
 
-/// `do_to_timestamp` outside the standard mode: the fields of the input, the offset west of UTC that the input gives, and the precision of `FF1` to `FF6`.
-#[allow(clippy::too_many_lines)]
+/// `do_to_timestamp` of `to_timestamp` and `to_date`.
 fn do_to_timestamp(call: &Call<'_>, args: &[Value]) -> Result<(Tm, Option<i32>, i32)> {
     let text = args.first().and_then(Value::as_str).ok_or_else(bad_value)?;
     let format = args.get(1).and_then(Value::as_str).ok_or_else(bad_value)?;
+    let nodes = parse(format, false)?;
+    fields(call, text, (!format.is_empty()).then_some(nodes.as_slice()), false)
+}
+
+/// The body of `do_to_timestamp`: the fields of the input, the offset west of UTC that the input gives, and the precision of `FF1` to `FF6`. `nodes` is `None` for an empty format.
+#[allow(clippy::too_many_lines)]
+fn fields(
+    call: &Call<'_>,
+    text: &str,
+    nodes: Option<&[Node]>,
+    std: bool,
+) -> Result<(Tm, Option<i32>, i32)> {
     let session = call.session.zone()?;
-    let mut f = if format.is_empty() {
-        FromChar::default()
-    } else {
-        let cx = datetime_input(call.session, session.as_ref());
-        from_char(&parse(format), text, &cx)?
+    let mut f = match nodes {
+        None => FromChar::default(),
+        Some(nodes) => {
+            let cx = datetime_input(call.session, session.as_ref());
+            from_char(nodes, text, &cx, std)?
+        }
     };
     let overflow = || {
         Error::new(
@@ -1464,4 +1505,82 @@ fn to_date(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         return Err(range());
     }
     Ok(Value::Date(date))
+}
+
+/// `DCH_datetime_type`: true when the format has a field of the date, of the time and of the zone.
+fn datetime_type(nodes: &[Node]) -> (bool, bool, bool) {
+    let (mut dated, mut timed, mut zoned) = (false, false, false);
+    for node in nodes {
+        let Node::Action { pattern, .. } = node else { continue };
+        match pattern {
+            P::Fx | P::IsoWeek => {}
+            P::Meridiem { .. }
+            | P::Hour12
+            | P::Hour24
+            | P::Minute
+            | P::Second
+            | P::Millisecond
+            | P::Microsecond
+            | P::Fraction(_)
+            | P::SecondsOfDay => timed = true,
+            P::Zone { .. } | P::Offset | P::ZoneHour | P::ZoneMinute => zoned = true,
+            _ => dated = true,
+        }
+    }
+    (dated, timed, zoned)
+}
+
+/// A value of `parse_datetime`: a `date`, `time`, `timetz`, `timestamp` or `timestamptz`, and the offset west of UTC that the input gives for a type with a zone. `FF1` to `FF6` round the value to their precision.
+pub(crate) type Datetime = (Value, i32);
+
+/// `parse_datetime` in the standard mode for the SQL/JSON path: the value of the input in the type that the fields of the format give. The outer error is the error of the format. The inner error is the error of the input, which a silent path does not give.
+pub(crate) fn parse_datetime(
+    call: &Call<'_>,
+    text: &str,
+    format: &str,
+) -> Result<Result<Datetime>> {
+    let nodes = parse(format, true)?;
+    Ok(datetime_value(call, text, (!format.is_empty()).then_some(nodes.as_slice())))
+}
+
+/// The value of [`parse_datetime`] for the parsed format.
+fn datetime_value(call: &Call<'_>, text: &str, nodes: Option<&[Node]>) -> Result<Datetime> {
+    let (tm, west, precision) = fields(call, text, nodes, true)?;
+    let typmod = if precision == 0 { -1 } else { precision };
+    let range = |what: &str| Error::new(SqlState::DATETIME_VALUE_OUT_OF_RANGE, what.to_string());
+    let missing =
+        |what: &str| format_error(format!("missing time zone in input string for type {what}"));
+    Ok(match nodes.map_or((false, false, false), datetime_type) {
+        (true, true, true) => {
+            let tz = west.ok_or_else(|| missing("timestamptz"))?;
+            let ts = tm.timestamp_west(tz).map_err(|_| range("timestamptz out of range"))?;
+            (Value::TimestampTz(adjust_timestamp(ts, typmod).map_err(type_error)?), tz)
+        }
+        (true, true, false) => {
+            let ts = tm.timestamp_west(0).map_err(|_| range("timestamp out of range"))?;
+            (Value::Timestamp(adjust_timestamp(ts, typmod).map_err(type_error)?), 0)
+        }
+        (true, false, true) => {
+            return Err(format_error("datetime format is zoned but not timed".to_string()));
+        }
+        (true, false, false) => {
+            let range = || range(&format!("date out of range: \"{text}\""));
+            if !valid_julian(tm.year, tm.mon) {
+                return Err(range());
+            }
+            let date = date2j(tm.year, tm.mon, tm.mday) - POSTGRES_EPOCH_JDATE;
+            if !valid_date(i64::from(date)) {
+                return Err(range());
+            }
+            (Value::Date(date), 0)
+        }
+        (false, true, true) => {
+            let tz = west.ok_or_else(|| missing("timetz"))?;
+            (Value::TimeTz(adjust_time(tm.time, typmod), tz), tz)
+        }
+        (false, true, false) => (Value::Time(adjust_time(tm.time, typmod)), 0),
+        (false, false, _) => {
+            return Err(format_error("datetime format is not dated and not timed".to_string()));
+        }
+    })
 }
