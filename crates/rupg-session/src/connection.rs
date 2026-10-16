@@ -2363,6 +2363,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/ts_query.test")));
     }
 
+    /// The `json` and `jsonb` forms of `to_tsvector`, `json_to_tsvector` and `jsonb_to_tsvector`: the positions of the strings, the filter of strings, numbers, booleans and keys, the errors of the filter, and the duplicate keys of `json`. `connection/ts_json.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_json() {
+        big_stack(|| script(include_str!("connection/ts_json.test")));
+    }
+
+    /// The functions `ts_rank` and `ts_rank_cd` with all forms of arguments: the operators of the query, weights, prefixes, the methods of normalization, an array of weights and its errors, and a document with no positions. `connection/ts_rank.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_rank() {
+        big_stack(|| script(include_str!("connection/ts_rank.test")));
+    }
+
     /// The type `tsquery`: the text input with its operators, weights and prefixes and its errors, the notice for a query with no lexemes, the output, the order, `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@`, the limits of the distance, the lexeme and the stack of operators, arrays of `tsquery`, `GROUP BY`, `pg_input_is_valid`, the text and binary forms of `COPY` and a query with parameters. `connection/tsquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn tsquery() {

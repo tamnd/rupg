@@ -9,7 +9,7 @@ use crate::{Call, Kernel, bad_value};
 
 /// `TSTernaryValue`. `Maybe` is a match of an operand that has no positions, where the positions decide the result.
 #[derive(Clone, Copy, PartialEq, Eq)]
-enum Ternary {
+pub(crate) enum Ternary {
     No,
     Yes,
     Maybe,
@@ -17,14 +17,17 @@ enum Ternary {
 
 /// `ExecPhraseData`: the positions where a part of a query under `<N>` matches.
 #[derive(Default)]
-struct Phrase {
+pub(crate) struct Phrase {
     /// The positions in order with no two equal positions, as `WordEntryPos` values. Only the 14 low bits count.
-    pos: Vec<u16>,
+    pub(crate) pos: Vec<u16>,
     /// True when the part matches at each position that is not in `pos`.
     negate: bool,
     /// The number of lexemes of the match, less one. A position is the position of the last lexeme of the match.
     width: i32,
 }
+
+/// The check of the operand at an index of the query, as the callback `chkcond` of `TS_execute` does. The positions go into the `Phrase` when the caller gives one.
+pub(crate) type Check<'c> = dyn Fn(usize, Option<&mut Phrase>) -> Ternary + 'c;
 
 /// `TSPO_L_ONLY`, `TSPO_R_ONLY` and `TSPO_BOTH`.
 const L_ONLY: u8 = 1;
@@ -148,15 +151,15 @@ fn output(
 }
 
 /// `TS_phrase_execute`: the match of the part of the query at `at`, which is under a `<N>`, with its positions.
-fn phrase(lexemes: &[Lexeme], items: &[QueryItem], at: usize, data: &mut Phrase) -> Ternary {
+fn phrase(items: &[QueryItem], at: usize, data: &mut Phrase, check: &Check<'_>) -> Ternary {
     let QueryItem::Operator { op, distance, left } = &items[at] else {
-        return check(lexemes, &items[at], Some(data));
+        return check(at, Some(data));
     };
     let mut l = Phrase::default();
     let mut r = Phrase::default();
     let left = at + *left as usize;
     match *op {
-        TSQUERY_NOT => match phrase(lexemes, items, at + 1, data) {
+        TSQUERY_NOT => match phrase(items, at + 1, data, check) {
             Ternary::No => {
                 data.negate = true;
                 Ternary::Yes
@@ -172,11 +175,11 @@ fn phrase(lexemes: &[Lexeme], items: &[QueryItem], at: usize, data: &mut Phrase)
             Ternary::Maybe => Ternary::Maybe,
         },
         TSQUERY_PHRASE | TSQUERY_AND => {
-            let lmatch = phrase(lexemes, items, left, &mut l);
+            let lmatch = phrase(items, left, &mut l, check);
             if lmatch == Ternary::No {
                 return Ternary::No;
             }
-            let rmatch = phrase(lexemes, items, at + 1, &mut r);
+            let rmatch = phrase(items, at + 1, &mut r, check);
             if rmatch == Ternary::No {
                 return Ternary::No;
             }
@@ -202,8 +205,8 @@ fn phrase(lexemes: &[Lexeme], items: &[QueryItem], at: usize, data: &mut Phrase)
             }
         }
         TSQUERY_OR => {
-            let lmatch = phrase(lexemes, items, left, &mut l);
-            let rmatch = phrase(lexemes, items, at + 1, &mut r);
+            let lmatch = phrase(items, left, &mut l, check);
+            let rmatch = phrase(items, at + 1, &mut r, check);
             if lmatch == Ternary::No && rmatch == Ternary::No {
                 return Ternary::No;
             }
@@ -233,38 +236,38 @@ fn phrase(lexemes: &[Lexeme], items: &[QueryItem], at: usize, data: &mut Phrase)
 }
 
 /// `TS_execute_recurse`: the match of the part of the query at `at`, which is not under a `<N>`. A `<N>` that cannot get the positions does not match.
-fn execute(lexemes: &[Lexeme], items: &[QueryItem], at: usize) -> Ternary {
+fn execute(items: &[QueryItem], at: usize, check: &Check<'_>) -> Ternary {
     let QueryItem::Operator { op, left, .. } = &items[at] else {
-        return check(lexemes, &items[at], None);
+        return check(at, None);
     };
     let left = at + *left as usize;
     match *op {
-        TSQUERY_NOT => match execute(lexemes, items, at + 1) {
+        TSQUERY_NOT => match execute(items, at + 1, check) {
             Ternary::No => Ternary::Yes,
             Ternary::Yes => Ternary::No,
             Ternary::Maybe => Ternary::Maybe,
         },
         TSQUERY_AND => {
-            let lmatch = execute(lexemes, items, left);
+            let lmatch = execute(items, left, check);
             if lmatch == Ternary::No {
                 return Ternary::No;
             }
-            match execute(lexemes, items, at + 1) {
+            match execute(items, at + 1, check) {
                 Ternary::Yes => lmatch,
                 other => other,
             }
         }
         TSQUERY_OR => {
-            let lmatch = execute(lexemes, items, left);
+            let lmatch = execute(items, left, check);
             if lmatch == Ternary::Yes {
                 return Ternary::Yes;
             }
-            match execute(lexemes, items, at + 1) {
+            match execute(items, at + 1, check) {
                 Ternary::No => lmatch,
                 other => other,
             }
         }
-        TSQUERY_PHRASE => match phrase(lexemes, items, at, &mut Phrase::default()) {
+        TSQUERY_PHRASE => match phrase(items, at, &mut Phrase::default(), check) {
             Ternary::Yes => Ternary::Yes,
             _ => Ternary::No,
         },
@@ -274,7 +277,12 @@ fn execute(lexemes: &[Lexeme], items: &[QueryItem], at: usize) -> Ternary {
 
 /// True when the query matches the vector. An empty query matches no vector.
 pub(crate) fn matches(lexemes: &[Lexeme], items: &[QueryItem]) -> bool {
-    !items.is_empty() && execute(lexemes, items, 0) != Ternary::No
+    !items.is_empty() && matches_with(items, &|at, data| check(lexemes, &items[at], data))
+}
+
+/// `TS_execute` with the check of the caller: true when the query matches. The query must not be empty.
+pub(crate) fn matches_with(items: &[QueryItem], check: &Check<'_>) -> bool {
+    execute(items, 0, check) != Ternary::No
 }
 
 /// The vector and the query of the arguments.
