@@ -30,7 +30,7 @@ struct Kind {
 }
 
 /// `dropmsgstringarray`, without the kinds that rupg does not have.
-const KINDS: [Kind; 4] = [
+const KINDS: [Kind; 5] = [
     Kind {
         code: b'r',
         missing_state: SqlState::UNDEFINED_TABLE,
@@ -58,6 +58,13 @@ const KINDS: [Kind; 4] = [
         word: "index",
         article: "an index",
         hint: "Use DROP INDEX to remove an index.",
+    },
+    Kind {
+        code: b'c',
+        missing_state: SqlState::UNDEFINED_OBJECT,
+        word: "type",
+        article: "a type",
+        hint: "Use DROP TYPE to remove a type.",
     },
 ];
 
@@ -470,6 +477,7 @@ impl Definer<'_, '_> {
                     RelKind::Sequence => b'S',
                     RelKind::Toast => b't',
                     RelKind::View => b'v',
+                    RelKind::Composite => b'c',
                     RelKind::Table => b'r',
                 };
                 (code, rel.namespace, rel.name.as_str())

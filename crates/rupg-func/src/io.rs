@@ -135,7 +135,7 @@ pub fn input_supported(ty: u32) -> bool {
     if let Some(range) = builtin::multirange_range(ty) {
         return input_supported(range);
     }
-    output_supported(ty) && ty != oid::ANYARRAY && !is_row_type(ty)
+    output_supported(ty) && ty != oid::ANYARRAY && ty != oid::RECORD
 }
 
 /// The name of a type for an error.
@@ -389,6 +389,97 @@ fn record_out(record: &Record, session: &dyn Session, out: &mut Vec<u8>) -> Resu
     Ok(())
 }
 
+/// The type and the typmod of each column of the relation of a row type: a system catalog or a relation of the catalog of the session.
+fn row_columns(ty: u32, session: &dyn Session) -> Option<Vec<(u32, i32)>> {
+    let relid = builtin::type_by_oid(ty).filter(|row| row.relid != 0)?.relid;
+    if let Some(catalog) = rupg_pgcatalog::catalog_by_oid(relid) {
+        return Some(catalog.columns.iter().map(|c| (c.type_oid, -1)).collect());
+    }
+    let rel = session.catalog()?.relation(relid)?;
+    Some(rel.columns.iter().map(|c| (c.ty, c.typmod)).collect())
+}
+
+/// `record_in` of a composite type: the fields in parentheses with a comma between them, as [`record_out`] writes them. An empty field is null. A field can have double quotes and backslashes, as in `record_out`.
+fn record_in(
+    ty: u32,
+    text: &str,
+    session: &dyn Session,
+    noisy: bool,
+) -> std::result::Result<Value, Failed> {
+    if ty == oid::RECORD {
+        return Err(Failed::Hard(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "input of anonymous composite types is not implemented",
+        )));
+    }
+    let columns = row_columns(ty, session).ok_or_else(|| Failed::Hard(no_input(ty)))?;
+    let malformed = |detail: &str| {
+        Failed::Soft(
+            Error::new(
+                SqlState::INVALID_TEXT_REPRESENTATION,
+                format!("malformed record literal: \"{text}\""),
+            )
+            .with_detail(detail),
+        )
+    };
+    let bytes = text.as_bytes();
+    let mut at = bytes.iter().take_while(|&&b| is_space(b)).count();
+    if bytes.get(at) != Some(&b'(') {
+        return Err(malformed("Missing left parenthesis."));
+    }
+    at += 1;
+    let mut types = Vec::with_capacity(columns.len());
+    let mut values = Vec::with_capacity(columns.len());
+    let mut field = Vec::new();
+    for (i, &(column, typmod)) in columns.iter().enumerate() {
+        if i > 0 {
+            if bytes.get(at) != Some(&b',') {
+                return Err(malformed("Too few columns."));
+            }
+            at += 1;
+        }
+        types.push(column);
+        if matches!(bytes.get(at), Some(b',' | b')')) {
+            values.push(Value::Null);
+            continue;
+        }
+        field.clear();
+        let mut quoted = false;
+        while quoted || !matches!(bytes.get(at), Some(b',' | b')')) {
+            let Some(&b) = bytes.get(at) else {
+                return Err(malformed("Unexpected end of input."));
+            };
+            at += 1;
+            match b {
+                b'\\' => {
+                    let Some(&next) = bytes.get(at) else {
+                        return Err(malformed("Unexpected end of input."));
+                    };
+                    field.push(next);
+                    at += 1;
+                }
+                b'"' if quoted && bytes.get(at) == Some(&b'"') => {
+                    field.push(b'"');
+                    at += 1;
+                }
+                b'"' => quoted = !quoted,
+                _ => field.push(b),
+            }
+        }
+        // The bytes of the field come from the text and split it only at ASCII bytes, so they are UTF-8.
+        let item = String::from_utf8_lossy(&field);
+        values.push(input_value(column, &item, typmod, session, noisy)?);
+    }
+    if bytes.get(at) != Some(&b')') {
+        return Err(malformed("Too many columns."));
+    }
+    at += 1;
+    if bytes[at..].iter().any(|&b| !is_space(b)) {
+        return Err(malformed("Junk after right parenthesis."));
+    }
+    Ok(Value::Record(Box::new(Record::new(types, values))))
+}
+
 /// `isspace` of C in the C locale.
 fn is_space(b: u8) -> bool {
     matches!(b, b' ' | b'\t' | b'\n' | b'\r' | 0x0B | 0x0C)
@@ -594,6 +685,9 @@ fn input_value(
     }
     if let Some(range) = builtin::multirange_range(ty) {
         return multirange_in(range, text, session, noisy);
+    }
+    if is_row_type(ty) {
+        return record_in(ty, text, session, noisy);
     }
     if let Some(kind) = RegKind::from_oid(ty) {
         return match reg::input(kind, text, session)? {

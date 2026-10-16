@@ -949,7 +949,7 @@ pub fn types() -> &'static [TypeRow] {
     &BUILTIN.types
 }
 
-/// The built-in type with this OID, a type that [`add_system_type`] added, or a type that [`use_session_domains`] gave to the thread.
+/// The built-in type with this OID, a type that [`add_system_type`] added, or a type that [`use_session_types`] gave to the thread.
 pub fn type_by_oid(oid: u32) -> Option<&'static TypeRow> {
     BUILTIN
         .type_oid
@@ -959,7 +959,7 @@ pub fn type_by_oid(oid: u32) -> Option<&'static TypeRow> {
         .or_else(|| SESSION.with_borrow(|s| s.types.iter().copied().find(|t| t.oid == oid)))
 }
 
-/// The built-in type with this name in this schema, a type that [`add_system_type`] added, or a type that [`use_session_domains`] gave to the thread.
+/// The built-in type with this name in this schema, a type that [`add_system_type`] added, or a type that [`use_session_types`] gave to the thread.
 pub fn type_by_name(namespace: u32, name: &str) -> Option<&'static TypeRow> {
     let b = &*BUILTIN;
     let builtin = b
@@ -1032,7 +1032,7 @@ pub fn is_system_proc(oid: u32) -> bool {
     !BUILTIN.proc_oid.contains_key(&oid) && system().procs.iter().any(|p| p.oid == oid)
 }
 
-/// The constraints of a domain that [`add_system_domain`] added, or of a domain that [`use_session_domains`] gave to the thread.
+/// The constraints of a domain that [`add_system_domain`] added, or of a domain that [`use_session_types`] gave to the thread.
 pub fn domain_by_oid(oid: u32) -> Option<&'static DomainRow> {
     system()
         .domains
@@ -1042,7 +1042,7 @@ pub fn domain_by_oid(oid: u32) -> Option<&'static DomainRow> {
         .or_else(|| SESSION.with_borrow(|s| s.domains.iter().copied().find(|d| d.oid == oid)))
 }
 
-/// A domain of the catalog of a session, for [`use_session_domains`].
+/// A domain of the catalog of a session, for [`use_session_types`].
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct SessionDomain {
     /// The facts of the rows of the domain and of its array type.
@@ -1053,63 +1053,113 @@ pub struct SessionDomain {
     pub checks: Vec<(String, String)>,
 }
 
-/// The domains of the catalog that the session of the thread uses now.
+/// The row type of a relation of the catalog of a session, for [`use_session_types`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionRowType {
+    pub oid: u32,
+    pub name: String,
+    pub array: u32,
+    pub array_name: String,
+    pub namespace: u32,
+    /// `typrelid`: the relation of the row type.
+    pub relation: u32,
+}
+
+/// A type of the catalog of a session that has rows in the overlay of the thread.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum SessionType {
+    Domain(SessionDomain),
+    Row(SessionRowType),
+}
+
+/// The types of the catalog that the session of the thread uses now.
 #[derive(Default)]
 struct Session {
-    /// The domains as the session gave them.
-    given: Vec<SessionDomain>,
+    /// The types as the session gave them.
+    given: Vec<SessionType>,
     types: Vec<&'static TypeRow>,
     domains: Vec<&'static DomainRow>,
 }
 
 thread_local! {
-    /// A session runs each statement on one thread, so the rows of its domains are the rows of the thread.
+    /// A session runs each statement on one thread, so the rows of its types are the rows of the thread.
     static SESSION: RefCell<Session> = RefCell::new(Session::default());
 }
 
-/// The rows of a domain of [`INTERNED`]: the domain, its array type and its constraints.
-type Interned = (&'static TypeRow, &'static TypeRow, &'static DomainRow);
+/// The rows of a type of [`INTERNED`]: the type, its array type and the constraints of a domain.
+type Interned = (&'static TypeRow, &'static TypeRow, Option<&'static DomainRow>);
 
-/// The rows of each domain that a session used, with the facts that made them. A domain gets its rows once in the process, also when many sessions use it, so the rows live as long as the process, as the built-in rows do.
-static INTERNED: Mutex<Vec<(SessionDomain, Interned)>> = Mutex::new(Vec::new());
+/// The rows of each type that a session used, with the facts that made them. A type gets its rows once in the process, also when many sessions use it, so the rows live as long as the process, as the built-in rows do.
+static INTERNED: Mutex<Vec<(SessionType, Interned)>> = Mutex::new(Vec::new());
 
-/// Gives the domains of the catalog of the session to the thread, so that [`type_by_oid`], [`type_by_name`] and [`domain_by_oid`] find them. The domains come in the order of their OIDs, so the base type of a domain comes before the domain. A domain with a base type that is not known has no rows.
-pub fn use_session_domains(domains: Vec<SessionDomain>) {
-    if SESSION.with_borrow(|s| s.given == domains) {
-        return;
-    }
-    SESSION.set(Session::default());
-    for domain in domains {
-        let interned = INTERNED
-            .lock()
-            .unwrap_or_else(PoisonError::into_inner)
-            .iter()
-            .find(|(facts, _)| *facts == domain)
-            .map(|(_, rows)| *rows);
-        // `domain_rows` reads the base type from the rows of the thread, so it runs with no borrow of them.
-        let rows = interned.or_else(|| {
+/// The rows of a type of a session. `None` if a type that the rows copy is not known.
+fn session_rows(ty: &SessionType) -> Option<Interned> {
+    let leak = |row: TypeRow| -> &'static TypeRow { Box::leak(Box::new(row)) };
+    Some(match ty {
+        SessionType::Domain(domain) => {
             let (row, array) = domain_rows(domain.rows.clone())?;
             let constraints = DomainRow {
                 oid: row.oid,
                 not_null: domain.not_null,
                 checks: domain.checks.clone(),
             };
-            let rows: Interned = (
-                Box::leak(Box::new(row)),
-                Box::leak(Box::new(array)),
-                Box::leak(Box::new(constraints)),
-            );
-            INTERNED.lock().unwrap_or_else(PoisonError::into_inner).push((domain.clone(), rows));
+            (leak(row), leak(array), Some(Box::leak(Box::new(constraints))))
+        }
+        SessionType::Row(new) => {
+            let (row, array) = row_type_rows(new.clone())?;
+            (leak(row), leak(array), None)
+        }
+    })
+}
+
+/// Gives the types of the catalog of the session to the thread, so that [`type_by_oid`], [`type_by_name`] and [`domain_by_oid`] find them. The types come in the order of their OIDs, so the base type of a domain comes before the domain. A type that copies a type that is not known has no rows.
+pub fn use_session_types(types: Vec<SessionType>) {
+    if SESSION.with_borrow(|s| s.given == types) {
+        return;
+    }
+    SESSION.set(Session::default());
+    for ty in types {
+        let interned = INTERNED
+            .lock()
+            .unwrap_or_else(PoisonError::into_inner)
+            .iter()
+            .find(|(facts, _)| *facts == ty)
+            .map(|(_, rows)| *rows);
+        // `domain_rows` reads the base type from the rows of the thread, so it runs with no borrow of them.
+        let rows = interned.or_else(|| {
+            let rows = session_rows(&ty)?;
+            INTERNED.lock().unwrap_or_else(PoisonError::into_inner).push((ty.clone(), rows));
             Some(rows)
         });
         SESSION.with_borrow_mut(|s| {
             if let Some((row, array, constraints)) = rows {
                 s.types.extend([row, array]);
-                s.domains.push(constraints);
+                s.domains.extend(constraints);
             }
-            s.given.push(domain);
+            s.given.push(ty);
         });
     }
+}
+
+/// The rows of the row type of a relation and of its array type, which copy the rows of the row type of `pg_class`, as all row types have the same form.
+fn row_type_rows(new: SessionRowType) -> Option<(TypeRow, TypeRow)> {
+    let template = type_by_oid(catalog("pg_class")?.rowtype_oid)?;
+    let row = TypeRow {
+        oid: new.oid,
+        name: new.name.leak(),
+        namespace: new.namespace,
+        relid: new.relation,
+        array: new.array,
+        ..*template
+    };
+    let array = TypeRow {
+        oid: new.array,
+        name: new.array_name.leak(),
+        namespace: new.namespace,
+        elem: new.oid,
+        ..*type_by_oid(template.array)?
+    };
+    Some((row, array))
 }
 
 /// The OID of `_int4`, the template of the array type of a domain over a type with no array type.

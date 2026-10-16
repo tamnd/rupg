@@ -442,6 +442,7 @@ impl Connection {
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
+                    Node::CompositeTypeStmt(_) => CommandTag::CreateType,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::CommentStmt(_) => CommandTag::Comment,
                     Node::DropStmt(stmt) => match stmt.removeType {
@@ -2508,6 +2509,12 @@ mod tests {
     #[test]
     fn domain_user() {
         big_stack(|| script(include_str!("connection/domain_user.test")));
+    }
+
+    /// `CREATE TYPE` for a composite type: the rows of `pg_type`, `pg_class` and `pg_attribute`, the casts of `ROW` values and of text to the type, the errors of a bad count of columns and of a malformed literal, `pg_input_is_valid`, a nested composite type, comparisons and `ORDER BY`, the selection of a field, the row type of a table, and `DROP TYPE`. `connection/comptype.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn comptype() {
+        big_stack(|| script(include_str!("connection/comptype.test")));
     }
 
     /// The functions in SQL of `information_schema` that have a `RETURN` body, such as `_pg_char_max_length`: the rows of `pg_proc` and `pg_depend` with the OIDs of PostgreSQL, `pg_get_function_arguments` and `pg_get_function_result`, the results for many types and type modifiers and for the columns of a table, a call with and without the schema in `search_path`, and the errors of a bad argument. Also the shift operators `<<` and `>>` of the integer types, which the bodies use. `connection/sql_functions.test` is the output of PostgreSQL 19 for the same script in a new database.

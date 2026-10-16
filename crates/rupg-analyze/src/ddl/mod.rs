@@ -61,6 +61,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::IndexStmt(_)
             | Node::CreateSchemaStmt(_)
             | Node::CreateDomainStmt(_)
+            | Node::CompositeTypeStmt(_)
             | Node::ViewStmt(_)
             | Node::CommentStmt(_)
             | Node::CreateSeqStmt(_)
@@ -114,6 +115,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
         Node::ViewStmt(view) => definer.create_view(view, text),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
+        Node::CompositeTypeStmt(stmt) => definer.create_composite_type(stmt),
         Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
         Node::CommentStmt(comment) => definer.comment(comment),
         Node::DropStmt(drop) => definer.drop(drop),
@@ -442,6 +444,7 @@ impl Definer<'_, '_> {
                 Some(RelKind::Sequence) => b'S',
                 Some(RelKind::Toast) => b't',
                 Some(RelKind::View) => b'v',
+                Some(RelKind::Composite) => b'c',
                 _ => b'r',
             },
             Found::Builtin(row) => row.kind,

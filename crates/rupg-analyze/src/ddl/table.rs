@@ -5,8 +5,8 @@ use rupg_catalog::{Column, MAX_COLUMNS, NewRelation, SequenceData, SequenceInfo}
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
-    CollateClause, ColumnDef, ConstrType, Constraint, CreateStmt, Equal, IndexElem, IndexStmt,
-    Node, OnCommitAction, RangeVar, TypeName,
+    CollateClause, ColumnDef, CompositeTypeStmt, ConstrType, Constraint, CreateStmt, Equal,
+    IndexElem, IndexStmt, Node, OnCommitAction, RangeVar, TypeName,
 };
 use rupg_types::{Value, oid};
 
@@ -473,6 +473,81 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
+    /// `DefineCompositeType`, then `DefineRelation` for the relation of the type. The errors have no place, as `DefineCompositeType` gives no parse state.
+    pub(super) fn create_composite_type(&mut self, stmt: &CompositeTypeStmt) -> Result<()> {
+        let rv = stmt.typevar.as_deref().cloned().unwrap_or_default();
+        let namespace = self.creation_namespace(&rv).map_err(|e| e.with_position(None))?;
+        let name = relname(&rv).to_string();
+        // `moveArrayTypeName` moves an array type that a type made out of the way, so only another type is a conflict.
+        let user = self.catalog.type_by_name(namespace, &name).map(|t| (t.oid, t.element));
+        let old = user.or_else(|| builtin::type_by_name(namespace, &name).map(|t| (t.oid, t.elem)));
+        let is_auto_array = |(ty, element): (u32, u32)| {
+            element != 0
+                && (self.catalog.type_by_oid(element).is_some_and(|e| e.array == ty)
+                    || types::row(element).is_some_and(|e| e.array == ty))
+        };
+        if old.is_some_and(|old| !is_auto_array(old)) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("type \"{name}\" already exists"),
+            ));
+        }
+        let defs: Vec<&ColumnDef> = stmt
+            .coldeflist
+            .iter()
+            .flatten()
+            .filter_map(|n| match n {
+                Node::ColumnDef(def) => Some(&**def),
+                _ => None,
+            })
+            .collect();
+        if defs.len() > MAX_COLUMNS {
+            return Err(Error::new(
+                SqlState::TOO_MANY_COLUMNS,
+                format!("tables can have at most {MAX_COLUMNS} columns"),
+            ));
+        }
+        let column_name = |def: &ColumnDef| def.colname.clone().unwrap_or_default();
+        for (i, def) in defs.iter().enumerate() {
+            let name = column_name(def);
+            if defs[..i].iter().any(|d| column_name(d) == name) {
+                return Err(Error::new(
+                    SqlState::DUPLICATE_COLUMN,
+                    format!("column \"{name}\" specified more than once"),
+                ));
+            }
+        }
+        let mut columns = Vec::with_capacity(defs.len());
+        for def in defs {
+            let mut type_name = def.typeName.as_deref().cloned().unwrap_or_default();
+            type_name.location = -1;
+            let (ty, typmod) = self.an.type_name(&type_name)?;
+            let collation = match def.collClause.as_deref() {
+                Some(coll) => {
+                    let collation = self.an.collation_oid(&coll.collname, None)?;
+                    if !types::collatable(ty) {
+                        return Err(Error::new(
+                            SqlState::DATATYPE_MISMATCH,
+                            format!("collations are not supported by type {}", types::name(ty)),
+                        ));
+                    }
+                    collation
+                }
+                None => types::row(ty).map_or(0, |t| t.collation),
+            };
+            let mut column = Column::new(column_name(def), ty, typmod, collation);
+            column.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
+            columns.push(column);
+        }
+        for column in &columns {
+            check_attribute_type(&column.name, column.ty, self.an.env.allow_system_table_mods())?;
+        }
+        self.check_relation_name(namespace, &name)?;
+        let new = NewRelation { namespace, name, owner: self.user, columns };
+        self.catalog.create_composite_type(new)?;
+        Ok(())
+    }
+
     /// The checks of `heap_create_with_catalog` on the name of a new relation: no relation with the name in the schema, no type with the name, and no relation in a system schema. The last check uses one OID, as PostgreSQL gives the relation its OID first.
     pub(super) fn check_relation_name(&mut self, namespace: u32, name: &str) -> Result<()> {
         if self.relation_in(namespace, name).is_some() {
@@ -897,7 +972,7 @@ pub(super) fn constraint_index(
     }
 }
 
-/// `CheckAttributeType`: a column cannot have a pseudo-type, also as the base type of a domain or the element type of an array. `anyarray` allows the type `anyarray`, as `CHKATYPE_ANYARRAY` does when `allow_system_table_mods` is on.
+/// `CheckAttributeType`: a column cannot have a pseudo-type, also as the base type of a domain or the element type of an array. The columns of a composite type passed the check when the type was made. `anyarray` allows the type `anyarray`, as `CHKATYPE_ANYARRAY` does when `allow_system_table_mods` is on.
 pub(crate) fn check_attribute_type(name: &str, ty: u32, anyarray: bool) -> Result<()> {
     let Some(row) = types::row(ty) else { return Ok(()) };
     match row.kind {
@@ -907,7 +982,6 @@ pub(crate) fn check_attribute_type(name: &str, ty: u32, anyarray: bool) -> Resul
             format!("column \"{name}\" has pseudo-type {}", types::name(ty)),
         )),
         b'd' => check_attribute_type(name, row.base, false),
-        b'c' => Err(not_yet("a column of a composite type", None)),
         _ if types::element(ty) != 0 => check_attribute_type(name, types::element(ty), false),
         _ => Ok(()),
     }
