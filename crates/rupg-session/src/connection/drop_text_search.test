@@ -1,0 +1,159 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TEXT SEARCH DICTIONARY d1 (TEMPLATE = simple)
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH DICTIONARY s.d2 (TEMPLATE = simple, ACCEPT = false)
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH CONFIGURATION c1 (PARSER = default)
+CREATE TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION c1 ADD MAPPING FOR asciiword WITH d1
+ALTER TEXT SEARCH CONFIGURATION
+> CREATE TEXT SEARCH CONFIGURATION c2 (COPY = c1)
+CREATE TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION c2 ADD MAPPING FOR word WITH s.d2, d1
+ALTER TEXT SEARCH CONFIGURATION
+> DROP TEXT SEARCH DICTIONARY d1
+ERROR 2BP01 cannot drop text search dictionary d1 because other objects depend on it
+> DROP TEXT SEARCH DICTIONARY s.d2
+ERROR 2BP01 cannot drop text search dictionary s.d2 because other objects depend on it
+> DROP TEXT SEARCH DICTIONARY s.d2 RESTRICT
+ERROR 2BP01 cannot drop text search dictionary s.d2 because other objects depend on it
+> DROP TEXT SEARCH DICTIONARY nope
+ERROR 42704 text search dictionary "nope" does not exist
+> DROP TEXT SEARCH DICTIONARY IF EXISTS nope
+NOTICE 00000 text search dictionary "nope" does not exist, skipping
+DROP TEXT SEARCH DICTIONARY
+> DROP TEXT SEARCH DICTIONARY IF EXISTS nos.nope
+NOTICE 00000 schema "nos" does not exist, skipping
+DROP TEXT SEARCH DICTIONARY
+> DROP TEXT SEARCH DICTIONARY nos.nope
+ERROR 3F000 schema "nos" does not exist
+> DROP TEXT SEARCH DICTIONARY IF EXISTS x.nos.nope
+ERROR 0A000 cross-database references are not implemented: x.nos.nope
+> DROP TEXT SEARCH DICTIONARY IF EXISTS s.nope
+NOTICE 00000 text search dictionary "s.nope" does not exist, skipping
+DROP TEXT SEARCH DICTIONARY
+> DROP TEXT SEARCH DICTIONARY simple
+ERROR 2BP01 cannot drop text search dictionary simple because it is required by the database system
+> DROP TEXT SEARCH DICTIONARY pg_catalog.simple
+ERROR 2BP01 cannot drop text search dictionary simple because it is required by the database system
+> DROP TEXT SEARCH CONFIGURATION simple
+ERROR 2BP01 cannot drop text search configuration simple because it is required by the database system
+> DROP TEXT SEARCH TEMPLATE simple
+ERROR 2BP01 cannot drop text search template simple because it is required by the database system
+> DROP TEXT SEARCH PARSER "default"
+ERROR 2BP01 cannot drop text search parser "default" because it is required by the database system
+> DROP TEXT SEARCH PARSER IF EXISTS nope
+NOTICE 00000 text search parser "nope" does not exist, skipping
+DROP TEXT SEARCH PARSER
+> DROP TEXT SEARCH TEMPLATE IF EXISTS nope
+NOTICE 00000 text search template "nope" does not exist, skipping
+DROP TEXT SEARCH TEMPLATE
+> DROP TEXT SEARCH CONFIGURATION IF EXISTS nope
+NOTICE 00000 text search configuration "nope" does not exist, skipping
+DROP TEXT SEARCH CONFIGURATION
+> DROP TEXT SEARCH TEMPLATE nope
+ERROR 42704 text search template "nope" does not exist
+> DROP TEXT SEARCH CONFIGURATION nope
+ERROR 42704 text search configuration "nope" does not exist
+> DROP TEXT SEARCH PARSER nope
+ERROR 42704 text search parser "nope" does not exist
+> DROP TEXT SEARCH CONFIGURATION c1
+DROP TEXT SEARCH CONFIGURATION
+> SELECT cfgname FROM pg_ts_config WHERE oid >= 16384 ORDER BY 1
+fields cfgname@pg_ts_config.2:19:64:-1
+row c2
+SELECT 1
+> SELECT maptokentype, mapseqno FROM pg_ts_config_map WHERE mapcfg >= 16384 ORDER BY 1, 2
+fields maptokentype@pg_ts_config_map.2:23:4:-1,mapseqno@pg_ts_config_map.3:23:4:-1
+row 1,1
+row 2,1
+row 2,2
+SELECT 3
+> SET search_path = s, public
+SET
+search_path=s, public
+> DROP TEXT SEARCH DICTIONARY d1
+ERROR 2BP01 cannot drop text search dictionary d1 because other objects depend on it
+> RESET search_path
+RESET
+search_path="$user", public
+> DROP TEXT SEARCH DICTIONARY d1 CASCADE
+NOTICE 00000 drop cascades to text search configuration c2
+DROP TEXT SEARCH DICTIONARY
+> SELECT cfgname FROM pg_ts_config WHERE oid >= 16384 ORDER BY 1
+fields cfgname@pg_ts_config.2:19:64:-1
+SELECT 0
+> SELECT dictname FROM pg_ts_dict WHERE oid >= 16384 ORDER BY 1
+fields dictname@pg_ts_dict.2:19:64:-1
+row d2
+SELECT 1
+> SELECT count(*) FROM pg_ts_config_map WHERE mapcfg >= 16384
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TEXT SEARCH CONFIGURATION c3 (PARSER = default)
+CREATE TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION c3 ADD MAPPING FOR asciiword WITH s.d2
+ALTER TEXT SEARCH CONFIGURATION
+> COMMENT ON TEXT SEARCH CONFIGURATION c3 IS 'a config'
+COMMENT
+> DROP SCHEMA s
+ERROR 2BP01 cannot drop schema s because other objects depend on it
+> DROP SCHEMA s CASCADE
+NOTICE 00000 drop cascades to 2 other objects
+DROP SCHEMA
+> SELECT cfgname FROM pg_ts_config WHERE oid >= 16384 ORDER BY 1
+fields cfgname@pg_ts_config.2:19:64:-1
+SELECT 0
+> SELECT count(*) FROM pg_description WHERE objoid >= 16384
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TEXT SEARCH TEMPLATE t1 (LEXIZE = dsimple_lexize, INIT = dsimple_init)
+CREATE TEXT SEARCH TEMPLATE
+> CREATE TEXT SEARCH DICTIONARY d3 (TEMPLATE = t1)
+CREATE TEXT SEARCH DICTIONARY
+> DROP TEXT SEARCH TEMPLATE t1
+ERROR 2BP01 cannot drop text search template t1 because other objects depend on it
+> DROP TEXT SEARCH TEMPLATE t1 CASCADE
+NOTICE 00000 drop cascades to text search dictionary d3
+DROP TEXT SEARCH TEMPLATE
+> SELECT tmplname FROM pg_ts_template WHERE oid >= 16384
+fields tmplname@pg_ts_template.2:19:64:-1
+SELECT 0
+> CREATE TEXT SEARCH DICTIONARY d4 (TEMPLATE = simple)
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH DICTIONARY d5 (TEMPLATE = simple)
+CREATE TEXT SEARCH DICTIONARY
+> DROP TEXT SEARCH DICTIONARY d4, nope
+ERROR 42704 text search dictionary "nope" does not exist
+> DROP TEXT SEARCH DICTIONARY IF EXISTS d4, nope, d5
+NOTICE 00000 text search dictionary "nope" does not exist, skipping
+DROP TEXT SEARCH DICTIONARY
+> SELECT dictname FROM pg_ts_dict WHERE oid >= 16384
+fields dictname@pg_ts_dict.2:19:64:-1
+SELECT 0
+> CREATE TEXT SEARCH CONFIGURATION c4 (PARSER = default)
+CREATE TEXT SEARCH CONFIGURATION
+> BEGIN
+BEGIN
+> DROP TEXT SEARCH CONFIGURATION c4
+DROP TEXT SEARCH CONFIGURATION
+> SELECT cfgname FROM pg_ts_config WHERE oid >= 16384
+fields cfgname@pg_ts_config.2:19:64:-1
+SELECT 0
+> ROLLBACK
+ROLLBACK
+> SELECT cfgname FROM pg_ts_config WHERE oid >= 16384
+fields cfgname@pg_ts_config.2:19:64:-1
+row c4
+SELECT 1
+> DROP TEXT SEARCH CONFIGURATION public.c4
+DROP TEXT SEARCH CONFIGURATION
+> SELECT count(*) FROM pg_depend WHERE objid >= 16384 AND classid IN (3600, 3602, 3764)
+fields count:20:8:-1
+row 0
+SELECT 1

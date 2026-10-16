@@ -1,22 +1,27 @@
-//! The commands of text search of `tsearchcmds.c`: `CREATE TEXT SEARCH TEMPLATE`, `CREATE TEXT SEARCH DICTIONARY`, `CREATE TEXT SEARCH CONFIGURATION`, `ALTER TEXT SEARCH CONFIGURATION` and `COMMENT ON` for these objects. The objects are found by name as `get_ts_template_oid`, `get_ts_parser_oid`, `get_ts_dict_oid` and `get_ts_config_oid` of `namespace.c` find them, in the catalog and in the built-in rows.
+//! The commands of text search of `tsearchcmds.c`: `CREATE TEXT SEARCH TEMPLATE`, `CREATE TEXT SEARCH DICTIONARY`, `CREATE TEXT SEARCH CONFIGURATION`, `ALTER TEXT SEARCH CONFIGURATION`, and `COMMENT ON` and `DROP` for these objects. The objects are found by name as `get_ts_template_oid`, `get_ts_parser_oid`, `get_ts_dict_oid` and `get_ts_config_oid` of `namespace.c` find them, in the catalog and in the built-in rows.
 //!
 //! `CREATE TEXT SEARCH DICTIONARY` runs the init function of the template on the options, as `verify_dictoptions` does. rupg has the init functions of the templates `simple` and `snowball`. A dictionary of another template gives `0A000`. `CREATE TEXT SEARCH PARSER` also gives `0A000`.
 
 use rupg_catalog::{
-    ObjRef, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, TsConfig, TsDictionary,
-    TsMapping, TsTemplate,
+    FIRST_NORMAL_OID, ObjRef, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, TsConfig,
+    TsDictionary, TsMapping, TsTemplate, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::ObjectType;
-use rupg_sql::nodes::{AlterTSConfigType, AlterTSConfigurationStmt, DefElem, DefineStmt, Node};
+use rupg_sql::nodes::{
+    AlterTSConfigType, AlterTSConfigurationStmt, DefElem, DefineStmt, DropStmt, Node,
+};
 use rupg_types::oid;
 
 use super::comment::{name_list, not_owner};
-use super::drop::quote_identifier;
+use super::drop::{builtin_object, quote_identifier};
 use super::{Definer, not_yet};
 use crate::tsdict::{Dictionary, cell_oid, mappings, static_rows, template_init};
 use crate::typename::{names, type_name_text};
+
+/// `BOOTSTRAP_SUPERUSERID`: the owner of the built-in objects.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
 
 /// The OID of the default parser of text search, `default`.
 const DEFAULT_PARSER: u32 = 3722;
@@ -532,6 +537,86 @@ impl Definer<'_, '_> {
             return Err(not_yet("a change of a built-in object of text search", None));
         }
         Ok(())
+    }
+
+    /// The schema, the name and the owner of an object of the kind, of the catalog or built in. A template, a parser and a built-in object have the bootstrap superuser as owner.
+    fn ts_row(&self, kind: Kind, object: u32) -> Option<(u32, String, u32)> {
+        let user = match kind {
+            Kind::Template => {
+                self.catalog.ts_template(object).map(|t| (t.namespace, t.name.clone(), 0))
+            }
+            Kind::Parser => None,
+            Kind::Dictionary => {
+                self.catalog.ts_dictionary(object).map(|d| (d.namespace, d.name.clone(), d.owner))
+            }
+            Kind::Config => {
+                self.catalog.ts_config(object).map(|c| (c.namespace, c.name.clone(), c.owner))
+            }
+        };
+        user.or_else(|| {
+            builtin::named_by_oid(kind.named(), object).map(|r| (r.namespace, r.name.into(), 0))
+        })
+        .map(|(namespace, name, owner)| {
+            (namespace, name, if owner == 0 { BOOTSTRAP_SUPERUSER } else { owner })
+        })
+    }
+
+    /// The objects of `DROP TEXT SEARCH`, as `RemoveObjects` finds them, with the check of `check_object_ownership`. The owner of the schema of an object can also remove it. A name that gives no object gives the notice of `does_not_exist_skipping` with `IF EXISTS`.
+    pub(super) fn find_ts(&mut self, stmt: &DropStmt) -> Result<Vec<ObjRef>> {
+        let Some(kind) = Kind::of(stmt.removeType) else {
+            return Err(Error::internal("not an object of text search"));
+        };
+        let mut objects = Vec::new();
+        for item in stmt.objects.iter().flatten() {
+            let list = name_list(Some(item));
+            let Some(found) = self.ts_lookup(kind, &list, stmt.missing_ok)? else {
+                let schema = match list.as_slice() {
+                    [schema, _] | [_, schema, _] => Some(*schema),
+                    _ => None,
+                };
+                let message = match schema {
+                    Some(schema) if self.an.schema(schema).is_none() => {
+                        format!("schema \"{schema}\" does not exist, skipping")
+                    }
+                    _ => format!("{} \"{}\" does not exist, skipping", kind.word(), list.join(".")),
+                };
+                self.notice(SqlState::SUCCESSFUL_COMPLETION, message);
+                continue;
+            };
+            let (namespace, _, owner) = self.ts_row(kind, found).unwrap_or_default();
+            if !self.is_superuser() && self.schema_owner(namespace) != Some(self.user) {
+                if matches!(kind, Kind::Template | Kind::Parser) {
+                    return Err(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, "must be superuser"));
+                }
+                if owner != self.user {
+                    return Err(not_owner(kind.word(), &list.join(".")));
+                }
+            }
+            let object = ObjRef::new(kind.class(), found);
+            if found < FIRST_NORMAL_OID && !is_pinned(object) {
+                return Err(builtin_object());
+            }
+            objects.push(object);
+        }
+        Ok(objects)
+    }
+
+    /// `getObjectDescription` for an object of text search: the words of its kind and its name, after its schema when the object is not visible.
+    pub(super) fn describe_ts(&self, object: ObjRef) -> String {
+        let kind = match object.class {
+            PG_TS_TEMPLATE => Kind::Template,
+            PG_TS_PARSER => Kind::Parser,
+            PG_TS_DICT => Kind::Dictionary,
+            _ => Kind::Config,
+        };
+        match self.ts_row(kind, object.oid) {
+            Some((namespace, name, _)) => {
+                let shown =
+                    self.qualify(namespace, &name, |ns| self.ts_in(kind, ns, &name).is_some());
+                format!("{} {shown}", kind.word())
+            }
+            None => format!("{} {}", kind.word(), object.oid),
+        }
     }
 
     /// The object of `COMMENT ON TEXT SEARCH`, after the check of its owner.

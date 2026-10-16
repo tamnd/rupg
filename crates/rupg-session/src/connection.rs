@@ -454,6 +454,12 @@ impl Connection {
                         ObjectType::OBJECT_SEQUENCE => CommandTag::DropSequence,
                         ObjectType::OBJECT_TYPE => CommandTag::DropType,
                         ObjectType::OBJECT_DOMAIN => CommandTag::DropDomain,
+                        ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
+                        ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
+                        ObjectType::OBJECT_TSTEMPLATE => CommandTag::DropTextSearchTemplate,
+                        ObjectType::OBJECT_TSCONFIGURATION => {
+                            CommandTag::DropTextSearchConfiguration
+                        }
                         _ => CommandTag::DropTable,
                     },
                     Node::AlterTableStmt(stmt) => match stmt.objtype {
@@ -2536,6 +2542,12 @@ mod tests {
     #[test]
     fn for_update() {
         big_stack(|| script(include_str!("connection/for_update.test")));
+    }
+
+    /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn drop_text_search() {
+        big_stack(|| script(include_str!("connection/drop_text_search.test")));
     }
 
     /// The functions in SQL of `information_schema` that have a `RETURN` body, such as `_pg_char_max_length`: the rows of `pg_proc` and `pg_depend` with the OIDs of PostgreSQL, `pg_get_function_arguments` and `pg_get_function_result`, the results for many types and type modifiers and for the columns of a table, a call with and without the schema in `search_path`, and the errors of a bad argument. Also the shift operators `<<` and `>>` of the integer types, which the bodies use. `connection/sql_functions.test` is the output of PostgreSQL 19 for the same script in a new database.

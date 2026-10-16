@@ -101,6 +101,10 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_SCHEMA
             | ObjectType::OBJECT_TYPE
             | ObjectType::OBJECT_DOMAIN
+            | ObjectType::OBJECT_TSPARSER
+            | ObjectType::OBJECT_TSDICTIONARY
+            | ObjectType::OBJECT_TSTEMPLATE
+            | ObjectType::OBJECT_TSCONFIGURATION
     )
 }
 

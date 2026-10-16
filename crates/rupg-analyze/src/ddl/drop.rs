@@ -1,8 +1,9 @@
-//! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE`, `DROP SCHEMA`, `DROP TYPE` and `DROP DOMAIN`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
+//! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE`, `DROP SCHEMA`, `DROP TYPE`, `DROP DOMAIN` and `DROP TEXT SEARCH`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
-    PG_REWRITE, PG_TRIGGER, PG_TYPE, Refusal, RelKind, Target, flag, is_pinned,
+    PG_REWRITE, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE,
+    Refusal, RelKind, Target, flag, is_pinned,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -116,7 +117,7 @@ pub(super) fn quote_identifier(name: &str) -> String {
 }
 
 /// The error for a built-in object that is not pinned, which rupg cannot remove.
-fn builtin_object() -> Error {
+pub(super) fn builtin_object() -> Error {
     not_yet("DROP of a built-in object", None)
 }
 
@@ -130,6 +131,10 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_VIEW
             | ObjectType::OBJECT_INDEX
             | ObjectType::OBJECT_SEQUENCE => self.find_relations(stmt)?,
+            ObjectType::OBJECT_TSPARSER
+            | ObjectType::OBJECT_TSDICTIONARY
+            | ObjectType::OBJECT_TSTEMPLATE
+            | ObjectType::OBJECT_TSCONFIGURATION => self.find_ts(stmt)?,
             _ => return Err(not_yet("DROP of this kind of object", None)),
         };
         self.perform(&objects, stmt.behavior == DropBehavior::DROP_CASCADE)
@@ -451,6 +456,7 @@ impl Definer<'_, '_> {
                 None => format!("rule {}", object.oid),
             },
             PG_NAMESPACE => format!("schema {}", self.schema_name(object.oid)),
+            PG_TS_PARSER | PG_TS_DICT | PG_TS_TEMPLATE | PG_TS_CONFIG => self.describe_ts(object),
             PG_PROC => match self.catalog.function(object.oid) {
                 Some(function) => {
                     let args: Vec<String> =
@@ -504,7 +510,12 @@ impl Definer<'_, '_> {
     }
 
     /// `quote_qualified_identifier`: the quoted name, after the quoted schema when the object is not visible. `exists(ns)` is true when the schema `ns` has an object with the name. The object is visible when its schema is the first schema of the search path that has an object with the name.
-    fn qualify(&self, namespace: u32, name: &str, exists: impl Fn(u32) -> bool) -> String {
+    pub(super) fn qualify(
+        &self,
+        namespace: u32,
+        name: &str,
+        exists: impl Fn(u32) -> bool,
+    ) -> String {
         let first = self.an.path.iter().copied().find(|&ns| ns == namespace || exists(ns));
         if first == Some(namespace) && namespace != PG_TOAST_NAMESPACE {
             return quote_identifier(name);
