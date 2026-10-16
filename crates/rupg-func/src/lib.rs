@@ -58,6 +58,7 @@ mod tsearch;
 mod tsmatch;
 mod tsparser;
 mod tsquery;
+mod tsrank;
 mod tsvector;
 mod unicode;
 mod updatable;
@@ -436,6 +437,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| tsquery::by_src(src))
         .or_else(|| tsearch::by_src(src))
         .or_else(|| tsmatch::by_src(src))
+        .or_else(|| tsrank::by_src(src))
         .or_else(|| activity::by_src(src))
         .or_else(|| replication::by_src(src))
         .or_else(|| shared::by_src(src))

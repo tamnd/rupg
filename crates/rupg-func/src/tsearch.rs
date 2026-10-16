@@ -1,13 +1,13 @@
-//! The functions of text search that use the parser: `ts_parse` and `ts_token_type` of `wparser.c`, `to_tsvector`, `to_tsquery`, `plainto_tsquery`, `phraseto_tsquery` and `websearch_to_tsquery` of `to_tsany.c` with `parsetext` of `ts_parse.c`, `get_current_ts_config` of `ts_utils.c`, and `ts_match_tq` and `ts_match_tt` of `tsvector_op.c`. A function without a configuration uses the configuration of `default_text_search_config`, as `getTSCurrentConfig` finds it.
+//! The functions of text search that use the parser: `ts_parse` and `ts_token_type` of `wparser.c`, `to_tsvector` for `text`, `json` and `jsonb`, `to_tsquery`, `plainto_tsquery`, `phraseto_tsquery` and `websearch_to_tsquery` of `to_tsany.c` with `parsetext` of `ts_parse.c`, `get_current_ts_config` of `ts_utils.c`, and `ts_match_tq` and `ts_match_tt` of `tsvector_op.c`. A function without a configuration uses the configuration of `default_text_search_config`, as `getTSCurrentConfig` finds it.
 
 use rupg_analyze::tsdict::{self, Config};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::TOKEN_TYPES;
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_types::{
-    Lexeme, QueryItem, RegKind, TSQUERY_AND, TSQUERY_PHRASE, TSVECTOR_MAX_DATA,
-    TSVECTOR_MAX_POSITIONS, TSVECTOR_MAX_WORD, TsQueryMode, TsQueryPush, TypeError, Value,
-    limit_position, ts_compare_string, tsquery_parse_with, tsvector_data_len,
+    JsonItem, JsonToken, JsonTree, Lexeme, QueryItem, RegKind, TSQUERY_AND, TSQUERY_PHRASE,
+    TSVECTOR_MAX_DATA, TSVECTOR_MAX_POSITIONS, TSVECTOR_MAX_WORD, TsQueryMode, TsQueryPush,
+    TypeError, Value, limit_position, ts_compare_string, tsquery_parse_with, tsvector_data_len,
 };
 
 use crate::{Call, Kernel, Session, bad_value, reg, tsparser};
@@ -117,6 +117,124 @@ fn to_tsvector(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let [text] = args else { return Err(bad_value()) };
     let config = current_config(call.session)?;
     to_tsvector_with(call.session, config, text.as_str().ok_or_else(bad_value)?)
+}
+
+/// The kinds of values of `parse_jsonb_index_flags`.
+const JSON_STRING: u8 = 1 << 0;
+const JSON_NUMERIC: u8 = 1 << 1;
+const JSON_BOOL: u8 = 1 << 2;
+const JSON_KEY: u8 = 1 << 3;
+const JSON_ALL: u8 = JSON_STRING | JSON_NUMERIC | JSON_BOOL | JSON_KEY;
+
+/// The hint of the errors for a bad flag.
+const JSON_FLAG_HINT: &str =
+    "Possible values are: \"string\", \"numeric\", \"boolean\", \"key\", and \"all\".";
+
+/// `parse_jsonb_index_flags`: the kinds of values in a `jsonb` array or scalar of the names `string`, `numeric`, `boolean`, `key` and `all`.
+fn json_flags(flags: &str) -> Result<u8> {
+    let tree = JsonTree::parse(flags).map_err(crate::type_error)?;
+    let elems = match tree.item(0) {
+        JsonItem::Object(_) => {
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                "wrong flag type, only arrays and scalars are allowed",
+            ));
+        }
+        JsonItem::Array(elems) => elems.clone(),
+        _ => vec![0],
+    };
+    let mut out = 0;
+    for elem in elems {
+        let name = match tree.item(elem) {
+            JsonItem::String(name) => name,
+            JsonItem::Array(_) | JsonItem::Object(_) => {
+                return Err(Error::internal("unexpected end of flag array"));
+            }
+            _ => {
+                return Err(Error::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    "flag array element is not a string",
+                )
+                .with_hint(JSON_FLAG_HINT));
+            }
+        };
+        out |= match name.to_ascii_lowercase().as_str() {
+            "all" => JSON_ALL,
+            "key" => JSON_KEY,
+            "string" => JSON_STRING,
+            "numeric" => JSON_NUMERIC,
+            "boolean" => JSON_BOOL,
+            _ => {
+                return Err(Error::new(
+                    SqlState::INVALID_PARAMETER_VALUE,
+                    format!("wrong flag in flag array: \"{name}\""),
+                )
+                .with_hint(JSON_FLAG_HINT));
+            }
+        };
+    }
+    Ok(out)
+}
+
+/// `json_to_tsvector_worker` and `jsonb_to_tsvector_worker`: the lexemes of the keys and the scalars of the kinds of `flags`, in the order of the value. A `json` value keeps the order and the duplicate keys of its text, and a `jsonb` value has its keys in order. Each value with lexemes adds one position after its last word, so a phrase does not match across two values.
+fn json_to_tsvector_with(
+    session: &dyn Session,
+    config: u32,
+    json: &str,
+    flags: u8,
+) -> Result<Value> {
+    let tree = JsonTree::parse(json).map_err(crate::type_error)?;
+    let config = tsdict::config(session.catalog(), config)?;
+    let mut parsed = Parsed::default();
+    let mut add = |text: &str| {
+        let before = parsed.words.len();
+        parse_text(session, &config, text, &mut parsed);
+        if parsed.words.len() > before {
+            parsed.pos += 1;
+        }
+    };
+    for token in tree.tokens() {
+        match token {
+            JsonToken::Key(key, _) if flags & JSON_KEY != 0 => add(key),
+            JsonToken::Scalar { node, .. } => match tree.item(node) {
+                JsonItem::String(text) if flags & JSON_STRING != 0 => add(text),
+                JsonItem::Number if flags & JSON_NUMERIC != 0 => {
+                    let node = tree.node(node);
+                    add(&tree.source()[node.start..node.end]);
+                }
+                JsonItem::Bool(value) if flags & JSON_BOOL != 0 => {
+                    add(if *value { "true" } else { "false" });
+                }
+                _ => {}
+            },
+            _ => {}
+        }
+    }
+    Ok(Value::TsVector(make_tsvector(parsed)?))
+}
+
+/// The functions `to_tsvector` and `json_to_tsvector` of `json` and `jsonb`, with a configuration as the first argument or with the configuration of `default_text_search_config`. `to_tsvector` takes the strings, and `json_to_tsvector` takes the kinds of values of its last argument.
+fn json_to_tsvector_kind(call: &Call<'_>, args: &[Value], filter: bool) -> Result<Value> {
+    let (args, flags) = match (filter, args) {
+        (true, [args @ .., flags]) => (args, json_flags(flags.as_str().ok_or_else(bad_value)?)?),
+        _ => (args, JSON_STRING),
+    };
+    let (config, json) = match args {
+        [config, json] => (config.as_oid().ok_or_else(bad_value)?, json),
+        [json] => (current_config(call.session)?, json),
+        _ => return Err(bad_value()),
+    };
+    json_to_tsvector_with(call.session, config, json.as_str().ok_or_else(bad_value)?, flags)
+}
+
+/// `json_string_to_tsvector`, `jsonb_string_to_tsvector` and their forms `_byid`.
+fn json_string_to_tsvector(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    json_to_tsvector_kind(call, args, false)
+}
+
+/// `json_to_tsvector`, `jsonb_to_tsvector` and their forms `_byid`.
+fn json_to_tsvector(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    json_to_tsvector_kind(call, args, true)
 }
 
 /// `get_current_ts_config`: the configuration of `default_text_search_config`.
@@ -299,6 +417,14 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "phraseto_tsquery_byid" | "phraseto_tsquery" => phraseto_tsquery,
         "websearch_to_tsquery_byid" | "websearch_to_tsquery" => websearch_to_tsquery,
         "ts_match_tt" => match_tt,
+        "json_string_to_tsvector_byid"
+        | "json_string_to_tsvector"
+        | "jsonb_string_to_tsvector_byid"
+        | "jsonb_string_to_tsvector" => json_string_to_tsvector,
+        "json_to_tsvector_byid"
+        | "json_to_tsvector"
+        | "jsonb_to_tsvector_byid"
+        | "jsonb_to_tsvector" => json_to_tsvector,
         _ => return None,
     })
 }
