@@ -74,6 +74,7 @@ impl Definer<'_, '_> {
         let mut default_refs = Vec::new();
         let mut saw_default = false;
         let mut null_defined = false;
+        let mut not_null = false;
         for con in &constraints {
             match con.contype {
                 ConstrType::CONSTR_DEFAULT => {
@@ -88,14 +89,34 @@ impl Definer<'_, '_> {
                 }
                 ConstrType::CONSTR_NOTNULL => {
                     if null_defined {
+                        if !not_null {
+                            return Err(syntax_error(
+                                "conflicting NULL/NOT NULL constraints",
+                                con.location,
+                            ));
+                        }
+                        return Err(definition_error(
+                            "redundant NOT NULL constraint definition",
+                            con.location,
+                        ));
+                    }
+                    if con.is_no_inherit {
+                        return Err(definition_error(
+                            "not-null constraints for domains cannot be marked NO INHERIT",
+                            con.location,
+                        ));
+                    }
+                    (not_null, null_defined) = (true, true);
+                }
+                ConstrType::CONSTR_NULL => {
+                    if null_defined && not_null {
                         return Err(syntax_error(
                             "conflicting NULL/NOT NULL constraints",
                             con.location,
                         ));
                     }
-                    return Err(super::not_yet("NOT NULL on a domain", place(con.location)));
+                    (not_null, null_defined) = (false, true);
                 }
-                ConstrType::CONSTR_NULL => null_defined = true,
                 ConstrType::CONSTR_CHECK if con.is_no_inherit => {
                     return Err(definition_error(
                         "check constraints for domains cannot be marked NO INHERIT",
@@ -157,11 +178,17 @@ impl Definer<'_, '_> {
             namespace,
             name: name.to_string(),
             owner: self.user,
-            domain: Domain { base, typmod, collation, default },
+            domain: Domain { base, typmod, collation, default, not_null: false },
         };
         let domain = self.catalog.create_domain(new, &default_refs)?;
-        for con in constraints.iter().filter(|c| c.contype == ConstrType::CONSTR_CHECK) {
-            self.add_domain_check(domain, con, (base, typmod))?;
+        for con in &constraints {
+            match con.contype {
+                ConstrType::CONSTR_CHECK => self.add_domain_check(domain, con, (base, typmod))?,
+                ConstrType::CONSTR_NOTNULL => {
+                    self.catalog.add_domain_not_null(domain, con.conname.as_deref())?;
+                }
+                _ => {}
+            }
         }
         Ok(domain)
     }
@@ -175,7 +202,11 @@ impl Definer<'_, '_> {
         domain: &str,
     ) -> Result<Option<Expr>> {
         let Some(raw) = con.raw_expr.as_ref() else { return Ok(None) };
-        let expr = self.an.with_kind(Kind::ColumnDefault, |an| an.transform(Some(raw)))?;
+        // `DefineDomain` makes the parse state with no query text, so the errors have no place.
+        let expr = self
+            .an
+            .with_kind(Kind::ColumnDefault, |an| an.transform(Some(raw)))
+            .map_err(|e| e.with_position(None))?;
         let from = expr.ty;
         let Some(expr) = self.an.coerce_to_target(expr, base, typmod, Context::Assignment, None)?
         else {
@@ -205,7 +236,11 @@ impl Definer<'_, '_> {
         let old = self.an.domain_value.replace((base, typmod));
         let expr = self.an.with_kind(Kind::Check, |an| an.transform(con.raw_expr.as_ref()));
         self.an.domain_value = old;
-        let expr = self.an.coerce_to_boolean(expr?, "CHECK")?;
+        // `DefineDomain` makes the parse state with no query text, so the errors have no place.
+        let expr = self
+            .an
+            .coerce_to_boolean(expr.map_err(|e| e.with_position(None))?, "CHECK")
+            .map_err(|e| e.with_position(None))?;
         let refs = references(0, &[&expr]);
         let text = crate::node::write(&expr)?;
         self.catalog.add_domain_check(domain, con.conname.as_deref(), text, &refs)?;

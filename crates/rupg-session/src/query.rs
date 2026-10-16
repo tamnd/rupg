@@ -9,7 +9,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use rupg_analyze::{Env, Params};
-use rupg_catalog::{Catalog, SequenceData};
+use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, SequenceData};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::{AdvisoryLock, Backend, Client, Randomness, Sequences};
@@ -120,6 +120,35 @@ pub(crate) struct Reader<'a> {
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
 type ZoneOf = std::result::Result<Rc<Arc<tz::Zone>>, String>;
 
+/// Gives the domains of the catalog to the thread, so that the lookups of the types by OID and by name find them, as the syscache of PostgreSQL finds the rows of `pg_type`.
+fn use_domains(catalog: &Catalog) {
+    let domains = catalog
+        .types()
+        .filter(|ty| ty.oid >= FIRST_NORMAL_OID)
+        .filter_map(|ty| {
+            let domain = ty.domain.as_ref()?;
+            let array = catalog.type_by_oid(ty.array)?;
+            let checks = catalog
+                .constraints_of_domain(ty.oid)
+                .filter(|c| c.kind == ConKind::Check)
+                .map(|c| (c.name.clone(), c.expr.clone().unwrap_or_default()))
+                .collect();
+            let rows = builtin::NewDomainRows {
+                oid: ty.oid,
+                name: ty.name.clone(),
+                array: array.oid,
+                array_name: array.name.clone(),
+                namespace: ty.namespace,
+                base: domain.base,
+                typmod: domain.typmod,
+                collation: domain.collation,
+            };
+            Some(builtin::SessionDomain { rows, not_null: domain.not_null, checks })
+        })
+        .collect();
+    builtin::use_session_domains(domains);
+}
+
 impl<'a> Reader<'a> {
     pub(crate) fn new(
         settings: &'a RefCell<Settings>,
@@ -132,6 +161,7 @@ impl<'a> Reader<'a> {
     ) -> Reader<'a> {
         let name = settings.borrow().get("TimeZone").unwrap_or_else(|| "UTC".to_owned());
         let zone = session_zone(&name);
+        use_domains(&catalog);
         Reader {
             settings,
             user,

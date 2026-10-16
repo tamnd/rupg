@@ -487,8 +487,29 @@ fn set_rows(op: &SetOp, leaf: &mut Leaf<'_>, session: &dyn Session) -> Result<Ro
 /// The rows of a query.
 type Rows = Vec<Vec<Value>>;
 
-/// The name and the expression of each check constraint of a domain.
-type Checks = Rc<Vec<(String, Expr)>>;
+/// The constraints of a domain and of the domains below it, as `DomainConstraintCache` keeps them.
+#[derive(Debug, Default)]
+struct DomainChecks {
+    /// A domain of the stack has a not-null constraint.
+    not_null: bool,
+    /// The name and the expression of each check constraint.
+    checks: Vec<(String, Expr)>,
+}
+
+type Checks = Rc<DomainChecks>;
+
+/// The domains of a domain and of the domains below it, from the top. A type that is not a domain gives no domains.
+fn domain_stack(domain: u32) -> impl Iterator<Item = u32> {
+    std::iter::successors(Some(domain), |&ty| builtin::type_by_oid(ty).map(|row| row.base))
+        .take_while(|&ty| builtin::type_by_oid(ty).is_some_and(|row| row.kind == b'd'))
+}
+
+/// True when a domain or a domain below it has a constraint, so that the cast to the domain must run its checks.
+pub(crate) fn has_domain_constraints(domain: u32) -> bool {
+    domain_stack(domain)
+        .filter_map(builtin::domain_by_oid)
+        .any(|row| row.not_null || !row.checks.is_empty())
+}
 
 /// The body of each function in SQL, by the OID of the function and the types of the arguments of the call, or `None` for a function of the catalog that is not in SQL.
 type Bodies = Rc<RefCell<Vec<((u32, Vec<u32>), Option<Rc<Body>>)>>>;
@@ -511,19 +532,23 @@ struct Cache {
 }
 
 impl Cache {
-    /// `load_domaintype_info`: the check constraints of a domain, in the order of their names.
+    /// `load_domaintype_info`: the constraints of a domain and of the domains below it. The checks of a domain below come first, and the checks of one domain come in the order of their names.
     fn domain_checks(&self, domain: u32) -> Result<Checks> {
         if let Some((_, checks)) = self.domains.borrow().iter().find(|(d, _)| *d == domain) {
             return Ok(Rc::clone(checks));
         }
-        let mut checks = Vec::new();
-        if let Some(row) = builtin::domain_by_oid(domain) {
+        let mut all = DomainChecks::default();
+        for row in domain_stack(domain).filter_map(builtin::domain_by_oid) {
+            all.not_null |= row.not_null;
+            let mut checks = Vec::new();
             for (name, text) in &row.checks {
                 checks.push((name.clone(), rupg_analyze::node::read(text)?));
             }
+            checks.sort_by(|a, b| a.0.cmp(&b.0));
+            checks.append(&mut all.checks);
+            all.checks = checks;
         }
-        checks.sort_by(|a, b| a.0.cmp(&b.0));
-        let checks = Rc::new(checks);
+        let checks = Rc::new(all);
         self.domains.borrow_mut().push((domain, Rc::clone(&checks)));
         Ok(checks)
     }
@@ -1637,7 +1662,17 @@ impl<'a> Eval<'a> {
 
     /// The error of the first check constraint of the domain that gives false for the value, or `None` when no check gives false.
     fn domain_failure(&mut self, domain: u32, value: &Value) -> Result<Option<Error>> {
-        for (name, check) in self.cache.domain_checks(domain)?.iter() {
+        let checks = self.cache.domain_checks(domain)?;
+        if checks.not_null && value.is_null() {
+            return Ok(Some(Error::new(
+                SqlState::NOT_NULL_VIOLATION,
+                format!(
+                    "domain {} does not allow null values",
+                    rupg_func::type_message_name(domain, self.session)
+                ),
+            )));
+        }
+        for (name, check) in &checks.checks {
             self.domain_value.push(value.clone());
             let result = self.eval(check);
             self.domain_value.pop();

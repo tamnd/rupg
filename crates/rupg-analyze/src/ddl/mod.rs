@@ -1,4 +1,4 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH` and `ALTER TEXT SEARCH CONFIGURATION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner` and the functions of `tsearchcmds.c` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH` and `ALTER TEXT SEARCH CONFIGURATION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner` and the functions of `tsearchcmds.c` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`, so [`is_definition`] does not list it. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
 mod comment;
@@ -60,6 +60,7 @@ pub fn is_definition(stmt: &Node) -> bool {
         Node::CreateStmt(_)
             | Node::IndexStmt(_)
             | Node::CreateSchemaStmt(_)
+            | Node::CreateDomainStmt(_)
             | Node::ViewStmt(_)
             | Node::CommentStmt(_)
             | Node::CreateSeqStmt(_)
@@ -93,6 +94,8 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_INDEX
             | ObjectType::OBJECT_SEQUENCE
             | ObjectType::OBJECT_SCHEMA
+            | ObjectType::OBJECT_TYPE
+            | ObjectType::OBJECT_DOMAIN
     )
 }
 

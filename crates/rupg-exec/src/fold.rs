@@ -449,10 +449,10 @@ impl<'a> Fold<'a> {
                 let arg = self.expr(arg)?;
                 self.coerce(with(expr, ExprKind::CoerceViaIo(Box::new(arg), *form)))
             }
-            // A domain with no check constraint is a relabel of the value. The checks of any other domain run with the query, as in PostgreSQL.
+            // A domain with no constraint is a relabel of the value. The checks of any other domain run with the query, as in PostgreSQL.
             ExprKind::CoerceToDomain(arg, form) => {
                 let arg = self.expr(arg)?;
-                let checked = builtin::domain_by_oid(expr.ty).is_some_and(|d| !d.checks.is_empty());
+                let checked = crate::has_domain_constraints(expr.ty);
                 Ok(match arg.kind {
                     ExprKind::Const(v) if !checked => {
                         with(expr, ExprKind::Const(relabel(v, expr.ty)))

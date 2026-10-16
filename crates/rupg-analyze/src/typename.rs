@@ -161,6 +161,15 @@ impl Analyzer<'_> {
         Ok((row.oid, typmod))
     }
 
+    /// `LookupTypeName` for a statement that names a type as an object, such as `DROP TYPE`: the OID of the type, or `None` when the schema has no type with the name. The type modifiers do not count, and the errors have no position.
+    pub(crate) fn lookup_type_name(&self, name: &TypeName) -> Result<Option<u32>> {
+        let mut row = self.lookup_type(&names(&name.names), None)?;
+        if !name.arrayBounds.is_empty() {
+            row = row.and_then(|element| self.type_by_oid(element.array));
+        }
+        Ok(row.map(|row| row.oid))
+    }
+
     /// The type with this OID, a built-in type or a type of the catalog.
     fn type_by_oid(&self, oid: u32) -> Option<Found> {
         if oid == 0 {

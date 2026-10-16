@@ -342,6 +342,9 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
+/// The OID of `_int4`, the template of the array type of a domain over a type with no array type.
+const INT4_ARRAY: u32 = 1007;
+
 /// The static row of `pg_type` with the OID.
 fn type_row(table: &Table, type_oid: u32, session: &dyn Session) -> Result<usize> {
     for row in 0..table.len {
@@ -358,20 +361,36 @@ fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Resu
     let array_type = builtin::type_by_oid(row_type).map_or(0, |t| t.array);
     let (row_template, array_template) =
         (type_row(table, row_type, session)?, type_row(table, array_type, session)?);
-    let mut rows = Vec::new();
+    let mut rows: Vec<Row<'a>> = Vec::new();
+    // A base type of the catalog comes before its domain, so the row of the domain can copy its row.
+    let copy =
+        |rows: &[Row<'a>], type_oid: u32| match catalog.types().position(|t| t.oid == type_oid) {
+            Some(i) if i < rows.len() => Ok(Row { table, values: rows[i].values.clone() }),
+            _ => Row::copy(table, type_row(table, type_oid, session)?, session),
+        };
     for ty in catalog.types() {
         let element_domain = catalog.type_by_oid(ty.element).and_then(|t| t.domain.as_ref());
-        let template = if let Some(domain) = &ty.domain {
-            type_row(table, domain.base, session)?
+        let mut row = if let Some(domain) = &ty.domain {
+            copy(&rows, domain.base)?
         } else if let Some(domain) = element_domain {
-            let base_array = builtin::type_by_oid(domain.base).map_or(0, |t| t.array);
-            type_row(table, base_array, session)?
+            let base_array = match catalog.type_by_oid(domain.base) {
+                Some(base) => base.array,
+                None => builtin::type_by_oid(domain.base).map_or(0, |t| t.array),
+            };
+            if base_array == 0 {
+                // A base type with no array type, such as an array type, gives the array type of the domain the alignment of `DefineDomain`.
+                let double = builtin::type_by_oid(domain.base).is_some_and(|t| t.align == b'd');
+                let mut row = copy(&rows, INT4_ARRAY)?;
+                row.set("typalign", code(if double { 'd' } else { 'i' }));
+                row
+            } else {
+                copy(&rows, base_array)?
+            }
         } else if ty.relation == 0 {
-            array_template
+            Row::copy(table, array_template, session)?
         } else {
-            row_template
+            Row::copy(table, row_template, session)?
         };
-        let mut row = Row::copy(table, template, session)?;
         if let Some(domain) = &ty.domain {
             let default = match &domain.default {
                 Some(text) => Value::text(rupg_func::deparse_expression(text, session)?),
@@ -384,7 +403,7 @@ fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Resu
                 .set("typreceive", oid(builtin::DOMAIN_RECV))
                 .set("typmodin", oid(0))
                 .set("typmodout", oid(0))
-                .set("typnotnull", Value::Bool(false))
+                .set("typnotnull", Value::Bool(domain.not_null))
                 .set("typbasetype", oid(domain.base))
                 .set("typtypmod", Value::Int4(domain.typmod))
                 .set("typndims", Value::Int4(0))

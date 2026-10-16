@@ -674,6 +674,7 @@ fn add_system_domain(catalog: &Catalog, name: &str) -> Result<()> {
     checks.sort_by_key(|c| c.oid);
     builtin::add_system_domain(builtin::DomainRow {
         oid: ty.oid,
+        not_null: domain.not_null,
         checks: checks
             .iter()
             .map(|c| (c.name.clone(), c.expr.clone().unwrap_or_default()))

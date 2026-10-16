@@ -1,0 +1,202 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE DOMAIN posint AS integer CHECK (VALUE > 0)
+CREATE DOMAIN
+> CREATE DOMAIN posint AS integer
+ERROR 42710 type "posint" already exists
+> SELECT 5::posint, (5::posint + 1), pg_typeof(5::posint)
+fields posint:23:4:-1,?column?:23:4:-1,pg_typeof:2206:4:-1
+row 5,6,posint
+SELECT 1
+> SELECT (-1)::posint
+fields posint:23:4:-1
+ERROR 23514 value for domain posint violates check constraint "posint_check"
+> SELECT NULL::posint IS NULL
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> CREATE DOMAIN nn_text text NOT NULL DEFAULT 'x' COLLATE "C"
+CREATE DOMAIN
+> SELECT NULL::nn_text
+fields nn_text:25:-1:-1
+ERROR 23502 domain nn_text does not allow null values
+> SELECT 'abc'::nn_text, pg_typeof('abc'::nn_text)
+fields nn_text:25:-1:-1,pg_typeof:2206:4:-1
+row abc,nn_text
+SELECT 1
+> CREATE DOMAIN short varchar(3)
+CREATE DOMAIN
+> SELECT 'abcdef'::short
+fields short:1043:-1:7
+row abc
+SELECT 1
+> SELECT 'ab'::short, 'abcd'::varchar(10)::short
+fields short:1043:-1:7,short:1043:-1:7
+row ab,abc
+SELECT 1
+> CREATE DOMAIN even AS posint CONSTRAINT is_even CHECK (VALUE % 2 = 0)
+CREATE DOMAIN
+> SELECT 4::even
+fields even:23:4:-1
+row 4
+SELECT 1
+> SELECT 3::even
+fields even:23:4:-1
+ERROR 23514 value for domain even violates check constraint "is_even"
+> SELECT (-2)::even
+fields even:23:4:-1
+ERROR 23514 value for domain even violates check constraint "posint_check"
+> SELECT typname, typtype, typlen, typbyval, typcategory, typdelim, typinput, typoutput, typreceive, typsend, typalign, typstorage, typnotnull, typbasetype::regtype, typtypmod, typndims, typcollation::regcollation, typdefault, typdefaultbin IS NULL AS no_default, typarray::regtype, typelem::regtype FROM pg_type WHERE typnamespace = 'public'::regnamespace ORDER BY typname
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typlen@pg_type.5:21:2:-1,typbyval@pg_type.6:16:1:-1,typcategory@pg_type.8:18:1:-1,typdelim@pg_type.11:18:1:-1,typinput@pg_type.16:24:4:-1,typoutput@pg_type.17:24:4:-1,typreceive@pg_type.18:24:4:-1,typsend@pg_type.19:24:4:-1,typalign@pg_type.23:18:1:-1,typstorage@pg_type.24:18:1:-1,typnotnull@pg_type.25:16:1:-1,typbasetype:2206:4:-1,typtypmod@pg_type.27:23:4:-1,typndims@pg_type.28:23:4:-1,typcollation:4191:4:-1,typdefault@pg_type.31:25:-1:-1,no_default:16:1:-1,typarray:2206:4:-1,typelem:2206:4:-1
+row _even,b,-1,f,A,,,array_in,array_out,array_recv,array_send,i,x,f,-,-1,0,-,NULL,t,-,even
+row _nn_text,b,-1,f,A,,,array_in,array_out,array_recv,array_send,i,x,f,-,-1,0,"C",NULL,t,-,nn_text
+row _posint,b,-1,f,A,,,array_in,array_out,array_recv,array_send,i,x,f,-,-1,0,-,NULL,t,-,posint
+row _short,b,-1,f,A,,,array_in,array_out,array_recv,array_send,i,x,f,-,-1,0,"default",NULL,t,-,short
+row even,d,4,t,N,,,domain_in,int4out,domain_recv,int4send,i,p,f,posint,-1,0,-,NULL,t,even[],-
+row nn_text,d,-1,f,S,,,domain_in,textout,domain_recv,textsend,i,x,t,text,-1,0,"C",'x'::text,f,nn_text[],-
+row posint,d,4,t,N,,,domain_in,int4out,domain_recv,int4send,i,p,f,integer,-1,0,-,NULL,t,posint[],-
+row short,d,-1,f,S,,,domain_in,varcharout,domain_recv,varcharsend,i,x,f,character varying,7,0,"default",NULL,t,short[],-
+SELECT 8
+> SELECT conname, contype, contypid::regtype, pg_get_constraintdef(oid), convalidated FROM pg_constraint WHERE connamespace = 'public'::regnamespace ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,contypid:2206:4:-1,pg_get_constraintdef:25:-1:-1,convalidated@pg_constraint.8:16:1:-1
+row is_even,c,even,CHECK ((((VALUE)::integer % 2) = 0)),t
+row nn_text_not_null,n,nn_text,NOT NULL,t
+row posint_check,c,posint,CHECK ((VALUE > 0)),t
+SELECT 3
+> SELECT domain_name, data_type, character_maximum_length, domain_default, collation_name FROM information_schema.domains WHERE domain_schema = 'public' ORDER BY domain_name
+fields domain_name@information_schema.domains.3:19:64:-1,data_type@information_schema.domains.4:1043:-1:-1,character_maximum_length@information_schema.domains.5:23:4:-1,domain_default@information_schema.domains.19:1043:-1:-1,collation_name@information_schema.domains.12:19:64:-1
+row even,USER-DEFINED,NULL,NULL,NULL
+row nn_text,text,NULL,'x'::text,C
+row posint,integer,NULL,NULL,NULL
+row short,character varying,3,NULL,NULL
+SELECT 4
+> SELECT constraint_name, domain_name FROM information_schema.domain_constraints WHERE domain_schema = 'public' ORDER BY constraint_name
+fields constraint_name@information_schema.domain_constraints.3:19:64:-1,domain_name@information_schema.domain_constraints.6:19:64:-1
+row is_even,even
+row nn_text_not_null,nn_text
+row posint_check,posint
+SELECT 3
+> SELECT format_type('posint'::regtype, NULL), format_type('short'::regtype, -1), 'even[]'::regtype
+fields format_type:25:-1:-1,format_type:25:-1:-1,regtype:2206:4:-1
+row posint,short,even[]
+SELECT 1
+> SELECT ARRAY[1, 2]::posint[]::text, pg_typeof(ARRAY[1, 2]::posint[])
+fields array:25:-1:-1,pg_typeof:2206:4:-1
+row {1,2},posint[]
+SELECT 1
+> SELECT ARRAY[1, -2]::posint[]::text
+fields array:25:-1:-1
+ERROR 23514 value for domain posint violates check constraint "posint_check"
+> CREATE TABLE t (a posint, b even DEFAULT 2, c nn_text)
+CREATE TABLE
+> SELECT attname, atttypid::regtype, atttypmod, attnotnull FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,atttypmod@pg_attribute.6:23:4:-1,attnotnull@pg_attribute.12:16:1:-1
+row a,posint,-1,f
+row b,even,-1,f
+row c,nn_text,-1,f
+SELECT 3
+> DROP DOMAIN posint
+ERROR 2BP01 cannot drop type posint because other objects depend on it
+> DROP DOMAIN even
+ERROR 2BP01 cannot drop type even because other objects depend on it
+> DROP TABLE t
+DROP TABLE
+> DROP DOMAIN posint CASCADE
+NOTICE 00000 drop cascades to type even
+DROP DOMAIN
+> SELECT typname FROM pg_type WHERE typnamespace = 'public'::regnamespace ORDER BY typname
+fields typname@pg_type.2:19:64:-1
+row _nn_text
+row _short
+row nn_text
+row short
+SELECT 4
+> DROP DOMAIN nope
+ERROR 42704 type "nope" does not exist
+> DROP DOMAIN IF EXISTS nope
+NOTICE 00000 type "nope" does not exist, skipping
+DROP DOMAIN
+> DROP DOMAIN IF EXISTS nope.nope
+NOTICE 00000 schema "nope" does not exist, skipping
+DROP DOMAIN
+> DROP DOMAIN nope.nope
+ERROR 3F000 schema "nope" does not exist
+> DROP TYPE IF EXISTS nope
+NOTICE 00000 type "nope" does not exist, skipping
+DROP TYPE
+> DROP DOMAIN integer
+ERROR 42809 "pg_catalog.int4" is not a domain
+> DROP TYPE integer
+ERROR 2BP01 cannot drop type integer because it is required by the database system
+> DROP TYPE _short
+ERROR 2BP01 cannot drop type short[] because type short requires it
+> DROP TYPE short[]
+ERROR 2BP01 cannot drop type short[] because type short requires it
+> DROP DOMAIN IF EXISTS nope, short
+NOTICE 00000 type "nope" does not exist, skipping
+DROP DOMAIN
+> SELECT typname FROM pg_type WHERE typnamespace = 'public'::regnamespace ORDER BY typname
+fields typname@pg_type.2:19:64:-1
+row _nn_text
+row nn_text
+SELECT 2
+> DROP TYPE nn_text
+DROP TYPE
+> SELECT count(*) FROM pg_type WHERE typnamespace = 'public'::regnamespace
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE DOMAIN d1 AS int CHECK (VALUE > 0) CHECK (VALUE < 10)
+CREATE DOMAIN
+> SELECT conname FROM pg_constraint WHERE contypid = 'd1'::regtype ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1
+row d1_check
+row d1_check1
+SELECT 2
+> CREATE DOMAIN d2 AS d1[]
+CREATE DOMAIN
+> CREATE DOMAIN d3 AS int[] CHECK (array_length(VALUE, 1) = 2)
+CREATE DOMAIN
+> SELECT '{1,2}'::d3, pg_typeof('{1,2}'::d3)
+fields d3:1007:-1:-1,pg_typeof:2206:4:-1
+row {1,2},d3
+SELECT 1
+> SELECT '{1,2,3}'::d3
+fields d3:1007:-1:-1
+ERROR 23514 value for domain d3 violates check constraint "d3_check"
+> CREATE DOMAIN d4 AS pg_catalog.int4 NULL
+CREATE DOMAIN
+> CREATE DOMAIN d5 AS int NULL NOT NULL
+ERROR 42601 conflicting NULL/NOT NULL constraints at 30
+> CREATE DOMAIN d6 AS int CHECK (VALUE > 0) NO INHERIT
+ERROR 42P17 check constraints for domains cannot be marked NO INHERIT at 25
+> CREATE DOMAIN d7 AS anyelement
+ERROR 42804 "anyelement" is not a valid base type for a domain at 21
+> CREATE DOMAIN d8 AS nope
+ERROR 42704 type "nope" does not exist at 21
+> CREATE DOMAIN nope.d9 AS int
+ERROR 3F000 schema "nope" does not exist
+> CREATE DOMAIN d10 AS int DEFAULT 'abc'
+ERROR 22P02 invalid input syntax for type integer: "abc" at 34
+> CREATE DOMAIN d11 AS int CHECK (nope > 0)
+ERROR 42703 column "nope" does not exist
+> CREATE DOMAIN d12 AS int COLLATE "C"
+ERROR 42804 collations are not supported by type integer at 22
+> BEGIN
+BEGIN
+> CREATE DOMAIN d13 AS int
+CREATE DOMAIN
+> SELECT 1::d13
+fields d13:23:4:-1
+row 1
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT 1::d13
+ERROR 42704 type "d13" does not exist at 11
+> DROP DOMAIN d1, d3, d4
+ERROR 2BP01 cannot drop desired object(s) because other objects depend on them
+> SELECT count(*) FROM pg_type WHERE typnamespace = 'public'::regnamespace
+fields count:20:8:-1
+row 8
+SELECT 1

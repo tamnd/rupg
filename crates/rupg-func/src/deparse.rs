@@ -924,6 +924,8 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
                 out.push_str(" NO INHERIT");
             }
         }
+        // The `NOT NULL` constraint of a domain has no column.
+        ConKind::NotNull if con.domain != 0 => out.push_str("NOT NULL"),
         ConKind::NotNull => {
             out.push_str(&format!("NOT NULL {}", column_list(relation()?, &con.keys[..1])?));
             if con.no_inherit {
