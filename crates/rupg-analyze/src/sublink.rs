@@ -54,9 +54,7 @@ impl Analyzer<'_> {
             SubLinkType::ANY_SUBLINK => SubLinkKind::Any,
             SubLinkType::EXPR_SUBLINK => SubLinkKind::Expr,
             SubLinkType::ARRAY_SUBLINK => SubLinkKind::Array,
-            SubLinkType::ROWCOMPARE_SUBLINK => {
-                return Err(not_yet("a row comparison with a subquery", at));
-            }
+            SubLinkType::ROWCOMPARE_SUBLINK => SubLinkKind::RowCompare,
             _ => return Err(not_yet("this kind of subquery", at)),
         };
         let query = self.sub_analyze(s.subselect.as_ref())?;
@@ -87,7 +85,7 @@ impl Analyzer<'_> {
                     (array, typmod, None)
                 }
             }
-            SubLinkKind::Any | SubLinkKind::All => {
+            SubLinkKind::Any | SubLinkKind::All | SubLinkKind::RowCompare => {
                 let left = match &s.testexpr {
                     Some(Node::RowExpr(r)) => self.transform_list(&r.args)?,
                     node => vec![self.transform(node.as_ref())?],

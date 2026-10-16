@@ -101,7 +101,7 @@ impl Subscript {
 #[derive(Clone, Debug, PartialEq)]
 pub struct SubLink {
     pub kind: SubLinkKind,
-    /// `testexpr`: for `ANY` and `ALL`, the test of each row of the subquery. It compares the left side with [`ExprKind::SubColumn`].
+    /// `testexpr`: for `ANY`, `ALL` and a row comparison, the test of each row of the subquery. It compares the left side with [`ExprKind::SubColumn`].
     pub test: Option<Expr>,
     pub query: Query,
 }
@@ -119,6 +119,8 @@ pub enum SubLinkKind {
     Expr,
     /// `ARRAY(SELECT ...)`, which gives the values of the one column as an array.
     Array,
+    /// `(a, b) op (SELECT ...)`, which gives the result of the test on the one row.
+    RowCompare,
 }
 
 /// A column of a relation of `FROM`.

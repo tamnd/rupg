@@ -1,0 +1,137 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW t AS SELECT * FROM (VALUES (1, 'x'), (2, 'y'), (3, NULL)) AS v (a, b)
+CREATE VIEW
+> SELECT (1, 'x') = (SELECT a, b FROM t WHERE a = 1)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT (1, 'y') = (SELECT a, b FROM t WHERE a = 1)
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT (1, 'x') <> (SELECT a, b FROM t WHERE a = 1)
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT (1, 'y') <> (SELECT a, b FROM t WHERE a = 1)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT (1, 'x') = (SELECT a, b FROM t WHERE a = 9)
+fields ?column?:16:1:-1
+row NULL
+SELECT 1
+> SELECT (3, 'z') = (SELECT a, b FROM t WHERE a = 3)
+fields ?column?:16:1:-1
+row NULL
+SELECT 1
+> SELECT (4, 'z') = (SELECT a, b FROM t WHERE a = 3)
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT (3, 'z') <> (SELECT a, b FROM t WHERE a = 3)
+fields ?column?:16:1:-1
+row NULL
+SELECT 1
+> SELECT (1, 'x') = (SELECT a, b FROM t)
+fields ?column?:16:1:-1
+ERROR 21000 more than one row returned by a subquery used as an expression
+> SELECT (1, 'x') = (SELECT a FROM t WHERE a = 1)
+ERROR 42601 subquery has too few columns at 17
+> SELECT (1, 'x', 2) = (SELECT a, b FROM t WHERE a = 1)
+ERROR 42601 subquery has too few columns at 20
+> SELECT ROW(1) = (SELECT 1)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT ROW(1) = (SELECT 2)
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT ROW(1, 2) = (SELECT 1, 2)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT ROW(1, 2) IS NULL, (1, 2) = (SELECT NULL::int, 2)
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,NULL
+SELECT 1
+> SELECT a, b FROM t AS o WHERE (a, b) = (SELECT a, b FROM t WHERE a = o.a) ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 1,x
+row 2,y
+SELECT 2
+> SELECT a, (a, a + 1) = (SELECT o.a, o.a + 1 FROM t AS o WHERE o.a = t.a) FROM t ORDER BY a
+fields a@t.1:23:4:-1,?column?:16:1:-1
+row 1,t
+row 2,t
+row 3,t
+SELECT 3
+> SELECT a FROM t WHERE (a, 'x') <> (SELECT 1, 'x') ORDER BY a
+fields a@t.1:23:4:-1
+row 2
+row 3
+SELECT 2
+> SELECT (1, 'x') = (SELECT a, b FROM t WHERE a = 1) AND true
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT (1, 2) = (SELECT 1, 'a')
+ERROR 42883 operator does not exist: integer = text at 15
+> SELECT (1, 2) + (SELECT 1, 2)
+ERROR 42804 row comparison operator must yield type boolean, not type integer at 15
+> SELECT (1, 2) = (SELECT 1, 2) AS r, (1, 2) <> (SELECT 2, 2) AS s
+fields r:16:1:-1,s:16:1:-1
+row t,t
+SELECT 1
+> SELECT (1, 2) = ANY (SELECT 1, 2)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> CREATE VIEW v1 AS SELECT a, (a, b) = (SELECT 1, 'x') AS e, (a, b) <> (SELECT a, b FROM t AS i WHERE i.a = t.a) AS n FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v1')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    ((a, b) = ( SELECT 1,
+            'x'::text)) AS e,
+    ((a, b) <> ( SELECT i.a,
+            i.b
+           FROM t i
+          WHERE (i.a = t.a))) AS n
+   FROM t;
+SELECT 1
+> SELECT * FROM v1 ORDER BY a
+fields a@v1.1:23:4:-1,e@v1.2:16:1:-1,n@v1.3:16:1:-1
+row 1,t,f
+row 2,f,f
+row 3,f,NULL
+SELECT 3
+> CREATE VIEW v2 AS SELECT ROW(a) = (SELECT 1) AS e FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (a = ( SELECT 1)) AS e
+   FROM t;
+SELECT 1
+> SELECT * FROM v2
+fields e@v2.1:16:1:-1
+row t
+row f
+row f
+SELECT 3
+> PREPARE p(int, text) AS SELECT ($1, $2) = (SELECT a, b FROM t WHERE a = 1)
+PREPARE
+> EXECUTE p(1, 'x')
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> EXECUTE p(2, 'x')
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT (1, 2) = (SELECT 1, 2 WHERE false) IS NULL
+fields ?column?:16:1:-1
+row t
+SELECT 1
