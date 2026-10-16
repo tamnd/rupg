@@ -11,7 +11,10 @@ use rupg_types::{Value, oid};
 use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, can_coerce, common_of};
-use crate::expr::{BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, NamedArg, SqlValue};
+use crate::expr::{
+    BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, NamedArg, RowCompare, RowCompareKind,
+    SqlValue,
+};
 use crate::typename::{names, place};
 use crate::types;
 
@@ -46,6 +49,17 @@ fn compare_kinds(operator: u32) -> u8 {
         return 1 << COMPARE_NE;
     }
     0
+}
+
+/// The btree comparison function of the operator family where the operator has the strategy, as the support function 1 that `ExecInitExprRec` finds for a `RowCompareExpr`.
+fn compare_proc(operator: u32, strategy: u32) -> Option<u32> {
+    let amop = rupg_pgcatalog::builtin::amops_of_operator(operator).find(|a| {
+        a.method == crate::typcache::BTREE && u32::try_from(a.strategy).ok() == Some(strategy)
+    })?;
+    rupg_pgcatalog::builtin::amprocs(amop.family, amop.left)
+        .iter()
+        .find(|p| p.right == amop.right && p.number == 1)
+        .map(|p| p.proc)
 }
 
 /// A raw `A_Expr` of one operator, as `makeSimpleA_Expr` builds it.
@@ -278,7 +292,7 @@ impl Analyzer<'_> {
         Ok(Expr { kind: ExprKind::Param(n), ty, typmod: -1, location: at })
     }
 
-    /// `make_row_comparison_op`: `(a, b) op (c, d)`, with an operator for each pair of fields. The operators of `=` combine with `AND`, and the operators of `<>` with `OR`. The kind of comparison is the first kind, in the order of `CompareType`, that each operator has in a btree operator family, or `<>` for the negator of an equality operator of a btree family.
+    /// `make_row_comparison_op`: `(a, b) op (c, d)`, with an operator for each pair of fields. The operators of `=` combine with `AND`, the operators of `<>` with `OR`, and the ordering operators make a [`RowCompare`]. The kind of comparison is the first kind, in the order of `CompareType`, that each operator has in a btree operator family, or `<>` for the negator of an equality operator of a btree family.
     ///
     /// # Errors
     ///
@@ -324,13 +338,30 @@ impl Analyzer<'_> {
             return Ok(ops.remove(0));
         }
         let mut kinds = u8::MAX;
+        let mut operators = Vec::with_capacity(ops.len());
         for op in &ops {
             let ExprKind::Func(Func { form: FuncForm::Operator(operator), .. }) = op.kind else {
                 return Err(Error::internal("a row comparison that is not an operator"));
             };
             kinds &= compare_kinds(operator);
+            operators.push(operator);
         }
-        match kinds.trailing_zeros() {
+        let strategy = kinds.trailing_zeros();
+        if let Some(kind) = RowCompareKind::of_strategy(strategy) {
+            let compares = operators
+                .iter()
+                .map(|&operator| {
+                    compare_proc(operator, strategy).ok_or_else(|| {
+                        Error::internal(format!(
+                            "missing support function 1 for the operator {operator}"
+                        ))
+                    })
+                })
+                .collect::<Result<Vec<u32>>>()?;
+            let rc = RowCompare { kind, ops, compares };
+            return Ok(Expr::new(ExprKind::RowCompare(Box::new(rc)), oid::BOOL));
+        }
+        match strategy {
             COMPARE_EQ => Ok(Expr::new(ExprKind::Bool(BoolOp::And, ops), oid::BOOL).at(at)),
             COMPARE_NE => Ok(Expr::new(ExprKind::Bool(BoolOp::Or, ops), oid::BOOL).at(at)),
             8 => Err(Error::new(
@@ -342,7 +373,7 @@ impl Analyzer<'_> {
             )
             .with_hint("Row comparison operators must be associated with btree operator families.")
             .at_opt(at)),
-            _ => Err(not_yet("a row comparison with an ordering operator", at)),
+            _ => Err(Error::internal("a row comparison of an unknown kind")),
         }
     }
 

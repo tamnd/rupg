@@ -2550,6 +2550,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/row_compare_sublink.test")));
     }
 
+    /// A row comparison with `<`, `<=`, `>` or `>=`: the pairs of fields after the first pair that is not equal, null fields, fields of different types, the errors, a comparison in `WHERE`, with a subquery and with `ANY` and `ALL`, a prepared statement and the text of a view. `connection/row_compare.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn row_compare() {
+        big_stack(|| script(include_str!("connection/row_compare.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

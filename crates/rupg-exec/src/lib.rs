@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use rupg_analyze::{
     Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query,
-    SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, Target,
-    WindowFunc,
+    RowCompare, SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript,
+    Target, WindowFunc,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -186,6 +186,13 @@ fn check(expr: &Expr) -> Result<()> {
         }
         ExprKind::Array { elements, .. } | ExprKind::Row(elements) => {
             elements.iter().try_for_each(check)?;
+        }
+        // The executor calls the comparison function of each pair of fields, not the operator.
+        ExprKind::RowCompare(rc) => {
+            for (op, &compare) in rc.ops.iter().zip(&rc.compares) {
+                kernel(compare, expr.location)?;
+                op.children().into_iter().try_for_each(check)?;
+            }
         }
         ExprKind::Agg(agg) => {
             agg.direct.iter().try_for_each(check)?;
@@ -1472,6 +1479,7 @@ impl<'a> Eval<'a> {
                 Ok(Value::Null)
             }
             ExprKind::MinMax { greatest, less, args } => self.min_max(*greatest, *less, args),
+            ExprKind::RowCompare(rc) => self.row_compare(rc),
             ExprKind::NullIf { equal, args } => {
                 let [a, b] = args.as_slice() else {
                     return Err(Error::internal("NULLIF needs two arguments"));
@@ -1879,6 +1887,29 @@ impl<'a> Eval<'a> {
             }
         }
         Ok(result)
+    }
+
+    /// `EEOP_ROWCOMPARE_STEP` and `EEOP_ROWCOMPARE_FINAL`: the comparison function of each pair of fields, until a pair is not equal. The result of the last comparison decides. A null field in a pair that the executor compares gives null.
+    fn row_compare(&mut self, rc: &RowCompare) -> Result<Value> {
+        let mut order = 0;
+        for (op, &compare) in rc.ops.iter().zip(&rc.compares) {
+            let ExprKind::Func(Func { args, .. }) = &op.kind else {
+                return Err(Error::internal("a row comparison that is not an operator"));
+            };
+            let [left, right] = args.as_slice() else {
+                return Err(Error::internal("a row comparison operator needs two arguments"));
+            };
+            let pair = [self.eval(left)?, self.eval(right)?];
+            order = match self.call(compare, &[left.ty, right.ty], oid::INT4, false, &pair)? {
+                Value::Int4(order) => order,
+                Value::Null => return Ok(Value::Null),
+                _ => return Err(Error::internal("a comparison function that is not int4")),
+            };
+            if order != 0 {
+                break;
+            }
+        }
+        Ok(Value::Bool(rc.kind.test(order)))
     }
 
     /// `x op ANY (array)` and `x op ALL (array)`, as `ExecEvalScalarArrayOp` gives them.

@@ -6,8 +6,8 @@ use rupg_common::{Error, Result};
 use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value};
 
 use crate::expr::{
-    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, SqlValue,
-    Subscript, Var,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, RowCompare,
+    RowCompareKind, SqlValue, Subscript, Var,
 };
 
 /// The stored form of an expression.
@@ -93,6 +93,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::ScalarArrayOp { .. } => "SCALARARRAYOP",
         ExprKind::Array { .. } => "ARRAY",
         ExprKind::Row(_) => "ROW",
+        ExprKind::RowCompare(_) => "ROWCOMPARE",
         ExprKind::SqlValue(_) => "SQLVALUE",
         ExprKind::Var(_) => "VAR",
         ExprKind::FieldSelect(..) => "FIELDSELECT",
@@ -204,6 +205,11 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Distinct { equal, not, args } => {
             out.push_str(&format!(" :equal {equal} :not {not}"));
             write_args(args, out)?;
+        }
+        ExprKind::RowCompare(rc) => {
+            let compares: Vec<String> = rc.compares.iter().map(u32::to_string).collect();
+            out.push_str(&format!(" :kind {} :compares ({})", rc.kind.name(), compares.join(" ")));
+            write_args(&rc.ops, out)?;
         }
         ExprKind::ScalarArrayOp { func, any, args } => {
             out.push_str(&format!(" :func {func} :any {any}"));
@@ -722,6 +728,15 @@ fn expr_of(item: &Item) -> Result<Expr> {
         "CASETEST" => ExprKind::CaseTest,
         "COALESCE" => ExprKind::Coalesce(f.exprs("args")?),
         "ROW" => ExprKind::Row(f.exprs("args")?),
+        "ROWCOMPARE" => {
+            let kind = RowCompareKind::of_name(f.atom("kind")?)
+                .ok_or_else(|| bad("a kind of row comparison"))?;
+            let compares = list(f.get("compares")?)?
+                .iter()
+                .map(|c| number(atom(c)?))
+                .collect::<Result<_>>()?;
+            ExprKind::RowCompare(Box::new(RowCompare { kind, ops: f.exprs("args")?, compares }))
+        }
         "MINMAX" => ExprKind::MinMax {
             greatest: f.flag("greatest")?,
             less: f.number("less")?,
@@ -1071,6 +1086,14 @@ mod tests {
             ),
             Expr::new(ExprKind::MinMax { greatest: true, less: 66, args: vec![var(1)] }, oid::INT4),
             Expr::new(ExprKind::NullIf { equal: 65, args: vec![var(1), var(2)] }, oid::INT4),
+            Expr::new(
+                ExprKind::RowCompare(Box::new(RowCompare {
+                    kind: RowCompareKind::LessEqual,
+                    ops: vec![var(1), var(2)],
+                    compares: vec![351, 2188],
+                })),
+                oid::BOOL,
+            ),
             Expr::new(
                 ExprKind::Distinct { equal: 65, not: true, args: vec![var(1), var(2)] },
                 oid::BOOL,

@@ -2,7 +2,7 @@
 
 use rupg_analyze::{
     BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Join, JoinKind, NamedArg, Query,
-    Relation, SubLink, SubLinkKind, Subscript, Var,
+    Relation, RowCompare, SubLink, SubLinkKind, Subscript, Var,
 };
 use rupg_common::Result;
 use rupg_func::Session;
@@ -362,6 +362,7 @@ impl<'a> Fold<'a> {
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. } => self.all(args),
             ExprKind::Array { elements, .. } | ExprKind::Row(elements) => self.all(elements),
+            ExprKind::RowCompare(rc) => self.all(&mut rc.ops),
             ExprKind::Case(case) => {
                 if let Some(arg) = &mut case.arg {
                     self.subqueries(arg)?;
@@ -558,6 +559,21 @@ impl<'a> Fold<'a> {
                 let folded =
                     with(expr, ExprKind::MinMax { greatest: *greatest, less: *less, args });
                 if all { self.evaluate(folded) } else { Ok(folded) }
+            }
+            // `eval_const_expressions` folds the fields, but not the comparison, and keeps the operator of each pair of fields.
+            ExprKind::RowCompare(rc) => {
+                let mut ops = Vec::with_capacity(rc.ops.len());
+                for op in &rc.ops {
+                    let ExprKind::Func(f) = &op.kind else {
+                        return Err(rupg_common::Error::internal(
+                            "a row comparison that is not an operator",
+                        ));
+                    };
+                    let args = self.list(&f.args)?;
+                    ops.push(with(op, ExprKind::Func(Func { args, ..f.clone() })));
+                }
+                let rc = RowCompare { ops, ..(**rc).clone() };
+                Ok(with(expr, ExprKind::RowCompare(Box::new(rc))))
             }
             // As in `eval_const_expressions`, a `ROW()` of constants is a constant. A view keeps the `ROW()` as it is written, because the fold is only for the plan.
             ExprKind::Row(args) => {

@@ -61,6 +61,8 @@ pub enum ExprKind {
     ScalarArrayOp { func: u32, any: bool, args: Vec<Expr> },
     /// `RowExpr`: `ROW(...)`, a value of `record` with a field for each argument.
     Row(Vec<Expr>),
+    /// `RowCompareExpr`: `(a, b) < (c, d)` and the other comparisons of two rows with an ordering operator.
+    RowCompare(Box<RowCompare>),
     /// `ArrayExpr`: `ARRAY[...]`. The elements of a multidimensional array are arrays.
     Array { element: u32, multidims: bool, elements: Vec<Expr> },
     /// `SQLValueFunction`, such as `CURRENT_USER` and `CURRENT_TIMESTAMP(3)`.
@@ -104,6 +106,70 @@ pub struct SubLink {
     /// `testexpr`: for `ANY`, `ALL` and a row comparison, the test of each row of the subquery. It compares the left side with [`ExprKind::SubColumn`].
     pub test: Option<Expr>,
     pub query: Query,
+}
+
+/// The comparison of two rows with an ordering operator, as `RowCompareExpr`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct RowCompare {
+    pub kind: RowCompareKind,
+    /// The operator call for each pair of fields, with the field of the left row and the field of the right row as its arguments.
+    pub ops: Vec<Expr>,
+    /// The btree comparison function of each pair of fields, from the operator family of the operator.
+    pub compares: Vec<u32>,
+}
+
+/// The comparison of a [`RowCompare`], as `rctype`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum RowCompareKind {
+    Less,
+    LessEqual,
+    GreaterEqual,
+    Greater,
+}
+
+impl RowCompareKind {
+    /// The kind of a btree strategy number, or `None` for `=` and the numbers that are not a strategy.
+    pub fn of_strategy(strategy: u32) -> Option<RowCompareKind> {
+        match strategy {
+            1 => Some(RowCompareKind::Less),
+            2 => Some(RowCompareKind::LessEqual),
+            4 => Some(RowCompareKind::GreaterEqual),
+            5 => Some(RowCompareKind::Greater),
+            _ => None,
+        }
+    }
+
+    /// The result of the comparison for the result of a btree comparison function: below 0, 0 or above 0.
+    pub fn test(self, order: i32) -> bool {
+        match self {
+            RowCompareKind::Less => order < 0,
+            RowCompareKind::LessEqual => order <= 0,
+            RowCompareKind::GreaterEqual => order >= 0,
+            RowCompareKind::Greater => order > 0,
+        }
+    }
+
+    /// The name of the kind in the text of a stored expression.
+    pub fn name(self) -> &'static str {
+        match self {
+            RowCompareKind::Less => "lt",
+            RowCompareKind::LessEqual => "le",
+            RowCompareKind::GreaterEqual => "ge",
+            RowCompareKind::Greater => "gt",
+        }
+    }
+
+    /// The kind with this name, as [`RowCompareKind::name`] gives it.
+    pub fn of_name(name: &str) -> Option<RowCompareKind> {
+        [
+            RowCompareKind::Less,
+            RowCompareKind::LessEqual,
+            RowCompareKind::GreaterEqual,
+            RowCompareKind::Greater,
+        ]
+        .into_iter()
+        .find(|kind| kind.name() == name)
+    }
 }
 
 /// The kinds of `SubLink` that the analyzer takes.
@@ -306,6 +372,7 @@ impl Expr {
             | ExprKind::Var(_)
             | ExprKind::SubColumn(_) => Vec::new(),
             ExprKind::SubLink(sub) => sub.test.iter().collect(),
+            ExprKind::RowCompare(rc) => rc.ops.iter().collect(),
             ExprKind::Func(f) => f.args.iter().collect(),
             ExprKind::NamedArg(na) => vec![&na.arg],
             ExprKind::Agg(agg) => {
@@ -350,6 +417,7 @@ impl Expr {
             | ExprKind::Var(_)
             | ExprKind::SubColumn(_) => Vec::new(),
             ExprKind::SubLink(sub) => sub.test.iter_mut().collect(),
+            ExprKind::RowCompare(rc) => rc.ops.iter_mut().collect(),
             ExprKind::Func(f) => f.args.iter_mut().collect(),
             ExprKind::NamedArg(na) => vec![&mut na.arg],
             ExprKind::Agg(agg) => {
@@ -516,6 +584,7 @@ impl Expr {
             | ExprKind::FieldSelect(arg, _) => Some(&**arg),
             ExprKind::Subscript(sub) => Some(&sub.container),
             ExprKind::SubLink(sub) => sub.test.as_ref(),
+            ExprKind::RowCompare(rc) => rc.ops.first(),
             ExprKind::NamedArg(na) => Some(&na.arg),
             _ => None,
         };
