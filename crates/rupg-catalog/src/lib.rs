@@ -305,7 +305,30 @@ pub struct Type {
     pub array: u32,
     /// The facts of a domain, or `None` for a type of another kind.
     pub domain: Option<Domain>,
+    /// The labels of an enum type in their sort order, as `pg_enum` holds them, or `None` for a type of another kind.
+    pub labels: Option<Vec<EnumLabel>>,
 }
+
+/// A label of an enum type, one row of `pg_enum`.
+#[derive(Clone, Debug)]
+pub struct EnumLabel {
+    /// The OID of the label. The labels of `CREATE TYPE ... AS ENUM` have even OIDs in their sort order.
+    pub oid: u32,
+    /// `enumsortorder`.
+    pub sort_order: f32,
+    /// `enumlabel`.
+    pub label: String,
+}
+
+impl PartialEq for EnumLabel {
+    fn eq(&self, other: &EnumLabel) -> bool {
+        self.oid == other.oid
+            && self.sort_order.to_bits() == other.sort_order.to_bits()
+            && self.label == other.label
+    }
+}
+
+impl Eq for EnumLabel {}
 
 /// The facts of a domain that `pg_type` holds for a type of the kind `d`.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -602,6 +625,19 @@ pub struct NewDomain {
     pub owner: u32,
     /// The facts of the domain.
     pub domain: Domain,
+}
+
+/// A new enum type for [`Catalog::create_enum`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewEnum {
+    /// The OID of the schema.
+    pub namespace: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the owner role.
+    pub owner: u32,
+    /// The labels in their sort order.
+    pub labels: Vec<String>,
 }
 
 /// A new table, a new index or a new sequence before it has an OID.
@@ -1096,6 +1132,7 @@ impl Catalog {
                 element: 0,
                 array,
                 domain: None,
+                labels: None,
             },
         );
         self.types.insert(
@@ -1109,6 +1146,7 @@ impl Catalog {
                 element: row_type,
                 array: 0,
                 domain: None,
+                labels: None,
             },
         );
         self.relations.insert(
@@ -1253,6 +1291,7 @@ impl Catalog {
                 element: 0,
                 array,
                 domain: Some(new.domain),
+                labels: None,
             },
         );
         self.types.insert(
@@ -1266,6 +1305,7 @@ impl Catalog {
                 element: oid,
                 array: 0,
                 domain: None,
+                labels: None,
             },
         );
         // `record_object_address_dependencies` sorts the objects by the OID of their catalog.
@@ -1278,6 +1318,58 @@ impl Catalog {
         for &referenced in refs {
             self.depend(me, referenced, DepKind::Normal);
         }
+        self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
+        Ok(oid)
+    }
+
+    /// `DefineEnum`: the enum type, its labels and its array type. The array type gets the first OID, then the type, then each label gets the next even OID, as `EnumValuesCreate` gives the labels even OIDs in their sort order. The type depends on its schema. The return value is the OID of the type.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the schema has a type with the name that is not an array type of another type.
+    pub fn create_enum(&mut self, new: NewEnum) -> Result<u32> {
+        self.check_new_type(new.namespace, &new.name)?;
+        let array = self.new_oid();
+        let oid = self.new_oid();
+        let mut labels = Vec::with_capacity(new.labels.len());
+        for (i, label) in new.labels.into_iter().enumerate() {
+            let mut label_oid = self.new_oid();
+            while label_oid & 1 != 0 {
+                label_oid = self.new_oid();
+            }
+            labels.push(EnumLabel { oid: label_oid, sort_order: (i + 1) as f32, label });
+        }
+        let array_name = self.array_type_name(&new.name, new.namespace);
+        self.types.insert(
+            oid,
+            Type {
+                oid,
+                name: new.name,
+                namespace: new.namespace,
+                owner: new.owner,
+                relation: 0,
+                element: 0,
+                array,
+                domain: None,
+                labels: Some(labels),
+            },
+        );
+        self.types.insert(
+            array,
+            Type {
+                oid: array,
+                name: array_name,
+                namespace: new.namespace,
+                owner: new.owner,
+                relation: 0,
+                element: oid,
+                array: 0,
+                domain: None,
+                labels: None,
+            },
+        );
+        let me = ObjRef::new(PG_TYPE, oid);
+        self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
         self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
         Ok(oid)
     }

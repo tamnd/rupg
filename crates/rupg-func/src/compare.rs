@@ -56,6 +56,8 @@ enum Family {
     TsQuery,
     /// `record`, which compares as `record_cmp` does.
     Record,
+    /// The enum types. A value is the OID of its label, and the labels of `CREATE TYPE ... AS ENUM` have OIDs in their sort order, so the order of the OIDs is the order of `enum_cmp`.
+    Enum,
 }
 
 /// The family of a type, or `None` for a type that has no comparison here.
@@ -95,8 +97,10 @@ fn family(ty: u32) -> Option<Family> {
         oid::TSVECTOR => Family::TsVector,
         oid::TSQUERY => Family::TsQuery,
         oid::RECORD => Family::Record,
+        oid::ANYENUM => Family::Enum,
         _ => match builtin::type_by_oid(ty) {
             Some(row) if row.category == b'A' && row.elem != 0 => Family::Array,
+            Some(row) if row.kind == b'e' => Family::Enum,
             _ => return None,
         },
     })
@@ -561,6 +565,7 @@ pub(crate) fn by_src(src: &str, proc: &ProcRow) -> Option<Kernel> {
                 | "range_cmp"
                 | "multirange_cmp"
                 | "bpcharcmp"
+                | "enum_cmp"
                 | "byteacmp"
                 | "date_cmp"
                 | "date_cmp_timestamp"

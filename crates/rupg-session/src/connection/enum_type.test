@@ -1,0 +1,149 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE TYPE mood AS ENUM ('sad', 'ok', 'happy')
+CREATE TYPE
+> CREATE TYPE mood AS ENUM ('x')
+ERROR 42710 type "mood" already exists
+> CREATE TYPE empty_e AS ENUM ()
+CREATE TYPE
+> CREATE TYPE dup AS ENUM ('a', 'a')
+ERROR 42710 enum label "a" used more than once
+> SELECT 'ok'::mood::text, pg_typeof('ok'::mood)::text, 'happy'::mood::text
+fields text:25:-1:-1,pg_typeof:25:-1:-1,text:25:-1:-1
+row ok,mood,happy
+SELECT 1
+> SELECT 'nope'::mood
+ERROR 22P02 invalid input value for enum mood: "nope" at 8
+> SELECT pg_input_is_valid('ok', 'mood'), pg_input_is_valid('nope', 'mood')
+fields pg_input_is_valid:16:1:-1,pg_input_is_valid:16:1:-1
+row t,f
+SELECT 1
+> SELECT 'sad'::mood < 'happy'::mood, 'ok'::mood = 'ok'::mood, 'ok'::mood <> 'sad'::mood, 'happy'::mood >= 'ok'::mood
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t
+SELECT 1
+> SELECT enum_first(NULL::mood)::text, enum_last(NULL::mood)::text, enum_range(NULL::mood)::text, enum_range('ok'::mood, NULL)::text, enum_range(NULL, 'ok'::mood)::text, enum_range('sad'::mood, 'ok'::mood)::text
+fields enum_first:25:-1:-1,enum_last:25:-1:-1,enum_range:25:-1:-1,enum_range:25:-1:-1,enum_range:25:-1:-1,enum_range:25:-1:-1
+row sad,happy,{sad,ok,happy},{ok,happy},{sad,ok},{sad,ok}
+SELECT 1
+> SELECT enum_range(NULL::empty_e)::text, enum_range('happy'::mood, 'sad'::mood)::text, enum_range(NULL::mood, NULL)::text
+fields enum_range:25:-1:-1,enum_range:25:-1:-1,enum_range:25:-1:-1
+row {},{},{sad,ok,happy}
+SELECT 1
+> SELECT enum_first(NULL::empty_e)::text
+fields enum_first:25:-1:-1
+ERROR 55000 enum empty_e contains no values
+> SELECT enum_last(NULL::empty_e)::text
+fields enum_last:25:-1:-1
+ERROR 55000 enum empty_e contains no values
+> SELECT ARRAY['ok', 'nope']::mood[]
+ERROR 22P02 invalid input value for enum mood: "nope" at 20
+> DROP DOMAIN mood
+ERROR 42809 "mood" is not a domain
+> SELECT x::text FROM (VALUES ('happy'::mood), ('sad'::mood), ('ok'::mood)) v(x) ORDER BY x
+fields x:25:-1:-1
+row happy
+row ok
+row sad
+SELECT 3
+> SELECT x::text FROM (VALUES ('happy'::mood), ('sad'::mood), ('ok'::mood)) v(x) ORDER BY x DESC
+fields x:25:-1:-1
+row sad
+row ok
+row happy
+SELECT 3
+> SELECT max(x)::text, min(x)::text FROM (VALUES ('happy'::mood), ('sad'::mood), ('ok'::mood)) v(x)
+fields max:25:-1:-1,min:25:-1:-1
+row happy,sad
+SELECT 1
+> SELECT '{sad,happy}'::mood[]::text, ARRAY['ok'::mood, 'sad']::text
+fields text:25:-1:-1,array:25:-1:-1
+row {sad,happy},{ok,sad}
+SELECT 1
+> SELECT 'ok'::text::mood::text, 'ok'::varchar::mood::text
+fields text:25:-1:-1,text:25:-1:-1
+row ok,ok
+SELECT 1
+> SELECT enumlabel, enumsortorder FROM pg_enum WHERE enumtypid = 'mood'::regtype ORDER BY enumsortorder
+fields enumlabel@pg_enum.4:19:64:-1,enumsortorder@pg_enum.3:700:4:-1
+row sad,1
+row ok,2
+row happy,3
+SELECT 3
+> SELECT typname, typtype, typlen, typbyval, typcategory, typinput::text, typoutput::text, typreceive::text, typsend::text, typalign, typstorage, typelem <> 0, typarray <> 0, typrelid FROM pg_type WHERE typnamespace = 'public'::regnamespace ORDER BY typname
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typlen@pg_type.5:21:2:-1,typbyval@pg_type.6:16:1:-1,typcategory@pg_type.8:18:1:-1,typinput:25:-1:-1,typoutput:25:-1:-1,typreceive:25:-1:-1,typsend:25:-1:-1,typalign@pg_type.23:18:1:-1,typstorage@pg_type.24:18:1:-1,?column?:16:1:-1,?column?:16:1:-1,typrelid@pg_type.12:26:4:-1
+row _empty_e,b,-1,f,A,array_in,array_out,array_recv,array_send,i,x,t,f,0
+row _mood,b,-1,f,A,array_in,array_out,array_recv,array_send,i,x,t,f,0
+row empty_e,e,4,t,E,enum_in,enum_out,enum_recv,enum_send,i,p,f,t,0
+row mood,e,4,t,E,enum_in,enum_out,enum_recv,enum_send,i,p,f,t,0
+SELECT 4
+> SELECT classid::regclass, objsubid, refclassid::regclass, refobjsubid, deptype FROM pg_depend WHERE objid IN (SELECT oid FROM pg_type WHERE typnamespace = 'public'::regnamespace) ORDER BY 1, 2, 3, 4, 5
+fields classid:2205:4:-1,objsubid@pg_depend.3:23:4:-1,refclassid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_type,0,pg_type,0,i
+row pg_type,0,pg_type,0,i
+row pg_type,0,pg_namespace,0,n
+row pg_type,0,pg_namespace,0,n
+SELECT 4
+> SELECT format_type('mood'::regtype, NULL), format_type('_mood'::regtype, NULL)
+fields format_type:25:-1:-1,format_type:25:-1:-1
+row mood,mood[]
+SELECT 1
+> CREATE TYPE long_e AS ENUM ('aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa')
+ERROR 42602 invalid enum label "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+> CREATE TYPE odd AS ENUM ('', 'with space', 'Quote''s')
+CREATE TYPE
+> SELECT enum_range(NULL::odd)::text, ''::odd::text
+fields enum_range:25:-1:-1,text:25:-1:-1
+row {"","with space",Quote's},
+SELECT 1
+> SELECT 'ok'::mood = 'ok'
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT 'ok'::mood || 'x'
+fields ?column?:25:-1:-1
+row okx
+SELECT 1
+> SELECT 'ok'::mood::int
+ERROR 42846 cannot cast type mood to integer at 18
+> CREATE TABLE tm (m mood)
+CREATE TABLE
+> SELECT m::text FROM tm
+fields m:25:-1:-1
+SELECT 0
+> SELECT enum_first(1)
+ERROR 42883 function enum_first(integer) does not exist at 8
+> SELECT CASE WHEN 'ok'::mood > 'sad' THEN 'yes' ELSE 'no' END
+fields case:25:-1:-1
+row yes
+SELECT 1
+> SELECT 'sad'::mood IN ('ok', 'sad'), 'happy'::mood BETWEEN 'sad' AND 'ok'
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> SELECT DISTINCT x::text FROM (VALUES ('ok'::mood), ('ok'::mood), ('sad'::mood)) v(x) ORDER BY 1
+fields x:25:-1:-1
+row ok
+row sad
+SELECT 2
+> SELECT x::text, count(*) FROM (VALUES ('ok'::mood), ('ok'::mood), ('sad'::mood)) v(x) GROUP BY x ORDER BY x
+fields x:25:-1:-1,count:20:8:-1
+row ok,2
+row sad,1
+SELECT 2
+> SELECT enum_cmp('ok'::mood, 'sad'::mood), enum_larger('ok'::mood, 'sad'::mood)::text, enum_smaller('ok'::mood, 'sad'::mood)::text
+fields enum_cmp:23:4:-1,enum_larger:25:-1:-1,enum_smaller:25:-1:-1
+row 1,ok,sad
+SELECT 1
+> DROP TYPE mood
+ERROR 2BP01 cannot drop type mood because other objects depend on it
+> DROP TABLE tm
+DROP TABLE
+> DROP TYPE mood
+DROP TYPE
+> DROP TYPE odd, long_e
+ERROR 42704 type "long_e" does not exist
+> SELECT count(*) FROM pg_enum
+fields count:20:8:-1
+row 3
+SELECT 1

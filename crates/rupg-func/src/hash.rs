@@ -44,6 +44,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "hashint4", "hashint4extended" => oid::INT4;
         "hashint8", "hashint8extended" => oid::INT8;
         "hashoid", "hashoidextended" => oid::OID;
+        // `hashenum` hashes the OID of the label, as `hashoid` does.
+        "hashenum", "hashenumextended" => oid::OID;
         "hashoid8", "hashoid8extended" => oid::OID8;
         "hashxid", "hashxidextended" => oid::XID;
         "hashxid8", "hashxid8extended" => oid::XID8;
