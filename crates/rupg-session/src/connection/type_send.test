@@ -1,0 +1,811 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT boolsend('t'::bool)
+fields boolsend:17:-1:-1
+row \x01
+SELECT 1
+> SELECT array_send(ARRAY['t'::bool, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001000000002000000010000000101ffffffff
+SELECT 1
+> SELECT byteasend('\x0102'::bytea)
+fields byteasend:17:-1:-1
+row \x0102
+SELECT 1
+> SELECT array_send(ARRAY['\x0102'::bytea, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000000110000000200000001000000020102ffffffff
+SELECT 1
+> SELECT charsend('a'::char)
+ERROR 42883 function charsend(character) does not exist at 8
+> SELECT array_send(ARRAY['a'::char, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000041200000002000000010000000161ffffffff
+SELECT 1
+> SELECT namesend('abc'::name)
+fields namesend:17:-1:-1
+row \x616263
+SELECT 1
+> SELECT array_send(ARRAY['abc'::name, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000013000000020000000100000003616263ffffffff
+SELECT 1
+> SELECT int8send('12'::int8)
+fields int8send:17:-1:-1
+row \x000000000000000c
+SELECT 1
+> SELECT array_send(ARRAY['12'::int8, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000014000000020000000100000008000000000000000cffffffff
+SELECT 1
+> SELECT int2send('3'::int2)
+fields int2send:17:-1:-1
+row \x0003
+SELECT 1
+> SELECT array_send(ARRAY['3'::int2, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000000150000000200000001000000020003ffffffff
+SELECT 1
+> SELECT int2vectorsend('1 2'::int2vector)
+fields int2vectorsend:17:-1:-1
+row \x0000000100000000000000150000000200000000000000020001000000020002
+SELECT 1
+> SELECT array_send(ARRAY['1 2'::int2vector, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000000160000000200000001000000200000000100000000000000150000000200000000000000020001000000020002ffffffff
+SELECT 1
+> SELECT int4send('5'::int4)
+fields int4send:17:-1:-1
+row \x00000005
+SELECT 1
+> SELECT array_send(ARRAY['5'::int4, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001700000002000000010000000400000005ffffffff
+SELECT 1
+> SELECT regprocsend('now'::regproc)
+fields regprocsend:17:-1:-1
+row \x00000513
+SELECT 1
+> SELECT array_send(ARRAY['now'::regproc, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001800000002000000010000000400000513ffffffff
+SELECT 1
+> SELECT textsend('t'::text)
+fields textsend:17:-1:-1
+row \x74
+SELECT 1
+> SELECT array_send(ARRAY['t'::text, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001900000002000000010000000174ffffffff
+SELECT 1
+> SELECT oidsend('7'::oid)
+fields oidsend:17:-1:-1
+row \x00000007
+SELECT 1
+> SELECT array_send(ARRAY['7'::oid, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001a00000002000000010000000400000007ffffffff
+SELECT 1
+> SELECT tidsend('(1,2)'::tid)
+fields tidsend:17:-1:-1
+row \x000000010002
+SELECT 1
+> SELECT array_send(ARRAY['(1,2)'::tid, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001b000000020000000100000006000000010002ffffffff
+SELECT 1
+> SELECT xidsend('9'::xid)
+fields xidsend:17:-1:-1
+row \x00000009
+SELECT 1
+> SELECT array_send(ARRAY['9'::xid, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001c00000002000000010000000400000009ffffffff
+SELECT 1
+> SELECT cidsend('10'::cid)
+fields cidsend:17:-1:-1
+row \x0000000a
+SELECT 1
+> SELECT array_send(ARRAY['10'::cid, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001d0000000200000001000000040000000affffffff
+SELECT 1
+> SELECT oidvectorsend('1 2'::oidvector)
+fields oidvectorsend:17:-1:-1
+row \x00000001000000000000001a000000020000000000000004000000010000000400000002
+SELECT 1
+> SELECT array_send(ARRAY['1 2'::oidvector, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000001e00000002000000010000002400000001000000000000001a000000020000000000000004000000010000000400000002ffffffff
+SELECT 1
+> SELECT json_send('{"a":1}'::json)
+fields json_send:17:-1:-1
+row \x7b2261223a317d
+SELECT 1
+> SELECT array_send(ARRAY['{"a":1}'::json, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000000720000000200000001000000077b2261223a317dffffffff
+SELECT 1
+> SELECT xml_send('<a>1</a>'::xml)
+fields xml_send:17:-1:-1
+row \x3c613e313c2f613e
+SELECT 1
+> SELECT array_send(ARRAY['<a>1</a>'::xml, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000008e0000000200000001000000083c613e313c2f613effffffff
+SELECT 1
+> SELECT point_send('(1,2)'::point)
+fields point_send:17:-1:-1
+row \x3ff00000000000004000000000000000
+SELECT 1
+> SELECT array_send(ARRAY['(1,2)'::point, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000002580000000200000001000000103ff00000000000004000000000000000ffffffff
+SELECT 1
+> SELECT lseg_send('[(1,2),(3,4)]'::lseg)
+fields lseg_send:17:-1:-1
+row \x3ff0000000000000400000000000000040080000000000004010000000000000
+SELECT 1
+> SELECT array_send(ARRAY['[(1,2),(3,4)]'::lseg, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000002590000000200000001000000203ff0000000000000400000000000000040080000000000004010000000000000ffffffff
+SELECT 1
+> SELECT path_send('((1,2),(3,4))'::path)
+fields path_send:17:-1:-1
+row \x01000000023ff0000000000000400000000000000040080000000000004010000000000000
+SELECT 1
+> SELECT array_send(ARRAY['((1,2),(3,4))'::path, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000025a00000002000000010000002501000000023ff0000000000000400000000000000040080000000000004010000000000000ffffffff
+SELECT 1
+> SELECT box_send('(1,2),(3,4)'::box)
+fields box_send:17:-1:-1
+row \x400800000000000040100000000000003ff00000000000004000000000000000
+SELECT 1
+> SELECT array_send(ARRAY['(1,2),(3,4)'::box, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000025b000000020000000100000020400800000000000040100000000000003ff00000000000004000000000000000ffffffff
+SELECT 1
+> SELECT poly_send('((1,2),(3,4),(5,6))'::polygon)
+fields poly_send:17:-1:-1
+row \x000000033ff000000000000040000000000000004008000000000000401000000000000040140000000000004018000000000000
+SELECT 1
+> SELECT array_send(ARRAY['((1,2),(3,4),(5,6))'::polygon, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000025c000000020000000100000034000000033ff000000000000040000000000000004008000000000000401000000000000040140000000000004018000000000000ffffffff
+SELECT 1
+> SELECT line_send('{1,2,3}'::line)
+fields line_send:17:-1:-1
+row \x3ff000000000000040000000000000004008000000000000
+SELECT 1
+> SELECT array_send(ARRAY['{1,2,3}'::line, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000002740000000200000001000000183ff000000000000040000000000000004008000000000000ffffffff
+SELECT 1
+> SELECT cidr_send('10.0.0.0/8'::cidr)
+fields cidr_send:17:-1:-1
+row \x020801040a000000
+SELECT 1
+> SELECT array_send(ARRAY['10.0.0.0/8'::cidr, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000028a000000020000000100000008020801040a000000ffffffff
+SELECT 1
+> SELECT float4send('1.5'::float4)
+fields float4send:17:-1:-1
+row \x3fc00000
+SELECT 1
+> SELECT array_send(ARRAY['1.5'::float4, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000002bc0000000200000001000000043fc00000ffffffff
+SELECT 1
+> SELECT float8send('2.5'::float8)
+fields float8send:17:-1:-1
+row \x4004000000000000
+SELECT 1
+> SELECT array_send(ARRAY['2.5'::float8, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000002bd0000000200000001000000084004000000000000ffffffff
+SELECT 1
+> SELECT circle_send('<(1,2),3>'::circle)
+fields circle_send:17:-1:-1
+row \x3ff000000000000040000000000000004008000000000000
+SELECT 1
+> SELECT array_send(ARRAY['<(1,2),3>'::circle, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000002ce0000000200000001000000183ff000000000000040000000000000004008000000000000ffffffff
+SELECT 1
+> SELECT macaddr8_send('08:00:2b:01:02:03:04:05'::macaddr8)
+fields macaddr8_send:17:-1:-1
+row \x08002b0102030405
+SELECT 1
+> SELECT array_send(ARRAY['08:00:2b:01:02:03:04:05'::macaddr8, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000030600000002000000010000000808002b0102030405ffffffff
+SELECT 1
+> SELECT cash_send('12.34'::money)
+fields cash_send:17:-1:-1
+row \x00000000000004d2
+SELECT 1
+> SELECT array_send(ARRAY['12.34'::money, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000031600000002000000010000000800000000000004d2ffffffff
+SELECT 1
+> SELECT macaddr_send('08:00:2b:01:02:03'::macaddr)
+fields macaddr_send:17:-1:-1
+row \x08002b010203
+SELECT 1
+> SELECT array_send(ARRAY['08:00:2b:01:02:03'::macaddr, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000033d00000002000000010000000608002b010203ffffffff
+SELECT 1
+> SELECT inet_send('10.1.2.3/16'::inet)
+fields inet_send:17:-1:-1
+row \x021000040a010203
+SELECT 1
+> SELECT array_send(ARRAY['10.1.2.3/16'::inet, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000365000000020000000100000008021000040a010203ffffffff
+SELECT 1
+> SELECT bpcharsend('ab'::bpchar)
+fields bpcharsend:17:-1:-1
+row \x6162
+SELECT 1
+> SELECT array_send(ARRAY['ab'::bpchar, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000004120000000200000001000000026162ffffffff
+SELECT 1
+> SELECT varcharsend('ab'::varchar)
+fields varcharsend:17:-1:-1
+row \x6162
+SELECT 1
+> SELECT array_send(ARRAY['ab'::varchar, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000004130000000200000001000000026162ffffffff
+SELECT 1
+> SELECT date_send('2020-01-02'::date)
+fields date_send:17:-1:-1
+row \x00001c8a
+SELECT 1
+> SELECT array_send(ARRAY['2020-01-02'::date, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000043a00000002000000010000000400001c8affffffff
+SELECT 1
+> SELECT time_send('01:02:03'::time)
+fields time_send:17:-1:-1
+row \x00000000dde878c0
+SELECT 1
+> SELECT array_send(ARRAY['01:02:03'::time, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000043b00000002000000010000000800000000dde878c0ffffffff
+SELECT 1
+> SELECT timestamp_send('2020-01-02 03:04:05'::timestamp)
+fields timestamp_send:17:-1:-1
+row \x00023e1e36ef1340
+SELECT 1
+> SELECT array_send(ARRAY['2020-01-02 03:04:05'::timestamp, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000045a00000002000000010000000800023e1e36ef1340ffffffff
+SELECT 1
+> SELECT timestamptz_send('2020-01-02 03:04:05+00'::timestamptz)
+fields timestamptz_send:17:-1:-1
+row \x00023e1e36ef1340
+SELECT 1
+> SELECT array_send(ARRAY['2020-01-02 03:04:05+00'::timestamptz, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000004a000000002000000010000000800023e1e36ef1340ffffffff
+SELECT 1
+> SELECT interval_send('1 day 2 hours'::interval)
+fields interval_send:17:-1:-1
+row \x00000001ad2748000000000100000000
+SELECT 1
+> SELECT array_send(ARRAY['1 day 2 hours'::interval, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000004a200000002000000010000001000000001ad2748000000000100000000ffffffff
+SELECT 1
+> SELECT timetz_send('01:02:03+04'::timetz)
+fields timetz_send:17:-1:-1
+row \x00000000dde878c0ffffc7c0
+SELECT 1
+> SELECT array_send(ARRAY['01:02:03+04'::timetz, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000004f200000002000000010000000c00000000dde878c0ffffc7c0ffffffff
+SELECT 1
+> SELECT bit_send('101'::bit)
+fields bit_send:17:-1:-1
+row \x0000000180
+SELECT 1
+> SELECT array_send(ARRAY['101'::bit, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000006180000000200000001000000050000000180ffffffff
+SELECT 1
+> SELECT varbit_send('1011'::varbit)
+fields varbit_send:17:-1:-1
+row \x00000004b0
+SELECT 1
+> SELECT array_send(ARRAY['1011'::varbit, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000061a00000002000000010000000500000004b0ffffffff
+SELECT 1
+> SELECT numeric_send('1.25'::numeric)
+fields numeric_send:17:-1:-1
+row \x0002000000000002000109c4
+SELECT 1
+> SELECT array_send(ARRAY['1.25'::numeric, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000006a400000002000000010000000c0002000000000002000109c4ffffffff
+SELECT 1
+> SELECT textsend('c'::refcursor)
+ERROR 42883 function textsend(refcursor) does not exist at 8
+> SELECT array_send(ARRAY['c'::refcursor, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000006fe00000002000000010000000163ffffffff
+SELECT 1
+> SELECT regproceduresend('now()'::regprocedure)
+fields regproceduresend:17:-1:-1
+row \x00000513
+SELECT 1
+> SELECT array_send(ARRAY['now()'::regprocedure, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000089a00000002000000010000000400000513ffffffff
+SELECT 1
+> SELECT regopersend('||/'::regoper)
+fields regopersend:17:-1:-1
+row \x00000255
+SELECT 1
+> SELECT array_send(ARRAY['||/'::regoper, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000089b00000002000000010000000400000255ffffffff
+SELECT 1
+> SELECT regoperatorsend('+(integer,integer)'::regoperator)
+fields regoperatorsend:17:-1:-1
+row \x00000227
+SELECT 1
+> SELECT array_send(ARRAY['+(integer,integer)'::regoperator, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000089c00000002000000010000000400000227ffffffff
+SELECT 1
+> SELECT regclasssend('pg_class'::regclass)
+fields regclasssend:17:-1:-1
+row \x000004eb
+SELECT 1
+> SELECT array_send(ARRAY['pg_class'::regclass, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000089d000000020000000100000004000004ebffffffff
+SELECT 1
+> SELECT regtypesend('integer'::regtype)
+fields regtypesend:17:-1:-1
+row \x00000017
+SELECT 1
+> SELECT array_send(ARRAY['integer'::regtype, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000089e00000002000000010000000400000017ffffffff
+SELECT 1
+> SELECT uuid_send('a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid)
+fields uuid_send:17:-1:-1
+row \xa0eebc999c0b4ef8bb6d6bb9bd380a11
+SELECT 1
+> SELECT array_send(ARRAY['a0eebc99-9c0b-4ef8-bb6d-6bb9bd380a11'::uuid, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000b86000000020000000100000010a0eebc999c0b4ef8bb6d6bb9bd380a11ffffffff
+SELECT 1
+> SELECT txid_snapshot_send('10:20:10,14,15'::txid_snapshot)
+fields txid_snapshot_send:17:-1:-1
+row \x00000003000000000000000a0000000000000014000000000000000a000000000000000e000000000000000f
+SELECT 1
+> SELECT array_send(ARRAY['10:20:10,14,15'::txid_snapshot, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000b9a00000002000000010000002c00000003000000000000000a0000000000000014000000000000000a000000000000000e000000000000000fffffffff
+SELECT 1
+> SELECT pg_lsn_send('16/B374D848'::pg_lsn)
+fields pg_lsn_send:17:-1:-1
+row \x00000016b374d848
+SELECT 1
+> SELECT array_send(ARRAY['16/B374D848'::pg_lsn, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000c9400000002000000010000000800000016b374d848ffffffff
+SELECT 1
+> SELECT tsvectorsend('a:1 b:2'::tsvector)
+fields tsvectorsend:17:-1:-1
+row \x00000002610000010001620000010002
+SELECT 1
+> SELECT array_send(ARRAY['a:1 b:2'::tsvector, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000e1e00000002000000010000001000000002610000010001620000010002ffffffff
+SELECT 1
+> SELECT tsquerysend('a & b'::tsquery)
+fields tsquerysend:17:-1:-1
+row \x00000003020201000062000100006100
+SELECT 1
+> SELECT array_send(ARRAY['a & b'::tsquery, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000e1f00000002000000010000001000000003020201000062000100006100ffffffff
+SELECT 1
+> SELECT regconfigsend('english'::regconfig)
+fields regconfigsend:17:-1:-1
+row \x000033f5
+SELECT 1
+> SELECT array_send(ARRAY['english'::regconfig, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000e96000000020000000100000004000033f5ffffffff
+SELECT 1
+> SELECT regdictionarysend('simple'::regdictionary)
+fields regdictionarysend:17:-1:-1
+row \x00000eb5
+SELECT 1
+> SELECT array_send(ARRAY['simple'::regdictionary, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000eb900000002000000010000000400000eb5ffffffff
+SELECT 1
+> SELECT jsonb_send('{"a":1}'::jsonb)
+fields jsonb_send:17:-1:-1
+row \x017b2261223a20317d
+SELECT 1
+> SELECT array_send(ARRAY['{"a":1}'::jsonb, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000eda000000020000000100000009017b2261223a20317dffffffff
+SELECT 1
+> SELECT range_send('[1,5)'::int4range)
+fields range_send:17:-1:-1
+row \x0200000004000000010000000400000005
+SELECT 1
+> SELECT array_send(ARRAY['[1,5)'::int4range, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000f400000000200000001000000110200000004000000010000000400000005ffffffff
+SELECT 1
+> SELECT range_send('[1.5,2.5]'::numrange)
+fields range_send:17:-1:-1
+row \x060000000c0002000000000001000113880000000c000200000000000100021388
+SELECT 1
+> SELECT array_send(ARRAY['[1.5,2.5]'::numrange, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000f42000000020000000100000021060000000c0002000000000001000113880000000c000200000000000100021388ffffffff
+SELECT 1
+> SELECT range_send('[2020-01-01,2020-02-01)'::tsrange)
+fields range_send:17:-1:-1
+row \x020000000800023e0786c26000000000080002407723d70000
+SELECT 1
+> SELECT array_send(ARRAY['[2020-01-01,2020-02-01)'::tsrange, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000f44000000020000000100000019020000000800023e0786c26000000000080002407723d70000ffffffff
+SELECT 1
+> SELECT range_send('[2020-01-01 00:00+00,2020-02-01 00:00+00)'::tstzrange)
+fields range_send:17:-1:-1
+row \x020000000800023e0786c26000000000080002407723d70000
+SELECT 1
+> SELECT array_send(ARRAY['[2020-01-01 00:00+00,2020-02-01 00:00+00)'::tstzrange, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000f46000000020000000100000019020000000800023e0786c26000000000080002407723d70000ffffffff
+SELECT 1
+> SELECT range_send('[2020-01-01,2020-02-01)'::daterange)
+fields range_send:17:-1:-1
+row \x020000000400001c890000000400001ca8
+SELECT 1
+> SELECT array_send(ARRAY['[2020-01-01,2020-02-01)'::daterange, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000f48000000020000000100000011020000000400001c890000000400001ca8ffffffff
+SELECT 1
+> SELECT range_send('(1,9]'::int8range)
+fields range_send:17:-1:-1
+row \x0200000008000000000000000200000008000000000000000a
+SELECT 1
+> SELECT array_send(ARRAY['(1,9]'::int8range, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000f560000000200000001000000190200000008000000000000000200000008000000000000000affffffff
+SELECT 1
+> SELECT jsonpath_send('$.a[*] ? (@ > 1)'::jsonpath)
+fields jsonpath_send:17:-1:-1
+row \x01242e2261225b2a5d3f2840203e203129
+SELECT 1
+> SELECT array_send(ARRAY['$.a[*] ? (@ > 1)'::jsonpath, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000fe800000002000000010000001101242e2261225b2a5d3f2840203e203129ffffffff
+SELECT 1
+> SELECT regnamespacesend('pg_catalog'::regnamespace)
+fields regnamespacesend:17:-1:-1
+row \x0000000b
+SELECT 1
+> SELECT array_send(ARRAY['pg_catalog'::regnamespace, NULL])
+fields array_send:17:-1:-1
+row \x000000010000000100000ff90000000200000001000000040000000bffffffff
+SELECT 1
+> SELECT regrolesend('postgres'::regrole)
+fields regrolesend:17:-1:-1
+row \x0000000a
+SELECT 1
+> SELECT array_send(ARRAY['postgres'::regrole, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000010000000000200000001000000040000000affffffff
+SELECT 1
+> SELECT regcollationsend('"C"'::regcollation)
+fields regcollationsend:17:-1:-1
+row \x000003b6
+SELECT 1
+> SELECT array_send(ARRAY['"C"'::regcollation, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000105f000000020000000100000004000003b6ffffffff
+SELECT 1
+> SELECT multirange_send('{[1,3),[5,7)}'::int4multirange)
+fields multirange_send:17:-1:-1
+row \x00000002000000110200000004000000010000000400000003000000110200000004000000050000000400000007
+SELECT 1
+> SELECT array_send(ARRAY['{[1,3),[5,7)}'::int4multirange, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000116300000002000000010000002e00000002000000110200000004000000010000000400000003000000110200000004000000050000000400000007ffffffff
+SELECT 1
+> SELECT multirange_send('{[1,2]}'::nummultirange)
+fields multirange_send:17:-1:-1
+row \x000000010000001d060000000a000100000000000000010000000a00010000000000000002
+SELECT 1
+> SELECT array_send(ARRAY['{[1,2]}'::nummultirange, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000011b4000000020000000100000025000000010000001d060000000a000100000000000000010000000a00010000000000000002ffffffff
+SELECT 1
+> SELECT multirange_send('{[2020-01-01,2020-01-02)}'::tsmultirange)
+fields multirange_send:17:-1:-1
+row \x0000000100000019020000000800023e0786c260000000000800023e1ba499c000
+SELECT 1
+> SELECT array_send(ARRAY['{[2020-01-01,2020-01-02)}'::tsmultirange, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000011b50000000200000001000000210000000100000019020000000800023e0786c260000000000800023e1ba499c000ffffffff
+SELECT 1
+> SELECT multirange_send('{[2020-01-01 00:00+00,2020-01-02 00:00+00)}'::tstzmultirange)
+fields multirange_send:17:-1:-1
+row \x0000000100000019020000000800023e0786c260000000000800023e1ba499c000
+SELECT 1
+> SELECT array_send(ARRAY['{[2020-01-01 00:00+00,2020-01-02 00:00+00)}'::tstzmultirange, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000011b60000000200000001000000210000000100000019020000000800023e0786c260000000000800023e1ba499c000ffffffff
+SELECT 1
+> SELECT multirange_send('{[2020-01-01,2020-01-05)}'::datemultirange)
+fields multirange_send:17:-1:-1
+row \x0000000100000011020000000400001c890000000400001c8d
+SELECT 1
+> SELECT array_send(ARRAY['{[2020-01-01,2020-01-05)}'::datemultirange, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000011b70000000200000001000000190000000100000011020000000400001c890000000400001c8dffffffff
+SELECT 1
+> SELECT multirange_send('{(1,5]}'::int8multirange)
+fields multirange_send:17:-1:-1
+row \x000000010000001902000000080000000000000002000000080000000000000006
+SELECT 1
+> SELECT array_send(ARRAY['{(1,5]}'::int8multirange, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000011b8000000020000000100000021000000010000001902000000080000000000000002000000080000000000000006ffffffff
+SELECT 1
+> SELECT pg_snapshot_send('10:20:10,14,15'::pg_snapshot)
+fields pg_snapshot_send:17:-1:-1
+row \x00000003000000000000000a0000000000000014000000000000000a000000000000000e000000000000000f
+SELECT 1
+> SELECT array_send(ARRAY['10:20:10,14,15'::pg_snapshot, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000013ae00000002000000010000002c00000003000000000000000a0000000000000014000000000000000a000000000000000e000000000000000fffffffff
+SELECT 1
+> SELECT xid8send('123'::xid8)
+fields xid8send:17:-1:-1
+row \x000000000000007b
+SELECT 1
+> SELECT array_send(ARRAY['123'::xid8, NULL])
+fields array_send:17:-1:-1
+row \x0000000100000001000013cd000000020000000100000008000000000000007bffffffff
+SELECT 1
+> SELECT oid8send('456'::oid8)
+fields oid8send:17:-1:-1
+row \x00000000000001c8
+SELECT 1
+> SELECT array_send(ARRAY['456'::oid8, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000192500000002000000010000000800000000000001c8ffffffff
+SELECT 1
+> SELECT regdatabasesend('postgres'::regdatabase)
+fields regdatabasesend:17:-1:-1
+row \x00000005
+SELECT 1
+> SELECT array_send(ARRAY['postgres'::regdatabase, NULL])
+fields array_send:17:-1:-1
+row \x00000001000000010000195a00000002000000010000000400000005ffffffff
+SELECT 1
+> SELECT numeric_send(v::numeric) FROM (VALUES ('0'), ('-1.5'), ('NaN'), ('Infinity'), ('-Infinity'), ('123456789012345678901234567890.000000000001'), ('0.0000001'), ('1e100'), ('-0.00')) t(v)
+fields numeric_send:17:-1:-1
+row \x0000000000000000
+row \x000200004000000100011388
+row \x00000000c0000000
+row \x00000000d0000020
+row \x00000000f0000020
+row \x000b00070000000c000c0d801ed204d2162e23340d801ed2000000000001
+row \x0001fffe00000007000a
+row \x00010019000000000001
+row \x0000000000000002
+SELECT 9
+> SELECT float8send(v::float8), float4send(v::float4) FROM (VALUES ('0'), ('-0'), ('NaN'), ('Infinity'), ('-Infinity'), ('1e-40'), ('3.4e38')) t(v)
+fields float8send:17:-1:-1,float4send:17:-1:-1
+row \x0000000000000000,\x00000000
+row \x8000000000000000,\x80000000
+row \x7ff8000000000000,\x7fc00000
+row \x7ff0000000000000,\x7f800000
+row \xfff0000000000000,\xff800000
+row \x37a16c262777579c,\x000116c2
+row \x47eff933c78cdfad,\x7f7fc99e
+SELECT 7
+> SELECT timestamp_send(v::timestamp), timestamptz_send(v::timestamptz) FROM (VALUES ('infinity'), ('-infinity'), ('4713-01-01 BC'), ('294276-12-31 23:59:59.999999')) t(v)
+fields timestamp_send:17:-1:-1,timestamptz_send:17:-1:-1
+row \x7fffffffffffffff,\x7fffffffffffffff
+row \x8000000000000000,\x8000000000000000
+row \xfd0f7fbdaf17e000,\xfd0f7fbdaf17e000
+row \x7fffff5bb3b29fff,\x7fffff5bb3b29fff
+SELECT 4
+> SELECT date_send(v::date) FROM (VALUES ('infinity'), ('-infinity'), ('4713-01-01 BC'), ('2000-01-01')) t(v)
+fields date_send:17:-1:-1
+row \x7fffffff
+row \x80000000
+row \xffda97cd
+row \x00000000
+SELECT 4
+> SELECT interval_send(v::interval) FROM (VALUES ('-1 year -2 mons +3 days -04:05:06.789'), ('infinity'), ('-infinity'), ('0')) t(v)
+fields interval_send:17:-1:-1
+row \xfffffffc9368357800000003fffffff2
+row \x7fffffffffffffff7fffffff7fffffff
+row \x80000000000000008000000080000000
+row \x00000000000000000000000000000000
+SELECT 4
+> SELECT timetz_send(v::timetz), time_send(v::time) FROM (VALUES ('24:00:00-15:59'), ('00:00:00+15:59'), ('12:34:56.789012+05:30')) t(v)
+fields timetz_send:17:-1:-1,time_send:17:-1:-1
+row \x000000141dd760000000e0c4,\x000000141dd76000
+row \x0000000000000000ffff1f3c,\x0000000000000000
+row \x0000000a8be62614ffffb2a8,\x0000000a8be62614
+SELECT 3
+> SELECT inet_send(v::inet), cidr_send(v::cidr) FROM (VALUES ('::1/128'), ('2001:db8::/32'), ('0.0.0.0/0'), ('192.168.1.0/24')) t(v)
+fields inet_send:17:-1:-1,cidr_send:17:-1:-1
+row \x0380001000000000000000000000000000000001,\x0380011000000000000000000000000000000001
+row \x0320001020010db8000000000000000000000000,\x0320011020010db8000000000000000000000000
+row \x0200000400000000,\x0200010400000000
+row \x02180004c0a80100,\x02180104c0a80100
+SELECT 4
+> SELECT inet_send('2001:db8::1/64'::inet), inet_send('10.1.2.3'::inet)
+fields inet_send:17:-1:-1,inet_send:17:-1:-1
+row \x0340001020010db8000000000000000000000001,\x022000040a010203
+SELECT 1
+> SELECT bit_send(v::bit(12)), varbit_send(v::varbit) FROM (VALUES ('101010101010'), ('000000000001')) t(v)
+fields bit_send:17:-1:-1,varbit_send:17:-1:-1
+row \x0000000caaa0,\x0000000caaa0
+row \x0000000c0010,\x0000000c0010
+SELECT 2
+> SELECT varbit_send(''::varbit), varbit_send('1'::varbit), varbit_send('111111111'::varbit)
+fields varbit_send:17:-1:-1,varbit_send:17:-1:-1,varbit_send:17:-1:-1
+row \x00000000,\x0000000180,\x00000009ff80
+SELECT 1
+> SELECT array_send('{}'::int4[]), array_send('{{1,2},{3,4}}'::int4[]), array_send('[2:3]={5,6}'::int4[]), array_send('[0:1][-1:0]={{a,b},{c,d}}'::text[])
+fields array_send:17:-1:-1,array_send:17:-1:-1,array_send:17:-1:-1,array_send:17:-1:-1
+row \x000000000000000000000017,\x000000020000000000000017000000020000000100000002000000010000000400000001000000040000000200000004000000030000000400000004,\x000000010000000000000017000000020000000200000004000000050000000400000006,\x000000020000000000000019000000020000000000000002ffffffff0000000161000000016200000001630000000164
+SELECT 1
+> SELECT array_send(ARRAY[NULL::int4]), array_send(ARRAY[ARRAY[NULL::text, 'x'], ARRAY['y', NULL]])
+fields array_send:17:-1:-1,array_send:17:-1:-1
+row \x0000000100000001000000170000000100000001ffffffff,\x00000002000000010000001900000002000000010000000200000001ffffffff00000001780000000179ffffffff
+SELECT 1
+> SELECT array_send('{1.5,NaN}'::numeric[]), array_send('{"(1,2)","(3,4)"}'::point[]), array_send('{"[1,2)",empty}'::int4range[])
+fields array_send:17:-1:-1,array_send:17:-1:-1,array_send:17:-1:-1
+row \x0000000100000000000006a400000002000000010000000c0002000000000001000113880000000800000000c0000000,\x0000000100000000000002580000000200000001000000103ff000000000000040000000000000000000001040080000000000004010000000000000,\x000000010000000000000f4000000002000000010000001102000000040000000100000004000000020000000101
+SELECT 1
+> SELECT range_send(v::int4range) FROM (VALUES ('empty'), ('(,)'), ('[1,)'), ('(,5]'), ('[3,3]')) t(v)
+fields range_send:17:-1:-1
+row \x01
+row \x18
+row \x120000000400000001
+row \x080000000400000006
+row \x0200000004000000030000000400000004
+SELECT 5
+> SELECT range_send(v::numrange) FROM (VALUES ('[1.5,)'), ('(,-2.25]'), ('empty')) t(v)
+fields range_send:17:-1:-1
+row \x120000000c000200000000000100011388
+row \x0c0000000c0002000040000002000209c4
+row \x01
+SELECT 3
+> SELECT range_send('[-infinity,infinity]'::daterange), range_send('[2020-01-01 00:00:00+00,infinity)'::tstzrange)
+fields range_send:17:-1:-1,range_send:17:-1:-1
+row \x060000000480000000000000047fffffff,\x020000000800023e0786c26000000000087fffffffffffffff
+SELECT 1
+> SELECT multirange_send('{}'::int4multirange), multirange_send('{[1,2), (5,)}'::int4multirange), multirange_send('{(,3), [7,9]}'::int8multirange)
+fields multirange_send:17:-1:-1,multirange_send:17:-1:-1,multirange_send:17:-1:-1
+row \x00000000,\x0000000200000011020000000400000001000000040000000200000009120000000400000006,\x000000020000000d08000000080000000000000003000000190200000008000000000000000700000008000000000000000a
+SELECT 1
+> SELECT jsonb_send(v::jsonb) FROM (VALUES ('null'), ('[1, "a", true, null, {"b": [2.50]}]'), ('{"z": 1, "a": {"é": "é\n"}}'), ('"x"'), ('-0.0e10')) t(v)
+fields jsonb_send:17:-1:-1
+row \x016e756c6c
+row \x015b312c202261222c20747275652c206e756c6c2c207b2262223a205b322e35305d7d5d
+row \x017b2261223a207b22c3a9223a2022c3a95c6e227d2c20227a223a20317d
+row \x01227822
+row \x0130
+SELECT 5
+> SELECT json_send(v::json) FROM (VALUES ('{ "a" : 1 }'), ('[1,2,  3]')) t(v)
+fields json_send:17:-1:-1
+row \x7b20226122203a2031207d
+row \x5b312c322c2020335d
+SELECT 2
+> SELECT tsvectorsend(v::tsvector) FROM (VALUES (''), ('a b c'), ('a:1A,2B,3C,4 zz:16383D'), ('''x y'':5 \\:1')) t(v)
+fields tsvectorsend:17:-1:-1
+row \x00000000
+row \x00000003610000006200000063000000
+row \x0000000261000004c0018002400300047a7a0000013fff
+row \x000000025c00000100017820790000010005
+SELECT 4
+> SELECT tsquerysend(v::tsquery) FROM (VALUES ('a:*'), ('a:AB & !b'), ('a <3> b | (c <-> d)'), ('!a:*D')) t(v)
+fields tsquerysend:17:-1:-1
+row \x000000010100016100
+row \x00000004020202010100006200010c006100
+row \x00000007020302040001010000640001000063000204000301000062000100006100
+row \x0000000202010101016100
+SELECT 4
+> SELECT jsonpath_send(v::jsonpath) FROM (VALUES ('strict $.a'), ('$ ? (@ like_regex "a.*" flag "i")'), ('$.datetime("YYYY")'), ('lax $[1 to last]')) t(v)
+fields jsonpath_send:17:-1:-1
+row \x0173747269637420242e226122
+row \x01243f2840206c696b655f72656765782022612e2a2220666c61672022692229
+row \x01242e6461746574696d652822595959592229
+row \x01245b3120746f206c6173745d
+SELECT 4
+> SELECT uuid_send('00000000-0000-0000-0000-000000000000'), macaddr8_send('08:00:2b:01:02:03'::macaddr8), macaddr_send('ff:ff:ff:ff:ff:ff')
+fields uuid_send:17:-1:-1,macaddr8_send:17:-1:-1,macaddr_send:17:-1:-1
+row \x00000000000000000000000000000000,\x08002bfffe010203,\xffffffffffff
+SELECT 1
+> SELECT cash_send('-92233720368547758.08'::money), cash_send('0'::money)
+fields cash_send:17:-1:-1,cash_send:17:-1:-1
+row \x8000000000000000,\x0000000000000000
+SELECT 1
+> SELECT tidsend('(4294967295,65535)'::tid), xidsend('4294967295'::xid), xid8send('18446744073709551615'::xid8), cidsend('0'::cid)
+fields tidsend:17:-1:-1,xidsend:17:-1:-1,xid8send:17:-1:-1,cidsend:17:-1:-1
+row \xffffffffffff,\xffffffff,\xffffffffffffffff,\x00000000
+SELECT 1
+> SELECT pg_lsn_send('0/0'::pg_lsn), pg_lsn_send('FFFFFFFF/FFFFFFFF'::pg_lsn)
+fields pg_lsn_send:17:-1:-1,pg_lsn_send:17:-1:-1
+row \x0000000000000000,\xffffffffffffffff
+SELECT 1
+> SELECT pg_snapshot_send('10:10:'::pg_snapshot), txid_snapshot_send('1:2:'::txid_snapshot)
+fields pg_snapshot_send:17:-1:-1,txid_snapshot_send:17:-1:-1
+row \x00000000000000000000000a000000000000000a,\x0000000000000000000000010000000000000002
+SELECT 1
+> SELECT path_send('[(1,2),(3,4),(5,6)]'::path), poly_send('((0,0))'::polygon), circle_send('<(0,0),0>'::circle), box_send('(3,4),(1,2)'::box)
+fields path_send:17:-1:-1,poly_send:17:-1:-1,circle_send:17:-1:-1,box_send:17:-1:-1
+row \x00000000033ff000000000000040000000000000004008000000000000401000000000000040140000000000004018000000000000,\x0000000100000000000000000000000000000000,\x000000000000000000000000000000000000000000000000,\x400800000000000040100000000000003ff00000000000004000000000000000
+SELECT 1
+> SELECT point_send('(NaN,Infinity)'::point), line_send('[(0,0),(1,1)]'::line), lseg_send('[(0,0),(0,0)]'::lseg)
+fields point_send:17:-1:-1,line_send:17:-1:-1,lseg_send:17:-1:-1
+row \x7ff80000000000007ff0000000000000,\x3ff0000000000000bff00000000000000000000000000000,\x0000000000000000000000000000000000000000000000000000000000000000
+SELECT 1
+> SELECT byteasend(''::bytea), textsend(''), textsend('é漢字'), bpcharsend('ab'::char(5)), varcharsend('ab '::varchar(3)), namesend(repeat('x', 70)::name), charsend('é'::"char")
+fields byteasend:17:-1:-1,textsend:17:-1:-1,textsend:17:-1:-1,bpcharsend:17:-1:-1,varcharsend:17:-1:-1,namesend:17:-1:-1,charsend:17:-1:-1
+row \x,\x,\xc3a9e6bca2e5ad97,\x6162202020,\x616220,\x787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878787878,\xc3
+SELECT 1
+> SELECT boolsend(false), int2send((-32768)::int2), int4send(-2147483648), int8send(-9223372036854775808), oidsend(4294967295::oid), oid8send('18446744073709551615'::oid8)
+fields boolsend:17:-1:-1,int2send:17:-1:-1,int4send:17:-1:-1,int8send:17:-1:-1,oidsend:17:-1:-1,oid8send:17:-1:-1
+row \x00,\x8000,\x80000000,\x8000000000000000,\xffffffff,\xffffffffffffffff
+SELECT 1
+> SELECT int2vectorsend(''::int2vector), oidvectorsend(''::oidvector), int2vectorsend('-1 32767'::int2vector)
+fields int2vectorsend:17:-1:-1,oidvectorsend:17:-1:-1,int2vectorsend:17:-1:-1
+row \x0000000100000000000000150000000000000000,\x00000001000000000000001a0000000000000000,\x000000010000000000000015000000020000000000000002ffff000000027fff
+SELECT 1
+> SELECT xml_send('<?xml version="1.0"?><a>é</a>'::xml), xml_send('text only'::xml)
+fields xml_send:17:-1:-1,xml_send:17:-1:-1
+row \x3c613ec3a93c2f613e,\x74657874206f6e6c79
+SELECT 1
+> SELECT regclasssend('pg_type'::regclass), regtypesend('text[]'::regtype), regprocsend('-'::regproc), regclasssend('-'::regclass)
+fields regclasssend:17:-1:-1,regtypesend:17:-1:-1,regprocsend:17:-1:-1,regclasssend:17:-1:-1
+row \x000004df,\x000003f1,\x00000000,\x00000000
+SELECT 1
+> SELECT record_send(ROW(1, 'a', NULL::text, ARRAY[1.5]))
+fields record_send:17:-1:-1
+row \x00000004000000170000000400000001000002c1000000016100000019ffffffff000004cf000000240000000100000000000006a400000001000000010000000c000200000000000100011388
+SELECT 1
+> SELECT record_send(ROW())
+fields record_send:17:-1:-1
+row \x00000000
+SELECT 1
+> SELECT int4send(NULL), array_send(NULL::int4[])
+fields int4send:17:-1:-1,array_send:17:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT array_send(ARRAY['a:1'::tsvector, ''::tsvector]), array_send(ARRAY['{"a":1}'::jsonb])
+fields array_send:17:-1:-1,array_send:17:-1:-1
+row \x000000010000000000000e1e00000002000000010000000a000000016100000100010000000400000000,\x000000010000000000000eda000000010000000100000009017b2261223a20317d
+SELECT 1
+> SELECT aclitemout('postgres=r/postgres'::aclitem)
+fields aclitemout:2275:-2:-1
+row postgres=r/postgres
+SELECT 1

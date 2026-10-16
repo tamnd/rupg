@@ -2393,6 +2393,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/ts_headline_json.test")));
     }
 
+    /// The send functions of the base types and of their arrays called from SQL, which give the binary form of each type: the special values of the numbers and the times, multidimensional arrays with lower bounds and null elements, empty ranges and ranges with no bounds, `jsonb`, `tsvector`, `tsquery`, `jsonpath`, the network and geometric types, the limits of the integer types, and `record_send`. `connection/type_send.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn type_send() {
+        big_stack(|| script(include_str!("connection/type_send.test")));
+    }
+
+    /// The text input and output functions of the types called from SQL: the typmod of the third argument of an input function, the errors of the input, null values, and the result of type `cstring`. `connection/type_in_out.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn type_in_out() {
+        big_stack(|| script(include_str!("connection/type_in_out.test")));
+    }
+
     /// The function `ts_stat`: the counts of the lexemes and of their positions, the weights, the order of the rows, null values, the errors of a query that does not give one `tsvector` column, an empty text, two statements, a statement that gives no rows and a statement that is not read-only, and the errors of the query with and without a position. `connection/ts_stat.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn ts_stat() {

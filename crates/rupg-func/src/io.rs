@@ -6,7 +6,7 @@ use rupg_types::{
     self as types, Array, DateTimeInput, Record, Recv, RegKind, Value, ZoneAbbrevs, oid, tz,
 };
 
-use crate::{Session, bad_value, not_yet, reg, type_error};
+use crate::{Call, Session, bad_value, not_yet, reg, type_error};
 
 /// The OID of `xid`.
 const XID: u32 = 28;
@@ -948,6 +948,32 @@ fn receive_from(
         }
     };
     Ok(value)
+}
+
+/// The kernel of each text input function of a type, such as `int4in` or `numeric_in`, called from SQL: the value of the text for the type of the result, with the typmod of the third argument.
+pub(crate) fn input_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let text = args.first().and_then(Value::as_str).ok_or_else(bad_value)?;
+    let typmod = match args.get(2) {
+        Some(Value::Int4(typmod)) => *typmod,
+        _ => -1,
+    };
+    input(call.ret, text, typmod, call.session)
+}
+
+/// The kernel of each text output function of a type, such as `int4out` or `array_out`, called from SQL: the text of the value for the type of the argument.
+pub(crate) fn output_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let ([ty], [value]) = (call.args, args) else { return Err(bad_value()) };
+    let mut out = Vec::new();
+    output(*ty, value, call.session, &mut out)?;
+    Ok(Value::text(String::from_utf8(out).map_err(|_| bad_value())?))
+}
+
+/// The kernel of each send function of a type, such as `int4send` or `array_send`, called from SQL: the binary output of the value for the type of the argument.
+pub(crate) fn send_kernel(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let ([ty], [value]) = (call.args, args) else { return Err(bad_value()) };
+    let mut out = Vec::new();
+    send(*ty, value, &mut out)?;
+    Ok(Value::Bytea(out))
 }
 
 /// The binary output function of the type.
