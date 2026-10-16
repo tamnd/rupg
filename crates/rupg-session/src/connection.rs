@@ -441,6 +441,7 @@ impl Connection {
                 Ok(Done::Tag(match node {
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
+                    Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::CommentStmt(_) => CommandTag::Comment,
                     Node::DropStmt(stmt) => match stmt.removeType {
@@ -448,6 +449,8 @@ impl Connection {
                         ObjectType::OBJECT_VIEW => CommandTag::DropView,
                         ObjectType::OBJECT_INDEX => CommandTag::DropIndex,
                         ObjectType::OBJECT_SEQUENCE => CommandTag::DropSequence,
+                        ObjectType::OBJECT_TYPE => CommandTag::DropType,
+                        ObjectType::OBJECT_DOMAIN => CommandTag::DropDomain,
                         _ => CommandTag::DropTable,
                     },
                     Node::AlterTableStmt(stmt) => match stmt.objtype {
@@ -2499,6 +2502,12 @@ mod tests {
     #[test]
     fn domains() {
         big_stack(|| script(include_str!("connection/domains.test")));
+    }
+
+    /// `CREATE DOMAIN` and `DROP DOMAIN` of a user: the default, the collation, the `NOT NULL` constraint and the check constraints with their names, the rows of `pg_type` and `pg_constraint`, the views of `information_schema`, the casts that check the constraints, a domain over a domain and over an array, `DROP TYPE` of a domain, and the errors of each statement. `connection/domain_user.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn domain_user() {
+        big_stack(|| script(include_str!("connection/domain_user.test")));
     }
 
     /// The functions in SQL of `information_schema` that have a `RETURN` body, such as `_pg_char_max_length`: the rows of `pg_proc` and `pg_depend` with the OIDs of PostgreSQL, `pg_get_function_arguments` and `pg_get_function_result`, the results for many types and type modifiers and for the columns of a table, a call with and without the schema in `search_path`, and the errors of a bad argument. Also the shift operators `<<` and `>>` of the integer types, which the bodies use. `connection/sql_functions.test` is the output of PostgreSQL 19 for the same script in a new database.

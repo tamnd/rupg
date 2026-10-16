@@ -315,6 +315,8 @@ pub struct Domain {
     pub collation: u32,
     /// `typdefaultbin`: the default in the form of the analyzer, or `None`.
     pub default: Option<String>,
+    /// `typnotnull`: the domain has a not-null constraint.
+    pub not_null: bool,
 }
 
 /// A function, one row of `pg_proc`. Only the setup of a new cluster makes functions, for the functions in SQL of `information_schema`.
@@ -1363,17 +1365,7 @@ impl Catalog {
         let ty = self.types.get(&domain).ok_or_else(|| no_object("type", domain))?;
         let (domain_name, namespace) = (ty.name.clone(), ty.namespace);
         let name = match name {
-            Some(name) => {
-                if self.constraints_of_domain(domain).any(|c| c.name == name) {
-                    return Err(Error::new(
-                        SqlState::DUPLICATE_OBJECT,
-                        format!(
-                            "constraint \"{name}\" for domain \"{domain_name}\" already exists"
-                        ),
-                    ));
-                }
-                name.to_string()
-            }
+            Some(name) => self.new_domain_constraint_name(domain, &domain_name, name)?,
             None => self.choose_constraint_name(&domain_name, None, "check", namespace),
         };
         let mut constraint = self.new_constraint(name, namespace, ConKind::Check, 0, Vec::new());
@@ -1385,6 +1377,42 @@ impl Catalog {
         self.depend(me, ObjRef::new(PG_TYPE, domain), DepKind::Auto);
         for &referenced in refs {
             self.depend(me, referenced, DepKind::Normal);
+        }
+        Ok(oid)
+    }
+
+    /// The name that a statement gives to a constraint of a domain, which no other constraint of the domain has.
+    fn new_domain_constraint_name(
+        &self,
+        domain: u32,
+        domain_name: &str,
+        name: &str,
+    ) -> Result<String> {
+        if self.constraints_of_domain(domain).any(|c| c.name == name) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("constraint \"{name}\" for domain \"{domain_name}\" already exists"),
+            ));
+        }
+        Ok(name.to_string())
+    }
+
+    /// `domainAddNotNullConstraint`: the not-null constraint of a domain, which also sets `typnotnull`. Without a name, the name is `domain_not_null`.
+    pub fn add_domain_not_null(&mut self, domain: u32, name: Option<&str>) -> Result<u32> {
+        let ty = self.types.get(&domain).ok_or_else(|| no_object("type", domain))?;
+        let (domain_name, namespace) = (ty.name.clone(), ty.namespace);
+        let name = match name {
+            Some(name) => self.new_domain_constraint_name(domain, &domain_name, name)?,
+            None => self.choose_constraint_name(&domain_name, None, "not_null", namespace),
+        };
+        let mut constraint = self.new_constraint(name, namespace, ConKind::NotNull, 0, Vec::new());
+        constraint.domain = domain;
+        let me = ObjRef::new(PG_CONSTRAINT, constraint.oid);
+        let oid = constraint.oid;
+        self.insert_constraint(constraint);
+        self.depend(me, ObjRef::new(PG_TYPE, domain), DepKind::Auto);
+        if let Some(Type { domain: Some(facts), .. }) = self.types.get_mut(&domain) {
+            facts.not_null = true;
         }
         Ok(oid)
     }

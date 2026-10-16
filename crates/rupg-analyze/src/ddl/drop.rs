@@ -1,4 +1,4 @@
-//! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE` and `DROP SCHEMA`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
+//! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE`, `DROP SCHEMA`, `DROP TYPE` and `DROP DOMAIN`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
@@ -12,6 +12,10 @@ use rupg_types::{TypeInfo, format_type};
 
 use super::comment::{name_list, not_owner, range_var};
 use super::{Definer, Found, PG_TOAST_NAMESPACE, not_yet, qualified, relname};
+use crate::typename::type_name_text;
+
+/// `BOOTSTRAP_SUPERUSERID`: the owner of the built-in types.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
 
 /// `MAX_REPORTED_DEPS`: the number of objects that the detail of the report names.
 const MAX_REPORTED: usize = 100;
@@ -114,6 +118,7 @@ impl Definer<'_, '_> {
     pub(super) fn drop(&mut self, stmt: &DropStmt) -> Result<()> {
         let objects = match stmt.removeType {
             ObjectType::OBJECT_SCHEMA => self.find_schemas(stmt)?,
+            ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => self.find_types(stmt)?,
             ObjectType::OBJECT_TABLE
             | ObjectType::OBJECT_VIEW
             | ObjectType::OBJECT_INDEX
@@ -253,6 +258,58 @@ impl Definer<'_, '_> {
                 return Err(not_owner("schema", name));
             }
             let object = ObjRef::new(PG_NAMESPACE, oid);
+            if oid < FIRST_NORMAL_OID && !is_pinned(object) {
+                return Err(builtin_object());
+            }
+            objects.push(object);
+        }
+        Ok(objects)
+    }
+
+    /// The types of `RemoveObjects`, with the checks of `get_object_address_type` and `check_object_ownership`. `DROP DOMAIN` accepts only a domain.
+    fn find_types(&mut self, stmt: &DropStmt) -> Result<Vec<ObjRef>> {
+        let mut objects = Vec::new();
+        for item in stmt.objects.iter().flatten() {
+            let Node::TypeName(name) = item else {
+                return Err(Error::internal("a type name"));
+            };
+            let found = match self.an.lookup_type_name(name) {
+                Err(error) if stmt.missing_ok && error.state() == SqlState::UNDEFINED_SCHEMA => {
+                    self.notice(
+                        SqlState::SUCCESSFUL_COMPLETION,
+                        format!("{}, skipping", error.message()),
+                    );
+                    continue;
+                }
+                found => found?,
+            };
+            let Some(oid) = found else {
+                let message = format!("type \"{}\" does not exist", type_name_text(name));
+                if !stmt.missing_ok {
+                    return Err(Error::new(SqlState::UNDEFINED_OBJECT, message));
+                }
+                self.notice(SqlState::SUCCESSFUL_COMPLETION, format!("{message}, skipping"));
+                continue;
+            };
+            let (kind, owner) = match self.catalog.type_by_oid(oid) {
+                Some(ty) if ty.domain.is_some() => (b'd', ty.owner),
+                Some(ty) if ty.relation != 0 => (b'c', ty.owner),
+                Some(ty) => (b'b', ty.owner),
+                None => {
+                    (builtin::type_by_oid(oid).map_or(b'b', |row| row.kind), BOOTSTRAP_SUPERUSER)
+                }
+            };
+            if stmt.removeType == ObjectType::OBJECT_DOMAIN && kind != b'd' {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("\"{}\" is not a domain", type_name_text(name)),
+                ));
+            }
+            if !self.is_superuser() && owner != self.user {
+                let word = if kind == b'd' { "domain" } else { "type" };
+                return Err(not_owner(word, &self.type_text(oid)));
+            }
+            let object = ObjRef::new(PG_TYPE, oid);
             if oid < FIRST_NORMAL_OID && !is_pinned(object) {
                 return Err(builtin_object());
             }
