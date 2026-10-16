@@ -1,0 +1,95 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''c''::tsquery')
+fields ts_rewrite:3615:-1:-1
+row 'b' & 'c'
+SELECT 1
+> SELECT ts_rewrite('a & b & c'::tsquery, $$SELECT t::tsquery, s::tsquery FROM (VALUES ('a', 'x|y'), ('b & c', 'z'), (NULL, 'q'), ('x', NULL), ('', 'w'), ('y', 'k')) v(t, s)$$)
+fields ts_rewrite:3615:-1:-1
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+row 'z' & ( 'k' | 'x' )
+SELECT 1
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery')
+fields ts_rewrite:3615:-1:-1
+ERROR 22023 ts_rewrite query must return two tsquery columns
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''c''::text')
+fields ts_rewrite:3615:-1:-1
+ERROR 22023 ts_rewrite query must return two tsquery columns
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::text, ''c''::tsquery')
+fields ts_rewrite:3615:-1:-1
+ERROR 22023 ts_rewrite query must return two tsquery columns
+> SELECT ts_rewrite(''::tsquery, 'SELECT 1')
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 19
+fields ts_rewrite:3615:-1:-1
+row 
+SELECT 1
+> SELECT ts_rewrite(''::tsquery, 'nonsense')
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 19
+fields ts_rewrite:3615:-1:-1
+row 
+SELECT 1
+> SELECT ts_rewrite('a'::tsquery, 'nonsense')
+fields ts_rewrite:3615:-1:-1
+ERROR 42601 syntax error at or near "nonsense"
+> SELECT ts_rewrite('a'::tsquery, '')
+fields ts_rewrite:3615:-1:-1
+ERROR 42P11 cannot open multi-query plan as cursor
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''''::tsquery')
+fields ts_rewrite:3615:-1:-1
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+row 'b'
+SELECT 1
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''''::tsquery UNION ALL SELECT ''b'', ''c''')
+fields ts_rewrite:3615:-1:-1
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+row 'c'
+SELECT 1
+> SELECT ts_rewrite('a'::tsquery, 'SELECT ''a''::tsquery, ''''::tsquery UNION ALL SELECT ''b'', ''c''')
+fields ts_rewrite:3615:-1:-1
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+row 
+SELECT 1
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''b''::tsquery UNION ALL SELECT ''b'', ''c''')
+fields ts_rewrite:3615:-1:-1
+row 'c' & 'c'
+SELECT 1
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''b''::tsquery WHERE false')
+fields ts_rewrite:3615:-1:-1
+row 'b' & 'a'
+SELECT 1
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''b''::tsquery FROM generate_series(1, 300)')
+fields ts_rewrite:3615:-1:-1
+row 'b' & 'b'
+SELECT 1
+> SELECT ts_rewrite('a <-> b | c'::tsquery, 'SELECT ''a <-> b''::tsquery, ''d & e''::tsquery')
+fields ts_rewrite:3615:-1:-1
+row 'c' | 'e' & 'd'
+SELECT 1
+> SELECT ts_rewrite('a & !b'::tsquery, 'SELECT ''b''::tsquery, ''''::tsquery')
+fields ts_rewrite:3615:-1:-1
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+row 'a'
+SELECT 1
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''c''::tsquery; SELECT 1')
+fields ts_rewrite:3615:-1:-1
+ERROR 42P11 cannot open multi-query plan as cursor
+> SELECT ts_rewrite('a & b'::tsquery, 'SET TimeZone TO ''UTC''')
+fields ts_rewrite:3615:-1:-1
+ERROR 42P11 cannot open SET query as cursor
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT 1/0, 2')
+fields ts_rewrite:3615:-1:-1
+ERROR 22012 division by zero (SQL statement "SELECT 1/0, 2")
+> SELECT ts_rewrite('a & b'::tsquery, NULL)
+fields ts_rewrite:3615:-1:-1
+row NULL
+SELECT 1
+> SELECT ts_rewrite(NULL, 'SELECT 1')
+fields ts_rewrite:3615:-1:-1
+row NULL
+SELECT 1
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT ''a''::tsquery, ''c''::tsquery, 1')
+fields ts_rewrite:3615:-1:-1
+ERROR 22023 ts_rewrite query must return two tsquery columns
+> SELECT ts_rewrite('a & b'::tsquery, 'SELECT nope')
+fields ts_rewrite:3615:-1:-1
+ERROR 42703 column "nope" does not exist

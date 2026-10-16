@@ -125,7 +125,7 @@ pub fn run(node: &Node, text: &str, cx: &mut Context<'_>) -> Result<Outcome, Err
 }
 
 /// The error for a statement that the session cannot run yet, with the first word of the statement.
-fn not_supported(text: &str) -> Error {
+pub(crate) fn not_supported(text: &str) -> Error {
     let word: String = text
         .trim_start_matches(|c: char| c.is_whitespace() || c == '(')
         .chars()
