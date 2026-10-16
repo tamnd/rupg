@@ -1,12 +1,13 @@
-//! The functions of text search that use the parser: `ts_parse` and `ts_token_type` of `wparser.c`, `to_tsvector` of `to_tsany.c` with `parsetext` of `ts_parse.c`, `get_current_ts_config` of `ts_utils.c` and `ts_match_tq` of `tsvector_op.c`. A function without a configuration uses the configuration of `default_text_search_config`, as `getTSCurrentConfig` finds it.
+//! The functions of text search that use the parser: `ts_parse` and `ts_token_type` of `wparser.c`, `to_tsvector`, `to_tsquery`, `plainto_tsquery`, `phraseto_tsquery` and `websearch_to_tsquery` of `to_tsany.c` with `parsetext` of `ts_parse.c`, `get_current_ts_config` of `ts_utils.c`, and `ts_match_tq` and `ts_match_tt` of `tsvector_op.c`. A function without a configuration uses the configuration of `default_text_search_config`, as `getTSCurrentConfig` finds it.
 
 use rupg_analyze::tsdict::{self, Config};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::TOKEN_TYPES;
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_types::{
-    Lexeme, RegKind, TSVECTOR_MAX_DATA, TSVECTOR_MAX_POSITIONS, TSVECTOR_MAX_WORD, Value,
-    limit_position, ts_compare_string, tsvector_data_len,
+    Lexeme, QueryItem, RegKind, TSQUERY_AND, TSQUERY_PHRASE, TSVECTOR_MAX_DATA,
+    TSVECTOR_MAX_POSITIONS, TSVECTOR_MAX_WORD, TsQueryMode, TsQueryPush, TypeError, Value,
+    limit_position, ts_compare_string, tsquery_parse_with, tsvector_data_len,
 };
 
 use crate::{Call, Kernel, Session, bad_value, reg, tsparser};
@@ -133,6 +134,116 @@ fn match_tq(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(Value::Bool(crate::tsmatch::matches(&lexemes, items)))
 }
 
+/// `pushval_morph`: the lexemes of an operand of a query, from `parsetext`. The lexemes of one word have `&` between them, and the words have `op` with the distance 1 between them. A stop word in the operand keeps its place, so the distances of `<->` stay correct. An operand with no lexemes is the place of a stop word.
+fn push_morph(
+    session: &dyn Session,
+    config: &Config,
+    op: u8,
+    push: &mut TsQueryPush<'_>,
+    text: &str,
+    weight: u8,
+    prefix: bool,
+) -> std::result::Result<(), TypeError> {
+    let mut parsed = Parsed::default();
+    parse_text(session, config, text, &mut parsed);
+    if parsed.words.is_empty() {
+        push.stop();
+        return Ok(());
+    }
+    let mut words = parsed.words.into_iter().peekable();
+    let mut pos = 0;
+    let mut first = true;
+    while let Some((word, at)) = words.next() {
+        if pos > 0 {
+            while pos + 1 < at {
+                push.stop();
+                if !first {
+                    push.operator(op, 1);
+                }
+                first = false;
+                pos += 1;
+            }
+        }
+        pos = at;
+        push.value(word, weight, prefix)?;
+        while let Some((word, _)) = words.next_if(|word| word.1 == pos) {
+            push.value(word, weight, prefix)?;
+            push.operator(TSQUERY_AND, 0);
+        }
+        if !first {
+            push.operator(op, 1);
+        }
+        first = false;
+    }
+    Ok(())
+}
+
+/// `parse_tsquery` with `pushval_morph`: the query of a text with a configuration, with the notice of PostgreSQL for an empty query.
+fn to_tsquery_with(
+    session: &dyn Session,
+    config: u32,
+    text: &str,
+    mode: TsQueryMode,
+    op: u8,
+) -> Result<Vec<QueryItem>> {
+    let config = tsdict::config(session.catalog(), config)?;
+    let mut pushval = |push: &mut TsQueryPush<'_>, word: &str, weight: u8, prefix: bool| {
+        push_morph(session, &config, op, push, word, weight, prefix)
+    };
+    let (items, stops) = tsquery_parse_with(text, mode, &mut pushval)?;
+    if stops {
+        session.warn(Error::new(
+            SqlState::SUCCESSFUL_COMPLETION,
+            "text-search query contains only stop words or doesn't contain lexemes, ignored",
+        ));
+    } else if items.is_empty() {
+        session.warn(crate::tsquery::no_lexemes(text));
+    }
+    Ok(items)
+}
+
+/// The functions that make a query, with a configuration as the first argument or with the configuration of `default_text_search_config`. `mode` is the syntax of the text, and `op` is the operator between the words of an operand.
+fn to_tsquery_kind(call: &Call<'_>, args: &[Value], mode: TsQueryMode, op: u8) -> Result<Value> {
+    let (config, text) = match args {
+        [config, text] => (config.as_oid().ok_or_else(bad_value)?, text),
+        [text] => (current_config(call.session)?, text),
+        _ => return Err(bad_value()),
+    };
+    let text = text.as_str().ok_or_else(bad_value)?;
+    Ok(Value::TsQuery(to_tsquery_with(call.session, config, text, mode, op)?))
+}
+
+/// `to_tsquery_byid` and `to_tsquery`.
+fn to_tsquery(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    to_tsquery_kind(call, args, TsQueryMode::Standard, TSQUERY_PHRASE)
+}
+
+/// `plainto_tsquery_byid` and `plainto_tsquery`.
+fn plainto_tsquery(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    to_tsquery_kind(call, args, TsQueryMode::Plain, TSQUERY_AND)
+}
+
+/// `phraseto_tsquery_byid` and `phraseto_tsquery`.
+fn phraseto_tsquery(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    to_tsquery_kind(call, args, TsQueryMode::Plain, TSQUERY_PHRASE)
+}
+
+/// `websearch_to_tsquery_byid` and `websearch_to_tsquery`.
+fn websearch_to_tsquery(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    to_tsquery_kind(call, args, TsQueryMode::Web, TSQUERY_PHRASE)
+}
+
+/// `ts_match_tt`: the operator `text @@ text`, which is `to_tsvector(text) @@ plainto_tsquery(text)`.
+fn match_tt(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [text, query] = args else { return Err(bad_value()) };
+    let config = current_config(call.session)?;
+    let vector = to_tsvector_with(call.session, config, text.as_str().ok_or_else(bad_value)?)?;
+    let Value::TsVector(lexemes) = vector else { return Err(bad_value()) };
+    let query = query.as_str().ok_or_else(bad_value)?;
+    let items = to_tsquery_with(call.session, config, query, TsQueryMode::Plain, TSQUERY_AND)?;
+    Ok(Value::Bool(crate::tsmatch::matches(&lexemes, &items)))
+}
+
 /// `lookup_ts_parser_cache`: the default parser is the only parser.
 ///
 /// # Errors
@@ -183,6 +294,11 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "to_tsvector" => to_tsvector,
         "get_current_ts_config" => get_current_ts_config,
         "ts_match_tq" => match_tq,
+        "to_tsquery_byid" | "to_tsquery" => to_tsquery,
+        "plainto_tsquery_byid" | "plainto_tsquery" => plainto_tsquery,
+        "phraseto_tsquery_byid" | "phraseto_tsquery" => phraseto_tsquery,
+        "websearch_to_tsquery_byid" | "websearch_to_tsquery" => websearch_to_tsquery,
+        "ts_match_tt" => match_tt,
         _ => return None,
     })
 }

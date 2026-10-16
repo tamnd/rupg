@@ -168,6 +168,73 @@ enum Token {
     Close,
 }
 
+/// The tokenizer of `parse_tsquery`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TsQueryMode {
+    /// `gettoken_query_standard`: the syntax of `tsqueryin` and `to_tsquery`.
+    Standard,
+    /// `gettoken_query_plain`: the whole text is one operand, for `plainto_tsquery` and `phraseto_tsquery`.
+    Plain,
+    /// `gettoken_query_websearch`: the syntax of `websearch_to_tsquery`, with `-`, `or` and text in double quotes.
+    Web,
+}
+
+/// An item that the parser makes, or `QI_VALSTOP`, the place of a stop word.
+#[derive(Debug)]
+enum Pol {
+    Item(QueryItem),
+    Stop,
+}
+
+/// The items of a query in postfix order, as `pushValue`, `pushOperator` and `pushStop` add them. The function for the operands of [`tsquery_parse_with`] adds the items of each operand here.
+#[derive(Debug)]
+pub struct TsQueryPush<'a> {
+    text: &'a str,
+    items: Vec<Pol>,
+    /// The bytes of the operands with a zero byte after each one.
+    data: usize,
+}
+
+impl TsQueryPush<'_> {
+    /// `pushValue`: one lexeme.
+    ///
+    /// # Errors
+    ///
+    /// `54000` for a lexeme or a query that is too long.
+    pub fn value(&mut self, word: String, weight: u8, prefix: bool) -> Result<(), TypeError> {
+        if word.len() > TSVECTOR_MAX_WORD {
+            return Err(TypeError::new(
+                SqlState::PROGRAM_LIMIT_EXCEEDED,
+                format!("word is too long in tsquery: \"{}\"", self.text),
+            ));
+        }
+        if self.data > TSVECTOR_MAX_DATA {
+            return Err(TypeError::new(
+                SqlState::PROGRAM_LIMIT_EXCEEDED,
+                format!("value is too big in tsquery: \"{}\"", self.text),
+            ));
+        }
+        self.data += word.len() + 1;
+        self.items.push(Pol::Item(QueryItem::Operand { word, weight, prefix }));
+        Ok(())
+    }
+
+    /// `pushOperator`: an operator for the items before it. Only `<N>` keeps the distance.
+    pub fn operator(&mut self, op: u8, distance: u16) {
+        let distance = if op == TSQUERY_PHRASE { distance } else { 0 };
+        self.items.push(Pol::Item(QueryItem::Operator { op, distance, left: 0 }));
+    }
+
+    /// `pushStop`: the place of a stop word, which the parser takes out of the query at the end.
+    pub fn stop(&mut self) {
+        self.items.push(Pol::Stop);
+    }
+}
+
+/// The function that adds the items of an operand of a query: the text of the operand, its weights and its prefix flag.
+pub type TsQueryPushVal<'f> =
+    dyn FnMut(&mut TsQueryPush<'_>, &str, u8, bool) -> Result<(), TypeError> + 'f;
+
 /// The parser of the text of a `tsquery`.
 struct Parser<'a> {
     text: &'a str,
@@ -175,10 +242,8 @@ struct Parser<'a> {
     /// The number of parentheses that are open.
     count: i32,
     wait: Wait,
-    /// The items in postfix order.
-    items: Vec<QueryItem>,
-    /// The bytes of the operands with a zero byte after each one.
-    data: usize,
+    mode: TsQueryMode,
+    push: TsQueryPush<'a>,
 }
 
 impl Parser<'_> {
@@ -195,6 +260,7 @@ impl Parser<'_> {
 
     /// `gettoken_tsvector` with the flags of a query: a lexeme ends at an operator or a colon, and has no positions. `None` at the end of the text.
     fn word(&mut self) -> Result<Option<String>, TypeError> {
+        let web = self.mode == TsQueryMode::Web;
         let mut word = String::new();
         let mut state = Word::Start;
         let mut old = Word::End;
@@ -203,12 +269,12 @@ impl Parser<'_> {
             match state {
                 Word::Start => match c {
                     None => return Ok(None),
-                    Some('\'') => state = Word::EndComplex,
-                    Some('\\') => {
+                    Some('\'') if !web => state = Word::EndComplex,
+                    Some('\\') if !web => {
                         state = Word::Next;
                         old = Word::End;
                     }
-                    Some(c) if is_operator(c) => return Err(self.syntax()),
+                    Some(c) if is_operator(c) || (web && c == '"') => return Err(self.syntax()),
                     Some(c) if is_space(c) => {}
                     Some(c) => {
                         word.push(c);
@@ -228,12 +294,14 @@ impl Parser<'_> {
                     }
                 },
                 Word::End => match c {
-                    Some('\\') => {
+                    Some('\\') if !web => {
                         state = Word::Next;
                         old = Word::End;
                     }
                     None => break,
-                    Some(c) if is_space(c) || is_operator(c) || c == ':' => break,
+                    Some(c) if is_space(c) || is_operator(c) || c == ':' || (web && c == '"') => {
+                        break;
+                    }
                     Some(c) => word.push(c),
                 },
                 Word::EndComplex => match c {
@@ -313,8 +381,109 @@ impl Parser<'_> {
         Ok(Some(distance))
     }
 
-    /// `gettoken_query_standard`.
+    /// The next token of the tokenizer of the mode.
     fn token(&mut self) -> Result<Token, TypeError> {
+        match self.mode {
+            TsQueryMode::Standard => self.token_standard(),
+            TsQueryMode::Plain => Ok(self.token_plain()),
+            TsQueryMode::Web => self.token_web(),
+        }
+    }
+
+    /// `gettoken_query_plain`: the rest of the text as one operand.
+    fn token_plain(&mut self) -> Token {
+        if self.at >= self.text.len() {
+            return Token::End;
+        }
+        let word = self.text[self.at..].to_string();
+        self.at = self.text.len();
+        self.count += 1;
+        Token::Operand(word, 0, false)
+    }
+
+    /// `parse_or_operator`: true at the word `or` when an operand comes after it. The word must end after `or`.
+    fn or_operator(&mut self) -> bool {
+        let rest = &self.text[self.at..];
+        if !rest.get(..2).is_some_and(|or| or.eq_ignore_ascii_case("or")) {
+            return false;
+        }
+        let mut after = rest[2..].chars();
+        match after.next() {
+            None => return false,
+            Some(c) if c == '-' || c == '_' || c.is_ascii_alphanumeric() => return false,
+            Some(_) => {}
+        }
+        if !after.any(|c| !is_space(c)) {
+            return false;
+        }
+        self.at += 2;
+        true
+    }
+
+    /// `gettoken_query_websearch`: words with `-` for `!`, `or` for `|`, and text in double quotes for one operand. Other operators are ignored, and two operands with nothing between them have `&` between them.
+    fn token_web(&mut self) -> Result<Token, TypeError> {
+        loop {
+            let c = self.peek();
+            match self.wait {
+                Wait::FirstOperand | Wait::Operand => match c {
+                    Some('-') => {
+                        self.at += 1;
+                        self.wait = Wait::Operand;
+                        return Ok(Token::Operator(TSQUERY_NOT, 0));
+                    }
+                    Some('"') => {
+                        let start = self.at + 1;
+                        let len = self.text[start..].find('"').unwrap_or(self.text.len() - start);
+                        let word = self.text[start..start + len].to_string();
+                        self.at = (start + len + 1).min(self.text.len());
+                        self.wait = Wait::Operator;
+                        self.count += 1;
+                        return Ok(Token::Operand(word, 0, false));
+                    }
+                    Some(c) if is_operator(c) => {
+                        self.at += 1;
+                        self.wait = Wait::Operand;
+                        continue;
+                    }
+                    Some(c) if is_space(c) => {}
+                    _ => {
+                        return Ok(match self.word()? {
+                            Some(word) => {
+                                self.wait = Wait::Operator;
+                                Token::Operand(word, 0, false)
+                            }
+                            None if self.wait == Wait::FirstOperand => Token::End,
+                            None => {
+                                // An operator at the end must have an operand.
+                                self.push.stop();
+                                Token::End
+                            }
+                        });
+                    }
+                },
+                Wait::Operator => match c {
+                    None => return Ok(Token::End),
+                    Some(_) if self.or_operator() => {
+                        self.wait = Wait::Operand;
+                        return Ok(Token::Operator(TSQUERY_OR, 0));
+                    }
+                    Some(c) if is_operator(c) => {
+                        self.at += 1;
+                        continue;
+                    }
+                    Some(c) if !is_space(c) => {
+                        self.wait = Wait::Operand;
+                        return Ok(Token::Operator(TSQUERY_AND, 0));
+                    }
+                    Some(_) => {}
+                },
+            }
+            self.at += c.map_or(0, char::len_utf8);
+        }
+    }
+
+    /// `gettoken_query_standard`.
+    fn token_standard(&mut self) -> Result<Token, TypeError> {
         loop {
             let c = self.peek();
             match self.wait {
@@ -377,25 +546,6 @@ impl Parser<'_> {
         }
     }
 
-    /// `pushValue`.
-    fn push_operand(&mut self, word: String, weight: u8, prefix: bool) -> Result<(), TypeError> {
-        if word.len() > TSVECTOR_MAX_WORD {
-            return Err(TypeError::new(
-                SqlState::PROGRAM_LIMIT_EXCEEDED,
-                format!("word is too long in tsquery: \"{}\"", self.text),
-            ));
-        }
-        if self.data > TSVECTOR_MAX_DATA {
-            return Err(TypeError::new(
-                SqlState::PROGRAM_LIMIT_EXCEEDED,
-                format!("value is too big in tsquery: \"{}\"", self.text),
-            ));
-        }
-        self.data += word.len() + 1;
-        self.items.push(QueryItem::Operand { word, weight, prefix });
-        Ok(())
-    }
-
     /// `cleanOpStack`: moves the operators that bind at least as much as `op` to the items. `!` binds to the right, so it moves only the operators that bind more.
     fn clean(&mut self, stack: &mut Vec<(u8, u16)>, op: u8) {
         let p = priority(op);
@@ -405,12 +555,12 @@ impl Parser<'_> {
                 break;
             }
             stack.pop();
-            self.items.push(QueryItem::Operator { op: top, distance, left: 0 });
+            self.push.operator(top, distance);
         }
     }
 
     /// `makepol`: the items of one level of parentheses in postfix order.
-    fn makepol(&mut self, depth: usize) -> Result<(), TypeError> {
+    fn makepol(&mut self, depth: usize, pushval: &mut TsQueryPushVal<'_>) -> Result<(), TypeError> {
         if depth >= MAX_DEPTH {
             return Err(too_deep());
         }
@@ -418,7 +568,9 @@ impl Parser<'_> {
         loop {
             match self.token()? {
                 Token::End => break,
-                Token::Operand(word, weight, prefix) => self.push_operand(word, weight, prefix)?,
+                Token::Operand(word, weight, prefix) => {
+                    pushval(&mut self.push, &word, weight, prefix)?
+                }
                 Token::Operator(op, distance) => {
                     self.clean(&mut stack, op);
                     if stack.len() == STACK_DEPTH {
@@ -426,7 +578,7 @@ impl Parser<'_> {
                     }
                     stack.push((op, distance));
                 }
-                Token::Open => self.makepol(depth + 1)?,
+                Token::Open => self.makepol(depth + 1, pushval)?,
                 Token::Close => break,
                 Token::Bad => return Err(self.syntax()),
             }
@@ -442,16 +594,129 @@ impl Parser<'_> {
 ///
 /// `42601` for bad syntax, `22023` for a distance out of range, `54000` for a lexeme or a query that is too long, `XX000` for more than 32 operators that wait in one level of parentheses, and `54001` for a query that is too deep.
 pub fn tsquery_parse(text: &str) -> Result<Vec<QueryItem>, TypeError> {
-    let mut parser =
-        Parser { text, at: 0, count: 0, wait: Wait::FirstOperand, items: Vec::new(), data: 0 };
-    parser.makepol(0)?;
-    let mut items = parser.items;
+    let mut asis = |push: &mut TsQueryPush<'_>, word: &str, weight: u8, prefix: bool| {
+        push.value(word.to_string(), weight, prefix)
+    };
+    Ok(tsquery_parse_with(text, TsQueryMode::Standard, &mut asis)?.0)
+}
+
+/// `parse_tsquery`: the items of a query in the syntax of the mode. `pushval` adds the items of each operand: one lexeme, a query of lexemes, or the place of a stop word. The places of the stop words go out of the query at the end, as `cleanup_tsquery_stopwords` takes them out. The flag is true when the query had only stop words, so nothing is left. The caller sends the notice of PostgreSQL for an empty query.
+///
+/// # Errors
+///
+/// The errors of [`tsquery_parse`] and of `pushval`.
+pub fn tsquery_parse_with(
+    text: &str,
+    mode: TsQueryMode,
+    pushval: &mut TsQueryPushVal<'_>,
+) -> Result<(Vec<QueryItem>, bool), TypeError> {
+    let push = TsQueryPush { text, items: Vec::new(), data: 0 };
+    let mut parser = Parser { text, at: 0, count: 0, wait: Wait::FirstOperand, mode, push };
+    parser.makepol(0, pushval)?;
+    let mut items = parser.push.items;
     if items.is_empty() {
-        return Ok(items);
+        return Ok((Vec::new(), false));
     }
     items.reverse();
+    if items.iter().any(|item| matches!(item, Pol::Stop)) {
+        let mut rest = items.into_iter();
+        let tree = tree(&mut rest, 0)?;
+        if rest.next().is_some() {
+            return Err(internal("malformed tsquery: extra nodes".to_string()));
+        }
+        return Ok(match clean_stops(tree).0 {
+            Some(tree) => (plain(tree), false),
+            None => (Vec::new(), true),
+        });
+    }
+    let mut items: Vec<QueryItem> = items
+        .into_iter()
+        .filter_map(|item| match item {
+            Pol::Item(item) => Some(item),
+            Pol::Stop => None,
+        })
+        .collect();
     link(&mut items)?;
-    Ok(items)
+    Ok((items, false))
+}
+
+/// A node of the tree of `maketree`, for `clean_stopword_intree`.
+enum Node {
+    Operand(QueryItem),
+    Stop,
+    Operator { op: u8, distance: u16, right: Box<Node>, left: Option<Box<Node>> },
+}
+
+/// `findoprnd` and `maketree` for the items of a query with stop words, in prefix order.
+fn tree(items: &mut std::vec::IntoIter<Pol>, depth: usize) -> Result<Node, TypeError> {
+    if depth >= MAX_DEPTH {
+        return Err(too_deep());
+    }
+    match items.next() {
+        None => Err(internal("malformed tsquery: operand not found".to_string())),
+        Some(Pol::Stop) => Ok(Node::Stop),
+        Some(Pol::Item(QueryItem::Operator { op, distance, .. })) => {
+            let right = Box::new(tree(items, depth + 1)?);
+            let left =
+                if op == TSQUERY_NOT { None } else { Some(Box::new(tree(items, depth + 1)?)) };
+            Ok(Node::Operator { op, distance, right, left })
+        }
+        Some(Pol::Item(item)) => Ok(Node::Operand(item)),
+    }
+}
+
+/// `clean_stopword_intree`: the tree without the stop words, or `None` when nothing is left. The two numbers are the distances that the removed words add on the left side and on the right side of the tree, which a `<N>` above it adds to its distance.
+fn clean_stops(node: Node) -> (Option<Node>, i32, i32) {
+    let Node::Operator { op, distance, right, left } = node else {
+        return match node {
+            Node::Stop => (None, 0, 0),
+            node => (Some(node), 0, 0),
+        };
+    };
+    let (right, rladd, rradd) = clean_stops(*right);
+    let Some(left) = left else {
+        // `!` does not change the width of the pattern.
+        let node = right.map(|right| Node::Operator { op, distance, right: Box::new(right), left });
+        return (node, rladd, rradd);
+    };
+    let (left, lladd, lradd) = clean_stops(*left);
+    let phrase = op == TSQUERY_PHRASE;
+    let own = if phrase { i32::from(distance) } else { 0 };
+    match (left, right) {
+        (None, None) => {
+            let add = if phrase { lladd + own + rladd } else { lladd.max(rladd) };
+            (None, add, add)
+        }
+        (None, Some(right)) if phrase => (Some(right), lladd + own + rladd, rradd),
+        (None, Some(right)) => (Some(right), rladd, rradd),
+        (Some(left), None) if phrase => (Some(left), lladd, lradd + own + rradd),
+        (Some(left), None) => (Some(left), lladd, lradd),
+        (Some(left), Some(right)) => {
+            let (right, left) = (Box::new(right), Some(Box::new(left)));
+            if phrase {
+                let distance = u16::try_from(own + lradd + rladd).unwrap_or(u16::MAX);
+                (Some(Node::Operator { op, distance, right, left }), lladd, rradd)
+            } else {
+                (Some(Node::Operator { op, distance, right, left }), 0, 0)
+            }
+        }
+    }
+}
+
+/// `plaintree`: the items of a tree in prefix order.
+fn plain(node: Node) -> Vec<QueryItem> {
+    match node {
+        Node::Operand(item) => vec![item],
+        Node::Stop => Vec::new(),
+        Node::Operator { op, distance, right, left: None } => {
+            let mut items = vec![QueryItem::Operator { op, distance, left: 1 }];
+            items.extend(plain(*right));
+            items
+        }
+        Node::Operator { op, distance, right, left: Some(left) } => {
+            join(op, distance, plain(*right), plain(*left))
+        }
+    }
 }
 
 /// `infix`: the item at `at` and its operands. An operator that binds less than its parent has parentheses, and so has a `<N>` on the right side of a `<N>`.
@@ -758,6 +1023,36 @@ mod tests {
         let mut out = Vec::new();
         tsquery_deparse(&tsquery_parse(input).unwrap(), &mut out);
         String::from_utf8(out).unwrap()
+    }
+
+    /// The text of a query in the mode, with `stop` as the only stop word.
+    fn text_in(mode: TsQueryMode, input: &str) -> (String, bool) {
+        let mut pushval = |push: &mut TsQueryPush<'_>, word: &str, weight: u8, prefix: bool| {
+            if word == "stop" {
+                push.stop();
+                return Ok(());
+            }
+            push.value(word.to_string(), weight, prefix)
+        };
+        let (items, stops) = tsquery_parse_with(input, mode, &mut pushval).unwrap();
+        let mut out = Vec::new();
+        tsquery_deparse(&items, &mut out);
+        (String::from_utf8(out).unwrap(), stops)
+    }
+
+    #[test]
+    fn modes() {
+        let web = |input| text_in(TsQueryMode::Web, input).0;
+        assert_eq!(web("a or -b c"), "'a' | !'b' & 'c'");
+        assert_eq!(web("\"a b\" or_c"), "'a b' & 'or_c'");
+        assert_eq!(web("a & | ( ) < b"), "'a' & 'b'");
+        assert_eq!(web("it's a\\b"), "'it''s' & 'a\\\\b'");
+        assert_eq!(web("a or"), "'a' & 'or'");
+        assert_eq!(text_in(TsQueryMode::Plain, "a & b").0, "'a & b'");
+        assert_eq!(text_in(TsQueryMode::Standard, "a <-> stop <-> b").0, "'a' <2> 'b'");
+        assert_eq!(text_in(TsQueryMode::Standard, "(a <-> stop) <-> b").0, "'a' <2> 'b'");
+        assert_eq!(text_in(TsQueryMode::Standard, "stop & !stop"), (String::new(), true));
+        assert_eq!(text_in(TsQueryMode::Standard, "stop | a").0, "'a'");
     }
 
     fn error(input: &str) -> (String, String) {

@@ -1,0 +1,456 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT to_tsquery('english', 'The & Fat & Rats')
+fields to_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT to_tsquery('english', 'fat & rat:AB & !cats')
+fields to_tsquery:3615:-1:-1
+row 'fat' & 'rat':AB & !'cat'
+SELECT 1
+> SELECT to_tsquery('english', 'supern:*A & star:A*B')
+fields to_tsquery:3615:-1:-1
+row 'supern':*A & 'star':*AB
+SELECT 1
+> SELECT to_tsquery('english', '''supernovae stars'' & !crab')
+fields to_tsquery:3615:-1:-1
+row 'supernova' <-> 'star' & !'crab'
+SELECT 1
+> SELECT to_tsquery('english', 'fat <-> rats <2> cats')
+fields to_tsquery:3615:-1:-1
+row 'fat' <-> 'rat' <2> 'cat'
+SELECT 1
+> SELECT to_tsquery('english', 'the <-> fat <-> the <-> rats')
+fields to_tsquery:3615:-1:-1
+row 'fat' <2> 'rat'
+SELECT 1
+> SELECT to_tsquery('english', 'fat <-> the <-> the <-> rats')
+fields to_tsquery:3615:-1:-1
+row 'fat' <3> 'rat'
+SELECT 1
+> SELECT to_tsquery('english', 'the & the')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT to_tsquery('english', 'the | fat')
+fields to_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT to_tsquery('english', '!the')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT to_tsquery('english', '!the & fat')
+fields to_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT to_tsquery('english', '(the | a) <-> fat')
+fields to_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT to_tsquery('english', 'fat <3> (the <-> rats)')
+fields to_tsquery:3615:-1:-1
+row 'fat' <4> 'rat'
+SELECT 1
+> SELECT to_tsquery('english', '(fat <-> the) <2> rats')
+fields to_tsquery:3615:-1:-1
+row 'fat' <3> 'rat'
+SELECT 1
+> SELECT to_tsquery('english', 'foo-bar & x@y.com')
+fields to_tsquery:3615:-1:-1
+row 'foo-bar' <-> 'foo' <-> 'bar' & 'x@y.com'
+SELECT 1
+> SELECT to_tsquery('english', '''the fat rats''')
+fields to_tsquery:3615:-1:-1
+row 'fat' <-> 'rat'
+SELECT 1
+> SELECT to_tsquery('english', '''fat the rats''')
+fields to_tsquery:3615:-1:-1
+row 'fat' <2> 'rat'
+SELECT 1
+> SELECT to_tsquery('english', '''fat the rats'':B')
+fields to_tsquery:3615:-1:-1
+row 'fat':B <2> 'rat':B
+SELECT 1
+> SELECT to_tsquery('english', '''fat the rats'':*')
+fields to_tsquery:3615:-1:-1
+row 'fat':* <2> 'rat':*
+SELECT 1
+> SELECT to_tsquery('english', '')
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+fields to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT to_tsquery('english', '   ')
+NOTICE 00000 text-search query doesn't contain lexemes: "   "
+fields to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT to_tsquery('english', 'the')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT to_tsquery('english', '&')
+ERROR 42601 syntax error in tsquery: "&"
+> SELECT to_tsquery('english', 'fat &')
+ERROR 42601 no operand in tsquery: "fat &"
+> SELECT to_tsquery('english', 'fat rats')
+ERROR 42601 syntax error in tsquery: "fat rats"
+> SELECT to_tsquery('english', 'fat & (rats')
+ERROR 42601 syntax error in tsquery: "fat & (rats"
+> SELECT to_tsquery('english', ':a')
+ERROR 42601 syntax error in tsquery: ":a"
+> SELECT to_tsquery('simple', 'The & Fat & Rats')
+fields to_tsquery:3615:-1:-1
+row 'the' & 'fat' & 'rats'
+SELECT 1
+> SELECT to_tsquery('simple', 'Héllo & ÄÖ')
+fields to_tsquery:3615:-1:-1
+row 'héllo' & 'ÄÖ'
+SELECT 1
+> SELECT to_tsquery('nosuch', 'a')
+ERROR 42704 text search configuration "nosuch" does not exist at 19
+> SELECT to_tsquery('english', NULL) IS NULL
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT to_tsquery('Fat:ab & Cats')
+fields to_tsquery:3615:-1:-1
+row 'fat':AB & 'cat'
+SELECT 1
+> SELECT to_tsquery('english', '-')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT to_tsquery('english', 'a <-> -')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT plainto_tsquery('english', 'The Fat Rats')
+fields plainto_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT plainto_tsquery('english', 'The Fat & Rats:C')
+fields plainto_tsquery:3615:-1:-1
+row 'fat' & 'rat' & 'c'
+SELECT 1
+> SELECT plainto_tsquery('english', 'the a of')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields plainto_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT plainto_tsquery('english', '')
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+fields plainto_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT plainto_tsquery('english', 'fat the rats')
+fields plainto_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT plainto_tsquery('simple', 'fat the rats')
+fields plainto_tsquery:3615:-1:-1
+row 'fat' & 'the' & 'rats'
+SELECT 1
+> SELECT plainto_tsquery('english', 'foo-bar x@y.com 1.5e3')
+fields plainto_tsquery:3615:-1:-1
+row 'foo-bar' & 'foo' & 'bar' & 'x@y.com' & '1.5e3'
+SELECT 1
+> SELECT plainto_tsquery('The Fat Rats')
+fields plainto_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT phraseto_tsquery('english', 'The Fat Rats')
+fields phraseto_tsquery:3615:-1:-1
+row 'fat' <-> 'rat'
+SELECT 1
+> SELECT phraseto_tsquery('english', 'The Cat and Rats')
+fields phraseto_tsquery:3615:-1:-1
+row 'cat' <2> 'rat'
+SELECT 1
+> SELECT phraseto_tsquery('english', 'fat the the rats')
+fields phraseto_tsquery:3615:-1:-1
+row 'fat' <3> 'rat'
+SELECT 1
+> SELECT phraseto_tsquery('english', 'fat the')
+fields phraseto_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT phraseto_tsquery('english', 'the fat')
+fields phraseto_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT phraseto_tsquery('english', 'the and of')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields phraseto_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT phraseto_tsquery('english', 'foo-bar baz')
+fields phraseto_tsquery:3615:-1:-1
+row 'foo-bar' <-> 'foo' <-> 'bar' <-> 'baz'
+SELECT 1
+> SELECT phraseto_tsquery('english', '')
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+fields phraseto_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT phraseto_tsquery('The Fat Rats')
+fields phraseto_tsquery:3615:-1:-1
+row 'fat' <-> 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'The fat rats')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', '"supernovae stars" -crab')
+fields websearch_to_tsquery:3615:-1:-1
+row 'supernova' <-> 'star' & !'crab'
+SELECT 1
+> SELECT websearch_to_tsquery('english', '"sad cat" or "fat rat"')
+fields websearch_to_tsquery:3615:-1:-1
+row 'sad' <-> 'cat' | 'fat' <-> 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'signal -"segmentation fault"')
+fields websearch_to_tsquery:3615:-1:-1
+row 'signal' & !( 'segment' <-> 'fault' )
+SELECT 1
+> SELECT websearch_to_tsquery('english', '""')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields websearch_to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT websearch_to_tsquery('english', '"')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields websearch_to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT websearch_to_tsquery('english', '"fat rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' <-> 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat or')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat or rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' | 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat OR rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' | 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat or-rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'or-rat' <2> 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat or_rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat orrat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'orrat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat or !rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' | 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat or -rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' | !'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'or fat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat or or rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' | 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat -')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', '-fat')
+fields websearch_to_tsquery:3615:-1:-1
+row !'fat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', '--fat')
+fields websearch_to_tsquery:3615:-1:-1
+row !!'fat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat & rat | cat ! (dog) <-> <2>')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'rat' & 'cat' & 'dog' & '2'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat:A rat:*')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat''s rat\cat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'rat' <-> 'cat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'the or fat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat or the')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'the -fat')
+fields websearch_to_tsquery:3615:-1:-1
+row !'fat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', '-the')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields websearch_to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT websearch_to_tsquery('english', '"the fat" rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', '"fat the rat"')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' <2> 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'fat"rat"cat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'rat' & 'cat'
+SELECT 1
+> SELECT websearch_to_tsquery('english', '')
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+fields websearch_to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT websearch_to_tsquery('english', '   ')
+NOTICE 00000 text-search query doesn't contain lexemes: "   "
+fields websearch_to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'the')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields websearch_to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT websearch_to_tsquery('english', 'a or b or c')
+fields websearch_to_tsquery:3615:-1:-1
+row 'b' | 'c'
+SELECT 1
+> SELECT websearch_to_tsquery('simple', 'Fat oR Rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' | 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('simple', 'fat or	rat')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' | 'rat'
+SELECT 1
+> SELECT websearch_to_tsquery('simple', 'fat or é')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' | 'é'
+SELECT 1
+> SELECT websearch_to_tsquery('simple', 'fat oré')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'oré'
+SELECT 1
+> SELECT websearch_to_tsquery('The Fat Rats')
+fields websearch_to_tsquery:3615:-1:-1
+row 'fat' & 'rat'
+SELECT 1
+> SELECT 'The Fat Rats'::text @@ 'fat rat'::text, 'The Fat Rats'::text @@ 'fat cat'::text
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> SELECT 'The Fat Rats'::text @@ 'the'::text
+fields ?column?:16:1:-1
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+row f
+SELECT 1
+> SELECT 'The Fat Rats'::text @@ ''::text
+fields ?column?:16:1:-1
+NOTICE 00000 text-search query doesn't contain lexemes: ""
+row f
+SELECT 1
+> SELECT to_tsvector('english', 'The fat rats ate the cat') @@ to_tsquery('english', 'fat <-> rat')
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT to_tsvector('english', 'The fat rats ate the cat') @@ phraseto_tsquery('english', 'rats ate the cat')
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT to_tsvector('english', 'The fat rats ate the cat') @@ phraseto_tsquery('english', 'rats the cat')
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT to_tsvector('english', 'The fat rats ate the cat') @@ websearch_to_tsquery('english', '"fat rats" -dog')
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SET default_text_search_config TO 'simple'
+SET
+> SELECT to_tsquery('The & Fat'), plainto_tsquery('The Fat'), phraseto_tsquery('The Fat'), websearch_to_tsquery('The or Fat')
+fields to_tsquery:3615:-1:-1,plainto_tsquery:3615:-1:-1,phraseto_tsquery:3615:-1:-1,websearch_to_tsquery:3615:-1:-1
+row 'the' & 'fat','the' & 'fat','the' <-> 'fat','the' | 'fat'
+SELECT 1
+> SELECT 'The Fat Rats'::text @@ 'the'::text
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> CREATE TEXT SEARCH DICTIONARY sdict (TEMPLATE = simple, STOPWORDS = english)
+CREATE TEXT SEARCH DICTIONARY
+> CREATE TEXT SEARCH CONFIGURATION cfg (COPY = simple)
+CREATE TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION cfg ALTER MAPPING FOR asciiword WITH sdict
+ALTER TEXT SEARCH CONFIGURATION
+> SELECT to_tsquery('cfg', 'The & Fat'), plainto_tsquery('cfg', 'the fat and the rat')
+fields to_tsquery:3615:-1:-1,plainto_tsquery:3615:-1:-1
+row 'fat','fat' & 'rat'
+SELECT 1
+> SELECT phraseto_tsquery('cfg', 'the fat and the rat'), websearch_to_tsquery('cfg', '"the fat" or the')
+fields phraseto_tsquery:3615:-1:-1,websearch_to_tsquery:3615:-1:-1
+row 'fat' <3> 'rat','fat'
+SELECT 1
+> ALTER TEXT SEARCH CONFIGURATION cfg DROP MAPPING FOR asciiword
+ALTER TEXT SEARCH CONFIGURATION
+> SELECT to_tsquery('cfg', 'fat & rat'), plainto_tsquery('cfg', 'fat rat')
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields to_tsquery:3615:-1:-1,plainto_tsquery:3615:-1:-1
+row ,
+SELECT 1
+> SELECT to_tsquery('cfg', 'fat & é')
+fields to_tsquery:3615:-1:-1
+row 'é'
+SELECT 1
+> SELECT to_tsquery('english', repeat('a', 2047))
+fields to_tsquery:3615:-1:-1
+row 'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+SELECT 1
+> SELECT to_tsquery('english', repeat('a', 2048))
+NOTICE 54000 word is too long to be indexed
+NOTICE 00000 text-search query contains only stop words or doesn't contain lexemes, ignored
+fields to_tsquery:3615:-1:-1
+row 
+SELECT 1
+> SELECT plainto_tsquery('simple', repeat('a', 2048) || ' b')
+NOTICE 54000 word is too long to be indexed
+fields plainto_tsquery:3615:-1:-1
+row 'b'
+SELECT 1
+> SELECT querytree(to_tsquery('english', '!fat & the'))
+fields querytree:25:-1:-1
+row T
+SELECT 1
+> SELECT numnode(plainto_tsquery('english', 'the fat rats ate'))
+fields numnode:23:4:-1
+row 5
+SELECT 1
