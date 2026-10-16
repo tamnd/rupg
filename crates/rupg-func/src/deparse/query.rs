@@ -930,6 +930,10 @@ impl Deparser<'_> {
                 self.buf.push_str(&format!(" {opname} ALL "));
                 true
             }
+            SubLinkKind::RowCompare => {
+                self.buf.push_str(&format!(" {opname} "));
+                true
+            }
             SubLinkKind::Expr | SubLinkKind::Array => false,
         };
         if paren {

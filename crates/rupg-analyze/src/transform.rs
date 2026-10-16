@@ -4,7 +4,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
     A_ArrayExpr, A_Const, A_Expr, A_Expr_Kind, BoolExpr, BoolExprType, BoolTestType, CaseExpr,
     CoercionForm, FuncCall, MinMaxOp, Node, NullTestType, SQLValueFunction, SQLValueFunctionOp,
-    TypeCast,
+    SubLink as RawSubLink, SubLinkType, TypeCast,
 };
 use rupg_types::{Value, oid};
 
@@ -355,6 +355,19 @@ impl Analyzer<'_> {
             | A_Expr_Kind::AEXPR_LIKE
             | A_Expr_Kind::AEXPR_ILIKE
             | A_Expr_Kind::AEXPR_SIMILAR => {
+                if let (Some(row @ Node::RowExpr(_)), Some(Node::SubLink(s))) = (&a.lexpr, &a.rexpr)
+                    && s.subLinkType == SubLinkType::EXPR_SUBLINK
+                {
+                    // `(a, b) op (SELECT ...)` is a row comparison with the row of the subquery.
+                    let s = RawSubLink {
+                        subLinkType: SubLinkType::ROWCOMPARE_SUBLINK,
+                        testexpr: Some(row.clone()),
+                        operName: a.name.clone(),
+                        location: a.location,
+                        ..(**s).clone()
+                    };
+                    return self.transform_sublink(&s);
+                }
                 if let (Some(Node::RowExpr(l)), Some(Node::RowExpr(r))) = (&a.lexpr, &a.rexpr) {
                     let left = self.transform_list(&l.args)?;
                     let right = self.transform_list(&r.args)?;

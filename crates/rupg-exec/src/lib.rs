@@ -1564,6 +1564,23 @@ impl<'a> Eval<'a> {
                     "more than one row returned by a subquery used as an expression",
                 )),
             },
+            SubLinkKind::RowCompare => match rows.as_slice() {
+                [] => Ok(Value::Null),
+                [row] => {
+                    let test = sub
+                        .test
+                        .as_ref()
+                        .ok_or_else(|| Error::internal("a row comparison needs a test"))?;
+                    self.sub.push(row.clone());
+                    let result = self.eval(test);
+                    self.sub.pop();
+                    result
+                }
+                _ => Err(Error::new(
+                    SqlState::CARDINALITY_VIOLATION,
+                    "more than one row returned by a subquery used as an expression",
+                )),
+            },
             SubLinkKind::Array => {
                 let values =
                     rows.iter().map(|row| row.first().filter(|v| !v.is_null()).cloned()).collect();
