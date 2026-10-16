@@ -47,7 +47,7 @@ pub struct TypeRow {
 }
 
 /// A row of `pg_proc`.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct ProcRow {
     pub oid: u32,
     pub name: &'static str,
@@ -1084,12 +1084,47 @@ struct EnumRow {
     labels: Vec<(u32, String)>,
 }
 
+/// A range type of the catalog of a session, with its multirange type, for [`use_session_types`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionRange {
+    pub oid: u32,
+    pub name: String,
+    pub array: u32,
+    pub array_name: String,
+    pub namespace: u32,
+    /// `rngsubtype`.
+    pub subtype: u32,
+    /// `rngcollation`.
+    pub collation: u32,
+    /// `typalign` of the four types.
+    pub align: u8,
+    pub multirange: u32,
+    pub multirange_name: String,
+    pub multirange_namespace: u32,
+    pub multirange_array: u32,
+    pub multirange_array_name: String,
+    /// The OIDs of the two constructors of the range type, then of the three constructors of the multirange type.
+    pub constructors: [u32; 5],
+    /// The OID of the cast from the range type to the multirange type.
+    pub cast: u32,
+}
+
+/// The facts of `pg_range` for a range type that [`use_session_types`] gave to the thread.
+#[derive(Debug)]
+struct RangeRow {
+    oid: u32,
+    subtype: u32,
+    multirange: u32,
+    collation: u32,
+}
+
 /// A type of the catalog of a session that has rows in the overlay of the thread.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionType {
     Domain(SessionDomain),
     Row(SessionRowType),
     Enum(SessionEnum),
+    Range(SessionRange),
 }
 
 /// The types of the catalog that the session of the thread uses now.
@@ -1100,6 +1135,9 @@ struct Session {
     types: Vec<&'static TypeRow>,
     domains: Vec<&'static DomainRow>,
     enums: Vec<&'static EnumRow>,
+    ranges: Vec<&'static RangeRow>,
+    procs: Vec<&'static ProcRow>,
+    casts: Vec<&'static CastRow>,
 }
 
 thread_local! {
@@ -1107,9 +1145,16 @@ thread_local! {
     static SESSION: RefCell<Session> = RefCell::new(Session::default());
 }
 
-/// The rows of a type of [`INTERNED`]: the type, its array type, the constraints of a domain and the labels of an enum type.
-type Interned =
-    (&'static TypeRow, &'static TypeRow, Option<&'static DomainRow>, Option<&'static EnumRow>);
+/// The rows of a type of [`INTERNED`]: the type, its array type and the other types that come with it, the constraints of a domain, the labels of an enum type, the facts of a range type, and the functions and the casts that come with the type.
+#[derive(Clone, Default)]
+struct Interned {
+    types: Vec<&'static TypeRow>,
+    domain: Option<&'static DomainRow>,
+    labels: Option<&'static EnumRow>,
+    range: Option<&'static RangeRow>,
+    procs: Vec<&'static ProcRow>,
+    casts: Vec<&'static CastRow>,
+}
 
 /// The rows of each type that a session used, with the facts that made them. A type gets its rows once in the process, also when many sessions use it, so the rows live as long as the process, as the built-in rows do.
 static INTERNED: Mutex<Vec<(SessionType, Interned)>> = Mutex::new(Vec::new());
@@ -1125,17 +1170,26 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
                 not_null: domain.not_null,
                 checks: domain.checks.clone(),
             };
-            (leak(row), leak(array), Some(Box::leak(Box::new(constraints))), None)
+            Interned {
+                types: vec![leak(row), leak(array)],
+                domain: Some(Box::leak(Box::new(constraints))),
+                ..Interned::default()
+            }
         }
         SessionType::Row(new) => {
             let (row, array) = row_type_rows(new.clone())?;
-            (leak(row), leak(array), None, None)
+            Interned { types: vec![leak(row), leak(array)], ..Interned::default() }
         }
         SessionType::Enum(new) => {
             let (row, array) = enum_rows(new.clone())?;
             let labels = EnumRow { oid: new.oid, labels: new.labels.clone() };
-            (leak(row), leak(array), None, Some(Box::leak(Box::new(labels))))
+            Interned {
+                types: vec![leak(row), leak(array)],
+                labels: Some(Box::leak(Box::new(labels))),
+                ..Interned::default()
+            }
         }
+        SessionType::Range(new) => range_rows(new)?,
     })
 }
 
@@ -1151,18 +1205,24 @@ pub fn use_session_types(types: Vec<SessionType>) {
             .unwrap_or_else(PoisonError::into_inner)
             .iter()
             .find(|(facts, _)| *facts == ty)
-            .map(|(_, rows)| *rows);
+            .map(|(_, rows)| rows.clone());
         // `domain_rows` reads the base type from the rows of the thread, so it runs with no borrow of them.
         let rows = interned.or_else(|| {
             let rows = session_rows(&ty)?;
-            INTERNED.lock().unwrap_or_else(PoisonError::into_inner).push((ty.clone(), rows));
+            INTERNED
+                .lock()
+                .unwrap_or_else(PoisonError::into_inner)
+                .push((ty.clone(), rows.clone()));
             Some(rows)
         });
         SESSION.with_borrow_mut(|s| {
-            if let Some((row, array, constraints, labels)) = rows {
-                s.types.extend([row, array]);
-                s.domains.extend(constraints);
-                s.enums.extend(labels);
+            if let Some(rows) = rows {
+                s.types.extend(rows.types);
+                s.domains.extend(rows.domain);
+                s.enums.extend(rows.labels);
+                s.ranges.extend(rows.range);
+                s.procs.extend(rows.procs);
+                s.casts.extend(rows.casts);
             }
             s.given.push(ty);
         });
@@ -1219,6 +1279,94 @@ fn enum_rows(new: SessionEnum) -> Option<(TypeRow, TypeRow)> {
         ..*type_by_oid(template.array)?
     };
     Some((row, array))
+}
+
+/// The OID of the type `text`.
+const TEXT: u32 = 25;
+
+/// The OIDs of `int4range`, `_int4range`, `int4multirange` and `_int4multirange`, the templates of the rows of a range type, as `DefineRange` gives each range type the same functions.
+const INT4_RANGE_TYPES: [u32; 4] = [3904, 3905, 4451, 6150];
+
+/// The rows of a range type, of its multirange type, of their array types, of the constructors and of the cast, as `DefineRange` makes them. The rows copy the rows of `int4range`, with the alignment of the subtype. The constructors copy the constructors of `int4range` and `int4multirange`.
+fn range_rows(new: &SessionRange) -> Option<Interned> {
+    let [range, range_array, multirange, multirange_array] = INT4_RANGE_TYPES;
+    let copy = |template: u32, oid: u32, name: &str, namespace: u32| -> Option<&'static TypeRow> {
+        let row = TypeRow {
+            oid,
+            name: name.to_string().leak(),
+            namespace,
+            align: new.align,
+            ..*type_by_oid(template)?
+        };
+        Some(Box::leak(Box::new(row)))
+    };
+    let types = vec![
+        TypeRow { array: new.array, ..*copy(range, new.oid, &new.name, new.namespace)? },
+        TypeRow { elem: new.oid, ..*copy(range_array, new.array, &new.array_name, new.namespace)? },
+        TypeRow {
+            array: new.multirange_array,
+            ..*copy(multirange, new.multirange, &new.multirange_name, new.multirange_namespace)?
+        },
+        TypeRow {
+            elem: new.multirange,
+            ..*copy(
+                multirange_array,
+                new.multirange_array,
+                &new.multirange_array_name,
+                new.multirange_namespace,
+            )?
+        },
+    ];
+    let int4 = type_by_oid(range)?.name;
+    let int4_multirange = type_by_oid(multirange)?.name;
+    let leak_args = |args: Vec<u32>| -> &'static [u32] { args.leak() };
+    let sub = new.subtype;
+    let shapes = [
+        (int4, 2, new.oid, vec![sub, sub]),
+        (int4, 3, new.oid, vec![sub, sub, TEXT]),
+        (int4_multirange, 0, new.multirange, Vec::new()),
+        (int4_multirange, 1, new.multirange, vec![new.oid]),
+        (int4_multirange, 1, new.multirange, vec![new.array]),
+    ];
+    let mut procs = Vec::with_capacity(shapes.len());
+    for (i, (name, nargs, rettype, args)) in shapes.into_iter().enumerate() {
+        // The two constructors of a multirange type with one argument differ by `VARIADIC`.
+        let base = procs_named(name)
+            .find(|p| p.argtypes.len() == nargs && (i < 3 || (p.variadic != 0) == (i == 4)))?;
+        let own_name = if i < 2 { &new.name } else { &new.multirange_name };
+        let row = ProcRow {
+            oid: new.constructors[i],
+            name: own_name.clone().leak(),
+            namespace: new.namespace,
+            rettype,
+            variadic: if base.variadic == 0 { 0 } else { new.oid },
+            argtypes: leak_args(args.clone()),
+            allargtypes: base.allargtypes.map(|_| leak_args(args)),
+            ..*base
+        };
+        procs.push(&*Box::leak(Box::new(row)));
+    }
+    let cast = CastRow {
+        oid: new.cast,
+        source: new.oid,
+        target: new.multirange,
+        func: new.constructors[3],
+        context: b'e',
+        method: b'f',
+    };
+    let facts = RangeRow {
+        oid: new.oid,
+        subtype: new.subtype,
+        multirange: new.multirange,
+        collation: new.collation,
+    };
+    Some(Interned {
+        types: types.into_iter().map(|row| &*Box::leak(Box::new(row))).collect(),
+        range: Some(Box::leak(Box::new(facts))),
+        procs,
+        casts: vec![Box::leak(Box::new(cast))],
+        ..Interned::default()
+    })
 }
 
 /// The OID and the name of each label of an enum type that [`use_session_types`] gave to the thread, in their sort order. `None` for a type that is not such an enum type.
@@ -1293,20 +1441,22 @@ pub fn procs() -> &'static [ProcRow] {
     &BUILTIN.procs
 }
 
-/// The built-in function with this OID, or a function that [`add_system_proc`] added.
+/// The built-in function with this OID, a function that [`add_system_proc`] added, or a function of a type that [`use_session_types`] gave to the thread.
 pub fn proc_by_oid(oid: u32) -> Option<&'static ProcRow> {
     BUILTIN
         .proc_oid
         .get(&oid)
         .map(|&i| &BUILTIN.procs[i])
         .or_else(|| system().procs.iter().copied().find(|p| p.oid == oid))
+        .or_else(|| SESSION.with_borrow(|s| s.procs.iter().copied().find(|p| p.oid == oid)))
 }
 
-/// The built-in functions with this name, in the order of `pg_proc.dat`, then the functions with this name that [`add_system_proc`] added.
+/// The built-in functions with this name, in the order of `pg_proc.dat`, then the functions with this name that [`add_system_proc`] added, then the functions with this name of the types that [`use_session_types`] gave to the thread.
 pub fn procs_named(name: &str) -> impl Iterator<Item = &'static ProcRow> {
     let b = &*BUILTIN;
-    let added: Vec<&'static ProcRow> =
+    let mut added: Vec<&'static ProcRow> =
         system().procs.iter().copied().filter(|p| p.name == name).collect();
+    SESSION.with_borrow(|s| added.extend(s.procs.iter().copied().filter(|p| p.name == name)));
     b.proc_name.get(name).into_iter().flatten().map(|&i| &b.procs[i]).chain(added)
 }
 
@@ -1331,9 +1481,13 @@ pub fn casts() -> &'static [CastRow] {
     &BUILTIN.casts
 }
 
-/// The built-in cast from `source` to `target`.
+/// The built-in cast from `source` to `target`, or a cast of a type that [`use_session_types`] gave to the thread.
 pub fn cast(source: u32, target: u32) -> Option<&'static CastRow> {
-    BUILTIN.cast_pair.get(&(source, target)).map(|&i| &BUILTIN.casts[i])
+    BUILTIN.cast_pair.get(&(source, target)).map(|&i| &BUILTIN.casts[i]).or_else(|| {
+        SESSION.with_borrow(|s| {
+            s.casts.iter().copied().find(|c| c.source == source && c.target == target)
+        })
+    })
 }
 
 /// Every built-in operator class.
@@ -1435,19 +1589,41 @@ pub fn members() -> &'static [MemberRow] {
     &BUILTIN.members
 }
 
+/// The facts of a range type that [`use_session_types`] gave to the thread that `found` takes.
+fn session_range<T>(found: impl Fn(&RangeRow) -> Option<T>) -> Option<T> {
+    SESSION.with_borrow(|s| s.ranges.iter().find_map(|r| found(r)))
+}
+
 /// The range type of a multirange type, as `get_multirange_range` gives it.
 pub fn multirange_range(multirange: u32) -> Option<u32> {
-    BUILTIN.multirange_range.get(&multirange).copied()
+    BUILTIN
+        .multirange_range
+        .get(&multirange)
+        .copied()
+        .or_else(|| session_range(|r| (r.multirange == multirange).then_some(r.oid)))
 }
 
 /// The subtype of a range type, as `get_range_subtype` gives it.
 pub fn range_subtype(range: u32) -> Option<u32> {
-    BUILTIN.range_types.get(&range).map(|&(subtype, _)| subtype)
+    BUILTIN
+        .range_types
+        .get(&range)
+        .map(|&(subtype, _)| subtype)
+        .or_else(|| session_range(|r| (r.oid == range).then_some(r.subtype)))
 }
 
 /// The multirange type of a range type, as `get_range_multirange` gives it.
 pub fn range_multirange(range: u32) -> Option<u32> {
-    BUILTIN.range_types.get(&range).map(|&(_, multirange)| multirange)
+    BUILTIN
+        .range_types
+        .get(&range)
+        .map(|&(_, multirange)| multirange)
+        .or_else(|| session_range(|r| (r.oid == range).then_some(r.multirange)))
+}
+
+/// The collation of a range type of a session, as `get_range_collation` gives it, or `None` for a built-in range type, whose collation is the collation of its subtype.
+pub fn range_collation(range: u32) -> Option<u32> {
+    session_range(|r| (r.oid == range).then_some(r.collation))
 }
 
 #[cfg(test)]

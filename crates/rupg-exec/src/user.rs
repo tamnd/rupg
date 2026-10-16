@@ -2,7 +2,7 @@
 //!
 //! The columns of `pg_node_tree` hold the expressions in the form of the analyzer, not in the form of `nodeToString`.
 
-use rupg_catalog::{Catalog, ConKind, Constraint, RelKind, Relation};
+use rupg_catalog::{Catalog, ConKind, Constraint, Function, RangePart, RelKind, Relation, Type};
 use rupg_common::{Error, Result};
 use rupg_func::Session;
 use rupg_pgcatalog::{Catalog as Table, builtin};
@@ -150,6 +150,8 @@ pub(crate) fn rows(
         "pg_ts_config" => ts_configs(table, catalog),
         "pg_ts_config_map" => ts_mappings(table, catalog),
         "pg_enum" => enum_labels(table, catalog),
+        "pg_range" => ranges(table, catalog),
+        "pg_cast" => casts(table, catalog),
         _ => Vec::new(),
     };
     Ok(rows.into_iter().map(|row| row.values).collect())
@@ -352,6 +354,28 @@ const OID_TYPE: u32 = 26;
 /// The OID of `_oid`, which the array type of an enum type copies.
 const OID_ARRAY: u32 = 1028;
 
+/// The OIDs of `int4range`, `_int4range`, `int4multirange` and `_int4multirange`, which the types of a range type copy, as `DefineRange` gives each range type the same functions.
+const INT4_RANGE_TYPES: [u32; 4] = [3904, 3905, 4451, 6150];
+
+/// The template of the row of a type of a range type in [`INT4_RANGE_TYPES`] and the alignment of the type, or `None` for a type of another kind.
+fn range_template(catalog: &Catalog, ty: &Type) -> Option<(u32, u8)> {
+    let [range, range_array, multirange, multirange_array] = INT4_RANGE_TYPES;
+    let info = |oid: u32| match catalog.type_by_oid(oid).and_then(|t| t.range.as_ref()) {
+        Some(RangePart::Range(info)) => Some(info),
+        _ => None,
+    };
+    let part = |ty: &Type| match &ty.range {
+        Some(RangePart::Range(info)) => Some((false, info.align)),
+        Some(RangePart::Multirange(of)) => Some((true, info(*of)?.align)),
+        None => None,
+    };
+    if let Some((multi, align)) = part(ty) {
+        return Some((if multi { multirange } else { range }, align));
+    }
+    let (multi, align) = part(catalog.type_by_oid(ty.element)?)?;
+    Some((if multi { multirange_array } else { range_array }, align))
+}
+
 /// The OID of a function of an enum type, such as `enum_in`.
 fn enum_function(name: &str) -> Value {
     oid(builtin::procs_named(name).next().map_or(0, |p| p.oid))
@@ -385,6 +409,10 @@ fn types<'a>(table: &'a Table, catalog: &Catalog, session: &dyn Session) -> Resu
         let element_domain = element.and_then(|t| t.domain.as_ref());
         let mut row = if let Some(domain) = &ty.domain {
             copy(&rows, domain.base)?
+        } else if let Some((template, align)) = range_template(catalog, ty) {
+            let mut row = Row::copy(table, type_row(table, template, session)?, session)?;
+            row.set("typalign", Value::Char(align));
+            row
         } else if ty.labels.is_some() {
             let mut row = Row::copy(table, type_row(table, OID_TYPE, session)?, session)?;
             row.set("typtype", code('e'))
@@ -675,6 +703,17 @@ fn sequences<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
 }
 
 /// The functions in SQL. A body in a string is in `prosrc`. For a body in SQL, `prosqlbody` has the text of the statement that made the function, and `prosrc` is empty.
+/// `provariadic`: the element type of the `VARIADIC` argument, or 0.
+fn variadic(catalog: &Catalog, f: &Function) -> u32 {
+    let Some(i) = f.argmodes.iter().position(|&mode| mode == b'v') else { return 0 };
+    let array = f.allargtypes.get(i).copied().unwrap_or(0);
+    catalog
+        .type_by_oid(array)
+        .map(|t| t.element)
+        .or_else(|| builtin::type_by_oid(array).map(|t| t.elem))
+        .unwrap_or(0)
+}
+
 fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     catalog
         .functions()
@@ -690,7 +729,7 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("prolang", oid(f.lang))
                 .set("procost", Value::Float4(cost))
                 .set("prorows", Value::Float4(rows))
-                .set("provariadic", oid(0))
+                .set("provariadic", oid(variadic(catalog, f)))
                 .set("prosupport", oid(f.support))
                 .set("prokind", code('f'))
                 .set("prosecdef", Value::Bool(false))
@@ -813,6 +852,39 @@ fn enum_labels<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         }
     }
     rows
+}
+
+fn ranges<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    let mut rows = Vec::new();
+    for ty in catalog.types() {
+        let Some(RangePart::Range(info)) = &ty.range else { continue };
+        let mut row = Row::new(table);
+        row.set("rngtypid", oid(ty.oid))
+            .set("rngsubtype", oid(info.subtype))
+            .set("rngmultitypid", oid(info.multirange))
+            .set("rngcollation", oid(info.collation))
+            .set("rngsubopc", oid(info.subopc))
+            .set("rngcanonical", oid(info.canonical))
+            .set("rngsubdiff", oid(info.subdiff));
+        rows.push(row);
+    }
+    rows
+}
+
+fn casts<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .casts()
+        .map(|c| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(c.oid))
+                .set("castsource", oid(c.source))
+                .set("casttarget", oid(c.target))
+                .set("castfunc", oid(c.func))
+                .set("castcontext", Value::Char(c.context))
+                .set("castmethod", Value::Char(c.method));
+            row
+        })
+        .collect()
 }
 
 fn ts_mappings<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {

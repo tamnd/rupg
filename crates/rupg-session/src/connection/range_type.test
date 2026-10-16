@@ -1,0 +1,124 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE TYPE floatrange AS RANGE (subtype = float8, subtype_diff = float8mi)
+CREATE TYPE
+> SELECT '[1.5,2.5)'::floatrange::text, floatrange(1, 2)::text, floatrange(1, 2, '[]')::text, pg_typeof(floatrange(1, 2))::text
+fields text:25:-1:-1,floatrange:25:-1:-1,floatrange:25:-1:-1,pg_typeof:25:-1:-1
+row [1.5,2.5),[1,2),[1,2],floatrange
+SELECT 1
+> SELECT '[3,1)'::floatrange
+ERROR 22000 range lower bound must be less than or equal to range upper bound at 8
+> SELECT 'empty'::floatrange::text, isempty('empty'::floatrange), lower('[1,2)'::floatrange), upper('[1,2)'::floatrange)
+fields text:25:-1:-1,isempty:16:1:-1,lower:701:8:-1,upper:701:8:-1
+row empty,t,1,2
+SELECT 1
+> SELECT '[1,5)'::floatrange @> 2.0::float8, '[1,5)'::floatrange && '[4,6)'::floatrange, ('[1,5)'::floatrange * '[4,6)'::floatrange)::text, ('[1,5)'::floatrange + '[4,6)'::floatrange)::text
+fields ?column?:16:1:-1,?column?:16:1:-1,text:25:-1:-1,text:25:-1:-1
+row t,t,[4,5),[1,6)
+SELECT 1
+> SELECT '{[1,2),[3,4)}'::floatmultirange::text, floatmultirange(floatrange(1,2), floatrange(3,4))::text, floatmultirange()::text
+fields text:25:-1:-1,floatmultirange:25:-1:-1,floatmultirange:25:-1:-1
+row {[1,2),[3,4)},{[1,2),[3,4)},{}
+SELECT 1
+> SELECT range_agg(r)::text FROM (VALUES ('[1,2)'::floatrange), ('[2,3)'::floatrange)) v(r)
+fields range_agg:25:-1:-1
+row {[1,3)}
+SELECT 1
+> SELECT x::text FROM (VALUES ('[2,3)'::floatrange), ('[1,3)'::floatrange), ('empty'::floatrange)) v(x) ORDER BY x
+fields x:25:-1:-1
+row [1,3)
+row [2,3)
+row empty
+SELECT 3
+> SELECT typname, typtype, typlen, typbyval, typcategory, typinput::text, typoutput::text, typreceive::text, typsend::text, typanalyze::text, typalign, typstorage, typelem <> 0, typarray <> 0 FROM pg_type WHERE typnamespace = 'public'::regnamespace ORDER BY typname
+fields typname@pg_type.2:19:64:-1,typtype@pg_type.7:18:1:-1,typlen@pg_type.5:21:2:-1,typbyval@pg_type.6:16:1:-1,typcategory@pg_type.8:18:1:-1,typinput:25:-1:-1,typoutput:25:-1:-1,typreceive:25:-1:-1,typsend:25:-1:-1,typanalyze:25:-1:-1,typalign@pg_type.23:18:1:-1,typstorage@pg_type.24:18:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row _floatmultirange,b,-1,f,A,array_in,array_out,array_recv,array_send,array_typanalyze,d,x,t,f
+row _floatrange,b,-1,f,A,array_in,array_out,array_recv,array_send,array_typanalyze,d,x,t,f
+row floatmultirange,m,-1,f,R,multirange_in,multirange_out,multirange_recv,multirange_send,multirange_typanalyze,d,x,f,t
+row floatrange,r,-1,f,R,range_in,range_out,range_recv,range_send,range_typanalyze,d,x,f,t
+SELECT 4
+> SELECT rngtypid::regtype::text, rngsubtype::regtype, rngmultitypid::regtype::text, rngcollation, rngsubopc::regclass, rngcanonical, rngsubdiff FROM pg_range WHERE rngtypid = 'floatrange'::regtype
+fields rngtypid:25:-1:-1,rngsubtype:2206:4:-1,rngmultitypid:25:-1:-1,rngcollation@pg_range.4:26:4:-1,rngsubopc:2205:4:-1,rngcanonical@pg_range.11:24:4:-1,rngsubdiff@pg_range.12:24:4:-1
+row floatrange,double precision,floatmultirange,0,3123,-,float8mi
+SELECT 1
+> SELECT proname, pronargs, proargtypes::regtype[]::text, prorettype::regtype::text, prosrc, prokind, proisstrict, provolatile, proparallel FROM pg_proc WHERE pronamespace = 'public'::regnamespace ORDER BY proname, pronargs
+fields proname@pg_proc.2:19:64:-1,pronargs@pg_proc.17:21:2:-1,proargtypes:25:-1:-1,prorettype:25:-1:-1,prosrc@pg_proc.26:25:-1:-1,prokind@pg_proc.10:18:1:-1,proisstrict@pg_proc.13:16:1:-1,provolatile@pg_proc.15:18:1:-1,proparallel@pg_proc.16:18:1:-1
+row floatmultirange,0,{},floatmultirange,multirange_constructor0,f,t,i,s
+row floatmultirange,1,[0:0]={floatrange},floatmultirange,multirange_constructor1,f,t,i,s
+row floatmultirange,1,[0:0]={floatrange[]},floatmultirange,multirange_constructor2,f,t,i,s
+row floatrange,2,[0:1]={"double precision","double precision"},floatrange,range_constructor2,f,f,i,s
+row floatrange,3,[0:2]={"double precision","double precision",text},floatrange,range_constructor3,f,f,i,s
+SELECT 5
+> SELECT classid::regclass, objsubid, refclassid::regclass, refobjsubid, deptype FROM pg_depend WHERE objid IN (SELECT oid FROM pg_type WHERE typnamespace = 'public'::regnamespace UNION ALL SELECT oid FROM pg_proc WHERE pronamespace = 'public'::regnamespace) ORDER BY 1, 2, 3, 4, 5
+fields classid:2205:4:-1,objsubid@pg_depend.3:23:4:-1,refclassid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_type,0,pg_type,0,i
+row pg_type,0,pg_type,0,i
+row pg_type,0,pg_type,0,i
+row pg_type,0,pg_namespace,0,n
+row pg_type,0,pg_namespace,0,n
+row pg_proc,0,pg_type,0,i
+row pg_proc,0,pg_type,0,i
+row pg_proc,0,pg_type,0,i
+row pg_proc,0,pg_type,0,i
+row pg_proc,0,pg_type,0,i
+row pg_proc,0,pg_type,0,n
+row pg_proc,0,pg_type,0,n
+row pg_proc,0,pg_type,0,n
+row pg_proc,0,pg_type,0,n
+row pg_proc,0,pg_type,0,n
+row pg_proc,0,pg_type,0,n
+row pg_proc,0,pg_type,0,n
+row pg_proc,0,pg_namespace,0,n
+row pg_proc,0,pg_namespace,0,n
+row pg_proc,0,pg_namespace,0,n
+row pg_proc,0,pg_namespace,0,n
+row pg_proc,0,pg_namespace,0,n
+SELECT 22
+> CREATE TYPE textrange2 AS RANGE (subtype = text, collation = "C")
+CREATE TYPE
+> SELECT textrange2('a', 'b')::text, '[a,b]'::textrange2::text, '{[a,b]}'::textmultirange2::text
+fields textrange2:25:-1:-1,text:25:-1:-1,text:25:-1:-1
+row [a,b),[a,b],{[a,b]}
+SELECT 1
+> CREATE TYPE int4r AS RANGE (subtype = int4, multirange_type_name = int4rm)
+CREATE TYPE
+> SELECT int4r(1, 5)::text, int4rm(int4r(1, 5))::text, '[1,5]'::int4r::text
+fields int4r:25:-1:-1,int4rm:25:-1:-1,text:25:-1:-1
+row [1,5),{[1,5)},[1,5]
+SELECT 1
+> CREATE TYPE bad AS RANGE (subtype = nope)
+ERROR 42704 type "nope" does not exist
+> CREATE TYPE bad AS RANGE (foo = int4)
+ERROR 42601 type attribute "foo" not recognized
+> CREATE TYPE bad AS RANGE (subtype_diff = float8mi)
+ERROR 42601 type attribute "subtype" is required
+> CREATE TYPE floatrange AS RANGE (subtype = float8)
+ERROR 42710 type "floatrange" already exists
+> CREATE TYPE bad AS RANGE (subtype = int4, subtype = int8)
+ERROR 42601 conflicting or redundant options at 43
+> CREATE TYPE bad AS RANGE (subtype = int4, collation = "C")
+ERROR 42809 range collation specified but subtype does not support collation
+> CREATE TYPE bad AS RANGE (subtype = float8, subtype_diff = int4mi)
+ERROR 42883 function int4mi(double precision, double precision) does not exist
+> CREATE TYPE bad AS RANGE (subtype = float8, multirange_type_name = floatmultirange)
+ERROR 42710 type "floatmultirange" already exists
+> CREATE TYPE int4range AS RANGE (subtype = int4)
+CREATE TYPE
+> SELECT range_merge('[1,2)'::floatrange, '[5,6)'::floatrange)::text, '[1,2)'::floatrange -|- '[2,3)'::floatrange
+fields range_merge:25:-1:-1,?column?:16:1:-1
+row [1,6),t
+SELECT 1
+> DROP TYPE floatmultirange
+ERROR 2BP01 cannot drop type floatmultirange because type floatrange requires it
+> DROP TYPE floatrange
+DROP TYPE
+> DROP TYPE textrange2, int4r
+DROP TYPE
+> SELECT count(*) FROM pg_range WHERE rngtypid >= 16384
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT count(*) FROM pg_proc WHERE pronamespace = 'public'::regnamespace
+fields count:20:8:-1
+row 5
+SELECT 1

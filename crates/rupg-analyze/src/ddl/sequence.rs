@@ -42,7 +42,7 @@ struct Options<'n> {
 }
 
 /// `errorConflictingDefElem`.
-fn conflicting(def: &DefElem) -> Error {
+pub(super) fn conflicting(def: &DefElem) -> Error {
     Error::new(SqlState::SYNTAX_ERROR, "conflicting or redundant options")
         .at_opt(place(def.location))
 }

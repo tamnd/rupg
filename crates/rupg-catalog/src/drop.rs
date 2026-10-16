@@ -5,7 +5,7 @@ use std::cmp::Ordering;
 use rupg_common::{Error, Result, SqlState};
 
 use super::{
-    Catalog, DepKind, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
+    Catalog, DepKind, ObjRef, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
     PG_REWRITE, PG_TRIGGER, PG_TYPE, is_pinned,
 };
 
@@ -241,6 +241,9 @@ impl Catalog {
             }
             PG_TRIGGER => {
                 self.triggers.remove(&object.oid);
+            }
+            PG_CAST => {
+                self.casts.remove(&object.oid);
             }
             PG_REWRITE => {}
             class => {
