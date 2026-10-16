@@ -44,6 +44,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         "json_array_elements" => crate::json::json_array_elements,
         "json_array_elements_text" => crate::json::json_array_elements_text,
         "jsonb_array_elements" => crate::json::jsonb_array_elements,
+        "jsonb_path_query" | "jsonb_path_query_tz" => crate::jsonpath::jsonb_path_query,
         "jsonb_array_elements_text" => crate::json::jsonb_array_elements_text,
         "pg_partition_tree" | "pg_partition_ancestors" => crate::catinfo::partition_members,
         "pg_get_keywords" => keywords,

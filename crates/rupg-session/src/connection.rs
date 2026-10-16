@@ -2883,6 +2883,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/window_frame.test")));
     }
 
+    /// The executor of `jsonpath`: `jsonb_path_exists`, `jsonb_path_match`, `jsonb_path_query`, `jsonb_path_query_array` and `jsonb_path_query_first`, the operators `@?` and `@@`, the lax and the strict modes, the accessors, the filters and the predicates, the arithmetic, the variables, the item methods but the datetime methods, the ids of `.keyvalue()`, the silent calls, and the errors. `connection/jsonpath_exec.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn jsonpath_exec() {
+        big_stack(|| script(include_str!("connection/jsonpath_exec.test")));
+    }
+
     /// A row on the left of `IN`, `ANY` and `ALL` with a subquery: one operator for each column of the subquery that `AND` or `OR` combines, the NULL results, the errors for a wrong number of columns and for an operator that does not give `boolean`, a view with these tests in `pg_get_viewdef`, and the same results when a hash table of the subquery gives them. `connection/row_in_subquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn row_in_subquery() {
