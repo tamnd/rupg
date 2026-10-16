@@ -1,5 +1,7 @@
 //! `ts_rank` and `ts_rank_cd` of `tsrank.c`: the rank of a `tsvector` for a `tsquery`. The arithmetic is in `float4` and `float8` at the same steps as in PostgreSQL, so the results are the same to the last bit.
 
+use std::convert::Infallible;
+
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{
     Array, Lexeme, QueryItem, TSQUERY_AND, TSQUERY_PHRASE, Value, position_of, ts_compare_string,
@@ -71,7 +73,10 @@ fn operands(items: &[QueryItem]) -> Vec<(&str, bool)> {
             QueryItem::Operator { .. } => None,
         })
         .collect();
-    out.sort_by(|a, b| ts_compare_string(a.0.as_bytes(), b.0.as_bytes()).cmp(&0));
+    // The sort of PostgreSQL is not stable, so it can keep a different one of two equal words with different prefix flags. The same sort keeps the same one.
+    let Ok(()) = rupg_common::qsort::<_, Infallible, _>(&mut out, &mut |a, b| {
+        Ok(ts_compare_string(a.0.as_bytes(), b.0.as_bytes()).cmp(&0))
+    });
     out.dedup_by(|a, b| a.0 == b.0);
     out
 }

@@ -23,7 +23,7 @@ pub(crate) struct Parsed {
 }
 
 /// The notice of `parsetext` for a word or a lexeme that is longer than `MAXSTRLEN`.
-fn too_long_word() -> Error {
+pub(crate) fn too_long_word() -> Error {
     Error::new(SqlState::PROGRAM_LIMIT_EXCEEDED, "word is too long to be indexed")
         .with_detail(format!("Words longer than {TSVECTOR_MAX_WORD} characters are ignored."))
         .as_notice()

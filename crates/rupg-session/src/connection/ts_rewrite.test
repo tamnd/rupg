@@ -1,0 +1,96 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT ts_rewrite('foo & bar & qq & new & york', 'new & york'::tsquery, 'big & apple | nyc | new & york')
+fields ts_rewrite:3615:-1:-1
+row 'foo' & 'bar' & 'qq' & ( 'new' & 'york' | 'nyc' | 'big' & 'apple' )
+SELECT 1
+> SELECT ts_rewrite('moscow', 'moscow', 'hotel')
+fields ts_rewrite:3615:-1:-1
+row 'hotel'
+SELECT 1
+> SELECT ts_rewrite('bar & qq & foo & (new | york)', 'york'::tsquery, 'nyc')
+fields ts_rewrite:3615:-1:-1
+row 'foo' & 'bar' & 'qq' & ( 'new' | 'nyc' )
+SELECT 1
+> SELECT ts_rewrite('a & b', 'a', ''), ts_rewrite('!a', 'a', ''), ts_rewrite('!a & b', 'a', '')
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 33
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 60
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 91
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'b',,'b'
+SELECT 1
+> SELECT ts_rewrite('a <-> b', 'a', 'c'), ts_rewrite('a <-> b', 'a', ''), ts_rewrite('a <2> b', 'a <2> b', 'x'), ts_rewrite('a <2> b', 'a <3> b', 'x'), ts_rewrite('a <2> b', 'b <2> a', 'x')
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 68
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'c' <-> 'b','b','x','a' <2> 'b','a' <2> 'b'
+SELECT 1
+> SELECT ts_rewrite('', 'a', 'b'), ts_rewrite('a', '', 'b'), ts_rewrite('a', 'a', ''), ts_rewrite('a', 'b', 'c')
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 19
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 50
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 81
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row ,'a',,'a'
+SELECT 1
+> SELECT ts_rewrite('a | b | c', 'b | c', 'd'), ts_rewrite('a & b & c', 'c & a', 'x & y'), ts_rewrite('a & (b | c)', 'c | b', 'd')
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'a' | 'd','b' & 'y' & 'x','a' & 'd'
+SELECT 1
+> SELECT ts_rewrite('(a | b) & (a | b)', 'a | b', 'c'), ts_rewrite('a:A & b:*', 'a', 'z:B'), ts_rewrite('a & b', 'a & b', 'a'), ts_rewrite('a & b', 'a:B', 'c:*')
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'c' & 'c','b':* & 'z':B,'a','b' & 'c':*
+SELECT 1
+> SELECT ts_rewrite('a & b & c & d & e', 'b & d', 'f | g'), ts_rewrite('a | b | c | d | e', 'e | a | c', 'f & g & h')
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'e' & 'c' & 'a' & ( 'f' | 'g' ),'b' | 'd' | 'h' & 'f' & 'g'
+SELECT 1
+> SELECT ts_rewrite('!(a & b)', 'a & b', 'c'), ts_rewrite('!(a & b)', 'a', ''), ts_rewrite('!(a & b)', 'b & a', '')
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 74
+NOTICE 00000 text-search query doesn't contain lexemes: "" at 111
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row !'c',!'b',
+SELECT 1
+> SELECT ts_rewrite('a <-> b <-> c', 'b <-> c', 'x'), ts_rewrite('a <-> (b & c)', 'c & b', 'x'), ts_rewrite('(a <-> b) & c', 'a <-> b', 'z <-> y')
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'a' <-> 'b' <-> 'c','a' <-> 'x','c' & 'z' <-> 'y'
+SELECT 1
+> SELECT ts_rewrite('a & b & a', 'a', 'x'), ts_rewrite('a & a & a', 'a & a', 'y'), ts_rewrite('a | (b & c) | (c & b)', 'b & c', 'd')
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'b' & 'x' & 'x','y' & 'a','a' | 'd' | 'd'
+SELECT 1
+> SELECT ts_rewrite('x & (y | z) & w', 'w & x', 'q'), ts_rewrite('(x | y) & (z | w)', 'x | y', 'q | r')
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'q' & ( 'z' | 'y' ),( 'z' | 'w' ) & ( 'q' | 'r' )
+SELECT 1
+> SELECT ts_rewrite('a & b', 'a', 'a & c'), ts_rewrite('a | b', 'a', 'a | b'), ts_rewrite('foo:* & bar', 'foo', 'baz')
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'b' & 'a' & 'c','b' | 'a' | 'b','bar' & 'baz'
+SELECT 1
+> SELECT q, ts_rewrite(q, 'cat'::tsquery, 'dog | wolf') FROM (VALUES ('cat & fat'::tsquery), ('!cat'), ('cat <-> rat'), ('rat | cat | bat'), ('(cat & rat) | (cat & bat)'), ('cat')) AS t(q)
+fields q:3615:-1:-1,ts_rewrite:3615:-1:-1
+row 'cat' & 'fat',( 'dog' | 'wolf' ) & 'fat'
+row !'cat',!( 'dog' | 'wolf' )
+row 'cat' <-> 'rat',( 'dog' | 'wolf' ) <-> 'rat'
+row 'rat' | 'cat' | 'bat','dog' | 'wolf' | 'rat' | 'bat'
+row 'cat' & 'rat' | 'cat' & 'bat',( 'dog' | 'wolf' ) & 'rat' | ( 'dog' | 'wolf' ) & 'bat'
+row 'cat','dog' | 'wolf'
+SELECT 6
+> SELECT numnode(ts_rewrite('a & b & c & d', 'a & c', 'x')), ts_rewrite('a & b & c & d', 'a & c', 'x')::text
+fields numnode:23:4:-1,ts_rewrite:25:-1:-1
+row 5,'b' & 'd' & 'x'
+SELECT 1
+> SELECT ts_rewrite('abc & def & ghi & jkl & mno & pqr & stu & vwx', 'mno & def & vwx', 'zz')
+fields ts_rewrite:3615:-1:-1
+row 'abc' & 'stu' & 'ghi' & 'zz' & 'jkl' & 'pqr'
+SELECT 1
+> SELECT ts_rewrite('1 & 2 & 3 & 4 & 5 & 6 & 7 & 8 & 9 & 10 & 11 & 12', '3 & 7 & 11', 'x | y')
+fields ts_rewrite:3615:-1:-1
+row '5' & '9' & '12' & '4' & '8' & '2' & '6' & '10' & '1' & ( 'y' | 'x' )
+SELECT 1
+> SELECT ts_rewrite(to_tsquery('english', 'supernovae & stars'), to_tsquery('english', 'supernovae'), 'sn'::tsquery)
+fields ts_rewrite:3615:-1:-1
+row 'sn' & 'star'
+SELECT 1
+> SELECT ts_rewrite(NULL, 'a', 'b'), ts_rewrite('a', NULL, 'b'), ts_rewrite('a', 'a', NULL)
+fields ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1,ts_rewrite:3615:-1:-1
+row NULL,NULL,NULL
+SELECT 1

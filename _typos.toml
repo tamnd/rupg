@@ -22,6 +22,10 @@ wth = "wth"
 ket = "ket"
 amongs = "amongs"
 dispell = "dispell"
+# The stems `fals` and `valu` of the English stemmer, and the word `abd` of the tests of the text search functions.
+fals = "fals"
+valu = "valu"
+abd = "abd"
 
 # Test inputs that are wrong on purpose.
 [default]

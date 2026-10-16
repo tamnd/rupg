@@ -16,14 +16,14 @@ pub(crate) enum Ternary {
 }
 
 /// `ExecPhraseData`: the positions where a part of a query under `<N>` matches.
-#[derive(Default)]
+#[derive(Clone, Default)]
 pub(crate) struct Phrase {
     /// The positions in order with no two equal positions, as `WordEntryPos` values. Only the 14 low bits count.
     pub(crate) pos: Vec<u16>,
     /// True when the part matches at each position that is not in `pos`.
-    negate: bool,
+    pub(crate) negate: bool,
     /// The number of lexemes of the match, less one. A position is the position of the last lexeme of the match.
-    width: i32,
+    pub(crate) width: i32,
 }
 
 /// The check of the operand at an index of the query, as the callback `chkcond` of `TS_execute` does. The positions go into the `Phrase` when the caller gives one.
@@ -151,7 +151,12 @@ fn output(
 }
 
 /// `TS_phrase_execute`: the match of the part of the query at `at`, which is under a `<N>`, with its positions.
-fn phrase(items: &[QueryItem], at: usize, data: &mut Phrase, check: &Check<'_>) -> Ternary {
+pub(crate) fn phrase(
+    items: &[QueryItem],
+    at: usize,
+    data: &mut Phrase,
+    check: &Check<'_>,
+) -> Ternary {
     let QueryItem::Operator { op, distance, left } = &items[at] else {
         return check(at, Some(data));
     };
@@ -272,6 +277,50 @@ fn execute(items: &[QueryItem], at: usize, check: &Check<'_>) -> Ternary {
             _ => Ternary::No,
         },
         _ => Ternary::No,
+    }
+}
+
+/// `TS_execute_locations`: when the query matches, the positions of each part that `&` joins at the top of the query. Each part is an operand or a `<N>`, and the parts under `|` come together in one part. A part under `!` gives no positions.
+pub(crate) fn locations(items: &[QueryItem], at: usize, check: &Check<'_>) -> Option<Vec<Phrase>> {
+    let QueryItem::Operator { op, left, .. } = &items[at] else {
+        let mut data = Phrase::default();
+        return (check(at, Some(&mut data)) == Ternary::Yes).then(|| vec![data]);
+    };
+    let left = at + *left as usize;
+    match *op {
+        TSQUERY_NOT => locations(items, at + 1, check).is_none().then(Vec::new),
+        TSQUERY_AND => {
+            let mut l = locations(items, left, check)?;
+            l.extend(locations(items, at + 1, check)?);
+            Some(l)
+        }
+        TSQUERY_OR => {
+            let (l, r) = (locations(items, left, check), locations(items, at + 1, check));
+            if l.is_none() && r.is_none() {
+                return None;
+            }
+            let (l, r) = (l.unwrap_or_default(), r.unwrap_or_default());
+            if l.is_empty() || r.is_empty() {
+                return Some(if l.is_empty() { r } else { l });
+            }
+            // `(A & B) | (C & D)` is `(A | C) & (A | D) & (B | C) & (B | D)`.
+            let mut out = Vec::with_capacity(l.len() * r.len());
+            for x in &l {
+                for y in &r {
+                    let mut data = Phrase::default();
+                    output(&mut data, x, y, BOTH | L_ONLY | R_ONLY, (0, 0));
+                    data.width = x.width.max(y.width);
+                    out.push(data);
+                }
+            }
+            Some(out)
+        }
+        TSQUERY_PHRASE => {
+            let mut data = Phrase::default();
+            (phrase(items, at, &mut data, check) == Ternary::Yes)
+                .then(|| if data.negate { Vec::new() } else { vec![data] })
+        }
+        _ => None,
     }
 }
 
