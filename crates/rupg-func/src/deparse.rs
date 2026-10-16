@@ -8,8 +8,8 @@ mod query;
 use std::ptr;
 
 use rupg_analyze::{
-    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, SortGroup, SqlValue,
-    SubLink, SubLinkKind, Var, WindowClause, WindowFunc,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, RowCompare,
+    SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc,
 };
 use rupg_analyze::{default_opclass, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, Relation};
@@ -324,6 +324,7 @@ impl<'a> Deparser<'a> {
                 self.list(args, true)?;
                 self.buf.push(')');
             }
+            ExprKind::RowCompare(rc) => self.row_compare(rc)?,
             ExprKind::MinMax { greatest, args, .. } => {
                 self.buf.push_str(if *greatest { "GREATEST(" } else { "LEAST(" });
                 self.list(args, true)?;
@@ -496,6 +497,42 @@ impl<'a> Deparser<'a> {
             }
             FuncForm::Call => self.call(f)?,
         }
+        Ok(())
+    }
+
+    /// A `RowCompareExpr`: both rows with `ROW`, and the name of the operator of the first pair of fields.
+    fn row_compare(&mut self, rc: &RowCompare) -> Result<()> {
+        let mut pairs = Vec::with_capacity(rc.ops.len());
+        let mut name = "";
+        for op in &rc.ops {
+            let ExprKind::Func(Func { form: FuncForm::Operator(opno), args, .. }) = &op.kind else {
+                return Err(Error::internal("a row comparison that is not an operator"));
+            };
+            let [left, right] = args.as_slice() else {
+                return Err(Error::internal("a row comparison operator needs two arguments"));
+            };
+            if name.is_empty() {
+                name = builtin::operator_by_oid(*opno).map(|op| op.name).ok_or_else(|| {
+                    Error::internal(format!("cache lookup failed for operator {opno}"))
+                })?;
+            }
+            pairs.push((left, right));
+        }
+        self.buf.push_str("(ROW(");
+        for (i, (left, _)) in pairs.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            self.expr(left, true)?;
+        }
+        self.buf.push_str(&format!(") {name} ROW("));
+        for (i, (_, right)) in pairs.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            self.expr(right, true)?;
+        }
+        self.buf.push_str("))");
         Ok(())
     }
 
@@ -690,7 +727,10 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         ExprKind::Distinct { not: false, .. } => own_syntax(parent),
         ExprKind::Distinct { not: true, .. } => bool_simple(BoolOp::Not, parent, paren),
         ExprKind::Bool(op, _) => bool_simple(*op, parent, paren),
-        ExprKind::ScalarArrayOp { .. } | ExprKind::CaseTest | ExprKind::NamedArg(_) => false,
+        ExprKind::ScalarArrayOp { .. }
+        | ExprKind::RowCompare(_)
+        | ExprKind::CaseTest
+        | ExprKind::NamedArg(_) => false,
     }
 }
 

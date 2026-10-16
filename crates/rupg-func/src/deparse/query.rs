@@ -883,9 +883,10 @@ impl Deparser<'_> {
         self.buf.push_str(if sub.kind == SubLinkKind::Array { "ARRAY(" } else { "(" });
         let mut opname = "";
         if let Some(test) = &sub.test {
-            // One operator, or the operators of `=` or `<>` for a row on the left.
+            // One operator, the operators of `=` or `<>` for a row on the left, or the operators of a comparison of rows.
             let (ops, row) = match &test.kind {
                 ExprKind::Bool(_, ops) => (ops.as_slice(), true),
+                ExprKind::RowCompare(rc) => (rc.ops.as_slice(), true),
                 _ => (std::slice::from_ref(test), false),
             };
             if row {
