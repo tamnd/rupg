@@ -1,0 +1,55 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT ts_headline('english', '{"a":"aaa bbb", "b":{"c":"ccc ddd fff", "c1":"ccc1 ddd1"}, "d":["ggg hhh", "iii jjj"]}'::json, to_tsquery('english', 'bbb & ddd & hhh'), 'MaxWords=2, MinWords=1')
+fields ts_headline:114:-1:-1
+row {"a":"aaa","b":{"c":"ccc","c1":"ccc1"},"d":["ggg","iii"]}
+SELECT 1
+> SELECT ts_headline('english', '{"a":"aaa bbb", "b":{"c":"ccc ddd fff", "c1":"ccc1 ddd1"}, "d":["ggg hhh", "iii jjj"]}'::jsonb, to_tsquery('english', 'bbb & ddd & hhh'), 'MaxWords=2, MinWords=1')
+fields ts_headline:3802:-1:-1
+row {"a": "aaa", "b": {"c": "ccc", "c1": "ccc1"}, "d": ["ggg", "iii"]}
+SELECT 1
+> SELECT ts_headline('english', '{"a":"aaa bbb", "b":{"c":"ccc ddd fff"}, "d":["ggg hhh", "iii jjj"]}'::json, to_tsquery('english', 'bbb & ddd & hhh'), 'StartSel = <, StopSel = >')
+fields ts_headline:114:-1:-1
+row {"a":"aaa <bbb>","b":{"c":"ccc <ddd> fff"},"d":["ggg <hhh>","iii jjj"]}
+SELECT 1
+> SELECT ts_headline('english', '{"a":"aaa bbb", "b":{"c":"ccc ddd fff"}, "d":["ggg hhh", "iii jjj"]}'::jsonb, to_tsquery('english', 'bbb & ddd & hhh'), 'StartSel = <, StopSel = >')
+fields ts_headline:3802:-1:-1
+row {"a": "aaa <bbb>", "b": {"c": "ccc <ddd> fff"}, "d": ["ggg <hhh>", "iii jjj"]}
+SELECT 1
+> SELECT ts_headline('{"a" : "aaa bbb", "b": 1.50, "c":  [true, null, -2e3, "x \"y\" bbb"], "e":{}, "f":[]}'::json, to_tsquery('english', 'bbb'))
+fields ts_headline:114:-1:-1
+row {"a":"aaa <b>bbb</b>","b":1.50,"c":[true,null,-2e3,"x \"y\" <b>bbb</b>"],"e":{},"f":[]}
+SELECT 1
+> SELECT ts_headline('{"a" : "aaa bbb", "b": 1.50, "c":  [true, null, -2e3, "x \"y\" bbb"], "e":{}, "f":[]}'::jsonb, to_tsquery('english', 'bbb'))
+fields ts_headline:3802:-1:-1
+row {"a": "aaa <b>bbb</b>", "b": 1.50, "c": [true, null, -2000, "x \"y\" <b>bbb</b>"], "e": {}, "f": []}
+SELECT 1
+> SELECT ts_headline('"aaa bbb"'::json, to_tsquery('english', 'bbb')), ts_headline('"aaa bbb"'::jsonb, to_tsquery('english', 'bbb'))
+fields ts_headline:114:-1:-1,ts_headline:3802:-1:-1
+row "aaa <b>bbb</b>","aaa <b>bbb</b>"
+SELECT 1
+> SELECT ts_headline('5'::json, to_tsquery('english', 'bbb'), 'MinWords=0'), ts_headline('[1, {"k": null}]'::jsonb, to_tsquery('english', 'bbb'), 'Foo=1')
+fields ts_headline:114:-1:-1,ts_headline:3802:-1:-1
+row 5,[1, {"k": null}]
+SELECT 1
+> SELECT ts_headline('["aaa"]'::json, to_tsquery('english', 'bbb'), 'MinWords=0')
+fields ts_headline:114:-1:-1
+ERROR 22023 MinWords must be positive
+> SELECT ts_headline('["aaa"]'::jsonb, to_tsquery('english', 'bbb'), 'Foo=1')
+fields ts_headline:3802:-1:-1
+ERROR 22023 unrecognized headline parameter: "Foo"
+> SELECT ts_headline('["aaa"]'::jsonb, to_tsquery('english', 'bbb'), 'Foo')
+fields ts_headline:3802:-1:-1
+ERROR 42601 invalid parameter list format: "Foo"
+> SELECT ts_headline('{"bbb": "bbb", "a\nb": "tab\there bbb"}'::json, to_tsquery('english', 'bbb'))
+fields ts_headline:114:-1:-1
+row {"bbb":"<b>bbb</b>","a\nb":"tab\there <b>bbb</b>"}
+SELECT 1
+> SELECT ts_headline('{"z": "bbb", "a": "bbb ccc", "a": "dup bbb"}'::json, to_tsquery('english', 'bbb')), ts_headline('{"z": "bbb", "a": "bbb ccc", "a": "dup bbb"}'::jsonb, to_tsquery('english', 'bbb'))
+fields ts_headline:114:-1:-1,ts_headline:3802:-1:-1
+row {"z":"<b>bbb</b>","a":"<b>bbb</b> ccc","a":"dup <b>bbb</b>"},{"a": "dup <b>bbb</b>", "z": "<b>bbb</b>"}
+SELECT 1
+> SELECT ts_headline('simple', '["a b <-> c", "b c"]'::json, 'b <-> c')
+fields ts_headline:114:-1:-1
+row ["a <b>b</b> <-> <b>c</b>","<b>b</b> <b>c</b>"]
+SELECT 1

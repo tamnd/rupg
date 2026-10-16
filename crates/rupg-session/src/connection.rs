@@ -2387,6 +2387,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/ts_headline.test")));
     }
 
+    /// The function `ts_headline` for `json` and `jsonb`: the headline of each string that is not a key, the text of the other scalars, a scalar at the root, duplicate keys, escapes, and the errors of the options, which come only for a value with a string. `connection/ts_headline_json.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn ts_headline_json() {
+        big_stack(|| script(include_str!("connection/ts_headline_json.test")));
+    }
+
     /// The type `tsquery`: the text input with its operators, weights and prefixes and its errors, the notice for a query with no lexemes, the output, the order, `numnode`, `querytree`, `tsquery_phrase`, the operators `&&`, `||`, `!!`, `<->`, `@>` and `<@`, the limits of the distance, the lexeme and the stack of operators, arrays of `tsquery`, `GROUP BY`, `pg_input_is_valid`, the text and binary forms of `COPY` and a query with parameters. `connection/tsquery.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn tsquery() {
