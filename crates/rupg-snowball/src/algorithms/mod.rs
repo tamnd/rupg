@@ -1,0 +1,35 @@
+//! The stemmers that Snowball generates. Each file is the output of `snowball X.sbl -rust`, with the two `use` lines changed from `snowball::` to `crate::`. See the README of this crate.
+
+pub(crate) mod arabic_stemmer;
+pub(crate) mod armenian_stemmer;
+pub(crate) mod basque_stemmer;
+pub(crate) mod catalan_stemmer;
+pub(crate) mod danish_stemmer;
+pub(crate) mod dutch_porter_stemmer;
+pub(crate) mod dutch_stemmer;
+pub(crate) mod english_stemmer;
+pub(crate) mod esperanto_stemmer;
+pub(crate) mod estonian_stemmer;
+pub(crate) mod finnish_stemmer;
+pub(crate) mod french_stemmer;
+pub(crate) mod german_stemmer;
+pub(crate) mod greek_stemmer;
+pub(crate) mod hindi_stemmer;
+pub(crate) mod hungarian_stemmer;
+pub(crate) mod indonesian_stemmer;
+pub(crate) mod irish_stemmer;
+pub(crate) mod italian_stemmer;
+pub(crate) mod lithuanian_stemmer;
+pub(crate) mod nepali_stemmer;
+pub(crate) mod norwegian_stemmer;
+pub(crate) mod polish_stemmer;
+pub(crate) mod porter_stemmer;
+pub(crate) mod portuguese_stemmer;
+pub(crate) mod romanian_stemmer;
+pub(crate) mod russian_stemmer;
+pub(crate) mod serbian_stemmer;
+pub(crate) mod spanish_stemmer;
+pub(crate) mod swedish_stemmer;
+pub(crate) mod tamil_stemmer;
+pub(crate) mod turkish_stemmer;
+pub(crate) mod yiddish_stemmer;

@@ -1,0 +1,570 @@
+//! The commands of text search of `tsearchcmds.c`: `CREATE TEXT SEARCH TEMPLATE`, `CREATE TEXT SEARCH DICTIONARY`, `CREATE TEXT SEARCH CONFIGURATION`, `ALTER TEXT SEARCH CONFIGURATION` and `COMMENT ON` for these objects. The objects are found by name as `get_ts_template_oid`, `get_ts_parser_oid`, `get_ts_dict_oid` and `get_ts_config_oid` of `namespace.c` find them, in the catalog and in the built-in rows.
+//!
+//! `CREATE TEXT SEARCH DICTIONARY` runs the init function of the template on the options, as `verify_dictoptions` does. rupg has the init functions of the templates `simple` and `snowball`. A dictionary of another template gives `0A000`. `CREATE TEXT SEARCH PARSER` also gives `0A000`.
+
+use rupg_catalog::{
+    ObjRef, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, TsConfig, TsDictionary,
+    TsMapping, TsTemplate,
+};
+use rupg_common::{Error, Result, SqlState};
+use rupg_pgcatalog::builtin::{self, Named};
+use rupg_sql::nodes::ObjectType;
+use rupg_sql::nodes::{AlterTSConfigType, AlterTSConfigurationStmt, DefElem, DefineStmt, Node};
+use rupg_types::oid;
+
+use super::comment::{name_list, not_owner};
+use super::drop::quote_identifier;
+use super::{Definer, not_yet};
+use crate::tsdict::{Dictionary, cell_oid, static_rows, template_init};
+use crate::typename::{names, type_name_text};
+
+/// The OID of the default parser of text search, `default`.
+const DEFAULT_PARSER: u32 = 3722;
+
+/// A kind of object of text search.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Kind {
+    Template,
+    Parser,
+    Dictionary,
+    Config,
+}
+
+impl Kind {
+    /// The words for the object in the messages.
+    fn word(self) -> &'static str {
+        match self {
+            Kind::Template => "text search template",
+            Kind::Parser => "text search parser",
+            Kind::Dictionary => "text search dictionary",
+            Kind::Config => "text search configuration",
+        }
+    }
+
+    /// The built-in rows of the kind.
+    fn named(self) -> Named {
+        match self {
+            Kind::Template => Named::Template,
+            Kind::Parser => Named::Parser,
+            Kind::Dictionary => Named::Dictionary,
+            Kind::Config => Named::Config,
+        }
+    }
+
+    /// The OID of the catalog of the kind.
+    fn class(self) -> u32 {
+        match self {
+            Kind::Template => PG_TS_TEMPLATE,
+            Kind::Parser => PG_TS_PARSER,
+            Kind::Dictionary => PG_TS_DICT,
+            Kind::Config => PG_TS_CONFIG,
+        }
+    }
+
+    /// The kind of an `ObjectType`.
+    fn of(objtype: ObjectType) -> Option<Kind> {
+        match objtype {
+            ObjectType::OBJECT_TSTEMPLATE => Some(Kind::Template),
+            ObjectType::OBJECT_TSPARSER => Some(Kind::Parser),
+            ObjectType::OBJECT_TSDICTIONARY => Some(Kind::Dictionary),
+            ObjectType::OBJECT_TSCONFIGURATION => Some(Kind::Config),
+            _ => None,
+        }
+    }
+}
+
+/// True for the kinds of `DefineStmt` of text search.
+pub(super) fn is_ts_kind(objtype: ObjectType) -> bool {
+    Kind::of(objtype).is_some()
+}
+
+/// The name of an option.
+fn def_name(def: &DefElem) -> &str {
+    def.defname.as_deref().unwrap_or_default()
+}
+
+/// The error of `defGetString` and `defGetQualifiedName` for an option without a value.
+fn no_parameter(def: &DefElem) -> Error {
+    Error::new(SqlState::SYNTAX_ERROR, format!("{} requires a parameter", def_name(def)))
+}
+
+/// `defGetString`.
+fn def_string(def: &DefElem) -> Result<String> {
+    Ok(match &def.arg {
+        None => return Err(no_parameter(def)),
+        Some(Node::Integer(n)) => n.to_string(),
+        Some(Node::Float(s) | Node::String(s) | Node::BitString(s)) => s.to_string(),
+        Some(Node::Boolean(b)) => b.to_string(),
+        Some(Node::TypeName(name)) => type_name_text(name),
+        Some(Node::List(list)) => names(list).join("."),
+        Some(Node::A_Star(_)) => "*".to_string(),
+        Some(_) => String::new(),
+    })
+}
+
+/// `defGetQualifiedName`.
+fn qualified_name(def: &DefElem) -> Result<Vec<&str>> {
+    match &def.arg {
+        None => Err(no_parameter(def)),
+        Some(Node::TypeName(name)) => Ok(names(&name.names)),
+        Some(Node::List(list)) => Ok(names(list)),
+        Some(Node::String(name)) => Ok(vec![&**name]),
+        Some(_) => Err(Error::new(
+            SqlState::SYNTAX_ERROR,
+            format!("argument of {} must be a name", def_name(def)),
+        )),
+    }
+}
+
+/// `serialize_deflist`: the text of `dictinitoption`. An integer or a float has no quotes. Another value is in single quotes, with `E` before the quotes when it has a backslash.
+fn serialize(options: &[&DefElem]) -> Result<String> {
+    let mut out = String::new();
+    for (i, def) in options.iter().enumerate() {
+        let value = def_string(def)?;
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(&quote_identifier(def_name(def)));
+        out.push_str(" = ");
+        if matches!(def.arg, Some(Node::Integer(_) | Node::Float(_))) {
+            out.push_str(&value);
+            continue;
+        }
+        if value.contains('\\') {
+            out.push('E');
+        }
+        out.push('\'');
+        for c in value.chars() {
+            if c == '\'' || c == '\\' {
+                out.push(c);
+            }
+            out.push(c);
+        }
+        out.push('\'');
+    }
+    Ok(out)
+}
+
+/// The built-in rows of `pg_ts_config_map` of a configuration, in the order of the index on the configuration, the token type and the place.
+fn builtin_mappings(config: u32) -> Vec<TsMapping> {
+    let Some(catalog) = rupg_pgcatalog::catalog("pg_ts_config_map") else { return Vec::new() };
+    static_rows("pg_ts_config_map", "mapcfg", config)
+        .into_iter()
+        .map(|row| {
+            let int = |column| i32::try_from(cell_oid(catalog, row, column)).unwrap_or(0);
+            TsMapping {
+                config,
+                token: int("maptokentype"),
+                seqno: int("mapseqno"),
+                dict: cell_oid(catalog, row, "mapdict"),
+            }
+        })
+        .collect()
+}
+
+impl Definer<'_, '_> {
+    /// The object of the kind with the name in the schema, of the catalog or built in.
+    fn ts_in(&self, kind: Kind, namespace: u32, name: &str) -> Option<u32> {
+        let user = match kind {
+            Kind::Template => self.catalog.ts_template_by_name(namespace, name).map(|t| t.oid),
+            Kind::Parser => None,
+            Kind::Dictionary => self.catalog.ts_dictionary_by_name(namespace, name).map(|d| d.oid),
+            Kind::Config => self.catalog.ts_config_by_name(namespace, name).map(|c| c.oid),
+        };
+        user.or_else(|| {
+            builtin::named(kind.named())
+                .iter()
+                .find(|r| r.namespace == namespace && r.name == name)
+                .map(|r| r.oid)
+        })
+    }
+
+    /// `get_ts_*_oid`: the object of the kind that a name gives. With `missing_ok`, a name that gives no object, or a schema that does not exist, is `None`.
+    fn ts_lookup(&self, kind: Kind, list: &[&str], missing_ok: bool) -> Result<Option<u32>> {
+        let (schema, name) = match self.an.split_name(list, None) {
+            Ok(split) => split,
+            Err(error) if missing_ok && error.state() == SqlState::UNDEFINED_SCHEMA => {
+                return Ok(None);
+            }
+            Err(error) => return Err(error),
+        };
+        let found = match schema {
+            Some(namespace) => self.ts_in(kind, namespace, name),
+            None => self.an.path.iter().find_map(|&ns| self.ts_in(kind, ns, name)),
+        };
+        if found.is_none() && !missing_ok {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("{} \"{}\" does not exist", kind.word(), list.join(".")),
+            ));
+        }
+        Ok(found)
+    }
+
+    /// `get_ts_*_oid` with `missing_ok` false.
+    fn ts_oid(&self, kind: Kind, list: &[&str]) -> Result<u32> {
+        Ok(self.ts_lookup(kind, list, false)?.unwrap_or_default())
+    }
+
+    /// `QualifiedNameGetCreationNamespace`: the schema and the name of a new object.
+    fn ts_creation<'n>(&self, list: &[&'n str]) -> Result<(u32, &'n str)> {
+        let (schema, name) = self.an.split_name(list, None)?;
+        let namespace = match schema {
+            Some(namespace) => namespace,
+            None => self.an.env.search_path().first().copied().ok_or_else(|| {
+                Error::new(SqlState::UNDEFINED_SCHEMA, "no schema has been selected to create in")
+            })?,
+        };
+        Ok((namespace, name))
+    }
+
+    /// `DefineTSTemplate`, `DefineTSDictionary` and `DefineTSConfiguration`.
+    pub(super) fn define_ts(&mut self, stmt: &DefineStmt) -> Result<()> {
+        let list = names(&stmt.defnames);
+        let defs: Vec<&DefElem> = stmt
+            .definition
+            .iter()
+            .flatten()
+            .filter_map(|n| match n {
+                Node::DefElem(def) => Some(&**def),
+                _ => None,
+            })
+            .collect();
+        match Kind::of(stmt.kind) {
+            Some(Kind::Template) => self.create_ts_template(&list, &defs),
+            Some(Kind::Dictionary) => self.create_ts_dictionary(&list, &defs),
+            Some(Kind::Config) => self.create_ts_config(&list, &defs),
+            _ => Err(not_yet("CREATE TEXT SEARCH PARSER", None)),
+        }
+    }
+
+    /// `DefineTSTemplate`.
+    fn create_ts_template(&mut self, list: &[&str], defs: &[&DefElem]) -> Result<()> {
+        if !self.is_superuser() {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "must be superuser to create text search templates",
+            ));
+        }
+        let (namespace, name) = self.ts_creation(list)?;
+        let (mut init, mut lexize) = (0, 0);
+        for def in defs {
+            match def_name(def) {
+                "init" => init = self.template_function(def, 1)?,
+                "lexize" => lexize = self.template_function(def, 4)?,
+                other => {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        format!("text search template parameter \"{other}\" not recognized"),
+                    ));
+                }
+            }
+        }
+        if lexize == 0 {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                "text search template lexize method is required",
+            ));
+        }
+        let new = TsTemplate { oid: 0, name: name.to_string(), namespace, init, lexize };
+        self.catalog.create_ts_template(new)?;
+        Ok(())
+    }
+
+    /// `get_ts_template_func`: the function of an option of a template, with `nargs` arguments of type `internal`, as `LookupFuncName` finds it. It must give `internal`.
+    fn template_function(&self, def: &DefElem, nargs: usize) -> Result<u32> {
+        let list = qualified_name(def)?;
+        let (schema, name) = self.an.split_name(&list, None)?;
+        let args = vec![oid::INTERNAL; nargs];
+        let schemas = match schema {
+            Some(namespace) => vec![namespace],
+            None => self.an.path.clone(),
+        };
+        let found = schemas.iter().find_map(|&namespace| {
+            let user = self
+                .catalog
+                .functions()
+                .find(|f| f.namespace == namespace && f.name == name && f.argtypes == args)
+                .map(|f| (f.oid, f.rettype));
+            user.or_else(|| {
+                builtin::procs_named(name)
+                    .find(|p| p.namespace == namespace && p.argtypes == args.as_slice())
+                    .map(|p| (p.oid, p.rettype))
+            })
+        });
+        let signature = format!("{}({})", list.join("."), vec!["internal"; nargs].join(", "));
+        match found {
+            Some((function, oid::INTERNAL)) => Ok(function),
+            Some(_) => Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                format!("function {signature} should return type internal"),
+            )),
+            None => Err(Error::new(
+                SqlState::UNDEFINED_FUNCTION,
+                format!("function {signature} does not exist"),
+            )),
+        }
+    }
+
+    /// `verify_dictoptions`: the init function of the template must accept the options.
+    fn verify_dictoptions(&self, template: u32, options: &[&DefElem]) -> Result<()> {
+        let (name, init) = template_init(Some(self.catalog), template).unwrap_or_default();
+        if init.is_empty() {
+            if options.is_empty() {
+                return Ok(());
+            }
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                format!("text search template \"{name}\" does not accept options"),
+            ));
+        }
+        let pairs = options
+            .iter()
+            .map(|def| Ok((def_name(def).to_string(), def_string(def)?)))
+            .collect::<Result<Vec<_>>>()?;
+        match Dictionary::init(&init, &pairs)? {
+            Some(_) => Ok(()),
+            None => Err(not_yet(&format!("a dictionary of the template {name}"), None)),
+        }
+    }
+
+    /// `DefineTSDictionary`.
+    fn create_ts_dictionary(&mut self, list: &[&str], defs: &[&DefElem]) -> Result<()> {
+        let (namespace, name) = self.ts_creation(list)?;
+        self.check_create_in(namespace, None)?;
+        let mut template = 0;
+        let mut options = Vec::new();
+        for &def in defs {
+            if def_name(def) == "template" {
+                template = self.ts_oid(Kind::Template, &qualified_name(def)?)?;
+            } else {
+                options.push(def);
+            }
+        }
+        if template == 0 {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                "text search template is required",
+            ));
+        }
+        self.verify_dictoptions(template, &options)?;
+        let options = if options.is_empty() { None } else { Some(serialize(&options)?) };
+        let new = TsDictionary {
+            oid: 0,
+            name: name.to_string(),
+            namespace,
+            owner: self.user,
+            template,
+            options,
+        };
+        self.catalog.create_ts_dictionary(new)?;
+        Ok(())
+    }
+
+    /// The parser of a configuration.
+    fn config_parser(&self, config: u32) -> u32 {
+        match self.catalog.ts_config(config) {
+            Some(c) => c.parser,
+            None => rupg_pgcatalog::catalog("pg_ts_config")
+                .and_then(|catalog| {
+                    static_rows("pg_ts_config", "oid", config)
+                        .first()
+                        .map(|&row| cell_oid(catalog, row, "cfgparser"))
+                })
+                .unwrap_or(DEFAULT_PARSER),
+        }
+    }
+
+    /// The rows of `pg_ts_config_map` of a configuration, in the order of the index on the configuration, the token type and the place.
+    fn config_mappings(&self, config: u32) -> Vec<TsMapping> {
+        if self.catalog.ts_config(config).is_none() {
+            return builtin_mappings(config);
+        }
+        let mut list: Vec<TsMapping> =
+            self.catalog.ts_mappings().iter().filter(|m| m.config == config).copied().collect();
+        list.sort_by_key(|m| (m.token, m.seqno));
+        list
+    }
+
+    /// `DefineTSConfiguration`. With `COPY`, the new configuration gets the parser and the map of the old one.
+    fn create_ts_config(&mut self, list: &[&str], defs: &[&DefElem]) -> Result<()> {
+        let (namespace, name) = self.ts_creation(list)?;
+        self.check_create_in(namespace, None)?;
+        let (mut parser, mut source) = (0, 0);
+        for def in defs {
+            match def_name(def) {
+                "parser" => parser = self.ts_oid(Kind::Parser, &qualified_name(def)?)?,
+                "copy" => source = self.ts_oid(Kind::Config, &qualified_name(def)?)?,
+                other => {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        format!("text search configuration parameter \"{other}\" not recognized"),
+                    ));
+                }
+            }
+        }
+        if source != 0 && parser != 0 {
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                "cannot specify both PARSER and COPY options",
+            ));
+        }
+        let mut copy = Vec::new();
+        if source != 0 {
+            parser = self.config_parser(source);
+            copy = self.config_mappings(source);
+        }
+        if parser == 0 {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                "text search parser is required",
+            ));
+        }
+        let new = TsConfig { oid: 0, name: name.to_string(), namespace, owner: self.user, parser };
+        self.catalog.create_ts_config(new, &copy)?;
+        Ok(())
+    }
+
+    /// `getTokenTypes`: the numbers of the token types of the default parser, without duplicates.
+    fn token_types(list: &[Option<Node>]) -> Result<Vec<(i32, String)>> {
+        let mut out: Vec<(i32, String)> = Vec::new();
+        for name in names(list) {
+            if out.iter().any(|(_, n)| n == name) {
+                continue;
+            }
+            let number = (1..)
+                .zip(rupg_pgcatalog::TOKEN_TYPES)
+                .find(|(_, (alias, _))| *alias == name)
+                .map(|(n, _)| n)
+                .ok_or_else(|| {
+                    Error::new(
+                        SqlState::INVALID_PARAMETER_VALUE,
+                        format!("token type \"{name}\" does not exist"),
+                    )
+                })?;
+            out.push((number, name.to_string()));
+        }
+        Ok(out)
+    }
+
+    /// `AlterTSConfiguration`: `ADD MAPPING`, `ALTER MAPPING` and `DROP MAPPING`.
+    pub(super) fn alter_ts_config(&mut self, stmt: &AlterTSConfigurationStmt) -> Result<()> {
+        let list = names(&stmt.cfgname);
+        let shown = list.join(".");
+        let Some(config) = self.ts_lookup(Kind::Config, &list, true)? else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("text search configuration \"{shown}\" does not exist"),
+            ));
+        };
+        self.check_ts_owner(Kind::Config, config, &shown)?;
+        if !stmt.dicts.is_empty() {
+            self.make_mapping(stmt, config)?;
+        } else if !stmt.tokentype.is_empty() {
+            self.drop_mapping(stmt, config)?;
+        }
+        self.catalog.update_ts_config_depends(config);
+        Ok(())
+    }
+
+    /// `MakeConfigurationMapping`.
+    fn make_mapping(&mut self, stmt: &AlterTSConfigurationStmt, config: u32) -> Result<()> {
+        let tokens: Vec<i32> =
+            Self::token_types(&stmt.tokentype)?.into_iter().map(|(n, _)| n).collect();
+        let mut dicts = Vec::new();
+        for dict in stmt.dicts.iter().flatten() {
+            let Node::List(list) = dict else { continue };
+            dicts.push(self.ts_oid(Kind::Dictionary, &names(list))?);
+        }
+        if stmt.kind == AlterTSConfigType::ALTER_TSCONFIG_REPLACE_DICT
+            || stmt.kind == AlterTSConfigType::ALTER_TSCONFIG_REPLACE_DICT_FOR_TOKEN
+        {
+            let (Some(&old), Some(&new)) = (dicts.first(), dicts.get(1)) else {
+                return Err(Error::internal("ALTER MAPPING REPLACE needs two dictionaries"));
+            };
+            self.catalog.replace_ts_dictionary(config, &tokens, old, new);
+            return Ok(());
+        }
+        let keep = |m: &&TsMapping| !(stmt.r#override && tokens.contains(&m.token));
+        for &token in &tokens {
+            for seqno in (1..).take(dicts.len()) {
+                let taken = self
+                    .catalog
+                    .ts_mappings()
+                    .iter()
+                    .filter(keep)
+                    .any(|m| m.config == config && m.token == token && m.seqno == seqno);
+                if taken {
+                    return Err(Error::new(
+                        SqlState::UNIQUE_VIOLATION,
+                        "duplicate key value violates unique constraint \"pg_ts_config_map_index\"",
+                    )
+                    .with_detail(format!(
+                        "Key (mapcfg, maptokentype, mapseqno)=({config}, {token}, {seqno}) already exists."
+                    )));
+                }
+            }
+        }
+        self.catalog.add_ts_mapping(config, &tokens, &dicts, stmt.r#override);
+        Ok(())
+    }
+
+    /// `DropConfigurationMapping`. With `IF EXISTS`, a token type without rows gives a `NOTICE`.
+    fn drop_mapping(&mut self, stmt: &AlterTSConfigurationStmt, config: u32) -> Result<()> {
+        for (token, name) in Self::token_types(&stmt.tokentype)? {
+            if self.catalog.drop_ts_mapping(config, token) {
+                continue;
+            }
+            if !stmt.missing_ok {
+                return Err(Error::new(
+                    SqlState::UNDEFINED_OBJECT,
+                    format!("mapping for token type \"{name}\" does not exist"),
+                ));
+            }
+            self.notice(
+                SqlState::SUCCESSFUL_COMPLETION,
+                format!("mapping for token type \"{name}\" does not exist, skipping"),
+            );
+        }
+        Ok(())
+    }
+
+    /// `check_object_ownership` for an object of text search. A template and a parser need a superuser, and a dictionary and a configuration need their owner. rupg cannot change a built-in object.
+    fn check_ts_owner(&self, kind: Kind, object: u32, shown: &str) -> Result<()> {
+        let (user, owner) = match kind {
+            Kind::Template => (self.catalog.ts_template(object).is_some(), None),
+            Kind::Parser => (false, None),
+            Kind::Dictionary => {
+                let dict = self.catalog.ts_dictionary(object);
+                (dict.is_some(), dict.map(|d| d.owner))
+            }
+            Kind::Config => {
+                let config = self.catalog.ts_config(object);
+                (config.is_some(), config.map(|c| c.owner))
+            }
+        };
+        if !self.is_superuser() {
+            if matches!(kind, Kind::Template | Kind::Parser) {
+                return Err(Error::new(SqlState::INSUFFICIENT_PRIVILEGE, "must be superuser"));
+            }
+            if owner != Some(self.user) {
+                return Err(not_owner(kind.word(), shown));
+            }
+        }
+        if !user {
+            return Err(not_yet("a change of a built-in object of text search", None));
+        }
+        Ok(())
+    }
+
+    /// The object of `COMMENT ON TEXT SEARCH`, after the check of its owner.
+    pub(super) fn comment_ts(&self, objtype: ObjectType, object: Option<&Node>) -> Result<ObjRef> {
+        let Some(kind) = Kind::of(objtype) else {
+            return Err(Error::internal("not an object of text search"));
+        };
+        let list = name_list(object);
+        let found = self.ts_oid(kind, &list)?;
+        self.check_ts_owner(kind, found, &list.join("."))?;
+        Ok(ObjRef::new(kind.class(), found))
+    }
+}

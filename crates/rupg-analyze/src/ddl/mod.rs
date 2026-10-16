@@ -1,4 +1,4 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE` and `ALTER SCHEMA ... OWNER TO`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable` and `AlterSchemaOwner` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH` and `ALTER TEXT SEARCH CONFIGURATION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner` and the functions of `tsearchcmds.c` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE DOMAIN` and `CREATE FUNCTION`, for the domains and the functions of `information_schema`, so [`is_definition`] does not list them. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
 mod comment;
@@ -13,6 +13,7 @@ mod sequence;
 mod table;
 #[cfg(test)]
 mod tests;
+mod tsearch;
 mod view;
 
 pub use copy::{CopyRelation, CopyTarget, attnums, copy_relation, copy_target};
@@ -63,7 +64,9 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CommentStmt(_)
             | Node::CreateSeqStmt(_)
             | Node::AlterSeqStmt(_)
-    ) || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
+            | Node::AlterTSConfigurationStmt(_)
+    ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind))
+        || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype))
         || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA)
 }
@@ -115,6 +118,8 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterOwnerStmt(alter) => definer.alter_owner(alter),
         Node::CreateSeqStmt(create) => definer.create_sequence(create),
         Node::AlterSeqStmt(alter) => definer.alter_sequence(alter),
+        Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) => definer.define_ts(define),
+        Node::AlterTSConfigurationStmt(alter) => definer.alter_ts_config(alter),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }

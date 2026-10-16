@@ -1,0 +1,20 @@
+[package]
+name = "rupg-snowball"
+description = "The 33 Snowball stemmers of PostgreSQL 19, from the Rust code that Snowball generates at the commit of the PostgreSQL pin."
+version.workspace = true
+edition.workspace = true
+rust-version.workspace = true
+# The code comes from Snowball. See README.md and LICENSE.
+license = "BSD-3-Clause"
+repository.workspace = true
+homepage.workspace = true
+authors.workspace = true
+keywords.workspace = true
+categories.workspace = true
+readme = "README.md"
+publish = false
+
+[dependencies]
+
+[lints]
+workspace = true

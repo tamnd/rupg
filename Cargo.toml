@@ -53,6 +53,7 @@ rupg-raft = { version = "=0.1.27", path = "crates/rupg-raft" }
 rupg-server = { version = "=0.1.27", path = "crates/rupg-server" }
 rupg-session = { version = "=0.1.27", path = "crates/rupg-session" }
 rupg-shim = { version = "=0.1.27", path = "crates/rupg-shim" }
+rupg-snowball = { version = "=0.1.27", path = "crates/rupg-snowball" }
 rupg-sql = { version = "=0.1.27", path = "crates/rupg-sql" }
 rupg-summary = { version = "=0.1.27", path = "crates/rupg-summary" }
 rupg-table = { version = "=0.1.27", path = "crates/rupg-table" }

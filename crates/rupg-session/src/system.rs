@@ -1,10 +1,12 @@
-//! The objects that `initdb` makes with SQL after the bootstrap: the system views of `system_views.sql` and the schema `information_schema` of `information_schema.sql`.
+//! The objects that `initdb` makes with SQL after the bootstrap: the system views of `system_views.sql`, the Snowball dictionaries of `snowball_create.sql` and the schema `information_schema` of `information_schema.sql`.
 //!
 //! `initdb` runs the script in one backend as the bootstrap superuser, with `search_path` set to `pg_catalog` and `allow_system_table_mods` on. rupg runs each `CREATE VIEW` of the script through the analyzer in the same way, once in each process, and each new store starts from the result.
 //!
 //! A view takes four OIDs in a row: the view, its array type, its row type and its `_RETURN` rule. When the rule is long, PostgreSQL moves its query to the TOAST table of `pg_rewrite`, and the TOAST value takes the next OID. The text of the rule in rupg is not the text of PostgreSQL, so [`VIEW_OIDS`] holds the OID of each view in PostgreSQL 19, and the views get the same OIDs as in PostgreSQL.
 //!
 //! The `GRANT` and `REVOKE` statements of the script on views set the privileges of these views. Then each view without privileges gets `SELECT` for PUBLIC, as `setup_privileges` of `initdb` gives it. The statements on catalogs changed the static rows already.
+//!
+//! `snowball_create.sql` runs next. It makes the two functions in C of the Snowball dictionaries, the template `snowball`, and a dictionary and a configuration for each of the 31 languages, with their comments and the maps of the configurations. rupg makes the functions as `plpgsql` below, and runs the other statements of the script through the analyzer.
 //!
 //! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges, the five domains and the eleven functions in SQL, with the OIDs of PostgreSQL 19. The tables and the views of the script are not done yet.
 //!
@@ -41,8 +43,20 @@ const RIGHTS: &str = "arwdDxtm";
 /// The OID of the extension `plpgsql` in PostgreSQL 19. Its three functions and its language take the next four OIDs.
 const PLPGSQL: u32 = 13704;
 
+/// The OID of `dsnowball_init`, the first object of `snowball_create.sql` in PostgreSQL 19. The objects of the script take the next OIDs in order.
+const SNOWBALL: u32 = 13285;
+
+/// The languages of `snowball_create.pl` whose words in ASCII go to the dictionary of another language, and that language.
+const ASCII_LANGUAGES: [(&str, &str); 2] = [("hindi", "english"), ("russian", "english")];
+
+/// The stemmers of `dict_snowball` that `snowball_create.pl` makes no dictionary for.
+const NO_DICTIONARY: [&str; 2] = ["dutch_porter", "porter"];
+
 /// `ClanguageId`, the OID of the language `c`.
 const C_LANGUAGE: u32 = 13;
+
+/// The OID of the type `internal`.
+const INTERNAL: u32 = 2281;
 
 /// The OID of each system view in PostgreSQL 19, in the order of `system_views.sql`.
 const VIEW_OIDS: [(&str, u32); 86] = [
@@ -319,12 +333,102 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
             failed.push((oid.to_string(), error));
         }
     }
+    snowball(&mut catalog, &mut failed, &clock, &user);
     information_schema(&mut catalog, &mut failed, &clock, &user);
     if let Err(error) = plpgsql(&mut catalog) {
         failed.push(("CREATE EXTENSION plpgsql".to_string(), error));
     }
     catalog.set_next_oid(FIRST_NORMAL_OID);
     (catalog, failed)
+}
+
+/// The text of `snowball_create.sql`, as `snowball_create.pl` makes it: `snowball_func.sql.in`, then `snowball.sql.in` for each language with its words in place. A language with a stop word file gets the option `StopWords`.
+fn snowball_script() -> String {
+    let mut script = rupg_pgcatalog::snowball_func().to_string();
+    for stemmer in rupg_snowball::Stemmer::all() {
+        let lang = stemmer.name();
+        if NO_DICTIONARY.contains(&lang) {
+            continue;
+        }
+        let ascii = ASCII_LANGUAGES.iter().find(|(l, _)| *l == lang).map_or(lang, |(_, a)| *a);
+        let stop = match rupg_pgcatalog::stop_words(lang) {
+            Some(_) => format!(", StopWords={lang}"),
+            None => String::new(),
+        };
+        script.push_str(
+            &rupg_pgcatalog::snowball_language()
+                .replace("_LANGNAME_", lang)
+                .replace("_DICTNAME_", &format!("{lang}_stem"))
+                .replace("_CFGNAME_", lang)
+                .replace("_ASCDICTNAME_", &format!("{ascii}_stem"))
+                .replace("_NONASCDICTNAME_", &format!("{lang}_stem"))
+                .replace("_STOPWORDS_", &stop),
+        );
+    }
+    script
+}
+
+/// Runs `snowball_create.sql`. The two functions in C are made as the functions of `plpgsql` are made, and the other statements go through the analyzer.
+fn snowball(catalog: &mut Catalog, failed: &mut Vec<(String, Error)>, clock: &OsClock, user: &str) {
+    catalog.set_next_oid(SNOWBALL);
+    for (name, nargs) in [("dsnowball_init", 1), ("dsnowball_lexize", 4)] {
+        let function = Function {
+            oid: 0,
+            name: name.to_string(),
+            namespace: PG_CATALOG,
+            owner: BOOTSTRAP_SUPERUSER,
+            lang: C_LANGUAGE,
+            cost: 1,
+            rows: 0,
+            support: 0,
+            strict: true,
+            volatile: b'v',
+            parallel: b'u',
+            rettype: INTERNAL,
+            retset: false,
+            argtypes: vec![INTERNAL; nargs],
+            allargtypes: Vec::new(),
+            argmodes: Vec::new(),
+            argnames: Vec::new(),
+            src: name.to_string(),
+            bin: "$libdir/dict_snowball".to_string(),
+            body: None,
+        };
+        let made =
+            catalog.create_function(function, &[]).and_then(|oid| add_system_proc(catalog, oid));
+        if let Err(error) = made {
+            failed.push((name.to_string(), error));
+        }
+    }
+    let text = snowball_script();
+    let Ok((list, _)) = rupg_sql::parse(&text) else {
+        failed.push(("snowball_create.sql".to_string(), Error::internal("no parse")));
+        return;
+    };
+    let settings = match base_settings(&[
+        ("search_path".to_string(), "pg_catalog".to_string()),
+        ("allow_system_table_mods".to_string(), "on".to_string()),
+    ]) {
+        Ok(settings) => RefCell::new(settings),
+        Err(error) => {
+            failed.push(("search_path".to_string(), error));
+            return;
+        }
+    };
+    for node in list.iter().flatten() {
+        let Node::RawStmt(raw) = node else { continue };
+        let Some(stmt) = raw.stmt.as_ref() else { continue };
+        if matches!(stmt, Node::CreateFunctionStmt(_) | Node::VariableSetStmt(_)) {
+            continue;
+        }
+        let start = usize::try_from(raw.stmt_location).unwrap_or(0).min(text.len());
+        let end =
+            usize::try_from(raw.stmt_len).map_or(text.len(), |len| (start + len).min(text.len()));
+        let statement = text.get(start..end).unwrap_or_default();
+        if let Err(error) = define(catalog, &settings, (user, clock), stmt, statement) {
+            failed.push((statement.to_string(), error));
+        }
+    }
 }
 
 /// Runs the parts of `information_schema.sql` that rupg can run: the schema, its privileges, the `search_path` of the script, the domains, the functions, the views, the tables and the privileges on the views and the tables. Each domain and each function also goes into the rows of `rupg-pgcatalog`, so that the analyzer and the executor find it as they find a built-in object. The rows of the tables are not there yet, because rupg cannot run `INSERT`.
@@ -725,5 +829,13 @@ mod tests {
             .map(|r| (r.name.as_str(), r.oid))
             .collect();
         assert_eq!(relations, INFORMATION_SCHEMA_OIDS);
+        let dicts: Vec<(&str, u32)> =
+            catalog.ts_dictionaries().map(|d| (d.name.as_str(), d.oid)).take(2).collect();
+        assert_eq!(dicts, [("arabic_stem", 13288), ("armenian_stem", 13290)]);
+        assert_eq!(
+            catalog.ts_configs().last().map(|c| (c.name.as_str(), c.oid)),
+            Some(("yiddish", 13349))
+        );
+        assert_eq!(catalog.ts_mappings().len(), 31 * 19);
     }
 }

@@ -5,6 +5,7 @@
 [ranks]
 "rupg-common" = 0
 "rupg-types" = 1
+"rupg-snowball" = 2
 "rupg-platform" = 10
 "rupg-file" = 11
 "rupg-wire" = 12

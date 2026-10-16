@@ -1,0 +1,236 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT ts_lexize('english_stem', 'Jumping'), ts_lexize('english_stem', 'The'), ts_lexize('english_stem', 'stars'), ts_lexize('simple', 'Hello'), ts_lexize('simple', '')
+fields ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1
+row {jump},{},{star},{hello},{}
+SELECT 1
+> SELECT ts_lexize('russian_stem', 'книги'), ts_lexize('russian_stem', 'Books'), ts_lexize('german_stem', 'Häuser'), ts_lexize('french_stem', 'chanteuses')
+fields ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1
+row {книг},{books},{haus},{chanteux}
+SELECT 1
+> SELECT ts_lexize('nosuch', 'a')
+ERROR 42704 text search dictionary "nosuch" does not exist at 18
+> SELECT ts_lexize(3727::regdictionary, 'a')
+ERROR XX000 cache lookup failed for text search dictionary 3727
+> SELECT ts_lexize('english_stem', NULL) IS NULL
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT dictname, dicttemplate::regproc, dictinitoption FROM pg_ts_dict WHERE dictname IN ('simple', 'english_stem', 'russian_stem', 'dutch_stem') ORDER BY 1
+fields dictname@pg_ts_dict.2:19:64:-1,dicttemplate:24:4:-1,dictinitoption@pg_ts_dict.6:25:-1:-1
+row dutch_stem,13287,language = 'dutch', stopwords = 'dutch'
+row english_stem,13287,language = 'english', stopwords = 'english'
+row russian_stem,13287,language = 'russian', stopwords = 'russian'
+row simple,3727,NULL
+SELECT 4
+> SELECT tmplname, tmplinit, tmpllexize FROM pg_ts_template ORDER BY oid
+fields tmplname@pg_ts_template.2:19:64:-1,tmplinit@pg_ts_template.4:24:4:-1,tmpllexize@pg_ts_template.5:24:4:-1
+row simple,dsimple_init,dsimple_lexize
+row synonym,dsynonym_init,dsynonym_lexize
+row ispell,dispell_init,dispell_lexize
+row thesaurus,thesaurus_init,thesaurus_lexize
+row snowball,dsnowball_init,dsnowball_lexize
+SELECT 5
+> SELECT cfgname, cfgparser FROM pg_ts_config WHERE cfgname IN ('simple', 'english', 'hindi') ORDER BY 1
+fields cfgname@pg_ts_config.2:19:64:-1,cfgparser@pg_ts_config.5:26:4:-1
+row english,3722
+row hindi,3722
+row simple,3722
+SELECT 3
+> SELECT count(*), count(DISTINCT mapcfg) FROM pg_ts_config_map
+fields count:20:8:-1,count:20:8:-1
+row 608,32
+SELECT 1
+> SELECT maptokentype, mapseqno, mapdict::regdictionary FROM pg_ts_config_map WHERE mapcfg = 'english'::regconfig ORDER BY 1, 2
+fields maptokentype@pg_ts_config_map.2:23:4:-1,mapseqno@pg_ts_config_map.3:23:4:-1,mapdict:3769:4:-1
+row 1,1,english_stem
+row 2,1,english_stem
+row 3,1,simple
+row 4,1,simple
+row 5,1,simple
+row 6,1,simple
+row 7,1,simple
+row 8,1,simple
+row 9,1,simple
+row 10,1,english_stem
+row 11,1,english_stem
+row 15,1,simple
+row 16,1,english_stem
+row 17,1,english_stem
+row 18,1,simple
+row 19,1,simple
+row 20,1,simple
+row 21,1,simple
+row 22,1,simple
+SELECT 19
+> SELECT 'english'::regconfig, 'pg_catalog.english'::regconfig, 'english_stem'::regdictionary, 'simple'::regdictionary::oid, 'simple'::regconfig::oid
+fields regconfig:3734:4:-1,regconfig:3734:4:-1,regdictionary:3769:4:-1,oid:26:4:-1,oid:26:4:-1
+row english,english,english_stem,3765,3748
+SELECT 1
+> SELECT 'nosuch'::regconfig
+ERROR 42704 text search configuration "nosuch" does not exist at 8
+> SELECT to_regdictionary('nosuch') IS NULL, to_regconfig('english')
+ERROR 42883 function to_regdictionary(unknown) does not exist at 8
+> CREATE TEXT SEARCH DICTIONARY my_simple (TEMPLATE = simple, STOPWORDS = english, ACCEPT = false)
+CREATE TEXT SEARCH DICTIONARY
+> SELECT ts_lexize('my_simple', 'The'), ts_lexize('my_simple', 'Cats')
+fields ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1
+row {},NULL
+SELECT 1
+> SELECT dictname, dicttemplate::regproc, dictinitoption FROM pg_ts_dict WHERE dictname = 'my_simple'
+fields dictname@pg_ts_dict.2:19:64:-1,dicttemplate:24:4:-1,dictinitoption@pg_ts_dict.6:25:-1:-1
+row my_simple,3727,stopwords = 'english', accept = 'false'
+SELECT 1
+> CREATE TEXT SEARCH DICTIONARY my_stem (TEMPLATE = snowball, Language = english)
+CREATE TEXT SEARCH DICTIONARY
+> SELECT ts_lexize('my_stem', 'the'), ts_lexize('my_stem', 'running'), dictinitoption FROM pg_ts_dict WHERE dictname = 'my_stem'
+fields ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1,dictinitoption@pg_ts_dict.6:25:-1:-1
+row {the},{run},language = 'english'
+SELECT 1
+> CREATE TEXT SEARCH DICTIONARY my_stem2 (TEMPLATE = snowball, Language = 'dutch', StopWords = 'dutch')
+CREATE TEXT SEARCH DICTIONARY
+> SELECT ts_lexize('my_stem2', 'het'), ts_lexize('my_stem2', 'lopen'), dictinitoption FROM pg_ts_dict WHERE dictname = 'my_stem2'
+fields ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1,dictinitoption@pg_ts_dict.6:25:-1:-1
+row {},{loop},language = 'dutch', stopwords = 'dutch'
+SELECT 1
+> CREATE TEXT SEARCH DICTIONARY bad1 (TEMPLATE = snowball)
+ERROR 22023 missing Language parameter
+> CREATE TEXT SEARCH DICTIONARY bad2 (TEMPLATE = snowball, Language = klingon)
+ERROR 42704 no Snowball stemmer available for language "klingon" and encoding "UTF8"
+> CREATE TEXT SEARCH DICTIONARY bad4 (TEMPLATE = simple, Accept = maybe)
+ERROR 42601 accept requires a Boolean value
+> CREATE TEXT SEARCH DICTIONARY bad5 (TEMPLATE = simple, Foo = 1)
+ERROR 22023 unrecognized simple dictionary parameter: "foo"
+> CREATE TEXT SEARCH DICTIONARY bad6 (Language = english)
+ERROR 42P17 text search template is required
+> CREATE TEXT SEARCH DICTIONARY bad7 (TEMPLATE = nosuch)
+ERROR 42704 text search template "nosuch" does not exist
+> CREATE TEXT SEARCH DICTIONARY my_simple (TEMPLATE = simple)
+ERROR 23505 duplicate key value violates unique constraint "pg_ts_dict_dictname_index"
+> CREATE TEXT SEARCH DICTIONARY bad8 (TEMPLATE = snowball, Language = english, Language = french)
+ERROR 22023 multiple Language parameters
+> CREATE TEXT SEARCH CONFIGURATION my_cfg (COPY = english)
+CREATE TEXT SEARCH CONFIGURATION
+> SELECT count(*) FROM pg_ts_config_map WHERE mapcfg = 'my_cfg'::regconfig
+fields count:20:8:-1
+row 19
+SELECT 1
+> ALTER TEXT SEARCH CONFIGURATION my_cfg ALTER MAPPING FOR asciiword WITH my_simple, english_stem
+ALTER TEXT SEARCH CONFIGURATION
+> SELECT maptokentype, mapseqno, mapdict::regdictionary FROM pg_ts_config_map WHERE mapcfg = 'my_cfg'::regconfig AND maptokentype IN (1, 2) ORDER BY 1, 2
+fields maptokentype@pg_ts_config_map.2:23:4:-1,mapseqno@pg_ts_config_map.3:23:4:-1,mapdict:3769:4:-1
+row 1,1,my_simple
+row 1,2,english_stem
+row 2,1,english_stem
+SELECT 3
+> ALTER TEXT SEARCH CONFIGURATION my_cfg ALTER MAPPING REPLACE english_stem WITH my_stem
+ALTER TEXT SEARCH CONFIGURATION
+> SELECT maptokentype, mapseqno, mapdict::regdictionary FROM pg_ts_config_map WHERE mapcfg = 'my_cfg'::regconfig ORDER BY 1, 2
+fields maptokentype@pg_ts_config_map.2:23:4:-1,mapseqno@pg_ts_config_map.3:23:4:-1,mapdict:3769:4:-1
+row 1,1,my_simple
+row 1,2,my_stem
+row 2,1,my_stem
+row 3,1,simple
+row 4,1,simple
+row 5,1,simple
+row 6,1,simple
+row 7,1,simple
+row 8,1,simple
+row 9,1,simple
+row 10,1,my_stem
+row 11,1,my_stem
+row 15,1,simple
+row 16,1,my_stem
+row 17,1,my_stem
+row 18,1,simple
+row 19,1,simple
+row 20,1,simple
+row 21,1,simple
+row 22,1,simple
+SELECT 20
+> ALTER TEXT SEARCH CONFIGURATION my_cfg DROP MAPPING FOR email, url
+ALTER TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION my_cfg DROP MAPPING FOR email
+ERROR 42704 mapping for token type "email" does not exist
+> ALTER TEXT SEARCH CONFIGURATION my_cfg DROP MAPPING IF EXISTS FOR email
+NOTICE 00000 mapping for token type "email" does not exist, skipping
+ALTER TEXT SEARCH CONFIGURATION
+> ALTER TEXT SEARCH CONFIGURATION my_cfg ADD MAPPING FOR nosuch WITH simple
+ERROR 22023 token type "nosuch" does not exist
+> ALTER TEXT SEARCH CONFIGURATION my_cfg ADD MAPPING FOR asciiword WITH simple
+ERROR 23505 duplicate key value violates unique constraint "pg_ts_config_map_index"
+> ALTER TEXT SEARCH CONFIGURATION my_cfg ADD MAPPING FOR email WITH simple, simple
+ALTER TEXT SEARCH CONFIGURATION
+> SELECT maptokentype, mapseqno, mapdict::regdictionary FROM pg_ts_config_map WHERE mapcfg = 'my_cfg'::regconfig AND maptokentype = 4 ORDER BY 1, 2
+fields maptokentype@pg_ts_config_map.2:23:4:-1,mapseqno@pg_ts_config_map.3:23:4:-1,mapdict:3769:4:-1
+row 4,1,simple
+row 4,2,simple
+SELECT 2
+> ALTER TEXT SEARCH CONFIGURATION nosuch ADD MAPPING FOR email WITH simple
+ERROR 42704 text search configuration "nosuch" does not exist
+> ALTER TEXT SEARCH CONFIGURATION my_cfg ADD MAPPING FOR email WITH nosuch
+ERROR 42704 text search dictionary "nosuch" does not exist
+> CREATE TEXT SEARCH CONFIGURATION my_cfg2 (PARSER = default)
+CREATE TEXT SEARCH CONFIGURATION
+> SELECT count(*) FROM pg_ts_config_map WHERE mapcfg = 'my_cfg2'::regconfig
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TEXT SEARCH CONFIGURATION my_cfg3 (PARSER = nosuch)
+ERROR 42704 text search parser "nosuch" does not exist
+> CREATE TEXT SEARCH CONFIGURATION my_cfg3 (COPY = english, PARSER = default)
+ERROR 42601 cannot specify both PARSER and COPY options
+> CREATE TEXT SEARCH CONFIGURATION my_cfg3 (FOO = bar)
+ERROR 42601 text search configuration parameter "foo" not recognized
+> CREATE TEXT SEARCH CONFIGURATION my_cfg3 ()
+ERROR 42601 syntax error at or near ")" at 43
+> CREATE TEXT SEARCH CONFIGURATION my_cfg (COPY = simple)
+ERROR 23505 duplicate key value violates unique constraint "pg_ts_config_cfgname_index"
+> CREATE TEXT SEARCH TEMPLATE my_tmpl (LEXIZE = dsimple_lexize, INIT = dsimple_init)
+CREATE TEXT SEARCH TEMPLATE
+> SELECT tmplname, tmplinit, tmpllexize FROM pg_ts_template WHERE tmplname = 'my_tmpl'
+fields tmplname@pg_ts_template.2:19:64:-1,tmplinit@pg_ts_template.4:24:4:-1,tmpllexize@pg_ts_template.5:24:4:-1
+row my_tmpl,dsimple_init,dsimple_lexize
+SELECT 1
+> CREATE TEXT SEARCH TEMPLATE bad_tmpl (INIT = dsimple_init)
+ERROR 42P17 text search template lexize method is required
+> CREATE TEXT SEARCH TEMPLATE bad_tmpl (LEXIZE = nosuch)
+ERROR 42883 function nosuch(internal, internal, internal, internal) does not exist
+> CREATE TEXT SEARCH TEMPLATE bad_tmpl (LEXIZE = dsimple_lexize, FOO = bar)
+ERROR 42601 text search template parameter "foo" not recognized
+> CREATE TEXT SEARCH DICTIONARY my_dict3 (TEMPLATE = my_tmpl, StopWords = russian)
+CREATE TEXT SEARCH DICTIONARY
+> SELECT ts_lexize('my_dict3', 'и'), ts_lexize('my_dict3', 'Cat')
+fields ts_lexize:1009:-1:-1,ts_lexize:1009:-1:-1
+row {},{cat}
+SELECT 1
+> COMMENT ON TEXT SEARCH DICTIONARY my_simple IS 'a simple dictionary'
+COMMENT
+> COMMENT ON TEXT SEARCH CONFIGURATION my_cfg IS 'a configuration'
+COMMENT
+> COMMENT ON TEXT SEARCH TEMPLATE my_tmpl IS 'a template'
+COMMENT
+> SELECT obj_description('my_simple'::regdictionary, 'pg_ts_dict'), obj_description('my_cfg'::regconfig, 'pg_ts_config'), obj_description('english_stem'::regdictionary, 'pg_ts_dict')
+fields obj_description:25:-1:-1,obj_description:25:-1:-1,obj_description:25:-1:-1
+row a simple dictionary,a configuration,snowball stemmer for english language
+SELECT 1
+> COMMENT ON TEXT SEARCH DICTIONARY nosuch IS 'x'
+ERROR 42704 text search dictionary "nosuch" does not exist
+> SELECT 'public.my_cfg'::regconfig, 'my_simple'::regdictionary, pg_ts_config_is_visible('my_cfg'::regconfig), pg_ts_dict_is_visible('my_simple'::regdictionary), (SELECT pg_ts_template_is_visible(oid) FROM pg_ts_template WHERE tmplname = 'my_tmpl')
+fields regconfig:3734:4:-1,regdictionary:3769:4:-1,pg_ts_config_is_visible:16:1:-1,pg_ts_dict_is_visible:16:1:-1,pg_ts_template_is_visible:16:1:-1
+row my_cfg,my_simple,t,t,t
+SELECT 1
+> CREATE SCHEMA ts
+CREATE SCHEMA
+> CREATE TEXT SEARCH DICTIONARY ts.hidden (TEMPLATE = simple)
+CREATE TEXT SEARCH DICTIONARY
+> SELECT 'ts.hidden'::regdictionary, pg_ts_dict_is_visible('ts.hidden'::regdictionary), ts_lexize('ts.hidden', 'Word')
+fields regdictionary:3769:4:-1,pg_ts_dict_is_visible:16:1:-1,ts_lexize:1009:-1:-1
+row ts.hidden,f,{word}
+SELECT 1
+> SELECT classid::regclass, refclassid::regclass, deptype FROM pg_depend WHERE objid = 'my_cfg'::regconfig ORDER BY refobjid DESC, refclassid
+fields classid:2205:4:-1,refclassid:2205:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_ts_config,pg_ts_dict,n
+row pg_ts_config,pg_ts_dict,n
+row pg_ts_config,pg_namespace,n
+SELECT 3

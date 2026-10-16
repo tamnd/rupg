@@ -1,4 +1,4 @@
-//! The functions of `tsvector` in `tsvector_op.c` that need no text search configuration: `length`, `strip`, `setweight`, `ts_delete`, `tsvector_to_array`, `array_to_tsvector`, `ts_filter`, `unnest`, the operator `||` and `tsvector_cmp`.
+//! The functions of `tsvector` in `tsvector_op.c` that need no text search configuration: `length`, `strip`, `setweight`, `ts_delete`, `tsvector_to_array`, `array_to_tsvector`, `ts_filter`, `unnest`, the operator `||` and `tsvector_cmp`. It also has `ts_lexize` of `dict.c`.
 
 use std::cmp::Ordering;
 
@@ -303,6 +303,21 @@ pub(crate) fn unnest(_: &Call<'_>, args: &[Value]) -> Result<Vec<Vec<Value>>> {
     Ok(rows.collect())
 }
 
+/// `ts_lexize`: the lexemes of a word after the dictionary, or a null when the dictionary does not know the word.
+fn lexize(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let [dict, word] = args else { return Err(bad_value()) };
+    let dict = dict.as_oid().ok_or_else(bad_value)?;
+    let word = word.as_str().ok_or_else(bad_value)?;
+    let dictionary = rupg_analyze::tsdict::dictionary(call.session.catalog(), dict)?;
+    Ok(match dictionary.lexize(word) {
+        None => Value::Null,
+        Some(words) => {
+            let words = words.into_iter().map(|w| Some(Value::text(w))).collect();
+            Value::Array(Box::new(Array::one(words)))
+        }
+    })
+}
+
 /// The kernel of a function of `tsvector` by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match src {
@@ -317,6 +332,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "tsvector_filter" => filter,
         "tsvector_concat" => concat,
         "tsvector_cmp" => cmp,
+        "ts_lexize" => lexize,
         _ => return None,
     })
 }

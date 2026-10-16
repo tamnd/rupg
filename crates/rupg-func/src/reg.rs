@@ -150,6 +150,51 @@ pub(crate) fn visible(kind: Named, row: &NamedRow, session: &dyn Session) -> boo
     find(kind, &path(session), row.name, row.method).is_some_and(|found| found.oid == row.oid)
 }
 
+/// The name and the schema of an object of text search, built in or of the catalog.
+fn ts_name(kind: Named, oid: u32, session: &dyn Session) -> Option<(String, u32)> {
+    if let Some(row) = builtin::named_by_oid(kind, oid) {
+        return Some((row.name.to_string(), row.namespace));
+    }
+    let catalog = session.catalog()?;
+    let pair = |name: &str, namespace: u32| (name.to_string(), namespace);
+    match kind {
+        Named::Template => catalog.ts_template(oid).map(|t| pair(&t.name, t.namespace)),
+        Named::Dictionary => catalog.ts_dictionary(oid).map(|d| pair(&d.name, d.namespace)),
+        Named::Config => catalog.ts_config(oid).map(|c| pair(&c.name, c.namespace)),
+        _ => None,
+    }
+}
+
+/// The OID of the object of text search with the name in the first schema of `spaces` that has one, built in or of the catalog.
+fn ts_find(kind: Named, spaces: &[u32], name: &str, session: &dyn Session) -> Option<u32> {
+    let catalog = session.catalog();
+    spaces.iter().find_map(|&ns| {
+        find(kind, &[ns], name, 0).map(|row| row.oid).or_else(|| match kind {
+            Named::Template => catalog?.ts_template_by_name(ns, name).map(|t| t.oid),
+            Named::Dictionary => catalog?.ts_dictionary_by_name(ns, name).map(|d| d.oid),
+            Named::Config => catalog?.ts_config_by_name(ns, name).map(|c| c.oid),
+            _ => None,
+        })
+    })
+}
+
+/// `TSParserIsVisible`, `TSDictionaryIsVisible`, `TSTemplateIsVisible` and `TSConfigIsVisible`: true when the unqualified name finds the object. `None` when no object has the OID.
+pub(crate) fn ts_visible(kind: Named, oid: u32, session: &dyn Session) -> Option<bool> {
+    let (name, _) = ts_name(kind, oid, session)?;
+    Some(ts_find(kind, &path(session), &name, session) == Some(oid))
+}
+
+/// The text of `regconfigout` and `regdictionaryout`: the name, with the schema when the name is not visible.
+fn ts_text(kind: Named, oid: u32, session: &dyn Session) -> Option<String> {
+    let (name, namespace) = ts_name(kind, oid, session)?;
+    let schema = if ts_find(kind, &path(session), &name, session) == Some(oid) {
+        None
+    } else {
+        namespace_name(namespace, session)
+    };
+    Some(qualified(schema, &name))
+}
+
 /// The OID of the relation with the name in the first schema of `spaces` that has one.
 fn find_class(spaces: &[u32], name: &str, session: &dyn Session) -> Option<u32> {
     spaces.iter().find_map(|&ns| {
@@ -400,8 +445,8 @@ fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
             Some(qualified(schema, name))
         }
         RegKind::Collation => named(Named::Collation),
-        RegKind::Config => named(Named::Config),
-        RegKind::Dictionary => named(Named::Dictionary),
+        RegKind::Config => ts_text(Named::Config, oid, session),
+        RegKind::Dictionary => ts_text(Named::Dictionary, oid, session),
         RegKind::Namespace => namespace_name(oid, session).map(quote_identifier),
         RegKind::Role => builtin::named_by_oid(Named::Role, oid).map(|r| quote_identifier(r.name)),
         RegKind::Database => match builtin::named_by_oid(Named::Database, oid) {
@@ -507,6 +552,13 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
             None => soft(state, message),
         }
     };
+    let ts_in = |named: Named, state: SqlState, message: String| {
+        let (schema, name) = deconstruct(names, session)?;
+        match ts_find(named, &spaces(schema, session), name, session) {
+            Some(oid) => Ok(Ok(oid)),
+            None => soft(state, message),
+        }
+    };
     match kind {
         RegKind::Class => class_in(names, session, false),
         RegKind::Namespace => simple(&schemas, SqlState::UNDEFINED_SCHEMA, "schema"),
@@ -522,12 +574,12 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
             SqlState::UNDEFINED_OBJECT,
             format!("collation \"{list}\" for encoding \"{UTF8_NAME}\" does not exist"),
         ),
-        RegKind::Config => in_schema(
+        RegKind::Config => ts_in(
             Named::Config,
             SqlState::UNDEFINED_OBJECT,
             format!("text search configuration \"{list}\" does not exist"),
         ),
-        RegKind::Dictionary => in_schema(
+        RegKind::Dictionary => ts_in(
             Named::Dictionary,
             SqlState::UNDEFINED_OBJECT,
             format!("text search dictionary \"{list}\" does not exist"),
