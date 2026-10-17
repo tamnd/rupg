@@ -385,6 +385,7 @@ impl<'a> Fold<'a> {
                     None => Ok(()),
                 }
             }
+            ExprKind::Grouping(g) => self.all(&mut g.args),
             ExprKind::Window(w) => {
                 self.all(&mut w.args)?;
                 match &mut w.filter {
@@ -634,6 +635,8 @@ impl<'a> Fold<'a> {
                 }
                 Ok(with(expr, ExprKind::Agg(agg)))
             }
+            // The value of `GROUPING` depends on the grouping set of the row.
+            ExprKind::Grouping(_) => Ok(expr.clone()),
             ExprKind::Window(w) => {
                 let mut w = w.clone();
                 w.args = self.list(&w.args)?;
@@ -826,6 +829,7 @@ fn mutable(expr: &Expr) -> bool {
             ExprKind::SqlValue(_)
             | ExprKind::SubLink(_)
             | ExprKind::Agg(_)
+            | ExprKind::Grouping(_)
             | ExprKind::Window(_) => true,
             _ => false,
         };

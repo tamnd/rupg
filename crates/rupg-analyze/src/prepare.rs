@@ -57,6 +57,8 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         filter: None,
         grouped: false,
         group: Vec::new(),
+        grouping_sets: Vec::new(),
+        group_distinct: false,
         having: None,
         sort: Vec::new(),
         distinct: Vec::new(),

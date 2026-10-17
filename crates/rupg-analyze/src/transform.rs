@@ -203,11 +203,7 @@ impl Analyzer<'_> {
             }
             Node::SubLink(s) => self.transform_sublink(s),
             Node::A_Indirection(i) => self.transform_indirection(i),
-            Node::GroupingFunc(g) => Err(Error::new(
-                SqlState::GROUPING_ERROR,
-                "arguments to GROUPING must be grouping expressions of the associated query level",
-            )
-            .at_opt(place(g.location))),
+            Node::GroupingFunc(g) => self.grouping_func(g),
             _ => Err(not_yet("this kind of expression", None)),
         }
     }

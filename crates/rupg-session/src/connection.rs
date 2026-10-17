@@ -2610,6 +2610,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/outer_aggregate.test")));
     }
 
+    /// `GROUPING SETS`, `ROLLUP`, `CUBE`, `GROUP BY DISTINCT` and `GROUPING`: the groups of each grouping set, the items that are null in the groups of a set that does not have them, also in a subquery, `HAVING`, window functions, the aggregates with `DISTINCT` and `ORDER BY`, an empty input, the errors of the places where `GROUPING` cannot be, of its arguments and of the limits, the check of a primary key with only the items in all the sets, and the text of views. `connection/grouping_sets.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn grouping_sets() {
+        big_stack(|| script(include_str!("connection/grouping_sets.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

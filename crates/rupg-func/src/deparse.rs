@@ -422,6 +422,11 @@ impl<'a> Deparser<'a> {
             }
             ExprKind::SqlValue(value) => self.buf.push_str(&sql_value(*value)),
             ExprKind::Agg(agg) => self.aggregate(agg)?,
+            ExprKind::Grouping(g) => {
+                self.buf.push_str("GROUPING(");
+                self.list(&g.args, true)?;
+                self.buf.push(')');
+            }
             ExprKind::Window(w) => self.window_func(w)?,
             ExprKind::SubLink(sub) => self.sublink(sub)?,
             ExprKind::SubColumn(_) => {
@@ -698,6 +703,7 @@ fn own_syntax(parent: &Expr) -> bool {
         | ExprKind::MinMax { .. }
         | ExprKind::NullIf { .. }
         | ExprKind::Agg(_)
+        | ExprKind::Grouping(_)
         | ExprKind::Window(_)
         | ExprKind::Case(_) => true,
         _ => false,
@@ -737,6 +743,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::SqlValue(_)
         | ExprKind::NullIf { .. }
         | ExprKind::Agg(_)
+        | ExprKind::Grouping(_)
         | ExprKind::Window(_)
         | ExprKind::Case(_) => true,
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,

@@ -101,6 +101,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::NamedArg(_) => "NAMEDARG",
         ExprKind::Param(_)
         | ExprKind::Agg(_)
+        | ExprKind::Grouping(_)
         | ExprKind::Window(_)
         | ExprKind::SubLink(_)
         | ExprKind::SubColumn(_) => {
@@ -269,6 +270,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         }
         ExprKind::Param(_)
         | ExprKind::Agg(_)
+        | ExprKind::Grouping(_)
         | ExprKind::Window(_)
         | ExprKind::SubLink(_)
         | ExprKind::SubColumn(_) => {}

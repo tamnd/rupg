@@ -6,8 +6,8 @@ use std::collections::HashMap;
 
 use rupg_analyze::{
     Column, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING, FRAMEOPTION_START_OFFSET,
-    Frame, FromFunction, FromItem, Join, JoinKind, JoinRow, NullTreatment, Query, SetKind, SetOp,
-    SetTree,
+    Frame, FromFunction, FromItem, GroupingSet, Join, JoinKind, JoinRow, NullTreatment, Query,
+    SetKind, SetOp, SetTree,
 };
 use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
@@ -365,15 +365,27 @@ impl Deparser<'_> {
             self.keyword(" WHERE ", -INDENT_STD, INDENT_STD, 1);
             self.expr(filter, false)?;
         }
-        if !query.group.is_empty() {
+        if !query.group.is_empty() || !query.grouping_sets.is_empty() {
             self.keyword(" GROUP BY ", -INDENT_STD, INDENT_STD, 1);
+            if query.group_distinct {
+                self.buf.push_str("DISTINCT ");
+            }
             let saved = std::mem::replace(&mut self.in_group_by, true);
-            for (i, item) in query.group.iter().enumerate() {
-                if i > 0 {
-                    self.buf.push_str(", ");
+            if query.grouping_sets.is_empty() {
+                for (i, item) in query.group.iter().enumerate() {
+                    if i > 0 {
+                        self.buf.push_str(", ");
+                    }
+                    let e = target_expr(query, item)?;
+                    self.sort_group(e, item.target + 1, false)?;
                 }
-                let e = target_expr(query, item)?;
-                self.sort_group(e, item.target + 1, false)?;
+            } else {
+                for (i, set) in query.grouping_sets.iter().enumerate() {
+                    if i > 0 {
+                        self.buf.push_str(", ");
+                    }
+                    self.grouping_set(query, set, true)?;
+                }
             }
             self.in_group_by = saved;
         }
@@ -992,6 +1004,49 @@ impl Deparser<'_> {
                 Ok(())
             }
         }
+    }
+
+    /// `get_rule_groupingset`: a grouping set of `GROUP BY`. A simple set with one item has no parentheses when `omit_parens` is true.
+    fn grouping_set(&mut self, query: &Query, set: &GroupingSet, omit_parens: bool) -> Result<()> {
+        let (open, content, omit_child) = match set {
+            GroupingSet::Empty => {
+                self.buf.push_str("()");
+                return Ok(());
+            }
+            GroupingSet::Simple(items) => {
+                let parens = !omit_parens || items.len() != 1;
+                if parens {
+                    self.buf.push('(');
+                }
+                for (i, &target) in items.iter().enumerate() {
+                    if i > 0 {
+                        self.buf.push_str(", ");
+                    }
+                    let e = query
+                        .targets
+                        .get(target)
+                        .map(|t| &t.expr)
+                        .ok_or_else(|| Error::internal("a grouping set item has no target"))?;
+                    self.sort_group(e, target + 1, false)?;
+                }
+                if parens {
+                    self.buf.push(')');
+                }
+                return Ok(());
+            }
+            GroupingSet::Rollup(content) => ("ROLLUP(", content, true),
+            GroupingSet::Cube(content) => ("CUBE(", content, true),
+            GroupingSet::Sets(content) => ("GROUPING SETS (", content, false),
+        };
+        self.buf.push_str(open);
+        for (i, child) in content.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            self.grouping_set(query, child, omit_child)?;
+        }
+        self.buf.push(')');
+        Ok(())
     }
 
     /// `get_agg_expr`: a call of an aggregate function, with `DISTINCT`, `ORDER BY`, `WITHIN GROUP` and `FILTER`.

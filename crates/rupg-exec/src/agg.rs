@@ -4,13 +4,13 @@
 
 use std::collections::HashSet;
 
-use rupg_analyze::{Aggref, Expr, ExprKind, Query, SortGroup, WindowFunc};
+use rupg_analyze::{Aggref, Expr, ExprKind, Query, SortGroup, WindowFunc, expand_grouping_sets};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel};
 use rupg_pgcatalog::builtin;
 use rupg_types::{Array, ArrayDim, MAXDIM, Numeric, NumericSign, Range, Value, oid};
 
-use crate::{AggValues, Eval, kernel, not_yet, signature, sort, strict, window};
+use crate::{Eval, Group, kernel, not_yet, signature, sort, strict, window};
 
 /// The way the engine computes an aggregate.
 pub(crate) enum Method {
@@ -974,23 +974,25 @@ pub(crate) fn check(query: &Query) -> Result<()> {
     Ok(())
 }
 
-/// The groups of the rows, as the indexes of the rows of each group.
+/// The groups of the rows on the items of `GROUP BY` of a grouping set, as the indexes of the rows of each group. `set` has the targets of the items.
 fn groups<'a>(
     eval: &mut Eval<'a>,
     query: &Query,
+    set: &[usize],
     tuples: &'a [Vec<usize>],
 ) -> Result<Vec<Vec<usize>>> {
-    if query.group.is_empty() {
+    let items: Vec<&SortGroup> = query.group.iter().filter(|g| set.contains(&g.target)).collect();
+    if items.is_empty() {
         return Ok(vec![(0..tuples.len()).collect()]);
     }
-    let exprs: Vec<&Expr> = query.group.iter().map(|g| &query.targets[g.target].expr).collect();
+    let exprs: Vec<&Expr> = items.iter().map(|g| &query.targets[g.target].expr).collect();
     let mut keys = Vec::with_capacity(tuples.len());
     for tuple in tuples {
         eval.tuple = tuple;
         keys.push(exprs.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?);
     }
     let list: Vec<SortGroup> =
-        query.group.iter().enumerate().map(|(i, g)| SortGroup { target: i, ..g.clone() }).collect();
+        items.iter().enumerate().map(|(i, g)| SortGroup { target: i, ..(*g).clone() }).collect();
     let types: Vec<u32> = exprs.iter().map(|e| e.ty).collect();
     let keys_of = sort::Keys::new(&list, &types, eval.session)?;
     let mut groups: Vec<Vec<usize>> = Vec::new();
@@ -1023,7 +1025,71 @@ fn groups<'a>(
     Ok(groups)
 }
 
-/// The rows of a query with `GROUP BY`, `HAVING` or an aggregate call: one row for each group that `HAVING` keeps, with all the items of the select list.
+/// The expressions of the select list and of `HAVING` that are items of `GROUP BY`, also in the subqueries, each with the target of its item, as `substitute_grouped_columns` finds them. They are null in the groups of a grouping set that does not have the item.
+fn grouped_exprs(query: &Query) -> Vec<(*const Expr, usize)> {
+    /// The items of `GROUP BY` as a subquery `depth` levels down sees them.
+    struct Items<'q> {
+        items: Vec<(usize, &'q Expr)>,
+        raised: Vec<Vec<(usize, Expr)>>,
+    }
+    impl Items<'_> {
+        fn find(&mut self, expr: &Expr, depth: usize) -> Option<usize> {
+            if depth == 0 {
+                return self.items.iter().find(|(_, g)| g.same(expr)).map(|(t, _)| *t);
+            }
+            while self.raised.len() < depth {
+                let levels = self.raised.len() + 1;
+                let raised = self
+                    .items
+                    .iter()
+                    .map(|(t, g)| {
+                        let mut g = (*g).clone();
+                        g.raise(levels);
+                        (*t, g)
+                    })
+                    .collect();
+                self.raised.push(raised);
+            }
+            self.raised[depth - 1].iter().find(|(_, g)| g.same(expr)).map(|(t, _)| *t)
+        }
+
+        fn walk(&mut self, expr: &Expr, depth: usize, out: &mut Vec<(*const Expr, usize)>) {
+            if let Some(target) = self.find(expr, depth) {
+                out.push((std::ptr::from_ref(expr), target));
+                return;
+            }
+            match &expr.kind {
+                // The arguments of an aggregate of the query read the rows of the group, but the direct arguments read the group.
+                ExprKind::Agg(agg) if agg.levels_up == depth => {
+                    for e in &agg.direct {
+                        self.walk(e, depth, out);
+                    }
+                    return;
+                }
+                ExprKind::Agg(agg) if agg.levels_up > depth => return,
+                ExprKind::Grouping(g) if g.levels_up >= depth => return,
+                _ => {}
+            }
+            for child in expr.children() {
+                self.walk(child, depth, out);
+            }
+            if let ExprKind::SubLink(sub) = &expr.kind {
+                for (e, depth) in sub.query.all_exprs(depth + 1) {
+                    self.walk(e, depth, out);
+                }
+            }
+        }
+    }
+    let items = query.group.iter().map(|g| (g.target, &query.targets[g.target].expr)).collect();
+    let mut items = Items { items, raised: Vec::new() };
+    let mut out = Vec::new();
+    for expr in query.targets.iter().map(|t| &t.expr).chain(&query.having) {
+        items.walk(expr, 0, &mut out);
+    }
+    out
+}
+
+/// The rows of a query with `GROUP BY`, `HAVING` or an aggregate call: one row for each group that `HAVING` keeps, with all the items of the select list. With grouping sets, each set makes its own groups, and the sets with more items come first.
 pub(crate) fn rows<'a>(
     eval: &mut Eval<'a>,
     query: &'a Query,
@@ -1063,14 +1129,78 @@ pub(crate) fn rows<'a>(
         .collect::<Result<_>>()?;
     let levels = super::set_levels(&query.targets);
     let calls = window::calls(query);
+    // The targets of the items of each grouping set.
+    let all_items: Vec<usize> = query.group.iter().map(|g| g.target).collect();
+    let (sets, grouped) = if query.grouping_sets.is_empty() {
+        (vec![all_items.clone()], Vec::new())
+    } else {
+        let mut sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, usize::MAX)
+            .unwrap_or_default();
+        sets.reverse();
+        (sets, grouped_exprs(query))
+    };
+    let inherited = std::mem::take(&mut eval.group.nulled);
     // With window function calls, the windows read the groups that `HAVING` keeps: the first row of each group and the results of its aggregate calls.
-    let mut kept: Vec<(&[usize], AggValues)> = Vec::new();
+    let mut kept: Vec<(&[usize], Group)> = Vec::new();
     let mut rows = Vec::new();
-    for group in groups(eval, query, tuples)? {
+    for set in &sets {
+        let out: Vec<usize> = all_items.iter().copied().filter(|t| !set.contains(t)).collect();
+        let mut nulled = inherited.clone();
+        nulled.extend(grouped.iter().filter(|(_, t)| out.contains(t)).map(|(e, _)| *e));
+        eval.group = Group { nulled: inherited.clone(), ..Group::default() };
+        for group in groups(eval, query, set, tuples)? {
+            rows_of_group(
+                eval,
+                query,
+                &aggs,
+                &group,
+                tuples,
+                none,
+                Group { aggs: Vec::new(), out: out.clone(), nulled: nulled.clone() },
+                &levels,
+                !calls.is_empty(),
+                &mut kept,
+                &mut rows,
+            )?;
+        }
+    }
+    if !calls.is_empty() {
+        let (firsts, mut groups): (Vec<&[usize]>, Vec<_>) = kept.into_iter().unzip();
+        let input = window::Input { tuples: &firsts, groups: &groups };
+        let (sequence, mut values) = window::compute(eval, query, &calls, input, eval.session)?;
+        for i in sequence {
+            eval.tuple = firsts[i];
+            eval.group = std::mem::take(&mut groups[i]);
+            eval.windows = std::mem::take(&mut values[i]);
+            eval.project(&query.targets, &levels, &mut rows)?;
+        }
+        eval.windows.clear();
+    }
+    eval.group = Group { nulled: inherited, ..Group::default() };
+    Ok(rows)
+}
+
+/// The aggregate calls of a group, then `HAVING` and the row of the group. With window function calls, the group goes to `kept` for the windows. `current` has the grouping set of the group.
+#[allow(clippy::too_many_arguments)]
+fn rows_of_group<'a>(
+    eval: &mut Eval<'a>,
+    query: &'a Query,
+    aggs: &[Agg<'_>],
+    group: &[usize],
+    tuples: &'a [Vec<usize>],
+    none: &'a [usize],
+    current: Group,
+    levels: &[Vec<&Expr>],
+    windowed: bool,
+    kept: &mut Vec<(&'a [usize], Group)>,
+    rows: &mut Vec<Vec<Value>>,
+) -> Result<()> {
+    eval.group = current;
+    {
         let mut states = aggs.iter().map(|a| a.start(eval)).collect::<Result<Vec<_>>>()?;
         // The rows of an aggregate with `DISTINCT` or `ORDER BY`, which it reads after the sort.
         let mut sorted: Vec<Vec<Vec<Value>>> = vec![Vec::new(); aggs.len()];
-        for &i in &group {
+        for &i in group {
             eval.tuple = &tuples[i];
             for ((agg, state), sorted) in aggs.iter().zip(&mut states).zip(&mut sorted) {
                 if let Some(filter) = &agg.agg.filter
@@ -1119,30 +1249,17 @@ pub(crate) fn rows<'a>(
             }
             values.push((agg.key, agg.finish(state, eval)?));
         }
-        eval.aggs = values;
+        eval.group.aggs = values;
         if let Some(having) = &query.having
             && eval.eval(having)? != Value::Bool(true)
         {
-            continue;
+            return Ok(());
         }
-        if calls.is_empty() {
-            eval.project(&query.targets, &levels, &mut rows)?;
+        if !windowed {
+            eval.project(&query.targets, levels, rows)?;
         } else {
-            kept.push((eval.tuple, std::mem::take(&mut eval.aggs)));
+            kept.push((eval.tuple, std::mem::take(&mut eval.group)));
         }
     }
-    if !calls.is_empty() {
-        let (firsts, mut aggs): (Vec<&[usize]>, Vec<_>) = kept.into_iter().unzip();
-        let input = window::Input { tuples: &firsts, aggs: &aggs };
-        let (sequence, mut values) = window::compute(eval, query, &calls, input, eval.session)?;
-        for i in sequence {
-            eval.tuple = firsts[i];
-            eval.aggs = std::mem::take(&mut aggs[i]);
-            eval.windows = std::mem::take(&mut values[i]);
-            eval.project(&query.targets, &levels, &mut rows)?;
-        }
-        eval.windows.clear();
-    }
-    eval.aggs.clear();
-    Ok(rows)
+    Ok(())
 }

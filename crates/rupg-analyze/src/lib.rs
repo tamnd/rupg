@@ -49,9 +49,9 @@ pub use ddl::{
     define, function_body, is_definition, lock_table,
 };
 pub use expr::{
-    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JoinRow, NamedArg,
-    NullTreatment, RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript, Var,
-    WindowFunc,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, GroupingFunc,
+    JoinRow, NamedArg, NullTreatment, RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind,
+    Subscript, Var, WindowFunc,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use funcargs::{arg_defaults, expand_arguments};
@@ -60,7 +60,7 @@ pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use select::{Query, Target};
 pub use setop::{SetKind, SetOp, SetTree, strength_name};
-pub use sort::SortGroup;
+pub use sort::{GroupingSet, SortGroup, expand_grouping_sets};
 pub use typcache::{default_opclass, sort_operators};
 pub use typename::parse_type;
 pub use window::{
