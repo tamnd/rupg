@@ -207,6 +207,7 @@ fn check(expr: &Expr) -> Result<()> {
             expr.children().into_iter().try_for_each(check)?;
         }
         ExprKind::JsonExpr(e) => e.children().into_iter().try_for_each(check)?,
+        ExprKind::JsonTable(t) => t.children().into_iter().try_for_each(check)?,
         ExprKind::Window(w) => {
             if w.agg {
                 agg::method(&agg::window_aggref(w), expr.ty, expr.location)?;
@@ -1293,6 +1294,9 @@ impl<'a> Eval<'a> {
 
     /// `ExecMakeTableFunctionResult`: the rows of one call of a function in `FROM`. A strict function with a null argument gives no rows when it gives a set, and else one row of nulls. Another expression gives one row with its value.
     fn function_set(&mut self, call: &Expr, width: usize) -> Result<Rows> {
+        if let ExprKind::JsonTable(table) = &call.kind {
+            return self.json_table(table);
+        }
         let ExprKind::Func(f) = &call.kind else { return self.function_row(call, width) };
         if !table_function(f.oid, width) {
             return self.function_row(call, width);
@@ -1619,6 +1623,7 @@ impl<'a> Eval<'a> {
             ExprKind::JsonCtor(c) => self.json_ctor(c),
             ExprKind::IsJson(p) => self.is_json(p),
             ExprKind::JsonExpr(e) => self.json_expr(e),
+            ExprKind::JsonTable(_) => Err(Error::internal("JSON_TABLE out of FROM")),
             ExprKind::Window(w) => self
                 .windows
                 .iter()
@@ -2314,6 +2319,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 mod agg;
 mod fold;
 mod jsonexpr;
+mod jsontable;
 mod scan;
 mod sort;
 mod user;

@@ -178,10 +178,15 @@ impl Eval<'_> {
                 }
                 _ => {
                     self.set_flags(e, flags);
-                    return Err(Error::new(
-                        SqlState::NO_SQL_JSON_ITEM,
-                        "no SQL/JSON item found for specified path",
-                    ));
+                    let message = match &e.column {
+                        Some(column) => {
+                            format!(
+                                "no SQL/JSON item found for specified path of column \"{column}\""
+                            )
+                        }
+                        None => "no SQL/JSON item found for specified path".to_owned(),
+                    };
+                    return Err(Error::new(SqlState::NO_SQL_JSON_ITEM, message));
                 }
             },
             Outcome::Error => {
@@ -278,20 +283,14 @@ impl Eval<'_> {
                 if !throw {
                     return Ok(Outcome::Error);
                 }
-                return Err(Error::new(
-                    SqlState::MORE_THAN_ONE_SQL_JSON_ITEM,
-                    "JSON path expression in JSON_VALUE must return single scalar item",
-                ));
+                return Err(Error::new(SqlState::MORE_THAN_ONE_SQL_JSON_ITEM, scalar_message(e)));
             }
             JsonExprOp::Value => items.swap_remove(0),
         };
         let text = match &one {
             SqlJsonItem::Container(_) if !throw => return Ok(Outcome::Error),
             SqlJsonItem::Container(_) => {
-                return Err(Error::new(
-                    SqlState::SQL_JSON_SCALAR_REQUIRED,
-                    "JSON path expression in JSON_VALUE must return single scalar item",
-                ));
+                return Err(Error::new(SqlState::SQL_JSON_SCALAR_REQUIRED, scalar_message(e)));
             }
             SqlJsonItem::Null => return Ok(Outcome::Value(Value::Null)),
             _ if e.returning.ty == oid::JSON || e.returning.ty == oid::JSONB => one.jsonb(),
@@ -547,6 +546,16 @@ impl Eval<'_> {
     }
 }
 
+/// The error message of `JSON_VALUE` for a result that is not one scalar item.
+fn scalar_message(e: &JsonExpr) -> String {
+    match &e.column {
+        Some(column) => {
+            format!("JSON path expression for column \"{column}\" must return single scalar item")
+        }
+        None => "JSON path expression in JSON_VALUE must return single scalar item".to_owned(),
+    }
+}
+
 /// `JSON_QUERY`: the wrapper of the items, and the error for more than one item with no wrapper.
 fn json_query(e: &JsonExpr, items: &[SqlJsonItem], throw: bool) -> Result<Outcome> {
     let wrap = !items.is_empty()
@@ -563,10 +572,12 @@ fn json_query(e: &JsonExpr, items: &[SqlJsonItem], throw: bool) -> Result<Outcom
         [] => Ok(Outcome::Empty),
         [one] => Ok(Outcome::Value(Value::Text(one.jsonb()))),
         _ if !throw => Ok(Outcome::Error),
-        _ => Err(Error::new(
-            SqlState::MORE_THAN_ONE_SQL_JSON_ITEM,
-            "JSON path expression in JSON_QUERY must return single item when no wrapper is requested",
-        )
+        _ => Err(Error::new(SqlState::MORE_THAN_ONE_SQL_JSON_ITEM, match &e.column {
+            Some(column) => format!(
+                "JSON path expression for column \"{column}\" must return single item when no wrapper is requested"
+            ),
+            None => "JSON path expression in JSON_QUERY must return single item when no wrapper is requested".to_owned(),
+        })
         .with_hint("Use the WITH WRAPPER clause to wrap SQL/JSON items into an array.")),
     }
 }

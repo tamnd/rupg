@@ -10,8 +10,8 @@ use std::ptr;
 use rupg_analyze::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JsonBehavior,
     JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp, JsonFormat,
-    JsonFormatKind, JsonItemType, JsonWrapper, RowCompare, SortGroup, SqlValue, SubLink,
-    SubLinkKind, Var, WindowClause, WindowFunc,
+    JsonFormatKind, JsonItemType, JsonTable, JsonTablePlan, JsonTableScan, JsonWrapper, RowCompare,
+    SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc,
 };
 use rupg_analyze::{default_opclass, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, Relation};
@@ -440,6 +440,7 @@ impl<'a> Deparser<'a> {
             }
             ExprKind::JsonCtor(c) => self.json_ctor(c)?,
             ExprKind::JsonExpr(j) => self.json_expr(j, implicit)?,
+            ExprKind::JsonTable(_) => return Err(Error::internal("JSON_TABLE out of FROM")),
             ExprKind::IsJson(p) => {
                 self.open();
                 self.paren(&p.expr, true, e)?;
@@ -514,6 +515,138 @@ impl<'a> Deparser<'a> {
         }
         self.buf.push(')');
         Ok(())
+    }
+
+    /// `get_json_table`: a call of `JSON_TABLE` in `FROM`.
+    pub(crate) fn json_table(&mut self, t: &JsonTable) -> Result<()> {
+        let JsonTablePlan::Scan(root) = &t.plan else {
+            return Err(Error::internal("a JSON_TABLE plan with no scan at the top"));
+        };
+        self.buf.push_str("JSON_TABLE(");
+        self.indent += INDENT_VAR;
+        self.keyword("", 0, 0, 0);
+        self.expr(&t.context, false)?;
+        self.buf.push_str(", ");
+        self.json_table_path(root)?;
+        if !t.passing.is_empty() {
+            self.buf.push(' ');
+            self.keyword("PASSING ", 0, 0, 0);
+            self.indent += INDENT_VAR;
+            for (i, (name, value)) in t.passing.iter().enumerate() {
+                if i > 0 {
+                    self.buf.push_str(", ");
+                }
+                self.keyword("", 0, 0, 0);
+                self.expr(value, false)?;
+                self.buf.push_str(" AS ");
+                self.buf.push_str(&quote_identifier(name));
+            }
+            self.indent -= INDENT_VAR;
+        }
+        self.json_table_columns(t, root)?;
+        match t.on_error {
+            JsonBehaviorKind::EmptyArray => {}
+            kind => {
+                self.buf.push(' ');
+                self.buf.push_str(kind.name());
+                self.buf.push_str(" ON ERROR");
+            }
+        }
+        self.indent -= INDENT_VAR;
+        self.keyword(")", 0, 0, 0);
+        Ok(())
+    }
+
+    /// The path of a scan and its name.
+    fn json_table_path(&mut self, scan: &JsonTableScan) -> Result<()> {
+        let path = Expr::new(ExprKind::Const(scan.path.clone()), oid::JSONPATH);
+        self.constant(&path, &scan.path, -1)?;
+        self.buf.push_str(" AS ");
+        self.buf.push_str(&quote_identifier(&scan.name));
+        Ok(())
+    }
+
+    /// `get_json_table_columns`: the columns of a scan, then its `NESTED` parts.
+    fn json_table_columns(&mut self, t: &JsonTable, scan: &JsonTableScan) -> Result<()> {
+        self.buf.push(' ');
+        self.keyword("COLUMNS (", 0, 0, 0);
+        self.indent += INDENT_VAR;
+        for at in scan.columns.clone() {
+            let column = &t.columns[at];
+            if at > scan.columns.start {
+                self.buf.push_str(", ");
+            }
+            self.keyword("", 0, 0, 0);
+            self.buf.push_str(&quote_identifier(&column.name));
+            self.buf.push(' ');
+            let Some(ExprKind::JsonExpr(j)) = column.expr.as_ref().map(|e| &e.kind) else {
+                self.buf.push_str("FOR ORDINALITY");
+                continue;
+            };
+            self.buf.push_str(&reg::type_text(column.ty, Some(column.typmod), self.session)?);
+            let default = if j.op == JsonExprOp::Exists {
+                self.buf.push_str(" EXISTS");
+                JsonBehaviorKind::False
+            } else {
+                if j.op == JsonExprOp::Query
+                    && builtin::type_by_oid(column.ty).is_some_and(|row| row.category == b'S')
+                {
+                    self.buf.push_str(" FORMAT JSON");
+                }
+                JsonBehaviorKind::Null
+            };
+            self.buf.push_str(" PATH ");
+            match &j.path.kind {
+                ExprKind::Const(value) => self.constant(&j.path, value, -1)?,
+                _ => self.expr(&j.path, false)?,
+            }
+            if j.op == JsonExprOp::Query {
+                self.buf.push_str(match j.wrapper {
+                    JsonWrapper::Conditional => " WITH CONDITIONAL WRAPPER",
+                    JsonWrapper::Unconditional => " WITH UNCONDITIONAL WRAPPER",
+                    JsonWrapper::None | JsonWrapper::Unspec => " WITHOUT WRAPPER",
+                });
+                self.buf.push_str(if j.omit_quotes { " OMIT QUOTES" } else { " KEEP QUOTES" });
+            }
+            if let Some(on_empty) = &j.on_empty
+                && on_empty.kind != default
+            {
+                self.json_behavior(on_empty, "EMPTY")?;
+            }
+            if j.on_error.kind != default {
+                self.json_behavior(&j.on_error, "ERROR")?;
+            }
+        }
+        if let Some(child) = &scan.child {
+            self.json_table_nested(t, child, !scan.columns.is_empty())?;
+        }
+        self.indent -= INDENT_VAR;
+        self.keyword(")", 0, 0, 0);
+        Ok(())
+    }
+
+    /// `get_json_table_nested_columns`.
+    fn json_table_nested(
+        &mut self,
+        t: &JsonTable,
+        plan: &JsonTablePlan,
+        comma: bool,
+    ) -> Result<()> {
+        match plan {
+            JsonTablePlan::Scan(scan) => {
+                if comma {
+                    self.buf.push(',');
+                }
+                self.buf.push(' ');
+                self.keyword("NESTED PATH ", 0, 0, 0);
+                self.json_table_path(scan)?;
+                self.json_table_columns(t, scan)
+            }
+            JsonTablePlan::Sibling(left, right) => {
+                self.json_table_nested(t, left, comma)?;
+                self.json_table_nested(t, right, true)
+            }
+        }
     }
 
     /// `get_json_behavior`.
@@ -924,6 +1057,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::Window(_)
         | ExprKind::JsonCtor(_)
         | ExprKind::JsonExpr(_)
+        | ExprKind::JsonTable(_)
         | ExprKind::Case(_) => true,
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,
         ExprKind::JsonValue(v) => is_simple(&v.raw, e, paren),

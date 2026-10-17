@@ -405,6 +405,9 @@ impl<'a> Fold<'a> {
             ExprKind::JsonExpr(j) => {
                 j.children_mut().into_iter().try_for_each(|e| self.subqueries(e))
             }
+            ExprKind::JsonTable(t) => {
+                t.children_mut().into_iter().try_for_each(|e| self.subqueries(e))
+            }
             ExprKind::Window(w) => {
                 self.all(&mut w.args)?;
                 match &mut w.filter {
@@ -691,6 +694,18 @@ impl<'a> Fold<'a> {
                     *part = self.expr(part)?;
                 }
                 Ok(with(expr, ExprKind::JsonExpr(j)))
+            }
+            // The columns read the row of the plan as a `CaseTest`, which is not the value of a `CASE` around the call.
+            ExprKind::JsonTable(t) => {
+                let mut t = t.clone();
+                self.case.push(None);
+                let folded: Result<()> = t.children_mut().into_iter().try_for_each(|part| {
+                    *part = self.expr(part)?;
+                    Ok(())
+                });
+                self.case.pop();
+                folded?;
+                Ok(with(expr, ExprKind::JsonTable(t)))
             }
             ExprKind::Window(w) => {
                 let mut w = w.clone();

@@ -178,6 +178,8 @@ pub(crate) fn transform_locking_clause(query: &mut Query, clause: &LockingClause
                 }
                 Some(if relation.cte.is_some() {
                     Found::Error("a WITH query")
+                } else if relation.json_table().is_some() {
+                    Found::Error("a table function")
                 } else if relation.function.is_some() {
                     Found::Error("a function")
                 } else if relation.values.is_some() {
