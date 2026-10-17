@@ -1,11 +1,13 @@
 //! Runs the server on a free port of the loopback address and talks to it as a client.
 
 use std::io::{Read, Write};
+use std::path::Path;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
 use rupg_platform::os::{OsEntropy, OsIo, OsNet, OsTasks};
-use rupg_platform::{Net, Stream, Tasks};
+use rupg_platform::sim::SimIo;
+use rupg_platform::{Io, Net, OpenMode, Stream, Tasks};
 use rupg_server::{Config, Log, Server};
 use rupg_wire::{
     Authentication, Backend, CANCEL_REQUEST_CODE, Crypto, Hashes, PROTOCOL_3_0, md5_encrypt,
@@ -576,6 +578,80 @@ fn rules_that_do_not_load() {
         [
             "LOG:  missing entry at end of line\nCONTEXT:  line 1 of configuration file \"pg_ident.conf\""
         ]
+    );
+}
+
+#[test]
+fn a_configuration_file() {
+    let io = Arc::new(SimIo::new(0));
+    let dir_text = "/d".to_owned();
+    let write = |name: &str, text: &str| {
+        let file = io.open(&Path::new("/d").join(name), OpenMode::Create).unwrap();
+        file.set_size(0).unwrap();
+        file.write_at(0, text.as_bytes()).unwrap();
+    };
+    write("pg_hba.conf", "host all all 127.0.0.1/32 trust\n");
+    write("pg_ident.conf", "");
+    write(
+        "postgresql.conf",
+        "work_mem = 8MB\n# a comment\nwork_mem = '9MB'\ninclude_dir 'conf.d'\nmy.option = x\nport 5999\n",
+    );
+    write("conf.d/a.conf", "search_path = 'a, b'\n");
+    let log = Arc::new(Kept::default());
+    let config = Config {
+        listen: "127.0.0.1:0".into(),
+        data_directory: Some(dir_text.clone()),
+        log: Some(log.clone()),
+        ..Config::default()
+    };
+    let start = |config: &Config| {
+        Server::start(config, Arc::new(OsNet), io.clone(), Arc::new(OsTasks), Arc::new(OsEntropy))
+    };
+    let server = start(&config).unwrap();
+    let (mut stream, _) = connect(&server, &POSTGRES);
+    let sql = "SELECT sourceline, name, setting, applied, coalesce(error, '') FROM pg_file_settings ORDER BY seqno";
+    stream.write_all(&query(sql)).unwrap();
+    assert_eq!(
+        read(&mut *stream),
+        [
+            "columns 5",
+            "row 1,work_mem,8MB,f,",
+            "row 3,work_mem,9MB,t,",
+            "row 1,search_path,a, b,t,",
+            "row 5,my.option,x,t,",
+            "row 6,port,5999,f,setting could not be applied",
+            "SELECT 5",
+            "ready I",
+        ]
+    );
+    let sql = "SELECT name, setting, source, coalesce(sourceline::text, '') FROM pg_settings WHERE name IN ('work_mem', 'config_file', 'hba_file', 'data_directory') ORDER BY name";
+    stream.write_all(&query(sql)).unwrap();
+    assert_eq!(
+        read(&mut *stream),
+        [
+            "columns 4".to_owned(),
+            format!("row config_file,{dir_text}/postgresql.conf,override,"),
+            format!("row data_directory,{dir_text},override,"),
+            format!("row hba_file,{dir_text}/pg_hba.conf,override,"),
+            "row work_mem,9216,configuration file,3".into(),
+            "SELECT 4".into(),
+            "ready I".into(),
+        ]
+    );
+    drop(stream);
+    server.stop().unwrap();
+    assert_eq!(log.take(), Vec::<String>::new());
+    // An error in the file stops the start.
+    write("conf.d/a.conf", "search_path = 'a, b'\nbad line here\n");
+    let error = start(&config).unwrap_err();
+    let file = format!("{dir_text}/conf.d/a.conf");
+    assert_eq!(
+        (error.state().as_str(), error.message().to_owned()),
+        ("F0000", format!("configuration file \"{dir_text}/postgresql.conf\" contains errors"))
+    );
+    assert_eq!(
+        log.take(),
+        [format!("LOG:  syntax error in file \"{file}\" line 2, near token \"here\"")]
     );
 }
 

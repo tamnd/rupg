@@ -46,11 +46,6 @@ pub(crate) fn extension_versions(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Va
     ]])
 }
 
-/// `pg_show_all_file_settings`: rupg reads no configuration file, so no line of a file gives a setting. The setting `config_file` is empty for the same reason.
-pub(crate) fn file_settings(_: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
-    Ok(Vec::new())
-}
-
 /// The names of `pg_config`, in the order of `get_configdata`.
 const CONFIG_NAMES: [&str; 23] = [
     "BINDIR",

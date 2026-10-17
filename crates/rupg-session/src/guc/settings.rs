@@ -25,6 +25,8 @@ pub enum Source {
     Argument,
     /// A value of the startup packet.
     Client,
+    /// A value that the server sets over the others at start, such as `config_file`.
+    Override,
     /// A value that a statement set.
     Session,
 }
@@ -38,6 +40,7 @@ impl Source {
             Source::File => "configuration file",
             Source::Argument => "command line",
             Source::Client => "client",
+            Source::Override => "override",
             Source::Session => "session",
         }
     }
@@ -54,6 +57,8 @@ pub struct Current {
     pub source: &'static str,
     /// The `reset_val` column, or `None` for a string parameter that the server sets at start and that has no value yet.
     pub reset: Option<String>,
+    /// The `sourcefile` and `sourceline` columns: the line of the configuration file that gave the value. `None` when the value did not come from the file, or when the session cannot read the settings of the server.
+    pub location: Option<(String, i32)>,
 }
 
 /// What a statement does with a value.
@@ -171,6 +176,8 @@ struct Slot {
     current: Value,
     reset: Value,
     save: Option<Save>,
+    /// The file and the line of the configuration file that last gave a value, as `set_config_sourcefile` keeps them.
+    location: Option<(Arc<str>, i32)>,
     /// The number of slots before this one. `RESET ALL` goes in this order, as PostgreSQL goes over the parameters in the order that they left their default values.
     order: usize,
 }
@@ -310,6 +317,60 @@ impl Settings {
         let setting = self.parse(parameter, text)?;
         let value = Value { setting, source: Source::Default };
         self.store_reset(parameter, value);
+        Ok(())
+    }
+
+    /// Sets a value that the server works out at start, such as `config_file`, as the current value and the reset value, with the source `override`. The values of the file and of the command line do not change it after this. There is no check of the context.
+    ///
+    /// # Errors
+    ///
+    /// A name that is not a parameter, or a value that the parameter does not take.
+    pub fn set_override(&mut self, name: &str, text: &str) -> Result<(), Error> {
+        let parameter = find(name).ok_or_else(|| unrecognized(name))?;
+        let setting = self.parse(parameter, text)?;
+        self.store_reset(parameter, Value { setting, source: Source::Override });
+        Ok(())
+    }
+
+    /// `set_config_sourcefile`: the file and the line of the configuration file that gave the value of a parameter or a placeholder, which `pg_settings` shows while the value comes from the file.
+    pub fn set_location(&mut self, name: &str, file: &str, line: i32) {
+        let key =
+            find(name).map_or_else(|| name.to_ascii_lowercase(), |p| p.name.to_ascii_lowercase());
+        if let Some(slot) = owned(&mut self.slots, &self.base, &key) {
+            slot.location = Some((Arc::from(file), line));
+        }
+    }
+
+    /// True for a parameter or a placeholder that exists, as `find_option` finds it without making a placeholder.
+    #[must_use]
+    pub fn exists(&self, name: &str) -> bool {
+        find(name).is_some() || self.find_slot(lower(name).as_ref()).is_some()
+    }
+
+    /// `set_config_option` with `PGC_SIGHUP` that changes nothing, as `pg_file_settings` checks a line of the configuration file. The value must be valid, an internal parameter cannot come from the file, and a parameter of the server start must keep its current value.
+    ///
+    /// # Errors
+    ///
+    /// A name that is not a parameter and not a valid placeholder name, a value that the parameter does not take, and a value that cannot change now.
+    pub fn check_file(&self, name: &str, text: &str) -> Result<(), Error> {
+        let Some(parameter) = find(name) else {
+            return placeholder_name(name);
+        };
+        let cannot = |what: &str| {
+            Error::new(
+                SqlState::CANT_CHANGE_RUNTIME_PARAM,
+                format!("parameter \"{}\" {what}", parameter.name),
+            )
+        };
+        if parameter.context == Context::Internal {
+            return Err(cannot("cannot be changed"));
+        }
+        let setting = self.parse(parameter, text)?;
+        if parameter.context == Context::Postmaster
+            && parameter.show(&setting) != parameter.show(&self.setting(parameter))
+        {
+            return Err(cannot("cannot be changed without restarting the server"));
+        }
         Ok(())
     }
 
@@ -570,6 +631,7 @@ impl Settings {
                         current: value.clone(),
                         reset: value,
                         save: None,
+                        location: None,
                         order: self.count - 1,
                     }
                 }
@@ -768,7 +830,12 @@ impl Settings {
             Some(slot) => Some(parameter.setting(&slot.reset.setting)),
             None => parameter.boot_text(),
         };
-        Current { parameter, setting, source, reset }
+        // `GetConfigOptionValues` shows the line only to a role that can read all the settings.
+        let location = slot
+            .filter(|slot| slot.current.source == Source::File && self.superuser)
+            .and_then(|slot| slot.location.as_ref())
+            .map(|(file, line)| (file.to_string(), *line));
+        Current { parameter, setting, source, reset, location }
     }
 
     /// The value of a parameter as `SHOW` gives it, with the show hooks of PostgreSQL.

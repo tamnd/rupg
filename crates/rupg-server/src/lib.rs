@@ -13,6 +13,7 @@
 #![forbid(unsafe_code)]
 
 mod auth;
+mod conf;
 mod hba;
 #[cfg(not(feature = "tls"))]
 #[path = "no_tls.rs"]
@@ -31,7 +32,7 @@ use std::time::Duration;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
-use rupg_session::auth::{HbaRule, IdentMapping};
+use rupg_session::auth::{FileSetting, HbaRule, IdentMapping};
 use rupg_session::connection::{self, Client, Connection, Next, Ssl, Start};
 use rupg_session::guc::Settings;
 use rupg_session::store::Store;
@@ -84,6 +85,8 @@ pub struct Config {
     pub ident: Option<String>,
     /// The settings of the command line, as `-c name=value`.
     pub settings: Vec<(String, String)>,
+    /// The directory of `-D`, an absolute path. The server reads `postgresql.conf` in it when `config_file` is not set, and `pg_hba.conf` and `pg_ident.conf` in it when `hba_file` and `ident_file` are not set. `None` and no `config_file` give no configuration file.
+    pub data_directory: Option<String>,
     /// The server log. `None` drops the messages.
     pub log: Option<Arc<dyn Log>>,
     /// The clock of `now()` and the other times of SQL. `None` gives the clock of the operating system.
@@ -99,6 +102,7 @@ impl Default for Config {
             hba: None,
             ident: None,
             settings: Vec::new(),
+            data_directory: None,
             log: None,
             clock: None,
         }
@@ -253,8 +257,7 @@ impl Server {
             args.push(("listen_addresses".into(), host.into()));
             args.push(("port".into(), port.into()));
         }
-        let base = connection::base_settings(&args)?;
-        let sockets = socket_paths(&base, &address)?;
+        let mut base = connection::base_settings(&args)?;
         let write = |severity: &str, lines: &[String]| {
             if let Some(log) = &config.log {
                 for line in lines {
@@ -262,10 +265,16 @@ impl Server {
                 }
             }
         };
+        let mut lines = Vec::new();
+        let conf = conf::select(&mut base, config.data_directory.as_deref(), &*io, &mut lines);
+        write("LOG", &lines);
+        let conf = conf?;
+        base.share();
+        let sockets = socket_paths(&base, &address)?;
         let tls = tls::load(&base, &*io)?;
         let (hba_source, ident_source) = rule_sources(config, &base);
         let ssl = base.get("ssl").as_deref() == Some("on");
-        let files = RuleFiles { io: io.clone(), hba: hba_source, ident: ident_source, ssl };
+        let files = RuleFiles { io: io.clone(), hba: hba_source, ident: ident_source, ssl, conf };
         let (hba, ident) = load_rules(&files, &*io, &write)?;
         let mut listeners = vec![listener];
         for path in &sockets {
@@ -481,6 +490,8 @@ struct RuleFiles {
     ident: Stored,
     /// The setting `ssl`.
     ssl: bool,
+    /// The configuration files, for the view `pg_file_settings`.
+    conf: Option<conf::ConfFiles>,
 }
 
 impl rupg_session::auth::AuthFiles for RuleFiles {
@@ -490,6 +501,12 @@ impl rupg_session::auth::AuthFiles for RuleFiles {
 
     fn ident_mappings(&self) -> Result<Vec<IdentMapping>> {
         hba::ident_mappings(&*self.io, self.ident.source())
+    }
+
+    fn file_settings(&self, settings: &Settings) -> Vec<FileSetting> {
+        self.conf
+            .as_ref()
+            .map_or_else(Vec::new, |files| conf::file_settings(&*self.io, files, settings))
     }
 }
 

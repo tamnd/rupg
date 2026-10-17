@@ -7,7 +7,7 @@
 use std::process::ExitCode;
 use std::sync::Arc;
 
-const USAGE: &str = "usage: rupg [--version | --print-config | --help | check FILE | serve [--listen ADDR] [--pwfile FILE] [-c name=value]...]";
+const USAGE: &str = "usage: rupg [--version | --print-config | --help | check FILE | serve [-D DIR] [--listen ADDR] [--pwfile FILE] [-c name=value]...]";
 
 /// The server log on the standard error, one message after the other, as PostgreSQL writes it with `log_destination = stderr`.
 #[derive(Debug)]
@@ -80,12 +80,41 @@ fn check(file: &str) -> ExitCode {
     }
 }
 
-/// The options of `rupg serve`: `--listen ADDR`, `--pwfile FILE` with the password of the superuser, and `-c name=value` for each setting, as `postgres -c` takes them.
+/// The absolute path of `path`, relative to `base` or else to the current directory.
+fn absolute(path: &str, base: Option<&str>) -> Result<String, String> {
+    let path = match base {
+        Some(base) => std::path::Path::new(base).join(path),
+        None => std::path::PathBuf::from(path),
+    };
+    Ok(std::path::absolute(&path)
+        .map_err(|e| format!("could not find the absolute path of \"{}\": {e}", path.display()))?
+        .to_string_lossy()
+        .into_owned())
+}
+
+/// The options of `rupg serve`: `-D DIR` with the configuration files, `--listen ADDR`, `--pwfile FILE` with the password of the superuser, and `-c name=value` for each setting, as `postgres -D` and `postgres -c` take them.
 fn serve_config(args: &[String]) -> Result<rupg::server::Config, String> {
     let mut config = rupg::server::Config { log: Some(Arc::new(Stderr)), ..Default::default() };
+    // `-D` comes first, because the paths of the other settings are relative to it.
+    let mut words = args.iter();
+    while let Some(arg) = words.next() {
+        let dir = match arg.as_str() {
+            "-D" => words.next().ok_or("-D requires a directory")?.as_str(),
+            arg => match arg.strip_prefix("-D") {
+                Some(dir) if !dir.is_empty() => dir,
+                _ => continue,
+            },
+        };
+        config.data_directory = Some(absolute(dir, None)?);
+    }
     let mut args = args.iter();
     while let Some(arg) = args.next() {
         let setting = match arg.as_str() {
+            "-D" => {
+                args.next();
+                continue;
+            }
+            arg if arg.starts_with("-D") => continue,
             "--listen" => {
                 config.listen = args.next().ok_or("--listen requires an address")?.clone();
                 continue;
@@ -110,16 +139,14 @@ fn serve_config(args: &[String]) -> Result<rupg::server::Config, String> {
         let (name, value) =
             setting.split_once('=').ok_or(format!("-c {setting} requires a value"))?;
         let name = name.replace('-', "_");
-        // PostgreSQL reads a relative path of a file setting from its data directory. rupg has no data directory yet, so the path is relative to the current directory.
+        // PostgreSQL makes `config_file` and `data_directory` absolute from the current directory, and reads the other files from its data directory, or else from the current directory.
         let value = match name.as_str() {
+            "config_file" | "data_directory" if !value.is_empty() => absolute(value, None)?,
             "hba_file" | "ident_file" | "ssl_cert_file" | "ssl_key_file" | "ssl_ca_file"
             | "ssl_crl_file"
                 if !value.is_empty() =>
             {
-                std::path::absolute(value)
-                    .map_err(|e| format!("could not find the absolute path of \"{value}\": {e}"))?
-                    .to_string_lossy()
-                    .into_owned()
+                absolute(value, config.data_directory.as_deref())?
             }
             _ => value.to_owned(),
         };
@@ -130,6 +157,13 @@ fn serve_config(args: &[String]) -> Result<rupg::server::Config, String> {
 
 /// `rupg serve`. It runs until the process ends.
 fn serve(config: &rupg::server::Config) -> ExitCode {
+    // `ChangeToDataDir`: a relative path in the configuration file, such as `ssl_cert_file = 'server.crt'`, is in the data directory.
+    if let Some(dir) = &config.data_directory
+        && let Err(e) = std::env::set_current_dir(dir)
+    {
+        eprintln!("rupg serve: could not change directory to \"{dir}\": {e}");
+        return ExitCode::FAILURE;
+    }
     let server = match rupg::server::serve(config) {
         Ok(server) => server,
         Err(e) => {

@@ -74,7 +74,7 @@ pub fn set_kernel(func: u32) -> Option<SetKernel> {
         }
         "pg_available_extensions" => crate::absent::extensions,
         "pg_available_extension_versions" => crate::absent::extension_versions,
-        "show_all_file_settings" => crate::absent::file_settings,
+        "show_all_file_settings" => file_settings,
         "pg_config" => crate::absent::config,
         "pg_stat_get_recovery" => crate::absent::recovery,
         "pg_get_shmem_allocations_numa" => crate::absent::shmem_numa,
@@ -196,6 +196,11 @@ fn cursors(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
 /// `pg_hba_file_rules`: the lines of the host rules, which the view `pg_hba_file_rules` reads.
 fn hba_rules(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
     call.session.hba_rules()
+}
+
+/// `pg_show_all_file_settings`: the lines of the configuration files, which the view `pg_file_settings` reads.
+fn file_settings(call: &Call<'_>, _: &[Value]) -> Result<Vec<Vec<Value>>> {
+    Ok(call.session.file_settings())
 }
 
 /// `pg_ident_file_mappings`: the lines of the user maps, which the view `pg_ident_file_mappings` reads.
