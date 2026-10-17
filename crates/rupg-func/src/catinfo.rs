@@ -23,8 +23,11 @@ fn oid_arg(args: &[Value], index: usize) -> Result<u32> {
 /// The visibility of an object of a kind that [`Named`] has, such as a relation or an operator class.
 fn named_visible(kind: Named, call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = oid_arg(args, 0)?;
-    if matches!(kind, Named::Config | Named::Dictionary | Named::Parser | Named::Template) {
-        return Ok(reg::ts_visible(kind, oid, call.session).map_or(Value::Null, Value::Bool));
+    if matches!(
+        kind,
+        Named::Collation | Named::Config | Named::Dictionary | Named::Parser | Named::Template
+    ) {
+        return Ok(reg::catalog_visible(kind, oid, call.session).map_or(Value::Null, Value::Bool));
     }
     Ok(builtin::named_by_oid(kind, oid)
         .map_or(Value::Null, |row| Value::Bool(reg::visible(kind, row, call.session))))

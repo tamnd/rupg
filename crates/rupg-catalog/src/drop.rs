@@ -1,6 +1,7 @@
 //! The removal of objects: the walk of `findDependentObjects` and the work of `deleteOneObject` and `doDeletion` in `dependency.c`. The analyzer finds the objects that a statement names, writes the messages of `reportDependentObjects` with the names of the objects, and then calls [`Catalog::remove`].
 
 use std::cmp::Ordering;
+use std::sync::Arc;
 
 use rupg_common::{Error, Result, SqlState};
 
@@ -204,7 +205,9 @@ impl Catalog {
             let object = target.object;
             self.remove_one(object)?;
             self.depends.retain(|d| !covers(object, d.object));
-            self.descriptions.retain(|found, _| !covers(object, *found));
+            if self.descriptions.keys().any(|found| covers(object, *found)) {
+                Arc::make_mut(&mut self.descriptions).retain(|found, _| !covers(object, *found));
+            }
         }
         Ok(())
     }

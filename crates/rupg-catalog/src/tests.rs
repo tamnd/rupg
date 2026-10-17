@@ -587,3 +587,38 @@ fn deletions_and_removal() {
     assert!(cat.depends().is_empty());
     assert_eq!(cat.descriptions().count(), 0);
 }
+
+/// `pg_import_system_collations` on a new cluster: a name that the schema has for the same encoding, or for any encoding, makes no collation and uses no OID.
+#[test]
+fn import_collations() {
+    let mut cat = Catalog::new();
+    cat.set_next_oid(12396);
+    let libc = |name: &str, encoding: i32| Collation {
+        oid: 0,
+        name: name.to_string(),
+        namespace: 11,
+        owner: 10,
+        provider: b'c',
+        encoding,
+        libc_locale: Some(format!("{name}.utf8")),
+        locale: None,
+        version: Some("2.39".to_string()),
+    };
+    assert_eq!(cat.create_collation(libc("en_US", 6), None), Some(12396));
+    assert_eq!(cat.create_collation(libc("en_US", 6), None), None);
+    assert_eq!(cat.create_collation(libc("en_US", -1), None), None);
+    assert_eq!(cat.create_collation(libc("en_US", 8), None), Some(12397));
+    let icu = Collation {
+        provider: b'i',
+        encoding: -1,
+        libc_locale: None,
+        locale: Some("und".to_string()),
+        ..libc("und-x-icu", -1)
+    };
+    assert_eq!(cat.create_collation(icu, Some("Unknown language")), Some(12398));
+    assert_eq!(cat.collation_by_name(11, "en_US").map(|c| c.oid), Some(12396));
+    assert_eq!(cat.collation_by_name(11, "und-x-icu").map(|c| c.encoding), Some(-1));
+    assert_eq!(cat.collation_by_name(2200, "en_US"), None);
+    assert_eq!(cat.description(ObjRef::new(PG_COLLATION, 12398)), Some("Unknown language"));
+    assert_eq!(cat.collations().count(), 3);
+}

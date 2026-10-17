@@ -1,6 +1,6 @@
 //! The schemas and the static rows of the system catalogs.
 //!
-//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. It adds the rows of `template0` and `postgres`, which `initdb` copies from `template1`. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`. It gives the functions that `system_functions.sql` replaces their body in SQL. Last, it gives the static rows the privileges that `initdb` gives them, from the steps of `initdb.c` and the `GRANT` and `REVOKE` statements of `system_views.sql`.
+//! `cargo xtask pgcatalog` reads the 64 catalog headers and the `.dat` files in `vendor/postgres-19/src/include/catalog` and writes `crates/rupg-pgcatalog/src/generated`. It follows `genbki.pl` and `Catalog.pm` of the pin. It fills the defaults of `BKI_DEFAULT`, makes the array types of `pg_type`, gives an OID from 10000 to each row that has none, turns the names of `BKI_LOOKUP` into OIDs, and makes the rows of `pg_description` and `pg_shdescription` from the `descr` fields. It adds the rows of `template0` and `postgres`, which `initdb` copies from `template1`. It gives the collation `unicode` the version that `setup_collation` of `initdb` gives it. Then it replaces the tokens that `initdb` replaces in `postgres.bki`, and adds the descriptions of the operator functions that `setup_description` of `initdb` adds. It also makes the rows that the bootstrap mode adds to `pg_class`, `pg_attribute` and `pg_index` for the catalogs, their toast tables and their indexes, and the rows that `system_constraints.sql` adds to `pg_constraint`. It gives the functions that `system_functions.sql` replaces their body in SQL. Last, it gives the static rows the privileges that `initdb` gives them, from the steps of `initdb.c` and the `GRANT` and `REVOKE` statements of `system_views.sql`.
 //!
 //! `cargo xtask pgcatalog --check` writes nothing. It fails if a file is not the same as the file that the task makes. See `spec/07-sql-types-and-catalog.md` section 7.13.2.
 
@@ -205,6 +205,9 @@ fn generate(include: &Path) -> Result<Vec<(String, String)>, String> {
             }
             if name == "pg_database" {
                 initdb_databases(&mut rows)?;
+            }
+            if name == "pg_collation" {
+                initdb_collations(&mut rows)?;
             }
             for row in &rows {
                 let Some(descr) = row.get("descr") else { continue };
@@ -1887,6 +1890,19 @@ fn initdb_databases(rows: &mut Vec<Row>) -> Result<(), String> {
         }
         rows.push(row);
     }
+    Ok(())
+}
+
+/// The collator version of the root locale of ICU 74, which `icu::ROOT_VERSION` of rupg-pgcatalog also holds.
+const ICU_ROOT_VERSION: &str = "153.121";
+
+/// `setup_collation` of `initdb` sets the version of the collation `unicode` with `pg_collation_actual_version`. The collation uses the root locale of ICU.
+fn initdb_collations(rows: &mut [Row]) -> Result<(), String> {
+    let unicode = rows
+        .iter_mut()
+        .find(|r| r.get("collname").map(String::as_str) == Some("unicode"))
+        .ok_or("pg_collation.dat: no unicode")?;
+    unicode.insert("collversion".into(), ICU_ROOT_VERSION.into());
     Ok(())
 }
 

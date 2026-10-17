@@ -6,6 +6,7 @@
 
 pub mod builtin;
 mod generated;
+pub mod icu;
 
 use std::fmt::Write as _;
 
@@ -305,5 +306,22 @@ mod tests {
         assert_eq!(float4_text(1e10), "1e+10");
         assert_eq!(float4_text(1e-5), "1e-05");
         assert_eq!(char_text(0), "");
+    }
+
+    #[test]
+    fn icu_locales() {
+        let root = icu::locales().next().unwrap();
+        assert_eq!(
+            (root.tag, root.version, root.comment),
+            ("und", icu::ROOT_VERSION, Some("Unknown language"))
+        );
+        assert_eq!(icu::locales().count(), 852);
+        // `setup_collation` of initdb gives the collation `unicode` the version of the root locale.
+        let pg_collation = catalog("pg_collation").unwrap();
+        let unicode = (0..pg_collation.len)
+            .map(|row| copy_line(pg_collation, row))
+            .find(|line| line.contains("\tunicode\t"))
+            .unwrap();
+        assert!(unicode.ends_with(&format!("\t{}", icu::ROOT_VERSION)));
     }
 }

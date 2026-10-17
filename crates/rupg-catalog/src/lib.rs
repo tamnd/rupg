@@ -27,6 +27,7 @@ pub use tsearch::{
 };
 
 use std::collections::BTreeMap;
+use std::sync::Arc;
 
 use rupg_common::{Error, Result, SqlState};
 
@@ -620,6 +621,29 @@ pub struct NewRule {
     pub path: Vec<u32>,
 }
 
+/// A collation, one row of `pg_collation`. The catalog holds the collations that `pg_import_system_collations` makes when the cluster starts.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Collation {
+    /// The OID.
+    pub oid: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the schema.
+    pub namespace: u32,
+    /// The OID of the owner.
+    pub owner: u32,
+    /// `collprovider`: `c` for the C library and `i` for ICU.
+    pub provider: u8,
+    /// `collencoding`: the encoding, or -1 for any encoding.
+    pub encoding: i32,
+    /// `collcollate` and `collctype`: the locale of the C library, or `None` for ICU.
+    pub libc_locale: Option<String>,
+    /// `colllocale`: the locale of ICU, or `None` for the C library.
+    pub locale: Option<String>,
+    /// `collversion`, or `None`.
+    pub version: Option<String>,
+}
+
 /// An object as `pg_depend` names it: the OID of its catalog, its OID and a column number or 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjRef {
@@ -857,13 +881,14 @@ pub struct Catalog {
     extensions: BTreeMap<u32, Extension>,
     triggers: BTreeMap<u32, Trigger>,
     rules: BTreeMap<u32, Rule>,
+    collations: Arc<BTreeMap<u32, Collation>>,
     ts_templates: BTreeMap<u32, TsTemplate>,
     ts_parsers: BTreeMap<u32, TsParser>,
     ts_dictionaries: BTreeMap<u32, TsDictionary>,
     ts_configs: BTreeMap<u32, TsConfig>,
     ts_mappings: Vec<TsMapping>,
     depends: Vec<Depend>,
-    descriptions: BTreeMap<ObjRef, String>,
+    descriptions: Arc<BTreeMap<ObjRef, String>>,
 }
 
 impl Default for Catalog {
@@ -871,6 +896,9 @@ impl Default for Catalog {
         Catalog::new()
     }
 }
+
+/// The number of the encoding UTF8, the encoding of each database.
+const UTF8: i32 = 6;
 
 /// `IsPinnedObject`: true for an object that initdb made, except the schema `public`, the databases and the large objects.
 pub fn is_pinned(object: ObjRef) -> bool {
@@ -898,6 +926,11 @@ fn no_object(what: &str, oid: u32) -> Error {
     Error::internal(format!("cache lookup failed for {what} {oid}"))
 }
 
+/// True when a new collation of the encoding `new` cannot have the name of a collation of the encoding `existing` in the same schema, as `CollationCreate` checks it. A collation of any encoding (-1) conflicts with every collation, and a collation of `UTF8` conflicts with a new collation of any encoding.
+pub fn collation_conflict(existing: i32, new: i32) -> bool {
+    existing == new || existing == -1 || (new == -1 && existing == UTF8)
+}
+
 impl Catalog {
     /// An empty catalog. The first object gets the OID 16384.
     pub fn new() -> Catalog {
@@ -914,13 +947,14 @@ impl Catalog {
             extensions: BTreeMap::new(),
             triggers: BTreeMap::new(),
             rules: BTreeMap::new(),
+            collations: Arc::default(),
             ts_templates: BTreeMap::new(),
             ts_parsers: BTreeMap::new(),
             ts_dictionaries: BTreeMap::new(),
             ts_configs: BTreeMap::new(),
             ts_mappings: Vec::new(),
             depends: Vec::new(),
-            descriptions: BTreeMap::new(),
+            descriptions: Arc::default(),
         }
     }
 
@@ -1075,6 +1109,26 @@ impl Catalog {
         self.rules.values().find(|r| r.relation == relation && r.name == name)
     }
 
+    /// The collations in the order of their OIDs.
+    pub fn collations(&self) -> impl Iterator<Item = &Collation> {
+        self.collations.values()
+    }
+
+    /// The collation with the OID.
+    pub fn collation(&self, oid: u32) -> Option<&Collation> {
+        self.collations.get(&oid)
+    }
+
+    /// The collation with the name in a schema, as `lookup_collation` finds it: a collation of the encoding of the database first, then a collation of any encoding.
+    pub fn collation_by_name(&self, namespace: u32, name: &str) -> Option<&Collation> {
+        let find = |encoding: i32| {
+            self.collations
+                .values()
+                .find(|c| c.namespace == namespace && c.name == name && c.encoding == encoding)
+        };
+        find(UTF8).or_else(|| find(-1))
+    }
+
     /// The check constraints of a domain.
     pub fn constraints_of_domain(&self, domain: u32) -> impl Iterator<Item = &Constraint> {
         self.constraints.values().filter(move |c| c.domain == domain)
@@ -1113,8 +1167,11 @@ impl Catalog {
     /// `CreateComments`: sets the comment of an object, or drops it for `None`.
     pub fn set_description(&mut self, object: ObjRef, text: Option<String>) {
         match text {
-            Some(text) => self.descriptions.insert(object, text),
-            None => self.descriptions.remove(&object),
+            Some(text) => Arc::make_mut(&mut self.descriptions).insert(object, text),
+            None if self.descriptions.contains_key(&object) => {
+                Arc::make_mut(&mut self.descriptions).remove(&object)
+            }
+            None => None,
         };
     }
 
@@ -1412,6 +1469,24 @@ impl Catalog {
         let rule = Rule { oid, name, relation, event, instead, enabled, qualified, text, path };
         self.rules.insert(oid, rule);
         Ok(oid)
+    }
+
+    /// `CollationCreate` with `if_not_exists` and `quiet`: adds a collation and gives its OID, or gives `None` and adds nothing when the schema has a collation with the name for the same encoding. A collation for any encoding also conflicts with a collation for the encoding of the database, and a collation for one encoding conflicts with a collation for any encoding. The OID in `collation` is not used, and `comment` is the description of the new collation.
+    pub fn create_collation(&mut self, collation: Collation, comment: Option<&str>) -> Option<u32> {
+        let conflict = self.collations.values().any(|c| {
+            c.namespace == collation.namespace
+                && c.name == collation.name
+                && collation_conflict(c.encoding, collation.encoding)
+        });
+        if conflict {
+            return None;
+        }
+        let oid = self.new_oid();
+        Arc::make_mut(&mut self.collations).insert(oid, Collation { oid, ..collation });
+        if let Some(comment) = comment {
+            self.set_description(ObjRef::new(PG_COLLATION, oid), Some(comment.to_string()));
+        }
+        Some(oid)
     }
 
     /// The dependencies of the `_RETURN` rule of a view, as `InsertRule` and `recordDependencyOnExpr` record them. The rule is part of the view, and it depends on each object that the query reads. The objects come in the order of `eliminate_duplicate_dependencies`, from the highest OID down, and a column takes the place of its whole relation.
