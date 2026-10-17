@@ -57,17 +57,17 @@ This section lists every byte that rupg may send differently from the oracle wit
 | 2 | The values of user OIDs | A client reads them and uses them. It does not compare them with constants. The differences between consecutive user OIDs are compared (document 07 section 7.12) |
 | 3 | The values of statistics counters | `pg_stat_*` counts depend on the engine. The columns, the types and the presence of rows are compared |
 | 4 | The values of physical row identity: `ctid`, `xmin`, `xmax`, `cmin`, `cmax` | The values come from rupg's own storage (document 11 section 11.9). Their types, and the rules that clients rely on, such as "`xmin` changes when the row changes", are compared |
-| 5 | Sizes: `pg_relation_size`, `pg_database_size`, `relpages` and similar | rupg stores data in another form, and the cold store is smaller by design |
+| 5 | Sizes: `pg_relation_size`, `pg_database_size`, `relpages`, the settings `shared_memory_size` and `shared_memory_size_in_huge_pages` and similar | rupg stores data in another form, and the cold store is smaller by design |
 | 6 | C functions, the C extension ABI and `LOAD` | rupg has no C ABI (document 16 section 16.10). `CREATE FUNCTION ... LANGUAGE C` fails with `0A000` |
 | 7 | Physical streaming replication and `pg_basebackup` | rupg replicates with Raft per shard (document 18). Logical replication in and out is counted from M9 |
 | 8 | The bytes of the PostgreSQL data directory and `pg_upgrade` | rupg stores one `.rupg` file. The importer of M9 reads a PostgreSQL data directory and a `pg_dump` archive, and the result of the import is compared row by row, but the on-disk bytes are not a goal |
 | 9 | Time | `now()`, `clock_timestamp()` and the timestamps in statistics views differ between two runs of the same server |
-| 10 | The platform text in `version()` and the source fields of errors | `version()` names rupg and its compiler (section 5.7). The F, L and R fields are in section 5.2 |
+| 10 | The platform text in `version()`, the build values of `pg_config` and the source fields of errors | `version()` names rupg and its compiler (section 5.7). rupg does not record the options of its build, so `pg_config` shows other values. The F, L and R fields are in section 5.2 |
 | 11 | The internals of `pg_node_tree` and TOAST relations | rupg stores its own expression trees and has no TOAST tables. `reltoastrelid` is 0. The text of `pg_get_expr`, `pg_get_viewdef` and the other deparse functions is compared |
 | 12 | The suffix of `server_version` after the version number | The value is `19.0 (rupg X.Y.Z)`. Clients read the leading number. Section 5.7 |
 | 13 | The value of the process ID in `BackendKeyData` and `pg_backend_pid()` | rupg sessions are tasks, not processes (document 06 section 6.2). The value is a session number, and the two places show the same number |
 | 14 | Server log lines | The log is not part of the protocol. rupg writes the same text for the lines that log analyzers parse, but a difference is not counted |
-| 15 | File system paths: `data_directory`, `config_file`, `hba_file`, `ident_file`, `pg_settings.sourcefile` and the `file_name` column of `pg_hba_file_rules` | Two servers on one machine never have the same paths. rupg keeps its host rules inside the file, so these values have another form (document 06 section 6.8) |
+| 15 | File system paths: `data_directory`, `config_file`, `hba_file`, `ident_file`, `pg_settings.sourcefile`, the `file_name` column of `pg_hba_file_rules` and the directories of `pg_config` | Two servers on one machine never have the same paths. rupg keeps its host rules inside the file, so these values have another form (document 06 section 6.8) |
 
 Items 1 to 11 are the list in `../2140/compat/postgres/01-what-compatible-means.md` section 1.6. Item 8 is changed, because rupg has an importer and the rudb design did not. Items 12 to 15 are new for rupg. Item 12 follows from section 5.7. Item 13 follows from the session model. Item 14 states a rule that the rudb design had in its harness and not in its list. Item 15 follows from the rule of one file with no sidecar.
 
