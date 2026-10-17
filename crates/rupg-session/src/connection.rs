@@ -2598,6 +2598,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/join_alias_viewdef.test")));
     }
 
+    /// `t.*` for a relation of a query outside the subquery, in the list of a scalar subquery, `ARRAY`, `EXISTS`, `IN` and `LATERAL`, and `t.*` and `(e).*` in `ROW`, in a row comparison and in `IN` with a subquery, with the errors and the text of views. `connection/outer_star.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn outer_star() {
+        big_stack(|| script(include_str!("connection/outer_star.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

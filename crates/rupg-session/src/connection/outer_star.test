@@ -1,0 +1,160 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW a AS SELECT * FROM (VALUES (1, 'x'), (2, 'y')) AS v (k, s)
+CREATE VIEW
+> CREATE VIEW o AS SELECT * FROM (VALUES (1), (2), (NULL)) AS v (k)
+CREATE VIEW
+> SELECT (SELECT x.*) AS r FROM o x ORDER BY 1
+fields r:23:4:-1
+row 1
+row 2
+row NULL
+SELECT 3
+> SELECT (SELECT x.* FROM (VALUES (5)) AS z (c)) AS r FROM o x ORDER BY 1
+fields r:23:4:-1
+row 1
+row 2
+row NULL
+SELECT 3
+> SELECT (SELECT x.*) FROM a x
+ERROR 42601 subquery must return only one column at 8
+> SELECT (SELECT ROW(x.*)) AS r FROM a x ORDER BY 1
+fields r:2249:-1:-1
+row (1,x)
+row (2,y)
+SELECT 2
+> SELECT (SELECT row_to_json(r) FROM (SELECT x.*) AS r) AS j FROM a x ORDER BY x.k
+fields j:114:-1:-1
+row {"k":1,"s":"x"}
+row {"k":2,"s":"y"}
+SELECT 2
+> SELECT ARRAY(SELECT x.*) AS r FROM o x ORDER BY 1
+fields r:1007:-1:-1
+row {1}
+row {2}
+row {NULL}
+SELECT 3
+> SELECT EXISTS (SELECT x.*) AS e FROM o x
+fields e:16:1:-1
+row t
+row t
+row t
+SELECT 3
+> SELECT x.k FROM a x WHERE x.k IN (SELECT y.* FROM o y WHERE y.k = x.k) ORDER BY 1
+fields k@a.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT l.* FROM a x, LATERAL (SELECT x.*, 1 AS one) AS l ORDER BY 1
+fields k@a.1:23:4:-1,s@a.2:25:-1:-1,one:23:4:-1
+row 1,x,1
+row 2,y,1
+SELECT 2
+> SELECT l.* FROM a x CROSS JOIN LATERAL (SELECT x.* FROM o WHERE o.k = x.k) AS l ORDER BY 1
+fields k@a.1:23:4:-1,s@a.2:25:-1:-1
+row 1,x
+row 2,y
+SELECT 2
+> SELECT (SELECT (SELECT x.*)) AS r FROM o x ORDER BY 1
+fields r:23:4:-1
+row 1
+row 2
+row NULL
+SELECT 3
+> SELECT (SELECT y.* FROM a y WHERE y.k = x.k LIMIT 0) FROM o x
+ERROR 42601 subquery must return only one column at 8
+> SELECT (SELECT public.x.* ) FROM o x
+ERROR 42P01 invalid reference to FROM-clause entry for table "x" at 16
+> SELECT (SELECT public.o.*) AS r FROM o ORDER BY 1
+fields r:23:4:-1
+row 1
+row 2
+row NULL
+SELECT 3
+> SELECT (SELECT zz.*) FROM o x
+ERROR 42P01 missing FROM-clause entry for table "zz" at 16
+> SELECT ROW(x.*) AS r, ROW(x.*, 5, x.*) AS q FROM a x ORDER BY x.k
+fields r:2249:-1:-1,q:2249:-1:-1
+row (1,x),(1,x,5,1,x)
+row (2,y),(2,y,5,2,y)
+SELECT 2
+> SELECT ROW((x).*) AS r FROM (SELECT ROW(1, 'z')::a AS x) AS t
+fields r:2249:-1:-1
+row (1,z)
+SELECT 1
+> SELECT ROW(x.*) = ROW(1, 'x') AS e FROM a x ORDER BY x.k
+fields e:16:1:-1
+row t
+row f
+SELECT 2
+> SELECT ROW(*) FROM a
+ERROR 42601 syntax error at or near "*" at 12
+> SELECT x.k FROM a x WHERE ROW(x.*) IN (SELECT 1, 'x')
+fields k@a.1:23:4:-1
+row 1
+SELECT 1
+> SELECT x.k, ROW(x.*) IS DISTINCT FROM ROW(1, 'x') AS d FROM a x ORDER BY 1
+fields k@a.1:23:4:-1,d:16:1:-1
+row 1,f
+row 2,t
+SELECT 2
+> SELECT x.k, ROW(x.*) < ROW(2, 'a') AS l FROM a x ORDER BY 1
+fields k@a.1:23:4:-1,l:16:1:-1
+row 1,t
+row 2,f
+SELECT 2
+> CREATE VIEW v1 AS SELECT (SELECT x.*) AS r FROM o x
+CREATE VIEW
+> SELECT * FROM v1 ORDER BY 1
+fields r@v1.1:23:4:-1
+row 1
+row 2
+row NULL
+SELECT 3
+> SELECT pg_get_viewdef('v1')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ( SELECT x.k) AS r
+   FROM o x;
+SELECT 1
+> CREATE VIEW v2 AS SELECT l.* FROM a x, LATERAL (SELECT x.*, 1 AS one) AS l
+CREATE VIEW
+> SELECT * FROM v2 ORDER BY 1
+fields k@v2.1:23:4:-1,s@v2.2:25:-1:-1,one@v2.3:23:4:-1
+row 1,x,1
+row 2,y,1
+SELECT 2
+> SELECT pg_get_viewdef('v2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT l.k,
+    l.s,
+    l.one
+   FROM a x,
+    LATERAL ( SELECT x.k,
+            x.s,
+            1 AS one) l;
+SELECT 1
+> CREATE VIEW v3 AS SELECT (SELECT ROW(x.*))::text AS r FROM a x
+CREATE VIEW
+> SELECT * FROM v3 ORDER BY 1
+fields r@v3.1:25:-1:-1
+row (1,x)
+row (2,y)
+SELECT 2
+> SELECT pg_get_viewdef('v3')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (( SELECT ROW(x.k, x.s) AS "row"))::text AS r
+   FROM a x;
+SELECT 1
+> CREATE VIEW v4 AS SELECT ROW(x.*, 0)::text AS r, (SELECT ROW(x.*) = ROW(1, 'x')) AS e FROM a x
+CREATE VIEW
+> SELECT * FROM v4 ORDER BY 1
+fields r@v4.1:25:-1:-1,e@v4.2:16:1:-1
+row (1,x,0),t
+row (2,y,0),f
+SELECT 2
+> SELECT pg_get_viewdef('v4')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (ROW(k, s, 0))::text AS r,
+    ( SELECT ((x.k = 1) AND (x.s = 'x'::text))) AS e
+   FROM a x;
+SELECT 1
