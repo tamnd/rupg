@@ -3,9 +3,10 @@
 //! The session reports the state `active` and the text of the statement when a `Query`, `Parse`, `Bind` or `Execute` starts, and the idle state that `ReadyForQuery` gives before it sends the message. The start of a transaction sets `xact_start`, and the end of a transaction clears it and drops the snapshot. When `track_activities` is off, the next report sets the state `disabled` and clears the text and the times, as in PostgreSQL.
 
 use std::cell::RefCell;
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use rupg_func::{Backend, BackendState, Client, Ssl};
+use rupg_func::{Backend, BackendState, Client, RelationCounts, Ssl};
 use rupg_wire::TransactionStatus;
 
 use super::Connection;
@@ -28,6 +29,12 @@ pub(crate) struct Activity {
     ssl: Option<Ssl>,
     /// The snapshot of the table that the transaction reads, after its first read.
     snapshot: RefCell<Option<Arc<[Backend]>>>,
+    /// The OID of the database of the session.
+    database: u32,
+    /// The sequential scans of each relation that the transaction counted. The end of the transaction reports them to the store.
+    scans: RefCell<BTreeMap<u32, i64>>,
+    /// The snapshot of the counters of the relations that the transaction reads, after its first read.
+    relations: RefCell<Option<Arc<HashMap<u32, RelationCounts>>>>,
     /// `debug_query_string`: the text of the message that runs, in full. It is `None` while the session waits for the client.
     pub(crate) query: Option<String>,
     /// `SYSTEM_USER`, as `auth_method:authn_id`, or `None` for a method that checks no identity.
@@ -57,9 +64,27 @@ impl Activity {
         }
     }
 
-    /// `pgstat_clear_backend_activity_snapshot`.
+    /// `pgstat_count_heap_scan`: counts a sequential scan of a relation.
+    pub(crate) fn count_scan(&self, relation: u32) {
+        *self.scans.borrow_mut().entry(relation).or_default() += 1;
+    }
+
+    /// The sequential scans of a relation that the transaction counted.
+    pub(crate) fn pending_scans(&self, relation: u32) -> i64 {
+        self.scans.borrow().get(&relation).copied().unwrap_or(0)
+    }
+
+    /// The counters of a relation from the snapshot of the transaction. The first read takes the snapshot.
+    pub(crate) fn relation_counts(&self, store: &Store, relation: u32) -> Option<RelationCounts> {
+        let mut snapshot = self.relations.borrow_mut();
+        let counts = snapshot.get_or_insert_with(|| Arc::new(store.relation_counts(self.database)));
+        counts.get(&relation).copied()
+    }
+
+    /// `pgstat_clear_snapshot`: drops the snapshots of the table of the sessions and of the counters of the relations.
     pub(crate) fn clear(&self) {
         self.snapshot.borrow_mut().take();
+        self.relations.borrow_mut().take();
     }
 }
 
@@ -135,6 +160,7 @@ impl Connection {
             ssl: self.activity.ssl.clone(),
             ..Backend::default()
         };
+        self.activity.database = self.database_oid;
         self.activity.number = Some(self.store.join(backend, Arc::clone(&self.end)));
     }
 
@@ -200,10 +226,14 @@ impl Connection {
         self.report_transaction(Some(self.transaction_start));
     }
 
-    /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, and `AtEOXact_PgStat` drops the snapshot of the table.
+    /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, `AtEOXact_PgStat` drops the snapshots, and `pgstat_report_stat` reports the scans of the transaction. A scan counts also after an abort, as in PostgreSQL.
     pub(super) fn transaction_ended(&mut self) {
         self.store.locks().release_all(self.pid, false);
         self.activity.clear();
+        let scans = std::mem::take(self.activity.scans.get_mut());
+        if !scans.is_empty() {
+            self.store.report_scans(self.database_oid, &scans, query::now(&*self.clock));
+        }
         self.report_transaction(None);
     }
 

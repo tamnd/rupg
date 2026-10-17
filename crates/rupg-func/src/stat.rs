@@ -1,6 +1,6 @@
 //! The functions of the cumulative statistics for one object, from `pgstatfuncs.c`: the counters of a relation or an index, of a function and of a database, and the `xact` forms that read the counts of the transaction.
 //!
-//! rupg does not keep the counters yet. So each function gives the value that PostgreSQL gives for an object that has no entry in the statistics: 0 for a counter and for a total time of a relation or a database, and null for a time stamp and for each value of a function. The views `pg_stat_*` and `pg_statio_*` then have a row for each object, with the columns and the types of PostgreSQL (spec/07 section 7.14).
+//! rupg keeps only the sequential scans of a relation: their count, `numscans`, and the time of the last one, `lastscan`. The other functions give the value that PostgreSQL gives for an object that has no entry in the statistics: 0 for a counter and for a total time of a relation or a database, and null for a time stamp and for each value of a function. The views `pg_stat_*` and `pg_statio_*` then have a row for each object, with the columns and the types of PostgreSQL (spec/07 section 7.14).
 
 use rupg_common::Result;
 use rupg_types::Value;
@@ -76,6 +76,15 @@ const RELATION_STAMPS: [&str; 6] = [
     "stat_reset_time",
 ];
 
+/// The counters of a relation in the statistics of the server, the part of `PgStat_StatTabEntry` that rupg keeps.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RelationCounts {
+    /// `numscans`: the count of the sequential scans of the relation.
+    pub numscans: i64,
+    /// `lastscan`: the end of the last transaction that scanned the relation, in microseconds since 2000-01-01 UTC, or `None` before the first scan.
+    pub lastscan: Option<i64>,
+}
+
 /// The OID of the object. A strict function does not get null, and PostgreSQL does not check that the object exists.
 fn object(args: &[Value]) -> Result<u32> {
     args.first().and_then(Value::as_oid).ok_or_else(bad_value)
@@ -85,6 +94,23 @@ fn object(args: &[Value]) -> Result<u32> {
 fn counter(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     object(args)?;
     Ok(Value::Int8(0))
+}
+
+/// `pg_stat_get_numscans`: the sequential scans of a relation that the server reported.
+fn numscans(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let counts = call.session.relation_counts(object(args)?);
+    Ok(Value::Int8(counts.map_or(0, |c| c.numscans)))
+}
+
+/// `pg_stat_get_lastscan`: the time of the last sequential scan of a relation, or null.
+fn lastscan(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let counts = call.session.relation_counts(object(args)?);
+    Ok(counts.and_then(|c| c.lastscan).map_or(Value::Null, Value::TimestampTz))
+}
+
+/// `pg_stat_get_xact_numscans`: the sequential scans of a relation that the transaction counted.
+fn xact_numscans(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    Ok(Value::Int8(call.session.pending_scans(object(args)?)))
 }
 
 /// A total time of an object with no entry.
@@ -108,8 +134,16 @@ fn checksum_failures(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     })
 }
 
+/// `pg_stat_force_next_flush`: the next end of a transaction reports the counts at once. rupg reports them at the end of each transaction, so the call has no effect. The result is `void`, whose value the engine keeps as an empty text.
+fn force_next_flush(_: &Call<'_>, _: &[Value]) -> Result<Value> {
+    Ok(Value::text(""))
+}
+
 /// The kernel of a function of this module by its `prosrc`.
 pub(crate) fn by_src(src: &str) -> Option<Kernel> {
+    if src == "pg_stat_force_next_flush" {
+        return Some(force_next_flush);
+    }
     let name = src.strip_prefix("pg_stat_get_")?;
     if let Some(name) = name.strip_prefix("db_") {
         return Some(match name {
@@ -123,6 +157,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     if let Some(name) = name.strip_prefix("xact_") {
         return Some(match name {
             "function_calls" | "function_total_time" | "function_self_time" => none,
+            "numscans" => xact_numscans,
             _ if RELATION_COUNTERS.contains(&name) => counter,
             _ => return None,
         });
@@ -130,6 +165,8 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
     Some(match name {
         "function_calls" | "function_total_time" | "function_self_time" => none,
         "function_stat_reset_time" => none,
+        "numscans" => numscans,
+        "lastscan" => lastscan,
         _ if RELATION_COUNTERS.contains(&name) => counter,
         _ if RELATION_TIMES.contains(&name) => total_time,
         _ if RELATION_STAMPS.contains(&name) => none,

@@ -7,7 +7,7 @@ use std::time::Duration;
 
 use rupg_catalog::{Catalog, Database, SequenceData};
 use rupg_common::{Error, Result, SqlState};
-use rupg_func::Backend;
+use rupg_func::{Backend, RelationCounts};
 use rupg_platform::Tasks;
 
 use crate::advisory::Locks;
@@ -40,6 +40,8 @@ pub struct Store {
     locks: Locks,
     /// The rows of the files of the sequences that the sessions changed, by the number of the file. The rows are not in a transaction, so a rollback does not undo a change, as in PostgreSQL.
     sequences: Mutex<HashMap<u32, SequenceData>>,
+    /// The counters of the relations in the cumulative statistics, by the OID of the database and the OID of the relation.
+    relations: Mutex<HashMap<(u32, u32), RelationCounts>>,
 }
 
 /// A slot of the table of the sessions.
@@ -407,6 +409,26 @@ impl Store {
     /// The time of the last reset of the statistics of the whole server, or 0 before the first session.
     pub(crate) fn stats_reset(&self) -> i64 {
         self.stats_reset.load(Ordering::Relaxed)
+    }
+
+    /// `pgstat_relation_flush_cb`: adds the sequential scans that a transaction counted to the counters of the relations of its database. `time` is the end of the transaction, which becomes `lastscan` when it is later than the last scan.
+    pub(crate) fn report_scans(&self, database: u32, scans: &BTreeMap<u32, i64>, time: i64) {
+        let mut relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&relation, &count) in scans {
+            let counts = relations.entry((database, relation)).or_default();
+            counts.numscans += count;
+            counts.lastscan = Some(counts.lastscan.map_or(time, |last| last.max(time)));
+        }
+    }
+
+    /// The counters of the relations of a database, for the snapshot of a transaction.
+    pub(crate) fn relation_counts(&self, database: u32) -> HashMap<u32, RelationCounts> {
+        let relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
+        relations
+            .iter()
+            .filter(|((db, _), _)| *db == database)
+            .map(|(&(_, rel), &c)| (rel, c))
+            .collect()
     }
 
     /// `pgstat_read_current_status`: a copy of the rows of the table, in the order of their numbers.

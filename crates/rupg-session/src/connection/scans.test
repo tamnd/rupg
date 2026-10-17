@@ -1,0 +1,118 @@
+> CREATE SCHEMA sc
+CREATE SCHEMA
+> CREATE TABLE sc.a (x int PRIMARY KEY, y int UNIQUE)
+CREATE TABLE
+> CREATE TABLE sc.b (x int, y int)
+CREATE TABLE
+> CREATE TABLE sc.k (x int)
+CREATE TABLE
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan, last_seq_scan IS NOT NULL AS scanned, last_seq_scan <= now() AS before FROM pg_stat_user_tables WHERE schemaname = 'sc' ORDER BY relname
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1,scanned:16:1:-1,before:16:1:-1
+row a,2,t,t
+row b,0,f,NULL
+row k,0,f,NULL
+SELECT 3
+> ALTER TABLE sc.b ADD CHECK (x > 0), ADD CHECK (x < 100)
+ALTER TABLE
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan, last_seq_scan IS NOT NULL AS scanned FROM pg_stat_user_tables WHERE schemaname = 'sc' ORDER BY relname
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1,scanned:16:1:-1
+row a,2,t
+row b,1,t
+row k,0,f
+SELECT 3
+> ALTER TABLE sc.b ADD CONSTRAINT b_x_not_null NOT NULL x
+ALTER TABLE
+> ALTER TABLE sc.b ADD CONSTRAINT b_x_again NOT NULL x
+ERROR 55000 cannot create not-null constraint "b_x_again" on column "x" of table "b"
+> ALTER TABLE sc.b ADD FOREIGN KEY (y) REFERENCES sc.a
+ALTER TABLE
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan, last_seq_scan IS NOT NULL AS scanned FROM pg_stat_user_tables WHERE schemaname = 'sc' ORDER BY relname
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1,scanned:16:1:-1
+row a,2,t
+row b,3,t
+row k,0,f
+SELECT 3
+> CREATE TABLE sc.c (x int, y text)
+CREATE TABLE
+> ALTER TABLE sc.c ADD PRIMARY KEY (x)
+ALTER TABLE
+> CREATE INDEX b_x ON sc.b (x)
+CREATE INDEX
+> CREATE VIEW sc.v AS SELECT * FROM sc.c
+CREATE VIEW
+> SELECT * FROM sc.v
+fields x@sc.v.1:23:4:-1,y@sc.v.2:25:-1:-1
+SELECT 0
+> SELECT * FROM sc.b
+fields x@sc.b.1:23:4:-1,y@sc.b.2:23:4:-1
+SELECT 0
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan, last_seq_scan IS NOT NULL AS scanned FROM pg_stat_user_tables WHERE schemaname = 'sc' ORDER BY relname
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1,scanned:16:1:-1
+row a,2,t
+row b,5,t
+row c,3,t
+row k,0,f
+SELECT 4
+> BEGIN
+BEGIN
+> SELECT * FROM sc.k
+fields x@sc.k.1:23:4:-1
+SELECT 0
+> SELECT * FROM sc.k
+fields x@sc.k.1:23:4:-1
+SELECT 0
+> SELECT pg_stat_get_xact_numscans('sc.k'::regclass), pg_stat_get_numscans('sc.k'::regclass), pg_stat_get_lastscan('sc.k'::regclass)
+fields pg_stat_get_xact_numscans:20:8:-1,pg_stat_get_numscans:20:8:-1,pg_stat_get_lastscan:1184:8:-1
+row 2,0,NULL
+SELECT 1
+> SELECT seq_scan FROM pg_stat_xact_user_tables WHERE relname = 'k'
+fields seq_scan@pg_stat_xact_user_tables.4:20:8:-1
+row 2
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT pg_stat_get_xact_numscans('sc.k'::regclass), pg_stat_get_numscans('sc.k'::regclass), pg_stat_get_lastscan('sc.k'::regclass) <= now()
+fields pg_stat_get_xact_numscans:20:8:-1,pg_stat_get_numscans:20:8:-1,?column?:16:1:-1
+row 0,2,t
+SELECT 1
+> SET track_counts TO off
+SET
+> SELECT * FROM sc.k
+fields x@sc.k.1:23:4:-1
+SELECT 0
+> CREATE INDEX k_x ON sc.k (x)
+CREATE INDEX
+> RESET track_counts
+RESET
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT pg_stat_get_numscans('sc.k'::regclass)
+fields pg_stat_get_numscans:20:8:-1
+row 2
+SELECT 1
+> SELECT pg_stat_get_numscans('pg_class'::regclass) >= 0, pg_stat_get_numscans(0), pg_stat_get_lastscan(0)
+fields ?column?:16:1:-1,pg_stat_get_numscans:20:8:-1,pg_stat_get_lastscan:1184:8:-1
+row t,0,NULL
+SELECT 1

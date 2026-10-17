@@ -56,6 +56,8 @@ pub struct Defined {
     pub messages: Vec<Message>,
     /// The result of the statement. After an error the caller discards the changes of the catalog, but the OIDs that the statement used stay used, as in PostgreSQL.
     pub result: Result<()>,
+    /// The tables that the statement read with a sequential scan, once for each scan, as `pgstat_count_heap_scan` counts them: the build of an index, the check of new constraints by `ALTER TABLE` and the check of a new foreign key. The scans count also when the statement fails.
+    pub scans: Vec<u32>,
 }
 
 /// True for a statement that [`define`] runs.
@@ -121,6 +123,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         catalog,
         user,
         messages: Vec::new(),
+        scans: Vec::new(),
     };
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
@@ -146,7 +149,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         }
     };
     definer.flush();
-    Defined { messages: definer.messages, result }
+    Defined { messages: definer.messages, result, scans: definer.scans }
 }
 
 /// The session with the schemas of the catalog, which the analyzer finds by name.
@@ -211,6 +214,8 @@ pub(crate) struct Definer<'a, 'c> {
     catalog: &'c mut Catalog,
     user: u32,
     messages: Vec<Message>,
+    /// The tables of [`Defined::scans`].
+    scans: Vec<u32>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.

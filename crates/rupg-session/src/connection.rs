@@ -449,6 +449,11 @@ impl Connection {
         }
         let mut work = Catalog::clone(&self.catalog());
         let defined = rupg_analyze::define(node, text, &self.reader(), &mut work, self.role);
+        if self.settings.get_mut().get("track_counts").as_deref() != Some("off") {
+            for &table in &defined.scans {
+                self.activity.count_scan(table);
+            }
+        }
         notices.extend(defined.messages.into_iter().map(|message| match message {
             Message::Warning(error) => Notice::warning(error),
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
@@ -3043,6 +3048,12 @@ mod tests {
     #[test]
     fn statistics() {
         big_stack(|| script(include_str!("connection/statistics.test")));
+    }
+
+    /// The sequential scans of the tables in `pg_stat_user_tables`: the build of each index, the scan of `ALTER TABLE` that checks new constraints, the check of a new foreign key and the read of a table, the counts of a transaction that rolls back, and `track_counts`. `connection/scans.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn scans() {
+        big_stack(|| script(include_str!("connection/scans.test")));
     }
 
     /// `SELECT` from the tables and sequences of the user, with the types of the columns. `connection/user_select.test` is the output of PostgreSQL 19 for the same script in a new database.

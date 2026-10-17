@@ -1,7 +1,7 @@
 //! `CREATE INDEX`, as `transformIndexStmt`, `DefineIndex` and `ComputeIndexAttrs` run it.
 
 use rupg_catalog::size::{empty_index_pages, new_table_tuples, typavgwidth};
-use rupg_catalog::{ConKind, NewIndex, NewIndexColumn};
+use rupg_catalog::{ConKind, NewIndex, NewIndexColumn, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{IndexElem, IndexStmt, Node, SortByDir, SortByNulls};
@@ -283,6 +283,10 @@ impl Definer<'_, '_> {
             pages,
         };
         self.catalog.create_index(new)?;
+        // `index_build` reads the rows of the table with a sequential scan.
+        if self.catalog.relation(table).is_some_and(|r| r.kind == RelKind::Table) {
+            self.scans.push(table);
+        }
         Ok(())
     }
 
