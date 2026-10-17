@@ -420,6 +420,34 @@ fn scram() {
     server.stop().unwrap();
 }
 
+/// `pg_authid` and `pg_shadow` show the stored secret of the superuser, and `pg_roles` hides it. The salt is new at each start, so the test checks the form of the secret.
+#[test]
+fn stored_secret() {
+    let (server, _) = password_server("host all all 127.0.0.1/32 trust\n", &[]);
+    let (mut stream, _) = connect(&server, &POSTGRES);
+    let sql = "SELECT a.rolpassword ~ '^SCRAM-SHA-256\\$4096:[A-Za-z0-9+/=]{24}\\$[A-Za-z0-9+/=]{44}:[A-Za-z0-9+/=]{44}$', a.rolpassword = s.passwd, r.rolpassword FROM pg_authid a, pg_shadow s, pg_roles r WHERE a.rolname = 'postgres' AND s.usename = a.rolname AND r.rolname = a.rolname";
+    stream.write_all(&query(sql)).unwrap();
+    assert_eq!(read(&mut *stream), ["columns 3", "row t,t,********", "SELECT 1", "ready I"]);
+    stream
+        .write_all(&query("SELECT count(*) FROM pg_authid WHERE rolpassword IS NOT NULL"))
+        .unwrap();
+    assert_eq!(read(&mut *stream), ["columns 1", "row 1", "SELECT 1", "ready I"]);
+    // The server stops when its sessions end.
+    drop(stream);
+    server.stop().unwrap();
+    let (server, _) =
+        password_server("host all all 127.0.0.1/32 trust\n", &[("password_encryption", "md5")]);
+    let (mut stream, _) = connect(&server, &POSTGRES);
+    stream.write_all(&query("SELECT rolpassword FROM pg_authid WHERE oid = 10")).unwrap();
+    let md5 = format!("row {}", md5_encrypt(&Hashes, b"secret", b"postgres"));
+    assert_eq!(
+        read(&mut *stream),
+        ["columns 1".to_owned(), md5, "SELECT 1".into(), "ready I".into()]
+    );
+    drop(stream);
+    server.stop().unwrap();
+}
+
 #[test]
 fn md5() {
     let hba = "host all all 127.0.0.1/32 md5\n";

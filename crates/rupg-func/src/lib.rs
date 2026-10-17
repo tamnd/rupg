@@ -252,6 +252,11 @@ pub trait Session {
     fn ident_mappings(&self) -> Result<Vec<Vec<Value>>> {
         Ok(Vec::new())
     }
+    /// The stored secret of the password of a role, which `pg_authid.rolpassword` shows, or `None` for a role with no password.
+    fn role_password(&self, role: u32) -> Option<String> {
+        let _ = role;
+        None
+    }
     /// The row of the file of a sequence as the sessions changed it, or `None` when no session changed it, so that the row is the one of the file when it was made.
     fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
         let _ = file;

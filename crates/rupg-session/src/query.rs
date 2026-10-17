@@ -623,6 +623,12 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn role_password(&self, role: u32) -> Option<String> {
+        let (_, store) = self.activity?;
+        // `BOOTSTRAP_SUPERUSERID`: the server has one role with a password.
+        if role == 10 { store.password().map(str::to_owned) } else { None }
+    }
+
     fn stats_reset(&self) -> i64 {
         self.activity.map_or(0, |(_, store)| store.stats_reset())
     }
