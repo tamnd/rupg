@@ -85,13 +85,14 @@ pub use datetime::{IntervalSum, interval_lerp};
 pub use deparse::deparse_expression;
 pub use encoding::{char_to_encoding, encoding, encoding_to_char};
 pub use io::{
-    base_type, input, input_supported, is_row_type, output, output_supported, receive, send,
-    to_text,
+    base_type, input, input_soft, input_supported, is_row_type, output, output_supported, receive,
+    send, to_text,
 };
 pub use jsonbuild::{
     is_json, json_ctor_array, json_ctor_object, json_ctor_parse, json_ctor_scalar, json_structured,
     json_value,
 };
+pub use jsonpath::{PathVar, SqlJsonItem, sql_json_path};
 pub use multirange::range_agg;
 pub use random::Randomness;
 pub use reg::ts_config_setting;

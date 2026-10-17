@@ -1,0 +1,901 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW t AS SELECT * FROM (VALUES (1, '{"a": 1, "b": [1, 2, 3], "c": "str", "d": null, "e": {"x": true}}'::jsonb, '$.a'), (2, '{"a": "12", "b": [], "c": "2020-01-02", "d": 1.5}'::jsonb, '$.b'), (3, NULL::jsonb, '$.c')) AS v (a, js, p)
+CREATE VIEW
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', '$.a')
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', '$.b')
+fields json_exists:16:1:-1
+row f
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'strict $.b')
+fields json_exists:16:1:-1
+row f
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'strict $.b' ERROR ON ERROR)
+fields json_exists:16:1:-1
+ERROR 2203A JSON object does not contain key "b"
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'strict $.b' TRUE ON ERROR)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'strict $.b' FALSE ON ERROR)
+fields json_exists:16:1:-1
+row f
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'strict $.b' UNKNOWN ON ERROR)
+fields json_exists:16:1:-1
+row NULL
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'lax $.b' ERROR ON ERROR)
+fields json_exists:16:1:-1
+row f
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[1, 2, 3]', '$[*] ? (@ > $x)' PASSING 2 AS x)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[1, 2, 3]', '$[*] ? (@ > $x)' PASSING 5 AS x)
+fields json_exists:16:1:-1
+row f
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[1, 2, 3]', '$[*] ? (@ == $x)' PASSING 2.0 AS x, 'a' AS y)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '["a", "b"]', '$[*] ? (@ == $y)' PASSING 2 AS x, 'b' AS y)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[1]', '$[*] ? (@ == $y)' PASSING 2 AS x)
+fields json_exists:16:1:-1
+ERROR 42704 could not find jsonpath variable "y"
+> SELECT JSON_EXISTS(jsonb '[1]', '$[*] ? (@ == $y)' PASSING 2 AS x ERROR ON ERROR)
+fields json_exists:16:1:-1
+ERROR 42704 could not find jsonpath variable "y"
+> SELECT JSON_EXISTS(jsonb '{"a": [1, 2]}', '$.a ? (@ == $v)' PASSING jsonb '2' AS v)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": [1, 2]}', '$ ? (@.a == $v)' PASSING '[1, 2]'::json AS v)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[true]', '$[*] ? (@ == $v)' PASSING true AS v)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '["2020-01-02"]', '$[*] ? (@.datetime() == $v)' PASSING date '2020-01-02' AS v)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[1]', '$[*] ? (@ == $v)' PASSING 1.5::float8 AS v)
+fields json_exists:16:1:-1
+row f
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[1]', '$[*] ? (@ == $v)' PASSING NULL::int AS v)
+fields json_exists:16:1:-1
+row f
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[null]', '$[*] ? (@ == $v)' PASSING NULL::int AS v)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[1]', '$[*] ? (@ == $v)' PASSING point '(1,2)' AS v)
+fields json_exists:16:1:-1
+row f
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '[1]', '$[*] ? (@ == $v)' PASSING 'a'::char(3) AS v)
+fields json_exists:16:1:-1
+ERROR 22023 could not convert value of type character to jsonpath
+> SELECT JSON_EXISTS(NULL::jsonb, '$')
+fields json_exists:16:1:-1
+row NULL
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '1', NULL)
+fields json_exists:16:1:-1
+row NULL
+SELECT 1
+> SELECT JSON_EXISTS('{"a": 1}', '$.a')
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS('{"a": 1}'::json, '$.a')
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS('{"a": 1}'::text, '$.a')
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS('{"a": 1}' FORMAT JSON, '$.a')
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS('{"a": ' , '$.a')
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: {"a": )
+> SELECT JSON_EXISTS(1, '$')
+ERROR 42846 cannot cast type integer to jsonb at 20
+> SELECT JSON_EXISTS(jsonb '1', 1)
+ERROR 42804 JSON path expression must be of type jsonpath, not of type integer at 31
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', '$.a'::text)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'bad path')
+ERROR 42601 syntax error at or near " " of jsonpath input at 38
+> SELECT JSON_EXISTS(jsonb '1', '$' NULL ON ERROR)
+ERROR 42601 invalid ON ERROR behavior at 35
+> SELECT JSON_EXISTS(jsonb '1', '$' EMPTY ARRAY ON ERROR)
+ERROR 42601 invalid ON ERROR behavior at 35
+> SELECT a, JSON_EXISTS(js, '$.b[*] ? (@ > 1)') FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_exists:16:1:-1
+row 1,t
+row 2,f
+row 3,NULL
+SELECT 3
+> SELECT JSON_VALUE(jsonb '"abc"', '$')
+fields json_value:25:-1:-1
+row abc
+SELECT 1
+> SELECT JSON_VALUE(jsonb '123', '$')
+fields json_value:25:-1:-1
+row 123
+SELECT 1
+> SELECT JSON_VALUE(jsonb '1.50', '$')
+fields json_value:25:-1:-1
+row 1.50
+SELECT 1
+> SELECT JSON_VALUE(jsonb 'true', '$')
+fields json_value:25:-1:-1
+row t
+SELECT 1
+> SELECT JSON_VALUE(jsonb 'null', '$')
+fields json_value:25:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[1]', '$')
+fields json_value:25:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[1]', '$' ERROR ON ERROR)
+fields json_value:25:-1:-1
+ERROR 2203F JSON path expression in JSON_VALUE must return single scalar item
+> SELECT JSON_VALUE(jsonb '{"a": 1}', '$' ERROR ON ERROR)
+fields json_value:25:-1:-1
+ERROR 2203F JSON path expression in JSON_VALUE must return single scalar item
+> SELECT JSON_VALUE(jsonb '[1, 2]', '$[*]' ERROR ON ERROR)
+fields json_value:25:-1:-1
+ERROR 22034 JSON path expression in JSON_VALUE must return single scalar item
+> SELECT JSON_VALUE(jsonb '[1, 2]', '$[*]')
+fields json_value:25:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[1, 2]', '$[*]' DEFAULT 'x' ON ERROR)
+fields json_value:25:-1:-1
+row x
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[]', '$[*]')
+fields json_value:25:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[]', '$[*]' ERROR ON EMPTY)
+fields json_value:25:-1:-1
+ERROR 22035 no SQL/JSON item found for specified path
+> SELECT JSON_VALUE(jsonb '[]', '$[*]' ERROR ON EMPTY NULL ON ERROR)
+fields json_value:25:-1:-1
+ERROR 22035 no SQL/JSON item found for specified path
+> SELECT JSON_VALUE(jsonb '[]', '$[*]' DEFAULT 'empty' ON EMPTY)
+fields json_value:25:-1:-1
+row empty
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[]', 'strict $[0]' DEFAULT 'empty' ON EMPTY DEFAULT 'err' ON ERROR)
+fields json_value:25:-1:-1
+row err
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[]', 'strict $[0]' ERROR ON ERROR)
+fields json_value:25:-1:-1
+ERROR 22033 jsonpath array subscript is out of bounds
+> SELECT JSON_VALUE(jsonb '[]', 'lax $[0]' DEFAULT 'empty' ON EMPTY DEFAULT 'err' ON ERROR)
+fields json_value:25:-1:-1
+row empty
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"123"', '$' RETURNING int)
+fields json_value:23:4:-1
+row 123
+SELECT 1
+> SELECT JSON_VALUE(jsonb '123', '$' RETURNING int)
+fields json_value:23:4:-1
+row 123
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING int)
+fields json_value:23:4:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING int ERROR ON ERROR)
+fields json_value:23:4:-1
+ERROR 22P02 invalid input syntax for type integer: "abc"
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING int DEFAULT 7 ON ERROR)
+fields json_value:23:4:-1
+row 7
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING int DEFAULT '7' ON ERROR)
+fields json_value:23:4:-1
+row 7
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING int DEFAULT 'x' ON ERROR)
+ERROR 22P02 invalid input syntax for type integer: "x" at 60
+> SELECT JSON_VALUE(jsonb '1.234', '$' RETURNING numeric(4,1))
+fields json_value:1700:-1:262149
+row 1.2
+SELECT 1
+> SELECT JSON_VALUE(jsonb '1.234', '$' RETURNING numeric(4,1) DEFAULT 99.99 ON ERROR)
+fields json_value:1700:-1:262149
+row 1.2
+SELECT 1
+> SELECT JSON_VALUE(jsonb '12345.6', '$' RETURNING numeric(4,1) DEFAULT 1.25 ON ERROR)
+fields json_value:1700:-1:262149
+row 1.3
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abcdef"', '$' RETURNING varchar(3))
+fields json_value:1043:-1:7
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abcdef"', '$' RETURNING varchar(3) ERROR ON ERROR)
+fields json_value:1043:-1:7
+ERROR 22001 value too long for type character varying(3)
+> SELECT JSON_VALUE(jsonb '"abc  "', '$' RETURNING varchar(3))
+fields json_value:1043:-1:7
+row abc
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"ab"', '$' RETURNING char(4))
+fields json_value:1042:-1:8
+row ab  
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"2020-01-02"', '$' RETURNING date)
+fields json_value:1082:4:-1
+row 2020-01-02
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"2020-01-02"', '$.datetime()')
+fields json_value:25:-1:-1
+row 2020-01-02
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"2020-01-02 03:04:05+02"', '$.datetime()')
+fields json_value:25:-1:-1
+row 2020-01-02 01:04:05+00
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"2020-01-02 03:04:05"', '$.datetime()' RETURNING timestamptz)
+fields json_value:1184:8:-1
+row 2020-01-02 03:04:05+00
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"10:20:30"', '$.datetime()' RETURNING time)
+fields json_value:1083:8:-1
+row 10:20:30
+SELECT 1
+> SELECT JSON_VALUE(jsonb 'true', '$' RETURNING bool)
+fields json_value:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_VALUE(jsonb 'true', '$' RETURNING int)
+fields json_value:23:4:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING json)
+fields json_value:114:-1:-1
+row "abc"
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING jsonb)
+fields json_value:3802:-1:-1
+row "abc"
+SELECT 1
+> SELECT JSON_VALUE(jsonb '12', '$' RETURNING jsonb)
+fields json_value:3802:-1:-1
+row 12
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING bytea)
+fields json_value:17:-1:-1
+row \x616263
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING text FORMAT JSON)
+ERROR 42601 cannot specify FORMAT JSON in RETURNING clause of JSON_VALUE() at 53
+> SELECT JSON_VALUE(jsonb '"abc"', '$' RETURNING int[])
+fields json_value:1007:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"{1,2}"', '$' RETURNING int[])
+fields json_value:1007:-1:-1
+row {1,2}
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[]', '$' EMPTY ARRAY ON ERROR)
+ERROR 42601 invalid ON ERROR behavior at 35
+> SELECT JSON_VALUE(jsonb '[]', '$[*]' EMPTY ON EMPTY)
+ERROR 42601 invalid ON EMPTY behavior at 38
+> SELECT JSON_VALUE(jsonb '1', '$' TRUE ON ERROR)
+ERROR 42601 invalid ON ERROR behavior at 34
+> SELECT JSON_VALUE(jsonb '[1]', '$' DEFAULT a ON ERROR) FROM t
+ERROR 42804 can only specify a constant, non-aggregate function, or operator expression for DEFAULT at 44
+> SELECT JSON_VALUE(jsonb '[1]', '$' DEFAULT (SELECT 1) ON ERROR)
+ERROR 42804 can only specify a constant, non-aggregate function, or operator expression for DEFAULT at 44
+> SELECT JSON_VALUE(jsonb '[1]', '$' DEFAULT sum(1) ON ERROR)
+ERROR 42804 can only specify a constant, non-aggregate function, or operator expression for DEFAULT at 44
+> SELECT JSON_VALUE(jsonb '[1]', '$' DEFAULT generate_series(1, 2) ON ERROR)
+ERROR 42804 DEFAULT expression must not return a set at 44
+> SELECT JSON_VALUE(jsonb '[1]', '$' DEFAULT 1 + 2 ON ERROR)
+fields json_value:25:-1:-1
+row 3
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[1]', '$' DEFAULT lower('X') ON ERROR)
+fields json_value:25:-1:-1
+row x
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[1]', '$' RETURNING int DEFAULT point '(1,2)' ON ERROR)
+ERROR 42846 cannot cast behavior expression of type point to integer at 64
+> SELECT JSON_VALUE(jsonb '[1]', '$' RETURNING int DEFAULT NULL ON ERROR)
+fields json_value:23:4:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '[1]', '$' RETURNING int DEFAULT '{"a": 1}'::jsonb ON ERROR)
+fields json_value:23:4:-1
+ERROR 42804 could not coerce ON ERROR expression (DEFAULT) to the RETURNING type
+> SELECT JSON_VALUE(jsonb '{"a": 1}', '$.a' RETURNING int DEFAULT 'x' ON EMPTY)
+ERROR 22P02 invalid input syntax for type integer: "x" at 65
+> SELECT JSON_VALUE(jsonb '{"a": "x"}', '$.a' RETURNING int DEFAULT 5 ON ERROR)
+fields json_value:23:4:-1
+row 5
+SELECT 1
+> SELECT JSON_VALUE(jsonb '{"a": 2}', '$.a + $b' PASSING 3 AS b RETURNING int)
+fields json_value:23:4:-1
+row 5
+SELECT 1
+> SELECT JSON_VALUE(jsonb '{"a": 2}', '$.a + $b' PASSING 3 AS b, 4 AS b)
+fields json_value:25:-1:-1
+row 5
+SELECT 1
+> SELECT JSON_VALUE(jsonb '{"a": 2}', '$.a / 0')
+fields json_value:25:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '{"a": 2}', '$.a / 0' ERROR ON ERROR)
+fields json_value:25:-1:-1
+ERROR 22012 division by zero
+> SELECT a, JSON_VALUE(js, '$.a'), JSON_VALUE(js, '$.c'), JSON_VALUE(js, '$.d' RETURNING numeric) FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_value:25:-1:-1,json_value:25:-1:-1,json_value:1700:-1:-1
+row 1,1,str,NULL
+row 2,12,2020-01-02,1.5
+row 3,NULL,NULL,NULL
+SELECT 3
+> SELECT a, JSON_VALUE(js, p) FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_value:25:-1:-1
+row 1,1
+row 2,NULL
+row 3,NULL
+SELECT 3
+> SELECT a, JSON_VALUE(js, p::jsonpath) FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_value:25:-1:-1
+row 1,1
+row 2,NULL
+row 3,NULL
+SELECT 3
+> SET DateStyle TO 'SQL, DMY'
+SET
+DateStyle=SQL, DMY
+> SELECT JSON_VALUE(jsonb '"2020-01-02"', '$.datetime()')
+fields json_value:25:-1:-1
+row 02/01/2020
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"2020-01-02 03:04:05"', '$.datetime()')
+fields json_value:25:-1:-1
+row 02/01/2020 03:04:05
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"2020-01-02"', '$.datetime()')
+fields json_query:3802:-1:-1
+row "2020-01-02"
+SELECT 1
+> RESET DateStyle
+RESET
+DateStyle=ISO, MDY
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a')
+fields json_query:3802:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]')
+fields json_query:3802:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]' ERROR ON ERROR)
+fields json_query:3802:-1:-1
+ERROR 22034 JSON path expression in JSON_QUERY must return single item when no wrapper is requested
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]' WITH WRAPPER)
+fields json_query:3802:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]' WITH ARRAY WRAPPER)
+fields json_query:3802:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]' WITH CONDITIONAL WRAPPER)
+fields json_query:3802:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[0]' WITH CONDITIONAL WRAPPER)
+fields json_query:3802:-1:-1
+row 1
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[0]' WITH UNCONDITIONAL WRAPPER)
+fields json_query:3802:-1:-1
+row [1]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[0]' WITHOUT WRAPPER)
+fields json_query:3802:-1:-1
+row 1
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[0]' WITHOUT ARRAY WRAPPER)
+fields json_query:3802:-1:-1
+row 1
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.b' WITH WRAPPER)
+fields json_query:3802:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.b' EMPTY ARRAY ON EMPTY)
+fields json_query:3802:-1:-1
+row []
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.b' EMPTY OBJECT ON EMPTY)
+fields json_query:3802:-1:-1
+row {}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.b' EMPTY ON EMPTY)
+fields json_query:3802:-1:-1
+row []
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.b' ERROR ON EMPTY)
+fields json_query:3802:-1:-1
+ERROR 22035 no SQL/JSON item found for specified path
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.b' DEFAULT '"d"' ON EMPTY)
+fields json_query:3802:-1:-1
+row "d"
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]' EMPTY ARRAY ON ERROR)
+fields json_query:3802:-1:-1
+row []
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]' EMPTY OBJECT ON ERROR)
+fields json_query:3802:-1:-1
+row {}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]' DEFAULT '[9]' ON ERROR)
+fields json_query:3802:-1:-1
+row [9]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": [1, 2]}', '$.a[*]' TRUE ON ERROR)
+ERROR 42601 invalid ON ERROR behavior at 51
+> SELECT JSON_QUERY(jsonb '"abc"', '$')
+fields json_query:3802:-1:-1
+row "abc"
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' KEEP QUOTES)
+fields json_query:3802:-1:-1
+row "abc"
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' KEEP QUOTES ON SCALAR STRING)
+fields json_query:3802:-1:-1
+row "abc"
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' OMIT QUOTES)
+fields json_query:3802:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' OMIT QUOTES ERROR ON ERROR)
+fields json_query:3802:-1:-1
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: abc)
+> SELECT JSON_QUERY(jsonb '"[1, 2]"', '$' OMIT QUOTES)
+fields json_query:3802:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING text OMIT QUOTES)
+fields json_query:25:-1:-1
+row abc
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING text)
+fields json_query:25:-1:-1
+row "abc"
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING json)
+fields json_query:114:-1:-1
+row "abc"
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING json OMIT QUOTES)
+fields json_query:114:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING varchar(3))
+fields json_query:1043:-1:7
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING varchar(3) ERROR ON ERROR)
+fields json_query:1043:-1:7
+ERROR 22001 value too long for type character varying(3)
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING char(10) OMIT QUOTES)
+fields json_query:1042:-1:14
+row abc       
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING bytea)
+fields json_query:17:-1:-1
+row \x2261626322
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"abc"', '$' RETURNING bytea FORMAT JSON)
+fields json_query:17:-1:-1
+row \x2261626322
+SELECT 1
+> SELECT JSON_QUERY(jsonb '123', '$' RETURNING int)
+fields json_query:23:4:-1
+row 123
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"123"', '$' RETURNING int)
+fields json_query:23:4:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"123"', '$' RETURNING int OMIT QUOTES)
+fields json_query:23:4:-1
+row 123
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$' RETURNING int)
+fields json_query:23:4:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$' RETURNING int ERROR ON ERROR)
+fields json_query:23:4:-1
+ERROR 22P02 invalid input syntax for type integer: "[1, 2]"
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$' RETURNING text)
+fields json_query:25:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$' RETURNING json)
+fields json_query:114:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": 1}', '$' RETURNING jsonb FORMAT JSON)
+fields json_query:3802:-1:-1
+row {"a": 1}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$' RETURNING int[])
+fields json_query:1007:-1:-1
+row {1,2}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[[1, 2], [3, 4]]', '$' RETURNING int[])
+fields json_query:1007:-1:-1
+row {{1,2},{3,4}}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[[1, 2], [3]]', '$' RETURNING int[] ERROR ON ERROR)
+fields json_query:1007:-1:-1
+ERROR 22P02 malformed JSON array
+> SELECT JSON_QUERY(jsonb '[1, "a"]', '$' RETURNING int[])
+fields json_query:1007:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, "a"]', '$' RETURNING int[] ERROR ON ERROR)
+fields json_query:1007:-1:-1
+ERROR 22P02 invalid input syntax for type integer: "a"
+> SELECT JSON_QUERY(jsonb '["a", null]', '$' RETURNING text[])
+fields json_query:1009:-1:-1
+row {a,NULL}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"{1,2}"', '$' RETURNING int[])
+fields json_query:1007:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"{1,2}"', '$' RETURNING int[] OMIT QUOTES)
+fields json_query:1007:-1:-1
+row {1,2}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '1', '$' RETURNING int[] ERROR ON ERROR)
+fields json_query:1007:-1:-1
+ERROR 22P02 expected JSON array
+> SELECT JSON_QUERY(jsonb '[]', '$[*]' RETURNING int EMPTY ARRAY ON EMPTY)
+fields json_query:23:4:-1
+ERROR 42804 could not coerce ON EMPTY expression (EMPTY ARRAY) to the RETURNING type
+> SELECT JSON_QUERY(jsonb '[]', '$[*]' RETURNING int EMPTY ARRAY ON EMPTY ERROR ON ERROR)
+fields json_query:23:4:-1
+ERROR 22P02 invalid input syntax for type integer: "[]"
+> SELECT JSON_QUERY(jsonb '[]', '$[*]' RETURNING text EMPTY OBJECT ON EMPTY)
+fields json_query:25:-1:-1
+row {}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$[*]' RETURNING int[] EMPTY ARRAY ON ERROR)
+fields json_query:1007:-1:-1
+row {}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$[*]' RETURNING int DEFAULT 5 ON ERROR)
+fields json_query:23:4:-1
+row 5
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$[*]' RETURNING int DEFAULT '5' ON ERROR)
+fields json_query:23:4:-1
+row 5
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$[*]' WITH WRAPPER OMIT QUOTES)
+ERROR 42601 SQL/JSON QUOTES behavior must not be specified when WITH WRAPPER is used at 8
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$[*]' WITH CONDITIONAL WRAPPER KEEP QUOTES)
+fields json_query:3802:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$[*]' UNKNOWN ON ERROR)
+ERROR 42601 invalid ON ERROR behavior at 42
+> SELECT JSON_QUERY(jsonb '[1, 2]', '$[*] ? (@ > $x)' PASSING 1 AS x)
+fields json_query:3802:-1:-1
+row 2
+SELECT 1
+> SELECT JSON_QUERY(jsonb '["2020-01-02"]', '$[0].datetime()')
+fields json_query:3802:-1:-1
+row "2020-01-02"
+SELECT 1
+> SELECT JSON_QUERY(jsonb '["2020-01-02 03:04:05+02"]', '$[0].datetime()' WITH WRAPPER)
+fields json_query:3802:-1:-1
+row ["2020-01-02T03:04:05+02:00"]
+SELECT 1
+> SELECT JSON_QUERY('[1, 2]', '$[1]')
+fields json_query:3802:-1:-1
+row 2
+SELECT 1
+> SELECT JSON_QUERY('[1, 2]'::json, '$[1]')
+fields json_query:3802:-1:-1
+row 2
+SELECT 1
+> SELECT JSON_QUERY('[1, 2]'::bytea, '$[1]')
+ERROR 42846 cannot cast type bytea to jsonb at 19
+> SELECT JSON_QUERY('[1, 2]'::bytea FORMAT JSON, '$[1]')
+fields json_query:3802:-1:-1
+row 2
+SELECT 1
+> SELECT JSON_QUERY(js, '$.e') FROM t ORDER BY a
+fields json_query:3802:-1:-1
+row {"x": true}
+row NULL
+row NULL
+SELECT 3
+> SELECT a, JSON_QUERY(js, '$.b' WITH CONDITIONAL WRAPPER), JSON_QUERY(js, '$.b[*]' WITH WRAPPER) FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_query:3802:-1:-1,json_query:3802:-1:-1
+row 1,[1, 2, 3],[1, 2, 3]
+row 2,[],NULL
+row 3,NULL,NULL
+SELECT 3
+> SELECT JSON_QUERY(jsonb '{"a": 1}', '$.a' RETURNING text DEFAULT a ON EMPTY) FROM t
+ERROR 42804 can only specify a constant, non-aggregate function, or operator expression for DEFAULT at 66
+> CREATE VIEW v1 AS SELECT JSON_EXISTS(js, '$.a') AS e1, JSON_EXISTS(js, 'strict $.b[*] ? (@ > $x)' PASSING 1 AS x, 'q' AS "Y" ERROR ON ERROR) AS e2, JSON_EXISTS(js, '$' UNKNOWN ON ERROR) AS e3, JSON_EXISTS(js, '$' FALSE ON ERROR) AS e4 FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v1')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT JSON_EXISTS(js, '$."a"') AS e1,
+    JSON_EXISTS(js, 'strict $."b"[*]?(@ > $"x")' PASSING 1 AS x, 'q'::text AS "Y" ERROR ON ERROR) AS e2,
+    JSON_EXISTS(js, '$' UNKNOWN ON ERROR) AS e3,
+    JSON_EXISTS(js, '$') AS e4
+   FROM t;
+SELECT 1
+> SELECT * FROM v1 ORDER BY e1, e2
+fields e1@v1.1:16:1:-1,e2@v1.2:16:1:-1,e3@v1.3:16:1:-1,e4@v1.4:16:1:-1
+row t,f,t,t
+row t,t,t,t
+row NULL,NULL,NULL,NULL
+SELECT 3
+> CREATE VIEW v2 AS SELECT JSON_VALUE(js, '$.a') AS v1, JSON_VALUE(js, '$.a' RETURNING int DEFAULT 0 ON EMPTY DEFAULT -1 ON ERROR) AS v2, JSON_VALUE(js, '$.c' RETURNING varchar(5) NULL ON EMPTY ERROR ON ERROR) AS v3, JSON_VALUE(js, '$.d' RETURNING numeric(5,2)) AS v4, JSON_VALUE(js, '$.a' RETURNING jsonb) AS v5, JSON_VALUE('{"a": 1}', '$.a') AS v6 FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT JSON_VALUE(js, '$."a"' RETURNING text) AS v1,
+    JSON_VALUE(js, '$."a"' RETURNING integer DEFAULT 0 ON EMPTY DEFAULT '-1'::integer ON ERROR) AS v2,
+    JSON_VALUE(js, '$."c"' RETURNING character varying(5) ERROR ON ERROR) AS v3,
+    JSON_VALUE(js, '$."d"' RETURNING numeric(5,2)) AS v4,
+    JSON_VALUE(js, '$."a"' RETURNING jsonb) AS v5,
+    JSON_VALUE('{"a": 1}'::text, '$."a"' RETURNING text) AS v6
+   FROM t;
+SELECT 1
+> SELECT a, v1, v2, v5, v4, v6 FROM v2, (SELECT 1 AS a) s ORDER BY v1
+fields a:23:4:-1,v1@v2.1:25:-1:-1,v2@v2.2:23:4:-1,v5@v2.5:3802:-1:-1,v4@v2.4:1700:-1:327686,v6@v2.6:25:-1:-1
+row 1,1,1,1,NULL,1
+row 1,12,12,"12",1.50,1
+row 1,NULL,NULL,NULL,NULL,1
+SELECT 3
+> CREATE VIEW v3 AS SELECT JSON_QUERY(js, '$.b') AS q1, JSON_QUERY(js, '$.b[*]' WITH WRAPPER) AS q2, JSON_QUERY(js, '$.b[*]' WITH CONDITIONAL WRAPPER EMPTY ARRAY ON EMPTY) AS q3, JSON_QUERY(js, '$.c' RETURNING text OMIT QUOTES) AS q4, JSON_QUERY(js, '$.c' RETURNING json KEEP QUOTES EMPTY OBJECT ON ERROR) AS q5, JSON_QUERY(js, '$.x' DEFAULT '[]' ON EMPTY ERROR ON ERROR) AS q6, JSON_QUERY(js, '$.b' RETURNING int[]) AS q7, JSON_QUERY(js::json, '$.e' RETURNING jsonb FORMAT JSON) AS q8 FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v3')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT JSON_QUERY(js, '$."b"' RETURNING jsonb WITHOUT WRAPPER KEEP QUOTES) AS q1,
+    JSON_QUERY(js, '$."b"[*]' RETURNING jsonb WITH UNCONDITIONAL WRAPPER KEEP QUOTES) AS q2,
+    JSON_QUERY(js, '$."b"[*]' RETURNING jsonb WITH CONDITIONAL WRAPPER KEEP QUOTES EMPTY ARRAY ON EMPTY) AS q3,
+    JSON_QUERY(js, '$."c"' RETURNING text WITHOUT WRAPPER OMIT QUOTES) AS q4,
+    JSON_QUERY(js, '$."c"' RETURNING json WITHOUT WRAPPER KEEP QUOTES EMPTY OBJECT ON ERROR) AS q5,
+    JSON_QUERY(js, '$."x"' RETURNING jsonb WITHOUT WRAPPER KEEP QUOTES DEFAULT '[]'::jsonb ON EMPTY ERROR ON ERROR) AS q6,
+    JSON_QUERY(js, '$."b"' RETURNING integer[] WITHOUT WRAPPER KEEP QUOTES) AS q7,
+    JSON_QUERY((js)::json, '$."e"' RETURNING jsonb FORMAT JSON WITHOUT WRAPPER KEEP QUOTES) AS q8
+   FROM t;
+SELECT 1
+> SELECT * FROM v3 ORDER BY q4
+fields q1@v3.1:3802:-1:-1,q2@v3.2:3802:-1:-1,q3@v3.3:3802:-1:-1,q4@v3.4:25:-1:-1,q5@v3.5:114:-1:-1,q6@v3.6:3802:-1:-1,q7@v3.7:1007:-1:-1,q8@v3.8:3802:-1:-1
+row [],NULL,[],2020-01-02,"2020-01-02",[],{},NULL
+row [1, 2, 3],[1, 2, 3],[1, 2, 3],str,"str",[],{1,2,3},{"x": true}
+row NULL,NULL,[],NULL,NULL,[],NULL,NULL
+SELECT 3
+> CREATE VIEW v4 AS SELECT JSON_VALUE(js, '$.a' RETURNING text DEFAULT 'x' || 'y' ON EMPTY) AS d1, JSON_QUERY(js, '$.a' RETURNING text DEFAULT lower('Q') ON ERROR) AS d2, JSON_VALUE(js, p) AS d3, JSON_EXISTS(js::text FORMAT JSON, '$') AS d4 FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v4')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT JSON_VALUE(js, '$."a"' RETURNING text DEFAULT ('x'::text || 'y'::text) ON EMPTY) AS d1,
+    JSON_QUERY(js, '$."a"' RETURNING text WITHOUT WRAPPER KEEP QUOTES DEFAULT lower('Q'::text) ON ERROR) AS d2,
+    JSON_VALUE(js, (p)::jsonpath RETURNING text) AS d3,
+    JSON_EXISTS((js)::text FORMAT JSON, '$') AS d4
+   FROM t;
+SELECT 1
+> SELECT * FROM v4 ORDER BY d3
+fields d1@v4.1:25:-1:-1,d2@v4.2:25:-1:-1,d3@v4.3:25:-1:-1,d4@v4.4:16:1:-1
+row 1,1,1,t
+row 12,"12",NULL,t
+row NULL,NULL,NULL,NULL
+SELECT 3
+> CREATE DOMAIN dpos AS int CHECK (VALUE > 0)
+CREATE DOMAIN
+> CREATE DOMAIN dnn AS int NOT NULL
+CREATE DOMAIN
+> SELECT JSON_VALUE(jsonb '5', '$' RETURNING dpos)
+fields json_value:23:4:-1
+row 5
+SELECT 1
+> SELECT JSON_VALUE(jsonb '-5', '$' RETURNING dpos)
+fields json_value:23:4:-1
+row NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '-5', '$' RETURNING dpos ERROR ON ERROR)
+fields json_value:23:4:-1
+ERROR 23514 value for domain dpos violates check constraint "dpos_check"
+> SELECT JSON_VALUE(jsonb '-5', '$' RETURNING dpos DEFAULT 2 ON ERROR)
+fields json_value:23:4:-1
+row 2
+SELECT 1
+> SELECT JSON_VALUE(jsonb '-5', '$' RETURNING dpos DEFAULT -2 ON ERROR)
+fields json_value:23:4:-1
+ERROR 42804 could not coerce ON ERROR expression (DEFAULT) to the RETURNING type
+> SELECT JSON_VALUE(jsonb '[]', '$[*]' RETURNING dpos DEFAULT -2 ON EMPTY)
+fields json_value:23:4:-1
+ERROR 42804 could not coerce ON EMPTY expression (DEFAULT) to the RETURNING type
+> SELECT JSON_VALUE(jsonb '[]', '$[*]' RETURNING dnn)
+fields json_value:23:4:-1
+ERROR 42804 could not coerce ON EMPTY expression (NULL) to the RETURNING type
+> SELECT JSON_VALUE(jsonb '[]', '$[*]' RETURNING dnn ERROR ON ERROR)
+fields json_value:23:4:-1
+ERROR 23502 domain dnn does not allow null values
+> SELECT JSON_VALUE(NULL::jsonb, '$' RETURNING dnn)
+fields json_value:23:4:-1
+ERROR 42804 could not coerce ON ERROR expression (NULL) to the RETURNING type
+> SELECT JSON_VALUE(NULL::jsonb, '$' RETURNING dnn ERROR ON ERROR)
+fields json_value:23:4:-1
+ERROR 23502 domain dnn does not allow null values
+> SELECT JSON_QUERY(jsonb '-5', '$' RETURNING dpos)
+fields json_query:23:4:-1
+row NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb '-5', '$' RETURNING dpos ERROR ON ERROR)
+fields json_query:23:4:-1
+ERROR 23514 value for domain dpos violates check constraint "dpos_check"
+> SELECT JSON_QUERY(jsonb '"7"', '$' RETURNING dpos OMIT QUOTES)
+fields json_query:23:4:-1
+row 7
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', '$.a' RETURNING int), JSON_EXISTS(jsonb '{"a": 1}', '$.b' RETURNING int)
+ERROR 42601 syntax error at or near "RETURNING" at 44
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', '$.a' RETURNING text), JSON_EXISTS(jsonb '{"a": 1}', '$.b' RETURNING dpos)
+ERROR 42601 syntax error at or near "RETURNING" at 44
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', '$.b' RETURNING dpos ERROR ON ERROR)
+ERROR 42601 syntax error at or near "RETURNING" at 44
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'strict $.b' ERROR ON ERROR)
+fields json_exists:16:1:-1
+ERROR 2203A JSON object does not contain key "b"
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'strict $.b' UNKNOWN ON ERROR)
+fields json_exists:16:1:-1
+row NULL
+SELECT 1
+> SELECT JSON_EXISTS(jsonb '{"a": 1}', 'strict $.b' TRUE ON ERROR)
+fields json_exists:16:1:-1
+row t
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[[1, 2], 3]', '$' RETURNING int[] ERROR ON ERROR)
+fields json_query:1007:-1:-1
+ERROR 22P02 expected JSON array
+> SELECT JSON_QUERY(jsonb '[[[1], [2]], [[3], 4]]', '$' RETURNING int[] ERROR ON ERROR)
+fields json_query:1007:-1:-1
+ERROR 22P02 expected JSON array
+> SELECT JSON_QUERY(jsonb '[[1, 2], [3, 4]]', '$' RETURNING text[])
+fields json_query:1009:-1:-1
+row {{1,2},{3,4}}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[["a", null], [true, {"b": 1}]]', '$' RETURNING text[])
+fields json_query:1009:-1:-1
+row {{a,NULL},{true,"{\"b\": 1}"}}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '["a", 1]', '$' RETURNING jsonb[]), JSON_QUERY(jsonb '["a", 1]', '$' RETURNING json[])
+fields json_query:3807:-1:-1,json_query:199:-1:-1
+row {"\"a\"",1},{"\"a\"",1}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[[], []]', '$' RETURNING int[]), JSON_QUERY(jsonb '[]', '$' RETURNING int[])
+fields json_query:1007:-1:-1,json_query:1007:-1:-1
+row {},{}
+SELECT 1
+> SELECT JSON_QUERY(jsonb '{"a": 1}', '$' RETURNING int[] ERROR ON ERROR)
+fields json_query:1007:-1:-1
+ERROR 22P02 expected JSON array
+> SELECT JSON_QUERY(jsonb 'null', '$' RETURNING int ERROR ON ERROR)
+fields json_query:23:4:-1
+ERROR 22P02 invalid input syntax for type integer: "null"
+> SELECT JSON_QUERY(jsonb 'null', '$' RETURNING text), JSON_QUERY(jsonb 'null', '$' RETURNING text OMIT QUOTES)
+fields json_query:25:-1:-1,json_query:25:-1:-1
+row null,null
+SELECT 1
+> SELECT JSON_QUERY(jsonb '"x"', '$' RETURNING json), JSON_QUERY(jsonb '"x"', '$' RETURNING json OMIT QUOTES ERROR ON ERROR)
+fields json_query:114:-1:-1,json_query:114:-1:-1
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: x)
+> SELECT JSON_VALUE(jsonb '{"a": 1}', '$.a ? (@ > $x)' PASSING 0 AS x), JSON_VALUE(jsonb '{"a": 1}', '$.a ? (@ > $x)' PASSING 2 AS x)
+fields json_value:25:-1:-1,json_value:25:-1:-1
+row 1,NULL
+SELECT 1
+> SELECT JSON_QUERY(jsonb 'null', '$x' PASSING 1.5::float4 AS x), JSON_QUERY(jsonb 'null', '$x' PASSING 2.5::float8 AS x), JSON_QUERY(jsonb 'null', '$x' PASSING 'a'::varchar AS x)
+fields json_query:3802:-1:-1,json_query:3802:-1:-1,json_query:3802:-1:-1
+row 1.5,2.5,"a"
+SELECT 1
+> SELECT JSON_QUERY(jsonb 'null', '$x' PASSING date '2020-01-02' AS x), JSON_VALUE(jsonb 'null', '$x' PASSING timestamptz '2020-01-02 03:04:05+02' AS x)
+fields json_query:3802:-1:-1,json_value:25:-1:-1
+row "2020-01-02",2020-01-02 01:04:05+00
+SELECT 1
+> SELECT JSON_QUERY(jsonb 'null', '$x' PASSING '{"a": [1]}'::json AS x), JSON_QUERY(jsonb 'null', '$x.a' PASSING jsonb '{"a": [1]}' AS x)
+fields json_query:3802:-1:-1,json_query:3802:-1:-1
+row {"a": [1]},[1]
+SELECT 1
+> SELECT JSON_QUERY(jsonb 'null', '$x' PASSING NULL::int AS x), JSON_QUERY(jsonb 'null', '$x' PASSING true AS x)
+fields json_query:3802:-1:-1,json_query:3802:-1:-1
+row null,true
+SELECT 1
+> SELECT JSON_QUERY(jsonb 'null', '$y' PASSING 1 AS x)
+fields json_query:3802:-1:-1
+ERROR 42704 could not find jsonpath variable "y"
+> SELECT JSON_QUERY(jsonb 'null', '$y' PASSING 1 AS x ERROR ON ERROR)
+fields json_query:3802:-1:-1
+ERROR 42704 could not find jsonpath variable "y"
+> SELECT JSON_QUERY(jsonb 'null', '$x' PASSING 1::oid AS x)
+fields json_query:3802:-1:-1
+row "1"
+SELECT 1
+> SELECT JSON_QUERY(jsonb '[{"a": 1}, {"a": 2}]', '$[*].keyvalue()' WITH WRAPPER)
+fields json_query:3802:-1:-1
+row [{"id": 12, "key": "a", "value": 1}, {"id": 36, "key": "a", "value": 2}]
+SELECT 1
+> SELECT JSON_QUERY(jsonb 'null', '$x.keyvalue()' PASSING jsonb '{"b": 2}' AS x, jsonb '{"c": 3}' AS y WITH WRAPPER)
+fields json_query:3802:-1:-1
+row [{"id": 10000000000, "key": "b", "value": 2}]
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"2020-01-02"', '$.datetime()'), JSON_VALUE(jsonb '"2020-01-02 03:04:05+02"', '$.datetime()'), JSON_QUERY(jsonb '"12:30"', '$.datetime()')
+fields json_value:25:-1:-1,json_value:25:-1:-1,json_query:3802:-1:-1
+row 2020-01-02,2020-01-02 01:04:05+00,NULL
+SELECT 1
+> SELECT JSON_VALUE(jsonb '"2020-01-02"', '$.datetime()' RETURNING date), JSON_VALUE(jsonb '"2020-01-02"', '$.datetime()' RETURNING json)
+fields json_value:1082:4:-1,json_value:114:-1:-1
+row 2020-01-02,"2020-01-02"
+SELECT 1
+> SELECT JSON_VALUE(jsonb 'true', '$' RETURNING bool), JSON_VALUE(jsonb '1.0', '$' RETURNING int), JSON_VALUE(jsonb '1.0', '$' RETURNING int ERROR ON ERROR)
+fields json_value:16:1:-1,json_value:23:4:-1,json_value:23:4:-1
+ERROR 22P02 invalid input syntax for type integer: "1.0"
+> CREATE VIEW t2 AS SELECT * FROM (VALUES (1, '[]'::jsonb), (2, NULL), (3, '[1]'), (4, NULL)) AS v (a, js)
+CREATE VIEW
+> SELECT a, JSON_QUERY(js, '$[*]' EMPTY ARRAY ON EMPTY), JSON_VALUE(js, '$[*]' DEFAULT 'e' ON EMPTY DEFAULT 'r' ON ERROR), JSON_VALUE(js, 'strict $[0]' DEFAULT 'e' ON EMPTY DEFAULT 'r' ON ERROR) FROM t2
+fields a@t2.1:23:4:-1,json_query:3802:-1:-1,json_value:25:-1:-1,json_value:25:-1:-1
+row 1,[],e,r
+row 2,[],NULL,r
+row 3,1,1,1
+row 4,NULL,NULL,NULL
+SELECT 4
+> SELECT count(JSON_VALUE(js, '$[*]' RETURNING dnn DEFAULT 5 ON EMPTY)) FROM t2
+fields count:20:8:-1
+ERROR 42804 could not coerce ON EMPTY expression (DEFAULT) to the RETURNING type
+> SELECT count(JSON_VALUE(js, '$[*]' RETURNING dnn DEFAULT 5 ON EMPTY)) FROM t2 WHERE a < 2
+fields count:20:8:-1
+row 1
+SELECT 1

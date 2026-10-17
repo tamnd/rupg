@@ -531,7 +531,7 @@ fn coerce_to_domain(
 }
 
 /// `hide_coercion_node`: a cast that the analyzer made shows as implicit.
-fn hide_cast(expr: &mut Expr) {
+pub(crate) fn hide_cast(expr: &mut Expr) {
     match &mut expr.kind {
         ExprKind::Func(Func { form, .. })
             if matches!(form, FuncForm::ExplicitCast | FuncForm::ImplicitCast) =>

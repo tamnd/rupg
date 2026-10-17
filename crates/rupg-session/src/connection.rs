@@ -2628,6 +2628,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sqljson_agg.test")));
     }
 
+    /// The SQL/JSON query functions `JSON_EXISTS`, `JSON_VALUE` and `JSON_QUERY`: `PASSING`, the types of `RETURNING` with domains and arrays, the wrappers, `OMIT QUOTES`, the behaviors `ON EMPTY` and `ON ERROR` and their casts, the errors of the analyzer and of the path, the flags that a null context item reads from the row before, and the text of views. `connection/sqljson_query.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sqljson_query() {
+        big_stack(|| script(include_str!("connection/sqljson_query.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

@@ -402,6 +402,9 @@ impl<'a> Fold<'a> {
                 }
             }
             ExprKind::IsJson(p) => self.subqueries(&mut p.expr),
+            ExprKind::JsonExpr(j) => {
+                j.children_mut().into_iter().try_for_each(|e| self.subqueries(e))
+            }
             ExprKind::Window(w) => {
                 self.all(&mut w.args)?;
                 match &mut w.filter {
@@ -680,6 +683,14 @@ impl<'a> Fold<'a> {
                 let arg = self.expr(&p.expr)?;
                 let p = IsJson { expr: arg, ..(**p).clone() };
                 Ok(with(expr, ExprKind::IsJson(Box::new(p))))
+            }
+            // A SQL/JSON query function is not folded, as in PostgreSQL. Its parts are.
+            ExprKind::JsonExpr(j) => {
+                let mut j = j.clone();
+                for part in j.children_mut() {
+                    *part = self.expr(part)?;
+                }
+                Ok(with(expr, ExprKind::JsonExpr(j)))
             }
             ExprKind::Window(w) => {
                 let mut w = w.clone();

@@ -89,6 +89,8 @@ pub enum ExprKind {
     JsonCtor(Box<JsonCtor>),
     /// `JsonIsPredicate`: `IS JSON`, of type `boolean`.
     IsJson(Box<IsJson>),
+    /// `JsonExpr`: `JSON_EXISTS`, `JSON_QUERY` or `JSON_VALUE`.
+    JsonExpr(Box<JsonExpr>),
 }
 
 /// The whole row of a join, or of the alias of `USING`.
@@ -403,6 +405,115 @@ pub struct IsJson {
     pub base_type: u32,
 }
 
+/// `JsonExprOp`: the function of a [`JsonExpr`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonExprOp {
+    /// `JSON_EXISTS`, which gives true when the path finds an item.
+    Exists,
+    /// `JSON_QUERY`, which gives the item that the path finds as JSON.
+    Query,
+    /// `JSON_VALUE`, which gives the scalar item that the path finds as a SQL value.
+    Value,
+}
+
+/// `JsonWrapper`: the `WRAPPER` clause of `JSON_QUERY`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JsonWrapper {
+    /// No clause, which is the same as `WITHOUT WRAPPER`.
+    #[default]
+    Unspec,
+    /// `WITHOUT WRAPPER`.
+    None,
+    /// `WITH CONDITIONAL WRAPPER`: an array only for more than one item.
+    Conditional,
+    /// `WITH UNCONDITIONAL WRAPPER`: always an array.
+    Unconditional,
+}
+
+/// `JsonBehaviorType`: what a SQL/JSON function gives on an error or when the path finds no item.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonBehaviorKind {
+    Null,
+    Error,
+    Empty,
+    True,
+    False,
+    Unknown,
+    EmptyArray,
+    EmptyObject,
+    Default,
+}
+
+impl JsonBehaviorKind {
+    /// The name of the behavior as `ON ERROR` and `ON EMPTY` show it.
+    pub fn name(self) -> &'static str {
+        match self {
+            JsonBehaviorKind::Null => "NULL",
+            JsonBehaviorKind::Error => "ERROR",
+            JsonBehaviorKind::Empty => "EMPTY",
+            JsonBehaviorKind::True => "TRUE",
+            JsonBehaviorKind::False => "FALSE",
+            JsonBehaviorKind::Unknown => "UNKNOWN",
+            JsonBehaviorKind::EmptyArray => "EMPTY ARRAY",
+            JsonBehaviorKind::EmptyObject => "EMPTY OBJECT",
+            JsonBehaviorKind::Default => "DEFAULT",
+        }
+    }
+}
+
+/// `JsonBehavior`: an `ON ERROR` or an `ON EMPTY` clause.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonBehavior {
+    pub kind: JsonBehaviorKind,
+    /// The value of the behavior, or `None` for `ERROR`.
+    pub expr: Option<Expr>,
+    /// True when the executor casts the value to the type of `RETURNING` at run time, as `json_populate_type` does.
+    pub coerce: bool,
+}
+
+/// `JsonExpr`: `JSON_EXISTS`, `JSON_QUERY` or `JSON_VALUE`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonExpr {
+    pub op: JsonExprOp,
+    /// The context item as a `jsonb` value.
+    pub formatted: Expr,
+    /// The path, of type `jsonpath`.
+    pub path: Expr,
+    /// The names and the values of the `PASSING` clause.
+    pub passing: Vec<(String, Expr)>,
+    pub returning: JsonReturning,
+    /// `ON EMPTY`, which `JSON_EXISTS` does not have.
+    pub on_empty: Option<JsonBehavior>,
+    pub on_error: JsonBehavior,
+    pub wrapper: JsonWrapper,
+    /// `OMIT QUOTES`, which is always true for `JSON_VALUE`.
+    pub omit_quotes: bool,
+    /// True when the executor casts the result to the type of `RETURNING` as `json_populate_type` does.
+    pub json_coercion: bool,
+    /// True when the executor casts the text of the result to the type of `RETURNING` with its input function.
+    pub io_coercion: bool,
+}
+
+impl JsonExpr {
+    /// The context item, the path, the values of `PASSING` and the values of the behaviors.
+    pub fn children(&self) -> Vec<&Expr> {
+        let mut all = vec![&self.formatted, &self.path];
+        all.extend(self.passing.iter().map(|(_, e)| e));
+        let behaviors = self.on_empty.iter().chain([&self.on_error]);
+        all.extend(behaviors.filter_map(|b| b.expr.as_ref()));
+        all
+    }
+
+    /// [`JsonExpr::children`], to change.
+    pub fn children_mut(&mut self) -> Vec<&mut Expr> {
+        let JsonExpr { formatted, path, passing, on_empty, on_error, .. } = self;
+        let mut all = vec![formatted, path];
+        all.extend(passing.iter_mut().map(|(_, e)| e));
+        all.extend(on_empty.iter_mut().chain([on_error]).filter_map(|b| b.expr.as_mut()));
+        all
+    }
+}
+
 /// A call of a window function, as `WindowFunc`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowFunc {
@@ -569,6 +680,7 @@ impl Expr {
             ExprKind::JsonValue(v) => vec![&v.raw, &v.formatted],
             ExprKind::JsonCtor(c) => c.args.iter().chain(&c.func).chain(&c.coercion).collect(),
             ExprKind::IsJson(p) => vec![&p.expr],
+            ExprKind::JsonExpr(j) => j.children(),
             ExprKind::Case(case) => {
                 let mut all: Vec<&Expr> = case.arg.as_deref().into_iter().collect();
                 for (when, then) in &case.whens {
@@ -630,6 +742,7 @@ impl Expr {
                 args.iter_mut().chain(func).chain(coercion).collect()
             }
             ExprKind::IsJson(p) => vec![&mut p.expr],
+            ExprKind::JsonExpr(j) => j.children_mut(),
             ExprKind::Case(case) => {
                 let mut all: Vec<&mut Expr> = case.arg.as_deref_mut().into_iter().collect();
                 for (when, then) in &mut case.whens {

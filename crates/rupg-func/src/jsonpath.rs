@@ -13,10 +13,10 @@ use std::rc::Rc;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_types::{
-    DateFormat, DateOrder, DateStyle, FixedZone, JSONPATH_LAST, JsonItem, JsonNode, JsonTree,
-    Numeric, NumericSign, PathItem, PathOp, UNIX_TO_POSTGRES_USECS, USECS_PER_SEC, Value,
+    DateFormat, DateOrder, DateStyle, FixedZone, JSONPATH_LAST, JsonItem, JsonNode, JsonPath,
+    JsonTree, Numeric, NumericSign, PathItem, PathOp, UNIX_TO_POSTGRES_USECS, USECS_PER_SEC, Value,
     adjust_time, adjust_timestamp, bool_in, date_out, float8_in, int4_in, int8_in, json_escape,
-    jsonpath_regex_flags, local_offset, numeric_in, numeric_out, time_out, timestamp_out,
+    jsonpath_regex_flags, local_offset, numeric_in, numeric_out, oid, time_out, timestamp_out,
     timestamptz_out,
 };
 
@@ -324,11 +324,95 @@ fn head(chain: &[PathItem]) -> Result<&PathItem> {
     chain.first().ok_or_else(|| Error::internal("empty jsonpath expression"))
 }
 
+/// The variables of a path.
+enum Vars<'a> {
+    /// An operator, which has no variables.
+    None,
+    /// The object of the argument `vars` of a function.
+    Object(Rc<Doc>),
+    /// The `PASSING` clause of a SQL/JSON query function.
+    Passing(&'a [PathVar]),
+}
+
+/// A value of the `PASSING` clause of a SQL/JSON query function: its name, its type and its value.
+#[derive(Clone, Debug, PartialEq)]
+pub struct PathVar {
+    pub name: String,
+    pub ty: u32,
+    pub value: Value,
+}
+
+/// An item that a SQL/JSON query function finds.
+#[derive(Clone, Debug, PartialEq)]
+pub enum SqlJsonItem {
+    Null,
+    Bool(bool),
+    Numeric(Numeric),
+    String(String),
+    /// A `date`, `time`, `timetz`, `timestamp` or `timestamptz` value, and its text in `jsonb`.
+    Datetime(Value, String),
+    /// An array or an object, as the text of `jsonb`.
+    Container(String),
+}
+
+impl SqlJsonItem {
+    /// The text of the item as `jsonb`.
+    pub fn jsonb(&self) -> String {
+        let mut out = String::new();
+        match self {
+            SqlJsonItem::Null => out.push_str("null"),
+            SqlJsonItem::Bool(b) => out.push_str(if *b { "true" } else { "false" }),
+            SqlJsonItem::Numeric(n) => out.push_str(&numeric_text(n)),
+            SqlJsonItem::String(s) | SqlJsonItem::Datetime(_, s) => json_escape(s, &mut out),
+            SqlJsonItem::Container(text) => out.push_str(text),
+        }
+        out
+    }
+}
+
+/// `JsonItemFromDatum`: the item of a value of `PASSING`.
+fn passing_item(call: &Call<'_>, var: &PathVar) -> Result<Item> {
+    Ok(match (var.ty, &var.value) {
+        (_, Value::Null) => Item::Null,
+        (oid::BOOL, Value::Bool(b)) => Item::Bool(*b),
+        (oid::NUMERIC, Value::Numeric(n)) => Item::Numeric(n.clone()),
+        (oid::INT2 | oid::INT4 | oid::INT8, value) => {
+            Item::Numeric(Numeric::from_integer(value.as_i64().ok_or_else(bad_value)?.into()))
+        }
+        (oid::FLOAT4, value @ Value::Float4(_)) => {
+            match crate::cast::float4_to_numeric(call, std::slice::from_ref(value))? {
+                Value::Numeric(n) => Item::Numeric(n),
+                _ => return Err(bad_value()),
+            }
+        }
+        (oid::FLOAT8, Value::Float8(f)) => Item::Numeric(Numeric::from_f64(*f)),
+        (oid::TEXT | oid::VARCHAR, Value::Text(s)) => Item::String(s.clone()),
+        (oid::DATE | oid::TIME | oid::TIMETZ | oid::TIMESTAMP | oid::TIMESTAMPTZ, value) => {
+            Item::Datetime(value.clone(), datetime_text(value, 0)?)
+        }
+        (oid::JSONB, Value::Text(text)) => Doc::parse(text.clone())?.get(0)?,
+        (oid::JSON, Value::Text(text)) => {
+            let Value::Text(text) = crate::input(oid::JSONB, text, -1, call.session)? else {
+                return Err(bad_value());
+            };
+            Doc::parse(text)?.get(0)?
+        }
+        (ty, _) => {
+            return Err(Error::new(
+                SqlState::INVALID_PARAMETER_VALUE,
+                format!(
+                    "could not convert value of type {} to jsonpath",
+                    crate::type_message_name(ty, call.session)
+                ),
+            ));
+        }
+    })
+}
+
 /// `JsonPathExecContext`.
 struct Exec<'a> {
     call: &'a Call<'a>,
-    /// The object of the variables, or `None` for an operator.
-    vars: Option<Rc<Doc>>,
+    vars: Vars<'a>,
     lax: bool,
     ignore_structural: bool,
     throw: bool,
@@ -593,16 +677,27 @@ impl Exec<'_> {
             PathItem::Numeric(n) => Item::Numeric(n.clone()),
             PathItem::String(s) => Item::String(s.clone()),
             PathItem::Variable(name) => {
-                let found = self.vars.as_ref().and_then(|vars| Some((vars, vars.field(0, name)?)));
-                let Some((vars, child)) = found else {
-                    return Err(Error::new(
+                let missing = || {
+                    Error::new(
                         SqlState::UNDEFINED_OBJECT,
                         format!("could not find jsonpath variable \"{name}\""),
-                    ));
+                    )
                 };
-                let vars = Rc::clone(vars);
-                self.base = Base { node: Some((Rc::clone(&vars), 0)), id: 1 };
-                vars.get(child)?
+                match &self.vars {
+                    Vars::None => return Err(missing()),
+                    Vars::Object(vars) => {
+                        let vars = Rc::clone(vars);
+                        let child = vars.field(0, name).ok_or_else(missing)?;
+                        self.base = Base { node: Some((Rc::clone(&vars), 0)), id: 1 };
+                        vars.get(child)?
+                    }
+                    Vars::Passing(vars) => {
+                        let at = vars.iter().position(|v| v.name == *name).ok_or_else(missing)?;
+                        let item = passing_item(self.call, &vars[at])?;
+                        self.base = Base::of(&item, i64::try_from(at + 1).unwrap_or(i64::MAX));
+                        item
+                    }
+                }
             }
             _ => return Err(Error::internal("unexpected jsonpath item type")),
         })
@@ -1703,14 +1798,32 @@ fn execute(
             "Jsonpath parameters should be encoded as key-value pairs of \"vars\" object.",
         ));
     }
+    let last_id = 1 + i64::from(vars.is_some());
+    let vars = vars.map_or(Vars::None, Vars::Object);
+    let (res, items) = run(call, &target, path, vars, last_id, !silent, want, use_tz)?;
+    Ok((res, items, silent))
+}
+
+/// The run of a path on the root of a document, with the id that `.keyvalue()` gives after the ids of the variables.
+#[allow(clippy::too_many_arguments)]
+fn run(
+    call: &Call<'_>,
+    target: &Rc<Doc>,
+    path: &JsonPath,
+    vars: Vars<'_>,
+    last_id: i64,
+    throw: bool,
+    want: bool,
+    use_tz: bool,
+) -> Result<(Res, Vec<Item>)> {
     let root = target.get(0)?;
     let mut exec = Exec {
         call,
-        last_id: 1 + i64::from(vars.is_some()),
+        last_id,
         vars,
         lax: path.lax,
         ignore_structural: path.lax,
-        throw: !silent,
+        throw,
         root: root.clone(),
         current: root.clone(),
         base: Base { node: None, id: 0 },
@@ -1729,7 +1842,42 @@ fn execute(
     } else {
         exec.item(&path.expr, &root, want.then_some(&mut items))?
     };
-    Ok((res, items, silent))
+    Ok((res, items))
+}
+
+/// `executeJsonPath` for `JSON_EXISTS`, `JSON_QUERY` and `JSON_VALUE`: whether the path on the `jsonb` value finds an item, and the items when `want` is true. The result is `None` for an error of the path when `throw` is false. The casts of the datetime values can use the zone of the session.
+///
+/// # Errors
+///
+/// The error of the path when `throw` is true, and the errors that a silent path also gives, such as a variable that `PASSING` does not have.
+pub fn sql_json_path(
+    call: &Call<'_>,
+    target: &Value,
+    path: &Value,
+    vars: &[PathVar],
+    throw: bool,
+    want: bool,
+) -> Result<Option<(bool, Vec<SqlJsonItem>)>> {
+    let Value::Text(target) = target else { return Err(bad_value()) };
+    let Value::JsonPath(path) = path else { return Err(bad_value()) };
+    let target = Doc::parse(target.clone())?;
+    let last_id = 1 + i64::try_from(vars.len()).unwrap_or(i64::MAX);
+    let (res, items) = run(call, &target, path, Vars::Passing(vars), last_id, throw, want, true)?;
+    if res == Res::Error {
+        return Ok(None);
+    }
+    let items = items
+        .into_iter()
+        .map(|item| match item {
+            Item::Null => SqlJsonItem::Null,
+            Item::Bool(b) => SqlJsonItem::Bool(b),
+            Item::Numeric(n) => SqlJsonItem::Numeric(n),
+            Item::String(s) => SqlJsonItem::String(s),
+            Item::Datetime(value, text) => SqlJsonItem::Datetime(value, text),
+            Item::Node(doc, at) => SqlJsonItem::Container(doc.text(at).to_owned()),
+        })
+        .collect();
+    Ok(Some((res == Res::Ok, items)))
 }
 
 /// `jsonb_path_exists` and `@?`: null for an error in a silent call.
