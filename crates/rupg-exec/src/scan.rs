@@ -21,6 +21,12 @@ const XMIN_ATTNUM: i16 = -2;
 /// `FrozenTransactionId`: the transaction ID of a row that each snapshot sees.
 const FROZEN_TRANSACTION_ID: u32 = 2;
 
+/// The OID of the catalog `pg_authid`.
+const PG_AUTHID: u32 = 1260;
+
+/// The index of the column `rolpassword` of `pg_authid`. The static rows have no password, and the session gives the stored secret of each role.
+const ROLPASSWORD: usize = 10;
+
 /// The row number of a relation that is null in a tuple.
 pub(crate) const NONE: usize = usize::MAX;
 
@@ -272,6 +278,15 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
                 });
             }
             table.push(values);
+        }
+        if relation.oid == PG_AUTHID && used.get(ROLPASSWORD).copied().unwrap_or(false) {
+            for (row, values) in table.iter_mut().enumerate() {
+                if let Values::Oid(roles) = catalog.rows[0].values
+                    && let Some(password) = session.role_password(roles[row])
+                {
+                    values[ROLPASSWORD] = Value::text(password);
+                }
+            }
         }
         if let Some(user) = session.catalog() {
             table.extend(crate::user::rows(catalog, user, session)?);

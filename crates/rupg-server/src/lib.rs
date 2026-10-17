@@ -282,7 +282,7 @@ impl Server {
         let shared = Arc::new(Shared {
             base,
             roles: Roles { superuser: config.superuser.clone() },
-            secret,
+            secret: secret.clone(),
             hba,
             ident,
             net: net.clone(),
@@ -291,7 +291,9 @@ impl Server {
             iterations,
             log: config.log.clone(),
             clock: config.clock.clone(),
-            store: Arc::new(Store::with_tasks(tasks.clone()).with_auth(Arc::new(files))),
+            store: Arc::new(
+                Store::with_tasks(tasks.clone()).with_auth(Arc::new(files)).with_password(secret),
+            ),
             entropy,
             tasks: tasks.clone(),
             keys: Mutex::new(BTreeMap::new()),

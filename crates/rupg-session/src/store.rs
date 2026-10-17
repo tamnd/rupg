@@ -34,6 +34,8 @@ pub struct Store {
     stats_reset: AtomicI64,
     /// The authentication files of the server, which the views `pg_hba_file_rules` and `pg_ident_file_mappings` read.
     auth: Option<Arc<dyn AuthFiles>>,
+    /// The stored secret of the bootstrap superuser, which `pg_authid.rolpassword` shows.
+    password: Option<String>,
     /// The advisory locks of the sessions.
     locks: Locks,
     /// The rows of the files of the sequences that the sessions changed, by the number of the file. The rows are not in a transaction, so a rollback does not undo a change, as in PostgreSQL.
@@ -101,6 +103,17 @@ impl Store {
     #[must_use]
     pub fn with_auth(self, auth: Arc<dyn AuthFiles>) -> Store {
         Store { auth: Some(auth), ..self }
+    }
+
+    /// The store with the stored secret of the bootstrap superuser, in the format of `pg_authid.rolpassword`.
+    #[must_use]
+    pub fn with_password(self, password: Option<String>) -> Store {
+        Store { password, ..self }
+    }
+
+    /// The stored secret of the bootstrap superuser, or `None` for a superuser with no password.
+    pub(crate) fn password(&self) -> Option<&str> {
+        self.password.as_deref()
     }
 
     /// The authentication files of the server, or `None` for a store with no server.
