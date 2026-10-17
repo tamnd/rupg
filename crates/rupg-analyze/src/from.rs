@@ -1047,6 +1047,28 @@ impl Analyzer<'_> {
         });
     }
 
+    /// The range table of `transformRuleStmt`: a new scope with the relation of a rule as `old`, then as `new`. A qualified name can use the names of `visible`, and an unqualified name can use their columns only with `columns`.
+    pub(crate) fn rule_scope(
+        &mut self,
+        oid: u32,
+        name: &str,
+        visible: [bool; 2],
+        columns: bool,
+    ) -> Result<()> {
+        self.scope = Scope::default();
+        for (refname, visible) in ["old", "new"].into_iter().zip(visible) {
+            let alias = Alias { aliasname: Some(refname.into()), ..Alias::default() };
+            let relation =
+                Relation::new(oid, self.open_relation(oid, name, None)?, None, None, None);
+            let mut item = self.add_relation(relation, refname.to_string(), Some(&alias))?;
+            item.cols_visible = columns;
+            if visible {
+                self.scope.namespace.push(item);
+            }
+        }
+        Ok(())
+    }
+
     /// `RangeVarGetRelid`: the OID of the relation that a name gives, or `None`. The relation can be of any kind.
     pub(crate) fn lookup_relation(&self, rv: &RangeVar) -> Result<Option<u32>> {
         let at = place(rv.location);

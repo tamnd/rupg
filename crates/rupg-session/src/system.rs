@@ -4,6 +4,8 @@
 //!
 //! A view takes four OIDs in a row: the view, its array type, its row type and its `_RETURN` rule. When the rule is long, PostgreSQL moves its query to the TOAST table of `pg_rewrite`, and the TOAST value takes the next OID. The text of the rule in rupg is not the text of PostgreSQL, so [`VIEW_OIDS`] holds the OID of each view in PostgreSQL 19, and the views get the same OIDs as in PostgreSQL.
 //!
+//! The rules `pg_settings_u` and `pg_settings_n` on `pg_settings` come after the view, and [`RULE_OID`] holds the OID of the first rule in PostgreSQL 19.
+//!
 //! The `GRANT` and `REVOKE` statements of the script on views set the privileges of these views. Then each view without privileges gets `SELECT` for PUBLIC, as `setup_privileges` of `initdb` gives it. The statements on catalogs changed the static rows already.
 //!
 //! `snowball_create.sql` runs next. It makes the two functions in C of the Snowball dictionaries, the template `snowball`, and a dictionary and a configuration for each of the 31 languages, with their comments and the maps of the configurations. rupg makes the functions as `plpgsql` below, and runs the other statements of the script through the analyzer.
@@ -11,8 +13,6 @@
 //! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges, the five domains and the eleven functions in SQL, with the OIDs of PostgreSQL 19. The tables and the views of the script are not done yet.
 //!
 //! Last, `initdb` runs `CREATE EXTENSION plpgsql`. rupg makes the extension, the three functions in C of `plpgsql--1.0.sql`, the language and their comments, with the OIDs of PostgreSQL 19.
-//!
-//! These parts of `system_views.sql` are not done yet: the rules `pg_settings_u` and `pg_settings_n` on `pg_settings`. Their OIDs stay unused.
 
 use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
@@ -57,6 +57,9 @@ const C_LANGUAGE: u32 = 13;
 
 /// The OID of the type `internal`.
 const INTERNAL: u32 = 2281;
+
+/// The first rule of the script and its OID in PostgreSQL 19. The view `pg_settings` takes the four OIDs before it, and the rule `pg_settings_n` takes the next OID.
+const RULE_OID: (&str, u32) = ("pg_settings_u", 12114);
 
 /// The OID of each system view in PostgreSQL 19, in the order of `system_views.sql`.
 const VIEW_OIDS: [(&str, u32); 86] = [
@@ -291,11 +294,18 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
             usize::try_from(raw.stmt_len).map_or(text.len(), |len| (start + len).min(text.len()));
         let statement = text.get(start..end).unwrap_or_default();
         match stmt {
-            Node::ViewStmt(view) => {
-                let name =
-                    view.view.as_ref().and_then(|rv| rv.relname.as_deref()).unwrap_or_default();
+            Node::ViewStmt(_) | Node::RuleStmt(_) => {
+                let name = match stmt {
+                    Node::ViewStmt(view) => view.view.as_ref().and_then(|rv| rv.relname.as_deref()),
+                    Node::RuleStmt(rule) => rule.rulename.as_deref(),
+                    _ => None,
+                };
+                let name = name.unwrap_or_default();
                 if let Some(&(_, oid)) = VIEW_OIDS.iter().find(|(n, _)| *n == name) {
                     catalog.set_next_oid(oid);
+                }
+                if name == RULE_OID.0 {
+                    catalog.set_next_oid(RULE_OID.1);
                 }
                 let reader = Reader::new(
                     &settings,

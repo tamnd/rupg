@@ -135,6 +135,7 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE
             | ObjectType::OBJECT_TSCONFIGURATION => self.find_ts(stmt)?,
+            ObjectType::OBJECT_RULE => return self.drop_rule(stmt),
             _ => return Err(not_yet("DROP of this kind of object", None)),
         };
         self.perform(&objects, stmt.behavior == DropBehavior::DROP_CASCADE)
@@ -331,7 +332,7 @@ impl Definer<'_, '_> {
     }
 
     /// `performMultipleDeletions`: the walk of the dependencies, the report and the removal.
-    fn perform(&mut self, objects: &[ObjRef], cascade: bool) -> Result<()> {
+    pub(super) fn perform(&mut self, objects: &[ObjRef], cascade: bool) -> Result<()> {
         let targets = match self.catalog.deletions(objects) {
             Ok(targets) => targets,
             Err(Refusal::Pinned(object)) => {
@@ -453,7 +454,12 @@ impl Definer<'_, '_> {
             },
             PG_REWRITE => match self.catalog.view_of_rule(object.oid) {
                 Some(view) => format!("rule _RETURN on {}", self.describe_relation(view.oid)),
-                None => format!("rule {}", object.oid),
+                None => match self.catalog.rule(object.oid) {
+                    Some(rule) => {
+                        format!("rule {} on {}", rule.name, self.describe_relation(rule.relation))
+                    }
+                    None => format!("rule {}", object.oid),
+                },
             },
             PG_NAMESPACE => format!("schema {}", self.schema_name(object.oid)),
             PG_TS_PARSER | PG_TS_DICT | PG_TS_TEMPLATE | PG_TS_CONFIG => self.describe_ts(object),

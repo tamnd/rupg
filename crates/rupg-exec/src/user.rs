@@ -325,7 +325,12 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("relkind", code(rel.kind.code()))
                 .set("relnatts", Value::Int2(number(rel.columns.len()) - 1))
                 .set("relchecks", Value::Int2(i16::try_from(checks.count()).unwrap_or(i16::MAX)))
-                .set("relhasrules", Value::Bool(rel.view.is_some()))
+                .set(
+                    "relhasrules",
+                    Value::Bool(
+                        rel.view.is_some() || catalog.rules().any(|r| r.relation == rel.oid),
+                    ),
+                )
                 .set("relhastriggers", Value::Bool(rel.has_triggers))
                 .set("relhassubclass", Value::Bool(false))
                 .set("relrowsecurity", Value::Bool(false))
@@ -665,21 +670,29 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
 }
 
 /// The `_RETURN` rule of each view. `ev_action` holds the statement that made the view.
+/// The `_RETURN` rules of the views and the rules of `CREATE RULE`, in the order of their OIDs. `ev_qual` and `ev_action` have the text of the statement in place of the node trees, and `ev_qual` is `<>` for a rule with no condition.
 fn rewrites<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
-    catalog
-        .relations()
-        .filter_map(|rel| {
-            let view = rel.view.as_ref()?;
+    let views = catalog.relations().filter_map(|rel| {
+        let view = rel.view.as_ref()?;
+        Some((view.rule, "_RETURN", rel.oid, b'1', b'O', true, false, &view.text))
+    });
+    let rules = catalog.rules().map(|r| {
+        (r.oid, r.name.as_str(), r.relation, r.event, r.enabled, r.instead, r.qualified, &r.text)
+    });
+    let mut all: Vec<_> = views.chain(rules).collect();
+    all.sort_by_key(|r| r.0);
+    all.into_iter()
+        .map(|(rule, name, class, event, enabled, instead, qualified, text)| {
             let mut row = Row::new(table);
-            row.set("oid", oid(view.rule))
-                .set("rulename", Value::text("_RETURN"))
-                .set("ev_class", oid(rel.oid))
-                .set("ev_type", code('1'))
-                .set("ev_enabled", code('O'))
-                .set("is_instead", Value::Bool(true))
-                .set("ev_qual", Value::text("<>"))
-                .set("ev_action", Value::text(view.text.clone()));
-            Some(row)
+            row.set("oid", oid(rule))
+                .set("rulename", Value::text(name))
+                .set("ev_class", oid(class))
+                .set("ev_type", code(char::from(event)))
+                .set("ev_enabled", code(char::from(enabled)))
+                .set("is_instead", Value::Bool(instead))
+                .set("ev_qual", Value::text(if qualified { text.as_str() } else { "<>" }))
+                .set("ev_action", Value::text(text.clone()));
+            row
         })
         .collect()
 }

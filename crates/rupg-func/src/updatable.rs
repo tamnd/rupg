@@ -1,6 +1,6 @@
 //! `pg_relation_is_updatable` and `pg_column_is_updatable`: a port of `relation_is_updatable` and of the checks of `rewriteHandler.c` that make a view automatically updatable.
 //!
-//! rupg has no rules other than the `_RETURN` rule of a view, no `INSTEAD OF` triggers and no foreign tables. So the events of a relation come from its kind and, for a view, from its query. The rules `pg_settings_u` and `pg_settings_n` are not done yet, so `pg_settings` gives 0 and not the `UPDATE` event of `pg_settings_n`.
+//! rupg has no `INSTEAD OF` triggers and no foreign tables. So the events of a relation come from its kind, from its rules with `DO INSTEAD` and no condition and, for a view, from its query. The rule `pg_settings_n` gives the `UPDATE` event of `pg_settings`.
 
 use std::collections::BTreeSet;
 
@@ -80,9 +80,16 @@ fn relation_is_updatable(
         'v' => {}
         _ => return Ok(0),
     }
+    let rules = session.catalog().into_iter().flat_map(|c| c.rules()).filter(|r| r.relation == oid);
+    let rule_events = rules
+        .filter(|r| r.instead && !r.qualified)
+        .fold(0, |events, r| events | ((1 << (r.event - b'0')) & ALL_EVENTS));
+    if rule_events == ALL_EVENTS {
+        return Ok(rule_events);
+    }
     let env = reg::SessionEnv(session);
-    let Some(query) = rupg_analyze::view_query(&env, oid)? else { return Ok(0) };
-    let Some((base, base_oid)) = auto_base(&query, session) else { return Ok(0) };
+    let Some(query) = rupg_analyze::view_query(&env, oid)? else { return Ok(rule_events) };
+    let Some((base, base_oid)) = auto_base(&query, session) else { return Ok(rule_events) };
     // The updatable columns of the view in `columns`, each with the column of the base relation that it shows.
     let updatable: Vec<i16> = (1i16..)
         .zip(&query.targets)
@@ -98,7 +105,7 @@ fn relation_is_updatable(
         events &= relation_is_updatable(base_oid, outer, base_columns, session)?;
         outer.pop();
     }
-    Ok(events)
+    Ok(rule_events | events)
 }
 
 /// `pg_relation_is_updatable(regclass, boolean)`. The second argument adds the events of the `INSTEAD OF` triggers, and rupg has none.

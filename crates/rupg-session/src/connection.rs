@@ -446,6 +446,7 @@ impl Connection {
                     | Node::CreateEnumStmt(_)
                     | Node::CreateRangeStmt(_) => CommandTag::CreateType,
                     Node::ViewStmt(_) => CommandTag::CreateView,
+                    Node::RuleStmt(_) => CommandTag::CreateRule,
                     Node::CommentStmt(_) => CommandTag::Comment,
                     Node::DropStmt(stmt) => match stmt.removeType {
                         ObjectType::OBJECT_SCHEMA => CommandTag::DropSchema,
@@ -454,6 +455,7 @@ impl Connection {
                         ObjectType::OBJECT_SEQUENCE => CommandTag::DropSequence,
                         ObjectType::OBJECT_TYPE => CommandTag::DropType,
                         ObjectType::OBJECT_DOMAIN => CommandTag::DropDomain,
+                        ObjectType::OBJECT_RULE => CommandTag::DropRule,
                         ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::DropTextSearchTemplate,
@@ -3314,6 +3316,12 @@ mod tests {
     #[test]
     fn ruledef() {
         big_stack(|| script(include_str!("connection/ruledef.test")));
+    }
+
+    /// `CREATE RULE` and `DROP RULE` on a table and a view: `pg_rewrite`, `pg_rules`, `pg_get_ruledef`, the rows of `pg_depend`, `relhasrules`, `pg_relation_is_updatable`, the rules `pg_settings_u` and `pg_settings_n`, and the errors of `transformRuleStmt` and `DefineQueryRewrite`. `connection/rules.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn rules() {
+        big_stack(|| script(include_str!("connection/rules.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

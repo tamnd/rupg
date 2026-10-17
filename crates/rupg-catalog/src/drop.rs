@@ -259,7 +259,9 @@ impl Catalog {
                 self.ts_configs.remove(&object.oid);
                 self.ts_mappings.retain(|m| m.config != object.oid);
             }
-            PG_REWRITE => {}
+            PG_REWRITE => {
+                self.rules.remove(&object.oid);
+            }
             class => {
                 return Err(Error::internal(format!("unsupported object class: {class}")));
             }

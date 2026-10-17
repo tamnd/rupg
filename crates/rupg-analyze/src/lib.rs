@@ -50,8 +50,8 @@ pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
-    Allowed, Body, CopyRelation, CopyTarget, Defined, Message, attnums, copy_relation, copy_target,
-    define, function_body, is_definition, lock_table,
+    Allowed, Body, CopyRelation, CopyTarget, Defined, Message, RuleTree, attnums, copy_relation,
+    copy_target, define, function_body, is_definition, lock_table, rule_tree,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, GroupingFunc, IsJson,
