@@ -150,8 +150,8 @@ pub(crate) fn visible(kind: Named, row: &NamedRow, session: &dyn Session) -> boo
     find(kind, &path(session), row.name, row.method).is_some_and(|found| found.oid == row.oid)
 }
 
-/// The name and the schema of an object of text search, built in or of the catalog.
-fn ts_name(kind: Named, oid: u32, session: &dyn Session) -> Option<(String, u32)> {
+/// The name and the schema of a collation or an object of text search, built in or of the catalog.
+fn catalog_name(kind: Named, oid: u32, session: &dyn Session) -> Option<(String, u32)> {
     if let Some(row) = builtin::named_by_oid(kind, oid) {
         return Some((row.name.to_string(), row.namespace));
     }
@@ -162,12 +162,13 @@ fn ts_name(kind: Named, oid: u32, session: &dyn Session) -> Option<(String, u32)
         Named::Parser => catalog.ts_parser(oid).map(|p| pair(&p.name, p.namespace)),
         Named::Dictionary => catalog.ts_dictionary(oid).map(|d| pair(&d.name, d.namespace)),
         Named::Config => catalog.ts_config(oid).map(|c| pair(&c.name, c.namespace)),
+        Named::Collation => catalog.collation(oid).map(|c| pair(&c.name, c.namespace)),
         _ => None,
     }
 }
 
-/// The OID of the object of text search with the name in the first schema of `spaces` that has one, built in or of the catalog.
-fn ts_find(kind: Named, spaces: &[u32], name: &str, session: &dyn Session) -> Option<u32> {
+/// The OID of the collation or the object of text search with the name in the first schema of `spaces` that has one, built in or of the catalog.
+fn catalog_find(kind: Named, spaces: &[u32], name: &str, session: &dyn Session) -> Option<u32> {
     let catalog = session.catalog();
     spaces.iter().find_map(|&ns| {
         find(kind, &[ns], name, 0).map(|row| row.oid).or_else(|| match kind {
@@ -175,6 +176,7 @@ fn ts_find(kind: Named, spaces: &[u32], name: &str, session: &dyn Session) -> Op
             Named::Parser => catalog?.ts_parser_by_name(ns, name).map(|p| p.oid),
             Named::Dictionary => catalog?.ts_dictionary_by_name(ns, name).map(|d| d.oid),
             Named::Config => catalog?.ts_config_by_name(ns, name).map(|c| c.oid),
+            Named::Collation => catalog?.collation_by_name(ns, name).map(|c| c.oid),
             _ => None,
         })
     })
@@ -187,7 +189,9 @@ fn ts_find(kind: Named, spaces: &[u32], name: &str, session: &dyn Session) -> Op
 /// The errors of the input of `regconfig` that are not soft.
 pub fn ts_config_setting(text: &str, session: &dyn Session) -> Result<Option<String>> {
     let Ok(oid) = input(RegKind::Config, text, session)? else { return Ok(None) };
-    let Some((name, namespace)) = ts_name(Named::Config, oid, session) else { return Ok(None) };
+    let Some((name, namespace)) = catalog_name(Named::Config, oid, session) else {
+        return Ok(None);
+    };
     Ok(Some(qualified(namespace_name(namespace, session), &name)))
 }
 
@@ -207,7 +211,7 @@ pub(crate) fn ts_parser_oid(text: &str, session: &dyn Session) -> Result<u32> {
             format!("schema \"{schema}\" does not exist"),
         ));
     }
-    ts_find(Named::Parser, &spaces(schema, session), name, session).ok_or_else(|| {
+    catalog_find(Named::Parser, &spaces(schema, session), name, session).ok_or_else(|| {
         Error::new(
             SqlState::UNDEFINED_OBJECT,
             format!("text search parser \"{}\" does not exist", name_list(&names)),
@@ -215,16 +219,16 @@ pub(crate) fn ts_parser_oid(text: &str, session: &dyn Session) -> Result<u32> {
     })
 }
 
-/// `TSParserIsVisible`, `TSDictionaryIsVisible`, `TSTemplateIsVisible` and `TSConfigIsVisible`: true when the unqualified name finds the object. `None` when no object has the OID.
-pub(crate) fn ts_visible(kind: Named, oid: u32, session: &dyn Session) -> Option<bool> {
-    let (name, _) = ts_name(kind, oid, session)?;
-    Some(ts_find(kind, &path(session), &name, session) == Some(oid))
+/// `CollationIsVisible`, `TSParserIsVisible`, `TSDictionaryIsVisible`, `TSTemplateIsVisible` and `TSConfigIsVisible`: true when the unqualified name finds the object. `None` when no object has the OID.
+pub(crate) fn catalog_visible(kind: Named, oid: u32, session: &dyn Session) -> Option<bool> {
+    let (name, _) = catalog_name(kind, oid, session)?;
+    Some(catalog_find(kind, &path(session), &name, session) == Some(oid))
 }
 
-/// The text of `regconfigout` and `regdictionaryout`: the name, with the schema when the name is not visible.
-fn ts_text(kind: Named, oid: u32, session: &dyn Session) -> Option<String> {
-    let (name, namespace) = ts_name(kind, oid, session)?;
-    let schema = if ts_find(kind, &path(session), &name, session) == Some(oid) {
+/// The text of `regcollationout`, `regconfigout` and `regdictionaryout`: the name, with the schema when the name is not visible.
+fn catalog_text(kind: Named, oid: u32, session: &dyn Session) -> Option<String> {
+    let (name, namespace) = catalog_name(kind, oid, session)?;
+    let schema = if catalog_find(kind, &path(session), &name, session) == Some(oid) {
         None
     } else {
         namespace_name(namespace, session)
@@ -462,15 +466,6 @@ pub(crate) fn output(kind: RegKind, oid: u32, session: &dyn Session, out: &mut V
 
 /// The text of the object with this OID, or `None` when no object has it.
 fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
-    let named = |named: Named| {
-        let row = builtin::named_by_oid(named, oid)?;
-        let schema = if visible(named, row, session) {
-            None
-        } else {
-            namespace_name(row.namespace, session)
-        };
-        Some(qualified(schema, row.name))
-    };
     match kind {
         RegKind::Class => {
             let (name, namespace) = class_name(oid, session)?;
@@ -481,9 +476,9 @@ fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
             };
             Some(qualified(schema, name))
         }
-        RegKind::Collation => named(Named::Collation),
-        RegKind::Config => ts_text(Named::Config, oid, session),
-        RegKind::Dictionary => ts_text(Named::Dictionary, oid, session),
+        RegKind::Collation => catalog_text(Named::Collation, oid, session),
+        RegKind::Config => catalog_text(Named::Config, oid, session),
+        RegKind::Dictionary => catalog_text(Named::Dictionary, oid, session),
         RegKind::Namespace => namespace_name(oid, session).map(quote_identifier),
         RegKind::Role => builtin::named_by_oid(Named::Role, oid).map(|r| quote_identifier(r.name)),
         RegKind::Database => match builtin::named_by_oid(Named::Database, oid) {
@@ -582,16 +577,9 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
     if let Some(catalog) = session.catalog() {
         schemas.extend(catalog.schemas().map(|s| (s.name.as_str(), s.oid)));
     }
-    let in_schema = |named: Named, state: SqlState, message: String| {
+    let catalog_in = |named: Named, state: SqlState, message: String| {
         let (schema, name) = deconstruct(names, session)?;
-        match find(named, &spaces(schema, session), name, 0) {
-            Some(row) => Ok(Ok(row.oid)),
-            None => soft(state, message),
-        }
-    };
-    let ts_in = |named: Named, state: SqlState, message: String| {
-        let (schema, name) = deconstruct(names, session)?;
-        match ts_find(named, &spaces(schema, session), name, session) {
+        match catalog_find(named, &spaces(schema, session), name, session) {
             Some(oid) => Ok(Ok(oid)),
             None => soft(state, message),
         }
@@ -606,17 +594,17 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
             databases.extend(created.iter().map(|d| (d.name.as_str(), d.oid)));
             simple(&databases, SqlState::UNDEFINED_OBJECT, "database")
         }
-        RegKind::Collation => in_schema(
+        RegKind::Collation => catalog_in(
             Named::Collation,
             SqlState::UNDEFINED_OBJECT,
             format!("collation \"{list}\" for encoding \"{UTF8_NAME}\" does not exist"),
         ),
-        RegKind::Config => ts_in(
+        RegKind::Config => catalog_in(
             Named::Config,
             SqlState::UNDEFINED_OBJECT,
             format!("text search configuration \"{list}\" does not exist"),
         ),
-        RegKind::Dictionary => ts_in(
+        RegKind::Dictionary => catalog_in(
             Named::Dictionary,
             SqlState::UNDEFINED_OBJECT,
             format!("text search dictionary \"{list}\" does not exist"),

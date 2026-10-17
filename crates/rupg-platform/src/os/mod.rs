@@ -3,6 +3,7 @@
 // This module is the one place where the engine may call the clock, the file system, the threads and the network of the operating system.
 #![allow(clippy::disallowed_methods, clippy::disallowed_types)]
 
+mod locale;
 #[cfg(unix)]
 mod lookup;
 mod net;
@@ -10,6 +11,7 @@ mod tasks;
 #[cfg(unix)]
 mod unix;
 
+pub use locale::{libc_version, locale_codeset, system_locales};
 pub use net::OsNet;
 pub use tasks::{OsTasks, STACK_SIZE};
 

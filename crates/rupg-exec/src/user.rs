@@ -150,6 +150,7 @@ pub(crate) fn rows(
         "pg_ts_dict" => ts_dictionaries(table, catalog),
         "pg_ts_config" => ts_configs(table, catalog),
         "pg_ts_config_map" => ts_mappings(table, catalog),
+        "pg_collation" => collations(table, catalog),
         "pg_enum" => enum_labels(table, catalog),
         "pg_range" => ranges(table, catalog),
         "pg_cast" => casts(table, catalog),
@@ -866,6 +867,29 @@ fn ts_configs<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("cfgnamespace", oid(c.namespace))
                 .set("cfgowner", oid(c.owner))
                 .set("cfgparser", oid(c.parser));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_collation` that `pg_import_system_collations` adds at the setup of a cluster.
+fn collations<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .collations()
+        .map(|c| {
+            let mut row = Row::new(table);
+            let text = |value: &Option<String>| value.clone().map_or(Value::Null, Value::text);
+            row.set("oid", oid(c.oid))
+                .set("collname", Value::text(c.name.clone()))
+                .set("collnamespace", oid(c.namespace))
+                .set("collowner", oid(c.owner))
+                .set("collprovider", Value::Char(c.provider))
+                .set("collisdeterministic", Value::Bool(true))
+                .set("collencoding", Value::Int4(c.encoding))
+                .set("collcollate", text(&c.libc_locale))
+                .set("collctype", text(&c.libc_locale))
+                .set("colllocale", text(&c.locale))
+                .set("collversion", text(&c.version));
             row
         })
         .collect()

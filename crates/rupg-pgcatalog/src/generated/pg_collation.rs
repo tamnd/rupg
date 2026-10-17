@@ -86,10 +86,10 @@ pub(crate) static COLUMNS: [Batch; 12] = [
     // collversion
     Batch {
         values: Values::Text(&[
-            "", "", "", "1", "", "1", "1",
+            "", "", "", "1", "153.121", "1", "1",
         ]),
         nulls: &[
-            0x0000000000000017,
+            0x0000000000000007,
         ],
     },
 ];

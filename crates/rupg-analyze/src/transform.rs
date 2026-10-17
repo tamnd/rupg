@@ -231,7 +231,10 @@ impl Analyzer<'_> {
                 .find(|r| r.name == name && (r.encoding == -1 || r.encoding == 6));
             return row.map(|r| r.oid).ok_or_else(|| Error::internal("a built-in collation"));
         }
-        if in_catalog && OTHER_COLLATIONS.contains(&name) {
+        let imported = || {
+            self.env.catalog().and_then(|c| c.collation_by_name(crate::PG_CATALOG_NAMESPACE, name))
+        };
+        if in_catalog && (OTHER_COLLATIONS.contains(&name) || imported().is_some()) {
             return Err(not_yet(&format!("collation \"{name}\""), at));
         }
         Err(Error::new(

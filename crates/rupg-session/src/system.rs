@@ -12,17 +12,19 @@
 //!
 //! `information_schema.sql` runs next, with `search_path` set to `information_schema` by the script. rupg makes the schema with its privileges, the five domains and the eleven functions in SQL, with the OIDs of PostgreSQL 19. The tables and the views of the script are not done yet.
 //!
+//! `setup_collation` runs before `snowball_create.sql`. It runs `pg_import_system_collations`, which makes a collation for each locale that `locale -a` prints, then a collation without the encoding tag for each name that has one, then a collation for each locale of ICU. The first collation gets the OID 12396 in PostgreSQL 19, and the OIDs of the next collations come from the locales of the system. The objects of `snowball_create.sql` have fixed OIDs in rupg, so rupg makes the collations last, with the same OIDs.
+//!
 //! Last, `initdb` runs `CREATE EXTENSION plpgsql`. rupg makes the extension, the three functions in C of `plpgsql--1.0.sql`, the language and their comments, with the OIDs of PostgreSQL 19.
 
 use std::cell::RefCell;
 use std::sync::{Arc, OnceLock};
 
 use rupg_catalog::{
-    Catalog, Extension, FIRST_NORMAL_OID, FIRST_UNPINNED_OID, Function, Language, ObjRef,
-    PG_EXTENSION, PG_LANGUAGE, PG_PROC, RelKind,
+    Catalog, Collation, Extension, FIRST_NORMAL_OID, FIRST_UNPINNED_OID, Function, Language,
+    ObjRef, PG_EXTENSION, PG_LANGUAGE, PG_PROC, RelKind, collation_conflict,
 };
 use rupg_common::{Error, Result};
-use rupg_pgcatalog::builtin;
+use rupg_pgcatalog::builtin::{self, Named};
 use rupg_platform::os::OsClock;
 use rupg_sql::nodes::{GrantStmt, Node, ObjectType, RoleSpecType};
 
@@ -57,6 +59,111 @@ const C_LANGUAGE: u32 = 13;
 
 /// The OID of the type `internal`.
 const INTERNAL: u32 = 2281;
+
+/// The OID of the first collation of `pg_import_system_collations` in PostgreSQL 19.
+const COLLATION_OID: u32 = 12396;
+
+/// The number of the encoding `SQL_ASCII`, the encoding of the locales `C` and `POSIX`.
+const SQL_ASCII: i32 = 0;
+
+/// `KOI8U`, the last encoding that a server can use, `PG_ENCODING_BE_LAST`.
+const LAST_SERVER_ENCODING: i32 = 34;
+
+/// `encoding_match_list` of `chklocale.c`: the names of the codesets of the C library, with the encoding of each. The codesets of the encodings that only a client can use are not here, because `pg_import_system_collations` skips their locales.
+const CODESETS: [(&str, &str); 92] = [
+    ("EUC-JP", "EUC_JP"),
+    ("eucJP", "EUC_JP"),
+    ("IBM-eucJP", "EUC_JP"),
+    ("sdeckanji", "EUC_JP"),
+    ("CP20932", "EUC_JP"),
+    ("EUC-CN", "EUC_CN"),
+    ("eucCN", "EUC_CN"),
+    ("IBM-eucCN", "EUC_CN"),
+    ("GB2312", "EUC_CN"),
+    ("dechanzi", "EUC_CN"),
+    ("CP20936", "EUC_CN"),
+    ("EUC-KR", "EUC_KR"),
+    ("eucKR", "EUC_KR"),
+    ("IBM-eucKR", "EUC_KR"),
+    ("deckorean", "EUC_KR"),
+    ("5601", "EUC_KR"),
+    ("CP51949", "EUC_KR"),
+    ("EUC-TW", "EUC_TW"),
+    ("eucTW", "EUC_TW"),
+    ("IBM-eucTW", "EUC_TW"),
+    ("cns11643", "EUC_TW"),
+    ("UTF-8", "UTF8"),
+    ("utf8", "UTF8"),
+    ("CP65001", "UTF8"),
+    ("ISO-8859-1", "LATIN1"),
+    ("ISO8859-1", "LATIN1"),
+    ("iso88591", "LATIN1"),
+    ("CP28591", "LATIN1"),
+    ("ISO-8859-2", "LATIN2"),
+    ("ISO8859-2", "LATIN2"),
+    ("iso88592", "LATIN2"),
+    ("CP28592", "LATIN2"),
+    ("ISO-8859-3", "LATIN3"),
+    ("ISO8859-3", "LATIN3"),
+    ("iso88593", "LATIN3"),
+    ("CP28593", "LATIN3"),
+    ("ISO-8859-4", "LATIN4"),
+    ("ISO8859-4", "LATIN4"),
+    ("iso88594", "LATIN4"),
+    ("CP28594", "LATIN4"),
+    ("ISO-8859-9", "LATIN5"),
+    ("ISO8859-9", "LATIN5"),
+    ("iso88599", "LATIN5"),
+    ("CP28599", "LATIN5"),
+    ("ISO-8859-10", "LATIN6"),
+    ("ISO8859-10", "LATIN6"),
+    ("iso885910", "LATIN6"),
+    ("ISO-8859-13", "LATIN7"),
+    ("ISO8859-13", "LATIN7"),
+    ("iso885913", "LATIN7"),
+    ("ISO-8859-14", "LATIN8"),
+    ("ISO8859-14", "LATIN8"),
+    ("iso885914", "LATIN8"),
+    ("ISO-8859-15", "LATIN9"),
+    ("ISO8859-15", "LATIN9"),
+    ("iso885915", "LATIN9"),
+    ("CP28605", "LATIN9"),
+    ("ISO-8859-16", "LATIN10"),
+    ("ISO8859-16", "LATIN10"),
+    ("iso885916", "LATIN10"),
+    ("KOI8-R", "KOI8R"),
+    ("CP20866", "KOI8R"),
+    ("KOI8-U", "KOI8U"),
+    ("CP21866", "KOI8U"),
+    ("CP866", "WIN866"),
+    ("CP874", "WIN874"),
+    ("CP1250", "WIN1250"),
+    ("CP1251", "WIN1251"),
+    ("ansi-1251", "WIN1251"),
+    ("CP1252", "WIN1252"),
+    ("CP1253", "WIN1253"),
+    ("CP1254", "WIN1254"),
+    ("CP1255", "WIN1255"),
+    ("CP1256", "WIN1256"),
+    ("CP1257", "WIN1257"),
+    ("CP1258", "WIN1258"),
+    ("ISO-8859-5", "ISO_8859_5"),
+    ("ISO8859-5", "ISO_8859_5"),
+    ("iso88595", "ISO_8859_5"),
+    ("CP28595", "ISO_8859_5"),
+    ("ISO-8859-6", "ISO_8859_6"),
+    ("ISO8859-6", "ISO_8859_6"),
+    ("iso88596", "ISO_8859_6"),
+    ("CP28596", "ISO_8859_6"),
+    ("ISO-8859-7", "ISO_8859_7"),
+    ("ISO8859-7", "ISO_8859_7"),
+    ("iso88597", "ISO_8859_7"),
+    ("CP28597", "ISO_8859_7"),
+    ("ISO-8859-8", "ISO_8859_8"),
+    ("ISO8859-8", "ISO_8859_8"),
+    ("iso88598", "ISO_8859_8"),
+    ("CP28598", "ISO_8859_8"),
+];
 
 /// The first rule of the script and its OID in PostgreSQL 19. The view `pg_settings` takes the four OIDs before it, and the rule `pg_settings_n` takes the next OID.
 const RULE_OID: (&str, u32) = ("pg_settings_u", 12114);
@@ -348,8 +455,102 @@ pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
     if let Err(error) = plpgsql(&mut catalog) {
         failed.push(("CREATE EXTENSION plpgsql".to_string(), error));
     }
+    collations(&mut catalog);
     catalog.set_next_oid(FIRST_NORMAL_OID);
     (catalog, failed)
+}
+
+/// `normalize_libc_locale_name`: the name of a locale without its encoding tags, such as `en_US` for `en_US.utf8` and `br_FR@euro` for `br_FR.iso885915@euro`. `None` when the name has no tag.
+fn without_encoding(name: &str) -> Option<String> {
+    if !name.contains('.') {
+        return None;
+    }
+    let mut out = String::with_capacity(name.len());
+    let mut chars = name.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c == '.' {
+            while chars.next_if(|c| c.is_ascii_alphanumeric() || *c == '-').is_some() {}
+        } else {
+            out.push(c);
+        }
+    }
+    Some(out)
+}
+
+/// `pg_get_encoding_from_locale`: the encoding of a locale of the C library. `None` when the locale does not exist or its codeset is not in [`CODESETS`].
+fn locale_encoding(name: &str) -> Option<i32> {
+    if name.eq_ignore_ascii_case("C") || name.eq_ignore_ascii_case("POSIX") {
+        return Some(SQL_ASCII);
+    }
+    let codeset = rupg_platform::os::locale_codeset(name)?;
+    let (_, encoding) = CODESETS.iter().find(|(c, _)| c.eq_ignore_ascii_case(&codeset))?;
+    Some(rupg_func::char_to_encoding(encoding))
+}
+
+/// `pg_import_system_collations('pg_catalog')`, which `setup_collation` of `initdb` runs. Each locale of `locale -a` with an ASCII name and an encoding that a server can use gets a collation of the C library. `C`, `POSIX` and the other locales of `SQL_ASCII` get none, because the static rows have `C` and `POSIX`. A name with an encoding tag also gives an alias without the tag, after all the names, in the order of the locale names. Last, each locale of ICU gets a collation for any encoding, with its comment. A name that the schema has already for the encoding makes no collation.
+fn collations(catalog: &mut Catalog) {
+    catalog.set_next_oid(COLLATION_OID);
+    let version = rupg_platform::os::libc_version();
+    let libc = |name: &str, locale: &str, encoding: i32| {
+        // `get_collation_actual_version_libc`: `C`, `POSIX` and the names that start with `C.` have no version.
+        let plain = locale.eq_ignore_ascii_case("C")
+            || locale.eq_ignore_ascii_case("POSIX")
+            || locale.get(..2).is_some_and(|start| start.eq_ignore_ascii_case("C."));
+        Collation {
+            oid: 0,
+            name: name.to_string(),
+            namespace: PG_CATALOG,
+            owner: BOOTSTRAP_SUPERUSER,
+            provider: b'c',
+            encoding,
+            libc_locale: Some(locale.to_string()),
+            locale: None,
+            version: if plain { None } else { version.clone() },
+        }
+    };
+    // The built-in collations, such as `C`, are not in the catalog, so their names are checked here.
+    let create = |catalog: &mut Catalog, collation: Collation, comment: Option<&str>| {
+        let taken = builtin::named(Named::Collation).iter().any(|row| {
+            row.namespace == collation.namespace
+                && row.name == collation.name
+                && collation_conflict(row.encoding, collation.encoding)
+        });
+        if !taken {
+            catalog.create_collation(collation, comment);
+        }
+    };
+    let mut aliases = Vec::new();
+    for locale in rupg_platform::os::system_locales() {
+        if !locale.is_ascii() {
+            continue;
+        }
+        let Some(encoding) = locale_encoding(&locale) else { continue };
+        if !(SQL_ASCII + 1..=LAST_SERVER_ENCODING).contains(&encoding) {
+            continue;
+        }
+        create(catalog, libc(&locale, &locale, encoding), None);
+        if let Some(alias) = without_encoding(&locale) {
+            aliases.push((locale, alias, encoding));
+        }
+    }
+    aliases.sort_by(|a, b| a.0.cmp(&b.0));
+    for (locale, alias, encoding) in &aliases {
+        create(catalog, libc(alias, locale, *encoding), None);
+    }
+    for icu in rupg_pgcatalog::icu::locales() {
+        let collation = Collation {
+            oid: 0,
+            name: format!("{}-x-icu", icu.tag),
+            namespace: PG_CATALOG,
+            owner: BOOTSTRAP_SUPERUSER,
+            provider: b'i',
+            encoding: -1,
+            libc_locale: None,
+            locale: Some(icu.tag.to_string()),
+            version: Some(icu.version.to_string()),
+        };
+        create(catalog, collation, icu.comment);
+    }
 }
 
 /// The text of `snowball_create.sql`, as `snowball_create.pl` makes it: `snowball_func.sql.in`, then `snowball.sql.in` for each language with its words in place. A language with a stop word file gets the option `StopWords`.
