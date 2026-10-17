@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `INSERT` with `VALUES`, with a query and with `DEFAULT VALUES` into a table, with the defaults of the columns and of the domains, the not-null and check constraints, and the errors of PostgreSQL. The rows are in memory with MVCC snapshots, so a rollback removes them and other sessions see them only after the commit (#391).
+
 ## 0.1.41 (2026-10-18)
 
 A patch release on the way to M2. The connection rate targets of spec/06 section 6.18 now hold for the server CPU for each connection.
