@@ -337,8 +337,10 @@ impl Definer<'_, '_> {
                 }
             }
         }
+        // `ATRewriteTables` scans the table once to check the new not-null and check constraints.
+        let mut verify = false;
         for con in &not_nulls {
-            self.alter_not_null(target, con)?;
+            verify |= self.alter_not_null(target, con)?;
         }
         for index in &indexes {
             self.create_index(index, true)?;
@@ -356,14 +358,22 @@ impl Definer<'_, '_> {
                     // `ATAddCheckNNConstraint` gives no query text to `AddRelationNewConstraints`, so the errors of the expression have no place.
                     self.add_checks(target.oid, std::slice::from_ref(&con))
                         .map_err(|e| e.with_position(None))?;
+                    verify |= con.is_enforced;
                 }
                 Other::Foreign(con) => {
                     if !con.initially_valid && con.is_enforced {
                         return Err(not_yet("NOT VALID", place(con.location)));
                     }
                     self.add_foreign_key(target.oid, &con)?;
+                    // `RI_Initial_Check` reads the rows of the table.
+                    if con.is_enforced {
+                        self.scans.push(target.oid);
+                    }
                 }
             }
+        }
+        if verify {
+            self.scans.push(target.oid);
         }
         for role in &passes.owners {
             let owner = self.role_oid(role)?;
@@ -431,8 +441,8 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// The not-null constraint of `AddRelationNewConstraints`. A column with a not-null constraint keeps it, as `AdjustNotNullInheritance` does.
-    fn alter_not_null(&mut self, target: &Target, con: &Constraint) -> Result<()> {
+    /// The not-null constraint of `AddRelationNewConstraints`. A column with a not-null constraint keeps it, as `AdjustNotNullInheritance` does. The result is true for a new constraint, which a scan of the table must check.
+    fn alter_not_null(&mut self, target: &Target, con: &Constraint) -> Result<bool> {
         let key = not_null_column(con).to_string();
         let column = self.catalog.relation(target.oid).and_then(|r| r.column_number(&key));
         let Some(column) = column else {
@@ -482,10 +492,10 @@ impl Definer<'_, '_> {
                     "A not-null constraint named \"{name}\" already exists for this column."
                 )));
             }
-            return Ok(());
+            return Ok(false);
         }
         self.catalog.add_not_null(target.oid, con.conname.as_deref(), column, con.is_no_inherit)?;
-        Ok(())
+        Ok(true)
     }
 
     /// `ATExecChangeOwner`: the new owner of the relation, then of its indexes, its TOAST table and the sequences that it owns. `recursing` is true for these.

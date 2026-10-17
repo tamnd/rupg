@@ -311,12 +311,15 @@ fn row_names(relation: &rupg_analyze::Relation) -> Option<Arc<[String]>> {
     Some(names.map(|(i, c)| alias.get(i).unwrap_or(&c.name).clone()).collect())
 }
 
-/// The rows of a relation of the user. A session cannot add rows yet, so a table has no rows. A sequence has its one row, the row of its file.
+/// The rows of a relation of the user. A session cannot add rows yet, so a table has no rows. A sequence has its one row, the row of its file. The read of a table counts as a sequential scan, because rupg has no index scans yet.
 fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
     let relation = session
         .catalog()
         .and_then(|c| c.relation(oid))
         .ok_or_else(|| Error::internal(format!("no relation has the OID {oid}")))?;
+    if relation.kind == rupg_catalog::RelKind::Table {
+        session.count_scan(oid);
+    }
     Ok(match &relation.sequence {
         Some(sequence) => {
             let row = session.sequence_row(sequence.file).unwrap_or(sequence.data);

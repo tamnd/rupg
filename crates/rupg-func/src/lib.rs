@@ -101,6 +101,7 @@ pub use reg::ts_config_setting;
 pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use sequence::Sequences;
 pub use srf::{SetKernel, set_kernel};
+pub use stat::RelationCounts;
 pub use text::quote_identifier;
 pub use tsm::sample_rows;
 pub use xml::{xml_expr, xml_value};
@@ -304,8 +305,22 @@ pub trait Session {
     fn backends(&self) -> Arc<[Backend]> {
         Arc::from(Vec::new())
     }
-    /// `pgstat_clear_snapshot`: drops the snapshot of the table of the sessions.
+    /// `pgstat_clear_snapshot`: drops the snapshot of the table of the sessions and of the statistics.
     fn clear_backends(&self) {}
+    /// `pgstat_count_heap_scan`: counts a sequential scan of a relation in the counts of the transaction. A session with no server keeps no counts.
+    fn count_scan(&self, relation: u32) {
+        let _ = relation;
+    }
+    /// `pgstat_fetch_stat_tabentry`: the counters of a relation of the database of the session, from the snapshot of the transaction, or `None` for a relation with no entry. The first call of a transaction takes the snapshot.
+    fn relation_counts(&self, relation: u32) -> Option<RelationCounts> {
+        let _ = relation;
+        None
+    }
+    /// `find_tabstat_entry`: the sequential scans of a relation that the transaction counted and did not report yet.
+    fn pending_scans(&self, relation: u32) -> i64 {
+        let _ = relation;
+        0
+    }
     /// The time of the last reset of the statistics of the whole server in microseconds since 2000-01-01 UTC, or 0 when the session has no server.
     fn stats_reset(&self) -> i64 {
         0

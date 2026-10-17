@@ -607,6 +607,23 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn count_scan(&self, relation: u32) {
+        if let Some((activity, _)) = self.activity
+            && self.settings().get("track_counts").as_deref() != Some("off")
+        {
+            activity.count_scan(relation);
+        }
+    }
+
+    fn relation_counts(&self, relation: u32) -> Option<rupg_func::RelationCounts> {
+        let (activity, store) = self.activity?;
+        activity.relation_counts(store, relation)
+    }
+
+    fn pending_scans(&self, relation: u32) -> i64 {
+        self.activity.map_or(0, |(activity, _)| activity.pending_scans(relation))
+    }
+
     fn hba_rules(&self) -> Result<Vec<Vec<Value>>> {
         match self.activity.and_then(|(_, store)| store.auth()) {
             Some(auth) => Ok(auth.hba_rules()?.into_iter().map(crate::auth::hba_values).collect()),
