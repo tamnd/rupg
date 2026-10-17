@@ -399,7 +399,7 @@ fn recursive_rows(
         step = new_rows(&keys, &mut seen, step)?;
     }
     let mut frames = run.outer.to_vec();
-    frames.push(Frame { tables, tuple: &[] });
+    frames.push(Frame { tables, tuple: &[], aggs: &[] });
     let mut rows = Vec::new();
     while !step.is_empty() {
         run.session.interrupted()?;
@@ -683,6 +683,8 @@ fn hash_rows(rows: &Rows, pairs: &[(&Expr, usize)]) -> Option<Hashed> {
 struct Frame<'a> {
     tables: &'a scan::Tables,
     tuple: &'a [usize],
+    /// The result of each aggregate call of the query for the group, which an aggregate of the query in a subquery reads.
+    aggs: &'a [(*const Aggref, Value)],
 }
 
 /// True when a subquery reads a column of a query outside it, so that it must run again for each row of that query.
@@ -784,7 +786,7 @@ fn with_subqueries(
     }
     let mut tables = (**base).clone();
     let mut frames = outer.to_vec();
-    frames.push(Frame { tables: base, tuple: &[] });
+    frames.push(Frame { tables: base, tuple: &[], aggs: &[] });
     for (i, relation) in query.relations.iter().enumerate() {
         if let Some(id) = work(relation) {
             let rows =
@@ -910,7 +912,7 @@ fn run_query(
             }
             let Some(sub) = &relation.subquery else { return Ok(Vec::new()) };
             let mut frames = outer.to_vec();
-            frames.push(Frame { tables, tuple });
+            frames.push(Frame { tables, tuple, aggs: &[] });
             run_query(sub, params, session, cache, &frames, false)
         };
         scan::tuples(query, tables, &mut |expr, tuple| eval.at(tuple).eval(expr), &mut source)?
@@ -1555,6 +1557,16 @@ impl<'a> Eval<'a> {
                 .and_then(|row| row.get(*n))
                 .cloned()
                 .ok_or_else(|| Error::internal("a subquery column is outside of ANY or ALL")),
+            ExprKind::Agg(agg) if agg.levels_up > 0 => self
+                .outer
+                .len()
+                .checked_sub(agg.levels_up)
+                .and_then(|i| self.outer.get(i))
+                .and_then(|frame| frame.aggs.iter().find(|(call, _)| std::ptr::eq(*call, &**agg)))
+                .map(|(_, value)| value.clone())
+                .ok_or_else(|| {
+                    Error::internal("an aggregate of an outer query is outside of a group")
+                }),
             ExprKind::Agg(agg) => self
                 .aggs
                 .iter()
@@ -1575,7 +1587,7 @@ impl<'a> Eval<'a> {
         let exists = sub.kind == SubLinkKind::Exists;
         let query = &sub.query;
         let mut frames = self.outer.to_vec();
-        frames.push(Frame { tables: self.tables, tuple: self.tuple });
+        frames.push(Frame { tables: self.tables, tuple: self.tuple, aggs: &self.aggs });
         let rows = self.cache.rows(query, || {
             run_query(query, self.params, self.session, self.cache, &frames, exists)
         })?;

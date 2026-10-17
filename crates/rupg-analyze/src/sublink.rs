@@ -29,10 +29,12 @@ impl Analyzer<'_> {
         self.outer.push(scope);
         let kind = std::mem::replace(&mut self.kind, Kind::Other);
         let has_aggs = std::mem::replace(&mut self.has_aggs, false);
+        self.outer_kinds.push((Some(kind), has_aggs));
         let srfs = self.srfs;
         let result = self.select(stmt);
         self.srfs = srfs;
-        self.has_aggs = has_aggs;
+        // An aggregate of this query in the subquery sets `has_aggs` of this query.
+        self.has_aggs = self.outer_kinds.pop().map_or(has_aggs, |(_, has_aggs)| has_aggs);
         self.kind = kind;
         self.scope = self.outer.pop().unwrap_or_default();
         result

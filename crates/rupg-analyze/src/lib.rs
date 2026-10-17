@@ -129,6 +129,8 @@ pub(crate) struct Analyzer<'a> {
     kind: agg::Kind,
     /// `p_hasAggs`: true when the query has an aggregate call.
     has_aggs: bool,
+    /// For each scope of `outer`, the part of that query that has the subquery and `p_hasAggs` of that query. The part is `None` for a subquery in `FROM`.
+    outer_kinds: Vec<(Option<agg::Kind>, bool)>,
     /// `p_windowdefs`: the windows of the `WINDOW` clause of the query, then the windows of its `OVER` clauses.
     windowdefs: Vec<rupg_sql::nodes::WindowDef>,
     /// `p_hasWindowFuncs`: true when the query has a call of a window function.
@@ -164,6 +166,7 @@ impl<'a> Analyzer<'a> {
             outer: Vec::new(),
             kind: agg::Kind::Other,
             has_aggs: false,
+            outer_kinds: Vec::new(),
             windowdefs: Vec::new(),
             has_windows: false,
             keep_unknowns: false,
