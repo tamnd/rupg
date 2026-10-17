@@ -12,6 +12,7 @@ use rupg_platform::Tasks;
 
 use crate::advisory::Locks;
 use crate::auth::AuthFiles;
+use crate::heap::Heap;
 
 /// How long a session waits for the lock before it looks at its cancel flag again.
 const WAIT_SLICE: Duration = Duration::from_millis(50);
@@ -42,6 +43,8 @@ pub struct Store {
     sequences: Mutex<HashMap<u32, SequenceData>>,
     /// The counters of the relations in the cumulative statistics, by the OID of the database and the OID of the relation.
     relations: Mutex<HashMap<(u32, u32), RelationCounts>>,
+    /// The rows of the tables.
+    heap: Heap,
 }
 
 /// A slot of the table of the sessions.
@@ -288,6 +291,7 @@ impl Store {
             ));
         }
         self.state().databases.remove(&row.oid);
+        self.heap.drop_tables(row.oid, |_| false);
         Ok(())
     }
 
@@ -337,6 +341,11 @@ impl Store {
     /// The advisory locks of the sessions.
     pub(crate) fn locks(&self) -> &Locks {
         &self.locks
+    }
+
+    /// The rows of the tables.
+    pub(crate) fn heap(&self) -> &Heap {
+        &self.heap
     }
 
     /// The row of the file of a sequence, or `None` when no session changed it.

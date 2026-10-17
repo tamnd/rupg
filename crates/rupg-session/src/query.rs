@@ -26,6 +26,7 @@ use rupg_wire::{Field, Portals, Statements};
 use crate::advisory::{Edge, Request, Tag, mode_name};
 use crate::connection::{Activity, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
+use crate::heap::View;
 use crate::param::type_error;
 use crate::store::Store;
 use crate::utility;
@@ -79,7 +80,7 @@ pub(crate) type Row = Vec<Option<Vec<u8>>>;
 
 /// True for a statement that the engine plans, not the session.
 pub(crate) fn is_query(node: &Node) -> bool {
-    matches!(node, Node::SelectStmt(_))
+    matches!(node, Node::SelectStmt(_) | Node::InsertStmt(_))
 }
 
 /// The time on the clock in microseconds since 2000-01-01 UTC.
@@ -115,6 +116,8 @@ pub(crate) struct Reader<'a> {
     randomness: Option<&'a RefCell<Randomness>>,
     /// The warnings of the functions that the statement called, such as the input function of `aclitem`. The session sends them before the result.
     warnings: RefCell<Vec<Error>>,
+    /// What the statement sees of the rows of the tables, or `None` for a reader that is not a session.
+    view: Option<View>,
 }
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
@@ -228,6 +231,7 @@ impl<'a> Reader<'a> {
             sequences: None,
             randomness: None,
             warnings: RefCell::new(Vec::new()),
+            view: None,
         }
     }
 
@@ -273,6 +277,17 @@ impl<'a> Reader<'a> {
     pub(crate) fn with_portals(mut self, portals: &'a Portals<Portal>) -> Reader<'a> {
         self.portals = Some(portals);
         self
+    }
+
+    /// The reader of a session that sees the rows of the tables through `view`.
+    pub(crate) fn with_view(mut self, view: View) -> Reader<'a> {
+        self.view = Some(view);
+        self
+    }
+
+    /// What the statement sees of the rows, or `None` for a reader that is not a session.
+    pub(crate) fn view(&self) -> Option<&View> {
+        self.view.as_ref()
     }
 
     /// The row of the session and its store, or `0A000` for a reader that is not a session, which has no locks and cannot wait.
@@ -612,6 +627,13 @@ impl rupg_func::Session for Reader<'_> {
             && self.settings().get("track_counts").as_deref() != Some("off")
         {
             activity.count_scan(relation);
+        }
+    }
+
+    fn table_rows(&self, relation: u32) -> Result<Vec<Vec<Value>>> {
+        match (self.activity, &self.view) {
+            (Some((_, store)), Some(view)) => Ok(store.heap().rows(relation, view)),
+            _ => Ok(Vec::new()),
         }
     }
 

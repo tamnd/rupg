@@ -247,7 +247,7 @@ const MIXED_KEYS: &str =
 /// `0A000` for a function or a type that the engine does not have yet.
 pub fn prepare(query: Query) -> Result<Plan> {
     rupg_analyze::check_outer_joins(&query)?;
-    check_query(&query, true)?;
+    check_query(&query, query.insert.is_none())?;
     Ok(Plan { query })
 }
 
@@ -1003,8 +1003,16 @@ fn run_query(
 impl Plan {
     /// The columns of the result. The junk columns of `ORDER BY` do not count.
     pub fn columns(&self) -> &[Target] {
+        if self.query.insert.is_some() {
+            return &[];
+        }
         let n = self.query.targets.iter().take_while(|t| !t.junk).count();
         &self.query.targets[..n]
+    }
+
+    /// The table that the query writes when it is an `INSERT`. Then [`Plan::run`] gives the new rows.
+    pub fn insert(&self) -> Option<&rupg_analyze::InsertInfo> {
+        self.query.insert.as_ref()
     }
 
     /// The warnings of the analysis of the query.
@@ -1036,23 +1044,35 @@ impl Plan {
         backward(&self.query)
     }
 
-    /// The checks of `ExecutorStart`, which come before `RowDescription`: a read-only transaction cannot lock a row, and a sequence has no rows to lock.
+    /// The checks of `ExecutorStart`, which come before `RowDescription`: a read-only transaction cannot write or lock a row, and a sequence has no rows to lock.
     ///
     /// # Errors
     ///
-    /// `25006` for `FOR UPDATE` or `FOR SHARE` in a read-only transaction, and `42809` for a lock on the rows of a sequence.
+    /// `25006` for `INSERT`, `FOR UPDATE` or `FOR SHARE` in a read-only transaction, and `42809` for a lock on the rows of a sequence.
     pub fn start(&self, session: &dyn Session) -> Result<()> {
+        if self.query.insert.is_some()
+            && session.setting("transaction_read_only").as_deref() == Some("on")
+        {
+            return Err(Error::new(
+                SqlState::READ_ONLY_SQL_TRANSACTION,
+                "cannot execute INSERT in a read-only transaction",
+            ));
+        }
         check_row_marks(&self.query, session)
     }
 
-    /// Runs the query and gives its rows.
+    /// Runs the query and gives its rows. For an `INSERT`, the rows are the new rows of the table after the checks of its constraints.
     ///
     /// # Errors
     ///
-    /// The error of a function, such as a division by zero.
+    /// The error of a function, such as a division by zero, and the error of a constraint of the table.
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         self.start(session)?;
-        run_query(&self.query, params, session, &Cache::default(), &[], false)
+        let rows = run_query(&self.query, params, session, &Cache::default(), &[], false)?;
+        match &self.query.insert {
+            Some(info) => insert::check(info, rows, session),
+            None => Ok(rows),
+        }
     }
 }
 
@@ -2369,6 +2389,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 
 mod agg;
 mod fold;
+mod insert;
 mod jsonexpr;
 mod jsontable;
 mod scan;

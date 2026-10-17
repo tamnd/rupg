@@ -12,6 +12,7 @@ pub mod block;
 pub mod connection;
 mod generated;
 pub mod guc;
+mod heap;
 mod param;
 mod query;
 pub mod store;

@@ -273,7 +273,7 @@ impl Connection {
                 })?;
                 notices.extend(made.notices().iter().map(|error| Notice::warning(error.clone())));
                 self.notices(&mut notices, &text, &[], out);
-                columns = Some(query::columns(&made));
+                columns = made.insert().is_none().then(|| query::columns(&made));
                 params = made.params().to_vec();
                 plan = Some(made);
             } else if let Node::ExecuteStmt(stmt) = node {
@@ -502,13 +502,23 @@ impl Connection {
             } else if let Some(plan) = &plan {
                 self.settings.borrow_mut().take_snapshot();
                 let reader = self.reader();
-                let rows = query::run(plan, &params, &reader, &formats);
-                // The warnings of the run, such as the warning of `pg_advisory_unlock`, come before the rows.
-                let mut notices: Vec<Notice> =
-                    reader.take_warnings().into_iter().map(Notice::of_function).collect();
-                drop(reader);
-                self.notices(&mut notices, &statement.text, &[], out);
-                Done::Rows { columns: Vec::new(), rows: rows?, tag: CommandTag::Select }
+                if let Some(info) = plan.insert() {
+                    let rows = plan.run(&params, &reader);
+                    let mut notices: Vec<Notice> =
+                        reader.take_warnings().into_iter().map(Notice::of_function).collect();
+                    let view = reader.view().cloned().unwrap_or_default();
+                    drop(reader);
+                    self.notices(&mut notices, &statement.text, &[], out);
+                    Done::Count(CommandTag::Insert, self.store_rows(info.table, &view, rows?))
+                } else {
+                    let rows = query::run(plan, &params, &reader, &formats);
+                    // The warnings of the run, such as the warning of `pg_advisory_unlock`, come before the rows.
+                    let mut notices: Vec<Notice> =
+                        reader.take_warnings().into_iter().map(Notice::of_function).collect();
+                    drop(reader);
+                    self.notices(&mut notices, &statement.text, &[], out);
+                    Done::Rows { columns: Vec::new(), rows: rows?, tag: CommandTag::Select }
+                }
             } else if prepare::is_prepare(node) {
                 let mut notices = Vec::new();
                 let result = self.run_prepare(node, &statement.text, &formats, &mut notices, 0);

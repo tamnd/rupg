@@ -66,7 +66,7 @@ impl Connection {
         let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
         let params = plan.params().to_vec();
-        let columns = Some(query::columns(&plan));
+        let columns = plan.insert().is_none().then(|| query::columns(&plan));
         let prepared = Prepared::new(
             text.to_owned(),
             Some(node.clone()),
@@ -123,6 +123,13 @@ impl Connection {
             None => None,
         };
         statement.count_plan(reader.settings().get("plan_cache_mode").as_deref());
+        if let Some(plan) = &plan
+            && let Some(info) = plan.insert()
+        {
+            let rows = plan.run(&params, &reader)?;
+            let view = reader.view().cloned().unwrap_or_default();
+            return Ok(Done::Count(CommandTag::Insert, self.store_rows(info.table, &view, rows)));
+        }
         if let Some(plan) = plan {
             let rows = query::run(&plan, &params, &reader, formats)?;
             let columns = statement.columns.clone().unwrap_or_default();
