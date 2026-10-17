@@ -89,7 +89,7 @@ impl Analyzer<'_> {
             }
             SubLinkKind::Any | SubLinkKind::All | SubLinkKind::RowCompare => {
                 let left = match &s.testexpr {
-                    Some(Node::RowExpr(r)) => self.transform_list(&r.args)?,
+                    Some(Node::RowExpr(r)) => self.transform_expression_list(&r.args)?,
                     node => vec![self.transform(node.as_ref())?],
                 };
                 let op_names = if s.operName.is_empty() { vec!["="] } else { names(&s.operName) };

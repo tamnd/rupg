@@ -1689,9 +1689,12 @@ impl Analyzer<'_> {
                     .at_opt(at));
                 }
                 match self.item_by_name(schema, table, at)? {
-                    Some((0, item)) => vec![item],
-                    Some(_) => {
-                        return Err(not_yet("a row expansion of a relation of an outer query", at));
+                    // The columns of a relation of a query outside this query are references to the outer query.
+                    Some((level, mut item)) => {
+                        for (_, expr) in &mut item.columns {
+                            expr.raise(level);
+                        }
+                        vec![item]
                     }
                     None => return Err(self.missing_entry(schema, table, at)),
                 }
@@ -1714,7 +1717,6 @@ fn ambiguous(name: &str, at: Option<usize>) -> Error {
         .at_opt(at)
 }
 
-/// The error of a part of `FROM` that the analyzer does not take yet.
 /// The `relkind` of a built-in relation, from the static rows of `pg_class`.
 fn builtin_relkind(oid: u32) -> Option<u8> {
     let class = rupg_pgcatalog::catalog("pg_class")?;
@@ -1726,6 +1728,7 @@ fn builtin_relkind(oid: u32) -> Option<u8> {
     oids.iter().position(|&o| o == oid).map(|row| kinds[row])
 }
 
+/// The error of a part of `FROM` that the analyzer does not take yet.
 fn not_yet(what: &str, at: Option<usize>) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet")).at_opt(at)
 }

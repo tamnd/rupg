@@ -197,7 +197,7 @@ impl Analyzer<'_> {
                 Ok(arg)
             }
             Node::RowExpr(r) => {
-                let args = self.transform_list(&r.args)?;
+                let args = self.transform_expression_list(&r.args)?;
                 Ok(Expr::new(ExprKind::Row(args, CastForm::Implicit), oid::RECORD)
                     .at(place(r.location)))
             }
@@ -236,6 +236,23 @@ impl Analyzer<'_> {
     /// The expressions of a list.
     pub(crate) fn transform_list(&mut self, list: &[Option<Node>]) -> Result<Vec<Expr>> {
         list.iter().map(|n| self.transform(n.as_ref())).collect()
+    }
+
+    /// `transformExpressionList`: the expressions of a list where `t.*` and `(e).*` give the columns of the relation or the fields of the row, as for `ROW(t.*)`.
+    pub(crate) fn transform_expression_list(&mut self, list: &[Option<Node>]) -> Result<Vec<Expr>> {
+        let mut out = Vec::with_capacity(list.len());
+        for node in list {
+            let columns = match node {
+                Some(Node::ColumnRef(c)) => self.expand_star(c)?,
+                Some(Node::A_Indirection(i)) => self.expand_indirection_star(i)?,
+                _ => None,
+            };
+            match columns {
+                Some(columns) => out.extend(columns.into_iter().map(|(_, e)| e)),
+                None => out.push(self.transform(node.as_ref())?),
+            }
+        }
+        Ok(out)
     }
 
     /// `make_const`: the constant of a literal.
@@ -480,8 +497,8 @@ impl Analyzer<'_> {
                     return self.transform_sublink(&s);
                 }
                 if let (Some(Node::RowExpr(l)), Some(Node::RowExpr(r))) = (&a.lexpr, &a.rexpr) {
-                    let left = self.transform_list(&l.args)?;
-                    let right = self.transform_list(&r.args)?;
+                    let left = self.transform_expression_list(&l.args)?;
+                    let right = self.transform_expression_list(&r.args)?;
                     return self.row_comparison(&op_names, left, right, at);
                 }
                 let left = match &a.lexpr {
