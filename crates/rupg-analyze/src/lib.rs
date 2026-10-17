@@ -49,8 +49,9 @@ pub use ddl::{
     define, function_body, is_definition, lock_table,
 };
 pub use expr::{
-    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, RowCompare,
-    RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript, Var, WindowFunc,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg,
+    NullTreatment, RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript, Var,
+    WindowFunc,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use funcargs::{arg_defaults, expand_arguments};

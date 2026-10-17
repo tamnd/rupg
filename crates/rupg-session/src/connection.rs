@@ -2580,6 +2580,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/composite_from.test")));
     }
 
+    /// `RESPECT NULLS` and `IGNORE NULLS` of `lag`, `lead`, `first_value`, `last_value` and `nth_value`: offsets that are negative, zero and null, defaults, partitions, frames with exclusions, the errors for the other window functions, aggregates and plain functions, a query with no rows and the text of a view. `connection/window_ignore_nulls.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn window_ignore_nulls() {
+        big_stack(|| script(include_str!("connection/window_ignore_nulls.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

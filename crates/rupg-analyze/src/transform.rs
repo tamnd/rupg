@@ -12,8 +12,8 @@ use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, can_coerce, common_of};
 use crate::expr::{
-    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, RowCompare,
-    RowCompareKind, SqlValue,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, NullTreatment,
+    RowCompare, RowCompareKind, SqlValue,
 };
 use crate::typename::{names, place};
 use crate::types;
@@ -731,7 +731,12 @@ impl Analyzer<'_> {
             order: &f.agg_order,
             filter,
             over: f.over.as_deref(),
-            null_treatment: f.ignore_nulls != 0,
+            // `PARSER_IGNORE_NULLS` is 1 and `PARSER_RESPECT_NULLS` is 2.
+            nulls: match f.ignore_nulls {
+                0 => NullTreatment::None,
+                1 => NullTreatment::Ignore,
+                _ => NullTreatment::Respect,
+            },
             srfs,
         };
         let mut call = self.make_func(&func_names, args, f.func_variadic, Some(parts), at)?;

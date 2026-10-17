@@ -6,7 +6,7 @@ use std::collections::HashMap;
 
 use rupg_analyze::{
     Column, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING, FRAMEOPTION_START_OFFSET,
-    Frame, FromFunction, FromItem, Join, JoinKind, Query, SetKind, SetOp, SetTree,
+    Frame, FromFunction, FromItem, Join, JoinKind, NullTreatment, Query, SetKind, SetOp, SetTree,
 };
 use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
@@ -419,7 +419,11 @@ impl Deparser<'_> {
             self.buf.push_str(") FILTER (WHERE ");
             self.expr(filter, false)?;
         }
-        self.buf.push_str(") OVER ");
+        self.buf.push_str(") ");
+        if w.nulls == NullTreatment::Ignore {
+            self.buf.push_str("IGNORE NULLS ");
+        }
+        self.buf.push_str("OVER ");
         let window = w.winref.checked_sub(1).and_then(|i| self.windows.get(i)).cloned();
         let Some(window) = window else {
             return Err(Error::internal(format!(

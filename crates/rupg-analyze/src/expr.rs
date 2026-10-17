@@ -262,6 +262,20 @@ pub struct WindowFunc {
     pub agg: bool,
     /// `aggfilter`: the condition of `FILTER (WHERE ...)` of an aggregate.
     pub filter: Option<Box<Expr>>,
+    /// `ignore_nulls`: the clause `RESPECT NULLS` or `IGNORE NULLS` of the call.
+    pub nulls: NullTreatment,
+}
+
+/// The null treatment of a call of a window function, as `ignore_nulls`.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum NullTreatment {
+    /// No clause.
+    #[default]
+    None,
+    /// `IGNORE NULLS`: `lag`, `lead`, `first_value`, `last_value` and `nth_value` skip the rows where the argument is null.
+    Ignore,
+    /// `RESPECT NULLS`, which is the same as no clause for the functions that accept it.
+    Respect,
 }
 
 /// The way a call was written, which a deparse function shows.

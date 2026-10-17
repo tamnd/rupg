@@ -6,7 +6,7 @@ use rupg_sql::nodes::{List, Node, WindowDef};
 
 use crate::Analyzer;
 use crate::coerce::AtOpt;
-use crate::expr::{Aggref, Expr, ExprKind, Var};
+use crate::expr::{Aggref, Expr, ExprKind, NullTreatment, Var};
 use crate::select::Target;
 use crate::sort::SortGroup;
 
@@ -121,8 +121,8 @@ pub(crate) struct Parts<'a> {
     pub(crate) filter: Option<Expr>,
     /// The window of `OVER`.
     pub(crate) over: Option<&'a WindowDef>,
-    /// True when the call has `RESPECT NULLS` or `IGNORE NULLS`.
-    pub(crate) null_treatment: bool,
+    /// The clause `RESPECT NULLS` or `IGNORE NULLS` of the call.
+    pub(crate) nulls: NullTreatment,
     /// The number of the calls of functions that give a set before the arguments, as `last_srf` of `ParseFuncOrColumn`.
     pub(crate) srfs: usize,
 }

@@ -3,8 +3,8 @@
 use std::cmp::Ordering;
 
 use rupg_analyze::{
-    Expr, ExprKind, Frame, FrameBound, FrameExclusion, FrameMode, Query, SortGroup, WindowClause,
-    WindowFunc,
+    Expr, ExprKind, Frame, FrameBound, FrameExclusion, FrameMode, NullTreatment, Query, SortGroup,
+    WindowClause, WindowFunc,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session};
@@ -354,6 +354,29 @@ fn partition_values(
 ) -> Result<Vec<Value>> {
     let n = part.len();
     let mut out = Vec::with_capacity(n);
+    // `WinCheckAndInitializeNullTreatment`: only these functions take the clause, and the check runs when the function runs.
+    let takes_nulls = matches!(
+        method,
+        Method::LeadLag(_) | Method::FirstValue | Method::LastValue | Method::NthValue
+    );
+    if call.nulls != NullTreatment::None && !takes_nulls {
+        let name = builtin::proc_by_oid(call.oid).map_or("", |p| p.name);
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("function {name} does not allow RESPECT/IGNORE NULLS"),
+        ));
+    }
+    // With `IGNORE NULLS`, the value of the argument on each row of the partition, which the search for the rows that are not null reads.
+    let values = if call.nulls == NullTreatment::Ignore {
+        part.iter().map(|&row| arg(eval, call, 0, input, row)).collect::<Result<Vec<_>>>()?
+    } else {
+        Vec::new()
+    };
+    let ignore = !values.is_empty();
+    // The `count`-th row of `rows` where the argument is not null, from 1, as `ignorenulls_getfuncarginframe`.
+    let nth_not_null = |rows: &mut dyn Iterator<Item = usize>, count: usize| {
+        rows.filter(|&at| !values[at].is_null()).nth(count - 1).map(|at| values[at].clone())
+    };
     match method {
         Method::RowNumber => out.extend((1..=n).map(int8)),
         Method::Rank => out.extend(groups.iter().map(|g| int8(g.0 + 1))),
@@ -431,6 +454,22 @@ fn partition_values(
                 } else {
                     1
                 };
+                if ignore && offset != 0 {
+                    // `WinGetFuncArgInPartition`: the row that is the `offset`-th row with a value that is not null, from the current row.
+                    let ahead = forward == (offset > 0);
+                    let count = usize::try_from(offset.unsigned_abs()).unwrap_or(usize::MAX);
+                    let found = if ahead {
+                        nth_not_null(&mut (i + 1..n), count)
+                    } else {
+                        nth_not_null(&mut (0..i).rev(), count)
+                    };
+                    out.push(match found {
+                        Some(value) => value,
+                        None if call.args.len() > 2 => arg(eval, call, 2, input, part[i])?,
+                        None => Value::Null,
+                    });
+                    continue;
+                }
                 let at = i64::try_from(i).unwrap_or(i64::MAX);
                 let target = if forward { at + offset } else { at - offset };
                 let value = match usize::try_from(target).ok().filter(|t| *t < n) {
@@ -439,6 +478,17 @@ fn partition_values(
                     None => Value::Null,
                 };
                 out.push(value);
+            }
+        }
+        Method::FirstValue if ignore => {
+            for bounds in frames {
+                out.push(nth_not_null(&mut bounds.rows(), 1).unwrap_or(Value::Null));
+            }
+        }
+        Method::LastValue if ignore => {
+            for bounds in frames {
+                let rows: Vec<usize> = bounds.rows().collect();
+                out.push(nth_not_null(&mut rows.into_iter().rev(), 1).unwrap_or(Value::Null));
             }
         }
         Method::FirstValue => {
@@ -470,6 +520,10 @@ fn partition_values(
                     ));
                 }
                 let at = usize::try_from(nth - 1).unwrap_or(usize::MAX);
+                if ignore {
+                    out.push(nth_not_null(&mut bounds.rows(), at + 1).unwrap_or(Value::Null));
+                    continue;
+                }
                 out.push(match bounds.rows().nth(at) {
                     Some(at) => arg(eval, call, 0, input, part[at])?,
                     None => Value::Null,
