@@ -1,8 +1,9 @@
 //! `eval_const_expressions` of `clauses.c`: the planner computes each part of an expression whose arguments are constants and whose function is immutable. An error of such a part, such as a division by zero, comes when the query is planned, before the server sends the description of the rows. The plan then runs the folded expressions, so a part that the fold drops does not run.
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Join, JoinKind, JoinRow, NamedArg,
-    Query, Relation, RowCompare, SubLink, SubLinkKind, Subscript, Var,
+    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, IsJson, Join, JoinKind, JoinRow,
+    JsonCtor, JsonValue, NamedArg, Query, Relation, RowCompare, SubLink, SubLinkKind, Subscript,
+    Var,
 };
 use rupg_common::Result;
 use rupg_func::Session;
@@ -386,6 +387,18 @@ impl<'a> Fold<'a> {
                 }
             }
             ExprKind::Grouping(g) => self.all(&mut g.args),
+            ExprKind::JsonValue(v) => {
+                self.subqueries(&mut v.raw)?;
+                self.subqueries(&mut v.formatted)
+            }
+            ExprKind::JsonCtor(c) => {
+                self.all(&mut c.args)?;
+                match &mut c.coercion {
+                    Some(coercion) => self.subqueries(coercion),
+                    None => Ok(()),
+                }
+            }
+            ExprKind::IsJson(p) => self.subqueries(&mut p.expr),
             ExprKind::Window(w) => {
                 self.all(&mut w.args)?;
                 match &mut w.filter {
@@ -637,6 +650,30 @@ impl<'a> Fold<'a> {
             }
             // The value of `GROUPING` depends on the grouping set of the row.
             ExprKind::Grouping(_) => Ok(expr.clone()),
+            // A `JsonValueExpr` with a constant value is the constant.
+            ExprKind::JsonValue(v) => {
+                let formatted = self.expr(&v.formatted)?;
+                if value(&formatted).is_some() {
+                    return Ok(formatted);
+                }
+                let raw = self.expr(&v.raw)?;
+                let v = JsonValue { raw, formatted, format: v.format };
+                Ok(with(expr, ExprKind::JsonValue(Box::new(v))))
+            }
+            // The constructor is not folded. The `CaseTest` of the coercion is not the value of a `CASE` outside.
+            ExprKind::JsonCtor(c) => {
+                let args = self.list(&c.args)?;
+                self.case.push(None);
+                let coercion = c.coercion.as_ref().map(|e| self.expr(e)).transpose();
+                self.case.pop();
+                let c = JsonCtor { args, coercion: coercion?, ..(**c).clone() };
+                Ok(with(expr, ExprKind::JsonCtor(Box::new(c))))
+            }
+            ExprKind::IsJson(p) => {
+                let arg = self.expr(&p.expr)?;
+                let p = IsJson { expr: arg, ..(**p).clone() };
+                Ok(with(expr, ExprKind::IsJson(Box::new(p))))
+            }
             ExprKind::Window(w) => {
                 let mut w = w.clone();
                 w.args = self.list(&w.args)?;

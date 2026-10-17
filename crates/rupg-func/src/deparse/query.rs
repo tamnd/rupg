@@ -993,7 +993,10 @@ impl Deparser<'_> {
             _ => {
                 let paren = self.paren
                     || matches!(&e.kind, ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)))
-                    || matches!(e.kind, ExprKind::Agg(_) | ExprKind::Window(_));
+                    || matches!(
+                        e.kind,
+                        ExprKind::Agg(_) | ExprKind::Window(_) | ExprKind::JsonCtor(_)
+                    );
                 if paren {
                     self.buf.push('(');
                 }

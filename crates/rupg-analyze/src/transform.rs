@@ -204,6 +204,12 @@ impl Analyzer<'_> {
             Node::SubLink(s) => self.transform_sublink(s),
             Node::A_Indirection(i) => self.transform_indirection(i),
             Node::GroupingFunc(g) => self.grouping_func(g),
+            Node::JsonObjectConstructor(c) => self.json_object(c),
+            Node::JsonArrayConstructor(c) => self.json_array(c),
+            Node::JsonIsPredicate(p) => self.is_json(p),
+            Node::JsonParseExpr(e) => self.json_parse(e),
+            Node::JsonScalarExpr(e) => self.json_scalar(e),
+            Node::JsonSerializeExpr(e) => self.json_serialize(e),
             _ => Err(not_yet("this kind of expression", None)),
         }
     }

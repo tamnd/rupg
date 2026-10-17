@@ -2,11 +2,12 @@
 //!
 //! A value goes to the text of `json` as `datum_to_json_internal` writes it, by the category that `json_categorize_type` gives its type. A function of `jsonb` gives that text to `jsonb_in`, which puts the keys of each object in their order and keeps only the last field of each key, as `pushJsonbValue` does. The text of `json` and the value of `jsonb` agree in the other parts: a number that is not finite is a string, and a key is always a string.
 
+use rupg_analyze::JsonItemType;
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{
-    DateFormat, DateOrder, DateStyle, Record, Value, date_out, json_escape, jsonb_in, oid,
-    timestamp_out, timestamptz_out,
+    DateFormat, DateOrder, DateStyle, JsonItem, JsonTree, Record, Value, date_out, json_escape,
+    json_in, jsonb_in, oid, timestamp_out, timestamptz_out,
 };
 
 use crate::deparse::row_names;
@@ -409,4 +410,177 @@ fn json_object_two_arg(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 
 fn jsonb_object_two_arg(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     jsonb(&object_two_arg(args)?)
+}
+
+/// The JSON whitespace that the lexer skips.
+const JSON_SPACE: [char; 4] = [' ', '\t', '\n', '\r'];
+
+/// The error of a key that is not unique. A `jsonb` value does not show the key.
+fn duplicate_key(key: Option<&str>) -> Error {
+    let message = match key {
+        Some(key) => format!("duplicate JSON object key value: {key}"),
+        None => "duplicate JSON object key value".to_owned(),
+    };
+    Error::new(SqlState::DUPLICATE_JSON_OBJECT_KEY_VALUE, message)
+}
+
+/// `json_build_object_worker` and `jsonb_build_object_worker` for `JSON_OBJECT`: an object of the keys and the values, one after the other.
+///
+/// A `json` value keeps each field in its order. A `jsonb` value keeps the last field of each key, and then `ABSENT ON NULL` removes each field with a JSON null value, as `uniqueifyJsonbObject` does. A key of a field that `ABSENT ON NULL` skips still counts for `WITH UNIQUE KEYS`.
+///
+/// # Errors
+///
+/// The error of a null key, of a key that is not a scalar, or of a key that is not unique.
+pub fn json_ctor_object(
+    args: &[(u32, Value)],
+    jsonb: bool,
+    absent_on_null: bool,
+    unique: bool,
+    session: &dyn Session,
+) -> Result<Value> {
+    let mut fields: Vec<(String, String)> = Vec::new();
+    let mut keys = std::collections::HashSet::new();
+    for (i, pair) in args.chunks(2).enumerate() {
+        let [(key_ty, key), (ty, value)] = pair else { return Err(bad_value()) };
+        let skip = absent_on_null && value.is_null();
+        if jsonb && key.is_null() {
+            return Err(invalid(&format!("argument {}: key must not be null", 2 * i + 1)));
+        }
+        if skip && !unique {
+            continue;
+        }
+        if key.is_null() {
+            return Err(Error::new(
+                SqlState::NULL_VALUE_NOT_ALLOWED,
+                "null value not allowed for object key",
+            ));
+        }
+        let mut name = String::new();
+        json_value(*key_ty, key, true, session, &mut name)?;
+        if unique && !keys.insert(name.clone()) {
+            return Err(duplicate_key((!jsonb).then_some(&*name)));
+        }
+        if skip && !jsonb {
+            continue;
+        }
+        let mut text = String::new();
+        json_value(*ty, value, false, session, &mut text)?;
+        fields.push((name, text));
+    }
+    if jsonb {
+        // The last field of each key, then the fields with a value that is not a JSON null.
+        let mut last: Vec<(String, String)> = Vec::new();
+        for (name, text) in fields.into_iter().rev() {
+            if !last.iter().any(|(n, _)| *n == name) {
+                last.push((name, text));
+            }
+        }
+        last.reverse();
+        if absent_on_null {
+            last.retain(|(_, text)| text.trim_matches(JSON_SPACE) != "null");
+        }
+        fields = last;
+    }
+    let mut out = String::from("{");
+    for (i, (name, text)) in fields.iter().enumerate() {
+        if i > 0 {
+            out.push_str(", ");
+        }
+        out.push_str(name);
+        out.push_str(" : ");
+        out.push_str(text);
+    }
+    out.push('}');
+    if jsonb { self::jsonb(&out) } else { Ok(Value::Text(out)) }
+}
+
+/// `json_build_array_worker` and `jsonb_build_array_worker` for `JSON_ARRAY`: an array of the values. `ABSENT ON NULL` skips the null values.
+///
+/// # Errors
+///
+/// The error of the output of a value.
+pub fn json_ctor_array(
+    args: &[(u32, Value)],
+    jsonb: bool,
+    absent_on_null: bool,
+    session: &dyn Session,
+) -> Result<Value> {
+    let mut out = String::from("[");
+    let mut first = true;
+    for (ty, value) in args {
+        if absent_on_null && value.is_null() {
+            continue;
+        }
+        if !first {
+            out.push_str(", ");
+        }
+        first = false;
+        json_value(*ty, value, false, session, &mut out)?;
+    }
+    out.push(']');
+    if jsonb { self::jsonb(&out) } else { Ok(Value::Text(out)) }
+}
+
+/// `datum_to_json` and `datum_to_jsonb` for `JSON_SCALAR`: the JSON value of a SQL value, or null for null.
+///
+/// # Errors
+///
+/// The error of the output of the value.
+pub fn json_ctor_scalar(
+    ty: u32,
+    value: &Value,
+    jsonb: bool,
+    session: &dyn Session,
+) -> Result<Value> {
+    if value.is_null() {
+        return Ok(Value::Null);
+    }
+    let mut out = String::new();
+    json_value(ty, value, false, session, &mut out)?;
+    if jsonb { self::jsonb(&out) } else { Ok(Value::Text(out)) }
+}
+
+/// True when no object of the parsed value has a key two times.
+fn unique_keys(tree: JsonTree<'_>) -> bool {
+    tree.into_nodes().iter().all(|node| match &node.item {
+        JsonItem::Object(fields) => {
+            let mut keys = std::collections::HashSet::new();
+            fields.iter().all(|(key, _)| keys.insert(key.as_str()))
+        }
+        _ => true,
+    })
+}
+
+/// `JSON` with `WITH UNIQUE KEYS`: the `json` or `jsonb` value of a text that has no object with a key two times, as `json_validate` and `jsonb_from_text` check it.
+///
+/// # Errors
+///
+/// The error of the input of the type, or of a key that is not unique.
+pub fn json_ctor_parse(text: &str, jsonb: bool) -> Result<Value> {
+    let tree = JsonTree::parse(text).map_err(type_error)?;
+    if !unique_keys(tree) {
+        return Err(duplicate_key(None));
+    }
+    if jsonb { self::jsonb(text) } else { Ok(Value::text(text)) }
+}
+
+/// `ExecEvalJsonIsPredicate`: true when the value is JSON of the kind of the predicate. `base_type` is `text`, `json` or `jsonb`. The first token of a `text` or a `json` value gives its kind, and only a `text` value or a check of the keys parses all of the value.
+pub fn is_json(value: &str, base_type: u32, item: JsonItemType, unique: bool) -> bool {
+    let first = value.trim_start_matches(JSON_SPACE).chars().next();
+    let kind = match first {
+        Some('{') => JsonItemType::Object,
+        Some('[') => JsonItemType::Array,
+        Some(_) => JsonItemType::Scalar,
+        None => return false,
+    };
+    if base_type == oid::JSONB {
+        return item == JsonItemType::Any || item == kind;
+    }
+    if item != JsonItemType::Any && item != kind {
+        return false;
+    }
+    if unique {
+        return JsonTree::parse(value).is_ok_and(unique_keys);
+    }
+    base_type != oid::TEXT || json_in(value).is_ok()
 }

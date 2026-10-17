@@ -1,0 +1,437 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW t AS SELECT * FROM (VALUES (1, 'x', '{"a": 1}'), (2, NULL, '[1, 2]'), (3, 'z', 'bad')) AS v (a, b, j)
+CREATE VIEW
+> SELECT JSON_OBJECT()
+fields json_object:114:-1:-1
+row {}
+SELECT 1
+> SELECT JSON_OBJECT(RETURNING jsonb)
+fields json_object:3802:-1:-1
+row {}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1, 'b': 'x', 'c': NULL)
+fields json_object:114:-1:-1
+row {"a" : 1, "b" : "x", "c" : null}
+SELECT 1
+> SELECT JSON_OBJECT('a' VALUE 1, 'b' VALUE true)
+fields json_object:114:-1:-1
+row {"a" : 1, "b" : true}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1, 'b': NULL ABSENT ON NULL)
+fields json_object:114:-1:-1
+row {"a" : 1}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1, 'b': NULL NULL ON NULL)
+fields json_object:114:-1:-1
+row {"a" : 1, "b" : null}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1, 'a': 2)
+fields json_object:114:-1:-1
+row {"a" : 1, "a" : 2}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1, 'a': 2 WITH UNIQUE KEYS)
+fields json_object:114:-1:-1
+ERROR 22030 duplicate JSON object key value: "a"
+> SELECT JSON_OBJECT('a': 1, 'a': 2 RETURNING jsonb)
+fields json_object:3802:-1:-1
+row {"a": 2}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1, 'a': 2 WITH UNIQUE KEYS RETURNING jsonb)
+fields json_object:3802:-1:-1
+ERROR 22030 duplicate JSON object key value
+> SELECT JSON_OBJECT('a': 1, 'a': NULL ABSENT ON NULL RETURNING jsonb)
+fields json_object:3802:-1:-1
+row {"a": 1}
+SELECT 1
+> SELECT JSON_OBJECT('a': NULL, 'a': 1 ABSENT ON NULL WITH UNIQUE KEYS)
+fields json_object:114:-1:-1
+ERROR 22030 duplicate JSON object key value: "a"
+> SELECT JSON_OBJECT('a': 'null'::jsonb ABSENT ON NULL RETURNING jsonb)
+fields json_object:3802:-1:-1
+row {}
+SELECT 1
+> SELECT JSON_OBJECT('a': 'null'::json ABSENT ON NULL)
+fields json_object:114:-1:-1
+row {"a" : null}
+SELECT 1
+> SELECT JSON_OBJECT(NULL: 1)
+fields json_object:114:-1:-1
+ERROR 22004 null value not allowed for object key
+> SELECT JSON_OBJECT(NULL: 1 RETURNING jsonb)
+fields json_object:3802:-1:-1
+ERROR 22023 argument 1: key must not be null
+> SELECT JSON_OBJECT('a': '{"x": 1}')
+fields json_object:114:-1:-1
+row {"a" : "{\"x\": 1}"}
+SELECT 1
+> SELECT JSON_OBJECT('a': '{"x": 1}' FORMAT JSON)
+fields json_object:114:-1:-1
+row {"a" : {"x": 1}}
+SELECT 1
+> SELECT JSON_OBJECT('a': '{"x": 1}'::jsonb)
+fields json_object:3802:-1:-1
+row {"a": {"x": 1}}
+SELECT 1
+> SELECT JSON_OBJECT('a': '{"x": 1}'::json)
+fields json_object:114:-1:-1
+row {"a" : {"x": 1}}
+SELECT 1
+> SELECT JSON_OBJECT('a': '{"x" 1}' FORMAT JSON)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: {"x" 1...)
+> SELECT JSON_OBJECT('a': 1 FORMAT JSON)
+ERROR 42804 cannot use non-string types with explicit FORMAT JSON clause at 27
+> SELECT JSON_OBJECT('a': '"x"'::bytea FORMAT JSON)
+fields json_object:114:-1:-1
+row {"a" : "x"}
+SELECT 1
+> SELECT JSON_OBJECT('a': '"x"'::bytea FORMAT JSON ENCODING UTF8)
+fields json_object:114:-1:-1
+row {"a" : "x"}
+SELECT 1
+> SELECT JSON_OBJECT('a': '"x"' FORMAT JSON ENCODING UTF8)
+ERROR 42804 JSON ENCODING clause is only allowed for bytea input type at 31
+> SELECT JSON_OBJECT('a': '"x"'::bytea FORMAT JSON ENCODING UTF16)
+fields json_object:114:-1:-1
+ERROR 22023 invalid source encoding name "UTF16"
+> SELECT JSON_OBJECT('a': 1 RETURNING text)
+fields json_object:25:-1:-1
+row {"a" : 1}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1 RETURNING varchar(5))
+fields json_object:1043:-1:9
+ERROR 22001 value too long for type character varying(5)
+> SELECT JSON_OBJECT('a': 1 RETURNING bytea)
+fields json_object:17:-1:-1
+row \x7b226122203a20317d
+SELECT 1
+> SELECT JSON_OBJECT('a': 1 RETURNING bytea FORMAT JSON)
+fields json_object:17:-1:-1
+row \x7b226122203a20317d
+SELECT 1
+> SELECT JSON_OBJECT('a': 1 RETURNING bytea FORMAT JSON ENCODING UTF8)
+fields json_object:17:-1:-1
+row \x7b226122203a20317d
+SELECT 1
+> SELECT JSON_OBJECT('a': 1 RETURNING bytea FORMAT JSON ENCODING UTF16)
+ERROR 0A000 unsupported JSON encoding at 43
+> SELECT JSON_OBJECT('a': 1 RETURNING text FORMAT JSON ENCODING UTF8)
+ERROR 0A000 cannot set JSON encoding for non-bytea output types at 42
+> SELECT JSON_OBJECT('a': 1 RETURNING int4)
+ERROR 42846 cannot cast type json to integer
+> SELECT JSON_OBJECT('a': 1 RETURNING int4 FORMAT JSON)
+ERROR 42846 cannot cast type json to integer at 42
+> SELECT JSON_OBJECT('a': 1 RETURNING json FORMAT JSON)
+fields json_object:114:-1:-1
+row {"a" : 1}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1 RETURNING jsonb FORMAT JSON)
+fields json_object:3802:-1:-1
+row {"a": 1}
+SELECT 1
+> SELECT JSON_OBJECT('a': 1 RETURNING setof int)
+ERROR 0A000 returning SETOF types is not supported in SQL/JSON functions
+> SELECT JSON_OBJECT('a': 1 RETURNING record)
+ERROR 0A000 returning pseudo-types is not supported in SQL/JSON functions
+> SELECT JSON_OBJECT(1: 1, 2.5: true, true: 'x')
+fields json_object:114:-1:-1
+row {"1" : 1, "2.5" : true, "true" : "x"}
+SELECT 1
+> SELECT JSON_OBJECT(ARRAY[1]: 1)
+fields json_object:114:-1:-1
+ERROR 22023 key value must be scalar, not array, composite, or json
+> SELECT JSON_OBJECT('a': ARRAY[1, 2], 'b': ROW(1, 'x'), 'c': date '2020-01-02')
+fields json_object:114:-1:-1
+row {"a" : [1,2], "b" : {"f1":1,"f2":"x"}, "c" : "2020-01-02"}
+SELECT 1
+> SELECT JSON_OBJECT('k' || a: b) FROM t ORDER BY a
+fields json_object:114:-1:-1
+row {"k1" : "x"}
+row {"k2" : null}
+row {"k3" : "z"}
+SELECT 3
+> SELECT JSON_OBJECT('k' || a: b ABSENT ON NULL RETURNING jsonb) FROM t ORDER BY a
+fields json_object:3802:-1:-1
+row {"k1": "x"}
+row {}
+row {"k3": "z"}
+SELECT 3
+> SELECT pg_typeof(JSON_OBJECT('a': 1)), pg_typeof(JSON_OBJECT('a': 1 RETURNING jsonb)), pg_typeof(JSON_OBJECT('a': '1'::jsonb))
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row json,jsonb,jsonb
+SELECT 1
+> SELECT JSON_ARRAY()
+fields json_array:114:-1:-1
+row []
+SELECT 1
+> SELECT JSON_ARRAY(RETURNING jsonb)
+fields json_array:3802:-1:-1
+row []
+SELECT 1
+> SELECT JSON_ARRAY(1, 'x', NULL, true)
+fields json_array:114:-1:-1
+row [1, "x", true]
+SELECT 1
+> SELECT JSON_ARRAY(1, 'x', NULL, true NULL ON NULL)
+fields json_array:114:-1:-1
+row [1, "x", null, true]
+SELECT 1
+> SELECT JSON_ARRAY(1, NULL ABSENT ON NULL RETURNING jsonb)
+fields json_array:3802:-1:-1
+row [1]
+SELECT 1
+> SELECT JSON_ARRAY(1, '[2]' FORMAT JSON, '{"a":1}'::jsonb)
+fields json_array:3802:-1:-1
+row [1, [2], {"a": 1}]
+SELECT 1
+> SELECT JSON_ARRAY('[2]'::json, '{"b": 1, "a": 2}'::jsonb RETURNING jsonb)
+fields json_array:3802:-1:-1
+row [[2], {"a": 2, "b": 1}]
+SELECT 1
+> SELECT JSON_ARRAY(JSON_ARRAY(1, 2), JSON_OBJECT('a': JSON_ARRAY()))
+fields json_array:114:-1:-1
+row [[1, 2], {"a" : []}]
+SELECT 1
+> SELECT JSON_ARRAY(a, b) FROM t ORDER BY a
+fields json_array:114:-1:-1
+row [1, "x"]
+row [2]
+row [3, "z"]
+SELECT 3
+> SELECT JSON_ARRAY(1 RETURNING text), JSON_ARRAY(1 RETURNING varchar(2))
+fields json_array:25:-1:-1,json_array:1043:-1:6
+ERROR 22001 value too long for type character varying(2)
+> SELECT JSON_ARRAY(1 RETURNING int)
+ERROR 42846 cannot cast type json to integer
+> SELECT JSON_ARRAY('a' FORMAT JSON)
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: a)
+> SELECT JSON('{"a": 1, "a": 2}'), JSON(' 1 ')
+fields json:114:-1:-1,json:114:-1:-1
+row {"a": 1, "a": 2}, 1 
+SELECT 1
+> SELECT JSON('{"a": 1, "a": 2}' WITH UNIQUE KEYS)
+fields json:114:-1:-1
+ERROR 22030 duplicate JSON object key value
+> SELECT JSON('{"a": 1, "b": 2}' WITH UNIQUE KEYS)
+fields json:114:-1:-1
+row {"a": 1, "b": 2}
+SELECT 1
+> SELECT JSON('{"a": 1, "a": 2}' WITHOUT UNIQUE KEYS)
+fields json:114:-1:-1
+row {"a": 1, "a": 2}
+SELECT 1
+> SELECT JSON('{"a" 1}')
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: {"a" 1...)
+> SELECT JSON(NULL), JSON(NULL::text)
+fields json:114:-1:-1,json:114:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT JSON('{"a": 1}'::json), JSON('{"a": 1}'::jsonb)
+fields json:114:-1:-1,json:114:-1:-1
+row {"a": 1},{"a": 1}
+SELECT 1
+> SELECT JSON('1'::bytea)
+fields json:114:-1:-1
+row 1
+SELECT 1
+> SELECT JSON('1'::bytea FORMAT JSON ENCODING UTF8)
+fields json:114:-1:-1
+row 1
+SELECT 1
+> SELECT JSON(1)
+ERROR 42846 cannot cast type integer to json at 13
+> SELECT JSON('[1]'::varchar), JSON('[1]'::name WITH UNIQUE KEYS)
+fields json:114:-1:-1,json:114:-1:-1
+row [1],[1]
+SELECT 1
+> SELECT JSON('{"a": 1}'::json WITH UNIQUE KEYS)
+ERROR 42804 cannot use non-string types with WITH UNIQUE KEYS clause at 8
+> SELECT JSON(j) FROM t WHERE a < 3 ORDER BY a
+fields json:114:-1:-1
+row {"a": 1}
+row [1, 2]
+SELECT 2
+> SELECT pg_typeof(JSON('1')), pg_typeof(JSON('1'::jsonb))
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row json,json
+SELECT 1
+> SELECT JSON_SCALAR(1), JSON_SCALAR(1.5), JSON_SCALAR('x'), JSON_SCALAR(true), JSON_SCALAR(NULL)
+fields json_scalar:114:-1:-1,json_scalar:114:-1:-1,json_scalar:114:-1:-1,json_scalar:114:-1:-1,json_scalar:114:-1:-1
+row 1,1.5,"x",true,NULL
+SELECT 1
+> SELECT JSON_SCALAR(date '2020-01-02'), JSON_SCALAR(timestamptz '2020-01-02 03:04:05+00'), JSON_SCALAR('a"b'::varchar)
+fields json_scalar:114:-1:-1,json_scalar:114:-1:-1,json_scalar:114:-1:-1
+row "2020-01-02","2020-01-02T03:04:05+00:00","a\"b"
+SELECT 1
+> SELECT JSON_SCALAR('{"a": 1}'::json), JSON_SCALAR('{"b": 1, "a": 2}'::jsonb)
+fields json_scalar:114:-1:-1,json_scalar:114:-1:-1
+row {"a": 1},{"a": 2, "b": 1}
+SELECT 1
+> SELECT JSON_SCALAR(ARRAY[1, 2]), JSON_SCALAR(ROW(1, 2))
+fields json_scalar:114:-1:-1,json_scalar:114:-1:-1
+row [1,2],{"f1":1,"f2":2}
+SELECT 1
+> SELECT JSON_SCALAR('NaN'::float8), JSON_SCALAR('Infinity'::numeric), JSON_SCALAR(1e30::float8)
+fields json_scalar:114:-1:-1,json_scalar:114:-1:-1,json_scalar:114:-1:-1
+row "NaN","Infinity",1e+30
+SELECT 1
+> SELECT pg_typeof(JSON_SCALAR(1)), JSON_SCALAR(a), JSON_SCALAR(b) FROM t ORDER BY a
+fields pg_typeof:2206:4:-1,json_scalar:114:-1:-1,json_scalar:114:-1:-1
+row json,1,"x"
+row json,2,NULL
+row json,3,"z"
+SELECT 3
+> SELECT JSON_SERIALIZE('{"a": 1}'), JSON_SERIALIZE('[1]'::json RETURNING varchar(10))
+fields json_serialize:25:-1:-1,json_serialize:1043:-1:14
+row {"a": 1},[1]
+SELECT 1
+> SELECT JSON_SERIALIZE('{"a": 1}' RETURNING bytea), JSON_SERIALIZE(NULL)
+fields json_serialize:17:-1:-1,json_serialize:25:-1:-1
+row \x7b2261223a20317d,NULL
+SELECT 1
+> SELECT JSON_SERIALIZE('{"a": 1}' RETURNING jsonb)
+ERROR 42804 cannot use type jsonb in RETURNING clause of JSON_SERIALIZE()
+> SELECT JSON_SERIALIZE('{"a": 1}' RETURNING int)
+ERROR 42804 cannot use type integer in RETURNING clause of JSON_SERIALIZE()
+> SELECT JSON_SERIALIZE('{"a" 1}')
+ERROR 22P02 invalid input syntax for type json (JSON data, line 1: {"a" 1...)
+> SELECT JSON_SERIALIZE(1)
+ERROR 42804 cannot use non-string types with implicit FORMAT JSON clause at 23
+> SELECT JSON_SERIALIZE('1'::bytea FORMAT JSON)
+fields json_serialize:25:-1:-1
+row 1
+SELECT 1
+> SELECT JSON_SERIALIZE('[1]' RETURNING varchar(2))
+fields json_serialize:1043:-1:6
+ERROR 22001 value too long for type character varying(2)
+> SELECT pg_typeof(JSON_SERIALIZE('1')), pg_typeof(JSON_SERIALIZE('1' RETURNING bytea))
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row text,bytea
+SELECT 1
+> SELECT '{"a": 1}' IS JSON, '[1]' IS JSON ARRAY, '1' IS JSON SCALAR, '{}' IS JSON OBJECT, 'x' IS JSON, NULL IS JSON
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t,t,f,NULL
+SELECT 1
+> SELECT '{"a": 1}' IS JSON VALUE, '[1]' IS JSON OBJECT, '1' IS JSON ARRAY, '{}' IS JSON SCALAR, '"x"' IS JSON SCALAR
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,f,t
+SELECT 1
+> SELECT '{"a": 1, "a": 2}' IS JSON WITH UNIQUE KEYS, '{"a": 1, "b": {"a": 1, "a": 2}}' IS JSON WITH UNIQUE KEYS, '{"a": 1, "b": 2}' IS JSON OBJECT WITH UNIQUE KEYS
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row f,f,t
+SELECT 1
+> SELECT '[{"a": 1, "a": 2}]' IS JSON ARRAY WITHOUT UNIQUE KEYS, '[{"a": 1}, {"a": 2}]' IS JSON WITH UNIQUE KEYS
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> SELECT '{"a": 1, "a": 2}'::json IS JSON WITH UNIQUE KEYS, '{"a": 1, "a": 2}'::jsonb IS JSON WITH UNIQUE KEYS
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,t
+SELECT 1
+> SELECT '[1]'::jsonb IS JSON ARRAY, '1'::jsonb IS JSON ARRAY, '1'::jsonb IS JSON SCALAR, '{}'::jsonb IS JSON OBJECT, '[]'::jsonb IS JSON SCALAR
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,t,t,f
+SELECT 1
+> SELECT '[1]'::json IS JSON ARRAY, ' 1 '::json IS JSON SCALAR, '{}'::json IS NOT JSON OBJECT
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,f
+SELECT 1
+> SELECT 'x' IS NOT JSON, '1' IS NOT JSON SCALAR, NULL IS NOT JSON
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,NULL
+SELECT 1
+> SELECT '{"a": 1}'::bytea IS JSON, 'x'::bytea IS JSON
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> SELECT '{"a": 1}'::bytea FORMAT JSON IS JSON
+ERROR 42601 syntax error at or near "FORMAT" at 26
+> SELECT '{"a": 1}'::bytea FORMAT JSON ENCODING UTF8 IS JSON
+ERROR 42601 syntax error at or near "FORMAT" at 26
+> SELECT '1' FORMAT JSON ENCODING UTF8 IS JSON
+ERROR 42601 syntax error at or near "FORMAT" at 12
+> SELECT 1 IS JSON
+ERROR 42804 cannot use type integer in IS JSON predicate at 8
+> SELECT '[1]'::varchar(5) IS JSON, '[1]'::char(3) IS JSON, '[1]'::name IS JSON
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT a, j IS JSON, j IS JSON OBJECT, j IS NOT JSON FROM t ORDER BY a
+fields a@t.1:23:4:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row 1,t,t,f
+row 2,t,f,f
+row 3,f,f,t
+SELECT 3
+> SELECT a FROM t WHERE j IS JSON ARRAY
+fields a@t.1:23:4:-1
+row 2
+SELECT 1
+> SELECT '{"a": 1}' IS JSON AND true, NOT '1' IS JSON
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+SELECT 1
+> CREATE VIEW v1 AS SELECT JSON_OBJECT('a': 1, 'b': b) AS c1, JSON_OBJECT('k': a ABSENT ON NULL WITH UNIQUE KEYS RETURNING jsonb) AS c2, JSON_OBJECT() AS c3, JSON_OBJECT('x': j FORMAT JSON RETURNING text) AS c4 FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v1'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT JSON_OBJECT('a' : 1, 'b' : b RETURNING json) AS c1,
+    JSON_OBJECT('k' : a ABSENT ON NULL WITH UNIQUE KEYS RETURNING jsonb) AS c2,
+    JSON_OBJECT( RETURNING json) AS c3,
+    JSON_OBJECT('x' : j FORMAT JSON RETURNING text) AS c4
+   FROM t;
+SELECT 1
+> CREATE VIEW v2 AS SELECT JSON_ARRAY(a, b) AS c1, JSON_ARRAY(a, b NULL ON NULL RETURNING jsonb) AS c2, JSON_ARRAY() AS c3, JSON_ARRAY(a RETURNING bytea FORMAT JSON ENCODING UTF8) AS c4 FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v2'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT JSON_ARRAY(a, b RETURNING json) AS c1,
+    JSON_ARRAY(a, b NULL ON NULL RETURNING jsonb) AS c2,
+    JSON_ARRAY( RETURNING json) AS c3,
+    JSON_ARRAY(a RETURNING bytea) AS c4
+   FROM t;
+SELECT 1
+> CREATE VIEW v3 AS SELECT a, JSON(j) AS c1, JSON(j WITH UNIQUE KEYS) AS c2, JSON_SCALAR(a) AS c3, JSON_SCALAR(b) AS c4, JSON_SERIALIZE(JSON(j)) AS c5, JSON_SERIALIZE(JSON(j) RETURNING bytea) AS c6, JSON_SERIALIZE(JSON(j) RETURNING varchar(9)) AS c7 FROM t WHERE a < 3
+CREATE VIEW
+> SELECT pg_get_viewdef('v3'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    JSON(j) AS c1,
+    JSON(j WITH UNIQUE KEYS) AS c2,
+    JSON_SCALAR(a) AS c3,
+    JSON_SCALAR(b) AS c4,
+    JSON_SERIALIZE(JSON(j) RETURNING text) AS c5,
+    JSON_SERIALIZE(JSON(j) RETURNING bytea) AS c6,
+    JSON_SERIALIZE(JSON(j) RETURNING character varying(9)) AS c7
+   FROM t
+  WHERE (a < 3);
+SELECT 1
+> SELECT * FROM v3 ORDER BY a
+fields a@v3.1:23:4:-1,c1@v3.2:114:-1:-1,c2@v3.3:114:-1:-1,c3@v3.4:114:-1:-1,c4@v3.5:114:-1:-1,c5@v3.6:25:-1:-1,c6@v3.7:17:-1:-1,c7@v3.8:1043:-1:13
+row 1,{"a": 1},{"a": 1},1,"x",{"a": 1},\x7b2261223a20317d,{"a": 1}
+row 2,[1, 2],[1, 2],2,NULL,[1, 2],\x5b312c20325d,[1, 2]
+SELECT 2
+> CREATE VIEW v4 AS SELECT j IS JSON AS c1, j IS JSON OBJECT AS c2, j IS NOT JSON ARRAY WITH UNIQUE KEYS AS c3, j::json IS JSON SCALAR AS c4, (j IS JSON) = true AS c5, j::bytea IS JSON AS c6 FROM t WHERE a < 3
+CREATE VIEW
+> SELECT pg_get_viewdef('v4'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (j IS JSON) AS c1,
+    (j IS JSON OBJECT) AS c2,
+    (NOT (j IS JSON ARRAY WITH UNIQUE KEYS)) AS c3,
+    ((j)::json IS JSON SCALAR) AS c4,
+    ((j IS JSON) = true) AS c5,
+    ((j)::bytea IS JSON) AS c6
+   FROM t
+  WHERE (a < 3);
+SELECT 1
+> SELECT * FROM v4 ORDER BY 1, 2
+fields c1@v4.1:16:1:-1,c2@v4.2:16:1:-1,c3@v4.3:16:1:-1,c4@v4.4:16:1:-1,c5@v4.5:16:1:-1,c6@v4.6:16:1:-1
+row t,f,f,f,t,t
+row t,t,t,f,t,t
+SELECT 2
+> CREATE VIEW v5 AS SELECT JSON_OBJECT('a': JSON_ARRAY(1, 2), 'b': j::bytea FORMAT JSON, 'c': j::jsonb FORMAT JSON) AS c1 FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v5'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT JSON_OBJECT('a' : JSON_ARRAY(1, 2 RETURNING json), 'b' : (j)::bytea FORMAT JSON, 'c' : (j)::jsonb RETURNING jsonb) AS c1
+   FROM t;
+SELECT 1

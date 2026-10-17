@@ -24,6 +24,7 @@ mod resolve;
 mod select;
 mod setop;
 mod sort;
+mod sqljson;
 mod sublink;
 mod subscript;
 mod transform;
@@ -49,9 +50,10 @@ pub use ddl::{
     define, function_body, is_definition, lock_table,
 };
 pub use expr::{
-    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, GroupingFunc,
-    JoinRow, NamedArg, NullTreatment, RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind,
-    Subscript, Var, WindowFunc,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, GroupingFunc, IsJson,
+    JoinRow, JsonCtor, JsonCtorKind, JsonEncoding, JsonFormat, JsonFormatKind, JsonItemType,
+    JsonReturning, JsonValue, NamedArg, NullTreatment, RowCompare, RowCompareKind, SqlValue,
+    SubLink, SubLinkKind, Subscript, Var, WindowFunc,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use funcargs::{arg_defaults, expand_arguments};

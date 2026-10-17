@@ -10,9 +10,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use rupg_analyze::{
-    Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, Query,
-    RowCompare, SetKind, SetOp, SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript,
-    Target, WindowFunc,
+    Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, IsJson,
+    JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp, SetTree, SortGroup,
+    SqlValue, SubLink, SubLinkKind, Subscript, Target, WindowFunc,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -203,6 +203,9 @@ fn check(expr: &Expr) -> Result<()> {
             }
         }
         ExprKind::Grouping(g) => g.args.iter().try_for_each(check)?,
+        ExprKind::JsonValue(_) | ExprKind::JsonCtor(_) | ExprKind::IsJson(_) => {
+            expr.children().into_iter().try_for_each(check)?;
+        }
         ExprKind::Window(w) => {
             if w.agg {
                 agg::method(&agg::window_aggref(w), expr.ty, expr.location)?;
@@ -1609,6 +1612,9 @@ impl<'a> Eval<'a> {
                     g.refs.iter().fold(0, |bits, r| (bits << 1) | i32::from(out.contains(r)));
                 Ok(Value::Int4(bits))
             }
+            ExprKind::JsonValue(v) => self.eval(&v.formatted),
+            ExprKind::JsonCtor(c) => self.json_ctor(c),
+            ExprKind::IsJson(p) => self.is_json(p),
             ExprKind::Window(w) => self
                 .windows
                 .iter()
@@ -1924,6 +1930,64 @@ impl<'a> Eval<'a> {
             });
         }
         Ok(if null { None } else { Some(out) })
+    }
+
+    /// `ExecEvalJsonConstructor`: the `json` or `jsonb` value of a SQL/JSON constructor, then its cast to the type of `RETURNING`.
+    fn json_ctor(&mut self, c: &JsonCtor) -> Result<Value> {
+        let jsonb = c.returning.format.kind == JsonFormatKind::Jsonb;
+        let first = || {
+            c.args.first().ok_or_else(|| Error::internal("a SQL/JSON constructor with no argument"))
+        };
+        let value = match c.kind {
+            JsonCtorKind::Parse if c.unique => match self.eval(first()?)? {
+                Value::Null => Value::Null,
+                v => {
+                    let text = v
+                        .as_str()
+                        .ok_or_else(|| Error::internal("JSON of a value that is not text"))?;
+                    rupg_func::json_ctor_parse(text, jsonb)?
+                }
+            },
+            JsonCtorKind::Parse | JsonCtorKind::Serialize => self.eval(first()?)?,
+            JsonCtorKind::Scalar => {
+                let arg = first()?;
+                let v = self.eval(arg)?;
+                rupg_func::json_ctor_scalar(arg.ty, &v, jsonb, self.session)?
+            }
+            JsonCtorKind::Object | JsonCtorKind::Array => {
+                let mut args = Vec::with_capacity(c.args.len());
+                for arg in &c.args {
+                    args.push((arg.ty, self.eval(arg)?));
+                }
+                if c.kind == JsonCtorKind::Object {
+                    rupg_func::json_ctor_object(
+                        &args,
+                        jsonb,
+                        c.absent_on_null,
+                        c.unique,
+                        self.session,
+                    )?
+                } else {
+                    rupg_func::json_ctor_array(&args, jsonb, c.absent_on_null, self.session)?
+                }
+            }
+        };
+        let Some(coercion) = &c.coercion else { return Ok(value) };
+        self.case.push(value);
+        let result = self.eval(coercion);
+        self.case.pop();
+        result
+    }
+
+    /// `ExecEvalJsonIsPredicate`: null for a null value.
+    fn is_json(&mut self, p: &IsJson) -> Result<Value> {
+        let v = self.eval(&p.expr)?;
+        if v.is_null() {
+            return Ok(Value::Null);
+        }
+        let text =
+            v.as_str().ok_or_else(|| Error::internal("IS JSON of a value that is not text"))?;
+        Ok(Value::Bool(rupg_func::is_json(text, p.base_type, p.item, p.unique)))
     }
 
     fn case(&mut self, case: &Case) -> Result<Value> {
