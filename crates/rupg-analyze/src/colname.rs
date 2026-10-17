@@ -1,7 +1,8 @@
 //! `FigureColname`: the name of a column of the result when the query gives no `AS` name, from the raw expression as `parse_target.c` finds it.
 
 use rupg_sql::nodes::{
-    A_Expr_Kind, MinMaxOp, Node, SQLValueFunctionOp, SelectStmt, SetOperation, SubLinkType,
+    A_Expr_Kind, JsonExprOp, MinMaxOp, Node, SQLValueFunctionOp, SelectStmt, SetOperation,
+    SubLinkType,
 };
 
 /// The name of the column for the expression, or `?column?`.
@@ -108,6 +109,19 @@ fn figure(node: Option<&Node>) -> Option<(String, u8)> {
             SQLValueFunctionOp::SVFOP_CURRENT_CATALOG => "current_catalog",
             _ => "current_schema",
         }),
+        Node::JsonParseExpr(_) => strong("json"),
+        Node::JsonScalarExpr(_) => strong("json_scalar"),
+        Node::JsonSerializeExpr(_) => strong("json_serialize"),
+        Node::JsonObjectConstructor(_) => strong("json_object"),
+        Node::JsonArrayConstructor(_) | Node::JsonArrayQueryConstructor(_) => strong("json_array"),
+        Node::JsonObjectAgg(_) => strong("json_objectagg"),
+        Node::JsonArrayAgg(_) => strong("json_arrayagg"),
+        Node::JsonFuncExpr(f) => match f.op {
+            JsonExprOp::JSON_EXISTS_OP => strong("json_exists"),
+            JsonExprOp::JSON_QUERY_OP => strong("json_query"),
+            JsonExprOp::JSON_VALUE_OP => strong("json_value"),
+            _ => None,
+        },
         _ => None,
     }
 }

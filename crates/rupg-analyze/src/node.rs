@@ -6,8 +6,9 @@ use rupg_common::{Error, Result};
 use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value};
 
 use crate::expr::{
-    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JoinRow, NamedArg,
-    RowCompare, RowCompareKind, SqlValue, Subscript, Var,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, IsJson, JoinRow, JsonCtor,
+    JsonCtorKind, JsonEncoding, JsonFormat, JsonFormatKind, JsonItemType, JsonReturning, JsonValue,
+    NamedArg, RowCompare, RowCompareKind, SqlValue, Subscript, Var,
 };
 
 /// The stored form of an expression.
@@ -99,6 +100,9 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Var(_) => "VAR",
         ExprKind::FieldSelect(..) => "FIELDSELECT",
         ExprKind::NamedArg(_) => "NAMEDARG",
+        ExprKind::JsonValue(_) => "JSONVALUEEXPR",
+        ExprKind::JsonCtor(_) => "JSONCONSTRUCTOREXPR",
+        ExprKind::IsJson(_) => "JSONISPREDICATE",
         ExprKind::Param(_)
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
@@ -268,6 +272,30 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push_str(&format!(" :number {}", na.number));
             write_field("arg", &na.arg, out)?;
         }
+        ExprKind::JsonValue(v) => {
+            write_format(v.format, out);
+            write_field("raw", &v.raw, out)?;
+            write_field("formatted", &v.formatted, out)?;
+        }
+        ExprKind::JsonCtor(c) => {
+            let kind = CTOR_KINDS.iter().find(|(k, _)| *k == c.kind).map_or("object", |(_, n)| n);
+            out.push_str(&format!(
+                " :kind {kind} :unique {} :absent {} :rtype {} :rtypmod {}",
+                c.unique, c.absent_on_null, c.returning.ty, c.returning.typmod
+            ));
+            write_format(c.returning.format, out);
+            write_args(&c.args, out)?;
+            out.push_str(" :coercion ");
+            match &c.coercion {
+                Some(coercion) => write_expr(coercion, out)?,
+                None => out.push_str("<>"),
+            }
+        }
+        ExprKind::IsJson(p) => {
+            let item = ITEM_TYPES.iter().find(|(i, _)| *i == p.item).map_or("any", |(_, n)| n);
+            out.push_str(&format!(" :item {item} :unique {} :basetype {}", p.unique, p.base_type));
+            write_field("arg", &p.expr, out)?;
+        }
         ExprKind::Param(_)
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
@@ -277,6 +305,56 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
     }
     out.push('}');
     Ok(())
+}
+
+/// The names of the formats of a `FORMAT` clause.
+const FORMAT_KINDS: [(JsonFormatKind, &str); 3] = [
+    (JsonFormatKind::Default, "default"),
+    (JsonFormatKind::Json, "json"),
+    (JsonFormatKind::Jsonb, "jsonb"),
+];
+
+/// The names of the encodings of a `FORMAT` clause.
+const ENCODINGS: [(JsonEncoding, &str); 4] = [
+    (JsonEncoding::Default, "default"),
+    (JsonEncoding::Utf8, "utf8"),
+    (JsonEncoding::Utf16, "utf16"),
+    (JsonEncoding::Utf32, "utf32"),
+];
+
+/// The names of the SQL/JSON constructors.
+const CTOR_KINDS: [(JsonCtorKind, &str); 5] = [
+    (JsonCtorKind::Object, "object"),
+    (JsonCtorKind::Array, "array"),
+    (JsonCtorKind::Parse, "parse"),
+    (JsonCtorKind::Scalar, "scalar"),
+    (JsonCtorKind::Serialize, "serialize"),
+];
+
+/// The names of the kinds of `IS JSON`.
+const ITEM_TYPES: [(JsonItemType, &str); 4] = [
+    (JsonItemType::Any, "any"),
+    (JsonItemType::Object, "object"),
+    (JsonItemType::Array, "array"),
+    (JsonItemType::Scalar, "scalar"),
+];
+
+/// The fields of a `FORMAT` clause.
+fn write_format(format: JsonFormat, out: &mut String) {
+    let kind = FORMAT_KINDS.iter().find(|(k, _)| *k == format.kind).map_or("default", |(_, n)| n);
+    let encoding =
+        ENCODINGS.iter().find(|(e, _)| *e == format.encoding).map_or("default", |(_, n)| n);
+    out.push_str(&format!(" :format {kind} :encoding {encoding}"));
+}
+
+/// The `FORMAT` clause of the fields that [`write_format`] wrote.
+fn format_of(f: &Fields<'_>) -> Result<JsonFormat> {
+    let kind = f.atom("format")?;
+    let encoding = f.atom("encoding")?;
+    let kind = FORMAT_KINDS.iter().find(|(_, n)| *n == kind).ok_or_else(|| bad("a JSON format"))?;
+    let encoding =
+        ENCODINGS.iter().find(|(_, n)| *n == encoding).ok_or_else(|| bad("a JSON encoding"))?;
+    Ok(JsonFormat { kind: kind.0, encoding: encoding.0 })
 }
 
 fn write_field(name: &str, expr: &Expr, out: &mut String) -> Result<()> {
@@ -817,6 +895,48 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 .map_err(|_| bad("a name that is not UTF-8"))?;
             let number = f.number("number")?;
             ExprKind::NamedArg(Box::new(NamedArg { arg: *f.expr("arg")?, name, number }))
+        }
+        "JSONVALUEEXPR" => ExprKind::JsonValue(Box::new(JsonValue {
+            raw: *f.expr("raw")?,
+            formatted: *f.expr("formatted")?,
+            format: format_of(&f)?,
+        })),
+        "JSONCONSTRUCTOREXPR" => {
+            let kind = f.atom("kind")?;
+            let kind = CTOR_KINDS
+                .iter()
+                .find(|(_, n)| *n == kind)
+                .ok_or_else(|| bad("a SQL/JSON constructor"))?;
+            let returning = JsonReturning {
+                format: format_of(&f)?,
+                ty: f.number("rtype")?,
+                typmod: f.number("rtypmod")?,
+            };
+            let coercion = match f.get("coercion")? {
+                Item::Atom(empty) if empty == "<>" => None,
+                item => Some(expr_of(item)?),
+            };
+            ExprKind::JsonCtor(Box::new(JsonCtor {
+                kind: kind.0,
+                args: f.exprs("args")?,
+                returning,
+                unique: f.flag("unique")?,
+                absent_on_null: f.flag("absent")?,
+                coercion,
+            }))
+        }
+        "JSONISPREDICATE" => {
+            let item = f.atom("item")?;
+            let item = ITEM_TYPES
+                .iter()
+                .find(|(_, n)| *n == item)
+                .ok_or_else(|| bad("an IS JSON kind"))?;
+            ExprKind::IsJson(Box::new(IsJson {
+                expr: *f.expr("arg")?,
+                item: item.0,
+                unique: f.flag("unique")?,
+                base_type: f.number("basetype")?,
+            }))
         }
         _ => return Err(bad(&format!("the node {name}"))),
     };

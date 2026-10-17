@@ -88,7 +88,10 @@ pub use io::{
     base_type, input, input_supported, is_row_type, output, output_supported, receive, send,
     to_text,
 };
-pub use jsonbuild::{json_structured, json_value};
+pub use jsonbuild::{
+    is_json, json_ctor_array, json_ctor_object, json_ctor_parse, json_ctor_scalar, json_structured,
+    json_value,
+};
 pub use multirange::range_agg;
 pub use random::Randomness;
 pub use reg::ts_config_setting;

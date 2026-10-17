@@ -83,6 +83,12 @@ pub enum ExprKind {
     SubLink(Box<SubLink>),
     /// `Param` of the kind `PARAM_SUBLINK`: the value of the column with this index, from 0, of a row of the subquery, in the test of `ANY` or `ALL`.
     SubColumn(usize),
+    /// `JsonValueExpr`: an input of a SQL/JSON function with its `FORMAT` clause, as the value of the formatted expression.
+    JsonValue(Box<JsonValue>),
+    /// `JsonConstructorExpr`: `JSON_OBJECT`, `JSON_ARRAY`, `JSON`, `JSON_SCALAR` or `JSON_SERIALIZE`.
+    JsonCtor(Box<JsonCtor>),
+    /// `JsonIsPredicate`: `IS JSON`, of type `boolean`.
+    IsJson(Box<IsJson>),
 }
 
 /// The whole row of a join, or of the alias of `USING`.
@@ -276,6 +282,117 @@ pub struct GroupingFunc {
     pub levels_up: usize,
 }
 
+/// `JsonFormatType`: the format of a `FORMAT` clause.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JsonFormatKind {
+    /// No `FORMAT` clause.
+    #[default]
+    Default,
+    /// `FORMAT JSON`.
+    Json,
+    /// The format of a `jsonb` value, which no clause can give.
+    Jsonb,
+}
+
+/// `JsonEncoding`: the `ENCODING` of a `FORMAT JSON` clause.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum JsonEncoding {
+    /// No `ENCODING` clause.
+    #[default]
+    Default,
+    Utf8,
+    Utf16,
+    Utf32,
+}
+
+impl JsonEncoding {
+    /// The name of the encoding in the SQL text.
+    pub fn name(self) -> &'static str {
+        match self {
+            JsonEncoding::Default | JsonEncoding::Utf8 => "UTF8",
+            JsonEncoding::Utf16 => "UTF16",
+            JsonEncoding::Utf32 => "UTF32",
+        }
+    }
+}
+
+/// `JsonFormat`: a `FORMAT` clause.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct JsonFormat {
+    pub kind: JsonFormatKind,
+    pub encoding: JsonEncoding,
+}
+
+/// `JsonValueExpr`: an input of a SQL/JSON function. The executor reads `formatted`, and the deparser shows `raw` and the format.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonValue {
+    /// The input as the query wrote it.
+    pub raw: Expr,
+    /// The input as a value of `json` or `jsonb`, or as `text` for an input of `bytea`.
+    pub formatted: Expr,
+    pub format: JsonFormat,
+}
+
+/// `JsonConstructorType`: the function of a [`JsonCtor`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonCtorKind {
+    /// `JSON_OBJECT`. The arguments are the keys and the values, one after the other.
+    Object,
+    /// `JSON_ARRAY` with a list of values.
+    Array,
+    /// `JSON`, which checks that a text is JSON.
+    Parse,
+    /// `JSON_SCALAR`, which makes a JSON value from a SQL value.
+    Scalar,
+    /// `JSON_SERIALIZE`, which makes a string from a JSON value.
+    Serialize,
+}
+
+/// `JsonReturning`: the type of the result of a SQL/JSON function and its format.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct JsonReturning {
+    pub format: JsonFormat,
+    pub ty: u32,
+    pub typmod: i32,
+}
+
+/// `JsonConstructorExpr`: a SQL/JSON constructor.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonCtor {
+    pub kind: JsonCtorKind,
+    pub args: Vec<Expr>,
+    /// The `RETURNING` clause, or the type that the analyzer gives when the call has no clause.
+    pub returning: JsonReturning,
+    /// `WITH UNIQUE KEYS`.
+    pub unique: bool,
+    /// `ABSENT ON NULL`.
+    pub absent_on_null: bool,
+    /// The cast of the `json` or `jsonb` value to the type of `RETURNING`. [`ExprKind::CaseTest`] is the value.
+    pub coercion: Option<Expr>,
+}
+
+/// `JsonValueType`: the kind of JSON value that `IS JSON` accepts.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum JsonItemType {
+    /// `IS JSON` or `IS JSON VALUE`.
+    Any,
+    Object,
+    Array,
+    Scalar,
+}
+
+/// `JsonIsPredicate`: `IS JSON`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct IsJson {
+    /// The value, of type `text`, `json` or `jsonb`.
+    pub expr: Expr,
+    pub item: JsonItemType,
+    /// `WITH UNIQUE KEYS`.
+    pub unique: bool,
+    /// `exprBaseType`: the type of the value, `text`, `json` or `jsonb`.
+    pub base_type: u32,
+}
+
 /// A call of a window function, as `WindowFunc`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowFunc {
@@ -439,6 +556,9 @@ impl Expr {
             | ExprKind::ScalarArrayOp { args, .. }
             | ExprKind::Array { elements: args, .. } => args.iter().collect(),
             ExprKind::JoinRow(row) => row.fields.iter().collect(),
+            ExprKind::JsonValue(v) => vec![&v.raw, &v.formatted],
+            ExprKind::JsonCtor(c) => c.args.iter().chain(&c.coercion).collect(),
+            ExprKind::IsJson(p) => vec![&p.expr],
             ExprKind::Case(case) => {
                 let mut all: Vec<&Expr> = case.arg.as_deref().into_iter().collect();
                 for (when, then) in &case.whens {
@@ -494,6 +614,9 @@ impl Expr {
             | ExprKind::ScalarArrayOp { args, .. }
             | ExprKind::Array { elements: args, .. } => args.iter_mut().collect(),
             ExprKind::JoinRow(row) => row.fields.iter_mut().collect(),
+            ExprKind::JsonValue(v) => vec![&mut v.raw, &mut v.formatted],
+            ExprKind::JsonCtor(c) => c.args.iter_mut().chain(&mut c.coercion).collect(),
+            ExprKind::IsJson(p) => vec![&mut p.expr],
             ExprKind::Case(case) => {
                 let mut all: Vec<&mut Expr> = case.arg.as_deref_mut().into_iter().collect();
                 for (when, then) in &mut case.whens {

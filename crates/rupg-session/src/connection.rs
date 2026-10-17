@@ -2616,6 +2616,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/grouping_sets.test")));
     }
 
+    /// The SQL/JSON constructors `JSON_OBJECT`, `JSON_ARRAY`, `JSON`, `JSON_SCALAR` and `JSON_SERIALIZE`, and the predicate `IS JSON`: `ABSENT ON NULL`, `WITH UNIQUE KEYS`, `FORMAT JSON`, the types of `RETURNING`, the names of the columns, the errors of keys that are null or not unique and of bad input, and the text of views. `connection/sqljson.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sqljson() {
+        big_stack(|| script(include_str!("connection/sqljson.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

@@ -8,8 +8,9 @@ mod query;
 use std::ptr;
 
 use rupg_analyze::{
-    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, RowCompare,
-    SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JsonCtor,
+    JsonCtorKind, JsonEncoding, JsonFormat, JsonFormatKind, JsonItemType, RowCompare, SortGroup,
+    SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc,
 };
 use rupg_analyze::{default_opclass, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, Relation};
@@ -432,7 +433,70 @@ impl<'a> Deparser<'a> {
             ExprKind::SubColumn(_) => {
                 return Err(Error::internal("a column of a subquery outside its test"));
             }
+            ExprKind::JsonValue(v) => {
+                self.expr(&v.raw, false)?;
+                json_format(v.format, &mut self.buf);
+            }
+            ExprKind::JsonCtor(c) => self.json_ctor(c)?,
+            ExprKind::IsJson(p) => {
+                self.open();
+                self.paren(&p.expr, true, e)?;
+                self.buf.push_str(" IS JSON");
+                self.buf.push_str(match p.item {
+                    JsonItemType::Any => "",
+                    JsonItemType::Object => " OBJECT",
+                    JsonItemType::Array => " ARRAY",
+                    JsonItemType::Scalar => " SCALAR",
+                });
+                if p.unique {
+                    self.buf.push_str(" WITH UNIQUE KEYS");
+                }
+                self.close();
+            }
         }
+        Ok(())
+    }
+
+    /// `get_json_constructor` and `get_json_constructor_options`.
+    fn json_ctor(&mut self, c: &JsonCtor) -> Result<()> {
+        self.buf.push_str(match c.kind {
+            JsonCtorKind::Object => "JSON_OBJECT(",
+            JsonCtorKind::Array => "JSON_ARRAY(",
+            JsonCtorKind::Parse => "JSON(",
+            JsonCtorKind::Scalar => "JSON_SCALAR(",
+            JsonCtorKind::Serialize => "JSON_SERIALIZE(",
+        });
+        for (i, arg) in c.args.iter().enumerate() {
+            if i > 0 {
+                let object = c.kind == JsonCtorKind::Object && i % 2 != 0;
+                self.buf.push_str(if object { " : " } else { ", " });
+            }
+            self.expr(arg, true)?;
+        }
+        if c.absent_on_null {
+            if c.kind == JsonCtorKind::Object {
+                self.buf.push_str(" ABSENT ON NULL");
+            }
+        } else if c.kind == JsonCtorKind::Array {
+            self.buf.push_str(" NULL ON NULL");
+        }
+        if c.unique {
+            self.buf.push_str(" WITH UNIQUE KEYS");
+        }
+        if !matches!(c.kind, JsonCtorKind::Parse | JsonCtorKind::Scalar) {
+            let returning = c.returning;
+            let ty = reg::type_text(returning.ty, Some(returning.typmod), self.session)?;
+            self.buf.push_str(&format!(" RETURNING {ty}"));
+            let default = if returning.ty == oid::JSONB {
+                JsonFormatKind::Jsonb
+            } else {
+                JsonFormatKind::Json
+            };
+            if returning.format.kind != default {
+                json_format(returning.format, &mut self.buf);
+            }
+        }
+        self.buf.push(')');
         Ok(())
     }
 
@@ -724,6 +788,19 @@ fn bool_simple(op: BoolOp, parent: &Expr, paren: bool) -> bool {
     }
 }
 
+/// `get_json_format`: the `FORMAT` clause, or nothing for the default format.
+fn json_format(format: JsonFormat, buf: &mut String) {
+    match format.kind {
+        JsonFormatKind::Default => return,
+        JsonFormatKind::Json => buf.push_str(" FORMAT JSON"),
+        JsonFormatKind::Jsonb => buf.push_str(" FORMAT JSONB"),
+    }
+    if format.encoding != JsonEncoding::Default {
+        buf.push_str(" ENCODING ");
+        buf.push_str(format.encoding.name());
+    }
+}
+
 /// `isSimpleNode`: true when the node needs no parentheses in its parent.
 fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
     match &e.kind {
@@ -745,8 +822,10 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
         | ExprKind::Window(_)
+        | ExprKind::JsonCtor(_)
         | ExprKind::Case(_) => true,
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,
+        ExprKind::JsonValue(v) => is_simple(&v.raw, e, paren),
         ExprKind::Relabel(arg, _)
         | ExprKind::CoerceViaIo(arg, _)
         | ExprKind::ArrayCoerce { arg, .. }
@@ -777,9 +856,10 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
             }
             own_syntax(parent)
         }
-        ExprKind::SubLink(_) | ExprKind::NullTest(..) | ExprKind::BooleanTest(..) => {
-            own_syntax(parent)
-        }
+        ExprKind::SubLink(_)
+        | ExprKind::NullTest(..)
+        | ExprKind::BooleanTest(..)
+        | ExprKind::IsJson(_) => own_syntax(parent),
         ExprKind::Distinct { not: false, .. } => own_syntax(parent),
         ExprKind::Distinct { not: true, .. } => bool_simple(BoolOp::Not, parent, paren),
         ExprKind::Bool(op, _) => bool_simple(*op, parent, paren),
