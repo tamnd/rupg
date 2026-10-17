@@ -2640,6 +2640,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sqljson_table.test")));
     }
 
+    /// `SEARCH DEPTH FIRST`, `SEARCH BREADTH FIRST` and `CYCLE` in `WITH RECURSIVE`: the columns of the clauses in each reference, `UNION` and `UNION ALL`, the type of the mark, the columns that `*` does not give inside the query, the errors of the clauses, and the text of views. `connection/with_search_cycle.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn with_search_cycle() {
+        big_stack(|| script(include_str!("connection/with_search_cycle.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

@@ -11,6 +11,7 @@ use crate::Analyzer;
 use crate::coerce::AtOpt;
 use crate::expr::Expr;
 use crate::from::{Column, Item, Relation};
+use crate::searchcycle::{self, CycleClause, SearchClause};
 use crate::select::Query;
 use crate::sort::{list_location, raw_location};
 use crate::typename::place;
@@ -24,13 +25,18 @@ pub struct Cte {
     pub name: String,
     /// The names of the columns after the name of the query, as `aliascolnames`.
     pub aliases: Vec<String>,
-    /// The columns of the query, with the names of [`Cte::aliases`] first.
+    /// The columns of the query, with the names of [`Cte::aliases`] first, then the columns of [`Cte::search`] and [`Cte::cycle`].
     pub columns: Vec<Column>,
+    /// The query as the statement gives it. With `SEARCH` or `CYCLE`, each reference reads the query after the rewrite of the clauses.
     pub query: Box<Query>,
     /// `cterecursive`: the query reads itself.
     pub recursive: bool,
     /// `Some(true)` for `MATERIALIZED`, `Some(false)` for `NOT MATERIALIZED`, `None` when the query gives neither.
     pub materialized: Option<bool>,
+    /// `search_clause`.
+    pub search: Option<SearchClause>,
+    /// `cycle_clause`.
+    pub cycle: Option<CycleClause>,
 }
 
 /// The query of `WITH` that a relation of `FROM` reads, as a `RangeTblEntry` of the kind `RTE_CTE`.
@@ -55,10 +61,14 @@ pub(crate) struct CteItem {
     visible: bool,
     /// The columns, after the analysis of the query, or after the non-recursive term of a recursive query.
     columns: Option<Vec<Column>>,
-    /// The query, after its analysis.
+    /// The query, after its analysis, and after the rewrite of `SEARCH` and `CYCLE`.
     query: Option<Box<Query>>,
+    /// The query before the rewrite of `SEARCH` and `CYCLE`.
+    written: Option<Box<Query>>,
     /// The number of the work table of a recursive query.
     work: Option<usize>,
+    search: Option<SearchClause>,
+    cycle: Option<CycleClause>,
 }
 
 impl CteItem {
@@ -77,22 +87,34 @@ impl CteItem {
             visible,
             columns: None,
             query: None,
+            written: None,
             work: None,
+            search: None,
+            cycle: None,
         }
+    }
+
+    /// The columns of a reference to the query: the columns of the query, then the columns of `SEARCH` and `CYCLE`.
+    fn reference_columns(&self) -> Option<Vec<Column>> {
+        let mut columns = self.columns.clone()?;
+        columns.extend(searchcycle::extra_columns(self.search.as_ref(), self.cycle.as_ref()));
+        Some(columns)
     }
 
     /// The query of `WITH` of the query tree.
     fn into_cte(self) -> Result<Cte> {
-        let (Some(columns), Some(query)) = (self.columns, self.query) else {
+        let (Some(columns), Some(query)) = (self.reference_columns(), self.query) else {
             return Err(Error::internal("a query of WITH with no analysis"));
         };
         Ok(Cte {
             name: self.name,
             aliases: self.aliases,
             columns,
-            query,
+            query: self.written.unwrap_or(query),
             recursive: self.recursive,
             materialized: self.materialized,
+            search: self.search,
+            cycle: self.cycle,
         })
     }
 
@@ -528,15 +550,14 @@ impl Analyzer<'_> {
 
     /// `analyzeCTE`: the analysis of the query of `WITH` in the slot `slot` of the scope. The query of a recursive query must give the types of its non-recursive term.
     fn analyze_cte(&mut self, slot: usize, cte: &CommonTableExpr) -> Result<()> {
-        if cte.search_clause.is_some() || cte.cycle_clause.is_some() {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "SEARCH and CYCLE are not supported yet",
-            ));
-        }
         let Some(Node::SelectStmt(stmt)) = &cte.ctequery else {
             return Err(Error::internal("a query of WITH that is not SelectStmt"));
         };
+        // The type of the mark comes before the analysis of the query, which can read the mark.
+        self.scope.ctes[slot].search = cte.search_clause.as_deref().map(searchcycle::search_clause);
+        if let Some(raw) = cte.cycle_clause.as_deref() {
+            self.scope.ctes[slot].cycle = Some(self.cycle_clause(raw)?);
+        }
         if self.scope.ctes[slot].recursive {
             self.scope.ctes[slot].work = Some(self.works);
             self.works += 1;
@@ -573,7 +594,18 @@ impl Analyzer<'_> {
             let columns = item.columns(shown)?;
             self.scope.ctes[slot].columns = Some(columns);
         }
-        self.scope.ctes[slot].query = Some(Box::new(query));
+        let item = &mut self.scope.ctes[slot];
+        let (search, cycle) = (item.search.as_ref(), item.cycle.as_ref());
+        if search.is_some() || cycle.is_some() {
+            let columns = item.columns.as_deref().unwrap_or_default();
+            searchcycle::check(columns, item.recursive, item.location, search, cycle, &query)?;
+            let rewritten =
+                searchcycle::rewrite(&item.name, columns, item.work, search, cycle, &query)?;
+            item.written = Some(Box::new(query));
+            item.query = Some(Box::new(rewritten));
+            return Ok(());
+        }
+        item.query = Some(Box::new(query));
         Ok(())
     }
 
@@ -614,9 +646,11 @@ impl Analyzer<'_> {
             scope.ctes.iter().find(|c| c.visible && c.name == name).map(|c| (level, c))
         });
         let Some((level, item)) = found else { return Ok(None) };
-        let Some(columns) = item.columns.clone() else {
+        let Some(columns) = item.reference_columns() else {
             return Err(Error::internal("a reference to a query of WITH with no columns"));
         };
+        let available = item.columns.as_ref().map_or(0, Vec::len);
+        let extra = columns.len() - available;
         let mut relation = match &item.query {
             Some(query) => {
                 let mut query = (**query).clone();
@@ -631,7 +665,21 @@ impl Analyzer<'_> {
         relation.cte = Some(CteRef { name: name.to_string(), work });
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
-        self.add_relation(relation, refname, alias).map(Some)
+        // The alias cannot name the columns of `SEARCH` and `CYCLE`.
+        let given = alias.map_or(0, |a| a.colnames.len());
+        if extra > 0 && given > available {
+            return Err(Error::new(
+                SqlState::INVALID_COLUMN_REFERENCE,
+                format!(
+                    "table \"{refname}\" has {available} columns available but {given} columns specified"
+                ),
+            ));
+        }
+        // A query inside the query of `WITH` does not see the columns of `SEARCH` and `CYCLE` in `*`.
+        let hidden = if level > 0 { extra } else { 0 };
+        let mut item = self.add_relation(relation, refname, alias)?;
+        item.hide_last(hidden);
+        Ok(Some(item))
     }
 
     /// `isFutureCTE`: true when a query of `WITH` that the query cannot read yet has the name.

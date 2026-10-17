@@ -14,7 +14,7 @@ use crate::sort::SortGroup;
 use crate::window::WindowClause;
 
 /// The query tree of a `SELECT`.
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Query {
     /// The relations of `FROM`, which a [`crate::Var`] names by index.
     pub relations: Vec<Relation>,

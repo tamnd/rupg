@@ -188,6 +188,15 @@ pub(crate) struct Item {
     rel_visible: bool,
     /// True when an unqualified column name can use the item.
     cols_visible: bool,
+    /// The number of the last columns that `*` does not give, as `p_dontexpand`: the columns of `SEARCH` and `CYCLE` in a reference from inside the query of `WITH`.
+    hidden: usize,
+}
+
+impl Item {
+    /// Keeps the last `count` columns out of `*`.
+    pub(crate) fn hide_last(&mut self, count: usize) {
+        self.hidden = count;
+    }
 }
 
 /// The state of the names of `FROM`.
@@ -826,7 +835,14 @@ impl Analyzer<'_> {
             relation: Some(index),
             oid,
         });
-        Ok(Item { entry, name: refname, columns: exprs, rel_visible: true, cols_visible: true })
+        Ok(Item {
+            entry,
+            name: refname,
+            columns: exprs,
+            rel_visible: true,
+            cols_visible: true,
+            hidden: 0,
+        })
     }
 
     /// `addRangeTableEntryForValues` and `addNSItemToQuery`: adds the relation of a `VALUES` list with the name `*VALUES*`, and gives its index and its columns.
@@ -859,6 +875,7 @@ impl Analyzer<'_> {
             columns,
             rel_visible: false,
             cols_visible: true,
+            hidden: 0,
         });
         before
     }
@@ -910,6 +927,7 @@ impl Analyzer<'_> {
             columns: exprs,
             rel_visible: true,
             cols_visible: true,
+            hidden: 0,
         });
     }
 
@@ -1158,6 +1176,7 @@ impl Analyzer<'_> {
                 columns: columns[..using_count].to_vec(),
                 rel_visible: true,
                 cols_visible: true,
+                hidden: 0,
             };
             self.check_conflicts(std::slice::from_ref(&item), &namespace)?;
             namespace.push(item);
@@ -1175,6 +1194,7 @@ impl Analyzer<'_> {
             columns,
             rel_visible: alias.is_some(),
             cols_visible: true,
+            hidden: 0,
         };
         namespace.push(item.clone());
         let join = Join {
@@ -1754,7 +1774,8 @@ impl Analyzer<'_> {
         };
         let mut columns = Vec::new();
         for item in items {
-            for (name, expr) in item.columns {
+            let shown = item.columns.len() - item.hidden;
+            for (name, expr) in item.columns.into_iter().take(shown) {
                 columns.push((name, expr.at(at)));
             }
         }

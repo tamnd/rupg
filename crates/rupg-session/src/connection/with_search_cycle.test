@@ -1,0 +1,760 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW graph0 AS SELECT * FROM (VALUES (1, 2, 'arc 1 -> 2'), (1, 3, 'arc 1 -> 3'), (2, 3, 'arc 2 -> 3'), (1, 4, 'arc 1 -> 4'), (4, 5, 'arc 4 -> 5')) AS v (f, t, label)
+CREATE VIEW
+> CREATE VIEW graph AS SELECT * FROM (VALUES (1, 2, 'arc 1 -> 2'), (1, 3, 'arc 1 -> 3'), (2, 3, 'arc 2 -> 3'), (1, 4, 'arc 1 -> 4'), (4, 5, 'arc 4 -> 5'), (5, 1, 'arc 5 -> 1')) AS v (f, t, label)
+CREATE VIEW
+> with recursive search_graph(f, t, label) as (select * from graph0 g union all select g.* from graph0 g, search_graph sg where g.f = sg.t) search depth first by f, t set seq select * from search_graph order by seq
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,seq:2287:-1:-1
+row 1,2,arc 1 -> 2,{"(1,2)"}
+row 2,3,arc 2 -> 3,{"(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,{"(1,3)"}
+row 1,4,arc 1 -> 4,{"(1,4)"}
+row 4,5,arc 4 -> 5,{"(1,4)","(4,5)"}
+row 2,3,arc 2 -> 3,{"(2,3)"}
+row 4,5,arc 4 -> 5,{"(4,5)"}
+SELECT 7
+> with recursive search_graph(f, t, label) as (select * from graph0 g union distinct select g.* from graph0 g, search_graph sg where g.f = sg.t) search depth first by f, t set seq select * from search_graph order by seq
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,seq:2287:-1:-1
+row 1,2,arc 1 -> 2,{"(1,2)"}
+row 2,3,arc 2 -> 3,{"(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,{"(1,3)"}
+row 1,4,arc 1 -> 4,{"(1,4)"}
+row 4,5,arc 4 -> 5,{"(1,4)","(4,5)"}
+row 2,3,arc 2 -> 3,{"(2,3)"}
+row 4,5,arc 4 -> 5,{"(4,5)"}
+SELECT 7
+> with recursive search_graph(f, t, label) as (select * from graph0 g union all select g.* from graph0 g, search_graph sg where g.f = sg.t) search breadth first by f, t set seq select * from search_graph order by seq
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,seq:2249:-1:-1
+row 1,2,arc 1 -> 2,(0,1,2)
+row 1,3,arc 1 -> 3,(0,1,3)
+row 1,4,arc 1 -> 4,(0,1,4)
+row 2,3,arc 2 -> 3,(0,2,3)
+row 4,5,arc 4 -> 5,(0,4,5)
+row 2,3,arc 2 -> 3,(1,2,3)
+row 4,5,arc 4 -> 5,(1,4,5)
+SELECT 7
+> with recursive search_graph(f, t, label) as (select * from graph0 g union distinct select g.* from graph0 g, search_graph sg where g.f = sg.t) search breadth first by f, t set seq select * from search_graph order by seq
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,seq:2249:-1:-1
+row 1,2,arc 1 -> 2,(0,1,2)
+row 1,3,arc 1 -> 3,(0,1,3)
+row 1,4,arc 1 -> 4,(0,1,4)
+row 2,3,arc 2 -> 3,(0,2,3)
+row 4,5,arc 4 -> 5,(0,4,5)
+row 2,3,arc 2 -> 3,(1,2,3)
+row 4,5,arc 4 -> 5,(1,4,5)
+SELECT 7
+> with recursive test as (select 1 as x union all select x + 1 from test where x < 5) search depth first by x set y select * from test
+fields x:23:4:-1,y:2287:-1:-1
+row 1,{(1)}
+row 2,{(1),(2)}
+row 3,{(1),(2),(3)}
+row 4,{(1),(2),(3),(4)}
+row 5,{(1),(2),(3),(4),(5)}
+SELECT 5
+> with recursive test as (select 1 as x union all select x + 1 from test where x < 5) search breadth first by x set y select * from test
+fields x:23:4:-1,y:2249:-1:-1
+row 1,(0,1)
+row 2,(1,2)
+row 3,(2,3)
+row 4,(3,4)
+row 5,(4,5)
+SELECT 5
+> with recursive search_graph(f, t, label) as (select * from graph0 g union all select g.* from graph0 g, search_graph sg where g.f = sg.t) search depth first by foo, tar set seq select * from search_graph
+ERROR 42601 search column "foo" not in WITH query column list at 139
+> with recursive search_graph(f, t, label) as (select * from graph0 g union all select g.* from graph0 g, search_graph sg where g.f = sg.t) search depth first by f, t set label select * from search_graph
+ERROR 42601 search sequence column name "label" already used in WITH query column list at 139
+> with recursive search_graph(f, t, label) as (select * from graph0 g union all select g.* from graph0 g, search_graph sg where g.f = sg.t) search depth first by f, t, f set seq select * from search_graph
+ERROR 42701 search column "f" specified more than once at 139
+> with recursive search_graph(f, t, label) as (select * from graph0 g union all select * from graph0 g union all select g.* from graph0 g, search_graph sg where g.f = sg.t) search depth first by f, t set seq select * from search_graph order by seq
+ERROR 0A000 with a SEARCH or CYCLE clause, the left side of the UNION must be a SELECT
+> with recursive search_graph(f, t, label) as (select * from graph0 g union all (select * from graph0 g union all select g.* from graph0 g, search_graph sg where g.f = sg.t)) search depth first by f, t set seq select * from search_graph order by seq
+ERROR 42601 with a SEARCH or CYCLE clause, the right side of the UNION must be a SELECT
+> with recursive x(col) as (select 1 union (with x as (select * from x) select * from x)) search depth first by col set seq select * from x
+ERROR 0A000 with a SEARCH or CYCLE clause, the recursive reference to WITH query "x" must be at the top level of its right-hand SELECT
+> with x(col) as (select 1) search depth first by col set seq select * from x
+ERROR 42601 WITH query is not recursive at 6
+> with recursive x(col) as (select 1) search depth first by col set seq select * from x
+ERROR 42601 WITH query is not recursive at 16
+> with recursive x(col) as (select 1 union all select col + 1 from (select * from x) s where col < 3) search depth first by col set seq select * from x
+ERROR 0A000 with a SEARCH or CYCLE clause, the recursive reference to WITH query "x" must be at the top level of its right-hand SELECT
+> CREATE VIEW v_search AS with recursive search_graph(f, t, label) as (select * from graph0 g union all select g.* from graph0 g, search_graph sg where g.f = sg.t) search depth first by f, t set seq select f, t, label from search_graph
+CREATE VIEW
+> select pg_get_viewdef('v_search')
+fields pg_get_viewdef:25:-1:-1
+row  WITH RECURSIVE search_graph(f, t, label) AS (
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph0 g
+        UNION ALL
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph0 g,
+            search_graph sg
+          WHERE (g.f = sg.t)
+        ) SEARCH DEPTH FIRST BY f, t SET seq
+ SELECT f,
+    t,
+    label
+   FROM search_graph;
+SELECT 1
+> select * from v_search order by 1, 2
+fields f@v_search.1:23:4:-1,t@v_search.2:23:4:-1,label@v_search.3:25:-1:-1
+row 1,2,arc 1 -> 2
+row 1,3,arc 1 -> 3
+row 1,4,arc 1 -> 4
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+SELECT 7
+> with recursive search_graph(f, t, label, is_cycle, path) as (select *, false, array[row(g.f, g.t)] from graph g union all select g.*, row(g.f, g.t) = any(path), path || row(g.f, g.t) from graph g, search_graph sg where g.f = sg.t and not is_cycle) select * from search_graph order by path
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,is_cycle:16:1:-1,path:2287:-1:-1
+row 1,2,arc 1 -> 2,f,{"(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(1,4)"}
+row 4,5,arc 4 -> 5,f,{"(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(1,4)","(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(1,4)","(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(1,4)","(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,t,{"(1,4)","(4,5)","(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,f,{"(2,3)"}
+row 4,5,arc 4 -> 5,f,{"(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(4,5)","(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,t,{"(4,5)","(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,f,{"(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,t,{"(5,1)","(1,4)","(4,5)","(5,1)"}
+SELECT 25
+> with recursive search_graph(f, t, label, is_cycle, path) as (select *, false, array[row(g.f, g.t)] from graph g union distinct select g.*, row(g.f, g.t) = any(path), path || row(g.f, g.t) from graph g, search_graph sg where g.f = sg.t and not is_cycle) select * from search_graph order by path
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,is_cycle:16:1:-1,path:2287:-1:-1
+row 1,2,arc 1 -> 2,f,{"(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(1,4)"}
+row 4,5,arc 4 -> 5,f,{"(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(1,4)","(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(1,4)","(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(1,4)","(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,t,{"(1,4)","(4,5)","(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,f,{"(2,3)"}
+row 4,5,arc 4 -> 5,f,{"(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(4,5)","(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,t,{"(4,5)","(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,f,{"(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,t,{"(5,1)","(1,4)","(4,5)","(5,1)"}
+SELECT 25
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle using path select * from search_graph order by path
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,is_cycle:16:1:-1,path:2287:-1:-1
+row 1,2,arc 1 -> 2,f,{"(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(1,4)"}
+row 4,5,arc 4 -> 5,f,{"(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(1,4)","(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(1,4)","(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(1,4)","(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,t,{"(1,4)","(4,5)","(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,f,{"(2,3)"}
+row 4,5,arc 4 -> 5,f,{"(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(4,5)","(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,t,{"(4,5)","(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(5,1)"}
+row 1,2,arc 1 -> 2,f,{"(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,f,{"(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,f,{"(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,f,{"(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,t,{"(5,1)","(1,4)","(4,5)","(5,1)"}
+SELECT 25
+> with recursive search_graph(f, t, label) as (select * from graph g union distinct select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to 'Y' default 'N' using path select * from search_graph order by path
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,is_cycle:25:-1:-1,path:2287:-1:-1
+row 1,2,arc 1 -> 2,N,{"(1,2)"}
+row 2,3,arc 2 -> 3,N,{"(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,N,{"(1,3)"}
+row 1,4,arc 1 -> 4,N,{"(1,4)"}
+row 4,5,arc 4 -> 5,N,{"(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,N,{"(1,4)","(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,N,{"(1,4)","(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,N,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,N,{"(1,4)","(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,Y,{"(1,4)","(4,5)","(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,N,{"(2,3)"}
+row 4,5,arc 4 -> 5,N,{"(4,5)"}
+row 5,1,arc 5 -> 1,N,{"(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,N,{"(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,N,{"(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,N,{"(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,N,{"(4,5)","(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,Y,{"(4,5)","(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,N,{"(5,1)"}
+row 1,2,arc 1 -> 2,N,{"(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,N,{"(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,N,{"(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,N,{"(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,N,{"(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,Y,{"(5,1)","(1,4)","(4,5)","(5,1)"}
+SELECT 25
+> with recursive test as (select 0 as x union all select (x + 1) % 10 from test) cycle x set is_cycle using path select * from test
+fields x:23:4:-1,is_cycle:16:1:-1,path:2287:-1:-1
+row 0,f,{(0)}
+row 1,f,{(0),(1)}
+row 2,f,{(0),(1),(2)}
+row 3,f,{(0),(1),(2),(3)}
+row 4,f,{(0),(1),(2),(3),(4)}
+row 5,f,{(0),(1),(2),(3),(4),(5)}
+row 6,f,{(0),(1),(2),(3),(4),(5),(6)}
+row 7,f,{(0),(1),(2),(3),(4),(5),(6),(7)}
+row 8,f,{(0),(1),(2),(3),(4),(5),(6),(7),(8)}
+row 9,f,{(0),(1),(2),(3),(4),(5),(6),(7),(8),(9)}
+row 0,t,{(0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(0)}
+SELECT 11
+> with recursive test as (select 0 as x union all select (x + 1) % 10 from test where not is_cycle) cycle x set is_cycle using path select * from test
+fields x:23:4:-1,is_cycle:16:1:-1,path:2287:-1:-1
+row 0,f,{(0)}
+row 1,f,{(0),(1)}
+row 2,f,{(0),(1),(2)}
+row 3,f,{(0),(1),(2),(3)}
+row 4,f,{(0),(1),(2),(3),(4)}
+row 5,f,{(0),(1),(2),(3),(4),(5)}
+row 6,f,{(0),(1),(2),(3),(4),(5),(6)}
+row 7,f,{(0),(1),(2),(3),(4),(5),(6),(7)}
+row 8,f,{(0),(1),(2),(3),(4),(5),(6),(7),(8)}
+row 9,f,{(0),(1),(2),(3),(4),(5),(6),(7),(8),(9)}
+row 0,t,{(0),(1),(2),(3),(4),(5),(6),(7),(8),(9),(0)}
+SELECT 11
+> with recursive graph(f, t, label) as (values (1, 2, 'arc 1 -> 2'), (1, 3, 'arc 1 -> 3'), (2, 3, 'arc 2 -> 3'), (1, 4, 'arc 1 -> 4'), (4, 5, 'arc 4 -> 5'), (5, 1, 'arc 5 -> 1')), search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to true default false using path select f, t, label from search_graph order by path
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1
+row 1,2,arc 1 -> 2
+row 2,3,arc 2 -> 3
+row 1,3,arc 1 -> 3
+row 1,4,arc 1 -> 4
+row 4,5,arc 4 -> 5
+row 5,1,arc 5 -> 1
+row 1,2,arc 1 -> 2
+row 2,3,arc 2 -> 3
+row 1,3,arc 1 -> 3
+row 1,4,arc 1 -> 4
+row 2,3,arc 2 -> 3
+row 4,5,arc 4 -> 5
+row 5,1,arc 5 -> 1
+row 1,2,arc 1 -> 2
+row 2,3,arc 2 -> 3
+row 1,3,arc 1 -> 3
+row 1,4,arc 1 -> 4
+row 4,5,arc 4 -> 5
+row 5,1,arc 5 -> 1
+row 1,2,arc 1 -> 2
+row 2,3,arc 2 -> 3
+row 1,3,arc 1 -> 3
+row 1,4,arc 1 -> 4
+row 4,5,arc 4 -> 5
+row 5,1,arc 5 -> 1
+SELECT 25
+> with recursive a as (select 1 as b union all select * from a) cycle b set c using p select * from a
+fields b:23:4:-1,c:16:1:-1,p:2287:-1:-1
+row 1,f,{(1)}
+row 1,t,{(1),(1)}
+SELECT 2
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) search depth first by f, t set seq cycle f, t set is_cycle using path select * from search_graph order by seq
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,seq:2287:-1:-1,is_cycle:16:1:-1,path:2287:-1:-1
+row 1,2,arc 1 -> 2,{"(1,2)"},f,{"(1,2)"}
+row 2,3,arc 2 -> 3,{"(1,2)","(2,3)"},f,{"(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,{"(1,3)"},f,{"(1,3)"}
+row 1,4,arc 1 -> 4,{"(1,4)"},f,{"(1,4)"}
+row 4,5,arc 4 -> 5,{"(1,4)","(4,5)"},f,{"(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,{"(1,4)","(4,5)","(5,1)"},f,{"(1,4)","(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,{"(1,4)","(4,5)","(5,1)","(1,2)"},f,{"(1,4)","(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"},f,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,{"(1,4)","(4,5)","(5,1)","(1,3)"},f,{"(1,4)","(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,{"(1,4)","(4,5)","(5,1)","(1,4)"},t,{"(1,4)","(4,5)","(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,{"(2,3)"},f,{"(2,3)"}
+row 4,5,arc 4 -> 5,{"(4,5)"},f,{"(4,5)"}
+row 5,1,arc 5 -> 1,{"(4,5)","(5,1)"},f,{"(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,{"(4,5)","(5,1)","(1,2)"},f,{"(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,{"(4,5)","(5,1)","(1,2)","(2,3)"},f,{"(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,{"(4,5)","(5,1)","(1,3)"},f,{"(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,{"(4,5)","(5,1)","(1,4)"},f,{"(4,5)","(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,{"(4,5)","(5,1)","(1,4)","(4,5)"},t,{"(4,5)","(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,{"(5,1)"},f,{"(5,1)"}
+row 1,2,arc 1 -> 2,{"(5,1)","(1,2)"},f,{"(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,{"(5,1)","(1,2)","(2,3)"},f,{"(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,{"(5,1)","(1,3)"},f,{"(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,{"(5,1)","(1,4)"},f,{"(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,{"(5,1)","(1,4)","(4,5)"},f,{"(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,{"(5,1)","(1,4)","(4,5)","(5,1)"},t,{"(5,1)","(1,4)","(4,5)","(5,1)"}
+SELECT 25
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) search breadth first by f, t set seq cycle f, t set is_cycle using path select * from search_graph order by seq
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,seq:2249:-1:-1,is_cycle:16:1:-1,path:2287:-1:-1
+row 1,2,arc 1 -> 2,(0,1,2),f,{"(1,2)"}
+row 1,3,arc 1 -> 3,(0,1,3),f,{"(1,3)"}
+row 1,4,arc 1 -> 4,(0,1,4),f,{"(1,4)"}
+row 2,3,arc 2 -> 3,(0,2,3),f,{"(2,3)"}
+row 4,5,arc 4 -> 5,(0,4,5),f,{"(4,5)"}
+row 5,1,arc 5 -> 1,(0,5,1),f,{"(5,1)"}
+row 1,2,arc 1 -> 2,(1,1,2),f,{"(5,1)","(1,2)"}
+row 1,3,arc 1 -> 3,(1,1,3),f,{"(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,(1,1,4),f,{"(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,(1,2,3),f,{"(1,2)","(2,3)"}
+row 4,5,arc 4 -> 5,(1,4,5),f,{"(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,(1,5,1),f,{"(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,(2,1,2),f,{"(4,5)","(5,1)","(1,2)"}
+row 1,3,arc 1 -> 3,(2,1,3),f,{"(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,(2,1,4),f,{"(4,5)","(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,(2,2,3),f,{"(5,1)","(1,2)","(2,3)"}
+row 4,5,arc 4 -> 5,(2,4,5),f,{"(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,(2,5,1),f,{"(1,4)","(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,(3,1,2),f,{"(1,4)","(4,5)","(5,1)","(1,2)"}
+row 1,3,arc 1 -> 3,(3,1,3),f,{"(1,4)","(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,(3,1,4),t,{"(1,4)","(4,5)","(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,(3,2,3),f,{"(4,5)","(5,1)","(1,2)","(2,3)"}
+row 4,5,arc 4 -> 5,(3,4,5),t,{"(4,5)","(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,(3,5,1),t,{"(5,1)","(1,4)","(4,5)","(5,1)"}
+row 2,3,arc 2 -> 3,(4,2,3),f,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"}
+SELECT 25
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle foo, tar set is_cycle using path select * from search_graph
+ERROR 42601 cycle column "foo" not in WITH query column list at 137
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to true default 55 using path select * from search_graph
+ERROR 42804 CYCLE types boolean and integer cannot be matched at 177
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to point '(1,1)' default point '(0,0)' using path select * from search_graph
+ERROR 42883 could not identify an equality operator for type point
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set label to true default false using path select * from search_graph
+ERROR 42601 cycle mark column name "label" already used in WITH query column list at 137
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to true default false using label select * from search_graph
+ERROR 42601 cycle path column name "label" already used in WITH query column list at 137
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set foo to true default false using foo select * from search_graph
+ERROR 42601 cycle mark column name and cycle path column name are the same at 137
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t, f set is_cycle to true default false using path select * from search_graph
+ERROR 42701 cycle column "f" specified more than once at 137
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) search depth first by f, t set foo cycle f, t set foo to true default false using path select * from search_graph
+ERROR 42601 search sequence column name and cycle mark column name are the same at 137
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) search depth first by f, t set foo cycle f, t set is_cycle to true default false using foo select * from search_graph
+ERROR 42601 search sequence column name and cycle path column name are the same at 137
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to 1 default 0 using path select * from search_graph order by path
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,is_cycle:23:4:-1,path:2287:-1:-1
+row 1,2,arc 1 -> 2,0,{"(1,2)"}
+row 2,3,arc 2 -> 3,0,{"(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,0,{"(1,3)"}
+row 1,4,arc 1 -> 4,0,{"(1,4)"}
+row 4,5,arc 4 -> 5,0,{"(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,0,{"(1,4)","(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,0,{"(1,4)","(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,0,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,0,{"(1,4)","(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,1,{"(1,4)","(4,5)","(5,1)","(1,4)"}
+row 2,3,arc 2 -> 3,0,{"(2,3)"}
+row 4,5,arc 4 -> 5,0,{"(4,5)"}
+row 5,1,arc 5 -> 1,0,{"(4,5)","(5,1)"}
+row 1,2,arc 1 -> 2,0,{"(4,5)","(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,0,{"(4,5)","(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,0,{"(4,5)","(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,0,{"(4,5)","(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,1,{"(4,5)","(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,0,{"(5,1)"}
+row 1,2,arc 1 -> 2,0,{"(5,1)","(1,2)"}
+row 2,3,arc 2 -> 3,0,{"(5,1)","(1,2)","(2,3)"}
+row 1,3,arc 1 -> 3,0,{"(5,1)","(1,3)"}
+row 1,4,arc 1 -> 4,0,{"(5,1)","(1,4)"}
+row 4,5,arc 4 -> 5,0,{"(5,1)","(1,4)","(4,5)"}
+row 5,1,arc 5 -> 1,1,{"(5,1)","(1,4)","(4,5)","(5,1)"}
+SELECT 25
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to 1.5 default 2 using path select *, pg_typeof(is_cycle) from search_graph order by path
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,is_cycle:1700:-1:-1,path:2287:-1:-1,pg_typeof:2206:4:-1
+row 1,2,arc 1 -> 2,2,{"(1,2)"},numeric
+row 2,3,arc 2 -> 3,2,{"(1,2)","(2,3)"},numeric
+row 1,3,arc 1 -> 3,2,{"(1,3)"},numeric
+row 1,4,arc 1 -> 4,2,{"(1,4)"},numeric
+row 4,5,arc 4 -> 5,2,{"(1,4)","(4,5)"},numeric
+row 5,1,arc 5 -> 1,2,{"(1,4)","(4,5)","(5,1)"},numeric
+row 1,2,arc 1 -> 2,2,{"(1,4)","(4,5)","(5,1)","(1,2)"},numeric
+row 2,3,arc 2 -> 3,2,{"(1,4)","(4,5)","(5,1)","(1,2)","(2,3)"},numeric
+row 1,3,arc 1 -> 3,2,{"(1,4)","(4,5)","(5,1)","(1,3)"},numeric
+row 1,4,arc 1 -> 4,1.5,{"(1,4)","(4,5)","(5,1)","(1,4)"},numeric
+row 2,3,arc 2 -> 3,2,{"(2,3)"},numeric
+row 4,5,arc 4 -> 5,2,{"(4,5)"},numeric
+row 5,1,arc 5 -> 1,2,{"(4,5)","(5,1)"},numeric
+row 1,2,arc 1 -> 2,2,{"(4,5)","(5,1)","(1,2)"},numeric
+row 2,3,arc 2 -> 3,2,{"(4,5)","(5,1)","(1,2)","(2,3)"},numeric
+row 1,3,arc 1 -> 3,2,{"(4,5)","(5,1)","(1,3)"},numeric
+row 1,4,arc 1 -> 4,2,{"(4,5)","(5,1)","(1,4)"},numeric
+row 4,5,arc 4 -> 5,1.5,{"(4,5)","(5,1)","(1,4)","(4,5)"},numeric
+row 5,1,arc 5 -> 1,2,{"(5,1)"},numeric
+row 1,2,arc 1 -> 2,2,{"(5,1)","(1,2)"},numeric
+row 2,3,arc 2 -> 3,2,{"(5,1)","(1,2)","(2,3)"},numeric
+row 1,3,arc 1 -> 3,2,{"(5,1)","(1,3)"},numeric
+row 1,4,arc 1 -> 4,2,{"(5,1)","(1,4)"},numeric
+row 4,5,arc 4 -> 5,2,{"(5,1)","(1,4)","(4,5)"},numeric
+row 5,1,arc 5 -> 1,1.5,{"(5,1)","(1,4)","(4,5)","(5,1)"},numeric
+SELECT 25
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to null default false using path select count(*) from search_graph
+fields count:20:8:-1
+row 6
+SELECT 1
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to f default false using path select * from search_graph
+ERROR 42601 syntax error at or near "default" at 166
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to 1 default 'a' using path select * from search_graph
+ERROR 22P02 invalid input syntax for type integer: "a" at 174
+> with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t and sg.f < 0) cycle f, t set is_cycle using path select * from search_graph order by path
+fields f:23:4:-1,t:23:4:-1,label:25:-1:-1,is_cycle:16:1:-1,path:2287:-1:-1
+row 1,2,arc 1 -> 2,f,{"(1,2)"}
+row 1,3,arc 1 -> 3,f,{"(1,3)"}
+row 1,4,arc 1 -> 4,f,{"(1,4)"}
+row 2,3,arc 2 -> 3,f,{"(2,3)"}
+row 4,5,arc 4 -> 5,f,{"(4,5)"}
+row 5,1,arc 5 -> 1,f,{"(5,1)"}
+SELECT 6
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select * from x x1, x x2 where x1.a = x2.a order by 1
+fields a:23:4:-1,s:2287:-1:-1,a:23:4:-1,s:2287:-1:-1
+row 1,{(1)},1,{(1)}
+row 2,{(1),(2)},2,{(1),(2)}
+row 3,{(1),(2),(3)},3,{(1),(2),(3)}
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select s, (select count(*) from x where x.s <= y.s) from x y order by 1
+fields s:2287:-1:-1,count:20:8:-1
+row {(1)},1
+row {(1),(2)},2
+row {(1),(2),(3)},3
+SELECT 3
+> with recursive x(a, b) as (select 1, 'a' union all select a + 1, b || 'a' from x where a < 3) search breadth first by b set s select * from x order by s
+fields a:23:4:-1,b:25:-1:-1,s:2249:-1:-1
+row 1,a,(0,a)
+row 2,aa,(1,aa)
+row 3,aaa,(2,aaa)
+SELECT 3
+> with recursive x(a, b) as (select 1, 'a' union all select a + 1, b || 'a' from x where a < 3) search breadth first by b, a set s select s from x order by s desc
+fields s:2249:-1:-1
+row (2,aaa,3)
+row (1,aa,2)
+row (0,a,1)
+SELECT 3
+> CREATE VIEW v_cycle1 AS with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle using path select f, t, label from search_graph
+CREATE VIEW
+> CREATE VIEW v_cycle2 AS with recursive search_graph(f, t, label) as (select * from graph g union all select g.* from graph g, search_graph sg where g.f = sg.t) cycle f, t set is_cycle to 'Y' default 'N' using path select f, t, label from search_graph
+CREATE VIEW
+> CREATE VIEW v_cycle3 AS with recursive search_graph(f, t, label) as (select * from graph g union select g.* from graph g, search_graph sg where g.f = sg.t) search breadth first by f set s cycle t set c to 1 default 0 using p select f, t, label from search_graph
+CREATE VIEW
+> CREATE VIEW v_cycle4 AS with recursive "A b"("F x") as (select 1 union all select "F x" + 1 from "A b" where "F x" < 3) search depth first by "F x" set "S q" cycle "F x" set "C x" to true default false using "P x" select "F x" from "A b"
+CREATE VIEW
+> select pg_get_viewdef('v_cycle1')
+fields pg_get_viewdef:25:-1:-1
+row  WITH RECURSIVE search_graph(f, t, label) AS (
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph g
+        UNION ALL
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph g,
+            search_graph sg
+          WHERE (g.f = sg.t)
+        ) CYCLE f, t SET is_cycle USING path
+ SELECT f,
+    t,
+    label
+   FROM search_graph;
+SELECT 1
+> select pg_get_viewdef('v_cycle2')
+fields pg_get_viewdef:25:-1:-1
+row  WITH RECURSIVE search_graph(f, t, label) AS (
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph g
+        UNION ALL
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph g,
+            search_graph sg
+          WHERE (g.f = sg.t)
+        ) CYCLE f, t SET is_cycle TO 'Y'::text DEFAULT 'N'::text USING path
+ SELECT f,
+    t,
+    label
+   FROM search_graph;
+SELECT 1
+> select pg_get_viewdef('v_cycle3')
+fields pg_get_viewdef:25:-1:-1
+row  WITH RECURSIVE search_graph(f, t, label) AS (
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph g
+        UNION
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph g,
+            search_graph sg
+          WHERE (g.f = sg.t)
+        ) SEARCH BREADTH FIRST BY f SET s CYCLE t SET c TO 1 DEFAULT 0 USING p
+ SELECT f,
+    t,
+    label
+   FROM search_graph;
+SELECT 1
+> select pg_get_viewdef('v_cycle4')
+fields pg_get_viewdef:25:-1:-1
+row  WITH RECURSIVE "A b"("F x") AS (
+         SELECT 1 AS "?column?"
+        UNION ALL
+         SELECT ("A b_1"."F x" + 1)
+           FROM "A b" "A b_1"
+          WHERE ("A b_1"."F x" < 3)
+        ) SEARCH DEPTH FIRST BY "F x" SET "S q" CYCLE "F x" SET "C x" USING "P x"
+ SELECT "F x"
+   FROM "A b";
+SELECT 1
+> select pg_get_viewdef('v_cycle3', true)
+fields pg_get_viewdef:25:-1:-1
+row  WITH RECURSIVE search_graph(f, t, label) AS (
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph g
+        UNION
+         SELECT g.f,
+            g.t,
+            g.label
+           FROM graph g,
+            search_graph sg
+          WHERE g.f = sg.t
+        ) SEARCH BREADTH FIRST BY f SET s CYCLE t SET c TO 1 DEFAULT 0 USING p
+ SELECT f,
+    t,
+    label
+   FROM search_graph;
+SELECT 1
+> select * from v_cycle1 order by 1, 2
+fields f@v_cycle1.1:23:4:-1,t@v_cycle1.2:23:4:-1,label@v_cycle1.3:25:-1:-1
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+SELECT 25
+> select * from v_cycle2 order by 1, 2
+fields f@v_cycle2.1:23:4:-1,t@v_cycle2.2:23:4:-1,label@v_cycle2.3:25:-1:-1
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+SELECT 25
+> select * from v_cycle3 order by 1, 2
+fields f@v_cycle3.1:23:4:-1,t@v_cycle3.2:23:4:-1,label@v_cycle3.3:25:-1:-1
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,2,arc 1 -> 2
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,3,arc 1 -> 3
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 1,4,arc 1 -> 4
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 2,3,arc 2 -> 3
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 4,5,arc 4 -> 5
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+row 5,1,arc 5 -> 1
+SELECT 25
+> select * from v_cycle4
+fields F x@v_cycle4.1:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) cycle a set c to text 'yes' default text 'no' using p select * from x
+fields a:23:4:-1,c:25:-1:-1,p:2287:-1:-1
+row 1,no,{(1)}
+row 2,no,{(1),(2)}
+row 3,no,{(1),(2),(3)}
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select * from x x1(b, c)
+ERROR 42P10 table "x1" has 1 columns available but 2 columns specified
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select * from x x1(b, c, d)
+ERROR 42P10 table "x1" has 1 columns available but 3 columns specified
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select * from (select * from x) y
+fields a:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select (select count(*) from (select * from x) z) from x y
+fields count:20:8:-1
+row 3
+row 3
+row 3
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select x1 from x x1
+fields x1:2249:-1:-1
+row (1,"{(1)}")
+row (2,"{(1),(2)}")
+row (3,"{(1),(2),(3)}")
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select x1.* from x x1 order by s
+fields a:23:4:-1,s:2287:-1:-1
+row 1,{(1)}
+row 2,{(1),(2)}
+row 3,{(1),(2),(3)}
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) cycle a set c using p select x1, (x1).a from x x1
+fields x1:2249:-1:-1,a:23:4:-1
+row (1,f,"{(1)}"),1
+row (2,f,"{(1),(2)}"),2
+row (3,f,"{(1),(2),(3)}"),3
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3 and array_length(s, 1) < 2) search depth first by a set s select * from x
+fields a:23:4:-1,s:2287:-1:-1
+row 1,{(1)}
+row 2,{(1),(2)}
+SELECT 2
+> select g.f, (with recursive t(n) as (select g.f union all select n + 1 from t where n < g.t) search depth first by n set s select max(array_length(s, 1)) from t) from graph g order by 1, 2
+fields f@graph.1:23:4:-1,max:23:4:-1
+row 1,2
+row 1,3
+row 1,4
+row 2,2
+row 4,2
+row 5,1
+SELECT 6
+> with recursive x(a, b) as (select 1, 1 union all select a + 1, b from x where a < 4) cycle b set c to 'y' default 'n' using p select * from x
+fields a:23:4:-1,b:23:4:-1,c:25:-1:-1,p:2287:-1:-1
+row 1,1,n,{(1)}
+row 2,1,y,{(1),(1)}
+SELECT 2
+> with recursive x(a, b) as (select 1, 1 union select a % 3 + 1, b from x) cycle a set c using p select * from x order by p
+fields a:23:4:-1,b:23:4:-1,c:16:1:-1,p:2287:-1:-1
+row 1,1,f,{(1)}
+row 2,1,f,{(1),(2)}
+row 3,1,f,{(1),(2),(3)}
+row 1,1,t,{(1),(2),(3),(1)}
+SELECT 4
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3), y as (select * from x) search depth first by a set s select * from y
+ERROR 42601 WITH query is not recursive at 78
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s, y as (select * from x) select * from y
+fields a:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s select * from x join x x2 using (a)
+fields a:23:4:-1,s:2287:-1:-1,s:2287:-1:-1
+row 1,{(1)},{(1)}
+row 2,{(1),(2)},{(1),(2)}
+row 3,{(1),(2),(3)},{(1),(2),(3)}
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x x9 where a < 3) search depth first by a set s select * from x
+fields a:23:4:-1,s:2287:-1:-1
+row 1,{(1)}
+row 2,{(1),(2)}
+row 3,{(1),(2),(3)}
+SELECT 3
+> with recursive x(a) as (select 1 union all select x.a + 1 from x join graph g on g.f = x.a where x.a < 3) cycle a set c using p select * from x order by p
+fields a:23:4:-1,c:16:1:-1,p:2287:-1:-1
+row 1,f,{(1)}
+row 2,f,{(1),(2)}
+row 2,f,{(1),(2)}
+row 2,f,{(1),(2)}
+row 3,f,{(1),(2),(3)}
+row 3,f,{(1),(2),(3)}
+row 3,f,{(1),(2),(3)}
+SELECT 7
+> with recursive x(a) as (select 1 union all select a + 1 from graph g left join x on g.f = x.a where x.a < 3) cycle a set c using p select * from x
+ERROR 42P19 recursive reference to query "x" must not appear within an outer join at 80
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search depth first by a set s cycle a set c using p select * from x order by s
+fields a:23:4:-1,s:2287:-1:-1,c:16:1:-1,p:2287:-1:-1
+row 1,{(1)},f,{(1)}
+row 2,{(1),(2)},f,{(1),(2)}
+row 3,{(1),(2),(3)},f,{(1),(2),(3)}
+SELECT 3
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) cycle a set c to 1 default 'a' using p select * from x
+ERROR 22P02 invalid input syntax for type integer: "a" at 104
+> with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) cycle a set c to B'1' default B'0' using p select * from x
+fields a:23:4:-1,c:1560:-1:-1,p:2287:-1:-1
+row 1,0,{(1)}
+row 2,0,{(1),(2)}
+row 3,0,{(1),(2),(3)}
+SELECT 3
+> CREATE VIEW v1 AS with recursive x(a) as (select 1 union all select a + 1 from x where a < 3) search breadth first by a set s select a, s from x
+ERROR 42P16 column "s" has pseudo-type record
