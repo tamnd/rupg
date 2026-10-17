@@ -4,6 +4,16 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.39 (2026-10-17)
+
+A patch release on the way to M2. The releases from 0.1.29 to 0.1.38 have their notes on the release page of GitHub. This release brings the version of the crates up to the tag.
+
+### Added
+
+- `TABLESAMPLE` with the methods `BERNOULLI` and `SYSTEM` (#377).
+- The stored secret of the superuser in `pg_authid`, `pg_shadow` and `pg_roles` (#378).
+- `rupg serve -D DIR` reads `postgresql.conf`, `postgresql.auto.conf` and the files that they include. `pg_file_settings` shows their lines, and `pg_settings` shows `sourcefile` and `sourceline` (#379).
+
 ## 0.1.28 (2026-10-16)
 
 A patch release on the way to M2. rupg now has full text search with the default parser, the Snowball dictionaries and the functions of PostgreSQL 19 for `tsvector` and `tsquery`.
