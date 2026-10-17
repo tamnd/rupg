@@ -7,7 +7,7 @@ use rupg_types::oid;
 use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, Path, can_coerce, find_path};
-use crate::expr::{Expr, ExprKind, Func, FuncForm, NamedArg};
+use crate::expr::{Expr, ExprKind, Func, FuncForm, NamedArg, NullTreatment};
 use crate::funcargs::arg_defaults;
 use crate::poly;
 use crate::types;
@@ -103,7 +103,7 @@ fn check_parts(
                 "OVER specified, but {name} is not a window function nor an aggregate function"
             ));
         }
-        if parts.null_treatment {
+        if parts.nulls != NullTreatment::None {
             return wrong(format!(
                 "RESPECT/IGNORE NULLS specified, but {name} is not a window function"
             ));
@@ -125,7 +125,7 @@ fn check_parts(
                 "{name} is not an ordered-set aggregate, so it cannot have WITHIN GROUP"
             ));
         }
-        if parts.null_treatment {
+        if parts.nulls != NullTreatment::None {
             return wrong("aggregate functions do not accept RESPECT/IGNORE NULLS".into());
         }
     } else if prokind == b'w' {

@@ -241,9 +241,6 @@ impl Analyzer<'_> {
             )
             .at_opt(at));
         }
-        if parts.null_treatment {
-            return Err(not_yet("RESPECT NULLS and IGNORE NULLS", at));
-        }
         if self.has_windows
             && let Some(inner) = args.iter().find_map(Expr::first_window)
         {
@@ -314,6 +311,7 @@ impl Analyzer<'_> {
             star: parts.star,
             agg: aggregate.is_some(),
             filter: parts.filter.map(Box::new),
+            nulls: parts.nulls,
         };
         Ok(Expr { kind: ExprKind::Window(Box::new(call)), ty, typmod: -1, location: at })
     }

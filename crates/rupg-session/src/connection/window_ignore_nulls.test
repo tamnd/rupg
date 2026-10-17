@@ -1,0 +1,160 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW t AS SELECT * FROM (VALUES (1, 10), (2, NULL), (3, 30), (4, NULL), (5, NULL), (6, 60)) AS v (a, b)
+CREATE VIEW
+> SELECT a, b, lag(b) IGNORE NULLS OVER w, lead(b) IGNORE NULLS OVER w, first_value(b) IGNORE NULLS OVER w, last_value(b) IGNORE NULLS OVER w, nth_value(b, 2) IGNORE NULLS OVER w FROM t WINDOW w AS (ORDER BY a) ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,lag:23:4:-1,lead:23:4:-1,first_value:23:4:-1,last_value:23:4:-1,nth_value:23:4:-1
+row 1,10,NULL,30,10,10,NULL
+row 2,NULL,10,30,10,10,NULL
+row 3,30,10,60,10,30,30
+row 4,NULL,30,60,10,30,30
+row 5,NULL,30,60,10,30,30
+row 6,60,30,NULL,10,60,30
+SELECT 6
+> SELECT a, b, lag(b, 2) IGNORE NULLS OVER w, lead(b, 2, -1) IGNORE NULLS OVER w FROM t WINDOW w AS (ORDER BY a) ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,lag:23:4:-1,lead:23:4:-1
+row 1,10,NULL,60
+row 2,NULL,NULL,60
+row 3,30,NULL,-1
+row 4,NULL,10,-1
+row 5,NULL,10,-1
+row 6,60,10,-1
+SELECT 6
+> SELECT a, b, first_value(b) IGNORE NULLS OVER w, last_value(b) IGNORE NULLS OVER w, nth_value(b, 2) IGNORE NULLS OVER w FROM t WINDOW w AS (ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,first_value:23:4:-1,last_value:23:4:-1,nth_value:23:4:-1
+row 1,10,10,60,30
+row 2,NULL,10,60,30
+row 3,30,10,60,30
+row 4,NULL,10,60,30
+row 5,NULL,10,60,30
+row 6,60,10,60,30
+SELECT 6
+> SELECT a, b, first_value(b) RESPECT NULLS OVER w, lag(b) RESPECT NULLS OVER w FROM t WINDOW w AS (ORDER BY a) ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,first_value:23:4:-1,lag:23:4:-1
+row 1,10,10,NULL
+row 2,NULL,10,10
+row 3,30,10,NULL
+row 4,NULL,10,30
+row 5,NULL,10,NULL
+row 6,60,10,NULL
+SELECT 6
+> SELECT a, b, last_value(b) IGNORE NULLS OVER (ORDER BY a ROWS BETWEEN 1 PRECEDING AND 1 FOLLOWING) FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,last_value:23:4:-1
+row 1,10,10
+row 2,NULL,30
+row 3,30,30
+row 4,NULL,30
+row 5,NULL,60
+row 6,60,60
+SELECT 6
+> SELECT a, b, first_value(b) IGNORE NULLS OVER (ORDER BY a ROWS BETWEEN 1 FOLLOWING AND 2 FOLLOWING) FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,first_value:23:4:-1
+row 1,10,30
+row 2,NULL,30
+row 3,30,NULL
+row 4,NULL,60
+row 5,NULL,60
+row 6,60,NULL
+SELECT 6
+> SELECT a, b, nth_value(b, 2) IGNORE NULLS OVER (ORDER BY a ROWS BETWEEN 2 PRECEDING AND CURRENT ROW EXCLUDE CURRENT ROW) FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,nth_value:23:4:-1
+row 1,10,NULL
+row 2,NULL,NULL
+row 3,30,NULL
+row 4,NULL,NULL
+row 5,NULL,NULL
+row 6,60,NULL
+SELECT 6
+> SELECT row_number() IGNORE NULLS OVER (ORDER BY a) FROM t
+fields row_number:20:8:-1
+ERROR 0A000 function row_number does not allow RESPECT/IGNORE NULLS
+> SELECT sum(b) IGNORE NULLS OVER (ORDER BY a) FROM t
+ERROR 42809 aggregate functions do not accept RESPECT/IGNORE NULLS at 8
+> SELECT sum(b) IGNORE NULLS FROM t
+ERROR 42809 aggregate functions do not accept RESPECT/IGNORE NULLS at 8
+> SELECT rank() RESPECT NULLS OVER (ORDER BY a) FROM t
+fields rank:20:8:-1
+ERROR 0A000 function rank does not allow RESPECT/IGNORE NULLS
+> SELECT a, b, lag(b, -1) IGNORE NULLS OVER w, lead(b, -2) IGNORE NULLS OVER w, lag(b, 0) IGNORE NULLS OVER w, lag(b, NULL) IGNORE NULLS OVER w FROM t WINDOW w AS (ORDER BY a) ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,lag:23:4:-1,lead:23:4:-1,lag:23:4:-1,lag:23:4:-1
+row 1,10,30,NULL,10,NULL
+row 2,NULL,30,NULL,NULL,NULL
+row 3,30,60,NULL,30,NULL
+row 4,NULL,60,10,NULL,NULL
+row 5,NULL,60,10,NULL,NULL
+row 6,60,NULL,10,60,NULL
+SELECT 6
+> SELECT a, b, lag(b, 1, 0) IGNORE NULLS OVER (PARTITION BY a % 2 ORDER BY a), last_value(b) IGNORE NULLS OVER (PARTITION BY a % 2 ORDER BY a DESC) FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,lag:23:4:-1,last_value:23:4:-1
+row 1,10,0,10
+row 2,NULL,0,60
+row 3,30,10,30
+row 4,NULL,0,60
+row 5,NULL,30,NULL
+row 6,60,0,60
+SELECT 6
+> SELECT a, b, first_value(b) IGNORE NULLS OVER (ORDER BY a GROUPS BETWEEN CURRENT ROW AND 1 FOLLOWING EXCLUDE GROUP) FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,first_value:23:4:-1
+row 1,10,NULL
+row 2,NULL,30
+row 3,30,NULL
+row 4,NULL,NULL
+row 5,NULL,60
+row 6,60,NULL
+SELECT 6
+> SELECT a, b, nth_value(b, 3) IGNORE NULLS OVER (ORDER BY a ROWS BETWEEN UNBOUNDED PRECEDING AND UNBOUNDED FOLLOWING) FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,nth_value:23:4:-1
+row 1,10,60
+row 2,NULL,60
+row 3,30,60
+row 4,NULL,60
+row 5,NULL,60
+row 6,60,60
+SELECT 6
+> SELECT a, b, nth_value(b, 0) IGNORE NULLS OVER (ORDER BY a) FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,nth_value:23:4:-1
+ERROR 22016 argument of nth_value must be greater than zero
+> SELECT ntile(2) IGNORE NULLS OVER (ORDER BY a) FROM t
+fields ntile:23:4:-1
+ERROR 0A000 function ntile does not allow RESPECT/IGNORE NULLS
+> SELECT row_number() IGNORE NULLS OVER (ORDER BY a) FROM t WHERE a > 100
+fields row_number:20:8:-1
+SELECT 0
+> SELECT lower('A') IGNORE NULLS OVER ()
+ERROR 42809 OVER specified, but lower is not a window function nor an aggregate function at 8
+> SELECT a, lag(a) IGNORE NULLS OVER (ORDER BY a), lead(a) RESPECT NULLS OVER (ORDER BY a) FROM t ORDER BY a
+fields a@t.1:23:4:-1,lag:23:4:-1,lead:23:4:-1
+row 1,NULL,2
+row 2,1,3
+row 3,2,4
+row 4,3,5
+row 5,4,6
+row 6,5,NULL
+SELECT 6
+> SELECT a, b, lag(b) IGNORE NULLS OVER w, lag(b) OVER w FROM t WINDOW w AS (ORDER BY a) ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,lag:23:4:-1,lag:23:4:-1
+row 1,10,NULL,NULL
+row 2,NULL,10,10
+row 3,30,10,NULL
+row 4,NULL,30,30
+row 5,NULL,30,NULL
+row 6,60,30,NULL
+SELECT 6
+> CREATE VIEW w AS SELECT a, lag(b) IGNORE NULLS OVER (ORDER BY a) AS l, first_value(b) RESPECT NULLS OVER (ORDER BY a) AS f FROM t
+CREATE VIEW
+> SELECT * FROM w ORDER BY a
+fields a@w.1:23:4:-1,l@w.2:23:4:-1,f@w.3:23:4:-1
+row 1,NULL,10
+row 2,10,10
+row 3,10,10
+row 4,30,10
+row 5,30,10
+row 6,30,10
+SELECT 6
+> SELECT pg_get_viewdef('w')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    lag(b) IGNORE NULLS OVER (ORDER BY a) AS l,
+    first_value(b) OVER (ORDER BY a) AS f
+   FROM t;
+SELECT 1
