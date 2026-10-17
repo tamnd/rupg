@@ -366,7 +366,11 @@ impl Tokenizer<'_> {
 }
 
 /// `GetConfFilesInDir`: the files of the directory `name` that end in `.conf`, in the order of their names. `name` is relative to the directory of the file `outer`. An error is the text of the log line and the short text of the error.
-fn conf_files(io: &dyn Io, outer: &str, name: &str) -> Result<Vec<String>, (String, String)> {
+pub(crate) fn conf_files(
+    io: &dyn Io,
+    outer: &str,
+    name: &str,
+) -> Result<Vec<String>, (String, String)> {
     if name.trim_matches([' ', '\t', '\r', '\n']).is_empty() {
         return Err((
             format!("empty configuration directory name: \"{name}\""),
@@ -436,7 +440,7 @@ fn next_token(line: &[u8], at: &mut usize) -> Option<(String, bool, bool)> {
 }
 
 /// `AbsoluteConfigLocation`: a path relative to the directory of the file that names it.
-fn absolute_location(location: &str, calling: &str) -> String {
+pub(crate) fn absolute_location(location: &str, calling: &str) -> String {
     let path = Path::new(location);
     if path.is_absolute() {
         return location.to_owned();

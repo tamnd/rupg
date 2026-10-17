@@ -252,6 +252,10 @@ pub trait Session {
     fn ident_mappings(&self) -> Result<Vec<Vec<Value>>> {
         Ok(Vec::new())
     }
+    /// The rows of `pg_show_all_file_settings`, one for each line of the configuration files and each error in them, in the 7 columns of the function. A session with no server has no rows.
+    fn file_settings(&self) -> Vec<Vec<Value>> {
+        Vec::new()
+    }
     /// The stored secret of the password of a role, which `pg_authid.rolpassword` shows, or `None` for a role with no password.
     fn role_password(&self, role: u32) -> Option<String> {
         let _ = role;

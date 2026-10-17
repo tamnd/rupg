@@ -614,6 +614,18 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn file_settings(&self) -> Vec<Vec<Value>> {
+        let Some(auth) = self.activity.and_then(|(_, store)| store.auth()) else {
+            return Vec::new();
+        };
+        let lines = auth.file_settings(&self.settings());
+        lines
+            .into_iter()
+            .enumerate()
+            .map(|(i, line)| crate::auth::file_values(i + 1, line))
+            .collect()
+    }
+
     fn ident_mappings(&self) -> Result<Vec<Vec<Value>>> {
         match self.activity.and_then(|(_, store)| store.auth()) {
             Some(auth) => {
@@ -735,9 +747,8 @@ impl rupg_func::Session for Reader<'_> {
                     enumvals,
                     text(parameter.boot_text()),
                     text(current.reset),
-                    // rupg reads no configuration file, so no value has a file and a line.
-                    Value::Null,
-                    Value::Null,
+                    text(current.location.as_ref().map(|(file, _)| file.clone())),
+                    current.location.map_or(Value::Null, |(_, line)| Value::Int4(line)),
                     Value::Bool(false),
                 ]
             })

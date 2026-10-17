@@ -1,9 +1,10 @@
-//! The rows of the views `pg_hba_file_rules` and `pg_ident_file_mappings`, as `hbafuncs.c` of PostgreSQL makes them.
+//! The rows of the views `pg_hba_file_rules` and `pg_ident_file_mappings`, as `hbafuncs.c` of PostgreSQL makes them, and of the view `pg_file_settings`.
 //!
-//! The server owns the authentication files, so it gives the lines of the files through [`AuthFiles`], and this module puts them in the columns of the views. PostgreSQL reads the files again at each call of the functions, so a view shows the files as they are now, and not the rules that the server loaded. The module also gives the server the regular expressions of the files.
+//! The server owns the authentication files and the configuration files, so it gives the lines of the files through [`AuthFiles`], and this module puts them in the columns of the views. PostgreSQL reads the files again at each call of the functions, so a view shows the files as they are now, and not the rules that the server loaded. The module also gives the server the regular expressions of the files.
 
 use std::fmt;
 
+use crate::guc::Settings;
 use rupg_common::Result;
 pub use rupg_func::{AuthMatch, auth_compile, auth_search};
 use rupg_types::{Array, Value};
@@ -56,7 +57,21 @@ pub struct IdentMapping {
     pub error: Option<String>,
 }
 
-/// The authentication files of a server.
+/// One line of the configuration files, or one error in them, as the view `pg_file_settings` shows it.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct FileSetting {
+    /// The file, or `None` for an error that has no file.
+    pub file: Option<String>,
+    pub line: i32,
+    /// The name of the parameter, or `None` for an error.
+    pub name: Option<String>,
+    /// The value, or `None` for an error.
+    pub setting: Option<String>,
+    pub applied: bool,
+    pub error: Option<String>,
+}
+
+/// The authentication files and the configuration files of a server.
 pub trait AuthFiles: Send + Sync + fmt::Debug {
     /// The lines of the host rules, read again from their source.
     ///
@@ -71,6 +86,12 @@ pub trait AuthFiles: Send + Sync + fmt::Debug {
     ///
     /// The error of a file of the maps that does not open.
     fn ident_mappings(&self) -> Result<Vec<IdentMapping>>;
+
+    /// The lines of the configuration files, read again and checked with the settings of the session, as `ProcessConfigFileInternal` gives them when it changes nothing. A server with no configuration file has no lines.
+    fn file_settings(&self, settings: &Settings) -> Vec<FileSetting> {
+        let _ = settings;
+        Vec::new()
+    }
 }
 
 /// A `text[]` value.
@@ -104,6 +125,20 @@ pub(crate) fn hba_values(rule: HbaRule) -> Vec<Value> {
     }
     row.push(text(rule.error));
     row
+}
+
+/// `show_all_file_settings`: the 7 columns of `pg_file_settings` for the line number `seqno`, from 1.
+pub(crate) fn file_values(seqno: usize, setting: FileSetting) -> Vec<Value> {
+    let line = if setting.file.is_some() { Value::Int4(setting.line) } else { Value::Null };
+    vec![
+        text(setting.file),
+        line,
+        Value::Int4(i32::try_from(seqno).unwrap_or(i32::MAX)),
+        text(setting.name),
+        text(setting.setting),
+        Value::Bool(setting.applied),
+        text(setting.error),
+    ]
 }
 
 /// `fill_ident_line`: the 7 columns of `pg_ident_file_mappings`. A line that did not parse has nulls for the map and the two users.
