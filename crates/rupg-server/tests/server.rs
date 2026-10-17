@@ -655,6 +655,68 @@ fn a_configuration_file() {
     );
 }
 
+#[test]
+fn addresses_of_the_configuration_file() {
+    let io = Arc::new(SimIo::new(0));
+    let free = OsNet.listen("127.0.0.1:0").unwrap().local_addr();
+    let port = free.rsplit_once(':').unwrap().1.to_owned();
+    let file = |name: &str, text: &str| {
+        let file = io.open(&Path::new("/d").join(name), OpenMode::Create).unwrap();
+        file.set_size(0).unwrap();
+        file.write_at(0, text.as_bytes()).unwrap();
+    };
+    file("pg_hba.conf", "local all all trust\nhost all all 127.0.0.1/32 trust\n");
+    file("pg_ident.conf", "");
+    let write = |text: &str| file("postgresql.conf", text);
+    write(&format!(
+        "listen_addresses = '127.0.0.1'\nport = {port}\nunix_socket_directories = ''\n"
+    ));
+    let log = Arc::new(Kept::default());
+    let config =
+        Config { data_directory: Some("/d".into()), log: Some(log.clone()), ..Config::default() };
+    let start = |config: &Config| {
+        Server::start(config, Arc::new(OsNet), io.clone(), Arc::new(OsTasks), Arc::new(OsEntropy))
+    };
+    let server = start(&config).unwrap();
+    assert_eq!(server.address(), format!("127.0.0.1:{port}"));
+    assert!(server.sockets().is_empty());
+    let (mut stream, _) = connect(&server, &POSTGRES);
+    let sql = "SELECT name, source, sourceline FROM pg_settings WHERE name IN ('listen_addresses', 'port') ORDER BY name";
+    stream.write_all(&query(sql)).unwrap();
+    assert_eq!(
+        read(&mut *stream),
+        [
+            "columns 3",
+            "row listen_addresses,configuration file,1",
+            "row port,configuration file,2",
+            "SELECT 2",
+            "ready I",
+        ]
+    );
+    stream.write_all(&query("SELECT bool_and(applied) FROM pg_file_settings")).unwrap();
+    assert_eq!(read(&mut *stream), ["columns 1", "row t", "SELECT 1", "ready I"]);
+    drop(stream);
+    server.stop().unwrap();
+    assert_eq!(log.take(), Vec::<String>::new());
+    // A host that the server cannot listen on gives a warning, and no host at all stops the start.
+    write(&format!(
+        "listen_addresses = '192.0.2.1'\nport = {port}\nunix_socket_directories = ''\n"
+    ));
+    let error = start(&config).unwrap_err();
+    assert_eq!(error.message(), "could not create any TCP/IP sockets");
+    assert_eq!(
+        log.take().last().unwrap(),
+        "WARNING:  could not create listen socket for \"192.0.2.1\""
+    );
+    // An empty list gives no TCP listener.
+    write(&format!("listen_addresses = ''\nport = {port}\n"));
+    let server = start(&config).unwrap();
+    assert_eq!(server.address(), "");
+    #[cfg(unix)]
+    assert!(server.sockets()[0].ends_with(&format!(".s.PGSQL.{port}")));
+    server.stop().unwrap();
+}
+
 #[cfg(unix)]
 #[test]
 fn peer() {

@@ -171,7 +171,9 @@ fn serve(config: &rupg::server::Config) -> ExitCode {
             return ExitCode::FAILURE;
         }
     };
-    eprintln!("rupg serve: listening on {}", server.address());
+    for address in server.addresses() {
+        eprintln!("rupg serve: listening on {address}");
+    }
     for socket in server.sockets() {
         eprintln!("rupg serve: listening on Unix socket \"{socket}\"");
     }
