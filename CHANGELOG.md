@@ -4,6 +4,21 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.40 (2026-10-18)
+
+A patch release on the way to M2. The L2 comparison of the gate schema now passes for 201 of 209 catalogs and views.
+
+### Added
+
+- `CREATE RULE` and `DROP RULE`, with the rules in `pg_rewrite` and `pg_get_ruledef` (#381).
+- `pg_import_system_collations`, which makes a collation for each locale of the C library and of ICU, as initdb does (#382).
+- The settings `tcp_keepalives_idle`, `tcp_keepalives_interval`, `tcp_keepalives_count` and `tcp_user_timeout` show and set the options of the socket, and `num_os_semaphores` has the value of PostgreSQL (#383).
+- The count of the sequential scans of the tables in `seq_scan` and `last_seq_scan` of `pg_stat_user_tables`, and `pg_stat_force_next_flush` (#385).
+
+### Changed
+
+- Section 5.2 of the specification names `pg_config` and the shared memory sizes in the exclusions (#384).
+
 ## 0.1.39 (2026-10-17)
 
 A patch release on the way to M2. The releases from 0.1.29 to 0.1.38 have their notes on the release page of GitHub. This release brings the version of the crates up to the tag.
