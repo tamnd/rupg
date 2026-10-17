@@ -214,6 +214,8 @@ impl Analyzer<'_> {
             Node::JsonScalarExpr(e) => self.json_scalar(e),
             Node::JsonSerializeExpr(e) => self.json_serialize(e),
             Node::JsonFuncExpr(f) => self.json_func_expr(f),
+            Node::XmlExpr(x) => self.xml_expr(x),
+            Node::XmlSerialize(x) => self.xml_serialize(x),
             _ => Err(not_yet("this kind of expression", None)),
         }
     }

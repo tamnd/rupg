@@ -2,6 +2,7 @@
 //!
 //! PostgreSQL keeps the text of an `xml` value as it is, and only checks it. The checker in the modules below follows the parser of libxml2 with the options of PostgreSQL, so it accepts the same values and gives the same error text. It does not build a tree, because PostgreSQL does not keep one.
 
+mod build;
 mod content;
 mod ctxt;
 mod document;
@@ -16,6 +17,11 @@ use rupg_common::SqlState;
 
 use crate::TypeError;
 use ctxt::{Report, cstr};
+
+pub use build::{
+    XmlStandalone, escape_xml, sql_name, xml_base64, xml_binhex, xml_comment, xml_concat,
+    xml_element, xml_name, xml_pi, xml_root, xml_text,
+};
 
 /// The error codes of `parse_xml_decl`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]

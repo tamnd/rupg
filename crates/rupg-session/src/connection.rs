@@ -2646,6 +2646,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/with_search_cycle.test")));
     }
 
+    /// The SQL/XML functions with their own syntax, `XMLELEMENT`, `XMLFOREST`, `XMLCONCAT`, `XMLPARSE`, `XMLPI`, `XMLROOT`, `XMLSERIALIZE` and `IS DOCUMENT`, and the functions `xmlcomment`, `xmltext`, `xml`, `xmlagg` and `xml_is_well_formed`: the names of elements and attributes, the forms of the values, the declarations, the errors of the analyzer and of the functions, the text of views and of stored expressions. `connection/xml_exprs.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn xml_exprs() {
+        big_stack(|| script(include_str!("connection/xml_exprs.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

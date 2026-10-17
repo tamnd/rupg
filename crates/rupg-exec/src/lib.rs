@@ -207,6 +207,7 @@ fn check(expr: &Expr) -> Result<()> {
             expr.children().into_iter().try_for_each(check)?;
         }
         ExprKind::JsonExpr(e) => e.children().into_iter().try_for_each(check)?,
+        ExprKind::Xml(x) => x.children().into_iter().try_for_each(check)?,
         ExprKind::JsonTable(t) => t.children().into_iter().try_for_each(check)?,
         ExprKind::Window(w) => {
             if w.agg {
@@ -1623,6 +1624,11 @@ impl<'a> Eval<'a> {
             ExprKind::JsonCtor(c) => self.json_ctor(c),
             ExprKind::IsJson(p) => self.is_json(p),
             ExprKind::JsonExpr(e) => self.json_expr(e),
+            ExprKind::Xml(x) => {
+                let values =
+                    x.children().into_iter().map(|e| self.eval(e)).collect::<Result<Vec<_>>>()?;
+                rupg_func::xml_expr(x, &values, self.session)
+            }
             ExprKind::JsonTable(_) => Err(Error::internal("JSON_TABLE out of FROM")),
             ExprKind::Window(w) => self
                 .windows

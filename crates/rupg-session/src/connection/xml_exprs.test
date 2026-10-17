@@ -1,0 +1,618 @@
+> SET TimeZone TO 'UTC'
+SET
+> SELECT xmlelement(name a)
+fields xmlelement:142:-1:-1
+row <a/>
+SELECT 1
+> SELECT xmlelement(name a, '')
+fields xmlelement:142:-1:-1
+row <a></a>
+SELECT 1
+> SELECT xmlelement(name a, null)
+fields xmlelement:142:-1:-1
+row <a/>
+SELECT 1
+> SELECT xmlelement(name a, 'x', null, 'y')
+fields xmlelement:142:-1:-1
+row <a>xy</a>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes('v' as b))
+fields xmlelement:142:-1:-1
+row <a b="v"/>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(null as b))
+fields xmlelement:142:-1:-1
+row <a/>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(E'<>&"''\r\n\t' as b), E'<>&"''\r\n\t')
+fields xmlelement:142:-1:-1
+row <a b="&lt;&gt;&amp;&quot;'&#13;&#10;&#9;">&lt;&gt;&amp;"'&#x0d;
+	</a>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes('é€😀' as b), 'é€😀')
+fields xmlelement:142:-1:-1
+row <a b="&#xE9;&#x20AC;&#x1F600;">é€😀</a>
+SELECT 1
+> SELECT xmlelement(name "a b", xmlattributes(1 as "c:d", 2 as ":x", 3 as "_x"))
+fields xmlelement:142:-1:-1
+row <a_x0020_b c:d="1" _x003A_x="2" _x005F_x="3"/>
+SELECT 1
+> SELECT xmlelement(name "1a", xmlattributes(1 as "-b"))
+fields xmlelement:142:-1:-1
+row <_x0031_a _x002D_b="1"/>
+SELECT 1
+> SELECT xmlelement(name "xmlfoo")
+fields xmlelement:142:-1:-1
+row <xmlfoo/>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(1 as b, 2 as b))
+ERROR 42601 XML attribute name "b" appears more than once at 49
+> SELECT xmlelement(name a, xmlattributes(1))
+ERROR 42601 unnamed XML attribute value must be a column reference at 41
+> SELECT xmlelement(name a, xmlelement(name b, 'x'), '<c/>'::xml, '<c/>')
+fields xmlelement:142:-1:-1
+row <a><b>x</b><c/>&lt;c/&gt;</a>
+SELECT 1
+> SELECT xmlelement(name a, true, false, 1.5, 2::int8, '2000-01-02'::date, '2000-01-02 03:04:05.678'::timestamp, '2000-01-02 03:04:05'::timestamptz, '\x0102ff'::bytea)
+fields xmlelement:142:-1:-1
+row <a>truefalse1.522000-01-022000-01-02T03:04:05.6782000-01-02T03:04:05+00:00AQL/</a>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(true as b, '2000-01-02'::date as c, '\x0102ff'::bytea as d))
+fields xmlelement:142:-1:-1
+row <a b="true" c="2000-01-02" d="AQL/"/>
+SELECT 1
+> SELECT xmlelement(name a, ARRAY[1,2,null,3], ARRAY['<a>','b'])
+fields xmlelement:142:-1:-1
+row <a><element>1</element><element>2</element><element>3</element><element>&lt;a&gt;</element><element>b</element></a>
+SELECT 1
+> SELECT xmlelement(name a, '-infinity'::date)
+fields xmlelement:142:-1:-1
+ERROR 22008 date out of range
+> SELECT xmlelement(name a, 'infinity'::timestamp)
+fields xmlelement:142:-1:-1
+ERROR 22008 timestamp out of range
+> SELECT xmlelement(name a, 'infinity'::timestamptz)
+fields xmlelement:142:-1:-1
+ERROR 22008 timestamp out of range
+> SELECT xmlelement(name a, '0044-03-15 BC'::date, '0044-03-15 12:00 BC'::timestamp)
+fields xmlelement:142:-1:-1
+row <a>0044-03-15 BC0044-03-15T12:00:00 BC</a>
+SELECT 1
+> SELECT xmlelement(name a, '2000-01-02 03:04:05+05:30'::timestamptz)
+fields xmlelement:142:-1:-1
+row <a>2000-01-01T21:34:05+00:00</a>
+SELECT 1
+> SET TimeZone TO 'Asia/Kolkata'
+SET
+TimeZone=Asia/Kolkata
+> SELECT xmlelement(name a, '2000-01-02 03:04:05+00'::timestamptz)
+fields xmlelement:142:-1:-1
+row <a>2000-01-02T08:34:05+05:30</a>
+SELECT 1
+> SET TimeZone TO 'UTC'
+SET
+TimeZone=UTC
+> SELECT xmlelement(name a, '1 day 2 hours'::interval, '12:34'::time, 'a'::name, 3::oid)
+fields xmlelement:142:-1:-1
+row <a>1 day 02:00:0012:34:00a3</a>
+SELECT 1
+> SET xmlbinary TO hex
+SET
+> SELECT xmlelement(name a, xmlattributes('\xabcd'::bytea as b), '\x0102ff'::bytea, decode(repeat('ab', 40), 'hex'))
+fields xmlelement:142:-1:-1
+row <a b="ABCD">0102FFABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABABAB</a>
+SELECT 1
+> SET xmlbinary TO base64
+SET
+> SELECT replace(xmlelement(name a, decode(repeat('ab', 100), 'hex'))::text, E'\r\n', '|')
+fields replace:25:-1:-1
+row <a>q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6ur|q6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urq6urqw==</a>
+SELECT 1
+> SELECT xmlforest('x' as a, null as b, 1 as c)
+fields xmlforest:142:-1:-1
+row <a>x</a><c>1</c>
+SELECT 1
+> SELECT xmlforest(null as a)
+fields xmlforest:142:-1:-1
+row NULL
+SELECT 1
+> SELECT xmlforest('<&>' as a, '<x/>'::xml as b, ARRAY[1,2] as c)
+fields xmlforest:142:-1:-1
+row <a>&lt;&amp;&gt;</a><b><x/></b><c><element>1</element><element>2</element></c>
+SELECT 1
+> SELECT xmlforest(a, b) FROM (VALUES (1, 'x')) AS v (a, b)
+fields xmlforest:142:-1:-1
+row <a>1</a><b>x</b>
+SELECT 1
+> SELECT xmlforest(a, b, a) FROM (VALUES (1, 'x')) AS v (a, b)
+fields xmlforest:142:-1:-1
+row <a>1</a><b>x</b><a>1</a>
+SELECT 1
+> SELECT xmlforest(1)
+ERROR 42601 unnamed XML element value must be a column reference at 18
+> SELECT xmlforest(v.a AS "x y") FROM (VALUES (1)) AS v (a)
+fields xmlforest:142:-1:-1
+row <x_x0020_y>1</x_x0020_y>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(v.a, v.b)) FROM (VALUES (1, 'x')) AS v (a, b)
+fields xmlelement:142:-1:-1
+row <a a="1" b="x"/>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(v.a, v.a)) FROM (VALUES (1, 'x')) AS v (a, b)
+ERROR 42601 XML attribute name "a" appears more than once at 46
+> SELECT xmlconcat('<a/>', '<b/>')
+fields xmlconcat:142:-1:-1
+row <a/><b/>
+SELECT 1
+> SELECT xmlconcat('<a/>', null, '<b/>')
+fields xmlconcat:142:-1:-1
+row <a/><b/>
+SELECT 1
+> SELECT xmlconcat(null, null)
+fields xmlconcat:142:-1:-1
+row NULL
+SELECT 1
+> SELECT xmlconcat('<?xml version="1.1"?><a/>', '<?xml version="1.1" standalone="no"?><b/>')
+fields xmlconcat:142:-1:-1
+row <?xml version="1.1"?><a/><b/>
+SELECT 1
+> SELECT xmlconcat('<?xml version="1.1"?><a/>', '<?xml version="1.0"?><b/>')
+fields xmlconcat:142:-1:-1
+row <a/><b/>
+SELECT 1
+> SELECT xmlconcat('<?xml version="1.0" standalone="yes"?><a/>', '<?xml version="1.0" standalone="yes"?><b/>')
+fields xmlconcat:142:-1:-1
+row <?xml version="1.0" standalone="yes"?><a/><b/>
+SELECT 1
+> SELECT xmlconcat('<?xml version="1.0" standalone="yes"?><a/>', '<b/>')
+fields xmlconcat:142:-1:-1
+row <a/><b/>
+SELECT 1
+> SELECT xmlconcat('<a', '<b/>')
+ERROR 2200N invalid XML content at 18
+> SELECT xmlconcat(1, 2)
+ERROR 42804 argument of XMLCONCAT must be type xml, not type integer at 18
+> SELECT xmlconcat('x'::text)
+ERROR 42804 argument of XMLCONCAT must be type xml, not type text at 18
+> SELECT xmlparse(content 'x<a/>')
+fields xmlparse:142:-1:-1
+row x<a/>
+SELECT 1
+> SELECT xmlparse(document 'x<a/>')
+ERROR 2200M invalid XML document
+> SELECT xmlparse(document '<a> <b/> </a>' strip whitespace)
+fields xmlparse:142:-1:-1
+row <a> <b/> </a>
+SELECT 1
+> SELECT xmlparse(content '<a> <b/> </a>' preserve whitespace)
+fields xmlparse:142:-1:-1
+row <a> <b/> </a>
+SELECT 1
+> SELECT xmlparse(content null)
+fields xmlparse:142:-1:-1
+row NULL
+SELECT 1
+> SELECT xmlparse(content 1)
+fields xmlparse:142:-1:-1
+row 1
+SELECT 1
+> SELECT xmlparse(content '<a')
+ERROR 2200N invalid XML content
+> SELECT xmlpi(name foo)
+fields xmlpi:142:-1:-1
+row <?foo?>
+SELECT 1
+> SELECT xmlpi(name foo, 'bar')
+fields xmlpi:142:-1:-1
+row <?foo bar?>
+SELECT 1
+> SELECT xmlpi(name foo, '   bar baz')
+fields xmlpi:142:-1:-1
+row <?foo bar baz?>
+SELECT 1
+> SELECT xmlpi(name foo, null)
+fields xmlpi:142:-1:-1
+row NULL
+SELECT 1
+> SELECT xmlpi(name xml, null)
+ERROR 2200T invalid XML processing instruction
+> SELECT xmlpi(name XmL)
+ERROR 2200T invalid XML processing instruction
+> SELECT xmlpi(name "xml")
+ERROR 2200T invalid XML processing instruction
+> SELECT xmlpi(name foo, 'a?>b')
+ERROR 2200T invalid XML processing instruction
+> SELECT xmlpi(name foo, '')
+fields xmlpi:142:-1:-1
+row <?foo ?>
+SELECT 1
+> SELECT xmlpi(name "a b", 'x')
+fields xmlpi:142:-1:-1
+row <?a_x0020_b x?>
+SELECT 1
+> SELECT xmlroot('<a/>', version '1.1')
+fields xmlroot:142:-1:-1
+row <?xml version="1.1"?><a/>
+SELECT 1
+> SELECT xmlroot('<a/>', version no value)
+fields xmlroot:142:-1:-1
+row <a/>
+SELECT 1
+> SELECT xmlroot('<a/>', version '1.0', standalone yes)
+fields xmlroot:142:-1:-1
+row <?xml version="1.0" standalone="yes"?><a/>
+SELECT 1
+> SELECT xmlroot('<a/>', version '1.0', standalone no)
+fields xmlroot:142:-1:-1
+row <?xml version="1.0" standalone="no"?><a/>
+SELECT 1
+> SELECT xmlroot('<a/>', version '1.0', standalone no value)
+fields xmlroot:142:-1:-1
+row <a/>
+SELECT 1
+> SELECT xmlroot('<?xml version="1.1" standalone="yes"?><a/>', version no value)
+fields xmlroot:142:-1:-1
+row <?xml version="1.0" standalone="yes"?><a/>
+SELECT 1
+> SELECT xmlroot('<?xml version="1.1" standalone="yes"?><a/>', version no value, standalone no value)
+fields xmlroot:142:-1:-1
+row <a/>
+SELECT 1
+> SELECT xmlroot(null, version '1.0')
+fields xmlroot:142:-1:-1
+row NULL
+SELECT 1
+> SELECT xmlroot(xmlroot('<a/>', version '1.0'), version '1.1', standalone no)
+fields xmlroot:142:-1:-1
+row <?xml version="1.1" standalone="no"?><a/>
+SELECT 1
+> SELECT xmlroot('<a/>', version null)
+fields xmlroot:142:-1:-1
+row <a/>
+SELECT 1
+> SELECT '<a/>'::xml IS DOCUMENT, 'x<a/>'::xml IS DOCUMENT, ''::xml IS DOCUMENT, null::xml IS DOCUMENT, '<a/>'::xml IS NOT DOCUMENT
+fields ?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1,?column?:16:1:-1
+row t,f,f,NULL,f
+SELECT 1
+> SELECT 'x' IS DOCUMENT
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT 1 IS DOCUMENT
+ERROR 42804 argument of IS DOCUMENT must be type xml, not type integer at 8
+> SELECT xmlserialize(content '<a/>' as text)
+fields xmlserialize:25:-1:-1
+row <a/>
+SELECT 1
+> SELECT xmlserialize(document '<a/>' as varchar(10))
+fields xmlserialize:1043:-1:14
+row <a/>
+SELECT 1
+> SELECT xmlserialize(document 'x<a/>' as text)
+ERROR 2200L not an XML document
+> SELECT xmlserialize(content 'x<a/>' as character varying)
+fields xmlserialize:1043:-1:-1
+row x<a/>
+SELECT 1
+> SELECT xmlserialize(content '<a/>' as int)
+ERROR 42846 cannot cast XMLSERIALIZE result to integer at 8
+> SELECT xmlserialize(content '<a/>' as name)
+fields xmlserialize:19:64:-1
+row <a/>
+SELECT 1
+> SELECT xmlserialize(content '<abc/>' as varchar(3))
+ERROR 22001 value too long for type character varying(3)
+> SELECT xmlserialize(content '<abc/>' as char(3))
+ERROR 22001 value too long for type character(3)
+> SELECT xmlserialize(content null as text)
+fields xmlserialize:25:-1:-1
+row NULL
+SELECT 1
+> SELECT xmlserialize(content '<a/>' as text no indent)
+fields xmlserialize:25:-1:-1
+row <a/>
+SELECT 1
+> SELECT xmlcomment('hello'), xmlcomment(''), xmlcomment('a-b')
+fields xmlcomment:142:-1:-1,xmlcomment:142:-1:-1,xmlcomment:142:-1:-1
+row <!--hello-->,<!---->,<!--a-b-->
+SELECT 1
+> SELECT xmlcomment('a--b')
+ERROR 2200S invalid XML comment
+> SELECT xmlcomment('a-')
+ERROR 2200S invalid XML comment
+> SELECT xmlcomment(null)
+fields xmlcomment:142:-1:-1
+row NULL
+SELECT 1
+> SELECT xmltext('<a & b>'), xmltext(E'x\ry"z'), xmltext(null)
+fields xmltext:142:-1:-1,xmltext:142:-1:-1,xmltext:142:-1:-1
+row &lt;a &amp; b&gt;,x&#13;y&quot;z,NULL
+SELECT 1
+> SELECT xml('<a/>'), xml('a<'), text('<a/>'::xml)
+ERROR 2200N invalid XML content at 25
+> SELECT xmlagg(x) FROM (VALUES ('<a/>'::xml), (null), ('<b/>')) AS v (x)
+fields xmlagg:142:-1:-1
+row <a/><b/>
+SELECT 1
+> SELECT xmlagg(x ORDER BY n DESC) FROM (VALUES ('<a/>'::xml, 1), ('<b/>', 2)) AS v (x, n)
+fields xmlagg:142:-1:-1
+row <b/><a/>
+SELECT 1
+> SELECT xmlagg(x) FROM (VALUES (null::xml)) AS v (x)
+fields xmlagg:142:-1:-1
+row NULL
+SELECT 1
+> SELECT xml_is_well_formed('<a/>'), xml_is_well_formed('x'), xml_is_well_formed('<a'), xml_is_well_formed_document('x'), xml_is_well_formed_content('x'), xml_is_well_formed_document('<a/>')
+fields xml_is_well_formed:16:1:-1,xml_is_well_formed:16:1:-1,xml_is_well_formed:16:1:-1,xml_is_well_formed_document:16:1:-1,xml_is_well_formed_content:16:1:-1,xml_is_well_formed_document:16:1:-1
+row t,t,f,f,t,t
+SELECT 1
+> SET xmloption TO document
+SET
+> SELECT xml_is_well_formed('x'), xml('<a/>')
+fields xml_is_well_formed:16:1:-1,xml:142:-1:-1
+row f,<a/>
+SELECT 1
+> SELECT xml('x')
+ERROR 2200M invalid XML document at 12
+> SET xmloption TO content
+SET
+> SELECT xmlvalidate('<a/>', 'x')
+ERROR 0A000 xmlvalidate is not implemented
+> SELECT pg_typeof(xmlserialize(content '<a/>' as varchar(10))), pg_typeof('<a/>'::xml IS DOCUMENT), pg_typeof(xmlelement(name a))
+fields pg_typeof:2206:4:-1,pg_typeof:2206:4:-1,pg_typeof:2206:4:-1
+row character varying,boolean,xml
+SELECT 1
+> CREATE VIEW xv1 AS SELECT xmlelement(name "a b", xmlattributes(1 as c, 'x' as "d e"), 'y', xmlelement(name f)) AS e1, xmlforest(1 as a, 'b' as "_x") AS e2, xmlconcat('<a/>', '<b/>') AS e3, xmlparse(content '<a/>') AS e4, xmlparse(document '<a/>' strip whitespace) AS e5, xmlpi(name foo) AS e6, xmlpi(name foo, 'bar') AS e7
+CREATE VIEW
+> SELECT pg_get_viewdef('xv1')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT XMLELEMENT(NAME "a b", XMLATTRIBUTES(1 AS c, 'x' AS "d e"), 'y', XMLELEMENT(NAME f)) AS e1,
+    XMLFOREST(1 AS a, 'b' AS _x) AS e2,
+    XMLCONCAT('<a/>'::xml, '<b/>'::xml) AS e3,
+    XMLPARSE(CONTENT '<a/>'::text STRIP WHITESPACE) AS e4,
+    XMLPARSE(DOCUMENT '<a/>'::text STRIP WHITESPACE) AS e5,
+    XMLPI(NAME foo) AS e6,
+    XMLPI(NAME foo, 'bar'::text) AS e7;
+SELECT 1
+> SELECT * FROM xv1
+fields e1@xv1.1:142:-1:-1,e2@xv1.2:142:-1:-1,e3@xv1.3:142:-1:-1,e4@xv1.4:142:-1:-1,e5@xv1.5:142:-1:-1,e6@xv1.6:142:-1:-1,e7@xv1.7:142:-1:-1
+row <a_x0020_b c="1" d_x0020_e="x">y<f/></a_x0020_b>,<a>1</a><_x005F_x>b</_x005F_x>,<a/><b/>,<a/>,<a/>,<?foo?>,<?foo bar?>
+SELECT 1
+> CREATE VIEW xv2 AS SELECT xmlroot('<a/>', version '1.0', standalone yes) AS r1, xmlroot('<a/>', version no value) AS r2, xmlroot('<a/>', version '1.1', standalone no value) AS r3, xmlroot('<a/>', version '1.1', standalone no) AS r4, '<a/>'::xml IS DOCUMENT AS d, '<a/>'::xml IS NOT DOCUMENT AS nd, xmlserialize(content '<a/>' as varchar(10)) AS s1, xmlserialize(document '<a/>' as text) AS s2, xmlserialize(content '<a/>' as name) AS s3
+CREATE VIEW
+> SELECT pg_get_viewdef('xv2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT XMLROOT('<a/>'::xml, VERSION '1.0'::text, STANDALONE YES) AS r1,
+    XMLROOT('<a/>'::xml, VERSION NO VALUE) AS r2,
+    XMLROOT('<a/>'::xml, VERSION '1.1'::text, STANDALONE NO VALUE) AS r3,
+    XMLROOT('<a/>'::xml, VERSION '1.1'::text, STANDALONE NO) AS r4,
+    '<a/>'::xml IS DOCUMENT AS d,
+    (NOT '<a/>'::xml IS DOCUMENT) AS nd,
+    (XMLSERIALIZE(CONTENT '<a/>'::xml AS character varying(10) NO INDENT))::character varying(10) AS s1,
+    XMLSERIALIZE(DOCUMENT '<a/>'::xml AS text NO INDENT) AS s2,
+    (XMLSERIALIZE(CONTENT '<a/>'::xml AS name NO INDENT))::name AS s3;
+SELECT 1
+> SELECT * FROM xv2
+fields r1@xv2.1:142:-1:-1,r2@xv2.2:142:-1:-1,r3@xv2.3:142:-1:-1,r4@xv2.4:142:-1:-1,d@xv2.5:16:1:-1,nd@xv2.6:16:1:-1,s1@xv2.7:1043:-1:14,s2@xv2.8:25:-1:-1,s3@xv2.9:19:64:-1
+row <?xml version="1.0" standalone="yes"?><a/>,<a/>,<?xml version="1.1"?><a/>,<?xml version="1.1" standalone="no"?><a/>,t,f,<a/>,<a/>,<a/>
+SELECT 1
+> CREATE VIEW xv3 AS SELECT xmlelement(name "xml:x", xmlattributes(v.a, v.b AS "c:d"), v.b) AS e, xmlforest(v.a, v.b AS "1x") AS f, xmlagg(xmlelement(name i, v.a)) OVER () AS g FROM (VALUES (1, 'x')) AS v (a, b)
+CREATE VIEW
+> SELECT pg_get_viewdef('xv3')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT XMLELEMENT(NAME "xml:x", XMLATTRIBUTES(a AS a, b AS "c:d"), b) AS e,
+    XMLFOREST(a AS a, b AS "1x") AS f,
+    xmlagg(XMLELEMENT(NAME i, a)) OVER () AS g
+   FROM ( VALUES (1,'x'::text)) v(a, b);
+SELECT 1
+> SELECT * FROM xv3
+fields e@xv3.1:142:-1:-1,f@xv3.2:142:-1:-1,g@xv3.3:142:-1:-1
+row <xml:x a="1" c:d="x">x</xml:x>,<a>1</a><_x0031_x>x</_x0031_x>,<i>1</i>
+SELECT 1
+> CREATE VIEW xv4 AS SELECT xmlcomment('c') AS c, xmltext('t') AS t, xml('<a/>') AS x, xmlconcat(xmlcomment('a'), null) AS n, (xmlelement(name a) IS DOCUMENT) IS TRUE AS d
+CREATE VIEW
+> SELECT pg_get_viewdef('xv4')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT xmlcomment('c'::text) AS c,
+    xmltext('t'::text) AS t,
+    '<a/>'::xml AS x,
+    XMLCONCAT(xmlcomment('a'::text), NULL::xml) AS n,
+    (XMLELEMENT(NAME a) IS DOCUMENT IS TRUE) AS d;
+SELECT 1
+> SELECT * FROM xv4
+fields c@xv4.1:142:-1:-1,t@xv4.2:142:-1:-1,x@xv4.3:142:-1:-1,n@xv4.4:142:-1:-1,d@xv4.5:16:1:-1
+row <!--c-->,t,<a/>,<!--a-->,t
+SELECT 1
+> SELECT '<?xml version="1.1"?><a/>'::xml IS DOCUMENT
+WARNING 01000 line 1: Unsupported version '1.1'
+<?xml version="1.1"?><a/>
+                   ^
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT xmlparse(document '<?xml version="1.1"?><a/>')
+WARNING 01000 line 1: Unsupported version '1.1'
+<?xml version="1.1"?><a/>
+                   ^
+fields xmlparse:142:-1:-1
+row <?xml version="1.1"?><a/>
+SELECT 1
+> SELECT xmlparse(document E'<a>\n</b>')
+ERROR 2200M invalid XML document
+> SELECT xmlserialize(document E'x' as text)
+ERROR 2200L not an XML document
+> SELECT xmlelement(name a, xmlattributes(1 as b), xmlforest(2 as c), xmlpi(name p), xmlcomment('c'))
+fields xmlelement:142:-1:-1
+row <a b="1"><c>2</c><?p?><!--c--></a>
+SELECT 1
+> SELECT xmlelement(name a, x) FROM (VALUES (1), (null), (3)) AS v (x)
+fields xmlelement:142:-1:-1
+row <a>1</a>
+row <a/>
+row <a>3</a>
+SELECT 3
+> SELECT xmlforest(x AS "a", y) FROM (VALUES (1, null), (null, null), (null, 'y')) AS v (x, y)
+fields xmlforest:142:-1:-1
+row <a>1</a>
+row NULL
+row <y>y</y>
+SELECT 3
+> SELECT xmlconcat(x, y) FROM (VALUES ('<a/>'::xml, '<b/>'::xml), (null, '<c/>'), (null, null)) AS v (x, y)
+fields xmlconcat:142:-1:-1
+row <a/><b/>
+row <c/>
+row NULL
+SELECT 3
+> SELECT xmlpi(name a, x) FROM (VALUES ('x'), (null)) AS v (x)
+fields xmlpi:142:-1:-1
+row <?a x?>
+row NULL
+SELECT 2
+> SELECT xmlroot(x, version y, standalone yes) FROM (VALUES ('<a/>'::xml, '1.0'), ('<b/>', null)) AS v (x, y)
+fields xmlroot:142:-1:-1
+row <?xml version="1.0" standalone="yes"?><a/>
+row <?xml version="1.0" standalone="yes"?><b/>
+SELECT 2
+> SELECT xmlelement(name a, ROW(1, 'x'))
+fields xmlelement:142:-1:-1
+row <a>(1,x)</a>
+SELECT 1
+> SELECT xmlelement(name a, 1::float8 / 3, 'NaN'::numeric, 1e20::float4)
+fields xmlelement:142:-1:-1
+row <a>0.3333333333333333NaN1e+20</a>
+SELECT 1
+> SELECT xmlelement(name a, '{1,2}'::int[][], '{{1,2},{3,4}}'::int[])
+fields xmlelement:142:-1:-1
+row <a><element>1</element><element>2</element><element>1</element><element>2</element><element>3</element><element>4</element></a>
+SELECT 1
+> SELECT xmlelement(name a, '{"<a/>"}'::xml[])
+fields xmlelement:142:-1:-1
+row <a><element><a/></element></a>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes('<x/>'::xml as b))
+fields xmlelement:142:-1:-1
+row <a b="&lt;x/&gt;"/>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(ARRAY[1,2] as b))
+fields xmlelement:142:-1:-1
+row <a b="&lt;element&gt;1&lt;/element&gt;&lt;element&gt;2&lt;/element&gt;"/>
+SELECT 1
+> SELECT xmlelement(name a, 'a' COLLATE "C")
+fields xmlelement:142:-1:-1
+row <a>a</a>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(v.a)) FROM (VALUES (1)) AS v (a) WHERE xmlelement(name a, v.a)::text = '<a>1</a>'
+fields xmlelement:142:-1:-1
+row <a a="1"/>
+SELECT 1
+> SELECT xmlelement(name a, 'x') = xmlelement(name a, 'x')
+ERROR 42883 operator does not exist: xml = xml at 32
+> SELECT xmlparse(content E'<a>é</a>'), xmlelement(name "é")
+fields xmlparse:142:-1:-1,xmlelement:142:-1:-1
+row <a>é</a>,<é/>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(E'a\nb' as c))
+fields xmlelement:142:-1:-1
+row <a c="a&#10;b"/>
+SELECT 1
+> CREATE VIEW xp1 AS SELECT xmlroot('<a/>', version '1.0', standalone yes) AS r1, '<a/>'::xml IS DOCUMENT AS d, '<a/>'::xml IS NOT DOCUMENT AS nd, (xmlelement(name a) IS DOCUMENT) IS TRUE AS d2, xmlserialize(content '<a/>' as varchar(10)) AS s1, xmlelement(name a, xmlattributes(1 + 2 AS b), 3 * 4, xmlconcat('<x/>', null)) AS e, NOT (xmlparse(content 'x') IS DOCUMENT) AND true AS d3
+CREATE VIEW
+> SELECT pg_get_viewdef('xp1', true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT XMLROOT('<a/>'::xml, VERSION '1.0'::text, STANDALONE YES) AS r1,
+    ('<a/>'::xml) IS DOCUMENT AS d,
+    NOT ('<a/>'::xml) IS DOCUMENT AS nd,
+    (XMLELEMENT(NAME a)) IS DOCUMENT IS TRUE AS d2,
+    XMLSERIALIZE(CONTENT '<a/>'::xml AS character varying(10) NO INDENT)::character varying(10) AS s1,
+    XMLELEMENT(NAME a, XMLATTRIBUTES(1 + 2 AS b), 3 * 4, XMLCONCAT('<x/>'::xml, NULL::xml)) AS e,
+    NOT (XMLPARSE(CONTENT 'x'::text STRIP WHITESPACE)) IS DOCUMENT AND true AS d3;
+SELECT 1
+> SELECT * FROM xp1
+fields r1@xp1.1:142:-1:-1,d@xp1.2:16:1:-1,nd@xp1.3:16:1:-1,d2@xp1.4:16:1:-1,s1@xp1.5:1043:-1:14,e@xp1.6:142:-1:-1,d3@xp1.7:16:1:-1
+row <?xml version="1.0" standalone="yes"?><a/>,t,f,t,<a/>,<a b="3">12<x/></a>,t
+SELECT 1
+> CREATE TABLE xt (a xml DEFAULT xmlelement(name a, xmlattributes(1 as b), 'x'), b xml CHECK (b IS DOCUMENT), c text DEFAULT xmlserialize(content xmlroot('<a/>', version '1.0', standalone no value) as text), d xml DEFAULT xmlforest(1 as "x y", 'z' as z), e xml DEFAULT xmlpi(name p, 'q'), f xml DEFAULT xmlparse(document '<a/>' preserve whitespace))
+CREATE TABLE
+> SELECT a.attname, pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum WHERE d.adrelid = 'xt'::regclass ORDER BY a.attnum
+fields attname@pg_attribute.2:19:64:-1,pg_get_expr:25:-1:-1
+row a,XMLELEMENT(NAME a, XMLATTRIBUTES(1 AS b), 'x')
+row c,XMLSERIALIZE(CONTENT XMLROOT('<a/>'::xml, VERSION '1.0'::text, STANDALONE NO VALUE) AS text NO INDENT)
+row d,XMLFOREST(1 AS "x y", 'z' AS z)
+row e,XMLPI(NAME p, 'q'::text)
+row f,XMLPARSE(DOCUMENT '<a/>'::text PRESERVE WHITESPACE)
+SELECT 5
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'xt'::regclass
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (b IS DOCUMENT)
+SELECT 1
+> SELECT xmlparse(content x) FROM (VALUES (1)) AS v (x)
+fields xmlparse:142:-1:-1
+row 1
+SELECT 1
+> SELECT xmlpi(name foo, 1), xmlroot('<a/>', version 1)
+fields xmlpi:142:-1:-1,xmlroot:142:-1:-1
+row <?foo 1?>,<?xml version="1"?><a/>
+SELECT 1
+> SELECT xmlserialize(content 1 as text)
+ERROR 42804 argument of XMLSERIALIZE must be type xml, not type integer at 29
+> SELECT xmlroot(1, version '1.0')
+ERROR 42804 argument of XMLROOT must be type xml, not type integer at 16
+> SELECT x IS DOCUMENT, x IS NOT DOCUMENT FROM (VALUES ('<a/>'::xml), ('a<b/>'), (null)) AS v (x)
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,f
+row f,t
+row NULL,NULL
+SELECT 3
+> SELECT xmlelement(name a, generate_series(1, 2))
+fields xmlelement:142:-1:-1
+row <a>1</a>
+row <a>2</a>
+SELECT 2
+> SELECT xmlelement(name a, (SELECT 1)), xmlforest((SELECT 2) AS b)
+fields xmlelement:142:-1:-1,xmlforest:142:-1:-1
+row <a>1</a>,<b>2</b>
+SELECT 1
+> SELECT xmlagg(xmlelement(name a, x)) FROM (VALUES (1), (2)) AS v (x)
+fields xmlagg:142:-1:-1
+row <a>1</a><a>2</a>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(x AS b)) FROM (VALUES (1), (2)) AS v (x) ORDER BY 1::text
+fields xmlelement:142:-1:-1
+row <a b="1"/>
+row <a b="2"/>
+SELECT 2
+> SELECT xmlconcat(xmlelement(name a), xmlcomment('c'), xmlpi(name p))
+fields xmlconcat:142:-1:-1
+row <a/><!--c--><?p?>
+SELECT 1
+> SELECT xmlelement(name a, sum(x)) FROM (VALUES (1), (2)) AS v (x)
+fields xmlelement:142:-1:-1
+row <a>3</a>
+SELECT 1
+> SELECT xmlforest(x) FROM (VALUES (true), (false)) AS v (x)
+fields xmlforest:142:-1:-1
+row <x>true</x>
+row <x>false</x>
+SELECT 2
+> SELECT xmlelement(name "Foo", xmlattributes('a' AS "Bar")), xmlelement(name foo_bar)
+fields xmlelement:142:-1:-1,xmlelement:142:-1:-1
+row <Foo Bar="a"/>,<foo_bar/>
+SELECT 1
+> SELECT xmlelement(name a, xmlattributes(1 as b), xmlattributes(2 as c))
+ERROR 42601 syntax error at or near "(" at 63
+> SELECT xmlelement(name a, 'x'::varchar(3), 'y'::char(3), 'z'::name)
+fields xmlelement:142:-1:-1
+row <a>xy  z</a>
+SELECT 1
+> SELECT xmlroot('<a/>', version '1.0', standalone yes) IS DOCUMENT
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT xmlparse(content 'x' preserve whitespace) IS DOCUMENT
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT xmlserialize(content xmlelement(name a, 'x') as text) || 'y'
+fields ?column?:25:-1:-1
+row <a>x</a>y
+SELECT 1

@@ -66,6 +66,7 @@ mod tsstat;
 mod tsvector;
 mod unicode;
 mod updatable;
+mod xml;
 mod zones;
 
 use std::collections::BTreeMap;
@@ -100,6 +101,7 @@ pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use sequence::Sequences;
 pub use srf::{SetKernel, set_kernel};
 pub use text::quote_identifier;
+pub use xml::{xml_expr, xml_value};
 
 /// `format_type_be`: the name of a type for a message, with its schema when the search path does not find it.
 pub fn type_message_name(ty: u32, session: &dyn Session) -> String {
@@ -476,6 +478,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| advisory::by_src(src))
         .or_else(|| sequence::by_src(src))
         .or_else(|| enums::by_src(src))
+        .or_else(|| xml::by_src(src))
 }
 
 /// The name of the operator that the function implements, if it implements one.

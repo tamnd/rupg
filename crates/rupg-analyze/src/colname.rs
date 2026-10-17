@@ -2,7 +2,7 @@
 
 use rupg_sql::nodes::{
     A_Expr_Kind, JsonExprOp, MinMaxOp, Node, SQLValueFunctionOp, SelectStmt, SetOperation,
-    SubLinkType,
+    SubLinkType, XmlExprOp,
 };
 
 /// The name of the column for the expression, or `?column?`.
@@ -116,6 +116,17 @@ fn figure(node: Option<&Node>) -> Option<(String, u8)> {
         Node::JsonArrayConstructor(_) | Node::JsonArrayQueryConstructor(_) => strong("json_array"),
         Node::JsonObjectAgg(_) => strong("json_objectagg"),
         Node::JsonArrayAgg(_) => strong("json_arrayagg"),
+        Node::XmlExpr(x) => strong(match x.op {
+            XmlExprOp::IS_XMLCONCAT => "xmlconcat",
+            XmlExprOp::IS_XMLELEMENT => "xmlelement",
+            XmlExprOp::IS_XMLFOREST => "xmlforest",
+            XmlExprOp::IS_XMLPARSE => "xmlparse",
+            XmlExprOp::IS_XMLPI => "xmlpi",
+            XmlExprOp::IS_XMLROOT => "xmlroot",
+            XmlExprOp::IS_XMLSERIALIZE => "xmlserialize",
+            _ => return None,
+        }),
+        Node::XmlSerialize(_) => strong("xmlserialize"),
         Node::JsonFuncExpr(f) => match f.op {
             JsonExprOp::JSON_EXISTS_OP => strong("json_exists"),
             JsonExprOp::JSON_QUERY_OP => strong("json_query"),
