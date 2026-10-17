@@ -340,7 +340,7 @@ impl Analyzer<'_> {
             }
             .at_opt(at)
         };
-        let ExprKind::Row(args) = expr.kind else { return Err(cannot(None)) };
+        let ExprKind::Row(args, _) = expr.kind else { return Err(cannot(None)) };
         let columns = self.row_columns(base).ok_or_else(|| cannot(None))?;
         if args.len() < columns.len() {
             return Err(cannot(Some("Input has too few columns.".into())));
@@ -366,7 +366,9 @@ impl Analyzer<'_> {
             };
             fields.push(field);
         }
-        let row = Expr { kind: ExprKind::Row(fields), ty: base, typmod: -1, location };
+        let form =
+            if context == Context::Explicit { CastForm::Explicit } else { CastForm::Implicit };
+        let row = Expr { kind: ExprKind::Row(fields, form), ty: base, typmod: -1, location };
         Ok(if base == target {
             row
         } else {
@@ -539,6 +541,7 @@ fn hide_cast(expr: &mut Expr) {
         ExprKind::Relabel(_, form)
         | ExprKind::CoerceViaIo(_, form)
         | ExprKind::ArrayCoerce { form, .. }
+        | ExprKind::Row(_, form)
         | ExprKind::CoerceToDomain(_, form) => *form = CastForm::Implicit,
         _ => {}
     }

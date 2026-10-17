@@ -1,0 +1,120 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE TYPE c AS (a int, b text)
+CREATE TYPE
+> CREATE TYPE d AS (x c, y numeric(5,2))
+CREATE TYPE
+> SELECT * FROM CAST(ROW(5, 'z') AS c)
+fields a:23:4:-1,b:25:-1:-1
+row 5,z
+SELECT 1
+> SELECT * FROM CAST(ROW(5, 'z') AS c) AS t
+fields a:23:4:-1,b:25:-1:-1
+row 5,z
+SELECT 1
+> SELECT t.* FROM CAST(ROW(5, 'z') AS c) AS t (p, q)
+fields p:23:4:-1,q:25:-1:-1
+row 5,z
+SELECT 1
+> SELECT * FROM CAST(ROW(5, 'z') AS c) AS t (p)
+fields p:23:4:-1,b:25:-1:-1
+row 5,z
+SELECT 1
+> SELECT * FROM CAST(ROW(5, 'z') AS c) AS t (p, q, r)
+ERROR 42P10 table "t" has 2 columns available but 3 columns specified
+> SELECT * FROM CAST(ROW(5, 'z') AS c) AS t (p int, q text)
+ERROR 42601 a column definition list is redundant for a function returning a named composite type at 44
+> SELECT a, b FROM CAST(NULL AS c)
+fields a:23:4:-1,b:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT * FROM CAST(NULL AS c) AS t WHERE t.a IS NULL
+fields a:23:4:-1,b:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT * FROM COALESCE(NULL::c, ROW(1, 'q')::c)
+fields a:23:4:-1,b:25:-1:-1
+row 1,q
+SELECT 1
+> SELECT * FROM NULLIF(ROW(1, 'q')::c, ROW(1, 'q')::c)
+fields a:23:4:-1,b:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT x::text, y FROM CAST(ROW(ROW(1, 'n'), 3.14159) AS d)
+fields x:25:-1:-1,y:1700:-1:327686
+row (1,n),3.14
+SELECT 1
+> SELECT (x).a, y FROM CAST(ROW(ROW(1, 'n'), 3.14159) AS d)
+fields a:23:4:-1,y:1700:-1:327686
+row 1,3.14
+SELECT 1
+> SELECT t::text FROM CAST(ROW(5, 'z') AS c) AS t
+fields t:25:-1:-1
+row (5,z)
+SELECT 1
+> SELECT * FROM CAST(ROW(5, 'z') AS c) WITH ORDINALITY
+fields a:23:4:-1,b:25:-1:-1,ordinality:20:8:-1
+row 5,z,1
+SELECT 1
+> SELECT * FROM ROWS FROM (CAST(ROW(5, 'z') AS c), generate_series(1, 2))
+fields a:23:4:-1,b:25:-1:-1,generate_series:23:4:-1
+row 5,z,1
+row NULL,NULL,2
+SELECT 2
+> SELECT * FROM generate_series(1, 2) AS s, CAST(ROW(s, 'w' || s) AS c) AS t
+fields s:23:4:-1,a:23:4:-1,b:25:-1:-1
+row 1,1,w1
+row 2,2,w2
+SELECT 2
+> SELECT * FROM generate_series(1, 2) AS s, LATERAL CAST(ROW(s * 10, NULL) AS c) AS t ORDER BY s
+fields s:23:4:-1,a:23:4:-1,b:25:-1:-1
+row 1,10,NULL
+row 2,20,NULL
+SELECT 2
+> CREATE TABLE tb (k int, v text)
+CREATE TABLE
+> SELECT * FROM CAST(ROW(7, 'tb') AS tb)
+fields k:23:4:-1,v:25:-1:-1
+row 7,tb
+SELECT 1
+> SELECT k + 1, upper(v) FROM CAST(ROW(7, 'tb') AS tb) AS r
+fields ?column?:23:4:-1,upper:25:-1:-1
+row 8,TB
+SELECT 1
+> CREATE VIEW w AS SELECT * FROM CAST(ROW(5, 'z') AS c)
+CREATE VIEW
+> SELECT * FROM w
+fields a@w.1:23:4:-1,b@w.2:25:-1:-1
+row 5,z
+SELECT 1
+> SELECT pg_get_viewdef('w')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b
+   FROM CAST(ROW(5, 'z'::text)::c AS c) "row"(a, b);
+SELECT 1
+> CREATE VIEW w2 AS SELECT p FROM CAST(ROW(5, 'z') AS c) AS t (p)
+CREATE VIEW
+> SELECT * FROM w2
+fields p@w2.1:23:4:-1
+row 5
+SELECT 1
+> SELECT pg_get_viewdef('w2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT p
+   FROM CAST(ROW(5, 'z'::text)::c AS c) t(p, b);
+SELECT 1
+> CREATE VIEW w3 AS SELECT CAST(ROW(5, 'z') AS c) AS r, ROW(1, 'x')::c AS s, ROW(1, 2)::text AS t, (ROW(2, 'y')::c).b AS u, COALESCE(NULL, ROW(3, 'q')::c) AS v
+CREATE VIEW
+> SELECT r::text, s::text, t, u, v::text FROM w3
+fields r:25:-1:-1,s:25:-1:-1,t@w3.3:25:-1:-1,u@w3.4:25:-1:-1,v:25:-1:-1
+row (5,z),(1,x),(1,2),y,(3,q)
+SELECT 1
+> SELECT pg_get_viewdef('w3')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ROW(5, 'z'::text)::c AS r,
+    ROW(1, 'x'::text)::c AS s,
+    (ROW(1, 2))::text AS t,
+    (ROW(2, 'y'::text)::c).b AS u,
+    COALESCE(NULL::c, ROW(3, 'q'::text)::c) AS v;
+SELECT 1

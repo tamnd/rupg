@@ -319,10 +319,14 @@ impl<'a> Deparser<'a> {
                 self.list(args, true)?;
                 self.buf.push(')');
             }
-            ExprKind::Row(args) => {
+            ExprKind::Row(args, form) => {
                 self.buf.push_str("ROW(");
                 self.list(args, true)?;
                 self.buf.push(')');
+                if *form == CastForm::Explicit {
+                    let ty = reg::type_text(e.ty, Some(-1), self.session)?;
+                    self.buf.push_str(&format!("::{ty}"));
+                }
             }
             ExprKind::RowCompare(rc) => self.row_compare(rc)?,
             ExprKind::MinMax { greatest, args, .. } => {
@@ -645,7 +649,7 @@ fn own_syntax(parent: &Expr) -> bool {
         ExprKind::Bool(..)
         | ExprKind::Subscript(_)
         | ExprKind::Array { .. }
-        | ExprKind::Row(_)
+        | ExprKind::Row(..)
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }
         | ExprKind::NullIf { .. }
@@ -681,7 +685,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         // The `.` binds the most, but a field of a field needs parentheses.
         ExprKind::FieldSelect(..) => !matches!(parent.kind, ExprKind::FieldSelect(..)),
         ExprKind::Array { .. }
-        | ExprKind::Row(_)
+        | ExprKind::Row(..)
         | ExprKind::Subscript(_)
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }

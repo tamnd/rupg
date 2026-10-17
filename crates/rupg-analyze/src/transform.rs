@@ -12,8 +12,8 @@ use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, can_coerce, common_of};
 use crate::expr::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, Func, FuncForm, NamedArg, RowCompare, RowCompareKind,
-    SqlValue,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, RowCompare,
+    RowCompareKind, SqlValue,
 };
 use crate::typename::{names, place};
 use crate::types;
@@ -198,7 +198,8 @@ impl Analyzer<'_> {
             }
             Node::RowExpr(r) => {
                 let args = self.transform_list(&r.args)?;
-                Ok(Expr::new(ExprKind::Row(args), oid::RECORD).at(place(r.location)))
+                Ok(Expr::new(ExprKind::Row(args, CastForm::Implicit), oid::RECORD)
+                    .at(place(r.location)))
             }
             Node::SubLink(s) => self.transform_sublink(s),
             Node::A_Indirection(i) => self.transform_indirection(i),
@@ -397,7 +398,7 @@ impl Analyzer<'_> {
         }
         let left = self.transform(a.lexpr.as_ref())?;
         let right = self.transform(a.rexpr.as_ref())?;
-        let (ExprKind::Row(l), ExprKind::Row(r)) = (&left.kind, &right.kind) else {
+        let (ExprKind::Row(l, _), ExprKind::Row(r, _)) = (&left.kind, &right.kind) else {
             return self.distinct_op(op_names, not, left, right, at);
         };
         if l.len() != r.len() {

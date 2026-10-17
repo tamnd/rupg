@@ -649,7 +649,10 @@ impl Analyzer<'_> {
                 )
                 .at_opt(at));
             }
-            return Err(not_yet("a function in FROM that returns a composite type", expr.location));
+            // `TYPEFUNC_COMPOSITE`: a column for each attribute of the type.
+            return self
+                .row_columns(expr.ty)
+                .ok_or_else(|| Error::internal("a composite type with no relation"));
         }
         if !coldefs.is_empty() {
             return Err(Error::new(

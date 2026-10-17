@@ -92,7 +92,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::Distinct { .. } => "DISTINCT",
         ExprKind::ScalarArrayOp { .. } => "SCALARARRAYOP",
         ExprKind::Array { .. } => "ARRAY",
-        ExprKind::Row(_) => "ROW",
+        ExprKind::Row(..) => "ROW",
         ExprKind::RowCompare(_) => "ROWCOMPARE",
         ExprKind::SqlValue(_) => "SQLVALUE",
         ExprKind::Var(_) => "VAR",
@@ -193,7 +193,14 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             write_field("default", &case.default, out)?;
         }
         ExprKind::CaseTest | ExprKind::DomainValue => {}
-        ExprKind::Coalesce(args) | ExprKind::Row(args) => write_args(args, out)?,
+        ExprKind::Coalesce(args) => write_args(args, out)?,
+        ExprKind::Row(args, form) => {
+            out.push_str(match form {
+                CastForm::Explicit => " :form explicit",
+                CastForm::Implicit => " :form implicit",
+            });
+            write_args(args, out)?;
+        }
         ExprKind::MinMax { greatest, less, args } => {
             out.push_str(&format!(" :greatest {greatest} :less {less}"));
             write_args(args, out)?;
@@ -727,7 +734,8 @@ fn expr_of(item: &Item) -> Result<Expr> {
         }
         "CASETEST" => ExprKind::CaseTest,
         "COALESCE" => ExprKind::Coalesce(f.exprs("args")?),
-        "ROW" => ExprKind::Row(f.exprs("args")?),
+        // A row of an older node text has no form, and is implicit.
+        "ROW" => ExprKind::Row(f.exprs("args")?, cast_form(&f).unwrap_or(CastForm::Implicit)),
         "ROWCOMPARE" => {
             let kind = RowCompareKind::of_name(f.atom("kind")?)
                 .ok_or_else(|| bad("a kind of row comparison"))?;
