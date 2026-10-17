@@ -8,9 +8,10 @@ mod query;
 use std::ptr;
 
 use rupg_analyze::{
-    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JsonCtor,
-    JsonCtorKind, JsonEncoding, JsonFormat, JsonFormatKind, JsonItemType, RowCompare, SortGroup,
-    SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JsonBehavior,
+    JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp, JsonFormat,
+    JsonFormatKind, JsonItemType, JsonWrapper, RowCompare, SortGroup, SqlValue, SubLink,
+    SubLinkKind, Var, WindowClause, WindowFunc,
 };
 use rupg_analyze::{default_opclass, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, Relation};
@@ -438,6 +439,7 @@ impl<'a> Deparser<'a> {
                 json_format(v.format, &mut self.buf);
             }
             ExprKind::JsonCtor(c) => self.json_ctor(c)?,
+            ExprKind::JsonExpr(j) => self.json_expr(j, implicit)?,
             ExprKind::IsJson(p) => {
                 self.open();
                 self.paren(&p.expr, true, e)?;
@@ -454,6 +456,80 @@ impl<'a> Deparser<'a> {
                 self.close();
             }
         }
+        Ok(())
+    }
+
+    /// The case of `get_rule_expr` for a `JsonExpr`, with `get_json_path_spec`, `get_json_returning` and `get_json_expr_options`.
+    fn json_expr(&mut self, j: &JsonExpr, showimplicit: bool) -> Result<()> {
+        self.buf.push_str(match j.op {
+            JsonExprOp::Exists => "JSON_EXISTS(",
+            JsonExprOp::Query => "JSON_QUERY(",
+            JsonExprOp::Value => "JSON_VALUE(",
+        });
+        self.expr(&j.formatted, showimplicit)?;
+        self.buf.push_str(", ");
+        match &j.path.kind {
+            ExprKind::Const(value) => self.constant(&j.path, value, -1)?,
+            _ => self.expr(&j.path, showimplicit)?,
+        }
+        for (i, (name, value)) in j.passing.iter().enumerate() {
+            self.buf.push_str(if i == 0 { " PASSING " } else { ", " });
+            self.expr(value, showimplicit)?;
+            self.buf.push_str(" AS ");
+            self.buf.push_str(&quote_identifier(name));
+        }
+        let returning = j.returning;
+        if j.op != JsonExprOp::Exists || returning.ty != oid::BOOL {
+            let ty = reg::type_text(returning.ty, Some(returning.typmod), self.session)?;
+            self.buf.push_str(&format!(" RETURNING {ty}"));
+            let default = if returning.ty == oid::JSONB {
+                JsonFormatKind::Jsonb
+            } else {
+                JsonFormatKind::Json
+            };
+            if j.op != JsonExprOp::Query || returning.format.kind != default {
+                json_format(returning.format, &mut self.buf);
+            }
+        }
+        if j.op == JsonExprOp::Query {
+            self.buf.push_str(match j.wrapper {
+                JsonWrapper::Conditional => " WITH CONDITIONAL WRAPPER",
+                JsonWrapper::Unconditional => " WITH UNCONDITIONAL WRAPPER",
+                JsonWrapper::None | JsonWrapper::Unspec => " WITHOUT WRAPPER",
+            });
+            self.buf.push_str(if j.omit_quotes { " OMIT QUOTES" } else { " KEEP QUOTES" });
+        }
+        let default = if j.op == JsonExprOp::Exists {
+            JsonBehaviorKind::False
+        } else {
+            JsonBehaviorKind::Null
+        };
+        if let Some(on_empty) = &j.on_empty
+            && on_empty.kind != default
+        {
+            self.json_behavior(on_empty, "EMPTY")?;
+        }
+        if j.on_error.kind != default {
+            self.json_behavior(&j.on_error, "ERROR")?;
+        }
+        self.buf.push(')');
+        Ok(())
+    }
+
+    /// `get_json_behavior`.
+    fn json_behavior(&mut self, behavior: &JsonBehavior, on: &str) -> Result<()> {
+        match (&behavior.expr, behavior.kind) {
+            (Some(expr), JsonBehaviorKind::Default) => {
+                self.buf.push_str(" DEFAULT ");
+                self.expr(expr, false)?;
+            }
+            (_, kind) => {
+                self.buf.push(' ');
+                self.buf.push_str(kind.name());
+            }
+        }
+        self.buf.push_str(" ON ");
+        self.buf.push_str(on);
         Ok(())
     }
 
@@ -847,6 +923,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::Grouping(_)
         | ExprKind::Window(_)
         | ExprKind::JsonCtor(_)
+        | ExprKind::JsonExpr(_)
         | ExprKind::Case(_) => true,
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,
         ExprKind::JsonValue(v) => is_simple(&v.raw, e, paren),

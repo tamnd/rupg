@@ -142,7 +142,7 @@ fn float8_to_numeric(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 }
 
 /// `float4_numeric`: the value printed with 6 significant digits, as `%.*g` with `FLT_DIG` gives it.
-fn float4_to_numeric(_: &Call<'_>, args: &[Value]) -> Result<Value> {
+pub(crate) fn float4_to_numeric(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let v = float(first(args)?).ok_or_else(bad_value)?;
     if !v.is_finite() {
         return Ok(Value::Numeric(Numeric::from_f64(v)));

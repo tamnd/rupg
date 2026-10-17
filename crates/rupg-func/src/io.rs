@@ -595,7 +595,7 @@ pub fn input(ty: u32, text: &str, typmod: i32, session: &dyn Session) -> Result<
 /// # Errors
 ///
 /// `0A000` for a type that has no input function here.
-pub(crate) fn input_soft(
+pub fn input_soft(
     ty: u32,
     text: &str,
     typmod: i32,

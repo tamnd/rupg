@@ -36,7 +36,7 @@ const ARRAY_AGGS: [[u32; 2]; 2] = [[3175, 6276], [3267, 6284]];
 const OBJECT_AGGS: [[u32; 4]; 2] = [[3197, 6280, 6281, 6282], [3270, 6288, 6289, 6290]];
 
 /// A `FORMAT` clause of the raw tree with its place.
-fn format_of(raw: Option<&RawFormat>) -> (JsonFormat, Option<usize>) {
+pub(crate) fn format_of(raw: Option<&RawFormat>) -> (JsonFormat, Option<usize>) {
     let Some(raw) = raw else { return (JsonFormat::default(), None) };
     let kind = match raw.format_type {
         RawFormatType::JS_FORMAT_JSON => JsonFormatKind::Json,
@@ -72,7 +72,7 @@ fn call(func: u32, args: Vec<Expr>, ty: u32, at: Option<usize>) -> Expr {
 }
 
 /// The error of a cast that does not exist.
-fn cannot_cast(from: u32, to: u32, at: Option<usize>) -> Error {
+pub(crate) fn cannot_cast(from: u32, to: u32, at: Option<usize>) -> Error {
     Error::new(
         SqlState::CANNOT_COERCE,
         format!("cannot cast type {} to {}", types::name(from), types::name(to)),
@@ -81,18 +81,40 @@ fn cannot_cast(from: u32, to: u32, at: Option<usize>) -> Error {
 }
 
 /// True for a type of the string category.
-fn is_string(ty: u32) -> bool {
+pub(crate) fn is_string(ty: u32) -> bool {
     types::category(ty) == b'S'
+}
+
+/// True for a type that a `PASSING` argument keeps, as the path executor reads it directly.
+fn passes_directly(ty: u32) -> bool {
+    matches!(
+        ty,
+        oid::BOOL
+            | oid::NUMERIC
+            | oid::INT2
+            | oid::INT4
+            | oid::INT8
+            | oid::FLOAT4
+            | oid::FLOAT8
+            | oid::TEXT
+            | oid::VARCHAR
+            | oid::DATE
+            | oid::TIME
+            | oid::TIMETZ
+            | oid::TIMESTAMP
+            | oid::TIMESTAMPTZ
+    ) || is_string(ty)
 }
 
 impl Analyzer<'_> {
     /// `transformJsonValueExpr`: an input of a constructor, as a `json` or a `jsonb` value when its format or `target` asks for one.
-    fn json_value_expr(
+    pub(crate) fn json_value_expr(
         &mut self,
         construct: &str,
         ve: Option<&JsonValueExpr>,
         default_format: JsonFormatKind,
         target: u32,
+        isarg: bool,
     ) -> Result<Expr> {
         let raw_node = ve.and_then(|ve| ve.raw_expr.as_ref());
         let (ve_format, format_at) = format_of(ve.and_then(|ve| ve.format.as_deref()));
@@ -113,6 +135,11 @@ impl Analyzer<'_> {
                 .at_opt(format_at));
             }
             if json { JsonFormatKind::Default } else { ve_format.kind }
+        } else if isarg {
+            if passes_directly(ty) {
+                return Ok(expr);
+            }
+            default_format
         } else if json {
             JsonFormatKind::Default
         } else {
@@ -122,7 +149,7 @@ impl Analyzer<'_> {
             return Ok(expr);
         }
         let only_cast = target != 0;
-        if !only_cast && ty != oid::BYTEA && !is_string(ty) {
+        if !isarg && !only_cast && ty != oid::BYTEA && !is_string(ty) {
             let message = if ve_format.kind == JsonFormatKind::Default {
                 "cannot use non-string types with implicit FORMAT JSON clause"
             } else {
@@ -158,7 +185,7 @@ impl Analyzer<'_> {
     }
 
     /// `transformJsonOutput` and `checkJsonOutputFormat`: the type of `RETURNING` and its format, or `None` when the call has no clause. The place is the place of the `FORMAT` clause.
-    fn json_output(
+    pub(crate) fn json_output(
         &mut self,
         output: Option<&JsonOutput>,
         allow_format: bool,
@@ -304,7 +331,13 @@ impl Analyzer<'_> {
             };
             args.push(self.transform(kv.key.as_ref())?);
             let value = kv.value.as_deref();
-            args.push(self.json_value_expr("JSON_OBJECT()", value, JsonFormatKind::Default, 0)?);
+            args.push(self.json_value_expr(
+                "JSON_OBJECT()",
+                value,
+                JsonFormatKind::Default,
+                0,
+                false,
+            )?);
         }
         let returning = self.json_constructor_output(ctor.output.as_deref(), &args)?;
         self.json_constructor(
@@ -330,6 +363,7 @@ impl Analyzer<'_> {
                 Some(ve),
                 JsonFormatKind::Default,
                 0,
+                false,
             )?);
         }
         let returning = self.json_constructor_output(ctor.output.as_deref(), &args)?;
@@ -482,7 +516,8 @@ impl Analyzer<'_> {
         };
         let key = self.transform(kv.key.as_ref())?;
         let value = kv.value.as_deref();
-        let value = self.json_value_expr("JSON_OBJECTAGG()", value, JsonFormatKind::Default, 0)?;
+        let value =
+            self.json_value_expr("JSON_OBJECTAGG()", value, JsonFormatKind::Default, 0, false)?;
         let args = vec![key, value];
         let ctor = agg.constructor.as_deref();
         let returning =
@@ -503,7 +538,8 @@ impl Analyzer<'_> {
     /// `transformJsonArrayAgg`: a call of `json_agg` or of `jsonb_agg`, with `_strict` for `ABSENT ON NULL`.
     pub(crate) fn json_array_agg(&mut self, agg: &JsonArrayAgg) -> Result<Expr> {
         let value = agg.arg.as_deref();
-        let arg = self.json_value_expr("JSON_ARRAYAGG()", value, JsonFormatKind::Default, 0)?;
+        let arg =
+            self.json_value_expr("JSON_ARRAYAGG()", value, JsonFormatKind::Default, 0, false)?;
         let args = vec![arg];
         let ctor = agg.constructor.as_deref();
         let returning =
@@ -596,7 +632,7 @@ impl Analyzer<'_> {
             }
             arg
         } else {
-            self.json_value_expr("JSON()", ve, JsonFormatKind::Json, returning.0.ty)?
+            self.json_value_expr("JSON()", ve, JsonFormatKind::Json, returning.0.ty, false)?
         };
         self.json_constructor(
             JsonCtorKind::Parse,
@@ -634,6 +670,7 @@ impl Analyzer<'_> {
             jsexpr.expr.as_deref(),
             JsonFormatKind::Json,
             0,
+            false,
         )?;
         let returning = match self.json_output(jsexpr.output.as_deref(), true)? {
             Some(returning) => {

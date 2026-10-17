@@ -6,9 +6,10 @@ use rupg_common::{Error, Result};
 use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value};
 
 use crate::expr::{
-    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, IsJson, JoinRow, JsonCtor,
-    JsonCtorKind, JsonEncoding, JsonFormat, JsonFormatKind, JsonItemType, JsonReturning, JsonValue,
-    NamedArg, RowCompare, RowCompareKind, SqlValue, Subscript, Var,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, IsJson, JoinRow,
+    JsonBehavior, JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp,
+    JsonFormat, JsonFormatKind, JsonItemType, JsonReturning, JsonValue, JsonWrapper, NamedArg,
+    RowCompare, RowCompareKind, SqlValue, Subscript, Var,
 };
 
 /// The stored form of an expression.
@@ -103,6 +104,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::JsonValue(_) => "JSONVALUEEXPR",
         ExprKind::JsonCtor(_) => "JSONCONSTRUCTOREXPR",
         ExprKind::IsJson(_) => "JSONISPREDICATE",
+        ExprKind::JsonExpr(_) => "JSONEXPR",
         ExprKind::Param(_)
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
@@ -299,6 +301,35 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push_str(&format!(" :item {item} :unique {} :basetype {}", p.unique, p.base_type));
             write_field("arg", &p.expr, out)?;
         }
+        ExprKind::JsonExpr(j) => {
+            let op = JSON_OPS.iter().find(|(o, _)| *o == j.op).map_or("exists", |(_, n)| n);
+            let wrapper =
+                WRAPPERS.iter().find(|(w, _)| *w == j.wrapper).map_or("unspec", |(_, n)| n);
+            out.push_str(&format!(
+                " :op {op} :wrapper {wrapper} :omitquotes {} :jsoncoercion {} :iocoercion {} :rtype {} :rtypmod {}",
+                j.omit_quotes, j.json_coercion, j.io_coercion, j.returning.ty, j.returning.typmod
+            ));
+            write_format(j.returning.format, out);
+            write_field("formatted", &j.formatted, out)?;
+            write_field("path", &j.path, out)?;
+            out.push_str(" :names (");
+            for (i, (name, _)) in j.passing.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                hex(name.as_bytes(), out);
+            }
+            out.push(')');
+            let values: Vec<Expr> = j.passing.iter().map(|(_, e)| e.clone()).collect();
+            write_args(&values, out)?;
+            out.push_str(" :onempty ");
+            match &j.on_empty {
+                Some(behavior) => write_behavior(behavior, out)?,
+                None => out.push_str("<>"),
+            }
+            out.push_str(" :onerror ");
+            write_behavior(&j.on_error, out)?;
+        }
         ExprKind::Param(_)
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
@@ -344,6 +375,57 @@ const ITEM_TYPES: [(JsonItemType, &str); 4] = [
     (JsonItemType::Array, "array"),
     (JsonItemType::Scalar, "scalar"),
 ];
+
+/// The names of the SQL/JSON query functions.
+const JSON_OPS: [(JsonExprOp, &str); 3] =
+    [(JsonExprOp::Exists, "exists"), (JsonExprOp::Query, "query"), (JsonExprOp::Value, "value")];
+
+/// The names of the `WRAPPER` clauses.
+const WRAPPERS: [(JsonWrapper, &str); 4] = [
+    (JsonWrapper::Unspec, "unspec"),
+    (JsonWrapper::None, "none"),
+    (JsonWrapper::Conditional, "conditional"),
+    (JsonWrapper::Unconditional, "unconditional"),
+];
+
+/// The names of the behaviors of `ON EMPTY` and `ON ERROR`.
+const BEHAVIORS: [(JsonBehaviorKind, &str); 9] = [
+    (JsonBehaviorKind::Null, "null"),
+    (JsonBehaviorKind::Error, "error"),
+    (JsonBehaviorKind::Empty, "empty"),
+    (JsonBehaviorKind::True, "true"),
+    (JsonBehaviorKind::False, "false"),
+    (JsonBehaviorKind::Unknown, "unknown"),
+    (JsonBehaviorKind::EmptyArray, "emptyarray"),
+    (JsonBehaviorKind::EmptyObject, "emptyobject"),
+    (JsonBehaviorKind::Default, "default"),
+];
+
+/// A behavior as the list of its kind, its flag of the cast at run time and its value, with `<>` for no value.
+fn write_behavior(behavior: &JsonBehavior, out: &mut String) -> Result<()> {
+    let kind = BEHAVIORS.iter().find(|(k, _)| *k == behavior.kind).map_or("null", |(_, n)| n);
+    out.push_str(&format!("({kind} {} ", behavior.coerce));
+    match &behavior.expr {
+        Some(expr) => write_expr(expr, out)?,
+        None => out.push_str("<>"),
+    }
+    out.push(')');
+    Ok(())
+}
+
+/// The behavior that [`write_behavior`] wrote.
+fn behavior_of(item: &Item) -> Result<JsonBehavior> {
+    let [kind, coerce, expr] = list(item)? else { return Err(bad("a SQL/JSON behavior")) };
+    let kind = atom(kind)?;
+    let kind =
+        BEHAVIORS.iter().find(|(_, n)| *n == kind).ok_or_else(|| bad("a SQL/JSON behavior"))?.0;
+    let coerce = atom(coerce)? == "true";
+    let expr = match expr {
+        Item::Atom(empty) if empty == "<>" => None,
+        item => Some(expr_of(item)?),
+    };
+    Ok(JsonBehavior { kind, expr, coerce })
+}
 
 /// The fields of a `FORMAT` clause.
 fn write_format(format: JsonFormat, out: &mut String) {
@@ -944,6 +1026,49 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 item: item.0,
                 unique: f.flag("unique")?,
                 base_type: f.number("basetype")?,
+            }))
+        }
+        "JSONEXPR" => {
+            let op = f.atom("op")?;
+            let op = JSON_OPS
+                .iter()
+                .find(|(_, n)| *n == op)
+                .ok_or_else(|| bad("a SQL/JSON function"))?;
+            let wrapper = f.atom("wrapper")?;
+            let wrapper = WRAPPERS
+                .iter()
+                .find(|(_, n)| *n == wrapper)
+                .ok_or_else(|| bad("a SQL/JSON wrapper"))?;
+            let returning = JsonReturning {
+                format: format_of(&f)?,
+                ty: f.number("rtype")?,
+                typmod: f.number("rtypmod")?,
+            };
+            let text = |b: &str| {
+                String::from_utf8(bytes_of(b)?).map_err(|_| bad("a name that is not UTF-8"))
+            };
+            let names: Vec<String> =
+                list(f.get("names")?)?.iter().map(|n| text(atom(n)?)).collect::<Result<_>>()?;
+            let values = f.exprs("args")?;
+            if names.len() != values.len() {
+                return Err(bad("a PASSING clause"));
+            }
+            let on_empty = match f.get("onempty")? {
+                Item::Atom(empty) if empty == "<>" => None,
+                item => Some(behavior_of(item)?),
+            };
+            ExprKind::JsonExpr(Box::new(JsonExpr {
+                op: op.0,
+                formatted: *f.expr("formatted")?,
+                path: *f.expr("path")?,
+                passing: names.into_iter().zip(values).collect(),
+                returning,
+                on_empty,
+                on_error: behavior_of(f.get("onerror")?)?,
+                wrapper: wrapper.0,
+                omit_quotes: f.flag("omitquotes")?,
+                json_coercion: f.flag("jsoncoercion")?,
+                io_coercion: f.flag("iocoercion")?,
             }))
         }
         _ => return Err(bad(&format!("the node {name}"))),

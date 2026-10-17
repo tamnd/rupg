@@ -206,6 +206,7 @@ fn check(expr: &Expr) -> Result<()> {
         ExprKind::JsonValue(_) | ExprKind::JsonCtor(_) | ExprKind::IsJson(_) => {
             expr.children().into_iter().try_for_each(check)?;
         }
+        ExprKind::JsonExpr(e) => e.children().into_iter().try_for_each(check)?,
         ExprKind::Window(w) => {
             if w.agg {
                 agg::method(&agg::window_aggref(w), expr.ty, expr.location)?;
@@ -542,6 +543,8 @@ struct Cache {
     bodies: Bodies,
     /// The rows of the work table of each recursive query of `WITH` that runs now, by the number of its work table. The last entry with a number is the one that the reference reads.
     work: RefCell<Vec<(usize, Rc<Rows>)>>,
+    /// The flags `error` and `empty` of each `JsonExpr`, by the address of the node, as its `JsonExprState` keeps them from one evaluation to the next.
+    json_flags: RefCell<Vec<(*const rupg_analyze::JsonExpr, jsonexpr::Flags)>>,
 }
 
 impl Cache {
@@ -1615,6 +1618,7 @@ impl<'a> Eval<'a> {
             ExprKind::JsonValue(v) => self.eval(&v.formatted),
             ExprKind::JsonCtor(c) => self.json_ctor(c),
             ExprKind::IsJson(p) => self.is_json(p),
+            ExprKind::JsonExpr(e) => self.json_expr(e),
             ExprKind::Window(w) => self
                 .windows
                 .iter()
@@ -2309,6 +2313,7 @@ fn relabel(value: Value, ty: u32) -> Value {
 
 mod agg;
 mod fold;
+mod jsonexpr;
 mod scan;
 mod sort;
 mod user;
