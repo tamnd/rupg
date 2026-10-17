@@ -1,5 +1,9 @@
 //! Threads of the operating system.
+//!
+//! A thread that ends a task waits for [`KEEP_IDLE`] for the next task with the same name, and runs it. A new thread and its end cost more than the startup of a session: the system makes the stack and the signal stack, and at the end it gives back the pages of the stack, so the next thread gets each page again with a fault. A connection that only logs in and ends spent most of its time there (spec/06 section 6.18).
 
+use std::panic::{self, AssertUnwindSafe};
+use std::sync::{Arc, Condvar, Mutex, MutexGuard, PoisonError};
 use std::thread;
 use std::time::Duration;
 
@@ -10,37 +14,135 @@ use crate::tasks::{Join, Task, TaskHandle, Tasks};
 /// The stack of each thread. It is the stack of the main thread on Linux, which is the stack of a PostgreSQL backend. The parser of a debug build needs more than the 2 MiB that Rust gives a new thread.
 pub const STACK_SIZE: usize = 8 << 20;
 
-/// Runs each task on its own thread of the operating system, with a stack of [`STACK_SIZE`] bytes.
+/// How long a thread with no task waits for one before it ends.
+const KEEP_IDLE: Duration = Duration::from_secs(10);
+
+/// The most threads that wait for a task. A thread after that one ends at the end of its task.
+const MAX_IDLE: usize = 64;
+
+/// The threads that wait for a task.
+static IDLE: Mutex<Vec<Arc<Worker>>> = Mutex::new(Vec::new());
+
+/// Runs each task on a thread of the operating system with a stack of [`STACK_SIZE`] bytes. A task gets a thread that waits for a task with the same name, or a new thread.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OsTasks;
 
+/// One thread and the next task that it runs.
+struct Worker {
+    name: String,
+    next: Mutex<Option<(Task, Arc<Done>)>>,
+    wake: Condvar,
+}
+
+/// The end of one task: `Some(true)` when it panicked.
+#[derive(Debug, Default)]
+struct Done {
+    state: Mutex<Option<bool>>,
+    ended: Condvar,
+}
+
+impl std::fmt::Debug for Worker {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("Worker").field("name", &self.name).finish_non_exhaustive()
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// The loop of a thread: the task, then the wait for the next one.
+fn work(worker: &Arc<Worker>) {
+    loop {
+        let Some((task, done)) = lock(&worker.next).take() else { return };
+        let panicked = panic::catch_unwind(AssertUnwindSafe(task)).is_err();
+        // A thread whose task panicked ends, so that its thread-local values go too. The other threads go to the list before the task ends for `join`, so a task that starts after the `join` of the last task gets this thread.
+        let keep = !panicked && {
+            let mut idle = lock(&IDLE);
+            let room = idle.len() < MAX_IDLE;
+            if room {
+                idle.push(Arc::clone(worker));
+            }
+            room
+        };
+        *lock(&done.state) = Some(panicked);
+        done.ended.notify_all();
+        drop(done);
+        if !keep {
+            return;
+        }
+        let mut next = lock(&worker.next);
+        while next.is_none() {
+            let (guard, wait) =
+                worker.wake.wait_timeout(next, KEEP_IDLE).unwrap_or_else(PoisonError::into_inner);
+            next = guard;
+            if wait.timed_out() && next.is_none() {
+                drop(next);
+                let mut idle = lock(&IDLE);
+                if let Some(at) = idle.iter().position(|w| Arc::ptr_eq(w, worker)) {
+                    idle.swap_remove(at);
+                    return;
+                }
+                drop(idle);
+                // `spawn` took this thread and gives it a task now.
+                next = lock(&worker.next);
+            }
+        }
+    }
+}
+
 #[derive(Debug)]
-struct OsJoin(thread::JoinHandle<()>);
+struct OsJoin {
+    name: String,
+    done: Arc<Done>,
+}
 
 impl Join for OsJoin {
     fn join(self: Box<Self>) -> Result<()> {
-        let name = self.0.thread().name().unwrap_or("unnamed").to_string();
-        self.0.join().map_err(|_| Error::internal(format!("the task \"{name}\" panicked")))
+        let mut state = lock(&self.done.state);
+        while state.is_none() {
+            state = self.done.ended.wait(state).unwrap_or_else(PoisonError::into_inner);
+        }
+        match *state {
+            Some(true) => Err(Error::internal(format!("the task \"{}\" panicked", self.name))),
+            _ => Ok(()),
+        }
     }
 
     fn is_finished(&self) -> bool {
-        self.0.is_finished()
+        lock(&self.done.state).is_some()
     }
 }
 
 impl Tasks for OsTasks {
     fn spawn(&self, name: &str, task: Task) -> Result<TaskHandle> {
-        let handle = thread::Builder::new()
-            .name(name.to_string())
-            .stack_size(STACK_SIZE)
-            .spawn(task)
-            .map_err(|e| {
-                Error::new(
-                    SqlState::INSUFFICIENT_RESOURCES,
-                    format!("could not start the thread \"{name}\": {e}"),
-                )
-            })?;
-        Ok(TaskHandle::new(Box::new(OsJoin(handle))))
+        let done = Arc::new(Done::default());
+        let job = (task, Arc::clone(&done));
+        let waiting = {
+            let mut idle = lock(&IDLE);
+            idle.iter().rposition(|w| w.name == name).map(|at| idle.swap_remove(at))
+        };
+        if let Some(worker) = waiting {
+            *lock(&worker.next) = Some(job);
+            worker.wake.notify_one();
+        } else {
+            let worker = Arc::new(Worker {
+                name: name.to_string(),
+                next: Mutex::new(Some(job)),
+                wake: Condvar::new(),
+            });
+            thread::Builder::new()
+                .name(name.to_string())
+                .stack_size(STACK_SIZE)
+                .spawn(move || work(&worker))
+                .map_err(|e| {
+                    Error::new(
+                        SqlState::INSUFFICIENT_RESOURCES,
+                        format!("could not start the thread \"{name}\": {e}"),
+                    )
+                })?;
+        }
+        Ok(TaskHandle::new(Box::new(OsJoin { name: name.to_string(), done })))
     }
 
     fn sleep(&self, d: Duration) {
@@ -165,5 +267,78 @@ mod stack {
             );
             task.unwrap().join().unwrap();
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::HashSet;
+    use std::sync::mpsc;
+
+    use super::*;
+
+    /// Runs a task with this name, and gives the thread that ran it.
+    fn id_of(name: &str) -> thread::ThreadId {
+        let (send, receive) = mpsc::channel();
+        let task = OsTasks.spawn(
+            name,
+            Box::new(move || {
+                send.send(thread::current().id()).unwrap();
+            }),
+        );
+        task.unwrap().join().unwrap();
+        receive.recv().unwrap()
+    }
+
+    #[test]
+    fn a_thread_runs_the_next_task_with_its_name() {
+        let first = id_of("rupg-reuse");
+        assert_ne!(first, thread::current().id());
+        assert_eq!(id_of("rupg-reuse"), first);
+        assert_eq!(id_of("rupg-reuse"), first);
+        assert_ne!(id_of("rupg-other"), first);
+    }
+
+    #[test]
+    fn a_thread_whose_task_panicked_ends() {
+        let before = id_of("rupg-panics");
+        let (send, receive) = mpsc::channel();
+        let bad = OsTasks.spawn(
+            "rupg-panics",
+            Box::new(move || {
+                send.send(thread::current().id()).unwrap();
+                panic!("a test panic");
+            }),
+        );
+        assert!(bad.unwrap().join().unwrap_err().message().contains("rupg-panics"));
+        assert_eq!(receive.recv().unwrap(), before);
+        assert_ne!(id_of("rupg-panics"), before);
+    }
+
+    #[test]
+    fn tasks_at_the_same_time_have_their_own_threads() {
+        let (send, receive) = mpsc::channel();
+        let go = Arc::new((Mutex::new(false), Condvar::new()));
+        let tasks: Vec<_> = (0..3)
+            .map(|_| {
+                let (send, go) = (send.clone(), Arc::clone(&go));
+                let task = Box::new(move || {
+                    send.send(thread::current().id()).unwrap();
+                    let mut started = lock(&go.0);
+                    while !*started {
+                        started = go.1.wait(started).unwrap();
+                    }
+                });
+                OsTasks.spawn("rupg-together", task).unwrap()
+            })
+            .collect();
+        let ids: HashSet<_> = (0..3).map(|_| receive.recv().unwrap()).collect();
+        assert!(tasks.iter().all(|t| !t.is_finished()));
+        *lock(&go.0) = true;
+        go.1.notify_all();
+        for task in tasks {
+            task.join().unwrap();
+        }
+        assert_eq!(ids.len(), 3);
     }
 }

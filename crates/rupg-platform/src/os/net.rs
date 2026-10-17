@@ -116,6 +116,11 @@ impl Write for OsStream {
         self.0.write(buf)
     }
 
+    /// One `writev` for all the parts. TLS gives each record of the handshake as one part, and the default sends one part at a time.
+    fn write_vectored(&mut self, bufs: &[io::IoSlice<'_>]) -> io::Result<usize> {
+        self.0.write_vectored(bufs)
+    }
+
     fn flush(&mut self) -> io::Result<()> {
         self.0.flush()
     }
