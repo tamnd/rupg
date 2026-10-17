@@ -59,8 +59,8 @@ pub enum ExprKind {
     Distinct { equal: u32, not: bool, args: Vec<Expr> },
     /// `ScalarArrayOpExpr`: `x op ANY (array)` when `any` is true, or `x op ALL (array)`.
     ScalarArrayOp { func: u32, any: bool, args: Vec<Expr> },
-    /// `RowExpr`: `ROW(...)`, a value of `record` with a field for each argument.
-    Row(Vec<Expr>),
+    /// `RowExpr`: `ROW(...)`, a value of `record` with a field for each argument. The form is explicit for a cast of a row to a composite type, as `row_format`.
+    Row(Vec<Expr>, CastForm),
     /// `RowCompareExpr`: `(a, b) < (c, d)` and the other comparisons of two rows with an ordering operator.
     RowCompare(Box<RowCompare>),
     /// `ArrayExpr`: `ARRAY[...]`. The elements of a multidimensional array are arrays.
@@ -389,7 +389,7 @@ impl Expr {
             ExprKind::Subscript(sub) => sub.bounds().chain([&sub.container]).collect(),
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
-            | ExprKind::Row(args)
+            | ExprKind::Row(args, _)
             | ExprKind::MinMax { args, .. }
             | ExprKind::NullIf { args, .. }
             | ExprKind::Distinct { args, .. }
@@ -442,7 +442,7 @@ impl Expr {
             }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
-            | ExprKind::Row(args)
+            | ExprKind::Row(args, _)
             | ExprKind::MinMax { args, .. }
             | ExprKind::NullIf { args, .. }
             | ExprKind::Distinct { args, .. }

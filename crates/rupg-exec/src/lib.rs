@@ -184,7 +184,7 @@ fn check(expr: &Expr) -> Result<()> {
             kernel(*func, expr.location)?;
             args.iter().try_for_each(check)?;
         }
-        ExprKind::Array { elements, .. } | ExprKind::Row(elements) => {
+        ExprKind::Array { elements, .. } | ExprKind::Row(elements, _) => {
             elements.iter().try_for_each(check)?;
         }
         // The executor calls the comparison function of each pair of fields, not the operator.
@@ -1270,9 +1270,9 @@ impl<'a> Eval<'a> {
 
     /// `ExecMakeTableFunctionResult`: the rows of one call of a function in `FROM`. A strict function with a null argument gives no rows when it gives a set, and else one row of nulls. Another expression gives one row with its value.
     fn function_set(&mut self, call: &Expr, width: usize) -> Result<Rows> {
-        let ExprKind::Func(f) = &call.kind else { return Ok(vec![vec![self.eval(call)?]]) };
+        let ExprKind::Func(f) = &call.kind else { return self.function_row(call, width) };
         if !table_function(f.oid, width) {
-            return Ok(vec![vec![self.eval(call)?]]);
+            return self.function_row(call, width);
         }
         let exprs = rupg_analyze::expand_arguments(f)?;
         let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
@@ -1299,6 +1299,19 @@ impl<'a> Eval<'a> {
         let kernel = set_kernel(f.oid, call.location)?;
         let c = Call { session: self.session, args: &types, ret: call.ty, variadic: f.variadic };
         kernel(&c, &args)
+    }
+
+    /// The one row of an expression in `FROM` that does not give a set. A value of a composite type gives a column for each field, and a null value gives a row of nulls.
+    fn function_row(&mut self, call: &Expr, width: usize) -> Result<Rows> {
+        let value = self.eval(call)?;
+        if !builtin::type_by_oid(call.ty).is_some_and(|t| t.kind == b'c') {
+            return Ok(vec![vec![value]]);
+        }
+        match value {
+            Value::Record(record) if record.values.len() == width => Ok(vec![record.values]),
+            Value::Null => Ok(vec![vec![Value::Null; width]]),
+            _ => Err(Error::internal("a function in FROM did not give a row of its type")),
+        }
     }
 
     /// `ExecProjectSet`: the rows of the targets for the row of the query. The calls of functions that give a set run level by level, and the calls of a level read the values of the levels below. The calls of one level go side by side, and a call with fewer values gives nulls, as `ExecProjectSRF` does. When no call of a level gives a value, the row gives no rows.
@@ -1512,7 +1525,7 @@ impl<'a> Eval<'a> {
             }
             ExprKind::ScalarArrayOp { func, any, args } => self.scalar_array_op(*func, *any, args),
             ExprKind::Array { multidims, elements, .. } => self.array(*multidims, elements),
-            ExprKind::Row(args) => {
+            ExprKind::Row(args, _) => {
                 let values = args.iter().map(|e| self.eval(e)).collect::<Result<Vec<_>>>()?;
                 let types = args.iter().map(|e| e.ty).collect();
                 Ok(Value::Record(Box::new(Record::new(types, values))))

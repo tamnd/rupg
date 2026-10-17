@@ -361,7 +361,7 @@ impl<'a> Fold<'a> {
             | ExprKind::NullIf { args, .. }
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. } => self.all(args),
-            ExprKind::Array { elements, .. } | ExprKind::Row(elements) => self.all(elements),
+            ExprKind::Array { elements, .. } | ExprKind::Row(elements, _) => self.all(elements),
             ExprKind::RowCompare(rc) => self.all(&mut rc.ops),
             ExprKind::Case(case) => {
                 if let Some(arg) = &mut case.arg {
@@ -576,10 +576,10 @@ impl<'a> Fold<'a> {
                 Ok(with(expr, ExprKind::RowCompare(Box::new(rc))))
             }
             // As in `eval_const_expressions`, a `ROW()` of constants is a constant. A view keeps the `ROW()` as it is written, because the fold is only for the plan.
-            ExprKind::Row(args) => {
+            ExprKind::Row(args, form) => {
                 let args = self.list(args)?;
                 let all = args.iter().all(|a| value(a).is_some());
-                let folded = with(expr, ExprKind::Row(args));
+                let folded = with(expr, ExprKind::Row(args, *form));
                 if all { self.evaluate(folded) } else { Ok(folded) }
             }
             ExprKind::Array { element, multidims, elements } => {
