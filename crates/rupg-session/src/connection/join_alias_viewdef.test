@@ -1,0 +1,320 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW a AS SELECT * FROM (VALUES (1, 'x'), (2, 'y')) AS v (k, s)
+CREATE VIEW
+> CREATE VIEW b AS SELECT * FROM (VALUES (1, 10.5), (3, 30)) AS v (k, n)
+CREATE VIEW
+> CREATE VIEW c AS SELECT * FROM (VALUES (1, true), (2, false)) AS v (k, f)
+CREATE VIEW
+> CREATE VIEW w1 AS SELECT j::text AS t FROM (a LEFT JOIN b USING (k)) AS j
+CREATE VIEW
+> SELECT * FROM w1 ORDER BY 1
+fields t@w1.1:25:-1:-1
+row (1,x,10.5)
+row (2,y,)
+SELECT 2
+> SELECT pg_get_viewdef('w1')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (j.*)::text AS t
+   FROM (a
+     LEFT JOIN b USING (k)) j;
+SELECT 1
+> CREATE VIEW w2 AS SELECT s.j::text AS t FROM (SELECT j FROM (a JOIN b USING (k)) AS j) AS s
+CREATE VIEW
+> SELECT * FROM w2
+fields t@w2.1:25:-1:-1
+row (1,x,10.5)
+SELECT 1
+> SELECT pg_get_viewdef('w2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (j)::text AS t
+   FROM ( SELECT j.*::record AS j
+           FROM (a
+             JOIN b USING (k)) j) s;
+SELECT 1
+> CREATE VIEW w3 AS SELECT (j).r, (SELECT row_to_json(j)) AS o FROM (a LEFT JOIN b USING (k)) AS j (p, q, r) ORDER BY 1
+CREATE VIEW
+> SELECT * FROM w3
+fields r@w3.1:1700:-1:-1,o@w3.2:114:-1:-1
+row 10.5,{"p":1,"q":"x","r":10.5}
+row NULL,{"p":2,"q":"y","r":null}
+SELECT 2
+> SELECT pg_get_viewdef('w3')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.r,
+    ( SELECT row_to_json(j.*) AS row_to_json) AS o
+   FROM (a a(p, s)
+     LEFT JOIN b b(p, n) USING (p)) j(p, q, r)
+  ORDER BY j.r;
+SELECT 1
+> CREATE VIEW w4 AS SELECT j.k, j.s, j.n FROM (a JOIN b USING (k)) AS j
+CREATE VIEW
+> SELECT * FROM w4
+fields k@w4.1:23:4:-1,s@w4.2:25:-1:-1,n@w4.3:1700:-1:-1
+row 1,x,10.5
+SELECT 1
+> SELECT pg_get_viewdef('w4')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k,
+    j.s,
+    j.n
+   FROM (a
+     JOIN b USING (k)) j;
+SELECT 1
+> CREATE VIEW w5 AS SELECT j.k, j.s FROM (a FULL JOIN b USING (k)) AS j ORDER BY j.k
+CREATE VIEW
+> SELECT * FROM w5
+fields k@w5.1:23:4:-1,s@w5.2:25:-1:-1
+row 1,x
+row 2,y
+row 3,NULL
+SELECT 3
+> SELECT pg_get_viewdef('w5')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k,
+    j.s
+   FROM (a
+     FULL JOIN b USING (k)) j
+  ORDER BY j.k;
+SELECT 1
+> CREATE VIEW w6 AS SELECT j.k, j.f, j.n FROM ((a JOIN c USING (k)) AS i JOIN b USING (k)) AS j
+CREATE VIEW
+> SELECT * FROM w6
+fields k@w6.1:23:4:-1,f@w6.2:16:1:-1,n@w6.3:1700:-1:-1
+row 1,t,10.5
+SELECT 1
+> SELECT pg_get_viewdef('w6')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k,
+    j.f,
+    j.n
+   FROM ((a
+     JOIN c USING (k)) i
+     JOIN b USING (k)) j;
+SELECT 1
+> CREATE VIEW w7 AS SELECT a.k, j.n FROM a JOIN (b JOIN c USING (k)) AS a2 ON true JOIN (b CROSS JOIN c) AS j ON j.f
+CREATE VIEW
+> SELECT * FROM w7 ORDER BY 1, 2
+fields k@w7.1:23:4:-1,n@w7.2:1700:-1:-1
+row 1,10.5
+row 1,30
+row 2,10.5
+row 2,30
+SELECT 4
+> SELECT pg_get_viewdef('w7')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a.k,
+    j.n
+   FROM ((a
+     JOIN (b
+     JOIN c USING (k)) a2 ON (true))
+     JOIN (b b_1
+     CROSS JOIN c c_1) j(k, n, k_1, f) ON (j.f));
+SELECT 1
+> CREATE VIEW w8 AS SELECT a.* FROM (b JOIN c USING (k)) AS a JOIN a AS z ON a.k = z.k
+CREATE VIEW
+> SELECT * FROM w8
+fields k@w8.1:23:4:-1,n@w8.2:1700:-1:-1,f@w8.3:16:1:-1
+row 1,10.5,t
+SELECT 1
+> SELECT pg_get_viewdef('w8')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a.k,
+    a.n,
+    a.f
+   FROM ((b
+     JOIN c USING (k)) a
+     JOIN a z ON ((a.k = z.k)));
+SELECT 1
+> CREATE VIEW w9 AS SELECT j.x, j.y FROM (a JOIN b USING (k)) AS j (x, y)
+CREATE VIEW
+> SELECT * FROM w9
+fields x@w9.1:23:4:-1,y@w9.2:25:-1:-1
+row 1,x
+SELECT 1
+> SELECT pg_get_viewdef('w9')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.x,
+    j.y
+   FROM (a a(x, s)
+     JOIN b b(x, n) USING (x)) j(x, y, n);
+SELECT 1
+> CREATE VIEW w10 AS SELECT j.k, j.s, j.m FROM (a JOIN b USING (k)) AS j (k, s, m) WHERE j.m > 1
+CREATE VIEW
+> SELECT * FROM w10
+fields k@w10.1:23:4:-1,s@w10.2:25:-1:-1,m@w10.3:1700:-1:-1
+row 1,x,10.5
+SELECT 1
+> SELECT pg_get_viewdef('w10')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k,
+    j.s,
+    j.m
+   FROM (a
+     JOIN b USING (k)) j(k, s, m)
+  WHERE (j.m > (1)::numeric);
+SELECT 1
+> CREATE VIEW w11 AS SELECT j.k AS jk, j.n FROM (a JOIN b USING (k) AS u) AS j
+CREATE VIEW
+> SELECT * FROM w11
+fields jk@w11.1:23:4:-1,n@w11.2:1700:-1:-1
+row 1,10.5
+SELECT 1
+> SELECT pg_get_viewdef('w11')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k AS jk,
+    j.n
+   FROM (a
+     JOIN b USING (k) AS u) j;
+SELECT 1
+> CREATE VIEW w12 AS SELECT j.k, a.s FROM (b JOIN c USING (k)) AS j JOIN a USING (k)
+CREATE VIEW
+> SELECT * FROM w12
+fields k@w12.1:23:4:-1,s@w12.2:25:-1:-1
+row 1,x
+SELECT 1
+> SELECT pg_get_viewdef('w12')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k,
+    a.s
+   FROM ((b
+     JOIN c USING (k)) j
+     JOIN a USING (k));
+SELECT 1
+> CREATE VIEW w13 AS SELECT j.n, q.k FROM (a JOIN b USING (k)) AS j, LATERAL (SELECT j.k) AS q
+CREATE VIEW
+> SELECT * FROM w13
+fields n@w13.1:1700:-1:-1,k@w13.2:23:4:-1
+row 10.5,1
+SELECT 1
+> SELECT pg_get_viewdef('w13')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.n,
+    q.k
+   FROM (a
+     JOIN b USING (k)) j,
+    LATERAL ( SELECT j.k) q;
+SELECT 1
+> CREATE VIEW w14 AS SELECT k FROM (a JOIN b USING (k)) AS j JOIN c USING (k)
+CREATE VIEW
+> SELECT * FROM w14
+fields k@w14.1:23:4:-1
+row 1
+SELECT 1
+> SELECT pg_get_viewdef('w14')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k
+   FROM ((a
+     JOIN b USING (k)) j
+     JOIN c USING (k));
+SELECT 1
+> CREATE VIEW w15 AS SELECT j.k, j.s, j.n FROM (a JOIN b ON a.k = b.k) AS j (k, s, k2, n)
+CREATE VIEW
+> SELECT * FROM w15
+fields k@w15.1:23:4:-1,s@w15.2:25:-1:-1,n@w15.3:1700:-1:-1
+row 1,x,10.5
+SELECT 1
+> SELECT pg_get_viewdef('w15')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k,
+    j.s,
+    j.n
+   FROM (a
+     JOIN b ON ((a.k = b.k))) j(k, s, k2, n);
+SELECT 1
+> CREATE VIEW w16 AS SELECT count(*) AS n FROM (a NATURAL JOIN b) AS j GROUP BY j.k
+CREATE VIEW
+> SELECT * FROM w16
+fields n@w16.1:20:8:-1
+row 1
+SELECT 1
+> SELECT pg_get_viewdef('w16')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT count(*) AS n
+   FROM (a
+     JOIN b USING (k)) j
+  GROUP BY j.k;
+SELECT 1
+> CREATE VIEW w17 AS SELECT * FROM (a FULL JOIN b USING (k)) AS j (z) JOIN c ON c.k = j.z
+CREATE VIEW
+> SELECT * FROM w17 ORDER BY 1
+fields z@w17.1:23:4:-1,s@w17.2:25:-1:-1,n@w17.3:1700:-1:-1,k@w17.4:23:4:-1,f@w17.5:16:1:-1
+row 1,x,10.5,1,t
+row 2,y,NULL,2,f
+SELECT 2
+> SELECT pg_get_viewdef('w17')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.z,
+    j.s,
+    j.n,
+    c.k,
+    c.f
+   FROM ((a a(z, s)
+     FULL JOIN b b(z, n) USING (z)) j
+     JOIN c ON ((c.k = j.z)));
+SELECT 1
+> CREATE VIEW w18 AS SELECT k, n, j.f2 FROM a FULL JOIN b USING (k) JOIN (c JOIN a AS a3 USING (k)) AS j (k2, f2) ON j.f2
+CREATE VIEW
+> SELECT * FROM w18 ORDER BY 1
+fields k@w18.1:23:4:-1,n@w18.2:1700:-1:-1,f2@w18.3:16:1:-1
+row 1,10.5,t
+row 2,NULL,t
+row 3,30,t
+SELECT 3
+> SELECT pg_get_viewdef('w18')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT k,
+    b.n,
+    j.f2
+   FROM ((a
+     FULL JOIN b USING (k))
+     JOIN (c c(k2, f)
+     JOIN a a3(k2, s) USING (k2)) j(k2, f2, s) ON (j.f2));
+SELECT 1
+> CREATE VIEW w19 AS SELECT j.*, j::text AS t FROM (a JOIN (b JOIN c USING (k)) AS i (q) ON a.k = i.q) AS j
+CREATE VIEW
+> SELECT * FROM w19 ORDER BY 1
+fields k@w19.1:23:4:-1,s@w19.2:25:-1:-1,q@w19.3:23:4:-1,n@w19.4:1700:-1:-1,f@w19.5:16:1:-1,t@w19.6:25:-1:-1
+row 1,x,1,10.5,t,(1,x,1,10.5,t)
+SELECT 1
+> SELECT pg_get_viewdef('w19')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT j.k,
+    j.s,
+    j.q,
+    j.n,
+    j.f,
+    (j.*)::text AS t
+   FROM (a
+     JOIN (b b(q, n)
+     JOIN c c(q, f) USING (q)) i ON ((a.k = i.q))) j;
+SELECT 1
+> CREATE VIEW w20 AS SELECT (SELECT j.s FROM (a JOIN c USING (k)) AS j WHERE j.k = x.k) AS t FROM (a JOIN b USING (k)) AS x
+CREATE VIEW
+> SELECT * FROM w20
+fields t@w20.1:25:-1:-1
+row x
+SELECT 1
+> SELECT pg_get_viewdef('w20')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ( SELECT j.s
+           FROM (a a_1
+             JOIN c USING (k)) j
+          WHERE (j.k = x.k)) AS t
+   FROM (a
+     JOIN b USING (k)) x;
+SELECT 1
+> CREATE VIEW w21 AS SELECT a.k, b.f FROM (a JOIN b USING (k)) AS a JOIN c AS b USING (k)
+CREATE VIEW
+> SELECT * FROM w21
+fields k@w21.1:23:4:-1,f@w21.2:16:1:-1
+row 1,t
+SELECT 1
+> SELECT pg_get_viewdef('w21')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a_1.k,
+    b_1.f
+   FROM ((a
+     JOIN b USING (k)) a_1
+     JOIN c b_1 USING (k));
+SELECT 1

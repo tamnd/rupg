@@ -323,6 +323,9 @@ impl<'a> Fold<'a> {
             alias: join.alias.clone(),
             using_alias: join.using_alias.clone(),
             merged: join.merged.clone(),
+            columns: join.columns.clone(),
+            aliases: join.aliases.clone(),
+            sources: join.sources.clone(),
         })))
     }
 

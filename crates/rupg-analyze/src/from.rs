@@ -135,6 +135,12 @@ pub struct Join {
     pub using_alias: Option<String>,
     /// The value of each column of `USING`, as `joinaliasvars` has it: a column of one side, a cast of it, or `COALESCE` of the two sides for a full join.
     pub merged: Vec<Expr>,
+    /// The name and the value of each column of the join, as `eref->colnames` and `joinaliasvars`: the columns of `USING` first, then the other columns of the left side, then the other columns of the right side.
+    pub columns: Vec<(String, Expr)>,
+    /// The names of the columns that the alias of the join gives, as `alias->colnames`.
+    pub aliases: Vec<String>,
+    /// For each column of the join, the number from 1 of the column of the left side and of the right side that it reads, or 0, as `joinleftcols` and `joinrightcols`.
+    pub sources: Vec<(usize, usize)>,
 }
 
 /// The kinds of join.
@@ -1051,19 +1057,25 @@ impl Analyzer<'_> {
         let merged_values: Vec<Expr> = merged.iter().map(|(_, e)| e.clone()).collect();
         let mut columns = merged;
         let using_count = columns.len();
+        let mut sources: Vec<(usize, usize)> =
+            l_used.iter().zip(&r_used).map(|(l, r)| (l + 1, r + 1)).collect();
         for (i, c) in l_item.columns.iter().enumerate() {
             if !l_used.contains(&i) {
                 columns.push(c.clone());
+                sources.push((i + 1, 0));
             }
         }
         for (i, c) in r_item.columns.iter().enumerate() {
             if !r_used.contains(&i) {
                 columns.push(c.clone());
+                sources.push((0, i + 1));
             }
         }
         let alias = j.alias.as_deref();
+        let mut aliases = Vec::new();
         if let Some(alias) = alias {
             let given = alias_columns(alias);
+            aliases.clone_from(&given);
             let name = alias.aliasname.as_deref().unwrap_or_default();
             if given.len() > columns.len() {
                 return Err(Error::new(
@@ -1128,6 +1140,9 @@ impl Analyzer<'_> {
                 .and_then(|a| a.aliasname.as_deref())
                 .map(str::to_string),
             merged: merged_values,
+            columns: item.columns.clone(),
+            aliases,
+            sources,
         };
         Ok((FromItem::Join(Box::new(join)), item, namespace))
     }

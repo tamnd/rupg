@@ -52,6 +52,27 @@ struct Namespace {
     merged: Vec<(Expr, String)>,
     /// The relations of the query, where a field of a value of type `record` finds its name.
     relations: Vec<rupg_analyze::Relation>,
+    /// The joins of `FROM`, an outer join before the joins in it, as the `deparse_columns` of the entries of the joins.
+    joins: Vec<JoinNames>,
+    /// The joins, by their index in `joins`, that the deparse shows now. A column of a relation of such a join shows the name of its relation, not the name of the join.
+    inside: Vec<usize>,
+}
+
+/// The names of a join and of its columns, as `deparse_columns` for an entry of a join.
+#[derive(Debug, Default)]
+struct JoinNames {
+    /// The name of the join with an alias, which no other relation of the query has, or `None` for a join with no alias.
+    name: Option<String>,
+    /// The indexes of the relations in the join.
+    relations: Vec<usize>,
+    /// `colnames`: the name of each column of the join.
+    columns: Vec<String>,
+    /// `usingNames`: the names of the columns of `USING`.
+    using: Vec<String>,
+    /// The value of each column of the join.
+    values: Vec<Expr>,
+    /// `printaliases`: `FROM` shows the names of the columns after the alias.
+    print_aliases: bool,
 }
 
 /// A deparse of an expression or of a query, as `deparse_context`. Each form of the functions sets `PRETTYFLAG_INDENT`, so a `CASE` always takes more than one line.
@@ -90,6 +111,8 @@ impl<'a> Deparser<'a> {
             print_aliases: vec![false],
             merged: Vec::new(),
             relations: Vec::new(),
+            joins: Vec::new(),
+            inside: Vec::new(),
         });
         d
     }
@@ -211,6 +234,14 @@ impl<'a> Deparser<'a> {
 
     /// `get_rule_expr`. `implicit` is `showimplicit`: true to show the casts that the analyzer added.
     fn expr(&mut self, e: &Expr, implicit: bool) -> Result<()> {
+        if let Some((join, column)) = self.join_column(e) {
+            if self.prefix {
+                self.buf.push_str(&quote_identifier(&join));
+                self.buf.push('.');
+            }
+            self.buf.push_str(&quote_identifier(&column));
+            return Ok(());
+        }
         if let Some(name) = self.merged_name(e) {
             self.buf.push_str(&quote_identifier(&name));
             return Ok(());
@@ -329,8 +360,9 @@ impl<'a> Deparser<'a> {
                 }
             }
             ExprKind::JoinRow(row) => match &row.alias {
-                Some(alias) => {
-                    self.buf.push_str(&quote_identifier(alias));
+                Some(_) => {
+                    let name = self.join_row_name(row);
+                    self.buf.push_str(&quote_identifier(&name));
                     self.buf.push_str(".*");
                 }
                 None => {

@@ -6,7 +6,8 @@ use std::collections::HashMap;
 
 use rupg_analyze::{
     Column, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING, FRAMEOPTION_START_OFFSET,
-    Frame, FromFunction, FromItem, Join, JoinKind, NullTreatment, Query, SetKind, SetOp, SetTree,
+    Frame, FromFunction, FromItem, Join, JoinKind, JoinRow, NullTreatment, Query, SetKind, SetOp,
+    SetTree,
 };
 use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
@@ -17,8 +18,8 @@ use rupg_sql::nodes::{
 use rupg_types::qualified_name_list;
 
 use super::{
-    Aggref, Deparser, Error, Expr, ExprKind, Func, FuncForm, INDENT_STD, INDENT_VAR, Namespace,
-    Result, SortGroup, SubLink, SubLinkKind, Value, WindowClause, WindowFunc, builtin,
+    Aggref, Deparser, Error, Expr, ExprKind, Func, FuncForm, INDENT_STD, INDENT_VAR, JoinNames,
+    Namespace, Result, SortGroup, SubLink, SubLinkKind, Value, WindowClause, WindowFunc, builtin,
     looks_like_function, oid, pretty_arg, qualified_relation_name, quote_identifier, reg,
     relation_name, sort_operators,
 };
@@ -76,57 +77,108 @@ impl Deparser<'_> {
         done
     }
 
-    /// `set_rtable_names` and `set_relation_column_names`: a name for each relation of the query that no other relation of the query or of the queries outside it has, and the names of the columns of each relation.
+    /// `set_rtable_names`, `set_using_names`, `set_relation_column_names` and `set_join_column_names`: a name for each relation and each join with an alias that no other relation of the query or of the queries outside it has, and the names of the columns of each relation and each join. The names come in the order of the range table, where a join comes after the relations in it.
     fn namespace(&self, query: &Query) -> Namespace {
         let mut used: HashMap<String, u32> = HashMap::new();
         for space in &self.namespaces {
-            for name in space.names.iter().filter(|n| !n.is_empty()) {
+            let joins = space.joins.iter().filter_map(|j| j.name.as_ref());
+            for name in space.names.iter().filter(|n| !n.is_empty()).chain(joins) {
                 used.insert(name.clone(), 0);
             }
         }
-        let mut space = Namespace::default();
-        for rel in &query.relations {
-            let base = match reg::class_name(rel.oid, self.session) {
-                Some((name, _)) if rel.alias.is_none() && rel.oid != 0 => name.to_string(),
-                _ => rel.name.clone(),
-            };
-            let name = match used.get(&base).copied() {
-                None => {
-                    used.insert(base.clone(), 0);
-                    base
-                }
-                Some(mut counter) => {
-                    let name = loop {
-                        counter += 1;
-                        let name = format!("{base}_{counter}");
-                        if !used.contains_key(&name) {
-                            break name;
-                        }
-                    };
-                    used.insert(base, counter);
-                    used.insert(name.clone(), 0);
-                    name
-                }
-            };
-            let given: &[String] = rel.alias.as_deref().unwrap_or_default();
-            let mut columns: Vec<String> = Vec::with_capacity(rel.columns.len());
-            let mut changed = false;
-            for (i, column) in rel.columns.iter().enumerate() {
-                let wanted = given.get(i).unwrap_or(&column.name);
-                // The real name of a column of a table or a view is the name in the catalog. For another relation, it is the name that the alias gives.
-                let real = if rel.oid != 0 { &column.name } else { wanted };
-                let name = unique_column(wanted, &columns);
-                changed |= name != *real;
-                columns.push(name);
+        let mut joins = Vec::new();
+        let mut order = Vec::new();
+        let tops: Vec<Slot> =
+            query.from.iter().map(|item| walk_from(item, &mut joins, &mut order)).collect();
+        let mut seen = vec![false; query.relations.len()];
+        for slot in &order {
+            if let Slot::Relation(i) = slot
+                && let Some(s) = seen.get_mut(*i)
+            {
+                *s = true;
             }
+        }
+        order.extend(seen.iter().enumerate().filter(|(_, s)| !**s).map(|(i, _)| Slot::Relation(i)));
+        let mut space =
+            Namespace { names: vec![String::new(); query.relations.len()], ..Default::default() };
+        let mut join_names: Vec<Option<String>> = vec![None; joins.len()];
+        for slot in &order {
+            match *slot {
+                Slot::Relation(i) => {
+                    let Some(rel) = query.relations.get(i) else { continue };
+                    let base = match reg::class_name(rel.oid, self.session) {
+                        Some((name, _)) if rel.alias.is_none() && rel.oid != 0 => name.to_string(),
+                        _ => rel.name.clone(),
+                    };
+                    space.names[i] = unique_name(base, &mut used);
+                }
+                Slot::Join(k) => {
+                    if let Some(alias) = &joins[k].join.alias {
+                        join_names[k] = Some(unique_name(alias.clone(), &mut used));
+                    }
+                }
+            }
+        }
+        let mut state = ColumnNames {
+            relations: query.relations.iter().map(|r| vec![None; r.columns.len()]).collect(),
+            relation_parents: vec![Vec::new(); query.relations.len()],
+            joins: joins.iter().map(|j| vec![None; j.join.columns.len()]).collect(),
+            join_parents: vec![Vec::new(); joins.len()],
+            join_using: vec![Vec::new(); joins.len()],
+            using: Vec::new(),
+            unique_using: joins
+                .iter()
+                .any(|j| j.join.alias.is_none() && !j.join.using.is_empty() && !j.join.plain_using),
+        };
+        for slot in tops {
+            if let Slot::Join(k) = slot {
+                state.using_names(&joins, k, &[]);
+            }
+        }
+        let mut print_join = vec![false; joins.len()];
+        for slot in &order {
+            match *slot {
+                Slot::Relation(i) => {
+                    let Some(rel) = query.relations.get(i) else { continue };
+                    let given: &[String] = rel.alias.as_deref().unwrap_or_default();
+                    for (c, column) in rel.columns.iter().enumerate() {
+                        if state.relations[i][c].is_none() {
+                            let wanted = given.get(c).unwrap_or(&column.name);
+                            let name = state.unique(wanted, Slot::Relation(i));
+                            state.relations[i][c] = Some(name);
+                        }
+                    }
+                }
+                Slot::Join(k) => print_join[k] = state.join_columns(&joins, k),
+            }
+        }
+        for (i, rel) in query.relations.iter().enumerate() {
+            let given: &[String] = rel.alias.as_deref().unwrap_or_default();
+            let names: Vec<String> =
+                state.relations[i].iter().map(|n| n.clone().unwrap_or_default()).collect();
+            // The real name of a column of a table or a view is the name in the catalog. For another relation, it is the name that the alias gives.
+            let changed = rel.columns.iter().zip(&names).enumerate().any(|(c, (column, name))| {
+                let real =
+                    if rel.oid != 0 { &column.name } else { given.get(c).unwrap_or(&column.name) };
+                name != real
+            });
             let print = if rel.oid != 0 {
                 changed
             } else {
                 rel.function.is_some() || !given.is_empty() || changed
             };
-            space.names.push(name);
-            space.columns.push(columns);
+            space.columns.push(names);
             space.print_aliases.push(print);
+        }
+        for (k, info) in joins.iter().enumerate() {
+            space.joins.push(JoinNames {
+                name: join_names[k].clone(),
+                relations: info.relations.clone(),
+                columns: state.joins[k].iter().map(|n| n.clone().unwrap_or_default()).collect(),
+                using: std::mem::take(&mut state.join_using[k]),
+                values: info.join.columns.iter().map(|(_, e)| e.clone()).collect(),
+                print_aliases: print_join[k],
+            });
         }
         for item in &query.from {
             merged_columns(item, &mut space.merged);
@@ -135,8 +187,66 @@ impl Deparser<'_> {
         space
     }
 
-    /// The name of a column of `USING` that is not a column of one side, when the expression is its value in this query or in a query outside it.
+    /// `get_variable` for a column of a join with an alias: the name of the join and the name of the column, when the expression is the value of a column of a join with an alias outside the part of `FROM` that the deparse shows now. The alias hides the relations in the join, so the query reads such a column through the join.
+    pub(super) fn join_column(&self, e: &Expr) -> Option<(String, String)> {
+        for (levels, space) in self.namespaces.iter().rev().enumerate() {
+            for (k, join) in space.joins.iter().enumerate() {
+                let Some(name) = &join.name else { continue };
+                if space.inside.contains(&k) {
+                    continue;
+                }
+                for (value, column) in join.values.iter().zip(&join.columns) {
+                    let found = match (&value.kind, &e.kind) {
+                        (ExprKind::Var(v), ExprKind::Var(w)) => {
+                            v.relation == w.relation
+                                && v.attnum == w.attnum
+                                && v.levels_up + levels == w.levels_up
+                        }
+                        (ExprKind::Var(_), _) | (_, ExprKind::Var(_)) => false,
+                        _ if std::mem::discriminant(&value.kind)
+                            != std::mem::discriminant(&e.kind) =>
+                        {
+                            false
+                        }
+                        _ => {
+                            let mut value = value.clone();
+                            value.raise(levels);
+                            value.same(e)
+                        }
+                    };
+                    if found {
+                        return Some((name.clone(), column.clone()));
+                    }
+                }
+            }
+        }
+        None
+    }
+
+    /// The name of the join with an alias that gives the fields of a whole row, or the alias of the analyzer when no join of the queries gives them.
+    pub(super) fn join_row_name(&self, row: &JoinRow) -> String {
+        for (levels, space) in self.namespaces.iter().rev().enumerate() {
+            for join in &space.joins {
+                let Some(name) = &join.name else { continue };
+                let same = join.values.len() == row.fields.len()
+                    && join.values.iter().zip(&row.fields).all(|(value, field)| {
+                        let mut value = value.clone();
+                        value.raise(levels);
+                        value.same(field)
+                    });
+                if same {
+                    return name.clone();
+                }
+            }
+        }
+        row.alias.clone().unwrap_or_default()
+    }
+
+    /// The name of a column of `USING` that is not a column of one side, or of a column of a join with an alias, when the expression is its value in this query or in a query outside it.
     pub(super) fn merged_name(&self, e: &Expr) -> Option<String> {
+        if let Some((_, column)) = self.join_column(e) {
+            return Some(column);
+        }
         for (levels, space) in self.namespaces.iter().rev().enumerate() {
             for (value, name) in &space.merged {
                 let found = if levels == 0 {
@@ -673,13 +783,58 @@ impl Deparser<'_> {
         Ok(())
     }
 
-    /// A join of `FROM`. A join with an alias needs the names of the columns of the join, which the engine does not choose yet.
+    /// A join of `FROM`, with the names of `USING` that the namespace chooses. A join with an alias is always in parentheses, and the alias and the names of the columns come after them.
     fn join(&mut self, join: &Join, query: &Query) -> Result<()> {
-        if join.alias.is_some() {
-            return Err(not_yet("a deparse of a join with an alias"));
+        let mut relations = Vec::new();
+        base_relations(&join.left, &mut relations);
+        base_relations(&join.right, &mut relations);
+        let space = self.namespaces.last().ok_or_else(|| Error::internal("no namespace"))?;
+        let k = space
+            .joins
+            .iter()
+            .position(|j| j.relations == relations)
+            .ok_or_else(|| Error::internal("a join with no names"))?;
+        let using = space.joins[k].using.clone();
+        let paren_right = self.paren
+            && !matches!(&join.right, FromItem::Relation(_))
+            && !matches!(&join.right, FromItem::Join(right) if right.alias.is_some());
+        let parens = !self.paren || join.alias.is_some();
+        if parens {
+            self.buf.push('(');
         }
-        let paren_right = self.paren && !matches!(join.right, FromItem::Relation(_));
-        self.open();
+        if let Some(space) = self.namespaces.last_mut() {
+            space.inside.push(k);
+        }
+        let done = self.join_body(join, query, paren_right, &using);
+        if let Some(space) = self.namespaces.last_mut() {
+            space.inside.pop();
+        }
+        done?;
+        if parens {
+            self.buf.push(')');
+        }
+        let space = self.namespaces.last().ok_or_else(|| Error::internal("no namespace"))?;
+        let names = &space.joins[k];
+        if let Some(name) = &names.name {
+            let mut text = format!(" {}", quote_identifier(name));
+            if names.print_aliases && !names.columns.is_empty() {
+                let columns: Vec<String> =
+                    names.columns.iter().map(|c| quote_identifier(c)).collect();
+                text.push_str(&format!("({})", columns.join(", ")));
+            }
+            self.buf.push_str(&text);
+        }
+        Ok(())
+    }
+
+    /// The two sides of a join and its condition.
+    fn join_body(
+        &mut self,
+        join: &Join,
+        query: &Query,
+        paren_right: bool,
+        using: &[String],
+    ) -> Result<()> {
         self.range_item(&join.left, query)?;
         let word = match join.kind {
             JoinKind::Inner if join.on.is_some() => " JOIN ",
@@ -697,7 +852,7 @@ impl Deparser<'_> {
             self.buf.push(')');
         }
         if !join.using.is_empty() {
-            let names: Vec<String> = join.using.iter().map(|n| quote_identifier(n)).collect();
+            let names: Vec<String> = using.iter().map(|n| quote_identifier(n)).collect();
             self.buf.push_str(&format!(" USING ({})", names.join(", ")));
             if let Some(alias) = &join.using_alias {
                 self.buf.push_str(&format!(" AS {}", quote_identifier(alias)));
@@ -710,7 +865,6 @@ impl Deparser<'_> {
         } else if join.kind != JoinKind::Inner {
             self.buf.push_str(" ON TRUE");
         }
-        self.close();
         Ok(())
     }
 
@@ -1113,12 +1267,219 @@ fn target_expr<'q>(query: &'q Query, item: &SortGroup) -> Result<&'q Expr> {
         .ok_or_else(|| Error::internal("an item of a clause with no target"))
 }
 
-/// `make_colname_unique`: the name, or the name with `_1`, `_2` and so on when another column of the relation has it.
-fn unique_column(name: &str, taken: &[String]) -> String {
-    if !taken.iter().any(|t| t == name) {
-        return name.to_string();
+/// The relations of a part of `FROM`, from left to right.
+fn base_relations(item: &FromItem, out: &mut Vec<usize>) {
+    match item {
+        FromItem::Relation(i) => out.push(*i),
+        FromItem::Join(join) => {
+            base_relations(&join.left, out);
+            base_relations(&join.right, out);
+        }
     }
-    (1..).map(|i| format!("{name}_{i}")).find(|n| !taken.contains(n)).unwrap_or_default()
+}
+
+/// A part of `FROM` as an entry of the range table: a relation by its index, or a join by its index in the joins of the query.
+#[derive(Clone, Copy, Debug)]
+enum Slot {
+    Relation(usize),
+    Join(usize),
+}
+
+/// A join of `FROM` with its two sides and the relations in it.
+#[derive(Debug)]
+struct JoinInfo<'q> {
+    join: &'q Join,
+    left: Slot,
+    right: Slot,
+    relations: Vec<usize>,
+}
+
+/// Adds the joins of a part of `FROM` to `joins`, an outer join before the joins in it, and adds the parts to `order` in the order of the range table, where a join comes after its two sides. The result is the slot of the part.
+fn walk_from<'q>(item: &'q FromItem, joins: &mut Vec<JoinInfo<'q>>, order: &mut Vec<Slot>) -> Slot {
+    let join = match item {
+        FromItem::Relation(i) => {
+            order.push(Slot::Relation(*i));
+            return Slot::Relation(*i);
+        }
+        FromItem::Join(join) => join,
+    };
+    let k = joins.len();
+    let (left, right) = (Slot::Relation(0), Slot::Relation(0));
+    joins.push(JoinInfo { join, left, right, relations: Vec::new() });
+    let left = walk_from(&join.left, joins, order);
+    let right = walk_from(&join.right, joins, order);
+    let mut relations = Vec::new();
+    for side in [left, right] {
+        match side {
+            Slot::Relation(i) => relations.push(i),
+            Slot::Join(j) => relations.extend_from_slice(&joins[j].relations),
+        }
+    }
+    joins[k] = JoinInfo { join, left, right, relations };
+    order.push(Slot::Join(k));
+    Slot::Join(k)
+}
+
+/// The name, or the name with `_1`, `_2` and so on when another relation of the query or of a query outside it has the name, as `set_rtable_names` chooses it.
+fn unique_name(base: String, used: &mut HashMap<String, u32>) -> String {
+    let Some(mut counter) = used.get(&base).copied() else {
+        used.insert(base.clone(), 0);
+        return base;
+    };
+    let name = loop {
+        counter += 1;
+        let name = format!("{base}_{counter}");
+        if !used.contains_key(&name) {
+            break name;
+        }
+    };
+    used.insert(base, counter);
+    used.insert(name.clone(), 0);
+    name
+}
+
+/// The names of the columns of the relations and the joins of a query while the deparse chooses them, as `colnames` and `parentUsing` of each `deparse_columns` and `using_names` of `deparse_namespace`. `None` is a column with no name yet.
+#[derive(Debug)]
+struct ColumnNames {
+    relations: Vec<Vec<Option<String>>>,
+    relation_parents: Vec<Vec<String>>,
+    joins: Vec<Vec<Option<String>>>,
+    join_parents: Vec<Vec<String>>,
+    /// `usingNames` of each join.
+    join_using: Vec<Vec<String>>,
+    /// `using_names`: the names of `USING` that must be unique in the query.
+    using: Vec<String>,
+    /// `unique_using`: true when a join with no alias has a column of `USING` that is not a column of one side, as `has_dangerous_join_using` finds.
+    unique_using: bool,
+}
+
+impl ColumnNames {
+    fn names(&self, slot: Slot) -> Option<&Vec<Option<String>>> {
+        match slot {
+            Slot::Relation(i) => self.relations.get(i),
+            Slot::Join(k) => self.joins.get(k),
+        }
+    }
+
+    /// Gives a name to the column with this number from 1 of a part of `FROM`, as a join pushes the names of its columns down to its sides. 0 is no column.
+    fn push(&mut self, slot: Slot, number: usize, name: &str) {
+        let names = match slot {
+            Slot::Relation(i) => self.relations.get_mut(i),
+            Slot::Join(k) => self.joins.get_mut(k),
+        };
+        if let Some(names) = names
+            && number > 0
+        {
+            if names.len() < number {
+                names.resize(number, None);
+            }
+            names[number - 1] = Some(name.to_string());
+        }
+    }
+
+    /// `make_colname_unique` and `colname_is_unique`: the name, or the name with `_1`, `_2` and so on when another column of the part of `FROM`, a column of `USING` of a join above it, or a name of `USING` that must be unique has it.
+    fn unique(&self, name: &str, slot: Slot) -> String {
+        let names = self.names(slot).map(Vec::as_slice).unwrap_or_default();
+        let parents = match slot {
+            Slot::Relation(i) => self.relation_parents.get(i),
+            Slot::Join(k) => self.join_parents.get(k),
+        };
+        let parents = parents.map(Vec::as_slice).unwrap_or_default();
+        let taken = |n: &str| {
+            names.iter().flatten().any(|t| t == n)
+                || parents.iter().any(|t| t == n)
+                || self.using.iter().any(|t| t == n)
+        };
+        if !taken(name) {
+            return name.to_string();
+        }
+        (1..).map(|i| format!("{name}_{i}")).find(|n| !taken(n)).unwrap_or_default()
+    }
+
+    /// `set_using_names`: the names of the columns of `USING` of a join and of the joins in it. A join pushes these names down to the columns of its sides, and a join with no alias also pushes down the names that a join above it gives.
+    fn using_names(&mut self, joins: &[JoinInfo<'_>], k: usize, parent: &[String]) {
+        let Some(info) = joins.get(k) else { return };
+        let join = info.join;
+        if join.alias.is_none() {
+            let pushed = self.joins.get(k).cloned().unwrap_or_default();
+            for (i, name) in pushed.iter().enumerate() {
+                let Some(name) = name else { continue };
+                let (l, r) = join.sources.get(i).copied().unwrap_or_default();
+                self.push(info.left, l, name);
+                self.push(info.right, r, name);
+            }
+        }
+        let mut parent = parent.to_vec();
+        let mut using = Vec::with_capacity(join.using.len());
+        for (i, written) in join.using.iter().enumerate() {
+            let pushed = self.joins.get(k).and_then(|n| n.get(i)).cloned().flatten();
+            let name = match pushed {
+                Some(name) => name,
+                None => {
+                    // A name that the alias of the join gives is better than the name in `USING`.
+                    let wanted = match &join.alias {
+                        Some(_) => join.aliases.get(i).unwrap_or(written),
+                        None => written,
+                    };
+                    let name = self.unique(wanted, Slot::Join(k));
+                    if self.unique_using {
+                        self.using.push(name.clone());
+                    }
+                    self.push(Slot::Join(k), i + 1, &name);
+                    name
+                }
+            };
+            let (l, r) = join.sources.get(i).copied().unwrap_or_default();
+            self.push(info.left, l, &name);
+            self.push(info.right, r, &name);
+            parent.push(name.clone());
+            using.push(name);
+        }
+        if let Some(slot) = self.join_using.get_mut(k) {
+            *slot = using;
+        }
+        for side in [info.left, info.right] {
+            match side {
+                Slot::Relation(i) => {
+                    if let Some(slot) = self.relation_parents.get_mut(i) {
+                        slot.clone_from(&parent);
+                    }
+                }
+                Slot::Join(j) => {
+                    if let Some(slot) = self.join_parents.get_mut(j) {
+                        slot.clone_from(&parent);
+                    }
+                    self.using_names(joins, j, &parent);
+                }
+            }
+        }
+    }
+
+    /// `set_join_column_names`: the names of the columns of a join that are not columns of `USING`, after the names of its sides. A join with no alias takes the names of its sides. The result is `printaliases`: true for a join with an alias when a name is not the name of the column of its side.
+    fn join_columns(&mut self, joins: &[JoinInfo<'_>], k: usize) -> bool {
+        let Some(info) = joins.get(k) else { return false };
+        let join = info.join;
+        let mut changed = false;
+        for i in join.using.len()..join.columns.len() {
+            let (l, r) = join.sources.get(i).copied().unwrap_or_default();
+            let (side, number) = if l > 0 { (info.left, l) } else { (info.right, r) };
+            let real =
+                self.names(side).and_then(|n| n.get(number.wrapping_sub(1))).cloned().flatten();
+            let Some(real) = real else { continue };
+            let assigned = self.joins.get(k).and_then(|n| n.get(i)).cloned().flatten();
+            let name = match (&join.alias, assigned) {
+                (None, _) => real.clone(),
+                (Some(_), Some(name)) => name,
+                (Some(_), None) => {
+                    let wanted = join.aliases.get(i).unwrap_or(&real);
+                    self.unique(wanted, Slot::Join(k))
+                }
+            };
+            changed |= name != real;
+            self.push(Slot::Join(k), i + 1, &name);
+        }
+        join.alias.is_some() && changed
+    }
 }
 
 /// `get_simple_values_rte`: the rows of the query when it is a plain `VALUES` list whose columns keep their names.
