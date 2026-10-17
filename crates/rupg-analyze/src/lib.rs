@@ -16,6 +16,7 @@ mod expr;
 mod from;
 mod funcargs;
 mod jsonfunc;
+mod jsontable;
 mod locking;
 pub mod node;
 mod poly;
@@ -53,9 +54,9 @@ pub use ddl::{
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, GroupingFunc, IsJson,
     JoinRow, JsonBehavior, JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr,
-    JsonExprOp, JsonFormat, JsonFormatKind, JsonItemType, JsonReturning, JsonValue, JsonWrapper,
-    NamedArg, NullTreatment, RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript,
-    Var, WindowFunc,
+    JsonExprOp, JsonFormat, JsonFormatKind, JsonItemType, JsonReturning, JsonTable,
+    JsonTableColumn, JsonTablePlan, JsonTableScan, JsonValue, JsonWrapper, NamedArg, NullTreatment,
+    RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript, Var, WindowFunc,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use funcargs::{arg_defaults, expand_arguments};

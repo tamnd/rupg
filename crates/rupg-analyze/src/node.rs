@@ -110,7 +110,8 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         | ExprKind::Grouping(_)
         | ExprKind::Window(_)
         | ExprKind::SubLink(_)
-        | ExprKind::SubColumn(_) => {
+        | ExprKind::SubColumn(_)
+        | ExprKind::JsonTable(_) => {
             return Err(Error::internal("a stored expression cannot have this node"));
         }
     };
@@ -335,7 +336,8 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         | ExprKind::Grouping(_)
         | ExprKind::Window(_)
         | ExprKind::SubLink(_)
-        | ExprKind::SubColumn(_) => {}
+        | ExprKind::SubColumn(_)
+        | ExprKind::JsonTable(_) => {}
     }
     out.push('}');
     Ok(())
@@ -1069,6 +1071,7 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 omit_quotes: f.flag("omitquotes")?,
                 json_coercion: f.flag("jsoncoercion")?,
                 io_coercion: f.flag("iocoercion")?,
+                column: None,
             }))
         }
         _ => return Err(bad(&format!("the node {name}"))),

@@ -115,6 +115,11 @@ fn domain_has_constraints(ty: u32) -> bool {
 impl Analyzer<'_> {
     /// `transformJsonFuncExpr`: `JSON_EXISTS`, `JSON_QUERY` or `JSON_VALUE`.
     pub(crate) fn json_func_expr(&mut self, f: &JsonFuncExpr) -> Result<Expr> {
+        self.json_func(f, None)
+    }
+
+    /// [`Analyzer::json_func_expr`], also for a column of `JSON_TABLE`. `context` is the context item of a column, a `CaseTest` of type `jsonb` that the analyzer already made.
+    pub(crate) fn json_func(&mut self, f: &JsonFuncExpr, context: Option<Expr>) -> Result<Expr> {
         let (op, func_name, default_format) = match f.op {
             RawOp::JSON_EXISTS_OP => (JsonExprOp::Exists, "JSON_EXISTS", JsonFormatKind::Default),
             RawOp::JSON_QUERY_OP => (JsonExprOp::Query, "JSON_QUERY", JsonFormatKind::Jsonb),
@@ -191,13 +196,16 @@ impl Analyzer<'_> {
                 "scalar columns",
             )?,
         }
-        let formatted = self.json_value_expr(
-            func_name,
-            f.context_item.as_deref(),
-            default_format,
-            oid::JSONB,
-            false,
-        )?;
+        let formatted = match context {
+            Some(context) => context,
+            None => self.json_value_expr(
+                func_name,
+                f.context_item.as_deref(),
+                default_format,
+                oid::JSONB,
+                false,
+            )?,
+        };
         let path = self.transform(f.pathspec.as_ref())?;
         let (path_ty, path_at) = (path.ty, path.place());
         let Some(mut path) =
@@ -292,6 +300,7 @@ impl Analyzer<'_> {
             omit_quotes,
             json_coercion,
             io_coercion,
+            column: column.map(str::to_string),
         };
         Ok(Expr { kind: ExprKind::JsonExpr(Box::new(j)), ty, typmod, location: place(f.location) })
     }

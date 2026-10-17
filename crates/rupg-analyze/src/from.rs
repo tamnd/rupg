@@ -5,7 +5,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::Values;
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{
-    Alias, CoercionForm, ColumnRef, FuncCall, JoinExpr, JoinType, Node, RangeFunction,
+    Alias, CoercionForm, ColumnRef, FuncCall, JoinExpr, JoinType, JsonTable, Node, RangeFunction,
     RangeSubselect, RangeVar, SelectStmt,
 };
 use rupg_types::oid;
@@ -81,6 +81,14 @@ impl Relation {
             alias: None,
             lateral: false,
             cte: None,
+        }
+    }
+
+    /// The call of `JSON_TABLE` when the relation is one.
+    pub fn json_table(&self) -> Option<&crate::expr::JsonTable> {
+        match self.function.as_ref()?.calls.as_slice() {
+            [(Expr { kind: ExprKind::JsonTable(table), .. }, _)] => Some(table),
+            _ => None,
         }
     }
 }
@@ -327,8 +335,11 @@ impl Analyzer<'_> {
                 Ok((FromItem::Relation(index), item.clone(), vec![item]))
             }
             Node::RangeTableSample(_) => Err(not_yet("TABLESAMPLE", None)),
-            Node::RangeTableFunc(_) | Node::JsonTable(_) => {
-                Err(not_yet("XMLTABLE and JSON_TABLE", None))
+            Node::RangeTableFunc(_) => Err(not_yet("XMLTABLE", None)),
+            Node::JsonTable(jt) => {
+                let item = self.range_json_table(jt)?;
+                let index = self.scope.entries[item.entry].relation.unwrap_or_default();
+                Ok((FromItem::Relation(index), item.clone(), vec![item]))
             }
             _ => Err(Error::internal("unrecognized node type in FROM")),
         }
@@ -511,6 +522,45 @@ impl Analyzer<'_> {
         let function = FromFunction { calls: out, ordinality: r.ordinality, coldefs: defined };
         let mut relation = Relation::new(0, columns, None, Some(function), None);
         relation.lateral = r.lateral;
+        self.add_relation(relation, refname, alias)
+    }
+
+    /// `transformJsonTable` and `addRangeTableEntryForTableFunc`: `JSON_TABLE` and its namespace item. The expressions can read the parts of `FROM` before it, also with no `LATERAL`.
+    fn range_json_table(&mut self, jt: &JsonTable) -> Result<Item> {
+        let before = self.scope.lateral.len();
+        let hidden = std::mem::take(&mut self.scope.namespace);
+        self.scope.lateral.extend(hidden.into_iter().map(|item| (item, true)));
+        let active = std::mem::replace(&mut self.scope.lateral_active, true);
+        let table = self.with_kind(Kind::FromFunction, |a| a.json_table(jt));
+        self.scope.lateral_active = active;
+        self.scope.namespace =
+            self.scope.lateral.split_off(before).into_iter().map(|(item, _)| item).collect();
+        let (call, table_columns) = table?;
+        let alias = jt.alias.as_deref();
+        if let Some(alias) = alias {
+            let given = alias_columns(alias).len();
+            if given > table_columns.len() {
+                return Err(Error::new(
+                    SqlState::INVALID_COLUMN_REFERENCE,
+                    format!(
+                        "JSON_TABLE function has {} columns available but {given} columns specified",
+                        table_columns.len()
+                    ),
+                ));
+            }
+        }
+        let refname = alias
+            .and_then(|a| a.aliasname.as_deref())
+            .map_or_else(|| "json_table".to_string(), str::to_string);
+        let columns: Vec<Column> = table_columns
+            .into_iter()
+            .map(|c| Column { name: c.name, ty: c.ty, typmod: c.typmod, not_null: false })
+            .collect();
+        let width = columns.len();
+        let function =
+            FromFunction { calls: vec![(call, width)], ordinality: false, coldefs: vec![false] };
+        let mut relation = Relation::new(0, columns, None, Some(function), None);
+        relation.lateral = jt.lateral;
         self.add_relation(relation, refname, alias)
     }
 

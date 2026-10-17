@@ -91,6 +91,8 @@ pub enum ExprKind {
     IsJson(Box<IsJson>),
     /// `JsonExpr`: `JSON_EXISTS`, `JSON_QUERY` or `JSON_VALUE`.
     JsonExpr(Box<JsonExpr>),
+    /// `TableFunc` of the kind `TFT_JSON_TABLE`: the call of `JSON_TABLE` in `FROM`, of type `record`.
+    JsonTable(Box<JsonTable>),
 }
 
 /// The whole row of a join, or of the alias of `USING`.
@@ -492,6 +494,8 @@ pub struct JsonExpr {
     pub json_coercion: bool,
     /// True when the executor casts the text of the result to the type of `RETURNING` with its input function.
     pub io_coercion: bool,
+    /// `column_name`: the name of the column of `JSON_TABLE` that the node computes, which the errors show.
+    pub column: Option<String>,
 }
 
 impl JsonExpr {
@@ -512,6 +516,74 @@ impl JsonExpr {
         all.extend(on_empty.iter_mut().chain([on_error]).filter_map(|b| b.expr.as_mut()));
         all
     }
+}
+
+/// `TableFunc` of the kind `TFT_JSON_TABLE`: the call of `JSON_TABLE`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonTable {
+    /// `docexpr`: the context item as a `jsonb` value.
+    pub context: Expr,
+    /// The names and the values of the `PASSING` clause.
+    pub passing: Vec<(String, Expr)>,
+    /// The top `ON ERROR` clause: `ERROR`, `EMPTY` or `EMPTY ARRAY`.
+    pub on_error: JsonBehaviorKind,
+    /// The plan that gives the rows.
+    pub plan: JsonTablePlan,
+    /// The columns, with no `NESTED` parts, in the order of the result.
+    pub columns: Vec<JsonTableColumn>,
+}
+
+impl JsonTable {
+    /// The context item, the values of `PASSING` and the expressions of the columns.
+    pub fn children(&self) -> Vec<&Expr> {
+        let mut all = vec![&self.context];
+        all.extend(self.passing.iter().map(|(_, e)| e));
+        all.extend(self.columns.iter().filter_map(|c| c.expr.as_ref()));
+        all
+    }
+
+    /// [`JsonTable::children`], to change.
+    pub fn children_mut(&mut self) -> Vec<&mut Expr> {
+        let JsonTable { context, passing, columns, .. } = self;
+        let mut all = vec![context];
+        all.extend(passing.iter_mut().map(|(_, e)| e));
+        all.extend(columns.iter_mut().filter_map(|c| c.expr.as_mut()));
+        all
+    }
+}
+
+/// A column of `JSON_TABLE`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonTableColumn {
+    pub name: String,
+    pub ty: u32,
+    pub typmod: i32,
+    /// The `JsonExpr` that gives the value from the row of the plan, which reads the row as a `CaseTest`, or `None` for `FOR ORDINALITY`.
+    pub expr: Option<Expr>,
+}
+
+/// `JsonTablePlan`: the plan that gives the rows of `JSON_TABLE`.
+#[derive(Clone, Debug, PartialEq)]
+pub enum JsonTablePlan {
+    /// `JsonTablePathScan`.
+    Scan(Box<JsonTableScan>),
+    /// `JsonTableSiblingJoin`: the rows of the left plan, and then the rows of the right plan.
+    Sibling(Box<JsonTablePlan>, Box<JsonTablePlan>),
+}
+
+/// `JsonTablePathScan`: a row pattern path and the columns that read its rows.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JsonTableScan {
+    /// The path, as a `jsonpath` value.
+    pub path: Value,
+    /// The name of the path, which the analyzer gives when the query does not.
+    pub name: String,
+    /// True when an error of the path is an error of the query, for `ERROR ON ERROR` at the top.
+    pub error_on_error: bool,
+    /// The indexes of the columns of the scan in [`JsonTable::columns`].
+    pub columns: std::ops::Range<usize>,
+    /// The plan of the `NESTED` parts.
+    pub child: Option<JsonTablePlan>,
 }
 
 /// A call of a window function, as `WindowFunc`.
@@ -681,6 +753,7 @@ impl Expr {
             ExprKind::JsonCtor(c) => c.args.iter().chain(&c.func).chain(&c.coercion).collect(),
             ExprKind::IsJson(p) => vec![&p.expr],
             ExprKind::JsonExpr(j) => j.children(),
+            ExprKind::JsonTable(j) => j.children(),
             ExprKind::Case(case) => {
                 let mut all: Vec<&Expr> = case.arg.as_deref().into_iter().collect();
                 for (when, then) in &case.whens {
@@ -743,6 +816,7 @@ impl Expr {
             }
             ExprKind::IsJson(p) => vec![&mut p.expr],
             ExprKind::JsonExpr(j) => j.children_mut(),
+            ExprKind::JsonTable(j) => j.children_mut(),
             ExprKind::Case(case) => {
                 let mut all: Vec<&mut Expr> = case.arg.as_deref_mut().into_iter().collect();
                 for (when, then) in &mut case.whens {

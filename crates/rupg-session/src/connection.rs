@@ -2634,6 +2634,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sqljson_query.test")));
     }
 
+    /// `JSON_TABLE` in `FROM`: the columns of `JSON_VALUE`, `JSON_QUERY` and `EXISTS`, `FOR ORDINALITY`, `PASSING`, the plans of `NESTED PATH` and of sibling paths, `LATERAL` references, the top `ON ERROR`, the errors of the analyzer and of the columns, and the text of views. `connection/sqljson_table.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sqljson_table() {
+        big_stack(|| script(include_str!("connection/sqljson_table.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

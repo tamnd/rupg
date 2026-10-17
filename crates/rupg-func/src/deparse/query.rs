@@ -162,7 +162,10 @@ impl Deparser<'_> {
                     if rel.oid != 0 { &column.name } else { given.get(c).unwrap_or(&column.name) };
                 name != real
             });
-            let print = if rel.oid != 0 {
+            // `JSON_TABLE` does not show the names of its columns after its alias.
+            let print = if rel.json_table().is_some() {
+                false
+            } else if rel.oid != 0 {
                 changed
             } else {
                 rel.function.is_some() || !given.is_empty() || changed
@@ -706,6 +709,8 @@ impl Deparser<'_> {
             self.buf.push_str(&quote_identifier(&cte.name));
         } else if rel.oid != 0 {
             self.buf.push_str(&relation_name(rel.oid, self.session)?);
+        } else if let Some(table) = rel.json_table() {
+            self.json_table(table)?;
         } else if let Some(function) = &rel.function {
             coldef = self.function_item(function, &rel.columns)?;
         } else if let Some(rows) = &rel.values {
@@ -721,11 +726,12 @@ impl Deparser<'_> {
         let refname = space.names.get(index).cloned().unwrap_or_default();
         let columns = space.columns.get(index).cloned().unwrap_or_default();
         let print_aliases = space.print_aliases.get(index).copied().unwrap_or(false);
-        // `get_rte_alias`: a subquery, a function and a `VALUES` list always show their alias. A table, a view and a query of `WITH` show it when the query gives one or when the name is not the name of the relation.
+        // `get_rte_alias`: a subquery, a function and a `VALUES` list always show their alias, and `JSON_TABLE` shows it only when the query gives one. A table, a view and a query of `WITH` show it when the query gives one or when the name is not the name of the relation.
         let show = rel.alias.is_some()
             || print_aliases
             || match &rel.cte {
                 Some(cte) => cte.name != refname,
+                None if rel.json_table().is_some() => false,
                 None if rel.oid == 0 => true,
                 None => {
                     reg::class_name(rel.oid, self.session).is_none_or(|(name, _)| name != refname)
