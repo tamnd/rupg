@@ -657,12 +657,12 @@ fn subqueries() {
                 "more than one row returned by a subquery used as an expression".to_string()
             ))
         );
-        // rupg does not take an aggregate of an outer query yet. PostgreSQL gives 2 here.
+        // The aggregate belongs to the outer query, as in PostgreSQL.
         assert_eq!(
-            error(
+            one(
                 "SELECT (SELECT max(a.oid) FROM pg_type LIMIT 1) FROM pg_am a WHERE a.amname = 'heap'"
             ),
-            "0A000"
+            "2"
         );
     });
 }

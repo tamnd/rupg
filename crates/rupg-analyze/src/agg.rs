@@ -273,14 +273,21 @@ impl Analyzer<'_> {
                 min
             })
             .min();
-        if level.is_some_and(|l| l > 0) {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "an aggregate of an outer query is not supported yet",
-            )
-            .at_opt(at));
-        }
-        match self.kind {
+        let level = level.unwrap_or(0);
+        // The aggregate belongs to the query `level` levels up, so the part of that query that has the subquery decides where the aggregate can be.
+        let outer = self.outer_kinds.len().checked_sub(level).filter(|_| level > 0);
+        let place = match outer {
+            Some(i) => self.outer_kinds.get(i).and_then(|(kind, _)| *kind),
+            None => Some(self.kind),
+        };
+        let Some(place) = place else {
+            return Err(grouping_error(
+                "aggregate functions are not allowed in FROM clause of their own query level"
+                    .into(),
+                at,
+            ));
+        };
+        match place {
             Kind::JoinOn => {
                 return Err(grouping_error(
                     "aggregate functions are not allowed in JOIN conditions".into(),
@@ -304,13 +311,16 @@ impl Analyzer<'_> {
             | Kind::ValuesSingle
             | Kind::ExecuteParameter => {
                 return Err(grouping_error(
-                    format!("aggregate functions are not allowed in {}", self.kind.name()),
+                    format!("aggregate functions are not allowed in {}", place.name()),
                     at,
                 ));
             }
             _ => {}
         }
-        self.has_aggs = true;
+        match outer.and_then(|i| self.outer_kinds.get_mut(i)) {
+            Some((_, has_aggs)) => *has_aggs = true,
+            None => self.has_aggs = true,
+        }
         let agg = Aggref {
             oid,
             kind,
@@ -322,6 +332,7 @@ impl Analyzer<'_> {
             star: parts.star,
             variadic,
             filter,
+            levels_up: level,
         };
         Ok(Expr { kind: ExprKind::Agg(Box::new(agg)), ty, typmod: -1, location: at })
     }
@@ -378,9 +389,9 @@ struct Check<'a, 'b> {
 impl Check<'_, '_> {
     /// Checks an expression of the query, or of a subquery `depth` levels down.
     fn expr(&mut self, expr: &Expr, depth: usize) -> Result<()> {
-        // The direct arguments of an ordered-set aggregate are outside of the aggregate.
+        // The direct arguments of an ordered-set aggregate are outside of the aggregate. An aggregate of this query in a subquery is `depth` levels up.
         if let ExprKind::Agg(agg) = &expr.kind
-            && depth == 0
+            && agg.levels_up == depth
         {
             return agg.direct.iter().try_for_each(|e| self.expr(e, depth));
         }

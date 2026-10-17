@@ -314,6 +314,8 @@ impl Moments {
 /// An aggregate call of the query with its method.
 struct Agg<'q> {
     agg: &'q Aggref,
+    /// The address of the call in the query, which [`Eval`] finds the result by. For an aggregate of the query in a subquery, `agg` is a copy whose arguments read the query, and `key` is the call in the subquery.
+    key: *const Aggref,
     ty: u32,
     method: Method,
     /// The types of the arguments that the transition function gets.
@@ -841,6 +843,7 @@ pub(crate) fn window_aggref(call: &WindowFunc) -> Aggref {
         star: call.star,
         variadic: false,
         filter: call.filter.clone(),
+        levels_up: 0,
     }
 }
 
@@ -856,6 +859,7 @@ pub(crate) fn window_values(
     let aggref = window_aggref(call);
     let agg = Agg {
         agg: &aggref,
+        key: std::ptr::from_ref(&aggref),
         ty,
         method: method(&aggref, ty, None)?,
         types: aggref.args.iter().map(|a| a.ty).collect(),
@@ -907,10 +911,12 @@ pub(crate) fn window_values(
     Ok(out)
 }
 
-/// The aggregate calls of an expression. An aggregate call has no other aggregate call in it.
+/// The aggregate calls of an expression. An aggregate call has no other aggregate call in it. An aggregate of a query outside the query is not a call of the query.
 fn collect<'q>(expr: &'q Expr, out: &mut Vec<(&'q Aggref, &'q Expr)>) {
     if let ExprKind::Agg(agg) = &expr.kind {
-        out.push((agg, expr));
+        if agg.levels_up == 0 {
+            out.push((agg, expr));
+        }
         return;
     }
     for child in expr.children() {
@@ -930,9 +936,27 @@ pub(crate) fn calls(query: &Query) -> Vec<(&Aggref, &Expr)> {
     out
 }
 
+/// The aggregate calls of the query in the subqueries of the select list and of `HAVING`, as `replace_outer_agg` finds them, each with the number of levels between the call and the query.
+fn outer_calls(query: &Query) -> Vec<(&Aggref, &Expr, usize)> {
+    let mut out = Vec::new();
+    for expr in query.targets.iter().map(|t| &t.expr).chain(&query.having) {
+        expr.find(0, &mut |e, depth| {
+            if let ExprKind::Agg(agg) = &e.kind
+                && depth > 0
+                && agg.levels_up == depth
+            {
+                out.push((&**agg, e, depth));
+            }
+            None::<()>
+        });
+    }
+    out
+}
+
 /// Checks that the engine has every aggregate and every function of the groups.
 pub(crate) fn check(query: &Query) -> Result<()> {
-    for (agg, expr) in calls(query) {
+    let outer = outer_calls(query).into_iter().map(|(agg, expr, _)| (agg, expr));
+    for (agg, expr) in calls(query).into_iter().chain(outer) {
         method(agg, expr.ty, expr.location)?;
         for g in agg.order.iter().chain(&agg.distinct) {
             kernel(g.equal, None)?;
@@ -1006,11 +1030,31 @@ pub(crate) fn rows<'a>(
     tuples: &'a [Vec<usize>],
     none: &'a [usize],
 ) -> Result<Vec<Vec<Value>>> {
-    let aggs: Vec<Agg<'_>> = calls(query)
-        .into_iter()
-        .map(|(agg, expr)| {
+    let outer = outer_calls(query);
+    let lowered: Vec<Aggref> = outer
+        .iter()
+        .map(|(agg, _, depth)| {
+            let mut copy = (*agg).clone();
+            for e in copy.direct.iter_mut().chain(&mut copy.args).chain(copy.filter.as_deref_mut())
+            {
+                e.lower(*depth);
+            }
+            copy.levels_up = 0;
+            copy
+        })
+        .collect();
+    let all =
+        calls(query).into_iter().map(|(agg, expr)| (agg, std::ptr::from_ref(agg), expr)).chain(
+            lowered
+                .iter()
+                .zip(&outer)
+                .map(|(copy, (agg, expr, _))| (copy, std::ptr::from_ref(*agg), *expr)),
+        );
+    let aggs: Vec<Agg<'_>> = all
+        .map(|(agg, key, expr)| {
             Ok(Agg {
                 agg,
+                key,
                 ty: expr.ty,
                 method: method(agg, expr.ty, expr.location)?,
                 types: agg.args[..agg.nargs].iter().map(|a| a.ty).collect(),
@@ -1050,7 +1094,7 @@ pub(crate) fn rows<'a>(
                 let direct =
                     agg.agg.direct.iter().map(|e| eval.eval(e)).collect::<Result<Vec<_>>>()?;
                 let value = agg.ordered_set(ordered, &direct, inputs, eval)?;
-                values.push((std::ptr::from_ref(agg.agg), value));
+                values.push((agg.key, value));
                 continue;
             }
             if !agg.agg.order.is_empty() || !agg.agg.distinct.is_empty() {
@@ -1073,7 +1117,7 @@ pub(crate) fn rows<'a>(
                     agg.advance(&mut state, args, eval)?;
                 }
             }
-            values.push((std::ptr::from_ref(agg.agg), agg.finish(state, eval)?));
+            values.push((agg.key, agg.finish(state, eval)?));
         }
         eval.aggs = values;
         if let Some(having) = &query.having

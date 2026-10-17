@@ -259,6 +259,8 @@ pub struct Aggref {
     pub variadic: bool,
     /// `aggfilter`: the condition of `FILTER (WHERE ...)`.
     pub filter: Option<Box<Expr>>,
+    /// `agglevelsup`: 0 for an aggregate of the query that has the call, 1 for an aggregate of the query outside it, and so on. The arguments of an aggregate of an outer query read only the columns of that query and of the queries outside it.
+    pub levels_up: usize,
 }
 
 /// A call of a window function, as `WindowFunc`.
@@ -558,9 +560,28 @@ impl Expr {
         }
     }
 
+    /// `IncrementVarSublevelsUp` with a negative delta: each column of a query outside the expression comes `levels` levels down, as the planner moves an aggregate of an outer query to that query. A column of a level that is less than `levels` levels up does not change.
+    pub fn lower(&mut self, levels: usize) {
+        self.lower_from(levels, 0);
+    }
+
+    fn lower_from(&mut self, levels: usize, depth: usize) {
+        if let ExprKind::Var(var) = &mut self.kind
+            && var.levels_up >= depth + levels
+        {
+            var.levels_up -= levels;
+        }
+        for child in self.children_mut() {
+            child.lower_from(levels, depth);
+        }
+        if let ExprKind::SubLink(sub) = &mut self.kind {
+            sub.query.each_expr_mut(depth + 1, &mut |e, depth| e.lower_from(levels, depth));
+        }
+    }
+
     /// `contain_aggs_of_level` and `locate_agg_of_level`: the first aggregate call in the expression.
     pub fn first_agg(&self) -> Option<&Expr> {
-        if matches!(self.kind, ExprKind::Agg(_)) {
+        if matches!(&self.kind, ExprKind::Agg(agg) if agg.levels_up == 0) {
             return Some(self);
         }
         self.children().into_iter().find_map(Expr::first_agg)

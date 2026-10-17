@@ -2604,6 +2604,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/outer_star.test")));
     }
 
+    /// An aggregate of an outer query in a subquery, as `agglevelsup`: in the select list, `HAVING` and `ORDER BY` of the outer query, with `GROUP BY`, `FILTER`, `ORDER BY` and `DISTINCT` in the call, an ordered-set aggregate, a subquery in a subquery, an aggregate of the subquery in the same expression, `EXISTS` and `ARRAY`, the errors of the places where the aggregate cannot be and of the columns that are not in `GROUP BY`, and the text of views. `connection/outer_aggregate.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn outer_aggregate() {
+        big_stack(|| script(include_str!("connection/outer_aggregate.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

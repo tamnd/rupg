@@ -1,0 +1,125 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW a AS SELECT * FROM (VALUES (1, 'x'), (2, 'y'), (2, 'z')) AS v (k, s)
+CREATE VIEW
+> CREATE VIEW o AS SELECT * FROM (VALUES (1, 10), (2, 20), (2, 30), (NULL, 40)) AS v (k, n)
+CREATE VIEW
+> SELECT (SELECT max(x.k)) AS m FROM o x
+fields m:23:4:-1
+row 2
+SELECT 1
+> SELECT (SELECT max(x.k) FROM a) AS m FROM o x
+fields m:23:4:-1
+ERROR 21000 more than one row returned by a subquery used as an expression
+> SELECT (SELECT count(*) + max(x.n) FROM a) AS m FROM o x
+fields m:20:8:-1
+row 43
+SELECT 1
+> SELECT x.k, (SELECT sum(x.n)) AS s FROM o x GROUP BY x.k ORDER BY 1
+fields k@o.1:23:4:-1,s:20:8:-1
+row 1,10
+row 2,50
+row NULL,40
+SELECT 3
+> SELECT x.k, (SELECT string_agg(a.s, ',' ORDER BY a.s) FROM a WHERE a.k = x.k) AS t, (SELECT sum(x.n) FROM a WHERE a.k = x.k AND a.s <> 'z') AS u FROM o x GROUP BY x.k ORDER BY 1
+fields k@o.1:23:4:-1,t:25:-1:-1,u:20:8:-1
+row 1,x,10
+row 2,y,z,50
+row NULL,NULL,NULL
+SELECT 3
+> SELECT x.k FROM o x GROUP BY x.k HAVING (SELECT sum(x.n)) > 20 ORDER BY 1
+fields k@o.1:23:4:-1
+row 2
+row NULL
+SELECT 2
+> SELECT x.k FROM o x GROUP BY x.k ORDER BY (SELECT sum(x.n)) DESC
+fields k@o.1:23:4:-1
+row 2
+row NULL
+row 1
+SELECT 3
+> SELECT x.k, (SELECT max(x.n)) AS m FROM o x
+ERROR 42803 column "x.k" must appear in the GROUP BY clause or be used in an aggregate function at 8
+> SELECT (SELECT x.k) FROM o x GROUP BY x.n
+ERROR 42803 subquery uses ungrouped column "x.k" from outer query at 16
+> SELECT * FROM o x WHERE (SELECT max(x.k)) > 0
+ERROR 42803 aggregate functions are not allowed in WHERE at 33
+> SELECT x.k FROM o x GROUP BY (SELECT max(x.k))
+ERROR 42803 aggregate functions are not allowed in GROUP BY at 38
+> SELECT * FROM o x JOIN a ON (SELECT max(x.k)) = 1
+ERROR 42803 aggregate functions are not allowed in JOIN conditions at 37
+> SELECT * FROM o x, LATERAL (SELECT max(x.k)) AS l
+ERROR 42803 aggregate functions are not allowed in FROM clause of their own query level at 36
+> SELECT (SELECT (SELECT max(x.n))) AS m FROM o x
+fields m:23:4:-1
+row 40
+SELECT 1
+> SELECT (SELECT max(x.n + a.k) FROM a) AS m FROM o x ORDER BY 1
+fields m:23:4:-1
+row 12
+row 22
+row 32
+row 42
+SELECT 4
+> SELECT (SELECT count(*) FILTER (WHERE x.n > 15)) AS c FROM o x
+fields c:20:8:-1
+row 3
+SELECT 1
+> SELECT (SELECT array_agg(x.n ORDER BY x.n DESC)) AS c FROM o x
+fields c:1007:-1:-1
+row {40,30,20,10}
+SELECT 1
+> SELECT (SELECT count(DISTINCT x.k)) AS c FROM o x
+fields c:20:8:-1
+row 2
+SELECT 1
+> SELECT EXISTS (SELECT max(x.k)) AS e FROM o x
+fields e:16:1:-1
+row t
+SELECT 1
+> SELECT ARRAY(SELECT sum(x.n) + a.k FROM a ORDER BY 1) AS r FROM o x
+fields r:1016:-1:-1
+row {101,102,102}
+SELECT 1
+> SELECT (SELECT max(x.n) OVER ()) FROM o x
+fields max:23:4:-1
+row 10
+row 20
+row 30
+row 40
+SELECT 4
+> SELECT (SELECT max(max(x.n))) FROM o x
+ERROR 42803 aggregate function calls cannot be nested at 20
+> SELECT (SELECT percentile_disc(0.5) WITHIN GROUP (ORDER BY x.n)) AS p FROM o x
+fields p:23:4:-1
+row 20
+SELECT 1
+> CREATE VIEW v1 AS SELECT x.k, (SELECT sum(x.n) FROM a WHERE a.k = x.k AND a.s <> 'z') AS u FROM o x GROUP BY x.k
+CREATE VIEW
+> SELECT * FROM v1 ORDER BY 1
+fields k@v1.1:23:4:-1,u@v1.2:20:8:-1
+row 1,10
+row 2,50
+row NULL,NULL
+SELECT 3
+> SELECT pg_get_viewdef('v1')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT k,
+    ( SELECT sum(x.n) AS sum
+           FROM a
+          WHERE ((a.k = x.k) AND (a.s <> 'z'::text))) AS u
+   FROM o x
+  GROUP BY k;
+SELECT 1
+> CREATE VIEW v2 AS SELECT (SELECT count(*) + max(x.n) FROM a) AS m FROM o x
+CREATE VIEW
+> SELECT * FROM v2
+fields m@v2.1:20:8:-1
+row 43
+SELECT 1
+> SELECT pg_get_viewdef('v2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ( SELECT (count(*) + max(x.n))
+           FROM a) AS m
+   FROM o x;
+SELECT 1
