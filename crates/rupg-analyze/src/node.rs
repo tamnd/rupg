@@ -9,7 +9,7 @@ use crate::expr::{
     BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, IsJson, JoinRow,
     JsonBehavior, JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp,
     JsonFormat, JsonFormatKind, JsonItemType, JsonReturning, JsonValue, JsonWrapper, NamedArg,
-    RowCompare, RowCompareKind, SqlValue, Subscript, Var,
+    RowCompare, RowCompareKind, SqlValue, Subscript, Var, XmlExpr, XmlOp,
 };
 
 /// The stored form of an expression.
@@ -105,6 +105,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::JsonCtor(_) => "JSONCONSTRUCTOREXPR",
         ExprKind::IsJson(_) => "JSONISPREDICATE",
         ExprKind::JsonExpr(_) => "JSONEXPR",
+        ExprKind::Xml(_) => "XMLEXPR",
         ExprKind::Param(_)
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
@@ -331,6 +332,30 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             out.push_str(" :onerror ");
             write_behavior(&j.on_error, out)?;
         }
+        ExprKind::Xml(x) => {
+            let op = XML_OPS.iter().find(|(o, _)| *o == x.op).map_or("concat", |(_, n)| n);
+            out.push_str(&format!(" :op {op} :name "));
+            match &x.name {
+                Some(name) => hex(name.as_bytes(), out),
+                None => out.push_str("<>"),
+            }
+            out.push_str(" :names (");
+            for (i, (name, _)) in x.named.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                hex(name.as_bytes(), out);
+            }
+            out.push(')');
+            let values: Vec<Expr> = x.named.iter().map(|(_, e)| e.clone()).collect();
+            out.push_str(" :named ");
+            out.push_str(&write_list(&values)?);
+            write_args(&x.args, out)?;
+            out.push_str(&format!(
+                " :document {} :indent {} :ttype {} :ttypmod {}",
+                x.document, x.indent, x.target.0, x.target.1
+            ));
+        }
         ExprKind::Param(_)
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
@@ -381,6 +406,18 @@ const ITEM_TYPES: [(JsonItemType, &str); 4] = [
 /// The names of the SQL/JSON query functions.
 const JSON_OPS: [(JsonExprOp, &str); 3] =
     [(JsonExprOp::Exists, "exists"), (JsonExprOp::Query, "query"), (JsonExprOp::Value, "value")];
+
+/// The names of the SQL/XML functions.
+const XML_OPS: [(XmlOp, &str); 8] = [
+    (XmlOp::Concat, "concat"),
+    (XmlOp::Element, "element"),
+    (XmlOp::Forest, "forest"),
+    (XmlOp::Parse, "parse"),
+    (XmlOp::Pi, "pi"),
+    (XmlOp::Root, "root"),
+    (XmlOp::Serialize, "serialize"),
+    (XmlOp::Document, "document"),
+];
 
 /// The names of the `WRAPPER` clauses.
 const WRAPPERS: [(JsonWrapper, &str); 4] = [
@@ -1072,6 +1109,33 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 json_coercion: f.flag("jsoncoercion")?,
                 io_coercion: f.flag("iocoercion")?,
                 column: None,
+            }))
+        }
+        "XMLEXPR" => {
+            let op = f.atom("op")?;
+            let op =
+                XML_OPS.iter().find(|(_, n)| *n == op).ok_or_else(|| bad("a SQL/XML function"))?;
+            let text = |b: &str| {
+                String::from_utf8(bytes_of(b)?).map_err(|_| bad("a name that is not UTF-8"))
+            };
+            let name = match f.atom("name")? {
+                "<>" => None,
+                name => Some(text(name)?),
+            };
+            let names: Vec<String> =
+                list(f.get("names")?)?.iter().map(|n| text(atom(n)?)).collect::<Result<_>>()?;
+            let values = f.exprs("named")?;
+            if names.len() != values.len() {
+                return Err(bad("the named arguments of a SQL/XML function"));
+            }
+            ExprKind::Xml(Box::new(XmlExpr {
+                op: op.0,
+                name,
+                named: names.into_iter().zip(values).collect(),
+                args: f.exprs("args")?,
+                document: f.flag("document")?,
+                indent: f.flag("indent")?,
+                target: (f.number("ttype")?, f.number("ttypmod")?),
             }))
         }
         _ => return Err(bad(&format!("the node {name}"))),

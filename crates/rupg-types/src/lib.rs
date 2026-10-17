@@ -171,4 +171,7 @@ pub use tsvector::{
 pub use typeid::TypeId;
 pub use types::{Oid, PgType, TypeInfo, format_type};
 pub use value::{Record, Value};
-pub use xml::{xml_encoding, xml_in, xml_out};
+pub use xml::{
+    XmlStandalone, escape_xml, sql_name, xml_base64, xml_binhex, xml_comment, xml_concat,
+    xml_element, xml_encoding, xml_in, xml_name, xml_out, xml_pi, xml_root, xml_text,
+};

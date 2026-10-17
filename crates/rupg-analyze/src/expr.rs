@@ -93,6 +93,8 @@ pub enum ExprKind {
     JsonExpr(Box<JsonExpr>),
     /// `TableFunc` of the kind `TFT_JSON_TABLE`: the call of `JSON_TABLE` in `FROM`, of type `record`.
     JsonTable(Box<JsonTable>),
+    /// `XmlExpr`: `XMLELEMENT`, `XMLFOREST`, `XMLCONCAT`, `XMLPARSE`, `XMLPI`, `XMLROOT`, `XMLSERIALIZE` or `IS DOCUMENT`.
+    Xml(Box<XmlExpr>),
 }
 
 /// The whole row of a join, or of the alias of `USING`.
@@ -393,6 +395,49 @@ pub enum JsonItemType {
     Object,
     Array,
     Scalar,
+}
+
+/// `XmlExprOp`: the function of an [`XmlExpr`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum XmlOp {
+    Concat,
+    Element,
+    Forest,
+    Parse,
+    Pi,
+    Root,
+    Serialize,
+    Document,
+}
+
+/// `XmlExpr`: a SQL/XML function with its own syntax. The type is `boolean` for `IS DOCUMENT`, `text` for `XMLSERIALIZE` and `xml` for the others.
+#[derive(Clone, Debug, PartialEq)]
+pub struct XmlExpr {
+    pub op: XmlOp,
+    /// The XML name of the element of `XMLELEMENT` or the target of `XMLPI`.
+    pub name: Option<String>,
+    /// The attributes of `XMLELEMENT` or the elements of `XMLFOREST`, with their XML names.
+    pub named: Vec<(String, Expr)>,
+    /// The other arguments. `XMLPARSE` has the text and the flag of `PRESERVE WHITESPACE`. `XMLROOT` has the value, the version or a null `text` and the `integer` of `STANDALONE`.
+    pub args: Vec<Expr>,
+    /// `DOCUMENT`, not `CONTENT`, for `XMLPARSE` and `XMLSERIALIZE`.
+    pub document: bool,
+    /// `INDENT` of `XMLSERIALIZE`.
+    pub indent: bool,
+    /// The type and the type modifier of `AS` of `XMLSERIALIZE`.
+    pub target: (u32, i32),
+}
+
+impl XmlExpr {
+    /// The expressions of the named arguments, then the other arguments.
+    pub fn children(&self) -> Vec<&Expr> {
+        self.named.iter().map(|(_, e)| e).chain(&self.args).collect()
+    }
+
+    /// The expressions of the named arguments, then the other arguments.
+    pub fn children_mut(&mut self) -> Vec<&mut Expr> {
+        self.named.iter_mut().map(|(_, e)| e).chain(&mut self.args).collect()
+    }
 }
 
 /// `JsonIsPredicate`: `IS JSON`.
@@ -753,6 +798,7 @@ impl Expr {
             ExprKind::JsonCtor(c) => c.args.iter().chain(&c.func).chain(&c.coercion).collect(),
             ExprKind::IsJson(p) => vec![&p.expr],
             ExprKind::JsonExpr(j) => j.children(),
+            ExprKind::Xml(x) => x.children(),
             ExprKind::JsonTable(j) => j.children(),
             ExprKind::Case(case) => {
                 let mut all: Vec<&Expr> = case.arg.as_deref().into_iter().collect();
@@ -816,6 +862,7 @@ impl Expr {
             }
             ExprKind::IsJson(p) => vec![&mut p.expr],
             ExprKind::JsonExpr(j) => j.children_mut(),
+            ExprKind::Xml(x) => x.children_mut(),
             ExprKind::JsonTable(j) => j.children_mut(),
             ExprKind::Case(case) => {
                 let mut all: Vec<&mut Expr> = case.arg.as_deref_mut().into_iter().collect();
@@ -976,6 +1023,7 @@ impl Expr {
             ExprKind::SubLink(sub) => sub.test.as_ref(),
             ExprKind::RowCompare(rc) => rc.ops.first(),
             ExprKind::NamedArg(na) => Some(&na.arg),
+            ExprKind::Xml(x) => x.args.first(),
             _ => None,
         };
         match (self.location, first.and_then(Expr::place)) {

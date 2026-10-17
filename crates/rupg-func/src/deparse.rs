@@ -11,13 +11,13 @@ use rupg_analyze::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JsonBehavior,
     JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp, JsonFormat,
     JsonFormatKind, JsonItemType, JsonTable, JsonTablePlan, JsonTableScan, JsonWrapper, RowCompare,
-    SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc,
+    SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc, XmlExpr, XmlOp,
 };
 use rupg_analyze::{default_opclass, node, sort_operators};
 use rupg_catalog::{ConKind, Constraint, IndexInfo, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
-use rupg_types::{Value, oid};
+use rupg_types::{Value, oid, sql_name};
 
 use crate::io::to_text;
 use crate::reg;
@@ -206,6 +206,20 @@ impl<'a> Deparser<'a> {
     /// The `)` that goes with [`Deparser::open`].
     fn close(&mut self) {
         if !self.paren {
+            self.buf.push(')');
+        }
+    }
+
+    /// The `(` of `get_rule_expr_paren` for a node that is not simple, when the flags have `PRETTYFLAG_PAREN`.
+    fn open_pretty(&mut self) {
+        if self.paren {
+            self.buf.push('(');
+        }
+    }
+
+    /// The `)` that goes with [`Deparser::open_pretty`].
+    fn close_pretty(&mut self) {
+        if self.paren {
             self.buf.push(')');
         }
     }
@@ -439,6 +453,7 @@ impl<'a> Deparser<'a> {
                 json_format(v.format, &mut self.buf);
             }
             ExprKind::JsonCtor(c) => self.json_ctor(c)?,
+            ExprKind::Xml(x) => self.xml_expr(x)?,
             ExprKind::JsonExpr(j) => self.json_expr(j, implicit)?,
             ExprKind::JsonTable(_) => return Err(Error::internal("JSON_TABLE out of FROM")),
             ExprKind::IsJson(p) => {
@@ -457,6 +472,100 @@ impl<'a> Deparser<'a> {
                 self.close();
             }
         }
+        Ok(())
+    }
+
+    /// The case of `get_rule_expr` for an `XmlExpr`.
+    fn xml_expr(&mut self, x: &XmlExpr) -> Result<()> {
+        self.buf.push_str(match x.op {
+            XmlOp::Concat => "XMLCONCAT(",
+            XmlOp::Element => "XMLELEMENT(",
+            XmlOp::Forest => "XMLFOREST(",
+            XmlOp::Parse => "XMLPARSE(",
+            XmlOp::Pi => "XMLPI(",
+            XmlOp::Root => "XMLROOT(",
+            XmlOp::Serialize => "XMLSERIALIZE(",
+            XmlOp::Document => "",
+        });
+        if matches!(x.op, XmlOp::Parse | XmlOp::Serialize) {
+            self.buf.push_str(if x.document { "DOCUMENT " } else { "CONTENT " });
+        }
+        let mut comma = false;
+        if let Some(name) = &x.name {
+            self.buf.push_str("NAME ");
+            self.buf.push_str(&quote_identifier(&sql_name(name)));
+            comma = true;
+        }
+        if !x.named.is_empty() {
+            let forest = x.op == XmlOp::Forest;
+            if !forest {
+                if comma {
+                    self.buf.push_str(", ");
+                }
+                self.buf.push_str("XMLATTRIBUTES(");
+                comma = false;
+            }
+            for (name, e) in &x.named {
+                if comma {
+                    self.buf.push_str(", ");
+                }
+                self.expr(e, true)?;
+                self.buf.push_str(" AS ");
+                self.buf.push_str(&quote_identifier(&sql_name(name)));
+                comma = true;
+            }
+            if !forest {
+                self.buf.push(')');
+            }
+        }
+        if !x.args.is_empty() {
+            if comma {
+                self.buf.push_str(", ");
+            }
+            match x.op {
+                XmlOp::Parse => {
+                    self.expr(&x.args[0], true)?;
+                    let preserve = matches!(
+                        x.args.get(1).map(|e| &e.kind),
+                        Some(ExprKind::Const(Value::Bool(true)))
+                    );
+                    self.buf.push_str(if preserve {
+                        " PRESERVE WHITESPACE"
+                    } else {
+                        " STRIP WHITESPACE"
+                    });
+                }
+                XmlOp::Root => {
+                    self.expr(&x.args[0], true)?;
+                    self.buf.push_str(", VERSION ");
+                    match x.args.get(1) {
+                        Some(Expr { kind: ExprKind::Const(Value::Null), .. }) | None => {
+                            self.buf.push_str("NO VALUE");
+                        }
+                        Some(version) => self.expr(version, false)?,
+                    }
+                    self.buf.push_str(match x.args.get(2).map(|e| &e.kind) {
+                        Some(ExprKind::Const(Value::Int4(0))) => ", STANDALONE YES",
+                        Some(ExprKind::Const(Value::Int4(1))) => ", STANDALONE NO",
+                        Some(ExprKind::Const(Value::Int4(2))) => ", STANDALONE NO VALUE",
+                        _ => "",
+                    });
+                }
+                // The argument is a list, which is never simple.
+                XmlOp::Document => {
+                    self.open_pretty();
+                    self.list(&x.args, false)?;
+                    self.close_pretty();
+                }
+                _ => self.list(&x.args, true)?,
+            }
+        }
+        if x.op == XmlOp::Serialize {
+            self.buf.push_str(" AS ");
+            self.buf.push_str(&reg::type_text(x.target.0, Some(x.target.1), self.session)?);
+            self.buf.push_str(if x.indent { " INDENT" } else { " NO INDENT" });
+        }
+        self.buf.push_str(if x.op == XmlOp::Document { " IS DOCUMENT" } else { ")" });
         Ok(())
     }
 
@@ -1002,6 +1111,7 @@ fn own_syntax(parent: &Expr) -> bool {
         | ExprKind::Agg(_)
         | ExprKind::Grouping(_)
         | ExprKind::Window(_)
+        | ExprKind::Xml(_)
         | ExprKind::Case(_) => true,
         _ => false,
     }
@@ -1058,6 +1168,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         | ExprKind::JsonCtor(_)
         | ExprKind::JsonExpr(_)
         | ExprKind::JsonTable(_)
+        | ExprKind::Xml(_)
         | ExprKind::Case(_) => true,
         ExprKind::Func(f) if !matches!(f.form, FuncForm::Operator(_)) => true,
         ExprKind::JsonValue(v) => is_simple(&v.raw, e, paren),
@@ -1623,7 +1734,8 @@ fn looks_like_function(e: &Expr) -> bool {
         ExprKind::NullIf { .. }
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }
-        | ExprKind::SqlValue(_) => true,
+        | ExprKind::SqlValue(_)
+        | ExprKind::Xml(_) => true,
         _ => false,
     }
 }

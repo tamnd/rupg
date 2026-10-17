@@ -38,6 +38,7 @@ pub mod types;
 mod values;
 mod walk;
 mod window;
+mod xmlexpr;
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::Node;
@@ -58,6 +59,7 @@ pub use expr::{
     JsonExprOp, JsonFormat, JsonFormatKind, JsonItemType, JsonReturning, JsonTable,
     JsonTableColumn, JsonTablePlan, JsonTableScan, JsonValue, JsonWrapper, NamedArg, NullTreatment,
     RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript, Var, WindowFunc,
+    XmlExpr, XmlOp,
 };
 pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
 pub use funcargs::{arg_defaults, expand_arguments};

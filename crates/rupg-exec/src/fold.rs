@@ -3,7 +3,7 @@
 use rupg_analyze::{
     BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, IsJson, Join, JoinKind, JoinRow,
     JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation, RowCompare, SubLink, SubLinkKind,
-    Subscript, Var,
+    Subscript, Var, XmlOp,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -408,6 +408,7 @@ impl<'a> Fold<'a> {
             ExprKind::JsonTable(t) => {
                 t.children_mut().into_iter().try_for_each(|e| self.subqueries(e))
             }
+            ExprKind::Xml(x) => x.children_mut().into_iter().try_for_each(|e| self.subqueries(e)),
             ExprKind::Window(w) => {
                 self.all(&mut w.args)?;
                 match &mut w.filter {
@@ -695,6 +696,17 @@ impl<'a> Fold<'a> {
                 }
                 Ok(with(expr, ExprKind::JsonExpr(j)))
             }
+            // `XMLELEMENT` and `XMLFOREST` call the output functions of many types, so they are only stable and are not folded. The others are folded when all their arguments are constants.
+            ExprKind::Xml(x) => {
+                let mut x = x.clone();
+                for part in x.children_mut() {
+                    *part = self.expr(part)?;
+                }
+                let all = x.children().into_iter().all(|a| value(a).is_some());
+                let immutable = !matches!(x.op, XmlOp::Element | XmlOp::Forest);
+                let folded = with(expr, ExprKind::Xml(x));
+                if all && immutable { self.evaluate(folded) } else { Ok(folded) }
+            }
             // The columns read the row of the plan as a `CaseTest`, which is not the value of a `CASE` around the call.
             ExprKind::JsonTable(t) => {
                 let mut t = t.clone();
@@ -901,6 +913,7 @@ fn mutable(expr: &Expr) -> bool {
             | ExprKind::Agg(_)
             | ExprKind::Grouping(_)
             | ExprKind::Window(_) => true,
+            ExprKind::Xml(x) => matches!(x.op, XmlOp::Element | XmlOp::Forest),
             _ => false,
         };
         mutable.then_some(())
