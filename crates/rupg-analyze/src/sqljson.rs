@@ -1,15 +1,20 @@
-//! The SQL/JSON constructors of `parse_expr.c`: `JSON_OBJECT`, `JSON_ARRAY`, `JSON`, `JSON_SCALAR`, `JSON_SERIALIZE` and `IS JSON`.
+//! The SQL/JSON constructors of `parse_expr.c`: `JSON_OBJECT`, `JSON_ARRAY`, `JSON`, `JSON_SCALAR`, `JSON_SERIALIZE`, `JSON_OBJECTAGG`, `JSON_ARRAYAGG` and `IS JSON`.
 
 use rupg_common::{Error, Result, SqlState};
+use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
-    JsonArrayConstructor, JsonEncoding as RawEncoding, JsonFormat as RawFormat,
-    JsonFormatType as RawFormatType, JsonIsPredicate, JsonObjectConstructor, JsonOutput,
-    JsonParseExpr, JsonScalarExpr, JsonSerializeExpr, JsonValueExpr, JsonValueType, Node,
+    Alias, ColumnRef, JsonAggConstructor, JsonArrayAgg, JsonArrayConstructor,
+    JsonArrayQueryConstructor, JsonEncoding as RawEncoding, JsonFormat as RawFormat,
+    JsonFormatType as RawFormatType, JsonIsPredicate, JsonObjectAgg, JsonObjectConstructor,
+    JsonOutput, JsonParseExpr, JsonScalarExpr, JsonSerializeExpr, JsonValueExpr, JsonValueType,
+    Node, RangeSubselect, ResTarget, SelectStmt, SubLink as RawSubLink, SubLinkType,
 };
 use rupg_types::{Value, oid};
 
 use crate::Analyzer;
+use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context};
+use crate::expr::NullTreatment;
 use crate::expr::{
     Expr, ExprKind, Func, FuncForm, IsJson, JsonCtor, JsonCtorKind, JsonEncoding, JsonFormat,
     JsonFormatKind, JsonItemType, JsonReturning, JsonValue,
@@ -25,6 +30,10 @@ const CONVERT_TO: u32 = 1717;
 const TO_JSON: u32 = 3176;
 /// `to_jsonb(anyelement)`.
 const TO_JSONB: u32 = 3787;
+/// `json_agg`, `json_agg_strict`, `jsonb_agg` and `jsonb_agg_strict`, by `ABSENT ON NULL`.
+const ARRAY_AGGS: [[u32; 2]; 2] = [[3175, 6276], [3267, 6284]];
+/// `json_object_agg` and its forms for `jsonb`, by `WITH UNIQUE KEYS` and `ABSENT ON NULL`: the plain one, `_strict`, `_unique` and `_unique_strict`.
+const OBJECT_AGGS: [[u32; 4]; 2] = [[3197, 6280, 6281, 6282], [3270, 6288, 6289, 6290]];
 
 /// A `FORMAT` clause of the raw tree with its place.
 fn format_of(raw: Option<&RawFormat>) -> (JsonFormat, Option<usize>) {
@@ -243,21 +252,27 @@ impl Analyzer<'_> {
     }
 
     /// `makeJsonConstructorExpr` with `coerceJsonFuncExpr`: the constructor with the cast of its `json` or `jsonb` value to the type of `RETURNING`.
+    #[allow(clippy::too_many_arguments)]
     fn json_constructor(
         &mut self,
         kind: JsonCtorKind,
         args: Vec<Expr>,
+        func: Option<Expr>,
         (returning, format_at): (JsonReturning, Option<usize>),
         unique: bool,
         absent_on_null: bool,
         location: i32,
     ) -> Result<Expr> {
-        let value_ty =
-            if returning.format.kind == JsonFormatKind::Jsonb { oid::JSONB } else { oid::JSON };
+        let (value_ty, value_typmod) = match &func {
+            Some(func) => (func.ty, func.typmod),
+            None if returning.format.kind == JsonFormatKind::Jsonb => (oid::JSONB, -1),
+            None => (oid::JSON, -1),
+        };
         let coercion = if returning.ty == value_ty {
             None
         } else {
-            let placeholder = Expr::new(ExprKind::CaseTest, value_ty);
+            let placeholder =
+                Expr { typmod: value_typmod, ..Expr::new(ExprKind::CaseTest, value_ty) };
             if returning.format.kind == JsonFormatKind::Json && returning.ty == oid::BYTEA {
                 let text = self.coerce_to_specific(placeholder, oid::TEXT, "JSON_FUNCTION")?;
                 let encoding = encoding_const(returning.format);
@@ -274,7 +289,9 @@ impl Analyzer<'_> {
             }
         };
         let (ty, typmod) = (returning.ty, returning.typmod);
-        let ctor = JsonCtor { kind, args, returning, unique, absent_on_null, coercion };
+        let format = JsonFormat::default();
+        let ctor =
+            JsonCtor { kind, args, func, format, returning, unique, absent_on_null, coercion };
         Ok(Expr { kind: ExprKind::JsonCtor(Box::new(ctor)), ty, typmod, location: place(location) })
     }
 
@@ -293,6 +310,7 @@ impl Analyzer<'_> {
         self.json_constructor(
             JsonCtorKind::Object,
             args,
+            None,
             returning,
             ctor.unique,
             ctor.absent_on_null,
@@ -318,10 +336,187 @@ impl Analyzer<'_> {
         self.json_constructor(
             JsonCtorKind::Array,
             args,
+            None,
             returning,
             false,
             ctor.absent_on_null,
             ctor.location,
+        )
+    }
+
+    /// `transformJsonArrayQueryConstructor`: `JSON_ARRAY` with a subquery, which gives `COALESCE((SELECT JSON_ARRAYAGG(q.a) FROM (subquery) q(a)), '[]')`. The analyzer first reads the subquery alone to check that it has one column.
+    pub(crate) fn json_array_query(&mut self, ctor: &JsonArrayQueryConstructor) -> Result<Expr> {
+        let at = place(ctor.location);
+        let query = self.sub_analyze(ctor.query.as_ref())?;
+        let mut columns = query.targets.iter().filter(|t| !t.junk);
+        let (Some(column), None) = (columns.next(), columns.next()) else {
+            return Err(Error::new(SqlState::SYNTAX_ERROR, "subquery must return only one column")
+                .at_opt(at));
+        };
+        let arg = column.expr.clone();
+        let colref = Node::ColumnRef(Box::new(ColumnRef {
+            fields: vec![Some(Node::String("q".into())), Some(Node::String("a".into()))],
+            location: ctor.location,
+        }));
+        let value = JsonValueExpr {
+            raw_expr: Some(colref.clone()),
+            formatted_expr: Some(colref),
+            format: ctor.format.clone(),
+        };
+        let constructor = JsonAggConstructor {
+            output: ctor.output.clone(),
+            location: ctor.location,
+            ..Default::default()
+        };
+        let agg = JsonArrayAgg {
+            constructor: Some(Box::new(constructor)),
+            arg: Some(Box::new(value)),
+            absent_on_null: ctor.absent_on_null,
+        };
+        let target = ResTarget {
+            val: Some(Node::JsonArrayAgg(Box::new(agg))),
+            location: ctor.location,
+            ..Default::default()
+        };
+        let alias =
+            Alias { aliasname: Some("q".into()), colnames: vec![Some(Node::String("a".into()))] };
+        let range = RangeSubselect {
+            lateral: false,
+            subquery: ctor.query.clone(),
+            alias: Some(Box::new(alias)),
+        };
+        let select = SelectStmt {
+            targetList: vec![Some(Node::ResTarget(Box::new(target)))],
+            fromClause: vec![Some(Node::RangeSubselect(Box::new(range)))],
+            ..Default::default()
+        };
+        let sublink = RawSubLink {
+            subLinkType: SubLinkType::EXPR_SUBLINK,
+            subselect: Some(Node::SelectStmt(Box::new(select))),
+            location: ctor.location,
+            ..Default::default()
+        };
+        let exec = self.transform(Some(&Node::SubLink(Box::new(sublink))))?;
+        // The empty array has the type and the type modifier of the result, so that a short `RETURNING` type applies to it too.
+        let (ty, typmod) = (exec.ty, exec.typmod);
+        let empty = Expr::constant(Value::text("[]"), oid::UNKNOWN, -1, at);
+        let empty = self
+            .coerce_to_target(empty, ty, typmod, Context::Assignment, at)?
+            .ok_or_else(|| cannot_cast(oid::UNKNOWN, ty, at))?;
+        let coalesce =
+            Expr { kind: ExprKind::Coalesce(vec![exec, empty]), ty, typmod, location: at };
+        let returning = self.json_constructor_output(ctor.output.as_deref(), &[arg])?;
+        let mut result = self.json_constructor(
+            JsonCtorKind::ArrayQuery,
+            Vec::new(),
+            Some(coalesce),
+            returning,
+            false,
+            ctor.absent_on_null,
+            ctor.location,
+        )?;
+        if let ExprKind::JsonCtor(c) = &mut result.kind {
+            c.format = format_of(ctor.format.as_deref()).0;
+        }
+        Ok(result)
+    }
+
+    /// `transformJsonAggConstructor`: the constructor of `JSON_OBJECTAGG` or `JSON_ARRAYAGG` with the call of the aggregate, or of the window function when the call has `OVER`.
+    #[allow(clippy::too_many_arguments)]
+    fn json_agg_constructor(
+        &mut self,
+        agg_ctor: Option<&JsonAggConstructor>,
+        returning: (JsonReturning, Option<usize>),
+        args: Vec<Expr>,
+        func: u32,
+        kind: JsonCtorKind,
+        unique: bool,
+        absent_on_null: bool,
+    ) -> Result<Expr> {
+        let Some(agg_ctor) = agg_ctor else {
+            return Err(Error::internal("a SQL/JSON aggregate with no constructor"));
+        };
+        let at = place(agg_ctor.location);
+        let ty =
+            if returning.0.format.kind == JsonFormatKind::Jsonb { oid::JSONB } else { oid::JSON };
+        let filter = match &agg_ctor.agg_filter {
+            Some(node) => {
+                let expr = self.with_kind(Kind::Filter, |a| a.transform(Some(node)))?;
+                Some(self.coerce_to_boolean(expr, "FILTER")?)
+            }
+            None => None,
+        };
+        let parts = Parts {
+            star: false,
+            distinct: false,
+            within_group: false,
+            order: &agg_ctor.agg_order,
+            filter,
+            over: agg_ctor.over.as_deref(),
+            nulls: NullTreatment::None,
+            srfs: self.srfs.0,
+        };
+        let call = if agg_ctor.over.is_some() {
+            let proc = builtin::proc_by_oid(func).ok_or_else(|| {
+                Error::internal(format!("cache lookup failed for function {func}"))
+            })?;
+            self.window_call(proc, Some(proc.name), args, parts, ty, at)?
+        } else {
+            self.aggregate_call(func, b'n', args, parts, false, ty, at)?
+        };
+        self.json_constructor(
+            kind,
+            Vec::new(),
+            Some(call),
+            returning,
+            unique,
+            absent_on_null,
+            agg_ctor.location,
+        )
+    }
+
+    /// `transformJsonObjectAgg`: a call of `json_object_agg` or of `jsonb_object_agg`, with `_unique` for `WITH UNIQUE KEYS` and `_strict` for `ABSENT ON NULL`.
+    pub(crate) fn json_object_agg(&mut self, agg: &JsonObjectAgg) -> Result<Expr> {
+        let Some(kv) = agg.arg.as_deref() else {
+            return Err(Error::internal("a JSON_OBJECTAGG with no argument"));
+        };
+        let key = self.transform(kv.key.as_ref())?;
+        let value = kv.value.as_deref();
+        let value = self.json_value_expr("JSON_OBJECTAGG()", value, JsonFormatKind::Default, 0)?;
+        let args = vec![key, value];
+        let ctor = agg.constructor.as_deref();
+        let returning =
+            self.json_constructor_output(ctor.and_then(|c| c.output.as_deref()), &args)?;
+        let jsonb = usize::from(returning.0.format.kind == JsonFormatKind::Jsonb);
+        let form = usize::from(agg.absent_on_null) + 2 * usize::from(agg.unique);
+        self.json_agg_constructor(
+            ctor,
+            returning,
+            args,
+            OBJECT_AGGS[jsonb][form],
+            JsonCtorKind::ObjectAgg,
+            agg.unique,
+            agg.absent_on_null,
+        )
+    }
+
+    /// `transformJsonArrayAgg`: a call of `json_agg` or of `jsonb_agg`, with `_strict` for `ABSENT ON NULL`.
+    pub(crate) fn json_array_agg(&mut self, agg: &JsonArrayAgg) -> Result<Expr> {
+        let value = agg.arg.as_deref();
+        let arg = self.json_value_expr("JSON_ARRAYAGG()", value, JsonFormatKind::Default, 0)?;
+        let args = vec![arg];
+        let ctor = agg.constructor.as_deref();
+        let returning =
+            self.json_constructor_output(ctor.and_then(|c| c.output.as_deref()), &args)?;
+        let jsonb = usize::from(returning.0.format.kind == JsonFormatKind::Jsonb);
+        self.json_agg_constructor(
+            ctor,
+            returning,
+            args,
+            ARRAY_AGGS[jsonb][usize::from(agg.absent_on_null)],
+            JsonCtorKind::ArrayAgg,
+            false,
+            agg.absent_on_null,
         )
     }
 
@@ -406,6 +601,7 @@ impl Analyzer<'_> {
         self.json_constructor(
             JsonCtorKind::Parse,
             vec![arg],
+            None,
             returning,
             jsexpr.unique_keys,
             false,
@@ -423,6 +619,7 @@ impl Analyzer<'_> {
         self.json_constructor(
             JsonCtorKind::Scalar,
             vec![arg],
+            None,
             returning,
             false,
             false,
@@ -461,6 +658,7 @@ impl Analyzer<'_> {
         self.json_constructor(
             JsonCtorKind::Serialize,
             vec![arg],
+            None,
             returning,
             false,
             false,

@@ -1949,6 +1949,12 @@ impl<'a> Eval<'a> {
                 }
             },
             JsonCtorKind::Parse | JsonCtorKind::Serialize => self.eval(first()?)?,
+            JsonCtorKind::ObjectAgg | JsonCtorKind::ArrayAgg | JsonCtorKind::ArrayQuery => {
+                let func = c.func.as_ref();
+                self.eval(
+                    func.ok_or_else(|| Error::internal("a SQL/JSON aggregate with no call"))?,
+                )?
+            }
             JsonCtorKind::Scalar => {
                 let arg = first()?;
                 let v = self.eval(arg)?;

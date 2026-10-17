@@ -19,9 +19,9 @@ use rupg_types::qualified_name_list;
 
 use super::{
     Aggref, Deparser, Error, Expr, ExprKind, Func, FuncForm, INDENT_STD, INDENT_VAR, JoinNames,
-    Namespace, Result, SortGroup, SubLink, SubLinkKind, Value, WindowClause, WindowFunc, builtin,
-    looks_like_function, oid, pretty_arg, qualified_relation_name, quote_identifier, reg,
-    relation_name, sort_operators,
+    JsonCtor, Namespace, Result, SortGroup, SubLink, SubLinkKind, Value, WindowClause, WindowFunc,
+    builtin, json_format, looks_like_function, oid, pretty_arg, qualified_relation_name,
+    quote_identifier, reg, relation_name, sort_operators,
 };
 use crate::{Call, Session, bad_value, not_yet, type_error};
 
@@ -522,13 +522,34 @@ impl Deparser<'_> {
 
     /// `get_windowfunc_expr`: a call of a window function, then `OVER` and the name of its window or the window in parentheses.
     pub(super) fn window_func(&mut self, w: &WindowFunc) -> Result<()> {
-        let proc = builtin::proc_by_oid(w.oid).ok_or_else(|| {
-            Error::internal(format!("cache lookup failed for function {}", w.oid))
-        })?;
-        self.buf.push_str(&quote_identifier(proc.name));
+        self.window_func_as(w, None)
+    }
+
+    /// `get_windowfunc_expr_helper`: a call of a window function. `json` has the name, the options and the kind of a SQL/JSON aggregate, where `JSON_OBJECTAGG` puts ` : ` between its two arguments.
+    pub(super) fn window_func_as(
+        &mut self,
+        w: &WindowFunc,
+        json: Option<(&str, &str, bool)>,
+    ) -> Result<()> {
+        match json {
+            Some((name, _, _)) => self.buf.push_str(name),
+            None => {
+                let proc = builtin::proc_by_oid(w.oid).ok_or_else(|| {
+                    Error::internal(format!("cache lookup failed for function {}", w.oid))
+                })?;
+                self.buf.push_str(&quote_identifier(proc.name));
+            }
+        }
         self.buf.push('(');
         if w.star {
             self.buf.push('*');
+        } else if let Some((_, _, true)) = json {
+            let [key, value, ..] = w.args.as_slice() else {
+                return Err(Error::internal("JSON_OBJECTAGG with less than two arguments"));
+            };
+            self.expr(key, false)?;
+            self.buf.push_str(" : ");
+            self.expr(value, false)?;
         } else {
             for (i, arg) in w.args.iter().enumerate() {
                 if i > 0 {
@@ -536,6 +557,9 @@ impl Deparser<'_> {
                 }
                 self.expr(arg, true)?;
             }
+        }
+        if let Some((_, options, _)) = json {
+            self.buf.push_str(options);
         }
         if let Some(filter) = &w.filter {
             self.buf.push_str(") FILTER (WHERE ");
@@ -1054,10 +1078,22 @@ impl Deparser<'_> {
 
     /// `get_agg_expr`: a call of an aggregate function, with `DISTINCT`, `ORDER BY`, `WITHIN GROUP` and `FILTER`.
     pub(super) fn aggregate(&mut self, agg: &Aggref) -> Result<()> {
+        self.aggregate_as(agg, None)
+    }
+
+    /// `get_agg_expr_helper`: a call of an aggregate function. `json` has the name, the options and the kind of a SQL/JSON aggregate, where `JSON_OBJECTAGG` puts ` : ` between its two arguments.
+    pub(super) fn aggregate_as(
+        &mut self,
+        agg: &Aggref,
+        json: Option<(&str, &str, bool)>,
+    ) -> Result<()> {
         let proc = builtin::proc_by_oid(agg.oid).ok_or_else(|| {
             Error::internal(format!("cache lookup failed for function {}", agg.oid))
         })?;
-        self.buf.push_str(&quote_identifier(proc.name));
+        match json {
+            Some((name, _, _)) => self.buf.push_str(name),
+            None => self.buf.push_str(&quote_identifier(proc.name)),
+        }
         self.buf.push('(');
         if !agg.distinct.is_empty() {
             self.buf.push_str("DISTINCT ");
@@ -1077,9 +1113,13 @@ impl Deparser<'_> {
             self.buf.push('*');
         } else {
             let variadic = agg.variadic && proc.variadic != 0;
+            let object = matches!(json, Some((_, _, true)));
             for (i, arg) in agg.args.iter().take(agg.nargs).enumerate() {
+                if object && i > 1 {
+                    break;
+                }
                 if i > 0 {
-                    self.buf.push_str(", ");
+                    self.buf.push_str(if object { " : " } else { ", " });
                 }
                 if variadic && i + 1 == agg.nargs {
                     self.buf.push_str("VARIADIC ");
@@ -1092,10 +1132,41 @@ impl Deparser<'_> {
             let exprs: Vec<&Expr> = agg.args.iter().collect();
             self.order_by(&agg.order, &exprs, false)?;
         }
+        if let Some((_, options, _)) = json {
+            self.buf.push_str(options);
+        }
         if let Some(filter) = &agg.filter {
             self.buf.push_str(") FILTER (WHERE ");
             self.expr(filter, false)?;
         }
+        self.buf.push(')');
+        Ok(())
+    }
+
+    /// `get_json_constructor` for `JSON_ARRAY` with a subquery. The subquery is the subquery in `FROM` of the query of `SELECT JSON_ARRAYAGG` in [`JsonCtor::func`].
+    pub(super) fn json_array_query(&mut self, c: &JsonCtor) -> Result<()> {
+        let wrapper = match c.func.as_ref().map(|f| &f.kind) {
+            Some(ExprKind::Coalesce(args)) => match args.first().map(|a| &a.kind) {
+                Some(ExprKind::SubLink(sub)) => Some(&sub.query),
+                _ => None,
+            },
+            _ => None,
+        };
+        let Some(wrapper) = wrapper else {
+            return Err(Error::internal("JSON_ARRAY with a subquery and no COALESCE"));
+        };
+        let Some(query) = wrapper.relations.first().and_then(|r| r.subquery.as_deref()) else {
+            return Err(Error::internal("JSON_ARRAY with no subquery"));
+        };
+        self.buf.push_str("JSON_ARRAY(");
+        // The subquery is one level below the query of `SELECT JSON_ARRAYAGG`, whose names the subquery does not see.
+        let names = vec![String::new(); wrapper.relations.len()];
+        self.namespaces.push(Namespace { names, ..Default::default() });
+        let done = self.query_def(query, None, false, self.indent);
+        self.namespaces.pop();
+        done?;
+        json_format(c.format, &mut self.buf);
+        self.json_ctor_options(c)?;
         self.buf.push(')');
         Ok(())
     }

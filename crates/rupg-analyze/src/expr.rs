@@ -346,6 +346,12 @@ pub enum JsonCtorKind {
     Scalar,
     /// `JSON_SERIALIZE`, which makes a string from a JSON value.
     Serialize,
+    /// `JSON_OBJECTAGG`. The call of the aggregate is [`JsonCtor::func`].
+    ObjectAgg,
+    /// `JSON_ARRAYAGG`. The call of the aggregate is [`JsonCtor::func`].
+    ArrayAgg,
+    /// `JSON_ARRAY` with a subquery. [`JsonCtor::func`] is `COALESCE((SELECT JSON_ARRAYAGG(q.a) FROM (subquery) q(a)), '[]')`.
+    ArrayQuery,
 }
 
 /// `JsonReturning`: the type of the result of a SQL/JSON function and its format.
@@ -361,6 +367,10 @@ pub struct JsonReturning {
 pub struct JsonCtor {
     pub kind: JsonCtorKind,
     pub args: Vec<Expr>,
+    /// The expression that gives the value of `JSON_OBJECTAGG`, `JSON_ARRAYAGG` and `JSON_ARRAY` with a subquery.
+    pub func: Option<Expr>,
+    /// The `FORMAT` clause of the subquery of `JSON_ARRAY`.
+    pub format: JsonFormat,
     /// The `RETURNING` clause, or the type that the analyzer gives when the call has no clause.
     pub returning: JsonReturning,
     /// `WITH UNIQUE KEYS`.
@@ -557,7 +567,7 @@ impl Expr {
             | ExprKind::Array { elements: args, .. } => args.iter().collect(),
             ExprKind::JoinRow(row) => row.fields.iter().collect(),
             ExprKind::JsonValue(v) => vec![&v.raw, &v.formatted],
-            ExprKind::JsonCtor(c) => c.args.iter().chain(&c.coercion).collect(),
+            ExprKind::JsonCtor(c) => c.args.iter().chain(&c.func).chain(&c.coercion).collect(),
             ExprKind::IsJson(p) => vec![&p.expr],
             ExprKind::Case(case) => {
                 let mut all: Vec<&Expr> = case.arg.as_deref().into_iter().collect();
@@ -615,7 +625,10 @@ impl Expr {
             | ExprKind::Array { elements: args, .. } => args.iter_mut().collect(),
             ExprKind::JoinRow(row) => row.fields.iter_mut().collect(),
             ExprKind::JsonValue(v) => vec![&mut v.raw, &mut v.formatted],
-            ExprKind::JsonCtor(c) => c.args.iter_mut().chain(&mut c.coercion).collect(),
+            ExprKind::JsonCtor(c) => {
+                let JsonCtor { args, func, coercion, .. } = &mut **c;
+                args.iter_mut().chain(func).chain(coercion).collect()
+            }
             ExprKind::IsJson(p) => vec![&mut p.expr],
             ExprKind::Case(case) => {
                 let mut all: Vec<&mut Expr> = case.arg.as_deref_mut().into_iter().collect();

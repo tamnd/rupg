@@ -465,6 +465,8 @@ impl<'a> Deparser<'a> {
             JsonCtorKind::Parse => "JSON(",
             JsonCtorKind::Scalar => "JSON_SCALAR(",
             JsonCtorKind::Serialize => "JSON_SERIALIZE(",
+            JsonCtorKind::ObjectAgg | JsonCtorKind::ArrayAgg => return self.json_agg_ctor(c),
+            JsonCtorKind::ArrayQuery => return self.json_array_query(c),
         });
         for (i, arg) in c.args.iter().enumerate() {
             if i > 0 {
@@ -473,11 +475,34 @@ impl<'a> Deparser<'a> {
             }
             self.expr(arg, true)?;
         }
+        self.json_ctor_options(c)?;
+        self.buf.push(')');
+        Ok(())
+    }
+
+    /// `get_json_agg_constructor`: the call of the aggregate or of the window function with the name and the options of the constructor.
+    fn json_agg_ctor(&mut self, c: &JsonCtor) -> Result<()> {
+        let saved = std::mem::take(&mut self.buf);
+        let done = self.json_ctor_options(c);
+        let options = std::mem::replace(&mut self.buf, saved);
+        done?;
+        let object = c.kind == JsonCtorKind::ObjectAgg;
+        let json =
+            Some((if object { "JSON_OBJECTAGG" } else { "JSON_ARRAYAGG" }, &*options, object));
+        match c.func.as_ref().map(|f| &f.kind) {
+            Some(ExprKind::Agg(agg)) => self.aggregate_as(agg, json),
+            Some(ExprKind::Window(w)) => self.window_func_as(w, json),
+            _ => Err(Error::internal("invalid JsonConstructorExpr underlying node type")),
+        }
+    }
+
+    /// `get_json_constructor_options`: `ABSENT ON NULL`, `NULL ON NULL`, `WITH UNIQUE KEYS` and `RETURNING`.
+    fn json_ctor_options(&mut self, c: &JsonCtor) -> Result<()> {
         if c.absent_on_null {
-            if c.kind == JsonCtorKind::Object {
+            if matches!(c.kind, JsonCtorKind::Object | JsonCtorKind::ObjectAgg) {
                 self.buf.push_str(" ABSENT ON NULL");
             }
-        } else if c.kind == JsonCtorKind::Array {
+        } else if matches!(c.kind, JsonCtorKind::Array | JsonCtorKind::ArrayAgg) {
             self.buf.push_str(" NULL ON NULL");
         }
         if c.unique {
@@ -496,7 +521,6 @@ impl<'a> Deparser<'a> {
                 json_format(returning.format, &mut self.buf);
             }
         }
-        self.buf.push(')');
         Ok(())
     }
 

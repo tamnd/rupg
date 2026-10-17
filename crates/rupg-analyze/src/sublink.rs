@@ -21,7 +21,7 @@ fn not_yet(what: &str, at: Option<usize>) -> Error {
 
 impl Analyzer<'_> {
     /// `parse_sub_analyze`: the query tree of a subquery. The subquery sees the names of this query and of the queries outside it.
-    fn sub_analyze(&mut self, node: Option<&Node>) -> Result<Query> {
+    pub(crate) fn sub_analyze(&mut self, node: Option<&Node>) -> Result<Query> {
         let Some(Node::SelectStmt(stmt)) = node else {
             return Err(Error::internal("a subquery that is not SelectStmt"));
         };
