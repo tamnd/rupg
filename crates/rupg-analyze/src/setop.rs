@@ -178,6 +178,7 @@ impl Analyzer<'_> {
             ctes: Vec::new(),
             recursive: false,
             row_marks: Vec::new(),
+            insert: None,
         })
     }
 

@@ -319,6 +319,13 @@ fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         .ok_or_else(|| Error::internal(format!("no relation has the OID {oid}")))?;
     if relation.kind == rupg_catalog::RelKind::Table {
         session.count_scan(oid);
+        // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null.
+        let width = relation.columns.len();
+        let mut rows = session.table_rows(oid)?;
+        for row in &mut rows {
+            row.resize(width, Value::Null);
+        }
+        return Ok(rows);
     }
     Ok(match &relation.sequence {
         Some(sequence) => {

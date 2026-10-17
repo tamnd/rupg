@@ -2,12 +2,12 @@
 //!
 //! The connection does no I/O. The server gives it the bytes that the client sent and an output buffer, and [`Connection::step`] tells the server what to do next. See `spec/06-server-and-wire.md` section 6.1.
 
-use std::cell::{Ref, RefCell};
+use std::cell::{Cell, Ref, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rupg_analyze::{Message, Params};
-use rupg_catalog::{Catalog, database};
+use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, database};
 use rupg_common::{Error, SqlState};
 use rupg_func::{BackendState, Randomness, Sequences};
 pub use rupg_func::{Client, Ssl};
@@ -16,6 +16,7 @@ use rupg_platform::Clock;
 use rupg_platform::os::OsClock;
 use rupg_sql::Severity;
 use rupg_sql::nodes::{LockStmt, Node, ObjectType};
+use rupg_types::Value;
 use rupg_wire::{
     CancelKey, CommandTag, Field, Frontend, Level, OutBuf, Portals, ProtocolError, Session,
     Statements, source_fields,
@@ -23,6 +24,7 @@ use rupg_wire::{
 
 use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
+use crate::heap::{Snapshot, View};
 use crate::query::{self, Column, Reader, Row};
 use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
@@ -338,6 +340,46 @@ pub struct Connection {
     randomness: RefCell<Randomness>,
     /// The `COPY ... FROM STDIN` that reads its data.
     copy_in: Option<copy_from::CopyIn>,
+    /// The transaction ID of the transaction, or 0 while the transaction did not write a row.
+    xid: Cell<u32>,
+    /// `currentCommandId`: the commands of the transaction that wrote rows.
+    command: Cell<u32>,
+    /// The snapshot of a transaction in `REPEATABLE READ` or `SERIALIZABLE`, from its first statement to its end.
+    snapshot: RefCell<Option<Snapshot>>,
+}
+
+/// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default or a not-null constraint, a new constraint, or a new unique index. A dropped table and a new column with no default keep the rows.
+fn changes_rows(old: &Catalog, new: &Catalog, rel: &rupg_catalog::Relation) -> bool {
+    let Some(now) = new.relation(rel.oid) else {
+        return false;
+    };
+    if now.columns.len() < rel.columns.len() {
+        return true;
+    }
+    let same = rel.columns.iter().zip(&now.columns).all(|(before, after)| {
+        before.ty == after.ty
+            && before.typmod == after.typmod
+            && before.collation == after.collation
+            && (before.not_null || !after.not_null)
+    });
+    if !same {
+        return true;
+    }
+    let added = (rel.columns.len()..now.columns.len()).any(|i| {
+        let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
+        now.columns[i].not_null || new.default_of(rel.oid, attnum).is_some()
+    });
+    if added {
+        return true;
+    }
+    let constraint = new
+        .constraints_of(rel.oid)
+        .any(|c| c.kind != ConKind::NotNull && c.validated && old.constraint(c.oid).is_none());
+    let index = new.relations().any(|index| {
+        old.relation(index.oid).is_none()
+            && index.index.as_ref().is_some_and(|info| info.table == rel.oid && info.unique)
+    });
+    constraint || index
 }
 
 /// The OID of the bootstrap superuser, which owns the objects of initdb.
@@ -371,6 +413,9 @@ impl Connection {
             sequences: RefCell::new(Sequences::default()),
             randomness: RefCell::new(Randomness::default()),
             copy_in: None,
+            xid: Cell::new(0),
+            command: Cell::new(0),
+            snapshot: RefCell::new(None),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -410,6 +455,85 @@ impl Connection {
         .with_statements(&self.statements)
         .with_portals(&self.portals)
         .with_cancel(&self.cancel)
+        .with_view(self.view())
+    }
+
+    /// `GetTransactionSnapshot`: a new snapshot for each statement in `READ COMMITTED`, and the snapshot of the first statement for the whole transaction in the other levels.
+    fn view(&self) -> View {
+        let heap = self.store.heap();
+        let isolation = self.settings.borrow().get("transaction_isolation");
+        let snapshot = if matches!(isolation.as_deref(), Some("repeatable read" | "serializable")) {
+            self.snapshot.borrow_mut().get_or_insert_with(|| heap.snapshot()).clone()
+        } else {
+            heap.snapshot()
+        };
+        View {
+            database: self.database_oid,
+            snapshot,
+            xid: self.xid.get(),
+            command: self.command.get(),
+        }
+    }
+
+    /// `0A000` when a statement changes a table that has rows in a way that the rows must change too, such as a new column with a default or a new constraint that must check the rows. The heap cannot change its rows yet.
+    fn keeps_rows(&self, node: &Node, work: &Catalog) -> Result<(), Error> {
+        let heap = self.store.heap();
+        let old = self.catalog();
+        let mut tables = old.relations().filter(|rel| {
+            rel.kind == RelKind::Table
+                && rel.oid >= FIRST_NORMAL_OID
+                && heap.has_rows(self.database_oid, rel.oid)
+        });
+        let changed = if matches!(node, Node::AlterDomainStmt(_)) {
+            tables.next().is_some()
+        } else {
+            tables.any(|rel| changes_rows(&old, work, rel))
+        };
+        if !changed {
+            return Ok(());
+        }
+        let statement = match node {
+            Node::AlterDomainStmt(_) => "ALTER DOMAIN",
+            Node::IndexStmt(_) => "CREATE INDEX",
+            Node::AlterTableStmt(_) => "ALTER TABLE",
+            _ => "this statement",
+        };
+        Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("{statement} on a table with rows is not supported yet"),
+        ))
+    }
+
+    /// Stores the new rows of an `INSERT` in the heap and gives their number. The first write of a transaction gives it a transaction ID, and each write ends a command, as `CommandCounterIncrement` does.
+    fn store_rows(&self, table: u32, view: &View, rows: Vec<Vec<Value>>) -> u64 {
+        let count = rows.len() as u64;
+        let heap = self.store.heap();
+        if self.xid.get() == 0 {
+            self.xid.set(heap.begin());
+        }
+        let view = View { xid: self.xid.get(), ..view.clone() };
+        heap.insert(table, &view, rows);
+        self.command.set(view.command + 1);
+        count
+    }
+
+    /// The end of the rows of a transaction: a commit makes them visible and removes the rows of the tables that the transaction dropped, and a rollback removes them.
+    fn end_rows(&mut self, commit: bool, defined: bool) {
+        let heap = self.store.heap();
+        let xid = self.xid.replace(0);
+        if xid != 0 {
+            if commit {
+                heap.commit(xid);
+            } else {
+                heap.abort(xid);
+            }
+        }
+        if commit && defined {
+            let catalog = self.store.committed(self.database_oid);
+            heap.drop_tables(self.database_oid, |relation| catalog.relation(relation).is_some());
+        }
+        self.command.set(0);
+        self.snapshot.replace(None);
     }
 
     /// The check hook of `default_text_search_config` for a `SET` of it, which reads the catalog.
@@ -458,10 +582,11 @@ impl Connection {
             Message::Warning(error) => Notice::warning(error),
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
         }));
+        let result = defined.result.and_then(|()| self.keeps_rows(node, &work));
         let Some(lease) = self.lease.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
         };
-        match defined.result {
+        match result {
             Ok(()) => {
                 lease.catalog = Arc::new(work);
                 Ok(Done::Tag(match node {
@@ -966,6 +1091,14 @@ impl Connection {
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         plan.start(&reader)?;
+        if let Some(info) = plan.insert() {
+            let rows = plan.run(&[], &reader);
+            late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
+            let Some(view) = reader.view() else {
+                return Err(Error::internal("the reader of the session has no view of the rows"));
+            };
+            return Ok(Done::Count(CommandTag::Insert, self.store_rows(info.table, view, rows?)));
+        }
         let columns = query::columns(&plan);
         let rows = query::run(&plan, &[], &reader, &[]);
         late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
@@ -1002,11 +1135,13 @@ impl Connection {
         let kept = chained.then(|| self.settings.get_mut().characteristics());
         if ending != Ending::None {
             self.settings.get_mut().end(ending == Ending::Commit);
+            let defined = self.lease.is_some();
             if let Some(lease) = self.lease.take()
                 && ending == Ending::Commit
             {
                 lease.commit();
             }
+            self.end_rows(ending == Ending::Commit, defined);
             self.transaction_ended();
         }
         if kept.is_some() {
@@ -1044,6 +1179,7 @@ impl Connection {
         if self.transaction.abort_current() == Ending::Rollback {
             self.settings.get_mut().end(false);
             self.lease = None;
+            self.end_rows(false, false);
         }
         self.transaction_ended();
         if self.transaction.failed() {
@@ -1059,6 +1195,7 @@ impl Connection {
 
 impl Drop for Connection {
     fn drop(&mut self) {
+        self.end_rows(false, false);
         self.leave();
     }
 }
@@ -2570,6 +2707,12 @@ mod tests {
     #[test]
     fn for_update() {
         big_stack(|| script(include_str!("connection/for_update.test")));
+    }
+
+    /// `INSERT` with `VALUES`, a query and `DEFAULT VALUES`: the defaults of the columns and of the domains, the coercion to the types of the columns, the not-null and check constraints with the failing row, the errors of `transformInsertStmt`, a rollback of the rows, a read-only transaction, `PREPARE` and the extended protocol. `connection/insert.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn insert() {
+        big_stack(|| script(include_str!("connection/insert.test")));
     }
 
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.

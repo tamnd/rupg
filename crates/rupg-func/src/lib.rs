@@ -311,6 +311,15 @@ pub trait Session {
     fn count_scan(&self, relation: u32) {
         let _ = relation;
     }
+    /// The rows of a table of the user that the snapshot of the statement sees, each with a value for each column of the table when the row was written. A session with no server has no rows.
+    ///
+    /// # Errors
+    ///
+    /// An error of the store of the rows.
+    fn table_rows(&self, relation: u32) -> Result<Vec<Vec<Value>>> {
+        let _ = relation;
+        Ok(Vec::new())
+    }
     /// `pgstat_fetch_stat_tabentry`: the counters of a relation of the database of the session, from the snapshot of the transaction, or `None` for a relation with no entry. The first call of a transaction takes the snapshot.
     fn relation_counts(&self, relation: u32) -> Option<RelationCounts> {
         let _ = relation;

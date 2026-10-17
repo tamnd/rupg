@@ -60,6 +60,8 @@ pub struct Query {
     pub recursive: bool,
     /// `rowMarks`: the relations that `FOR UPDATE` or `FOR SHARE` locks.
     pub row_marks: Vec<crate::RowMark>,
+    /// The table that an `INSERT` writes, or `None` for a `SELECT`.
+    pub insert: Option<crate::InsertInfo>,
 }
 
 /// A column of the result.
@@ -341,6 +343,7 @@ impl Analyzer<'_> {
             ctes: Vec::new(),
             recursive: false,
             row_marks: Vec::new(),
+            insert: None,
         };
         for clause in s.lockingClause.iter().flatten() {
             if let Node::LockingClause(clause) = clause {

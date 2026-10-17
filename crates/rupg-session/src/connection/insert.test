@@ -1,0 +1,156 @@
+!details
+> CREATE TABLE t (a int NOT NULL, b text DEFAULT 'x', c numeric CHECK (c > 0), d varchar(3))
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'a', 2, 'abc')
+INSERT 0 1
+> INSERT INTO t (a) VALUES (2)
+INSERT 0 1
+> INSERT INTO t VALUES (3, DEFAULT, 1.5), (4, 'q', NULL, 'z')
+ERROR 42601 VALUES lists must all be the same length at 42
+> INSERT INTO t VALUES (3, DEFAULT, 1.5, NULL), (4, 'q', NULL, 'z')
+INSERT 0 2
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:-1,d@t.4:1043:-1:7
+row 1,a,2,abc
+row 2,x,NULL,NULL
+row 3,x,1.5,NULL
+row 4,q,NULL,z
+SELECT 4
+> INSERT INTO t SELECT a + 10, b, c, d FROM t
+INSERT 0 4
+> SELECT count(*), sum(a) FROM t
+fields count:20:8:-1,sum:20:8:-1
+row 8,60
+SELECT 1
+> INSERT INTO t VALUES (NULL)
+ERROR 23502 null value in column "a" of relation "t" violates not-null constraint
+DETAIL Failing row contains (null, x, null, null).
+> INSERT INTO t VALUES (5, 'a', -1)
+ERROR 23514 new row for relation "t" violates check constraint "t_c_check"
+DETAIL Failing row contains (5, a, -1, null).
+> INSERT INTO t VALUES (5, 'a', 1, 'abcd')
+ERROR 22001 value too long for type character varying(3)
+> INSERT INTO t VALUES (5, 'a', 1, 'ab', 9)
+ERROR 42601 INSERT has more expressions than target columns at 40
+> INSERT INTO t (a, a) VALUES (1, 2)
+ERROR 42701 column "a" specified more than once at 19
+> INSERT INTO t (zz) VALUES (1)
+ERROR 42703 column "zz" of relation "t" does not exist at 16
+> INSERT INTO t (a, b) VALUES (1)
+ERROR 42601 INSERT has more target columns than expressions at 19
+> INSERT INTO t VALUES ('x')
+ERROR 22P02 invalid input syntax for type integer: "x" at 23
+> BEGIN
+BEGIN
+> INSERT INTO t VALUES (100)
+INSERT 0 1
+> SELECT count(*) FROM t
+fields count:20:8:-1
+row 9
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT count(*) FROM t
+fields count:20:8:-1
+row 8
+SELECT 1
+> BEGIN
+BEGIN
+> INSERT INTO t VALUES (200)
+INSERT 0 1
+> SELECT 1/0
+ERROR 22012 division by zero
+> ROLLBACK
+ROLLBACK
+> SELECT count(*) FROM t WHERE a = 200
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN READ ONLY
+BEGIN
+> INSERT INTO t VALUES (300)
+ERROR 25006 cannot execute INSERT in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> CREATE DOMAIN pos AS int CHECK (VALUE > 0)
+CREATE DOMAIN
+> CREATE DOMAIN dd AS text DEFAULT 'dv' NOT NULL
+CREATE DOMAIN
+> CREATE TABLE s (id serial, p pos, q dd, r date DEFAULT '2020-01-01', u int[])
+CREATE TABLE
+> INSERT INTO s (p) VALUES (1), (2)
+INSERT 0 2
+> INSERT INTO s (p, u) VALUES (3, '{1,2}')
+INSERT 0 1
+> INSERT INTO s (p) VALUES (-1)
+ERROR 23514 value for domain pos violates check constraint "pos_check"
+> INSERT INTO s (p, q) VALUES (1, NULL)
+ERROR 23502 domain dd does not allow null values
+> INSERT INTO s (p, q) SELECT 7, 'lit'
+INSERT 0 1
+> INSERT INTO s (p, q) SELECT 8, 'a' UNION ALL SELECT 9, 'b'
+INSERT 0 2
+> INSERT INTO s (q) VALUES (1::int)
+INSERT 0 1
+> INSERT INTO s (p) VALUES ('1'::text)
+ERROR 42804 column "p" is of type pos but expression is of type text at 27
+HINT You will need to rewrite or cast the expression.
+> PREPARE pi (int) AS INSERT INTO s (p) VALUES ($1)
+PREPARE
+> EXECUTE pi(10)
+INSERT 0 1
+> EXECUTE pi(-3)
+ERROR 23514 value for domain pos violates check constraint "pos_check"
+P ins|INSERT INTO s (p) VALUES ($1)
+X ins|11
+INSERT 0 1
+> INSERT INTO s DEFAULT VALUES
+INSERT 0 1
+> SELECT * FROM s ORDER BY id
+fields id@s.1:23:4:-1,p@s.2:23:4:-1,q@s.3:25:-1:-1,r@s.4:1082:4:-1,u@s.5:1007:-1:-1
+row 1,1,dv,2020-01-01,NULL
+row 2,2,dv,2020-01-01,NULL
+row 3,3,dv,2020-01-01,{1,2}
+row 6,7,lit,2020-01-01,NULL
+row 7,8,a,2020-01-01,NULL
+row 8,9,b,2020-01-01,NULL
+row 9,NULL,1,2020-01-01,NULL
+row 10,10,dv,2020-01-01,NULL
+row 12,11,dv,2020-01-01,NULL
+row 13,NULL,dv,2020-01-01,NULL
+SELECT 10
+> CREATE VIEW v AS SELECT 1 AS a
+CREATE VIEW
+> CREATE SEQUENCE sq
+CREATE SEQUENCE
+> INSERT INTO sq VALUES (1)
+ERROR 42809 cannot change sequence "sq"
+> INSERT INTO nosuch VALUES (1)
+ERROR 42P01 relation "nosuch" does not exist at 13
+> CREATE TABLE w (a int, b text)
+CREATE TABLE
+> INSERT INTO w VALUES (1, 'x' || 'y'), (2, NULL), (DEFAULT, DEFAULT)
+INSERT 0 3
+> INSERT INTO w (b, a) VALUES ('k', 5)
+INSERT 0 1
+> INSERT INTO w VALUES ((1, 2))
+ERROR 42804 column "a" is of type integer but expression is of type record at 23
+HINT You will need to rewrite or cast the expression.
+> INSERT INTO w (a, b) VALUES ((1, 'x'))
+ERROR 42601 INSERT has more target columns than expressions at 19
+HINT The insertion source is a row expression containing the same number of columns expected by the INSERT. Did you accidentally use extra parentheses?
+> INSERT INTO w VALUES (1, 2)
+INSERT 0 1
+> SELECT * FROM w
+fields a@w.1:23:4:-1,b@w.2:25:-1:-1
+row 1,xy
+row 2,NULL
+row NULL,NULL
+row 5,k
+row 1,2
+SELECT 5
+> CREATE TABLE ck (t text CHECK (length(t) < 5))
+CREATE TABLE
+> INSERT INTO ck VALUES (repeat('y', 100))
+ERROR 23514 new row for relation "ck" violates check constraint "ck_t_check"
+DETAIL Failing row contains (yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy...).
