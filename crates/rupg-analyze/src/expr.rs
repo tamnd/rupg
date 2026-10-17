@@ -61,6 +61,8 @@ pub enum ExprKind {
     ScalarArrayOp { func: u32, any: bool, args: Vec<Expr> },
     /// `RowExpr`: `ROW(...)`, a value of `record` with a field for each argument. The form is explicit for a cast of a row to a composite type, as `row_format`.
     Row(Vec<Expr>, CastForm),
+    /// The whole row of a join, as the `Var` with the attribute number 0 of a join, which the planner of PostgreSQL makes a `RowExpr` with the names of the columns. A join with no relation of its own gives the columns of the join as the fields.
+    JoinRow(Box<JoinRow>),
     /// `RowCompareExpr`: `(a, b) < (c, d)` and the other comparisons of two rows with an ordering operator.
     RowCompare(Box<RowCompare>),
     /// `ArrayExpr`: `ARRAY[...]`. The elements of a multidimensional array are arrays.
@@ -79,6 +81,17 @@ pub enum ExprKind {
     SubLink(Box<SubLink>),
     /// `Param` of the kind `PARAM_SUBLINK`: the value of the column with this index, from 0, of a row of the subquery, in the test of `ANY` or `ALL`.
     SubColumn(usize),
+}
+
+/// The whole row of a join, or of the alias of `USING`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct JoinRow {
+    /// The alias of the join, which the deparser shows as `alias.*`. `None` for the alias of `USING`, which is a `RowExpr` in PostgreSQL and shows as `ROW(...)`.
+    pub alias: Option<String>,
+    /// The name of each field, which is the name of the column of the join.
+    pub names: Vec<String>,
+    /// The value of each field.
+    pub fields: Vec<Expr>,
 }
 
 /// The parts of a fetch from an array, as `SubscriptingRef`.
@@ -409,6 +422,7 @@ impl Expr {
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. }
             | ExprKind::Array { elements: args, .. } => args.iter().collect(),
+            ExprKind::JoinRow(row) => row.fields.iter().collect(),
             ExprKind::Case(case) => {
                 let mut all: Vec<&Expr> = case.arg.as_deref().into_iter().collect();
                 for (when, then) in &case.whens {
@@ -462,6 +476,7 @@ impl Expr {
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. }
             | ExprKind::Array { elements: args, .. } => args.iter_mut().collect(),
+            ExprKind::JoinRow(row) => row.fields.iter_mut().collect(),
             ExprKind::Case(case) => {
                 let mut all: Vec<&mut Expr> = case.arg.as_deref_mut().into_iter().collect();
                 for (when, then) in &mut case.whens {

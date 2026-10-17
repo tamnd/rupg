@@ -1,0 +1,159 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW a AS SELECT * FROM (VALUES (1, 'x'), (2, 'y')) AS v (k, s)
+CREATE VIEW
+> CREATE VIEW b AS SELECT * FROM (VALUES (1, 10.5), (3, 30)) AS v (k, n)
+CREATE VIEW
+> SELECT j FROM (a JOIN b USING (k)) AS j
+fields j:2249:-1:-1
+row (1,x,10.5)
+SELECT 1
+> SELECT j FROM (a LEFT JOIN b USING (k)) AS j ORDER BY 1
+fields j:2249:-1:-1
+row (1,x,10.5)
+row (2,y,)
+SELECT 2
+> SELECT j FROM (a FULL JOIN b ON a.k = b.k) AS j ORDER BY 1
+fields j:2249:-1:-1
+row (1,x,1,10.5)
+row (2,y,,)
+row (,,3,30)
+SELECT 3
+> SELECT j.*, j::text FROM (a CROSS JOIN b) AS j ORDER BY 1
+fields k@a.1:23:4:-1,s@a.2:25:-1:-1,k@b.1:23:4:-1,n@b.2:1700:-1:-1,j:25:-1:-1
+row 1,x,1,10.5,(1,x,1,10.5)
+row 1,x,3,30,(1,x,3,30)
+row 2,y,1,10.5,(2,y,1,10.5)
+row 2,y,3,30,(2,y,3,30)
+SELECT 4
+> SELECT row_to_json(j) FROM (a JOIN b USING (k)) AS j
+fields row_to_json:114:-1:-1
+row {"k":1,"s":"x","n":10.5}
+SELECT 1
+> SELECT j IS NULL, j IS NOT NULL FROM (a LEFT JOIN b USING (k)) AS j ORDER BY 1
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,t
+row f,f
+SELECT 2
+> SELECT pg_typeof(j) FROM (a JOIN b USING (k)) AS j
+fields pg_typeof:2206:4:-1
+row record
+SELECT 1
+> SELECT (j).k, (j).n FROM (a JOIN b USING (k)) AS j
+fields k@a.1:23:4:-1,n@b.2:1700:-1:-1
+row 1,10.5
+SELECT 1
+> SELECT j = j FROM (a JOIN b USING (k)) AS j
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT count(DISTINCT j) FROM (a CROSS JOIN b) AS j
+fields count:20:8:-1
+row 4
+SELECT 1
+> SELECT x FROM (a JOIN b USING (k) AS x) AS j
+ERROR 42703 column "x" does not exist at 8
+> SELECT j FROM (a JOIN b USING (k)) AS j (p, q, r)
+fields j:2249:-1:-1
+row (1,x,10.5)
+SELECT 1
+> SELECT j FROM ((a JOIN b USING (k)) AS j JOIN a AS a2 USING (k))
+fields j:2249:-1:-1
+row (1,x,10.5)
+SELECT 1
+> SELECT j FROM (a NATURAL JOIN b) AS j
+fields j:2249:-1:-1
+row (1,x,10.5)
+SELECT 1
+> SELECT row_to_json(j) FROM (a JOIN b USING (k)) AS j (p, q, r)
+fields row_to_json:114:-1:-1
+row {"p":1,"q":"x","r":10.5}
+SELECT 1
+> SELECT (j).zz FROM (a JOIN b USING (k)) AS j
+ERROR 42703 column j.zz does not exist at 9
+> SELECT (j).s, j.n FROM (a JOIN b USING (k)) AS j (k, s)
+fields s@a.2:25:-1:-1,n@b.2:1700:-1:-1
+row x,10.5
+SELECT 1
+> SELECT (SELECT j::text) FROM (a JOIN b USING (k)) AS j
+fields j:25:-1:-1
+row (1,x,10.5)
+SELECT 1
+> SELECT (SELECT row_to_json(j) FROM (VALUES (1)) AS z (c)) FROM (a JOIN b USING (k)) AS j
+fields row_to_json:114:-1:-1
+row {"k":1,"s":"x","n":10.5}
+SELECT 1
+> SELECT j2 FROM ((a JOIN b USING (k)) AS j JOIN a AS a2 USING (k)) AS j2
+fields j2:2249:-1:-1
+row (1,x,10.5,x)
+SELECT 1
+> SELECT x, row_to_json(x) FROM a JOIN b USING (k) AS x
+fields x:2249:-1:-1,row_to_json:114:-1:-1
+row (1),{"k":1}
+SELECT 1
+> SELECT x FROM a FULL JOIN b USING (k) AS x ORDER BY 1
+fields x:2249:-1:-1
+row (1)
+row (2)
+row (3)
+SELECT 3
+> CREATE VIEW w AS SELECT j FROM (a JOIN b USING (k)) AS j
+ERROR 42P16 column "j" has pseudo-type record
+> SELECT * FROM w
+ERROR 42P01 relation "w" does not exist at 15
+> SELECT pg_get_viewdef('w')
+fields pg_get_viewdef:25:-1:-1
+ERROR 42P01 relation "w" does not exist
+> CREATE VIEW w2 AS SELECT j::text AS t FROM (a LEFT JOIN b USING (k)) AS j
+CREATE VIEW
+> SELECT * FROM w2 ORDER BY 1
+fields t@w2.1:25:-1:-1
+row (1,x,10.5)
+row (2,y,)
+SELECT 2
+> CREATE VIEW w3 AS SELECT row_to_json(x) AS r, (j).s, j.n FROM (a JOIN b USING (k) AS x) AS j
+ERROR 42703 column "x" does not exist at 38
+> SELECT * FROM w3
+ERROR 42P01 relation "w3" does not exist at 15
+> SELECT pg_get_viewdef('w3')
+fields pg_get_viewdef:25:-1:-1
+ERROR 42P01 relation "w3" does not exist
+> CREATE VIEW w4 AS SELECT row_to_json(x) AS r FROM a JOIN b USING (k) AS x
+CREATE VIEW
+> SELECT * FROM w4
+fields r@w4.1:114:-1:-1
+row {"k":1}
+SELECT 1
+> SELECT pg_get_viewdef('w4')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT row_to_json(ROW(a.k)) AS r
+   FROM (a
+     JOIN b USING (k) AS x);
+SELECT 1
+> CREATE VIEW w5 AS SELECT s.j::text AS t FROM (SELECT j FROM (a JOIN b USING (k)) AS j) AS s
+CREATE VIEW
+> SELECT * FROM w5
+fields t@w5.1:25:-1:-1
+row (1,x,10.5)
+SELECT 1
+> SELECT (j).n FROM (a LEFT JOIN b USING (k)) AS j (p, q, r)
+ERROR 42703 column j.n does not exist at 9
+> CREATE VIEW w6 AS SELECT (j).r, (SELECT row_to_json(j)) AS o FROM (a LEFT JOIN b USING (k)) AS j (p, q, r) ORDER BY 1
+CREATE VIEW
+> SELECT * FROM w6
+fields r@w6.1:1700:-1:-1,o@w6.2:114:-1:-1
+row 10.5,{"p":1,"q":"x","r":10.5}
+row NULL,{"p":2,"q":"y","r":null}
+SELECT 2
+> SELECT (j).* FROM (a JOIN b USING (k)) AS j
+fields k@a.1:23:4:-1,s@a.2:25:-1:-1,n@b.2:1700:-1:-1
+row 1,x,10.5
+SELECT 1
+> SELECT (x).* FROM a JOIN b USING (k) AS x
+fields k:23:4:-1
+row 1
+SELECT 1
+> SELECT (x).k FROM a JOIN b USING (k) AS x
+fields k:23:4:-1
+row 1
+SELECT 1

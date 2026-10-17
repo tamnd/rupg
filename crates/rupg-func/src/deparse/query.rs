@@ -473,6 +473,12 @@ impl Deparser<'_> {
                     self.whole_row(var, &target.expr, true)?;
                     if self.names_visible { None } else { Some("?column?".to_string()) }
                 }
+                // `get_variable` shows the type of a whole row in the list of the query.
+                ExprKind::JoinRow(row) if row.alias.is_some() => {
+                    self.expr(&target.expr, true)?;
+                    self.buf.push_str("::record");
+                    if self.names_visible { None } else { Some("?column?".to_string()) }
+                }
                 ExprKind::Var(var) => Some(self.variable(var, false)?),
                 _ => {
                     self.expr(&target.expr, true)?;

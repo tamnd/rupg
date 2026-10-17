@@ -2586,6 +2586,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/window_ignore_nulls.test")));
     }
 
+    /// The whole row of a join with an alias and of the alias of `USING`: inner, outer, full and cross joins, the aliases of the columns, the fields and the error for a name that is no field, `.*`, `row_to_json`, `IS NULL`, comparisons, a reference from a subquery, a join in a join, and views. `connection/join_whole_row.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn join_whole_row() {
+        big_stack(|| script(include_str!("connection/join_whole_row.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

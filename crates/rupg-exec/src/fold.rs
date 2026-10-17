@@ -1,8 +1,8 @@
 //! `eval_const_expressions` of `clauses.c`: the planner computes each part of an expression whose arguments are constants and whose function is immutable. An error of such a part, such as a division by zero, comes when the query is planned, before the server sends the description of the rows. The plan then runs the folded expressions, so a part that the fold drops does not run.
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Join, JoinKind, NamedArg, Query,
-    Relation, RowCompare, SubLink, SubLinkKind, Subscript, Var,
+    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, Join, JoinKind, JoinRow, NamedArg,
+    Query, Relation, RowCompare, SubLink, SubLinkKind, Subscript, Var,
 };
 use rupg_common::Result;
 use rupg_func::Session;
@@ -362,6 +362,7 @@ impl<'a> Fold<'a> {
             | ExprKind::Distinct { args, .. }
             | ExprKind::ScalarArrayOp { args, .. } => self.all(args),
             ExprKind::Array { elements, .. } | ExprKind::Row(elements, _) => self.all(elements),
+            ExprKind::JoinRow(row) => self.all(&mut row.fields),
             ExprKind::RowCompare(rc) => self.all(&mut rc.ops),
             ExprKind::Case(case) => {
                 if let Some(arg) = &mut case.arg {
@@ -581,6 +582,11 @@ impl<'a> Fold<'a> {
                 let all = args.iter().all(|a| value(a).is_some());
                 let folded = with(expr, ExprKind::Row(args, *form));
                 if all { self.evaluate(folded) } else { Ok(folded) }
+            }
+            ExprKind::JoinRow(row) => {
+                let fields = self.list(&row.fields)?;
+                let row = JoinRow { fields, ..(**row).clone() };
+                Ok(with(expr, ExprKind::JoinRow(Box::new(row))))
             }
             ExprKind::Array { element, multidims, elements } => {
                 let elements = self.list(elements)?;

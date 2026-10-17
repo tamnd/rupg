@@ -6,8 +6,8 @@ use rupg_common::{Error, Result};
 use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value};
 
 use crate::expr::{
-    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg, RowCompare,
-    RowCompareKind, SqlValue, Subscript, Var,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JoinRow, NamedArg,
+    RowCompare, RowCompareKind, SqlValue, Subscript, Var,
 };
 
 /// The stored form of an expression.
@@ -93,6 +93,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::ScalarArrayOp { .. } => "SCALARARRAYOP",
         ExprKind::Array { .. } => "ARRAY",
         ExprKind::Row(..) => "ROW",
+        ExprKind::JoinRow(_) => "JOINROW",
         ExprKind::RowCompare(_) => "ROWCOMPARE",
         ExprKind::SqlValue(_) => "SQLVALUE",
         ExprKind::Var(_) => "VAR",
@@ -200,6 +201,22 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
                 CastForm::Implicit => " :form implicit",
             });
             write_args(args, out)?;
+        }
+        ExprKind::JoinRow(row) => {
+            out.push_str(" :alias ");
+            match &row.alias {
+                Some(alias) => hex(alias.as_bytes(), out),
+                None => out.push_str("<>"),
+            }
+            out.push_str(" :names (");
+            for (i, name) in row.names.iter().enumerate() {
+                if i > 0 {
+                    out.push(' ');
+                }
+                hex(name.as_bytes(), out);
+            }
+            out.push(')');
+            write_args(&row.fields, out)?;
         }
         ExprKind::MinMax { greatest, less, args } => {
             out.push_str(&format!(" :greatest {greatest} :less {less}"));
@@ -736,6 +753,18 @@ fn expr_of(item: &Item) -> Result<Expr> {
         "COALESCE" => ExprKind::Coalesce(f.exprs("args")?),
         // A row of an older node text has no form, and is implicit.
         "ROW" => ExprKind::Row(f.exprs("args")?, cast_form(&f).unwrap_or(CastForm::Implicit)),
+        "JOINROW" => {
+            let text = |b: &str| {
+                String::from_utf8(bytes_of(b)?).map_err(|_| bad("a name that is not UTF-8"))
+            };
+            let alias = match f.atom("alias")? {
+                "<>" => None,
+                alias => Some(text(alias)?),
+            };
+            let names =
+                list(f.get("names")?)?.iter().map(|n| text(atom(n)?)).collect::<Result<_>>()?;
+            ExprKind::JoinRow(Box::new(JoinRow { alias, names, fields: f.exprs("args")? }))
+        }
         "ROWCOMPARE" => {
             let kind = RowCompareKind::of_name(f.atom("kind")?)
                 .ok_or_else(|| bad("a kind of row comparison"))?;
@@ -1091,6 +1120,18 @@ mod tests {
                     number: 2,
                 })),
                 oid::INT4,
+            ),
+            Expr::new(
+                ExprKind::JoinRow(Box::new(JoinRow {
+                    alias: Some("j k".to_owned()),
+                    names: vec!["a".to_owned(), String::new()],
+                    fields: vec![var(1), var(2)],
+                })),
+                oid::RECORD,
+            ),
+            Expr::new(
+                ExprKind::JoinRow(Box::new(JoinRow { alias: None, names: vec![], fields: vec![] })),
+                oid::RECORD,
             ),
             Expr::new(ExprKind::MinMax { greatest: true, less: 66, args: vec![var(1)] }, oid::INT4),
             Expr::new(ExprKind::NullIf { equal: 65, args: vec![var(1), var(2)] }, oid::INT4),
