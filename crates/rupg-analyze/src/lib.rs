@@ -61,7 +61,9 @@ pub use expr::{
     RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript, Var, WindowFunc,
     XmlExpr, XmlOp,
 };
-pub use from::{Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM};
+pub use from::{
+    Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM, TableSample,
+};
 pub use funcargs::{arg_defaults, expand_arguments};
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use prepare::{execute_params, param_types};

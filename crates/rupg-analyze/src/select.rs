@@ -75,7 +75,7 @@ pub struct Target {
 }
 
 impl Query {
-    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET`, `LIMIT`, the offsets of the frames of the windows, the calls of the functions in `FROM` and the rows of the `VALUES` lists.
+    /// The expressions of the query, in the order of `query_tree_walker`: the targets, the conditions of the joins, `WHERE`, `HAVING`, `OFFSET`, `LIMIT`, the offsets of the frames of the windows, the calls of the functions in `FROM`, the rows of the `VALUES` lists and the arguments of `TABLESAMPLE`.
     pub fn exprs(&self) -> Vec<&Expr> {
         fn joins<'a>(item: &'a FromItem, out: &mut Vec<&'a Expr>) {
             if let FromItem::Join(j) = item {
@@ -97,6 +97,9 @@ impl Query {
                 out.extend(function.calls.iter().map(|(call, _)| call));
             }
             out.extend(relation.values.iter().flatten().flatten());
+            if let Some(sample) = &relation.tablesample {
+                out.extend(sample.args.iter().chain(&sample.repeatable));
+            }
         }
         out
     }
@@ -130,6 +133,9 @@ impl Query {
                 out.extend(function.calls.iter_mut().map(|(call, _)| call));
             }
             out.extend(relation.values.iter_mut().flatten().flatten());
+            if let Some(sample) = &mut relation.tablesample {
+                out.extend(sample.args.iter_mut().chain(&mut sample.repeatable));
+            }
         }
         out
     }

@@ -6,7 +6,7 @@ use rupg_pgcatalog::Values;
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{
     Alias, CoercionForm, ColumnRef, FuncCall, JoinExpr, JoinType, JsonTable, Node, RangeFunction,
-    RangeSubselect, RangeVar, SelectStmt,
+    RangeSubselect, RangeTableSample, RangeVar, SelectStmt,
 };
 use rupg_types::oid;
 
@@ -60,6 +60,8 @@ pub struct Relation {
     pub lateral: bool,
     /// The query of `WITH` that the relation reads.
     pub cte: Option<CteRef>,
+    /// The `TABLESAMPLE` clause of a table.
+    pub tablesample: Option<TableSample>,
 }
 
 impl Relation {
@@ -81,6 +83,7 @@ impl Relation {
             alias: None,
             lateral: false,
             cte: None,
+            tablesample: None,
         }
     }
 
@@ -91,6 +94,17 @@ impl Relation {
             _ => None,
         }
     }
+}
+
+/// `TableSampleClause`: the sample method of `TABLESAMPLE` and its arguments.
+#[derive(Clone, Debug, PartialEq)]
+pub struct TableSample {
+    /// The OID of the handler function of the method.
+    pub handler: u32,
+    /// The arguments, each with the type that the method gives for it.
+    pub args: Vec<Expr>,
+    /// The seed of `REPEATABLE`, of type `double precision`.
+    pub repeatable: Option<Expr>,
 }
 
 /// A call of a function in `FROM` with its name and its column definition list.
@@ -343,7 +357,7 @@ impl Analyzer<'_> {
                 let index = self.scope.entries[item.entry].relation.unwrap_or_default();
                 Ok((FromItem::Relation(index), item.clone(), vec![item]))
             }
-            Node::RangeTableSample(_) => Err(not_yet("TABLESAMPLE", None)),
+            Node::RangeTableSample(r) => self.range_table_sample(r),
             Node::RangeTableFunc(_) => Err(not_yet("XMLTABLE", None)),
             Node::JsonTable(jt) => {
                 let item = self.range_json_table(jt)?;
@@ -352,6 +366,108 @@ impl Analyzer<'_> {
             }
             _ => Err(Error::internal("unrecognized node type in FROM")),
         }
+    }
+
+    /// The part of `transformFromClauseItem` for `TABLESAMPLE`: the relation must be a table or a materialized view, and the clause goes on its entry.
+    fn range_table_sample(&mut self, r: &RangeTableSample) -> Result<(FromItem, Item, Vec<Item>)> {
+        let node =
+            r.relation.as_ref().ok_or_else(|| Error::internal("a TABLESAMPLE with no relation"))?;
+        let (item, top, namespace) = self.transform_from_item(node)?;
+        let index = self.scope.entries[top.entry].relation.unwrap_or_default();
+        let relation = &self.scope.relations[index];
+        if relation.oid == 0
+            || relation.cte.is_some()
+            || !matches!(crate::ddl::relkind(self.env, relation.oid), b'r' | b'm' | b'p')
+        {
+            let at = match node {
+                Node::RangeVar(rv) => place(rv.location),
+                _ => None,
+            };
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "TABLESAMPLE clause can only be applied to tables and materialized views",
+            )
+            .at_opt(at));
+        }
+        // The arguments cannot see the parts of `FROM` before the relation, because `p_lateral_active` stays false.
+        let before = self.scope.lateral.len();
+        let hidden = std::mem::take(&mut self.scope.namespace);
+        self.scope.lateral.extend(hidden.into_iter().map(|item| (item, true)));
+        let active = std::mem::replace(&mut self.scope.lateral_active, false);
+        let sample = self.table_sample(r);
+        self.scope.lateral_active = active;
+        self.scope.namespace =
+            self.scope.lateral.split_off(before).into_iter().map(|(item, _)| item).collect();
+        self.scope.relations[index].tablesample = Some(sample?);
+        Ok((item, top, namespace))
+    }
+
+    /// `transformRangeTableSample`: the handler of the method, which has the name of the method, one argument of type `internal` and the result type `tsm_handler`, and the arguments with the types of the method.
+    fn table_sample(&mut self, r: &RangeTableSample) -> Result<TableSample> {
+        let at = place(r.location);
+        let names: Vec<&str> = fields(&r.method).into_iter().flatten().collect();
+        let shown = names.join(".");
+        let missing = || {
+            Error::new(
+                SqlState::UNDEFINED_OBJECT,
+                format!("tablesample method {shown} does not exist"),
+            )
+            .at_opt(at)
+        };
+        let (schema, name) = match names.as_slice() {
+            [schema, name] => (Some(self.schema(schema).ok_or_else(missing)?), *name),
+            _ => self.split_name(&names, None)?,
+        };
+        let schemas = match schema {
+            Some(namespace) => vec![namespace],
+            None => self.path.clone(),
+        };
+        let found = schemas.iter().find_map(|&namespace| {
+            let user = self.env.catalog().and_then(|c| {
+                c.functions()
+                    .find(|f| {
+                        f.namespace == namespace && f.name == name && f.argtypes == [oid::INTERNAL]
+                    })
+                    .map(|f| (f.oid, f.rettype))
+            });
+            user.or_else(|| {
+                builtin::procs_named(name)
+                    .find(|p| p.namespace == namespace && p.argtypes == [oid::INTERNAL])
+                    .map(|p| (p.oid, p.rettype))
+            })
+        });
+        let Some((handler, rettype)) = found else { return Err(missing()) };
+        if rettype != oid::TSM_HANDLER {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("function {shown} must return type tsm_handler"),
+            )
+            .at_opt(at));
+        }
+        // `GetTsmRoutine`: the methods `system` and `bernoulli` take the percentage of the rows as `real`, and accept `REPEATABLE`.
+        let params = [oid::FLOAT4];
+        if r.args.len() != params.len() {
+            let count = params.len();
+            let noun = if count == 1 { "argument" } else { "arguments" };
+            return Err(Error::new(
+                SqlState::INVALID_TABLESAMPLE_ARGUMENT,
+                format!("tablesample method {shown} requires {count} {noun}, not {}", r.args.len()),
+            )
+            .at_opt(at));
+        }
+        let mut args = Vec::with_capacity(params.len());
+        for (arg, &ty) in r.args.iter().zip(&params) {
+            let expr = self.with_kind(Kind::FromFunction, |a| a.transform(arg.as_ref()))?;
+            args.push(self.coerce_to_specific(expr, ty, "TABLESAMPLE")?);
+        }
+        let repeatable = match &r.repeatable {
+            Some(node) => {
+                let expr = self.with_kind(Kind::FromFunction, |a| a.transform(Some(node)))?;
+                Some(self.coerce_to_specific(expr, oid::FLOAT8, "REPEATABLE")?)
+            }
+            None => None,
+        };
+        Ok(TableSample { handler, args, repeatable })
     }
 
     /// `addRangeTableEntry` for a table of the catalog: the entry and its namespace item.

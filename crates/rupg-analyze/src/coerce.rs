@@ -166,8 +166,10 @@ impl Analyzer<'_> {
         }
         let input = (expr.ty, expr.typmod);
         let expr = self.coerce(expr, target, typmod, context, location)?;
-        // A length cast hides the cast below it, which the analyzer made in the same step, as `hide_coercion_node` does.
-        let hide = (expr.ty, expr.typmod) != input && !matches!(expr.kind, ExprKind::Const(_));
+        // A length cast hides the cast below it, which the analyzer made in the same step, as `hide_coercion_node` does. With no length cast, the cast stays as it is.
+        let length = typmod >= 0 && (expr.typmod != typmod || expr.ty != target);
+        let hide =
+            length && (expr.ty, expr.typmod) != input && !matches!(expr.kind, ExprKind::Const(_));
         let mut expr = self.coerce_typmod(expr, target, typmod, context, location);
         if hide
             && let ExprKind::Func(Func { args, .. }) = &mut expr.kind
@@ -483,19 +485,26 @@ impl Analyzer<'_> {
         self.coerce_to_specific(expr, oid::BOOL, construct)
     }
 
-    /// `coerce_to_specific_type`: the expression as a value of the type, with an assignment cast, for a clause such as `LIMIT`.
+    /// `coerce_to_specific_type`: the expression as a value of the type, with an assignment cast, for a clause such as `LIMIT`. The value cannot be a set.
     pub(crate) fn coerce_to_specific(
         &mut self,
         expr: Expr,
         target: u32,
         construct: &str,
     ) -> Result<Expr> {
-        if expr.ty == target {
-            return Ok(expr);
-        }
         let ty = expr.ty;
         let place = expr.place();
-        match self.coerce_to_target(expr, target, -1, Context::Assignment, None)? {
+        let coerced = if ty == target {
+            Some(expr)
+        } else {
+            self.coerce_to_target(expr, target, -1, Context::Assignment, None)?
+        };
+        match coerced {
+            Some(expr) if expr.first_set_call().is_some() => Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!("argument of {construct} must not return a set"),
+            )
+            .at_opt(expr.place())),
             Some(expr) => Ok(expr),
             None => Err(Error::new(
                 SqlState::DATATYPE_MISMATCH,

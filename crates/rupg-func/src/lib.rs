@@ -57,6 +57,7 @@ mod timezone;
 mod trig;
 mod tsearch;
 mod tsheadline;
+mod tsm;
 mod tsmatch;
 mod tsparser;
 mod tsquery;
@@ -101,6 +102,7 @@ pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use sequence::Sequences;
 pub use srf::{SetKernel, set_kernel};
 pub use text::quote_identifier;
+pub use tsm::sample_rows;
 pub use xml::{xml_expr, xml_value};
 
 /// `format_type_be`: the name of a type for a message, with its schema when the search path does not find it.
