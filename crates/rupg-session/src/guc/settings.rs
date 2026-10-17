@@ -13,6 +13,7 @@ use std::sync::{Arc, LazyLock};
 use super::{Context, Parameter, Setting, check, find, flag, valid_custom_name};
 use rupg_common::Error;
 use rupg_common::SqlState;
+use rupg_platform::TcpOption;
 
 /// Where a value came from, which `RESET ALL` reads to find the values that a statement set.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -256,6 +257,8 @@ pub struct Settings {
     superuser: bool,
     /// `FirstSnapshotSet`: a statement of the current transaction took a snapshot, so the isolation level and the deferrable mode cannot change.
     snapshot: bool,
+    /// The values that the system gave to the TCP options of the socket of the session, in the order of [`TcpOption::ALL`], with -1 for a value that the system did not give. `None` for a Unix socket and for a session with no socket.
+    socket: Option<[i32; 4]>,
 }
 
 impl Settings {
@@ -272,6 +275,7 @@ impl Settings {
             generation: 0,
             superuser,
             snapshot: false,
+            socket: None,
         }
     }
 
@@ -294,6 +298,20 @@ impl Settings {
     fn each_slot(&self) -> impl Iterator<Item = (&String, &Slot)> {
         let base = self.base.iter().filter(|(key, _)| !self.slots.contains_key(key.as_str()));
         self.slots.iter().chain(base)
+    }
+
+    /// Keeps the values that the system gave to the TCP options of the socket of the session, in the order of [`TcpOption::ALL`], for the show hooks of the TCP parameters.
+    pub fn set_socket(&mut self, values: [i32; 4]) {
+        self.socket = Some(values);
+    }
+
+    /// The values of the TCP parameters, in the order of [`TcpOption::ALL`]. 0 asks for the value of the system.
+    #[must_use]
+    pub fn tcp_values(&self) -> [i32; 4] {
+        TcpOption::ALL.map(|option| match find(option.parameter()).map(|p| self.setting(p)) {
+            Some(Setting::Int(value)) => value,
+            _ => 0,
+        })
     }
 
     /// Changes whether the session counts as a superuser for the parameters that only a superuser can set, after `SET ROLE` or `SET SESSION AUTHORIZATION` changes the current user.
@@ -816,6 +834,7 @@ impl Settings {
         let value = slot.map_or_else(|| parameter.boot(), |slot| slot.current.setting.clone());
         // `ShowGUCOption` without the units: a number in the base unit, unless a show hook gives the text.
         let setting = match value {
+            _ if tcp_index(parameter).is_some() => self.shown(parameter),
             Setting::Int(_) | Setting::Real(_) if !parameter.mode() => parameter.setting(&value),
             _ => self.shown(parameter),
         };
@@ -840,6 +859,9 @@ impl Settings {
 
     /// The value of a parameter as `SHOW` gives it, with the show hooks of PostgreSQL.
     fn shown(&self, parameter: &'static Parameter) -> String {
+        if let Some(index) = tcp_index(parameter) {
+            return self.tcp_shown(parameter, index);
+        }
         let value = parameter.show(&self.setting(parameter));
         match parameter.name {
             "archive_command" if self.get("archive_mode").as_deref() == Some("off") => {
@@ -847,6 +869,15 @@ impl Settings {
             }
             "timing_clock_source" if value == "auto" => "auto (system)".to_owned(),
             _ => value,
+        }
+    }
+
+    /// The show hooks of the TCP parameters, as `pq_getkeepalivesidle` and the others give the value: 0 for a Unix socket, the value of the parameter when it is not 0, and else the value that the system gave to the socket.
+    fn tcp_shown(&self, parameter: &'static Parameter, index: usize) -> String {
+        let Some(values) = self.socket else { return "0".to_owned() };
+        match self.setting(parameter) {
+            Setting::Int(value) if value != 0 => value.to_string(),
+            _ => values[index].to_string(),
         }
     }
 
@@ -878,6 +909,11 @@ impl Settings {
         }
         reports
     }
+}
+
+/// The place of a TCP parameter in [`TcpOption::ALL`], or `None` for another parameter.
+fn tcp_index(parameter: &Parameter) -> Option<usize> {
+    TcpOption::ALL.iter().position(|option| option.parameter() == parameter.name)
 }
 
 /// The check of a name that is not a parameter of PostgreSQL, for a placeholder: it needs a dot, the form of a custom name, and a prefix that is not reserved.
@@ -1071,6 +1107,18 @@ mod tests {
             flatten("extra_float_digits", &two).unwrap_err().message(),
             "SET extra_float_digits takes only one argument"
         );
+    }
+
+    #[test]
+    fn the_tcp_parameters_show_the_socket() {
+        let mut s = Settings::new(true);
+        assert_eq!(s.get("tcp_keepalives_idle").as_deref(), Some("0"), "no socket");
+        s.set_socket([7200, 75, 9, -1]);
+        assert_eq!(s.get("tcp_keepalives_idle").as_deref(), Some("7200"));
+        assert_eq!(s.get("tcp_user_timeout").as_deref(), Some("-1"));
+        s.set("tcp_keepalives_idle", Some("60"), Action::Set, Origin::Statement).unwrap();
+        assert_eq!(s.get("tcp_keepalives_idle").as_deref(), Some("60"));
+        assert_eq!(s.tcp_values(), [60, 0, 0, 0]);
     }
 
     #[test]

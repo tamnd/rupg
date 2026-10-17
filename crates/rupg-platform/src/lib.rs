@@ -24,6 +24,6 @@ pub use cpu::{CpuFeatures, CpuLevel, physical_memory};
 pub use entropy::Entropy;
 pub use io::{File, FileMode, Io, OpenMode};
 pub use memory::{MemoryPool, Reclaimer, Reservation};
-pub use net::{Listener, Net, Stream};
+pub use net::{Listener, Net, Stream, TcpOption};
 pub use region::Region;
 pub use tasks::{Join, Task, TaskHandle, Tasks};

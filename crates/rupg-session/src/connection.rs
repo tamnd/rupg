@@ -143,6 +143,27 @@ pub fn base_settings(args: &[(String, String)]) -> Result<Settings, Error> {
     Ok(settings)
 }
 
+/// `NUM_SPECIAL_WORKER_PROCS` of `proc.h`: the autovacuum launcher and the slot sync worker.
+const SPECIAL_WORKER_PROCS: i64 = 2;
+/// `NUM_AUXILIARY_PROCS` of `proc.h`: six auxiliary processes and `MAX_IO_WORKERS`, which is 32.
+const AUXILIARY_PROCS: i64 = 6 + 32;
+
+/// `InitializeShmemGUCs` for `num_os_semaphores`, after the configuration file: `ProcGlobalSemas`, which is one semaphore for each backend that `InitializeMaxBackends` counts and one for each auxiliary process. rupg uses no semaphores, but it gives the number that PostgreSQL uses. The sizes of the shared memory stay 0, because rupg does not have the shared memory of PostgreSQL.
+///
+/// # Errors
+///
+/// A value that the parameter does not take.
+pub fn semaphore_count(settings: &mut Settings) -> Result<(), Error> {
+    let get = |name: &str| settings.get(name).and_then(|v| v.parse::<i64>().ok()).unwrap_or(0);
+    let backends =
+        ["max_connections", "autovacuum_worker_slots", "max_worker_processes", "max_wal_senders"]
+            .into_iter()
+            .map(get)
+            .sum::<i64>()
+            + SPECIAL_WORKER_PROCS;
+    settings.set_internal("num_os_semaphores", &(backends + AUXILIARY_PROCS).to_string())
+}
+
 /// `pg_split_opts` and the switches of `process_postgres_switches` that set a parameter: the names and values of `-c name=value` and `--name=value` in the `options` of the startup packet. A backslash takes the next character as it is, also a space.
 ///
 /// # Errors
@@ -3705,6 +3726,14 @@ mod tests {
         let ascii =
             session_settings(&base, &start(None, &[("client_encoding", "sql_ascii")])).unwrap();
         assert_eq!(ascii.get("client_encoding").as_deref(), Some("SQL_ASCII"));
+    }
+
+    #[test]
+    fn the_semaphore_count() {
+        let mut settings = base_settings(&[("max_connections".into(), "20".into())]).unwrap();
+        semaphore_count(&mut settings).unwrap();
+        // 20 connections, 16 autovacuum workers, 8 workers, 10 WAL senders, 2 special workers and 38 auxiliary processes.
+        assert_eq!(settings.get("num_os_semaphores").as_deref(), Some("94"));
     }
 
     #[test]

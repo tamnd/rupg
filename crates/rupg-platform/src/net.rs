@@ -85,6 +85,22 @@ pub trait Stream: Read + Write + Send + fmt::Debug {
         Err(Error::internal("the connection is not a Unix socket"))
     }
 
+    /// The value of a TCP option of the socket, as `getsockopt` gives it. `None` for a socket that is not TCP, and for a system that does not have the option.
+    fn tcp_option(&self, option: TcpOption) -> Option<i32> {
+        let _ = option;
+        None
+    }
+
+    /// Sets a TCP option of the socket with `setsockopt`. The default does nothing.
+    ///
+    /// # Errors
+    ///
+    /// The system cannot set the option. The message is the text of the system.
+    fn set_tcp_option(&self, option: TcpOption, value: i32) -> Result<()> {
+        let _ = (option, value);
+        Ok(())
+    }
+
     /// Sets the longest time that a read waits for data. After that time the read gives an error of the kind `WouldBlock` or `TimedOut`. `None` waits with no limit. The default does nothing, so that a read waits with no limit.
     ///
     /// # Errors
@@ -93,5 +109,46 @@ pub trait Stream: Read + Write + Send + fmt::Debug {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
         let _ = timeout;
         Ok(())
+    }
+}
+
+/// A TCP option of a socket that a parameter of the session controls.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TcpOption {
+    /// `TCP_KEEPIDLE`, the parameter `tcp_keepalives_idle`, in seconds.
+    KeepalivesIdle,
+    /// `TCP_KEEPINTVL`, the parameter `tcp_keepalives_interval`, in seconds.
+    KeepalivesInterval,
+    /// `TCP_KEEPCNT`, the parameter `tcp_keepalives_count`.
+    KeepalivesCount,
+    /// `TCP_USER_TIMEOUT`, the parameter `tcp_user_timeout`, in milliseconds.
+    UserTimeout,
+}
+
+impl TcpOption {
+    /// All the options.
+    pub const ALL: [TcpOption; 4] =
+        [Self::KeepalivesIdle, Self::KeepalivesInterval, Self::KeepalivesCount, Self::UserTimeout];
+
+    /// The parameter of the session that controls the option.
+    #[must_use]
+    pub fn parameter(self) -> &'static str {
+        match self {
+            Self::KeepalivesIdle => "tcp_keepalives_idle",
+            Self::KeepalivesInterval => "tcp_keepalives_interval",
+            Self::KeepalivesCount => "tcp_keepalives_count",
+            Self::UserTimeout => "tcp_user_timeout",
+        }
+    }
+
+    /// The name of the option of the system, for the messages.
+    #[must_use]
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::KeepalivesIdle => "TCP_KEEPIDLE",
+            Self::KeepalivesInterval => "TCP_KEEPINTVL",
+            Self::KeepalivesCount => "TCP_KEEPCNT",
+            Self::UserTimeout => "TCP_USER_TIMEOUT",
+        }
     }
 }
