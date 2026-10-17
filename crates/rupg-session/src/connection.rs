@@ -2622,6 +2622,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/sqljson.test")));
     }
 
+    /// The SQL/JSON aggregates `JSON_OBJECTAGG` and `JSON_ARRAYAGG` and `JSON_ARRAY` with a subquery: `ABSENT ON NULL`, `WITH UNIQUE KEYS`, `FORMAT JSON`, `ORDER BY`, `FILTER`, `OVER`, the types of `RETURNING`, an empty input, the errors of keys, of nested calls and of a subquery with more than one column, and the text of views. `connection/sqljson_agg.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn sqljson_agg() {
+        big_stack(|| script(include_str!("connection/sqljson_agg.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {

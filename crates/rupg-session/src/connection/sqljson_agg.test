@@ -1,0 +1,299 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW t AS SELECT * FROM (VALUES (1, 'x', 10, 'g1', '{"a": 1}'), (2, 'y', NULL, 'g1', '[1, 2]'), (3, 'z', 30, 'g2', 'true'), (4, 'x', 40, 'g2', NULL)) AS v (a, k, v, g, j)
+CREATE VIEW
+> SELECT JSON_OBJECTAGG(k : v) FROM t
+fields json_objectagg:114:-1:-1
+row { "x" : 10, "y" : null, "z" : 30, "x" : 40 }
+SELECT 1
+> SELECT JSON_OBJECTAGG(k VALUE v) FROM t
+fields json_objectagg:114:-1:-1
+row { "x" : 10, "y" : null, "z" : 30, "x" : 40 }
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v ABSENT ON NULL) FROM t
+fields json_objectagg:114:-1:-1
+row { "x" : 10, "z" : 30, "x" : 40 }
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v NULL ON NULL RETURNING jsonb) FROM t
+fields json_objectagg:3802:-1:-1
+row {"x": 40, "y": null, "z": 30}
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v ABSENT ON NULL RETURNING jsonb) FROM t
+fields json_objectagg:3802:-1:-1
+row {"x": 40, "z": 30}
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v WITH UNIQUE KEYS) FROM t
+fields json_objectagg:114:-1:-1
+ERROR 22030 duplicate JSON object key value: "x"
+> SELECT JSON_OBJECTAGG(k : v WITH UNIQUE KEYS RETURNING jsonb) FROM t
+fields json_objectagg:3802:-1:-1
+ERROR 22030 duplicate JSON object key value
+> SELECT JSON_OBJECTAGG(k : v WITH UNIQUE KEYS) FROM t WHERE a < 4
+fields json_objectagg:114:-1:-1
+row { "x" : 10, "y" : null, "z" : 30 }
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v ABSENT ON NULL WITH UNIQUE KEYS RETURNING jsonb) FROM t WHERE a < 4
+fields json_objectagg:3802:-1:-1
+row {"x": 10, "z": 30}
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v RETURNING text) FROM t
+fields json_objectagg:25:-1:-1
+row { "x" : 10, "y" : null, "z" : 30, "x" : 40 }
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v RETURNING varchar(10)) FROM t
+fields json_objectagg:1043:-1:14
+ERROR 22001 value too long for type character varying(10)
+> SELECT JSON_OBJECTAGG(k : v RETURNING bytea) FROM t
+fields json_objectagg:17:-1:-1
+row \x7b20227822203a2031302c20227922203a206e756c6c2c20227a22203a2033302c20227822203a203430207d
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : j FORMAT JSON) FROM t
+fields json_objectagg:114:-1:-1
+row { "x" : {"a": 1}, "y" : [1, 2], "z" : true, "x" : null }
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : j::jsonb) FROM t
+fields json_objectagg:3802:-1:-1
+row {"x": null, "y": [1, 2], "z": true}
+SELECT 1
+> SELECT JSON_OBJECTAGG(NULL::text : v) FROM t
+fields json_objectagg:114:-1:-1
+ERROR 22004 null value not allowed for object key
+> SELECT JSON_OBJECTAGG(NULL::text : v RETURNING jsonb) FROM t
+fields json_objectagg:3802:-1:-1
+ERROR 22023 field name must not be null
+> SELECT JSON_OBJECTAGG(k : v) FROM t WHERE false
+fields json_objectagg:114:-1:-1
+row NULL
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v) FILTER (WHERE a > 1) FROM t
+fields json_objectagg:114:-1:-1
+row { "y" : null, "z" : 30, "x" : 40 }
+SELECT 1
+> SELECT JSON_OBJECTAGG(k : v ORDER BY a DESC) FROM t
+ERROR 42601 syntax error at or near "ORDER" at 29
+> SELECT a, JSON_OBJECTAGG(k : v) OVER (PARTITION BY g) FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_objectagg:114:-1:-1
+row 1,{ "x" : 10, "y" : null }
+row 2,{ "x" : 10, "y" : null }
+row 3,{ "z" : 30, "x" : 40 }
+row 4,{ "z" : 30, "x" : 40 }
+SELECT 4
+> SELECT a, JSON_OBJECTAGG(k : v) OVER (ORDER BY a) FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_objectagg:114:-1:-1
+row 1,{ "x" : 10 }
+row 2,{ "x" : 10, "y" : null }
+row 3,{ "x" : 10, "y" : null, "z" : 30 }
+row 4,{ "x" : 10, "y" : null, "z" : 30, "x" : 40 }
+SELECT 4
+> SELECT JSON_ARRAYAGG(v) FROM t
+fields json_arrayagg:114:-1:-1
+row [10, 30, 40]
+SELECT 1
+> SELECT JSON_ARRAYAGG(v NULL ON NULL) FROM t
+fields json_arrayagg:114:-1:-1
+row [10, null, 30, 40]
+SELECT 1
+> SELECT JSON_ARRAYAGG(v ABSENT ON NULL RETURNING jsonb) FROM t
+fields json_arrayagg:3802:-1:-1
+row [10, 30, 40]
+SELECT 1
+> SELECT JSON_ARRAYAGG(v NULL ON NULL RETURNING jsonb) FROM t
+fields json_arrayagg:3802:-1:-1
+row [10, null, 30, 40]
+SELECT 1
+> SELECT JSON_ARRAYAGG(v ORDER BY a DESC) FROM t
+fields json_arrayagg:114:-1:-1
+row [40, 30, 10]
+SELECT 1
+> SELECT JSON_ARRAYAGG(k ORDER BY k, a DESC) FROM t
+fields json_arrayagg:114:-1:-1
+row ["x", "x", "y", "z"]
+SELECT 1
+> SELECT JSON_ARRAYAGG(j FORMAT JSON) FROM t
+fields json_arrayagg:114:-1:-1
+row [{"a": 1}, [1, 2], true]
+SELECT 1
+> SELECT JSON_ARRAYAGG(j FORMAT JSON NULL ON NULL) FROM t
+fields json_arrayagg:114:-1:-1
+row [{"a": 1}, [1, 2], true, null]
+SELECT 1
+> SELECT JSON_ARRAYAGG(j::jsonb) FROM t
+fields json_arrayagg:3802:-1:-1
+row [{"a": 1}, [1, 2], true]
+SELECT 1
+> SELECT JSON_ARRAYAGG(v RETURNING text) FROM t
+fields json_arrayagg:25:-1:-1
+row [10, 30, 40]
+SELECT 1
+> SELECT JSON_ARRAYAGG(v RETURNING varchar(5)) FROM t
+fields json_arrayagg:1043:-1:9
+ERROR 22001 value too long for type character varying(5)
+> SELECT JSON_ARRAYAGG(v RETURNING int) FROM t
+ERROR 42846 cannot cast type json to integer
+> SELECT JSON_ARRAYAGG(a) FROM t WHERE false
+fields json_arrayagg:114:-1:-1
+row NULL
+SELECT 1
+> SELECT g, JSON_ARRAYAGG(a ORDER BY a DESC) FROM t GROUP BY g ORDER BY g
+fields g@t.4:25:-1:-1,json_arrayagg:114:-1:-1
+row g1,[2, 1]
+row g2,[4, 3]
+SELECT 2
+> SELECT JSON_ARRAYAGG(a) FILTER (WHERE v IS NOT NULL) FROM t
+fields json_arrayagg:114:-1:-1
+row [1, 3, 4]
+SELECT 1
+> SELECT a, JSON_ARRAYAGG(a) OVER (PARTITION BY g) FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_arrayagg:114:-1:-1
+row 1,[1, 2]
+row 2,[1, 2]
+row 3,[3, 4]
+row 4,[3, 4]
+SELECT 4
+> SELECT a, JSON_ARRAYAGG(v NULL ON NULL RETURNING jsonb) OVER w FROM t WINDOW w AS (ORDER BY a ROWS BETWEEN 1 PRECEDING AND CURRENT ROW) ORDER BY a
+fields a@t.1:23:4:-1,json_arrayagg:3802:-1:-1
+row 1,[10]
+row 2,[10, null]
+row 3,[null, 30]
+row 4,[30, 40]
+SELECT 4
+> SELECT a, JSON_ARRAYAGG(a ORDER BY a) OVER () FROM t
+ERROR 0A000 aggregate ORDER BY is not implemented for window functions at 11
+> SELECT JSON_ARRAYAGG(JSON_ARRAYAGG(a)) FROM t
+ERROR 42803 aggregate function calls cannot be nested at 22
+> SELECT JSON_ARRAYAGG(a) FROM t WHERE JSON_ARRAYAGG(a) IS NOT NULL
+ERROR 42803 aggregate functions are not allowed in WHERE at 38
+> SELECT JSON_ARRAYAGG(a), JSON_OBJECTAGG(k : a) FROM t
+fields json_arrayagg:114:-1:-1,json_objectagg:114:-1:-1
+row [1, 2, 3, 4],{ "x" : 1, "y" : 2, "z" : 3, "x" : 4 }
+SELECT 1
+> SELECT JSON_ARRAY(SELECT a FROM t ORDER BY a)
+fields json_array:114:-1:-1
+row [1, 2, 3, 4]
+SELECT 1
+> SELECT JSON_ARRAY(SELECT v FROM t ORDER BY a)
+fields json_array:114:-1:-1
+row [10, 30, 40]
+SELECT 1
+> SELECT JSON_ARRAY(SELECT v FROM t ORDER BY a NULL ON NULL)
+ERROR 42601 syntax error at or near "NULL" at 46
+> SELECT JSON_ARRAY(SELECT v FROM t ORDER BY a RETURNING jsonb)
+fields json_array:3802:-1:-1
+row [10, 30, 40]
+SELECT 1
+> SELECT JSON_ARRAY(SELECT j FROM t ORDER BY a FORMAT JSON)
+fields json_array:114:-1:-1
+row [{"a": 1}, [1, 2], true]
+SELECT 1
+> SELECT JSON_ARRAY(SELECT a FROM t WHERE false)
+fields json_array:114:-1:-1
+row []
+SELECT 1
+> SELECT JSON_ARRAY(SELECT a FROM t WHERE false RETURNING jsonb)
+fields json_array:3802:-1:-1
+row []
+SELECT 1
+> SELECT JSON_ARRAY(SELECT a FROM t WHERE false RETURNING text)
+fields json_array:25:-1:-1
+row []
+SELECT 1
+> SELECT JSON_ARRAY(SELECT a FROM t RETURNING varchar(5))
+fields json_array:1043:-1:9
+ERROR 22001 value too long for type character varying(5)
+> SELECT JSON_ARRAY(SELECT a FROM t WHERE a < 3 ORDER BY a RETURNING varchar(9))
+fields json_array:1043:-1:13
+row [1, 2]
+SELECT 1
+> SELECT JSON_ARRAY(SELECT a, k FROM t)
+ERROR 42601 subquery must return only one column at 8
+> SELECT JSON_ARRAY(SELECT FROM t)
+ERROR 42601 subquery must return only one column at 8
+> SELECT a, JSON_ARRAY(SELECT x.a FROM t AS x WHERE x.g = t.g ORDER BY x.a) FROM t ORDER BY a
+fields a@t.1:23:4:-1,json_array:114:-1:-1
+row 1,[1, 2]
+row 2,[1, 2]
+row 3,[3, 4]
+row 4,[3, 4]
+SELECT 4
+> SELECT JSON_ARRAY(SELECT * FROM (VALUES (1), (2)) AS q (a))
+fields json_array:114:-1:-1
+row [1, 2]
+SELECT 1
+> SELECT JSON_ARRAY(VALUES (1), (2))
+fields json_array:114:-1:-1
+row [1, 2]
+SELECT 1
+> CREATE VIEW v1 AS SELECT JSON_OBJECTAGG(k : v) AS c1, JSON_OBJECTAGG(k : v ABSENT ON NULL WITH UNIQUE KEYS RETURNING jsonb) AS c2, JSON_OBJECTAGG(k : j FORMAT JSON RETURNING text) FILTER (WHERE a > 1) AS c3, JSON_ARRAYAGG(v) AS c4, JSON_ARRAYAGG(v ORDER BY a DESC NULL ON NULL RETURNING jsonb) AS c5, JSON_ARRAYAGG(j FORMAT JSON) FILTER (WHERE a < 4) AS c6 FROM t WHERE a < 4
+CREATE VIEW
+> SELECT pg_get_viewdef('v1'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT JSON_OBJECTAGG(k : v RETURNING json) AS c1,
+    JSON_OBJECTAGG(k : v ABSENT ON NULL WITH UNIQUE KEYS RETURNING jsonb) AS c2,
+    JSON_OBJECTAGG(k : j FORMAT JSON RETURNING text) FILTER (WHERE (a > 1)) AS c3,
+    JSON_ARRAYAGG(v RETURNING json) AS c4,
+    JSON_ARRAYAGG(v ORDER BY a DESC NULL ON NULL RETURNING jsonb) AS c5,
+    JSON_ARRAYAGG(j FORMAT JSON RETURNING json) FILTER (WHERE (a < 4)) AS c6
+   FROM t
+  WHERE (a < 4);
+SELECT 1
+> SELECT c2, c5 FROM v1
+fields c2@v1.2:3802:-1:-1,c5@v1.5:3802:-1:-1
+row {"x": 10, "z": 30},[30, null, 10]
+SELECT 1
+> CREATE VIEW v2 AS SELECT a, JSON_OBJECTAGG(k : v) OVER (PARTITION BY g) AS c1, JSON_ARRAYAGG(a RETURNING jsonb) OVER w AS c2, JSON_ARRAYAGG(v NULL ON NULL) FILTER (WHERE a > 1) OVER w AS c3 FROM t WINDOW w AS (ORDER BY a)
+CREATE VIEW
+> SELECT pg_get_viewdef('v2'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    JSON_OBJECTAGG(k : v RETURNING json) OVER (PARTITION BY g) AS c1,
+    JSON_ARRAYAGG(a RETURNING jsonb) OVER w AS c2,
+    JSON_ARRAYAGG(v NULL ON NULL RETURNING json) FILTER (WHERE (a > 1)) OVER w AS c3
+   FROM t
+  WINDOW w AS (ORDER BY a);
+SELECT 1
+> SELECT * FROM v2 ORDER BY a
+fields a@v2.1:23:4:-1,c1@v2.2:114:-1:-1,c2@v2.3:3802:-1:-1,c3@v2.4:114:-1:-1
+row 1,{ "x" : 10, "y" : null },[1],NULL
+row 2,{ "x" : 10, "y" : null },[1, 2],[null]
+row 3,{ "z" : 30, "x" : 40 },[1, 2, 3],[null, 30]
+row 4,{ "z" : 30, "x" : 40 },[1, 2, 3, 4],[null, 30, 40]
+SELECT 4
+> CREATE VIEW v3 AS SELECT a, JSON_ARRAY(SELECT x.a FROM t AS x WHERE x.g = t.g ORDER BY x.a) AS c1, JSON_ARRAY(SELECT j FROM t ORDER BY a FORMAT JSON RETURNING jsonb) AS c2, JSON_ARRAY(SELECT k FROM t AS q WHERE false RETURNING varchar(9)) AS c3 FROM t
+CREATE VIEW
+> SELECT pg_get_viewdef('v3'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    JSON_ARRAY( SELECT x.a
+           FROM t x
+          WHERE (x.g = t.g)
+          ORDER BY x.a RETURNING json) AS c1,
+    JSON_ARRAY( SELECT t_1.j
+           FROM t t_1
+          ORDER BY t_1.a FORMAT JSON RETURNING jsonb) AS c2,
+    JSON_ARRAY( SELECT q.k
+           FROM t q
+          WHERE false RETURNING character varying(9)) AS c3
+   FROM t;
+SELECT 1
+> SELECT * FROM v3 ORDER BY a
+fields a@v3.1:23:4:-1,c1@v3.2:114:-1:-1,c2@v3.3:3802:-1:-1,c3@v3.4:1043:-1:13
+row 1,[1, 2],[{"a": 1}, [1, 2], true],[]
+row 2,[1, 2],[{"a": 1}, [1, 2], true],[]
+row 3,[3, 4],[{"a": 1}, [1, 2], true],[]
+row 4,[3, 4],[{"a": 1}, [1, 2], true],[]
+SELECT 4
+> CREATE VIEW v4 AS SELECT g, JSON_ARRAYAGG(a ORDER BY a DESC) AS c1, JSON_ARRAYAGG(k ORDER BY k NULL ON NULL RETURNING jsonb) AS c2 FROM t GROUP BY g
+CREATE VIEW
+> SELECT pg_get_viewdef('v4'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT g,
+    JSON_ARRAYAGG(a ORDER BY a DESC RETURNING json) AS c1,
+    JSON_ARRAYAGG(k ORDER BY k NULL ON NULL RETURNING jsonb) AS c2
+   FROM t
+  GROUP BY g;
+SELECT 1
+> SELECT * FROM v4 ORDER BY g
+fields g@v4.1:25:-1:-1,c1@v4.2:114:-1:-1,c2@v4.3:3802:-1:-1
+row g1,[2, 1],["x", "y"]
+row g2,[4, 3],["x", "z"]
+SELECT 2

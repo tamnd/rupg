@@ -285,6 +285,9 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
             ));
             write_format(c.returning.format, out);
             write_args(&c.args, out)?;
+            if c.func.is_some() {
+                return Err(Error::internal("a stored expression cannot have this node"));
+            }
             out.push_str(" :coercion ");
             match &c.coercion {
                 Some(coercion) => write_expr(coercion, out)?,
@@ -323,12 +326,15 @@ const ENCODINGS: [(JsonEncoding, &str); 4] = [
 ];
 
 /// The names of the SQL/JSON constructors.
-const CTOR_KINDS: [(JsonCtorKind, &str); 5] = [
+const CTOR_KINDS: [(JsonCtorKind, &str); 8] = [
     (JsonCtorKind::Object, "object"),
     (JsonCtorKind::Array, "array"),
     (JsonCtorKind::Parse, "parse"),
     (JsonCtorKind::Scalar, "scalar"),
     (JsonCtorKind::Serialize, "serialize"),
+    (JsonCtorKind::ObjectAgg, "objectagg"),
+    (JsonCtorKind::ArrayAgg, "arrayagg"),
+    (JsonCtorKind::ArrayQuery, "arrayquery"),
 ];
 
 /// The names of the kinds of `IS JSON`.
@@ -919,6 +925,8 @@ fn expr_of(item: &Item) -> Result<Expr> {
             ExprKind::JsonCtor(Box::new(JsonCtor {
                 kind: kind.0,
                 args: f.exprs("args")?,
+                func: None,
+                format: JsonFormat::default(),
                 returning,
                 unique: f.flag("unique")?,
                 absent_on_null: f.flag("absent")?,

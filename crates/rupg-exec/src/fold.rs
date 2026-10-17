@@ -2,10 +2,10 @@
 
 use rupg_analyze::{
     BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, IsJson, Join, JoinKind, JoinRow,
-    JsonCtor, JsonValue, NamedArg, Query, Relation, RowCompare, SubLink, SubLinkKind, Subscript,
-    Var,
+    JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation, RowCompare, SubLink, SubLinkKind,
+    Subscript, Var,
 };
-use rupg_common::Result;
+use rupg_common::{Error, Result};
 use rupg_func::Session;
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
@@ -393,6 +393,9 @@ impl<'a> Fold<'a> {
             }
             ExprKind::JsonCtor(c) => {
                 self.all(&mut c.args)?;
+                if let Some(func) = &mut c.func {
+                    self.subqueries(func)?;
+                }
                 match &mut c.coercion {
                     Some(coercion) => self.subqueries(coercion),
                     None => Ok(()),
@@ -583,9 +586,7 @@ impl<'a> Fold<'a> {
                 let mut ops = Vec::with_capacity(rc.ops.len());
                 for op in &rc.ops {
                     let ExprKind::Func(f) = &op.kind else {
-                        return Err(rupg_common::Error::internal(
-                            "a row comparison that is not an operator",
-                        ));
+                        return Err(Error::internal("a row comparison that is not an operator"));
                     };
                     let args = self.list(&f.args)?;
                     ops.push(with(op, ExprKind::Func(Func { args, ..f.clone() })));
@@ -660,13 +661,19 @@ impl<'a> Fold<'a> {
                 let v = JsonValue { raw, formatted, format: v.format };
                 Ok(with(expr, ExprKind::JsonValue(Box::new(v))))
             }
+            // `JSON_ARRAY` with a subquery is the expression that gives its value.
+            ExprKind::JsonCtor(c) if c.kind == JsonCtorKind::ArrayQuery => match &c.func {
+                Some(func) => self.expr(func),
+                None => Err(Error::internal("JSON_ARRAY with a subquery and no expression")),
+            },
             // The constructor is not folded. The `CaseTest` of the coercion is not the value of a `CASE` outside.
             ExprKind::JsonCtor(c) => {
                 let args = self.list(&c.args)?;
+                let func = c.func.as_ref().map(|e| self.expr(e)).transpose()?;
                 self.case.push(None);
                 let coercion = c.coercion.as_ref().map(|e| self.expr(e)).transpose();
                 self.case.pop();
-                let c = JsonCtor { args, coercion: coercion?, ..(**c).clone() };
+                let c = JsonCtor { args, func, coercion: coercion?, ..(**c).clone() };
                 Ok(with(expr, ExprKind::JsonCtor(Box::new(c))))
             }
             ExprKind::IsJson(p) => {
