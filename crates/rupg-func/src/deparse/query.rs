@@ -5,9 +5,9 @@
 use std::collections::HashMap;
 
 use rupg_analyze::{
-    Column, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING, FRAMEOPTION_START_OFFSET,
-    Frame, FromFunction, FromItem, GroupingSet, Join, JoinKind, JoinRow, NullTreatment, Query,
-    SetKind, SetOp, SetTree,
+    Column, Cte, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
+    FRAMEOPTION_START_OFFSET, Frame, FromFunction, FromItem, GroupingSet, Join, JoinKind, JoinRow,
+    NullTreatment, Query, SetKind, SetOp, SetTree,
 };
 use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
@@ -332,10 +332,40 @@ impl Deparser<'_> {
             self.query_def(&cte.query, None, true, self.indent)?;
             self.keyword("", 0, 0, 0);
             self.buf.push(')');
+            self.search_cycle(cte)?;
             sep = ", ";
         }
         self.indent -= INDENT_STD;
         self.keyword("", 0, 0, 0);
+        Ok(())
+    }
+
+    /// The `SEARCH` and `CYCLE` clauses of a query of `WITH`. `CYCLE` shows `TO` and `DEFAULT` unless the marks are `true` and `false`.
+    fn search_cycle(&mut self, cte: &Cte) -> Result<()> {
+        let names = |list: &[String]| -> String {
+            list.iter().map(|n| quote_identifier(n)).collect::<Vec<_>>().join(", ")
+        };
+        if let Some(s) = &cte.search {
+            let order = if s.breadth { "BREADTH" } else { "DEPTH" };
+            let columns = names(&s.columns);
+            let seq = quote_identifier(&s.seq);
+            self.buf.push_str(&format!(" SEARCH {order} FIRST BY {columns} SET {seq}"));
+        }
+        if let Some(c) = &cte.cycle {
+            let columns = names(&c.columns);
+            let mark = quote_identifier(&c.mark);
+            self.buf.push_str(&format!(" CYCLE {columns} SET {mark}"));
+            let plain = matches!(c.value.kind, ExprKind::Const(Value::Bool(true)))
+                && matches!(c.default.kind, ExprKind::Const(Value::Bool(false)))
+                && c.ty == oid::BOOL;
+            if !plain {
+                self.buf.push_str(" TO ");
+                self.expr(&c.value, false)?;
+                self.buf.push_str(" DEFAULT ");
+                self.expr(&c.default, false)?;
+            }
+            self.buf.push_str(&format!(" USING {}", quote_identifier(&c.path)));
+        }
         Ok(())
     }
 
