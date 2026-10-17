@@ -1,0 +1,291 @@
+> CREATE TABLE t (a int, b text)
+CREATE TABLE
+> CREATE TABLE u (a int, c text)
+CREATE TABLE
+> CREATE VIEW v AS SELECT a, b FROM t
+CREATE VIEW
+> CREATE RULE r1 AS ON UPDATE TO t DO INSTEAD NOTHING
+CREATE RULE
+> CREATE RULE r2 AS ON INSERT TO t WHERE new.a > 0 DO ALSO SELECT new.a, new.b
+CREATE RULE
+> CREATE RULE r3 AS ON DELETE TO t DO (SELECT old.a; SELECT * FROM u WHERE u.a = old.a)
+CREATE RULE
+> CREATE RULE r4 AS ON UPDATE TO v WHERE old.a <> new.a DO INSTEAD SELECT u.c FROM u WHERE u.a = new.a
+CREATE RULE
+> CREATE RULE "Upper" AS ON DELETE TO v DO INSTEAD NOTHING
+CREATE RULE
+> SELECT pg_get_ruledef(oid), pg_get_ruledef(oid, true) FROM pg_rewrite WHERE ev_class IN ('t'::regclass, 'v'::regclass) ORDER BY rulename
+fields pg_get_ruledef:25:-1:-1,pg_get_ruledef:25:-1:-1
+row CREATE RULE "Upper" AS
+    ON DELETE TO public.v DO INSTEAD NOTHING;,CREATE RULE "Upper" AS
+    ON DELETE TO v DO INSTEAD NOTHING;
+row CREATE RULE "_RETURN" AS
+    ON SELECT TO public.v DO INSTEAD  SELECT a,
+    b
+   FROM t;,CREATE RULE "_RETURN" AS
+    ON SELECT TO v DO INSTEAD  SELECT a,
+    b
+   FROM t;
+row CREATE RULE r1 AS
+    ON UPDATE TO public.t DO INSTEAD NOTHING;,CREATE RULE r1 AS
+    ON UPDATE TO t DO INSTEAD NOTHING;
+row CREATE RULE r2 AS
+    ON INSERT TO public.t
+   WHERE (new.a > 0) DO  SELECT new.a,
+    new.b;,CREATE RULE r2 AS
+    ON INSERT TO t
+   WHERE new.a > 0 DO  SELECT new.a,
+    new.b;
+row CREATE RULE r3 AS
+    ON DELETE TO public.t DO ( SELECT old.a;
+ SELECT u.a,
+    u.c
+   FROM u
+  WHERE (u.a = old.a);
+);,CREATE RULE r3 AS
+    ON DELETE TO t DO ( SELECT old.a;
+ SELECT u.a,
+    u.c
+   FROM u
+  WHERE u.a = old.a;
+);
+row CREATE RULE r4 AS
+    ON UPDATE TO public.v
+   WHERE (old.a <> new.a) DO INSTEAD  SELECT u.c
+   FROM u
+  WHERE (u.a = new.a);,CREATE RULE r4 AS
+    ON UPDATE TO v
+   WHERE old.a <> new.a DO INSTEAD  SELECT u.c
+   FROM u
+  WHERE u.a = new.a;
+SELECT 6
+> SELECT rulename, ev_class::regclass, ev_type, ev_enabled, is_instead, ev_qual = '<>' AS noqual FROM pg_rewrite WHERE ev_class IN ('t'::regclass, 'v'::regclass) ORDER BY rulename
+fields rulename@pg_rewrite.2:19:64:-1,ev_class:2205:4:-1,ev_type@pg_rewrite.4:18:1:-1,ev_enabled@pg_rewrite.5:18:1:-1,is_instead@pg_rewrite.6:16:1:-1,noqual:16:1:-1
+row Upper,v,4,O,t,t
+row _RETURN,v,1,O,t,t
+row r1,t,2,O,t,t
+row r2,t,3,O,f,f
+row r3,t,4,O,f,t
+row r4,v,2,O,t,f
+SELECT 6
+> SELECT schemaname, tablename, rulename, definition FROM pg_rules WHERE schemaname = 'public' ORDER BY rulename
+fields schemaname@pg_rules.1:19:64:-1,tablename@pg_rules.2:19:64:-1,rulename@pg_rules.3:19:64:-1,definition@pg_rules.4:25:-1:-1
+row public,v,Upper,CREATE RULE "Upper" AS
+    ON DELETE TO public.v DO INSTEAD NOTHING;
+row public,t,r1,CREATE RULE r1 AS
+    ON UPDATE TO public.t DO INSTEAD NOTHING;
+row public,t,r2,CREATE RULE r2 AS
+    ON INSERT TO public.t
+   WHERE (new.a > 0) DO  SELECT new.a,
+    new.b;
+row public,t,r3,CREATE RULE r3 AS
+    ON DELETE TO public.t DO ( SELECT old.a;
+ SELECT u.a,
+    u.c
+   FROM u
+  WHERE (u.a = old.a);
+);
+row public,v,r4,CREATE RULE r4 AS
+    ON UPDATE TO public.v
+   WHERE (old.a <> new.a) DO INSTEAD  SELECT u.c
+   FROM u
+  WHERE (u.a = new.a);
+SELECT 5
+> SELECT r.rulename, d.refobjid::regclass, d.refobjsubid, d.deptype FROM pg_depend d JOIN pg_rewrite r ON d.objid = r.oid WHERE d.classid = 'pg_rewrite'::regclass AND r.ev_class IN ('t'::regclass, 'v'::regclass) ORDER BY r.rulename, d.refobjid::regclass::text, d.refobjsubid, d.deptype
+fields rulename@pg_rewrite.2:19:64:-1,refobjid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row Upper,v,0,a
+row Upper,v,0,n
+row _RETURN,t,1,n
+row _RETURN,t,2,n
+row _RETURN,v,0,i
+row r1,t,0,a
+row r1,t,0,n
+row r2,t,0,a
+row r2,t,1,n
+row r2,t,1,n
+row r2,t,2,n
+row r3,t,0,a
+row r3,t,1,n
+row r3,u,1,n
+row r3,u,2,n
+row r4,u,1,n
+row r4,u,2,n
+row r4,v,0,a
+row r4,v,1,n
+row r4,v,1,n
+SELECT 20
+> SELECT relname, relhasrules FROM pg_class WHERE relname IN ('t', 'u', 'v') ORDER BY relname
+fields relname@pg_class.2:19:64:-1,relhasrules@pg_class.21:16:1:-1
+row t,t
+row u,f
+row v,t
+SELECT 3
+> SELECT pg_relation_is_updatable('v'::regclass, false), pg_relation_is_updatable('t'::regclass, false)
+fields pg_relation_is_updatable:23:4:-1,pg_relation_is_updatable:23:4:-1
+row 28,28
+SELECT 1
+> SELECT oid, rulename, ev_type, ev_enabled, is_instead, ev_qual = '<>' AS noqual FROM pg_rewrite WHERE ev_class = 'pg_settings'::regclass ORDER BY oid
+fields oid@pg_rewrite.1:26:4:-1,rulename@pg_rewrite.2:19:64:-1,ev_type@pg_rewrite.4:18:1:-1,ev_enabled@pg_rewrite.5:18:1:-1,is_instead@pg_rewrite.6:16:1:-1,noqual:16:1:-1
+row 12113,_RETURN,1,O,t,t
+row 12114,pg_settings_u,2,O,f,f
+row 12115,pg_settings_n,2,O,t,t
+SELECT 3
+> SELECT pg_get_ruledef(oid), pg_get_ruledef(oid, true) FROM pg_rewrite WHERE ev_class = 'pg_settings'::regclass ORDER BY oid
+fields pg_get_ruledef:25:-1:-1,pg_get_ruledef:25:-1:-1
+row CREATE RULE "_RETURN" AS
+    ON SELECT TO pg_catalog.pg_settings DO INSTEAD  SELECT name,
+    setting,
+    unit,
+    category,
+    short_desc,
+    extra_desc,
+    context,
+    vartype,
+    source,
+    min_val,
+    max_val,
+    enumvals,
+    boot_val,
+    reset_val,
+    sourcefile,
+    sourceline,
+    pending_restart
+   FROM pg_show_all_settings() a(name, setting, unit, category, short_desc, extra_desc, context, vartype, source, min_val, max_val, enumvals, boot_val, reset_val, sourcefile, sourceline, pending_restart);,CREATE RULE "_RETURN" AS
+    ON SELECT TO pg_settings DO INSTEAD  SELECT name,
+    setting,
+    unit,
+    category,
+    short_desc,
+    extra_desc,
+    context,
+    vartype,
+    source,
+    min_val,
+    max_val,
+    enumvals,
+    boot_val,
+    reset_val,
+    sourcefile,
+    sourceline,
+    pending_restart
+   FROM pg_show_all_settings() a(name, setting, unit, category, short_desc, extra_desc, context, vartype, source, min_val, max_val, enumvals, boot_val, reset_val, sourcefile, sourceline, pending_restart);
+row CREATE RULE pg_settings_u AS
+    ON UPDATE TO pg_catalog.pg_settings
+   WHERE (new.name = old.name) DO  SELECT set_config(old.name, new.setting, false) AS set_config;,CREATE RULE pg_settings_u AS
+    ON UPDATE TO pg_settings
+   WHERE new.name = old.name DO  SELECT set_config(old.name, new.setting, false) AS set_config;
+row CREATE RULE pg_settings_n AS
+    ON UPDATE TO pg_catalog.pg_settings DO INSTEAD NOTHING;,CREATE RULE pg_settings_n AS
+    ON UPDATE TO pg_settings DO INSTEAD NOTHING;
+SELECT 3
+> SELECT objid, refobjid::regclass, refobjsubid, deptype FROM pg_depend WHERE classid = 'pg_rewrite'::regclass AND objid IN (12114, 12115) ORDER BY objid, refobjsubid, deptype
+fields objid@pg_depend.2:26:4:-1,refobjid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row 12114,pg_settings,0,a
+row 12114,pg_settings,1,n
+row 12114,pg_settings,1,n
+row 12114,pg_settings,2,n
+row 12115,pg_settings,0,a
+row 12115,pg_settings,0,n
+SELECT 6
+> SELECT pg_relation_is_updatable('pg_settings'::regclass, false), relhasrules FROM pg_class WHERE oid = 'pg_settings'::regclass
+fields pg_relation_is_updatable:23:4:-1,relhasrules@pg_class.21:16:1:-1
+row 4,t
+SELECT 1
+> CREATE RULE r1 AS ON UPDATE TO t DO INSTEAD NOTHING
+ERROR 42710 rule "r1" for relation "t" already exists
+> CREATE OR REPLACE RULE r1 AS ON UPDATE TO t WHERE old.a = 1 DO ALSO SELECT old.b
+CREATE RULE
+> SELECT pg_get_ruledef(oid) FROM pg_rewrite WHERE rulename = 'r1'
+fields pg_get_ruledef:25:-1:-1
+row CREATE RULE r1 AS
+    ON UPDATE TO public.t
+   WHERE (old.a = 1) DO  SELECT old.b;
+SELECT 1
+> CREATE RULE "_RETURN" AS ON UPDATE TO t DO INSTEAD NOTHING
+ERROR 42P17 non-view rule for "t" must not be named "_RETURN"
+> CREATE RULE x AS ON SELECT TO t DO INSTEAD SELECT 1
+ERROR 42809 relation "t" cannot have ON SELECT rules
+> CREATE RULE x AS ON SELECT TO v DO INSTEAD SELECT 1 AS a, 'x'::text AS b
+ERROR 55000 "v" is already a view
+> CREATE RULE x AS ON SELECT TO v DO INSTEAD SELECT 1 AS z, 'x'::text AS b
+ERROR 42P17 SELECT rule's target entry 1 has different column name from column "a"
+> CREATE RULE x AS ON SELECT TO v DO INSTEAD SELECT 1 AS a
+ERROR 42P17 SELECT rule's target list has too few entries
+> CREATE RULE x AS ON SELECT TO v DO INSTEAD SELECT 1 AS a, 'x'::text AS b, 2 AS c
+ERROR 42P17 SELECT rule's target list has too many entries
+> CREATE RULE x AS ON SELECT TO v DO INSTEAD SELECT 'x'::text AS a, 'x'::text AS b
+ERROR 42P17 SELECT rule's target entry 1 has different type from column "a"
+> CREATE RULE x AS ON SELECT TO v DO ALSO SELECT 1 AS a, 'x'::text AS b
+ERROR 0A000 rules on SELECT must have action INSTEAD SELECT
+> CREATE RULE x AS ON SELECT TO v DO INSTEAD NOTHING
+ERROR 0A000 rules on SELECT must have action INSTEAD SELECT
+> CREATE RULE x AS ON SELECT TO v WHERE true DO INSTEAD SELECT 1 AS a, 'x'::text AS b
+ERROR 0A000 event qualifications are not implemented for rules on SELECT
+> CREATE RULE x AS ON INSERT TO t DO ALSO SELECT old.a
+ERROR 42P17 ON INSERT rule cannot use OLD
+> CREATE RULE x AS ON DELETE TO t DO ALSO SELECT new.a
+ERROR 42P17 ON DELETE rule cannot use NEW
+> CREATE RULE x AS ON UPDATE TO t DO ALSO WITH w AS (SELECT old.a) SELECT * FROM w
+ERROR 0A000 cannot refer to OLD within WITH query
+> CREATE RULE x AS ON UPDATE TO t WHERE a = 1 DO NOTHING
+ERROR 42702 column reference "a" is ambiguous at 39
+> CREATE RULE x AS ON INSERT TO t WHERE a = 1 DO NOTHING
+CREATE RULE
+> CREATE RULE x AS ON UPDATE TO t WHERE new.a DO NOTHING
+ERROR 42804 argument of WHERE must be type boolean, not type integer at 39
+> CREATE RULE x AS ON UPDATE TO t DO SELECT a
+ERROR 42703 column "a" does not exist at 43
+> CREATE RULE x AS ON UPDATE TO nosuch DO NOTHING
+ERROR 42P01 relation "nosuch" does not exist
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> CREATE RULE x AS ON UPDATE TO s DO NOTHING
+ERROR 42809 relation "s" cannot have rules
+> CREATE RULE x AS ON UPDATE TO pg_class DO NOTHING
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> CREATE RULE x AS ON UPDATE TO t WHERE old.a = 1 DO ALSO (SELECT 1 UNION SELECT 2)
+ERROR 0A000 conditional UNION/INTERSECT/EXCEPT statements are not implemented
+> DROP RULE nosuch ON t
+ERROR 42704 rule "nosuch" for relation "t" does not exist
+> DROP RULE IF EXISTS nosuch ON t
+NOTICE 00000 rule "nosuch" for relation "t" does not exist, skipping
+DROP RULE
+> DROP RULE IF EXISTS nosuch ON nosuch
+NOTICE 00000 relation "nosuch" does not exist, skipping
+DROP RULE
+> DROP RULE nosuch ON nosuch
+ERROR 42P01 relation "nosuch" does not exist
+> DROP RULE IF EXISTS nosuch ON nosch.t
+NOTICE 00000 schema "nosch" does not exist, skipping
+DROP RULE
+> DROP RULE "_RETURN" ON v
+ERROR 2BP01 cannot drop rule _RETURN on view v because view v requires it
+> DROP RULE r2 ON t
+DROP RULE
+> SELECT rulename FROM pg_rewrite WHERE ev_class = 't'::regclass ORDER BY rulename
+fields rulename@pg_rewrite.2:19:64:-1
+row r1
+row r3
+row x
+SELECT 3
+> DROP RULE r3 ON public.t
+DROP RULE
+> DROP RULE r1 ON t
+DROP RULE
+> SELECT relname, relhasrules FROM pg_class WHERE relname IN ('t', 'v') ORDER BY relname
+fields relname@pg_class.2:19:64:-1,relhasrules@pg_class.21:16:1:-1
+row t,t
+row v,t
+SELECT 2
+> DROP TABLE u
+ERROR 2BP01 cannot drop table u because other objects depend on it
+> DROP VIEW v
+DROP VIEW
+> SELECT count(*) FROM pg_rewrite WHERE rulename IN ('r4', 'Upper')
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_depend WHERE classid = 'pg_rewrite'::regclass AND objid >= 16384
+fields count:20:8:-1
+row 3
+SELECT 1

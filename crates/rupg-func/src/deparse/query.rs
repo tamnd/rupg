@@ -1748,14 +1748,16 @@ pub(super) fn get_viewdef_name(call: &Call<'_>, args: &[Value]) -> Result<Value>
     viewdef(oid, paren, wrap, call.session)
 }
 
-/// `pg_get_ruledef(oid)` and `pg_get_ruledef(oid, bool)`: the `CREATE RULE` statement of a rule, as `make_ruledef` makes it, or null when no rule has the OID. The only rules of rupg are the `_RETURN` rules of the views, which are `ON SELECT DO INSTEAD` with the query of the view.
+/// `pg_get_ruledef(oid)` and `pg_get_ruledef(oid, bool)`: the `CREATE RULE` statement of a rule, as `make_ruledef` makes it, or null when no rule has the OID. The `_RETURN` rule of a view is `ON SELECT DO INSTEAD` with the query of the view.
 pub(super) fn get_ruledef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
     let pretty = pretty_arg(args, 1)?;
-    let view = call.session.catalog().and_then(|c| {
-        c.relations().find(|r| r.view.as_ref().is_some_and(|v| v.rule == oid)).map(|r| r.oid)
-    });
-    let Some(view) = view else { return Ok(Value::Null) };
+    let Some(catalog) = call.session.catalog() else { return Ok(Value::Null) };
+    if let Some(rule) = catalog.rule(oid) {
+        return ruledef(rule, pretty, call.session).map(Value::Text);
+    }
+    let view = catalog.relations().find(|r| r.view.as_ref().is_some_and(|v| v.rule == oid));
+    let Some(view) = view.map(|r| r.oid) else { return Ok(Value::Null) };
     let Value::Text(query) = viewdef(view, pretty, 0, call.session)? else {
         return Ok(Value::Null);
     };
@@ -1766,4 +1768,56 @@ pub(super) fn get_ruledef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     };
     let rule = quote_identifier("_RETURN");
     Ok(Value::Text(format!("CREATE RULE {rule} AS\n    ON SELECT TO {name} DO INSTEAD {query}")))
+}
+
+/// `make_ruledef` for a rule of `CREATE RULE`. The condition reads the names of the first action, and `DO INSTEAD NOTHING` has the query of `NOTHING` as its action.
+fn ruledef(rule: &rupg_catalog::Rule, pretty: bool, session: &dyn Session) -> Result<String> {
+    let env = reg::SessionEnv(session);
+    let tree = rupg_analyze::rule_tree(&env, rule.oid)?
+        .ok_or_else(|| Error::internal(format!("cache lookup failed for rule {}", rule.oid)))?;
+    let event = match rule.event {
+        b'1' => "SELECT",
+        b'2' => "UPDATE",
+        b'3' => "INSERT",
+        _ => "DELETE",
+    };
+    let name = if pretty {
+        relation_name(rule.relation, session)?
+    } else {
+        qualified_relation_name(rule.relation, session)?
+    };
+    let mut d = Deparser::new(session, pretty, 0);
+    d.buf = format!("CREATE RULE {} AS\n    ON {event} TO {name}", quote_identifier(&rule.name));
+    if let Some(qual) = &tree.qual {
+        d.buf.push_str("\n   WHERE ");
+        let context = tree.actions.first().unwrap_or(&tree.base);
+        let space = d.namespace(context);
+        d.prefix = context.relations.len() != 1;
+        d.indent = INDENT_STD;
+        d.namespaces.push(space);
+        d.expr(qual, false)?;
+        d.namespaces.pop();
+        d.indent = 0;
+        d.prefix = false;
+    }
+    d.buf.push_str(" DO ");
+    if rule.instead {
+        d.buf.push_str("INSTEAD ");
+    }
+    match tree.actions.as_slice() {
+        [] => d.buf.push_str("NOTHING;"),
+        [action] => {
+            d.query_def(action, None, true, 0)?;
+            d.buf.push(';');
+        }
+        actions => {
+            d.buf.push('(');
+            for action in actions {
+                d.query_def(action, None, true, 0)?;
+                d.buf.push_str(";\n");
+            }
+            d.buf.push_str(");");
+        }
+    }
+    Ok(d.buf)
 }

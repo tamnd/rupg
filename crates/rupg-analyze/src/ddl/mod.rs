@@ -1,4 +1,4 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH` and `ALTER TEXT SEARCH CONFIGURATION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner` and the functions of `tsearchcmds.c` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`, so [`is_definition`] does not list it. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH` and `ALTER TEXT SEARCH CONFIGURATION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner` and the functions of `tsearchcmds.c` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`, so [`is_definition`] does not list it. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
 mod comment;
@@ -11,6 +11,7 @@ mod function;
 mod index;
 mod lock;
 mod rangetype;
+mod rule;
 mod sequence;
 mod table;
 #[cfg(test)]
@@ -22,6 +23,7 @@ pub use copy::{CopyRelation, CopyTarget, attnums, copy_relation, copy_target};
 pub use function::{Body, function_body};
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, lock_table};
+pub use rule::{RuleTree, rule_tree};
 pub(crate) use table::check_attribute_type;
 
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
@@ -68,6 +70,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateEnumStmt(_)
             | Node::CreateRangeStmt(_)
             | Node::ViewStmt(_)
+            | Node::RuleStmt(_)
             | Node::CommentStmt(_)
             | Node::CreateSeqStmt(_)
             | Node::AlterSeqStmt(_)
@@ -102,6 +105,7 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_SCHEMA
             | ObjectType::OBJECT_TYPE
             | ObjectType::OBJECT_DOMAIN
+            | ObjectType::OBJECT_RULE
             | ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE
@@ -123,6 +127,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::IndexStmt(index) => definer.create_index(index, false),
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
         Node::ViewStmt(view) => definer.create_view(view, text),
+        Node::RuleStmt(rule) => definer.create_rule(rule, text),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CompositeTypeStmt(stmt) => definer.create_composite_type(stmt),
         Node::CreateEnumStmt(stmt) => definer.create_enum(stmt),

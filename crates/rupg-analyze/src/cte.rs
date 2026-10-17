@@ -563,7 +563,8 @@ impl Analyzer<'_> {
             self.works += 1;
         }
         self.parent_cte = Some(slot);
-        let query = self.sub_select(stmt, false);
+        // The query sees the namespace of this query, as `parse_sub_analyze` with no `p_lateral_only`. The namespace is empty before `FROM`, except for `old` and `new` of a rule action.
+        let query = self.sub_select(stmt, true);
         self.parent_cte = None;
         let query = query?;
         let item = &self.scope.ctes[slot];

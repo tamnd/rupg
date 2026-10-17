@@ -242,7 +242,7 @@ pub(super) fn function_references(query: &Query) -> Vec<ObjRef> {
 }
 
 /// `find_expr_references_walker` for the query of a view: each relation of the query, each column that the query reads, each function that the query calls, and the relation or the type of each `regclass` or `regtype` constant, also in the subqueries and in the queries of `WITH`. A relation that reads a query of `WITH` has a copy of the query, which does not count, so a query of `WITH` that no part of the query reads also counts, as in PostgreSQL. `outer` holds the queries outside `query`, from the nearest. A view in the query is one relation, and the query of the view does not count.
-fn query_references(query: &Query, outer: &[&Query], refs: &mut Vec<ObjRef>) {
+pub(super) fn query_references(query: &Query, outer: &[&Query], refs: &mut Vec<ObjRef>) {
     let mut levels = vec![query];
     levels.extend_from_slice(outer);
     for relation in &query.relations {
@@ -263,7 +263,7 @@ fn query_references(query: &Query, outer: &[&Query], refs: &mut Vec<ObjRef>) {
 }
 
 /// The references of an expression of the first query of `levels`. A column of the whole row has no reference.
-fn expr_references(expr: &Expr, levels: &[&Query], refs: &mut Vec<ObjRef>) {
+pub(super) fn expr_references(expr: &Expr, levels: &[&Query], refs: &mut Vec<ObjRef>) {
     match (&expr.kind, expr.ty) {
         (ExprKind::Var(var), _) if var.attnum != 0 => {
             let relation = levels.get(var.levels_up).and_then(|q| q.relations.get(var.relation));

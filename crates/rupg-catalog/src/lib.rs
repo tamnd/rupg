@@ -578,6 +578,48 @@ pub struct Trigger {
     pub deferred: bool,
 }
 
+/// A rule of `CREATE RULE`, one row of `pg_rewrite`. The `_RETURN` rule of a view is part of [`ViewInfo`], not a [`Rule`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Rule {
+    /// The OID.
+    pub oid: u32,
+    /// The name.
+    pub name: String,
+    /// The OID of the relation of the rule.
+    pub relation: u32,
+    /// `ev_type`: the event, from `1` for `SELECT` to `4` for `DELETE`.
+    pub event: u8,
+    /// `is_instead`: true for `DO INSTEAD`.
+    pub instead: bool,
+    /// `ev_enabled`: `O` when the rule fires in the origin mode.
+    pub enabled: u8,
+    /// True when the rule has a condition of `WHERE`.
+    pub qualified: bool,
+    /// The text of the statement that made the rule or that last replaced it. Only the analyzer reads it back.
+    pub text: String,
+    /// The schemas of `search_path` when that statement ran, in order.
+    pub path: Vec<u32>,
+}
+
+/// The facts of a new rule for [`Catalog::create_rule`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct NewRule {
+    /// The name.
+    pub name: String,
+    /// The OID of the relation.
+    pub relation: u32,
+    /// `ev_type`.
+    pub event: u8,
+    /// `is_instead`.
+    pub instead: bool,
+    /// True when the rule has a condition of `WHERE`.
+    pub qualified: bool,
+    /// The text of the statement.
+    pub text: String,
+    /// The schemas of `search_path`.
+    pub path: Vec<u32>,
+}
+
 /// An object as `pg_depend` names it: the OID of its catalog, its OID and a column number or 0.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
 pub struct ObjRef {
@@ -814,6 +856,7 @@ pub struct Catalog {
     languages: BTreeMap<u32, Language>,
     extensions: BTreeMap<u32, Extension>,
     triggers: BTreeMap<u32, Trigger>,
+    rules: BTreeMap<u32, Rule>,
     ts_templates: BTreeMap<u32, TsTemplate>,
     ts_parsers: BTreeMap<u32, TsParser>,
     ts_dictionaries: BTreeMap<u32, TsDictionary>,
@@ -870,6 +913,7 @@ impl Catalog {
             languages: BTreeMap::new(),
             extensions: BTreeMap::new(),
             triggers: BTreeMap::new(),
+            rules: BTreeMap::new(),
             ts_templates: BTreeMap::new(),
             ts_parsers: BTreeMap::new(),
             ts_dictionaries: BTreeMap::new(),
@@ -1014,6 +1058,21 @@ impl Catalog {
     /// The trigger with the OID.
     pub fn trigger(&self, oid: u32) -> Option<&Trigger> {
         self.triggers.get(&oid)
+    }
+
+    /// The rules in the order of their OIDs.
+    pub fn rules(&self) -> impl Iterator<Item = &Rule> {
+        self.rules.values()
+    }
+
+    /// The rule with the OID.
+    pub fn rule(&self, oid: u32) -> Option<&Rule> {
+        self.rules.get(&oid)
+    }
+
+    /// The rule of a relation with the name.
+    pub fn rule_by_name(&self, relation: u32, name: &str) -> Option<&Rule> {
+        self.rules.values().find(|r| r.relation == relation && r.name == name)
     }
 
     /// The check constraints of a domain.
@@ -1318,10 +1377,52 @@ impl Catalog {
         Ok(())
     }
 
+    /// `InsertRule`: a new rule, or with `replace` new facts for the rule of the relation with the same name. A replaced rule keeps its OID and `ev_enabled`, and gets new dependencies. The rule depends on its relation, then on the objects that the actions read, then on the objects that the condition reads. The result is the OID of the rule.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the relation has a rule with the name and `replace` is false.
+    pub fn create_rule(
+        &mut self,
+        new: NewRule,
+        replace: bool,
+        actions: &[ObjRef],
+        qual: &[ObjRef],
+    ) -> Result<u32> {
+        let old = self.rule_by_name(new.relation, &new.name).map(|r| r.oid);
+        let oid = match old {
+            Some(_) if !replace => {
+                let relation = self.relation(new.relation).map_or("", |r| r.name.as_str());
+                return Err(Error::new(
+                    SqlState::DUPLICATE_OBJECT,
+                    format!("rule \"{}\" for relation \"{relation}\" already exists", new.name),
+                ));
+            }
+            Some(oid) => oid,
+            None => self.new_oid(),
+        };
+        let enabled = self.rules.get(&oid).map_or(b'O', |r| r.enabled);
+        let object = ObjRef::new(PG_REWRITE, oid);
+        self.depends.retain(|d| d.object != object);
+        let kind = if new.event == b'1' { DepKind::Internal } else { DepKind::Auto };
+        self.depend(object, ObjRef::new(PG_CLASS, new.relation), kind);
+        self.depend_refs(object, actions);
+        self.depend_refs(object, qual);
+        let NewRule { name, relation, event, instead, qualified, text, path } = new;
+        let rule = Rule { oid, name, relation, event, instead, enabled, qualified, text, path };
+        self.rules.insert(oid, rule);
+        Ok(oid)
+    }
+
     /// The dependencies of the `_RETURN` rule of a view, as `InsertRule` and `recordDependencyOnExpr` record them. The rule is part of the view, and it depends on each object that the query reads. The objects come in the order of `eliminate_duplicate_dependencies`, from the highest OID down, and a column takes the place of its whole relation.
     fn depend_rule(&mut self, rule: u32, view: u32, refs: &[ObjRef]) {
         let object = ObjRef::new(PG_REWRITE, rule);
         self.depend(object, ObjRef::new(PG_CLASS, view), DepKind::Internal);
+        self.depend_refs(object, refs);
+    }
+
+    /// `recordDependencyOnExpr` with `DEPENDENCY_NORMAL`: the object depends on each object of `refs`. The objects come in the order of `eliminate_duplicate_dependencies`, from the highest OID down, and a column takes the place of its whole relation.
+    fn depend_refs(&mut self, object: ObjRef, refs: &[ObjRef]) {
         let mut refs = refs.to_vec();
         refs.sort_by(|a, b| {
             b.oid
