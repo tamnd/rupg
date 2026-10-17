@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use rupg_analyze::{
     Column, Cte, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
     FRAMEOPTION_START_OFFSET, Frame, FromFunction, FromItem, GroupingSet, Join, JoinKind, JoinRow,
-    NullTreatment, Query, SetKind, SetOp, SetTree,
+    NullTreatment, Query, SetKind, SetOp, SetTree, TableSample,
 };
 use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
@@ -776,6 +776,36 @@ impl Deparser<'_> {
         } else if print_aliases && !columns.is_empty() {
             let names: Vec<String> = columns.iter().map(|c| quote_identifier(c)).collect();
             self.buf.push_str(&format!("({})", names.join(", ")));
+        }
+        // `TABLESAMPLE` goes after the alias.
+        if let Some(sample) = &rel.tablesample {
+            self.tablesample(sample)?;
+        }
+        Ok(())
+    }
+
+    /// `get_tablesample_def`: ` TABLESAMPLE method (args)`, then `REPEATABLE (seed)` when the query gives a seed.
+    fn tablesample(&mut self, sample: &TableSample) -> Result<()> {
+        let proc = builtin::proc_by_oid(sample.handler).ok_or_else(|| {
+            Error::internal(format!("cache lookup failed for function {}", sample.handler))
+        })?;
+        let name = if reg::function_visible(proc, self.session) {
+            quote_identifier(proc.name)
+        } else {
+            reg::qualified(reg::namespace_name(proc.namespace, self.session), proc.name)
+        };
+        self.buf.push_str(&format!(" TABLESAMPLE {name} ("));
+        for (i, arg) in sample.args.iter().enumerate() {
+            if i > 0 {
+                self.buf.push_str(", ");
+            }
+            self.expr(arg, false)?;
+        }
+        self.buf.push(')');
+        if let Some(seed) = &sample.repeatable {
+            self.buf.push_str(" REPEATABLE (");
+            self.expr(seed, false)?;
+            self.buf.push(')');
         }
         Ok(())
     }

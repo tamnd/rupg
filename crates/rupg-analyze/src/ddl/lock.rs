@@ -177,7 +177,7 @@ impl Locker<'_, '_> {
 }
 
 /// The `relkind` of a relation of the catalog or of the built-in catalog.
-pub(super) fn relkind(env: &dyn Env, relid: u32) -> u8 {
+pub(crate) fn relkind(env: &dyn Env, relid: u32) -> u8 {
     match env.catalog().and_then(|c| c.relation(relid)) {
         Some(rel) => match rel.kind {
             RelKind::Table => b'r',

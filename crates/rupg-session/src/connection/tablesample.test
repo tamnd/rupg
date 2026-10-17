@@ -1,0 +1,345 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE TABLE ts (id int, name text)
+CREATE TABLE
+> SELECT * FROM ts TABLESAMPLE system (50)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE bernoulli (50) REPEATABLE (1)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (50) REPEATABLE (0.5)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts AS x TABLESAMPLE bernoulli (10)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT x.id FROM ts AS x (i) TABLESAMPLE bernoulli (10)
+ERROR 42703 column x.id does not exist at 8
+> SELECT * FROM ts TABLESAMPLE SYSTEM (10)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE "system" (10)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE BERNOULLI (10)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (-1)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT * FROM ts TABLESAMPLE system (101)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT * FROM ts TABLESAMPLE bernoulli (101)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT * FROM ts TABLESAMPLE bernoulli (-0.5)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT * FROM ts TABLESAMPLE bernoulli ('NaN')
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT * FROM ts TABLESAMPLE system ('NaN')
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT * FROM ts TABLESAMPLE system ('Infinity')
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT * FROM ts TABLESAMPLE system (NULL)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H TABLESAMPLE parameter cannot be null
+> SELECT * FROM ts TABLESAMPLE bernoulli (NULL::float8)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H TABLESAMPLE parameter cannot be null
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE (NULL)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202G TABLESAMPLE REPEATABLE parameter cannot be null
+> SELECT * FROM ts TABLESAMPLE system (200) REPEATABLE (NULL)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202G TABLESAMPLE REPEATABLE parameter cannot be null
+> SELECT * FROM ts TABLESAMPLE system (NULL) REPEATABLE (NULL)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H TABLESAMPLE parameter cannot be null
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE ('Infinity')
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (10, 20)
+ERROR 2202H tablesample method system requires 1 argument, not 2 at 30
+> SELECT * FROM ts TABLESAMPLE system ()
+ERROR 42601 syntax error at or near ")" at 38
+> SELECT * FROM ts TABLESAMPLE foo (10)
+ERROR 42704 tablesample method foo does not exist at 30
+> SELECT * FROM ts TABLESAMPLE pg_catalog.system (10)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE public.system (10)
+ERROR 42704 tablesample method public.system does not exist at 30
+> SELECT * FROM ts TABLESAMPLE nosuch.system (10)
+ERROR 42704 tablesample method nosuch.system does not exist at 30
+> SELECT * FROM ts TABLESAMPLE a.b.c (10)
+ERROR 0A000 cross-database references are not implemented: a.b.c
+> SELECT * FROM ts TABLESAMPLE system_rows (10)
+ERROR 42704 tablesample method system_rows does not exist at 30
+> SELECT * FROM ts TABLESAMPLE int4in (10)
+ERROR 42704 tablesample method int4in does not exist at 30
+> SELECT * FROM ts TABLESAMPLE heap_tableam_handler (10)
+ERROR 42809 function heap_tableam_handler must return type tsm_handler at 30
+> SELECT * FROM ts TABLESAMPLE brinhandler (10, 2)
+ERROR 42809 function brinhandler must return type tsm_handler at 30
+> SELECT * FROM ts TABLESAMPLE system ('abc')
+ERROR 22P02 invalid input syntax for type real: "abc" at 38
+> SELECT * FROM ts TABLESAMPLE system ('5')
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (true)
+ERROR 42804 argument of TABLESAMPLE must be type real, not type boolean at 38
+> SELECT * FROM ts TABLESAMPLE system (10::numeric)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (10::bigint)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system ('10'::text)
+ERROR 42804 argument of TABLESAMPLE must be type real, not type text at 38
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE ('x')
+ERROR 22P02 invalid input syntax for type double precision: "x" at 54
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE (true)
+ERROR 42804 argument of REPEATABLE must be type double precision, not type boolean at 54
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE (1::numeric)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE ('1'::text)
+ERROR 42804 argument of REPEATABLE must be type double precision, not type text at 54
+> SELECT * FROM ts TABLESAMPLE system (id)
+ERROR 42703 column "id" does not exist at 38
+> SELECT * FROM ts TABLESAMPLE system (ts.id)
+ERROR 42P01 invalid reference to FROM-clause entry for table "ts" at 38
+> SELECT * FROM ts TABLESAMPLE system (count(*))
+ERROR 42803 aggregate functions are not allowed in functions in FROM at 38
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE (sum(1))
+ERROR 42803 aggregate functions are not allowed in functions in FROM at 54
+> SELECT * FROM ts TABLESAMPLE system (sum(1) OVER ())
+ERROR 42P20 window functions are not allowed in functions in FROM at 38
+> SELECT * FROM ts TABLESAMPLE system (generate_series(1, 2))
+ERROR 42804 argument of TABLESAMPLE must not return a set at 38
+> SELECT * FROM ts TABLESAMPLE system ((SELECT 10))
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system ((SELECT 200))
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT * FROM ts TABLESAMPLE system (random())
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE (random())
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system ($1)
+ERROR 42P02 there is no parameter $1 at 38
+> SELECT * FROM ts t1, ts t2 TABLESAMPLE system (t1.id)
+ERROR 42P01 invalid reference to FROM-clause entry for table "t1" at 48
+> SELECT * FROM ts t1 JOIN ts t2 TABLESAMPLE system (t1.id) ON true
+ERROR 42P01 invalid reference to FROM-clause entry for table "t1" at 52
+> SELECT * FROM ts t1, LATERAL (SELECT * FROM ts t2 TABLESAMPLE system (t1.id)) s
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1,id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (10) JOIN ts t2 TABLESAMPLE bernoulli (5) USING (id)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ONLY ts TABLESAMPLE system (10)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (10) FOR UPDATE
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (200) WHERE false
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (200) LIMIT 0
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> SELECT * FROM ts TABLESAMPLE system (200) WHERE id = 1
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT count(*) FROM ts TABLESAMPLE system (200)
+fields count:20:8:-1
+ERROR 2202H sample percentage must be between 0 and 100
+> SELECT count(*) FROM ts TABLESAMPLE system (20)
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE VIEW tsv AS SELECT * FROM ts
+CREATE VIEW
+> SELECT * FROM tsv TABLESAMPLE system (10)
+ERROR 0A000 TABLESAMPLE clause can only be applied to tables and materialized views at 15
+> SELECT * FROM pg_tables TABLESAMPLE system (10)
+ERROR 0A000 TABLESAMPLE clause can only be applied to tables and materialized views at 15
+> SELECT * FROM information_schema.tables TABLESAMPLE system (10)
+ERROR 0A000 TABLESAMPLE clause can only be applied to tables and materialized views at 15
+> WITH c AS (SELECT 1) SELECT * FROM c TABLESAMPLE system (10)
+ERROR 0A000 TABLESAMPLE clause can only be applied to tables and materialized views at 36
+> WITH ts AS (SELECT 1) SELECT * FROM ts TABLESAMPLE system (10)
+ERROR 0A000 TABLESAMPLE clause can only be applied to tables and materialized views at 37
+> SELECT * FROM generate_series(1, 3) TABLESAMPLE system (10)
+ERROR 42601 syntax error at or near "TABLESAMPLE" at 37
+> SELECT * FROM (SELECT 1) TABLESAMPLE system (10)
+ERROR 42601 syntax error at or near "TABLESAMPLE" at 26
+> SELECT * FROM ts TABLESAMPLE system (10) REPEATABLE (1) REPEATABLE (2)
+ERROR 42601 syntax error at or near "REPEATABLE" at 57
+> SELECT * FROM ts TABLESAMPLE system (10) AS x
+ERROR 42601 syntax error at or near "AS" at 42
+> SELECT * FROM ts TABLESAMPLE system
+ERROR 42601 syntax error at end of input at 36
+> SELECT count(*) FROM pg_class TABLESAMPLE system (0)
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_class TABLESAMPLE bernoulli (0)
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_class TABLESAMPLE bernoulli (0) REPEATABLE (5)
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) = (SELECT count(*) FROM pg_class) FROM pg_class TABLESAMPLE system (100)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT count(*) = (SELECT count(*) FROM pg_class) FROM pg_class TABLESAMPLE bernoulli (100) REPEATABLE (3)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT count(*) <= (SELECT count(*) FROM pg_class) FROM pg_class TABLESAMPLE bernoulli (50)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT count(*) <= (SELECT count(*) FROM pg_type) FROM pg_type TABLESAMPLE system (50) REPEATABLE (7)
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> SELECT relname FROM pg_class TABLESAMPLE bernoulli (100) WHERE relname = 'pg_type'
+fields relname@pg_class.2:19:64:-1
+row pg_type
+SELECT 1
+> SELECT c.relname FROM pg_class c TABLESAMPLE system (100) REPEATABLE (1) WHERE c.relname = 'pg_class'
+fields relname@pg_class.2:19:64:-1
+row pg_class
+SELECT 1
+> SELECT x, (SELECT count(*) FROM pg_class TABLESAMPLE system (x)) > 0 FROM (VALUES (0), (100)) v (x)
+fields x:23:4:-1,?column?:16:1:-1
+row 0,f
+row 100,t
+SELECT 2
+> PREPARE p (float4) AS SELECT * FROM ts TABLESAMPLE system ($1)
+PREPARE
+> EXECUTE p (10)
+fields id@ts.1:23:4:-1,name@ts.2:25:-1:-1
+SELECT 0
+> EXECUTE p (200)
+ERROR 2202H sample percentage must be between 0 and 100
+> EXECUTE p (NULL)
+ERROR 2202H TABLESAMPLE parameter cannot be null
+> PREPARE q (int, float8) AS SELECT count(*) FROM pg_class TABLESAMPLE bernoulli ($1) REPEATABLE ($2)
+PREPARE
+> EXECUTE q (0, 1)
+fields count:20:8:-1
+row 0
+SELECT 1
+> EXECUTE q (100, NULL)
+ERROR 2202G TABLESAMPLE REPEATABLE parameter cannot be null
+> CREATE VIEW tsv1 AS SELECT id FROM ts TABLESAMPLE system (10 * 2) REPEATABLE (2)
+CREATE VIEW
+> CREATE VIEW tsv2 AS SELECT id FROM ts x TABLESAMPLE bernoulli (5.5) REPEATABLE (1 + 1)
+CREATE VIEW
+> CREATE VIEW tsv3 AS SELECT id FROM ts TABLESAMPLE pg_catalog.system ('10')
+CREATE VIEW
+> CREATE VIEW tsv4 AS SELECT * FROM ts t (a, b) TABLESAMPLE system (10)
+CREATE VIEW
+> CREATE VIEW tsv5 AS SELECT * FROM ts TABLESAMPLE bernoulli (10::numeric) REPEATABLE (1::numeric)
+CREATE VIEW
+> CREATE VIEW tsv6 AS SELECT * FROM ts t1 TABLESAMPLE system (10) JOIN ts t2 TABLESAMPLE system (20) USING (id)
+ERROR 42701 column "name" specified more than once
+> CREATE VIEW tsv7 AS SELECT (SELECT count(*) FROM pg_class TABLESAMPLE system (x)) AS n FROM (VALUES (0)) v (x)
+CREATE VIEW
+> CREATE VIEW tsv8 AS SELECT * FROM ts TABLESAMPLE system ('10'::float8 / 2) REPEATABLE ('1'::float4)
+CREATE VIEW
+> SELECT pg_get_viewdef('tsv1'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT id
+   FROM ts TABLESAMPLE system ((10 * 2)) REPEATABLE (2);
+SELECT 1
+> SELECT pg_get_viewdef('tsv1'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT id
+   FROM ts TABLESAMPLE system ((10 * 2)) REPEATABLE (2);
+SELECT 1
+> SELECT pg_get_viewdef('tsv2'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT id
+   FROM ts x TABLESAMPLE bernoulli (5.5) REPEATABLE ((1 + 1));
+SELECT 1
+> SELECT pg_get_viewdef('tsv2'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT id
+   FROM ts x TABLESAMPLE bernoulli (5.5) REPEATABLE ((1 + 1));
+SELECT 1
+> SELECT pg_get_viewdef('tsv3'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT id
+   FROM ts TABLESAMPLE system ('10'::real);
+SELECT 1
+> SELECT pg_get_viewdef('tsv4'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b
+   FROM ts t(a, b) TABLESAMPLE system (10);
+SELECT 1
+> SELECT pg_get_viewdef('tsv5'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT id,
+    name
+   FROM ts TABLESAMPLE bernoulli ((10)::numeric) REPEATABLE ((1)::numeric);
+SELECT 1
+> SELECT pg_get_viewdef('tsv5'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT id,
+    name
+   FROM ts TABLESAMPLE bernoulli (10::numeric) REPEATABLE (1::numeric);
+SELECT 1
+> SELECT pg_get_viewdef('tsv6'::regclass, true)
+ERROR 42P01 relation "tsv6" does not exist at 23
+> SELECT pg_get_viewdef('tsv7'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT ( SELECT count(*) AS count
+           FROM pg_class TABLESAMPLE system (v.x)) AS n
+   FROM ( VALUES (0)) v(x);
+SELECT 1
+> SELECT pg_get_viewdef('tsv8'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT id,
+    name
+   FROM ts TABLESAMPLE system (('10'::double precision / (2)::double precision)) REPEATABLE ('1'::real);
+SELECT 1
+> SELECT * FROM tsv1
+fields id@tsv1.1:23:4:-1
+SELECT 0
+> SELECT * FROM tsv4
+fields a@tsv4.1:23:4:-1,b@tsv4.2:25:-1:-1
+SELECT 0
+> SELECT * FROM tsv7
+fields n@tsv7.1:20:8:-1
+row 0
+SELECT 1
+> SELECT classid::regclass, refobjid::regclass, refobjsubid, deptype FROM pg_depend WHERE objid = (SELECT oid FROM pg_rewrite WHERE ev_class = 'tsv1'::regclass) ORDER BY 1, 2, 3
+fields classid:2205:4:-1,refobjid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_rewrite,ts,1,n
+row pg_rewrite,tsv1,0,i
+SELECT 2
+> SELECT proname, prorettype::regtype, proargtypes::regtype[] FROM pg_proc WHERE prorettype = 'tsm_handler'::regtype ORDER BY 1
+fields proname@pg_proc.2:19:64:-1,prorettype:2206:4:-1,proargtypes:2211:-1:-1
+row bernoulli,tsm_handler,[0:0]={internal}
+row system,tsm_handler,[0:0]={internal}
+row tsm_handler_in,tsm_handler,[0:0]={cstring}
+SELECT 3

@@ -310,6 +310,21 @@ fn float(value: f64, seed: Seed) -> u64 {
     seed.bytes(&value.to_le_bytes())
 }
 
+/// `hashfloat8` of the seed of `TABLESAMPLE ... REPEATABLE`.
+pub(crate) fn float8_hash(value: f64) -> u32 {
+    #[allow(clippy::cast_possible_truncation)]
+    let hash = float(value, Seed::Plain) as u32;
+    hash
+}
+
+/// The hash of the number of a row and the seed of a sample, which `TABLESAMPLE` compares with its cutoff. `tsm_bernoulli.c` hashes the block, the offset and the seed of a row. A row of rupg has no block, so its number takes the place of the block and the offset.
+pub(crate) fn sample_hash(row: u64, seed: u32) -> u32 {
+    let mut data = [0; 12];
+    data[..8].copy_from_slice(&row.to_le_bytes());
+    data[8..].copy_from_slice(&seed.to_le_bytes());
+    hash_bytes(&data, 0).1
+}
+
 /// `hash_numeric`: the hash of the digits of base 10000 with no zeros at the two ends, then the weight of the first digit that is not zero. A special value has the hash of [`Seed::zero`], and zero has the hash of [`Seed::zero`] less 1.
 fn numeric(value: &Numeric, seed: Seed) -> u64 {
     if matches!(

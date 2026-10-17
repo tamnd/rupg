@@ -12,7 +12,7 @@ use std::sync::Arc;
 use rupg_analyze::{
     Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, IsJson,
     JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp, SetTree, SortGroup,
-    SqlValue, SubLink, SubLinkKind, Subscript, Target, WindowFunc,
+    SqlValue, SubLink, SubLinkKind, Subscript, TableSample, Target, WindowFunc,
 };
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
@@ -288,6 +288,9 @@ fn check_query(query: &Query, output: bool) -> Result<()> {
             check_query(sub, false)?;
         }
         relation.values.iter().flatten().flatten().try_for_each(check)?;
+        if let Some(sample) = &relation.tablesample {
+            sample.args.iter().chain(&sample.repeatable).try_for_each(check)?;
+        }
         for (call, width) in relation.function.iter().flat_map(|f| &f.calls) {
             match &call.kind {
                 ExprKind::Func(f) if table_function(f.oid, *width) => {
@@ -789,7 +792,11 @@ fn with_subqueries(
 ) -> Result<Rc<scan::Tables>> {
     let work = |r: &rupg_analyze::Relation| r.cte.as_ref().and_then(|c| c.work);
     if query.relations.iter().all(|r| {
-        r.subquery.is_none() && r.function.is_none() && r.values.is_none() && work(r).is_none()
+        r.subquery.is_none()
+            && r.function.is_none()
+            && r.values.is_none()
+            && r.tablesample.is_none()
+            && work(r).is_none()
     }) {
         return Ok(Rc::clone(base));
     }
@@ -825,6 +832,13 @@ fn with_subqueries(
         {
             let mut eval = Eval::new(params, session, base, cache, outer);
             tables.rows[i] = Rc::new(eval.values_rows(rows)?);
+        }
+        if let Some(sample) = &relation.tablesample {
+            let mut eval = Eval::new(params, session, base, cache, outer);
+            let rows = &tables.rows[i];
+            let kept = eval.sample(sample, rows.len())?;
+            let kept: Rows = kept.into_iter().map(|row| rows[row].clone()).collect();
+            tables.rows[i] = Rc::new(kept);
         }
     }
     Ok(Rc::new(tables))
@@ -1262,6 +1276,37 @@ impl<'a> Eval<'a> {
             sets: Vec::new(),
             windows: Vec::new(),
         }
+    }
+
+    /// `tablesample_init`: the arguments of `TABLESAMPLE`, which cannot be null, then the seed of `REPEATABLE`, then the numbers of the rows, of `count`, that the sample keeps.
+    fn sample(&mut self, sample: &TableSample, count: usize) -> Result<Vec<usize>> {
+        let mut percent = 0.0;
+        for arg in &sample.args {
+            match self.eval(arg)? {
+                Value::Null => {
+                    return Err(Error::new(
+                        SqlState::INVALID_TABLESAMPLE_ARGUMENT,
+                        "TABLESAMPLE parameter cannot be null",
+                    ));
+                }
+                Value::Float4(value) => percent = value,
+                _ => return Err(Error::internal("an argument of TABLESAMPLE that is not real")),
+            }
+        }
+        let seed = match &sample.repeatable {
+            Some(expr) => match self.eval(expr)? {
+                Value::Null => {
+                    return Err(Error::new(
+                        SqlState::INVALID_TABLESAMPLE_REPEAT,
+                        "TABLESAMPLE REPEATABLE parameter cannot be null",
+                    ));
+                }
+                Value::Float8(value) => Some(value),
+                _ => return Err(Error::internal("a seed of REPEATABLE that is not a float")),
+            },
+            None => None,
+        };
+        rupg_func::sample_rows(percent, seed, count, self.session)
     }
 
     /// The rows of a `VALUES` list, as `ValuesScan` gives them.

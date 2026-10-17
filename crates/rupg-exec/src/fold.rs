@@ -74,8 +74,13 @@ fn plan(
         window.frame.start = fold.one(old.frame.start.as_ref())?;
         window.frame.end = fold.one(old.frame.end.as_ref())?;
     }
-    // The rows of a `VALUES` list fold after the clauses, as the range table does in `subquery_planner`.
+    // The arguments of `TABLESAMPLE` and the rows of a `VALUES` list fold after the clauses, as the range table does in `subquery_planner`.
     for (relation, old) in out.relations.iter_mut().zip(&query.relations) {
+        if let (Some(sample), Some(old)) = (&mut relation.tablesample, &old.tablesample) {
+            let args: Vec<&Expr> = old.args.iter().collect();
+            sample.args = fold.clause(&args)?;
+            sample.repeatable = fold.one(old.repeatable.as_ref())?;
+        }
         let (Some(rows), Some(old)) = (&mut relation.values, &old.values) else { continue };
         for (row, old) in rows.iter_mut().zip(old) {
             let exprs: Vec<&Expr> = old.iter().collect();
