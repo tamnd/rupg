@@ -13,7 +13,7 @@ use std::time::Duration;
 
 use ring::digest;
 use rupg_common::{Error, Result, SqlState};
-use rupg_platform::{Io, Stream};
+use rupg_platform::{Io, Stream, TcpOption};
 use rupg_session::connection::Ssl;
 use rupg_session::guc::Settings;
 use rustls::pki_types::pem::PemObject;
@@ -424,6 +424,14 @@ impl Stream for TlsStream {
 
     fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
         self.0.lock().unwrap_or_else(PoisonError::into_inner).sock.set_read_timeout(timeout)
+    }
+
+    fn tcp_option(&self, option: TcpOption) -> Option<i32> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).sock.tcp_option(option)
+    }
+
+    fn set_tcp_option(&self, option: TcpOption, value: i32) -> Result<()> {
+        self.0.lock().unwrap_or_else(PoisonError::into_inner).sock.set_tcp_option(option, value)
     }
 }
 

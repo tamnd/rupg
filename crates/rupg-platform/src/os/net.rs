@@ -6,9 +6,9 @@ use std::time::Duration;
 
 use rupg_common::{Error, Result, SqlState};
 
-use crate::net::{Listener, Net, Stream};
+use crate::net::{Listener, Net, Stream, TcpOption};
 
-/// The sockets of the operating system. `TCP_NODELAY` is on for each TCP connection, because the protocol sends small messages and waits for the answer.
+/// The sockets of the operating system. `TCP_NODELAY` is on for each TCP connection, because the protocol sends small messages and waits for the answer. `SO_KEEPALIVE` is on for each TCP connection that a listener accepts, as `StreamConnection` of PostgreSQL sets it.
 #[derive(Clone, Copy, Debug, Default)]
 pub struct OsNet;
 
@@ -79,6 +79,12 @@ impl Listener for OsListener {
         let (stream, _) = self.0.accept().map_err(|e| {
             Error::new(SqlState::CONNECTION_FAILURE, format!("could not accept a connection: {e}"))
         })?;
+        keep_alive(&stream).map_err(|e| {
+            Error::new(
+                SqlState::CONNECTION_FAILURE,
+                format!("setsockopt(SO_KEEPALIVE) failed: {e}"),
+            )
+        })?;
         OsStream::boxed(stream)
     }
 
@@ -138,6 +144,99 @@ impl Stream for OsStream {
     fn set_read_timeout(&self, timeout: Option<Duration>) -> Result<()> {
         self.0.set_read_timeout(timeout).map_err(|e| timeout_error(&e))
     }
+
+    fn tcp_option(&self, option: TcpOption) -> Option<i32> {
+        get_tcp_option(&self.0, option)
+    }
+
+    fn set_tcp_option(&self, option: TcpOption, value: i32) -> Result<()> {
+        set_tcp_option(&self.0, option, value).map_err(|e| {
+            Error::new(
+                SqlState::CONNECTION_FAILURE,
+                format!("setsockopt({}) failed: {e}", option.name()),
+            )
+        })
+    }
+}
+
+/// The size of an option of the type `int` of C.
+#[cfg(target_os = "linux")]
+const INT_SIZE: libc::socklen_t = 4;
+
+/// The name of the option for `getsockopt` and `setsockopt` at the level `IPPROTO_TCP`.
+#[cfg(target_os = "linux")]
+fn tcp_name(option: TcpOption) -> libc::c_int {
+    match option {
+        TcpOption::KeepalivesIdle => libc::TCP_KEEPIDLE,
+        TcpOption::KeepalivesInterval => libc::TCP_KEEPINTVL,
+        TcpOption::KeepalivesCount => libc::TCP_KEEPCNT,
+        TcpOption::UserTimeout => libc::TCP_USER_TIMEOUT,
+    }
+}
+
+/// `setsockopt` of an option of the type `int`.
+#[cfg(target_os = "linux")]
+fn set_option(
+    socket: &TcpStream,
+    level: libc::c_int,
+    name: libc::c_int,
+    value: i32,
+) -> io::Result<()> {
+    use std::os::fd::AsRawFd;
+    // SAFETY: the socket stays open while `socket` lives, and `value` is an `int` that lives for the call.
+    let result = unsafe {
+        libc::setsockopt(socket.as_raw_fd(), level, name, (&raw const value).cast(), INT_SIZE)
+    };
+    if result == 0 { Ok(()) } else { Err(io::Error::last_os_error()) }
+}
+
+/// Turns on `SO_KEEPALIVE`.
+#[cfg(target_os = "linux")]
+fn keep_alive(socket: &TcpStream) -> io::Result<()> {
+    set_option(socket, libc::SOL_SOCKET, libc::SO_KEEPALIVE, 1)
+}
+
+/// The value of a TCP option of the socket.
+#[cfg(target_os = "linux")]
+fn get_tcp_option(socket: &TcpStream, option: TcpOption) -> Option<i32> {
+    use std::os::fd::AsRawFd;
+    let mut value: libc::c_int = 0;
+    let mut size = INT_SIZE;
+    // SAFETY: the socket stays open while `socket` lives, and `value` and `size` can take a write of their sizes.
+    let result = unsafe {
+        libc::getsockopt(
+            socket.as_raw_fd(),
+            libc::IPPROTO_TCP,
+            tcp_name(option),
+            (&raw mut value).cast(),
+            &raw mut size,
+        )
+    };
+    (result == 0).then_some(value)
+}
+
+/// Sets a TCP option of the socket.
+#[cfg(target_os = "linux")]
+fn set_tcp_option(socket: &TcpStream, option: TcpOption, value: i32) -> io::Result<()> {
+    set_option(socket, libc::IPPROTO_TCP, tcp_name(option), value)
+}
+
+/// Only Linux is done, so the other systems leave `SO_KEEPALIVE` off.
+#[cfg(not(target_os = "linux"))]
+fn keep_alive(_socket: &TcpStream) -> io::Result<()> {
+    Ok(())
+}
+
+/// Only Linux is done, so the other systems do not know the options.
+#[cfg(not(target_os = "linux"))]
+fn get_tcp_option(_socket: &TcpStream, _option: TcpOption) -> Option<i32> {
+    None
+}
+
+/// Only Linux is done, so the other systems do not change the options.
+#[cfg(not(target_os = "linux"))]
+fn set_tcp_option(_socket: &TcpStream, _option: TcpOption, _value: i32) -> io::Result<()> {
+    Ok(())
 }
 
 /// The error of `setsockopt` for `SO_RCVTIMEO`.

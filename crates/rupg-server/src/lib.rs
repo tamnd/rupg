@@ -31,7 +31,7 @@ use std::sync::{Arc, Mutex, PoisonError};
 use std::time::Duration;
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks};
+use rupg_platform::{Clock, Entropy, Io, Listener, Net, Stream, TaskHandle, Tasks, TcpOption};
 use rupg_session::auth::{FileSetting, HbaRule, IdentMapping};
 use rupg_session::connection::{self, Client, Connection, Next, Ssl, Start};
 use rupg_session::guc::Settings;
@@ -269,6 +269,7 @@ impl Server {
         let conf = conf::select(&mut base, config.data_directory.as_deref(), &*io, &mut lines);
         write("LOG", &lines);
         let conf = conf?;
+        connection::semaphore_count(&mut base)?;
         base.share();
         let sockets = socket_paths(&base, &address)?;
         let tls = tls::load(&base, &*io)?;
@@ -839,6 +840,54 @@ fn address(wire: &Wire, text: &str) -> Client {
     text.parse().map_or(Client::Unknown, Client::Inet)
 }
 
+/// The TCP options of the socket of a session, which the assign hooks of `tcp_keepalives_idle` and the other TCP parameters set.
+struct Socket {
+    /// The values that the system gave to the options when the session started, in the order of [`TcpOption::ALL`], with -1 for a value that the system did not give.
+    defaults: [i32; 4],
+    /// The values of the parameters that the socket has now.
+    applied: [i32; 4],
+    /// The generation of the settings at the last check.
+    generation: u64,
+}
+
+impl Socket {
+    /// The options of a TCP socket. `None` for a Unix socket, and for a system that gives none of the options.
+    fn of(stream: &dyn Stream) -> Option<Socket> {
+        let values = TcpOption::ALL.map(|option| stream.tcp_option(option));
+        if stream.is_local() || values.iter().all(Option::is_none) {
+            return None;
+        }
+        Some(Socket {
+            defaults: values.map(|v| v.unwrap_or(-1)),
+            applied: [0; 4],
+            generation: u64::MAX,
+        })
+    }
+
+    /// `pq_setkeepalivesidle` and the others: sets each option whose parameter changed. The value 0 gives the option back the value of the system. A failure goes to the log, as in PostgreSQL, and the statement does not fail.
+    fn apply(&mut self, settings: &Settings, stream: &dyn Stream, shared: &Shared) {
+        if settings.generation() == self.generation {
+            return;
+        }
+        self.generation = settings.generation();
+        let values = settings.tcp_values();
+        for (i, option) in TcpOption::ALL.into_iter().enumerate() {
+            if values[i] == self.applied[i] {
+                continue;
+            }
+            let value = if values[i] == 0 { self.defaults[i] } else { values[i] };
+            if value < 0 {
+                self.applied[i] = values[i];
+                continue;
+            }
+            match stream.set_tcp_option(option, value) {
+                Ok(()) => self.applied[i] = values[i],
+                Err(error) => shared.log_error("LOG", &error),
+            }
+        }
+    }
+}
+
 /// The authentication, the start of the session, and the main loop.
 fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
     let Some(auth::Admitted { notices, system_user }) =
@@ -849,13 +898,17 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
     wire.out.authentication_ok();
     let settings =
         admit(shared, start).and_then(|()| connection::session_settings(&shared.base, start));
-    let settings = match settings {
+    let mut settings = match settings {
         Ok(settings) => settings,
         Err(error) => {
             shared.log_error("FATAL", &error);
             return wire.fatal(&error);
         }
     };
+    let mut socket = Socket::of(&*wire.stream);
+    if let Some(socket) = &socket {
+        settings.set_socket(socket.defaults);
+    }
     // `EmitConnectionWarnings` at the end of `InitPostgres`, after the settings of the startup packet.
     let md5_warnings = settings.get("md5_password_warnings").as_deref() != Some("off");
     let quiet = settings.get("client_min_messages").as_deref() == Some("error");
@@ -882,6 +935,9 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
     loop {
         let step = connection.step(&wire.input[wire.at..], &mut wire.out);
         wire.consume(step.used);
+        if let Some(socket) = &mut socket {
+            socket.apply(&connection.settings(), &*wire.stream, shared);
+        }
         let going = match step.next {
             Next::Continue => wire.out.len() < FLUSH_AT || wire.flush(),
             Next::Flush => wire.flush(),
