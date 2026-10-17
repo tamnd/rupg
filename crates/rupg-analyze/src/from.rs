@@ -15,7 +15,7 @@ use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::colname::figure_colname;
 use crate::cte::{CteItem, CteRef};
-use crate::expr::{CastForm, Expr, ExprKind, Var};
+use crate::expr::{CastForm, Expr, ExprKind, JoinRow, Var};
 use crate::typename::place;
 use crate::types;
 
@@ -1248,7 +1248,18 @@ impl Analyzer<'_> {
     fn whole_row(&self, level: usize, item: &Item, at: Option<usize>) -> Result<Expr> {
         let entry = &self.level(level).entries[item.entry];
         let Some(relation) = entry.relation else {
-            return Err(not_yet("a whole-row reference to a join", at));
+            // The alias of `USING` is an item of the entry of the join with other columns.
+            let alias = (entry.aliased && item.name == entry.name).then(|| item.name.clone());
+            let mut fields = Vec::with_capacity(item.columns.len());
+            let mut names = Vec::with_capacity(item.columns.len());
+            for (name, expr) in &item.columns {
+                let mut expr = expr.clone();
+                expr.raise(level);
+                fields.push(expr);
+                names.push(name.clone());
+            }
+            let row = JoinRow { alias, names, fields };
+            return Ok(Expr::new(ExprKind::JoinRow(Box::new(row)), oid::RECORD).at(at));
         };
         let ty = match entry.oid {
             0 => oid::RECORD,

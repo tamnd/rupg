@@ -187,6 +187,7 @@ fn check(expr: &Expr) -> Result<()> {
         ExprKind::Array { elements, .. } | ExprKind::Row(elements, _) => {
             elements.iter().try_for_each(check)?;
         }
+        ExprKind::JoinRow(row) => row.fields.iter().try_for_each(check)?,
         // The executor calls the comparison function of each pair of fields, not the operator.
         ExprKind::RowCompare(rc) => {
             for (op, &compare) in rc.ops.iter().zip(&rc.compares) {
@@ -1529,6 +1530,12 @@ impl<'a> Eval<'a> {
                 let values = args.iter().map(|e| self.eval(e)).collect::<Result<Vec<_>>>()?;
                 let types = args.iter().map(|e| e.ty).collect();
                 Ok(Value::Record(Box::new(Record::new(types, values))))
+            }
+            ExprKind::JoinRow(row) => {
+                let values = row.fields.iter().map(|e| self.eval(e)).collect::<Result<Vec<_>>>()?;
+                let types = row.fields.iter().map(|e| e.ty).collect();
+                let names = Some(row.names.iter().cloned().collect());
+                Ok(Value::Record(Box::new(Record { types, values, names })))
             }
             ExprKind::SqlValue(v) => self.sql_value(*v),
             ExprKind::Var(var) if var.levels_up == 0 => Ok(self.tables.var(self.tuple, *var)),

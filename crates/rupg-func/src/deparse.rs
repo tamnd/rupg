@@ -328,6 +328,17 @@ impl<'a> Deparser<'a> {
                     self.buf.push_str(&format!("::{ty}"));
                 }
             }
+            ExprKind::JoinRow(row) => match &row.alias {
+                Some(alias) => {
+                    self.buf.push_str(&quote_identifier(alias));
+                    self.buf.push_str(".*");
+                }
+                None => {
+                    self.buf.push_str("ROW(");
+                    self.list(&row.fields, true)?;
+                    self.buf.push(')');
+                }
+            },
             ExprKind::RowCompare(rc) => self.row_compare(rc)?,
             ExprKind::MinMax { greatest, args, .. } => {
                 self.buf.push_str(if *greatest { "GREATEST(" } else { "LEAST(" });
@@ -650,6 +661,7 @@ fn own_syntax(parent: &Expr) -> bool {
         | ExprKind::Subscript(_)
         | ExprKind::Array { .. }
         | ExprKind::Row(..)
+        | ExprKind::JoinRow(_)
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }
         | ExprKind::NullIf { .. }
@@ -686,6 +698,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         ExprKind::FieldSelect(..) => !matches!(parent.kind, ExprKind::FieldSelect(..)),
         ExprKind::Array { .. }
         | ExprKind::Row(..)
+        | ExprKind::JoinRow(_)
         | ExprKind::Subscript(_)
         | ExprKind::Coalesce(_)
         | ExprKind::MinMax { .. }

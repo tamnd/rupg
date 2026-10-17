@@ -49,7 +49,7 @@ pub use ddl::{
     define, function_body, is_definition, lock_table,
 };
 pub use expr::{
-    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, NamedArg,
+    Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JoinRow, NamedArg,
     NullTreatment, RowCompare, RowCompareKind, SqlValue, SubLink, SubLinkKind, Subscript, Var,
     WindowFunc,
 };

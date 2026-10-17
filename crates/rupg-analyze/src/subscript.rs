@@ -39,6 +39,11 @@ impl Analyzer<'_> {
         {
             return self.whole_row_columns(var, at).map(Some);
         }
+        if let ExprKind::JoinRow(row) = &expr.kind
+            && row.alias.is_some()
+        {
+            return Ok(Some(row.names.iter().cloned().zip(row.fields.iter().cloned()).collect()));
+        }
         let ty = expr.ty;
         let columns =
             if ty == oid::RECORD { self.record_columns(&expr)? } else { self.row_columns(ty) };
@@ -100,6 +105,18 @@ impl Analyzer<'_> {
             && var.attnum == 0
         {
             return self.whole_row_field(var, name, at);
+        }
+        if let ExprKind::JoinRow(row) = &arg.kind
+            && let Some(alias) = &row.alias
+        {
+            let Some(i) = row.names.iter().position(|n| n == name) else {
+                return Err(Error::new(
+                    SqlState::UNDEFINED_COLUMN,
+                    format!("column {alias}.{name} does not exist"),
+                )
+                .at_opt(at));
+            };
+            return Ok(row.fields[i].clone().at(at));
         }
         let ty = arg.ty;
         let columns =
