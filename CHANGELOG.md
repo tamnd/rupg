@@ -4,6 +4,20 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.41 (2026-10-18)
+
+A patch release on the way to M2. The connection rate targets of spec/06 section 6.18 now hold for the server CPU for each connection.
+
+### Added
+
+- `rupg serve` without `--listen` listens on each host of `listen_addresses` with the port of `port` after it reads `postgresql.conf`, as the postmaster does. `pg_settings` and `pg_file_settings` show these settings from the file (#387).
+
+### Changed
+
+- A connection runs on a thread that waits for the next task, so the server does not start a new thread and a new stack for each connection. The TCP stream and the Unix stream send the records of the TLS handshake with one `writev`. On server1 the server CPU for each connection with `trust` over a Unix socket is 135 µs against 9298 µs for PostgreSQL, and with SCRAM over TLS and an ECDSA P-256 certificate it is 775 µs against 11424 µs (#388).
+- `boot_val` of `server_version` in `pg_settings` is the version of rupg, as `PG_VERSION` is in PostgreSQL (#387).
+- Section 6.18 of spec/06 tells how the connection rate is measured when the client and the server share a machine, and which certificate the TLS case uses (#389).
+
 ## 0.1.40 (2026-10-18)
 
 A patch release on the way to M2. The L2 comparison of the gate schema now passes for 201 of 209 catalogs and views.
