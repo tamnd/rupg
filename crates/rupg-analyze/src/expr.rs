@@ -77,6 +77,8 @@ pub enum ExprKind {
     Agg(Box<Aggref>),
     /// `WindowFunc`: a call of a window function, which reads the rows of its window.
     Window(Box<WindowFunc>),
+    /// `GroupingFunc`: a call of `GROUPING`, of type `integer`.
+    Grouping(Box<GroupingFunc>),
     /// `SubLink`: a subquery in an expression.
     SubLink(Box<SubLink>),
     /// `Param` of the kind `PARAM_SUBLINK`: the value of the column with this index, from 0, of a row of the subquery, in the test of `ANY` or `ALL`.
@@ -263,6 +265,17 @@ pub struct Aggref {
     pub levels_up: usize,
 }
 
+/// A call of `GROUPING`, as `GroupingFunc`. The result has a bit for each argument, with the bit of the last argument as the lowest bit. A bit is 1 when the grouping set of the group does not have the argument.
+#[derive(Clone, Debug, PartialEq)]
+pub struct GroupingFunc {
+    /// The arguments, which are items of `GROUP BY`.
+    pub args: Vec<Expr>,
+    /// `refs`: the target of the item of `GROUP BY` of each argument. `parseCheckAggregates` sets them.
+    pub refs: Vec<usize>,
+    /// `agglevelsup`: 0 for a call of the query that has the call, 1 for a call of the query outside it, and so on.
+    pub levels_up: usize,
+}
+
 /// A call of a window function, as `WindowFunc`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct WindowFunc {
@@ -408,6 +421,7 @@ impl Expr {
                 agg.direct.iter().chain(&agg.args).chain(agg.filter.as_deref()).collect()
             }
             ExprKind::Window(w) => w.args.iter().chain(w.filter.as_deref()).collect(),
+            ExprKind::Grouping(g) => g.args.iter().collect(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
@@ -437,7 +451,7 @@ impl Expr {
         }
     }
 
-    fn children_mut(&mut self) -> Vec<&mut Expr> {
+    pub(crate) fn children_mut(&mut self) -> Vec<&mut Expr> {
         match &mut self.kind {
             ExprKind::Const(_)
             | ExprKind::Param(_)
@@ -458,6 +472,7 @@ impl Expr {
                 let WindowFunc { args, filter, .. } = &mut **w;
                 args.iter_mut().chain(filter.as_deref_mut()).collect()
             }
+            ExprKind::Grouping(g) => g.args.iter_mut().collect(),
             ExprKind::Relabel(arg, _)
             | ExprKind::CoerceViaIo(arg, _)
             | ExprKind::CoerceToDomain(arg, _)
@@ -579,9 +594,11 @@ impl Expr {
         }
     }
 
-    /// `contain_aggs_of_level` and `locate_agg_of_level`: the first aggregate call in the expression.
+    /// `contain_aggs_of_level` and `locate_agg_of_level`: the first aggregate call or call of `GROUPING` in the expression.
     pub fn first_agg(&self) -> Option<&Expr> {
-        if matches!(&self.kind, ExprKind::Agg(agg) if agg.levels_up == 0) {
+        if matches!(&self.kind, ExprKind::Agg(agg) if agg.levels_up == 0)
+            || matches!(&self.kind, ExprKind::Grouping(g) if g.levels_up == 0)
+        {
             return Some(self);
         }
         self.children().into_iter().find_map(Expr::first_agg)

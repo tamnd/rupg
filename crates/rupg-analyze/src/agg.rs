@@ -3,12 +3,14 @@
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{List, Node, WindowDef};
+use rupg_types::oid;
 
 use crate::Analyzer;
 use crate::coerce::AtOpt;
-use crate::expr::{Aggref, Expr, ExprKind, NullTreatment, Var};
+use crate::expr::{Aggref, Expr, ExprKind, GroupingFunc, NullTreatment, Var};
 use crate::select::Target;
-use crate::sort::SortGroup;
+use crate::sort::{GroupingSet, SortGroup, expand_grouping_sets};
+use crate::typename::place;
 
 /// The part of a query that the analyzer reads, as `ParseExprKind`. It tells where an aggregate call can be.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
@@ -140,12 +142,31 @@ fn nested_set(expr: &Expr) -> Option<&Expr> {
     }
 }
 
-/// The first aggregate call in the arguments of an aggregate, outside their subqueries.
+/// The first aggregate call or `GROUPING` in the arguments of an aggregate, outside their subqueries.
 fn nested_agg(expr: &Expr) -> Option<&Expr> {
     match &expr.kind {
-        ExprKind::Agg(_) => Some(expr),
+        ExprKind::Agg(_) | ExprKind::Grouping(_) => Some(expr),
         _ => expr.children().into_iter().find_map(nested_agg),
     }
+}
+
+/// check_agg_arguments: the level of an aggregate or of `GROUPING`. A call whose arguments read only the columns of outer queries belongs to the outer query.
+fn agg_level<'a>(args: impl Iterator<Item = &'a Expr>) -> usize {
+    args.filter_map(|e| {
+        let mut min: Option<usize> = None;
+        e.find(0, &mut |e, depth| {
+            if let ExprKind::Var(var) = e.kind
+                && var.levels_up >= depth
+            {
+                let up = var.levels_up - depth;
+                min = Some(min.map_or(up, |m| m.min(up)));
+            }
+            None::<()>
+        });
+        min
+    })
+    .min()
+    .unwrap_or(0)
 }
 
 /// An error of an aggregate call in a wrong place, with the SQLSTATE `42803`.
@@ -234,7 +255,7 @@ impl Analyzer<'_> {
             .or_else(|| direct.iter().find_map(nested_agg));
         if let Some(inner) = inner {
             match inner.kind {
-                ExprKind::Agg(_) => {
+                ExprKind::Agg(_) | ExprKind::Grouping(_) => {
                     return Err(grouping_error(
                         "aggregate function calls cannot be nested".into(),
                         inner.location,
@@ -255,26 +276,64 @@ impl Analyzer<'_> {
             .with_hint(SRF_HINT)
             .at_opt(inner.location));
         }
-        // check_agg_arguments: an aggregate whose arguments read only the columns of outer queries belongs to the outer query.
-        let level = args
-            .iter()
-            .chain(filter.as_deref())
-            .filter_map(|e| {
-                let mut min: Option<usize> = None;
-                e.find(0, &mut |e, depth| {
-                    if let ExprKind::Var(var) = e.kind
-                        && var.levels_up >= depth
-                    {
-                        let up = var.levels_up - depth;
-                        min = Some(min.map_or(up, |m| m.min(up)));
-                    }
-                    None::<()>
-                });
-                min
-            })
-            .min();
-        let level = level.unwrap_or(0);
-        // The aggregate belongs to the query `level` levels up, so the part of that query that has the subquery decides where the aggregate can be.
+        let level = agg_level(args.iter().chain(filter.as_deref()));
+        self.check_agg_place(level, "aggregate functions", at)?;
+        let agg = Aggref {
+            oid,
+            kind,
+            direct,
+            args,
+            nargs,
+            order,
+            distinct,
+            star: parts.star,
+            variadic,
+            filter,
+            levels_up: level,
+        };
+        Ok(Expr { kind: ExprKind::Agg(Box::new(agg)), ty, typmod: -1, location: at })
+    }
+
+    /// `transformGroupingFunc`: a call of `GROUPING`, which the checks of `parseCheckAggregates` complete.
+    pub(crate) fn grouping_func(&mut self, g: &rupg_sql::nodes::GroupingFunc) -> Result<Expr> {
+        let at = place(g.location);
+        if g.args.len() > 31 {
+            return Err(Error::new(
+                SqlState::TOO_MANY_ARGUMENTS,
+                "GROUPING must have fewer than 32 arguments",
+            )
+            .at_opt(at));
+        }
+        let args = self.transform_expression_list(&g.args)?;
+        let inner = args.iter().find_map(nested_set).or_else(|| args.iter().find_map(nested_agg));
+        if let Some(inner) = inner {
+            let message = match inner.kind {
+                ExprKind::Agg(_) | ExprKind::Grouping(_) => {
+                    "aggregate function calls cannot be nested"
+                }
+                ExprKind::Window(_) => {
+                    "aggregate function calls cannot contain window function calls"
+                }
+                _ => {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "aggregate function calls cannot contain set-returning function calls",
+                    )
+                    .with_hint(SRF_HINT)
+                    .at_opt(inner.location));
+                }
+            };
+            return Err(grouping_error(message.into(), inner.location));
+        }
+        let levels_up = agg_level(args.iter());
+        self.check_agg_place(levels_up, "grouping operations", at)?;
+        let grouping = GroupingFunc { args, refs: Vec::new(), levels_up };
+        Ok(Expr::new(ExprKind::Grouping(Box::new(grouping)), oid::INT4).at(at))
+    }
+
+    /// The checks of `check_agglevels_and_constraints`: an aggregate call or a `GROUPING` of the query `level` levels up must be in a part of that query that can have it. The query then has aggregates. `what` names the kind of the call in the errors.
+    fn check_agg_place(&mut self, level: usize, what: &str, at: Option<usize>) -> Result<()> {
+        // The part of the query `level` levels up that has the subquery decides where the call can be.
         let outer = self.outer_kinds.len().checked_sub(level).filter(|_| level > 0);
         let place = match outer {
             Some(i) => self.outer_kinds.get(i).and_then(|(kind, _)| *kind),
@@ -282,15 +341,14 @@ impl Analyzer<'_> {
         };
         let Some(place) = place else {
             return Err(grouping_error(
-                "aggregate functions are not allowed in FROM clause of their own query level"
-                    .into(),
+                format!("{what} are not allowed in FROM clause of their own query level"),
                 at,
             ));
         };
         match place {
             Kind::JoinOn => {
                 return Err(grouping_error(
-                    "aggregate functions are not allowed in JOIN conditions".into(),
+                    format!("{what} are not allowed in JOIN conditions"),
                     at,
                 ));
             }
@@ -311,7 +369,7 @@ impl Analyzer<'_> {
             | Kind::ValuesSingle
             | Kind::ExecuteParameter => {
                 return Err(grouping_error(
-                    format!("aggregate functions are not allowed in {}", place.name()),
+                    format!("{what} are not allowed in {}", place.name()),
                     at,
                 ));
             }
@@ -321,54 +379,125 @@ impl Analyzer<'_> {
             Some((_, has_aggs)) => *has_aggs = true,
             None => self.has_aggs = true,
         }
-        let agg = Aggref {
-            oid,
-            kind,
-            direct,
-            args,
-            nargs,
-            order,
-            distinct,
-            star: parts.star,
-            variadic,
-            filter,
-            levels_up: level,
-        };
-        Ok(Expr { kind: ExprKind::Agg(Box::new(agg)), ty, typmod: -1, location: at })
+        Ok(())
     }
 
-    /// `parseCheckAggregates`: each column that the select list and `HAVING` read outside of an aggregate call must be an item of `GROUP BY`, or a column of a table whose primary key is in `GROUP BY`.
+    /// `parseCheckAggregates`: each column that the select list and `HAVING` read outside of an aggregate call must be an item of `GROUP BY`, or a column of a table whose primary key is in all the grouping sets. Each argument of `GROUPING` must be an item of `GROUP BY`. When the grouping sets expand to one set that is not empty, the query has no grouping sets.
     pub(crate) fn check_grouping(
         &self,
-        targets: &[Target],
-        having: Option<&Expr>,
+        targets: &mut [Target],
+        mut having: Option<&mut Expr>,
         group: &[SortGroup],
+        sets: &mut Vec<GroupingSet>,
+        distinct: bool,
     ) -> Result<()> {
-        let grouped: Vec<&Expr> = group.iter().map(|g| &targets[g.target].expr).collect();
-        let non_var = grouped.iter().any(|e| !matches!(e.kind, ExprKind::Var(_)));
-        let vars: Vec<Var> = grouped
-            .iter()
-            .filter_map(|e| match e.kind {
-                ExprKind::Var(var) if var.levels_up == 0 => Some(var),
-                _ => None,
-            })
-            .collect();
+        // `gset_common`: the items that are in all the grouping sets.
+        let mut common = None;
+        if !sets.is_empty() {
+            let Some(expanded) = expand_grouping_sets(sets, distinct, 4096) else {
+                return Err(Error::new(
+                    SqlState::STATEMENT_TOO_COMPLEX,
+                    "too many grouping sets present (maximum 4096)",
+                ));
+            };
+            let mut items = expanded.first().cloned().unwrap_or_default();
+            for set in expanded.iter().skip(1) {
+                items.retain(|item| set.contains(item));
+            }
+            if expanded.len() == 1 && !group.is_empty() {
+                sets.clear();
+            } else {
+                common = Some(items);
+            }
+        }
+        let grouped: Vec<(usize, Expr)> =
+            group.iter().map(|g| (g.target, targets[g.target].expr.clone())).collect();
+        let non_var = grouped.iter().any(|(_, e)| !matches!(e.kind, ExprKind::Var(_)));
+        let level_vars = |all: bool| -> Vec<Var> {
+            grouped
+                .iter()
+                .filter(|(t, _)| all || common.as_ref().is_none_or(|c| c.contains(t)))
+                .filter_map(|(_, e)| match e.kind {
+                    ExprKind::Var(var) if var.levels_up == 0 => Some(var),
+                    _ => None,
+                })
+                .collect()
+        };
+        let vars = level_vars(true);
+        let common_vars = level_vars(false);
+        let exprs: Vec<&Expr> = grouped.iter().map(|(_, e)| e).collect();
         let mut check = Check {
             analyzer: self,
-            grouped: &grouped,
+            grouped: &exprs,
             raised: Vec::new(),
             non_var,
             vars: &vars,
+            common: &common_vars,
             proven: Vec::new(),
         };
-        for target in targets {
+        for target in targets.iter_mut() {
+            finalize_grouping(&mut target.expr, 0, &grouped, non_var)?;
+        }
+        for target in targets.iter() {
             check.expr(&target.expr, 0)?;
         }
-        if let Some(having) = having {
+        if let Some(having) = having.as_deref_mut() {
+            finalize_grouping(having, 0, &grouped, non_var)?;
             check.expr(having, 0)?;
         }
-        self.check_recursive_aggs(targets.iter().map(|t| &t.expr).chain(having))
+        self.check_recursive_aggs(targets.iter().map(|t| &t.expr).chain(having.as_deref()))
     }
+}
+
+/// `finalize_grouping_exprs`: the items of `GROUP BY` that the arguments of each `GROUPING` of the query name, in an expression of the query or of a subquery `depth` levels down. `grouped` has the targets and the expressions of the items.
+fn finalize_grouping(
+    expr: &mut Expr,
+    depth: usize,
+    grouped: &[(usize, Expr)],
+    non_var: bool,
+) -> Result<()> {
+    match &mut expr.kind {
+        ExprKind::Grouping(g) if g.levels_up == depth => {
+            let mut refs = Vec::with_capacity(g.args.len());
+            for arg in &g.args {
+                // An argument must be an item of the query itself. A column of a table whose primary key is an item is not.
+                let found = match arg.kind {
+                    ExprKind::Var(var) if var.levels_up == depth => {
+                        let var = Var { levels_up: 0, ..var };
+                        grouped.iter().find(|(_, e)| matches!(e.kind, ExprKind::Var(v) if v == var))
+                    }
+                    ExprKind::Var(_) => None,
+                    _ if non_var && depth == 0 => grouped.iter().find(|(_, e)| e.same(arg)),
+                    _ => None,
+                };
+                let Some(&(target, _)) = found else {
+                    return Err(grouping_error(
+                        "arguments to GROUPING must be grouping expressions of the associated query level".into(),
+                        arg.place(),
+                    ));
+                };
+                refs.push(target);
+            }
+            g.refs = refs;
+            return Ok(());
+        }
+        ExprKind::Grouping(_) => return Ok(()),
+        ExprKind::Agg(agg) if agg.levels_up >= depth => return Ok(()),
+        _ => {}
+    }
+    for child in expr.children_mut() {
+        finalize_grouping(child, depth, grouped, non_var)?;
+    }
+    if let ExprKind::SubLink(sub) = &mut expr.kind {
+        let mut result = Ok(());
+        sub.query.each_expr_mut(depth + 1, &mut |e, depth| {
+            if result.is_ok() {
+                result = finalize_grouping(e, depth, grouped, non_var);
+            }
+        });
+        result?;
+    }
+    Ok(())
 }
 
 /// The state of `substitute_grouped_columns`.
@@ -382,6 +511,8 @@ struct Check<'a, 'b> {
     non_var: bool,
     /// The items of `GROUP BY` that are columns.
     vars: &'a [Var],
+    /// `groupClauseCommonVars`: the items of `GROUP BY` that are columns and are in all the grouping sets. Only these can prove a primary key.
+    common: &'a [Var],
     /// `func_grouped_rels`: the relations whose primary key is in `GROUP BY`.
     proven: Vec<usize>,
 }
@@ -394,6 +525,12 @@ impl Check<'_, '_> {
             && agg.levels_up == depth
         {
             return agg.direct.iter().try_for_each(|e| self.expr(e, depth));
+        }
+        // `finalize_grouping` checks the arguments of `GROUPING`.
+        if let ExprKind::Grouping(g) = &expr.kind
+            && g.levels_up >= depth
+        {
+            return Ok(());
         }
         if self.non_var && self.is_grouped(expr, depth) {
             return Ok(());
@@ -449,7 +586,7 @@ impl Check<'_, '_> {
         // check_functional_grouping: all the columns of the primary key are in GROUP BY.
         let relid = self.analyzer.scope.relations[var.relation].oid;
         if let Some(key) = builtin::primary_key(relid)
-            && key.iter().all(|&attnum| self.vars.contains(&Var { attnum, ..var }))
+            && key.iter().all(|&attnum| self.common.contains(&Var { attnum, ..var }))
         {
             self.proven.push(var.relation);
             return Ok(());

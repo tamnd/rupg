@@ -31,6 +31,177 @@ pub struct SortGroup {
     pub hashable: bool,
 }
 
+/// A grouping set of `GROUP BY`, as `GroupingSet` after `transformGroupClause`. A simple set names its items by the index of their targets in [`crate::Query::targets`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum GroupingSet {
+    /// `()`.
+    Empty,
+    /// A list of items.
+    Simple(Vec<usize>),
+    /// `ROLLUP`, of simple sets.
+    Rollup(Vec<GroupingSet>),
+    /// `CUBE`, of simple sets.
+    Cube(Vec<GroupingSet>),
+    /// `GROUPING SETS`, of sets of the other kinds.
+    Sets(Vec<GroupingSet>),
+}
+
+impl GroupingSet {
+    /// `expand_groupingset_node`: the lists of items of the set.
+    fn expand(&self) -> Vec<Vec<usize>> {
+        fn items(set: &GroupingSet) -> &[usize] {
+            match set {
+                GroupingSet::Simple(items) => items,
+                _ => &[],
+            }
+        }
+        match self {
+            GroupingSet::Empty => vec![Vec::new()],
+            GroupingSet::Simple(items) => vec![items.clone()],
+            GroupingSet::Rollup(content) => {
+                let mut out: Vec<Vec<usize>> = (1..=content.len())
+                    .rev()
+                    .map(|n| content[..n].iter().flat_map(|s| items(s).iter().copied()).collect())
+                    .collect();
+                out.push(Vec::new());
+                out
+            }
+            GroupingSet::Cube(content) => (0..1u32 << content.len())
+                .map(|mask| {
+                    content
+                        .iter()
+                        .enumerate()
+                        .filter(|(i, _)| mask & (1 << i) != 0)
+                        .flat_map(|(_, s)| items(s).iter().copied())
+                        .collect()
+                })
+                .collect(),
+            GroupingSet::Sets(content) => content.iter().flat_map(GroupingSet::expand).collect(),
+        }
+    }
+}
+
+/// `expand_grouping_sets`: the grouping sets of `GROUP BY` as lists of items, with the shortest lists first. Each set is the product of the expansions of the items of `GROUP BY`. With `distinct` the same set comes once. The result is `None` when there are more than `limit` sets.
+pub fn expand_grouping_sets(
+    sets: &[GroupingSet],
+    distinct: bool,
+    limit: usize,
+) -> Option<Vec<Vec<usize>>> {
+    // `list_union_int`: the items of `a`, then the items of `b` that are not in it.
+    fn union(a: &[usize], b: &[usize]) -> Vec<usize> {
+        let mut out = a.to_vec();
+        for &item in b {
+            if !out.contains(&item) {
+                out.push(item);
+            }
+        }
+        out
+    }
+    let mut count = 1.0;
+    let mut expanded = Vec::with_capacity(sets.len());
+    for set in sets {
+        let lists = set.expand();
+        count *= lists.len() as f64;
+        if count > limit as f64 {
+            return None;
+        }
+        expanded.push(lists);
+    }
+    let Some((first, rest)) = expanded.split_first() else { return Some(Vec::new()) };
+    let mut result: Vec<Vec<usize>> = first.iter().map(|l| union(&[], l)).collect();
+    for lists in rest {
+        result = result.iter().flat_map(|q| lists.iter().map(|l| union(q, l))).collect();
+    }
+    if distinct && result.len() > 1 {
+        for list in &mut result {
+            list.sort_unstable();
+        }
+        result.sort_by(|a, b| a.len().cmp(&b.len()).then_with(|| a.cmp(b)));
+        result.dedup();
+    } else {
+        result.sort_by_key(Vec::len);
+    }
+    Some(result)
+}
+
+/// An item of `GROUP BY` after `flatten_grouping_sets`.
+enum Flat<'a> {
+    /// An expression.
+    Item(Option<&'a Node>),
+    /// The expressions of a row in parentheses in a grouping set.
+    Row(Vec<Option<&'a Node>>),
+    /// A grouping set, its flat content and its place.
+    Set(GroupingSetKind, Vec<Flat<'a>>, Option<usize>),
+}
+
+/// True for a row in parentheses with no `ROW`, which `GROUP BY` takes as a list of items.
+fn implicit_row(node: &Node) -> Option<&List> {
+    match node {
+        Node::RowExpr(row) if row.row_format == CoercionForm::COERCE_IMPLICIT_CAST => {
+            Some(&row.args)
+        }
+        _ => None,
+    }
+}
+
+/// The expressions of a row in parentheses, with the rows in it as their expressions.
+fn row_items<'a>(list: &'a List, out: &mut Vec<Option<&'a Node>>) {
+    for node in list {
+        match node.as_ref().and_then(implicit_row) {
+            Some(args) => row_items(args, out),
+            None => out.push(node.as_ref()),
+        }
+    }
+}
+
+/// `flatten_grouping_sets` at the top of `GROUP BY`: a row adds its expressions as items, and the empty grouping set `()` adds nothing. `has_sets` becomes true when the list has a grouping set.
+fn flatten_top<'a>(list: &'a List, has_sets: &mut bool) -> Vec<Flat<'a>> {
+    let mut out = Vec::new();
+    for node in list {
+        match node {
+            Some(Node::GroupingSet(set)) => {
+                *has_sets = true;
+                if set.kind != GroupingSetKind::GROUPING_SET_EMPTY {
+                    out.push(Flat::Set(
+                        set.kind,
+                        flatten_content(&set.content),
+                        place(set.location),
+                    ));
+                }
+            }
+            Some(node) if let Some(args) = implicit_row(node) => {
+                let mut items = Vec::new();
+                row_items(args, &mut items);
+                out.extend(items.into_iter().map(Flat::Item));
+            }
+            node => out.push(Flat::Item(node.as_ref())),
+        }
+    }
+    out
+}
+
+/// `flatten_grouping_sets` in a grouping set: the content of `GROUPING SETS` in `GROUPING SETS` comes into the outer set.
+fn flatten_content(list: &List) -> Vec<Flat<'_>> {
+    let mut out = Vec::new();
+    for node in list {
+        match node {
+            Some(Node::GroupingSet(set)) if set.kind == GroupingSetKind::GROUPING_SET_SETS => {
+                out.extend(flatten_content(&set.content));
+            }
+            Some(Node::GroupingSet(set)) => {
+                out.push(Flat::Set(set.kind, flatten_content(&set.content), place(set.location)));
+            }
+            Some(node) if let Some(args) = implicit_row(node) => {
+                let mut items = Vec::new();
+                row_items(args, &mut items);
+                out.push(Flat::Row(items));
+            }
+            node => out.push(Flat::Item(node.as_ref())),
+        }
+    }
+    out
+}
+
 /// `leftmostLoc`.
 fn leftmost(a: Option<usize>, b: Option<usize>) -> Option<usize> {
     match (a, b) {
@@ -247,28 +418,122 @@ impl Analyzer<'_> {
         Ok(sort)
     }
 
-    /// `transformGroupClause`: the items of `GROUP BY`, and true when the list has the empty grouping set `()`. An item that is also an item of `ORDER BY` takes the operator of `ORDER BY`. The same item comes once.
+    /// `transformGroupClause`: the items of `GROUP BY`, each once, and the grouping sets. The list of grouping sets is empty when `GROUP BY` has no grouping set. With only empty grouping sets it is `()` and the list of items is empty.
     pub(crate) fn group_clause(
         &mut self,
         list: &List,
         targets: &mut Vec<Target>,
         sort: &[SortGroup],
-    ) -> Result<(Vec<SortGroup>, bool)> {
-        let mut flat = Vec::new();
-        let empty_set = flatten_groups(list, &mut flat)?;
+    ) -> Result<(Vec<SortGroup>, Vec<GroupingSet>)> {
+        let mut has_sets = false;
+        let flat = flatten_top(list, &mut has_sets);
         let mut result = Vec::new();
-        for node in flat {
-            let target = self.target_sql92(node, targets, Kind::GroupBy)?;
-            if result.iter().any(|g: &SortGroup| g.target == target) {
-                continue;
-            }
-            if let Some(item) = sort.iter().find(|s| s.target == target) {
-                result.push(item.clone());
-                continue;
-            }
-            self.add_group(target, targets, &mut result, raw_location(node))?;
+        let mut sets = Vec::new();
+        if flat.is_empty() && has_sets {
+            sets.push(GroupingSet::Empty);
         }
-        Ok((result, empty_set))
+        let mut seen = Vec::new();
+        for item in &flat {
+            match item {
+                Flat::Set(kind, content, at) => {
+                    sets.push(self.grouping_set(
+                        *kind,
+                        content,
+                        *at,
+                        targets,
+                        sort,
+                        &mut result,
+                    )?);
+                }
+                Flat::Row(_) => return Err(Error::internal("a row at the top of GROUP BY")),
+                Flat::Item(node) => {
+                    let target =
+                        self.group_item(*node, Some(&mut seen), targets, sort, &mut result, true)?;
+                    if let Some(target) = target
+                        && has_sets
+                    {
+                        sets.push(GroupingSet::Simple(vec![target]));
+                    }
+                }
+            }
+        }
+        Ok((result, sets))
+    }
+
+    /// `transformGroupClauseExpr`: the target of an item of `GROUP BY`, which comes in `result` once. An item that is also an item of `ORDER BY` takes the operator of `ORDER BY`, but in a grouping set it puts nulls last. `seen` has the targets of the list that has the item, and an item that is in it again gives `None`.
+    fn group_item(
+        &mut self,
+        node: Option<&Node>,
+        seen: Option<&mut Vec<usize>>,
+        targets: &mut Vec<Target>,
+        sort: &[SortGroup],
+        result: &mut Vec<SortGroup>,
+        toplevel: bool,
+    ) -> Result<Option<usize>> {
+        let target = self.target_sql92(node, targets, Kind::GroupBy)?;
+        if let Some(seen) = seen {
+            if seen.contains(&target) {
+                return Ok(None);
+            }
+            seen.push(target);
+        }
+        if result.iter().any(|g| g.target == target) {
+            return Ok(Some(target));
+        }
+        match sort.iter().find(|s| s.target == target) {
+            Some(item) => {
+                result
+                    .push(SortGroup { nulls_first: item.nulls_first && toplevel, ..item.clone() });
+            }
+            None => self.add_group(target, targets, result, raw_location(node))?,
+        }
+        Ok(Some(target))
+    }
+
+    /// `transformGroupingSet`: a grouping set with the targets of its items. A row in parentheses is a simple set with each item once.
+    fn grouping_set(
+        &mut self,
+        kind: GroupingSetKind,
+        content: &[Flat<'_>],
+        at: Option<usize>,
+        targets: &mut Vec<Target>,
+        sort: &[SortGroup],
+        result: &mut Vec<SortGroup>,
+    ) -> Result<GroupingSet> {
+        let mut sets = Vec::with_capacity(content.len());
+        for item in content {
+            sets.push(match item {
+                Flat::Row(nodes) => {
+                    let mut seen = Vec::new();
+                    let mut items = Vec::with_capacity(nodes.len());
+                    for &node in nodes {
+                        let target =
+                            self.group_item(node, Some(&mut seen), targets, sort, result, false)?;
+                        items.extend(target);
+                    }
+                    GroupingSet::Simple(items)
+                }
+                Flat::Set(kind, content, at) => {
+                    self.grouping_set(*kind, content, *at, targets, sort, result)?
+                }
+                Flat::Item(node) => {
+                    let target = self.group_item(*node, None, targets, sort, result, false)?;
+                    GroupingSet::Simple(target.into_iter().collect())
+                }
+            });
+        }
+        // The number of the sets of `CUBE` grows as a power of 2.
+        if kind == GroupingSetKind::GROUPING_SET_CUBE && sets.len() > 12 {
+            return Err(
+                Error::new(SqlState::TOO_MANY_COLUMNS, "CUBE is limited to 12 elements").at_opt(at)
+            );
+        }
+        Ok(match kind {
+            GroupingSetKind::GROUPING_SET_EMPTY => GroupingSet::Empty,
+            GroupingSetKind::GROUPING_SET_ROLLUP => GroupingSet::Rollup(sets),
+            GroupingSetKind::GROUPING_SET_CUBE => GroupingSet::Cube(sets),
+            _ => GroupingSet::Sets(sets),
+        })
     }
 
     /// `addTargetToSortList`.
@@ -487,30 +752,6 @@ impl Analyzer<'_> {
         }
         Ok(Some(expr))
     }
-}
-
-/// `flatten_grouping_sets`: the items of `GROUP BY` with the items of a row in parentheses as items of their own. The result is true when the list has the empty grouping set `()`, which adds no item. The analyzer does not take the other grouping sets yet.
-fn flatten_groups<'a>(list: &'a List, flat: &mut Vec<Option<&'a Node>>) -> Result<bool> {
-    let mut empty_set = false;
-    for node in list {
-        match node {
-            Some(Node::RowExpr(row)) if row.row_format == CoercionForm::COERCE_IMPLICIT_CAST => {
-                empty_set |= flatten_groups(&row.args, flat)?;
-            }
-            Some(Node::GroupingSet(set)) if set.kind == GroupingSetKind::GROUPING_SET_EMPTY => {
-                empty_set = true;
-            }
-            Some(Node::GroupingSet(set)) => {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    "GROUPING SETS, ROLLUP and CUBE are not supported yet",
-                )
-                .at_opt(place(set.location)));
-            }
-            node => flat.push(node.as_ref()),
-        }
-    }
-    Ok(empty_set)
 }
 
 /// The function of an operator, or 0.

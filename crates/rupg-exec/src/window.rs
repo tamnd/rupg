@@ -11,7 +11,7 @@ use rupg_func::{Call, Kernel, Session};
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
 
-use crate::{AggValues, Eval, agg, kernel, not_yet, signature, sort};
+use crate::{Eval, Group, agg, kernel, not_yet, signature, sort};
 
 /// The window functions that the engine has, by the name of their C function.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -180,11 +180,11 @@ pub(crate) fn check(query: &Query) -> Result<()> {
     Ok(())
 }
 
-/// The rows that the windows read: a tuple of the scan for each row and, in a query with groups, the results of the aggregate calls of the group of each row.
+/// The rows that the windows read: a tuple of the scan for each row and, in a query with groups, the group of each row.
 #[derive(Clone, Copy)]
 pub(crate) struct Input<'t> {
     pub(crate) tuples: &'t [&'t [usize]],
-    pub(crate) aggs: &'t [AggValues],
+    pub(crate) groups: &'t [Group],
 }
 
 impl<'t> Input<'t> {
@@ -194,8 +194,8 @@ impl<'t> Input<'t> {
         't: 'b,
     {
         let mut e = eval.at(self.tuples[row]);
-        if let Some(aggs) = self.aggs.get(row) {
-            e.aggs.clone_from(aggs);
+        if let Some(group) = self.groups.get(row) {
+            e.group.clone_from(group);
         }
         e
     }

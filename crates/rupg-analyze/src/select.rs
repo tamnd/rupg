@@ -28,6 +28,10 @@ pub struct Query {
     pub grouped: bool,
     /// The items of `GROUP BY`.
     pub group: Vec<SortGroup>,
+    /// `groupingSets`: the grouping sets of `GROUP BY`, or none for a plain `GROUP BY`. Each set makes groups on its own items, and the other items of `GROUP BY` are null in its rows.
+    pub grouping_sets: Vec<crate::GroupingSet>,
+    /// `groupDistinct`: `GROUP BY DISTINCT`, which makes the groups of the same grouping set once.
+    pub group_distinct: bool,
     /// The `HAVING` condition, of type `boolean`, which each group must pass.
     pub having: Option<Expr>,
     /// The items of `ORDER BY`.
@@ -242,7 +246,7 @@ impl Analyzer<'_> {
             }
             None => None,
         };
-        let having = match &s.havingClause {
+        let mut having = match &s.havingClause {
             Some(node) => {
                 let expr = self.with_kind(Kind::Having, |a| a.transform(Some(node)))?;
                 Some(self.coerce_to_boolean(expr, "HAVING")?)
@@ -270,7 +274,7 @@ impl Analyzer<'_> {
             }
         }
         let sort = self.sort_clause(&s.sortClause, &mut targets)?;
-        let (group, empty_set) = self.group_clause(&s.groupClause, &mut targets, &sort)?;
+        let (group, mut grouping_sets) = self.group_clause(&s.groupClause, &mut targets, &sort)?;
         // The parser gives a list with one null item for `DISTINCT` and the expressions for `DISTINCT ON`.
         let distinct_on = matches!(s.distinctClause.first(), Some(Some(_)));
         let distinct = if s.distinctClause.is_empty() {
@@ -295,9 +299,17 @@ impl Analyzer<'_> {
                 target.expr = self.coerce(expr, oid::TEXT, -1, Context::Implicit, None)?;
             }
         }
-        let grouped = self.has_aggs || !group.is_empty() || empty_set || having.is_some();
+        let group_distinct = s.groupDistinct;
+        let grouped =
+            self.has_aggs || !group.is_empty() || !grouping_sets.is_empty() || having.is_some();
         if grouped {
-            self.check_grouping(&targets, having.as_ref(), &group)?;
+            self.check_grouping(
+                &mut targets,
+                having.as_mut(),
+                &group,
+                &mut grouping_sets,
+                group_distinct,
+            )?;
         }
         let relations = std::mem::take(&mut self.scope.relations);
         let mut query = Query {
@@ -307,6 +319,8 @@ impl Analyzer<'_> {
             filter,
             grouped,
             group,
+            grouping_sets,
+            group_distinct,
             having,
             sort,
             distinct,

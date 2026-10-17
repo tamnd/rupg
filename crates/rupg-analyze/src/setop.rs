@@ -162,6 +162,8 @@ impl Analyzer<'_> {
             filter: None,
             grouped: false,
             group: Vec::new(),
+            grouping_sets: Vec::new(),
+            group_distinct: false,
             having: None,
             sort,
             distinct: Vec::new(),

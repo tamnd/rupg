@@ -202,6 +202,7 @@ fn check(expr: &Expr) -> Result<()> {
                 check(filter)?;
             }
         }
+        ExprKind::Grouping(g) => g.args.iter().try_for_each(check)?,
         ExprKind::Window(w) => {
             if w.agg {
                 agg::method(&agg::window_aggref(w), expr.ty, expr.location)?;
@@ -399,7 +400,7 @@ fn recursive_rows(
         step = new_rows(&keys, &mut seen, step)?;
     }
     let mut frames = run.outer.to_vec();
-    frames.push(Frame { tables, tuple: &[], aggs: &[] });
+    frames.push(Frame { tables, tuple: &[], group: None });
     let mut rows = Vec::new();
     while !step.is_empty() {
         run.session.interrupted()?;
@@ -683,8 +684,13 @@ fn hash_rows(rows: &Rows, pairs: &[(&Expr, usize)]) -> Option<Hashed> {
 struct Frame<'a> {
     tables: &'a scan::Tables,
     tuple: &'a [usize],
-    /// The result of each aggregate call of the query for the group, which an aggregate of the query in a subquery reads.
-    aggs: &'a [(*const Aggref, Value)],
+    /// The group of the query, which an aggregate or a `GROUPING` of the query in a subquery reads.
+    group: Option<&'a Group>,
+}
+
+/// The expressions that the queries outside a subquery make null.
+fn inherited(outer: &[Frame<'_>]) -> Vec<*const Expr> {
+    outer.iter().rev().find_map(|f| f.group).map(|g| g.nulled.clone()).unwrap_or_default()
 }
 
 /// True when a subquery reads a column of a query outside it, so that it must run again for each row of that query.
@@ -786,7 +792,7 @@ fn with_subqueries(
     }
     let mut tables = (**base).clone();
     let mut frames = outer.to_vec();
-    frames.push(Frame { tables: base, tuple: &[], aggs: &[] });
+    frames.push(Frame { tables: base, tuple: &[], group: None });
     for (i, relation) in query.relations.iter().enumerate() {
         if let Some(id) = work(relation) {
             let rows =
@@ -912,7 +918,7 @@ fn run_query(
             }
             let Some(sub) = &relation.subquery else { return Ok(Vec::new()) };
             let mut frames = outer.to_vec();
-            frames.push(Frame { tables, tuple, aggs: &[] });
+            frames.push(Frame { tables, tuple, group: None });
             run_query(sub, params, session, cache, &frames, false)
         };
         scan::tuples(query, tables, &mut |expr, tuple| eval.at(tuple).eval(expr), &mut source)?
@@ -943,7 +949,7 @@ fn run_query(
                 &eval,
                 query,
                 &calls,
-                window::Input { tuples: &refs, aggs: &[] },
+                window::Input { tuples: &refs, groups: &[] },
                 session,
             )?
         };
@@ -1189,8 +1195,16 @@ fn order(
     Ok(rows)
 }
 
-/// The result of each aggregate call of a group, by the address of the call in the query.
-type AggValues = Vec<(*const Aggref, Value)>;
+/// The state of a group of a query with groups.
+#[derive(Clone, Debug, Default)]
+pub(crate) struct Group {
+    /// The result of each aggregate call for the group, by the address of the call in the query.
+    pub(crate) aggs: Vec<(*const Aggref, Value)>,
+    /// The targets of the items of `GROUP BY` that are not in the grouping set of the group, which `GROUPING` reads.
+    pub(crate) out: Vec<usize>,
+    /// The expressions that are null in the group, by address: the items of `GROUP BY` that are not in the grouping set of the group, also in the subqueries, and the expressions that the queries outside the query make null.
+    pub(crate) nulled: Vec<*const Expr>,
+}
 
 /// The state of the evaluation of the expressions of one row.
 struct Eval<'a> {
@@ -1202,8 +1216,8 @@ struct Eval<'a> {
     tables: &'a scan::Tables,
     /// The row of each relation. In a query with groups it is the first row of the group.
     tuple: &'a [usize],
-    /// The result of each aggregate call for the group, by the address of the call in the query.
-    aggs: AggValues,
+    /// The aggregate calls and the grouping set of the group.
+    group: Group,
     cache: &'a Cache,
     /// The rows of the queries outside the query, with the query just outside it last.
     outer: &'a [Frame<'a>],
@@ -1232,7 +1246,7 @@ impl<'a> Eval<'a> {
             case: Vec::new(),
             tables,
             tuple: &[],
-            aggs: Vec::new(),
+            group: Group { nulled: inherited(outer), ..Group::default() },
             cache,
             outer,
             sub: Vec::new(),
@@ -1378,7 +1392,7 @@ impl<'a> Eval<'a> {
             case: Vec::new(),
             tables: self.tables,
             tuple,
-            aggs: Vec::new(),
+            group: Group { nulled: self.group.nulled.clone(), ..Group::default() },
             cache: self.cache,
             outer: self.outer,
             sub: Vec::new(),
@@ -1417,6 +1431,9 @@ impl<'a> Eval<'a> {
     }
 
     fn eval(&mut self, expr: &Expr) -> Result<Value> {
+        if !self.group.nulled.is_empty() && self.group.nulled.contains(&std::ptr::from_ref(expr)) {
+            return Ok(Value::Null);
+        }
         match &expr.kind {
             ExprKind::Const(v) => Ok(v.clone()),
             ExprKind::Param(n) => {
@@ -1562,17 +1579,36 @@ impl<'a> Eval<'a> {
                 .len()
                 .checked_sub(agg.levels_up)
                 .and_then(|i| self.outer.get(i))
-                .and_then(|frame| frame.aggs.iter().find(|(call, _)| std::ptr::eq(*call, &**agg)))
+                .and_then(|frame| frame.group)
+                .and_then(|g| g.aggs.iter().find(|(call, _)| std::ptr::eq(*call, &**agg)))
                 .map(|(_, value)| value.clone())
                 .ok_or_else(|| {
                     Error::internal("an aggregate of an outer query is outside of a group")
                 }),
             ExprKind::Agg(agg) => self
+                .group
                 .aggs
                 .iter()
                 .find(|(call, _)| std::ptr::eq(*call, &**agg))
                 .map(|(_, value)| value.clone())
                 .ok_or_else(|| Error::internal("an aggregate call is outside of a group")),
+            // `ExecEvalGroupingFunc`: a bit for each argument, the last one lowest, which is 1 when the argument is not in the grouping set of the group.
+            ExprKind::Grouping(g) => {
+                let out = if g.levels_up == 0 {
+                    Some(&self.group.out)
+                } else {
+                    self.outer
+                        .len()
+                        .checked_sub(g.levels_up)
+                        .and_then(|i| self.outer.get(i))
+                        .and_then(|frame| frame.group)
+                        .map(|g| &g.out)
+                };
+                let out = out.ok_or_else(|| Error::internal("GROUPING is outside of a group"))?;
+                let bits =
+                    g.refs.iter().fold(0, |bits, r| (bits << 1) | i32::from(out.contains(r)));
+                Ok(Value::Int4(bits))
+            }
             ExprKind::Window(w) => self
                 .windows
                 .iter()
@@ -1587,7 +1623,7 @@ impl<'a> Eval<'a> {
         let exists = sub.kind == SubLinkKind::Exists;
         let query = &sub.query;
         let mut frames = self.outer.to_vec();
-        frames.push(Frame { tables: self.tables, tuple: self.tuple, aggs: &self.aggs });
+        frames.push(Frame { tables: self.tables, tuple: self.tuple, group: Some(&self.group) });
         let rows = self.cache.rows(query, || {
             run_query(query, self.params, self.session, self.cache, &frames, exists)
         })?;
@@ -2118,7 +2154,7 @@ fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
         case: Vec::new(),
         tables: &tables,
         tuple: &[],
-        aggs: Vec::new(),
+        group: Group::default(),
         cache: &cache,
         outer: &[],
         sub: Vec::new(),
@@ -2164,7 +2200,7 @@ pub fn input_failure(ty: u32, value: &Value, session: &dyn Session) -> Result<Op
         case: Vec::new(),
         tables: &tables,
         tuple: &[],
-        aggs: Vec::new(),
+        group: Group::default(),
         cache: &cache,
         outer: &[],
         sub: Vec::new(),

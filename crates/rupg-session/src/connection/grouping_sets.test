@@ -1,0 +1,447 @@
+> SET TimeZone TO 'UTC'
+SET
+> CREATE VIEW t AS SELECT * FROM (VALUES (1, 'x', 10), (1, 'y', 20), (2, 'x', 30), (2, 'y', 40), (3, 'x', 50)) AS v (a, b, n)
+CREATE VIEW
+> SELECT a, b, sum(n) FROM t GROUP BY ROLLUP (a, b) ORDER BY a, b
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,sum:20:8:-1
+row 1,x,10
+row 1,y,20
+row 1,NULL,30
+row 2,x,30
+row 2,y,40
+row 2,NULL,70
+row 3,x,50
+row 3,NULL,50
+row NULL,NULL,150
+SELECT 9
+> SELECT a, b, sum(n), grouping(a, b) FROM t GROUP BY CUBE (a, b) ORDER BY a, b
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,sum:20:8:-1,grouping:23:4:-1
+row 1,x,10,0
+row 1,y,20,0
+row 1,NULL,30,1
+row 2,x,30,0
+row 2,y,40,0
+row 2,NULL,70,1
+row 3,x,50,0
+row 3,NULL,50,1
+row NULL,x,90,2
+row NULL,y,60,2
+row NULL,NULL,150,3
+SELECT 11
+> SELECT a, b, count(*) FROM t GROUP BY GROUPING SETS ((a), (b), ()) ORDER BY 1, 2
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,NULL,2
+row 2,NULL,2
+row 3,NULL,1
+row NULL,x,3
+row NULL,y,2
+row NULL,NULL,5
+SELECT 6
+> SELECT a, b, count(*) FROM t GROUP BY GROUPING SETS (a, b, (a, b), ()) ORDER BY 1, 2
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,x,1
+row 1,y,1
+row 1,NULL,2
+row 2,x,1
+row 2,y,1
+row 2,NULL,2
+row 3,x,1
+row 3,NULL,1
+row NULL,x,3
+row NULL,y,2
+row NULL,NULL,5
+SELECT 11
+> SELECT a, b, count(*) FROM t GROUP BY a, ROLLUP (b) ORDER BY 1, 2
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,x,1
+row 1,y,1
+row 1,NULL,2
+row 2,x,1
+row 2,y,1
+row 2,NULL,2
+row 3,x,1
+row 3,NULL,1
+SELECT 8
+> SELECT a, b, count(*) FROM t GROUP BY ROLLUP (a), CUBE (b) ORDER BY 1, 2, 3
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,x,1
+row 1,y,1
+row 1,NULL,2
+row 2,x,1
+row 2,y,1
+row 2,NULL,2
+row 3,x,1
+row 3,NULL,1
+row NULL,x,3
+row NULL,y,2
+row NULL,NULL,5
+SELECT 11
+> SELECT a, b, count(*) FROM t GROUP BY DISTINCT ROLLUP (a), CUBE (b) ORDER BY 1, 2
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,x,1
+row 1,y,1
+row 1,NULL,2
+row 2,x,1
+row 2,y,1
+row 2,NULL,2
+row 3,x,1
+row 3,NULL,1
+row NULL,x,3
+row NULL,y,2
+row NULL,NULL,5
+SELECT 11
+> SELECT a, count(*) FROM t GROUP BY GROUPING SETS ((a), (a)) ORDER BY 1
+fields a@t.1:23:4:-1,count:20:8:-1
+row 1,2
+row 1,2
+row 2,2
+row 2,2
+row 3,1
+row 3,1
+SELECT 6
+> SELECT a, count(*) FROM t GROUP BY ROLLUP (a, a) ORDER BY 1, 2
+fields a@t.1:23:4:-1,count:20:8:-1
+row 1,2
+row 1,2
+row 2,2
+row 2,2
+row 3,1
+row 3,1
+row NULL,5
+SELECT 7
+> SELECT count(*) FROM t GROUP BY GROUPING SETS ((), ())
+fields count:20:8:-1
+row 5
+row 5
+SELECT 2
+> SELECT count(*) FROM t WHERE false GROUP BY ROLLUP (a)
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT a, count(*) FROM t WHERE false GROUP BY CUBE (a)
+fields a@t.1:23:4:-1,count:20:8:-1
+row NULL,0
+SELECT 1
+> SELECT count(*) FROM t WHERE false GROUP BY ()
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT a + 1 AS c, sum(n) FROM t GROUP BY ROLLUP (a + 1) ORDER BY 1
+fields c:23:4:-1,sum:20:8:-1
+row 2,30
+row 3,70
+row 4,50
+row NULL,150
+SELECT 4
+> SELECT a + 1, coalesce(a, 0), a IS NULL, sum(n) FROM t GROUP BY ROLLUP (a) ORDER BY 1
+fields ?column?:23:4:-1,coalesce:23:4:-1,?column?:16:1:-1,sum:20:8:-1
+row 2,1,f,30
+row 3,2,f,70
+row 4,3,f,50
+row NULL,0,t,150
+SELECT 4
+> SELECT grouping(a), grouping(b), grouping(b, a), a, b FROM t GROUP BY ROLLUP (a, b) ORDER BY 4, 5
+fields grouping:23:4:-1,grouping:23:4:-1,grouping:23:4:-1,a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 0,0,0,1,x
+row 0,0,0,1,y
+row 0,1,2,1,NULL
+row 0,0,0,2,x
+row 0,0,0,2,y
+row 0,1,2,2,NULL
+row 0,0,0,3,x
+row 0,1,2,3,NULL
+row 1,1,3,NULL,NULL
+SELECT 9
+> SELECT a, sum(n) FROM t GROUP BY ROLLUP (a) HAVING grouping(a) = 0 OR sum(n) > 100 ORDER BY 1
+fields a@t.1:23:4:-1,sum:20:8:-1
+row 1,30
+row 2,70
+row 3,50
+row NULL,150
+SELECT 4
+> SELECT a, sum(n) FROM t GROUP BY ROLLUP (a) HAVING a IS NULL
+fields a@t.1:23:4:-1,sum:20:8:-1
+row NULL,150
+SELECT 1
+> SELECT a, b, sum(n) FROM t GROUP BY ROLLUP (a, b) ORDER BY grouping(a, b), a, b
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,sum:20:8:-1
+row 1,x,10
+row 1,y,20
+row 2,x,30
+row 2,y,40
+row 3,x,50
+row 1,NULL,30
+row 2,NULL,70
+row 3,NULL,50
+row NULL,NULL,150
+SELECT 9
+> SELECT a, (SELECT a), (SELECT grouping(a)), (SELECT sum(n) + a), sum(n) FROM t GROUP BY ROLLUP (a) ORDER BY 1
+fields a@t.1:23:4:-1,a:23:4:-1,grouping:23:4:-1,?column?:20:8:-1,sum:20:8:-1
+row 1,1,0,31,30
+row 2,2,0,72,70
+row 3,3,0,53,50
+row NULL,NULL,1,NULL,150
+SELECT 4
+> SELECT a, b, rank() OVER (PARTITION BY grouping(a, b) ORDER BY sum(n) DESC), sum(n) FROM t GROUP BY CUBE (a, b) ORDER BY 1, 2
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,rank:20:8:-1,sum:20:8:-1
+row 1,x,5,10
+row 1,y,4,20
+row 1,NULL,3,30
+row 2,x,3,30
+row 2,y,2,40
+row 2,NULL,1,70
+row 3,x,1,50
+row 3,NULL,2,50
+row NULL,x,1,90
+row NULL,y,2,60
+row NULL,NULL,1,150
+SELECT 11
+> SELECT a, sum(n), sum(sum(n)) OVER (ORDER BY a) FROM t GROUP BY ROLLUP (a) ORDER BY 1
+fields a@t.1:23:4:-1,sum:20:8:-1,sum:1700:-1:-1
+row 1,30,30
+row 2,70,100
+row 3,50,150
+row NULL,150,300
+SELECT 4
+> SELECT a, grouping(a) FROM t GROUP BY a ORDER BY 1
+fields a@t.1:23:4:-1,grouping:23:4:-1
+row 1,0
+row 2,0
+row 3,0
+SELECT 3
+> SELECT a, b, count(*) FROM t GROUP BY GROUPING SETS (ROLLUP (a, b), CUBE (b)) ORDER BY 1, 2, 3
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,x,1
+row 1,y,1
+row 1,NULL,2
+row 2,x,1
+row 2,y,1
+row 2,NULL,2
+row 3,x,1
+row 3,NULL,1
+row NULL,x,3
+row NULL,y,2
+row NULL,NULL,5
+row NULL,NULL,5
+SELECT 12
+> SELECT a, b, count(*) FROM t GROUP BY GROUPING SETS ((a, b), GROUPING SETS ((a), ())) ORDER BY 1, 2
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,x,1
+row 1,y,1
+row 1,NULL,2
+row 2,x,1
+row 2,y,1
+row 2,NULL,2
+row 3,x,1
+row 3,NULL,1
+row NULL,NULL,5
+SELECT 9
+> SELECT a, b, count(*) FROM t GROUP BY (a, b) ORDER BY 1, 2
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,x,1
+row 1,y,1
+row 2,x,1
+row 2,y,1
+row 3,x,1
+SELECT 5
+> SELECT a, count(DISTINCT b), string_agg(b, ',' ORDER BY b) FROM t GROUP BY ROLLUP (a) ORDER BY 1
+fields a@t.1:23:4:-1,count:20:8:-1,string_agg:25:-1:-1
+row 1,2,x,y
+row 2,2,x,y
+row 3,1,x
+row NULL,2,x,x,x,y,y
+SELECT 4
+> SELECT a, percentile_disc(0.5) WITHIN GROUP (ORDER BY n) FROM t GROUP BY CUBE (a) ORDER BY 1
+fields a@t.1:23:4:-1,percentile_disc:23:4:-1
+row 1,10
+row 2,30
+row 3,50
+row NULL,30
+SELECT 4
+> SELECT DISTINCT a FROM t GROUP BY ROLLUP (a, b) ORDER BY 1
+fields a@t.1:23:4:-1
+row 1
+row 2
+row 3
+row NULL
+SELECT 4
+> SELECT a, b FROM t GROUP BY ROLLUP (a, b) ORDER BY 1, 2 LIMIT 3
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 1,x
+row 1,y
+row 1,NULL
+SELECT 3
+> SELECT t.a, n FROM t GROUP BY ROLLUP (a), n ORDER BY 1, 2
+fields a@t.1:23:4:-1,n@t.3:23:4:-1
+row 1,10
+row 1,20
+row 2,30
+row 2,40
+row 3,50
+row NULL,10
+row NULL,20
+row NULL,30
+row NULL,40
+row NULL,50
+SELECT 10
+> SELECT a, b, count(*) FROM t GROUP BY GROUPING SETS ((a, b), ()) ORDER BY a NULLS FIRST, b DESC
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row NULL,NULL,5
+row 1,y,1
+row 1,x,1
+row 2,y,1
+row 2,x,1
+row 3,x,1
+SELECT 6
+> SELECT c.relname FROM pg_class c WHERE c.oid = 1259 GROUP BY c.oid, ROLLUP (c.relkind)
+fields relname@pg_class.2:19:64:-1
+row pg_class
+row pg_class
+SELECT 2
+> SELECT b, count(*) FROM t GROUP BY ROLLUP (a)
+ERROR 42803 column "t.b" must appear in the GROUP BY clause or be used in an aggregate function at 8
+> SELECT c.relname FROM pg_class c GROUP BY ROLLUP (c.oid)
+ERROR 42803 column "c.relname" must appear in the GROUP BY clause or be used in an aggregate function at 8
+> SELECT grouping(n) FROM t GROUP BY ROLLUP (a)
+ERROR 42803 arguments to GROUPING must be grouping expressions of the associated query level at 17
+> SELECT grouping(a + 1) FROM t GROUP BY a
+ERROR 42803 arguments to GROUPING must be grouping expressions of the associated query level at 17
+> SELECT a FROM t WHERE grouping(a) = 0 GROUP BY a
+ERROR 42803 grouping operations are not allowed in WHERE at 23
+> SELECT a FROM t GROUP BY a, grouping(a)
+ERROR 42803 grouping operations are not allowed in GROUP BY at 29
+> SELECT sum(grouping(a)) FROM t GROUP BY a
+ERROR 42803 aggregate function calls cannot be nested at 12
+> SELECT grouping(sum(n)) FROM t GROUP BY a
+ERROR 42803 aggregate function calls cannot be nested at 17
+> SELECT grouping(a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a, a) FROM t GROUP BY a
+ERROR 54023 GROUPING must have fewer than 32 arguments at 8
+> SELECT 1 FROM t GROUP BY CUBE (a, a, a, a, a, a, a, a, a, a, a, a, a)
+ERROR 54011 CUBE is limited to 12 elements at 26
+> SELECT 1 FROM t GROUP BY CUBE (a, b, n, a, b, n, a, b, n, a, b, n), CUBE (a, b)
+ERROR 54001 too many grouping sets present (maximum 4096)
+> SELECT grouping(a) FROM t
+ERROR 42803 arguments to GROUPING must be grouping expressions of the associated query level at 17
+> SELECT 1 FROM t JOIN t u ON grouping(t.a) = 0 GROUP BY t.a
+ERROR 42803 grouping operations are not allowed in JOIN conditions at 29
+> SELECT 1 FROM t, LATERAL (SELECT grouping(t.a)) s GROUP BY t.a
+ERROR 42803 grouping operations are not allowed in FROM clause of their own query level at 34
+> SELECT (SELECT grouping(u.a) FROM t u GROUP BY ROLLUP (u.a) ORDER BY 1 DESC LIMIT 1) FROM t GROUP BY a ORDER BY 1
+fields grouping:23:4:-1
+row 1
+row 1
+row 1
+SELECT 3
+> SELECT (SELECT grouping(t.a) FROM t u LIMIT 1) FROM t GROUP BY ROLLUP (a) ORDER BY 1
+fields grouping:23:4:-1
+row 0
+row 0
+row 0
+row 1
+SELECT 4
+> SELECT a, b, count(*) FROM t GROUP BY DISTINCT a, b ORDER BY 1, 2
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,count:20:8:-1
+row 1,x,1
+row 1,y,1
+row 2,x,1
+row 2,y,1
+row 3,x,1
+SELECT 5
+> CREATE VIEW v1 AS SELECT a, b, sum(n), grouping(a, b) AS g FROM t GROUP BY ROLLUP (a, b)
+CREATE VIEW
+> CREATE VIEW v2 AS SELECT a, b, count(*) FROM t GROUP BY DISTINCT a, CUBE (a, b), GROUPING SETS ((a), (b, a), (), ROLLUP (b))
+CREATE VIEW
+> CREATE VIEW v3 AS SELECT count(*) FROM t GROUP BY ()
+CREATE VIEW
+> CREATE VIEW v4 AS SELECT a + 1 AS c FROM t GROUP BY GROUPING SETS ((a + 1), (), (a + 1, b))
+CREATE VIEW
+> CREATE VIEW v5 AS SELECT a, b FROM t GROUP BY DISTINCT a, b
+CREATE VIEW
+> CREATE VIEW v6 AS SELECT a FROM t GROUP BY a, ()
+CREATE VIEW
+> SELECT pg_get_viewdef('v1'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b,
+    sum(n) AS sum,
+    GROUPING(a, b) AS g
+   FROM t
+  GROUP BY ROLLUP(a, b);
+SELECT 1
+> SELECT pg_get_viewdef('v2'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b,
+    count(*) AS count
+   FROM t
+  GROUP BY DISTINCT a, CUBE(a, b), GROUPING SETS ((a), (b, a), (), ROLLUP(b));
+SELECT 1
+> SELECT pg_get_viewdef('v3'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT count(*) AS count
+   FROM t
+  GROUP BY ();
+SELECT 1
+> SELECT pg_get_viewdef('v4'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (a + 1) AS c
+   FROM t
+  GROUP BY GROUPING SETS (((a + 1)), (), ((a + 1), b));
+SELECT 1
+> SELECT pg_get_viewdef('v5'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b
+   FROM t
+  GROUP BY DISTINCT a, b;
+SELECT 1
+> SELECT pg_get_viewdef('v6'::regclass)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a
+   FROM t
+  GROUP BY a;
+SELECT 1
+> SELECT pg_get_viewdef('v1'::regclass, true)
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b,
+    sum(n) AS sum,
+    GROUPING(a, b) AS g
+   FROM t
+  GROUP BY ROLLUP(a, b);
+SELECT 1
+> SELECT * FROM v1 ORDER BY 1, 2
+fields a@v1.1:23:4:-1,b@v1.2:25:-1:-1,sum@v1.3:20:8:-1,g@v1.4:23:4:-1
+row 1,x,10,0
+row 1,y,20,0
+row 1,NULL,30,1
+row 2,x,30,0
+row 2,y,40,0
+row 2,NULL,70,1
+row 3,x,50,0
+row 3,NULL,50,1
+row NULL,NULL,150,3
+SELECT 9
+> SELECT * FROM v2 ORDER BY 1, 2, 3
+fields a@v2.1:23:4:-1,b@v2.2:25:-1:-1,count@v2.3:20:8:-1
+row 1,x,1
+row 1,y,1
+row 1,NULL,2
+row 2,x,1
+row 2,y,1
+row 2,NULL,2
+row 3,x,1
+row 3,NULL,1
+SELECT 8
+> SELECT * FROM v4 ORDER BY 1
+fields c@v4.1:23:4:-1
+row 2
+row 2
+row 2
+row 3
+row 3
+row 3
+row 4
+row 4
+row NULL
+SELECT 9
