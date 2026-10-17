@@ -367,6 +367,8 @@ The protocol puts a floor under every statement. On the machine `gpc` (i9-13900K
 | `COPY FROM STDIN` load time for ClickBench `hits` and TPC-H at scale factor 10 | At least 10x faster than the oracle with its fastest legal configuration | M4 |
 | Pipelined point operations at depth 64 | Server CPU per operation 10x below the oracle | M8 |
 
+**How the connection rate is measured.** `rupg-bench connect` runs the test. When the client runs on the same machine as the server, the client uses the same cores. With TLS, its side of the handshake and of SCRAM costs about one core, so the rate measures the client too. Thus the result also has the server CPU for each connection, from the option `--pid`, and a connection rate target holds when the server CPU for each connection is at least 10x below the oracle. A run with the client on a different machine gives the rate itself. The TLS case uses an ECDSA P-256 certificate on both servers. With an RSA-2048 certificate the signature of the handshake costs about 0.8 ms on both servers, with ring and with OpenSSL. That is more than half of the budget of 10x, so we publish the RSA-2048 number next to the ECDSA number and do not claim the target for it.
+
 The connection rate target is a prediction based on the cost of a process fork in PostgreSQL against the cost of a task in rupg. SCRAM with 4,096 iterations of PBKDF2 costs the same CPU on both servers, so the TLS and SCRAM target depends on the rest of the startup being small. If the target fails because of PBKDF2 alone, we publish the number with that cause and do not lower the iteration count. The 1 percent rule comes from `../2140/compat/postgres/15-performance.md`. Document 20 runs these measurements.
 
 ## 6.19 Gates
