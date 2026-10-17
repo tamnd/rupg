@@ -2592,6 +2592,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/join_whole_row.test")));
     }
 
+    /// `pg_get_viewdef` for a join with an alias: the names of the join and of its columns, the aliases of the columns that it shows only when a name changes, the names of `USING` that go down to the relations in the join, a column of the join in the list, `WHERE`, `ORDER BY` and `GROUP BY`, a join in a join, a name that another relation has, `USING ... AS`, `LATERAL` and a subquery. `connection/join_alias_viewdef.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn join_alias_viewdef() {
+        big_stack(|| script(include_str!("connection/join_alias_viewdef.test")));
+    }
+
     /// `DROP TEXT SEARCH` for templates, parsers, dictionaries and configurations: the errors and the notices of names that give no object, the pinned objects, the configurations that depend on a dictionary, the dictionaries that depend on a template, a schema with objects of text search, and a removal in a transaction that rolls back. `connection/drop_text_search.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn drop_text_search() {
