@@ -762,7 +762,12 @@ impl rupg_func::Session for Reader<'_> {
                     text(min),
                     text(max),
                     enumvals,
-                    text(parameter.boot_text()),
+                    // The boot value of `server_version` is `PG_VERSION`, the version of the build, so it is the version of rupg.
+                    text(if parameter.name == "server_version" {
+                        Some(crate::connection::server_version())
+                    } else {
+                        parameter.boot_text()
+                    }),
                     text(current.reset),
                     text(current.location.as_ref().map(|(file, _)| file.clone())),
                     current.location.map_or(Value::Null, |(_, line)| Value::Int4(line)),

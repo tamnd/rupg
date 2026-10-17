@@ -47,6 +47,8 @@ The L5 number is a number per client. We never add the clients into one sum, bec
 
 **The message boundaries of COPY.** PostgreSQL sends one row per `CopyData` message. rupg sends one or more whole rows per message, up to 64 KiB, because the encoder writes vectors (document 06 section 6.11). psql and every driver in the matrix accept both forms, so the comparison joins the data first.
 
+**The port of the server.** The oracle and rupg run on one machine with the same configuration files, and only the line of `port` is different. Two servers cannot listen on one port, so the value of `port` in `SHOW`, `pg_settings` and `pg_file_settings` and the value of `inet_server_port()` are not compared. The source and the line of the setting are compared.
+
 ## 5.3 The excluded bytes
 
 This section lists every byte that rupg may send differently from the oracle without a difference being counted. The list is closed. A byte that is not on this list and that differs is a difference. To add an item, you must write the reason in document 24 first, and the item must name a client behavior that does not depend on the byte.
@@ -67,7 +69,7 @@ This section lists every byte that rupg may send differently from the oracle wit
 | 12 | The suffix of `server_version` after the version number | The value is `19.0 (rupg X.Y.Z)`. Clients read the leading number. Section 5.7 |
 | 13 | The value of the process ID in `BackendKeyData` and `pg_backend_pid()` | rupg sessions are tasks, not processes (document 06 section 6.2). The value is a session number, and the two places show the same number |
 | 14 | Server log lines | The log is not part of the protocol. rupg writes the same text for the lines that log analyzers parse, but a difference is not counted |
-| 15 | File system paths: `data_directory`, `config_file`, `hba_file`, `ident_file`, `pg_settings.sourcefile`, the `file_name` column of `pg_hba_file_rules` and the directories of `pg_config` | Two servers on one machine never have the same paths. rupg keeps its host rules inside the file, so these values have another form (document 06 section 6.8) |
+| 15 | File system paths: `data_directory`, `config_file`, `hba_file`, `ident_file`, `hosts_file`, `pg_settings.sourcefile`, the `file_name` column of `pg_hba_file_rules` and the directories of `pg_config` | Two servers on one machine never have the same paths. rupg keeps its host rules inside the file, so these values have another form (document 06 section 6.8) |
 
 Items 1 to 11 are the list in `../2140/compat/postgres/01-what-compatible-means.md` section 1.6. Item 8 is changed, because rupg has an importer and the rudb design did not. Items 12 to 15 are new for rupg. Item 12 follows from section 5.7. Item 13 follows from the session model. Item 14 states a rule that the rudb design had in its harness and not in its list. Item 15 follows from the rule of one file with no sidecar.
 

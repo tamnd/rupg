@@ -6,7 +6,7 @@
 //!
 //! The rules come from the file of the setting `hba_file` when it is set, else from [`Config::hba`], else from the defaults of spec/06 section 6.8. The tables `rupg_hba` and `rupg_ident` of the spec do not exist yet, so [`Config::hba`] and [`Config::ident`] stand in for them.
 //!
-//! The server listens on the TCP address of [`Config::listen`] and on the Unix socket `<dir>/.s.PGSQL.<port>` for each directory of `unix_socket_directories`, with the port of the TCP address (spec/06 section 6.15).
+//! The server listens on the TCP address of [`Config::listen`], or else on each host of `listen_addresses` with the port of `port` after it reads the configuration file, as the postmaster does. It also listens on the Unix socket `<dir>/.s.PGSQL.<port>` for each directory of `unix_socket_directories` (spec/06 section 6.15).
 //!
 //! This crate first ships in milestone M2. See `spec/22-crate-layout.md` section 22.4 and `spec/23-milestones.md`.
 
@@ -73,7 +73,7 @@ pub trait Log: Send + Sync + fmt::Debug {
 /// The settings of a server.
 #[derive(Clone, Debug)]
 pub struct Config {
-    /// The address of the listener, such as `127.0.0.1:5432`. The port 0 takes a free port.
+    /// The address of the listener, such as `127.0.0.1:5432`, which sets `listen_addresses` and `port` as the command line does. The port 0 takes a free port. An empty text takes the hosts of `listen_addresses` and the port of `port` from the settings and the configuration file.
     pub listen: String,
     /// The name of the only role, which is a superuser.
     pub superuser: String,
@@ -96,7 +96,7 @@ pub struct Config {
 impl Default for Config {
     fn default() -> Config {
         Config {
-            listen: "127.0.0.1:5432".into(),
+            listen: String::new(),
             superuser: "postgres".into(),
             password: None,
             hba: None,
@@ -150,7 +150,7 @@ struct Shared {
 pub struct Server {
     shared: Arc<Shared>,
     net: Arc<dyn Net>,
-    address: String,
+    addresses: Vec<String>,
     sockets: Vec<String>,
     accept: Vec<TaskHandle>,
     connections: Arc<Mutex<Vec<TaskHandle>>>,
@@ -210,8 +210,47 @@ fn split_directories(list: &str) -> std::result::Result<Vec<String>, ()> {
     }
 }
 
-/// The paths of the Unix sockets for the TCP address `address`.
-fn socket_paths(settings: &Settings, address: &str) -> Result<Vec<String>> {
+/// `ListenServerPort` for each host of `listen_addresses`, with the port of `port`. A host that the server cannot listen on gives a warning, and the server stops only when no host works. `*` is each IPv4 address, and `localhost` is the loopback address of IPv4 and of IPv6.
+fn tcp_listeners(
+    settings: &Settings,
+    net: &dyn Net,
+    write: &dyn Fn(&str, &[String]),
+) -> Result<Vec<Box<dyn Listener>>> {
+    let list = settings.get("listen_addresses").unwrap_or_default();
+    let hosts = rupg_session::guc::split_identifiers(&list, ',').ok_or_else(|| {
+        Error::new(
+            SqlState::INVALID_PARAMETER_VALUE,
+            "invalid list syntax in parameter \"listen_addresses\"",
+        )
+    })?;
+    let port = settings.get("port").unwrap_or_else(|| "5432".into());
+    let mut listeners = Vec::new();
+    for host in &hosts {
+        let addresses = match host.as_str() {
+            "*" => vec![format!("0.0.0.0:{port}")],
+            "localhost" => vec![format!("127.0.0.1:{port}"), format!("[::1]:{port}")],
+            ip if ip.contains(':') => vec![format!("[{ip}]:{port}")],
+            name => vec![format!("{name}:{port}")],
+        };
+        let before = listeners.len();
+        for address in &addresses {
+            match net.listen(address) {
+                Ok(listener) => listeners.push(listener),
+                Err(e) => write("LOG", &[e.message().to_owned()]),
+            }
+        }
+        if listeners.len() == before {
+            write("WARNING", &[format!("could not create listen socket for \"{host}\"")]);
+        }
+    }
+    if listeners.is_empty() && !hosts.is_empty() {
+        return Err(Error::new(SqlState::INTERNAL_ERROR, "could not create any TCP/IP sockets"));
+    }
+    Ok(listeners)
+}
+
+/// The paths of the Unix sockets for the port of `port`.
+fn socket_paths(settings: &Settings) -> Result<Vec<String>> {
     let list = settings.get("unix_socket_directories").unwrap_or_default();
     let dirs = split_directories(&list).map_err(|()| {
         Error::new(
@@ -219,8 +258,8 @@ fn socket_paths(settings: &Settings, address: &str) -> Result<Vec<String>> {
             "invalid list syntax in parameter \"unix_socket_directories\"",
         )
     })?;
-    let port = address.rsplit_once(':').map_or("5432", |(_, port)| port);
-    let name = socket_name(port);
+    let port = settings.get("port").unwrap_or_else(|| "5432".into());
+    let name = socket_name(&port);
     dirs.iter()
         .map(|dir| {
             if !dir.starts_with('/') {
@@ -248,14 +287,18 @@ impl Server {
         tasks: Arc<dyn Tasks>,
         entropy: Arc<dyn Entropy>,
     ) -> Result<Server> {
-        let listener = net.listen(&config.listen)?;
-        let address = listener.local_addr();
-        // `listen_addresses` and `port` show the TCP address that the server got.
+        // With `listen`, `listen_addresses` and `port` show the TCP address that the server got, as settings of the command line.
+        let mut tcp = Vec::new();
         let mut args = config.settings.clone();
-        if let Some((host, port)) = address.rsplit_once(':') {
-            let host = host.trim_start_matches('[').trim_end_matches(']');
-            args.push(("listen_addresses".into(), host.into()));
-            args.push(("port".into(), port.into()));
+        if !config.listen.is_empty() {
+            let listener = net.listen(&config.listen)?;
+            let address = listener.local_addr();
+            if let Some((host, port)) = address.rsplit_once(':') {
+                let host = host.trim_start_matches('[').trim_end_matches(']');
+                args.push(("listen_addresses".into(), host.into()));
+                args.push(("port".into(), port.into()));
+            }
+            tcp.push(listener);
         }
         let mut base = connection::base_settings(&args)?;
         let write = |severity: &str, lines: &[String]| {
@@ -270,14 +313,18 @@ impl Server {
         write("LOG", &lines);
         let conf = conf?;
         connection::semaphore_count(&mut base)?;
+        if config.listen.is_empty() {
+            tcp = tcp_listeners(&base, &*net, &write)?;
+        }
         base.share();
-        let sockets = socket_paths(&base, &address)?;
+        let addresses: Vec<String> = tcp.iter().map(|listener| listener.local_addr()).collect();
+        let sockets = socket_paths(&base)?;
         let tls = tls::load(&base, &*io)?;
         let (hba_source, ident_source) = rule_sources(config, &base);
         let ssl = base.get("ssl").as_deref() == Some("on");
         let files = RuleFiles { io: io.clone(), hba: hba_source, ident: ident_source, ssl, conf };
         let (hba, ident) = load_rules(&files, &*io, &write)?;
-        let mut listeners = vec![listener];
+        let mut listeners = tcp;
         for path in &sockets {
             listeners.push(net.listen(path)?);
         }
@@ -310,7 +357,8 @@ impl Server {
             stopping: AtomicBool::new(false),
         });
         let connections = Arc::new(Mutex::new(Vec::new()));
-        let mut server = Server { shared, net, address, sockets, accept: Vec::new(), connections };
+        let mut server =
+            Server { shared, net, addresses, sockets, accept: Vec::new(), connections };
         for listener in listeners {
             let shared = server.shared.clone();
             let connections = server.connections.clone();
@@ -330,9 +378,14 @@ impl Server {
         Ok(server)
     }
 
-    /// The TCP address of the server, with the port that it got.
+    /// The first TCP address of the server, with the port that it got. It is empty when the server has no TCP listener.
     pub fn address(&self) -> &str {
-        &self.address
+        self.addresses.first().map_or("", String::as_str)
+    }
+
+    /// The TCP addresses of the server, one for each listener.
+    pub fn addresses(&self) -> &[String] {
+        &self.addresses
     }
 
     /// The paths of the Unix sockets of the server.
@@ -348,7 +401,7 @@ impl Server {
     pub fn stop(mut self) -> Result<()> {
         self.shared.stopping.store(true, Ordering::SeqCst);
         // A connection to each listener wakes the task that waits in accept.
-        let addresses = std::iter::once(&self.address).chain(&self.sockets);
+        let addresses = self.addresses.iter().chain(&self.sockets);
         for address in addresses.take(self.accept.len()) {
             if let Ok(stream) = self.net.connect(address) {
                 let _ = stream.shutdown();
