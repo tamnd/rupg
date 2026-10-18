@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `INSERT` and `UPDATE` check the unique indexes and the primary keys of the table. A duplicate key gives `23505` with the key in the detail, and a key that a transaction in progress holds makes the write wait for the end of that transaction (#395).
+
 ## 0.1.42 (2026-10-18)
 
 A patch release on the way to M3. Tables now take rows: `INSERT`, `UPDATE` and `DELETE` work on the rows in memory, with MVCC snapshots and the waits for the rows that other transactions change.
