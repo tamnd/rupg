@@ -49,6 +49,23 @@ pub struct Write {
     pub width: usize,
     /// The names of the check constraints in the order of their names. The targets after the columns are the conditions of these constraints, in the same order.
     pub checks: Vec<String>,
+    /// The unique indexes of the table in the order of their OIDs, as `RelationGetIndexList` gives them. Each new version of a row must have a key that no other version has.
+    pub unique: Vec<Unique>,
+}
+
+/// A unique index of the target table, which `_bt_check_unique` checks for each new version of a row.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Unique {
+    /// The name of the index, for the error.
+    pub name: String,
+    /// The column of the table of each key column, from 0.
+    pub columns: Vec<usize>,
+    /// The type of each key column.
+    pub types: Vec<u32>,
+    /// The key columns as `pg_get_indexdef_columns` gives them, for the detail of the error.
+    pub shown: String,
+    /// `indnullsnotdistinct`: a null is equal to a null, so two keys with nulls can conflict.
+    pub nulls_not_distinct: bool,
 }
 
 /// An item of a row of `VALUES` or of `UPDATE ... SET`: an expression, or `DEFAULT` at its place.
@@ -127,7 +144,9 @@ impl Analyzer<'_> {
             query = with_checks(&name, &columns, query, checks, false);
         }
         let width = columns.len();
-        query.write = Some(Write { kind: WriteKind::Insert, table, name, width, checks: names });
+        let unique = self.unique_keys(table, &columns)?;
+        query.write =
+            Some(Write { kind: WriteKind::Insert, table, name, width, checks: names, unique });
         Ok(query)
     }
 
@@ -176,12 +195,6 @@ impl Analyzer<'_> {
             }
         }
         if let Some(catalog) = self.env.catalog() {
-            let unique = catalog.relations().any(|index| {
-                index.index.as_ref().is_some_and(|info| info.table == oid && info.unique)
-            });
-            if unique && kind != WriteKind::Delete {
-                return Err(not_yet(&format!("{what} a table with a unique index")));
-            }
             let foreign = catalog.constraints_of(oid).any(|c| c.kind == ConKind::Foreign);
             if foreign && kind != WriteKind::Delete {
                 return Err(not_yet(&format!("{what} a table with a foreign key")));
@@ -209,6 +222,55 @@ impl Analyzer<'_> {
             })
             .collect();
         Ok((oid, rel.name.clone(), columns))
+    }
+
+    /// The unique indexes of a table in the order of their OIDs. A unique index with an expression, a predicate or a deferrable constraint is not supported yet.
+    pub(crate) fn unique_keys(&self, table: u32, columns: &[Column]) -> Result<Vec<Unique>> {
+        let Some(catalog) = self.env.catalog() else {
+            return Ok(Vec::new());
+        };
+        let mut indexes: Vec<_> = catalog
+            .relations()
+            .filter_map(|rel| {
+                rel.index
+                    .as_ref()
+                    .filter(|info| info.table == table && info.unique)
+                    .map(|info| (rel, info))
+            })
+            .collect();
+        indexes.sort_by_key(|(rel, _)| rel.oid);
+        let mut list = Vec::with_capacity(indexes.len());
+        for (rel, info) in indexes {
+            if info.exprs.is_some() || info.predicate.is_some() || !info.immediate {
+                return Err(not_yet(
+                    "a write to a table with a unique index on an expression, a partial unique index or a deferrable unique constraint",
+                ));
+            }
+            let count = usize::try_from(info.key_count).unwrap_or_default();
+            let mut key = Unique {
+                name: rel.name.clone(),
+                columns: Vec::with_capacity(count),
+                types: Vec::with_capacity(count),
+                shown: String::new(),
+                nulls_not_distinct: info.nulls_not_distinct,
+            };
+            for &attnum in info.keys.iter().take(count) {
+                let column = usize::try_from(attnum - 1)
+                    .ok()
+                    .and_then(|at| columns.get(at).map(|c| (at, c)));
+                let Some((at, column)) = column else {
+                    return Err(Error::internal("a unique index with a key that is not a column"));
+                };
+                if !key.shown.is_empty() {
+                    key.shown.push_str(", ");
+                }
+                key.shown.push_str(&crate::ddl::quote_identifier(&column.name));
+                key.columns.push(at);
+                key.types.push(column.ty);
+            }
+            list.push(key);
+        }
+        Ok(list)
     }
 
     /// `checkInsertTargets`: the columns of the column list, or all the columns of the table when the statement has no list.

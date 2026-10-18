@@ -1,0 +1,206 @@
+!details
+> CREATE TABLE u (a int PRIMARY KEY, b text UNIQUE, c int)
+CREATE TABLE
+> INSERT INTO u VALUES (1, 'x', 1), (2, 'y', 2)
+INSERT 0 2
+> INSERT INTO u VALUES (1, 'z', 3)
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (a)=(1) already exists.
+> INSERT INTO u VALUES (3, 'x', 3)
+ERROR 23505 duplicate key value violates unique constraint "u_b_key"
+DETAIL Key (b)=(x) already exists.
+> INSERT INTO u VALUES (3, NULL, 3), (4, NULL, 4)
+INSERT 0 2
+> INSERT INTO u VALUES (5, 'q', 5), (5, 'r', 6)
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (a)=(5) already exists.
+> INSERT INTO u VALUES (NULL, 'w', 0)
+ERROR 23502 null value in column "a" of relation "u" violates not-null constraint
+DETAIL Failing row contains (null, w, 0).
+> SELECT * FROM u ORDER BY a
+fields a@u.1:23:4:-1,b@u.2:25:-1:-1,c@u.3:23:4:-1
+row 1,x,1
+row 2,y,2
+row 3,NULL,3
+row 4,NULL,4
+SELECT 4
+> UPDATE u SET a = a + 1
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (a)=(2) already exists.
+> UPDATE u SET a = a + 10
+UPDATE 4
+> SELECT * FROM u ORDER BY a
+fields a@u.1:23:4:-1,b@u.2:25:-1:-1,c@u.3:23:4:-1
+row 11,x,1
+row 12,y,2
+row 13,NULL,3
+row 14,NULL,4
+SELECT 4
+> UPDATE u SET b = 'y' WHERE a = 11
+ERROR 23505 duplicate key value violates unique constraint "u_b_key"
+DETAIL Key (b)=(y) already exists.
+> UPDATE u SET c = c + 1 WHERE a = 11
+UPDATE 1
+> DELETE FROM u WHERE a = 11
+DELETE 1
+> INSERT INTO u VALUES (11, 'x', 0)
+INSERT 0 1
+> BEGIN
+BEGIN
+> DELETE FROM u WHERE a = 12
+DELETE 1
+> INSERT INTO u VALUES (12, 'y', 0)
+INSERT 0 1
+> COMMIT
+COMMIT
+> BEGIN
+BEGIN
+> INSERT INTO u VALUES (20, 'k', 0)
+INSERT 0 1
+> INSERT INTO u VALUES (20, 'k', 0)
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (a)=(20) already exists.
+> SELECT 1
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM u ORDER BY a
+fields a@u.1:23:4:-1,b@u.2:25:-1:-1,c@u.3:23:4:-1
+row 11,x,0
+row 12,y,0
+row 13,NULL,3
+row 14,NULL,4
+SELECT 4
+> UPDATE u SET b = upper(b)
+UPDATE 4
+> SELECT * FROM u ORDER BY a
+fields a@u.1:23:4:-1,b@u.2:25:-1:-1,c@u.3:23:4:-1
+row 11,X,0
+row 12,Y,0
+row 13,NULL,3
+row 14,NULL,4
+SELECT 4
+> CREATE TABLE m (a int, b text, UNIQUE (a, b))
+CREATE TABLE
+> INSERT INTO m VALUES (1, 'a'), (1, 'b'), (NULL, 'a'), (NULL, 'a')
+INSERT 0 4
+> INSERT INTO m VALUES (1, 'a')
+ERROR 23505 duplicate key value violates unique constraint "m_a_b_key"
+DETAIL Key (a, b)=(1, a) already exists.
+> CREATE TABLE q ("Col A" int UNIQUE, "end" int UNIQUE)
+CREATE TABLE
+> INSERT INTO q VALUES (1, 1)
+INSERT 0 1
+> INSERT INTO q VALUES (1, 2)
+ERROR 23505 duplicate key value violates unique constraint "q_Col A_key"
+DETAIL Key ("Col A")=(1) already exists.
+> INSERT INTO q VALUES (2, 1)
+ERROR 23505 duplicate key value violates unique constraint "q_end_key"
+DETAIL Key ("end")=(1) already exists.
+> CREATE TABLE n (a int, b int, UNIQUE NULLS NOT DISTINCT (a, b))
+CREATE TABLE
+> INSERT INTO n VALUES (1, NULL)
+INSERT 0 1
+> INSERT INTO n VALUES (1, NULL)
+ERROR 23505 duplicate key value violates unique constraint "n_a_b_key"
+DETAIL Key (a, b)=(1, null) already exists.
+> CREATE TABLE nu (x numeric UNIQUE)
+CREATE TABLE
+> INSERT INTO nu VALUES (1.0)
+INSERT 0 1
+> INSERT INTO nu VALUES (1.00)
+ERROR 23505 duplicate key value violates unique constraint "nu_x_key"
+DETAIL Key (x)=(1.00) already exists.
+> CREATE TABLE f (x float8 UNIQUE)
+CREATE TABLE
+> INSERT INTO f VALUES ('-0')
+INSERT 0 1
+> INSERT INTO f VALUES ('0')
+ERROR 23505 duplicate key value violates unique constraint "f_x_key"
+DETAIL Key (x)=(0) already exists.
+> INSERT INTO f VALUES ('NaN')
+INSERT 0 1
+> INSERT INTO f VALUES ('NaN')
+ERROR 23505 duplicate key value violates unique constraint "f_x_key"
+DETAIL Key (x)=(NaN) already exists.
+> CREATE TABLE ch (x char(3) PRIMARY KEY, y varchar(5) UNIQUE)
+CREATE TABLE
+> INSERT INTO ch VALUES ('a', 'a')
+INSERT 0 1
+> INSERT INTO ch VALUES ('a  ', 'b')
+ERROR 23505 duplicate key value violates unique constraint "ch_pkey"
+DETAIL Key (x)=(a  ) already exists.
+> INSERT INTO ch VALUES ('A', 'a ')
+INSERT 0 1
+> INSERT INTO ch VALUES ('b', 'a')
+ERROR 23505 duplicate key value violates unique constraint "ch_y_key"
+DETAIL Key (y)=(a) already exists.
+> CREATE TABLE ix (a int, b int)
+CREATE TABLE
+> CREATE UNIQUE INDEX ix_a ON ix (a) INCLUDE (b)
+CREATE INDEX
+> INSERT INTO ix VALUES (1, 1)
+INSERT 0 1
+> INSERT INTO ix VALUES (1, 2)
+ERROR 23505 duplicate key value violates unique constraint "ix_a"
+DETAIL Key (a)=(1) already exists.
+> CREATE TABLE two (a int, b int)
+CREATE TABLE
+> CREATE UNIQUE INDEX two_b ON two (b)
+CREATE INDEX
+> CREATE UNIQUE INDEX two_a ON two (a)
+CREATE INDEX
+> INSERT INTO two VALUES (1, 1)
+INSERT 0 1
+> INSERT INTO two VALUES (1, 1)
+ERROR 23505 duplicate key value violates unique constraint "two_b"
+DETAIL Key (b)=(1) already exists.
+> INSERT INTO two VALUES (1, 2)
+ERROR 23505 duplicate key value violates unique constraint "two_a"
+DETAIL Key (a)=(1) already exists.
+> CREATE TABLE cc (a int UNIQUE CHECK (a > 0))
+CREATE TABLE
+> INSERT INTO cc VALUES (1)
+INSERT 0 1
+> INSERT INTO cc VALUES (1)
+ERROR 23505 duplicate key value violates unique constraint "cc_a_key"
+DETAIL Key (a)=(1) already exists.
+> INSERT INTO cc VALUES (-1)
+ERROR 23514 new row for relation "cc" violates check constraint "cc_a_check"
+DETAIL Failing row contains (-1).
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE d (a date PRIMARY KEY, t timestamptz UNIQUE, i interval UNIQUE)
+CREATE TABLE
+> INSERT INTO d VALUES ('2026-01-01', '2026-01-01 00:00:00+00', '1 day')
+INSERT 0 1
+> INSERT INTO d VALUES ('2026-01-01', '2026-01-02 00:00:00+00', '2 days')
+ERROR 23505 duplicate key value violates unique constraint "d_pkey"
+DETAIL Key (a)=(2026-01-01) already exists.
+> INSERT INTO d VALUES ('2026-01-02', '2026-01-01 00:00:00+00', '2 days')
+ERROR 23505 duplicate key value violates unique constraint "d_t_key"
+DETAIL Key (t)=(2026-01-01 00:00:00+00) already exists.
+> INSERT INTO d VALUES ('2026-01-03', '2026-01-03 00:00:00+00', '24 hours')
+ERROR 23505 duplicate key value violates unique constraint "d_i_key"
+DETAIL Key (i)=(24:00:00) already exists.
+> PREPARE pi(int) AS INSERT INTO u VALUES ($1, 'p', 0)
+PREPARE
+> EXECUTE pi(100)
+INSERT 0 1
+> EXECUTE pi(100)
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (a)=(100) already exists.
+P pu|UPDATE u SET a = $1 WHERE a = 100
+X pu|11
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (a)=(11) already exists.
+X pu|101
+UPDATE 1
+> SELECT * FROM u ORDER BY a
+fields a@u.1:23:4:-1,b@u.2:25:-1:-1,c@u.3:23:4:-1
+row 11,X,0
+row 12,Y,0
+row 13,NULL,3
+row 14,NULL,4
+row 101,p,0
+SELECT 5

@@ -67,7 +67,7 @@ pub use from::{
     Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM, TableSample,
 };
 pub use funcargs::{arg_defaults, expand_arguments};
-pub use insert::{Write, WriteKind};
+pub use insert::{Unique, Write, WriteKind};
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};

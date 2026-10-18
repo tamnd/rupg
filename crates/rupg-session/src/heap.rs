@@ -1,10 +1,12 @@
 //! The rows of the tables in memory, with the transaction IDs of `heapam_visibility.c`. Each version of a row has the transaction and the command that made it, and the transaction and the command that deleted it. A snapshot tells which versions a statement sees.
 
 use std::collections::{BTreeSet, HashMap};
+use std::hash::{DefaultHasher, Hash, Hasher};
 use std::sync::{Mutex, MutexGuard, PoisonError};
 
+use rupg_analyze::Unique;
 use rupg_common::{Error, Result, SqlState};
-use rupg_types::Value;
+use rupg_types::{Value, oid};
 
 /// `FirstNormalTransactionId`: the first transaction ID that a transaction gets.
 const FIRST_NORMAL_XID: u32 = 3;
@@ -46,16 +48,237 @@ struct Table {
     versions: Vec<Version>,
     /// The ID of the last version that the table got. An ID is not used again, also after an abort.
     last_tid: u64,
+    /// The map of each unique key that a write checked. A map has the IDs of all the versions, live or not, with a key that has no null.
+    keys: Vec<KeyMap>,
+}
+
+/// The versions of a table by the hash of their key, for one unique key, which takes the place of the btree of a unique index. The map can keep the ID of a version that went, which a check skips.
+#[derive(Debug)]
+struct KeyMap {
+    columns: Vec<usize>,
+    types: Vec<u32>,
+    nulls_not_distinct: bool,
+    hashes: HashMap<u64, Vec<u64>>,
+}
+
+impl KeyMap {
+    fn of(key: &Unique) -> Self {
+        KeyMap {
+            columns: key.columns.clone(),
+            types: key.types.clone(),
+            nulls_not_distinct: key.nulls_not_distinct,
+            hashes: HashMap::new(),
+        }
+    }
+
+    fn is(&self, key: &Unique) -> bool {
+        self.columns == key.columns
+            && self.types == key.types
+            && self.nulls_not_distinct == key.nulls_not_distinct
+    }
+
+    /// The hash of the key of a row, or `None` when the key has a null and two nulls are not equal, so the key cannot conflict. Two keys that are equal have the same hash.
+    fn hash(&self, values: &[Value]) -> Option<u64> {
+        let mut hasher = DefaultHasher::new();
+        for (&column, &ty) in self.columns.iter().zip(&self.types) {
+            match values.get(column)? {
+                Value::Null if self.nulls_not_distinct => 0_u8.hash(&mut hasher),
+                Value::Null => return None,
+                value => hash_value(value, ty, &mut hasher),
+            }
+        }
+        Some(hasher.finish())
+    }
+
+    /// True when two rows have the same key, with the equality of the btree operator class of each column.
+    fn same(&self, a: &[Value], b: &[Value]) -> Result<bool> {
+        for (&column, &ty) in self.columns.iter().zip(&self.types) {
+            let equal = match (&a[column], &b[column]) {
+                (Value::Null, Value::Null) => self.nulls_not_distinct,
+                (Value::Null, _) | (_, Value::Null) => false,
+                (x, y) => rupg_func::equal(ty, x, ty, y)?,
+            };
+            if !equal {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+}
+
+/// Adds a value that is not null to a hash. The types whose equality is not the equality of their form in memory all go to the same hash.
+fn hash_value(value: &Value, ty: u32, hasher: &mut DefaultHasher) {
+    match value {
+        Value::Bool(v) => v.hash(hasher),
+        Value::Int2(_) | Value::Int4(_) | Value::Int8(_) => value.as_i64().hash(hasher),
+        Value::Float4(_) | Value::Float8(_) => {
+            let x = match value {
+                Value::Float4(x) => f64::from(*x),
+                Value::Float8(x) => *x,
+                _ => 0.0,
+            };
+            // `float8_cmp_internal`: -0 is equal to 0, and NaN is equal to NaN.
+            let x = if x.is_nan() {
+                f64::NAN
+            } else if x == 0.0 {
+                0.0
+            } else {
+                x
+            };
+            x.to_bits().hash(hasher);
+        }
+        Value::Oid(v) => v.hash(hasher),
+        Value::Char(v) => v.hash(hasher),
+        Value::Text(v) if rupg_func::base_type(ty) == oid::BPCHAR => {
+            v.trim_end_matches(' ').hash(hasher);
+        }
+        Value::Text(v) => v.hash(hasher),
+        Value::Bytea(v) => v.hash(hasher),
+        Value::Uuid(v) => v.hash(hasher),
+        Value::Date(v) => v.hash(hasher),
+        Value::Time(v) | Value::Timestamp(v) | Value::TimestampTz(v) => v.hash(hasher),
+        _ => {}
+    }
+}
+
+/// What a dirty snapshot sees of a version with the same key, as `_bt_check_unique` reads it with `SnapshotDirty`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Seen {
+    /// The version went, or the transaction deleted it.
+    Dead,
+    /// The version is live: the key is a duplicate.
+    Live,
+    /// A transaction that is in progress inserted or deleted the version.
+    Wait(u32),
+}
+
+/// `HeapTupleSatisfiesDirty` for the transaction `xid`. An aborted transaction left no versions, so each `xmin` committed or is in progress.
+fn dirty(version: &Version, xid: u32, running: &BTreeSet<u32>) -> Seen {
+    if version.xmin != xid && running.contains(&version.xmin) {
+        return Seen::Wait(version.xmin);
+    }
+    match version.xmax {
+        0 => Seen::Live,
+        xmax if xmax == xid => Seen::Dead,
+        xmax if running.contains(&xmax) => Seen::Wait(xmax),
+        _ => Seen::Dead,
+    }
 }
 
 impl Table {
     /// Adds a version and gives its ID.
     fn push(&mut self, xmin: u32, cmin: u32, values: Vec<Value>) -> u64 {
-        self.last_tid += 1;
-        let tid = self.last_tid;
+        self.add(None, xmin, cmin, values)
+    }
+
+    /// Adds a version with the ID `kept` that an earlier try of the write had, or with a new ID, at its place in the order of the IDs.
+    fn add(&mut self, kept: Option<u64>, xmin: u32, cmin: u32, values: Vec<Value>) -> u64 {
+        let tid = kept.unwrap_or_else(|| {
+            self.last_tid += 1;
+            self.last_tid
+        });
+        for map in &mut self.keys {
+            if let Some(hash) = map.hash(&values) {
+                map.hashes.entry(hash).or_default().push(tid);
+            }
+        }
         let values = values.into_boxed_slice();
-        self.versions.push(Version { tid, xmin, cmin, xmax: 0, cmax: 0, next: 0, values });
+        let version = Version { tid, xmin, cmin, xmax: 0, cmax: 0, next: 0, values };
+        if self.versions.last().is_none_or(|last| last.tid < tid) {
+            self.versions.push(version);
+        } else {
+            let at = self.versions.partition_point(|other| other.tid < tid);
+            self.versions.insert(at, version);
+        }
         tid
+    }
+
+    /// The place of the version `tid`.
+    fn find(&self, tid: u64) -> Option<usize> {
+        self.versions.binary_search_by_key(&tid, |version| version.tid).ok()
+    }
+
+    /// The place in `keys` of the map of each unique key. The first write that checks a key makes its map from all the versions.
+    fn key_maps(&mut self, unique: &[Unique]) -> Vec<usize> {
+        let mut places = Vec::with_capacity(unique.len());
+        for key in unique {
+            let place = match self.keys.iter().position(|map| map.is(key)) {
+                Some(place) => place,
+                None => {
+                    let mut map = KeyMap::of(key);
+                    for version in &self.versions {
+                        if let Some(hash) = map.hash(&version.values) {
+                            map.hashes.entry(hash).or_default().push(version.tid);
+                        }
+                    }
+                    self.keys.push(map);
+                    self.keys.len() - 1
+                }
+            };
+            places.push(place);
+        }
+        places
+    }
+
+    /// `_bt_check_unique` of the new version `tid` for each unique key, in the order of the indexes. The result is the first conflict: a live version with the same key, or a transaction in progress that the write must wait for. `used` has the IDs of the new versions of the write up to `tid`.
+    fn check_keys(
+        &self,
+        places: &[usize],
+        used: &[u64],
+        xid: u32,
+        running: &BTreeSet<u32>,
+    ) -> Result<Option<Changed>> {
+        let Some(&tid) = used.last() else {
+            return Ok(None);
+        };
+        let Some(at) = self.find(tid) else {
+            return Ok(None);
+        };
+        let values = &self.versions[at].values;
+        for (index, &place) in places.iter().enumerate() {
+            let map = &self.keys[place];
+            let Some(hash) = map.hash(values) else {
+                continue;
+            };
+            for &other in map.hashes.get(&hash).into_iter().flatten() {
+                if other == tid {
+                    continue;
+                }
+                let Some(found) = self.find(other) else {
+                    continue;
+                };
+                let version = &self.versions[found];
+                let seen = dirty(version, xid, running);
+                if seen == Seen::Dead || !map.same(values, &version.values)? {
+                    continue;
+                }
+                return Ok(Some(match seen {
+                    Seen::Wait(holder) => Changed::WaitKey { holder, index, used: used.to_vec() },
+                    _ => Changed::Duplicate {
+                        index,
+                        key: map.columns.iter().map(|&column| values[column].clone()).collect(),
+                    },
+                }));
+            }
+        }
+        Ok(None)
+    }
+
+    /// Takes back the new versions `used` and the deletes of the versions `deleted`, after a write that must wait or that failed. The IDs stay used: after a wait the write makes its versions again with the same IDs, as the versions of PostgreSQL stay in place while it waits, and after a failure the versions of PostgreSQL stay in the heap until the end of the transaction.
+    fn undo(&mut self, used: &[u64], deleted: &[u64]) {
+        if let Some(&first) = used.first() {
+            let at = self.versions.partition_point(|version| version.tid < first);
+            let tail = self.versions.split_off(at);
+            self.versions.extend(tail.into_iter().filter(|v| used.binary_search(&v.tid).is_err()));
+        }
+        for &tid in deleted {
+            if let Some(at) = self.find(tid) {
+                let version = &mut self.versions[at];
+                version.xmax = 0;
+                version.cmax = 0;
+                version.next = 0;
+            }
+        }
     }
 }
 
@@ -102,8 +325,8 @@ pub(crate) struct View {
 /// A change of a row by `UPDATE` or `DELETE`: the ID of the version, and the new values, or `None` to delete it.
 pub(crate) type Change = (u64, Option<Vec<Value>>);
 
-/// The result of [`Heap::change`].
-#[derive(Debug, PartialEq, Eq)]
+/// The result of [`Heap::insert`] and [`Heap::change`].
+#[derive(Debug, PartialEq)]
 pub(crate) enum Changed {
     /// The number of rows that changed.
     Done(u64),
@@ -111,6 +334,10 @@ pub(crate) enum Changed {
     Wait { holder: u32, tid: u64 },
     /// In `READ COMMITTED`, a transaction that committed after the snapshot changed a row. The statement must run again with a new snapshot, which sees the last version of the row, as `EvalPlanQual` checks it.
     Again,
+    /// The transaction `holder` is in progress and inserted or deleted a version with the same key in the unique index at the place `index` of the list of the write. The write must wait for the end of `holder` and try again with the IDs `used` of its new versions, of which the last is the version that waits.
+    WaitKey { holder: u32, index: usize, used: Vec<u64> },
+    /// A live version has the key of a new version in the unique index at the place `index`. `key` is the value of each key column.
+    Duplicate { index: usize, key: Vec<Value> },
 }
 
 /// The text of the item pointer of a version, `(page,item)`, as `tidout` gives it.
@@ -159,13 +386,43 @@ impl Heap {
             .collect()
     }
 
-    /// Adds the rows that the command of the view inserted.
-    pub(crate) fn insert(&self, relation: u32, view: &View, rows: Vec<Vec<Value>>) {
+    /// Adds the rows that the command of the view inserted, and checks each new version for each unique key. When a key conflicts, no row is added, and the result tells the statement to wait or gives the duplicate key. `kept` has the IDs of the new versions of an earlier try that waited.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the equality of a key.
+    pub(crate) fn insert(
+        &self,
+        relation: u32,
+        view: &View,
+        rows: Vec<Vec<Value>>,
+        unique: &[Unique],
+        kept: &[u64],
+    ) -> Result<Changed> {
         let mut state = self.state();
-        let table = state.tables.entry((view.database, relation)).or_default();
-        for values in rows {
-            table.push(view.xid, view.command, values);
+        let State { tables, running, .. } = &mut *state;
+        let table = tables.entry((view.database, relation)).or_default();
+        let count = rows.len() as u64;
+        if unique.is_empty() {
+            for values in rows {
+                table.push(view.xid, view.command, values);
+            }
+            return Ok(Changed::Done(count));
         }
+        let places = table.key_maps(unique);
+        let mut kept = kept.iter().copied();
+        let mut used = Vec::with_capacity(rows.len());
+        for values in rows {
+            used.push(table.add(kept.next(), view.xid, view.command, values));
+            match table.check_keys(&places, &used, view.xid, running) {
+                Ok(None) => {}
+                result => {
+                    table.undo(&used, &[]);
+                    return result.map(|conflict| conflict.unwrap_or(Changed::Done(0)));
+                }
+            }
+        }
+        Ok(Changed::Done(count))
     }
 
     /// `heap_update` and `heap_delete` for the rows that the command of the view changes. A row that the command changed before stays as it is, as for a row that a join gives more than once. When another transaction changed a row after the snapshot, nothing changes, and the result tells the statement to wait or to run again.
@@ -178,6 +435,8 @@ impl Heap {
         relation: u32,
         view: &View,
         changes: Vec<Change>,
+        unique: &[Unique],
+        kept: &[u64],
     ) -> Result<Changed> {
         let mut state = self.state();
         let State { tables, running, .. } = &mut *state;
@@ -205,21 +464,39 @@ impl Heap {
                 }
                 _ => return Ok(Changed::Again),
             }
-            if found.iter().any(|&(i, _)| i == at) {
+            if found.iter().any(|&(old, _)| old == tid) {
                 continue;
             }
-            found.push((at, values));
+            found.push((tid, values));
         }
         let count = found.len() as u64;
-        for (at, values) in found {
+        let places = table.key_maps(unique);
+        let mut kept = kept.iter().copied();
+        let mut used = Vec::new();
+        let mut deleted = Vec::with_capacity(found.len());
+        for (old, values) in found {
             let next = match values {
-                Some(values) => table.push(view.xid, view.command, values),
+                Some(values) => table.add(kept.next(), view.xid, view.command, values),
                 None => 0,
             };
-            let version = &mut table.versions[at];
-            version.xmax = view.xid;
-            version.cmax = view.command;
-            version.next = next;
+            if let Some(at) = table.find(old) {
+                let version = &mut table.versions[at];
+                version.xmax = view.xid;
+                version.cmax = view.command;
+                version.next = next;
+            }
+            deleted.push(old);
+            if next == 0 || places.is_empty() {
+                continue;
+            }
+            used.push(next);
+            match table.check_keys(&places, &used, view.xid, running) {
+                Ok(None) => {}
+                result => {
+                    table.undo(&used, &deleted);
+                    return result.map(|conflict| conflict.unwrap_or(Changed::Done(0)));
+                }
+            }
         }
         Ok(Changed::Done(count))
     }
@@ -335,7 +612,8 @@ mod tests {
     fn a_snapshot_sees_only_the_committed_rows() {
         let heap = Heap::default();
         let xid = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]]);
+        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]], &[], &[])
+            .unwrap();
         assert_eq!(heap.rows(7, &view(heap.snapshot(), 0, 0)).len(), 0);
         assert_eq!(heap.rows(7, &view(heap.snapshot(), xid, 0)).len(), 0);
         assert_eq!(heap.rows(7, &view(heap.snapshot(), xid, 1)).len(), 1);
@@ -349,12 +627,14 @@ mod tests {
     fn an_abort_removes_the_rows() {
         let heap = Heap::default();
         let xid = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]]);
+        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]], &[], &[])
+            .unwrap();
         heap.abort(xid);
         assert!(!heap.has_rows(1, 7));
         assert_eq!(heap.rows(7, &view(heap.snapshot(), 0, 0)).len(), 0);
         let xid = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]]);
+        heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]], &[], &[])
+            .unwrap();
         assert_eq!(first_tid(&heap, &view(heap.snapshot(), xid, 1)), 2);
     }
 
@@ -362,16 +642,17 @@ mod tests {
     fn an_update_waits_for_the_other_transaction() {
         let heap = Heap::default();
         let first = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), first, 0), vec![vec![Value::Int4(1)]]);
+        heap.insert(7, &view(heap.snapshot(), first, 0), vec![vec![Value::Int4(1)]], &[], &[])
+            .unwrap();
         heap.commit(first);
         let a = heap.begin(1);
         let b = heap.begin(2);
         let tid = first_tid(&heap, &view(heap.snapshot(), a, 0));
         let change = || vec![(tid, Some(vec![Value::Int4(2)]))];
-        let done = heap.change(7, &view(heap.snapshot(), a, 0), change()).unwrap();
+        let done = heap.change(7, &view(heap.snapshot(), a, 0), change(), &[], &[]).unwrap();
         assert_eq!(done, Changed::Done(1));
         let wait = Changed::Wait { holder: a, tid };
-        assert_eq!(heap.change(7, &view(heap.snapshot(), b, 0), change()).unwrap(), wait);
+        assert_eq!(heap.change(7, &view(heap.snapshot(), b, 0), change(), &[], &[]).unwrap(), wait);
         heap.wait(b, a);
         assert_eq!(heap.deadlock(b), None);
         heap.wait(a, b);
@@ -379,7 +660,7 @@ mod tests {
         assert_eq!(cycle, [Wait { pid: 2, xid: a, holder: 1 }, Wait { pid: 1, xid: b, holder: 2 }]);
         heap.waited(a);
         heap.abort(a);
-        let done = heap.change(7, &view(heap.snapshot(), b, 0), change()).unwrap();
+        let done = heap.change(7, &view(heap.snapshot(), b, 0), change(), &[], &[]).unwrap();
         assert_eq!(done, Changed::Done(1));
         heap.commit(b);
         let rows = heap.rows(7, &view(heap.snapshot(), 0, 0));
@@ -388,24 +669,75 @@ mod tests {
     }
 
     #[test]
+    fn a_unique_key_waits_for_the_other_transaction() {
+        let heap = Heap::default();
+        let key = Unique {
+            name: "t_pkey".to_string(),
+            columns: vec![0],
+            types: vec![oid::INT4],
+            shown: "a".to_string(),
+            nulls_not_distinct: false,
+        };
+        let unique = std::slice::from_ref(&key);
+        let row = |a: i32| vec![Value::Int4(a)];
+        let first = heap.begin(1);
+        let rows = vec![row(1), Vec::from([Value::Null]), Vec::from([Value::Null])];
+        let done = heap.insert(7, &view(heap.snapshot(), first, 0), rows, unique, &[]).unwrap();
+        assert_eq!(done, Changed::Done(3));
+        let again = heap.insert(7, &view(heap.snapshot(), first, 1), vec![row(1)], unique, &[]);
+        assert_eq!(again.unwrap(), Changed::Duplicate { index: 0, key: row(1) });
+        heap.commit(first);
+        let a = heap.begin(1);
+        let b = heap.begin(2);
+        heap.insert(7, &view(heap.snapshot(), a, 0), vec![row(2)], unique, &[]).unwrap();
+        let wait = heap.insert(7, &view(heap.snapshot(), b, 0), vec![row(3), row(2)], unique, &[]);
+        assert_eq!(wait.unwrap(), Changed::WaitKey { holder: a, index: 0, used: vec![6, 7] });
+        heap.abort(a);
+        let done =
+            heap.insert(7, &view(heap.snapshot(), b, 0), vec![row(3), row(2)], unique, &[6, 7]);
+        assert_eq!(done.unwrap(), Changed::Done(2));
+        heap.commit(b);
+        // The keys of the rows that the transaction deleted are free for the transaction.
+        let c = heap.begin(1);
+        let view_c = view(heap.snapshot(), c, 0);
+        let rows = heap.rows(7, &view_c);
+        let tids: Vec<u64> = rows
+            .iter()
+            .filter(|r| matches!(r[0], Value::Int4(2 | 3)))
+            .map(|r| match r[1] {
+                Value::Int8(tid) => tid.cast_unsigned(),
+                _ => 0,
+            })
+            .collect();
+        let changes = tids.iter().map(|&tid| (tid, None)).collect();
+        assert_eq!(heap.change(7, &view_c, changes, unique, &[]).unwrap(), Changed::Done(2));
+        let view_c = view(heap.snapshot(), c, 1);
+        assert_eq!(
+            heap.insert(7, &view_c, vec![row(2), row(3)], unique, &[]).unwrap(),
+            Changed::Done(2)
+        );
+    }
+
+    #[test]
     fn a_committed_change_runs_the_statement_again() {
         let heap = Heap::default();
         let first = heap.begin(1);
-        heap.insert(7, &view(heap.snapshot(), first, 0), vec![vec![Value::Int4(1)]]);
+        heap.insert(7, &view(heap.snapshot(), first, 0), vec![vec![Value::Int4(1)]], &[], &[])
+            .unwrap();
         heap.commit(first);
         let old = heap.snapshot();
         let tid = first_tid(&heap, &view(old.clone(), 0, 0));
         let a = heap.begin(1);
-        heap.change(7, &view(heap.snapshot(), a, 0), vec![(tid, None)]).unwrap();
+        heap.change(7, &view(heap.snapshot(), a, 0), vec![(tid, None)], &[], &[]).unwrap();
         heap.commit(a);
         let b = heap.begin(2);
         let change = vec![(tid, Some(vec![Value::Int4(3)]))];
         assert_eq!(
-            heap.change(7, &view(old.clone(), b, 0), change.clone()).unwrap(),
+            heap.change(7, &view(old.clone(), b, 0), change.clone(), &[], &[]).unwrap(),
             Changed::Again
         );
         let serializable = View { serializable: true, ..view(old, b, 0) };
-        let error = heap.change(7, &serializable, change).unwrap_err();
+        let error = heap.change(7, &serializable, change, &[], &[]).unwrap_err();
         assert_eq!(error.state(), SqlState::T_R_SERIALIZATION_FAILURE);
         assert_eq!(error.message(), "could not serialize access due to concurrent delete");
         assert_eq!(tid_text(1), "(0,1)");

@@ -114,7 +114,9 @@ impl Analyzer<'_> {
             query = with_checks(&name, &columns, query, checks, true);
         }
         let width = columns.len();
-        query.write = Some(Write { kind: WriteKind::Update, table, name, width, checks: names });
+        let unique = self.unique_keys(table, &columns)?;
+        query.write =
+            Some(Write { kind: WriteKind::Update, table, name, width, checks: names, unique });
         Ok(query)
     }
 
@@ -141,6 +143,7 @@ impl Analyzer<'_> {
                 name,
                 width: 0,
                 checks: Vec::new(),
+                unique: Vec::new(),
             }),
             ..Query::default()
         })
