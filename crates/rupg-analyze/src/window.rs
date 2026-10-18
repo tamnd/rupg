@@ -269,6 +269,7 @@ impl Analyzer<'_> {
             | Kind::Values
             | Kind::ValuesSingle
             | Kind::UpdateSource
+            | Kind::Returning
             | Kind::ColumnDefault
             | Kind::IndexExpression
             | Kind::IndexPredicate

@@ -25,6 +25,7 @@ mod poly;
 mod prepare;
 mod record;
 mod resolve;
+mod returning;
 mod searchcycle;
 mod select;
 mod setop;

@@ -1001,13 +1001,32 @@ fn run_query(
 }
 
 impl Plan {
-    /// The columns of the result. The junk columns of `ORDER BY` do not count.
+    /// The columns of the result. The junk columns of `ORDER BY` do not count. A query that writes has the columns of its `RETURNING`, or none.
     pub fn columns(&self) -> &[Target] {
-        if self.query.write.is_some() {
-            return &[];
+        if let Some(write) = &self.query.write {
+            return write.returning.as_ref().map_or(&[], |query| &query.targets);
         }
         let n = self.query.targets.iter().take_while(|t| !t.junk).count();
         &self.query.targets[..n]
+    }
+
+    /// `ExecProcessReturning`: the rows of `RETURNING` for the rows that the statement wrote. Each row has the columns of the table, then the values that the query of the statement carries for `RETURNING`. A query with no `RETURNING` gives no rows.
+    ///
+    /// # Errors
+    ///
+    /// The error of a function of the list, such as a division by zero.
+    pub fn returning(
+        &self,
+        rows: Vec<Vec<Value>>,
+        params: &[Value],
+        session: &dyn Session,
+    ) -> Result<Vec<Vec<Value>>> {
+        let Some(query) = self.query.write.as_ref().and_then(|w| w.returning.as_deref()) else {
+            return Ok(Vec::new());
+        };
+        let cache = Cache::default();
+        cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, rows))));
+        run_query(query, params, session, &cache, &[], false)
     }
 
     /// The table that the query writes when it is an `INSERT`, an `UPDATE` or a `DELETE`. Then [`Plan::run`] gives the rows that change.

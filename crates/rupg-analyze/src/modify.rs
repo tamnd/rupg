@@ -3,14 +3,16 @@
 //! The target table is the first relation of `FROM`, and the relations of `FROM` or `USING` come after it. The query of an `UPDATE` gives the new row of each row that changes: the expression of each column that `SET` gives, and the old value of each other column. The conditions of the check constraints come after the columns, and the ID of the version of the old row comes last. The query of a `DELETE` gives only the ID of the version of each row that goes.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_sql::nodes::{DeleteStmt, Node, RangeVar, ResTarget, SubLinkType, UpdateStmt};
+use rupg_sql::nodes::{
+    DeleteStmt, Node, RangeVar, ResTarget, ReturningClause, SubLinkType, UpdateStmt,
+};
 use rupg_types::oid;
 
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
-use crate::from::FromItem;
+use crate::from::{Column, FromItem};
 use crate::insert::{Item, Write, WriteKind, not_yet, targets, with_checks};
 use crate::select::{Query, Target};
 use crate::sort::raw_location;
@@ -27,9 +29,6 @@ impl Analyzer<'_> {
     pub(crate) fn update(&mut self, s: &UpdateStmt) -> Result<Query> {
         if s.withClause.is_some() {
             return Err(not_yet("WITH in UPDATE"));
-        }
-        if s.returningClause.is_some() {
-            return Err(not_yet("RETURNING"));
         }
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an UPDATE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Update)?;
@@ -100,6 +99,9 @@ impl Analyzer<'_> {
                 }
             });
         }
+        let (returning, carried) =
+            self.write_returning(s.returningClause.as_deref(), WriteKind::Update)?;
+        let tail = tail_columns(&carried);
         let mut query = Query {
             relations: std::mem::take(&mut self.scope.relations),
             from,
@@ -107,16 +109,24 @@ impl Analyzer<'_> {
             filter,
             ..Query::default()
         };
+        query.targets.extend(carried_targets(carried));
         query.targets.push(tid_target());
         let checks = self.checks(table)?;
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         if !checks.is_empty() {
-            query = with_checks(&name, &columns, query, checks, true);
+            query = with_checks(&name, &columns, query, checks, &tail);
         }
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
-        query.write =
-            Some(Write { kind: WriteKind::Update, table, name, width, checks: names, unique });
+        query.write = Some(Write {
+            kind: WriteKind::Update,
+            table,
+            name,
+            width,
+            checks: names,
+            unique,
+            returning,
+        });
         Ok(query)
     }
 
@@ -125,17 +135,23 @@ impl Analyzer<'_> {
         if s.withClause.is_some() {
             return Err(not_yet("WITH in DELETE"));
         }
-        if s.returningClause.is_some() {
-            return Err(not_yet("RETURNING"));
-        }
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("a DELETE with no table"))?;
-        let (table, name, _) = self.target_table(rv, WriteKind::Delete)?;
+        let (table, name, columns) = self.target_table(rv, WriteKind::Delete)?;
         let from = self.target_from(rv, &s.usingClause)?;
         let filter = self.target_where(s.whereClause.as_ref())?;
+        let (returning, carried) =
+            self.write_returning(s.returningClause.as_deref(), WriteKind::Delete)?;
+        // With `RETURNING`, each row gives the old row and the carried values before the ID of its version.
+        let mut targets = Vec::new();
+        if returning.is_some() {
+            targets = old_row(&columns);
+            targets.extend(carried_targets(carried));
+        }
+        targets.push(tid_target());
         Ok(Query {
             relations: std::mem::take(&mut self.scope.relations),
             from,
-            targets: vec![tid_target()],
+            targets,
             filter,
             write: Some(Write {
                 kind: WriteKind::Delete,
@@ -144,13 +160,33 @@ impl Analyzer<'_> {
                 width: 0,
                 checks: Vec::new(),
                 unique: Vec::new(),
+                returning,
             }),
             ..Query::default()
         })
     }
 
+    /// The query of `RETURNING` of an `UPDATE` or a `DELETE`, and the values that the query of the statement carries for it.
+    fn write_returning(
+        &mut self,
+        clause: Option<&ReturningClause>,
+        kind: WriteKind,
+    ) -> Result<(Option<Box<Query>>, Vec<Expr>)> {
+        match clause {
+            None => Ok((None, Vec::new())),
+            Some(clause) => {
+                let (query, carried) = self.returning(clause, kind)?;
+                Ok((Some(Box::new(query)), carried))
+            }
+        }
+    }
+
     /// The target table, then the relations of `FROM` or `USING`, as `setTargetTable` and `transformFromClause` add them. A name that the list gives twice is an error.
-    fn target_from(&mut self, rv: &RangeVar, list: &[Option<Node>]) -> Result<Vec<FromItem>> {
+    pub(crate) fn target_from(
+        &mut self,
+        rv: &RangeVar,
+        list: &[Option<Node>],
+    ) -> Result<Vec<FromItem>> {
         let mut nodes = Vec::with_capacity(list.len() + 1);
         nodes.push(Some(Node::RangeVar(Box::new(rv.clone()))));
         nodes.extend(list.iter().cloned());
@@ -235,6 +271,42 @@ impl Analyzer<'_> {
             .at_opt(at)),
         }
     }
+}
+
+/// The targets of the values that the query of an `UPDATE` or a `DELETE` carries for `RETURNING`.
+fn carried_targets(carried: Vec<Expr>) -> impl Iterator<Item = Target> {
+    carried.into_iter().map(|expr| Target { name: String::new(), expr, origin: None, junk: false })
+}
+
+/// The columns of the carried values, which [`with_checks`] keeps after the conditions, then the ID of the version.
+fn tail_columns(carried: &[Expr]) -> Vec<Column> {
+    let mut tail: Vec<Column> = carried
+        .iter()
+        .map(|expr| Column {
+            name: String::new(),
+            ty: expr.ty,
+            typmod: expr.typmod,
+            not_null: false,
+        })
+        .collect();
+    tail.push(Column { name: "ctid".to_string(), ty: oid::INT8, typmod: -1, not_null: false });
+    tail
+}
+
+/// The targets that read each column of the old row of the target table.
+fn old_row(columns: &[Column]) -> Vec<Target> {
+    let row = columns
+        .iter()
+        .enumerate()
+        .map(|(index, column)| {
+            let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
+            let mut expr =
+                Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), column.ty);
+            expr.typmod = column.typmod;
+            expr
+        })
+        .collect();
+    targets(columns, row)
 }
 
 /// The target that reads the ID of the version of the row of the target table.

@@ -273,7 +273,7 @@ impl Connection {
                 })?;
                 notices.extend(made.notices().iter().map(|error| Notice::warning(error.clone())));
                 self.notices(&mut notices, &text, &[], out);
-                columns = made.write().is_none().then(|| query::columns(&made));
+                columns = query::returns_rows(&made).then(|| query::columns(&made));
                 params = made.params().to_vec();
                 plan = Some(made);
             } else if let Node::ExecuteStmt(stmt) = node {
@@ -509,7 +509,7 @@ impl Connection {
                     let view = reader.view().cloned().unwrap_or_default();
                     drop(reader);
                     self.notices(&mut notices, &statement.text, &[], out);
-                    self.write_rows(plan, &params, &view, rows?)?
+                    self.write_rows(plan, &params, &view, rows?, &formats)?
                 } else {
                     let rows = query::run(plan, &params, &reader, &formats);
                     // The warnings of the run, such as the warning of `pg_advisory_unlock`, come before the rows.

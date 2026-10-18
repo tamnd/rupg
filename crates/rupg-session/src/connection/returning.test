@@ -1,0 +1,198 @@
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE r (id int PRIMARY KEY, a text, b int DEFAULT 7)
+CREATE TABLE
+> INSERT INTO r VALUES (1, 'x') RETURNING *
+fields id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1
+row 1,x,7
+INSERT 0 1
+> INSERT INTO r VALUES (2, 'y'), (3, 'z') RETURNING id, a || '!' AS bang, b * 2
+fields id@r.1:23:4:-1,bang:25:-1:-1,?column?:23:4:-1
+row 2,y!,14
+row 3,z!,14
+INSERT 0 2
+> INSERT INTO r (id) SELECT g FROM generate_series(4, 5) g RETURNING id, a, b
+fields id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1
+row 4,NULL,7
+row 5,NULL,7
+INSERT 0 2
+> INSERT INTO r AS q VALUES (6, 'w') RETURNING q.id, q::text
+fields id@r.1:23:4:-1,q:25:-1:-1
+row 6,(6,w,7)
+INSERT 0 1
+> INSERT INTO r VALUES (7, 'v') RETURNING old.id, new.id, old::text, new.*, old IS NULL
+fields id@r.1:23:4:-1,id@r.1:23:4:-1,old:25:-1:-1,id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1,?column?:16:1:-1
+row NULL,7,NULL,7,v,7,t
+INSERT 0 1
+> INSERT INTO r VALUES (8, 'u') RETURNING WITH (OLD AS o, NEW AS n) o.a, n.a
+fields a@r.2:25:-1:-1,a@r.2:25:-1:-1
+row NULL,u
+INSERT 0 1
+> INSERT INTO r VALUES (9, 't') RETURNING tableoid::regclass, id
+fields tableoid:2205:4:-1,id@r.1:23:4:-1
+row r,9
+INSERT 0 1
+> INSERT INTO r VALUES (10, 's') RETURNING (SELECT count(*) FROM r)
+fields count:20:8:-1
+row 9
+INSERT 0 1
+> UPDATE r SET a = a || '2' WHERE id < 3 RETURNING *
+fields id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1
+row 1,x2,7
+row 2,y2,7
+UPDATE 2
+> UPDATE r SET b = b + 1 WHERE id = 1 RETURNING old.b, new.b, b, old.*, new::text
+fields b@r.3:23:4:-1,b@r.3:23:4:-1,b@r.3:23:4:-1,id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1,new:25:-1:-1
+row 7,8,8,1,x2,7,(1,x2,8)
+UPDATE 1
+> UPDATE r SET a = 'm' WHERE id = 2 RETURNING WITH (OLD AS before) before.a, a
+fields a@r.2:25:-1:-1,a@r.2:25:-1:-1
+row y2,m
+UPDATE 1
+> CREATE TABLE s (id int, note text)
+CREATE TABLE
+> INSERT INTO s VALUES (1, 'one'), (2, 'two')
+INSERT 0 2
+> UPDATE r SET a = s.note FROM s WHERE r.id = s.id RETURNING r.id, s.note, s.*, old.a
+fields id@r.1:23:4:-1,note@s.2:25:-1:-1,id@s.1:23:4:-1,note@s.2:25:-1:-1,a@r.2:25:-1:-1
+row 1,one,1,one,x2
+row 2,two,2,two,m
+UPDATE 2
+> UPDATE r SET b = 0 WHERE id = 100 RETURNING *
+fields id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1
+UPDATE 0
+> DELETE FROM r WHERE id = 10 RETURNING *
+fields id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1
+row 10,s,7
+DELETE 1
+> DELETE FROM r WHERE id = 9 RETURNING old.*, new.*, new IS NULL
+fields id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1,id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1,?column?:16:1:-1
+row 9,t,7,NULL,NULL,NULL,t
+DELETE 1
+> DELETE FROM r USING s WHERE r.id = s.id + 2 RETURNING r.a, s.note
+fields a@r.2:25:-1:-1,note@s.2:25:-1:-1
+row z,one
+row NULL,two
+DELETE 2
+> INSERT INTO r VALUES (11) RETURNING count(*)
+ERROR 42803 aggregate functions are not allowed in RETURNING at 37
+> INSERT INTO r VALUES (11) RETURNING generate_series(1, 2)
+ERROR 0A000 set-returning functions are not allowed in RETURNING at 37
+> INSERT INTO r VALUES (11) RETURNING row_number() OVER ()
+ERROR 42P20 window functions are not allowed in RETURNING at 37
+> INSERT INTO r VALUES (11) RETURNING nope
+ERROR 42703 column "nope" does not exist at 37
+> INSERT INTO r VALUES (11) RETURNING s.id
+ERROR 42P01 missing FROM-clause entry for table "s" at 37
+> INSERT INTO r VALUES (11) RETURNING WITH (OLD AS o, OLD AS p) o.id
+ERROR 42601 OLD cannot be specified multiple times at 53
+> INSERT INTO r VALUES (11) RETURNING WITH (NEW AS r) r.id
+ERROR 42712 table name "r" specified more than once at 43
+> INSERT INTO r VALUES (11) RETURNING WITH (OLD AS x, NEW AS x) x.id
+ERROR 42712 table name "x" specified more than once at 53
+> UPDATE r SET a = 'q' FROM s AS old WHERE r.id = old.id RETURNING old.note
+fields note@s.2:25:-1:-1
+row one
+row two
+UPDATE 2
+> INSERT INTO r VALUES (11) RETURNING 'lit', NULL
+fields ?column?:25:-1:-1,?column?:25:-1:-1
+row lit,NULL
+INSERT 0 1
+> INSERT INTO r VALUES (1) RETURNING id
+ERROR 23505 duplicate key value violates unique constraint "r_pkey"
+> UPDATE r SET b = 1/0 WHERE id = 1 RETURNING 1/0
+ERROR 22012 division by zero
+> INSERT INTO r VALUES (12) RETURNING id / 0
+ERROR 22012 division by zero
+> SELECT id, a, b FROM r ORDER BY id
+fields id@r.1:23:4:-1,a@r.2:25:-1:-1,b@r.3:23:4:-1
+row 1,q,8
+row 2,q,7
+row 5,NULL,7
+row 6,w,7
+row 7,v,7
+row 8,u,7
+row 11,NULL,7
+SELECT 7
+P ins|INSERT INTO r VALUES ($1, $2) RETURNING id, a
+X ins|20|p
+row 20,p
+INSERT 0 1
+X ins|21|NULL
+row 21,NULL
+INSERT 0 1
+> CREATE TABLE e ()
+CREATE TABLE
+> INSERT INTO e DEFAULT VALUES RETURNING *
+ERROR 42601 RETURNING must have at least one column at 40
+> INSERT INTO r VALUES (30) RETURNING xmin = xmin
+fields ?column?:16:1:-1
+row t
+INSERT 0 1
+> CREATE TABLE c (id int, v int CHECK (v > 0), w int NOT NULL DEFAULT 1)
+CREATE TABLE
+> INSERT INTO c VALUES (1, 5), (2, 6) RETURNING v, w
+fields v@c.2:23:4:-1,w@c.3:23:4:-1
+row 5,1
+row 6,1
+INSERT 0 2
+> UPDATE c SET v = v + 1 FROM s WHERE c.id = s.id RETURNING old.v, new.v, s.note, (SELECT s.note || '!' || c.v)
+fields v@c.2:23:4:-1,v@c.2:23:4:-1,note@s.2:25:-1:-1,?column?:25:-1:-1
+row 5,6,one,one!6
+row 6,7,two,two!7
+UPDATE 2
+> UPDATE c SET v = 0 WHERE id = 1 RETURNING v
+ERROR 23514 new row for relation "c" violates check constraint "c_v_check"
+> UPDATE c SET v = v * 10 FROM (VALUES (1), (1)) x(k) WHERE c.id = x.k RETURNING id, v, x.k
+fields id@c.1:23:4:-1,v@c.2:23:4:-1,k:23:4:-1
+row 1,60,1
+UPDATE 1
+> DELETE FROM c WHERE id = 2 RETURNING (SELECT old.v + 100), c::text
+fields ?column?:23:4:-1,c:25:-1:-1
+row 107,(2,7,1)
+DELETE 1
+> BEGIN
+BEGIN
+> INSERT INTO c VALUES (3, 1) RETURNING id
+fields id@c.1:23:4:-1
+row 3
+INSERT 0 1
+> INSERT INTO c VALUES (4, -1) RETURNING id
+ERROR 23514 new row for relation "c" violates check constraint "c_v_check"
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM c ORDER BY id
+fields id@c.1:23:4:-1,v@c.2:23:4:-1,w@c.3:23:4:-1
+row 1,60,1
+SELECT 1
+> PREPARE pi(int) AS INSERT INTO c VALUES ($1, $1 * 2) RETURNING id, v, w + $1
+PREPARE
+> EXECUTE pi(7)
+fields id@c.1:23:4:-1,v@c.2:23:4:-1,?column?:23:4:-1
+row 7,14,8
+INSERT 0 1
+> EXECUTE pi(8)
+fields id@c.1:23:4:-1,v@c.2:23:4:-1,?column?:23:4:-1
+row 8,16,9
+INSERT 0 1
+P upd|UPDATE c SET v = v + $1 WHERE id = $2 RETURNING old.v AS before, v AS after
+X upd|1|7
+row 14,15
+UPDATE 1
+X upd|1|100
+UPDATE 0
+P del|DELETE FROM c WHERE id > $1 RETURNING *
+X del|7
+row 8,16,1
+DELETE 1
+> INSERT INTO c SELECT 9, 9 RETURNING tableoid = 'c'::regclass, c.*
+fields ?column?:16:1:-1,id@c.1:23:4:-1,v@c.2:23:4:-1,w@c.3:23:4:-1
+row t,9,9,1
+INSERT 0 1
+> SELECT * FROM c ORDER BY id
+fields id@c.1:23:4:-1,v@c.2:23:4:-1,w@c.3:23:4:-1
+row 1,60,1
+row 7,15,1
+row 9,9,1
+SELECT 3
