@@ -19,6 +19,7 @@ mod insert;
 mod jsonfunc;
 mod jsontable;
 mod locking;
+mod modify;
 pub mod node;
 mod poly;
 mod prepare;
@@ -66,7 +67,7 @@ pub use from::{
     Column, FromFunction, FromItem, Join, JoinKind, Relation, TABLE_OID_ATTNUM, TableSample,
 };
 pub use funcargs::{arg_defaults, expand_arguments};
-pub use insert::InsertInfo;
+pub use insert::{Write, WriteKind};
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
@@ -227,6 +228,8 @@ pub fn analyze(stmt: &Node, env: &dyn Env, params: &Params) -> Result<Query> {
     let mut query = match stmt {
         Node::SelectStmt(select) => analyzer.select(select)?,
         Node::InsertStmt(insert) => analyzer.insert(insert)?,
+        Node::UpdateStmt(update) => analyzer.update(update)?,
+        Node::DeleteStmt(delete) => analyzer.delete(delete)?,
         _ => {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,

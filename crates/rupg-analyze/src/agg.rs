@@ -51,6 +51,8 @@ pub(crate) enum Kind {
     Values,
     /// `EXPR_KIND_VALUES_SINGLE`: a `VALUES` list with one row.
     ValuesSingle,
+    /// `EXPR_KIND_UPDATE_SOURCE`: the source of an assignment of `UPDATE ... SET`.
+    UpdateSource,
     /// `EXPR_KIND_EXECUTE_PARAMETER`.
     ExecuteParameter,
 }
@@ -81,6 +83,7 @@ impl Kind {
             Kind::IndexPredicate => "index predicates",
             Kind::FromFunction => "functions in FROM",
             Kind::Values | Kind::ValuesSingle => "VALUES",
+            Kind::UpdateSource => "UPDATE",
             Kind::ExecuteParameter => "EXECUTE parameters",
         }
     }
@@ -367,6 +370,7 @@ impl Analyzer<'_> {
             | Kind::FromFunction
             | Kind::Values
             | Kind::ValuesSingle
+            | Kind::UpdateSource
             | Kind::ExecuteParameter => {
                 return Err(grouping_error(
                     format!("{what} are not allowed in {}", place.name()),

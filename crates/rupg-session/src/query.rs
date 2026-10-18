@@ -42,6 +42,8 @@ const PG_SLEEP: (&str, &str) = ("Timeout", "PgSleep");
 const SLEEP_SLICE_US: i64 = 10_000;
 /// The wait event of a wait for an advisory lock.
 const ADVISORY: (&str, &str) = ("Lock", "advisory");
+/// The wait event of a wait for the end of a transaction that changed a row.
+const TRANSACTION_ID: (&str, &str) = ("Lock", "transactionid");
 
 /// A column of a result.
 #[derive(Clone, Debug)]
@@ -80,7 +82,10 @@ pub(crate) type Row = Vec<Option<Vec<u8>>>;
 
 /// True for a statement that the engine plans, not the session.
 pub(crate) fn is_query(node: &Node) -> bool {
-    matches!(node, Node::SelectStmt(_) | Node::InsertStmt(_))
+    matches!(
+        node,
+        Node::SelectStmt(_) | Node::InsertStmt(_) | Node::UpdateStmt(_) | Node::DeleteStmt(_)
+    )
 }
 
 /// The time on the clock in microseconds since 2000-01-01 UTC.
@@ -309,7 +314,7 @@ impl<'a> Reader<'a> {
     }
 
     /// `ProcSleep` for the request of the session in the queue of `tag`. After `deadlock_timeout`, the session looks once for a cycle of waits, as `CheckDeadLock` does. A cancel and the end of `lock_timeout` stop the wait.
-    fn wait_lock(&self, store: &Store, tag: Tag, session: bool) -> Result<()> {
+    fn wait_lock(&self, store: &Store, tag: Tag, share: bool, session: bool) -> Result<()> {
         let locks = store.locks();
         let start = now(self.clock);
         let mut check = Some(start.saturating_add(self.timeout("deadlock_timeout") * 1000));
@@ -318,6 +323,7 @@ impl<'a> Reader<'a> {
             ms => Some(start.saturating_add(ms * 1000)),
         };
         let slice = Duration::from_micros(SLEEP_SLICE_US.cast_unsigned());
+        let waiting = || format!("waiting for {} on {tag}", mode_name(share));
         loop {
             if locks.wait(tag, self.pid, session, slice, store.tasks()) {
                 return Ok(());
@@ -326,14 +332,16 @@ impl<'a> Reader<'a> {
                 return Err(Error::new(
                     SqlState::QUERY_CANCELED,
                     "canceling statement due to user request",
-                ));
+                )
+                .with_context(waiting()));
             }
             let time = now(self.clock);
             if limit.is_some_and(|limit| time >= limit) {
                 return Err(Error::new(
                     SqlState::LOCK_NOT_AVAILABLE,
                     "canceling statement due to lock timeout",
-                ));
+                )
+                .with_context(waiting()));
             }
             if check.is_some_and(|check| time >= check) {
                 check = None;
@@ -342,6 +350,54 @@ impl<'a> Reader<'a> {
                 }
             }
         }
+    }
+
+    /// `XactLockTableWait`: the wait of the transaction `xid` for the end of the transaction `holder`, which changed a row that the statement changes. After `deadlock_timeout`, the session looks once for a cycle of waits. A cancel and the end of `lock_timeout` stop the wait. `context` tells the row, as `XactLockTableWaitErrorCb` does.
+    ///
+    /// # Errors
+    ///
+    /// `57014` for a cancel, `55P03` at the end of `lock_timeout` and `40P01` for a cycle of waits.
+    pub(crate) fn wait_xact(&self, xid: u32, holder: u32, context: &str) -> Result<()> {
+        let (activity, store) = self.server()?;
+        let heap = store.heap();
+        heap.wait(xid, holder);
+        activity.report_wait(store, Some(TRANSACTION_ID));
+        let start = now(self.clock);
+        let mut check = Some(start.saturating_add(self.timeout("deadlock_timeout") * 1000));
+        let limit = match self.timeout("lock_timeout") {
+            0 => None,
+            ms => Some(start.saturating_add(ms * 1000)),
+        };
+        let slice = Duration::from_micros(SLEEP_SLICE_US.cast_unsigned());
+        let waiting = format!("waiting for ShareLock on transaction {holder}");
+        let mut result = Ok(());
+        while heap.running(holder) {
+            if let Err(error) = rupg_func::Session::interrupted(self) {
+                result = Err(error.with_context(waiting).with_context(context));
+                break;
+            }
+            let time = now(self.clock);
+            if limit.is_some_and(|limit| time >= limit) {
+                result = Err(Error::new(
+                    SqlState::LOCK_NOT_AVAILABLE,
+                    "canceling statement due to lock timeout",
+                )
+                .with_context(waiting)
+                .with_context(context));
+                break;
+            }
+            if check.is_some_and(|check| time >= check) {
+                check = None;
+                if let Some(cycle) = heap.deadlock(xid) {
+                    result = Err(xact_deadlock(&cycle).with_context(context));
+                    break;
+                }
+            }
+            store.nap(slice);
+        }
+        activity.report_wait(store, None);
+        heap.waited(xid);
+        result
     }
 
     /// The settings of the session.
@@ -391,6 +447,22 @@ fn deadlock(cycle: &[Edge]) -> Error {
                 edge.pid,
                 mode_name(edge.share),
                 edge.tag
+            )
+        })
+        .collect();
+    Error::new(SqlState::T_R_DEADLOCK_DETECTED, "deadlock detected")
+        .with_detail(lines.join("\n"))
+        .with_hint("See server log for query details.")
+}
+
+/// `DeadLockReport` for a cycle of waits for the ends of transactions.
+fn xact_deadlock(cycle: &[crate::heap::Wait]) -> Error {
+    let lines: Vec<String> = cycle
+        .iter()
+        .map(|wait| {
+            format!(
+                "Process {} waits for ShareLock on transaction {}; blocked by process {}.",
+                wait.pid, wait.xid, wait.holder
             )
         })
         .collect();
@@ -463,7 +535,7 @@ impl rupg_func::Session for Reader<'_> {
             Request::Queued => {}
         }
         activity.report_wait(store, Some(ADVISORY));
-        let result = self.wait_lock(store, tag, lock.session);
+        let result = self.wait_lock(store, tag, lock.share, lock.session);
         activity.report_wait(store, None);
         if result.is_err() {
             locks.leave_queue(tag, self.pid);
