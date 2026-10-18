@@ -18,6 +18,9 @@ use rupg_types::{Array, Record, Value, oid};
 /// The attribute number of the system column `xmin`.
 const XMIN_ATTNUM: i16 = -2;
 
+/// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`.
+const CTID_ATTNUM: i16 = -1;
+
 /// `FrozenTransactionId`: the transaction ID of a row that each snapshot sees.
 const FROZEN_TRANSACTION_ID: u32 = 2;
 
@@ -123,15 +126,28 @@ impl Tables {
         if var.attnum == XMIN_ATTNUM {
             return Value::Oid(FROZEN_TRANSACTION_ID);
         }
+        let width = self.types[var.relation].len();
+        if var.attnum == CTID_ATTNUM {
+            // A row of a table of the user ends with the ID of its version, which `UPDATE` and `DELETE` read as `ctid`.
+            let tid = if self.needs[var.relation].is_empty() {
+                self.rows[var.relation][row].get(width).cloned()
+            } else {
+                self.grown[var.relation].borrow()[row].get(width).cloned()
+            };
+            if let Some(tid) = tid {
+                return tid;
+            }
+        }
         if var.attnum < 0 {
             return Value::Oid(0);
         }
         if var.attnum == 0 {
-            let values = if self.needs[var.relation].is_empty() {
+            let mut values = if self.needs[var.relation].is_empty() {
                 self.rows[var.relation][row].clone()
             } else {
                 self.grown[var.relation].borrow()[row].clone()
             };
+            values.truncate(width);
             let types = self.types[var.relation].clone();
             let names = self.names[var.relation].clone();
             return Value::Record(Box::new(Record { types, values, names }));
@@ -311,7 +327,7 @@ fn row_names(relation: &rupg_analyze::Relation) -> Option<Arc<[String]>> {
     Some(names.map(|(i, c)| alias.get(i).unwrap_or(&c.name).clone()).collect())
 }
 
-/// The rows of a relation of the user. A session cannot add rows yet, so a table has no rows. A sequence has its one row, the row of its file. The read of a table counts as a sequential scan, because rupg has no index scans yet.
+/// The rows of a relation of the user. A table gives the rows that the snapshot of the statement sees, each with the ID of its version at the end. A sequence has its one row, the row of its file. The read of a table counts as a sequential scan, because rupg has no index scans yet.
 fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
     let relation = session
         .catalog()
@@ -319,11 +335,13 @@ fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         .ok_or_else(|| Error::internal(format!("no relation has the OID {oid}")))?;
     if relation.kind == rupg_catalog::RelKind::Table {
         session.count_scan(oid);
-        // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null.
+        // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null. The ID of the version stays at the end of the row.
         let width = relation.columns.len();
         let mut rows = session.table_rows(oid)?;
         for row in &mut rows {
+            let tid = row.pop().unwrap_or(Value::Null);
             row.resize(width, Value::Null);
+            row.push(tid);
         }
         return Ok(rows);
     }

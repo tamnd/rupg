@@ -6,9 +6,10 @@ use std::cell::{Cell, Ref, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rupg_analyze::{Message, Params};
+use rupg_analyze::{Message, Params, WriteKind};
 use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, database};
 use rupg_common::{Error, SqlState};
+use rupg_exec::Plan;
 use rupg_func::{BackendState, Randomness, Sequences};
 pub use rupg_func::{Client, Ssl};
 use rupg_pgcatalog::builtin;
@@ -24,7 +25,7 @@ use rupg_wire::{
 
 use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
-use crate::heap::{Snapshot, View};
+use crate::heap::{Change, Changed, Snapshot, View, tid_text};
 use crate::query::{self, Column, Reader, Row};
 use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
@@ -348,6 +349,18 @@ pub struct Connection {
     snapshot: RefCell<Option<Snapshot>>,
 }
 
+/// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
+fn row_changes(rows: Vec<Vec<Value>>, update: bool) -> Result<Vec<Change>, Error> {
+    let mut changes = Vec::with_capacity(rows.len());
+    for mut row in rows {
+        let Some(Value::Int8(tid)) = row.pop() else {
+            return Err(Error::internal("a row to change with no ID of its version"));
+        };
+        changes.push((tid.cast_unsigned(), update.then_some(row)));
+    }
+    Ok(changes)
+}
+
 /// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default or a not-null constraint, a new constraint, or a new unique index. A dropped table and a new column with no default keep the rows.
 fn changes_rows(old: &Catalog, new: &Catalog, rel: &rupg_catalog::Relation) -> bool {
     let Some(now) = new.relation(rel.oid) else {
@@ -462,7 +475,8 @@ impl Connection {
     fn view(&self) -> View {
         let heap = self.store.heap();
         let isolation = self.settings.borrow().get("transaction_isolation");
-        let snapshot = if matches!(isolation.as_deref(), Some("repeatable read" | "serializable")) {
+        let serializable = matches!(isolation.as_deref(), Some("repeatable read" | "serializable"));
+        let snapshot = if serializable {
             self.snapshot.borrow_mut().get_or_insert_with(|| heap.snapshot()).clone()
         } else {
             heap.snapshot()
@@ -472,6 +486,7 @@ impl Connection {
             snapshot,
             xid: self.xid.get(),
             command: self.command.get(),
+            serializable,
         }
     }
 
@@ -504,17 +519,55 @@ impl Connection {
         ))
     }
 
-    /// Stores the new rows of an `INSERT` in the heap and gives their number. The first write of a transaction gives it a transaction ID, and each write ends a command, as `CommandCounterIncrement` does.
-    fn store_rows(&self, table: u32, view: &View, rows: Vec<Vec<Value>>) -> u64 {
-        let count = rows.len() as u64;
+    /// Writes the rows of an `INSERT`, an `UPDATE` or a `DELETE` in the heap and gives the tag of the command with the number of rows. The first write of a transaction gives it a transaction ID, and each write ends a command, as `CommandCounterIncrement` does. When another transaction that is in progress changed a row, the statement waits for its end and then tries again. In `READ COMMITTED`, when a transaction that committed after the snapshot changed a row, the plan runs again with a new snapshot.
+    fn write_rows(
+        &self,
+        plan: &Plan,
+        params: &[Value],
+        view: &View,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<Done, Error> {
+        let Some(info) = plan.write() else {
+            return Err(Error::internal("a plan that does not write"));
+        };
         let heap = self.store.heap();
         if self.xid.get() == 0 {
-            self.xid.set(heap.begin());
+            self.xid.set(heap.begin(self.pid));
         }
-        let view = View { xid: self.xid.get(), ..view.clone() };
-        heap.insert(table, &view, rows);
+        let mut view = View { xid: self.xid.get(), ..view.clone() };
+        let (tag, count) = match info.kind {
+            WriteKind::Insert => {
+                let count = rows.len() as u64;
+                heap.insert(info.table, &view, rows);
+                (CommandTag::Insert, count)
+            }
+            kind => {
+                let update = kind == WriteKind::Update;
+                let mut changes = row_changes(rows, update)?;
+                let count = loop {
+                    match heap.change(info.table, &view, changes.clone())? {
+                        Changed::Done(count) => break count,
+                        Changed::Wait { holder, tid } => {
+                            let what = if update { "updating" } else { "deleting" };
+                            let context = format!(
+                                "while {what} tuple {} in relation \"{}\"",
+                                tid_text(tid),
+                                info.name
+                            );
+                            self.reader().wait_xact(view.xid, holder, &context)?;
+                        }
+                        Changed::Again => {
+                            let reader = self.reader();
+                            changes = row_changes(plan.run(params, &reader)?, update)?;
+                            view = reader.view().cloned().unwrap_or_default();
+                        }
+                    }
+                };
+                (if update { CommandTag::Update } else { CommandTag::Delete }, count)
+            }
+        };
         self.command.set(view.command + 1);
-        count
+        Ok(Done::Count(tag, count))
     }
 
     /// The end of the rows of a transaction: a commit makes them visible and removes the rows of the tables that the transaction dropped, and a rollback removes them.
@@ -1091,13 +1144,13 @@ impl Connection {
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         plan.start(&reader)?;
-        if let Some(info) = plan.insert() {
+        if plan.write().is_some() {
             let rows = plan.run(&[], &reader);
             late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
             let Some(view) = reader.view() else {
                 return Err(Error::internal("the reader of the session has no view of the rows"));
             };
-            return Ok(Done::Count(CommandTag::Insert, self.store_rows(info.table, view, rows?)));
+            return self.write_rows(&plan, &[], view, rows?);
         }
         let columns = query::columns(&plan);
         let rows = query::run(&plan, &[], &reader, &[]);
@@ -2715,6 +2768,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/insert.test")));
     }
 
+    /// `UPDATE` and `DELETE`: `SET` with `DEFAULT` and `ROW`, `FROM` and `USING`, subqueries, the errors of `transformUpdateTargetList`, the check and not-null constraints, a rollback, a read-only transaction, `PREPARE` and the extended protocol. `connection/update.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn update() {
+        big_stack(|| script(include_str!("connection/update.test")));
+    }
+
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn row_compare_sublink() {
@@ -3072,6 +3131,12 @@ mod tests {
         big_stack(advisory_wait_cases);
     }
 
+    /// `UPDATE` and `DELETE` in two sessions: a wait with the wait event `transactionid` that ends at the rollback or the commit of the other transaction, the second run of the statement after a commit, the serialization error of repeatable read, and the end of `lock_timeout`.
+    #[test]
+    fn row_wait() {
+        big_stack(row_wait_cases);
+    }
+
     /// The warning of a function in an `Execute` comes after the description and before the rows, as in the test `pipeline_idle` of `libpq_pipeline`.
     #[test]
     fn advisory_extended() {
@@ -3098,6 +3163,99 @@ mod tests {
                 ]
             );
         });
+    }
+
+    #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
+    fn row_wait_cases() {
+        let store = Arc::new(Store::new());
+        let (cmds, cmd) = std::sync::mpsc::channel::<String>();
+        let (outs, out) = std::sync::mpsc::channel();
+        let waiter = Arc::clone(&store);
+        let b = std::thread::Builder::new()
+            .stack_size(8 << 20)
+            .spawn(move || {
+                let (mut b, _) = connect_to(&waiter, 1235);
+                while let Ok(text) = cmd.recv() {
+                    outs.send(send(&mut b, &query(&text))).unwrap();
+                }
+            })
+            .unwrap();
+        let (mut a, _) = connect_to(&store, 1234);
+        let look = query(
+            "SELECT state, wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = 1235",
+        );
+        let wait_for_b = |a: &mut Connection| {
+            let mut lines = Vec::new();
+            for _ in 0..2000 {
+                lines = send(a, &look);
+                if lines.iter().any(|l| l.contains(",Lock,transactionid,")) {
+                    break;
+                }
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            lines.swap_remove(1)
+        };
+        let has = |lines: &[String], line: &str| lines.iter().any(|l| l.starts_with(line));
+        send(&mut a, &query("CREATE TABLE t (a int, b text)"));
+        send(&mut a, &query("INSERT INTO t VALUES (1, 'x'), (2, 'y')"));
+
+        // A rollback of the other transaction: the statement changes the old version.
+        send(&mut a, &query("BEGIN"));
+        send(&mut a, &query("DELETE FROM t WHERE a = 2"));
+        cmds.send("UPDATE t SET b = 'z' WHERE a = 2".into()).unwrap();
+        assert_eq!(
+            wait_for_b(&mut a),
+            "row active,Lock,transactionid,UPDATE t SET b = 'z' WHERE a = 2"
+        );
+        send(&mut a, &query("ROLLBACK"));
+        let lines = out.recv().unwrap();
+        assert!(has(&lines, "UPDATE 1"), "{lines:?}");
+
+        // A commit of the other transaction: the statement runs again and changes the new version.
+        send(&mut a, &query("BEGIN"));
+        send(&mut a, &query("UPDATE t SET b = b || 'a' WHERE a = 1"));
+        cmds.send("UPDATE t SET b = b || 'b' WHERE a = 1".into()).unwrap();
+        assert_eq!(
+            wait_for_b(&mut a),
+            "row active,Lock,transactionid,UPDATE t SET b = b || 'b' WHERE a = 1"
+        );
+        send(&mut a, &query("COMMIT"));
+        let lines = out.recv().unwrap();
+        assert!(has(&lines, "UPDATE 1"), "{lines:?}");
+        let lines = send(&mut a, &query("SELECT b FROM t ORDER BY a"));
+        assert_eq!(lines[1..3], ["row xab", "row z"]);
+
+        // Repeatable read: a commit of the other transaction is a serialization error.
+        cmds.send("BEGIN ISOLATION LEVEL REPEATABLE READ; SELECT count(*) FROM t".into()).unwrap();
+        out.recv().unwrap();
+        send(&mut a, &query("BEGIN"));
+        send(&mut a, &query("UPDATE t SET b = 'c' WHERE a = 2"));
+        cmds.send("DELETE FROM t WHERE a = 2".into()).unwrap();
+        assert_eq!(wait_for_b(&mut a), "row active,Lock,transactionid,DELETE FROM t WHERE a = 2");
+        send(&mut a, &query("COMMIT"));
+        let lines = out.recv().unwrap();
+        assert!(
+            has(&lines, "ERROR 40001 could not serialize access due to concurrent update"),
+            "{lines:?}"
+        );
+        cmds.send("ROLLBACK".into()).unwrap();
+        out.recv().unwrap();
+
+        // The end of lock_timeout.
+        send(&mut a, &query("BEGIN"));
+        send(&mut a, &query("UPDATE t SET b = 'g' WHERE a = 1"));
+        cmds.send("SET lock_timeout = 20; DELETE FROM t WHERE a = 1".into()).unwrap();
+        let lines = out.recv().unwrap();
+        let context = "(waiting for ShareLock on transaction ";
+        assert!(
+            has(&lines, &format!("ERROR 55P03 canceling statement due to lock timeout {context}")),
+            "{lines:?}"
+        );
+        send(&mut a, &query("ROLLBACK"));
+        drop(cmds);
+        b.join().unwrap();
+        let lines = send(&mut a, &query("SELECT b FROM t ORDER BY a"));
+        assert_eq!(lines[1..3], ["row xab", "row c"]);
     }
 
     #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
@@ -3152,7 +3310,9 @@ mod tests {
         send(&mut a, &query("SET lock_timeout = 20"));
         let lines = send(&mut a, &query("SELECT pg_advisory_xact_lock(2)"));
         assert!(
-            lines.iter().any(|l| l == "ERROR 55P03 canceling statement due to lock timeout"),
+            lines
+                .iter()
+                .any(|l| l.starts_with("ERROR 55P03 canceling statement due to lock timeout")),
             "{lines:?}"
         );
         let lines = send(&mut a, &query("SELECT pg_try_advisory_lock(1), pg_try_advisory_lock(3)"));

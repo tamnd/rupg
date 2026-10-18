@@ -1,0 +1,252 @@
+!details
+> CREATE TABLE t (a int, b text, c numeric(5,2) DEFAULT 1.5)
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'one', 1), (2, 'two', 2), (3, 'three', 3)
+INSERT 0 3
+> UPDATE t SET b = 'uno' WHERE a = 1
+UPDATE 1
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 1,uno,1.00
+row 2,two,2.00
+row 3,three,3.00
+SELECT 3
+> UPDATE t SET c = c * 2, b = upper(b)
+UPDATE 3
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 1,UNO,2.00
+row 2,TWO,4.00
+row 3,THREE,6.00
+SELECT 3
+> UPDATE t SET c = DEFAULT WHERE a = 2
+UPDATE 1
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 1,UNO,2.00
+row 2,TWO,1.50
+row 3,THREE,6.00
+SELECT 3
+> UPDATE t SET (a, b) = (a + 10, 'x' || b) WHERE a = 3
+UPDATE 1
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 1,UNO,2.00
+row 2,TWO,1.50
+row 13,xTHREE,6.00
+SELECT 3
+> UPDATE t SET (a, b) = ROW(a + 100, DEFAULT) WHERE a = 13
+UPDATE 1
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 1,UNO,2.00
+row 2,TWO,1.50
+row 113,NULL,6.00
+SELECT 3
+> UPDATE t SET a = 5 WHERE false
+UPDATE 0
+> UPDATE t AS x SET b = x.b || '!' WHERE x.a = 1
+UPDATE 1
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 1,UNO!,2.00
+row 2,TWO,1.50
+row 113,NULL,6.00
+SELECT 3
+> UPDATE t SET nope = 1
+ERROR 42703 column "nope" of relation "t" does not exist at 14
+> UPDATE t SET t.b = 1
+ERROR 42703 column "t" of relation "t" does not exist at 14
+HINT SET target columns cannot be qualified with the relation name.
+> UPDATE t SET ctid = 1
+ERROR 0A000 cannot assign to system column "ctid" at 14
+> UPDATE t SET a = 1, a = 2
+ERROR 42601 multiple assignments to same column "a"
+> UPDATE t SET (a, b) = (1, 2, 3)
+ERROR 42601 number of columns does not match number of values at 23
+> UPDATE t SET (a, b) = 1
+ERROR 0A000 source for a multiple-column UPDATE item must be a sub-SELECT or ROW() expression at 23
+> UPDATE t SET a = 'abc'
+ERROR 22P02 invalid input syntax for type integer: "abc" at 18
+> UPDATE t SET a = count(*)
+ERROR 42803 aggregate functions are not allowed in UPDATE at 18
+> UPDATE t SET a = 1 WHERE count(*) > 1
+ERROR 42803 aggregate functions are not allowed in WHERE at 26
+> UPDATE t SET a = generate_series(1, 2)
+ERROR 0A000 set-returning functions are not allowed in UPDATE at 18
+> UPDATE t SET c = 12345
+ERROR 22003 numeric field overflow
+DETAIL A field with precision 5, scale 2 must round to an absolute value less than 10^3.
+> UPDATE nope SET a = 1
+ERROR 42P01 relation "nope" does not exist at 8
+> UPDATE t SET a = sum(a) OVER ()
+ERROR 42P20 window functions are not allowed in UPDATE at 18
+> CREATE TABLE u (k int, v text)
+CREATE TABLE
+> INSERT INTO u VALUES (1, 'from u'), (2, 'also u')
+INSERT 0 2
+> UPDATE t SET b = u.v FROM u WHERE t.a = u.k
+UPDATE 2
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 1,from u,2.00
+row 2,also u,1.50
+row 113,NULL,6.00
+SELECT 3
+> UPDATE t SET b = u.v FROM t, u
+ERROR 42712 table name "t" specified more than once
+> UPDATE t SET b = (SELECT v FROM u WHERE k = 2) WHERE a = 1
+UPDATE 1
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 1,also u,2.00
+row 2,also u,1.50
+row 113,NULL,6.00
+SELECT 3
+> UPDATE t SET a = a + 1 WHERE a IN (SELECT k FROM u)
+UPDATE 2
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 2,also u,2.00
+row 3,also u,1.50
+row 113,NULL,6.00
+SELECT 3
+> CREATE TABLE ck (a int CHECK (a > 0), b int NOT NULL)
+CREATE TABLE
+> INSERT INTO ck VALUES (1, 1), (2, 2)
+INSERT 0 2
+> UPDATE ck SET a = -1 WHERE a = 1
+ERROR 23514 new row for relation "ck" violates check constraint "ck_a_check"
+DETAIL Failing row contains (-1, 1).
+> UPDATE ck SET b = NULL
+ERROR 23502 null value in column "b" of relation "ck" violates not-null constraint
+DETAIL Failing row contains (1, null).
+> UPDATE ck SET a = a + 10
+UPDATE 2
+> SELECT * FROM ck ORDER BY a
+fields a@ck.1:23:4:-1,b@ck.2:23:4:-1
+row 11,1
+row 12,2
+SELECT 2
+> DELETE FROM t WHERE a = 2
+DELETE 1
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 3,also u,1.50
+row 113,NULL,6.00
+SELECT 2
+> DELETE FROM t USING u WHERE t.a = u.k + 1
+DELETE 1
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 113,NULL,6.00
+SELECT 1
+> DELETE FROM t AS x WHERE x.b IS NULL
+DELETE 1
+> DELETE FROM t WHERE count(*) > 0
+ERROR 42803 aggregate functions are not allowed in WHERE at 21
+> DELETE FROM nope
+ERROR 42P01 relation "nope" does not exist at 13
+> DELETE FROM t USING t
+ERROR 42712 table name "t" specified more than once
+> DELETE FROM t
+DELETE 0
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+SELECT 0
+> BEGIN
+BEGIN
+> INSERT INTO t VALUES (7, 'seven')
+INSERT 0 1
+> UPDATE t SET b = 'SEVEN'
+UPDATE 1
+> UPDATE t SET b = b || '?'
+UPDATE 1
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 7,SEVEN?,1.50
+SELECT 1
+> DELETE FROM t
+DELETE 1
+> SELECT count(*) FROM t
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+SELECT 0
+> INSERT INTO t VALUES (8, 'eight')
+INSERT 0 1
+> BEGIN
+BEGIN
+> UPDATE t SET b = 'gone'
+UPDATE 1
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 8,eight,1.50
+SELECT 1
+> BEGIN
+BEGIN
+> DELETE FROM t
+DELETE 1
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 8,eight,1.50
+SELECT 1
+> BEGIN READ ONLY
+BEGIN
+> UPDATE t SET a = 1
+ERROR 25006 cannot execute UPDATE in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> BEGIN READ ONLY
+BEGIN
+> DELETE FROM t
+ERROR 25006 cannot execute DELETE in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> UPDATE s SET last_value = 1
+ERROR 42809 cannot change sequence "s"
+> DELETE FROM s
+ERROR 42809 cannot change sequence "s"
+> CREATE VIEW vv AS SELECT 1 AS x
+CREATE VIEW
+> PREPARE pu(int, text) AS UPDATE t SET b = $2 WHERE a = $1
+PREPARE
+> EXECUTE pu(8, 'ocho')
+UPDATE 1
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 8,ocho,1.50
+SELECT 1
+> PREPARE pd(int) AS DELETE FROM t WHERE a = $1
+PREPARE
+> EXECUTE pd(8)
+DELETE 1
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+SELECT 0
+P su|UPDATE t SET b = $1 WHERE a = $2
+> INSERT INTO t VALUES (9, 'nine')
+INSERT 0 1
+X su|neun|9
+UPDATE 1
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:327686
+row 9,neun,1.50
+SELECT 1
+P sd|DELETE FROM t WHERE a = $1
+X sd|9
+DELETE 1
+> SELECT count(*) FROM t
+fields count:20:8:-1
+row 0
+SELECT 1

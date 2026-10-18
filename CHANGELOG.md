@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - `INSERT` with `VALUES`, with a query and with `DEFAULT VALUES` into a table, with the defaults of the columns and of the domains, the not-null and check constraints, and the errors of PostgreSQL. The rows are in memory with MVCC snapshots, so a rollback removes them and other sessions see them only after the commit (#391).
+- `UPDATE` and `DELETE` on a table, with `SET` from `DEFAULT` and `ROW(...)`, `FROM` and `USING`, the check and not-null constraints, and the errors of PostgreSQL. A change of a row that another transaction changed waits for that transaction, with the deadlock check, `lock_timeout`, the second run in read committed and the serialization error in repeatable read (#392).
 
 ## 0.1.41 (2026-10-18)
 

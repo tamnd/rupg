@@ -887,6 +887,7 @@ impl Analyzer<'_> {
             | Kind::Limit
             | Kind::Offset
             | Kind::Values
+            | Kind::UpdateSource
             | Kind::ColumnDefault
             | Kind::Check
             | Kind::IndexExpression

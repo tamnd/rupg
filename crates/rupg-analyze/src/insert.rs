@@ -16,21 +16,43 @@ use crate::select::{Query, Target};
 use crate::typename::place;
 use crate::types;
 
-/// The table that an `INSERT` writes.
+/// The kind of a statement that writes the rows of a table, `CmdType`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum WriteKind {
+    Insert,
+    Update,
+    Delete,
+}
+
+impl WriteKind {
+    /// The name of the statement.
+    pub fn name(self) -> &'static str {
+        match self {
+            WriteKind::Insert => "INSERT",
+            WriteKind::Update => "UPDATE",
+            WriteKind::Delete => "DELETE",
+        }
+    }
+}
+
+/// The table that an `INSERT`, an `UPDATE` or a `DELETE` writes.
+///
+/// The rows of the query of an `INSERT` are the new rows, each with the conditions of the check constraints after the columns. The rows of an `UPDATE` are the same, with the ID of the version of the old row at the end. The rows of a `DELETE` have only the ID of the version of the row.
 #[derive(Clone, Debug, PartialEq)]
-pub struct InsertInfo {
+pub struct Write {
+    pub kind: WriteKind,
     /// The OID of the table.
     pub table: u32,
     /// The name of the table, for the errors of the constraints.
     pub name: String,
-    /// The number of columns of the table. The first targets of the query are the columns.
+    /// The number of columns of the table. The first targets of the query are the columns. For a `DELETE` it is 0.
     pub width: usize,
     /// The names of the check constraints in the order of their names. The targets after the columns are the conditions of these constraints, in the same order.
     pub checks: Vec<String>,
 }
 
-/// An item of a row of `VALUES`: an expression, or `DEFAULT` at its place.
-enum Item {
+/// An item of a row of `VALUES` or of `UPDATE ... SET`: an expression, or `DEFAULT` at its place.
+pub(crate) enum Item {
     Expr(Expr),
     Default(Option<usize>),
 }
@@ -48,7 +70,7 @@ impl Item {
 type Given = (usize, Option<usize>);
 
 /// The error of a clause that the analyzer does not take yet.
-fn not_yet(what: &str) -> Error {
+pub(crate) fn not_yet(what: &str) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet"))
 }
 
@@ -70,7 +92,7 @@ impl Analyzer<'_> {
             return Err(not_yet("RETURNING"));
         }
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an INSERT with no table"))?;
-        let (table, name, columns) = self.target_table(rv)?;
+        let (table, name, columns) = self.target_table(rv, WriteKind::Insert)?;
         let given = self.insert_targets(&s.cols, &name, &columns)?;
         let explicit = !s.cols.is_empty();
         let select = match &s.selectStmt {
@@ -102,14 +124,24 @@ impl Analyzer<'_> {
         let checks = self.checks(table)?;
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         if !checks.is_empty() {
-            query = with_checks(&name, &columns, query, checks);
+            query = with_checks(&name, &columns, query, checks, false);
         }
-        query.insert = Some(InsertInfo { table, name, width: columns.len(), checks: names });
+        let width = columns.len();
+        query.write = Some(Write { kind: WriteKind::Insert, table, name, width, checks: names });
         Ok(query)
     }
 
-    /// `setTargetTable`: the OID, the name and the columns of the table that the statement writes.
-    fn target_table(&self, rv: &rupg_sql::nodes::RangeVar) -> Result<(u32, String, Vec<Column>)> {
+    /// `setTargetTable`: the OID, the name and the columns of the table that the statement writes. A table with a constraint or an object that the executor does not check yet gives `0A000`.
+    pub(crate) fn target_table(
+        &self,
+        rv: &rupg_sql::nodes::RangeVar,
+        kind: WriteKind,
+    ) -> Result<(u32, String, Vec<Column>)> {
+        let what = match kind {
+            WriteKind::Insert => "INSERT into",
+            WriteKind::Update => "UPDATE of",
+            WriteKind::Delete => "DELETE from",
+        };
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default().to_string();
         let Some(oid) = self.lookup_relation(rv)? else {
@@ -125,7 +157,7 @@ impl Analyzer<'_> {
         };
         let rel = self.env.catalog().and_then(|c| c.relation(oid));
         let Some(rel) = rel else {
-            return Err(not_yet("INSERT into a system catalog"));
+            return Err(not_yet(&format!("{what} a system catalog")));
         };
         match rel.kind {
             RelKind::Table => {}
@@ -135,7 +167,7 @@ impl Analyzer<'_> {
                     format!("cannot change sequence \"{name}\""),
                 ));
             }
-            RelKind::View => return Err(not_yet("INSERT into a view")),
+            RelKind::View => return Err(not_yet(&format!("{what} a view"))),
             _ => {
                 return Err(Error::new(
                     SqlState::WRONG_OBJECT_TYPE,
@@ -147,17 +179,23 @@ impl Analyzer<'_> {
             let unique = catalog.relations().any(|index| {
                 index.index.as_ref().is_some_and(|info| info.table == oid && info.unique)
             });
-            if unique {
-                return Err(not_yet("INSERT into a table with a unique index"));
+            if unique && kind != WriteKind::Delete {
+                return Err(not_yet(&format!("{what} a table with a unique index")));
             }
-            if catalog.constraints_of(oid).any(|c| c.kind == ConKind::Foreign) {
-                return Err(not_yet("INSERT into a table with a foreign key"));
+            let foreign = catalog.constraints_of(oid).any(|c| c.kind == ConKind::Foreign);
+            if foreign && kind != WriteKind::Delete {
+                return Err(not_yet(&format!("{what} a table with a foreign key")));
+            }
+            let referenced =
+                catalog.constraints().any(|c| c.foreign.as_ref().is_some_and(|f| f.table == oid));
+            if referenced && kind != WriteKind::Insert {
+                return Err(not_yet(&format!("{what} a table that a foreign key references")));
             }
             if rel.has_triggers || catalog.triggers().any(|t| t.relation == oid) {
-                return Err(not_yet("INSERT into a table with triggers"));
+                return Err(not_yet(&format!("{what} a table with triggers")));
             }
             if catalog.rules().any(|r| r.relation == oid) {
-                return Err(not_yet("INSERT into a table with rules"));
+                return Err(not_yet(&format!("{what} a table with rules")));
             }
         }
         let columns = rel
@@ -265,7 +303,7 @@ impl Analyzer<'_> {
     }
 
     /// `transformAssignedExpr`: the expression cast to the type of the column with an assignment cast.
-    fn assign(&mut self, expr: Expr, column: &Column) -> Result<Expr> {
+    pub(crate) fn assign(&mut self, expr: Expr, column: &Column) -> Result<Expr> {
         let (from, at) = (expr.ty, expr.place());
         self.coerce_to_target(expr, column.ty, column.typmod, Context::Assignment, None)?
             .ok_or_else(|| {
@@ -284,7 +322,12 @@ impl Analyzer<'_> {
     }
 
     /// `build_column_default`: the default of the column, or the default of its domain, cast to the type of the column. With no default, the value is a null value of the type, which a domain checks, as `coerce_null_to_domain` gives.
-    fn column_default(&mut self, table: u32, index: usize, column: &Column) -> Result<Expr> {
+    pub(crate) fn column_default(
+        &mut self,
+        table: u32,
+        index: usize,
+        column: &Column,
+    ) -> Result<Expr> {
         let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
         let catalog = self.env.catalog();
         let text = catalog.and_then(|c| c.default_of(table, attnum)).map(|d| d.expr.clone());
@@ -459,7 +502,7 @@ impl Analyzer<'_> {
     }
 
     /// The check constraints of the table with their conditions, in the order of their names, as `CheckConstraintFetch` sorts them.
-    fn checks(&self, table: u32) -> Result<Vec<(String, Expr)>> {
+    pub(crate) fn checks(&self, table: u32) -> Result<Vec<(String, Expr)>> {
         let Some(catalog) = self.env.catalog() else { return Ok(Vec::new()) };
         let mut checks: Vec<(String, &str)> = catalog
             .constraints_of(table)
@@ -482,7 +525,7 @@ fn general_select(s: &SelectStmt) -> bool {
 }
 
 /// The targets of the row, with the names of the columns.
-fn targets(columns: &[Column], row: Vec<Expr>) -> Vec<Target> {
+pub(crate) fn targets(columns: &[Column], row: Vec<Expr>) -> Vec<Target> {
     columns
         .iter()
         .zip(row)
@@ -495,8 +538,24 @@ fn row_query(columns: &[Column], row: Vec<Expr>) -> Query {
     Query { targets: targets(columns, row), ..Query::default() }
 }
 
-/// The query that reads the rows of `rows` as a subquery with the name of the table, and gives the columns and then the condition of each check constraint.
-fn with_checks(name: &str, columns: &[Column], rows: Query, checks: Vec<(String, Expr)>) -> Query {
+/// The query that reads the rows of `rows` as a subquery with the name of the table, and gives the columns and then the condition of each check constraint. With `tid`, the rows end with the ID of the version of the old row, which comes after the conditions.
+pub(crate) fn with_checks(
+    name: &str,
+    columns: &[Column],
+    rows: Query,
+    checks: Vec<(String, Expr)>,
+    tid: bool,
+) -> Query {
+    let mut columns = columns.to_vec();
+    if tid {
+        columns.push(Column {
+            name: "ctid".to_string(),
+            ty: oid::INT8,
+            typmod: -1,
+            not_null: false,
+        });
+    }
+    let width = columns.len() - usize::from(tid);
     let mut targets: Vec<Target> = columns
         .iter()
         .enumerate()
@@ -508,13 +567,15 @@ fn with_checks(name: &str, columns: &[Column], rows: Query, checks: Vec<(String,
             Target { name: c.name.clone(), expr, origin: None, junk: false }
         })
         .collect();
+    let tid = targets.split_off(width);
     targets.extend(checks.into_iter().map(|(n, expr)| Target {
         name: n,
         expr,
         origin: None,
         junk: false,
     }));
-    let mut relation = Relation::new(0, columns.to_vec(), Some(Box::new(rows)), None, None);
+    targets.extend(tid);
+    let mut relation = Relation::new(0, columns, Some(Box::new(rows)), None, None);
     relation.name = name.to_string();
     Query {
         relations: vec![relation],
