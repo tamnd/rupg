@@ -986,6 +986,11 @@ fn cursor_error(node: &Node, text: &str) -> Option<Error> {
     })
 }
 
+/// True when the plan gives rows, which `RowDescription` describes: a query that reads, or a query that writes with `RETURNING`. A query that writes with no `RETURNING` gives `NoData`.
+pub(crate) fn returns_rows(plan: &Plan) -> bool {
+    plan.write().is_none_or(|write| write.returning.is_some())
+}
+
 /// The columns of the result of a plan. A column of a domain has the base type and the typmod of the domain, as `SendRowDescriptionMessage` gives them.
 pub(crate) fn columns(plan: &Plan) -> Vec<Column> {
     plan.columns()

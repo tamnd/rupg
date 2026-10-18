@@ -55,6 +55,8 @@ pub(crate) enum Kind {
     UpdateSource,
     /// `EXPR_KIND_EXECUTE_PARAMETER`.
     ExecuteParameter,
+    /// `EXPR_KIND_RETURNING`: the list of `RETURNING`.
+    Returning,
 }
 
 impl Kind {
@@ -85,6 +87,7 @@ impl Kind {
             Kind::Values | Kind::ValuesSingle => "VALUES",
             Kind::UpdateSource => "UPDATE",
             Kind::ExecuteParameter => "EXECUTE parameters",
+            Kind::Returning => "RETURNING",
         }
     }
 
@@ -371,7 +374,8 @@ impl Analyzer<'_> {
             | Kind::Values
             | Kind::ValuesSingle
             | Kind::UpdateSource
-            | Kind::ExecuteParameter => {
+            | Kind::ExecuteParameter
+            | Kind::Returning => {
                 return Err(grouping_error(
                     format!("{what} are not allowed in {}", place.name()),
                     at,

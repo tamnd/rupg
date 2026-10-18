@@ -66,7 +66,7 @@ impl Connection {
         let plan = plan?;
         notices.extend(plan.notices().iter().map(|error| Notice::warning(error.clone())));
         let params = plan.params().to_vec();
-        let columns = plan.write().is_none().then(|| query::columns(&plan));
+        let columns = query::returns_rows(&plan).then(|| query::columns(&plan));
         let prepared = Prepared::new(
             text.to_owned(),
             Some(node.clone()),
@@ -128,7 +128,7 @@ impl Connection {
         {
             let rows = plan.run(&params, &reader)?;
             let view = reader.view().cloned().unwrap_or_default();
-            return self.write_rows(plan, &params, &view, rows);
+            return self.write_rows(plan, &params, &view, rows, formats);
         }
         if let Some(plan) = plan {
             let rows = query::run(&plan, &params, &reader, formats)?;

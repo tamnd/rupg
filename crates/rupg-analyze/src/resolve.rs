@@ -888,6 +888,7 @@ impl Analyzer<'_> {
             | Kind::Offset
             | Kind::Values
             | Kind::UpdateSource
+            | Kind::Returning
             | Kind::ColumnDefault
             | Kind::Check
             | Kind::IndexExpression

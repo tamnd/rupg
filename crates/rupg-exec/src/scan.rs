@@ -320,6 +320,19 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     })
 }
 
+/// The rows of a query of `RETURNING`, which has one relation: the rows that the statement wrote, each with the columns of the table and then the carried values.
+pub(crate) fn given(query: &Query, rows: Vec<Vec<Value>>) -> Tables {
+    Tables {
+        rows: vec![Rc::new(rows)],
+        oids: query.relations.iter().map(|r| r.oid).collect(),
+        types: query.relations.iter().map(|r| r.columns.iter().map(|c| c.ty).collect()).collect(),
+        names: query.relations.iter().map(row_names).collect(),
+        needs: vec![Vec::new()],
+        grown: vec![RefCell::default()],
+        indexes: RefCell::default(),
+    }
+}
+
 /// The names of the fields of a whole row of a relation. A subquery, a function or a `VALUES` list takes the names of the alias, then the names of its columns. A table takes the names of the columns of its row type, as the alias does not change the row type.
 fn row_names(relation: &rupg_analyze::Relation) -> Option<Arc<[String]>> {
     let alias = if relation.oid == 0 { relation.alias.as_deref().unwrap_or_default() } else { &[] };

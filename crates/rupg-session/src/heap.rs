@@ -425,7 +425,7 @@ impl Heap {
         Ok(Changed::Done(count))
     }
 
-    /// `heap_update` and `heap_delete` for the rows that the command of the view changes. A row that the command changed before stays as it is, as for a row that a join gives more than once. When another transaction changed a row after the snapshot, nothing changes, and the result tells the statement to wait or to run again.
+    /// `heap_update` and `heap_delete` for the rows that the command of the view changes. A row that the command changed before stays as it is, as for a row that a join gives more than once. When another transaction changed a row after the snapshot, nothing changes, and the result tells the statement to wait or to run again. When the change is done, `applied` has the index in `changes` of each row that changed, for `RETURNING`.
     ///
     /// # Errors
     ///
@@ -437,14 +437,17 @@ impl Heap {
         changes: Vec<Change>,
         unique: &[Unique],
         kept: &[u64],
+        applied: &mut Vec<usize>,
     ) -> Result<Changed> {
+        applied.clear();
         let mut state = self.state();
         let State { tables, running, .. } = &mut *state;
         let Some(table) = tables.get_mut(&(view.database, relation)) else {
             return Ok(Changed::Done(0));
         };
         let mut found = Vec::with_capacity(changes.len());
-        for (tid, values) in changes {
+        let mut indexes = Vec::with_capacity(changes.len());
+        for (index, (tid, values)) in changes.into_iter().enumerate() {
             let Ok(at) = table.versions.binary_search_by_key(&tid, |version| version.tid) else {
                 continue;
             };
@@ -468,6 +471,7 @@ impl Heap {
                 continue;
             }
             found.push((tid, values));
+            indexes.push(index);
         }
         let count = found.len() as u64;
         let places = table.key_maps(unique);
@@ -498,6 +502,7 @@ impl Heap {
                 }
             }
         }
+        *applied = indexes;
         Ok(Changed::Done(count))
     }
 
@@ -649,10 +654,16 @@ mod tests {
         let b = heap.begin(2);
         let tid = first_tid(&heap, &view(heap.snapshot(), a, 0));
         let change = || vec![(tid, Some(vec![Value::Int4(2)]))];
-        let done = heap.change(7, &view(heap.snapshot(), a, 0), change(), &[], &[]).unwrap();
+        let done = heap
+            .change(7, &view(heap.snapshot(), a, 0), change(), &[], &[], &mut Vec::new())
+            .unwrap();
         assert_eq!(done, Changed::Done(1));
         let wait = Changed::Wait { holder: a, tid };
-        assert_eq!(heap.change(7, &view(heap.snapshot(), b, 0), change(), &[], &[]).unwrap(), wait);
+        assert_eq!(
+            heap.change(7, &view(heap.snapshot(), b, 0), change(), &[], &[], &mut Vec::new())
+                .unwrap(),
+            wait
+        );
         heap.wait(b, a);
         assert_eq!(heap.deadlock(b), None);
         heap.wait(a, b);
@@ -660,7 +671,9 @@ mod tests {
         assert_eq!(cycle, [Wait { pid: 2, xid: a, holder: 1 }, Wait { pid: 1, xid: b, holder: 2 }]);
         heap.waited(a);
         heap.abort(a);
-        let done = heap.change(7, &view(heap.snapshot(), b, 0), change(), &[], &[]).unwrap();
+        let done = heap
+            .change(7, &view(heap.snapshot(), b, 0), change(), &[], &[], &mut Vec::new())
+            .unwrap();
         assert_eq!(done, Changed::Done(1));
         heap.commit(b);
         let rows = heap.rows(7, &view(heap.snapshot(), 0, 0));
@@ -710,7 +723,10 @@ mod tests {
             })
             .collect();
         let changes = tids.iter().map(|&tid| (tid, None)).collect();
-        assert_eq!(heap.change(7, &view_c, changes, unique, &[]).unwrap(), Changed::Done(2));
+        assert_eq!(
+            heap.change(7, &view_c, changes, unique, &[], &mut Vec::new()).unwrap(),
+            Changed::Done(2)
+        );
         let view_c = view(heap.snapshot(), c, 1);
         assert_eq!(
             heap.insert(7, &view_c, vec![row(2), row(3)], unique, &[]).unwrap(),
@@ -728,16 +744,18 @@ mod tests {
         let old = heap.snapshot();
         let tid = first_tid(&heap, &view(old.clone(), 0, 0));
         let a = heap.begin(1);
-        heap.change(7, &view(heap.snapshot(), a, 0), vec![(tid, None)], &[], &[]).unwrap();
+        heap.change(7, &view(heap.snapshot(), a, 0), vec![(tid, None)], &[], &[], &mut Vec::new())
+            .unwrap();
         heap.commit(a);
         let b = heap.begin(2);
         let change = vec![(tid, Some(vec![Value::Int4(3)]))];
         assert_eq!(
-            heap.change(7, &view(old.clone(), b, 0), change.clone(), &[], &[]).unwrap(),
+            heap.change(7, &view(old.clone(), b, 0), change.clone(), &[], &[], &mut Vec::new())
+                .unwrap(),
             Changed::Again
         );
         let serializable = View { serializable: true, ..view(old, b, 0) };
-        let error = heap.change(7, &serializable, change, &[], &[]).unwrap_err();
+        let error = heap.change(7, &serializable, change, &[], &[], &mut Vec::new()).unwrap_err();
         assert_eq!(error.state(), SqlState::T_R_SERIALIZATION_FAILURE);
         assert_eq!(error.message(), "could not serialize access due to concurrent delete");
         assert_eq!(tid_text(1), "(0,1)");

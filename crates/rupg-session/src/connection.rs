@@ -350,15 +350,25 @@ pub struct Connection {
 }
 
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
-fn row_changes(rows: Vec<Vec<Value>>, update: bool) -> Result<Vec<Change>, Error> {
+fn row_changes(
+    rows: Vec<Vec<Value>>,
+    info: &Write,
+) -> Result<(Vec<Change>, Vec<Vec<Value>>), Error> {
+    let update = info.kind == WriteKind::Update;
+    let returning = info.returning.is_some();
     let mut changes = Vec::with_capacity(rows.len());
+    let mut kept = Vec::with_capacity(if returning { rows.len() } else { 0 });
     for mut row in rows {
         let Some(Value::Int8(tid)) = row.pop() else {
             return Err(Error::internal("a row to change with no ID of its version"));
         };
+        if returning {
+            kept.push(if update { row.clone() } else { std::mem::take(&mut row) });
+        }
+        row.truncate(info.width);
         changes.push((tid.cast_unsigned(), update.then_some(row)));
     }
-    Ok(changes)
+    Ok((changes, kept))
 }
 
 /// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default or a not-null constraint, a new constraint, or a new unique index. A dropped table and a new column with no default keep the rows.
@@ -526,6 +536,7 @@ impl Connection {
         params: &[Value],
         view: &View,
         rows: Vec<Vec<Value>>,
+        formats: &[i16],
     ) -> Result<Done, Error> {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
@@ -535,9 +546,14 @@ impl Connection {
             self.xid.set(heap.begin(self.pid));
         }
         let mut view = View { xid: self.xid.get(), ..view.clone() };
+        // The rows that `RETURNING` reads: the rows that the statement wrote.
+        let mut written = Vec::new();
         let (tag, count) = match info.kind {
             WriteKind::Insert => {
                 let count = rows.len() as u64;
+                if info.returning.is_some() {
+                    written.clone_from(&rows);
+                }
                 if info.unique.is_empty() {
                     heap.insert(info.table, &view, rows, &[], &[])?;
                 } else {
@@ -553,10 +569,19 @@ impl Connection {
             }
             kind => {
                 let update = kind == WriteKind::Update;
-                let mut changes = row_changes(rows, update)?;
+                let (mut changes, mut given) = row_changes(rows, info)?;
                 let mut kept = Vec::new();
+                let mut applied = Vec::new();
                 let count = loop {
-                    match heap.change(info.table, &view, changes.clone(), &info.unique, &kept)? {
+                    let changed = heap.change(
+                        info.table,
+                        &view,
+                        changes.clone(),
+                        &info.unique,
+                        &kept,
+                        &mut applied,
+                    )?;
+                    match changed {
                         Changed::Done(count) => break count,
                         Changed::Wait { holder, tid } => {
                             let what = if update { "updating" } else { "deleting" };
@@ -569,17 +594,38 @@ impl Connection {
                         }
                         Changed::Again => {
                             let reader = self.reader();
-                            changes = row_changes(plan.run(params, &reader)?, update)?;
+                            (changes, given) = row_changes(plan.run(params, &reader)?, info)?;
                             view = reader.view().cloned().unwrap_or_default();
                         }
                         conflict => kept = self.key_conflict(info, &view, conflict)?,
                     }
                 };
+                if info.returning.is_some() {
+                    let mut given: Vec<Option<Vec<Value>>> = given.into_iter().map(Some).collect();
+                    written = applied
+                        .iter()
+                        .filter_map(|&at| given.get_mut(at).and_then(Option::take))
+                        .collect();
+                }
                 (if update { CommandTag::Update } else { CommandTag::Delete }, count)
             }
         };
+        let done = if info.returning.is_some() {
+            // A subquery of `RETURNING` reads with the snapshot of the statement, which does not see the rows of the statement.
+            let reader = self.reader().with_view(view.clone());
+            let rows = plan.returning(written, params, &reader)?;
+            let columns = query::columns(plan);
+            let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+            let rows = rows
+                .iter()
+                .map(|values| query::encode(&types, values, &reader, formats))
+                .collect::<Result<Vec<_>, _>>()?;
+            Done::Rows { columns, rows, tag }
+        } else {
+            Done::Count(tag, count)
+        };
         self.command.set(view.command + 1);
-        Ok(Done::Count(tag, count))
+        Ok(done)
     }
 
     /// A conflict of a new version in a unique index. The write waits for the transaction that holds the key, as `_bt_check_unique` does, and gives the IDs of the new versions for the next try. Or it fails with the duplicate key and its value, as `BuildIndexValueDescription` gives it.
@@ -1207,7 +1253,7 @@ impl Connection {
             let Some(view) = reader.view() else {
                 return Err(Error::internal("the reader of the session has no view of the rows"));
             };
-            return self.write_rows(&plan, &[], view, rows?);
+            return self.write_rows(&plan, &[], view, rows?, &[]);
         }
         let columns = query::columns(&plan);
         let rows = query::run(&plan, &[], &reader, &[]);
@@ -2835,6 +2881,12 @@ mod tests {
     #[test]
     fn unique() {
         big_stack(|| script(include_str!("connection/unique.test")));
+    }
+
+    /// `RETURNING` of `INSERT`, `UPDATE` and `DELETE`: `*` and expressions, the names `old` and `new` and the options that rename them, the columns of `FROM` and `USING`, subqueries, the errors of `transformReturningClause`, the check constraints, a rollback, `PREPARE` and the extended protocol. `connection/returning.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn returning() {
+        big_stack(|| script(include_str!("connection/returning.test")));
     }
 
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.

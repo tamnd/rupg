@@ -1002,6 +1002,38 @@ impl Analyzer<'_> {
         self.scope.namespace.truncate(items);
     }
 
+    /// `addNSItemForReturning`: adds the target table, which is the first relation of the scope, with the name `old` or `new` of `RETURNING`. A qualified name can use the item, but an unqualified name cannot. It gives the index of the new relation.
+    pub(crate) fn add_returning_item(&mut self, name: &str) -> Result<usize> {
+        let target = self
+            .scope
+            .relations
+            .first()
+            .ok_or_else(|| Error::internal("RETURNING with no table"))?;
+        let relation = Relation::new(target.oid, target.columns.clone(), None, None, None);
+        let index = self.scope.relations.len();
+        let mut item = self.add_relation(relation, name.to_string(), None)?;
+        item.cols_visible = false;
+        self.scope.namespace.push(item);
+        Ok(index)
+    }
+
+    /// True when a table name gives an item of the scope or of a scope outside it, as `refnameNamespaceItem` finds it.
+    pub(crate) fn has_refname(&self, name: &str) -> Result<bool> {
+        Ok(self.item_by_name(None, name, None)?.is_some())
+    }
+
+    /// The number of relations, entries and items of the scope, which [`Analyzer::truncate_scope`] goes back to.
+    pub(crate) fn scope_size(&self) -> (usize, usize, usize) {
+        (self.scope.relations.len(), self.scope.entries.len(), self.scope.namespace.len())
+    }
+
+    /// Removes the relations, the entries and the items that the scope got after [`Analyzer::scope_size`].
+    pub(crate) fn truncate_scope(&mut self, (relations, entries, items): (usize, usize, usize)) {
+        self.scope.relations.truncate(relations);
+        self.scope.entries.truncate(entries);
+        self.scope.namespace.truncate(items);
+    }
+
     /// `addRangeTableEntryForRelation` and `addNSItemToQuery` for a table of a statement that defines an object: the expressions of the statement can use the columns. Each column is a name, a type and a typmod.
     pub(crate) fn add_table(&mut self, oid: u32, name: &str, columns: &[(String, u32, i32)]) {
         let index = self.scope.relations.len();

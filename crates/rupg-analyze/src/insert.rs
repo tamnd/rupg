@@ -51,6 +51,8 @@ pub struct Write {
     pub checks: Vec<String>,
     /// The unique indexes of the table in the order of their OIDs, as `RelationGetIndexList` gives them. Each new version of a row must have a key that no other version has.
     pub unique: Vec<Unique>,
+    /// The query of `RETURNING`, which reads one relation: the rows that the statement writes. Each row has the columns of the table, then the values that the query of the statement carries for it. For an `UPDATE` and a `DELETE` the carried values come after the columns and the conditions in each row of the query of the statement, before the ID of the version.
+    pub returning: Option<Box<Query>>,
 }
 
 /// A unique index of the target table, which `_bt_check_unique` checks for each new version of a row.
@@ -105,9 +107,6 @@ impl Analyzer<'_> {
         if s.onConflictClause.is_some() {
             return Err(not_yet("ON CONFLICT"));
         }
-        if s.returningClause.is_some() {
-            return Err(not_yet("RETURNING"));
-        }
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an INSERT with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Insert)?;
         let given = self.insert_targets(&s.cols, &name, &columns)?;
@@ -141,12 +140,31 @@ impl Analyzer<'_> {
         let checks = self.checks(table)?;
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         if !checks.is_empty() {
-            query = with_checks(&name, &columns, query, checks, false);
+            query = with_checks(&name, &columns, query, checks, &[]);
         }
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
-        query.write =
-            Some(Write { kind: WriteKind::Insert, table, name, width, checks: names, unique });
+        // The list of `RETURNING` sees only the target table.
+        let returning = match s.returningClause.as_deref() {
+            None => None,
+            Some(clause) => {
+                let outer = std::mem::take(&mut self.scope);
+                let result = self
+                    .target_from(rv, &[])
+                    .and_then(|_| self.returning(clause, WriteKind::Insert));
+                self.scope = outer;
+                Some(Box::new(result?.0))
+            }
+        };
+        query.write = Some(Write {
+            kind: WriteKind::Insert,
+            table,
+            name,
+            width,
+            checks: names,
+            unique,
+            returning,
+        });
         Ok(query)
     }
 
@@ -600,24 +618,17 @@ fn row_query(columns: &[Column], row: Vec<Expr>) -> Query {
     Query { targets: targets(columns, row), ..Query::default() }
 }
 
-/// The query that reads the rows of `rows` as a subquery with the name of the table, and gives the columns and then the condition of each check constraint. With `tid`, the rows end with the ID of the version of the old row, which comes after the conditions.
+/// The query that reads the rows of `rows` as a subquery with the name of the table, and gives the columns and then the condition of each check constraint. The values of `tail` come after the columns in each row of `rows`, and after the conditions in each row of the query, as the carried values of `RETURNING` and the ID of the version of the old row of an `UPDATE`.
 pub(crate) fn with_checks(
     name: &str,
     columns: &[Column],
     rows: Query,
     checks: Vec<(String, Expr)>,
-    tid: bool,
+    tail: &[Column],
 ) -> Query {
+    let width = columns.len();
     let mut columns = columns.to_vec();
-    if tid {
-        columns.push(Column {
-            name: "ctid".to_string(),
-            ty: oid::INT8,
-            typmod: -1,
-            not_null: false,
-        });
-    }
-    let width = columns.len() - usize::from(tid);
+    columns.extend_from_slice(tail);
     let mut targets: Vec<Target> = columns
         .iter()
         .enumerate()
@@ -629,14 +640,14 @@ pub(crate) fn with_checks(
             Target { name: c.name.clone(), expr, origin: None, junk: false }
         })
         .collect();
-    let tid = targets.split_off(width);
+    let tail = targets.split_off(width);
     targets.extend(checks.into_iter().map(|(n, expr)| Target {
         name: n,
         expr,
         origin: None,
         junk: false,
     }));
-    targets.extend(tid);
+    targets.extend(tail);
     let mut relation = Relation::new(0, columns, Some(Box::new(rows)), None, None);
     relation.name = name.to_string();
     Query {

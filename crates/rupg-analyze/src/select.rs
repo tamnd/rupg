@@ -1,7 +1,7 @@
 //! `transformSelectStmt` of `analyze.c`: `FROM`, the target list, the `WHERE` condition, `GROUP BY`, `HAVING`, `ORDER BY`, `DISTINCT`, `LIMIT` and `OFFSET`.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_sql::nodes::{LimitOption, Node, SelectStmt, SetOperation};
+use rupg_sql::nodes::{LimitOption, List, Node, SelectStmt, SetOperation};
 use rupg_types::oid;
 
 use crate::Analyzer;
@@ -197,6 +197,62 @@ impl Analyzer<'_> {
         Ok(query)
     }
 
+    /// `transformTargetList`: the targets of a list of `ResTarget` items in the place `kind`, with `*` and `x.*` expanded to their columns.
+    pub(crate) fn target_list(&mut self, list: &List, kind: Kind) -> Result<Vec<Target>> {
+        let mut targets = Vec::with_capacity(list.len());
+        for target in list {
+            let Some(Node::ResTarget(rt)) = target else {
+                return Err(Error::internal("a target that is not ResTarget"));
+            };
+            if let Some(Node::ColumnRef(c)) = &rt.val
+                && let Some(columns) = self.expand_star(c)?
+            {
+                for (name, expr) in columns {
+                    targets.push(Target { name, expr, origin: None, junk: false });
+                }
+                continue;
+            }
+            if let Some(Node::A_Indirection(ind)) = &rt.val
+                && let Some(fields) = self.with_kind(kind, |a| a.expand_indirection_star(ind))?
+            {
+                for (name, expr) in fields {
+                    targets.push(Target { name, expr, origin: None, junk: false });
+                }
+                continue;
+            }
+            let expr = self.with_kind(kind, |a| a.transform(rt.val.as_ref()))?;
+            let name = match &rt.name {
+                Some(name) => name.to_string(),
+                None => figure_colname(rt.val.as_ref()),
+            };
+            targets.push(Target { name, expr, origin: None, junk: false });
+        }
+        Ok(targets)
+    }
+
+    /// `markTargetListOrigins`: a target that is a column of a relation names the table and the column, also for a column of a query outside this query. A column of a view is a column of the view. A column of a subquery in FROM has the origin of the column of the subquery, and a column of a function in FROM has no origin.
+    pub(crate) fn mark_origins(&self, targets: &mut [Target]) {
+        for target in targets {
+            if let ExprKind::Var(var) = &target.expr.kind {
+                let relation = &self.level(var.levels_up).relations[var.relation];
+                target.origin = match &relation.subquery {
+                    None if relation.function.is_some()
+                        || relation.values.is_some()
+                        || relation.cte.is_some() =>
+                    {
+                        None
+                    }
+                    None => Some((relation.oid, var.attnum)),
+                    Some(_) if relation.oid != 0 => Some((relation.oid, var.attnum)),
+                    Some(sub) => usize::try_from(var.attnum - 1)
+                        .ok()
+                        .and_then(|i| sub.targets.iter().filter(|t| !t.junk).nth(i))
+                        .and_then(|t| t.origin),
+                };
+            }
+        }
+    }
+
     /// The query tree of a `SELECT` that is not a set operation or a `VALUES` list, with its windows.
     fn simple_select(&mut self, s: &SelectStmt, keep_unknowns: bool) -> Result<Query> {
         if s.intoClause.is_some() {
@@ -218,35 +274,7 @@ impl Analyzer<'_> {
     /// The query tree of a `SELECT` that is not a set operation or a `VALUES` list.
     fn plain_select(&mut self, s: &SelectStmt, keep_unknowns: bool) -> Result<Query> {
         let from = self.transform_from(&s.fromClause)?;
-        let mut targets = Vec::with_capacity(s.targetList.len());
-        for target in &s.targetList {
-            let Some(Node::ResTarget(rt)) = target else {
-                return Err(Error::internal("a target that is not ResTarget"));
-            };
-            if let Some(Node::ColumnRef(c)) = &rt.val
-                && let Some(columns) = self.expand_star(c)?
-            {
-                for (name, expr) in columns {
-                    targets.push(Target { name, expr, origin: None, junk: false });
-                }
-                continue;
-            }
-            if let Some(Node::A_Indirection(ind)) = &rt.val
-                && let Some(fields) =
-                    self.with_kind(Kind::Select, |a| a.expand_indirection_star(ind))?
-            {
-                for (name, expr) in fields {
-                    targets.push(Target { name, expr, origin: None, junk: false });
-                }
-                continue;
-            }
-            let expr = self.with_kind(Kind::Select, |a| a.transform(rt.val.as_ref()))?;
-            let name = match &rt.name {
-                Some(name) => name.to_string(),
-                None => figure_colname(rt.val.as_ref()),
-            };
-            targets.push(Target { name, expr, origin: None, junk: false });
-        }
+        let mut targets = self.target_list(&s.targetList, Kind::Select)?;
         let filter = match &s.whereClause {
             Some(node) => {
                 let expr = self.with_kind(Kind::Where, |a| a.transform(Some(node)))?;
@@ -261,26 +289,7 @@ impl Analyzer<'_> {
             }
             None => None,
         };
-        // markTargetListOrigins: a target that is a column of a relation names the table and the column, also for a column of a query outside this query. A column of a view is a column of the view. A column of a subquery in FROM has the origin of the column of the subquery, and a column of a function in FROM has no origin.
-        for target in &mut targets {
-            if let ExprKind::Var(var) = &target.expr.kind {
-                let relation = &self.level(var.levels_up).relations[var.relation];
-                target.origin = match &relation.subquery {
-                    None if relation.function.is_some()
-                        || relation.values.is_some()
-                        || relation.cte.is_some() =>
-                    {
-                        None
-                    }
-                    None => Some((relation.oid, var.attnum)),
-                    Some(_) if relation.oid != 0 => Some((relation.oid, var.attnum)),
-                    Some(sub) => usize::try_from(var.attnum - 1)
-                        .ok()
-                        .and_then(|i| sub.targets.iter().filter(|t| !t.junk).nth(i))
-                        .and_then(|t| t.origin),
-                };
-            }
-        }
+        self.mark_origins(&mut targets);
         let sort = self.sort_clause(&s.sortClause, &mut targets)?;
         let (group, mut grouping_sets) = self.group_clause(&s.groupClause, &mut targets, &sort)?;
         // The parser gives a list with one null item for `DISTINCT` and the expressions for `DISTINCT ON`.
