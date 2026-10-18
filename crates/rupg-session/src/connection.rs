@@ -3181,13 +3181,15 @@ mod tests {
             })
             .unwrap();
         let (mut a, _) = connect_to(&store, 1234);
+        // A reads `pg_stat_activity` from a snapshot that lasts to the end of its transaction, so a third session looks at the wait.
+        let (mut c, _) = connect_to(&store, 1236);
         let look = query(
             "SELECT state, wait_event_type, wait_event, query FROM pg_stat_activity WHERE pid = 1235",
         );
-        let wait_for_b = |a: &mut Connection| {
+        let wait_for_b = |c: &mut Connection| {
             let mut lines = Vec::new();
             for _ in 0..2000 {
-                lines = send(a, &look);
+                lines = send(c, &look);
                 if lines.iter().any(|l| l.contains(",Lock,transactionid,")) {
                     break;
                 }
@@ -3204,7 +3206,7 @@ mod tests {
         send(&mut a, &query("DELETE FROM t WHERE a = 2"));
         cmds.send("UPDATE t SET b = 'z' WHERE a = 2".into()).unwrap();
         assert_eq!(
-            wait_for_b(&mut a),
+            wait_for_b(&mut c),
             "row active,Lock,transactionid,UPDATE t SET b = 'z' WHERE a = 2"
         );
         send(&mut a, &query("ROLLBACK"));
@@ -3216,7 +3218,7 @@ mod tests {
         send(&mut a, &query("UPDATE t SET b = b || 'a' WHERE a = 1"));
         cmds.send("UPDATE t SET b = b || 'b' WHERE a = 1".into()).unwrap();
         assert_eq!(
-            wait_for_b(&mut a),
+            wait_for_b(&mut c),
             "row active,Lock,transactionid,UPDATE t SET b = b || 'b' WHERE a = 1"
         );
         send(&mut a, &query("COMMIT"));
@@ -3231,7 +3233,7 @@ mod tests {
         send(&mut a, &query("BEGIN"));
         send(&mut a, &query("UPDATE t SET b = 'c' WHERE a = 2"));
         cmds.send("DELETE FROM t WHERE a = 2".into()).unwrap();
-        assert_eq!(wait_for_b(&mut a), "row active,Lock,transactionid,DELETE FROM t WHERE a = 2");
+        assert_eq!(wait_for_b(&mut c), "row active,Lock,transactionid,DELETE FROM t WHERE a = 2");
         send(&mut a, &query("COMMIT"));
         let lines = out.recv().unwrap();
         assert!(
