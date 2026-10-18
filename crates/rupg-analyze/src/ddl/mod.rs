@@ -20,6 +20,7 @@ mod tsearch;
 mod view;
 
 pub use copy::{CopyRelation, CopyTarget, attnums, copy_relation, copy_target};
+pub(crate) use drop::quote_identifier;
 pub use function::{Body, function_body};
 pub(crate) use lock::relkind;
 pub use lock::{Allowed, lock_table};

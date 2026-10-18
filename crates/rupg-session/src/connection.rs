@@ -6,7 +6,7 @@ use std::cell::{Cell, Ref, RefCell};
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use rupg_analyze::{Message, Params, WriteKind};
+use rupg_analyze::{Message, Params, Write, WriteKind};
 use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, database};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
@@ -538,14 +538,25 @@ impl Connection {
         let (tag, count) = match info.kind {
             WriteKind::Insert => {
                 let count = rows.len() as u64;
-                heap.insert(info.table, &view, rows);
+                if info.unique.is_empty() {
+                    heap.insert(info.table, &view, rows, &[], &[])?;
+                } else {
+                    let mut kept = Vec::new();
+                    loop {
+                        match heap.insert(info.table, &view, rows.clone(), &info.unique, &kept)? {
+                            Changed::Done(_) => break,
+                            conflict => kept = self.key_conflict(info, &view, conflict)?,
+                        }
+                    }
+                }
                 (CommandTag::Insert, count)
             }
             kind => {
                 let update = kind == WriteKind::Update;
                 let mut changes = row_changes(rows, update)?;
+                let mut kept = Vec::new();
                 let count = loop {
-                    match heap.change(info.table, &view, changes.clone())? {
+                    match heap.change(info.table, &view, changes.clone(), &info.unique, &kept)? {
                         Changed::Done(count) => break count,
                         Changed::Wait { holder, tid } => {
                             let what = if update { "updating" } else { "deleting" };
@@ -561,6 +572,7 @@ impl Connection {
                             changes = row_changes(plan.run(params, &reader)?, update)?;
                             view = reader.view().cloned().unwrap_or_default();
                         }
+                        conflict => kept = self.key_conflict(info, &view, conflict)?,
                     }
                 };
                 (if update { CommandTag::Update } else { CommandTag::Delete }, count)
@@ -568,6 +580,51 @@ impl Connection {
         };
         self.command.set(view.command + 1);
         Ok(Done::Count(tag, count))
+    }
+
+    /// A conflict of a new version in a unique index. The write waits for the transaction that holds the key, as `_bt_check_unique` does, and gives the IDs of the new versions for the next try. Or it fails with the duplicate key and its value, as `BuildIndexValueDescription` gives it.
+    fn key_conflict(
+        &self,
+        info: &Write,
+        view: &View,
+        conflict: Changed,
+    ) -> Result<Vec<u64>, Error> {
+        match conflict {
+            Changed::WaitKey { holder, index, used } => {
+                let name = info.unique.get(index).map_or("", |key| key.name.as_str());
+                let tid = tid_text(used.last().copied().unwrap_or_default());
+                let context = format!("while inserting index tuple {tid} in relation \"{name}\"");
+                self.reader().wait_xact(view.xid, holder, &context)?;
+                Ok(used)
+            }
+            Changed::Duplicate { index, key } => {
+                let Some(unique) = info.unique.get(index) else {
+                    return Err(Error::internal(
+                        "a duplicate key of an index that is not in the list",
+                    ));
+                };
+                let reader = self.reader();
+                let mut values = String::new();
+                for (value, &ty) in key.iter().zip(&unique.types) {
+                    if !values.is_empty() {
+                        values.push_str(", ");
+                    }
+                    if matches!(value, Value::Null) {
+                        values.push_str("null");
+                    } else {
+                        let mut out = Vec::new();
+                        rupg_func::output(ty, value, &reader, &mut out)?;
+                        values.push_str(&String::from_utf8_lossy(&out));
+                    }
+                }
+                Err(Error::new(
+                    SqlState::UNIQUE_VIOLATION,
+                    format!("duplicate key value violates unique constraint \"{}\"", unique.name),
+                )
+                .with_detail(format!("Key ({})=({values}) already exists.", unique.shown)))
+            }
+            _ => Err(Error::internal("a write result that is not a conflict of a key")),
+        }
     }
 
     /// The end of the rows of a transaction: a commit makes them visible and removes the rows of the tables that the transaction dropped, and a rollback removes them.
@@ -2774,6 +2831,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/update.test")));
     }
 
+    /// The unique indexes and the primary keys of `INSERT` and `UPDATE`: the error of a duplicate key with the key as `BuildIndexValueDescription` gives it, a key in more than one column, nulls that are distinct or not, the equality of `numeric`, `float8`, `bpchar`, `timestamptz` and `interval`, the order of the indexes, an `UPDATE` that conflicts with a row that it did not change yet, and a key that a delete of the same transaction made free. `connection/unique.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn unique() {
+        big_stack(|| script(include_str!("connection/unique.test")));
+    }
+
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn row_compare_sublink() {
@@ -3254,10 +3317,28 @@ mod tests {
             "{lines:?}"
         );
         send(&mut a, &query("ROLLBACK"));
-        drop(cmds);
-        b.join().unwrap();
         let lines = send(&mut a, &query("SELECT b FROM t ORDER BY a"));
         assert_eq!(lines[1..3], ["row xab", "row c"]);
+
+        // A key that a transaction in progress inserted: the insert waits, and then adds its row after a rollback or fails after a commit.
+        send(&mut a, &query("CREATE TABLE k (a int PRIMARY KEY)"));
+        for (end, result) in [("ROLLBACK", "INSERT 0 1"), ("COMMIT", "ERROR 23505")] {
+            send(&mut a, &query("BEGIN"));
+            send(&mut a, &query("INSERT INTO k VALUES (1)"));
+            cmds.send("SET lock_timeout = 0; INSERT INTO k VALUES (1)".into()).unwrap();
+            assert_eq!(
+                wait_for_b(&mut c),
+                "row active,Lock,transactionid,SET lock_timeout = 0; INSERT INTO k VALUES (1)"
+            );
+            send(&mut a, &query(end));
+            let lines = out.recv().unwrap();
+            assert!(has(&lines, result), "{lines:?}");
+            if end == "ROLLBACK" {
+                send(&mut a, &query("DELETE FROM k"));
+            }
+        }
+        drop(cmds);
+        b.join().unwrap();
     }
 
     #[allow(clippy::disallowed_methods)] // Test threads, not tasks of the engine.
