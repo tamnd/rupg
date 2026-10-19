@@ -1017,6 +1017,26 @@ impl Analyzer<'_> {
         Ok(index)
     }
 
+    /// The part of `transformOnConflictClause` that adds `EXCLUDED` for `ON CONFLICT DO UPDATE`: the row that the statement proposed, with the columns of the target table, which is the first relation of the scope. The entry has no system columns, as an entry of a composite type. It gives the index of the new relation.
+    pub(crate) fn add_excluded(&mut self) -> Result<usize> {
+        let target = self
+            .scope
+            .relations
+            .first()
+            .ok_or_else(|| Error::internal("ON CONFLICT with no table"))?;
+        let relation = Relation::new(target.oid, target.columns.clone(), None, None, None);
+        let index = self.scope.relations.len();
+        let item = self.add_relation(relation, "excluded".to_string(), None)?;
+        self.scope.entries[item.entry].oid = 0;
+        self.scope.namespace.push(item);
+        Ok(index)
+    }
+
+    /// Removes the last item of the namespace and keeps its entry, as `transformOnConflictClause` removes `EXCLUDED` after `SET` and `WHERE`. A name of the entry is then an error.
+    pub(crate) fn hide_last_item(&mut self) {
+        self.scope.namespace.pop();
+    }
+
     /// True when a table name gives an item of the scope or of a scope outside it, as `refnameNamespaceItem` finds it.
     pub(crate) fn has_refname(&self, name: &str) -> Result<bool> {
         Ok(self.item_by_name(None, name, None)?.is_some())

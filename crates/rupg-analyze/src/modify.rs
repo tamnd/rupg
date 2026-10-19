@@ -34,7 +34,51 @@ impl Analyzer<'_> {
         let (table, name, columns) = self.target_table(rv, WriteKind::Update)?;
         let from = self.target_from(rv, &s.fromClause)?;
         let filter = self.target_where(s.whereClause.as_ref())?;
-        let items = self.set_items(&s.targetList)?;
+        let row = self.update_row(rv, table, &name, &columns, &s.targetList)?;
+        let (returning, carried) =
+            self.write_returning(s.returningClause.as_deref(), WriteKind::Update)?;
+        let tail = tail_columns(&carried);
+        let mut query = Query {
+            relations: std::mem::take(&mut self.scope.relations),
+            from,
+            targets: targets(&columns, row),
+            filter,
+            ..Query::default()
+        };
+        query.targets.extend(carried_targets(carried));
+        query.targets.push(tid_target());
+        let checks = self.checks(table)?;
+        let names = checks.iter().map(|(n, _)| n.clone()).collect();
+        if !checks.is_empty() {
+            query = with_checks(&name, &columns, query, checks, &tail);
+        }
+        let width = columns.len();
+        let unique = self.unique_keys(table, &columns)?;
+        let foreign = self.foreign_keys(table, WriteKind::Update, &columns)?;
+        query.write = Some(Write {
+            kind: WriteKind::Update,
+            table,
+            name,
+            width,
+            checks: names,
+            unique,
+            returning,
+            foreign,
+            on_conflict: None,
+        });
+        Ok(query)
+    }
+
+    /// `transformUpdateTargetList` with the defaults of `rewriteTargetListIU`: the new row of an `UPDATE` or of `ON CONFLICT DO UPDATE` for the items of `SET`. A column that `SET` does not give keeps the value of the column of the target table, which is the relation 0.
+    pub(crate) fn update_row(
+        &mut self,
+        rv: &RangeVar,
+        table: u32,
+        name: &str,
+        columns: &[Column],
+        list: &rupg_sql::nodes::List,
+    ) -> Result<Vec<Expr>> {
+        let items = self.set_items(list)?;
         // `transformUpdateTargetList`: the column of each item, and the expression cast to the type of the column.
         let mut given: Vec<(usize, &ResTarget, Option<Expr>)> = Vec::with_capacity(items.len());
         for (rt, item) in items {
@@ -99,37 +143,7 @@ impl Analyzer<'_> {
                 }
             });
         }
-        let (returning, carried) =
-            self.write_returning(s.returningClause.as_deref(), WriteKind::Update)?;
-        let tail = tail_columns(&carried);
-        let mut query = Query {
-            relations: std::mem::take(&mut self.scope.relations),
-            from,
-            targets: targets(&columns, row),
-            filter,
-            ..Query::default()
-        };
-        query.targets.extend(carried_targets(carried));
-        query.targets.push(tid_target());
-        let checks = self.checks(table)?;
-        let names = checks.iter().map(|(n, _)| n.clone()).collect();
-        if !checks.is_empty() {
-            query = with_checks(&name, &columns, query, checks, &tail);
-        }
-        let width = columns.len();
-        let unique = self.unique_keys(table, &columns)?;
-        let foreign = self.foreign_keys(table, WriteKind::Update, &columns)?;
-        query.write = Some(Write {
-            kind: WriteKind::Update,
-            table,
-            name,
-            width,
-            checks: names,
-            unique,
-            returning,
-            foreign,
-        });
-        Ok(query)
+        Ok(row)
     }
 
     /// `transformDeleteStmt`: the query tree of a `DELETE`.
@@ -165,6 +179,7 @@ impl Analyzer<'_> {
                 unique: Vec::new(),
                 returning,
                 foreign,
+                on_conflict: None,
             }),
             ..Query::default()
         })
@@ -198,7 +213,7 @@ impl Analyzer<'_> {
     }
 
     /// `transformWhereClause` of the statement, with `WHERE CURRENT OF` as an error.
-    fn target_where(&mut self, node: Option<&Node>) -> Result<Option<Expr>> {
+    pub(crate) fn target_where(&mut self, node: Option<&Node>) -> Result<Option<Expr>> {
         match node {
             None => Ok(None),
             Some(Node::CurrentOfExpr(_)) => Err(not_yet("WHERE CURRENT OF")),
@@ -278,7 +293,7 @@ impl Analyzer<'_> {
 }
 
 /// The targets of the values that the query of an `UPDATE` or a `DELETE` carries for `RETURNING`.
-fn carried_targets(carried: Vec<Expr>) -> impl Iterator<Item = Target> {
+pub(crate) fn carried_targets(carried: Vec<Expr>) -> impl Iterator<Item = Target> {
     carried.into_iter().map(|expr| Target { name: String::new(), expr, origin: None, junk: false })
 }
 

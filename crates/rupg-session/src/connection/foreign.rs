@@ -35,9 +35,10 @@ pub(super) struct Batch {
 }
 
 impl Batch {
-    /// The rows of the write `info` of the command `command`.
+    /// The rows of the write `info` of the command `command`, with the foreign keys `foreign` of the event of the rows.
     pub(super) fn new(
         info: &Write,
+        foreign: &[Foreign],
         command: u32,
         new: Vec<Vec<Value>>,
         old: Vec<Vec<Value>>,
@@ -45,7 +46,7 @@ impl Batch {
         Batch {
             table: info.table,
             name: info.name.clone(),
-            foreign: info.foreign.clone(),
+            foreign: foreign.to_vec(),
             command,
             new,
             old,
@@ -135,13 +136,13 @@ fn key_value(value: &Value, from: u32, to: u32) -> Value {
 }
 
 impl Connection {
-    /// Fires the triggers of the foreign keys of a write and of the writes of their actions, batch after batch in the order of the queue.
+    /// Fires the triggers of the foreign keys of the batches of a write and of the writes of their actions, batch after batch in the order of the queue.
     ///
     /// # Errors
     ///
     /// `23503` for a key that the referenced table does not have, for a key of `MATCH FULL` with nulls and values, and for an old key that a row of the referencing table still has. `23001` for an old key of `RESTRICT` that a row of the referencing table has. The errors of the statement of an action, with the statement in their context.
-    pub(super) fn fire(&self, batch: Batch) -> Result<(), Error> {
-        let mut queue = VecDeque::from([batch]);
+    pub(super) fn fire(&self, batches: Vec<Batch>) -> Result<(), Error> {
+        let mut queue = VecDeque::from(batches);
         while let Some(batch) = queue.pop_front() {
             self.fire_batch(&batch, &mut queue)?;
         }
@@ -332,9 +333,7 @@ impl Connection {
         let applied = self
             .run_action(foreign, plan, params)
             .map_err(|error| query::inner_error(error, &foreign.query))?;
-        if let Some(batch) = applied.batch {
-            queue.push_back(batch);
-        }
+        queue.extend(applied.batches);
         Ok(applied.count > 0)
     }
 
