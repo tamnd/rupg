@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The deferred foreign keys: a foreign key that is `DEFERRABLE INITIALLY DEFERRED` checks its rows at the commit, and `SET CONSTRAINTS` with `ALL` or a list of names makes the constraints of a transaction `DEFERRED` or `IMMEDIATE` (#404).
+
 ## 0.1.44 (2026-10-19)
 
 A patch release on the way to M3. `INSERT ... ON CONFLICT` and `MERGE` now run, and the foreign keys run their actions.
