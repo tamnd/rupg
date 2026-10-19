@@ -72,7 +72,8 @@ impl Definer<'_, '_> {
             number.and_then(|n| rel.and_then(|r| r.column(n))).is_some_and(|c| c.identity != 0);
         let row_type = rel.map_or(0, |r| r.row_type);
         let Some(number) = number else {
-            if SYSTEM_COLUMNS.contains(&column.as_str()) {
+            // A composite type has no system columns.
+            if target.kind != b'c' && SYSTEM_COLUMNS.contains(&column.as_str()) {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
                     format!("cannot alter system column \"{column}\""),
@@ -102,14 +103,13 @@ impl Definer<'_, '_> {
             None => types::row(ty).map_or(0, |t| t.collation),
         };
         check_attribute_type(&column, ty, false)?;
-        if row_type != 0 && [ty, types::element(ty), types::base(ty)].contains(&row_type) {
-            return Err(Error::new(
-                SqlState::INVALID_TABLE_DEFINITION,
-                format!(
-                    "composite type {} cannot be made a member of itself",
-                    types::name(row_type)
-                ),
-            ));
+        self.check_member_of_itself(ty, row_type)?;
+        let mut new = Column::new(column.clone(), ty, typmod, collation);
+        new.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
+        // A composite type has no rows, so the old values need no expression, but a stored value of the type keeps its fields.
+        if target.kind == b'c' {
+            self.check_row_type_users(target)?;
+            return Ok(TypeCmd { column, new });
         }
         let given = using.is_some();
         let expr = match using {
@@ -150,8 +150,6 @@ impl Definer<'_, '_> {
                 expr: node.clone(),
             });
         }
-        let mut new = Column::new(column.clone(), ty, typmod, collation);
-        new.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
         Ok(TypeCmd { column, new })
     }
 

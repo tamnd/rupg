@@ -22,6 +22,7 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_INDEX
             | ObjectType::OBJECT_SEQUENCE
             | ObjectType::OBJECT_COLUMN
+            | ObjectType::OBJECT_ATTRIBUTE
             | ObjectType::OBJECT_TABCONSTRAINT
             | ObjectType::OBJECT_SCHEMA
             | ObjectType::OBJECT_TYPE
@@ -37,7 +38,9 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_SCHEMA => {
                 self.rename_schema(stmt.subname.as_deref().unwrap_or_default(), newname)
             }
-            ObjectType::OBJECT_COLUMN => self.rename_column(stmt, newname),
+            ObjectType::OBJECT_COLUMN | ObjectType::OBJECT_ATTRIBUTE => {
+                self.rename_column(stmt, newname)
+            }
             ObjectType::OBJECT_TABCONSTRAINT => self.rename_table_constraint(stmt, newname),
             ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => self.rename_type(stmt),
             _ => self.rename_relation(stmt, newname),
@@ -125,8 +128,10 @@ impl Definer<'_, '_> {
         let Some(target) = self.rename_target(&rv, stmt.missing_ok)? else { return Ok(()) };
         let column = stmt.subname.as_deref().unwrap_or_default();
         let rel = self.catalog.relation(target.oid);
+        // A composite type has no system columns.
+        let system = |name: &str| target.kind != b'c' && system_column(name).is_some();
         let Some(number) = rel.and_then(|r| r.column_number(column)) else {
-            if system_column(column).is_some() {
+            if system(column) {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
                     format!("cannot rename system column \"{column}\""),
@@ -138,7 +143,7 @@ impl Definer<'_, '_> {
             ));
         };
         // `check_for_column_name_collision`.
-        if system_column(newname).is_some() {
+        if system(newname) {
             return Err(Error::new(
                 SqlState::DUPLICATE_COLUMN,
                 format!("column name \"{newname}\" conflicts with a system column name"),

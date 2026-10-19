@@ -16,7 +16,7 @@ use super::alter::Target;
 use super::alter_column::{attribute_compression, attribute_storage};
 use super::comment::range_var;
 use super::sequence::conflicting;
-use super::{Definer, is_system_namespace, not_yet, references, relname};
+use super::{Definer, is_system_namespace, not_yet, references, relkind_detail, relname};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::ExprKind;
@@ -803,8 +803,16 @@ impl Definer<'_, '_> {
         let Some(column) = plan.columns.first() else {
             return Err(Error::internal("ADD COLUMN without a column"));
         };
-        // `check_for_column_name_collision`.
-        if SYSTEM_COLUMNS.contains(&column.name.as_str()) {
+        // The `OWNED BY` of the sequence of `generateSerialExtraStmts` comes first.
+        if target.kind == b'c' && !plan.serials.is_empty() {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("sequence cannot be owned by relation \"{}\"", target.name),
+            )
+            .with_detail(relkind_detail(target.kind)));
+        }
+        // `check_for_column_name_collision`. A composite type has no system columns.
+        if target.kind != b'c' && SYSTEM_COLUMNS.contains(&column.name.as_str()) {
             return Err(Error::new(
                 SqlState::DUPLICATE_COLUMN,
                 format!("column name \"{}\" conflicts with a system column name", column.name),
@@ -831,6 +839,8 @@ impl Definer<'_, '_> {
         }
         let new = self.catalog_column(column)?;
         check_attribute_type(&new.name, new.ty, self.an.env.allow_system_table_mods())?;
+        let row_type = self.catalog.relation(table).map_or(0, |r| r.row_type);
+        self.check_member_of_itself(new.ty, row_type)?;
         let number = self.catalog.add_column(table, new)?;
         match &column.default {
             Some(RawDefault::Expr(node)) => {

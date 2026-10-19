@@ -27,6 +27,7 @@ use crate::types;
 /// The relation kinds of `ATSimplePermissions` that a subcommand allows, as `relkind` codes.
 const TABLE_VIEW: &[u8] = b"rpvf";
 const TABLE: &[u8] = b"rpf";
+const TABLE_TYPE: &[u8] = b"rpfc";
 const STATISTICS: &[u8] = b"rpmfiI";
 const STORAGE: &[u8] = b"rpmf";
 const COMPRESSION: &[u8] = b"rpm";
@@ -239,12 +240,13 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_FOREIGN_TABLE if kind != b'f' => {
                 return Err(wrong("a foreign table"));
             }
+            ObjectType::OBJECT_TYPE if kind != b'c' => return Err(wrong("a composite type")),
             ObjectType::OBJECT_INDEX if kind != b'i' && kind != b'I' => {
                 return Err(wrong("an index"));
             }
             _ => {}
         }
-        if kind == b'c' {
+        if kind == b'c' && objtype != ObjectType::OBJECT_TYPE {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("\"{name}\" is a composite type"),
@@ -288,14 +290,14 @@ impl Definer<'_, '_> {
     ) -> Result<()> {
         match cmd.subtype {
             AlterTableType::AT_AddColumn => {
-                self.simple_permissions(target, cmd, TABLE)?;
+                self.simple_permissions(target, cmd, TABLE_TYPE)?;
                 let Some(Node::ColumnDef(def)) = &cmd.def else {
                     return Err(Error::internal("ADD COLUMN without a column"));
                 };
                 passes.columns.push(((**def).clone(), cmd.missing_ok));
             }
             AlterTableType::AT_AlterColumnType => {
-                self.simple_permissions(target, cmd, TABLE)?;
+                self.simple_permissions(target, cmd, TABLE_TYPE)?;
                 let change = self.prep_alter_type(target, cmd)?;
                 passes.types.push(change);
             }
@@ -322,7 +324,7 @@ impl Definer<'_, '_> {
                 passes.drops.push(DropCmd::Constraint(name, cmd.missing_ok, cascade));
             }
             AlterTableType::AT_DropColumn => {
-                self.simple_permissions(target, cmd, TABLE)?;
+                self.simple_permissions(target, cmd, TABLE_TYPE)?;
                 let name = cmd.name.as_deref().unwrap_or_default().to_string();
                 let cascade = cmd.behavior == DropBehavior::DROP_CASCADE;
                 passes.drops.push(DropCmd::Column(name, cmd.missing_ok, cascade));
@@ -549,8 +551,11 @@ impl Definer<'_, '_> {
                 }
             }
         }
-        // `ATRewriteTables` scans the table once to write the rows with their new types and to check the new not-null and check constraints.
-        let mut verify = !passes.types.is_empty();
+        // `ATRewriteTables` scans the table once to write the rows with their new types and to check the new not-null and check constraints. A composite type has no rows.
+        let mut verify = !passes.types.is_empty() && target.kind != b'c';
+        if verify {
+            self.check_row_type_users(target)?;
+        }
         for con in &not_nulls {
             verify |= self.alter_not_null(target, con)?;
         }

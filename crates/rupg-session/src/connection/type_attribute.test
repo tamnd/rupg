@@ -1,0 +1,265 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE ct AS (a int, b text)
+CREATE TYPE
+> CREATE TABLE t (x ct)
+CREATE TABLE
+> INSERT INTO t VALUES (ROW(1, 'q'))
+INSERT 0 1
+> ALTER TYPE ct ADD ATTRIBUTE c int
+ALTER TYPE
+> SELECT x, (x).c FROM t
+fields x@t.1:20143:-1:-1,c:23:4:-1
+row (1,q,),NULL
+SELECT 1
+> SELECT attname, atttypid::regtype::text, attnum, attisdropped FROM pg_attribute WHERE attrelid = 'ct'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:25:-1:-1,attnum@pg_attribute.5:21:2:-1,attisdropped@pg_attribute.17:16:1:-1
+row a,integer,1,f
+row b,text,2,f
+row c,integer,3,f
+SELECT 3
+> ALTER TYPE ct ADD ATTRIBUTE c int CASCADE
+ERROR 42701 column "c" of relation "ct" already exists
+> ALTER TYPE ct ADD ATTRIBUTE d int NOT NULL
+ERROR 42601 syntax error at or near "NOT" at 35
+> ALTER TYPE ct ADD ATTRIBUTE d text COLLATE "C"
+ALTER TYPE
+> SELECT attname, attcollation::regcollation::text FROM pg_attribute WHERE attrelid = 'ct'::regclass AND attname = 'd'
+fields attname@pg_attribute.2:19:64:-1,attcollation:25:-1:-1
+row d,"C"
+SELECT 1
+> SELECT x FROM t
+fields x@t.1:20143:-1:-1
+row (1,q,,)
+SELECT 1
+> ALTER TYPE ct DROP ATTRIBUTE d
+ALTER TYPE
+> ALTER TYPE ct DROP ATTRIBUTE d
+ERROR 42703 column "d" of relation "ct" does not exist
+> ALTER TYPE ct DROP ATTRIBUTE IF EXISTS d
+NOTICE 00000 column "d" of relation "ct" does not exist, skipping
+ALTER TYPE
+> ALTER TYPE ct DROP ATTRIBUTE b CASCADE
+ALTER TYPE
+> SELECT x FROM t
+fields x@t.1:20143:-1:-1
+row (1,)
+SELECT 1
+> SELECT attname, atttypid::regtype::text, attnum, attisdropped FROM pg_attribute WHERE attrelid = 'ct'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:25:-1:-1,attnum@pg_attribute.5:21:2:-1,attisdropped@pg_attribute.17:16:1:-1
+row a,integer,1,f
+row ........pg.dropped.2........,-,2,t
+row c,integer,3,f
+row ........pg.dropped.4........,-,4,t
+SELECT 4
+> ALTER TYPE ct ALTER ATTRIBUTE a TYPE bigint
+ERROR 0A000 cannot alter type "ct" because column "t.x" uses it
+> ALTER TYPE ct ALTER ATTRIBUTE a TYPE bigint CASCADE
+ERROR 0A000 cannot alter type "ct" because column "t.x" uses it
+> INSERT INTO t VALUES (ROW(2, 3))
+INSERT 0 1
+> SELECT x, (x).a, (x).c FROM t ORDER BY 2
+fields x@t.1:20143:-1:-1,a:23:4:-1,c:23:4:-1
+row (1,),1,NULL
+row (2,3),2,3
+SELECT 2
+> SELECT (x).* FROM t ORDER BY 1
+fields a:23:4:-1,c:23:4:-1
+row 1,NULL
+row 2,3
+SELECT 2
+> SELECT x = ROW(1, NULL)::ct FROM t ORDER BY (x).a
+fields ?column?:16:1:-1
+row t
+row f
+SELECT 2
+> CREATE TYPE ct3 AS (a int, b text)
+CREATE TYPE
+> ALTER TYPE ct3 ALTER ATTRIBUTE a TYPE bigint
+ALTER TYPE
+> ALTER TYPE ct3 ALTER ATTRIBUTE a SET DATA TYPE text COLLATE "C"
+ALTER TYPE
+> ALTER TYPE ct3 ALTER ATTRIBUTE a TYPE int USING a::int
+ERROR 42601 syntax error at or near "USING" at 43
+> ALTER TYPE ct3 ALTER ATTRIBUTE nosuch TYPE int
+ERROR 42703 column "nosuch" of relation "ct3" does not exist
+> ALTER TYPE ct3 ALTER ATTRIBUTE a TYPE point
+ALTER TYPE
+> ALTER TYPE ct3 ALTER ATTRIBUTE a TYPE nosuch
+ERROR 42704 type "nosuch" does not exist at 39
+> ALTER TYPE ct3 ALTER ATTRIBUTE a TYPE varchar(5)
+ALTER TYPE
+> SELECT attname, format_type(atttypid, atttypmod), attcollation::regcollation::text FROM pg_attribute WHERE attrelid = 'ct3'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1,attcollation:25:-1:-1
+row a,character varying(5),"default"
+row b,text,"default"
+SELECT 2
+> ALTER TYPE ct3 ALTER ATTRIBUTE b TYPE int COLLATE "C"
+ERROR 42804 collations are not supported by type integer at 43
+> ALTER TYPE ct3 RENAME ATTRIBUTE a TO z
+ALTER TYPE
+> ALTER TYPE ct3 RENAME ATTRIBUTE nosuch TO y
+ERROR 42703 column "nosuch" does not exist
+> ALTER TYPE ct3 RENAME ATTRIBUTE z TO b
+ERROR 42701 column "b" of relation "ct3" already exists
+> ALTER TYPE ct3 ADD ATTRIBUTE e int, DROP ATTRIBUTE b, ALTER ATTRIBUTE a TYPE text
+ERROR 42703 column "a" of relation "ct3" does not exist
+> SELECT attname, atttypid::regtype::text, attnum, attisdropped FROM pg_attribute WHERE attrelid = 'ct3'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:25:-1:-1,attnum@pg_attribute.5:21:2:-1,attisdropped@pg_attribute.17:16:1:-1
+row z,character varying,1,f
+row b,text,2,f
+SELECT 2
+> SELECT ROW('x', 1)::ct3
+fields row:20151:-1:-1
+row (x,1)
+SELECT 1
+> CREATE TYPE e AS ENUM ('a')
+CREATE TYPE
+> ALTER TYPE e ADD ATTRIBUTE c int
+ERROR 42P01 relation "e" does not exist
+> ALTER TYPE t ADD ATTRIBUTE c int
+ERROR 42809 "t" is not a composite type
+> ALTER TYPE nosuch ADD ATTRIBUTE c int
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TYPE e RENAME ATTRIBUTE a TO b
+ERROR 42P01 relation "e" does not exist
+> ALTER TYPE ct3 ADD ATTRIBUTE ctid int
+ALTER TYPE
+> ALTER TYPE ct3 DROP ATTRIBUTE xmin
+ERROR 42703 column "xmin" of relation "ct3" does not exist
+> ALTER TYPE ct3 RENAME ATTRIBUTE xmin TO q
+ERROR 42703 column "xmin" does not exist
+> ALTER TYPE ct3 RENAME ATTRIBUTE ctid TO xmax
+ALTER TYPE
+> ALTER TYPE ct3 ADD ATTRIBUTE f ct3
+ERROR 42P16 composite type ct3 cannot be made a member of itself
+> ALTER TYPE ct3 ADD ATTRIBUTE f ct3[]
+ERROR 42P16 composite type ct3 cannot be made a member of itself
+> CREATE DOMAIN d3 AS ct3
+CREATE DOMAIN
+> ALTER TYPE ct3 ADD ATTRIBUTE f d3
+ERROR 42P16 composite type ct3 cannot be made a member of itself
+> CREATE TYPE ct4 AS (w ct3)
+CREATE TYPE
+> ALTER TYPE ct3 ADD ATTRIBUTE f ct4
+ERROR 42P16 composite type ct3 cannot be made a member of itself
+> ALTER TYPE ct3 ADD ATTRIBUTE s serial
+ERROR 42809 sequence cannot be owned by relation "ct3"
+DETAIL This operation is not supported for composite types.
+> ALTER TYPE ct3 ADD ATTRIBUTE p anyelement
+ERROR 42P16 column "p" has pseudo-type anyelement
+> ALTER TYPE ct3 ADD ATTRIBUTE c int RESTRICT
+ALTER TYPE
+> CREATE TABLE u (x ct4)
+CREATE TABLE
+> ALTER TYPE ct3 ALTER ATTRIBUTE c TYPE bigint
+ERROR 0A000 cannot alter type "ct3" because column "u.x" uses it
+> DROP TABLE u
+DROP TABLE
+> CREATE TABLE u (x d3[])
+CREATE TABLE
+> ALTER TYPE ct3 ALTER ATTRIBUTE c TYPE bigint
+ERROR 0A000 cannot alter type "ct3" because column "u.x" uses it
+> DROP TABLE u
+DROP TABLE
+> ALTER TYPE ct3 ALTER ATTRIBUTE c TYPE bigint
+ALTER TYPE
+> ALTER TABLE ct3 ADD COLUMN q int
+ERROR 42809 "ct3" is a composite type
+HINT Use ALTER TYPE instead.
+> ALTER TABLE ct3 RENAME COLUMN c TO cc
+ALTER TABLE
+> SELECT attname, format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 'ct3'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,format_type:25:-1:-1
+row z,character varying(5)
+row b,text
+row xmax,integer
+row cc,bigint
+SELECT 4
+> ALTER TYPE t RENAME ATTRIBUTE x TO y
+ALTER TYPE
+> SELECT attname FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0
+fields attname@pg_attribute.2:19:64:-1
+row y
+SELECT 1
+> CREATE TABLE r (a int)
+CREATE TABLE
+> ALTER TABLE r ADD COLUMN b r[]
+ERROR 42P16 composite type r cannot be made a member of itself
+> CREATE TYPE ct5 AS (a int)
+CREATE TYPE
+> CREATE TABLE t5 (x ct5[], y int)
+CREATE TABLE
+> INSERT INTO t5 VALUES (ARRAY[ROW(1)::ct5, NULL, ROW(2)::ct5], 1)
+INSERT 0 1
+> ALTER TYPE ct5 ADD ATTRIBUTE b int
+ALTER TYPE
+> SELECT x FROM t5
+fields x@t5.1:20177:-1:-1
+row {"(1,)",NULL,"(2,)"}
+SELECT 1
+> ALTER TYPE ct5 DROP ATTRIBUTE a
+ALTER TYPE
+> SELECT x FROM t5
+fields x@t5.1:20177:-1:-1
+row {(),NULL,()}
+SELECT 1
+> CREATE TABLE r2 (a int, b text)
+CREATE TABLE
+> CREATE TABLE t6 (z r2)
+CREATE TABLE
+> INSERT INTO t6 VALUES (ROW(1, 'x'))
+INSERT 0 1
+> ALTER TABLE r2 DROP COLUMN a
+ALTER TABLE
+> SELECT z FROM t6
+fields z@t6.1:20186:-1:-1
+row (x)
+SELECT 1
+> ALTER TABLE r2 ADD COLUMN c int
+ALTER TABLE
+> SELECT z, (z).c FROM t6
+fields z@t6.1:20186:-1:-1,c:23:4:-1
+row (x,),NULL
+SELECT 1
+> ALTER TABLE r2 ALTER COLUMN b TYPE varchar
+ERROR 0A000 cannot alter table "r2" because column "t6.z" uses its row type
+> INSERT INTO r2 VALUES ('a', 1)
+INSERT 0 1
+> ALTER TABLE r2 ALTER COLUMN c TYPE bigint
+ERROR 0A000 cannot alter table "r2" because column "t6.z" uses its row type
+> DROP TABLE t6
+DROP TABLE
+> ALTER TABLE r2 ALTER COLUMN c TYPE bigint
+ALTER TABLE
+> CREATE TYPE n1 AS (a int, b int)
+CREATE TYPE
+> CREATE TYPE n2 AS (p n1, q int)
+CREATE TYPE
+> CREATE DOMAIN dn2 AS n2
+CREATE DOMAIN
+> CREATE TABLE t7 (v dn2)
+CREATE TABLE
+> INSERT INTO t7 VALUES (ROW(ROW(1, 2), 3))
+INSERT 0 1
+> ALTER TYPE n1 DROP ATTRIBUTE a, ADD ATTRIBUTE c text
+ALTER TYPE
+> SELECT v, (v).p, ((v).p).b, ((v).p).c FROM t7
+fields v@t7.1:20204:-1:-1,p:20201:-1:-1,b:23:4:-1,c:25:-1:-1
+row ("(2,)",3),(2,),2,NULL
+SELECT 1
+> BEGIN
+BEGIN
+> ALTER TYPE n1 ADD ATTRIBUTE d int
+ALTER TYPE
+> SELECT v FROM t7
+fields v@t7.1:20204:-1:-1
+row ("(2,,)",3)
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT v FROM t7
+fields v@t7.1:20204:-1:-1
+row ("(2,)",3)
+SELECT 1

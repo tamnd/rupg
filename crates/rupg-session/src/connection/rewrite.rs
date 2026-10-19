@@ -9,7 +9,7 @@ use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, Relation};
 use rupg_common::{Error, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{Node, RangeVar};
-use rupg_types::Value;
+use rupg_types::{Record, Value};
 
 use super::Connection;
 use super::foreign::Batch;
@@ -50,26 +50,17 @@ impl Connection {
                 None => Ok(Vec::new()),
             };
         }
-        // A value of a row type keeps a field for each column of its table, so a table with such values in its rows stops the drop of a column of the row type.
-        for rel in old.relations().filter(|rel| rel.row_type != 0) {
-            let Some(now) = work.relation(rel.oid) else { continue };
-            let dropped =
-                rel.columns.iter().zip(&now.columns).any(|(b, a)| !b.dropped && a.dropped);
-            let user = |other: &&Relation| {
-                other.oid != rel.oid
-                    && other.columns.iter().any(|c| uses_type(work, c.ty, rel.row_type))
-            };
-            if dropped && tables.iter().any(user) {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    "DROP COLUMN of a table whose row type is in a table with rows is not supported yet",
-                ));
-            }
-        }
+        // A value of a row type keeps a field for each column of its relation, so a table with such values in its rows gets them again when the relation gets or loses a column.
+        let reshaped = reshaped_row_types(&old, work);
+        let holds = |rel: &Relation| {
+            !reshaped.is_empty()
+                && rel.columns.iter().any(|c| holds_row_type(&old, c.ty, &reshaped, 0))
+        };
         let mut out = Vec::new();
         let transformed = |rel: &Relation| transforms.iter().any(|t| t.table == rel.oid);
-        for rel in
-            tables.into_iter().filter(|rel| transformed(rel) || changes_rows(&old, work, rel))
+        for rel in tables
+            .into_iter()
+            .filter(|rel| transformed(rel) || changes_rows(&old, work, rel) || holds(rel))
         {
             let Some(now) = work.relation(rel.oid) else { continue };
             let same = now.columns.len() >= rel.columns.len()
@@ -201,10 +192,25 @@ impl Connection {
             })
             .map(|(at, name)| (at, name.as_str()))
             .collect();
+        let reshaped = reshaped_row_types(old, work);
+        let reshape: Vec<bool> = live
+            .iter()
+            .map(|&i| !reshaped.is_empty() && holds_row_type(old, rel.columns[i].ty, &reshaped, 0))
+            .collect();
         let mut new_rows = Vec::with_capacity(rows.len());
         for row in rows {
-            let row: Vec<Value> =
-                live.iter().map(|&i| row.get(i).cloned().unwrap_or(Value::Null)).collect();
+            let row: Vec<Value> = live
+                .iter()
+                .zip(&reshape)
+                .map(|(&i, &reshape)| {
+                    let value = row.get(i).cloned().unwrap_or(Value::Null);
+                    if reshape {
+                        reshape_value(old, work, rel.columns[i].ty, value, 0)
+                    } else {
+                        value
+                    }
+                })
+                .collect();
             for mut values in plan.run_unchecked(&row, &reader)? {
                 for (column, value) in now.columns.iter().zip(&values) {
                     if column.not_null && value.is_null() {
@@ -308,21 +314,77 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
     constraint || index
 }
 
-/// True when the type `ty` is the type `target`, or an array or a domain of it.
-fn uses_type(catalog: &Catalog, ty: u32, target: u32) -> bool {
-    let mut ty = ty;
-    for _ in 0..32 {
-        if ty == target {
-            return true;
-        }
-        let Some(found) = catalog.type_by_oid(ty) else { return false };
-        ty = match &found.domain {
-            Some(domain) => domain.base,
-            None if found.element != 0 => found.element,
-            None => return false,
-        };
+/// The row types whose relations get or lose a column from the catalog `old` to the catalog `new`.
+fn reshaped_row_types(old: &Catalog, new: &Catalog) -> Vec<u32> {
+    old.relations()
+        .filter(|rel| rel.row_type != 0)
+        .filter(|rel| {
+            new.relation(rel.oid).is_some_and(|now| {
+                now.columns.len() != rel.columns.len()
+                    || rel.columns.iter().zip(&now.columns).any(|(b, a)| b.dropped != a.dropped)
+            })
+        })
+        .map(|rel| rel.row_type)
+        .collect()
+}
+
+/// True when the type `ty` is one of the row types `targets`, or a domain, an array or a composite type that holds one.
+fn holds_row_type(catalog: &Catalog, ty: u32, targets: &[u32], depth: usize) -> bool {
+    if targets.contains(&ty) {
+        return true;
     }
-    false
+    let Some(found) = catalog.type_by_oid(ty).filter(|_| depth < 32) else { return false };
+    if let Some(domain) = &found.domain {
+        return holds_row_type(catalog, domain.base, targets, depth + 1);
+    }
+    if found.element != 0 {
+        return holds_row_type(catalog, found.element, targets, depth + 1);
+    }
+    catalog.relation(found.relation).is_some_and(|rel| {
+        rel.columns.iter().any(|c| !c.dropped && holds_row_type(catalog, c.ty, targets, depth + 1))
+    })
+}
+
+/// A stored value of the type `ty` with the fields of the catalog `new`: a record has a field for each column of its relation that is not dropped, with a null for a new column, also in the arrays, the domains and the other records that hold it. A value that the catalog `old` gave fewer fields gets nulls too.
+fn reshape_value(old: &Catalog, new: &Catalog, ty: u32, value: Value, depth: usize) -> Value {
+    let Some(found) = old.type_by_oid(ty).filter(|_| depth < 32) else { return value };
+    if let Some(domain) = &found.domain {
+        return reshape_value(old, new, domain.base, value, depth + 1);
+    }
+    match value {
+        Value::Array(mut array) if found.element != 0 => {
+            for element in array.values.iter_mut().flatten() {
+                let taken = std::mem::replace(element, Value::Null);
+                *element = reshape_value(old, new, found.element, taken, depth + 1);
+            }
+            Value::Array(array)
+        }
+        Value::Record(record) => {
+            let (Some(before), Some(after)) =
+                (old.relation(found.relation), new.relation(found.relation))
+            else {
+                return Value::Record(record);
+            };
+            let mut fields = record.values.into_iter();
+            let mut by_column: Vec<Option<Value>> = before
+                .columns
+                .iter()
+                .map(|c| if c.dropped { None } else { fields.next() })
+                .collect();
+            let mut types = Vec::with_capacity(after.columns.len());
+            let mut values = Vec::with_capacity(after.columns.len());
+            for (i, column) in after.columns.iter().enumerate().filter(|(_, c)| !c.dropped) {
+                let value = match by_column.get_mut(i).and_then(Option::take) {
+                    Some(value) => reshape_value(old, new, before.columns[i].ty, value, depth + 1),
+                    None => Value::Null,
+                };
+                types.push(column.ty);
+                values.push(value);
+            }
+            Value::Record(Box::new(Record::new(types, values)))
+        }
+        value => value,
+    }
 }
 
 /// `DomainHasConstraints`: true for a domain with a not-null constraint or a check constraint, also from the domain that it is based on. A new column of such a domain with no default gets a null of the domain in each row, which the constraints check.
