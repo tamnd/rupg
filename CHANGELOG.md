@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER TABLE ... CLUSTER ON`, `SET WITHOUT CLUSTER` and `REPLICA IDENTITY`. The catalog keeps `indisclustered`, `indisreplident` and `relreplident`, and `DROP NOT NULL` keeps the not-null constraint of a key column of the replica identity index (#424).
 - The options of relations: `WITH (...)` of `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW` and the index of a constraint, and `SET (...)` and `RESET (...)` of `ALTER TABLE`, `ALTER INDEX` and `ALTER VIEW`. The options of the namespace `toast` go to the TOAST table. `ALTER TABLE ... SET WITHOUT OIDS` is accepted (#423).
 - `ALTER TABLE ... ALTER COLUMN ... SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION`, and `SET` and `RESET` of the column options, with `STORAGE` and `COMPRESSION` in `CREATE TABLE`. The catalog keeps `attstattarget`, `attstorage`, `attcompression` and `attoptions` (#422).
 
