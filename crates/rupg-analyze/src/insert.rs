@@ -251,9 +251,7 @@ fn first_place(items: &[Item]) -> Option<usize> {
 impl Analyzer<'_> {
     /// `transformInsertStmt`: the query tree of an `INSERT`.
     pub(crate) fn insert(&mut self, s: &InsertStmt) -> Result<Query> {
-        if s.withClause.is_some() {
-            return Err(not_yet("WITH in INSERT"));
-        }
+        self.write_with(s.withClause.as_deref())?;
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an INSERT with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Insert)?;
         let given = self.insert_targets(&s.cols, &name, &columns)?;
@@ -295,6 +293,8 @@ impl Analyzer<'_> {
         let (mut on_conflict, mut returning) = (None, None);
         if s.onConflictClause.is_some() || s.returningClause.is_some() {
             let outer = std::mem::take(&mut self.scope);
+            // `ON CONFLICT` and `RETURNING` can read the queries of `WITH`.
+            self.scope.ctes.clone_from(&outer.ctes);
             let result = self.insert_clauses(s, rv, table, &name, &columns, &unique);
             self.scope = outer;
             (on_conflict, returning) = result?;
@@ -311,6 +311,7 @@ impl Analyzer<'_> {
             on_conflict,
             merge: None,
         });
+        self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
     }
 

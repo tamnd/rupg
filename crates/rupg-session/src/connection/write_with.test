@@ -1,0 +1,101 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int PRIMARY KEY, v text)
+CREATE TABLE
+> CREATE TABLE s (id int, v text)
+CREATE TABLE
+> INSERT INTO s VALUES (1, 'a'), (2, 'b'), (3, 'c')
+INSERT 0 3
+> WITH x AS (SELECT id, v FROM s WHERE id < 3) INSERT INTO t SELECT * FROM x
+INSERT 0 2
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,a
+row 2,b
+SELECT 2
+> WITH x AS (SELECT 3 AS id, 'z' AS v) INSERT INTO t SELECT id, v FROM x RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,z
+INSERT 0 1
+> WITH x(n) AS (VALUES (10)) INSERT INTO t VALUES ((SELECT n FROM x), 'ten')
+INSERT 0 1
+> WITH x AS (SELECT 11 AS n) INSERT INTO t VALUES ((SELECT n FROM x), 'a'), ((SELECT n + 1 FROM x), 'b')
+INSERT 0 2
+> WITH x AS (SELECT 1 AS id) UPDATE t SET v = 'one' WHERE id IN (SELECT id FROM x)
+UPDATE 1
+> WITH x AS (SELECT 2 AS id, 'two' AS w) UPDATE t SET v = x.w FROM x WHERE t.id = x.id RETURNING t.*
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 2,two
+UPDATE 1
+> WITH x AS (SELECT 12 AS id) DELETE FROM t WHERE id = (SELECT id FROM x) RETURNING id
+fields id@t.1:23:4:-1
+row 12
+DELETE 1
+> WITH x AS (SELECT 11 AS id) DELETE FROM t USING x WHERE t.id = x.id
+DELETE 1
+> WITH RECURSIVE r(n) AS (SELECT 20 UNION ALL SELECT n + 1 FROM r WHERE n < 23) INSERT INTO t SELECT n, 'r' FROM r
+INSERT 0 4
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,one
+row 2,two
+row 3,z
+row 10,ten
+row 20,r
+row 21,r
+row 22,r
+row 23,r
+SELECT 8
+> WITH x AS (SELECT id, 'm' AS v FROM s) MERGE INTO t USING x ON t.id = x.id WHEN MATCHED THEN UPDATE SET v = x.v WHEN NOT MATCHED THEN INSERT VALUES (x.id, x.v)
+MERGE 3
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,m
+row 2,m
+row 3,m
+row 10,ten
+row 20,r
+row 21,r
+row 22,r
+row 23,r
+SELECT 8
+> WITH x AS (SELECT 1) INSERT INTO t VALUES (30, 'a') RETURNING (SELECT count(*) FROM x)
+fields count:20:8:-1
+row 1
+INSERT 0 1
+> WITH x AS (SELECT 1 AS id), x AS (SELECT 2) DELETE FROM t
+ERROR 42712 WITH query name "x" specified more than once at 29
+> WITH x AS (SELECT 1 AS id) INSERT INTO t WITH y AS (SELECT 40 AS id) SELECT id, 'y' FROM y
+INSERT 0 1
+> WITH x AS (SELECT 41 AS id) INSERT INTO t WITH y AS (SELECT id FROM x) SELECT id, 'xy' FROM y
+INSERT 0 1
+> WITH x AS MATERIALIZED (SELECT 42 AS id) INSERT INTO t SELECT id, 'mat' FROM x
+INSERT 0 1
+> WITH x AS (SELECT 1 AS id) UPDATE t SET v = (SELECT 'sub' || id FROM x) WHERE id = 1 RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,sub1
+UPDATE 1
+> PREPARE p(int) AS WITH x AS (SELECT $1 AS id) DELETE FROM t WHERE id IN (SELECT id FROM x)
+PREPARE
+> EXECUTE p(40)
+DELETE 1
+> WITH x AS (SELECT * FROM nope) DELETE FROM t
+ERROR 42P01 relation "nope" does not exist at 26
+> WITH x AS (SELECT 1) UPDATE x SET a = 1
+ERROR 42P01 relation "x" does not exist at 29
+> WITH t AS (SELECT 1 AS id) DELETE FROM t WHERE id = 1
+DELETE 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 2,m
+row 3,m
+row 10,ten
+row 20,r
+row 21,r
+row 22,r
+row 23,r
+row 30,a
+row 41,xy
+row 42,mat
+SELECT 10

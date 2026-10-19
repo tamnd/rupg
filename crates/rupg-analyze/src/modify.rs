@@ -27,9 +27,7 @@ const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "ctid", "xmin", "cmin", "xmax", "
 impl Analyzer<'_> {
     /// `transformUpdateStmt`: the query tree of an `UPDATE`.
     pub(crate) fn update(&mut self, s: &UpdateStmt) -> Result<Query> {
-        if s.withClause.is_some() {
-            return Err(not_yet("WITH in UPDATE"));
-        }
+        self.write_with(s.withClause.as_deref())?;
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an UPDATE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Update)?;
         let from = self.target_from(rv, &s.fromClause)?;
@@ -67,6 +65,7 @@ impl Analyzer<'_> {
             on_conflict: None,
             merge: None,
         });
+        self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
     }
 
@@ -149,9 +148,7 @@ impl Analyzer<'_> {
 
     /// `transformDeleteStmt`: the query tree of a `DELETE`.
     pub(crate) fn delete(&mut self, s: &DeleteStmt) -> Result<Query> {
-        if s.withClause.is_some() {
-            return Err(not_yet("WITH in DELETE"));
-        }
+        self.write_with(s.withClause.as_deref())?;
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("a DELETE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Delete)?;
         let foreign = self.foreign_keys(table, WriteKind::Delete, &columns)?;
@@ -166,7 +163,7 @@ impl Analyzer<'_> {
             targets.extend(carried_targets(carried));
         }
         targets.push(tid_target());
-        Ok(Query {
+        let mut query = Query {
             relations: std::mem::take(&mut self.scope.relations),
             from,
             targets,
@@ -184,7 +181,9 @@ impl Analyzer<'_> {
                 merge: None,
             }),
             ..Query::default()
-        })
+        };
+        self.end_write_with(&mut query, s.withClause.as_deref())?;
+        Ok(query)
     }
 
     /// The query of `RETURNING` of an `UPDATE` or a `DELETE`, and the values that the query of the statement carries for it.
@@ -208,10 +207,10 @@ impl Analyzer<'_> {
         rv: &RangeVar,
         list: &[Option<Node>],
     ) -> Result<Vec<FromItem>> {
-        let mut nodes = Vec::with_capacity(list.len() + 1);
-        nodes.push(Some(Node::RangeVar(Box::new(rv.clone()))));
-        nodes.extend(list.iter().cloned());
-        self.transform_from(&nodes)
+        let target = self.target_relation(rv)?;
+        let mut items = vec![target];
+        items.extend(self.transform_from(list)?);
+        Ok(items)
     }
 
     /// `transformWhereClause` of the statement, with `WHERE CURRENT OF` as an error.

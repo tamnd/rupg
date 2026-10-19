@@ -100,9 +100,7 @@ pub(crate) fn carry(carried: &mut Vec<Expr>, relation: usize, attnum: i16, expr:
 impl Analyzer<'_> {
     /// `transformMergeStmt`: the query tree of a `MERGE`.
     pub(crate) fn merge(&mut self, s: &MergeStmt) -> Result<Query> {
-        if s.withClause.is_some() {
-            return Err(not_yet("WITH in MERGE"));
-        }
+        self.write_with(s.withClause.as_deref())?;
         let mut clauses = Vec::with_capacity(s.mergeWhenClauses.len());
         for node in &s.mergeWhenClauses {
             let Some(Node::MergeWhenClause(clause)) = node else {
@@ -250,7 +248,7 @@ impl Analyzer<'_> {
         let update_foreign = foreign(self, MergeCommand::Update, WriteKind::Update)?;
         let delete_foreign = foreign(self, MergeCommand::Delete, WriteKind::Delete)?;
         let unique = self.unique_keys(table, &columns)?;
-        Ok(Query {
+        let mut query = Query {
             relations: std::mem::take(&mut self.scope.relations),
             from: vec![from],
             targets: query_targets,
@@ -273,7 +271,9 @@ impl Analyzer<'_> {
                 }),
             }),
             ..Query::default()
-        })
+        };
+        self.end_write_with(&mut query, s.withClause.as_deref())?;
+        Ok(query)
     }
 
     /// `transformMergeStmt` for one `WHEN` clause: the condition, and the new row of an `INSERT` or an `UPDATE`.
