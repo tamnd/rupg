@@ -1,0 +1,159 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id serial PRIMARY KEY, n int)
+CREATE TABLE
+> CREATE SEQUENCE own_seq START 10
+CREATE SEQUENCE
+> ALTER SEQUENCE own_seq OWNED BY a.n
+ALTER SEQUENCE
+> CREATE SEQUENCE free_seq START 100
+CREATE SEQUENCE
+> INSERT INTO a (n) VALUES (nextval('own_seq')), (nextval('own_seq'))
+INSERT 0 2
+> SELECT nextval('free_seq')
+fields nextval:20:8:-1
+row 100
+SELECT 1
+> ALTER SEQUENCE own_seq RESTART 50
+ALTER SEQUENCE
+> SELECT * FROM a ORDER BY id
+fields id@a.1:23:4:-1,n@a.2:23:4:-1
+row 1,10
+row 2,11
+SELECT 2
+> TRUNCATE a RESTART IDENTITY
+TRUNCATE TABLE
+> SELECT currval('a_id_seq'), currval('own_seq')
+fields currval:20:8:-1,currval:20:8:-1
+row 2,11
+SELECT 1
+> SELECT nextval('a_id_seq'), nextval('own_seq'), nextval('free_seq')
+fields nextval:20:8:-1,nextval:20:8:-1,nextval:20:8:-1
+row 1,10,101
+SELECT 1
+> INSERT INTO a (n) VALUES (1) RETURNING *
+fields id@a.1:23:4:-1,n@a.2:23:4:-1
+row 2,1
+INSERT 0 1
+> BEGIN
+BEGIN
+> INSERT INTO a (n) VALUES (2), (3)
+INSERT 0 2
+> TRUNCATE a
+TRUNCATE TABLE
+> SELECT count(*) FROM a
+fields count:20:8:-1
+row 0
+SELECT 1
+> INSERT INTO a (id, n) VALUES (1, 4)
+INSERT 0 1
+> SELECT * FROM a
+fields id@a.1:23:4:-1,n@a.2:23:4:-1
+row 1,4
+SELECT 1
+> COMMIT
+COMMIT
+> SELECT * FROM a
+fields id@a.1:23:4:-1,n@a.2:23:4:-1
+row 1,4
+SELECT 1
+> BEGIN
+BEGIN
+> TRUNCATE a
+TRUNCATE TABLE
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM a
+fields id@a.1:23:4:-1,n@a.2:23:4:-1
+row 1,4
+SELECT 1
+> BEGIN TRANSACTION READ ONLY
+BEGIN
+> TRUNCATE a
+ERROR 25006 cannot execute TRUNCATE TABLE in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> SET default_transaction_read_only = on
+SET
+default_transaction_read_only=on
+> TRUNCATE nope
+ERROR 25006 cannot execute TRUNCATE TABLE in a read-only transaction
+> RESET default_transaction_read_only
+RESET
+default_transaction_read_only=off
+> TRUNCATE public.a
+TRUNCATE TABLE
+> TRUNCATE nos.a
+ERROR 3F000 schema "nos" does not exist
+> TRUNCATE pg_tables
+ERROR 42809 "pg_tables" is not a table
+> TRUNCATE pg_catalog.pg_class
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> TRUNCATE information_schema.tables
+ERROR 42809 "tables" is not a table
+> CREATE TYPE ct AS (x int)
+CREATE TYPE
+> TRUNCATE ct
+ERROR 42809 "ct" is not a table
+> CREATE TABLE p (id int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE c (pid int REFERENCES p)
+CREATE TABLE
+> CREATE TABLE lone (id int)
+CREATE TABLE
+> CREATE TABLE ref_self (id int PRIMARY KEY, parent int REFERENCES ref_self)
+CREATE TABLE
+> TRUNCATE ref_self, p
+ERROR 0A000 cannot truncate a table referenced in a foreign key constraint
+DETAIL Table "c" references "p".
+HINT Truncate table "c" at the same time, or use TRUNCATE ... CASCADE.
+> TRUNCATE lone, p
+ERROR 0A000 cannot truncate a table referenced in a foreign key constraint
+DETAIL Table "c" references "p".
+HINT Truncate table "c" at the same time, or use TRUNCATE ... CASCADE.
+> TRUNCATE p, lone, c
+TRUNCATE TABLE
+> TRUNCATE c, p RESTRICT
+TRUNCATE TABLE
+> TRUNCATE ONLY p CASCADE
+NOTICE 00000 truncate cascades to table "c"
+TRUNCATE TABLE
+> SELECT relname, relhastriggers FROM pg_class WHERE relname IN ('p', 'c', 'lone') ORDER BY relname
+fields relname@pg_class.2:19:64:-1,relhastriggers@pg_class.22:16:1:-1
+row c,t
+row lone,f
+row p,t
+SELECT 3
+> CREATE TABLE g1 (id int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE g2 (id int PRIMARY KEY, g1 int REFERENCES g1)
+CREATE TABLE
+> CREATE TABLE g3 (g2 int REFERENCES g2)
+CREATE TABLE
+> INSERT INTO g1 VALUES (1)
+INSERT 0 1
+> INSERT INTO g2 VALUES (1, 1)
+INSERT 0 1
+> INSERT INTO g3 VALUES (1)
+INSERT 0 1
+> TRUNCATE g1 CASCADE
+NOTICE 00000 truncate cascades to table "g2"
+NOTICE 00000 truncate cascades to table "g3"
+TRUNCATE TABLE
+> SELECT (SELECT count(*) FROM g1), (SELECT count(*) FROM g2), (SELECT count(*) FROM g3)
+fields count:20:8:-1,count:20:8:-1,count:20:8:-1
+row 0,0,0
+SELECT 1
+> TRUNCATE g1, g2
+ERROR 0A000 cannot truncate a table referenced in a foreign key constraint
+DETAIL Table "g3" references "g2".
+HINT Truncate table "g3" at the same time, or use TRUNCATE ... CASCADE.
+> PREPARE tr AS TRUNCATE a
+ERROR 42601 syntax error at or near "TRUNCATE" at 15
+> DROP TABLE a, p, c, lone, ref_self, g1, g2, g3
+DROP TABLE
+> DROP SEQUENCE free_seq
+DROP SEQUENCE
+> DROP TYPE ct
+DROP TYPE

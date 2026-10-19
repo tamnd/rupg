@@ -600,6 +600,24 @@ impl Heap {
         Ok(Changed::Done(count))
     }
 
+    /// The rows that `TRUNCATE` removes. Each version that no transaction deleted gets the transaction of the view as `xmax`, so that a rollback brings the rows back, as the old file of `RelationSetNewRelfilenumber` stays until the commit. `TRUNCATE` takes `AccessExclusiveLock`, which waits for each transaction that changed the table. So when another transaction in progress inserted or deleted a version, nothing changes, and the result is that transaction, for the statement to wait for.
+    pub(crate) fn truncate(&self, relation: u32, view: &View) -> Option<u32> {
+        let mut state = self.state();
+        let State { tables, running, .. } = &mut *state;
+        let table = tables.get_mut(&(view.database, relation))?;
+        let other = |xid: u32| xid != 0 && xid != view.xid && running.contains(&xid);
+        for version in &table.versions {
+            if let Some(holder) = [version.xmin, version.xmax].into_iter().find(|&x| other(x)) {
+                return Some(holder);
+            }
+        }
+        for version in table.versions.iter_mut().filter(|version| version.xmax == 0) {
+            version.xmax = view.xid;
+            version.cmax = view.command;
+        }
+        None
+    }
+
     /// Records that `xid` waits for `holder`, as `LockAcquire` adds an edge to the wait graph.
     pub(crate) fn wait(&self, xid: u32, holder: u32) {
         self.state().waits.insert(xid, holder);
@@ -735,6 +753,22 @@ mod tests {
         heap.insert(7, &view(heap.snapshot(), xid, 0), vec![vec![Value::Int4(1)]], &[], &[])
             .unwrap();
         assert_eq!(first_tid(&heap, &view(heap.snapshot(), xid, 1)), 2);
+    }
+
+    #[test]
+    fn a_truncate_waits_and_a_rollback_brings_the_rows_back() {
+        let heap = Heap::default();
+        let first = heap.begin(1);
+        heap.insert(7, &view(heap.snapshot(), first, 0), vec![vec![Value::Int4(1)]], &[], &[])
+            .unwrap();
+        let a = heap.begin(2);
+        assert_eq!(heap.truncate(7, &view(heap.snapshot(), a, 0)), Some(first));
+        heap.commit(first);
+        assert_eq!(heap.truncate(7, &view(heap.snapshot(), a, 0)), None);
+        assert_eq!(heap.rows(7, &view(heap.snapshot(), a, 1)).len(), 0);
+        assert_eq!(heap.rows(7, &view(heap.snapshot(), 0, 0)).len(), 1);
+        heap.abort(a);
+        assert_eq!(heap.rows(7, &view(heap.snapshot(), 0, 0)).len(), 1);
     }
 
     #[test]

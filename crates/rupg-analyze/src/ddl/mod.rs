@@ -1,4 +1,4 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH` and `ALTER TEXT SEARCH CONFIGURATION`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner` and the functions of `tsearchcmds.c` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`, so [`is_definition`] does not list it. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c` and `ExecuteTruncate` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`, so [`is_definition`] does not list it. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
 mod comment;
@@ -17,6 +17,7 @@ mod sequence;
 mod table;
 #[cfg(test)]
 mod tests;
+mod truncate;
 mod tsearch;
 mod view;
 
@@ -60,6 +61,8 @@ pub struct Defined {
     pub result: Result<()>,
     /// The tables that the statement read with a sequential scan, once for each scan, as `pgstat_count_heap_scan` counts them: the build of an index, the check of new constraints by `ALTER TABLE` and the check of a new foreign key. The scans count also when the statement fails.
     pub scans: Vec<u32>,
+    /// The tables of `TRUNCATE`, whose rows the caller removes after the checks pass.
+    pub truncated: Vec<u32>,
 }
 
 /// True for a statement that [`define`] runs.
@@ -79,6 +82,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateSeqStmt(_)
             | Node::AlterSeqStmt(_)
             | Node::AlterTSConfigurationStmt(_)
+            | Node::TruncateStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype))
@@ -126,6 +130,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         user,
         messages: Vec::new(),
         scans: Vec::new(),
+        truncated: Vec::new(),
     };
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
@@ -146,12 +151,18 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterSeqStmt(alter) => definer.alter_sequence(alter),
         Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) => definer.define_ts(define),
         Node::AlterTSConfigurationStmt(alter) => definer.alter_ts_config(alter),
+        Node::TruncateStmt(truncate) => definer.truncate(truncate),
         _ => {
             Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "this statement is not supported yet"))
         }
     };
     definer.flush();
-    Defined { messages: definer.messages, result, scans: definer.scans }
+    Defined {
+        messages: definer.messages,
+        result,
+        scans: definer.scans,
+        truncated: definer.truncated,
+    }
 }
 
 /// The session with the schemas of the catalog, which the analyzer finds by name.
@@ -218,6 +229,8 @@ pub(crate) struct Definer<'a, 'c> {
     messages: Vec<Message>,
     /// The tables of [`Defined::scans`].
     scans: Vec<u32>,
+    /// The tables of [`Defined::truncated`].
+    truncated: Vec<u32>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.
