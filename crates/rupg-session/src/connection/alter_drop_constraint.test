@@ -1,0 +1,177 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (k int PRIMARY KEY, u int UNIQUE, n int NOT NULL, c int CHECK (c > 0), CONSTRAINT nn CHECK (n < 100))
+CREATE TABLE
+> CREATE TABLE r (k int REFERENCES p, u int REFERENCES p (u))
+CREATE TABLE
+> SELECT conname, contype FROM pg_constraint WHERE conrelid = 'p'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1
+row nn,c
+row p_c_check,c
+row p_k_not_null,n
+row p_n_not_null,n
+row p_pkey,p
+row p_u_key,u
+SELECT 6
+> ALTER TABLE p DROP CONSTRAINT nosuch
+ERROR 42704 constraint "nosuch" of relation "p" does not exist
+> ALTER TABLE p DROP CONSTRAINT IF EXISTS nosuch
+NOTICE 00000 constraint "nosuch" of relation "p" does not exist, skipping
+ALTER TABLE
+> ALTER TABLE p DROP CONSTRAINT r_k_fkey
+ERROR 42704 constraint "r_k_fkey" of relation "p" does not exist
+> ALTER TABLE p DROP CONSTRAINT p_pkey
+ERROR 2BP01 cannot drop constraint p_pkey on table p because other objects depend on it
+DETAIL constraint r_k_fkey on table r depends on index p_pkey
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE p DROP CONSTRAINT p_u_key RESTRICT
+ERROR 2BP01 cannot drop constraint p_u_key on table p because other objects depend on it
+DETAIL constraint r_u_fkey on table r depends on index p_u_key
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE p DROP CONSTRAINT p_k_not_null
+ERROR 42P16 column "k" is in a primary key
+> ALTER TABLE p DROP CONSTRAINT p_n_not_null
+ALTER TABLE
+> SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 'p'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1
+row k,t
+row u,f
+row n,f
+row c,f
+SELECT 4
+> INSERT INTO p VALUES (1, 1, NULL, 1)
+INSERT 0 1
+> ALTER TABLE p DROP CONSTRAINT p_c_check
+ALTER TABLE
+> INSERT INTO p VALUES (2, 2, 2, -1)
+INSERT 0 1
+> INSERT INTO p VALUES (3, 3, 200, -1)
+ERROR 23514 new row for relation "p" violates check constraint "nn"
+DETAIL Failing row contains (3, 3, 200, -1).
+> ALTER TABLE p DROP CONSTRAINT nn, DROP CONSTRAINT nn
+ERROR 42704 constraint "nn" of relation "p" does not exist
+> ALTER TABLE p DROP CONSTRAINT nn, DROP CONSTRAINT IF EXISTS nn
+NOTICE 00000 constraint "nn" of relation "p" does not exist, skipping
+ALTER TABLE
+> INSERT INTO p VALUES (3, 3, 200, -1)
+INSERT 0 1
+> ALTER TABLE p DROP CONSTRAINT p_pkey CASCADE
+NOTICE 00000 drop cascades to constraint r_k_fkey on table r
+ALTER TABLE
+> SELECT conname, contype FROM pg_constraint WHERE conrelid IN ('p'::regclass, 'r'::regclass) ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1
+row p_k_not_null,n
+row p_u_key,u
+row r_u_fkey,f
+SELECT 3
+> SELECT relname FROM pg_class WHERE relname LIKE 'p\_%' ORDER BY relname
+fields relname@pg_class.2:19:64:-1
+row p_u_key
+SELECT 1
+> INSERT INTO p VALUES (3, 4, 5, 6)
+INSERT 0 1
+> INSERT INTO r VALUES (99, NULL)
+INSERT 0 1
+> ALTER TABLE p DROP CONSTRAINT p_k_not_null
+ALTER TABLE
+> INSERT INTO p VALUES (NULL, 5, 5, 6)
+INSERT 0 1
+> ALTER TABLE r DROP CONSTRAINT r_u_fkey
+ALTER TABLE
+> INSERT INTO r VALUES (NULL, 99)
+INSERT 0 1
+> ALTER TABLE p DROP CONSTRAINT p_u_key
+ALTER TABLE
+> SELECT count(*) FROM pg_constraint WHERE conrelid IN ('p'::regclass, 'r'::regclass)
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE i (a int GENERATED ALWAYS AS IDENTITY, b int NOT NULL, c int, d int PRIMARY KEY)
+CREATE TABLE
+> ALTER TABLE i DROP CONSTRAINT i_a_not_null
+ERROR 55000 column "a" of relation "i" is an identity column
+> ALTER TABLE i ALTER COLUMN a DROP NOT NULL
+ERROR 42601 column "a" of relation "i" is an identity column
+> ALTER TABLE i ALTER COLUMN d DROP NOT NULL
+ERROR 42P16 column "d" is in a primary key
+> ALTER TABLE i ALTER COLUMN nosuch DROP NOT NULL
+ERROR 42703 column "nosuch" of relation "i" does not exist
+> ALTER TABLE i ALTER COLUMN ctid DROP NOT NULL
+ERROR 0A000 cannot alter system column "ctid"
+> ALTER TABLE i ALTER COLUMN c DROP NOT NULL
+ALTER TABLE
+> ALTER TABLE i ALTER COLUMN b DROP NOT NULL
+ALTER TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 'i'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1
+row i_a_not_null
+row i_d_not_null
+row i_pkey
+SELECT 3
+> INSERT INTO i (b, d) VALUES (NULL, 1)
+INSERT 0 1
+> ALTER TABLE i ALTER COLUMN b SET NOT NULL
+ERROR 23502 column "b" of relation "i" contains null values
+> UPDATE i SET b = 1
+UPDATE 1
+> ALTER TABLE i ALTER COLUMN b SET NOT NULL, ALTER COLUMN b DROP NOT NULL
+ALTER TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 'i'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1
+row i_a_not_null
+row i_b_not_null
+row i_d_not_null
+row i_pkey
+SELECT 4
+> ALTER TABLE i ALTER COLUMN b DROP NOT NULL, ALTER COLUMN b SET NOT NULL
+ALTER TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 'i'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1
+row i_a_not_null
+row i_b_not_null
+row i_d_not_null
+row i_pkey
+SELECT 4
+> CREATE VIEW iv AS SELECT * FROM i
+CREATE VIEW
+> ALTER TABLE iv DROP CONSTRAINT x
+ERROR 42809 ALTER action DROP CONSTRAINT cannot be performed on relation "iv"
+DETAIL This operation is not supported for views.
+> ALTER TABLE iv ALTER COLUMN b DROP NOT NULL
+ERROR 42809 ALTER action ALTER COLUMN ... DROP NOT NULL cannot be performed on relation "iv"
+DETAIL This operation is not supported for views.
+> ALTER VIEW iv ALTER COLUMN b DROP NOT NULL
+ERROR 42809 ALTER action ALTER COLUMN ... DROP NOT NULL cannot be performed on relation "iv"
+DETAIL This operation is not supported for views.
+> CREATE TABLE q (a int, CONSTRAINT q_a CHECK (a > 0), CONSTRAINT q_b UNIQUE (a))
+CREATE TABLE
+> CREATE INDEX qi ON q (a)
+CREATE INDEX
+> ALTER TABLE q DROP CONSTRAINT qi
+ERROR 42704 constraint "qi" of relation "q" does not exist
+> ALTER TABLE q DROP CONSTRAINT q_b, ADD CONSTRAINT q_b UNIQUE (a)
+ALTER TABLE
+> ALTER TABLE q ADD CONSTRAINT q_c CHECK (a < 9), DROP CONSTRAINT q_c
+ERROR 42704 constraint "q_c" of relation "q" does not exist
+> ALTER TABLE q DROP CONSTRAINT q_a, ADD CONSTRAINT q_a CHECK (a < 0)
+ALTER TABLE
+> SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'q'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1
+row q_a,CHECK ((a < 0))
+row q_b,UNIQUE (a)
+SELECT 2
+> DROP INDEX q_b
+ERROR 2BP01 cannot drop index q_b because constraint q_b on table q requires it
+HINT You can drop constraint q_b on table q instead.
+> BEGIN
+BEGIN
+> ALTER TABLE q DROP CONSTRAINT q_b
+ALTER TABLE
+> ROLLBACK
+ROLLBACK
+> SELECT conname FROM pg_constraint WHERE conrelid = 'q'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1
+row q_a
+row q_b
+SELECT 2

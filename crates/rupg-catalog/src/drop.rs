@@ -6,9 +6,9 @@ use std::sync::Arc;
 use rupg_common::{Error, Result, SqlState};
 
 use super::{
-    Catalog, DepKind, ObjRef, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
-    PG_REWRITE, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, PG_TYPE,
-    is_pinned,
+    Catalog, ConKind, DepKind, ObjRef, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE,
+    PG_PROC, PG_REWRITE, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE,
+    PG_TYPE, is_pinned,
 };
 
 /// The reasons that the walk reached an object, the bits `DEPFLAG_*` of `dependency.c`.
@@ -235,7 +235,14 @@ impl Catalog {
                 }
             }
             PG_CONSTRAINT => {
-                self.constraints.remove(&object.oid);
+                // `dropconstraint_internal` clears `attnotnull` with the not-null constraint of the column.
+                if let Some(con) = self.constraints.remove(&object.oid)
+                    && con.kind == ConKind::NotNull
+                    && let [number] = con.keys[..]
+                    && let Ok(column) = self.column_mut(con.relation, number)
+                {
+                    column.not_null = false;
+                }
             }
             PG_NAMESPACE => {
                 self.schemas.remove(&object.oid);

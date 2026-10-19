@@ -6,6 +6,7 @@ mod comment;
 mod copy;
 mod domain;
 mod drop;
+mod drop_constraint;
 mod enumtype;
 mod fkey;
 mod function;
