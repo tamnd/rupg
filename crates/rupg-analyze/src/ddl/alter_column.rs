@@ -96,7 +96,7 @@ impl Definer<'_, '_> {
                     .map(|c| c.options.clone())
                     .unwrap_or_default();
                 let options = reloptions::transform(&old, defs, None, &[], *reset)?;
-                reloptions::validate(&options, reloptions::ATTRIBUTE)?;
+                reloptions::validate(&options, reloptions::ATTRIBUTE, false)?;
                 self.catalog.set_column_options(target.oid, number, options)
             }
         }

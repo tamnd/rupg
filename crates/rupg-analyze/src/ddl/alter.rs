@@ -1,4 +1,4 @@
-//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column, and `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column. The other subcommands give `0A000`.
+//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column, and `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column, the `SET` and `RESET` of the options of the relation, and `SET WITHOUT OIDS`. The other subcommands give `0A000`.
 //!
 //! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
 
@@ -29,6 +29,7 @@ const TABLE: &[u8] = b"rpf";
 const STATISTICS: &[u8] = b"rpmfiI";
 const STORAGE: &[u8] = b"rpmf";
 const COMPRESSION: &[u8] = b"rpm";
+const REL_OPTIONS: &[u8] = b"rpvmi";
 
 /// `alter_table_type_to_string`: the words of a subcommand in its errors.
 fn action_words(subtype: AlterTableType) -> &'static str {
@@ -116,7 +117,7 @@ struct Passes {
     constraints: Vec<Constraint>,
     /// `AT_PASS_ADD_OTHERCONSTR`: `SET DEFAULT` and `ADD IDENTITY`, in the order of the statement. The check constraints and the foreign keys come after them, from the transform.
     defaults: Vec<AddCmd>,
-    /// `AT_PASS_MISC`: `OWNER TO`, the `SET` options of an identity column, and the subcommands that change the statistics, the storage and the options of a column, in the order of the statement.
+    /// `AT_PASS_MISC`: `OWNER TO`, the `SET` options of an identity column, the subcommands that change the statistics, the storage and the options of a column, and the `SET` and `RESET` of the options of the relation, in the order of the statement.
     misc: Vec<MiscCmd>,
 }
 
@@ -150,6 +151,8 @@ enum MiscCmd {
     Identity(String, Vec<Option<Node>>),
     /// `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION`, or `SET` or `RESET` of the options of a column.
     Column(ColumnCmd),
+    /// `SET (...)` of the options of the relation, or `RESET (...)` when the flag is true.
+    Options(Vec<Option<Node>>, bool),
 }
 
 /// A constraint of `AT_PASS_ADD_OTHERCONSTR`.
@@ -395,6 +398,17 @@ impl Definer<'_, '_> {
                 let reset = cmd.subtype == AlterTableType::AT_ResetOptions;
                 passes.misc.push(MiscCmd::Column(ColumnCmd::Options(column, defs, reset)));
             }
+            AlterTableType::AT_SetRelOptions | AlterTableType::AT_ResetRelOptions => {
+                self.simple_permissions(target, cmd, REL_OPTIONS)?;
+                let defs = match &cmd.def {
+                    Some(Node::List(list)) => list.clone(),
+                    _ => Vec::new(),
+                };
+                let reset = cmd.subtype == AlterTableType::AT_ResetRelOptions;
+                passes.misc.push(MiscCmd::Options(defs, reset));
+            }
+            // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
+            AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
             other => {
                 let words = action_words(other);
                 let what = if words.is_empty() { "this ALTER TABLE action" } else { words };
@@ -567,6 +581,7 @@ impl Definer<'_, '_> {
                     self.set_identity(target, column, options)?;
                 }
                 MiscCmd::Column(cmd) => self.alter_column_facts(target, cmd)?,
+                MiscCmd::Options(defs, reset) => self.set_rel_options(target, defs, *reset)?,
             }
         }
         Ok(())

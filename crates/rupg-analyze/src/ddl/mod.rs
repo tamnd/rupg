@@ -15,6 +15,7 @@ mod identity;
 mod index;
 mod lock;
 mod rangetype;
+mod relation_options;
 mod reloptions;
 mod rename;
 mod rule;

@@ -8,6 +8,7 @@ use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{Node, ViewCheckOption, ViewStmt};
 use rupg_types::{Value, oid};
 
+use super::reloptions;
 use super::{Definer, Found, check_attribute_type, not_yet, relname};
 use crate::collate::target_collation;
 use crate::expr::{Expr, ExprKind};
@@ -154,33 +155,11 @@ pub(super) fn parse_bool(text: &str) -> Option<bool> {
     rupg_types::bool_in(text).ok()
 }
 
-/// `transformRelOptions` and `view_reloptions`: the options of `WITH` as `name=value`, in the order of the statement. An option with a namespace, such as `toast.name`, does not apply to a view and is dropped.
+/// `transformRelOptions` and `view_reloptions`: the options of `WITH` as `name=value`, in the order of the statement. An option in the namespace `toast` does not apply to a view and is dropped.
 fn view_options(options: &[Option<Node>]) -> Result<Vec<String>> {
-    let invalid = |message: String| Error::new(SqlState::INVALID_PARAMETER_VALUE, message);
-    let mut out = Vec::new();
-    let mut seen: Vec<&str> = Vec::new();
-    for option in options.iter().flatten() {
-        let Node::DefElem(def) = option else { continue };
-        if def.defnamespace.is_some() {
-            continue;
-        }
-        let name = def.defname.as_deref().unwrap_or_default();
-        let value = def_string(def.arg.as_ref());
-        out.push((name, value));
-    }
-    for (name, value) in &out {
-        if !matches!(*name, "security_barrier" | "security_invoker") {
-            return Err(invalid(format!("unrecognized parameter \"{name}\"")));
-        }
-        if seen.contains(name) {
-            return Err(invalid(format!("parameter \"{name}\" specified more than once")));
-        }
-        seen.push(name);
-        if parse_bool(value).is_none() {
-            return Err(invalid(format!("invalid value for boolean option \"{name}\": {value}")));
-        }
-    }
-    Ok(out.into_iter().map(|(name, value)| format!("{name}={value}")).collect())
+    let options = reloptions::transform_create(options, None, &["toast"])?;
+    reloptions::validate(&options, reloptions::VIEW, false)?;
+    Ok(options)
 }
 
 /// The error of `CREATE OR REPLACE VIEW` for a relation that is not a view.

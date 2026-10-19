@@ -261,9 +261,7 @@ impl Definer<'_, '_> {
         let mut table_rv = rv.clone();
         table_rv.schemaname = Some(self.schema_name(namespace).into());
         let indexes = index_constraints(&mut plan, &table_rv)?;
-        if !stmt.options.is_empty() {
-            return Err(not_yet("WITH options", at));
-        }
+        let options = self.create_table_options(&stmt.options)?;
         if stmt.tablespacename.is_some() {
             return Err(not_yet("TABLESPACE", at));
         }
@@ -284,6 +282,10 @@ impl Definer<'_, '_> {
             ));
         }
         let table = self.define_relation(&plan)?;
+        if !options.is_empty() {
+            self.catalog.set_options(table, options)?;
+        }
+        self.create_toast_options(table, &stmt.options)?;
         for index in &indexes {
             self.create_index(index, false)?;
         }

@@ -2775,6 +2775,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_column_options.test")));
     }
 
+    /// `WITH (...)` of `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW` and the index of a constraint, and `SET (...)` and `RESET (...)` of `ALTER TABLE`, `ALTER INDEX` and `ALTER VIEW`: the options of a table and of its TOAST table, of a btree index, of a hash index and of a view, the parse of each kind of value, `WITH OIDS`, and the errors for a namespace, a name, a value and a relation of the wrong kind. `connection/relation_options.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn relation_options() {
+        big_stack(|| script(include_str!("connection/relation_options.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {
