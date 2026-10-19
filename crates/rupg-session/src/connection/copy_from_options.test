@@ -1,0 +1,266 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int NOT NULL, b text DEFAULT 'dflt', c numeric DEFAULT 1)
+CREATE TABLE
+> COPY t FROM STDIN WITH (DEFAULT 'D')
+< 1	D	D
+< 2	x	3
+<done
+copy in 0 0,0,0
+COPY 2
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:-1
+row 1,dflt,1
+row 2,x,3
+SELECT 2
+> COPY t FROM STDIN WITH (DEFAULT 'D')
+< D	a	1
+<done
+copy in 0 0,0,0
+ERROR 22P04 unexpected default marker in COPY data (COPY t, line 1: "D	a	1")
+DETAIL Column "id" has no default value.
+> COPY t FROM STDIN WITH (FORMAT csv, DEFAULT 'D')
+< 3,D,"D"
+< 4,"D",D
+<done
+copy in 0 0,0,0
+ERROR 22P02 invalid input syntax for type numeric: "D" (COPY t, line 1, column c: "D")
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:-1
+row 1,dflt,1
+row 2,x,3
+SELECT 2
+> COPY t FROM STDIN WITH (ON_ERROR ignore)
+< 5	a	1
+< x	b	1
+< 6	c	y
+< 7	d	2
+<done
+copy in 0 0,0,0
+NOTICE 00000 2 rows were skipped due to data type incompatibility
+COPY 2
+> SELECT * FROM t WHERE id >= 5 ORDER BY id
+fields id@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:-1
+row 5,a,1
+row 7,d,2
+SELECT 2
+> COPY t FROM STDIN WITH (ON_ERROR ignore)
+< 8	a	z
+<done
+copy in 0 0,0,0
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 0
+> COPY t FROM STDIN WITH (ON_ERROR ignore, LOG_VERBOSITY verbose)
+< 9	a	1
+< q	b	1
+< 10	c	w
+<done
+copy in 0 0,0,0
+NOTICE 00000 skipping row due to data type incompatibility at line 2 for column "id": "q" (COPY t)
+NOTICE 00000 skipping row due to data type incompatibility at line 3 for column "c": "w" (COPY t)
+NOTICE 00000 2 rows were skipped due to data type incompatibility
+COPY 1
+> COPY t FROM STDIN WITH (ON_ERROR ignore, LOG_VERBOSITY silent)
+< r	b	1
+<done
+copy in 0 0,0,0
+COPY 0
+> COPY t FROM STDIN WITH (ON_ERROR ignore, REJECT_LIMIT 1)
+< s	b	1
+< 11	b	1
+<done
+copy in 0 0,0,0
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 1
+> COPY t FROM STDIN WITH (ON_ERROR ignore, REJECT_LIMIT 1)
+< s	b	1
+< t	b	1
+< 12	b	1
+<done
+copy in 0 0,0,0
+ERROR 22P02 skipped more than REJECT_LIMIT (1) rows due to data type incompatibility (COPY t, line 2, column id: "t")
+> COPY t FROM STDIN WITH (ON_ERROR ignore)
+< 13	a
+<done
+copy in 0 0,0,0
+ERROR 22P04 missing data for column "c" (COPY t, line 1: "13	a")
+> COPY t FROM STDIN WITH (ON_ERROR ignore)
+< \N	a	1
+<done
+copy in 0 0,0,0
+ERROR 23502 null value in column "id" of relation "t" violates not-null constraint (COPY t, line 1: "\N	a	1")
+DETAIL Failing row contains (null, a, 1).
+> CREATE TABLE n (id int, v int)
+CREATE TABLE
+> COPY n FROM STDIN WITH (ON_ERROR set_null)
+< 1	x
+< y	2
+<done
+copy in 0 0,0
+NOTICE 00000 in 2 rows, columns were set to null due to data type incompatibility
+COPY 2
+> SELECT * FROM n ORDER BY id
+fields id@n.1:23:4:-1,v@n.2:23:4:-1
+row 1,NULL
+row NULL,2
+SELECT 2
+> COPY n FROM STDIN WITH (ON_ERROR set_null, LOG_VERBOSITY verbose)
+< 3	x
+<done
+copy in 0 0,0
+NOTICE 00000 setting to null due to data type incompatibility at line 1 for column "v": "x" (COPY n)
+NOTICE 00000 in 1 row, columns were set to null due to data type incompatibility
+COPY 1
+> CREATE DOMAIN dnn AS int NOT NULL
+CREATE DOMAIN
+> CREATE TABLE dn (v dnn)
+CREATE TABLE
+> COPY dn FROM STDIN WITH (ON_ERROR set_null)
+< x
+<done
+copy in 0 0
+ERROR 23502 domain dnn does not allow null values (COPY dn, line 1, column v: "x")
+DETAIL ON_ERROR SET_NULL cannot be applied because column "v" (domain dnn) does not accept null values.
+> COPY t FROM STDIN WITH (ON_ERROR ignore)
+< 14	a	99999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999e1000000
+<done
+copy in 0 0,0,0
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 0
+> COPY t FROM STDIN WITH (FORMAT csv, ON_ERROR ignore, LOG_VERBOSITY verbose)
+< 15,a,b
+<done
+copy in 0 0,0,0
+NOTICE 00000 skipping row due to data type incompatibility at line 1 for column "c": "b" (COPY t)
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 0
+> CREATE TABLE vc (v varchar(2))
+CREATE TABLE
+> COPY vc FROM STDIN WITH (ON_ERROR ignore)
+< abc
+<done
+copy in 0 0
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 0
+> COPY t FROM STDIN WITH (ON_ERROR ignore, LOG_VERBOSITY verbose)
+< x	a	1
+< 16	a
+<done
+copy in 0 0,0,0
+NOTICE 00000 skipping row due to data type incompatibility at line 1 for column "id": "x" (COPY t)
+ERROR 22P04 missing data for column "c" (COPY t, line 2: "16	a")
+> COPY t FROM STDIN WITH (DEFAULT 'D', ON_ERROR ignore)
+< 17	\D	D
+< 18	D	u
+<done
+copy in 0 0,0,0
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 1
+> SELECT * FROM t WHERE id >= 16 ORDER BY id
+fields id@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:-1
+row 17,D,1
+SELECT 1
+> COPY n FROM STDIN WITH (ON_ERROR set_null, LOG_VERBOSITY verbose)
+< x	y
+<done
+copy in 0 0,0
+NOTICE 00000 setting to null due to data type incompatibility at line 1 for column "id": "x" (COPY n)
+NOTICE 00000 setting to null due to data type incompatibility at line 1 for column "v": "y" (COPY n)
+NOTICE 00000 in 1 row, columns were set to null due to data type incompatibility
+COPY 1
+> CREATE DOMAIN dpos AS int CHECK (VALUE > 0)
+CREATE DOMAIN
+> CREATE TABLE dp (a int, v dpos DEFAULT 5)
+CREATE TABLE
+> COPY dp FROM STDIN
+< 1	1
+< 2	-1
+<done
+copy in 0 0,0
+ERROR 23514 value for domain dpos violates check constraint "dpos_check" (COPY dp, line 2, column v: "-1")
+> COPY dp FROM STDIN WITH (ON_ERROR ignore, LOG_VERBOSITY verbose)
+< 3	2
+< 4	-2
+<done
+copy in 0 0,0
+NOTICE 00000 skipping row due to data type incompatibility at line 2 for column "v": "-2" (COPY dp)
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 1
+> COPY dp FROM STDIN WITH (ON_ERROR set_null)
+< 5	-3
+<done
+copy in 0 0,0
+NOTICE 00000 in 1 row, columns were set to null due to data type incompatibility
+COPY 1
+> COPY dp FROM STDIN WITH (DEFAULT 'D')
+< 6	D
+<done
+copy in 0 0,0
+COPY 1
+> COPY dp FROM STDIN WITH (FORMAT csv)
+< 8,-4
+<done
+copy in 0 0,0
+ERROR 23514 value for domain dpos violates check constraint "dpos_check" (COPY dp, line 1, column v: "-4")
+> SELECT * FROM dp ORDER BY a
+fields a@dp.1:23:4:-1,v@dp.2:23:4:-1
+row 3,2
+row 5,NULL
+row 6,5
+SELECT 3
+> COPY dn FROM STDIN
+< \N
+<done
+copy in 0 0
+ERROR 23502 domain dnn does not allow null values (COPY dn, line 1, column v: null input)
+> COPY dn FROM STDIN WITH (ON_ERROR ignore)
+< \N
+< 7
+<done
+copy in 0 0
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 1
+> SELECT * FROM dn
+fields v@dn.1:23:4:-1
+row 7
+SELECT 1
+> CREATE TABLE g (id int GENERATED ALWAYS AS IDENTITY, s serial, b text)
+CREATE TABLE
+> COPY g FROM STDIN WITH (DEFAULT 'D')
+< D	D	\D
+< 10	D	D
+<done
+copy in 0 0,0,0
+ERROR 22P04 unexpected default marker in COPY data (COPY g, line 2: "10	D	D")
+DETAIL Column "b" has no default value.
+> SELECT * FROM g
+fields id@g.1:23:4:-1,s@g.2:23:4:-1,b@g.3:25:-1:-1
+SELECT 0
+> COPY g (b) FROM STDIN WITH (DEFAULT 'D')
+< D
+<done
+copy in 0 0
+ERROR 22P04 unexpected default marker in COPY data (COPY g, line 1: "D")
+DETAIL Column "b" has no default value.
+> COPY t FROM STDIN WITH (FORMAT binary, DEFAULT 'D')
+<done
+ERROR 42601 cannot specify DEFAULT in BINARY mode
+> COPY t (id) FROM STDIN WITH (ON_ERROR ignore) WHERE id > 20
+< 19
+< x
+< 21
+<done
+copy in 0 0
+NOTICE 00000 1 row was skipped due to data type incompatibility
+COPY 1
+> SELECT * FROM t WHERE id >= 19 ORDER BY id
+fields id@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:1700:-1:-1
+row 21,dflt,1
+SELECT 1
+> DROP TABLE t, n, dn, vc, dp, g
+DROP TABLE
+> DROP DOMAIN dnn
+DROP DOMAIN
+> DROP DOMAIN dpos
+DROP DOMAIN

@@ -69,8 +69,34 @@ pub(super) struct Options {
     pub(super) freeze: bool,
     /// The canonical name of the encoding of `ENCODING`.
     pub(super) encoding: Option<&'static str>,
-    /// `DEFAULT`, or `ON_ERROR` that is not `STOP`. `COPY ... FROM` does not read rows with these options yet.
-    pub(super) later: Option<&'static str>,
+    /// `DEFAULT`: the text of a field that gives the default of its column.
+    pub(super) default: Option<String>,
+    pub(super) on_error: OnError,
+    /// `REJECT_LIMIT`: the number of rows that `ON_ERROR IGNORE` can skip, or `None` for no limit.
+    pub(super) reject_limit: Option<i64>,
+    pub(super) verbosity: Verbosity,
+}
+
+/// `CopyOnErrorChoice`: what `COPY ... FROM` does for a field that the input function of its type does not accept.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum OnError {
+    /// The copy stops with the error.
+    Stop,
+    /// The copy skips the row.
+    Ignore,
+    /// The value of the field is null.
+    SetNull,
+}
+
+/// `CopyLogVerbosityChoice`: the notices of `ON_ERROR`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
+pub(super) enum Verbosity {
+    /// No notices.
+    Silent,
+    /// A notice with the number of rows at the end of the copy.
+    Default,
+    /// Also a notice for each field that the copy did not accept.
+    Verbose,
 }
 
 impl CopyOut {
@@ -213,7 +239,7 @@ pub(super) fn options(list: &[Option<Node>], is_from: bool) -> Result<Options, E
     let mut convert_selectively = false;
     let mut encoding_name = None;
     let mut force_array = None;
-    let mut log_verbosity = false;
+    let mut log_verbosity = None;
     let mut reject = None;
     let mut on_error = None;
     for node in list.iter().flatten() {
@@ -333,31 +359,45 @@ pub(super) fn options(list: &[Option<Node>], is_from: bool) -> Result<Options, E
                     .with_position(at));
                 }
                 on_error = Some(
-                    ["stop", "ignore", "set_null"]
-                        .into_iter()
-                        .find(|v| text.eq_ignore_ascii_case(v))
-                        .ok_or_else(|| {
-                            Error::new(
-                                SqlState::INVALID_PARAMETER_VALUE,
-                                format!("COPY ON_ERROR \"{text}\" not recognized"),
-                            )
-                            .with_position(at)
-                        })?,
+                    [
+                        ("stop", OnError::Stop),
+                        ("ignore", OnError::Ignore),
+                        ("set_null", OnError::SetNull),
+                    ]
+                    .into_iter()
+                    .find(|(v, _)| text.eq_ignore_ascii_case(v))
+                    .map(|(_, choice)| choice)
+                    .ok_or_else(|| {
+                        Error::new(
+                            SqlState::INVALID_PARAMETER_VALUE,
+                            format!("COPY ON_ERROR \"{text}\" not recognized"),
+                        )
+                        .with_position(at)
+                    })?,
                 );
             }
             "log_verbosity" => {
-                if log_verbosity {
+                if log_verbosity.is_some() {
                     return Err(conflict());
                 }
-                log_verbosity = true;
                 let text = def_string(def)?;
-                if !["silent", "default", "verbose"].iter().any(|v| text.eq_ignore_ascii_case(v)) {
-                    return Err(Error::new(
-                        SqlState::INVALID_PARAMETER_VALUE,
-                        format!("COPY LOG_VERBOSITY \"{text}\" not recognized"),
-                    )
-                    .with_position(at));
-                }
+                log_verbosity = Some(
+                    [
+                        ("silent", Verbosity::Silent),
+                        ("default", Verbosity::Default),
+                        ("verbose", Verbosity::Verbose),
+                    ]
+                    .into_iter()
+                    .find(|(v, _)| text.eq_ignore_ascii_case(v))
+                    .map(|(_, verbosity)| verbosity)
+                    .ok_or_else(|| {
+                        Error::new(
+                            SqlState::INVALID_PARAMETER_VALUE,
+                            format!("COPY LOG_VERBOSITY \"{text}\" not recognized"),
+                        )
+                        .with_position(at)
+                    })?,
+                );
             }
             "reject_limit" => {
                 if reject.is_some() {
@@ -497,14 +537,14 @@ pub(super) fn options(list: &[Option<Node>], is_from: bool) -> Result<Options, E
             ));
         }
     }
-    let on_error = on_error.unwrap_or("stop");
-    if format == Format::Binary && on_error != "stop" {
+    let on_error = on_error.unwrap_or(OnError::Stop);
+    if format == Format::Binary && on_error != OnError::Stop {
         return Err(Error::new(
             SqlState::SYNTAX_ERROR,
             "only ON_ERROR STOP is allowed in BINARY mode",
         ));
     }
-    if reject.is_some() && on_error != "ignore" {
+    if reject.is_some() && on_error != OnError::Ignore {
         return Err(invalid("COPY REJECT_LIMIT requires ON_ERROR to be set to IGNORE".to_string()));
     }
     Ok(Options {
@@ -520,13 +560,10 @@ pub(super) fn options(list: &[Option<Node>], is_from: bool) -> Result<Options, E
         force_null,
         freeze,
         encoding: encoding_name,
-        later: if default.is_some() {
-            Some("DEFAULT")
-        } else if on_error != "stop" {
-            Some("ON_ERROR")
-        } else {
-            None
-        },
+        default,
+        on_error,
+        reject_limit: reject,
+        verbosity: log_verbosity.unwrap_or(Verbosity::Default),
     })
 }
 

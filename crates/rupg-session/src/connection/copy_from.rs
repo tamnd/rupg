@@ -1,17 +1,22 @@
 //! `COPY ... FROM STDIN`, as `DoCopy`, `BeginCopyFrom`, `CopyFrom` and `copyfromparse.c` run it. The copy reads the fields of each line, and `NextCopyFrom` makes the values of the columns with the input functions or the receive functions of their types. The other columns get their defaults from a plan of `INSERT`, which also checks the constraints. The copy keeps up to `MAX_BUFFERED_TUPLES` rows and then writes them in the heap, as `CopyMultiInsertInfoFlush` does. The triggers of the foreign keys fire at the end of the copy.
 
-use rupg_analyze::Params;
+use std::rc::Rc;
+
+use rupg_analyze::{CopyTarget, Params};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
-use rupg_sql::nodes::CopyStmt;
+use rupg_pgcatalog::builtin;
+use rupg_sql::Severity;
+use rupg_sql::nodes::{CopyStmt, RangeVar};
 use rupg_types::Value;
 use rupg_wire::OutBuf;
 
 use super::Connection;
-use super::copy::{BINARY_SIGNATURE, ForceQuote, Format, options};
+use super::copy::{BINARY_SIGNATURE, ForceQuote, Format, OnError, Verbosity, options};
 use super::foreign::Batch;
 use crate::heap::{Changed, View};
 use crate::query::{self, Reader};
+use crate::utility::Notice;
 
 /// `MAX_COPY_DATA_DISPLAY`: the number of bytes of a line that the context of an error shows.
 const MAX_DISPLAY: usize = 100;
@@ -28,22 +33,63 @@ struct Row {
     text: Option<Vec<u8>>,
     /// The fields of the line, with `None` for a null value.
     fields: Vec<Option<Vec<u8>>>,
+    /// `defaults`: true for a field that is the marker of `DEFAULT`. It is empty for a row with no marker.
+    defaults: Vec<bool>,
+}
+
+/// The fields of a line of the text format or the CSV format.
+#[derive(Debug)]
+struct Fields {
+    /// The fields, with `None` for a null value.
+    fields: Vec<Option<Vec<u8>>>,
+    /// The marks of the fields that are the marker of `DEFAULT`, or nothing for a line with no marker.
+    defaults: Vec<bool>,
+}
+
+impl Fields {
+    /// The fields of a line. The marks become empty when no field is a marker, so that the copy uses the plan with no defaults.
+    fn new(fields: Vec<Option<Vec<u8>>>, mut defaults: Vec<bool>) -> Fields {
+        if !defaults.contains(&true) {
+            defaults.clear();
+        }
+        Fields { fields, defaults }
+    }
+}
+
+/// The values that [`CopyIn::values`] made of the fields of a row.
+#[derive(Debug)]
+struct Made {
+    /// The values of the selected columns with no marker of `DEFAULT`, or `None` when `ON_ERROR IGNORE` skips the row.
+    values: Option<Vec<Value>>,
+    /// The column and the field of each value that the input function did not accept: the column of a row that the copy skips, or each column that `ON_ERROR SET_NULL` sets to null.
+    failed: Vec<(usize, Option<Vec<u8>>)>,
 }
 
 /// The plans of a copy and the rows that it did not write yet.
 #[derive(Debug)]
 struct Load {
     /// The `INSERT` that makes the rows of the table, or `None` for a relation that is not in the catalog of the session.
-    plan: Option<Plan>,
+    plan: Option<Rc<Plan>>,
+    /// The table and its name for the plans of the rows with markers of `DEFAULT`, or `None` for a copy with no `DEFAULT`.
+    source: Option<(CopyTarget, RangeVar)>,
+    /// The plan for each set of columns that have the marker of `DEFAULT` in a row.
+    defaulted: Vec<(Vec<bool>, Rc<Plan>)>,
     /// The query of the condition `WHERE`.
     filter: Option<Plan>,
     /// The type and the type modifier of each selected column.
     types: Vec<(u32, i32)>,
+    /// True for a selected column whose type is a domain or an array of a domain. The input checks the value with the constraints of the domain, as `domain_in` does.
+    domains: Vec<bool>,
+    /// True for a selected column that has a default, `defexprs`.
+    has_default: Vec<bool>,
     /// `force_notnull_flags` and `force_null_flags` of each selected column.
     force_not_null: Vec<bool>,
     force_null: Vec<bool>,
-    /// The option that `COPY ... FROM` does not read rows with yet.
-    later: Option<&'static str>,
+    on_error: OnError,
+    reject_limit: Option<i64>,
+    verbosity: Verbosity,
+    /// `num_errors`: the number of rows with a field that the input function did not accept.
+    errors: u64,
     /// The rows that the copy checked and did not write in the heap yet, and the line of each row.
     rows: Vec<Vec<Value>>,
     lines: Vec<u64>,
@@ -101,9 +147,13 @@ pub(super) struct CopyIn {
     ended: bool,
     /// True when the copy read the header of the binary format.
     binary_header: bool,
+    /// `default_print`: the marker of `DEFAULT`.
+    default: Option<Vec<u8>>,
     /// The lines that the copy read and did not make values of yet.
     pending: Vec<Row>,
     load: Load,
+    /// The notices of `ON_ERROR`, which the session sends before the result of the copy.
+    pub(super) notices: Vec<Notice>,
 }
 
 impl Connection {
@@ -173,6 +223,21 @@ impl Connection {
         let types: Vec<(u32, i32)> = rel
             .map(|rel| rel.columns.iter().map(|column| (column.ty, column.typmod)).collect())
             .unwrap_or_default();
+        // `build_column_default`: the default of the column, the next value of an identity column, or the default of the domain of the column.
+        let has_default: Vec<bool> = target
+            .selected
+            .iter()
+            .map(|&i| {
+                rel.and_then(|rel| rel.columns.get(i)).is_some_and(|column| {
+                    column.has_default
+                        || column.identity != 0
+                        || catalog
+                            .type_by_oid(column.ty)
+                            .and_then(|ty| ty.domain.as_ref())
+                            .is_some_and(|domain| domain.default.is_some())
+                })
+            })
+            .collect();
         let filter = match (&stmt.whereClause, rel) {
             (Some(condition), Some(_)) => {
                 let node = rupg_analyze::copy_filter(&target, rv, condition);
@@ -217,20 +282,34 @@ impl Connection {
             ));
         }
         let plan = match rel {
-            Some(_) => {
-                let node = rupg_analyze::copy_insert(&target, rv);
-                let params = Params { types: vec![0; target.selected.len()], variable: true };
-                Some(query::plan(&node, &reader, &params)?.fold(None, &reader)?)
-            }
+            Some(_) => Some(Rc::new(insert_plan(&target, rv, &[], &reader)?)),
             None => None,
         };
+        let types: Vec<(u32, i32)> =
+            target.selected.iter().filter_map(|&i| types.get(i).copied()).collect();
+        let domains = types
+            .iter()
+            .map(|&(ty, _)| {
+                let element = builtin::type_by_oid(ty).map_or(0, |row| row.elem);
+                builtin::domain_by_oid(ty).is_some() || builtin::domain_by_oid(element).is_some()
+            })
+            .collect();
+        let source = (rel.is_some() && options.default.is_some())
+            .then(|| (target.clone(), RangeVar::clone(rv)));
         let load = Load {
             plan,
+            source,
+            defaulted: Vec::new(),
             filter,
-            types: target.selected.iter().filter_map(|&i| types.get(i).copied()).collect(),
+            types,
+            domains,
+            has_default,
             force_not_null,
             force_null,
-            later: options.later,
+            on_error: options.on_error,
+            reject_limit: options.reject_limit,
+            verbosity: options.verbosity,
+            errors: 0,
             rows: Vec::new(),
             lines: Vec::new(),
             count: 0,
@@ -254,8 +333,10 @@ impl Connection {
             buf: Vec::new(),
             ended: false,
             binary_header: false,
+            default: options.default.map(String::into_bytes),
             pending: Vec::new(),
             load,
+            notices: Vec::new(),
         })
     }
 
@@ -279,6 +360,24 @@ impl Connection {
         if !batches.is_empty() {
             self.fire(batches)?;
         }
+        let errors = copy.load.errors;
+        if errors > 0 && copy.load.verbosity >= Verbosity::Default {
+            let message = match (copy.load.on_error, errors) {
+                (OnError::SetNull, 1) => {
+                    "in 1 row, columns were set to null due to data type incompatibility"
+                        .to_string()
+                }
+                (OnError::SetNull, _) => format!(
+                    "in {errors} rows, columns were set to null due to data type incompatibility"
+                ),
+                (_, 1) => "1 row was skipped due to data type incompatibility".to_string(),
+                _ => format!("{errors} rows were skipped due to data type incompatibility"),
+            };
+            copy.notices.push(Notice {
+                severity: Severity::Notice,
+                error: Error::new(SqlState::SUCCESSFUL_COMPLETION, message),
+            });
+        }
         Ok(copy.load.count)
     }
 
@@ -288,17 +387,19 @@ impl Connection {
             return Ok(());
         }
         let pending = std::mem::take(&mut copy.pending);
-        let (Some(plan), None) = (&copy.load.plan, copy.load.later) else {
-            let what = copy.load.later.map_or(String::new(), |option| format!(" and {option}"));
+        if copy.load.plan.is_none() {
             return Err(copy.at_line(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
-                format!("COPY FROM with rows{what} is not supported yet"),
+                "COPY FROM with rows is not supported yet",
             )));
-        };
-        let width = plan.write().map_or(0, |info| info.width);
+        }
         let reader = self.reader();
         for row in pending {
-            let params = copy.values(&row, &reader)?;
+            let made = copy.values(&row, &reader)?;
+            copy.count_failed(&row, &made)?;
+            let Some(params) = made.values else { continue };
+            let plan = copy.load.plan_for(&row.defaults, &reader)?;
+            let width = plan.write().map_or(0, |info| info.width);
             let line = |error: Error| error.with_context(copy.row_context(&row));
             let rows = plan.run_unchecked(&params, &reader).map_err(line)?;
             let rows = match &copy.load.filter {
@@ -334,7 +435,7 @@ impl Connection {
         if load.rows.is_empty() {
             return Ok(());
         }
-        let Some(info) = load.plan.as_ref().and_then(Plan::write) else {
+        let Some(info) = load.plan.as_deref().and_then(Plan::write) else {
             return Err(Error::internal("a copy with no plan of its rows"));
         };
         let heap = self.store.heap();
@@ -376,6 +477,39 @@ impl Connection {
             load.batches.push(Batch::new(info, &info.foreign, view.command, new_rows, Vec::new()));
         }
         Ok(())
+    }
+}
+
+/// The plan of the `INSERT` of [`rupg_analyze::copy_insert`]. The parameters get the types of their columns.
+fn insert_plan(
+    target: &CopyTarget,
+    rv: &RangeVar,
+    defaults: &[bool],
+    reader: &Reader<'_>,
+) -> Result<Plan, Error> {
+    let node = rupg_analyze::copy_insert(target, rv, defaults);
+    let count =
+        (0..target.selected.len()).filter(|&k| !defaults.get(k).copied().unwrap_or(false)).count();
+    let params = Params { types: vec![0; count], variable: true };
+    query::plan(&node, reader, &params)?.fold(None, reader)
+}
+
+impl Load {
+    /// The plan for a row whose fields in `defaults` are the marker of `DEFAULT`. The copy plans the `INSERT` for a set of such columns at the first row that has it.
+    fn plan_for(&mut self, defaults: &[bool], reader: &Reader<'_>) -> Result<Rc<Plan>, Error> {
+        let base = self.plan.as_ref().ok_or_else(|| Error::internal("a copy with no plan"))?;
+        if !defaults.contains(&true) {
+            return Ok(Rc::clone(base));
+        }
+        if let Some((_, plan)) = self.defaulted.iter().find(|(set, _)| set == defaults) {
+            return Ok(Rc::clone(plan));
+        }
+        let Some((target, rv)) = &self.source else {
+            return Err(Error::internal("a marker of DEFAULT in a copy with no DEFAULT"));
+        };
+        let plan = Rc::new(insert_plan(target, rv, defaults, reader)?);
+        self.defaulted.push((defaults.to_vec(), Rc::clone(&plan)));
+        Ok(plan)
     }
 }
 
@@ -465,9 +599,21 @@ impl CopyIn {
         }
     }
 
-    /// `NextCopyFrom`: the value of each selected column from the fields of a row, with the input function or the receive function of the type of the column and its type modifier. An error has the context of the column and of its field.
-    fn values(&self, row: &Row, reader: &Reader<'_>) -> Result<Vec<Value>, Error> {
+    /// The context of an error in a field, with the text of the field when the format has lines.
+    fn column_context(&self, row: &Row, i: usize, field: Option<&[u8]>) -> String {
+        let name = self.names.get(i).map_or("", String::as_str);
+        let at = format!("COPY {}, line {}, column {name}", self.name, row.line);
+        match (field, &row.text) {
+            (_, None) => at,
+            (Some(field), Some(_)) => format!("{at}: \"{}\"", shown(field)),
+            (None, Some(_)) => format!("{at}: null input"),
+        }
+    }
+
+    /// `NextCopyFrom`: the value of each selected column from the fields of a row, with the input function or the receive function of the type of the column and its type modifier. A field that is the marker of `DEFAULT` has no value. An error has the context of the column and of its field. With `ON_ERROR IGNORE` or `ON_ERROR SET_NULL`, a soft error of the input function skips the row or sets the value to null.
+    fn values(&self, row: &Row, reader: &Reader<'_>) -> Result<Made, Error> {
         let mut values = Vec::with_capacity(self.names.len());
+        let mut failed = Vec::new();
         for (i, (name, &(ty, typmod))) in self.names.iter().zip(&self.load.types).enumerate() {
             let Some(field) = row.fields.get(i) else {
                 return Err(Error::new(
@@ -476,6 +622,9 @@ impl CopyIn {
                 )
                 .with_context(self.row_context(row)));
             };
+            if row.defaults.get(i).copied().unwrap_or(false) {
+                continue;
+            }
             let mut field = field.as_deref();
             if self.format == Format::Csv {
                 if field.is_none() && self.load.force_not_null[i] {
@@ -484,21 +633,18 @@ impl CopyIn {
                     field = None;
                 }
             }
-            let context = || {
-                let at = format!("COPY {}, line {}, column {name}", self.name, row.line);
-                match (field, &row.text) {
-                    (_, None) => at,
-                    (Some(field), Some(_)) => format!("{at}: \"{}\"", shown(field)),
-                    (None, Some(_)) => format!("{at}: null input"),
-                }
-            };
+            let context = || self.column_context(row, i, field);
+            let hard = |error: Error| error.with_context(context());
             let value = match field {
                 None => Ok(Value::Null),
                 Some(bytes) if self.format == Format::Binary => {
-                    rupg_func::receive(ty, bytes, typmod, 0, reader)
+                    Ok(rupg_func::receive(ty, bytes, typmod, 0, reader).map_err(hard)?)
                 }
                 Some(bytes) => match std::str::from_utf8(bytes) {
-                    Ok(text) => rupg_func::input(ty, text, typmod, reader),
+                    Ok(text) if self.load.on_error == OnError::Stop => {
+                        Ok(rupg_func::input(ty, text, typmod, reader).map_err(hard)?)
+                    }
+                    Ok(text) => rupg_func::input_soft(ty, text, typmod, reader).map_err(hard)?,
                     // `CopyReadAttributesText` checks the encoding of the fields before it reads their values, so the error has the context of the line.
                     Err(_) => {
                         let error = query::param(ty, 0, Some(bytes), i + 1, reader).err();
@@ -508,9 +654,81 @@ impl CopyIn {
                     }
                 },
             };
-            values.push(value.map_err(|error| error.with_context(context()))?);
+            let value = match value {
+                Ok(value) if self.load.domains[i] => {
+                    match rupg_exec::input_failure(ty, &value, reader).map_err(hard)? {
+                        Some(error) => Err(error),
+                        None => Ok(value),
+                    }
+                }
+                value => value,
+            };
+            match (value, self.load.on_error) {
+                (Ok(value), _) => values.push(value),
+                (Err(error), OnError::Stop) => return Err(hard(error)),
+                (Err(_), OnError::Ignore) => {
+                    failed.push((i, field.map(<[u8]>::to_vec)));
+                    return Ok(Made { values: None, failed });
+                }
+                (Err(_), OnError::SetNull) => {
+                    if self.load.domains[i]
+                        && rupg_exec::input_failure(ty, &Value::Null, reader)
+                            .map_err(hard)?
+                            .is_some()
+                    {
+                        let domain = rupg_func::type_message_name(ty, reader);
+                        return Err(hard(
+                            Error::new(
+                                SqlState::NOT_NULL_VIOLATION,
+                                format!("domain {domain} does not allow null values"),
+                            )
+                            .with_detail(format!(
+                                "ON_ERROR SET_NULL cannot be applied because column \"{name}\" (domain {domain}) does not accept null values."
+                            )),
+                        ));
+                    }
+                    failed.push((i, field.map(<[u8]>::to_vec)));
+                    values.push(Value::Null);
+                }
+            }
         }
-        Ok(values)
+        Ok(Made { values: Some(values), failed })
+    }
+
+    /// The count of `num_errors` for a row with a field that the input function did not accept, the notices of `LOG_VERBOSITY VERBOSE`, and the check of `REJECT_LIMIT`.
+    fn count_failed(&mut self, row: &Row, made: &Made) -> Result<(), Error> {
+        let Some((at, field)) = made.failed.first() else { return Ok(()) };
+        self.load.errors += 1;
+        if self.load.verbosity == Verbosity::Verbose {
+            let what = if made.values.is_none() { "skipping row" } else { "setting to null" };
+            for (i, field) in &made.failed {
+                let value = field
+                    .as_deref()
+                    .map_or("null input".to_string(), |field| format!("\"{}\"", shown(field)));
+                let message = format!(
+                    "{what} due to data type incompatibility at line {} for column \"{}\": {value}",
+                    row.line, self.names[*i]
+                );
+                self.notices.push(Notice {
+                    severity: Severity::Notice,
+                    error: Error::new(SqlState::SUCCESSFUL_COMPLETION, message)
+                        .with_context(format!("COPY {}", self.name)),
+                });
+            }
+        }
+        if made.values.is_none()
+            && let Some(limit) = self.load.reject_limit
+            && self.load.errors > limit.unsigned_abs()
+        {
+            return Err(Error::new(
+                SqlState::INVALID_TEXT_REPRESENTATION,
+                format!(
+                    "skipped more than REJECT_LIMIT ({limit}) rows due to data type incompatibility"
+                ),
+            )
+            .with_context(self.column_context(row, *at, field.as_deref())));
+        }
+        Ok(())
     }
 
     /// Reads the data in the buffer. At `eof`, the rest of the buffer is the last line.
@@ -545,8 +763,20 @@ impl CopyIn {
                     } else {
                         self.text_fields(&line)
                     };
-                    let fields =
+                    let Fields { fields, defaults } =
                         fields.map_err(|error| error.with_context(self.line_context(&line)))?;
+                    let no_default = defaults
+                        .iter()
+                        .zip(&self.load.has_default)
+                        .position(|(&marker, &has_default)| marker && !has_default);
+                    if let Some(at) = no_default {
+                        return Err(Error::new(
+                            SqlState::BAD_COPY_FILE_FORMAT,
+                            "unexpected default marker in COPY data",
+                        )
+                        .with_detail(format!("Column \"{}\" has no default value.", self.names[at]))
+                        .with_context(self.line_context(&line)));
+                    }
                     if fields.len() > self.names.len() {
                         return Err(Error::new(
                             SqlState::BAD_COPY_FILE_FORMAT,
@@ -554,7 +784,7 @@ impl CopyIn {
                         )
                         .with_context(self.line_context(&line)));
                     }
-                    self.pending.push(Row { line: self.line, text: Some(line), fields });
+                    self.pending.push(Row { line: self.line, text: Some(line), fields, defaults });
                 }
                 Read::End | Read::Eof => {
                     // `cur_lineno` counts the line of the marker. `NextCopyFromRawFieldsInternal` reads the fields of the header line also when the data ended before it.
@@ -711,7 +941,7 @@ impl CopyIn {
         let bad = |message: String| {
             Error::new(SqlState::BAD_COPY_FILE_FORMAT, message).with_context(context())
         };
-        let fields = fields.map_err(|error| error.with_context(context()))?;
+        let fields = fields.map_err(|error| error.with_context(context()))?.fields;
         if fields.len() != self.names.len() {
             return Err(bad(format!(
                 "wrong number of fields in header line: got {}, expected {}",
@@ -741,9 +971,10 @@ impl CopyIn {
         Ok(())
     }
 
-    /// `CopyReadAttributesText`: the fields of a line of the text format, with `None` for the null string.
-    fn text_fields(&self, line: &[u8]) -> Result<Vec<Option<Vec<u8>>>, Error> {
+    /// `CopyReadAttributesText`: the fields of a line of the text format, with `None` for the null string, and the marks of the fields that are the marker of `DEFAULT`.
+    fn text_fields(&self, line: &[u8]) -> Result<Fields, Error> {
         let mut fields = Vec::new();
+        let mut defaults = Vec::new();
         let mut i = 0;
         loop {
             let start = i;
@@ -798,16 +1029,20 @@ impl CopyIn {
             }
             let raw_end = if last { i } else { i - 1 };
             let raw = &line[start..raw_end];
+            if self.default.is_some() {
+                defaults.push(self.default.as_deref() == Some(raw));
+            }
             fields.push(if raw == self.null.as_slice() { None } else { Some(field) });
             if last {
-                return Ok(fields);
+                return Ok(Fields::new(fields, defaults));
             }
         }
     }
 
-    /// `CopyReadAttributesCSV`: the fields of a line of the CSV format, with `None` for the null string outside quotes.
-    fn csv_fields(&self, line: &[u8]) -> Result<Vec<Option<Vec<u8>>>, Error> {
+    /// `CopyReadAttributesCSV`: the fields of a line of the CSV format, with `None` for the null string outside quotes, and the marks of the fields that are the marker of `DEFAULT` outside quotes.
+    fn csv_fields(&self, line: &[u8]) -> Result<Fields, Error> {
         let mut fields = Vec::new();
+        let mut defaults = Vec::new();
         let mut i = 0;
         loop {
             let start = i;
@@ -849,9 +1084,12 @@ impl CopyIn {
             }
             let raw_end = if last { i } else { i - 1 };
             let raw = &line[start..raw_end];
+            if self.default.is_some() {
+                defaults.push(!saw_quote && self.default.as_deref() == Some(raw));
+            }
             fields.push(if !saw_quote && raw == self.null.as_slice() { None } else { Some(field) });
             if last {
-                return Ok(fields);
+                return Ok(Fields::new(fields, defaults));
             }
         }
     }
@@ -955,7 +1193,7 @@ impl CopyIn {
                 at += size;
             }
             self.buf.drain(..at);
-            self.pending.push(Row { line: self.line, text: None, fields });
+            self.pending.push(Row { line: self.line, text: None, fields, defaults: Vec::new() });
             self.line += 1;
         }
         self.ended = true;
