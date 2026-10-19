@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.48 (2026-10-20)
+
 ### Added
 
 - `ALTER TABLE ... DROP COLUMN` with `IF EXISTS` and `CASCADE`. The column stays in `pg_attribute` with `attisdropped`, so the other columns keep their numbers, and the indexes, constraints, defaults and sequences on the column go with it (#420).
