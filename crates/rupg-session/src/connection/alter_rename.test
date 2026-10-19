@@ -1,0 +1,273 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int PRIMARY KEY, b text UNIQUE, c int CHECK (c > 0) DEFAULT 5)
+CREATE TABLE
+> CREATE INDEX ti ON t (c)
+CREATE INDEX
+> CREATE VIEW v AS SELECT a, b AS bb, c + 1 AS c1 FROM t WHERE c > 0
+CREATE VIEW
+> CREATE VIEW vv (x) AS SELECT a FROM v
+CREATE VIEW
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> INSERT INTO t VALUES (1, 'x', 2)
+INSERT 0 1
+> ALTER TABLE t RENAME TO u
+ALTER TABLE
+> SELECT relname FROM pg_class WHERE oid = 'u'::regclass
+fields relname@pg_class.2:19:64:-1
+row u
+SELECT 1
+> SELECT typname FROM pg_type WHERE typrelid = 'u'::regclass
+fields typname@pg_type.2:19:64:-1
+row u
+SELECT 1
+> SELECT typname FROM pg_type WHERE typelem = (SELECT reltype FROM pg_class WHERE relname = 'u')
+fields typname@pg_type.2:19:64:-1
+row _u
+SELECT 1
+> SELECT pg_get_viewdef('v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b AS bb,
+    (c + 1) AS c1
+   FROM u
+  WHERE (c > 0);
+SELECT 1
+> SELECT * FROM v
+fields a@v.1:23:4:-1,bb@v.2:25:-1:-1,c1@v.3:23:4:-1
+row 1,x,3
+SELECT 1
+> ALTER TABLE u RENAME COLUMN a TO aa
+ALTER TABLE
+> ALTER TABLE u RENAME b TO b2
+ALTER TABLE
+> SELECT pg_get_viewdef('v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT aa AS a,
+    b2 AS bb,
+    (c + 1) AS c1
+   FROM u
+  WHERE (c > 0);
+SELECT 1
+> SELECT pg_get_viewdef('vv')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a AS x
+   FROM v;
+SELECT 1
+> SELECT * FROM vv
+fields x@vv.1:23:4:-1
+row 1
+SELECT 1
+> SELECT attname FROM pg_attribute WHERE attrelid = 't_pkey'::regclass
+fields attname@pg_attribute.2:19:64:-1
+row a
+SELECT 1
+> SELECT attname FROM pg_attribute WHERE attrelid = 'ti'::regclass
+fields attname@pg_attribute.2:19:64:-1
+row c
+SELECT 1
+> SELECT pg_get_indexdef('t_b_key'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE UNIQUE INDEX t_b_key ON public.u USING btree (b2)
+SELECT 1
+> SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'u'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1
+row t_a_not_null,NOT NULL aa
+row t_b_key,UNIQUE (b2)
+row t_c_check,CHECK ((c > 0))
+row t_pkey,PRIMARY KEY (aa)
+SELECT 4
+> ALTER TABLE u RENAME COLUMN c TO c
+ERROR 42701 column "c" of relation "u" already exists
+> ALTER TABLE u RENAME COLUMN c TO aa
+ERROR 42701 column "aa" of relation "u" already exists
+> ALTER TABLE u RENAME COLUMN nosuch TO z
+ERROR 42703 column "nosuch" does not exist
+> ALTER TABLE u RENAME COLUMN ctid TO z
+ERROR 0A000 cannot rename system column "ctid"
+> ALTER TABLE u RENAME COLUMN c TO xmin
+ERROR 42701 column name "xmin" conflicts with a system column name
+> ALTER TABLE u RENAME TO s
+ERROR 42P07 relation "s" already exists
+> ALTER TABLE u RENAME TO u
+ERROR 42P07 relation "u" already exists
+> ALTER TABLE nosuch RENAME TO z
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TABLE IF EXISTS nosuch RENAME TO z
+NOTICE 00000 relation "nosuch" does not exist, skipping
+ALTER TABLE
+> ALTER TABLE IF EXISTS nosuch RENAME COLUMN a TO z
+NOTICE 00000 relation "nosuch" does not exist, skipping
+ALTER TABLE
+> ALTER VIEW u RENAME TO z
+ERROR 42809 "u" is not a view
+> ALTER INDEX u RENAME TO z
+ALTER INDEX
+> ALTER TABLE z RENAME TO u
+ALTER TABLE
+> ALTER VIEW ti RENAME TO z
+ERROR 42809 "ti" is not a view
+> ALTER SEQUENCE ti RENAME TO z
+ERROR 42809 "ti" is not a sequence
+> CREATE TYPE ct AS (a int)
+CREATE TYPE
+> ALTER TABLE ct RENAME TO z
+ERROR 42809 "ct" is a composite type
+HINT Use ALTER TYPE instead.
+> ALTER TABLE ct RENAME a TO b
+ALTER TABLE
+> ALTER SEQUENCE u RENAME TO z
+ERROR 42809 "u" is not a sequence
+> ALTER TABLE v RENAME TO v2
+ALTER TABLE
+> ALTER VIEW v2 RENAME COLUMN bb TO bbb
+ALTER VIEW
+> SELECT pg_get_viewdef('v2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT aa AS a,
+    b2 AS bbb,
+    (c + 1) AS c1
+   FROM u
+  WHERE (c > 0);
+SELECT 1
+> SELECT pg_get_viewdef('vv')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a AS x
+   FROM v2;
+SELECT 1
+> ALTER TABLE ti RENAME TO ti2
+ALTER TABLE
+> ALTER INDEX ti2 RENAME TO ti3
+ALTER INDEX
+> ALTER INDEX t_pkey RENAME TO u_pkey
+ALTER INDEX
+> SELECT conname FROM pg_constraint WHERE conrelid = 'u'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1
+row t_a_not_null
+row t_b_key
+row t_c_check
+row u_pkey
+SELECT 4
+> ALTER TABLE u RENAME CONSTRAINT t_b_key TO u_b_key
+ALTER TABLE
+> SELECT relname FROM pg_class WHERE relname LIKE 'u\_%' ORDER BY relname
+fields relname@pg_class.2:19:64:-1
+row u_b_key
+row u_pkey
+SELECT 2
+> ALTER TABLE u RENAME CONSTRAINT t_c_check TO u_b_key
+ERROR 42710 constraint "u_b_key" for relation "u" already exists
+> ALTER TABLE u RENAME CONSTRAINT nosuch TO z
+ERROR 42704 constraint "nosuch" for table "u" does not exist
+> ALTER TABLE u RENAME CONSTRAINT t_c_check TO u_c_check
+ALTER TABLE
+> ALTER TABLE u RENAME CONSTRAINT t_aa_not_null TO u_nn
+ERROR 42704 constraint "t_aa_not_null" for table "u" does not exist
+> ALTER TABLE u RENAME CONSTRAINT t_a_not_null TO u_nn
+ALTER TABLE
+> CREATE TABLE r (k int CONSTRAINT r_fk REFERENCES u)
+CREATE TABLE
+> ALTER TABLE r RENAME CONSTRAINT r_fk TO r_fk2
+ALTER TABLE
+> ALTER TABLE u RENAME CONSTRAINT r_fk2 TO r_fk3
+ERROR 42704 constraint "r_fk2" for table "u" does not exist
+> ALTER TABLE r RENAME k TO kk
+ALTER TABLE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conname = 'r_fk2'
+fields pg_get_constraintdef:25:-1:-1
+row FOREIGN KEY (kk) REFERENCES u(aa)
+SELECT 1
+> INSERT INTO r VALUES (5)
+ERROR 23503 insert or update on table "r" violates foreign key constraint "r_fk2"
+DETAIL Key (kk)=(5) is not present in table "u".
+> ALTER TABLE u RENAME TO "U"
+ALTER TABLE
+> SELECT pg_get_viewdef('v2')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT aa AS a,
+    b2 AS bbb,
+    (c + 1) AS c1
+   FROM "U"
+  WHERE (c > 0);
+SELECT 1
+> ALTER TABLE "U" RENAME TO u
+ALTER TABLE
+> SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'u'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1
+row u_b_key,UNIQUE (b2)
+row u_c_check,CHECK ((c > 0))
+row u_nn,NOT NULL aa
+row u_pkey,PRIMARY KEY (aa)
+SELECT 4
+> ALTER SEQUENCE s RENAME TO s2
+ALTER SEQUENCE
+> ALTER TABLE s2 RENAME TO s3
+ALTER TABLE
+> ALTER INDEX s3 RENAME TO s4
+ALTER INDEX
+> SELECT nextval('s4')
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> CREATE TABLE w (id serial, n int)
+CREATE TABLE
+> ALTER TABLE w RENAME TO w2
+ALTER TABLE
+> ALTER TABLE w2 RENAME id TO wid
+ALTER TABLE
+> INSERT INTO w2 (n) VALUES (1) RETURNING *
+fields wid@w2.1:23:4:-1,n@w2.2:23:4:-1
+row 1,1
+INSERT 0 1
+> SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 'w2'::regclass
+fields pg_get_expr:25:-1:-1
+row nextval('w_id_seq'::regclass)
+SELECT 1
+> SELECT * FROM u
+fields aa@u.1:23:4:-1,b2@u.2:25:-1:-1,c@u.3:23:4:-1
+row 1,x,2
+SELECT 1
+> SELECT * FROM v2
+fields a@v2.1:23:4:-1,bbb@v2.2:25:-1:-1,c1@v2.3:23:4:-1
+row 1,x,3
+SELECT 1
+> CREATE SCHEMA sc
+CREATE SCHEMA
+> CREATE TABLE sc.t (a int)
+CREATE TABLE
+> ALTER TABLE sc.t RENAME TO t2
+ALTER TABLE
+> SELECT relname FROM pg_class WHERE relnamespace = 'sc'::regnamespace
+fields relname@pg_class.2:19:64:-1
+row t2
+SELECT 1
+> ALTER TABLE sc.t2 RENAME TO sc.t3
+ERROR 42601 syntax error at or near "." at 31
+> ALTER SCHEMA sc RENAME TO sc2
+ALTER SCHEMA
+> SELECT * FROM sc2.t2
+fields a@sc2.t2.1:23:4:-1
+SELECT 0
+> ALTER SCHEMA sc2 RENAME TO public
+ERROR 42P06 schema "public" already exists
+> ALTER SCHEMA sc2 RENAME TO pg_x
+ERROR 42939 unacceptable schema name "pg_x"
+DETAIL The prefix "pg_" is reserved for system schemas.
+> ALTER SCHEMA nosuch RENAME TO z
+ERROR 3F000 schema "nosuch" does not exist
+> BEGIN
+BEGIN
+> ALTER TABLE u RENAME TO uu
+ALTER TABLE
+> SELECT * FROM uu
+fields aa@uu.1:23:4:-1,b2@uu.2:25:-1:-1,c@uu.3:23:4:-1
+row 1,x,2
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM u
+fields aa@u.1:23:4:-1,b2@u.2:25:-1:-1,c@u.3:23:4:-1
+row 1,x,2
+SELECT 1

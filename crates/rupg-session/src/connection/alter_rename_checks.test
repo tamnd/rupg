@@ -1,0 +1,132 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE u (a int PRIMARY KEY, c int CHECK (c > 0))
+CREATE TABLE
+> CREATE INDEX ti ON u (c)
+CREATE INDEX
+> CREATE INDEX te ON u ((c + 1))
+CREATE INDEX
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> CREATE VIEW v AS SELECT a FROM u
+CREATE VIEW
+> CREATE TYPE ct AS (a int)
+CREATE TYPE
+> ALTER VIEW u RENAME COLUMN c TO c9
+ALTER VIEW
+> ALTER SEQUENCE u RENAME COLUMN c9 TO c
+ERROR 42601 syntax error at or near "COLUMN" at 25
+> ALTER INDEX u RENAME COLUMN c TO c8
+ERROR 42601 syntax error at or near "COLUMN" at 22
+> ALTER TABLE u RENAME COLUMN c8 TO c
+ERROR 42703 column "c8" does not exist
+> ALTER TABLE s RENAME COLUMN last_value TO x
+ERROR 42809 cannot rename columns of relation "s"
+DETAIL This operation is not supported for sequences.
+> ALTER TABLE ti RENAME COLUMN c TO d
+ALTER TABLE
+> SELECT attname FROM pg_attribute WHERE attrelid = 'ti'::regclass
+fields attname@pg_attribute.2:19:64:-1
+row d
+SELECT 1
+> ALTER TABLE te RENAME COLUMN expr TO e
+ALTER TABLE
+> SELECT pg_get_indexdef('te'::regclass)
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX te ON public.u USING btree (((c9 + 1)))
+SELECT 1
+> ALTER TABLE v RENAME COLUMN a TO b
+ALTER TABLE
+> ALTER TABLE ct RENAME COLUMN a TO b
+ALTER TABLE
+> ALTER TABLE v RENAME CONSTRAINT x TO y
+ERROR 42704 constraint "x" for table "v" does not exist
+> ALTER TABLE ct RENAME CONSTRAINT x TO y
+ERROR 42704 constraint "x" for table "ct" does not exist
+> ALTER TABLE s RENAME CONSTRAINT x TO y
+ERROR 42809 cannot rename columns of relation "s"
+DETAIL This operation is not supported for sequences.
+> ALTER TABLE pg_class RENAME TO x
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> ALTER TABLE pg_class RENAME relname TO x
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> ALTER TABLE pg_catalog.pg_class RENAME CONSTRAINT x TO y
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> ALTER TABLE u RENAME CONSTRAINT u_c_check TO ti
+ALTER TABLE
+> ALTER TABLE u RENAME CONSTRAINT u_pkey TO ti
+ERROR 42P07 relation "ti" already exists
+> ALTER TABLE u RENAME CONSTRAINT u_pkey TO u_c_check
+ALTER TABLE
+> ALTER TABLE u RENAME TO ct
+ERROR 42P07 relation "ct" already exists
+> ALTER TABLE u RENAME TO _ct
+ALTER TABLE
+> SELECT typname FROM pg_type WHERE typname LIKE '%ct' ORDER BY typname
+fields typname@pg_type.2:19:64:-1
+row __ct
+row _ct
+row _pg_largeobject
+row _pg_ts_dict
+row ct
+row pg_largeobject
+row pg_ndistinct
+row pg_ts_dict
+SELECT 8
+> ALTER TABLE _ct RENAME TO u
+ALTER TABLE
+> CREATE SCHEMA sc
+CREATE SCHEMA
+> CREATE TABLE sc.t (a int)
+CREATE TABLE
+> CREATE VIEW scv AS SELECT a, a + 1 AS b FROM sc.t
+CREATE VIEW
+> ALTER SCHEMA sc RENAME TO sc2
+ALTER SCHEMA
+> SELECT pg_get_viewdef('scv')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    (a + 1) AS b
+   FROM sc2.t;
+SELECT 1
+> SELECT * FROM scv
+fields a@scv.1:23:4:-1,b@scv.2:23:4:-1
+SELECT 0
+> ALTER TABLE sc2.t RENAME TO t2
+ALTER TABLE
+> SELECT pg_get_viewdef('scv')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    (a + 1) AS b
+   FROM sc2.t2;
+SELECT 1
+> SET search_path = sc2, public
+SET
+search_path=sc2, public
+> CREATE VIEW public.scw AS SELECT a FROM t2
+CREATE VIEW
+> RESET search_path
+RESET
+search_path="$user", public
+> SELECT pg_get_viewdef('scw')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a
+   FROM sc2.t2;
+SELECT 1
+> ALTER TABLE sc2.t2 RENAME a TO a2
+ALTER TABLE
+> SELECT pg_get_viewdef('scw')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a2 AS a
+   FROM sc2.t2;
+SELECT 1
+> SELECT pg_get_viewdef('scv')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a2 AS a,
+    (a2 + 1) AS b
+   FROM sc2.t2;
+SELECT 1
+> SELECT * FROM scw
+fields a@scw.1:23:4:-1
+SELECT 0

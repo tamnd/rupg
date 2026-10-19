@@ -5,6 +5,8 @@
 mod function;
 mod query;
 
+pub use query::view_statement;
+
 use std::ptr;
 
 use rupg_analyze::{

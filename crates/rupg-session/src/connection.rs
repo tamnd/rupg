@@ -793,10 +793,11 @@ impl Connection {
         }));
         let transforms = &defined.transforms;
         let rewrite = defined.result.and_then(|()| self.rows_to_rewrite(node, &work, transforms));
-        let work = Arc::new(work);
+        let mut work = Arc::new(work);
         let result = rewrite
             .and_then(|tables| self.rewrite_rows(&tables, &work, transforms))
-            .and_then(|()| self.truncate_rows(&defined.truncated, &work));
+            .and_then(|()| self.truncate_rows(&defined.truncated, &work))
+            .and_then(|()| self.view_texts(&defined.views, &mut work));
         let Some(lease) = self.lease.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
         };
@@ -829,15 +830,13 @@ impl Connection {
                         }
                         _ => CommandTag::DropTable,
                     },
-                    Node::AlterTableStmt(stmt) => match stmt.objtype {
-                        ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
-                        ObjectType::OBJECT_SEQUENCE => CommandTag::AlterSequence,
-                        ObjectType::OBJECT_VIEW => CommandTag::AlterView,
-                        ObjectType::OBJECT_MATVIEW => CommandTag::AlterMaterializedView,
-                        ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::AlterForeignTable,
-                        _ => CommandTag::AlterTable,
-                    },
+                    Node::AlterTableStmt(stmt) => alter_tag(stmt.objtype),
                     Node::AlterOwnerStmt(_) => CommandTag::AlterSchema,
+                    Node::RenameStmt(stmt) => match stmt.renameType {
+                        ObjectType::OBJECT_COLUMN => alter_tag(stmt.relationType),
+                        ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
+                        kind => alter_tag(kind),
+                    },
                     Node::CreateSeqStmt(_) => CommandTag::CreateSequence,
                     Node::AlterSeqStmt(_) => CommandTag::AlterSequence,
                     Node::DefineStmt(stmt) => match stmt.kind {
@@ -859,6 +858,33 @@ impl Connection {
                 Err(error)
             }
         }
+    }
+
+    /// The new text of each view of `views` after `ALTER ... RENAME`. The old catalog gives the query of the view, and the deparse writes it with the names of `work`, as `pg_get_viewdef` gives it. The view keeps `search_path` of the statement, which the deparse uses for the names that it does not qualify.
+    fn view_texts(&self, views: &[u32], work: &mut Arc<Catalog>) -> Result<(), Error> {
+        if views.is_empty() {
+            return Ok(());
+        }
+        let old = self.reader();
+        let reader = self.reader_on(Arc::clone(work));
+        // The analyzer looks in `pg_catalog` first when `search_path` does not name it, as `recomputeNamespacePath` does.
+        let mut path = rupg_analyze::Env::search_path(&reader);
+        if !path.contains(&rupg_analyze::PG_CATALOG_NAMESPACE) {
+            path.insert(0, rupg_analyze::PG_CATALOG_NAMESPACE);
+        }
+        let mut texts = Vec::with_capacity(views.len());
+        for &oid in views {
+            let Some(rel) = work.relation(oid) else { continue };
+            let Some(query) = rupg_analyze::view_query(&old, oid)? else { continue };
+            let columns: Vec<String> = rel.columns.iter().map(|c| c.name.clone()).collect();
+            texts.push((oid, rupg_func::view_statement(&query, &rel.name, &columns, &reader)?));
+        }
+        drop(reader);
+        let catalog = Arc::make_mut(work);
+        for (oid, text) in texts {
+            catalog.set_view_text(oid, text, path.clone())?;
+        }
+        Ok(())
     }
 
     /// The rows of the tables of `TRUNCATE`. The first write of a transaction gives it a transaction ID, and the statement ends a command. When another transaction in progress changed a table, the statement waits for its end, as the lock of `TRUNCATE` waits.
@@ -1464,6 +1490,19 @@ impl Drop for Connection {
     fn drop(&mut self) {
         self.end_rows(false, false);
         self.leave();
+    }
+}
+
+/// `AlterObjectTypeCommandTag` for the kinds of relations: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
+fn alter_tag(kind: ObjectType) -> CommandTag {
+    match kind {
+        ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
+        ObjectType::OBJECT_SEQUENCE => CommandTag::AlterSequence,
+        ObjectType::OBJECT_VIEW => CommandTag::AlterView,
+        ObjectType::OBJECT_MATVIEW => CommandTag::AlterMaterializedView,
+        ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::AlterForeignTable,
+        ObjectType::OBJECT_TYPE => CommandTag::AlterType,
+        _ => CommandTag::AlterTable,
     }
 }
 
@@ -2704,6 +2743,18 @@ mod tests {
     #[test]
     fn alter_drop_constraint() {
         big_stack(|| script(include_str!("connection/alter_drop_constraint.test")));
+    }
+
+    /// `ALTER ... RENAME` of a table, a view, an index, a sequence, a column and a constraint: the row type and the array type of a table, the index of a key, the text of the views that read the renamed objects, the errors of a name that exists, and a rollback. `connection/alter_rename.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_rename() {
+        big_stack(|| script(include_str!("connection/alter_rename.test")));
+    }
+
+    /// The checks of `ALTER ... RENAME COLUMN` and `RENAME CONSTRAINT` for each kind of relation, the columns of an index, a system catalog, an array type that moves for a new row type, and `ALTER SCHEMA ... RENAME` with the views that read the schema. `connection/alter_rename_checks.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_rename_checks() {
+        big_stack(|| script(include_str!("connection/alter_rename_checks.test")));
     }
 
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
