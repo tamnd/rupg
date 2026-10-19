@@ -408,6 +408,21 @@ impl Definer<'_, '_> {
                 format!("column \"{column}\" of relation \"{}\" does not exist", target.name),
             ));
         };
+        if rel.and_then(|r| r.column(number)).is_some_and(|c| c.identity != 0) {
+            let error = Error::new(
+                SqlState::SYNTAX_ERROR,
+                format!(
+                    "column \"{column}\" of relation \"{}\" is an identity column",
+                    target.name
+                ),
+            );
+            return Err(match def {
+                Some(_) => error,
+                None => {
+                    error.with_hint("Use ALTER TABLE ... ALTER COLUMN ... DROP IDENTITY instead.")
+                }
+            });
+        }
         let (ty, typmod) = rel.and_then(|r| r.column(number)).map_or((0, -1), |c| (c.ty, c.typmod));
         self.catalog.remove_default(target.oid, number);
         let Some(node) = def else { return Ok(()) };

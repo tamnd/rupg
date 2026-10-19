@@ -113,14 +113,16 @@ fn check_writable(command: &str, session: &dyn Session) -> Result<()> {
     Ok(())
 }
 
-/// `nextval_oid`: `nextval_internal` with the check of the privileges.
+/// `nextval_oid`: `nextval_internal` with the check of the privileges. The analyzer gives a second argument `true` for the default of an identity column, which is `NextValueExpr`: that call does not check the privileges.
 fn nextval(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let relid = oid_arg(args, 0)?;
     let session = call.session;
     let (name, info) = open(relid, session)?;
     let mut sequences = local(session)?.borrow_mut();
     let elm = *sequences.init(relid, info.file);
-    check(relid, name, crate::acl::USAGE_UPDATE, session)?;
+    if !matches!(args.get(1), Some(Value::Bool(true))) {
+        check(relid, name, crate::acl::USAGE_UPDATE, session)?;
+    }
     check_writable("nextval()", session)?;
     if elm.last != elm.cached {
         let elm = sequences.init(relid, info.file);

@@ -46,6 +46,17 @@ impl Catalog {
         Ok(())
     }
 
+    /// `getIdentitySequence`: the sequence of an identity column, which has an internal dependency on the column.
+    pub fn identity_sequence(&self, table: u32, column: i16) -> Option<u32> {
+        let target = ObjRef::column(table, column);
+        self.depends
+            .iter()
+            .find(|d| {
+                d.referenced == target && d.object.class == PG_CLASS && d.kind == DepKind::Internal
+            })
+            .map(|d| d.object.oid)
+    }
+
     /// `process_owned_by`: the sequence loses its dependencies of `kind` on relations, and then gets one on the column when `column` is given.
     pub fn set_owned_by(&mut self, sequence: u32, column: Option<(u32, i16)>, kind: DepKind) {
         let me = ObjRef::new(PG_CLASS, sequence);

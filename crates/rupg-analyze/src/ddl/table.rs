@@ -1,19 +1,22 @@
 //! `CREATE TABLE`, as `transformCreateStmt` and `DefineRelation` run it. Then the statements that `transformCreateStmt` adds run in the same order as in PostgreSQL: the sequences of the `serial` columns before the table, then the indexes, the foreign keys and `OWNED BY` after it.
 
 use rupg_catalog::toast::{Shape, needs_toast};
-use rupg_catalog::{Column, MAX_COLUMNS, NewRelation, SequenceData, SequenceInfo};
+use rupg_catalog::{Column, DepKind, MAX_COLUMNS, NewRelation, SequenceData, SequenceInfo};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
-    CollateClause, ColumnDef, CompositeTypeStmt, ConstrType, Constraint, CreateStmt, Equal,
-    IndexElem, IndexStmt, Node, OnCommitAction, RangeVar, TypeName,
+    CollateClause, ColumnDef, CompositeTypeStmt, ConstrType, Constraint, CreateStmt, DefElem,
+    Equal, IndexElem, IndexStmt, Node, OnCommitAction, RangeVar, TypeName,
 };
 use rupg_types::{Value, oid};
 
+use super::comment::range_var;
+use super::sequence::conflicting;
 use super::{Definer, is_system_namespace, not_yet, references, relname};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{Expr, ExprKind, Func, FuncForm};
+use crate::expr::ExprKind;
+use crate::insert::nextval;
 use crate::typename::{names, place};
 use crate::types;
 
@@ -35,13 +38,18 @@ struct NewColumn {
     collate: Option<CollateClause>,
     is_not_null: bool,
     default: Option<RawDefault>,
+    /// `attidentity`, or 0.
+    identity: u8,
 }
 
-/// The sequence of a `serial` column.
+/// The sequence of a `serial` column or of an identity column.
 struct Serial {
     name: String,
+    namespace: u32,
     ty: u32,
     column: usize,
+    /// The options of the sequence of an identity column, with `AS` and the type of the column first, or `None` for a `serial` column.
+    identity: Option<Vec<Option<Node>>>,
     oid: u32,
 }
 
@@ -237,18 +245,25 @@ impl Definer<'_, '_> {
                 Column::new("log_cnt", oid::INT8, -1, 0),
                 Column::new("is_called", oid::BOOL, -1, 0),
             ];
-            let new =
-                NewRelation { namespace, name: serial.name.clone(), owner: self.user, columns };
-            let info = SequenceInfo {
-                ty: serial.ty,
-                start: 1,
-                increment: 1,
-                max: serial_max(serial.ty),
-                min: 1,
-                cache: 1,
-                cycle: false,
-                file: 0,
-                data: SequenceData::new(1),
+            let new = NewRelation {
+                namespace: serial.namespace,
+                name: serial.name.clone(),
+                owner: self.user,
+                columns,
+            };
+            let info = match &serial.identity {
+                Some(options) => self.identity_sequence_info(options)?,
+                None => SequenceInfo {
+                    ty: serial.ty,
+                    start: 1,
+                    increment: 1,
+                    max: serial_max(serial.ty),
+                    min: 1,
+                    cache: 1,
+                    cycle: false,
+                    file: 0,
+                    data: SequenceData::new(1),
+                },
             };
             serial.oid = self.catalog.create_sequence(new, info)?;
         }
@@ -267,8 +282,87 @@ impl Definer<'_, '_> {
         }
         for serial in &plan.serials {
             let column = i16::try_from(serial.column + 1).unwrap_or(i16::MAX);
-            self.catalog.set_sequence_owner(serial.oid, table, column);
+            if serial.identity.is_some() {
+                // `transformColumnDefinition` names the table for `OWNED BY` with the schema of the sequence, so a sequence in another schema does not find the table.
+                if serial.namespace != plan.namespace {
+                    return Err(Error::new(
+                        SqlState::UNDEFINED_TABLE,
+                        format!(
+                            "relation \"{}.{}\" does not exist",
+                            self.schema_name(serial.namespace),
+                            plan.relname
+                        ),
+                    ));
+                }
+                self.catalog.set_owned_by(serial.oid, Some((table, column)), DepKind::Internal);
+            } else {
+                self.catalog.set_sequence_owner(serial.oid, table, column);
+            }
         }
+        Ok(())
+    }
+
+    /// `generateSerialSequence` for an identity column: the name and the schema of the sequence come from `SEQUENCE NAME`, or the name comes from the names of the table and the column. The other options get `AS` with the type of the column first, so that the error for an `AS` of the statement points to it.
+    fn identity_sequence(
+        &mut self,
+        plan: &mut Plan,
+        column: &str,
+        ty: u32,
+        options: &[Option<Node>],
+    ) -> Result<()> {
+        let type_name = TypeName { typeOid: ty, typemod: -1, location: -1, ..TypeName::default() };
+        let as_type = DefElem {
+            defname: Some("as".into()),
+            arg: Some(Node::TypeName(Box::new(type_name))),
+            location: -1,
+            ..DefElem::default()
+        };
+        let mut rest = vec![Some(Node::DefElem(Box::new(as_type)))];
+        let mut name_option: Option<&DefElem> = None;
+        for option in options {
+            match option {
+                Some(Node::DefElem(def)) if def.defname.as_deref() == Some("sequence_name") => {
+                    if name_option.is_some() {
+                        return Err(conflicting(def));
+                    }
+                    name_option = Some(def);
+                }
+                _ => rest.push(option.clone()),
+            }
+        }
+        let (namespace, name) = match name_option {
+            Some(def) => {
+                let list = match &def.arg {
+                    Some(Node::List(list)) => names(list),
+                    _ => Vec::new(),
+                };
+                let rv = range_var(&list)?;
+                let namespace = if rv.schemaname.is_some() {
+                    self.creation_namespace(&rv)?
+                } else {
+                    plan.namespace
+                };
+                (namespace, relname(&rv).to_string())
+            }
+            None => {
+                let name = self.catalog.choose_relation_name(
+                    &plan.relname,
+                    Some(column),
+                    "seq",
+                    plan.namespace,
+                    false,
+                );
+                (plan.namespace, name)
+            }
+        };
+        plan.serials.push(Serial {
+            name,
+            namespace,
+            ty,
+            column: plan.columns.len(),
+            identity: Some(rest),
+            oid: 0,
+        });
         Ok(())
     }
 
@@ -338,7 +432,14 @@ impl Definer<'_, '_> {
                 plan.namespace,
                 false,
             );
-            plan.serials.push(Serial { name: sequence, ty, column: plan.columns.len(), oid: 0 });
+            plan.serials.push(Serial {
+                name: sequence,
+                namespace: plan.namespace,
+                ty,
+                column: plan.columns.len(),
+                identity: None,
+                oid: 0,
+            });
             cons.push(Constraint {
                 contype: ConstrType::CONSTR_DEFAULT,
                 location: -1,
@@ -351,14 +452,20 @@ impl Definer<'_, '_> {
         disallow_noinherit |= cons
             .iter()
             .any(|c| matches!(c.contype, ConstrType::CONSTR_IDENTITY | ConstrType::CONSTR_PRIMARY));
-        let mut column =
-            NewColumn { name: name.clone(), type_name, collate, is_not_null: false, default: None };
+        let mut column = NewColumn {
+            name: name.clone(),
+            type_name,
+            collate,
+            is_not_null: false,
+            default: None,
+            identity: 0,
+        };
+        let relname = plan.relname.clone();
         let conflict = |at: Option<usize>| {
             Error::new(
                 SqlState::SYNTAX_ERROR,
                 format!(
-                    "conflicting NULL/NOT NULL declarations for column \"{name}\" of table \"{}\"",
-                    plan.relname
+                    "conflicting NULL/NOT NULL declarations for column \"{name}\" of table \"{relname}\""
                 ),
             )
             .at_opt(at)
@@ -433,7 +540,29 @@ impl Definer<'_, '_> {
                         None => RawDefault::Serial(plan.serials.len() - 1),
                     });
                 }
-                ConstrType::CONSTR_IDENTITY => return Err(not_yet("an identity column", at)),
+                ConstrType::CONSTR_IDENTITY => {
+                    if column.identity != 0 {
+                        return Err(Error::new(
+                            SqlState::SYNTAX_ERROR,
+                            format!(
+                                "multiple identity specifications for column \"{name}\" of table \"{}\"",
+                                plan.relname
+                            ),
+                        )
+                        .at_opt(at));
+                    }
+                    self.identity_sequence(plan, &name, ty, &con.options)?;
+                    column.identity = con.generated_when;
+                    // An identity column is always not null, but the column can have a constraint already.
+                    if saw_nullable && !column.is_not_null {
+                        return Err(conflict(at));
+                    }
+                    if !saw_nullable {
+                        new_not_nulls.push(make_not_null(&name));
+                    }
+                    column.is_not_null = true;
+                    saw_nullable = true;
+                }
                 ConstrType::CONSTR_GENERATED => return Err(not_yet("a generated column", at)),
                 ConstrType::CONSTR_CHECK => new_checks.push(con),
                 ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE => {
@@ -459,6 +588,16 @@ impl Definer<'_, '_> {
                 | ConstrType::CONSTR_ATTR_ENFORCED
                 | ConstrType::CONSTR_ATTR_NOT_ENFORCED => {}
                 _ => return Err(Error::internal("column exclusion constraints are not supported")),
+            }
+            if column.default.is_some() && column.identity != 0 {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    format!(
+                        "both default and identity specified for column \"{name}\" of table \"{}\"",
+                        plan.relname
+                    ),
+                )
+                .at_opt(at));
             }
         }
         if need_notnull && !(saw_nullable && column.is_not_null) {
@@ -616,6 +755,7 @@ impl Definer<'_, '_> {
             };
             let mut new = Column::new(column.name.clone(), ty, typmod, collation);
             new.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
+            new.identity = column.identity;
             columns.push(new);
         }
         for column in &columns {
@@ -990,20 +1130,4 @@ pub(crate) fn check_attribute_type(name: &str, ty: u32, anyarray: bool) -> Resul
         _ if types::element(ty) != 0 => check_attribute_type(name, types::element(ty), false),
         _ => Ok(()),
     }
-}
-
-/// The default of a `serial` column before the cast to the type of the column: `nextval('sequence'::regclass)`.
-fn nextval(sequence: u32) -> Result<Expr> {
-    let proc = builtin::procs_named("nextval")
-        .next()
-        .ok_or_else(|| Error::internal("function nextval does not exist"))?;
-    let arg = Expr::constant(Value::Oid(sequence), oid::REGCLASS, -1, None);
-    let func = Func {
-        oid: proc.oid,
-        args: vec![arg],
-        form: FuncForm::Call,
-        variadic: false,
-        retset: false,
-    };
-    Ok(Expr::new(ExprKind::Func(func), proc.rettype))
 }

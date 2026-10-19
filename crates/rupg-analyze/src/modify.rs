@@ -130,6 +130,16 @@ impl Analyzer<'_> {
         for (index, slot) in slots.into_iter().enumerate() {
             let column = &columns[index];
             row.push(match slot {
+                Some(Some(_)) if self.identity(table, index) == b'a' => {
+                    return Err(Error::new(
+                        SqlState::GENERATED_ALWAYS,
+                        format!("column \"{}\" can only be updated to DEFAULT", column.name),
+                    )
+                    .with_detail(format!(
+                        "Column \"{}\" is an identity column defined as GENERATED ALWAYS.",
+                        column.name
+                    )));
+                }
                 Some(Some(expr)) => expr,
                 Some(None) => self.column_default(table, index, column)?,
                 None => {

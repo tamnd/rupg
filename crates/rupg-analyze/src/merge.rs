@@ -6,8 +6,7 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{
-    CmdType, MergeMatchKind, MergeStmt, MergeSupportFunc, MergeWhenClause, Node, OverridingKind,
-    RangeVar,
+    CmdType, MergeMatchKind, MergeStmt, MergeSupportFunc, MergeWhenClause, Node, RangeVar,
 };
 use rupg_types::{Value, oid};
 
@@ -16,7 +15,7 @@ use crate::agg::Kind;
 use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Join, JoinKind, Relation};
-use crate::insert::{Foreign, Write, WriteKind, not_yet, targets, with_checks};
+use crate::insert::{Foreign, Write, WriteKind, targets, with_checks};
 use crate::modify::{carried_targets, old_row, tid_target};
 use crate::returning::rewrite;
 use crate::select::{Query, Target};
@@ -295,9 +294,6 @@ impl Analyzer<'_> {
         };
         let (command, row) = match clause.commandType {
             CmdType::CMD_INSERT => {
-                if clause.r#override != OverridingKind::OVERRIDING_NOT_SET {
-                    return Err(not_yet("OVERRIDING in MERGE"));
-                }
                 let given = self.insert_targets(&clause.targetList, name, columns)?;
                 let exprs = if clause.values.is_empty() {
                     // `INSERT DEFAULT VALUES`.
@@ -305,7 +301,7 @@ impl Analyzer<'_> {
                 } else {
                     let items = self.value_items(&clause.values, Kind::ValuesSingle)?;
                     let explicit = !clause.targetList.is_empty();
-                    self.insert_row(items, table, columns, &given, explicit)?
+                    self.insert_row(items, table, columns, &given, explicit, clause.r#override)?
                 };
                 (MergeCommand::Insert, self.full_row(table, columns, &given, exprs)?)
             }
