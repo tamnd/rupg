@@ -791,10 +791,11 @@ impl Connection {
             Message::Warning(error) => Notice::warning(error),
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
         }));
-        let rewrite = defined.result.and_then(|()| self.rows_to_rewrite(node, &work));
+        let transforms = &defined.transforms;
+        let rewrite = defined.result.and_then(|()| self.rows_to_rewrite(node, &work, transforms));
         let work = Arc::new(work);
         let result = rewrite
-            .and_then(|tables| self.rewrite_rows(&tables, &work))
+            .and_then(|tables| self.rewrite_rows(&tables, &work, transforms))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work));
         let Some(lease) = self.lease.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
@@ -2679,6 +2680,24 @@ mod tests {
     #[test]
     fn alter_identity_more() {
         big_stack(|| script(include_str!("connection/alter_identity_more.test")));
+    }
+
+    /// `ALTER TABLE ... ALTER COLUMN ... TYPE` with and without `USING`, the rows with the new values, a default, a check constraint, `COLLATE`, an index and a unique index, a view, and the errors of the checks. `connection/alter_column_type.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_column_type() {
+        big_stack(|| script(include_str!("connection/alter_column_type.test")));
+    }
+
+    /// The objects on a column that `ALTER COLUMN ... TYPE` changes: a default that cannot get the new type, the errors of `USING`, the sequence of a `serial` column and of an identity column, a foreign key on both sides, an index with an operator class and with a collation, a domain, several subcommands, and a rollback. `connection/alter_column_type_dependents.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_column_type_dependents() {
+        big_stack(|| script(include_str!("connection/alter_column_type_dependents.test")));
+    }
+
+    /// The order of the checks of `ALTER COLUMN ... TYPE`, a column that two subcommands change, the collation, a pseudo-type, the row type of the table, an array, the check constraints that it parses again in the order of their OIDs, and the indexes that keep their OIDs. `connection/alter_column_type_checks.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_column_type_checks() {
+        big_stack(|| script(include_str!("connection/alter_column_type_checks.test")));
     }
 
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.

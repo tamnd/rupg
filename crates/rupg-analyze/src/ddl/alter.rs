@@ -1,6 +1,6 @@
-//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `SET NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `OWNER TO`, and `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column. The other subcommands give `0A000`.
+//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `OWNER TO`, and `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column. The other subcommands give `0A000`.
 //!
-//! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the new columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
+//! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
 
 use rupg_catalog::{ConKind, DepKind, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
@@ -11,6 +11,7 @@ use rupg_sql::nodes::{
 };
 use rupg_types::Value;
 
+use super::alter_type::{Changed, TypeCmd};
 use super::comment::not_owner;
 use super::drop::owner_word;
 use super::table::{SYSTEM_COLUMNS, constraint_index, make_not_null, not_null_column};
@@ -103,6 +104,8 @@ fn action_words(subtype: AlterTableType) -> &'static str {
 struct Passes {
     /// `AT_PASS_DROP`: `DROP DEFAULT` and `DROP IDENTITY`, in the order of the statement.
     drops: Vec<DropCmd>,
+    /// `AT_PASS_ALTER_TYPE`: `ALTER COLUMN ... TYPE`, in the order of the statement.
+    types: Vec<TypeCmd>,
     /// `AT_PASS_ADD_COL`: `ADD COLUMN` with its `IF NOT EXISTS`, in the order of the statement.
     columns: Vec<(ColumnDef, bool)>,
     /// `AT_PASS_ADD_CONSTR`: the constraints of `ADD CONSTRAINT` before their transform.
@@ -265,6 +268,11 @@ impl Definer<'_, '_> {
                 };
                 passes.columns.push(((**def).clone(), cmd.missing_ok));
             }
+            AlterTableType::AT_AlterColumnType => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let change = self.prep_alter_type(target, cmd)?;
+                passes.types.push(change);
+            }
             AlterTableType::AT_SetNotNull => {
                 self.simple_permissions(target, cmd, TABLE)?;
                 let column = cmd.name.as_deref().unwrap_or_default();
@@ -383,6 +391,14 @@ impl Definer<'_, '_> {
                 }
             }
         }
+        let original = match self.catalog.relation(target.oid) {
+            Some(rel) if !passes.types.is_empty() => rel.columns.clone(),
+            _ => Vec::new(),
+        };
+        let mut changed = Changed::default();
+        for cmd in &passes.types {
+            self.exec_alter_type(target, cmd, &original, &mut changed)?;
+        }
         let mut column_constraints = Vec::new();
         for (def, if_not_exists) in &passes.columns {
             if let Some(rest) = self.add_column(target, def, *if_not_exists)? {
@@ -394,9 +410,10 @@ impl Definer<'_, '_> {
                 column_constraints.extend(rest.into_iter().map(|con| (con, defaulted)));
             }
         }
-        if !passes.columns.is_empty() {
+        if !passes.columns.is_empty() || !passes.types.is_empty() {
             self.toast_after_columns(target.oid)?;
         }
+        self.after_alter_type(&original, &changed)?;
         let mut not_nulls = Vec::new();
         let mut indexes = Vec::new();
         let mut others: Vec<Other> = Vec::new();
@@ -425,8 +442,8 @@ impl Definer<'_, '_> {
                 }
             }
         }
-        // `ATRewriteTables` scans the table once to check the new not-null and check constraints.
-        let mut verify = false;
+        // `ATRewriteTables` scans the table once to write the rows with their new types and to check the new not-null and check constraints.
+        let mut verify = !passes.types.is_empty();
         for con in &not_nulls {
             verify |= self.alter_not_null(target, con)?;
         }
@@ -481,7 +498,7 @@ impl Definer<'_, '_> {
     }
 
     /// The scope of the analyzer with the columns of the table, for the expressions of a default or a check constraint.
-    fn table_scope(&mut self, table: u32) {
+    pub(super) fn table_scope(&mut self, table: u32) {
         self.an.scope = crate::from::Scope::default();
         if let Some(rel) = self.catalog.relation(table) {
             let columns: Vec<(String, u32, i32)> =

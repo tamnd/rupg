@@ -1286,6 +1286,21 @@ pub fn deparse_expression(text: &str, session: &dyn Session) -> Result<String> {
     deparse(text, &[], false, session)
 }
 
+/// `deparse_expression` of a stored expression of the relation `relid`, with the names of its columns, as `pg_get_expr` gives it.
+///
+/// # Errors
+///
+/// An internal error for a relation that the catalog does not have, and the errors of the deparse.
+pub fn deparse_relation_expression(
+    text: &str,
+    relid: u32,
+    session: &dyn Session,
+) -> Result<String> {
+    let columns = column_names(relid, session)
+        .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {relid}")))?;
+    deparse(text, &columns, false, session)
+}
+
 /// The expressions of a stored form. A list is `(...)`, and an expression is `{...}`.
 fn stored(text: &str) -> Result<Vec<Expr>> {
     if text.trim_start().starts_with('(') {
