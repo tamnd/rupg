@@ -1,4 +1,4 @@
-//! The transaction block of a session: the values of `blockState` in `xact.c`, without the states of subtransactions and of parallel workers.
+//! The transaction block of a session: the values of `blockState` in `xact.c`, without the states of parallel workers. A subtransaction has no state of its own: `TBLOCK_SUBINPROGRESS` is [`Block::InProgress`] with savepoints, and `TBLOCK_SUBABORT` is [`Block::Abort`] with savepoints.
 //!
 //! The session has no transaction of the engine yet. The block decides what the client can see: the status byte of `ReadyForQuery`, the warnings and the tags of `BEGIN`, `COMMIT` and `ROLLBACK`, the error `25P02` in a failed block, and the end of each transaction, where the settings keep or restore the values that `SET` changed. Each method has the name of the function of `xact.c` that it follows.
 
@@ -37,18 +37,21 @@ pub enum Ending {
     Commit,
     /// The transaction rolls back.
     Rollback,
+    /// `AbortSubTransaction`: the innermost subtransaction rolls back to its savepoint, and the block fails. The transaction goes on.
+    Savepoint,
 }
 
-/// The transaction block and the `AND CHAIN` flag of the statement that ends it.
-#[derive(Clone, Copy, Debug)]
+/// The transaction block, the `AND CHAIN` flag of the statement that ends it, and the names of the savepoints, the outermost first.
+#[derive(Clone, Debug)]
 pub struct Transaction {
     block: Block,
     chain: bool,
+    savepoints: Vec<String>,
 }
 
 impl Default for Transaction {
     fn default() -> Transaction {
-        Transaction { block: Block::Default, chain: false }
+        Transaction { block: Block::Default, chain: false, savepoints: Vec::new() }
     }
 }
 
@@ -58,6 +61,11 @@ fn only_in_blocks(statement: &str) -> Error {
         SqlState::NO_ACTIVE_SQL_TRANSACTION,
         format!("{statement} can only be used in transaction blocks"),
     )
+}
+
+/// The error of `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT` with a name that no savepoint has.
+fn no_savepoint(name: &str) -> Error {
+    Error::new(SqlState::S_E_INVALID_SPECIFICATION, format!("savepoint \"{name}\" does not exist"))
 }
 
 /// The warning of `COMMIT` and `ROLLBACK` outside of a block.
@@ -88,6 +96,11 @@ impl Transaction {
     /// True in a failed block, where only `COMMIT` and `ROLLBACK` run.
     pub fn failed(&self) -> bool {
         self.block == Block::Abort
+    }
+
+    /// The number of savepoints, which is the nesting level of the current subtransaction. It is 0 outside of a subtransaction.
+    pub fn depth(&self) -> usize {
+        self.savepoints.len()
     }
 
     /// True when the end of the current statement commits the transaction, as [`Transaction::finish_command`] decides.
@@ -154,6 +167,11 @@ impl Transaction {
                 }
                 true
             }
+            // The subtransaction rolled back when it failed, but the transaction did not.
+            Block::Abort if !self.savepoints.is_empty() => {
+                self.block = Block::AbortPending;
+                false
+            }
             Block::Abort => {
                 self.block = Block::AbortEnd;
                 false
@@ -173,6 +191,7 @@ impl Transaction {
         let mut warning = None;
         match self.block {
             Block::InProgress => self.block = Block::AbortPending,
+            Block::Abort if !self.savepoints.is_empty() => self.block = Block::AbortPending,
             Block::Abort => self.block = Block::AbortEnd,
             Block::Implicit | Block::Started => {
                 if chain {
@@ -187,6 +206,53 @@ impl Transaction {
         Ok(warning)
     }
 
+    /// `DefineSavepoint`: `SAVEPOINT` starts a subtransaction with the name.
+    ///
+    /// # Errors
+    ///
+    /// `25P01` outside of a block that the client started.
+    pub fn savepoint(&mut self, name: &str) -> Result<(), Error> {
+        if self.block != Block::InProgress {
+            return Err(only_in_blocks("SAVEPOINT"));
+        }
+        self.savepoints.push(name.to_owned());
+        Ok(())
+    }
+
+    /// `ReleaseSavepoint`: `RELEASE SAVEPOINT` commits the innermost subtransaction with the name and the subtransactions in it. It gives the number of savepoints that stay.
+    ///
+    /// # Errors
+    ///
+    /// `25P01` outside of a block that the client started, and `3B001` when no savepoint has the name.
+    pub fn release(&mut self, name: &str) -> Result<usize, Error> {
+        if self.block != Block::InProgress {
+            return Err(only_in_blocks("RELEASE SAVEPOINT"));
+        }
+        let at = self.find(name)?;
+        self.savepoints.truncate(at);
+        Ok(at)
+    }
+
+    /// `RollbackToSavepoint`: `ROLLBACK TO SAVEPOINT` rolls back the innermost subtransaction with the name and the subtransactions in it, and starts the subtransaction again. A failed block goes on. It gives the number of savepoints that stay, with the savepoint of the name.
+    ///
+    /// # Errors
+    ///
+    /// `25P01` outside of a block that the client started, and `3B001` when no savepoint has the name.
+    pub fn rollback_to(&mut self, name: &str) -> Result<usize, Error> {
+        if !matches!(self.block, Block::InProgress | Block::Abort) {
+            return Err(only_in_blocks("ROLLBACK TO SAVEPOINT"));
+        }
+        let at = self.find(name)?;
+        self.savepoints.truncate(at + 1);
+        self.block = Block::InProgress;
+        Ok(at + 1)
+    }
+
+    /// The place of the innermost savepoint with the name.
+    fn find(&self, name: &str) -> Result<usize, Error> {
+        self.savepoints.iter().rposition(|saved| saved == name).ok_or_else(|| no_savepoint(name))
+    }
+
     /// `CommitTransactionCommand`: the end of a statement. It gives what happens to the transaction, and true when `AND CHAIN` starts a new block at once.
     pub fn finish_command(&mut self) -> (Ending, bool) {
         let chain = std::mem::take(&mut self.chain);
@@ -199,19 +265,26 @@ impl Transaction {
             block => (Ending::None, block),
         };
         let chained = chain && next == Block::Default;
+        if next == Block::Default {
+            self.savepoints.clear();
+        }
         self.block = if chained { Block::InProgress } else { next };
         (ending, chained)
     }
 
-    /// `AbortCurrentTransaction`: the end of a statement that failed. A block that the client started becomes a failed block, and any other transaction ends.
+    /// `AbortCurrentTransaction`: the end of a statement that failed. A block that the client started becomes a failed block, and any other transaction ends. In a subtransaction only the subtransaction rolls back.
     pub fn abort_current(&mut self) -> Ending {
         self.chain = false;
         let (ending, next) = match self.block {
             Block::Default | Block::Abort => (Ending::None, self.block),
+            Block::InProgress if !self.savepoints.is_empty() => (Ending::Savepoint, Block::Abort),
             Block::InProgress => (Ending::Rollback, Block::Abort),
             Block::AbortEnd => (Ending::None, Block::Default),
             _ => (Ending::Rollback, Block::Default),
         };
+        if next == Block::Default {
+            self.savepoints.clear();
+        }
         self.block = next;
         ending
     }
@@ -293,6 +366,36 @@ mod tests {
         assert!(t.begin().is_none());
         assert_eq!(t.finish_command(), (Ending::None, false));
         assert_eq!(t.block(), Block::InProgress);
+    }
+
+    #[test]
+    fn savepoints() {
+        let mut t = Transaction::default();
+        t.start_command();
+        assert_eq!(t.savepoint("a").unwrap_err().state(), SqlState::NO_ACTIVE_SQL_TRANSACTION);
+        t.abort_current();
+        statement(&mut t, |t| assert!(t.begin().is_none()));
+        statement(&mut t, |t| t.savepoint("a").unwrap());
+        statement(&mut t, |t| t.savepoint("b").unwrap());
+        statement(&mut t, |t| t.savepoint("a").unwrap());
+        assert_eq!(t.depth(), 3);
+        assert_eq!(t.clone_run(|t| t.rollback_to("a").unwrap()), 3);
+        assert_eq!(t.clone_run(|t| t.release("b").unwrap()), 1);
+        assert_eq!(
+            t.clone_run(|t| t.release("b").unwrap_err().state()),
+            SqlState::S_E_INVALID_SPECIFICATION
+        );
+        t.start_command();
+        assert_eq!(t.abort_current(), Ending::Savepoint);
+        assert!(t.failed());
+        assert_eq!(t.clone_run(|t| t.rollback_to("a").unwrap()), 1);
+        assert_eq!(t.block(), Block::InProgress);
+        t.start_command();
+        assert_eq!(t.abort_current(), Ending::Savepoint);
+        // COMMIT of a failed subtransaction rolls back the transaction.
+        let commit = statement(&mut t, |t| assert_eq!(t.commit(false).unwrap(), (false, None)));
+        assert_eq!(commit, (Ending::Rollback, false));
+        assert_eq!(t.depth(), 0);
     }
 
     impl Transaction {

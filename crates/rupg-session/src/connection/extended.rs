@@ -132,6 +132,8 @@ pub(crate) struct Portal {
     pub(super) run: Run,
     /// The transaction block failed after the portal was made, so the portal cannot run.
     pub(super) failed: bool,
+    /// The number of savepoints when the portal was made. A rollback of the subtransaction of this level removes the portal.
+    pub(super) level: usize,
 }
 
 impl Portal {
@@ -145,6 +147,7 @@ impl Portal {
             params: Vec::new(),
             run,
             failed: false,
+            level: 0,
         }
     }
 
@@ -381,7 +384,9 @@ impl Connection {
             }
             None => Vec::new(),
         };
-        let portal = Portal { statement, plan, formats, params, run: Run::Ready, failed: false };
+        let level = self.transaction.depth();
+        let portal =
+            Portal { statement, plan, formats, params, run: Run::Ready, failed: false, level };
         self.portals.insert(bind.portal, portal);
         out.bind_complete();
         Ok(())
@@ -522,6 +527,8 @@ impl Connection {
                     self.end_writes(writes, &params, Vec::new())?;
                     Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
                 }
+            } else if let Some(stmt) = utility::is_savepoint(node) {
+                self.savepoint(stmt)?
             } else if prepare::is_prepare(node) {
                 let mut notices = Vec::new();
                 let result = self.run_prepare(node, &statement.text, &formats, &mut notices, 0);

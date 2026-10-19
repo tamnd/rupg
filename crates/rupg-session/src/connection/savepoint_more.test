@@ -1,0 +1,342 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SET DateStyle = 'ISO, MDY'
+SET
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SET DateStyle = 'SQL, DMY'
+SET
+DateStyle=SQL, DMY
+> SHOW DateStyle
+fields DateStyle:25:-1:-1
+row SQL, DMY
+SHOW
+> ROLLBACK TO a
+ROLLBACK
+DateStyle=ISO, MDY
+> SHOW DateStyle
+fields DateStyle:25:-1:-1
+row ISO, MDY
+SHOW
+> SET LOCAL DateStyle = 'Postgres, DMY'
+SET
+DateStyle=Postgres, DMY
+> SAVEPOINT b
+SAVEPOINT
+> SET DateStyle = 'German'
+SET
+DateStyle=German, DMY
+> RELEASE b
+RELEASE
+> SHOW DateStyle
+fields DateStyle:25:-1:-1
+row German, DMY
+SHOW
+> SAVEPOINT c
+SAVEPOINT
+> SET search_path = nope
+SET
+search_path=nope
+> SELECT 1/0
+ERROR 22012 division by zero
+search_path="$user", public
+> ROLLBACK TO c
+ROLLBACK
+> SHOW search_path
+fields search_path:25:-1:-1
+row "$user", public
+SHOW
+> COMMIT
+COMMIT
+> SHOW DateStyle
+fields DateStyle:25:-1:-1
+row German, DMY
+SHOW
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SET DateStyle = 'SQL, DMY'
+SET
+DateStyle=SQL, DMY
+> RELEASE a
+RELEASE
+> COMMIT
+COMMIT
+> SHOW DateStyle
+fields DateStyle:25:-1:-1
+row SQL, DMY
+SHOW
+> RESET DateStyle
+RESET
+DateStyle=ISO, MDY
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SET TRANSACTION ISOLATION LEVEL REPEATABLE READ
+ERROR 25001 SET TRANSACTION ISOLATION LEVEL must not be called in a subtransaction
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SET TRANSACTION ISOLATION LEVEL READ COMMITTED
+SET
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SET TRANSACTION READ ONLY
+SET
+> RELEASE a
+RELEASE
+> SHOW transaction_read_only
+fields transaction_read_only:25:-1:-1
+row off
+SHOW
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SET TRANSACTION DEFERRABLE
+ERROR 25001 SET TRANSACTION [NOT] DEFERRABLE cannot be called within a subtransaction
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> CREATE TABLE s (id int)
+CREATE TABLE
+> INSERT INTO s VALUES (1)
+INSERT 0 1
+> ROLLBACK TO a
+ROLLBACK
+> SELECT * FROM s
+ERROR 42P01 relation "s" does not exist at 15
+> ROLLBACK TO a
+ROLLBACK
+> CREATE TABLE s (id int)
+CREATE TABLE
+> SAVEPOINT b
+SAVEPOINT
+> CREATE INDEX s_id ON s (id)
+CREATE INDEX
+> ROLLBACK TO b
+ROLLBACK
+> SELECT indexname FROM pg_indexes WHERE tablename = 's'
+fields indexname@pg_indexes.3:19:64:-1
+SELECT 0
+> COMMIT
+COMMIT
+> SELECT count(*) FROM s
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE SEQUENCE q
+CREATE SEQUENCE
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SELECT nextval('q')
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> ALTER SEQUENCE q RESTART 100
+ALTER SEQUENCE
+> SELECT nextval('q')
+fields nextval:20:8:-1
+row 100
+SELECT 1
+> ROLLBACK TO a
+ROLLBACK
+> SELECT nextval('q')
+fields nextval:20:8:-1
+row 2
+SELECT 1
+> COMMIT
+COMMIT
+> CREATE TABLE p (id int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE c (pid int REFERENCES p DEFERRABLE INITIALLY DEFERRED)
+CREATE TABLE
+> BEGIN
+BEGIN
+> INSERT INTO p VALUES (1)
+INSERT 0 1
+> SAVEPOINT a
+SAVEPOINT
+> INSERT INTO c VALUES (2)
+INSERT 0 1
+> ROLLBACK TO a
+ROLLBACK
+> INSERT INTO c VALUES (1)
+INSERT 0 1
+> COMMIT
+COMMIT
+> SELECT * FROM c
+fields pid@c.1:23:4:-1
+row 1
+SELECT 1
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> INSERT INTO c VALUES (3)
+INSERT 0 1
+> RELEASE a
+RELEASE
+> COMMIT
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(3) is not present in table "p".
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SET CONSTRAINTS ALL IMMEDIATE
+SET CONSTRAINTS
+> ROLLBACK TO a
+ROLLBACK
+> INSERT INTO c VALUES (4)
+INSERT 0 1
+> SAVEPOINT b
+SAVEPOINT
+> SET CONSTRAINTS ALL IMMEDIATE
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(4) is not present in table "p".
+> ROLLBACK TO b
+ROLLBACK
+> ROLLBACK
+ROLLBACK
+> INSERT INTO s SELECT generate_series(1, 5)
+INSERT 0 5
+> BEGIN
+BEGIN
+> DECLARE c1 CURSOR FOR SELECT id FROM s ORDER BY id
+DECLARE CURSOR
+> FETCH 1 FROM c1
+fields id@s.1:23:4:-1
+row 1
+FETCH 1
+> SAVEPOINT a
+SAVEPOINT
+> FETCH 1 FROM c1
+fields id@s.1:23:4:-1
+row 2
+FETCH 1
+> DECLARE c2 CURSOR FOR SELECT id FROM s ORDER BY id
+DECLARE CURSOR
+> FETCH 1 FROM c2
+fields id@s.1:23:4:-1
+row 1
+FETCH 1
+> ROLLBACK TO a
+ROLLBACK
+> FETCH 1 FROM c1
+fields id@s.1:23:4:-1
+row 3
+FETCH 1
+> FETCH 1 FROM c2
+ERROR 34000 cursor "c2" does not exist
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> DECLARE c1 CURSOR FOR SELECT id FROM s ORDER BY id
+DECLARE CURSOR
+> SAVEPOINT a
+SAVEPOINT
+> DECLARE c2 CURSOR FOR SELECT id FROM s ORDER BY id
+DECLARE CURSOR
+> RELEASE a
+RELEASE
+> FETCH 1 FROM c2
+fields id@s.1:23:4:-1
+row 1
+FETCH 1
+> SAVEPOINT b
+SAVEPOINT
+> FETCH 1 FROM c1
+fields id@s.1:23:4:-1
+row 1
+FETCH 1
+> SELECT 1/0
+ERROR 22012 division by zero
+> ROLLBACK TO b
+ROLLBACK
+> FETCH 1 FROM c1
+fields id@s.1:23:4:-1
+row 2
+FETCH 1
+> FETCH 1 FROM c2
+fields id@s.1:23:4:-1
+row 2
+FETCH 1
+> COMMIT
+COMMIT
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> TRUNCATE s
+TRUNCATE TABLE
+> SELECT count(*) FROM s
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK TO a
+ROLLBACK
+> SELECT count(*) FROM s
+fields count:20:8:-1
+row 5
+SELECT 1
+> COMMIT
+COMMIT
+> BEGIN
+BEGIN
+> SELECT pg_advisory_xact_lock(5)
+fields pg_advisory_xact_lock:2278:4:-1
+row 
+SELECT 1
+> SAVEPOINT a
+SAVEPOINT
+> SELECT pg_advisory_xact_lock(6)
+fields pg_advisory_xact_lock:2278:4:-1
+row 
+SELECT 1
+> ROLLBACK TO a
+ROLLBACK
+> COMMIT
+COMMIT
+> PREPARE ps AS SELECT 1
+PREPARE
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> PREPARE ps2 AS SELECT 2
+PREPARE
+> ROLLBACK TO a
+ROLLBACK
+> EXECUTE ps2
+fields ?column?:23:4:-1
+row 2
+SELECT 1
+> COMMIT
+COMMIT
+> DEALLOCATE ps2
+DEALLOCATE
+> DROP TABLE s, c, p
+DROP TABLE
+> DROP SEQUENCE q
+DROP SEQUENCE

@@ -682,6 +682,20 @@ impl Heap {
         state.waits.remove(&xid);
     }
 
+    /// `AbortSubTransaction` for the rows: the versions that the commands of `xid` from `command` on inserted go, and the versions that they deleted stay. A transaction has no transaction IDs for its subtransactions, so the command of each change tells the changes of the subtransaction from the changes before it.
+    pub(crate) fn rollback_to(&self, xid: u32, command: u32) {
+        let mut state = self.state();
+        for table in state.tables.values_mut() {
+            table.versions.retain(|version| version.xmin != xid || version.cmin < command);
+            let deleted = |version: &&mut Version| version.xmax == xid && version.cmax >= command;
+            for version in table.versions.iter_mut().filter(deleted) {
+                version.xmax = 0;
+                version.cmax = 0;
+                version.next = 0;
+            }
+        }
+    }
+
     /// Removes the rows of the tables of a database that `keep` does not keep, after a commit drops the tables.
     pub(crate) fn drop_tables(&self, database: u32, keep: impl Fn(u32) -> bool) {
         self.state().tables.retain(|&(db, relation), _| db != database || keep(relation));
@@ -769,6 +783,21 @@ mod tests {
         assert_eq!(heap.rows(7, &view(heap.snapshot(), 0, 0)).len(), 1);
         heap.abort(a);
         assert_eq!(heap.rows(7, &view(heap.snapshot(), 0, 0)).len(), 1);
+    }
+
+    #[test]
+    fn a_rollback_to_a_savepoint_undoes_the_later_commands() {
+        let heap = Heap::default();
+        let a = heap.begin(1);
+        let row = |n| vec![vec![Value::Int4(n)]];
+        heap.insert(7, &view(heap.snapshot(), a, 0), row(1), &[], &[]).unwrap();
+        heap.insert(7, &view(heap.snapshot(), a, 1), row(2), &[], &[]).unwrap();
+        assert_eq!(heap.truncate(7, &view(heap.snapshot(), a, 2)), None);
+        assert_eq!(heap.rows(7, &view(heap.snapshot(), a, 3)).len(), 0);
+        heap.rollback_to(a, 1);
+        let rows = heap.rows(7, &view(heap.snapshot(), a, 3));
+        assert_eq!(rows.len(), 1);
+        assert_eq!(rows[0][0], Value::Int4(1));
     }
 
     #[test]

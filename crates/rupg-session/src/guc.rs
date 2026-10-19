@@ -13,7 +13,9 @@ mod settings;
 mod status;
 
 pub use check::{ZoneError, encoding, split_identifiers, zone};
-pub use settings::{Action, Arg, Characteristics, Current, Origin, Settings, Source, flatten};
+pub use settings::{
+    Action, Arg, Characteristics, Current, Origin, Savepoint, Settings, Source, flatten,
+};
 pub use status::{HONORED, REFUSED, Status, refuses, status};
 
 use crate::generated::guc::PARAMETERS;
