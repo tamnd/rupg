@@ -2537,7 +2537,7 @@ pub fn check_input(ty: u32, value: &Value, session: &dyn Session) -> Result<()> 
     }
 }
 
-/// The checks of [`check_input`] as `domain_check_safe` makes them: the error of the first check constraint that rejects the value is a soft error, and `None` means that the value passes.
+/// The checks of [`check_input`] as `domain_check_safe` makes them: the error of the first check constraint that rejects the value is a soft error, and `None` means that the value passes. A null value of a domain must pass the not-null constraint and the check constraints of the domain, as `domain_in` checks it for a null input.
 ///
 /// # Errors
 ///
@@ -2548,7 +2548,6 @@ pub fn input_failure(ty: u32, value: &Value, session: &dyn Session) -> Result<Op
         Value::Array(array) if builtin::domain_by_oid(element).is_some() => {
             (element, array.values.iter().flatten().collect())
         }
-        Value::Null => return Ok(None),
         value if builtin::domain_by_oid(ty).is_some() => (ty, vec![value]),
         _ => return Ok(None),
     };

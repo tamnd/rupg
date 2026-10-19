@@ -1090,6 +1090,7 @@ impl Connection {
             Frontend::CopyFail(message) => Err(copy.fail(message)),
             _ => self.copy_done(&mut copy),
         };
+        self.notices(&mut copy.notices, "", &[], out);
         match result {
             Ok(count) => {
                 let failed = self.resume_query(&copy.text, copy.index, count, out);
@@ -4107,6 +4108,12 @@ mod tests {
     #[test]
     fn copy_from_rows() {
         big_stack(|| script(include_str!("connection/copy_from_rows.test")));
+    }
+
+    /// `COPY ... FROM STDIN` with `DEFAULT`, `ON_ERROR IGNORE` and `ON_ERROR SET_NULL`, `REJECT_LIMIT` and `LOG_VERBOSITY`, and the checks of domains in the input of the fields. `connection/copy_from_options.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn copy_from_options() {
+        big_stack(|| script(include_str!("connection/copy_from_options.test")));
     }
 
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.

@@ -25,7 +25,7 @@ pub struct CopyRelation {
 }
 
 /// The table of a `COPY ... FROM`, as `DoCopy` and `BeginCopyFrom` open it.
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CopyTarget {
     /// The OID of the relation.
     pub relid: u32,
@@ -111,21 +111,25 @@ pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Co
     Ok(CopyRelation { name, columns, selected, query: select.into() })
 }
 
-/// The `INSERT` that writes the rows of a `COPY ... FROM`, as `CopyFrom` fills a row: the parameter `$n` is the value of the selected column `n`, and the other columns get their defaults. `OVERRIDING SYSTEM VALUE` lets the data give a value to an identity column `GENERATED ALWAYS`, as `COPY` does.
+/// The `INSERT` that writes the rows of a `COPY ... FROM`, as `CopyFrom` fills a row: the parameter `$n` is the value of the selected column `n`, and the other columns get their defaults. `defaults` is true for a selected column whose field is the marker of `DEFAULT`. Such a column also gets its default, and the parameters skip it. `OVERRIDING SYSTEM VALUE` lets the data give a value to an identity column `GENERATED ALWAYS`, as `COPY` does.
 #[must_use]
-pub fn copy_insert(target: &CopyTarget, rv: &RangeVar) -> Node {
-    let cols = target
+pub fn copy_insert(target: &CopyTarget, rv: &RangeVar, defaults: &[bool]) -> Node {
+    let cols: Vec<_> = target
         .selected
         .iter()
-        .map(|&i| {
+        .enumerate()
+        .filter(|&(k, _)| !defaults.get(k).copied().unwrap_or(false))
+        .map(|(_, &i)| {
             let name = Some(target.columns[i].as_str().into());
             Some(ResTarget { name, location: -1, ..Default::default() }.into())
         })
         .collect();
+    // With no columns, the statement is `INSERT ... DEFAULT VALUES`.
+    let select = (!cols.is_empty()).then(|| values(cols.len()).into());
     let insert = InsertStmt {
         relation: Some(Box::new(RangeVar { alias: None, location: -1, ..rv.clone() })),
         cols,
-        selectStmt: Some(values(target.selected.len()).into()),
+        selectStmt: select,
         r#override: OverridingKind::OVERRIDING_SYSTEM_VALUE,
         ..Default::default()
     };
