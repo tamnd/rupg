@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `ALTER TABLE ... ALTER COLUMN ... SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION`, and `SET` and `RESET` of the column options, with `STORAGE` and `COMPRESSION` in `CREATE TABLE`. The catalog keeps `attstattarget`, `attstorage`, `attcompression` and `attoptions` (#422).
+
 ## 0.1.48 (2026-10-20)
 
 ### Added
