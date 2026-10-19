@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER TABLE ... ADD COLUMN` and `ALTER COLUMN ... SET NOT NULL`. A statement that changes a table with rows now changes and checks the rows, so `ADD COLUMN`, `ADD CONSTRAINT`, `SET NOT NULL` and `CREATE UNIQUE INDEX` work on a table with rows (#415).
 - `COPY ... FROM STDIN` reads rows with `DEFAULT`, `ON_ERROR IGNORE`, `ON_ERROR SET_NULL`, `REJECT_LIMIT` and `LOG_VERBOSITY`, and the input of a field of a domain checks the constraints of the domain (#414).
 - `COPY ... FROM STDIN` reads rows in the text, CSV and binary formats, with the defaults of the other columns, `FORCE_NULL`, `FORCE_NOT_NULL`, the condition `WHERE`, the constraints and the foreign keys of the table (#413).
 
