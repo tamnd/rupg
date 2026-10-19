@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.47 (2026-10-19)
+
 ### Added
 
 - `ALTER TABLE ... ADD COLUMN` and `ALTER COLUMN ... SET NOT NULL`. A statement that changes a table with rows now changes and checks the rows, so `ADD COLUMN`, `ADD CONSTRAINT`, `SET NOT NULL` and `CREATE UNIQUE INDEX` work on a table with rows (#415).
