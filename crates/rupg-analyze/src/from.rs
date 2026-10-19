@@ -575,6 +575,15 @@ impl Analyzer<'_> {
 
     /// `parse_sub_analyze`: the query tree of a subquery of this query, which sees the queries outside this query. It sees the parts of `FROM` of this query only with `LATERAL`.
     pub(crate) fn sub_select(&mut self, stmt: &SelectStmt, lateral: bool) -> Result<crate::Query> {
+        self.sub_level(lateral, |analyzer| analyzer.select(stmt))
+    }
+
+    /// The analysis `f` of a statement in a new level below this query, as `parse_sub_analyze` makes a `ParseState` with this query as its parent.
+    pub(crate) fn sub_level(
+        &mut self,
+        lateral: bool,
+        f: impl FnOnce(&mut Self) -> Result<crate::Query>,
+    ) -> Result<crate::Query> {
         let mut scope = std::mem::take(&mut self.scope);
         let before = scope.lateral.len();
         let hidden = std::mem::take(&mut scope.namespace);
@@ -585,7 +594,7 @@ impl Analyzer<'_> {
         let has_aggs = std::mem::replace(&mut self.has_aggs, false);
         self.outer_kinds.push((None, has_aggs));
         let srfs = self.srfs;
-        let result = self.select(stmt);
+        let result = f(self);
         self.srfs = srfs;
         self.has_aggs = self.outer_kinds.pop().map_or(has_aggs, |(_, has_aggs)| has_aggs);
         self.kind = kind;

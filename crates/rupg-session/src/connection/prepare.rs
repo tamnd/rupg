@@ -123,15 +123,15 @@ impl Connection {
             None => None,
         };
         statement.count_plan(reader.settings().get("plan_cache_mode").as_deref());
-        if let Some(plan) = &plan
-            && plan.write().is_some()
-        {
-            let rows = plan.run(&params, &reader)?;
-            let view = reader.view().cloned().unwrap_or_default();
-            return self.write_rows(plan, &params, &view, rows, formats);
-        }
         if let Some(plan) = plan {
+            let view = reader.view().cloned().unwrap_or_default();
+            let (plan, writes) = self.start_writes(plan, &params, &view)?;
+            if plan.write().is_some() {
+                let rows = plan.run(&params, &reader)?;
+                return self.write_rows(&plan, &params, &view, rows, formats, writes);
+            }
             let rows = query::run(&plan, &params, &reader, formats)?;
+            self.end_writes(writes, &params, Vec::new())?;
             let columns = statement.columns.clone().unwrap_or_default();
             return Ok(Done::Rows { columns, rows, tag: CommandTag::Select });
         }

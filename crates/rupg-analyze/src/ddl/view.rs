@@ -29,6 +29,12 @@ impl Definer<'_, '_> {
             ));
         }
         let query = self.an.select(select)?;
+        if query.ctes.iter().any(|c| c.write.is_some()) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "views must not contain data-modifying statements in WITH",
+            ));
+        }
         if stmt.withCheckOption != ViewCheckOption::NO_CHECK_OPTION {
             return Err(not_yet("WITH CHECK OPTION", None));
         }

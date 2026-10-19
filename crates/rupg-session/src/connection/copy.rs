@@ -173,7 +173,10 @@ impl Connection {
         let binary = options.format == Format::Binary;
         let formats = vec![i16::from(binary); selected.len()];
         *started = Some((binary, selected.len()));
+        let view = reader.view().cloned().unwrap_or_default();
+        let (plan, writes) = self.start_writes(plan, &[], &view)?;
         let rows = query::run(&plan, &[], &reader, &formats)?;
+        self.end_writes(writes, &[], Vec::new())?;
         let names: Vec<&str> = selected.iter().map(|&i| columns[i].as_str()).collect();
         let data =
             if binary { binary_rows(&rows) } else { text_rows(&options, &names, &force, &rows) };

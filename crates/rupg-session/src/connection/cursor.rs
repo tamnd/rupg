@@ -298,6 +298,12 @@ impl Connection {
         let plan = query::plan(node, &reader, params);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
+        if plan.modifying_cte() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "DECLARE CURSOR must not contain data-modifying statements in WITH",
+            ));
+        }
         // `transformDeclareCursorStmt`: a cursor that locks rows must be read-only.
         if let Some(clause) = plan.lock_clause() {
             let checks = [

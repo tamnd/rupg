@@ -1,0 +1,132 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int PRIMARY KEY, v text)
+CREATE TABLE
+> CREATE TABLE log (id int, v text, what text)
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'a'), (2, 'b'), (3, 'c'), (4, 'd')
+INSERT 0 4
+> WITH d AS (DELETE FROM t WHERE id = 1 RETURNING *) INSERT INTO log SELECT id, v, 'del' FROM d
+INSERT 0 1
+> SELECT * FROM log ORDER BY id
+fields id@log.1:23:4:-1,v@log.2:25:-1:-1,what@log.3:25:-1:-1
+row 1,a,del
+SELECT 1
+> WITH d AS (DELETE FROM t WHERE id = 2 RETURNING id, v) SELECT * FROM d
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 2,b
+SELECT 1
+> WITH u AS (UPDATE t SET v = v || '!' WHERE id >= 3 RETURNING id, v) SELECT count(*), max(v) FROM u
+fields count:20:8:-1,max:25:-1:-1
+row 2,d!
+SELECT 1
+> WITH i AS (INSERT INTO t VALUES (5, 'e') RETURNING id) SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,c!
+row 4,d!
+SELECT 2
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,c!
+row 4,d!
+row 5,e
+SELECT 3
+> WITH i AS (INSERT INTO t VALUES (6, 'f') RETURNING *), j AS (INSERT INTO log SELECT id, v, 'ins' FROM i RETURNING *) SELECT * FROM j
+fields id@log.1:23:4:-1,v@log.2:25:-1:-1,what@log.3:25:-1:-1
+row 6,f,ins
+SELECT 1
+> WITH d AS (DELETE FROM t WHERE id = 6) SELECT 1 AS one
+fields one:23:4:-1
+row 1
+SELECT 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,c!
+row 4,d!
+row 5,e
+SELECT 3
+> WITH d AS (DELETE FROM t WHERE id = 5) SELECT * FROM d
+ERROR 0A000 WITH query "d" does not have a RETURNING clause at 54
+> WITH d AS (DELETE FROM log RETURNING *) UPDATE t SET v = 'x' FROM d WHERE t.id = d.id RETURNING t.*
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+UPDATE 0
+> SELECT * FROM log ORDER BY id
+fields id@log.1:23:4:-1,v@log.2:25:-1:-1,what@log.3:25:-1:-1
+SELECT 0
+> WITH u AS (UPDATE t SET v = 'y' WHERE id = 3 RETURNING *) UPDATE t SET v = 'z' WHERE id = 3 RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,z
+UPDATE 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,z
+row 4,d!
+row 5,e
+SELECT 3
+> WITH u AS (UPDATE t SET v = 'w' WHERE id = 4 RETURNING *) DELETE FROM t WHERE id = 4 RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 4,d!
+DELETE 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,z
+row 5,e
+SELECT 2
+> SELECT * FROM (WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d) s
+ERROR 0A000 WITH clause containing a data-modifying statement must be at the top level at 21
+> WITH x AS (SELECT 1), d AS (DELETE FROM t WHERE id IN (SELECT * FROM x) RETURNING *) SELECT * FROM d
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+SELECT 0
+> SELECT (WITH d AS (DELETE FROM t RETURNING *) SELECT count(*) FROM d)
+ERROR 0A000 WITH clause containing a data-modifying statement must be at the top level at 14
+> WITH d AS (DELETE FROM t WHERE id = 3 RETURNING *) SELECT * FROM d, d AS d2
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,z,3,z
+SELECT 1
+> WITH RECURSIVE d AS (DELETE FROM t WHERE id = 99 RETURNING *) SELECT * FROM d
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+SELECT 0
+> WITH i AS (INSERT INTO t VALUES (3, 'dup') RETURNING *) SELECT * FROM i
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,dup
+SELECT 1
+> BEGIN
+BEGIN
+> WITH i AS (INSERT INTO t VALUES (7, 'g') RETURNING *) INSERT INTO t SELECT id + 1, v FROM i
+INSERT 0 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,dup
+row 5,e
+row 7,g
+row 8,g
+SELECT 4
+> ROLLBACK
+ROLLBACK
+> WITH m AS (MERGE INTO t USING (VALUES (3), (9)) s(id) ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = 'mm' WHEN NOT MATCHED THEN INSERT VALUES (s.id, 'mi') RETURNING merge_action(), t.*) SELECT * FROM m ORDER BY id
+fields merge_action:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1
+row UPDATE,3,mm
+row INSERT,9,mi
+SELECT 2
+> PREPARE p(int) AS WITH d AS (DELETE FROM t WHERE id = $1 RETURNING v) SELECT v FROM d
+PREPARE
+> EXECUTE p(9)
+fields v@t.2:25:-1:-1
+row mi
+SELECT 1
+> WITH d AS (DELETE FROM t WHERE id = 3 RETURNING *) DELETE FROM t WHERE id = 3 RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 3,mm
+DELETE 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 5,e
+SELECT 1
+> WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM t
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 5,e
+SELECT 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+SELECT 0

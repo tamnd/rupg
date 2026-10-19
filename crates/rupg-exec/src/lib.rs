@@ -23,6 +23,8 @@ use rupg_types::{Array, ArrayDim, MAXDIM, NAME_MAX_BYTES, Record, Value, format_
 #[derive(Debug)]
 pub struct Plan {
     query: Query,
+    /// The rows of `RETURNING` of each statement of `WITH` that changes data, by the number of the statement, which the references to the statement read.
+    written: Arc<Vec<Rows>>,
 }
 
 /// The error of a feature that the engine does not have yet.
@@ -248,6 +250,17 @@ const MIXED_KEYS: &str =
 pub fn prepare(query: Query) -> Result<Plan> {
     rupg_analyze::check_outer_joins(&query)?;
     check_query(&query, query.write.is_none())?;
+    check_write(&query)?;
+    for cte in query.ctes.iter().filter(|c| c.write.is_some()) {
+        rupg_analyze::check_outer_joins(&cte.query)?;
+        check_query(&cte.query, false)?;
+        check_write(&cte.query)?;
+    }
+    Ok(Plan { query, written: Arc::default() })
+}
+
+/// Checks the queries of `ON CONFLICT DO UPDATE` and of the clauses of `MERGE` of a write.
+fn check_write(query: &Query) -> Result<()> {
     if let Some(update) =
         query.write.as_ref().and_then(|w| w.on_conflict.as_ref()?.update.as_deref())
     {
@@ -256,7 +269,34 @@ pub fn prepare(query: Query) -> Result<Plan> {
     for clause in query.write.iter().filter_map(|w| w.merge.as_ref()).flat_map(|m| &m.clauses) {
         check_query(&clause.query, false)?;
     }
-    Ok(Plan { query })
+    Ok(())
+}
+
+/// The numbers of the statements of `WITH` that change data whose rows a query reads, in `FROM`, in a subquery, in `RETURNING`, in `ON CONFLICT DO UPDATE` and in the clauses of `MERGE`.
+fn read_writes(query: &Query, out: &mut Vec<usize>) {
+    fn relations(query: &Query, out: &mut Vec<usize>) {
+        for relation in &query.relations {
+            out.extend(relation.cte.as_ref().and_then(|c| c.write));
+            if let Some(sub) = &relation.subquery {
+                relations(sub, out);
+            }
+        }
+    }
+    relations(query, out);
+    for (expr, _) in query.all_exprs(0) {
+        expr.find(0, &mut |e, _| {
+            if let ExprKind::SubLink(sub) = &e.kind {
+                relations(&sub.query, out);
+            }
+            None::<()>
+        });
+    }
+    let Some(write) = &query.write else { return };
+    let update = write.on_conflict.as_ref().and_then(|c| c.update.as_deref());
+    let clauses = write.merge.iter().flat_map(|m| m.clauses.iter().map(|c| &*c.query));
+    for part in write.returning.as_deref().into_iter().chain(update).chain(clauses) {
+        read_writes(part, out);
+    }
 }
 
 /// Checks that the engine can run a query or a subquery. With `output`, it also checks that the engine has the output function of each column.
@@ -556,6 +596,8 @@ struct Cache {
     bodies: Bodies,
     /// The rows of the work table of each recursive query of `WITH` that runs now, by the number of its work table. The last entry with a number is the one that the reference reads.
     work: RefCell<Vec<(usize, Rc<Rows>)>>,
+    /// The rows of the statements of `WITH` that change data, as [`Plan`] keeps them.
+    written: Arc<Vec<Rows>>,
     /// The flags `error` and `empty` of each `JsonExpr`, by the address of the node, as its `JsonExprState` keeps them from one evaluation to the next.
     json_flags: RefCell<Vec<(*const rupg_analyze::JsonExpr, jsonexpr::Flags)>>,
 }
@@ -799,12 +841,14 @@ fn with_subqueries(
     outer: &[Frame<'_>],
 ) -> Result<Rc<scan::Tables>> {
     let work = |r: &rupg_analyze::Relation| r.cte.as_ref().and_then(|c| c.work);
+    let write = |r: &rupg_analyze::Relation| r.cte.as_ref().and_then(|c| c.write);
     if query.relations.iter().all(|r| {
         r.subquery.is_none()
             && r.function.is_none()
             && r.values.is_none()
             && r.tablesample.is_none()
             && work(r).is_none()
+            && write(r).is_none()
     }) {
         return Ok(Rc::clone(base));
     }
@@ -821,6 +865,12 @@ fn with_subqueries(
             let rows =
                 cache.work.borrow().iter().rev().find(|(w, _)| *w == id).map(|(_, r)| Rc::clone(r));
             tables.rows[i] = rows.ok_or_else(|| Error::internal("a work table with no rows"))?;
+        }
+        if let Some(id) = write(relation) {
+            let Some(rows) = cache.written.get(id) else {
+                return Err(not_yet("a statement that changes data in WITH in this place"));
+            };
+            tables.rows[i] = Rc::new(rows.clone());
         }
         if let Some(sub) = &relation.subquery
             && tables.needs[i].is_empty()
@@ -1032,7 +1082,7 @@ impl Plan {
         let Some(query) = self.query.write.as_ref().and_then(|w| w.returning.as_deref()) else {
             return Ok(Vec::new());
         };
-        let cache = Cache::default();
+        let cache = self.cache();
         cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![rows]))));
         run_query(query, params, session, &cache, &[], false)
     }
@@ -1062,7 +1112,7 @@ impl Plan {
         {
             base = inner;
         }
-        let cache = Cache::default();
+        let cache = self.cache();
         let tables = scan::given(base, vec![vec![existing], vec![excluded]]);
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
@@ -1093,7 +1143,7 @@ impl Plan {
         {
             base = inner;
         }
-        let cache = Cache::default();
+        let cache = self.cache();
         let tables = scan::given(base, vec![vec![target], vec![carried]]);
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
@@ -1104,6 +1154,41 @@ impl Plan {
             _ => rows,
         };
         Ok(rows.into_iter().next())
+    }
+
+    /// The cache of a run, with the rows of the statements of `WITH` that change data.
+    fn cache(&self) -> Cache {
+        Cache { written: Arc::clone(&self.written), ..Cache::default() }
+    }
+
+    /// `hasModifyingCTE`: true when the query has a statement of `WITH` that changes data.
+    pub fn modifying_cte(&self) -> bool {
+        self.query.ctes.iter().any(|c| c.write.is_some())
+    }
+
+    /// The statements of `WITH` that change data, in the order of their numbers, each with true when the statement or another statement of `WITH` reads its rows. The rows of each statement must go to [`Plan::with_written`] before a run of a plan that reads them.
+    pub fn cte_writes(&self) -> Vec<(Plan, bool)> {
+        let mut read = Vec::new();
+        read_writes(&self.query, &mut read);
+        let mut writes: Vec<(usize, &Query)> =
+            self.query.ctes.iter().filter_map(|c| c.write.map(|n| (n, &*c.query))).collect();
+        writes.sort_by_key(|(n, _)| *n);
+        for (_, query) in &writes {
+            read_writes(query, &mut read);
+        }
+        writes
+            .into_iter()
+            .map(|(n, query)| {
+                let plan = Plan { query: query.clone(), written: Arc::clone(&self.written) };
+                (plan, read.contains(&n))
+            })
+            .collect()
+    }
+
+    /// The plan with the rows of `RETURNING` of the statements of `WITH` that change data, by the number of each statement.
+    #[must_use]
+    pub fn with_written(self, written: Vec<Vec<Vec<Value>>>) -> Plan {
+        Plan { written: Arc::new(written), ..self }
     }
 
     /// The table that the query writes when it is an `INSERT`, an `UPDATE` or a `DELETE`. Then [`Plan::run`] gives the rows that change.
@@ -1132,7 +1217,11 @@ impl Plan {
     ///
     /// The error of an immutable function of constants, such as a division by zero.
     pub fn fold(&self, params: Option<&[Value]>, session: &dyn Session) -> Result<Plan> {
-        Ok(Plan { query: fold::query(&self.query, params, session)? })
+        let mut query = fold::query(&self.query, params, session)?;
+        for cte in query.ctes.iter_mut().filter(|c| c.write.is_some()) {
+            *cte.query = fold::query(&cte.query, params, session)?;
+        }
+        Ok(Plan { query, written: Arc::clone(&self.written) })
     }
 
     /// `ExecSupportsBackwardScan` on the plan that PostgreSQL makes for the query, which decides if a cursor with neither `SCROLL` nor `NO SCROLL` can scan backward.
@@ -1146,12 +1235,12 @@ impl Plan {
     ///
     /// `25006` for `INSERT`, `UPDATE`, `DELETE`, `FOR UPDATE` or `FOR SHARE` in a read-only transaction, and `42809` for a lock on the rows of a sequence.
     pub fn start(&self, session: &dyn Session) -> Result<()> {
-        if let Some(write) = &self.query.write
-            && session.setting("transaction_read_only").as_deref() == Some("on")
-        {
+        let writes = self.query.write.is_some() || self.modifying_cte();
+        if writes && session.setting("transaction_read_only").as_deref() == Some("on") {
+            let name = self.query.write.as_ref().map_or("SELECT", |w| w.kind.name());
             return Err(Error::new(
                 SqlState::READ_ONLY_SQL_TRANSACTION,
-                format!("cannot execute {} in a read-only transaction", write.kind.name()),
+                format!("cannot execute {name} in a read-only transaction"),
             ));
         }
         check_row_marks(&self.query, session)
@@ -1164,7 +1253,7 @@ impl Plan {
     /// The error of a function, such as a division by zero, and the error of a constraint of the table.
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         self.start(session)?;
-        let rows = run_query(&self.query, params, session, &Cache::default(), &[], false)?;
+        let rows = run_query(&self.query, params, session, &self.cache(), &[], false)?;
         match &self.query.write {
             Some(info) => insert::check(info, rows, session),
             None => Ok(rows),
@@ -1239,6 +1328,9 @@ fn backward(query: &Query) -> bool {
     if let Some(cte) = &relation.cte {
         if cte.work.is_some() {
             return false;
+        }
+        if cte.write.is_some() {
+            return true;
         }
         // A query of `WITH` that the planner does not put in place of its reference is a `CteScan`.
         let scanned = query
