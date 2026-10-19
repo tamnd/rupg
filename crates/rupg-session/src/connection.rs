@@ -41,6 +41,7 @@ mod extended;
 mod foreign;
 mod merge;
 mod prepare;
+mod savepoint;
 mod upsert;
 mod writes;
 
@@ -372,6 +373,8 @@ pub struct Connection {
     deferred: RefCell<Vec<Batch>>,
     /// The modes that `SET CONSTRAINTS` gave in the transaction.
     modes: RefCell<deferred::Modes>,
+    /// The state of the transaction at each savepoint, the outermost first, as the names of the savepoints in [`Transaction`].
+    marks: Vec<savepoint::Mark>,
 }
 
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
@@ -466,6 +469,7 @@ impl Connection {
             snapshot: RefCell::new(None),
             deferred: RefCell::new(Vec::new()),
             modes: RefCell::new(deferred::Modes::default()),
+            marks: Vec::new(),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -781,6 +785,7 @@ impl Connection {
         self.command.set(0);
         self.snapshot.replace(None);
         self.end_deferred();
+        self.marks.clear();
     }
 
     /// The check hook of `default_text_search_config` for a `SET` of it, which reads the catalog.
@@ -1228,6 +1233,9 @@ impl Connection {
                     SqlState::IN_FAILED_SQL_TRANSACTION,
                     "current transaction is aborted, commands ignored until end of transaction block",
                 ))
+            } else if let Some(stmt) = utility::is_savepoint(node) {
+                drop(self.portals.close(b""));
+                self.savepoint(stmt)
             } else if prepare::is_prepare(node) {
                 drop(self.portals.close(b""));
                 self.run_prepare(node, text, &[], &mut notices, 0)
@@ -1468,15 +1476,23 @@ impl Connection {
     /// The part of `AbortCurrentTransaction` of [`Connection::fail`] after the error went to the client.
     fn abort(&mut self) {
         self.xact_started = false;
-        if self.transaction.abort_current() == Ending::Rollback {
-            self.settings.get_mut().end(false);
-            self.lease = None;
-            self.end_rows(false, false);
+        match self.transaction.abort_current() {
+            Ending::Savepoint => self.roll_back_subtransaction(),
+            ending => {
+                if ending == Ending::Rollback {
+                    self.settings.get_mut().end(false);
+                    self.lease = None;
+                    self.end_rows(false, false);
+                }
+                self.transaction_ended();
+            }
         }
-        self.transaction_ended();
         if self.transaction.failed() {
+            // In a subtransaction only the portals of the subtransaction fail.
+            let depth = self.transaction.depth();
             self.portals.retain(|_, portal| {
-                portal.failed |= !portal.as_cursor().is_some_and(cursor::Cursor::held);
+                let held = portal.as_cursor().is_some_and(cursor::Cursor::held);
+                portal.failed |= portal.level >= depth && !held;
                 true
             });
         } else {
@@ -2717,6 +2733,18 @@ mod tests {
     #[test]
     fn truncate_more() {
         big_stack(|| script(include_str!("connection/truncate_more.test")));
+    }
+
+    /// `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT` outside of a block and in an implicit block, the rows of a subtransaction after a rollback and after a release, the names that no savepoint has, an error in a subtransaction, nested savepoints with the same name, a quoted name, `COMMIT` and `ROLLBACK` of a failed subtransaction, and the statements of a failed subtransaction. `connection/savepoint.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn savepoint() {
+        big_stack(|| script(include_str!("connection/savepoint.test")));
+    }
+
+    /// Savepoints with the settings and their reports, `SET TRANSACTION` in a subtransaction, the catalog, a sequence, the deferred triggers of a foreign key and `SET CONSTRAINTS`, the cursors from before and after a savepoint, `TRUNCATE`, the advisory locks of the transaction level and `PREPARE`. `connection/savepoint_more.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn savepoint_more() {
+        big_stack(|| script(include_str!("connection/savepoint_more.test")));
     }
 
     /// The system columns `xmin`, `cmin`, `xmax` and `cmax` of a table and of a catalog, their types and their errors in a view, a subquery and a check constraint, the partition key functions for a table that is not partitioned, and the recovery functions on a server that is not in recovery. The script does not show the value of `xmin`, because rupg has no row versions yet. `connection/system_columns.test` is the output of PostgreSQL 19 for the same script in a new database.

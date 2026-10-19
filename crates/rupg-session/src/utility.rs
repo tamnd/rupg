@@ -398,7 +398,46 @@ fn show(name: &str, settings: &Settings) -> Result<Outcome, Error> {
     Ok(Outcome::Rows { columns: vec![column], rows: vec![vec![value]] })
 }
 
-/// `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT` and the forms that need savepoints or two phase commit, which the session does not have yet.
+/// `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT` for the transaction block, as `standard_ProcessUtility` runs them. It gives the tag and the number of savepoints that stay. The caller keeps or restores the state of the transaction at each savepoint.
+///
+/// # Errors
+///
+/// `25P01` outside of a transaction block and `3B001` for a savepoint that does not exist.
+pub(crate) fn savepoint(
+    stmt: &TransactionStmt,
+    transaction: &mut Transaction,
+) -> Result<(CommandTag, usize), Error> {
+    let name = stmt.savepoint_name.as_deref().unwrap_or("");
+    match stmt.kind {
+        TransactionStmtKind::TRANS_STMT_SAVEPOINT => {
+            require_block(transaction, "SAVEPOINT")?;
+            transaction.savepoint(name)?;
+            Ok((CommandTag::Savepoint, transaction.depth()))
+        }
+        TransactionStmtKind::TRANS_STMT_RELEASE => {
+            require_block(transaction, "RELEASE SAVEPOINT")?;
+            Ok((CommandTag::Release, transaction.release(name)?))
+        }
+        _ => {
+            require_block(transaction, "ROLLBACK TO SAVEPOINT")?;
+            Ok((CommandTag::Rollback, transaction.rollback_to(name)?))
+        }
+    }
+}
+
+/// The statement of `SAVEPOINT`, `RELEASE SAVEPOINT` or `ROLLBACK TO SAVEPOINT`, or `None` for another statement.
+pub(crate) fn is_savepoint(node: &Node) -> Option<&TransactionStmt> {
+    let Node::TransactionStmt(stmt) = node else { return None };
+    matches!(
+        stmt.kind,
+        TransactionStmtKind::TRANS_STMT_SAVEPOINT
+            | TransactionStmtKind::TRANS_STMT_RELEASE
+            | TransactionStmtKind::TRANS_STMT_ROLLBACK_TO
+    )
+    .then_some(stmt)
+}
+
+/// `BEGIN`, `START TRANSACTION`, `COMMIT`, `END`, `ROLLBACK`, `ABORT`, the forms with savepoints, and the forms that need two phase commit, which the session does not have yet.
 fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTag, Error> {
     match stmt.kind {
         TransactionStmtKind::TRANS_STMT_BEGIN | TransactionStmtKind::TRANS_STMT_START => {
@@ -425,23 +464,12 @@ fn transaction(stmt: &TransactionStmt, cx: &mut Context<'_>) -> Result<CommandTa
             }
             Ok(CommandTag::Rollback)
         }
-        TransactionStmtKind::TRANS_STMT_SAVEPOINT => {
-            require_block(cx.transaction, "SAVEPOINT")?;
-            Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "SAVEPOINT is not supported yet"))
-        }
-        TransactionStmtKind::TRANS_STMT_RELEASE => {
-            require_block(cx.transaction, "RELEASE SAVEPOINT")?;
-            Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "RELEASE SAVEPOINT is not supported yet",
-            ))
-        }
-        TransactionStmtKind::TRANS_STMT_ROLLBACK_TO => {
-            require_block(cx.transaction, "ROLLBACK TO SAVEPOINT")?;
-            Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "ROLLBACK TO SAVEPOINT is not supported yet",
-            ))
+        TransactionStmtKind::TRANS_STMT_SAVEPOINT
+        | TransactionStmtKind::TRANS_STMT_RELEASE
+        | TransactionStmtKind::TRANS_STMT_ROLLBACK_TO => {
+            let tag = savepoint(stmt, cx.transaction)?.0;
+            cx.settings.set_subtransaction(cx.transaction.depth() > 0);
+            Ok(tag)
         }
         _ => Err(Error::new(
             SqlState::FEATURE_NOT_SUPPORTED,

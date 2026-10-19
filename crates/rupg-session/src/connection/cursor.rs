@@ -397,7 +397,8 @@ impl Connection {
             self.statement_start,
             false,
         );
-        let portal = Portal::cursor(Arc::new(statement), cursor);
+        let mut portal = Portal::cursor(Arc::new(statement), cursor);
+        portal.level = self.transaction.depth();
         self.portals.insert(name.as_bytes(), portal);
         Ok(Done::Tag(CommandTag::DeclareCursor))
     }

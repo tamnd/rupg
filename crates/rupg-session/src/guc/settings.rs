@@ -235,6 +235,14 @@ const CHARACTERISTICS: [(&str, &str); 3] = [
 #[derive(Clone, Debug, PartialEq)]
 pub struct Characteristics([Setting; 3]);
 
+/// The values of the parameters at a savepoint, from [`Settings::savepoint`].
+#[derive(Clone, Debug)]
+pub struct Savepoint {
+    slots: Arc<HashMap<String, Slot>>,
+    saved: Vec<String>,
+    read_only: Setting,
+}
+
 /// The prefix that rupg keeps for its own parameters.
 const RESERVED_PREFIX: &str = "rupg";
 
@@ -257,6 +265,8 @@ pub struct Settings {
     superuser: bool,
     /// `FirstSnapshotSet`: a statement of the current transaction took a snapshot, so the isolation level and the deferrable mode cannot change.
     snapshot: bool,
+    /// `IsSubTransaction`: the transaction has a savepoint, so the isolation level and the deferrable mode cannot change.
+    subtransaction: bool,
     /// The values that the system gave to the TCP options of the socket of the session, in the order of [`TcpOption::ALL`], with -1 for a value that the system did not give. `None` for a Unix socket and for a session with no socket.
     socket: Option<[i32; 4]>,
 }
@@ -275,6 +285,7 @@ impl Settings {
             generation: 0,
             superuser,
             snapshot: false,
+            subtransaction: false,
             socket: None,
         }
     }
@@ -602,24 +613,31 @@ impl Settings {
         Ok(setting)
     }
 
-    /// `check_transaction_isolation`, `check_transaction_deferrable` and `check_transaction_read_only`: after the first snapshot of a transaction, its isolation level cannot change, its deferrable mode cannot be set, and it cannot become read-write.
+    /// `check_transaction_isolation`, `check_transaction_deferrable` and `check_transaction_read_only`: after the first snapshot of a transaction or in a subtransaction, its isolation level cannot change, its deferrable mode cannot be set, and it cannot become read-write.
     fn check_transaction(
         &self,
         parameter: &Parameter,
         shown: &str,
         current: &str,
     ) -> Result<(), Error> {
-        if !self.snapshot {
-            return Ok(());
-        }
+        let (snapshot, sub) = (self.snapshot, self.subtransaction);
         let message = match parameter.name {
-            "transaction_isolation" if shown != current => {
+            "transaction_isolation" if shown != current && snapshot => {
                 "SET TRANSACTION ISOLATION LEVEL must be called before any query"
             }
-            "transaction_deferrable" => {
+            "transaction_isolation" if shown != current && sub => {
+                "SET TRANSACTION ISOLATION LEVEL must not be called in a subtransaction"
+            }
+            "transaction_deferrable" if sub => {
+                "SET TRANSACTION [NOT] DEFERRABLE cannot be called within a subtransaction"
+            }
+            "transaction_deferrable" if snapshot => {
                 "SET TRANSACTION [NOT] DEFERRABLE must be called before any query"
             }
-            "transaction_read_only" if shown == "off" && current == "on" => {
+            "transaction_read_only" if shown == "off" && current == "on" && sub => {
+                "cannot set transaction read-write mode inside a read-only transaction"
+            }
+            "transaction_read_only" if shown == "off" && current == "on" && snapshot => {
                 "transaction read-write mode must be set before any query"
             }
             _ => return Ok(()),
@@ -713,6 +731,7 @@ impl Settings {
     /// `StartTransaction`: a new transaction takes `transaction_isolation`, `transaction_read_only` and `transaction_deferrable` from their defaults, or from the transaction before it after `AND CHAIN`. PostgreSQL sets the variables of these parameters directly, so the change is not in the stack of the transaction, the end of the transaction does not restore it, and the source of the value does not change.
     pub fn start_transaction(&mut self, chained: Option<Characteristics>) {
         self.snapshot = false;
+        self.subtransaction = false;
         for (i, (name, default)) in CHARACTERISTICS.into_iter().enumerate() {
             let (Some(parameter), Some(default)) = (find(name), find(default)) else { continue };
             let setting = match &chained {
@@ -747,6 +766,47 @@ impl Settings {
             let Some(reset) = self.find_slot(&key).map(|slot| slot.reset.clone()) else { continue };
             self.assign(&key, reset, Action::Set);
         }
+    }
+
+    /// Notes that the transaction has a savepoint or has none, for the checks of `SET TRANSACTION`.
+    pub fn set_subtransaction(&mut self, subtransaction: bool) {
+        self.subtransaction = subtransaction;
+    }
+
+    /// The values at a `SAVEPOINT`, which [`Settings::rollback_to`] brings back. The slots are shared, so this copies no value.
+    #[must_use]
+    pub fn savepoint(&self) -> Savepoint {
+        let read_only = find("transaction_read_only").map(|parameter| self.setting(parameter));
+        Savepoint {
+            slots: Arc::clone(&self.slots),
+            saved: self.saved.clone(),
+            read_only: read_only.unwrap_or(Setting::Bool(false)),
+        }
+    }
+
+    /// `AtEOSubXact_GUC` after `ROLLBACK TO SAVEPOINT` or an error in a subtransaction: each value goes back to its value at the savepoint, and a reported value that changes is reported again.
+    pub fn rollback_to(&mut self, savepoint: &Savepoint) {
+        let now = std::mem::replace(&mut self.slots, Arc::clone(&savepoint.slots));
+        let keys = std::mem::replace(&mut self.saved, savepoint.saved.clone());
+        self.generation += 1;
+        for key in keys {
+            let Some(slot) = now.get(&key) else { continue };
+            if self.find_slot(&key).is_none_or(|old| old.current != slot.current) {
+                self.changed(slot.parameter);
+            }
+        }
+    }
+
+    /// `CommitSubTransaction` after `RELEASE SAVEPOINT`: the values of the subtransaction stay, but `transaction_read_only` goes back to its value at the savepoint, as `XactReadOnly` takes `prevXactReadOnly`.
+    pub fn release(&mut self, savepoint: &Savepoint) {
+        let Some(parameter) = find("transaction_read_only") else { return };
+        if self.setting(parameter) == savepoint.read_only {
+            return;
+        }
+        let key = lower(parameter.name);
+        let slot = self.slot(&key, Some(parameter), parameter.name);
+        slot.current.setting = savepoint.read_only.clone();
+        self.changed(Some(parameter));
     }
 
     /// The end of a transaction: keeps or restores the values that it changed.

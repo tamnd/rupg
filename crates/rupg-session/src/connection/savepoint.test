@@ -1,0 +1,241 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int PRIMARY KEY, v text)
+CREATE TABLE
+> SAVEPOINT a
+ERROR 25P01 SAVEPOINT can only be used in transaction blocks
+> RELEASE SAVEPOINT a
+ERROR 25P01 RELEASE SAVEPOINT can only be used in transaction blocks
+> ROLLBACK TO SAVEPOINT a
+ERROR 25P01 ROLLBACK TO SAVEPOINT can only be used in transaction blocks
+> SELECT 1; SAVEPOINT a
+fields ?column?:23:4:-1
+row 1
+SELECT 1
+ERROR 25P01 SAVEPOINT can only be used in transaction blocks
+> BEGIN
+BEGIN
+> INSERT INTO t VALUES (1, 'one')
+INSERT 0 1
+> SAVEPOINT a
+SAVEPOINT
+> INSERT INTO t VALUES (2, 'two')
+INSERT 0 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> ROLLBACK TO SAVEPOINT a
+ROLLBACK
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,one
+SELECT 1
+> INSERT INTO t VALUES (2, 'deux')
+INSERT 0 1
+> RELEASE SAVEPOINT a
+RELEASE
+> COMMIT
+COMMIT
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,one
+row 2,deux
+SELECT 2
+> BEGIN
+BEGIN
+> RELEASE SAVEPOINT nope
+ERROR 3B001 savepoint "nope" does not exist
+> SELECT 1
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK TO SAVEPOINT nope
+ERROR 3B001 savepoint "nope" does not exist
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> ROLLBACK TO nope
+ERROR 3B001 savepoint "nope" does not exist
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> UPDATE t SET v = 'uno' WHERE id = 1
+UPDATE 1
+> DELETE FROM t WHERE id = 2
+DELETE 1
+> SELECT 1/0
+ERROR 22012 division by zero
+> SELECT * FROM t
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK TO a
+ROLLBACK
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,one
+row 2,deux
+SELECT 2
+> UPDATE t SET v = 'eins' WHERE id = 1
+UPDATE 1
+> COMMIT
+COMMIT
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,eins
+row 2,deux
+SELECT 2
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> INSERT INTO t VALUES (3, 'a')
+INSERT 0 1
+> SAVEPOINT b
+SAVEPOINT
+> INSERT INTO t VALUES (4, 'b')
+INSERT 0 1
+> SAVEPOINT a
+SAVEPOINT
+> INSERT INTO t VALUES (5, 'a2')
+INSERT 0 1
+> ROLLBACK TO a
+ROLLBACK
+> SELECT id FROM t ORDER BY id
+fields id@t.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> ROLLBACK TO a
+ROLLBACK
+> RELEASE a
+RELEASE
+> SELECT id FROM t ORDER BY id
+fields id@t.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> ROLLBACK TO a
+ROLLBACK
+> SELECT id FROM t ORDER BY id
+fields id@t.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> RELEASE b
+ERROR 3B001 savepoint "b" does not exist
+> ROLLBACK TO b
+ERROR 3B001 savepoint "b" does not exist
+> ROLLBACK TO a
+ROLLBACK
+> SELECT id FROM t ORDER BY id
+fields id@t.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> COMMIT
+COMMIT
+> SELECT id FROM t ORDER BY id
+fields id@t.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> BEGIN
+BEGIN
+> SAVEPOINT x
+SAVEPOINT
+> INSERT INTO t VALUES (6, 'x')
+INSERT 0 1
+> SELECT 1/0
+ERROR 22012 division by zero
+> COMMIT
+ROLLBACK
+> SELECT id FROM t ORDER BY id
+fields id@t.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> BEGIN
+BEGIN
+> SAVEPOINT x
+SAVEPOINT
+> INSERT INTO t VALUES (6, 'x')
+INSERT 0 1
+> ROLLBACK
+ROLLBACK
+> SELECT id FROM t ORDER BY id
+fields id@t.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> BEGIN
+BEGIN
+> INSERT INTO t VALUES (7, 'y')
+INSERT 0 1
+> SAVEPOINT x
+SAVEPOINT
+> INSERT INTO t VALUES (7, 'dup')
+ERROR 23505 duplicate key value violates unique constraint "t_pkey"
+DETAIL Key (id)=(7) already exists.
+> ROLLBACK TO x
+ROLLBACK
+> INSERT INTO t VALUES (8, 'z')
+INSERT 0 1
+> COMMIT
+COMMIT
+> SELECT id FROM t ORDER BY id
+fields id@t.1:23:4:-1
+row 1
+row 2
+row 7
+row 8
+SELECT 4
+> BEGIN
+BEGIN
+> SAVEPOINT "A"
+SAVEPOINT
+> ROLLBACK TO a
+ERROR 3B001 savepoint "a" does not exist
+> ROLLBACK TO "A"
+ROLLBACK
+> RELEASE "A"
+RELEASE
+> SAVEPOINT s1
+SAVEPOINT
+> SAVEPOINT s1
+SAVEPOINT
+> RELEASE s1
+RELEASE
+> RELEASE s1
+RELEASE
+> RELEASE s1
+ERROR 3B001 savepoint "s1" does not exist
+> COMMIT
+ROLLBACK
+> BEGIN
+BEGIN
+> SAVEPOINT a
+SAVEPOINT
+> SELECT 1/0
+ERROR 22012 division by zero
+> SAVEPOINT b
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> RELEASE a
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK TO a
+ROLLBACK
+> SAVEPOINT b
+SAVEPOINT
+> RELEASE a
+RELEASE
+> COMMIT
+COMMIT
+> DROP TABLE t
+DROP TABLE

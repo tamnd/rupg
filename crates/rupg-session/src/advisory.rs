@@ -263,6 +263,42 @@ impl Locks {
         true
     }
 
+    /// The counts of the holds of the transaction level of the owner, which a savepoint keeps for [`Locks::release_since`].
+    pub(crate) fn xact_holds(&self, owner: i32) -> Vec<(Tag, bool, u32)> {
+        let table = self.table();
+        let mut holds = Vec::new();
+        for (tag, lock) in table.iter() {
+            for hold in lock.holds.iter().filter(|h| h.owner == owner && h.xact > 0) {
+                holds.push((*tag, hold.share, hold.xact));
+            }
+        }
+        holds
+    }
+
+    /// `LockReleaseCurrentOwner` at the abort of a subtransaction: the holds of the transaction level of the owner go back to the counts of `kept`, so the locks that the subtransaction took go.
+    pub(crate) fn release_since(&self, owner: i32, kept: &[(Tag, bool, u32)]) {
+        let mut table = self.table();
+        let mut freed = false;
+        table.retain(|tag, lock| {
+            lock.holds.retain_mut(|hold| {
+                if hold.owner != owner || hold.xact == 0 {
+                    return true;
+                }
+                let count =
+                    kept.iter().find(|k| k.0 == *tag && k.1 == hold.share).map_or(0, |k| k.2);
+                hold.xact = hold.xact.min(count);
+                let kept = hold.session > 0 || hold.xact > 0;
+                freed |= !kept;
+                kept
+            });
+            !lock.holds.is_empty() || !lock.queue.is_empty()
+        });
+        drop(table);
+        if freed {
+            self.changed.notify_all();
+        }
+    }
+
     /// `LockReleaseAll` for one level: releases all the holds of the owner at the session level or at the transaction level.
     pub(crate) fn release_all(&self, owner: i32, session: bool) {
         let mut table = self.table();
@@ -352,6 +388,23 @@ mod tests {
         locks.release_all(1, false);
         assert_eq!(locks.request(tag(1), 2, false, true, false), Request::Busy);
         locks.release_all(1, true);
+        assert_eq!(locks.request(tag(1), 2, false, true, false), Request::Granted);
+    }
+
+    #[test]
+    fn a_subtransaction_releases_its_locks() {
+        let locks = Locks::default();
+        assert_eq!(locks.request(tag(1), 1, false, false, false), Request::Granted);
+        assert_eq!(locks.request(tag(1), 1, false, true, false), Request::Granted);
+        let kept = locks.xact_holds(1);
+        assert_eq!(locks.request(tag(1), 1, false, false, false), Request::Granted);
+        assert_eq!(locks.request(tag(2), 1, false, false, false), Request::Granted);
+        locks.release_since(1, &kept);
+        assert_eq!(locks.xact_holds(1), kept);
+        assert_eq!(locks.request(tag(2), 2, false, true, false), Request::Granted);
+        assert_eq!(locks.request(tag(1), 2, false, true, false), Request::Busy);
+        locks.release_all(1, false);
+        assert!(locks.release(tag(1), 1, false));
         assert_eq!(locks.request(tag(1), 2, false, true, false), Request::Granted);
     }
 

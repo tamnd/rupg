@@ -1,4 +1,4 @@
-//! The deferred triggers of the foreign keys, as `trigger.c` keeps them. A trigger that is deferred does not fire at the end of its statement. Its rows go to the queue of the transaction, and they fire at the commit or when `SET CONSTRAINTS` makes the trigger immediate. A rollback removes the queue. Savepoints do not keep a part of the queue yet.
+//! The deferred triggers of the foreign keys, as `trigger.c` keeps them. A trigger that is deferred does not fire at the end of its statement. Its rows go to the queue of the transaction, and they fire at the commit or when `SET CONSTRAINTS` makes the trigger immediate. A rollback removes the queue, and a rollback to a savepoint brings back the queue and the modes of the savepoint.
 
 use std::collections::HashMap;
 
@@ -11,7 +11,7 @@ use super::{Connection, Done};
 use crate::utility::Notice;
 
 /// `SetConstraintStateData`: the modes that `SET CONSTRAINTS` gave in the transaction. True is `DEFERRED`.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 pub(super) struct Modes {
     /// The mode of the last `SET CONSTRAINTS ALL`.
     all: Option<bool>,
