@@ -10,6 +10,7 @@ mod agg;
 mod coerce;
 mod collate;
 mod colname;
+mod constraints_set;
 mod cte;
 mod ddl;
 mod expr;
@@ -52,6 +53,7 @@ use crate::coerce::AtOpt;
 
 pub use coerce::{Context, Path, can_coerce, find_path};
 pub use colname::figure_colname;
+pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
     Allowed, Body, CopyRelation, CopyTarget, Defined, Message, RuleTree, attnums, copy_relation,

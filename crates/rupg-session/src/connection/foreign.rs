@@ -13,12 +13,13 @@ use rupg_exec::Plan;
 use rupg_sql::nodes::Node;
 use rupg_types::{Numeric, Value, oid};
 
+use super::deferred::Modes;
 use super::{Applied, Connection};
 use crate::heap::hash_value;
 use crate::query;
 
 /// The rows of a write of a table with foreign keys, for the triggers of the foreign keys, `AfterTriggerEventList`.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub(super) struct Batch {
     /// The OID of the table.
     table: u32,
@@ -51,6 +52,20 @@ impl Batch {
             new,
             old,
         }
+    }
+
+    /// The batch of the triggers that fire now and the batch of the triggers that `modes` defers to the commit, as `afterTriggerCheckState` decides for each trigger.
+    fn split(self, modes: &Modes) -> (Option<Batch>, Option<Batch>) {
+        if !self.foreign.iter().any(|foreign| modes.deferred(foreign)) {
+            return (Some(self), None);
+        }
+        let (later, now): (Vec<Foreign>, Vec<Foreign>) =
+            self.foreign.iter().cloned().partition(|foreign| modes.deferred(foreign));
+        if now.is_empty() {
+            return (None, Some(self));
+        }
+        let deferred = Batch { foreign: later, ..self.clone() };
+        (Some(Batch { foreign: now, ..self }), Some(deferred))
     }
 }
 
@@ -136,7 +151,7 @@ fn key_value(value: &Value, from: u32, to: u32) -> Value {
 }
 
 impl Connection {
-    /// Fires the triggers of the foreign keys of the batches of a write and of the writes of their actions, batch after batch in the order of the queue.
+    /// Fires the triggers of the foreign keys of the batches of a write and of the writes of their actions, batch after batch in the order of the queue. The rows of a trigger that is deferred go to the queue of the transaction.
     ///
     /// # Errors
     ///
@@ -144,7 +159,13 @@ impl Connection {
     pub(super) fn fire(&self, batches: Vec<Batch>) -> Result<(), Error> {
         let mut queue = VecDeque::from(batches);
         while let Some(batch) = queue.pop_front() {
-            self.fire_batch(&batch, &mut queue)?;
+            let (now, later) = batch.split(&self.modes.borrow());
+            if let Some(later) = later {
+                self.deferred.borrow_mut().push(later);
+            }
+            if let Some(now) = now {
+                self.fire_batch(&now, &mut queue)?;
+            }
         }
         Ok(())
     }

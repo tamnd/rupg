@@ -1,0 +1,189 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (id int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE c (id int, pid int REFERENCES p DEFERRABLE INITIALLY DEFERRED)
+CREATE TABLE
+> CREATE TABLE d (id int, pid int REFERENCES p DEFERRABLE)
+CREATE TABLE
+> CREATE TABLE e (id int, pid int REFERENCES p)
+CREATE TABLE
+> INSERT INTO c VALUES (1, 1)
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(1) is not present in table "p".
+> BEGIN
+BEGIN
+> INSERT INTO c VALUES (1, 1)
+INSERT 0 1
+> INSERT INTO p VALUES (1)
+INSERT 0 1
+> COMMIT
+COMMIT
+> SELECT * FROM c
+fields id@c.1:23:4:-1,pid@c.2:23:4:-1
+row 1,1
+SELECT 1
+> BEGIN
+BEGIN
+> INSERT INTO c VALUES (2, 2)
+INSERT 0 1
+> SELECT count(*) FROM c
+fields count:20:8:-1
+row 2
+SELECT 1
+> COMMIT
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(2) is not present in table "p".
+> SELECT count(*) FROM c
+fields count:20:8:-1
+row 1
+SELECT 1
+> BEGIN
+BEGIN
+> INSERT INTO c VALUES (3, 3)
+INSERT 0 1
+> SET CONSTRAINTS ALL IMMEDIATE
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(3) is not present in table "p".
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> INSERT INTO d VALUES (1, 5)
+ERROR 23503 insert or update on table "d" violates foreign key constraint "d_pid_fkey"
+DETAIL Key (pid)=(5) is not present in table "p".
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SET CONSTRAINTS ALL DEFERRED
+SET CONSTRAINTS
+> INSERT INTO d VALUES (1, 5)
+INSERT 0 1
+> INSERT INTO p VALUES (5)
+INSERT 0 1
+> COMMIT
+COMMIT
+> BEGIN
+BEGIN
+> SET CONSTRAINTS c_pid_fkey IMMEDIATE
+SET CONSTRAINTS
+> INSERT INTO c VALUES (4, 4)
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(4) is not present in table "p".
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> INSERT INTO c VALUES (5, 50)
+INSERT 0 1
+> DELETE FROM c WHERE id = 5
+DELETE 1
+> COMMIT
+COMMIT
+> BEGIN
+BEGIN
+> DELETE FROM p WHERE id = 1
+DELETE 1
+> INSERT INTO p VALUES (1)
+INSERT 0 1
+> COMMIT
+COMMIT
+> BEGIN
+BEGIN
+> DELETE FROM p WHERE id = 1
+DELETE 1
+> COMMIT
+ERROR 23503 update or delete on table "p" violates foreign key constraint "c_pid_fkey" on table "c"
+DETAIL Key (id)=(1) is still referenced from table "c".
+> BEGIN
+BEGIN
+> SET CONSTRAINTS nope IMMEDIATE
+ERROR 42704 constraint "nope" does not exist
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SET CONSTRAINTS e_pid_fkey DEFERRED
+ERROR 42809 constraint "e_pid_fkey" is not deferrable
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> SET CONSTRAINTS public.c_pid_fkey, d_pid_fkey DEFERRED
+SET CONSTRAINTS
+> INSERT INTO c VALUES (6, 6)
+INSERT 0 1
+> UPDATE c SET pid = 1 WHERE id = 6
+UPDATE 1
+> INSERT INTO d VALUES (7, 7)
+INSERT 0 1
+> SET CONSTRAINTS d_pid_fkey IMMEDIATE
+ERROR 23503 insert or update on table "d" violates foreign key constraint "d_pid_fkey"
+DETAIL Key (pid)=(7) is not present in table "p".
+> ROLLBACK
+ROLLBACK
+> SET CONSTRAINTS ALL DEFERRED
+WARNING 25P01 SET CONSTRAINTS can only be used in transaction blocks
+SET CONSTRAINTS
+> BEGIN
+BEGIN
+> SET CONSTRAINTS ALL DEFERRED
+SET CONSTRAINTS
+> INSERT INTO c VALUES (8, 8)
+INSERT 0 1
+> INSERT INTO c VALUES (9, 9)
+INSERT 0 1
+> SET CONSTRAINTS ALL IMMEDIATE
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(8) is not present in table "p".
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> INSERT INTO c VALUES (10, 10)
+INSERT 0 1
+> SET CONSTRAINTS ALL IMMEDIATE
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(10) is not present in table "p".
+> SET CONSTRAINTS ALL DEFERRED
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> INSERT INTO p VALUES (10)
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> COMMIT
+ROLLBACK
+> CREATE TABLE f (id int, pid int REFERENCES p ON DELETE CASCADE DEFERRABLE INITIALLY DEFERRED)
+CREATE TABLE
+> INSERT INTO p VALUES (20)
+INSERT 0 1
+> INSERT INTO f VALUES (1, 20)
+INSERT 0 1
+> BEGIN
+BEGIN
+> DELETE FROM p WHERE id = 20
+DELETE 1
+> SELECT count(*) FROM f
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT conname, condeferrable, condeferred FROM pg_constraint WHERE contype = 'f' ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1
+row c_pid_fkey,t,t
+row d_pid_fkey,t,f
+row e_pid_fkey,f,f
+row f_pid_fkey,t,t
+SELECT 4
+> SELECT tgname ~ 'RI_ConstraintTrigger' AS ri, tgdeferrable, tginitdeferred, tgfoid::regproc FROM pg_trigger WHERE tgconstraint = (SELECT oid FROM pg_constraint WHERE conname = 'f_pid_fkey') ORDER BY tgfoid
+fields ri:16:1:-1,tgdeferrable@pg_trigger.12:16:1:-1,tginitdeferred@pg_trigger.13:16:1:-1,tgfoid:24:4:-1
+row t,t,t,"RI_FKey_check_ins"
+row t,t,t,"RI_FKey_check_upd"
+row t,f,f,"RI_FKey_cascade_del"
+row t,t,t,"RI_FKey_noaction_upd"
+SELECT 4
+> SELECT * FROM c ORDER BY id
+fields id@c.1:23:4:-1,pid@c.2:23:4:-1
+row 1,1
+SELECT 1

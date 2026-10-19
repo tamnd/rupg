@@ -537,6 +537,11 @@ impl Connection {
                 })?
             } else if let Node::LockStmt(stmt) = node {
                 self.lock(stmt)?
+            } else if let Node::ConstraintsSetStmt(stmt) = node {
+                let mut notices = Vec::new();
+                let result = self.set_constraints(stmt, &mut notices);
+                self.notices(&mut notices, &statement.text, &[], out);
+                result?
             } else if let Node::CopyStmt(stmt) = node {
                 let mut started = None;
                 let result = self.copy(stmt, &mut started);
@@ -630,6 +635,7 @@ impl Connection {
             },
         };
         if transaction_statement || immediate_commit {
+            self.pre_commit()?;
             self.finish_xact();
         } else {
             self.pipelining = true;
@@ -692,9 +698,13 @@ impl Connection {
         out.close_complete();
     }
 
-    /// The `Sync` message: the end of the implicit block of the messages before it, and the end of the transaction if no block is open.
-    pub(super) fn sync(&mut self) {
+    /// The `Sync` message: the end of the implicit block of the messages before it, and the end of the transaction if no block is open. An error of a deferred trigger before the commit ends the transaction.
+    pub(super) fn sync(&mut self, out: &mut OutBuf) {
         self.transaction.end_implicit();
+        if let Err(error) = self.pre_commit() {
+            self.fail(&error, None, out);
+            return;
+        }
         self.finish_xact();
     }
 }

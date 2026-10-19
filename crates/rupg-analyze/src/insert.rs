@@ -121,6 +121,12 @@ pub struct Foreign {
     pub types: Vec<u32>,
     /// The type of each column of the key of the referencing table.
     pub referencing_types: Vec<u32>,
+    /// The OID of the constraint, which `SET CONSTRAINTS` names.
+    pub constraint: u32,
+    /// `tgdeferrable`: `SET CONSTRAINTS` can defer the trigger. The trigger of an action is not deferrable.
+    pub deferrable: bool,
+    /// `tginitdeferred`: the trigger fires at the commit when `SET CONSTRAINTS` does not change its mode.
+    pub deferred: bool,
 }
 
 /// A unique index of the target table, which `_bt_check_unique` checks for each new version of a row.
@@ -541,7 +547,7 @@ impl Analyzer<'_> {
         Ok((oid, rel.name.clone(), columns))
     }
 
-    /// The foreign keys that a write of the table checks after the statement, in the order of the names of their triggers, as `AfterTriggerSaveEvent` queues the triggers for each row. A constraint that is `INITIALLY DEFERRED` is not supported yet.
+    /// The foreign keys that a write of the table checks after the statement, in the order of the names of their triggers, as `AfterTriggerSaveEvent` queues the triggers for each row.
     pub(crate) fn foreign_keys(
         &self,
         table: u32,
@@ -573,11 +579,6 @@ impl Analyzer<'_> {
             else {
                 return Err(Error::internal("a trigger of a foreign key with no foreign key"));
             };
-            if trigger.deferred {
-                return Err(not_yet(
-                    "a write to a table with a foreign key that is INITIALLY DEFERRED",
-                ));
-            }
             let action = match function {
                 2 | 3 => Action::Cascade,
                 4 | 5 => Action::Restrict,
@@ -608,6 +609,9 @@ impl Analyzer<'_> {
                 other_columns: Vec::with_capacity(mine.len()),
                 types: Vec::with_capacity(mine.len()),
                 referencing_types: Vec::with_capacity(mine.len()),
+                constraint: constraint.oid,
+                deferrable: trigger.deferrable,
+                deferred: trigger.deferred,
             };
             for (&attnum, &other_attnum) in mine.iter().zip(theirs) {
                 let column = place(attnum).and_then(|at| columns.get(at).map(|c| (at, c)));
