@@ -1,0 +1,133 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b int, c text NOT NULL, d int)
+CREATE TABLE
+> INSERT INTO t VALUES (1, 2, 'x', 4), (2, 3, 'y', 5)
+INSERT 0 2
+> ALTER TABLE t DROP COLUMN b
+ALTER TABLE
+> SELECT * FROM t AS z (p, q) ORDER BY p
+fields p@t.1:23:4:-1,q@t.3:25:-1:-1,d@t.4:23:4:-1
+row 1,x,4
+row 2,y,5
+SELECT 2
+> SELECT z.r FROM t AS z (p, q, r) ORDER BY p
+fields r@t.4:23:4:-1
+row 4
+row 5
+SELECT 2
+> SELECT * FROM t AS z (p, q, r, s)
+ERROR 42P10 table "z" has 3 columns available but 4 columns specified
+> SELECT z::text FROM t AS z (p) ORDER BY p
+fields z:25:-1:-1
+row (1,x,4)
+row (2,y,5)
+SELECT 2
+> SELECT tableoid::regclass, a FROM t ORDER BY a
+fields tableoid:2205:4:-1,a@t.1:23:4:-1
+row t,1
+row t,2
+SELECT 2
+> INSERT INTO t VALUES (3, NULL, 6)
+ERROR 23502 null value in column "c" of relation "t" violates not-null constraint
+DETAIL Failing row contains (3, null, 6).
+> INSERT INTO t (a, b) VALUES (3, 1)
+ERROR 42703 column "b" of relation "t" does not exist at 19
+> ALTER TABLE t ALTER COLUMN d TYPE bigint USING d * 10
+ALTER TABLE
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,c@t.3:25:-1:-1,d@t.4:20:8:-1
+row 1,x,40
+row 2,y,50
+SELECT 2
+> ALTER TABLE t ADD COLUMN e int NOT NULL DEFAULT 0, DROP COLUMN a
+ALTER TABLE
+> SELECT * FROM t ORDER BY c
+fields c@t.3:25:-1:-1,d@t.4:20:8:-1,e@t.5:23:4:-1
+row x,40,0
+row y,50,0
+SELECT 2
+> COPY t FROM STDIN
+< z	7	1
+< \.
+<done
+copy in 0 0,0,0
+COPY 1
+> COPY t (e, c) FROM STDIN
+< 2	w
+< \.
+<done
+copy in 0 0,0
+COPY 1
+> SELECT * FROM t ORDER BY c
+fields c@t.3:25:-1:-1,d@t.4:20:8:-1,e@t.5:23:4:-1
+row w,NULL,2
+row x,40,0
+row y,50,0
+row z,7,1
+SELECT 4
+> UPDATE t SET d = 1 WHERE c = 'w' RETURNING *
+fields c@t.3:25:-1:-1,d@t.4:20:8:-1,e@t.5:23:4:-1
+row w,1,2
+UPDATE 1
+> DELETE FROM t WHERE c = 'z' RETURNING *
+fields c@t.3:25:-1:-1,d@t.4:20:8:-1,e@t.5:23:4:-1
+row z,7,1
+DELETE 1
+> ALTER TABLE t ADD COLUMN b int
+ALTER TABLE
+> SELECT attname, attnum FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1
+row c,3
+row d,4
+row e,5
+row b,6
+SELECT 4
+> SELECT relnatts FROM pg_class WHERE relname = 't'
+fields relnatts@pg_class.19:21:2:-1
+row 6
+SELECT 1
+> CREATE INDEX ON t (b)
+CREATE INDEX
+> CREATE TABLE u (a int, b int)
+CREATE TABLE
+> CREATE VIEW uv AS SELECT * FROM u
+CREATE VIEW
+> ALTER TABLE u DROP COLUMN a CASCADE
+NOTICE 00000 drop cascades to view uv
+ALTER TABLE
+> SELECT relname FROM pg_class WHERE relname IN ('u', 'uv') ORDER BY relname
+fields relname@pg_class.2:19:64:-1
+row u
+SELECT 1
+> CREATE TYPE ct AS (a int, b int)
+CREATE TYPE
+> ALTER TABLE ct DROP COLUMN a
+ERROR 42809 "ct" is a composite type
+HINT Use ALTER TYPE instead.
+> CREATE TABLE k (a int, b int)
+CREATE TABLE
+> ALTER TABLE k DROP COLUMN a, DROP COLUMN b
+ALTER TABLE
+> SELECT * FROM k
+fields 
+SELECT 0
+> ALTER TABLE k DROP COLUMN a
+ERROR 42703 column "a" of relation "k" does not exist
+> ALTER TABLE k ADD COLUMN a int
+ALTER TABLE
+> INSERT INTO k VALUES (1)
+INSERT 0 1
+> SELECT * FROM k
+fields a@k.3:23:4:-1
+row 1
+SELECT 1
+> SELECT k::text FROM k
+fields k:25:-1:-1
+row (1)
+SELECT 1
+> SELECT row_to_json(k) FROM k
+fields row_to_json:114:-1:-1
+row {"a":1}
+SELECT 1

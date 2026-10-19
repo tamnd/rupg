@@ -1,0 +1,226 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int PRIMARY KEY, b text, c int DEFAULT 7 CHECK (c > 0), d int, e int)
+CREATE TABLE
+> CREATE INDEX t_d ON t (d)
+CREATE INDEX
+> CREATE INDEX t_de ON t (d, e)
+CREATE INDEX
+> CREATE INDEX t_ex ON t ((d + a))
+CREATE INDEX
+> CREATE VIEW v AS SELECT a, b FROM t
+CREATE VIEW
+> INSERT INTO t VALUES (1, 'x', 2, 3, 4), (2, 'y', 3, 4, 5)
+INSERT 0 2
+> ALTER TABLE t DROP COLUMN b
+ERROR 2BP01 cannot drop column b of table t because other objects depend on it
+DETAIL view v depends on column b of table t
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE t DROP COLUMN b CASCADE
+NOTICE 00000 drop cascades to view v
+ALTER TABLE
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,c@t.3:23:4:-1,d@t.4:23:4:-1,e@t.5:23:4:-1
+row 1,2,3,4
+row 2,3,4,5
+SELECT 2
+> SELECT attname, attnum, attisdropped, atttypid, attnotnull, atthasdef FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attisdropped@pg_attribute.17:16:1:-1,atttypid@pg_attribute.3:26:4:-1,attnotnull@pg_attribute.12:16:1:-1,atthasdef@pg_attribute.13:16:1:-1
+row a,1,f,23,t,f
+row ........pg.dropped.2........,2,t,0,f,f
+row c,3,f,23,f,t
+row d,4,f,23,f,f
+row e,5,f,23,f,f
+SELECT 5
+> INSERT INTO t VALUES (3, 4, 5, 6)
+INSERT 0 1
+> INSERT INTO t VALUES (4, 5, 6, 7, 8)
+ERROR 42601 INSERT has more expressions than target columns at 35
+> INSERT INTO t (a, e) VALUES (5, 9) RETURNING *
+fields a@t.1:23:4:-1,c@t.3:23:4:-1,d@t.4:23:4:-1,e@t.5:23:4:-1
+row 5,7,NULL,9
+INSERT 0 1
+> SELECT t::text FROM t ORDER BY a
+fields t:25:-1:-1
+row (1,2,3,4)
+row (2,3,4,5)
+row (3,4,5,6)
+row (5,7,,9)
+SELECT 4
+> SELECT row_to_json(t) FROM t WHERE a = 1
+fields row_to_json:114:-1:-1
+row {"a":1,"c":2,"d":3,"e":4}
+SELECT 1
+> SELECT t.* FROM t WHERE a = 1
+fields a@t.1:23:4:-1,c@t.3:23:4:-1,d@t.4:23:4:-1,e@t.5:23:4:-1
+row 1,2,3,4
+SELECT 1
+> UPDATE t SET d = d + 10 WHERE a = 1 RETURNING *
+fields a@t.1:23:4:-1,c@t.3:23:4:-1,d@t.4:23:4:-1,e@t.5:23:4:-1
+row 1,2,13,4
+UPDATE 1
+> ALTER TABLE t DROP COLUMN nosuch
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> ALTER TABLE t DROP COLUMN IF EXISTS nosuch
+NOTICE 00000 column "nosuch" of relation "t" does not exist, skipping
+ALTER TABLE
+> ALTER TABLE t DROP COLUMN ctid
+ERROR 0A000 cannot drop system column "ctid"
+> ALTER TABLE t DROP COLUMN b
+ERROR 42703 column "b" of relation "t" does not exist
+> SELECT b FROM t
+ERROR 42703 column "b" does not exist at 8
+> ALTER TABLE t DROP COLUMN c
+ALTER TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 't'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1
+row t_a_not_null
+row t_pkey
+SELECT 2
+> SELECT relname FROM pg_class WHERE relname LIKE 't\_%' ORDER BY relname
+fields relname@pg_class.2:19:64:-1
+row t_d
+row t_de
+row t_ex
+row t_pkey
+SELECT 4
+> ALTER TABLE t DROP COLUMN d
+ALTER TABLE
+> SELECT relname FROM pg_class WHERE relname LIKE 't\_%' ORDER BY relname
+fields relname@pg_class.2:19:64:-1
+row t_pkey
+SELECT 1
+> ALTER TABLE t ADD COLUMN f int DEFAULT 1
+ALTER TABLE
+> SELECT attname, attnum, attisdropped FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attisdropped@pg_attribute.17:16:1:-1
+row a,1,f
+row ........pg.dropped.2........,2,t
+row ........pg.dropped.3........,3,t
+row ........pg.dropped.4........,4,t
+row e,5,f
+row f,6,f
+SELECT 6
+> SELECT * FROM t ORDER BY a
+fields a@t.1:23:4:-1,e@t.5:23:4:-1,f@t.6:23:4:-1
+row 1,4,1
+row 2,5,1
+row 3,6,1
+row 5,9,1
+SELECT 4
+> SELECT column_name, ordinal_position FROM information_schema.columns WHERE table_name = 't' ORDER BY ordinal_position
+fields column_name@information_schema.columns.4:19:64:-1,ordinal_position@information_schema.columns.5:23:4:-1
+row a,1
+row e,5
+row f,6
+SELECT 3
+> CREATE TABLE r (k int REFERENCES t, z int)
+CREATE TABLE
+> ALTER TABLE t DROP COLUMN a
+ERROR 2BP01 cannot drop column a of table t because other objects depend on it
+DETAIL constraint r_k_fkey on table r depends on column a of table t
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE t DROP COLUMN a CASCADE
+NOTICE 00000 drop cascades to constraint r_k_fkey on table r
+ALTER TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid IN ('t'::regclass, 'r'::regclass) ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1
+SELECT 0
+> ALTER TABLE r DROP COLUMN k
+ALTER TABLE
+> SELECT * FROM r
+fields z@r.2:23:4:-1
+SELECT 0
+> ALTER TABLE r DROP COLUMN z
+ALTER TABLE
+> SELECT * FROM r
+fields 
+SELECT 0
+> INSERT INTO r DEFAULT VALUES
+INSERT 0 1
+> SELECT count(*) FROM r
+fields count:20:8:-1
+row 1
+SELECT 1
+> CREATE TABLE s (id serial, n int GENERATED ALWAYS AS IDENTITY, m int)
+CREATE TABLE
+> ALTER TABLE s DROP COLUMN id
+ALTER TABLE
+> ALTER TABLE s DROP COLUMN n
+ALTER TABLE
+> SELECT relname FROM pg_class WHERE relname LIKE 's\_%' ORDER BY relname
+fields relname@pg_class.2:19:64:-1
+SELECT 0
+> CREATE TABLE w (a int, b int, c int)
+CREATE TABLE
+> INSERT INTO w VALUES (1, 2, 3)
+INSERT 0 1
+> ALTER TABLE w DROP COLUMN a, DROP COLUMN c
+ALTER TABLE
+> SELECT * FROM w
+fields b@w.2:23:4:-1
+row 2
+SELECT 1
+> ALTER TABLE w DROP COLUMN b, ADD COLUMN x int DEFAULT 5
+ALTER TABLE
+> SELECT * FROM w
+fields x@w.4:23:4:-1
+row 5
+SELECT 1
+> COPY w TO STDOUT
+copy out 0 0
+data 5\n
+copy done
+COPY 1
+> CREATE VIEW wv AS SELECT * FROM w
+CREATE VIEW
+> ALTER TABLE wv DROP COLUMN x
+ERROR 42809 ALTER action DROP COLUMN cannot be performed on relation "wv"
+DETAIL This operation is not supported for views.
+> ALTER VIEW wv DROP COLUMN x
+ERROR 42809 ALTER action DROP COLUMN cannot be performed on relation "wv"
+DETAIL This operation is not supported for views.
+> CREATE TABLE p (a int, b int, CHECK (a < b))
+CREATE TABLE
+> ALTER TABLE p DROP COLUMN a
+ALTER TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 'p'::regclass
+fields conname@pg_constraint.2:19:64:-1
+SELECT 0
+> CREATE TABLE q (a int, b int)
+CREATE TABLE
+> CREATE VIEW qv AS SELECT q FROM q
+CREATE VIEW
+> ALTER TABLE q DROP COLUMN b
+ALTER TABLE
+> CREATE TABLE q2 (a int, b int, c int)
+CREATE TABLE
+> CREATE TABLE q3 (x q2)
+CREATE TABLE
+> ALTER TABLE q2 DROP COLUMN b
+ALTER TABLE
+> INSERT INTO q3 VALUES (ROW(1, 3))
+INSERT 0 1
+> SELECT x::text, (x).c FROM q3
+fields x:25:-1:-1,c:23:4:-1
+row (1,3),3
+SELECT 1
+> SELECT (ROW(1, 2)::q2).*
+fields a:23:4:-1,c:23:4:-1
+row 1,2
+SELECT 1
+> BEGIN
+BEGIN
+> ALTER TABLE w DROP COLUMN x
+ERROR 2BP01 cannot drop column x of table w because other objects depend on it
+DETAIL view wv depends on column x of table w
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> SELECT * FROM w
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM w
+fields x@w.4:23:4:-1
+row 5
+SELECT 1

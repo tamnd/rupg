@@ -148,8 +148,15 @@ impl Tables {
                 self.grown[var.relation].borrow()[row].clone()
             };
             values.truncate(width);
-            let types = self.types[var.relation].clone();
-            let names = self.names[var.relation].clone();
+            let mut types = self.types[var.relation].clone();
+            let mut names = self.names[var.relation].clone();
+            // A dropped column of a table has the type 0, and the row type has no field for it.
+            if self.oids[var.relation] != 0 && types.contains(&0) {
+                let live = |i: &usize| types[*i] != 0;
+                values = (0..values.len()).filter(live).map(|i| values[i].clone()).collect();
+                names = names.map(|n| (0..n.len()).filter(live).map(|i| n[i].clone()).collect());
+                types.retain(|&t| t != 0);
+            }
             return Value::Record(Box::new(Record { types, values, names }));
         }
         let column = usize::try_from(var.attnum - 1).unwrap_or(usize::MAX);

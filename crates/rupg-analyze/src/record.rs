@@ -59,6 +59,9 @@ pub fn record_fields(expr: &Expr, levels: &[&[Relation]]) -> Result<Option<Vec<C
             };
             if var.attnum == 0 {
                 let mut columns = relation.columns.clone();
+                if relation.oid != 0 {
+                    columns.retain(|c| !c.is_dropped());
+                }
                 if let Some(names) = &relation.alias {
                     for (column, name) in columns.iter_mut().zip(names) {
                         column.name.clone_from(name);

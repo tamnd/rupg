@@ -3,12 +3,12 @@
 use std::cmp::Ordering;
 use std::sync::Arc;
 
-use rupg_common::{Error, Result, SqlState};
+use rupg_common::{Error, Result};
 
 use super::{
-    Catalog, ConKind, DepKind, ObjRef, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE,
-    PG_PROC, PG_REWRITE, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE,
-    PG_TYPE, is_pinned,
+    Catalog, Column, ConKind, DepKind, ObjRef, PG_ATTRDEF, PG_CAST, PG_CLASS, PG_CONSTRAINT,
+    PG_NAMESPACE, PG_PROC, PG_REWRITE, PG_TRIGGER, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER,
+    PG_TS_TEMPLATE, PG_TYPE, is_pinned,
 };
 
 /// The reasons that the walk reached an object, the bits `DEPFLAG_*` of `dependency.c`.
@@ -199,7 +199,7 @@ impl Catalog {
     ///
     /// # Errors
     ///
-    /// `0A000` for a column, because rupg cannot remove a column yet.
+    /// An internal error for an object of a class that the catalog cannot remove.
     pub fn remove(&mut self, targets: &[Target]) -> Result<()> {
         for target in targets {
             let object = target.object;
@@ -215,11 +215,23 @@ impl Catalog {
     /// `doDeletion` for one object. A rule has no row of its own: it goes with its view.
     fn remove_one(&mut self, object: ObjRef) -> Result<()> {
         match object.class {
+            // `RemoveAttributeById`: the row of `pg_attribute` stays with `attisdropped`, so the later columns keep their numbers.
             PG_CLASS if object.sub != 0 => {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    "the removal of a column is not supported yet",
-                ));
+                if let Ok(number) = i16::try_from(object.sub)
+                    && let Ok(column) = self.column_mut(object.oid, number)
+                {
+                    *column = Column {
+                        name: format!("........pg.dropped.{}........", object.sub),
+                        ty: 0,
+                        typmod: -1,
+                        ndims: 0,
+                        collation: 0,
+                        not_null: false,
+                        has_default: false,
+                        identity: 0,
+                        dropped: true,
+                    };
+                }
             }
             PG_CLASS => {
                 self.relations.remove(&object.oid);

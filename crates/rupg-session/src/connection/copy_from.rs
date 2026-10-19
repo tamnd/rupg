@@ -220,15 +220,16 @@ impl Connection {
         }
         let catalog = self.catalog();
         let rel = catalog.relation(target.relid);
-        let types: Vec<(u32, i32)> = rel
-            .map(|rel| rel.columns.iter().map(|column| (column.ty, column.typmod)).collect())
-            .unwrap_or_default();
+        // The columns of the target are the columns that are not dropped.
+        let live: Vec<&rupg_catalog::Column> =
+            rel.map(|rel| rel.columns.iter().filter(|c| !c.dropped).collect()).unwrap_or_default();
+        let types: Vec<(u32, i32)> = live.iter().map(|column| (column.ty, column.typmod)).collect();
         // `build_column_default`: the default of the column, the next value of an identity column, or the default of the domain of the column.
         let has_default: Vec<bool> = target
             .selected
             .iter()
             .map(|&i| {
-                rel.and_then(|rel| rel.columns.get(i)).is_some_and(|column| {
+                live.get(i).is_some_and(|column| {
                     column.has_default
                         || column.identity != 0
                         || catalog

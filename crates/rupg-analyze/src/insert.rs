@@ -538,11 +538,12 @@ impl Analyzer<'_> {
                 return Err(not_yet(&format!("{what} a table with rules")));
             }
         }
+        // A dropped column keeps its place with no name and the type 0, and each new row has a null for it.
         let columns = rel
             .columns
             .iter()
             .map(|c| Column {
-                name: c.name.clone(),
+                name: if c.dropped { String::new() } else { c.name.clone() },
                 ty: c.ty,
                 typmod: c.typmod,
                 not_null: c.not_null,
@@ -713,7 +714,10 @@ impl Analyzer<'_> {
         columns: &[Column],
     ) -> Result<Vec<Given>> {
         if cols.is_empty() {
-            return Ok((0..columns.len()).map(|i| (i, None)).collect());
+            return Ok((0..columns.len())
+                .filter(|&i| !columns[i].is_dropped())
+                .map(|i| (i, None))
+                .collect());
         }
         let mut given: Vec<Given> = Vec::with_capacity(cols.len());
         for col in cols {
@@ -861,6 +865,10 @@ impl Analyzer<'_> {
         index: usize,
         column: &Column,
     ) -> Result<Expr> {
+        // A dropped column gets a null, as `ExecInitInsertProjection` gives it.
+        if column.is_dropped() {
+            return Ok(Expr::new(ExprKind::Const(Value::Null), 0));
+        }
         let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
         let sequence = self.env.catalog().and_then(|c| c.identity_sequence(table, attnum));
         if self.identity(table, index) != 0
