@@ -549,7 +549,7 @@ fn attribute<'a>(
         .set("attnotnull", Value::Bool(column.not_null))
         .set("atthasdef", Value::Bool(column.has_default))
         .set("atthasmissing", Value::Bool(false))
-        .set("attidentity", Value::Char(0))
+        .set("attidentity", Value::Char(column.identity))
         .set("attgenerated", Value::Char(0))
         .set("attisdropped", Value::Bool(false))
         .set("attislocal", Value::Bool(true))

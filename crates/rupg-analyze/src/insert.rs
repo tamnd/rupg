@@ -5,13 +5,15 @@
 use rupg_catalog::{ConKind, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
-use rupg_sql::nodes::{InsertStmt, Node, OnConflictAction, OnConflictClause, RangeVar, SelectStmt};
+use rupg_sql::nodes::{
+    InsertStmt, Node, OnConflictAction, OnConflictClause, OverridingKind, RangeVar, SelectStmt,
+};
 use rupg_types::{Value, oid};
 
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{Expr, ExprKind, Var};
+use crate::expr::{Expr, ExprKind, Func, FuncForm, Var};
 use crate::from::{Column, FromItem, Relation};
 use crate::merge::Merge;
 use crate::modify::carried_targets;
@@ -267,17 +269,18 @@ impl Analyzer<'_> {
                 row_query(&columns, row)
             }
             Some(select) if general_select(select) => {
-                self.insert_select(select, table, &columns, &given, explicit)?
+                self.insert_select(select, table, &columns, &given, explicit, s.r#override)?
             }
             Some(select) if select.valuesLists.len() > 1 => {
-                self.insert_values(select, table, &columns, &given, explicit)?
+                self.insert_values(select, table, &columns, &given, explicit, s.r#override)?
             }
             Some(select) => {
                 let Some(Some(Node::List(list))) = select.valuesLists.first() else {
                     return Err(Error::internal("a VALUES row that is not a list"));
                 };
                 let items = self.value_items(list, Kind::ValuesSingle)?;
-                let exprs = self.insert_row(items, table, &columns, &given, explicit)?;
+                let exprs =
+                    self.insert_row(items, table, &columns, &given, explicit, s.r#override)?;
                 let row = self.full_row(table, &columns, &given, exprs)?;
                 row_query(&columns, row)
             }
@@ -758,7 +761,7 @@ impl Analyzer<'_> {
         Ok(items)
     }
 
-    /// `transformInsertRow`: the items of a row, each with the type of its column, and `DEFAULT` as the default of the column.
+    /// `transformInsertRow`: the items of a row, each with the type of its column, and `DEFAULT` as the default of the column. An identity column gets its default for `OVERRIDING USER VALUE`, and a column that is `GENERATED ALWAYS` takes only `DEFAULT` without `OVERRIDING SYSTEM VALUE`.
     pub(crate) fn insert_row(
         &mut self,
         items: Vec<Item>,
@@ -766,6 +769,7 @@ impl Analyzer<'_> {
         columns: &[Column],
         given: &[Given],
         explicit: bool,
+        overriding: OverridingKind,
     ) -> Result<Vec<Expr>> {
         if items.len() > given.len() {
             return Err(Error::new(
@@ -789,12 +793,46 @@ impl Analyzer<'_> {
         }
         let mut row = Vec::with_capacity(items.len());
         for (item, &(index, _)) in items.into_iter().zip(given) {
+            let column = &columns[index];
+            // `rewriteTargetListIU`: the value of an identity column with `OVERRIDING`.
+            let identity = self.identity(table, index);
+            let item = match item {
+                Item::Expr(_)
+                    if identity != 0 && overriding == OverridingKind::OVERRIDING_USER_VALUE =>
+                {
+                    Item::Default(None)
+                }
+                Item::Expr(_)
+                    if identity == b'a' && overriding == OverridingKind::OVERRIDING_NOT_SET =>
+                {
+                    return Err(Error::new(
+                        SqlState::GENERATED_ALWAYS,
+                        format!(
+                            "cannot insert a non-DEFAULT value into column \"{}\"",
+                            column.name
+                        ),
+                    )
+                    .with_detail(format!(
+                        "Column \"{}\" is an identity column defined as GENERATED ALWAYS.",
+                        column.name
+                    ))
+                    .with_hint("Use OVERRIDING SYSTEM VALUE to override."));
+                }
+                item => item,
+            };
             row.push(match item {
-                Item::Default(_) => self.column_default(table, index, &columns[index])?,
-                Item::Expr(expr) => self.assign(expr, &columns[index])?,
+                Item::Default(_) => self.column_default(table, index, column)?,
+                Item::Expr(expr) => self.assign(expr, column)?,
             });
         }
         Ok(row)
+    }
+
+    /// `attidentity` of the column of the table with the index `index` from 0, or 0 for a column that is not an identity column.
+    pub(crate) fn identity(&self, table: u32, index: usize) -> u8 {
+        let catalog = self.env.catalog();
+        let relation = catalog.and_then(|c| c.relation(table));
+        relation.and_then(|r| r.columns.get(index)).map_or(0, |c| c.identity)
     }
 
     /// `transformAssignedExpr`: the expression cast to the type of the column with an assignment cast.
@@ -816,7 +854,7 @@ impl Analyzer<'_> {
             })
     }
 
-    /// `build_column_default`: the default of the column, or the default of its domain, cast to the type of the column. With no default, the value is a null value of the type, which a domain checks, as `coerce_null_to_domain` gives.
+    /// `build_column_default`: the default of the column, or the default of its domain, cast to the type of the column. With no default, the value is a null value of the type, which a domain checks, as `coerce_null_to_domain` gives. The default of an identity column is the next value of its sequence, as `NextValueExpr` gives.
     pub(crate) fn column_default(
         &mut self,
         table: u32,
@@ -824,6 +862,21 @@ impl Analyzer<'_> {
         column: &Column,
     ) -> Result<Expr> {
         let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
+        let sequence = self.env.catalog().and_then(|c| c.identity_sequence(table, attnum));
+        if self.identity(table, index) != 0
+            && let Some(sequence) = sequence
+        {
+            let mut expr = nextval(sequence)?;
+            // `NextValueExpr` does not check the privileges of the sequence.
+            if let ExprKind::Func(func) = &mut expr.kind {
+                func.args.push(Expr::constant(Value::Bool(true), oid::BOOL, -1, None));
+            }
+            return self
+                .coerce_to_target(expr, column.ty, column.typmod, Context::Assignment, None)?
+                .ok_or_else(|| {
+                    Error::internal("an identity column of a type that is not an integer")
+                });
+        }
         let catalog = self.env.catalog();
         let text = catalog.and_then(|c| c.default_of(table, attnum)).map(|d| d.expr.clone());
         let text = text.or_else(|| {
@@ -889,6 +942,7 @@ impl Analyzer<'_> {
         columns: &[Column],
         given: &[Given],
         explicit: bool,
+        overriding: OverridingKind,
     ) -> Result<Query> {
         self.keep_unknowns = true;
         let sub = self.sub_select(select, false);
@@ -921,7 +975,7 @@ impl Analyzer<'_> {
                 not_null: false,
             })
             .collect();
-        let exprs = self.insert_row(items, table, columns, given, explicit)?;
+        let exprs = self.insert_row(items, table, columns, given, explicit, overriding)?;
         let row = self.full_row(table, columns, given, exprs)?;
         let mut relation = Relation::new(0, sub_columns, Some(Box::new(sub)), None, None);
         relation.name = "*SELECT*".to_string();
@@ -941,6 +995,7 @@ impl Analyzer<'_> {
         columns: &[Column],
         given: &[Given],
         explicit: bool,
+        overriding: OverridingKind,
     ) -> Result<Query> {
         let mut rows: Vec<Vec<Expr>> = Vec::with_capacity(select.valuesLists.len());
         let mut length = None;
@@ -960,7 +1015,7 @@ impl Analyzer<'_> {
                 }
                 Some(_) => {}
             }
-            rows.push(self.insert_row(items, table, columns, given, explicit)?);
+            rows.push(self.insert_row(items, table, columns, given, explicit, overriding)?);
         }
         let width = rows.first().map_or(0, Vec::len);
         let value_columns: Vec<Column> = given
@@ -1007,6 +1062,22 @@ impl Analyzer<'_> {
         checks.sort_by(|a, b| a.0.cmp(&b.0));
         checks.into_iter().map(|(name, text)| Ok((name, crate::node::read(text)?))).collect()
     }
+}
+
+/// The default of a `serial` column or of an identity column before the cast to the type of the column: `nextval('sequence'::regclass)`.
+pub(crate) fn nextval(sequence: u32) -> Result<Expr> {
+    let proc = builtin::procs_named("nextval")
+        .next()
+        .ok_or_else(|| Error::internal("function nextval does not exist"))?;
+    let arg = Expr::constant(Value::Oid(sequence), oid::REGCLASS, -1, None);
+    let func = Func {
+        oid: proc.oid,
+        args: vec![arg],
+        form: FuncForm::Call,
+        variadic: false,
+        retset: false,
+    };
+    Ok(Expr::new(ExprKind::Func(func), proc.rettype))
 }
 
 /// `isGeneralSelect`: a source that is not a plain `VALUES` list runs as a subquery.

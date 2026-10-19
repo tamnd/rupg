@@ -191,6 +191,17 @@ impl Definer<'_, '_> {
             .ok_or_else(|| Error::internal("the input of bigint gave a value of another type"))
     }
 
+    /// The row of `pg_sequence` of the sequence of an identity column, from the options of the column.
+    pub(super) fn identity_sequence_info(
+        &mut self,
+        options: &[Option<Node>],
+    ) -> Result<SequenceInfo> {
+        let params = self.init_params(options, true, None)?;
+        let mut info = params.info;
+        info.data = SequenceData::new(params.last_value);
+        Ok(info)
+    }
+
     /// `init_params`: the checks of the options and the new row of `pg_sequence`. `current` is the row of `pg_sequence` and the row of the file for `ALTER SEQUENCE`, and `None` for `CREATE SEQUENCE`, which takes the defaults for the options that it does not give.
     fn init_params(
         &mut self,
