@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.44 (2026-10-19)
+
+A patch release on the way to M3. `INSERT ... ON CONFLICT` and `MERGE` now run, and the foreign keys run their actions.
+
 ### Added
 
 - `MERGE` with `WHEN MATCHED`, `WHEN NOT MATCHED BY SOURCE` and `WHEN NOT MATCHED BY TARGET`, the actions `INSERT`, `UPDATE`, `DELETE` and `DO NOTHING`, and `RETURNING` with `merge_action()`, `old` and `new` (#402).
