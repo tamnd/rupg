@@ -1329,6 +1329,82 @@ impl Catalog {
         Ok(number)
     }
 
+    /// `ATExecAlterColumnType` for the catalog: the column gets its new type, type modifier, collation and number of array dimensions, and its dependencies on the old type and collation give way to dependencies on the new ones.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a column that is not in the catalog.
+    pub fn alter_column_type(&mut self, table: u32, number: i16, new: &Column) -> Result<()> {
+        let column = self.column_mut(table, number)?;
+        column.ty = new.ty;
+        column.typmod = new.typmod;
+        column.collation = new.collation;
+        column.ndims = new.ndims;
+        let me = ObjRef::column(table, number);
+        self.depends.retain(|d| {
+            d.object != me
+                || d.kind != DepKind::Normal
+                || !matches!(d.referenced.class, PG_TYPE | PG_COLLATION)
+        });
+        let refs = [(PG_TYPE, new.ty), (PG_COLLATION, new.collation)];
+        for (class, found) in refs.into_iter().filter(|&(_, found)| found != 0) {
+            self.depend(me, ObjRef::new(class, found), DepKind::Normal);
+        }
+        Ok(())
+    }
+
+    /// The column `column` of an index, from 0, after a change of the type of the column `from` of the table, as the index that `ATPostAlterTypeCleanup` makes again has it: the type of the table column, the collation `collation`, and for a key column the operator class `class`.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for an index or a column that is not in the catalog.
+    pub fn set_index_column(
+        &mut self,
+        index: u32,
+        column: usize,
+        class: u32,
+        collation: u32,
+        from: &Column,
+    ) -> Result<()> {
+        let rel = self.relation_mut(index)?;
+        let found = rel.columns.get_mut(column).map(|c| {
+            c.ty = from.ty;
+            c.typmod = from.typmod;
+            c.ndims = from.ndims;
+            c.collation = collation;
+        });
+        if let Some(info) = rel.index.as_mut()
+            && let (Some(class_at), Some(collation_at)) =
+                (info.classes.get_mut(column), info.collations.get_mut(column))
+        {
+            *class_at = class;
+            *collation_at = collation;
+        }
+        found.ok_or_else(|| no_object(&format!("column {column} of index"), index))
+    }
+
+    /// The equality operators of a foreign key, `conpfeqop`, `conppeqop` and `conffeqop`, after a change of the type of a key column, as the foreign key that `ATPostAlterTypeCleanup` makes again has them.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a constraint that is not a foreign key of the catalog.
+    pub fn set_foreign_operators(
+        &mut self,
+        constraint: u32,
+        pf_eq: Vec<u32>,
+        pp_eq: Vec<u32>,
+        ff_eq: Vec<u32>,
+    ) -> Result<()> {
+        let foreign = self.constraints.get_mut(&constraint).and_then(|c| c.foreign.as_mut());
+        let Some(foreign) = foreign else {
+            return Err(no_object("foreign key", constraint));
+        };
+        foreign.pf_eq = pf_eq;
+        foreign.pp_eq = pp_eq;
+        foreign.ff_eq = ff_eq;
+        Ok(())
+    }
+
     /// `heap_create_with_catalog` for an ordinary table: the table gets an OID, then its array type, then its row type.
     pub fn create_table(&mut self, new: NewRelation) -> Result<u32> {
         self.create_relation(new, RelKind::Table)

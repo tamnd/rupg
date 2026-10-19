@@ -416,7 +416,7 @@ impl Definer<'_, '_> {
     }
 
     /// `getObjectDescription`.
-    fn describe(&self, object: ObjRef) -> String {
+    pub(super) fn describe(&self, object: ObjRef) -> String {
         match object.class {
             PG_CLASS if object.sub != 0 => {
                 let column = self

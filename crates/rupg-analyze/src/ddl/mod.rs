@@ -1,6 +1,7 @@
 //! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c` and `ExecuteTruncate` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`, so [`is_definition`] does not list it. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
+mod alter_type;
 mod comment;
 mod copy;
 mod domain;
@@ -23,6 +24,7 @@ mod view;
 
 pub use copy::{
     CopyRelation, CopyTarget, attnums, copy_filter, copy_insert, copy_relation, copy_target,
+    rewrite_insert,
 };
 pub(crate) use drop::quote_identifier;
 pub use function::{Body, function_body};
@@ -65,6 +67,19 @@ pub struct Defined {
     pub scans: Vec<u32>,
     /// The tables of `TRUNCATE`, whose rows the caller removes after the checks pass.
     pub truncated: Vec<u32>,
+    /// The expressions of `USING` of `ALTER COLUMN ... TYPE`, which give the new values of the columns when the caller writes the rows of the table again.
+    pub transforms: Vec<Transform>,
+}
+
+/// The expression of `USING` of `ALTER COLUMN ... TYPE` for one column, as `ATPrepAlterColumnType` keeps it in `tab->newvals`.
+#[derive(Clone, Debug)]
+pub struct Transform {
+    /// The OID of the table.
+    pub table: u32,
+    /// The name of the column.
+    pub column: String,
+    /// The expression before its transform. It refers to the columns of the table by their names, and it gives the old values of the columns.
+    pub expr: Node,
 }
 
 /// True for a statement that [`define`] runs.
@@ -133,6 +148,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         messages: Vec::new(),
         scans: Vec::new(),
         truncated: Vec::new(),
+        transforms: Vec::new(),
     };
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
@@ -164,6 +180,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         result,
         scans: definer.scans,
         truncated: definer.truncated,
+        transforms: definer.transforms,
     }
 }
 
@@ -212,6 +229,10 @@ impl Env for SchemaEnv<'_> {
     fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
         self.env.sequence_row(file)
     }
+
+    fn deparse(&self, text: &str, relation: u32) -> Result<String> {
+        self.env.deparse(text, relation)
+    }
 }
 
 /// A relation that a name gives.
@@ -233,6 +254,8 @@ pub(crate) struct Definer<'a, 'c> {
     scans: Vec<u32>,
     /// The tables of [`Defined::truncated`].
     truncated: Vec<u32>,
+    /// The expressions of [`Defined::transforms`].
+    transforms: Vec<Transform>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.

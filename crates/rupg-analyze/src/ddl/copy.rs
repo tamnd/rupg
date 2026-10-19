@@ -156,6 +156,52 @@ pub fn copy_filter(target: &CopyTarget, rv: &RangeVar, condition: &Node) -> Node
     select.into()
 }
 
+/// The `INSERT` that writes a row of a table again after `ALTER COLUMN ... TYPE`, as `ATRewriteTable` evaluates `tab->newvals`: the parameter `$n` is the old value of the selected column `n`, and `transforms` gives the expression of `USING` of a selected column, or `None` for a column that keeps its old value. The expressions refer to the columns by their names, through `FROM (VALUES ($1, ...)) AS relname(columns)`. The other columns get their defaults.
+#[must_use]
+pub fn rewrite_insert(target: &CopyTarget, rv: &RangeVar, transforms: &[Option<&Node>]) -> Node {
+    let names: Vec<&str> = target.selected.iter().map(|&i| target.columns[i].as_str()).collect();
+    let cols = names
+        .iter()
+        .map(|&name| {
+            Some(ResTarget { name: Some(name.into()), location: -1, ..Default::default() }.into())
+        })
+        .collect();
+    let targets = names
+        .iter()
+        .enumerate()
+        .map(|(k, &name)| {
+            let value = match transforms.get(k).copied().flatten() {
+                Some(expr) => expr.clone(),
+                None => {
+                    let field = Some(Node::String(name.into()));
+                    ColumnRef { fields: vec![field], location: -1 }.into()
+                }
+            };
+            Some(ResTarget { val: Some(value), location: -1, ..Default::default() }.into())
+        })
+        .collect();
+    let colnames = names.iter().map(|&name| Some(Node::String(name.into()))).collect();
+    let alias = Alias { aliasname: rv.relname.clone(), colnames };
+    let from = RangeSubselect {
+        lateral: false,
+        subquery: Some(values(names.len()).into()),
+        alias: Some(Box::new(alias)),
+    };
+    let select = SelectStmt {
+        targetList: targets,
+        fromClause: vec![Some(from.into())],
+        ..Default::default()
+    };
+    let insert = InsertStmt {
+        relation: Some(Box::new(RangeVar { alias: None, location: -1, ..rv.clone() })),
+        cols,
+        selectStmt: Some(select.into()),
+        r#override: OverridingKind::OVERRIDING_SYSTEM_VALUE,
+        ..Default::default()
+    };
+    insert.into()
+}
+
 /// `VALUES ($1, ..., $count)`.
 fn values(count: usize) -> SelectStmt {
     let params = (1..=count)

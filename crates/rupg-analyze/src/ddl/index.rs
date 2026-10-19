@@ -501,16 +501,9 @@ impl Definer<'_, '_> {
         let parts = names(opclass);
         let legacy = parts.len() == 1 && LEGACY_OPCLASSES.contains(&parts[0]);
         if parts.is_empty() || legacy {
-            return default_opclass(ty, method).map(|c| c.oid).ok_or_else(|| {
-                Error::new(
-                    SqlState::UNDEFINED_OBJECT,
-                    format!(
-                        "data type {} has no default operator class for access method \"{method_name}\"",
-                        types::name(ty)
-                    ),
-                )
-                .with_hint("You must specify an operator class for the index or define a default operator class for the data type.")
-            });
+            return default_opclass(ty, method)
+                .map(|c| c.oid)
+                .ok_or_else(|| no_default_opclass(ty, method));
         }
         let shown = parts.join(".");
         let (schema, name) = match parts.as_slice() {
@@ -554,6 +547,19 @@ impl Definer<'_, '_> {
         }
         Ok(class.oid)
     }
+}
+
+/// The error of `ResolveOpClass` for a type with no default operator class for the access method.
+pub(super) fn no_default_opclass(ty: u32, method: u32) -> Error {
+    let method_name = if method == HASH { "hash" } else { "btree" };
+    Error::new(
+        SqlState::UNDEFINED_OBJECT,
+        format!(
+            "data type {} has no default operator class for access method \"{method_name}\"",
+            types::name(ty)
+        ),
+    )
+    .with_hint("You must specify an operator class for the index or define a default operator class for the data type.")
 }
 
 /// The index elements of a list.

@@ -1,0 +1,199 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text DEFAULT 'x')
+CREATE TABLE
+> INSERT INTO t VALUES (1, '5')
+INSERT 0 1
+> CREATE VIEW v AS SELECT a FROM t
+CREATE VIEW
+> ALTER TABLE t ALTER COLUMN a TYPE bigint
+ERROR 0A000 cannot alter type of a column used by a view or rule
+DETAIL rule _RETURN on view v depends on column "a".
+> ALTER TABLE t ALTER COLUMN b TYPE int USING b::int
+ERROR 42804 default for column "b" cannot be cast automatically to type integer
+> ALTER TABLE t ALTER COLUMN b TYPE int USING 'x'
+ERROR 22P02 invalid input syntax for type integer: "x" at 45
+> ALTER TABLE t ALTER COLUMN b TYPE int USING now()
+ERROR 42804 result of USING clause for column "b" cannot be cast automatically to type integer
+HINT You might need to add an explicit cast.
+> ALTER TABLE t ALTER COLUMN b TYPE int USING generate_series(1, 2)
+ERROR 0A000 set-returning functions are not allowed in transform expressions at 45
+> ALTER TABLE t ALTER COLUMN b TYPE int USING row_number() OVER ()
+ERROR 42P20 window functions are not allowed in transform expressions at 45
+> ALTER TABLE t ALTER COLUMN b TYPE int USING $1
+ERROR 42P02 there is no parameter $1 at 45
+> ALTER TABLE t ALTER COLUMN b TYPE int USING t.b::int
+ERROR 42804 default for column "b" cannot be cast automatically to type integer
+> SELECT * FROM t
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 1,5
+SELECT 1
+> SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 't'::regclass
+fields pg_get_expr:25:-1:-1
+row 'x'::text
+SELECT 1
+> CREATE TABLE d (a text DEFAULT 'abc')
+CREATE TABLE
+> ALTER TABLE d ALTER COLUMN a TYPE int USING a::int
+ERROR 42804 default for column "a" cannot be cast automatically to type integer
+> ALTER TABLE d ALTER COLUMN a TYPE date USING NULL
+ERROR 42804 default for column "a" cannot be cast automatically to type date
+> CREATE TABLE s (id serial PRIMARY KEY, n int)
+CREATE TABLE
+> INSERT INTO s (n) VALUES (1), (2)
+INSERT 0 2
+> ALTER TABLE s ALTER COLUMN id TYPE bigint
+ALTER TABLE
+> SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 's'::regclass
+fields pg_get_expr:25:-1:-1
+row nextval('s_id_seq'::regclass)
+SELECT 1
+> SELECT seqtypid::regtype FROM pg_sequence WHERE seqrelid = 's_id_seq'::regclass
+fields seqtypid:2206:4:-1
+row integer
+SELECT 1
+> INSERT INTO s (n) VALUES (3)
+INSERT 0 1
+> SELECT * FROM s ORDER BY id
+fields id@s.1:20:8:-1,n@s.2:23:4:-1
+row 1,1
+row 2,2
+row 3,3
+SELECT 3
+> CREATE TABLE i (id int GENERATED ALWAYS AS IDENTITY, n int)
+CREATE TABLE
+> INSERT INTO i (n) VALUES (1)
+INSERT 0 1
+> ALTER TABLE i ALTER COLUMN id TYPE bigint
+ALTER TABLE
+> SELECT seqtypid::regtype, seqmax FROM pg_sequence WHERE seqrelid = 'i_id_seq'::regclass
+fields seqtypid:2206:4:-1,seqmax@pg_sequence.5:20:8:-1
+row bigint,9223372036854775807
+SELECT 1
+> ALTER TABLE i ALTER COLUMN id TYPE smallint
+ALTER TABLE
+> SELECT seqtypid::regtype, seqmax FROM pg_sequence WHERE seqrelid = 'i_id_seq'::regclass
+fields seqtypid:2206:4:-1,seqmax@pg_sequence.5:20:8:-1
+row smallint,32767
+SELECT 1
+> ALTER TABLE i ALTER COLUMN id TYPE text
+ERROR 22023 identity column type must be smallint, integer, or bigint
+> CREATE TABLE p (k int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE c (k int REFERENCES p)
+CREATE TABLE
+> INSERT INTO p VALUES (1)
+INSERT 0 1
+> INSERT INTO c VALUES (1)
+INSERT 0 1
+> ALTER TABLE c ALTER COLUMN k TYPE bigint
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN k TYPE bigint
+ALTER TABLE
+> ALTER TABLE c ALTER COLUMN k TYPE text
+ERROR 42804 foreign key constraint "c_k_fkey" cannot be implemented
+DETAIL Key columns "k" of the referencing table and "k" of the referenced table are of incompatible types: text and bigint.
+> ALTER TABLE p ALTER COLUMN k TYPE text
+ERROR 42804 foreign key constraint "c_k_fkey" cannot be implemented
+DETAIL Key columns "k" of the referencing table and "k" of the referenced table are of incompatible types: bigint and text.
+> SELECT conname, contype, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid IN ('p'::regclass, 'c'::regclass) ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,pg_get_constraintdef:25:-1:-1
+row c_k_fkey,f,FOREIGN KEY (k) REFERENCES p(k)
+row p_k_not_null,n,NOT NULL k
+row p_pkey,p,PRIMARY KEY (k)
+SELECT 3
+> CREATE TABLE y (a text, b text)
+CREATE TABLE
+> CREATE INDEX yb ON y (b text_pattern_ops)
+CREATE INDEX
+> CREATE INDEX ya ON y (a COLLATE "C")
+CREATE INDEX
+> ALTER TABLE y ALTER COLUMN b TYPE varchar(5)
+ALTER TABLE
+> ALTER TABLE y ALTER COLUMN a TYPE varchar(5)
+ALTER TABLE
+> SELECT pg_get_indexdef(indexrelid) FROM pg_index WHERE indrelid = 'y'::regclass ORDER BY 1
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ya ON public.y USING btree (a COLLATE "C")
+row CREATE INDEX yb ON public.y USING btree (b text_pattern_ops)
+SELECT 2
+> ALTER TABLE y ALTER COLUMN b TYPE int USING length(b)
+ERROR 42804 operator class "text_pattern_ops" does not accept data type integer
+> CREATE DOMAIN pos AS int CHECK (VALUE > 0)
+CREATE DOMAIN
+> CREATE TABLE z (a int)
+CREATE TABLE
+> INSERT INTO z VALUES (0)
+INSERT 0 1
+> ALTER TABLE z ALTER COLUMN a TYPE pos
+ERROR 23514 value for domain pos violates check constraint "pos_check"
+> UPDATE z SET a = 1
+UPDATE 1
+> ALTER TABLE z ALTER COLUMN a TYPE pos
+ALTER TABLE
+> SELECT a, pg_typeof(a) FROM z
+fields a@z.1:23:4:-1,pg_typeof:2206:4:-1
+row 1,pos
+SELECT 1
+> ALTER TABLE z ALTER COLUMN a TYPE numeric(1,0) USING a * 100
+ERROR 22003 numeric field overflow
+DETAIL A field with precision 1, scale 0 must round to an absolute value less than 10^1.
+> CREATE TABLE w (a int, b int CHECK (b > a), c int CHECK (c > 0))
+CREATE TABLE
+> INSERT INTO w VALUES (1, 2, 3)
+INSERT 0 1
+> ALTER TABLE w ALTER COLUMN a TYPE numeric, ALTER COLUMN b TYPE numeric
+ALTER TABLE
+> SELECT conname, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'w'::regclass ORDER BY conname
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1
+row w_c_check,CHECK ((c > 0))
+row w_check,CHECK ((b > a))
+SELECT 2
+> ALTER TABLE w ALTER COLUMN c TYPE int, ADD COLUMN e int DEFAULT 1
+ALTER TABLE
+> ALTER TABLE w ADD COLUMN f int, ALTER COLUMN f TYPE bigint
+ERROR 42703 column "f" of relation "w" does not exist
+> SELECT * FROM w
+fields a@w.1:1700:-1:-1,b@w.2:1700:-1:-1,c@w.3:23:4:-1,e@w.4:23:4:-1
+row 1,2,3,1
+SELECT 1
+> ALTER TABLE w ALTER COLUMN a TYPE int USING a::int, ALTER COLUMN c SET NOT NULL
+ALTER TABLE
+> ALTER TABLE w ALTER a TYPE bigint
+ALTER TABLE
+> ALTER TABLE w ALTER COLUMN a TYPE int[]
+ERROR 42804 column "a" cannot be cast automatically to type integer[]
+HINT You might need to specify "USING a::integer[]".
+> SELECT * FROM w
+fields a@w.1:20:8:-1,b@w.2:1700:-1:-1,c@w.3:23:4:-1,e@w.4:23:4:-1
+row 1,2,3,1
+SELECT 1
+> SELECT attname, atttypid::regtype, attndims FROM pg_attribute WHERE attrelid = 'w'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,attndims@pg_attribute.7:21:2:-1
+row a,bigint,0
+row b,numeric,0
+row c,integer,0
+row e,integer,0
+SELECT 4
+> CREATE VIEW wv AS SELECT * FROM w
+CREATE VIEW
+> ALTER VIEW wv ALTER COLUMN a TYPE int
+ERROR 42809 ALTER action ALTER COLUMN ... SET DATA TYPE cannot be performed on relation "wv"
+DETAIL This operation is not supported for views.
+> ALTER TABLE wv ALTER COLUMN a TYPE int
+ERROR 42809 ALTER action ALTER COLUMN ... SET DATA TYPE cannot be performed on relation "wv"
+DETAIL This operation is not supported for views.
+> BEGIN
+BEGIN
+> ALTER TABLE w ALTER COLUMN c TYPE text
+ERROR 0A000 cannot alter type of a column used by a view or rule
+DETAIL rule _RETURN on view wv depends on column "c".
+> SELECT * FROM w
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM w
+fields a@w.1:20:8:-1,b@w.2:1700:-1:-1,c@w.3:23:4:-1,e@w.4:23:4:-1
+row 1,2,3,1
+SELECT 1

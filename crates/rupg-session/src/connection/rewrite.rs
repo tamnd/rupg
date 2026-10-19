@@ -1,10 +1,10 @@
-//! The rows of a table after a statement that changes the table, as `ATRewriteTables` makes them: a new column gets its default in each row, and the rows must pass the new not-null constraints, the new check constraints, the new unique indexes and the new foreign keys.
+//! The rows of a table after a statement that changes the table, as `ATRewriteTables` makes them: a new column gets its default in each row, a column with a new type gets the value of its `USING` expression or its old value with the new type, and the rows must pass the new not-null constraints, the new check constraints, the new unique indexes and the new foreign keys.
 //!
 //! PostgreSQL writes the rows to a new file, or it only reads them when no row changes. rupg deletes each row and inserts its new version in the same command, so a rollback brings back the old rows.
 
 use std::sync::Arc;
 
-use rupg_analyze::{CopyTarget, Params};
+use rupg_analyze::{CopyTarget, Params, Transform};
 use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, Relation};
 use rupg_common::{Error, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -17,12 +17,17 @@ use crate::heap::{Changed, View};
 use crate::query;
 
 impl Connection {
-    /// The tables whose rows the statement `node` changes, from the catalog before the statement to `work`. A table with no rows needs no change.
+    /// The tables whose rows the statement `node` changes, from the catalog before the statement to `work`. A table with no rows needs no change. A table with an expression of `transforms` always gets its rows again.
     ///
     /// # Errors
     ///
-    /// `0A000` for a change that the rows cannot get yet: `ALTER DOMAIN` on a table with rows, and a change of the type of a column or a dropped column.
-    pub(super) fn rows_to_rewrite(&self, node: &Node, work: &Catalog) -> Result<Vec<u32>, Error> {
+    /// `0A000` for a change that the rows cannot get yet: `ALTER DOMAIN` on a table with rows, a change of the type of a column by a statement that is not `ALTER TABLE`, and a dropped column.
+    pub(super) fn rows_to_rewrite(
+        &self,
+        node: &Node,
+        work: &Catalog,
+        transforms: &[Transform],
+    ) -> Result<Vec<u32>, Error> {
         let heap = self.store.heap();
         let old = self.catalog();
         let mut tables = old.relations().filter(|rel| {
@@ -43,14 +48,16 @@ impl Connection {
             };
         }
         let mut out = Vec::new();
-        for rel in tables.filter(|rel| changes_rows(&old, work, rel)) {
+        let transformed = |rel: &Relation| transforms.iter().any(|t| t.table == rel.oid);
+        for rel in tables.filter(|rel| transformed(rel) || changes_rows(&old, work, rel)) {
             let Some(now) = work.relation(rel.oid) else { continue };
             let same = now.columns.len() >= rel.columns.len()
-                && rel.columns.iter().zip(&now.columns).all(|(before, after)| {
-                    before.ty == after.ty
-                        && before.typmod == after.typmod
-                        && before.collation == after.collation
-                });
+                && (matches!(node, Node::AlterTableStmt(_))
+                    || rel.columns.iter().zip(&now.columns).all(|(before, after)| {
+                        before.ty == after.ty
+                            && before.typmod == after.typmod
+                            && before.collation == after.collation
+                    }));
             if !same {
                 return Err(not_yet(match node {
                     Node::IndexStmt(_) => "CREATE INDEX",
@@ -64,7 +71,12 @@ impl Connection {
     }
 
     /// `ATRewriteTable` for the tables: each row gets the new columns, then the checks of the new constraints. The first write of a transaction gives it a transaction ID, and the statement ends a command. When another transaction in progress changed a table, the statement waits for its end, as the lock of `ALTER TABLE` waits.
-    pub(super) fn rewrite_rows(&self, tables: &[u32], work: &Arc<Catalog>) -> Result<(), Error> {
+    pub(super) fn rewrite_rows(
+        &self,
+        tables: &[u32],
+        work: &Arc<Catalog>,
+        transforms: &[Transform],
+    ) -> Result<(), Error> {
         if tables.is_empty() {
             return Ok(());
         }
@@ -84,13 +96,13 @@ impl Connection {
             // The rows that the truncate deleted stay visible to the command that deleted them.
             let view = View { xid: self.xid.get(), ..self.view() };
             let rows = heap.rows(table, &view);
-            self.rewrite_table(&old, rel, work, &view, rows)?;
+            self.rewrite_table(&old, rel, work, &view, rows, transforms)?;
         }
         self.command.set(command + 1);
         Ok(())
     }
 
-    /// The new versions of the rows `rows` of the table `rel`, with the ID of the old version at the end of each row. The `INSERT` of the old columns gives the new columns their defaults, as the expressions of `ATRewriteTable` do.
+    /// The new versions of the rows `rows` of the table `rel`, with the ID of the old version at the end of each row. The `INSERT` of the old columns gives the new columns their defaults, as the expressions of `ATRewriteTable` do. When a column has a new type or an expression of `transforms`, the `INSERT` reads the old values with their old types, and the expressions give the new values.
     fn rewrite_table(
         &self,
         old: &Catalog,
@@ -98,6 +110,7 @@ impl Connection {
         work: &Arc<Catalog>,
         view: &View,
         rows: Vec<Vec<Value>>,
+        transforms: &[Transform],
     ) -> Result<(), Error> {
         let Some(now) = work.relation(rel.oid) else { return Ok(()) };
         let width = rel.columns.len();
@@ -120,9 +133,26 @@ impl Connection {
             location: -1,
             ..RangeVar::default()
         };
-        let node = rupg_analyze::copy_insert(&target, &rv, &[]);
+        let changed = rel.columns.iter().zip(&now.columns).any(|(before, after)| {
+            before.ty != after.ty
+                || before.typmod != after.typmod
+                || before.collation != after.collation
+        });
+        let own: Vec<&Transform> = transforms.iter().filter(|t| t.table == rel.oid).collect();
+        let (node, types) = if width > 0 && (changed || !own.is_empty()) {
+            // The last expression for a column wins, as the last entry of `tab->newvals` does.
+            let exprs: Vec<Option<&Node>> = rel
+                .columns
+                .iter()
+                .map(|c| own.iter().rev().find(|t| t.column == c.name).map(|t| &t.expr))
+                .collect();
+            let types = rel.columns.iter().map(|c| c.ty).collect();
+            (rupg_analyze::rewrite_insert(&target, &rv, &exprs), types)
+        } else {
+            (rupg_analyze::copy_insert(&target, &rv, &[]), vec![0; width])
+        };
         let reader = self.reader_on(Arc::clone(work));
-        let params = Params { types: vec![0; width], variable: true };
+        let params = Params { types, variable: true };
         let plan = query::plan(&node, &reader, &params)?.fold(None, &reader)?;
         let Some(info) = plan.write() else {
             return Err(Error::internal("the rewrite of a table with no plan of its rows"));

@@ -932,6 +932,10 @@ impl Env for Reader<'_> {
     fn sequence_row(&self, file: u32) -> Option<SequenceData> {
         rupg_func::Session::sequence_row(self, file)
     }
+
+    fn deparse(&self, text: &str, relation: u32) -> Result<String> {
+        rupg_func::deparse_relation_expression(text, relation, self)
+    }
 }
 
 /// `parse_analyze` and the plan of a statement.

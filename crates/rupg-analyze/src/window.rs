@@ -274,7 +274,8 @@ impl Analyzer<'_> {
             | Kind::ColumnDefault
             | Kind::IndexExpression
             | Kind::IndexPredicate
-            | Kind::ExecuteParameter => {
+            | Kind::ExecuteParameter
+            | Kind::Transform => {
                 Some(format!("window functions are not allowed in {}", self.kind.name()))
             }
             Kind::Other => return Err(not_yet("a window function in this place", at)),

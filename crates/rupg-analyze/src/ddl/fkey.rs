@@ -21,6 +21,20 @@ fn invalid(message: String) -> Error {
     Error::new(SqlState::INVALID_FOREIGN_KEY, message)
 }
 
+/// The columns of a foreign key and the operator classes of the unique index that it uses, for [`Definer::foreign_operators`].
+pub(super) struct Keys<'a> {
+    /// The referencing table.
+    pub(super) table: u32,
+    /// The referencing columns.
+    pub(super) fk: &'a [i16],
+    /// The referenced table.
+    pub(super) pk: u32,
+    /// The referenced columns.
+    pub(super) pk_keys: &'a [i16],
+    /// The operator class of the index for each referenced column.
+    pub(super) classes: &'a [u32],
+}
+
 impl Definer<'_, '_> {
     /// Adds the foreign key `con` to the table.
     pub(super) fn add_foreign_key(&mut self, table: u32, con: &Constraint) -> Result<()> {
@@ -117,15 +131,51 @@ impl Definer<'_, '_> {
                 "number of referencing and referenced columns for foreign key disagree".into(),
             ));
         }
+        let keys = Keys { table, fk: &fk_keys, pk, pk_keys: &pk_keys, classes: &classes };
+        let names = (fk_names.as_slice(), pk_names.as_slice());
+        let (pf_eq, pp_eq, ff_eq) = self.foreign_operators(&name, &keys, names)?;
+        let foreign = ForeignKey {
+            table: pk,
+            keys: pk_keys,
+            update: char::from(con.fk_upd_action),
+            delete: char::from(con.fk_del_action),
+            match_type: char::from(con.fk_matchtype),
+            pf_eq,
+            pp_eq,
+            ff_eq,
+        };
+        self.catalog.add_foreign_key(NewForeignKey {
+            table,
+            name: Some(name),
+            keys: fk_keys,
+            index,
+            deferrable: con.deferrable,
+            deferred: con.initdeferred,
+            foreign,
+        })?;
+        Ok(())
+    }
+
+    /// The equality operators `conpfeqop`, `conppeqop` and `conffeqop` of `ATAddForeignKeyConstraint` for the columns of a foreign key, from the operator classes of the unique index of the referenced table.
+    ///
+    /// # Errors
+    ///
+    /// `42804` for a pair of columns that no operator can compare.
+    pub(super) fn foreign_operators(
+        &self,
+        name: &str,
+        keys: &Keys<'_>,
+        names: (&[impl AsRef<str>], &[impl AsRef<str>]),
+    ) -> Result<(Vec<u32>, Vec<u32>, Vec<u32>)> {
         let (mut pf_eq, mut pp_eq, mut ff_eq) = (Vec::new(), Vec::new(), Vec::new());
-        for i in 0..fk_keys.len() {
-            let fk_type = self.column_type(table, fk_keys[i]);
-            let pk_type = self.column_type(pk, pk_keys[i]);
-            let class = builtin::opclasses().iter().find(|c| c.oid == classes[i]);
+        for i in 0..keys.fk.len() {
+            let fk_type = self.column_type(keys.table, keys.fk[i]);
+            let pk_type = self.column_type(keys.pk, keys.pk_keys[i]);
+            let class = builtin::opclasses().iter().find(|c| c.oid == keys.classes[i]);
             let Some(class) = class else {
                 return Err(Error::internal(format!(
                     "cache lookup failed for opclass {}",
-                    classes[i]
+                    keys.classes[i]
                 )));
             };
             let (family, intype) = (class.family, class.intype);
@@ -153,8 +203,8 @@ impl Definer<'_, '_> {
                 )
                 .with_detail(format!(
                     "Key columns \"{}\" of the referencing table and \"{}\" of the referenced table are of incompatible types: {} and {}.",
-                    fk_names[i],
-                    pk_names[i],
+                    names.0[i].as_ref(),
+                    names.1[i].as_ref(),
                     types::name(fk_type),
                     types::name(pk_type)
                 )));
@@ -163,26 +213,7 @@ impl Definer<'_, '_> {
             pp_eq.push(pp);
             ff_eq.push(ff.unwrap_or(0));
         }
-        let foreign = ForeignKey {
-            table: pk,
-            keys: pk_keys,
-            update: char::from(con.fk_upd_action),
-            delete: char::from(con.fk_del_action),
-            match_type: char::from(con.fk_matchtype),
-            pf_eq,
-            pp_eq,
-            ff_eq,
-        };
-        self.catalog.add_foreign_key(NewForeignKey {
-            table,
-            name: Some(name),
-            keys: fk_keys,
-            index,
-            deferrable: con.deferrable,
-            deferred: con.initdeferred,
-            foreign,
-        })?;
-        Ok(())
+        Ok((pf_eq, pp_eq, ff_eq))
     }
 
     /// `transformColumnNameList`: the numbers of the columns of a foreign key.

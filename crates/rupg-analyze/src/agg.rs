@@ -59,6 +59,8 @@ pub(crate) enum Kind {
     ExecuteParameter,
     /// `EXPR_KIND_RETURNING`: the list of `RETURNING`.
     Returning,
+    /// `EXPR_KIND_ALTER_COL_TRANSFORM`: the expression of `USING` of `ALTER COLUMN ... TYPE`.
+    Transform,
 }
 
 impl Kind {
@@ -91,6 +93,7 @@ impl Kind {
             Kind::MergeWhen => "MERGE WHEN conditions",
             Kind::ExecuteParameter => "EXECUTE parameters",
             Kind::Returning => "RETURNING",
+            Kind::Transform => "transform expressions",
         }
     }
 
@@ -103,6 +106,7 @@ impl Kind {
                 | Kind::IndexExpression
                 | Kind::IndexPredicate
                 | Kind::ExecuteParameter
+                | Kind::Transform
         )
     }
 
@@ -113,6 +117,7 @@ impl Kind {
             Kind::Check => "check constraint",
             Kind::IndexExpression => "index expression",
             Kind::ExecuteParameter => "EXECUTE parameter",
+            Kind::Transform => "transform expression",
             _ => "index predicate",
         }
     }
@@ -379,7 +384,8 @@ impl Analyzer<'_> {
             | Kind::UpdateSource
             | Kind::MergeWhen
             | Kind::ExecuteParameter
-            | Kind::Returning => {
+            | Kind::Returning
+            | Kind::Transform => {
                 return Err(grouping_error(
                     format!("{what} are not allowed in {}", place.name()),
                     at,

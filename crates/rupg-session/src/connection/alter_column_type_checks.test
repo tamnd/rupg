@@ -1,0 +1,119 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text, c int GENERATED ALWAYS AS IDENTITY)
+CREATE TABLE
+> ALTER TABLE t ALTER COLUMN a TYPE nosuchtype USING nosuch
+ERROR 42703 column "nosuch" does not exist at 52
+> ALTER TABLE t ALTER COLUMN ctid TYPE int USING nosuch
+ERROR 42703 column "nosuch" does not exist at 48
+> ALTER TABLE t ALTER COLUMN ctid TYPE nosuchtype
+ERROR 0A000 cannot alter system column "ctid" at 28
+> ALTER TABLE t ALTER COLUMN a TYPE int, ALTER COLUMN a TYPE nosuchtype
+ERROR 42704 type "nosuchtype" does not exist at 60
+> ALTER TABLE t ALTER COLUMN a TYPE int, ALTER COLUMN a TYPE bigint
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN a TYPE bigint, ALTER COLUMN a TYPE int
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN c TYPE nosuchtype
+ERROR 42704 type "nosuchtype" does not exist at 35
+> ALTER TABLE t ALTER COLUMN c TYPE text USING nosuch
+ERROR 42703 column "nosuch" does not exist at 46
+> ALTER TABLE t ALTER COLUMN c TYPE text, ALTER COLUMN b TYPE nosuchtype
+ERROR 22023 identity column type must be smallint, integer, or bigint
+> ALTER TABLE t ALTER COLUMN a TYPE int COLLATE "C"
+ERROR 42804 collations are not supported by type integer at 39
+> ALTER TABLE t ALTER COLUMN b TYPE text COLLATE nosuch
+ERROR 42704 collation "nosuch" for encoding "UTF8" does not exist at 40
+> ALTER TABLE t ALTER COLUMN b TYPE text COLLATE "C"
+ALTER TABLE
+> SELECT attcollation FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'b'
+fields attcollation@pg_attribute.20:26:4:-1
+row 950
+SELECT 1
+> ALTER TABLE t ALTER COLUMN b TYPE varchar(3)
+ALTER TABLE
+> SELECT attcollation FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'b'
+fields attcollation@pg_attribute.20:26:4:-1
+row 100
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a TYPE anyelement
+ERROR 42P16 column "a" has pseudo-type anyelement
+> ALTER TABLE t ALTER COLUMN a TYPE t
+ERROR 42P16 composite type t cannot be made a member of itself
+> ALTER TABLE t ALTER COLUMN a TYPE int[] USING NULL
+ALTER TABLE
+> SELECT attname, atttypid::regtype, attndims FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,attndims@pg_attribute.7:21:2:-1
+row a,integer[],1
+row b,character varying,0
+row c,integer,0
+SELECT 3
+> ALTER TABLE t ALTER COLUMN a TYPE int USING a[1] + 1, ALTER COLUMN b TYPE int USING length(b) + a[1]
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN a TYPE numeric(4,1) USING a + 'x'
+ERROR 22P02 invalid input syntax for type integer: "x" at 58
+> ALTER TABLE t ALTER COLUMN a TYPE numeric(4,1) USING sum(a) OVER ()
+ERROR 42P20 window functions are not allowed in transform expressions at 54
+> ALTER TABLE t ALTER COLUMN b TYPE numeric(4,1)
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN a TYPE nosuch.x
+ERROR 3F000 schema "nosuch" does not exist at 35
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 't'::regclass
+fields pg_get_constraintdef:25:-1:-1
+row NOT NULL c
+SELECT 1
+> CREATE TABLE u (a int CHECK (a > 0), b int, CONSTRAINT bc CHECK (b < 10 AND a < 20))
+CREATE TABLE
+> INSERT INTO u VALUES (1, 2)
+INSERT 0 1
+> SELECT conname, oid > 0 FROM pg_constraint WHERE conrelid = 'u'::regclass ORDER BY oid
+fields conname@pg_constraint.2:19:64:-1,?column?:16:1:-1
+row u_a_check,t
+row bc,t
+SELECT 2
+> ALTER TABLE u ALTER COLUMN a TYPE bigint
+ALTER TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 'u'::regclass ORDER BY oid
+fields conname@pg_constraint.2:19:64:-1
+row u_a_check
+row bc
+SELECT 2
+> ALTER TABLE u ALTER COLUMN b TYPE text
+ERROR 42883 operator does not exist: text < integer
+DETAIL No operator of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> ALTER TABLE u ALTER COLUMN a TYPE text USING 'x'
+ERROR 42883 operator does not exist: text > integer
+DETAIL No operator of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+> ALTER TABLE u ADD CONSTRAINT bb CHECK (b > 0), ALTER COLUMN b TYPE bigint
+ALTER TABLE
+> ALTER TABLE u ALTER COLUMN b TYPE bigint USING b * 5
+ERROR 23514 check constraint "bc" of relation "u" is violated by some row
+> SELECT * FROM u
+fields a@u.1:20:8:-1,b@u.2:20:8:-1
+row 1,2
+SELECT 1
+> CREATE TABLE ix (a int PRIMARY KEY, b int UNIQUE)
+CREATE TABLE
+> SELECT relname FROM pg_class WHERE relname LIKE 'ix%' ORDER BY oid
+fields relname@pg_class.2:19:64:-1
+row ix
+row ix_pkey
+row ix_b_key
+SELECT 3
+> ALTER TABLE ix ALTER COLUMN b TYPE bigint
+ALTER TABLE
+> SELECT relname FROM pg_class WHERE relname LIKE 'ix%' ORDER BY oid
+fields relname@pg_class.2:19:64:-1
+row ix
+row ix_pkey
+row ix_b_key
+SELECT 3
+> SELECT conname FROM pg_constraint WHERE conrelid = 'ix'::regclass ORDER BY oid
+fields conname@pg_constraint.2:19:64:-1
+row ix_a_not_null
+row ix_pkey
+row ix_b_key
+SELECT 3

@@ -56,9 +56,9 @@ pub use colname::figure_colname;
 pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
-    Allowed, Body, CopyRelation, CopyTarget, Defined, Message, RuleTree, attnums, copy_filter,
-    copy_insert, copy_relation, copy_target, define, function_body, is_definition, lock_table,
-    rule_tree,
+    Allowed, Body, CopyRelation, CopyTarget, Defined, Message, RuleTree, Transform, attnums,
+    copy_filter, copy_insert, copy_relation, copy_target, define, function_body, is_definition,
+    lock_table, rewrite_insert, rule_tree,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, GroupingFunc, IsJson,
@@ -118,6 +118,18 @@ pub trait Env {
     fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
         let _ = file;
         None
+    }
+    /// `pg_get_expr` of a stored expression of the relation `relation`: the text of the expression with the names of the columns, which the parser can read again, as `ATPostAlterTypeParse` reads the definition of a constraint.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` when the session cannot show a stored expression, and the errors of the deparse.
+    fn deparse(&self, text: &str, relation: u32) -> Result<String> {
+        let _ = (text, relation);
+        Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "the text of a stored expression is not supported here",
+        ))
     }
 }
 
