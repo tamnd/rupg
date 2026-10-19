@@ -36,6 +36,7 @@ mod copy;
 mod copy_from;
 mod cursor;
 mod databases;
+mod deferred;
 mod extended;
 mod foreign;
 mod merge;
@@ -365,6 +366,10 @@ pub struct Connection {
     command: Cell<u32>,
     /// The snapshot of a transaction in `REPEATABLE READ` or `SERIALIZABLE`, from its first statement to its end.
     snapshot: RefCell<Option<Snapshot>>,
+    /// The rows of the deferred triggers of the foreign keys, in the order of the writes.
+    deferred: RefCell<Vec<Batch>>,
+    /// The modes that `SET CONSTRAINTS` gave in the transaction.
+    modes: RefCell<deferred::Modes>,
 }
 
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
@@ -457,6 +462,8 @@ impl Connection {
             xid: Cell::new(0),
             command: Cell::new(0),
             snapshot: RefCell::new(None),
+            deferred: RefCell::new(Vec::new()),
+            modes: RefCell::new(deferred::Modes::default()),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -772,6 +779,7 @@ impl Connection {
         }
         self.command.set(0);
         self.snapshot.replace(None);
+        self.end_deferred();
     }
 
     /// The check hook of `default_text_search_config` for a `SET` of it, which reads the catalog.
@@ -1000,7 +1008,7 @@ impl Connection {
                 Next::Continue
             }
             Some(Ok(Frontend::Sync)) => {
-                self.sync();
+                self.sync(out);
                 Next::Continue
             }
             Some(Ok(Frontend::Flush)) => Next::Flush,
@@ -1198,6 +1206,9 @@ impl Connection {
             } else if let Node::LockStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.lock(stmt)
+            } else if let Node::ConstraintsSetStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.set_constraints(stmt, &mut notices)
             } else if let Node::CopyStmt(stmt) = node
                 && stmt.is_from
             {
@@ -1272,12 +1283,16 @@ impl Connection {
             if matches!(outcome, Done::Tag(CommandTag::DiscardAll | CommandTag::DiscardSequences)) {
                 self.sequences.get_mut().discard();
             }
-            if i + 1 == statements.len() {
-                if many {
-                    self.transaction.end_implicit();
+            let last = i + 1 == statements.len();
+            if last && many {
+                self.transaction.end_implicit();
+            }
+            if last || matches!(node, Node::TransactionStmt(_)) {
+                // The deferred triggers fire before the commit. Their error ends the transaction, and the tag of the statement does not go.
+                if let Err(error) = self.pre_commit() {
+                    self.fail(&error, None, out);
+                    return true;
                 }
-                self.finish_xact();
-            } else if matches!(node, Node::TransactionStmt(_)) {
                 self.finish_xact();
             }
             match outcome {
@@ -2993,6 +3008,12 @@ mod tests {
     #[test]
     fn merge() {
         big_stack(|| script(include_str!("connection/merge.test")));
+    }
+
+    /// The deferred foreign keys: `DEFERRABLE` and `INITIALLY DEFERRED`, the checks at the commit and at the end of a statement outside of a block, `SET CONSTRAINTS` with `ALL`, a list of names and a name with a schema, the errors of `SET CONSTRAINTS`, an old key of the referenced table that a later insert gives back, a new row that a later statement deletes, and an action of `ON DELETE CASCADE`, which fires at once. `connection/deferred_constraints.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn deferred_constraints() {
+        big_stack(|| script(include_str!("connection/deferred_constraints.test")));
     }
 
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.

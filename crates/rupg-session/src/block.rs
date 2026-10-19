@@ -90,6 +90,11 @@ impl Transaction {
         self.block == Block::Abort
     }
 
+    /// True when the end of the current statement commits the transaction, as [`Transaction::finish_command`] decides.
+    pub fn commits(&self) -> bool {
+        matches!(self.block, Block::Started | Block::End)
+    }
+
     /// `StartTransactionCommand`: a statement starts, and starts a transaction if there is none. It gives true when a transaction starts.
     pub fn start_command(&mut self) -> bool {
         let starts = self.block == Block::Default;
