@@ -837,6 +837,7 @@ impl Connection {
                         ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
                         kind => alter_tag(kind),
                     },
+                    Node::AlterObjectSchemaStmt(stmt) => alter_tag(stmt.objectType),
                     Node::CreateSeqStmt(_) => CommandTag::CreateSequence,
                     Node::AlterSeqStmt(_) => CommandTag::AlterSequence,
                     Node::DefineStmt(stmt) => match stmt.kind {
@@ -2785,6 +2786,12 @@ mod tests {
     #[test]
     fn cluster_replica_identity() {
         big_stack(|| script(include_str!("connection/cluster_replica_identity.test")));
+    }
+
+    /// `ALTER TABLE`, `ALTER VIEW` and `ALTER SEQUENCE` with `SET SCHEMA`: the move of the row type, the indexes, the owned sequences and the constraints, the dependency on the schema, the text of the views that read a moved relation, and the errors for the relation, the schema and a name that the new schema has. `connection/set_schema.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn set_schema() {
+        big_stack(|| script(include_str!("connection/set_schema.test")));
     }
 
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.

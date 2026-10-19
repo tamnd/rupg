@@ -1,0 +1,254 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA s1
+CREATE SCHEMA
+> CREATE SCHEMA s2
+CREATE SCHEMA
+> CREATE TABLE t (a serial PRIMARY KEY, b int GENERATED ALWAYS AS IDENTITY, c int CHECK (c > 0), d text UNIQUE)
+CREATE TABLE
+> CREATE INDEX t_c ON t (c)
+CREATE INDEX
+> CREATE VIEW v AS SELECT a, c FROM t
+CREATE VIEW
+> CREATE VIEW vv AS SELECT a FROM v
+CREATE VIEW
+> CREATE SEQUENCE sq
+CREATE SEQUENCE
+> ALTER TABLE t SET SCHEMA s1
+ALTER TABLE
+> SELECT c.relname, n.nspname, c.relkind FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 's1', 's2') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,nspname@pg_namespace.2:19:64:-1,relkind@pg_class.18:18:1:-1
+row sq,public,S
+row t,s1,r
+row t_a_seq,s1,S
+row t_b_seq,s1,S
+row t_c,s1,i
+row t_d_key,s1,i
+row t_pkey,s1,i
+row v,public,v
+row vv,public,v
+SELECT 9
+> SELECT conname, connamespace::regnamespace::text FROM pg_constraint WHERE conrelid = 's1.t'::regclass ORDER BY 1
+fields conname@pg_constraint.2:19:64:-1,connamespace:25:-1:-1
+row t_a_not_null,s1
+row t_b_not_null,s1
+row t_c_check,s1
+row t_d_key,s1
+row t_pkey,s1
+SELECT 5
+> SELECT typname, typnamespace::regnamespace::text FROM pg_type WHERE typname IN ('t', '_t') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typnamespace:25:-1:-1
+row _t,s1
+row t,s1
+SELECT 2
+> SELECT pg_get_viewdef('v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    c
+   FROM s1.t;
+SELECT 1
+> SELECT pg_get_serial_sequence('s1.t', 'a'), pg_get_serial_sequence('s1.t', 'b')
+fields pg_get_serial_sequence:25:-1:-1,pg_get_serial_sequence:25:-1:-1
+row s1.t_a_seq,s1.t_b_seq
+SELECT 1
+> SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 's1.t'::regclass
+fields pg_get_expr:25:-1:-1
+row nextval('s1.t_a_seq'::regclass)
+SELECT 1
+> SELECT relnamespace::regnamespace::text FROM pg_class WHERE oid = (SELECT reltoastrelid FROM pg_class WHERE oid = 's1.t'::regclass)
+fields relnamespace:25:-1:-1
+row pg_toast
+SELECT 1
+> SELECT classid::regclass::text, objid::regclass::text, refclassid::regclass::text, deptype FROM pg_depend WHERE refobjid = 's1'::regnamespace ORDER BY 2
+fields classid:25:-1:-1,objid:25:-1:-1,refclassid:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row pg_class,s1.t,pg_namespace,n
+row pg_class,s1.t_a_seq,pg_namespace,n
+row pg_class,s1.t_b_seq,pg_namespace,n
+SELECT 3
+> INSERT INTO s1.t (c, d) VALUES (1, 'x') RETURNING *
+fields a@s1.t.1:23:4:-1,b@s1.t.2:23:4:-1,c@s1.t.3:23:4:-1,d@s1.t.4:25:-1:-1
+row 1,1,1,x
+INSERT 0 1
+> INSERT INTO s1.t (c, d) VALUES (0, 'y')
+ERROR 23514 new row for relation "t" violates check constraint "t_c_check"
+DETAIL Failing row contains (2, 2, 0, y).
+> INSERT INTO s1.t (c, d) VALUES (2, 'x')
+ERROR 23505 duplicate key value violates unique constraint "t_d_key"
+DETAIL Key (d)=(x) already exists.
+> SELECT * FROM v
+fields a@v.1:23:4:-1,c@v.2:23:4:-1
+row 1,1
+SELECT 1
+> SELECT * FROM vv
+fields a@vv.1:23:4:-1
+row 1
+SELECT 1
+> ALTER TABLE t SET SCHEMA s2
+ERROR 42P01 relation "t" does not exist
+> ALTER TABLE s1.t SET SCHEMA s1
+ALTER TABLE
+> ALTER TABLE s1.t SET SCHEMA nosuch
+ERROR 3F000 schema "nosuch" does not exist
+> ALTER TABLE s1.t SET SCHEMA pg_toast
+ERROR 0A000 cannot move objects into or out of TOAST schema
+> ALTER TABLE IF EXISTS nosuch SET SCHEMA s2
+NOTICE 00000 relation "nosuch" does not exist, skipping
+ALTER TABLE
+> ALTER TABLE IF EXISTS nosuch.t SET SCHEMA s2
+NOTICE 00000 relation "t" does not exist, skipping
+ALTER TABLE
+> ALTER TABLE nosuch SET SCHEMA s2
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TABLE s1.t_c SET SCHEMA s2
+ERROR 42809 cannot change schema of index "t_c"
+HINT Change the schema of the table instead.
+> ALTER SEQUENCE s1.t_a_seq SET SCHEMA s2
+ERROR 0A000 cannot move an owned sequence into another schema
+DETAIL Sequence "t_a_seq" is linked to table "t".
+> ALTER TABLE s1.t_b_seq SET SCHEMA s2
+ERROR 0A000 cannot move an owned sequence into another schema
+DETAIL Sequence "t_b_seq" is linked to table "t".
+> ALTER SEQUENCE s1.t_a_seq SET SCHEMA nosuch
+ERROR 0A000 cannot move an owned sequence into another schema
+DETAIL Sequence "t_a_seq" is linked to table "t".
+> ALTER VIEW s1.t SET SCHEMA s2
+ERROR 42809 "t" is not a view
+> ALTER SEQUENCE s1.t SET SCHEMA s2
+ERROR 42809 "t" is not a sequence
+> ALTER MATERIALIZED VIEW s1.t SET SCHEMA s2
+ERROR 42809 "t" is not a materialized view
+> ALTER FOREIGN TABLE s1.t SET SCHEMA s2
+ERROR 42809 "t" is not a foreign table
+> ALTER TABLE v SET SCHEMA s2
+ALTER TABLE
+> SELECT pg_get_viewdef('s2.v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    c
+   FROM s1.t;
+SELECT 1
+> SELECT pg_get_viewdef('vv')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a
+   FROM s2.v;
+SELECT 1
+> SELECT * FROM vv
+fields a@vv.1:23:4:-1
+row 1
+SELECT 1
+> ALTER SEQUENCE sq SET SCHEMA s2
+ALTER SEQUENCE
+> SELECT nextval('s2.sq')
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> ALTER TABLE s2.sq SET SCHEMA public
+ALTER TABLE
+> ALTER VIEW sq SET SCHEMA s2
+ERROR 42809 "sq" is not a view
+> CREATE TYPE ct AS (x int)
+CREATE TYPE
+> ALTER TABLE ct SET SCHEMA s2
+ERROR 42809 "ct" is a composite type
+HINT Use ALTER TYPE instead.
+> CREATE TABLE s2.t (x int)
+CREATE TABLE
+> ALTER TABLE s1.t SET SCHEMA s2
+ERROR 42P07 relation "t" already exists in schema "s2"
+> DROP TABLE s2.t
+DROP TABLE
+> CREATE TYPE s2.t AS ENUM ('a')
+CREATE TYPE
+> ALTER TABLE s1.t SET SCHEMA s2
+ERROR 42710 type "t" already exists in schema "s2"
+> DROP TYPE s2.t
+DROP TYPE
+> CREATE TYPE s2._t AS ENUM ('a')
+CREATE TYPE
+> ALTER TABLE s1.t SET SCHEMA s2
+ERROR 42710 type "_t" already exists in schema "s2"
+> DROP TYPE s2._t
+DROP TYPE
+> CREATE TABLE s2.t_pkey (x int)
+CREATE TABLE
+> ALTER TABLE s1.t SET SCHEMA s2
+ERROR 42P07 relation "t_pkey" already exists in schema "s2"
+> DROP TABLE s2.t_pkey
+DROP TABLE
+> CREATE TABLE s2.t_a_seq (x int)
+CREATE TABLE
+> ALTER TABLE s1.t SET SCHEMA s2
+ERROR 42P07 relation "t_a_seq" already exists in schema "s2"
+> DROP TABLE s2.t_a_seq
+DROP TABLE
+> CREATE TABLE p (a int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE f (a int REFERENCES p)
+CREATE TABLE
+> ALTER TABLE p SET SCHEMA s2
+ALTER TABLE
+> SELECT conname, connamespace::regnamespace::text, conrelid::regclass::text FROM pg_constraint WHERE conname IN ('f_a_fkey', 'p_pkey', 'p_a_not_null') ORDER BY 1
+fields conname@pg_constraint.2:19:64:-1,connamespace:25:-1:-1,conrelid:25:-1:-1
+row f_a_fkey,public,f
+row p_a_not_null,s2,s2.p
+row p_pkey,s2,s2.p
+SELECT 3
+> INSERT INTO f VALUES (1)
+ERROR 23503 insert or update on table "f" violates foreign key constraint "f_a_fkey"
+DETAIL Key (a)=(1) is not present in table "p".
+> INSERT INTO s2.p VALUES (1)
+INSERT 0 1
+> INSERT INTO f VALUES (1)
+INSERT 0 1
+> ALTER TABLE pg_class SET SCHEMA s2
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> ALTER TABLE s1.t SET SCHEMA public
+ALTER TABLE
+> SELECT pg_get_viewdef('s2.v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    c
+   FROM t;
+SELECT 1
+> SELECT c.relname, n.nspname FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname IN ('public', 's1', 's2') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,nspname@pg_namespace.2:19:64:-1
+row ct,public
+row f,public
+row p,s2
+row p_pkey,s2
+row sq,public
+row t,public
+row t_a_seq,public
+row t_b_seq,public
+row t_c,public
+row t_d_key,public
+row t_pkey,public
+row v,s2
+row vv,public
+SELECT 13
+> SELECT classid::regclass::text, objid::regclass::text, deptype FROM pg_depend WHERE refobjid = 's2'::regnamespace ORDER BY 2
+fields classid:25:-1:-1,objid:25:-1:-1,deptype@pg_depend.7:18:1:-1
+row pg_class,s2.p,n
+row pg_class,s2.v,n
+SELECT 2
+> DROP SCHEMA s1
+DROP SCHEMA
+> DROP SCHEMA s2
+ERROR 2BP01 cannot drop schema s2 because other objects depend on it
+DETAIL view s2.v depends on schema s2
+view vv depends on view s2.v
+table s2.p depends on schema s2
+constraint f_a_fkey on table f depends on table s2.p
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP SCHEMA s2 CASCADE
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to view s2.v
+drop cascades to view vv
+drop cascades to table s2.p
+drop cascades to constraint f_a_fkey on table f
+DROP SCHEMA
+> SELECT relname FROM pg_class WHERE relname IN ('v', 'vv', 'p', 'f')
+fields relname@pg_class.2:19:64:-1
+row f
+SELECT 1
