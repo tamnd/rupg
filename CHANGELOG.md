@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.49 (2026-10-20)
+
 ### Added
 
 - `ALTER TYPE ... ADD VALUE` and `ALTER TYPE ... RENAME VALUE` for enum types, with the sort order and the OID of PostgreSQL, the order of labels with odd OIDs, and the error for a new label that the transaction uses before the commit (#426).
