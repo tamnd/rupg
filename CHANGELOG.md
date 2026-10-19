@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER TABLE ... DROP CONSTRAINT` with `IF EXISTS` and `CASCADE`, and `ALTER COLUMN ... DROP NOT NULL`. A primary key or a unique constraint takes its index with it, and the objects that depend on the constraint give the PostgreSQL error or go with `CASCADE` (#418).
 - `ALTER TABLE ... ALTER COLUMN ... TYPE` with `USING` and `COLLATE`. The statement changes the default, the indexes, the check constraints and the foreign keys on the column, writes the rows again with the new type, and gives the PostgreSQL errors for a view or a rule that uses the column (#417).
 
 ## 0.1.47 (2026-10-19)
