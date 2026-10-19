@@ -1,0 +1,286 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int NOT NULL, b text, c int)
+CREATE TABLE
+> CREATE INDEX t_a ON t (a)
+CREATE INDEX
+> CREATE INDEX t_b ON t (b)
+CREATE INDEX
+> CREATE INDEX t_h ON t USING hash (a)
+CREATE INDEX
+> CREATE INDEX t_p ON t (a) WHERE a > 0
+CREATE INDEX
+> CREATE INDEX t_e ON t ((a + 1))
+CREATE INDEX
+> CREATE TABLE o (x int)
+CREATE TABLE
+> CREATE INDEX o_x ON o (x)
+CREATE INDEX
+> ALTER TABLE t CLUSTER ON t_a
+ALTER TABLE
+> SELECT indexrelid::regclass::text, indisclustered, indisreplident FROM pg_index WHERE indrelid = 't'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1,indisreplident@pg_index.15:16:1:-1
+row t_a,t,f
+row t_b,f,f
+row t_e,f,f
+row t_h,f,f
+row t_p,f,f
+SELECT 5
+> ALTER TABLE t CLUSTER ON t_b
+ALTER TABLE
+> SELECT indexrelid::regclass::text, indisclustered FROM pg_index WHERE indrelid = 't'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1
+row t_a,f
+row t_b,t
+row t_e,f
+row t_h,f
+row t_p,f
+SELECT 5
+> ALTER TABLE t CLUSTER ON t_b
+ALTER TABLE
+> ALTER TABLE t CLUSTER ON nosuch
+ERROR 42704 index "nosuch" for table "t" does not exist
+> ALTER TABLE t CLUSTER ON o_x
+ERROR 42809 "o_x" is not an index for table "t"
+> ALTER TABLE t CLUSTER ON o
+ERROR 42809 "o" is not an index
+> ALTER TABLE t CLUSTER ON t_h
+ERROR 0A000 cannot cluster on index "t_h" because access method does not support clustering
+> ALTER TABLE t CLUSTER ON t_p
+ERROR 0A000 cannot cluster on partial index "t_p"
+> ALTER TABLE t CLUSTER ON t_e
+ALTER TABLE
+> SELECT indexrelid::regclass::text, indisclustered FROM pg_index WHERE indrelid = 't'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1
+row t_a,f
+row t_b,f
+row t_e,t
+row t_h,f
+row t_p,f
+SELECT 5
+> ALTER TABLE t CLUSTER ON public.t_a
+ERROR 42601 syntax error at or near "." at 32
+> ALTER TABLE t SET WITHOUT CLUSTER
+ALTER TABLE
+> SELECT indexrelid::regclass::text, indisclustered FROM pg_index WHERE indrelid = 't'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1
+row t_a,f
+row t_b,f
+row t_e,f
+row t_h,f
+row t_p,f
+SELECT 5
+> ALTER TABLE t SET WITHOUT CLUSTER
+ALTER TABLE
+> ALTER TABLE t CLUSTER ON t_a, SET WITHOUT CLUSTER
+ALTER TABLE
+> SELECT indexrelid::regclass::text, indisclustered FROM pg_index WHERE indrelid = 't'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1
+row t_a,f
+row t_b,f
+row t_e,f
+row t_h,f
+row t_p,f
+SELECT 5
+> ALTER TABLE t SET WITHOUT CLUSTER, CLUSTER ON t_a
+ALTER TABLE
+> SELECT indexrelid::regclass::text, indisclustered FROM pg_index WHERE indrelid = 't'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1
+row t_a,t
+row t_b,f
+row t_e,f
+row t_h,f
+row t_p,f
+SELECT 5
+> ALTER INDEX t_a CLUSTER ON t_a
+ERROR 42809 ALTER action CLUSTER ON cannot be performed on relation "t_a"
+DETAIL This operation is not supported for indexes.
+> CREATE VIEW v AS SELECT * FROM o
+CREATE VIEW
+> ALTER TABLE v CLUSTER ON t_a
+ERROR 42809 ALTER action CLUSTER ON cannot be performed on relation "v"
+DETAIL This operation is not supported for views.
+> ALTER VIEW v SET WITHOUT CLUSTER
+ERROR 42809 ALTER action SET WITHOUT CLUSTER cannot be performed on relation "v"
+DETAIL This operation is not supported for views.
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> ALTER TABLE s REPLICA IDENTITY FULL
+ERROR 42809 ALTER action REPLICA IDENTITY cannot be performed on relation "s"
+DETAIL This operation is not supported for sequences.
+> ALTER VIEW v REPLICA IDENTITY FULL
+ERROR 42809 ALTER action REPLICA IDENTITY cannot be performed on relation "v"
+DETAIL This operation is not supported for views.
+> CREATE INDEX t_a2 ON t (c)
+CREATE INDEX
+> ALTER TABLE t REPLICA IDENTITY FULL
+ALTER TABLE
+> SELECT relreplident FROM pg_class WHERE relname = 't'
+fields relreplident@pg_class.27:18:1:-1
+row f
+SELECT 1
+> ALTER TABLE t REPLICA IDENTITY NOTHING
+ALTER TABLE
+> SELECT relreplident FROM pg_class WHERE relname = 't'
+fields relreplident@pg_class.27:18:1:-1
+row n
+SELECT 1
+> ALTER TABLE t REPLICA IDENTITY USING INDEX nosuch
+ERROR 42704 index "nosuch" for table "t" does not exist
+> ALTER TABLE t REPLICA IDENTITY USING INDEX o_x
+ERROR 42809 "o_x" is not an index for table "t"
+> ALTER TABLE t REPLICA IDENTITY USING INDEX o
+ERROR 42809 "o" is not an index
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_a
+ERROR 42809 cannot use non-unique index "t_a" as replica identity
+> CREATE UNIQUE INDEX t_ua ON t (a)
+CREATE INDEX
+> CREATE UNIQUE INDEX t_ub ON t (b)
+CREATE INDEX
+> CREATE UNIQUE INDEX t_up ON t (a) WHERE a > 0
+CREATE INDEX
+> CREATE UNIQUE INDEX t_uexp ON t ((a + 1))
+CREATE INDEX
+> CREATE UNIQUE INDEX t_uac ON t (a) INCLUDE (c)
+CREATE INDEX
+> ALTER TABLE t ADD CONSTRAINT t_d UNIQUE (a) DEFERRABLE
+ALTER TABLE
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_ub
+ERROR 42809 index "t_ub" cannot be used as replica identity because column "b" is nullable
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_up
+ERROR 0A000 cannot use partial index "t_up" as replica identity
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_uexp
+ERROR 0A000 cannot use expression index "t_uexp" as replica identity
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_d
+ERROR 0A000 cannot use non-immediate index "t_d" as replica identity
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_uac
+ALTER TABLE
+> SELECT relreplident FROM pg_class WHERE relname = 't'
+fields relreplident@pg_class.27:18:1:-1
+row i
+SELECT 1
+> SELECT indexrelid::regclass::text, indisreplident FROM pg_index WHERE indrelid = 't'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisreplident@pg_index.15:16:1:-1
+row t_a,f
+row t_a2,f
+row t_b,f
+row t_d,f
+row t_e,f
+row t_h,f
+row t_p,f
+row t_ua,f
+row t_uac,t
+row t_ub,f
+row t_uexp,f
+row t_up,f
+SELECT 12
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_ua
+ALTER TABLE
+> SELECT indexrelid::regclass::text, indisreplident FROM pg_index WHERE indrelid = 't'::regclass AND indisreplident ORDER BY 1
+fields indexrelid:25:-1:-1,indisreplident@pg_index.15:16:1:-1
+row t_ua,t
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a DROP NOT NULL
+ERROR 42P16 column "a" is in index used as replica identity
+> ALTER TABLE t ALTER COLUMN c DROP NOT NULL
+ALTER TABLE
+> ALTER TABLE t REPLICA IDENTITY DEFAULT
+ALTER TABLE
+> SELECT relreplident, (SELECT count(*) FROM pg_index WHERE indrelid = 't'::regclass AND indisreplident) FROM pg_class WHERE relname = 't'
+fields relreplident@pg_class.27:18:1:-1,count:20:8:-1
+row d,0
+SELECT 1
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_ua
+ALTER TABLE
+> DROP INDEX t_ua
+DROP INDEX
+> SELECT relreplident FROM pg_class WHERE relname = 't'
+fields relreplident@pg_class.27:18:1:-1
+row i
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a DROP NOT NULL
+ALTER TABLE
+> ALTER TABLE t ADD PRIMARY KEY (a)
+ALTER TABLE
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_pkey
+ALTER TABLE
+> SELECT relreplident FROM pg_class WHERE relname = 't'
+fields relreplident@pg_class.27:18:1:-1
+row i
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a DROP NOT NULL
+ERROR 42P16 column "a" is in a primary key
+> ALTER TABLE t CLUSTER ON t_pkey, REPLICA IDENTITY FULL
+ALTER TABLE
+> SELECT relreplident FROM pg_class WHERE relname = 't'
+fields relreplident@pg_class.27:18:1:-1
+row f
+SELECT 1
+> SELECT indexrelid::regclass::text, indisclustered, indisreplident FROM pg_index WHERE indrelid = 't'::regclass AND (indisclustered OR indisreplident) ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1,indisreplident@pg_index.15:16:1:-1
+row t_pkey,t,f
+SELECT 1
+> SELECT indexrelid::regclass::text, indisclustered, indisreplident FROM pg_index WHERE indrelid = 't'::regclass AND (indisclustered OR indisreplident) ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1,indisreplident@pg_index.15:16:1:-1
+row t_pkey,t,f
+SELECT 1
+> ALTER TABLE t REPLICA IDENTITY USING INDEX t_pkey
+ALTER TABLE
+> SELECT relreplident, (SELECT indexrelid::regclass::text FROM pg_index WHERE indrelid = 't'::regclass AND indisreplident) FROM pg_class WHERE relname = 't'
+fields relreplident@pg_class.27:18:1:-1,indexrelid:25:-1:-1
+row i,t_pkey
+SELECT 1
+> SELECT indexrelid::regclass::text, indisclustered FROM pg_index WHERE indrelid = 't'::regclass AND indisclustered
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1
+row t_pkey,t
+SELECT 1
+> CREATE TABLE w (a int NOT NULL, b int NOT NULL)
+CREATE TABLE
+> CREATE UNIQUE INDEX w_ab ON w (a, b)
+CREATE INDEX
+> ALTER TABLE w REPLICA IDENTITY USING INDEX w_ab
+ALTER TABLE
+> ALTER TABLE w ALTER COLUMN b DROP NOT NULL
+ERROR 42P16 column "b" is in index used as replica identity
+> ALTER TABLE w DROP COLUMN b
+ALTER TABLE
+> SELECT relreplident FROM pg_class WHERE relname = 'w'
+fields relreplident@pg_class.27:18:1:-1
+row i
+SELECT 1
+> ALTER TABLE w CLUSTER ON w_ab
+ERROR 42704 index "w_ab" for table "w" does not exist
+> SELECT indexrelid::regclass::text, indisclustered, indisreplident FROM pg_index WHERE indrelid = 'w'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1,indisreplident@pg_index.15:16:1:-1
+SELECT 0
+> ALTER TABLE w REPLICA IDENTITY DEFAULT
+ALTER TABLE
+> SELECT relname, relreplident FROM pg_class WHERE relname IN ('t', 'w', 'v', 's', 't_pkey') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,relreplident@pg_class.27:18:1:-1
+row s,n
+row t,i
+row t_pkey,n
+row v,n
+row w,d
+SELECT 5
+> CREATE TABLE u (a int NOT NULL, b int GENERATED ALWAYS AS IDENTITY)
+CREATE TABLE
+> CREATE UNIQUE INDEX u_ab ON u (a, b)
+CREATE INDEX
+> ALTER TABLE u REPLICA IDENTITY USING INDEX u_ab, CLUSTER ON u_ab
+ALTER TABLE
+> ALTER TABLE u ALTER COLUMN b DROP NOT NULL
+ERROR 42601 column "b" of relation "u" is an identity column
+> ALTER TABLE u ALTER COLUMN a TYPE bigint
+ALTER TABLE
+> SELECT indexrelid::regclass::text, indisclustered, indisreplident FROM pg_index WHERE indrelid = 'u'::regclass ORDER BY 1
+fields indexrelid:25:-1:-1,indisclustered@pg_index.10:16:1:-1,indisreplident@pg_index.15:16:1:-1
+row u_ab,t,t
+SELECT 1
+> ALTER TABLE u REPLICA IDENTITY FULL, ALTER COLUMN a DROP NOT NULL
+ERROR 42P16 column "a" is in index used as replica identity
+> SELECT relreplident FROM pg_class WHERE relname = 'u'
+fields relreplident@pg_class.27:18:1:-1
+row i
+SELECT 1

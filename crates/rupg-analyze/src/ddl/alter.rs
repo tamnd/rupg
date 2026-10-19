@@ -1,13 +1,14 @@
-//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column, and `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column, the `SET` and `RESET` of the options of the relation, and `SET WITHOUT OIDS`. The other subcommands give `0A000`.
+//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column, and `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column, the `SET` and `RESET` of the options of the relation, `CLUSTER ON`, `SET WITHOUT CLUSTER`, `REPLICA IDENTITY`, and `SET WITHOUT OIDS`. The other subcommands give `0A000`.
 //!
-//! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
+//! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner, the `SET` options of the identity columns and the other subcommands of `AT_PASS_MISC`, in the order of the statement.
 
 use rupg_catalog::{ConKind, DepKind, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
 use rupg_sql::nodes::{
     AlterOwnerStmt, AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType,
-    Constraint, DropBehavior, IndexStmt, Node, ObjectType, RangeVar, RoleSpec, RoleSpecType,
+    Constraint, DropBehavior, IndexStmt, Node, ObjectType, RangeVar, ReplicaIdentityStmt, RoleSpec,
+    RoleSpecType,
 };
 use rupg_types::Value;
 
@@ -30,6 +31,7 @@ const STATISTICS: &[u8] = b"rpmfiI";
 const STORAGE: &[u8] = b"rpmf";
 const COMPRESSION: &[u8] = b"rpm";
 const REL_OPTIONS: &[u8] = b"rpvmi";
+const TABLE_MATVIEW: &[u8] = b"rpm";
 
 /// `alter_table_type_to_string`: the words of a subcommand in its errors.
 fn action_words(subtype: AlterTableType) -> &'static str {
@@ -153,6 +155,10 @@ enum MiscCmd {
     Column(ColumnCmd),
     /// `SET (...)` of the options of the relation, or `RESET (...)` when the flag is true.
     Options(Vec<Option<Node>>, bool),
+    /// `CLUSTER ON` with the name of the index, or `SET WITHOUT CLUSTER` with no name.
+    Cluster(Option<String>),
+    /// `REPLICA IDENTITY`.
+    ReplicaIdentity(ReplicaIdentityStmt),
 }
 
 /// A constraint of `AT_PASS_ADD_OTHERCONSTR`.
@@ -407,6 +413,19 @@ impl Definer<'_, '_> {
                 let reset = cmd.subtype == AlterTableType::AT_ResetRelOptions;
                 passes.misc.push(MiscCmd::Options(defs, reset));
             }
+            AlterTableType::AT_ClusterOn | AlterTableType::AT_DropCluster => {
+                self.simple_permissions(target, cmd, TABLE_MATVIEW)?;
+                let name =
+                    cmd.name.as_deref().filter(|_| cmd.subtype == AlterTableType::AT_ClusterOn);
+                passes.misc.push(MiscCmd::Cluster(name.map(str::to_owned)));
+            }
+            AlterTableType::AT_ReplicaIdentity => {
+                self.simple_permissions(target, cmd, TABLE_MATVIEW)?;
+                let Some(Node::ReplicaIdentityStmt(stmt)) = &cmd.def else {
+                    return Err(Error::internal("REPLICA IDENTITY without a statement"));
+                };
+                passes.misc.push(MiscCmd::ReplicaIdentity((**stmt).clone()));
+            }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
             other => {
@@ -582,6 +601,9 @@ impl Definer<'_, '_> {
                 }
                 MiscCmd::Column(cmd) => self.alter_column_facts(target, cmd)?,
                 MiscCmd::Options(defs, reset) => self.set_rel_options(target, defs, *reset)?,
+                MiscCmd::Cluster(Some(name)) => self.cluster_on(target, name)?,
+                MiscCmd::Cluster(None) => self.drop_cluster(target),
+                MiscCmd::ReplicaIdentity(stmt) => self.replica_identity(target, stmt)?,
             }
         }
         Ok(())
