@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.43 (2026-10-19)
+
+A patch release on the way to M3. Writes now check the unique indexes, the primary keys and the foreign keys, and `RETURNING` gives the rows that a write changed.
+
 ### Added
 
 - `INSERT` and `UPDATE` check the unique indexes and the primary keys of the table. A duplicate key gives `23505` with the key in the detail, and a key that a transaction in progress holds makes the write wait for the end of that transaction (#395).
