@@ -811,6 +811,7 @@ impl Connection {
                     Node::CompositeTypeStmt(_)
                     | Node::CreateEnumStmt(_)
                     | Node::CreateRangeStmt(_) => CommandTag::CreateType,
+                    Node::AlterEnumStmt(_) => CommandTag::AlterType,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::RuleStmt(_) => CommandTag::CreateRule,
                     Node::CommentStmt(_) => CommandTag::Comment,
@@ -2792,6 +2793,12 @@ mod tests {
     #[test]
     fn set_schema() {
         big_stack(|| script(include_str!("connection/set_schema.test")));
+    }
+
+    /// `ALTER TYPE ... ADD VALUE` and `ALTER TYPE ... RENAME VALUE`: the sort order and the OID of a new label, the new sort orders when `float4` has no middle, the order of the labels with odd OIDs in comparisons, sorts and a unique index, the error for a new label that the transaction uses before the commit, and the errors for the type and the labels. `connection/enum_values.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn enum_values() {
+        big_stack(|| script(include_str!("connection/enum_values.test")));
     }
 
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -1075,6 +1075,8 @@ pub struct SessionEnum {
     pub namespace: u32,
     /// The OID and the name of each label, in their sort order.
     pub labels: Vec<(u32, String)>,
+    /// The OIDs of the labels that the open transaction added, which a statement cannot use before the commit.
+    pub uncommitted: Vec<u32>,
 }
 
 /// The labels of an enum type that [`use_session_types`] gave to the thread, for [`enum_labels`].
@@ -1082,6 +1084,7 @@ pub struct SessionEnum {
 struct EnumRow {
     oid: u32,
     labels: Vec<(u32, String)>,
+    uncommitted: Vec<u32>,
 }
 
 /// A range type of the catalog of a session, with its multirange type, for [`use_session_types`].
@@ -1182,7 +1185,11 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
         }
         SessionType::Enum(new) => {
             let (row, array) = enum_rows(new.clone())?;
-            let labels = EnumRow { oid: new.oid, labels: new.labels.clone() };
+            let labels = EnumRow {
+                oid: new.oid,
+                labels: new.labels.clone(),
+                uncommitted: new.uncommitted.clone(),
+            };
             Interned {
                 types: vec![leak(row), leak(array)],
                 labels: Some(Box::leak(Box::new(labels))),
@@ -1372,6 +1379,16 @@ fn range_rows(new: &SessionRange) -> Option<Interned> {
 /// The OID and the name of each label of an enum type that [`use_session_types`] gave to the thread, in their sort order. `None` for a type that is not such an enum type.
 pub fn enum_labels(ty: u32) -> Option<&'static [(u32, String)]> {
     SESSION.with_borrow(|s| s.enums.iter().find(|e| e.oid == ty).map(|e| e.labels.as_slice()))
+}
+
+/// The place of a label in the sort order of its enum type, as `enum_cmp_internal` reads it from the type cache for an odd OID. `None` for an OID that is not a label of an enum type that [`use_session_types`] gave to the thread.
+pub fn enum_label_place(label: u32) -> Option<usize> {
+    SESSION.with_borrow(|s| s.enums.iter().find_map(|e| e.labels.iter().position(|l| l.0 == label)))
+}
+
+/// `EnumUncommitted`: true for a label that the open transaction added to an enum type that an earlier transaction made.
+pub fn enum_label_is_uncommitted(ty: u32, label: u32) -> bool {
+    SESSION.with_borrow(|s| s.enums.iter().any(|e| e.oid == ty && e.uncommitted.contains(&label)))
 }
 
 /// The OID of `_int4`, the template of the array type of a domain over a type with no array type.

@@ -4,7 +4,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{Array, Value};
 
-use crate::io::{base_type, is_enum, type_name};
+use crate::io::{base_type, check_safe_enum_use, is_enum, type_name};
 use crate::{Call, Kernel, bad_value};
 
 /// The kernel of a function of the enum types by its `prosrc`.
@@ -34,7 +34,10 @@ fn endpoint(call: &Call<'_>, last: bool) -> Result<Value> {
     let (ty, labels) = labels(call)?;
     let label = if last { labels.last() } else { labels.first() };
     match label {
-        Some((oid, _)) => Ok(Value::Oid(*oid)),
+        Some((oid, name)) => {
+            check_safe_enum_use(ty, *oid, name)?;
+            Ok(Value::Oid(*oid))
+        }
         None => Err(Error::new(
             SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
             format!("enum {} contains no values", type_name(ty)),
@@ -50,9 +53,9 @@ fn enum_last(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     endpoint(call, true)
 }
 
-/// The labels from `lower` to `upper` in their sort order, as an array. A null bound is the first or the last label.
+/// The labels from `lower` to `upper` in their sort order, as an array. A null bound is the first or the last label. `enum_range_internal` checks each label of the array.
 fn range(call: &Call<'_>, lower: Option<u32>, upper: Option<u32>) -> Result<Value> {
-    let (_, labels) = labels(call)?;
+    let (ty, labels) = labels(call)?;
     let position =
         |bound: u32| labels.iter().position(|(oid, _)| *oid == bound).ok_or_else(bad_value);
     let start = lower.map_or(Ok(0), position)?;
@@ -61,8 +64,8 @@ fn range(call: &Call<'_>, lower: Option<u32>, upper: Option<u32>) -> Result<Valu
         .get(start..end.max(start))
         .unwrap_or_default()
         .iter()
-        .map(|(oid, _)| Some(Value::Oid(*oid)))
-        .collect();
+        .map(|(oid, name)| check_safe_enum_use(ty, *oid, name).map(|()| Some(Value::Oid(*oid))))
+        .collect::<Result<_>>()?;
     Ok(Value::Array(Box::new(Array::one(values))))
 }
 

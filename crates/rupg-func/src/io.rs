@@ -151,6 +151,18 @@ fn enum_in(ty: u32, text: &str) -> std::result::Result<u32, Error> {
         })
 }
 
+/// `check_safe_enum_use`: an error for a label that the open transaction added to an enum type that an earlier transaction made, as an index can have the label only after the commit.
+pub(crate) fn check_safe_enum_use(ty: u32, oid: u32, label: &str) -> Result<()> {
+    if !builtin::enum_label_is_uncommitted(ty, oid) {
+        return Ok(());
+    }
+    Err(Error::new(
+        SqlState::UNSAFE_NEW_ENUM_VALUE_USAGE,
+        format!("unsafe use of new value \"{label}\" of enum type {}", type_name(ty)),
+    )
+    .with_hint("New enum values must be committed before they can be used."))
+}
+
 /// True for `record` and for the row type of a system catalog, which `record_out` and `record_send` show. The output of each field needs the output of its type, which the engine checks when it shows the row.
 pub fn is_row_type(ty: u32) -> bool {
     ty == oid::RECORD || builtin::type_by_oid(ty).is_some_and(|row| row.kind == b'c')
@@ -739,7 +751,9 @@ fn input_value(
         return record_in(ty, text, session, noisy);
     }
     if is_enum(ty) {
-        return enum_in(ty, text).map(Value::Oid).map_err(Failed::Soft);
+        let oid = enum_in(ty, text).map_err(Failed::Soft)?;
+        check_safe_enum_use(ty, oid, text).map_err(Failed::Hard)?;
+        return Ok(Value::Oid(oid));
     }
     if let Some(kind) = RegKind::from_oid(ty) {
         return match reg::input(kind, text, session)? {
@@ -1022,7 +1036,10 @@ fn receive_from(
         return Ok(Value::Bytea(types::geo_recv(kind, recv)?));
     }
     if is_enum(ty) {
-        return enum_in(ty, recv.text()?).map(Value::Oid).map_err(Received::Engine);
+        let text = recv.text()?;
+        let oid = enum_in(ty, text).map_err(Received::Engine)?;
+        check_safe_enum_use(ty, oid, text).map_err(Received::Engine)?;
+        return Ok(Value::Oid(oid));
     }
     let value = match ty {
         oid::BOOL => Value::Bool(recv.bool()?),

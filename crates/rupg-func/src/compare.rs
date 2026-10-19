@@ -56,7 +56,7 @@ enum Family {
     TsQuery,
     /// `record`, which compares as `record_cmp` does.
     Record,
-    /// The enum types. A value is the OID of its label, and the labels of `CREATE TYPE ... AS ENUM` have OIDs in their sort order, so the order of the OIDs is the order of `enum_cmp`.
+    /// The enum types. A value is the OID of its label. The even OIDs of the labels of a type are in their sort order, so two even OIDs compare as numbers, as `enum_cmp_internal` compares them. An odd OID comes from `ALTER TYPE ... ADD VALUE` when no even OID sorts correctly, and then the places of the labels in the sort order give the order.
     Enum,
 }
 
@@ -106,6 +106,19 @@ fn family(ty: u32) -> Option<Family> {
     })
 }
 
+/// True when one of the two types is an enum type or `anyenum`, so that two OIDs are labels of an enum type.
+fn is_enum_pair(left: u32, right: u32) -> bool {
+    family(left) == Some(Family::Enum) || family(right) == Some(Family::Enum)
+}
+
+/// `enum_cmp_internal` with an odd OID: the order of the places of the two labels in the sort order of their type.
+fn enum_order(x: u32, y: u32) -> Ordering {
+    match (builtin::enum_label_place(x), builtin::enum_label_place(y)) {
+        (Some(a), Some(b)) => a.cmp(&b),
+        _ => x.cmp(&y),
+    }
+}
+
 /// The element type of an array type, or 0.
 fn element(ty: u32) -> u32 {
     builtin::type_by_oid(base_type(ty)).map_or(0, |row| row.elem)
@@ -140,6 +153,9 @@ pub fn compare(left: u32, a: &Value, right: u32, b: &Value) -> Result<Ordering> 
         }
         (Value::Bool(x), Value::Bool(y)) => x.cmp(y),
         (Value::Char(x), Value::Char(y)) => x.cmp(y),
+        (Value::Oid(x), Value::Oid(y)) if (x | y) & 1 == 1 && is_enum_pair(left, right) => {
+            enum_order(*x, *y)
+        }
         (Value::Oid(x), Value::Oid(y)) => x.cmp(y),
         (Value::Bytea(x), Value::Bytea(y)) => x.cmp(y),
         (Value::Uuid(x), Value::Uuid(y)) => x.cmp(y),

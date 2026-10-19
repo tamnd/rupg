@@ -1,0 +1,335 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE parity AS ENUM ('x')
+CREATE TYPE
+> CREATE TYPE e AS ENUM ('a', 'c')
+CREATE TYPE
+> ALTER TYPE e ADD VALUE 'c' BEFORE 'nosuch'
+ERROR 42710 enum label "c" already exists
+> ALTER TYPE e ADD VALUE IF NOT EXISTS 'c' BEFORE 'nosuch'
+NOTICE 42710 enum label "c" already exists, skipping
+ALTER TYPE
+> ALTER TYPE e ADD VALUE 'x' BEFORE 'nosuch'
+ERROR 22023 "nosuch" is not an existing enum label
+> ALTER TYPE e RENAME VALUE 'nosuch' TO 'c'
+ERROR 22023 "nosuch" is not an existing enum label
+> ALTER TYPE e RENAME VALUE 'a' TO 'a'
+ERROR 42710 enum label "a" already exists
+> ALTER TYPE e RENAME VALUE 'nosuch' TO 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+ERROR 42602 invalid enum label "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+DETAIL Labels must be 63 bytes or less.
+> ALTER TYPE e ADD VALUE IF NOT EXISTS 'xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx'
+ERROR 42602 invalid enum label "xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+DETAIL Labels must be 63 bytes or less.
+> ALTER TYPE e ADD VALUE 'b' AFTER 'a'
+ALTER TYPE
+> ALTER TYPE e ADD VALUE 'z'
+ALTER TYPE
+> ALTER TYPE e ADD VALUE '0' BEFORE 'a'
+ALTER TYPE
+> SELECT oid::text::int8 - 'e'::regtype::oid::text::int8 AS d, enumsortorder, enumlabel FROM pg_enum WHERE enumtypid = 'e'::regtype ORDER BY enumsortorder
+fields d:20:8:-1,enumsortorder@pg_enum.3:700:4:-1,enumlabel@pg_enum.4:19:64:-1
+row 7,0,0
+row 2,1,a
+row 5,1.5,b
+row 4,2,c
+row 6,3,z
+SELECT 5
+> SELECT x::text, x < 'b'::e AS lt, enum_cmp(x, 'b') FROM unnest(enum_range(NULL::e)) x ORDER BY x DESC
+fields x:25:-1:-1,lt:16:1:-1,enum_cmp:23:4:-1
+row z,f,1
+row c,f,1
+row b,f,0
+row a,t,-1
+row 0,t,-1
+SELECT 5
+> CREATE TABLE t (x e)
+CREATE TABLE
+> INSERT INTO t SELECT unnest(enum_range(NULL::e))
+INSERT 0 5
+> SELECT max(x)::text, min(x)::text, array_agg(x ORDER BY x)::text FROM t
+fields max:25:-1:-1,min:25:-1:-1,array_agg:25:-1:-1
+row z,0,{0,a,b,c,z}
+SELECT 1
+> CREATE TYPE f AS ENUM ('a', 'b')
+CREATE TYPE
+> ALTER TYPE f ADD VALUE 'a1' AFTER 'a'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'a2' AFTER 'a1'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'a3' AFTER 'a2'
+ALTER TYPE
+> SELECT enumsortorder, enumlabel FROM pg_enum WHERE enumtypid = 'f'::regtype ORDER BY enumsortorder
+fields enumsortorder@pg_enum.3:700:4:-1,enumlabel@pg_enum.4:19:64:-1
+row 1,a
+row 1.5,a1
+row 1.75,a2
+row 1.875,a3
+row 2,b
+SELECT 5
+> ALTER TYPE f ADD VALUE 'q1' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q2' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q3' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q4' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q5' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q6' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q7' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q8' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q9' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q10' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q11' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q12' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q13' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q14' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q15' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q16' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q17' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q18' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q19' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q20' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q21' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q22' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q23' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q24' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q25' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q26' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q27' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q28' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q29' BEFORE 'b'
+ALTER TYPE
+> ALTER TYPE f ADD VALUE 'q30' BEFORE 'b'
+ALTER TYPE
+> SELECT count(*), min(enumsortorder), max(enumsortorder) FROM pg_enum WHERE enumtypid = 'f'::regtype
+fields count:20:8:-1,min:700:4:-1,max:700:4:-1
+row 35,1,25
+SELECT 1
+> SELECT string_agg(enumsortorder::text, ',' ORDER BY enumsortorder) FROM pg_enum WHERE enumtypid = 'f'::regtype
+fields string_agg:25:-1:-1
+row 1,2,3,4,5,6,7,8,9,10,11,12,13,14,15,16,17,18,19,20,21,22,23,24,24.5,24.75,24.875,24.9375,24.96875,24.984375,24.992188,24.996094,24.998047,24.999023,25
+SELECT 1
+> SELECT string_agg(x::text, ',' ORDER BY x) FROM unnest(enum_range(NULL::f)) x
+fields string_agg:25:-1:-1
+row a,a1,a2,a3,q1,q2,q3,q4,q5,q6,q7,q8,q9,q10,q11,q12,q13,q14,q15,q16,q17,q18,q19,q20,q21,q22,q23,q24,q25,q26,q27,q28,q29,q30,b
+SELECT 1
+> CREATE TABLE after1 ()
+CREATE TABLE
+> SELECT 'after1'::regclass::oid::text::int8 - 'f'::regtype::oid::text::int8
+fields ?column?:20:8:-1
+row 70
+SELECT 1
+> BEGIN
+BEGIN
+> ALTER TYPE e ADD VALUE 'g'
+ALTER TYPE
+> SELECT enum_last(NULL::e)::text
+fields enum_last:25:-1:-1
+ERROR 55P04 unsafe use of new value "g" of enum type e
+HINT New enum values must be committed before they can be used.
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> ALTER TYPE e ADD VALUE 'g'
+ALTER TYPE
+> SELECT enum_range(NULL::e)::text
+fields enum_range:25:-1:-1
+ERROR 55P04 unsafe use of new value "g" of enum type e
+HINT New enum values must be committed before they can be used.
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> ALTER TYPE e ADD VALUE 'g'
+ALTER TYPE
+> SELECT enum_first(NULL::e)::text, 'z'::e::text
+fields enum_first:25:-1:-1,text:25:-1:-1
+row 0,z
+SELECT 1
+> SELECT x::text FROM t ORDER BY x LIMIT 1
+fields x:25:-1:-1
+row 0
+SELECT 1
+> SELECT enum_range('a'::e, 'c'::e)::text
+fields enum_range:25:-1:-1
+row {a,b,c}
+SELECT 1
+> SELECT ARRAY['g']::e[]
+ERROR 55P04 unsafe use of new value "g" of enum type e at 14
+HINT New enum values must be committed before they can be used.
+> COMMIT
+ROLLBACK
+> SELECT enum_last(NULL::e)::text
+fields enum_last:25:-1:-1
+row z
+SELECT 1
+> BEGIN
+BEGIN
+> CREATE TYPE h AS ENUM ('a')
+CREATE TYPE
+> ALTER TYPE h ADD VALUE 'b'
+ALTER TYPE
+> ALTER TYPE h RENAME VALUE 'a' TO 'a0'
+ALTER TYPE
+> SELECT 'b'::h::text, enum_range(NULL::h)::text
+fields text:25:-1:-1,enum_range:25:-1:-1
+row b,{a0,b}
+SELECT 1
+> COMMIT
+COMMIT
+> BEGIN
+BEGIN
+> ALTER TYPE h ADD VALUE 'c'
+ALTER TYPE
+> SAVEPOINT s
+SAVEPOINT
+> SELECT 'c'::h
+ERROR 55P04 unsafe use of new value "c" of enum type h at 8
+HINT New enum values must be committed before they can be used.
+> ROLLBACK TO s
+ROLLBACK
+> ALTER TYPE h RENAME VALUE 'c' TO 'c2'
+ALTER TYPE
+> SELECT 'c2'::h
+ERROR 55P04 unsafe use of new value "c2" of enum type h at 8
+HINT New enum values must be committed before they can be used.
+> ROLLBACK
+ROLLBACK
+> ALTER TYPE h RENAME VALUE 'a0' TO 'b'
+ERROR 42710 enum label "b" already exists
+> ALTER TYPE e ADD VALUE 'g'
+ALTER TYPE
+> ALTER TYPE e ADD VALUE IF NOT EXISTS 'g'
+NOTICE 42710 enum label "g" already exists, skipping
+ALTER TYPE
+> ALTER TYPE e ADD VALUE IF NOT EXISTS 'g' BEFORE 'nosuch'
+NOTICE 42710 enum label "g" already exists, skipping
+ALTER TYPE
+> ALTER TYPE e[] ADD VALUE 'k'
+ERROR 42601 syntax error at or near "[" at 13
+> ALTER TYPE _e ADD VALUE 'k'
+ERROR 42809 e[] is not an enum
+> ALTER TYPE nosuch.e ADD VALUE 'k'
+ERROR 3F000 schema "nosuch" does not exist
+> ALTER TYPE pg_catalog.e ADD VALUE 'k'
+ERROR 42704 type "pg_catalog.e" does not exist
+> ALTER TYPE int4 ADD VALUE 'k'
+ERROR 42809 integer is not an enum
+> CREATE TABLE u (x e PRIMARY KEY)
+CREATE TABLE
+> INSERT INTO u SELECT x FROM t
+INSERT 0 5
+> INSERT INTO u VALUES ('b')
+ERROR 23505 duplicate key value violates unique constraint "u_pkey"
+DETAIL Key (x)=(b) already exists.
+> SELECT x::text FROM u WHERE x > 'a' ORDER BY x
+fields x:25:-1:-1
+row b
+row c
+row z
+SELECT 3
+> SELECT x::text FROM u WHERE x BETWEEN '0' AND 'b' ORDER BY x DESC
+fields x:25:-1:-1
+row b
+row a
+row 0
+SELECT 3
+> SELECT string_agg(x::text, ',' ORDER BY x) FROM (SELECT DISTINCT x FROM (SELECT unnest(enum_range(NULL::e)) x UNION ALL SELECT unnest(enum_range(NULL::e))) s) d
+fields string_agg:25:-1:-1
+row 0,a,b,c,z,g
+SELECT 1
+> SELECT greatest('b'::e, 'a'::e, '0'::e)::text, least('b'::e, 'z'::e)::text
+fields greatest:25:-1:-1,least:25:-1:-1
+row b,b
+SELECT 1
+> ALTER TYPE e RENAME VALUE 'b' TO 'bb'
+ALTER TYPE
+> SELECT x::text FROM u ORDER BY x
+fields x:25:-1:-1
+row 0
+row a
+row bb
+row c
+row z
+SELECT 5
+> SELECT 'b'::e
+ERROR 22P02 invalid input value for enum e: "b" at 8
+> SELECT enumlabel FROM pg_enum WHERE enumtypid = 'e'::regtype ORDER BY enumsortorder
+fields enumlabel@pg_enum.4:19:64:-1
+row 0
+row a
+row bb
+row c
+row z
+row g
+SELECT 6
+> ALTER TYPE e ADD VALUE ''
+ALTER TYPE
+> SELECT ''::e::text, enum_last(NULL::e)::text
+fields text:25:-1:-1,enum_last:25:-1:-1
+row ,
+SELECT 1
+> CREATE DOMAIN ed AS e
+CREATE DOMAIN
+> ALTER TYPE ed ADD VALUE 'k'
+ERROR 42809 ed is not an enum
+> CREATE TYPE ct AS (a int)
+CREATE TYPE
+> ALTER TYPE ct ADD VALUE 'k'
+ERROR 42809 ct is not an enum
+> ALTER TYPE nosuch ADD VALUE 'k'
+ERROR 42704 type "nosuch" does not exist
+> CREATE TYPE empty AS ENUM ()
+CREATE TYPE
+> ALTER TYPE empty ADD VALUE 'x' BEFORE 'y'
+ERROR 22023 "y" is not an existing enum label
+> ALTER TYPE empty ADD VALUE 'x'
+ALTER TYPE
+> ALTER TYPE empty ADD VALUE 'w' BEFORE 'x'
+ALTER TYPE
+> ALTER TYPE empty ADD VALUE 'y' AFTER 'x'
+ALTER TYPE
+> SELECT oid::text::int8 - 'empty'::regtype::oid::text::int8 AS d, enumsortorder, enumlabel FROM pg_enum WHERE enumtypid = 'empty'::regtype ORDER BY enumsortorder
+fields d:20:8:-1,enumsortorder@pg_enum.3:700:4:-1,enumlabel@pg_enum.4:19:64:-1
+row 2,0,w
+row 1,1,x
+row 3,2,y
+SELECT 3
+> SELECT enum_range(NULL::empty)::text, 'w'::empty < 'x', 'y'::empty > 'w'
+fields enum_range:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1
+row {w,x,y},t,t
+SELECT 1
+> CREATE TABLE after2 ()
+CREATE TABLE
+> SELECT 'after2'::regclass::oid::text::int8 - 'empty'::regtype::oid::text::int8
+fields ?column?:20:8:-1
+row 4
+SELECT 1

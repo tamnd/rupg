@@ -504,7 +504,7 @@ impl Definer<'_, '_> {
     }
 
     /// `format_type_be` for a type of the catalog or a built-in type: the name with the schema when the search path does not find the type by its name, and the element type with `[]` for an array.
-    fn type_text(&self, oid: u32) -> String {
+    pub(super) fn type_text(&self, oid: u32) -> String {
         let Some(ty) = self.catalog.type_by_oid(oid) else { return format_type(oid).into_owned() };
         if ty.element != 0 && ty.relation == 0 && ty.domain.is_none() {
             return format!("{}[]", self.type_text(ty.element));

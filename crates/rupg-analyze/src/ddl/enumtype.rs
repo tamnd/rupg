@@ -8,7 +8,7 @@ use super::Definer;
 use crate::typename::names;
 
 /// The longest label in bytes, as a label is a `name`.
-const MAX_LABEL: usize = 63;
+pub(super) const MAX_LABEL: usize = 63;
 
 impl Definer<'_, '_> {
     /// `DefineEnum`: the enum type, its labels and its array type.

@@ -466,9 +466,12 @@ pub(crate) struct Lease {
 }
 
 impl Lease {
-    /// Makes the changes of the transaction the catalog of the last commit, and releases the lock.
+    /// Makes the changes of the transaction the catalog of the last commit, and releases the lock. After the commit the new labels of the enum types are safe to use.
     pub(crate) fn commit(mut self) {
-        let catalog = std::mem::take(&mut self.catalog);
+        let mut catalog = std::mem::take(&mut self.catalog);
+        if catalog.has_uncommitted_enums() {
+            Arc::make_mut(&mut catalog).commit_enums();
+        }
         if let Some(db) = self.store.state().databases.get_mut(&self.database) {
             db.committed = catalog;
         }
