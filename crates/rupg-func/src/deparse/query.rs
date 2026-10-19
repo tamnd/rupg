@@ -135,15 +135,32 @@ impl Deparser<'_> {
                 state.using_names(&joins, k, &[]);
             }
         }
+        // `set_relation_column_names` reads the names of the columns of a table or a view from the catalog, so a column that `ALTER ... RENAME` renamed after the analysis of the query shows its new name.
+        let catalog = self.session.catalog();
+        let real_names: Vec<Vec<String>> = query
+            .relations
+            .iter()
+            .map(|rel| {
+                let now = catalog
+                    .and_then(|c| c.relation(rel.oid))
+                    .filter(|now| rel.oid != 0 && now.columns.len() >= rel.columns.len());
+                match now {
+                    Some(now) => {
+                        now.columns.iter().take(rel.columns.len()).map(|c| c.name.clone()).collect()
+                    }
+                    None => rel.columns.iter().map(|c| c.name.clone()).collect(),
+                }
+            })
+            .collect();
         let mut print_join = vec![false; joins.len()];
         for slot in &order {
             match *slot {
                 Slot::Relation(i) => {
                     let Some(rel) = query.relations.get(i) else { continue };
                     let given: &[String] = rel.alias.as_deref().unwrap_or_default();
-                    for (c, column) in rel.columns.iter().enumerate() {
+                    for (c, column) in real_names[i].iter().enumerate() {
                         if state.relations[i][c].is_none() {
-                            let wanted = given.get(c).unwrap_or(&column.name);
+                            let wanted = given.get(c).unwrap_or(column);
                             let name = state.unique(wanted, Slot::Relation(i));
                             state.relations[i][c] = Some(name);
                         }
@@ -157,11 +174,11 @@ impl Deparser<'_> {
             let names: Vec<String> =
                 state.relations[i].iter().map(|n| n.clone().unwrap_or_default()).collect();
             // The real name of a column of a table or a view is the name in the catalog. For another relation, it is the name that the alias gives.
-            let changed = rel.columns.iter().zip(&names).enumerate().any(|(c, (column, name))| {
-                let real =
-                    if rel.oid != 0 { &column.name } else { given.get(c).unwrap_or(&column.name) };
-                name != real
-            });
+            let changed =
+                real_names[i].iter().zip(&names).enumerate().any(|(c, (column, name))| {
+                    let real = if rel.oid != 0 { column } else { given.get(c).unwrap_or(column) };
+                    name != real
+                });
             // `JSON_TABLE` does not show the names of its columns after its alias.
             let print = if rel.json_table().is_some() {
                 false
@@ -1718,6 +1735,22 @@ fn viewdef(oid: u32, paren: bool, wrap: i32, session: &dyn Session) -> Result<Va
     d.query_def(&query, Some(&result), true, 0)?;
     d.buf.push(';');
     Ok(Value::text(d.buf))
+}
+
+/// The text of a `CREATE VIEW` statement that makes the view `name` again with the query and the names of its columns, as `pg_get_viewdef_worker` gives the query. The catalog keeps the text of a view, and the text names the objects that the query reads, so `ALTER ... RENAME` writes the text again from the query of the old names.
+///
+/// # Errors
+///
+/// The errors of the deparse.
+pub fn view_statement(
+    query: &Query,
+    name: &str,
+    columns: &[String],
+    session: &dyn Session,
+) -> Result<String> {
+    let mut d = Deparser::new(session, false, 0);
+    d.query_def(query, Some(columns), true, 0)?;
+    Ok(format!("CREATE VIEW {} AS {}", quote_identifier(name), d.buf))
 }
 
 /// The pretty flags and the wrap column of a call from its second argument: none for `pg_get_viewdef(oid)`, a `boolean` for `pg_get_viewdef(oid, bool)`, and the wrap column for `pg_get_viewdef(oid, int4)`, which also sets `PRETTYFLAG_PAREN`.

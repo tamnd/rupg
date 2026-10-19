@@ -1247,6 +1247,84 @@ impl Catalog {
         array
     }
 
+    /// `RenameRelationInternal`: the new name of a relation. The row type and the array type get new names, as `RenameTypeInternal` gives them, and the constraint of an index gets the name of the index, as `RenameConstraintById` gives it.
+    ///
+    /// # Errors
+    ///
+    /// `42P07` when the schema has a relation with the name, `42710` when the name is the name of a type or of a constraint of the table, and an internal error for a relation that the catalog does not have.
+    pub fn rename_relation(&mut self, oid: u32, name: &str) -> Result<()> {
+        let rel = self.relation(oid).ok_or_else(|| no_object("relation", oid))?;
+        let (namespace, row_type) = (rel.namespace, rel.row_type);
+        let table = rel.index.as_ref().map_or(0, |info| info.table);
+        if self.relation_by_name(namespace, name).is_some() {
+            return Err(duplicate_table(name));
+        }
+        self.relation_mut(oid)?.name = name.to_string();
+        if row_type != 0 {
+            self.check_new_type(namespace, name)?;
+            let array = self.types.get(&row_type).map_or(0, |t| t.array);
+            let array_name = self.array_type_name(name, namespace);
+            if let Some(ty) = self.types.get_mut(&row_type) {
+                ty.name = name.to_string();
+            }
+            if let Some(ty) = self.types.get_mut(&array) {
+                ty.name = array_name;
+            }
+        }
+        let constraint = self
+            .constraints
+            .values()
+            .find(|c| {
+                c.index == oid
+                    && c.relation == table
+                    && matches!(c.kind, ConKind::Primary | ConKind::Unique)
+            })
+            .map(|c| c.oid);
+        if let Some(constraint) = constraint {
+            self.rename_constraint(constraint, name)?;
+        }
+        Ok(())
+    }
+
+    /// `renameatt_internal`: the new name of a column. The caller checks the name.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a column that the catalog does not have.
+    pub fn rename_column(&mut self, relation: u32, number: i16, name: &str) -> Result<()> {
+        self.column_mut(relation, number)?.name = name.to_string();
+        Ok(())
+    }
+
+    /// `RenameConstraintById`: the new name of a constraint. The index of a primary key or a unique constraint keeps its name: the caller renames the index, which renames the constraint.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the table has a constraint with the name, and an internal error for a constraint that the catalog does not have.
+    pub fn rename_constraint(&mut self, oid: u32, name: &str) -> Result<()> {
+        let con = self.constraints.get(&oid).ok_or_else(|| no_object("constraint", oid))?;
+        let relation = con.relation;
+        if relation != 0 && self.constraints_of(relation).any(|c| c.name == name) {
+            let table = self.relation(relation).map_or("", |r| r.name.as_str());
+            return Err(duplicate_constraint(name, table));
+        }
+        if let Some(con) = self.constraints.get_mut(&oid) {
+            con.name = name.to_string();
+        }
+        Ok(())
+    }
+
+    /// `RenameSchema`: the new name of a schema. The caller checks the name.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a schema that the catalog does not have.
+    pub fn rename_schema(&mut self, oid: u32, name: &str) -> Result<()> {
+        let schema = self.schemas.get_mut(&oid).ok_or_else(|| no_object("schema", oid))?;
+        schema.name = name.to_string();
+        Ok(())
+    }
+
     /// `CREATE SCHEMA`. The caller checks the names of the built-in schemas and the `pg_` prefix.
     pub fn create_schema(&mut self, name: &str, owner: u32) -> Result<u32> {
         if self.schema_by_name(name).is_some() {
@@ -1537,6 +1615,14 @@ impl Catalog {
         let rule = view.rule;
         self.depends.retain(|d| d.object != ObjRef::new(PG_REWRITE, rule));
         self.depend_rule(rule, oid, refs);
+        Ok(())
+    }
+
+    /// A new text of the view `oid` with the same query, which `ALTER ... RENAME` gives when the view reads an object that gets a new name. The rule keeps its dependencies.
+    pub fn set_view_text(&mut self, oid: u32, text: String, path: Vec<u32>) -> Result<()> {
+        let view = self.relation_mut(oid)?.view.as_mut().ok_or_else(|| no_object("view", oid))?;
+        view.text = text;
+        view.path = path;
         Ok(())
     }
 

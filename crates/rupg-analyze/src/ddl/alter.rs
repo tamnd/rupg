@@ -190,7 +190,12 @@ impl Definer<'_, '_> {
     }
 
     /// `RangeVarCallbackForAlterRelation`: the owner, the system catalogs and the kind that the statement names.
-    fn alter_target(&self, objtype: ObjectType, found: Found, name: &str) -> Result<Target> {
+    pub(super) fn alter_target(
+        &self,
+        objtype: ObjectType,
+        found: Found,
+        name: &str,
+    ) -> Result<Target> {
         let kind = self.kind_of(found);
         let owner = match found {
             Found::User(oid) => self.catalog.relation(oid).map_or(0, |r| r.owner),

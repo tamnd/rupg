@@ -14,6 +14,7 @@ mod identity;
 mod index;
 mod lock;
 mod rangetype;
+mod rename;
 mod rule;
 mod sequence;
 mod table;
@@ -70,6 +71,8 @@ pub struct Defined {
     pub truncated: Vec<u32>,
     /// The expressions of `USING` of `ALTER COLUMN ... TYPE`, which give the new values of the columns when the caller writes the rows of the table again.
     pub transforms: Vec<Transform>,
+    /// The views whose query reads an object that the statement renamed. The catalog keeps the text of a view, so the caller writes the text again from the query that the old names give.
+    pub views: Vec<u32>,
 }
 
 /// The expression of `USING` of `ALTER COLUMN ... TYPE` for one column, as `ATPrepAlterColumnType` keeps it in `tab->newvals`.
@@ -105,6 +108,7 @@ pub fn is_definition(stmt: &Node) -> bool {
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype))
         || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA)
+        || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
 }
 
 /// True for the kinds of relations of `AlterTableStmt` that [`define`] runs. `ALTER TYPE` of a composite type is not one of them.
@@ -150,6 +154,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         scans: Vec::new(),
         truncated: Vec::new(),
         transforms: Vec::new(),
+        views: Vec::new(),
     };
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
@@ -166,6 +171,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::DropStmt(drop) => definer.drop(drop),
         Node::AlterTableStmt(alter) => definer.alter_table(alter),
         Node::AlterOwnerStmt(alter) => definer.alter_owner(alter),
+        Node::RenameStmt(rename) => definer.rename(rename),
         Node::CreateSeqStmt(create) => definer.create_sequence(create),
         Node::AlterSeqStmt(alter) => definer.alter_sequence(alter),
         Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) => definer.define_ts(define),
@@ -182,6 +188,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         scans: definer.scans,
         truncated: definer.truncated,
         transforms: definer.transforms,
+        views: definer.views,
     }
 }
 
@@ -257,6 +264,8 @@ pub(crate) struct Definer<'a, 'c> {
     truncated: Vec<u32>,
     /// The expressions of [`Defined::transforms`].
     transforms: Vec<Transform>,
+    /// The views of [`Defined::views`].
+    views: Vec<u32>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.
