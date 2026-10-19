@@ -204,6 +204,7 @@ impl Analyzer<'_> {
             Node::SubLink(s) => self.transform_sublink(s),
             Node::A_Indirection(i) => self.transform_indirection(i),
             Node::GroupingFunc(g) => self.grouping_func(g),
+            Node::MergeSupportFunc(f) => self.merge_support_func(f),
             Node::JsonObjectConstructor(c) => self.json_object(c),
             Node::JsonArrayConstructor(c) => self.json_array(c),
             Node::JsonArrayQueryConstructor(c) => self.json_array_query(c),

@@ -253,6 +253,9 @@ pub fn prepare(query: Query) -> Result<Plan> {
     {
         check_query(update, false)?;
     }
+    for clause in query.write.iter().filter_map(|w| w.merge.as_ref()).flat_map(|m| &m.clauses) {
+        check_query(&clause.query, false)?;
+    }
     Ok(Plan { query })
 }
 
@@ -1064,6 +1067,43 @@ impl Plan {
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
         Ok(insert::check(info, rows, session)?.into_iter().next())
+    }
+
+    /// `ExecMergeMatched` and `ExecMergeNotMatched` for one clause of a `MERGE`: the row that the clause gives for the row `target` of the table, which ends with the ID of its version, and the carried values of the row of the join. It is `None` when the condition of the clause is not true. The new row of an `INSERT` or an `UPDATE` has the columns of the table, after the checks of the constraints.
+    ///
+    /// # Errors
+    ///
+    /// The error of a function of the clause, and the error of a constraint of the table.
+    pub fn merge_clause(
+        &self,
+        clause: &rupg_analyze::MergeClause,
+        target: Vec<Value>,
+        carried: Vec<Value>,
+        params: &[Value],
+        session: &dyn Session,
+    ) -> Result<Option<Vec<Value>>> {
+        let Some(info) = self.query.write.as_ref() else {
+            return Ok(None);
+        };
+        let query = &*clause.query;
+        // The query of the checks of the constraints reads the query of the new row as a subquery.
+        let mut base = query;
+        while let [relation] = base.relations.as_slice()
+            && let Some(inner) = relation.subquery.as_deref()
+        {
+            base = inner;
+        }
+        let cache = Cache::default();
+        let tables = scan::given(base, vec![vec![target], vec![carried]]);
+        cache.tables.borrow_mut().push((base, Rc::new(tables)));
+        let rows = run_query(query, params, session, &cache, &[], false)?;
+        let rows = match clause.command {
+            rupg_analyze::MergeCommand::Insert | rupg_analyze::MergeCommand::Update => {
+                insert::check_rows(info, rows, session)?
+            }
+            _ => rows,
+        };
+        Ok(rows.into_iter().next())
     }
 
     /// The table that the query writes when it is an `INSERT`, an `UPDATE` or a `DELETE`. Then [`Plan::run`] gives the rows that change.

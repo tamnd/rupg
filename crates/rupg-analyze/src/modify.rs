@@ -65,6 +65,7 @@ impl Analyzer<'_> {
             returning,
             foreign,
             on_conflict: None,
+            merge: None,
         });
         Ok(query)
     }
@@ -180,6 +181,7 @@ impl Analyzer<'_> {
                 returning,
                 foreign,
                 on_conflict: None,
+                merge: None,
             }),
             ..Query::default()
         })
@@ -313,7 +315,7 @@ fn tail_columns(carried: &[Expr]) -> Vec<Column> {
 }
 
 /// The targets that read each column of the old row of the target table.
-fn old_row(columns: &[Column]) -> Vec<Target> {
+pub(crate) fn old_row(columns: &[Column]) -> Vec<Target> {
     let row = columns
         .iter()
         .enumerate()
@@ -329,7 +331,7 @@ fn old_row(columns: &[Column]) -> Vec<Target> {
 }
 
 /// The target that reads the ID of the version of the row of the target table.
-fn tid_target() -> Target {
+pub(crate) fn tid_target() -> Target {
     let var = Var { relation: 0, attnum: CTID_ATTNUM, levels_up: 0 };
     Target {
         name: "ctid".to_string(),

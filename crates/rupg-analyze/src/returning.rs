@@ -10,8 +10,9 @@ use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind, Var};
-use crate::from::{FromItem, Relation};
+use crate::from::{Column, FromItem, Relation};
 use crate::insert::WriteKind;
+use crate::merge::carry;
 use crate::select::Query;
 use crate::typename::place;
 
@@ -23,6 +24,8 @@ enum Source {
     Carry(usize),
     /// A row that the statement does not have.
     Null,
+    /// The columns of the row of `RETURNING` of a `MERGE` after this number of columns: the old row, the new row or the action.
+    Shift(usize),
 }
 
 impl Analyzer<'_> {
@@ -37,7 +40,19 @@ impl Analyzer<'_> {
         kind: WriteKind,
     ) -> Result<(Query, Vec<Expr>)> {
         let size = self.scope_size();
+        // `merge_action()` reads the relation of the action, which no name can find.
+        if kind == WriteKind::Merge {
+            let column = Column {
+                name: "merge_action".to_string(),
+                ty: oid::TEXT,
+                typmod: -1,
+                not_null: false,
+            };
+            self.scope.merge_action = Some(self.scope.relations.len());
+            self.scope.relations.push(Relation::new(0, vec![column], None, None, None));
+        }
         let result = self.returning_list(clause, kind);
+        self.scope.merge_action = None;
         self.truncate_scope(size);
         result
     }
@@ -107,30 +122,37 @@ impl Analyzer<'_> {
             }
         }
         let [old, new] = relations;
-        let source = |relation: usize| {
-            if Some(relation) == old {
-                match kind {
-                    WriteKind::Insert => Source::Null,
-                    WriteKind::Update => Source::Carry(0),
-                    WriteKind::Delete => Source::Row,
-                }
-            } else if Some(relation) == new {
-                match kind {
-                    WriteKind::Delete => Source::Null,
-                    WriteKind::Insert | WriteKind::Update => Source::Row,
-                }
-            } else if relation == 0 {
-                Source::Row
-            } else {
-                Source::Carry(relation)
-            }
-        };
         let table = self
             .scope
             .relations
             .first()
             .ok_or_else(|| Error::internal("RETURNING with no table"))?;
         let width = table.columns.len();
+        let action = self.scope.merge_action;
+        let source = |relation: usize| {
+            if Some(relation) == old {
+                match kind {
+                    WriteKind::Insert => Source::Null,
+                    WriteKind::Update => Source::Carry(0),
+                    WriteKind::Delete => Source::Row,
+                    WriteKind::Merge => Source::Shift(width),
+                }
+            } else if Some(relation) == new {
+                match kind {
+                    WriteKind::Delete => Source::Null,
+                    WriteKind::Insert | WriteKind::Update => Source::Row,
+                    WriteKind::Merge => Source::Shift(2 * width),
+                }
+            } else if Some(relation) == action {
+                Source::Shift(3 * width)
+            } else if relation == 0 {
+                Source::Row
+            } else {
+                Source::Carry(relation)
+            }
+        };
+        // The carried values of a `MERGE` come after the row, the old row, the new row and the action.
+        let base = if kind == WriteKind::Merge { 3 * width + 1 } else { width };
         let mut carried: Vec<Expr> = Vec::new();
         let mut change = |expr: &mut Expr, depth: usize| {
             let ExprKind::Var(var) = expr.kind else { return };
@@ -140,20 +162,14 @@ impl Analyzer<'_> {
             match source(var.relation) {
                 Source::Row => expr.kind = ExprKind::Var(Var { relation: 0, ..var }),
                 Source::Null => expr.kind = ExprKind::Const(Value::Null),
+                Source::Shift(by) => {
+                    let attnum =
+                        i16::try_from(by).map_or(i16::MAX, |by| by.saturating_add(var.attnum));
+                    expr.kind = ExprKind::Var(Var { relation: 0, attnum, levels_up: depth });
+                }
                 Source::Carry(relation) => {
-                    let found = carried.iter().position(|c| {
-                        matches!(c.kind, ExprKind::Var(v) if v.relation == relation && v.attnum == var.attnum)
-                    });
-                    let at = found.unwrap_or_else(|| {
-                        let mut value = Expr::new(
-                            ExprKind::Var(Var { relation, attnum: var.attnum, levels_up: 0 }),
-                            expr.ty,
-                        );
-                        value.typmod = expr.typmod;
-                        carried.push(value);
-                        carried.len() - 1
-                    });
-                    let attnum = i16::try_from(width + 1 + at).unwrap_or(i16::MAX);
+                    let at = carry(&mut carried, relation, var.attnum, expr);
+                    let attnum = i16::try_from(base + 1 + at).unwrap_or(i16::MAX);
                     expr.kind = ExprKind::Var(Var { relation: 0, attnum, levels_up: depth });
                 }
             }
@@ -175,7 +191,7 @@ impl Analyzer<'_> {
 }
 
 /// Calls `f` for the expression and for each expression in it, also in its subqueries, with the number of subqueries between the expression and this expression. `f` sees an expression before the expressions in it.
-fn rewrite(expr: &mut Expr, depth: usize, f: &mut dyn FnMut(&mut Expr, usize)) {
+pub(crate) fn rewrite(expr: &mut Expr, depth: usize, f: &mut dyn FnMut(&mut Expr, usize)) {
     f(expr, depth);
     for child in expr.children_mut() {
         rewrite(child, depth, f);

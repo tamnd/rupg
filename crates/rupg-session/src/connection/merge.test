@@ -1,0 +1,159 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int PRIMARY KEY, v text, n int DEFAULT 7, CHECK (n < 100))
+CREATE TABLE
+> CREATE TABLE s (id int, v text, n int)
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'a', 1), (2, 'b', 2), (3, 'c', 3)
+INSERT 0 3
+> INSERT INTO s VALUES (1, 'x', 10), (2, 'y', 20), (4, 'z', 40), (5, 'w', 50)
+INSERT 0 4
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v, s.n)
+MERGE 4
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row 1,x,1
+row 2,y,2
+row 3,c,3
+row 4,z,40
+row 5,w,50
+SELECT 5
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED AND s.n > 15 THEN DELETE WHEN MATCHED THEN UPDATE SET n = t.n + s.n RETURNING merge_action(), t.*, old.n, new.n, s.v
+fields merge_action:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,n@t.3:23:4:-1,n@t.3:23:4:-1,v@s.2:25:-1:-1
+row UPDATE,1,x,11,1,11,x
+row DELETE,2,y,2,2,NULL,y
+row DELETE,4,z,40,40,NULL,z
+row DELETE,5,w,50,50,NULL,w
+MERGE 4
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row 1,x,11
+row 3,c,3
+SELECT 2
+> MERGE INTO t AS x USING (SELECT 2 AS id, 'q' AS v) AS q ON x.id = q.id WHEN NOT MATCHED THEN INSERT (id, v) VALUES (q.id, q.v) RETURNING *
+fields id:23:4:-1,v:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row 2,q,2,q,7
+MERGE 1
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED BY SOURCE THEN UPDATE SET v = t.v || '!' WHEN NOT MATCHED BY TARGET THEN DO NOTHING RETURNING merge_action(), t.*
+fields merge_action:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row UPDATE,3,c!,3
+MERGE 1
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED BY SOURCE AND t.id = 3 THEN DELETE RETURNING merge_action(), old.*
+fields merge_action:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row DELETE,3,c!,3
+MERGE 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row 1,x,11
+row 2,q,7
+SELECT 2
+> MERGE INTO t USING (VALUES (1, 'd'), (1, 'e')) AS v (id, v) ON t.id = v.id WHEN MATCHED THEN UPDATE SET v = v.v
+ERROR 21000 MERGE command cannot affect row a second time
+HINT Ensure that not more than one source row matches any one target row.
+> MERGE INTO t USING (VALUES (1, 'd'), (1, 'e')) AS v (id, v) ON t.id = v.id WHEN MATCHED THEN DO NOTHING
+MERGE 0
+> MERGE INTO t USING (VALUES (1, 'd'), (1, 'e')) AS v (id, v) ON t.id = v.id WHEN MATCHED THEN DELETE
+ERROR 21000 MERGE command cannot affect row a second time
+HINT Ensure that not more than one source row matches any one target row.
+> MERGE INTO t USING (VALUES (8, 'd'), (8, 'e')) AS v (id, v) ON t.id = v.id WHEN NOT MATCHED THEN INSERT VALUES (v.id, v.v)
+ERROR 23505 duplicate key value violates unique constraint "t_pkey"
+DETAIL Key (id)=(8) already exists.
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET n = 500
+ERROR 23514 new row for relation "t" violates check constraint "t_n_check"
+DETAIL Failing row contains (1, x, 500).
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id, t.v)
+ERROR 42P01 invalid reference to FROM-clause entry for table "t" at 80
+DETAIL There is an entry for table "t", but it cannot be referenced from this part of the query.
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED BY SOURCE THEN UPDATE SET v = s.v
+ERROR 42P01 invalid reference to FROM-clause entry for table "s" at 84
+DETAIL There is an entry for table "s", but it cannot be referenced from this part of the query.
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DELETE WHEN MATCHED AND s.n > 0 THEN DELETE
+ERROR 42601 unreachable WHEN clause specified after unconditional WHEN clause
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (1, 'a', 2, 3)
+ERROR 42601 INSERT has more expressions than target columns at 85
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (id, v) VALUES (1)
+ERROR 42601 INSERT has more target columns than expressions at 71
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT (nope) VALUES (1)
+ERROR 42703 column "nope" of relation "t" does not exist at 67
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET nope = 1
+ERROR 42703 column "nope" of relation "t" does not exist at 66
+> MERGE INTO t USING s ON count(*) > 0 WHEN MATCHED THEN DELETE
+ERROR 42803 aggregate functions are not allowed in JOIN conditions at 25
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED AND count(*) > 0 THEN DELETE
+ERROR 42803 aggregate functions are not allowed in MERGE WHEN conditions at 54
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED AND merge_action() = 'x' THEN DELETE
+ERROR 42601 MERGE_ACTION() can only be used in the RETURNING list of a MERGE command at 54
+> SELECT merge_action()
+ERROR 42601 MERGE_ACTION() can only be used in the RETURNING list of a MERGE command at 8
+> MERGE INTO t USING t ON t.id = t.id WHEN MATCHED THEN DELETE
+ERROR 42712 name "t" specified more than once
+DETAIL The name is used both as MERGE target table and data source.
+> MERGE INTO t USING s ON t.id = nope WHEN MATCHED THEN DELETE
+ERROR 42703 column "nope" does not exist at 32
+> MERGE INTO t USING s ON id = 1 WHEN MATCHED THEN DELETE
+ERROR 42702 column reference "id" is ambiguous at 25
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = id::text
+ERROR 42702 column reference "id" is ambiguous at 70
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT DEFAULT VALUES
+ERROR 23502 null value in column "id" of relation "t" violates not-null constraint
+DETAIL Failing row contains (null, null, 7).
+> MERGE INTO t USING s ON 1 = 2 WHEN NOT MATCHED THEN INSERT (id) VALUES (s.id + 100) RETURNING merge_action(), id, n, old.id IS NULL
+ERROR 42702 column reference "id" is ambiguous at 111
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN DO NOTHING
+MERGE 0
+> MERGE INTO t USING s JOIN (VALUES (1)) AS j (k) ON s.id = j.k ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = s.v || j.k RETURNING t.*, j.k
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,k:23:4:-1
+row 1,x1,11,1
+MERGE 1
+> MERGE INTO t USING s ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v, s.n * 3)
+ERROR 23514 new row for relation "t" violates check constraint "t_n_check"
+DETAIL Failing row contains (4, z, 120).
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row 1,x1,11
+row 2,q,7
+SELECT 2
+> CREATE TABLE r (id int REFERENCES t)
+CREATE TABLE
+> INSERT INTO r VALUES (2)
+INSERT 0 1
+> MERGE INTO t USING (VALUES (2)) AS v (id) ON t.id = v.id WHEN MATCHED THEN DELETE
+ERROR 23503 update or delete on table "t" violates foreign key constraint "r_id_fkey" on table "r"
+DETAIL Key (id)=(2) is still referenced from table "r".
+> MERGE INTO r USING (VALUES (99)) AS v (id) ON r.id = v.id WHEN NOT MATCHED THEN INSERT VALUES (v.id)
+ERROR 23503 insert or update on table "r" violates foreign key constraint "r_id_fkey"
+DETAIL Key (id)=(99) is not present in table "t".
+> BEGIN
+BEGIN
+> MERGE INTO t USING (VALUES (60, 'tx')) AS v (id, v) ON t.id = v.id WHEN NOT MATCHED THEN INSERT VALUES (v.id, v.v)
+MERGE 1
+> MERGE INTO t USING (VALUES (60, 'tx')) AS v (id, v) ON t.id = v.id WHEN MATCHED THEN UPDATE SET v = 'tx2' RETURNING *
+fields id:23:4:-1,v:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row 60,tx,60,tx2,7
+MERGE 1
+> ROLLBACK
+ROLLBACK
+> PREPARE m1 (int, text) AS MERGE INTO t USING (VALUES ($1, $2)) AS v (id, v) ON t.id = v.id WHEN MATCHED THEN UPDATE SET v = v.v WHEN NOT MATCHED THEN INSERT VALUES (v.id, v.v) RETURNING merge_action(), t.*
+PREPARE
+> EXECUTE m1 (1, 'p1')
+fields merge_action:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row UPDATE,1,p1,11
+MERGE 1
+> EXECUTE m1 (70, 'p70')
+fields merge_action:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row INSERT,70,p70,7
+MERGE 1
+> MERGE INTO t USING s ON t.id = s.id WHEN MATCHED THEN UPDATE SET id = t.id + 1
+ERROR 23505 duplicate key value violates unique constraint "t_pkey"
+DETAIL Key (id)=(2) already exists.
+> MERGE INTO t USING (SELECT 1 AS id) AS q ON t.id = q.id WHEN MATCHED THEN UPDATE SET n = (SELECT max(n) FROM s WHERE s.id <> q.id) - 1 RETURNING *
+fields id:23:4:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row 1,1,p1,49
+MERGE 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1
+row 1,p1,49
+row 2,q,7
+row 70,p70,7
+SELECT 3

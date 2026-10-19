@@ -8,15 +8,24 @@ use rupg_types::Value;
 /// The most bytes of a value in the detail of an error, as `ExecBuildSlotValueDescription` cuts it.
 const MAX_FIELD_LEN: usize = 64;
 
-/// Checks each new row and gives the rows with only the columns of the table, and the ID of the version of the old row for an `UPDATE`. The rows of a `DELETE` have nothing to check.
+/// Checks each new row and gives the rows with only the columns of the table, and the ID of the version of the old row for an `UPDATE`. The rows of a `DELETE` have nothing to check, and the rows of a `MERGE` are the rows of the join, which the clauses of the `MERGE` check.
 pub(crate) fn check(
     info: &Write,
     rows: Vec<Vec<Value>>,
     session: &dyn Session,
 ) -> Result<Vec<Vec<Value>>> {
-    if info.kind == WriteKind::Delete {
+    if matches!(info.kind, WriteKind::Delete | WriteKind::Merge) {
         return Ok(rows);
     }
+    check_rows(info, rows, session)
+}
+
+/// The checks of [`check`] on new rows of the table, with the conditions of the check constraints after the columns.
+pub(crate) fn check_rows(
+    info: &Write,
+    rows: Vec<Vec<Value>>,
+    session: &dyn Session,
+) -> Result<Vec<Vec<Value>>> {
     let rel = session.catalog().and_then(|c| c.relation(info.table));
     let types: Vec<u32> = rel.map(|r| r.columns.iter().map(|c| c.ty).collect()).unwrap_or_default();
     let mut out = Vec::with_capacity(rows.len());

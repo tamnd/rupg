@@ -13,6 +13,7 @@ use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Relation};
+use crate::merge::Merge;
 use crate::modify::carried_targets;
 use crate::select::{Query, Target};
 use crate::typename::place;
@@ -24,6 +25,7 @@ pub enum WriteKind {
     Insert,
     Update,
     Delete,
+    Merge,
 }
 
 impl WriteKind {
@@ -33,6 +35,7 @@ impl WriteKind {
             WriteKind::Insert => "INSERT",
             WriteKind::Update => "UPDATE",
             WriteKind::Delete => "DELETE",
+            WriteKind::Merge => "MERGE",
         }
     }
 }
@@ -59,6 +62,8 @@ pub struct Write {
     pub foreign: Vec<Foreign>,
     /// The `ON CONFLICT` clause of an `INSERT`.
     pub on_conflict: Option<OnConflict>,
+    /// The clauses of a `MERGE`.
+    pub merge: Option<Merge>,
 }
 
 /// `OnConflictExpr`: what an `INSERT` does for a new row with the key of a row that the table has.
@@ -225,7 +230,7 @@ impl Item {
 }
 
 /// A column that the statement gives: the index of the column in the table and the place of its name in the column list.
-type Given = (usize, Option<usize>);
+pub(crate) type Given = (usize, Option<usize>);
 
 /// The error of a clause that the analyzer does not take yet.
 pub(crate) fn not_yet(what: &str) -> Error {
@@ -298,6 +303,7 @@ impl Analyzer<'_> {
             returning,
             foreign,
             on_conflict,
+            merge: None,
         });
         Ok(query)
     }
@@ -475,6 +481,7 @@ impl Analyzer<'_> {
             WriteKind::Insert => "INSERT into",
             WriteKind::Update => "UPDATE of",
             WriteKind::Delete => "DELETE from",
+            WriteKind::Merge => "MERGE into",
         };
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default().to_string();
@@ -691,7 +698,7 @@ impl Analyzer<'_> {
     }
 
     /// `checkInsertTargets`: the columns of the column list, or all the columns of the table when the statement has no list.
-    fn insert_targets(
+    pub(crate) fn insert_targets(
         &self,
         cols: &rupg_sql::nodes::List,
         name: &str,
@@ -730,7 +737,11 @@ impl Analyzer<'_> {
     }
 
     /// `transformExpressionList` for a row of `VALUES` in an `INSERT`, which keeps `DEFAULT` at the top of an item.
-    fn value_items(&mut self, list: &rupg_sql::nodes::List, kind: Kind) -> Result<Vec<Item>> {
+    pub(crate) fn value_items(
+        &mut self,
+        list: &rupg_sql::nodes::List,
+        kind: Kind,
+    ) -> Result<Vec<Item>> {
         let mut items = Vec::with_capacity(list.len());
         for node in list {
             if let Some(Node::SetToDefault(d)) = node {
@@ -743,7 +754,7 @@ impl Analyzer<'_> {
     }
 
     /// `transformInsertRow`: the items of a row, each with the type of its column, and `DEFAULT` as the default of the column.
-    fn insert_row(
+    pub(crate) fn insert_row(
         &mut self,
         items: Vec<Item>,
         table: u32,
@@ -844,7 +855,7 @@ impl Analyzer<'_> {
     }
 
     /// The row of the table: the expression of each column that the statement gives, and the default of each other column.
-    fn full_row(
+    pub(crate) fn full_row(
         &mut self,
         table: u32,
         columns: &[Column],
