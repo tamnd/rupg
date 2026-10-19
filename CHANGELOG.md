@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER TYPE ... ADD VALUE` and `ALTER TYPE ... RENAME VALUE` for enum types, with the sort order and the OID of PostgreSQL, the order of labels with odd OIDs, and the error for a new label that the transaction uses before the commit (#426).
 - `ALTER TABLE`, `ALTER VIEW` and `ALTER SEQUENCE` with `SET SCHEMA`. The relation moves with its row type, its indexes, its owned sequences and its constraints, and the views that read it get a new text (#425).
 - `ALTER TABLE ... CLUSTER ON`, `SET WITHOUT CLUSTER` and `REPLICA IDENTITY`. The catalog keeps `indisclustered`, `indisreplident` and `relreplident`, and `DROP NOT NULL` keeps the not-null constraint of a key column of the replica identity index (#424).
 - The options of relations: `WITH (...)` of `CREATE TABLE`, `CREATE INDEX`, `CREATE VIEW` and the index of a constraint, and `SET (...)` and `RESET (...)` of `ALTER TABLE`, `ALTER INDEX` and `ALTER VIEW`. The options of the namespace `toast` go to the TOAST table. `ALTER TABLE ... SET WITHOUT OIDS` is accepted (#423).
