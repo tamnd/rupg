@@ -135,7 +135,7 @@ fn def_name(node: &Node) -> Option<&str> {
 }
 
 /// `defGetString`: the value of an option as text. An option without a value is `true`.
-fn def_string(arg: Option<&Node>) -> String {
+pub(super) fn def_string(arg: Option<&Node>) -> String {
     match arg {
         None => "true".to_string(),
         Some(Node::Integer(n)) => n.to_string(),

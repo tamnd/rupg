@@ -168,6 +168,14 @@ pub struct Column {
     pub identity: u8,
     /// `attisdropped`. A dropped column keeps its place, so the later columns keep their numbers, but it has no name that a query can use and no type.
     pub dropped: bool,
+    /// `attstattarget`: the statistics target of `SET STATISTICS`, or `None` for the default.
+    pub stat_target: Option<i16>,
+    /// `attstorage` of `STORAGE` or `SET STORAGE`, or 0 for the storage of the type.
+    pub storage: u8,
+    /// `attcompression`: `p` for `pglz`, `l` for `lz4`, or 0 for the default method.
+    pub compression: u8,
+    /// `attoptions`: each option as `name=value`.
+    pub options: Vec<String>,
 }
 
 impl Column {
@@ -183,6 +191,10 @@ impl Column {
             has_default: false,
             identity: 0,
             dropped: false,
+            stat_target: None,
+            storage: 0,
+            compression: 0,
+            options: Vec::new(),
         }
     }
 }
@@ -2228,6 +2240,62 @@ impl Catalog {
         Ok(())
     }
 
+    /// `ATExecSetStatistics`: `attstattarget` of a column, or `None` for the default.
+    pub fn set_stat_target(
+        &mut self,
+        relation: u32,
+        column: i16,
+        target: Option<i16>,
+    ) -> Result<()> {
+        self.column_mut(relation, column)?.stat_target = target;
+        Ok(())
+    }
+
+    /// `ATExecSetStorage` and `SetIndexStorageProperties`: `attstorage` of a column and of each index column that is the column.
+    pub fn set_storage(&mut self, relation: u32, column: i16, storage: u8) -> Result<()> {
+        self.column_mut(relation, column)?.storage = storage;
+        for (index, number) in self.index_columns_of(relation, column) {
+            self.column_mut(index, number)?.storage = storage;
+        }
+        Ok(())
+    }
+
+    /// `ATExecSetCompression` and `SetIndexStorageProperties`: `attcompression` of a column and of each index column that is the column.
+    pub fn set_compression(&mut self, relation: u32, column: i16, compression: u8) -> Result<()> {
+        self.column_mut(relation, column)?.compression = compression;
+        for (index, number) in self.index_columns_of(relation, column) {
+            self.column_mut(index, number)?.compression = compression;
+        }
+        Ok(())
+    }
+
+    /// `ATExecSetOptions`: `attoptions` of a column.
+    pub fn set_column_options(
+        &mut self,
+        relation: u32,
+        column: i16,
+        options: Vec<String>,
+    ) -> Result<()> {
+        self.column_mut(relation, column)?.options = options;
+        Ok(())
+    }
+
+    /// The OID and the column number of each index column that is the column of the table, as `SetIndexStorageProperties` finds them.
+    fn index_columns_of(&self, relation: u32, column: i16) -> Vec<(u32, i16)> {
+        let mut found = Vec::new();
+        for rel in self.relations.values() {
+            let Some(info) = rel.index.as_ref().filter(|i| i.table == relation) else { continue };
+            for (i, &key) in info.keys.iter().enumerate() {
+                if key == column
+                    && let Ok(number) = i16::try_from(i + 1)
+                {
+                    found.push((rel.oid, number));
+                }
+            }
+        }
+        found
+    }
+
     /// `RemoveAttrDefault`: removes the default of a column with its rows of `pg_depend`. A column with no default is not an error.
     pub fn remove_default(&mut self, relation: u32, column: i16) {
         let Some(oid) = self.default_of(relation, column).map(|d| d.oid) else { return };
@@ -2414,6 +2482,8 @@ impl Catalog {
                 let from = usize::try_from(c.key).ok().and_then(|k| k.checked_sub(1));
                 if let Some(from) = from.and_then(|k| table_columns.get(k)) {
                     column.ndims = from.ndims;
+                    column.storage = from.storage;
+                    column.compression = from.compression;
                 }
                 column
             })

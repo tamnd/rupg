@@ -1,0 +1,262 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text STORAGE MAIN COMPRESSION pglz, c numeric, d int[], e varchar(10) STORAGE PLAIN)
+CREATE TABLE
+> SELECT attname, attstattarget, attstorage, attcompression, attoptions FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstattarget@pg_attribute.21:21:2:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,attoptions@pg_attribute.23:1009:-1:-1
+row a,NULL,p,,NULL
+row b,NULL,m,p,NULL
+row c,NULL,m,,NULL
+row d,NULL,x,,NULL
+row e,NULL,p,,NULL
+SELECT 5
+> CREATE TABLE t2 (a int STORAGE EXTERNAL)
+ERROR 0A000 column data type integer can only have storage PLAIN
+> CREATE TABLE t3 (a int COMPRESSION pglz)
+ERROR 0A000 column data type integer does not support compression
+> CREATE TABLE t4 (a text COMPRESSION bogus)
+ERROR 22023 invalid compression method "bogus"
+> CREATE TABLE t5 (a text STORAGE bogus)
+ERROR 22023 invalid storage type "bogus"
+> CREATE TABLE t6 (a text STORAGE DEFAULT COMPRESSION DEFAULT, b text COMPRESSION lz4)
+CREATE TABLE
+> SELECT attname, attstorage, attcompression FROM pg_attribute WHERE attrelid = 't6'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1
+row a,x,
+row b,x,l
+SELECT 2
+> ALTER TABLE t ALTER COLUMN a SET STATISTICS 500
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN b SET STORAGE EXTERNAL
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN b SET COMPRESSION lz4
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN c SET (n_distinct = 100)
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN c SET (n_distinct_inherited = -0.5, n_distinct = 5)
+ALTER TABLE
+> SELECT attname, attstattarget, attstorage, attcompression, attoptions FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstattarget@pg_attribute.21:21:2:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,attoptions@pg_attribute.23:1009:-1:-1
+row a,500,p,,NULL
+row b,NULL,e,l,NULL
+row c,NULL,m,,{n_distinct_inherited=-0.5,n_distinct=5}
+row d,NULL,x,,NULL
+row e,NULL,p,,NULL
+SELECT 5
+> ALTER TABLE t ALTER COLUMN c RESET (n_distinct)
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN a SET STATISTICS -1
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN b SET STORAGE DEFAULT
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN b SET COMPRESSION DEFAULT
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN d SET STORAGE PLAIN, ALTER COLUMN e SET STORAGE EXTENDED
+ALTER TABLE
+> SELECT attname, attstattarget, attstorage, attcompression, attoptions FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstattarget@pg_attribute.21:21:2:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,attoptions@pg_attribute.23:1009:-1:-1
+row a,NULL,p,,NULL
+row b,NULL,x,,NULL
+row c,NULL,m,,{n_distinct_inherited=-0.5}
+row d,NULL,p,,NULL
+row e,NULL,x,,NULL
+SELECT 5
+> ALTER TABLE t ALTER COLUMN a SET STATISTICS 0
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN a SET STATISTICS DEFAULT
+ALTER TABLE
+> SELECT attstattarget FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'a'
+fields attstattarget@pg_attribute.21:21:2:-1
+row NULL
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a SET STATISTICS 20000
+WARNING 22023 lowering statistics target to 10000
+ALTER TABLE
+> SELECT attstattarget FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'a'
+fields attstattarget@pg_attribute.21:21:2:-1
+row 10000
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a SET STATISTICS -5
+ERROR 22023 statistics target -5 is too low
+> ALTER TABLE t ALTER COLUMN a SET STATISTICS 5, ALTER COLUMN a SET STORAGE EXTERNAL
+ERROR 0A000 column data type integer can only have storage PLAIN
+> SELECT attstattarget FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'a'
+fields attstattarget@pg_attribute.21:21:2:-1
+row 10000
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a SET STORAGE MAIN
+ERROR 0A000 column data type integer can only have storage PLAIN
+> ALTER TABLE t ALTER COLUMN a SET STORAGE bogus
+ERROR 22023 invalid storage type "bogus"
+> ALTER TABLE t ALTER COLUMN a SET COMPRESSION lz4
+ERROR 0A000 column data type integer does not support compression
+> ALTER TABLE t ALTER COLUMN a SET COMPRESSION bogus
+ERROR 0A000 column data type integer does not support compression
+> ALTER TABLE t ALTER COLUMN b SET COMPRESSION bogus
+ERROR 22023 invalid compression method "bogus"
+> ALTER TABLE t ALTER COLUMN c SET (bogus = 1)
+ERROR 22023 unrecognized parameter "bogus"
+> ALTER TABLE t ALTER COLUMN c SET (n_distinct = -2)
+ERROR 22023 value -2 out of bounds for option "n_distinct"
+DETAIL Valid values are between "-1.000000" and "179769313486231570814527423731704356798070567525844996598917476803157260780028538760589558632766878171540458953514382464234321326889464182768467546703537516986049910576551282076245490090389328944075868508455133942304583236903222948165808559332123348274797826204144723168738177180919299881250404026184124858368.000000".
+> ALTER TABLE t ALTER COLUMN c SET (n_distinct = abc)
+ERROR 22023 invalid value for floating point option "n_distinct": abc
+> ALTER TABLE t ALTER COLUMN c SET (n_distinct)
+ERROR 22023 invalid value for floating point option "n_distinct": true
+> ALTER TABLE t ALTER COLUMN c SET (n_distinct = 2, n_distinct = 3)
+ERROR 22023 parameter "n_distinct" specified more than once
+> ALTER TABLE t ALTER COLUMN c SET (toast.n_distinct = 2)
+ERROR 22023 unrecognized parameter namespace "toast"
+> ALTER TABLE t ALTER COLUMN c RESET (n_distinct = 5)
+ERROR 42601 RESET must not include values for parameters
+> ALTER TABLE t ALTER COLUMN c SET (n_distinct = ' 4 ')
+ALTER TABLE
+> SELECT attoptions FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'c'
+fields attoptions@pg_attribute.23:1009:-1:-1
+row {n_distinct_inherited=-0.5,"n_distinct= 4 "}
+SELECT 1
+> ALTER TABLE t ALTER COLUMN c SET (n_distinct = '7', n_distinct_inherited = 1e3)
+ALTER TABLE
+> SELECT attoptions FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'c'
+fields attoptions@pg_attribute.23:1009:-1:-1
+row {n_distinct=7,n_distinct_inherited=1e3}
+SELECT 1
+> ALTER TABLE t ALTER COLUMN c RESET (nosuch)
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN c RESET (n_distinct, n_distinct_inherited)
+ALTER TABLE
+> SELECT attoptions FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'c'
+fields attoptions@pg_attribute.23:1009:-1:-1
+row NULL
+SELECT 1
+> ALTER TABLE t ALTER COLUMN nosuch SET STATISTICS 5
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> ALTER TABLE t ALTER COLUMN nosuch SET STORAGE PLAIN
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> ALTER TABLE t ALTER COLUMN nosuch SET COMPRESSION pglz
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> ALTER TABLE t ALTER COLUMN nosuch SET (n_distinct = 1)
+ERROR 42703 column "nosuch" of relation "t" does not exist
+> ALTER TABLE t ALTER COLUMN ctid SET STATISTICS 5
+ERROR 0A000 cannot alter system column "ctid"
+> ALTER TABLE t ALTER COLUMN tableoid SET STORAGE PLAIN
+ERROR 0A000 cannot alter system column "tableoid"
+> ALTER TABLE t ALTER COLUMN xmin SET COMPRESSION pglz
+ERROR 0A000 cannot alter system column "xmin"
+> ALTER TABLE t ALTER COLUMN cmin SET (n_distinct = 1)
+ERROR 0A000 cannot alter system column "cmin"
+> ALTER TABLE t ALTER COLUMN 1 SET STATISTICS 5
+ERROR 0A000 cannot refer to non-index column by number
+> ALTER TABLE t ALTER COLUMN b SET STORAGE MAIN, ALTER COLUMN b SET COMPRESSION lz4
+ALTER TABLE
+> CREATE INDEX t_b ON t (b)
+CREATE INDEX
+> CREATE INDEX t_bx ON t (b, a)
+CREATE INDEX
+> SELECT attrelid::regclass, attnum, attstorage, attcompression FROM pg_attribute WHERE attrelid IN ('t_b'::regclass, 't_bx'::regclass) ORDER BY 1, 2
+fields attrelid:2205:4:-1,attnum@pg_attribute.5:21:2:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1
+row t_b,1,m,l
+row t_bx,1,m,l
+row t_bx,2,p,
+SELECT 3
+> ALTER TABLE t ALTER COLUMN b SET STORAGE EXTERNAL, ALTER COLUMN b SET COMPRESSION pglz
+ALTER TABLE
+> SELECT attrelid::regclass, attnum, attstorage, attcompression FROM pg_attribute WHERE attrelid IN ('t_b'::regclass, 't_bx'::regclass) ORDER BY 1, 2
+fields attrelid:2205:4:-1,attnum@pg_attribute.5:21:2:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1
+row t_b,1,e,p
+row t_bx,1,e,p
+row t_bx,2,p,
+SELECT 3
+> ALTER INDEX t_b ALTER COLUMN 1 SET STATISTICS 100
+ERROR 0A000 cannot alter statistics on non-expression column "b" of index "t_b"
+HINT Alter statistics on table column instead.
+> CREATE INDEX t_e ON t ((a + 1)) INCLUDE (b)
+CREATE INDEX
+> ALTER INDEX t_e ALTER COLUMN 1 SET STATISTICS 100
+ALTER INDEX
+> SELECT attname, attstattarget FROM pg_attribute WHERE attrelid = 't_e'::regclass ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstattarget@pg_attribute.21:21:2:-1
+row expr,100
+row b,NULL
+SELECT 2
+> ALTER INDEX t_e ALTER COLUMN expr SET STATISTICS DEFAULT
+ALTER INDEX
+> SELECT attname, attstattarget FROM pg_attribute WHERE attrelid = 't_e'::regclass ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstattarget@pg_attribute.21:21:2:-1
+row expr,NULL
+row b,NULL
+SELECT 2
+> ALTER INDEX t_e ALTER COLUMN 2 SET STATISTICS 5
+ERROR 0A000 cannot alter statistics on included column "b" of index "t_e"
+> ALTER INDEX t_e ALTER COLUMN 3 SET STATISTICS 5
+ERROR 42703 column number 3 of relation "t_e" does not exist
+> ALTER INDEX t_e ALTER COLUMN 0 SET STATISTICS 5
+ERROR 22023 column number must be in range from 1 to 32767 at 30
+> ALTER INDEX t_e ALTER COLUMN b SET STORAGE PLAIN
+ERROR 42809 ALTER action ALTER COLUMN ... SET STORAGE cannot be performed on relation "t_e"
+DETAIL This operation is not supported for indexes.
+> ALTER INDEX t_e ALTER COLUMN b SET (n_distinct = 1)
+ERROR 42809 ALTER action ALTER COLUMN ... SET cannot be performed on relation "t_e"
+DETAIL This operation is not supported for indexes.
+> ALTER INDEX t_e ALTER COLUMN b SET COMPRESSION pglz
+ERROR 42809 ALTER action ALTER COLUMN ... SET COMPRESSION cannot be performed on relation "t_e"
+DETAIL This operation is not supported for indexes.
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> ALTER SEQUENCE s ALTER COLUMN last_value SET STATISTICS 5
+ERROR 42809 ALTER action ALTER COLUMN ... SET STATISTICS cannot be performed on relation "s"
+DETAIL This operation is not supported for sequences.
+> CREATE VIEW v AS SELECT a, b FROM t
+CREATE VIEW
+> ALTER VIEW v ALTER COLUMN a SET STATISTICS 5
+ERROR 42809 ALTER action ALTER COLUMN ... SET STATISTICS cannot be performed on relation "v"
+DETAIL This operation is not supported for views.
+> ALTER TABLE v ALTER COLUMN b SET STORAGE PLAIN
+ERROR 42809 ALTER action ALTER COLUMN ... SET STORAGE cannot be performed on relation "v"
+DETAIL This operation is not supported for views.
+> CREATE DOMAIN dm AS int
+CREATE DOMAIN
+> CREATE DOMAIN dt AS text
+CREATE DOMAIN
+> CREATE TYPE ct AS (x int, y text)
+CREATE TYPE
+> CREATE TYPE en AS ENUM ('x', 'y')
+CREATE TYPE
+> CREATE TABLE t7 (a dm, b dt, c ct, d en)
+CREATE TABLE
+> ALTER TABLE t7 ALTER COLUMN a SET STORAGE EXTERNAL
+ERROR 0A000 column data type dm can only have storage PLAIN
+> ALTER TABLE t7 ALTER COLUMN d SET COMPRESSION pglz
+ERROR 0A000 column data type en does not support compression
+> ALTER TABLE t7 ALTER COLUMN b SET STORAGE PLAIN, ALTER COLUMN c SET STORAGE MAIN, ALTER COLUMN c SET COMPRESSION pglz
+ALTER TABLE
+> SELECT attname, attstorage, attcompression FROM pg_attribute WHERE attrelid = 't7'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1
+row a,p,
+row b,p,
+row c,m,p
+row d,p,
+SELECT 4
+> BEGIN
+BEGIN
+> ALTER TABLE t7 ALTER COLUMN b SET STORAGE MAIN
+ALTER TABLE
+> ROLLBACK
+ROLLBACK
+> SELECT attstorage FROM pg_attribute WHERE attrelid = 't7'::regclass AND attname = 'b'
+fields attstorage@pg_attribute.10:18:1:-1
+row p
+SELECT 1
+> ALTER TABLE t ADD COLUMN f text STORAGE EXTERNAL, ALTER COLUMN f SET (n_distinct = 3)
+ALTER TABLE
+> SELECT attname, attstorage, attoptions FROM pg_attribute WHERE attrelid = 't'::regclass AND attname = 'f'
+fields attname@pg_attribute.2:19:64:-1,attstorage@pg_attribute.10:18:1:-1,attoptions@pg_attribute.23:1009:-1:-1
+row f,e,{n_distinct=3}
+SELECT 1
+> ALTER TABLE t DROP COLUMN c
+ALTER TABLE
+> SELECT attname, attstattarget, attoptions FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum = 3
+fields attname@pg_attribute.2:19:64:-1,attstattarget@pg_attribute.21:21:2:-1,attoptions@pg_attribute.23:1009:-1:-1
+row ........pg.dropped.3........,NULL,NULL
+SELECT 1

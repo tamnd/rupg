@@ -13,6 +13,7 @@ use rupg_sql::nodes::{
 use rupg_types::{Value, oid};
 
 use super::alter::Target;
+use super::alter_column::{attribute_compression, attribute_storage};
 use super::comment::range_var;
 use super::sequence::conflicting;
 use super::{Definer, is_system_namespace, not_yet, references, relname};
@@ -43,6 +44,10 @@ struct NewColumn {
     default: Option<RawDefault>,
     /// `attidentity`, or 0.
     identity: u8,
+    /// The name of the storage of `STORAGE`.
+    storage: Option<String>,
+    /// The name of the method of `COMPRESSION`.
+    compression: Option<String>,
 }
 
 /// The name, the schema and the options of the sequence of an identity column, as `generateSerialSequence` finds them.
@@ -385,12 +390,6 @@ impl Definer<'_, '_> {
     fn column_definition(&mut self, plan: &mut Plan, def: &ColumnDef) -> Result<()> {
         let at = place(def.location);
         let name = def.colname.as_deref().unwrap_or_default().to_string();
-        if def.compression.is_some() {
-            return Err(not_yet("COMPRESSION", at));
-        }
-        if def.storage_name.is_some() {
-            return Err(not_yet("STORAGE", at));
-        }
         if !def.fdwoptions.is_empty() {
             return Err(not_yet("OPTIONS", at));
         }
@@ -474,6 +473,8 @@ impl Definer<'_, '_> {
             is_not_null: false,
             default: None,
             identity: 0,
+            storage: def.storage_name.as_deref().map(str::to_string),
+            compression: def.compression.as_deref().map(str::to_string),
         };
         let relname = plan.relname.clone();
         let conflict = |at: Option<usize>| {
@@ -769,6 +770,12 @@ impl Definer<'_, '_> {
         let mut new = Column::new(column.name.clone(), ty, typmod, collation);
         new.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
         new.identity = column.identity;
+        if let Some(name) = &column.storage {
+            new.storage = attribute_storage(ty, name)?;
+        }
+        if let Some(name) = &column.compression {
+            new.compression = attribute_compression(ty, name)?;
+        }
         Ok(new)
     }
 
@@ -1066,7 +1073,7 @@ fn shape(column: &Column) -> Shape {
     Shape {
         len: row.map_or(-1, |t| t.len),
         align: row.map_or(b'i', |t| t.align),
-        storage: row.map_or(b'x', |t| t.storage),
+        storage: if column.storage == 0 { row.map_or(b'x', |t| t.storage) } else { column.storage },
         ty: column.ty,
         typmod: column.typmod,
     }
