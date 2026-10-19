@@ -39,6 +39,14 @@ fn is_system_column(name: &str) -> bool {
     name == "tableoid" || OTHER_SYSTEM_COLUMNS.iter().any(|c| c.0 == name)
 }
 
+/// The attribute number and the type of a system column, as `SystemAttributeByName` gives them.
+pub(crate) fn system_column(name: &str) -> Option<(i16, u32)> {
+    if name == "tableoid" {
+        return Some((TABLE_OID_ATTNUM, oid::OID));
+    }
+    OTHER_SYSTEM_COLUMNS.iter().find(|c| c.0 == name).map(|c| (c.1, c.2))
+}
+
 /// A relation of `FROM`, as a `RangeTblEntry` of the kind `RTE_RELATION` or `RTE_SUBQUERY`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Relation {

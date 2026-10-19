@@ -8,6 +8,7 @@ mod drop;
 mod enumtype;
 mod fkey;
 mod function;
+mod identity;
 mod index;
 mod lock;
 mod rangetype;
