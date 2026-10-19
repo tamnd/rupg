@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `COPY ... FROM STDIN` reads rows in the text, CSV and binary formats, with the defaults of the other columns, `FORCE_NULL`, `FORCE_NOT_NULL`, the condition `WHERE`, the constraints and the foreign keys of the table (#413).
+
 ## 0.1.46 (2026-10-19)
 
 ### Added
