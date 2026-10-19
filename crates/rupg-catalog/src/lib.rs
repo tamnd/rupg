@@ -230,6 +230,10 @@ pub struct IndexInfo {
     pub predicate: Option<String>,
     /// `relpages` of the index: the pages of the main fork when the index is new.
     pub pages: i32,
+    /// `indisclustered`: `CLUSTER ON` chose the index.
+    pub clustered: bool,
+    /// `indisreplident`: `REPLICA IDENTITY USING INDEX` chose the index.
+    pub replica_identity: bool,
 }
 
 /// The facts of a sequence, one row of `pg_sequence`.
@@ -288,6 +292,8 @@ pub struct Relation {
     pub options: Vec<String>,
     /// `relacl`: the items of the `aclitem[]` value in their text form, or `None` for the default privileges of the owner.
     pub acl: Option<Vec<String>>,
+    /// `relreplident`: `d`, `n`, `f` or `i`, or 0 for the default of the kind of the relation.
+    pub replica_identity: u8,
 }
 
 /// The query of a view and its `_RETURN` rule.
@@ -1569,6 +1575,7 @@ impl Catalog {
                 view: None,
                 options: Vec::new(),
                 acl: None,
+                replica_identity: 0,
             },
         );
         let (class, ty) = (ObjRef::new(PG_CLASS, oid), ObjRef::new(PG_TYPE, row_type));
@@ -1733,6 +1740,26 @@ impl Catalog {
     /// Sets `reloptions` of a relation.
     pub fn set_options(&mut self, oid: u32, options: Vec<String>) -> Result<()> {
         self.relation_mut(oid)?.options = options;
+        Ok(())
+    }
+
+    /// `mark_index_clustered`: sets `indisclustered` on the index and clears it on each other index of the table. `None` clears it on all of them.
+    pub fn set_clustered(&mut self, table: u32, index: Option<u32>) {
+        for rel in self.relations.values_mut() {
+            if let Some(info) = rel.index.as_mut().filter(|i| i.table == table) {
+                info.clustered = Some(rel.oid) == index;
+            }
+        }
+    }
+
+    /// `relation_mark_replica_identity`: sets `relreplident` of the table, and sets `indisreplident` on the index and clears it on each other index of the table.
+    pub fn set_replica_identity(&mut self, table: u32, code: u8, index: Option<u32>) -> Result<()> {
+        self.relation_mut(table)?.replica_identity = code;
+        for rel in self.relations.values_mut() {
+            if let Some(info) = rel.index.as_mut().filter(|i| i.table == table) {
+                info.replica_identity = Some(rel.oid) == index;
+            }
+        }
         Ok(())
     }
 
@@ -2190,6 +2217,7 @@ impl Catalog {
                 view: None,
                 options: Vec::new(),
                 acl: None,
+                replica_identity: 0,
             },
         );
         self.depend(
@@ -2471,6 +2499,8 @@ impl Catalog {
             exprs: new.exprs,
             predicate: new.predicate,
             pages: new.pages,
+            clustered: false,
+            replica_identity: false,
         };
         let table_columns = self.relations.get(&new.table).map_or(&[][..], |r| &r.columns[..]);
         let columns = new
@@ -2506,6 +2536,7 @@ impl Catalog {
                 view: None,
                 options: Vec::new(),
                 acl: None,
+                replica_identity: 0,
             },
         );
         let me = ObjRef::new(PG_CLASS, oid);
@@ -2656,6 +2687,7 @@ impl Catalog {
                 view: None,
                 options: Vec::new(),
                 acl: None,
+                replica_identity: 0,
             },
         );
         let info = IndexInfo {
@@ -2673,6 +2705,8 @@ impl Catalog {
             exprs: None,
             predicate: None,
             pages: 1,
+            clustered: false,
+            replica_identity: false,
         };
         self.relations.insert(
             index,
@@ -2692,6 +2726,7 @@ impl Catalog {
                 view: None,
                 options: Vec::new(),
                 acl: None,
+                replica_identity: 0,
             },
         );
         self.relation_mut(table)?.toast = oid;

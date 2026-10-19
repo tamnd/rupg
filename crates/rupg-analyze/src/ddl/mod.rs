@@ -3,6 +3,7 @@
 mod alter;
 mod alter_column;
 mod alter_type;
+mod cluster;
 mod comment;
 mod copy;
 mod domain;

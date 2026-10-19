@@ -104,7 +104,7 @@ impl Definer<'_, '_> {
         }
     }
 
-    /// The checks of `dropconstraint_internal` for a not-null constraint: a column of the primary key and an identity column keep their constraint.
+    /// The checks of `dropconstraint_internal` for a not-null constraint: a column of the primary key, a key column of the replica identity index and an identity column keep their constraint.
     fn check_drop_not_null(&self, target: &Target, number: i16) -> Result<()> {
         let attr = self.catalog.relation(target.oid).and_then(|r| r.column(number));
         let column = attr.map_or("", |c| c.name.as_str());
@@ -116,6 +116,23 @@ impl Definer<'_, '_> {
             return Err(Error::new(
                 SqlState::INVALID_TABLE_DEFINITION,
                 format!("column \"{column}\" is in a primary key"),
+            ));
+        }
+        let replica = self.catalog.relation(target.oid).is_some_and(|r| r.replica_identity == b'i')
+            && self.catalog.relations().any(|r| {
+                r.index.as_ref().is_some_and(|i| {
+                    i.table == target.oid
+                        && i.replica_identity
+                        && i.keys
+                            .iter()
+                            .take(usize::try_from(i.key_count).unwrap_or_default())
+                            .any(|&k| k == number)
+                })
+            });
+        if replica {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                format!("column \"{column}\" is in index used as replica identity"),
             ));
         }
         if attr.is_some_and(|c| c.identity != 0) {

@@ -2781,6 +2781,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/relation_options.test")));
     }
 
+    /// `CLUSTER ON`, `SET WITHOUT CLUSTER` and `REPLICA IDENTITY` of `ALTER TABLE`: `indisclustered`, `indisreplident` and `relreplident`, the checks of the index, the order of the subcommands, `DROP NOT NULL` on a column of the replica identity index, and the flags after `ALTER COLUMN ... TYPE`, `DROP INDEX` and `DROP COLUMN`. `connection/cluster_replica_identity.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn cluster_replica_identity() {
+        big_stack(|| script(include_str!("connection/cluster_replica_identity.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {

@@ -337,7 +337,14 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("relrowsecurity", Value::Bool(false))
                 .set("relforcerowsecurity", Value::Bool(false))
                 .set("relispopulated", Value::Bool(true))
-                .set("relreplident", code(if rel.kind == RelKind::Table { 'd' } else { 'n' }))
+                .set(
+                    "relreplident",
+                    code(match rel.replica_identity {
+                        0 if rel.kind == RelKind::Table => 'd',
+                        0 => 'n',
+                        c => char::from(c),
+                    }),
+                )
                 .set("relispartition", Value::Bool(false))
                 .set("relrewrite", oid(0))
                 .set("relfrozenxid", oid(if heap { FIRST_NORMAL_XID } else { 0 }))
@@ -661,12 +668,12 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("indisprimary", Value::Bool(info.primary))
                 .set("indisexclusion", Value::Bool(false))
                 .set("indimmediate", Value::Bool(info.immediate))
-                .set("indisclustered", Value::Bool(false))
+                .set("indisclustered", Value::Bool(info.clustered))
                 .set("indisvalid", Value::Bool(true))
                 .set("indcheckxmin", Value::Bool(false))
                 .set("indisready", Value::Bool(true))
                 .set("indislive", Value::Bool(true))
-                .set("indisreplident", Value::Bool(false))
+                .set("indisreplident", Value::Bool(info.replica_identity))
                 .set("indkey", int2_vector(&info.keys))
                 .set("indcollation", oid_vector(&info.collations))
                 .set("indclass", oid_vector(&info.classes))
