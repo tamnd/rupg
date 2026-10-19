@@ -225,6 +225,8 @@ pub(crate) struct Scope {
     lateral_active: bool,
     /// `p_ctenamespace`: the queries of the `WITH` clause of this query.
     pub(crate) ctes: Vec<CteItem>,
+    /// The relation that gives `merge_action()` while the analyzer reads the `RETURNING` list of a `MERGE`.
+    pub(crate) merge_action: Option<usize>,
 }
 
 impl Scope {
@@ -1030,6 +1032,43 @@ impl Analyzer<'_> {
         self.scope.entries[item.entry].oid = 0;
         self.scope.namespace.push(item);
         Ok(index)
+    }
+
+    /// The part of `transformMergeStmt` that adds the target table and the source: the target table is the relation 0, and the namespace has the items of the source, then the item of the target table. It gives the part of `FROM` of the source.
+    ///
+    /// # Errors
+    ///
+    /// `42712` when the source has the name of the target table, and the errors of the source.
+    pub(crate) fn merge_from(&mut self, rv: &RangeVar, source: &Node) -> Result<FromItem> {
+        let target = self.relation(rv)?;
+        let (item, _, namespace) = self.transform_from_item(source)?;
+        if namespace.iter().any(|other| other.name == target.name) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_ALIAS,
+                format!("name \"{}\" specified more than once", target.name),
+            )
+            .with_detail("The name is used both as MERGE target table and data source."));
+        }
+        self.scope.namespace.extend(namespace);
+        self.scope.namespace.push(target);
+        Ok(item)
+    }
+
+    /// `setNamespaceForMergeWhen`: the items that a `WHEN` clause of `MERGE` can see. A clause for a source row with no target row cannot see the target table, which is the last item, and a clause for a target row with no source row cannot see the source. It gives the full namespace, which [`Analyzer::set_namespace`] puts back.
+    pub(crate) fn merge_namespace(&mut self, target: bool, source: bool) -> Vec<Item> {
+        let full = self.scope.namespace.clone();
+        let Some((last, before)) = full.split_last() else { return full };
+        self.scope.namespace = match (target, source) {
+            (true, true) => full.clone(),
+            (false, _) => before.to_vec(),
+            (true, false) => vec![last.clone()],
+        };
+        full
+    }
+
+    /// Puts back the namespace that [`Analyzer::merge_namespace`] gave.
+    pub(crate) fn set_namespace(&mut self, namespace: Vec<Item>) {
+        self.scope.namespace = namespace;
     }
 
     /// Removes the last item of the namespace and keeps its entry, as `transformOnConflictClause` removes `EXCLUDED` after `SET` and `WHERE`. A name of the entry is then an error.

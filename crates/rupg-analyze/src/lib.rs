@@ -19,6 +19,7 @@ mod insert;
 mod jsonfunc;
 mod jsontable;
 mod locking;
+mod merge;
 mod modify;
 pub mod node;
 mod poly;
@@ -70,6 +71,7 @@ pub use from::{
 pub use funcargs::{arg_defaults, expand_arguments};
 pub use insert::{Action, Foreign, OnConflict, Unique, Write, WriteKind};
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
+pub use merge::{MatchKind, Merge, MergeClause, MergeCommand};
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use searchcycle::{CycleClause, SearchClause};
@@ -231,6 +233,7 @@ pub fn analyze(stmt: &Node, env: &dyn Env, params: &Params) -> Result<Query> {
         Node::InsertStmt(insert) => analyzer.insert(insert)?,
         Node::UpdateStmt(update) => analyzer.update(update)?,
         Node::DeleteStmt(delete) => analyzer.delete(delete)?,
+        Node::MergeStmt(merge) => analyzer.merge(merge)?,
         _ => {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,

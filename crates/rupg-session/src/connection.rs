@@ -38,6 +38,7 @@ mod cursor;
 mod databases;
 mod extended;
 mod foreign;
+mod merge;
 mod prepare;
 mod upsert;
 
@@ -604,7 +605,18 @@ impl Connection {
         // The new and the old rows of `ON CONFLICT DO UPDATE`.
         let mut updated = (Vec::new(), Vec::new());
         let upsert = info.on_conflict.as_ref().filter(|conflict| !conflict.arbiters.is_empty());
+        let mut batches = Vec::new();
         let (tag, count) = match info.kind {
+            WriteKind::Merge => {
+                let Some(merge) = info.merge.as_ref() else {
+                    return Err(Error::internal("a MERGE with no clauses"));
+                };
+                let done = self.merge(plan, info, merge, params, &view, rows)?;
+                written = done.written;
+                batches = done.batches;
+                view = done.view;
+                (CommandTag::Merge, done.count)
+            }
             WriteKind::Insert if let Some(conflict) = upsert => {
                 let done = self.upsert(plan, info, conflict, params, &view, rows)?;
                 written = done.written;
@@ -686,7 +698,6 @@ impl Connection {
             }
         };
         self.command.set(view.command + 1);
-        let mut batches = Vec::new();
         if foreign && (!new_rows.is_empty() || !old_rows.is_empty()) {
             batches.push(Batch::new(info, &info.foreign, view.command, new_rows, old_rows));
         }
@@ -2976,6 +2987,12 @@ mod tests {
     #[test]
     fn on_conflict() {
         big_stack(|| script(include_str!("connection/on_conflict.test")));
+    }
+
+    /// `MERGE`: `WHEN MATCHED`, `WHEN NOT MATCHED BY SOURCE` and `WHEN NOT MATCHED BY TARGET` with `INSERT`, `UPDATE`, `DELETE` and `DO NOTHING`, conditions, `RETURNING` with `merge_action()`, `old` and `new`, a row of the target table that the command changes two times, the checks, the unique keys and the foreign keys, the errors of the analysis, a join as the source, a transaction and a prepared statement. `connection/merge.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn merge() {
+        big_stack(|| script(include_str!("connection/merge.test")));
     }
 
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.

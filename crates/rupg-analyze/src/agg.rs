@@ -53,6 +53,8 @@ pub(crate) enum Kind {
     ValuesSingle,
     /// `EXPR_KIND_UPDATE_SOURCE`: the source of an assignment of `UPDATE ... SET`.
     UpdateSource,
+    /// `EXPR_KIND_MERGE_WHEN`: the condition of a `WHEN` clause of `MERGE`.
+    MergeWhen,
     /// `EXPR_KIND_EXECUTE_PARAMETER`.
     ExecuteParameter,
     /// `EXPR_KIND_RETURNING`: the list of `RETURNING`.
@@ -86,6 +88,7 @@ impl Kind {
             Kind::FromFunction => "functions in FROM",
             Kind::Values | Kind::ValuesSingle => "VALUES",
             Kind::UpdateSource => "UPDATE",
+            Kind::MergeWhen => "MERGE WHEN conditions",
             Kind::ExecuteParameter => "EXECUTE parameters",
             Kind::Returning => "RETURNING",
         }
@@ -374,6 +377,7 @@ impl Analyzer<'_> {
             | Kind::Values
             | Kind::ValuesSingle
             | Kind::UpdateSource
+            | Kind::MergeWhen
             | Kind::ExecuteParameter
             | Kind::Returning => {
                 return Err(grouping_error(
