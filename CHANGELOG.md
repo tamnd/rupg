@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- The statements that change data in `WITH`: an `INSERT`, an `UPDATE`, a `DELETE` or a `MERGE` in `WITH` runs in the command of the statement, and the other parts can read the rows of its `RETURNING` (#406).
 - `WITH` before `INSERT`, `UPDATE`, `DELETE` and `MERGE`: the queries of `WITH` can be read in all the parts of the statement (#405).
 - The deferred foreign keys: a foreign key that is `DEFERRABLE INITIALLY DEFERRED` checks its rows at the commit, and `SET CONSTRAINTS` with `ALL` or a list of names makes the constraints of a transaction `DEFERRED` or `IMMEDIATE` (#404).
 
