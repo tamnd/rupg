@@ -107,7 +107,7 @@ impl KeyMap {
 }
 
 /// Adds a value that is not null to a hash. The types whose equality is not the equality of their form in memory all go to the same hash.
-fn hash_value(value: &Value, ty: u32, hasher: &mut DefaultHasher) {
+pub(crate) fn hash_value(value: &Value, ty: u32, hasher: &mut DefaultHasher) {
     match value {
         Value::Bool(v) => v.hash(hasher),
         Value::Int2(_) | Value::Int4(_) | Value::Int8(_) => value.as_i64().hash(hasher),
@@ -383,6 +383,17 @@ impl Heap {
                 row.push(Value::Int8(version.tid.cast_signed()));
                 row
             })
+            .collect()
+    }
+
+    /// The values of the versions `tids` of a table, also of a version that a transaction deleted, in the order of the list. A version that is not in the table gives no row.
+    pub(crate) fn versions(&self, database: u32, relation: u32, tids: &[u64]) -> Vec<Vec<Value>> {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(database, relation)) else {
+            return Vec::new();
+        };
+        tids.iter()
+            .filter_map(|&tid| table.find(tid).map(|at| table.versions[at].values.to_vec()))
             .collect()
     }
 

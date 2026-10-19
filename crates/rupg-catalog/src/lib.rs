@@ -911,6 +911,11 @@ pub fn is_pinned(object: ObjRef) -> bool {
     !(object.class == PG_NAMESPACE && object.oid == PUBLIC)
 }
 
+/// The place of a function of the foreign keys in the order of `ri_triggers.c`, from 0 for `RI_FKey_check_ins` to 11 for `RI_FKey_noaction_upd`, or `None` for another function. The functions of the referencing table are 0 and 1. For the referenced table, an even place is a function of `DELETE` and an odd place a function of `UPDATE`.
+pub fn foreign_key_function(function: u32) -> Option<u32> {
+    function.checked_sub(RI_FKEY_CHECK_INS).filter(|&at| at <= 11)
+}
+
 fn duplicate_table(name: &str) -> Error {
     Error::new(SqlState::DUPLICATE_TABLE, format!("relation \"{name}\" already exists"))
 }
