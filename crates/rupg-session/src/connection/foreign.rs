@@ -1,16 +1,65 @@
-//! The checks of the foreign keys after a write, as the triggers `RI_FKey_check_ins`, `RI_FKey_check_upd`, `RI_FKey_noaction_del`, `RI_FKey_noaction_upd`, `RI_FKey_restrict_del` and `RI_FKey_restrict_upd` of `ri_triggers.c` make them.
+//! The triggers of the foreign keys after a write, as `ri_triggers.c` makes them: the checks of `RI_FKey_check_ins` and `RI_FKey_check_upd`, the checks of `NO ACTION` and `RESTRICT`, and the actions of `CASCADE`, `SET NULL` and `SET DEFAULT`.
 //!
 //! PostgreSQL runs a query for each row that the statement wrote. rupg reads the other table one time for each foreign key and keeps its keys in a map by their hash. The checks come after the last row of the statement and see all the rows of the statement. In `READ COMMITTED` they also see the rows that other transactions committed before the check. The row locks of `FOR KEY SHARE` are not made yet, so a check does not wait for a write of another transaction that is in progress.
+//!
+//! An action runs its statement on the referencing table for each old key, as `ri_PerformCheck` runs it with SPI. SPI does not fire the triggers at the end of that statement, so its rows go to the end of the queue of the statement of the client, and the triggers fire in the order of `afterTriggerInvokeEvents`.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hasher};
 
-use rupg_analyze::{Foreign, Write};
+use rupg_analyze::{Action, Foreign, Params, Write};
 use rupg_common::{Error, SqlState};
+use rupg_exec::Plan;
+use rupg_sql::nodes::Node;
 use rupg_types::{Numeric, Value, oid};
 
-use super::Connection;
-use crate::heap::{View, hash_value};
+use super::{Applied, Connection};
+use crate::heap::hash_value;
+use crate::query;
+
+/// The rows of a write of a table with foreign keys, for the triggers of the foreign keys, `AfterTriggerEventList`.
+#[derive(Debug)]
+pub(super) struct Batch {
+    /// The OID of the table.
+    table: u32,
+    /// The name of the table, for the errors.
+    name: String,
+    /// The foreign keys that the write checks, in the order of the names of their triggers.
+    foreign: Vec<Foreign>,
+    /// The command of the write.
+    command: u32,
+    /// The new rows of an `INSERT` or an `UPDATE`, in the order of the write.
+    new: Vec<Vec<Value>>,
+    /// The old rows of an `UPDATE` or a `DELETE`, in the order of the write.
+    old: Vec<Vec<Value>>,
+}
+
+impl Batch {
+    /// The rows of the write `info` of the command `command`.
+    pub(super) fn new(
+        info: &Write,
+        command: u32,
+        new: Vec<Vec<Value>>,
+        old: Vec<Vec<Value>>,
+    ) -> Batch {
+        Batch {
+            table: info.table,
+            name: info.name.clone(),
+            foreign: info.foreign.clone(),
+            command,
+            new,
+            old,
+        }
+    }
+}
+
+/// What the triggers of one foreign key of a batch keep between the rows: the keys of the other table, the keys of the table of the batch, and the plan of the statement of the action.
+#[derive(Default)]
+struct State {
+    other: Option<Keys>,
+    own: Option<Keys>,
+    plan: Option<Plan>,
+}
 
 /// The keys with no null of the rows of a table for one foreign key, as values of the types of the referenced key, by their hash.
 struct Keys {
@@ -86,123 +135,237 @@ fn key_value(value: &Value, from: u32, to: u32) -> Value {
 }
 
 impl Connection {
-    /// The checks of the foreign keys of a write, after the last row of the statement. `new` has the new rows of an `INSERT` or an `UPDATE`, and `old` has the old rows of an `UPDATE` or a `DELETE`, in the order of the write. The checks go row by row, and for each row in the order of the list of the write, as `afterTriggerInvokeEvents` fires the triggers.
+    /// Fires the triggers of the foreign keys of a write and of the writes of their actions, batch after batch in the order of the queue.
     ///
     /// # Errors
     ///
-    /// `23503` for a key that the referenced table does not have, for a key of `MATCH FULL` with nulls and values, and for an old key that a row of the referencing table still has.
-    pub(super) fn check_foreign(
-        &self,
-        info: &Write,
-        view: &View,
-        new: &[Vec<Value>],
-        old: &[Vec<Value>],
-    ) -> Result<(), Error> {
-        let heap = self.store.heap();
-        // The check sees the rows of the statement, as the command counter goes up before the triggers fire.
-        let check = View { xid: view.xid, command: view.command + 1, ..self.view() };
-        let mut others: Vec<Option<Keys>> = info.foreign.iter().map(|_| None).collect();
-        let mut owns: Vec<Option<Keys>> = info.foreign.iter().map(|_| None).collect();
-        for at in 0..new.len().max(old.len()) {
-            for (index, foreign) in info.foreign.iter().enumerate() {
-                let rows = if foreign.referencing { new } else { old };
+    /// `23503` for a key that the referenced table does not have, for a key of `MATCH FULL` with nulls and values, and for an old key that a row of the referencing table still has. `23001` for an old key of `RESTRICT` that a row of the referencing table has. The errors of the statement of an action, with the statement in their context.
+    pub(super) fn fire(&self, batch: Batch) -> Result<(), Error> {
+        let mut queue = VecDeque::from([batch]);
+        while let Some(batch) = queue.pop_front() {
+            self.fire_batch(&batch, &mut queue)?;
+        }
+        Ok(())
+    }
+
+    /// The triggers of the rows of one batch. They go row by row, and for each row in the order of the list of the write, as `afterTriggerInvokeEvents` fires them.
+    fn fire_batch(&self, batch: &Batch, queue: &mut VecDeque<Batch>) -> Result<(), Error> {
+        let mut states: Vec<State> = batch.foreign.iter().map(|_| State::default()).collect();
+        // The new rows that are still live, after an action changed rows.
+        let mut live: Option<Vec<bool>> = None;
+        for at in 0..batch.new.len().max(batch.old.len()) {
+            for (index, foreign) in batch.foreign.iter().enumerate() {
+                let rows = if foreign.referencing { &batch.new } else { &batch.old };
                 let Some(row) = rows.get(at) else { continue };
                 let key: Vec<&Value> = foreign
                     .columns
                     .iter()
                     .map(|&column| row.get(column).unwrap_or(&Value::Null))
                     .collect();
+                let state = &mut states[index];
                 if foreign.referencing {
-                    // `RI_FKey_fk_upd_check_required` and `ri_NullCheck`.
-                    let nulls = key.iter().filter(|value| value.is_null()).count();
-                    if nulls == key.len() {
-                        continue;
-                    }
-                    if nulls > 0 {
-                        if foreign.full {
-                            return Err(violation(info, foreign).with_detail(
-                                "MATCH FULL does not allow mixing of null and nonnull key values.",
-                            ));
-                        }
-                        continue;
-                    }
-                    if let Some(before) = old.get(at) {
-                        let mut unchanged = true;
-                        for ((&column, value), &ty) in
-                            foreign.columns.iter().zip(&key).zip(&foreign.referencing_types)
-                        {
-                            let was = before.get(column).unwrap_or(&Value::Null);
-                            if was.is_null() || !rupg_func::equal(ty, was, ty, value)? {
-                                unchanged = false;
-                                break;
-                            }
-                        }
-                        if unchanged {
+                    // `RI_FKey_check`: a new row that a later write deleted or updated needs no check.
+                    if self.command.get() > batch.command + 1 {
+                        let live = live.get_or_insert_with(|| {
+                            let view = self.view();
+                            self.store.heap().live(
+                                view.database,
+                                batch.table,
+                                view.xid,
+                                batch.command,
+                            )
+                        });
+                        if live.len() == batch.new.len() && !live[at] {
                             continue;
                         }
                     }
-                    let probe: Vec<Value> = key
+                    self.check_key(batch, foreign, &key, batch.old.get(at), state)?;
+                    continue;
+                }
+                // `RI_FKey_pk_upd_check_required`: an old key with a null has no reference, and an update that keeps the key needs no trigger.
+                if key.iter().any(|value| value.is_null()) {
+                    continue;
+                }
+                let after = batch.new.get(at);
+                if let Some(after) = after
+                    && foreign
+                        .columns
                         .iter()
-                        .zip(foreign.referencing_types.iter().zip(&foreign.types))
-                        .map(|(value, (&from, &to))| key_value(value, from, to))
-                        .collect();
-                    let keys = others[index].get_or_insert_with(|| {
-                        let rows = heap.rows(foreign.other, &check);
-                        Keys::of(rows, &foreign.other_columns, &foreign.types, &foreign.types)
-                    });
-                    if !keys.has(&probe, &foreign.types)? {
-                        let shown = self.key_text(foreign, &key, &foreign.referencing_types)?;
-                        return Err(violation(info, foreign).with_detail(format!(
-                            "Key {shown} is not present in table \"{}\".",
-                            foreign.other_name
-                        )));
-                    }
-                } else {
-                    // `RI_FKey_pk_upd_check_required`: an old key with a null has no reference, and an update that keeps the key needs no check.
-                    if key.iter().any(|value| value.is_null()) {
-                        continue;
-                    }
-                    if let Some(after) = new.get(at)
-                        && foreign
+                        .zip(&key)
+                        .all(|(&column, &value)| after.get(column) == Some(value))
+                {
+                    continue;
+                }
+                if matches!(foreign.action, Action::NoAction | Action::Restrict) {
+                    self.check_references(batch, foreign, &key, state)?;
+                    continue;
+                }
+                let mut params = Vec::with_capacity(key.len() * 2);
+                if foreign.action == Action::Cascade
+                    && let Some(after) = after
+                {
+                    params.extend(
+                        foreign
                             .columns
                             .iter()
-                            .zip(&key)
-                            .all(|(&column, &value)| after.get(column) == Some(value))
-                    {
-                        continue;
+                            .map(|&column| after.get(column).cloned().unwrap_or(Value::Null)),
+                    );
+                }
+                params.extend(key.iter().map(|&value| value.clone()));
+                if self.act(foreign, &mut state.plan, &params, queue)? {
+                    for state in &mut states {
+                        state.other = None;
+                        state.own = None;
                     }
-                    let probe: Vec<Value> = key.iter().map(|&value| value.clone()).collect();
-                    // `ri_Check_Pk_Match`: for `NO ACTION`, another row with the old key keeps the references.
-                    if !foreign.restrict {
-                        let keys = owns[index].get_or_insert_with(|| {
-                            let rows = heap.rows(info.table, &check);
-                            Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types)
-                        });
-                        if keys.has(&probe, &foreign.types)? {
-                            continue;
-                        }
-                    }
-                    let keys = others[index].get_or_insert_with(|| {
-                        let rows = heap.rows(foreign.other, &check);
-                        Keys::of(
-                            rows,
-                            &foreign.other_columns,
-                            &foreign.referencing_types,
-                            &foreign.types,
-                        )
-                    });
-                    if keys.has(&probe, &foreign.types)? {
-                        let shown = self.key_text(foreign, &key, &foreign.types)?;
-                        let still = if foreign.restrict { "" } else { "still " };
-                        return Err(violation(info, foreign).with_detail(format!(
-                            "Key {shown} is {still}referenced from table \"{}\".",
-                            foreign.other_name
-                        )));
-                    }
+                    live = None;
+                }
+                // `ri_set` for `SET DEFAULT`: a row that got the default can have the old key again, so the check of `NO ACTION` runs after the action.
+                if foreign.action == Action::SetDefault {
+                    self.check_references(batch, foreign, &key, &mut states[index])?;
                 }
             }
         }
         Ok(())
+    }
+
+    /// `RI_FKey_check`: the referenced table must have the new key of a row of the referencing table. `before` is the old row of an `UPDATE`.
+    fn check_key(
+        &self,
+        batch: &Batch,
+        foreign: &Foreign,
+        key: &[&Value],
+        before: Option<&Vec<Value>>,
+        state: &mut State,
+    ) -> Result<(), Error> {
+        // `RI_FKey_fk_upd_check_required` and `ri_NullCheck`.
+        let nulls = key.iter().filter(|value| value.is_null()).count();
+        if nulls == key.len() {
+            return Ok(());
+        }
+        if nulls > 0 {
+            if foreign.full {
+                return Err(violation(batch, foreign).with_detail(
+                    "MATCH FULL does not allow mixing of null and nonnull key values.",
+                ));
+            }
+            return Ok(());
+        }
+        if let Some(before) = before {
+            let mut unchanged = true;
+            for ((&column, value), &ty) in
+                foreign.columns.iter().zip(key).zip(&foreign.referencing_types)
+            {
+                let was = before.get(column).unwrap_or(&Value::Null);
+                if was.is_null() || !rupg_func::equal(ty, was, ty, value)? {
+                    unchanged = false;
+                    break;
+                }
+            }
+            if unchanged {
+                return Ok(());
+            }
+        }
+        let probe: Vec<Value> = key
+            .iter()
+            .zip(foreign.referencing_types.iter().zip(&foreign.types))
+            .map(|(value, (&from, &to))| key_value(value, from, to))
+            .collect();
+        let keys = state.other.get_or_insert_with(|| {
+            // The check sees the rows of the statement, as the command counter goes up before the triggers fire.
+            let rows = self.store.heap().rows(foreign.other, &self.view());
+            Keys::of(rows, &foreign.other_columns, &foreign.types, &foreign.types)
+        });
+        if !keys.has(&probe, &foreign.types)? {
+            let shown = self.key_text(foreign, key, &foreign.referencing_types)?;
+            return Err(violation(batch, foreign).with_detail(format!(
+                "Key {shown} is not present in table \"{}\".",
+                foreign.other_name
+            )));
+        }
+        Ok(())
+    }
+
+    /// `ri_restrict`: no row of the referencing table can have an old key of the referenced table.
+    fn check_references(
+        &self,
+        batch: &Batch,
+        foreign: &Foreign,
+        key: &[&Value],
+        state: &mut State,
+    ) -> Result<(), Error> {
+        let heap = self.store.heap();
+        let restrict = foreign.action == Action::Restrict;
+        let probe: Vec<Value> = key.iter().map(|&value| value.clone()).collect();
+        // `ri_Check_Pk_Match`: for `NO ACTION`, another row with the old key keeps the references.
+        if !restrict {
+            let keys = state.own.get_or_insert_with(|| {
+                let rows = heap.rows(batch.table, &self.view());
+                Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types)
+            });
+            if keys.has(&probe, &foreign.types)? {
+                return Ok(());
+            }
+        }
+        let keys = state.other.get_or_insert_with(|| {
+            let rows = heap.rows(foreign.other, &self.view());
+            Keys::of(rows, &foreign.other_columns, &foreign.referencing_types, &foreign.types)
+        });
+        if keys.has(&probe, &foreign.types)? {
+            let shown = self.key_text(foreign, key, &foreign.types)?;
+            let still = if restrict { "" } else { "still " };
+            return Err(violation(batch, foreign).with_detail(format!(
+                "Key {shown} is {still}referenced from table \"{}\".",
+                foreign.other_name
+            )));
+        }
+        Ok(())
+    }
+
+    /// The action of a foreign key for an old key: its statement on the referencing table with the parameters `params`. The rows of the statement go to the end of the queue. True if the statement changed rows.
+    fn act(
+        &self,
+        foreign: &Foreign,
+        plan: &mut Option<Plan>,
+        params: &[Value],
+        queue: &mut VecDeque<Batch>,
+    ) -> Result<bool, Error> {
+        let applied = self
+            .run_action(foreign, plan, params)
+            .map_err(|error| query::inner_error(error, &foreign.query))?;
+        if let Some(batch) = applied.batch {
+            queue.push_back(batch);
+        }
+        Ok(applied.count > 0)
+    }
+
+    /// `ri_PlanCheck` and `ri_PerformCheck`: plans the statement of an action one time for each batch, and runs it.
+    fn run_action(
+        &self,
+        foreign: &Foreign,
+        plan: &mut Option<Plan>,
+        params: &[Value],
+    ) -> Result<Applied, Error> {
+        let reader = self.reader();
+        if plan.is_none() {
+            let (list, _) = rupg_sql::parse(&foreign.query)?;
+            let node = list.iter().flatten().find_map(|node| match node {
+                Node::RawStmt(raw) => raw.stmt.as_ref(),
+                _ => None,
+            });
+            let Some(node) = node else {
+                return Err(Error::internal("an action of a foreign key with no statement"));
+            };
+            let types = foreign.types.iter().cycle().take(params.len()).copied().collect();
+            let planned = query::plan(node, &reader, &Params { types, variable: false })?;
+            *plan = Some(planned.fold(None, &reader)?);
+        }
+        let Some(plan) = plan.as_ref() else {
+            return Err(Error::internal("an action of a foreign key with no plan"));
+        };
+        let rows = plan.run(params, &reader)?;
+        let view = reader.view().cloned().unwrap_or_default();
+        drop(reader);
+        self.apply_write(plan, params, &view, rows)
     }
 
     /// The key of the detail of `ri_ReportViolation`: `(a, b)=(1, x)`, with the names of the columns as they are and the values of their output functions.
@@ -226,22 +389,22 @@ impl Connection {
 }
 
 /// The error of `ri_ReportViolation` with no detail, or of `ri_restrict` for `RESTRICT`.
-fn violation(info: &Write, foreign: &Foreign) -> Error {
+fn violation(batch: &Batch, foreign: &Foreign) -> Error {
     let message = if foreign.referencing {
         format!(
             "insert or update on table \"{}\" violates foreign key constraint \"{}\"",
-            info.name, foreign.name
+            batch.name, foreign.name
         )
-    } else if foreign.restrict {
+    } else if foreign.action == Action::Restrict {
         let message = format!(
             "update or delete on table \"{}\" violates RESTRICT setting of foreign key constraint \"{}\" on table \"{}\"",
-            info.name, foreign.name, foreign.other_name
+            batch.name, foreign.name, foreign.other_name
         );
         return Error::new(SqlState::RESTRICT_VIOLATION, message);
     } else {
         format!(
             "update or delete on table \"{}\" violates foreign key constraint \"{}\" on table \"{}\"",
-            info.name, foreign.name, foreign.other_name
+            batch.name, foreign.name, foreign.other_name
         )
     };
     Error::new(SqlState::FOREIGN_KEY_VIOLATION, message)

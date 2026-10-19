@@ -29,6 +29,7 @@ use crate::heap::{Change, Changed, Snapshot, View, tid_text};
 use crate::query::{self, Column, Reader, Row};
 use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
+use foreign::Batch;
 
 mod activity;
 mod copy;
@@ -72,6 +73,20 @@ pub fn version_text() -> String {
         env!("RUPG_RUSTC"),
         usize::BITS
     )
+}
+
+/// The result of the write of the rows of a statement.
+#[derive(Debug)]
+struct Applied {
+    tag: CommandTag,
+    /// The number of rows that the statement wrote.
+    count: u64,
+    /// The rows that `RETURNING` reads.
+    written: Vec<Vec<Value>>,
+    /// The view of the last try of the write.
+    view: View,
+    /// The rows that the triggers of the foreign keys get, when the table has foreign keys and the statement wrote rows.
+    batch: Option<Batch>,
 }
 
 /// The result of a statement as the session sends it.
@@ -530,7 +545,7 @@ impl Connection {
         ))
     }
 
-    /// Writes the rows of an `INSERT`, an `UPDATE` or a `DELETE` in the heap and gives the tag of the command with the number of rows. The first write of a transaction gives it a transaction ID, and each write ends a command, as `CommandCounterIncrement` does. When another transaction that is in progress changed a row, the statement waits for its end and then tries again. In `READ COMMITTED`, when a transaction that committed after the snapshot changed a row, the plan runs again with a new snapshot.
+    /// Writes the rows of an `INSERT`, an `UPDATE` or a `DELETE` in the heap and gives the tag of the command with the number of rows, or the rows of `RETURNING`. The triggers of the foreign keys fire after the rows of `RETURNING`, as `AfterTriggerEndQuery` fires them at the end of the statement.
     fn write_rows(
         &self,
         plan: &Plan,
@@ -539,6 +554,39 @@ impl Connection {
         rows: Vec<Vec<Value>>,
         formats: &[i16],
     ) -> Result<Done, Error> {
+        let Some(info) = plan.write() else {
+            return Err(Error::internal("a plan that does not write"));
+        };
+        let Applied { tag, count, written, view, batch } =
+            self.apply_write(plan, params, view, rows)?;
+        let done = if info.returning.is_some() {
+            // A subquery of `RETURNING` reads with the snapshot of the statement, which does not see the rows of the statement.
+            let reader = self.reader().with_view(view.clone());
+            let rows = plan.returning(written, params, &reader)?;
+            let columns = query::columns(plan);
+            let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+            let rows = rows
+                .iter()
+                .map(|values| query::encode(&types, values, &reader, formats))
+                .collect::<Result<Vec<_>, _>>()?;
+            Done::Rows { columns, rows, tag }
+        } else {
+            Done::Count(tag, count)
+        };
+        if let Some(batch) = batch {
+            self.fire(batch)?;
+        }
+        Ok(done)
+    }
+
+    /// Writes the rows of a statement in the heap. The first write of a transaction gives it a transaction ID, and each write ends a command, as `CommandCounterIncrement` does. When another transaction that is in progress changed a row, the statement waits for its end and then tries again. In `READ COMMITTED`, when a transaction that committed after the snapshot changed a row, the plan runs again with a new snapshot.
+    fn apply_write(
+        &self,
+        plan: &Plan,
+        params: &[Value],
+        view: &View,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<Applied, Error> {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
         };
@@ -626,25 +674,10 @@ impl Connection {
                 (if update { CommandTag::Update } else { CommandTag::Delete }, count)
             }
         };
-        if foreign {
-            self.check_foreign(info, &view, &new_rows, &old_rows)?;
-        }
-        let done = if info.returning.is_some() {
-            // A subquery of `RETURNING` reads with the snapshot of the statement, which does not see the rows of the statement.
-            let reader = self.reader().with_view(view.clone());
-            let rows = plan.returning(written, params, &reader)?;
-            let columns = query::columns(plan);
-            let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
-            let rows = rows
-                .iter()
-                .map(|values| query::encode(&types, values, &reader, formats))
-                .collect::<Result<Vec<_>, _>>()?;
-            Done::Rows { columns, rows, tag }
-        } else {
-            Done::Count(tag, count)
-        };
         self.command.set(view.command + 1);
-        Ok(done)
+        let batch = (foreign && (!new_rows.is_empty() || !old_rows.is_empty()))
+            .then(|| Batch::new(info, view.command, new_rows, old_rows));
+        Ok(Applied { tag, count, written, view, batch })
     }
 
     /// A conflict of a new version in a unique index. The write waits for the transaction that holds the key, as `_bt_check_unique` does, and gives the IDs of the new versions for the next try. Or it fails with the duplicate key and its value, as `BuildIndexValueDescription` gives it.
@@ -2912,6 +2945,12 @@ mod tests {
     #[test]
     fn foreign_key() {
         big_stack(|| script(include_str!("connection/foreign_key.test")));
+    }
+
+    /// The actions of the foreign keys: `CASCADE`, `SET NULL` and `SET DEFAULT` for a delete and an update, the checks of the rows that an action changed, an action that a check of `NO ACTION` of another table stops, a table that references itself, keys of more than one column, the casts of the statement of an action in the context of its errors, a row that two actions change, `RETURNING` and a transaction. `connection/foreign_key_actions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key_actions() {
+        big_stack(|| script(include_str!("connection/foreign_key_actions.test")));
     }
 
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.

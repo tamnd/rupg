@@ -397,6 +397,20 @@ impl Heap {
             .collect()
     }
 
+    /// For each version of a table that the command `command` of the transaction `xid` added, in the order of their IDs, true if the transaction did not delete or update it after, as `SnapshotSelf` sees it.
+    pub(crate) fn live(&self, database: u32, relation: u32, xid: u32, command: u32) -> Vec<bool> {
+        let state = self.state();
+        let Some(table) = state.tables.get(&(database, relation)) else {
+            return Vec::new();
+        };
+        table
+            .versions
+            .iter()
+            .filter(|version| version.xmin == xid && version.cmin == command)
+            .map(|version| version.xmax != xid)
+            .collect()
+    }
+
     /// Adds the rows that the command of the view inserted, and checks each new version for each unique key. When a key conflicts, no row is added, and the result tells the statement to wait or gives the duplicate key. `kept` has the IDs of the new versions of an earlier try that waited.
     ///
     /// # Errors
