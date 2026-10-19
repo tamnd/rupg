@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.45 (2026-10-19)
+
 ### Added
 
 - The statements that change data in `WITH`: an `INSERT`, an `UPDATE`, a `DELETE` or a `MERGE` in `WITH` runs in the command of the statement, and the other parts can read the rows of its `RETURNING` (#406).
