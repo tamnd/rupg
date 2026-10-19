@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `WITH` before `INSERT`, `UPDATE`, `DELETE` and `MERGE`: the queries of `WITH` can be read in all the parts of the statement (#405).
 - The deferred foreign keys: a foreign key that is `DEFERRABLE INITIALLY DEFERRED` checks its rows at the commit, and `SET CONSTRAINTS` with `ALL` or a list of names makes the constraints of a transaction `DEFERRED` or `IMMEDIATE` (#404).
 
 ## 0.1.44 (2026-10-19)
