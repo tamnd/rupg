@@ -1252,8 +1252,30 @@ impl Plan {
     ///
     /// The error of a function, such as a division by zero, and the error of a constraint of the table.
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
+        let rows = self.run_unchecked(params, session)?;
+        self.check(rows, session)
+    }
+
+    /// [`Plan::run`] with no checks of the constraints of the table. The rows of an `INSERT` have the values of the conditions of the check constraints after the columns of the table. `COPY ... FROM` drops the rows that its condition `WHERE` rejects before [`Plan::check`], as `CopyFrom` does.
+    ///
+    /// # Errors
+    ///
+    /// The error of a function, such as a division by zero.
+    pub fn run_unchecked(
+        &self,
+        params: &[Value],
+        session: &dyn Session,
+    ) -> Result<Vec<Vec<Value>>> {
         self.start(session)?;
-        let rows = run_query(&self.query, params, session, &self.cache(), &[], false)?;
+        run_query(&self.query, params, session, &self.cache(), &[], false)
+    }
+
+    /// The checks of `ExecConstraints` on the rows of [`Plan::run_unchecked`]. It gives the rows with only the columns of the table.
+    ///
+    /// # Errors
+    ///
+    /// The error of a not-null constraint or of a check constraint.
+    pub fn check(&self, rows: Vec<Vec<Value>>, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         match &self.query.write {
             Some(info) => insert::check(info, rows, session),
             None => Ok(rows),
