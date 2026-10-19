@@ -1,6 +1,6 @@
-//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT` and `OWNER TO`. The other subcommands give `0A000`.
+//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `OWNER TO`, and `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column. The other subcommands give `0A000`.
 //!
-//! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the transform of the new constraints, the not-null constraints, the indexes, the other constraints and the defaults, and last the change of the owner.
+//! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
 
 use rupg_catalog::{ConKind, DepKind, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
@@ -101,14 +101,38 @@ fn action_words(subtype: AlterTableType) -> &'static str {
 /// The work of the subcommands after their checks, by pass.
 #[derive(Default)]
 struct Passes {
-    /// `AT_PASS_DROP`: the columns of `DROP DEFAULT`.
-    drop_defaults: Vec<String>,
+    /// `AT_PASS_DROP`: `DROP DEFAULT` and `DROP IDENTITY`, in the order of the statement.
+    drops: Vec<DropCmd>,
     /// `AT_PASS_ADD_CONSTR`: the constraints of `ADD CONSTRAINT` before their transform.
     constraints: Vec<Constraint>,
-    /// `AT_PASS_ADD_OTHERCONSTR`: the columns and the expressions of `SET DEFAULT`. The check constraints and the foreign keys come after them, from the transform.
-    defaults: Vec<(String, Node)>,
-    /// `AT_PASS_MISC`: the new owners of `OWNER TO`.
-    owners: Vec<RoleSpec>,
+    /// `AT_PASS_ADD_OTHERCONSTR`: `SET DEFAULT` and `ADD IDENTITY`, in the order of the statement. The check constraints and the foreign keys come after them, from the transform.
+    defaults: Vec<AddCmd>,
+    /// `AT_PASS_MISC`: `OWNER TO` and the `SET` options of an identity column, in the order of the statement.
+    misc: Vec<MiscCmd>,
+}
+
+/// A subcommand of `AT_PASS_DROP`.
+enum DropCmd {
+    /// `DROP DEFAULT` of the column.
+    Default(String),
+    /// `DROP IDENTITY` of the column, with `IF EXISTS`.
+    Identity(String, bool),
+}
+
+/// A subcommand of `AT_PASS_ADD_OTHERCONSTR`.
+enum AddCmd {
+    /// `SET DEFAULT` of the column, with the expression.
+    Default(String, Node),
+    /// `ADD GENERATED ... AS IDENTITY` of the column.
+    Identity(String, Box<Constraint>),
+}
+
+/// A subcommand of `AT_PASS_MISC`.
+enum MiscCmd {
+    /// `OWNER TO` with the new owner.
+    Owner(RoleSpec),
+    /// `SET GENERATED` and the options of the sequence of the column.
+    Identity(String, Vec<Option<Node>>),
 }
 
 /// A constraint of `AT_PASS_ADD_OTHERCONSTR`.
@@ -118,11 +142,11 @@ enum Other {
 }
 
 /// The relation of an `ALTER TABLE` after its lookup.
-struct Target {
-    oid: u32,
-    kind: u8,
-    name: String,
-    namespace: u32,
+pub(super) struct Target {
+    pub(super) oid: u32,
+    pub(super) kind: u8,
+    pub(super) name: String,
+    pub(super) namespace: u32,
 }
 
 impl Definer<'_, '_> {
@@ -235,8 +259,8 @@ impl Definer<'_, '_> {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
                 match &cmd.def {
-                    Some(def) => passes.defaults.push((column, def.clone())),
-                    None => passes.drop_defaults.push(column),
+                    Some(def) => passes.defaults.push(AddCmd::Default(column, def.clone())),
+                    None => passes.drops.push(DropCmd::Default(column)),
                 }
             }
             AlterTableType::AT_AddConstraint => {
@@ -251,7 +275,29 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_ChangeOwner => {
                 let role = cmd.newowner.as_deref().cloned().unwrap_or_default();
-                passes.owners.push(role);
+                passes.misc.push(MiscCmd::Owner(role));
+            }
+            AlterTableType::AT_AddIdentity => {
+                self.simple_permissions(target, cmd, TABLE_VIEW)?;
+                let Some(Node::Constraint(con)) = &cmd.def else {
+                    return Err(Error::internal("ADD IDENTITY without a constraint"));
+                };
+                let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                passes.defaults.push(AddCmd::Identity(column, con.clone()));
+            }
+            AlterTableType::AT_SetIdentity => {
+                self.simple_permissions(target, cmd, TABLE_VIEW)?;
+                let options = match &cmd.def {
+                    Some(Node::List(list)) => list.clone(),
+                    _ => Vec::new(),
+                };
+                let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                passes.misc.push(MiscCmd::Identity(column, options));
+            }
+            AlterTableType::AT_DropIdentity => {
+                self.simple_permissions(target, cmd, TABLE_VIEW)?;
+                let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                passes.drops.push(DropCmd::Identity(column, cmd.missing_ok));
             }
             other => {
                 let words = action_words(other);
@@ -308,8 +354,13 @@ impl Definer<'_, '_> {
 
     /// `ATRewriteCatalogs`: the passes in order.
     fn run_passes(&mut self, target: &Target, passes: Passes) -> Result<()> {
-        for column in &passes.drop_defaults {
-            self.column_default(target, column, None)?;
+        for cmd in &passes.drops {
+            match cmd {
+                DropCmd::Default(column) => self.column_default(target, column, None)?,
+                DropCmd::Identity(column, missing_ok) => {
+                    self.drop_identity(target, column, *missing_ok)?;
+                }
+            }
         }
         let mut not_nulls = Vec::new();
         let mut indexes = Vec::new();
@@ -345,8 +396,11 @@ impl Definer<'_, '_> {
         for index in &indexes {
             self.create_index(index, true)?;
         }
-        for (column, def) in &passes.defaults {
-            self.column_default(target, column, Some(def))?;
+        for cmd in &passes.defaults {
+            match cmd {
+                AddCmd::Default(column, def) => self.column_default(target, column, Some(def))?,
+                AddCmd::Identity(column, con) => self.add_identity(target, column, con)?,
+            }
         }
         for other in others {
             match other {
@@ -375,9 +429,16 @@ impl Definer<'_, '_> {
         if verify {
             self.scans.push(target.oid);
         }
-        for role in &passes.owners {
-            let owner = self.role_oid(role)?;
-            self.change_owner(target.oid, owner, false)?;
+        for cmd in &passes.misc {
+            match cmd {
+                MiscCmd::Owner(role) => {
+                    let owner = self.role_oid(role)?;
+                    self.change_owner(target.oid, owner, false)?;
+                }
+                MiscCmd::Identity(column, options) => {
+                    self.set_identity(target, column, options)?;
+                }
+            }
         }
         Ok(())
     }

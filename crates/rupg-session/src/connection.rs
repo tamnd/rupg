@@ -2662,6 +2662,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/identity_more.test")));
     }
 
+    /// `ALTER TABLE ... ALTER COLUMN` with `ADD GENERATED ... AS IDENTITY`, `SET GENERATED`, the `SET` options and `RESTART` of the sequence, and `DROP IDENTITY` with and without `IF EXISTS`, their errors, and a rollback of `DROP IDENTITY`. `connection/alter_identity.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_identity() {
+        big_stack(|| script(include_str!("connection/alter_identity.test")));
+    }
+
+    /// The order of the identity subcommands in one `ALTER TABLE`, a column with a default, a view, an index and a sequence, `SEQUENCE NAME` in another schema and with a name in use, and the system columns. `connection/alter_identity_more.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_identity_more() {
+        big_stack(|| script(include_str!("connection/alter_identity_more.test")));
+    }
+
     /// The system columns `xmin`, `cmin`, `xmax` and `cmax` of a table and of a catalog, their types and their errors in a view, a subquery and a check constraint, the partition key functions for a table that is not partitioned, and the recovery functions on a server that is not in recovery. The script does not show the value of `xmin`, because rupg has no row versions yet. `connection/system_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn system_columns() {

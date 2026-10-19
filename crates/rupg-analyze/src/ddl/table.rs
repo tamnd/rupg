@@ -42,6 +42,14 @@ struct NewColumn {
     identity: u8,
 }
 
+/// The name, the schema and the options of the sequence of an identity column, as `generateSerialSequence` finds them.
+pub(super) struct IdentitySequence {
+    pub(super) namespace: u32,
+    pub(super) name: String,
+    /// The options with `AS` and the type of the column first.
+    pub(super) options: Vec<Option<Node>>,
+}
+
 /// The sequence of a `serial` column or of an identity column.
 struct Serial {
     name: String,
@@ -240,17 +248,6 @@ impl Definer<'_, '_> {
             return Err(not_yet("USING", at));
         }
         for serial in &mut plan.serials {
-            let columns = vec![
-                Column::new("last_value", oid::INT8, -1, 0),
-                Column::new("log_cnt", oid::INT8, -1, 0),
-                Column::new("is_called", oid::BOOL, -1, 0),
-            ];
-            let new = NewRelation {
-                namespace: serial.namespace,
-                name: serial.name.clone(),
-                owner: self.user,
-                columns,
-            };
             let info = match &serial.identity {
                 Some(options) => self.identity_sequence_info(options)?,
                 None => SequenceInfo {
@@ -265,7 +262,7 @@ impl Definer<'_, '_> {
                     data: SequenceData::new(1),
                 },
             };
-            serial.oid = self.catalog.create_sequence(new, info)?;
+            serial.oid = self.new_sequence(serial.namespace, &serial.name, info)?;
         }
         if stmt.oncommit != OnCommitAction::ONCOMMIT_NOOP {
             return Err(Error::new(
@@ -283,18 +280,8 @@ impl Definer<'_, '_> {
         for serial in &plan.serials {
             let column = i16::try_from(serial.column + 1).unwrap_or(i16::MAX);
             if serial.identity.is_some() {
-                // `transformColumnDefinition` names the table for `OWNED BY` with the schema of the sequence, so a sequence in another schema does not find the table.
-                if serial.namespace != plan.namespace {
-                    return Err(Error::new(
-                        SqlState::UNDEFINED_TABLE,
-                        format!(
-                            "relation \"{}.{}\" does not exist",
-                            self.schema_name(serial.namespace),
-                            plan.relname
-                        ),
-                    ));
-                }
-                self.catalog.set_owned_by(serial.oid, Some((table, column)), DepKind::Internal);
+                let owner = (table, plan.namespace, plan.relname.as_str());
+                self.own_identity_sequence(serial.oid, serial.namespace, owner, column)?;
             } else {
                 self.catalog.set_sequence_owner(serial.oid, table, column);
             }
@@ -302,14 +289,50 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `generateSerialSequence` for an identity column: the name and the schema of the sequence come from `SEQUENCE NAME`, or the name comes from the names of the table and the column. The other options get `AS` with the type of the column first, so that the error for an `AS` of the statement points to it.
-    fn identity_sequence(
+    /// `DefineSequence` for the sequence of a `serial` column or of an identity column: a relation with the columns of a sequence and the row of `pg_sequence`.
+    pub(super) fn new_sequence(
         &mut self,
-        plan: &mut Plan,
+        namespace: u32,
+        name: &str,
+        info: SequenceInfo,
+    ) -> Result<u32> {
+        let columns = vec![
+            Column::new("last_value", oid::INT8, -1, 0),
+            Column::new("log_cnt", oid::INT8, -1, 0),
+            Column::new("is_called", oid::BOOL, -1, 0),
+        ];
+        let new = NewRelation { namespace, name: name.to_string(), owner: self.user, columns };
+        self.catalog.create_sequence(new, info)
+    }
+
+    /// The `OWNED BY` of the sequence of an identity column, with an internal dependency on the column. `table` is the OID, the schema and the name of the table. `generateSerialSequence` names the table for `OWNED BY` with the schema of the sequence, so a sequence in another schema does not find the table.
+    pub(super) fn own_identity_sequence(
+        &mut self,
+        sequence: u32,
+        namespace: u32,
+        table: (u32, u32, &str),
+        column: i16,
+    ) -> Result<()> {
+        let (oid, table_namespace, relname) = table;
+        if namespace != table_namespace {
+            return Err(Error::new(
+                SqlState::UNDEFINED_TABLE,
+                format!("relation \"{}.{relname}\" does not exist", self.schema_name(namespace)),
+            ));
+        }
+        self.catalog.set_owned_by(sequence, Some((oid, column)), DepKind::Internal);
+        Ok(())
+    }
+
+    /// `generateSerialSequence` for an identity column: the name and the schema of the sequence come from `SEQUENCE NAME`, or the name comes from the names of the table and the column. The other options get `AS` with the type of the column first, so that the error for an `AS` of the statement points to it.
+    pub(super) fn identity_sequence(
+        &mut self,
+        table: &str,
+        namespace: u32,
         column: &str,
         ty: u32,
         options: &[Option<Node>],
-    ) -> Result<()> {
+    ) -> Result<IdentitySequence> {
         let type_name = TypeName { typeOid: ty, typemod: -1, location: -1, ..TypeName::default() };
         let as_type = DefElem {
             defname: Some("as".into()),
@@ -337,33 +360,17 @@ impl Definer<'_, '_> {
                     _ => Vec::new(),
                 };
                 let rv = range_var(&list)?;
-                let namespace = if rv.schemaname.is_some() {
-                    self.creation_namespace(&rv)?
-                } else {
-                    plan.namespace
-                };
+                let namespace =
+                    if rv.schemaname.is_some() { self.creation_namespace(&rv)? } else { namespace };
                 (namespace, relname(&rv).to_string())
             }
             None => {
-                let name = self.catalog.choose_relation_name(
-                    &plan.relname,
-                    Some(column),
-                    "seq",
-                    plan.namespace,
-                    false,
-                );
-                (plan.namespace, name)
+                let name =
+                    self.catalog.choose_relation_name(table, Some(column), "seq", namespace, false);
+                (namespace, name)
             }
         };
-        plan.serials.push(Serial {
-            name,
-            namespace,
-            ty,
-            column: plan.columns.len(),
-            identity: Some(rest),
-            oid: 0,
-        });
-        Ok(())
+        Ok(IdentitySequence { namespace, name, options: rest })
     }
 
     /// `transformColumnDefinition`.
@@ -551,7 +558,21 @@ impl Definer<'_, '_> {
                         )
                         .at_opt(at));
                     }
-                    self.identity_sequence(plan, &name, ty, &con.options)?;
+                    let sequence = self.identity_sequence(
+                        &plan.relname,
+                        plan.namespace,
+                        &name,
+                        ty,
+                        &con.options,
+                    )?;
+                    plan.serials.push(Serial {
+                        name: sequence.name,
+                        namespace: sequence.namespace,
+                        ty,
+                        column: plan.columns.len(),
+                        identity: Some(sequence.options),
+                        oid: 0,
+                    });
                     column.identity = con.generated_when;
                     // An identity column is always not null, but the column can have a constraint already.
                     if saw_nullable && !column.is_not_null {

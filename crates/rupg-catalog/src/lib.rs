@@ -2035,6 +2035,12 @@ impl Catalog {
         Ok(oid)
     }
 
+    /// The `attidentity` of a column: `a`, `d`, or 0 for a column that is not an identity column.
+    pub fn set_identity(&mut self, relation: u32, column: i16, identity: u8) -> Result<()> {
+        self.column_mut(relation, column)?.identity = identity;
+        Ok(())
+    }
+
     /// `RemoveAttrDefault`: removes the default of a column with its rows of `pg_depend`. A column with no default is not an error.
     pub fn remove_default(&mut self, relation: u32, column: i16) {
         let Some(oid) = self.default_of(relation, column).map(|d| d.oid) else { return };
