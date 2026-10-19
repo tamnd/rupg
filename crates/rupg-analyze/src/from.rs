@@ -472,11 +472,16 @@ impl Analyzer<'_> {
         Ok(TableSample { handler, args, repeatable })
     }
 
-    /// `addRangeTableEntry` for a table of the catalog: the entry and its namespace item.
+    /// A relation of `FROM` with a name: a query of `WITH`, or a table of the catalog.
     fn relation(&mut self, rv: &RangeVar) -> Result<Item> {
         if let Some(item) = self.cte_reference(rv)? {
             return Ok(item);
         }
+        self.catalog_relation(rv)
+    }
+
+    /// `addRangeTableEntry` for a table of the catalog: the entry and its namespace item. The target table of a write is a table of the catalog also when a query of `WITH` has its name, as `setTargetTable` finds it.
+    fn catalog_relation(&mut self, rv: &RangeVar) -> Result<Item> {
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default();
         let oid = self.lookup_relation(rv)?.ok_or_else(|| {
@@ -1034,13 +1039,21 @@ impl Analyzer<'_> {
         Ok(index)
     }
 
+    /// `setTargetTable` for an `UPDATE` or a `DELETE`: the target table as the first part of `FROM`, in the namespace.
+    pub(crate) fn target_relation(&mut self, rv: &RangeVar) -> Result<FromItem> {
+        let item = self.catalog_relation(rv)?;
+        let index = self.scope.entries[item.entry].relation.unwrap_or_default();
+        self.scope.namespace.push(item);
+        Ok(FromItem::Relation(index))
+    }
+
     /// The part of `transformMergeStmt` that adds the target table and the source: the target table is the relation 0, and the namespace has the items of the source, then the item of the target table. It gives the part of `FROM` of the source.
     ///
     /// # Errors
     ///
     /// `42712` when the source has the name of the target table, and the errors of the source.
     pub(crate) fn merge_from(&mut self, rv: &RangeVar, source: &Node) -> Result<FromItem> {
-        let target = self.relation(rv)?;
+        let target = self.catalog_relation(rv)?;
         let (item, _, namespace) = self.transform_from_item(source)?;
         if namespace.iter().any(|other| other.name == target.name) {
             return Err(Error::new(

@@ -3016,6 +3016,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/deferred_constraints.test")));
     }
 
+    /// `WITH` before `INSERT`, `UPDATE`, `DELETE` and `MERGE`: a query of `WITH` in `FROM`, in `USING`, as the source of `MERGE`, in a subquery of `VALUES`, of `SET`, of `WHERE` and of `RETURNING`, `WITH RECURSIVE`, `MATERIALIZED`, a `WITH` of the `SELECT` of an `INSERT`, a target table with the name of a query of `WITH`, a prepared statement, and the errors. `connection/write_with.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn write_with() {
+        big_stack(|| script(include_str!("connection/write_with.test")));
+    }
+
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn row_compare_sublink() {

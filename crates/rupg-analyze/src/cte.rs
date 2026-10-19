@@ -688,6 +688,25 @@ impl Analyzer<'_> {
         self.levels().any(|(_, scope)| scope.ctes.iter().any(|c| !c.visible && c.name == name))
     }
 
+    /// `transformWithClause` for an `INSERT`, an `UPDATE`, a `DELETE` or a `MERGE`: the queries of `WITH` that all the parts of the statement can read.
+    pub(crate) fn write_with(&mut self, with: Option<&WithClause>) -> Result<()> {
+        match with {
+            Some(with) => self.transform_with(with),
+            None => Ok(()),
+        }
+    }
+
+    /// The queries of `WITH` of a write, at the end of its analysis. Each reference has a copy of its query, so the list only names them.
+    pub(crate) fn end_write_with(
+        &mut self,
+        query: &mut Query,
+        with: Option<&WithClause>,
+    ) -> Result<()> {
+        query.recursive = with.is_some_and(|w| w.recursive);
+        query.ctes = self.take_ctes()?;
+        Ok(())
+    }
+
     /// The queries of `WITH` of the query, at the end of its analysis.
     pub(crate) fn take_ctes(&mut self) -> Result<Vec<Cte>> {
         std::mem::take(&mut self.scope.ctes).into_iter().map(CteItem::into_cte).collect()
