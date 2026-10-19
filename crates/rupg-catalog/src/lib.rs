@@ -16,6 +16,7 @@ pub mod toast;
 mod drop;
 mod owner;
 mod sequence;
+mod set_schema;
 mod tsearch;
 
 pub use drop::{Refusal, Target, flag};

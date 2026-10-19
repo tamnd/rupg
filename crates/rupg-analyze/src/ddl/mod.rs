@@ -21,6 +21,7 @@ mod reloptions;
 mod rename;
 mod rule;
 mod sequence;
+mod set_schema;
 mod table;
 #[cfg(test)]
 mod tests;
@@ -113,6 +114,7 @@ pub fn is_definition(stmt: &Node) -> bool {
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype))
         || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA)
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
+        || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType))
 }
 
 /// True for the kinds of relations of `AlterTableStmt` that [`define`] runs. `ALTER TYPE` of a composite type is not one of them.
@@ -176,6 +178,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::AlterTableStmt(alter) => definer.alter_table(alter),
         Node::AlterOwnerStmt(alter) => definer.alter_owner(alter),
         Node::RenameStmt(rename) => definer.rename(rename),
+        Node::AlterObjectSchemaStmt(alter) => definer.alter_relation_schema(alter),
         Node::CreateSeqStmt(create) => definer.create_sequence(create),
         Node::AlterSeqStmt(alter) => definer.alter_sequence(alter),
         Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind) => definer.define_ts(define),

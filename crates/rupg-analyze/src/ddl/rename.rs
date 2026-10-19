@@ -42,7 +42,11 @@ impl Definer<'_, '_> {
     }
 
     /// The lookup of the relation of a rename. With `IF EXISTS`, a relation that does not exist gives a notice and `None`.
-    fn rename_lookup(&mut self, rv: &RangeVar, missing_ok: bool) -> Result<Option<Found>> {
+    pub(super) fn rename_lookup(
+        &mut self,
+        rv: &RangeVar,
+        missing_ok: bool,
+    ) -> Result<Option<Found>> {
         match self.lookup_relation(rv) {
             Ok(found) => Ok(Some(found)),
             Err(e)
@@ -224,7 +228,7 @@ impl Definer<'_, '_> {
     }
 
     /// Adds to [`super::Defined::views`] the views whose query reads an object that `uses` accepts. A rule that is not the rule of a view and reads such an object gives `0A000`, as rupg cannot write the text of a rule again yet.
-    fn views_using(&mut self, uses: impl Fn(ObjRef) -> bool) -> Result<()> {
+    pub(super) fn views_using(&mut self, uses: impl Fn(ObjRef) -> bool) -> Result<()> {
         let rules: Vec<u32> = self
             .catalog
             .depends()
