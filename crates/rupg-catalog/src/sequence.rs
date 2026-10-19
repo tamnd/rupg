@@ -57,6 +57,25 @@ impl Catalog {
             .map(|d| d.object.oid)
     }
 
+    /// `getOwnedSequences`: the sequences that a column of the table owns, by an automatic dependency of `OWNED BY` or `SERIAL` or by the internal dependency of an identity column, in the order of the columns.
+    pub fn owned_sequences(&self, table: u32) -> Vec<u32> {
+        let mut owned: Vec<(i32, u32)> = self
+            .depends
+            .iter()
+            .filter(|d| {
+                d.referenced.class == PG_CLASS
+                    && d.referenced.oid == table
+                    && d.object.class == PG_CLASS
+                    && d.object.sub == 0
+                    && matches!(d.kind, DepKind::Auto | DepKind::Internal)
+                    && self.relation(d.object.oid).is_some_and(|r| r.sequence.is_some())
+            })
+            .map(|d| (d.referenced.sub, d.object.oid))
+            .collect();
+        owned.sort_by_key(|&(sub, _)| sub);
+        owned.into_iter().map(|(_, oid)| oid).collect()
+    }
+
     /// `process_owned_by`: the sequence loses its dependencies of `kind` on relations, and then gets one on the column when `column` is given.
     pub fn set_owned_by(&mut self, sequence: u32, column: Option<(u32, i16)>, kind: DepKind) {
         let me = ObjRef::new(PG_CLASS, sequence);

@@ -815,6 +815,14 @@ impl Connection {
                 "DROP INDEX CONCURRENTLY cannot run inside a transaction block",
             ));
         }
+        if matches!(node, Node::TruncateStmt(_))
+            && self.settings.borrow().get("transaction_read_only").as_deref() == Some("on")
+        {
+            return Err(Error::new(
+                SqlState::READ_ONLY_SQL_TRANSACTION,
+                "cannot execute TRUNCATE TABLE in a read-only transaction",
+            ));
+        }
         if self.lease.is_none() {
             self.lease = Some(self.store.lease(self.database_oid, &self.cancel)?);
         }
@@ -829,7 +837,10 @@ impl Connection {
             Message::Warning(error) => Notice::warning(error),
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
         }));
-        let result = defined.result.and_then(|()| self.keeps_rows(node, &work));
+        let result = defined
+            .result
+            .and_then(|()| self.keeps_rows(node, &work))
+            .and_then(|()| self.truncate_rows(&defined.truncated, &work));
         let Some(lease) = self.lease.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
         };
@@ -883,6 +894,7 @@ impl Connection {
                         _ => CommandTag::CreateTable,
                     },
                     Node::AlterTSConfigurationStmt(_) => CommandTag::AlterTextSearchConfiguration,
+                    Node::TruncateStmt(_) => CommandTag::TruncateTable,
                     _ => CommandTag::CreateTable,
                 }))
             }
@@ -891,6 +903,27 @@ impl Connection {
                 Err(error)
             }
         }
+    }
+
+    /// The rows of the tables of `TRUNCATE`. The first write of a transaction gives it a transaction ID, and the statement ends a command. When another transaction in progress changed a table, the statement waits for its end, as the lock of `TRUNCATE` waits.
+    fn truncate_rows(&self, tables: &[u32], work: &Catalog) -> Result<(), Error> {
+        if tables.is_empty() {
+            return Ok(());
+        }
+        let heap = self.store.heap();
+        if self.xid.get() == 0 {
+            self.xid.set(heap.begin(self.pid));
+        }
+        let view = View { xid: self.xid.get(), ..self.view() };
+        for &table in tables {
+            while let Some(holder) = heap.truncate(table, &view) {
+                let name = work.relation(table).map_or("", |r| r.name.as_str());
+                let context = format!("while truncating relation \"{name}\"");
+                self.reader().wait_xact(view.xid, holder, &context)?;
+            }
+        }
+        self.command.set(view.command + 1);
+        Ok(())
     }
 
     /// `LOCK TABLE`: `RequireTransactionBlock`, then the checks of [`rupg_analyze::lock_table`] with the privileges of `LockTableAclCheck`. The statement takes no lock.
@@ -2672,6 +2705,18 @@ mod tests {
     #[test]
     fn alter_identity_more() {
         big_stack(|| script(include_str!("connection/alter_identity_more.test")));
+    }
+
+    /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn truncate() {
+        big_stack(|| script(include_str!("connection/truncate.test")));
+    }
+
+    /// `TRUNCATE` with the sequences that a column owns, `currval` after `RESTART IDENTITY`, the rows of the same transaction, a read-only transaction, the names with a schema, the relations that are not tables, the order of the error of a foreign key, a cascade over two levels and `PREPARE`. `connection/truncate_more.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn truncate_more() {
+        big_stack(|| script(include_str!("connection/truncate_more.test")));
     }
 
     /// The system columns `xmin`, `cmin`, `xmax` and `cmax` of a table and of a catalog, their types and their errors in a view, a subquery and a check constraint, the partition key functions for a table that is not partitioned, and the recovery functions on a server that is not in recovery. The script does not show the value of `xmin`, because rupg has no row versions yet. `connection/system_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
