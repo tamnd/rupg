@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `ALTER TABLE ... ALTER COLUMN ... TYPE` with `USING` and `COLLATE`. The statement changes the default, the indexes, the check constraints and the foreign keys on the column, writes the rows again with the new type, and gives the PostgreSQL errors for a view or a rule that uses the column (#417).
+
 ## 0.1.47 (2026-10-19)
 
 ### Added
