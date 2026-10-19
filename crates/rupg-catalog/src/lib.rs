@@ -14,6 +14,7 @@ pub mod size;
 pub mod toast;
 
 mod drop;
+mod enum_label;
 mod owner;
 mod sequence;
 mod set_schema;
@@ -914,6 +915,10 @@ pub struct Catalog {
     ts_mappings: Vec<TsMapping>,
     depends: Vec<Depend>,
     descriptions: Arc<BTreeMap<ObjRef, String>>,
+    /// `uncommitted_enum_types`: the enum types that the open transaction made. [`Catalog::commit_enums`] clears them at the commit.
+    uncommitted_types: Vec<u32>,
+    /// `uncommitted_enum_values`: the labels that `ALTER TYPE ... ADD VALUE` of the open transaction gave to an enum type that an earlier transaction made. A statement cannot use such a label until the commit.
+    uncommitted_labels: Vec<u32>,
 }
 
 impl Default for Catalog {
@@ -985,6 +990,8 @@ impl Catalog {
             ts_mappings: Vec::new(),
             depends: Vec::new(),
             descriptions: Arc::default(),
+            uncommitted_types: Vec::new(),
+            uncommitted_labels: Vec::new(),
         }
     }
 
@@ -1873,6 +1880,7 @@ impl Catalog {
         let me = ObjRef::new(PG_TYPE, oid);
         self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
         self.depend(ObjRef::new(PG_TYPE, array), me, DepKind::Internal);
+        self.uncommitted_types.push(oid);
         Ok(oid)
     }
 

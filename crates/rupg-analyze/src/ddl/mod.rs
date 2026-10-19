@@ -9,6 +9,7 @@ mod copy;
 mod domain;
 mod drop;
 mod drop_constraint;
+mod enum_label;
 mod enumtype;
 mod fkey;
 mod function;
@@ -101,6 +102,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateDomainStmt(_)
             | Node::CompositeTypeStmt(_)
             | Node::CreateEnumStmt(_)
+            | Node::AlterEnumStmt(_)
             | Node::CreateRangeStmt(_)
             | Node::ViewStmt(_)
             | Node::RuleStmt(_)
@@ -171,6 +173,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CompositeTypeStmt(stmt) => definer.create_composite_type(stmt),
         Node::CreateEnumStmt(stmt) => definer.create_enum(stmt),
+        Node::AlterEnumStmt(stmt) => definer.alter_enum(stmt),
         Node::CreateRangeStmt(stmt) => definer.create_range(stmt),
         Node::CreateFunctionStmt(function) => definer.create_function(function, text).map(|_| ()),
         Node::CommentStmt(comment) => definer.comment(comment),

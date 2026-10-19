@@ -182,6 +182,11 @@ fn use_types(catalog: &Catalog) {
                     array_name: array.name.clone(),
                     namespace: ty.namespace,
                     labels: labels.iter().map(|l| (l.oid, l.label.clone())).collect(),
+                    uncommitted: labels
+                        .iter()
+                        .filter(|l| catalog.label_is_uncommitted(l.oid))
+                        .map(|l| l.oid)
+                        .collect(),
                 }));
             }
             let domain = ty.domain.as_ref()?;
