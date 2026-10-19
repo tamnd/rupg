@@ -499,25 +499,28 @@ impl Connection {
                 self.fetch_cursor(stmt, Some(&formats))?
             } else if let Node::ClosePortalStmt(stmt) = node {
                 self.close_cursor(stmt, name)?
-            } else if let Some(plan) = &plan {
+            } else if let Some(plan) = plan {
                 self.settings.borrow_mut().take_snapshot();
                 let reader = self.reader();
+                let view = reader.view().cloned().unwrap_or_default();
+                let (plan, writes) = self.start_writes(plan, &params, &view)?;
                 if plan.write().is_some() {
                     let rows = plan.run(&params, &reader);
                     let mut notices: Vec<Notice> =
                         reader.take_warnings().into_iter().map(Notice::of_function).collect();
-                    let view = reader.view().cloned().unwrap_or_default();
                     drop(reader);
                     self.notices(&mut notices, &statement.text, &[], out);
-                    self.write_rows(plan, &params, &view, rows?, &formats)?
+                    self.write_rows(&plan, &params, &view, rows?, &formats, writes)?
                 } else {
-                    let rows = query::run(plan, &params, &reader, &formats);
+                    let rows = query::run(&plan, &params, &reader, &formats);
                     // The warnings of the run, such as the warning of `pg_advisory_unlock`, come before the rows.
                     let mut notices: Vec<Notice> =
                         reader.take_warnings().into_iter().map(Notice::of_function).collect();
                     drop(reader);
                     self.notices(&mut notices, &statement.text, &[], out);
-                    Done::Rows { columns: Vec::new(), rows: rows?, tag: CommandTag::Select }
+                    let rows = rows?;
+                    self.end_writes(writes, &params, Vec::new())?;
+                    Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
                 }
             } else if prepare::is_prepare(node) {
                 let mut notices = Vec::new();

@@ -236,6 +236,11 @@ impl Analyzer<'_> {
             if let ExprKind::Var(var) = &target.expr.kind {
                 let relation = &self.level(var.levels_up).relations[var.relation];
                 target.origin = match &relation.subquery {
+                    None if let Some(cte) = relation.cte.as_ref().filter(|c| c.write.is_some()) => {
+                        usize::try_from(var.attnum - 1)
+                            .ok()
+                            .and_then(|i| cte.origins.get(i).copied().flatten())
+                    }
                     None if relation.function.is_some()
                         || relation.values.is_some()
                         || relation.cte.is_some() =>

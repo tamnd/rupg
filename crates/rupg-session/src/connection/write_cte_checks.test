@@ -1,0 +1,98 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int PRIMARY KEY, v text)
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'a'), (2, 'b')
+INSERT 0 2
+> CREATE VIEW vw AS WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d
+ERROR 0A000 views must not contain data-modifying statements in WITH
+> DECLARE c CURSOR FOR WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d
+ERROR 0A000 DECLARE CURSOR must not contain data-modifying statements in WITH
+> BEGIN
+BEGIN
+> DECLARE c CURSOR FOR WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d
+ERROR 0A000 DECLARE CURSOR must not contain data-modifying statements in WITH
+> ROLLBACK
+ROLLBACK
+> COPY (WITH d AS (DELETE FROM t WHERE id = 9 RETURNING *) SELECT * FROM d) TO STDOUT
+copy out 0 0,0
+copy done
+COPY 0
+> WITH RECURSIVE d AS (DELETE FROM t WHERE id IN (SELECT id FROM d) RETURNING *) SELECT * FROM d
+ERROR 42P19 recursive query "d" must not contain data-modifying statements at 16
+> INSERT INTO t WITH d AS (DELETE FROM t WHERE id = 2 RETURNING *) SELECT id + 10, v FROM d RETURNING *
+ERROR 0A000 WITH clause containing a data-modifying statement must be at the top level at 20
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,a
+row 2,b
+SELECT 2
+> WITH d (a, b, c) AS (DELETE FROM t RETURNING *) SELECT * FROM d
+ERROR 42P10 WITH query "d" has 2 columns available but 3 columns specified at 6
+> WITH d (a) AS (DELETE FROM t WHERE id = 99 RETURNING *) SELECT * FROM d
+fields a@t.1:23:4:-1,v@t.2:25:-1:-1
+SELECT 0
+> BEGIN READ ONLY
+BEGIN
+> WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d
+ERROR 25006 cannot execute SELECT in a read-only transaction
+> ROLLBACK
+ROLLBACK
+> WITH d AS (UPDATE t SET v = 'u' RETURNING old.v AS o, new.v AS n) SELECT * FROM d ORDER BY o
+fields o@t.2:25:-1:-1,n@t.2:25:-1:-1
+row a,u
+row b,u
+SELECT 2
+> WITH d AS (DELETE FROM t WHERE id = 1 RETURNING *) SELECT (SELECT count(*) FROM d), * FROM t ORDER BY id
+fields count:20:8:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 1,1,u
+row 1,2,u
+SELECT 2
+> WITH a AS (WITH b AS (DELETE FROM t RETURNING *) SELECT * FROM b) SELECT * FROM a
+ERROR 0A000 WITH clause containing a data-modifying statement must be at the top level at 17
+> WITH d AS (DELETE FROM t WHERE false RETURNING *) SELECT * FROM d UNION ALL SELECT 0, 'z'
+fields id:23:4:-1,v:25:-1:-1
+row 0,z
+SELECT 1
+> (WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d) UNION ALL SELECT 0, 'z'
+ERROR 0A000 WITH clause containing a data-modifying statement must be at the top level at 7
+> WITH d AS NOT MATERIALIZED (DELETE FROM t WHERE false RETURNING *) SELECT * FROM d
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+SELECT 0
+> WITH d AS (INSERT INTO t VALUES (12, 'x') RETURNING *) SELECT * FROM d
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 12,x
+SELECT 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1
+row 2,u
+row 12,x
+SELECT 2
+> CREATE TABLE p (id int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE c (pid int REFERENCES p)
+CREATE TABLE
+> INSERT INTO p VALUES (1), (2)
+INSERT 0 2
+> INSERT INTO c VALUES (1)
+INSERT 0 1
+> WITH d AS (DELETE FROM p WHERE id = 1 RETURNING *) SELECT * FROM d
+ERROR 23503 update or delete on table "p" violates foreign key constraint "c_pid_fkey" on table "c"
+DETAIL Key (id)=(1) is still referenced from table "c".
+> WITH i AS (INSERT INTO p VALUES (3) RETURNING id) INSERT INTO c SELECT id FROM i
+INSERT 0 1
+> WITH d AS (DELETE FROM c WHERE pid = 1 RETURNING *) DELETE FROM p WHERE id = 1
+DELETE 1
+> WITH i AS (INSERT INTO c VALUES (9)) SELECT 1 AS one
+ERROR 23503 insert or update on table "c" violates foreign key constraint "c_pid_fkey"
+DETAIL Key (pid)=(9) is not present in table "p".
+> SELECT * FROM p ORDER BY id
+fields id@p.1:23:4:-1
+row 2
+row 3
+SELECT 2
+> SELECT * FROM c ORDER BY pid
+fields pid@c.1:23:4:-1
+row 3
+SELECT 1

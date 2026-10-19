@@ -42,10 +42,12 @@ mod foreign;
 mod merge;
 mod prepare;
 mod upsert;
+mod writes;
 
 pub(crate) use activity::Activity;
 use extended::Failed;
 pub(crate) use extended::{Portal, Prepared};
+use writes::Writes;
 
 /// The version of rupg, which `server_version` and the parameter `rupg.version` report.
 pub const VERSION: &str = env!("CARGO_PKG_VERSION");
@@ -554,7 +556,7 @@ impl Connection {
         ))
     }
 
-    /// Writes the rows of an `INSERT`, an `UPDATE` or a `DELETE` in the heap and gives the tag of the command with the number of rows, or the rows of `RETURNING`. The triggers of the foreign keys fire after the rows of `RETURNING`, as `AfterTriggerEndQuery` fires them at the end of the statement.
+    /// Writes the rows of an `INSERT`, an `UPDATE` or a `DELETE` in the heap and gives the tag of the command with the number of rows, or the rows of `RETURNING`. Then the statements of `WITH` that no part reads run. The triggers of the foreign keys fire after all the writes, as `AfterTriggerEndQuery` fires them at the end of the statement.
     fn write_rows(
         &self,
         plan: &Plan,
@@ -562,6 +564,7 @@ impl Connection {
         view: &View,
         rows: Vec<Vec<Value>>,
         formats: &[i16],
+        writes: Writes,
     ) -> Result<Done, Error> {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
@@ -582,9 +585,7 @@ impl Connection {
         } else {
             Done::Count(tag, count)
         };
-        if !batches.is_empty() {
-            self.fire(batches)?;
-        }
+        self.end_writes(writes, params, batches)?;
         Ok(done)
     }
 
@@ -1344,19 +1345,24 @@ impl Connection {
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
         plan.start(&reader)?;
+        let Some(view) = reader.view() else {
+            return Err(Error::internal("the reader of the session has no view of the rows"));
+        };
+        let (plan, writes) = self.start_writes(plan, &[], view)?;
         if plan.write().is_some() {
             let rows = plan.run(&[], &reader);
             late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
-            let Some(view) = reader.view() else {
-                return Err(Error::internal("the reader of the session has no view of the rows"));
-            };
-            return self.write_rows(&plan, &[], view, rows?, &[]);
+            let done = self.write_rows(&plan, &[], view, rows?, &[], writes)?;
+            return Ok(done);
         }
         let columns = query::columns(&plan);
         let rows = query::run(&plan, &[], &reader, &[]);
         late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         match rows {
-            Ok(rows) => Ok(Done::Rows { columns, rows, tag: CommandTag::Select }),
+            Ok(rows) => {
+                self.end_writes(writes, &[], Vec::new())?;
+                Ok(Done::Rows { columns, rows, tag: CommandTag::Select })
+            }
             Err(error) => {
                 *described = Some(columns);
                 Err(error)
@@ -3020,6 +3026,18 @@ mod tests {
     #[test]
     fn write_with() {
         big_stack(|| script(include_str!("connection/write_with.test")));
+    }
+
+    /// The statements of `WITH` that change data: `DELETE`, `UPDATE`, `INSERT` and `MERGE` with `RETURNING` that the main query reads, a statement that no part reads, a statement that reads another, two parts that change one row, a prepared statement, and the error of a reference to a statement with no `RETURNING` and of a statement below the top. `connection/write_cte.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn write_cte() {
+        big_stack(|| script(include_str!("connection/write_cte.test")));
+    }
+
+    /// The checks of the statements of `WITH` that change data: a view, a cursor, `COPY`, a recursive query, the `SELECT` of an `INSERT`, the names of the columns, a read-only transaction, `RETURNING` with `old` and `new`, a subquery, a nested `WITH`, a set operation and the foreign keys of the rows of the statements. `connection/write_cte_checks.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn write_cte_checks() {
+        big_stack(|| script(include_str!("connection/write_cte_checks.test")));
     }
 
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.

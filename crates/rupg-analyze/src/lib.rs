@@ -166,6 +166,8 @@ pub(crate) struct Analyzer<'a> {
     parent_cte: Option<usize>,
     /// The number of work tables of recursive queries that the analysis has made, which gives each its own number.
     works: usize,
+    /// The number of the statements of `WITH` that change data, which [`Cte::write`] counts.
+    writes: usize,
 }
 
 impl<'a> Analyzer<'a> {
@@ -194,6 +196,7 @@ impl<'a> Analyzer<'a> {
             srfs: (0, None),
             parent_cte: None,
             works: 0,
+            writes: 0,
         }
     }
 

@@ -37,6 +37,8 @@ pub struct Cte {
     pub search: Option<SearchClause>,
     /// `cycle_clause`.
     pub cycle: Option<CycleClause>,
+    /// For an `INSERT`, an `UPDATE`, a `DELETE` or a `MERGE`, the number of the statement among the statements of `WITH` of the statement that change data, in the order of their analysis. Then [`Cte::query`] is the statement, and a reference reads the rows of its `RETURNING`.
+    pub write: Option<usize>,
 }
 
 /// The query of `WITH` that a relation of `FROM` reads, as a `RangeTblEntry` of the kind `RTE_CTE`.
@@ -46,6 +48,10 @@ pub struct CteRef {
     pub name: String,
     /// For the reference of a recursive query to itself, as `self_reference`, the number of the work table that the recursive `UNION` fills at each step. The relation then has no subquery. Another reference has a copy of the query of `WITH` as its subquery.
     pub work: Option<usize>,
+    /// For a reference to a statement that changes data, the number of [`Cte::write`]. The relation then has no subquery, and its rows are the rows of `RETURNING` of the statement.
+    pub write: Option<usize>,
+    /// The table and the column of each column of the reference to a statement that changes data, from the targets of its `RETURNING`.
+    pub origins: Vec<Option<(u32, i16)>>,
 }
 
 /// A query of `WITH` in the scope of a query, as an item of `p_ctenamespace`.
@@ -69,6 +75,12 @@ pub(crate) struct CteItem {
     work: Option<usize>,
     search: Option<SearchClause>,
     cycle: Option<CycleClause>,
+    /// The number of a statement that changes data, as [`Cte::write`].
+    write: Option<usize>,
+    /// True when the statement that changes data has `RETURNING`.
+    returning: bool,
+    /// The origins of the columns of `RETURNING`, as [`CteRef::origins`].
+    origins: Vec<Option<(u32, i16)>>,
 }
 
 impl CteItem {
@@ -91,6 +103,9 @@ impl CteItem {
             work: None,
             search: None,
             cycle: None,
+            write: None,
+            returning: false,
+            origins: Vec::new(),
         }
     }
 
@@ -115,6 +130,7 @@ impl CteItem {
             materialized: self.materialized,
             search: self.search,
             cycle: self.cycle,
+            write: self.write,
         })
     }
 
@@ -490,12 +506,14 @@ impl Analyzer<'_> {
                 )
                 .at_opt(place(again.location)));
             }
-        }
-        if list.iter().any(|c| !matches!(c.ctequery, Some(Node::SelectStmt(_)))) {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "a statement that changes data in WITH is not supported yet",
-            ));
+            // A statement that changes data runs once, so only the statement at the top can have it.
+            if !matches!(cte.ctequery, Some(Node::SelectStmt(_))) && !self.outer.is_empty() {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "WITH clause containing a data-modifying statement must be at the top level",
+                )
+                .at_opt(place(cte.location)));
+            }
         }
         let base = self.scope.ctes.len();
         if !with.recursive {
@@ -550,8 +568,10 @@ impl Analyzer<'_> {
 
     /// `analyzeCTE`: the analysis of the query of `WITH` in the slot `slot` of the scope. The query of a recursive query must give the types of its non-recursive term.
     fn analyze_cte(&mut self, slot: usize, cte: &CommonTableExpr) -> Result<()> {
-        let Some(Node::SelectStmt(stmt)) = &cte.ctequery else {
-            return Err(Error::internal("a query of WITH that is not SelectStmt"));
+        let stmt = match &cte.ctequery {
+            Some(Node::SelectStmt(stmt)) => stmt,
+            Some(node) => return self.analyze_write_cte(slot, cte, node),
+            None => return Err(Error::internal("a query of WITH with no statement")),
         };
         // The type of the mark comes before the analysis of the query, which can read the mark.
         self.scope.ctes[slot].search = cte.search_clause.as_deref().map(searchcycle::search_clause);
@@ -610,6 +630,35 @@ impl Analyzer<'_> {
         Ok(())
     }
 
+    /// `analyzeCTE` for an `INSERT`, an `UPDATE`, a `DELETE` or a `MERGE` of `WITH`. The columns are the columns of `RETURNING`, and a statement with no `RETURNING` has no columns.
+    fn analyze_write_cte(&mut self, slot: usize, cte: &CommonTableExpr, node: &Node) -> Result<()> {
+        let query = self.sub_level(true, |analyzer| match node {
+            Node::InsertStmt(s) => analyzer.insert(s),
+            Node::UpdateStmt(s) => analyzer.update(s),
+            Node::DeleteStmt(s) => analyzer.delete(s),
+            Node::MergeStmt(s) => analyzer.merge(s),
+            _ => Err(Error::internal("a query of WITH that is not a statement of a query")),
+        })?;
+        let returning = query.write.as_ref().and_then(|w| w.returning.as_deref());
+        let shown: Vec<&crate::select::Target> =
+            returning.map(|r| r.targets.iter().filter(|t| !t.junk).collect()).unwrap_or_default();
+        let item = &self.scope.ctes[slot];
+        let columns = item
+            .columns(shown.iter().map(|t| (t.name.clone(), t.expr.ty, t.expr.typmod)).collect())?;
+        if cte.search_clause.is_some() || cte.cycle_clause.is_some() {
+            return Err(Error::new(SqlState::SYNTAX_ERROR, "WITH query is not recursive")
+                .at_opt(item.location));
+        }
+        let item = &mut self.scope.ctes[slot];
+        item.origins = shown.iter().map(|t| t.origin).collect();
+        item.returning = returning.is_some();
+        item.columns = Some(columns);
+        item.query = Some(Box::new(query));
+        item.write = Some(self.writes);
+        self.writes += 1;
+        Ok(())
+    }
+
     /// True when the query of a set operation is the query of a recursive query of `WITH`, whose slot in the scope just outside the query is `parent`.
     pub(crate) fn recursive_parent(&self, parent: Option<usize>) -> Option<&CteItem> {
         let item = self.outer.last()?.ctes.get(parent?)?;
@@ -650,6 +699,25 @@ impl Analyzer<'_> {
         let Some(columns) = item.reference_columns() else {
             return Err(Error::internal("a reference to a query of WITH with no columns"));
         };
+        if let Some(write) = item.write {
+            if !item.returning {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("WITH query \"{name}\" does not have a RETURNING clause"),
+                )
+                .at_opt(place(rv.location)));
+            }
+            let mut relation = Relation::new(0, columns, None, None, None);
+            relation.cte = Some(CteRef {
+                name: name.to_string(),
+                work: None,
+                write: Some(write),
+                origins: item.origins.clone(),
+            });
+            let alias = rv.alias.as_deref();
+            let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
+            return self.add_relation(relation, refname, alias).map(Some);
+        }
         let available = item.columns.as_ref().map_or(0, Vec::len);
         let extra = columns.len() - available;
         let mut relation = match &item.query {
@@ -663,7 +731,8 @@ impl Analyzer<'_> {
             None => Relation::new(0, columns, None, None, None),
         };
         let work = if item.query.is_none() { item.work } else { None };
-        relation.cte = Some(CteRef { name: name.to_string(), work });
+        relation.cte =
+            Some(CteRef { name: name.to_string(), work, write: None, origins: Vec::new() });
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
         // The alias cannot name the columns of `SEARCH` and `CYCLE`.

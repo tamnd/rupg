@@ -1,8 +1,8 @@
 //! `raw_expression_tree_walker` of `nodeFuncs.c`: the walk of the children of a node of the raw parse tree, which the checks of `WITH RECURSIVE` use before the analysis.
 
 use rupg_sql::nodes::{
-    JsonAggConstructor, JsonBehavior, JsonOutput, JsonValueExpr, List, Node, SelectStmt, TypeName,
-    WindowDef,
+    InferClause, JsonAggConstructor, JsonBehavior, JsonOutput, JsonValueExpr, List, Node,
+    OnConflictClause, RangeVar, ReturningClause, SelectStmt, TypeName, WindowDef,
 };
 
 /// The callbacks of a walk. Each callback gives true to stop the walk.
@@ -33,6 +33,25 @@ fn window(w: &mut dyn Walker, d: Option<&WindowDef>) -> bool {
             || list(w, &d.orderClause)
             || one(w, d.startOffset.as_ref())
             || one(w, d.endOffset.as_ref())
+    })
+}
+
+/// The target table of a write, which the walk sees as a `RangeVar` node.
+fn target(w: &mut dyn Walker, rv: Option<&RangeVar>) -> bool {
+    rv.is_some_and(|rv| w.node(&Node::RangeVar(Box::new(rv.clone()))))
+}
+
+fn returning(w: &mut dyn Walker, r: Option<&ReturningClause>) -> bool {
+    r.is_some_and(|r| list(w, &r.options) || list(w, &r.exprs))
+}
+
+fn infer(w: &mut dyn Walker, i: Option<&InferClause>) -> bool {
+    i.is_some_and(|i| list(w, &i.indexElems) || one(w, i.whereClause.as_ref()))
+}
+
+fn on_conflict(w: &mut dyn Walker, c: Option<&OnConflictClause>) -> bool {
+    c.is_some_and(|c| {
+        infer(w, c.infer.as_deref()) || list(w, &c.targetList) || one(w, c.whereClause.as_ref())
     })
 }
 
@@ -97,6 +116,37 @@ pub(crate) fn walk(w: &mut dyn Walker, node: &Node) -> bool {
         }
         Node::IntoClause(i) => one(w, i.viewQuery.as_ref()),
         Node::SelectStmt(s) => select(w, s),
+        // The `WITH` clause of a write is not a child, as the walk of `WITH RECURSIVE` reads it only under its own control.
+        Node::InsertStmt(s) => {
+            target(w, s.relation.as_deref())
+                || list(w, &s.cols)
+                || one(w, s.selectStmt.as_ref())
+                || on_conflict(w, s.onConflictClause.as_deref())
+                || returning(w, s.returningClause.as_deref())
+        }
+        Node::DeleteStmt(s) => {
+            target(w, s.relation.as_deref())
+                || list(w, &s.usingClause)
+                || one(w, s.whereClause.as_ref())
+                || returning(w, s.returningClause.as_deref())
+        }
+        Node::UpdateStmt(s) => {
+            target(w, s.relation.as_deref())
+                || list(w, &s.targetList)
+                || one(w, s.whereClause.as_ref())
+                || list(w, &s.fromClause)
+                || returning(w, s.returningClause.as_deref())
+        }
+        Node::MergeStmt(s) => {
+            target(w, s.relation.as_deref())
+                || one(w, s.sourceRelation.as_ref())
+                || one(w, s.joinCondition.as_ref())
+                || list(w, &s.mergeWhenClauses)
+                || returning(w, s.returningClause.as_deref())
+        }
+        Node::MergeWhenClause(c) => {
+            one(w, c.condition.as_ref()) || list(w, &c.targetList) || list(w, &c.values)
+        }
         Node::A_Expr(e) => one(w, e.lexpr.as_ref()) || one(w, e.rexpr.as_ref()),
         Node::BoolExpr(b) => list(w, &b.args),
         Node::FuncCall(f) => {
