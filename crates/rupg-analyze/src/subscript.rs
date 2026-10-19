@@ -45,8 +45,12 @@ impl Analyzer<'_> {
             return Ok(Some(row.names.iter().cloned().zip(row.fields.iter().cloned()).collect()));
         }
         let ty = expr.ty;
-        let columns =
-            if ty == oid::RECORD { self.record_columns(&expr)? } else { self.row_columns(ty) };
+        // `lookup_rowtype_tupdesc_domain`: a domain over a composite type has the fields of the type.
+        let columns = if ty == oid::RECORD {
+            self.record_columns(&expr)?
+        } else {
+            self.row_columns(types::base(ty))
+        };
         let Some(columns) = columns else {
             let message = if ty == oid::RECORD {
                 "record type has not been registered".to_string()
@@ -119,8 +123,11 @@ impl Analyzer<'_> {
             return Ok(row.fields[i].clone().at(at));
         }
         let ty = arg.ty;
-        let columns =
-            if ty == oid::RECORD { self.record_columns(&arg)? } else { self.row_columns(ty) };
+        let columns = if ty == oid::RECORD {
+            self.record_columns(&arg)?
+        } else {
+            self.row_columns(types::base(ty))
+        };
         if let Some(columns) = &columns
             && let Some(i) = columns.iter().position(|c| c.name == name)
         {

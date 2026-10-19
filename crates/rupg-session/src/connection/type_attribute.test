@@ -9,8 +9,8 @@ CREATE TABLE
 INSERT 0 1
 > ALTER TYPE ct ADD ATTRIBUTE c int
 ALTER TYPE
-> SELECT x, (x).c FROM t
-fields x@t.1:20143:-1:-1,c:23:4:-1
+> SELECT x::text, (x).c FROM t
+fields x:25:-1:-1,c:23:4:-1
 row (1,q,),NULL
 SELECT 1
 > SELECT attname, atttypid::regtype::text, attnum, attisdropped FROM pg_attribute WHERE attrelid = 'ct'::regclass AND attnum > 0 ORDER BY attnum
@@ -29,8 +29,8 @@ ALTER TYPE
 fields attname@pg_attribute.2:19:64:-1,attcollation:25:-1:-1
 row d,"C"
 SELECT 1
-> SELECT x FROM t
-fields x@t.1:20143:-1:-1
+> SELECT x::text FROM t
+fields x:25:-1:-1
 row (1,q,,)
 SELECT 1
 > ALTER TYPE ct DROP ATTRIBUTE d
@@ -42,8 +42,8 @@ NOTICE 00000 column "d" of relation "ct" does not exist, skipping
 ALTER TYPE
 > ALTER TYPE ct DROP ATTRIBUTE b CASCADE
 ALTER TYPE
-> SELECT x FROM t
-fields x@t.1:20143:-1:-1
+> SELECT x::text FROM t
+fields x:25:-1:-1
 row (1,)
 SELECT 1
 > SELECT attname, atttypid::regtype::text, attnum, attisdropped FROM pg_attribute WHERE attrelid = 'ct'::regclass AND attnum > 0 ORDER BY attnum
@@ -59,8 +59,8 @@ ERROR 0A000 cannot alter type "ct" because column "t.x" uses it
 ERROR 0A000 cannot alter type "ct" because column "t.x" uses it
 > INSERT INTO t VALUES (ROW(2, 3))
 INSERT 0 1
-> SELECT x, (x).a, (x).c FROM t ORDER BY 2
-fields x@t.1:20143:-1:-1,a:23:4:-1,c:23:4:-1
+> SELECT x::text, (x).a, (x).c FROM t ORDER BY 2
+fields x:25:-1:-1,a:23:4:-1,c:23:4:-1
 row (1,),1,NULL
 row (2,3),2,3
 SELECT 2
@@ -110,8 +110,8 @@ fields attname@pg_attribute.2:19:64:-1,atttypid:25:-1:-1,attnum@pg_attribute.5:2
 row z,character varying,1,f
 row b,text,2,f
 SELECT 2
-> SELECT ROW('x', 1)::ct3
-fields row:20151:-1:-1
+> SELECT ROW('x', 1)::ct3::text
+fields row:25:-1:-1
 row (x,1)
 SELECT 1
 > CREATE TYPE e AS ENUM ('a')
@@ -195,14 +195,14 @@ CREATE TABLE
 INSERT 0 1
 > ALTER TYPE ct5 ADD ATTRIBUTE b int
 ALTER TYPE
-> SELECT x FROM t5
-fields x@t5.1:20177:-1:-1
+> SELECT x::text FROM t5
+fields x:25:-1:-1
 row {"(1,)",NULL,"(2,)"}
 SELECT 1
 > ALTER TYPE ct5 DROP ATTRIBUTE a
 ALTER TYPE
-> SELECT x FROM t5
-fields x@t5.1:20177:-1:-1
+> SELECT x::text FROM t5
+fields x:25:-1:-1
 row {(),NULL,()}
 SELECT 1
 > CREATE TABLE r2 (a int, b text)
@@ -213,14 +213,14 @@ CREATE TABLE
 INSERT 0 1
 > ALTER TABLE r2 DROP COLUMN a
 ALTER TABLE
-> SELECT z FROM t6
-fields z@t6.1:20186:-1:-1
+> SELECT z::text FROM t6
+fields z:25:-1:-1
 row (x)
 SELECT 1
 > ALTER TABLE r2 ADD COLUMN c int
 ALTER TABLE
-> SELECT z, (z).c FROM t6
-fields z@t6.1:20186:-1:-1,c:23:4:-1
+> SELECT z::text, (z).c FROM t6
+fields z:25:-1:-1,c:23:4:-1
 row (x,),NULL
 SELECT 1
 > ALTER TABLE r2 ALTER COLUMN b TYPE varchar
@@ -245,21 +245,21 @@ CREATE TABLE
 INSERT 0 1
 > ALTER TYPE n1 DROP ATTRIBUTE a, ADD ATTRIBUTE c text
 ALTER TYPE
-> SELECT v, (v).p, ((v).p).b, ((v).p).c FROM t7
-fields v@t7.1:20204:-1:-1,p:20201:-1:-1,b:23:4:-1,c:25:-1:-1
+> SELECT v::text, (v).p::text, ((v).p).b, ((v).p).c FROM t7
+fields v:25:-1:-1,p:25:-1:-1,b:23:4:-1,c:25:-1:-1
 row ("(2,)",3),(2,),2,NULL
 SELECT 1
 > BEGIN
 BEGIN
 > ALTER TYPE n1 ADD ATTRIBUTE d int
 ALTER TYPE
-> SELECT v FROM t7
-fields v@t7.1:20204:-1:-1
+> SELECT v::text FROM t7
+fields v:25:-1:-1
 row ("(2,,)",3)
 SELECT 1
 > ROLLBACK
 ROLLBACK
-> SELECT v FROM t7
-fields v@t7.1:20204:-1:-1
+> SELECT v::text FROM t7
+fields v:25:-1:-1
 row ("(2,)",3)
 SELECT 1
