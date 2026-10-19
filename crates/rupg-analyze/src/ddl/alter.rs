@@ -1,13 +1,13 @@
-//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `OWNER TO`, and `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column. The other subcommands give `0A000`.
+//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `SET NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `OWNER TO`, and `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column. The other subcommands give `0A000`.
 //!
-//! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
+//! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the new columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
 
 use rupg_catalog::{ConKind, DepKind, PG_CLASS, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
 use rupg_sql::nodes::{
-    AlterOwnerStmt, AlterTableCmd, AlterTableStmt, AlterTableType, ConstrType, Constraint,
-    IndexStmt, Node, ObjectType, RangeVar, RoleSpec, RoleSpecType,
+    AlterOwnerStmt, AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType,
+    Constraint, IndexStmt, Node, ObjectType, RangeVar, RoleSpec, RoleSpecType,
 };
 use rupg_types::Value;
 
@@ -103,6 +103,8 @@ fn action_words(subtype: AlterTableType) -> &'static str {
 struct Passes {
     /// `AT_PASS_DROP`: `DROP DEFAULT` and `DROP IDENTITY`, in the order of the statement.
     drops: Vec<DropCmd>,
+    /// `AT_PASS_ADD_COL`: `ADD COLUMN` with its `IF NOT EXISTS`, in the order of the statement.
+    columns: Vec<(ColumnDef, bool)>,
     /// `AT_PASS_ADD_CONSTR`: the constraints of `ADD CONSTRAINT` before their transform.
     constraints: Vec<Constraint>,
     /// `AT_PASS_ADD_OTHERCONSTR`: `SET DEFAULT` and `ADD IDENTITY`, in the order of the statement. The check constraints and the foreign keys come after them, from the transform.
@@ -138,7 +140,8 @@ enum MiscCmd {
 /// A constraint of `AT_PASS_ADD_OTHERCONSTR`.
 enum Other {
     Check(Constraint),
-    Foreign(Constraint),
+    /// A foreign key, and true when `RI_Initial_Check` reads the rows. `transformAlterTableStmt` skips the check for the foreign key of a new column with no default, as all its values are null.
+    Foreign(Constraint, bool),
 }
 
 /// The relation of an `ALTER TABLE` after its lookup.
@@ -255,6 +258,24 @@ impl Definer<'_, '_> {
         passes: &mut Passes,
     ) -> Result<()> {
         match cmd.subtype {
+            AlterTableType::AT_AddColumn => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let Some(Node::ColumnDef(def)) = &cmd.def else {
+                    return Err(Error::internal("ADD COLUMN without a column"));
+                };
+                passes.columns.push(((**def).clone(), cmd.missing_ok));
+            }
+            AlterTableType::AT_SetNotNull => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let column = cmd.name.as_deref().unwrap_or_default();
+                if SYSTEM_COLUMNS.contains(&column) {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!("cannot alter system column \"{column}\""),
+                    ));
+                }
+                passes.constraints.push(make_not_null(column));
+            }
             AlterTableType::AT_ColumnDefault => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
@@ -353,7 +374,7 @@ impl Definer<'_, '_> {
     }
 
     /// `ATRewriteCatalogs`: the passes in order.
-    fn run_passes(&mut self, target: &Target, passes: Passes) -> Result<()> {
+    fn run_passes(&mut self, target: &Target, mut passes: Passes) -> Result<()> {
         for cmd in &passes.drops {
             match cmd {
                 DropCmd::Default(column) => self.column_default(target, column, None)?,
@@ -361,6 +382,20 @@ impl Definer<'_, '_> {
                     self.drop_identity(target, column, *missing_ok)?;
                 }
             }
+        }
+        let mut column_constraints = Vec::new();
+        for (def, if_not_exists) in &passes.columns {
+            if let Some(rest) = self.add_column(target, def, *if_not_exists)? {
+                let name = def.colname.as_deref().unwrap_or_default();
+                let rel = self.catalog.relation(target.oid);
+                let number = rel.and_then(|r| r.column_number(name)).unwrap_or(0);
+                let identity = rel.and_then(|r| r.column(number)).is_some_and(|c| c.identity != 0);
+                let defaulted = identity || self.catalog.default_of(target.oid, number).is_some();
+                column_constraints.extend(rest.into_iter().map(|con| (con, defaulted)));
+            }
+        }
+        if !passes.columns.is_empty() {
+            self.toast_after_columns(target.oid)?;
         }
         let mut not_nulls = Vec::new();
         let mut indexes = Vec::new();
@@ -372,7 +407,9 @@ impl Definer<'_, '_> {
             location: -1,
             ..RangeVar::default()
         };
-        for con in passes.constraints {
+        let constraints =
+            std::mem::take(&mut passes.constraints).into_iter().map(|con| (con, true));
+        for (con, defaulted) in column_constraints.into_iter().chain(constraints) {
             match con.contype {
                 ConstrType::CONSTR_NOTNULL => not_nulls.push(con),
                 ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE => {
@@ -382,7 +419,7 @@ impl Definer<'_, '_> {
                     return Err(not_yet("an exclusion constraint", place(con.location)));
                 }
                 ConstrType::CONSTR_CHECK => others.push(Other::Check(con)),
-                ConstrType::CONSTR_FOREIGN => others.push(Other::Foreign(con)),
+                ConstrType::CONSTR_FOREIGN => others.push(Other::Foreign(con, defaulted)),
                 ConstrType(n) => {
                     return Err(Error::internal(format!("unrecognized constraint type: {n}")));
                 }
@@ -414,13 +451,13 @@ impl Definer<'_, '_> {
                         .map_err(|e| e.with_position(None))?;
                     verify |= con.is_enforced;
                 }
-                Other::Foreign(con) => {
+                Other::Foreign(con, validated) => {
                     if !con.initially_valid && con.is_enforced {
                         return Err(not_yet("NOT VALID", place(con.location)));
                     }
                     self.add_foreign_key(target.oid, &con)?;
                     // `RI_Initial_Check` reads the rows of the table.
-                    if con.is_enforced {
+                    if con.is_enforced && validated {
                         self.scans.push(target.oid);
                     }
                 }
@@ -455,7 +492,12 @@ impl Definer<'_, '_> {
     }
 
     /// `ATExecColumnDefault`: drops the default of the column, then adds the new default.
-    fn column_default(&mut self, target: &Target, column: &str, def: Option<&Node>) -> Result<()> {
+    pub(super) fn column_default(
+        &mut self,
+        target: &Target,
+        column: &str,
+        def: Option<&Node>,
+    ) -> Result<()> {
         let rel = self.catalog.relation(target.oid);
         let Some(number) = rel.and_then(|r| r.column_number(column)) else {
             if SYSTEM_COLUMNS.contains(&column) {

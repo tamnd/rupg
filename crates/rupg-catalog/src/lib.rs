@@ -1307,6 +1307,28 @@ impl Catalog {
         Ok(())
     }
 
+    /// `ATExecAddColumn` for the catalog: the column goes at the end of the columns of the table, and it depends on its type and its collation, as `add_column_datatype_dependency` and `add_column_collation_dependency` record them. The result is the number of the new column.
+    ///
+    /// # Errors
+    ///
+    /// `54011` for a table that has the most columns already, and an internal error for a relation that is not in the catalog.
+    pub fn add_column(&mut self, table: u32, column: Column) -> Result<i16> {
+        let refs = [(PG_TYPE, column.ty), (PG_COLLATION, column.collation)];
+        let rel = self.relation_mut(table)?;
+        if rel.columns.len() >= MAX_COLUMNS {
+            return Err(Error::new(
+                SqlState::TOO_MANY_COLUMNS,
+                format!("tables can have at most {MAX_COLUMNS} columns"),
+            ));
+        }
+        rel.columns.push(column);
+        let number = i16::try_from(rel.columns.len()).unwrap_or(i16::MAX);
+        for (class, found) in refs.into_iter().filter(|&(_, found)| found != 0) {
+            self.depend(ObjRef::column(table, number), ObjRef::new(class, found), DepKind::Normal);
+        }
+        Ok(number)
+    }
+
     /// `heap_create_with_catalog` for an ordinary table: the table gets an OID, then its array type, then its row type.
     pub fn create_table(&mut self, new: NewRelation) -> Result<u32> {
         self.create_relation(new, RelKind::Table)

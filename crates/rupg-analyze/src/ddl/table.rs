@@ -1,7 +1,9 @@
 //! `CREATE TABLE`, as `transformCreateStmt` and `DefineRelation` run it. Then the statements that `transformCreateStmt` adds run in the same order as in PostgreSQL: the sequences of the `serial` columns before the table, then the indexes, the foreign keys and `OWNED BY` after it.
 
 use rupg_catalog::toast::{Shape, needs_toast};
-use rupg_catalog::{Column, DepKind, MAX_COLUMNS, NewRelation, SequenceData, SequenceInfo};
+use rupg_catalog::{
+    Column, DepKind, MAX_COLUMNS, NewRelation, RelKind, SequenceData, SequenceInfo,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
@@ -10,6 +12,7 @@ use rupg_sql::nodes::{
 };
 use rupg_types::{Value, oid};
 
+use super::alter::Target;
 use super::comment::range_var;
 use super::sequence::conflicting;
 use super::{Definer, is_system_namespace, not_yet, references, relname};
@@ -97,6 +100,21 @@ fn serial_max(ty: u32) -> i64 {
         oid::INT2 => i64::from(i16::MAX),
         oid::INT4 => i64::from(i32::MAX),
         _ => i64::MAX,
+    }
+}
+
+/// The options of the sequence of a `serial` column of the type.
+fn serial_info(ty: u32) -> SequenceInfo {
+    SequenceInfo {
+        ty,
+        start: 1,
+        increment: 1,
+        max: serial_max(ty),
+        min: 1,
+        cache: 1,
+        cycle: false,
+        file: 0,
+        data: SequenceData::new(1),
     }
 }
 
@@ -250,17 +268,7 @@ impl Definer<'_, '_> {
         for serial in &mut plan.serials {
             let info = match &serial.identity {
                 Some(options) => self.identity_sequence_info(options)?,
-                None => SequenceInfo {
-                    ty: serial.ty,
-                    start: 1,
-                    increment: 1,
-                    max: serial_max(serial.ty),
-                    min: 1,
-                    cache: 1,
-                    cycle: false,
-                    file: 0,
-                    data: SequenceData::new(1),
-                },
+                None => serial_info(serial.ty),
             };
             serial.oid = self.new_sequence(serial.namespace, &serial.name, info)?;
         }
@@ -743,6 +751,119 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
+    /// `BuildDescForRelation` for one column: its type, its type modifier, its collation and the number of its array dimensions.
+    fn catalog_column(&mut self, column: &NewColumn) -> Result<Column> {
+        let mut type_name = column.type_name.clone();
+        type_name.location = -1;
+        let (ty, typmod) = self.an.type_name(&type_name)?;
+        if type_name.setof {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                format!("column \"{}\" cannot be declared SETOF", column.name),
+            ));
+        }
+        let collation = match &column.collate {
+            Some(coll) => self.an.collation_oid(&coll.collname, None)?,
+            None => types::row(ty).map_or(0, |t| t.collation),
+        };
+        let mut new = Column::new(column.name.clone(), ty, typmod, collation);
+        new.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
+        new.identity = column.identity;
+        Ok(new)
+    }
+
+    /// `ADD COLUMN` of `ALTER TABLE`: `transformColumnDefinition` and the sequence of a `serial` column or of an identity column, then `ATExecAddColumn`. The column gets its default, its not-null constraint and the `OWNED BY` of its sequence. The result is the other constraints of the column, the unique constraints, the check constraints and the foreign keys, for the later passes, or `None` when the table has the column and the statement has `IF NOT EXISTS`.
+    pub(super) fn add_column(
+        &mut self,
+        target: &Target,
+        def: &ColumnDef,
+        if_not_exists: bool,
+    ) -> Result<Option<Vec<Constraint>>> {
+        let mut plan = Plan {
+            relname: target.name.clone(),
+            namespace: target.namespace,
+            columns: Vec::new(),
+            checks: Vec::new(),
+            not_nulls: Vec::new(),
+            indexes: Vec::new(),
+            foreign: Vec::new(),
+            serials: Vec::new(),
+            has_pkey: false,
+        };
+        self.column_definition(&mut plan, def)?;
+        let Some(column) = plan.columns.first() else {
+            return Err(Error::internal("ADD COLUMN without a column"));
+        };
+        // `check_for_column_name_collision`.
+        if SYSTEM_COLUMNS.contains(&column.name.as_str()) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_COLUMN,
+                format!("column name \"{}\" conflicts with a system column name", column.name),
+            ));
+        }
+        let table = target.oid;
+        if self.catalog.relation(table).and_then(|r| r.column_number(&column.name)).is_some() {
+            let message = format!(
+                "column \"{}\" of relation \"{}\" already exists",
+                column.name, target.name
+            );
+            if if_not_exists {
+                self.notice(SqlState::DUPLICATE_COLUMN, format!("{message}, skipping"));
+                return Ok(None);
+            }
+            return Err(Error::new(SqlState::DUPLICATE_COLUMN, message));
+        }
+        for serial in &mut plan.serials {
+            let info = match &serial.identity {
+                Some(options) => self.identity_sequence_info(options)?,
+                None => serial_info(serial.ty),
+            };
+            serial.oid = self.new_sequence(serial.namespace, &serial.name, info)?;
+        }
+        let new = self.catalog_column(column)?;
+        check_attribute_type(&new.name, new.ty, self.an.env.allow_system_table_mods())?;
+        let number = self.catalog.add_column(table, new)?;
+        match &column.default {
+            Some(RawDefault::Expr(node)) => {
+                let name = column.name.clone();
+                let node = node.clone();
+                self.column_default(target, &name, Some(&node))?;
+            }
+            Some(RawDefault::Serial(k)) => {
+                let expr = nextval(plan.serials[*k].oid)?;
+                let refs = references(table, &[&expr]);
+                self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
+            }
+            None => {}
+        }
+        self.add_not_nulls(table, &plan)?;
+        for serial in &plan.serials {
+            if serial.identity.is_some() {
+                let owner = (table, plan.namespace, plan.relname.as_str());
+                self.own_identity_sequence(serial.oid, serial.namespace, owner, number)?;
+            } else {
+                self.catalog.set_sequence_owner(serial.oid, table, number);
+            }
+        }
+        let mut rest = plan.indexes;
+        rest.extend(plan.checks);
+        rest.extend(plan.foreign);
+        Ok(Some(rest))
+    }
+
+    /// `AlterTableCreateToastTable`: a table whose columns can need it gets a TOAST table after its new columns.
+    pub(super) fn toast_after_columns(&mut self, table: u32) -> Result<()> {
+        let Some(rel) = self.catalog.relation(table) else { return Ok(()) };
+        if rel.toast != 0 || rel.kind != RelKind::Table {
+            return Ok(());
+        }
+        let shapes: Vec<Shape> = rel.columns.iter().map(shape).collect();
+        if needs_toast(&shapes) {
+            self.catalog.create_toast(table)?;
+        }
+        Ok(())
+    }
+
     /// `DefineRelation` and `heap_create_with_catalog` for the table, then its defaults, its check constraints and its not-null constraints. The result is the OID of the table.
     fn define_relation(&mut self, plan: &Plan) -> Result<u32> {
         if plan.columns.len() > MAX_COLUMNS {
@@ -761,23 +882,7 @@ impl Definer<'_, '_> {
         }
         let mut columns = Vec::with_capacity(plan.columns.len());
         for column in &plan.columns {
-            let mut type_name = column.type_name.clone();
-            type_name.location = -1;
-            let (ty, typmod) = self.an.type_name(&type_name)?;
-            if type_name.setof {
-                return Err(Error::new(
-                    SqlState::INVALID_TABLE_DEFINITION,
-                    format!("column \"{}\" cannot be declared SETOF", column.name),
-                ));
-            }
-            let collation = match &column.collate {
-                Some(coll) => self.an.collation_oid(&coll.collname, None)?,
-                None => types::row(ty).map_or(0, |t| t.collation),
-            };
-            let mut new = Column::new(column.name.clone(), ty, typmod, collation);
-            new.ndims = i16::try_from(type_name.arrayBounds.len()).unwrap_or(i16::MAX);
-            new.identity = column.identity;
-            columns.push(new);
+            columns.push(self.catalog_column(column)?);
         }
         for column in &columns {
             if SYSTEM_COLUMNS.contains(&column.name.as_str()) {
@@ -791,19 +896,7 @@ impl Definer<'_, '_> {
             check_attribute_type(&column.name, column.ty, self.an.env.allow_system_table_mods())?;
         }
         self.check_relation_name(plan.namespace, &plan.relname)?;
-        let shapes: Vec<Shape> = columns
-            .iter()
-            .map(|c| {
-                let row = types::row(c.ty);
-                Shape {
-                    len: row.map_or(-1, |t| t.len),
-                    align: row.map_or(b'i', |t| t.align),
-                    storage: row.map_or(b'x', |t| t.storage),
-                    ty: c.ty,
-                    typmod: c.typmod,
-                }
-            })
-            .collect();
+        let shapes: Vec<Shape> = columns.iter().map(shape).collect();
         let scope: Vec<(String, u32, i32)> =
             columns.iter().map(|c| (c.name.clone(), c.ty, c.typmod)).collect();
         let new = NewRelation {
@@ -964,6 +1057,18 @@ impl Definer<'_, '_> {
             i += 1;
         }
         Ok(())
+    }
+}
+
+/// The facts of the type of a column that `needs_toast_table` reads.
+fn shape(column: &Column) -> Shape {
+    let row = types::row(column.ty);
+    Shape {
+        len: row.map_or(-1, |t| t.len),
+        align: row.map_or(b'i', |t| t.align),
+        storage: row.map_or(b'x', |t| t.storage),
+        ty: column.ty,
+        typmod: column.typmod,
     }
 }
 

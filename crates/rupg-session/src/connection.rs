@@ -7,7 +7,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 
 use rupg_analyze::{Message, Params, Write, WriteKind};
-use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, database};
+use rupg_catalog::{Catalog, database};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_func::{BackendState, Randomness, Sequences};
@@ -41,6 +41,7 @@ mod extended;
 mod foreign;
 mod merge;
 mod prepare;
+mod rewrite;
 mod savepoint;
 mod upsert;
 mod writes;
@@ -399,40 +400,6 @@ fn row_changes(
     Ok((changes, kept))
 }
 
-/// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default or a not-null constraint, a new constraint, or a new unique index. A dropped table and a new column with no default keep the rows.
-fn changes_rows(old: &Catalog, new: &Catalog, rel: &rupg_catalog::Relation) -> bool {
-    let Some(now) = new.relation(rel.oid) else {
-        return false;
-    };
-    if now.columns.len() < rel.columns.len() {
-        return true;
-    }
-    let same = rel.columns.iter().zip(&now.columns).all(|(before, after)| {
-        before.ty == after.ty
-            && before.typmod == after.typmod
-            && before.collation == after.collation
-            && (before.not_null || !after.not_null)
-    });
-    if !same {
-        return true;
-    }
-    let added = (rel.columns.len()..now.columns.len()).any(|i| {
-        let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
-        now.columns[i].not_null || new.default_of(rel.oid, attnum).is_some()
-    });
-    if added {
-        return true;
-    }
-    let constraint = new
-        .constraints_of(rel.oid)
-        .any(|c| c.kind != ConKind::NotNull && c.validated && old.constraint(c.oid).is_none());
-    let index = new.relations().any(|index| {
-        old.relation(index.oid).is_none()
-            && index.index.as_ref().is_some_and(|info| info.table == rel.oid && info.unique)
-    });
-    constraint || index
-}
-
 /// The OID of the bootstrap superuser, which owns the objects of initdb.
 const BOOTSTRAP_SUPERUSER: u32 = 10;
 
@@ -494,6 +461,11 @@ impl Connection {
 
     /// What a statement reads of the session.
     fn reader(&self) -> Reader<'_> {
+        self.reader_on(self.catalog())
+    }
+
+    /// What a statement reads of the session, with the catalog `catalog`.
+    fn reader_on(&self, catalog: Arc<Catalog>) -> Reader<'_> {
         Reader::new(
             &self.settings,
             &self.user,
@@ -501,7 +473,7 @@ impl Connection {
             (self.transaction_start, self.statement_start),
             &*self.clock,
             self.pid,
-            self.catalog(),
+            catalog,
         )
         .with_activity(&self.activity, &self.store)
         .with_sequences(&self.sequences)
@@ -529,35 +501,6 @@ impl Connection {
             command: self.command.get(),
             serializable,
         }
-    }
-
-    /// `0A000` when a statement changes a table that has rows in a way that the rows must change too, such as a new column with a default or a new constraint that must check the rows. The heap cannot change its rows yet.
-    fn keeps_rows(&self, node: &Node, work: &Catalog) -> Result<(), Error> {
-        let heap = self.store.heap();
-        let old = self.catalog();
-        let mut tables = old.relations().filter(|rel| {
-            rel.kind == RelKind::Table
-                && rel.oid >= FIRST_NORMAL_OID
-                && heap.has_rows(self.database_oid, rel.oid)
-        });
-        let changed = if matches!(node, Node::AlterDomainStmt(_)) {
-            tables.next().is_some()
-        } else {
-            tables.any(|rel| changes_rows(&old, work, rel))
-        };
-        if !changed {
-            return Ok(());
-        }
-        let statement = match node {
-            Node::AlterDomainStmt(_) => "ALTER DOMAIN",
-            Node::IndexStmt(_) => "CREATE INDEX",
-            Node::AlterTableStmt(_) => "ALTER TABLE",
-            _ => "this statement",
-        };
-        Err(Error::new(
-            SqlState::FEATURE_NOT_SUPPORTED,
-            format!("{statement} on a table with rows is not supported yet"),
-        ))
     }
 
     /// Writes the rows of an `INSERT`, an `UPDATE` or a `DELETE` in the heap and gives the tag of the command with the number of rows, or the rows of `RETURNING`. Then the statements of `WITH` that no part reads run. The triggers of the foreign keys fire after all the writes, as `AfterTriggerEndQuery` fires them at the end of the statement.
@@ -743,20 +686,7 @@ impl Connection {
                         "a duplicate key of an index that is not in the list",
                     ));
                 };
-                let reader = self.reader();
-                let mut values = String::new();
-                for (value, &ty) in key.iter().zip(&unique.types) {
-                    if !values.is_empty() {
-                        values.push_str(", ");
-                    }
-                    if matches!(value, Value::Null) {
-                        values.push_str("null");
-                    } else {
-                        let mut out = Vec::new();
-                        rupg_func::output(ty, value, &reader, &mut out)?;
-                        values.push_str(&String::from_utf8_lossy(&out));
-                    }
-                }
+                let values = self.index_key_text(&unique.types, &key)?;
                 Err(Error::new(
                     SqlState::UNIQUE_VIOLATION,
                     format!("duplicate key value violates unique constraint \"{}\"", unique.name),
@@ -765,6 +695,25 @@ impl Connection {
             }
             _ => Err(Error::internal("a write result that is not a conflict of a key")),
         }
+    }
+
+    /// The values of a key for the detail of an error, `BuildIndexValueDescription`: the output of each value, or `null`.
+    fn index_key_text(&self, types: &[u32], key: &[Value]) -> Result<String, Error> {
+        let reader = self.reader();
+        let mut values = String::new();
+        for (value, &ty) in key.iter().zip(types) {
+            if !values.is_empty() {
+                values.push_str(", ");
+            }
+            if matches!(value, Value::Null) {
+                values.push_str("null");
+            } else {
+                let mut out = Vec::new();
+                rupg_func::output(ty, value, &reader, &mut out)?;
+                values.push_str(&String::from_utf8_lossy(&out));
+            }
+        }
+        Ok(values)
     }
 
     /// The end of the rows of a transaction: a commit makes them visible and removes the rows of the tables that the transaction dropped, and a rollback removes them.
@@ -842,16 +791,17 @@ impl Connection {
             Message::Warning(error) => Notice::warning(error),
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
         }));
-        let result = defined
-            .result
-            .and_then(|()| self.keeps_rows(node, &work))
+        let rewrite = defined.result.and_then(|()| self.rows_to_rewrite(node, &work));
+        let work = Arc::new(work);
+        let result = rewrite
+            .and_then(|tables| self.rewrite_rows(&tables, &work))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work));
         let Some(lease) = self.lease.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
         };
         match result {
             Ok(()) => {
-                lease.catalog = Arc::new(work);
+                lease.catalog = work;
                 Ok(Done::Tag(match node {
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
@@ -4114,6 +4064,12 @@ mod tests {
     #[test]
     fn copy_from_options() {
         big_stack(|| script(include_str!("connection/copy_from_options.test")));
+    }
+
+    /// `ALTER TABLE ... ADD COLUMN` on an empty table and on a table with rows: defaults, `serial` and identity columns, not-null, check, unique and foreign key constraints, domains, and a rollback. Also `SET NOT NULL`, `ADD CONSTRAINT` and `CREATE UNIQUE INDEX` on a table with rows. `connection/alter_add_column.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_add_column() {
+        big_stack(|| script(include_str!("connection/alter_add_column.test")));
     }
 
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
