@@ -230,6 +230,10 @@ impl Catalog {
                         has_default: false,
                         identity: 0,
                         dropped: true,
+                        stat_target: None,
+                        storage: column.storage,
+                        compression: column.compression,
+                        options: Vec::new(),
                     };
                 }
             }

@@ -1,4 +1,4 @@
-//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, and `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column. The other subcommands give `0A000`.
+//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column, and `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column. The other subcommands give `0A000`.
 //!
 //! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
 
@@ -11,6 +11,7 @@ use rupg_sql::nodes::{
 };
 use rupg_types::Value;
 
+use super::alter_column::ColumnCmd;
 use super::alter_type::{Changed, TypeCmd};
 use super::comment::not_owner;
 use super::drop::owner_word;
@@ -25,6 +26,9 @@ use crate::types;
 /// The relation kinds of `ATSimplePermissions` that a subcommand allows, as `relkind` codes.
 const TABLE_VIEW: &[u8] = b"rpvf";
 const TABLE: &[u8] = b"rpf";
+const STATISTICS: &[u8] = b"rpmfiI";
+const STORAGE: &[u8] = b"rpmf";
+const COMPRESSION: &[u8] = b"rpm";
 
 /// `alter_table_type_to_string`: the words of a subcommand in its errors.
 fn action_words(subtype: AlterTableType) -> &'static str {
@@ -112,7 +116,7 @@ struct Passes {
     constraints: Vec<Constraint>,
     /// `AT_PASS_ADD_OTHERCONSTR`: `SET DEFAULT` and `ADD IDENTITY`, in the order of the statement. The check constraints and the foreign keys come after them, from the transform.
     defaults: Vec<AddCmd>,
-    /// `AT_PASS_MISC`: `OWNER TO` and the `SET` options of an identity column, in the order of the statement.
+    /// `AT_PASS_MISC`: `OWNER TO`, the `SET` options of an identity column, and the subcommands that change the statistics, the storage and the options of a column, in the order of the statement.
     misc: Vec<MiscCmd>,
 }
 
@@ -144,6 +148,8 @@ enum MiscCmd {
     Owner(RoleSpec),
     /// `SET GENERATED` and the options of the sequence of the column.
     Identity(String, Vec<Option<Node>>),
+    /// `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION`, or `SET` or `RESET` of the options of a column.
+    Column(ColumnCmd),
 }
 
 /// A constraint of `AT_PASS_ADD_OTHERCONSTR`.
@@ -356,6 +362,39 @@ impl Definer<'_, '_> {
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
                 passes.drops.push(DropCmd::Identity(column, cmd.missing_ok));
             }
+            AlterTableType::AT_SetStatistics => {
+                self.simple_permissions(target, cmd, STATISTICS)?;
+                let value = match &cmd.def {
+                    Some(Node::Integer(n)) => Some(*n),
+                    _ => None,
+                };
+                let name = cmd.name.as_deref().map(str::to_string);
+                passes.misc.push(MiscCmd::Column(ColumnCmd::Statistics(name, cmd.num, value)));
+            }
+            AlterTableType::AT_SetStorage | AlterTableType::AT_SetCompression => {
+                let storage = cmd.subtype == AlterTableType::AT_SetStorage;
+                self.simple_permissions(target, cmd, if storage { STORAGE } else { COMPRESSION })?;
+                let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                let name = match &cmd.def {
+                    Some(Node::String(name)) => name.to_string(),
+                    _ => "default".to_string(),
+                };
+                passes.misc.push(MiscCmd::Column(if storage {
+                    ColumnCmd::Storage(column, name)
+                } else {
+                    ColumnCmd::Compression(column, name)
+                }));
+            }
+            AlterTableType::AT_SetOptions | AlterTableType::AT_ResetOptions => {
+                self.simple_permissions(target, cmd, STORAGE)?;
+                let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                let defs = match &cmd.def {
+                    Some(Node::List(list)) => list.clone(),
+                    _ => Vec::new(),
+                };
+                let reset = cmd.subtype == AlterTableType::AT_ResetOptions;
+                passes.misc.push(MiscCmd::Column(ColumnCmd::Options(column, defs, reset)));
+            }
             other => {
                 let words = action_words(other);
                 let what = if words.is_empty() { "this ALTER TABLE action" } else { words };
@@ -527,6 +566,7 @@ impl Definer<'_, '_> {
                 MiscCmd::Identity(column, options) => {
                     self.set_identity(target, column, options)?;
                 }
+                MiscCmd::Column(cmd) => self.alter_column_facts(target, cmd)?,
             }
         }
         Ok(())

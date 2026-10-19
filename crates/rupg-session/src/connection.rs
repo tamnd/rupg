@@ -2769,6 +2769,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_drop_column_rows.test")));
     }
 
+    /// `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column, `STORAGE` and `COMPRESSION` in `CREATE TABLE`, the facts that an index column takes from its table column, and the errors for a type that cannot change, a system column, an index column and a relation of the wrong kind. `connection/alter_column_options.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_column_options() {
+        big_stack(|| script(include_str!("connection/alter_column_options.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {

@@ -531,6 +531,9 @@ fn attribute<'a>(
         Some(t) => (t.len, t.by_val, t.align, t.storage),
         None => (-1, false, b'd', b'x'),
     };
+    if column.storage != 0 {
+        storage = column.storage;
+    }
     if rel.kind == RelKind::Toast {
         storage = b'p';
     }
@@ -545,7 +548,7 @@ fn attribute<'a>(
         .set("attbyval", Value::Bool(by_val))
         .set("attalign", Value::Char(align))
         .set("attstorage", Value::Char(storage))
-        .set("attcompression", Value::Char(0))
+        .set("attcompression", Value::Char(column.compression))
         .set("attnotnull", Value::Bool(column.not_null))
         .set("atthasdef", Value::Bool(column.has_default))
         .set("atthasmissing", Value::Bool(false))
@@ -554,7 +557,12 @@ fn attribute<'a>(
         .set("attisdropped", Value::Bool(column.dropped))
         .set("attislocal", Value::Bool(true))
         .set("attinhcount", Value::Int2(0))
-        .set("attcollation", oid(column.collation));
+        .set("attcollation", oid(column.collation))
+        .set("attstattarget", column.stat_target.map_or(Value::Null, Value::Int2))
+        .set(
+            "attoptions",
+            if column.options.is_empty() { Value::Null } else { text_array(&column.options) },
+        );
     row
 }
 

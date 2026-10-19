@@ -1,6 +1,7 @@
 //! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c` and `ExecuteTruncate` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`, so [`is_definition`] does not list it. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
+mod alter_column;
 mod alter_type;
 mod comment;
 mod copy;
@@ -14,6 +15,7 @@ mod identity;
 mod index;
 mod lock;
 mod rangetype;
+mod reloptions;
 mod rename;
 mod rule;
 mod sequence;
@@ -376,6 +378,12 @@ impl Definer<'_, '_> {
     fn notice(&mut self, state: SqlState, message: String) {
         self.flush();
         self.messages.push(Message::Notice(Error::new(state, message)));
+    }
+
+    /// Adds a `WARNING` after the messages that came before it.
+    fn warning(&mut self, state: SqlState, message: String) {
+        self.flush();
+        self.messages.push(Message::Warning(Error::new(state, message)));
     }
 
     /// True when the role of the statement is a superuser.
