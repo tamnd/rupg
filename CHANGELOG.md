@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `INSERT` and `UPDATE` check the unique indexes and the primary keys of the table. A duplicate key gives `23505` with the key in the detail, and a key that a transaction in progress holds makes the write wait for the end of that transaction (#395).
 - `RETURNING` for `INSERT`, `UPDATE` and `DELETE`, with the names `old` and `new` and the option `RETURNING WITH (OLD AS o, NEW AS n)`. The list can read the columns of `FROM` and `USING` and can have subqueries, and the session sends the rows in the simple and the extended protocol (#396).
+- `INSERT`, `UPDATE` and `DELETE` check the foreign keys after the statement, with `MATCH SIMPLE`, `MATCH FULL`, `NO ACTION` and `RESTRICT`. The errors and their details are the same as in PostgreSQL (#397).
 
 ## 0.1.42 (2026-10-18)
 

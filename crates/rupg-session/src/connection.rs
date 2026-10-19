@@ -36,6 +36,7 @@ mod copy_from;
 mod cursor;
 mod databases;
 mod extended;
+mod foreign;
 mod prepare;
 
 pub(crate) use activity::Activity;
@@ -548,11 +549,17 @@ impl Connection {
         let mut view = View { xid: self.xid.get(), ..view.clone() };
         // The rows that `RETURNING` reads: the rows that the statement wrote.
         let mut written = Vec::new();
+        // The new and the old rows that the foreign keys check.
+        let foreign = !info.foreign.is_empty();
+        let (mut new_rows, mut old_rows) = (Vec::new(), Vec::new());
         let (tag, count) = match info.kind {
             WriteKind::Insert => {
                 let count = rows.len() as u64;
                 if info.returning.is_some() {
                     written.clone_from(&rows);
+                }
+                if foreign {
+                    new_rows.clone_from(&rows);
                 }
                 if info.unique.is_empty() {
                     heap.insert(info.table, &view, rows, &[], &[])?;
@@ -600,6 +607,15 @@ impl Connection {
                         conflict => kept = self.key_conflict(info, &view, conflict)?,
                     }
                 };
+                if foreign {
+                    let tids: Vec<u64> =
+                        applied.iter().filter_map(|&at| changes.get(at).map(|c| c.0)).collect();
+                    old_rows = heap.versions(view.database, info.table, &tids);
+                    new_rows = applied
+                        .iter()
+                        .filter_map(|&at| changes.get(at).and_then(|c| c.1.clone()))
+                        .collect();
+                }
                 if info.returning.is_some() {
                     let mut given: Vec<Option<Vec<Value>>> = given.into_iter().map(Some).collect();
                     written = applied
@@ -610,6 +626,9 @@ impl Connection {
                 (if update { CommandTag::Update } else { CommandTag::Delete }, count)
             }
         };
+        if foreign {
+            self.check_foreign(info, &view, &new_rows, &old_rows)?;
+        }
         let done = if info.returning.is_some() {
             // A subquery of `RETURNING` reads with the snapshot of the statement, which does not see the rows of the statement.
             let reader = self.reader().with_view(view.clone());
@@ -2887,6 +2906,12 @@ mod tests {
     #[test]
     fn returning() {
         big_stack(|| script(include_str!("connection/returning.test")));
+    }
+
+    /// The checks of the foreign keys: a new key that the referenced table does not have, nulls with `MATCH SIMPLE` and `MATCH FULL`, an update that keeps the key, the old key of a delete or an update of the referenced table with `NO ACTION` and `RESTRICT`, the order of the checks, a table that references itself, keys of more than one column, keys of two types, `RETURNING` and a transaction. `connection/foreign_key.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn foreign_key() {
+        big_stack(|| script(include_str!("connection/foreign_key.test")));
     }
 
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.

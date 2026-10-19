@@ -118,6 +118,7 @@ impl Analyzer<'_> {
         }
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
+        let foreign = self.foreign_keys(table, WriteKind::Update, &columns)?;
         query.write = Some(Write {
             kind: WriteKind::Update,
             table,
@@ -126,6 +127,7 @@ impl Analyzer<'_> {
             checks: names,
             unique,
             returning,
+            foreign,
         });
         Ok(query)
     }
@@ -137,6 +139,7 @@ impl Analyzer<'_> {
         }
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("a DELETE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Delete)?;
+        let foreign = self.foreign_keys(table, WriteKind::Delete, &columns)?;
         let from = self.target_from(rv, &s.usingClause)?;
         let filter = self.target_where(s.whereClause.as_ref())?;
         let (returning, carried) =
@@ -161,6 +164,7 @@ impl Analyzer<'_> {
                 checks: Vec::new(),
                 unique: Vec::new(),
                 returning,
+                foreign,
             }),
             ..Query::default()
         })

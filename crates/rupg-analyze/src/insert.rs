@@ -53,6 +53,35 @@ pub struct Write {
     pub unique: Vec<Unique>,
     /// The query of `RETURNING`, which reads one relation: the rows that the statement writes. Each row has the columns of the table, then the values that the query of the statement carries for it. For an `UPDATE` and a `DELETE` the carried values come after the columns and the conditions in each row of the query of the statement, before the ID of the version.
     pub returning: Option<Box<Query>>,
+    /// The foreign keys that the write checks after the statement, in the order of the names of their triggers.
+    pub foreign: Vec<Foreign>,
+}
+
+/// A foreign key that a write checks after the statement for each row that it wrote, as a trigger of `ri_triggers.c` checks it. The target table is the referencing table for `RI_FKey_check_ins` and `RI_FKey_check_upd`, and the referenced table for `RI_FKey_noaction_del`, `RI_FKey_noaction_upd`, `RI_FKey_restrict_del` and `RI_FKey_restrict_upd`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct Foreign {
+    /// The name of the constraint.
+    pub name: String,
+    /// True when the target table is the referencing table.
+    pub referencing: bool,
+    /// `RESTRICT`: the check of the referenced table does not look for another row with the old key, as `ri_Check_Pk_Match` does for `NO ACTION`.
+    pub restrict: bool,
+    /// `MATCH FULL`: a key with nulls and values is an error.
+    pub full: bool,
+    /// The OID of the other table.
+    pub other: u32,
+    /// The name of the other table, for the error.
+    pub other_name: String,
+    /// The key columns of the target table, from 0.
+    pub columns: Vec<usize>,
+    /// The names of the key columns of the target table, for the detail of the error.
+    pub names: Vec<String>,
+    /// The key columns of the other table, from 0.
+    pub other_columns: Vec<usize>,
+    /// The type of each column of the key of the referenced table. The checks compare the values of the referencing table as values of these types.
+    pub types: Vec<u32>,
+    /// The type of each column of the key of the referencing table.
+    pub referencing_types: Vec<u32>,
 }
 
 /// A unique index of the target table, which `_bt_check_unique` checks for each new version of a row.
@@ -144,6 +173,7 @@ impl Analyzer<'_> {
         }
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
+        let foreign = self.foreign_keys(table, WriteKind::Insert, &columns)?;
         // The list of `RETURNING` sees only the target table.
         let returning = match s.returningClause.as_deref() {
             None => None,
@@ -164,6 +194,7 @@ impl Analyzer<'_> {
             checks: names,
             unique,
             returning,
+            foreign,
         });
         Ok(query)
     }
@@ -213,16 +244,11 @@ impl Analyzer<'_> {
             }
         }
         if let Some(catalog) = self.env.catalog() {
-            let foreign = catalog.constraints_of(oid).any(|c| c.kind == ConKind::Foreign);
-            if foreign && kind != WriteKind::Delete {
-                return Err(not_yet(&format!("{what} a table with a foreign key")));
-            }
-            let referenced =
-                catalog.constraints().any(|c| c.foreign.as_ref().is_some_and(|f| f.table == oid));
-            if referenced && kind != WriteKind::Insert {
-                return Err(not_yet(&format!("{what} a table that a foreign key references")));
-            }
-            if rel.has_triggers || catalog.triggers().any(|t| t.relation == oid) {
+            // Only the internal triggers of the foreign keys exist, and the write checks the foreign keys itself.
+            let user = |t: &rupg_catalog::Trigger| {
+                t.relation == oid && rupg_catalog::foreign_key_function(t.function).is_none()
+            };
+            if catalog.triggers().any(user) {
                 return Err(not_yet(&format!("{what} a table with triggers")));
             }
             if catalog.rules().any(|r| r.relation == oid) {
@@ -240,6 +266,101 @@ impl Analyzer<'_> {
             })
             .collect();
         Ok((oid, rel.name.clone(), columns))
+    }
+
+    /// The foreign keys that a write of the table checks after the statement, in the order of the names of their triggers, as `AfterTriggerSaveEvent` queues the triggers for each row. An action of `CASCADE`, `SET NULL` or `SET DEFAULT` and a constraint that is `INITIALLY DEFERRED` are not supported yet.
+    pub(crate) fn foreign_keys(
+        &self,
+        table: u32,
+        kind: WriteKind,
+        columns: &[Column],
+    ) -> Result<Vec<Foreign>> {
+        let Some(catalog) = self.env.catalog() else {
+            return Ok(Vec::new());
+        };
+        let mut triggers: Vec<_> = catalog
+            .triggers()
+            .filter(|t| t.relation == table)
+            .filter_map(|t| {
+                let function = rupg_catalog::foreign_key_function(t.function)?;
+                let event = match function {
+                    0 => WriteKind::Insert,
+                    f if f % 2 == 1 => WriteKind::Update,
+                    _ => WriteKind::Delete,
+                };
+                (event == kind).then_some((t, function))
+            })
+            .collect();
+        triggers.sort_by(|a, b| a.0.name.cmp(&b.0.name));
+        let mut list = Vec::with_capacity(triggers.len());
+        for (trigger, function) in triggers {
+            let constraint = catalog.constraint(trigger.constraint);
+            let Some((constraint, foreign)) =
+                constraint.and_then(|c| c.foreign.as_ref().map(|f| (c, f)))
+            else {
+                return Err(Error::internal("a trigger of a foreign key with no foreign key"));
+            };
+            if trigger.deferred {
+                return Err(not_yet(
+                    "a write to a table with a foreign key that is INITIALLY DEFERRED",
+                ));
+            }
+            let restrict = match function {
+                0 | 1 | 10 | 11 => false,
+                4 | 5 => true,
+                _ => {
+                    let event = if kind == WriteKind::Delete { "DELETE" } else { "UPDATE" };
+                    return Err(not_yet(&format!(
+                        "{} a table that a foreign key references with ON {event} CASCADE, SET NULL or SET DEFAULT",
+                        kind.name()
+                    )));
+                }
+            };
+            let referencing = function < 2;
+            let (other, mine, theirs) = if referencing {
+                (foreign.table, &constraint.keys, &foreign.keys)
+            } else {
+                (constraint.relation, &foreign.keys, &constraint.keys)
+            };
+            let Some(other_rel) = catalog.relation(other) else {
+                return Err(Error::internal("a foreign key of a table that does not exist"));
+            };
+            let place = |attnum: i16| usize::try_from(attnum - 1).ok();
+            let mut check = Foreign {
+                name: constraint.name.clone(),
+                referencing,
+                restrict,
+                full: foreign.match_type == 'f',
+                other,
+                other_name: other_rel.name.clone(),
+                columns: Vec::with_capacity(mine.len()),
+                names: Vec::with_capacity(mine.len()),
+                other_columns: Vec::with_capacity(mine.len()),
+                types: Vec::with_capacity(mine.len()),
+                referencing_types: Vec::with_capacity(mine.len()),
+            };
+            for (&attnum, &other_attnum) in mine.iter().zip(theirs) {
+                let column = place(attnum).and_then(|at| columns.get(at).map(|c| (at, c)));
+                let other_column =
+                    place(other_attnum).and_then(|at| other_rel.columns.get(at).map(|c| (at, c)));
+                let (Some((at, column)), Some((other_at, other_column))) = (column, other_column)
+                else {
+                    return Err(Error::internal("a foreign key with a key that is not a column"));
+                };
+                check.columns.push(at);
+                check.names.push(column.name.clone());
+                check.other_columns.push(other_at);
+                let (key, referencing_key) = if referencing {
+                    (other_column.ty, column.ty)
+                } else {
+                    (column.ty, other_column.ty)
+                };
+                check.types.push(key);
+                check.referencing_types.push(referencing_key);
+            }
+            list.push(check);
+        }
+        Ok(list)
     }
 
     /// The unique indexes of a table in the order of their OIDs. A unique index with an expression, a predicate or a deferrable constraint is not supported yet.
