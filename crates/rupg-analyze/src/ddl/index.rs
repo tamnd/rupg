@@ -7,6 +7,7 @@ use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{IndexElem, IndexStmt, Node, SortByDir, SortByNulls};
 use rupg_types::oid;
 
+use super::reloptions;
 use super::{Definer, Found, is_mutable, not_yet, references, relkind_detail};
 use crate::agg::Kind;
 use crate::coerce::AtOpt;
@@ -194,9 +195,7 @@ impl Definer<'_, '_> {
                 ));
             }
         }
-        if !stmt.options.is_empty() {
-            return Err(not_yet("WITH options", None));
-        }
+        let options = self.create_index_options(method, &stmt.options)?;
         if stmt.tableSpace.is_some() {
             return Err(not_yet("TABLESPACE", None));
         }
@@ -260,11 +259,7 @@ impl Definer<'_, '_> {
                 .iter()
                 .filter(|c| !c.dropped)
                 .map(|c| typavgwidth(types::row(c.ty).map_or(-1, |t| t.len), c.ty, c.typmod));
-            let fillfactor = rel
-                .options
-                .iter()
-                .find_map(|o| o.strip_prefix("fillfactor=")?.parse().ok())
-                .unwrap_or(100);
+            let fillfactor = reloptions::int_option(&rel.options, "fillfactor").unwrap_or(100);
             empty_index_pages(method, new_table_tuples(widths, fillfactor))
         });
         let new = NewIndex {
@@ -283,7 +278,10 @@ impl Definer<'_, '_> {
             refs,
             pages,
         };
-        self.catalog.create_index(new)?;
+        let (index, _) = self.catalog.create_index(new)?;
+        if !options.is_empty() {
+            self.catalog.set_options(index, options)?;
+        }
         // `index_build` reads the rows of the table with a sequential scan.
         if self.catalog.relation(table).is_some_and(|r| r.kind == RelKind::Table) {
             self.scans.push(table);

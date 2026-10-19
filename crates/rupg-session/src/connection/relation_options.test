@@ -1,0 +1,327 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text) WITH (fillfactor = 70, autovacuum_enabled = off, toast.autovacuum_enabled = false, toast.vacuum_truncate)
+CREATE TABLE
+> SELECT c.reloptions, t.reloptions AS toast FROM pg_class c JOIN pg_class t ON t.oid = c.reltoastrelid WHERE c.relname = 't'
+fields reloptions@pg_class.33:1009:-1:-1,toast@pg_class.33:1009:-1:-1
+row {fillfactor=70,autovacuum_enabled=off},{autovacuum_enabled=false,vacuum_truncate=true}
+SELECT 1
+> CREATE TABLE t2 (a int) WITH (fillfactor = 5)
+ERROR 22023 value 5 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE TABLE t3 (a int) WITH (toast.fillfactor = 50)
+ERROR 22023 unrecognized parameter "fillfactor"
+> CREATE TABLE t4 (a int) WITH (toast.bogus = 1)
+ERROR 22023 unrecognized parameter "bogus"
+> CREATE TABLE t5 (a int) WITH (bogus.x = 1)
+ERROR 22023 unrecognized parameter namespace "bogus"
+> CREATE TABLE t6 (a int) WITH (oids = false)
+CREATE TABLE
+> SELECT reloptions FROM pg_class WHERE relname = 't6'
+fields reloptions@pg_class.33:1009:-1:-1
+row NULL
+SELECT 1
+> CREATE TABLE t7 (a int) WITH (oids = true)
+ERROR 0A000 tables declared WITH OIDS are not supported
+> CREATE TABLE t8 (a int) WITH (OIDS)
+ERROR 0A000 tables declared WITH OIDS are not supported
+> CREATE TABLE t9 (a int) WITH (toast.autovacuum_enabled = false)
+CREATE TABLE
+> SELECT reloptions, reltoastrelid FROM pg_class WHERE relname = 't9'
+fields reloptions@pg_class.33:1009:-1:-1,reltoastrelid@pg_class.14:26:4:-1
+row NULL,0
+SELECT 1
+> CREATE TABLE t10 (a int) WITH (fillfactor = 50, fillfactor = 60)
+ERROR 22023 parameter "fillfactor" specified more than once
+> CREATE TABLE t11 (a nosuchtype) WITH (fillfactor = 5)
+ERROR 42704 type "nosuchtype" does not exist at 21
+> CREATE TABLE t12 (a int) WITH (vacuum_index_cleanup = TRUE, parallel_workers = '0x10', fillfactor = 7e1, autovacuum_vacuum_scale_factor = 0.5)
+CREATE TABLE
+> SELECT reloptions FROM pg_class WHERE relname = 't12'
+fields reloptions@pg_class.33:1009:-1:-1
+row {vacuum_index_cleanup=true,parallel_workers=0x10,fillfactor=7e1,autovacuum_vacuum_scale_factor=0.5}
+SELECT 1
+> CREATE TABLE t13 (a int) WITH (fillfactor = 70.4)
+CREATE TABLE
+> SELECT reloptions FROM pg_class WHERE relname = 't13'
+fields reloptions@pg_class.33:1009:-1:-1
+row {fillfactor=70.4}
+SELECT 1
+> CREATE TABLE t14 (a int) WITH (fillfactor = ' 70 ')
+CREATE TABLE
+> CREATE TABLE t15 (a int) WITH (autovacuum_enabled = ' on')
+ERROR 22023 invalid value for boolean option "autovacuum_enabled":  on
+> CREATE TABLE t16 (a int) WITH (fillfactor = 2147483648)
+ERROR 22023 invalid value for integer option "fillfactor": 2147483648
+> CREATE TABLE x1 (a int) WITH (fillfactor = 5, oids = true)
+ERROR 0A000 tables declared WITH OIDS are not supported
+> CREATE TABLE x3 (a int) WITH (oids = bogus)
+ERROR 42601 oids requires a Boolean value
+> CREATE TABLE x4 (a int) WITH (toast.oids = true)
+ERROR 22023 unrecognized parameter "oids"
+> CREATE TABLE x6 (a int, a int) WITH (fillfactor = 5)
+ERROR 22023 value 5 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE TABLE x7 (a int, b text) WITH (toast.fillfactor = 5, fillfactor = 5)
+ERROR 22023 value 5 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE TABLE x8 (a int PRIMARY KEY WITH (fillfactor = 5))
+ERROR 22023 value 5 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE TABLE x10 (a int) WITH (fillfactor = '010')
+ERROR 22023 value 010 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE TABLE x11 (a int) WITH (fillfactor = '1e10')
+ERROR 22023 invalid value for integer option "fillfactor": 1e10
+> CREATE TABLE x12 (a int) WITH (fillfactor = '-0x10')
+ERROR 22023 value -0x10 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE TABLE x13 (a int) WITH (fillfactor = '')
+ERROR 22023 invalid value for integer option "fillfactor": 
+> CREATE TABLE x14 (a int) WITH (fillfactor)
+ERROR 22023 invalid value for integer option "fillfactor": true
+> CREATE TABLE x15 (a int) WITH (autovacuum_vacuum_scale_factor = 1e400)
+ERROR 22023 invalid value for floating point option "autovacuum_vacuum_scale_factor": 1e400
+> CREATE TABLE x16 (a int) WITH (vacuum_index_cleanup = 'ON', autovacuum_enabled = 'YES')
+CREATE TABLE
+> SELECT reloptions FROM pg_class WHERE relname = 'x16'
+fields reloptions@pg_class.33:1009:-1:-1
+row {vacuum_index_cleanup=ON,autovacuum_enabled=YES}
+SELECT 1
+> CREATE TABLE x17 (a int) WITH (vacuum_index_cleanup = 'maybe')
+ERROR 22023 invalid value for enum option "vacuum_index_cleanup": maybe
+DETAIL Valid values are "on", "off", and "auto".
+> CREATE TABLE x18 (a int) WITH (autovacuum_vacuum_threshold = -1)
+ERROR 22023 value -1 out of bounds for option "autovacuum_vacuum_threshold"
+DETAIL Valid values are between "0" and "2147483647".
+> CREATE TABLE x19 (a int) WITH (autovacuum_vacuum_scale_factor = 200)
+ERROR 22023 value 200 out of bounds for option "autovacuum_vacuum_scale_factor"
+DETAIL Valid values are between "0.000000" and "100.000000".
+> CREATE TABLE x20 (a int) WITH (fillfactor = 70.5, parallel_workers = 1.5)
+CREATE TABLE
+> CREATE TABLE x21 (a int) WITH (fillfactor = '70abc')
+ERROR 22023 invalid value for integer option "fillfactor": 70abc
+> CREATE TABLE x22 (a int) WITH (fillfactor = '10.6e1')
+ERROR 22023 value 10.6e1 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE TABLE x23 (a int) WITH (user_catalog_table = true, toast_tuple_target = 100)
+ERROR 22023 value 100 out of bounds for option "toast_tuple_target"
+DETAIL Valid values are between "128" and "8160".
+> CREATE TABLE x24 (a int) WITH (vacuum_max_eager_freeze_failure_rate = 2)
+ERROR 22023 value 2 out of bounds for option "vacuum_max_eager_freeze_failure_rate"
+DETAIL Valid values are between "0.000000" and "1.000000".
+> CREATE TABLE x25 (a int) WITH (autovacuum_freeze_max_age = 5)
+ERROR 22023 value 5 out of bounds for option "autovacuum_freeze_max_age"
+DETAIL Valid values are between "100000" and "2000000000".
+> CREATE TABLE x26 (a int) WITH ("Fillfactor" = 50)
+ERROR 22023 unrecognized parameter "Fillfactor"
+> CREATE TABLE x27 (a int) WITH (FillFactor = 50)
+CREATE TABLE
+> SELECT reloptions FROM pg_class WHERE relname = 'x27'
+fields reloptions@pg_class.33:1009:-1:-1
+row {fillfactor=50}
+SELECT 1
+> CREATE TABLE x28 (a int) WITH ("a=b" = 1)
+ERROR 22023 invalid option name "a=b": must not contain "="
+> CREATE TABLE x29 (a int) WITH (toast.vacuum_truncate = 'x')
+ERROR 22023 invalid value for boolean option "vacuum_truncate": x
+> ALTER TABLE t SET (fillfactor = 80, parallel_workers = 2)
+ALTER TABLE
+> ALTER TABLE t RESET (autovacuum_enabled, toast.autovacuum_enabled, nosuch)
+ALTER TABLE
+> SELECT c.reloptions, t.reloptions AS toast FROM pg_class c JOIN pg_class t ON t.oid = c.reltoastrelid WHERE c.relname = 't'
+fields reloptions@pg_class.33:1009:-1:-1,toast@pg_class.33:1009:-1:-1
+row {fillfactor=80,parallel_workers=2},{vacuum_truncate=true}
+SELECT 1
+> ALTER TABLE t SET (toast.fillfactor = 1)
+ERROR 22023 unrecognized parameter "fillfactor"
+> ALTER TABLE t SET (toast.parallel_workers = 1)
+ERROR 22023 unrecognized parameter "parallel_workers"
+> ALTER TABLE t RESET (fillfactor = 1)
+ERROR 42601 RESET must not include values for parameters
+> ALTER TABLE t SET (oids = false)
+ERROR 22023 unrecognized parameter "oids"
+> ALTER TABLE t SET WITHOUT OIDS
+ALTER TABLE
+> ALTER TABLE t9 SET (toast.bogus = 1)
+ALTER TABLE
+> ALTER TABLE t RESET (toast.vacuum_truncate), SET (fillfactor = 90)
+ALTER TABLE
+> SELECT c.reloptions, t.reloptions AS toast FROM pg_class c JOIN pg_class t ON t.oid = c.reltoastrelid WHERE c.relname = 't'
+fields reloptions@pg_class.33:1009:-1:-1,toast@pg_class.33:1009:-1:-1
+row {parallel_workers=2,fillfactor=90},NULL
+SELECT 1
+> ALTER TABLE t SET (fillfactor = 10), SET (fillfactor = 20)
+ALTER TABLE
+> SELECT reloptions FROM pg_class WHERE relname = 't'
+fields reloptions@pg_class.33:1009:-1:-1
+row {parallel_workers=2,fillfactor=20}
+SELECT 1
+> ALTER TABLE t SET (fillfactor = 5)
+ERROR 22023 value 5 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> ALTER TABLE t SET (fillfactor = 50, fillfactor = 60)
+ERROR 22023 parameter "fillfactor" specified more than once
+> ALTER TABLE t SET (fillfactor = 50), SET (fillfactor = 5)
+ERROR 22023 value 5 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> ALTER TABLE t SET (toast.autovacuum_enabled = off), SET (toast.x = 1)
+ERROR 22023 unrecognized parameter "x"
+> SELECT c.reloptions, t.reloptions AS toast FROM pg_class c JOIN pg_class t ON t.oid = c.reltoastrelid WHERE c.relname = 't'
+fields reloptions@pg_class.33:1009:-1:-1,toast@pg_class.33:1009:-1:-1
+row {parallel_workers=2,fillfactor=20},NULL
+SELECT 1
+> ALTER TABLE t SET (bogus.x = 1)
+ERROR 22023 unrecognized parameter namespace "bogus"
+> ALTER TABLE t RESET (bogus.x)
+ALTER TABLE
+> ALTER TABLE IF EXISTS nosuch SET (fillfactor = 50)
+NOTICE 00000 relation "nosuch" does not exist, skipping
+ALTER TABLE
+> ALTER TABLE t SET (toast_tuple_target = 200, user_catalog_table)
+ALTER TABLE
+> ALTER TABLE t OWNER TO CURRENT_USER, SET (parallel_workers = 4)
+ALTER TABLE
+> SELECT reloptions FROM pg_class WHERE relname = 't'
+fields reloptions@pg_class.33:1009:-1:-1
+row {fillfactor=20,toast_tuple_target=200,user_catalog_table=true,parallel_workers=4}
+SELECT 1
+> ALTER TABLE t ALTER COLUMN a SET (fillfactor = 50)
+ERROR 22023 unrecognized parameter "fillfactor"
+> CREATE INDEX t_a ON t (a) WITH (fillfactor = 50, deduplicate_items = off)
+CREATE INDEX
+> SELECT reloptions FROM pg_class WHERE relname = 't_a'
+fields reloptions@pg_class.33:1009:-1:-1
+row {fillfactor=50,deduplicate_items=off}
+SELECT 1
+> CREATE INDEX t_h ON t USING hash (a) WITH (fillfactor = 60)
+CREATE INDEX
+> SELECT reloptions FROM pg_class WHERE relname = 't_h'
+fields reloptions@pg_class.33:1009:-1:-1
+row {fillfactor=60}
+SELECT 1
+> CREATE INDEX t_h2 ON t USING hash (a) WITH (deduplicate_items = off)
+ERROR 22023 unrecognized parameter "deduplicate_items"
+> CREATE INDEX t_b ON t (a) WITH (fillfactor = 5)
+ERROR 22023 value 5 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE INDEX t_c ON t (a) WITH (toast.fillfactor = 50)
+ERROR 22023 unrecognized parameter namespace "toast"
+> CREATE INDEX t_d ON t (a) WITH (bogus.fillfactor = 50)
+ERROR 22023 unrecognized parameter namespace "bogus"
+> CREATE INDEX i1 ON t (nosuch) WITH (fillfactor = 5)
+ERROR 22023 value 5 out of bounds for option "fillfactor"
+DETAIL Valid values are between "10" and "100".
+> CREATE INDEX i2 ON t (a) WITH (fillfactor = 50, fillfactor = 60)
+ERROR 22023 parameter "fillfactor" specified more than once
+> CREATE INDEX i3 ON t (a) WITH (deduplicate_items = 'maybe')
+ERROR 22023 invalid value for boolean option "deduplicate_items": maybe
+> CREATE INDEX i4 ON t (a) WITH (oids = false)
+ERROR 22023 unrecognized parameter "oids"
+> CREATE UNIQUE INDEX i5 ON t USING hash (a) WITH (fillfactor = 5)
+ERROR 0A000 access method "hash" does not support unique indexes
+> ALTER INDEX t_a SET (fillfactor = 90)
+ALTER INDEX
+> ALTER INDEX t_a RESET (deduplicate_items)
+ALTER INDEX
+> SELECT reloptions FROM pg_class WHERE relname = 't_a'
+fields reloptions@pg_class.33:1009:-1:-1
+row {fillfactor=90}
+SELECT 1
+> ALTER INDEX t_a SET (autovacuum_enabled = off)
+ERROR 22023 unrecognized parameter "autovacuum_enabled"
+> ALTER INDEX t_a SET (toast.autovacuum_enabled = off)
+ALTER INDEX
+> ALTER INDEX t_h SET (deduplicate_items = on)
+ERROR 22023 unrecognized parameter "deduplicate_items"
+> ALTER TABLE t_h SET (fillfactor = 70)
+ALTER TABLE
+> SELECT reloptions FROM pg_class WHERE relname = 't_h'
+fields reloptions@pg_class.33:1009:-1:-1
+row {fillfactor=70}
+SELECT 1
+> ALTER INDEX t SET (fillfactor = 70)
+ERROR 42809 "t" is not an index
+> ALTER VIEW t SET (fillfactor = 70)
+ERROR 42809 "t" is not a view
+> ALTER TABLE t ADD CONSTRAINT t_u UNIQUE (a) WITH (fillfactor = 40)
+ALTER TABLE
+> ALTER TABLE t ADD CONSTRAINT t_pk PRIMARY KEY (a) WITH (fillfactor = 30)
+ALTER TABLE
+> SELECT relname, reloptions FROM pg_class WHERE relname IN ('t_u', 't_pk') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,reloptions@pg_class.33:1009:-1:-1
+row t_pk,{fillfactor=30}
+row t_u,{fillfactor=40}
+SELECT 2
+> CREATE TABLE u (a int PRIMARY KEY WITH (fillfactor = 20), b int UNIQUE WITH (deduplicate_items = on))
+CREATE TABLE
+> SELECT relname, reloptions FROM pg_class WHERE relname LIKE 'u\_%' ORDER BY 1
+fields relname@pg_class.2:19:64:-1,reloptions@pg_class.33:1009:-1:-1
+row u_b_key,{deduplicate_items=on}
+row u_pkey,{fillfactor=20}
+SELECT 2
+> CREATE VIEW v AS SELECT a FROM t
+CREATE VIEW
+> ALTER VIEW v SET (security_barrier = true, security_invoker)
+ALTER VIEW
+> SELECT reloptions FROM pg_class WHERE relname = 'v'
+fields reloptions@pg_class.33:1009:-1:-1
+row {security_barrier=true,security_invoker=true}
+SELECT 1
+> ALTER VIEW v SET (fillfactor = 5)
+ERROR 22023 unrecognized parameter "fillfactor"
+> ALTER VIEW v SET (toast.fillfactor = 5)
+ALTER VIEW
+> ALTER VIEW v SET (bogus.fillfactor = 5)
+ERROR 22023 unrecognized parameter namespace "bogus"
+> ALTER VIEW v RESET (security_barrier)
+ALTER VIEW
+> ALTER TABLE v SET (security_barrier)
+ALTER TABLE
+> ALTER VIEW v SET (security_barrier = 'maybe')
+ERROR 22023 invalid value for boolean option "security_barrier": maybe
+> SELECT reloptions FROM pg_class WHERE relname = 'v'
+fields reloptions@pg_class.33:1009:-1:-1
+row {security_invoker=true,security_barrier=true}
+SELECT 1
+> ALTER VIEW v SET (check_option = bogus)
+ERROR 22023 invalid value for enum option "check_option": bogus
+DETAIL Valid values are "local" and "cascaded".
+> CREATE VIEW v3 WITH (toast.x = 1) AS SELECT 1 AS x
+CREATE VIEW
+> CREATE VIEW v4 WITH (bogus.x = 1) AS SELECT 1 AS x
+ERROR 22023 unrecognized parameter namespace "bogus"
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> ALTER SEQUENCE s SET (fillfactor = 5)
+ERROR 42809 ALTER action SET cannot be performed on relation "s"
+DETAIL This operation is not supported for sequences.
+> ALTER TABLE s SET (fillfactor = 50)
+ERROR 42809 ALTER action SET cannot be performed on relation "s"
+DETAIL This operation is not supported for sequences.
+> ALTER TABLE s SET WITHOUT OIDS
+ERROR 42809 ALTER action SET WITHOUT OIDS cannot be performed on relation "s"
+DETAIL This operation is not supported for sequences.
+> CREATE TYPE ct AS (x int)
+CREATE TYPE
+> ALTER TABLE ct SET (fillfactor = 50)
+ERROR 42809 "ct" is a composite type
+HINT Use ALTER TYPE instead.
+> SELECT relname, reloptions FROM pg_class WHERE relnamespace = 'public'::regnamespace AND reloptions IS NOT NULL ORDER BY 1
+fields relname@pg_class.2:19:64:-1,reloptions@pg_class.33:1009:-1:-1
+row t,{fillfactor=20,toast_tuple_target=200,user_catalog_table=true,parallel_workers=4}
+row t12,{vacuum_index_cleanup=true,parallel_workers=0x10,fillfactor=7e1,autovacuum_vacuum_scale_factor=0.5}
+row t13,{fillfactor=70.4}
+row t14,{"fillfactor= 70 "}
+row t_a,{fillfactor=90}
+row t_h,{fillfactor=70}
+row t_pk,{fillfactor=30}
+row t_u,{fillfactor=40}
+row u_b_key,{deduplicate_items=on}
+row u_pkey,{fillfactor=20}
+row v,{security_invoker=true,security_barrier=true}
+row x16,{vacuum_index_cleanup=ON,autovacuum_enabled=YES}
+row x20,{fillfactor=70.5,parallel_workers=1.5}
+row x27,{fillfactor=50}
+SELECT 14
