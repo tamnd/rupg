@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The actions `CASCADE`, `SET NULL` and `SET DEFAULT` of the foreign keys for `DELETE` and `UPDATE` of the referenced table. Each action runs the same statement as PostgreSQL on the referencing table, and the triggers of its rows fire in the same order as in PostgreSQL (#400).
+
 ## 0.1.43 (2026-10-19)
 
 A patch release on the way to M3. Writes now check the unique indexes, the primary keys and the foreign keys, and `RETURNING` gives the rows that a write changed.

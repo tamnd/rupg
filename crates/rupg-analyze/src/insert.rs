@@ -4,6 +4,7 @@
 
 use rupg_catalog::{ConKind, RelKind};
 use rupg_common::{Error, Result, SqlState};
+use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{InsertStmt, Node, SelectStmt};
 use rupg_types::{Value, oid};
 
@@ -57,15 +58,32 @@ pub struct Write {
     pub foreign: Vec<Foreign>,
 }
 
-/// A foreign key that a write checks after the statement for each row that it wrote, as a trigger of `ri_triggers.c` checks it. The target table is the referencing table for `RI_FKey_check_ins` and `RI_FKey_check_upd`, and the referenced table for `RI_FKey_noaction_del`, `RI_FKey_noaction_upd`, `RI_FKey_restrict_del` and `RI_FKey_restrict_upd`.
+/// What a trigger of a foreign key on the referenced table does for an old key, `confdeltype` and `confupdtype`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Action {
+    /// `NO ACTION`: an error if a row of the referencing table has the old key and no other row of the referenced table has it.
+    NoAction,
+    /// `RESTRICT`: an error if a row of the referencing table has the old key. The check does not look for another row with the old key, as `ri_Check_Pk_Match` does for `NO ACTION`.
+    Restrict,
+    /// `CASCADE`: the rows of the referencing table with the old key go, or get the new key.
+    Cascade,
+    /// `SET NULL`: the rows of the referencing table with the old key get nulls.
+    SetNull,
+    /// `SET DEFAULT`: the rows of the referencing table with the old key get the defaults of the columns.
+    SetDefault,
+}
+
+/// A foreign key that a write checks after the statement for each row that it wrote, as a trigger of `ri_triggers.c` checks it. The target table is the referencing table for `RI_FKey_check_ins` and `RI_FKey_check_upd`, and the referenced table for the triggers of the actions, such as `RI_FKey_noaction_del` and `RI_FKey_cascade_upd`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Foreign {
     /// The name of the constraint.
     pub name: String,
     /// True when the target table is the referencing table.
     pub referencing: bool,
-    /// `RESTRICT`: the check of the referenced table does not look for another row with the old key, as `ri_Check_Pk_Match` does for `NO ACTION`.
-    pub restrict: bool,
+    /// The action for an old key of the referenced table. It is [`Action::NoAction`] for the referencing table.
+    pub action: Action,
+    /// The statement of `CASCADE`, `SET NULL` or `SET DEFAULT` on the referencing table, as `ri_PlanCheck` makes it, or an empty text. Its parameters are the old key, or for `ON UPDATE CASCADE` the new key and then the old key, with the types of [`Foreign::types`].
+    pub query: String,
     /// `MATCH FULL`: a key with nulls and values is an error.
     pub full: bool,
     /// The OID of the other table.
@@ -97,6 +115,80 @@ pub struct Unique {
     pub shown: String,
     /// `indnullsnotdistinct`: a null is equal to a null, so two keys with nulls can conflict.
     pub nulls_not_distinct: bool,
+}
+
+/// `quoteOneName` of `ri_triggers.c`: a name in double quotes, with each double quote doubled.
+fn quote_one(name: &str) -> String {
+    format!("\"{}\"", name.replace('"', "\"\""))
+}
+
+/// The statement of an action of a foreign key on the referencing table `table`, as `RI_FKey_cascade_del`, `RI_FKey_cascade_upd` and `ri_set` make it. `names` are the key columns of the referencing table.
+fn action_query(
+    action: Action,
+    kind: WriteKind,
+    table: &str,
+    names: &[&str],
+    foreign: &Foreign,
+) -> String {
+    let columns: Vec<String> = names.iter().map(|name| quote_one(name)).collect();
+    let mut query = match (action, kind) {
+        (Action::Cascade, WriteKind::Delete) => format!("DELETE FROM ONLY {table}"),
+        (Action::Cascade, _) => {
+            let set: Vec<String> =
+                columns.iter().enumerate().map(|(at, c)| format!(" {c} = ${}", at + 1)).collect();
+            format!("UPDATE ONLY {table} SET{}", set.join(","))
+        }
+        _ => {
+            let value = if action == Action::SetNull { "NULL" } else { "DEFAULT" };
+            let set: Vec<String> = columns.iter().map(|c| format!(" {c} = {value}")).collect();
+            format!("UPDATE ONLY {table} SET{}", set.join(","))
+        }
+    };
+    // The parameters of the old key come after the new key for `ON UPDATE CASCADE`.
+    let first =
+        if action == Action::Cascade && kind == WriteKind::Update { names.len() } else { 0 };
+    for (at, column) in columns.iter().enumerate() {
+        let separator = if at == 0 { "WHERE" } else { "AND" };
+        let (pk, fk) = (foreign.types[at], foreign.referencing_types[at]);
+        let (left, right) = operator_types(pk, fk);
+        query.push_str(&format!(" {separator} ${}", first + at + 1));
+        if left != pk {
+            query.push_str(&cast_to(left));
+        }
+        query.push_str(&format!(" OPERATOR(pg_catalog.=) {column}"));
+        if right != fk {
+            query.push_str(&cast_to(right));
+        }
+    }
+    query
+}
+
+/// The input types of the equality operator `pf_eq_oprs` of a key column of the referenced type `pk` and the referencing type `fk`. `ATAddForeignKeyConstraint` takes the operator of the operator class of the index of the referenced key for the two types, or for the type of the class when the family has no operator for the type of the referencing column.
+fn operator_types(pk: u32, fk: u32) -> (u32, u32) {
+    let class = |ty: u32| match types::base(ty) {
+        oid::VARCHAR => oid::TEXT,
+        ty => ty,
+    };
+    let family = |ty: u32| match ty {
+        oid::INT2 | oid::INT4 | oid::INT8 => 1,
+        oid::FLOAT4 | oid::FLOAT8 => 2,
+        oid::DATE | oid::TIMESTAMP | oid::TIMESTAMPTZ => 3,
+        oid::TEXT | oid::NAME => 4,
+        _ => 0,
+    };
+    let (left, other) = (class(pk), class(fk));
+    let right = if other == left || (family(left) != 0 && family(left) == family(other)) {
+        other
+    } else {
+        left
+    };
+    (left, right)
+}
+
+/// `add_cast_to` of `ruleutils.c`: the cast to a type of `pg_catalog`, with the names as `quote_identifier` gives them.
+fn cast_to(ty: u32) -> String {
+    let name = builtin::type_by_oid(ty).map_or("", |row| row.name);
+    format!("::pg_catalog.{}", crate::ddl::quote_identifier(name))
 }
 
 /// An item of a row of `VALUES` or of `UPDATE ... SET`: an expression, or `DEFAULT` at its place.
@@ -268,7 +360,7 @@ impl Analyzer<'_> {
         Ok((oid, rel.name.clone(), columns))
     }
 
-    /// The foreign keys that a write of the table checks after the statement, in the order of the names of their triggers, as `AfterTriggerSaveEvent` queues the triggers for each row. An action of `CASCADE`, `SET NULL` or `SET DEFAULT` and a constraint that is `INITIALLY DEFERRED` are not supported yet.
+    /// The foreign keys that a write of the table checks after the statement, in the order of the names of their triggers, as `AfterTriggerSaveEvent` queues the triggers for each row. A constraint that is `INITIALLY DEFERRED` is not supported yet.
     pub(crate) fn foreign_keys(
         &self,
         table: u32,
@@ -305,16 +397,12 @@ impl Analyzer<'_> {
                     "a write to a table with a foreign key that is INITIALLY DEFERRED",
                 ));
             }
-            let restrict = match function {
-                0 | 1 | 10 | 11 => false,
-                4 | 5 => true,
-                _ => {
-                    let event = if kind == WriteKind::Delete { "DELETE" } else { "UPDATE" };
-                    return Err(not_yet(&format!(
-                        "{} a table that a foreign key references with ON {event} CASCADE, SET NULL or SET DEFAULT",
-                        kind.name()
-                    )));
-                }
+            let action = match function {
+                2 | 3 => Action::Cascade,
+                4 | 5 => Action::Restrict,
+                6 | 7 => Action::SetNull,
+                8 | 9 => Action::SetDefault,
+                _ => Action::NoAction,
             };
             let referencing = function < 2;
             let (other, mine, theirs) = if referencing {
@@ -329,7 +417,8 @@ impl Analyzer<'_> {
             let mut check = Foreign {
                 name: constraint.name.clone(),
                 referencing,
-                restrict,
+                action,
+                query: String::new(),
                 full: foreign.match_type == 'f',
                 other,
                 other_name: other_rel.name.clone(),
@@ -357,6 +446,20 @@ impl Analyzer<'_> {
                 };
                 check.types.push(key);
                 check.referencing_types.push(referencing_key);
+            }
+            if matches!(action, Action::Cascade | Action::SetNull | Action::SetDefault) {
+                let names: Vec<&str> = check
+                    .other_columns
+                    .iter()
+                    .map(|&at| other_rel.columns[at].name.as_str())
+                    .collect();
+                let schema = match catalog.schema(other_rel.namespace) {
+                    Some(schema) => schema.name.clone(),
+                    None => builtin::named_by_oid(Named::Namespace, other_rel.namespace)
+                        .map_or_else(String::new, |n| n.name.to_string()),
+                };
+                let table = format!("{}.{}", quote_one(&schema), quote_one(&other_rel.name));
+                check.query = action_query(action, kind, &table, &names, &check);
             }
             list.push(check);
         }

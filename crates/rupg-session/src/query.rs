@@ -940,7 +940,7 @@ pub(crate) fn plan(node: &Node, reader: &Reader<'_>, params: &Params) -> Result<
 }
 
 /// `_SPI_error_callback` for an error of the plan of the query of a function: an error with a position loses it, because the position is in the text of the query and not in the text of the client, and another error gets the text of the query in its context.
-fn inner_error(error: Error, text: &str) -> Error {
+pub(crate) fn inner_error(error: Error, text: &str) -> Error {
     if error.position().is_some() {
         error.with_position(None)
     } else {

@@ -1,0 +1,333 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (id int PRIMARY KEY, name text)
+CREATE TABLE
+> INSERT INTO p VALUES (1, 'one'), (2, 'two'), (3, 'three'), (4, 'four')
+INSERT 0 4
+> CREATE TABLE cc (id int, pid int REFERENCES p ON DELETE CASCADE ON UPDATE CASCADE)
+CREATE TABLE
+> INSERT INTO cc VALUES (1, 1), (2, 1), (3, 2), (4, NULL)
+INSERT 0 4
+> UPDATE p SET id = 10 WHERE id = 1
+UPDATE 1
+> SELECT * FROM cc ORDER BY id
+fields id@cc.1:23:4:-1,pid@cc.2:23:4:-1
+row 1,10
+row 2,10
+row 3,2
+row 4,NULL
+SELECT 4
+> DELETE FROM p WHERE id = 10
+DELETE 1
+> SELECT * FROM cc ORDER BY id
+fields id@cc.1:23:4:-1,pid@cc.2:23:4:-1
+row 3,2
+row 4,NULL
+SELECT 2
+> CREATE TABLE sn (id int, pid int DEFAULT 3 REFERENCES p ON DELETE SET NULL ON UPDATE SET DEFAULT)
+CREATE TABLE
+> INSERT INTO sn VALUES (1, 2), (2, 4)
+INSERT 0 2
+> UPDATE p SET id = 20 WHERE id = 2
+UPDATE 1
+> SELECT * FROM sn ORDER BY id
+fields id@sn.1:23:4:-1,pid@sn.2:23:4:-1
+row 1,3
+row 2,4
+SELECT 2
+> SELECT * FROM cc ORDER BY id
+fields id@cc.1:23:4:-1,pid@cc.2:23:4:-1
+row 3,20
+row 4,NULL
+SELECT 2
+> DELETE FROM p WHERE id = 3
+DELETE 1
+> SELECT * FROM sn ORDER BY id
+fields id@sn.1:23:4:-1,pid@sn.2:23:4:-1
+row 1,NULL
+row 2,4
+SELECT 2
+> UPDATE p SET id = 40 WHERE id = 4
+ERROR 23503 insert or update on table "sn" violates foreign key constraint "sn_pid_fkey"
+DETAIL Key (pid)=(3) is not present in table "p".
+> SELECT * FROM sn ORDER BY id
+fields id@sn.1:23:4:-1,pid@sn.2:23:4:-1
+row 1,NULL
+row 2,4
+SELECT 2
+> CREATE TABLE sd (id int, pid int DEFAULT 99 REFERENCES p ON DELETE SET DEFAULT)
+CREATE TABLE
+> INSERT INTO sd VALUES (1, 20)
+INSERT 0 1
+> DELETE FROM p WHERE id = 20
+ERROR 23503 insert or update on table "sd" violates foreign key constraint "sd_pid_fkey"
+DETAIL Key (pid)=(99) is not present in table "p".
+> CREATE TABLE sd2 (id int, pid int DEFAULT 40 REFERENCES p ON DELETE SET DEFAULT)
+CREATE TABLE
+> INSERT INTO sd2 VALUES (1, 40)
+ERROR 23503 insert or update on table "sd2" violates foreign key constraint "sd2_pid_fkey"
+DETAIL Key (pid)=(40) is not present in table "p".
+> DELETE FROM p WHERE id = 40
+DELETE 0
+> SELECT * FROM p ORDER BY id
+fields id@p.1:23:4:-1,name@p.2:25:-1:-1
+row 4,four
+row 20,two
+SELECT 2
+> CREATE TABLE nn (id int, pid int NOT NULL REFERENCES p ON DELETE SET NULL)
+CREATE TABLE
+> INSERT INTO p VALUES (5, 'five')
+INSERT 0 1
+> INSERT INTO nn VALUES (1, 5)
+INSERT 0 1
+> DELETE FROM p WHERE id = 5
+ERROR 23502 null value in column "pid" of relation "nn" violates not-null constraint (SQL statement "UPDATE ONLY "public"."nn" SET "pid" = NULL WHERE $1 OPERATOR(pg_catalog.=) "pid"")
+DETAIL Failing row contains (1, null).
+> CREATE TABLE g (id int PRIMARY KEY, up int REFERENCES g ON DELETE CASCADE)
+CREATE TABLE
+> INSERT INTO g VALUES (1, NULL), (2, 1), (3, 2), (4, 3), (5, 1)
+INSERT 0 5
+> DELETE FROM g WHERE id = 2
+DELETE 1
+> SELECT * FROM g ORDER BY id
+fields id@g.1:23:4:-1,up@g.2:23:4:-1
+row 1,NULL
+row 5,1
+SELECT 2
+> CREATE TABLE a (id int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, aid int REFERENCES a ON DELETE CASCADE)
+CREATE TABLE
+> CREATE TABLE c (bid int REFERENCES b)
+CREATE TABLE
+> INSERT INTO a VALUES (1), (2)
+INSERT 0 2
+> INSERT INTO b VALUES (10, 1), (20, 2)
+INSERT 0 2
+> INSERT INTO c VALUES (10)
+INSERT 0 1
+> DELETE FROM a WHERE id = 1
+ERROR 23503 update or delete on table "b" violates foreign key constraint "c_bid_fkey" on table "c"
+DETAIL Key (id)=(10) is still referenced from table "c".
+> DELETE FROM a WHERE id = 2
+DELETE 1
+> SELECT * FROM b
+fields id@b.1:23:4:-1,aid@b.2:23:4:-1
+row 10,1
+SELECT 1
+> CREATE TABLE m (a int, b int, PRIMARY KEY (a, b))
+CREATE TABLE
+> CREATE TABLE mc (k int, a int, b int DEFAULT 0, FOREIGN KEY (a, b) REFERENCES m ON DELETE SET NULL ON UPDATE CASCADE)
+CREATE TABLE
+> INSERT INTO m VALUES (1, 1), (1, 2)
+INSERT 0 2
+> INSERT INTO mc VALUES (1, 1, 1), (2, 1, 2)
+INSERT 0 2
+> UPDATE m SET b = b + 10
+UPDATE 2
+> SELECT * FROM mc ORDER BY k
+fields k@mc.1:23:4:-1,a@mc.2:23:4:-1,b@mc.3:23:4:-1
+row 1,1,11
+row 2,1,12
+SELECT 2
+> DELETE FROM m WHERE b = 11
+DELETE 1
+> SELECT * FROM mc ORDER BY k
+fields k@mc.1:23:4:-1,a@mc.2:23:4:-1,b@mc.3:23:4:-1
+row 1,NULL,NULL
+row 2,1,12
+SELECT 2
+> CREATE TABLE uq (id int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE uc (v int UNIQUE REFERENCES uq ON UPDATE CASCADE)
+CREATE TABLE
+> INSERT INTO uq VALUES (1), (2)
+INSERT 0 2
+> INSERT INTO uc VALUES (1), (2)
+INSERT 0 2
+> UPDATE uq SET id = 3 - id
+ERROR 23505 duplicate key value violates unique constraint "uq_pkey"
+DETAIL Key (id)=(2) already exists.
+> UPDATE uq SET id = id + 10 RETURNING *
+fields id@uq.1:23:4:-1
+row 11
+row 12
+UPDATE 2
+> SELECT * FROM uc ORDER BY v
+fields v@uc.1:23:4:-1
+row 11
+row 12
+SELECT 2
+> CREATE TABLE ck (v int CHECK (v < 100) REFERENCES uq ON UPDATE CASCADE)
+CREATE TABLE
+> INSERT INTO ck VALUES (11)
+INSERT 0 1
+> UPDATE uq SET id = 111 WHERE id = 11
+ERROR 23514 new row for relation "ck" violates check constraint "ck_v_check" (SQL statement "UPDATE ONLY "public"."ck" SET "v" = $1 WHERE $2 OPERATOR(pg_catalog.=) "v"")
+DETAIL Failing row contains (111).
+> CREATE TABLE q (id int PRIMARY KEY)
+CREATE TABLE
+> INSERT INTO q VALUES (1), (2), (3), (4)
+INSERT 0 4
+> CREATE TABLE sq (id int, pid int DEFAULT 4 REFERENCES q ON DELETE SET DEFAULT)
+CREATE TABLE
+> INSERT INTO sq VALUES (1, 4)
+INSERT 0 1
+> DELETE FROM q WHERE id = 4
+ERROR 23503 update or delete on table "q" violates foreign key constraint "sq_pid_fkey" on table "sq"
+DETAIL Key (id)=(4) is still referenced from table "sq".
+> CREATE TABLE nu (v numeric PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE ni (v int NOT NULL REFERENCES nu ON DELETE SET NULL)
+CREATE TABLE
+> INSERT INTO nu VALUES (1)
+INSERT 0 1
+> INSERT INTO ni VALUES (1)
+INSERT 0 1
+> DELETE FROM nu
+ERROR 23502 null value in column "v" of relation "ni" violates not-null constraint (SQL statement "UPDATE ONLY "public"."ni" SET "v" = NULL WHERE $1 OPERATOR(pg_catalog.=) "v"::pg_catalog."numeric"")
+DETAIL Failing row contains (null).
+> CREATE TABLE tx (t text PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE vc (v varchar(5) NOT NULL REFERENCES tx ON DELETE SET NULL ON UPDATE CASCADE)
+CREATE TABLE
+> INSERT INTO tx VALUES ('ab')
+INSERT 0 1
+> INSERT INTO vc VALUES ('ab')
+INSERT 0 1
+> UPDATE tx SET t = 'abcdefgh'
+ERROR 22001 value too long for type character varying(5) (SQL statement "UPDATE ONLY "public"."vc" SET "v" = $1 WHERE $2 OPERATOR(pg_catalog.=) "v"::pg_catalog.text")
+> DELETE FROM tx
+ERROR 23502 null value in column "v" of relation "vc" violates not-null constraint (SQL statement "UPDATE ONLY "public"."vc" SET "v" = NULL WHERE $1 OPERATOR(pg_catalog.=) "v"::pg_catalog.text")
+DETAIL Failing row contains (null).
+> CREATE TABLE m2 (a int, b text, PRIMARY KEY (a, b))
+CREATE TABLE
+> CREATE TABLE mc2 (k int CHECK (k > 0), a int, b text, FOREIGN KEY (a, b) REFERENCES m2 ON UPDATE CASCADE ON DELETE CASCADE)
+CREATE TABLE
+> CREATE TABLE "Odd ""x" ("I d" int PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE od (r int NOT NULL REFERENCES "Odd ""x" ON DELETE SET NULL)
+CREATE TABLE
+> INSERT INTO "Odd ""x" VALUES (1)
+INSERT 0 1
+> INSERT INTO od VALUES (1)
+INSERT 0 1
+> DELETE FROM "Odd ""x"
+ERROR 23502 null value in column "r" of relation "od" violates not-null constraint (SQL statement "UPDATE ONLY "public"."od" SET "r" = NULL WHERE $1 OPERATOR(pg_catalog.=) "r"")
+DETAIL Failing row contains (null).
+> CREATE TABLE b8 (id int8 PRIMARY KEY)
+CREATE TABLE
+> CREATE TABLE c4 (v int4 NOT NULL REFERENCES b8 ON DELETE SET NULL)
+CREATE TABLE
+> INSERT INTO b8 VALUES (1)
+INSERT 0 1
+> INSERT INTO c4 VALUES (1)
+INSERT 0 1
+> DELETE FROM b8
+ERROR 23502 null value in column "v" of relation "c4" violates not-null constraint (SQL statement "UPDATE ONLY "public"."c4" SET "v" = NULL WHERE $1 OPERATOR(pg_catalog.=) "v"")
+DETAIL Failing row contains (null).
+> CREATE TABLE n2 (v int2 NOT NULL REFERENCES q ON DELETE SET NULL)
+CREATE TABLE
+> INSERT INTO n2 VALUES (1)
+INSERT 0 1
+> DELETE FROM q WHERE id = 1
+ERROR 23502 null value in column "v" of relation "n2" violates not-null constraint (SQL statement "UPDATE ONLY "public"."n2" SET "v" = NULL WHERE $1 OPERATOR(pg_catalog.=) "v"")
+DETAIL Failing row contains (null).
+> CREATE SCHEMA s1
+CREATE SCHEMA
+> CREATE TABLE s1.t (v int NOT NULL REFERENCES q ON DELETE SET NULL)
+CREATE TABLE
+> INSERT INTO s1.t VALUES (2)
+INSERT 0 1
+> DELETE FROM q WHERE id = 2
+ERROR 23502 null value in column "v" of relation "t" violates not-null constraint (SQL statement "UPDATE ONLY "s1"."t" SET "v" = NULL WHERE $1 OPERATOR(pg_catalog.=) "v"")
+DETAIL Failing row contains (null).
+> CREATE TABLE ch (v char(3) NOT NULL REFERENCES tx ON DELETE SET NULL)
+CREATE TABLE
+> INSERT INTO tx VALUES ('x')
+INSERT 0 1
+> INSERT INTO ch VALUES ('x')
+INSERT 0 1
+> DELETE FROM tx WHERE t = 'x'
+ERROR 23502 null value in column "v" of relation "ch" violates not-null constraint (SQL statement "UPDATE ONLY "public"."ch" SET "v" = NULL WHERE $1 OPERATOR(pg_catalog.=) "v"::pg_catalog.text")
+DETAIL Failing row contains (null).
+> CREATE DOMAIN dint AS int
+CREATE DOMAIN
+> CREATE TABLE dm (v dint NOT NULL REFERENCES q ON DELETE SET NULL)
+CREATE TABLE
+> INSERT INTO dm VALUES (3)
+INSERT 0 1
+> DELETE FROM q WHERE id = 3
+ERROR 23502 null value in column "v" of relation "dm" violates not-null constraint (SQL statement "UPDATE ONLY "public"."dm" SET "v" = NULL WHERE $1 OPERATOR(pg_catalog.=) "v"::pg_catalog.int4")
+DETAIL Failing row contains (null).
+> INSERT INTO m2 VALUES (1, 'x'), (2, 'y')
+INSERT 0 2
+> INSERT INTO mc2 VALUES (1, 1, 'x'), (2, 1, 'x'), (3, 2, 'y')
+INSERT 0 3
+> UPDATE m2 SET b = 'z' WHERE a = 1
+UPDATE 1
+> SELECT * FROM mc2 ORDER BY k
+fields k@mc2.1:23:4:-1,a@mc2.2:23:4:-1,b@mc2.3:25:-1:-1
+row 1,1,z
+row 2,1,z
+row 3,2,y
+SELECT 3
+> DELETE FROM m2 WHERE a = 2
+DELETE 1
+> SELECT * FROM mc2 ORDER BY k
+fields k@mc2.1:23:4:-1,a@mc2.2:23:4:-1,b@mc2.3:25:-1:-1
+row 1,1,z
+row 2,1,z
+SELECT 2
+> CREATE TABLE pp (id int PRIMARY KEY)
+CREATE TABLE
+> INSERT INTO pp VALUES (1), (2)
+INSERT 0 2
+> CREATE TABLE tw (x int REFERENCES pp ON UPDATE CASCADE ON DELETE SET NULL, y int REFERENCES pp ON UPDATE CASCADE ON DELETE CASCADE)
+CREATE TABLE
+> INSERT INTO tw VALUES (1, 2), (2, 1), (1, 1)
+INSERT 0 3
+> UPDATE pp SET id = id + 10
+UPDATE 2
+> SELECT * FROM tw ORDER BY x, y
+fields x@tw.1:23:4:-1,y@tw.2:23:4:-1
+row 11,11
+row 11,12
+row 12,11
+SELECT 3
+> DELETE FROM pp WHERE id = 11
+DELETE 1
+> SELECT * FROM tw ORDER BY x, y
+fields x@tw.1:23:4:-1,y@tw.2:23:4:-1
+row NULL,12
+SELECT 1
+> CREATE TABLE tz (x int DEFAULT 99 REFERENCES pp ON DELETE SET DEFAULT, y int REFERENCES pp ON DELETE CASCADE)
+CREATE TABLE
+> INSERT INTO pp VALUES (13)
+INSERT 0 1
+> INSERT INTO tz VALUES (12, 12), (13, 12)
+INSERT 0 2
+> DELETE FROM pp WHERE id = 12
+DELETE 1
+> SELECT * FROM tz
+fields x@tz.1:23:4:-1,y@tz.2:23:4:-1
+SELECT 0
+> SELECT * FROM tw
+fields x@tw.1:23:4:-1,y@tw.2:23:4:-1
+SELECT 0
+> BEGIN
+BEGIN
+> INSERT INTO tz VALUES (13, 13)
+INSERT 0 1
+> DELETE FROM pp
+DELETE 1
+> SELECT count(*) FROM tz
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM tz
+fields x@tz.1:23:4:-1,y@tz.2:23:4:-1
+SELECT 0
