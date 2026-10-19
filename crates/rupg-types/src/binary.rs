@@ -115,15 +115,18 @@ impl<'a> Recv<'a> {
         self.array()
     }
 
-    /// The check after the receive function: parameter `number`, from 1, must have no bytes left.
+    /// The check after the receive function: parameter `number`, from 1, must have no bytes left. A field of `COPY ... FROM` has the number 0.
     pub fn finish(self, number: usize) -> Result<(), TypeError> {
         if self.at == self.data.len() {
             return Ok(());
         }
-        Err(TypeError::new(
-            SqlState::INVALID_BINARY_REPRESENTATION,
-            format!("incorrect binary data format in bind parameter {number}"),
-        ))
+        // `COPY ... FROM` with the binary format gives no parameter number.
+        let message = if number == 0 {
+            "incorrect binary data format".to_string()
+        } else {
+            format!("incorrect binary data format in bind parameter {number}")
+        };
+        Err(TypeError::new(SqlState::INVALID_BINARY_REPRESENTATION, message))
     }
 }
 

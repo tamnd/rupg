@@ -69,6 +69,8 @@ pub(super) struct Options {
     pub(super) freeze: bool,
     /// The canonical name of the encoding of `ENCODING`.
     pub(super) encoding: Option<&'static str>,
+    /// `DEFAULT`, or `ON_ERROR` that is not `STOP`. `COPY ... FROM` does not read rows with these options yet.
+    pub(super) later: Option<&'static str>,
 }
 
 impl CopyOut {
@@ -518,6 +520,13 @@ pub(super) fn options(list: &[Option<Node>], is_from: bool) -> Result<Options, E
         force_null,
         freeze,
         encoding: encoding_name,
+        later: if default.is_some() {
+            Some("DEFAULT")
+        } else if on_error != "stop" {
+            Some("ON_ERROR")
+        } else {
+            None
+        },
     })
 }
 

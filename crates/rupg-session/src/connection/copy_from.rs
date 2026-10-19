@@ -1,14 +1,57 @@
-//! `COPY ... FROM STDIN`, as `DoCopy`, `BeginCopyFrom`, `CopyFrom` and `copyfromparse.c` run it. The tables of rupg have no rows yet, so a copy reads the header lines and the end of the data, and a row of data gives `0A000`.
+//! `COPY ... FROM STDIN`, as `DoCopy`, `BeginCopyFrom`, `CopyFrom` and `copyfromparse.c` run it. The copy reads the fields of each line, and `NextCopyFrom` makes the values of the columns with the input functions or the receive functions of their types. The other columns get their defaults from a plan of `INSERT`, which also checks the constraints. The copy keeps up to `MAX_BUFFERED_TUPLES` rows and then writes them in the heap, as `CopyMultiInsertInfoFlush` does. The triggers of the foreign keys fire at the end of the copy.
 
+use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
+use rupg_exec::Plan;
 use rupg_sql::nodes::CopyStmt;
+use rupg_types::Value;
 use rupg_wire::OutBuf;
 
 use super::Connection;
 use super::copy::{BINARY_SIGNATURE, ForceQuote, Format, options};
+use super::foreign::Batch;
+use crate::heap::{Changed, View};
+use crate::query::{self, Reader};
 
 /// `MAX_COPY_DATA_DISPLAY`: the number of bytes of a line that the context of an error shows.
 const MAX_DISPLAY: usize = 100;
+
+/// `MAX_BUFFERED_TUPLES`: the number of rows that the copy keeps before it writes them in the heap.
+const MAX_BUFFERED: usize = 1000;
+
+/// A line of data that the copy read, before `NextCopyFrom` makes its values.
+#[derive(Debug)]
+struct Row {
+    /// `cur_lineno` of the row.
+    line: u64,
+    /// The line, for the context of an error. A row of the binary format has no line.
+    text: Option<Vec<u8>>,
+    /// The fields of the line, with `None` for a null value.
+    fields: Vec<Option<Vec<u8>>>,
+}
+
+/// The plans of a copy and the rows that it did not write yet.
+#[derive(Debug)]
+struct Load {
+    /// The `INSERT` that makes the rows of the table, or `None` for a relation that is not in the catalog of the session.
+    plan: Option<Plan>,
+    /// The query of the condition `WHERE`.
+    filter: Option<Plan>,
+    /// The type and the type modifier of each selected column.
+    types: Vec<(u32, i32)>,
+    /// `force_notnull_flags` and `force_null_flags` of each selected column.
+    force_not_null: Vec<bool>,
+    force_null: Vec<bool>,
+    /// The option that `COPY ... FROM` does not read rows with yet.
+    later: Option<&'static str>,
+    /// The rows that the copy checked and did not write in the heap yet, and the line of each row.
+    rows: Vec<Vec<Value>>,
+    lines: Vec<u64>,
+    /// The number of rows that the copy wrote.
+    count: u64,
+    /// The rows for the triggers of the foreign keys.
+    batches: Vec<Batch>,
+}
 
 /// `EolType`: the line ending of the data, which the first line sets.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -58,6 +101,9 @@ pub(super) struct CopyIn {
     ended: bool,
     /// True when the copy read the header of the binary format.
     binary_header: bool,
+    /// The lines that the copy read and did not make values of yet.
+    pending: Vec<Row>,
+    load: Load,
 }
 
 impl Connection {
@@ -122,6 +168,33 @@ impl Connection {
                 format!("COPY with ENCODING {name} is not supported yet"),
             ));
         }
+        let catalog = self.catalog();
+        let rel = catalog.relation(target.relid);
+        let types: Vec<(u32, i32)> = rel
+            .map(|rel| rel.columns.iter().map(|column| (column.ty, column.typmod)).collect())
+            .unwrap_or_default();
+        let filter = match (&stmt.whereClause, rel) {
+            (Some(condition), Some(_)) => {
+                let node = rupg_analyze::copy_filter(&target, rv, condition);
+                let params =
+                    Params { types: types.iter().map(|&(ty, _)| ty).collect(), variable: false };
+                let plan = query::plan(&node, &reader, &params)?.fold(None, &reader)?;
+                Some(plan)
+            }
+            _ => None,
+        };
+        let flags = |force: &ForceQuote| -> Result<Vec<bool>, Error> {
+            Ok(match force {
+                ForceQuote::None => vec![false; target.selected.len()],
+                ForceQuote::All => vec![true; target.selected.len()],
+                ForceQuote::Names(names) => {
+                    let named = rupg_analyze::attnums(&target.columns, names, Some(&target.name))?;
+                    target.selected.iter().map(|at| named.contains(at)).collect()
+                }
+            })
+        };
+        let force_not_null = flags(&options.force_not_null)?;
+        let force_null = flags(&options.force_null)?;
         let binary = options.format == Format::Binary;
         out.copy_in_response(i8::from(binary), &vec![i16::from(binary); target.selected.len()]);
         let name = &target.name;
@@ -143,6 +216,26 @@ impl Connection {
                 "COPY FREEZE is not supported yet",
             ));
         }
+        let plan = match rel {
+            Some(_) => {
+                let node = rupg_analyze::copy_insert(&target, rv);
+                let params = Params { types: vec![0; target.selected.len()], variable: true };
+                Some(query::plan(&node, &reader, &params)?.fold(None, &reader)?)
+            }
+            None => None,
+        };
+        let load = Load {
+            plan,
+            filter,
+            types: target.selected.iter().filter_map(|&i| types.get(i).copied()).collect(),
+            force_not_null,
+            force_null,
+            later: options.later,
+            rows: Vec::new(),
+            lines: Vec::new(),
+            count: 0,
+            batches: Vec::new(),
+        };
         let names = target.selected.iter().map(|&i| target.columns[i].clone()).collect();
         Ok(CopyIn {
             text: String::new(),
@@ -161,7 +254,158 @@ impl Connection {
             buf: Vec::new(),
             ended: false,
             binary_header: false,
+            pending: Vec::new(),
+            load,
         })
+    }
+
+    /// `CopyData` of a copy: the copy reads the lines that are complete and makes the values of their rows. The rows before a line with an error come first, as `CopyFrom` reads one row at a time.
+    pub(super) fn copy_data(&self, copy: &mut CopyIn, bytes: &[u8]) -> Result<(), Error> {
+        let read = copy.data(bytes);
+        self.load_rows(copy)?;
+        read
+    }
+
+    /// `CopyDone` of a copy: the copy reads the rest of the data, writes the rows that remain, and fires the triggers of the foreign keys. It gives the number of rows that the copy wrote.
+    pub(super) fn copy_done(&self, copy: &mut CopyIn) -> Result<u64, Error> {
+        let read = copy.done();
+        self.load_rows(copy)?;
+        read?;
+        self.flush_rows(copy)?;
+        if copy.load.count > 0 {
+            self.command.set(self.command.get() + 1);
+        }
+        let batches = std::mem::take(&mut copy.load.batches);
+        if !batches.is_empty() {
+            self.fire(batches)?;
+        }
+        Ok(copy.load.count)
+    }
+
+    /// `NextCopyFrom` and the checks of `CopyFrom` for the lines that the copy read: the values of the columns, the defaults of the other columns, the condition `WHERE` and the constraints of the table.
+    fn load_rows(&self, copy: &mut CopyIn) -> Result<(), Error> {
+        if copy.pending.is_empty() {
+            return Ok(());
+        }
+        let pending = std::mem::take(&mut copy.pending);
+        let (Some(plan), None) = (&copy.load.plan, copy.load.later) else {
+            let what = copy.load.later.map_or(String::new(), |option| format!(" and {option}"));
+            return Err(copy.at_line(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("COPY FROM with rows{what} is not supported yet"),
+            )));
+        };
+        let width = plan.write().map_or(0, |info| info.width);
+        let reader = self.reader();
+        for row in pending {
+            let params = copy.values(&row, &reader)?;
+            let line = |error: Error| error.with_context(copy.row_context(&row));
+            let rows = plan.run_unchecked(&params, &reader).map_err(line)?;
+            let rows = match &copy.load.filter {
+                Some(filter) => {
+                    let mut kept = Vec::with_capacity(rows.len());
+                    for values in rows {
+                        let shown = filter.run(&values[..width.min(values.len())], &reader);
+                        if matches!(
+                            shown.map_err(line)?.first().and_then(|r| r.first()),
+                            Some(Value::Bool(true))
+                        ) {
+                            kept.push(values);
+                        }
+                    }
+                    kept
+                }
+                None => rows,
+            };
+            let rows = plan.check(rows, &reader).map_err(line)?;
+            copy.load.lines.extend(rows.iter().map(|_| row.line));
+            copy.load.rows.extend(rows);
+        }
+        drop(reader);
+        if copy.load.rows.len() >= MAX_BUFFERED {
+            self.flush_rows(copy)?;
+        }
+        Ok(())
+    }
+
+    /// `CopyMultiInsertBufferFlush`: the rows that the copy kept go in the heap. A duplicate key has the context of the line of its row.
+    fn flush_rows(&self, copy: &mut CopyIn) -> Result<(), Error> {
+        let load = &mut copy.load;
+        if load.rows.is_empty() {
+            return Ok(());
+        }
+        let Some(info) = load.plan.as_ref().and_then(Plan::write) else {
+            return Err(Error::internal("a copy with no plan of its rows"));
+        };
+        let heap = self.store.heap();
+        if self.xid.get() == 0 {
+            self.xid.set(heap.begin(self.pid));
+        }
+        let reader = self.reader();
+        let Some(view) = reader.view() else {
+            return Err(Error::internal("the reader of the session has no view of the rows"));
+        };
+        let view = View { xid: self.xid.get(), ..view.clone() };
+        drop(reader);
+        let rows = std::mem::take(&mut load.rows);
+        let lines = std::mem::take(&mut load.lines);
+        let count = rows.len() as u64;
+        let new_rows = if info.foreign.is_empty() { Vec::new() } else { rows.clone() };
+        if info.unique.is_empty() {
+            heap.insert(info.table, &view, rows, &[], &[])?;
+        } else {
+            let mut kept = Vec::new();
+            loop {
+                match heap.insert(info.table, &view, rows.clone(), &info.unique, &kept)? {
+                    Changed::Done(_) => break,
+                    Changed::Duplicate { index, key } => {
+                        let line = duplicate_line(info, index, &key, &rows, &lines);
+                        let conflict = Changed::Duplicate { index, key };
+                        let error = match self.key_conflict(info, &view, conflict) {
+                            Ok(_) => Error::internal("a duplicate key with no error"),
+                            Err(error) => error,
+                        };
+                        return Err(error.with_context(format!("COPY {}, line {line}", copy.name)));
+                    }
+                    conflict => kept = self.key_conflict(info, &view, conflict)?,
+                }
+            }
+        }
+        load.count += count;
+        if !new_rows.is_empty() {
+            load.batches.push(Batch::new(info, &info.foreign, view.command, new_rows, Vec::new()));
+        }
+        Ok(())
+    }
+}
+
+/// The line of the row whose key is a duplicate. The first row with the key can conflict only with a row that was in the table, and a later row with the key conflicts with the first row.
+fn duplicate_line(
+    info: &rupg_analyze::Write,
+    index: usize,
+    key: &[Value],
+    rows: &[Vec<Value>],
+    lines: &[u64],
+) -> u64 {
+    let Some(unique) = info.unique.get(index) else { return lines.last().copied().unwrap_or(0) };
+    let mut matches = rows.iter().enumerate().filter(|(_, row)| {
+        unique.columns.iter().zip(key).all(|(&at, value)| row.get(at) == Some(value))
+    });
+    let first = matches.next().map(|(at, _)| at);
+    let at = matches.next().map(|(at, _)| at).or(first);
+    at.and_then(|at| lines.get(at)).or(lines.last()).copied().unwrap_or(0)
+}
+
+/// The text of a line or a value for the context of an error, `limit_printout_length`: at most `MAX_COPY_DATA_DISPLAY` bytes, cut at the start of a character, and `...` after a text that the cut made shorter.
+fn shown(text: &[u8]) -> String {
+    if text.len() > MAX_DISPLAY {
+        let mut cut = MAX_DISPLAY;
+        while cut > 0 && (text[cut] & 0xC0) == 0x80 {
+            cut -= 1;
+        }
+        format!("{}...", String::from_utf8_lossy(&text[..cut]))
+    } else {
+        String::from_utf8_lossy(text).into_owned()
     }
 }
 
@@ -208,6 +452,67 @@ impl CopyIn {
         error.with_context(format!("COPY {}, line {}", self.name, self.line))
     }
 
+    /// The context of an error in the current line, with the text of the line.
+    fn line_context(&self, line: &[u8]) -> String {
+        format!("COPY {}, line {}: \"{}\"", self.name, self.line, shown(line))
+    }
+
+    /// The context of an error in a row, with the text of its line when the format has lines.
+    fn row_context(&self, row: &Row) -> String {
+        match &row.text {
+            Some(text) => format!("COPY {}, line {}: \"{}\"", self.name, row.line, shown(text)),
+            None => format!("COPY {}, line {}", self.name, row.line),
+        }
+    }
+
+    /// `NextCopyFrom`: the value of each selected column from the fields of a row, with the input function or the receive function of the type of the column and its type modifier. An error has the context of the column and of its field.
+    fn values(&self, row: &Row, reader: &Reader<'_>) -> Result<Vec<Value>, Error> {
+        let mut values = Vec::with_capacity(self.names.len());
+        for (i, (name, &(ty, typmod))) in self.names.iter().zip(&self.load.types).enumerate() {
+            let Some(field) = row.fields.get(i) else {
+                return Err(Error::new(
+                    SqlState::BAD_COPY_FILE_FORMAT,
+                    format!("missing data for column \"{name}\""),
+                )
+                .with_context(self.row_context(row)));
+            };
+            let mut field = field.as_deref();
+            if self.format == Format::Csv {
+                if field.is_none() && self.load.force_not_null[i] {
+                    field = Some(&self.null);
+                } else if field == Some(self.null.as_slice()) && self.load.force_null[i] {
+                    field = None;
+                }
+            }
+            let context = || {
+                let at = format!("COPY {}, line {}, column {name}", self.name, row.line);
+                match (field, &row.text) {
+                    (_, None) => at,
+                    (Some(field), Some(_)) => format!("{at}: \"{}\"", shown(field)),
+                    (None, Some(_)) => format!("{at}: null input"),
+                }
+            };
+            let value = match field {
+                None => Ok(Value::Null),
+                Some(bytes) if self.format == Format::Binary => {
+                    rupg_func::receive(ty, bytes, typmod, 0, reader)
+                }
+                Some(bytes) => match std::str::from_utf8(bytes) {
+                    Ok(text) => rupg_func::input(ty, text, typmod, reader),
+                    // `CopyReadAttributesText` checks the encoding of the fields before it reads their values, so the error has the context of the line.
+                    Err(_) => {
+                        let error = query::param(ty, 0, Some(bytes), i + 1, reader).err();
+                        let error =
+                            error.unwrap_or_else(|| Error::internal("a field that is not UTF-8"));
+                        return Err(error.with_context(self.row_context(row)));
+                    }
+                },
+            };
+            values.push(value.map_err(|error| error.with_context(context()))?);
+        }
+        Ok(values)
+    }
+
     /// Reads the data in the buffer. At `eof`, the rest of the buffer is the last line.
     fn read(&mut self, eof: bool) -> Result<(), Error> {
         if self.format == Format::Binary {
@@ -235,10 +540,21 @@ impl CopyIn {
                         }
                         continue;
                     }
-                    return Err(self.at_line(Error::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        "COPY FROM with rows is not supported yet",
-                    )));
+                    let fields = if self.format == Format::Csv {
+                        self.csv_fields(&line)
+                    } else {
+                        self.text_fields(&line)
+                    };
+                    let fields =
+                        fields.map_err(|error| error.with_context(self.line_context(&line)))?;
+                    if fields.len() > self.names.len() {
+                        return Err(Error::new(
+                            SqlState::BAD_COPY_FILE_FORMAT,
+                            "extra data after last expected column",
+                        )
+                        .with_context(self.line_context(&line)));
+                    }
+                    self.pending.push(Row { line: self.line, text: Some(line), fields });
                 }
                 Read::End | Read::Eof => {
                     // `cur_lineno` counts the line of the marker. `NextCopyFromRawFieldsInternal` reads the fields of the header line also when the data ended before it.
@@ -391,18 +707,7 @@ impl CopyIn {
     fn check_header(&self, line: &[u8]) -> Result<(), Error> {
         let fields =
             if self.format == Format::Csv { self.csv_fields(line) } else { self.text_fields(line) };
-        let context = || {
-            let shown = if line.len() > MAX_DISPLAY {
-                let mut cut = MAX_DISPLAY;
-                while cut > 0 && (line[cut] & 0xC0) == 0x80 {
-                    cut -= 1;
-                }
-                format!("{}...", String::from_utf8_lossy(&line[..cut]))
-            } else {
-                String::from_utf8_lossy(line).into_owned()
-            };
-            format!("COPY {}, line {}: \"{shown}\"", self.name, self.line)
-        };
+        let context = || self.line_context(line);
         let bad = |message: String| {
             Error::new(SqlState::BAD_COPY_FILE_FORMAT, message).with_context(context())
         };
@@ -599,15 +904,59 @@ impl CopyIn {
             // `NextCopyFrom` counts the tuple before it reads the field count.
             self.line = 1;
         }
-        let Some(count) = self.buf.get(..2).map(|b| i16::from_be_bytes([b[0], b[1]])) else {
-            // A field count that is not complete at the end of the data is the end of the data.
-            return Ok(());
-        };
-        if count != -1 {
-            return Err(self.at_line(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "COPY FROM with rows is not supported yet",
-            )));
+        loop {
+            let Some(count) = self.buf.get(..2).map(|b| i16::from_be_bytes([b[0], b[1]])) else {
+                // A field count that is not complete at the end of the data is the end of the data.
+                return Ok(());
+            };
+            if count == -1 {
+                break;
+            }
+            let expected = self.names.len();
+            if usize::try_from(count).ok() != Some(expected) {
+                return Err(
+                    self.at_line(bad(&format!("row field count is {count}, expected {expected}")))
+                );
+            }
+            let mut at = 2;
+            let mut fields = Vec::with_capacity(expected);
+            for name in &self.names {
+                let column = |error: Error| {
+                    error.with_context(format!(
+                        "COPY {}, line {}, column {name}",
+                        self.name, self.line
+                    ))
+                };
+                let size =
+                    self.buf.get(at..at + 4).map(|b| i32::from_be_bytes([b[0], b[1], b[2], b[3]]));
+                let Some(size) = size else {
+                    return if eof {
+                        Err(column(bad("unexpected EOF in COPY data")))
+                    } else {
+                        Ok(())
+                    };
+                };
+                at += 4;
+                if size == -1 {
+                    fields.push(None);
+                    continue;
+                }
+                let Ok(size) = usize::try_from(size) else {
+                    return Err(column(bad("invalid field size")));
+                };
+                let Some(bytes) = self.buf.get(at..at + size) else {
+                    return if eof {
+                        Err(column(bad("unexpected EOF in COPY data")))
+                    } else {
+                        Ok(())
+                    };
+                };
+                fields.push(Some(bytes.to_vec()));
+                at += size;
+            }
+            self.buf.drain(..at);
+            self.pending.push(Row { line: self.line, text: None, fields });
+            self.line += 1;
         }
         self.ended = true;
         let rest = self.buf.split_off(2);

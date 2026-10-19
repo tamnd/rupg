@@ -56,8 +56,9 @@ pub use colname::figure_colname;
 pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
-    Allowed, Body, CopyRelation, CopyTarget, Defined, Message, RuleTree, attnums, copy_relation,
-    copy_target, define, function_body, is_definition, lock_table, rule_tree,
+    Allowed, Body, CopyRelation, CopyTarget, Defined, Message, RuleTree, attnums, copy_filter,
+    copy_insert, copy_relation, copy_target, define, function_body, is_definition, lock_table,
+    rule_tree,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, GroupingFunc, IsJson,

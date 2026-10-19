@@ -1078,22 +1078,28 @@ impl Connection {
 
     /// `CopyData`, `CopyDone` or `CopyFail` of a `COPY ... FROM STDIN`. After `CopyDone` the session runs the rest of the statements of the `Query` message.
     fn copy_message(&mut self, message: Frontend<'_>, out: &mut OutBuf) -> Next {
-        let Some(copy) = self.copy_in.as_mut() else { return Next::Continue };
+        let Some(mut copy) = self.copy_in.take() else { return Next::Continue };
         let result = match message {
-            Frontend::CopyData(data) => match copy.data(data) {
-                Ok(()) => return Next::Continue,
+            Frontend::CopyData(data) => match self.copy_data(&mut copy, data) {
+                Ok(()) => {
+                    self.copy_in = Some(copy);
+                    return Next::Continue;
+                }
                 Err(error) => Err(error),
             },
             Frontend::CopyFail(message) => Err(copy.fail(message)),
-            _ => copy.done(),
+            _ => self.copy_done(&mut copy),
         };
-        let Some(copy) = self.copy_in.take() else { return Next::Continue };
-        if let Err(error) = result {
-            self.fail(&error, None, out);
-            return self.recover(out);
+        match result {
+            Ok(count) => {
+                let failed = self.resume_query(&copy.text, copy.index, count, out);
+                self.after_query(failed, out)
+            }
+            Err(error) => {
+                self.fail(&error, None, out);
+                self.recover(out)
+            }
         }
-        let failed = self.resume_query(&copy.text, copy.index, out);
-        self.after_query(failed, out)
     }
 
     /// The end of a message of the extended protocol. After an error the session drops the messages until `Sync`.
@@ -1193,11 +1199,12 @@ impl Connection {
         self.run_statements(text, &statements, 0, None, out)
     }
 
-    /// The rest of a `Query` message after the `COPY ... FROM STDIN` at `index` ended. The text parsed before, so the parse gives no error and its notices went to the client.
-    fn resume_query(&mut self, text: &str, index: usize, out: &mut OutBuf) -> bool {
+    /// The rest of a `Query` message after the `COPY ... FROM STDIN` at `index` ended with `count` rows. The text parsed before, so the parse gives no error and its notices went to the client.
+    fn resume_query(&mut self, text: &str, index: usize, count: u64, out: &mut OutBuf) -> bool {
         let Ok((list, _)) = rupg_sql::parse(text) else { return false };
         let statements = statements(&list, text);
-        self.run_statements(text, &statements, index, Some(Done::Count(CommandTag::Copy, 0)), out)
+        let copied = Some(Done::Count(CommandTag::Copy, count));
+        self.run_statements(text, &statements, index, copied, out)
     }
 
     /// The loop of `exec_simple_query` over the statements from `from`. `copied` is the result of a `COPY ... FROM STDIN` at `from` that ended. A `COPY ... FROM STDIN` stops the loop until its data ends. It gives true when a statement failed.
@@ -4094,6 +4101,12 @@ mod tests {
     #[test]
     fn copy_from() {
         big_stack(|| script(include_str!("connection/copy_from.test")));
+    }
+
+    /// `COPY ... FROM STDIN` with rows: the text, CSV and binary formats, the defaults of the columns that the copy does not give, `FORCE_NULL`, `FORCE_NOT_NULL`, the condition `WHERE`, identity columns, the errors of the fields and of the constraints with the context of their lines, foreign keys, a copy of more rows than the copy keeps before it writes them, and a copy in a subtransaction. `connection/copy_from_rows.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn copy_from_rows() {
+        big_stack(|| script(include_str!("connection/copy_from_rows.test")));
     }
 
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.

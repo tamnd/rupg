@@ -2,7 +2,10 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
-use rupg_sql::nodes::{ColumnRef, CopyStmt, Node, RangeVar, ResTarget, SelectStmt};
+use rupg_sql::nodes::{
+    Alias, ColumnRef, CopyStmt, InsertStmt, Node, OverridingKind, ParamRef, RangeSubselect,
+    RangeVar, ResTarget, SelectStmt,
+};
 
 use super::lock::{lookup, relkind};
 use super::relkind_detail;
@@ -106,6 +109,58 @@ pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Co
         ..Default::default()
     };
     Ok(CopyRelation { name, columns, selected, query: select.into() })
+}
+
+/// The `INSERT` that writes the rows of a `COPY ... FROM`, as `CopyFrom` fills a row: the parameter `$n` is the value of the selected column `n`, and the other columns get their defaults. `OVERRIDING SYSTEM VALUE` lets the data give a value to an identity column `GENERATED ALWAYS`, as `COPY` does.
+#[must_use]
+pub fn copy_insert(target: &CopyTarget, rv: &RangeVar) -> Node {
+    let cols = target
+        .selected
+        .iter()
+        .map(|&i| {
+            let name = Some(target.columns[i].as_str().into());
+            Some(ResTarget { name, location: -1, ..Default::default() }.into())
+        })
+        .collect();
+    let insert = InsertStmt {
+        relation: Some(Box::new(RangeVar { alias: None, location: -1, ..rv.clone() })),
+        cols,
+        selectStmt: Some(values(target.selected.len()).into()),
+        r#override: OverridingKind::OVERRIDING_SYSTEM_VALUE,
+        ..Default::default()
+    };
+    insert.into()
+}
+
+/// The query of the condition `WHERE` of a `COPY ... FROM`. The parameter `$n` is the value of the column `n` of the row, and the query gives the value of the condition, as `ExecQual` gives it for the row of `CopyFrom`.
+#[must_use]
+pub fn copy_filter(target: &CopyTarget, rv: &RangeVar, condition: &Node) -> Node {
+    let colnames =
+        target.columns.iter().map(|name| Some(Node::String(name.as_str().into()))).collect();
+    let alias = Alias { aliasname: rv.relname.clone(), colnames };
+    let from = RangeSubselect {
+        lateral: false,
+        subquery: Some(values(target.columns.len()).into()),
+        alias: Some(Box::new(alias)),
+    };
+    let target = ResTarget { val: Some(condition.clone()), location: -1, ..Default::default() };
+    let select = SelectStmt {
+        targetList: vec![Some(target.into())],
+        fromClause: vec![Some(from.into())],
+        ..Default::default()
+    };
+    select.into()
+}
+
+/// `VALUES ($1, ..., $count)`.
+fn values(count: usize) -> SelectStmt {
+    let params = (1..=count)
+        .map(|n| {
+            let number = i32::try_from(n).unwrap_or(i32::MAX);
+            Some(ParamRef { number, location: -1 }.into())
+        })
+        .collect();
+    SelectStmt { valuesLists: vec![Some(Node::List(params))], ..Default::default() }
 }
 
 /// `CopyGetAttnums`: the indexes of the columns that a list of names gives, or of all the columns when the list is empty. `rel` is the name of the relation for the error of a column that does not exist.
