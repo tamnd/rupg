@@ -837,7 +837,9 @@ impl Connection {
                         kind => alter_tag(kind),
                     },
                     Node::RenameStmt(stmt) => match stmt.renameType {
-                        ObjectType::OBJECT_COLUMN => alter_tag(stmt.relationType),
+                        ObjectType::OBJECT_COLUMN | ObjectType::OBJECT_ATTRIBUTE => {
+                            alter_tag(stmt.relationType)
+                        }
                         ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
                         kind => alter_tag(kind),
                     },
@@ -2809,6 +2811,12 @@ mod tests {
     #[test]
     fn type_alter() {
         big_stack(|| script(include_str!("connection/type_alter.test")));
+    }
+
+    /// `ALTER TYPE` with `ADD ATTRIBUTE`, `DROP ATTRIBUTE`, `ALTER ATTRIBUTE` and `RENAME ATTRIBUTE` for composite types: the stored values that get a null for a new attribute and lose a dropped one, also in arrays, domains and other composite types, the columns that stop a change of the type of an attribute, and the errors for types that would hold themselves. `connection/type_attribute.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn type_attribute() {
+        big_stack(|| script(include_str!("connection/type_attribute.test")));
     }
 
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.

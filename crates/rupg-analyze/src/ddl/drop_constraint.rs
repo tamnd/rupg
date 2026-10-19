@@ -44,7 +44,8 @@ impl Definer<'_, '_> {
     ) -> Result<()> {
         let number = self.catalog.relation(target.oid).and_then(|r| r.column_number(column));
         let Some(number) = number else {
-            if system_column(column).is_some() {
+            // A composite type has no system columns.
+            if target.kind != b'c' && system_column(column).is_some() {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
                     format!("cannot drop system column \"{column}\""),

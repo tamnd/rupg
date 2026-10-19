@@ -20,6 +20,7 @@ mod rangetype;
 mod relation_options;
 mod reloptions;
 mod rename;
+mod row_type;
 mod rule;
 mod sequence;
 mod set_schema;
@@ -114,13 +115,13 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::TruncateStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
-        || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype))
+        || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
         || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA || type_change::is_type_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
         || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || type_change::is_type_kind(alter.objectType))
 }
 
-/// True for the kinds of relations of `AlterTableStmt` that [`define`] runs. `ALTER TYPE` of a composite type is not one of them.
+/// True for the kinds of relations of `ALTER TABLE` and of the other statements that change a relation. `ALTER TYPE` of the attributes of a composite type is an `AlterTableStmt` too.
 fn is_alter_kind(kind: ObjectType) -> bool {
     matches!(
         kind,
