@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - `ALTER TYPE` and `ALTER DOMAIN` with `RENAME TO`, `SET SCHEMA` and `OWNER TO`. The array type changes with its type, a composite type changes with its relation, a domain moves with its constraints, and the multirange type of a range type gets the new owner. The views that name the type get a new text (#428).
+- `ALTER TYPE` with `ADD ATTRIBUTE`, `DROP ATTRIBUTE`, `ALTER ATTRIBUTE ... TYPE` and `RENAME ATTRIBUTE` for composite types. Stored values get a null for a new attribute and lose a dropped one, also in arrays, domains and other composite types. A change of the type of an attribute that a table column holds gives the error of PostgreSQL (#429).
 
 ## 0.1.49 (2026-10-20)
 
