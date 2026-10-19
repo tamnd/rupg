@@ -746,7 +746,7 @@ impl Definer<'_, '_> {
     }
 
     /// `ATExecChangeOwner`: the new owner of the relation, then of its indexes, its TOAST table and the sequences that it owns. `recursing` is true for these.
-    fn change_owner(&mut self, oid: u32, new: u32, recursing: bool) -> Result<()> {
+    pub(super) fn change_owner(&mut self, oid: u32, new: u32, recursing: bool) -> Result<()> {
         let Some(rel) = self.catalog.relation(oid) else {
             return Err(Error::internal(format!("cache lookup failed for relation {oid}")));
         };
@@ -784,7 +784,14 @@ impl Definer<'_, '_> {
                     .with_detail(format!("Sequence \"{name}\" is linked to table \"{table}\".")));
                 }
             }
-            b't' if recursing => {}
+            b't' | b'c' if recursing => {}
+            b'c' => {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("\"{name}\" is a composite type"),
+                )
+                .with_hint("Use ALTER TYPE instead."));
+            }
             _ => {
                 return Err(Error::new(
                     SqlState::WRONG_OBJECT_TYPE,
@@ -862,7 +869,7 @@ impl Definer<'_, '_> {
     }
 
     /// `check_can_set_role`: the role of the statement must be able to `SET ROLE` to the role.
-    fn check_can_set_role(&self, role: u32) -> Result<()> {
+    pub(super) fn check_can_set_role(&self, role: u32) -> Result<()> {
         if self.is_superuser() || can_set_role(self.user, role) {
             return Ok(());
         }
@@ -872,8 +879,11 @@ impl Definer<'_, '_> {
         ))
     }
 
-    /// `ExecAlterOwnerStmt` for a schema: `AlterSchemaOwner`.
+    /// `ExecAlterOwnerStmt` for a schema, `AlterSchemaOwner`, and for a type or a domain.
     pub(super) fn alter_owner(&mut self, stmt: &AlterOwnerStmt) -> Result<()> {
+        if matches!(stmt.objectType, ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN) {
+            return self.alter_type_owner(stmt);
+        }
         if stmt.objectType != ObjectType::OBJECT_SCHEMA {
             return Err(not_yet("this form of ALTER OWNER", None));
         }

@@ -31,7 +31,7 @@ impl Catalog {
             .map(|d| d.referenced.oid)
     }
 
-    /// `AlterTableNamespaceInternal`: moves the relations of [`Catalog::moved_relations`] to the schema, with the row type and the array type of each one and the constraints of the table. `changeDependencyFor` changes the dependency on the schema of each relation that is not an index. The caller checks the names in the new schema.
+    /// `AlterTableNamespaceInternal`: moves the relations of [`Catalog::moved_relations`] to the schema, with the row type and the array type of each one and the constraints of the table. `changeDependencyFor` changes the dependency on the schema of each relation that is not an index or a composite type, as the type of a composite type has the dependency. The caller checks the names in the new schema.
     ///
     /// # Errors
     ///
@@ -48,7 +48,7 @@ impl Catalog {
                     ty.namespace = namespace;
                 }
             }
-            if rel_kind != RelKind::Index {
+            if !matches!(rel_kind, RelKind::Index | RelKind::Composite) {
                 self.change_namespace_dependency(ObjRef::new(PG_CLASS, moved), old, namespace);
             }
         }
@@ -59,7 +59,7 @@ impl Catalog {
     }
 
     /// `changeDependencyFor`: the dependency of the object on the schema `old` becomes a dependency on `new`. A pinned schema has no dependency.
-    fn change_namespace_dependency(&mut self, object: ObjRef, old: u32, new: u32) {
+    pub(super) fn change_namespace_dependency(&mut self, object: ObjRef, old: u32, new: u32) {
         let (from, to) = (ObjRef::new(PG_NAMESPACE, old), ObjRef::new(PG_NAMESPACE, new));
         if let Some(at) =
             self.depends.iter().position(|d| d.object == object && d.referenced == from)
