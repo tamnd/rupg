@@ -39,6 +39,7 @@ mod databases;
 mod extended;
 mod foreign;
 mod prepare;
+mod upsert;
 
 pub(crate) use activity::Activity;
 use extended::Failed;
@@ -85,8 +86,8 @@ struct Applied {
     written: Vec<Vec<Value>>,
     /// The view of the last try of the write.
     view: View,
-    /// The rows that the triggers of the foreign keys get, when the table has foreign keys and the statement wrote rows.
-    batch: Option<Batch>,
+    /// The rows that the triggers of the foreign keys get, when the table has foreign keys and the statement wrote rows. `INSERT ... ON CONFLICT DO UPDATE` gives a batch for the rows that went in, then a batch for the rows that changed.
+    batches: Vec<Batch>,
 }
 
 /// The result of a statement as the session sends it.
@@ -557,7 +558,7 @@ impl Connection {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
         };
-        let Applied { tag, count, written, view, batch } =
+        let Applied { tag, count, written, view, batches } =
             self.apply_write(plan, params, view, rows)?;
         let done = if info.returning.is_some() {
             // A subquery of `RETURNING` reads with the snapshot of the statement, which does not see the rows of the statement.
@@ -573,8 +574,8 @@ impl Connection {
         } else {
             Done::Count(tag, count)
         };
-        if let Some(batch) = batch {
-            self.fire(batch)?;
+        if !batches.is_empty() {
+            self.fire(batches)?;
         }
         Ok(done)
     }
@@ -600,7 +601,17 @@ impl Connection {
         // The new and the old rows that the foreign keys check.
         let foreign = !info.foreign.is_empty();
         let (mut new_rows, mut old_rows) = (Vec::new(), Vec::new());
+        // The new and the old rows of `ON CONFLICT DO UPDATE`.
+        let mut updated = (Vec::new(), Vec::new());
+        let upsert = info.on_conflict.as_ref().filter(|conflict| !conflict.arbiters.is_empty());
         let (tag, count) = match info.kind {
+            WriteKind::Insert if let Some(conflict) = upsert => {
+                let done = self.upsert(plan, info, conflict, params, &view, rows)?;
+                written = done.written;
+                new_rows = done.inserted;
+                updated = (done.new, done.old);
+                (CommandTag::Insert, done.count)
+            }
             WriteKind::Insert => {
                 let count = rows.len() as u64;
                 if info.returning.is_some() {
@@ -675,9 +686,17 @@ impl Connection {
             }
         };
         self.command.set(view.command + 1);
-        let batch = (foreign && (!new_rows.is_empty() || !old_rows.is_empty()))
-            .then(|| Batch::new(info, view.command, new_rows, old_rows));
-        Ok(Applied { tag, count, written, view, batch })
+        let mut batches = Vec::new();
+        if foreign && (!new_rows.is_empty() || !old_rows.is_empty()) {
+            batches.push(Batch::new(info, &info.foreign, view.command, new_rows, old_rows));
+        }
+        if let Some(conflict) = upsert
+            && !updated.0.is_empty()
+        {
+            let (new, old) = updated;
+            batches.push(Batch::new(info, &conflict.foreign, view.command, new, old));
+        }
+        Ok(Applied { tag, count, written, view, batches })
     }
 
     /// A conflict of a new version in a unique index. The write waits for the transaction that holds the key, as `_bt_check_unique` does, and gives the IDs of the new versions for the next try. Or it fails with the duplicate key and its value, as `BuildIndexValueDescription` gives it.
@@ -2951,6 +2970,12 @@ mod tests {
     #[test]
     fn foreign_key_actions() {
         big_stack(|| script(include_str!("connection/foreign_key_actions.test")));
+    }
+
+    /// `INSERT ... ON CONFLICT`: `DO NOTHING` with and without an inference, `DO UPDATE` with `EXCLUDED`, an alias, `WHERE`, `DEFAULT` and a multiple-column `SET`, a row that the command proposes two times, a conflict on an index that is not an arbiter, the checks and the foreign keys of the new row, `RETURNING` with `old` and `new`, the errors of the inference, a transaction and a prepared statement. `connection/on_conflict.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn on_conflict() {
+        big_stack(|| script(include_str!("connection/on_conflict.test")));
     }
 
     /// A row comparison with a subquery, as `(a, b) = (SELECT ...)`: the operators `=` and `<>`, a subquery with no rows or more than one row, null fields, the errors for the number of columns and for the operators, a correlated subquery, `ROW(a)`, a prepared statement and the text of a view. `connection/row_compare_sublink.test` is the output of PostgreSQL 19 for the same script in a new database.

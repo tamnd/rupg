@@ -340,6 +340,19 @@ pub(crate) enum Changed {
     Duplicate { index: usize, key: Vec<Value> },
 }
 
+/// The result of [`Heap::speculative`] for one row of `INSERT ... ON CONFLICT`.
+#[derive(Debug, PartialEq)]
+pub(crate) enum Speculative {
+    /// The row went in.
+    Inserted,
+    /// A live version has the key of the row in an arbiter index: the ID of the version and its values. `own` is true when the transaction of the view made the version, `command` is true when the command of the view made it, and `visible` is true when the snapshot of the view sees it.
+    Conflict { tid: u64, values: Vec<Value>, own: bool, command: bool, visible: bool },
+    /// The transaction `holder` is in progress and inserted or deleted the version `tid` with the key of the row in an arbiter index. The statement must wait for its end and check the row again.
+    Wait { holder: u32, tid: u64 },
+    /// A conflict in a unique index that is not an arbiter, as [`Heap::insert`] gives it.
+    Key(Changed),
+}
+
 /// The text of the item pointer of a version, `(page,item)`, as `tidout` gives it.
 pub(crate) fn tid_text(tid: u64) -> String {
     let at = tid.saturating_sub(1);
@@ -448,6 +461,62 @@ impl Heap {
             }
         }
         Ok(Changed::Done(count))
+    }
+
+    /// `ExecCheckIndexConstraints` and the speculative insertion of `ExecInsert` for one row of `INSERT ... ON CONFLICT`. The row goes in when no version that a dirty snapshot sees has its key in an arbiter index, the indexes at the places `arbiters` of `unique`. The check and the insertion hold the lock of the heap, so no other write can come between them. `kept` is the ID of the version of an earlier try that waited.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the equality of a key.
+    pub(crate) fn speculative(
+        &self,
+        relation: u32,
+        view: &View,
+        values: Vec<Value>,
+        unique: &[Unique],
+        arbiters: &[usize],
+        kept: Option<u64>,
+    ) -> Result<Speculative> {
+        let mut state = self.state();
+        let State { tables, running, .. } = &mut *state;
+        let table = tables.entry((view.database, relation)).or_default();
+        let places = table.key_maps(unique);
+        for &arbiter in arbiters {
+            let Some(&place) = places.get(arbiter) else { continue };
+            let map = &table.keys[place];
+            let Some(hash) = map.hash(&values) else {
+                continue;
+            };
+            for &other in map.hashes.get(&hash).into_iter().flatten() {
+                let Some(found) = table.find(other) else {
+                    continue;
+                };
+                let version = &table.versions[found];
+                let seen = dirty(version, view.xid, running);
+                if seen == Seen::Dead || !map.same(&values, &version.values)? {
+                    continue;
+                }
+                if let Seen::Wait(holder) = seen {
+                    return Ok(Speculative::Wait { holder, tid: other });
+                }
+                let own = version.xmin == view.xid;
+                return Ok(Speculative::Conflict {
+                    tid: other,
+                    values: version.values.to_vec(),
+                    own,
+                    command: own && version.cmin == view.command,
+                    visible: visible(version, view),
+                });
+            }
+        }
+        let used = [table.add(kept, view.xid, view.command, values)];
+        match table.check_keys(&places, &used, view.xid, running) {
+            Ok(None) => Ok(Speculative::Inserted),
+            result => {
+                table.undo(&used, &[]);
+                Ok(Speculative::Key(result?.unwrap_or(Changed::Done(0))))
+            }
+        }
     }
 
     /// `heap_update` and `heap_delete` for the rows that the command of the view changes. A row that the command changed before stays as it is, as for a row that a join gives more than once. When another transaction changed a row after the snapshot, nothing changes, and the result tells the statement to wait or to run again. When the change is done, `applied` has the index in `changes` of each row that changed, for `RETURNING`.
@@ -710,6 +779,7 @@ mod tests {
     fn a_unique_key_waits_for_the_other_transaction() {
         let heap = Heap::default();
         let key = Unique {
+            oid: 0,
             name: "t_pkey".to_string(),
             columns: vec![0],
             types: vec![oid::INT4],

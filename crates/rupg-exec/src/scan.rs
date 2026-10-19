@@ -320,15 +320,15 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     })
 }
 
-/// The rows of a query of `RETURNING`, which has one relation: the rows that the statement wrote, each with the columns of the table and then the carried values.
-pub(crate) fn given(query: &Query, rows: Vec<Vec<Value>>) -> Tables {
+/// The rows of a query whose relations read the rows that the write gives, one list for each relation: the rows that the statement wrote for a query of `RETURNING`, or the old row and the row of `EXCLUDED` for the query of `ON CONFLICT DO UPDATE`.
+pub(crate) fn given(query: &Query, rows: Vec<Vec<Vec<Value>>>) -> Tables {
     Tables {
-        rows: vec![Rc::new(rows)],
+        rows: rows.into_iter().map(Rc::new).collect(),
         oids: query.relations.iter().map(|r| r.oid).collect(),
         types: query.relations.iter().map(|r| r.columns.iter().map(|c| c.ty).collect()).collect(),
         names: query.relations.iter().map(row_names).collect(),
-        needs: vec![Vec::new()],
-        grown: vec![RefCell::default()],
+        needs: query.relations.iter().map(|_| Vec::new()).collect(),
+        grown: query.relations.iter().map(|_| RefCell::default()).collect(),
         indexes: RefCell::default(),
     }
 }

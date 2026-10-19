@@ -1,0 +1,217 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int PRIMARY KEY, v text, n int DEFAULT 7, u int UNIQUE, CHECK (n < 100))
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'a', 1, 10), (2, 'b', 2, 20)
+INSERT 0 2
+> INSERT INTO t VALUES (1, 'x') ON CONFLICT DO NOTHING
+INSERT 0 0
+> INSERT INTO t VALUES (3, 'c', 3, 20) ON CONFLICT DO NOTHING
+INSERT 0 0
+> INSERT INTO t VALUES (3, 'c', 3, 20) ON CONFLICT (id) DO NOTHING
+ERROR 23505 duplicate key value violates unique constraint "t_u_key"
+DETAIL Key (u)=(20) already exists.
+> INSERT INTO t VALUES (3, 'c', 3, 30), (3, 'd', 4, 40) ON CONFLICT (id) DO NOTHING RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 3,c,3,30
+INSERT 0 1
+> INSERT INTO t VALUES (1, 'y') ON CONFLICT ON CONSTRAINT t_pkey DO NOTHING
+INSERT 0 0
+> INSERT INTO t VALUES (1, 'y') ON CONFLICT (id) DO UPDATE SET v = excluded.v RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 1,y,1,10
+INSERT 0 1
+> INSERT INTO t AS x VALUES (1, 'z', 5) ON CONFLICT (id) DO UPDATE SET n = x.n + excluded.n WHERE x.v <> 'q' RETURNING x.*, excluded.n
+ERROR 42P01 invalid reference to FROM-clause entry for table "excluded" at 123
+DETAIL There is an entry for table "excluded", but it cannot be referenced from this part of the query.
+> INSERT INTO t AS x VALUES (1, 'z', 5) ON CONFLICT (id) DO UPDATE SET n = x.n + excluded.n RETURNING x.*
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 1,y,6,10
+INSERT 0 1
+> INSERT INTO t AS x VALUES (1, 'z', 5, 10), (4, 'e', 1, 44) ON CONFLICT (id) DO UPDATE SET n = x.n + 1 WHERE x.n > 100 RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 4,e,1,44
+INSERT 0 1
+> INSERT INTO t VALUES (2, 'w'), (2, 'w2') ON CONFLICT (id) DO UPDATE SET v = excluded.v
+ERROR 21000 ON CONFLICT DO UPDATE command cannot affect row a second time
+HINT Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
+> INSERT INTO t VALUES (5, 'w'), (5, 'w2') ON CONFLICT (id) DO UPDATE SET v = excluded.v
+ERROR 21000 ON CONFLICT DO UPDATE command cannot affect row a second time
+HINT Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
+> INSERT INTO t VALUES (5, 'w'), (5, 'w2') ON CONFLICT (id) DO NOTHING
+INSERT 0 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 1,y,6,10
+row 2,b,2,20
+row 3,c,3,30
+row 4,e,1,44
+row 5,w,7,NULL
+SELECT 5
+> INSERT INTO t VALUES (1) ON CONFLICT DO UPDATE SET v = 'no'
+ERROR 42601 ON CONFLICT DO UPDATE requires inference specification or constraint name at 26
+HINT For example, ON CONFLICT (column_name).
+> INSERT INTO t VALUES (1) ON CONFLICT (v) DO NOTHING
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> INSERT INTO t VALUES (1) ON CONFLICT (nope) DO NOTHING
+ERROR 42703 column "nope" does not exist at 38
+> INSERT INTO t VALUES (1) ON CONFLICT ON CONSTRAINT nope DO NOTHING
+ERROR 42704 constraint "nope" for table "t" does not exist
+> INSERT INTO t VALUES (1) ON CONFLICT ON CONSTRAINT t_n_check DO NOTHING
+ERROR 42809 constraint in ON CONFLICT clause has no associated index
+> INSERT INTO t VALUES (1) ON CONFLICT (id) DO UPDATE SET u = 20
+ERROR 23505 duplicate key value violates unique constraint "t_u_key"
+DETAIL Key (u)=(20) already exists.
+> INSERT INTO t VALUES (1) ON CONFLICT (id) DO UPDATE SET n = 500
+ERROR 23514 new row for relation "t" violates check constraint "t_n_check"
+DETAIL Failing row contains (1, y, 500, 10).
+> INSERT INTO t VALUES (1) ON CONFLICT (id) DO UPDATE SET n = DEFAULT, v = DEFAULT RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 1,NULL,7,10
+INSERT 0 1
+> INSERT INTO t VALUES (1) ON CONFLICT (id) DO UPDATE SET (v, n) = (excluded.v, 8) RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 1,NULL,8,10
+INSERT 0 1
+> INSERT INTO t VALUES (1) ON CONFLICT (id) DO UPDATE SET id = excluded.id + 100 RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 101,NULL,8,10
+INSERT 0 1
+> INSERT INTO t SELECT g, 's' || g FROM generate_series(1, 6) g ON CONFLICT (id) DO UPDATE SET v = t.v || '+' RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 1,s1,7,NULL
+row 2,b+,2,20
+row 3,c+,3,30
+row 4,e+,1,44
+row 5,w+,7,NULL
+row 6,s6,7,NULL
+INSERT 0 6
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET v = excluded.v || t.v
+INSERT 0 1
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET v = v
+ERROR 42702 column reference "v" is ambiguous at 61
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET ctid = '(0,1)'
+ERROR 0A000 cannot assign to system column "ctid" at 57
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET excluded.v = 'x'
+ERROR 42703 column "excluded" of relation "t" does not exist at 57
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET v = 'x' WHERE count(*) > 0
+ERROR 42803 aggregate functions are not allowed in WHERE at 71
+> INSERT INTO t VALUES (2) ON CONFLICT (u) DO UPDATE SET v = 'nullu' RETURNING *
+ERROR 23505 duplicate key value violates unique constraint "t_pkey"
+DETAIL Key (id)=(2) already exists.
+> INSERT INTO t VALUES (2, 'k', 1, 20) ON CONFLICT (u) DO UPDATE SET v = 'byu' RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 2,byu,2,20
+INSERT 0 1
+> INSERT INTO t VALUES (2, 'k', 1, 20) ON CONFLICT (id, u) DO NOTHING
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> INSERT INTO t VALUES (2, 'k', 1, 20) ON CONFLICT (u, id) DO NOTHING
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 1,s1,7,NULL
+row 2,byu,2,20
+row 3,c+,3,30
+row 4,e+,1,44
+row 5,w+,7,NULL
+row 6,s6,7,NULL
+row 101,NULL,8,10
+SELECT 7
+> CREATE TABLE ref (r int REFERENCES t (u))
+CREATE TABLE
+> INSERT INTO ref VALUES (20)
+INSERT 0 1
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET u = 21
+ERROR 23503 update or delete on table "t" violates foreign key constraint "ref_r_fkey" on table "ref"
+DETAIL Key (u)=(20) is still referenced from table "ref".
+> INSERT INTO ref VALUES (1) ON CONFLICT DO NOTHING
+ERROR 23503 insert or update on table "ref" violates foreign key constraint "ref_r_fkey"
+DETAIL Key (r)=(1) is not present in table "t".
+> CREATE TABLE w (a int, b int, UNIQUE (a, b))
+CREATE TABLE
+> INSERT INTO w VALUES (1, NULL), (1, NULL) ON CONFLICT (a, b) DO UPDATE SET b = 2 RETURNING *
+fields a@w.1:23:4:-1,b@w.2:23:4:-1
+row 1,NULL
+row 1,NULL
+INSERT 0 2
+> INSERT INTO w VALUES (1, 2) ON CONFLICT (b, a) DO UPDATE SET b = w.b + 1 RETURNING *
+fields a@w.1:23:4:-1,b@w.2:23:4:-1
+row 1,2
+INSERT 0 1
+> CREATE TABLE np (a int)
+CREATE TABLE
+> INSERT INTO np VALUES (1) ON CONFLICT DO NOTHING
+INSERT 0 1
+> INSERT INTO np VALUES (1) ON CONFLICT (a) DO NOTHING
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> BEGIN
+BEGIN
+> INSERT INTO t VALUES (50, 'tx') ON CONFLICT (id) DO UPDATE SET v = 'tx2'
+INSERT 0 1
+> INSERT INTO t VALUES (50, 'tx') ON CONFLICT (id) DO UPDATE SET v = 'tx2' RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 50,tx2,7,NULL
+INSERT 0 1
+> ROLLBACK
+ROLLBACK
+> SELECT count(*) FROM t WHERE id = 50
+fields count:20:8:-1
+row 0
+SELECT 1
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET v = 'r' RETURNING excluded.v
+ERROR 42P01 invalid reference to FROM-clause entry for table "excluded" at 75
+DETAIL There is an entry for table "excluded", but it cannot be referenced from this part of the query.
+> INSERT INTO t VALUES (2, 'old') ON CONFLICT (id) DO UPDATE SET v = excluded.v RETURNING old.v, new.v, old.*
+fields v@t.2:25:-1:-1,v@t.2:25:-1:-1,id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row byu,old,2,byu,2,20
+INSERT 0 1
+> INSERT INTO t VALUES (77, 'old') ON CONFLICT (id) DO UPDATE SET v = excluded.v RETURNING old.v, new.v
+fields v@t.2:25:-1:-1,v@t.2:25:-1:-1
+row NULL,old
+INSERT 0 1
+> INSERT INTO t AS x VALUES (2) ON CONFLICT (id) DO UPDATE SET v = t.v
+ERROR 42P01 invalid reference to FROM-clause entry for table "t" at 66
+HINT Perhaps you meant to reference the table alias "x".
+> INSERT INTO t VALUES (2, 'e', 50) ON CONFLICT (id) DO UPDATE SET v = 'w' WHERE excluded.n > 40 RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 2,w,2,20
+INSERT 0 1
+> INSERT INTO t VALUES (2, 'e', 50) ON CONFLICT (id) DO UPDATE SET n = excluded.n * 3
+ERROR 23514 new row for relation "t" violates check constraint "t_n_check"
+DETAIL Failing row contains (2, w, 150, 20).
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET v = excluded.ctid::text
+ERROR 42703 column excluded.ctid does not exist at 61
+HINT Perhaps you meant to reference the column "excluded.id".
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET v = (SELECT excluded.v || 'q') RETURNING v
+fields v@t.2:25:-1:-1
+row NULL
+INSERT 0 1
+> INSERT INTO t (id, v) VALUES (2, 'cols') ON CONFLICT (id) DO UPDATE SET v = excluded.v || excluded.n RETURNING *
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 2,cols7,2,20
+INSERT 0 1
+> INSERT INTO t VALUES (2) ON CONFLICT (id) DO UPDATE SET v = 'a' WHERE v = 'b' OR excluded.u IS NULL RETURNING *
+ERROR 42702 column reference "v" is ambiguous at 71
+> PREPARE p1 (int, text) AS INSERT INTO t VALUES ($1, $2) ON CONFLICT (id) DO UPDATE SET v = $2 || '!' RETURNING *
+PREPARE
+> EXECUTE p1 (2, 'prep')
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 2,prep!,2,20
+INSERT 0 1
+> EXECUTE p1 (90, 'prep')
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 90,prep,7,NULL
+INSERT 0 1
+> SELECT * FROM t ORDER BY id
+fields id@t.1:23:4:-1,v@t.2:25:-1:-1,n@t.3:23:4:-1,u@t.4:23:4:-1
+row 1,s1,7,NULL
+row 2,prep!,2,20
+row 3,c+,3,30
+row 4,e+,1,44
+row 5,w+,7,NULL
+row 6,s6,7,NULL
+row 77,old,7,NULL
+row 90,prep,7,NULL
+row 101,NULL,8,10
+SELECT 9

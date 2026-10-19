@@ -248,6 +248,11 @@ const MIXED_KEYS: &str =
 pub fn prepare(query: Query) -> Result<Plan> {
     rupg_analyze::check_outer_joins(&query)?;
     check_query(&query, query.write.is_none())?;
+    if let Some(update) =
+        query.write.as_ref().and_then(|w| w.on_conflict.as_ref()?.update.as_deref())
+    {
+        check_query(update, false)?;
+    }
     Ok(Plan { query })
 }
 
@@ -1025,8 +1030,40 @@ impl Plan {
             return Ok(Vec::new());
         };
         let cache = Cache::default();
-        cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, rows))));
+        cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![rows]))));
         run_query(query, params, session, &cache, &[], false)
+    }
+
+    /// `ExecOnConflictUpdate`: the new row of `ON CONFLICT DO UPDATE` for the row `existing` of the table, which ends with the ID of its version, and the row `excluded` that the statement proposed, after the checks of the constraints. The new row has the columns of the table, then the values that `RETURNING` carries. It is `None` when the condition of `WHERE` is not true.
+    ///
+    /// # Errors
+    ///
+    /// The error of a function of `SET` or `WHERE`, and the error of a constraint of the table.
+    pub fn conflict_update(
+        &self,
+        existing: Vec<Value>,
+        excluded: Vec<Value>,
+        params: &[Value],
+        session: &dyn Session,
+    ) -> Result<Option<Vec<Value>>> {
+        let Some(info) = self.query.write.as_ref() else {
+            return Ok(None);
+        };
+        let Some(query) = info.on_conflict.as_ref().and_then(|c| c.update.as_deref()) else {
+            return Ok(None);
+        };
+        // The query of the checks of the constraints reads the query of the new row as a subquery.
+        let mut base = query;
+        while let [relation] = base.relations.as_slice()
+            && let Some(inner) = relation.subquery.as_deref()
+        {
+            base = inner;
+        }
+        let cache = Cache::default();
+        let tables = scan::given(base, vec![vec![existing], vec![excluded]]);
+        cache.tables.borrow_mut().push((base, Rc::new(tables)));
+        let rows = run_query(query, params, session, &cache, &[], false)?;
+        Ok(insert::check(info, rows, session)?.into_iter().next())
     }
 
     /// The table that the query writes when it is an `INSERT`, an `UPDATE` or a `DELETE`. Then [`Plan::run`] gives the rows that change.

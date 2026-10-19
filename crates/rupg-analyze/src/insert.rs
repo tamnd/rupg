@@ -5,7 +5,7 @@
 use rupg_catalog::{ConKind, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
-use rupg_sql::nodes::{InsertStmt, Node, SelectStmt};
+use rupg_sql::nodes::{InsertStmt, Node, OnConflictAction, OnConflictClause, RangeVar, SelectStmt};
 use rupg_types::{Value, oid};
 
 use crate::Analyzer;
@@ -13,6 +13,7 @@ use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Relation};
+use crate::modify::carried_targets;
 use crate::select::{Query, Target};
 use crate::typename::place;
 use crate::types;
@@ -55,6 +56,21 @@ pub struct Write {
     /// The query of `RETURNING`, which reads one relation: the rows that the statement writes. Each row has the columns of the table, then the values that the query of the statement carries for it. For an `UPDATE` and a `DELETE` the carried values come after the columns and the conditions in each row of the query of the statement, before the ID of the version.
     pub returning: Option<Box<Query>>,
     /// The foreign keys that the write checks after the statement, in the order of the names of their triggers.
+    pub foreign: Vec<Foreign>,
+    /// The `ON CONFLICT` clause of an `INSERT`.
+    pub on_conflict: Option<OnConflict>,
+}
+
+/// `OnConflictExpr`: what an `INSERT` does for a new row with the key of a row that the table has.
+#[derive(Clone, Debug, PartialEq)]
+pub struct OnConflict {
+    /// The places in [`Write::unique`] of the arbiter indexes, which `infer_arbiter_indexes` finds. A conflict in another unique index is an error.
+    pub arbiters: Vec<usize>,
+    /// The query of `DO UPDATE`, or `None` for `DO NOTHING`. It reads two relations: the row that the table has, with the ID of its version at the end, and `EXCLUDED`, the row that the statement proposed. It gives the new row, then the conditions of the check constraints, then the values that `RETURNING` carries, or no row when the condition of `WHERE` is not true.
+    pub update: Option<Box<Query>>,
+    /// The number of values that `RETURNING` carries: the columns of the old row. A row that the statement inserts has nulls for them.
+    pub carried: usize,
+    /// The foreign keys that an update of a row checks, in the order of the names of their triggers.
     pub foreign: Vec<Foreign>,
 }
 
@@ -105,6 +121,8 @@ pub struct Foreign {
 /// A unique index of the target table, which `_bt_check_unique` checks for each new version of a row.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Unique {
+    /// The OID of the index.
+    pub oid: u32,
     /// The name of the index, for the error.
     pub name: String,
     /// The column of the table of each key column, from 0.
@@ -225,9 +243,6 @@ impl Analyzer<'_> {
         if s.withClause.is_some() {
             return Err(not_yet("WITH in INSERT"));
         }
-        if s.onConflictClause.is_some() {
-            return Err(not_yet("ON CONFLICT"));
-        }
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("an INSERT with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Insert)?;
         let given = self.insert_targets(&s.cols, &name, &columns)?;
@@ -266,18 +281,13 @@ impl Analyzer<'_> {
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
         let foreign = self.foreign_keys(table, WriteKind::Insert, &columns)?;
-        // The list of `RETURNING` sees only the target table.
-        let returning = match s.returningClause.as_deref() {
-            None => None,
-            Some(clause) => {
-                let outer = std::mem::take(&mut self.scope);
-                let result = self
-                    .target_from(rv, &[])
-                    .and_then(|_| self.returning(clause, WriteKind::Insert));
-                self.scope = outer;
-                Some(Box::new(result?.0))
-            }
-        };
+        let (mut on_conflict, mut returning) = (None, None);
+        if s.onConflictClause.is_some() || s.returningClause.is_some() {
+            let outer = std::mem::take(&mut self.scope);
+            let result = self.insert_clauses(s, rv, table, &name, &columns, &unique);
+            self.scope = outer;
+            (on_conflict, returning) = result?;
+        }
         query.write = Some(Write {
             kind: WriteKind::Insert,
             table,
@@ -287,14 +297,178 @@ impl Analyzer<'_> {
             unique,
             returning,
             foreign,
+            on_conflict,
         });
         Ok(query)
+    }
+
+    /// `transformOnConflictClause` and `transformReturningClause` of an `INSERT`, which see only the target table. The query of `DO UPDATE` gets the conditions of the check constraints and the values that `RETURNING` carries.
+    fn insert_clauses(
+        &mut self,
+        s: &InsertStmt,
+        rv: &RangeVar,
+        table: u32,
+        name: &str,
+        columns: &[Column],
+        unique: &[Unique],
+    ) -> Result<(Option<OnConflict>, Option<Box<Query>>)> {
+        self.target_from(rv, &[])?;
+        let (mut on_conflict, inference) = match s.onConflictClause.as_deref() {
+            None => (None, Inference::All),
+            Some(clause) => {
+                let (on_conflict, inference) =
+                    self.on_conflict(clause, rv, table, name, columns)?;
+                (Some(on_conflict), inference)
+            }
+        };
+        // With `DO UPDATE`, the old row of `RETURNING` is the row that the statement updates, as for an `UPDATE`.
+        let update = on_conflict.as_ref().is_some_and(|c| c.update.is_some());
+        let kind = if update { WriteKind::Update } else { WriteKind::Insert };
+        let (returning, carried) = match s.returningClause.as_deref() {
+            None => (None, Vec::new()),
+            Some(clause) => {
+                let (query, carried) = self.returning(clause, kind)?;
+                (Some(Box::new(query)), carried)
+            }
+        };
+        if let Some(conflict) = &mut on_conflict
+            && let Some(mut query) = conflict.update.take()
+        {
+            let tail: Vec<Column> = carried
+                .iter()
+                .map(|expr| Column {
+                    name: String::new(),
+                    ty: expr.ty,
+                    typmod: expr.typmod,
+                    not_null: false,
+                })
+                .collect();
+            conflict.carried = carried.len();
+            query.targets.extend(carried_targets(carried));
+            let checks = self.checks(table)?;
+            if !checks.is_empty() {
+                query = Box::new(with_checks(name, columns, *query, checks, &tail));
+            }
+            conflict.update = Some(query);
+        }
+        // The planner matches the inference with the indexes after the analysis.
+        if let Some(conflict) = &mut on_conflict {
+            conflict.arbiters = arbiters(inference, unique)?;
+        }
+        Ok((on_conflict, returning))
+    }
+
+    /// `transformOnConflictClause`: the inference of the arbiter indexes, and the query of `DO UPDATE` with the new row. `SET` and `WHERE` see the target table and `EXCLUDED`, and the clauses after them see only the target table.
+    fn on_conflict(
+        &mut self,
+        clause: &OnConflictClause,
+        rv: &RangeVar,
+        table: u32,
+        name: &str,
+        columns: &[Column],
+    ) -> Result<(OnConflict, Inference)> {
+        let update = match clause.action {
+            OnConflictAction::ONCONFLICT_NOTHING => false,
+            OnConflictAction::ONCONFLICT_UPDATE => true,
+            _ => return Err(not_yet("ON CONFLICT DO SELECT")),
+        };
+        let inference = self.inference(clause, update, table, name, columns)?;
+        let mut on_conflict =
+            OnConflict { arbiters: Vec::new(), update: None, carried: 0, foreign: Vec::new() };
+        if !update {
+            return Ok((on_conflict, inference));
+        }
+        let excluded = self.add_excluded()?;
+        let parts = self.update_row(rv, table, name, columns, &clause.targetList).and_then(|row| {
+            let filter = self.target_where(clause.whereClause.as_ref())?;
+            Ok((row, filter))
+        });
+        self.hide_last_item();
+        let (row, filter) = parts?;
+        let query = Query {
+            relations: self.scope.relations.clone(),
+            from: vec![FromItem::Relation(0), FromItem::Relation(excluded)],
+            targets: targets(columns, row),
+            filter,
+            ..Query::default()
+        };
+        on_conflict.update = Some(Box::new(query));
+        on_conflict.foreign = self.foreign_keys(table, WriteKind::Update, columns)?;
+        Ok((on_conflict, inference))
+    }
+
+    /// `transformOnConflictArbiter`: the columns of the inference, or the index of the constraint that the clause names.
+    fn inference(
+        &mut self,
+        clause: &OnConflictClause,
+        update: bool,
+        table: u32,
+        name: &str,
+        columns: &[Column],
+    ) -> Result<Inference> {
+        let Some(infer) = clause.infer.as_deref() else {
+            if update {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    "ON CONFLICT DO UPDATE requires inference specification or constraint name",
+                )
+                .with_hint("For example, ON CONFLICT (column_name).")
+                .at_opt(place(clause.location)));
+            }
+            return Ok(Inference::All);
+        };
+        if let Some(conname) = infer.conname.as_deref() {
+            let constraint = self
+                .env
+                .catalog()
+                .and_then(|catalog| catalog.constraints_of(table).find(|c| c.name == conname));
+            let Some(constraint) = constraint else {
+                return Err(Error::new(
+                    SqlState::UNDEFINED_OBJECT,
+                    format!("constraint \"{conname}\" for table \"{name}\" does not exist"),
+                ));
+            };
+            return Ok(Inference::Constraint(constraint.index));
+        }
+        let mut set = Vec::with_capacity(infer.indexElems.len());
+        for node in &infer.indexElems {
+            let Some(Node::IndexElem(elem)) = node else {
+                return Err(Error::internal("an inference element that is not IndexElem"));
+            };
+            let at = place(elem.location);
+            let Some(column) = elem.name.as_deref() else {
+                return Err(not_yet("an expression in the inference of ON CONFLICT").at_opt(at));
+            };
+            if !elem.collation.is_empty() || !elem.opclass.is_empty() {
+                return Err(not_yet(
+                    "a collation or an operator class in the inference of ON CONFLICT",
+                )
+                .at_opt(at));
+            }
+            let Some(index) = columns.iter().position(|c| c.name == column) else {
+                return Err(Error::new(
+                    SqlState::UNDEFINED_COLUMN,
+                    format!("column \"{column}\" does not exist"),
+                )
+                // `resolve_unique_index_expr` puts the column reference at the inference clause.
+                .at_opt(place(infer.location)));
+            };
+            set.push(index);
+        }
+        set.sort_unstable();
+        set.dedup();
+        if let Some(predicate) = infer.whereClause.as_ref() {
+            // The unique indexes that a write takes have no predicate, so the predicate of the inference does not change the match.
+            let expr = self.with_kind(Kind::IndexPredicate, |a| a.transform(Some(predicate)))?;
+            self.coerce_to_boolean(expr, "WHERE")?;
+        }
+        Ok(Inference::Columns(set))
     }
 
     /// `setTargetTable`: the OID, the name and the columns of the table that the statement writes. A table with a constraint or an object that the executor does not check yet gives `0A000`.
     pub(crate) fn target_table(
         &self,
-        rv: &rupg_sql::nodes::RangeVar,
+        rv: &RangeVar,
         kind: WriteKind,
     ) -> Result<(u32, String, Vec<Column>)> {
         let what = match kind {
@@ -490,6 +664,7 @@ impl Analyzer<'_> {
             }
             let count = usize::try_from(info.key_count).unwrap_or_default();
             let mut key = Unique {
+                oid: rel.oid,
                 name: rel.name.clone(),
                 columns: Vec::with_capacity(count),
                 types: Vec::with_capacity(count),
@@ -840,6 +1015,59 @@ pub(crate) fn targets(columns: &[Column], row: Vec<Expr>) -> Vec<Target> {
 /// The query of a row with no `FROM`.
 fn row_query(columns: &[Column], row: Vec<Expr>) -> Query {
     Query { targets: targets(columns, row), ..Query::default() }
+}
+
+/// The arbiters of `ON CONFLICT` that the analysis finds, which the planner matches with the unique indexes.
+enum Inference {
+    /// No inference: all the unique indexes.
+    All,
+    /// The set of the columns of an inference, from 0, in order.
+    Columns(Vec<usize>),
+    /// The OID of the index of the constraint that `ON CONSTRAINT` names, or 0 for a constraint with no index.
+    Constraint(u32),
+}
+
+/// `infer_arbiter_indexes`: the places in `unique` of the arbiter indexes. An inference takes each unique index whose key has the same set of columns.
+fn arbiters(inference: Inference, unique: &[Unique]) -> Result<Vec<usize>> {
+    let places: Vec<usize> = match inference {
+        Inference::All => return Ok((0..unique.len()).collect()),
+        Inference::Constraint(0) => {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                "constraint in ON CONFLICT clause has no associated index",
+            ));
+        }
+        Inference::Constraint(index) => {
+            let places: Vec<usize> = unique
+                .iter()
+                .enumerate()
+                .filter(|(_, key)| key.oid == index)
+                .map(|(at, _)| at)
+                .collect();
+            if places.is_empty() {
+                return Err(not_yet("an exclusion constraint in ON CONFLICT"));
+            }
+            return Ok(places);
+        }
+        Inference::Columns(set) => unique
+            .iter()
+            .enumerate()
+            .filter(|(_, key)| {
+                let mut key = key.columns.clone();
+                key.sort_unstable();
+                key.dedup();
+                key == set
+            })
+            .map(|(at, _)| at)
+            .collect(),
+    };
+    if places.is_empty() {
+        return Err(Error::new(
+            SqlState::INVALID_COLUMN_REFERENCE,
+            "there is no unique or exclusion constraint matching the ON CONFLICT specification",
+        ));
+    }
+    Ok(places)
 }
 
 /// The query that reads the rows of `rows` as a subquery with the name of the table, and gives the columns and then the condition of each check constraint. The values of `tail` come after the columns in each row of `rows`, and after the conditions in each row of the query, as the carried values of `RETURNING` and the ID of the version of the old row of an `UPDATE`.
