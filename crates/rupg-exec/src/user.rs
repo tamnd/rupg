@@ -551,7 +551,7 @@ fn attribute<'a>(
         .set("atthasmissing", Value::Bool(false))
         .set("attidentity", Value::Char(column.identity))
         .set("attgenerated", Value::Char(0))
-        .set("attisdropped", Value::Bool(false))
+        .set("attisdropped", Value::Bool(column.dropped))
         .set("attislocal", Value::Bool(true))
         .set("attinhcount", Value::Int2(0))
         .set("attcollation", oid(column.collation));

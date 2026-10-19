@@ -452,7 +452,7 @@ fn attributes_of(relid: u32, session: &dyn Session) -> Vec<Attribute<'_>> {
     let user = rel.columns.iter().zip(1..).map(|(column, num)| Attribute {
         name: &column.name,
         num,
-        dropped: false,
+        dropped: column.dropped,
         acl: None,
     });
     system.chain(user).collect()

@@ -126,6 +126,8 @@ enum DropCmd {
     NotNull(String),
     /// `DROP CONSTRAINT` with the name, `IF EXISTS` and `CASCADE`.
     Constraint(String, bool, bool),
+    /// `DROP COLUMN` with the name, `IF EXISTS` and `CASCADE`.
+    Column(String, bool, bool),
 }
 
 /// A subcommand of `AT_PASS_ADD_OTHERCONSTR`.
@@ -304,6 +306,12 @@ impl Definer<'_, '_> {
                 let cascade = cmd.behavior == DropBehavior::DROP_CASCADE;
                 passes.drops.push(DropCmd::Constraint(name, cmd.missing_ok, cascade));
             }
+            AlterTableType::AT_DropColumn => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let name = cmd.name.as_deref().unwrap_or_default().to_string();
+                let cascade = cmd.behavior == DropBehavior::DROP_CASCADE;
+                passes.drops.push(DropCmd::Column(name, cmd.missing_ok, cascade));
+            }
             AlterTableType::AT_ColumnDefault => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
@@ -412,6 +420,9 @@ impl Definer<'_, '_> {
                 DropCmd::NotNull(column) => self.drop_not_null(target, column)?,
                 DropCmd::Constraint(name, missing_ok, cascade) => {
                     self.drop_constraint(target, name, *missing_ok, *cascade)?;
+                }
+                DropCmd::Column(name, missing_ok, cascade) => {
+                    self.drop_column(target, name, *missing_ok, *cascade)?;
                 }
             }
         }
@@ -526,7 +537,7 @@ impl Definer<'_, '_> {
         self.an.scope = crate::from::Scope::default();
         if let Some(rel) = self.catalog.relation(table) {
             let columns: Vec<(String, u32, i32)> =
-                rel.columns.iter().map(|c| (c.name.clone(), c.ty, c.typmod)).collect();
+                rel.columns.iter().map(crate::from::scope_column).collect();
             let relname = rel.name.clone();
             self.an.add_table(table, &relname, &columns);
         }

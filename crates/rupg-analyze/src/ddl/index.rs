@@ -91,7 +91,7 @@ impl Definer<'_, '_> {
         self.an.scope = crate::from::Scope::default();
         if let Some(rel) = self.catalog.relation(table) {
             let columns: Vec<(String, u32, i32)> =
-                rel.columns.iter().map(|c| (c.name.clone(), c.ty, c.typmod)).collect();
+                rel.columns.iter().map(crate::from::scope_column).collect();
             let relname = rel.name.clone();
             self.an.add_table(table, &relname, &columns);
         }
@@ -258,6 +258,7 @@ impl Definer<'_, '_> {
             let widths = rel
                 .columns
                 .iter()
+                .filter(|c| !c.dropped)
                 .map(|c| typavgwidth(types::row(c.ty).map_or(-1, |t| t.len), c.ty, c.typmod));
             let fillfactor = rel
                 .options

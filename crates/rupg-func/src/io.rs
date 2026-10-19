@@ -445,7 +445,7 @@ fn row_columns(ty: u32, session: &dyn Session) -> Option<Vec<(u32, i32)>> {
         return Some(catalog.columns.iter().map(|c| (c.type_oid, -1)).collect());
     }
     let rel = session.catalog()?.relation(relid)?;
-    Some(rel.columns.iter().map(|c| (c.ty, c.typmod)).collect())
+    Some(rel.columns.iter().filter(|c| !c.dropped).map(|c| (c.ty, c.typmod)).collect())
 }
 
 /// `record_in` of a composite type: the fields in parentheses with a comma between them, as [`record_out`] writes them. An empty field is null. A field can have double quotes and backslashes, as in `record_out`.

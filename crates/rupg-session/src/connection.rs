@@ -2757,6 +2757,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_rename_checks.test")));
     }
 
+    /// `ALTER TABLE ... DROP COLUMN` with the indexes, the constraints, the defaults, the sequences and the views that go with the column, `CASCADE`, `IF EXISTS`, the errors, the rows of `pg_attribute` and `information_schema.columns` after the drop, `INSERT`, `COPY`, whole rows and a row type of a dropped column, and a rollback. `connection/alter_drop_column.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_drop_column() {
+        big_stack(|| script(include_str!("connection/alter_drop_column.test")));
+    }
+
+    /// The columns after `DROP COLUMN`: the column names of an alias, a whole row, a failing row, `ALTER COLUMN ... TYPE` and `ADD COLUMN` that write the rows again, `COPY FROM`, `UPDATE` and `DELETE` with `RETURNING`, a table with no columns, and the errors for a composite type and a dropped column. `connection/alter_drop_column_rows.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_drop_column_rows() {
+        big_stack(|| script(include_str!("connection/alter_drop_column_rows.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {

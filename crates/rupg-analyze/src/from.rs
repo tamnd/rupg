@@ -139,6 +139,18 @@ pub struct Column {
     pub not_null: bool,
 }
 
+impl Column {
+    /// True for a dropped column of a table, which keeps its place with no name and the type 0.
+    pub(crate) fn is_dropped(&self) -> bool {
+        self.ty == 0 && self.name.is_empty()
+    }
+}
+
+/// The name, the type and the type modifier of a column of the catalog for [`Analyzer::add_table`]. A dropped column has no name.
+pub(crate) fn scope_column(c: &rupg_catalog::Column) -> (String, u32, i32) {
+    (if c.dropped { String::new() } else { c.name.clone() }, c.ty, c.typmod)
+}
+
 /// A part of `FROM`: a relation or a join.
 #[derive(Clone, Debug, PartialEq)]
 pub enum FromItem {
@@ -933,19 +945,23 @@ impl Analyzer<'_> {
     ) -> Result<Item> {
         let columns = &relation.columns;
         let mut colnames: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
+        // A dropped column of a table keeps its place in the range table, but it has no name and the alias does not name it.
+        let dropped: Vec<bool> =
+            columns.iter().map(|c| relation.oid != 0 && c.is_dropped()).collect();
         if let Some(alias) = alias {
             let given = alias_columns(alias);
-            if given.len() > colnames.len() {
+            let live = dropped.iter().filter(|&&d| !d).count();
+            if given.len() > live {
                 return Err(Error::new(
                     SqlState::INVALID_COLUMN_REFERENCE,
                     format!(
-                        "table \"{refname}\" has {} columns available but {} columns specified",
-                        colnames.len(),
+                        "table \"{refname}\" has {live} columns available but {} columns specified",
                         given.len()
                     ),
                 ));
             }
-            for (slot, name) in colnames.iter_mut().zip(given) {
+            let slots = colnames.iter_mut().zip(&dropped).filter(|(_, d)| !**d);
+            for ((slot, _), name) in slots.zip(given) {
                 *slot = name;
             }
         }
@@ -954,6 +970,7 @@ impl Analyzer<'_> {
             .iter()
             .zip(columns)
             .enumerate()
+            .filter(|&(i, _)| !dropped[i])
             .map(|(i, (n, c))| {
                 let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
                 let var = Var { relation: index, attnum, levels_up: 0 };
@@ -1129,6 +1146,7 @@ impl Analyzer<'_> {
         let exprs: Vec<(String, Expr)> = columns
             .iter()
             .enumerate()
+            .filter(|(_, (n, ty, _))| !(n.is_empty() && *ty == 0))
             .map(|(i, (n, ty, typmod))| {
                 let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
                 let var = Var { relation: index, attnum, levels_up: 0 };
@@ -1246,8 +1264,9 @@ impl Analyzer<'_> {
             return Ok(rel
                 .columns
                 .iter()
+                // A dropped column keeps its place with no name and the type 0.
                 .map(|c| Column {
-                    name: c.name.clone(),
+                    name: if c.dropped { String::new() } else { c.name.clone() },
                     ty: c.ty,
                     typmod: c.typmod,
                     not_null: c.not_null,
@@ -1631,7 +1650,10 @@ impl Analyzer<'_> {
             Some(_) => return None,
             None => self.env.catalog()?.relations().find(|r| r.row_type == ty)?.oid,
         };
-        self.open_relation(relid, "", None).ok()
+        let mut columns = self.open_relation(relid, "", None).ok()?;
+        // The row type has no field for a dropped column.
+        columns.retain(|c| !c.is_dropped());
+        Some(columns)
     }
 
     /// `scanNSItemForColumn` for a field of a whole-row `Var`: the column of the relation with the name, as `(t).a` is `t.a`. The error names the relation by its alias.
@@ -1678,6 +1700,9 @@ impl Analyzer<'_> {
             .ok_or_else(|| Error::internal("a whole-row reference has no relation"))?;
         let mut columns = Vec::with_capacity(entry.columns.len());
         for (i, (name, column)) in entry.columns.iter().zip(&relation.columns).enumerate() {
+            if relation.oid != 0 && column.is_dropped() {
+                continue;
+            }
             let attnum = i16::try_from(i + 1).map_err(|_| Error::internal("too many columns"))?;
             let mut expr = Expr::new(ExprKind::Var(Var { attnum, ..var }), column.ty).at(at);
             expr.typmod = column.typmod;
@@ -1720,8 +1745,10 @@ impl Analyzer<'_> {
         }
         let entry = &self.level(level).entries[item.entry];
         let Some(relation) = entry.relation else { return Ok(None) };
-        let view = self.level(level).relations.get(relation).is_some_and(|r| r.subquery.is_some());
-        if item.columns.len() != entry.columns.len() || entry.oid == 0 || view {
+        let rel = self.level(level).relations.get(relation);
+        let view = rel.is_some_and(|r| r.subquery.is_some());
+        let live = rel.map_or(0, |r| r.columns.iter().filter(|c| !c.is_dropped()).count());
+        if item.columns.len() != live || entry.oid == 0 || view {
             // The item of a USING alias gives only the columns of USING, and a subquery and a view have no system columns.
             return Ok(None);
         }

@@ -857,7 +857,7 @@ impl Definer<'_, '_> {
         if rel.toast != 0 || rel.kind != RelKind::Table {
             return Ok(());
         }
-        let shapes: Vec<Shape> = rel.columns.iter().map(shape).collect();
+        let shapes: Vec<Shape> = rel.columns.iter().filter(|c| !c.dropped).map(shape).collect();
         if needs_toast(&shapes) {
             self.catalog.create_toast(table)?;
         }

@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER TABLE ... DROP COLUMN` with `IF EXISTS` and `CASCADE`. The column stays in `pg_attribute` with `attisdropped`, so the other columns keep their numbers, and the indexes, constraints, defaults and sequences on the column go with it (#420).
 - `ALTER ... RENAME` of a table, a view, an index, a sequence, a column, a constraint of a table and a schema. The row type, the array type and the index of a key follow the new name, and the views that read a renamed object keep working (#419).
 - `ALTER TABLE ... DROP CONSTRAINT` with `IF EXISTS` and `CASCADE`, and `ALTER COLUMN ... DROP NOT NULL`. A primary key or a unique constraint takes its index with it, and the objects that depend on the constraint give the PostgreSQL error or go with `CASCADE` (#418).
 - `ALTER TABLE ... ALTER COLUMN ... TYPE` with `USING` and `COLLATE`. The statement changes the default, the indexes, the check constraints and the foreign keys on the column, writes the rows again with the new type, and gives the PostgreSQL errors for a view or a rule that uses the column (#417).

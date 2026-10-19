@@ -21,7 +21,7 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// `0A000` for a change that the rows cannot get yet: `ALTER DOMAIN` on a table with rows, a change of the type of a column by a statement that is not `ALTER TABLE`, and a dropped column.
+    /// `0A000` for a change that the rows cannot get yet: `ALTER DOMAIN` on a table with rows, and a change of the type of a column by a statement that is not `ALTER TABLE`.
     pub(super) fn rows_to_rewrite(
         &self,
         node: &Node,
@@ -30,11 +30,14 @@ impl Connection {
     ) -> Result<Vec<u32>, Error> {
         let heap = self.store.heap();
         let old = self.catalog();
-        let mut tables = old.relations().filter(|rel| {
-            rel.kind == RelKind::Table
-                && rel.oid >= FIRST_NORMAL_OID
-                && heap.has_rows(self.database_oid, rel.oid)
-        });
+        let tables: Vec<&Relation> = old
+            .relations()
+            .filter(|rel| {
+                rel.kind == RelKind::Table
+                    && rel.oid >= FIRST_NORMAL_OID
+                    && heap.has_rows(self.database_oid, rel.oid)
+            })
+            .collect();
         let not_yet = |statement: &str| {
             Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
@@ -42,21 +45,40 @@ impl Connection {
             )
         };
         if matches!(node, Node::AlterDomainStmt(_)) {
-            return match tables.next() {
+            return match tables.first() {
                 Some(_) => Err(not_yet("ALTER DOMAIN")),
                 None => Ok(Vec::new()),
             };
         }
+        // A value of a row type keeps a field for each column of its table, so a table with such values in its rows stops the drop of a column of the row type.
+        for rel in old.relations().filter(|rel| rel.row_type != 0) {
+            let Some(now) = work.relation(rel.oid) else { continue };
+            let dropped =
+                rel.columns.iter().zip(&now.columns).any(|(b, a)| !b.dropped && a.dropped);
+            let user = |other: &&Relation| {
+                other.oid != rel.oid
+                    && other.columns.iter().any(|c| uses_type(work, c.ty, rel.row_type))
+            };
+            if dropped && tables.iter().any(user) {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "DROP COLUMN of a table whose row type is in a table with rows is not supported yet",
+                ));
+            }
+        }
         let mut out = Vec::new();
         let transformed = |rel: &Relation| transforms.iter().any(|t| t.table == rel.oid);
-        for rel in tables.filter(|rel| transformed(rel) || changes_rows(&old, work, rel)) {
+        for rel in
+            tables.into_iter().filter(|rel| transformed(rel) || changes_rows(&old, work, rel))
+        {
             let Some(now) = work.relation(rel.oid) else { continue };
             let same = now.columns.len() >= rel.columns.len()
                 && (matches!(node, Node::AlterTableStmt(_))
                     || rel.columns.iter().zip(&now.columns).all(|(before, after)| {
-                        before.ty == after.ty
-                            && before.typmod == after.typmod
-                            && before.collation == after.collation
+                        after.dropped
+                            || before.ty == after.ty
+                                && before.typmod == after.typmod
+                                && before.collation == after.collation
                     }));
             if !same {
                 return Err(not_yet(match node {
@@ -114,6 +136,10 @@ impl Connection {
     ) -> Result<(), Error> {
         let Some(now) = work.relation(rel.oid) else { return Ok(()) };
         let width = rel.columns.len();
+        // A dropped column has no value in the new rows. The `INSERT` gives it a null.
+        let live: Vec<usize> = (0..width)
+            .filter(|&i| !rel.columns[i].dropped && now.columns.get(i).is_some_and(|c| !c.dropped))
+            .collect();
         let schemaname = match work.schema(now.namespace) {
             Some(schema) => schema.name.clone(),
             None => builtin::named_by_oid(Named::Namespace, now.namespace)
@@ -124,7 +150,7 @@ impl Connection {
             name: now.name.clone(),
             kind: b'r',
             columns: now.columns.iter().map(|c| c.name.clone()).collect(),
-            selected: (0..width).collect(),
+            selected: live.clone(),
         };
         let rv = RangeVar {
             schemaname: Some(schemaname.as_str().into()),
@@ -133,23 +159,26 @@ impl Connection {
             location: -1,
             ..RangeVar::default()
         };
-        let changed = rel.columns.iter().zip(&now.columns).any(|(before, after)| {
+        let changed = live.iter().any(|&i| {
+            let (before, after) = (&rel.columns[i], &now.columns[i]);
             before.ty != after.ty
                 || before.typmod != after.typmod
                 || before.collation != after.collation
         });
         let own: Vec<&Transform> = transforms.iter().filter(|t| t.table == rel.oid).collect();
-        let (node, types) = if width > 0 && (changed || !own.is_empty()) {
+        let (node, types) = if !live.is_empty() && (changed || !own.is_empty()) {
             // The last expression for a column wins, as the last entry of `tab->newvals` does.
-            let exprs: Vec<Option<&Node>> = rel
-                .columns
+            let exprs: Vec<Option<&Node>> = live
                 .iter()
-                .map(|c| own.iter().rev().find(|t| t.column == c.name).map(|t| &t.expr))
+                .map(|&i| {
+                    let name = &rel.columns[i].name;
+                    own.iter().rev().find(|t| t.column == *name).map(|t| &t.expr)
+                })
                 .collect();
-            let types = rel.columns.iter().map(|c| c.ty).collect();
+            let types = live.iter().map(|&i| rel.columns[i].ty).collect();
             (rupg_analyze::rewrite_insert(&target, &rv, &exprs), types)
         } else {
-            (rupg_analyze::copy_insert(&target, &rv, &[]), vec![0; width])
+            (rupg_analyze::copy_insert(&target, &rv, &[]), vec![0; live.len()])
         };
         let reader = self.reader_on(Arc::clone(work));
         let params = Params { types, variable: true };
@@ -173,8 +202,9 @@ impl Connection {
             .map(|(at, name)| (at, name.as_str()))
             .collect();
         let mut new_rows = Vec::with_capacity(rows.len());
-        for mut row in rows {
-            row.truncate(width);
+        for row in rows {
+            let row: Vec<Value> =
+                live.iter().map(|&i| row.get(i).cloned().unwrap_or(Value::Null)).collect();
             for mut values in plan.run_unchecked(&row, &reader)? {
                 for (column, value) in now.columns.iter().zip(&values) {
                     if column.not_null && value.is_null() {
@@ -246,11 +276,13 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
     if now.columns.len() < rel.columns.len() {
         return true;
     }
+    // A dropped column keeps its value in the rows, as no query can read it.
     let same = rel.columns.iter().zip(&now.columns).all(|(before, after)| {
-        before.ty == after.ty
-            && before.typmod == after.typmod
-            && before.collation == after.collation
-            && (before.not_null || !after.not_null)
+        after.dropped
+            || before.ty == after.ty
+                && before.typmod == after.typmod
+                && before.collation == after.collation
+                && (before.not_null || !after.not_null)
     });
     if !same {
         return true;
@@ -274,6 +306,23 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
             && index.index.as_ref().is_some_and(|info| info.table == rel.oid && info.unique)
     });
     constraint || index
+}
+
+/// True when the type `ty` is the type `target`, or an array or a domain of it.
+fn uses_type(catalog: &Catalog, ty: u32, target: u32) -> bool {
+    let mut ty = ty;
+    for _ in 0..32 {
+        if ty == target {
+            return true;
+        }
+        let Some(found) = catalog.type_by_oid(ty) else { return false };
+        ty = match &found.domain {
+            Some(domain) => domain.base,
+            None if found.element != 0 => found.element,
+            None => return false,
+        };
+    }
+    false
 }
 
 /// `DomainHasConstraints`: true for a domain with a not-null constraint or a check constraint, also from the domain that it is based on. A new column of such a domain with no default gets a null of the domain in each row, which the constraints check.

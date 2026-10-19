@@ -1,4 +1,4 @@
-//! `ALTER TABLE ... DROP CONSTRAINT` and `ALTER COLUMN ... DROP NOT NULL`, as `ATExecDropConstraint`, `ATExecDropNotNull` and `dropconstraint_internal` run them in the pass of the drops.
+//! `ALTER TABLE ... DROP CONSTRAINT`, `DROP COLUMN` and `ALTER COLUMN ... DROP NOT NULL`, as `ATExecDropConstraint`, `ATExecDropColumn`, `ATExecDropNotNull` and `dropconstraint_internal` run them in the pass of the drops.
 
 use rupg_catalog::{ConKind, ObjRef, PG_CONSTRAINT};
 use rupg_common::{Error, Result, SqlState};
@@ -32,6 +32,33 @@ impl Definer<'_, '_> {
             self.check_drop_not_null(target, number)?;
         }
         self.perform(&[ObjRef::new(PG_CONSTRAINT, oid)], cascade)
+    }
+
+    /// `ATExecDropColumn`: removes the column with the objects that depend on it, as `performDeletion` does. The column keeps its place as a dropped column, so the other columns keep their numbers.
+    pub(super) fn drop_column(
+        &mut self,
+        target: &Target,
+        column: &str,
+        missing_ok: bool,
+        cascade: bool,
+    ) -> Result<()> {
+        let number = self.catalog.relation(target.oid).and_then(|r| r.column_number(column));
+        let Some(number) = number else {
+            if system_column(column).is_some() {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("cannot drop system column \"{column}\""),
+                ));
+            }
+            let message =
+                format!("column \"{column}\" of relation \"{}\" does not exist", target.name);
+            if !missing_ok {
+                return Err(Error::new(SqlState::UNDEFINED_COLUMN, message));
+            }
+            self.notice(SqlState::SUCCESSFUL_COMPLETION, format!("{message}, skipping"));
+            return Ok(());
+        };
+        self.perform(&[ObjRef::column(target.oid, number)], cascade)
     }
 
     /// `ATExecDropNotNull`: removes the not-null constraint of the column. A column with no constraint needs no change.
