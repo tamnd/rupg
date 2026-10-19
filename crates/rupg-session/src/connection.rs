@@ -832,7 +832,10 @@ impl Connection {
                         _ => CommandTag::DropTable,
                     },
                     Node::AlterTableStmt(stmt) => alter_tag(stmt.objtype),
-                    Node::AlterOwnerStmt(_) => CommandTag::AlterSchema,
+                    Node::AlterOwnerStmt(stmt) => match stmt.objectType {
+                        ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
+                        kind => alter_tag(kind),
+                    },
                     Node::RenameStmt(stmt) => match stmt.renameType {
                         ObjectType::OBJECT_COLUMN => alter_tag(stmt.relationType),
                         ObjectType::OBJECT_SCHEMA => CommandTag::AlterSchema,
@@ -1504,6 +1507,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_MATVIEW => CommandTag::AlterMaterializedView,
         ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::AlterForeignTable,
         ObjectType::OBJECT_TYPE => CommandTag::AlterType,
+        ObjectType::OBJECT_DOMAIN => CommandTag::AlterDomain,
         _ => CommandTag::AlterTable,
     }
 }
@@ -2799,6 +2803,12 @@ mod tests {
     #[test]
     fn enum_values() {
         big_stack(|| script(include_str!("connection/enum_values.test")));
+    }
+
+    /// `ALTER TYPE` and `ALTER DOMAIN` with `RENAME TO`, `SET SCHEMA` and `OWNER TO` for an enum type, a composite type, a domain and a range type: the new names of the array types, the move of the relation of a composite type and of the constraints of a domain, the new owner of a multirange type, the new text of a view, and the errors for array types, row types of tables and names that exist. `connection/type_alter.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn type_alter() {
+        big_stack(|| script(include_str!("connection/type_alter.test")));
     }
 
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.

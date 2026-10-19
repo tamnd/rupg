@@ -1,0 +1,366 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA s
+CREATE SCHEMA
+> CREATE TYPE e AS ENUM ('a')
+CREATE TYPE
+> CREATE TYPE ct AS (a int, b text)
+CREATE TYPE
+> CREATE DOMAIN d AS int CHECK (VALUE > 0) NOT NULL
+CREATE DOMAIN
+> CREATE TYPE r AS RANGE (subtype = int4)
+CREATE TYPE
+> CREATE TABLE t (a e, b ct, c d, x r)
+CREATE TABLE
+> CREATE VIEW v AS SELECT a, b, 'a'::e AS l, NULL::d AS m, NULL::e[] AS n FROM t
+CREATE VIEW
+> ALTER TYPE e RENAME TO e
+ERROR 42710 type "e" already exists
+> ALTER TYPE e RENAME TO t
+ERROR 42710 type "t" already exists
+> ALTER TYPE ct RENAME TO t
+ERROR 42P07 relation "t" already exists
+> ALTER TYPE ct RENAME TO v
+ERROR 42P07 relation "v" already exists
+> ALTER TYPE e RENAME TO e2
+ALTER TYPE
+> SELECT typname, typnamespace::regnamespace::text FROM pg_type WHERE typname IN ('e', '_e', 'e2', '_e2') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typnamespace:25:-1:-1
+row _e2,public
+row e2,public
+SELECT 2
+> SELECT pg_get_viewdef('v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b,
+    'a'::e2 AS l,
+    (NULL::integer)::d AS m,
+    NULL::e2[] AS n
+   FROM t;
+SELECT 1
+> SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields format_type:25:-1:-1
+row e2
+row ct
+row d
+row r
+SELECT 4
+> ALTER DOMAIN e2 RENAME TO e3
+ERROR 42809 e2 is not a domain
+> ALTER DOMAIN _d RENAME TO e3
+ERROR 42809 d[] is not a domain
+> ALTER TYPE _d RENAME TO e3
+ERROR 42809 cannot alter array type d[]
+HINT You can alter type d, which will alter the array type as well.
+> ALTER TYPE _e2 RENAME TO x
+ERROR 42809 cannot alter array type e2[]
+HINT You can alter type e2, which will alter the array type as well.
+> ALTER TYPE pg_class RENAME TO e3
+ERROR 42809 pg_class is a table's row type
+HINT Use ALTER TABLE instead.
+> ALTER TYPE t RENAME TO t2
+ERROR 42809 t is a table's row type
+HINT Use ALTER TABLE instead.
+> ALTER TYPE s.nosuch RENAME TO e3
+ERROR 42704 type "s.nosuch" does not exist
+> ALTER TYPE nosuch.e2 RENAME TO e3
+ERROR 3F000 schema "nosuch" does not exist
+> ALTER TYPE nosuch RENAME TO e3
+ERROR 42704 type "nosuch" does not exist
+> ALTER TYPE e2 RENAME TO _ct
+ALTER TYPE
+> SELECT typname FROM pg_type WHERE typname IN ('_ct', '__ct', '__ct_1', 'ct') ORDER BY 1
+fields typname@pg_type.2:19:64:-1
+row __ct
+row __ct_1
+row _ct
+row ct
+SELECT 4
+> SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields format_type:25:-1:-1
+row _ct
+row ct
+row d
+row r
+SELECT 4
+> ALTER TYPE _ct RENAME TO e2
+ALTER TYPE
+> SELECT typname FROM pg_type WHERE typname IN ('_ct', '__ct', '__ct_1', 'ct', 'e2', '_e2') ORDER BY 1
+fields typname@pg_type.2:19:64:-1
+row __ct
+row _e2
+row ct
+row e2
+SELECT 4
+> ALTER TYPE ct RENAME TO ct2
+ALTER TYPE
+> SELECT relname, relkind FROM pg_class WHERE relname IN ('ct', 'ct2') ORDER BY 1
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1
+row ct2,c
+SELECT 1
+> SELECT typname FROM pg_type WHERE typname IN ('_ct', '__ct', 'ct', 'ct2', '_ct2') ORDER BY 1
+fields typname@pg_type.2:19:64:-1
+row _ct2
+row ct2
+SELECT 2
+> ALTER TYPE d RENAME TO d2
+ALTER TYPE
+> ALTER DOMAIN d2 RENAME TO d3
+ALTER DOMAIN
+> SELECT typname FROM pg_type WHERE typname IN ('d', '_d', 'd2', '_d2', 'd3', '_d3') ORDER BY 1
+fields typname@pg_type.2:19:64:-1
+row _d3
+row d3
+SELECT 2
+> SELECT pg_get_viewdef('v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b,
+    'a'::e2 AS l,
+    (NULL::integer)::d3 AS m,
+    NULL::e2[] AS n
+   FROM t;
+SELECT 1
+> ALTER TYPE r RENAME TO r2
+ALTER TYPE
+> SELECT typname FROM pg_type WHERE typnamespace = 'public'::regnamespace ORDER BY 1
+fields typname@pg_type.2:19:64:-1
+row _ct2
+row _d3
+row _e2
+row _r2
+row _r_multirange
+row _t
+row _v
+row ct2
+row d3
+row e2
+row r2
+row r_multirange
+row t
+row v
+SELECT 14
+> CREATE TYPE q AS ENUM ()
+CREATE TYPE
+> CREATE TABLE tq ()
+CREATE TABLE
+> ALTER TABLE tq RENAME TO q
+ERROR 42710 type "q" already exists
+> COMMENT ON TYPE e2 IS 'x'
+COMMENT
+> BEGIN
+BEGIN
+> ALTER TYPE e2 RENAME TO e5
+ALTER TYPE
+> SELECT 'a'::e5::text
+fields text:25:-1:-1
+row a
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT 'a'::e2::text, obj_description('e2'::regtype, 'pg_type')
+fields text:25:-1:-1,obj_description:25:-1:-1
+row a,x
+SELECT 1
+> ALTER TYPE e2 SET SCHEMA s
+ALTER TYPE
+> SELECT typname, typnamespace::regnamespace::text FROM pg_type WHERE typname IN ('e2', '_e2') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typnamespace:25:-1:-1
+row _e2,s
+row e2,s
+SELECT 2
+> SELECT pg_get_viewdef('v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b,
+    'a'::s.e2 AS l,
+    (NULL::integer)::d3 AS m,
+    NULL::s.e2[] AS n
+   FROM t;
+SELECT 1
+> SELECT format_type(atttypid, atttypmod) FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum
+fields format_type:25:-1:-1
+row s.e2
+row ct2
+row d3
+row r2
+SELECT 4
+> SELECT 'a'::s.e2::text
+fields text:25:-1:-1
+row a
+SELECT 1
+> ALTER TYPE s._e2 SET SCHEMA public
+ERROR 42809 cannot alter array type s.e2[]
+HINT You can alter type s.e2, which will alter the array type as well.
+> ALTER TYPE s.e2 SET SCHEMA s
+ALTER TYPE
+> ALTER TYPE s.e2 SET SCHEMA nosuch
+ERROR 3F000 schema "nosuch" does not exist
+> ALTER TYPE s.e2 SET SCHEMA pg_toast
+ERROR 0A000 cannot move objects into or out of TOAST schema
+> ALTER TYPE s.e2 SET SCHEMA pg_temp
+ERROR 0A000 cannot move objects into or out of temporary schemas
+> CREATE TYPE e2 AS ENUM ('b')
+CREATE TYPE
+> ALTER TYPE s.e2 SET SCHEMA public
+ERROR 42710 type "e2" already exists in schema "public"
+> CREATE TYPE s._e3 AS ENUM ('b')
+CREATE TYPE
+> CREATE TYPE e3 AS ENUM ('b')
+CREATE TYPE
+> SELECT typname, typnamespace::regnamespace::text FROM pg_type WHERE typname IN ('e3', '_e3', '__e3') ORDER BY 1, 2
+fields typname@pg_type.2:19:64:-1,typnamespace:25:-1:-1
+row __e3,s
+row _e3,public
+row _e3,s
+row e3,public
+SELECT 4
+> ALTER TYPE s._e3 SET SCHEMA public
+ERROR 42710 type "_e3" already exists in schema "public"
+> ALTER TYPE e3 SET SCHEMA s
+ERROR 42710 type "_e3" already exists in schema "s"
+> CREATE TABLE s.ct2 ()
+CREATE TABLE
+> ALTER TYPE ct2 SET SCHEMA s
+ERROR 42710 type "ct2" already exists in schema "s"
+> DROP TABLE s.ct2
+DROP TABLE
+> ALTER TYPE ct2 SET SCHEMA s
+ALTER TYPE
+> SELECT relname, relnamespace::regnamespace::text FROM pg_class WHERE relname = 'ct2'
+fields relname@pg_class.2:19:64:-1,relnamespace:25:-1:-1
+row ct2,s
+SELECT 1
+> SELECT typname, typnamespace::regnamespace::text FROM pg_type WHERE typname IN ('ct2', '_ct2') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typnamespace:25:-1:-1
+row _ct2,s
+row ct2,s
+SELECT 2
+> SELECT pg_get_viewdef('v')
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b,
+    'a'::s.e2 AS l,
+    (NULL::integer)::d3 AS m,
+    NULL::s.e2[] AS n
+   FROM t;
+SELECT 1
+> ALTER TYPE s.ct2 SET SCHEMA s
+ALTER TYPE
+> ALTER DOMAIN d3 SET SCHEMA s
+ALTER DOMAIN
+> SELECT conname, connamespace::regnamespace::text FROM pg_constraint WHERE contypid = 's.d3'::regtype ORDER BY 1
+fields conname@pg_constraint.2:19:64:-1,connamespace:25:-1:-1
+row d_check,s
+row d_not_null,s
+SELECT 2
+> SELECT typname, typnamespace::regnamespace::text FROM pg_type WHERE typname IN ('d3', '_d3') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typnamespace:25:-1:-1
+row _d3,s
+row d3,s
+SELECT 2
+> ALTER DOMAIN s.e2 SET SCHEMA public
+ERROR 42809 s.e2 is not a domain
+> ALTER TYPE r2 SET SCHEMA s
+ALTER TYPE
+> SELECT typname, typnamespace::regnamespace::text FROM pg_type WHERE typname IN ('r2', '_r2', 'r_multirange', '_r_multirange') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typnamespace:25:-1:-1
+row _r2,s
+row _r_multirange,public
+row r2,s
+row r_multirange,public
+SELECT 4
+> ALTER TYPE pg_class SET SCHEMA s
+ERROR 42809 pg_class is a table's row type
+HINT Use ALTER TABLE instead.
+> ALTER TYPE t SET SCHEMA s
+ERROR 42809 t is a table's row type
+HINT Use ALTER TABLE instead.
+> ALTER TYPE int4 SET SCHEMA pg_catalog
+ALTER TYPE
+> SELECT classid::regclass::text, refobjid::regnamespace::text, deptype, count(*) FROM pg_depend WHERE refclassid = 'pg_namespace'::regclass AND classid = 'pg_type'::regclass AND objid >= 16384 GROUP BY 1, 2, 3 ORDER BY 1, 2, 3
+fields classid:25:-1:-1,refobjid:25:-1:-1,deptype@pg_depend.7:18:1:-1,count:20:8:-1
+row pg_type,public,n,4
+row pg_type,s,n,5
+SELECT 2
+> ALTER TYPE s.e2 OWNER TO nosuch
+ERROR 42704 role "nosuch" does not exist
+> ALTER TYPE nosuch OWNER TO pg_monitor
+ERROR 42704 type "nosuch" does not exist
+> ALTER TYPE s.e2 OWNER TO pg_monitor
+ALTER TYPE
+> SELECT typname, typowner::regrole::text FROM pg_type WHERE typname IN ('e2', '_e2') ORDER BY 1, 2
+fields typname@pg_type.2:19:64:-1,typowner:25:-1:-1
+row _e2,pg_monitor
+row _e2,postgres
+row e2,pg_monitor
+row e2,postgres
+SELECT 4
+> ALTER TYPE s._e2 OWNER TO pg_monitor
+ERROR 42809 cannot alter array type s.e2[]
+HINT You can alter type s.e2, which will alter the array type as well.
+> ALTER TYPE t OWNER TO pg_monitor
+ERROR 42809 t is a table's row type
+HINT Use ALTER TABLE instead.
+> ALTER TYPE pg_class OWNER TO pg_monitor
+ERROR 42809 pg_class is a table's row type
+HINT Use ALTER TABLE instead.
+> ALTER TYPE s.ct2 OWNER TO pg_monitor
+ALTER TYPE
+> SELECT relname, relowner::regrole::text FROM pg_class WHERE relname = 'ct2'
+fields relname@pg_class.2:19:64:-1,relowner:25:-1:-1
+row ct2,pg_monitor
+SELECT 1
+> SELECT typname, typowner::regrole::text FROM pg_type WHERE typname IN ('ct2', '_ct2') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typowner:25:-1:-1
+row _ct2,pg_monitor
+row ct2,pg_monitor
+SELECT 2
+> ALTER TABLE s.ct2 OWNER TO CURRENT_USER
+ERROR 42809 "ct2" is a composite type
+HINT Use ALTER TYPE instead.
+> ALTER TYPE s.r2 OWNER TO pg_monitor
+ALTER TYPE
+> SELECT typname, typowner::regrole::text FROM pg_type WHERE typname IN ('r2', '_r2', 'r_multirange', '_r_multirange') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typowner:25:-1:-1
+row _r2,pg_monitor
+row _r_multirange,pg_monitor
+row r2,pg_monitor
+row r_multirange,pg_monitor
+SELECT 4
+> ALTER DOMAIN s.d3 OWNER TO pg_monitor
+ALTER DOMAIN
+> ALTER DOMAIN s.e2 OWNER TO pg_monitor
+ERROR 42809 s.e2 is not a domain
+> SELECT typname, typowner::regrole::text FROM pg_type WHERE typname IN ('d3', '_d3') ORDER BY 1
+fields typname@pg_type.2:19:64:-1,typowner:25:-1:-1
+row _d3,pg_monitor
+row d3,pg_monitor
+SELECT 2
+> ALTER TYPE s.e2 OWNER TO pg_monitor
+ALTER TYPE
+> ALTER TYPE int4 OWNER TO CURRENT_USER
+ALTER TYPE
+> ALTER TYPE s.e2 OWNER TO CURRENT_USER
+ALTER TYPE
+> SELECT typname, typowner::regrole::text FROM pg_type WHERE typname IN ('e2', '_e2') ORDER BY 1, 2
+fields typname@pg_type.2:19:64:-1,typowner:25:-1:-1
+row _e2,postgres
+row _e2,postgres
+row e2,postgres
+row e2,postgres
+SELECT 4
+> DROP SCHEMA s CASCADE
+NOTICE 00000 drop cascades to 10 other objects
+DETAIL drop cascades to type s.e2
+drop cascades to column a of table t
+drop cascades to type s.ct2
+drop cascades to column b of table t
+drop cascades to type s.d3
+drop cascades to column c of table t
+drop cascades to view v
+drop cascades to type s.r2
+drop cascades to column x of table t
+drop cascades to type s._e3
+DROP SCHEMA

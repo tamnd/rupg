@@ -13,6 +13,7 @@ pub mod names;
 pub mod size;
 pub mod toast;
 
+mod alter_type;
 mod drop;
 mod enum_label;
 mod owner;
@@ -1367,7 +1368,7 @@ impl Catalog {
         Ok(oid)
     }
 
-    /// Checks the name of a new relation, as `heap_create_with_catalog` and `index_create` do. When the row type of a new table would have the name of an array type that PostgreSQL made, the array type gets a new name, as `moveArrayTypeName` gives it.
+    /// Checks the name of a new relation, as `heap_create_with_catalog` and `index_create` do. When the row type of a new table would have the name of an array type that PostgreSQL made, the array type gets a new name, as `moveArrayTypeName` gives it. A type with the name gives the hint of `heap_create_with_catalog`.
     fn check_new_relation(&mut self, namespace: u32, name: &str, row_type: bool) -> Result<()> {
         if self.relation_by_name(namespace, name).is_some() {
             return Err(duplicate_table(name));
@@ -1375,7 +1376,9 @@ impl Catalog {
         if !row_type {
             return Ok(());
         }
-        self.check_new_type(namespace, name)
+        self.check_new_type(namespace, name).map_err(|e| e.with_hint(
+            "A relation has an associated type of the same name, so you must use a name that doesn't conflict with any existing type.",
+        ))
     }
 
     /// Checks the name of a new type: when the name is the name of an array type that PostgreSQL made, the array type gets a new name, as `moveArrayTypeName` gives it. Any other type with the name is an error.
@@ -1385,8 +1388,9 @@ impl Catalog {
         };
         let is_auto_array = old.1 != 0 && self.types.get(&old.1).is_some_and(|e| e.array == old.0);
         if !is_auto_array {
-            return Err(Error::new(SqlState::DUPLICATE_OBJECT, format!("type \"{name}\" already exists")).with_hint(
-                "A relation has an associated type of the same name, so you must use a name that doesn't conflict with any existing type.",
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("type \"{name}\" already exists"),
             ));
         }
         let renamed = self.array_type_name(name, namespace);
