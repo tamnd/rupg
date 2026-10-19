@@ -1,4 +1,4 @@
-//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `OWNER TO`, and `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column. The other subcommands give `0A000`.
+//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, and `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column. The other subcommands give `0A000`.
 //!
 //! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner and the `SET` options of the identity columns.
 
@@ -7,7 +7,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named, Owned};
 use rupg_sql::nodes::{
     AlterOwnerStmt, AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType,
-    Constraint, IndexStmt, Node, ObjectType, RangeVar, RoleSpec, RoleSpecType,
+    Constraint, DropBehavior, IndexStmt, Node, ObjectType, RangeVar, RoleSpec, RoleSpecType,
 };
 use rupg_types::Value;
 
@@ -102,7 +102,7 @@ fn action_words(subtype: AlterTableType) -> &'static str {
 /// The work of the subcommands after their checks, by pass.
 #[derive(Default)]
 struct Passes {
-    /// `AT_PASS_DROP`: `DROP DEFAULT` and `DROP IDENTITY`, in the order of the statement.
+    /// `AT_PASS_DROP`: `DROP DEFAULT`, `DROP NOT NULL`, `DROP CONSTRAINT` and `DROP IDENTITY`, in the order of the statement.
     drops: Vec<DropCmd>,
     /// `AT_PASS_ALTER_TYPE`: `ALTER COLUMN ... TYPE`, in the order of the statement.
     types: Vec<TypeCmd>,
@@ -122,6 +122,10 @@ enum DropCmd {
     Default(String),
     /// `DROP IDENTITY` of the column, with `IF EXISTS`.
     Identity(String, bool),
+    /// `DROP NOT NULL` of the column.
+    NotNull(String),
+    /// `DROP CONSTRAINT` with the name, `IF EXISTS` and `CASCADE`.
+    Constraint(String, bool, bool),
 }
 
 /// A subcommand of `AT_PASS_ADD_OTHERCONSTR`.
@@ -284,6 +288,17 @@ impl Definer<'_, '_> {
                 }
                 passes.constraints.push(make_not_null(column));
             }
+            AlterTableType::AT_DropNotNull => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                passes.drops.push(DropCmd::NotNull(column));
+            }
+            AlterTableType::AT_DropConstraint => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let name = cmd.name.as_deref().unwrap_or_default().to_string();
+                let cascade = cmd.behavior == DropBehavior::DROP_CASCADE;
+                passes.drops.push(DropCmd::Constraint(name, cmd.missing_ok, cascade));
+            }
             AlterTableType::AT_ColumnDefault => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
@@ -388,6 +403,10 @@ impl Definer<'_, '_> {
                 DropCmd::Default(column) => self.column_default(target, column, None)?,
                 DropCmd::Identity(column, missing_ok) => {
                     self.drop_identity(target, column, *missing_ok)?;
+                }
+                DropCmd::NotNull(column) => self.drop_not_null(target, column)?,
+                DropCmd::Constraint(name, missing_ok, cascade) => {
+                    self.drop_constraint(target, name, *missing_ok, *cascade)?;
                 }
             }
         }

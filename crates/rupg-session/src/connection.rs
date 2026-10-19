@@ -2700,6 +2700,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_column_type_checks.test")));
     }
 
+    /// `DROP CONSTRAINT` with `IF EXISTS` and `CASCADE`, the objects that depend on a key, a not-null constraint of a key or an identity column, `DROP NOT NULL`, and the pass of the drops before the new constraints. `connection/alter_drop_constraint.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_drop_constraint() {
+        big_stack(|| script(include_str!("connection/alter_drop_constraint.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {
