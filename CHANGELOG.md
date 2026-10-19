@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.46 (2026-10-19)
+
 ### Added
 
 - `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT`. A rollback to a savepoint brings back the rows, the catalog, the settings, the deferred triggers and the advisory locks of the transaction at the savepoint (#411).
