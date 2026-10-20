@@ -2098,6 +2098,22 @@ impl Catalog {
         Ok(())
     }
 
+    /// `AlterFunction`, and `AlterObjectRename_internal`, `AlterObjectNamespace_internal` and `AlterObjectOwner_internal` for a function: `change` gives the new row of the function. `changeDependencyFor` changes the dependency of the function on its schema when the schema changes.
+    ///
+    /// # Errors
+    ///
+    /// An internal error for a function that the catalog does not have.
+    pub fn alter_function(&mut self, oid: u32, change: impl FnOnce(&mut Function)) -> Result<()> {
+        let function = self.functions.get_mut(&oid).ok_or_else(|| no_object("function", oid))?;
+        let old = function.namespace;
+        change(function);
+        let new = function.namespace;
+        if old != new {
+            self.change_namespace_dependency(ObjRef::new(PG_PROC, oid), old, new);
+        }
+        Ok(())
+    }
+
     /// `CreateExtensionInternal`: a new extension, which gets the next OID.
     ///
     /// # Errors

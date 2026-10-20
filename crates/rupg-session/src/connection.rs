@@ -2857,6 +2857,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/variadic_function.test")));
     }
 
+    /// `ALTER FUNCTION` and `ALTER ROUTINE` with options, `RENAME TO`, `SET SCHEMA` and `OWNER TO`, and `COMMENT ON FUNCTION`, with the errors of the lookup of the function, of the options and of a name that the schema has. `connection/alter_function.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_function() {
+        big_stack(|| script(include_str!("connection/alter_function.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {

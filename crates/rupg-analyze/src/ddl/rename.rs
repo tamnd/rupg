@@ -1,4 +1,4 @@
-//! `ALTER ... RENAME` of a relation, a column, a constraint of a table and a schema, as `RenameRelation`, `renameatt`, `RenameConstraint` and `RenameSchema` run them.
+//! `ALTER ... RENAME` of a relation, a column, a constraint of a table and a schema, as `RenameRelation`, `renameatt`, `RenameConstraint` and `RenameSchema` run them. A type and a function have their own modules.
 //!
 //! The catalog keeps the text of a view, and the text names the objects that the query reads. So a rename gives the views that read the renamed objects in [`super::Defined::views`], and the caller writes their text again from the query of the old names.
 
@@ -27,6 +27,8 @@ pub(super) fn is_rename_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_SCHEMA
             | ObjectType::OBJECT_TYPE
             | ObjectType::OBJECT_DOMAIN
+            | ObjectType::OBJECT_FUNCTION
+            | ObjectType::OBJECT_ROUTINE
     )
 }
 
@@ -43,6 +45,9 @@ impl Definer<'_, '_> {
             }
             ObjectType::OBJECT_TABCONSTRAINT => self.rename_table_constraint(stmt, newname),
             ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => self.rename_type(stmt),
+            ObjectType::OBJECT_FUNCTION | ObjectType::OBJECT_ROUTINE => {
+                self.rename_function(stmt.renameType, stmt.object.as_ref(), newname)
+            }
             _ => self.rename_relation(stmt, newname),
         }
     }

@@ -14,11 +14,11 @@ use crate::typename::{names, type_name_text};
 const BOOTSTRAP_SUPERUSER: u32 = 10;
 
 /// A function that a name can find: a function of the catalog or a built-in function.
-struct Candidate {
-    oid: u32,
-    argtypes: Vec<u32>,
-    owner: u32,
-    kind: u8,
+pub(super) struct Candidate {
+    pub(super) oid: u32,
+    pub(super) argtypes: Vec<u32>,
+    pub(super) owner: u32,
+    pub(super) kind: u8,
 }
 
 impl Definer<'_, '_> {
@@ -51,7 +51,7 @@ impl Definer<'_, '_> {
     }
 
     /// `LookupFuncWithArgs` for `OBJECT_FUNCTION`: the function of the name, or with `missing_ok` `None` and the notice of `does_not_exist_skipping` when it does not exist. A name with no list of arguments must find one function.
-    fn find_function(
+    pub(super) fn find_function(
         &mut self,
         item: &ObjectWithArgs,
         missing_ok: bool,
@@ -121,7 +121,7 @@ impl Definer<'_, '_> {
     }
 
     /// The functions with the name in the schema: the functions of the catalog, and the built-in functions that the catalog does not have.
-    fn functions_in(&self, namespace: u32, name: &str) -> Vec<Candidate> {
+    pub(super) fn functions_in(&self, namespace: u32, name: &str) -> Vec<Candidate> {
         let mut found: Vec<Candidate> = self
             .catalog
             .functions()
