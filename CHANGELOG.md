@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Temporary tables, views and sequences in the schema `pg_temp_N` of the session, which goes when the session ends (#449).
+
 ### Fixed
 
 - A join that makes more rows than rupg can keep in memory gives the error `out of memory` and the server does not stop. The cross join of the regression test `groupingsets` stopped the server before (#448).

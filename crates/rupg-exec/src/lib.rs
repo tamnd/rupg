@@ -4,7 +4,7 @@
 
 #![forbid(unsafe_code)]
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::BTreeSet;
 use std::rc::Rc;
 use std::sync::Arc;
@@ -452,6 +452,7 @@ fn recursive_rows(
     work: usize,
     tables: &scan::Tables,
     run: &Run<'_, '_>,
+    want: Option<usize>,
 ) -> Result<Rows> {
     let types: Vec<u32> = op.columns.iter().map(|(ty, _)| *ty).collect();
     let keys = sort::Keys::new(&op.groups, &types, run.session)?;
@@ -467,6 +468,9 @@ fn recursive_rows(
     while !step.is_empty() {
         run.session.interrupted()?;
         rows.extend(step.iter().cloned());
+        if want.is_some_and(|want| rows.len() >= want) {
+            break;
+        }
         run.cache.work.borrow_mut().push((work, Rc::new(step)));
         let mut leaf = |i: usize| {
             let Some(sub) = &query.relations[i].subquery else {
@@ -605,6 +609,8 @@ struct Cache {
     written: Arc<Vec<Rows>>,
     /// The flags `error` and `empty` of each `JsonExpr`, by the address of the node, as its `JsonExprState` keeps them from one evaluation to the next.
     json_flags: RefCell<Vec<(*const rupg_analyze::JsonExpr, jsonexpr::Flags)>>,
+    /// The number of rows that the next run of a recursive query of `WITH` must give, when the query that reads it needs no more, as the `ExecProcNode` calls of a `Limit` above a `CteScan` read them. The run takes it.
+    want: Cell<Option<usize>>,
 }
 
 impl Cache {
@@ -844,6 +850,7 @@ fn with_subqueries(
     session: &dyn Session,
     cache: &Cache,
     outer: &[Frame<'_>],
+    want: Option<usize>,
 ) -> Result<Rc<scan::Tables>> {
     let work = |r: &rupg_analyze::Relation| r.cte.as_ref().and_then(|c| c.work);
     let write = |r: &rupg_analyze::Relation| r.cte.as_ref().and_then(|c| c.write);
@@ -881,8 +888,17 @@ fn with_subqueries(
             && tables.needs[i].is_empty()
             && !recursive.contains(&i)
         {
-            tables.rows[i] =
-                cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))?;
+            let recursive = sub.set_op.as_ref().is_some_and(|op| op.work.is_some());
+            tables.rows[i] = match want.filter(|_| recursive) {
+                // The rows of a part of the query do not go into the cache, because another reader of the query can need all of them.
+                Some(want) => {
+                    cache.want.set(Some(want));
+                    Rc::new(run_query(sub, params, session, cache, &frames, false)?)
+                }
+                None => {
+                    cache.rows(sub, || run_query(sub, params, session, cache, &frames, false))?
+                }
+            };
         }
         if let Some(function) = &relation.function
             && tables.needs[i].is_empty()
@@ -920,6 +936,24 @@ fn constant(expr: &Expr) -> bool {
     }
 }
 
+/// True when the rows of a query are the first rows of its one relation, in their order, so that a `LIMIT` of the query needs only that many rows of the relation.
+fn reads_all(query: &Query) -> bool {
+    query.relations.len() == 1
+        && query.filter.is_none()
+        && !query.grouped
+        && query.group.is_empty()
+        && query.having.is_none()
+        && query.sort.is_empty()
+        && query.distinct.is_empty()
+        && query.windows.is_empty()
+        && query.set_op.is_none()
+        && query.row_marks.is_empty()
+        && query.write.is_none()
+        && !query.has_target_srfs()
+        && agg::calls(query).is_empty()
+        && window::calls(query).is_empty()
+}
+
 /// Runs a query or a subquery and gives its rows, with no junk columns. `outer` has the rows of the queries outside a subquery, with the query just outside it last. With `exists`, the query runs as `simplify_EXISTS_query` makes it when it can, and gives one empty row when it has a row.
 fn run_query(
     query: &Query,
@@ -929,6 +963,7 @@ fn run_query(
     outer: &[Frame<'_>],
     exists: bool,
 ) -> Result<Vec<Vec<Value>>> {
+    let want = cache.want.take();
     let base = cache.tables(query, session)?;
     let mut eval = Eval::new(params, session, &base, cache, outer);
     // simplify_EXISTS_query: with no aggregate, no `HAVING`, no `OFFSET` and a `LIMIT` that is a constant more than 0 or null, `EXISTS` only needs a row of `FROM` and `WHERE`.
@@ -956,7 +991,8 @@ fn run_query(
     }
     let open = gate(query, &mut eval)?;
     let mut tables = if open {
-        with_subqueries(query, &base, params, session, cache, outer)?
+        let want = count.filter(|_| reads_all(query)).map(|count| count.saturating_add(offset));
+        with_subqueries(query, &base, params, session, cache, outer, want)?
     } else {
         Rc::clone(&base)
     };
@@ -968,7 +1004,7 @@ fn run_query(
         let rows = match op.work {
             Some(work) => {
                 let run = Run { params, session, cache, outer };
-                recursive_rows(query, op, work, &tables, &run)?
+                recursive_rows(query, op, work, &tables, &run, want)?
             }
             None => set_rows(op, &mut |i| Ok((*tables.rows[i]).clone()), session)?,
         };
