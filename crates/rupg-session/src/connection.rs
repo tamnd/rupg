@@ -2839,6 +2839,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/create_function.test")));
     }
 
+    /// `CREATE OR REPLACE FUNCTION`: a new body for a function that exists, which a view sees, new options, new dependencies, and the errors for a new result type, new `OUT` parameters, a new name of an argument and a body that does not fit. `connection/replace_function.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn replace_function() {
+        big_stack(|| script(include_str!("connection/replace_function.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {
