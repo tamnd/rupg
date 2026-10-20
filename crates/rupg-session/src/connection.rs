@@ -2831,6 +2831,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/describe_object.test")));
     }
 
+    /// `CREATE FUNCTION` and `DROP FUNCTION` for functions in SQL: calls in the target list, in `FROM` and in `WHERE`, a set, `OUT` parameters, `RETURNS TABLE`, the rows of `pg_proc`, the errors of a call and of a body, the dependencies of a view, of a type and of a schema, and the errors and notices of `DROP FUNCTION`. `connection/create_function.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn create_function() {
+        big_stack(|| script(include_str!("connection/create_function.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {

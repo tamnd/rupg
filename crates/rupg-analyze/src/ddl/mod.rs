@@ -1,4 +1,4 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c` and `ExecuteTruncate` run them, and they change a [`Catalog`]. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`, so [`is_definition`] does not list it. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c` and `ExecuteTruncate` run them, and they change a [`Catalog`]. `CREATE FUNCTION` makes a function in SQL. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
 mod alter_column;
@@ -9,6 +9,7 @@ mod copy;
 mod domain;
 mod drop;
 mod drop_constraint;
+mod drop_function;
 mod enum_label;
 mod enumtype;
 mod fkey;
@@ -108,6 +109,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateRangeStmt(_)
             | Node::ViewStmt(_)
             | Node::RuleStmt(_)
+            | Node::CreateFunctionStmt(_)
             | Node::CommentStmt(_)
             | Node::CreateSeqStmt(_)
             | Node::AlterSeqStmt(_)
@@ -146,6 +148,7 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_TYPE
             | ObjectType::OBJECT_DOMAIN
             | ObjectType::OBJECT_RULE
+            | ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE

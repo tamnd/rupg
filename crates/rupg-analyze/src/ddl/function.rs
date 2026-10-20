@@ -1,8 +1,8 @@
 //! `CreateFunction`: `CREATE FUNCTION` for a function in SQL, as `interpret_AS_clause`, `ProcedureCreate` and `fmgr_sql_validator` run it. The body is a `RETURN` expression, a query in `BEGIN ATOMIC` or a query in a string.
 //!
-//! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the body again each time a query calls the function, as it reads the query of a view. The analysis of a call uses the types of the arguments of the call, so a polymorphic argument has its actual type. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`.
+//! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the body again each time a query calls the function, as it reads the query of a view. The analysis of a call uses the types of the arguments of the call, so a polymorphic argument has its actual type. The setup of a new cluster runs `CREATE FUNCTION` for the functions of `information_schema` too.
 
-use rupg_catalog::{Catalog, Function, FunctionBody, ObjRef, PG_PROC};
+use rupg_catalog::{Catalog, Function, FunctionBody, ObjRef, PG_PROC, PG_TYPE};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{CreateFunctionStmt, DefElem, FunctionParameterMode, Node};
@@ -178,11 +178,14 @@ fn result_types(function: &Function, inputs: &[u32]) -> Result<Vec<u32>> {
         .collect()
 }
 
-/// The error of `check_sql_fn_retval` for a query with the wrong columns.
-fn mismatch(rettype: u32, detail: String) -> Error {
+/// The error of `check_sql_fn_retval` for a body with the wrong columns, in the function `name`.
+fn mismatch(rettype: u32, name: &str, detail: String) -> Error {
     Error::new(
         SqlState::INVALID_FUNCTION_DEFINITION,
-        format!("return type mismatch in function declared to return {}", types::name(rettype)),
+        format!(
+            "return type mismatch in function declared to return {} (SQL function \"{name}\")",
+            types::name(rettype)
+        ),
     )
     .with_detail(detail)
 }
@@ -209,19 +212,25 @@ fn body_references(catalog: &Catalog, body: &Expr) -> Vec<ObjRef> {
 
 impl Analyzer<'_> {
     /// `transformReturnStmt` and `check_sql_fn_retval`: the `RETURN` expression, as a value of the result type. A value of type `unknown` becomes `text` first, and then the cast to the result type is an assignment cast.
-    fn return_body(&mut self, value: Option<&Node>, rettype: u32) -> Result<Expr> {
+    fn return_body(&mut self, value: Option<&Node>, rettype: u32, name: &str) -> Result<Expr> {
         let mut expr = self.with_kind(Kind::Select, |an| an.transform(value))?;
         if expr.ty == oid::UNKNOWN {
             expr = self.coerce(expr, oid::TEXT, -1, Context::Implicit, None)?;
         }
         let actual = expr.ty;
         self.coerce_to_target(expr, rettype, -1, Context::Assignment, None)?.ok_or_else(|| {
-            mismatch(rettype, format!("Actual return type is {}.", types::name(actual)))
+            mismatch(rettype, name, format!("Actual return type is {}.", types::name(actual)))
         })
     }
 
     /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query must be the columns of the result, and each column takes an assignment cast to the type of the result column. The other statements give an error, as rupg runs only one query.
-    fn query_body(&mut self, stmts: &[&Node], rettype: u32, columns: &[u32]) -> Result<Query> {
+    fn query_body(
+        &mut self,
+        stmts: &[&Node],
+        rettype: u32,
+        columns: &[u32],
+        name: &str,
+    ) -> Result<Query> {
         let [Node::SelectStmt(select)] = stmts else {
             return Err(not_yet("a function body that is not one SELECT", None));
         };
@@ -231,12 +240,17 @@ impl Analyzer<'_> {
         if rettype != oid::RECORD && width != 1 {
             return Err(mismatch(
                 rettype,
+                name,
                 "Final statement must return exactly one column.".into(),
             ));
         }
         if rettype == oid::RECORD && !columns.is_empty() && width != columns.len() {
             let what = if width > columns.len() { "many" } else { "few" };
-            return Err(mismatch(rettype, format!("Final statement returns too {what} columns.")));
+            return Err(mismatch(
+                rettype,
+                name,
+                format!("Final statement returns too {what} columns."),
+            ));
         }
         for (i, &ty) in columns.iter().enumerate() {
             let target = &mut query.targets[i];
@@ -253,6 +267,7 @@ impl Analyzer<'_> {
             target.expr = cast.ok_or_else(|| {
                 mismatch(
                     rettype,
+                    name,
                     format!(
                         "Final statement returns {} instead of {} at column {}.",
                         types::name(actual),
@@ -278,13 +293,15 @@ impl Analyzer<'_> {
             _ => function.rettype,
         };
         Ok(match stmts {
-            Statements::Return(value) => Body::Value(self.return_body(*value, rettype)?),
+            Statements::Return(value) => {
+                Body::Value(self.return_body(*value, rettype, &function.name)?)
+            }
             Statements::Atomic(list) => {
-                Body::Query(Box::new(self.query_body(list, rettype, &columns)?))
+                Body::Query(Box::new(self.query_body(list, rettype, &columns, &function.name)?))
             }
             Statements::String(list) => {
                 let list: Vec<&Node> = list.iter().collect();
-                Body::Query(Box::new(self.query_body(&list, rettype, &columns)?))
+                Body::Query(Box::new(self.query_body(&list, rettype, &columns, &function.name)?))
             }
         })
     }
@@ -512,6 +529,18 @@ impl Definer<'_, '_> {
         }
         if support != 0 {
             refs.push(ObjRef::new(PG_PROC, support));
+        }
+        // `ProcedureCreate`: the function depends on the types of its result and of its arguments.
+        let args = if function.allargtypes.is_empty() {
+            &function.argtypes
+        } else {
+            &function.allargtypes
+        };
+        for &ty in std::iter::once(&function.rettype).chain(args) {
+            let found = ObjRef::new(PG_TYPE, ty);
+            if !refs.contains(&found) {
+                refs.push(found);
+            }
         }
         self.catalog.create_function(function, &refs)
     }
