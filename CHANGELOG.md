@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `ALTER FUNCTION` and `ALTER ROUTINE` with the options of a function, `RENAME TO`, `SET SCHEMA` and `OWNER TO`, and `COMMENT ON FUNCTION` (#437).
 - `VARIADIC` arguments for functions in SQL, with the checks of PostgreSQL for the names and types of the arguments, and functions in SQL that return `void` (#436).
 - The defaults of the arguments of functions in SQL, with `DEFAULT` or `=`. A call can leave out the last arguments or name its arguments, and `pg_get_function_arguments` shows the defaults (#435).
 - `CREATE OR REPLACE FUNCTION` for functions in SQL. The function keeps its OID and owner, and the checks of PostgreSQL for the return type, the `OUT` parameters and the names of the arguments apply (#434).
