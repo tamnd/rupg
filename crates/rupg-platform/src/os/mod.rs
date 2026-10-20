@@ -316,6 +316,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]
     fn whole_files_and_directories() {
         let dir = TempDir::new();
         let io = OsIo;
@@ -337,6 +338,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]
     fn owners_and_modes() {
         use std::os::unix::fs::PermissionsExt;
         let dir = TempDir::new();
@@ -354,6 +356,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]
     fn a_file_round_trip() {
         let dir = TempDir::new();
         let path = dir.0.join("a.rupg");
@@ -398,6 +401,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]
     fn tcp() {
         use std::io::{Read, Write};
 
@@ -432,6 +436,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]
     fn unix_sockets() {
         use std::io::{Read, Write};
 
@@ -490,6 +495,7 @@ mod tests {
 
     #[cfg(unix)]
     #[test]
+    #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]
     fn lookups() {
         let loopback: std::net::IpAddr = "127.0.0.1".parse().unwrap();
         let interfaces = OsNet.interfaces().unwrap();
@@ -501,6 +507,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "Miri isolates the test from the operating system")]
     fn the_clock_and_the_entropy() {
         let clock = OsClock::new();
         // 2026-01-01 UTC. A host clock before this date is wrong.

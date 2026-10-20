@@ -219,6 +219,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "Miri does not support sysconf(_SC_PHYS_PAGES)")]
     fn the_server_default() {
         let d = MemoryPool::server_default();
         assert!(d >= 64 << 20, "{d}");
