@@ -86,11 +86,10 @@ pub(crate) type Row = Vec<Option<Vec<u8>>>;
 pub(crate) fn is_query(node: &Node) -> bool {
     matches!(
         node,
-        Node::SelectStmt(_)
-            | Node::InsertStmt(_)
-            | Node::UpdateStmt(_)
-            | Node::DeleteStmt(_)
-            | Node::MergeStmt(_)
+        Node::SelectStmt(select) if select.intoClause.is_none()
+    ) || matches!(
+        node,
+        Node::InsertStmt(_) | Node::UpdateStmt(_) | Node::DeleteStmt(_) | Node::MergeStmt(_)
     )
 }
 

@@ -7,6 +7,7 @@ mod alter_type;
 mod cluster;
 mod comment;
 mod copy;
+mod create_table_as;
 mod domain;
 mod drop;
 mod drop_constraint;
@@ -83,6 +84,8 @@ pub struct Defined {
     pub truncated: Vec<u32>,
     /// The expressions of `USING` of `ALTER COLUMN ... TYPE`, which give the new values of the columns when the caller writes the rows of the table again.
     pub transforms: Vec<Transform>,
+    /// The table of `CREATE TABLE AS`, which the caller fills with the rows of the query, or `None`. It is `None` also for `WITH NO DATA` and for a table that exists with `IF NOT EXISTS`.
+    pub filled: Option<u32>,
     /// The views whose query reads an object that the statement renamed. The catalog keeps the text of a view, so the caller writes the text again from the query that the old names give.
     pub views: Vec<u32>,
 }
@@ -103,6 +106,7 @@ pub fn is_definition(stmt: &Node) -> bool {
     matches!(
         stmt,
         Node::CreateStmt(_)
+            | Node::CreateTableAsStmt(_)
             | Node::IndexStmt(_)
             | Node::CreateSchemaStmt(_)
             | Node::CreateDomainStmt(_)
@@ -125,6 +129,7 @@ pub fn is_definition(stmt: &Node) -> bool {
         || matches!(stmt, Node::AlterOwnerStmt(alter) if alter.objectType == ObjectType::OBJECT_SCHEMA || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
         || matches!(stmt, Node::RenameStmt(rename) if rename::is_rename_kind(rename.renameType))
         || matches!(stmt, Node::AlterObjectSchemaStmt(alter) if is_alter_kind(alter.objectType) || type_change::is_type_kind(alter.objectType) || alter_function::is_function_kind(alter.objectType))
+        || matches!(stmt, Node::SelectStmt(select) if select.intoClause.is_some())
 }
 
 /// True for the kinds of relations of `ALTER TABLE` and of the other statements that change a relation. `ALTER TYPE` of the attributes of a composite type is an `AlterTableStmt` too.
@@ -173,8 +178,11 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         transforms: Vec::new(),
         views: Vec::new(),
     };
+    let mut filled = None;
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
+        Node::CreateTableAsStmt(ctas) => definer.create_table_as(ctas).map(|table| filled = table),
+        Node::SelectStmt(select) => definer.select_into(select).map(|table| filled = table),
         Node::IndexStmt(index) => definer.create_index(index, false),
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
         Node::ViewStmt(view) => definer.create_view(view, text),
@@ -216,6 +224,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         scans: definer.scans,
         truncated: definer.truncated,
         transforms: definer.transforms,
+        filled,
         views: definer.views,
     }
 }

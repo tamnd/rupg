@@ -1,0 +1,154 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b varchar(5), c numeric(6,2), d text COLLATE "C")
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'x', 1.5, 'p'), (2, 'yy', 2.25, 'q'), (3, NULL, NULL, 'r')
+INSERT 0 3
+> CREATE TABLE t2 AS SELECT * FROM t
+SELECT 3
+> SELECT * FROM t2 ORDER BY a
+fields a@t2.1:23:4:-1,b@t2.2:1043:-1:9,c@t2.3:1700:-1:393222,d@t2.4:25:-1:-1
+row 1,x,1.50,p
+row 2,yy,2.25,q
+row 3,NULL,NULL,r
+SELECT 3
+> SELECT attname, atttypid::regtype, atttypmod, attcollation::regcollation, attnotnull, attndims FROM pg_attribute WHERE attrelid = 't2'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,atttypmod@pg_attribute.6:23:4:-1,attcollation:4191:4:-1,attnotnull@pg_attribute.12:16:1:-1,attndims@pg_attribute.7:21:2:-1
+row a,integer,-1,-,f,0
+row b,character varying,9,"default",f,0
+row c,numeric,393222,-,f,0
+row d,text,-1,"C",f,0
+SELECT 4
+> CREATE TABLE t3 (x, y) AS SELECT a, b FROM t WHERE a > 1
+SELECT 2
+> SELECT * FROM t3 ORDER BY x
+fields x@t3.1:23:4:-1,y@t3.2:1043:-1:9
+row 2,yy
+row 3,NULL
+SELECT 2
+> CREATE TABLE t4 (x, y, z) AS SELECT a FROM t
+ERROR 42601 too many column names were specified
+> CREATE TABLE t4 (x, x) AS SELECT a, b FROM t
+ERROR 42701 column "x" specified more than once
+> CREATE TABLE t4 AS SELECT 1 AS n, 'lit' AS s, ARRAY[1,2] AS arr, NULL AS z
+SELECT 1
+> SELECT attname, atttypid::regtype, atttypmod, attndims FROM pg_attribute WHERE attrelid = 't4'::regclass AND attnum > 0 ORDER BY attnum
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,atttypmod@pg_attribute.6:23:4:-1,attndims@pg_attribute.7:21:2:-1
+row n,integer,-1,0
+row s,text,-1,0
+row arr,integer[],-1,0
+row z,text,-1,0
+SELECT 4
+> CREATE TABLE t2 AS SELECT 1
+ERROR 42P07 relation "t2" already exists
+> CREATE TABLE IF NOT EXISTS t2 AS SELECT 1
+NOTICE 42P07 relation "t2" already exists, skipping
+CREATE TABLE AS
+> CREATE TABLE IF NOT EXISTS t5 AS SELECT a FROM t
+SELECT 3
+> CREATE TABLE t6 AS SELECT a FROM t WITH NO DATA
+CREATE TABLE AS
+> SELECT count(*) FROM t6
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE t7 AS SELECT a FROM t WITH DATA
+SELECT 3
+> CREATE TABLE t8 AS VALUES (1, 'a'), (2, 'b')
+SELECT 2
+> SELECT * FROM t8
+fields column1@t8.1:23:4:-1,column2@t8.2:25:-1:-1
+row 1,a
+row 2,b
+SELECT 2
+> CREATE TABLE t9 AS SELECT a, a FROM t
+ERROR 42701 column "a" specified more than once
+> CREATE TABLE t9 AS SELECT a AS ctid FROM t
+ERROR 42701 column name "ctid" conflicts with a system column name
+> CREATE TABLE t9 AS SELECT nosuch FROM t
+ERROR 42703 column "nosuch" does not exist at 27
+> CREATE TABLE t9 AS SELECT a FROM nosuch
+ERROR 42P01 relation "nosuch" does not exist at 34
+> CREATE TABLE nosuch.t9 AS SELECT 1
+ERROR 3F000 schema "nosuch" does not exist
+> CREATE TABLE tp (e text COLLATE "POSIX")
+CREATE TABLE
+> CREATE TABLE t9 AS SELECT d || e AS x FROM t, tp
+ERROR 42P22 no collation was derived for column "x" with collatable type text
+HINT Use the COLLATE clause to set the collation explicitly.
+> CREATE TABLE t9 AS SELECT ROW(1, 2) AS r
+ERROR 42P16 column "r" has pseudo-type record
+> CREATE TABLE t9 WITH (fillfactor = 50) AS SELECT 1 AS one
+SELECT 1
+> SELECT reloptions FROM pg_class WHERE relname = 't9'
+fields reloptions@pg_class.33:1009:-1:-1
+row {fillfactor=50}
+SELECT 1
+> CREATE TABLE t10 WITH (nosuch = 1) AS SELECT 1
+ERROR 22023 unrecognized parameter "nosuch"
+> CREATE TABLE t10 AS SELECT a FROM t ORDER BY a DESC LIMIT 2
+SELECT 2
+> SELECT * FROM t10
+fields a@t10.1:23:4:-1
+row 3
+row 2
+SELECT 2
+> SELECT a, b INTO t11 FROM t WHERE a < 3
+SELECT 2
+> SELECT * FROM t11 ORDER BY a
+fields a@t11.1:23:4:-1,b@t11.2:1043:-1:9
+row 1,x
+row 2,yy
+SELECT 2
+> SELECT a INTO TABLE t12 FROM t
+SELECT 3
+> SELECT a INTO t11 FROM t
+ERROR 42P07 relation "t11" already exists
+> CREATE TABLE t13 AS SELECT a FROM t UNION SELECT 9
+SELECT 4
+> SELECT * FROM t13 ORDER BY a
+fields a@t13.1:23:4:-1
+row 1
+row 2
+row 3
+row 9
+SELECT 4
+> CREATE TABLE t14 AS SELECT * FROM t WHERE false
+SELECT 0
+> SELECT count(*) FROM t14
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN
+BEGIN
+> CREATE TABLE t15 AS SELECT 1 AS x
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT * FROM t15
+ERROR 42P01 relation "t15" does not exist at 15
+> CREATE TABLE t15 AS SELECT 1/0 AS x
+ERROR 22012 division by zero
+> SELECT * FROM t15
+ERROR 42P01 relation "t15" does not exist at 15
+> CREATE TABLE t16 AS SELECT generate_series(1, 3) AS g
+SELECT 3
+> SELECT * FROM t16
+fields g@t16.1:23:4:-1
+row 1
+row 2
+row 3
+SELECT 3
+> INSERT INTO t16 VALUES (4)
+INSERT 0 1
+> SELECT count(*) FROM t16
+fields count:20:8:-1
+row 4
+SELECT 1
+> CREATE TABLE t17 AS WITH w AS (SELECT 5 AS v) SELECT v FROM w
+SELECT 1
+> SELECT * FROM t17
+fields v@t17.1:23:4:-1
+row 5
+SELECT 1
