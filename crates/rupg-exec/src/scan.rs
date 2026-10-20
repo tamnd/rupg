@@ -10,7 +10,7 @@ use std::sync::Arc;
 use rupg_analyze::{
     Expr, ExprKind, FromFunction, FromItem, JoinKind, Query, TABLE_OID_ATTNUM, Var,
 };
-use rupg_common::{Error, Result};
+use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
 use rupg_pgcatalog::{Batch, Values};
 use rupg_types::{Array, Record, Value, oid};
@@ -32,6 +32,21 @@ const ROLPASSWORD: usize = 10;
 
 /// The row number of a relation that is null in a tuple.
 pub(crate) const NONE: usize = usize::MAX;
+
+/// The most bytes that the tuples of one join can use. The executor keeps all the tuples of a join in memory, so a join with more tuples gives an error and does not stop the server. The tests use a smaller limit.
+const JOIN_BYTES: usize = if cfg!(test) { 1 << 22 } else { 1 << 30 };
+
+/// The most tuples of `width` relations that one join can make.
+fn join_limit(width: usize) -> usize {
+    JOIN_BYTES / (size_of::<Vec<usize>>() + width * size_of::<usize>())
+}
+
+/// The error of a join with more tuples than `join_limit` lets it make.
+fn too_many(limit: usize) -> Error {
+    Error::new(SqlState::OUT_OF_MEMORY, "out of memory").with_detail(format!(
+        "The join makes more than {limit} rows, and rupg keeps all the rows of a join in memory."
+    ))
+}
 
 /// The functions of the `=` operators that a hash join can use, because two values are equal only when they have the same form: `booleq`, `chareq`, `nameeq`, `int2eq`, `int4eq`, `texteq`, `oideq` and `int8eq`.
 pub(crate) const HASH_EQUALS: [u32; 8] = [60, 61, 62, 63, 65, 67, 184, 467];
@@ -650,6 +665,7 @@ impl Scan<'_, '_> {
             return join(input, self.tables, self.test);
         }
         let left = std::mem::take(&mut input.left);
+        let limit = join_limit(self.width);
         let mut out = Vec::new();
         for l in left {
             let context = merged(context, &l);
@@ -658,6 +674,9 @@ impl Scan<'_, '_> {
             let input = JoinInput { left: vec![l], right, ..input };
             let mut tuples = join(input, self.tables, self.test)?;
             self.tables.compact(&marks, &mut tuples);
+            if out.len() + tuples.len() > limit {
+                return Err(too_many(limit));
+            }
             out.extend(tuples);
         }
         Ok(out)
@@ -824,6 +843,8 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
         }
     };
     let mut right_matched = vec![false; right.len()];
+    let width = left.first().or(right.first()).map_or(0, Vec::len);
+    let limit = join_limit(width);
     let mut out = Vec::new();
     let mut index: BTreeMap<Key, Vec<usize>> = BTreeMap::new();
     let mut left_keys = Vec::new();
@@ -859,6 +880,9 @@ fn join<'a>(input: JoinInput<'a>, tables: &Tables, test: &mut Test<'_>) -> Resul
                 }
             }
             if pass {
+                if out.len() == limit {
+                    return Err(too_many(limit));
+                }
                 matched = true;
                 right_matched[i] = true;
                 out.push(tuple);
