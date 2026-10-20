@@ -613,8 +613,8 @@ impl Connection {
         let mut updated = (Vec::new(), Vec::new());
         let upsert = info.on_conflict.as_ref().filter(|conflict| !conflict.arbiters.is_empty());
         let mut batches = Vec::new();
-        let (tag, count) = match info.kind {
-            WriteKind::Merge => {
+        let (tag, count) = match (info.kind, upsert) {
+            (WriteKind::Merge, _) => {
                 let Some(merge) = info.merge.as_ref() else {
                     return Err(Error::internal("a MERGE with no clauses"));
                 };
@@ -624,14 +624,14 @@ impl Connection {
                 view = done.view;
                 (CommandTag::Merge, done.count)
             }
-            WriteKind::Insert if let Some(conflict) = upsert => {
+            (WriteKind::Insert, Some(conflict)) => {
                 let done = self.upsert(plan, info, conflict, params, &view, rows)?;
                 written = done.written;
                 new_rows = done.inserted;
                 updated = (done.new, done.old);
                 (CommandTag::Insert, done.count)
             }
-            WriteKind::Insert => {
+            (WriteKind::Insert, None) => {
                 let count = rows.len() as u64;
                 if info.returning.is_some() {
                     written.clone_from(&rows);
@@ -652,7 +652,7 @@ impl Connection {
                 }
                 (CommandTag::Insert, count)
             }
-            kind => {
+            (kind, _) => {
                 let update = kind == WriteKind::Update;
                 let (mut changes, mut given) = row_changes(rows, info)?;
                 let mut kept = Vec::new();

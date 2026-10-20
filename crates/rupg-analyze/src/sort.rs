@@ -169,12 +169,14 @@ fn flatten_top<'a>(list: &'a List, has_sets: &mut bool) -> Vec<Flat<'a>> {
                     ));
                 }
             }
-            Some(node) if let Some(args) = implicit_row(node) => {
-                let mut items = Vec::new();
-                row_items(args, &mut items);
-                out.extend(items.into_iter().map(Flat::Item));
-            }
-            node => out.push(Flat::Item(node.as_ref())),
+            node => match node.as_ref().and_then(implicit_row) {
+                Some(args) => {
+                    let mut items = Vec::new();
+                    row_items(args, &mut items);
+                    out.extend(items.into_iter().map(Flat::Item));
+                }
+                None => out.push(Flat::Item(node.as_ref())),
+            },
         }
     }
     out
@@ -191,12 +193,14 @@ fn flatten_content(list: &List) -> Vec<Flat<'_>> {
             Some(Node::GroupingSet(set)) => {
                 out.push(Flat::Set(set.kind, flatten_content(&set.content), place(set.location)));
             }
-            Some(node) if let Some(args) = implicit_row(node) => {
-                let mut items = Vec::new();
-                row_items(args, &mut items);
-                out.push(Flat::Row(items));
-            }
-            node => out.push(Flat::Item(node.as_ref())),
+            node => match node.as_ref().and_then(implicit_row) {
+                Some(args) => {
+                    let mut items = Vec::new();
+                    row_items(args, &mut items);
+                    out.push(Flat::Row(items));
+                }
+                None => out.push(Flat::Item(node.as_ref())),
+            },
         }
     }
     out
