@@ -240,9 +240,9 @@ impl Tables {
         index
     }
 
-    /// True when a relation of the part reads a relation outside the part.
-    fn depends(&self, relations: &[usize]) -> bool {
-        relations.iter().any(|r| self.needs[*r].iter().any(|n| !relations.contains(n)))
+    /// True when a relation of the part `relations` reads a relation of `left`.
+    fn depends_on(&self, relations: &[usize], left: &[usize]) -> bool {
+        relations.iter().any(|r| self.needs[*r].iter().any(|n| left.contains(n)))
     }
 }
 
@@ -644,7 +644,8 @@ impl Scan<'_, '_> {
         conds: Vec<&'q Expr>,
         context: &[usize],
     ) -> Result<Vec<Vec<usize>>> {
-        if !self.tables.depends(input.right_relations) {
+        // A part that reads only relations outside the join, which `context` holds, runs once for all the tuples of the left side.
+        if !self.tables.depends_on(input.right_relations, input.left_relations) {
             input.right = self.item_tuples(item, conds, context)?;
             return join(input, self.tables, self.test);
         }

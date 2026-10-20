@@ -15,6 +15,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - A `LATERAL` relation in a nested loop no longer keeps the rows of every run until the query ends. This stopped the server with no memory in the regression tests `join` and `subselect` (#444).
+- A correlated subquery finds its rows through an index of a column for `=` with an expression of the outer columns, not only with an outer column (#445).
 
 ## 0.1.51 (2026-10-20)
 
