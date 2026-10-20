@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `EXPLAIN` in the text, JSON, XML and YAML forms, with a planner that makes the plan of a query with the costs of PostgreSQL (#439).
 - `ALTER DATABASE ... SET` and `RESET`, with the settings applied at the start of each session of the database and shown in `pg_db_role_setting` (#440).
+- `COPY ... FROM 'file'`, which reads a file of the server, for a superuser (#441).
 
 ## 0.1.51 (2026-10-20)
 

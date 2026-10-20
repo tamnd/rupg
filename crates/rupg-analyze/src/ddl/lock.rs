@@ -192,7 +192,7 @@ pub(crate) fn relkind(env: &dyn Env, relid: u32) -> u8 {
 }
 
 /// The name of a relation of the catalog or of the built-in catalog.
-fn class_name(env: &dyn Env, relid: u32) -> String {
+pub(super) fn class_name(env: &dyn Env, relid: u32) -> String {
     match env.catalog().and_then(|c| c.relation(relid)) {
         Some(rel) => rel.name.clone(),
         None => builtin::named_by_oid(Named::Class, relid)

@@ -442,7 +442,7 @@ impl Parameter {
     }
 
     /// `parse_int` of `guc.c`: a decimal, octal or hexadecimal integer or a decimal fraction, then an optional unit. The error is the hint, if there is one.
-    fn parse_int(&self, text: &str) -> Result<i32, Option<&'static str>> {
+    pub(crate) fn parse_int(&self, text: &str) -> Result<i32, Option<&'static str>> {
         let (mut value, rest) = match strtol(text) {
             Some((value, rest)) if !rest.starts_with(['.', 'e', 'E']) => (value, rest),
             _ => strtod(text).ok_or(None)?,

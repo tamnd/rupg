@@ -243,7 +243,7 @@ pub fn attnums(columns: &[String], names: &[String], rel: Option<&str>) -> Resul
 }
 
 /// The names of the user columns of a relation of the catalog or of the built-in catalog.
-fn relation_columns(env: &dyn Env, relid: u32) -> Vec<String> {
+pub(super) fn relation_columns(env: &dyn Env, relid: u32) -> Vec<String> {
     if let Some(rel) = env.catalog().and_then(|c| c.relation(relid)) {
         return rel.columns.iter().filter(|c| !c.dropped).map(|c| c.name.clone()).collect();
     }

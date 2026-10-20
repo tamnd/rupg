@@ -587,6 +587,15 @@ impl Connection {
                     position: error.position().map(|at| character_position(&statement.text, at)),
                     error,
                 })?
+            } else if let Node::VacuumStmt(stmt) = node {
+                let mut notices = Vec::new();
+                let result = self.vacuum(stmt, &mut notices);
+                self.notices(&mut notices, &statement.text, &[], out);
+                immediate_commit = stmt.is_vacuumcmd;
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
             } else if let Node::AlterDatabaseSetStmt(stmt) = node {
                 self.alter_database_set(stmt)?
             } else {
