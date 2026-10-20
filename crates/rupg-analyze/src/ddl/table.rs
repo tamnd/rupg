@@ -214,6 +214,24 @@ fn constraint_attrs(list: &mut [Constraint]) -> Result<()> {
 }
 
 impl Definer<'_, '_> {
+    /// The check of `heap_create_with_catalog` for `ON COMMIT`, which only a temporary table can have.
+    pub(super) fn check_on_commit(&self, action: OnCommitAction, namespace: u32) -> Result<()> {
+        if action == OnCommitAction::ONCOMMIT_NOOP {
+            return Ok(());
+        }
+        if !self.catalog.is_temp_schema(namespace) {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                "ON COMMIT can only be used on temporary tables",
+            ));
+        }
+        match action {
+            OnCommitAction::ONCOMMIT_DELETE_ROWS => Err(not_yet("ON COMMIT DELETE ROWS", None)),
+            OnCommitAction::ONCOMMIT_DROP => Err(not_yet("ON COMMIT DROP", None)),
+            _ => Ok(()),
+        }
+    }
+
     /// `transformCreateStmt`, then `DefineRelation` and the statements that it adds.
     pub(super) fn create_table(&mut self, stmt: &CreateStmt) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
@@ -277,12 +295,7 @@ impl Definer<'_, '_> {
             };
             serial.oid = self.new_sequence(serial.namespace, &serial.name, info)?;
         }
-        if stmt.oncommit != OnCommitAction::ONCOMMIT_NOOP {
-            return Err(Error::new(
-                SqlState::INVALID_TABLE_DEFINITION,
-                "ON COMMIT can only be used on temporary tables",
-            ));
-        }
+        self.check_on_commit(stmt.oncommit, namespace)?;
         let table = self.define_relation(&plan)?;
         if !options.is_empty() {
             self.catalog.set_options(table, options)?;

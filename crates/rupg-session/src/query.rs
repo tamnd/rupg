@@ -443,7 +443,14 @@ impl<'a> Reader<'a> {
         let text = self.settings().get("search_path").unwrap_or_default();
         let mut path: Vec<(String, u32)> = Vec::new();
         for name in guc::split_identifiers(&text, ',').unwrap_or_default() {
-            let name = if name == "$user" { self.user.to_owned() } else { name };
+            let name = match name.as_str() {
+                "$user" => self.user.to_owned(),
+                "pg_temp" => match self.temp_name() {
+                    Some(temp) => temp,
+                    None => continue,
+                },
+                _ => name,
+            };
             if let Some(oid) = self.schema(&name)
                 && !path.iter().any(|&(_, o)| o == oid)
             {
@@ -453,8 +460,18 @@ impl<'a> Reader<'a> {
         path
     }
 
-    /// The OID of a built-in schema or a schema of the catalog.
+    /// The name of the temporary schema of the session, if it exists.
+    fn temp_name(&self) -> Option<String> {
+        let number = self.activity.and_then(|(activity, _)| activity.number())?;
+        let name = format!("pg_temp_{number}");
+        self.catalog.schema_by_name(&name).map(|_| name)
+    }
+
+    /// The OID of a built-in schema or a schema of the catalog. `pg_temp` names the temporary schema of the session.
     fn schema(&self, name: &str) -> Option<u32> {
+        if name == "pg_temp" {
+            return self.temp_name().and_then(|temp| self.schema(&temp));
+        }
         SCHEMAS
             .iter()
             .find(|(n, _)| *n == name)
@@ -703,6 +720,10 @@ impl rupg_func::Session for Reader<'_> {
         self.path().into_iter().map(|(name, _)| name).collect()
     }
 
+    fn temp_number(&self) -> Option<i32> {
+        self.activity.and_then(|(activity, _)| activity.number())
+    }
+
     fn backend_pid(&self) -> i32 {
         self.pid
     }
@@ -936,6 +957,10 @@ impl Env for Reader<'_> {
 
     fn namespace(&self, name: &str) -> Option<u32> {
         self.schema(name)
+    }
+
+    fn temp_number(&self) -> Option<i32> {
+        self.activity.and_then(|(activity, _)| activity.number())
     }
 
     fn database(&self) -> String {

@@ -1,0 +1,161 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SELECT pg_my_temp_schema();
+fields pg_my_temp_schema:26:4:-1
+row 0
+SELECT 1
+> CREATE TEMP TABLE t1 (a int, b text);
+CREATE TABLE
+> INSERT INTO t1 VALUES (1, 'one'), (2, 'two');
+INSERT 0 2
+> SELECT * FROM t1 ORDER BY a;
+fields a@t1.1:23:4:-1,b@t1.2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> SELECT relpersistence, relkind FROM pg_class WHERE relname = 't1';
+fields relpersistence@pg_class.17:18:1:-1,relkind@pg_class.18:18:1:-1
+row t,r
+SELECT 1
+> SELECT pg_my_temp_schema()::regnamespace::text ~ '^pg_temp_\d+$' AS named;
+fields named:16:1:-1
+row t
+SELECT 1
+> SELECT nspname ~ '^pg_temp_\d+$' AS temp FROM pg_namespace n JOIN pg_class c ON c.relnamespace = n.oid WHERE c.relname = 't1';
+fields temp:16:1:-1
+row t
+SELECT 1
+> SELECT (current_schemas(true))[1] ~ '^pg_temp_\d+$' AS first, (current_schemas(true))[2] AS second;
+fields first:16:1:-1,second:19:64:-1
+row t,pg_catalog
+SELECT 1
+> SELECT current_schemas(false);
+fields current_schemas:1003:-1:-1
+row {public}
+SELECT 1
+> CREATE TABLE t2 (x int);
+CREATE TABLE
+> INSERT INTO t2 VALUES (10);
+INSERT 0 1
+> CREATE TEMP TABLE t2 (y int);
+CREATE TABLE
+> INSERT INTO t2 VALUES (20);
+INSERT 0 1
+> SELECT * FROM t2;
+fields y@t2.1:23:4:-1
+row 20
+SELECT 1
+> SELECT * FROM public.t2;
+fields x@public.t2.1:23:4:-1
+row 10
+SELECT 1
+> SELECT * FROM pg_temp.t2;
+fields y@t2.1:23:4:-1
+row 20
+SELECT 1
+> DROP TABLE t2;
+DROP TABLE
+> SELECT * FROM t2;
+fields x@t2.1:23:4:-1
+row 10
+SELECT 1
+> CREATE TEMPORARY TABLE t3 AS SELECT 1 AS c;
+SELECT 1
+> SELECT relpersistence FROM pg_class WHERE relname = 't3';
+fields relpersistence@pg_class.17:18:1:-1
+row t
+SELECT 1
+> CREATE TABLE pg_temp.t4 (z int);
+CREATE TABLE
+> SELECT relpersistence FROM pg_class WHERE relname = 't4';
+fields relpersistence@pg_class.17:18:1:-1
+row t
+SELECT 1
+> CREATE TEMP TABLE public.t5 (z int);
+ERROR 42P16 cannot create temporary relation in non-temporary schema at 19
+> CREATE TABLE t6 (z int) ON COMMIT PRESERVE ROWS;
+ERROR 42P16 ON COMMIT can only be used on temporary tables
+> CREATE TEMP TABLE t6 (z int) ON COMMIT PRESERVE ROWS;
+CREATE TABLE
+> CREATE VIEW v1 AS SELECT * FROM t1;
+NOTICE 00000 view "v1" will be a temporary view
+DETAIL It depends on temporary table t1.
+CREATE VIEW
+> SELECT relpersistence FROM pg_class WHERE relname = 'v1';
+fields relpersistence@pg_class.17:18:1:-1
+row t
+SELECT 1
+> CREATE TEMP VIEW v2 AS SELECT 1 AS one;
+CREATE VIEW
+> SELECT relpersistence FROM pg_class WHERE relname = 'v2';
+fields relpersistence@pg_class.17:18:1:-1
+row t
+SELECT 1
+> CREATE TEMP SEQUENCE s1;
+CREATE SEQUENCE
+> SELECT nextval('s1');
+fields nextval:20:8:-1
+row 1
+SELECT 1
+> SELECT relpersistence FROM pg_class WHERE relname = 's1';
+fields relpersistence@pg_class.17:18:1:-1
+row t
+SELECT 1
+> CREATE TEMP TABLE big (t text);
+CREATE TABLE
+> INSERT INTO big VALUES (repeat('x', 10000));
+INSERT 0 1
+> SELECT length(t) FROM big;
+fields length:23:4:-1
+row 10000
+SELECT 1
+> SELECT n.nspname ~ '^pg_toast_temp_\d+$' AS toast FROM pg_class c JOIN pg_class t ON t.oid = c.reltoastrelid JOIN pg_namespace n ON n.oid = t.relnamespace WHERE c.relname = 'big';
+fields toast:16:1:-1
+row t
+SELECT 1
+> SELECT count(*) FROM pg_namespace WHERE nspname ~ '^pg_(toast_)?temp_\d+$' AND (oid = pg_my_temp_schema() OR NOT pg_is_other_temp_schema(oid));
+fields count:20:8:-1
+row 2
+SELECT 1
+> SELECT pg_is_other_temp_schema(pg_my_temp_schema());
+fields pg_is_other_temp_schema:16:1:-1
+row f
+SELECT 1
+> BEGIN;
+BEGIN
+> CREATE TEMP TABLE t7 (a int);
+CREATE TABLE
+> ROLLBACK;
+ROLLBACK
+> SELECT * FROM t7;
+ERROR 42P01 relation "t7" does not exist at 15
+> SET search_path = public, pg_temp;
+SET
+search_path=public, pg_temp
+> SELECT * FROM t1 ORDER BY a;
+fields a@t1.1:23:4:-1,b@t1.2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> CREATE TABLE t1 (q int);
+CREATE TABLE
+> SELECT * FROM t1;
+fields q@t1.1:23:4:-1
+SELECT 0
+> DROP TABLE t1;
+DROP TABLE
+> SELECT * FROM t1 ORDER BY a;
+fields a@t1.1:23:4:-1,b@t1.2:25:-1:-1
+row 1,one
+row 2,two
+SELECT 2
+> RESET search_path;
+RESET
+search_path="$user", public
+> DROP TABLE t1;
+ERROR 2BP01 cannot drop table t1 because other objects depend on it
+DETAIL view v1 depends on table t1
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE t6;
+DROP TABLE

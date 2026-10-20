@@ -62,6 +62,9 @@ use crate::{Analyzer, Env, PG_CATALOG_NAMESPACE, Params};
 /// The OID of the schema `pg_toast`, where a user cannot create a relation.
 const PG_TOAST_NAMESPACE: u32 = 99;
 
+/// `BOOTSTRAP_SUPERUSERID`, the owner of the temporary schemas.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
+
 /// A message of a statement that defines an object. The client gets the messages before the result.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Message {
@@ -278,6 +281,10 @@ impl Env for SchemaEnv<'_> {
     fn deparse(&self, text: &str, relation: u32) -> Result<String> {
         self.env.deparse(text, relation)
     }
+
+    fn temp_number(&self) -> Option<i32> {
+        self.env.temp_number()
+    }
 }
 
 /// A relation that a name gives.
@@ -469,8 +476,8 @@ impl Definer<'_, '_> {
         .at_opt(at))
     }
 
-    /// `RangeVarGetAndCheckCreationNamespace`: the schema where a new relation goes.
-    fn creation_namespace(&self, rv: &RangeVar) -> Result<u32> {
+    /// `RangeVarGetAndCheckCreationNamespace`: the schema where a new relation goes. A temporary relation and a relation in `pg_temp` go to the temporary schema of the session, and `RangeVarAdjustRelationPersistence` checks the persistence of the relation against its schema.
+    fn creation_namespace(&mut self, rv: &RangeVar) -> Result<u32> {
         let at = place(rv.location);
         if let Some(catalog) = rv.catalogname.as_deref()
             && catalog != self.an.env.database()
@@ -481,11 +488,12 @@ impl Definer<'_, '_> {
             )
             .at_opt(at));
         }
-        if rv.relpersistence == b't' {
-            return Err(not_yet("a temporary table", at));
-        }
         if rv.relpersistence == b'u' {
             return Err(not_yet("an unlogged table", at));
+        }
+        let temp = rv.relpersistence == b't';
+        if rv.schemaname.as_deref() == Some("pg_temp") || (temp && rv.schemaname.is_none()) {
+            return self.temp_namespace();
         }
         let namespace = match rv.schemaname.as_deref() {
             Some(schema) => self.an.schema(schema).ok_or_else(|| {
@@ -500,8 +508,55 @@ impl Definer<'_, '_> {
                     .at_opt(at)
             })?,
         };
-        self.check_create_in(namespace, at)?;
+        let own = namespace == self.an.temp || self.is_own_toast_temp(namespace);
+        if !own && self.catalog.is_temp_schema(namespace) {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                "cannot create relations in temporary schemas of other sessions",
+            ));
+        }
+        if temp && !own {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                "cannot create temporary relation in non-temporary schema",
+            )
+            .at_opt(at));
+        }
+        if !own {
+            self.check_create_in(namespace, at)?;
+        }
         Ok(namespace)
+    }
+
+    /// True for the TOAST schema `pg_toast_temp_N` of the temporary schema of the session.
+    fn is_own_toast_temp(&self, namespace: u32) -> bool {
+        let Some(n) = self.an.env.temp_number() else { return false };
+        self.catalog.schema(namespace).is_some_and(|s| s.name == format!("pg_toast_temp_{n}"))
+    }
+
+    /// `AccessTempTableNamespace` and `InitTempTableNamespace`: the temporary schema `pg_temp_N` of the session. The first temporary object of the session makes it and its TOAST schema `pg_toast_temp_N`, which the bootstrap superuser owns.
+    fn temp_namespace(&mut self) -> Result<u32> {
+        if self.an.temp != 0 {
+            return Ok(self.an.temp);
+        }
+        let Some(n) = self.an.env.temp_number() else {
+            return Err(not_yet("a temporary object in a session with no server", None));
+        };
+        let name = format!("pg_temp_{n}");
+        let oid = match self.catalog.schema_by_name(&name) {
+            Some(schema) => schema.oid,
+            None => {
+                let oid = self.catalog.create_schema(&name, BOOTSTRAP_SUPERUSER)?;
+                self.catalog.create_schema(&format!("pg_toast_temp_{n}"), BOOTSTRAP_SUPERUSER)?;
+                oid
+            }
+        };
+        self.an.temp = oid;
+        self.an.path.retain(|&ns| ns != oid);
+        if !self.an.temp_path.contains(&oid) {
+            self.an.temp_path.insert(0, oid);
+        }
+        Ok(oid)
     }
 
     /// A relation with this name in the schema, of the catalog or built in.
@@ -537,7 +592,7 @@ impl Definer<'_, '_> {
                 })?;
                 self.relation_in(namespace, name)
             }
-            None => self.an.path.iter().find_map(|&ns| self.relation_in(ns, name)),
+            None => self.an.temp_path.iter().find_map(|&ns| self.relation_in(ns, name)),
         };
         found.ok_or_else(|| {
             let shown = match rv.schemaname.as_deref() {

@@ -131,6 +131,17 @@ pub trait Env {
             "the text of a stored expression is not supported here",
         ))
     }
+    /// The number of the session in the table of the sessions, which names its temporary schema `pg_temp_N`, or `None` for a session that cannot have temporary objects.
+    fn temp_number(&self) -> Option<i32> {
+        None
+    }
+}
+
+/// `myTempNamespace`: the OID of the temporary schema of the session in the catalog, or 0 when the session has none yet.
+pub fn temp_namespace(env: &dyn Env, catalog: &rupg_catalog::Catalog) -> u32 {
+    env.temp_number()
+        .and_then(|n| catalog.schema_by_name(&format!("pg_temp_{n}")))
+        .map_or(0, |s| s.oid)
 }
 
 /// The parameters of a statement.
@@ -145,8 +156,12 @@ pub struct Params {
 /// The state of the analysis of one statement.
 pub(crate) struct Analyzer<'a> {
     env: &'a dyn Env,
-    /// The schemas that an unqualified name searches, with `pg_catalog` first when `search_path` does not name it.
+    /// The schemas that an unqualified name of a function, an operator or another object that is not a relation or a type searches, with `pg_catalog` first when `search_path` does not name it. It has no temporary schema, as the lookups of `namespace.c` skip `myTempNamespace`.
     path: Vec<u32>,
+    /// `activeSearchPath`: the schemas that an unqualified name of a relation or a type searches. The temporary schema of the session comes first when `search_path` does not name it.
+    temp_path: Vec<u32>,
+    /// The temporary schema of the session, or 0 when it has none yet.
+    temp: u32,
     params: Vec<u32>,
     variable: bool,
     /// The warnings and notices of the analysis, such as a precision that is too large.
@@ -191,9 +206,19 @@ impl<'a> Analyzer<'a> {
         if !path.contains(&PG_CATALOG_NAMESPACE) {
             path.insert(0, PG_CATALOG_NAMESPACE);
         }
+        let temp = env.catalog().map_or(0, |catalog| temp_namespace(env, catalog));
+        let mut temp_path = path.clone();
+        if temp != 0 {
+            path.retain(|&ns| ns != temp);
+            if !temp_path.contains(&temp) {
+                temp_path.insert(0, temp);
+            }
+        }
         Analyzer {
             env,
             path,
+            temp_path,
+            temp,
             params: params.types.clone(),
             variable: params.variable,
             notices: Vec::new(),

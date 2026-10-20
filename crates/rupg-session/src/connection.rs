@@ -1589,9 +1589,30 @@ impl Connection {
 }
 
 impl Drop for Connection {
+    /// `ShutdownPostgres` and `RemoveTempRelationsCallback`: the open transaction rolls back, then the temporary schemas of the session go with all their objects.
     fn drop(&mut self) {
+        self.settings.get_mut().end(false);
+        self.lease = None;
         self.end_rows(false, false);
+        self.xact_started = false;
+        self.transaction = Transaction::default();
+        self.remove_temp();
         self.leave();
+    }
+}
+
+impl Connection {
+    /// `RemoveTempRelations`: drops the temporary schema of the session and its schema for TOAST tables. The drop runs as the bootstrap superuser, which owns the schemas.
+    fn remove_temp(&mut self) {
+        let Some(number) = self.activity.number else { return };
+        let temp = format!("pg_temp_{number}");
+        if self.store.committed(self.database_oid).schema_by_name(&temp).is_none() {
+            return;
+        }
+        self.role = BOOTSTRAP_SUPERUSER;
+        let mut out = OutBuf::new();
+        self.simple_query(&format!("DROP SCHEMA {temp}, pg_toast_temp_{number} CASCADE"), &mut out);
+        self.finish_xact();
     }
 }
 
@@ -4402,6 +4423,51 @@ mod tests {
     #[test]
     fn state_views() {
         big_stack(|| script(include_str!("connection/state_views.test")));
+    }
+
+    /// Temporary tables, views and sequences: the schema `pg_temp_N` that the first temporary object makes, its place at the front of the search path, a temporary table that hides a table of the same name, `pg_temp` in a name and in `search_path`, the errors of a temporary object in another schema and of `ON COMMIT` on a table that is not temporary, a view of a temporary table, a TOAST table in `pg_toast_temp_N`, and a rollback of a `CREATE TEMP TABLE`. `connection/temp_tables.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn temp_tables() {
+        big_stack(|| script(include_str!("connection/temp_tables.test")));
+    }
+
+    /// The temporary schemas of a session go when the session ends, and another session cannot make a relation in them.
+    #[test]
+    fn temp_schemas_go_at_the_end() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            let (mut b, _) = connect_to(&store, 1235);
+            let row = |c: &mut Connection, sql: &str| {
+                let lines = send(c, &query(sql));
+                lines.iter().find_map(|l| l.strip_prefix("row ").map(str::to_string))
+            };
+            let count = "SELECT count(*) FROM pg_namespace WHERE nspname ~ '^pg_(toast_)?temp_'";
+            send(&mut a, &query("BEGIN; CREATE TEMP TABLE t (a text); INSERT INTO t VALUES ('x')"));
+            assert_eq!(row(&mut b, count).as_deref(), Some("0"));
+            send(&mut a, &query("COMMIT"));
+            assert_eq!(row(&mut b, count).as_deref(), Some("2"));
+            let temp = row(&mut a, "SELECT pg_my_temp_schema()::regnamespace").unwrap();
+            assert_eq!(
+                row(&mut b, &format!("SELECT pg_is_other_temp_schema('{temp}'::regnamespace)"))
+                    .as_deref(),
+                Some("t")
+            );
+            let lines = send(&mut b, &query(&format!("CREATE TABLE {temp}.u (a int)")));
+            assert!(
+                lines.iter().any(|l| l
+                    .contains("cannot create relations in temporary schemas of other sessions")),
+                "{lines:?}"
+            );
+            assert_eq!(row(&mut b, "SELECT count(*) FROM t").as_deref(), None);
+            send(&mut a, &query("BEGIN; INSERT INTO t VALUES ('y')"));
+            drop(a);
+            assert_eq!(row(&mut b, count).as_deref(), Some("0"));
+            assert_eq!(
+                row(&mut b, "SELECT count(*) FROM pg_class WHERE relname = 't'").as_deref(),
+                Some("0")
+            );
+        });
     }
 
     /// `has_table_privilege`, `has_column_privilege`, `has_any_column_privilege` and `has_sequence_privilege` on the system views, the views of `information_schema`, and a table, a view and an index that the script makes. The checks run for the superuser and for the predefined roles, with the system columns, column numbers that do not exist, and the errors of a bad name or a relation that is not a sequence. `connection/relation_privileges.test` is the output of PostgreSQL 19 for the same script in a new database.

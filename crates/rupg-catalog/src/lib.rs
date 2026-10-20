@@ -1071,6 +1071,25 @@ impl Catalog {
         self.schemas.values().find(|s| s.name == name)
     }
 
+    /// `isAnyTempNamespace`: true for a temporary schema `pg_temp_N` or its TOAST schema `pg_toast_temp_N` of any session. A user cannot make a schema with the prefix `pg_`, so the name tells.
+    pub fn is_temp_schema(&self, oid: u32) -> bool {
+        self.schemas.get(&oid).is_some_and(|s| {
+            s.name
+                .strip_prefix("pg_temp_")
+                .or_else(|| s.name.strip_prefix("pg_toast_temp_"))
+                .is_some_and(|n| !n.is_empty() && n.bytes().all(|b| b.is_ascii_digit()))
+        })
+    }
+
+    /// `GetTempToastNamespace`: the TOAST schema of the tables of a schema, which is `pg_toast_temp_N` for the temporary schema `pg_temp_N` and `pg_toast` for the other schemas.
+    fn toast_namespace(&self, namespace: u32) -> u32 {
+        self.schemas
+            .get(&namespace)
+            .and_then(|s| s.name.strip_prefix("pg_temp_"))
+            .and_then(|n| self.schema_by_name(&format!("pg_toast_temp_{n}")))
+            .map_or(PG_TOAST_NAMESPACE, |s| s.oid)
+    }
+
     /// The relations.
     pub fn relations(&self) -> impl Iterator<Item = &Relation> {
         self.relations.values()
@@ -2757,9 +2776,11 @@ impl Catalog {
         );
     }
 
-    /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`. The TOAST table gets an OID, then its index. They have no row type.
+    /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`, or in `pg_toast_temp_N` for a table of the temporary schema `pg_temp_N`. The TOAST table gets an OID, then its index. They have no row type.
     pub fn create_toast(&mut self, table: u32) -> Result<u32> {
-        let owner = self.relations.get(&table).ok_or_else(|| no_object("relation", table))?.owner;
+        let rel = self.relations.get(&table).ok_or_else(|| no_object("relation", table))?;
+        let owner = rel.owner;
+        let namespace = self.toast_namespace(rel.namespace);
         let oid = self.new_oid();
         let index = self.new_oid();
         let name = format!("pg_toast_{table}");
@@ -2771,7 +2792,7 @@ impl Catalog {
             Relation {
                 oid,
                 name: name.clone(),
-                namespace: PG_TOAST_NAMESPACE,
+                namespace,
                 kind: RelKind::Toast,
                 owner,
                 row_type: 0,
@@ -2810,7 +2831,7 @@ impl Catalog {
             Relation {
                 oid: index,
                 name: format!("{name}_index"),
-                namespace: PG_TOAST_NAMESPACE,
+                namespace,
                 kind: RelKind::Index,
                 owner,
                 row_type: 0,

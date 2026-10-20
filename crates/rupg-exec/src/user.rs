@@ -339,7 +339,10 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("reltoastrelid", oid(rel.toast))
                 .set("relhasindex", Value::Bool(rel.has_index))
                 .set("relisshared", Value::Bool(false))
-                .set("relpersistence", code('p'))
+                .set(
+                    "relpersistence",
+                    code(if catalog.is_temp_schema(rel.namespace) { 't' } else { 'p' }),
+                )
                 .set("relkind", code(rel.kind.code()))
                 .set("relnatts", Value::Int2(number(rel.columns.len()) - 1))
                 .set("relchecks", Value::Int2(i16::try_from(checks.count()).unwrap_or(i16::MAX)))

@@ -1,9 +1,7 @@
 //! `CREATE TABLE AS` and `SELECT INTO`, as `transformCreateTableAsStmt`, `ExecCreateTableAs` and `create_ctas_nodata` of `createas.c` run them. The statement makes the table here, and the caller then fills it with the rows of the query, as `intorel_receive` writes them.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_sql::nodes::{
-    CreateTableAsStmt, IntoClause, Node, ObjectType, OnCommitAction, SelectStmt,
-};
+use rupg_sql::nodes::{CreateTableAsStmt, IntoClause, Node, ObjectType, SelectStmt};
 
 use super::{Definer, not_yet, relname};
 use crate::collate::target_collation;
@@ -85,12 +83,7 @@ impl Definer<'_, '_> {
         if into.accessMethod.is_some() {
             return Err(not_yet("USING", at));
         }
-        if into.onCommit != OnCommitAction::ONCOMMIT_NOOP {
-            return Err(Error::new(
-                SqlState::INVALID_TABLE_DEFINITION,
-                "ON COMMIT can only be used on temporary tables",
-            ));
-        }
+        self.check_on_commit(into.onCommit, namespace)?;
         let table = self.create_query_table(namespace, &name, columns, &into.options)?;
         Ok((!into.skipData).then_some(table))
     }

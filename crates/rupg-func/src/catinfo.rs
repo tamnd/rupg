@@ -125,12 +125,12 @@ fn shobj_description(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     Ok(comment(catalog_oid(args)?.and_then(|class| builtin::shared_description(oid, class))))
 }
 
-/// `pg_is_other_temp_schema(oid)`: `isOtherTempNamespace`, true for a temporary schema of another session. A session has no temporary schema yet, so each schema with the name of a temporary schema is of another session.
+/// `pg_is_other_temp_schema(oid)`: `isOtherTempNamespace`, true for a temporary schema of another session.
 fn is_other_temp_schema(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = oid_arg(args, 0)?;
     let temp = reg::namespace_name(oid, call.session)
         .is_some_and(|name| name.starts_with("pg_temp_") || name.starts_with("pg_toast_temp_"));
-    Ok(Value::Bool(temp))
+    Ok(Value::Bool(temp && !reg::is_own_temp(oid, call.session)))
 }
 
 /// `pg_get_sequence_data(regclass)`: the last value, `is_called` and the LSN of the page of a sequence, which `pg_dump` reads. rupg keeps no pages with an LSN, so the LSN is 0/00000000. Each field is null for an OID that no relation has, for a relation that is not a sequence, and for a sequence on which the current user has no `SELECT` and no `USAGE`.
@@ -220,7 +220,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_statistics_obj_is_visible" => statistics_obj_visible,
         "pg_get_userbyid" => get_userbyid,
         // A session has no temporary schema yet, so `myTempNamespace` is 0.
-        "pg_my_temp_schema" => |_, _| Ok(Value::Oid(0)),
+        "pg_my_temp_schema" => |call, _| Ok(Value::Oid(reg::temp_namespace(call.session))),
         "pg_is_other_temp_schema" => is_other_temp_schema,
         "pg_get_sequence_data" => get_sequence_data,
         "pg_partition_root" => partition_root,

@@ -9,17 +9,17 @@ use rupg_sql::nodes::{Node, ViewCheckOption, ViewStmt};
 use rupg_types::{Value, oid};
 
 use super::reloptions;
-use super::{Definer, Found, check_attribute_type, not_yet, relname};
+use super::{Definer, Found, Message, check_attribute_type, not_yet, relname};
 use crate::collate::target_collation;
 use crate::expr::{Expr, ExprKind};
 use crate::select::Query;
-use crate::typename::{names, place, type_name_text};
+use crate::typename::{names, type_name_text};
 use crate::types;
 
 impl Definer<'_, '_> {
     /// `DefineView` and `DefineVirtualRelation`. `text` is the text of the statement, which the catalog keeps.
     pub(super) fn create_view(&mut self, stmt: &ViewStmt, text: &str) -> Result<()> {
-        let rv = stmt.view.as_deref().cloned().unwrap_or_default();
+        let mut rv = stmt.view.as_deref().cloned().unwrap_or_default();
         let Some(Node::SelectStmt(select)) = stmt.query.as_ref() else {
             return Err(Error::internal("the query of a view is not a SELECT"));
         };
@@ -57,9 +57,6 @@ impl Definer<'_, '_> {
                 "views cannot be unlogged because they do not have storage",
             ));
         }
-        if rv.relpersistence == b't' {
-            return Err(not_yet("a temporary view", place(rv.location)));
-        }
         let names = query.targets.iter().filter(|t| !t.junk).map(|t| t.name.as_str());
         let mut columns = Vec::with_capacity(targets.len());
         for (i, (expr, name)) in targets.iter().zip(names).enumerate() {
@@ -76,11 +73,34 @@ impl Definer<'_, '_> {
             }
             columns.push(Column::new(name, expr.ty, expr.typmod, collation));
         }
+        let mut refs = Vec::new();
+        query_references(self.catalog, &query, &[], &mut refs);
+        // `isQueryUsingTempRelation`: a view of a temporary relation is a temporary view.
+        let temp = refs.iter().copied().find(|r| {
+            r.class == PG_CLASS
+                && self
+                    .catalog
+                    .relation(r.oid)
+                    .is_some_and(|rel| self.catalog.is_temp_schema(rel.namespace))
+        });
+        if rv.relpersistence == b'p'
+            && let Some(temp) = temp
+        {
+            rv.relpersistence = b't';
+            let temp = ObjRef { sub: 0, ..temp };
+            let detail = format!("It depends on temporary {}.", self.describe(temp));
+            self.flush();
+            self.messages.push(Message::Notice(
+                Error::new(
+                    SqlState::SUCCESSFUL_COMPLETION,
+                    format!("view \"{}\" will be a temporary view", relname(&rv)),
+                )
+                .with_detail(detail),
+            ));
+        }
         // DefineVirtualRelation looks up the schema with no parse state, so its errors have no position.
         let namespace = self.creation_namespace(&rv).map_err(|e| e.with_position(None))?;
         let name = relname(&rv).to_string();
-        let mut refs = Vec::new();
-        query_references(self.catalog, &query, &[], &mut refs);
         let path = self.an.path.clone();
         if stmt.replace
             && let Some(found) = self.relation_in(namespace, &name)

@@ -171,6 +171,10 @@ pub trait Session {
     fn database(&self) -> &str;
     /// The schemas of `search_path` that exist, in order, without the implicit schemas.
     fn schemas(&self) -> Vec<String>;
+    /// The number of the session in the table of the sessions, which names its temporary schema `pg_temp_N`, or `None` for a session that cannot have temporary objects.
+    fn temp_number(&self) -> Option<i32> {
+        None
+    }
     /// The process ID of the session.
     fn backend_pid(&self) -> i32;
     /// The text of `version()`.

@@ -317,8 +317,11 @@ fn select_candidate(inputs: &[u32], candidates: Vec<Candidate>) -> Option<Candid
 }
 
 impl Analyzer<'_> {
-    /// The schema of a name, from the session.
+    /// The schema of a name, from the session. `pg_temp` names the temporary schema of the session, as `LookupExplicitNamespace` reads it.
     pub(crate) fn schema(&self, name: &str) -> Option<u32> {
+        if name == "pg_temp" && self.temp != 0 {
+            return Some(self.temp);
+        }
         self.env.namespace(name)
     }
 
