@@ -71,7 +71,7 @@ pub struct ProcRow {
     pub argmodes: Option<&'static [u8]>,
     /// `proargnames`, or `None` if no argument has a name.
     pub argnames: Option<&'static [&'static str]>,
-    /// `proargdefaults` as the text of the node tree, or `None`.
+    /// `proargdefaults` as the text of the node tree, or `None`. A function that `CREATE FUNCTION` makes has the stored form of `rupg-analyze`.
     pub argdefaults: Option<&'static str>,
     /// `prosrc`: for an internal function, the name of the C function, which is the name of its kernel.
     pub src: &'static str,
@@ -1145,6 +1145,9 @@ pub struct SessionFunction {
     pub argmodes: Vec<u8>,
     /// `proargnames`, or empty if no argument has a name.
     pub argnames: Vec<String>,
+    /// `proargdefaults` in the stored form of `rupg-analyze`, or `None` if no argument has a default.
+    pub argdefaults: Option<String>,
+    pub nargdefaults: i16,
 }
 
 /// An object of the catalog of a session that has rows in the overlay of the thread: a type, or a function in SQL.
@@ -1243,7 +1246,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
         retset: new.retset,
         volatile: new.volatile,
         nargs: i16::try_from(new.argtypes.len()).unwrap_or(i16::MAX),
-        nargdefaults: 0,
+        nargdefaults: new.nargdefaults,
         rettype: new.rettype,
         argtypes: new.argtypes.clone().leak(),
         allargtypes: (!new.allargtypes.is_empty()).then(|| &*new.allargtypes.clone().leak()),
@@ -1253,7 +1256,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
                 new.argnames.iter().map(|n| &*n.clone().leak()).collect();
             &*names.leak()
         }),
-        argdefaults: None,
+        argdefaults: new.argdefaults.clone().map(|text| &*text.leak()),
         src: "",
         sqlbody: None,
     }

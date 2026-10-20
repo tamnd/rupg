@@ -39,6 +39,8 @@ pub(crate) enum Kind {
     WindowGroups,
     /// `EXPR_KIND_COLUMN_DEFAULT`.
     ColumnDefault,
+    /// `EXPR_KIND_FUNCTION_DEFAULT`: the default of an argument of a function.
+    FunctionDefault,
     /// `EXPR_KIND_CHECK_CONSTRAINT`.
     Check,
     /// `EXPR_KIND_INDEX_EXPRESSION`.
@@ -83,7 +85,7 @@ impl Kind {
             Kind::WindowRange => "window RANGE",
             Kind::WindowRows => "window ROWS",
             Kind::WindowGroups => "window GROUPS",
-            Kind::ColumnDefault => "DEFAULT expressions",
+            Kind::ColumnDefault | Kind::FunctionDefault => "DEFAULT expressions",
             Kind::Check => "check constraints",
             Kind::IndexExpression => "index expressions",
             Kind::IndexPredicate => "index predicates",
@@ -102,6 +104,7 @@ impl Kind {
         matches!(
             self,
             Kind::ColumnDefault
+                | Kind::FunctionDefault
                 | Kind::Check
                 | Kind::IndexExpression
                 | Kind::IndexPredicate
@@ -113,7 +116,7 @@ impl Kind {
     /// The name of the place in the error of a subquery, as `transformSubLink` gives it.
     pub(crate) fn subquery_name(self) -> &'static str {
         match self {
-            Kind::ColumnDefault => "DEFAULT expression",
+            Kind::ColumnDefault | Kind::FunctionDefault => "DEFAULT expression",
             Kind::Check => "check constraint",
             Kind::IndexExpression => "index expression",
             Kind::ExecuteParameter => "EXECUTE parameter",
@@ -375,6 +378,7 @@ impl Analyzer<'_> {
             | Kind::WindowRows
             | Kind::WindowGroups
             | Kind::ColumnDefault
+            | Kind::FunctionDefault
             | Kind::Check
             | Kind::IndexExpression
             | Kind::IndexPredicate

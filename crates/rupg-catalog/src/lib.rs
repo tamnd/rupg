@@ -432,7 +432,7 @@ pub struct Domain {
     pub not_null: bool,
 }
 
-/// A function, one row of `pg_proc`. Only the setup of a new cluster makes functions, for the functions in SQL of `information_schema`.
+/// A function, one row of `pg_proc`: a function of the setup of a new cluster, such as a function in SQL of `information_schema`, or a function that `CREATE FUNCTION` makes.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Function {
     /// The OID. [`Catalog::create_function`] sets it.
@@ -469,6 +469,10 @@ pub struct Function {
     pub argmodes: Vec<u8>,
     /// `proargnames`: the name of each argument, with an empty name for an argument without a name. The list is empty when no argument has a name.
     pub argnames: Vec<String>,
+    /// `proargdefaults`: the defaults of the last input arguments, in the stored form of a list of expressions, or `None` when no argument has a default.
+    pub argdefaults: Option<String>,
+    /// `pronargdefaults`: the number of the defaults in `argdefaults`.
+    pub nargdefaults: i16,
     /// `prosrc`: the body in a string, or empty for a body in SQL.
     pub src: String,
     /// `probin`: the file of a function in C, or empty for another function.
@@ -1962,6 +1966,8 @@ impl Catalog {
             allargtypes: Vec::new(),
             argmodes: Vec::new(),
             argnames: Vec::new(),
+            argdefaults: None,
+            nargdefaults: 0,
             src: src.to_string(),
             bin: String::new(),
             body: None,

@@ -1,0 +1,175 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION f(a int, b int DEFAULT 10, c int = 100) RETURNS int LANGUAGE sql RETURN a + b + c;
+CREATE FUNCTION
+> SELECT f(1), f(1, 2), f(1, 2, 3);
+fields f:23:4:-1,f:23:4:-1,f:23:4:-1
+row 111,103,6
+SELECT 1
+> SELECT f(1, c => 5), f(a => 1);
+fields f:23:4:-1,f:23:4:-1
+row 16,111
+SELECT 1
+> SELECT pronargs, pronargdefaults FROM pg_proc WHERE proname = 'f';
+fields pronargs@pg_proc.17:21:2:-1,pronargdefaults@pg_proc.18:21:2:-1
+row 3,2
+SELECT 1
+> SELECT pg_get_function_arguments('f'::regproc), pg_get_function_identity_arguments('f'::regproc);
+fields pg_get_function_arguments:25:-1:-1,pg_get_function_identity_arguments:25:-1:-1
+row a integer, b integer DEFAULT 10, c integer DEFAULT 100,a integer, b integer, c integer
+SELECT 1
+> SELECT pg_get_expr(proargdefaults, 0) FROM pg_proc WHERE proname = 'f';
+fields pg_get_expr:25:-1:-1
+row 10, 100
+SELECT 1
+> SELECT f();
+ERROR 42883 function f() does not exist at 8
+DETAIL No function of that name accepts the given number of arguments.
+> CREATE FUNCTION g(a int DEFAULT 1, b int) RETURNS int LANGUAGE sql RETURN a;
+ERROR 42P13 input parameters after one with a default value must also have defaults at 36
+> CREATE FUNCTION g(OUT a int DEFAULT 1) LANGUAGE sql AS 'SELECT 1';
+ERROR 42P13 only input parameters can have default values at 19
+> CREATE FUNCTION g(a int DEFAULT 'x') RETURNS int LANGUAGE sql RETURN a;
+ERROR 22P02 invalid input syntax for type integer: "x" at 33
+> CREATE FUNCTION g(a int DEFAULT b) RETURNS int LANGUAGE sql RETURN a;
+ERROR 42703 column "b" does not exist at 33
+> CREATE FUNCTION g(a int DEFAULT (SELECT 1)) RETURNS int LANGUAGE sql RETURN a;
+ERROR 0A000 cannot use subquery in DEFAULT expression at 33
+> CREATE FUNCTION g(a int DEFAULT sum(1)) RETURNS int LANGUAGE sql RETURN a;
+ERROR 42803 aggregate functions are not allowed in DEFAULT expressions at 33
+> CREATE FUNCTION g(a int DEFAULT $1) RETURNS int LANGUAGE sql RETURN a;
+ERROR 42P02 there is no parameter $1 at 33
+> CREATE FUNCTION g(a text DEFAULT 'x', b numeric DEFAULT 1.5, d date DEFAULT now()) RETURNS text LANGUAGE sql RETURN a || b || (d IS NOT NULL);
+CREATE FUNCTION
+> SELECT g(), g('y'), g(b => 2);
+fields g:25:-1:-1,g:25:-1:-1,g:25:-1:-1
+row x1.5true,y1.5true,x2true
+SELECT 1
+> SELECT pg_get_function_arguments('g'::regproc);
+fields pg_get_function_arguments:25:-1:-1
+row a text DEFAULT 'x'::text, b numeric DEFAULT 1.5, d date DEFAULT now()
+SELECT 1
+> CREATE FUNCTION h(a int, b int DEFAULT 2) RETURNS int LANGUAGE sql RETURN a * b;
+CREATE FUNCTION
+> CREATE FUNCTION h(a int) RETURNS int LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> SELECT h(3);
+ERROR 42725 function h(integer) is not unique at 8
+DETAIL Could not choose a best candidate function.
+HINT You might need to add explicit type casts.
+> CREATE OR REPLACE FUNCTION h(a int, b int) RETURNS int LANGUAGE sql RETURN a * b;
+ERROR 42P13 cannot remove parameter defaults from existing function
+HINT Use DROP FUNCTION h(integer,integer) first.
+> CREATE OR REPLACE FUNCTION h(a int, b int DEFAULT '3') RETURNS int LANGUAGE sql RETURN a * b;
+CREATE FUNCTION
+> SELECT h(3, 4);
+fields h:23:4:-1
+row 12
+SELECT 1
+> DROP FUNCTION h(int);
+DROP FUNCTION
+> SELECT h(3);
+fields h:23:4:-1
+row 9
+SELECT 1
+> CREATE OR REPLACE FUNCTION h(a int DEFAULT 1, b int DEFAULT 5) RETURNS int LANGUAGE sql RETURN a * b;
+CREATE FUNCTION
+> SELECT h();
+fields h:23:4:-1
+row 5
+SELECT 1
+> CREATE FUNCTION k(a int, b bigint DEFAULT 1) RETURNS int LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> CREATE OR REPLACE FUNCTION k(a int, b bigint DEFAULT 1::int) RETURNS int LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> CREATE TABLE t (x int);
+CREATE TABLE
+> CREATE FUNCTION tf(a int DEFAULT f(1)) RETURNS int LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> SELECT tf();
+fields tf:23:4:-1
+row 111
+SELECT 1
+> DROP FUNCTION f;
+ERROR 2BP01 cannot drop function f(integer,integer,integer) because other objects depend on it
+DETAIL function tf(integer) depends on function f(integer,integer,integer)
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP FUNCTION f CASCADE;
+NOTICE 00000 drop cascades to function tf(integer)
+DROP FUNCTION
+> SELECT proname FROM pg_proc WHERE proname IN ('f', 'tf') ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1
+SELECT 0
+> CREATE FUNCTION m(a int DEFAULT 1 + 2 * 3) RETURNS int LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> SELECT m(), pg_get_function_arguments('m'::regproc);
+fields m:23:4:-1,pg_get_function_arguments:25:-1:-1
+row 7,a integer DEFAULT (1 + (2 * 3))
+SELECT 1
+> CREATE FUNCTION n(a int[] DEFAULT ARRAY[1, 2], b text DEFAULT NULL) RETURNS text LANGUAGE sql RETURN a::text || coalesce(b, '-');
+CREATE FUNCTION
+> SELECT n(), pg_get_function_arguments('n'::regproc);
+fields n:25:-1:-1,pg_get_function_arguments:25:-1:-1
+row {1,2}-,a integer[] DEFAULT ARRAY[1, 2], b text DEFAULT NULL::text
+SELECT 1
+> CREATE FUNCTION p(a int DEFAULT x) RETURNS int LANGUAGE sql RETURN a;
+ERROR 42703 column "x" does not exist at 33
+> CREATE FUNCTION p(a int DEFAULT t.x) RETURNS int LANGUAGE sql RETURN a;
+ERROR 42P01 missing FROM-clause entry for table "t" at 33
+> CREATE FUNCTION q(a int DEFAULT 2) RETURNS SETOF int LANGUAGE sql AS 'SELECT generate_series(1, a)';
+CREATE FUNCTION
+> SELECT * FROM q();
+fields q:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT pg_get_function_arg_default('q'::regproc, 1), pg_get_function_arg_default('n'::regproc, 2);
+fields pg_get_function_arg_default:25:-1:-1,pg_get_function_arg_default:25:-1:-1
+row 2,NULL::text
+SELECT 1
+> SELECT parameter_name, parameter_default FROM information_schema.parameters WHERE specific_name LIKE 'n\_%' ORDER BY ordinal_position;
+fields parameter_name@information_schema.parameters.8:19:64:-1,parameter_default@information_schema.parameters.32:1043:-1:-1
+row a,ARRAY[1, 2]
+row b,NULL::text
+SELECT 2
+> PREPARE pq AS SELECT h();
+PREPARE
+> EXECUTE pq;
+fields h:23:4:-1
+row 5
+SELECT 1
+> CREATE FUNCTION s(a int DEFAULT 1, OUT b int, c int DEFAULT 2) LANGUAGE sql AS 'SELECT a + c';
+CREATE FUNCTION
+> SELECT s(), s(5), s(c => 10);
+fields s:23:4:-1,s:23:4:-1,s:23:4:-1
+row 3,7,11
+SELECT 1
+> SELECT pg_get_function_arguments('s'::regproc);
+fields pg_get_function_arguments:25:-1:-1
+row a integer DEFAULT 1, OUT b integer, c integer DEFAULT 2
+SELECT 1
+> CREATE FUNCTION u(a int DEFAULT 'x'::text) RETURNS int LANGUAGE sql RETURN a;
+ERROR 42804 argument of DEFAULT must be type integer, not type text at 33
+> CREATE FUNCTION u(a int DEFAULT generate_series(1, 2)) RETURNS int LANGUAGE sql RETURN a;
+ERROR 0A000 set-returning functions are not allowed in DEFAULT expressions at 33
+> CREATE FUNCTION u(a int DEFAULT row_number() OVER ()) RETURNS int LANGUAGE sql RETURN a;
+ERROR 42P20 window functions are not allowed in DEFAULT expressions at 33
+> CREATE FUNCTION w(a timestamptz DEFAULT now(), b varchar(3) DEFAULT 'abc', c int DEFAULT -1) RETURNS text LANGUAGE sql RETURN b || c;
+CREATE FUNCTION
+> SELECT w(), pg_get_function_arguments('w'::regproc);
+fields w:25:-1:-1,pg_get_function_arguments:25:-1:-1
+row abc-1,a timestamp with time zone DEFAULT now(), b character varying DEFAULT 'abc'::character varying, c integer DEFAULT '-1'::integer
+SELECT 1
+> CREATE FUNCTION y(a int DEFAULT 1) RETURNS int LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> CREATE FUNCTION y(a int DEFAULT 1, b int DEFAULT 2) RETURNS int LANGUAGE sql RETURN a + b;
+CREATE FUNCTION
+> SELECT y(5);
+ERROR 42725 function y(integer) is not unique at 8
+DETAIL Could not choose a best candidate function.
+HINT You might need to add explicit type casts.
+> SELECT y();
+ERROR 42725 function y() is not unique at 8
+DETAIL Could not choose a best candidate function.
+HINT You might need to add explicit type casts.

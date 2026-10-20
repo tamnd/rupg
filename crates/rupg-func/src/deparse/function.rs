@@ -1,8 +1,8 @@
 //! The functions of `ruleutils.c` that show the arguments and the result of a function: `pg_get_function_arguments`, `pg_get_function_identity_arguments`, `pg_get_function_result` and `pg_get_function_arg_default`.
 //!
-//! All the functions are built in, so the arguments come from the static rows of `pg_proc`. Each default of an argument in `proargdefaults` is a `Const` node, which [`arg_defaults`] reads from the text of the node tree.
+//! The arguments come from the rows of `pg_proc` that `rupg-pgcatalog` has, with the functions of the session. [`arg_defaults`] reads the defaults of the arguments from `proargdefaults`.
 
-use rupg_analyze::{Expr, ExprKind, arg_defaults};
+use rupg_analyze::{Expr, arg_defaults};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, ProcRow};
 use rupg_types::Value;
@@ -19,11 +19,10 @@ const INOUT: u8 = b'b';
 const VARIADIC: u8 = b'v';
 const TABLE: u8 = b't';
 
-/// `deparse_expression` of a `Const` default.
-fn default_text(c: &Expr, session: &dyn Session) -> Result<String> {
-    let ExprKind::Const(value) = &c.kind else { return Err(bad_node()) };
+/// `deparse_expression` of a default.
+fn default_text(default: &Expr, session: &dyn Session) -> Result<String> {
     let mut d = Deparser::new(session, false, 0);
-    d.constant(c, value, 0)?;
+    d.expr(default, false)?;
     Ok(d.buf)
 }
 
