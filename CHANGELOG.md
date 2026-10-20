@@ -8,6 +8,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `CREATE PROCEDURE` and `CALL` with input, `INOUT` and `OUT` arguments, named arguments, defaults and `VARIADIC`. A procedure with output arguments gives one row. `DROP PROCEDURE`, `DROP ROUTINE`, `ALTER PROCEDURE`, `COMMENT ON PROCEDURE` and `CREATE OR REPLACE` check the kind of the routine as PostgreSQL does. (#464).
 - `CALL` in PL/pgSQL and in the extended protocol. In PL/pgSQL, the values of the `INOUT` and `OUT` arguments go back to the variables of the call, and an argument that is not a variable gives the error of PostgreSQL (#465).
+- `FOREACH ... SLICE` in PL/pgSQL, with the checks of PostgreSQL for the slice and for the type of the loop variable (#466).
+
+### Fixed
+
+- A syntax error in the code of `DO` has its place in the query, as in PostgreSQL. Before, the place was in the code (#466).
 
 ## 0.1.54 (2026-10-20)
 
