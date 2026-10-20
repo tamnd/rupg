@@ -457,6 +457,8 @@ pub struct Function {
     pub rows: u32,
     /// `prosupport`: the OID of the support function, or 0.
     pub support: u32,
+    /// `prokind`: `f` for a function or `p` for a procedure.
+    pub kind: u8,
     /// `proisstrict`: true when a null argument gives null without a call.
     pub strict: bool,
     /// `provolatile`: `i` immutable, `s` stable or `v` volatile.
@@ -2143,6 +2145,7 @@ impl Catalog {
             cost: 1,
             rows: 0,
             support: 0,
+            kind: b'f',
             // The constructors of a range type accept null bounds, which are infinite.
             strict: rettype == multirange,
             volatile: b'i',

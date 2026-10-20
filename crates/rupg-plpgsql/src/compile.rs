@@ -33,6 +33,8 @@ pub(crate) struct Signature {
     pub(crate) retset: bool,
     /// True for a call of a trigger function as a trigger, `PLPGSQL_DML_TRIGGER`.
     pub(crate) trigger: bool,
+    /// True for a procedure, `fn_prokind` `p`.
+    pub(crate) procedure: bool,
 }
 
 /// The variables of a trigger function after `new` and `old`, with their types, in the order of `do_compile`.
@@ -67,6 +69,7 @@ pub(crate) fn compile(src: &str, env: &dyn Env, sig: &Signature, check: bool) ->
         retset: sig.retset,
         rettype: sig.rettype,
         out: None,
+        procedure: sig.procedure,
         latest: 0,
     };
     let result = c.function(sig);
@@ -129,6 +132,8 @@ struct Compiler<'a> {
     rettype: u32,
     /// `out_param_varno`.
     out: Option<usize>,
+    /// True for a procedure.
+    procedure: bool,
     /// The byte offset of the last line that the compiler counted, as `plpgsql_latest_lineno` keeps it.
     latest: usize,
 }
@@ -404,9 +409,10 @@ impl Compiler<'_> {
                 self.parameter_name(&arg.name, d)?;
             }
         }
+        // A procedure gives a row, also with one output argument.
         self.out = match outs.as_slice() {
             [] => None,
-            [one] => Some(*one),
+            [one] if !sig.procedure => Some(*one),
             _ => Some(self.add_datum("(unnamed row)", DatumKind::Row { fields: outs.clone() })),
         };
         let rettype = sig.rettype;
@@ -1540,10 +1546,16 @@ impl Compiler<'_> {
             self.no_return_value(message, Some("Use RETURN NEXT or RETURN QUERY."))?;
             Returned::Nothing
         } else if self.rettype == oid::VOID {
-            self.no_return_value(
-                "RETURN cannot have a parameter in function returning void",
-                None,
-            )?;
+            if self.procedure {
+                let n = self.sc.next()?;
+                if !n.is_char(b';') {
+                    let message = "RETURN cannot have a parameter in a procedure";
+                    return Err(Error::new(SqlState::SYNTAX_ERROR, message).at(n.start));
+                }
+            } else {
+                let message = "RETURN cannot have a parameter in function returning void";
+                self.no_return_value(message, None)?;
+            }
             Returned::Nothing
         } else if let Some(out) = self.out {
             let message = "RETURN cannot have a parameter in function with OUT parameters";

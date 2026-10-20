@@ -781,7 +781,8 @@ impl Analyzer<'_> {
             },
             srfs,
         };
-        let mut call = self.make_func(&func_names, args, f.func_variadic, Some(parts), at)?;
+        let mut call =
+            self.make_func(&func_names, args, f.func_variadic, Some(parts), false, at)?;
         if f.funcformat == CoercionForm::COERCE_SQL_SYNTAX
             && let ExprKind::Func(func) = &mut call.kind
             && func.form == FuncForm::Call

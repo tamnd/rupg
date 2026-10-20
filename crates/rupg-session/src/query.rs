@@ -237,6 +237,7 @@ fn use_types(catalog: &Catalog) {
                     strict: f.strict,
                     retset: f.retset,
                     volatile: f.volatile,
+                    kind: f.kind,
                     rettype: f.rettype,
                     argtypes: f.argtypes.clone(),
                     allargtypes: f.allargtypes.clone(),

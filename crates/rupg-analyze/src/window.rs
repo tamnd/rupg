@@ -277,7 +277,8 @@ impl Analyzer<'_> {
             | Kind::IndexPredicate
             | Kind::ExecuteParameter
             | Kind::Transform
-            | Kind::TriggerWhen => {
+            | Kind::TriggerWhen
+            | Kind::CallArgument => {
                 Some(format!("window functions are not allowed in {}", self.kind.name()))
             }
             Kind::Other => return Err(not_yet("a window function in this place", at)),

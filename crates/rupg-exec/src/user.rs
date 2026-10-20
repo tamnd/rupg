@@ -839,7 +839,7 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("prorows", Value::Float4(rows))
                 .set("provariadic", oid(variadic_type(catalog, f)))
                 .set("prosupport", oid(f.support))
-                .set("prokind", code('f'))
+                .set("prokind", Value::Char(f.kind))
                 .set("prosecdef", Value::Bool(false))
                 .set("proleakproof", Value::Bool(false))
                 .set("proisstrict", Value::Bool(f.strict))

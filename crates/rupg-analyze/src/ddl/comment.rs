@@ -7,6 +7,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{CommentStmt, Node, ObjectType, RangeVar};
 
+use super::drop_function::routine_word;
 use super::index::system_column;
 use super::{Definer, Found, not_yet, relkind_detail, relname};
 use crate::typename::{names, type_name_text};
@@ -77,9 +78,9 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSCONFIGURATION => self.comment_ts(stmt.objtype, object)?,
-            ObjectType::OBJECT_FUNCTION | ObjectType::OBJECT_ROUTINE => {
-                self.comment_function(stmt.objtype, object)?
-            }
+            ObjectType::OBJECT_FUNCTION
+            | ObjectType::OBJECT_PROCEDURE
+            | ObjectType::OBJECT_ROUTINE => self.comment_function(stmt.objtype, object)?,
             _ => return Err(not_yet("COMMENT on this kind of object", None)),
         };
         let text = stmt.comment.as_deref().filter(|c| !c.is_empty()).map(str::to_string);
@@ -103,11 +104,10 @@ impl Definer<'_, '_> {
             return Err(Error::internal("a function name with arguments"));
         };
         let found = self
-            .find_function(item, false)?
+            .find_function(objtype, item, false)?
             .ok_or_else(|| Error::internal("a function that the lookup did not find"))?;
         if !self.is_superuser() && found.owner != self.user {
-            let word = if objtype == ObjectType::OBJECT_ROUTINE { "routine" } else { "function" };
-            return Err(not_owner(word, &names(&item.objname).join(".")));
+            return Err(not_owner(routine_word(objtype), &names(&item.objname).join(".")));
         }
         if found.oid < FIRST_NORMAL_OID {
             return Err(builtin_object());

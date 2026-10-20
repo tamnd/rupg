@@ -165,6 +165,8 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_RULE
             | ObjectType::OBJECT_TRIGGER
             | ObjectType::OBJECT_FUNCTION
+            | ObjectType::OBJECT_PROCEDURE
+            | ObjectType::OBJECT_ROUTINE
             | ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE

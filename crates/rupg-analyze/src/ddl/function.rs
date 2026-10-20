@@ -72,7 +72,7 @@ fn option_list(def: &DefElem) -> Option<Vec<String>> {
     }
 }
 
-/// `compute_function_attributes`: the options of the function. Each option that rupg does not have gives an error.
+/// `compute_function_attributes`: the options of the function. Each option that rupg does not have gives an error. An option that only a function can have gives `42P13` for a procedure.
 fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
     let mut out = Options {
         language: SQL_LANGUAGE,
@@ -90,6 +90,24 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
         let name = def.defname.as_deref().unwrap_or_default();
         let at = place(def.location);
         let bad = || not_yet(&format!("the option {name} of a function"), at);
+        let attribute = matches!(
+            name,
+            "volatility"
+                | "strict"
+                | "leakproof"
+                | "cost"
+                | "rows"
+                | "support"
+                | "parallel"
+                | "window"
+        );
+        if stmt.is_procedure && attribute {
+            return Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                "invalid attribute in procedure definition",
+            )
+            .at_opt(at));
+        }
         match (name, option_text(def)) {
             ("language", Some("sql")) => out.language = SQL_LANGUAGE,
             ("language", Some("plpgsql")) => out.language = PLPGSQL_LANGUAGE,
@@ -445,6 +463,7 @@ fn builtin_function(oid: u32) -> Option<Function> {
         cost: DEFAULT_COST,
         rows: 0,
         support: 0,
+        kind: b'f',
         strict: proc.strict,
         volatile: proc.volatile,
         parallel: b's',
@@ -466,9 +485,6 @@ fn builtin_function(oid: u32) -> Option<Function> {
 impl Definer<'_, '_> {
     /// `CreateFunction` for a function in SQL. `text` is the text of the statement, which the catalog keeps. The return value is the OID of the function.
     pub(super) fn create_function(&mut self, stmt: &CreateFunctionStmt, text: &str) -> Result<u32> {
-        if stmt.is_procedure {
-            return Err(not_yet("CREATE PROCEDURE", None));
-        }
         let parts = names(&stmt.funcname);
         let (schema, name) = self.an.split_name(&parts, None)?;
         let namespace = match schema {
@@ -478,6 +494,8 @@ impl Definer<'_, '_> {
             })?,
         };
         self.check_create_in(namespace, None)?;
+        let options = options(stmt)?;
+        let procedure = stmt.is_procedure;
         let mut argtypes = Vec::new();
         let mut allargtypes = Vec::new();
         let mut argmodes = Vec::new();
@@ -498,6 +516,9 @@ impl Definer<'_, '_> {
                 _ => b'i',
             };
             let ty = param.argType.as_deref().ok_or_else(|| Error::internal("an argument type"))?;
+            if ty.setof && procedure {
+                return bad("procedures cannot accept set arguments", at);
+            }
             if ty.setof {
                 return bad("functions cannot accept set arguments", at);
             }
@@ -505,6 +526,10 @@ impl Definer<'_, '_> {
             let input = matches!(mode, b'i' | b'b' | b'v');
             if input && argmodes.contains(&b'v') {
                 return bad("VARIADIC parameter must be the last input parameter", at);
+            }
+            // A `CALL` gives the output arguments too, so in a procedure an output parameter cannot come after `VARIADIC`.
+            if procedure && !input && argmodes.contains(&b'v') {
+                return bad("VARIADIC parameter must be the last parameter", at);
             }
             if mode == b'v'
                 && !matches!(ty, oid::ANYARRAY | oid::ANYCOMPATIBLEARRAY | oid::ANY)
@@ -538,6 +563,11 @@ impl Definer<'_, '_> {
                     "input parameters after one with a default value must also have defaults",
                     at,
                 );
+            } else if procedure && !defaults.is_empty() {
+                return bad(
+                    "procedure OUT parameters cannot appear after one with a default value",
+                    at,
+                );
             }
             if input {
                 argtypes.push(ty);
@@ -557,12 +587,14 @@ impl Definer<'_, '_> {
             argmodes.clear();
         }
         // `interpret_function_parameter_list`: the result type that the `OUT` parameters need.
+        // A procedure with output parameters gives a row, also with one of them.
         let required = match outs.as_slice() {
             [] => None,
-            [ty] => Some(*ty),
+            [ty] if !procedure => Some(*ty),
             _ => Some(oid::RECORD),
         };
         let (rettype, retset) = match (stmt.returnType.as_deref(), required) {
+            (_, required) if procedure => (required.unwrap_or(oid::VOID), false),
             (Some(ret), _) => {
                 let rettype = self.an.type_name(ret)?.0;
                 if let Some(required) = required.filter(|&r| r != rettype) {
@@ -584,7 +616,6 @@ impl Definer<'_, '_> {
                 ));
             }
         };
-        let options = options(stmt)?;
         if options.rows.is_some() && !retset {
             return Err(Error::new(
                 SqlState::INVALID_PARAMETER_VALUE,
@@ -604,6 +635,7 @@ impl Definer<'_, '_> {
             cost: options.cost,
             rows: if retset { options.rows.unwrap_or(DEFAULT_ROWS) } else { 0 },
             support,
+            kind: if stmt.is_procedure { b'p' } else { b'f' },
             strict: options.strict,
             volatile: options.volatile,
             parallel: options.parallel,
@@ -769,18 +801,27 @@ impl Definer<'_, '_> {
         self.an.env.check_function(function)
     }
 
-    /// The checks of `ProcedureCreate` for `CREATE OR REPLACE FUNCTION` of the function `old`: the owner, the result type, the row type of the `OUT` parameters, the names of the input arguments and the defaults do not change. New defaults can be added before the old ones.
+    /// The checks of `ProcedureCreate` for `CREATE OR REPLACE FUNCTION` of the function `old`: the owner, the kind, the result type, the row type of the `OUT` parameters, the names of the input arguments and the defaults do not change. New defaults can be added before the old ones.
     fn check_replace(&self, old: &Function, new: &Function) -> Result<()> {
         if !self.is_superuser() && old.owner != self.user {
             return Err(super::comment::not_owner("function", &old.name));
         }
+        if old.kind != new.kind {
+            let what = if old.kind == b'p' { "a procedure" } else { "a function" };
+            return Err(Error::new(SqlState::WRONG_OBJECT_TYPE, "cannot change routine kind")
+                .with_detail(format!("\"{}\" is {what}.", old.name)));
+        }
         let signature = self.describe(ObjRef::new(PG_PROC, old.oid));
-        let signature = signature.strip_prefix("function ").unwrap_or(&signature);
+        let signature = signature.split_once(' ').map_or(&*signature, |(_, rest)| rest);
+        let drop = if new.kind == b'p' { "DROP PROCEDURE" } else { "DROP FUNCTION" };
         let error = |message: String| {
             Error::new(SqlState::INVALID_FUNCTION_DEFINITION, message)
-                .with_hint(format!("Use DROP FUNCTION {signature} first."))
+                .with_hint(format!("Use {drop} {signature} first."))
         };
         let changed = "cannot change return type of existing function".to_string();
+        if (old.rettype != new.rettype || old.retset != new.retset) && new.kind == b'p' {
+            return Err(error("cannot change whether a procedure has output parameters".into()));
+        }
         if old.rettype != new.rettype || old.retset != new.retset {
             return Err(error(changed));
         }

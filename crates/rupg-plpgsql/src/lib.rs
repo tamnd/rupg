@@ -221,6 +221,7 @@ pub fn inline(spi: &dyn Spi, src: &str) -> Result<()> {
         rettype: oid::VOID,
         retset: false,
         trigger: false,
+        procedure: false,
     };
     let tree = compile(src, spi.env(), &sig, true)?;
     let compiled = Compiled::new(tree, "inline_code_block", 0);
@@ -333,5 +334,6 @@ fn signature(function: &rupg_catalog::Function, types: &[u32], ret: u32) -> Sign
         rettype,
         retset: function.retset,
         trigger: false,
+        procedure: function.kind == b'p',
     }
 }
