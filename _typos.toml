@@ -26,6 +26,8 @@ dispell = "dispell"
 fals = "fals"
 valu = "valu"
 abd = "abd"
+# The function `make_ands_implicit` of the planner.
+ands = "ands"
 
 # Test inputs that are wrong on purpose.
 [default]
