@@ -42,6 +42,8 @@ struct Options {
     support: Option<Vec<String>>,
     /// The body in a string, from `AS`.
     src: Option<String>,
+    /// The place of `AS` in the query text.
+    src_at: Option<usize>,
 }
 
 /// The text of the argument of an option.
@@ -76,6 +78,7 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
         rows: None,
         support: None,
         src: None,
+        src_at: None,
     };
     for def in stmt.options.iter().flatten() {
         let Node::DefElem(def) = def else { continue };
@@ -104,7 +107,10 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
             },
             ("support", _) => out.support = Some(option_list(def).ok_or_else(bad)?),
             ("as", _) => match option_list(def).as_deref() {
-                Some([src]) => out.src = Some(src.clone()),
+                Some([src]) => {
+                    out.src = Some(src.clone());
+                    out.src_at = at;
+                }
                 _ => return Err(bad()),
             },
             _ => return Err(bad()),
@@ -176,6 +182,20 @@ fn result_types(function: &Function, inputs: &[u32]) -> Result<Vec<u32>> {
             }
         })
         .collect()
+}
+
+/// `function_parse_error_transpose` and `match_prosrc_to_query`: the place in the query text of the body `src` of a function, in a string after `AS`, so that an error in the body has its place in the query. `text` is the text of the statement, and `as_at` is the place of `AS` in the query text. `None` when the string is not in the text.
+fn body_place(text: &str, src: &str, as_at: Option<usize>) -> Option<usize> {
+    let as_at = as_at?;
+    let quoted = src.replace('\'', "''");
+    let local = [src, quoted.as_str()].into_iter().find_map(|raw| {
+        text.match_indices(raw)
+            .map(|(i, _)| i)
+            .find(|&i| matches!(text.as_bytes()[..i].last(), Some(b'$' | b'\'')))
+    })?;
+    // The string comes after `AS`, so `AS` is the last word before it.
+    let keyword = text[..local].to_ascii_lowercase().rfind("as")?;
+    Some(as_at.checked_sub(keyword)? + local)
 }
 
 /// The names of the input arguments of a function, in the order of their numbers. An argument with no name has an empty name.
@@ -539,7 +559,15 @@ impl Definer<'_, '_> {
             bin: String::new(),
             body: Some(FunctionBody { text: text.to_string(), path: self.an.path.clone() }),
         };
-        let stmts = statements(stmt, options.src.as_deref())?;
+        // `function_parse_error_transpose`: an error in a body in a string has its place in the query text.
+        let transpose = |error: Error| match (&options.src, error.position()) {
+            (Some(src), Some(inner)) => {
+                let outer = body_place(text, src, options.src_at).map(|at| at + inner);
+                error.with_position(outer)
+            }
+            _ => error,
+        };
+        let stmts = statements(stmt, options.src.as_deref()).map_err(transpose)?;
         // `fmgr_sql_validator` reads a body in a string only when no argument is polymorphic, and a body in SQL always.
         let polymorphic = function.argtypes.iter().any(|&ty| types::is_polymorphic(ty));
         let mut refs = Vec::new();
@@ -548,7 +576,7 @@ impl Definer<'_, '_> {
             let mut an = Analyzer::new(self.an.env, &params);
             an.path.clone_from(&self.an.path);
             an.sql_function = Some((function.name.clone(), input_names(&function)));
-            let body = an.body(&function, &stmts, &function.argtypes)?;
+            let body = an.body(&function, &stmts, &function.argtypes).map_err(transpose)?;
             self.an.notices.append(&mut an.notices);
             refs = match (&body, &stmts) {
                 (_, Statements::String(_)) => Vec::new(),
