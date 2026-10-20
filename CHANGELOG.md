@@ -4,12 +4,15 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.54 (2026-10-20)
+
 ### Added
 
 - Functions in PL/pgSQL and the statement `DO`. A block with `EXCEPTION` runs in a subtransaction, and the errors and the messages have the context lines of PostgreSQL. `CALL` and `DO` inside PL/pgSQL, `FOREACH` with `SLICE` and triggers in PL/pgSQL are not supported yet (#458).
 - `%TYPE` in the signatures of functions. `CREATE FUNCTION` checks a PL/pgSQL body, and the assignments in PL/pgSQL coerce their values as PostgreSQL does (#459).
 - `CREATE TRIGGER`, `DROP TRIGGER`, `ALTER TRIGGER ... RENAME`, `ALTER TABLE ... ENABLE/DISABLE TRIGGER` and `COMMENT ON TRIGGER`, with `pg_trigger` and `pg_get_triggerdef`. The triggers do not fire yet, and a write to a table with a user trigger that fires gives an error (#460).
 - The triggers of `CREATE TRIGGER` fire on `INSERT`, `UPDATE` and `DELETE` with a trigger function in PL/pgSQL, with `NEW`, `OLD`, the variables `TG_*`, `WHEN` and `UPDATE OF`. The notices of a statement with no rows now go to the client (#461).
+- `DO` runs in a PL/pgSQL function and in a `DO` block, with the statement as the context of the messages and the errors of its code. `DO LANGUAGE sql` gives 0A000, as in PostgreSQL (#462).
 - `SET ROLE`, `SET SESSION AUTHORIZATION` and `RESET` of them change `current_user`, `session_user` and `is_superuser`, with the checks of PostgreSQL. A new object belongs to the current user (#453).
 
 ### Changed
