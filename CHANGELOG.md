@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `EXPLAIN` in the text, JSON, XML and YAML forms, with a planner that makes the plan of a query with the costs of PostgreSQL (#439).
+
 ## 0.1.51 (2026-10-20)
 
 ### Added
