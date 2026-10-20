@@ -7,6 +7,7 @@
 pub mod builtin;
 mod generated;
 pub mod icu;
+pub mod roles;
 
 use std::fmt::Write as _;
 

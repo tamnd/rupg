@@ -3,7 +3,6 @@
 use rupg_catalog::Database;
 use rupg_common::{Error, SqlState};
 use rupg_func::{char_to_encoding, encoding_to_char};
-use rupg_pgcatalog::builtin;
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
     AlterDatabaseSetStmt, CreatedbStmt, DefElem, DropdbStmt, Node, VariableSetKind,
@@ -124,7 +123,7 @@ fn text(option: Option<&DefElem>) -> Result<Option<String>, Error> {
 }
 
 /// `defGetInt32`.
-fn def_int32(def: &DefElem) -> Result<i32, Error> {
+pub(super) fn def_int32(def: &DefElem) -> Result<i32, Error> {
     match &def.arg {
         Some(Node::Integer(value)) => Ok(*value),
         _ => Err(Error::new(
@@ -266,19 +265,14 @@ impl Connection {
 
     /// `superuser()` for the role of the session.
     pub(super) fn superuser(&self) -> bool {
-        builtin::roles().iter().any(|role| role.oid == self.role && role.superuser)
+        self.roles().superuser(self.role)
     }
 
     /// `get_role_oid`: the roles of the catalog, and the user of the session, which is the bootstrap superuser when it is not a role of the catalog.
     fn role_named(&self, name: &str) -> Result<u32, Error> {
-        builtin::roles()
-            .iter()
-            .find(|role| role.name == name)
-            .map(|role| role.oid)
-            .or_else(|| (name == self.user).then_some(self.role))
-            .ok_or_else(|| {
-                Error::new(SqlState::UNDEFINED_OBJECT, format!("role \"{name}\" does not exist"))
-            })
+        self.roles().oid(name).or_else(|| (name == self.user).then_some(self.role)).ok_or_else(
+            || Error::new(SqlState::UNDEFINED_OBJECT, format!("role \"{name}\" does not exist")),
+        )
     }
 
     /// `createdb`.

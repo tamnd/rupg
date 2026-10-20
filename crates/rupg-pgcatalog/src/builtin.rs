@@ -353,12 +353,11 @@ impl Owned {
 pub struct RoleRow {
     pub oid: u32,
     pub name: &'static str,
-    /// `rolsuper`.
-    pub superuser: bool,
+    pub attrs: crate::roles::Attrs,
 }
 
 /// A row of `pg_auth_members`: `member` is a member of `role`.
-#[derive(Debug)]
+#[derive(Clone, Copy, Debug)]
 pub struct MemberRow {
     pub role: u32,
     pub member: u32,
@@ -867,8 +866,23 @@ fn load_owned(kind: Owned) -> Vec<OwnedRow> {
 fn load_roles() -> Vec<RoleRow> {
     let r = Rows::new("pg_authid");
     let (oid, name, superuser) = (r.oid("oid"), r.text("rolname"), r.bool("rolsuper"));
+    let (inherit, createrole) = (r.bool("rolinherit"), r.bool("rolcreaterole"));
+    let (createdb, login) = (r.bool("rolcreatedb"), r.bool("rolcanlogin"));
+    let (replication, bypassrls) = (r.bool("rolreplication"), r.bool("rolbypassrls"));
     (0..r.catalog.len)
-        .map(|i| RoleRow { oid: oid[i], name: name[i], superuser: superuser[i] })
+        .map(|i| RoleRow {
+            oid: oid[i],
+            name: name[i],
+            attrs: crate::roles::Attrs {
+                superuser: superuser[i],
+                inherit: inherit[i],
+                createrole: createrole[i],
+                createdb: createdb[i],
+                login: login[i],
+                replication: replication[i],
+                bypassrls: bypassrls[i],
+            },
+        })
         .collect()
 }
 

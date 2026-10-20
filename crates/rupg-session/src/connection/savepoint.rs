@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use rupg_catalog::Catalog;
 use rupg_common::Error;
+use rupg_pgcatalog::roles::Roles;
 use rupg_sql::nodes::TransactionStmt;
 use rupg_wire::CommandTag;
 
@@ -19,8 +20,8 @@ use crate::utility;
 pub(super) struct Mark {
     /// `currentCommandId` at the savepoint. The rows that the transaction wrote from this command on belong to the subtransaction.
     command: u32,
-    /// The catalog of the transaction, or `None` when the transaction did not hold the lock of the catalog.
-    catalog: Option<Arc<Catalog>>,
+    /// The catalog and the roles of the transaction, or `None` when the transaction did not hold the lock of the catalog.
+    catalog: Option<(Arc<Catalog>, Arc<Roles>)>,
     settings: Savepoint,
     deferred: Vec<Batch>,
     modes: Modes,
@@ -65,7 +66,10 @@ impl Connection {
     fn mark(&self) -> Mark {
         Mark {
             command: self.command.get(),
-            catalog: self.lease.as_ref().map(|lease| Arc::clone(&lease.catalog)),
+            catalog: self
+                .lease
+                .as_ref()
+                .map(|lease| (Arc::clone(&lease.catalog), Arc::clone(&lease.roles))),
             settings: self.settings.borrow().savepoint(),
             deferred: self.deferred.borrow().clone(),
             modes: self.modes.borrow().clone(),
@@ -81,8 +85,9 @@ impl Connection {
             self.store.heap().rollback_to(xid, mark.command);
         }
         match &mark.catalog {
-            Some(catalog) => {
+            Some((catalog, roles)) => {
                 if let Some(lease) = self.lease.as_mut() {
+                    lease.roles = Arc::clone(roles);
                     let next = lease.catalog.next_oid();
                     let mut catalog = Arc::clone(catalog);
                     if catalog.next_oid() < next {

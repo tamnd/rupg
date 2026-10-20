@@ -95,7 +95,7 @@ fn describe_object(call: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// # Errors
 ///
 /// `XX000` for a catalog that is not a catalog of objects.
-fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>> {
+pub fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>> {
     let oid = object.oid;
     let catalog = session.catalog();
     let text = match object.class {
@@ -170,7 +170,7 @@ fn describe(object: ObjRef, session: &dyn Session) -> Result<Option<String>> {
         PG_TS_DICT => ts_text(Named::Dictionary, "dictionary", oid, session),
         PG_TS_TEMPLATE => ts_text(Named::Template, "template", oid, session),
         PG_TS_CONFIG => ts_text(Named::Config, "configuration", oid, session),
-        PG_AUTHID => builtin::named_by_oid(Named::Role, oid).map(|r| format!("role {}", r.name)),
+        PG_AUTHID => rupg_pgcatalog::roles::current().name(oid).map(|name| format!("role {name}")),
         PG_DATABASE => match builtin::named_by_oid(Named::Database, oid) {
             Some(row) => Some(format!("database {}", row.name)),
             None => session

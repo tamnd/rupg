@@ -513,7 +513,7 @@ pub(crate) fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<
         RegKind::Config => catalog_text(Named::Config, oid, session),
         RegKind::Dictionary => catalog_text(Named::Dictionary, oid, session),
         RegKind::Namespace => namespace_name(oid, session).map(quote_identifier),
-        RegKind::Role => builtin::named_by_oid(Named::Role, oid).map(|r| quote_identifier(r.name)),
+        RegKind::Role => rupg_pgcatalog::roles::current().name(oid).map(quote_identifier),
         RegKind::Database => match builtin::named_by_oid(Named::Database, oid) {
             Some(row) => Some(quote_identifier(row.name)),
             None => {
@@ -620,7 +620,10 @@ fn name_in(kind: RegKind, text: &str, names: &[Cow<'_, str>], session: &dyn Sess
     match kind {
         RegKind::Class => class_in(names, session, false),
         RegKind::Namespace => simple(&schemas, SqlState::UNDEFINED_SCHEMA, "schema"),
-        RegKind::Role => simple(&rows(Named::Role), SqlState::UNDEFINED_OBJECT, "role"),
+        RegKind::Role => {
+            let roles = rupg_pgcatalog::roles::current();
+            simple(&roles.all().collect::<Vec<_>>(), SqlState::UNDEFINED_OBJECT, "role")
+        }
         RegKind::Database => {
             let created = session.databases();
             let mut databases = rows(Named::Database);

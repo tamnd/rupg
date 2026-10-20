@@ -1,0 +1,200 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_r1;
+CREATE ROLE
+> CREATE ROLE regress_r1;
+ERROR 42710 role "regress_r1" already exists
+> CREATE ROLE pg_regress_x;
+ERROR 42939 role name "pg_regress_x" is reserved
+DETAIL Role names starting with "pg_" are reserved.
+> CREATE USER regress_u1 CREATEDB CONNECTION LIMIT 5 VALID UNTIL '2030-01-01 00:00:00+00';
+CREATE ROLE
+> CREATE ROLE regress_r2 SUPERUSER NOINHERIT CREATEROLE REPLICATION BYPASSRLS;
+CREATE ROLE
+> CREATE ROLE regress_bad CONNECTION LIMIT -2;
+ERROR 22023 invalid connection limit: -2
+> CREATE ROLE regress_bad LOGIN NOLOGIN;
+ERROR 42601 conflicting or redundant options at 31
+> CREATE ROLE regress_sysid SYSID 12;
+NOTICE 00000 SYSID can no longer be specified
+CREATE ROLE
+> CREATE ROLE regress_pw PASSWORD '';
+NOTICE 00000 empty string is not a valid password, clearing password
+CREATE ROLE
+> CREATE ROLE regress_md5 PASSWORD 'md5e1bf3d6a9a4bd6dab1ec43d5d1a4ae6e';
+WARNING 01P01 setting an MD5-encrypted password
+DETAIL MD5 password support is deprecated and will be removed in a future release of PostgreSQL.
+HINT Refer to the PostgreSQL documentation for details about migrating to another password type.
+CREATE ROLE
+> SELECT rolname, rolsuper, rolinherit, rolcreaterole, rolcreatedb, rolcanlogin, rolreplication, rolconnlimit, rolvaliduntil, rolbypassrls, rolpassword FROM pg_roles WHERE rolname LIKE 'regress%' ORDER BY rolname;
+fields rolname@pg_roles.1:19:64:-1,rolsuper@pg_roles.2:16:1:-1,rolinherit@pg_roles.3:16:1:-1,rolcreaterole@pg_roles.4:16:1:-1,rolcreatedb@pg_roles.5:16:1:-1,rolcanlogin@pg_roles.6:16:1:-1,rolreplication@pg_roles.7:16:1:-1,rolconnlimit@pg_roles.8:23:4:-1,rolvaliduntil@pg_roles.10:1184:8:-1,rolbypassrls@pg_roles.11:16:1:-1,rolpassword@pg_roles.9:25:-1:-1
+row regress_md5,f,t,f,f,f,f,-1,NULL,f,********
+row regress_pw,f,t,f,f,f,f,-1,NULL,f,********
+row regress_r1,f,t,f,f,f,f,-1,NULL,f,********
+row regress_r2,t,f,t,f,f,t,-1,NULL,t,********
+row regress_sysid,f,t,f,f,f,f,-1,NULL,f,********
+row regress_u1,f,t,f,t,t,f,5,2030-01-01 00:00:00+00,f,********
+SELECT 6
+> SELECT rolname, rolpassword FROM pg_authid WHERE rolname LIKE 'regress%' ORDER BY rolname;
+fields rolname@pg_authid.2:19:64:-1,rolpassword@pg_authid.11:25:-1:-1
+row regress_md5,md5e1bf3d6a9a4bd6dab1ec43d5d1a4ae6e
+row regress_pw,NULL
+row regress_r1,NULL
+row regress_r2,NULL
+row regress_sysid,NULL
+row regress_u1,NULL
+SELECT 6
+> CREATE ROLE regress_g1 ROLE regress_u1 ADMIN regress_r2 IN ROLE regress_r1;
+CREATE ROLE
+> SELECT r.rolname AS role, m.rolname AS member, g.rolname AS grantor, a.admin_option, a.inherit_option, a.set_option FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.roleid JOIN pg_roles m ON m.oid = a.member JOIN pg_roles g ON g.oid = a.grantor WHERE r.rolname LIKE 'regress%' ORDER BY 1, 2, 3;
+fields role@pg_roles.1:19:64:-1,member@pg_roles.1:19:64:-1,grantor@pg_roles.1:19:64:-1,admin_option@pg_auth_members.5:16:1:-1,inherit_option@pg_auth_members.6:16:1:-1,set_option@pg_auth_members.7:16:1:-1
+row regress_g1,regress_r2,postgres,t,f,t
+row regress_g1,regress_u1,postgres,f,t,t
+row regress_r1,regress_g1,postgres,f,t,t
+SELECT 3
+> GRANT regress_g1 TO regress_u1;
+NOTICE 00000 role "regress_u1" has already been granted membership in role "regress_g1" by role "postgres"
+GRANT ROLE
+> GRANT regress_g1 TO regress_pw WITH ADMIN OPTION, INHERIT FALSE;
+GRANT ROLE
+> GRANT regress_g1 TO regress_pw WITH ADMIN TRUE;
+NOTICE 00000 role "regress_pw" has already been granted membership in role "regress_g1" by role "postgres"
+GRANT ROLE
+> GRANT regress_g1 TO regress_pw WITH bogus TRUE;
+ERROR 42601 unrecognized role option "bogus" at 37
+> GRANT regress_g1 TO regress_pw WITH ADMIN maybe;
+ERROR 42601 syntax error at or near "maybe" at 43
+> GRANT regress_g1 TO regress_g1;
+ERROR 0LP01 role "regress_g1" is a member of role "regress_g1"
+> GRANT regress_u1 TO regress_g1;
+ERROR 0LP01 role "regress_u1" is a member of role "regress_g1"
+> GRANT pg_database_owner TO regress_u1;
+ERROR 0A000 role "pg_database_owner" cannot have explicit members
+> GRANT regress_g1 TO pg_database_owner;
+ERROR 0A000 role "pg_database_owner" cannot be a member of any role
+> GRANT regress_nope TO regress_u1;
+ERROR 42704 role "regress_nope" does not exist
+> GRANT regress_g1 TO regress_nope;
+ERROR 42704 role "regress_nope" does not exist
+> GRANT regress_g1 (a) TO regress_u1;
+ERROR 0LP01 column names cannot be included in GRANT/REVOKE ROLE
+> GRANT regress_g1 TO regress_md5 GRANTED BY regress_pw;
+GRANT ROLE
+> SELECT r.rolname AS role, m.rolname AS member, g.rolname AS grantor, a.admin_option, a.inherit_option, a.set_option FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.roleid JOIN pg_roles m ON m.oid = a.member JOIN pg_roles g ON g.oid = a.grantor WHERE r.rolname LIKE 'regress%' ORDER BY 1, 2, 3;
+fields role@pg_roles.1:19:64:-1,member@pg_roles.1:19:64:-1,grantor@pg_roles.1:19:64:-1,admin_option@pg_auth_members.5:16:1:-1,inherit_option@pg_auth_members.6:16:1:-1,set_option@pg_auth_members.7:16:1:-1
+row regress_g1,regress_md5,regress_pw,f,t,t
+row regress_g1,regress_pw,postgres,t,f,t
+row regress_g1,regress_r2,postgres,t,f,t
+row regress_g1,regress_u1,postgres,f,t,t
+row regress_r1,regress_g1,postgres,f,t,t
+SELECT 5
+> REVOKE regress_g1 FROM regress_pw;
+ERROR 2BP01 dependent privileges exist
+HINT Use CASCADE to revoke them too.
+> REVOKE ADMIN OPTION FOR regress_g1 FROM regress_pw CASCADE;
+REVOKE ROLE
+> REVOKE INHERIT OPTION FOR regress_g1 FROM regress_u1;
+REVOKE ROLE
+> REVOKE regress_g1 FROM regress_sysid;
+WARNING 01000 role "regress_sysid" has not been granted membership in role "regress_g1" by role "postgres"
+REVOKE ROLE
+> SELECT r.rolname AS role, m.rolname AS member, g.rolname AS grantor, a.admin_option, a.inherit_option, a.set_option FROM pg_auth_members a JOIN pg_roles r ON r.oid = a.roleid JOIN pg_roles m ON m.oid = a.member JOIN pg_roles g ON g.oid = a.grantor WHERE r.rolname LIKE 'regress%' ORDER BY 1, 2, 3;
+fields role@pg_roles.1:19:64:-1,member@pg_roles.1:19:64:-1,grantor@pg_roles.1:19:64:-1,admin_option@pg_auth_members.5:16:1:-1,inherit_option@pg_auth_members.6:16:1:-1,set_option@pg_auth_members.7:16:1:-1
+row regress_g1,regress_pw,postgres,f,f,t
+row regress_g1,regress_r2,postgres,t,f,t
+row regress_g1,regress_u1,postgres,f,f,t
+row regress_r1,regress_g1,postgres,f,t,t
+SELECT 4
+> SELECT pg_has_role('regress_u1', 'regress_g1', 'MEMBER'), pg_has_role('regress_u1', 'regress_g1', 'USAGE'), pg_has_role('regress_pw', 'regress_g1', 'USAGE');
+fields pg_has_role:16:1:-1,pg_has_role:16:1:-1,pg_has_role:16:1:-1
+row t,f,f
+SELECT 1
+> ALTER ROLE regress_u1 NOCREATEDB LOGIN CONNECTION LIMIT 10;
+ALTER ROLE
+> ALTER ROLE regress_u1 PASSWORD 'md5e1bf3d6a9a4bd6dab1ec43d5d1a4ae6e';
+WARNING 01P01 setting an MD5-encrypted password
+DETAIL MD5 password support is deprecated and will be removed in a future release of PostgreSQL.
+HINT Refer to the PostgreSQL documentation for details about migrating to another password type.
+ALTER ROLE
+> ALTER ROLE regress_u1 PASSWORD NULL;
+ALTER ROLE
+> ALTER ROLE regress_nope LOGIN;
+ERROR 42704 role "regress_nope" does not exist
+> ALTER ROLE pg_monitor LOGIN;
+ERROR 42939 role name "pg_monitor" is reserved
+DETAIL Cannot alter reserved roles.
+> ALTER ROLE public LOGIN;
+ERROR 42704 role "public" does not exist
+> ALTER GROUP regress_g1 ADD USER regress_sysid;
+ALTER ROLE
+> ALTER GROUP regress_g1 DROP USER regress_sysid;
+ALTER ROLE
+> ALTER GROUP regress_g1 DROP USER regress_sysid;
+WARNING 01000 role "regress_sysid" has not been granted membership in role "regress_g1" by role "postgres"
+ALTER ROLE
+> SELECT rolname, rolcreatedb, rolcanlogin, rolconnlimit FROM pg_roles WHERE rolname = 'regress_u1';
+fields rolname@pg_roles.1:19:64:-1,rolcreatedb@pg_roles.5:16:1:-1,rolcanlogin@pg_roles.6:16:1:-1,rolconnlimit@pg_roles.8:23:4:-1
+row regress_u1,f,t,10
+SELECT 1
+> ALTER ROLE regress_md5 RENAME TO regress_md5b;
+NOTICE 00000 MD5 password cleared because of role rename
+ALTER ROLE
+> ALTER ROLE regress_md5b RENAME TO regress_u1;
+ERROR 42710 role "regress_u1" already exists
+> ALTER ROLE regress_md5b RENAME TO pg_x;
+ERROR 42939 role name "pg_x" is reserved
+DETAIL Role names starting with "pg_" are reserved.
+> ALTER ROLE regress_nope RENAME TO regress_x;
+ERROR 42704 role "regress_nope" does not exist
+> SELECT rolname, rolpassword IS NULL FROM pg_authid WHERE rolname LIKE 'regress_md5%';
+fields rolname@pg_authid.2:19:64:-1,?column?:16:1:-1
+row regress_md5b,t
+SELECT 1
+> CREATE SCHEMA regress_s AUTHORIZATION regress_u1;
+CREATE SCHEMA
+> CREATE TABLE regress_t (a int);
+CREATE TABLE
+> ALTER TABLE regress_t OWNER TO regress_u1;
+ALTER TABLE
+> DROP ROLE regress_u1;
+ERROR 2BP01 role "regress_u1" cannot be dropped because some objects depend on it
+DETAIL owner of schema regress_s
+owner of table regress_t
+> DROP TABLE regress_t;
+DROP TABLE
+> DROP SCHEMA regress_s;
+DROP SCHEMA
+> DROP ROLE regress_nope;
+ERROR 42704 role "regress_nope" does not exist
+> DROP ROLE IF EXISTS regress_nope, regress_u1;
+NOTICE 00000 role "regress_nope" does not exist, skipping
+DROP ROLE
+> DROP ROLE pg_monitor;
+ERROR 2BP01 cannot drop role pg_monitor because it is required by the database system
+> DROP ROLE CURRENT_USER;
+ERROR 22023 cannot use special role specifier in DROP ROLE
+> DROP ROLE regress_r1, regress_r2, regress_g1, regress_pw, regress_md5b, regress_sysid;
+DROP ROLE
+> SELECT count(*) FROM pg_roles WHERE rolname LIKE 'regress%';
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM pg_auth_members WHERE member >= 16384;
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> CREATE ROLE regress_tx;
+CREATE ROLE
+> SELECT count(*) FROM pg_roles WHERE rolname = 'regress_tx';
+fields count:20:8:-1
+row 1
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM pg_roles WHERE rolname = 'regress_tx';
+fields count:20:8:-1
+row 0
+SELECT 1

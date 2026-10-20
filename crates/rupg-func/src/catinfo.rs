@@ -64,8 +64,8 @@ fn statistics_obj_visible(_: &Call<'_>, args: &[Value]) -> Result<Value> {
 /// `pg_get_userbyid`: the name of the role, or `unknown (OID=n)`.
 fn get_userbyid(_: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = oid_arg(args, 0)?;
-    Ok(Value::Text(match builtin::named_by_oid(Named::Role, oid) {
-        Some(row) => row.name.to_string(),
+    Ok(Value::Text(match rupg_pgcatalog::roles::current().name(oid) {
+        Some(name) => name.to_string(),
         None => format!("unknown (OID={oid})"),
     }))
 }

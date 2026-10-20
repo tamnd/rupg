@@ -146,6 +146,8 @@ pub(crate) fn rows(
         "pg_rewrite" => rewrites(table, catalog),
         "pg_init_privs" => init_privs(table, catalog, session)?,
         "pg_database" => databases(table, session),
+        "pg_authid" => authids(table),
+        "pg_auth_members" => auth_members(table),
         "pg_db_role_setting" => db_role_settings(table, session),
         "pg_ts_template" => ts_templates(table, catalog),
         "pg_ts_parser" => ts_parsers(table, catalog),
@@ -267,6 +269,52 @@ fn databases<'a>(table: &'a Table, session: &dyn Session) -> Vec<Row<'a>> {
                 .set("daticurules", text(&database.icu_rules))
                 .set("datcollversion", text(&database.collation_version))
                 .set("datacl", database.acl.as_deref().map_or(Value::Null, text_array));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_authid` of the roles that `CREATE ROLE` made.
+fn authids(table: &Table) -> Vec<Row<'_>> {
+    let roles = rupg_pgcatalog::roles::current();
+    roles
+        .roles
+        .iter()
+        .map(|role| {
+            let a = role.attrs;
+            let mut row = Row::new(table);
+            row.set("oid", oid(role.oid))
+                .set("rolname", Value::text(role.name.clone()))
+                .set("rolsuper", Value::Bool(a.superuser))
+                .set("rolinherit", Value::Bool(a.inherit))
+                .set("rolcreaterole", Value::Bool(a.createrole))
+                .set("rolcreatedb", Value::Bool(a.createdb))
+                .set("rolcanlogin", Value::Bool(a.login))
+                .set("rolreplication", Value::Bool(a.replication))
+                .set("rolbypassrls", Value::Bool(a.bypassrls))
+                .set("rolconnlimit", Value::Int4(role.connlimit))
+                .set("rolpassword", role.password.clone().map_or(Value::Null, Value::text))
+                .set("rolvaliduntil", role.valid_until.map_or(Value::Null, Value::TimestampTz));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_auth_members` of the memberships that `GRANT` made.
+fn auth_members(table: &Table) -> Vec<Row<'_>> {
+    let roles = rupg_pgcatalog::roles::current();
+    roles
+        .members
+        .iter()
+        .map(|member| {
+            let mut row = Row::new(table);
+            row.set("oid", oid(member.oid))
+                .set("roleid", oid(member.role))
+                .set("member", oid(member.member))
+                .set("grantor", oid(member.grantor))
+                .set("admin_option", Value::Bool(member.admin))
+                .set("inherit_option", Value::Bool(member.inherit))
+                .set("set_option", Value::Bool(member.set));
             row
         })
         .collect()

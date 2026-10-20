@@ -295,7 +295,7 @@ impl Connection {
             } else if let Node::FetchStmt(stmt) = node {
                 columns = self.fetch_columns(stmt);
             } else if matches!(node, Node::ClosePortalStmt(_)) {
-            } else if !rupg_analyze::is_definition(node) {
+            } else if !rupg_analyze::is_definition(node) && !super::roles::is_role_statement(node) {
                 utility::check(node, &text)?;
                 columns = utility::columns(node, &self.settings.borrow())?
                     .map(|names| names.into_iter().map(Column::text).collect());
@@ -532,6 +532,14 @@ impl Connection {
             } else if prepare::is_prepare(node) {
                 let mut notices = Vec::new();
                 let result = self.run_prepare(node, &statement.text, &formats, &mut notices, 0);
+                self.notices(&mut notices, &statement.text, &[], out);
+                result.map_err(|error| Failed {
+                    position: error.position().map(|at| character_position(&statement.text, at)),
+                    error,
+                })?
+            } else if super::roles::is_role_statement(node) {
+                let mut notices = Vec::new();
+                let result = self.role_statement(node, &mut notices);
                 self.notices(&mut notices, &statement.text, &[], out);
                 result.map_err(|error| Failed {
                     position: error.position().map(|at| character_position(&statement.text, at)),
