@@ -1656,7 +1656,16 @@ impl<'a> Eval<'a> {
         let rows = self.function_set(call, 1)?;
         // The types of the `OUT` parameters, with the actual types of the call for a polymorphic type.
         let columns = rupg_analyze::out_columns(f)?.unwrap_or_default();
-        let types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
+        let mut types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
+        // A function in SQL that returns a composite type gives the types of the columns of its query.
+        if types.is_empty() && rows.first().is_some_and(|row| row.len() > 1) {
+            let args: Vec<u32> = rupg_analyze::expand_arguments(f)?.iter().map(|a| a.ty).collect();
+            if let Some(body) = self.cache.body(f.oid, &args, self.session)?
+                && let Body::Query(query) = &*body
+            {
+                types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty).collect();
+            }
+        }
         let names: Option<Arc<[String]>> =
             (!columns.is_empty()).then(|| columns.into_iter().map(|c| c.name).collect());
         Ok(rows
