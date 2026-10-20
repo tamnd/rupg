@@ -825,11 +825,14 @@ impl Exec<'_> {
                 self.set_found(n > 0);
                 Ok(Flow::Normal)
             }
-            StmtKind::Call { expr, call } => {
-                let word = if *call { "CALL" } else { "DO" };
+            StmtKind::Call { expr, call: false } => {
+                self.do_block(expr)?;
+                Ok(Flow::Normal)
+            }
+            StmtKind::Call { expr, call: true } => {
                 let error = Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
-                    format!("{word} in PL/pgSQL is not supported yet"),
+                    "CALL in PL/pgSQL is not supported yet",
                 );
                 Err(spi_error(expr, error).into())
             }
@@ -839,6 +842,27 @@ impl Exec<'_> {
             }
             StmtKind::Null => Ok(Flow::Normal),
         }
+    }
+
+    /// `exec_stmt_call` for `DO`: the code runs as `ExecuteDoStmt` runs it, with the statement as the context of its errors and messages. `FOUND` and the row count do not change.
+    fn do_block(&mut self, e: &Expr) -> Result<()> {
+        let node = parse_statement(&e.text).map_err(|error| spi_error(e, error))?;
+        let rupg_sql::nodes::Node::DoStmt(stmt) = &node else {
+            return Err(Error::internal("a DO statement"));
+        };
+        let src = crate::do_code(stmt).map_err(|error| spi_error(e, error))?;
+        let line = spi_line(Mode::Statement, &e.shown);
+        self.set_spi(Some(line.clone()));
+        let result = crate::inline(self.spi, &src);
+        self.set_spi(None);
+        result.map_err(|error| match error.position() {
+            // An error of the compile has its place in the code, which is a part of the statement.
+            Some(at) => {
+                let start = e.text.find(src.as_str());
+                spi_error(e, error.with_position(start.map(|start| start + at)))
+            }
+            None => error.with_context(line),
+        })
     }
 
     /// `exec_stmt_block`: the variables of `DECLARE`, then the statements, in a subtransaction when the block has handlers.

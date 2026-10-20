@@ -18,9 +18,10 @@ use std::sync::Arc;
 
 use rupg_analyze::{Env, types};
 use rupg_catalog::Catalog;
-use rupg_common::{Error, Result};
+use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
+use rupg_sql::nodes::{DoStmt, Node};
 use rupg_types::{Value, oid};
 
 use crate::compile::{Arg, Signature, compile};
@@ -165,6 +166,47 @@ pub fn trigger(spi: &dyn Spi, call: &TriggerCall<'_>) -> Result<Option<Vec<Value
         }
     };
     exec::run_trigger(spi, &compiled, call)
+}
+
+/// The options of `DO`, as `ExecuteDoStmt` reads them: the code, in a language that can run it.
+///
+/// # Errors
+///
+/// `42601` for an option that comes twice and for no code, `42704` for a language that does not exist, and `0A000` for a language with no inline handler.
+pub fn do_code(stmt: &DoStmt) -> Result<String> {
+    let mut src = None;
+    let mut language = None;
+    for def in stmt.args.iter().flatten() {
+        let Node::DefElem(def) = def else { continue };
+        let slot = match def.defname.as_deref() {
+            Some("as") => &mut src,
+            Some("language") => &mut language,
+            _ => continue,
+        };
+        if slot.is_some() {
+            return Err(Error::new(SqlState::SYNTAX_ERROR, "conflicting or redundant options")
+                .with_position(usize::try_from(def.location).ok()));
+        }
+        *slot = Some(match &def.arg {
+            Some(Node::String(s)) => s.to_string(),
+            _ => String::new(),
+        });
+    }
+    let Some(src) = src else {
+        return Err(Error::new(SqlState::SYNTAX_ERROR, "no inline code specified"));
+    };
+    let language = language.unwrap_or_else(|| "plpgsql".to_owned());
+    match language.as_str() {
+        "plpgsql" => Ok(src),
+        "internal" | "c" | "sql" => Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            format!("language \"{language}\" does not support inline code execution"),
+        )),
+        _ => Err(Error::new(
+            SqlState::UNDEFINED_OBJECT,
+            format!("language \"{language}\" does not exist"),
+        )),
+    }
 }
 
 /// `plpgsql_inline_handler`: runs the code of `DO`.
