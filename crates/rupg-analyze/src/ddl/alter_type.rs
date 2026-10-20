@@ -287,6 +287,21 @@ impl Definer<'_, '_> {
                         .catalog
                         .default_of(table, number)
                         .is_some_and(|d| d.oid == object.oid) => {}
+                // `ATExecAlterColumnType` takes another default as the expression of a generated column.
+                PG_ATTRDEF => {
+                    let default = self.catalog.defaults().find(|d| d.oid == object.oid);
+                    let rel = default.and_then(|d| self.catalog.relation(d.relation));
+                    let column = default.and_then(|d| rel?.column(d.column));
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "cannot alter type of a column used by a generated column",
+                    )
+                    .with_detail(format!(
+                        "Column \"{}\" is used by generated column \"{}\".",
+                        cmd.column,
+                        column.map_or("", |c| c.name.as_str())
+                    )));
+                }
                 _ => {
                     return Err(not_yet(
                         &format!(
@@ -301,7 +316,7 @@ impl Definer<'_, '_> {
         self.catalog.alter_column_type(table, number, &cmd.new)?;
         if let Some(expr) = default {
             self.catalog.remove_default(table, number);
-            let refs = references(table, &[&expr]);
+            let refs = references(self.catalog, table, &[&expr]);
             self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
         }
         Ok(())
@@ -389,7 +404,7 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// The check constraint that `ATPostAlterTypeParse` makes again from its text, with the same name. The new constraint has a new OID, so the session checks the rows against it.
+    /// The check constraint that `ATPostAlterTypeParse` makes again from its text, with the same name. The new constraint has a new OID, so the session checks the rows against it. The check of a domain over a composite type whose field gets a new type is made again as `AlterDomainAddConstraint` makes it.
     fn recook_check(&mut self, oid: u32) -> Result<()> {
         let Some(con) = self.catalog.constraint(oid).cloned() else {
             return Err(Error::internal(format!("cache lookup failed for constraint {oid}")));
@@ -413,6 +428,23 @@ impl Definer<'_, '_> {
         };
         let object = ObjRef::new(PG_CONSTRAINT, oid);
         self.catalog.remove(&[DropTarget { object, flags: flag::ORIGINAL, dependee: None }])?;
+        if con.domain != 0 {
+            let check = Constraint {
+                contype: ConstrType::CONSTR_CHECK,
+                conname: Some(con.name.as_str().into()),
+                raw_expr: Some(raw),
+                location: -1,
+                ..Constraint::default()
+            };
+            let found = self.catalog.type_by_oid(con.domain).and_then(|t| t.domain.as_ref());
+            let Some(base) = found.map(|d| (d.base, d.typmod)) else {
+                return Err(Error::internal(format!(
+                    "cache lookup failed for type {}",
+                    con.domain
+                )));
+            };
+            return self.add_domain_check(con.domain, &check, base);
+        }
         let check = Constraint {
             contype: ConstrType::CONSTR_CHECK,
             conname: Some(con.name.as_str().into()),

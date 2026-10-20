@@ -2,7 +2,7 @@
 //!
 //! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the query again each time a query uses the view. The rule of the view depends on the relations and the columns that the query reads, as `recordDependencyOnExpr` records them.
 
-use rupg_catalog::{Column, MAX_COLUMNS, NewRelation, ObjRef, PG_CLASS, PG_PROC, PG_TYPE};
+use rupg_catalog::{Catalog, Column, MAX_COLUMNS, NewRelation, ObjRef, PG_CLASS, PG_PROC, PG_TYPE};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{Node, ViewCheckOption, ViewStmt};
@@ -80,7 +80,7 @@ impl Definer<'_, '_> {
         let namespace = self.creation_namespace(&rv).map_err(|e| e.with_position(None))?;
         let name = relname(&rv).to_string();
         let mut refs = Vec::new();
-        query_references(&query, &[], &mut refs);
+        query_references(self.catalog, &query, &[], &mut refs);
         let path = self.an.path.clone();
         if stmt.replace
             && let Some(found) = self.relation_in(namespace, &name)
@@ -214,9 +214,9 @@ fn check_view_columns(new: &[Column], old: &[Column]) -> Result<()> {
 }
 
 /// The objects that a query in the body of a function refers to, as for a view, each one once.
-pub(super) fn function_references(query: &Query) -> Vec<ObjRef> {
+pub(super) fn function_references(catalog: &Catalog, query: &Query) -> Vec<ObjRef> {
     let mut found = Vec::new();
-    query_references(query, &[], &mut found);
+    query_references(catalog, query, &[], &mut found);
     let mut refs = Vec::new();
     for object in found {
         if !refs.contains(&object) {
@@ -226,8 +226,13 @@ pub(super) fn function_references(query: &Query) -> Vec<ObjRef> {
     refs
 }
 
-/// `find_expr_references_walker` for the query of a view: each relation of the query, each column that the query reads, each function that the query calls, and the relation or the type of each `regclass` or `regtype` constant, also in the subqueries and in the queries of `WITH`. A relation that reads a query of `WITH` has a copy of the query, which does not count, so a query of `WITH` that no part of the query reads also counts, as in PostgreSQL. `outer` holds the queries outside `query`, from the nearest. A view in the query is one relation, and the query of the view does not count.
-pub(super) fn query_references(query: &Query, outer: &[&Query], refs: &mut Vec<ObjRef>) {
+/// `find_expr_references_walker` for the query of a view: each relation of the query, each column that the query reads, each field of a composite type that the query selects, each function that the query calls, and the relation or the type of each `regclass` or `regtype` constant, also in the subqueries and in the queries of `WITH`. A relation that reads a query of `WITH` has a copy of the query, which does not count, so a query of `WITH` that no part of the query reads also counts, as in PostgreSQL. `outer` holds the queries outside `query`, from the nearest. A view in the query is one relation, and the query of the view does not count.
+pub(super) fn query_references(
+    catalog: &Catalog,
+    query: &Query,
+    outer: &[&Query],
+    refs: &mut Vec<ObjRef>,
+) {
     let mut levels = vec![query];
     levels.extend_from_slice(outer);
     for relation in &query.relations {
@@ -236,19 +241,24 @@ pub(super) fn query_references(query: &Query, outer: &[&Query], refs: &mut Vec<O
         } else if let Some(sub) = &relation.subquery
             && relation.cte.is_none()
         {
-            query_references(sub, &levels, refs);
+            query_references(catalog, sub, &levels, refs);
         }
     }
     for expr in query.exprs() {
-        expr_references(expr, &levels, refs);
+        expr_references(catalog, expr, &levels, refs);
     }
     for cte in &query.ctes {
-        query_references(&cte.query, &levels, refs);
+        query_references(catalog, &cte.query, &levels, refs);
     }
 }
 
 /// The references of an expression of the first query of `levels`. A column of the whole row has no reference.
-pub(super) fn expr_references(expr: &Expr, levels: &[&Query], refs: &mut Vec<ObjRef>) {
+pub(super) fn expr_references(
+    catalog: &Catalog,
+    expr: &Expr,
+    levels: &[&Query],
+    refs: &mut Vec<ObjRef>,
+) {
     match (&expr.kind, expr.ty) {
         (ExprKind::Var(var), _) if var.attnum != 0 => {
             let relation = levels.get(var.levels_up).and_then(|q| q.relations.get(var.relation));
@@ -267,11 +277,11 @@ pub(super) fn expr_references(expr: &Expr, levels: &[&Query], refs: &mut Vec<Obj
         (ExprKind::Func(f), _) => refs.push(ObjRef::new(PG_PROC, f.oid)),
         (ExprKind::Agg(a), _) => refs.push(ObjRef::new(PG_PROC, a.oid)),
         (ExprKind::Window(w), _) => refs.push(ObjRef::new(PG_PROC, w.oid)),
-        (ExprKind::SubLink(sub), _) => query_references(&sub.query, levels, refs),
-        _ => {}
+        (ExprKind::SubLink(sub), _) => query_references(catalog, &sub.query, levels, refs),
+        _ => refs.extend(super::field_reference(catalog, expr)),
     }
     refs.extend(super::type_reference(expr));
     for child in expr.children() {
-        expr_references(child, levels, refs);
+        expr_references(catalog, child, levels, refs);
     }
 }

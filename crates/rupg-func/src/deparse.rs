@@ -1246,15 +1246,24 @@ fn row_field_name(ty: u32, field: usize, session: &dyn Session) -> Result<String
     })
 }
 
-/// The names of the fields of a composite type, or `None` when the type is not the row type of a relation.
+/// The names of the fields of a composite type, also through a domain, or `None` when the type is not the row type of a relation. A value of the type has no field for a dropped column.
 pub(crate) fn row_names(ty: u32, session: &dyn Session) -> Option<Vec<String>> {
-    let relid = match builtin::type_by_oid(ty) {
-        Some(row) => row.relid,
-        None => session
-            .catalog()
-            .and_then(|c| c.relations().find(|r| r.row_type == ty))
-            .map_or(0, |r| r.oid),
+    let mut ty = ty;
+    let relid = loop {
+        match builtin::type_by_oid(ty) {
+            Some(row) if row.kind == b'd' && row.base != 0 => ty = row.base,
+            Some(row) => break row.relid,
+            None => {
+                break session
+                    .catalog()
+                    .and_then(|c| c.relations().find(|r| r.row_type == ty))
+                    .map_or(0, |r| r.oid);
+            }
+        }
     };
+    if let Some(rel) = session.catalog().and_then(|c| c.relation(relid)) {
+        return Some(rel.columns.iter().filter(|c| !c.dropped).map(|c| c.name.clone()).collect());
+    }
     column_names(relid, session)
 }
 
@@ -1288,7 +1297,7 @@ pub fn deparse_expression(text: &str, session: &dyn Session) -> Result<String> {
     deparse(text, &[], false, session)
 }
 
-/// `deparse_expression` of a stored expression of the relation `relid`, with the names of its columns, as `pg_get_expr` gives it.
+/// `deparse_expression` of a stored expression of the relation `relid`, with the names of its columns, as `pg_get_expr` gives it. The relation 0 gives an expression with no columns, such as the check of a domain.
 ///
 /// # Errors
 ///
@@ -1298,6 +1307,9 @@ pub fn deparse_relation_expression(
     relid: u32,
     session: &dyn Session,
 ) -> Result<String> {
+    if relid == 0 {
+        return deparse_expression(text, session);
+    }
     let columns = column_names(relid, session)
         .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {relid}")))?;
     deparse(text, &columns, false, session)

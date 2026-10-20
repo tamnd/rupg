@@ -2,7 +2,7 @@
 //!
 //! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the body again each time a query calls the function, as it reads the query of a view. The analysis of a call uses the types of the arguments of the call, so a polymorphic argument has its actual type. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`.
 
-use rupg_catalog::{Function, FunctionBody, ObjRef, PG_PROC};
+use rupg_catalog::{Catalog, Function, FunctionBody, ObjRef, PG_PROC};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{CreateFunctionStmt, DefElem, FunctionParameterMode, Node};
@@ -188,7 +188,7 @@ fn mismatch(rettype: u32, detail: String) -> Error {
 }
 
 /// The objects that the body refers to, as `recordDependencyOnExpr` records them: the functions that it calls, and the objects that [`references`] finds. The catalog drops the references to pinned objects.
-fn body_references(body: &Expr) -> Vec<ObjRef> {
+fn body_references(catalog: &Catalog, body: &Expr) -> Vec<ObjRef> {
     let mut refs = Vec::new();
     body.find(0, &mut |e, _| {
         if let ExprKind::Func(f) = &e.kind {
@@ -199,7 +199,7 @@ fn body_references(body: &Expr) -> Vec<ObjRef> {
         }
         None::<()>
     });
-    for found in references(0, &[body]) {
+    for found in references(catalog, 0, &[body]) {
         if !refs.contains(&found) {
             refs.push(found);
         }
@@ -506,8 +506,8 @@ impl Definer<'_, '_> {
             self.an.notices.append(&mut an.notices);
             refs = match (&body, &stmts) {
                 (_, Statements::String(_)) => Vec::new(),
-                (Body::Value(expr), _) => body_references(expr),
-                (Body::Query(query), _) => super::view::function_references(query),
+                (Body::Value(expr), _) => body_references(self.catalog, expr),
+                (Body::Query(query), _) => super::view::function_references(self.catalog, query),
             };
         }
         if support != 0 {

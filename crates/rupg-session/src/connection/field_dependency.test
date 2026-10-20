@@ -1,0 +1,282 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE ct AS (a int, b int, c text);
+CREATE TYPE
+> CREATE TABLE u (x ct);
+CREATE TABLE
+> INSERT INTO u VALUES (ROW(1, 2, 'p')), (ROW(3, 4, 'q'));
+INSERT 0 2
+> CREATE VIEW vu AS SELECT (x).a, (x).c FROM u;
+CREATE VIEW
+> CREATE VIEW vw AS SELECT x FROM u;
+CREATE VIEW
+> SELECT classid::regclass, (SELECT attname FROM pg_attribute WHERE attrelid = d.refobjid AND attnum = d.refobjsubid), deptype FROM pg_depend d WHERE refobjid = (SELECT typrelid FROM pg_type WHERE oid = 'ct'::regtype) ORDER BY 1, 2;
+fields classid:2205:4:-1,attname:19:64:-1,deptype@pg_depend.7:18:1:-1
+row pg_rewrite,a,n
+row pg_rewrite,c,n
+SELECT 2
+> ALTER TYPE ct DROP ATTRIBUTE a;
+ERROR 2BP01 cannot drop column a of composite type ct because other objects depend on it
+DETAIL view vu depends on column a of composite type ct
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TYPE ct DROP ATTRIBUTE c;
+ERROR 2BP01 cannot drop column c of composite type ct because other objects depend on it
+DETAIL view vu depends on column c of composite type ct
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TYPE ct RENAME ATTRIBUTE a TO aa;
+ALTER TYPE
+> SELECT pg_get_viewdef('vu'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (x).aa AS a,
+    (x).c AS c
+   FROM u;
+SELECT 1
+> SELECT * FROM vu ORDER BY 1;
+fields a@vu.1:23:4:-1,c@vu.2:25:-1:-1
+row 1,p
+row 3,q
+SELECT 2
+> ALTER TYPE ct DROP ATTRIBUTE b;
+ALTER TYPE
+> SELECT pg_get_viewdef('vu'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT (x).aa AS a,
+    (x).c AS c
+   FROM u;
+SELECT 1
+> SELECT * FROM vu ORDER BY 1;
+fields a@vu.1:23:4:-1,c@vu.2:25:-1:-1
+row 1,p
+row 3,q
+SELECT 2
+> SELECT x::text FROM vw ORDER BY 1;
+fields x:25:-1:-1
+row (1,p)
+row (3,q)
+SELECT 2
+> ALTER TYPE ct DROP ATTRIBUTE aa CASCADE;
+NOTICE 00000 drop cascades to view vu
+ALTER TYPE
+> SELECT relname FROM pg_class WHERE relname IN ('vu', 'vw') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row vw
+SELECT 1
+> SELECT x::text FROM u ORDER BY 1;
+fields x:25:-1:-1
+row (p)
+row (q)
+SELECT 2
+> DROP VIEW vw;
+DROP VIEW
+> DROP TABLE u;
+DROP TABLE
+> CREATE TYPE cu AS (a int, b int, c int);
+CREATE TYPE
+> CREATE TABLE t (x cu CHECK ((x).b > 0), y int DEFAULT (ROW(5, 6, 7)::cu).c);
+CREATE TABLE
+> INSERT INTO t VALUES (ROW(1, 2, 3));
+INSERT 0 1
+> CREATE INDEX t_idx ON t (((x).c));
+CREATE INDEX
+> SELECT classid::regclass, (SELECT attname FROM pg_attribute WHERE attrelid = d.refobjid AND attnum = d.refobjsubid), deptype FROM pg_depend d WHERE refobjid = (SELECT typrelid FROM pg_type WHERE oid = 'cu'::regtype) ORDER BY 1, 2;
+fields classid:2205:4:-1,attname:19:64:-1,deptype@pg_depend.7:18:1:-1
+row pg_class,c,n
+row pg_attrdef,c,n
+row pg_constraint,b,n
+SELECT 3
+> ALTER TYPE cu DROP ATTRIBUTE b;
+ERROR 2BP01 cannot drop column b of composite type cu because other objects depend on it
+DETAIL constraint t_x_check on table t depends on column b of composite type cu
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TYPE cu DROP ATTRIBUTE c;
+ERROR 2BP01 cannot drop column c of composite type cu because other objects depend on it
+DETAIL default value for column y of table t depends on column c of composite type cu
+index t_idx depends on column c of composite type cu
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TYPE cu DROP ATTRIBUTE a;
+ALTER TYPE
+> ALTER TYPE cu RENAME ATTRIBUTE b TO bb;
+ALTER TYPE
+> ALTER TYPE cu RENAME ATTRIBUTE c TO cc;
+ALTER TYPE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 't'::regclass;
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (((x).bb > 0))
+SELECT 1
+> SELECT pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid = 't'::regclass;
+fields pg_get_expr:25:-1:-1
+row (ROW(6, 7)::cu).cc
+SELECT 1
+> SELECT pg_get_indexdef('t_idx'::regclass);
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX t_idx ON public.t USING btree (((x).cc))
+SELECT 1
+> INSERT INTO t VALUES (ROW(0, 3));
+ERROR 23514 new row for relation "t" violates check constraint "t_x_check"
+DETAIL Failing row contains ((0,3), 7).
+> INSERT INTO t (x) VALUES (ROW(5, 4));
+INSERT 0 1
+> SELECT x::text, y FROM t ORDER BY 1;
+fields x:25:-1:-1,y@t.2:23:4:-1
+row (2,3),7
+row (5,4),7
+SELECT 2
+> SELECT x::text, y FROM t WHERE (x).cc = 3 ORDER BY 1;
+fields x:25:-1:-1,y@t.2:23:4:-1
+row (2,3),7
+SELECT 1
+> ALTER TYPE cu DROP ATTRIBUTE bb CASCADE;
+NOTICE 00000 drop cascades to constraint t_x_check on table t
+ALTER TYPE
+> ALTER TYPE cu DROP ATTRIBUTE cc CASCADE;
+NOTICE 00000 drop cascades to 2 other objects
+DETAIL drop cascades to default value for column y of table t
+drop cascades to index t_idx
+ALTER TYPE
+> SELECT conname FROM pg_constraint WHERE conrelid = 't'::regclass;
+fields conname@pg_constraint.2:19:64:-1
+SELECT 0
+> SELECT count(*) FROM pg_attrdef WHERE adrelid = 't'::regclass;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT relname FROM pg_class WHERE relname = 't_idx';
+fields relname@pg_class.2:19:64:-1
+SELECT 0
+> SELECT x::text, y FROM t ORDER BY 1;
+fields x:25:-1:-1,y@t.2:23:4:-1
+row (),7
+row (),7
+SELECT 2
+> CREATE TABLE r (a int, b int, c int);
+CREATE TABLE
+> CREATE TABLE s (y r CHECK ((y).c > 0));
+CREATE TABLE
+> INSERT INTO s VALUES (ROW(1, 2, 3));
+INSERT 0 1
+> ALTER TABLE r DROP COLUMN c;
+ERROR 2BP01 cannot drop column c of table r because other objects depend on it
+DETAIL constraint s_y_check on table s depends on column c of table r
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE r DROP COLUMN a;
+ALTER TABLE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 's'::regclass;
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (((y).c > 0))
+SELECT 1
+> INSERT INTO s VALUES (ROW(1, 0));
+ERROR 23514 new row for relation "s" violates check constraint "s_y_check"
+DETAIL Failing row contains ((1,0)).
+> INSERT INTO s VALUES (ROW(1, 5));
+INSERT 0 1
+> SELECT y::text FROM s ORDER BY 1;
+fields y:25:-1:-1
+row (1,5)
+row (2,3)
+SELECT 2
+> ALTER TABLE r RENAME COLUMN c TO cc;
+ALTER TABLE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 's'::regclass;
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (((y).cc > 0))
+SELECT 1
+> CREATE TYPE cd AS (a int, b int);
+CREATE TYPE
+> CREATE DOMAIN dd AS cd CHECK ((VALUE).b > 0);
+CREATE DOMAIN
+> ALTER TYPE cd DROP ATTRIBUTE b;
+ERROR 2BP01 cannot drop column b of composite type cd because other objects depend on it
+DETAIL constraint dd_check depends on column b of composite type cd
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TYPE cd DROP ATTRIBUTE a;
+ALTER TYPE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE contypid = 'dd'::regtype;
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (((VALUE).b > 0))
+SELECT 1
+> SELECT ROW(0)::dd::text;
+fields row:25:-1:-1
+ERROR 23514 value for domain dd violates check constraint "dd_check"
+> SELECT ROW(2)::dd::text;
+fields row:25:-1:-1
+row (2)
+SELECT 1
+> ALTER TYPE cd RENAME ATTRIBUTE b TO bb;
+ALTER TYPE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE contypid = 'dd'::regtype;
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (((VALUE).bb > 0))
+SELECT 1
+> ALTER TYPE cd DROP ATTRIBUTE bb CASCADE;
+NOTICE 00000 drop cascades to constraint dd_check
+ALTER TYPE
+> SELECT count(*) FROM pg_constraint WHERE contypid = 'dd'::regtype;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT ROW(NULL)::dd::text;
+ERROR 42846 cannot cast type record to dd at 17
+DETAIL Input has too many columns.
+> CREATE TYPE ce AS (a int, b int);
+CREATE TYPE
+> CREATE VIEW ve AS SELECT (ROW(1, 2)::ce).b;
+CREATE VIEW
+> CREATE TABLE te (y int DEFAULT (ROW(5, 6)::ce).b, z int CHECK (z <> (ROW(5, 6)::ce).a));
+CREATE TABLE
+> CREATE DOMAIN de AS ce CHECK ((VALUE).b > 0);
+CREATE DOMAIN
+> ALTER TYPE ce ALTER ATTRIBUTE b TYPE bigint;
+ERROR 0A000 cannot alter type of a column used by a view or rule
+DETAIL rule _RETURN on view ve depends on column "b".
+> DROP VIEW ve;
+DROP VIEW
+> ALTER TYPE ce ALTER ATTRIBUTE b TYPE bigint;
+ERROR 0A000 cannot alter type of a column used by a generated column
+DETAIL Column "b" is used by generated column "y".
+> ALTER TYPE ce ALTER ATTRIBUTE a TYPE bigint;
+ALTER TYPE
+> ALTER TABLE te DROP COLUMN y;
+ALTER TABLE
+> ALTER TYPE ce ALTER ATTRIBUTE b TYPE bigint;
+ALTER TYPE
+> ALTER TABLE te DROP COLUMN z;
+ALTER TABLE
+> ALTER TYPE ce ALTER ATTRIBUTE a TYPE bigint;
+ALTER TYPE
+> SELECT pg_get_constraintdef(oid) FROM pg_constraint WHERE contypid = 'de'::regtype;
+fields pg_get_constraintdef:25:-1:-1
+row CHECK (((VALUE).b > 0))
+SELECT 1
+> SELECT ROW(1, 0)::de::text;
+fields row:25:-1:-1
+ERROR 23514 value for domain de violates check constraint "de_check"
+> SELECT classid::regclass, (SELECT attname FROM pg_attribute WHERE attrelid = d.refobjid AND attnum = d.refobjsubid), deptype FROM pg_depend d WHERE refobjid = (SELECT typrelid FROM pg_type WHERE oid = 'ce'::regtype) ORDER BY 1, 2;
+fields classid:2205:4:-1,attname:19:64:-1,deptype@pg_depend.7:18:1:-1
+row pg_constraint,b,n
+SELECT 1
+> ALTER TYPE ce DROP ATTRIBUTE b;
+ERROR 2BP01 cannot drop column b of composite type ce because other objects depend on it
+DETAIL constraint de_check depends on column b of composite type ce
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TYPE ce RENAME ATTRIBUTE b TO bb;
+ALTER TYPE
+> ALTER TYPE ce DROP ATTRIBUTE a;
+ALTER TYPE
+> SELECT ROW(1, 0)::de::text;
+ERROR 42846 cannot cast type record to de at 17
+DETAIL Input has too many columns.
+> SELECT ROW(2)::de::text;
+fields row:25:-1:-1
+row (2)
+SELECT 1
+> SELECT ROW(0)::de::text;
+fields row:25:-1:-1
+ERROR 23514 value for domain de violates check constraint "de_check"
+> ALTER TYPE ce DROP ATTRIBUTE bb CASCADE;
+NOTICE 00000 drop cascades to constraint de_check
+ALTER TYPE
+> SELECT count(*) FROM pg_constraint WHERE contypid = 'de'::regtype;
+fields count:20:8:-1
+row 0
+SELECT 1
