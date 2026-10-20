@@ -1127,13 +1127,34 @@ struct RangeRow {
     collation: u32,
 }
 
-/// A type of the catalog of a session that has rows in the overlay of the thread.
+/// A function in SQL of the catalog of a session, for [`use_session_types`].
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SessionFunction {
+    pub oid: u32,
+    pub name: String,
+    pub namespace: u32,
+    pub lang: u32,
+    pub strict: bool,
+    pub retset: bool,
+    pub volatile: u8,
+    pub rettype: u32,
+    pub argtypes: Vec<u32>,
+    /// `proallargtypes`, or empty if all arguments are inputs.
+    pub allargtypes: Vec<u32>,
+    /// `proargmodes`, or empty if all arguments are inputs.
+    pub argmodes: Vec<u8>,
+    /// `proargnames`, or empty if no argument has a name.
+    pub argnames: Vec<String>,
+}
+
+/// An object of the catalog of a session that has rows in the overlay of the thread: a type, or a function in SQL.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum SessionType {
     Domain(SessionDomain),
     Row(SessionRowType),
     Enum(SessionEnum),
     Range(SessionRange),
+    Function(SessionFunction),
 }
 
 /// The types of the catalog that the session of the thread uses now.
@@ -1203,7 +1224,39 @@ fn session_rows(ty: &SessionType) -> Option<Interned> {
             }
         }
         SessionType::Range(new) => range_rows(new)?,
+        SessionType::Function(new) => {
+            Interned { procs: vec![Box::leak(Box::new(function_row(new)))], ..Interned::default() }
+        }
     })
+}
+
+/// The row of `pg_proc` of a function in SQL of a session. The analyzer reads the body from the catalog of the session, so the row has no `prosrc` and no `prosqlbody`.
+fn function_row(new: &SessionFunction) -> ProcRow {
+    ProcRow {
+        oid: new.oid,
+        name: new.name.clone().leak(),
+        namespace: new.namespace,
+        lang: new.lang,
+        variadic: 0,
+        kind: b'f',
+        strict: new.strict,
+        retset: new.retset,
+        volatile: new.volatile,
+        nargs: i16::try_from(new.argtypes.len()).unwrap_or(i16::MAX),
+        nargdefaults: 0,
+        rettype: new.rettype,
+        argtypes: new.argtypes.clone().leak(),
+        allargtypes: (!new.allargtypes.is_empty()).then(|| &*new.allargtypes.clone().leak()),
+        argmodes: (!new.argmodes.is_empty()).then(|| &*new.argmodes.clone().leak()),
+        argnames: (!new.argnames.is_empty()).then(|| {
+            let names: Vec<&'static str> =
+                new.argnames.iter().map(|n| &*n.clone().leak()).collect();
+            &*names.leak()
+        }),
+        argdefaults: None,
+        src: "",
+        sqlbody: None,
+    }
 }
 
 /// Gives the types of the catalog of the session to the thread, so that [`type_by_oid`], [`type_by_name`] and [`domain_by_oid`] find them. The types come in the order of their OIDs, so the base type of a domain comes before the domain. A type that copies a type that is not known has no rows.

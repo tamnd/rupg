@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `CREATE FUNCTION` and `DROP FUNCTION` for functions in SQL of a user. A body can be a `RETURN` expression, `BEGIN ATOMIC` or a string, and it can name the arguments. A function can return a set, a composite type or `OUT` parameters, and the dependencies of a function work with `DROP ... CASCADE` (#433).
 - `pg_describe_object`, the description of an object for each kind of object of the catalog. A name has its schema when the search path does not find it, and an object that does not exist gives null (#432).
 
 ## 0.1.50 (2026-10-20)

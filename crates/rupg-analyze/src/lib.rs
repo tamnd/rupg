@@ -173,6 +173,8 @@ pub(crate) struct Analyzer<'a> {
     views: Vec<u32>,
     /// The base type and the typmod of the domain whose check constraint the analyzer reads now, or `None`. Then the name `value` is [`ExprKind::DomainValue`].
     domain_value: Option<(u32, i32)>,
+    /// The name of the function in SQL whose body the analyzer reads now, and the names of its input arguments, or `None`. A name that is no column can then be an argument, as `sql_fn_post_column_ref` finds it.
+    sql_function: Option<(String, Vec<String>)>,
     /// The number of the calls of functions that give a set that the analysis of the query has made, and the place of the last one. It takes the place of `p_last_srf`: `CASE` and `COALESCE` compare the number before and after their arguments.
     srfs: (usize, Option<usize>),
     /// `p_parent_cte`: the slot of the query of `WITH` in the scope of the query outside, while the analyzer starts the query of that query of `WITH`. The next `SELECT` takes it.
@@ -206,6 +208,7 @@ impl<'a> Analyzer<'a> {
             keep_unknowns: false,
             views: Vec::new(),
             domain_value: None,
+            sql_function: None,
             srfs: (0, None),
             parent_cte: None,
             works: 0,

@@ -14,6 +14,7 @@ use rupg_analyze::{
     JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp, SetTree, SortGroup,
     SqlValue, SubLink, SubLinkKind, Subscript, TableSample, Target, WindowFunc,
 };
+use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
 use rupg_pgcatalog::builtin;
@@ -61,9 +62,13 @@ fn set_kernel(func: u32, location: Option<usize>) -> Result<rupg_func::SetKernel
     })
 }
 
-/// True for a built-in function with a body in SQL that has no kernel. The engine runs its body, as for a function that a user makes.
+/// The OID of the language `sql`.
+const SQL_LANGUAGE: u32 = 14;
+
+/// True for a function in SQL that a user makes, and for a built-in function with a body in SQL that has no kernel. The engine runs its body.
 fn runs_body(func: u32) -> bool {
-    builtin::proc_by_oid(func).is_some_and(|p| p.sqlbody.is_some())
+    let user = |p: &builtin::ProcRow| p.oid >= FIRST_NORMAL_OID && p.lang == SQL_LANGUAGE;
+    builtin::proc_by_oid(func).is_some_and(|p| p.sqlbody.is_some() || user(p))
         && rupg_func::kernel(func).is_none()
         && rupg_func::set_kernel(func).is_none()
 }
@@ -1651,7 +1656,16 @@ impl<'a> Eval<'a> {
         let rows = self.function_set(call, 1)?;
         // The types of the `OUT` parameters, with the actual types of the call for a polymorphic type.
         let columns = rupg_analyze::out_columns(f)?.unwrap_or_default();
-        let types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
+        let mut types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
+        // A function in SQL that returns a composite type gives the types of the columns of its query.
+        if types.is_empty() && rows.first().is_some_and(|row| row.len() > 1) {
+            let args: Vec<u32> = rupg_analyze::expand_arguments(f)?.iter().map(|a| a.ty).collect();
+            if let Some(body) = self.cache.body(f.oid, &args, self.session)?
+                && let Body::Query(query) = &*body
+            {
+                types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty).collect();
+            }
+        }
         let names: Option<Arc<[String]>> =
             (!columns.is_empty()).then(|| columns.into_iter().map(|c| c.name).collect());
         Ok(rows
@@ -2061,14 +2075,21 @@ impl<'a> Eval<'a> {
                     let tables = scan::Tables::default();
                     Eval::new(args, self.session, &tables, &cache, &[]).eval(expr)
                 }
-                // `fmgr_sql` for a function that does not return a set: the first column of the first row, or null.
+                // `fmgr_sql` for a function that does not return a set: the first column of the first row, or null. The columns of a function that returns a row make a row value.
                 Body::Query(query) => {
                     let rows = run_query(query, args, self.session, &cache, &[], false)?;
-                    Ok(rows
-                        .into_iter()
-                        .next()
-                        .and_then(|row| row.into_iter().next())
-                        .unwrap_or(Value::Null))
+                    let Some(mut row) = rows.into_iter().next() else { return Ok(Value::Null) };
+                    let composite = builtin::type_by_oid(ret).is_some_and(|t| t.kind == b'c');
+                    let whole = matches!(row.as_slice(), [Value::Record(_) | Value::Null]);
+                    if row.len() == 1 && ((ret != oid::RECORD && !composite) || whole) {
+                        return Ok(row.pop().unwrap_or(Value::Null));
+                    }
+                    let types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty);
+                    Ok(Value::Record(Box::new(Record {
+                        types: types.collect(),
+                        values: row,
+                        names: None,
+                    })))
                 }
             };
         }

@@ -34,6 +34,8 @@ use crate::utility;
 /// The schemas of a new database, from `pg_namespace.dat`.
 const SCHEMAS: [(&str, u32); 3] = [("pg_catalog", 11), ("pg_toast", 99), ("public", 2200)];
 
+/// The OID of the language `sql`.
+const SQL_LANGUAGE: u32 = 14;
 /// The microseconds from 1970-01-01 to 2000-01-01, the epoch of the timestamps of PostgreSQL.
 const EPOCH_SHIFT_US: i64 = 946_684_800_000_000;
 /// The wait event of `pg_sleep`.
@@ -132,9 +134,9 @@ pub(crate) struct Reader<'a> {
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
 type ZoneOf = std::result::Result<Rc<Arc<tz::Zone>>, String>;
 
-/// Gives the domains and the row types of the catalog to the thread, so that the lookups of the types by OID and by name find them, as the syscache of PostgreSQL finds the rows of `pg_type`.
+/// Gives the domains, the row types and the functions in SQL of the catalog to the thread, so that the lookups of the types and the functions by OID and by name find them, as the syscache of PostgreSQL finds the rows of `pg_type` and `pg_proc`.
 fn use_types(catalog: &Catalog) {
-    let types = catalog
+    let mut types: Vec<builtin::SessionType> = catalog
         .types()
         .filter(|ty| ty.oid >= FIRST_NORMAL_OID)
         .filter_map(|ty| {
@@ -212,6 +214,26 @@ fn use_types(catalog: &Catalog) {
             }))
         })
         .collect();
+    types.extend(
+        catalog.functions().filter(|f| f.oid >= FIRST_NORMAL_OID && f.lang == SQL_LANGUAGE).map(
+            |f| {
+                builtin::SessionType::Function(builtin::SessionFunction {
+                    oid: f.oid,
+                    name: f.name.clone(),
+                    namespace: f.namespace,
+                    lang: f.lang,
+                    strict: f.strict,
+                    retset: f.retset,
+                    volatile: f.volatile,
+                    rettype: f.rettype,
+                    argtypes: f.argtypes.clone(),
+                    allargtypes: f.allargtypes.clone(),
+                    argmodes: f.argmodes.clone(),
+                    argnames: f.argnames.clone(),
+                })
+            },
+        ),
+    );
     builtin::use_session_types(types);
 }
 

@@ -300,7 +300,7 @@ impl Analyzer<'_> {
     }
 
     /// `$n`.
-    fn transform_param(&mut self, number: i32, at: Option<usize>) -> Result<Expr> {
+    pub(crate) fn transform_param(&mut self, number: i32, at: Option<usize>) -> Result<Expr> {
         let index = usize::try_from(number).ok().filter(|&n| n >= 1);
         if let Some(n) = index {
             // A query of the extended protocol takes any parameter. One that the client did not declare has no type until the query gives it one.

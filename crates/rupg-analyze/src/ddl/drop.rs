@@ -1,4 +1,4 @@
-//! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE`, `DROP SCHEMA`, `DROP TYPE`, `DROP DOMAIN` and `DROP TEXT SEARCH`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
+//! `DROP TABLE`, `DROP VIEW`, `DROP INDEX`, `DROP SEQUENCE`, `DROP SCHEMA`, `DROP TYPE`, `DROP DOMAIN`, `DROP FUNCTION` and `DROP TEXT SEARCH`, as `RemoveRelations` and `RemoveObjects` run them. The statement finds all its objects first, then [`Catalog::deletions`] finds the objects that depend on them, and the report of `reportDependentObjects` names these objects as `getObjectDescription` does. A built-in object that is not pinned, such as the schema `public` or a view of `information_schema`, gives `0A000`.
 
 use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC,
@@ -135,6 +135,7 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE
             | ObjectType::OBJECT_TSCONFIGURATION => self.find_ts(stmt)?,
+            ObjectType::OBJECT_FUNCTION => self.find_functions(stmt)?,
             ObjectType::OBJECT_RULE => return self.drop_rule(stmt),
             _ => return Err(not_yet("DROP of this kind of object", None)),
         };
@@ -474,7 +475,17 @@ impl Definer<'_, '_> {
                     });
                     format!("function {name}({})", args.join(","))
                 }
-                None => format!("function {}", object.oid),
+                None => match builtin::proc_by_oid(object.oid) {
+                    Some(proc) => {
+                        let args: Vec<String> =
+                            proc.argtypes.iter().map(|&t| self.type_text(t)).collect();
+                        let name = self.qualify(proc.namespace, proc.name, |ns| {
+                            builtin::procs_named(proc.name).any(|p| p.namespace == ns)
+                        });
+                        format!("function {name}({})", args.join(","))
+                    }
+                    None => format!("function {}", object.oid),
+                },
             },
             class => format!("object {class} {}", object.oid),
         }

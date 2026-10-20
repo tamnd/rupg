@@ -1,8 +1,8 @@
 //! `CreateFunction`: `CREATE FUNCTION` for a function in SQL, as `interpret_AS_clause`, `ProcedureCreate` and `fmgr_sql_validator` run it. The body is a `RETURN` expression, a query in `BEGIN ATOMIC` or a query in a string.
 //!
-//! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the body again each time a query calls the function, as it reads the query of a view. The analysis of a call uses the types of the arguments of the call, so a polymorphic argument has its actual type. Only the setup of a new cluster runs `CREATE FUNCTION`, for the functions of `information_schema`.
+//! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the body again each time a query calls the function, as it reads the query of a view. The analysis of a call uses the types of the arguments of the call, so a polymorphic argument has its actual type. The setup of a new cluster runs `CREATE FUNCTION` for the functions of `information_schema` too.
 
-use rupg_catalog::{Catalog, Function, FunctionBody, ObjRef, PG_PROC};
+use rupg_catalog::{Catalog, Function, FunctionBody, ObjRef, PG_PROC, PG_TYPE};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{CreateFunctionStmt, DefElem, FunctionParameterMode, Node};
@@ -42,6 +42,8 @@ struct Options {
     support: Option<Vec<String>>,
     /// The body in a string, from `AS`.
     src: Option<String>,
+    /// The place of `AS` in the query text.
+    src_at: Option<usize>,
 }
 
 /// The text of the argument of an option.
@@ -76,6 +78,7 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
         rows: None,
         support: None,
         src: None,
+        src_at: None,
     };
     for def in stmt.options.iter().flatten() {
         let Node::DefElem(def) = def else { continue };
@@ -104,7 +107,10 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
             },
             ("support", _) => out.support = Some(option_list(def).ok_or_else(bad)?),
             ("as", _) => match option_list(def).as_deref() {
-                Some([src]) => out.src = Some(src.clone()),
+                Some([src]) => {
+                    out.src = Some(src.clone());
+                    out.src_at = at;
+                }
                 _ => return Err(bad()),
             },
             _ => return Err(bad()),
@@ -136,7 +142,10 @@ fn statements<'s>(stmt: &'s CreateFunctionStmt, src: Option<&str>) -> Result<Sta
         )),
         (Some(_), None) => Err(Error::internal("a function body of an unknown form")),
         (None, Some(src)) => {
-            let (list, _) = rupg_sql::parse(src).map_err(Error::from)?;
+            let (list, _) = rupg_sql::parse(src).map_err(|error| {
+                let at = error.location;
+                Error::from(error).with_position(at)
+            })?;
             let stmts = list
                 .into_iter()
                 .flatten()
@@ -178,11 +187,42 @@ fn result_types(function: &Function, inputs: &[u32]) -> Result<Vec<u32>> {
         .collect()
 }
 
-/// The error of `check_sql_fn_retval` for a query with the wrong columns.
-fn mismatch(rettype: u32, detail: String) -> Error {
+/// `function_parse_error_transpose` and `match_prosrc_to_query`: the place in the query text of the body `src` of a function, in a string after `AS`, so that an error in the body has its place in the query. `text` is the text of the statement, and `as_at` is the place of `AS` in the query text. `None` when the string is not in the text.
+fn body_place(text: &str, src: &str, as_at: Option<usize>) -> Option<usize> {
+    let as_at = as_at?;
+    let quoted = src.replace('\'', "''");
+    let local = [src, quoted.as_str()].into_iter().find_map(|raw| {
+        text.match_indices(raw)
+            .map(|(i, _)| i)
+            .find(|&i| matches!(text.as_bytes()[..i].last(), Some(b'$' | b'\'')))
+    })?;
+    // The string comes after `AS`, so `AS` is the last word before it.
+    let keyword = text[..local].to_ascii_lowercase().rfind("as")?;
+    Some(as_at.checked_sub(keyword)? + local)
+}
+
+/// The names of the input arguments of a function, in the order of their numbers. An argument with no name has an empty name.
+fn input_names(function: &Function) -> Vec<String> {
+    if function.argmodes.is_empty() {
+        return function.argnames.clone();
+    }
+    function
+        .argmodes
+        .iter()
+        .zip(&function.argnames)
+        .filter(|(mode, _)| matches!(mode, b'i' | b'b' | b'v'))
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
+/// The error of `check_sql_fn_retval` for a body with the wrong columns, in the function `name`.
+fn mismatch(rettype: u32, name: &str, detail: String) -> Error {
     Error::new(
         SqlState::INVALID_FUNCTION_DEFINITION,
-        format!("return type mismatch in function declared to return {}", types::name(rettype)),
+        format!(
+            "return type mismatch in function declared to return {} (SQL function \"{name}\")",
+            types::name(rettype)
+        ),
     )
     .with_detail(detail)
 }
@@ -209,34 +249,52 @@ fn body_references(catalog: &Catalog, body: &Expr) -> Vec<ObjRef> {
 
 impl Analyzer<'_> {
     /// `transformReturnStmt` and `check_sql_fn_retval`: the `RETURN` expression, as a value of the result type. A value of type `unknown` becomes `text` first, and then the cast to the result type is an assignment cast.
-    fn return_body(&mut self, value: Option<&Node>, rettype: u32) -> Result<Expr> {
+    fn return_body(&mut self, value: Option<&Node>, rettype: u32, name: &str) -> Result<Expr> {
         let mut expr = self.with_kind(Kind::Select, |an| an.transform(value))?;
         if expr.ty == oid::UNKNOWN {
             expr = self.coerce(expr, oid::TEXT, -1, Context::Implicit, None)?;
         }
         let actual = expr.ty;
         self.coerce_to_target(expr, rettype, -1, Context::Assignment, None)?.ok_or_else(|| {
-            mismatch(rettype, format!("Actual return type is {}.", types::name(actual)))
+            mismatch(rettype, name, format!("Actual return type is {}.", types::name(actual)))
         })
     }
 
-    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query must be the columns of the result, and each column takes an assignment cast to the type of the result column. The other statements give an error, as rupg runs only one query.
-    fn query_body(&mut self, stmts: &[&Node], rettype: u32, columns: &[u32]) -> Result<Query> {
+    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query must be the columns of the result, and each column takes an assignment cast to the type of the result column. A function that returns a composite type can also give one column of that type. The other statements give an error, as rupg runs only one query.
+    fn query_body(
+        &mut self,
+        stmts: &[&Node],
+        rettype: u32,
+        columns: &[u32],
+        name: &str,
+    ) -> Result<Query> {
         let [Node::SelectStmt(select)] = stmts else {
             return Err(not_yet("a function body that is not one SELECT", None));
         };
         let mut query = self.select(select)?;
         query.params.clone_from(&self.params);
         let width = query.targets.iter().take_while(|t| !t.junk).count();
-        if rettype != oid::RECORD && width != 1 {
+        let row = rettype == oid::RECORD || columns.len() != 1 || columns != [rettype];
+        let whole_row = [rettype];
+        let columns: &[u32] = if row && width == 1 && query.targets[0].expr.ty == rettype {
+            &whole_row
+        } else {
+            columns
+        };
+        if !row && width != 1 {
             return Err(mismatch(
                 rettype,
+                name,
                 "Final statement must return exactly one column.".into(),
             ));
         }
-        if rettype == oid::RECORD && !columns.is_empty() && width != columns.len() {
+        if row && !columns.is_empty() && width != columns.len() {
             let what = if width > columns.len() { "many" } else { "few" };
-            return Err(mismatch(rettype, format!("Final statement returns too {what} columns.")));
+            return Err(mismatch(
+                rettype,
+                name,
+                format!("Final statement returns too {what} columns."),
+            ));
         }
         for (i, &ty) in columns.iter().enumerate() {
             let target = &mut query.targets[i];
@@ -253,6 +311,7 @@ impl Analyzer<'_> {
             target.expr = cast.ok_or_else(|| {
                 mismatch(
                     rettype,
+                    name,
                     format!(
                         "Final statement returns {} instead of {} at column {}.",
                         types::name(actual),
@@ -272,19 +331,27 @@ impl Analyzer<'_> {
         stmts: &Statements<'_>,
         inputs: &[u32],
     ) -> Result<Body> {
-        let columns = result_types(function, inputs)?;
+        let mut columns = result_types(function, inputs)?;
         let rettype = match columns.as_slice() {
             [ty] if function.rettype != oid::RECORD => *ty,
             _ => function.rettype,
         };
+        // A composite type gives the columns of its relation.
+        if rettype != oid::RECORD
+            && let Some(fields) = self.row_columns(rettype)
+        {
+            columns = fields.iter().map(|c| c.ty).collect();
+        }
         Ok(match stmts {
-            Statements::Return(value) => Body::Value(self.return_body(*value, rettype)?),
+            Statements::Return(value) => {
+                Body::Value(self.return_body(*value, rettype, &function.name)?)
+            }
             Statements::Atomic(list) => {
-                Body::Query(Box::new(self.query_body(list, rettype, &columns)?))
+                Body::Query(Box::new(self.query_body(list, rettype, &columns, &function.name)?))
             }
             Statements::String(list) => {
                 let list: Vec<&Node> = list.iter().collect();
-                Body::Query(Box::new(self.query_body(&list, rettype, &columns)?))
+                Body::Query(Box::new(self.query_body(&list, rettype, &columns, &function.name)?))
             }
         })
     }
@@ -345,6 +412,7 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
     let params = Params { types: inputs.to_vec(), variable: false };
     let mut an = Analyzer::new(env, &params);
     an.path.clone_from(&body.path);
+    an.sql_function = Some((function.name.clone(), input_names(function)));
     an.body(function, &stmts, inputs).map(Some)
 }
 
@@ -494,7 +562,15 @@ impl Definer<'_, '_> {
             bin: String::new(),
             body: Some(FunctionBody { text: text.to_string(), path: self.an.path.clone() }),
         };
-        let stmts = statements(stmt, options.src.as_deref())?;
+        // `function_parse_error_transpose`: an error in a body in a string has its place in the query text.
+        let transpose = |error: Error| match (&options.src, error.position()) {
+            (Some(src), Some(inner)) => {
+                let outer = body_place(text, src, options.src_at).map(|at| at + inner);
+                error.with_position(outer)
+            }
+            _ => error,
+        };
+        let stmts = statements(stmt, options.src.as_deref()).map_err(transpose)?;
         // `fmgr_sql_validator` reads a body in a string only when no argument is polymorphic, and a body in SQL always.
         let polymorphic = function.argtypes.iter().any(|&ty| types::is_polymorphic(ty));
         let mut refs = Vec::new();
@@ -502,7 +578,8 @@ impl Definer<'_, '_> {
             let params = Params { types: function.argtypes.clone(), variable: false };
             let mut an = Analyzer::new(self.an.env, &params);
             an.path.clone_from(&self.an.path);
-            let body = an.body(&function, &stmts, &function.argtypes)?;
+            an.sql_function = Some((function.name.clone(), input_names(&function)));
+            let body = an.body(&function, &stmts, &function.argtypes).map_err(transpose)?;
             self.an.notices.append(&mut an.notices);
             refs = match (&body, &stmts) {
                 (_, Statements::String(_)) => Vec::new(),
@@ -512,6 +589,18 @@ impl Definer<'_, '_> {
         }
         if support != 0 {
             refs.push(ObjRef::new(PG_PROC, support));
+        }
+        // `ProcedureCreate`: the function depends on the types of its result and of its arguments.
+        let args = if function.allargtypes.is_empty() {
+            &function.argtypes
+        } else {
+            &function.allargtypes
+        };
+        for &ty in std::iter::once(&function.rettype).chain(args) {
+            let found = ObjRef::new(PG_TYPE, ty);
+            if !refs.contains(&found) {
+                refs.push(found);
+            }
         }
         self.catalog.create_function(function, &refs)
     }
