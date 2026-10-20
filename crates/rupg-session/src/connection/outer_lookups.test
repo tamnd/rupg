@@ -1,0 +1,43 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (id int, k int, s text)
+CREATE TABLE
+> INSERT INTO t SELECT g, g % 500, 'v' || g FROM generate_series(1, 2000) g
+INSERT 0 2000
+> SELECT count(*) FROM t t1 WHERE t1.k = 42 OR t1.k = (SELECT t2.id FROM t t2 WHERE t2.k = t1.id + 1 ORDER BY t2.id LIMIT 1)
+fields count:20:8:-1
+row 4
+SELECT 1
+> SELECT t1.id, (SELECT count(*) FROM t t2 WHERE t2.k = t1.id * 2) FROM t t1 WHERE t1.id IN (1, 100, 300, 499) ORDER BY t1.id
+fields id@t.1:23:4:-1,count:20:8:-1
+row 1,4
+row 100,4
+row 300,0
+row 499,0
+SELECT 4
+> SELECT t1.id, (SELECT min(t2.s) FROM t t2 WHERE t2.s = 'v' || (t1.id + 1)) FROM t t1 WHERE t1.id < 4 ORDER BY t1.id
+fields id@t.1:23:4:-1,min:25:-1:-1
+row 1,v2
+row 2,v3
+row 3,v4
+SELECT 3
+> SELECT t1.id FROM t t1 WHERE EXISTS (SELECT 1 FROM t t2 WHERE t2.id = t1.k + 1500) AND t1.id < 5 ORDER BY t1.id
+fields id@t.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> SELECT t1.id, (SELECT count(*) FROM t t2 WHERE t2.k = NULLIF(t1.id, 3)) FROM t t1 WHERE t1.id < 5 ORDER BY t1.id
+fields id@t.1:23:4:-1,count:20:8:-1
+row 1,4
+row 2,4
+row 3,0
+row 4,4
+SELECT 4
+> SELECT t1.id, (SELECT count(*) FROM t t2 WHERE t2.k = abs(t1.id - 400)) FROM t t1 WHERE t1.id IN (100, 1100) ORDER BY t1.id
+fields id@t.1:23:4:-1,count:20:8:-1
+row 100,4
+row 1100,0
+SELECT 2

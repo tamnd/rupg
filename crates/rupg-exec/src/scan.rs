@@ -487,13 +487,24 @@ fn plain_var(expr: &Expr) -> Option<Var> {
     }
 }
 
-/// True when an expression is a column of an outer query, or such a column with another type of the same form.
-fn outer_var(expr: &Expr) -> bool {
-    match &expr.kind {
-        ExprKind::Var(var) => var.levels_up > 0,
-        ExprKind::Relabel(arg, _) => outer_var(arg),
-        _ => false,
+/// True when an expression reads columns of an outer query and nothing of its own query, so that it has one value for each run of the query: a column of an outer query, a constant, a parameter, or a function that is not volatile of such expressions, as `t1.tenthous + 1`. An index of the other side then gives the rows of each run, as an index scan of PostgreSQL does with a parameter of the outer plan.
+fn outer_expr(expr: &Expr) -> bool {
+    fn fixed(expr: &Expr, outer: &mut bool) -> bool {
+        match &expr.kind {
+            ExprKind::Var(var) if var.levels_up > 0 => {
+                *outer = true;
+                true
+            }
+            ExprKind::Const(_) | ExprKind::Param(_) => true,
+            ExprKind::Relabel(arg, _) | ExprKind::CoerceViaIo(arg, _) => fixed(arg, outer),
+            ExprKind::Func(f) if !f.retset && !crate::volatile(expr) => {
+                f.args.iter().all(|arg| fixed(arg, outer))
+            }
+            _ => false,
+        }
     }
+    let mut outer = false;
+    fixed(expr, &mut outer) && outer
 }
 
 /// The parts of a condition that `AND` joins. They are references and not copies, because the cache of the rows of a subquery keeps them by the address of the subquery: a copy that the scan drops can free an address that another subquery then gets.
@@ -651,7 +662,7 @@ impl Scan<'_, '_> {
         Ok(out)
     }
 
-    /// The rows of a relation that can pass the conditions `conds`, through an index of a column, when a condition is an `=` of the column and a column of an outer query, as in a correlated subquery. The subquery runs for each row of the outer query, and the index makes each run read only the rows with the value of that row, as an index scan with a parameter does. `None` when no condition is such an `=`.
+    /// The rows of a relation that can pass the conditions `conds`, through an index of a column, when a condition is an `=` of the column and an expression of the columns of an outer query, as in a correlated subquery. The subquery runs for each row of the outer query, and the index makes each run read only the rows with the value of that row, as an index scan with a parameter does. `None` when no condition is such an `=`.
     fn lookup(&mut self, relation: usize, conds: &[&Expr]) -> Result<Option<Vec<usize>>> {
         let found = conds.iter().find_map(|expr| {
             let ExprKind::Func(f) = &expr.kind else { return None };
@@ -659,10 +670,10 @@ impl Scan<'_, '_> {
                 return None;
             }
             match (plain_var(&f.args[0]), plain_var(&f.args[1])) {
-                (Some(var), None) if var.relation == relation && outer_var(&f.args[1]) => {
+                (Some(var), None) if var.relation == relation && outer_expr(&f.args[1]) => {
                     Some((var, &f.args[1]))
                 }
-                (None, Some(var)) if var.relation == relation && outer_var(&f.args[0]) => {
+                (None, Some(var)) if var.relation == relation && outer_expr(&f.args[0]) => {
                     Some((var, &f.args[0]))
                 }
                 _ => None,

@@ -12,6 +12,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `VACUUM` and `ANALYZE`, which check their options, relations and columns and then end, because rupg has no statistics yet (#442).
 - `CREATE TABLE AS` and `SELECT ... INTO`, which make a table from the columns of a query and fill it with the rows of the query (#443).
 
+### Fixed
+
+- A `LATERAL` relation in a nested loop no longer keeps the rows of every run until the query ends. This stopped the server with no memory in the regression tests `join` and `subselect` (#444).
+
 ## 0.1.51 (2026-10-20)
 
 ### Added
