@@ -809,6 +809,7 @@ impl Connection {
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
                     Node::CreateFunctionStmt(_) => CommandTag::CreateFunction,
+                    Node::AlterFunctionStmt(stmt) => alter_tag(stmt.objtype),
                     Node::CompositeTypeStmt(_)
                     | Node::CreateEnumStmt(_)
                     | Node::CreateRangeStmt(_) => CommandTag::CreateType,
@@ -1502,7 +1503,7 @@ impl Drop for Connection {
     }
 }
 
-/// `AlterObjectTypeCommandTag` for the kinds of relations: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
+/// `AlterObjectTypeCommandTag` for the kinds of relations, of types and of functions: the tag of `ALTER TABLE` and of `ALTER ... RENAME` for the kind of the object.
 fn alter_tag(kind: ObjectType) -> CommandTag {
     match kind {
         ObjectType::OBJECT_INDEX => CommandTag::AlterIndex,
@@ -1512,6 +1513,9 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_FOREIGN_TABLE => CommandTag::AlterForeignTable,
         ObjectType::OBJECT_TYPE => CommandTag::AlterType,
         ObjectType::OBJECT_DOMAIN => CommandTag::AlterDomain,
+        ObjectType::OBJECT_FUNCTION => CommandTag::AlterFunction,
+        ObjectType::OBJECT_ROUTINE => CommandTag::AlterRoutine,
+        ObjectType::OBJECT_PROCEDURE => CommandTag::AlterProcedure,
         _ => CommandTag::AlterTable,
     }
 }
@@ -4110,10 +4114,7 @@ mod tests {
                 script_lines(&mut c, "> COMMENT ON COLUMN t.ctid IS 'x'"),
                 ["ERROR 0A000 COMMENT on a system column is not supported yet"]
             );
-            assert_eq!(
-                script_lines(&mut c, "> COMMENT ON FUNCTION lower(text) IS 'x'"),
-                ["ERROR 0A000 COMMENT on this kind of object is not supported yet"]
-            );
+            assert_eq!(script_lines(&mut c, "> COMMENT ON FUNCTION lower(text) IS 'x'"), [builtin]);
             assert_eq!(
                 script_lines(
                     &mut c,
