@@ -552,6 +552,14 @@ impl Connection {
                 let result = self.set_constraints(stmt, &mut notices);
                 self.notices(&mut notices, &statement.text, &[], out);
                 result?
+            } else if let Node::CopyStmt(stmt) = node
+                && stmt.is_from
+                && stmt.filename.is_some()
+            {
+                let mut notices = Vec::new();
+                let result = self.copy_from_file(stmt, &mut notices);
+                self.notices(&mut notices, &statement.text, &[], out);
+                result?
             } else if let Node::CopyStmt(stmt) = node {
                 let mut started = None;
                 let result = self.copy(stmt, &mut started);

@@ -140,6 +140,8 @@ struct Shared {
     tasks: Arc<dyn Tasks>,
     /// The catalog that all the sessions share.
     store: Arc<Store>,
+    /// The file system, which `COPY ... FROM` a file reads.
+    io: Arc<dyn Io>,
     /// The cancel key and the cancel flag of each session, by process ID.
     keys: Mutex<BTreeMap<i32, Live>>,
     stopping: AtomicBool,
@@ -353,6 +355,7 @@ impl Server {
             ),
             entropy,
             tasks: tasks.clone(),
+            io: io.clone(),
             keys: Mutex::new(BTreeMap::new()),
             stopping: AtomicBool::new(false),
         });
@@ -978,6 +981,7 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         connection.set_clock(Arc::clone(clock));
     }
     connection.set_store(Arc::clone(&shared.store));
+    connection.set_io(Arc::clone(&shared.io));
     let client = address(wire, &wire.stream.peer_addr());
     connection.set_addresses(client, address(wire, &wire.stream.local_addr()));
     if let Some(secured) = &wire.secured {

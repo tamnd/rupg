@@ -13,8 +13,8 @@ use rupg_exec::Plan;
 use rupg_func::{BackendState, Randomness, Sequences};
 pub use rupg_func::{Client, Ssl};
 use rupg_pgcatalog::builtin;
-use rupg_platform::Clock;
 use rupg_platform::os::OsClock;
+use rupg_platform::{Clock, Io};
 use rupg_sql::Severity;
 use rupg_sql::nodes::{LockStmt, Node, ObjectType};
 use rupg_types::Value;
@@ -48,6 +48,7 @@ mod upsert;
 mod writes;
 
 pub(crate) use activity::Activity;
+use copy_from::Begin;
 use extended::Failed;
 pub(crate) use extended::{Portal, Prepared};
 use writes::Writes;
@@ -365,6 +366,8 @@ pub struct Connection {
     role: u32,
     /// The catalog that the sessions of the server share.
     store: Arc<Store>,
+    /// The file system of the server, which `COPY ... FROM` a file reads. A session with no server has none.
+    io: Option<Arc<dyn Io>>,
     /// The lock of the store and the copy of the catalog, while the transaction changes the catalog.
     lease: Option<Lease>,
     /// The row of the session in the table of the sessions of the store.
@@ -437,6 +440,7 @@ impl Connection {
             statement_start: 0,
             role: role_oid(start),
             store: Arc::new(Store::new()),
+            io: None,
             lease: None,
             activity: Activity::default(),
             sequences: RefCell::new(Sequences::default()),
@@ -456,6 +460,11 @@ impl Connection {
     /// Sets the clock of `now()` and the other times of the session. The clock of the operating system is the default.
     pub fn set_clock(&mut self, clock: Arc<dyn Clock>) {
         self.clock = clock;
+    }
+
+    /// Sets the file system of the server, which `COPY ... FROM` a file reads.
+    pub fn set_io(&mut self, io: Arc<dyn Io>) {
+        self.io = Some(io);
     }
 
     /// Sets the catalog and the table of the sessions that the sessions of the server share, before [`Connection::greet`]. A new session has a store of its own.
@@ -1262,9 +1271,15 @@ impl Connection {
                 self.set_constraints(stmt, &mut notices)
             } else if let Node::CopyStmt(stmt) = node
                 && stmt.is_from
+                && stmt.filename.is_some()
             {
                 drop(self.portals.close(b""));
-                match self.copy_from(stmt, out) {
+                self.copy_from_file(stmt, &mut notices)
+            } else if let Node::CopyStmt(stmt) = node
+                && stmt.is_from
+            {
+                drop(self.portals.close(b""));
+                match self.copy_from(stmt, Begin::Client(out)) {
                     Ok(mut copy) => {
                         copy.text = text.to_string();
                         copy.index = i;
@@ -4135,14 +4150,49 @@ mod tests {
         big_stack(|| script(include_str!("connection/copy_to.test")));
     }
 
-    /// `COPY FROM` a file or a program, the JSON format, an encoding other than `UTF8` and `COPY TO` a file or a program give `0A000`.
+    /// `COPY ... FROM` a file of the server: the rows of the file in the simple and the extended protocol, an error of a line with the context of the line, and a file that does not exist. A session with no server cannot read files.
+    #[test]
+    fn copy_from_file() {
+        use rupg_platform::{OpenMode, sim::SimIo};
+        big_stack(|| {
+            let (mut c, _) = connect();
+            assert_eq!(script_lines(&mut c, "> CREATE TABLE t (a int, b text)"), ["CREATE TABLE"]);
+            assert_eq!(
+                script_lines(&mut c, "> COPY t FROM '/data/t.data'"),
+                ["ERROR 0A000 COPY FROM a file in a session with no server is not supported yet"]
+            );
+            let io = SimIo::new(1);
+            let file = io.open(std::path::Path::new("/data/t.data"), OpenMode::Create).unwrap();
+            file.write_at(0, b"1\tone\n2\ttwo\n").unwrap();
+            let file = io.open(std::path::Path::new("/data/bad.data"), OpenMode::Create).unwrap();
+            file.write_at(0, b"3\tthree\nx\tfour\n").unwrap();
+            c.set_io(Arc::new(io));
+            assert_eq!(script_lines(&mut c, "> COPY t FROM '/data/t.data'"), ["COPY 2"]);
+            assert!(script_lines(&mut c, "P s|COPY t (a, b) FROM '/data/t.data'").is_empty());
+            assert_eq!(script_lines(&mut c, "X s"), ["COPY 2"]);
+            assert_eq!(
+                script_lines(&mut c, "> COPY t FROM '/data/bad.data'"),
+                [
+                    "ERROR 22P02 invalid input syntax for type integer: \"x\" (COPY t, line 2, column a: \"x\")"
+                ]
+            );
+            assert_eq!(
+                script_lines(&mut c, "> COPY t FROM '/data/none.data'"),
+                ["ERROR 58P01 could not open file \"/data/none.data\" for reading: no such file"]
+            );
+            let rows =
+                script_lines(&mut c, "> SELECT a, b, count(*) FROM t GROUP BY a, b ORDER BY a");
+            assert_eq!(rows[1..], ["row 1,one,2", "row 2,two,2", "SELECT 2"]);
+        });
+    }
+
+    /// `COPY FROM` a program, the JSON format, an encoding other than `UTF8` and `COPY TO` a file or a program give `0A000`.
     #[test]
     fn copy_not_supported() {
         big_stack(|| {
             let (mut c, _) = connect();
             assert_eq!(script_lines(&mut c, "> CREATE TABLE t (a int)"), ["CREATE TABLE"]);
             for (sql, error) in [
-                ("COPY t FROM '/tmp/rupg-copy.txt'", "COPY FROM a file is not supported yet"),
                 ("COPY t FROM PROGRAM 'cat'", "COPY FROM a program is not supported yet"),
                 ("COPY t TO stdout (FORMAT json)", "COPY FORMAT JSON is not supported yet"),
                 (

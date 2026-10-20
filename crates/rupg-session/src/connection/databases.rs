@@ -265,7 +265,7 @@ impl Connection {
     }
 
     /// `superuser()` for the role of the session.
-    fn superuser(&self) -> bool {
+    pub(super) fn superuser(&self) -> bool {
         builtin::roles().iter().any(|role| role.oid == self.role && role.superuser)
     }
 
