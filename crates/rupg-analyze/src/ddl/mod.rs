@@ -32,6 +32,7 @@ mod tests;
 mod truncate;
 mod tsearch;
 mod type_change;
+mod vacuum;
 mod view;
 
 pub use copy::{
@@ -44,6 +45,7 @@ pub(crate) use lock::relkind;
 pub use lock::{Allowed, lock_table};
 pub use rule::{RuleTree, rule_tree};
 pub(crate) use table::check_attribute_type;
+pub use vacuum::vacuum_relations;
 
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
 use rupg_common::{Error, Result, SqlState};

@@ -88,7 +88,8 @@ pub fn check(node: &Node, text: &str) -> Result<(), Error> {
         | Node::DeallocateStmt(_)
         | Node::CreatedbStmt(_)
         | Node::DropdbStmt(_)
-        | Node::AlterDatabaseSetStmt(_) => Ok(()),
+        | Node::AlterDatabaseSetStmt(_)
+        | Node::VacuumStmt(_) => Ok(()),
         _ => Err(not_supported(text)),
     }
 }

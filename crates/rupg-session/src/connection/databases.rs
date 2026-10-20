@@ -247,8 +247,8 @@ fn not_supported(what: String) -> Error {
 }
 
 impl Connection {
-    /// `PreventInTransactionBlock` for `CREATE DATABASE` and `DROP DATABASE`. The caller commits the statement at once, also in the extended protocol.
-    fn prevent_block(&self, statement: &str) -> Result<(), Error> {
+    /// `PreventInTransactionBlock` for `CREATE DATABASE`, `DROP DATABASE` and `VACUUM`. The caller commits the statement at once, also in the extended protocol.
+    pub(super) fn prevent_block(&self, statement: &str) -> Result<(), Error> {
         if self.transaction.in_block() {
             return Err(Error::new(
                 SqlState::ACTIVE_SQL_TRANSACTION,

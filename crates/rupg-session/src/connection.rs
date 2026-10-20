@@ -45,6 +45,7 @@ mod prepare;
 mod rewrite;
 mod savepoint;
 mod upsert;
+mod vacuum;
 mod writes;
 
 pub(crate) use activity::Activity;
@@ -1301,6 +1302,9 @@ impl Connection {
             } else if let Node::AlterDatabaseSetStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.alter_database_set(stmt)
+            } else if let Node::VacuumStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.vacuum(stmt, &mut notices)
             } else if let Node::DeclareCursorStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.declare(stmt, text, None, &[], &mut notices)
@@ -3491,6 +3495,12 @@ mod tests {
     #[test]
     fn create_database() {
         big_stack(|| script(include_str!("connection/create_database.test")));
+    }
+
+    /// `VACUUM` and `ANALYZE`: the options and their checks, the column lists, a view, a sequence, an index and a view of the catalog that the statement skips, names that do not exist, a catalog, and a transaction block. `connection/vacuum.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn vacuum() {
+        big_stack(|| script(include_str!("connection/vacuum.test")));
     }
 
     /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -1,0 +1,170 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text)
+CREATE TABLE
+> CREATE VIEW v AS SELECT 1 AS x
+CREATE VIEW
+> CREATE SEQUENCE s
+CREATE SEQUENCE
+> CREATE INDEX ti ON t (a)
+CREATE INDEX
+> VACUUM
+VACUUM
+> VACUUM t
+VACUUM
+> VACUUM FULL t
+VACUUM
+> VACUUM FREEZE t
+VACUUM
+> VACUUM ANALYZE t
+VACUUM
+> VACUUM FULL FREEZE ANALYZE t (a)
+VACUUM
+> VACUUM (ANALYZE, FREEZE) t (a)
+VACUUM
+> VACUUM t (a)
+ERROR 0A000 ANALYZE option must be specified when a column list is provided
+> VACUUM (ANALYZE) t (a, a)
+ERROR 42701 column "a" of relation "t" appears more than once
+> VACUUM (ANALYZE) t (c)
+ERROR 42703 column "c" of relation "t" does not exist
+> VACUUM (ANALYZE) t, v
+WARNING 01000 skipping "v" --- cannot vacuum non-tables or special system tables
+VACUUM
+> VACUUM v
+WARNING 01000 skipping "v" --- cannot vacuum non-tables or special system tables
+VACUUM
+> VACUUM s
+WARNING 01000 skipping "s" --- cannot vacuum non-tables or special system tables
+VACUUM
+> VACUUM ti
+WARNING 01000 skipping "ti" --- cannot vacuum non-tables or special system tables
+VACUUM
+> VACUUM nosuch
+ERROR 42P01 relation "nosuch" does not exist
+> VACUUM nosuch.t
+ERROR 3F000 schema "nosuch" does not exist
+> VACUUM public.nosuch
+ERROR 42P01 relation "public.nosuch" does not exist
+> VACUUM t, nosuch
+ERROR 42P01 relation "nosuch" does not exist
+> VACUUM v, nosuch
+ERROR 42P01 relation "nosuch" does not exist
+> VACUUM (FOO) t
+ERROR 42601 unrecognized VACUUM option "foo" at 9
+> VACUUM (VERBOSE false, SKIP_LOCKED) t
+VACUUM
+> VACUUM (PARALLEL -1) t
+ERROR 42601 PARALLEL option must be between 0 and 1024 at 9
+> VACUUM (PARALLEL 2000) t
+ERROR 42601 PARALLEL option must be between 0 and 1024 at 9
+> VACUUM (PARALLEL) t
+ERROR 42601 parallel requires an integer value
+> VACUUM (PARALLEL 'x') t
+ERROR 42601 parallel requires an integer value
+> VACUUM (PARALLEL 2) t
+VACUUM
+> VACUUM (FULL, PARALLEL 2) t
+ERROR 0A000 VACUUM FULL cannot be performed in parallel
+> VACUUM (BUFFER_USAGE_LIMIT '10kB') t
+ERROR 22023 BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
+> VACUUM (BUFFER_USAGE_LIMIT 0) t
+VACUUM
+> VACUUM (BUFFER_USAGE_LIMIT '256kB') t
+VACUUM
+> VACUUM (BUFFER_USAGE_LIMIT '1 MB') t
+VACUUM
+> VACUUM (BUFFER_USAGE_LIMIT '1x') t
+ERROR 22023 BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
+HINT Valid units for this parameter are "B", "kB", "MB", "GB", and "TB".
+> VACUUM (BUFFER_USAGE_LIMIT '17GB') t
+ERROR 22023 BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
+> VACUUM (FULL, BUFFER_USAGE_LIMIT '256kB') t
+ERROR 0A000 BUFFER_USAGE_LIMIT cannot be specified for VACUUM FULL
+> VACUUM (FULL, ANALYZE, BUFFER_USAGE_LIMIT '256kB') t
+VACUUM
+> VACUUM (FULL, DISABLE_PAGE_SKIPPING) t
+ERROR 0A000 VACUUM option DISABLE_PAGE_SKIPPING cannot be used with FULL
+> VACUUM (FULL, PROCESS_TOAST false) t
+ERROR 0A000 PROCESS_TOAST required with VACUUM FULL
+> VACUUM (ONLY_DATABASE_STATS) t
+ERROR 0A000 ONLY_DATABASE_STATS cannot be specified with a list of tables
+> VACUUM (ONLY_DATABASE_STATS, FREEZE)
+ERROR 0A000 ONLY_DATABASE_STATS cannot be specified with other VACUUM options
+> VACUUM (ONLY_DATABASE_STATS, VERBOSE false)
+VACUUM
+> VACUUM (INDEX_CLEANUP auto, TRUNCATE false, PROCESS_MAIN off, SKIP_DATABASE_STATS) t
+VACUUM
+> VACUUM (INDEX_CLEANUP on, INDEX_CLEANUP) t
+VACUUM
+> VACUUM (INDEX_CLEANUP maybe) t
+ERROR 42601 index_cleanup requires a Boolean value
+> VACUUM (ANALYZE 'yes') t
+ERROR 42601 analyze requires a Boolean value
+> VACUUM (ANALYZE 2) t
+ERROR 42601 analyze requires a Boolean value
+> ANALYZE
+ANALYZE
+> ANALYZE t
+ANALYZE
+> ANALYZE t (b)
+ANALYZE
+> ANALYZE t (c)
+ERROR 42703 column "c" of relation "t" does not exist
+> ANALYZE t (a, b, a)
+ERROR 42701 column "a" of relation "t" appears more than once
+> ANALYZE v
+WARNING 01000 skipping "v" --- cannot analyze non-tables or special system tables
+ANALYZE
+> ANALYZE v (x)
+WARNING 01000 skipping "v" --- cannot analyze non-tables or special system tables
+ANALYZE
+> ANALYZE v (y)
+ERROR 42703 column "y" of relation "v" does not exist
+> ANALYZE s
+WARNING 01000 skipping "s" --- cannot analyze non-tables or special system tables
+ANALYZE
+> ANALYZE (FULL) t
+ERROR 42601 unrecognized ANALYZE option "full" at 10
+> ANALYZE (SKIP_LOCKED, VERBOSE off, BUFFER_USAGE_LIMIT 0) t
+ANALYZE
+> ANALYZE (BUFFER_USAGE_LIMIT 5) t
+ERROR 22023 BUFFER_USAGE_LIMIT option must be 0 or between 128 kB and 16777216 kB
+> ANALYZE pg_class
+ANALYZE
+> VACUUM pg_class
+VACUUM
+> ANALYZE pg_statistic (nosuch)
+ANALYZE
+> ANALYZE pg_tables
+WARNING 01000 skipping "pg_tables" --- cannot analyze non-tables or special system tables
+ANALYZE
+> VACUUM pg_catalog.pg_tables
+WARNING 01000 skipping "pg_tables" --- cannot vacuum non-tables or special system tables
+VACUUM
+> ANALYZE t, v, s
+WARNING 01000 skipping "v" --- cannot analyze non-tables or special system tables
+WARNING 01000 skipping "s" --- cannot analyze non-tables or special system tables
+ANALYZE
+> BEGIN
+BEGIN
+> ANALYZE t
+ANALYZE
+> ANALYZE t, v
+WARNING 01000 skipping "v" --- cannot analyze non-tables or special system tables
+ANALYZE
+> VACUUM t
+ERROR 25001 VACUUM cannot run inside a transaction block
+> ROLLBACK
+ROLLBACK
+> BEGIN
+BEGIN
+> VACUUM (ANALYZE) t
+ERROR 25001 VACUUM cannot run inside a transaction block
+> ROLLBACK
+ROLLBACK
+> SELECT 1
+fields ?column?:23:4:-1
+row 1
+SELECT 1
