@@ -246,16 +246,26 @@ pub fn split_options(options: &str) -> Result<Vec<(String, String)>, Error> {
     Ok(settings)
 }
 
-/// The settings of a new session: the base settings, the values that the server sets for the session, then the `options` of the startup packet and its other parameters, as `process_startup_options` applies them.
+/// The settings of a new session: the base settings, the values that the server sets for the session, the settings of `ALTER DATABASE ... SET` in `database`, then the `options` of the startup packet and its other parameters, as `process_startup_options` applies them.
 ///
 /// # Errors
 ///
 /// A bad `options` parameter and a setting that is not valid. The server sends them as `FATAL`.
-pub fn session_settings(base: &Settings, start: &Start) -> Result<Settings, Error> {
+pub fn session_settings(
+    base: &Settings,
+    start: &Start,
+    database: &[String],
+) -> Result<Settings, Error> {
     let mut settings = base.clone();
     settings.set_superuser(start.superuser);
     settings.set_internal("is_superuser", if start.superuser { "on" } else { "off" })?;
     settings.set_internal("session_authorization", &start.user)?;
+    // `process_settings`: a stored setting that is no longer valid gives a warning in PostgreSQL, and the session starts without it.
+    for item in database {
+        if let Some((name, value)) = item.split_once('=') {
+            drop(settings.set_database(name, value));
+        }
+    }
     let options = match &start.options {
         Some(options) => split_options(options)?,
         None => Vec::new(),
@@ -1273,6 +1283,9 @@ impl Connection {
             } else if let Node::DropdbStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.drop_database(stmt, &mut notices)
+            } else if let Node::AlterDatabaseSetStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.alter_database_set(stmt)
             } else if let Node::DeclareCursorStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.declare(stmt, text, None, &[], &mut notices)
@@ -1587,7 +1600,7 @@ mod tests {
     /// A session with the process ID `pid` on the store of a server.
     fn connect_to(store: &Arc<Store>, pid: i32) -> (Connection, Vec<String>) {
         let start = start(None, &[("application_name", "test")]);
-        let settings = session_settings(&base_settings(&[]).unwrap(), &start).unwrap();
+        let settings = session_settings(&base_settings(&[]).unwrap(), &start, &[]).unwrap();
         let mut connection = Connection::new(&start, settings, PROTOCOL_3_0);
         connection.set_store(Arc::clone(store));
         // The oracle runs the scripts on a Unix socket.
@@ -3465,10 +3478,44 @@ mod tests {
         big_stack(|| script(include_str!("connection/create_database.test")));
     }
 
-    /// A session of a database other than `postgres`.
+    /// `ALTER DATABASE ... SET`: the checks of the names and the values, and the rows of `pg_db_role_setting`. `connection/alter_database_set.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn alter_database_set() {
+        big_stack(|| script(include_str!("connection/alter_database_set.test")));
+    }
+
+    /// A new session of a database takes the settings of `ALTER DATABASE ... SET` with the source `database`, and `RESET` goes back to them. A session of another database does not take them.
+    #[test]
+    fn database_settings() {
+        big_stack(|| {
+            let store = Arc::new(Store::new());
+            let (mut a, _) = connect_to(&store, 1234);
+            for sql in [
+                "CREATE DATABASE x",
+                "ALTER DATABASE x SET work_mem TO '16MB'",
+                "ALTER DATABASE x SET my.thing TO 'v'",
+            ] {
+                assert!(!line_of(&mut a, sql, "").starts_with("ERROR"), "{sql}");
+            }
+            assert_eq!(line_of(&mut a, "SHOW work_mem", "row"), "row 4MB");
+            let mut b = connect_database(&store, 1235, "x");
+            assert_eq!(line_of(&mut b, "SHOW work_mem", "row"), "row 16MB");
+            assert_eq!(line_of(&mut b, "SHOW my.thing", "row"), "row v");
+            let source = "SELECT source FROM pg_settings WHERE name = 'work_mem'";
+            assert_eq!(line_of(&mut b, source, "row"), "row database");
+            line_of(&mut b, "SET work_mem TO '1MB'", "SET");
+            line_of(&mut b, "RESET work_mem", "RESET");
+            assert_eq!(line_of(&mut b, "SHOW work_mem", "row"), "row 16MB");
+            let mut c = connect_database(&store, 1236, "postgres");
+            assert_eq!(line_of(&mut c, "SHOW work_mem", "row"), "row 4MB");
+        });
+    }
+
+    /// A session of a database other than `postgres`, with the settings of `ALTER DATABASE ... SET` for the database.
     fn connect_database(store: &Arc<Store>, pid: i32, database: &str) -> Connection {
         let start = Start { database: database.into(), ..start(None, &[]) };
-        let settings = session_settings(&base_settings(&[]).unwrap(), &start).unwrap();
+        let stored = store.database_settings(store.admit(database).unwrap());
+        let settings = session_settings(&base_settings(&[]).unwrap(), &start, &stored).unwrap();
         let mut connection = Connection::new(&start, settings, PROTOCOL_3_0);
         connection.set_store(Arc::clone(store));
         let mut out = OutBuf::new();
@@ -4591,12 +4638,12 @@ mod tests {
             "invalid command-line argument for server process: -x"
         );
         let base = base_settings(&[]).unwrap();
-        let settings = session_settings(&base, &start(Some("-c work_mem=16MB"), &[])).unwrap();
+        let settings = session_settings(&base, &start(Some("-c work_mem=16MB"), &[]), &[]).unwrap();
         assert_eq!(settings.get("work_mem").as_deref(), Some("16MB"));
-        let latin1 = session_settings(&base, &start(None, &[("client_encoding", "LATIN1")]));
+        let latin1 = session_settings(&base, &start(None, &[("client_encoding", "LATIN1")]), &[]);
         assert_eq!(latin1.unwrap_err().state(), SqlState::FEATURE_NOT_SUPPORTED);
-        let ascii =
-            session_settings(&base, &start(None, &[("client_encoding", "sql_ascii")])).unwrap();
+        let ascii = session_settings(&base, &start(None, &[("client_encoding", "sql_ascii")]), &[])
+            .unwrap();
         assert_eq!(ascii.get("client_encoding").as_deref(), Some("SQL_ASCII"));
     }
 

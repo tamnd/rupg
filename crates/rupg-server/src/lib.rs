@@ -833,15 +833,15 @@ fn start_tls(shared: &Shared, tls: &Tls, wire: &mut Wire, early: &[u8], direct: 
     }
 }
 
-/// The checks of `InitPostgres` after the authentication: the role and the database.
-fn admit(shared: &Shared, start: &Start) -> std::result::Result<(), Error> {
+/// The checks of `InitPostgres` after the authentication: the role and the database. It gives the OID of the database.
+fn admit(shared: &Shared, start: &Start) -> std::result::Result<u32, Error> {
     if start.user != shared.roles.superuser {
         return Err(Error::new(
             SqlState::INVALID_AUTHORIZATION_SPECIFICATION,
             format!("role \"{}\" does not exist", start.user),
         ));
     }
-    shared.store.admit(&start.database).map(drop)
+    shared.store.admit(&start.database)
 }
 
 /// A session in the cancel registry.
@@ -949,8 +949,9 @@ fn session(shared: &Shared, wire: &mut Wire, start: &Start, protocol: u32) {
         return;
     };
     wire.out.authentication_ok();
-    let settings =
-        admit(shared, start).and_then(|()| connection::session_settings(&shared.base, start));
+    let settings = admit(shared, start).and_then(|database| {
+        connection::session_settings(&shared.base, start, &shared.store.database_settings(database))
+    });
     let mut settings = match settings {
         Ok(settings) => settings,
         Err(error) => {

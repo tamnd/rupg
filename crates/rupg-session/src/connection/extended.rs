@@ -579,6 +579,8 @@ impl Connection {
                     position: error.position().map(|at| character_position(&statement.text, at)),
                     error,
                 })?
+            } else if let Node::AlterDatabaseSetStmt(stmt) = node {
+                self.alter_database_set(stmt)?
             } else {
                 let mut notices = Vec::new();
                 let ts_config = self.ts_config(node)?;

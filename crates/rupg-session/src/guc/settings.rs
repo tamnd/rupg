@@ -24,6 +24,8 @@ pub enum Source {
     File,
     /// A value of the command line of the server.
     Argument,
+    /// A value that `ALTER DATABASE ... SET` stored for the database of the session.
+    Database,
     /// A value of the startup packet.
     Client,
     /// A value that the server sets over the others at start, such as `config_file`.
@@ -40,6 +42,7 @@ impl Source {
             Source::Default => "default",
             Source::File => "configuration file",
             Source::Argument => "command line",
+            Source::Database => "database",
             Source::Client => "client",
             Source::Override => "override",
             Source::Session => "session",
@@ -465,6 +468,47 @@ impl Settings {
         let setting = self.parse(parameter, text)?;
         self.store_reset(parameter, Value { setting, source: Source::Argument });
         Ok(())
+    }
+
+    /// A value that `ALTER DATABASE ... SET` stored for the database of the session, as `ApplySetting` sets it with `PGC_S_DATABASE` at the start of the session. It comes before the values of the client. A parameter that a statement cannot set is not set.
+    ///
+    /// # Errors
+    ///
+    /// A name that is not a parameter and not a valid placeholder name, a parameter that cannot change after the start of the session, or a value that the parameter does not take.
+    pub fn set_database(&mut self, name: &str, text: &str) -> Result<(), Error> {
+        let Some(parameter) = find(name) else {
+            placeholder_name(name)?;
+            let key = name.to_ascii_lowercase();
+            let value =
+                Value { setting: Setting::String(text.to_owned()), source: Source::Database };
+            let slot = self.slot(&key, None, name);
+            slot.current = value.clone();
+            slot.reset = value;
+            return Ok(());
+        };
+        self.allowed(parameter, Origin::Statement)?;
+        let setting = self.parse(parameter, text)?;
+        self.store_reset(parameter, Value { setting, source: Source::Database });
+        Ok(())
+    }
+
+    /// `validate_option_array_item` for `ALTER DATABASE ... SET`: the check of the name, of the context and of the value, with no change. `text` is `None` for `RESET`. It gives the name that the stored setting has, which is the name of the parameter as PostgreSQL spells it.
+    ///
+    /// # Errors
+    ///
+    /// A name that is not a parameter and not a valid placeholder name, a parameter that a statement cannot set, and a value that the parameter does not take.
+    pub fn check_stored(&self, name: &str, text: Option<&str>) -> Result<String, Error> {
+        let Some(parameter) = find(name) else {
+            if text.is_some() || !valid_custom_name(name) {
+                placeholder_name(name)?;
+            }
+            return Ok(name.to_owned());
+        };
+        self.allowed(parameter, Origin::Statement)?;
+        if let Some(text) = text {
+            self.parse(parameter, text)?;
+        }
+        Ok(parameter.name.to_owned())
     }
 
     /// Reads a value of a parameter with the rules of `set`, and does not keep it.

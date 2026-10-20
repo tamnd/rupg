@@ -1,0 +1,53 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE DATABASE rupg_ads_scratch
+CREATE DATABASE
+> ALTER DATABASE rupg_ads_nosuch SET work_mem = '1MB'
+ERROR 3D000 database "rupg_ads_nosuch" does not exist
+> ALTER DATABASE rupg_ads_scratch SET nosuch = 1
+ERROR 42704 unrecognized configuration parameter "nosuch"
+> ALTER DATABASE rupg_ads_scratch SET shared_buffers = '1MB'
+ERROR 55P02 parameter "shared_buffers" cannot be changed without restarting the server
+> ALTER DATABASE rupg_ads_scratch SET work_mem = 'abc'
+ERROR 22023 invalid value for parameter "work_mem": "abc"
+> ALTER DATABASE rupg_ads_scratch SET log_connections = on
+ERROR 55P02 parameter "log_connections" cannot be set after connection start
+> ALTER DATABASE rupg_ads_scratch SET archive_command = 'x'
+ERROR 55P02 parameter "archive_command" cannot be changed now
+> ALTER DATABASE rupg_ads_scratch SET my.thing = 'x'
+ALTER DATABASE
+> ALTER DATABASE rupg_ads_scratch RESET my.other
+ALTER DATABASE
+> ALTER DATABASE rupg_ads_scratch RESET nosuch
+ERROR 42704 unrecognized configuration parameter "nosuch"
+> ALTER DATABASE rupg_ads_scratch SET WORK_MEM TO '16MB'
+ALTER DATABASE
+> ALTER DATABASE rupg_ads_scratch SET lc_messages TO 'C'
+ALTER DATABASE
+> ALTER DATABASE rupg_ads_scratch SET search_path TO a, "B"
+ALTER DATABASE
+> ALTER DATABASE rupg_ads_scratch SET work_mem TO '32MB'
+ALTER DATABASE
+> ALTER DATABASE rupg_ads_scratch SET DateStyle FROM CURRENT
+ALTER DATABASE
+> SELECT setconfig FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = 'rupg_ads_scratch'
+fields setconfig@pg_db_role_setting.3:1009:-1:-1
+row {my.thing=x,work_mem=32MB,lc_messages=C,"search_path=a, \"B\"","DateStyle=ISO, MDY"}
+SELECT 1
+> ALTER DATABASE rupg_ads_scratch RESET work_mem
+ALTER DATABASE
+> ALTER DATABASE rupg_ads_scratch SET lc_messages TO DEFAULT
+ALTER DATABASE
+> SELECT setconfig FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = 'rupg_ads_scratch'
+fields setconfig@pg_db_role_setting.3:1009:-1:-1
+row {my.thing=x,"search_path=a, \"B\"","DateStyle=ISO, MDY"}
+SELECT 1
+> ALTER DATABASE rupg_ads_scratch RESET ALL
+ALTER DATABASE
+> SELECT count(*) FROM pg_db_role_setting s JOIN pg_database d ON d.oid = s.setdatabase WHERE d.datname = 'rupg_ads_scratch'
+fields count:20:8:-1
+row 0
+SELECT 1
+> DROP DATABASE rupg_ads_scratch
+DROP DATABASE
