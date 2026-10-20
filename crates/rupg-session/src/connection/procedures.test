@@ -1,0 +1,172 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int);
+CREATE TABLE
+> CREATE PROCEDURE p1(x int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   INSERT INTO t VALUES (x);
+>>   RAISE NOTICE 'p1 %', x;
+>> END $$;
+CREATE PROCEDURE
+> CALL p1(1);
+NOTICE 00000 p1 1 (PL/pgSQL function p1(integer) line 4 at RAISE)
+CALL
+> CALL p1(x => 2);
+NOTICE 00000 p1 2 (PL/pgSQL function p1(integer) line 4 at RAISE)
+CALL
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> CREATE PROCEDURE p2(INOUT a int, INOUT b text) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   a := a * 10;
+>>   b := b || '!';
+>> END $$;
+CREATE PROCEDURE
+> CALL p2(3, 'hi');
+fields a:23:4:-1,b:25:-1:-1
+row 30,hi!
+CALL
+> CREATE PROCEDURE p3(IN a int, OUT b int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   b := a + 1;
+>> END $$;
+CREATE PROCEDURE
+> CALL p3(5, NULL);
+fields b:23:4:-1
+row 6
+CALL
+> CALL p3(5);
+ERROR 42883 procedure p3(integer) does not exist at 6
+DETAIL No procedure of that name accepts the given number of arguments.
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1
+row 1
+row 2
+SELECT 2
+> SELECT p1(1);
+ERROR 42809 p1(integer) is a procedure at 8
+HINT To call a procedure, use CALL.
+> CALL abs(1);
+ERROR 42809 abs(integer) is not a procedure at 6
+HINT To call a function, use SELECT.
+> CALL nosuch(1);
+ERROR 42883 procedure nosuch(integer) does not exist at 6
+DETAIL There is no procedure of that name.
+> CALL p1('x');
+ERROR 22P02 invalid input syntax for type integer: "x" at 9
+> CALL p1();
+ERROR 42883 procedure p1() does not exist at 6
+DETAIL No procedure of that name accepts the given number of arguments.
+> CREATE PROCEDURE p7(a int DEFAULT 9) LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'a=%', a; END $$;
+CREATE PROCEDURE
+> CALL p7();
+NOTICE 00000 a=9 (PL/pgSQL function p7(integer) line 1 at RAISE)
+CALL
+> CALL p7(1);
+NOTICE 00000 a=1 (PL/pgSQL function p7(integer) line 1 at RAISE)
+CALL
+> SELECT proname, prokind, prorettype::regtype, proargmodes FROM pg_proc WHERE proname LIKE 'p_' ORDER BY proname;
+fields proname@pg_proc.2:19:64:-1,prokind@pg_proc.10:18:1:-1,prorettype:2206:4:-1,proargmodes@pg_proc.22:1002:-1:-1
+row p1,p,void,NULL
+row p2,p,record,{b,b}
+row p3,p,record,{i,o}
+row p7,p,void,NULL
+row pi,f,double precision,NULL
+SELECT 5
+> CREATE PROCEDURE p8() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;
+ERROR 42601 syntax error at or near "int" at 31
+> CREATE PROCEDURE p8(VARIADIC a int[]) LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE '%', a; END $$;
+CREATE PROCEDURE
+> CALL p8(1, 2, 3);
+NOTICE 00000 {1,2,3} (PL/pgSQL function p8(integer[]) line 1 at RAISE)
+CALL
+> CREATE PROCEDURE p9() LANGUAGE plpgsql AS $$ BEGIN RETURN 1; END $$;
+ERROR 42601 RETURN cannot have a parameter in a procedure at 59
+> CREATE PROCEDURE p9() LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'early'; RETURN; RAISE NOTICE 'late'; END $$;
+CREATE PROCEDURE
+> CALL p9();
+NOTICE 00000 early (PL/pgSQL function p9() line 1 at RAISE)
+CALL
+> CREATE OR REPLACE PROCEDURE p9() LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'replaced'; END $$;
+CREATE PROCEDURE
+> CALL p9();
+NOTICE 00000 replaced (PL/pgSQL function p9() line 1 at RAISE)
+CALL
+> CREATE OR REPLACE FUNCTION p9() RETURNS void LANGUAGE sql AS $$ SELECT $$;
+ERROR 42809 cannot change routine kind
+DETAIL "p9" is a procedure.
+> CREATE FUNCTION f1() RETURNS int LANGUAGE sql AS $$ SELECT 1 $$;
+CREATE FUNCTION
+> CREATE OR REPLACE PROCEDURE f1() LANGUAGE sql AS $$ SELECT 1 $$;
+ERROR 42809 cannot change routine kind
+DETAIL "f1" is a function.
+> DROP PROCEDURE f1();
+ERROR 42809 f1() is not a procedure
+> DROP FUNCTION p9();
+ERROR 42809 p9() is not a function
+> DROP PROCEDURE p9();
+DROP PROCEDURE
+> DROP PROCEDURE p9();
+ERROR 42883 procedure p9() does not exist
+> DROP PROCEDURE IF EXISTS p9();
+NOTICE 00000 procedure p9() does not exist, skipping
+DROP PROCEDURE
+> DROP ROUTINE p7;
+DROP ROUTINE
+> CALL p7();
+ERROR 42883 procedure p7() does not exist at 6
+DETAIL There is no procedure of that name.
+> CREATE PROCEDURE p10() LANGUAGE plpgsql AS $$ BEGIN PERFORM 1/0; END $$;
+CREATE PROCEDURE
+> CALL p10();
+ERROR 22012 division by zero (SQL statement "SELECT 1/0"
+PL/pgSQL function p10() line 1 at PERFORM)
+> CREATE PROCEDURE p11(a int, OUT b int, INOUT c int) LANGUAGE plpgsql AS $$ BEGIN b := a; c := c + a; END $$;
+CREATE PROCEDURE
+> CALL p11(1, NULL, 2);
+fields b:23:4:-1,c:23:4:-1
+row 1,3
+CALL
+> CALL p11(1, 5, 2);
+fields b:23:4:-1,c:23:4:-1
+row 1,3
+CALL
+> CALL p11(a => 1, b => NULL, c => 2);
+fields b:23:4:-1,c:23:4:-1
+row 1,3
+CALL
+> CREATE PROCEDURE p12(OUT a int) LANGUAGE plpgsql AS $$ BEGIN a := 1; END $$;
+CREATE PROCEDURE
+> CALL p12(NULL);
+fields a:23:4:-1
+row 1
+CALL
+> CALL p12(1 + 1);
+fields a:23:4:-1
+row 1
+CALL
+> SELECT pg_get_function_arguments('p11'::regproc), pg_get_function_result('p11'::regproc), pg_get_function_result('p1'::regproc);
+fields pg_get_function_arguments:25:-1:-1,pg_get_function_result:25:-1:-1,pg_get_function_result:25:-1:-1
+row IN a integer, OUT b integer, INOUT c integer,NULL,NULL
+SELECT 1
+> SELECT routine_name, routine_type, data_type FROM information_schema.routines WHERE routine_name IN ('p1', 'p11', 'f1') ORDER BY 1;
+fields routine_name@information_schema.routines.6:19:64:-1,routine_type@information_schema.routines.7:1043:-1:-1,data_type@information_schema.routines.14:1043:-1:-1
+row f1,FUNCTION,integer
+row p1,PROCEDURE,NULL
+row p11,PROCEDURE,NULL
+SELECT 3
+> CREATE PROCEDURE p13(a int) STRICT LANGUAGE sql AS $$ SELECT 1 $$;
+ERROR 42P13 invalid attribute in procedure definition at 29
+> CREATE PROCEDURE p13(a int) IMMUTABLE LANGUAGE sql AS $$ SELECT 1 $$;
+ERROR 42P13 invalid attribute in procedure definition at 29
+> ALTER PROCEDURE p1(int) RENAME TO p1b;
+ALTER PROCEDURE
+> CALL p1b(51);
+NOTICE 00000 p1 51 (PL/pgSQL function p1b(integer) line 4 at RAISE)
+CALL
+> ALTER FUNCTION p1b(int) RENAME TO p1c;
+ERROR 42809 p1b(integer) is not a function

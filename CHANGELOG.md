@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `CREATE PROCEDURE` and `CALL` with input, `INOUT` and `OUT` arguments, named arguments, defaults and `VARIADIC`. A procedure with output arguments gives one row. `DROP PROCEDURE`, `DROP ROUTINE`, `ALTER PROCEDURE`, `COMMENT ON PROCEDURE` and `CREATE OR REPLACE` check the kind of the routine as PostgreSQL does. `CALL` in PL/pgSQL and in the extended protocol is not supported yet (#464).
+
 ## 0.1.54 (2026-10-20)
 
 ### Added

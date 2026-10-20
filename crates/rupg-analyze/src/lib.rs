@@ -7,6 +7,7 @@
 #![forbid(unsafe_code)]
 
 mod agg;
+mod call;
 mod coerce;
 mod collate;
 mod colname;
@@ -341,6 +342,7 @@ fn analyze_in<'a>(
         Node::UpdateStmt(update) => analyzer.update(update)?,
         Node::DeleteStmt(delete) => analyzer.delete(delete)?,
         Node::MergeStmt(merge) => analyzer.merge(merge)?,
+        Node::CallStmt(call) => analyzer.call(call)?,
         _ => {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,

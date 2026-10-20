@@ -103,26 +103,38 @@ fn const_value(ty: u32, bytes: &[u8]) -> Result<Value> {
 ///
 /// An internal error when the call does not fit the function, which the analyzer prevents.
 pub fn expand_arguments(f: &Func) -> Result<Cow<'_, [Expr]>> {
-    let named = f.args.iter().any(|a| matches!(a.kind, ExprKind::NamedArg(_)));
     let Some(proc) = builtin::proc_by_oid(f.oid) else { return Ok(Cow::Borrowed(&f.args)) };
+    expand(&f.args, proc)
+}
+
+/// The row of a procedure as `expand_function_arguments` reads it with `include_out_arguments`: the arguments are all the arguments, so that the arguments of a `CALL` take the output arguments too.
+pub(crate) fn all_arguments(proc: &ProcRow) -> ProcRow {
+    let argtypes = proc.allargtypes.unwrap_or(proc.argtypes);
+    let nargs = i16::try_from(argtypes.len()).unwrap_or(i16::MAX);
+    ProcRow { argtypes, argmodes: None, nargs, ..*proc }
+}
+
+/// The arguments `args` of a call of `proc` in the order of the arguments of `proc`, with the defaults.
+pub(crate) fn expand<'a>(args: &'a [Expr], proc: &ProcRow) -> Result<Cow<'a, [Expr]>> {
+    let named = args.iter().any(|a| matches!(a.kind, ExprKind::NamedArg(_)));
     let pronargs = proc.argtypes.len();
     if !named {
-        if f.args.len() >= pronargs || proc.nargdefaults == 0 {
-            return Ok(Cow::Borrowed(&f.args));
+        if args.len() >= pronargs || proc.nargdefaults == 0 {
+            return Ok(Cow::Borrowed(args));
         }
         // add_function_defaults: the defaults of the last arguments.
         let defaults = arg_defaults(proc)?;
-        let skip = (f.args.len() + defaults.len())
+        let skip = (args.len() + defaults.len())
             .checked_sub(pronargs)
             .ok_or_else(|| Error::internal("not enough default arguments"))?;
-        let mut args = f.args.clone();
+        let mut args = args.to_vec();
         args.extend(defaults.into_iter().skip(skip));
         return Ok(Cow::Owned(args));
     }
     // reorder_function_arguments: each argument at its number, then the defaults in the gaps.
     let mut slots: Vec<Option<Expr>> = vec![None; pronargs];
     let mut next = 0;
-    for arg in &f.args {
+    for arg in args {
         let (number, arg) = match &arg.kind {
             ExprKind::NamedArg(na) => (na.number, &na.arg),
             _ => {
@@ -133,7 +145,7 @@ pub fn expand_arguments(f: &Func) -> Result<Cow<'_, [Expr]>> {
         let slot = slots.get_mut(number).ok_or_else(|| Error::internal("too many arguments"))?;
         *slot = Some(arg.clone());
     }
-    if f.args.len() < pronargs {
+    if args.len() < pronargs {
         let first = pronargs.saturating_sub(usize::try_from(proc.nargdefaults).unwrap_or(0));
         for (slot, default) in slots[first..].iter_mut().zip(arg_defaults(proc)?) {
             if slot.is_none() {

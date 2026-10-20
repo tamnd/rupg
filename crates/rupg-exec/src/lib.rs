@@ -82,9 +82,9 @@ fn procedural(func: u32) -> bool {
     builtin::proc_by_oid(func).is_some_and(|p| p.lang == PLPGSQL_LANGUAGE)
 }
 
-/// True when a call in `FROM` needs the set kernel of the function: the function gives a set, or a row with `width` columns.
+/// True when a call in `FROM` needs the set kernel of the function: the function gives a set, or a row with `width` columns, or it is a procedure, which gives a row also with one column.
 fn table_function(func: u32, width: usize) -> bool {
-    width > 1 || builtin::proc_by_oid(func).is_some_and(|p| p.retset)
+    width > 1 || builtin::proc_by_oid(func).is_some_and(|p| p.retset || p.kind == b'p')
 }
 
 /// True for a function that gives one composite value and has a plain kernel but no set kernel. In `FROM`, the fields of the value are the columns of its one row.

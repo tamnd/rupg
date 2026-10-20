@@ -135,7 +135,9 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSTEMPLATE
             | ObjectType::OBJECT_TSCONFIGURATION => self.find_ts(stmt)?,
-            ObjectType::OBJECT_FUNCTION => self.find_functions(stmt)?,
+            ObjectType::OBJECT_FUNCTION
+            | ObjectType::OBJECT_PROCEDURE
+            | ObjectType::OBJECT_ROUTINE => self.find_functions(stmt)?,
             ObjectType::OBJECT_RULE => return self.drop_rule(stmt),
             ObjectType::OBJECT_TRIGGER => return self.drop_trigger(stmt),
             _ => return Err(not_yet("DROP of this kind of object", None)),

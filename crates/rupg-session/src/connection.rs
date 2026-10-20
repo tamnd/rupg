@@ -909,6 +909,9 @@ impl Connection {
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
+                    Node::CreateFunctionStmt(stmt) if stmt.is_procedure => {
+                        CommandTag::CreateProcedure
+                    }
                     Node::CreateFunctionStmt(_) => CommandTag::CreateFunction,
                     Node::AlterFunctionStmt(stmt) => alter_tag(stmt.objtype),
                     Node::CompositeTypeStmt(_)
@@ -929,6 +932,8 @@ impl Connection {
                         ObjectType::OBJECT_RULE => CommandTag::DropRule,
                         ObjectType::OBJECT_TRIGGER => CommandTag::DropTrigger,
                         ObjectType::OBJECT_FUNCTION => CommandTag::DropFunction,
+                        ObjectType::OBJECT_PROCEDURE => CommandTag::DropProcedure,
+                        ObjectType::OBJECT_ROUTINE => CommandTag::DropRoutine,
                         ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::DropTextSearchTemplate,
@@ -1411,6 +1416,9 @@ impl Connection {
             } else if query::is_query(node) {
                 drop(self.portals.close(b""));
                 self.select(node, &mut notices, &mut late, &mut described)
+            } else if let Node::CallStmt(_) = node {
+                drop(self.portals.close(b""));
+                self.call(node, &mut notices, &mut late, &mut described)
             } else if roles::is_role_statement(node) {
                 drop(self.portals.close(b""));
                 self.role_statement(node, &mut notices)
@@ -1611,6 +1619,29 @@ impl Connection {
                 *described = Some(columns);
                 Err(error)
             }
+        }
+    }
+
+    /// `ExecuteCallStmt`: `CALL` runs as a query that calls the procedure. A procedure with output arguments gives one row with them, and a procedure with none gives no rows.
+    fn call(
+        &self,
+        node: &Node,
+        notices: &mut Vec<Notice>,
+        late: &mut Vec<Notice>,
+        described: &mut Option<Vec<Column>>,
+    ) -> Result<Done, Error> {
+        // `ExecuteCallStmt` describes the row only when it sends the row, so an error gives no description.
+        let done = self.select(node, notices, late, described);
+        if done.is_err() {
+            *described = None;
+        }
+        match done? {
+            Done::Rows { columns, rows, .. }
+                if columns.first().is_none_or(|c| c.ty != rupg_types::oid::VOID) =>
+            {
+                Ok(Done::Rows { columns, rows, tag: CommandTag::Call })
+            }
+            _ => Ok(Done::Tag(CommandTag::Call)),
         }
     }
 
@@ -4574,6 +4605,12 @@ mod tests {
     #[test]
     fn plpgsql_do() {
         big_stack(|| script(include_str!("connection/plpgsql_do.test")));
+    }
+
+    /// `CREATE PROCEDURE` and `CALL`: input, `INOUT` and `OUT` arguments, named arguments, defaults and `VARIADIC`, the errors of a call of a function with `CALL` and of a procedure with `SELECT`, `RETURN` in a procedure, the options that a procedure cannot have, `CREATE OR REPLACE` that changes the kind, and `DROP`, `DROP ROUTINE` and `ALTER ... RENAME` with the checks of the kind. `connection/procedures.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn procedures() {
+        big_stack(|| script(include_str!("connection/procedures.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

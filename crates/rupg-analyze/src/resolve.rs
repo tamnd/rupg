@@ -8,7 +8,7 @@ use crate::Analyzer;
 use crate::agg::{Kind, Parts};
 use crate::coerce::{AtOpt, Context, Path, can_coerce, find_path};
 use crate::expr::{Expr, ExprKind, Func, FuncForm, NamedArg, NullTreatment};
-use crate::funcargs::arg_defaults;
+use crate::funcargs::{all_arguments, arg_defaults};
 use crate::poly;
 use crate::types;
 
@@ -369,19 +369,27 @@ impl Analyzer<'_> {
         }
     }
 
-    /// `FuncnameGetCandidates` with the defaults of the arguments. `argnames` has the names of the named arguments, which are the last arguments.
+    /// `FuncnameGetCandidates` with the defaults of the arguments. `argnames` has the names of the named arguments, which are the last arguments. With `include_out_arguments`, for a `CALL`, a candidate takes all its arguments, also the output arguments.
     fn func_candidates(
         &self,
         names: &[&str],
         nargs: usize,
         argnames: &[&str],
         expand_variadic: bool,
+        include_out_arguments: bool,
         at: Option<usize>,
     ) -> Result<(Vec<Candidate>, u32)> {
         let (schema, name) = self.split_name(names, at)?;
         let mut flags = if schema.is_some() { SCHEMA_GIVEN } else { 0 };
         let mut list: Vec<Candidate> = Vec::new();
         for proc in builtin::procs_named(name) {
+            let all;
+            let proc = if include_out_arguments {
+                all = all_arguments(proc);
+                &all
+            } else {
+                proc
+            };
             flags |= NAME_EXISTS;
             let pathpos = match schema {
                 Some(ns) if proc.namespace == ns => 0,
@@ -467,6 +475,7 @@ impl Analyzer<'_> {
     }
 
     /// `func_get_detail`. Only the arguments that the call gives decide the match, and not the defaults.
+    #[allow(clippy::too_many_arguments)]
     fn func_detail(
         &self,
         names: &[&str],
@@ -474,11 +483,12 @@ impl Analyzer<'_> {
         inputs: &[u32],
         argnames: &[&str],
         expand_variadic: bool,
+        proc_call: bool,
         at: Option<usize>,
     ) -> Result<(Detail, u32)> {
         let nargs = inputs.len();
         let (candidates, mut flags) =
-            self.func_candidates(names, nargs, argnames, expand_variadic, at)?;
+            self.func_candidates(names, nargs, argnames, expand_variadic, proc_call, at)?;
         let exact = candidates.iter().find(|c| nargs == 0 || c.args[..nargs] == *inputs);
         let best = match exact {
             Some(c) => Some(c.clone()),
@@ -588,19 +598,21 @@ impl Analyzer<'_> {
         })
     }
 
-    /// `ParseFuncOrColumn` for a call of a function. The named arguments come after the positional arguments.
+    /// `ParseFuncOrColumn` for a call of a function. The named arguments come after the positional arguments. `proc_call` is true for the call of a `CALL`, which must find a procedure, and whose arguments are all the arguments of the procedure, also the output arguments.
     pub(crate) fn make_func(
         &mut self,
         names: &[&str],
         mut args: Vec<Expr>,
         variadic_keyword: bool,
         parts: Option<Parts<'_>>,
+        proc_call: bool,
         at: Option<usize>,
     ) -> Result<Expr> {
         if args.len() > FUNC_MAX_ARGS {
+            let what = if proc_call { "procedure" } else { "function" };
             return Err(Error::new(
                 SqlState::TOO_MANY_ARGUMENTS,
-                format!("cannot pass more than {FUNC_MAX_ARGS} arguments to a function"),
+                format!("cannot pass more than {FUNC_MAX_ARGS} arguments to a {what}"),
             )
             .at_opt(at));
         }
@@ -626,14 +638,23 @@ impl Analyzer<'_> {
         let argnames: Vec<&str> = owned_names.iter().map(String::as_str).collect();
         let inputs: Vec<u32> = args.iter().map(|a| a.ty).collect();
         let (detail, flags) =
-            self.func_detail(names, &args, &inputs, &argnames, !variadic_keyword, at)?;
+            self.func_detail(names, &args, &inputs, &argnames, !variadic_keyword, proc_call, at)?;
         let name = names.join(".");
         let proc = match &detail {
             Detail::Normal(c) => builtin::proc_by_oid(c.oid),
             _ => None,
         };
         let prokind = proc.map_or(b'f', |p| p.kind);
-        if prokind == b'p' {
+        let found = matches!(detail, Detail::Normal(_) | Detail::Coercion(_));
+        if proc_call && found && prokind != b'p' {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("{} is not a procedure", signature(&name, &inputs, &argnames)),
+            )
+            .with_hint("To call a function, use SELECT.")
+            .at_opt(at));
+        }
+        if prokind == b'p' && !proc_call {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("{} is a procedure", signature(&name, &inputs, &argnames)),
@@ -648,6 +669,7 @@ impl Analyzer<'_> {
         if let Some(parts) = &parts {
             check_parts(parts, &detail, prokind, aggregate, &name, at)?;
         }
+        let what = if proc_call { "procedure" } else { "function" };
         let candidate = match detail {
             Detail::Coercion(target) => {
                 let arg = args.into_iter().next().expect("one argument");
@@ -656,9 +678,9 @@ impl Analyzer<'_> {
             Detail::Multiple => {
                 return Err(Error::new(
                     SqlState::AMBIGUOUS_FUNCTION,
-                    format!("function {} is not unique", signature(&name, &inputs, &argnames)),
+                    format!("{what} {} is not unique", signature(&name, &inputs, &argnames)),
                 )
-                .with_detail("Could not choose a best candidate function.")
+                .with_detail(format!("Could not choose a best candidate {what}."))
                 .with_hint("You might need to add explicit type casts.")
                 .at_opt(at));
             }
@@ -677,24 +699,26 @@ impl Analyzer<'_> {
                 }
                 let error = Error::new(
                     SqlState::UNDEFINED_FUNCTION,
-                    format!("function {} does not exist", signature(&name, &inputs, &argnames)),
+                    format!("{what} {} does not exist", signature(&name, &inputs, &argnames)),
                 );
                 let error = if flags & NAME_VISIBLE == 0 {
                     if flags & SCHEMA_GIVEN != 0 {
                         error
                     } else if flags & NAME_EXISTS == 0 {
-                        error.with_detail("There is no function of that name.")
+                        error.with_detail(format!("There is no {what} of that name."))
                     } else {
-                        error.with_detail(
-                            "A function of that name exists, but it is not in the search_path.",
-                        )
+                        error.with_detail(format!(
+                            "A {what} of that name exists, but it is not in the search_path."
+                        ))
                     }
                 } else if flags & ARGCOUNT_MATCH == 0 {
-                    error.with_detail(
-                        "No function of that name accepts the given number of arguments.",
-                    )
+                    error.with_detail(format!(
+                        "No {what} of that name accepts the given number of arguments."
+                    ))
                 } else if !argnames.is_empty() && flags & ARGNAMES_MATCH == 0 {
-                    error.with_detail("No function of that name accepts the given argument names.")
+                    error.with_detail(format!(
+                        "No {what} of that name accepts the given argument names."
+                    ))
                 } else if !argnames.is_empty() && flags & ARGNAMES_NONDUP == 0 {
                     error.with_detail("In the closest available match, an argument was specified both positionally and by name.")
                 } else if !argnames.is_empty() && flags & ARGNAMES_ALL == 0 {
@@ -709,7 +733,9 @@ impl Analyzer<'_> {
                     )
                 } else {
                     error
-                        .with_detail("No function of that name accepts the given argument types.")
+                        .with_detail(format!(
+                            "No {what} of that name accepts the given argument types."
+                        ))
                         .with_hint("You might need to add explicit type casts.")
                 };
                 return Err(error.at_opt(at));
@@ -717,6 +743,13 @@ impl Analyzer<'_> {
             Detail::Normal(c) => c,
         };
         let proc = builtin::proc_by_oid(candidate.oid).expect("candidate in pg_proc");
+        let all;
+        let proc = if proc_call {
+            all = all_arguments(proc);
+            &all
+        } else {
+            proc
+        };
         if let Some(numbers) = &candidate.argnumbers {
             for (arg, &number) in args.iter_mut().zip(numbers) {
                 if let ExprKind::NamedArg(na) = &mut arg.kind {
@@ -844,7 +877,7 @@ impl Analyzer<'_> {
             }
             return self.aggregate_call(proc.oid, row.kind, args, parts, variadic, result, at);
         }
-        if prokind != b'f' {
+        if prokind != b'f' && !proc_call {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "a call of this function is not supported yet",
@@ -900,7 +933,8 @@ impl Analyzer<'_> {
             | Kind::IndexPredicate
             | Kind::ExecuteParameter
             | Kind::Transform
-            | Kind::TriggerWhen => {
+            | Kind::TriggerWhen
+            | Kind::CallArgument => {
                 format!("set-returning functions are not allowed in {}", self.kind.name())
             }
             Kind::ValuesSingle | Kind::Other => {

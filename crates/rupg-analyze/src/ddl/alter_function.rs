@@ -14,12 +14,15 @@ use crate::typename::{names, place};
 
 /// True for the kinds of objects of `ALTER FUNCTION` and `ALTER ROUTINE`, which [`super::define`] runs with `RENAME TO`, `SET SCHEMA` and `OWNER TO`.
 pub(super) fn is_function_kind(kind: ObjectType) -> bool {
-    matches!(kind, ObjectType::OBJECT_FUNCTION | ObjectType::OBJECT_ROUTINE)
+    matches!(
+        kind,
+        ObjectType::OBJECT_FUNCTION | ObjectType::OBJECT_PROCEDURE | ObjectType::OBJECT_ROUTINE
+    )
 }
 
 /// The word of `aclcheck_error` with `ACLCHECK_NOT_OWNER` for a function.
 fn owner_word(kind: ObjectType) -> &'static str {
-    if kind == ObjectType::OBJECT_ROUTINE { "routine" } else { "function" }
+    super::drop_function::routine_word(kind)
 }
 
 /// The function name with arguments of a node of `RenameStmt`, `AlterObjectSchemaStmt` or `AlterOwnerStmt`.
@@ -59,10 +62,7 @@ fn whole_number(def: &DefElem, word: &str) -> Result<u32> {
 impl Definer<'_, '_> {
     /// The function of `LookupFuncWithArgs` that a statement changes.
     fn lookup_function(&mut self, kind: ObjectType, item: &ObjectWithArgs) -> Result<Candidate> {
-        if kind == ObjectType::OBJECT_PROCEDURE {
-            return Err(not_yet("ALTER PROCEDURE", None));
-        }
-        self.find_function(item, false)?
+        self.find_function(kind, item, false)?
             .ok_or_else(|| Error::internal("a function that the lookup did not find"))
     }
 

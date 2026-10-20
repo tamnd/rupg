@@ -1151,6 +1151,8 @@ pub struct SessionFunction {
     pub strict: bool,
     pub retset: bool,
     pub volatile: u8,
+    /// `prokind`: `f` for a function or `p` for a procedure.
+    pub kind: u8,
     pub rettype: u32,
     pub argtypes: Vec<u32>,
     /// `proallargtypes`, or empty if all arguments are inputs.
@@ -1257,7 +1259,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
         namespace: new.namespace,
         lang: new.lang,
         variadic: new.variadic,
-        kind: b'f',
+        kind: new.kind,
         strict: new.strict,
         retset: new.retset,
         volatile: new.volatile,
