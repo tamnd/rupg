@@ -103,13 +103,11 @@ row NULL
 SELECT 1
 > COMMENT ON FUNCTION s.f(bigint) IS 'x';
 ERROR 42883 function s.f(bigint) does not exist
-> CREATE ROLE alice;
-CREATE ROLE
-> ALTER FUNCTION s.f(int) OWNER TO alice;
+> ALTER FUNCTION s.f(int) OWNER TO pg_monitor;
 ALTER FUNCTION
 > SELECT proowner::regrole FROM pg_proc WHERE oid = 's.f(int)'::regprocedure;
 fields proowner:4096:4:-1
-row alice
+row pg_monitor
 SELECT 1
 > ALTER FUNCTION s.f(int) OWNER TO nosuch;
 ERROR 42704 role "nosuch" does not exist
@@ -120,5 +118,3 @@ DROP FUNCTION
 > DROP SCHEMA s CASCADE;
 NOTICE 00000 drop cascades to function s.f(text)
 DROP SCHEMA
-> DROP ROLE alice;
-DROP ROLE
