@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.51 (2026-10-20)
+
 ### Added
 
 - `ALTER FUNCTION` and `ALTER ROUTINE` with the options of a function, `RENAME TO`, `SET SCHEMA` and `OWNER TO`, and `COMMENT ON FUNCTION` (#437).
