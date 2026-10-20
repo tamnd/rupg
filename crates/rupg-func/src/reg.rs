@@ -50,10 +50,31 @@ impl Env for SessionEnv<'_> {
     fn catalog(&self) -> Option<&Catalog> {
         self.0.catalog()
     }
+
+    fn temp_number(&self) -> Option<i32> {
+        self.0.temp_number()
+    }
 }
 
-/// The OID of the schema with this name.
+/// `myTempNamespace`: the OID of the temporary schema of the session, or 0 when it has none yet.
+pub(crate) fn temp_namespace(session: &dyn Session) -> u32 {
+    session
+        .catalog()
+        .map_or(0, |catalog| rupg_analyze::temp_namespace(&SessionEnv(session), catalog))
+}
+
+/// `isTempOrTempToastNamespace`: true for the temporary schema of the session and its TOAST schema.
+pub(crate) fn is_own_temp(oid: u32, session: &dyn Session) -> bool {
+    let Some(n) = session.temp_number() else { return false };
+    namespace_name(oid, session)
+        .is_some_and(|name| name == format!("pg_temp_{n}") || name == format!("pg_toast_temp_{n}"))
+}
+
+/// The OID of the schema with this name. `pg_temp` names the temporary schema of the session.
 fn namespace_oid(name: &str, session: &dyn Session) -> Option<u32> {
+    if name == "pg_temp" {
+        return Some(temp_namespace(session)).filter(|&oid| oid != 0);
+    }
     builtin::named(Named::Namespace)
         .iter()
         .find(|row| row.name == name)
@@ -68,12 +89,24 @@ pub(crate) fn namespace_name(oid: u32, session: &dyn Session) -> Option<&str> {
         .or_else(|| session.catalog()?.schema(oid).map(|s| s.name.as_str()))
 }
 
-/// The schemas that an unqualified name searches: `pg_catalog` first when `search_path` does not name it, then the schemas of `search_path` that exist.
+/// The schemas that an unqualified name of a function, an operator or another object that is not a relation or a type searches: `pg_catalog` first when `search_path` does not name it, then the schemas of `search_path` that exist. The lookups of `namespace.c` skip the temporary schema.
 pub(crate) fn path(session: &dyn Session) -> Vec<u32> {
+    let mut path = temp_path(session);
+    let temp = temp_namespace(session);
+    path.retain(|&ns| ns != temp);
+    path
+}
+
+/// `activeSearchPath`: the schemas that an unqualified name of a relation or a type searches. The temporary schema of the session comes first, then `pg_catalog`, when `search_path` does not name them.
+pub(crate) fn temp_path(session: &dyn Session) -> Vec<u32> {
     let mut path: Vec<u32> =
         session.schemas().iter().filter_map(|n| namespace_oid(n, session)).collect();
     if !path.contains(&PG_CATALOG) {
         path.insert(0, PG_CATALOG);
+    }
+    let temp = temp_namespace(session);
+    if temp != 0 && !path.contains(&temp) {
+        path.insert(0, temp);
     }
     path
 }
@@ -271,13 +304,13 @@ pub(crate) fn type_name(oid: u32, session: &dyn Session) -> Option<(&str, u32)> 
 /// `RelationIsVisible`, or `None` when no relation has the OID.
 pub(crate) fn class_visible(oid: u32, session: &dyn Session) -> Option<bool> {
     let (name, _) = class_name(oid, session)?;
-    Some(find_class(&path(session), name, session) == Some(oid))
+    Some(find_class(&temp_path(session), name, session) == Some(oid))
 }
 
 /// `TypeIsVisible`, or `None` when no type has the OID.
 pub(crate) fn type_visible(oid: u32, session: &dyn Session) -> Option<bool> {
     let (name, _) = type_name(oid, session)?;
-    Some(find_type(&path(session), name, session) == Some(oid))
+    Some(find_type(&temp_path(session), name, session) == Some(oid))
 }
 
 /// `FuncnameGetCandidates`: the functions with the name in the schemas, in the order of the schemas. A function with the same argument types as a function in a schema before it is hidden.
@@ -676,7 +709,7 @@ fn class_in(names: &[Cow<'_, str>], session: &dyn Session, strict: bool) -> Soft
             }
             None => Vec::new(),
         },
-        None => path(session),
+        None => temp_path(session),
     };
     if let Some(oid) = find_class(&spaces, name, session) {
         return Ok(Ok(oid));

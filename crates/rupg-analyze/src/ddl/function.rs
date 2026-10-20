@@ -418,7 +418,7 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
     let stmts = statements(stmt, src)?;
     let params = Params { types: inputs.to_vec(), variable: false };
     let mut an = Analyzer::new(env, &params);
-    an.path.clone_from(&body.path);
+    an.set_path(&body.path);
     an.sql_function = Some((function.name.clone(), input_names(function)));
     an.body(function, &stmts, inputs).map(Some)
 }
@@ -660,7 +660,7 @@ impl Definer<'_, '_> {
         if !(polymorphic && matches!(stmts, Statements::String(_))) {
             let params = Params { types: function.argtypes.clone(), variable: false };
             let mut an = Analyzer::new(self.an.env, &params);
-            an.path.clone_from(&self.an.path);
+            an.set_path(&self.an.path);
             an.sql_function = Some((function.name.clone(), input_names(&function)));
             let body = an.body(&function, &stmts, &function.argtypes).map_err(transpose)?;
             self.an.notices.append(&mut an.notices);

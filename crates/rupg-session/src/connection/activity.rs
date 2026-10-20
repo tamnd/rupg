@@ -42,6 +42,11 @@ pub(crate) struct Activity {
 }
 
 impl Activity {
+    /// The number of the session in the table, after [`Connection::greet`].
+    pub(crate) fn number(&self) -> Option<i32> {
+        self.number
+    }
+
     /// The snapshot of the transaction. The first read takes it, after it writes the current `application_name` of the session, which PostgreSQL writes when the setting changes.
     pub(crate) fn backends(&self, store: &Store, settings: &Settings) -> Arc<[Backend]> {
         let mut snapshot = self.snapshot.borrow_mut();

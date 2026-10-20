@@ -556,7 +556,7 @@ impl Analyzer<'_> {
             return Err(Error::internal("the query of a view is not a SELECT"));
         };
         let mut an = Analyzer::new(self.env, &crate::Params::default());
-        an.path.clone_from(&view.path);
+        an.set_path(&view.path);
         an.views.clone_from(&self.views);
         an.views.push(oid);
         an.select(select).map(Some).map_err(|error| error.with_position(None))
@@ -1234,7 +1234,7 @@ impl Analyzer<'_> {
         match &rv.schemaname {
             // A schema that does not exist has no relation, as RangeVarGetRelid with missing_ok gives.
             Some(schema) => Ok(self.schema(schema).and_then(in_schema)),
-            None => Ok(self.path.iter().find_map(|&ns| in_schema(ns))),
+            None => Ok(self.temp_path.iter().find_map(|&ns| in_schema(ns))),
         }
     }
 

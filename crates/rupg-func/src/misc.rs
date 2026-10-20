@@ -24,12 +24,19 @@ fn current_schema(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(call.session.schemas().into_iter().next().map_or(Value::Null, Value::Text))
 }
 
-/// `current_schemas(bool)`: the schemas of the search path that exist, with `pg_catalog` first when the argument is true and the path does not name it.
+/// `current_schemas(bool)`: the schemas of the search path that exist. When the argument is true, `pg_catalog` and then the temporary schema of the session come first when the path does not name them.
 fn current_schemas(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let implicit = args.first().and_then(Value::as_bool).ok_or_else(bad_value)?;
     let mut schemas = call.session.schemas();
     if implicit && !schemas.iter().any(|s| s == "pg_catalog") {
         schemas.insert(0, "pg_catalog".to_string());
+    }
+    let temp = crate::reg::temp_namespace(call.session);
+    if implicit
+        && let Some(name) = crate::reg::namespace_name(temp, call.session)
+        && !schemas.iter().any(|s| s == name)
+    {
+        schemas.insert(0, name.to_string());
     }
     let values = schemas.into_iter().map(|s| Some(Value::Text(s))).collect();
     Ok(Value::Array(Box::new(Array::one(values))))

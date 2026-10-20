@@ -224,7 +224,7 @@ impl Definer<'_, '_> {
         let name = relname(rv);
         Ok(match rv.schemaname.as_deref() {
             Some(schema) => self.an.schema(schema).and_then(|ns| self.relation_in(ns, name)),
-            None => self.an.path.iter().find_map(|&ns| self.relation_in(ns, name)),
+            None => self.an.temp_path.iter().find_map(|&ns| self.relation_in(ns, name)),
         })
     }
 
@@ -533,7 +533,7 @@ impl Definer<'_, '_> {
         name: &str,
         exists: impl Fn(u32) -> bool,
     ) -> String {
-        let first = self.an.path.iter().copied().find(|&ns| ns == namespace || exists(ns));
+        let first = self.an.temp_path.iter().copied().find(|&ns| ns == namespace || exists(ns));
         if first == Some(namespace) && namespace != PG_TOAST_NAMESPACE {
             return quote_identifier(name);
         }

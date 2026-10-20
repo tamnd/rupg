@@ -192,7 +192,7 @@ impl Analyzer<'_> {
     /// `LookupTypeName`: the type with this name, in the schema that the name gives or in the search path.
     fn lookup_type(&self, names: &[&str], at: Option<usize>) -> Result<Option<Found>> {
         match names {
-            [name] => Ok(self.path.iter().find_map(|&ns| self.type_in(ns, name))),
+            [name] => Ok(self.temp_path.iter().find_map(|&ns| self.type_in(ns, name))),
             [schema, name] => {
                 let ns = self.schema(schema).ok_or_else(|| {
                     Error::new(
