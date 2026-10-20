@@ -363,6 +363,8 @@ impl Compiler<'_> {
                 }
                 Ok(())
             }
+            // A field is assignable when its record is.
+            DatumKind::Field { rec, .. } => self.check_assignable(*rec, at),
             _ if datum.constant => Err(Error::new(
                 SqlState::ERROR_IN_ASSIGNMENT,
                 format!("variable \"{}\" is declared CONSTANT", datum.name),
@@ -997,7 +999,7 @@ impl Compiler<'_> {
         let of = |d: usize| match self.datums[d].kind {
             DatumKind::Var { ty, typmod } => Some((ty, typmod)),
             DatumKind::Rec { ty } => Some((ty, -1)),
-            DatumKind::Row { .. } => None,
+            DatumKind::Row { .. } | DatumKind::Field { .. } => None,
         };
         let (relation, column) = match names {
             [name] => {
@@ -1293,15 +1295,16 @@ impl Compiler<'_> {
         let mut var = ForVar { name: w.name(), start: t.start, scalar: None, row: None };
         match &w.datum {
             Some((d, field)) => {
-                if field.is_some() {
-                    return Err(not_yet("a field of a record as a loop variable"));
-                }
-                if !matches!(self.datums[*d].kind, DatumKind::Var { .. }) {
-                    var.row = Some(*d);
+                let d = match field {
+                    Some(name) => self.field_datum(*d, name),
+                    None => *d,
+                };
+                if !matches!(self.datums[d].kind, DatumKind::Var { .. } | DatumKind::Field { .. }) {
+                    var.row = Some(d);
                 } else {
-                    var.scalar = Some(*d);
+                    var.scalar = Some(d);
                     if self.sc.peek()?.is_char(b',') {
-                        var.row = Some(self.scalar_list(*d, w.start)?);
+                        var.row = Some(self.scalar_list(d, w.start)?);
                     }
                 }
             }
@@ -1824,9 +1827,10 @@ impl Compiler<'_> {
                 let name = w.map(|w| w.name()).unwrap_or_default();
                 return Err(syntax_at(format!("\"{name}\" is not a scalar variable"), v.start));
             }
-            if field.is_some() {
-                return Err(not_yet("a field of a record as a target of GET DIAGNOSTICS"));
-            }
+            let d = match field {
+                Some(name) => self.field_datum(d, &name),
+                None => d,
+            };
             self.check_assignable(d, v.start)?;
             let op = self.sc.next()?;
             if !is_assign(&op) {
@@ -1874,10 +1878,11 @@ impl Compiler<'_> {
         let Some((d, field)) = w.as_ref().and_then(|w| w.datum.clone()) else {
             return Err(self.not_variable(&t, w.as_ref()));
         };
-        if field.is_some() {
-            return Err(not_yet("a field of a record as a target of INTO"));
-        }
-        if !matches!(self.datums[d].kind, DatumKind::Var { .. }) {
+        let d = match field {
+            Some(name) => self.field_datum(d, &name),
+            None => d,
+        };
+        if !matches!(self.datums[d].kind, DatumKind::Var { .. } | DatumKind::Field { .. }) {
             self.check_assignable(d, t.start)?;
             let n = self.sc.peek()?;
             if n.is_char(b',') {
@@ -1891,6 +1896,16 @@ impl Compiler<'_> {
         Ok((self.scalar_list(d, t.start)?, strict))
     }
 
+    /// `plpgsql_build_recfield`: the variable of the field `name` of the record `rec`. A field that has a variable keeps it.
+    fn field_datum(&mut self, rec: usize, name: &str) -> usize {
+        let found = self.datums.iter().position(|datum| {
+            matches!(&datum.kind, DatumKind::Field { rec: r, name: n } if *r == rec && n == name)
+        });
+        found.unwrap_or_else(|| {
+            self.add_datum(name, DatumKind::Field { rec, name: name.to_owned() })
+        })
+    }
+
     /// `read_into_scalar_list`: a row of the variable `first` and the variables after it, which commas join.
     fn scalar_list(&mut self, first: usize, at: usize) -> Result<usize> {
         self.check_assignable(first, at)?;
@@ -1902,11 +1917,12 @@ impl Compiler<'_> {
             let Some((d, field)) = w.as_ref().and_then(|w| w.datum.clone()) else {
                 return Err(self.not_variable(&t, w.as_ref()));
             };
-            if field.is_some() {
-                return Err(not_yet("a field of a record as a target of INTO"));
-            }
+            let d = match field {
+                Some(name) => self.field_datum(d, &name),
+                None => d,
+            };
             self.check_assignable(d, t.start)?;
-            if !matches!(self.datums[d].kind, DatumKind::Var { .. }) {
+            if !matches!(self.datums[d].kind, DatumKind::Var { .. } | DatumKind::Field { .. }) {
                 let name = w.map(|w| w.name()).unwrap_or_default();
                 return Err(syntax_at(format!("\"{name}\" is not a scalar variable"), t.start));
             }

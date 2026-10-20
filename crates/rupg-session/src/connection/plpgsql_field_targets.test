@@ -1,0 +1,67 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE pair AS (a int, b text);
+CREATE TYPE
+> DO $$ DECLARE r pair; BEGIN SELECT 1, 'x' INTO r.a, r.b; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(1,x) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN SELECT 7 INTO r.a; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(7,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; n int; BEGIN SELECT 5, 6 INTO n, r.a; RAISE NOTICE 'n=% r=%', n, r; END $$;
+NOTICE 00000 n=5 r=(6,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN SELECT '12' INTO r.a; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(12,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN SELECT 'zz' INTO r.a; END $$;
+ERROR 22P02 invalid input syntax for type integer: "zz" (PL/pgSQL function inline_code_block line 1 at SQL statement)
+> DO $$ DECLARE r pair; BEGIN SELECT 1 INTO r.c; END $$;
+ERROR 42703 record "r" has no field "c" (PL/pgSQL function inline_code_block line 1 at SQL statement)
+> DO $$ DECLARE r record; BEGIN SELECT 1 INTO r.a; END $$;
+ERROR 55000 record "r" is not assigned yet (PL/pgSQL function inline_code_block line 1 at SQL statement)
+DETAIL The tuple structure of a not-yet-assigned record is indeterminate.
+> DO $$ DECLARE r record; BEGIN SELECT 1 AS a, 2 AS b INTO r; SELECT 9 INTO r.b; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(1,9) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN SELECT 1 INTO STRICT r.a FROM generate_series(1, 2); END $$;
+ERROR P0003 query returned more than one row (PL/pgSQL function inline_code_block line 1 at SQL statement)
+HINT Make sure the query returns a single row, or use LIMIT 1.
+> DO $$ DECLARE r pair; BEGIN SELECT 1 INTO r.a WHERE false; RAISE NOTICE 'r=% found=%', r, found; END $$;
+NOTICE 00000 r=(,) found=f (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN PERFORM 1; GET DIAGNOSTICS r.a = ROW_COUNT; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(1,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN EXECUTE 'SELECT 3, $1' INTO r.a, r.b USING 'q'; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(3,q) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'one'), (2, 'two');
+INSERT 0 2
+> DO $$ DECLARE r pair; BEGIN UPDATE t SET b = b || '!' WHERE a = 1 RETURNING a, b INTO r.a, r.b; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(1,one!) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN FOR r.a IN 1..2 LOOP RAISE NOTICE 'r=%', r; END LOOP; END $$;
+NOTICE 00000 r=<NULL> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=<NULL> (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN FOR r.a, r.b IN SELECT a, b FROM t ORDER BY a LOOP RAISE NOTICE 'r=%', r; END LOOP; END $$;
+NOTICE 00000 r=(1,one!) (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(2,two) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN FOR r.a IN SELECT a FROM t ORDER BY a LOOP RAISE NOTICE 'r=%', r; END LOOP; END $$;
+NOTICE 00000 r=(1,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(2,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pair; BEGIN FOREACH r.a IN ARRAY ARRAY[4,5] LOOP RAISE NOTICE 'r=%', r; END LOOP; END $$;
+NOTICE 00000 r=(4,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(5,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r CONSTANT pair := ROW(1, 'a'); BEGIN SELECT 2 INTO r.a; END $$;
+ERROR 22005 variable "r" is declared CONSTANT at 67
+> DO $$ DECLARE r pair; BEGIN r.a := 3; SELECT r.a + 1 INTO r.a; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(4,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
