@@ -174,8 +174,18 @@ mod stack {
     const KEEP: usize = 16 << 10;
 
     thread_local! {
-        /// The lowest address of the stack of this thread. It is 0 before the first call, and `usize::MAX` when the system does not give it.
-        static LOW: Cell<usize> = const { Cell::new(0) };
+        /// The lowest address of the stack of this thread and the address after its end. Both are 0 before the first call, and both are `usize::MAX` when the system does not give them.
+        static STACK: Cell<(usize, usize)> = const { Cell::new((0, 0)) };
+    }
+
+    /// The addresses of the stack of this thread, as [`STACK`] has them.
+    fn stack() -> (usize, usize) {
+        STACK.with(|stack| {
+            if stack.get() == (0, 0) {
+                stack.set(stack_range().unwrap_or((usize::MAX, usize::MAX)));
+            }
+            stack.get()
+        })
     }
 
     /// Gives back the pages of the stack below the current frame, less [`KEEP`] bytes. The next use of these pages gets new pages of zeros.
@@ -183,12 +193,11 @@ mod stack {
     pub(super) fn trim() {
         let here = 0u8;
         let top = ptr::from_ref(&here).addr();
-        let low = LOW.with(|low| {
-            if low.get() == 0 {
-                low.set(stack_low().unwrap_or(usize::MAX));
-            }
-            low.get()
-        });
+        let (low, high) = stack();
+        // With the address sanitizer, a local can be on a fake stack on the heap. Then the frames of this thread are not known, and no page is released.
+        if !(low..high).contains(&top) {
+            return;
+        }
         let page = page_size();
         // The first page above the lowest address is not released. It can be a guard page.
         let start = low.saturating_add(2 * page - 1) & !(page - 1);
@@ -201,8 +210,8 @@ mod stack {
         }
     }
 
-    /// The lowest address of the stack of this thread, from `pthread_getattr_np`.
-    fn stack_low() -> Option<usize> {
+    /// The lowest address of the stack of this thread and the address after its end, from `pthread_getattr_np`.
+    fn stack_range() -> Option<(usize, usize)> {
         let mut attr = MaybeUninit::<libc::pthread_attr_t>::uninit();
         // SAFETY: `pthread_getattr_np` fills `attr` when it gives 0, and `pthread_attr_destroy` releases it after the read.
         unsafe {
@@ -213,7 +222,7 @@ mod stack {
             let mut size = 0;
             let got = libc::pthread_attr_getstack(attr.as_ptr(), &raw mut addr, &raw mut size);
             libc::pthread_attr_destroy(attr.as_mut_ptr());
-            (got == 0 && size > 0).then(|| addr.addr())
+            (got == 0 && size > 0).then(|| (addr.addr(), addr.addr() + size))
         }
     }
 
@@ -258,6 +267,11 @@ mod stack {
                 "trim",
                 Box::new(|| {
                     let deepest = deep(1024);
+                    let (low, high) = stack();
+                    // With the address sanitizer, the frames can be on a fake stack on the heap, and the trim does not release them.
+                    if !(low..high).contains(&deepest) {
+                        return;
+                    }
                     assert!(resident(deepest));
                     OsTasks.trim_stack();
                     assert!(!resident(deepest));
