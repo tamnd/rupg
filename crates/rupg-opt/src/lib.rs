@@ -45,6 +45,8 @@ struct Builder<'q> {
     ctes: Vec<CteUse<'q>>,
     /// The rows of the part of each recursive query that is not recursive, by the number of its work table, for the estimate of a `WorkTableScan`.
     work: Vec<(usize, f64)>,
+    /// True when the next query is the subquery of `EXISTS`.
+    exists: bool,
 }
 
 /// A query of `WITH` in the scope of the planner.
@@ -67,6 +69,8 @@ pub(crate) struct Level<'q> {
     pub(crate) display_query: &'q Query,
     /// The subplans that run once before the top node: the queries of `WITH` and the subqueries with no reference to the query.
     pub(crate) init: Vec<SubPlan<'q>>,
+    /// True when the query gives no targets, as `simplify_EXISTS_query` makes the subquery of `EXISTS`.
+    pub(crate) no_targets: bool,
 }
 
 impl<'q> Level<'q> {
@@ -77,6 +81,19 @@ impl<'q> Level<'q> {
 }
 
 /// The query of the rows of a statement with the conditions of check constraints, which `with_checks` of the analyzer puts around the query of the rows.
+/// True when `simplify_EXISTS_query` takes out the targets of the subquery of `EXISTS`: a query with no set operation, aggregate, window, `HAVING`, `LIMIT`, `OFFSET` or row lock.
+fn simple_exists(query: &Query) -> bool {
+    query.set_op.is_none()
+        && !query.grouped
+        && query.having.is_none()
+        && query.windows.is_empty()
+        && query.limit.is_none()
+        && query.offset.is_none()
+        && query.row_marks.is_empty()
+        && query.sort.is_empty()
+        && query.distinct.is_empty()
+}
+
 fn unwrap_checks(query: &Query) -> &Query {
     let Some(write) = &query.write else { return query };
     match query.relations.as_slice() {
@@ -96,8 +113,15 @@ impl<'q> Builder<'q> {
         let query = unwrap_checks(outer);
         let target = write.is_some_and(|w| w.kind == WriteKind::Insert);
         let scope = self.push_scope(query, parent, target);
-        let mut level =
-            Level { scope, query, display: scope, display_query: query, init: Vec::new() };
+        let no_targets = std::mem::take(&mut self.exists) && simple_exists(query);
+        let mut level = Level {
+            scope,
+            query,
+            display: scope,
+            display_query: query,
+            init: Vec::new(),
+            no_targets,
+        };
         let depth = self.ctes.len();
         if !std::ptr::eq(outer, query) {
             self.ctes_of(outer, &mut level);
@@ -192,6 +216,7 @@ impl<'q> Builder<'q> {
         let name = format!("{prefix}_{}", self.counts[index]);
         let correlated = exprs::correlated(&link.query, 1);
         let scope = level.scope;
+        self.exists = link.kind == SubLinkKind::Exists;
         let mut plan = self.subplan(|b| b.query(&link.query, Some(scope)));
         let init = !correlated && !matches!(link.kind, SubLinkKind::Any | SubLinkKind::All);
         let hashed = !correlated && link.kind == SubLinkKind::Any && hashable_test(link);

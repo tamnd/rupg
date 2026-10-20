@@ -382,6 +382,7 @@ dependencies = [
  "rupg-catalog",
  "rupg-common",
  "rupg-pgcatalog",
+ "rupg-plan",
  "rupg-sql",
  "rupg-types",
  "sha2",
@@ -433,6 +434,12 @@ dependencies = [
 [[package]]
 name = "rupg-opt"
 version = "0.1.51"
+dependencies = [
+ "rupg-analyze",
+ "rupg-pgcatalog",
+ "rupg-plan",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-pgcatalog"
@@ -441,6 +448,10 @@ version = "0.1.51"
 [[package]]
 name = "rupg-plan"
 version = "0.1.51"
+dependencies = [
+ "rupg-analyze",
+ "rupg-common",
+]
 
 [[package]]
 name = "rupg-platform"
@@ -479,7 +490,9 @@ dependencies = [
  "rupg-common",
  "rupg-exec",
  "rupg-func",
+ "rupg-opt",
  "rupg-pgcatalog",
+ "rupg-plan",
  "rupg-platform",
  "rupg-snowball",
  "rupg-sql",

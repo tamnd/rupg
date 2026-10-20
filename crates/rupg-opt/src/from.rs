@@ -321,6 +321,17 @@ pub(crate) fn function_rows(call: &Expr) -> f64 {
             }
         }
     }
+    // `array_unnest_support`: the number of the elements of the array, as `estimate_array_length`.
+    if name == Some("unnest")
+        && let [array] = f.args.as_slice()
+    {
+        return match &array.strip_implicit().kind {
+            ExprKind::Const(Value::Array(a)) => a.values.len() as f64,
+            ExprKind::Const(Value::Null) => 0.0,
+            ExprKind::Array { multidims: false, elements, .. } => elements.len() as f64,
+            _ => 10.0,
+        };
+    }
     match name {
         _ if !f.retset => 1.0,
         Some(

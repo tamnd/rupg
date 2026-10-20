@@ -262,8 +262,9 @@ impl Explainer<'_, '_> {
         if matches!(
             node.kind,
             Kind::NestedLoop { .. } | Kind::MergeJoin { .. } | Kind::HashJoin { .. }
-        ) && (!text || self.options.verbose)
+        ) && !text
         {
+            // The planner does not prove that the inner side is unique yet, and the text form shows only a true value.
             self.w.boolean("Inner Unique", false);
         }
         self.parts(node)?;

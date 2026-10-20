@@ -1064,6 +1064,11 @@ fn run_query(
 }
 
 impl Plan {
+    /// The query of the plan after `prepare` and `fold`, which `EXPLAIN` shows.
+    pub fn query(&self) -> &Query {
+        &self.query
+    }
+
     /// The columns of the result. The junk columns of `ORDER BY` do not count. A query that writes has the columns of its `RETURNING`, or none.
     pub fn columns(&self) -> &[Target] {
         if let Some(write) = &self.query.write {

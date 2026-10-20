@@ -37,6 +37,7 @@ mod copy_from;
 mod cursor;
 mod databases;
 mod deferred;
+mod explain;
 mod extended;
 mod foreign;
 mod merge;
@@ -1234,6 +1235,9 @@ impl Connection {
             } else if prepare::is_prepare(node) {
                 drop(self.portals.close(b""));
                 self.run_prepare(node, text, &[], &mut notices, 0)
+            } else if let Node::ExplainStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                self.explain(stmt, &mut notices)
             } else if query::is_query(node) {
                 drop(self.portals.close(b""));
                 self.select(node, &mut notices, &mut late, &mut described)
@@ -2541,6 +2545,18 @@ mod tests {
     #[test]
     fn prepared_statements() {
         big_stack(|| script(include_str!("connection/prepared_statements.test")));
+    }
+
+    /// `EXPLAIN`: the options and their errors, the text, JSON, XML and YAML forms, the costs of the scans, the joins, the aggregates, the windows, the set operations, the sorts, `LIMIT`, the subplans and the init plans of subqueries, the statements that write a table, and `VERBOSE` with the outputs of the nodes. `connection/explain.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain() {
+        big_stack(|| script(include_str!("connection/explain.test")));
+    }
+
+    /// `EXPLAIN` of the queries on a table with a primary key, whose plans do not use the index. `connection/explain_keys.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_keys() {
+        big_stack(|| script(include_str!("connection/explain_keys.test")));
     }
 
     /// Cursors: `DECLARE` with each option, `FETCH` and `MOVE` in each direction on cursors that can and cannot scan backward, `CLOSE` and `CLOSE ALL`, the view `pg_cursors`, a cursor `WITH HOLD` after a commit and after a rollback, the errors of the statements and of the grammar, `Describe` of a statement of `FETCH` and of the portal of a cursor, and `Close` of the portal. `connection/cursors.test` is the output of PostgreSQL 19 for the same script in a new database, without the rows of a `BINARY` cursor and without a query that fails after the first row.

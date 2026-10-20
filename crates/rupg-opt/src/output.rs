@@ -3,13 +3,17 @@
 //! The width of a node is the width of the values that the nodes above it read, as the width of the `PathTarget` of its path. A scan below a join or an `Agg` gives all the columns of its relation, as a physical target list, but its width counts only the columns that the nodes above read.
 
 use rupg_analyze::{Expr, ExprKind, Var};
-use rupg_plan::{Item, Kind, Node};
+use rupg_plan::{Item, Kind, Node, Operation};
 
 use crate::{Level, cost, exprs, from};
 
 /// Sets the target lists and the widths of the nodes of the plan of a query level.
 pub(crate) fn level<'q>(level: &Level<'q>, node: &mut Node<'q>) {
-    let want = level.display_query.targets.iter().map(|t| Item::of(&t.expr)).collect();
+    let want = if level.no_targets {
+        Vec::new()
+    } else {
+        level.display_query.targets.iter().map(|t| Item::of(&t.expr)).collect()
+    };
     set(level, node, want, false);
 }
 
@@ -52,8 +56,8 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.output = want.iter().map(Item::passed).collect();
             node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
         }
-        Kind::Modify { .. } => {
-            let want = level.query.targets.iter().map(|t| Item::of(&t.expr)).collect();
+        Kind::Modify { operation, .. } => {
+            let want = modify_targets(level, *operation);
             if let Some(child) = node.children.first_mut() {
                 set(level, child, want, false);
             }
@@ -94,6 +98,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             let vars = keys.iter().all(is_var)
                 && keys.iter().enumerate().all(|(i, k)| !keys[..i].iter().any(|o| o.same(k)));
             grouped(level, node, want, &keys, vars);
+            keys_below(node);
         }
         Kind::WindowAgg { window, .. } => {
             let clause = &level.query.windows[*window];
@@ -139,6 +144,13 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::WorkTableScan(r) => {
             let r = *r;
             node.cost.width = width(level, node.scope, &want);
+            if let Some(output) = simple_values(level, node, r, &want) {
+                node.kind = Kind::Result { replaces: None, one_time: Vec::new() };
+                node.cost.startup = 0.0;
+                node.cost.total = cost::CPU_TUPLE;
+                node.output = output;
+                return;
+            }
             let plain =
                 want.iter().all(|w| matches!(w.expr.kind, ExprKind::Var(v) if v.attnum > 0));
             node.output = if physical && plain { all_columns(level, r) } else { want };
@@ -150,6 +162,60 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
         }
     }
+}
+
+/// The items that the rows below a `ModifyTable` give, as `preprocess_targetlist`. An `UPDATE` gives the new values of the columns of `SET` and the ID of the version of the row, and a `DELETE` gives only the ID. The node computes `RETURNING` from the old and the new rows.
+fn modify_targets<'q>(level: &Level<'q>, operation: Operation) -> Vec<Item<'q>> {
+    let query = level.query;
+    let all = || query.targets.iter().map(|t| Item::of(&t.expr)).collect();
+    let (Some(write), Some(tid)) = (&query.write, query.targets.last()) else { return all() };
+    match operation {
+        Operation::Update if write.width < query.targets.len() => {
+            let mut out: Vec<Item<'q>> = query.targets[..write.width]
+                .iter()
+                .enumerate()
+                .filter(|(i, t)| {
+                    !matches!(t.expr.kind, ExprKind::Var(v) if v.relation == 0 && v.levels_up == 0 && usize::try_from(v.attnum).ok() == Some(i + 1))
+                })
+                .map(|(_, t)| Item::of(&t.expr))
+                .collect();
+            out.push(Item::of(&tid.expr));
+            out
+        }
+        Operation::Delete => vec![Item::of(&tid.expr)],
+        _ => all(),
+    }
+}
+
+/// `pull_up_simple_values`: the expressions of the row of a `VALUES` with one row that is the only relation of a query, which a `Result` gives in place of the `Values Scan`. The items must be columns of the row.
+fn simple_values<'q>(
+    level: &Level<'q>,
+    node: &Node<'q>,
+    r: usize,
+    want: &[Item<'q>],
+) -> Option<Vec<Item<'q>>> {
+    let query = level.query;
+    if !matches!(node.kind, Kind::ValuesScan(_))
+        || node.scope != level.scope
+        || query.relations.len() != 1
+        || query.write.is_some()
+        || !node.filter.is_empty()
+    {
+        return None;
+    }
+    let [row] = query.relations[r].values.as_deref()? else { return None };
+    if row.iter().any(exprs::volatile) {
+        return None;
+    }
+    want.iter()
+        .map(|w| match w.expr.kind {
+            ExprKind::Var(v) if v.relation == r && v.levels_up == 0 => {
+                let column = usize::try_from(v.attnum).ok()?.checked_sub(1)?;
+                row.get(column).map(Item::of)
+            }
+            _ => None,
+        })
+        .collect()
 }
 
 /// The columns of a relation of the query, as `build_physical_tlist`.
@@ -226,6 +292,22 @@ fn grouped<'q>(
     }
     node.cost.width = width(level, node.scope, &output);
     node.output = output;
+}
+
+/// The keys of an `Agg` show as the expressions of the node below it, as `show_sort_group_keys` finds them in its target list. A key is in parentheses only when that node reads it from a node below it.
+fn keys_below(node: &mut Node<'_>) {
+    let Some(child) = node.children.first() else { return };
+    let below = |item: &Item<'_>| {
+        child.output.iter().find(|o| o.expr.same(&item.expr)).map_or(item.below, |o| o.below)
+    };
+    let Kind::Aggregate { keys, sets, .. } = &node.kind else { return };
+    let flags: Vec<bool> = keys.iter().chain(sets.iter().flat_map(|(_, s)| s)).map(below).collect();
+    if let Kind::Aggregate { keys, sets, .. } = &mut node.kind {
+        let items = keys.iter_mut().chain(sets.iter_mut().flat_map(|(_, s)| s));
+        for (item, flag) in items.zip(flags) {
+            item.below = flag;
+        }
+    }
 }
 
 /// The target list of a join: the items that the parent reads. Each side gives the columns of its relations that the join and the nodes above it read, and the columns that a lateral reference of the other side reads.

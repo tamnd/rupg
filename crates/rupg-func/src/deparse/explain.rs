@@ -1,0 +1,274 @@
+//! The texts of a plan for `EXPLAIN`: the names of its relations, as `select_rtable_names_for_explain` chooses them, and its expressions, as `deparse_expression` shows them with the context of `set_deparse_context_plan`.
+
+use std::collections::HashMap;
+use std::ptr;
+
+use rupg_analyze::{Expr, SubLink, SubLinkKind};
+use rupg_plan::{Kind, Node, Plan, TARGET, Texts};
+use rupg_sql::nodes::FRAMEOPTION_NONDEFAULT;
+
+use super::{
+    Deparser, Error, Namespace, Result, SubName, builtin, quote_identifier, reg, sort_operators,
+};
+use crate::Session;
+
+/// The output of `EXPLAIN` for a plan, with the names and the expressions that the session shows.
+///
+/// # Errors
+///
+/// The errors of the deparse of the expressions.
+pub fn explain(
+    plan: &Plan<'_>,
+    options: &rupg_plan::Options,
+    session: &dyn Session,
+) -> Result<String> {
+    let mut texts = PlanTexts::new(plan, session);
+    rupg_plan::explain(plan, options, &mut texts)
+}
+
+/// The names of the relations of each query of a plan and the names of its subplans and of its windows.
+struct PlanTexts<'a, 'q> {
+    session: &'a dyn Session,
+    plan: &'a Plan<'q>,
+    /// The names of each scope of the plan.
+    spaces: Vec<Namespace>,
+    /// The name of the target table of each scope of an `INSERT`.
+    targets: Vec<Option<String>>,
+    /// The name of each window of each scope, as `WindowAgg.winname`.
+    windows: Vec<Vec<Option<String>>>,
+    subplans: Vec<SubName>,
+}
+
+impl<'a, 'q> PlanTexts<'a, 'q> {
+    /// The names of the relations of the plan. The scopes in [`Plan::order`] take their names in that order, and each name is unique in all of them. The target table of an `INSERT` is the first relation of its query.
+    fn new(plan: &'a Plan<'q>, session: &'a dyn Session) -> PlanTexts<'a, 'q> {
+        let d = Deparser::new(session, false, 0);
+        let count = plan.scopes.len();
+        let mut spaces: Vec<Option<Namespace>> = vec![None; count];
+        let mut targets = vec![None; count];
+        let mut used: HashMap<String, u32> = HashMap::new();
+        for &s in &plan.order {
+            let Some(scope) = plan.scopes.get(s) else { continue };
+            if spaces[s].is_some() {
+                continue;
+            }
+            if scope.target
+                && let Some(write) = &scope.query.write
+            {
+                let base = reg::class_name(write.table, session)
+                    .map_or_else(|| write.name.clone(), |(name, _)| name.to_string());
+                targets[s] = Some(super::query::unique_name(base, &mut used));
+            }
+            spaces[s] = Some(d.namespace_in(scope.query, &mut used, true));
+        }
+        let spaces = spaces
+            .into_iter()
+            .enumerate()
+            .map(|(s, space)| {
+                space.unwrap_or_else(|| {
+                    d.namespace_in(plan.scopes[s].query, &mut HashMap::new(), true)
+                })
+            })
+            .collect();
+        let mut windows: Vec<Vec<Option<String>>> =
+            plan.scopes.iter().map(|s| vec![None; s.query.windows.len()]).collect();
+        window_names(&plan.root, &mut windows);
+        let subplans = plan
+            .sublinks
+            .iter()
+            .map(|l| SubName {
+                link: ptr::from_ref(l.link),
+                name: l.name.clone(),
+                init: l.init,
+                hashed: l.hashed,
+            })
+            .collect();
+        PlanTexts { session, plan, spaces, targets, windows, subplans }
+    }
+
+    /// A deparse of the expressions of a scope, with the names of the scope and of the scopes outside it.
+    fn deparser(&self, scope: usize, prefix: bool) -> Result<Deparser<'a>> {
+        let mut chain = Vec::new();
+        let mut at = Some(scope);
+        while let Some(s) = at {
+            let Some(found) = self.plan.scopes.get(s) else {
+                return Err(Error::internal(format!("no scope {s} in the plan")));
+            };
+            chain.push(s);
+            at = found.parent;
+        }
+        let mut d = Deparser::new(self.session, false, 0);
+        d.namespaces = chain.iter().rev().map(|s| self.spaces[*s].clone()).collect();
+        d.prefix = prefix;
+        d.outer_prefix = true;
+        let query = self.plan.scopes[scope].query;
+        d.windows.clone_from(&query.windows);
+        d.window_targets = query.targets.iter().map(|t| t.expr.clone()).collect();
+        d.window_names.clone_from(&self.windows[scope]);
+        d.subplans.clone_from(&self.subplans);
+        Ok(d)
+    }
+}
+
+/// The names of the windows of the nodes of a plan, by the scope and the number of each window.
+fn window_names(node: &Node<'_>, out: &mut [Vec<Option<String>>]) {
+    if let Kind::WindowAgg { name, window, .. } = &node.kind
+        && let Some(slot) = out.get_mut(node.scope).and_then(|w| w.get_mut(*window))
+    {
+        *slot = Some(name.clone());
+    }
+    for child in &node.children {
+        window_names(child, out);
+    }
+    for sub in node.init_plans.iter().chain(&node.sub_plans) {
+        window_names(&sub.plan, out);
+    }
+}
+
+impl Texts for PlanTexts<'_, '_> {
+    fn expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String> {
+        let mut d = self.deparser(scope, prefix)?;
+        d.expr(expr, false)?;
+        Ok(d.buf)
+    }
+
+    fn refname(&mut self, scope: usize, relation: usize) -> String {
+        if relation == TARGET {
+            return self.targets.get(scope).cloned().flatten().unwrap_or_default();
+        }
+        self.spaces.get(scope).and_then(|s| s.names.get(relation)).cloned().unwrap_or_default()
+    }
+
+    fn quote(&self, name: &str) -> String {
+        quote_identifier(name)
+    }
+
+    fn object(&mut self, oid: u32, function: bool) -> (String, String) {
+        let (name, namespace) = if function {
+            match builtin::proc_by_oid(oid) {
+                Some(proc) => (proc.name, proc.namespace),
+                None => return (String::new(), String::new()),
+            }
+        } else {
+            match reg::class_name(oid, self.session) {
+                Some(found) => found,
+                None => return (String::new(), String::new()),
+            }
+        };
+        let schema = reg::namespace_name(namespace, self.session).unwrap_or_default();
+        (name.to_string(), schema.to_string())
+    }
+
+    fn window(
+        &mut self,
+        scope: usize,
+        window: usize,
+        rows_frame: bool,
+        prefix: bool,
+    ) -> Result<String> {
+        let query = self.plan.scopes[scope].query;
+        let clause = query
+            .windows
+            .get(window)
+            .ok_or_else(|| Error::internal(format!("no window {window} in the query")))?;
+        let target = |target: usize| {
+            query
+                .targets
+                .get(target)
+                .map(|t| &t.expr)
+                .ok_or_else(|| Error::internal("an item of a window with no expression"))
+        };
+        let mut d = self.deparser(scope, prefix)?;
+        d.buf.push('(');
+        if !clause.partition.is_empty() {
+            d.buf.push_str("PARTITION BY ");
+            for (i, item) in clause.partition.iter().enumerate() {
+                if i > 0 {
+                    d.buf.push_str(", ");
+                }
+                d.expr(target(item.target)?, false)?;
+            }
+        }
+        if !clause.order.is_empty() {
+            if !clause.partition.is_empty() {
+                d.buf.push(' ');
+            }
+            d.buf.push_str("ORDER BY ");
+            for (i, item) in clause.order.iter().enumerate() {
+                if i > 0 {
+                    d.buf.push_str(", ");
+                }
+                let e = target(item.target)?;
+                d.expr(e, false)?;
+                // `show_sortorder_options`.
+                let (lt, gt) = sort_operators(e.ty);
+                if item.operator == lt {
+                    if item.nulls_first {
+                        d.buf.push_str(" NULLS FIRST");
+                    }
+                } else if item.operator == gt {
+                    d.buf.push_str(" DESC");
+                    if !item.nulls_first {
+                        d.buf.push_str(" NULLS LAST");
+                    }
+                } else if let Some(op) = builtin::operator_by_oid(item.operator) {
+                    d.buf.push_str(&format!(" USING {}", op.name));
+                    d.buf.push_str(if item.nulls_first { " NULLS FIRST" } else { " NULLS LAST" });
+                }
+            }
+        }
+        let space = !clause.partition.is_empty() || !clause.order.is_empty();
+        if rows_frame {
+            if space {
+                d.buf.push(' ');
+            }
+            d.buf.push_str("ROWS UNBOUNDED PRECEDING");
+        } else if clause.frame.options & FRAMEOPTION_NONDEFAULT != 0 {
+            if space {
+                d.buf.push(' ');
+            }
+            d.frame(&clause.frame)?;
+        }
+        d.buf.push(')');
+        Ok(d.buf)
+    }
+}
+
+impl Deparser<'_> {
+    /// `get_rule_expr` for a `SubPlan`: the name of the subplan of a subquery, with the test of `ANY`, `ALL` or a comparison of rows, where each column of the subquery shows as `(SubPlan any_1).col1`. The value of an `InitPlan` shows as `(InitPlan expr_1).col1`, as `get_parameter` shows the parameter that the `InitPlan` sets.
+    pub(super) fn subplan_link(&mut self, sub: &SubLink, name: &SubName) -> Result<()> {
+        let plan = match (name.init, name.hashed) {
+            (true, _) => format!("InitPlan {}", name.name),
+            (false, true) => format!("hashed SubPlan {}", name.name),
+            (false, false) => format!("SubPlan {}", name.name),
+        };
+        if name.init {
+            match &sub.test {
+                Some(test) => self.subplan_test(test, &plan)?,
+                None => self.buf.push_str(&format!("({plan}).col1")),
+            }
+            return Ok(());
+        }
+        self.buf.push_str(match sub.kind {
+            SubLinkKind::Exists => "EXISTS(",
+            SubLinkKind::All => "(ALL ",
+            SubLinkKind::Any => "(ANY ",
+            SubLinkKind::Array => "ARRAY(",
+            SubLinkKind::RowCompare | SubLinkKind::Expr => "(",
+        });
+        match &sub.test {
+            Some(test) => self.subplan_test(test, &plan)?,
+            None => self.buf.push_str(&plan),
+        }
+        self.buf.push(')');
+        Ok(())
+    }
+
+    /// The test of a subquery, where a column of the subquery shows as a column of the subplan.
+    fn subplan_test(&mut self, test: &Expr, plan: &str) -> Result<()> {
+        let saved = self.subplan.replace(format!("({plan})"));
+        let done = self.expr(test, false);
+        self.subplan = saved;
+        done
+    }
+}

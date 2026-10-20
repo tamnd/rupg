@@ -308,13 +308,10 @@ impl<'q> Builder<'q> {
 
     /// The plan of a set operation, as `plan_set_operations`. The nodes above it show the expressions of the leftmost `SELECT`.
     pub(crate) fn set_op(&mut self, level: &mut Level<'q>, op: &'q SetOp) -> Node<'q> {
-        let leftmost = op.left.leftmost();
         let node = self.set_node(level, op);
-        if let Some(sub) = level.query.relations.get(leftmost).and_then(|r| r.subquery.as_deref())
-            && let Some(scope) = self.scopes.iter().position(|s| std::ptr::eq(s.query, sub))
-        {
+        if let Some(scope) = self.leftmost_scope(level, op) {
             level.display = scope;
-            level.display_query = sub;
+            level.display_query = self.scopes[scope].query;
         }
         node
     }
@@ -398,6 +395,8 @@ impl<'q> Builder<'q> {
                 let (sort_startup, sort_total) = cost::sort((c.startup, c.total), c.rows, None);
                 let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * columns as f64;
                 let keys = self.leaf_items(level, op);
+                // The keys show with the names of the leftmost `SELECT`.
+                let scope = self.leftmost_scope(level, op).unwrap_or(scope);
                 if hashable && hash_total <= unique_total {
                     let mut node = Node::new(
                         Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
@@ -451,6 +450,12 @@ impl<'q> Builder<'q> {
                 node
             }
         }
+    }
+
+    /// The scope of the leftmost `SELECT` of a set operation.
+    fn leftmost_scope(&self, level: &Level<'q>, op: &'q SetOp) -> Option<usize> {
+        let sub = level.query.relations.get(op.left.leftmost())?.subquery.as_deref()?;
+        self.scopes.iter().position(|s| std::ptr::eq(s.query, sub))
     }
 
     /// The columns of the leftmost `SELECT` of a set operation, as the keys of the node that finds the equal rows.
@@ -598,8 +603,9 @@ fn grouping_sets<'q>(
     };
     let c = input.cost;
     let n = c.rows;
+    // The sets with the most items come first, as `preprocess_grouping_sets` sorts them.
     let mut ordered: Vec<&Vec<usize>> = sets.iter().collect();
-    ordered.reverse();
+    ordered.sort_by_key(|s| std::cmp::Reverse(s.len()));
     let mut groups = 0.0;
     let mut units_all = 0.0;
     let mut out_sets = Vec::new();
@@ -713,11 +719,60 @@ fn startup_tuples(level: &Level<'_>, window: usize, rows: f64) -> f64 {
     cost::clamp_rows(out.min(partition_rows))
 }
 
-/// The `WindowAgg` nodes of the query, each with a `Sort` below it when the rows are not in the order of its window. The windows with the most keys come first, as `select_active_windows`.
+/// `tleSortGroupRef`: the number of each target that an item of `ORDER BY`, `GROUP BY`, `DISTINCT` or a window names, in the order that the analyzer gives the numbers.
+fn sort_refs(query: &Query) -> Vec<u32> {
+    let mut refs = vec![0; query.targets.len()];
+    let mut next = 0;
+    let windows = query.windows.iter().flat_map(|w| w.partition.iter().chain(&w.order));
+    for item in query.sort.iter().chain(&query.group).chain(&query.distinct).chain(windows) {
+        if let Some(slot) = refs.get_mut(item.target)
+            && *slot == 0
+        {
+            next += 1;
+            *slot = next;
+        }
+    }
+    refs
+}
+
+/// `select_active_windows`: the windows that a call uses, in the order of their `WindowAgg` nodes from the bottom up. `common_prefix_cmp` puts the items with the higher numbers first, so that the windows that share a prefix of their keys come next to each other, and a window with more keys comes before a window with a prefix of its keys.
+fn active_windows(level: &Level<'_>, calls: &[Vec<&WindowFunc>]) -> Vec<usize> {
+    let query = level.query;
+    let refs = sort_refs(query);
+    let unique = |w: usize| {
+        let clause = &query.windows[w];
+        let mut out: Vec<&SortGroup> = Vec::new();
+        for item in clause.partition.iter().chain(&clause.order) {
+            if !out.contains(&item) {
+                out.push(item);
+            }
+        }
+        out
+    };
+    let mut active: Vec<(usize, Vec<&SortGroup>)> =
+        (0..calls.len()).filter(|w| !calls[*w].is_empty()).map(|w| (w, unique(w))).collect();
+    active.sort_by(|(_, a), (_, b)| {
+        for (x, y) in a.iter().zip(b) {
+            let rx = refs.get(x.target).copied().unwrap_or(0);
+            let ry = refs.get(y.target).copied().unwrap_or(0);
+            let found = ry
+                .cmp(&rx)
+                .then(y.operator.cmp(&x.operator))
+                .then(y.nulls_first.cmp(&x.nulls_first));
+            if found.is_ne() {
+                return found;
+            }
+        }
+        b.len().cmp(&a.len())
+    });
+    active.into_iter().map(|(w, _)| w).collect()
+}
+
+/// The `WindowAgg` nodes of the query, each with a `Sort` below it when the rows are not in the order of its window, in the order of `select_active_windows`. A window with no name takes the name `w1`, `w2` and so on in that order, as `name_active_windows`, with a number that no named window of the query uses.
 fn windows<'q>(level: &Level<'q>, mut node: Node<'q>, order: &mut Vec<OrderKey>) -> Node<'q> {
     let calls = window_calls(level.query);
-    let mut active: Vec<usize> = (0..calls.len()).filter(|w| !calls[*w].is_empty()).collect();
-    active.sort_by_key(|w| std::cmp::Reverse(window_keys(level, *w).len()));
+    let active = active_windows(level, &calls);
+    let mut number = 0;
     for window in active {
         let clause = &level.query.windows[window];
         node = sort_if(node, window_keys(level, window), order, None);
@@ -749,7 +804,15 @@ fn windows<'q>(level: &Level<'q>, mut node: Node<'q>, order: &mut Vec<OrderKey>)
                     )
                 })
             });
-        let name = clause.name.clone().unwrap_or_else(|| format!("w{}", window + 1));
+        let name = clause.name.clone().unwrap_or_else(|| {
+            loop {
+                number += 1;
+                let name = format!("w{number}");
+                if !level.query.windows.iter().any(|w| w.name.as_deref() == Some(name.as_str())) {
+                    break name;
+                }
+            }
+        });
         node = Node::new(Kind::WindowAgg { name, window, rows_frame }, level.scope, vec![node]);
         node.cost = Cost { startup, total, ..c };
     }
@@ -773,6 +836,16 @@ fn distinct<'q>(level: &Level<'q>, input: Node<'q>, order: &mut Vec<OrderKey>) -
         let key = sort_key(level.target(d.target), d);
         if !keys.iter().any(|k| k.item.expr.same(&key.item.expr)) {
             keys.push(key);
+        }
+    }
+    // `DISTINCT ON` sorts on all the items of `ORDER BY` when it has more items, as `create_final_distinct_paths`.
+    if query.distinct_on && query.sort.len() > keys.len() {
+        keys.clear();
+        for s in &query.sort {
+            let key = sort_key(level.target(s.target), s);
+            if !keys.iter().any(|k| k.item.expr.same(&key.item.expr)) {
+                keys.push(key);
+            }
         }
     }
     let presorted = satisfies(order, &keys);
