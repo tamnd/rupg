@@ -4,8 +4,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.53 (2026-10-20)
+
 ### Added
 
+- `CREATE ROLE`, `ALTER ROLE`, `DROP ROLE`, `ALTER ROLE ... RENAME TO`, and `GRANT` and `REVOKE` of a role, with the errors and notices of PostgreSQL (#451).
 - Temporary tables, views and sequences in the schema `pg_temp_N` of the session, which goes when the session ends (#449).
 
 ### Fixed
