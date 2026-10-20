@@ -62,6 +62,8 @@ pub struct Query {
     pub row_marks: Vec<crate::RowMark>,
     /// The table that an `INSERT` writes, or `None` for a `SELECT`.
     pub write: Option<crate::Write>,
+    /// `outargs` of `CallStmt`: the arguments of `CALL` for the `INOUT` and `OUT` arguments of the procedure, in order.
+    pub out_args: Vec<crate::OutArg>,
 }
 
 /// A column of the result.
@@ -363,6 +365,7 @@ impl Analyzer<'_> {
             recursive: false,
             row_marks: Vec::new(),
             write: None,
+            out_args: Vec::new(),
         };
         for clause in s.lockingClause.iter().flatten() {
             if let Node::LockingClause(clause) = clause {

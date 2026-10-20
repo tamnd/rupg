@@ -74,5 +74,6 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         recursive: false,
         row_marks: Vec::new(),
         write: None,
+        out_args: Vec::new(),
     })
 }

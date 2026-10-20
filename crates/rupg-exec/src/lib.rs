@@ -1251,6 +1251,11 @@ impl Plan {
         self.query.write.as_ref()
     }
 
+    /// The arguments of a `CALL` for the output arguments of the procedure.
+    pub fn out_args(&self) -> &[rupg_analyze::OutArg] {
+        &self.query.out_args
+    }
+
     /// The warnings of the analysis of the query.
     pub fn notices(&self) -> &[Error] {
         &self.query.notices

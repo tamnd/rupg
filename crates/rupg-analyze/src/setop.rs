@@ -179,6 +179,7 @@ impl Analyzer<'_> {
             recursive: false,
             row_marks: Vec::new(),
             write: None,
+            out_args: Vec::new(),
         })
     }
 

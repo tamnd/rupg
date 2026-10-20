@@ -261,7 +261,7 @@ impl Connection {
             if self.transaction.failed() && !utility::exits_transaction(node) {
                 return Err(aborted().into());
             }
-            if query::is_query(node) {
+            if query::is_query(node) || matches!(node, Node::CallStmt(_)) {
                 self.settings.borrow_mut().take_snapshot();
                 let given = Params { types: params.clone(), variable: true };
                 let reader = self.reader();
@@ -276,7 +276,9 @@ impl Connection {
                 })?;
                 notices.extend(made.notices().iter().map(|error| Notice::warning(error.clone())));
                 self.notices(&mut notices, &text, &[], out);
-                columns = query::returns_rows(&made).then(|| query::columns(&made));
+                // `CallStmtResultDesc`: a procedure with no output arguments gives no row.
+                let void = matches!(node, Node::CallStmt(_)) && query::is_void(&made);
+                columns = (query::returns_rows(&made) && !void).then(|| query::columns(&made));
                 params = made.params().to_vec();
                 plan = Some(made);
             } else if let Node::ExecuteStmt(stmt) = node {
@@ -529,7 +531,13 @@ impl Connection {
                     let ended = self.end_writes(writes, &params, Vec::new());
                     self.notices(&mut self.trigger_notices(), &statement.text, &[], out);
                     ended?;
-                    Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
+                    match node {
+                        Node::CallStmt(_) if query::is_void(&plan) => Done::Tag(CommandTag::Call),
+                        Node::CallStmt(_) => {
+                            Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Call }
+                        }
+                        _ => Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select },
+                    }
                 }
             } else if let Some(stmt) = utility::is_savepoint(node) {
                 self.savepoint(stmt)?
