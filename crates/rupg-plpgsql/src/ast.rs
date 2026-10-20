@@ -89,6 +89,8 @@ pub(crate) enum DatumKind {
     Rec { ty: u32 },
     /// `PLpgSQL_row`: a list of variables, as the target of `INTO x, y`.
     Row { fields: Vec<usize> },
+    /// `PLpgSQL_recfield`: the field `name` of the record `rec`, as a target of `INTO`, of `GET DIAGNOSTICS` and of a loop.
+    Field { rec: usize, name: String },
 }
 
 /// An item of the names, `PLpgSQL_nsitem`.

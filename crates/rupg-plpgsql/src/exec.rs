@@ -441,7 +441,7 @@ impl Exec<'_> {
                 DatumKind::Rec { ty } => {
                     Slot::Rec { ty: *ty, fields: type_fields(self.env(), *ty), values: None }
                 }
-                DatumKind::Row { .. } => Slot::Row,
+                DatumKind::Row { .. } | DatumKind::Field { .. } => Slot::Row,
             })
             .collect();
     }
@@ -1076,6 +1076,9 @@ impl Exec<'_> {
             DatumKind::Var { .. } => {
                 types::element(binding_type(self.f, &self.slots, &Binding::Datum(target))?.0)
             }
+            DatumKind::Field { rec, name } => {
+                types::element(rec_field(self.f, &self.slots, *rec, name)?.1)
+            }
         };
         if slice > 0 && var_elem == 0 {
             return Err(Error::new(
@@ -1639,8 +1642,16 @@ impl Exec<'_> {
                 (value, *ty, -1)
             }
             Slot::Row => {
-                let DatumKind::Row { fields } = &self.f.datums[d].kind else {
-                    return (Value::Null, oid::RECORD, -1);
+                let fields = match &self.f.datums[d].kind {
+                    DatumKind::Row { fields } => fields,
+                    DatumKind::Field { rec, name } => {
+                        let binding = Binding::Field(*rec, name.clone());
+                        let value = self.binding_value(&binding).unwrap_or(Value::Null);
+                        let (ty, typmod) = binding_type(self.f, &self.slots, &binding)
+                            .unwrap_or((oid::UNKNOWN, -1));
+                        return (value, ty, typmod);
+                    }
+                    _ => return (Value::Null, oid::RECORD, -1),
                 };
                 let (types, values) = fields
                     .iter()
@@ -1677,15 +1688,7 @@ impl Exec<'_> {
     fn assign(&mut self, target: &Target, value: Value, ty: u32, typmod: i32) -> Result<()> {
         match target {
             Target::Datum(d) => self.assign_datum(*d, value, ty, typmod),
-            Target::Field(d, name) => {
-                let (i, fty, fmod) = rec_field(self.f, &self.slots, *d, name)?;
-                let value = self.cast(value, (ty, typmod), (fty, fmod))?;
-                if let Slot::Rec { fields, values, .. } = &mut self.slots[*d] {
-                    let n = fields.as_ref().map_or(0, |f| f.len());
-                    values.get_or_insert_with(|| vec![Value::Null; n])[i] = value;
-                }
-                Ok(())
-            }
+            Target::Field(d, name) => self.assign_field(*d, name, value, ty, typmod),
             Target::Element(d, subscripts) => {
                 if subscripts.len() != 1 {
                     return Err(Error::new(
@@ -1733,6 +1736,24 @@ impl Exec<'_> {
                 Ok(())
             }
         }
+    }
+
+    /// The assignment of a value of the type `ty` to the field `name` of the record `d`. A null record becomes a record of nulls first.
+    fn assign_field(
+        &mut self,
+        d: usize,
+        name: &str,
+        value: Value,
+        ty: u32,
+        typmod: i32,
+    ) -> Result<()> {
+        let (i, fty, fmod) = rec_field(self.f, &self.slots, d, name)?;
+        let value = self.cast(value, (ty, typmod), (fty, fmod))?;
+        if let Slot::Rec { fields, values, .. } = &mut self.slots[d] {
+            let n = fields.as_ref().map_or(0, |f| f.len());
+            values.get_or_insert_with(|| vec![Value::Null; n])[i] = value;
+        }
+        Ok(())
     }
 
     /// The assignment of a value of the type `ty` to the variable `d`.
@@ -1802,6 +1823,7 @@ impl Exec<'_> {
                     "cannot assign non-composite value to a row variable",
                 )),
             },
+            DatumKind::Field { rec, name } => self.assign_field(*rec, name, value, ty, typmod),
         }
     }
 
@@ -1851,7 +1873,7 @@ impl Exec<'_> {
                 }
                 Ok(())
             }
-            DatumKind::Var { .. } => {
+            DatumKind::Var { .. } | DatumKind::Field { .. } => {
                 let value = row.and_then(|row| row.into_iter().next()).unwrap_or(Value::Null);
                 let (ty, typmod) = columns.first().map_or((oid::UNKNOWN, -1), |c| (c.1, c.2));
                 self.assign_datum(d, value, ty, typmod)
