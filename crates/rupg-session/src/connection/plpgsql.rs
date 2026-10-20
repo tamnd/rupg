@@ -10,7 +10,7 @@ use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
 use rupg_plpgsql::{Cache, Spi};
-use rupg_sql::nodes::DoStmt;
+use rupg_sql::nodes::{DoStmt, Node};
 use rupg_types::Value;
 
 use super::foreign::Batch;
@@ -173,17 +173,37 @@ impl Connection {
         result
     }
 
-    /// `ExecuteDoStmt`: runs the code of `DO`. The messages of `RAISE` go to `warnings`.
+    /// `ExecuteDoStmt`: runs the code of `DO`, which is a part of the query `text`. The messages of `RAISE` go to `warnings`.
     ///
     /// # Errors
     ///
     /// The errors of [`rupg_plpgsql::do_code`] and of the code.
-    pub(super) fn run_do(&self, stmt: &DoStmt, warnings: &mut Vec<Error>) -> Result<(), Error> {
+    pub(super) fn run_do(
+        &self,
+        stmt: &DoStmt,
+        text: &str,
+        warnings: &mut Vec<Error>,
+    ) -> Result<(), Error> {
         let src = rupg_plpgsql::do_code(stmt)?;
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
         let result = rupg_plpgsql::inline(&PlSpi::new(self, &reader), &src);
         warnings.extend(reader.take_warnings());
-        result
+        result.map_err(|error| match (error.position(), code_place(stmt, text, &src)) {
+            // `function_parse_error_transpose`: an error of the compile has its place in the code, which is a part of the query.
+            (Some(at), Some(start)) => error.with_position(Some(start + at)),
+            _ => error,
+        })
     }
+}
+
+/// The place in the query `text` of the code `src` of `DO`, which is in the string after the place of the option `AS`. `None` when the string has the code in another form, such as with doubled quotes.
+fn code_place(stmt: &DoStmt, text: &str, src: &str) -> Option<usize> {
+    let at = stmt.args.iter().flatten().find_map(|def| match def {
+        Node::DefElem(def) if def.defname.as_deref() == Some("as") => {
+            usize::try_from(def.location).ok()
+        }
+        _ => None,
+    })?;
+    text.get(at..)?.find(src).map(|i| at + i)
 }

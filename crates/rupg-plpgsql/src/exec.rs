@@ -1035,7 +1035,7 @@ impl Exec<'_> {
         Ok(out)
     }
 
-    /// `exec_stmt_foreach_a`.
+    /// `exec_stmt_foreach_a`. With `SLICE n`, each value of the loop is an array of the last `n` dimensions, with their lower bounds, as `array_iterate` gives it.
     fn foreach(
         &mut self,
         label: Option<&str>,
@@ -1044,7 +1044,7 @@ impl Exec<'_> {
         expr: &Expr,
         body: &[Stmt],
     ) -> Run<Flow> {
-        let (value, ty, _) = self.eval(expr)?;
+        let (value, ty, typmod) = self.eval(expr)?;
         let array = match value {
             Value::Null => {
                 return Err(Error::new(
@@ -1062,19 +1062,55 @@ impl Exec<'_> {
                 .into());
             }
         };
-        if slice > 0 {
+        let ndim = array.dims.len();
+        let Some(slice) = usize::try_from(slice).ok().filter(|&n| n <= ndim) else {
             return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "FOREACH with SLICE is not supported yet",
+                SqlState::ARRAY_SUBSCRIPT_ERROR,
+                format!("slice dimension ({slice}) is out of the valid range 0..{ndim}"),
+            )
+            .into());
+        };
+        // A record or a row is not an array, and it can have no type yet.
+        let var_elem = match &self.f.datums[target].kind {
+            DatumKind::Rec { .. } | DatumKind::Row { .. } => 0,
+            DatumKind::Var { .. } => {
+                types::element(binding_type(self.f, &self.slots, &Binding::Datum(target))?.0)
+            }
+        };
+        if slice > 0 && var_elem == 0 {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                "FOREACH ... SLICE loop variable must be of an array type",
             )
             .into());
         }
-        let elem = types::element(ty);
+        if slice == 0 && var_elem != 0 {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                "FOREACH loop variable must not be of an array type",
+            )
+            .into());
+        }
+        let values: Vec<(Value, u32)> = if slice == 0 {
+            let elem = types::element(ty);
+            array.values.into_iter().map(|value| (value.unwrap_or(Value::Null), elem)).collect()
+        } else {
+            let dims = array.dims[ndim - slice..].to_vec();
+            let n = dims.iter().map(|d| usize::try_from(d.len).unwrap_or(0)).product::<usize>();
+            array
+                .values
+                .chunks(n.max(1))
+                .map(|values| {
+                    let part = Array { dims: dims.clone(), values: values.to_vec() };
+                    (Value::Array(Box::new(part)), ty)
+                })
+                .collect()
+        };
         let mut found = false;
         let mut out = Flow::Normal;
-        for value in array.values {
+        for (value, vty) in values {
             found = true;
-            self.assign_datum(target, value.unwrap_or(Value::Null), elem, -1)?;
+            self.assign_datum(target, value, vty, typmod)?;
             let flow = self.stmts(body)?;
             if let Some(flow) = after_body(flow, label) {
                 out = flow;

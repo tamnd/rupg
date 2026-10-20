@@ -1,0 +1,69 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 1 IN ARRAY ARRAY[[1,2],[3,4],[5,6]] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+NOTICE 00000 x={1,2} (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={3,4} (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={5,6} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 2 IN ARRAY ARRAY[[1,2],[3,4]] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+NOTICE 00000 x={{1,2},{3,4}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 1 IN ARRAY ARRAY[1,2,3] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+NOTICE 00000 x={1,2,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 1 IN ARRAY '[2:3][5:6]={{1,2},{3,4}}'::int[] LOOP RAISE NOTICE 'x=% lb=%', x, array_lower(x, 1); END LOOP; END $$;
+NOTICE 00000 x=[5:6]={1,2} lb=5 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x=[5:6]={3,4} lb=5 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 2 IN ARRAY '{{{1,2},{3,4}},{{5,6},{7,8}}}'::int[] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+NOTICE 00000 x={{1,2},{3,4}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={{5,6},{7,8}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 1 IN ARRAY ARRAY[[1,NULL],[NULL,4]] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+NOTICE 00000 x={1,NULL} (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={NULL,4} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 3 IN ARRAY ARRAY[[1,2],[3,4]] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+ERROR 2202E slice dimension (3) is out of the valid range 0..2 (PL/pgSQL function inline_code_block line 1 at FOREACH over array)
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 1 IN ARRAY '{}'::int[] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+ERROR 2202E slice dimension (1) is out of the valid range 0..0 (PL/pgSQL function inline_code_block line 1 at FOREACH over array)
+> DO $$ DECLARE x int; BEGIN FOREACH x SLICE 1 IN ARRAY ARRAY[1,2] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+ERROR 42804 FOREACH ... SLICE loop variable must be of an array type (PL/pgSQL function inline_code_block line 1 at FOREACH over array)
+> DO $$ DECLARE x int[]; BEGIN FOREACH x IN ARRAY ARRAY[1,2] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+ERROR 42804 FOREACH loop variable must not be of an array type (PL/pgSQL function inline_code_block line 1 at FOREACH over array)
+> DO $$ DECLARE x int; BEGIN FOREACH x IN ARRAY '{}'::int[] LOOP RAISE NOTICE 'x=%', x; END LOOP; RAISE NOTICE 'found=%', found; END $$;
+NOTICE 00000 found=f (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int; BEGIN FOREACH x IN ARRAY ARRAY[[1,2],[3,4]] LOOP RAISE NOTICE 'x=%', x; END LOOP; RAISE NOTICE 'found=%', found; END $$;
+NOTICE 00000 x=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x=3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x=4 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 found=t (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x text[]; BEGIN FOREACH x SLICE 1 IN ARRAY ARRAY[['a','b'],['c','d']] LOOP RAISE NOTICE 'x=% x1=%', x, x[1]; END LOOP; END $$;
+NOTICE 00000 x={a,b} x1=a (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={c,d} x1=c (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x numeric[]; BEGIN FOREACH x SLICE 1 IN ARRAY ARRAY[[1,2],[3,4]] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+NOTICE 00000 x={1,2} (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={3,4} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x varchar(1)[]; BEGIN FOREACH x SLICE 1 IN ARRAY ARRAY[['ab','b'],['c','d']] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+ERROR 22001 value too long for type character varying(1) (PL/pgSQL function inline_code_block line 1 at FOREACH over array)
+> DO $$ DECLARE x varchar(1); BEGIN FOREACH x IN ARRAY ARRAY['ab','b'] LOOP RAISE NOTICE 'x=%', x; END LOOP; END $$;
+ERROR 22001 value too long for type character varying(1) (PL/pgSQL function inline_code_block line 1 at FOREACH over array)
+> DO $$ DECLARE x int[]; n int := 0; BEGIN FOREACH x SLICE 1 IN ARRAY ARRAY[[1,2],[3,4],[5,6]] LOOP n := n + 1; EXIT WHEN n = 2; END LOOP; RAISE NOTICE 'n=% x=%', n, x; END $$;
+NOTICE 00000 n=2 x={3,4} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r record; BEGIN FOREACH r SLICE 1 IN ARRAY ARRAY[[1,2]] LOOP END LOOP; END $$;
+ERROR 42804 FOREACH ... SLICE loop variable must be of an array type (PL/pgSQL function inline_code_block line 1 at FOREACH over array)
+> DO $$ DECLARE a int; b int; BEGIN FOREACH a, b IN ARRAY ARRAY[ROW(1,2), ROW(3,4)] LOOP RAISE NOTICE 'a=% b=%', a, b; END LOOP; END $$;
+NOTICE 00000 a=1 b=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 a=3 b=4 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE 0 IN ARRAY ARRAY[1,2] LOOP END LOOP; END $$;
+ERROR 42804 FOREACH loop variable must not be of an array type (PL/pgSQL function inline_code_block line 1 at FOREACH over array)
+> DO $$ DECLARE x int[]; BEGIN FOREACH x SLICE -1 IN ARRAY ARRAY[1,2] LOOP END LOOP; END $$;
+ERROR 42601 syntax error at or near "-" at 46

@@ -1478,7 +1478,7 @@ impl Connection {
             } else if let Node::DoStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 let mut warnings = Vec::new();
-                let result = self.run_do(stmt, &mut warnings);
+                let result = self.run_do(stmt, text, &mut warnings);
                 notices.extend(warnings.into_iter().map(Notice::of_function));
                 result.map(|()| Done::Tag(CommandTag::Do))
             } else {
@@ -4623,6 +4623,12 @@ mod tests {
     #[test]
     fn call_extended() {
         big_stack(|| script(include_str!("connection/call_extended.test")));
+    }
+
+    /// `FOREACH ... SLICE` in PL/pgSQL: the slices of the last dimensions with their lower bounds, the checks of the slice and of the type of the loop variable, the typmod of the loop variable, `EXIT` and `FOUND`. `connection/plpgsql_foreach_slice.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_foreach_slice() {
+        big_stack(|| script(include_str!("connection/plpgsql_foreach_slice.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
