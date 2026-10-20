@@ -808,6 +808,7 @@ impl Connection {
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
+                    Node::CreateFunctionStmt(_) => CommandTag::CreateFunction,
                     Node::CompositeTypeStmt(_)
                     | Node::CreateEnumStmt(_)
                     | Node::CreateRangeStmt(_) => CommandTag::CreateType,
@@ -823,6 +824,7 @@ impl Connection {
                         ObjectType::OBJECT_TYPE => CommandTag::DropType,
                         ObjectType::OBJECT_DOMAIN => CommandTag::DropDomain,
                         ObjectType::OBJECT_RULE => CommandTag::DropRule,
+                        ObjectType::OBJECT_FUNCTION => CommandTag::DropFunction,
                         ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
                         ObjectType::OBJECT_TSTEMPLATE => CommandTag::DropTextSearchTemplate,
