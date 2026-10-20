@@ -522,7 +522,16 @@ impl Compiler<'_> {
     /// A new expression of the text `text` at the byte offset `at`.
     fn expr(&mut self, text: String, mode: Mode, at: usize) -> Expr {
         self.exprs += 1;
-        Expr { id: self.exprs - 1, shown: text.clone(), text, lead: 0, mode, ns: self.top, at }
+        Expr {
+            id: self.exprs - 1,
+            shown: text.clone(),
+            text,
+            lead: 0,
+            mode,
+            ns: self.top,
+            at,
+            target: None,
+        }
     }
 
     /// `check_sql_expr`: the parser of SQL reads the text, and a syntax error gets the place in the body.
@@ -580,7 +589,11 @@ impl Compiler<'_> {
                     return Err(self.yyerror(&t, "mismatched parentheses"));
                 }
             }
-            if t.is_end() || t.is_char(b';') {
+            // The end of the body in a query is a syntax error at the end of the input, as PostgreSQL gives it.
+            if t.is_end() {
+                return Err(self.yyerror(&t, "syntax error"));
+            }
+            if t.is_char(b';') {
                 if level != 0 {
                     return Err(self.yyerror(&t, "mismatched parentheses"));
                 }
@@ -1111,6 +1124,9 @@ impl Compiler<'_> {
         let stop = expr.at + expr.text.len();
         expr.shown = self.sc.src[w.start..stop].to_owned();
         expr.lead = expr.at - w.start;
+        if let Target::Datum(d) = target {
+            expr.target = Some(d);
+        }
         Ok(self.finish(w.start, StmtKind::Assign { target, expr }))
     }
 

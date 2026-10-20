@@ -285,6 +285,10 @@ impl Env for SchemaEnv<'_> {
     fn temp_number(&self) -> Option<i32> {
         self.env.temp_number()
     }
+
+    fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
+        self.env.check_function(function)
+    }
 }
 
 /// A relation that a name gives.
@@ -419,9 +423,11 @@ pub(crate) fn type_reference(expr: &Expr) -> Option<ObjRef> {
 }
 
 impl Definer<'_, '_> {
-    /// Moves the warnings of the analyzer to the messages.
+    /// Moves the warnings and the notices of the analyzer to the messages.
     fn flush(&mut self) {
-        self.messages.extend(self.an.notices.drain(..).map(Message::Warning));
+        self.messages.extend(self.an.notices.drain(..).map(|error| {
+            if error.is_notice() { Message::Notice(error) } else { Message::Warning(error) }
+        }));
     }
 
     /// Adds a `NOTICE` after the warnings that came before it.

@@ -43,6 +43,60 @@ pub fn analyze_with(
     crate::analyze_hooked(stmt, env, params, Some(variables))
 }
 
+/// `transformPLAssignStmt`: [`analyze_with`] of the value of an assignment to the variable `name` of the type `ty` with the typmod `typmod`. The value takes the type of the variable with the casts of PL/pgSQL, so that the error of a cast points into the assignment.
+///
+/// # Errors
+///
+/// The errors of [`analyze_with`], `42601` for a value that is not one column and `42804` for a value that has no cast to the type of the variable.
+pub fn analyze_assign(
+    stmt: &Node,
+    env: &dyn Env,
+    variables: &dyn Variables,
+    (ty, typmod): (u32, i32),
+    name: &str,
+) -> Result<Query> {
+    crate::analyze_assigned(stmt, env, variables, (ty, typmod, name.to_owned()))
+}
+
+impl Analyzer<'_> {
+    /// `transformPLAssignStmtTarget`: the value of an assignment, coerced to the type of the variable. A row value for a row variable of another row type stays as it is, and the executor converts it.
+    pub(crate) fn assign_target(
+        &mut self,
+        targets: &mut [Target],
+        (ty, typmod, name): (u32, i32, String),
+    ) -> Result<()> {
+        let [target] = targets else {
+            let n = targets.len();
+            let word = if n == 1 { "column" } else { "columns" };
+            return Err(Error::new(
+                SqlState::SYNTAX_ERROR,
+                format!("assignment source returned {n} {word}"),
+            ));
+        };
+        let source = target.expr.ty;
+        let composite = |t: u32| t == rupg_types::oid::RECORD || crate::types::is_complex(t);
+        if ty != source && composite(ty) && composite(source) {
+            return Ok(());
+        }
+        let expr = std::mem::replace(&mut target.expr, Expr::new(ExprKind::CaseTest, 0));
+        let at = expr.location;
+        let Some(expr) = self.coerce_to_target(expr, ty, typmod, Context::Plpgsql, None)? else {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "variable \"{name}\" is of type {} but expression is of type {}",
+                    crate::types::name(ty),
+                    crate::types::name(source)
+                ),
+            )
+            .with_hint("You will need to rewrite or cast the expression.")
+            .at_opt(at));
+        };
+        target.expr = expr;
+        Ok(())
+    }
+}
+
 /// `get_cast_hashentry`: the query `SELECT $1` that casts a value of the type `source` to the type `target` with the typmod `typmod`, in the context of PL/pgSQL, where the output and the input functions cast a value when no other cast exists.
 ///
 /// # Errors
