@@ -451,9 +451,6 @@ impl Definer<'_, '_> {
         if stmt.is_procedure {
             return Err(not_yet("CREATE PROCEDURE", None));
         }
-        if stmt.replace {
-            return Err(not_yet("CREATE OR REPLACE FUNCTION", None));
-        }
         let parts = names(&stmt.funcname);
         let (schema, name) = self.an.split_name(&parts, None)?;
         let namespace = match schema {
@@ -570,6 +567,20 @@ impl Definer<'_, '_> {
             }
             _ => error,
         };
+        let old = self
+            .catalog
+            .functions()
+            .find(|f| f.namespace == namespace && f.name == name && f.argtypes == function.argtypes)
+            .cloned();
+        if let Some(old) = &old {
+            if !stmt.replace {
+                return Err(Error::new(
+                    SqlState::DUPLICATE_FUNCTION,
+                    format!("function \"{name}\" already exists with same argument types"),
+                ));
+            }
+            self.check_replace(old, &function)?;
+        }
         let stmts = statements(stmt, options.src.as_deref()).map_err(transpose)?;
         // `fmgr_sql_validator` reads a body in a string only when no argument is polymorphic, and a body in SQL always.
         let polymorphic = function.argtypes.iter().any(|&ty| types::is_polymorphic(ty));
@@ -602,6 +613,47 @@ impl Definer<'_, '_> {
                 refs.push(found);
             }
         }
-        self.catalog.create_function(function, &refs)
+        match old {
+            Some(old) => self.catalog.replace_function(old.oid, function, &refs).map(|()| old.oid),
+            None => self.catalog.create_function(function, &refs),
+        }
+    }
+
+    /// The checks of `ProcedureCreate` for `CREATE OR REPLACE FUNCTION` of the function `old`: the owner, the result type, the row type of the `OUT` parameters and the names of the input arguments do not change.
+    fn check_replace(&self, old: &Function, new: &Function) -> Result<()> {
+        if !self.is_superuser() && old.owner != self.user {
+            return Err(super::comment::not_owner("function", &old.name));
+        }
+        let signature = self.describe(ObjRef::new(PG_PROC, old.oid));
+        let signature = signature.strip_prefix("function ").unwrap_or(&signature);
+        let error = |message: String| {
+            Error::new(SqlState::INVALID_FUNCTION_DEFINITION, message)
+                .with_hint(format!("Use DROP FUNCTION {signature} first."))
+        };
+        let changed = "cannot change return type of existing function".to_string();
+        if old.rettype != new.rettype || old.retset != new.retset {
+            return Err(error(changed));
+        }
+        let outs = |f: &Function| -> Vec<(u32, String)> {
+            f.allargtypes
+                .iter()
+                .zip(&f.argmodes)
+                .zip(f.argnames.iter().map(String::as_str).chain(std::iter::repeat("")))
+                .filter(|((_, mode), _)| matches!(mode, b'o' | b'b' | b't'))
+                .map(|((&ty, _), name)| (ty, name.to_string()))
+                .collect()
+        };
+        if old.rettype == oid::RECORD && outs(old) != outs(new) {
+            return Err(
+                error(changed).with_detail("Row type defined by OUT parameters is different.")
+            );
+        }
+        let names = input_names(new);
+        for (i, name) in input_names(old).iter().enumerate() {
+            if !name.is_empty() && names.get(i) != Some(name) {
+                return Err(error(format!("cannot change name of input parameter \"{name}\"")));
+            }
+        }
+        Ok(())
     }
 }

@@ -1,0 +1,100 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION f(x int) RETURNS int LANGUAGE sql RETURN x + 1;
+CREATE FUNCTION
+> CREATE VIEW v AS SELECT f(1) AS a;
+CREATE VIEW
+> SELECT f(1), (SELECT a FROM v);
+fields f:23:4:-1,a:23:4:-1
+row 2,2
+SELECT 1
+> CREATE OR REPLACE FUNCTION f(x int) RETURNS int LANGUAGE sql RETURN x + 10;
+CREATE FUNCTION
+> SELECT f(1), (SELECT a FROM v);
+fields f:23:4:-1,a:23:4:-1
+row 11,11
+SELECT 1
+> SELECT count(*) FROM pg_proc WHERE proname = 'f';
+fields count:20:8:-1
+row 1
+SELECT 1
+> CREATE OR REPLACE FUNCTION f(x int) RETURNS bigint LANGUAGE sql RETURN x + 10;
+ERROR 42P13 cannot change return type of existing function
+HINT Use DROP FUNCTION f(integer) first.
+> CREATE OR REPLACE FUNCTION f(x int) RETURNS SETOF int LANGUAGE sql RETURN x + 10;
+ERROR 42P13 cannot change return type of existing function
+HINT Use DROP FUNCTION f(integer) first.
+> CREATE OR REPLACE FUNCTION f(y int) RETURNS int LANGUAGE sql RETURN y + 10;
+ERROR 42P13 cannot change name of input parameter "x"
+HINT Use DROP FUNCTION f(integer) first.
+> CREATE OR REPLACE FUNCTION f(int) RETURNS int LANGUAGE sql RETURN $1 + 20;
+ERROR 42P13 cannot change name of input parameter "x"
+HINT Use DROP FUNCTION f(integer) first.
+> SELECT f(1);
+fields f:23:4:-1
+row 11
+SELECT 1
+> CREATE OR REPLACE FUNCTION f(x int) RETURNS int LANGUAGE sql RETURN x + 30;
+CREATE FUNCTION
+> SELECT f(1), proargnames FROM pg_proc WHERE proname = 'f';
+fields f:23:4:-1,proargnames@pg_proc.23:1009:-1:-1
+row 31,{x}
+SELECT 1
+> CREATE OR REPLACE FUNCTION f(x int) RETURNS int LANGUAGE sql RETURN 'abc';
+ERROR 42P13 return type mismatch in function declared to return integer (SQL function "f")
+DETAIL Actual return type is text.
+> CREATE OR REPLACE FUNCTION f(x int) RETURNS int LANGUAGE sql STRICT IMMUTABLE RETURN x * 2;
+CREATE FUNCTION
+> SELECT f(4), f(NULL), provolatile, proisstrict FROM pg_proc WHERE proname = 'f';
+fields f:23:4:-1,f:23:4:-1,provolatile@pg_proc.15:18:1:-1,proisstrict@pg_proc.13:16:1:-1
+row 8,NULL,i,t
+SELECT 1
+> CREATE OR REPLACE FUNCTION g(x int, OUT a int, OUT b int) LANGUAGE sql AS $$ SELECT x, x $$;
+CREATE FUNCTION
+> CREATE OR REPLACE FUNCTION g(x int, OUT a int, OUT c int) LANGUAGE sql AS $$ SELECT x, x $$;
+ERROR 42P13 cannot change return type of existing function
+DETAIL Row type defined by OUT parameters is different.
+HINT Use DROP FUNCTION g(integer) first.
+> CREATE OR REPLACE FUNCTION g(x int, OUT a int, OUT b bigint) LANGUAGE sql AS $$ SELECT x, x $$;
+ERROR 42P13 cannot change return type of existing function
+DETAIL Row type defined by OUT parameters is different.
+HINT Use DROP FUNCTION g(integer) first.
+> CREATE OR REPLACE FUNCTION g(x int, OUT a int, OUT b int) LANGUAGE sql AS $$ SELECT x, x * 2 $$;
+CREATE FUNCTION
+> SELECT * FROM g(3);
+fields a:23:4:-1,b:23:4:-1
+row 3,6
+SELECT 1
+> CREATE TABLE t (a int);
+CREATE TABLE
+> CREATE OR REPLACE FUNCTION h() RETURNS bigint LANGUAGE sql BEGIN ATOMIC SELECT count(*) FROM t; END;
+CREATE FUNCTION
+> DROP TABLE t;
+ERROR 2BP01 cannot drop table t because other objects depend on it
+DETAIL function h() depends on table t
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> CREATE OR REPLACE FUNCTION h() RETURNS bigint LANGUAGE sql RETURN 5;
+CREATE FUNCTION
+> DROP TABLE t;
+DROP TABLE
+> SELECT h();
+fields h:20:8:-1
+row 5
+SELECT 1
+> CREATE SCHEMA s;
+CREATE SCHEMA
+> CREATE FUNCTION s.k(int) RETURNS int LANGUAGE sql RETURN 1;
+CREATE FUNCTION
+> CREATE OR REPLACE FUNCTION s.k(int) RETURNS text LANGUAGE sql RETURN 'a';
+ERROR 42P13 cannot change return type of existing function
+HINT Use DROP FUNCTION s.k(integer) first.
+> CREATE FUNCTION f(x int) RETURNS int LANGUAGE sql RETURN 'abc';
+ERROR 42723 function "f" already exists with same argument types
+> DROP SCHEMA s CASCADE;
+NOTICE 00000 drop cascades to function s.k(integer)
+DROP SCHEMA
+> DROP VIEW v;
+DROP VIEW
+> DROP FUNCTION f(int), g(int), h();
+DROP FUNCTION

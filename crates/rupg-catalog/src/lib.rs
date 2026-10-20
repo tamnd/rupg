@@ -2073,6 +2073,25 @@ impl Catalog {
         Ok(oid)
     }
 
+    /// `ProcedureCreate` with `replace` for the function `oid` that exists: the function gets the new facts and keeps its OID and its owner. Its old dependencies go, and it depends on its schema and on the objects in `refs`, as a new function does.
+    ///
+    /// # Errors
+    ///
+    /// An internal error when no function has the OID.
+    pub fn replace_function(&mut self, oid: u32, mut new: Function, refs: &[ObjRef]) -> Result<()> {
+        let old = self.functions.get(&oid).ok_or_else(|| no_object("function", oid))?;
+        new.oid = oid;
+        new.owner = old.owner;
+        let me = ObjRef::new(PG_PROC, oid);
+        self.depends.retain(|d| d.object != me);
+        self.depend(me, ObjRef::new(PG_NAMESPACE, new.namespace), DepKind::Normal);
+        for &referenced in refs {
+            self.depend(me, referenced, DepKind::Normal);
+        }
+        self.functions.insert(oid, new);
+        Ok(())
+    }
+
     /// `CreateExtensionInternal`: a new extension, which gets the next OID.
     ///
     /// # Errors
