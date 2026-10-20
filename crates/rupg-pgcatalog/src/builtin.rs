@@ -1145,6 +1145,8 @@ pub struct SessionFunction {
     pub argmodes: Vec<u8>,
     /// `proargnames`, or empty if no argument has a name.
     pub argnames: Vec<String>,
+    /// `provariadic`: the element type of the `VARIADIC` argument, or 0.
+    pub variadic: u32,
     /// `proargdefaults` in the stored form of `rupg-analyze`, or `None` if no argument has a default.
     pub argdefaults: Option<String>,
     pub nargdefaults: i16,
@@ -1240,7 +1242,7 @@ fn function_row(new: &SessionFunction) -> ProcRow {
         name: new.name.clone().leak(),
         namespace: new.namespace,
         lang: new.lang,
-        variadic: 0,
+        variadic: new.variadic,
         kind: b'f',
         strict: new.strict,
         retset: new.retset,

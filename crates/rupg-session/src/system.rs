@@ -836,7 +836,7 @@ fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
         name: f.name.clone().leak(),
         namespace: f.namespace,
         lang: f.lang,
-        variadic: 0,
+        variadic: rupg_exec::variadic_type(catalog, f),
         kind: b'f',
         strict: f.strict,
         retset: f.retset,

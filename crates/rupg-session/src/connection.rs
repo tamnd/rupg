@@ -2851,6 +2851,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/function_defaults.test")));
     }
 
+    /// `VARIADIC` arguments of functions in SQL, with calls that give a list of values or an array, `provariadic` and the errors for a bad `VARIADIC` argument. The script also has the checks of `interpret_function_parameter_list` and `fmgr_sql_validator` for the names and types of the arguments and for the result type. `connection/variadic_function.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn variadic_function() {
+        big_stack(|| script(include_str!("connection/variadic_function.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {

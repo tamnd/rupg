@@ -230,6 +230,7 @@ fn use_types(catalog: &Catalog) {
                     allargtypes: f.allargtypes.clone(),
                     argmodes: f.argmodes.clone(),
                     argnames: f.argnames.clone(),
+                    variadic: rupg_exec::variadic_type(catalog, f),
                     argdefaults: f.argdefaults.clone(),
                     nargdefaults: f.nargdefaults,
                 })
