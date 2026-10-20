@@ -5,6 +5,11 @@ use std::sync::Arc;
 
 use crate::builtin::{self, MemberRow};
 
+/// `BOOTSTRAP_SUPERUSERID`.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
+/// `ROLE_PG_DATABASE_OWNER`.
+const PG_DATABASE_OWNER: u32 = 6171;
+
 /// A row of `pg_authid` that `CREATE ROLE` made.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct Role {
@@ -134,6 +139,27 @@ impl Roles {
             inherit: m.inherit,
             set: m.set,
         }))
+    }
+
+    /// `member_can_set_role`: a superuser can become any role, and another role can become a role that it reaches through memberships with `set_option`. The bootstrap superuser owns each database, so it is a member of `pg_database_owner`.
+    pub fn can_set_role(&self, member: u32, role: u32) -> bool {
+        if self.superuser(member) {
+            return true;
+        }
+        let mut reached = vec![member];
+        let mut at = 0;
+        while let Some(&next) = reached.get(at) {
+            at += 1;
+            for edge in self.edges().filter(|m| m.member == next && m.set) {
+                if !reached.contains(&edge.role) {
+                    reached.push(edge.role);
+                }
+            }
+            if next == BOOTSTRAP_SUPERUSER && !reached.contains(&PG_DATABASE_OWNER) {
+                reached.push(PG_DATABASE_OWNER);
+            }
+        }
+        reached.contains(&role)
     }
 
     /// The names and the OIDs of all the roles, those of `initdb` first.

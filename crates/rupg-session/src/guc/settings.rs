@@ -571,6 +571,10 @@ impl Settings {
             Origin::Statement => {
                 self.slot(&key, Some(parameter), parameter.name);
                 self.assign(&key, value, action);
+                // `set_config_with_handle`: a change of `session_authorization` does `SET ROLE NONE`, or `RESET ROLE` for a reset, with the same action, so the two changes end together.
+                if parameter.name == "session_authorization" {
+                    self.set("role", text.map(|_| "none"), action, origin)?;
+                }
             }
         }
         Ok(())

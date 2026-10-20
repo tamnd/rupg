@@ -365,8 +365,13 @@ pub struct Connection {
     /// `xactStartTimestamp` and `stmtStartTimestamp`, in microseconds since 2000-01-01 UTC.
     transaction_start: i64,
     statement_start: i64,
-    /// The OID of the role of the session.
+    /// `GetUserId`: the OID of the current user.
     role: u32,
+    /// `GetSessionUserId`: the OID of the session user.
+    session_role: u32,
+    /// The names of the current user and of the session user, which `current_user` and `session_user` give.
+    current_user: String,
+    session_user: String,
     /// The catalog that the sessions of the server share.
     store: Arc<Store>,
     /// The file system of the server, which `COPY ... FROM` a file reads. A session with no server has none.
@@ -428,6 +433,8 @@ impl Connection {
             transaction: Transaction::default(),
             session: Session::new(),
             user: start.user.clone(),
+            current_user: start.user.clone(),
+            session_user: start.user.clone(),
             database: start.database.clone(),
             database_oid: database::POSTGRES,
             protocol,
@@ -442,6 +449,7 @@ impl Connection {
             transaction_start: 0,
             statement_start: 0,
             role: role_oid(start),
+            session_role: role_oid(start),
             store: Arc::new(Store::new()),
             io: None,
             lease: None,
@@ -482,6 +490,25 @@ impl Connection {
         self.statement_start = query::now(&*self.clock);
     }
 
+    /// `SetSessionAuthorization` and `SetCurrentRoleId`: the session user from `session_authorization`, the current user from `role`, or the session user when `role` is `none`, and `is_superuser` from the current user. A rollback and `RESET` change the settings too, so the session reads them again before each statement and before `ReadyForQuery`.
+    fn sync_role(&mut self) {
+        let roles = self.roles();
+        let settings = self.settings.get_mut();
+        let session = settings.get("session_authorization").unwrap_or_else(|| self.user.clone());
+        let current =
+            settings.get("role").filter(|role| role != "none").unwrap_or_else(|| session.clone());
+        let role = utility::role_oid(&roles, &current, &self.user).unwrap_or(BOOTSTRAP_SUPERUSER);
+        let superuser = if roles.superuser(role) { "on" } else { "off" };
+        if settings.get("is_superuser").as_deref() != Some(superuser) {
+            drop(settings.set_internal("is_superuser", superuser));
+        }
+        self.session_role =
+            utility::role_oid(&roles, &session, &self.user).unwrap_or(BOOTSTRAP_SUPERUSER);
+        self.role = role;
+        self.current_user = current;
+        self.session_user = session;
+    }
+
     /// What a statement reads of the session.
     fn reader(&self) -> Reader<'_> {
         self.reader_on(self.catalog())
@@ -492,13 +519,14 @@ impl Connection {
         rupg_pgcatalog::roles::use_roles(self.roles());
         Reader::new(
             &self.settings,
-            &self.user,
+            &self.current_user,
             &self.database,
             (self.transaction_start, self.statement_start),
             &*self.clock,
             self.pid,
             catalog,
         )
+        .with_users(&self.session_user, &self.user)
         .with_activity(&self.activity, &self.store)
         .with_sequences(&self.sequences)
         .with_randomness(&self.randomness)
@@ -1192,6 +1220,7 @@ impl Connection {
     /// The parameters that changed, then `ReadyForQuery`.
     fn ready_for_query(&mut self, out: &mut OutBuf) {
         self.report_idle();
+        self.sync_role();
         self.session.set_utf8(self.utf8());
         let mut reports = self.settings.get_mut().reports();
         // PostgreSQL changes `is_superuser` inside the change of `session_authorization`, so it reports `session_authorization` first.
@@ -1514,6 +1543,7 @@ impl Connection {
 
     /// `start_xact_command`: the start of a statement, which starts a transaction if there is none. After an `Execute` that completed, it starts an implicit block.
     fn start_xact(&mut self) {
+        self.sync_role();
         if !self.xact_started {
             if self.transaction.start_command() {
                 self.settings.get_mut().start_transaction(None);
@@ -1623,7 +1653,9 @@ impl Connection {
         if self.store.committed(self.database_oid).schema_by_name(&temp).is_none() {
             return;
         }
-        self.role = BOOTSTRAP_SUPERUSER;
+        let settings = self.settings.get_mut();
+        drop(settings.set_internal("role", "none"));
+        drop(settings.set_internal("session_authorization", &self.user));
         let mut out = OutBuf::new();
         self.simple_query(&format!("DROP SCHEMA {temp}, pg_toast_temp_{number} CASCADE"), &mut out);
         self.finish_xact();
@@ -3274,6 +3306,12 @@ mod tests {
     #[test]
     fn roles() {
         big_stack(|| script(include_str!("connection/roles.test")));
+    }
+
+    /// `SET ROLE`, `SET SESSION AUTHORIZATION`, `RESET` and `set_config` of them, in a transaction and out of one: `current_user`, `session_user`, the reports of `is_superuser`, the checks of the roles, and the owner of a new table. `connection/set_role.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn set_role() {
+        big_stack(|| script(include_str!("connection/set_role.test")));
     }
 
     /// The functions of the size of an object: `pg_size_pretty` of a `bigint` and of a `numeric`, `pg_size_bytes` with its errors, the size of each fork of an empty table, an index of each access method, a sequence and a view, the file of a relation and the relation of a file, the location of a tablespace, `pg_tablespace_databases` and the size of a database and of a tablespace. `connection/db_size.test` is the output of PostgreSQL 19 for the same script in a new database.

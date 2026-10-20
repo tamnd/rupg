@@ -102,7 +102,12 @@ pub(crate) fn now(clock: &dyn Clock) -> i64 {
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {
     settings: &'a RefCell<Settings>,
+    /// The current user, which `role` gives, or else the session user.
     pub(crate) user: &'a str,
+    /// The session user, which `session_authorization` gives.
+    session_user: &'a str,
+    /// The user of the login.
+    login: &'a str,
     pub(crate) database: &'a str,
     pub(crate) transaction_start: i64,
     pub(crate) statement_start: i64,
@@ -255,6 +260,8 @@ impl<'a> Reader<'a> {
         Reader {
             settings,
             user,
+            session_user: user,
+            login: user,
             database,
             transaction_start: times.0,
             statement_start: times.1,
@@ -276,6 +283,13 @@ impl<'a> Reader<'a> {
     /// The warnings of the functions since the last call.
     pub(crate) fn take_warnings(&self) -> Vec<Error> {
         self.warnings.take()
+    }
+
+    /// The reader of a session whose session user and user of the login are not its current user.
+    pub(crate) fn with_users(mut self, session_user: &'a str, login: &'a str) -> Reader<'a> {
+        self.session_user = session_user;
+        self.login = login;
+        self
     }
 
     /// The reader of a session, which reads the table of the sessions in `store`.
@@ -697,7 +711,7 @@ impl rupg_func::Session for Reader<'_> {
     }
 
     fn session_user(&self) -> &str {
-        self.user
+        self.session_user
     }
 
     fn system_user(&self) -> Option<String> {
@@ -934,7 +948,7 @@ impl rupg_func::Session for Reader<'_> {
 
     fn set_setting(&self, name: &str, value: Option<&str>, local: bool) -> Result<String> {
         if let Some(value) = value {
-            utility::check_role(name, value, self.user)?;
+            utility::check_role(name, value, self.login, self.session_user)?;
         }
         let config = match value {
             Some(value) if utility::is_ts_config(name) => {
