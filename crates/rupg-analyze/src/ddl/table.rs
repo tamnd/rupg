@@ -40,6 +40,8 @@ struct NewColumn {
     name: String,
     type_name: TypeName,
     collate: Option<CollateClause>,
+    /// `collOid`: the collation of a column of `CREATE TABLE AS`, or 0.
+    collation: u32,
     is_not_null: bool,
     default: Option<RawDefault>,
     /// `attidentity`, or 0.
@@ -389,6 +391,53 @@ impl Definer<'_, '_> {
     }
 
     /// `transformColumnDefinition`.
+    /// `create_ctas_internal`: `DefineRelation` for the columns of the query of `CREATE TABLE AS`. Each column has its name, its type, its typmod and its collation, as `makeColumnDef` gives them. `defs` are the options of `WITH`.
+    pub(super) fn create_query_table(
+        &mut self,
+        namespace: u32,
+        name: &str,
+        columns: Vec<(String, u32, i32, u32)>,
+        defs: &[Option<Node>],
+    ) -> Result<u32> {
+        let options = self.create_table_options(defs)?;
+        let columns = columns
+            .into_iter()
+            .map(|(name, ty, typmod, collation)| NewColumn {
+                name,
+                type_name: TypeName {
+                    typeOid: ty,
+                    typemod: typmod,
+                    location: -1,
+                    ..TypeName::default()
+                },
+                collate: None,
+                collation,
+                is_not_null: false,
+                default: None,
+                identity: 0,
+                storage: None,
+                compression: None,
+            })
+            .collect();
+        let plan = Plan {
+            relname: name.to_string(),
+            namespace,
+            columns,
+            checks: Vec::new(),
+            not_nulls: Vec::new(),
+            indexes: Vec::new(),
+            foreign: Vec::new(),
+            serials: Vec::new(),
+            has_pkey: false,
+        };
+        let table = self.define_relation(&plan)?;
+        if !options.is_empty() {
+            self.catalog.set_options(table, options)?;
+        }
+        self.create_toast_options(table, defs)?;
+        Ok(table)
+    }
+
     fn column_definition(&mut self, plan: &mut Plan, def: &ColumnDef) -> Result<()> {
         let at = place(def.location);
         let name = def.colname.as_deref().unwrap_or_default().to_string();
@@ -472,6 +521,7 @@ impl Definer<'_, '_> {
             name: name.clone(),
             type_name,
             collate,
+            collation: 0,
             is_not_null: false,
             default: None,
             identity: 0,
@@ -767,6 +817,7 @@ impl Definer<'_, '_> {
         }
         let collation = match &column.collate {
             Some(coll) => self.an.collation_oid(&coll.collname, None)?,
+            None if column.collation != 0 => column.collation,
             None => types::row(ty).map_or(0, |t| t.collation),
         };
         let mut new = Column::new(column.name.clone(), ty, typmod, collation);

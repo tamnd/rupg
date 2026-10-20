@@ -16,7 +16,7 @@ use rupg_pgcatalog::builtin;
 use rupg_platform::os::OsClock;
 use rupg_platform::{Clock, Io};
 use rupg_sql::Severity;
-use rupg_sql::nodes::{LockStmt, Node, ObjectType};
+use rupg_sql::nodes::{InsertStmt, LockStmt, Node, ObjectType, RangeVar, SelectStmt};
 use rupg_types::Value;
 use rupg_wire::{
     CancelKey, CommandTag, Field, Frontend, Level, OutBuf, Portals, ProtocolError, Session,
@@ -824,8 +824,12 @@ impl Connection {
         };
         match result {
             Ok(()) => {
-                lease.catalog = work;
+                let old = std::mem::replace(&mut lease.catalog, work);
+                if let Some(table) = defined.filled {
+                    return self.fill(node, table, &old, notices);
+                }
                 Ok(Done::Tag(match node {
+                    Node::CreateTableAsStmt(_) | Node::SelectStmt(_) => CommandTag::CreateTableAs,
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
@@ -886,6 +890,58 @@ impl Connection {
             }
             Err(error) => {
                 Arc::make_mut(&mut lease.catalog).advance_oid(work.next_oid());
+                Err(error)
+            }
+        }
+    }
+
+    /// `intorel_receive`: the rows of the query of `CREATE TABLE AS` or `SELECT INTO` go into the new table `table`, as `INSERT ... SELECT` writes them. When the query fails, the catalog goes back to `old`, so the table is gone, and its OIDs stay used.
+    fn fill(
+        &mut self,
+        node: &Node,
+        table: u32,
+        old: &Arc<Catalog>,
+        notices: &mut Vec<Notice>,
+    ) -> Result<Done, Error> {
+        let query = match node {
+            Node::CreateTableAsStmt(stmt) => stmt.query.clone(),
+            Node::SelectStmt(stmt) => Some(Node::SelectStmt(Box::new(SelectStmt {
+                intoClause: None,
+                ..(**stmt).clone()
+            }))),
+            _ => None,
+        };
+        let catalog = self.catalog();
+        let Some(relation) = catalog.relation(table) else {
+            return Err(Error::internal("the table of CREATE TABLE AS is gone"));
+        };
+        let relation = RangeVar {
+            schemaname: catalog.schema(relation.namespace).map(|s| s.name.as_str().into()),
+            relname: Some(relation.name.as_str().into()),
+            inh: true,
+            relpersistence: b'p',
+            location: -1,
+            ..RangeVar::default()
+        };
+        let insert = InsertStmt {
+            relation: Some(Box::new(relation)),
+            selectStmt: query,
+            ..InsertStmt::default()
+        };
+        let mut late = Vec::new();
+        let mut described = None;
+        let result =
+            self.select(&Node::InsertStmt(Box::new(insert)), notices, &mut late, &mut described);
+        notices.append(&mut late);
+        match result {
+            Ok(Done::Count(_, count)) => Ok(Done::Count(CommandTag::Select, count)),
+            Ok(_) => Err(Error::internal("the INSERT of CREATE TABLE AS gave no count")),
+            Err(error) => {
+                if let Some(lease) = self.lease.as_mut() {
+                    let next = lease.catalog.next_oid();
+                    lease.catalog = Arc::clone(old);
+                    Arc::make_mut(&mut lease.catalog).advance_oid(next);
+                }
                 Err(error)
             }
         }
@@ -3495,6 +3551,12 @@ mod tests {
     #[test]
     fn create_database() {
         big_stack(|| script(include_str!("connection/create_database.test")));
+    }
+
+    /// `CREATE TABLE AS` and `SELECT INTO`: the types, typmods and collations of the columns, a list of column names, `IF NOT EXISTS`, `WITH NO DATA`, the options of the table, the errors of the query and of the table, a query that fails at run time, and a transaction block. `connection/create_table_as.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn create_table_as() {
+        big_stack(|| script(include_str!("connection/create_table_as.test")));
     }
 
     /// `VACUUM` and `ANALYZE`: the options and their checks, the column lists, a view, a sequence, an index and a view of the catalog that the statement skips, names that do not exist, a catalog, and a transaction block. `connection/vacuum.test` is the output of PostgreSQL 19 for the same script in a new database.
