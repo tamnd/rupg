@@ -160,6 +160,8 @@ enum MiscCmd {
     Cluster(Option<String>),
     /// `REPLICA IDENTITY`.
     ReplicaIdentity(ReplicaIdentityStmt),
+    /// `ENABLE TRIGGER` and `DISABLE TRIGGER`: the name of the trigger or no name for `ALL` and `USER`, the new `tgenabled`, and true for `USER`, which skips the internal triggers.
+    Trigger(Option<String>, u8, bool),
 }
 
 /// A constraint of `AT_PASS_ADD_OTHERCONSTR`.
@@ -428,6 +430,28 @@ impl Definer<'_, '_> {
                 };
                 passes.misc.push(MiscCmd::ReplicaIdentity((**stmt).clone()));
             }
+            AlterTableType::AT_EnableTrig
+            | AlterTableType::AT_EnableAlwaysTrig
+            | AlterTableType::AT_EnableReplicaTrig
+            | AlterTableType::AT_DisableTrig
+            | AlterTableType::AT_EnableTrigAll
+            | AlterTableType::AT_DisableTrigAll
+            | AlterTableType::AT_EnableTrigUser
+            | AlterTableType::AT_DisableTrigUser => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let (enabled, named, user) = match cmd.subtype {
+                    AlterTableType::AT_EnableTrig => (b'O', true, false),
+                    AlterTableType::AT_EnableAlwaysTrig => (b'A', true, false),
+                    AlterTableType::AT_EnableReplicaTrig => (b'R', true, false),
+                    AlterTableType::AT_DisableTrig => (b'D', true, false),
+                    AlterTableType::AT_EnableTrigAll => (b'O', false, false),
+                    AlterTableType::AT_DisableTrigAll => (b'D', false, false),
+                    AlterTableType::AT_EnableTrigUser => (b'O', false, true),
+                    _ => (b'D', false, true),
+                };
+                let name = cmd.name.as_deref().filter(|_| named).map(str::to_owned);
+                passes.misc.push(MiscCmd::Trigger(name, enabled, user));
+            }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
             other => {
@@ -609,6 +633,9 @@ impl Definer<'_, '_> {
                 MiscCmd::Cluster(Some(name)) => self.cluster_on(target, name)?,
                 MiscCmd::Cluster(None) => self.drop_cluster(target),
                 MiscCmd::ReplicaIdentity(stmt) => self.replica_identity(target, stmt)?,
+                MiscCmd::Trigger(name, enabled, user) => {
+                    self.enable_trigger(target.oid, name.as_deref(), *enabled, *user)?;
+                }
             }
         }
         Ok(())

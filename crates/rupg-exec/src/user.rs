@@ -694,11 +694,14 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
     row
 }
 
-/// The internal triggers of the foreign keys. They fire after each row and have no arguments and no columns.
+/// The triggers of `CREATE TRIGGER` and the internal triggers of the foreign keys. `tgargs` has each argument with a zero byte after it.
 fn triggers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     catalog
         .triggers()
         .map(|trigger| {
+            let args: Vec<u8> =
+                trigger.args.iter().flat_map(|a| a.bytes().chain(std::iter::once(0))).collect();
+            let name = |n: Option<&String>| n.map_or(Value::Null, |n| Value::text(n.clone()));
             let mut row = Row::new(table);
             row.set("oid", oid(trigger.oid))
                 .set("tgrelid", oid(trigger.relation))
@@ -706,16 +709,19 @@ fn triggers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("tgname", Value::text(trigger.name.clone()))
                 .set("tgfoid", oid(trigger.function))
                 .set("tgtype", Value::Int2(trigger.kind))
-                .set("tgenabled", code('O'))
-                .set("tgisinternal", Value::Bool(true))
+                .set("tgenabled", Value::Char(trigger.enabled))
+                .set("tgisinternal", Value::Bool(trigger.internal))
                 .set("tgconstrrelid", oid(trigger.constraint_relation))
                 .set("tgconstrindid", oid(trigger.constraint_index))
                 .set("tgconstraint", oid(trigger.constraint))
                 .set("tgdeferrable", Value::Bool(trigger.deferrable))
                 .set("tginitdeferred", Value::Bool(trigger.deferred))
-                .set("tgnargs", Value::Int2(0))
-                .set("tgattr", int2_vector(&[]))
-                .set("tgargs", Value::Bytea(Vec::new()));
+                .set("tgnargs", Value::Int2(i16::try_from(trigger.args.len()).unwrap_or(i16::MAX)))
+                .set("tgattr", int2_vector(&trigger.columns))
+                .set("tgargs", Value::Bytea(args))
+                .set("tgqual", tree(trigger.qual.as_ref()))
+                .set("tgoldtable", name(trigger.old_table.as_ref()))
+                .set("tgnewtable", name(trigger.new_table.as_ref()));
             row
         })
         .collect()

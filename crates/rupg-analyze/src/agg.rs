@@ -63,6 +63,8 @@ pub(crate) enum Kind {
     Returning,
     /// `EXPR_KIND_ALTER_COL_TRANSFORM`: the expression of `USING` of `ALTER COLUMN ... TYPE`.
     Transform,
+    /// `EXPR_KIND_TRIGGER_WHEN`: the condition of `WHEN` of `CREATE TRIGGER`.
+    TriggerWhen,
 }
 
 impl Kind {
@@ -96,6 +98,7 @@ impl Kind {
             Kind::ExecuteParameter => "EXECUTE parameters",
             Kind::Returning => "RETURNING",
             Kind::Transform => "transform expressions",
+            Kind::TriggerWhen => "trigger WHEN conditions",
         }
     }
 
@@ -110,6 +113,7 @@ impl Kind {
                 | Kind::IndexPredicate
                 | Kind::ExecuteParameter
                 | Kind::Transform
+                | Kind::TriggerWhen
         )
     }
 
@@ -121,6 +125,7 @@ impl Kind {
             Kind::IndexExpression => "index expression",
             Kind::ExecuteParameter => "EXECUTE parameter",
             Kind::Transform => "transform expression",
+            Kind::TriggerWhen => "trigger WHEN condition",
             _ => "index predicate",
         }
     }
@@ -389,7 +394,8 @@ impl Analyzer<'_> {
             | Kind::MergeWhen
             | Kind::ExecuteParameter
             | Kind::Returning
-            | Kind::Transform => {
+            | Kind::Transform
+            | Kind::TriggerWhen => {
                 return Err(grouping_error(
                     format!("{what} are not allowed in {}", place.name()),
                     at,

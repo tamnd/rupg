@@ -137,6 +137,7 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_TSCONFIGURATION => self.find_ts(stmt)?,
             ObjectType::OBJECT_FUNCTION => self.find_functions(stmt)?,
             ObjectType::OBJECT_RULE => return self.drop_rule(stmt),
+            ObjectType::OBJECT_TRIGGER => return self.drop_trigger(stmt),
             _ => return Err(not_yet("DROP of this kind of object", None)),
         };
         self.perform(&objects, stmt.behavior == DropBehavior::DROP_CASCADE)

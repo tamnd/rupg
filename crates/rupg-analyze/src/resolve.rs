@@ -899,7 +899,8 @@ impl Analyzer<'_> {
             | Kind::IndexExpression
             | Kind::IndexPredicate
             | Kind::ExecuteParameter
-            | Kind::Transform => {
+            | Kind::Transform
+            | Kind::TriggerWhen => {
                 format!("set-returning functions are not allowed in {}", self.kind.name())
             }
             Kind::ValuesSingle | Kind::Other => {

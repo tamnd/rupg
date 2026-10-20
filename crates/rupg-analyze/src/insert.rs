@@ -527,10 +527,8 @@ impl Analyzer<'_> {
             }
         }
         if let Some(catalog) = self.env.catalog() {
-            // Only the internal triggers of the foreign keys exist, and the write checks the foreign keys itself.
-            let user = |t: &rupg_catalog::Trigger| {
-                t.relation == oid && rupg_catalog::foreign_key_function(t.function).is_none()
-            };
+            // The write checks the foreign keys itself, and the executor does not fire the other triggers yet. A disabled trigger and a trigger for the replica mode do not fire.
+            let user = |t: &rupg_catalog::Trigger| t.relation == oid && !t.internal && t.fires();
             if catalog.triggers().any(user) {
                 return Err(not_yet(&format!("{what} a table with triggers")));
             }
@@ -564,7 +562,7 @@ impl Analyzer<'_> {
         };
         let mut triggers: Vec<_> = catalog
             .triggers()
-            .filter(|t| t.relation == table)
+            .filter(|t| t.relation == table && t.fires())
             .filter_map(|t| {
                 let function = rupg_catalog::foreign_key_function(t.function)?;
                 let event = match function {

@@ -98,13 +98,19 @@ pub const PG_TRIGGER: u32 = 2620;
 /// The OID of `RI_FKey_check_ins`. The other functions of the foreign keys follow it in the order of `ri_triggers.c`.
 const RI_FKEY_CHECK_INS: u32 = 1644;
 /// `TRIGGER_TYPE_ROW`.
-const TRIGGER_ROW: i16 = 1;
+pub const TRIGGER_ROW: i16 = 1;
+/// `TRIGGER_TYPE_BEFORE`. A trigger with neither this bit nor [`TRIGGER_INSTEAD`] fires after the event.
+pub const TRIGGER_BEFORE: i16 = 2;
 /// `TRIGGER_TYPE_INSERT`.
-const TRIGGER_INSERT: i16 = 4;
+pub const TRIGGER_INSERT: i16 = 4;
 /// `TRIGGER_TYPE_DELETE`.
-const TRIGGER_DELETE: i16 = 8;
+pub const TRIGGER_DELETE: i16 = 8;
 /// `TRIGGER_TYPE_UPDATE`.
-const TRIGGER_UPDATE: i16 = 16;
+pub const TRIGGER_UPDATE: i16 = 16;
+/// `TRIGGER_TYPE_TRUNCATE`.
+pub const TRIGGER_TRUNCATE: i16 = 32;
+/// `TRIGGER_TYPE_INSTEAD`.
+pub const TRIGGER_INSTEAD: i16 = 64;
 
 /// A schema.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -585,8 +591,8 @@ pub struct Constraint {
     pub foreign: Option<ForeignKey>,
 }
 
-/// A trigger, one row of `pg_trigger`. Only the internal triggers of the foreign keys exist.
-#[derive(Clone, Debug, PartialEq, Eq)]
+/// A trigger, one row of `pg_trigger`: a trigger of `CREATE TRIGGER`, or an internal trigger of a foreign key.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct Trigger {
     /// The OID.
     pub oid: u32,
@@ -608,6 +614,50 @@ pub struct Trigger {
     pub deferrable: bool,
     /// `tginitdeferred`.
     pub deferred: bool,
+    /// `tgenabled`: `O` when the trigger fires in the origin mode, `D` when it is disabled, `R` when it fires only in the replica mode, and `A` when it always fires.
+    pub enabled: u8,
+    /// `tgisinternal`: true for a trigger of a foreign key.
+    pub internal: bool,
+    /// `tgargs`: the arguments of the function, as text.
+    pub args: Vec<String>,
+    /// `tgattr`: the numbers of the columns of `UPDATE OF`, in the order of the statement.
+    pub columns: Vec<i16>,
+    /// `tgoldtable`: the name of the transition table of `REFERENCING OLD TABLE`.
+    pub old_table: Option<String>,
+    /// `tgnewtable`: the name of the transition table of `REFERENCING NEW TABLE`.
+    pub new_table: Option<String>,
+    /// `tgqual`: the stored form of the condition of `WHEN`, in which the relation 0 is `old` and the relation 1 is `new`.
+    pub qual: Option<String>,
+}
+
+impl Trigger {
+    /// True when the trigger fires with `session_replication_role` at `origin`, the default: `tgenabled` is `O` or `A`.
+    pub fn fires(&self) -> bool {
+        matches!(self.enabled, b'O' | b'A')
+    }
+}
+
+/// The facts of a new trigger for [`Catalog::create_trigger`].
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct NewTrigger {
+    /// The name.
+    pub name: String,
+    /// The OID of the relation.
+    pub relation: u32,
+    /// The OID of the function.
+    pub function: u32,
+    /// `tgtype`.
+    pub kind: i16,
+    /// `tgargs`.
+    pub args: Vec<String>,
+    /// `tgattr`.
+    pub columns: Vec<i16>,
+    /// `tgoldtable`.
+    pub old_table: Option<String>,
+    /// `tgnewtable`.
+    pub new_table: Option<String>,
+    /// `tgqual`.
+    pub qual: Option<String>,
 }
 
 /// A rule of `CREATE RULE`, one row of `pg_rewrite`. The `_RETURN` rule of a view is part of [`ViewInfo`], not a [`Rule`].
@@ -1158,6 +1208,119 @@ impl Catalog {
     /// The trigger with the OID.
     pub fn trigger(&self, oid: u32) -> Option<&Trigger> {
         self.triggers.get(&oid)
+    }
+
+    /// The triggers of a relation in the order of their names, as the index `pg_trigger_tgrelid_tgname_index` gives them.
+    pub fn triggers_of(&self, relation: u32) -> Vec<&Trigger> {
+        let mut list: Vec<&Trigger> =
+            self.triggers.values().filter(|t| t.relation == relation).collect();
+        list.sort_by(|a, b| a.name.cmp(&b.name));
+        list
+    }
+
+    /// The trigger of the relation with the name.
+    pub fn trigger_by_name(&self, relation: u32, name: &str) -> Option<&Trigger> {
+        self.triggers.values().find(|t| t.relation == relation && t.name == name)
+    }
+
+    /// `CreateTriggerFiringOn`: a new trigger, or with `replace` new facts for the trigger of the relation with the same name. A replaced trigger keeps its OID and `tgenabled`, and gets new dependencies. The trigger depends on its function, then on its relation, then on each column of `UPDATE OF`, then on the objects that the condition of `WHEN` reads. The relation gets `relhastriggers`. The result is the OID of the trigger.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the relation has a trigger with the name and `replace` is false, or when that trigger is internal.
+    pub fn create_trigger(
+        &mut self,
+        new: NewTrigger,
+        replace: bool,
+        qual: &[ObjRef],
+    ) -> Result<u32> {
+        let old = self.trigger_by_name(new.relation, &new.name).map(|t| (t.oid, t.internal));
+        let relation = self.relation(new.relation).map_or("", |r| r.name.as_str());
+        let oid = match old {
+            Some(_) if !replace => {
+                return Err(Error::new(
+                    SqlState::DUPLICATE_OBJECT,
+                    format!("trigger \"{}\" for relation \"{relation}\" already exists", new.name),
+                ));
+            }
+            Some((_, true)) => {
+                return Err(Error::new(
+                    SqlState::DUPLICATE_OBJECT,
+                    format!(
+                        "trigger \"{}\" for relation \"{relation}\" is an internal or a child trigger",
+                        new.name
+                    ),
+                ));
+            }
+            Some((oid, false)) => oid,
+            None => self.new_oid(),
+        };
+        let enabled = self.triggers.get(&oid).map_or(b'O', |t| t.enabled);
+        let object = ObjRef::new(PG_TRIGGER, oid);
+        self.depends.retain(|d| d.object != object);
+        self.depend(object, ObjRef::new(PG_PROC, new.function), DepKind::Normal);
+        self.depend(object, ObjRef::new(PG_CLASS, new.relation), DepKind::Auto);
+        for &column in &new.columns {
+            self.depend(object, ObjRef::column(new.relation, column), DepKind::Normal);
+        }
+        self.depend_refs(object, qual);
+        let NewTrigger {
+            name,
+            relation,
+            function,
+            kind,
+            args,
+            columns,
+            old_table,
+            new_table,
+            qual,
+        } = new;
+        let trigger = Trigger {
+            oid,
+            relation,
+            name,
+            function,
+            kind,
+            enabled,
+            args,
+            columns,
+            old_table,
+            new_table,
+            qual,
+            ..Trigger::default()
+        };
+        self.triggers.insert(oid, trigger);
+        self.relation_mut(relation)?.has_triggers = true;
+        Ok(oid)
+    }
+
+    /// `renametrig_internal`: a new name for a trigger.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the relation of the trigger has a trigger with the new name.
+    pub fn rename_trigger(&mut self, oid: u32, name: &str) -> Result<()> {
+        let Some(relation) = self.triggers.get(&oid).map(|t| t.relation) else {
+            return Err(no_object("trigger", oid));
+        };
+        if self.trigger_by_name(relation, name).is_some() {
+            let rel = self.relation(relation).map_or("", |r| r.name.as_str());
+            return Err(Error::new(
+                SqlState::DUPLICATE_OBJECT,
+                format!("trigger \"{name}\" for relation \"{rel}\" already exists"),
+            ));
+        }
+        if let Some(trigger) = self.triggers.get_mut(&oid) {
+            trigger.name = name.to_string();
+        }
+        Ok(())
+    }
+
+    /// `EnableDisableTrigger`: sets `tgenabled` of a trigger.
+    pub fn set_trigger_enabled(&mut self, oid: u32, enabled: u8) {
+        if let Some(trigger) = self.triggers.get_mut(&oid) {
+            trigger.enabled = enabled;
+        }
     }
 
     /// The rules in the order of their OIDs.
@@ -2735,8 +2898,9 @@ impl Catalog {
             constraint_relation: new.table,
             constraint_index: new.index,
             constraint: oid,
-            deferrable: false,
-            deferred: false,
+            enabled: b'O',
+            internal: true,
+            ..Trigger::default()
         };
         // `createForeignKeyActionTriggers`: the triggers of the actions on the referenced table. Only `NO ACTION` can wait to the end of the transaction.
         for (event, action, offset) in [(TRIGGER_DELETE, delete, 0), (TRIGGER_UPDATE, update, 1)] {

@@ -1,0 +1,297 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE tt (a int, b text, c int);
+CREATE TABLE
+> CREATE FUNCTION trf() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE FUNCTION notrf() RETURNS int LANGUAGE sql AS 'select 1';
+CREATE FUNCTION
+> CREATE TRIGGER t1 BEFORE INSERT ON tt FOR EACH ROW EXECUTE FUNCTION trf();
+CREATE TRIGGER
+> CREATE TRIGGER t2 AFTER UPDATE OF c, a ON tt FOR EACH ROW WHEN (old.a IS DISTINCT FROM new.a AND new.b <> 'x') EXECUTE FUNCTION trf('x', 'it''s', 42, 'a\b');
+CREATE TRIGGER
+> CREATE TRIGGER t3 AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON tt FOR EACH STATEMENT EXECUTE PROCEDURE trf();
+CREATE TRIGGER
+> CREATE TRIGGER "T 4" AFTER DELETE ON tt REFERENCING OLD TABLE AS oldt FOR EACH STATEMENT EXECUTE FUNCTION trf();
+CREATE TRIGGER
+> CREATE TRIGGER t5 AFTER UPDATE ON tt REFERENCING NEW TABLE AS n OLD TABLE AS o FOR EACH ROW WHEN (new.* IS DISTINCT FROM old.*) EXECUTE FUNCTION public.trf();
+CREATE TRIGGER
+> SELECT tgname, tgtype, tgenabled, tgisinternal, tgnargs, tgattr, tgargs, tgqual IS NOT NULL AS q, tgoldtable, tgnewtable, tgfoid::regproc, tgconstraint, tgdeferrable FROM pg_trigger WHERE tgrelid = 'tt'::regclass ORDER BY tgname;
+fields tgname@pg_trigger.4:19:64:-1,tgtype@pg_trigger.6:21:2:-1,tgenabled@pg_trigger.7:18:1:-1,tgisinternal@pg_trigger.8:16:1:-1,tgnargs@pg_trigger.14:21:2:-1,tgattr@pg_trigger.15:22:-1:-1,tgargs@pg_trigger.16:17:-1:-1,q:16:1:-1,tgoldtable@pg_trigger.18:19:64:-1,tgnewtable@pg_trigger.19:19:64:-1,tgfoid:24:4:-1,tgconstraint@pg_trigger.11:26:4:-1,tgdeferrable@pg_trigger.12:16:1:-1
+row T 4,8,O,f,0,,\x,f,oldt,NULL,trf,0,f
+row t1,7,O,f,0,,\x,f,NULL,NULL,trf,0,f
+row t2,17,O,f,4,3 1,\x78006974277300343200615c6200,t,NULL,NULL,trf,0,f
+row t3,60,O,f,0,,\x,f,NULL,NULL,trf,0,f
+row t5,17,O,f,0,,\x,t,o,n,trf,0,f
+SELECT 5
+> SELECT pg_get_triggerdef(oid), pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgrelid = 'tt'::regclass ORDER BY tgname;
+fields pg_get_triggerdef:25:-1:-1,pg_get_triggerdef:25:-1:-1
+row CREATE TRIGGER "T 4" AFTER DELETE ON public.tt REFERENCING OLD TABLE AS oldt FOR EACH STATEMENT EXECUTE FUNCTION trf(),CREATE TRIGGER "T 4" AFTER DELETE ON tt REFERENCING OLD TABLE AS oldt FOR EACH STATEMENT EXECUTE FUNCTION trf()
+row CREATE TRIGGER t1 BEFORE INSERT ON public.tt FOR EACH ROW EXECUTE FUNCTION trf(),CREATE TRIGGER t1 BEFORE INSERT ON tt FOR EACH ROW EXECUTE FUNCTION trf()
+row CREATE TRIGGER t2 AFTER UPDATE OF c, a ON public.tt FOR EACH ROW WHEN (((old.a IS DISTINCT FROM new.a) AND (new.b <> 'x'::text))) EXECUTE FUNCTION trf('x', 'it''s', '42', 'a\b'),CREATE TRIGGER t2 AFTER UPDATE OF c, a ON tt FOR EACH ROW WHEN (old.a IS DISTINCT FROM new.a AND new.b <> 'x'::text) EXECUTE FUNCTION trf('x', 'it''s', '42', 'a\b')
+row CREATE TRIGGER t3 AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON public.tt FOR EACH STATEMENT EXECUTE FUNCTION trf(),CREATE TRIGGER t3 AFTER INSERT OR DELETE OR UPDATE OR TRUNCATE ON tt FOR EACH STATEMENT EXECUTE FUNCTION trf()
+row CREATE TRIGGER t5 AFTER UPDATE ON public.tt REFERENCING OLD TABLE AS o NEW TABLE AS n FOR EACH ROW WHEN ((new.* IS DISTINCT FROM old.*)) EXECUTE FUNCTION trf(),CREATE TRIGGER t5 AFTER UPDATE ON tt REFERENCING OLD TABLE AS o NEW TABLE AS n FOR EACH ROW WHEN (new.* IS DISTINCT FROM old.*) EXECUTE FUNCTION trf()
+SELECT 5
+> SELECT relhastriggers FROM pg_class WHERE relname = 'tt';
+fields relhastriggers@pg_class.22:16:1:-1
+row t
+SELECT 1
+> SELECT pg_get_triggerdef(0) IS NULL;
+fields ?column?:16:1:-1
+row t
+SELECT 1
+> CREATE TRIGGER t1 BEFORE INSERT ON tt FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 42710 trigger "t1" for relation "tt" already exists
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW EXECUTE FUNCTION notrf();
+ERROR 42P17 function notrf must return type trigger
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW EXECUTE FUNCTION nosuch();
+ERROR 42883 function nosuch() does not exist
+> CREATE TRIGGER t9 BEFORE INSERT ON tt FOR EACH ROW EXECUTE FUNCTION trf(1, 2.5, null, true, abc, "Q q");
+CREATE TRIGGER
+> SELECT tgnargs, tgargs, pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 't9';
+fields tgnargs@pg_trigger.14:21:2:-1,tgargs@pg_trigger.16:17:-1:-1,pg_get_triggerdef:25:-1:-1
+row 6,\x3100322e35006e756c6c0074727565006162630051207100,CREATE TRIGGER t9 BEFORE INSERT ON public.tt FOR EACH ROW EXECUTE FUNCTION trf('1', '2.5', 'null', 'true', 'abc', 'Q q')
+SELECT 1
+> DROP TRIGGER t9 ON tt;
+DROP TRIGGER
+> CREATE TRIGGER t6 BEFORE INSERT ON nosuch FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 42P01 relation "nosuch" does not exist
+> CREATE TRIGGER t6 BEFORE TRUNCATE ON tt FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 0A000 TRUNCATE FOR EACH ROW triggers are not supported
+> CREATE TRIGGER t6 INSTEAD OF INSERT ON tt FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 42809 "tt" is a table
+DETAIL Tables cannot have INSTEAD OF triggers.
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW WHEN (old.a = 1) EXECUTE FUNCTION trf();
+ERROR 42P17 INSERT trigger's WHEN condition cannot reference OLD values at 58
+> CREATE TRIGGER t6 BEFORE DELETE ON tt FOR EACH ROW WHEN (new.a = 1) EXECUTE FUNCTION trf();
+ERROR 42P17 DELETE trigger's WHEN condition cannot reference NEW values at 58
+> CREATE TRIGGER t6 BEFORE DELETE ON tt FOR EACH STATEMENT WHEN (old.a = 1) EXECUTE FUNCTION trf();
+ERROR 42P17 statement trigger's WHEN condition cannot reference column values at 64
+> CREATE TRIGGER t6 BEFORE DELETE ON tt FOR EACH STATEMENT WHEN (1 = 1) EXECUTE FUNCTION trf();
+CREATE TRIGGER
+> CREATE TRIGGER t10 BEFORE UPDATE OF a, a ON tt FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 42701 column "a" specified more than once
+> CREATE TRIGGER t10 BEFORE UPDATE OF zz ON tt FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 42703 column "zz" of relation "tt" does not exist
+> CREATE TRIGGER t6 BEFORE DELETE ON tt REFERENCING OLD TABLE AS o FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 42P17 transition table name can only be specified for an AFTER trigger
+> CREATE TRIGGER t6 AFTER INSERT ON tt REFERENCING OLD TABLE AS o FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 42P17 OLD TABLE can only be specified for a DELETE or UPDATE trigger
+> CREATE TRIGGER t6 AFTER DELETE ON tt REFERENCING NEW TABLE AS o FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 42P17 NEW TABLE can only be specified for an INSERT or UPDATE trigger
+> CREATE TRIGGER t6 AFTER INSERT OR DELETE ON tt REFERENCING OLD TABLE AS o FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 0A000 transition tables cannot be specified for triggers with more than one event
+> CREATE TRIGGER t6 AFTER UPDATE ON tt REFERENCING OLD TABLE AS o NEW TABLE AS o FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 42P17 OLD TABLE name and NEW TABLE name cannot be the same
+> CREATE TRIGGER t6 AFTER UPDATE ON tt REFERENCING OLD TABLE AS o OLD TABLE AS p FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 42P17 OLD TABLE cannot be specified multiple times
+> CREATE TRIGGER t6 AFTER UPDATE ON tt REFERENCING OLD ROW AS o FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 0A000 ROW variable naming in the REFERENCING clause is not supported
+HINT Use OLD TABLE or NEW TABLE for naming transition tables.
+> CREATE TRIGGER t6 AFTER UPDATE OF a ON tt REFERENCING OLD TABLE AS o FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 0A000 transition tables cannot be specified for triggers with column lists
+> CREATE TRIGGER t6 AFTER TRUNCATE ON tt REFERENCING OLD TABLE AS o FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 0A000 TRUNCATE triggers with transition tables are not supported
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW WHEN (new.zz = 1) EXECUTE FUNCTION trf();
+ERROR 42703 column new.zz does not exist at 58
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW WHEN (new.a) EXECUTE FUNCTION trf();
+ERROR 42804 argument of WHEN must be type boolean, not type integer at 58
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW WHEN (new.a = (select 1)) EXECUTE FUNCTION trf();
+ERROR 0A000 cannot use subquery in trigger WHEN condition at 66
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW WHEN (sum(new.a) > 1) EXECUTE FUNCTION trf();
+ERROR 42803 aggregate functions are not allowed in trigger WHEN conditions at 58
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW WHEN (new.ctid IS NULL) EXECUTE FUNCTION trf();
+ERROR 0A000 BEFORE trigger's WHEN condition cannot reference NEW system columns at 58
+> CREATE TRIGGER t6 BEFORE INSERT ON tt FOR EACH ROW WHEN (x.a = 1) EXECUTE FUNCTION trf();
+ERROR 42P01 missing FROM-clause entry for table "x" at 58
+> CREATE VIEW tv AS SELECT * FROM tt;
+CREATE VIEW
+> CREATE TRIGGER t6 BEFORE INSERT ON tv FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 42809 "tv" is a view
+DETAIL Views cannot have row-level BEFORE or AFTER triggers.
+> CREATE TRIGGER t6 INSTEAD OF INSERT ON tv FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 0A000 INSTEAD OF triggers must be FOR EACH ROW
+> CREATE TRIGGER t6 INSTEAD OF INSERT ON tv FOR EACH ROW WHEN (new.a = 1) EXECUTE FUNCTION trf();
+ERROR 0A000 INSTEAD OF triggers cannot have WHEN conditions
+> CREATE TRIGGER t6 INSTEAD OF UPDATE OF a ON tv FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 0A000 INSTEAD OF triggers cannot have column lists
+> CREATE TRIGGER t6 BEFORE TRUNCATE ON tv FOR EACH STATEMENT EXECUTE FUNCTION trf();
+ERROR 42809 "tv" is a view
+DETAIL Views cannot have TRUNCATE triggers.
+> CREATE TRIGGER t6 INSTEAD OF INSERT ON tv FOR EACH ROW EXECUTE FUNCTION trf();
+CREATE TRIGGER
+> CREATE TRIGGER t7 BEFORE INSERT ON tv FOR EACH STATEMENT EXECUTE FUNCTION trf();
+CREATE TRIGGER
+> SELECT pg_get_triggerdef(oid, true) FROM pg_trigger WHERE tgrelid = 'tv'::regclass ORDER BY tgname;
+fields pg_get_triggerdef:25:-1:-1
+row CREATE TRIGGER t6 INSTEAD OF INSERT ON tv FOR EACH ROW EXECUTE FUNCTION trf()
+row CREATE TRIGGER t7 BEFORE INSERT ON tv FOR EACH STATEMENT EXECUTE FUNCTION trf()
+SELECT 2
+> CREATE SEQUENCE ts;
+CREATE SEQUENCE
+> CREATE TRIGGER t8 BEFORE INSERT ON ts FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 42809 relation "ts" cannot have triggers
+DETAIL This operation is not supported for sequences.
+> CREATE TRIGGER t8 BEFORE INSERT ON pg_class FOR EACH ROW EXECUTE FUNCTION trf();
+ERROR 42501 permission denied: "pg_class" is a system catalog
+> CREATE OR REPLACE TRIGGER t1 AFTER INSERT ON tt FOR EACH ROW EXECUTE FUNCTION trf('r');
+CREATE TRIGGER
+> SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 't1';
+fields pg_get_triggerdef:25:-1:-1
+row CREATE TRIGGER t1 AFTER INSERT ON public.tt FOR EACH ROW EXECUTE FUNCTION trf('r')
+SELECT 1
+> ALTER TRIGGER t1 ON tt RENAME TO t1r;
+ALTER TRIGGER
+> ALTER TRIGGER t1 ON tt RENAME TO t1r;
+ERROR 42704 trigger "t1" for table "tt" does not exist
+> ALTER TRIGGER t2 ON tt RENAME TO t1r;
+ERROR 42710 trigger "t1r" for relation "tt" already exists
+> ALTER TRIGGER t1r ON nosuch RENAME TO t1;
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TABLE tt DISABLE TRIGGER t1r;
+ALTER TABLE
+> ALTER TABLE tt ENABLE REPLICA TRIGGER t2;
+ALTER TABLE
+> ALTER TABLE tt ENABLE ALWAYS TRIGGER t3;
+ALTER TABLE
+> SELECT tgname, tgenabled FROM pg_trigger WHERE tgrelid = 'tt'::regclass ORDER BY 1;
+fields tgname@pg_trigger.4:19:64:-1,tgenabled@pg_trigger.7:18:1:-1
+row T 4,O
+row t1r,D
+row t2,R
+row t3,A
+row t5,O
+row t6,O
+SELECT 6
+> ALTER TABLE tt DISABLE TRIGGER USER;
+ALTER TABLE
+> SELECT tgname, tgenabled FROM pg_trigger WHERE tgrelid = 'tt'::regclass ORDER BY 1;
+fields tgname@pg_trigger.4:19:64:-1,tgenabled@pg_trigger.7:18:1:-1
+row T 4,D
+row t1r,D
+row t2,D
+row t3,D
+row t5,D
+row t6,D
+SELECT 6
+> ALTER TABLE tt ENABLE TRIGGER ALL;
+ALTER TABLE
+> SELECT tgname, tgenabled FROM pg_trigger WHERE tgrelid = 'tt'::regclass ORDER BY 1;
+fields tgname@pg_trigger.4:19:64:-1,tgenabled@pg_trigger.7:18:1:-1
+row T 4,O
+row t1r,O
+row t2,O
+row t3,O
+row t5,O
+row t6,O
+SELECT 6
+> ALTER TABLE tt DISABLE TRIGGER nosuch;
+ERROR 42704 trigger "nosuch" for table "tt" does not exist
+> SELECT t.tgname, d.refclassid::regclass, d.refobjsubid, d.deptype FROM pg_depend d JOIN pg_trigger t ON d.classid = 'pg_trigger'::regclass AND d.objid = t.oid WHERE t.tgrelid = 'tt'::regclass ORDER BY 1, 2, 3;
+fields tgname@pg_trigger.4:19:64:-1,refclassid:2205:4:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row T 4,pg_proc,0,n
+row T 4,pg_class,0,a
+row t1r,pg_proc,0,n
+row t1r,pg_class,0,a
+row t2,pg_proc,0,n
+row t2,pg_class,0,a
+row t2,pg_class,1,n
+row t2,pg_class,1,n
+row t2,pg_class,2,n
+row t2,pg_class,3,n
+row t3,pg_proc,0,n
+row t3,pg_class,0,a
+row t5,pg_proc,0,n
+row t5,pg_class,0,a
+row t6,pg_proc,0,n
+row t6,pg_class,0,a
+SELECT 16
+> DROP FUNCTION trf();
+ERROR 2BP01 cannot drop function trf() because other objects depend on it
+DETAIL trigger t1r on table tt depends on function trf()
+trigger t2 on table tt depends on function trf()
+trigger t3 on table tt depends on function trf()
+trigger T 4 on table tt depends on function trf()
+trigger t5 on table tt depends on function trf()
+trigger t6 on table tt depends on function trf()
+trigger t6 on view tv depends on function trf()
+trigger t7 on view tv depends on function trf()
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> COMMENT ON TRIGGER t2 ON tt IS 'hello';
+COMMENT
+> SELECT obj_description(oid, 'pg_trigger') FROM pg_trigger WHERE tgname = 't2';
+fields obj_description:25:-1:-1
+row hello
+SELECT 1
+> COMMENT ON TRIGGER nosuch ON tt IS 'hello';
+ERROR 42704 trigger "nosuch" for table "tt" does not exist
+> ALTER TABLE tt DROP COLUMN a;
+ERROR 2BP01 cannot drop column a of table tt because other objects depend on it
+DETAIL trigger t2 on table tt depends on column a of table tt
+view tv depends on column a of table tt
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE tt DROP COLUMN c;
+ERROR 2BP01 cannot drop column c of table tt because other objects depend on it
+DETAIL trigger t2 on table tt depends on column c of table tt
+view tv depends on column c of table tt
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> SELECT trigger_name, event_manipulation, event_object_table, action_order, action_condition, action_statement, action_orientation, action_timing, action_reference_old_table, action_reference_new_table FROM information_schema.triggers ORDER BY 1, 2;
+fields trigger_name@information_schema.triggers.3:19:64:-1,event_manipulation@information_schema.triggers.4:1043:-1:-1,event_object_table@information_schema.triggers.7:19:64:-1,action_order@information_schema.triggers.8:23:4:-1,action_condition@information_schema.triggers.9:1043:-1:-1,action_statement@information_schema.triggers.10:1043:-1:-1,action_orientation@information_schema.triggers.11:1043:-1:-1,action_timing@information_schema.triggers.12:1043:-1:-1,action_reference_old_table@information_schema.triggers.13:19:64:-1,action_reference_new_table@information_schema.triggers.14:19:64:-1
+row T 4,DELETE,tt,1,NULL,EXECUTE FUNCTION trf(),STATEMENT,AFTER,oldt,NULL
+row t1r,INSERT,tt,1,NULL,EXECUTE FUNCTION trf('r'),ROW,AFTER,NULL,NULL
+row t2,UPDATE,tt,1,((old.a IS DISTINCT FROM new.a) AND (new.b <> 'x'::text)),EXECUTE FUNCTION trf('x', 'it''s', '42', 'a\b'),ROW,AFTER,NULL,NULL
+row t3,DELETE,tt,2,NULL,EXECUTE FUNCTION trf(),STATEMENT,AFTER,NULL,NULL
+row t3,INSERT,tt,1,NULL,EXECUTE FUNCTION trf(),STATEMENT,AFTER,NULL,NULL
+row t3,UPDATE,tt,1,NULL,EXECUTE FUNCTION trf(),STATEMENT,AFTER,NULL,NULL
+row t5,UPDATE,tt,2,(new.* IS DISTINCT FROM old.*),EXECUTE FUNCTION trf(),ROW,AFTER,o,n
+row t6,DELETE,tt,1,(1 = 1),EXECUTE FUNCTION trf(),STATEMENT,BEFORE,NULL,NULL
+row t6,INSERT,tv,1,NULL,EXECUTE FUNCTION trf(),ROW,INSTEAD OF,NULL,NULL
+row t7,INSERT,tv,1,NULL,EXECUTE FUNCTION trf(),STATEMENT,BEFORE,NULL,NULL
+SELECT 10
+> SELECT trigger_name, event_object_table, event_object_column FROM information_schema.triggered_update_columns;
+fields trigger_name@information_schema.triggered_update_columns.3:19:64:-1,event_object_table@information_schema.triggered_update_columns.6:19:64:-1,event_object_column@information_schema.triggered_update_columns.7:19:64:-1
+row t2,tt,c
+row t2,tt,a
+SELECT 2
+> DROP TRIGGER t2 ON tt;
+DROP TRIGGER
+> DROP TRIGGER t2 ON tt;
+ERROR 42704 trigger "t2" for table "tt" does not exist
+> DROP TRIGGER IF EXISTS t2 ON tt;
+NOTICE 00000 trigger "t2" for relation "tt" does not exist, skipping
+DROP TRIGGER
+> DROP TRIGGER IF EXISTS t2 ON nosuch;
+NOTICE 00000 relation "nosuch" does not exist, skipping
+DROP TRIGGER
+> DROP TRIGGER t2 ON nosuch;
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TABLE tt DROP COLUMN a;
+ERROR 2BP01 cannot drop column a of table tt because other objects depend on it
+DETAIL view tv depends on column a of table tt
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> SELECT tgname FROM pg_trigger WHERE tgrelid = 'tt'::regclass ORDER BY 1;
+fields tgname@pg_trigger.4:19:64:-1
+row T 4
+row t1r
+row t3
+row t5
+row t6
+SELECT 5
+> DROP FUNCTION trf() CASCADE;
+NOTICE 00000 drop cascades to 7 other objects
+DETAIL drop cascades to trigger t1r on table tt
+drop cascades to trigger t3 on table tt
+drop cascades to trigger T 4 on table tt
+drop cascades to trigger t5 on table tt
+drop cascades to trigger t6 on table tt
+drop cascades to trigger t6 on view tv
+drop cascades to trigger t7 on view tv
+DROP FUNCTION
+> SELECT tgname FROM pg_trigger WHERE NOT tgisinternal ORDER BY 1;
+fields tgname@pg_trigger.4:19:64:-1
+SELECT 0
+> SELECT relhastriggers FROM pg_class WHERE relname = 'tt';
+fields relhastriggers@pg_class.22:16:1:-1
+row t
+SELECT 1

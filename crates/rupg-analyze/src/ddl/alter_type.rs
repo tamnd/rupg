@@ -5,7 +5,7 @@
 use std::collections::BTreeSet;
 
 use rupg_catalog::{
-    Column, ConKind, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_REWRITE, RelKind,
+    Column, ConKind, ObjRef, PG_ATTRDEF, PG_CLASS, PG_CONSTRAINT, PG_REWRITE, PG_TRIGGER, RelKind,
     Target as DropTarget, flag,
 };
 use rupg_common::{Error, Result, SqlState};
@@ -243,6 +243,18 @@ impl Definer<'_, '_> {
                     return Err(Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
                         "cannot alter type of a column used by a view or rule",
+                    )
+                    .with_detail(format!(
+                        "{} depends on column \"{}\".",
+                        self.describe(object),
+                        cmd.column
+                    )));
+                }
+                // A trigger can depend on the column for `UPDATE OF` or for its condition of `WHEN`, and PostgreSQL does not change either one.
+                PG_TRIGGER => {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "cannot alter type of a column used in a trigger definition",
                     )
                     .with_detail(format!(
                         "{} depends on column \"{}\".",
