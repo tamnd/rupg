@@ -230,3 +230,50 @@ ERROR 42704 type "nosuchtype" does not exist
 > SELECT proname FROM pg_proc WHERE pronamespace = 'public'::regnamespace ORDER BY 1;
 fields proname@pg_proc.2:19:64:-1
 SELECT 0
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'one'), (2, 'two');
+INSERT 0 2
+> CREATE FUNCTION getall() RETURNS SETOF t LANGUAGE sql AS $$ SELECT * FROM t ORDER BY a $$;
+CREATE FUNCTION
+> CREATE FUNCTION first_t() RETURNS t LANGUAGE sql AS $$ SELECT * FROM t ORDER BY a LIMIT 1 $$;
+CREATE FUNCTION
+> CREATE FUNCTION rowof(x t) RETURNS text LANGUAGE sql RETURN x.b || '!';
+CREATE FUNCTION
+> CREATE FUNCTION fq(n int) RETURNS int LANGUAGE sql RETURN fq.n * 2;
+CREATE FUNCTION
+> CREATE FUNCTION quoted() RETURNS int LANGUAGE sql AS 'SELECT ''x''::int';
+ERROR 22P02 invalid input syntax for type integer: "x" at 62
+> CREATE FUNCTION syn() RETURNS int LANGUAGE sql AS $$ SELEC 1 $$;
+ERROR 42601 syntax error at or near "SELEC" at 54
+> SELECT getall()::text;
+fields getall:25:-1:-1
+row (1,one)
+row (2,two)
+SELECT 2
+> SELECT first_t()::text;
+fields first_t:25:-1:-1
+row (1,one)
+SELECT 1
+> SELECT (first_t()).b;
+fields b:25:-1:-1
+row one
+SELECT 1
+> SELECT * FROM first_t();
+fields a:23:4:-1,b:25:-1:-1
+row 1,one
+SELECT 1
+> SELECT rowof(t) FROM t ORDER BY a;
+fields rowof:25:-1:-1
+row one!
+row two!
+SELECT 2
+> SELECT fq(4);
+fields fq:23:4:-1
+row 8
+SELECT 1
+> SELECT quoted();
+ERROR 42883 function quoted() does not exist at 8
+DETAIL There is no function of that name.
+> DROP FUNCTION getall(), first_t(), rowof(t), fq(int);
+DROP FUNCTION
