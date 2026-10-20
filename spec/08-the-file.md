@@ -217,7 +217,7 @@ A checkpoint makes the current page table, catalog root and free space map reach
 These are the steps, in this order. A step starts only when the previous step is complete.
 
 1. **Fix the redo positions.** For each ring, the checkpoint computes the oldest log position that changed a page that is dirty in memory and has not been written. That is the position where redo of the ring must start after this checkpoint.
-2. **Write the old dirty pages.** The page writer writes the dirty pages whose first change is older than the checkpoint target, as in section 8.6.1, and waits for every write to complete. The target is the position that leaves at most `max_wal_size` of log in each ring.
+2. **Write the old dirty pages.** The page writer writes the dirty pages whose first change is older than the checkpoint target, as in section 8.6.1, and waits for every write to complete. The target is the set of positions that leaves at most `max_wal_size` of log in all the rings together.
 3. **Write the metadata pages.** The checkpoint writes, out of place, the dirty page table nodes from the leaves to the root, the dirty free space map pages, the pending free list pages, and a new copy of the log ring directory with the redo positions of step 1. It waits for every write to complete.
 4. **Sync the data.** It calls `fdatasync` on the file. On macOS it calls `fcntl` with `F_FULLFSYNC`, because `fsync` on macOS does not flush the drive's write cache (Apple `fsync(2)` manual page).
 5. **Write the slot.** It writes the inactive header slot with the generation of the active slot plus 1, the new roots and their checksums, and the checkpoint timestamp. The write is one 4 KiB direct write.
@@ -235,7 +235,7 @@ These are the steps, in this order. A step starts only when the previous step is
 | step 6 | either slot, both are complete | consistent in both cases |
 | step 7 | the new slot | redo from the new positions, the pending free list comes from the slot |
 
-**The checkpoint triggers are the PostgreSQL settings.** A checkpoint starts when `checkpoint_timeout` passes, default 5 minutes, or when any ring holds more than `max_wal_size` of log since its redo position, default 1 GB, as in PostgreSQL. The SQL command `CHECKPOINT` runs one and waits for it. `checkpoint_completion_target` paces step 2. These settings exist in PostgreSQL and clients read and set them, so rupg keeps their names and meanings (document 19).
+**The checkpoint triggers are the PostgreSQL settings.** A checkpoint starts when `checkpoint_timeout` passes, default 5 minutes, or when the rings together hold more than `max_wal_size` of log since their redo positions, default 1 GB, as in PostgreSQL. In PostgreSQL, `max_wal_size` bounds all the WAL of the server, so the sum over all rings keeps its meaning. A ring that is half full also starts a checkpoint, so that the ring does not fill (section 8.7). The SQL command `CHECKPOINT` runs one and waits for it. `checkpoint_completion_target` paces step 2. These settings exist in PostgreSQL and clients read and set them, so rupg keeps their names and meanings (document 19).
 
 ### 8.6.3 Segments and the log
 
@@ -273,7 +273,7 @@ Each worker has one log ring inside the file (document 04 section 4.3). A ring i
 
 **A flush never rewrites a block that holds a durable record.** The ring writes in units of 4 KiB, the alignment of direct I/O in section 8.2. A flush pads the last unit with a fill record. The next flush starts at the next unit. If the ring rewrote a partial unit, a torn write of that unit could destroy records that were already reported as committed. The padding costs space, and per-worker group commit amortizes it. "Moving on From Group Commit" (SIGMOD 2025) is the reference that document 11 uses for the commit protocol.
 
-**A ring grows when the checkpoint cannot keep up.** If a ring has no free space, its worker first starts a checkpoint. If the checkpoint does not free space because one transaction holds an old position, the ring adds an extent. The new extent is usable only after a checkpoint writes the new extent list and a slot that names it, so the growth costs one checkpoint. A ring shrinks back to four extents at a checkpoint when it has been less than one quarter full for 10 checkpoints. These numbers are budgets for M1, to be tuned against the TPC-C runs of M5.
+**A ring grows when the checkpoint cannot keep up.** When a ring is half full, its worker starts a checkpoint, so that the ring has space while the checkpoint runs. If a ring has no free space, its worker first starts a checkpoint. If the checkpoint does not free space because one transaction holds an old position, the ring adds an extent. The new extent is usable only after a checkpoint writes the new extent list and a slot that names it, so the growth costs one checkpoint. A ring shrinks back to four extents at a checkpoint when it has been less than one quarter full for 10 checkpoints. These numbers are budgets for M1, to be tuned against the TPC-C runs of M5.
 
 ## 8.8 The buffer manager
 
@@ -443,7 +443,7 @@ Every open runs the same path. A clean shutdown makes the path short, because th
 9. Run a checkpoint, so that the next crash does not redo the same log.
 10. Write the owner record and accept connections.
 
-**The recovery time depends on the log since the checkpoint.** With the default `max_wal_size` of 1 GB for each ring, the worst case is 1 GB of log on each ring. Document 11 sets the target for redo throughput and gives the measured number at M1.
+**The recovery time depends on the log since the checkpoint.** With the default `max_wal_size` of 1 GB for all the rings together, the worst case is 1 GB of log in total, for any number of rings. Document 11 sets the target for redo throughput and gives the measured number at M1.
 
 | Entry point | Who calls it | Effect |
 |---|---|---|

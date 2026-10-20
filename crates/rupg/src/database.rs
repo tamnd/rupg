@@ -32,8 +32,10 @@ pub struct Options {
     pub shared_buffers: u64,
     /// The number of extents of 16 MiB in the log ring of a new file. The default is 4.
     pub log_extents: usize,
-    /// A transaction that starts when the log holds more than this many bytes after the redo position takes a checkpoint first. The default is half the ring.
+    /// A transaction that starts when one ring holds more than this many bytes after its redo position takes a checkpoint first, so that the ring does not fill. The default is half the ring.
     pub checkpoint_log: Option<u64>,
+    /// `max_wal_size` in bytes. A transaction that starts when all the rings together hold more than this many bytes after their redo positions takes a checkpoint first. The sum, and not the bytes of each ring, bounds the log that recovery reads (spec/11 section 11.15). The default is 1 GiB, as in PostgreSQL.
+    pub max_wal_size: u64,
     /// Make the file if it does not exist or has zero bytes. The default is true. When it is false, a missing file or a file of zero bytes gives SQLSTATE `58P01`.
     pub create: bool,
     /// The number of logical pages that the window of the buffer pool can hold (spec/08 section 8.8.1). The default `None` takes the largest reservation of address space that the host gives. A reservation that large takes milliseconds to make and to free, so a test that opens many databases sets a small number. A file with more pages than the window gives an error.
@@ -47,6 +49,7 @@ impl Default for Options {
             shared_buffers: 128 << 20,
             log_extents: 4,
             checkpoint_log: None,
+            max_wal_size: 1 << 30,
             create: true,
             window_pages: None,
         }
@@ -111,6 +114,7 @@ struct Shared {
     store: Arc<FileStore>,
     txns: Arc<Transactions<BufferPool>>,
     checkpoint_log: u64,
+    max_wal_size: u64,
     catalog: Mutex<Catalog>,
     /// One checkpoint at a time. A new table holds it from its creation to the checkpoint that makes it durable.
     checkpoints: Mutex<()>,
@@ -218,6 +222,7 @@ impl Database {
             store,
             txns,
             checkpoint_log: options.checkpoint_log.unwrap_or(size / 2),
+            max_wal_size: options.max_wal_size,
             catalog: Mutex::new(catalog),
             checkpoints: Mutex::new(()),
         };
@@ -276,9 +281,10 @@ impl Database {
         self.transaction_with(Isolation::ReadCommitted)
     }
 
-    /// Starts a transaction at `isolation`. When the log holds more than [`Options::checkpoint_log`] bytes after the redo position, it takes a checkpoint first.
+    /// Starts a transaction at `isolation`. When one ring holds more than [`Options::checkpoint_log`] bytes after its redo position, or all the rings hold more than [`Options::max_wal_size`], it takes a checkpoint first.
     pub fn transaction_with(&self, isolation: Isolation) -> Result<Transaction> {
-        if self.log_bytes()? > self.shared.checkpoint_log {
+        let (largest, sum) = self.log_bytes();
+        if largest > self.shared.checkpoint_log || sum > self.shared.max_wal_size {
             // When another thread holds the lock, it writes a checkpoint now.
             if let Ok(_one) = self.shared.checkpoints.try_lock() {
                 self.checkpoint_locked(false)?;
@@ -287,11 +293,13 @@ impl Database {
         Ok(Transaction { database: self.shared.number, inner: self.shared.txns.begin(isolation) })
     }
 
-    /// The bytes of the log after the redo position, which a recovery would read.
-    fn log_bytes(&self) -> Result<u64> {
-        let Some(log) = self.shared.txns.log() else { return Ok(0) };
-        let ring = log.ring(RING as u16)?;
-        Ok(ring.end().saturating_sub(ring.state().redo))
+    /// The bytes of the log after the redo positions, which a recovery would read: the most in one ring and the sum over all rings.
+    fn log_bytes(&self) -> (u64, u64) {
+        let Some(log) = self.shared.txns.log() else { return (0, 0) };
+        log.rings()
+            .iter()
+            .map(|r| r.end().saturating_sub(r.state().redo))
+            .fold((0, 0), |(largest, sum), bytes| (largest.max(bytes), sum.saturating_add(bytes)))
     }
 
     /// Writes a checkpoint. After it, recovery reads only the log after it.
