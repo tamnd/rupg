@@ -27,13 +27,18 @@ fn field<'t>(node: &'t str, name: &str) -> Result<&'t str> {
     Ok(rest.split(' ').next().unwrap_or(""))
 }
 
-/// `stringToNode` for the `proargdefaults` of a function: a `Const` for each default, in the order of the arguments. A function with no defaults gives no expressions.
+/// `stringToNode` for the `proargdefaults` of a function: an expression for each default, in the order of the arguments. A function with no defaults gives no expressions.
+///
+/// A built-in function has a `Const` for each default. A function that `CREATE FUNCTION` makes has the stored form of [`crate::node`], which can hold any expression.
 ///
 /// # Errors
 ///
-/// An internal error for a node that is not a `Const` of a type that the defaults of the built-in functions have.
+/// An internal error for a node that is not a `Const` of a type that the defaults of the built-in functions have, or for a stored form that does not read.
 pub fn arg_defaults(proc: &ProcRow) -> Result<Vec<Expr>> {
     let Some(text) = proc.argdefaults else { return Ok(Vec::new()) };
+    if !text.starts_with("({CONST :consttype ") {
+        return crate::node::read_list(text);
+    }
     let inner = text.strip_prefix('(').and_then(|t| t.strip_suffix(')')).ok_or_else(bad_node)?;
     let mut out = Vec::new();
     for node in inner.split('}').map(str::trim).filter(|n| !n.is_empty()) {

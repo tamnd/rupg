@@ -2845,6 +2845,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/replace_function.test")));
     }
 
+    /// The defaults of the arguments of a function in SQL: calls that leave out arguments or name them, `pronargdefaults`, `proargdefaults`, `pg_get_function_arguments`, the errors of a bad default, the checks of `CREATE OR REPLACE FUNCTION` and a default that calls a function. `connection/function_defaults.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn function_defaults() {
+        big_stack(|| script(include_str!("connection/function_defaults.test")));
+    }
+
     /// `TRUNCATE` with `RESTART IDENTITY` and `CONTINUE IDENTITY`, a rollback, the foreign keys with `RESTRICT` and `CASCADE`, a table that refers to itself, a view, a sequence, an index, a system catalog and a prepared query. `connection/truncate.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn truncate() {

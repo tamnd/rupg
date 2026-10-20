@@ -891,6 +891,7 @@ impl Analyzer<'_> {
             | Kind::MergeWhen
             | Kind::Returning
             | Kind::ColumnDefault
+            | Kind::FunctionDefault
             | Kind::Check
             | Kind::IndexExpression
             | Kind::IndexPredicate

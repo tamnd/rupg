@@ -769,12 +769,13 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("provolatile", Value::Char(f.volatile))
                 .set("proparallel", Value::Char(f.parallel))
                 .set("pronargs", Value::Int2(i16::try_from(f.argtypes.len()).unwrap_or(i16::MAX)))
-                .set("pronargdefaults", Value::Int2(0))
+                .set("pronargdefaults", Value::Int2(f.nargdefaults))
                 .set("prorettype", oid(f.rettype))
                 .set("proargtypes", oid_vector(&f.argtypes))
                 .set("proallargtypes", oid_array(&f.allargtypes))
                 .set("proargmodes", char_array(&f.argmodes))
                 .set("proargnames", names)
+                .set("proargdefaults", tree(f.argdefaults.as_ref()))
                 .set("prosrc", Value::text(f.src.clone()))
                 .set(
                     "probin",

@@ -230,6 +230,8 @@ fn use_types(catalog: &Catalog) {
                     allargtypes: f.allargtypes.clone(),
                     argmodes: f.argmodes.clone(),
                     argnames: f.argnames.clone(),
+                    argdefaults: f.argdefaults.clone(),
+                    nargdefaults: f.nargdefaults,
                 })
             },
         ),

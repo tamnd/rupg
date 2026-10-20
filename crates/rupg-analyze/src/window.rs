@@ -272,6 +272,7 @@ impl Analyzer<'_> {
             | Kind::MergeWhen
             | Kind::Returning
             | Kind::ColumnDefault
+            | Kind::FunctionDefault
             | Kind::IndexExpression
             | Kind::IndexPredicate
             | Kind::ExecuteParameter

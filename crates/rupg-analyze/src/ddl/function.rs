@@ -10,11 +10,11 @@ use rupg_types::oid;
 
 use super::{Definer, not_yet, references};
 use crate::agg::Kind;
-use crate::coerce::Context;
+use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind};
 use crate::select::Query;
 use crate::typename::{names, place};
-use crate::{Analyzer, Env, Params, poly, types};
+use crate::{Analyzer, Env, Params, node, poly, types};
 
 /// The OID of the language `sql`.
 const SQL_LANGUAGE: u32 = 14;
@@ -439,6 +439,9 @@ fn builtin_function(oid: u32) -> Option<Function> {
         allargtypes: proc.allargtypes.unwrap_or_default().to_vec(),
         argmodes: proc.argmodes.unwrap_or_default().to_vec(),
         argnames: proc.argnames.unwrap_or_default().iter().map(|n| (*n).into()).collect(),
+        // The body does not read the defaults.
+        argdefaults: None,
+        nargdefaults: 0,
         src: String::new(),
         bin: String::new(),
         body: Some(FunctionBody { text: text.into(), path: vec![crate::PG_CATALOG_NAMESPACE] }),
@@ -465,6 +468,7 @@ impl Definer<'_, '_> {
         let mut argmodes = Vec::new();
         let mut argnames = Vec::new();
         let mut outs = Vec::new();
+        let mut defaults = Vec::new();
         for param in stmt.parameters.iter().flatten() {
             let Node::FunctionParameter(param) = param else { continue };
             let at = place(param.location);
@@ -476,11 +480,27 @@ impl Definer<'_, '_> {
                 FunctionParameterMode::FUNC_PARAM_TABLE => b't',
                 _ => return Err(not_yet("a VARIADIC argument", at)),
             };
-            if param.defexpr.is_some() {
-                return Err(not_yet("a default of an argument", at));
-            }
             let ty = param.argType.as_deref().ok_or_else(|| Error::internal("an argument type"))?;
             let ty = self.an.type_name(ty)?.0;
+            let input = matches!(mode, b'i' | b'b');
+            if let Some(raw) = &param.defexpr {
+                if !input {
+                    return Err(Error::new(
+                        SqlState::INVALID_FUNCTION_DEFINITION,
+                        "only input parameters can have default values",
+                    )
+                    .at_opt(at));
+                }
+                let expr =
+                    self.an.with_kind(Kind::FunctionDefault, |an| an.transform(Some(raw)))?;
+                defaults.push(self.an.coerce_to_specific(expr, ty, "DEFAULT")?);
+            } else if input && !defaults.is_empty() {
+                return Err(Error::new(
+                    SqlState::INVALID_FUNCTION_DEFINITION,
+                    "input parameters after one with a default value must also have defaults",
+                )
+                .at_opt(at));
+            }
             if matches!(mode, b'i' | b'b') {
                 argtypes.push(ty);
             }
@@ -555,6 +575,12 @@ impl Definer<'_, '_> {
             allargtypes,
             argmodes,
             argnames,
+            argdefaults: if defaults.is_empty() {
+                None
+            } else {
+                Some(node::write_list(&defaults)?)
+            },
+            nargdefaults: i16::try_from(defaults.len()).unwrap_or(i16::MAX),
             src: options.src.clone().unwrap_or_default(),
             bin: String::new(),
             body: Some(FunctionBody { text: text.to_string(), path: self.an.path.clone() }),
@@ -601,6 +627,13 @@ impl Definer<'_, '_> {
         if support != 0 {
             refs.push(ObjRef::new(PG_PROC, support));
         }
+        for default in &defaults {
+            for found in body_references(self.catalog, default) {
+                if !refs.contains(&found) {
+                    refs.push(found);
+                }
+            }
+        }
         // `ProcedureCreate`: the function depends on the types of its result and of its arguments.
         let args = if function.allargtypes.is_empty() {
             &function.argtypes
@@ -619,7 +652,7 @@ impl Definer<'_, '_> {
         }
     }
 
-    /// The checks of `ProcedureCreate` for `CREATE OR REPLACE FUNCTION` of the function `old`: the owner, the result type, the row type of the `OUT` parameters and the names of the input arguments do not change.
+    /// The checks of `ProcedureCreate` for `CREATE OR REPLACE FUNCTION` of the function `old`: the owner, the result type, the row type of the `OUT` parameters, the names of the input arguments and the defaults do not change. New defaults can be added before the old ones.
     fn check_replace(&self, old: &Function, new: &Function) -> Result<()> {
         if !self.is_superuser() && old.owner != self.user {
             return Err(super::comment::not_owner("function", &old.name));
@@ -652,6 +685,22 @@ impl Definer<'_, '_> {
         for (i, name) in input_names(old).iter().enumerate() {
             if !name.is_empty() && names.get(i) != Some(name) {
                 return Err(error(format!("cannot change name of input parameter \"{name}\"")));
+            }
+        }
+        if old.nargdefaults > 0 {
+            if new.nargdefaults < old.nargdefaults {
+                return Err(error(
+                    "cannot remove parameter defaults from existing function".into(),
+                ));
+            }
+            let defaults =
+                |f: &Function| f.argdefaults.as_deref().map_or(Ok(Vec::new()), node::read_list);
+            let (olds, news) = (defaults(old)?, defaults(new)?);
+            let skip = news.len().saturating_sub(olds.len());
+            if olds.iter().zip(&news[skip..]).any(|(o, n)| o.ty != n.ty) {
+                return Err(error(
+                    "cannot change data type of existing parameter default value".into(),
+                ));
             }
         }
         Ok(())
