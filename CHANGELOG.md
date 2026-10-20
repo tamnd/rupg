@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.50 (2026-10-20)
+
 ### Added
 
 - `ALTER TYPE` and `ALTER DOMAIN` with `RENAME TO`, `SET SCHEMA` and `OWNER TO`. The array type changes with its type, a composite type changes with its relation, a domain moves with its constraints, and the multirange type of a range type gets the new owner. The views that name the type get a new text (#428).
