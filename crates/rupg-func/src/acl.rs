@@ -167,7 +167,7 @@ fn privileges(text: &str, map: PrivMap) -> Result<u32> {
 
 /// The OID of the role with this name. The login role of the server is the bootstrap superuser, so the name of the current user also gives its OID.
 fn role_oid(name: &str, session: &dyn Session) -> Option<u32> {
-    builtin::roles().iter().find(|r| r.name == name).map(|r| r.oid).or_else(|| {
+    rupg_pgcatalog::roles::current().oid(name).or_else(|| {
         (name == session.user() || name == session.session_user()).then_some(BOOTSTRAP_SUPERUSER)
     })
 }
@@ -195,7 +195,7 @@ fn current_user(session: &dyn Session) -> u32 {
 
 /// `superuser_arg`. A role that does not exist is not a superuser.
 fn superuser(role: u32) -> bool {
-    builtin::roles().iter().any(|r| r.oid == role && r.superuser)
+    rupg_pgcatalog::roles::current().superuser(role)
 }
 
 /// The walks of `roles_is_member_of`.
@@ -211,12 +211,13 @@ enum Recurse {
 
 /// `roles_is_member_of`: the roles that `role` is a member of, directly or indirectly, with `role` first. The owner of the current database is a member of `pg_database_owner`, and `initdb` makes the bootstrap superuser the owner of each database. The second value is true when a role of the walk has the admin option on `admin_of`.
 fn roles_of(role: u32, how: Recurse, admin_of: Option<u32>) -> (Vec<u32>, bool) {
+    let created = rupg_pgcatalog::roles::current();
     let mut roles = vec![role];
     let mut admin = false;
     let mut at = 0;
     while let Some(&member) = roles.get(at) {
         at += 1;
-        for edge in builtin::members().iter().filter(|m| m.member == member) {
+        for edge in created.edges().filter(|m| m.member == member) {
             if Some(edge.role) == admin_of && edge.admin {
                 admin = true;
             }
@@ -316,7 +317,7 @@ fn acl_default(kind: AclKind, owner: u32) -> Vec<(u32, u32)> {
     items
 }
 
-/// Reads an `aclitem[]` value of the static rows as (grantee, bits).
+/// Reads an `aclitem[]` value as (grantee, bits).
 fn parse_acl(acl: &[&str]) -> Result<Vec<(u32, u32)>> {
     let bad = || Error::internal("a static aclitem that the engine cannot read");
     let mut items = Vec::with_capacity(acl.len());
@@ -326,7 +327,13 @@ fn parse_acl(acl: &[&str]) -> Result<Vec<(u32, u32)>> {
         let grantee = if grantee.is_empty() {
             PUBLIC
         } else {
-            builtin::roles().iter().find(|r| r.name == grantee).ok_or_else(bad)?.oid
+            let name = match grantee.strip_prefix('"').and_then(|g| g.strip_suffix('"')) {
+                Some(quoted) => quoted.replace("\"\"", "\""),
+                None => grantee.to_string(),
+            };
+            // A role that a session dropped or renamed after the grant has no row.
+            let Some(oid) = rupg_pgcatalog::roles::current().oid(&name) else { continue };
+            oid
         };
         let mut bits = 0;
         let mut last = 0;
@@ -1233,16 +1240,17 @@ fn aclremove(_call: &Call<'_>, _args: &[Value]) -> Result<Value> {
 
 /// `putid`: the name of a role in an `aclitem` value, in double quotes when it has a character that is not an ASCII letter, an ASCII digit or `_`. A role that does not exist shows as its OID.
 fn put_role(out: &mut String, role: u32) {
-    let Some(row) = builtin::roles().iter().find(|r| r.oid == role) else {
+    let roles = rupg_pgcatalog::roles::current();
+    let Some(name) = roles.name(role) else {
         out.push_str(&role.to_string());
         return;
     };
-    if row.name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
-        out.push_str(row.name);
+    if name.bytes().all(|c| c.is_ascii_alphanumeric() || c == b'_') {
+        out.push_str(name);
         return;
     }
     out.push('"');
-    for c in row.name.chars() {
+    for c in name.chars() {
         if c == '"' {
             out.push('"');
         }

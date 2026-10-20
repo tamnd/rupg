@@ -438,7 +438,7 @@ impl Definer<'_, '_> {
 
     /// True when the role of the statement is a superuser.
     fn is_superuser(&self) -> bool {
-        builtin::roles().iter().any(|r| r.oid == self.user && r.superuser)
+        rupg_pgcatalog::roles::current().superuser(self.user)
     }
 
     /// The owner of a schema, or `None` for a schema that does not exist.
@@ -460,7 +460,7 @@ impl Definer<'_, '_> {
 
     /// `object_aclcheck` of `CREATE` on a schema for a role: a superuser or the owner of the schema can create objects in it.
     fn may_create_in(&self, namespace: u32, role: u32) -> bool {
-        builtin::roles().iter().any(|r| r.oid == role && r.superuser)
+        rupg_pgcatalog::roles::current().superuser(role)
             || self.schema_owner(namespace) == Some(role)
     }
 
@@ -634,7 +634,8 @@ impl Definer<'_, '_> {
             None => self.user,
             Some(role) => self.role_oid(role)?,
         };
-        let owner_name = builtin::roles().iter().find(|r| r.oid == owner).map(|r| r.name);
+        let roles = rupg_pgcatalog::roles::current();
+        let owner_name = roles.name(owner);
         let name = match stmt.schemaname.as_deref() {
             Some(name) => name.to_string(),
             None => owner_name.unwrap_or_default().to_string(),

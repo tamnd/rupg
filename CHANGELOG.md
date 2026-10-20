@@ -11,6 +11,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - A join that makes more rows than rupg can keep in memory gives the error `out of memory` and the server does not stop. The cross join of the regression test `groupingsets` stopped the server before (#448).
+- A recursive query of `WITH` with no end under a `LIMIT` gives the rows of the `LIMIT`, and the server does not stop (#450).
 
 ## 0.1.52 (2026-10-20)
 

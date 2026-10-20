@@ -1022,6 +1022,11 @@ impl Catalog {
         }
     }
 
+    /// `GetNewObjectId` for an object that the catalog does not keep, such as a role: the next OID of the counter.
+    pub fn take_oid(&mut self) -> u32 {
+        self.new_oid()
+    }
+
     fn new_oid(&mut self) -> u32 {
         let oid = self.next_oid;
         self.next_oid = match oid.checked_add(1) {

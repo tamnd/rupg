@@ -1,0 +1,144 @@
+//! The roles that `CREATE ROLE` made and the memberships that `GRANT` made, with the lookups that see them together with the roles of `initdb`. The store of the server keeps them, and a session gives them to the thread of a statement with [`use_roles`], as it gives its types with [`crate::builtin::use_session_types`].
+
+use std::cell::RefCell;
+use std::sync::Arc;
+
+use crate::builtin::{self, MemberRow};
+
+/// A row of `pg_authid` that `CREATE ROLE` made.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Role {
+    pub oid: u32,
+    pub name: String,
+    pub attrs: Attrs,
+    /// `rolconnlimit`, or -1 for no limit.
+    pub connlimit: i32,
+    /// `rolpassword`: the stored secret of the password.
+    pub password: Option<String>,
+    /// `rolvaliduntil`, in microseconds since 2000-01-01 UTC.
+    pub valid_until: Option<i64>,
+}
+
+/// The attributes of a role that are true or false.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Attrs {
+    /// `rolsuper`.
+    pub superuser: bool,
+    /// `rolinherit`.
+    pub inherit: bool,
+    /// `rolcreaterole`.
+    pub createrole: bool,
+    /// `rolcreatedb`.
+    pub createdb: bool,
+    /// `rolcanlogin`.
+    pub login: bool,
+    /// `rolreplication`.
+    pub replication: bool,
+    /// `rolbypassrls`.
+    pub bypassrls: bool,
+}
+
+impl Default for Attrs {
+    /// The attributes of a new role: `INHERIT` and nothing else.
+    fn default() -> Attrs {
+        Attrs {
+            superuser: false,
+            inherit: true,
+            createrole: false,
+            createdb: false,
+            login: false,
+            replication: false,
+            bypassrls: false,
+        }
+    }
+}
+
+/// A row of `pg_auth_members` that `GRANT` made: `member` is a member of `role`, and `grantor` gave the membership.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Member {
+    pub oid: u32,
+    pub role: u32,
+    pub member: u32,
+    pub grantor: u32,
+    /// `admin_option`.
+    pub admin: bool,
+    /// `inherit_option`.
+    pub inherit: bool,
+    /// `set_option`.
+    pub set: bool,
+}
+
+/// The roles and the memberships that the statements made, in the order that they were made.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct Roles {
+    pub roles: Vec<Role>,
+    pub members: Vec<Member>,
+}
+
+thread_local! {
+    /// A session runs each statement on one thread, so the roles that the statement sees are the roles of the thread.
+    static CURRENT: RefCell<Arc<Roles>> = RefCell::new(Arc::default());
+}
+
+/// Gives the roles that a session sees to the thread, for [`current`].
+pub fn use_roles(roles: Arc<Roles>) {
+    CURRENT.set(roles);
+}
+
+/// The roles that the session of the thread gave with [`use_roles`]. A thread with no session has no roles of its own.
+pub fn current() -> Arc<Roles> {
+    CURRENT.with_borrow(Arc::clone)
+}
+
+impl Roles {
+    /// The role that `CREATE ROLE` made with this OID.
+    pub fn created(&self, oid: u32) -> Option<&Role> {
+        self.roles.iter().find(|r| r.oid == oid)
+    }
+
+    /// `get_role_oid`: the OID of the role with this name.
+    pub fn oid(&self, name: &str) -> Option<u32> {
+        match builtin::roles().iter().find(|r| r.name == name) {
+            Some(row) => Some(row.oid),
+            None => self.roles.iter().find(|r| r.name == name).map(|r| r.oid),
+        }
+    }
+
+    /// `GetUserNameFromId`: the name of the role with this OID.
+    pub fn name(&self, oid: u32) -> Option<&str> {
+        match builtin::roles().iter().find(|r| r.oid == oid) {
+            Some(row) => Some(row.name),
+            None => self.created(oid).map(|r| r.name.as_str()),
+        }
+    }
+
+    /// The attributes of the role with this OID.
+    pub fn attrs(&self, oid: u32) -> Option<Attrs> {
+        match builtin::roles().iter().find(|r| r.oid == oid) {
+            Some(row) => Some(row.attrs),
+            None => self.created(oid).map(|r| r.attrs),
+        }
+    }
+
+    /// `superuser_arg`. A role that does not exist is not a superuser.
+    pub fn superuser(&self, oid: u32) -> bool {
+        self.attrs(oid).is_some_and(|a| a.superuser)
+    }
+
+    /// The memberships of `pg_auth_members`: the rows of `initdb`, then the rows that `GRANT` made.
+    pub fn edges(&self) -> impl Iterator<Item = MemberRow> + '_ {
+        builtin::members().iter().copied().chain(self.members.iter().map(|m| MemberRow {
+            role: m.role,
+            member: m.member,
+            admin: m.admin,
+            inherit: m.inherit,
+            set: m.set,
+        }))
+    }
+
+    /// The names and the OIDs of all the roles, those of `initdb` first.
+    pub fn all(&self) -> impl Iterator<Item = (&str, u32)> + '_ {
+        let created = self.roles.iter().map(|r| (r.name.as_str(), r.oid));
+        builtin::roles().iter().map(|r| (r.name, r.oid)).chain(created)
+    }
+}

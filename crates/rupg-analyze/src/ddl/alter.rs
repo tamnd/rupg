@@ -820,7 +820,7 @@ impl Definer<'_, '_> {
                 ));
             }
         }
-        self.catalog.set_relation_owner(oid, new, role_name(old), role_name(new))?;
+        self.catalog.set_relation_owner(oid, new, &role_name(old), &role_name(new))?;
         let mut parts: Vec<u32> = Vec::new();
         if matches!(kind, b'r' | b'p' | b'm' | b't') {
             parts.extend(
@@ -929,7 +929,7 @@ impl Definer<'_, '_> {
                 format!("permission denied for database {}", self.an.env.database()),
             ));
         }
-        self.catalog.set_schema_owner(oid, new, role_name(old), role_name(new))?;
+        self.catalog.set_schema_owner(oid, new, &role_name(old), &role_name(new))?;
         Ok(())
     }
 
@@ -938,7 +938,7 @@ impl Definer<'_, '_> {
         match role.roletype {
             RoleSpecType::ROLESPEC_CSTRING => {
                 let name = role.rolename.as_deref().unwrap_or_default();
-                builtin::roles().iter().find(|r| r.name == name).map(|r| r.oid).ok_or_else(|| {
+                rupg_pgcatalog::roles::current().oid(name).ok_or_else(|| {
                     Error::new(
                         SqlState::UNDEFINED_OBJECT,
                         format!("role \"{name}\" does not exist"),
@@ -953,9 +953,9 @@ impl Definer<'_, '_> {
     }
 }
 
-/// The name of a built-in role.
-fn role_name(oid: u32) -> &'static str {
-    builtin::roles().iter().find(|r| r.oid == oid).map_or("", |r| r.name)
+/// The name of a role.
+fn role_name(oid: u32) -> String {
+    rupg_pgcatalog::roles::current().name(oid).unwrap_or_default().to_string()
 }
 
 /// `member_can_set_role` for a role that is not a superuser: the role is the member, or the member reaches it through memberships with the `SET` option.
@@ -964,7 +964,7 @@ fn can_set_role(member: u32, role: u32) -> bool {
     let mut i = 0;
     while i < reached.len() {
         let current = reached[i];
-        for m in builtin::members() {
+        for m in rupg_pgcatalog::roles::current().edges() {
             if m.member == current && m.set && !reached.contains(&m.role) {
                 reached.push(m.role);
             }

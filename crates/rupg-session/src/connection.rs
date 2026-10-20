@@ -13,6 +13,7 @@ use rupg_exec::Plan;
 use rupg_func::{BackendState, Randomness, Sequences};
 pub use rupg_func::{Client, Ssl};
 use rupg_pgcatalog::builtin;
+use rupg_pgcatalog::roles::Roles;
 use rupg_platform::os::OsClock;
 use rupg_platform::{Clock, Io};
 use rupg_sql::Severity;
@@ -43,6 +44,7 @@ mod foreign;
 mod merge;
 mod prepare;
 mod rewrite;
+mod roles;
 mod savepoint;
 mod upsert;
 mod vacuum;
@@ -487,6 +489,7 @@ impl Connection {
 
     /// What a statement reads of the session, with the catalog `catalog`.
     fn reader_on(&self, catalog: Arc<Catalog>) -> Reader<'_> {
+        rupg_pgcatalog::roles::use_roles(self.roles());
         Reader::new(
             &self.settings,
             &self.user,
@@ -771,6 +774,14 @@ impl Connection {
         match &self.lease {
             Some(lease) => Arc::clone(&lease.catalog),
             None => self.store.committed(self.database_oid),
+        }
+    }
+
+    /// The roles that a statement sees: the copy of the transaction when it holds the lock of the catalog, or the roles of the last commit.
+    fn roles(&self) -> Arc<Roles> {
+        match &self.lease {
+            Some(lease) => Arc::clone(&lease.roles),
+            None => self.store.roles(),
         }
     }
 
@@ -1317,6 +1328,9 @@ impl Connection {
             } else if query::is_query(node) {
                 drop(self.portals.close(b""));
                 self.select(node, &mut notices, &mut late, &mut described)
+            } else if roles::is_role_statement(node) {
+                drop(self.portals.close(b""));
+                self.role_statement(node, &mut notices)
             } else if rupg_analyze::is_definition(node) {
                 drop(self.portals.close(b""));
                 self.define(node, statement, &mut notices)
@@ -3254,6 +3268,12 @@ mod tests {
     #[test]
     fn databases() {
         big_stack(|| script(include_str!("connection/databases.test")));
+    }
+
+    /// `CREATE ROLE`, `ALTER ROLE`, `DROP ROLE` and `GRANT` and `REVOKE` of a role: the rows of `pg_roles`, `pg_authid` and `pg_auth_members`, the errors, the notices, and a role that a transaction makes and rolls back. `connection/roles.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn roles() {
+        big_stack(|| script(include_str!("connection/roles.test")));
     }
 
     /// The functions of the size of an object: `pg_size_pretty` of a `bigint` and of a `numeric`, `pg_size_bytes` with its errors, the size of each fork of an empty table, an index of each access method, a sequence and a view, the file of a relation and the relation of a file, the location of a tablespace, `pg_tablespace_databases` and the size of a database and of a tablespace. `connection/db_size.test` is the output of PostgreSQL 19 for the same script in a new database.

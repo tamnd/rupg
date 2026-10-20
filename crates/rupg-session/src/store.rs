@@ -8,6 +8,7 @@ use std::time::Duration;
 use rupg_catalog::{Catalog, Database, SequenceData};
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Backend, RelationCounts};
+use rupg_pgcatalog::roles::Roles;
 use rupg_platform::Tasks;
 
 use crate::advisory::Locks;
@@ -61,6 +62,8 @@ struct State {
     databases: BTreeMap<u32, Db>,
     /// `GetNewObjectId`: the OID counter of the cluster. Each catalog has a counter, and a transaction starts its counter at the counter of the cluster, so two databases do not give the same OID, as in PostgreSQL.
     next_oid: u32,
+    /// The roles of `CREATE ROLE` and the memberships of `GRANT` of the last commit. The roles belong to the cluster, so each database sees them.
+    roles: Arc<Roles>,
 }
 
 /// A database: its row of `pg_database`, the catalog of its last commit and its lock.
@@ -92,7 +95,7 @@ impl Default for State {
                 )
             })
             .collect();
-        State { databases, next_oid }
+        State { databases, next_oid, roles: Arc::default() }
     }
 }
 
@@ -144,6 +147,20 @@ impl Store {
             Some(db) => Arc::clone(&db.committed),
             None => crate::system::catalog(),
         }
+    }
+
+    /// The rows of `pg_database` and the catalogs of the last commit of all the databases, in the order of their OIDs.
+    pub(crate) fn catalogs(&self) -> Vec<(Database, Arc<Catalog>)> {
+        self.state()
+            .databases
+            .values()
+            .map(|db| (db.row.clone(), Arc::clone(&db.committed)))
+            .collect()
+    }
+
+    /// The roles and the memberships of the last commit.
+    pub(crate) fn roles(&self) -> Arc<Roles> {
+        Arc::clone(&self.state().roles)
     }
 
     fn state(&self) -> MutexGuard<'_, State> {
@@ -248,7 +265,8 @@ impl Store {
         if catalog.next_oid() < next {
             Arc::make_mut(&mut catalog).advance_oid(next);
         }
-        Ok(Lease { store: Arc::clone(self), database, catalog })
+        let roles = Arc::clone(&state.roles);
+        Ok(Lease { store: Arc::clone(self), database, catalog, base: Arc::clone(&roles), roles })
     }
 
     /// `createdb` after the checks of the options: the check of the name, the wait for the other sessions of the template to end, and the copy of the catalog of the template. `me` is the number of the session in the table. It gives the OID of the new database.
@@ -501,6 +519,10 @@ pub(crate) struct Lease {
     database: u32,
     /// The catalog with the changes of the transaction.
     pub(crate) catalog: Arc<Catalog>,
+    /// The roles of the last commit when the transaction took the lock.
+    base: Arc<Roles>,
+    /// The roles with the changes of the transaction.
+    pub(crate) roles: Arc<Roles>,
 }
 
 impl Lease {
@@ -510,10 +532,61 @@ impl Lease {
         if catalog.has_uncommitted_enums() {
             Arc::make_mut(&mut catalog).commit_enums();
         }
-        if let Some(db) = self.store.state().databases.get_mut(&self.database) {
+        let mut state = self.store.state();
+        if let Some(db) = state.databases.get_mut(&self.database) {
             db.committed = catalog;
         }
+        if !Arc::ptr_eq(&self.base, &self.roles) {
+            state.roles = if Arc::ptr_eq(&state.roles, &self.base) {
+                Arc::clone(&self.roles)
+            } else {
+                Arc::new(rebase(&state.roles, &self.base, &self.roles))
+            };
+        }
     }
+}
+
+/// The changes from `base` to `work` on the roles of a commit that came after `base`: the roles and the memberships that `work` added, changed and removed.
+fn rebase(now: &Roles, base: &Roles, work: &Roles) -> Roles {
+    let mut roles: Vec<_> = now
+        .roles
+        .iter()
+        .filter(|r| work.roles.iter().any(|w| w.oid == r.oid) || base.created(r.oid).is_none())
+        .cloned()
+        .collect();
+    for role in &work.roles {
+        match roles.iter_mut().find(|r| r.oid == role.oid) {
+            Some(r) => {
+                if base.created(role.oid) != Some(role) {
+                    r.clone_from(role);
+                }
+            }
+            None if base.created(role.oid).is_none() => roles.push(role.clone()),
+            None => {}
+        }
+    }
+    let mut members: Vec<_> = now
+        .members
+        .iter()
+        .filter(|m| {
+            work.members.iter().any(|w| w.oid == m.oid)
+                || base.members.iter().all(|b| b.oid != m.oid)
+        })
+        .copied()
+        .collect();
+    for member in &work.members {
+        let before = base.members.iter().find(|b| b.oid == member.oid);
+        match members.iter_mut().find(|m| m.oid == member.oid) {
+            Some(m) => {
+                if before != Some(member) {
+                    *m = *member;
+                }
+            }
+            None if before.is_none() => members.push(*member),
+            None => {}
+        }
+    }
+    Roles { roles, members }
 }
 
 impl Drop for Lease {
