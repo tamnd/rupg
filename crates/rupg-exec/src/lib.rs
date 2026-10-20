@@ -2073,11 +2073,16 @@ impl<'a> Eval<'a> {
             return match &*body {
                 Body::Value(expr) => {
                     let tables = scan::Tables::default();
-                    Eval::new(args, self.session, &tables, &cache, &[]).eval(expr)
+                    let value = Eval::new(args, self.session, &tables, &cache, &[]).eval(expr)?;
+                    Ok(if ret == oid::VOID { Value::Null } else { value })
                 }
                 // `fmgr_sql` for a function that does not return a set: the first column of the first row, or null. The columns of a function that returns a row make a row value.
                 Body::Query(query) => {
                     let rows = run_query(query, args, self.session, &cache, &[], false)?;
+                    // `fmgr_sql` gives null for a function that returns `void`.
+                    if ret == oid::VOID {
+                        return Ok(Value::Null);
+                    }
                     let Some(mut row) = rows.into_iter().next() else { return Ok(Value::Null) };
                     let composite = builtin::type_by_oid(ret).is_some_and(|t| t.kind == b'c');
                     let whole = matches!(row.as_slice(), [Value::Record(_) | Value::Null]);
@@ -2626,6 +2631,8 @@ mod scan;
 mod sort;
 mod user;
 mod window;
+
+pub use user::variadic_type;
 
 #[cfg(test)]
 mod tests;

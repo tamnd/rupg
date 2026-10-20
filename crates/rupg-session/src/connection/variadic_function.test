@@ -1,0 +1,98 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION vsum(VARIADIC a int[]) RETURNS int LANGUAGE sql RETURN (SELECT sum(x) FROM unnest(a) x);
+CREATE FUNCTION
+> SELECT vsum(1), vsum(1, 2, 3), vsum(VARIADIC ARRAY[4, 5]);
+fields vsum:23:4:-1,vsum:23:4:-1,vsum:23:4:-1
+row 1,6,9
+SELECT 1
+> SELECT vsum();
+ERROR 42883 function vsum() does not exist at 8
+DETAIL No function of that name accepts the given number of arguments.
+> SELECT vsum(VARIADIC a => ARRAY[1]);
+fields vsum:23:4:-1
+row 1
+SELECT 1
+> SELECT vsum(a => ARRAY[1]);
+ERROR 42883 function vsum(a => integer[]) does not exist at 8
+HINT This call would be correct if the variadic array were labeled VARIADIC and placed last.
+> SELECT provariadic::regtype, pronargs, proargtypes::regtype[]::text, proargmodes FROM pg_proc WHERE proname = 'vsum';
+fields provariadic:2206:4:-1,pronargs@pg_proc.17:21:2:-1,proargtypes:25:-1:-1,proargmodes@pg_proc.22:1002:-1:-1
+row integer,1,[0:0]={integer[]},{v}
+SELECT 1
+> SELECT pg_get_function_arguments('vsum'::regproc), pg_get_function_identity_arguments('vsum'::regproc);
+fields pg_get_function_arguments:25:-1:-1,pg_get_function_identity_arguments:25:-1:-1
+row VARIADIC a integer[],VARIADIC a integer[]
+SELECT 1
+> SELECT 'vsum(int[])'::regprocedure, 'vsum'::regproc::regprocedure;
+fields regprocedure:2202:4:-1,regprocedure:2202:4:-1
+row vsum(integer[]),vsum(integer[])
+SELECT 1
+> CREATE FUNCTION vcat(sep text, VARIADIC parts text[] DEFAULT '{}') RETURNS text LANGUAGE sql RETURN array_to_string(parts, sep);
+CREATE FUNCTION
+> SELECT vcat(','), vcat(',', 'a', 'b'), vcat(',', VARIADIC ARRAY['x', 'y']);
+fields vcat:25:-1:-1,vcat:25:-1:-1,vcat:25:-1:-1
+row ,a,b,x,y
+SELECT 1
+> SELECT pg_get_function_arguments('vcat'::regproc);
+fields pg_get_function_arguments:25:-1:-1
+row sep text, VARIADIC parts text[] DEFAULT '{}'::text[]
+SELECT 1
+> CREATE FUNCTION vany(VARIADIC "any") RETURNS int LANGUAGE sql RETURN 1;
+ERROR 42P13 SQL functions cannot have arguments of type "any"
+> CREATE FUNCTION vbad(VARIADIC a int) RETURNS int LANGUAGE sql RETURN 1;
+ERROR 42P13 VARIADIC parameter must be an array at 22
+> CREATE FUNCTION vbad(VARIADIC a int[], b int) RETURNS int LANGUAGE sql RETURN 1;
+ERROR 42P13 VARIADIC parameter must be the last input parameter at 40
+> CREATE FUNCTION vbad(VARIADIC a int[], OUT b int) LANGUAGE sql AS 'SELECT 1';
+CREATE FUNCTION
+> SELECT vbad(1, 2);
+fields vbad:23:4:-1
+row 1
+SELECT 1
+> CREATE FUNCTION vpoly(VARIADIC a anyarray) RETURNS anyelement LANGUAGE sql AS 'SELECT $1[1]';
+CREATE FUNCTION
+> SELECT vpoly(3, 4), vpoly('x'::text, 'y'), vpoly(VARIADIC ARRAY[1.5]);
+fields vpoly:23:4:-1,vpoly:25:-1:-1,vpoly:1700:-1:-1
+row 3,x,1.5
+SELECT 1
+> CREATE FUNCTION vt(VARIADIC int[]) RETURNS int LANGUAGE sql AS 'SELECT array_length($1, 1)';
+CREATE FUNCTION
+> SELECT vt(1, 2, 3, 4);
+fields vt:23:4:-1
+row 4
+SELECT 1
+> DROP FUNCTION vt(int[]);
+DROP FUNCTION
+> DROP FUNCTION vsum(VARIADIC int[]);
+DROP FUNCTION
+> DROP FUNCTION vcat;
+DROP FUNCTION
+> SELECT proname FROM pg_proc WHERE proname LIKE 'v%' AND pronamespace = 'public'::regnamespace ORDER BY 1;
+fields proname@pg_proc.2:19:64:-1
+row vbad
+row vpoly
+SELECT 2
+> CREATE FUNCTION dup(a int, a text) RETURNS int LANGUAGE sql RETURN 1;
+ERROR 42P13 parameter name "a" used more than once at 28
+> CREATE FUNCTION dup(INOUT a int, OUT a text) LANGUAGE sql AS 'SELECT 1, 2';
+ERROR 42P13 parameter name "a" used more than once at 34
+> CREATE FUNCTION dup(a int, OUT a text) LANGUAGE sql AS 'SELECT a::text';
+CREATE FUNCTION
+> SELECT dup(7);
+fields dup:25:-1:-1
+row 7
+SELECT 1
+> CREATE FUNCTION st(a SETOF int) RETURNS int LANGUAGE sql RETURN 1;
+ERROR 42P13 functions cannot accept set arguments at 20
+> CREATE FUNCTION tg() RETURNS trigger LANGUAGE sql AS 'SELECT 1';
+ERROR 42P13 SQL functions cannot return type trigger
+> CREATE FUNCTION ia(a internal) RETURNS int LANGUAGE sql RETURN 1;
+ERROR 42P13 SQL functions cannot have arguments of type internal
+> CREATE FUNCTION vd() RETURNS void LANGUAGE sql AS 'SELECT 1';
+CREATE FUNCTION
+> SELECT vd();
+fields vd:2278:4:-1
+row NULL
+SELECT 1

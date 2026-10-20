@@ -251,6 +251,10 @@ impl Analyzer<'_> {
     /// `transformReturnStmt` and `check_sql_fn_retval`: the `RETURN` expression, as a value of the result type. A value of type `unknown` becomes `text` first, and then the cast to the result type is an assignment cast.
     fn return_body(&mut self, value: Option<&Node>, rettype: u32, name: &str) -> Result<Expr> {
         let mut expr = self.with_kind(Kind::Select, |an| an.transform(value))?;
+        // A function that returns `void` takes any value, and the call gives null.
+        if rettype == oid::VOID {
+            return Ok(expr);
+        }
         if expr.ty == oid::UNKNOWN {
             expr = self.coerce(expr, oid::TEXT, -1, Context::Implicit, None)?;
         }
@@ -260,7 +264,7 @@ impl Analyzer<'_> {
         })
     }
 
-    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query must be the columns of the result, and each column takes an assignment cast to the type of the result column. A function that returns a composite type can also give one column of that type. The other statements give an error, as rupg runs only one query.
+    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query must be the columns of the result, and each column takes an assignment cast to the type of the result column. A function that returns a composite type can also give one column of that type, and a function that returns `void` can give any columns. The other statements give an error, as rupg runs only one query.
     fn query_body(
         &mut self,
         stmts: &[&Node],
@@ -273,6 +277,9 @@ impl Analyzer<'_> {
         };
         let mut query = self.select(select)?;
         query.params.clone_from(&self.params);
+        if rettype == oid::VOID {
+            return Ok(query);
+        }
         let width = query.targets.iter().take_while(|t| !t.junk).count();
         let row = rettype == oid::RECORD || columns.len() != 1 || columns != [rettype];
         let whole_row = [rettype];
@@ -469,47 +476,70 @@ impl Definer<'_, '_> {
         let mut argnames = Vec::new();
         let mut outs = Vec::new();
         let mut defaults = Vec::new();
+        let bad = |message: &str, at| {
+            Err(Error::new(SqlState::INVALID_FUNCTION_DEFINITION, message.to_string()).at_opt(at))
+        };
         for param in stmt.parameters.iter().flatten() {
             let Node::FunctionParameter(param) = param else { continue };
             let at = place(param.location);
             let mode = match param.mode {
-                FunctionParameterMode::FUNC_PARAM_IN
-                | FunctionParameterMode::FUNC_PARAM_DEFAULT => b'i',
                 FunctionParameterMode::FUNC_PARAM_OUT => b'o',
                 FunctionParameterMode::FUNC_PARAM_INOUT => b'b',
                 FunctionParameterMode::FUNC_PARAM_TABLE => b't',
-                _ => return Err(not_yet("a VARIADIC argument", at)),
+                FunctionParameterMode::FUNC_PARAM_VARIADIC => b'v',
+                _ => b'i',
             };
             let ty = param.argType.as_deref().ok_or_else(|| Error::internal("an argument type"))?;
+            if ty.setof {
+                return bad("functions cannot accept set arguments", at);
+            }
             let ty = self.an.type_name(ty)?.0;
-            let input = matches!(mode, b'i' | b'b');
+            let input = matches!(mode, b'i' | b'b' | b'v');
+            if input && argmodes.contains(&b'v') {
+                return bad("VARIADIC parameter must be the last input parameter", at);
+            }
+            if mode == b'v'
+                && !matches!(ty, oid::ANYARRAY | oid::ANYCOMPATIBLEARRAY | oid::ANY)
+                && types::element(ty) == 0
+            {
+                return bad("VARIADIC parameter must be an array", at);
+            }
+            // Two input parameters or two output parameters cannot have the same name. An input parameter and an output parameter can.
+            let name = param.name.as_deref().unwrap_or_default();
+            let clash = argnames.iter().zip(&argmodes).any(|(other, &other_mode)| {
+                let pure = |m: u8| match m {
+                    b'i' | b'v' => Some(true),
+                    b'o' | b't' => Some(false),
+                    _ => None,
+                };
+                let apart = matches!((pure(mode), pure(other_mode)), (Some(a), Some(b)) if a != b);
+                !name.is_empty() && other == name && !apart
+            });
+            if clash {
+                return bad(&format!("parameter name \"{name}\" used more than once"), at);
+            }
             if let Some(raw) = &param.defexpr {
                 if !input {
-                    return Err(Error::new(
-                        SqlState::INVALID_FUNCTION_DEFINITION,
-                        "only input parameters can have default values",
-                    )
-                    .at_opt(at));
+                    return bad("only input parameters can have default values", at);
                 }
                 let expr =
                     self.an.with_kind(Kind::FunctionDefault, |an| an.transform(Some(raw)))?;
                 defaults.push(self.an.coerce_to_specific(expr, ty, "DEFAULT")?);
             } else if input && !defaults.is_empty() {
-                return Err(Error::new(
-                    SqlState::INVALID_FUNCTION_DEFINITION,
+                return bad(
                     "input parameters after one with a default value must also have defaults",
-                )
-                .at_opt(at));
+                    at,
+                );
             }
-            if matches!(mode, b'i' | b'b') {
+            if input {
                 argtypes.push(ty);
             }
-            if mode != b'i' {
+            if matches!(mode, b'o' | b'b' | b't') {
                 outs.push(ty);
             }
             allargtypes.push(ty);
             argmodes.push(mode);
-            argnames.push(param.name.as_deref().unwrap_or_default().to_string());
+            argnames.push(name.to_string());
         }
         if argnames.iter().all(String::is_empty) {
             argnames.clear();
@@ -606,6 +636,22 @@ impl Definer<'_, '_> {
                 ));
             }
             self.check_replace(old, &function)?;
+        }
+        // `fmgr_sql_validator`: the only pseudo-types that a function in SQL can take are the polymorphic types, and it can also return `void` and `record`.
+        let pseudo = |ty: u32| {
+            builtin::type_by_oid(ty).is_some_and(|t| t.kind == b'p') && !types::is_polymorphic(ty)
+        };
+        if pseudo(rettype) && !matches!(rettype, oid::VOID | oid::RECORD) {
+            return Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                format!("SQL functions cannot return type {}", types::name(rettype)),
+            ));
+        }
+        if let Some(&ty) = function.argtypes.iter().find(|&&ty| pseudo(ty)) {
+            return Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                format!("SQL functions cannot have arguments of type {}", types::name(ty)),
+            ));
         }
         let stmts = statements(stmt, options.src.as_deref()).map_err(transpose)?;
         // `fmgr_sql_validator` reads a body in a string only when no argument is polymorphic, and a body in SQL always.

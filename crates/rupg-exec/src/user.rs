@@ -6,6 +6,7 @@ use rupg_catalog::{Catalog, ConKind, Constraint, Function, RangePart, RelKind, R
 use rupg_common::{Error, Result};
 use rupg_func::Session;
 use rupg_pgcatalog::{Catalog as Table, builtin};
+use rupg_types::oid::{ANY, ANYARRAY, ANYCOMPATIBLE, ANYCOMPATIBLEARRAY, ANYELEMENT};
 use rupg_types::{Array, Value};
 
 use crate::scan::value;
@@ -732,18 +733,22 @@ fn sequences<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-/// The functions in SQL. A body in a string is in `prosrc`. For a body in SQL, `prosqlbody` has the text of the statement that made the function, and `prosrc` is empty.
-/// `provariadic`: the element type of the `VARIADIC` argument, or 0.
-fn variadic(catalog: &Catalog, f: &Function) -> u32 {
+/// `provariadic`, as `ProcedureCreate` sets it: the element type of the `VARIADIC` argument, or 0 for a function with no `VARIADIC` argument. `anyarray` gives `anyelement`, `anycompatiblearray` gives `anycompatible`, and `"any"` gives `"any"`.
+pub fn variadic_type(catalog: &Catalog, f: &Function) -> u32 {
     let Some(i) = f.argmodes.iter().position(|&mode| mode == b'v') else { return 0 };
-    let array = f.allargtypes.get(i).copied().unwrap_or(0);
-    catalog
-        .type_by_oid(array)
-        .map(|t| t.element)
-        .or_else(|| builtin::type_by_oid(array).map(|t| t.elem))
-        .unwrap_or(0)
+    match f.allargtypes.get(i).copied().unwrap_or(0) {
+        ANYARRAY => ANYELEMENT,
+        ANYCOMPATIBLEARRAY => ANYCOMPATIBLE,
+        ANY => ANY,
+        array => catalog
+            .type_by_oid(array)
+            .map(|t| t.element)
+            .or_else(|| builtin::type_by_oid(array).map(|t| t.elem))
+            .unwrap_or(0),
+    }
 }
 
+/// The functions in SQL. A body in a string is in `prosrc`. For a body in SQL, `prosqlbody` has the text of the statement that made the function, and `prosrc` is empty.
 fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     catalog
         .functions()
@@ -759,7 +764,7 @@ fn functions<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("prolang", oid(f.lang))
                 .set("procost", Value::Float4(cost))
                 .set("prorows", Value::Float4(rows))
-                .set("provariadic", oid(variadic(catalog, f)))
+                .set("provariadic", oid(variadic_type(catalog, f)))
                 .set("prosupport", oid(f.support))
                 .set("prokind", code('f'))
                 .set("prosecdef", Value::Bool(false))
