@@ -93,6 +93,8 @@ pub fn output_supported(ty: u32) -> bool {
             | oid::ANYARRAY
             | oid::PG_LSN
             | oid::VOID
+            | oid::TRIGGER
+            | oid::EVENT_TRIGGER
             | oid::MONEY
             | oid::TID
             | oid::XID8

@@ -128,10 +128,14 @@ impl Connection {
             let (plan, writes) = self.start_writes(plan, &params, &view)?;
             if plan.write().is_some() {
                 let rows = plan.run(&params, &reader)?;
-                return self.write_rows(&plan, &params, &view, rows, formats, writes);
+                let done = self.write_rows(&plan, &params, &view, rows, formats, writes);
+                notices.extend(self.trigger_notices());
+                return done;
             }
             let rows = query::run(&plan, &params, &reader, formats)?;
-            self.end_writes(writes, &params, Vec::new())?;
+            let ended = self.end_writes(writes, &params, Vec::new());
+            notices.extend(self.trigger_notices());
+            ended?;
             let columns = statement.columns.clone().unwrap_or_default();
             return Ok(Done::Rows { columns, rows, tag: CommandTag::Select });
         }

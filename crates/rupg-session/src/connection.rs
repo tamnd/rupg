@@ -47,6 +47,7 @@ mod prepare;
 mod rewrite;
 mod roles;
 mod savepoint;
+mod trigger;
 mod upsert;
 mod vacuum;
 mod writes;
@@ -410,6 +411,10 @@ pub struct Connection {
     marks: Vec<savepoint::Mark>,
     /// The functions in PL/pgSQL that the session compiled, and the calls that run.
     plpgsql: rupg_plpgsql::Cache,
+    /// The queue of the triggers `AFTER` of the statement.
+    events: RefCell<Vec<trigger::Event>>,
+    /// The messages of `RAISE` of the triggers of the statement, for the client.
+    trigger_warnings: RefCell<Vec<Error>>,
 }
 
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
@@ -476,6 +481,8 @@ impl Connection {
             modes: RefCell::new(deferred::Modes::default()),
             marks: Vec::new(),
             plpgsql: rupg_plpgsql::Cache::default(),
+            events: RefCell::new(Vec::new()),
+            trigger_warnings: RefCell::new(Vec::new()),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -618,10 +625,18 @@ impl Connection {
             self.xid.set(heap.begin(self.pid));
         }
         let mut view = View { xid: self.xid.get(), ..view.clone() };
+        let triggers = self.write_triggers(info)?;
+        let rows = if triggers.is_empty() {
+            rows
+        } else {
+            self.before_statement(&triggers, info)?;
+            self.before_rows(plan, info, &triggers, rows)?
+        };
         // The rows that `RETURNING` reads: the rows that the statement wrote.
         let mut written = Vec::new();
-        // The new and the old rows that the foreign keys check.
+        // The new and the old rows that the foreign keys check and that the triggers `AFTER ... FOR EACH ROW` get.
         let foreign = !info.foreign.is_empty();
+        let keep_rows = foreign || triggers.after_rows();
         let (mut new_rows, mut old_rows) = (Vec::new(), Vec::new());
         // The new and the old rows of `ON CONFLICT DO UPDATE`.
         let mut updated = (Vec::new(), Vec::new());
@@ -650,7 +665,7 @@ impl Connection {
                 if info.returning.is_some() {
                     written.clone_from(&rows);
                 }
-                if foreign {
+                if keep_rows {
                     new_rows.clone_from(&rows);
                 }
                 if info.unique.is_empty() {
@@ -693,13 +708,16 @@ impl Connection {
                         }
                         Changed::Again => {
                             let reader = self.reader();
-                            (changes, given) = row_changes(plan.run(params, &reader)?, info)?;
+                            let rows = plan.run(params, &reader)?;
                             view = reader.view().cloned().unwrap_or_default();
+                            drop(reader);
+                            let rows = self.before_rows(plan, info, &triggers, rows)?;
+                            (changes, given) = row_changes(rows, info)?;
                         }
                         conflict => kept = self.key_conflict(info, &view, conflict)?,
                     }
                 };
-                if foreign {
+                if keep_rows {
                     let tids: Vec<u64> =
                         applied.iter().filter_map(|&at| changes.get(at).map(|c| c.0)).collect();
                     old_rows = heap.versions(view.database, info.table, &tids);
@@ -718,7 +736,11 @@ impl Connection {
                 (if update { CommandTag::Update } else { CommandTag::Delete }, count)
             }
         };
-        self.command.set(view.command + 1);
+        // The statements of the triggers `BEFORE` can end commands after the command of the write.
+        self.command.set(self.command.get().max(view.command + 1));
+        if !triggers.is_empty() {
+            self.after_write(info, &triggers, &old_rows, &new_rows)?;
+        }
         if foreign && (!new_rows.is_empty() || !old_rows.is_empty()) {
             batches.push(Batch::new(info, &info.foreign, view.command, new_rows, old_rows));
         }
@@ -801,6 +823,7 @@ impl Connection {
         self.snapshot.replace(None);
         self.end_deferred();
         self.marks.clear();
+        self.events.borrow_mut().clear();
     }
 
     /// The check hook of `default_text_search_config` for a `SET` of it, which reads the catalog.
@@ -1033,6 +1056,15 @@ impl Connection {
     fn truncate_rows(&self, tables: &[u32], work: &Catalog) -> Result<(), Error> {
         if tables.is_empty() {
             return Ok(());
+        }
+        let truncate = |t: &&rupg_catalog::Trigger| {
+            !t.internal && t.fires() && t.kind & rupg_catalog::TRIGGER_TRUNCATE != 0
+        };
+        if work.triggers().filter(truncate).any(|t| tables.contains(&t.relation)) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "TRUNCATE of a table with triggers is not supported yet",
+            ));
         }
         let heap = self.store.heap();
         if self.xid.get() == 0 {
@@ -1496,8 +1528,15 @@ impl Connection {
                 self.finish_xact();
             }
             match outcome {
-                Done::Tag(tag) => out.command_tag(tag, 0),
+                Done::Tag(tag) => {
+                    self.notices(&mut late, text, &[], out);
+                    out.command_tag(tag, 0);
+                }
                 Done::Rows { columns, rows, tag } => {
+                    // The rows of `RETURNING` come after the end of the write, as `FillPortalStore` gives them, so the notices of the write come before the description of the rows.
+                    if tag != CommandTag::Select {
+                        self.notices(&mut late, text, &[], out);
+                    }
                     let fields: Vec<Field<'_>> =
                         columns.iter().map(|column| column.field(0)).collect();
                     out.row_description(&fields);
@@ -1519,7 +1558,10 @@ impl Connection {
                     }
                     out.command_tag(CommandTag::Fetch, rows.len() as u64);
                 }
-                Done::Count(tag, count) => out.command_tag(tag, count),
+                Done::Count(tag, count) => {
+                    self.notices(&mut late, text, &[], out);
+                    out.command_tag(tag, count);
+                }
                 Done::Copy(copy) => copy.send(out),
             }
         }
@@ -1551,15 +1593,18 @@ impl Connection {
         if plan.write().is_some() {
             let rows = plan.run(&[], &reader);
             late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
-            let done = self.write_rows(&plan, &[], view, rows?, &[], writes)?;
-            return Ok(done);
+            let done = self.write_rows(&plan, &[], view, rows?, &[], writes);
+            late.extend(self.trigger_notices());
+            return done;
         }
         let columns = query::columns(&plan);
         let rows = query::run(&plan, &[], &reader, &[]);
         late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         match rows {
             Ok(rows) => {
-                self.end_writes(writes, &[], Vec::new())?;
+                let ended = self.end_writes(writes, &[], Vec::new());
+                late.extend(self.trigger_notices());
+                ended?;
                 Ok(Done::Rows { columns, rows, tag: CommandTag::Select })
             }
             Err(error) => {
@@ -4517,6 +4562,12 @@ mod tests {
     #[test]
     fn triggers() {
         big_stack(|| script(include_str!("connection/triggers.test")));
+    }
+
+    /// The calls of the triggers of `CREATE TRIGGER` in PL/pgSQL: the order of the triggers `BEFORE` and `AFTER` for each statement and for each row, the variables `TG_*`, `NEW` and `OLD`, a row that a trigger changes or skips, the checks after the triggers, `WHEN`, `UPDATE OF`, a disabled trigger, and the errors of a trigger function. `connection/trigger_fire.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn trigger_fire() {
+        big_stack(|| script(include_str!("connection/trigger_fire.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

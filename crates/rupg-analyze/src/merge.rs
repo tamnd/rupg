@@ -268,6 +268,8 @@ impl Analyzer<'_> {
                     update_foreign,
                     delete_foreign,
                 }),
+                recheck: None,
+                updated: Vec::new(),
             }),
             ..Query::default()
         };

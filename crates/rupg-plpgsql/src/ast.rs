@@ -23,6 +23,8 @@ pub(crate) struct Function {
     pub(crate) retset: bool,
     /// The declared result type.
     pub(crate) rettype: u32,
+    /// The variable `new` of a trigger function, which [`crate::compile::TRIGGER_VARIABLES`] and `old` follow.
+    pub(crate) trigger: Option<usize>,
 }
 
 /// A variable, `PLpgSQL_datum`.

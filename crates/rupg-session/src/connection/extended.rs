@@ -515,7 +515,9 @@ impl Connection {
                         reader.take_warnings().into_iter().map(Notice::of_function).collect();
                     drop(reader);
                     self.notices(&mut notices, &statement.text, &[], out);
-                    self.write_rows(&plan, &params, &view, rows?, &formats, writes)?
+                    let done = self.write_rows(&plan, &params, &view, rows?, &formats, writes);
+                    self.notices(&mut self.trigger_notices(), &statement.text, &[], out);
+                    done?
                 } else {
                     let rows = query::run(&plan, &params, &reader, &formats);
                     // The warnings of the run, such as the warning of `pg_advisory_unlock`, come before the rows.
@@ -524,7 +526,9 @@ impl Connection {
                     drop(reader);
                     self.notices(&mut notices, &statement.text, &[], out);
                     let rows = rows?;
-                    self.end_writes(writes, &params, Vec::new())?;
+                    let ended = self.end_writes(writes, &params, Vec::new());
+                    self.notices(&mut self.trigger_notices(), &statement.text, &[], out);
+                    ended?;
                     Done::Rows { columns: Vec::new(), rows, tag: CommandTag::Select }
                 }
             } else if let Some(stmt) = utility::is_savepoint(node) {

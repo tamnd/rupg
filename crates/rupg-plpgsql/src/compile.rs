@@ -31,7 +31,23 @@ pub(crate) struct Signature {
     /// The result type, with a polymorphic type changed to the actual type.
     pub(crate) rettype: u32,
     pub(crate) retset: bool,
+    /// True for a call of a trigger function as a trigger, `PLPGSQL_DML_TRIGGER`.
+    pub(crate) trigger: bool,
 }
+
+/// The variables of a trigger function after `new` and `old`, with their types, in the order of `do_compile`.
+pub(crate) const TRIGGER_VARIABLES: [(&str, u32); 10] = [
+    ("tg_name", oid::NAME),
+    ("tg_when", oid::TEXT),
+    ("tg_level", oid::TEXT),
+    ("tg_op", oid::TEXT),
+    ("tg_relid", oid::OID),
+    ("tg_relname", oid::NAME),
+    ("tg_table_name", oid::NAME),
+    ("tg_table_schema", oid::NAME),
+    ("tg_nargs", oid::INT4),
+    ("tg_argv", oid::TEXT_ARRAY),
+];
 
 /// `do_compile` and `plpgsql_compile_inline`: the function of the body `src`. With `check`, as `plpgsql_check_syntax` sets it, the parser of SQL reads each expression and statement.
 ///
@@ -365,6 +381,7 @@ impl Compiler<'_> {
     /// The function: the arguments, the variable `found`, the options and the top block.
     fn function(&mut self, sig: &Signature) -> Result<Function> {
         self.ns_push(Some(&sig.name), LabelKind::Block);
+        let trigger = if sig.trigger { Some(self.trigger_datums(sig)?) } else { None };
         let (mut args, mut outs) = (Vec::new(), Vec::new());
         for (i, arg) in sig.args.iter().enumerate() {
             let dollar = format!("${}", i + 1);
@@ -394,6 +411,7 @@ impl Compiler<'_> {
         };
         let rettype = sig.rettype;
         if types::row(rettype).is_some_and(|t| t.kind == b'p')
+            && !sig.trigger
             && rettype != oid::VOID
             && rettype != oid::RECORD
         {
@@ -430,7 +448,30 @@ impl Compiler<'_> {
             exprs: self.exprs,
             retset: self.retset,
             rettype: self.rettype,
+            trigger,
         })
+    }
+
+    /// The variables of a trigger function, as `do_compile` adds them for `PLPGSQL_DML_TRIGGER`: the records `new` and `old`, then [`TRIGGER_VARIABLES`]. It gives the variable `new`, and the others come after it in order.
+    fn trigger_datums(&mut self, sig: &Signature) -> Result<usize> {
+        if !sig.args.is_empty() {
+            return Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                "trigger functions cannot have declared arguments",
+            )
+            .with_hint(
+                "The arguments of the trigger can be accessed through TG_NARGS and TG_ARGV instead.",
+            ));
+        }
+        let new = self.add_datum("new", DatumKind::Rec { ty: oid::RECORD });
+        self.ns_add("new", NsEntry::Datum(new));
+        let old = self.add_datum("old", DatumKind::Rec { ty: oid::RECORD });
+        self.ns_add("old", NsEntry::Datum(old));
+        for (name, ty) in TRIGGER_VARIABLES {
+            let d = self.add_datum(name, DatumKind::Var { ty, typmod: -1 });
+            self.ns_add(name, NsEntry::Datum(d));
+        }
+        Ok(new)
     }
 
     /// `add_parameter_name`.
