@@ -41,6 +41,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - The workspace builds again with Rust 1.88, the lowest supported version. Four match arms used `if let` guards, which need a newer Rust (#457).
+- A new range type no longer loses memory. The rows of the type were copied from four boxes that were not freed (#455).
 
 ## 0.1.53 (2026-10-20)
 

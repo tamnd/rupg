@@ -1377,26 +1377,25 @@ const INT4_RANGE_TYPES: [u32; 4] = [3904, 3905, 4451, 6150];
 /// The rows of a range type, of its multirange type, of their array types, of the constructors and of the cast, as `DefineRange` makes them. The rows copy the rows of `int4range`, with the alignment of the subtype. The constructors copy the constructors of `int4range` and `int4multirange`.
 fn range_rows(new: &SessionRange) -> Option<Interned> {
     let [range, range_array, multirange, multirange_array] = INT4_RANGE_TYPES;
-    let copy = |template: u32, oid: u32, name: &str, namespace: u32| -> Option<&'static TypeRow> {
-        let row = TypeRow {
+    let copy = |template: u32, oid: u32, name: &str, namespace: u32| -> Option<TypeRow> {
+        Some(TypeRow {
             oid,
             name: name.to_string().leak(),
             namespace,
             align: new.align,
             ..*type_by_oid(template)?
-        };
-        Some(Box::leak(Box::new(row)))
+        })
     };
     let types = vec![
-        TypeRow { array: new.array, ..*copy(range, new.oid, &new.name, new.namespace)? },
-        TypeRow { elem: new.oid, ..*copy(range_array, new.array, &new.array_name, new.namespace)? },
+        TypeRow { array: new.array, ..copy(range, new.oid, &new.name, new.namespace)? },
+        TypeRow { elem: new.oid, ..copy(range_array, new.array, &new.array_name, new.namespace)? },
         TypeRow {
             array: new.multirange_array,
-            ..*copy(multirange, new.multirange, &new.multirange_name, new.multirange_namespace)?
+            ..copy(multirange, new.multirange, &new.multirange_name, new.multirange_namespace)?
         },
         TypeRow {
             elem: new.multirange,
-            ..*copy(
+            ..copy(
                 multirange_array,
                 new.multirange_array,
                 &new.multirange_array_name,

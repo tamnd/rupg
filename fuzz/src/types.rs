@@ -280,10 +280,12 @@ pub fn type_input(case: &InputCase) {
         Err(error) => return not_internal(&error, "the input"),
     };
     let text = output(ty, &value, &session).expect("the output of an accepted value");
+    if wide_zone(ty, &text) {
+        return;
+    }
     if !inexact_float(ty, case.settings) {
         let again = match rupg_func::input(ty.oid, &text, ty.typmod, &session) {
             Ok(again) => again,
-            Err(e) if wide_zone(ty, &e) => return,
             Err(e) => panic!("the input of the output {text:?} failed: {e:?}"),
         };
         assert_eq!(output(ty, &again, &session).expect("the output"), text, "the text round trip");
@@ -299,9 +301,11 @@ pub fn type_input(case: &InputCase) {
     }
 }
 
-/// True for a `timetz` with a zone that is 16 hours or more from UTC. The input takes such a zone as a POSIX zone, for example `A91`, but the output does not read back, in text or in binary. On the oracle `'11:11 A91'::timetz` gives `11:11:00-91`, and `'11:11:00-91'::timetz` gives `22009`.
-fn wide_zone(ty: &Type, error: &Error) -> bool {
-    ty.oid == oid::TIMETZ && error.state() == SqlState::INVALID_TIME_ZONE_DISPLACEMENT_VALUE
+/// True for a `timetz` with a zone that is 16 hours or more from UTC. The input takes such a zone as a POSIX zone, for example `A91`, but the output does not read back, in text or in binary. On the oracle `'11:11 A91'::timetz` gives `11:11:00-91`, and `'11:11:00-91'::timetz` gives `22009`. A zone of 100 hours or more reads back as a different zone: `'2:4 l123'::timetz` gives `02:04:00-123`, and `'02:04:00-123'::timetz` gives `02:04:00-01:23`.
+fn wide_zone(ty: &Type, text: &str) -> bool {
+    let Some(sign) = text.rfind(['+', '-']) else { return false };
+    let hours = text[sign + 1..].split(':').next().and_then(|h| h.parse::<u32>().ok());
+    ty.oid == oid::TIMETZ && hours.is_some_and(|h| h >= 16)
 }
 
 /// True for an `int2vector` or an `oidvector` with no element, or an array that holds one. PostgreSQL sends it as an array of one dimension of length 0, and its receive function refuses that: a `COPY` in the binary format of `''::oidvector` to a file and back gives `invalid oidvector data` on the oracle.
@@ -416,6 +420,14 @@ mod tests {
         let case = InputCase { ty, settings: Settings::default(), text: "1111A91".to_string() };
         type_input(&case);
         assert!(input_line(&case).starts_with("OK 11:11:00-91 "), "{}", input_line(&case));
+    }
+
+    #[test]
+    fn a_zone_of_100_hours_or_more() {
+        let ty = TYPES.iter().position(|t| t.oid == oid::TIMETZ).unwrap() as u8;
+        let case = InputCase { ty, settings: Settings::default(), text: "2:4 l123".to_string() };
+        type_input(&case);
+        assert!(input_line(&case).starts_with("OK 02:04:00-123 "), "{}", input_line(&case));
     }
 
     #[test]

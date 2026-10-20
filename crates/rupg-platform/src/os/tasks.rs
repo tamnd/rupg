@@ -252,6 +252,7 @@ mod stack {
         }
 
         #[test]
+        #[cfg_attr(miri, ignore = "Miri does not support mincore")]
         fn trim_releases_the_pages_below_the_frame() {
             let task = OsTasks.spawn(
                 "trim",

@@ -17,7 +17,7 @@
 //! Last, `initdb` runs `CREATE EXTENSION plpgsql`. rupg makes the extension, the three functions in C of `plpgsql--1.0.sql`, the language and their comments, with the OIDs of PostgreSQL 19.
 
 use std::cell::RefCell;
-use std::sync::{Arc, OnceLock};
+use std::sync::{Arc, Mutex, OnceLock, PoisonError};
 
 use rupg_catalog::{
     Catalog, Collation, Extension, FIRST_NORMAL_OID, FIRST_UNPINNED_OID, Function, Language,
@@ -377,6 +377,9 @@ pub(crate) fn catalog() -> Arc<Catalog> {
 
 /// Runs `system_views.sql` on a catalog of the bootstrap. Also gives each statement that failed, with its error.
 pub(crate) fn make() -> (Catalog, Vec<(String, Error)>) {
+    // A test can make a second catalog. It runs after the first one, so that it finds the rows of `rupg-pgcatalog` that the first one added and does not make them again.
+    static ONE_AT_A_TIME: Mutex<()> = Mutex::new(());
+    let _one = ONE_AT_A_TIME.lock().unwrap_or_else(PoisonError::into_inner);
     let mut catalog = Catalog::new();
     let mut failed = Vec::new();
     let text = rupg_pgcatalog::system_views();
@@ -824,6 +827,9 @@ fn define(
 /// Adds the row of a function of `information_schema` or of `plpgsql` to the rows of `rupg-pgcatalog`, so that the analyzer and the casts to `regproc` find the function.
 fn add_system_proc(catalog: &Catalog, oid: u32) -> Result<()> {
     let f = catalog.function(oid).ok_or_else(|| Error::internal(format!("no function {oid}")))?;
+    if builtin::proc_by_oid(oid).is_some() {
+        return Ok(());
+    }
     // The rows live as long as the process, as the built-in rows do.
     let argnames: Option<&'static [&'static str]> = (!f.argnames.is_empty()).then(|| {
         let names: Vec<&'static str> = f.argnames.iter().map(|n| &*n.clone().leak()).collect();
@@ -873,6 +879,9 @@ fn add_system_domain(catalog: &Catalog, name: &str) -> Result<()> {
     let missing = || Error::internal(format!("no domain {name}"));
     let ty = catalog.type_by_name(namespace, name).ok_or_else(missing)?;
     let domain = ty.domain.as_ref().ok_or_else(missing)?;
+    if builtin::type_by_oid(ty.oid).is_some() {
+        return Ok(());
+    }
     let array = catalog.type_by_oid(ty.array).ok_or_else(missing)?;
     let rows = builtin::domain_rows(builtin::NewDomainRows {
         oid: ty.oid,
