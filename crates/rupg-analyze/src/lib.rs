@@ -201,6 +201,16 @@ pub(crate) struct Analyzer<'a> {
 }
 
 impl<'a> Analyzer<'a> {
+    /// Sets the search path that a view, a rule or a function kept. The temporary schema of the session comes first in the path of the lookups of relations and types.
+    fn set_path(&mut self, path: &[u32]) {
+        let temp = self.temp;
+        self.path = path.iter().copied().filter(|&ns| temp == 0 || ns != temp).collect();
+        self.temp_path.clone_from(&self.path);
+        if temp != 0 {
+            self.temp_path.insert(0, temp);
+        }
+    }
+
     fn new(env: &'a dyn Env, params: &Params) -> Analyzer<'a> {
         let mut path = env.search_path();
         if !path.contains(&PG_CATALOG_NAMESPACE) {

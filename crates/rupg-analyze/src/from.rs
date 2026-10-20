@@ -556,7 +556,7 @@ impl Analyzer<'_> {
             return Err(Error::internal("the query of a view is not a SELECT"));
         };
         let mut an = Analyzer::new(self.env, &crate::Params::default());
-        an.path.clone_from(&view.path);
+        an.set_path(&view.path);
         an.views.clone_from(&self.views);
         an.views.push(oid);
         an.select(select).map(Some).map_err(|error| error.with_position(None))
