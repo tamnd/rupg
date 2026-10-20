@@ -47,7 +47,8 @@ jobs:
           # A report needs the names of the functions. The runner has llvm-symbolizer from its LLVM packages.
           for s in llvm-symbolizer llvm-symbolizer-18 llvm-symbolizer-17 llvm-symbolizer-16; do
             if command -v "$s" > /dev/null; then
-              export ASAN_SYMBOLIZER_PATH="$(command -v "$s")" TSAN_SYMBOLIZER_PATH="$(command -v "$s")"
+              ASAN_SYMBOLIZER_PATH=$(command -v "$s")
+              export ASAN_SYMBOLIZER_PATH TSAN_SYMBOLIZER_PATH="$ASAN_SYMBOLIZER_PATH"
               break
             fi
           done
