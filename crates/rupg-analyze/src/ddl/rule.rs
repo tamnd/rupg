@@ -199,15 +199,15 @@ impl Definer<'_, '_> {
         };
         let mut actions = Vec::new();
         if tree.actions.is_empty() {
-            query_references(&tree.base, &[], &mut actions);
+            query_references(self.catalog, &tree.base, &[], &mut actions);
         }
         for action in &tree.actions {
-            query_references(action, &[], &mut actions);
+            query_references(self.catalog, action, &[], &mut actions);
         }
         let mut qual = Vec::new();
         if let Some(expr) = &tree.qual {
             let context = tree.actions.first().unwrap_or(&tree.base);
-            expr_references(expr, &[context], &mut qual);
+            expr_references(self.catalog, expr, &[context], &mut qual);
         }
         let new = NewRule {
             name: rulename.to_string(),

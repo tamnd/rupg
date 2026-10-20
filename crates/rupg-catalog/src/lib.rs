@@ -2258,6 +2258,49 @@ impl Catalog {
             .ok_or_else(|| no_object(&format!("attribute {column} of relation"), relation))
     }
 
+    /// Changes the expressions that the catalog keeps in the form of the analyzer: the defaults of the columns and of the domains, the expressions of the check constraints, and the expressions and the predicates of the indexes. `change` gets the form, and true for the list of the expressions of an index. It gives the new form, or `None` for no change.
+    ///
+    /// # Errors
+    ///
+    /// The errors of `change`.
+    pub fn change_stored_exprs(
+        &mut self,
+        change: &mut dyn FnMut(&str, bool) -> Result<Option<String>>,
+    ) -> Result<()> {
+        for default in self.defaults.values_mut() {
+            if let Some(new) = change(&default.expr, false)? {
+                default.expr = new;
+            }
+        }
+        for con in self.constraints.values_mut() {
+            if let Some(expr) = &mut con.expr
+                && let Some(new) = change(expr, false)?
+            {
+                *expr = new;
+            }
+        }
+        for ty in self.types.values_mut() {
+            if let Some(expr) = ty.domain.as_mut().and_then(|d| d.default.as_mut())
+                && let Some(new) = change(expr, false)?
+            {
+                *expr = new;
+            }
+        }
+        for info in self.relations.values_mut().filter_map(|r| r.index.as_mut()) {
+            if let Some(exprs) = &mut info.exprs
+                && let Some(new) = change(exprs, true)?
+            {
+                *exprs = new;
+            }
+            if let Some(predicate) = &mut info.predicate
+                && let Some(new) = change(predicate, false)?
+            {
+                *predicate = new;
+            }
+        }
+        Ok(())
+    }
+
     /// `StoreAttrDefault`: the default of a column. `refs` are the objects that the expression refers to.
     pub fn add_default(
         &mut self,

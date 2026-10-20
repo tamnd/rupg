@@ -249,7 +249,8 @@ impl Definer<'_, '_> {
             (true, true) => Some(ConKind::Primary),
             (true, false) => Some(ConKind::Unique),
         };
-        let mut refs = references(table, &exprs.iter().chain(&predicate).collect::<Vec<_>>());
+        let mut refs =
+            references(self.catalog, table, &exprs.iter().chain(&predicate).collect::<Vec<_>>());
         if exprs.is_empty() && predicate.is_none() {
             refs.clear();
         }

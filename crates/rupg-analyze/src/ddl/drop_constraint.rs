@@ -59,7 +59,16 @@ impl Definer<'_, '_> {
             self.notice(SqlState::SUCCESSFUL_COMPLETION, format!("{message}, skipping"));
             return Ok(());
         };
-        self.perform(&[ObjRef::column(target.oid, number)], cascade)
+        // The place of the field among the fields of the row type, which have no dropped columns.
+        let at = self.catalog.relation(target.oid).map_or(0, |r| {
+            r.columns
+                .iter()
+                .take(usize::try_from(number - 1).unwrap_or(0))
+                .filter(|c| !c.dropped)
+                .count()
+        });
+        self.perform(&[ObjRef::column(target.oid, number)], cascade)?;
+        self.drop_field(target.oid, at)
     }
 
     /// `ATExecDropNotNull`: removes the not-null constraint of the column. A column with no constraint needs no change.

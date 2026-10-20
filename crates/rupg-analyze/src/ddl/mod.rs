@@ -342,8 +342,8 @@ fn column_numbers(exprs: &[&Expr]) -> Vec<i16> {
     numbers
 }
 
-/// `recordDependencyOnSingleRelExpr`: the objects that the expressions refer to. These are the columns of the relation and the relations and types of `regclass` and `regtype` constants. The catalog drops the references to pinned objects.
-fn references(relation: u32, exprs: &[&Expr]) -> Vec<ObjRef> {
+/// `recordDependencyOnSingleRelExpr`: the objects that the expressions refer to. These are the columns of the relation, the relations and types of `regclass` and `regtype` constants, and the fields of composite types that the expressions select. The catalog drops the references to pinned objects.
+fn references(catalog: &Catalog, relation: u32, exprs: &[&Expr]) -> Vec<ObjRef> {
     let mut refs: Vec<ObjRef> =
         column_numbers(exprs).into_iter().map(|n| ObjRef::column(relation, n)).collect();
     for expr in exprs {
@@ -355,7 +355,7 @@ fn references(relation: u32, exprs: &[&Expr]) -> Vec<ObjRef> {
                 (ExprKind::Const(Value::Oid(oid)), oid::REGTYPE) => {
                     Some(ObjRef::new(PG_TYPE, *oid))
                 }
-                _ => None,
+                _ => field_reference(catalog, e),
             };
             for found in found.into_iter().chain(type_reference(e)) {
                 if !refs.contains(&found) {
@@ -366,6 +366,14 @@ fn references(relation: u32, exprs: &[&Expr]) -> Vec<ObjRef> {
         });
     }
     refs
+}
+
+/// The column that `find_expr_references_walker` records for a `FieldSelect` of a composite type of the catalog, also through a domain: the column of the relation of the type that has the field.
+pub(crate) fn field_reference(catalog: &Catalog, expr: &Expr) -> Option<ObjRef> {
+    let ExprKind::FieldSelect(arg, field) = &expr.kind else { return None };
+    let rel = row_type::row_relation(catalog, arg.ty)?;
+    let (at, _) = rel.columns.iter().enumerate().filter(|(_, c)| !c.dropped).nth(*field)?;
+    Some(ObjRef::column(rel.oid, i16::try_from(at + 1).ok()?))
 }
 
 /// The type that `find_expr_references_walker` records for a constant, a cast or the `Param` of a column of a subquery, which is the type of its result. The catalog drops the references to the built-in types, so only a type such as a domain of `initdb` stays.

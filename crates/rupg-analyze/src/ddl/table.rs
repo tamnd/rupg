@@ -850,7 +850,7 @@ impl Definer<'_, '_> {
             }
             Some(RawDefault::Serial(k)) => {
                 let expr = nextval(plan.serials[*k].oid)?;
-                let refs = references(table, &[&expr]);
+                let refs = references(self.catalog, table, &[&expr]);
                 self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
             }
             None => {}
@@ -953,7 +953,7 @@ impl Definer<'_, '_> {
             if matches!(expr.kind, ExprKind::Const(Value::Null)) {
                 continue;
             }
-            let refs = references(table, &[&expr]);
+            let refs = references(self.catalog, table, &[&expr]);
             let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
             self.catalog.add_default(table, attnum, crate::node::write(&expr)?, &refs)?;
         }
@@ -983,7 +983,7 @@ impl Definer<'_, '_> {
                 ));
             }
             let keys = super::column_numbers(&[&expr]);
-            let refs = references(table, &[&expr]);
+            let refs = references(self.catalog, table, &[&expr]);
             let text = crate::node::write(&expr)?;
             let oid = self.catalog.add_check(
                 table,
