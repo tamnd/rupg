@@ -82,6 +82,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The triggers of `CREATE TRIGGER` fire on `INSERT`, `UPDATE` and `DELETE` with a trigger function in PL/pgSQL, with `NEW`, `OLD`, the variables `TG_*`, `WHEN` and `UPDATE OF`. The notices of a statement with no rows now go to the client (#461).
 - `DO` runs in a PL/pgSQL function and in a `DO` block, with the statement as the context of the messages and the errors of its code. `DO LANGUAGE sql` gives 0A000, as in PostgreSQL (#462).
 - `SET ROLE`, `SET SESSION AUTHORIZATION` and `RESET` of them change `current_user`, `session_user` and `is_superuser`, with the checks of PostgreSQL. A new object belongs to the current user (#453).
+- A checkpoint cuts the free arenas at the end of the file, as spec/08 section 8.9.3 says. The new length goes in the slot first, and the file gets shorter after that slot is durable (#456).
 
 ### Changed
 

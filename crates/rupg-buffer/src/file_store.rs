@@ -575,6 +575,19 @@ impl Inner {
         for &p in &self.pending_prev {
             Inner::release(&mut after, p)?;
         }
+        // The free arenas at the end go (section 8.9.3). Neither durable slot names a page in them. A map page that the shorter map does not need goes back.
+        let keep = loop {
+            let keep =
+                after.len() - after.iter().rev().take_while(|a| a.kind == ArenaKind::Free).count();
+            if fsm_at.len() <= keep.div_ceil(FSM_ARENAS_PER_PAGE).max(1) {
+                break keep;
+            }
+            let p =
+                fsm_at.pop().ok_or_else(|| Error::internal("the free space map has no page"))?;
+            Inner::release(&mut self.arenas, p)?;
+            Inner::release(&mut after, p)?;
+        };
+        after.truncate(keep);
         let mut fsm_sum = 0;
         for (i, &at) in fsm_at.iter().enumerate() {
             let first = i * FSM_ARENAS_PER_PAGE;
@@ -601,7 +614,7 @@ impl Inner {
             file_id: self.slot.file_id,
             features: self.slot.features,
             checkpoint: ts,
-            file_pages: self.file_pages(),
+            file_pages: FIRST_ARENA_PAGE + after.len() as u64 * ARENA_PAGES,
             page_table: Root {
                 page: root.entry.physical().unwrap_or(0),
                 checksum: stored_checksum(&root.page),
@@ -621,8 +634,12 @@ impl Inner {
         file.write_at(offset(name.page()), &block)?;
         file.sync()?;
 
-        // Step 7. The old pending free list is free, and the numbers released in the interval can be given out.
+        // Step 7. The old pending free list is free, and the numbers released in the interval can be given out. The file is cut only now, because the old slot can name the cut arenas until the new slot is durable.
+        let before = self.file_pages();
         self.arenas = after;
+        if self.cursor.is_some_and(|(a, _)| a >= self.arenas.len()) {
+            self.cursor = None;
+        }
         self.pending_prev = pending;
         self.fsm_at = fsm_at;
         self.list_at = list_at;
@@ -632,6 +649,9 @@ impl Inner {
         self.free.append(&mut self.freed);
         self.active = name;
         self.slot = slot;
+        if self.file_pages() < before {
+            file.set_size(offset(self.file_pages()))?;
+        }
         Ok(())
     }
 
@@ -1463,9 +1483,51 @@ mod tests {
         let s = open(&io).unwrap();
         s.check().unwrap();
         checkpoint_rings(&s, 3, &[ring(0, 0, &[a])]).unwrap();
-        assert_eq!(free_arenas(&s), free + 1);
+        // The extent was the last arena, so the file is now one arena shorter.
+        assert_eq!(free_arenas(&s), free);
+        assert_eq!(s.stats().file_pages, b);
         assert_eq!(s.add_ring_extent().unwrap(), b);
         checkpoint_rings(&s, 4, &[ring(0, 0, &[a, b])]).unwrap();
+        drop(s);
+        let s = open(&io).unwrap();
+        assert_eq!(s.rings(), [ring(0, 0, &[a, b])]);
+        s.check().unwrap();
+    }
+
+    #[test]
+    fn free_arenas_at_the_end_are_cut() {
+        let io = SimIo::new(14);
+        let s = create(&io);
+        let a = s.add_ring_extent().unwrap();
+        let b = s.add_ring_extent().unwrap();
+        let c = s.add_ring_extent().unwrap();
+        checkpoint_rings(&s, 1, &[ring(0, 0, &[a, b, c])]).unwrap();
+        let size = |pages: u64| {
+            let file = io.open(Path::new(PATH), OpenMode::ReadWrite).unwrap();
+            assert_eq!(file.size().unwrap(), offset(pages));
+        };
+        let long = s.stats().file_pages;
+        assert_eq!(long, c + ARENA_PAGES);
+        s.free_ring_extent(b).unwrap();
+        s.free_ring_extent(c).unwrap();
+        checkpoint_rings(&s, 2, &[ring(0, 0, &[a])]).unwrap();
+        // The older slot names the extents, so the file keeps its length.
+        assert_eq!(s.stats().file_pages, long);
+        size(long);
+        checkpoint_rings(&s, 3, &[ring(0, 0, &[a])]).unwrap();
+        assert_eq!(s.stats().file_pages, b);
+        assert_eq!(s.slot().1.file_pages, b);
+        size(b);
+        s.check().unwrap();
+        drop(s);
+
+        // The cut file opens, and it grows again.
+        let s = open(&io).unwrap();
+        s.check().unwrap();
+        assert_eq!(s.stats().file_pages, b);
+        assert_eq!(s.add_ring_extent().unwrap(), b);
+        checkpoint_rings(&s, 4, &[ring(0, 0, &[a, b])]).unwrap();
+        size(c);
         drop(s);
         let s = open(&io).unwrap();
         assert_eq!(s.rings(), [ring(0, 0, &[a, b])]);
