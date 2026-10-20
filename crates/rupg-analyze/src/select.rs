@@ -235,21 +235,21 @@ impl Analyzer<'_> {
         for target in targets {
             if let ExprKind::Var(var) = &target.expr.kind {
                 let relation = &self.level(var.levels_up).relations[var.relation];
-                target.origin = match &relation.subquery {
-                    None if let Some(cte) = relation.cte.as_ref().filter(|c| c.write.is_some()) => {
-                        usize::try_from(var.attnum - 1)
-                            .ok()
-                            .and_then(|i| cte.origins.get(i).copied().flatten())
-                    }
-                    None if relation.function.is_some()
-                        || relation.values.is_some()
-                        || relation.cte.is_some() =>
+                let written = relation.cte.as_ref().filter(|c| c.write.is_some());
+                target.origin = match (&relation.subquery, written) {
+                    (None, Some(cte)) => usize::try_from(var.attnum - 1)
+                        .ok()
+                        .and_then(|i| cte.origins.get(i).copied().flatten()),
+                    (None, None)
+                        if relation.function.is_some()
+                            || relation.values.is_some()
+                            || relation.cte.is_some() =>
                     {
                         None
                     }
-                    None => Some((relation.oid, var.attnum)),
-                    Some(_) if relation.oid != 0 => Some((relation.oid, var.attnum)),
-                    Some(sub) => usize::try_from(var.attnum - 1)
+                    (None, None) => Some((relation.oid, var.attnum)),
+                    (Some(_), _) if relation.oid != 0 => Some((relation.oid, var.attnum)),
+                    (Some(sub), _) => usize::try_from(var.attnum - 1)
                         .ok()
                         .and_then(|i| sub.targets.iter().filter(|t| !t.junk).nth(i))
                         .and_then(|t| t.origin),
