@@ -4613,6 +4613,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/procedures.test")));
     }
 
+    /// `CALL` in PL/pgSQL: the values of `INOUT` and `OUT` arguments go back to the variables and to the fields of records, with named arguments and defaults, a `CALL` in a procedure and in a function, and the errors of an argument that is not a variable, of a `CONSTANT` and of a cast. `FOUND` does not change. `connection/plpgsql_call.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_call() {
+        big_stack(|| script(include_str!("connection/plpgsql_call.test")));
+    }
+
+    /// `CALL` in the extended protocol: the parameters of the call, the description of the row of the output arguments, no description for a procedure with no output arguments, and the errors of `Parse` and `Execute`. `connection/call_extended.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn call_extended() {
+        big_stack(|| script(include_str!("connection/call_extended.test")));
+    }
+
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn array_agg_array() {

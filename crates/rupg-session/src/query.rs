@@ -1114,6 +1114,11 @@ pub(crate) fn returns_rows(plan: &Plan) -> bool {
     plan.write().is_none_or(|write| write.returning.is_some())
 }
 
+/// True for a plan whose first column has the type `void`, as the plan of a `CALL` of a procedure with no output arguments has.
+pub(crate) fn is_void(plan: &Plan) -> bool {
+    plan.columns().first().is_some_and(|target| target.expr.ty == oid::VOID)
+}
+
 /// The columns of the result of a plan. A column of a domain has the base type and the typmod of the domain, as `SendRowDescriptionMessage` gives them.
 pub(crate) fn columns(plan: &Plan) -> Vec<Column> {
     plan.columns()

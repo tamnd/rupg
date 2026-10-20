@@ -1,0 +1,127 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE PROCEDURE p_inc(INOUT x int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   x := x + 1;
+>> END $$;
+CREATE PROCEDURE
+> DO $$ DECLARE v int := 1; BEGIN CALL p_inc(v); CALL p_inc(v); RAISE NOTICE 'v=%', v; END $$;
+NOTICE 00000 v=3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> CREATE PROCEDURE p_two(IN a int, OUT b int, INOUT c text) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   b := a * 2;
+>>   c := c || '!';
+>> END $$;
+CREATE PROCEDURE
+> DO $$ DECLARE x int; y text := 'hi'; BEGIN CALL p_two(5, x, y); RAISE NOTICE 'x=% y=%', x, y; END $$;
+NOTICE 00000 x=10 y=hi! (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int; y text := 'hi'; BEGIN CALL p_two(c => y, b => x, a => 7); RAISE NOTICE 'x=% y=%', x, y; END $$;
+NOTICE 00000 x=14 y=hi! (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ BEGIN CALL p_inc(1); END $$;
+ERROR 42601 procedure parameter "x" is an output parameter but corresponding argument is not writable (PL/pgSQL function inline_code_block line 1 at CALL)
+> CREATE PROCEDURE p_un(INOUT int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   $1 := $1 * 3;
+>> END $$;
+CREATE PROCEDURE
+> DO $$ DECLARE v int := 2; BEGIN CALL p_un(v); RAISE NOTICE 'v=%', v; END $$;
+NOTICE 00000 v=6 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ BEGIN CALL p_un(2); END $$;
+ERROR 42601 procedure parameter 1 is an output parameter but corresponding argument is not writable (PL/pgSQL function inline_code_block line 1 at CALL)
+> DO $$ DECLARE v bigint := 1; BEGIN CALL p_inc(v); RAISE NOTICE 'v=%', v; END $$;
+ERROR 42883 procedure p_inc(bigint) does not exist (PL/pgSQL function inline_code_block line 1 at CALL)
+DETAIL No procedure of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+QUERY CALL p_inc(v) at 6
+> DO $$ DECLARE v numeric := 1.5; BEGIN CALL p_inc(v); RAISE NOTICE 'v=%', v; END $$;
+ERROR 42883 procedure p_inc(numeric) does not exist (PL/pgSQL function inline_code_block line 1 at CALL)
+DETAIL No procedure of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+QUERY CALL p_inc(v) at 6
+> DO $$ DECLARE v varchar := 'a'; y int; BEGIN CALL p_two(1, y, v); RAISE NOTICE 'v=%', v; END $$;
+ERROR 42601 procedure parameter "c" is an output parameter but corresponding argument is not writable (PL/pgSQL function inline_code_block line 1 at CALL)
+> DO $$ DECLARE v CONSTANT int := 1; BEGIN CALL p_inc(v); END $$;
+ERROR 22005 variable "v" is declared CONSTANT (PL/pgSQL function inline_code_block line 1 at CALL)
+> DO $$ DECLARE x int; BEGIN CALL p_two(1, x, NULL); END $$;
+ERROR 42601 procedure parameter "c" is an output parameter but corresponding argument is not writable (PL/pgSQL function inline_code_block line 1 at CALL)
+> CREATE TYPE pair AS (a int, b text);
+CREATE TYPE
+> DO $$ DECLARE r pair := ROW(4, 'z'); BEGIN CALL p_two(r.a, r.a, r.b); RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(8,z!) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r record; BEGIN SELECT 1 AS a INTO r; CALL p_inc(r.a); RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(2) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE v int := 1; BEGIN PERFORM 1 WHERE false; CALL p_inc(v); RAISE NOTICE 'found=% v=%', found, v; END $$;
+NOTICE 00000 found=f v=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> CREATE PROCEDURE p_outer(INOUT n int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   CALL p_inc(n);
+>>   CALL p_inc(n);
+>> END $$;
+CREATE PROCEDURE
+> CALL p_outer(10);
+fields n:23:4:-1
+row 12
+CALL
+> CREATE PROCEDURE p_note(a int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE 'note %', a;
+>> END $$;
+CREATE PROCEDURE
+> DO $$ BEGIN CALL p_note(3); END $$;
+NOTICE 00000 note 3 (PL/pgSQL function p_note(integer) line 3 at RAISE
+SQL statement "CALL p_note(3)"
+PL/pgSQL function inline_code_block line 1 at CALL)
+DO
+> CREATE FUNCTION f_calls(n int) RETURNS int LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   CALL p_inc(n);
+>>   RETURN n;
+>> END $$;
+CREATE FUNCTION
+> SELECT f_calls(41);
+fields f_calls:23:4:-1
+row 42
+SELECT 1
+> CREATE PROCEDURE p_err(a int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE EXCEPTION 'bad %', a;
+>> END $$;
+CREATE PROCEDURE
+> DO $$ BEGIN CALL p_err(1); END $$;
+ERROR P0001 bad 1 (PL/pgSQL function p_err(integer) line 3 at RAISE
+SQL statement "CALL p_err(1)"
+PL/pgSQL function inline_code_block line 1 at CALL)
+> DO $$ BEGIN CALL nosuch(1); END $$;
+ERROR 42883 procedure nosuch(integer) does not exist (PL/pgSQL function inline_code_block line 1 at CALL)
+DETAIL There is no procedure of that name.
+QUERY CALL nosuch(1) at 6
+> DO $$ BEGIN CALL abs(1); END $$;
+ERROR 42809 abs(integer) is not a procedure (PL/pgSQL function inline_code_block line 1 at CALL)
+HINT To call a function, use SELECT.
+QUERY CALL abs(1) at 6
+> DO $$ DECLARE v int := 5; BEGIN CALL p_inc(v + 0); END $$;
+ERROR 42601 procedure parameter "x" is an output parameter but corresponding argument is not writable (PL/pgSQL function inline_code_block line 1 at CALL)
+> CREATE PROCEDURE p_def(INOUT a int, b int DEFAULT 100) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   a := a + b;
+>> END $$;
+CREATE PROCEDURE
+> DO $$ DECLARE v int := 1; BEGIN CALL p_def(v); RAISE NOTICE 'v=%', v; END $$;
+NOTICE 00000 v=101 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> CREATE PROCEDURE p_sql(INOUT a int) LANGUAGE sql AS $$ SELECT a * 7 $$;
+CREATE PROCEDURE
+> DO $$ DECLARE v int := 3; BEGIN CALL p_sql(v); RAISE NOTICE 'v=%', v; END $$;
+NOTICE 00000 v=21 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE v int := 1; BEGIN CALL p_inc(v); GET DIAGNOSTICS v = ROW_COUNT; RAISE NOTICE 'rc=%', v; END $$;
+NOTICE 00000 rc=0 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO

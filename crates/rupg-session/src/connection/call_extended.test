@@ -1,0 +1,80 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE PROCEDURE p_inc(INOUT x int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   x := x + 1;
+>> END $$;
+CREATE PROCEDURE
+> CREATE PROCEDURE p_two(IN a int, OUT b int, INOUT c text) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   b := a * 2;
+>>   c := c || '!';
+>> END $$;
+CREATE PROCEDURE
+> CREATE TABLE t (a int);
+CREATE TABLE
+> CREATE PROCEDURE p_ins(a int) LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   INSERT INTO t VALUES (a);
+>>   RAISE NOTICE 'ins %', a;
+>> END $$;
+CREATE PROCEDURE
+P s1|CALL p_inc(5)
+D S s1
+params 
+fields x:23:4:-1
+X s1
+row 6
+CALL
+P s2|CALL p_inc($1)
+D S s2
+params 23
+fields x:23:4:-1
+X s2|41
+row 42
+CALL
+P s3|CALL p_two($1, NULL, $2)
+D S s3
+params 23,25
+fields b:23:4:-1,c:25:-1:-1
+X s3|3|hi
+row 6,hi!
+CALL
+P s4|CALL p_ins($1)
+D S s4
+params 23
+nodata
+X s4|7
+NOTICE 00000 ins 7 (PL/pgSQL function p_ins(integer) line 4 at RAISE)
+CALL
+X s4|8
+NOTICE 00000 ins 8 (PL/pgSQL function p_ins(integer) line 4 at RAISE)
+CALL
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1
+row 7
+row 8
+SELECT 2
+P s5|CALL nosuch($1)
+ERROR 42883 procedure nosuch(unknown) does not exist at 6
+DETAIL There is no procedure of that name.
+P s6|CALL abs($1)
+ERROR 42809 abs(unknown) is not a procedure at 6
+HINT To call a function, use SELECT.
+P s7|CALL p_inc($1::text)
+ERROR 42883 procedure p_inc(text) does not exist at 6
+DETAIL No procedure of that name accepts the given argument types.
+HINT You might need to add explicit type casts.
+P s8|CALL p_two(1, $1, 'x')
+D S s8
+params 23
+fields b:23:4:-1,c:25:-1:-1
+X s8|
+ERROR 22P02 invalid input syntax for type integer: "" (unnamed portal parameter $1 = '')
+P s9|CALL p_ins(1/0)
+D S s9
+params 
+nodata
+X s9
+ERROR 22012 division by zero

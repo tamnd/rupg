@@ -830,11 +830,8 @@ impl Exec<'_> {
                 Ok(Flow::Normal)
             }
             StmtKind::Call { expr, call: true } => {
-                let error = Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    "CALL in PL/pgSQL is not supported yet",
-                );
-                Err(spi_error(expr, error).into())
+                self.call(expr)?;
+                Ok(Flow::Normal)
             }
             StmtKind::GetDiag { stacked, items } => {
                 self.getdiag(*stacked, items)?;
@@ -842,6 +839,61 @@ impl Exec<'_> {
             }
             StmtKind::Null => Ok(Flow::Normal),
         }
+    }
+
+    /// `exec_stmt_call` for `CALL`. The values of the output arguments of the procedure go back to the variables of the call, as `make_callstmt_target` finds them. `FOUND` and the row count do not change.
+    fn call(&mut self, e: &Expr) -> Result<()> {
+        let p = self.plan(e)?;
+        let targets = p
+            .plan
+            .out_args()
+            .iter()
+            .map(|arg| self.out_target(&p, arg))
+            .collect::<Result<Vec<_>>>()?;
+        let (rows, ..) = self.execute(e)?;
+        if targets.is_empty() {
+            return Ok(());
+        }
+        if rows.len() > 1 {
+            return Err(Error::internal("procedure call returned more than one row"));
+        }
+        let Some(row) = rows.into_iter().next() else { return Ok(()) };
+        for ((target, value), (_, ty, typmod)) in targets.iter().zip(row).zip(columns(&p.plan)) {
+            self.assign(target, value, ty, typmod)?;
+        }
+        Ok(())
+    }
+
+    /// The variable of `make_callstmt_target` for an output argument of `CALL`. The argument must be a variable or a field of a record that is not `CONSTANT`, with no cast.
+    fn out_target(&self, p: &Prepared, arg: &rupg_analyze::OutArg) -> Result<Target> {
+        let binding = match arg.expr.kind {
+            ExprKind::Param(n) => p.bindings.get(n.wrapping_sub(1)).map(|(b, ..)| b),
+            _ => None,
+        };
+        let Some(binding) = binding else {
+            let message = match &arg.name {
+                Some(name) => format!(
+                    "procedure parameter \"{name}\" is an output parameter but corresponding argument is not writable"
+                ),
+                None => format!(
+                    "procedure parameter {} is an output parameter but corresponding argument is not writable",
+                    arg.position
+                ),
+            };
+            return Err(Error::new(SqlState::SYNTAX_ERROR, message));
+        };
+        let (Binding::Datum(d) | Binding::Field(d, _)) = binding;
+        let datum = &self.f.datums[*d];
+        if datum.constant {
+            return Err(Error::new(
+                SqlState::ERROR_IN_ASSIGNMENT,
+                format!("variable \"{}\" is declared CONSTANT", datum.name),
+            ));
+        }
+        Ok(match binding {
+            Binding::Datum(d) => Target::Datum(*d),
+            Binding::Field(d, name) => Target::Field(*d, name.clone()),
+        })
     }
 
     /// `exec_stmt_call` for `DO`: the code runs as `ExecuteDoStmt` runs it, with the statement as the context of its errors and messages. `FOUND` and the row count do not change.
