@@ -1,0 +1,211 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE ROLE regress_sr1;
+CREATE ROLE
+> CREATE ROLE regress_sr2 SUPERUSER;
+CREATE ROLE
+> CREATE ROLE regress_sr3;
+CREATE ROLE
+> GRANT regress_sr3 TO regress_sr1;
+GRANT ROLE
+> SELECT current_user, session_user, current_role;
+fields current_user:19:64:-1,session_user:19:64:-1,current_role:19:64:-1
+row postgres,postgres,postgres
+SELECT 1
+> SHOW role;
+fields role:25:-1:-1
+row none
+SHOW
+> SHOW is_superuser;
+fields is_superuser:25:-1:-1
+row on
+SHOW
+> SET ROLE regress_sr1;
+SET
+is_superuser=off
+> SELECT current_user, session_user, current_role;
+fields current_user:19:64:-1,session_user:19:64:-1,current_role:19:64:-1
+row regress_sr1,postgres,regress_sr1
+SELECT 1
+> SHOW role;
+fields role:25:-1:-1
+row regress_sr1
+SHOW
+> SHOW is_superuser;
+fields is_superuser:25:-1:-1
+row off
+SHOW
+> SET ROLE regress_nope;
+ERROR 22023 role "regress_nope" does not exist
+> SET ROLE regress_sr3;
+SET
+> SELECT current_user, session_user;
+fields current_user:19:64:-1,session_user:19:64:-1
+row regress_sr3,postgres
+SELECT 1
+> SET ROLE NONE;
+SET
+is_superuser=on
+> SELECT current_user, session_user;
+fields current_user:19:64:-1,session_user:19:64:-1
+row postgres,postgres
+SELECT 1
+> SET SESSION AUTHORIZATION regress_sr1;
+SET
+session_authorization=regress_sr1
+is_superuser=off
+> SELECT current_user, session_user;
+fields current_user:19:64:-1,session_user:19:64:-1
+row regress_sr1,regress_sr1
+SELECT 1
+> SHOW session_authorization;
+fields session_authorization:25:-1:-1
+row regress_sr1
+SHOW
+> SHOW is_superuser;
+fields is_superuser:25:-1:-1
+row off
+SHOW
+> SET ROLE regress_sr3;
+SET
+> SELECT current_user, session_user;
+fields current_user:19:64:-1,session_user:19:64:-1
+row regress_sr3,regress_sr1
+SELECT 1
+> SET ROLE regress_sr2;
+ERROR 42501 permission denied to set role "regress_sr2"
+> SET ROLE postgres;
+ERROR 42501 permission denied to set role "postgres"
+> SET ROLE NONE;
+SET
+> SET SESSION AUTHORIZATION regress_nope;
+ERROR 22023 role "regress_nope" does not exist
+> SET SESSION AUTHORIZATION regress_sr2;
+SET
+session_authorization=regress_sr2
+is_superuser=on
+> SELECT current_user, session_user;
+fields current_user:19:64:-1,session_user:19:64:-1
+row regress_sr2,regress_sr2
+SELECT 1
+> SHOW is_superuser;
+fields is_superuser:25:-1:-1
+row on
+SHOW
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+> SELECT current_user, session_user;
+fields current_user:19:64:-1,session_user:19:64:-1
+row postgres,postgres
+SELECT 1
+> BEGIN;
+BEGIN
+> SET LOCAL ROLE regress_sr1;
+SET
+is_superuser=off
+> SELECT current_user;
+fields current_user:19:64:-1
+row regress_sr1
+SELECT 1
+> COMMIT;
+COMMIT
+is_superuser=on
+> SELECT current_user;
+fields current_user:19:64:-1
+row postgres
+SELECT 1
+> BEGIN;
+BEGIN
+> SET ROLE regress_sr1;
+SET
+is_superuser=off
+> SELECT current_user;
+fields current_user:19:64:-1
+row regress_sr1
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+is_superuser=on
+> SELECT current_user;
+fields current_user:19:64:-1
+row postgres
+SELECT 1
+> SET ROLE regress_sr1;
+SET
+is_superuser=off
+> SET SESSION AUTHORIZATION regress_sr2;
+SET
+session_authorization=regress_sr2
+is_superuser=on
+> SELECT current_user, session_user;
+fields current_user:19:64:-1,session_user:19:64:-1
+row regress_sr2,regress_sr2
+SELECT 1
+> SHOW role;
+fields role:25:-1:-1
+row none
+SHOW
+> RESET ROLE;
+RESET
+> SELECT current_user, session_user;
+fields current_user:19:64:-1,session_user:19:64:-1
+row regress_sr2,regress_sr2
+SELECT 1
+> SET SESSION AUTHORIZATION DEFAULT;
+SET
+session_authorization=postgres
+> SELECT set_config('role', 'regress_sr1', false);
+fields set_config:25:-1:-1
+row regress_sr1
+SELECT 1
+is_superuser=off
+> SELECT current_user;
+fields current_user:19:64:-1
+row regress_sr1
+SELECT 1
+> SELECT set_config('role', 'regress_nope', false);
+fields set_config:25:-1:-1
+ERROR 22023 role "regress_nope" does not exist
+> RESET ROLE;
+RESET
+is_superuser=on
+> SET ROLE regress_sr1;
+SET
+is_superuser=off
+> DROP ROLE regress_sr1;
+ERROR 42501 permission denied to drop role
+DETAIL Only roles with the CREATEROLE attribute and the ADMIN option on the target roles may drop roles.
+> ALTER ROLE regress_sr1 RENAME TO regress_sr9;
+ERROR 0A000 current user cannot be renamed
+> RESET ROLE;
+RESET
+is_superuser=on
+> SET SESSION AUTHORIZATION regress_sr2;
+SET
+session_authorization=regress_sr2
+> DROP ROLE regress_sr2;
+ERROR 55006 current user cannot be dropped
+> ALTER ROLE regress_sr2 RENAME TO regress_sr9;
+ERROR 0A000 session user cannot be renamed
+> RESET SESSION AUTHORIZATION;
+RESET
+session_authorization=postgres
+> CREATE TABLE regress_sr_t (a int);
+CREATE TABLE
+> SET ROLE regress_sr2;
+SET
+> CREATE TABLE regress_sr_t2 (a int);
+CREATE TABLE
+> RESET ROLE;
+RESET
+> SELECT relname, pg_get_userbyid(relowner) FROM pg_class WHERE relname LIKE 'regress_sr_t%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,pg_get_userbyid:19:64:-1
+row regress_sr_t,postgres
+row regress_sr_t2,regress_sr2
+SELECT 2
+> DROP TABLE regress_sr_t, regress_sr_t2;
+DROP TABLE
+> DROP ROLE regress_sr1, regress_sr2, regress_sr3;
+DROP ROLE

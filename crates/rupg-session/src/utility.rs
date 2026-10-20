@@ -10,8 +10,13 @@ use rupg_sql::nodes::{
 };
 use rupg_wire::CommandTag;
 
+use rupg_pgcatalog::roles::Roles;
+
 use crate::block::Transaction;
 use crate::guc::{self, Action, Arg, Origin, Settings};
+
+/// `BOOTSTRAP_SUPERUSERID`.
+const BOOTSTRAP_SUPERUSER: u32 = 10;
 
 /// A `NoticeResponse` that a statement gives before its result.
 #[derive(Debug)]
@@ -50,7 +55,7 @@ pub enum Outcome {
 pub struct Context<'a> {
     pub settings: &'a mut Settings,
     pub transaction: &'a mut Transaction,
-    /// The user of the session, which is the only role that rupg knows yet.
+    /// The user of the login.
     pub user: &'a str,
     pub notices: &'a mut Vec<Notice>,
     /// `XACT_FLAGS_NEEDIMMEDIATECOMMIT`: the statement must commit at once, also in the extended protocol, where a statement does not commit before `Sync`.
@@ -272,7 +277,8 @@ fn assign(
     action: Action,
 ) -> Result<(), Error> {
     if let Some(value) = value {
-        check_role(name, value, cx.user)?;
+        let session = cx.settings.get("session_authorization").unwrap_or_default();
+        check_role(name, value, cx.user, &session)?;
     }
     let value = match cx.ts_config.as_deref() {
         Some(config) if value.is_some() && is_ts_config(name) => Some(config),
@@ -323,13 +329,30 @@ pub(crate) fn ts_config(
     }
 }
 
-/// `check_role` and `check_session_authorization` for a value of `role` or `session_authorization`. The session user is the only role yet.
-pub(crate) fn check_role(name: &str, value: &str, user: &str) -> Result<(), Error> {
-    match guc::find(name).map(|parameter| parameter.name) {
-        Some("role") if value != "none" && value != user => Err(no_role(value)),
-        Some("session_authorization") if value != user => Err(no_role(value)),
-        _ => Ok(()),
+/// `check_role` and `check_session_authorization` for a value of `role` or `session_authorization`. `user` is the user of the login and `session` is the session user. The user of the login is the bootstrap superuser, so it can take any session authorization.
+pub(crate) fn check_role(name: &str, value: &str, user: &str, session: &str) -> Result<(), Error> {
+    let parameter = guc::find(name).map(|parameter| parameter.name);
+    if !matches!(parameter, Some("role" | "session_authorization"))
+        || (parameter == Some("role") && value == "none")
+    {
+        return Ok(());
     }
+    let roles = rupg_pgcatalog::roles::current();
+    let role = role_oid(&roles, value, user).ok_or_else(|| no_role(value))?;
+    if parameter == Some("role")
+        && !roles.can_set_role(role_oid(&roles, session, user).unwrap_or(BOOTSTRAP_SUPERUSER), role)
+    {
+        return Err(Error::new(
+            SqlState::INSUFFICIENT_PRIVILEGE,
+            format!("permission denied to set role \"{value}\""),
+        ));
+    }
+    Ok(())
+}
+
+/// `get_role_oid`, where the user of the login is the bootstrap superuser.
+pub(crate) fn role_oid(roles: &Roles, name: &str, user: &str) -> Option<u32> {
+    roles.oid(name).or_else(|| (name == user).then_some(BOOTSTRAP_SUPERUSER))
 }
 
 fn no_role(name: &str) -> Error {

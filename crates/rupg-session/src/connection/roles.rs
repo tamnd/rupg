@@ -856,10 +856,16 @@ impl Connection {
         let new = stmt.newname.as_deref().unwrap_or_default();
         newline_check(new)?;
         let roleid = role_oid(work, old)?;
-        if roleid == self.role {
+        if roleid == self.session_role {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "session user cannot be renamed",
+            ));
+        }
+        if roleid == self.role {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "current user cannot be renamed",
             ));
         }
         if reserved(old) {
@@ -935,6 +941,9 @@ impl Connection {
             };
             if roleid == current {
                 return Err(Error::new(SqlState::OBJECT_IN_USE, "current user cannot be dropped"));
+            }
+            if roleid == self.session_role {
+                return Err(Error::new(SqlState::OBJECT_IN_USE, "session user cannot be dropped"));
             }
             if work.superuser(roleid) && !work.superuser(current) {
                 return Err(denied(
