@@ -10,7 +10,7 @@ use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
 use rupg_plpgsql::{Cache, Spi};
-use rupg_sql::nodes::{DoStmt, Node};
+use rupg_sql::nodes::DoStmt;
 use rupg_types::Value;
 
 use super::foreign::Batch;
@@ -177,32 +177,9 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// `42704` for a language that is not `plpgsql`, and the errors of the code.
+    /// The errors of [`rupg_plpgsql::do_code`] and of the code.
     pub(super) fn run_do(&self, stmt: &DoStmt, warnings: &mut Vec<Error>) -> Result<(), Error> {
-        let mut src = None;
-        let mut language = None;
-        for def in stmt.args.iter().flatten() {
-            let Node::DefElem(def) = def else { continue };
-            let text = match &def.arg {
-                Some(Node::String(s)) => Some(s.to_string()),
-                _ => None,
-            };
-            match def.defname.as_deref() {
-                Some("as") => src = text,
-                Some("language") => language = text,
-                _ => {}
-            }
-        }
-        let language = language.unwrap_or_else(|| "plpgsql".to_owned());
-        if language != "plpgsql" {
-            return Err(Error::new(
-                SqlState::UNDEFINED_OBJECT,
-                format!("language \"{language}\" does not exist"),
-            ));
-        }
-        let Some(src) = src else {
-            return Err(Error::new(SqlState::SYNTAX_ERROR, "no inline code specified"));
-        };
+        let src = rupg_plpgsql::do_code(stmt)?;
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
         let result = rupg_plpgsql::inline(&PlSpi::new(self, &reader), &src);

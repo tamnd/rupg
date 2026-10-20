@@ -1,0 +1,148 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION f1(n int) RETURNS int LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   DO $x$ BEGIN RAISE NOTICE 'inner do'; END $x$;
+>>   RETURN n + 1;
+>> END $$;
+CREATE FUNCTION
+> SELECT f1(1);
+fields f1:23:4:-1
+NOTICE 00000 inner do (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO $x$ BEGIN RAISE NOTICE 'inner do'; END $x$"
+PL/pgSQL function f1(integer) line 3 at DO)
+row 2
+SELECT 1
+> DO $$
+>> BEGIN
+>>   RAISE NOTICE 'outer';
+>>   DO $x$ BEGIN RAISE NOTICE 'inner'; END $x$;
+>>   RAISE NOTICE 'after';
+>> END $$;
+NOTICE 00000 outer (PL/pgSQL function inline_code_block line 3 at RAISE)
+NOTICE 00000 inner (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO $x$ BEGIN RAISE NOTICE 'inner'; END $x$"
+PL/pgSQL function inline_code_block line 4 at DO)
+NOTICE 00000 after (PL/pgSQL function inline_code_block line 5 at RAISE)
+DO
+> DO $$
+>> BEGIN
+>>   DO $x$ BEGIN RAISE EXCEPTION 'boom %', 1; END $x$;
+>> END $$;
+ERROR P0001 boom 1 (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO $x$ BEGIN RAISE EXCEPTION 'boom %', 1; END $x$"
+PL/pgSQL function inline_code_block line 3 at DO)
+> DO $$
+>> BEGIN
+>>   DO LANGUAGE plpgsql $x$ BEGIN RAISE NOTICE 'lang'; END $x$;
+>> END $$;
+NOTICE 00000 lang (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO LANGUAGE plpgsql $x$ BEGIN RAISE NOTICE 'lang'; END $x$"
+PL/pgSQL function inline_code_block line 3 at DO)
+DO
+> DO $$
+>> BEGIN
+>>   DO LANGUAGE sql $x$ SELECT 1 $x$;
+>> END $$;
+ERROR 0A000 language "sql" does not support inline code execution (SQL statement "DO LANGUAGE sql $x$ SELECT 1 $x$"
+PL/pgSQL function inline_code_block line 3 at DO)
+> CREATE TABLE t1 (a int);
+CREATE TABLE
+> DO $$
+>> BEGIN
+>>   DO $x$ BEGIN INSERT INTO t1 VALUES (1), (2); END $x$;
+>>   RAISE NOTICE 'found % count %', FOUND, (SELECT count(*) FROM t1);
+>> END $$;
+NOTICE 00000 found f count 2 (PL/pgSQL function inline_code_block line 4 at RAISE)
+DO
+> DO $$
+>> DECLARE r int;
+>> BEGIN
+>>   BEGIN
+>>     DO $x$ BEGIN INSERT INTO t1 VALUES (3); RAISE EXCEPTION 'undo'; END $x$;
+>>   EXCEPTION WHEN OTHERS THEN
+>>     RAISE NOTICE 'caught %', SQLERRM;
+>>   END;
+>>   SELECT count(*) INTO r FROM t1;
+>>   RAISE NOTICE 'rows %', r;
+>> END $$;
+NOTICE 00000 caught undo (PL/pgSQL function inline_code_block line 7 at RAISE)
+NOTICE 00000 rows 2 (PL/pgSQL function inline_code_block line 10 at RAISE)
+DO
+> DO $$
+>> BEGIN
+>>   DO $x$ BEGIN PERFORM 1/0; END $x$;
+>> END $$;
+ERROR 22012 division by zero (SQL statement "SELECT 1/0"
+PL/pgSQL function inline_code_block line 1 at PERFORM
+SQL statement "DO $x$ BEGIN PERFORM 1/0; END $x$"
+PL/pgSQL function inline_code_block line 3 at DO)
+> DO LANGUAGE sql $$ SELECT 1 $$;
+ERROR 0A000 language "sql" does not support inline code execution
+> DO LANGUAGE nosuch $$ x $$;
+ERROR 42704 language "nosuch" does not exist
+> DO LANGUAGE plpgsql LANGUAGE plpgsql $$ BEGIN END $$;
+ERROR 42601 conflicting or redundant options at 21
+> DO $$
+>> BEGIN
+>>   DO LANGUAGE plpgsql LANGUAGE plpgsql $x$ BEGIN END $x$;
+>> END $$;
+ERROR 42601 conflicting or redundant options (PL/pgSQL function inline_code_block line 3 at DO)
+QUERY DO LANGUAGE plpgsql LANGUAGE plpgsql $x$ BEGIN END $x$ at 21
+> DO $$
+>> BEGIN
+>>   DO LANGUAGE nosuch $x$ BEGIN END $x$;
+>> END $$;
+ERROR 42704 language "nosuch" does not exist (SQL statement "DO LANGUAGE nosuch $x$ BEGIN END $x$"
+PL/pgSQL function inline_code_block line 3 at DO)
+> DO $$
+>> DECLARE d int;
+>> BEGIN
+>>   DO $x$ BEGIN RAISE NOTICE 'x'; END $x$;
+>>   GET DIAGNOSTICS d = ROW_COUNT;
+>>   RAISE NOTICE 'rc %', d;
+>> END $$;
+NOTICE 00000 x (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO $x$ BEGIN RAISE NOTICE 'x'; END $x$"
+PL/pgSQL function inline_code_block line 4 at DO)
+NOTICE 00000 rc 0 (PL/pgSQL function inline_code_block line 6 at RAISE)
+DO
+> CREATE FUNCTION f2() RETURNS void LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   DO $x$ BEGIN RAISE NOTICE 'from f2'; PERFORM 1/0; END $x$;
+>> END $$;
+CREATE FUNCTION
+> SELECT f2();
+fields f2:2278:4:-1
+NOTICE 00000 from f2 (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO $x$ BEGIN RAISE NOTICE 'from f2'; PERFORM 1/0; END $x$"
+PL/pgSQL function f2() line 3 at DO)
+ERROR 22012 division by zero (SQL statement "SELECT 1/0"
+PL/pgSQL function inline_code_block line 1 at PERFORM
+SQL statement "DO $x$ BEGIN RAISE NOTICE 'from f2'; PERFORM 1/0; END $x$"
+PL/pgSQL function f2() line 3 at DO)
+> DO $$
+>> BEGIN
+>>   DO $x$ DECLARE v text; BEGIN v := 'a'; RAISE NOTICE '%', v || 'b'; END $x$;
+>> END $$;
+NOTICE 00000 ab (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO $x$ DECLARE v text; BEGIN v := 'a'; RAISE NOTICE '%', v || 'b'; END $x$"
+PL/pgSQL function inline_code_block line 3 at DO)
+DO
+> DO $$
+>> BEGIN
+>>   DO $x$
+>>   BEGIN
+>>     DO $y$ BEGIN RAISE NOTICE 'deep'; END $y$;
+>>   END $x$;
+>> END $$;
+NOTICE 00000 deep (PL/pgSQL function inline_code_block line 1 at RAISE
+SQL statement "DO $y$ BEGIN RAISE NOTICE 'deep'; END $y$"
+PL/pgSQL function inline_code_block line 3 at DO
+SQL statement "DO $x$
+  BEGIN
+    DO $y$ BEGIN RAISE NOTICE 'deep'; END $y$;
+  END $x$"
+PL/pgSQL function inline_code_block line 3 at DO)
+DO

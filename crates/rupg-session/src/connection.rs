@@ -4570,6 +4570,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/trigger_fire.test")));
     }
 
+    /// `DO` in PL/pgSQL: the messages and errors of the code with the statement as their context, a `DO` in a function, a `DO` in a `DO`, the writes of the code and their rollback in a block with `EXCEPTION`, `FOUND` and `ROW_COUNT` after `DO`, and the errors of the options of `DO`. `connection/plpgsql_do.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_do() {
+        big_stack(|| script(include_str!("connection/plpgsql_do.test")));
+    }
+
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn array_agg_array() {
