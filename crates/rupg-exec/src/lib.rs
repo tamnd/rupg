@@ -2061,14 +2061,21 @@ impl<'a> Eval<'a> {
                     let tables = scan::Tables::default();
                     Eval::new(args, self.session, &tables, &cache, &[]).eval(expr)
                 }
-                // `fmgr_sql` for a function that does not return a set: the first column of the first row, or null.
+                // `fmgr_sql` for a function that does not return a set: the first column of the first row, or null. The columns of a function that returns a row make a row value.
                 Body::Query(query) => {
                     let rows = run_query(query, args, self.session, &cache, &[], false)?;
-                    Ok(rows
-                        .into_iter()
-                        .next()
-                        .and_then(|row| row.into_iter().next())
-                        .unwrap_or(Value::Null))
+                    let Some(mut row) = rows.into_iter().next() else { return Ok(Value::Null) };
+                    let composite = builtin::type_by_oid(ret).is_some_and(|t| t.kind == b'c');
+                    let whole = matches!(row.as_slice(), [Value::Record(_) | Value::Null]);
+                    if row.len() == 1 && ((ret != oid::RECORD && !composite) || whole) {
+                        return Ok(row.pop().unwrap_or(Value::Null));
+                    }
+                    let types = query.targets.iter().filter(|t| !t.junk).map(|t| t.expr.ty);
+                    Ok(Value::Record(Box::new(Record {
+                        types: types.collect(),
+                        values: row,
+                        names: None,
+                    })))
                 }
             };
         }

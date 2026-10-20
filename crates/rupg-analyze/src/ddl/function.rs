@@ -237,7 +237,7 @@ impl Analyzer<'_> {
         })
     }
 
-    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query must be the columns of the result, and each column takes an assignment cast to the type of the result column. The other statements give an error, as rupg runs only one query.
+    /// The query of the last statement of a body, as `check_sql_fn_retval` checks it: the columns of the query must be the columns of the result, and each column takes an assignment cast to the type of the result column. A function that returns a composite type can also give one column of that type. The other statements give an error, as rupg runs only one query.
     fn query_body(
         &mut self,
         stmts: &[&Node],
@@ -251,14 +251,21 @@ impl Analyzer<'_> {
         let mut query = self.select(select)?;
         query.params.clone_from(&self.params);
         let width = query.targets.iter().take_while(|t| !t.junk).count();
-        if rettype != oid::RECORD && width != 1 {
+        let row = rettype == oid::RECORD || columns.len() != 1 || columns != [rettype];
+        let whole_row = [rettype];
+        let columns: &[u32] = if row && width == 1 && query.targets[0].expr.ty == rettype {
+            &whole_row
+        } else {
+            columns
+        };
+        if !row && width != 1 {
             return Err(mismatch(
                 rettype,
                 name,
                 "Final statement must return exactly one column.".into(),
             ));
         }
-        if rettype == oid::RECORD && !columns.is_empty() && width != columns.len() {
+        if row && !columns.is_empty() && width != columns.len() {
             let what = if width > columns.len() { "many" } else { "few" };
             return Err(mismatch(
                 rettype,
@@ -301,11 +308,17 @@ impl Analyzer<'_> {
         stmts: &Statements<'_>,
         inputs: &[u32],
     ) -> Result<Body> {
-        let columns = result_types(function, inputs)?;
+        let mut columns = result_types(function, inputs)?;
         let rettype = match columns.as_slice() {
             [ty] if function.rettype != oid::RECORD => *ty,
             _ => function.rettype,
         };
+        // A composite type gives the columns of its relation.
+        if rettype != oid::RECORD
+            && let Some(fields) = self.row_columns(rettype)
+        {
+            columns = fields.iter().map(|c| c.ty).collect();
+        }
         Ok(match stmts {
             Statements::Return(value) => {
                 Body::Value(self.return_body(*value, rettype, &function.name)?)
