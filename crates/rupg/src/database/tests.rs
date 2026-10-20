@@ -174,6 +174,8 @@ fn a_crash_keeps_each_acknowledged_commit() {
         let io = SimIo::new(seed);
         let mut rng = SimRng::new(seed + 100);
         let mut models: BTreeMap<String, Rows> = BTreeMap::new();
+        // The transactions that are open at each power cut. They roll back after the last round of the seed, when no round reads the file again.
+        let mut cut = Vec::new();
         for round in 0..5 {
             let db = open(&io, seed, &options);
             let start = generation(&db);
@@ -233,7 +235,7 @@ fn a_crash_keeps_each_acknowledged_commit() {
                 db.checkpoint().unwrap();
             }
             checkpoints += generation(&db) - start;
-            std::mem::forget(open);
+            cut.push(open);
             drop((db, table));
             io.crash_random().unwrap();
             let report = check(&io).unwrap_or_else(|e| panic!("seed {seed} round {round}: {e}"));

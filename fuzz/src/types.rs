@@ -286,7 +286,7 @@ pub fn type_input(case: &InputCase) {
         assert_eq!(output(ty, &again, &session).expect("the output"), text, "the text round trip");
     }
     let bytes = send(ty, &value).expect("the send of an accepted value");
-    match rupg_func::receive(ty.oid, &bytes, ty.typmod, 1) {
+    match rupg_func::receive(ty.oid, &bytes, ty.typmod, 1, &session) {
         Ok(back) => {
             let back = output(ty, &back, &session).expect("the output");
             assert_eq!(back, text, "the binary round trip");
@@ -309,12 +309,12 @@ fn empty_vector(ty: &Type, text: &str) -> bool {
 pub fn type_recv(case: &RecvCase) {
     let ty = case.ty();
     let session = Settings::default().session();
-    let value = match rupg_func::receive(ty.oid, &case.data, ty.typmod, 1) {
+    let value = match rupg_func::receive(ty.oid, &case.data, ty.typmod, 1, &session) {
         Ok(value) => value,
         Err(error) => return not_internal(&error, "the receive"),
     };
     let bytes = send(ty, &value).expect("the send of a received value");
-    let back = rupg_func::receive(ty.oid, &bytes, ty.typmod, 1)
+    let back = rupg_func::receive(ty.oid, &bytes, ty.typmod, 1, &session)
         .unwrap_or_else(|e| panic!("the receive of the send failed: {e:?}"));
     assert_eq!(send(ty, &back).expect("the send"), bytes, "the binary round trip");
     let text = output(ty, &value, &session).expect("the output of a received value");
@@ -366,7 +366,7 @@ pub fn recv_line(case: &RecvCase) -> String {
     let ty = case.ty();
     let session = Settings::default().session();
     let line = line(
-        rupg_func::receive(ty.oid, &case.data, ty.typmod, 1)
+        rupg_func::receive(ty.oid, &case.data, ty.typmod, 1, &session)
             .and_then(|value| Ok((output(ty, &value, &session)?, send(ty, &value)?))),
     );
     line.replace("incorrect binary data format in bind parameter 1", "incorrect binary data format")

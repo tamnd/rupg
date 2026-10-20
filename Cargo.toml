@@ -63,19 +63,19 @@ rupg-types = { version = "=0.1.55", path = "crates/rupg-types" }
 rupg-wasm = { version = "=0.1.55", path = "crates/rupg-wasm" }
 rupg-wire = { version = "=0.1.55", path = "crates/rupg-wire" }
 
-# Outside crates. Each one is in the table of spec/22-crate-layout.md section 22.5.
+# Outside crates. Each one is in the table of spec/22-crate-layout.md section 22.5. The lower bound of each crate is the version in Cargo.lock when the bound last changed. The nightly job of the oldest versions checks the bounds.
 # libc: the system calls of rupg-platform on Unix, for example F_FULLFSYNC and getentropy.
-libc = "0.2"
+libc = "0.2.190"
 # sha2, hmac, pbkdf2, md-5: SCRAM-SHA-256 and MD5 passwords in rupg-wire. See spec/22-crate-layout.md section 22.5.
 hmac = "0.13"
 md-5 = "0.11"
 pbkdf2 = { version = "0.13", default-features = false, features = ["hmac"] }
 sha2 = { version = "0.11", default-features = false }
 # rustls, ring: TLS for rupg-server with the feature tls, so rupg does not link OpenSSL. ring also gives the hash of the certificate for SCRAM with channel binding. See spec/22-crate-layout.md section 22.5.
-ring = "0.17"
-rustls = { version = "0.23", default-features = false, features = ["std", "tls12", "ring"] }
+ring = "0.17.14"
+rustls = { version = "0.23.46", default-features = false, features = ["std", "tls12", "ring"] }
 # loom: the tests of the latches and the log rings under every interleaving, a development dependency only. See spec/21-testing.md section 21.11.
-loom = "0.7"
+loom = "0.7.2"
 
 [workspace.lints.rust]
 missing_debug_implementations = "warn"

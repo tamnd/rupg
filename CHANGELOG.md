@@ -36,6 +36,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Changed
 
 - The facade takes a checkpoint when all the log rings together hold more than `Options::max_wal_size` bytes, default 1 GiB, as `max_wal_size` does in PostgreSQL. `Options::checkpoint_log` is now the limit of one ring (#454).
+- The lowest allowed versions of `libc`, `ring`, `rustls` and `loom` are now the versions in `Cargo.lock`. The old bounds let Cargo pick `libc` 0.2.0, which `ring` does not accept (#PR).
 
 ### Fixed
 
