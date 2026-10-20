@@ -202,6 +202,17 @@ fn errors() {
     });
 }
 
+/// A recursive query of `WITH` with no end gives as many rows as a `LIMIT` above it reads, as the `Limit` above a `CteScan` stops the `RecursiveUnion`.
+#[test]
+fn recursive_limit() {
+    big_stack(|| {
+        let with = "WITH RECURSIVE t(n) AS (VALUES (1) UNION ALL SELECT n + 1 FROM t)";
+        assert_eq!(one(&format!("SELECT count(*) FROM ({with} SELECT * FROM t LIMIT 10) s")), "10");
+        let query = format!("SELECT sum(n) FROM ({with} SELECT n FROM t OFFSET 5 LIMIT 5) s");
+        assert_eq!(one(&query), "40");
+    });
+}
+
 #[test]
 fn filter_and_session_values() {
     big_stack(|| {
