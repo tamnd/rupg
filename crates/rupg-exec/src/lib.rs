@@ -14,6 +14,7 @@ use rupg_analyze::{
     JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp, SetTree, SortGroup,
     SqlValue, SubLink, SubLinkKind, Subscript, TableSample, Target, WindowFunc,
 };
+use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
 use rupg_func::{Call, Kernel, Session, base_type};
 use rupg_pgcatalog::builtin;
@@ -61,9 +62,13 @@ fn set_kernel(func: u32, location: Option<usize>) -> Result<rupg_func::SetKernel
     })
 }
 
-/// True for a built-in function with a body in SQL that has no kernel. The engine runs its body, as for a function that a user makes.
+/// The OID of the language `sql`.
+const SQL_LANGUAGE: u32 = 14;
+
+/// True for a function in SQL that a user makes, and for a built-in function with a body in SQL that has no kernel. The engine runs its body.
 fn runs_body(func: u32) -> bool {
-    builtin::proc_by_oid(func).is_some_and(|p| p.sqlbody.is_some())
+    let user = |p: &builtin::ProcRow| p.oid >= FIRST_NORMAL_OID && p.lang == SQL_LANGUAGE;
+    builtin::proc_by_oid(func).is_some_and(|p| p.sqlbody.is_some() || user(p))
         && rupg_func::kernel(func).is_none()
         && rupg_func::set_kernel(func).is_none()
 }
