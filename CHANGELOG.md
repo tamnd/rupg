@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Fixed
+
+- A join that makes more rows than rupg can keep in memory gives the error `out of memory` and the server does not stop. The cross join of the regression test `groupingsets` stopped the server before (#448).
+
 ## 0.1.52 (2026-10-20)
 
 ### Added
@@ -18,6 +22,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - A `LATERAL` relation in a nested loop no longer keeps the rows of every run until the query ends. This stopped the server with no memory in the regression tests `join` and `subselect` (#444).
 - A correlated subquery finds its rows through an index of a column for `=` with an expression of the outer columns, not only with an outer column (#445).
+- A `LATERAL` item that reads no relation on the left side of its join runs once, and not once for each row of the left side (#446).
 - A `LATERAL` part of a join that reads only relations outside the join runs once, not once for each row of the left side (#446).
 
 ## 0.1.51 (2026-10-20)
