@@ -800,7 +800,7 @@ fn free_work(query: &Query) -> Vec<usize> {
 }
 
 /// `contain_volatile_functions`: true when the expression calls a volatile function, also in a subquery.
-fn volatile(expr: &Expr) -> bool {
+pub(crate) fn volatile(expr: &Expr) -> bool {
     let volatile = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.volatile == b'v');
     expr.find(0, &mut |e, _| match &e.kind {
         ExprKind::Func(f) if volatile(f.oid) => Some(()),

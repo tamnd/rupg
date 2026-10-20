@@ -3553,6 +3553,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/create_database.test")));
     }
 
+    /// A correlated subquery with an `=` of a column and an expression of the columns of the outer query, which the scan finds through an index of the column: an arithmetic expression, a text concatenation, `EXISTS`, `NULLIF` that gives a null, and a function. `connection/outer_lookups.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn outer_lookups() {
+        big_stack(|| script(include_str!("connection/outer_lookups.test")));
+    }
+
     /// The runs of a `LATERAL` relation in a nested loop: a join that keeps a few rows of many runs, an outer join with runs that give no row, a whole-row reference, two `LATERAL` relations in a chain, and an aggregate over the joined rows. `connection/lateral_runs.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn lateral_runs() {
