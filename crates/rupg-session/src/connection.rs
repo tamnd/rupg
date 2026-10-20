@@ -3553,6 +3553,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/create_database.test")));
     }
 
+    /// The runs of a `LATERAL` relation in a nested loop: a join that keeps a few rows of many runs, an outer join with runs that give no row, a whole-row reference, two `LATERAL` relations in a chain, and an aggregate over the joined rows. `connection/lateral_runs.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn lateral_runs() {
+        big_stack(|| script(include_str!("connection/lateral_runs.test")));
+    }
+
     /// `CREATE TABLE AS` and `SELECT INTO`: the types, typmods and collations of the columns, a list of column names, `IF NOT EXISTS`, `WITH NO DATA`, the options of the table, the errors of the query and of the table, a query that fails at run time, and a transaction block. `connection/create_table_as.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn create_table_as() {

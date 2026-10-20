@@ -188,6 +188,39 @@ impl Tables {
             .collect())
     }
 
+    /// The number of the rows that each relation that reads other relations has now, which [`Tables::compact`] takes later.
+    fn marks(&self) -> Vec<usize> {
+        self.grown.iter().map(|g| g.borrow().len()).collect()
+    }
+
+    /// Frees the rows that the runs added after `marks` and that no tuple of `tuples` uses, and gives the tuples the new row numbers. A nested loop runs a relation that reads other relations once for each outer row, and most of the rows of a run join no row. Without this, the rows of all the runs stay until the query ends.
+    fn compact(&self, marks: &[usize], tuples: &mut [Vec<usize>]) {
+        for (relation, &mark) in marks.iter().enumerate() {
+            let mut grown = self.grown[relation].borrow_mut();
+            if grown.len() == mark {
+                continue;
+            }
+            let mut used: Vec<usize> = tuples
+                .iter()
+                .map(|t| t[relation])
+                .filter(|&row| row != NONE && row >= mark)
+                .collect();
+            used.sort_unstable();
+            used.dedup();
+            let mut tail = grown.split_off(mark);
+            grown.extend(used.iter().map(|&row| std::mem::take(&mut tail[row - mark])));
+            for tuple in tuples.iter_mut() {
+                let row = tuple[relation];
+                if row != NONE
+                    && row >= mark
+                    && let Ok(at) = used.binary_search(&row)
+                {
+                    tuple[relation] = mark + at;
+                }
+            }
+        }
+    }
+
     /// The index of a column of a relation that reads no other relation. The first call makes it and the next calls use it again.
     fn index(&self, var: Var) -> Rc<Index> {
         let column = (var.relation, var.attnum);
@@ -608,9 +641,12 @@ impl Scan<'_, '_> {
         let mut out = Vec::new();
         for l in left {
             let context = merged(context, &l);
+            let marks = self.tables.marks();
             let right = self.item_tuples(item, conds.clone(), &context)?;
             let input = JoinInput { left: vec![l], right, ..input };
-            out.extend(join(input, self.tables, self.test)?);
+            let mut tuples = join(input, self.tables, self.test)?;
+            self.tables.compact(&marks, &mut tuples);
+            out.extend(tuples);
         }
         Ok(out)
     }

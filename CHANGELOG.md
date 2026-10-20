@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `ALTER DATABASE ... SET` and `RESET`, with the settings applied at the start of each session of the database and shown in `pg_db_role_setting` (#440).
 - `COPY ... FROM 'file'`, which reads a file of the server, for a superuser (#441).
 - `VACUUM` and `ANALYZE`, which check their options, relations and columns and then end, because rupg has no statistics yet (#442).
+- `CREATE TABLE AS` and `SELECT ... INTO`, which make a table from the columns of a query and fill it with the rows of the query (#443).
 
 ## 0.1.51 (2026-10-20)
 
