@@ -715,6 +715,13 @@ impl rupg_func::Session for Reader<'_> {
         }
     }
 
+    fn db_role_settings(&self) -> Vec<(u32, u32, Vec<String>)> {
+        match self.activity {
+            Some((_, store)) => store.db_role_settings(),
+            None => Vec::new(),
+        }
+    }
+
     fn backends(&self) -> Arc<[Backend]> {
         match self.activity {
             Some((activity, store)) => activity.backends(store, &self.settings()),

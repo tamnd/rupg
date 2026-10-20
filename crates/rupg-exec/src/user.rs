@@ -146,6 +146,7 @@ pub(crate) fn rows(
         "pg_rewrite" => rewrites(table, catalog),
         "pg_init_privs" => init_privs(table, catalog, session)?,
         "pg_database" => databases(table, session),
+        "pg_db_role_setting" => db_role_settings(table, session),
         "pg_ts_template" => ts_templates(table, catalog),
         "pg_ts_parser" => ts_parsers(table, catalog),
         "pg_ts_dict" => ts_dictionaries(table, catalog),
@@ -266,6 +267,21 @@ fn databases<'a>(table: &'a Table, session: &dyn Session) -> Vec<Row<'a>> {
                 .set("daticurules", text(&database.icu_rules))
                 .set("datcollversion", text(&database.collation_version))
                 .set("datacl", database.acl.as_deref().map_or(Value::Null, text_array));
+            row
+        })
+        .collect()
+}
+
+/// The rows of `pg_db_role_setting`: the settings of `ALTER DATABASE ... SET`.
+fn db_role_settings<'a>(table: &'a Table, session: &dyn Session) -> Vec<Row<'a>> {
+    session
+        .db_role_settings()
+        .into_iter()
+        .map(|(database, role, settings)| {
+            let mut row = Row::new(table);
+            row.set("setdatabase", oid(database))
+                .set("setrole", oid(role))
+                .set("setconfig", text_array(&settings));
             row
         })
         .collect()

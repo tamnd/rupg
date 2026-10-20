@@ -302,6 +302,10 @@ pub trait Session {
     fn databases(&self) -> Arc<[rupg_catalog::Database]> {
         Arc::from(Vec::new())
     }
+    /// The rows of `pg_db_role_setting`: the OID of the database, the OID of the role, and the settings, each as `name=value`. A session with no server has no rows.
+    fn db_role_settings(&self) -> Vec<(u32, u32, Vec<String>)> {
+        Vec::new()
+    }
     /// The rows of the table of the sessions in the order of their numbers, from the snapshot of the transaction. The first call of a transaction takes the snapshot.
     fn backends(&self) -> Arc<[Backend]> {
         Arc::from(Vec::new())

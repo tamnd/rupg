@@ -69,6 +69,8 @@ struct Db {
     row: Database,
     committed: Arc<Catalog>,
     locked: bool,
+    /// The `setconfig` of the row of `pg_db_role_setting` for the database and every role: the settings of `ALTER DATABASE ... SET`, each as `name=value`.
+    settings: Vec<String>,
 }
 
 impl Default for State {
@@ -78,7 +80,17 @@ impl Default for State {
         let next_oid = catalog.next_oid();
         let databases = Database::initdb()
             .into_iter()
-            .map(|row| (row.oid, Db { row, committed: Arc::clone(&catalog), locked: false }))
+            .map(|row| {
+                (
+                    row.oid,
+                    Db {
+                        row,
+                        committed: Arc::clone(&catalog),
+                        locked: false,
+                        settings: Vec::new(),
+                    },
+                )
+            })
             .collect();
         State { databases, next_oid }
     }
@@ -170,6 +182,32 @@ impl Store {
                 format!("database \"{name}\" is not currently accepting connections"),
             )),
             Some(row) => Ok(row.oid),
+        }
+    }
+
+    /// The settings of `ALTER DATABASE ... SET` for a database, each as `name=value`, which `process_settings` applies at the start of a session.
+    pub fn database_settings(&self, database: u32) -> Vec<String> {
+        self.state().databases.get(&database).map(|db| db.settings.clone()).unwrap_or_default()
+    }
+
+    /// The rows of `pg_db_role_setting`: one row for each database with settings, with the role 0, in the order of the OIDs of the databases.
+    pub(crate) fn db_role_settings(&self) -> Vec<(u32, u32, Vec<String>)> {
+        self.state()
+            .databases
+            .iter()
+            .filter(|(_, db)| !db.settings.is_empty())
+            .map(|(oid, db)| (*oid, 0, db.settings.clone()))
+            .collect()
+    }
+
+    /// Changes the settings of `ALTER DATABASE ... SET` for a database. The change does not wait for the end of the transaction.
+    pub(crate) fn change_database_settings(
+        &self,
+        database: u32,
+        change: impl FnOnce(&mut Vec<String>),
+    ) {
+        if let Some(db) = self.state().databases.get_mut(&database) {
+            change(&mut db.settings);
         }
     }
 
@@ -266,7 +304,7 @@ impl Store {
         Arc::make_mut(&mut committed).advance_oid(next);
         state.next_oid = next;
         let oid = row.oid;
-        state.databases.insert(oid, Db { row, committed, locked: false });
+        state.databases.insert(oid, Db { row, committed, locked: false, settings: Vec::new() });
         Ok(oid)
     }
 

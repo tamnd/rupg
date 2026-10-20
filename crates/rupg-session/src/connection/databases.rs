@@ -1,17 +1,19 @@
-//! `CREATE DATABASE` and `DROP DATABASE`: the checks of `createdb` and `dropdb` in the order of PostgreSQL, on the rows of `pg_database` that the store keeps. The engine has the encoding `UTF8` and the locale `C` only, so a new database must have them. The checks of PostgreSQL come first, and then the error `0A000` for an encoding or a locale that the engine does not have.
+//! `CREATE DATABASE`, `ALTER DATABASE ... SET` and `DROP DATABASE`: the checks of `createdb` and `dropdb` in the order of PostgreSQL, on the rows of `pg_database` that the store keeps. The engine has the encoding `UTF8` and the locale `C` only, so a new database must have them. The checks of PostgreSQL come first, and then the error `0A000` for an encoding or a locale that the engine does not have.
 
 use rupg_catalog::Database;
 use rupg_common::{Error, SqlState};
 use rupg_func::{char_to_encoding, encoding_to_char};
 use rupg_pgcatalog::builtin;
 use rupg_sql::Severity;
-use rupg_sql::nodes::{CreatedbStmt, DefElem, DropdbStmt, Node};
+use rupg_sql::nodes::{
+    AlterDatabaseSetStmt, CreatedbStmt, DefElem, DropdbStmt, Node, VariableSetKind,
+};
 use rupg_wire::CommandTag;
 
 use super::copy::{def_boolean, def_string};
 use super::{Connection, Done};
 use crate::store::NewDatabase;
-use crate::utility::Notice;
+use crate::utility::{self, Notice};
 
 /// `FirstNormalObjectId`.
 const FIRST_NORMAL_OBJECT_ID: u32 = 16384;
@@ -686,6 +688,54 @@ impl Connection {
         }
         self.store.drop_database(&row, force, self.activity.number)?;
         Ok(Done::Tag(CommandTag::DropDatabase))
+    }
+
+    /// `AlterDatabaseSet` and `AlterSetting`: the change of the stored settings of a database, which a new session of the database applies. `GUCArrayAdd` puts a new value in place of the value of the same parameter, and `GUCArrayDelete` and `RESET ALL` remove values.
+    pub(super) fn alter_database_set(
+        &mut self,
+        stmt: &AlterDatabaseSetStmt,
+    ) -> Result<Done, Error> {
+        let name = stmt.dbname.as_deref().unwrap_or_default();
+        let Some(row) = self.store.database(name) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_DATABASE,
+                format!("database \"{name}\" does not exist"),
+            ));
+        };
+        if !self.superuser() && row.owner != self.role {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                format!("must be owner of database {name}"),
+            ));
+        }
+        let Some(set) = &stmt.setstmt else {
+            return Err(Error::internal("ALTER DATABASE SET with no setting"));
+        };
+        let parameter = set.name.as_deref().unwrap_or_default();
+        // `ExtractSetVariableArgs`.
+        let value = match set.kind {
+            VariableSetKind::VAR_SET_VALUE => utility::flatten(parameter, &set.args)?,
+            VariableSetKind::VAR_SET_CURRENT => Some(self.settings.borrow().show(parameter)?.1),
+            _ => None,
+        };
+        if set.kind == VariableSetKind::VAR_RESET_ALL {
+            self.store.change_database_settings(row.oid, Vec::clear);
+            return Ok(Done::Tag(CommandTag::AlterDatabase));
+        }
+        let stored = self.settings.borrow().check_stored(parameter, value.as_deref())?;
+        let prefix = format!("{stored}=");
+        self.store.change_database_settings(row.oid, |settings| {
+            let at = settings.iter().position(|item| item.starts_with(&prefix));
+            match (value, at) {
+                (Some(value), Some(at)) => settings[at] = format!("{prefix}{value}"),
+                (Some(value), None) => settings.push(format!("{prefix}{value}")),
+                (None, Some(at)) => {
+                    settings.remove(at);
+                }
+                (None, None) => {}
+            }
+        });
+        Ok(Done::Tag(CommandTag::AlterDatabase))
     }
 }
 
