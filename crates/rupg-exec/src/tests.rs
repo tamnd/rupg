@@ -194,6 +194,11 @@ fn errors() {
         assert_eq!(error("SELECT ARRAY[ARRAY[1, 2], ARRAY[3]]"), "2202E");
         assert_eq!(error("SELECT 'abc'::int"), "22P02");
         assert_eq!(error("SELECT substr('abc', 1, -1)"), "22011");
+        // The tests keep 4 MiB of tuples for a join, which is about 100,000 tuples of two relations.
+        let join = "SELECT count(*) FROM generate_series(1, 300) a, generate_series(1, 300) b";
+        assert_eq!(one(join), "90000");
+        let join = "SELECT count(*) FROM generate_series(1, 400) a, generate_series(1, 400) b";
+        assert_eq!(error(join), "53200");
     });
 }
 
