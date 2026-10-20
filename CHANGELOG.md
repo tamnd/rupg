@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Changed
+
+- The facade takes a checkpoint when all the log rings together hold more than `Options::max_wal_size` bytes, default 1 GiB, as `max_wal_size` does in PostgreSQL. `Options::checkpoint_log` is now the limit of one ring (#454).
+
 ## 0.1.53 (2026-10-20)
 
 ### Added

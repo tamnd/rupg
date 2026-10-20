@@ -243,6 +243,43 @@ fn a_crash_keeps_each_acknowledged_commit() {
     assert!(checkpoints > 30, "{checkpoints}");
 }
 
+/// Commits of about 4 KiB each until the log holds `bytes`, and the checkpoints that the transactions took on the way.
+fn fill_log(db: &Database, table: &Table, bytes: u64) -> u64 {
+    let start = generation(db);
+    let mut rng = SimRng::new(7);
+    let mut written = 0;
+    while written < bytes {
+        let mut tx = db.transaction().unwrap();
+        for _ in 0..32 {
+            let name = Datum::Text("x".repeat(100 + rng.below(20) as usize));
+            tx.insert(table, &[Datum::Int8(1), name, Datum::Null]).unwrap();
+        }
+        tx.commit().unwrap();
+        written += 32 * 120;
+    }
+    generation(db) - start
+}
+
+/// `max_wal_size` counts the bytes of all the rings together, and `checkpoint_log` the bytes of one ring. Each one starts a checkpoint without the other (spec/11 section 11.15).
+#[test]
+fn the_log_size_starts_a_checkpoint() {
+    let quiet = Options { checkpoint_log: Some(1 << 30), max_wal_size: 1 << 30, ..options() };
+    let by_sum = Options { max_wal_size: 64 << 10, ..quiet.clone() };
+    let by_ring = Options { checkpoint_log: Some(64 << 10), ..quiet.clone() };
+    let mut counts = Vec::new();
+    for (seed, o) in [quiet, by_sum, by_ring].iter().enumerate() {
+        let io = SimIo::new(seed as u64);
+        let db = open(&io, seed as u64, o);
+        let t = db.create_table("t", columns()).unwrap();
+        counts.push(fill_log(&db, &t, 1 << 20));
+        let (largest, sum) = db.log_bytes();
+        assert!(largest <= sum, "seed {seed}");
+    }
+    assert_eq!(counts[0], 0);
+    assert!(counts[1] >= 8, "{counts:?}");
+    assert!(counts[2] >= 8, "{counts:?}");
+}
+
 #[test]
 fn check_finds_a_lost_page_and_a_damaged_leaf() {
     let io = SimIo::new(5);

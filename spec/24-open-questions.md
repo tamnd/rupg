@@ -38,6 +38,8 @@ These questions came up while the documents were written. They are closed, and t
 
 **C11. The ClickBench sort key comes from the data.** The plain `postgresql/create.sql` of ClickBench at `e6bda4e` declares no primary key. The rupg entry uses that schema, so the data rule of document 10 section 10.7.1 chooses the sort key.
 
+**Q31. The checkpoint trigger.** Closed at M1. `max_wal_size` applies to the sum over all rings, as in PostgreSQL, so the worst redo is 1 GB for any number of rings. A ring that is half full also starts a checkpoint. Document 11 section 11.15 gives the reason, and #44 has the evidence.
+
 ## 24.3 The 10x targets
 
 **Q1. Do the ClickBench rules accept the summaries?** H1 to H6 build structures at load from the data, under the honesty rule of document 02 section 2.4.5. The ClickBench maintainers decide what the untuned category allows. Raised by documents 02 and 20. Closes before the first submission, after M8. Decided by a written answer from the maintainers. Until then, every published rupg row has a second row with `rupg.use_summaries = off`.
@@ -103,8 +105,6 @@ These questions came up while the documents were written. They are closed, and t
 ## 24.5 The file, storage and compression
 
 **Q30. The log ring size.** Document 19 proposes 64 MiB per worker. Document 08 owns ring sizes and starts each ring at 64 MiB in 16 MiB extents, which is large for an embedded library. Raised by documents 11, 17 and 19. Closes at M1, from the load and TPC-C runs. At the M1 close (#2) this is still open. The load and TPC-C runs need SQL writes, which come after M1. M1 gives one data point: with the default options, an empty file after a clean close is 80.05 MiB long, and the 4 extents of 16 MiB of the ring are 64 MiB of it. See Q74.
-
-**Q31. The checkpoint trigger.** `max_wal_size` applies to each ring, so the worst redo is the number of rings times 1 GB, about 16 s on 16 rings. The other choice is the sum over all rings. Raised by document 11. Closes at M1. At the M1 close (#2) this is still open. At M1 every commit goes to ring 0, so the two choices give the same trigger. Document 11 section 11.15 uses each ring until a decision.
 
 **Q32. Dictionary leftovers.** Strings from deleted rows and aborted transactions stay in the dictionary until `REPACK` or `VACUUM FULL`. A user who deletes data for privacy expects it to be gone. Raised by document 09. Closes at M4. The choice is between a scrub in compaction and a documented rule.
 

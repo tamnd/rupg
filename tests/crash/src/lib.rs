@@ -161,6 +161,7 @@ fn options() -> Options {
         shared_buffers: 2 << 20,
         log_extents: 1,
         checkpoint_log: Some(48 << 10),
+        max_wal_size: 1 << 30,
         create: true,
         window_pages: Some(1 << 16),
     }
