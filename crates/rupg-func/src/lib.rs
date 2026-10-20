@@ -21,6 +21,7 @@ mod compare;
 mod datetime;
 mod dbsize;
 mod deparse;
+mod describe;
 mod encoding;
 mod enums;
 mod extract;
@@ -491,6 +492,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| snapshot::by_src(src))
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
+        .or_else(|| describe::by_src(src))
         .or_else(|| acl::by_src(src))
         .or_else(|| updatable::by_src(src))
         .or_else(|| deparse::by_src(src))

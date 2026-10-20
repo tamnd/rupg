@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `pg_describe_object`, the description of an object for each kind of object of the catalog. A name has its schema when the search path does not find it, and an object that does not exist gives null (#432).
+
 ## 0.1.50 (2026-10-20)
 
 ### Added
