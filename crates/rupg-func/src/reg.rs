@@ -226,7 +226,7 @@ pub(crate) fn catalog_visible(kind: Named, oid: u32, session: &dyn Session) -> O
 }
 
 /// The text of `regcollationout`, `regconfigout` and `regdictionaryout`: the name, with the schema when the name is not visible.
-fn catalog_text(kind: Named, oid: u32, session: &dyn Session) -> Option<String> {
+pub(crate) fn catalog_text(kind: Named, oid: u32, session: &dyn Session) -> Option<String> {
     let (name, namespace) = catalog_name(kind, oid, session)?;
     let schema = if catalog_find(kind, &path(session), &name, session) == Some(oid) {
         None
@@ -465,7 +465,7 @@ pub(crate) fn output(kind: RegKind, oid: u32, session: &dyn Session, out: &mut V
 }
 
 /// The text of the object with this OID, or `None` when no object has it.
-fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
+pub(crate) fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<String> {
     match kind {
         RegKind::Class => {
             let (name, namespace) = class_name(oid, session)?;

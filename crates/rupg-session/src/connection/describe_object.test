@@ -1,0 +1,445 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA s;
+CREATE SCHEMA
+> CREATE TABLE t (a int PRIMARY KEY, b text DEFAULT 'x' CHECK (b <> ''), "Weird Col" int);
+CREATE TABLE
+> CREATE TABLE s.u (a int);
+CREATE TABLE
+> CREATE VIEW v AS SELECT a FROM t;
+CREATE VIEW
+> CREATE SEQUENCE sq;
+CREATE SEQUENCE
+> CREATE INDEX ti ON t (b);
+CREATE INDEX
+> CREATE TYPE ct AS (x int, y text);
+CREATE TYPE
+> CREATE TYPE en AS ENUM ('a', 'b');
+CREATE TYPE
+> CREATE DOMAIN dm AS int CONSTRAINT dpos CHECK (VALUE > 0);
+CREATE DOMAIN
+> CREATE RULE r1 AS ON INSERT TO s.u DO INSTEAD NOTHING;
+CREATE RULE
+> CREATE TABLE "Mixed" (a int);
+CREATE TABLE
+> ALTER TABLE t DROP COLUMN "Weird Col";
+ALTER TABLE
+> CREATE TEXT SEARCH CONFIGURATION s.cfg (COPY = english);
+CREATE TEXT SEARCH CONFIGURATION
+> SELECT pg_describe_object('pg_class'::regclass, 't'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row table t
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 't'::regclass, 2);
+fields pg_describe_object:25:-1:-1
+row column b of table t
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 't'::regclass, 3);
+fields pg_describe_object:25:-1:-1
+row column ........pg.dropped.3........ of table t
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 't'::regclass, 9);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 's.u'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row table s.u
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'v'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row view v
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'sq'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row sequence sq
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'ti'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row index ti
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 't_pkey'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row index t_pkey
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'ct'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row composite type ct
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'ct'::regclass, 1);
+fields pg_describe_object:25:-1:-1
+row column x of composite type ct
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, '"Mixed"'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row table "Mixed"
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'pg_class'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row table pg_class
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'pg_class'::regclass, 1);
+fields pg_describe_object:25:-1:-1
+row column oid of table pg_class
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'pg_class'::regclass, -1);
+fields pg_describe_object:25:-1:-1
+row column ctid of table pg_class
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'information_schema.tables'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row view information_schema.tables
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 1, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 'int4'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type integer
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, '_int4'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type integer[]
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 'varchar'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type character varying
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 'ct'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type ct
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 'en'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type en
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 'dm'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type dm
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 't'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type t
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 's.u'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type s.u
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 1, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_proc'::regclass, 'now'::regproc, 0);
+fields pg_describe_object:25:-1:-1
+row function now()
+SELECT 1
+> SELECT pg_describe_object('pg_proc'::regclass, 'int4pl'::regproc, 0);
+fields pg_describe_object:25:-1:-1
+row function int4pl(integer,integer)
+SELECT 1
+> SELECT pg_describe_object('pg_proc'::regclass, 'count()'::regprocedure, 0);
+fields pg_describe_object:25:-1:-1
+row function count()
+SELECT 1
+> SELECT pg_describe_object('pg_proc'::regclass, 'sum(int4)'::regprocedure, 0);
+fields pg_describe_object:25:-1:-1
+row function sum(integer)
+SELECT 1
+> SELECT pg_describe_object('pg_proc'::regclass, 'row_number()'::regprocedure, 0);
+fields pg_describe_object:25:-1:-1
+row function row_number()
+SELECT 1
+> SELECT pg_describe_object('pg_proc'::regclass, 'substring(text,int4,int4)'::regprocedure, 0);
+fields pg_describe_object:25:-1:-1
+row function "substring"(text,integer,integer)
+SELECT 1
+> SELECT pg_describe_object('pg_proc'::regclass, 1, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_namespace'::regclass, 's'::regnamespace, 0);
+fields pg_describe_object:25:-1:-1
+row schema s
+SELECT 1
+> SELECT pg_describe_object('pg_namespace'::regclass, 'pg_catalog'::regnamespace, 0);
+fields pg_describe_object:25:-1:-1
+row schema pg_catalog
+SELECT 1
+> SELECT pg_describe_object('pg_namespace'::regclass, 'public'::regnamespace, 0);
+fields pg_describe_object:25:-1:-1
+row schema public
+SELECT 1
+> SELECT pg_describe_object('pg_namespace'::regclass, 1, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT d FROM (SELECT pg_describe_object(classid, objid, objsubid) AS d FROM pg_depend WHERE refobjid = 't'::regclass AND classid <> 'pg_type'::regclass) x WHERE d NOT LIKE 'toast%' ORDER BY 1;
+fields d:25:-1:-1
+row constraint t_a_not_null on table t
+row constraint t_b_check on table t
+row constraint t_b_check on table t
+row constraint t_pkey on table t
+row default value for column b of table t
+row index ti
+row rule _RETURN on view v
+SELECT 7
+> SELECT pg_describe_object(classid, objid, objsubid) FROM pg_depend WHERE refobjid = 'dm'::regtype ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row constraint dpos
+row type dm[]
+SELECT 2
+> SELECT pg_describe_object(classid, objid, objsubid) FROM pg_depend WHERE refobjid = 's.u'::regclass AND classid <> 'pg_type'::regclass ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row rule r1 on table s.u
+row rule r1 on table s.u
+SELECT 2
+> SELECT pg_describe_object(classid, objid, objsubid) FROM pg_depend WHERE refobjid = 'v'::regclass AND classid <> 'pg_type'::regclass ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row rule _RETURN on view v
+SELECT 1
+> SELECT pg_describe_object(refclassid, refobjid, refobjsubid) FROM pg_depend WHERE objid = 't'::regclass ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row schema public
+SELECT 1
+> SELECT pg_describe_object('pg_constraint'::regclass, oid, 0) FROM pg_constraint WHERE conname IN ('t_pkey', 't_b_check', 'dpos') ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row constraint dpos
+row constraint t_b_check on table t
+row constraint t_pkey on table t
+SELECT 3
+> SELECT pg_describe_object('pg_attrdef'::regclass, oid, 0) FROM pg_attrdef ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row default value for column b of table t
+SELECT 1
+> SELECT pg_describe_object('pg_rewrite'::regclass, oid, 0) FROM pg_rewrite WHERE ev_class IN ('v'::regclass, 's.u'::regclass) ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row rule _RETURN on view v
+row rule r1 on table s.u
+SELECT 2
+> SELECT pg_describe_object('pg_rewrite'::regclass, oid, 0) FROM pg_rewrite WHERE ev_class = 'pg_views'::regclass;
+fields pg_describe_object:25:-1:-1
+row rule _RETURN on view pg_views
+SELECT 1
+> SELECT pg_describe_object('pg_collation'::regclass, 100, 0);
+fields pg_describe_object:25:-1:-1
+row collation "default"
+SELECT 1
+> SELECT pg_describe_object('pg_collation'::regclass, 950, 0);
+fields pg_describe_object:25:-1:-1
+row collation "C"
+SELECT 1
+> SELECT pg_describe_object('pg_collation'::regclass, oid, 0) FROM pg_collation WHERE collname = 'C';
+fields pg_describe_object:25:-1:-1
+row collation "C"
+SELECT 1
+> SELECT pg_describe_object('pg_language'::regclass, oid, 0) FROM pg_language ORDER BY oid;
+fields pg_describe_object:25:-1:-1
+row language internal
+row language c
+row language sql
+row language plpgsql
+SELECT 4
+> SELECT pg_describe_object('pg_am'::regclass, oid, 0) FROM pg_am ORDER BY oid;
+fields pg_describe_object:25:-1:-1
+row access method heap
+row access method btree
+row access method hash
+row access method gist
+row access method gin
+row access method brin
+row access method spgist
+SELECT 7
+> SELECT pg_describe_object('pg_operator'::regclass, '+(int4,int4)'::regoperator, 0);
+fields pg_describe_object:25:-1:-1
+row operator +(integer,integer)
+SELECT 1
+> SELECT pg_describe_object('pg_operator'::regclass, '-(NONE,int4)'::regoperator, 0);
+fields pg_describe_object:25:-1:-1
+row operator -(NONE,integer)
+SELECT 1
+> SELECT pg_describe_object('pg_opclass'::regclass, oid, 0) FROM pg_opclass WHERE opcname IN ('int4_ops', 'text_ops') ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row operator class int4_ops for access method btree
+row operator class int4_ops for access method hash
+row operator class text_ops for access method btree
+row operator class text_ops for access method hash
+row operator class text_ops for access method spgist
+SELECT 5
+> SELECT pg_describe_object('pg_opfamily'::regclass, oid, 0) FROM pg_opfamily WHERE opfname IN ('integer_ops', 'text_ops') ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row operator family integer_ops for access method btree
+row operator family integer_ops for access method hash
+row operator family text_ops for access method btree
+row operator family text_ops for access method hash
+row operator family text_ops for access method spgist
+SELECT 5
+> SELECT pg_describe_object('pg_cast'::regclass, oid, 0) FROM pg_cast WHERE castsource = 'int4'::regtype AND casttarget IN ('int8'::regtype, 'text'::regtype, 'bool'::regtype) ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row cast from integer to bigint
+row cast from integer to boolean
+SELECT 2
+> SELECT pg_describe_object('pg_ts_config'::regclass, 'english'::regconfig, 0);
+fields pg_describe_object:25:-1:-1
+row text search configuration english
+SELECT 1
+> SELECT pg_describe_object('pg_ts_dict'::regclass, 'simple'::regdictionary, 0);
+fields pg_describe_object:25:-1:-1
+row text search dictionary simple
+SELECT 1
+> SELECT pg_describe_object('pg_ts_config'::regclass, 's.cfg'::regconfig, 0);
+fields pg_describe_object:25:-1:-1
+row text search configuration s.cfg
+SELECT 1
+> SELECT pg_describe_object('pg_ts_parser'::regclass, oid, 0) FROM pg_ts_parser;
+fields pg_describe_object:25:-1:-1
+row text search parser "default"
+SELECT 1
+> SELECT pg_describe_object('pg_ts_template'::regclass, oid, 0) FROM pg_ts_template ORDER BY oid LIMIT 2;
+fields pg_describe_object:25:-1:-1
+row text search template simple
+row text search template synonym
+SELECT 2
+> SELECT pg_describe_object('pg_conversion'::regclass, oid, 0) FROM pg_conversion ORDER BY oid LIMIT 2;
+fields pg_describe_object:25:-1:-1
+row conversion koi8_r_to_windows_1251
+row conversion windows_1251_to_koi8_r
+SELECT 2
+> SELECT pg_describe_object('pg_authid'::regclass, 10, 0);
+fields pg_describe_object:25:-1:-1
+row role postgres
+SELECT 1
+> SELECT pg_describe_object('pg_authid'::regclass, 1, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_database'::regclass, 1, 0);
+fields pg_describe_object:25:-1:-1
+row database template1
+SELECT 1
+> SELECT pg_describe_object('pg_tablespace'::regclass, 1663, 0);
+fields pg_describe_object:25:-1:-1
+row tablespace pg_default
+SELECT 1
+> SELECT pg_describe_object('pg_tablespace'::regclass, 1664, 0);
+fields pg_describe_object:25:-1:-1
+row tablespace pg_global
+SELECT 1
+> SELECT pg_describe_object('pg_extension'::regclass, oid, 0) FROM pg_extension;
+fields pg_describe_object:25:-1:-1
+row extension plpgsql
+SELECT 1
+> SELECT pg_describe_object('pg_largeobject'::regclass, 123, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object(0, 0, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object(0, 5, 0);
+fields pg_describe_object:25:-1:-1
+ERROR XX000 unsupported object class: 0
+> SELECT pg_describe_object(1, 5, 0);
+fields pg_describe_object:25:-1:-1
+ERROR XX000 unsupported object class: 1
+> SELECT pg_describe_object('pg_class'::regclass, 0, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object(NULL, 0, 0);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_amop'::regclass, oid, 0) FROM pg_amop WHERE amopopr = '<(int4,int4)'::regoperator ORDER BY 1 LIMIT 2;
+fields pg_describe_object:25:-1:-1
+row operator 1 (integer, integer) of operator family integer_minmax_multi_ops for access method brin: <(integer,integer)
+row operator 1 (integer, integer) of operator family integer_minmax_ops for access method brin: <(integer,integer)
+SELECT 2
+> SELECT pg_describe_object('pg_amproc'::regclass, oid, 0) FROM pg_amproc WHERE amproc = 'btint4cmp'::regproc;
+fields pg_describe_object:25:-1:-1
+row function 1 (integer, integer) of operator family integer_ops for access method btree: btint4cmp(integer,integer)
+row function 1 (jsonb, jsonb) of operator family jsonb_path_ops for access method gin: btint4cmp(integer,integer)
+SELECT 2
+> SET search_path = s, public;
+SET
+search_path=s, public
+> SELECT pg_describe_object('pg_class'::regclass, 't'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row table t
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'u'::regclass, 0);
+fields pg_describe_object:25:-1:-1
+row table u
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 'ct'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type ct
+SELECT 1
+> SELECT pg_describe_object('pg_ts_config'::regclass, 'cfg'::regconfig, 0);
+fields pg_describe_object:25:-1:-1
+row text search configuration cfg
+SELECT 1
+> SET search_path = s;
+SET
+search_path=s
+> SELECT pg_describe_object('pg_class'::regclass, 'public.t'::regclass, 2);
+fields pg_describe_object:25:-1:-1
+row column b of table public.t
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 'public.ct'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type public.ct
+SELECT 1
+> SELECT pg_describe_object('pg_type'::regclass, 'public.ct[]'::regtype, 0);
+fields pg_describe_object:25:-1:-1
+row type public.ct[]
+SELECT 1
+> SELECT pg_describe_object('pg_constraint'::regclass, oid, 0) FROM pg_constraint WHERE conname IN ('t_pkey', 'dpos') ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row constraint dpos
+row constraint t_pkey on table public.t
+SELECT 2
+> SELECT pg_describe_object('pg_attrdef'::regclass, oid, 0) FROM pg_attrdef ORDER BY 1;
+fields pg_describe_object:25:-1:-1
+row default value for column b of table public.t
+SELECT 1
+> SELECT pg_describe_object('pg_rewrite'::regclass, oid, 0) FROM pg_rewrite WHERE ev_class = 'public.v'::regclass;
+fields pg_describe_object:25:-1:-1
+row rule _RETURN on view public.v
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'public.t'::regclass, -1);
+fields pg_describe_object:25:-1:-1
+row column ctid of table public.t
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'public.v'::regclass, -1);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'public.t'::regclass, -7);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> RESET search_path;
+RESET
+search_path="$user", public
+> SELECT pg_describe_object('pg_class'::regclass, 't'::regclass, 3);
+fields pg_describe_object:25:-1:-1
+row column ........pg.dropped.3........ of table t
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'sq'::regclass, -6);
+fields pg_describe_object:25:-1:-1
+row column tableoid of sequence sq
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'pg_class'::regclass, -7);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_class'::regclass, 'pg_class'::regclass, 1000);
+fields pg_describe_object:25:-1:-1
+row NULL
+SELECT 1
+> SELECT pg_describe_object('pg_attribute'::regclass, 1, 0);
+fields pg_describe_object:25:-1:-1
+ERROR XX000 unsupported object class: 1249

@@ -130,6 +130,7 @@ pub struct OpclassRow {
 /// A row of `pg_amop`.
 #[derive(Debug)]
 pub struct AmopRow {
+    pub oid: u32,
     pub family: u32,
     pub left: u32,
     pub right: u32,
@@ -143,6 +144,7 @@ pub struct AmopRow {
 /// A row of `pg_amproc`.
 #[derive(Debug)]
 pub struct AmprocRow {
+    pub oid: u32,
     pub family: u32,
     pub left: u32,
     pub right: u32,
@@ -721,12 +723,14 @@ fn load_opclasses() -> Vec<OpclassRow> {
 
 fn load_amops() -> Vec<AmopRow> {
     let r = Rows::new("pg_amop");
+    let oid = r.oid("oid");
     let (family, left, right) =
         (r.oid("amopfamily"), r.oid("amoplefttype"), r.oid("amoprighttype"));
     let (strategy, purpose) = (r.int2("amopstrategy"), r.char("amoppurpose"));
     let (operator, method) = (r.oid("amopopr"), r.oid("amopmethod"));
     (0..r.catalog.len)
         .map(|i| AmopRow {
+            oid: oid[i],
             family: family[i],
             left: left[i],
             right: right[i],
@@ -740,12 +744,14 @@ fn load_amops() -> Vec<AmopRow> {
 
 fn load_amprocs() -> HashMap<(u32, u32), Vec<AmprocRow>> {
     let r = Rows::new("pg_amproc");
+    let oid = r.oid("oid");
     let (family, left, right) =
         (r.oid("amprocfamily"), r.oid("amproclefttype"), r.oid("amprocrighttype"));
     let (number, proc) = (r.int2("amprocnum"), r.oid("amproc"));
     let mut out: HashMap<(u32, u32), Vec<AmprocRow>> = HashMap::new();
     for i in 0..r.catalog.len {
         let row = AmprocRow {
+            oid: oid[i],
             family: family[i],
             left: left[i],
             right: right[i],
@@ -1527,6 +1533,23 @@ pub fn amops_of_operator(operator: u32) -> impl Iterator<Item = &'static AmopRow
 /// The rows of `pg_amproc` of the family for the left type, as `SearchSysCacheList2(AMPROCNUM, ...)` finds them.
 pub fn amprocs(family: u32, left: u32) -> &'static [AmprocRow] {
     BUILTIN.amprocs.get(&(family, left)).map_or(&[], Vec::as_slice)
+}
+
+/// The row of `pg_amop` with this OID.
+pub fn amop_by_oid(oid: u32) -> Option<&'static AmopRow> {
+    BUILTIN.amops.iter().find(|a| a.oid == oid)
+}
+
+/// The row of `pg_amproc` with this OID.
+pub fn amproc_by_oid(oid: u32) -> Option<&'static AmprocRow> {
+    BUILTIN.amprocs.values().flatten().find(|a| a.oid == oid)
+}
+
+/// The name of the access method with this OID, from `pg_am`.
+pub fn access_method_name(oid: u32) -> Option<&'static str> {
+    let r = Rows::new("pg_am");
+    let at = r.oid("oid").iter().position(|&o| o == oid)?;
+    Some(r.text("amname")[at])
 }
 
 /// The row of `pg_aggregate` of the aggregate function with this OID.
