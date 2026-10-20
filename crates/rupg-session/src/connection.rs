@@ -894,6 +894,7 @@ impl Connection {
                     Node::AlterEnumStmt(_) => CommandTag::AlterType,
                     Node::ViewStmt(_) => CommandTag::CreateView,
                     Node::RuleStmt(_) => CommandTag::CreateRule,
+                    Node::CreateTrigStmt(_) => CommandTag::CreateTrigger,
                     Node::CommentStmt(_) => CommandTag::Comment,
                     Node::DropStmt(stmt) => match stmt.removeType {
                         ObjectType::OBJECT_SCHEMA => CommandTag::DropSchema,
@@ -903,6 +904,7 @@ impl Connection {
                         ObjectType::OBJECT_TYPE => CommandTag::DropType,
                         ObjectType::OBJECT_DOMAIN => CommandTag::DropDomain,
                         ObjectType::OBJECT_RULE => CommandTag::DropRule,
+                        ObjectType::OBJECT_TRIGGER => CommandTag::DropTrigger,
                         ObjectType::OBJECT_FUNCTION => CommandTag::DropFunction,
                         ObjectType::OBJECT_TSPARSER => CommandTag::DropTextSearchParser,
                         ObjectType::OBJECT_TSDICTIONARY => CommandTag::DropTextSearchDictionary,
@@ -1701,6 +1703,7 @@ fn alter_tag(kind: ObjectType) -> CommandTag {
         ObjectType::OBJECT_FUNCTION => CommandTag::AlterFunction,
         ObjectType::OBJECT_ROUTINE => CommandTag::AlterRoutine,
         ObjectType::OBJECT_PROCEDURE => CommandTag::AlterProcedure,
+        ObjectType::OBJECT_TRIGGER => CommandTag::AlterTrigger,
         _ => CommandTag::AlterTable,
     }
 }
@@ -4508,6 +4511,12 @@ mod tests {
     #[test]
     fn rules() {
         big_stack(|| script(include_str!("connection/rules.test")));
+    }
+
+    /// `CREATE TRIGGER`, `DROP TRIGGER`, `ALTER TRIGGER ... RENAME`, `ALTER TABLE ... ENABLE TRIGGER` and `COMMENT ON TRIGGER`: `pg_trigger`, `pg_get_triggerdef`, the rows of `pg_depend`, the views `triggers` and `triggered_update_columns`, and the errors of `CreateTriggerFiringOn`, `renametrig` and `EnableDisableTrigger`. `connection/triggers.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn triggers() {
+        big_stack(|| script(include_str!("connection/triggers.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

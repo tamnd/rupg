@@ -1849,8 +1849,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_viewdef" | "pg_get_viewdef_ext" | "pg_get_viewdef_wrap" => query::get_viewdef,
         "pg_get_viewdef_name" | "pg_get_viewdef_name_ext" => query::get_viewdef_name,
         "pg_get_ruledef" | "pg_get_ruledef_ext" => query::get_ruledef,
-        // rupg has no triggers, so no OID is the OID of a trigger.
-        "pg_get_triggerdef" | "pg_get_triggerdef_ext" => |_, _| Ok(Value::Null),
+        "pg_get_triggerdef" | "pg_get_triggerdef_ext" => query::get_triggerdef,
         // rupg has no partitioned tables and no partitions, so no relation has a partition key or a partition constraint.
         "pg_get_partkeydef" | "pg_get_partition_constraintdef" => |_, _| Ok(Value::Null),
         _ => return None,

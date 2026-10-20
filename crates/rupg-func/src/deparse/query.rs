@@ -20,10 +20,14 @@ use rupg_types::qualified_name_list;
 use super::{
     Aggref, Deparser, Error, Expr, ExprKind, Func, FuncForm, INDENT_STD, INDENT_VAR, JoinNames,
     JsonCtor, Namespace, Result, SortGroup, SubLink, SubLinkKind, Value, WindowClause, WindowFunc,
-    builtin, json_format, looks_like_function, oid, pretty_arg, qualified_relation_name,
-    quote_identifier, reg, relation_name, sort_operators,
+    builtin, column_names, json_format, looks_like_function, oid, pretty_arg,
+    qualified_relation_name, quote_identifier, reg, relation_name, sort_operators,
 };
 use crate::{Call, Session, bad_value, not_yet, type_error};
+use rupg_catalog::{
+    TRIGGER_BEFORE, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_INSTEAD, TRIGGER_ROW, TRIGGER_TRUNCATE,
+    TRIGGER_UPDATE,
+};
 
 /// `PRETTYINDENT_JOIN`: the indent of a `JOIN` keyword after the start of its line.
 const INDENT_JOIN: i32 = 4;
@@ -1871,4 +1875,109 @@ fn ruledef(rule: &rupg_catalog::Rule, pretty: bool, session: &dyn Session) -> Re
         }
     }
     Ok(d.buf)
+}
+
+/// `pg_get_triggerdef(oid)` and `pg_get_triggerdef(oid, bool)`: the `CREATE TRIGGER` statement of a trigger, as `pg_get_triggerdef_worker` makes it, or null when no trigger has the OID.
+pub(super) fn get_triggerdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
+    let pretty = pretty_arg(args, 1)?;
+    let session = call.session;
+    let Some(trigger) = session.catalog().and_then(|c| c.trigger(oid)) else {
+        return Ok(Value::Null);
+    };
+    let kind = trigger.kind;
+    let constraint = if trigger.constraint != 0 { "CONSTRAINT " } else { "" };
+    let mut d = Deparser::new(session, pretty, 0);
+    d.buf = format!("CREATE {constraint}TRIGGER {} ", quote_identifier(&trigger.name));
+    d.buf.push_str(if kind & TRIGGER_BEFORE != 0 {
+        "BEFORE"
+    } else if kind & TRIGGER_INSTEAD != 0 {
+        "INSTEAD OF"
+    } else {
+        "AFTER"
+    });
+    let mut events = 0;
+    let mut event = |d: &mut Deparser<'_>, name: &str| {
+        d.buf.push_str(if events > 0 { " OR " } else { " " });
+        d.buf.push_str(name);
+        events += 1;
+    };
+    if kind & TRIGGER_INSERT != 0 {
+        event(&mut d, "INSERT");
+    }
+    if kind & TRIGGER_DELETE != 0 {
+        event(&mut d, "DELETE");
+    }
+    if kind & TRIGGER_UPDATE != 0 {
+        event(&mut d, "UPDATE");
+        if !trigger.columns.is_empty() {
+            let names = column_names(trigger.relation, session).unwrap_or_default();
+            let columns: Vec<String> = trigger
+                .columns
+                .iter()
+                .map(|&n| {
+                    let at = usize::try_from(n - 1).unwrap_or(usize::MAX);
+                    names.get(at).map_or_else(String::new, |n| quote_identifier(n))
+                })
+                .collect();
+            d.buf.push_str(" OF ");
+            d.buf.push_str(&columns.join(", "));
+        }
+    }
+    if kind & TRIGGER_TRUNCATE != 0 {
+        event(&mut d, "TRUNCATE");
+    }
+    let name = if pretty {
+        relation_name(trigger.relation, session)?
+    } else {
+        qualified_relation_name(trigger.relation, session)?
+    };
+    d.buf.push_str(&format!(" ON {name} "));
+    if trigger.constraint != 0 {
+        if trigger.constraint_relation != 0 {
+            let from = relation_name(trigger.constraint_relation, session)?;
+            d.buf.push_str(&format!("FROM {from} "));
+        }
+        if !trigger.deferrable {
+            d.buf.push_str("NOT ");
+        }
+        d.buf.push_str("DEFERRABLE INITIALLY ");
+        d.buf.push_str(if trigger.deferred { "DEFERRED " } else { "IMMEDIATE " });
+    }
+    if trigger.old_table.is_some() || trigger.new_table.is_some() {
+        d.buf.push_str("REFERENCING ");
+        if let Some(old) = &trigger.old_table {
+            d.buf.push_str(&format!("OLD TABLE AS {} ", quote_identifier(old)));
+        }
+        if let Some(new) = &trigger.new_table {
+            d.buf.push_str(&format!("NEW TABLE AS {} ", quote_identifier(new)));
+        }
+    }
+    d.buf.push_str(if kind & TRIGGER_ROW != 0 { "FOR EACH ROW " } else { "FOR EACH STATEMENT " });
+    let env = reg::SessionEnv(session);
+    if let Some((base, qual)) = rupg_analyze::trigger_when(&env, oid)? {
+        d.buf.push_str("WHEN (");
+        let space = d.namespace(&base);
+        d.prefix = true;
+        d.indent = INDENT_STD;
+        d.namespaces.push(space);
+        d.expr(&qual, false)?;
+        d.namespaces.pop();
+        d.indent = 0;
+        d.prefix = false;
+        d.buf.push_str(") ");
+    }
+    let proc = builtin::proc_by_oid(trigger.function).ok_or_else(|| {
+        Error::internal(format!("cache lookup failed for function {}", trigger.function))
+    })?;
+    let function = if reg::function_visible(proc, session) {
+        quote_identifier(proc.name)
+    } else {
+        reg::qualified(reg::namespace_name(proc.namespace, session), proc.name)
+    };
+    // `simple_quote_literal` with `standard_conforming_strings` on doubles only the quote.
+    let args: Vec<String> =
+        trigger.args.iter().map(|a| format!("'{}'", a.replace('\'', "''"))).collect();
+    d.buf.push_str(&format!("EXECUTE FUNCTION {function}({})", args.join(", ")));
+    Ok(Value::text(d.buf))
 }

@@ -1,4 +1,4 @@
-//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c` and `ExecuteTruncate` run them, and they change a [`Catalog`]. `CREATE FUNCTION` makes a function in SQL. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
+//! The statements that define objects: `CREATE TABLE`, `CREATE INDEX`, `CREATE SCHEMA`, `CREATE VIEW`, `CREATE RULE`, `CREATE TRIGGER`, `CREATE DOMAIN`, `CREATE FUNCTION`, `COMMENT`, `DROP`, `ALTER TABLE`, `ALTER SCHEMA ... OWNER TO`, `CREATE TEXT SEARCH`, `ALTER TEXT SEARCH CONFIGURATION` and `TRUNCATE`. They run as `transformCreateStmt`, `DefineRelation`, `DefineIndex`, `CreateSchemaCommand`, `DefineView`, `DefineRule`, `CreateTrigger`, `DefineDomain`, `CreateFunction`, `CommentObject`, `ExecDropStmt`, `AlterTable`, `AlterSchemaOwner`, the functions of `tsearchcmds.c` and `ExecuteTruncate` run them, and they change a [`Catalog`]. `CREATE FUNCTION` makes a function in SQL. [`lock_table`] runs the checks of `LOCK TABLE`, which finds its relations by name as these statements do.
 
 mod alter;
 mod alter_column;
@@ -30,6 +30,7 @@ mod set_schema;
 mod table;
 #[cfg(test)]
 mod tests;
+mod trigger;
 mod truncate;
 mod tsearch;
 mod type_change;
@@ -46,6 +47,7 @@ pub(crate) use lock::relkind;
 pub use lock::{Allowed, lock_table};
 pub use rule::{RuleTree, rule_tree};
 pub(crate) use table::check_attribute_type;
+pub use trigger::trigger_when;
 pub use vacuum::vacuum_relations;
 
 use rupg_catalog::{Catalog, ObjRef, PG_CLASS, PG_TYPE, RelKind};
@@ -119,6 +121,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::CreateRangeStmt(_)
             | Node::ViewStmt(_)
             | Node::RuleStmt(_)
+            | Node::CreateTrigStmt(_)
             | Node::CreateFunctionStmt(_)
             | Node::AlterFunctionStmt(_)
             | Node::CommentStmt(_)
@@ -160,6 +163,7 @@ fn is_drop_kind(kind: ObjectType) -> bool {
             | ObjectType::OBJECT_TYPE
             | ObjectType::OBJECT_DOMAIN
             | ObjectType::OBJECT_RULE
+            | ObjectType::OBJECT_TRIGGER
             | ObjectType::OBJECT_FUNCTION
             | ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
@@ -190,6 +194,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
         Node::ViewStmt(view) => definer.create_view(view, text),
         Node::RuleStmt(rule) => definer.create_rule(rule, text),
+        Node::CreateTrigStmt(trigger) => definer.create_trigger(trigger),
         Node::CreateDomainStmt(domain) => definer.create_domain(domain).map(|_| ()),
         Node::CompositeTypeStmt(stmt) => definer.create_composite_type(stmt),
         Node::CreateEnumStmt(stmt) => definer.create_enum(stmt),

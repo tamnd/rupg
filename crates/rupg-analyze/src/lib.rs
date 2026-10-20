@@ -59,7 +59,7 @@ pub use cte::{Cte, CteRef};
 pub use ddl::{
     Allowed, Body, CopyRelation, CopyTarget, Defined, Message, RuleTree, Transform, attnums,
     copy_filter, copy_insert, copy_relation, copy_target, define, function_body, is_definition,
-    lock_table, rewrite_insert, rule_tree, vacuum_relations,
+    lock_table, rewrite_insert, rule_tree, trigger_when, vacuum_relations,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, GroupingFunc, IsJson,

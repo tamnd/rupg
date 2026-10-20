@@ -1808,7 +1808,8 @@ impl Analyzer<'_> {
             )
             .at_opt(at));
         }
-        if name == "ctid" {
+        // The condition of a trigger names the system columns of the row, and `CREATE TRIGGER` gives the error for a `BEFORE` trigger.
+        if name == "ctid" && self.kind != Kind::TriggerWhen {
             return Err(not_yet("the system column \"ctid\"", at));
         }
         let var = Var { relation, attnum, levels_up: level };
