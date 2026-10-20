@@ -1325,6 +1325,37 @@ impl Plan {
         run_query(&self.query, params, session, &self.cache(), &[], false)
     }
 
+    /// The new row of an `INSERT` or an `UPDATE` after the triggers `BEFORE ... FOR EACH ROW` changed it: the columns `row`, then the conditions of the check constraints, from [`rupg_analyze::Write::recheck`]. A write with no such query gives the row as it is.
+    ///
+    /// # Errors
+    ///
+    /// The error of a function of a check constraint.
+    pub fn recheck(&self, row: Vec<Value>, session: &dyn Session) -> Result<Vec<Value>> {
+        let Some(query) = self.query.write.as_ref().and_then(|w| w.recheck.as_deref()) else {
+            return Ok(row);
+        };
+        let cache = self.cache();
+        cache.tables.borrow_mut().push((query, Rc::new(scan::given(query, vec![vec![row]]))));
+        let rows = run_query(query, &[], session, &cache, &[], false)?;
+        rows.into_iter().next().ok_or_else(|| Error::internal("a check of a row with no row"))
+    }
+
+    /// The checks of `ExecConstraints` on new rows that have the conditions of the check constraints after the columns, as [`Plan::recheck`] gives them. It gives the rows with no conditions.
+    ///
+    /// # Errors
+    ///
+    /// The error of a not-null constraint or of a check constraint.
+    pub fn check_rows(
+        &self,
+        rows: Vec<Vec<Value>>,
+        session: &dyn Session,
+    ) -> Result<Vec<Vec<Value>>> {
+        match &self.query.write {
+            Some(info) => insert::check_rows(info, rows, session),
+            None => Ok(rows),
+        }
+    }
+
     /// The checks of `ExecConstraints` on the rows of [`Plan::run_unchecked`]. It gives the rows with only the columns of the table.
     ///
     /// # Errors
@@ -1336,6 +1367,37 @@ impl Plan {
             None => Ok(rows),
         }
     }
+}
+
+/// `TriggerEnabled` for the condition of `WHEN` of a trigger: true when the condition `qual` is true for the old row `old` and the new row `new`. The relations of the query `base` are the old row and the new row, as [`rupg_analyze::trigger_when`] gives them.
+///
+/// # Errors
+///
+/// The error of a function of the condition.
+pub fn trigger_when(
+    base: &Query,
+    qual: &Expr,
+    old: Vec<Value>,
+    new: Vec<Value>,
+    session: &dyn Session,
+) -> Result<bool> {
+    let query = Query {
+        from: vec![FromItem::Relation(0), FromItem::Relation(1)],
+        targets: vec![Target {
+            name: String::new(),
+            expr: qual.clone(),
+            origin: None,
+            junk: false,
+        }],
+        ..base.clone()
+    };
+    let cache = Cache::default();
+    cache
+        .tables
+        .borrow_mut()
+        .push((&query, Rc::new(scan::given(&query, vec![vec![old], vec![new]]))));
+    let rows = run_query(&query, &[], session, &cache, &[], false)?;
+    Ok(matches!(rows.first().and_then(|row| row.first()), Some(Value::Bool(true))))
 }
 
 /// The checks of `ExecCheckXactReadOnly` and `CheckValidRowMarkRel` for the tables that `FOR UPDATE` or `FOR SHARE` locks: a read-only transaction cannot lock a row, and a sequence has no rows to lock.

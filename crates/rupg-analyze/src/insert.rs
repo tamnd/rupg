@@ -66,6 +66,10 @@ pub struct Write {
     pub on_conflict: Option<OnConflict>,
     /// The clauses of a `MERGE`.
     pub merge: Option<Merge>,
+    /// The query of the checks of the constraints after the triggers `BEFORE ... FOR EACH ROW` of an `INSERT` or an `UPDATE`, which can change the new row. It reads one relation, the new row, and gives its columns, then the conditions of the check constraints. When the write has it, [`Write::checks`] are not checked in the run of the plan: the rows of the run keep the conditions after the columns, and the caller checks the rows after the triggers.
+    pub recheck: Option<Box<Query>>,
+    /// The numbers of the columns that `SET` of an `UPDATE` gives, in the order of the list, for the triggers of `UPDATE OF`.
+    pub updated: Vec<i16>,
 }
 
 /// `OnConflictExpr`: what an `INSERT` does for a new row with the key of a row that the table has.
@@ -287,6 +291,7 @@ impl Analyzer<'_> {
         };
         let checks = self.checks(table)?;
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
+        let recheck = self.recheck(table, WriteKind::Insert, &name, &columns, &checks);
         if !checks.is_empty() {
             query = with_checks(&name, &columns, query, checks, &[]);
         }
@@ -294,6 +299,9 @@ impl Analyzer<'_> {
         let unique = self.unique_keys(table, &columns)?;
         let foreign = self.foreign_keys(table, WriteKind::Insert, &columns)?;
         let (mut on_conflict, mut returning) = (None, None);
+        if s.onConflictClause.is_some() && self.user_triggers(table, 0) {
+            return Err(not_yet("INSERT ... ON CONFLICT into a table with triggers"));
+        }
         if s.onConflictClause.is_some() || s.returningClause.is_some() {
             let outer = std::mem::take(&mut self.scope);
             // `ON CONFLICT` and `RETURNING` can read the queries of `WITH`.
@@ -313,6 +321,8 @@ impl Analyzer<'_> {
             foreign,
             on_conflict,
             merge: None,
+            recheck,
+            updated: Vec::new(),
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -527,9 +537,14 @@ impl Analyzer<'_> {
             }
         }
         if let Some(catalog) = self.env.catalog() {
-            // The write checks the foreign keys itself, and the executor does not fire the other triggers yet. A disabled trigger and a trigger for the replica mode do not fire.
-            let user = |t: &rupg_catalog::Trigger| t.relation == oid && !t.internal && t.fires();
-            if catalog.triggers().any(user) {
+            // The session fires the triggers of an `INSERT`, an `UPDATE` and a `DELETE`, but not the triggers with transition tables yet.
+            let event = trigger_event(kind);
+            let transition = |t: &rupg_catalog::Trigger| {
+                t.kind & event != 0 && (t.old_table.is_some() || t.new_table.is_some())
+            };
+            if (kind == WriteKind::Merge && self.user_triggers(oid, 0))
+                || catalog.triggers().any(|t| user_trigger(t, oid) && transition(t))
+            {
                 return Err(not_yet(&format!("{what} a table with triggers")));
             }
             if catalog.rules().any(|r| r.relation == oid) {
@@ -548,6 +563,33 @@ impl Analyzer<'_> {
             })
             .collect();
         Ok((oid, rel.name.clone(), columns))
+    }
+
+    /// True when the table has a trigger of the user that fires in the default mode and whose type has all the bits `bits`, such as `TRIGGER_ROW | TRIGGER_BEFORE | TRIGGER_INSERT`. With no bits, any such trigger counts.
+    pub(crate) fn user_triggers(&self, table: u32, bits: i16) -> bool {
+        let Some(catalog) = self.env.catalog() else { return false };
+        catalog.triggers().any(|t| user_trigger(t, table) && t.kind & bits == bits)
+    }
+
+    /// [`Write::recheck`] for a write of the table with a trigger `BEFORE ... FOR EACH ROW` for the event of `kind`, or `None`.
+    pub(crate) fn recheck(
+        &self,
+        table: u32,
+        kind: WriteKind,
+        name: &str,
+        columns: &[Column],
+        checks: &[(String, Expr)],
+    ) -> Option<Box<Query>> {
+        let bits = rupg_catalog::TRIGGER_ROW | rupg_catalog::TRIGGER_BEFORE | trigger_event(kind);
+        if !self.user_triggers(table, bits) {
+            return None;
+        }
+        let mut query = with_checks(name, columns, Query::default(), checks.to_vec(), &[]);
+        // The relation reads the row that the triggers give, not a subquery.
+        let mut relation = Relation::new(0, columns.to_vec(), None, None, None);
+        relation.name = name.to_string();
+        query.relations = vec![relation];
+        Some(Box::new(query))
     }
 
     /// The foreign keys that a write of the table checks after the statement, in the order of the names of their triggers, as `AfterTriggerSaveEvent` queues the triggers for each row.
@@ -1161,6 +1203,25 @@ fn arbiters(inference: Inference, unique: &[Unique]) -> Result<Vec<usize>> {
         ));
     }
     Ok(places)
+}
+
+/// True for a trigger of the table `table` that the user made and that fires in the default mode. The session checks the foreign keys itself, and a disabled trigger and a trigger for the replica mode do not fire.
+fn user_trigger(t: &rupg_catalog::Trigger, table: u32) -> bool {
+    t.relation == table && !t.internal && t.fires()
+}
+
+/// The bit of `tgtype` for the event of a write.
+fn trigger_event(kind: WriteKind) -> i16 {
+    match kind {
+        WriteKind::Insert => rupg_catalog::TRIGGER_INSERT,
+        WriteKind::Update => rupg_catalog::TRIGGER_UPDATE,
+        WriteKind::Delete => rupg_catalog::TRIGGER_DELETE,
+        WriteKind::Merge => {
+            rupg_catalog::TRIGGER_INSERT
+                | rupg_catalog::TRIGGER_UPDATE
+                | rupg_catalog::TRIGGER_DELETE
+        }
+    }
 }
 
 /// The query that reads the rows of `rows` as a subquery with the name of the table, and gives the columns and then the condition of each check constraint. The values of `tail` come after the columns in each row of `rows`, and after the conditions in each row of the query, as the carried values of `RETURNING` and the ID of the version of the old row of an `UPDATE`.

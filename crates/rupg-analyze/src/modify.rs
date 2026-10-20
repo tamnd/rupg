@@ -18,6 +18,18 @@ use crate::select::{Query, Target};
 use crate::sort::raw_location;
 use crate::typename::place;
 
+/// The numbers of the columns that the items of `SET` name, in the order of the list. The analysis of the items checks the names.
+fn set_columns(list: &rupg_sql::nodes::List, columns: &[Column]) -> Vec<i16> {
+    let names = list.iter().filter_map(|node| match node {
+        Some(Node::ResTarget(rt)) => rt.name.as_deref(),
+        _ => None,
+    });
+    names
+        .filter_map(|name| columns.iter().position(|c| c.name == name))
+        .map(|at| i16::try_from(at + 1).unwrap_or(i16::MAX))
+        .collect()
+}
+
 /// `SelfItemPointerAttributeNumber`: the attribute number of `ctid`, which reads the ID of the version of a row of the target table.
 const CTID_ATTNUM: i16 = -1;
 
@@ -47,6 +59,7 @@ impl Analyzer<'_> {
         query.targets.push(tid_target());
         let checks = self.checks(table)?;
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
+        let recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks);
         if !checks.is_empty() {
             query = with_checks(&name, &columns, query, checks, &tail);
         }
@@ -64,6 +77,8 @@ impl Analyzer<'_> {
             foreign,
             on_conflict: None,
             merge: None,
+            recheck,
+            updated: set_columns(&s.targetList, &columns),
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -189,6 +204,8 @@ impl Analyzer<'_> {
                 foreign,
                 on_conflict: None,
                 merge: None,
+                recheck: None,
+                updated: Vec::new(),
             }),
             ..Query::default()
         };

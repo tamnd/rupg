@@ -50,6 +50,11 @@ impl<'a> PlSpi<'a> {
     fn forward(&self, reader: &Reader<'_>) {
         self.outer.add_warnings(reader.take_warnings());
     }
+
+    /// The messages of the triggers of a statement of the function go to the reader of the statement that called the function.
+    fn forward_triggers(&self) {
+        self.outer.add_warnings(self.conn.trigger_warnings.take());
+    }
 }
 
 impl Spi for PlSpi<'_> {
@@ -78,6 +83,7 @@ impl Spi for PlSpi<'_> {
                 "a statement of WITH that changes data in PL/pgSQL is not supported yet",
             ));
         }
+        let mark = self.conn.event_mark();
         let rows = plan.run(params, &*reader);
         self.forward(&reader);
         let rows = rows?;
@@ -87,8 +93,9 @@ impl Spi for PlSpi<'_> {
         };
         let view = reader.view().cloned().unwrap_or_default();
         drop(reader);
-        let Applied { count, written, view, batches, .. } =
-            self.conn.apply_write(plan, params, &view, rows)?;
+        let applied = self.conn.apply_write(plan, params, &view, rows);
+        self.forward_triggers();
+        let Applied { count, written, view, batches, .. } = applied?;
         let rows = if info.returning.is_some() {
             // A subquery of `RETURNING` reads with the snapshot of the statement.
             let reader = self.conn.reader().with_view(view);
@@ -98,9 +105,10 @@ impl Spi for PlSpi<'_> {
         } else {
             Vec::new()
         };
-        if !batches.is_empty() {
-            self.conn.fire(batches)?;
-        }
+        let fired = if batches.is_empty() { Ok(()) } else { self.conn.fire(batches) };
+        let fired = fired.and_then(|()| self.conn.fire_events(mark));
+        self.forward_triggers();
+        fired?;
         Ok((rows, count))
     }
 
@@ -148,6 +156,21 @@ impl Connection {
         args: &[Value],
     ) -> rupg_common::Result<Vec<Value>> {
         rupg_plpgsql::call(&PlSpi::new(self, outer), func, types, ret, args)
+    }
+
+    /// `plpgsql_exec_trigger`: a call of a trigger function in PL/pgSQL. Its messages go to the messages of the triggers of the statement.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the function.
+    pub(super) fn pl_trigger(
+        &self,
+        call: &rupg_plpgsql::TriggerCall<'_>,
+    ) -> rupg_common::Result<Option<Vec<Value>>> {
+        let reader = self.reader();
+        let result = rupg_plpgsql::trigger(&PlSpi::new(self, &reader), call);
+        self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+        result
     }
 
     /// `ExecuteDoStmt`: runs the code of `DO`. The messages of `RAISE` go to `warnings`.

@@ -1,0 +1,337 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text, c int CHECK (c > 0));
+CREATE TABLE
+> CREATE FUNCTION show() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % % % % % % % %', tg_name, tg_when, tg_level, tg_op, tg_relid = 't'::regclass, tg_relname, tg_table_name, tg_table_schema, tg_nargs, tg_argv;
+>>   IF tg_level = 'ROW' THEN
+>>     RAISE NOTICE 'new=% old=%', NEW, OLD;
+>>   END IF;
+>>   IF tg_op = 'DELETE' THEN
+>>     RETURN OLD;
+>>   END IF;
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bs BEFORE INSERT OR UPDATE OR DELETE ON t FOR EACH STATEMENT EXECUTE FUNCTION show('x', 'y');
+CREATE TRIGGER
+> CREATE TRIGGER br BEFORE INSERT OR UPDATE OR DELETE ON t FOR EACH ROW EXECUTE FUNCTION show();
+CREATE TRIGGER
+> CREATE TRIGGER ar AFTER INSERT OR UPDATE OR DELETE ON t FOR EACH ROW EXECUTE FUNCTION show(1);
+CREATE TRIGGER
+> CREATE TRIGGER as1 AFTER INSERT OR UPDATE OR DELETE ON t FOR EACH STATEMENT EXECUTE FUNCTION show();
+CREATE TRIGGER
+> INSERT INTO t VALUES (1, 'one', 1), (2, 'two', 2);
+NOTICE 00000 bs BEFORE STATEMENT INSERT t t t public 2 [0:1]={x,y} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=(1,one,1) old=<NULL> (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=(2,two,2) old=<NULL> (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT t t t public 1 [0:0]={1} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=(1,one,1) old=<NULL> (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT t t t public 1 [0:0]={1} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=(2,two,2) old=<NULL> (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 as1 AFTER STATEMENT INSERT t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+INSERT 0 2
+> UPDATE t SET b = b || '!' WHERE a = 1;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE t t t public 2 [0:1]={x,y} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=(1,one!,1) old=(1,one,1) (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW UPDATE t t t public 1 [0:0]={1} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=(1,one!,1) old=(1,one,1) (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 as1 AFTER STATEMENT UPDATE t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+UPDATE 1
+> UPDATE t SET b = 'none' WHERE a = 99;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE t t t public 2 [0:1]={x,y} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 as1 AFTER STATEMENT UPDATE t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+UPDATE 0
+> DELETE FROM t WHERE a = 2;
+NOTICE 00000 bs BEFORE STATEMENT DELETE t t t public 2 [0:1]={x,y} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW DELETE t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=<NULL> old=(2,two,2) (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW DELETE t t t public 1 [0:0]={1} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=<NULL> old=(2,two,2) (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 as1 AFTER STATEMENT DELETE t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+DELETE 1
+> INSERT INTO t VALUES (3, 'three', 3) RETURNING *;
+NOTICE 00000 bs BEFORE STATEMENT INSERT t t t public 2 [0:1]={x,y} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=(3,three,3) old=<NULL> (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT t t t public 1 [0:0]={1} (PL/pgSQL function show() line 3 at RAISE)
+NOTICE 00000 new=(3,three,3) old=<NULL> (PL/pgSQL function show() line 5 at RAISE)
+NOTICE 00000 as1 AFTER STATEMENT INSERT t t t public 0 <NULL> (PL/pgSQL function show() line 3 at RAISE)
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:23:4:-1
+row 3,three,3
+INSERT 0 1
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:23:4:-1
+row 1,one!,1
+row 3,three,3
+SELECT 2
+> DROP TRIGGER bs ON t;
+DROP TRIGGER
+> DROP TRIGGER br ON t;
+DROP TRIGGER
+> DROP TRIGGER ar ON t;
+DROP TRIGGER
+> DROP TRIGGER as1 ON t;
+DROP TRIGGER
+> CREATE FUNCTION fix() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   IF NEW.a < 0 THEN
+>>     RETURN NULL;
+>>   END IF;
+>>   NEW.b := upper(NEW.b);
+>>   NEW.c := coalesce(NEW.c, 10);
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER fix BEFORE INSERT OR UPDATE ON t FOR EACH ROW EXECUTE FUNCTION fix();
+CREATE TRIGGER
+> INSERT INTO t VALUES (4, 'four', NULL), (-1, 'neg', 1);
+INSERT 0 1
+> INSERT INTO t VALUES (5, 'five', -5);
+ERROR 23514 new row for relation "t" violates check constraint "t_c_check"
+DETAIL Failing row contains (5, FIVE, -5).
+> UPDATE t SET c = NULL WHERE a = 4 RETURNING *;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:23:4:-1
+row 4,FOUR,10
+UPDATE 1
+> UPDATE t SET a = -a WHERE a = 3;
+UPDATE 0
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:23:4:-1
+row 1,one!,1
+row 3,three,3
+row 4,FOUR,10
+SELECT 3
+> DROP TRIGGER fix ON t;
+DROP TRIGGER
+> CREATE FUNCTION bad() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RETURN ROW(1, 'x');
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bad BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION bad();
+CREATE TRIGGER
+> INSERT INTO t VALUES (6, 'six', 6);
+ERROR 42804 returned row structure does not match the structure of the triggering table (PL/pgSQL function bad() during function exit)
+DETAIL Returned type unknown does not match expected type text in column "b" (position 2).
+> DROP TRIGGER bad ON t;
+DROP TRIGGER
+> CREATE FUNCTION noret() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE 'here';
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER noret BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION noret();
+CREATE TRIGGER
+> INSERT INTO t VALUES (6, 'six', 6);
+NOTICE 00000 here (PL/pgSQL function noret() line 3 at RAISE)
+ERROR 2F005 control reached end of trigger procedure without RETURN (PL/pgSQL function noret())
+> DROP TRIGGER noret ON t;
+DROP TRIGGER
+> CREATE TRIGGER noret AFTER INSERT ON t FOR EACH ROW EXECUTE FUNCTION noret();
+CREATE TRIGGER
+> INSERT INTO t VALUES (6, 'six', 6);
+NOTICE 00000 here (PL/pgSQL function noret() line 3 at RAISE)
+ERROR 2F005 control reached end of trigger procedure without RETURN (PL/pgSQL function noret())
+> DROP TRIGGER noret ON t;
+DROP TRIGGER
+> CREATE FUNCTION args(int) RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RETURN NULL; END $$;
+ERROR 42P13 trigger functions cannot have declared arguments (compilation of PL/pgSQL function "args" near line 1)
+HINT The arguments of the trigger can be accessed through TG_NARGS and TG_ARGV instead.
+> SELECT show();
+fields show:2279:4:-1
+ERROR 0A000 trigger functions can only be called as triggers (compilation of PL/pgSQL function "show" near line 1)
+> CREATE FUNCTION w() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % %', tg_name, NEW.a, OLD.a;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER w1 AFTER UPDATE ON t FOR EACH ROW WHEN (OLD.b IS DISTINCT FROM NEW.b) EXECUTE FUNCTION w();
+CREATE TRIGGER
+> CREATE TRIGGER w2 AFTER UPDATE OF c ON t FOR EACH ROW EXECUTE FUNCTION w();
+CREATE TRIGGER
+> CREATE TRIGGER w0 AFTER INSERT ON t FOR EACH ROW WHEN (NEW.a > 10) EXECUTE FUNCTION w();
+CREATE TRIGGER
+> UPDATE t SET b = b WHERE a = 1;
+UPDATE 1
+> UPDATE t SET b = 'z' WHERE a = 1;
+NOTICE 00000 w1 1 1 (PL/pgSQL function w() line 3 at RAISE)
+UPDATE 1
+> UPDATE t SET c = c WHERE a = 1;
+NOTICE 00000 w2 1 1 (PL/pgSQL function w() line 3 at RAISE)
+UPDATE 1
+> UPDATE t SET b = 'q', c = 7;
+NOTICE 00000 w1 3 3 (PL/pgSQL function w() line 3 at RAISE)
+NOTICE 00000 w2 3 3 (PL/pgSQL function w() line 3 at RAISE)
+NOTICE 00000 w1 4 4 (PL/pgSQL function w() line 3 at RAISE)
+NOTICE 00000 w2 4 4 (PL/pgSQL function w() line 3 at RAISE)
+NOTICE 00000 w1 1 1 (PL/pgSQL function w() line 3 at RAISE)
+NOTICE 00000 w2 1 1 (PL/pgSQL function w() line 3 at RAISE)
+UPDATE 3
+> INSERT INTO t VALUES (11, 'el', 1), (9, 'ni', 1);
+NOTICE 00000 w0 11 <NULL> (PL/pgSQL function w() line 3 at RAISE)
+INSERT 0 2
+> ALTER TABLE t DISABLE TRIGGER w1;
+ALTER TABLE
+> UPDATE t SET b = 'r' WHERE a = 1;
+UPDATE 1
+> ALTER TABLE t ENABLE TRIGGER w1;
+ALTER TABLE
+> DROP TRIGGER w0 ON t;
+DROP TRIGGER
+> DROP TRIGGER w1 ON t;
+DROP TRIGGER
+> DROP TRIGGER w2 ON t;
+DROP TRIGGER
+> CREATE TABLE log (x text);
+CREATE TABLE
+> CREATE FUNCTION logit() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   INSERT INTO log VALUES (tg_op || ' ' || coalesce(NEW.a, OLD.a) || ' ' || (SELECT count(*) FROM t));
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER logit AFTER INSERT OR DELETE ON t FOR EACH ROW EXECUTE FUNCTION logit();
+CREATE TRIGGER
+> INSERT INTO t VALUES (20, 'tw', 1), (21, 'tw', 1);
+INSERT 0 2
+> DELETE FROM t WHERE a >= 20;
+DELETE 2
+> SELECT * FROM log;
+fields x@log.1:25:-1:-1
+row INSERT 20 7
+row INSERT 21 7
+row DELETE 20 5
+row DELETE 21 5
+SELECT 4
+> DROP TRIGGER logit ON t;
+DROP TRIGGER
+> CREATE FUNCTION del() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   IF OLD.a = 1 THEN
+>>     RETURN NULL;
+>>   END IF;
+>>   RETURN OLD;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER del BEFORE DELETE ON t FOR EACH ROW EXECUTE FUNCTION del();
+CREATE TRIGGER
+> DELETE FROM t RETURNING a;
+fields a@t.1:23:4:-1
+row 3
+row 4
+row 11
+row 9
+DELETE 4
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:23:4:-1
+row 1,r,7
+SELECT 1
+> DROP TRIGGER del ON t;
+DROP TRIGGER
+> CREATE FUNCTION err() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE EXCEPTION 'no % for %', tg_op, NEW.a;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER err BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION err();
+CREATE TRIGGER
+> INSERT INTO t VALUES (30, 'th', 1);
+ERROR P0001 no INSERT for 30 (PL/pgSQL function err() line 3 at RAISE)
+> DROP TRIGGER err ON t;
+DROP TRIGGER
+> CREATE FUNCTION nn() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   NEW.b := NULL;
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> ALTER TABLE t ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> CREATE TRIGGER nn BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION nn();
+CREATE TRIGGER
+> INSERT INTO t VALUES (31, 'x', 1);
+ERROR 23502 null value in column "b" of relation "t" violates not-null constraint
+DETAIL Failing row contains (31, null, 1).
+> DROP TRIGGER nn ON t;
+DROP TRIGGER
+> CREATE FUNCTION argv() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% [%] [%] [%]', tg_nargs, tg_argv[0], tg_argv[1], tg_argv[5];
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER argv BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION argv('a b', 42);
+CREATE TRIGGER
+> INSERT INTO t VALUES (32, 'x', 1);
+NOTICE 00000 2 [a b] [42] [<NULL>] (PL/pgSQL function argv() line 3 at RAISE)
+INSERT 0 1
+> DROP TRIGGER argv ON t;
+DROP TRIGGER
+> CREATE TRIGGER st BEFORE INSERT ON t FOR EACH STATEMENT EXECUTE FUNCTION w();
+CREATE TRIGGER
+> INSERT INTO t VALUES (33, 'x', 1);
+NOTICE 00000 st <NULL> <NULL> (PL/pgSQL function w() line 3 at RAISE)
+INSERT 0 1
+> DROP TRIGGER st ON t;
+DROP TRIGGER
+> CREATE FUNCTION stnew() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE 'st %', NEW IS NULL;
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER st BEFORE INSERT ON t FOR EACH STATEMENT EXECUTE FUNCTION stnew();
+CREATE TRIGGER
+> INSERT INTO t VALUES (34, 'x', 1);
+NOTICE 00000 st t (PL/pgSQL function stnew() line 3 at RAISE)
+INSERT 0 1
+> DROP TRIGGER st ON t;
+DROP TRIGGER
+> CREATE FUNCTION retold() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RETURN OLD;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER ro BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION retold();
+CREATE TRIGGER
+> UPDATE t SET b = 'changed' WHERE a = 34 RETURNING *;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1,c@t.3:23:4:-1
+row 34,x,1
+UPDATE 1
+> DROP TRIGGER ro ON t;
+DROP TRIGGER
+> CREATE FUNCTION newrow() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   NEW := ROW(NEW.a, 'built', 99);
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER nr BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION newrow();
+CREATE TRIGGER
+> INSERT INTO t VALUES (35, 'x', 1) RETURNING *;
+ERROR 42804 returned row structure does not match the structure of the triggering table (PL/pgSQL function newrow() during function exit)
+DETAIL Returned type unknown does not match expected type text in column "b" (position 2).
+> DROP TRIGGER nr ON t;
+DROP TRIGGER
+> CREATE FUNCTION retint() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RETURN 1;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER ri BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION retint();
+CREATE TRIGGER
+> INSERT INTO t VALUES (36, 'x', 1);
+ERROR 42804 cannot return non-composite value from function returning composite type (PL/pgSQL function retint() line 3 at RETURN)
+> DROP TRIGGER ri ON t;
+DROP TRIGGER
+> SELECT count(*) FROM t;
+fields count:20:8:-1
+row 4
+SELECT 1

@@ -35,6 +35,7 @@ impl Connection {
         params: &[Value],
         view: &View,
     ) -> Result<(Plan, Writes), Error> {
+        self.start_triggers();
         let mut writes = Writes {
             after: Vec::new(),
             written: Vec::new(),
@@ -78,7 +79,7 @@ impl Connection {
         if !batches.is_empty() {
             self.fire(batches)?;
         }
-        Ok(())
+        self.fire_events(0)
     }
 
     /// Runs one statement of `WITH` that changes data in the command of the view, and gives the rows of its `RETURNING`.

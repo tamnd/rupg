@@ -287,6 +287,12 @@ impl Connection {
             ));
         }
         let catalog = self.catalog();
+        if catalog.triggers_of(target.relid).iter().any(|t| !t.internal && t.fires()) {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "COPY FROM into a table with triggers is not supported yet",
+            ));
+        }
         let rel = catalog.relation(target.relid);
         // The columns of the target are the columns that are not dropped.
         let live: Vec<&rupg_catalog::Column> =

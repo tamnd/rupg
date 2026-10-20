@@ -11,11 +11,11 @@ use rupg_exec::Plan;
 use rupg_func::Session;
 use rupg_types::{Array, ArrayDim, Record, Value, oid};
 
-use crate::Spi;
 use crate::ast::{
     Block, Cond, DatumKind, DiagItem, Expr, Function, Mode, RaiseOption, Returned, Source, Stmt,
     StmtKind, Target, ns_lookup,
 };
+use crate::{Spi, TriggerCall};
 
 /// The name, the type and the typmod of a field of a row or of a column of a result.
 pub(crate) type Field = (String, u32, i32);
@@ -350,6 +350,25 @@ pub(crate) fn run(
     ret: u32,
     args: &[Value],
 ) -> Result<Vec<Value>> {
+    enter(spi, c, ret, |x| x.function(types, args))
+}
+
+/// `plpgsql_exec_trigger`: a call of the compiled trigger function `c` for the event `call`. It gives the row that the trigger returns, or `None` for a null row and for a trigger `FOR EACH STATEMENT`.
+pub(crate) fn run_trigger(
+    spi: &dyn Spi,
+    c: &Compiled,
+    call: &TriggerCall<'_>,
+) -> Result<Option<Vec<Value>>> {
+    enter(spi, c, oid::TRIGGER, |x| x.trigger(call))
+}
+
+/// A call on the stack of the calls: the frame of the call, the state and the run `body`.
+fn enter<T>(
+    spi: &dyn Spi,
+    c: &Compiled,
+    ret: u32,
+    body: impl FnOnce(&mut Exec<'_>) -> Run<T>,
+) -> Result<T> {
     let depth = spi.cache().frames.borrow().len();
     if depth >= MAX_DEPTH {
         return Err(Error::new(SqlState::STATEMENT_TOO_COMPLEX, "stack depth limit exceeded")
@@ -368,7 +387,7 @@ pub(crate) fn run(
         retval: None,
         ret,
     };
-    let result = x.function(types, args);
+    let result = body(&mut x);
     spi.cache().frames.borrow_mut().truncate(depth);
     let sig = &c.sig;
     result.map_err(|fail| fail.framed(|| format!("PL/pgSQL function {sig}")))
@@ -409,8 +428,8 @@ impl Exec<'_> {
         stack(&self.spi.cache().frames.borrow())
     }
 
-    /// The call: the variables, the arguments, the top block and the result.
-    fn function(&mut self, types: &[u32], args: &[Value]) -> Run<Vec<Value>> {
+    /// The variables of the call before their values, `copy_plpgsql_datums`.
+    fn init_slots(&mut self) {
         let f = self.f;
         self.slots = f
             .datums
@@ -425,6 +444,12 @@ impl Exec<'_> {
                 DatumKind::Row { .. } => Slot::Row,
             })
             .collect();
+    }
+
+    /// The call: the variables, the arguments, the top block and the result.
+    fn function(&mut self, types: &[u32], args: &[Value]) -> Run<Vec<Value>> {
+        let f = self.f;
+        self.init_slots();
         for (i, &d) in f.args.iter().enumerate() {
             let value = args.get(i).cloned().unwrap_or(Value::Null);
             let ty = types.get(i).copied().unwrap_or(oid::UNKNOWN);
@@ -464,6 +489,108 @@ impl Exec<'_> {
             ))
         })?;
         Ok(vec![value])
+    }
+
+    /// The call of a trigger: the records `new` and `old` with the columns of the table, the variables of the trigger, the top block and the row of `RETURN`.
+    fn trigger(&mut self, call: &TriggerCall<'_>) -> Run<Option<Vec<Value>>> {
+        let f = self.f;
+        self.init_slots();
+        let Some(new) = f.trigger else {
+            return Err(Error::internal("a trigger function with no variable new").into());
+        };
+        let fields: Rc<[Field]> = call.columns.iter().filter(|c| c.1 != 0).cloned().collect();
+        let live = |row: &Option<Vec<Value>>| {
+            row.as_ref().map(|row| {
+                let columns = row.iter().zip(&call.columns);
+                columns.filter(|(_, c)| c.1 != 0).map(|(v, _)| v.clone()).collect()
+            })
+        };
+        for (d, row) in [(new, &call.new), (new + 1, &call.old)] {
+            let fields = Some(Rc::clone(&fields));
+            self.slots[d] = Slot::Rec { ty: oid::RECORD, fields, values: live(row) };
+        }
+        let t = call.trigger;
+        let argv = if t.args.is_empty() {
+            Value::Null
+        } else {
+            let args = t.args.iter().map(|a| Some(Value::Text(a.clone()))).collect();
+            Value::Array(Box::new(Array::vector(args)))
+        };
+        let values = [
+            Value::Text(t.name.clone()),
+            Value::Text(call.when.to_owned()),
+            Value::Text(call.level.to_owned()),
+            Value::Text(call.op.to_owned()),
+            Value::Oid(t.relation),
+            Value::Text(call.relname.to_owned()),
+            Value::Text(call.relname.to_owned()),
+            Value::Text(call.schema.to_owned()),
+            Value::Int4(i32::try_from(t.args.len()).unwrap_or(i32::MAX)),
+            argv,
+        ];
+        for (i, value) in values.into_iter().enumerate() {
+            if let Slot::Var { value: slot, .. } = &mut self.slots[new + 2 + i] {
+                *slot = value;
+            }
+        }
+        self.set_found(false);
+        let flow = self.block(&f.body)?;
+        self.set_at(None);
+        if flow != Flow::Return {
+            return Err(Fail::Framed(
+                Error::new(
+                    SqlState::S_R_E_FUNCTION_EXECUTED_NO_RETURN_STATEMENT,
+                    "control reached end of trigger procedure without RETURN",
+                )
+                .with_context(format!("PL/pgSQL function {}", self.c.sig)),
+            ));
+        }
+        let Some((Value::Record(record), ..)) = self.retval.take() else { return Ok(None) };
+        if call.level != "ROW" {
+            return Ok(None);
+        }
+        self.trigger_row(call, *record)
+            .map(Some)
+            .map_err(|e| Fail::Framed(e.with_context(self.line_text(None, "during function exit"))))
+    }
+
+    /// `convert_tuples_by_position` of the row that a trigger returns to the row of the table. A dropped column of the table gets a null.
+    fn trigger_row(&self, call: &TriggerCall<'_>, record: Record) -> Result<Vec<Value>> {
+        let mismatch =
+            "returned row structure does not match the structure of the triggering table";
+        let mut values = record.values.into_iter().zip(record.types);
+        let mut row = Vec::with_capacity(call.columns.len());
+        let (mut ins, mut outs) = (0, 0);
+        let mut short = false;
+        for (name, ty, _) in &call.columns {
+            if *ty == 0 {
+                row.push(Value::Null);
+                continue;
+            }
+            outs += 1;
+            let Some((value, from)) = values.next() else {
+                short = true;
+                row.push(Value::Null);
+                continue;
+            };
+            ins += 1;
+            if from != *ty {
+                return Err(Error::new(SqlState::DATATYPE_MISMATCH, mismatch).with_detail(format!(
+                    "Returned type {} does not match expected type {} in column \"{name}\" (position {outs}).",
+                    types::name(from),
+                    types::name(*ty)
+                )));
+            }
+            row.push(value);
+        }
+        let more = values.count();
+        if short || more > 0 {
+            return Err(Error::new(SqlState::DATATYPE_MISMATCH, mismatch).with_detail(format!(
+                "Number of returned columns ({}) does not match expected column count ({outs}).",
+                ins + more
+            )));
+        }
+        Ok(row)
     }
 
     /// The value of the call from the value of `RETURN`, cast to the result type.
@@ -960,6 +1087,12 @@ impl Exec<'_> {
             Returned::Var(d) => self.datum_value(*d),
             Returned::Expr(e) => self.eval(e)?,
         };
+        if self.f.trigger.is_some() && !matches!(value, Value::Null | Value::Record(_)) {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                "cannot return non-composite value from function returning composite type",
+            ));
+        }
         if !self.f.retset {
             self.retval = Some((value, ty, typmod));
             return Ok(());
@@ -1364,9 +1497,13 @@ impl Exec<'_> {
         Ok(rows.into_iter().next().and_then(|row| row.into_iter().next()).unwrap_or(Value::Null))
     }
 
-    /// The output text of a value that is not null.
+    /// `convert_value_to_string`: the text of the output function of the type for a value that is not null. A boolean gives `t` or `f`, and a `character` value keeps its spaces, which the cast to `text` does not do.
     fn text(&self, value: &Value, ty: u32) -> Result<String> {
-        rupg_func::to_text(ty, value, self.session())
+        match value {
+            Value::Bool(v) => Ok(if *v { "t" } else { "f" }.to_owned()),
+            Value::Text(v) if rupg_func::base_type(ty) == oid::BPCHAR => Ok(v.clone()),
+            _ => rupg_func::to_text(ty, value, self.session()),
+        }
     }
 
     /// `exec_eval_datum`: the value of a variable, with its type and typmod.

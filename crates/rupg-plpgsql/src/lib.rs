@@ -114,6 +114,59 @@ pub fn call(
     exec::run(spi, &compiled, types, ret, args)
 }
 
+/// The event of a call of a trigger function, as `TriggerData` gives it.
+#[derive(Debug)]
+pub struct TriggerCall<'a> {
+    /// The trigger.
+    pub trigger: &'a rupg_catalog::Trigger,
+    /// `BEFORE`, `AFTER` or `INSTEAD OF`.
+    pub when: &'a str,
+    /// `ROW` or `STATEMENT`.
+    pub level: &'a str,
+    /// `INSERT`, `UPDATE`, `DELETE` or `TRUNCATE`.
+    pub op: &'a str,
+    /// The name of the table.
+    pub relname: &'a str,
+    /// The name of the schema of the table.
+    pub schema: &'a str,
+    /// The columns of the table with their types and typmods, with the type 0 for a dropped column.
+    pub columns: Vec<(String, u32, i32)>,
+    /// The new row of an `INSERT` or of an `UPDATE` for a trigger `FOR EACH ROW`, with a value for each column.
+    pub new: Option<Vec<Value>>,
+    /// The old row of an `UPDATE` or of a `DELETE` for a trigger `FOR EACH ROW`.
+    pub old: Option<Vec<Value>>,
+}
+
+/// `plpgsql_exec_trigger`: a call of the trigger function of `call.trigger` for the event `call`. It gives the row that the function returns, with a value for each column of the table, or `None` for a null row and for a trigger `FOR EACH STATEMENT`.
+///
+/// # Errors
+///
+/// The errors of the compile and of the run of the function.
+pub fn trigger(spi: &dyn Spi, call: &TriggerCall<'_>) -> Result<Option<Vec<Value>>> {
+    let cache = spi.cache();
+    cache.check_catalog(spi.catalog());
+    let func = call.trigger.function;
+    let key = (func, vec![call.trigger.relation], oid::TRIGGER);
+    let found = cache.functions.borrow().get(&key).map(|(_, c)| Rc::clone(c));
+    let compiled = match found {
+        Some(compiled) => compiled,
+        None => {
+            let catalog = spi.catalog();
+            let Some(function) = catalog.function(func) else {
+                return Err(Error::internal(format!("cache lookup failed for function {func}")));
+            };
+            let mut sig = signature(function, &[], 0);
+            sig.trigger = true;
+            let tree = compile(&function.src, spi.env(), &sig, false)?;
+            let text = rupg_func::to_text(oid::REGPROCEDURE, &Value::Oid(func), spi.session())?;
+            let compiled = Rc::new(Compiled::new(tree, text, func));
+            cache.functions.borrow_mut().insert(key, (function.clone(), Rc::clone(&compiled)));
+            compiled
+        }
+    };
+    exec::run_trigger(spi, &compiled, call)
+}
+
 /// `plpgsql_inline_handler`: runs the code of `DO`.
 ///
 /// # Errors
@@ -125,21 +178,20 @@ pub fn inline(spi: &dyn Spi, src: &str) -> Result<()> {
         args: Vec::new(),
         rettype: oid::VOID,
         retset: false,
+        trigger: false,
     };
     let tree = compile(src, spi.env(), &sig, true)?;
     let compiled = Compiled::new(tree, "inline_code_block", 0);
     exec::run(spi, &compiled, &[], oid::VOID, &[]).map(drop)
 }
 
-/// `plpgsql_validator`: the compile of the body of a new function, with the check of the syntax of its queries. A polymorphic type compiles as a type of its kind, as `plpgsql_resolve_polymorphic_argtypes` does for the validator. A trigger function is not checked yet.
+/// `plpgsql_validator`: the compile of the body of a new function, with the check of the syntax of its queries. A polymorphic type compiles as a type of its kind, as `plpgsql_resolve_polymorphic_argtypes` does for the validator. A trigger function compiles as a trigger. An event trigger function is not checked yet.
 ///
 /// # Errors
 ///
 /// The syntax errors of the body.
 pub fn validate(env: &dyn Env, function: &rupg_catalog::Function) -> Result<()> {
-    if function.lang != PLPGSQL_LANGUAGE
-        || matches!(function.rettype, oid::TRIGGER | oid::EVENT_TRIGGER)
-    {
+    if function.lang != PLPGSQL_LANGUAGE || function.rettype == oid::EVENT_TRIGGER {
         return Ok(());
     }
     let dummy = |ty: u32| match ty {
@@ -158,6 +210,7 @@ pub fn validate(env: &dyn Env, function: &rupg_catalog::Function) -> Result<()> 
         arg.ty = dummy(arg.ty);
     }
     sig.rettype = dummy(function.rettype);
+    sig.trigger = function.rettype == oid::TRIGGER;
     sig.name.clone_from(&function.name);
     compile(&function.src, env, &sig, true).map(drop)
 }
@@ -232,5 +285,11 @@ fn signature(function: &rupg_catalog::Function, types: &[u32], ret: u32) -> Sign
         .collect();
     let rettype =
         if types::is_polymorphic(function.rettype) && ret != 0 { ret } else { function.rettype };
-    Signature { name: function.name.clone(), args, rettype, retset: function.retset }
+    Signature {
+        name: function.name.clone(),
+        args,
+        rettype,
+        retset: function.retset,
+        trigger: false,
+    }
 }
