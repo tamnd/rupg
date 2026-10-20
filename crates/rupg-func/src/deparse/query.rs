@@ -86,6 +86,16 @@ impl Deparser<'_> {
                 used.insert(name.clone(), 0);
             }
         }
+        self.namespace_in(query, &mut used, false)
+    }
+
+    /// [`Deparser::namespace`] with the names that are in use. For `EXPLAIN`, as `select_rtable_names_for_explain`, a join has no name, because no node of the plan reads a join, and a column of `USING` shows as its value.
+    pub(super) fn namespace_in(
+        &self,
+        query: &Query,
+        used: &mut HashMap<String, u32>,
+        explain: bool,
+    ) -> Namespace {
         let mut joins = Vec::new();
         let mut order = Vec::new();
         let tops: Vec<Slot> =
@@ -110,11 +120,13 @@ impl Deparser<'_> {
                         Some((name, _)) if rel.alias.is_none() && rel.oid != 0 => name.to_string(),
                         _ => rel.name.clone(),
                     };
-                    space.names[i] = unique_name(base, &mut used);
+                    space.names[i] = unique_name(base, used);
                 }
                 Slot::Join(k) => {
-                    if let Some(alias) = &joins[k].join.alias {
-                        join_names[k] = Some(unique_name(alias.clone(), &mut used));
+                    if let Some(alias) = &joins[k].join.alias
+                        && !explain
+                    {
+                        join_names[k] = Some(unique_name(alias.clone(), used));
                     }
                 }
             }
@@ -200,8 +212,10 @@ impl Deparser<'_> {
                 print_aliases: print_join[k],
             });
         }
-        for item in &query.from {
-            merged_columns(item, &mut space.merged);
+        if !explain {
+            for item in &query.from {
+                merged_columns(item, &mut space.merged);
+            }
         }
         space.relations.clone_from(&query.relations);
         space
@@ -511,7 +525,7 @@ impl Deparser<'_> {
     }
 
     /// `get_window_frame_options`: the mode of the frame, its bounds and its exclusion.
-    fn frame(&mut self, frame: &Frame) -> Result<()> {
+    pub(super) fn frame(&mut self, frame: &Frame) -> Result<()> {
         let options = frame.options;
         self.buf.push_str(if options & FRAMEOPTION_RANGE != 0 {
             "RANGE "
@@ -620,6 +634,10 @@ impl Deparser<'_> {
             self.buf.push_str("IGNORE NULLS ");
         }
         self.buf.push_str("OVER ");
+        if let Some(Some(name)) = w.winref.checked_sub(1).and_then(|i| self.window_names.get(i)) {
+            self.buf.push_str(&quote_identifier(name));
+            return Ok(());
+        }
         let window = w.winref.checked_sub(1).and_then(|i| self.windows.get(i)).cloned();
         let Some(window) = window else {
             return Err(Error::internal(format!(
@@ -1533,7 +1551,7 @@ fn walk_from<'q>(item: &'q FromItem, joins: &mut Vec<JoinInfo<'q>>, order: &mut 
 }
 
 /// The name, or the name with `_1`, `_2` and so on when another relation of the query or of a query outside it has the name, as `set_rtable_names` chooses it.
-fn unique_name(base: String, used: &mut HashMap<String, u32>) -> String {
+pub(super) fn unique_name(base: String, used: &mut HashMap<String, u32>) -> String {
     let Some(mut counter) = used.get(&base).copied() else {
         used.insert(base.clone(), 0);
         return base;

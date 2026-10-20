@@ -85,7 +85,7 @@ pub use agg::check_percentile;
 pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use datetime::{IntervalSum, interval_lerp};
-pub use deparse::{deparse_expression, deparse_relation_expression, view_statement};
+pub use deparse::{deparse_expression, deparse_relation_expression, explain, view_statement};
 pub use encoding::{char_to_encoding, encoding, encoding_to_char};
 pub use io::{
     base_type, input, input_soft, input_supported, is_row_type, output, output_supported, receive,

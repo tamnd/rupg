@@ -1,0 +1,882 @@
+//! The nodes above the join of `FROM`, as `grouping_planner` makes them: the aggregates, the windows, the functions that give sets, `DISTINCT`, `ORDER BY`, the locks of rows and `LIMIT`. Also the plan of a set operation and the node of a statement that writes a table.
+
+use rupg_analyze::{
+    Aggref, Expr, ExprKind, Query, SetKind, SetOp, SetTree, SortGroup, WindowFunc, Write,
+    WriteKind, expand_grouping_sets,
+};
+use rupg_pgcatalog::builtin;
+use rupg_plan::{Conflict, Cost, Item, Kind, Node, Operation, SortKey, Strategy, TARGET};
+
+use crate::from::{self, OrderKey, sort};
+use crate::{Builder, Level, cost, exprs};
+
+/// `FRAMEOPTION_DEFAULTS`: `RANGE BETWEEN UNBOUNDED PRECEDING AND CURRENT ROW`.
+const FRAME_DEFAULTS: i32 = 0x422;
+/// `FRAMEOPTION_ROWS`.
+const FRAME_ROWS: i32 = 0x4;
+/// `FRAMEOPTION_GROUPS`.
+const FRAME_GROUPS: i32 = 0x8;
+/// `FRAMEOPTION_END_UNBOUNDED_FOLLOWING`.
+const FRAME_END_UNBOUNDED_FOLLOWING: i32 = 0x100;
+/// `FRAMEOPTION_END_CURRENT_ROW`.
+const FRAME_END_CURRENT_ROW: i32 = 0x400;
+/// `FRAMEOPTION_END_OFFSET_PRECEDING`.
+const FRAME_END_OFFSET_PRECEDING: i32 = 0x1000;
+/// `FRAMEOPTION_END_OFFSET_FOLLOWING`.
+const FRAME_END_OFFSET_FOLLOWING: i32 = 0x4000;
+/// The most grouping sets that the planner expands, as the limit of `expand_grouping_sets` in `subquery_planner`.
+const MAX_SETS: usize = 4096;
+
+/// The conditions of `HAVING` that go to `WHERE`, and the conditions that stay in `HAVING`, as `subquery_planner` divides them. A condition with no aggregate goes to `WHERE`, but with no `GROUP BY` it also stays, because the group is there also when no row passes.
+pub(crate) fn having_split(query: &Query) -> (Vec<&Expr>, Vec<&Expr>) {
+    let mut parts = Vec::new();
+    if let Some(having) = &query.having {
+        exprs::and_parts(having, &mut parts);
+    }
+    let (mut to_where, mut keep) = (Vec::new(), Vec::new());
+    for part in parts {
+        let mut aggs = Vec::new();
+        exprs::aggregates(&[part], &mut aggs);
+        let stays = !aggs.is_empty()
+            || has_grouping(part)
+            || exprs::volatile(part)
+            || has_sublink(part)
+            || !query.grouping_sets.is_empty();
+        if stays {
+            keep.push(part);
+        } else if !query.group.is_empty() {
+            to_where.push(part);
+        } else {
+            to_where.push(part);
+            keep.push(part);
+        }
+    }
+    (to_where, keep)
+}
+
+/// True when the expression calls `GROUPING` of the query.
+fn has_grouping(expr: &Expr) -> bool {
+    expr.find(0, &mut |e, depth| match &e.kind {
+        ExprKind::Grouping(g) if g.levels_up == depth => Some(()),
+        _ => None,
+    })
+    .is_some()
+}
+
+/// True when the expression has a subquery.
+fn has_sublink(expr: &Expr) -> bool {
+    expr.find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(())).is_some()
+}
+
+/// A `Material` node over a node.
+pub(crate) fn materialize(node: Node<'_>) -> Node<'_> {
+    from::materialize(node)
+}
+
+/// A key of a sort for an item of `ORDER BY`, `GROUP BY` or `DISTINCT` with its operator: `ASC` for the `<` of the type, `DESC` for its `>`, or else `USING` with the operator.
+fn sort_key<'q>(expr: &'q Expr, item: &SortGroup) -> SortKey<'q> {
+    let name = builtin::operator_by_oid(item.operator).map_or("<", |o| o.name);
+    SortKey {
+        item: Item::below(expr),
+        desc: name == ">",
+        using: (name != "<" && name != ">").then(|| name.to_string()),
+        nulls_first: item.nulls_first,
+    }
+}
+
+/// The order of the rows after a sort on the keys.
+fn sorted_order(keys: &[SortKey<'_>]) -> Vec<OrderKey> {
+    keys.iter()
+        .map(|k| OrderKey {
+            exprs: vec![k.item.expr.as_ref().clone()],
+            desc: k.desc,
+            nulls_first: k.nulls_first,
+        })
+        .collect()
+}
+
+/// True when the rows are in the order of the keys, `pathkeys_contained_in`.
+fn satisfies(order: &[OrderKey], keys: &[SortKey<'_>]) -> bool {
+    keys.len() <= order.len()
+        && keys
+            .iter()
+            .zip(order)
+            .all(|(k, o)| k.using.is_none() && o.sorts(&k.item.expr, k.desc, k.nulls_first))
+}
+
+/// A sort of the node on the keys unless its rows are in that order already.
+fn sort_if<'q>(
+    node: Node<'q>,
+    keys: Vec<SortKey<'q>>,
+    order: &mut Vec<OrderKey>,
+    bound: Option<f64>,
+) -> Node<'q> {
+    if keys.is_empty() || satisfies(order, &keys) {
+        return node;
+    }
+    *order = sorted_order(&keys);
+    sort(node, keys, bound)
+}
+
+/// The cost of the transition of the aggregate calls for each row, in units of `cpu_operator_cost`, as `get_agg_clause_costs`: a call of the transition function and the cost of the arguments and of `FILTER`.
+fn agg_units(aggs: &[&Aggref]) -> f64 {
+    aggs.iter()
+        .map(|a| {
+            let args: usize = a.args.iter().map(exprs::calls).sum();
+            let filter = a.filter.as_deref().map_or(0, exprs::calls);
+            (1 + args + filter) as f64
+        })
+        .sum()
+}
+
+/// The value of a constant `bigint` of `LIMIT` or `OFFSET`, `Some(None)` for a null constant, or `None` for an expression that is not a constant.
+fn const_count(expr: &Expr) -> Option<Option<f64>> {
+    use rupg_types::Value;
+    match expr.strip_implicit().as_const()? {
+        Value::Null => Some(None),
+        Value::Int8(v) => Some(Some(*v as f64)),
+        Value::Int4(v) => Some(Some(f64::from(*v))),
+        Value::Int2(v) => Some(Some(f64::from(*v))),
+        _ => None,
+    }
+}
+
+/// The estimates of `LIMIT` and `OFFSET`, as `preprocess_limit`: 0 for no clause, -1 for an expression that is not a constant, or else the value.
+fn limit_estimates(query: &Query) -> (f64, f64) {
+    let count = query.limit.as_ref().map_or(0.0, |l| match const_count(l) {
+        Some(None) => 0.0,
+        Some(Some(v)) => v.max(1.0),
+        None => -1.0,
+    });
+    let offset = query.offset.as_ref().map_or(0.0, |o| match const_count(o) {
+        Some(None) => 0.0,
+        Some(Some(v)) => v.max(0.0),
+        None => -1.0,
+    });
+    (count, offset)
+}
+
+/// `limit_needed`: false when `LIMIT` is a null constant or absent and `OFFSET` is absent, null or 0.
+fn limit_needed(query: &Query) -> bool {
+    let limit = query.limit.as_ref().is_some_and(|l| const_count(l) != Some(None));
+    let offset = query
+        .offset
+        .as_ref()
+        .is_some_and(|o| !matches!(const_count(o), Some(None) | Some(Some(0.0))));
+    limit || offset
+}
+
+/// `adjust_limit_rows_costs`: the costs and the rows of a `Limit` over a node.
+fn limit_cost(input: Cost, count: f64, offset: f64) -> Cost {
+    let mut out = input;
+    let input_rows = input.rows;
+    if offset != 0.0 {
+        let skip = if offset > 0.0 { offset } else { cost::clamp_rows(input_rows * 0.1) };
+        let skip = skip.min(out.rows);
+        if out.rows > 0.0 {
+            out.startup += (out.total - out.startup) * skip / input_rows;
+        }
+        out.rows = (out.rows - skip).max(1.0);
+    }
+    if count != 0.0 {
+        let take = if count > 0.0 { count } else { cost::clamp_rows(input_rows * 0.1) };
+        let take = take.min(out.rows);
+        if input_rows > 0.0 {
+            out.total = out.startup + (input.total - input.startup) * take / input_rows;
+        }
+        out.rows = take.max(1.0);
+    }
+    out
+}
+
+/// The number of rows of a function that gives a set in the targets, as `expression_returns_set_rows`.
+fn set_rows(expr: &Expr) -> f64 {
+    let own = match &expr.kind {
+        ExprKind::Func(f) if f.retset => from::function_rows(expr),
+        _ => 1.0,
+    };
+    expr.children().into_iter().map(set_rows).fold(own, f64::max)
+}
+
+impl<'q> Builder<'q> {
+    /// `grouping_planner`: the nodes above the join of `FROM`.
+    pub(crate) fn upper(
+        &mut self,
+        level: &Level<'q>,
+        mut node: Node<'q>,
+        mut order: Vec<OrderKey>,
+    ) -> Node<'q> {
+        let query = level.query;
+        let scope = level.display;
+        if query.set_op.is_none() {
+            if query.grouped {
+                node = aggregate(level, node, &mut order);
+            }
+            node = windows(level, node, &mut order);
+            if query.has_target_srfs() {
+                let c = node.cost;
+                let rows = query.targets.iter().map(|t| set_rows(&t.expr)).fold(1.0, f64::max);
+                let per_row = cost::qual_cost(query.targets.iter().map(|t| &t.expr));
+                let out_rows = c.rows * rows;
+                node = Node::new(Kind::ProjectSet, scope, vec![node]);
+                node.cost = Cost {
+                    startup: c.startup,
+                    total: c.total
+                        + (cost::CPU_TUPLE + per_row) * c.rows
+                        + (out_rows - c.rows) * cost::CPU_TUPLE / 2.0,
+                    rows: out_rows,
+                    width: 0,
+                };
+            }
+            if !query.distinct.is_empty() {
+                node = distinct(level, node, &mut order);
+            }
+        }
+        let (count, offset) = limit_estimates(query);
+        if !query.sort.is_empty() {
+            let keys: Vec<SortKey<'q>> =
+                query.sort.iter().map(|s| sort_key(level.target(s.target), s)).collect();
+            let bound =
+                (count > 0.0 && offset >= 0.0 && !query.with_ties).then_some(count + offset);
+            node = sort_if(node, keys, &mut order, bound);
+        }
+        if !query.row_marks.is_empty() {
+            let c = node.cost;
+            node = Node::new(Kind::LockRows, scope, vec![node]);
+            node.cost = Cost { total: c.total + cost::CPU_TUPLE * c.rows, ..c };
+        }
+        if limit_needed(query) {
+            let c = node.cost;
+            node = Node::new(Kind::Limit, scope, vec![node]);
+            node.cost = limit_cost(c, count, offset);
+        }
+        node
+    }
+
+    /// The `ModifyTable` node of a statement that writes a table, as `create_modifytable_path`.
+    pub(crate) fn modify(
+        &mut self,
+        level: &Level<'q>,
+        write: &'q Write,
+        node: Node<'q>,
+    ) -> Node<'q> {
+        let operation = match write.kind {
+            WriteKind::Insert => Operation::Insert,
+            WriteKind::Update => Operation::Update,
+            WriteKind::Delete => Operation::Delete,
+            WriteKind::Merge => Operation::Merge,
+        };
+        let conflict = write.on_conflict.as_ref().map(|c| {
+            let mut filter = Vec::new();
+            let mut scope = None;
+            if let Some(update) = &c.update {
+                let update = crate::unwrap_checks(update);
+                scope = Some(self.scopes.len());
+                self.scopes.push(rupg_plan::Scope {
+                    query: update,
+                    parent: Some(level.scope),
+                    target: false,
+                });
+                let mut parts = Vec::new();
+                if let Some(cond) = &update.filter {
+                    exprs::and_parts(cond, &mut parts);
+                }
+                filter = parts.into_iter().map(Item::of).collect();
+            }
+            Conflict {
+                update: c.update.is_some(),
+                arbiters: c
+                    .arbiters
+                    .iter()
+                    .filter_map(|i| write.unique.get(*i))
+                    .map(|u| u.oid)
+                    .collect(),
+                filter,
+                scope,
+            }
+        });
+        let relation = if operation == Operation::Insert { TARGET } else { 0 };
+        let c = node.cost;
+        let mut out = Node::new(
+            Kind::Modify { operation, table: write.table, relation, conflict },
+            level.scope,
+            vec![node],
+        );
+        out.cost = Cost { rows: 0.0, width: 0, ..c };
+        out
+    }
+
+    /// The plan of a set operation, as `plan_set_operations`. The nodes above it show the expressions of the leftmost `SELECT`.
+    pub(crate) fn set_op(&mut self, level: &mut Level<'q>, op: &'q SetOp) -> Node<'q> {
+        let node = self.set_node(level, op);
+        if let Some(scope) = self.leftmost_scope(level, op) {
+            level.display = scope;
+            level.display_query = self.scopes[scope].query;
+        }
+        node
+    }
+
+    /// The plan of a part of the tree of a set operation.
+    fn set_tree(&mut self, level: &Level<'q>, tree: &'q SetTree) -> Node<'q> {
+        match tree {
+            SetTree::Leaf(i) => {
+                match level.query.relations.get(*i).and_then(|r| r.subquery.as_deref()) {
+                    Some(sub) => self.query(sub, Some(level.scope)),
+                    None => Node::new(
+                        Kind::Result { replaces: None, one_time: Vec::new() },
+                        level.scope,
+                        Vec::new(),
+                    ),
+                }
+            }
+            SetTree::Op(op) => self.set_node(level, op),
+        }
+    }
+
+    /// The members of a `UNION`, with the members of each `UNION` below it that PostgreSQL makes one `Append` with, as `recurse_union_children`.
+    fn union_members(
+        &mut self,
+        level: &Level<'q>,
+        top: &'q SetOp,
+        tree: &'q SetTree,
+        out: &mut Vec<Node<'q>>,
+    ) {
+        if let SetTree::Op(op) = tree
+            && op.kind == SetKind::Union
+            && op.work.is_none()
+            && (op.all == top.all || op.all)
+            && op.columns == top.columns
+        {
+            self.union_members(level, top, &op.left, out);
+            self.union_members(level, top, &op.right, out);
+            return;
+        }
+        out.push(self.set_tree(level, tree));
+    }
+
+    fn set_node(&mut self, level: &Level<'q>, op: &'q SetOp) -> Node<'q> {
+        let scope = level.scope;
+        if let Some(work) = op.work {
+            let left = self.set_tree(level, &op.left);
+            self.work.push((work, left.cost.rows));
+            let right = self.set_tree(level, &op.right);
+            self.work.pop();
+            let (l, r) = (left.cost, right.cost);
+            let rows = l.rows + 10.0 * r.rows;
+            let mut node = Node::new(Kind::RecursiveUnion, scope, vec![left, right]);
+            node.cost = Cost {
+                startup: l.startup,
+                total: l.total + 10.0 * r.total + cost::CPU_TUPLE * rows,
+                rows,
+                width: l.width.max(r.width),
+            };
+            return node;
+        }
+        let columns = op.columns.len();
+        match op.kind {
+            SetKind::Union => {
+                let mut members = Vec::new();
+                self.union_members(level, op, &op.left, &mut members);
+                self.union_members(level, op, &op.right, &mut members);
+                let startup = members.first().map_or(0.0, |m| m.cost.startup);
+                let width = members.first().map_or(0, |m| m.cost.width);
+                let rows: f64 = members.iter().map(|m| m.cost.rows).sum();
+                let total: f64 = members.iter().map(|m| m.cost.total).sum::<f64>()
+                    + 0.5 * cost::CPU_TUPLE * rows;
+                let mut append = Node::new(Kind::Append, scope, members);
+                append.cost = Cost { startup, total, rows, width };
+                if op.all {
+                    return append;
+                }
+                let c = append.cost;
+                let hashable = op.groups.iter().all(|g| g.hashable);
+                let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * columns as f64;
+                let hash_total = hash_startup + cost::CPU_TUPLE * rows;
+                let (sort_startup, sort_total) = cost::sort((c.startup, c.total), c.rows, None);
+                let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * columns as f64;
+                let keys = self.leaf_items(level, op);
+                // The keys show with the names of the leftmost `SELECT`.
+                let scope = self.leftmost_scope(level, op).unwrap_or(scope);
+                if hashable && hash_total <= unique_total {
+                    let mut node = Node::new(
+                        Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
+                        scope,
+                        vec![append],
+                    );
+                    node.cost = Cost { startup: hash_startup, total: hash_total, rows, width };
+                    node
+                } else {
+                    let sort_keys = keys
+                        .into_iter()
+                        .zip(&op.groups)
+                        .map(|(item, g)| SortKey {
+                            item,
+                            desc: false,
+                            using: None,
+                            nulls_first: g.nulls_first,
+                        })
+                        .collect();
+                    let mut sorted = Node::new(Kind::Sort(sort_keys), scope, vec![append]);
+                    sorted.cost = Cost { startup: sort_startup, total: sort_total, ..c };
+                    let mut node = Node::new(Kind::Unique, scope, vec![sorted]);
+                    node.cost = Cost { startup: sort_startup, total: unique_total, rows, width };
+                    node
+                }
+            }
+            SetKind::Intersect | SetKind::Except => {
+                let left = self.set_tree(level, &op.left);
+                let right = self.set_tree(level, &op.right);
+                let (l, r) = (left.cost, right.cost);
+                let left_groups = cost::groups(l.rows, columns);
+                let right_groups = cost::groups(r.rows, columns);
+                let rows = if op.kind == SetKind::Intersect {
+                    left_groups.min(right_groups)
+                } else {
+                    left_groups
+                };
+                let startup =
+                    l.total + r.total + cost::CPU_OPERATOR * (l.rows + r.rows) * columns as f64;
+                let mut node = Node::new(
+                    Kind::SetOp { except: op.kind == SetKind::Except, all: op.all },
+                    scope,
+                    vec![left, right],
+                );
+                node.cost = Cost {
+                    startup,
+                    total: startup + cost::CPU_TUPLE * left_groups,
+                    rows,
+                    width: l.width,
+                };
+                node
+            }
+        }
+    }
+
+    /// The scope of the leftmost `SELECT` of a set operation.
+    fn leftmost_scope(&self, level: &Level<'q>, op: &'q SetOp) -> Option<usize> {
+        let sub = level.query.relations.get(op.left.leftmost())?.subquery.as_deref()?;
+        self.scopes.iter().position(|s| std::ptr::eq(s.query, sub))
+    }
+
+    /// The columns of the leftmost `SELECT` of a set operation, as the keys of the node that finds the equal rows.
+    fn leaf_items(&self, level: &Level<'q>, op: &'q SetOp) -> Vec<Item<'q>> {
+        let leftmost = op.left.leftmost();
+        match level.query.relations.get(leftmost).and_then(|r| r.subquery.as_deref()) {
+            Some(sub) => {
+                sub.targets.iter().filter(|t| !t.junk).map(|t| Item::below(&t.expr)).collect()
+            }
+            None => Vec::new(),
+        }
+    }
+}
+
+/// The ordered aggregate call whose keys the input of the `Agg` gets sorted on, as the presorted aggregates of `make_pathkeys_for_groupagg`: the first call with `ORDER BY` or `DISTINCT`.
+fn ordered_keys<'q>(aggs: &[&'q Aggref]) -> Vec<SortKey<'q>> {
+    let Some(agg) = aggs.iter().find(|a| !a.order.is_empty() || !a.distinct.is_empty()) else {
+        return Vec::new();
+    };
+    let items = if agg.distinct.is_empty() { &agg.order } else { &agg.distinct };
+    items.iter().filter_map(|s| agg.args.get(s.target).map(|e| sort_key(e, s))).collect()
+}
+
+/// The `Agg` node of a query with groups, with a `Sort` below it when the strategy needs one, as `add_paths_to_grouping_rel`.
+fn aggregate<'q>(level: &Level<'q>, input: Node<'q>, order: &mut Vec<OrderKey>) -> Node<'q> {
+    let query = level.query;
+    let scope = level.scope;
+    let mut exprs_of: Vec<&Expr> = query.targets.iter().map(|t| &t.expr).collect();
+    let (_, having) = having_split(query);
+    exprs_of.extend(having.iter().copied());
+    let mut aggs = Vec::new();
+    exprs::aggregates(&exprs_of, &mut aggs);
+    let units = agg_units(&aggs);
+    let ordered = ordered_keys(&aggs);
+    let selectivity: f64 = having.iter().map(|h| cost::selectivity(h)).product();
+    let having_cost = cost::qual_cost(having.iter().copied());
+    let filter: Vec<Item<'q>> = having.iter().map(|h| Item::of(h)).collect();
+    let c = input.cost;
+    let n = c.rows;
+    if !query.grouping_sets.is_empty() {
+        return grouping_sets(level, input, order, units, filter, selectivity);
+    }
+    if query.group.is_empty() {
+        let mut input = input;
+        if !ordered.is_empty() {
+            input = sort_if(input, ordered, order, None);
+        }
+        let c = input.cost;
+        let startup = c.total + cost::CPU_OPERATOR * n * units;
+        let total = startup + cost::CPU_TUPLE + having_cost;
+        let mut node = Node::new(
+            Kind::Aggregate { strategy: Strategy::Plain, keys: Vec::new(), sets: Vec::new() },
+            scope,
+            vec![input],
+        );
+        node.filter = filter;
+        node.cost = Cost { startup, total, rows: cost::clamp_rows(selectivity), width: 0 };
+        order.clear();
+        return node;
+    }
+    let group = group_keys(level);
+    let nkeys = group.len() as f64;
+    let groups = cost::groups(n, group.len());
+    let keys: Vec<Item<'q>> = group.iter().map(|k| k.item.clone()).collect();
+    let rows = cost::clamp_rows(groups * selectivity);
+    let hashable = query.group.iter().all(|g| g.hashable) && ordered.is_empty();
+    // The sorted strategy: a `Sort` on the keys of the groups, and on the keys of an ordered call after them.
+    let mut sort_keys = group.clone();
+    sort_keys.extend(ordered);
+    let (sorted_input, sorted_order) = if satisfies(order, &sort_keys) {
+        (c, order.clone())
+    } else {
+        let (startup, total) = cost::sort((c.startup, c.total), n, None);
+        (Cost { startup, total, ..c }, sorted_order(&sort_keys))
+    };
+    let sorted_total = sorted_input.total
+        + cost::CPU_OPERATOR * n * (nkeys + units)
+        + cost::CPU_TUPLE * groups
+        + having_cost * groups;
+    let hash_startup = c.total + cost::CPU_OPERATOR * n * (nkeys + units);
+    let hash_total = hash_startup + cost::CPU_TUPLE * groups + having_cost * groups;
+    if hashable && hash_total * 1.01 < sorted_total {
+        let mut node = Node::new(
+            Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
+            scope,
+            vec![input],
+        );
+        node.filter = filter;
+        node.cost = Cost { startup: hash_startup, total: hash_total, rows, width: 0 };
+        order.clear();
+        return node;
+    }
+    let input = if satisfies(order, &sort_keys) { input } else { sort(input, sort_keys, None) };
+    *order = sorted_order;
+    order.truncate(group.len());
+    let mut node = Node::new(
+        Kind::Aggregate { strategy: Strategy::Sorted, keys, sets: Vec::new() },
+        scope,
+        vec![input],
+    );
+    node.filter = filter;
+    node.cost = Cost { startup: sorted_input.startup, total: sorted_total, rows, width: 0 };
+    node
+}
+
+/// The keys of `GROUP BY` as the keys of a sort, in the order of `ORDER BY` when its items are items of `GROUP BY`, as `preprocess_groupclause`.
+fn group_keys<'q>(level: &Level<'q>) -> Vec<SortKey<'q>> {
+    let query = level.query;
+    let mut items: Vec<&SortGroup> = Vec::new();
+    let in_group = |s: &SortGroup| query.group.iter().find(|g| g.target == s.target);
+    if query.sort.iter().all(|s| in_group(s).is_some_and(|g| g.equal == s.equal)) {
+        items.extend(query.sort.iter());
+    }
+    for g in &query.group {
+        if !items.iter().any(|i| i.target == g.target) {
+            items.push(g);
+        }
+    }
+    items.into_iter().map(|s| sort_key(level.target(s.target), s)).collect()
+}
+
+/// The `Agg` of a query with grouping sets: `HashAggregate` when each set can use a hash table, `MixedAggregate` when one of them is `()`, or else `GroupAggregate` on the sorted rows.
+fn grouping_sets<'q>(
+    level: &Level<'q>,
+    input: Node<'q>,
+    order: &mut Vec<OrderKey>,
+    units: f64,
+    filter: Vec<Item<'q>>,
+    selectivity: f64,
+) -> Node<'q> {
+    let query = level.query;
+    let scope = level.scope;
+    let sets = expand_grouping_sets(&query.grouping_sets, query.group_distinct, MAX_SETS)
+        .unwrap_or_default();
+    let group_of = |t: usize| query.group.iter().find(|g| g.target == t);
+    let hashable = |set: &Vec<usize>| set.iter().all(|t| group_of(*t).is_some_and(|g| g.hashable));
+    let all_hashable = sets.iter().filter(|s| !s.is_empty()).all(hashable);
+    let has_empty = sets.iter().any(Vec::is_empty);
+    let strategy = if !all_hashable {
+        Strategy::Sorted
+    } else if has_empty {
+        Strategy::Mixed
+    } else {
+        Strategy::Hashed
+    };
+    let c = input.cost;
+    let n = c.rows;
+    // The sets with the most items come first, as `preprocess_grouping_sets` sorts them.
+    let mut ordered: Vec<&Vec<usize>> = sets.iter().collect();
+    ordered.sort_by_key(|s| std::cmp::Reverse(s.len()));
+    let mut groups = 0.0;
+    let mut units_all = 0.0;
+    let mut out_sets = Vec::new();
+    let mut keys: Vec<Item<'q>> = Vec::new();
+    for set in &ordered {
+        groups += if set.is_empty() { 1.0 } else { cost::groups(n, set.len()) };
+        units_all += set.len() as f64 + units;
+        let items: Vec<Item<'q>> = set.iter().map(|t| Item::below(level.target(*t))).collect();
+        for item in &items {
+            if !keys.iter().any(|k| k.expr.same(&item.expr)) {
+                keys.push(item.clone());
+            }
+        }
+        out_sets.push((strategy != Strategy::Sorted && !set.is_empty(), items));
+    }
+    let mut input = input;
+    let mut startup = c.total;
+    if strategy == Strategy::Sorted {
+        let first = ordered.first().map(|s| s.as_slice()).unwrap_or_default();
+        let sort_keys: Vec<SortKey<'q>> = first
+            .iter()
+            .filter_map(|t| group_of(*t).map(|g| sort_key(level.target(*t), g)))
+            .collect();
+        input = sort_if(input, sort_keys, order, None);
+        startup = input.cost.startup;
+    }
+    let total = input.cost.total.max(c.total)
+        + cost::CPU_OPERATOR * n * units_all
+        + cost::CPU_TUPLE * groups;
+    if strategy != Strategy::Sorted {
+        startup += cost::CPU_OPERATOR * n * units_all;
+    }
+    order.clear();
+    let mut node =
+        Node::new(Kind::Aggregate { strategy, keys, sets: out_sets }, scope, vec![input]);
+    node.filter = filter;
+    node.cost = Cost {
+        startup,
+        total: total.max(startup),
+        rows: cost::clamp_rows(groups * selectivity),
+        width: 0,
+    };
+    node
+}
+
+/// The window calls of the query for each window, by `winref`.
+fn window_calls(query: &Query) -> Vec<Vec<&WindowFunc>> {
+    let mut out = vec![Vec::new(); query.windows.len()];
+    for target in &query.targets {
+        let mut calls = Vec::new();
+        exprs::window_calls(&target.expr, &mut calls);
+        for call in calls {
+            if let Some(list) = out.get_mut(call.winref.wrapping_sub(1)) {
+                list.push(call);
+            }
+        }
+    }
+    out
+}
+
+/// The keys of the sort of a window: the items of `PARTITION BY`, then the items of `ORDER BY`.
+fn window_keys<'q>(level: &Level<'q>, window: usize) -> Vec<SortKey<'q>> {
+    let clause = &level.query.windows[window];
+    let mut keys: Vec<SortKey<'q>> = Vec::new();
+    for item in clause.partition.iter().chain(&clause.order) {
+        let key = sort_key(level.target(item.target), item);
+        if !keys.iter().any(|k| k.item.expr.same(&key.item.expr)) {
+            keys.push(key);
+        }
+    }
+    keys
+}
+
+/// `get_windowclause_startup_tuples`: the rows that a window reads before its first row.
+fn startup_tuples(level: &Level<'_>, window: usize, rows: f64) -> f64 {
+    let clause = &level.query.windows[window];
+    let partitions =
+        if clause.partition.is_empty() { 1.0 } else { cost::groups(rows, clause.partition.len()) };
+    let partition_rows = (rows / partitions).max(1.0);
+    let options = clause.frame.options;
+    if options & FRAME_END_UNBOUNDED_FOLLOWING != 0 {
+        return cost::clamp_rows(partition_rows);
+    }
+    let end_offset = || {
+        clause
+            .frame
+            .end
+            .as_ref()
+            .and_then(const_count)
+            .flatten()
+            .map_or(10.0, |v| if options & FRAME_END_OFFSET_PRECEDING != 0 { -v } else { v })
+    };
+    let peers = || {
+        if clause.order.is_empty() {
+            partition_rows
+        } else {
+            partition_rows / cost::groups(partition_rows, clause.order.len())
+        }
+    };
+    let out = if options & FRAME_ROWS != 0 {
+        if options & FRAME_END_CURRENT_ROW != 0 { 1.0 } else { 1.0 + end_offset() }
+    } else if options & FRAME_GROUPS != 0 {
+        if options & FRAME_END_CURRENT_ROW != 0 { peers() } else { peers() * (1.0 + end_offset()) }
+    } else if options & FRAME_END_CURRENT_ROW != 0 {
+        peers()
+    } else if options & (FRAME_END_OFFSET_FOLLOWING | FRAME_END_OFFSET_PRECEDING) != 0 {
+        partition_rows / 3.0
+    } else {
+        partition_rows
+    };
+    cost::clamp_rows(out.min(partition_rows))
+}
+
+/// `tleSortGroupRef`: the number of each target that an item of `ORDER BY`, `GROUP BY`, `DISTINCT` or a window names, in the order that the analyzer gives the numbers.
+fn sort_refs(query: &Query) -> Vec<u32> {
+    let mut refs = vec![0; query.targets.len()];
+    let mut next = 0;
+    let windows = query.windows.iter().flat_map(|w| w.partition.iter().chain(&w.order));
+    for item in query.sort.iter().chain(&query.group).chain(&query.distinct).chain(windows) {
+        if let Some(slot) = refs.get_mut(item.target)
+            && *slot == 0
+        {
+            next += 1;
+            *slot = next;
+        }
+    }
+    refs
+}
+
+/// `select_active_windows`: the windows that a call uses, in the order of their `WindowAgg` nodes from the bottom up. `common_prefix_cmp` puts the items with the higher numbers first, so that the windows that share a prefix of their keys come next to each other, and a window with more keys comes before a window with a prefix of its keys.
+fn active_windows(level: &Level<'_>, calls: &[Vec<&WindowFunc>]) -> Vec<usize> {
+    let query = level.query;
+    let refs = sort_refs(query);
+    let unique = |w: usize| {
+        let clause = &query.windows[w];
+        let mut out: Vec<&SortGroup> = Vec::new();
+        for item in clause.partition.iter().chain(&clause.order) {
+            if !out.contains(&item) {
+                out.push(item);
+            }
+        }
+        out
+    };
+    let mut active: Vec<(usize, Vec<&SortGroup>)> =
+        (0..calls.len()).filter(|w| !calls[*w].is_empty()).map(|w| (w, unique(w))).collect();
+    active.sort_by(|(_, a), (_, b)| {
+        for (x, y) in a.iter().zip(b) {
+            let rx = refs.get(x.target).copied().unwrap_or(0);
+            let ry = refs.get(y.target).copied().unwrap_or(0);
+            let found = ry
+                .cmp(&rx)
+                .then(y.operator.cmp(&x.operator))
+                .then(y.nulls_first.cmp(&x.nulls_first));
+            if found.is_ne() {
+                return found;
+            }
+        }
+        b.len().cmp(&a.len())
+    });
+    active.into_iter().map(|(w, _)| w).collect()
+}
+
+/// The `WindowAgg` nodes of the query, each with a `Sort` below it when the rows are not in the order of its window, in the order of `select_active_windows`. A window with no name takes the name `w1`, `w2` and so on in that order, as `name_active_windows`, with a number that no named window of the query uses.
+fn windows<'q>(level: &Level<'q>, mut node: Node<'q>, order: &mut Vec<OrderKey>) -> Node<'q> {
+    let calls = window_calls(level.query);
+    let active = active_windows(level, &calls);
+    let mut number = 0;
+    for window in active {
+        let clause = &level.query.windows[window];
+        node = sort_if(node, window_keys(level, window), order, None);
+        let c = node.cost;
+        let mut total = c.total;
+        for call in &calls[window] {
+            let args: usize = call.args.iter().map(exprs::calls).sum();
+            let filter = call.filter.as_deref().map_or(0, exprs::calls);
+            total += cost::CPU_OPERATOR * (1 + args + filter) as f64 * c.rows;
+        }
+        let nkeys = (clause.partition.len() + clause.order.len()) as f64;
+        total += cost::CPU_OPERATOR * nkeys * c.rows + cost::CPU_TUPLE * c.rows;
+        let mut startup = c.startup;
+        let tuples = startup_tuples(level, window, c.rows);
+        if tuples > 1.0 && c.rows > 0.0 {
+            startup += (total - startup) * tuples / c.rows;
+        }
+        let rows_frame = clause.frame.options == FRAME_DEFAULTS
+            && calls[window].iter().all(|f| {
+                builtin::proc_by_oid(f.oid).is_some_and(|p| {
+                    matches!(
+                        p.name,
+                        "row_number"
+                            | "rank"
+                            | "dense_rank"
+                            | "percent_rank"
+                            | "ntile"
+                            | "cume_dist"
+                    )
+                })
+            });
+        let name = clause.name.clone().unwrap_or_else(|| {
+            loop {
+                number += 1;
+                let name = format!("w{number}");
+                if !level.query.windows.iter().any(|w| w.name.as_deref() == Some(name.as_str())) {
+                    break name;
+                }
+            }
+        });
+        node = Node::new(Kind::WindowAgg { name, window, rows_frame }, level.scope, vec![node]);
+        node.cost = Cost { startup, total, ..c };
+    }
+    node
+}
+
+/// The node of `DISTINCT`: a `HashAggregate` on the targets, or a `Unique` on the rows sorted on them, whichever costs less, as `create_distinct_paths`. `DISTINCT ON` always sorts.
+fn distinct<'q>(level: &Level<'q>, input: Node<'q>, order: &mut Vec<OrderKey>) -> Node<'q> {
+    let query = level.query;
+    let scope = level.scope;
+    let c = input.cost;
+    let ncols = query.distinct.len();
+    let groups = cost::groups(c.rows, ncols);
+    // The sort puts the items of `ORDER BY` first, so that the sort of `ORDER BY` after it has no work.
+    let mut keys: Vec<SortKey<'q>> = Vec::new();
+    let distinct_target = |t: usize| query.distinct.iter().any(|d| d.target == t);
+    if query.sort.iter().all(|s| distinct_target(s.target)) {
+        keys.extend(query.sort.iter().map(|s| sort_key(level.target(s.target), s)));
+    }
+    for d in &query.distinct {
+        let key = sort_key(level.target(d.target), d);
+        if !keys.iter().any(|k| k.item.expr.same(&key.item.expr)) {
+            keys.push(key);
+        }
+    }
+    // `DISTINCT ON` sorts on all the items of `ORDER BY` when it has more items, as `create_final_distinct_paths`.
+    if query.distinct_on && query.sort.len() > keys.len() {
+        keys.clear();
+        for s in &query.sort {
+            let key = sort_key(level.target(s.target), s);
+            if !keys.iter().any(|k| k.item.expr.same(&key.item.expr)) {
+                keys.push(key);
+            }
+        }
+    }
+    let presorted = satisfies(order, &keys);
+    let (sort_startup, sort_total) = if presorted {
+        (c.startup, c.total)
+    } else {
+        cost::sort((c.startup, c.total), c.rows, None)
+    };
+    let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * ncols as f64;
+    let hashable = !query.distinct_on && query.distinct.iter().all(|d| d.hashable);
+    let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * ncols as f64;
+    let hash_total = hash_startup + cost::CPU_TUPLE * groups;
+    // The hash table loses its order, so the sort of `ORDER BY` counts for it.
+    let hash_after = if query.sort.is_empty() {
+        hash_total
+    } else {
+        cost::sort((hash_startup, hash_total), groups, None).1
+    };
+    if hashable && hash_after < unique_total {
+        let items = query.distinct.iter().map(|d| Item::below(level.target(d.target))).collect();
+        let mut node = Node::new(
+            Kind::Aggregate { strategy: Strategy::Hashed, keys: items, sets: Vec::new() },
+            scope,
+            vec![input],
+        );
+        node.cost = Cost { startup: hash_startup, total: hash_total, rows: groups, width: 0 };
+        order.clear();
+        return node;
+    }
+    let input = sort_if(input, keys, order, None);
+    let mut node = Node::new(Kind::Unique, scope, vec![input]);
+    node.cost = Cost { startup: sort_startup, total: unique_total, rows: groups, ..c };
+    node
+}

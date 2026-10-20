@@ -2,9 +2,11 @@
 //!
 //! The functions read the stored form that `rupg_analyze::node` writes, or the query that the analyzer makes from the text of a view, and show it as PostgreSQL shows its node trees. The rules for parentheses, casts and constants follow `get_rule_expr`. The functions show the objects of the user and the system views. An index or a constraint of a system catalog gives an error that says that the engine cannot show it yet.
 
+mod explain;
 mod function;
 mod query;
 
+pub use explain::explain;
 pub use query::view_statement;
 
 use std::ptr;
@@ -44,7 +46,7 @@ const NULLS_FIRST: i16 = 2;
 const FIRST_USER_OID: u32 = 16384;
 
 /// The names of the relations of one query and of their columns, as `deparse_namespace` with its `deparse_columns`.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct Namespace {
     /// The name of each relation of the query, by its index, as `rtable_names`. The name is unique in the query and in the queries outside it.
     names: Vec<String>,
@@ -63,7 +65,7 @@ struct Namespace {
 }
 
 /// The names of a join and of its columns, as `deparse_columns` for an entry of a join.
-#[derive(Debug, Default)]
+#[derive(Clone, Debug, Default)]
 struct JoinNames {
     /// The name of the join with an alias, which no other relation of the query has, or `None` for a join with no alias.
     name: Option<String>,
@@ -102,7 +104,27 @@ struct Deparser<'a> {
     windows: Vec<WindowClause>,
     /// The expressions of the targets of the query, which the items of the windows name.
     window_targets: Vec<Expr>,
+    /// For `EXPLAIN`, the subplans of the subqueries in the expressions. A subquery shows the name of its subplan, as `get_rule_expr` shows a `SubPlan`.
+    subplans: Vec<SubName>,
+    /// For `EXPLAIN`, the subplan whose columns the test of `ANY` or `ALL` reads now, as `(SubPlan any_1)`.
+    subplan: Option<String>,
+    /// For `EXPLAIN`, the name of each window of the query by its number, which a call of a window function shows after `OVER`.
+    window_names: Vec<Option<String>>,
+    /// For `EXPLAIN`, a column of a query outside the query always shows the name of its relation, as `get_parameter` shows the value of a parameter.
+    outer_prefix: bool,
     buf: String,
+}
+
+/// The name of the subplan of a subquery in an expression, for `EXPLAIN`.
+#[derive(Clone, Debug)]
+struct SubName {
+    /// The subquery. The deparse only compares the address.
+    link: *const SubLink,
+    name: String,
+    /// The subplan is an `InitPlan`.
+    init: bool,
+    /// The subplan keeps its rows in a hash table.
+    hashed: bool,
 }
 
 impl<'a> Deparser<'a> {
@@ -135,6 +157,10 @@ impl<'a> Deparser<'a> {
             outputs: Vec::new(),
             windows: Vec::new(),
             window_targets: Vec::new(),
+            subplans: Vec::new(),
+            subplan: None,
+            window_names: Vec::new(),
+            outer_prefix: false,
             buf: String::new(),
         }
     }
@@ -169,7 +195,7 @@ impl<'a> Deparser<'a> {
         };
         let attname =
             attname.ok_or_else(|| Error::internal(format!("invalid attnum {}", var.attnum)))?;
-        let mut prefix = self.prefix;
+        let mut prefix = self.prefix || (self.outer_prefix && var.levels_up > 0);
         if in_order_by && !self.in_group_by && !prefix {
             prefix = self.outputs.iter().any(|(name, v)| *name == attname && *v != Some(*var));
         }
@@ -446,9 +472,18 @@ impl<'a> Deparser<'a> {
                 self.buf.push(')');
             }
             ExprKind::Window(w) => self.window_func(w)?,
-            ExprKind::SubLink(sub) => self.sublink(sub)?,
-            ExprKind::SubColumn(_) => {
-                return Err(Error::internal("a column of a subquery outside its test"));
+            ExprKind::SubLink(sub) => {
+                let link = ptr::from_ref(sub.as_ref());
+                match self.subplans.iter().find(|s| s.link == link).cloned() {
+                    Some(name) => self.subplan_link(sub, &name)?,
+                    None => self.sublink(sub)?,
+                }
+            }
+            ExprKind::SubColumn(column) => {
+                let Some(subplan) = &self.subplan else {
+                    return Err(Error::internal("a column of a subquery outside its test"));
+                };
+                self.buf.push_str(&format!("{subplan}.col{}", column + 1));
             }
             ExprKind::JsonValue(v) => {
                 self.expr(&v.raw, false)?;
