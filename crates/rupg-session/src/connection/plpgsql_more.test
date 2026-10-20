@@ -1,0 +1,539 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE emp (id int PRIMARY KEY, name text NOT NULL, salary numeric(10,2), dept int);
+CREATE TABLE
+> INSERT INTO emp VALUES (1, 'ann', 1000, 10), (2, 'bob', 1500.5, 10), (3, 'cat', 2000, 20), (4, 'dan', NULL, 30);
+INSERT 0 4
+> CREATE FUNCTION two_outs(x int, OUT doubled int, OUT label text) AS $$
+>> BEGIN
+>>   doubled := x * 2;
+>>   label := 'n=' || x;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT two_outs(4);
+fields two_outs:2249:-1:-1
+row (8,n=4)
+SELECT 1
+> SELECT * FROM two_outs(5);
+fields doubled:23:4:-1,label:25:-1:-1
+row 10,n=5
+SELECT 1
+> SELECT (two_outs(6)).label;
+fields label:25:-1:-1
+row n=6
+SELECT 1
+> CREATE FUNCTION emp_of(i int) RETURNS emp AS $$
+>> DECLARE
+>>   r emp%ROWTYPE;
+>> BEGIN
+>>   SELECT * INTO r FROM emp WHERE id = i;
+>>   RETURN r;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT emp_of(2);
+fields emp_of:16386:-1:-1
+row (2,bob,1500.50,10)
+SELECT 1
+> SELECT * FROM emp_of(3);
+fields id:23:4:-1,name:25:-1:-1,salary:1700:-1:655366,dept:23:4:-1
+row 3,cat,2000.00,20
+SELECT 1
+> SELECT * FROM emp_of(99);
+fields id:23:4:-1,name:25:-1:-1,salary:1700:-1:655366,dept:23:4:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> CREATE FUNCTION name_of(i int) RETURNS emp.name%TYPE AS $$
+>> DECLARE
+>>   n emp.name%TYPE;
+>> BEGIN
+>>   SELECT name INTO n FROM emp WHERE id = i;
+>>   RETURN upper(n);
+>> END
+>> $$ LANGUAGE plpgsql;
+NOTICE 00000 type reference emp.name%TYPE converted to text
+CREATE FUNCTION
+> SELECT name_of(1), name_of(42);
+fields name_of:25:-1:-1,name_of:25:-1:-1
+row ANN,NULL
+SELECT 1
+> CREATE FUNCTION rich(min numeric) RETURNS SETOF emp AS $$
+>> DECLARE
+>>   r record;
+>> BEGIN
+>>   FOR r IN SELECT * FROM emp WHERE salary >= min ORDER BY id LOOP
+>>     RETURN NEXT r;
+>>   END LOOP;
+>>   RETURN;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT * FROM rich(1500);
+fields id:23:4:-1,name:25:-1:-1,salary:1700:-1:655366,dept:23:4:-1
+row 2,bob,1500.50,10
+row 3,cat,2000.00,20
+SELECT 2
+> SELECT name FROM rich(0) WHERE dept = 10;
+fields name:25:-1:-1
+row ann
+row bob
+SELECT 2
+> CREATE FUNCTION by_dept(d int) RETURNS TABLE (who text, pay numeric) AS $$
+>> BEGIN
+>>   RETURN QUERY SELECT name, salary FROM emp WHERE dept = d ORDER BY id;
+>>   RETURN QUERY EXECUTE 'SELECT name || $1, salary FROM emp WHERE id = $2' USING '!', 4;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT * FROM by_dept(10);
+fields who:25:-1:-1,pay:1700:-1:-1
+row ann,1000.00
+row bob,1500.50
+row dan!,NULL
+SELECT 3
+> CREATE FUNCTION first_of(a anyarray) RETURNS anyelement AS $$
+>> BEGIN
+>>   RETURN a[array_lower(a, 1)];
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT first_of(ARRAY[3, 4, 5]), first_of(ARRAY['x', 'y']);
+fields first_of:23:4:-1,first_of:25:-1:-1
+row 3,x
+SELECT 1
+> CREATE FUNCTION pair(a anyelement, b anyelement) RETURNS anyarray AS $$
+>> DECLARE
+>>   r a%TYPE;
+>> BEGIN
+>>   r := b;
+>>   RETURN ARRAY[a, r];
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT pair(1, 2), pair('p'::text, 'q');
+fields pair:1007:-1:-1,pair:1009:-1:-1
+row {1,2},{p,q}
+SELECT 1
+> CREATE FUNCTION fib(n int) RETURNS int AS $$
+>> BEGIN
+>>   IF n < 2 THEN
+>>     RETURN n;
+>>   END IF;
+>>   RETURN fib(n - 1) + fib(n - 2);
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT fib(15);
+fields fib:23:4:-1
+row 610
+SELECT 1
+> CREATE FUNCTION labels() RETURNS text AS $$
+>> DECLARE
+>>   s text := '';
+>> BEGIN
+>>   <<outer>>
+>>   FOR i IN 1..3 LOOP
+>>     <<inner>>
+>>     FOR j IN 1..3 LOOP
+>>       CONTINUE outer WHEN j > i;
+>>       EXIT outer WHEN i = 3;
+>>       s := s || i || j || ' ';
+>>     END LOOP inner;
+>>   END LOOP outer;
+>>   RETURN s;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT labels();
+fields labels:25:-1:-1
+row 11 21 22 
+SELECT 1
+> CREATE FUNCTION steps() RETURNS text AS $$
+>> DECLARE
+>>   s text := '';
+>>   n int := 0;
+>> BEGIN
+>>   FOR i IN REVERSE 10..1 BY 3 LOOP
+>>     s := s || i || ',';
+>>   END LOOP;
+>>   WHILE n < 3 LOOP
+>>     n := n + 1;
+>>     s := s || 'w' || n;
+>>   END LOOP;
+>>   LOOP
+>>     n := n - 1;
+>>     EXIT WHEN n = 0;
+>>   END LOOP;
+>>   FOREACH n IN ARRAY ARRAY[7, 8, 9] LOOP
+>>     s := s || '[' || n || ']';
+>>   END LOOP;
+>>   RETURN s;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT steps();
+fields steps:25:-1:-1
+row 10,7,4,1,w1w2w3[7][8][9]
+SELECT 1
+> CREATE FUNCTION errs(k int) RETURNS text AS $$
+>> DECLARE
+>>   msg text;
+>>   st text;
+>>   det text;
+>>   hnt text;
+>> BEGIN
+>>   BEGIN
+>>     IF k = 1 THEN
+>>       PERFORM 1 / 0;
+>>     ELSIF k = 2 THEN
+>>       RAISE EXCEPTION USING ERRCODE = 'unique_violation', MESSAGE = 'dup', DETAIL = 'the detail', HINT = 'the hint';
+>>     ELSIF k = 3 THEN
+>>       RAISE invalid_parameter_value;
+>>     ELSIF k = 4 THEN
+>>       RAISE SQLSTATE '22012' USING MESSAGE = 'custom zero';
+>>     ELSE
+>>       INSERT INTO emp VALUES (1, 'again', 0, 0);
+>>     END IF;
+>>   EXCEPTION
+>>     WHEN division_by_zero THEN
+>>       GET STACKED DIAGNOSTICS msg = MESSAGE_TEXT, st = RETURNED_SQLSTATE;
+>>       RETURN 'div: ' || st || ' ' || msg;
+>>     WHEN unique_violation THEN
+>>       GET STACKED DIAGNOSTICS det = PG_EXCEPTION_DETAIL, hnt = PG_EXCEPTION_HINT;
+>>       RETURN 'uniq: ' || SQLSTATE || ' ' || SQLERRM || ' / ' || det || ' / ' || hnt;
+>>     WHEN data_exception THEN
+>>       RETURN 'data: ' || SQLSTATE || ' ' || SQLERRM;
+>>   END;
+>>   RETURN 'none';
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT errs(1), errs(2), errs(3), errs(4), errs(5);
+fields errs:25:-1:-1,errs:25:-1:-1,errs:25:-1:-1,errs:25:-1:-1,errs:25:-1:-1
+row div: 22012 division by zero,uniq: 23505 dup / the detail / the hint,data: 22023 invalid_parameter_value,div: 22012 custom zero,uniq: 23505 duplicate key value violates unique constraint "emp_pkey" / Key (id)=(1) already exists. / 
+SELECT 1
+> CREATE FUNCTION nested_handler() RETURNS text AS $$
+>> BEGIN
+>>   BEGIN
+>>     RAISE EXCEPTION 'inner';
+>>   EXCEPTION WHEN OTHERS THEN
+>>     BEGIN
+>>       RAISE EXCEPTION 'second: %', SQLERRM;
+>>     EXCEPTION WHEN OTHERS THEN
+>>       RETURN SQLERRM;
+>>     END;
+>>   END;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT nested_handler();
+fields nested_handler:25:-1:-1
+row second: inner
+SELECT 1
+> CREATE FUNCTION reraise() RETURNS int AS $$
+>> BEGIN
+>>   BEGIN
+>>     PERFORM 1 / 0;
+>>   EXCEPTION WHEN OTHERS THEN
+>>     RAISE NOTICE 'caught %', SQLSTATE;
+>>     RAISE;
+>>   END;
+>>   RETURN 1;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT reraise();
+fields reraise:23:4:-1
+NOTICE 00000 caught 22012 (PL/pgSQL function reraise() line 6 at RAISE)
+ERROR 22012 division by zero (SQL statement "SELECT 1 / 0"
+PL/pgSQL function reraise() line 4 at PERFORM)
+> CREATE FUNCTION writes(n int) RETURNS int AS $$
+>> DECLARE
+>>   c int;
+>> BEGIN
+>>   INSERT INTO emp VALUES (n, 'new' || n, 10, 40);
+>>   UPDATE emp SET salary = salary + 1 WHERE id = n;
+>>   SELECT count(*) INTO c FROM emp;
+>>   BEGIN
+>>     DELETE FROM emp WHERE id = n;
+>>     RAISE EXCEPTION 'undo';
+>>   EXCEPTION WHEN raise_exception THEN
+>>     NULL;
+>>   END;
+>>   RETURN c;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT writes(10);
+fields writes:23:4:-1
+row 5
+SELECT 1
+> SELECT id, name, salary FROM emp WHERE id = 10;
+fields id@emp.1:23:4:-1,name@emp.2:25:-1:-1,salary@emp.3:1700:-1:655366
+row 10,new10,11.00
+SELECT 1
+> CREATE FUNCTION ret_into(n int) RETURNS text AS $$
+>> DECLARE
+>>   r record;
+>>   k int;
+>> BEGIN
+>>   UPDATE emp SET salary = 5 WHERE id = n RETURNING id, name INTO r;
+>>   GET DIAGNOSTICS k = ROW_COUNT;
+>>   RETURN r.name || ' ' || k || ' ' || FOUND;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT ret_into(10);
+fields ret_into:25:-1:-1
+row new10 1 true
+SELECT 1
+> SELECT ret_into(77);
+fields ret_into:25:-1:-1
+row NULL
+SELECT 1
+> CREATE FUNCTION bad_assign() RETURNS int AS $$
+>> DECLARE
+>>   n int NOT NULL := 1;
+>> BEGIN
+>>   n := NULL;
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT bad_assign();
+fields bad_assign:23:4:-1
+ERROR 22004 null value cannot be assigned to variable "n" declared NOT NULL (PL/pgSQL function bad_assign() line 5 at assignment)
+> CREATE FUNCTION bad_cast() RETURNS int AS $$
+>> DECLARE
+>>   n int;
+>> BEGIN
+>>   n := 'abc';
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT bad_cast();
+fields bad_cast:23:4:-1
+ERROR 22P02 invalid input syntax for type integer: "abc" (PL/pgSQL function bad_cast() line 5 at assignment)
+QUERY n := 'abc' at 6
+> CREATE FUNCTION text_cast() RETURNS numeric AS $$
+>> DECLARE
+>>   n numeric(5,1);
+>>   t text := '12.345';
+>> BEGIN
+>>   n := t;
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT text_cast();
+fields text_cast:1700:-1:-1
+row 12.3
+SELECT 1
+> CREATE FUNCTION no_rec() RETURNS int AS $$
+>> DECLARE
+>>   r record;
+>> BEGIN
+>>   RETURN r.x;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT no_rec();
+fields no_rec:23:4:-1
+ERROR 55000 record "r" is not assigned yet (PL/pgSQL expression "r.x"
+PL/pgSQL function no_rec() line 5 at RETURN)
+DETAIL The tuple structure of a not-yet-assigned record is indeterminate.
+> CREATE FUNCTION no_field() RETURNS int AS $$
+>> DECLARE
+>>   r record;
+>> BEGIN
+>>   SELECT 1 AS a INTO r;
+>>   RETURN r.b;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT no_field();
+fields no_field:23:4:-1
+ERROR 42703 record "r" has no field "b" (PL/pgSQL expression "r.b"
+PL/pgSQL function no_field() line 6 at RETURN)
+> CREATE FUNCTION arr_set() RETURNS int[] AS $$
+>> DECLARE
+>>   a int[] := '{}';
+>> BEGIN
+>>   a[1] := 10;
+>>   a[3] := 30;
+>>   a[0] := 0;
+>>   RETURN a;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT arr_set();
+fields arr_set:1007:-1:-1
+row [0:3]={0,10,NULL,30}
+SELECT 1
+> CREATE FUNCTION rec_set() RETURNS text AS $$
+>> DECLARE
+>>   r emp;
+>> BEGIN
+>>   r.id := 7;
+>>   r.name := 'seven';
+>>   RETURN r::text;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT rec_set();
+fields rec_set:25:-1:-1
+row (7,seven,,)
+SELECT 1
+> CREATE FUNCTION searched(n int) RETURNS text AS $$
+>> BEGIN
+>>   CASE
+>>     WHEN n < 10 THEN RETURN 'small';
+>>     WHEN n < 100 THEN RETURN 'medium';
+>>     ELSE RETURN 'large';
+>>   END CASE;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT searched(5), searched(50), searched(500);
+fields searched:25:-1:-1,searched:25:-1:-1,searched:25:-1:-1
+row small,medium,large
+SELECT 1
+> CREATE FUNCTION in_where(n int) RETURNS boolean AS $$
+>> BEGIN
+>>   RETURN n % 2 = 0;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT id FROM emp WHERE in_where(id) ORDER BY id;
+fields id@emp.1:23:4:-1
+row 2
+row 4
+row 10
+SELECT 3
+> CREATE FUNCTION syntax_err() RETURNS int AS $$
+>> BEGIN
+>>   RETURN 1
+>> END
+>> $$ LANGUAGE plpgsql;
+ERROR 42601 syntax error at end of input at 69
+> CREATE FUNCTION bad_var() RETURNS int AS $$
+>> BEGIN
+>>   RETURN nosuch + 1;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT bad_var();
+fields bad_var:23:4:-1
+ERROR 42703 column "nosuch" does not exist (PL/pgSQL function bad_var() line 3 at RETURN)
+QUERY nosuch + 1 at 1
+> CREATE FUNCTION const_err() RETURNS int AS $$
+>> DECLARE
+>>   c CONSTANT int := 1;
+>> BEGIN
+>>   c := 2;
+>>   RETURN c;
+>> END
+>> $$ LANGUAGE plpgsql;
+ERROR 22005 variable "c" is declared CONSTANT at 86
+> CREATE FUNCTION exec_dyn(tbl text) RETURNS bigint AS $$
+>> DECLARE
+>>   n bigint;
+>> BEGIN
+>>   EXECUTE format('SELECT count(*) FROM %I', tbl) INTO n;
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT exec_dyn('emp');
+fields exec_dyn:20:8:-1
+row 5
+SELECT 1
+> SELECT exec_dyn('nosuch');
+fields exec_dyn:20:8:-1
+ERROR 42P01 relation "nosuch" does not exist (PL/pgSQL function exec_dyn(text) line 5 at EXECUTE)
+QUERY SELECT count(*) FROM nosuch at 22
+> CREATE FUNCTION too_many() RETURNS int AS $$
+>> DECLARE
+>>   n int;
+>> BEGIN
+>>   SELECT id INTO STRICT n FROM emp;
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT too_many();
+fields too_many:23:4:-1
+ERROR P0003 query returned more than one row (PL/pgSQL function too_many() line 5 at SQL statement)
+HINT Make sure the query returns a single row, or use LIMIT 1.
+> CREATE FUNCTION discard() RETURNS int AS $$
+>> BEGIN
+>>   SELECT 1;
+>>   RETURN 1;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT discard();
+fields discard:23:4:-1
+ERROR 42601 query has no destination for result data (PL/pgSQL function discard() line 3 at SQL statement)
+HINT If you want to discard the results of a SELECT, use PERFORM instead.
+> CREATE FUNCTION fmt() RETURNS void AS $$
+>> BEGIN
+>>   RAISE NOTICE 'a % b % c %%', 1, NULL;
+>>   RAISE NOTICE '%', ARRAY[1, 2];
+>>   RAISE NOTICE 'row %', ROW(1, 'x');
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT fmt();
+fields fmt:2278:4:-1
+NOTICE 00000 a 1 b <NULL> c % (PL/pgSQL function fmt() line 3 at RAISE)
+NOTICE 00000 {1,2} (PL/pgSQL function fmt() line 4 at RAISE)
+NOTICE 00000 row (1,x) (PL/pgSQL function fmt() line 5 at RAISE)
+row 
+SELECT 1
+> DO $$
+>> DECLARE
+>>   total numeric := 0;
+>>   r record;
+>> BEGIN
+>>   FOR r IN SELECT * FROM emp ORDER BY id LOOP
+>>     total := total + coalesce(r.salary, 0);
+>>   END LOOP;
+>>   RAISE NOTICE 'total %', total;
+>> END
+>> $$;
+NOTICE 00000 total 4505.50 (PL/pgSQL function inline_code_block line 9 at RAISE)
+DO
+> DO LANGUAGE plpgsql $$ BEGIN RAISE NOTICE 'lang first'; END $$;
+NOTICE 00000 lang first (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ BEGIN RAISE EXCEPTION 'from do %', 42 USING HINT = 'h'; END $$;
+ERROR P0001 from do 42 (PL/pgSQL function inline_code_block line 1 at RAISE)
+HINT h
+> DO $$ BEGIN PERFORM nosuch_fn(); END $$;
+ERROR 42883 function nosuch_fn() does not exist (PL/pgSQL function inline_code_block line 1 at PERFORM)
+DETAIL There is no function of that name.
+QUERY SELECT nosuch_fn() at 8
+> DO $$ BEGIN EXECUTE 'SELECT 1 +'; END $$;
+ERROR 42601 syntax error at end of input (PL/pgSQL function inline_code_block line 1 at EXECUTE)
+QUERY SELECT 1 + at 11
+> DROP FUNCTION fib(int);
+DROP FUNCTION
+> SELECT fib(3);
+ERROR 42883 function fib(integer) does not exist at 8
+DETAIL There is no function of that name.
+> CREATE OR REPLACE FUNCTION add1(x int) RETURNS int AS $$ BEGIN RETURN x + 100; END $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT add1(1);
+fields add1:23:4:-1
+row 101
+SELECT 1
+> CREATE OR REPLACE FUNCTION add1(x int) RETURNS int AS $$ BEGIN RETURN x + 200; END $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT add1(1);
+fields add1:23:4:-1
+row 201
+SELECT 1

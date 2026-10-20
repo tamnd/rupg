@@ -278,8 +278,13 @@ impl Analyzer<'_> {
 
     /// The query tree of a `SELECT` that is not a set operation or a `VALUES` list.
     fn plain_select(&mut self, s: &SelectStmt, keep_unknowns: bool) -> Result<Query> {
+        // The subqueries of the query are not the value of the assignment.
+        let assign = self.assign.take();
         let from = self.transform_from(&s.fromClause)?;
         let mut targets = self.target_list(&s.targetList, Kind::Select)?;
+        if let Some(assign) = assign {
+            self.assign_target(&mut targets, assign)?;
+        }
         let filter = match &s.whereClause {
             Some(node) => {
                 let expr = self.with_kind(Kind::Where, |a| a.transform(Some(node)))?;

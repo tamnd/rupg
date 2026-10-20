@@ -3107,6 +3107,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plpgsql.test")));
     }
 
+    /// More functions in PL/pgSQL: the `OUT` parameters, `%TYPE` and `%ROWTYPE`, the polymorphic functions, recursion, the labels of the loops, the condition names of the handlers, the writes in a block that rolls back, the assignments to fields and elements, the errors of the compile and `DO` with its errors. `connection/plpgsql_more.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_more() {
+        big_stack(|| script(include_str!("connection/plpgsql_more.test")));
+    }
+
     /// The system columns `xmin`, `cmin`, `xmax` and `cmax` of a table and of a catalog, their types and their errors in a view, a subquery and a check constraint, the partition key functions for a table that is not partitioned, and the recovery functions on a server that is not in recovery. The script does not show the value of `xmin`, because rupg has no row versions yet. `connection/system_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn system_columns() {

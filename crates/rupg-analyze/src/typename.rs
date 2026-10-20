@@ -2,7 +2,7 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, TypeRow};
-use rupg_sql::nodes::{Node, TypeName};
+use rupg_sql::nodes::{Node, RangeVar, TypeName};
 use rupg_types::typmod::{
     INTERVAL_FULL_PRECISION, INTERVAL_FULL_RANGE, MAX_TIME_PRECISION, VARHDRSZ, interval_typmod,
     numeric_typmod,
@@ -130,12 +130,83 @@ impl Found {
 }
 
 impl Analyzer<'_> {
+    /// `LookupTypeNameExtended` for `%TYPE`: the type of the column that the name gives, with the typmod -1 and the notice of PostgreSQL.
+    fn column_type_of(&mut self, name: &TypeName) -> Result<(u32, i32)> {
+        let at = place(name.location);
+        let parts = names(&name.names);
+        let mut rv = RangeVar { location: name.location, ..RangeVar::default() };
+        let field = match parts[..] {
+            [_] => {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    format!("improper %TYPE reference (too few dotted names): {}", parts.join(".")),
+                )
+                .at_opt(at));
+            }
+            [rel, field] => {
+                rv.relname = Some(rel.into());
+                field
+            }
+            [schema, rel, field] => {
+                rv.schemaname = Some(schema.into());
+                rv.relname = Some(rel.into());
+                field
+            }
+            [database, schema, rel, field] => {
+                rv.catalogname = Some(database.into());
+                rv.schemaname = Some(schema.into());
+                rv.relname = Some(rel.into());
+                field
+            }
+            _ => {
+                return Err(Error::new(
+                    SqlState::SYNTAX_ERROR,
+                    format!(
+                        "improper %TYPE reference (too many dotted names): {}",
+                        parts.join(".")
+                    ),
+                )
+                .at_opt(at));
+            }
+        };
+        let relname = rv.relname.as_deref().unwrap_or_default().to_owned();
+        let Some(relid) = self.lookup_relation(&rv)? else {
+            let shown = match &rv.schemaname {
+                Some(schema) => format!("{schema}.{relname}"),
+                None => relname,
+            };
+            return Err(Error::new(
+                SqlState::UNDEFINED_TABLE,
+                format!("relation \"{shown}\" does not exist"),
+            ));
+        };
+        let columns = self.open_relation(relid, &relname, at)?;
+        let Some(column) = columns.iter().find(|c| c.name == field) else {
+            return Err(Error::new(
+                SqlState::UNDEFINED_COLUMN,
+                format!("column \"{field}\" of relation \"{relname}\" does not exist"),
+            )
+            .at_opt(at));
+        };
+        self.notices.push(
+            Error::new(
+                SqlState::SUCCESSFUL_COMPLETION,
+                format!(
+                    "type reference {} converted to {}",
+                    type_name_text(name),
+                    crate::types::name(column.ty)
+                ),
+            )
+            .as_notice(),
+        );
+        Ok((column.ty, -1))
+    }
+
     /// `typenameTypeIdAndMod`: the OID and the typmod of a type name.
     pub(crate) fn type_name(&mut self, name: &TypeName) -> Result<(u32, i32)> {
         let at = place(name.location);
         if name.pct_type {
-            return Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "%TYPE is not supported yet")
-                .at_opt(at));
+            return self.column_type_of(name);
         }
         let mut row = if name.typeOid != 0 {
             self.type_by_oid(name.typeOid)

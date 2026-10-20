@@ -141,6 +141,8 @@ pub(crate) struct Expr {
     pub(crate) ns: Option<usize>,
     /// The byte offset of `text` in the body.
     pub(crate) at: usize,
+    /// The variable that an assignment sets, whose type the value takes in the analysis.
+    pub(crate) target: Option<usize>,
 }
 
 /// A statement with its line, `PLpgSQL_stmt`.

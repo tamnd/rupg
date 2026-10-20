@@ -1157,24 +1157,25 @@ impl Exec<'_> {
             return Ok(());
         };
         let processed = if write { n } else { n.min(1) };
-        self.rows_into(target, &columns(&p.plan), rows, strict || write)?;
+        self.rows_into(target, &columns(&p.plan), rows, strict, write)?;
         self.row_count = processed;
         self.set_found(processed > 0);
         Ok(())
     }
 
-    /// The first row of `rows` into the target of `INTO`. With `strict`, no row and more than one row are errors.
+    /// The first row of `rows` into the target of `INTO`. With `strict`, no row and more than one row are errors. For a `write` with `RETURNING`, more than one row is an error, and no row sets the target to nulls.
     fn rows_into(
         &mut self,
         target: usize,
         columns: &[Field],
         rows: Vec<Vec<Value>>,
         strict: bool,
+        write: bool,
     ) -> Result<()> {
         if rows.is_empty() && strict {
             return Err(Error::new(SqlState::NO_DATA_FOUND, "query returned no rows"));
         }
-        if rows.len() > 1 && strict {
+        if rows.len() > 1 && (strict || write) {
             return Err(Error::new(SqlState::TOO_MANY_ROWS, "query returned more than one row")
                 .with_hint("Make sure the query returns a single row, or use LIMIT 1."));
         }
@@ -1274,7 +1275,13 @@ impl Exec<'_> {
         };
         let resolver =
             Resolver { func: self.f, slots: &self.slots, ns: e.ns, bindings: RefCell::default() };
-        let query = rupg_analyze::analyze_with(&node, self.env(), &Params::default(), &resolver)?;
+        let datum = e.target.map(|d| &self.f.datums[d]);
+        let query = match datum.map(|d| (&d.kind, &d.name)) {
+            Some((&DatumKind::Var { ty, typmod }, name)) if ty != 0 => {
+                rupg_analyze::analyze_assign(&node, self.env(), &resolver, (ty, typmod), name)?
+            }
+            _ => rupg_analyze::analyze_with(&node, self.env(), &Params::default(), &resolver)?,
+        };
         let simple = e.mode != Mode::Statement && is_simple(&query);
         let plan = rupg_exec::prepare(query)?.fold(None, self.session())?;
         Ok(Prepared { plan, bindings: resolver.bindings.into_inner(), simple })
@@ -1554,11 +1561,16 @@ impl Exec<'_> {
         match &self.f.datums[d].kind {
             DatumKind::Rec { ty } => {
                 let ty = *ty;
-                let Some(row) = row else {
-                    if let Slot::Rec { values, .. } = &mut self.slots[d] {
-                        *values = None;
+                // No row with the columns of a query sets the fields to nulls.
+                let row = match row {
+                    Some(row) => row,
+                    None if !columns.is_empty() => vec![Value::Null; columns.len()],
+                    None => {
+                        if let Slot::Rec { values, .. } = &mut self.slots[d] {
+                            *values = None;
+                        }
+                        return Ok(());
                     }
-                    return Ok(());
                 };
                 if ty == oid::RECORD {
                     let fields: Rc<[Field]> = columns.iter().cloned().collect();
