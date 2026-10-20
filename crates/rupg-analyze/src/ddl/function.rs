@@ -142,7 +142,10 @@ fn statements<'s>(stmt: &'s CreateFunctionStmt, src: Option<&str>) -> Result<Sta
         )),
         (Some(_), None) => Err(Error::internal("a function body of an unknown form")),
         (None, Some(src)) => {
-            let (list, _) = rupg_sql::parse(src).map_err(Error::from)?;
+            let (list, _) = rupg_sql::parse(src).map_err(|error| {
+                let at = error.location;
+                Error::from(error).with_position(at)
+            })?;
             let stmts = list
                 .into_iter()
                 .flatten()
