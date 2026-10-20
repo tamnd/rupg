@@ -1239,7 +1239,12 @@ impl Analyzer<'_> {
     }
 
     /// The checks of `table_open` for a relation in `FROM`, and the columns of the relation. A table of the catalog, a table of the user and a sequence of the user can be in `FROM`. An index gives `42809`, and a built-in view gives `0A000`.
-    fn open_relation(&self, oid: u32, name: &str, at: Option<usize>) -> Result<Vec<Column>> {
+    pub(crate) fn open_relation(
+        &self,
+        oid: u32,
+        name: &str,
+        at: Option<usize>,
+    ) -> Result<Vec<Column>> {
         let index_error = || {
             Error::new(SqlState::WRONG_OBJECT_TYPE, format!("cannot open relation \"{name}\""))
                 .with_detail("This operation is not supported for indexes.")

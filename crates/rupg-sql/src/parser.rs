@@ -236,6 +236,20 @@ pub fn parse_type_name(text: &str) -> Result<crate::nodes::TypeName, Error> {
     }
 }
 
+/// The `SelectStmt` of a PL/pgSQL expression `text`, as `raw_parser` gives it in the mode `RAW_PARSE_PLPGSQL_EXPR`: the targets and the clauses of a `SELECT` without the word `SELECT`. An error is the first error of the lexer, the grammar or an action, at a byte offset in `text`.
+pub fn parse_plpgsql_expr(text: &str) -> Result<crate::nodes::Node, Error> {
+    let mut parser = Parser::with_mode(text, Some(crate::token::MODE_PLPGSQL_EXPR));
+    if run(&mut parser)?.is_none() {
+        return Err(parser.yyerror("syntax error"));
+    }
+    match parser.finish().0.pop() {
+        Some(Some(crate::nodes::Node::RawStmt(raw))) => {
+            raw.stmt.ok_or_else(|| Error::internal("the mode of an expression gave no statement"))
+        }
+        _ => Err(Error::internal("the mode of an expression gave no RawStmt")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

@@ -26,6 +26,38 @@ struct More {
     context: Option<String>,
     /// True for a message of `ereport(NOTICE)` with a SQLSTATE outside of class `00`.
     notice: bool,
+    /// The level of a message that is not an error, as `ereport` of `RAISE` gives it, or `None` for the level that the SQLSTATE gives.
+    level: Option<Level>,
+    /// The text of an internal query and the byte offset in it where the error starts, as `internalerrquery` and `internalerrposition` give them.
+    internal: Option<(String, Option<usize>)>,
+}
+
+/// The level of a message that is not an error, from the lowest to the highest.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum Level {
+    /// `DEBUG`, which goes to the client only when `client_min_messages` is a level of `DEBUG`.
+    Debug,
+    /// `LOG`, which goes to the client only when `client_min_messages` is `log` or lower.
+    Log,
+    /// `INFO`, which always goes to the client.
+    Info,
+    /// `NOTICE`.
+    Notice,
+    /// `WARNING`.
+    Warning,
+}
+
+impl Level {
+    /// The name of the level in the field `S` of a message.
+    pub fn name(self) -> &'static str {
+        match self {
+            Level::Debug => "DEBUG",
+            Level::Log => "LOG",
+            Level::Info => "INFO",
+            Level::Notice => "NOTICE",
+            Level::Warning => "WARNING",
+        }
+    }
 }
 
 impl Error {
@@ -103,6 +135,31 @@ impl Error {
     /// True for a message that [`Error::as_notice`] marked.
     pub fn is_notice(&self) -> bool {
         self.more.as_ref().is_some_and(|more| more.notice)
+    }
+
+    /// Sets the level of a message that is not an error, as `ereport` with a level such as `INFO` gives it.
+    #[must_use]
+    pub fn with_level(mut self, level: Level) -> Error {
+        self.more().level = Some(level);
+        self
+    }
+
+    /// The level that [`Error::with_level`] set, if any.
+    pub fn level(&self) -> Option<Level> {
+        self.more.as_ref()?.level
+    }
+
+    /// Sets the internal query and the byte offset in it where the error starts, as `internalerrquery` and `internalerrposition` do. The session gives them to the client in the fields `q` and `p`.
+    #[must_use]
+    pub fn with_internal(mut self, query: impl Into<String>, position: Option<usize>) -> Error {
+        self.more().internal = Some((query.into(), position));
+        self
+    }
+
+    /// The internal query and the byte offset in it, if any.
+    pub fn internal_query(&self) -> Option<(&str, Option<usize>)> {
+        let (query, position) = self.more.as_ref()?.internal.as_ref()?;
+        Some((query, *position))
     }
 
     fn more(&mut self) -> &mut More {

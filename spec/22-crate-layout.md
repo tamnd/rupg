@@ -111,7 +111,7 @@ The table gives each crate its group, what it owns, its main dependencies above 
 | `rupg-jit` | 10 | the compile tiers of document 14, lifted from rudb's query compiler | `rupg-func`, `rupg-plan` | yes | M6 | 30 |
 | `rupg-exec` | 10 | the vectorized executor, the point path, compressed execution, spill, the per-distinct result tables of document 14 section 14.6 | `rupg-jit`, `rupg-plan`, group 6 | no | M2 | 60 |
 | `rupg-exchange` | 10 | the exchange operators between workers and between nodes | `rupg-exec` | no | M8 | 8 |
-| `rupg-plpgsql` | 11 | PL/pgSQL, trigger execution, event triggers | group 10 | no | M7 | 25 |
+| `rupg-plpgsql` | 11 | PL/pgSQL, trigger execution, event triggers | group 10 | no | M3 | 25 |
 | `rupg-ext` | 11 | the extension API, `CREATE EXTENSION` for built-in extensions | group 10 | no | M6 | 8 |
 | `rupg-contrib` | 11 | the contrib extensions that document 16 lists, in Rust | `rupg-ext` | no | M6 | 50 |
 | `rupg-cluster` | beside 5 to 10 | placement, the shard map, distributed commit, distributed query, rebalancing | `rupg-raft`, `rupg-txn`, `rupg-catalog`, `rupg-exchange` | no | M10 | 25 |

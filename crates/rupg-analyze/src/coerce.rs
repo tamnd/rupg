@@ -15,6 +15,8 @@ pub enum Context {
     Implicit,
     /// The value of `INSERT` and `UPDATE`.
     Assignment,
+    /// `COERCION_PLPGSQL`: the value of an assignment of PL/pgSQL. When no other cast exists, the output function of the source and the input function of the target make the cast.
+    Plpgsql,
     /// `CAST(x AS type)` and `x::type`.
     Explicit,
 }
@@ -66,9 +68,10 @@ pub fn find_path(target: u32, source: u32, context: Context) -> Path {
             return Path::ArrayCoerce;
         }
     }
-    // Any type has an I/O cast to a string type in assignment, and a string type has an explicit I/O cast to any type.
+    // Any type has an I/O cast to a string type in assignment, and a string type has an explicit I/O cast to any type. In PL/pgSQL, any type has an I/O cast to any type.
     if (context >= Context::Assignment && types::category(target) == types::STRING)
         || (context >= Context::Explicit && types::category(source) == types::STRING)
+        || context == Context::Plpgsql
     {
         Path::ViaIo
     } else {

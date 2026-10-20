@@ -23,6 +23,7 @@ rupg-opt.workspace = true
 rupg-pgcatalog.workspace = true
 rupg-plan.workspace = true
 rupg-platform.workspace = true
+rupg-plpgsql.workspace = true
 rupg-snowball.workspace = true
 rupg-sql.workspace = true
 rupg-types.workspace = true

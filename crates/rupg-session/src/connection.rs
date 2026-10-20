@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rupg_analyze::{Message, Params, Write, WriteKind};
 use rupg_catalog::{Catalog, database};
-use rupg_common::{Error, SqlState};
+use rupg_common::{Error, Level as ErrorLevel, SqlState};
 use rupg_exec::Plan;
 use rupg_func::{BackendState, Randomness, Sequences};
 pub use rupg_func::{Client, Ssl};
@@ -42,6 +42,7 @@ mod explain;
 mod extended;
 mod foreign;
 mod merge;
+mod plpgsql;
 mod prepare;
 mod rewrite;
 mod roles;
@@ -305,6 +306,15 @@ pub fn write_error(
     if let Some(position) = &position {
         fields.push((b'P', position.as_bytes()));
     }
+    let internal = error.internal_query();
+    let internal_position =
+        internal.and_then(|(query, at)| at.map(|at| character_position(query, at).to_string()));
+    if let Some(position) = &internal_position {
+        fields.push((b'p', position.as_bytes()));
+    }
+    if let Some((query, _)) = internal {
+        fields.push((b'q', query.as_bytes()));
+    }
     if let Some(context) = error.context() {
         fields.push((b'W', context.as_bytes()));
     }
@@ -398,6 +408,8 @@ pub struct Connection {
     modes: RefCell<deferred::Modes>,
     /// The state of the transaction at each savepoint, the outermost first, as the names of the savepoints in [`Transaction`].
     marks: Vec<savepoint::Mark>,
+    /// The functions in PL/pgSQL that the session compiled, and the calls that run.
+    plpgsql: rupg_plpgsql::Cache,
 }
 
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
@@ -463,6 +475,7 @@ impl Connection {
             deferred: RefCell::new(Vec::new()),
             modes: RefCell::new(deferred::Modes::default()),
             marks: Vec::new(),
+            plpgsql: rupg_plpgsql::Cache::default(),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -534,6 +547,7 @@ impl Connection {
         .with_portals(&self.portals)
         .with_cancel(&self.cancel)
         .with_view(self.view())
+        .with_connection(self)
     }
 
     /// `GetTransactionSnapshot`: a new snapshot for each statement in `READ COMMITTED`, and the snapshot of the first statement for the whole transaction in the other levels.
@@ -1260,12 +1274,18 @@ impl Connection {
         let least = match self.settings.borrow().get("client_min_messages").as_deref() {
             Some("warning") => 1,
             Some("error") => 2,
+            Some("log") => -1,
+            Some(level) if level.starts_with("debug") => -2,
             _ => 0,
         };
         for (i, notice) in notices.drain(..).enumerate() {
-            let (rank, severity) = match notice.severity {
-                Severity::Notice => (0, "NOTICE"),
-                Severity::Warning => (1, "WARNING"),
+            let (rank, severity) = match (notice.error.level(), notice.severity) {
+                (Some(ErrorLevel::Debug), _) => (-2, "DEBUG"),
+                (Some(ErrorLevel::Log), _) => (-1, "LOG"),
+                // `INFO` goes to the client at any level of `client_min_messages`.
+                (Some(ErrorLevel::Info), _) => (least, "INFO"),
+                (Some(ErrorLevel::Notice), _) | (None, Severity::Notice) => (0, "NOTICE"),
+                (Some(ErrorLevel::Warning), _) | (None, Severity::Warning) => (1, "WARNING"),
             };
             if rank >= least {
                 let at = locations.get(i).copied().flatten().or_else(|| notice.error.position());
@@ -1413,6 +1433,12 @@ impl Connection {
             } else if let Node::ClosePortalStmt(stmt) = node {
                 drop(self.portals.close(b""));
                 self.close_cursor(stmt, b"")
+            } else if let Node::DoStmt(stmt) = node {
+                drop(self.portals.close(b""));
+                let mut warnings = Vec::new();
+                let result = self.run_do(stmt, &mut warnings);
+                notices.extend(warnings.into_iter().map(Notice::of_function));
+                result.map(|()| Done::Tag(CommandTag::Do))
             } else {
                 drop(self.portals.close(b""));
                 match self.ts_config(node) {
@@ -1931,6 +1957,14 @@ mod tests {
                         let value = field(&fields, code);
                         if details && !value.is_empty() {
                             line.push_str(&format!("\n{word} {value}"));
+                        }
+                    }
+                    let internal = field(&fields, b'q');
+                    if details && !internal.is_empty() {
+                        line.push_str(&format!("\nQUERY {internal}"));
+                        let position = field(&fields, b'p');
+                        if !position.is_empty() {
+                            line.push_str(&format!(" at {position}"));
                         }
                     }
                     line
@@ -2533,7 +2567,7 @@ mod tests {
         big_stack(catalog_rows_cases);
     }
 
-    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database. After a line `!details`, an error or a notice also has its detail and its hint. The lines `< text`, `<hex HEX`, `<done` and `<fail message` right after a simple query are the messages of `COPY ... FROM STDIN` that go with the query: `CopyData` of the text and a newline, `CopyData` of the bytes, `CopyDone` and `CopyFail`.
+    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database. A line `>> text` or `>>` after a statement goes on the statement as a new line. After a line `!details`, an error or a notice also has its detail, its hint and its internal query. The lines `< text`, `<hex HEX`, `<done` and `<fail message` right after a simple query are the messages of `COPY ... FROM STDIN` that go with the query: `CopyData` of the text and a newline, `CopyData` of the bytes, `CopyDone` and `CopyFail`.
     fn script(text: &str) {
         let (mut c, _) = connect();
         let starts = |l: &str| {
@@ -2547,6 +2581,11 @@ mod tests {
                 details = true;
                 continue;
             }
+            let mut statement = line.to_string();
+            while let Some(next) = lines.next_if(|l| *l == ">>" || l.starts_with(">> ")) {
+                statement.push('\n');
+                statement.push_str(next.strip_prefix(">> ").unwrap_or_default());
+            }
             let mut copy = Vec::new();
             while let Some(next) = lines.next_if(|l| l.starts_with('<')) {
                 copy.push(next);
@@ -2555,7 +2594,7 @@ mod tests {
             while let Some(next) = lines.next_if(|l| !starts(l)) {
                 want.push(next);
             }
-            assert_eq!(script_copy(&mut c, line, &copy, details), want, "{line}");
+            assert_eq!(script_copy(&mut c, &statement, &copy, details), want, "{statement}");
         }
     }
 
@@ -3060,6 +3099,12 @@ mod tests {
     #[test]
     fn savepoint_more() {
         big_stack(|| script(include_str!("connection/savepoint_more.test")));
+    }
+
+    /// Functions in PL/pgSQL and `DO`: the variables, the control statements, the queries with `INTO`, `EXECUTE`, `RAISE` with its options, the blocks with `EXCEPTION`, `GET DIAGNOSTICS`, `ASSERT`, the functions that return a set and the context lines of the errors and the messages. `connection/plpgsql.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql() {
+        big_stack(|| script(include_str!("connection/plpgsql.test")));
     }
 
     /// The system columns `xmin`, `cmin`, `xmax` and `cmax` of a table and of a catalog, their types and their errors in a view, a subquery and a check constraint, the partition key functions for a table that is not partitioned, and the recovery functions on a server that is not in recovery. The script does not show the value of `xmin`, because rupg has no row versions yet. `connection/system_columns.test` is the output of PostgreSQL 19 for the same script in a new database.

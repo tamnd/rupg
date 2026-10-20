@@ -65,12 +65,21 @@ fn set_kernel(func: u32, location: Option<usize>) -> Result<rupg_func::SetKernel
 /// The OID of the language `sql`.
 const SQL_LANGUAGE: u32 = 14;
 
-/// True for a function in SQL that a user makes, and for a built-in function with a body in SQL that has no kernel. The engine runs its body.
+/// The OID of the language `plpgsql`.
+const PLPGSQL_LANGUAGE: u32 = 13708;
+
+/// True for a function in SQL that a user makes, for a built-in function with a body in SQL that has no kernel, and for a function in PL/pgSQL. The engine runs its body.
 fn runs_body(func: u32) -> bool {
     let user = |p: &builtin::ProcRow| p.oid >= FIRST_NORMAL_OID && p.lang == SQL_LANGUAGE;
-    builtin::proc_by_oid(func).is_some_and(|p| p.sqlbody.is_some() || user(p))
-        && rupg_func::kernel(func).is_none()
-        && rupg_func::set_kernel(func).is_none()
+    procedural(func)
+        || builtin::proc_by_oid(func).is_some_and(|p| p.sqlbody.is_some() || user(p))
+            && rupg_func::kernel(func).is_none()
+            && rupg_func::set_kernel(func).is_none()
+}
+
+/// True for a function in PL/pgSQL, which [`Session::call_function`] runs.
+fn procedural(func: u32) -> bool {
+    builtin::proc_by_oid(func).is_some_and(|p| p.lang == PLPGSQL_LANGUAGE)
 }
 
 /// True when a call in `FROM` needs the set kernel of the function: the function gives a set, or a row with `width` columns.
@@ -1630,6 +1639,20 @@ impl<'a> Eval<'a> {
             return Ok(if retset { Vec::new() } else { vec![vec![Value::Null; width]] });
         }
         let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
+        if procedural(f.oid) {
+            // A row value gives a column for each field, and a null value gives a row of nulls.
+            let composite = call.ty == oid::RECORD
+                || builtin::type_by_oid(call.ty).is_some_and(|t| t.kind == b'c');
+            let values = self.session.call_function(f.oid, &types, call.ty, &args)?;
+            return Ok(values
+                .into_iter()
+                .map(|value| match value {
+                    Value::Record(record) if composite => record.values,
+                    Value::Null if composite => vec![Value::Null; width],
+                    value => vec![value],
+                })
+                .collect());
+        }
         if let Some(body) = self.cache.body(f.oid, &types, self.session)? {
             let Body::Query(query) = &*body else {
                 return Err(Error::internal("a function that returns a set with no query"));
@@ -1694,6 +1717,9 @@ impl<'a> Eval<'a> {
         let ExprKind::Func(f) = &call.kind else {
             return Err(Error::internal("a set that is not a function call"));
         };
+        if procedural(f.oid) {
+            return self.procedural_set(f, call.ty);
+        }
         let rows = self.function_set(call, 1)?;
         // The types of the `OUT` parameters, with the actual types of the call for a polymorphic type.
         let columns = rupg_analyze::out_columns(f)?.unwrap_or_default();
@@ -1720,6 +1746,17 @@ impl<'a> Eval<'a> {
                 }
             })
             .collect())
+    }
+
+    /// The values of a call of a function in PL/pgSQL that gives a set, with a row value for each row of a composite type. A strict function with a null argument gives no values.
+    fn procedural_set(&mut self, f: &Func, ret: u32) -> Result<Vec<Value>> {
+        let exprs = rupg_analyze::expand_arguments(f)?;
+        let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
+        if strict(f.oid) && args.iter().any(Value::is_null) {
+            return Ok(Vec::new());
+        }
+        let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
+        self.session.call_function(f.oid, &types, ret, &args)
     }
 
     /// A new state for the evaluation of a condition on another tuple of the same query.
@@ -2107,6 +2144,10 @@ impl<'a> Eval<'a> {
     ) -> Result<Value> {
         if strict(func) && args.iter().any(Value::is_null) {
             return Ok(Value::Null);
+        }
+        if procedural(func) {
+            let values = self.session.call_function(func, types, ret, args)?;
+            return Ok(values.into_iter().next().unwrap_or(Value::Null));
         }
         if let Some(body) = self.cache.body(func, types, self.session)? {
             // The body runs with a cache of its own, so that a subquery of the body that reads an argument runs again for each call.

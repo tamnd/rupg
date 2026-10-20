@@ -24,7 +24,7 @@ use rupg_types::{
 use rupg_wire::{Field, Portals, Statements};
 
 use crate::advisory::{Edge, Request, Tag, mode_name};
-use crate::connection::{Activity, Portal, Prepared};
+use crate::connection::{Activity, Connection, Portal, Prepared};
 use crate::guc::{self, Action, Origin, Settings};
 use crate::heap::View;
 use crate::param::type_error;
@@ -36,6 +36,8 @@ const SCHEMAS: [(&str, u32); 3] = [("pg_catalog", 11), ("pg_toast", 99), ("publi
 
 /// The OID of the language `sql`.
 const SQL_LANGUAGE: u32 = 14;
+/// The OID of the language `plpgsql`.
+const PLPGSQL_LANGUAGE: u32 = 13708;
 /// The microseconds from 1970-01-01 to 2000-01-01, the epoch of the timestamps of PostgreSQL.
 const EPOCH_SHIFT_US: i64 = 946_684_800_000_000;
 /// The wait event of `pg_sleep`.
@@ -133,6 +135,8 @@ pub(crate) struct Reader<'a> {
     warnings: RefCell<Vec<Error>>,
     /// What the statement sees of the rows of the tables, or `None` for a reader that is not a session.
     view: Option<View>,
+    /// The session, which runs the functions in PL/pgSQL, or `None` for a reader that is not a session.
+    conn: Option<&'a Connection>,
 }
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
@@ -219,8 +223,12 @@ fn use_types(catalog: &Catalog) {
         })
         .collect();
     types.extend(
-        catalog.functions().filter(|f| f.oid >= FIRST_NORMAL_OID && f.lang == SQL_LANGUAGE).map(
-            |f| {
+        catalog
+            .functions()
+            .filter(|f| {
+                f.oid >= FIRST_NORMAL_OID && matches!(f.lang, SQL_LANGUAGE | PLPGSQL_LANGUAGE)
+            })
+            .map(|f| {
                 builtin::SessionType::Function(builtin::SessionFunction {
                     oid: f.oid,
                     name: f.name.clone(),
@@ -238,8 +246,7 @@ fn use_types(catalog: &Catalog) {
                     argdefaults: f.argdefaults.clone(),
                     nargdefaults: f.nargdefaults,
                 })
-            },
-        ),
+            }),
     );
     builtin::use_session_types(types);
 }
@@ -277,6 +284,7 @@ impl<'a> Reader<'a> {
             randomness: None,
             warnings: RefCell::new(Vec::new()),
             view: None,
+            conn: None,
         }
     }
 
@@ -329,6 +337,17 @@ impl<'a> Reader<'a> {
     pub(crate) fn with_portals(mut self, portals: &'a Portals<Portal>) -> Reader<'a> {
         self.portals = Some(portals);
         self
+    }
+
+    /// The reader of the session `conn`, which can run a function in PL/pgSQL.
+    pub(crate) fn with_connection(mut self, conn: &'a Connection) -> Reader<'a> {
+        self.conn = Some(conn);
+        self
+    }
+
+    /// The warnings of the functions, which go to the warnings of the statement.
+    pub(crate) fn add_warnings(&self, warnings: Vec<Error>) {
+        self.warnings.borrow_mut().extend(warnings);
     }
 
     /// The reader of a session that sees the rows of the tables through `view`.
@@ -844,6 +863,22 @@ impl rupg_func::Session for Reader<'_> {
         self.warnings.borrow_mut().push(warning);
     }
 
+    fn call_function(
+        &self,
+        func: u32,
+        types: &[u32],
+        ret: u32,
+        args: &[Value],
+    ) -> Result<Vec<Value>> {
+        match self.conn {
+            Some(conn) => conn.pl_call(self, func, types, ret, args),
+            None => Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "a function in PL/pgSQL is not supported here",
+            )),
+        }
+    }
+
     fn run_query(&self, text: &str) -> Result<(Vec<u32>, Vec<Vec<Value>>)> {
         let (list, _) = rupg_sql::parse(text)?;
         let statements: Vec<&Node> = list
@@ -965,6 +1000,10 @@ impl rupg_func::Session for Reader<'_> {
 }
 
 impl Env for Reader<'_> {
+    fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
+        rupg_plpgsql::validate(self, function)
+    }
+
     fn search_path(&self) -> Vec<u32> {
         self.path().into_iter().map(|(_, oid)| oid).collect()
     }

@@ -10,7 +10,7 @@ mod ids;
 mod sort;
 mod sqlstate;
 
-pub use error::{Error, Result};
+pub use error::{Error, Level, Result};
 pub use ids::{Hlc, Lsn, Oid, RowId, ShardId, Xid};
 pub use sort::qsort;
 pub use sqlstate::{Category, SqlState};
