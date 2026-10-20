@@ -1,0 +1,44 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int)
+CREATE TABLE
+> INSERT INTO a SELECT generate_series(1, 300)
+INSERT 0 300
+> CREATE TABLE b (y int, s text)
+CREATE TABLE
+> INSERT INTO b SELECT g, 's' || g FROM generate_series(1, 300) g
+INSERT 0 300
+> SELECT count(*) FROM a, b JOIN LATERAL (VALUES (a.x)) ss(v) ON b.y = ss.v
+fields count:20:8:-1
+row 300
+SELECT 1
+> SELECT a.x, b.s, ss FROM a, b JOIN LATERAL (VALUES (a.x, a.x * 2)) ss(v, w) ON b.y = ss.v WHERE a.x % 100 = 7 ORDER BY a.x
+fields x@a.1:23:4:-1,s@b.2:25:-1:-1,ss:2249:-1:-1
+row 7,s7,(7,14)
+row 107,s107,(107,214)
+row 207,s207,(207,414)
+SELECT 3
+> SELECT a.x, ss.y, ss.t FROM a LEFT JOIN LATERAL (SELECT b.y, b.s || '!' AS t FROM b WHERE b.y = a.x * 3) ss ON true WHERE a.x > 97 AND a.x < 103 ORDER BY a.x
+fields x@a.1:23:4:-1,y@b.1:23:4:-1,t:25:-1:-1
+row 98,294,s294!
+row 99,297,s297!
+row 100,300,s300!
+row 101,NULL,NULL
+row 102,NULL,NULL
+SELECT 5
+> SELECT a.x, sum(ss.z) FROM a LEFT JOIN LATERAL (SELECT a.x + b.y AS z, b.y FROM b) ss ON a.x = ss.y GROUP BY a.x HAVING a.x < 4 ORDER BY a.x
+fields x@a.1:23:4:-1,sum:20:8:-1
+row 1,2
+row 2,4
+row 3,6
+SELECT 3
+> SELECT a.x, s1.p, s2.q FROM a, LATERAL (SELECT a.x * 10 AS p) s1, LATERAL (SELECT s1.p + b.y AS q FROM b WHERE b.y = a.x) s2 WHERE a.x IN (5, 250) ORDER BY a.x
+fields x@a.1:23:4:-1,p:23:4:-1,q:23:4:-1
+row 5,50,55
+row 250,2500,2750
+SELECT 2
+> SELECT count(*), sum(q) FROM a JOIN LATERAL (SELECT b.y AS q FROM b WHERE b.y <= a.x) ss ON ss.q % 50 = 0
+fields count:20:8:-1,sum:20:8:-1
+row 756,88550
+SELECT 1
