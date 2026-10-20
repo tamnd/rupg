@@ -108,7 +108,10 @@ impl Analyzer<'_> {
                 Err(Error::new(SqlState::SYNTAX_ERROR, "DEFAULT is not allowed in this context")
                     .at_opt(place(d.location)))
             }
-            Node::ColumnRef(c) => self.column_ref(c),
+            Node::ColumnRef(c) => match self.variables {
+                Some(variables) => self.column_or_variable(c, variables),
+                None => self.column_ref(c),
+            },
             Node::ParamRef(p) => self.transform_param(p.number, place(p.location)),
             Node::A_Expr(a) => self.transform_a_expr(a),
             Node::BoolExpr(b) => self.transform_bool(b),
@@ -302,6 +305,16 @@ impl Analyzer<'_> {
     /// `$n`.
     pub(crate) fn transform_param(&mut self, number: i32, at: Option<usize>) -> Result<Expr> {
         let index = usize::try_from(number).ok().filter(|&n| n >= 1);
+        if let Some(variables) = self.variables {
+            return match index.and_then(|n| variables.param(n)) {
+                Some(variable) => Ok(self.variable_param(variable, at)),
+                None => Err(Error::new(
+                    SqlState::UNDEFINED_PARAMETER,
+                    format!("there is no parameter ${number}"),
+                )
+                .at_opt(at)),
+            };
+        }
         if let Some(n) = index {
             // A query of the extended protocol takes any parameter. One that the client did not declare has no type until the query gives it one.
             if self.variable && n > self.params.len() && n <= MAX_PARAMS {

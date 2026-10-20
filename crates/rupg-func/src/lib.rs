@@ -370,6 +370,21 @@ pub trait Session {
         let _ = text;
         Err(not_yet("a query in a function"))
     }
+    /// `plpgsql_call_handler`: a call of the function `func` in PL/pgSQL with the values `args` of the types `types`, for the result type `ret`. It gives the value of the function, or a value for each row of a function that returns a set. A row is a `Record`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the function, and `0A000` for a session that cannot run a function in PL/pgSQL.
+    fn call_function(
+        &self,
+        func: u32,
+        types: &[u32],
+        ret: u32,
+        args: &[Value],
+    ) -> Result<Vec<Value>> {
+        let _ = (func, types, ret, args);
+        Err(not_yet("a function in PL/pgSQL"))
+    }
 }
 
 /// A call of a function.

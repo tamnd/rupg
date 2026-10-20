@@ -1,0 +1,588 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+INSERT 0 3
+> CREATE FUNCTION add1(x int) RETURNS int LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RETURN x + 1;
+>> END
+>> $$;
+CREATE FUNCTION
+> SELECT add1(41), add1(NULL);
+fields add1:23:4:-1,add1:23:4:-1
+row 42,NULL
+SELECT 1
+> CREATE FUNCTION fact(n int) RETURNS bigint AS $$
+>> DECLARE
+>>   r bigint := 1;
+>>   i int;
+>> BEGIN
+>>   FOR i IN 1..n LOOP
+>>     r := r * i;
+>>   END LOOP;
+>>   RETURN r;
+>> END;
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT fact(10), fact(0);
+fields fact:20:8:-1,fact:20:8:-1
+row 3628800,1
+SELECT 1
+> CREATE FUNCTION classify(n int) RETURNS text AS $$
+>> BEGIN
+>>   IF n < 0 THEN
+>>     RETURN 'negative';
+>>   ELSIF n = 0 THEN
+>>     RETURN 'zero';
+>>   ELSE
+>>     RETURN 'positive';
+>>   END IF;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT classify(-5), classify(0), classify(7);
+fields classify:25:-1:-1,classify:25:-1:-1,classify:25:-1:-1
+row negative,zero,positive
+SELECT 1
+> CREATE FUNCTION cases(n int) RETURNS text AS $$
+>> BEGIN
+>>   CASE n
+>>     WHEN 1, 2 THEN RETURN 'low';
+>>     WHEN 3 THEN RETURN 'mid';
+>>     ELSE RETURN 'high';
+>>   END CASE;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT cases(1), cases(3), cases(9);
+fields cases:25:-1:-1,cases:25:-1:-1,cases:25:-1:-1
+row low,mid,high
+SELECT 1
+> CREATE FUNCTION cases2(n int) RETURNS text AS $$
+>> BEGIN
+>>   CASE
+>>     WHEN n > 10 THEN RETURN 'big';
+>>     WHEN n > 5 THEN RETURN 'medium';
+>>   END CASE;
+>>   RETURN 'unreachable';
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT cases2(20), cases2(7);
+fields cases2:25:-1:-1,cases2:25:-1:-1
+row big,medium
+SELECT 1
+> SELECT cases2(1);
+fields cases2:25:-1:-1
+ERROR 20000 case not found (PL/pgSQL function cases2(integer) line 3 at CASE)
+HINT CASE statement is missing ELSE part.
+> CREATE FUNCTION loops() RETURNS text AS $$
+>> DECLARE
+>>   s text := '';
+>>   i int := 0;
+>> BEGIN
+>>   LOOP
+>>     i := i + 1;
+>>     EXIT WHEN i > 5;
+>>     CONTINUE WHEN i = 3;
+>>     s := s || i;
+>>   END LOOP;
+>>   WHILE i > 0 LOOP
+>>     i := i - 2;
+>>     s := s || ',' || i;
+>>   END LOOP;
+>>   FOR j IN REVERSE 10..1 BY 3 LOOP
+>>     s := s || ' ' || j;
+>>   END LOOP;
+>>   <<outer>>
+>>   FOR a IN 1..3 LOOP
+>>     FOR b IN 1..3 LOOP
+>>       CONTINUE outer WHEN b = 2;
+>>       s := s || ' ' || a || b;
+>>     END LOOP;
+>>   END LOOP outer;
+>>   RETURN s;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT loops();
+fields loops:25:-1:-1
+row 1245,4,2,0 10 7 4 1 11 21 31
+SELECT 1
+> CREATE FUNCTION sum_t() RETURNS int AS $$
+>> DECLARE
+>>   total int := 0;
+>>   r record;
+>> BEGIN
+>>   FOR r IN SELECT * FROM t ORDER BY a LOOP
+>>     total := total + r.a;
+>>     RAISE NOTICE 'row % %', r.a, r.b;
+>>   END LOOP;
+>>   RETURN total;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT sum_t();
+fields sum_t:23:4:-1
+NOTICE 00000 row 1 one (PL/pgSQL function sum_t() line 8 at RAISE)
+NOTICE 00000 row 2 two (PL/pgSQL function sum_t() line 8 at RAISE)
+NOTICE 00000 row 3 three (PL/pgSQL function sum_t() line 8 at RAISE)
+row 6
+SELECT 1
+> CREATE FUNCTION get_b(k int) RETURNS text AS $$
+>> DECLARE
+>>   v text;
+>> BEGIN
+>>   SELECT b INTO v FROM t WHERE a = k;
+>>   IF NOT FOUND THEN
+>>     RETURN 'missing';
+>>   END IF;
+>>   RETURN v;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT get_b(2), get_b(9);
+fields get_b:25:-1:-1,get_b:25:-1:-1
+row two,missing
+SELECT 1
+> CREATE FUNCTION strict_b(k int) RETURNS text AS $$
+>> DECLARE
+>>   v text;
+>> BEGIN
+>>   SELECT b INTO STRICT v FROM t WHERE a >= k;
+>>   RETURN v;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT strict_b(3);
+fields strict_b:25:-1:-1
+row three
+SELECT 1
+> SELECT strict_b(1);
+fields strict_b:25:-1:-1
+ERROR P0003 query returned more than one row (PL/pgSQL function strict_b(integer) line 5 at SQL statement)
+HINT Make sure the query returns a single row, or use LIMIT 1.
+> SELECT strict_b(9);
+fields strict_b:25:-1:-1
+ERROR P0002 query returned no rows (PL/pgSQL function strict_b(integer) line 5 at SQL statement)
+> CREATE FUNCTION ins(k int, v text) RETURNS int AS $$
+>> DECLARE
+>>   n int;
+>> BEGIN
+>>   INSERT INTO t VALUES (k, v);
+>>   GET DIAGNOSTICS n = ROW_COUNT;
+>>   UPDATE t SET b = upper(b) WHERE a <= k;
+>>   GET DIAGNOSTICS n = ROW_COUNT;
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT ins(4, 'four');
+fields ins:23:4:-1
+row 4
+SELECT 1
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 1,ONE
+row 2,TWO
+row 3,THREE
+row 4,FOUR
+SELECT 4
+> CREATE FUNCTION series(n int) RETURNS SETOF int AS $$
+>> BEGIN
+>>   FOR i IN 1..n LOOP
+>>     RETURN NEXT i * i;
+>>   END LOOP;
+>>   RETURN;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT * FROM series(4);
+fields series:23:4:-1
+row 1
+row 4
+row 9
+row 16
+SELECT 4
+> SELECT series(3);
+fields series:23:4:-1
+row 1
+row 4
+row 9
+SELECT 3
+> CREATE FUNCTION rows_t() RETURNS SETOF t AS $$
+>> BEGIN
+>>   RETURN QUERY SELECT * FROM t WHERE a > 2 ORDER BY a;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT * FROM rows_t();
+fields a:23:4:-1,b:25:-1:-1
+row 3,THREE
+row 4,FOUR
+SELECT 2
+> CREATE FUNCTION outs(x int, OUT y int, OUT z text) AS $$
+>> BEGIN
+>>   y := x * 2;
+>>   z := 'x' || x;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT * FROM outs(5);
+fields y:23:4:-1,z:25:-1:-1
+row 10,x5
+SELECT 1
+> SELECT outs(6);
+fields outs:2249:-1:-1
+row (12,x6)
+SELECT 1
+> CREATE FUNCTION tab(n int) RETURNS TABLE (k int, sq int) AS $$
+>> BEGIN
+>>   FOR i IN 1..n LOOP
+>>     k := i;
+>>     sq := i * i;
+>>     RETURN NEXT;
+>>   END LOOP;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT * FROM tab(3);
+fields k:23:4:-1,sq:23:4:-1
+row 1,1
+row 2,4
+row 3,9
+SELECT 3
+> CREATE FUNCTION raiser(n int) RETURNS void AS $$
+>> BEGIN
+>>   RAISE NOTICE 'n is %', n;
+>>   RAISE WARNING 'warn % and %', n, n + 1;
+>>   RAISE INFO 'info';
+>>   IF n > 1 THEN
+>>     RAISE EXCEPTION 'too big: %', n USING HINT = 'use a smaller number', DETAIL = 'some detail';
+>>   END IF;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT raiser(1);
+fields raiser:2278:4:-1
+NOTICE 00000 n is 1 (PL/pgSQL function raiser(integer) line 3 at RAISE)
+WARNING 01000 warn 1 and 2 (PL/pgSQL function raiser(integer) line 4 at RAISE)
+INFO 00000 info (PL/pgSQL function raiser(integer) line 5 at RAISE)
+row 
+SELECT 1
+> SELECT raiser(2);
+fields raiser:2278:4:-1
+NOTICE 00000 n is 2 (PL/pgSQL function raiser(integer) line 3 at RAISE)
+WARNING 01000 warn 2 and 3 (PL/pgSQL function raiser(integer) line 4 at RAISE)
+INFO 00000 info (PL/pgSQL function raiser(integer) line 5 at RAISE)
+ERROR P0001 too big: 2 (PL/pgSQL function raiser(integer) line 7 at RAISE)
+DETAIL some detail
+HINT use a smaller number
+> CREATE FUNCTION catcher(n int) RETURNS text AS $$
+>> DECLARE
+>>   v int;
+>> BEGIN
+>>   BEGIN
+>>     v := 10 / n;
+>>     RETURN 'ok ' || v;
+>>   EXCEPTION
+>>     WHEN division_by_zero THEN
+>>       RETURN 'caught ' || SQLSTATE || ' ' || SQLERRM;
+>>   END;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT catcher(5), catcher(0);
+fields catcher:25:-1:-1,catcher:25:-1:-1
+row ok 2,caught 22012 division by zero
+SELECT 1
+> CREATE FUNCTION rollback_block() RETURNS int AS $$
+>> DECLARE
+>>   n int;
+>> BEGIN
+>>   BEGIN
+>>     INSERT INTO t VALUES (100, 'hundred');
+>>     RAISE EXCEPTION 'undo';
+>>   EXCEPTION WHEN OTHERS THEN
+>>     RAISE NOTICE 'caught %', SQLERRM;
+>>   END;
+>>   SELECT count(*) INTO n FROM t WHERE a = 100;
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT rollback_block();
+fields rollback_block:23:4:-1
+NOTICE 00000 caught undo (PL/pgSQL function rollback_block() line 9 at RAISE)
+row 0
+SELECT 1
+> CREATE FUNCTION custom() RETURNS text AS $$
+>> BEGIN
+>>   RAISE SQLSTATE 'U0001' USING MESSAGE = 'my message';
+>> EXCEPTION WHEN SQLSTATE 'U0001' THEN
+>>   RETURN 'got ' || SQLERRM;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT custom();
+fields custom:25:-1:-1
+row got my message
+SELECT 1
+> CREATE FUNCTION stacked() RETURNS text AS $$
+>> DECLARE
+>>   msg text;
+>>   st text;
+>>   det text;
+>> BEGIN
+>>   RAISE EXCEPTION 'boom' USING DETAIL = 'the detail', ERRCODE = 'P0001';
+>> EXCEPTION WHEN raise_exception THEN
+>>   GET STACKED DIAGNOSTICS msg = MESSAGE_TEXT, st = RETURNED_SQLSTATE, det = PG_EXCEPTION_DETAIL;
+>>   RETURN msg || '/' || st || '/' || det;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT stacked();
+fields stacked:25:-1:-1
+row boom/P0001/the detail
+SELECT 1
+> CREATE FUNCTION dyn(tbl text) RETURNS bigint AS $$
+>> DECLARE
+>>   n bigint;
+>> BEGIN
+>>   EXECUTE 'SELECT count(*) FROM ' || quote_ident(tbl) INTO n;
+>>   EXECUTE 'SELECT count(*) FROM t WHERE a > $1' INTO n USING 1;
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT dyn('t');
+fields dyn:20:8:-1
+row 3
+SELECT 1
+> CREATE FUNCTION arr() RETURNS text AS $$
+>> DECLARE
+>>   a int[] := ARRAY[1, 2, 3];
+>>   x int;
+>>   s text := '';
+>> BEGIN
+>>   a[2] := 20;
+>>   a[4] := 40;
+>>   FOREACH x IN ARRAY a LOOP
+>>     s := s || x || ';';
+>>   END LOOP;
+>>   RETURN s || array_length(a, 1);
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT arr();
+fields arr:25:-1:-1
+row 1;20;3;40;4
+SELECT 1
+> CREATE FUNCTION recs() RETURNS text AS $$
+>> DECLARE
+>>   r t%ROWTYPE;
+>>   c t.b%TYPE;
+>> BEGIN
+>>   SELECT * INTO r FROM t WHERE a = 1;
+>>   c := r.b;
+>>   r.b := 'changed';
+>>   RETURN c || ' ' || r.b || ' ' || r.a;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT recs();
+fields recs:25:-1:-1
+row ONE changed 1
+SELECT 1
+> CREATE FUNCTION asserter(n int) RETURNS int AS $$
+>> BEGIN
+>>   ASSERT n > 0, 'n must be positive';
+>>   ASSERT n < 100;
+>>   RETURN n;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT asserter(5);
+fields asserter:23:4:-1
+row 5
+SELECT 1
+> SELECT asserter(-1);
+fields asserter:23:4:-1
+ERROR P0004 n must be positive (PL/pgSQL function asserter(integer) line 3 at ASSERT)
+> SELECT asserter(200);
+fields asserter:23:4:-1
+ERROR P0004 assertion failed (PL/pgSQL function asserter(integer) line 4 at ASSERT)
+> CREATE FUNCTION noreturn() RETURNS int AS $$
+>> BEGIN
+>>   PERFORM 1;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT noreturn();
+fields noreturn:23:4:-1
+ERROR 2F005 control reached end of function without RETURN (PL/pgSQL function noreturn())
+> CREATE FUNCTION divide(a int, b int) RETURNS int AS $$
+>> BEGIN
+>>   RETURN a / b;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT divide(1, 0);
+fields divide:23:4:-1
+ERROR 22012 division by zero (PL/pgSQL function divide(integer,integer) line 3 at RETURN)
+> CREATE FUNCTION nested(n int) RETURNS int AS $$
+>> BEGIN
+>>   RETURN divide(n, n - 1);
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT nested(1);
+fields nested:23:4:-1
+ERROR 22012 division by zero (PL/pgSQL function divide(integer,integer) line 3 at RETURN
+PL/pgSQL function nested(integer) line 3 at RETURN)
+> CREATE FUNCTION constants() RETURNS text AS $$
+>> DECLARE
+>>   c CONSTANT int := 5;
+>>   d int NOT NULL := 1;
+>>   e numeric(5,2) := 3.14159;
+>>   f varchar(3) := 'abc';
+>> BEGIN
+>>   RETURN c || ' ' || d || ' ' || e || ' ' || f;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT constants();
+fields constants:25:-1:-1
+row 5 1 3.14 abc
+SELECT 1
+> DO $$
+>> DECLARE
+>>   n int;
+>> BEGIN
+>>   SELECT count(*) INTO n FROM t;
+>>   RAISE NOTICE 'there are % rows', n;
+>> END
+>> $$;
+NOTICE 00000 there are 4 rows (PL/pgSQL function inline_code_block line 6 at RAISE)
+DO
+> DO $$ BEGIN RAISE EXCEPTION 'from do'; END $$;
+ERROR P0001 from do (PL/pgSQL function inline_code_block line 1 at RAISE)
+> DO LANGUAGE plpgsql $$ BEGIN PERFORM add1(1); END $$;
+DO
+> CREATE FUNCTION alias_args(int, text) RETURNS text AS $$
+>> DECLARE
+>>   x ALIAS FOR $1;
+>> BEGIN
+>>   RETURN x || $2;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT alias_args(7, 'z');
+fields alias_args:25:-1:-1
+row 7z
+SELECT 1
+> CREATE FUNCTION poly(a anyelement) RETURNS anyelement AS $$
+>> BEGIN
+>>   RETURN a;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT poly(1), poly('x'::text);
+fields poly:23:4:-1,poly:25:-1:-1
+row 1,x
+SELECT 1
+> CREATE FUNCTION blocks() RETURNS int AS $$
+>> <<b1>>
+>> DECLARE
+>>   x int := 1;
+>> BEGIN
+>>   DECLARE
+>>     x int := 2;
+>>   BEGIN
+>>     RETURN b1.x * 10 + x;
+>>   END;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT blocks();
+fields blocks:23:4:-1
+row 12
+SELECT 1
+> CREATE FUNCTION exit_block() RETURNS int AS $$
+>> BEGIN
+>>   <<blk>>
+>>   BEGIN
+>>     EXIT blk;
+>>     RETURN 1;
+>>   END;
+>>   RETURN 2;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT exit_block();
+fields exit_block:23:4:-1
+row 2
+SELECT 1
+> CREATE FUNCTION strict_f(x int) RETURNS int STRICT AS $$
+>> BEGIN
+>>   RAISE NOTICE 'called';
+>>   RETURN 1;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT strict_f(NULL), strict_f(1);
+fields strict_f:23:4:-1,strict_f:23:4:-1
+NOTICE 00000 called (PL/pgSQL function strict_f(integer) line 3 at RAISE)
+row NULL,1
+SELECT 1
+> CREATE FUNCTION retvoid() RETURNS void AS $$
+>> BEGIN
+>>   RETURN;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT retvoid();
+fields retvoid:2278:4:-1
+row 
+SELECT 1
+> CREATE FUNCTION found_test() RETURNS text AS $$
+>> DECLARE
+>>   s text := '';
+>> BEGIN
+>>   UPDATE t SET b = b WHERE a = 999;
+>>   s := s || found;
+>>   UPDATE t SET b = b WHERE a = 1;
+>>   s := s || found;
+>>   PERFORM * FROM t WHERE a = 999;
+>>   s := s || found;
+>>   FOR i IN 1..0 LOOP END LOOP;
+>>   s := s || found;
+>>   RETURN s;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT found_test();
+fields found_test:25:-1:-1
+row falsetruefalsefalse
+SELECT 1
+> CREATE FUNCTION returning_into() RETURNS text AS $$
+>> DECLARE
+>>   v text;
+>> BEGIN
+>>   INSERT INTO t VALUES (50, 'fifty') RETURNING b INTO v;
+>>   DELETE FROM t WHERE a = 50;
+>>   RETURN v;
+>> END
+>> $$ LANGUAGE plpgsql;
+CREATE FUNCTION
+> SELECT returning_into();
+fields returning_into:25:-1:-1
+row fifty
+SELECT 1
+> SELECT count(*) FROM t;
+fields count:20:8:-1
+row 4
+SELECT 1

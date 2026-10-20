@@ -464,6 +464,15 @@ dependencies = [
 [[package]]
 name = "rupg-plpgsql"
 version = "0.1.53"
+dependencies = [
+ "rupg-analyze",
+ "rupg-catalog",
+ "rupg-common",
+ "rupg-exec",
+ "rupg-func",
+ "rupg-sql",
+ "rupg-types",
+]
 
 [[package]]
 name = "rupg-raft"
@@ -494,6 +503,7 @@ dependencies = [
  "rupg-pgcatalog",
  "rupg-plan",
  "rupg-platform",
+ "rupg-plpgsql",
  "rupg-snowball",
  "rupg-sql",
  "rupg-types",

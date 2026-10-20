@@ -1,0 +1,175 @@
+//! The hooks of PL/pgSQL in the analysis: the variables of a function that a query names, as `plpgsql_post_column_ref` and `plpgsql_param_ref` of `pl_comp.c` find them, and the casts of the values of the variables, as `exec_cast_value` of `pl_exec.c` makes them.
+
+use rupg_common::{Error, Result, SqlState};
+use rupg_sql::nodes::{Node, RangeVar};
+
+use crate::coerce::{AtOpt, Context};
+use crate::expr::{Expr, ExprKind};
+use crate::select::{Query, Target};
+use crate::{Analyzer, Env, Params};
+
+/// A variable of a function that a query reads as a parameter.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Variable {
+    /// The number of the parameter, from 1.
+    pub param: usize,
+    pub ty: u32,
+    pub typmod: i32,
+}
+
+/// The variables of a PL/pgSQL function that the queries of the function can name.
+pub trait Variables {
+    /// `resolve_column_ref`: the variable that the names of a column reference name, such as `x`, `r.f` or `block.x`, or `None` when no variable has the names. `*` is not a name here.
+    ///
+    /// # Errors
+    ///
+    /// The error of a field that a record does not have, and of a record with no value yet.
+    fn column(&self, names: &[&str], at: Option<usize>) -> Result<Option<Variable>>;
+    /// `plpgsql_param_ref`: the variable of `$n`, which is the argument `n` of the function, or `None`.
+    fn param(&self, number: usize) -> Option<Variable>;
+}
+
+/// [`crate::analyze`] of a query of a PL/pgSQL function, whose names can be variables of the function. A name that is a column and a variable is an error, as `plpgsql.variable_conflict` with the value `error` gives it.
+///
+/// # Errors
+///
+/// The errors of the analysis, and `42702` for a name that is a column and a variable.
+pub fn analyze_with(
+    stmt: &Node,
+    env: &dyn Env,
+    params: &Params,
+    variables: &dyn Variables,
+) -> Result<Query> {
+    crate::analyze_hooked(stmt, env, params, Some(variables))
+}
+
+/// `get_cast_hashentry`: the query `SELECT $1` that casts a value of the type `source` to the type `target` with the typmod `typmod`, in the context of PL/pgSQL, where the output and the input functions cast a value when no other cast exists.
+///
+/// # Errors
+///
+/// `42846` when there is no cast, as for a type that is `internal`.
+pub fn plpgsql_cast(env: &dyn Env, source: (u32, i32), target: u32, typmod: i32) -> Result<Query> {
+    let mut analyzer = Analyzer::new(env, &Params { types: vec![source.0], variable: false });
+    let param = Expr { kind: ExprKind::Param(1), ty: source.0, typmod: source.1, location: None };
+    let Some(expr) = analyzer.coerce_to_target(param, target, typmod, Context::Plpgsql, None)?
+    else {
+        return Err(Error::new(
+            SqlState::CANNOT_COERCE,
+            format!(
+                "cannot cast type {} to {}",
+                crate::types::name(source.0),
+                crate::types::name(target)
+            ),
+        ));
+    };
+    let target = Target { name: "?column?".into(), expr, origin: None, junk: false };
+    Ok(Query { targets: vec![target], params: vec![source.0], ..Query::default() })
+}
+
+/// The name, the type and the typmod of each field of a row type, as `build_row_from_rowtype` reads them, or `None` for a type that is not the row type of a relation. A dropped column has no name and the type 0.
+pub fn row_type_fields(env: &dyn Env, ty: u32) -> Option<Vec<(String, u32, i32)>> {
+    let analyzer = Analyzer::new(env, &Params::default());
+    let columns = analyzer.row_columns(ty)?;
+    Some(columns.into_iter().map(|c| (c.name, c.ty, c.typmod)).collect())
+}
+
+/// The OID of the relation with the qualified name `names`, as `RangeVarGetRelid` finds it with the search path, or `None`.
+///
+/// # Errors
+///
+/// `0A000` for a name with a database that is not the current database.
+pub fn relation_by_names(env: &dyn Env, names: &[&str]) -> Result<Option<u32>> {
+    let mut rv = RangeVar::default();
+    match names {
+        [rel] => rv.relname = Some((*rel).into()),
+        [schema, rel] => {
+            rv.schemaname = Some((*schema).into());
+            rv.relname = Some((*rel).into());
+        }
+        [database, schema, rel] => {
+            rv.catalogname = Some((*database).into());
+            rv.schemaname = Some((*schema).into());
+            rv.relname = Some((*rel).into());
+        }
+        _ => return Ok(None),
+    }
+    Analyzer::new(env, &Params::default()).lookup_relation(&rv)
+}
+
+/// `plpgsql_parse_cwordtype`: the type and the typmod of the column `column` of the relation with the qualified name `names`, or `None` when the relation or the column does not exist.
+///
+/// # Errors
+///
+/// The errors of [`relation_by_names`].
+pub fn column_type(env: &dyn Env, names: &[&str], column: &str) -> Result<Option<(u32, i32)>> {
+    let Some(relid) = relation_by_names(env, names)? else { return Ok(None) };
+    let analyzer = Analyzer::new(env, &Params::default());
+    let Ok(columns) = analyzer.open_relation(relid, "", None) else { return Ok(None) };
+    Ok(columns.into_iter().find(|c| c.name == column).map(|c| (c.ty, c.typmod)))
+}
+
+/// `plpgsql_parse_wordrowtype`: the row type of the relation with the qualified name `names`, or `None`.
+///
+/// # Errors
+///
+/// The errors of [`relation_by_names`].
+pub fn relation_row_type(env: &dyn Env, names: &[&str]) -> Result<Option<u32>> {
+    let Some(relid) = relation_by_names(env, names)? else { return Ok(None) };
+    if let Some(rel) = env.catalog().and_then(|c| c.relation(relid)) {
+        return Ok(Some(rel.row_type).filter(|&ty| ty != 0));
+    }
+    Ok(rupg_pgcatalog::builtin::types().iter().find(|t| t.relid == relid).map(|t| t.oid))
+}
+
+impl Analyzer<'_> {
+    /// `plpgsql_post_column_ref` around `transformColumnRef`: the column, or the variable when no column has the name. A name that is both is an error.
+    pub(crate) fn column_or_variable(
+        &mut self,
+        c: &rupg_sql::nodes::ColumnRef,
+        variables: &dyn Variables,
+    ) -> Result<Expr> {
+        let at = crate::typename::place(c.location);
+        let names: Option<Vec<&str>> = c
+            .fields
+            .iter()
+            .map(|f| match f {
+                Some(Node::String(s)) => Some(&**s),
+                _ => None,
+            })
+            .collect();
+        let core = self.column_ref(c);
+        let Some(names) = names else { return core };
+        let missing =
+            |e: &Error| matches!(e.state(), SqlState::UNDEFINED_COLUMN | SqlState::UNDEFINED_TABLE);
+        match core {
+            Ok(expr) => match variables.column(&names, at)? {
+                Some(_) => Err(Error::new(
+                    SqlState::AMBIGUOUS_COLUMN,
+                    format!("column reference \"{}\" is ambiguous", names.join(".")),
+                )
+                .with_detail("It could refer to either a PL/pgSQL variable or a table column.")
+                .at_opt(at)),
+                None => Ok(expr),
+            },
+            Err(error) if missing(&error) => match variables.column(&names, at)? {
+                Some(variable) => Ok(self.variable_param(variable, at)),
+                None => Err(error),
+            },
+            Err(error) => Err(error),
+        }
+    }
+
+    /// The parameter of a variable. The parameters of the query grow to its number, and it gets the type of the variable.
+    pub(crate) fn variable_param(&mut self, variable: Variable, at: Option<usize>) -> Expr {
+        if self.params.len() < variable.param {
+            self.params.resize(variable.param, 0);
+        }
+        self.params[variable.param - 1] = variable.ty;
+        Expr {
+            kind: ExprKind::Param(variable.param),
+            ty: variable.ty,
+            typmod: variable.typmod,
+            location: at,
+        }
+    }
+}

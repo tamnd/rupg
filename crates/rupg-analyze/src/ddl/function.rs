@@ -18,6 +18,8 @@ use crate::{Analyzer, Env, Params, node, poly, types};
 
 /// The OID of the language `sql`.
 const SQL_LANGUAGE: u32 = 14;
+/// The OID of the language `plpgsql`, which the extension `plpgsql` of a new cluster makes.
+const PLPGSQL_LANGUAGE: u32 = 13708;
 /// The default `procost` of a function in a language other than C and `internal`.
 const DEFAULT_COST: u32 = 100;
 /// The default `prorows` of a function that returns a set.
@@ -34,6 +36,8 @@ pub enum Body {
 
 /// The facts of the options of `CREATE FUNCTION`.
 struct Options {
+    /// The OID of the language.
+    language: u32,
     strict: bool,
     volatile: u8,
     parallel: u8,
@@ -71,6 +75,7 @@ fn option_list(def: &DefElem) -> Option<Vec<String>> {
 /// `compute_function_attributes`: the options of the function. Each option that rupg does not have gives an error.
 fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
     let mut out = Options {
+        language: SQL_LANGUAGE,
         strict: false,
         volatile: b'v',
         parallel: b'u',
@@ -86,7 +91,8 @@ fn options(stmt: &CreateFunctionStmt) -> Result<Options> {
         let at = place(def.location);
         let bad = || not_yet(&format!("the option {name} of a function"), at);
         match (name, option_text(def)) {
-            ("language", Some("sql")) => {}
+            ("language", Some("sql")) => out.language = SQL_LANGUAGE,
+            ("language", Some("plpgsql")) => out.language = PLPGSQL_LANGUAGE,
             ("language", Some(language)) => {
                 return Err(not_yet(&format!("a function in the language {language}"), at));
             }
@@ -403,7 +409,9 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
             &built_in
         }
     };
-    let Some(body) = &function.body else { return Ok(None) };
+    let Some(body) = function.body.as_ref().filter(|_| function.lang == SQL_LANGUAGE) else {
+        return Ok(None);
+    };
     let (list, _) = rupg_sql::parse(&body.text).map_err(Error::from)?;
     let stmt = list.iter().flatten().find_map(|node| match node {
         Node::RawStmt(raw) => match raw.stmt.as_ref() {
@@ -592,7 +600,7 @@ impl Definer<'_, '_> {
             name: name.to_string(),
             namespace,
             owner: self.user,
-            lang: SQL_LANGUAGE,
+            lang: options.language,
             cost: options.cost,
             rows: if retset { options.rows.unwrap_or(DEFAULT_ROWS) } else { 0 },
             support,
@@ -637,10 +645,14 @@ impl Definer<'_, '_> {
             }
             self.check_replace(old, &function)?;
         }
-        // `fmgr_sql_validator`: the only pseudo-types that a function in SQL can take are the polymorphic types, and it can also return `void` and `record`.
         let pseudo = |ty: u32| {
             builtin::type_by_oid(ty).is_some_and(|t| t.kind == b'p') && !types::is_polymorphic(ty)
         };
+        if function.lang == PLPGSQL_LANGUAGE {
+            self.check_plpgsql(stmt, &function).map_err(transpose)?;
+            return self.store_function(old, function, &defaults, support, Vec::new());
+        }
+        // `fmgr_sql_validator`: the only pseudo-types that a function in SQL can take are the polymorphic types, and it can also return `void` and `record`.
         if pseudo(rettype) && !matches!(rettype, oid::VOID | oid::RECORD) {
             return Err(Error::new(
                 SqlState::INVALID_FUNCTION_DEFINITION,
@@ -670,10 +682,22 @@ impl Definer<'_, '_> {
                 (Body::Query(query), _) => super::view::function_references(self.catalog, query),
             };
         }
+        self.store_function(old, function, &defaults, support, refs)
+    }
+
+    /// `ProcedureCreate`: adds the function to the catalog, or replaces `old`, with the dependencies `refs` of its body and the dependencies of its support function, its defaults and its types.
+    fn store_function(
+        &mut self,
+        old: Option<Function>,
+        function: Function,
+        defaults: &[Expr],
+        support: u32,
+        mut refs: Vec<ObjRef>,
+    ) -> Result<u32> {
         if support != 0 {
             refs.push(ObjRef::new(PG_PROC, support));
         }
-        for default in &defaults {
+        for default in defaults {
             for found in body_references(self.catalog, default) {
                 if !refs.contains(&found) {
                     refs.push(found);
@@ -696,6 +720,53 @@ impl Definer<'_, '_> {
             Some(old) => self.catalog.replace_function(old.oid, function, &refs).map(|()| old.oid),
             None => self.catalog.create_function(function, &refs),
         }
+    }
+
+    /// `plpgsql_validator`: a function in PL/pgSQL has a body in a string, and the only pseudo-types that it can take are the polymorphic types and `record`. It can also return `void`, `trigger` and `event_trigger`. Then the session compiles the body.
+    fn check_plpgsql(&self, stmt: &CreateFunctionStmt, function: &Function) -> Result<()> {
+        if stmt.sql_body.is_some() {
+            return Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                "inline SQL function body only valid for language SQL",
+            ));
+        }
+        if function.src.is_empty()
+            && !stmt
+                .options
+                .iter()
+                .flatten()
+                .any(|o| matches!(o, Node::DefElem(def) if def.defname.as_deref() == Some("as")))
+        {
+            return Err(Error::new(
+                SqlState::INVALID_FUNCTION_DEFINITION,
+                "no function body specified",
+            ));
+        }
+        let pseudo = |ty: u32| builtin::type_by_oid(ty).is_some_and(|t| t.kind == b'p');
+        let ret = function.rettype;
+        if pseudo(ret)
+            && !matches!(ret, oid::TRIGGER | oid::EVENT_TRIGGER | oid::RECORD | oid::VOID)
+            && !types::is_polymorphic(ret)
+        {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("PL/pgSQL functions cannot return type {}", types::name(ret)),
+            ));
+        }
+        let args = if function.allargtypes.is_empty() {
+            &function.argtypes
+        } else {
+            &function.allargtypes
+        };
+        if let Some(&ty) =
+            args.iter().find(|&&ty| pseudo(ty) && ty != oid::RECORD && !types::is_polymorphic(ty))
+        {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("PL/pgSQL functions cannot accept type {}", types::name(ty)),
+            ));
+        }
+        self.an.env.check_function(function)
     }
 
     /// The checks of `ProcedureCreate` for `CREATE OR REPLACE FUNCTION` of the function `old`: the owner, the result type, the row type of the `OUT` parameters, the names of the input arguments and the defaults do not change. New defaults can be added before the old ones.

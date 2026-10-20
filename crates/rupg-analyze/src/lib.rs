@@ -23,6 +23,7 @@ mod locking;
 mod merge;
 mod modify;
 pub mod node;
+mod plpgsql;
 mod poly;
 mod prepare;
 mod record;
@@ -75,6 +76,10 @@ pub use funcargs::{arg_defaults, expand_arguments};
 pub use insert::{Action, Foreign, OnConflict, Unique, Write, WriteKind};
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use merge::{MatchKind, Merge, MergeClause, MergeCommand};
+pub use plpgsql::{
+    Variable, Variables, analyze_with, column_type, plpgsql_cast, relation_by_names,
+    relation_row_type, row_type_fields,
+};
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
 pub use searchcycle::{CycleClause, SearchClause};
@@ -134,6 +139,15 @@ pub trait Env {
     /// The number of the session in the table of the sessions, which names its temporary schema `pg_temp_N`, or `None` for a session that cannot have temporary objects.
     fn temp_number(&self) -> Option<i32> {
         None
+    }
+    /// The validator of the language of a new function in a procedural language, such as `plpgsql_validator`, which compiles the body. A session with no language passes the function.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the compile of the body.
+    fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
+        let _ = function;
+        Ok(())
     }
 }
 
@@ -198,6 +212,8 @@ pub(crate) struct Analyzer<'a> {
     works: usize,
     /// The number of the statements of `WITH` that change data, which [`Cte::write`] counts.
     writes: usize,
+    /// The variables of the PL/pgSQL function whose query the analyzer reads now, or `None`.
+    variables: Option<&'a dyn Variables>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -248,6 +264,7 @@ impl<'a> Analyzer<'a> {
             parent_cte: None,
             works: 0,
             writes: 0,
+            variables: None,
         }
     }
 
@@ -283,7 +300,18 @@ pub fn view_query(env: &dyn Env, oid: u32) -> Result<Option<Query>> {
 
 /// `parse_analyze`: the query tree of a raw statement, which is the `stmt` of a `RawStmt`. For a statement of the extended protocol, the [`Query`] has the type of each parameter.
 pub fn analyze(stmt: &Node, env: &dyn Env, params: &Params) -> Result<Query> {
+    analyze_hooked(stmt, env, params, None)
+}
+
+/// [`analyze`] with the variables of a PL/pgSQL function, if any.
+fn analyze_hooked(
+    stmt: &Node,
+    env: &dyn Env,
+    params: &Params,
+    variables: Option<&dyn Variables>,
+) -> Result<Query> {
     let mut analyzer = Analyzer::new(env, params);
+    analyzer.variables = variables;
     let mut query = match stmt {
         Node::SelectStmt(select) => analyzer.select(select)?,
         Node::InsertStmt(insert) => analyzer.insert(insert)?,
