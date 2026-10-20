@@ -1,0 +1,120 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION f(a int) RETURNS int LANGUAGE sql RETURN a + 1;
+CREATE FUNCTION
+> CREATE FUNCTION f(a text) RETURNS text LANGUAGE sql RETURN a || '!';
+CREATE FUNCTION
+> ALTER FUNCTION f(int) IMMUTABLE STRICT COST 5 PARALLEL SAFE;
+ALTER FUNCTION
+> SELECT provolatile, proisstrict, procost, proparallel FROM pg_proc WHERE oid = 'f(int)'::regprocedure;
+fields provolatile@pg_proc.15:18:1:-1,proisstrict@pg_proc.13:16:1:-1,procost@pg_proc.6:700:4:-1,proparallel@pg_proc.16:18:1:-1
+row i,t,5,s
+SELECT 1
+> ALTER FUNCTION f(int) STABLE CALLED ON NULL INPUT PARALLEL RESTRICTED;
+ALTER FUNCTION
+> SELECT provolatile, proisstrict, procost, proparallel FROM pg_proc WHERE oid = 'f(int)'::regprocedure;
+fields provolatile@pg_proc.15:18:1:-1,proisstrict@pg_proc.13:16:1:-1,procost@pg_proc.6:700:4:-1,proparallel@pg_proc.16:18:1:-1
+row s,f,5,r
+SELECT 1
+> ALTER FUNCTION f(int) ROWS 10;
+ERROR 22023 ROWS is not applicable when function does not return a set
+> ALTER FUNCTION f(int) COST 0;
+ERROR 22023 COST must be positive
+> ALTER FUNCTION f(int) IMMUTABLE VOLATILE;
+ERROR 42601 conflicting or redundant options at 33
+> ALTER FUNCTION f IMMUTABLE;
+ERROR 42725 function name "f" is not unique
+HINT Specify the argument list to select the function unambiguously.
+> ALTER FUNCTION f(bigint) IMMUTABLE;
+ERROR 42883 function f(bigint) does not exist
+> ALTER FUNCTION nosuch IMMUTABLE;
+ERROR 42883 could not find a function named "nosuch"
+> ALTER FUNCTION f(int) RENAME TO g;
+ALTER FUNCTION
+> SELECT g(1), 'g(int)'::regprocedure;
+fields g:23:4:-1,regprocedure:2202:4:-1
+row 2,g(integer)
+SELECT 1
+> ALTER FUNCTION f(text) RENAME TO g;
+ALTER FUNCTION
+> CREATE FUNCTION g(a text) RETURNS text LANGUAGE sql RETURN a;
+ERROR 42723 function "g" already exists with same argument types
+> ALTER FUNCTION g(int) RENAME TO f;
+ALTER FUNCTION
+> SELECT f(2);
+fields f:23:4:-1
+row 3
+SELECT 1
+> CREATE FUNCTION h(a int) RETURNS int LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> ALTER FUNCTION h(int) RENAME TO f;
+ERROR 42723 function f(integer) already exists in schema "public"
+> ALTER FUNCTION h(int) RENAME TO h;
+ERROR 42723 function h(integer) already exists in schema "public"
+> ALTER FUNCTION h(int) ROWS 0;
+ERROR 22023 ROWS must be positive
+> ALTER FUNCTION count(*) IMMUTABLE;
+ERROR 42601 syntax error at or near "*" at 22
+> ALTER ROUTINE h(int) VOLATILE;
+ALTER ROUTINE
+> DROP FUNCTION h(int);
+DROP FUNCTION
+> CREATE SCHEMA s;
+CREATE SCHEMA
+> ALTER FUNCTION f(int) SET SCHEMA s;
+ALTER FUNCTION
+> SELECT s.f(3), 'f(int)'::regprocedure;
+ERROR 42883 function "f(int)" does not exist at 16
+> SELECT pg_describe_object(classid, objid, objsubid), pg_describe_object(refclassid, refobjid, refobjsubid) FROM pg_depend WHERE objid = 's.f(int)'::regprocedure AND refclassid = 'pg_namespace'::regclass;
+fields pg_describe_object:25:-1:-1,pg_describe_object:25:-1:-1
+row function s.f(integer),schema s
+SELECT 1
+> ALTER FUNCTION s.f(int) SET SCHEMA nosuch;
+ERROR 3F000 schema "nosuch" does not exist
+> CREATE FUNCTION s.f(a text) RETURNS text LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> ALTER FUNCTION f(text) SET SCHEMA s;
+ERROR 42883 function f(text) does not exist
+> CREATE FUNCTION f(a text) RETURNS text LANGUAGE sql RETURN a;
+CREATE FUNCTION
+> ALTER FUNCTION f(text) SET SCHEMA s;
+ERROR 42723 function f(text) already exists in schema "s"
+> ALTER FUNCTION s.f(int) SET SCHEMA s;
+ALTER FUNCTION
+> DROP FUNCTION f(text);
+DROP FUNCTION
+> DROP SCHEMA s;
+ERROR 2BP01 cannot drop schema s because other objects depend on it
+DETAIL function s.f(integer) depends on schema s
+function s.f(text) depends on schema s
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> COMMENT ON FUNCTION s.f(int) IS 'adds one';
+COMMENT
+> SELECT obj_description('s.f(int)'::regprocedure, 'pg_proc');
+fields obj_description:25:-1:-1
+row adds one
+SELECT 1
+> COMMENT ON FUNCTION s.f(int) IS NULL;
+COMMENT
+> SELECT obj_description('s.f(int)'::regprocedure, 'pg_proc');
+fields obj_description:25:-1:-1
+row NULL
+SELECT 1
+> COMMENT ON FUNCTION s.f(bigint) IS 'x';
+ERROR 42883 function s.f(bigint) does not exist
+> ALTER FUNCTION s.f(int) OWNER TO pg_monitor;
+ALTER FUNCTION
+> SELECT proowner::regrole FROM pg_proc WHERE oid = 's.f(int)'::regprocedure;
+fields proowner:4096:4:-1
+row pg_monitor
+SELECT 1
+> ALTER FUNCTION s.f(int) OWNER TO nosuch;
+ERROR 42704 role "nosuch" does not exist
+> ALTER FUNCTION f(text) RESET ALL;
+ERROR 42883 function f(text) does not exist
+> DROP FUNCTION s.f(int);
+DROP FUNCTION
+> DROP SCHEMA s CASCADE;
+NOTICE 00000 drop cascades to function s.f(text)
+DROP SCHEMA

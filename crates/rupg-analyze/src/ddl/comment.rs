@@ -1,6 +1,8 @@
-//! `CommentObject`: `COMMENT ON`, as `comment.c` runs it, with the lookup of `get_object_address` and the checks of `check_object_ownership`. The objects are the schemas, the tables, the views, the indexes, the sequences, the columns, the constraints of the tables, the types and the objects of text search of the catalog. A comment on a built-in object or on an object of another kind gives `0A000`.
+//! `CommentObject`: `COMMENT ON`, as `comment.c` runs it, with the lookup of `get_object_address` and the checks of `check_object_ownership`. The objects are the schemas, the tables, the views, the indexes, the sequences, the columns, the constraints of the tables, the types, the functions and the objects of text search of the catalog. A comment on a built-in object or on an object of another kind gives `0A000`.
 
-use rupg_catalog::{ObjRef, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_TYPE};
+use rupg_catalog::{
+    FIRST_NORMAL_OID, ObjRef, PG_CLASS, PG_CONSTRAINT, PG_NAMESPACE, PG_PROC, PG_TYPE,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{CommentStmt, Node, ObjectType, RangeVar};
@@ -74,6 +76,9 @@ impl Definer<'_, '_> {
             | ObjectType::OBJECT_TSPARSER
             | ObjectType::OBJECT_TSDICTIONARY
             | ObjectType::OBJECT_TSCONFIGURATION => self.comment_ts(stmt.objtype, object)?,
+            ObjectType::OBJECT_FUNCTION | ObjectType::OBJECT_ROUTINE => {
+                self.comment_function(stmt.objtype, object)?
+            }
             _ => return Err(not_yet("COMMENT on this kind of object", None)),
         };
         let text = stmt.comment.as_deref().filter(|c| !c.is_empty()).map(str::to_string);
@@ -89,6 +94,24 @@ impl Definer<'_, '_> {
             return Err(not_owner(word, name));
         }
         Ok(oid)
+    }
+
+    /// A function, by `LookupFuncWithArgs`.
+    fn comment_function(&mut self, objtype: ObjectType, object: Option<&Node>) -> Result<ObjRef> {
+        let Some(Node::ObjectWithArgs(item)) = object else {
+            return Err(Error::internal("a function name with arguments"));
+        };
+        let found = self
+            .find_function(item, false)?
+            .ok_or_else(|| Error::internal("a function that the lookup did not find"))?;
+        if !self.is_superuser() && found.owner != self.user {
+            let word = if objtype == ObjectType::OBJECT_ROUTINE { "routine" } else { "function" };
+            return Err(not_owner(word, &names(&item.objname).join(".")));
+        }
+        if found.oid < FIRST_NORMAL_OID {
+            return Err(builtin_object());
+        }
+        Ok(ObjRef::new(PG_PROC, found.oid))
     }
 
     /// A schema, by `get_namespace_oid`.
