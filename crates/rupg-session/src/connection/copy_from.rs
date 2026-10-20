@@ -1,5 +1,6 @@
-//! `COPY ... FROM STDIN`, as `DoCopy`, `BeginCopyFrom`, `CopyFrom` and `copyfromparse.c` run it. The copy reads the fields of each line, and `NextCopyFrom` makes the values of the columns with the input functions or the receive functions of their types. The other columns get their defaults from a plan of `INSERT`, which also checks the constraints. The copy keeps up to `MAX_BUFFERED_TUPLES` rows and then writes them in the heap, as `CopyMultiInsertInfoFlush` does. The triggers of the foreign keys fire at the end of the copy.
+//! `COPY ... FROM STDIN` and `COPY ... FROM` a file of the server, as `DoCopy`, `BeginCopyFrom`, `CopyFrom` and `copyfromparse.c` run it. The copy reads the fields of each line, and `NextCopyFrom` makes the values of the columns with the input functions or the receive functions of their types. The other columns get their defaults from a plan of `INSERT`, which also checks the constraints. The copy keeps up to `MAX_BUFFERED_TUPLES` rows and then writes them in the heap, as `CopyMultiInsertInfoFlush` does. The triggers of the foreign keys fire at the end of the copy.
 
+use std::path::Path;
 use std::rc::Rc;
 
 use rupg_analyze::{CopyTarget, Params};
@@ -9,11 +10,11 @@ use rupg_pgcatalog::builtin;
 use rupg_sql::Severity;
 use rupg_sql::nodes::{CopyStmt, RangeVar};
 use rupg_types::Value;
-use rupg_wire::OutBuf;
+use rupg_wire::{CommandTag, OutBuf};
 
-use super::Connection;
 use super::copy::{BINARY_SIGNATURE, ForceQuote, Format, OnError, Verbosity, options};
 use super::foreign::Batch;
+use super::{Connection, Done};
 use crate::heap::{Changed, View};
 use crate::query::{self, Reader};
 use crate::utility::Notice;
@@ -23,6 +24,14 @@ const MAX_DISPLAY: usize = 100;
 
 /// `MAX_BUFFERED_TUPLES`: the number of rows that the copy keeps before it writes them in the heap.
 const MAX_BUFFERED: usize = 1000;
+
+/// Where the data of a copy comes from: the client, which gets `CopyInResponse`, or a file of the server, which the copy reads at the same point.
+#[derive(Debug)]
+pub(super) enum Begin<'a> {
+    Client(&'a mut OutBuf),
+    /// The name of the file, and the bytes of the file after the copy reads it.
+    File(&'a str, &'a mut Vec<u8>),
+}
 
 /// A line of data that the copy read, before `NextCopyFrom` makes its values.
 #[derive(Debug)]
@@ -157,9 +166,68 @@ pub(super) struct CopyIn {
 }
 
 impl Connection {
-    /// The checks of `DoCopy` and `BeginCopyFrom` for `COPY ... FROM STDIN`, then `CopyInResponse` and the checks of `CopyFrom`. The caller starts the copy with the state that this gives.
-    pub(super) fn copy_from(&self, stmt: &CopyStmt, out: &mut OutBuf) -> Result<CopyIn, Error> {
-        if stmt.filename.is_some() {
+    /// `COPY ... FROM` a file: the checks of `DoCopy`, then the copy reads the whole file where `BeginCopyFrom` opens it, and runs as a copy that got all the bytes at once. A program is not supported yet.
+    pub(super) fn copy_from_file(
+        &self,
+        stmt: &CopyStmt,
+        notices: &mut Vec<Notice>,
+    ) -> Result<Done, Error> {
+        if stmt.is_program {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "COPY FROM a program is not supported yet",
+            ));
+        }
+        if !self.superuser() {
+            return Err(Error::new(
+                SqlState::INSUFFICIENT_PRIVILEGE,
+                "permission denied to COPY from a file",
+            )
+            .with_detail(
+                "Only roles with privileges of the \"pg_read_server_files\" role may COPY from a file.",
+            )
+            .with_hint(
+                "Anyone can COPY to stdout or from stdin. psql's \\copy command also works for anyone.",
+            ));
+        }
+        let name = stmt.filename.as_deref().unwrap_or_default();
+        let mut bytes = Vec::new();
+        let mut copy = self.copy_from(stmt, Begin::File(name, &mut bytes))?;
+        let read = self.copy_data(&mut copy, &bytes);
+        let count = read.and_then(|()| self.copy_done(&mut copy));
+        notices.append(&mut copy.notices);
+        Ok(Done::Count(CommandTag::Copy, count?))
+    }
+
+    /// `AllocateFile` and the check of `BeginCopyFrom` for a file of the server: the bytes of the file. A relative name is in the data directory, which is the working directory of the server.
+    fn read_server_file(&self, name: &str) -> Result<Vec<u8>, Error> {
+        let Some(io) = &self.io else {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "COPY FROM a file in a session with no server is not supported yet",
+            ));
+        };
+        let path = Path::new(name);
+        let reading = |error: Error| {
+            let prefix = format!("could not open file \"{name}\": ");
+            let text = error.message().strip_prefix(&prefix).unwrap_or(error.message()).to_owned();
+            Error::new(error.state(), format!("could not open file \"{name}\" for reading: {text}"))
+        };
+        if let Ok(mode) = io.mode(path)
+            && !mode.regular
+            && io.read_dir(path).is_ok()
+        {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("\"{name}\" is a directory"),
+            ));
+        }
+        io.read_file(path).map_err(reading)
+    }
+
+    /// The checks of `DoCopy` and `BeginCopyFrom` for `COPY ... FROM STDIN` or a file, then `CopyInResponse` or the read of the file, and the checks of `CopyFrom`. The caller starts the copy with the state that this gives.
+    pub(super) fn copy_from(&self, stmt: &CopyStmt, begin: Begin<'_>) -> Result<CopyIn, Error> {
+        if stmt.filename.is_some() && matches!(begin, Begin::Client(_)) {
             let what = if stmt.is_program { "a program" } else { "a file" };
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
@@ -262,7 +330,13 @@ impl Connection {
         let force_not_null = flags(&options.force_not_null)?;
         let force_null = flags(&options.force_null)?;
         let binary = options.format == Format::Binary;
-        out.copy_in_response(i8::from(binary), &vec![i16::from(binary); target.selected.len()]);
+        match begin {
+            Begin::Client(out) => out.copy_in_response(
+                i8::from(binary),
+                &vec![i16::from(binary); target.selected.len()],
+            ),
+            Begin::File(name, bytes) => *bytes = self.read_server_file(name)?,
+        }
         let name = &target.name;
         let wrong = |message: String| Error::new(SqlState::WRONG_OBJECT_TYPE, message);
         match target.kind {
