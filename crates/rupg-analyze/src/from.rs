@@ -1553,6 +1553,9 @@ impl Analyzer<'_> {
                 if let Some((level, item)) = self.item_by_name(None, column, at)? {
                     return self.whole_row(level, &item, at);
                 }
+                if let Some(expr) = self.function_argument(&names, at)? {
+                    return Ok(expr);
+                }
                 return Err(self.missing_column(None, column, at));
             }
             [Some(table), None] => {
@@ -1600,11 +1603,45 @@ impl Analyzer<'_> {
             }
         };
         let Some((level, item)) = self.item_by_name(schema, table, at)? else {
+            if let Some(expr) = self.function_argument(&names, at)? {
+                return Ok(expr);
+            }
             return Err(self.missing_entry(schema, table, at));
         };
         match self.column_in(level, &item, column, at)? {
             Some(expr) => Ok(expr),
-            None => Err(self.missing_column(Some(table), column, at)),
+            None => match self.function_argument(&names, at)? {
+                Some(expr) => Ok(expr),
+                None => Err(self.missing_column(Some(table), column, at)),
+            },
+        }
+    }
+
+    /// `sql_fn_post_column_ref`: in the body of a function in SQL, a name that is no column can be an argument: `arg`, `function.arg`, `arg.field` or `function.arg.field`.
+    fn function_argument(
+        &mut self,
+        names: &[Option<&str>],
+        at: Option<usize>,
+    ) -> Result<Option<Expr>> {
+        let Some((function, args)) = &self.sql_function else { return Ok(None) };
+        let arg = |name: &str| args.iter().position(|a| a == name);
+        let found = match names {
+            [Some(name)] => arg(name).map(|n| (n, None)),
+            [Some(first), Some(name)] if *first == function.as_str() && arg(name).is_some() => {
+                arg(name).map(|n| (n, None))
+            }
+            [Some(name), Some(field)] => arg(name).map(|n| (n, Some(*field))),
+            [Some(first), Some(name), Some(field)] if *first == function.as_str() => {
+                arg(name).map(|n| (n, Some(*field)))
+            }
+            _ => None,
+        };
+        let Some((n, field)) = found else { return Ok(None) };
+        let number = i32::try_from(n + 1).map_err(|_| Error::internal("too many arguments"))?;
+        let param = self.transform_param(number, at)?;
+        match field {
+            Some(field) => self.field_select(param, field, at).map(Some),
+            None => Ok(Some(param)),
         }
     }
 

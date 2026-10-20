@@ -178,6 +178,20 @@ fn result_types(function: &Function, inputs: &[u32]) -> Result<Vec<u32>> {
         .collect()
 }
 
+/// The names of the input arguments of a function, in the order of their numbers. An argument with no name has an empty name.
+fn input_names(function: &Function) -> Vec<String> {
+    if function.argmodes.is_empty() {
+        return function.argnames.clone();
+    }
+    function
+        .argmodes
+        .iter()
+        .zip(&function.argnames)
+        .filter(|(mode, _)| matches!(mode, b'i' | b'b' | b'v'))
+        .map(|(_, name)| name.clone())
+        .collect()
+}
+
 /// The error of `check_sql_fn_retval` for a body with the wrong columns, in the function `name`.
 fn mismatch(rettype: u32, name: &str, detail: String) -> Error {
     Error::new(
@@ -362,6 +376,7 @@ pub fn function_body(env: &dyn Env, oid: u32, inputs: &[u32]) -> Result<Option<B
     let params = Params { types: inputs.to_vec(), variable: false };
     let mut an = Analyzer::new(env, &params);
     an.path.clone_from(&body.path);
+    an.sql_function = Some((function.name.clone(), input_names(function)));
     an.body(function, &stmts, inputs).map(Some)
 }
 
@@ -519,6 +534,7 @@ impl Definer<'_, '_> {
             let params = Params { types: function.argtypes.clone(), variable: false };
             let mut an = Analyzer::new(self.an.env, &params);
             an.path.clone_from(&self.an.path);
+            an.sql_function = Some((function.name.clone(), input_names(&function)));
             let body = an.body(&function, &stmts, &function.argtypes)?;
             self.an.notices.append(&mut an.notices);
             refs = match (&body, &stmts) {

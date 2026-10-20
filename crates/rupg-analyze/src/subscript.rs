@@ -104,7 +104,12 @@ impl Analyzer<'_> {
     }
 
     /// `ParseComplexProjection` and `unknown_attribute`: the field of a row value with the name. A field of the whole row of a relation is the column of the relation. A value of type `record` has the fields that [`crate::record_fields`] finds. A name that is no field can be a function in the functional notation, which rupg does not have yet.
-    fn field_select(&mut self, arg: Expr, name: &str, at: Option<usize>) -> Result<Expr> {
+    pub(crate) fn field_select(
+        &mut self,
+        arg: Expr,
+        name: &str,
+        at: Option<usize>,
+    ) -> Result<Expr> {
         if let ExprKind::Var(var) = arg.kind
             && var.attnum == 0
         {
