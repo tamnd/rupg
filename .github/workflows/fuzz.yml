@@ -1,6 +1,6 @@
 # The long fuzz runs of spec/21 section 21.7. A milestone closes only when each of its targets has its CPU hours with no open find. This workflow runs on request only.
 #
-# Each job runs one target with one libFuzzer worker on each of the 4 CPUs of the runner. A job has a limit of 6 hours, so a target gets more than one job. The CPU hours of a target are the jobs times 4 times the time of one job. With the defaults, each target gets 2 jobs of 3 hours and 10 minutes, which is 25.3 CPU hours.
+# Each job runs one target with one libFuzzer worker on each of the 4 CPUs of the runner. A job has a limit of 6 hours, so a target gets more than one job. The CPU hours of a target are the jobs times 4 times the time of one job. With the defaults, each target gets 2 jobs of 3 hours and 10 minutes, which is 25.3 CPU hours. The 8 jobs run in 2 groups of 4, so the run takes about 6.5 hours.
 
 name: fuzz
 
@@ -31,6 +31,8 @@ jobs:
     timeout-minutes: 350
     strategy:
       fail-fast: false
+      # At most 4 jobs run at once, so the run leaves runners for the checks of the pull requests.
+      max-parallel: 4
       matrix:
         target: ${{ fromJSON(inputs.targets) }}
         job: ${{ fromJSON(inputs.jobs) }}
