@@ -361,7 +361,9 @@ pub struct Connection {
     database_oid: u32,
     protocol: u32,
     statements: Statements<Arc<Prepared>>,
-    portals: Portals<Portal>,
+    portals: RefCell<Portals<Portal>>,
+    /// `unnamed_portal_count` of `portalmem.c`: the number of the last portal that a function in PL/pgSQL opened with no name.
+    unnamed_portals: Cell<u32>,
     /// `xact_started` of `postgres.c`: a statement runs in the transaction, so `finish_xact_command` must end it.
     xact_started: bool,
     /// `XACT_FLAGS_PIPELINING`: an `Execute` completed in the transaction, so the next message starts an implicit block.
@@ -456,7 +458,8 @@ impl Connection {
             database_oid: database::POSTGRES,
             protocol,
             statements: Statements::new(),
-            portals: Portals::new(),
+            portals: RefCell::new(Portals::new()),
+            unnamed_portals: Cell::new(0),
             xact_started: false,
             pipelining: false,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -1405,42 +1408,42 @@ impl Connection {
                     "current transaction is aborted, commands ignored until end of transaction block",
                 ))
             } else if let Some(stmt) = utility::is_savepoint(node) {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.savepoint(stmt)
             } else if prepare::is_prepare(node) {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.run_prepare(node, text, &[], &mut notices, 0)
             } else if let Node::ExplainStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.explain(stmt, &mut notices)
             } else if query::is_query(node) {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.select(node, &mut notices, &mut late, &mut described)
             } else if let Node::CallStmt(_) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.call(node, &mut notices, &mut late, &mut described)
             } else if roles::is_role_statement(node) {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.role_statement(node, &mut notices)
             } else if rupg_analyze::is_definition(node) {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.define(node, statement, &mut notices)
             } else if let Node::LockStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.lock(stmt)
             } else if let Node::ConstraintsSetStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.set_constraints(stmt, &mut notices)
             } else if let Node::CopyStmt(stmt) = node
                 && stmt.is_from
                 && stmt.filename.is_some()
             {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.copy_from_file(stmt, &mut notices)
             } else if let Node::CopyStmt(stmt) = node
                 && stmt.is_from
             {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 match self.copy_from(stmt, Begin::Client(out)) {
                     Ok(mut copy) => {
                         copy.text = text.to_string();
@@ -1452,37 +1455,37 @@ impl Connection {
                     Err(error) => Err(error),
                 }
             } else if let Node::CopyStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.copy(stmt, &mut copying)
             } else if let Node::CreatedbStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.create_database(stmt, &mut notices)
             } else if let Node::DropdbStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.drop_database(stmt, &mut notices)
             } else if let Node::AlterDatabaseSetStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.alter_database_set(stmt)
             } else if let Node::VacuumStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.vacuum(stmt, &mut notices)
             } else if let Node::DeclareCursorStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.declare(stmt, text, None, &[], &mut notices)
             } else if let Node::FetchStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.fetch_cursor(stmt, None)
             } else if let Node::ClosePortalStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 self.close_cursor(stmt, b"")
             } else if let Node::DoStmt(stmt) = node {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 let mut warnings = Vec::new();
                 let result = self.run_do(stmt, text, &mut warnings);
                 notices.extend(warnings.into_iter().map(Notice::of_function));
                 result.map(|()| Done::Tag(CommandTag::Do))
             } else {
-                drop(self.portals.close(b""));
+                drop(self.portals.get_mut().close(b""));
                 match self.ts_config(node) {
                     Ok(ts_config) => {
                         let mut cx = Context {
@@ -1518,7 +1521,7 @@ impl Connection {
             };
             if matches!(outcome, Done::Tag(CommandTag::DiscardAll)) {
                 self.statements.deallocate_all();
-                self.portals.clear();
+                self.portals.get_mut().clear();
             }
             if matches!(outcome, Done::Tag(CommandTag::DiscardAll | CommandTag::DiscardSequences)) {
                 self.sequences.get_mut().discard();
@@ -1691,7 +1694,7 @@ impl Connection {
 
     /// The end of a transaction, which removes the portals. A cursor `WITH HOLD` stays after a commit, and a cursor `WITH HOLD` of a transaction before this one stays after a rollback, as `PreCommit_Portals` and `AtCleanup_Portals` keep them.
     fn ended(&mut self, commit: bool) {
-        self.portals.retain(|_, portal| match &mut portal.run {
+        self.portals.get_mut().retain(|_, portal| match &mut portal.run {
             extended::Run::Cursor(cursor) if commit && cursor.holdable() => {
                 cursor.fresh = false;
                 true
@@ -1725,7 +1728,7 @@ impl Connection {
         if self.transaction.failed() {
             // In a subtransaction only the portals of the subtransaction fail.
             let depth = self.transaction.depth();
-            self.portals.retain(|_, portal| {
+            self.portals.get_mut().retain(|_, portal| {
                 let held = portal.as_cursor().is_some_and(cursor::Cursor::held);
                 portal.failed |= portal.level >= depth && !held;
                 true
@@ -4635,6 +4638,12 @@ mod tests {
     #[test]
     fn plpgsql_field_targets() {
         big_stack(|| script(include_str!("connection/plpgsql_field_targets.test")));
+    }
+
+    /// The cursors of PL/pgSQL: bound and unbound cursor variables, `OPEN` with arguments by place and by name, `OPEN FOR EXECUTE`, `FETCH` and `MOVE` in each direction, `CLOSE`, and the `FOR` loop over a cursor. A cursor that a function opens is a portal of the session that SQL can fetch from, and a subtransaction that rolls back closes the cursors that it opened. The errors of the compile and of the run are the errors of PostgreSQL. `connection/plpgsql_cursors.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_cursors() {
+        big_stack(|| script(include_str!("connection/plpgsql_cursors.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

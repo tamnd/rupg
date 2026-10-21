@@ -47,7 +47,7 @@ impl Connection {
                     self.settings.get_mut().release(&mark.settings);
                 }
                 self.marks.truncate(depth);
-                self.portals.retain(|_, portal| {
+                self.portals.get_mut().retain(|_, portal| {
                     portal.level = portal.level.min(depth);
                     true
                 });
@@ -55,7 +55,7 @@ impl Connection {
             _ => {
                 self.marks.truncate(depth);
                 self.roll_back_subtransaction();
-                self.portals.retain(|_, portal| portal.level < depth);
+                self.portals.get_mut().retain(|_, portal| portal.level < depth);
             }
         }
         self.settings.get_mut().set_subtransaction(depth > 0);

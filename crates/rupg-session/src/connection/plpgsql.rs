@@ -9,13 +9,16 @@ use rupg_catalog::Catalog;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
-use rupg_plpgsql::{Cache, Spi};
-use rupg_sql::nodes::{DoStmt, Node};
+use rupg_plpgsql::{Cache, Fetched, Spi};
+use rupg_sql::nodes::{DoStmt, FetchDirection, Node};
 use rupg_types::Value;
 
 use super::foreign::Batch;
 use super::{Applied, Connection};
 use crate::query::Reader;
+
+/// The state at the start of a subtransaction: the command, the deferred triggers and the names of the open portals.
+type Mark = (u32, Vec<Batch>, Vec<Vec<u8>>);
 
 /// The SPI of one call: the reader of the statement that called the function, and the reader of the current command of the transaction.
 struct PlSpi<'a> {
@@ -24,8 +27,8 @@ struct PlSpi<'a> {
     outer: &'a Reader<'a>,
     /// The reader of the last query and its command. A write ends the command, so that the next query sees the rows.
     reader: RefCell<Option<(u32, Rc<Reader<'a>>)>>,
-    /// The command and the deferred triggers at the start of each subtransaction.
-    marks: RefCell<Vec<(u32, Vec<Batch>)>>,
+    /// The command, the deferred triggers and the names of the open portals at the start of each subtransaction.
+    marks: RefCell<Vec<Mark>>,
 }
 
 impl<'a> PlSpi<'a> {
@@ -112,9 +115,61 @@ impl Spi for PlSpi<'_> {
         Ok((rows, count))
     }
 
+    fn cursor_exists(&self, name: &str) -> bool {
+        self.conn.portals.borrow().find(name.as_bytes()).is_some()
+    }
+
+    fn open_cursor(
+        &self,
+        name: Option<&str>,
+        plan: &Plan,
+        params: &[Value],
+        text: &str,
+        options: i32,
+    ) -> rupg_common::Result<String> {
+        let reader = self.reader();
+        plan.start(&*reader)?;
+        let run = plan.run(params, &*reader);
+        self.forward(&reader);
+        drop(reader);
+        let name = name.map_or_else(|| self.new_portal_name(), str::to_owned);
+        self.conn.open_portal(&name, plan, run, text, options);
+        Ok(name)
+    }
+
+    fn fetch_cursor(
+        &self,
+        name: &str,
+        direction: FetchDirection,
+        count: i64,
+        rows: bool,
+    ) -> rupg_common::Result<Fetched> {
+        self.conn.spi_fetch(name, direction, count, rows)
+    }
+
+    fn close_cursor(&self, name: &str) -> rupg_common::Result<()> {
+        match self.conn.portals.borrow_mut().close(name.as_bytes()) {
+            Some(_) => Ok(()),
+            None => Err(super::cursor::no_cursor(name)),
+        }
+    }
+
+    fn new_portal_name(&self) -> String {
+        // The first name `<unnamed portal n>` that is free.
+        loop {
+            let n = self.conn.unnamed_portals.get() + 1;
+            self.conn.unnamed_portals.set(n);
+            let name = format!("<unnamed portal {n}>");
+            if !self.cursor_exists(&name) {
+                return name;
+            }
+        }
+    }
+
     fn begin_sub(&self) -> usize {
         let mut marks = self.marks.borrow_mut();
-        marks.push((self.conn.command.get(), self.conn.deferred.borrow().clone()));
+        let portals = self.conn.portals.borrow().iter().map(|(name, _)| name.to_vec()).collect();
+        marks.push((self.conn.command.get(), self.conn.deferred.borrow().clone(), portals));
         marks.len() - 1
     }
 
@@ -124,12 +179,14 @@ impl Spi for PlSpi<'_> {
 
     fn rollback_sub(&self, sub: usize) {
         let mark = self.marks.borrow_mut().drain(sub..).next();
-        let Some((command, deferred)) = mark else { return };
+        let Some((command, deferred, portals)) = mark else { return };
         let xid = self.conn.xid.get();
         if xid != 0 {
             self.conn.store.heap().rollback_to(xid, command);
         }
         *self.conn.deferred.borrow_mut() = deferred;
+        // `AtSubAbort_Portals`: the portals that the subtransaction opened close.
+        self.conn.portals.borrow_mut().retain(|name, _| portals.iter().any(|p| p == name));
     }
 
     fn notice(&self, notice: Error) {

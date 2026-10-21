@@ -21,7 +21,7 @@ use rupg_catalog::Catalog;
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
-use rupg_sql::nodes::{DoStmt, Node};
+use rupg_sql::nodes::{DoStmt, FetchDirection, Node};
 use rupg_types::{Value, oid};
 
 use crate::compile::{Arg, Signature, compile};
@@ -44,6 +44,41 @@ pub trait Spi {
     ///
     /// The error of the query.
     fn execute(&self, plan: &Plan, params: &[Value]) -> Result<(Vec<Vec<Value>>, u64)>;
+    /// `SPI_cursor_find`: true when a portal has the name `name`.
+    fn cursor_exists(&self, name: &str) -> bool;
+    /// `SPI_cursor_open_with_paramlist`: opens a cursor on the rows of the plan, with the name `name`, or with a new name when it is `None`. `text` is the query of the cursor, and `options` has the bits of `CURSOR_OPT_SCROLL` and `CURSOR_OPT_NO_SCROLL`. It gives the name of the cursor.
+    ///
+    /// # Errors
+    ///
+    /// The error of a plan that cannot be a cursor.
+    fn open_cursor(
+        &self,
+        name: Option<&str>,
+        plan: &Plan,
+        params: &[Value],
+        text: &str,
+        options: i32,
+    ) -> Result<String>;
+    /// `SPI_scroll_cursor_fetch`, or `SPI_scroll_cursor_move` when `rows` is false: a fetch or a move of `count` rows from the cursor `name` in the direction `direction`.
+    ///
+    /// # Errors
+    ///
+    /// `34000` when there is no such cursor, and the errors of the move.
+    fn fetch_cursor(
+        &self,
+        name: &str,
+        direction: FetchDirection,
+        count: i64,
+        rows: bool,
+    ) -> Result<Fetched>;
+    /// `SPI_cursor_close`.
+    ///
+    /// # Errors
+    ///
+    /// `34000` when there is no such cursor.
+    fn close_cursor(&self, name: &str) -> Result<()>;
+    /// `CreateNewPortal`: a new name of the form `<unnamed portal n>`. The loop over a query takes one, as its rows come from a portal with no name.
+    fn new_portal_name(&self) -> String;
     /// `BeginInternalSubTransaction`: a mark of the writes so far, for [`Spi::rollback_sub`].
     fn begin_sub(&self) -> usize;
     /// `ReleaseCurrentSubTransaction`: the writes after the mark `sub` stay.
@@ -54,6 +89,17 @@ pub trait Spi {
     fn notice(&self, notice: Error);
     /// The compiled functions and the calls that run, which the session keeps.
     fn cache(&self) -> &Cache;
+}
+
+/// The result of [`Spi::fetch_cursor`].
+#[derive(Debug)]
+pub struct Fetched {
+    /// The name, the type and the typmod of each column of the cursor.
+    pub columns: Vec<(String, u32, i32)>,
+    /// The rows of a fetch.
+    pub rows: Vec<Vec<Value>>,
+    /// The number of rows that the fetch or the move went over.
+    pub count: u64,
 }
 
 /// The OID of a function, the actual types of its arguments and its actual result type.

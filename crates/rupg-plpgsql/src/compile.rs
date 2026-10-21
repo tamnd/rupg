@@ -2,12 +2,14 @@
 
 use rupg_analyze::{Env, types};
 use rupg_common::{Error, Level, Result, SqlState};
+use rupg_sql::nodes::{CURSOR_OPT_NO_SCROLL, CURSOR_OPT_SCROLL, FETCH_ALL, FetchDirection};
 use rupg_sql::token;
 use rupg_types::oid;
 
 use crate::ast::{
-    Block, Cond, Datum, DatumKind, DiagItem, Exceptions, Expr, Function, Handler, LabelKind, Mode,
-    NsEntry, NsItem, RaiseOption, Returned, Source, Stmt, StmtKind, Target, ns_lookup,
+    Block, Bound, Cond, Datum, DatumKind, DiagItem, Exceptions, Expr, Function, Handler, LabelKind,
+    Mode, NsEntry, NsItem, Opened, RaiseOption, Returned, Source, Stmt, StmtKind, Target,
+    ns_lookup,
 };
 use crate::scan::{Scanner, Tok};
 
@@ -209,6 +211,7 @@ impl Compiler<'_> {
             not_null: false,
             default: None,
             line: 0,
+            cursor: None,
         });
         self.datums.len() - 1
     }
@@ -800,8 +803,11 @@ impl Compiler<'_> {
             self.ns_add(name, NsEntry::Datum(item));
             return Ok(());
         }
-        if next.is("cursor") || next.is("scroll") || next.is("no") {
-            return Err(not_yet("a cursor in PL/pgSQL"));
+        if next.is("cursor")
+            || next.is("scroll")
+            || (next.is("no") && self.sc.peek_at(1)?.is("scroll"))
+        {
+            return self.decl_cursor(name, line, decls);
         }
         let constant = next.is("constant");
         if constant {
@@ -862,6 +868,70 @@ impl Compiler<'_> {
         datum.not_null = not_null.is_some();
         datum.default = default;
         datum.line = line;
+        Ok(())
+    }
+
+    /// `decl_statement` for a cursor: `name [NO] SCROLL CURSOR [(args)] {IS | FOR} query`. The arguments are variables that only the query sees.
+    fn decl_cursor(&mut self, name: String, line: u32, decls: &mut Vec<usize>) -> Result<()> {
+        let mut options = 0;
+        if self.sc.peek()?.is("no") {
+            self.sc.next()?;
+            self.expect("scroll")?;
+            options = CURSOR_OPT_NO_SCROLL;
+        } else if self.sc.peek()?.is("scroll") {
+            self.sc.next()?;
+            options = CURSOR_OPT_SCROLL;
+        }
+        self.expect("cursor")?;
+        self.ns_push(Some(&name), LabelKind::Other);
+        let args = if self.sc.peek()?.is_char(b'(') {
+            self.sc.next()?;
+            let mut fields = Vec::new();
+            loop {
+                let t = self.sc.next()?;
+                if !t.is_ident() {
+                    return Err(self.yyerror(&t, "syntax error"));
+                }
+                let arg = t.word.clone().unwrap_or_default();
+                if self.lookup(true, &arg, None, None).is_some() {
+                    return Err(self.yyerror(&t, "duplicate declaration"));
+                }
+                let arg_line = self.lineno(t.start);
+                let (ty, typmod) = self.datatype()?;
+                let Some(kind) = self.datum_kind(ty, typmod) else {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        format!("variable \"{arg}\" has pseudo-type {}", types::name(ty)),
+                    ));
+                };
+                let d = self.add_datum(arg.clone(), kind);
+                self.datums[d].line = arg_line;
+                self.ns_add(arg, NsEntry::Datum(d));
+                decls.push(d);
+                fields.push(d);
+                let t = self.sc.next()?;
+                if t.is_char(b')') {
+                    break;
+                }
+                if !t.is_char(b',') {
+                    return Err(self.yyerror(&t, "syntax error"));
+                }
+            }
+            Some(self.add_datum("(unnamed row)", DatumKind::Row { fields }))
+        } else {
+            None
+        };
+        let t = self.sc.next()?;
+        if !t.is("is") && !t.is("for") {
+            return Err(self.yyerror(&t, "syntax error"));
+        }
+        let query = self.sql_stmt()?;
+        self.ns_pop();
+        let d = self.add_datum(name.clone(), DatumKind::Var { ty: oid::REFCURSOR, typmod: -1 });
+        self.datums[d].line = line;
+        self.datums[d].cursor = Some(Box::new(Bound { query, args, options }));
+        self.ns_add(name, NsEntry::Datum(d));
+        decls.push(d);
         Ok(())
     }
 
@@ -1131,7 +1201,13 @@ impl Compiler<'_> {
                     Ok(self.finish(t.start, StmtKind::Call { expr, call: t.is("call") }))
                 }
                 "insert" | "import" | "merge" => self.execsql(&t),
-                "open" | "fetch" | "move" | "close" => Err(not_yet("a cursor in PL/pgSQL")),
+                "open" => self.open(&t),
+                "fetch" | "move" => self.fetch(&t),
+                "close" => {
+                    let cursor = self.cursor_variable()?;
+                    self.expect_char(b';')?;
+                    Ok(self.finish(t.start, StmtKind::Close(cursor)))
+                }
                 "commit" | "rollback" => Err(not_yet("transaction control in PL/pgSQL")),
                 _ => Err(self.yyerror(&t, "syntax error")),
             };
@@ -1141,6 +1217,259 @@ impl Compiler<'_> {
             return Err(syntax_at(format!("\"{}\" is not a known variable", w.name()), t.start));
         }
         self.execsql(&t)
+    }
+
+    /// `cursor_variable`: a variable of type `refcursor`.
+    fn cursor_variable(&mut self) -> Result<usize> {
+        let t = self.sc.next()?;
+        let w = self.word(&t, false)?;
+        let Some((d, field)) = w.as_ref().and_then(|w| w.datum.clone()) else {
+            return Err(self.not_variable(&t, w.as_ref()));
+        };
+        let DatumKind::Var { ty, .. } = self.datums[d].kind else {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                "cursor variable must be a simple variable",
+            )
+            .at(t.start));
+        };
+        if field.is_some() || self.sc.peek()?.is_char(b'[') {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                "cursor variable must be a simple variable",
+            )
+            .at(t.start));
+        }
+        if ty != oid::REFCURSOR {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!("variable \"{}\" must be of type cursor or refcursor", self.datums[d].name),
+            )
+            .at(t.start));
+        }
+        Ok(d)
+    }
+
+    /// `read_cursor_args`: the arguments of the bound cursor `cursor` and the token `until` after them. It gives a query of the values of the arguments in their order, or `None` for a cursor with no arguments.
+    fn cursor_args(&mut self, cursor: usize, until: &str) -> Result<Option<Expr>> {
+        let name = self.datums[cursor].name.clone();
+        let row = self.datums[cursor].cursor.as_ref().and_then(|bound| bound.args);
+        let t = self.sc.next()?;
+        let Some(row) = row else {
+            if t.is_char(b'(') {
+                return Err(syntax_at(format!("cursor \"{name}\" has no arguments"), t.start));
+            }
+            if !stops_at(&t, until) {
+                return Err(self.yyerror(&t, "syntax error"));
+            }
+            return Ok(None);
+        };
+        if !t.is_char(b'(') {
+            return Err(syntax_at(format!("cursor \"{name}\" has arguments"), t.start));
+        }
+        let DatumKind::Row { fields } = &self.datums[row].kind else {
+            return Err(Error::internal("the arguments of a cursor are not a row"));
+        };
+        let names: Vec<String> = fields.iter().map(|&f| self.datums[f].name.clone()).collect();
+        let n = names.len();
+        let mut values: Vec<Option<String>> = vec![None; n];
+        let mut named = false;
+        let mut start = None;
+        for argc in 0..n {
+            let (t1, t2) = (self.sc.peek()?, self.sc.peek_at(1)?);
+            let pos = if t1.kind == token::IDENT
+                && (t2.kind == token::COLON_EQUALS || t2.kind == token::EQUALS_GREATER)
+            {
+                let a = self.sc.next()?;
+                let arg = a.word.clone().unwrap_or_default();
+                let Some(pos) = names.iter().position(|n| *n == arg) else {
+                    return Err(syntax_at(
+                        format!("cursor \"{name}\" has no argument named \"{arg}\""),
+                        a.start,
+                    ));
+                };
+                self.sc.next()?;
+                named = true;
+                pos
+            } else {
+                argc
+            };
+            if values[pos].is_some() {
+                return Err(syntax_at(
+                    format!(
+                        "value for parameter \"{}\" of cursor \"{name}\" specified more than once",
+                        names[pos]
+                    ),
+                    t1.start,
+                ));
+            }
+            let (item, end) =
+                self.read_sql(&[",", ")"], "\",\" or \")\"", Mode::Expr, true, true)?;
+            start.get_or_insert(item.at);
+            values[pos] = Some(item.text);
+            if end.is_char(b')') && argc != n - 1 {
+                return Err(syntax_at(
+                    format!("not enough arguments for cursor \"{name}\""),
+                    end.start,
+                ));
+            }
+            if end.is_char(b',') && argc == n - 1 {
+                return Err(syntax_at(
+                    format!("too many arguments for cursor \"{name}\""),
+                    end.start,
+                ));
+            }
+        }
+        let text = values
+            .into_iter()
+            .zip(&names)
+            .map(|(value, arg)| {
+                let value = value.unwrap_or_default();
+                if named {
+                    format!("{value} AS {}", rupg_func::quote_identifier(arg))
+                } else {
+                    value
+                }
+            })
+            .collect::<Vec<_>>()
+            .join(", ");
+        let t = self.sc.next()?;
+        if !stops_at(&t, until) {
+            return Err(self.yyerror(&t, "syntax error"));
+        }
+        Ok(Some(self.expr(text, Mode::Expr, start.unwrap_or(t.start))))
+    }
+
+    /// `stmt_open`: `OPEN cursor [(args)]` for a bound cursor, or `OPEN cursor [[NO] SCROLL] FOR query` and `FOR EXECUTE query [USING params]` for an unbound cursor.
+    fn open(&mut self, t: &Tok) -> Result<Stmt> {
+        let cursor = self.cursor_variable()?;
+        let mut options = 0;
+        let query = if self.datums[cursor].cursor.is_some() {
+            Opened::Bound(self.cursor_args(cursor, ";")?)
+        } else {
+            let mut k = self.sc.next()?;
+            if k.is("no") {
+                k = self.sc.next()?;
+                if k.is("scroll") {
+                    options = CURSOR_OPT_NO_SCROLL;
+                    k = self.sc.next()?;
+                }
+            } else if k.is("scroll") {
+                options = CURSOR_OPT_SCROLL;
+                k = self.sc.next()?;
+            }
+            if !k.is("for") {
+                return Err(self.yyerror(&k, "syntax error, expected \"FOR\""));
+            }
+            if self.sc.peek()?.is("execute") {
+                self.sc.next()?;
+                let (query, term) = self.expr_until(&["using", ";"], "USING or ;")?;
+                let mut params = Vec::new();
+                if term.is("using") {
+                    loop {
+                        let (param, term) = self.expr_until(&[",", ";"], ", or ;")?;
+                        params.push(param);
+                        if !term.is_char(b',') {
+                            break;
+                        }
+                    }
+                }
+                Opened::Dynamic { query, params }
+            } else {
+                Opened::Query(self.sql_stmt()?)
+            }
+        };
+        Ok(self.finish(t.start, StmtKind::Open { cursor, query, options }))
+    }
+
+    /// `stmt_fetch` and `stmt_move`, with the direction of `read_fetch_direction`.
+    fn fetch(&mut self, t: &Tok) -> Result<Stmt> {
+        let mut direction = FetchDirection::FETCH_FORWARD;
+        let mut count = 1;
+        let mut expr = None;
+        let mut multiple = false;
+        let mut check_from = true;
+        let place = self.sc.place();
+        let d = self.sc.next()?;
+        if d.is_end() {
+            return Err(self.yyerror(&d, "unexpected end of function definition"));
+        }
+        let from_or_in = |t: &Tok| t.is("from") || t.is("in");
+        if d.is("next") {
+        } else if d.is("prior") {
+            direction = FetchDirection::FETCH_BACKWARD;
+        } else if d.is("first") {
+            direction = FetchDirection::FETCH_ABSOLUTE;
+        } else if d.is("last") {
+            direction = FetchDirection::FETCH_ABSOLUTE;
+            count = -1;
+        } else if d.is("absolute") || d.is("relative") {
+            direction = if d.is("absolute") {
+                FetchDirection::FETCH_ABSOLUTE
+            } else {
+                FetchDirection::FETCH_RELATIVE
+            };
+            expr = Some(self.expr_until(&["from", "in"], "FROM or IN")?.0);
+            check_from = false;
+        } else if d.is("all") {
+            count = FETCH_ALL;
+            multiple = true;
+        } else if d.is("forward") || d.is("backward") {
+            // `complete_direction`.
+            if d.is("backward") {
+                direction = FetchDirection::FETCH_BACKWARD;
+            }
+            let place = self.sc.place();
+            let k = self.sc.next()?;
+            if k.is_end() {
+                return Err(self.yyerror(&k, "unexpected end of function definition"));
+            }
+            if from_or_in(&k) {
+                check_from = false;
+            } else if k.is("all") {
+                count = FETCH_ALL;
+                multiple = true;
+            } else {
+                self.sc.reset(place);
+                expr = Some(self.expr_until(&["from", "in"], "FROM or IN")?.0);
+                multiple = true;
+                check_from = false;
+            }
+        } else if from_or_in(&d) {
+            check_from = false;
+        } else if self.word(&d, false)?.is_some_and(|w| w.datum.is_some()) {
+            self.sc.reset(place);
+            check_from = false;
+        } else {
+            self.sc.reset(place);
+            expr = Some(self.expr_until(&["from", "in"], "FROM or IN")?.0);
+            multiple = true;
+            check_from = false;
+        }
+        if check_from {
+            let k = self.sc.next()?;
+            if !from_or_in(&k) {
+                return Err(self.yyerror(&k, "expected FROM or IN"));
+            }
+        }
+        let cursor = self.cursor_variable()?;
+        let into = if t.is("fetch") {
+            self.expect("into")?;
+            let (target, _) = self.target_of_into(false)?;
+            self.expect_char(b';')?;
+            if multiple {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "FETCH statement cannot return multiple rows",
+                )
+                .at(t.start));
+            }
+            Some(target)
+        } else {
+            self.expect_char(b';')?;
+            None
+        };
+        Ok(self.finish(t.start, StmtKind::Fetch { cursor, direction, count, expr, into }))
     }
 
     /// `stmt_block`: a block and `;`.
@@ -1368,10 +1697,23 @@ impl Compiler<'_> {
             return Ok(StmtKind::ForQuery { label, target, source, body });
         }
         if let Some(w) = self.word(&t, false)?
-            && let Some((d, None)) = w.datum
-            && matches!(self.datums[d].kind, DatumKind::Var { ty: oid::REFCURSOR, .. })
+            && let Some((cursor, None)) = w.datum
+            && matches!(self.datums[cursor].kind, DatumKind::Var { ty: oid::REFCURSOR, .. })
         {
-            return Err(not_yet("a loop over a cursor"));
+            if var.scalar.is_some() && var.row.is_some() {
+                return Err(syntax_at(
+                    "cursor FOR loop must have only one target variable",
+                    var.start,
+                ));
+            }
+            if self.datums[cursor].cursor.is_none() {
+                return Err(syntax_at("cursor FOR loop must use a bound cursor variable", t.start));
+            }
+            let args = self.cursor_args(cursor, "loop")?;
+            let target = self.add_datum(var.name.clone(), DatumKind::Rec { ty: oid::RECORD });
+            self.ns_add(var.name, NsEntry::Datum(target));
+            let body = self.loop_body(label.as_deref())?;
+            return Ok(StmtKind::ForCursor { label, target, cursor, args, body });
         }
         let reverse = t.is("reverse");
         self.sc.reset(place);

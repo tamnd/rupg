@@ -361,7 +361,10 @@ impl Connection {
                 folded?
             }
         };
-        self.portals.make_room(name.as_bytes()).map_err(super::extended::protocol_error)?;
+        self.portals
+            .get_mut()
+            .make_room(name.as_bytes())
+            .map_err(super::extended::protocol_error)?;
         let reader = self.reader();
         let run = plan.run(params, &reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
@@ -399,8 +402,77 @@ impl Connection {
         );
         let mut portal = Portal::cursor(Arc::new(statement), cursor);
         portal.level = self.transaction.depth();
-        self.portals.insert(name.as_bytes(), portal);
+        self.portals.get_mut().insert(name.as_bytes(), portal);
         Ok(Done::Tag(CommandTag::DeclareCursor))
+    }
+
+    /// `SPI_cursor_open` for a function in PL/pgSQL: the cursor `name` with the result `run` of `plan`, with the query `text`. `options` has the bits of `SCROLL` and `NO SCROLL`.
+    pub(super) fn open_portal(
+        &self,
+        name: &str,
+        plan: &Plan,
+        run: Result<Vec<Vec<Value>>, Error>,
+        text: &str,
+        options: i32,
+    ) {
+        let (rows, error) = match run {
+            Ok(rows) => (rows, None),
+            Err(error) => (Vec::new(), Some(error)),
+        };
+        let scroll = has(options, CURSOR_OPT_SCROLL)
+            || (!has(options, CURSOR_OPT_NO_SCROLL) && plan.backward_scan());
+        let cursor = Cursor {
+            rows,
+            types: plan.columns().iter().map(|target| target.expr.ty).collect(),
+            at: 0,
+            pos: 0,
+            at_start: true,
+            at_end: false,
+            scroll,
+            binary: false,
+            hold: false,
+            text: text.to_owned(),
+            created: self.statement_start,
+            error,
+            fresh: true,
+        };
+        // The node of the query, for an `Execute` of the portal.
+        let node =
+            rupg_sql::parse(text).ok().and_then(|(list, _)| list.into_iter().next().flatten());
+        let statement = Prepared::new(
+            text.to_owned(),
+            node,
+            Vec::new(),
+            Some(query::columns(plan)),
+            None,
+            self.statement_start,
+            false,
+        );
+        let mut portal = Portal::cursor(Arc::new(statement), cursor);
+        portal.level = self.transaction.depth();
+        self.portals.borrow_mut().insert(name.as_bytes(), portal);
+    }
+
+    /// `SPI_scroll_cursor_fetch` and `SPI_scroll_cursor_move` for a function in PL/pgSQL: the rows of a fetch from the cursor `name` with the columns of the cursor, or the count of a move when `rows` is false.
+    pub(super) fn spi_fetch(
+        &self,
+        name: &str,
+        direction: FetchDirection,
+        count: i64,
+        rows: bool,
+    ) -> Result<rupg_plpgsql::Fetched, Error> {
+        let mut portals = self.portals.borrow_mut();
+        let portal = portals.find_mut(name.as_bytes()).ok_or_else(|| no_cursor(name))?;
+        let columns = portal.statement.columns.as_deref().unwrap_or_default();
+        let columns = columns.iter().map(|c| (c.name.clone(), c.ty, c.typmod)).collect();
+        let Run::Cursor(cursor) = &mut portal.run else { return Err(no_cursor(name)) };
+        if !rows {
+            let count = cursor.run_fetch(direction, count, None)?;
+            return Ok(rupg_plpgsql::Fetched { columns, rows: Vec::new(), count });
+        }
+        let mut found = Vec::new();
+        let count = cursor.run_fetch(direction, count, Some(&mut found))?;
+        Ok(rupg_plpgsql::Fetched { columns, rows: cursor.values(&found), count })
     }
 
     /// The columns of a `FETCH` that gives rows, or `None` for a `MOVE` and for a cursor that is not there, as `UtilityTupleDescriptor` gives them.
@@ -409,7 +481,10 @@ impl Connection {
             return None;
         }
         let name = stmt.portalname.as_deref().unwrap_or_default();
-        self.portals.find(name.as_bytes()).and_then(|portal| portal.statement.columns.clone())
+        self.portals
+            .borrow()
+            .find(name.as_bytes())
+            .and_then(|portal| portal.statement.columns.clone())
     }
 
     /// `PerformPortalFetch`: the rows of a `FETCH` in the formats of `formats`, or the count of a `MOVE`. The text format is the default, and a `FETCH` of a `Query` message on a `BINARY` cursor uses the binary format.
@@ -419,7 +494,8 @@ impl Connection {
         formats: Option<&[i16]>,
     ) -> Result<Done, Error> {
         let name = stmt.portalname.as_deref().unwrap_or_default();
-        let portal = self.portals.find_mut(name.as_bytes()).ok_or_else(|| no_cursor(name))?;
+        let portal =
+            self.portals.get_mut().find_mut(name.as_bytes()).ok_or_else(|| no_cursor(name))?;
         let columns = portal.statement.columns.clone().unwrap_or_default();
         let Run::Cursor(cursor) = &mut portal.run else { return Err(no_cursor(name)) };
         if stmt.ismove {
@@ -448,10 +524,10 @@ impl Connection {
         current: &[u8],
     ) -> Result<Done, Error> {
         let Some(name) = stmt.portalname.as_deref() else {
-            self.portals.retain(|name, _| name == current);
+            self.portals.get_mut().retain(|name, _| name == current);
             return Ok(Done::Tag(CommandTag::CloseCursorAll));
         };
-        if self.portals.close(name.as_bytes()).is_none() {
+        if self.portals.get_mut().close(name.as_bytes()).is_none() {
             return Err(no_cursor(name));
         }
         Ok(Done::Tag(CommandTag::CloseCursor))
