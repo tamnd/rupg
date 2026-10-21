@@ -6,7 +6,7 @@ use rupg_types::{MAXDIM, Value, oid};
 
 use crate::Analyzer;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{Expr, ExprKind, Subscript};
+use crate::expr::{Expr, ExprKind, FieldStore, Subscript};
 use crate::types;
 
 /// `array_subscript_handler`, the `typsubscript` of a true array type.
@@ -231,19 +231,43 @@ impl Analyzer<'_> {
         Ok(Expr { kind, ty: result, typmod, location: None })
     }
 
-    /// `transformAssignmentIndirection` and `transformAssignmentSubscripts`: the assignment of `rhs` to the part of `base` that the subscripts of `indirection` name, as an expression whose value is the array with the new value. `name` is the name of the target in the errors, and the type and the typmod are the type of `base`. The value takes the type of the element, or the type of the array for a slice. A field in the indirection is not supported yet.
+    /// `transformAssignmentIndirection`: the assignment of `rhs` to the part of `base` that the subscripts and the fields of `indirection` name, as an expression whose value is the whole value with the new part. `name` is the name of the target in the errors, and the type and the typmod are the type of `base`.
     pub(crate) fn assignment_indirection(
         &mut self,
-        (base, name, (ty, typmod)): (Expr, &str, (u32, i32)),
+        (base, name, target): (Expr, &str, (u32, i32)),
         indirection: &[Option<Node>],
         rhs: Expr,
         context: Context,
         at: Option<usize>,
     ) -> Result<Expr> {
+        let assigning = Assigning { context, at };
+        self.assign_indirect(Some(base), (name, false), target, indirection, rhs, &assigning)
+    }
+
+    /// `transformAssignmentIndirection` for the items of `indirection` after the first: with no `base`, `CaseTest` is the old value of the part. `subscripted` tells that the part is an element or a slice.
+    fn assign_indirect(
+        &mut self,
+        base: Option<Expr>,
+        (name, subscripted): (&str, bool),
+        (ty, typmod): (u32, i32),
+        indirection: &[Option<Node>],
+        rhs: Expr,
+        assigning: &Assigning,
+    ) -> Result<Expr> {
+        let at = assigning.at;
+        // `CaseTest` is the old value of the part, which the executor gives.
+        let base = base.unwrap_or_else(|| {
+            let mut test = Expr::new(ExprKind::CaseTest, ty);
+            test.typmod = typmod;
+            test
+        });
         let mut subscripts: Vec<&A_Indices> = Vec::new();
-        for item in indirection {
-            match item {
-                Some(Node::A_Indices(indices)) => subscripts.push(indices),
+        for (i, item) in indirection.iter().enumerate() {
+            let field = match item {
+                Some(Node::A_Indices(indices)) => {
+                    subscripts.push(indices);
+                    continue;
+                }
                 Some(Node::A_Star(_)) => {
                     return Err(Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
@@ -251,34 +275,108 @@ impl Analyzer<'_> {
                     )
                     .at_opt(at));
                 }
-                Some(Node::String(_)) => {
-                    return Err(Error::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        "an assignment to a field of a composite value is not supported yet",
-                    )
-                    .at_opt(at));
-                }
+                Some(Node::String(field)) => &**field,
                 _ => return Err(Error::internal("unrecognized indirection")),
+            };
+            let target = (name, (ty, typmod));
+            if !subscripts.is_empty() {
+                let rest = &indirection[i..];
+                return self.assign_subscripts(base, target, &subscripts, rest, rhs, assigning);
             }
+            let rest = &indirection[i + 1..];
+            return self.assign_field(base, target, field, rest, rhs, assigning);
         }
-        if subscripts.is_empty() {
-            return Err(Error::internal("an assignment to a part of a value has no subscripts"));
+        if !subscripts.is_empty() {
+            let target = (name, (ty, typmod));
+            return self.assign_subscripts(base, target, &subscripts, &[], rhs, assigning);
         }
-        let (container, container_mod) = container_type(ty, typmod);
-        let mut result = self.container_subscripts(base, &subscripts)?;
-        let (needed, needed_mod, source) = (result.ty, result.typmod, rhs.ty);
-        let Some(rhs) = self.coerce_to_target(rhs, needed, needed_mod, context, None)? else {
+        let source = rhs.ty;
+        let rhs = self.coerce_to_target(rhs, ty, typmod, assigning.context, None)?;
+        rhs.ok_or_else(|| {
+            let message = if subscripted {
+                format!(
+                    "subscripted assignment to \"{name}\" requires type {} but expression is of type {}",
+                    types::name(ty),
+                    types::name(source)
+                )
+            } else {
+                format!(
+                    "subfield \"{name}\" is of type {} but expression is of type {}",
+                    types::name(ty),
+                    types::name(source)
+                )
+            };
+            Error::new(SqlState::DATATYPE_MISMATCH, message)
+                .with_hint("You will need to rewrite or cast the expression.")
+                .at_opt(at)
+        })
+    }
+
+    /// The assignment to the field `field` of the row value `base`, as a `FieldStore`. A domain over a row type checks the new row.
+    fn assign_field(
+        &mut self,
+        base: Expr,
+        (name, (ty, typmod)): (&str, (u32, i32)),
+        field: &str,
+        rest: &[Option<Node>],
+        rhs: Expr,
+        assigning: &Assigning,
+    ) -> Result<Expr> {
+        let at = assigning.at;
+        let row = types::base(ty);
+        let Some(columns) = self.row_columns(row) else {
             return Err(Error::new(
                 SqlState::DATATYPE_MISMATCH,
                 format!(
-                    "subscripted assignment to \"{name}\" requires type {} but expression is of type {}",
-                    types::name(needed),
-                    types::name(source)
+                    "cannot assign to field \"{field}\" of column \"{name}\" because its type {} is not a composite type",
+                    types::name(ty)
                 ),
             )
-            .with_hint("You will need to rewrite or cast the expression.")
             .at_opt(at));
         };
+        let Some(index) = columns.iter().position(|c| c.name == field) else {
+            let message = if SYSTEM_COLUMNS.contains(&field) {
+                format!("cannot assign to system column \"{field}\"")
+            } else {
+                format!(
+                    "cannot assign to field \"{field}\" of column \"{name}\" because there is no such column in data type {}",
+                    types::name(ty)
+                )
+            };
+            return Err(Error::new(SqlState::UNDEFINED_COLUMN, message).at_opt(at));
+        };
+        let column = &columns[index];
+        let target = (column.ty, column.typmod);
+        let value = self.assign_indirect(None, (field, false), target, rest, rhs, assigning)?;
+        let types = columns.iter().map(|c| c.ty).collect();
+        let store = FieldStore { arg: base, fields: vec![(index, value)], types };
+        let result = Expr::new(ExprKind::FieldStore(Box::new(store)), row);
+        if row == ty {
+            return Ok(result);
+        }
+        self.coerce_to_target(result, ty, typmod, Context::Implicit, None)?.ok_or_else(|| {
+            Error::new(
+                SqlState::CANNOT_COERCE,
+                format!("cannot cast type {} to {}", types::name(row), types::name(ty)),
+            )
+            .at_opt(at)
+        })
+    }
+
+    /// `transformAssignmentSubscripts`: the assignment to the element or the slice of `base` that `subscripts` name. The value takes the type of the element, or the type of the array for a slice, and the items of `rest` name a part of it.
+    fn assign_subscripts(
+        &mut self,
+        base: Expr,
+        (name, (ty, typmod)): (&str, (u32, i32)),
+        subscripts: &[&A_Indices],
+        rest: &[Option<Node>],
+        rhs: Expr,
+        assigning: &Assigning,
+    ) -> Result<Expr> {
+        let (container, container_mod) = container_type(ty, typmod);
+        let mut result = self.container_subscripts(base, subscripts)?;
+        let needed = (result.ty, result.typmod);
+        let rhs = self.assign_indirect(None, (name, true), needed, rest, rhs, assigning)?;
         let ExprKind::Subscript(sub) = &mut result.kind else {
             return Err(Error::internal(
                 "the subscripts of an assignment are not a SubscriptingRef",
@@ -290,12 +388,13 @@ impl Analyzer<'_> {
             return Ok(result);
         }
         // A domain over an array checks the new array.
+        let context = assigning.context;
         self.coerce_to_target(result, ty, typmod, context, None)?.ok_or_else(|| {
             Error::new(
                 SqlState::CANNOT_COERCE,
                 format!("cannot cast type {} to {}", types::name(container), types::name(ty)),
             )
-            .at_opt(at)
+            .at_opt(assigning.at)
         })
     }
 
@@ -325,4 +424,13 @@ fn container_type(ty: u32, typmod: i32) -> (u32, i32) {
         oid::OIDVECTOR => (oid::OID_ARRAY, typmod),
         _ => (ty, typmod),
     }
+}
+
+/// The names of the system columns, which an assignment cannot set.
+const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "ctid", "xmin", "cmin", "xmax", "cmax"];
+
+/// The parts of an assignment that stay the same in each step of `transformAssignmentIndirection`: the kind of the cast of the new value and the place of the target.
+struct Assigning {
+    context: Context,
+    at: Option<usize>,
 }

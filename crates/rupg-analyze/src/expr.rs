@@ -73,6 +73,8 @@ pub enum ExprKind {
     Var(Var),
     /// `FieldSelect`: the field with this index, from 0, of a row value.
     FieldSelect(Box<Expr>, usize),
+    /// `FieldStore`: the row value of the argument with new values in some of its fields. The result is the row value.
+    FieldStore(Box<FieldStore>),
     /// `Aggref`: a call of an aggregate function, which reads all the rows of a group.
     Agg(Box<Aggref>),
     /// `WindowFunc`: a call of a window function, which reads the rows of its window.
@@ -106,6 +108,17 @@ pub struct JoinRow {
     pub names: Vec<String>,
     /// The value of each field.
     pub fields: Vec<Expr>,
+}
+
+/// The parts of an assignment to fields of a row value, as `FieldStore`.
+#[derive(Clone, Debug, PartialEq)]
+pub struct FieldStore {
+    /// `arg`: the old row value. A null value is a row whose fields are all null.
+    pub arg: Expr,
+    /// `fieldnums` and `newvals`: the index from 0 of each field that gets a new value, and the new value. In the new value, `CaseTest` is the old value of the field.
+    pub fields: Vec<(usize, Expr)>,
+    /// The type of each field of the row type, for a row that the null value makes.
+    pub types: Vec<u32>,
 }
 
 /// The parts of a fetch from an array or of an assignment to a part of an array, as `SubscriptingRef`.
@@ -789,6 +802,9 @@ impl Expr {
             ExprKind::Subscript(sub) => {
                 sub.bounds().chain([&sub.container]).chain(&sub.assign).collect()
             }
+            ExprKind::FieldStore(store) => {
+                [&store.arg].into_iter().chain(store.fields.iter().map(|(_, v)| v)).collect()
+            }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
             | ExprKind::Row(args, _)
@@ -849,6 +865,10 @@ impl Expr {
                 let Subscript { container, upper, lower, assign } = &mut **sub;
                 let bounds = upper.iter_mut().chain(lower.iter_mut().flatten()).flatten();
                 bounds.chain([container]).chain(assign).collect()
+            }
+            ExprKind::FieldStore(store) => {
+                let FieldStore { arg, fields, .. } = &mut **store;
+                [arg].into_iter().chain(fields.iter_mut().map(|(_, v)| v)).collect()
             }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
@@ -1024,6 +1044,7 @@ impl Expr {
             | ExprKind::BooleanTest(arg, _)
             | ExprKind::FieldSelect(arg, _) => Some(&**arg),
             ExprKind::Subscript(sub) => Some(&sub.container),
+            ExprKind::FieldStore(store) => Some(&store.arg),
             ExprKind::SubLink(sub) => sub.test.as_ref(),
             ExprKind::RowCompare(rc) => rc.ops.first(),
             ExprKind::NamedArg(na) => Some(&na.arg),

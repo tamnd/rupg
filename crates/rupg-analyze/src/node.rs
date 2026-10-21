@@ -6,7 +6,7 @@ use rupg_common::{Error, Result};
 use rupg_types::{Array, ArrayDim, Inet, Interval, NetFamily, Range, Record, Recv, Value};
 
 use crate::expr::{
-    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, IsJson, JoinRow,
+    BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm, IsJson, JoinRow,
     JsonBehavior, JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp,
     JsonFormat, JsonFormatKind, JsonItemType, JsonReturning, JsonValue, JsonWrapper, NamedArg,
     RowCompare, RowCompareKind, SqlValue, Subscript, Var, XmlExpr, XmlOp,
@@ -100,6 +100,7 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::SqlValue(_) => "SQLVALUE",
         ExprKind::Var(_) => "VAR",
         ExprKind::FieldSelect(..) => "FIELDSELECT",
+        ExprKind::FieldStore(_) => "FIELDSTORE",
         ExprKind::NamedArg(_) => "NAMEDARG",
         ExprKind::JsonValue(_) => "JSONVALUEEXPR",
         ExprKind::JsonCtor(_) => "JSONCONSTRUCTOREXPR",
@@ -273,6 +274,15 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
         ExprKind::FieldSelect(arg, field) => {
             out.push_str(&format!(" :field {field}"));
             write_field("arg", arg, out)?;
+        }
+        ExprKind::FieldStore(store) => {
+            let numbers = |n: &mut dyn Iterator<Item = String>| n.collect::<Vec<_>>().join(" ");
+            let fields = numbers(&mut store.fields.iter().map(|(i, _)| i.to_string()));
+            let types = numbers(&mut store.types.iter().map(u32::to_string));
+            out.push_str(&format!(" :fieldnums ({fields}) :types ({types})"));
+            write_field("arg", &store.arg, out)?;
+            let values: Vec<Expr> = store.fields.iter().map(|(_, v)| v.clone()).collect();
+            write_args(&values, out)?;
         }
         ExprKind::NamedArg(na) => {
             out.push_str(" :name ");
@@ -976,6 +986,23 @@ fn expr_of(item: &Item) -> Result<Expr> {
             let names =
                 list(f.get("names")?)?.iter().map(|n| text(atom(n)?)).collect::<Result<_>>()?;
             ExprKind::JoinRow(Box::new(JoinRow { alias, names, fields: f.exprs("args")? }))
+        }
+        "FIELDSTORE" => {
+            let numbers = |name: &str| -> Result<Vec<String>> {
+                list(f.get(name)?)?.iter().map(|n| atom(n).map(str::to_owned)).collect()
+            };
+            let fields =
+                numbers("fieldnums")?.iter().map(|n| number(n)).collect::<Result<Vec<usize>>>()?;
+            let types = numbers("types")?.iter().map(|n| number(n)).collect::<Result<_>>()?;
+            let values = f.exprs("args")?;
+            if values.len() != fields.len() {
+                return Err(bad("a FIELDSTORE with more fields than values"));
+            }
+            ExprKind::FieldStore(Box::new(FieldStore {
+                arg: *f.expr("arg")?,
+                fields: fields.into_iter().zip(values).collect(),
+                types,
+            }))
         }
         "ROWCOMPARE" => {
             let kind = RowCompareKind::of_name(f.atom("kind")?)

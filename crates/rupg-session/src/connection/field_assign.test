@@ -1,0 +1,147 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TYPE pt AS (x int, y int);
+CREATE TYPE
+> CREATE TYPE seg AS (a pt, b pt);
+CREATE TYPE
+> CREATE TYPE hold AS (v int[], t text);
+CREATE TYPE
+> CREATE TABLE tf (id int, p pt, ps pt[], s seg, h hold);
+CREATE TABLE
+> INSERT INTO tf VALUES (1, '(1,2)', '{"(1,2)","(3,4)"}', '("(1,2)","(3,4)")', '("{1,2}",a)');
+INSERT 0 1
+> UPDATE tf SET p.x = 5;
+UPDATE 1
+> SELECT p FROM tf;
+fields p@tf.2:16386:-1:-1
+row (5,2)
+SELECT 1
+> UPDATE tf SET p.x = 10, p.y = 20;
+UPDATE 1
+> SELECT p FROM tf;
+fields p@tf.2:16386:-1:-1
+row (10,20)
+SELECT 1
+> UPDATE tf SET p.y = p.x + 1, p.x = 0;
+ERROR 42P01 missing FROM-clause entry for table "p" at 21
+> SELECT p FROM tf;
+fields p@tf.2:16386:-1:-1
+row (10,20)
+SELECT 1
+> UPDATE tf SET ps[1].x = 7, ps[3].y = 9;
+UPDATE 1
+> SELECT ps FROM tf;
+fields ps@tf.3:16385:-1:-1
+row {"(7,2)","(3,4)","(,9)"}
+SELECT 1
+> UPDATE tf SET s.a.x = 100, s.b.y = 200;
+UPDATE 1
+> SELECT s FROM tf;
+fields s@tf.4:16389:-1:-1
+row ("(100,2)","(3,200)")
+SELECT 1
+> UPDATE tf SET h.v[3] = 3, h.t = 'b';
+UPDATE 1
+> SELECT h FROM tf;
+fields h@tf.5:16392:-1:-1
+row ("{1,2,3}",b)
+SELECT 1
+> UPDATE tf SET p.x = DEFAULT;
+ERROR 0A000 cannot set a subfield to DEFAULT at 15
+> UPDATE tf SET p.z = 1;
+ERROR 42703 cannot assign to field "z" of column "p" because there is no such column in data type pt at 15
+> UPDATE tf SET id.x = 1;
+ERROR 42804 cannot assign to field "x" of column "id" because its type integer is not a composite type at 15
+> UPDATE tf SET p.x = 'abc';
+ERROR 22P02 invalid input syntax for type integer: "abc" at 21
+> UPDATE tf SET p.x = now();
+ERROR 42804 subfield "x" is of type integer but expression is of type timestamp with time zone at 15
+HINT You will need to rewrite or cast the expression.
+> UPDATE tf SET p = '(1,1)', p.x = 2;
+ERROR 42601 multiple assignments to same column "p"
+> UPDATE tf SET p.x = 2, p = '(1,1)';
+ERROR 42601 multiple assignments to same column "p"
+> UPDATE tf SET p.x = 1, ps[1] = '(5,5)' RETURNING p, ps;
+fields p@tf.2:16386:-1:-1,ps@tf.3:16385:-1:-1
+row (1,20),{"(5,5)","(3,4)","(,9)"}
+UPDATE 1
+> UPDATE tf SET ps[1].x = 'z';
+ERROR 22P02 invalid input syntax for type integer: "z" at 25
+> UPDATE tf SET p = NULL;
+UPDATE 1
+> UPDATE tf SET p.y = 4;
+UPDATE 1
+> SELECT p, p IS NULL FROM tf;
+fields p@tf.2:16386:-1:-1,?column?:16:1:-1
+row (,4),f
+SELECT 1
+> INSERT INTO tf (id, p.x) VALUES (2, 3);
+INSERT 0 1
+> SELECT id, p FROM tf WHERE id = 2;
+fields id@tf.1:23:4:-1,p@tf.2:16386:-1:-1
+row 2,(3,)
+SELECT 1
+> INSERT INTO tf (id, p.x, p.y) VALUES (3, 1, 2), (4, 3, 4);
+INSERT 0 2
+> SELECT id, p FROM tf WHERE id >= 3 ORDER BY id;
+fields id@tf.1:23:4:-1,p@tf.2:16386:-1:-1
+row 3,(1,2)
+row 4,(3,4)
+SELECT 2
+> INSERT INTO tf (id, s.a.y, ps[2].x) VALUES (5, 6, 7);
+INSERT 0 1
+> SELECT id, s, ps FROM tf WHERE id = 5;
+fields id@tf.1:23:4:-1,s@tf.4:16389:-1:-1,ps@tf.3:16385:-1:-1
+row 5,("(,6)",),[2:2]={"(7,)"}
+SELECT 1
+> INSERT INTO tf (id, p.x) SELECT 6, 8;
+INSERT 0 1
+> SELECT id, p FROM tf WHERE id = 6;
+fields id@tf.1:23:4:-1,p@tf.2:16386:-1:-1
+row 6,(8,)
+SELECT 1
+> INSERT INTO tf (id, p.x) VALUES (7, DEFAULT);
+ERROR 0A000 cannot set a subfield to DEFAULT at 21
+> INSERT INTO tf (id, p, p.x) VALUES (7, '(1,1)', 2);
+ERROR 42701 column "p" specified more than once at 24
+> CREATE DOMAIN dpt AS pt CHECK ((VALUE).x > 0);
+CREATE DOMAIN
+> CREATE TABLE td (id int, d dpt);
+CREATE TABLE
+> INSERT INTO td VALUES (1, '(1,1)');
+INSERT 0 1
+> UPDATE td SET d.x = -1;
+ERROR 23514 value for domain dpt violates check constraint "dpt_check"
+> UPDATE td SET d.x = -1, d.x = 2;
+UPDATE 1
+> UPDATE td SET d.y = 9;
+UPDATE 1
+> SELECT d FROM td;
+fields d@td.2:16386:-1:-1
+row (2,9)
+SELECT 1
+> INSERT INTO td (id, d.y) VALUES (2, 1);
+INSERT 0 1
+> INSERT INTO td (id, d.x) VALUES (3, 4);
+INSERT 0 1
+> SELECT id, d FROM td ORDER BY id;
+fields id@td.1:23:4:-1,d@td.2:16386:-1:-1
+row 1,(2,9)
+row 2,(,1)
+row 3,(4,)
+SELECT 3
+> DO $$ DECLARE x pt[] := ARRAY['(1,2)'::pt]; BEGIN x[1].x := 5; x[2].y := 6; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={"(5,2)","(,6)"} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x hold := '("{1,2}",a)'; BEGIN x.v[2] := 20; RAISE NOTICE 'x=%', x; END $$;
+ERROR 42804 cannot assign non-composite value to a record variable (PL/pgSQL function inline_code_block line 1 during statement block local variable initialization)
+> DO $$ DECLARE x seg; BEGIN x.a.x := 1; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x=("(1,)",) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN x[1].a := 5; END $$;
+ERROR 42804 cannot assign to field "a" of column "x" because its type integer is not a composite type (PL/pgSQL function inline_code_block line 1 at assignment)
+QUERY x[1].a := 5 at 1
+> DO $$ DECLARE x pt[]; BEGIN x[1].z := 5; END $$;
+ERROR 42703 cannot assign to field "z" of column "x" because there is no such column in data type pt (PL/pgSQL function inline_code_block line 1 at assignment)
+QUERY x[1].z := 5 at 1

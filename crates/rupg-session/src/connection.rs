@@ -4658,6 +4658,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/array_assign.test")));
     }
 
+    /// The assignment to a field of a composite column in `UPDATE` and `INSERT`, and of a composite variable in PL/pgSQL, as `FieldStore` makes it: a field of a field, a field of an element of an array, an element of an array in a field, more than one item for the same column, a null row, a domain over a row type, and the errors. `connection/field_assign.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn field_assign() {
+        big_stack(|| script(include_str!("connection/field_assign.test")));
+    }
+
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn array_agg_array() {

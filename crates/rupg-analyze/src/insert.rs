@@ -14,7 +14,7 @@ use rupg_types::{Value, oid};
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{Expr, ExprKind, Func, FuncForm, Var};
+use crate::expr::{Expr, ExprKind, FieldStore, Func, FuncForm, Var};
 use crate::from::{Column, FromItem, Relation};
 use crate::merge::Merge;
 use crate::modify::carried_targets;
@@ -1312,12 +1312,18 @@ pub(crate) fn default_part(indirection: &List, at: Option<usize>) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("cannot set {what} to DEFAULT")).at_opt(at)
 }
 
-/// The value that an assignment to a part of a column sets, without the assignment.
+/// The value that an assignment to a part of a column sets, without the assignments of each level.
 fn strip_part(expr: Expr) -> Expr {
     match expr.kind {
         ExprKind::CoerceToDomain(arg, _) => strip_part(*arg),
         ExprKind::Subscript(sub) if sub.assign.is_some() => {
-            sub.assign.unwrap_or_else(|| Expr::new(ExprKind::Const(Value::Null), 0))
+            sub.assign.map_or_else(|| Expr::new(ExprKind::Const(Value::Null), 0), strip_part)
+        }
+        ExprKind::FieldStore(store) if store.fields.len() == 1 => {
+            store.fields.into_iter().next().map_or_else(
+                || Expr::new(ExprKind::Const(Value::Null), 0),
+                |(_, value)| strip_part(value),
+            )
         }
         _ => expr,
     }
@@ -1325,7 +1331,11 @@ fn strip_part(expr: Expr) -> Expr {
 
 /// Whether the value is an assignment to a part of a column.
 fn is_part(expr: &Expr) -> bool {
-    matches!(&expr.kind, ExprKind::Subscript(sub) if sub.assign.is_some())
+    match &expr.kind {
+        ExprKind::Subscript(sub) => sub.assign.is_some(),
+        ExprKind::FieldStore(_) => true,
+        _ => false,
+    }
 }
 
 /// `process_matched_tle`: two assignments to parts of the same column as one assignment, in which `prior` gives the old value for `src`. When both check the same domain, the domain checks the value after both.
@@ -1351,8 +1361,17 @@ pub(crate) fn merge_parts(prior: Expr, mut src: Expr, name: &str) -> Result<Expr
             format!("multiple assignments to same column \"{name}\""),
         ));
     }
-    if let ExprKind::Subscript(sub) = &mut src.kind {
-        sub.container = prior;
+    match (&mut src.kind, prior.kind) {
+        // Two assignments to fields are one `FieldStore` with the fields of both.
+        (ExprKind::FieldStore(store), ExprKind::FieldStore(old)) => {
+            let FieldStore { arg, mut fields, .. } = *old;
+            fields.append(&mut store.fields);
+            store.fields = fields;
+            store.arg = arg;
+        }
+        (ExprKind::FieldStore(store), kind) => store.arg = Expr { kind, ..prior },
+        (ExprKind::Subscript(sub), kind) => sub.container = Expr { kind, ..prior },
+        _ => {}
     }
     Ok(src)
 }

@@ -10,9 +10,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use rupg_analyze::{
-    Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FromFunction, FromItem, Func, IsJson,
-    JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp, SetTree, SortGroup,
-    SqlValue, SubLink, SubLinkKind, Subscript, TableSample, Target, WindowFunc,
+    Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FieldStore, FromFunction, FromItem, Func,
+    IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp, SetTree,
+    SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, TableSample, Target, WindowFunc,
 };
 use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
@@ -181,6 +181,10 @@ fn check(expr: &Expr) -> Result<()> {
         ExprKind::Subscript(sub) => {
             check(&sub.container)?;
             sub.bounds().chain(&sub.assign).try_for_each(check)?;
+        }
+        ExprKind::FieldStore(store) => {
+            check(&store.arg)?;
+            store.fields.iter().try_for_each(|(_, value)| check(value))?;
         }
         ExprKind::Bool(_, args) | ExprKind::Coalesce(args) => args.iter().try_for_each(check)?,
         ExprKind::Case(case) => {
@@ -1922,6 +1926,7 @@ impl<'a> Eval<'a> {
                 .cloned()
                 .ok_or_else(|| Error::internal("a VALUE is outside of the check of a domain")),
             ExprKind::Subscript(sub) => self.subscript(sub),
+            ExprKind::FieldStore(store) => self.field_store(store),
             ExprKind::Bool(op, args) => self.bool_op(*op, args),
             ExprKind::NullTest(arg, is_null) => {
                 Ok(Value::Bool(null_test(&self.eval(arg)?, *is_null)))
@@ -2377,7 +2382,19 @@ impl<'a> Eval<'a> {
             Some(lower) => Some(self.assign_subscripts(lower)?),
             None => None,
         };
-        let value = self.eval(assign)?;
+        let value = if is_indirection(assign) {
+            // `sbsrefoldvalue`: the new value reads the old element or slice as `CaseTest`.
+            let old = match &lower {
+                Some(lower) => Value::Array(Box::new(array_slice(&array, lower, &upper))),
+                None => array_element(&array, &upper),
+            };
+            self.case.push(old);
+            let value = self.eval(assign);
+            self.case.pop();
+            value?
+        } else {
+            self.eval(assign)?
+        };
         let array = match lower {
             Some(lower) => match value {
                 Value::Null => array,
@@ -2390,6 +2407,28 @@ impl<'a> Eval<'a> {
             }
         };
         Ok(Value::Array(Box::new(array)))
+    }
+
+    /// `ExecEvalFieldStoreDeForm` and `ExecEvalFieldStoreForm`: the row with the new values of its fields. Each new value reads the old value of its field as `CaseTest`. A null row is a row whose fields are all null.
+    fn field_store(&mut self, store: &FieldStore) -> Result<Value> {
+        let mut record = match self.eval(&store.arg)? {
+            Value::Record(record) => record,
+            Value::Null => {
+                let nulls = vec![Value::Null; store.types.len()];
+                Box::new(Record::new(store.types.clone(), nulls))
+            }
+            _ => return Err(Error::internal("the argument of a FieldStore is not a row")),
+        };
+        for (index, value) in &store.fields {
+            let Some(old) = record.values.get(*index).cloned() else {
+                return Err(Error::internal("a FieldStore of a field that the row does not have"));
+            };
+            self.case.push(old);
+            let value = self.eval(value);
+            self.case.pop();
+            record.values[*index] = value?;
+        }
+        Ok(Value::Record(record))
     }
 
     /// `array_subscript_check_subscripts` for an assignment: the values of the subscripts of one bound, with `None` for a bound that the query does not give.
@@ -2844,6 +2883,16 @@ pub use user::variadic_type;
 mod tests;
 
 /// `array_get_element`: the element at the subscripts, or null when the number of subscripts is not the number of dimensions or a subscript is outside its dimension.
+/// `isAssignmentIndirectionExpr`: whether the new value of an assignment is an assignment to a part of the old value, which it reads as `CaseTest`.
+fn is_indirection(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::FieldStore(_) => true,
+        ExprKind::Subscript(sub) => sub.assign.is_some(),
+        ExprKind::CoerceToDomain(arg, _) => is_indirection(arg),
+        _ => false,
+    }
+}
+
 fn array_element(array: &Array<Value>, subscripts: &[Option<i32>]) -> Value {
     if subscripts.len() != array.dims.len() {
         return Value::Null;
