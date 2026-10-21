@@ -17,7 +17,7 @@ use super::alter::Target;
 use super::alter_column::{attribute_compression, attribute_storage};
 use super::comment::range_var;
 use super::sequence::conflicting;
-use super::{Definer, is_system_namespace, not_yet, references, relkind_detail, relname};
+use super::{Definer, Fill, is_system_namespace, not_yet, references, relkind_detail, relname};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::ExprKind;
@@ -1039,6 +1039,8 @@ impl Definer<'_, '_> {
             }
             Some(RawDefault::Cooked(_)) | None => {}
         }
+        let default = self.catalog.default_of(table, number).map(|d| d.expr.clone());
+        self.added.push(Fill { table, column: number, default });
         self.add_not_nulls(table, &plan)?;
         for serial in &plan.serials {
             if serial.identity.is_some() {

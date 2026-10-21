@@ -980,11 +980,12 @@ impl Connection {
             Message::Warning(error) => Notice::warning(error),
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
         }));
-        let transforms = &defined.transforms;
-        let rewrite = defined.result.and_then(|()| self.rows_to_rewrite(node, &work, transforms));
+        let (transforms, fills) = (&defined.transforms, &defined.fills);
+        let rewrite =
+            defined.result.and_then(|()| self.rows_to_rewrite(node, &work, transforms, fills));
         let mut work = Arc::new(work);
         let result = rewrite
-            .and_then(|tables| self.rewrite_rows(&tables, &work, transforms))
+            .and_then(|tables| self.rewrite_rows(&tables, &work, transforms, fills))
             .and_then(|()| self.check_partitions(&defined.checks, &work))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work))
             .and_then(|()| self.view_texts(&defined.views, &mut work));
@@ -4880,6 +4881,12 @@ mod tests {
     #[test]
     fn partition_alter() {
         big_stack(|| script(include_str!("connection/partition_alter.test")));
+    }
+
+    /// The rows of a table after `ADD COLUMN` and a change of the default of the new column in the same statement: the rows get the default of `ADD COLUMN`, and new rows get the new default, also for the partitions. `DROP DEFAULT`, `ALTER COLUMN ... TYPE` and `DROP COLUMN` run before `ADD COLUMN`, so they cannot find the new column. `connection/add_column_default.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn add_column_default() {
+        big_stack(|| script(include_str!("connection/add_column_default.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

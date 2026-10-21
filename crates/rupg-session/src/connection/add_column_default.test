@@ -1,0 +1,73 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int);
+CREATE TABLE
+> INSERT INTO t VALUES (1), (2);
+INSERT 0 2
+> ALTER TABLE t ADD COLUMN b int, ALTER COLUMN b SET DEFAULT 3;
+ALTER TABLE
+> ALTER TABLE t ADD COLUMN c int DEFAULT 1, ALTER COLUMN c DROP DEFAULT;
+ERROR 42703 column "c" of relation "t" does not exist
+> ALTER TABLE t ADD COLUMN d int DEFAULT 1, ALTER COLUMN d SET DEFAULT 2;
+ALTER TABLE
+> ALTER TABLE t ALTER COLUMN e SET DEFAULT 'x', ADD COLUMN e text;
+ALTER TABLE
+> ALTER TABLE t ADD COLUMN f bigserial, ALTER COLUMN f SET DEFAULT 0;
+ALTER TABLE
+> ALTER TABLE t ADD COLUMN g int DEFAULT 7 NOT NULL, ALTER COLUMN g DROP DEFAULT;
+ERROR 42703 column "g" of relation "t" does not exist
+> INSERT INTO t (a, g) VALUES (3, 8);
+ERROR 42703 column "g" of relation "t" does not exist at 19
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,d@t.3:23:4:-1,e@t.4:25:-1:-1,f@t.5:20:8:-1
+row 1,NULL,1,NULL,1
+row 2,NULL,1,NULL,2
+SELECT 2
+> SELECT attname, atthasdef, atthasmissing FROM pg_attribute WHERE attrelid = 't'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,atthasdef@pg_attribute.13:16:1:-1,atthasmissing@pg_attribute.14:16:1:-1
+row a,f,f
+row b,t,f
+row d,t,f
+row e,t,f
+row f,t,f
+SELECT 5
+> ALTER TABLE t ADD COLUMN h int, ALTER COLUMN h SET DEFAULT 3, ALTER COLUMN h SET NOT NULL;
+ERROR 23502 column "h" of relation "t" contains null values
+> ALTER TABLE t ADD COLUMN h int DEFAULT 1, ADD CONSTRAINT t_h CHECK (h = 1), ALTER COLUMN h SET DEFAULT 2;
+ALTER TABLE
+> ALTER TABLE t ADD COLUMN i int DEFAULT 1, ALTER COLUMN i TYPE text;
+ERROR 42703 column "i" of relation "t" does not exist
+> ALTER TABLE t ADD COLUMN j int DEFAULT 4, ALTER COLUMN j DROP DEFAULT, DROP COLUMN j;
+ERROR 42703 column "j" of relation "t" does not exist
+> SELECT * FROM t ORDER BY a;
+fields a@t.1:23:4:-1,b@t.2:23:4:-1,d@t.3:23:4:-1,e@t.4:25:-1:-1,f@t.5:20:8:-1,h@t.6:23:4:-1
+row 1,NULL,1,NULL,1,1
+row 2,NULL,1,NULL,2,1
+SELECT 2
+> CREATE TABLE p (a int, b text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES IN (2) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE p21 PARTITION OF p2 FOR VALUES IN ('x');
+CREATE TABLE
+> INSERT INTO p VALUES (1, 'x'), (2, 'x');
+INSERT 0 2
+> ALTER TABLE p ADD COLUMN c int, ALTER COLUMN c SET DEFAULT 3;
+ALTER TABLE
+> ALTER TABLE p ADD COLUMN d int DEFAULT 1, ALTER COLUMN d DROP DEFAULT;
+ERROR 42703 column "d" of relation "p" does not exist
+> ALTER TABLE p ADD COLUMN e int DEFAULT 1, ALTER COLUMN e SET DEFAULT 2;
+ALTER TABLE
+> INSERT INTO p (a, b) VALUES (1, 'y');
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a, b;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1,e@p.4:23:4:-1
+row p1,1,x,NULL,1
+row p1,1,y,3,2
+row p21,2,x,NULL,1
+SELECT 3
+> DROP TABLE t, p;
+DROP TABLE
