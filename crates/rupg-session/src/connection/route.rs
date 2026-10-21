@@ -1,6 +1,6 @@
 //! `INSERT` into a partitioned table: `ExecFindPartition` routes each row to the leaf partition that takes it, and the leaf checks and writes the row.
 
-use rupg_analyze::{CopyTarget, Params, Write, WriteKind};
+use rupg_analyze::{CopyTarget, Foreign, Params, Write, WriteKind};
 use rupg_catalog::{Catalog, ConKind, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::{Plan, Router};
@@ -341,7 +341,7 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// The errors of the routing, of the triggers and of the constraints of the leaves, and `0A000` for a leaf with foreign keys.
+    /// The errors of the routing, of the triggers and of the constraints of the leaves.
     pub(super) fn change_routed(
         &self,
         (plan, info): (&Plan, &Write),
@@ -367,6 +367,7 @@ impl Connection {
         let mut rows = rows;
         let mut seq = 0;
         let mut applied = Vec::new();
+        let foreign = tree(&catalog, info.table).into_iter().any(|oid| has_foreign(&catalog, oid));
         loop {
             let reader = self.reader();
             // The changes of each old leaf, in the order of its first row, with the item of each change.
@@ -393,7 +394,7 @@ impl Connection {
                 group(&mut groups, at, item);
             }
             drop(reader);
-            if !self.change_leaves(&routing, groups, &done.view, keep, &mut applied)? {
+            if !self.change_leaves(&routing, groups, &done.view, keep || foreign, &mut applied)? {
                 break;
             }
             // The rows that this command changed stay as they are in the new run.
@@ -401,10 +402,34 @@ impl Connection {
             rows = plan.run(params, &reader)?;
             done.view = reader.view().cloned().unwrap_or_default();
         }
+        // The old and the new rows of the leaves for the triggers of the foreign keys, for each leaf and change, and the rows that move with the columns of the partitioned table.
+        let mut changes: Vec<FkRows> = Vec::new();
+        let (mut moved_new, mut moved_old) = (Vec::new(), Vec::new());
         for (at, item, old) in applied {
             let leaf = &routing.leaves[at];
             if !item.moves || item.to.is_some() {
                 done.count += 1;
+            }
+            if foreign && let Some(old) = &old {
+                let change = match (update, item.moves) {
+                    (true, false) => FkChange::Update,
+                    (true, true) => FkChange::Moved,
+                    (false, _) => FkChange::Delete,
+                };
+                let at_change = changes.iter().position(|c| c.0 == at && c.1 == change);
+                let at_change = at_change.unwrap_or_else(|| {
+                    changes.push((at, change, Vec::new(), Vec::new()));
+                    changes.len() - 1
+                });
+                let rows = &mut changes[at_change];
+                rows.3.push(old.clone());
+                if let Some(new) = item.new.as_ref().filter(|_| change == FkChange::Update) {
+                    rows.2.push(new.clone());
+                }
+                if let Some((to, checked)) = &item.to {
+                    moved_old.push(up(leaf, old, width));
+                    moved_new.push(up(&routing.leaves[*to], checked, width));
+                }
             }
             done.written.extend(item.shown.clone());
             if keep && let Some(old) = &old {
@@ -423,7 +448,30 @@ impl Connection {
                 moved.push((item.seq, to, checked));
             }
         }
-        self.insert_moved(&mut routing, &done.view, moved, after, &info.updated)?;
+        // `AfterTriggerSaveEvent`: the triggers of the foreign keys of each leaf fire for its rows. For a row that moves, a clone of a foreign key that refers to the old leaf does not fire, as the foreign key of the partitioned table fires for the update, as `ExecCrossPartitionUpdateForeignKey` queues it.
+        let reader = self.reader();
+        for (at, change, new, old) in changes {
+            let leaf = &routing.leaves[at];
+            let Some(leaf_info) = leaf.plan.write() else {
+                return Err(Error::internal("a partition with no plan of its rows"));
+            };
+            let kind =
+                if change == FkChange::Update { WriteKind::Update } else { WriteKind::Delete };
+            let mut keys = rupg_analyze::foreign_keys(&reader, leaf.oid, kind)?;
+            if change == FkChange::Moved {
+                keys.retain(|f| !f.cloned);
+            }
+            if !keys.is_empty() {
+                done.batches.push(Batch::new(leaf_info, &keys, done.view.command, new, old));
+            }
+        }
+        drop(reader);
+        let batches = self.insert_moved(&mut routing, &done.view, moved, after, &info.updated)?;
+        done.batches.extend(batches);
+        let keys: Vec<Foreign> = info.foreign.iter().filter(|f| !f.cloned).cloned().collect();
+        if !keys.is_empty() && !moved_old.is_empty() {
+            done.batches.push(Batch::new(info, &keys, done.view.command, moved_new, moved_old));
+        }
         old_rows.sort_by_key(|row| row.0);
         new_rows.sort_by_key(|row| row.0);
         done.old = old_rows.into_iter().map(|row| row.1).collect();
@@ -435,7 +483,7 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// The errors of the routing, of the triggers and of the constraints of the leaves, and `0A000` for a leaf with foreign keys.
+    /// The errors of the routing, of the triggers and of the constraints of the leaves.
     pub(super) fn route_change(
         &self,
         routing: &mut Routing,
@@ -471,7 +519,7 @@ impl Connection {
             }
         }
         let mut item = Moved { seq, tid, shown: None, to: None, new: None, moves: false, update };
-        let to = if update {
+        if update {
             let (to, values) = router.route(table, row[..width].to_vec(), reader)?;
             let to = leaf_at(leaves, catalog, (table, to, *first), reader)?;
             if to == at {
@@ -522,16 +570,6 @@ impl Connection {
                     item.to = Some((to, checked));
                 }
             }
-            to
-        } else {
-            at
-        };
-        if has_foreign(catalog, leaves[at].oid) || has_foreign(catalog, leaves[to].oid) {
-            return Err(not_yet(if update {
-                "UPDATE of a partitioned table with foreign keys"
-            } else {
-                "DELETE from a partitioned table with foreign keys"
-            }));
         }
         Ok(Some((at, item)))
     }
@@ -641,6 +679,22 @@ pub(super) struct ChangedRows {
     pub(super) new: Vec<Vec<Value>>,
     /// The view of the last run of the query.
     pub(super) view: View,
+    /// The rows that the foreign keys of the leaves and of the partitioned table check.
+    pub(super) batches: Vec<Batch>,
+}
+
+/// The rows of a leaf for the triggers of its foreign keys: the index of the leaf, the change, and the new and the old rows of the leaf.
+type FkRows = (usize, FkChange, Vec<Vec<Value>>, Vec<Vec<Value>>);
+
+/// The kind of a change of a row of a leaf for the triggers of its foreign keys.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum FkChange {
+    /// An `UPDATE` that keeps the row in its leaf.
+    Update,
+    /// A `DELETE`.
+    Delete,
+    /// An `UPDATE` that moves the row to another leaf, with a delete in the old leaf.
+    Moved,
 }
 
 /// A change of a row of a partitioned table.
@@ -747,6 +801,17 @@ fn root_detail(leaf: &Leaf, row: &[Value], error: Error, reader: &Reader<'_>) ->
         Ok(detail) => error.with_detail(detail),
         Err(_) => error,
     }
+}
+
+/// The table `table` and all its partitions, at each level.
+fn tree(catalog: &Catalog, table: u32) -> Vec<u32> {
+    let mut tables = vec![table];
+    let mut at = 0;
+    while let Some(&oid) = tables.get(at) {
+        tables.extend(catalog.partitions(oid).iter().map(|p| p.oid));
+        at += 1;
+    }
+    tables
 }
 
 /// True when a foreign key references the table `oid` or is a constraint of it.

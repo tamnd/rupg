@@ -1061,6 +1061,17 @@ pub struct NewIndex {
     pub pages: i32,
 }
 
+/// The side of a foreign key that a row of `pg_constraint` serves, as `addFkConstraint` takes it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum FkSide {
+    /// The constraint of the statement, for both tables.
+    Both,
+    /// A clone for a partition of the referenced table.
+    Referenced,
+    /// A clone for a partition of the referencing table.
+    Referencing,
+}
+
 /// A new foreign key before it has an OID.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct NewForeignKey {
@@ -3261,8 +3272,28 @@ impl Catalog {
 
     /// `ATAddForeignKeyConstraint`: a foreign key with its four triggers. Without a name, the name is `table_columns_fkey`.
     pub fn add_foreign_key(&mut self, new: NewForeignKey) -> Result<u32> {
+        let oid = self.add_fk_constraint(new, 0, FkSide::Both)?;
+        self.add_fk_action_triggers(oid, None)?;
+        self.add_fk_check_triggers(oid, None)?;
+        Ok(oid)
+    }
+
+    /// `addFkConstraint`: the row of `pg_constraint` of a foreign key, with no triggers. A constraint of the statement has no `parent`. A clone of the constraint `parent` serves one side: a clone for a partition of the referenced table depends on `parent` as a part of it, and a clone for a partition of the referencing table is a partition of `parent`. A clone keeps the name of `parent`, unless the table has a constraint with that name, and then the name gets `_1`, `_2` and so on. The constraint is `NO INHERIT` unless its table is partitioned.
+    pub fn add_fk_constraint(
+        &mut self,
+        new: NewForeignKey,
+        parent: u32,
+        side: FkSide,
+    ) -> Result<u32> {
         let (relname, namespace) = self.relation_facts(new.table)?;
         let name = match &new.name {
+            Some(name) if parent != 0 => {
+                if self.constraints_of(new.table).any(|c| c.name == *name) {
+                    self.choose_constraint_name(name, None, "", namespace)
+                } else {
+                    name.clone()
+                }
+            }
             Some(name) => {
                 self.check_constraint_name(new.table, name, &relname)?;
                 name.clone()
@@ -3282,16 +3313,22 @@ impl Catalog {
                 self.choose_constraint_name(&relname, Some(&addition), "fkey", namespace)
             }
         };
+        let partitioned =
+            self.relations.get(&new.table).is_some_and(|r| r.kind == RelKind::Partitioned);
         let mut constraint =
             self.new_constraint(name, namespace, ConKind::Foreign, new.table, new.keys);
         constraint.index = new.index;
-        constraint.no_inherit = true;
+        constraint.no_inherit = !partitioned && parent == 0;
         constraint.deferrable = new.deferrable;
         constraint.deferred = new.deferred;
+        if parent != 0 {
+            constraint.parent = parent;
+            constraint.local = false;
+            constraint.inhcount = 1;
+        }
         let oid = constraint.oid;
         let referenced = new.foreign.table;
         let referenced_keys = new.foreign.keys.clone();
-        let (delete, update) = (new.foreign.delete, new.foreign.update);
         constraint.foreign = Some(new.foreign);
         self.insert_constraint(constraint);
         let me = ObjRef::new(PG_CONSTRAINT, oid);
@@ -3299,21 +3336,33 @@ impl Catalog {
             self.depend(me, ObjRef::column(referenced, key), DepKind::Normal);
         }
         self.depend(me, ObjRef::new(PG_CLASS, new.index), DepKind::Normal);
-        let mut trigger = Trigger {
-            oid: 0,
-            relation: referenced,
-            name: String::new(),
-            function: 0,
-            kind: 0,
-            constraint_relation: new.table,
-            constraint_index: new.index,
-            constraint: oid,
-            enabled: b'O',
-            internal: true,
-            ..Trigger::default()
-        };
-        // `createForeignKeyActionTriggers`: the triggers of the actions on the referenced table. Only `NO ACTION` can wait to the end of the transaction.
-        for (event, action, offset) in [(TRIGGER_DELETE, delete, 0), (TRIGGER_UPDATE, update, 1)] {
+        match side {
+            _ if parent == 0 => {}
+            FkSide::Referenced => {
+                self.depend(me, ObjRef::new(PG_CONSTRAINT, parent), DepKind::Internal);
+            }
+            FkSide::Both | FkSide::Referencing => {
+                self.depend(me, ObjRef::new(PG_CONSTRAINT, parent), DepKind::PartitionPri);
+                self.depend(me, ObjRef::new(PG_CLASS, new.table), DepKind::PartitionSec);
+            }
+        }
+        Ok(oid)
+    }
+
+    /// `createForeignKeyActionTriggers`: the triggers of the actions of a foreign key on its referenced table, for a delete and for an update, in this order. Only `NO ACTION` can wait to the end of the transaction. The triggers of a clone are the clones of `parents`, the triggers of its parent constraint.
+    pub fn add_fk_action_triggers(
+        &mut self,
+        constraint: u32,
+        parents: Option<(u32, u32)>,
+    ) -> Result<(u32, u32)> {
+        let (mut trigger, foreign) = self.fk_trigger(constraint)?;
+        std::mem::swap(&mut trigger.relation, &mut trigger.constraint_relation);
+        let (delete, update) = (foreign.delete, foreign.update);
+        let (deferrable, deferred) = (trigger.deferrable, trigger.deferred);
+        let mut oids = [0; 2];
+        for (at, (event, action, offset)) in
+            [(TRIGGER_DELETE, delete, 0), (TRIGGER_UPDATE, update, 1)].into_iter().enumerate()
+        {
             let function = match action {
                 'r' => 4,
                 'c' => 2,
@@ -3324,23 +3373,71 @@ impl Catalog {
             let no_action = function == 10;
             trigger.function = RI_FKEY_CHECK_INS + function + offset;
             trigger.kind = TRIGGER_ROW | event;
-            trigger.deferrable = no_action && new.deferrable;
-            trigger.deferred = no_action && new.deferred;
+            trigger.deferrable = no_action && deferrable;
+            trigger.deferred = no_action && deferred;
+            trigger.parent = parents.map_or(0, |p| if at == 0 { p.0 } else { p.1 });
             self.add_trigger(&mut trigger, "RI_ConstraintTrigger_a");
+            oids[at] = trigger.oid;
         }
-        // `createForeignKeyCheckTriggers`: the checks on the referencing table.
-        trigger.relation = new.table;
-        trigger.constraint_relation = referenced;
-        trigger.deferrable = new.deferrable;
-        trigger.deferred = new.deferred;
-        for (event, offset) in [(TRIGGER_INSERT, 0), (TRIGGER_UPDATE, 1)] {
+        self.relation_mut(trigger.relation)?.has_triggers = true;
+        Ok((oids[0], oids[1]))
+    }
+
+    /// `createForeignKeyCheckTriggers`: the checks of a foreign key on its referencing table, for an insert and for an update, in this order. The triggers of a clone are the clones of `parents`, the triggers of its parent constraint.
+    pub fn add_fk_check_triggers(
+        &mut self,
+        constraint: u32,
+        parents: Option<(u32, u32)>,
+    ) -> Result<(u32, u32)> {
+        let (mut trigger, _) = self.fk_trigger(constraint)?;
+        let mut oids = [0; 2];
+        for (at, (event, offset)) in
+            [(TRIGGER_INSERT, 0), (TRIGGER_UPDATE, 1)].into_iter().enumerate()
+        {
             trigger.function = RI_FKEY_CHECK_INS + offset;
             trigger.kind = TRIGGER_ROW | event;
+            trigger.parent = parents.map_or(0, |p| if at == 0 { p.0 } else { p.1 });
             self.add_trigger(&mut trigger, "RI_ConstraintTrigger_c");
+            oids[at] = trigger.oid;
         }
-        self.relation_mut(new.table)?.has_triggers = true;
-        self.relation_mut(referenced)?.has_triggers = true;
-        Ok(oid)
+        self.relation_mut(trigger.relation)?.has_triggers = true;
+        Ok((oids[0], oids[1]))
+    }
+
+    /// The facts that the triggers of a foreign key share, with the referencing table as the table of the trigger.
+    fn fk_trigger(&self, constraint: u32) -> Result<(Trigger, ForeignKey)> {
+        let con =
+            self.constraints.get(&constraint).ok_or_else(|| no_object("constraint", constraint))?;
+        let Some(foreign) = con.foreign.clone() else {
+            return Err(Error::internal(format!("constraint {constraint} is not a foreign key")));
+        };
+        let trigger = Trigger {
+            relation: con.relation,
+            constraint_relation: foreign.table,
+            constraint_index: con.index,
+            constraint,
+            deferrable: con.deferrable,
+            deferred: con.deferred,
+            enabled: b'O',
+            internal: true,
+            ..Trigger::default()
+        };
+        Ok((trigger, foreign))
+    }
+
+    /// `TriggerSetParentTrigger`: the trigger becomes a clone of the trigger `parent`, with the partition dependencies on `parent` and on its table.
+    pub fn set_trigger_parent(&mut self, trigger: u32, parent: u32) {
+        let Some(found) = self.triggers.get_mut(&trigger) else { return };
+        found.parent = parent;
+        let table = found.relation;
+        let me = ObjRef::new(PG_TRIGGER, trigger);
+        self.depend(me, ObjRef::new(PG_TRIGGER, parent), DepKind::PartitionPri);
+        self.depend(me, ObjRef::new(PG_CLASS, table), DepKind::PartitionSec);
+    }
+
+    /// `deleteDependencyRecordsFor`: the object loses all its rows of `pg_depend`, so that it can go alone.
+    pub fn drop_depends_of(&mut self, object: ObjRef) {
+        self.depends.retain(|d| d.object != object);
     }
 
     /// `CreateTrigger` for an internal trigger of a constraint: a new OID, the name `prefix_OID`, and an internal dependency on the constraint. The dependency on the function is not recorded, because the function is pinned.
@@ -3348,11 +3445,12 @@ impl Catalog {
         trigger.oid = self.new_oid();
         trigger.name = format!("{prefix}_{}", trigger.oid);
         self.triggers.insert(trigger.oid, trigger.clone());
-        self.depend(
-            ObjRef::new(PG_TRIGGER, trigger.oid),
-            ObjRef::new(PG_CONSTRAINT, trigger.constraint),
-            DepKind::Internal,
-        );
+        let me = ObjRef::new(PG_TRIGGER, trigger.oid);
+        self.depend(me, ObjRef::new(PG_CONSTRAINT, trigger.constraint), DepKind::Internal);
+        if trigger.parent != 0 {
+            self.depend(me, ObjRef::new(PG_TRIGGER, trigger.parent), DepKind::PartitionPri);
+            self.depend(me, ObjRef::new(PG_CLASS, trigger.relation), DepKind::PartitionSec);
+        }
     }
 
     /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`, or in `pg_toast_temp_N` for a table of the temporary schema `pg_temp_N`. The TOAST table gets an OID, then its index. They have no row type.

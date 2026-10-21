@@ -358,7 +358,7 @@ impl Connection {
     }
 }
 
-/// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default, a not-null constraint or a domain with constraints, a new constraint, or a new unique index. A dropped table and a new column with no default keep the rows.
+/// True if the change of the catalog from `old` to `new` changes the rows of the table `rel`: a change of the type of a column, a new not-null constraint, a new column with a default, a not-null constraint or a domain with constraints, a new constraint that checks the rows of the table, or a new unique index. A dropped table and a new column with no default keep the rows.
 fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
     let Some(now) = new.relation(rel.oid) else {
         return false;
@@ -388,10 +388,13 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
     if added {
         return true;
     }
+    // A clone of a foreign key for a partition of the referenced table has no check on the rows of its table.
     let constraint = new.constraints_of(rel.oid).any(|c| {
         !matches!(c.kind, ConKind::NotNull | ConKind::Trigger)
             && c.validated
             && old.constraint(c.oid).is_none()
+            && (c.kind != ConKind::Foreign
+                || new.triggers_of(rel.oid).iter().any(|t| t.constraint == c.oid))
     });
     let index = new.relations().any(|index| {
         old.relation(index.oid).is_none()

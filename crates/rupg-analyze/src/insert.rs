@@ -138,6 +138,8 @@ pub struct Foreign {
     pub deferrable: bool,
     /// `tginitdeferred`: the trigger fires at the commit when `SET CONSTRAINTS` does not change its mode.
     pub deferred: bool,
+    /// `tgisclone`: the trigger is a clone of a trigger of the parent table. The delete of a row that an `UPDATE` moves to another partition skips such a trigger of the referenced table, because the event of the update of the partitioned table does its work.
+    pub cloned: bool,
 }
 
 /// A unique index of the target table, which `_bt_check_unique` checks for each new version of a row.
@@ -164,24 +166,25 @@ fn quote_one(name: &str) -> String {
 
 /// The statement of an action of a foreign key on the referencing table `table`, as `RI_FKey_cascade_del`, `RI_FKey_cascade_upd` and `ri_set` make it. `names` are the key columns of the referencing table.
 fn action_query(
-    action: Action,
-    kind: WriteKind,
-    table: &str,
+    (action, kind): (Action, WriteKind),
+    (table, only): (&str, bool),
     names: &[&str],
     foreign: &Foreign,
 ) -> String {
     let columns: Vec<String> = names.iter().map(|name| quote_one(name)).collect();
+    // `ri_triggers.c` writes `ONLY` unless the referencing table is partitioned.
+    let only = if only { "ONLY " } else { "" };
     let mut query = match (action, kind) {
-        (Action::Cascade, WriteKind::Delete) => format!("DELETE FROM ONLY {table}"),
+        (Action::Cascade, WriteKind::Delete) => format!("DELETE FROM {only}{table}"),
         (Action::Cascade, _) => {
             let set: Vec<String> =
                 columns.iter().enumerate().map(|(at, c)| format!(" {c} = ${}", at + 1)).collect();
-            format!("UPDATE ONLY {table} SET{}", set.join(","))
+            format!("UPDATE {only}{table} SET{}", set.join(","))
         }
         _ => {
             let value = if action == Action::SetNull { "NULL" } else { "DEFAULT" };
             let set: Vec<String> = columns.iter().map(|c| format!(" {c} = {value}")).collect();
-            format!("UPDATE ONLY {table} SET{}", set.join(","))
+            format!("UPDATE {only}{table} SET{}", set.join(","))
         }
     };
     // The parameters of the old key come after the new key for `ON UPDATE CASCADE`.
@@ -633,6 +636,11 @@ impl Analyzer<'_> {
         let Some(catalog) = self.env.catalog() else {
             return Ok(Vec::new());
         };
+        // `AfterTriggerSaveEvent`: the leaf partitions fire the triggers of the rows. A partitioned table fires only the triggers of its referenced keys, for the update of a row that moves to another partition.
+        let partitioned = catalog.relation(table).is_some_and(|r| r.kind == RelKind::Partitioned);
+        if partitioned && kind != WriteKind::Update {
+            return Ok(Vec::new());
+        }
         let mut triggers: Vec<_> = catalog
             .triggers()
             .filter(|t| t.relation == table && t.fires())
@@ -643,7 +651,7 @@ impl Analyzer<'_> {
                     f if f % 2 == 1 => WriteKind::Update,
                     _ => WriteKind::Delete,
                 };
-                (event == kind).then_some((t, function))
+                (event == kind && !(partitioned && function < 2)).then_some((t, function))
             })
             .collect();
         triggers.sort_by(|a, b| a.0.name.cmp(&b.0.name));
@@ -688,6 +696,7 @@ impl Analyzer<'_> {
                 constraint: constraint.oid,
                 deferrable: trigger.deferrable,
                 deferred: trigger.deferred,
+                cloned: trigger.parent != 0,
             };
             for (&attnum, &other_attnum) in mine.iter().zip(theirs) {
                 let column = place(attnum).and_then(|at| columns.get(at).map(|c| (at, c)));
@@ -720,7 +729,8 @@ impl Analyzer<'_> {
                         .map_or_else(String::new, |n| n.name.to_string()),
                 };
                 let table = format!("{}.{}", quote_one(&schema), quote_one(&other_rel.name));
-                check.query = action_query(action, kind, &table, &names, &check);
+                let only = other_rel.kind != RelKind::Partitioned;
+                check.query = action_query((action, kind), (&table, only), &names, &check);
             }
             list.push(check);
         }

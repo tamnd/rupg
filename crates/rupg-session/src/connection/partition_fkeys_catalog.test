@@ -1,0 +1,180 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE q (id int PRIMARY KEY) PARTITION BY RANGE (id);
+CREATE TABLE
+> CREATE TABLE q1 PARTITION OF q FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE t (id int REFERENCES q, a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE t1 PARTITION OF t FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE q2 PARTITION OF q FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> SELECT conname, conrelid::regclass, confrelid::regclass, conparentid <> 0 AS child, conislocal, coninhcount, connoinherit, conindid::regclass FROM pg_constraint WHERE contype = 'f' ORDER BY oid;
+fields conname@pg_constraint.2:19:64:-1,conrelid:2205:4:-1,confrelid:2205:4:-1,child:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1,conindid:2205:4:-1
+row t_id_fkey,t,q,f,t,0,f,q_pkey
+row t_id_fkey_1,t,q1,t,f,1,f,q1_pkey
+row t_id_fkey,t1,q,t,f,1,f,q_pkey
+row t_id_fkey_2,t,q2,t,f,1,f,q2_pkey
+SELECT 4
+> SELECT tgrelid::regclass, tgfoid::regproc, tgparentid <> 0 AS child, c.conname, tgconstrrelid::regclass, tgconstrindid::regclass, tgdeferrable FROM pg_trigger t JOIN pg_constraint c ON c.oid = tgconstraint ORDER BY t.oid;
+fields tgrelid:2205:4:-1,tgfoid:24:4:-1,child:16:1:-1,conname@pg_constraint.2:19:64:-1,tgconstrrelid:2205:4:-1,tgconstrindid:2205:4:-1,tgdeferrable@pg_trigger.12:16:1:-1
+row q,"RI_FKey_noaction_del",f,t_id_fkey,t,q_pkey,f
+row q,"RI_FKey_noaction_upd",f,t_id_fkey,t,q_pkey,f
+row q1,"RI_FKey_noaction_del",t,t_id_fkey_1,t,q1_pkey,f
+row q1,"RI_FKey_noaction_upd",t,t_id_fkey_1,t,q1_pkey,f
+row t,"RI_FKey_check_ins",f,t_id_fkey,q,q_pkey,f
+row t,"RI_FKey_check_upd",f,t_id_fkey,q,q_pkey,f
+row t1,"RI_FKey_check_ins",t,t_id_fkey,q,q_pkey,f
+row t1,"RI_FKey_check_upd",t,t_id_fkey,q,q_pkey,f
+row q2,"RI_FKey_noaction_del",t,t_id_fkey_2,t,q2_pkey,f
+row q2,"RI_FKey_noaction_upd",t,t_id_fkey_2,t,q2_pkey,f
+SELECT 10
+> SELECT classid::regclass, (SELECT conname FROM pg_constraint WHERE oid = objid) AS con, refclassid::regclass, CASE WHEN refclassid = 'pg_constraint'::regclass THEN (SELECT conname || '@' || conrelid::regclass FROM pg_constraint WHERE oid = refobjid) ELSE refobjid::regclass::text END AS ref, refobjsubid, deptype FROM pg_depend WHERE classid = 'pg_constraint'::regclass AND objid IN (SELECT oid FROM pg_constraint WHERE contype = 'f') ORDER BY objid, refclassid, refobjid, refobjsubid;
+fields classid:2205:4:-1,con:19:64:-1,refclassid:2205:4:-1,ref:25:-1:-1,refobjsubid@pg_depend.6:23:4:-1,deptype@pg_depend.7:18:1:-1
+row pg_constraint,t_id_fkey,pg_class,q,1,n
+row pg_constraint,t_id_fkey,pg_class,q_pkey,0,n
+row pg_constraint,t_id_fkey,pg_class,t,1,a
+row pg_constraint,t_id_fkey_1,pg_class,q1,1,n
+row pg_constraint,t_id_fkey_1,pg_class,q1_pkey,0,n
+row pg_constraint,t_id_fkey_1,pg_class,t,1,a
+row pg_constraint,t_id_fkey_1,pg_constraint,t_id_fkey@t,0,i
+row pg_constraint,t_id_fkey,pg_class,q,1,n
+row pg_constraint,t_id_fkey,pg_class,q_pkey,0,n
+row pg_constraint,t_id_fkey,pg_class,t1,0,S
+row pg_constraint,t_id_fkey,pg_class,t1,1,a
+row pg_constraint,t_id_fkey,pg_constraint,t_id_fkey@t,0,P
+row pg_constraint,t_id_fkey_2,pg_class,t,1,a
+row pg_constraint,t_id_fkey_2,pg_class,q2,1,n
+row pg_constraint,t_id_fkey_2,pg_class,q2_pkey,0,n
+row pg_constraint,t_id_fkey_2,pg_constraint,t_id_fkey@t,0,i
+SELECT 16
+> INSERT INTO q VALUES (1), (11);
+INSERT 0 2
+> INSERT INTO t VALUES (1, 1), (11, 2);
+INSERT 0 2
+> DROP TABLE q1;
+ERROR 2BP01 cannot drop table q1 because other objects depend on it
+DETAIL constraint t_id_fkey on table t depends on table q1
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE t1 DROP CONSTRAINT t_id_fkey;
+ERROR 42P16 cannot drop inherited constraint "t_id_fkey" of relation "t1"
+> ALTER TABLE t DROP CONSTRAINT t_id_fkey;
+ALTER TABLE
+> SELECT conname, conrelid::regclass, confrelid::regclass FROM pg_constraint WHERE contype = 'f' ORDER BY oid;
+fields conname@pg_constraint.2:19:64:-1,conrelid:2205:4:-1,confrelid:2205:4:-1
+SELECT 0
+> SELECT count(*) FROM pg_trigger WHERE tgconstraint <> 0;
+fields count:20:8:-1
+row 0
+SELECT 1
+> ALTER TABLE t ADD FOREIGN KEY (id) REFERENCES q ON DELETE CASCADE;
+ALTER TABLE
+> DELETE FROM q WHERE id = 11;
+DELETE 1
+> SELECT * FROM t;
+fields id@t.1:23:4:-1,a@t.2:23:4:-1
+row 1,1
+SELECT 1
+> UPDATE t SET a = 15 WHERE id = 1;
+ERROR 23514 no partition of relation "t" found for row
+DETAIL Partition key of the failing row contains (a) = (15).
+> CREATE TABLE t2 PARTITION OF t FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> UPDATE t SET a = 15 WHERE id = 1 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,id@t.1:23:4:-1,a@t.2:23:4:-1
+row t2,1,15
+UPDATE 1
+> UPDATE t SET id = 5 WHERE id = 1;
+ERROR 23503 insert or update on table "t2" violates foreign key constraint "t_id_fkey"
+DETAIL Key (id)=(5) is not present in table "q".
+> UPDATE q SET id = 12 WHERE id = 1;
+ERROR 23503 update or delete on table "q" violates foreign key constraint "t_id_fkey" on table "t"
+DETAIL Key (id)=(1) is still referenced from table "t".
+> DROP TABLE t1;
+DROP TABLE
+> DROP TABLE t2;
+DROP TABLE
+> SELECT conname, conrelid::regclass, confrelid::regclass FROM pg_constraint WHERE contype = 'f' ORDER BY oid;
+fields conname@pg_constraint.2:19:64:-1,conrelid:2205:4:-1,confrelid:2205:4:-1
+row t_id_fkey,t,q
+row t_id_fkey_1,t,q1
+row t_id_fkey_2,t,q2
+SELECT 3
+> DROP TABLE t;
+DROP TABLE
+> SELECT count(*) FROM pg_trigger WHERE tgconstraint <> 0;
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE u (id int);
+CREATE TABLE
+> ALTER TABLE u ADD CONSTRAINT u_id_fkey FOREIGN KEY (id) REFERENCES q;
+ALTER TABLE
+> CREATE TABLE w (id int, a int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE w1 (id int REFERENCES q, a int);
+CREATE TABLE
+> ALTER TABLE w ADD FOREIGN KEY (id) REFERENCES q;
+ALTER TABLE
+> ALTER TABLE w ATTACH PARTITION w1 FOR VALUES IN (1);
+ALTER TABLE
+> SELECT conname, conrelid::regclass, confrelid::regclass, conparentid <> 0 AS child, conislocal, coninhcount FROM pg_constraint WHERE contype = 'f' ORDER BY oid;
+fields conname@pg_constraint.2:19:64:-1,conrelid:2205:4:-1,confrelid:2205:4:-1,child:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row u_id_fkey,u,q,f,t,0
+row u_id_fkey_1,u,q1,t,f,1
+row u_id_fkey_2,u,q2,t,f,1
+row w1_id_fkey,w1,q,t,f,1
+row w_id_fkey,w,q,f,t,0
+row w_id_fkey_1,w,q1,t,f,1
+row w_id_fkey_2,w,q2,t,f,1
+SELECT 7
+> SELECT tgrelid::regclass, tgfoid::regproc, tgparentid <> 0 AS child, c.conname FROM pg_trigger t JOIN pg_constraint c ON c.oid = tgconstraint WHERE c.conrelid::regclass::text LIKE 'w%' ORDER BY t.oid;
+fields tgrelid:2205:4:-1,tgfoid:24:4:-1,child:16:1:-1,conname@pg_constraint.2:19:64:-1
+row w1,"RI_FKey_check_ins",t,w1_id_fkey
+row w1,"RI_FKey_check_upd",t,w1_id_fkey
+row q,"RI_FKey_noaction_del",f,w_id_fkey
+row q,"RI_FKey_noaction_upd",f,w_id_fkey
+row q1,"RI_FKey_noaction_del",t,w_id_fkey_1
+row q1,"RI_FKey_noaction_upd",t,w_id_fkey_1
+row q2,"RI_FKey_noaction_del",t,w_id_fkey_2
+row q2,"RI_FKey_noaction_upd",t,w_id_fkey_2
+row w,"RI_FKey_check_ins",f,w_id_fkey
+row w,"RI_FKey_check_upd",f,w_id_fkey
+SELECT 10
+> ALTER TABLE w DETACH PARTITION w1;
+ALTER TABLE
+> SELECT conname, conrelid::regclass, confrelid::regclass, conparentid <> 0 AS child, conislocal, coninhcount FROM pg_constraint WHERE contype = 'f' ORDER BY oid;
+fields conname@pg_constraint.2:19:64:-1,conrelid:2205:4:-1,confrelid:2205:4:-1,child:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row u_id_fkey,u,q,f,t,0
+row u_id_fkey_1,u,q1,t,f,1
+row u_id_fkey_2,u,q2,t,f,1
+row w1_id_fkey,w1,q,f,t,0
+row w_id_fkey,w,q,f,t,0
+row w_id_fkey_1,w,q1,t,f,1
+row w_id_fkey_2,w,q2,t,f,1
+row w1_id_fkey_1,w1,q1,t,f,1
+row w1_id_fkey_2,w1,q2,t,f,1
+SELECT 9
+> SELECT tgrelid::regclass, tgfoid::regproc, tgparentid <> 0 AS child, c.conname FROM pg_trigger t JOIN pg_constraint c ON c.oid = tgconstraint WHERE c.conrelid::regclass::text LIKE 'w%' ORDER BY t.oid;
+fields tgrelid:2205:4:-1,tgfoid:24:4:-1,child:16:1:-1,conname@pg_constraint.2:19:64:-1
+row w1,"RI_FKey_check_ins",f,w1_id_fkey
+row w1,"RI_FKey_check_upd",f,w1_id_fkey
+row q,"RI_FKey_noaction_del",f,w_id_fkey
+row q,"RI_FKey_noaction_upd",f,w_id_fkey
+row q1,"RI_FKey_noaction_del",t,w_id_fkey_1
+row q1,"RI_FKey_noaction_upd",t,w_id_fkey_1
+row q2,"RI_FKey_noaction_del",t,w_id_fkey_2
+row q2,"RI_FKey_noaction_upd",t,w_id_fkey_2
+row w,"RI_FKey_check_ins",f,w_id_fkey
+row w,"RI_FKey_check_upd",f,w_id_fkey
+row q,"RI_FKey_noaction_del",f,w1_id_fkey
+row q,"RI_FKey_noaction_upd",f,w1_id_fkey
+row q1,"RI_FKey_noaction_del",t,w1_id_fkey_1
+row q1,"RI_FKey_noaction_upd",t,w1_id_fkey_1
+row q2,"RI_FKey_noaction_del",t,w1_id_fkey_2
+row q2,"RI_FKey_noaction_upd",t,w1_id_fkey_2
+SELECT 16
+> DROP TABLE u, w, w1, q;
+DROP TABLE

@@ -16,6 +16,7 @@ mod drop_function;
 mod enum_label;
 mod enumtype;
 mod fkey;
+mod fkey_partition;
 mod function;
 mod identity;
 mod index;
@@ -102,6 +103,8 @@ pub struct Defined {
     pub views: Vec<u32>,
     /// The partitions of `ATTACH PARTITION` whose rows the caller checks against their new partition constraints after the statement, as `QueuePartitionConstraintValidation` queues them.
     pub checks: Vec<PartitionCheck>,
+    /// The partitions of `DETACH PARTITION` whose keys a foreign key refers to through the parent. Before the statement the caller checks that no row of a referencing table has a key of the partition, as `ATDetachCheckNoForeignKeyRefs` checks it, with the catalog before the statement.
+    pub detached: Vec<u32>,
 }
 
 /// A partition whose rows must satisfy its partition constraint, one entry of `tab->partition_constraint`.
@@ -217,6 +220,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         added: Vec::new(),
         views: Vec::new(),
         checks: Vec::new(),
+        detached: Vec::new(),
     };
     let mut filled = None;
     let result = match stmt {
@@ -282,6 +286,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         filled,
         views: definer.views,
         checks: definer.checks,
+        detached: definer.detached,
     }
 }
 
@@ -383,6 +388,8 @@ pub(crate) struct Definer<'a, 'c> {
     views: Vec<u32>,
     /// The partitions of [`Defined::checks`].
     checks: Vec<PartitionCheck>,
+    /// The partitions of [`Defined::detached`].
+    detached: Vec<u32>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.

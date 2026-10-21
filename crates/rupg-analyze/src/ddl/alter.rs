@@ -715,16 +715,21 @@ impl Definer<'_, '_> {
                     if !con.initially_valid && con.is_enforced {
                         return Err(not_yet("NOT VALID", place(con.location)));
                     }
-                    if target.kind == b'p' {
-                        return Err(not_yet(
-                            "a foreign key of a partitioned table",
-                            place(con.location),
+                    if target.kind == b'p' && !passes.recurse {
+                        let pk = con.pktable.as_deref().map_or("", relname);
+                        return Err(Error::new(
+                            SqlState::WRONG_OBJECT_TYPE,
+                            format!(
+                                "cannot use ONLY for foreign key on partitioned table \"{}\" referencing relation \"{pk}\"",
+                                target.name
+                            ),
                         ));
                     }
                     self.add_foreign_key(target.oid, &con)?;
-                    // `RI_Initial_Check` reads the rows of the table.
+                    // `RI_Initial_Check` reads the rows of the table, or of each leaf partition of a partitioned table.
                     if con.is_enforced && validated {
-                        self.scans.push(target.oid);
+                        let leaves = self.leaves(target.oid);
+                        self.scans.extend(leaves);
                     }
                 }
             }
