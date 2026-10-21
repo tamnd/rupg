@@ -5285,6 +5285,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/equivalence_const.test")));
     }
 
+    /// `EXPLAIN` of joins of three and four tables in the order that the join search of PostgreSQL finds: by the conditions of the joins, by the classes with a constant, with a table that has no condition, with a lateral function, and with a left join as one item. `connection/join_search.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn join_search() {
+        big_stack(|| script(include_str!("connection/join_search.test")));
+    }
+
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_constraintdef() {

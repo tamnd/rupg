@@ -40,12 +40,25 @@ impl<'q> Class<'q> {
     }
 }
 
-/// Makes the conditions of the equivalence classes with a constant of the join domain of the tree, and then of the domains below it. `top` is true for the domain of the whole query. The conditions of joins that go are added to `joined`. The result is false when two constants of a class of the top domain are not equal, so that no row passes.
-pub(super) fn domain<'q>(tree: &mut Tree<'q>, top: bool, joined: &mut Vec<&'q Expr>) -> bool {
+/// What the equivalence classes of the join domains of a query give to the rest of the planner.
+#[derive(Debug, Default)]
+pub(super) struct Found<'q> {
+    /// The conditions of joins that the classes took the place of.
+    pub(super) joined: Vec<&'q Expr>,
+    /// `ec_relids`: the relations of the members of each class.
+    pub(super) spans: Vec<BTreeSet<usize>>,
+}
+
+/// Makes the conditions of the equivalence classes with a constant of the join domain of the tree, and then of the domains below it. `top` is true for the domain of the whole query. The result is false when two constants of a class of the top domain are not equal, so that no row passes.
+pub(super) fn domain<'q>(tree: &mut Tree<'q>, top: bool, out: &mut Found<'q>) -> bool {
     let mut found = Vec::new();
     sources(tree, &mut found);
     found.sort_by_key(|(order, _)| *order);
     let classes = classes(&found);
+    for class in &classes {
+        out.spans.push(class.members.iter().flat_map(|m| exprs::relations(m)).collect());
+    }
+    let joined = &mut out.joined;
     let mut own = BTreeSet::new();
     own_rels(tree, &mut own);
     reconsider(tree, &classes, joined);
@@ -61,7 +74,7 @@ pub(super) fn domain<'q>(tree: &mut Tree<'q>, top: bool, joined: &mut Vec<&'q Ex
             None => {}
         }
     }
-    below(tree, joined);
+    below(tree, out);
     true
 }
 
@@ -330,20 +343,20 @@ fn remove<'q>(tree: &mut Tree<'q>, orders: &[usize], joined: &mut Vec<&'q Expr>)
 }
 
 /// The classes of the join domains below the domain: the nullable side of each left join and the two sides of a full join.
-fn below<'q>(tree: &mut Tree<'q>, joined: &mut Vec<&'q Expr>) {
+fn below<'q>(tree: &mut Tree<'q>, out: &mut Found<'q>) {
     let Tree::Join(join) = tree else { return };
     match join.kind {
         JoinKind::Inner => {
-            below(&mut join.left, joined);
-            below(&mut join.right, joined);
+            below(&mut join.left, out);
+            below(&mut join.right, out);
         }
         JoinKind::Left => {
-            below(&mut join.left, joined);
-            domain(&mut join.right, false, joined);
+            below(&mut join.left, out);
+            domain(&mut join.right, false, out);
         }
         _ => {
-            domain(&mut join.left, false, joined);
-            domain(&mut join.right, false, joined);
+            domain(&mut join.left, false, out);
+            domain(&mut join.right, false, out);
         }
     }
 }
