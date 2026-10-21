@@ -4,12 +4,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.56 (2026-10-21)
+
 ### Added
 
-- The assignment to an element or a slice of an array in PL/pgSQL, as in `x[2][1] := 30` and `x[2:3] := ARRAY[5, 6]`, for arrays of more than one dimension. An assignment to an element or a slice out of the bounds of a one-dimensional array makes the array larger, and the errors of the subscripts and of the bounds are the errors of PostgreSQL.
-- Subscripts on a column in `UPDATE`, `INSERT`, `ON CONFLICT DO UPDATE` and `MERGE`, as in `UPDATE t SET a[2] = 5` and `INSERT INTO t (a[1], a[3]) VALUES (1, 3)`. More than one item can set parts of the same column, and a domain over an array checks the new value after all of the items.
-- The assignment to a field of a composite value, as in `UPDATE t SET p.x = 5`, `INSERT INTO t (p.x, p.y) VALUES (1, 2)` and `x.a.x := 1` in PL/pgSQL. Fields and subscripts can be mixed, as in `UPDATE t SET ps[1].x = 7`.
-- `COMMIT` and `ROLLBACK` in PL/pgSQL, with `AND CHAIN`. A procedure that `CALL` runs outside of a transaction block, and the code of such a `DO`, can end the transaction, and a new transaction starts at once. A loop over a query or over a cursor goes on after the end. The errors in a function, in a trigger, in a transaction block and in a block with `EXCEPTION` are the errors of PostgreSQL.
+- The assignment to an element or a slice of an array in PL/pgSQL, as in `x[2][1] := 30` and `x[2:3] := ARRAY[5, 6]`, for arrays of more than one dimension. An assignment to an element or a slice out of the bounds of a one-dimensional array makes the array larger, and the errors of the subscripts and of the bounds are the errors of PostgreSQL (#470).
+- Subscripts on a column in `UPDATE`, `INSERT`, `ON CONFLICT DO UPDATE` and `MERGE`, as in `UPDATE t SET a[2] = 5` and `INSERT INTO t (a[1], a[3]) VALUES (1, 3)`. More than one item can set parts of the same column, and a domain over an array checks the new value after all of the items (#472).
+- The assignment to a field of a composite value, as in `UPDATE t SET p.x = 5`, `INSERT INTO t (p.x, p.y) VALUES (1, 2)` and `x.a.x := 1` in PL/pgSQL. Fields and subscripts can be mixed, as in `UPDATE t SET ps[1].x = 7` (#474).
+- `COMMIT` and `ROLLBACK` in PL/pgSQL, with `AND CHAIN`. A procedure that `CALL` runs outside of a transaction block, and the code of such a `DO`, can end the transaction, and a new transaction starts at once. A loop over a query or over a cursor goes on after the end. The errors in a function, in a trigger, in a transaction block and in a block with `EXCEPTION` are the errors of PostgreSQL (#476).
 
 ## 0.1.55 (2026-10-21)
 
