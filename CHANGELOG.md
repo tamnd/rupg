@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.55 (2026-10-21)
+
 ### Added
 
 - `CREATE PROCEDURE` and `CALL` with input, `INOUT` and `OUT` arguments, named arguments, defaults and `VARIADIC`. A procedure with output arguments gives one row. `DROP PROCEDURE`, `DROP ROUTINE`, `ALTER PROCEDURE`, `COMMENT ON PROCEDURE` and `CREATE OR REPLACE` check the kind of the routine as PostgreSQL does. (#464).
