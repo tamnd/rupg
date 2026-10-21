@@ -1,0 +1,204 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (id int, v int CHECK (v < 1000), note text);
+CREATE TABLE
+> CREATE TABLE c1 (x int DEFAULT 7, CHECK (v <> 13)) INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 (y text) INHERITS (p);
+CREATE TABLE
+> CREATE TABLE g1 (z int) INHERITS (c1);
+CREATE TABLE
+> INSERT INTO p VALUES (1, 10, 'p');
+INSERT 0 1
+> INSERT INTO c1 VALUES (2, 20, 'c1', 70);
+INSERT 0 1
+> INSERT INTO c2 VALUES (3, 30, 'c2', 'yy');
+INSERT 0 1
+> INSERT INTO g1 VALUES (4, 40, 'g1', 71, 400);
+INSERT 0 1
+> UPDATE p SET v = v + 1;
+UPDATE 4
+> SELECT tableoid::regclass, * FROM p ORDER BY id;
+fields tableoid:2205:4:-1,id@p.1:23:4:-1,v@p.2:23:4:-1,note@p.3:25:-1:-1
+row p,1,11,p
+row c1,2,21,c1
+row c2,3,31,c2
+row g1,4,41,g1
+SELECT 4
+> SELECT * FROM c1 ORDER BY id;
+fields id@c1.1:23:4:-1,v@c1.2:23:4:-1,note@c1.3:25:-1:-1,x@c1.4:23:4:-1
+row 2,21,c1,70
+row 4,41,g1,71
+SELECT 2
+> SELECT * FROM c2 ORDER BY id;
+fields id@c2.1:23:4:-1,v@c2.2:23:4:-1,note@c2.3:25:-1:-1,y@c2.4:25:-1:-1
+row 3,31,c2,yy
+SELECT 1
+> SELECT * FROM g1 ORDER BY id;
+fields id@g1.1:23:4:-1,v@g1.2:23:4:-1,note@g1.3:25:-1:-1,x@g1.4:23:4:-1,z@g1.5:23:4:-1
+row 4,41,g1,71,400
+SELECT 1
+> UPDATE p SET note = 'n' || id WHERE id > 2 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,id@p.1:23:4:-1,v@p.2:23:4:-1,note@p.3:25:-1:-1
+row c2,3,31,n3
+row g1,4,41,n4
+UPDATE 2
+> UPDATE ONLY p SET v = 0 RETURNING *;
+fields id@p.1:23:4:-1,v@p.2:23:4:-1,note@p.3:25:-1:-1
+row 1,0,p
+UPDATE 1
+> UPDATE c1 SET v = v * 2 RETURNING tableoid::regclass, id, v;
+fields tableoid:2205:4:-1,id@c1.1:23:4:-1,v@c1.2:23:4:-1
+row c1,2,42
+row g1,4,82
+UPDATE 2
+> UPDATE p SET v = 13 WHERE id = 2;
+ERROR 23514 new row for relation "c1" violates check constraint "c1_v_check"
+DETAIL Failing row contains (2, 13, c1).
+> UPDATE p SET v = 2000 WHERE id = 3;
+ERROR 23514 new row for relation "c2" violates check constraint "p_v_check"
+DETAIL Failing row contains (3, 2000, n3).
+> UPDATE p SET v = v WHERE tableoid = 'c2'::regclass;
+UPDATE 1
+> SELECT tableoid::regclass, * FROM p ORDER BY id;
+fields tableoid:2205:4:-1,id@p.1:23:4:-1,v@p.2:23:4:-1,note@p.3:25:-1:-1
+row p,1,0,p
+row c1,2,42,c1
+row c2,3,31,n3
+row g1,4,82,n4
+SELECT 4
+> CREATE TABLE src (id int, w int);
+CREATE TABLE
+> INSERT INTO src VALUES (1, 100), (4, 400);
+INSERT 0 2
+> UPDATE p SET v = src.w FROM src WHERE p.id = src.id RETURNING p.tableoid::regclass, p.id, p.v;
+fields tableoid:2205:4:-1,id@p.1:23:4:-1,v@p.2:23:4:-1
+row p,1,100
+row g1,4,400
+UPDATE 2
+> DELETE FROM p USING src WHERE p.id = src.id AND src.w = 400 RETURNING tableoid::regclass, *;
+ERROR 42702 column reference "tableoid" is ambiguous at 71
+> SELECT tableoid::regclass, * FROM p ORDER BY id;
+fields tableoid:2205:4:-1,id@p.1:23:4:-1,v@p.2:23:4:-1,note@p.3:25:-1:-1
+row p,1,100,p
+row c1,2,42,c1
+row c2,3,31,n3
+row g1,4,400,n4
+SELECT 4
+> CREATE FUNCTION trg() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % on %', TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME;
+>>   IF TG_OP = 'UPDATE' AND TG_LEVEL = 'ROW' AND TG_TABLE_NAME = 'c1' THEN
+>>     NEW.x := NEW.x + 1;
+>>   END IF;
+>>   IF TG_LEVEL = 'ROW' AND TG_OP = 'DELETE' THEN
+>>     RETURN OLD;
+>>   END IF;
+>>   IF TG_LEVEL = 'ROW' THEN
+>>     RETURN NEW;
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER ps BEFORE UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION trg();
+CREATE TRIGGER
+> CREATE TRIGGER pr BEFORE UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION trg();
+CREATE TRIGGER
+> CREATE TRIGGER c1s BEFORE UPDATE ON c1 FOR EACH STATEMENT EXECUTE FUNCTION trg();
+CREATE TRIGGER
+> CREATE TRIGGER c1r BEFORE UPDATE OR DELETE ON c1 FOR EACH ROW EXECUTE FUNCTION trg();
+CREATE TRIGGER
+> CREATE TRIGGER c2a AFTER UPDATE ON c2 FOR EACH ROW EXECUTE FUNCTION trg();
+CREATE TRIGGER
+> UPDATE p SET v = v + 1;
+NOTICE 00000 BEFORE STATEMENT UPDATE on p (PL/pgSQL function trg() line 3 at RAISE)
+NOTICE 00000 BEFORE ROW UPDATE on p (PL/pgSQL function trg() line 3 at RAISE)
+NOTICE 00000 BEFORE ROW UPDATE on c1 (PL/pgSQL function trg() line 3 at RAISE)
+NOTICE 00000 AFTER ROW UPDATE on c2 (PL/pgSQL function trg() line 3 at RAISE)
+UPDATE 4
+> SELECT tableoid::regclass, * FROM p ORDER BY id;
+fields tableoid:2205:4:-1,id@p.1:23:4:-1,v@p.2:23:4:-1,note@p.3:25:-1:-1
+row p,1,101,p
+row c1,2,43,c1
+row c2,3,32,n3
+row g1,4,401,n4
+SELECT 4
+> SELECT * FROM c1 ORDER BY id;
+fields id@c1.1:23:4:-1,v@c1.2:23:4:-1,note@c1.3:25:-1:-1,x@c1.4:23:4:-1
+row 2,43,c1,71
+row 4,401,n4,71
+SELECT 2
+> DELETE FROM p WHERE id = 2;
+NOTICE 00000 BEFORE STATEMENT DELETE on p (PL/pgSQL function trg() line 3 at RAISE)
+NOTICE 00000 BEFORE ROW DELETE on c1 (PL/pgSQL function trg() line 3 at RAISE)
+DELETE 1
+> SELECT tableoid::regclass, * FROM p ORDER BY id;
+fields tableoid:2205:4:-1,id@p.1:23:4:-1,v@p.2:23:4:-1,note@p.3:25:-1:-1
+row p,1,101,p
+row c2,3,32,n3
+row g1,4,401,n4
+SELECT 3
+> DROP TABLE p CASCADE;
+NOTICE 00000 drop cascades to 3 other objects
+DETAIL drop cascades to table c1
+drop cascades to table g1
+drop cascades to table c2
+DROP TABLE
+> CREATE TABLE a (k int);
+CREATE TABLE
+> CREATE TABLE b (k int);
+CREATE TABLE
+> CREATE TABLE ab (k int UNIQUE, extra int) INHERITS (a, b);
+NOTICE 00000 merging multiple inherited definitions of column "k"
+NOTICE 00000 merging column "k" with inherited definition
+CREATE TABLE
+> INSERT INTO ab VALUES (1, 10), (2, 20);
+INSERT 0 2
+> UPDATE a SET k = k + 10;
+UPDATE 2
+> UPDATE b SET k = 1;
+ERROR 23505 duplicate key value violates unique constraint "ab_k_key"
+DETAIL Key (k)=(1) already exists.
+> SELECT tableoid::regclass, * FROM a ORDER BY k;
+fields tableoid:2205:4:-1,k@a.1:23:4:-1
+row ab,11
+row ab,12
+SELECT 2
+> SELECT * FROM ab ORDER BY k;
+fields k@ab.1:23:4:-1,extra@ab.2:23:4:-1
+row 11,10
+row 12,20
+SELECT 2
+> DELETE FROM b WHERE k = 12;
+DELETE 1
+> SELECT tableoid::regclass, * FROM a ORDER BY k;
+fields tableoid:2205:4:-1,k@a.1:23:4:-1
+row ab,11
+SELECT 1
+> BEGIN;
+BEGIN
+> DELETE FROM a;
+DELETE 1
+> SELECT count(*) FROM ab;
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM ab;
+fields count:20:8:-1
+row 1
+SELECT 1
+> DELETE FROM ONLY a;
+DELETE 0
+> SELECT count(*) FROM ab;
+fields count:20:8:-1
+row 1
+SELECT 1
+> DELETE FROM a;
+DELETE 1
+> SELECT count(*) FROM ab;
+fields count:20:8:-1
+row 0
+SELECT 1

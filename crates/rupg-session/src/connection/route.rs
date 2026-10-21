@@ -338,7 +338,7 @@ impl Connection {
         Ok(batches)
     }
 
-    /// `ExecUpdate` and `ExecDelete` for a partitioned table: each row of the query gives the OID of its leaf and the ID of its version, and each leaf changes its rows. The triggers `BEFORE ... FOR EACH ROW` of the leaf fire for each row first. A new row that its leaf does not take moves, as `ExecCrossPartitionUpdate` moves it: the triggers `BEFORE DELETE` of the old leaf and `BEFORE INSERT` of the new leaf fire, the old leaf deletes the old row, and the row goes in the leaf that `ExecFindPartition` gives. The events of the triggers `AFTER ... FOR EACH ROW` of the leaves go in the queue in the order of the rows. With `keep`, the result has the old and the new rows with the columns of the partitioned table, for its transition tables.
+    /// `ExecUpdate` and `ExecDelete` for a partitioned table, or for a table with children of `INHERITS`: each row of the query gives the OID of its leaf and the ID of its version, and each leaf changes its rows. The triggers `BEFORE ... FOR EACH ROW` of the leaf fire for each row first. A new row that its leaf does not take moves, as `ExecCrossPartitionUpdate` moves it: the triggers `BEFORE DELETE` of the old leaf and `BEFORE INSERT` of the new leaf fire, the old leaf deletes the old row, and the row goes in the leaf that `ExecFindPartition` gives. The events of the triggers `AFTER ... FOR EACH ROW` of the leaves go in the queue in the order of the rows. With `keep`, the result has the old and the new rows with the columns of the partitioned table, for its transition tables.
     ///
     /// # Errors
     ///
@@ -480,7 +480,7 @@ impl Connection {
         Ok(done)
     }
 
-    /// The part of `ExecUpdate` and `ExecDelete` of a partitioned table before the write of one row of the write `info`: the old row is the version `tid` in the leaf `old`, and the row `row` of the partitioned table has the new row of an `UPDATE` in its first `width` columns. The triggers `BEFORE UPDATE` or `BEFORE DELETE ... FOR EACH ROW` of the leaf fire, and the row of a trigger goes in `row`. A new row that its leaf does not take moves: the triggers `BEFORE DELETE` of the old leaf and `BEFORE INSERT` of the new leaf fire, as `ExecCrossPartitionUpdate` fires them. The result is the index of the old leaf and the change, or `None` when a trigger skips the row.
+    /// The part of `ExecUpdate` and `ExecDelete` of a partitioned table before the write of one row of the write `info`: the old row is the version `tid` in the leaf `old`, and the row `row` of the partitioned table has the new row of an `UPDATE` in its first `width` columns. The triggers `BEFORE UPDATE` or `BEFORE DELETE ... FOR EACH ROW` of the leaf fire, and the row of a trigger goes in `row`. A new row that its leaf does not take moves: the triggers `BEFORE DELETE` of the old leaf and `BEFORE INSERT` of the new leaf fire, as `ExecCrossPartitionUpdate` fires them. A row of a table of the tree of `INHERITS` stays in its table, and the columns of the child that the parent table does not have keep their values. The result is the index of the old leaf and the change, or `None` when a trigger skips the row.
     ///
     /// # Errors
     ///
@@ -502,10 +502,22 @@ impl Connection {
         let leaf = &leaves[at];
         // The old row of the leaf for the triggers.
         let mut old_row = None;
-        if let Some(fire) = leaf.fire_of(event).filter(|t| t.before_rows()) {
+        // The new row of a table of the tree of `INHERITS`: its old row with the values of the columns of the parent table, which keeps the values of the columns of the child.
+        let mut child_row = None;
+        if update && info.inherit {
             let versions = heap.versions(self.database_oid, leaf.oid, &[tid]);
             old_row = versions.into_iter().next();
-            let new = update.then(|| down(leaf, &row[..width]));
+            child_row = Some(over(leaf, old_row.clone().unwrap_or_default(), &row[..width]));
+        }
+        if let Some(fire) = leaf.fire_of(event).filter(|t| t.before_rows()) {
+            if old_row.is_none() {
+                let versions = heap.versions(self.database_oid, leaf.oid, &[tid]);
+                old_row = versions.into_iter().next();
+            }
+            let new = match &child_row {
+                Some(child) => Some(child.clone()),
+                None => update.then(|| down(leaf, &row[..width])),
+            };
             let updated = if update { leaf_updated(leaf, &info.updated) } else { Vec::new() };
             let shape = (&updated[..], leaf.up.len());
             // `ExecBRUpdateTriggers`: the new row can move to another partition after the triggers.
@@ -518,9 +530,15 @@ impl Connection {
             if update {
                 row.splice(..width, up(leaf, &new, width));
             }
+            if child_row.is_some() {
+                child_row = Some(new);
+            }
         }
         let mut item = Moved { seq, tid, shown: None, to: None, new: None, moves: false, update };
-        if update {
+        if let Some(values) = child_row {
+            // A row of a table of the tree of `INHERITS` stays in its table.
+            item.new = Some(leaf_row(&leaves[at], &values, reader)?);
+        } else if update {
             let (to, values) = router.route(table, row[..width].to_vec(), reader)?;
             let to = leaf_at(leaves, catalog, (table, to, *first), reader)?;
             if to == at {
@@ -758,6 +776,17 @@ fn down(leaf: &Leaf, row: &[Value]) -> Vec<Value> {
     leaf.up.iter().map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null)).collect()
 }
 
+/// The row `old` of the leaf `leaf` with the values of the columns of the row `row` of the parent table in place of its own values.
+fn over(leaf: &Leaf, mut old: Vec<Value>, row: &[Value]) -> Vec<Value> {
+    old.resize(leaf.up.len(), Value::Null);
+    for (slot, to) in old.iter_mut().zip(&leaf.up) {
+        if let Some(value) = to.and_then(|to| row.get(to)) {
+            *slot = value.clone();
+        }
+    }
+    old
+}
+
 /// A row of the leaf `leaf` with the `width` columns of the partitioned table.
 fn up(leaf: &Leaf, row: &[Value], width: usize) -> Vec<Value> {
     let mut up = vec![Value::Null; width];
@@ -805,14 +834,10 @@ fn root_detail(leaf: &Leaf, row: &[Value], error: Error, reader: &Reader<'_>) ->
     }
 }
 
-/// The table `table` and all its partitions, at each level.
+/// The table `table` and all its partitions or its children of `INHERITS`, at each level.
 fn tree(catalog: &Catalog, table: u32) -> Vec<u32> {
     let mut tables = vec![table];
-    let mut at = 0;
-    while let Some(&oid) = tables.get(at) {
-        tables.extend(catalog.partitions(oid).iter().map(|p| p.oid));
-        at += 1;
-    }
+    tables.extend(catalog.all_inheritors(table));
     tables
 }
 
