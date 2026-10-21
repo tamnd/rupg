@@ -24,6 +24,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - When one `ALTER TABLE` adds a column and then sets the default of the column, the rows of the table get the default of `ADD COLUMN`, as in PostgreSQL. Before, they got the new default (#498).
+- The workflow `fuzz` now builds for `x86_64-unknown-linux-gnu`. Before, each job failed after a few seconds, because cargo-fuzz used the musl target of its own binary and the nightly toolchain does not have that target.
 
 ## 0.1.58 (2026-10-21)
 
