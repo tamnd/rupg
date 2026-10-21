@@ -1166,9 +1166,10 @@ impl Definer<'_, '_> {
         Ok(table)
     }
 
-    /// The check constraints of `AddRelationNewConstraints`.
-    pub(super) fn add_checks(&mut self, table: u32, checks: &[Constraint]) -> Result<()> {
+    /// The check constraints of `AddRelationNewConstraints`. The result is the OIDs of the new constraints.
+    pub(super) fn add_checks(&mut self, table: u32, checks: &[Constraint]) -> Result<Vec<u32>> {
         let mut names: Vec<String> = Vec::new();
+        let mut added = Vec::new();
         for con in checks {
             if !con.is_enforced {
                 return Err(not_yet("NOT ENFORCED", place(con.location)));
@@ -1206,11 +1207,12 @@ impl Definer<'_, '_> {
                 &refs,
                 con.is_no_inherit,
             )?;
-            if let Some(added) = self.catalog.constraint(oid) {
-                names.push(added.name.clone());
+            if let Some(con) = self.catalog.constraint(oid) {
+                names.push(con.name.clone());
             }
+            added.push(oid);
         }
-        Ok(())
+        Ok(added)
     }
 
     /// `AddRelationNotNullConstraints`.

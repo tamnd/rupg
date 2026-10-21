@@ -643,7 +643,7 @@ fn must_be_not_null(column: &str, table: &str) -> Error {
 }
 
 /// The text of an expression with no locations, which `constraints_equivalent` compares as the text of `pg_get_expr`.
-fn without_locations(text: Option<&str>) -> String {
+pub(super) fn without_locations(text: Option<&str>) -> String {
     let text = text.unwrap_or_default();
     let mut out = String::with_capacity(text.len());
     let mut rest = text;

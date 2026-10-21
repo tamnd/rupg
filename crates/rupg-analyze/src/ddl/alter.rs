@@ -1,5 +1,7 @@
 //! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column, and `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column, the `SET` and `RESET` of the options of the relation, `CLUSTER ON`, `SET WITHOUT CLUSTER`, `REPLICA IDENTITY`, and `SET WITHOUT OIDS`. `ATTACH PARTITION` and `DETACH PARTITION` are in `partition_attach`. The other subcommands give `0A000`.
 //!
+//! A subcommand on a partitioned table goes on to its partitions, as `partition_alter` describes. `SET DEFAULT`, `DROP DEFAULT`, `SET STATISTICS`, `SET STORAGE` and `ALTER COLUMN ... TYPE` get their checks for each partition, and they run on each partition after they run on the table.
+//!
 //! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner, the `SET` options of the identity columns and the other subcommands of `AT_PASS_MISC`, in the order of the statement.
 
 use rupg_catalog::{ConKind, DepKind, PG_CLASS, RelKind};
@@ -33,6 +35,7 @@ const STORAGE: &[u8] = b"rpmf";
 const COMPRESSION: &[u8] = b"rpm";
 const REL_OPTIONS: &[u8] = b"rpvmi";
 const TABLE_MATVIEW: &[u8] = b"rpm";
+const CLUSTER: &[u8] = b"rm";
 
 /// `alter_table_type_to_string`: the words of a subcommand in its errors.
 fn action_words(subtype: AlterTableType) -> &'static str {
@@ -107,17 +110,21 @@ fn action_words(subtype: AlterTableType) -> &'static str {
     usize::try_from(subtype.0).ok().and_then(|i| WORDS.get(i)).copied().unwrap_or_default()
 }
 
-/// The work of the subcommands after their checks, by pass.
+/// The work of the subcommands on one table after their checks, by pass.
 #[derive(Default)]
 struct Passes {
+    /// The subcommands go on to the partitions of the table: the statement has no `ONLY`, and the table is the table of the statement.
+    recurse: bool,
+    /// The table is a partition that the recursion of a subcommand reached.
+    recursing: bool,
     /// `AT_PASS_DROP`: `DROP DEFAULT`, `DROP NOT NULL`, `DROP CONSTRAINT` and `DROP IDENTITY`, in the order of the statement.
     drops: Vec<DropCmd>,
     /// `AT_PASS_ALTER_TYPE`: `ALTER COLUMN ... TYPE`, in the order of the statement.
     types: Vec<TypeCmd>,
     /// `AT_PASS_ADD_COL`: `ADD COLUMN` with its `IF NOT EXISTS`, in the order of the statement.
     columns: Vec<(ColumnDef, bool)>,
-    /// `AT_PASS_ADD_CONSTR`: the constraints of `ADD CONSTRAINT` before their transform.
-    constraints: Vec<Constraint>,
+    /// `AT_PASS_ADD_CONSTR`: the constraints of `ADD CONSTRAINT` before their transform, with the subcommand that gives them.
+    constraints: Vec<(Constraint, Origin)>,
     /// `AT_PASS_ADD_OTHERCONSTR`: `SET DEFAULT` and `ADD IDENTITY`, in the order of the statement. The check constraints and the foreign keys come after them, from the transform.
     defaults: Vec<AddCmd>,
     /// `AT_PASS_MISC`: `OWNER TO`, the `SET` options of an identity column, the subcommands that change the statistics, the storage and the options of a column, and the `SET` and `RESET` of the options of the relation, in the order of the statement.
@@ -164,6 +171,17 @@ enum MiscCmd {
     Trigger(Option<String>, u8, bool),
 }
 
+/// The subcommand that gives a constraint of `AT_PASS_ADD_CONSTR`.
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum Origin {
+    /// `ALTER COLUMN ... SET NOT NULL`, which `ATExecSetNotNull` runs.
+    SetNotNull,
+    /// `ADD CONSTRAINT` or a constraint of `ADD COLUMN`, which `ATAddCheckNNConstraint` runs.
+    Command,
+    /// The not-null constraint of a column of a new primary key, which goes on to the partitions even with `ONLY`.
+    PrimaryKey,
+}
+
 /// A constraint of `AT_PASS_ADD_OTHERCONSTR`.
 enum Other {
     Check(Constraint),
@@ -171,7 +189,7 @@ enum Other {
     Foreign(Constraint, bool),
 }
 
-/// The relation of an `ALTER TABLE` after its lookup.
+/// The relation of an `ALTER TABLE` after its lookup, or a partition that the recursion of a subcommand reaches.
 pub(super) struct Target {
     pub(super) oid: u32,
     pub(super) kind: u8,
@@ -211,18 +229,32 @@ impl Definer<'_, '_> {
         {
             return self.partition_command(&target, cmd);
         }
-        if target.kind == b'p' {
-            return Err(not_yet("ALTER TABLE of a partitioned table", None));
-        }
-        if self.catalog.relation(target.oid).is_some_and(|r| r.partition_of.is_some()) {
-            return Err(not_yet("ALTER TABLE of a partition", None));
-        }
-        let mut passes = Passes::default();
+        // The work queue of `ATController`: the table of the statement first, then the partitions that `ATSimpleRecursion` and `ATPrepAlterColumnType` reach, in the order that they reach them.
+        let passes = Passes { recurse: rv.inh, ..Passes::default() };
+        let mut queue = vec![(target, passes)];
         for cmd in stmt.cmds.iter().flatten() {
             let Node::AlterTableCmd(cmd) = cmd else { continue };
-            self.prep_command(&target, cmd, &mut passes)?;
+            let (target, passes) = &mut queue[0];
+            if !self.prep_command(target, cmd, passes)? {
+                continue;
+            }
+            for child in self.all_inheritors(queue[0].0.oid) {
+                let at = match queue.iter().position(|(t, _)| t.oid == child.oid) {
+                    Some(at) => at,
+                    None => {
+                        let passes = Passes { recursing: true, ..Passes::default() };
+                        queue.push((child, passes));
+                        queue.len() - 1
+                    }
+                };
+                let (target, passes) = &mut queue[at];
+                self.prep_command(target, cmd, passes)?;
+            }
         }
-        self.run_passes(&target, passes)
+        for (target, passes) in queue {
+            self.run_passes(&target, passes)?;
+        }
+        Ok(())
     }
 
     /// `RangeVarCallbackForAlterRelation`: the owner, the system catalogs and the kind that the statement names.
@@ -299,13 +331,14 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `ATPrepCmd`: the checks of one subcommand, and its place in the passes.
+    /// `ATPrepCmd`: the checks of one subcommand, and its place in the passes. The result is true when the subcommand goes on to all the partitions of the table and their partitions, as `ATSimpleRecursion` and `ATPrepAlterColumnType` take it, and the caller then runs the checks for each of them.
     fn prep_command(
         &mut self,
         target: &Target,
         cmd: &AlterTableCmd,
         passes: &mut Passes,
-    ) -> Result<()> {
+    ) -> Result<bool> {
+        let mut recurse = false;
         match cmd.subtype {
             AlterTableType::AT_AddColumn => {
                 self.simple_permissions(target, cmd, TABLE_TYPE)?;
@@ -316,8 +349,21 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_AlterColumnType => {
                 self.simple_permissions(target, cmd, TABLE_TYPE)?;
-                let change = self.prep_alter_type(target, cmd)?;
+                let change = self.prep_alter_type(target, cmd, passes.recursing)?;
                 passes.types.push(change);
+                recurse = passes.recurse;
+                if !passes.recurse
+                    && !passes.recursing
+                    && !self.catalog.partitions(target.oid).is_empty()
+                {
+                    let column = cmd.name.as_deref().unwrap_or_default();
+                    return Err(Error::new(
+                        SqlState::INVALID_TABLE_DEFINITION,
+                        format!(
+                            "type of inherited column \"{column}\" must be changed in child tables too"
+                        ),
+                    ));
+                }
             }
             AlterTableType::AT_SetNotNull => {
                 self.simple_permissions(target, cmd, TABLE)?;
@@ -328,7 +374,7 @@ impl Definer<'_, '_> {
                         format!("cannot alter system column \"{column}\""),
                     ));
                 }
-                passes.constraints.push(make_not_null(column));
+                passes.constraints.push((make_not_null(column), Origin::SetNotNull));
             }
             AlterTableType::AT_DropNotNull => {
                 self.simple_permissions(target, cmd, TABLE)?;
@@ -350,6 +396,7 @@ impl Definer<'_, '_> {
             AlterTableType::AT_ColumnDefault => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
+                recurse = passes.recurse;
                 match &cmd.def {
                     Some(def) => passes.defaults.push(AddCmd::Default(column, def.clone())),
                     None => passes.drops.push(DropCmd::Default(column)),
@@ -363,7 +410,7 @@ impl Definer<'_, '_> {
                 if con.contype == ConstrType::CONSTR_PRIMARY {
                     self.prep_primary_key(target, con, passes)?;
                 }
-                passes.constraints.push((**con).clone());
+                passes.constraints.push(((**con).clone(), Origin::Command));
             }
             AlterTableType::AT_ChangeOwner => {
                 let role = cmd.newowner.as_deref().cloned().unwrap_or_default();
@@ -371,6 +418,7 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_AddIdentity => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
+                self.identity_of_partitions(target)?;
                 let Some(Node::Constraint(con)) = &cmd.def else {
                     return Err(Error::internal("ADD IDENTITY without a constraint"));
                 };
@@ -379,6 +427,7 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_SetIdentity => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
+                self.identity_of_partitions(target)?;
                 let options = match &cmd.def {
                     Some(Node::List(list)) => list.clone(),
                     _ => Vec::new(),
@@ -388,6 +437,7 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_DropIdentity => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
+                self.identity_of_partitions(target)?;
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
                 passes.drops.push(DropCmd::Identity(column, cmd.missing_ok));
             }
@@ -399,10 +449,12 @@ impl Definer<'_, '_> {
                 };
                 let name = cmd.name.as_deref().map(str::to_string);
                 passes.misc.push(MiscCmd::Column(ColumnCmd::Statistics(name, cmd.num, value)));
+                recurse = passes.recurse;
             }
             AlterTableType::AT_SetStorage | AlterTableType::AT_SetCompression => {
                 let storage = cmd.subtype == AlterTableType::AT_SetStorage;
                 self.simple_permissions(target, cmd, if storage { STORAGE } else { COMPRESSION })?;
+                recurse = storage && passes.recurse;
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
                 let name = match &cmd.def {
                     Some(Node::String(name)) => name.to_string(),
@@ -434,7 +486,7 @@ impl Definer<'_, '_> {
                 passes.misc.push(MiscCmd::Options(defs, reset));
             }
             AlterTableType::AT_ClusterOn | AlterTableType::AT_DropCluster => {
-                self.simple_permissions(target, cmd, TABLE_MATVIEW)?;
+                self.simple_permissions(target, cmd, CLUSTER)?;
                 let name =
                     cmd.name.as_deref().filter(|_| cmd.subtype == AlterTableType::AT_ClusterOn);
                 passes.misc.push(MiscCmd::Cluster(name.map(str::to_owned)));
@@ -476,6 +528,18 @@ impl Definer<'_, '_> {
                 return Err(not_yet(&format!("ALTER TABLE ... {what}"), None));
             }
         }
+        Ok(recurse)
+    }
+
+    /// rupg has no identity columns of partitioned tables and of partitions yet.
+    fn identity_of_partitions(&self, target: &Target) -> Result<()> {
+        let partition = self.catalog.relation(target.oid).is_some_and(|r| r.partition_of.is_some());
+        if target.kind == b'p' || partition {
+            return Err(not_yet(
+                "an identity column of a partitioned table or of a partition",
+                None,
+            ));
+        }
         Ok(())
     }
 
@@ -510,7 +574,7 @@ impl Definer<'_, '_> {
                 ))
                 .with_hint(format!("You might need to {hint}.")));
             }
-            passes.constraints.push(make_not_null(key));
+            passes.constraints.push((make_not_null(key), Origin::PrimaryKey));
         }
         Ok(())
     }
@@ -531,12 +595,12 @@ impl Definer<'_, '_> {
                 DropCmd::Identity(column, missing_ok) => {
                     self.drop_identity(target, column, *missing_ok)?;
                 }
-                DropCmd::NotNull(column) => self.drop_not_null(target, column)?,
+                DropCmd::NotNull(column) => self.drop_not_null(target, column, passes.recurse)?,
                 DropCmd::Constraint(name, missing_ok, cascade) => {
-                    self.drop_constraint(target, name, *missing_ok, *cascade)?;
+                    self.drop_constraint(target, name, *missing_ok, *cascade, passes.recurse)?;
                 }
                 DropCmd::Column(name, missing_ok, cascade) => {
-                    self.drop_column(target, name, *missing_ok, *cascade)?;
+                    self.drop_column(target, name, *missing_ok, *cascade, passes.recurse)?;
                 }
             }
         }
@@ -549,13 +613,32 @@ impl Definer<'_, '_> {
             self.exec_alter_type(target, cmd, &original, &mut changed)?;
         }
         let mut column_constraints = Vec::new();
+        let partition = self.catalog.relation(target.oid).is_some_and(|r| r.partition_of.is_some());
         for (def, if_not_exists) in &passes.columns {
+            if partition && !passes.recursing {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    "cannot add column to a partition",
+                ));
+            }
             if let Some(rest) = self.add_column(target, def, *if_not_exists)? {
                 let name = def.colname.as_deref().unwrap_or_default();
                 let rel = self.catalog.relation(target.oid);
                 let number = rel.and_then(|r| r.column_number(name)).unwrap_or(0);
                 let identity = rel.and_then(|r| r.column(number)).is_some_and(|c| c.identity != 0);
                 let defaulted = identity || self.catalog.default_of(target.oid, number).is_some();
+                if !self.catalog.partitions(target.oid).is_empty() {
+                    if identity {
+                        return Err(not_yet("an identity column of a partitioned table", None));
+                    }
+                    if !passes.recurse {
+                        return Err(Error::new(
+                            SqlState::INVALID_TABLE_DEFINITION,
+                            "column must be added to child tables too",
+                        ));
+                    }
+                    self.add_column_to_partitions(target.oid, number)?;
+                }
                 column_constraints.extend(rest.into_iter().map(|con| (con, defaulted)));
             }
         }
@@ -573,11 +656,15 @@ impl Definer<'_, '_> {
             location: -1,
             ..RangeVar::default()
         };
-        let constraints =
-            std::mem::take(&mut passes.constraints).into_iter().map(|con| (con, true));
-        for (con, defaulted) in column_constraints.into_iter().chain(constraints) {
+        let constraints = std::mem::take(&mut passes.constraints)
+            .into_iter()
+            .map(|(con, origin)| (con, true, origin));
+        let column_constraints = column_constraints
+            .into_iter()
+            .map(|(con, defaulted)| (con, defaulted, Origin::Command));
+        for (con, defaulted, origin) in column_constraints.chain(constraints) {
             match con.contype {
-                ConstrType::CONSTR_NOTNULL => not_nulls.push(con),
+                ConstrType::CONSTR_NOTNULL => not_nulls.push((con, origin)),
                 ConstrType::CONSTR_PRIMARY | ConstrType::CONSTR_UNIQUE => {
                     indexes.push(alter_index_constraint(&con, &rv)?);
                 }
@@ -596,8 +683,9 @@ impl Definer<'_, '_> {
         if verify {
             self.check_row_type_users(target)?;
         }
-        for con in &not_nulls {
-            verify |= self.alter_not_null(target, con)?;
+        for (con, origin) in &not_nulls {
+            verify |=
+                self.alter_not_null(target, con, *origin, passes.recurse, passes.recursing)?;
         }
         for index in &indexes {
             self.create_index(index, true)?;
@@ -616,13 +704,23 @@ impl Definer<'_, '_> {
                     }
                     self.table_scope(target.oid);
                     // `ATAddCheckNNConstraint` gives no query text to `AddRelationNewConstraints`, so the errors of the expression have no place.
-                    self.add_checks(target.oid, std::slice::from_ref(&con))
+                    let added = self
+                        .add_checks(target.oid, std::slice::from_ref(&con))
                         .map_err(|e| e.with_position(None))?;
                     verify |= con.is_enforced;
+                    for oid in added {
+                        self.add_check_to_partitions(target, oid, passes.recurse)?;
+                    }
                 }
                 Other::Foreign(con, validated) => {
                     if !con.initially_valid && con.is_enforced {
                         return Err(not_yet("NOT VALID", place(con.location)));
+                    }
+                    if target.kind == b'p' {
+                        return Err(not_yet(
+                            "a foreign key of a partitioned table",
+                            place(con.location),
+                        ));
                     }
                     self.add_foreign_key(target.oid, &con)?;
                     // `RI_Initial_Check` reads the rows of the table.
@@ -632,7 +730,8 @@ impl Definer<'_, '_> {
                 }
             }
         }
-        if verify {
+        // A partitioned table has no rows. Its partitions get their own scans.
+        if verify && target.kind != b'p' {
             self.scans.push(target.oid);
         }
         for cmd in &passes.misc {
@@ -736,8 +835,16 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// The not-null constraint of `AddRelationNewConstraints`. A column with a not-null constraint keeps it, as `AdjustNotNullInheritance` does. The result is true for a new constraint, which a scan of the table must check.
-    fn alter_not_null(&mut self, target: &Target, con: &Constraint) -> Result<bool> {
+    /// `ATExecSetNotNull`, and the not-null constraint of `ATAddCheckNNConstraint` and `AddRelationNewConstraints`. A column with a not-null constraint keeps it, as `AdjustNotNullInheritance` does: the constraint counts the parent table when the recursion reaches the table, and else it becomes a constraint of the table itself. A new constraint goes on to the partitions with the same name. With `ONLY`, a table with partitions cannot get a new constraint, but the not-null constraints of a primary key always go on to the partitions. The result is true for a new constraint, which a scan of the table must check.
+    fn alter_not_null(
+        &mut self,
+        target: &Target,
+        con: &Constraint,
+        origin: Origin,
+        recurse: bool,
+        recursing: bool,
+    ) -> Result<bool> {
+        let recurse = recurse || origin == Origin::PrimaryKey;
         let key = not_null_column(con).to_string();
         let column = self.catalog.relation(target.oid).and_then(|r| r.column_number(&key));
         let Some(column) = column else {
@@ -778,6 +885,7 @@ impl Definer<'_, '_> {
             }
             if let Some(new) = con.conname.as_deref()
                 && new != name
+                && !recursing
             {
                 return Err(prerequisite(format!(
                     "cannot create not-null constraint \"{new}\" on column \"{key}\" of table \"{}\"",
@@ -787,9 +895,54 @@ impl Definer<'_, '_> {
                     "A not-null constraint named \"{name}\" already exists for this column."
                 )));
             }
+            let found = self
+                .catalog
+                .constraints_of(target.oid)
+                .find(|c| c.kind == ConKind::NotNull && c.keys == [column])
+                .map(|c| (c.oid, c.local, c.inhcount));
+            if let Some((oid, local, inhcount)) = found {
+                if recursing {
+                    self.catalog.set_constraint_inherited(
+                        oid,
+                        local,
+                        inhcount.saturating_add(1),
+                    )?;
+                } else if !local {
+                    self.catalog.set_constraint_inherited(oid, true, inhcount)?;
+                }
+            }
             return Ok(false);
         }
-        self.catalog.add_not_null(target.oid, con.conname.as_deref(), column, con.is_no_inherit)?;
+        let children = self.child_targets(target.oid);
+        if !recurse && !children.is_empty() {
+            let error = Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                "constraint must be added to child tables too",
+            );
+            return Err(match origin {
+                Origin::SetNotNull => error.with_hint("Do not specify the ONLY keyword."),
+                _ => error,
+            });
+        }
+        let oid = self.catalog.add_not_null(
+            target.oid,
+            con.conname.as_deref(),
+            column,
+            con.is_no_inherit,
+        )?;
+        if recursing {
+            self.catalog.set_constraint_inherited(oid, false, 1)?;
+        }
+        if con.is_no_inherit {
+            return Ok(true);
+        }
+        let mut inherited = con.clone();
+        inherited.conname = self.catalog.constraint(oid).map(|c| c.name.as_str().into());
+        for child in children {
+            if self.alter_not_null(&child, &inherited, origin, true, true)? && child.kind != b'p' {
+                self.scans.push(child.oid);
+            }
+        }
         Ok(true)
     }
 
@@ -803,7 +956,7 @@ impl Definer<'_, '_> {
         let mut new = new;
         match kind {
             b'r' | b'v' | b'm' | b'f' | b'p' => {}
-            b'i' => {
+            b'i' | b'I' => {
                 if !recursing {
                     if old != new {
                         self.flush();

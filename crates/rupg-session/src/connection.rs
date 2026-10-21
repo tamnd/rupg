@@ -4876,6 +4876,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_attach.test")));
     }
 
+    /// `ALTER TABLE` of partitioned tables and of partitions: `ADD COLUMN`, `SET DEFAULT`, `DROP COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `ADD CONSTRAINT` and `DROP CONSTRAINT` on the partitions, with `ONLY`, the counts of the inherited columns and constraints, `SET STATISTICS` and `SET STORAGE`, which go on to the partitions, and the subcommands that do not, the errors for the columns of the partition key and for the inherited columns and constraints of a partition, and the indexes of the primary keys and unique constraints. `connection/partition_alter.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_alter() {
+        big_stack(|| script(include_str!("connection/partition_alter.test")));
+    }
+
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn array_agg_array() {

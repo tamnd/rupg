@@ -1,0 +1,182 @@
+//! The recursion of `ALTER TABLE` to the partitions of a partitioned table: `ATSimpleRecursion` and the recursion of `ATPrepAlterColumnType` in the checks of the subcommands, and the recursion of `ATExecAddColumn` and `ATAddCheckNNConstraint` when the subcommands run. The recursion of `ATExecSetNotNull` is in `alter`, and the recursion of `ATExecDropColumn` and `dropconstraint_internal` is in `drop_constraint`.
+//!
+//! A partition has the columns of its parent table in the same order, so a column has the same number in each table, and an expression of the parent table holds for its partitions with no change.
+
+use rupg_catalog::ConKind;
+use rupg_common::{Error, Result, SqlState};
+
+use super::alter::Target;
+use super::partition_attach::without_locations;
+use super::{Definer, Found, column_numbers, references};
+use crate::expr::Expr;
+
+/// The error of a relation that is not in the catalog.
+fn lookup(oid: u32) -> Error {
+    Error::internal(format!("cache lookup failed for relation {oid}"))
+}
+
+impl Definer<'_, '_> {
+    /// The target of a partition that the recursion reaches.
+    fn target_of(&self, oid: u32) -> Target {
+        let (name, namespace) =
+            self.catalog.relation(oid).map(|r| (r.name.clone(), r.namespace)).unwrap_or_default();
+        Target { oid, kind: self.kind_of(Found::User(oid)), name, namespace }
+    }
+
+    /// `find_inheritance_children`: the partitions of a table, in the order of their OIDs.
+    pub(super) fn child_targets(&self, table: u32) -> Vec<Target> {
+        let children: Vec<u32> = self.catalog.partitions(table).iter().map(|r| r.oid).collect();
+        children.into_iter().map(|oid| self.target_of(oid)).collect()
+    }
+
+    /// `find_all_inheritors` with no table itself: the partitions of the table, then the partitions of each of them in the same order, and so on.
+    pub(super) fn all_inheritors(&self, table: u32) -> Vec<Target> {
+        let mut out = self.child_targets(table);
+        let mut i = 0;
+        while i < out.len() {
+            let more = self.child_targets(out[i].oid);
+            out.extend(more);
+            i += 1;
+        }
+        out
+    }
+
+    /// `has_partition_attrs` for one column: the column is a column of the partition key of the table, or an expression of the key uses it.
+    pub(super) fn in_partition_key(&self, table: u32, column: i16) -> Result<bool> {
+        let rel = self.catalog.relation(table);
+        let Some(key) = rel.and_then(|r| r.partition_key.as_ref()) else { return Ok(false) };
+        if key.attrs.contains(&column) {
+            return Ok(true);
+        }
+        let exprs: Vec<Expr> = match &key.exprs {
+            Some(text) => crate::node::read_list(text)?,
+            None => Vec::new(),
+        };
+        Ok(column_numbers(&exprs.iter().collect::<Vec<_>>()).contains(&column))
+    }
+
+    /// The recursion of `ATExecAddColumn`: each partition of `parent` gets the new column `number` of `parent` as an inherited column, with the default and the not-null constraint of the column, and then the partitions of a partition get the column in turn.
+    pub(super) fn add_column_to_partitions(&mut self, parent: u32, number: i16) -> Result<()> {
+        let rel = self.catalog.relation(parent).ok_or_else(|| lookup(parent))?;
+        let Some(column) = rel.column(number).cloned() else {
+            return Err(Error::internal(format!(
+                "cache lookup failed for attribute {number} of relation {parent}"
+            )));
+        };
+        let default = self.catalog.default_of(parent, number).map(|d| d.expr.clone());
+        let not_null = self
+            .catalog
+            .constraints_of(parent)
+            .find(|c| c.kind == ConKind::NotNull && c.keys == [number] && !c.no_inherit)
+            .map(|c| c.name.clone());
+        for child in self.child_targets(parent) {
+            let mut new = column.clone();
+            new.not_null = false;
+            new.has_default = false;
+            new.local = false;
+            new.inhcount = 1;
+            if self.catalog.add_column(child.oid, new)? != number {
+                return Err(Error::internal(format!(
+                    "column \"{}\" of relation \"{}\" has another number in its parent table",
+                    column.name, child.name
+                )));
+            }
+            if let Some(text) = &default {
+                let expr = crate::node::read(text)?;
+                let refs = references(self.catalog, child.oid, &[&expr]);
+                self.catalog.add_default(child.oid, number, text.clone(), &refs)?;
+            }
+            if let Some(name) = &not_null {
+                let used = self.catalog.constraints_of(child.oid).any(|c| c.name == *name);
+                let given = (!used).then_some(name.as_str());
+                let oid = self.catalog.add_not_null(child.oid, given, number, false)?;
+                self.catalog.set_constraint_inherited(oid, false, 1)?;
+            }
+            self.toast_after_columns(child.oid)?;
+            self.add_column_to_partitions(child.oid, number)?;
+        }
+        Ok(())
+    }
+
+    /// The recursion of `ATAddCheckNNConstraint` for the new check constraint `oid` of `parent`: each partition gets a constraint with the same name and expression, or `MergeWithExistingConstraint` merges the constraint with a constraint of the partition that has the same name and expression. A partition with a new constraint passes it to its own partitions. With `ONLY`, a table with partitions cannot get the constraint.
+    pub(super) fn add_check_to_partitions(
+        &mut self,
+        parent: &Target,
+        oid: u32,
+        recurse: bool,
+    ) -> Result<()> {
+        let Some(con) = self.catalog.constraint(oid).cloned() else {
+            return Err(Error::internal(format!("cache lookup failed for constraint {oid}")));
+        };
+        if con.no_inherit {
+            return Ok(());
+        }
+        let children = self.child_targets(parent.oid);
+        if !recurse && !children.is_empty() {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                "constraint must be added to child tables too",
+            ));
+        }
+        let text = con.expr.clone().unwrap_or_default();
+        for child in children {
+            let existing = self
+                .catalog
+                .constraints_of(child.oid)
+                .find(|c| c.name == con.name)
+                .map(|c| (c.oid, c.kind, c.expr.clone(), c.no_inherit, c.validated));
+            if let Some((found, kind, expr, no_inherit, validated)) = existing {
+                if kind != ConKind::Check
+                    || without_locations(expr.as_deref()) != without_locations(Some(&text))
+                {
+                    return Err(Error::new(
+                        SqlState::DUPLICATE_OBJECT,
+                        format!(
+                            "constraint \"{}\" for relation \"{}\" already exists",
+                            con.name, child.name
+                        ),
+                    ));
+                }
+                let conflict = if no_inherit {
+                    "non-inherited"
+                } else if !validated {
+                    "NOT VALID"
+                } else {
+                    ""
+                };
+                if !conflict.is_empty() {
+                    return Err(Error::new(
+                        SqlState::INVALID_OBJECT_DEFINITION,
+                        format!(
+                            "constraint \"{}\" conflicts with {conflict} constraint on relation \"{}\"",
+                            con.name, child.name
+                        ),
+                    ));
+                }
+                self.notice(
+                    SqlState::SUCCESSFUL_COMPLETION,
+                    format!("merging constraint \"{}\" with inherited definition", con.name),
+                );
+                self.catalog.set_constraint_inherited(found, false, 1)?;
+                continue;
+            }
+            let expr = crate::node::read(&text)?;
+            let refs = references(self.catalog, child.oid, &[&expr]);
+            let new = self.catalog.add_check(
+                child.oid,
+                Some(&con.name),
+                text.clone(),
+                con.keys.clone(),
+                &refs,
+                false,
+            )?;
+            self.catalog.set_constraint_inherited(new, false, 1)?;
+            // Phase 3 of `ALTER TABLE` reads the rows of a partition with a new constraint.
+            if child.kind != b'p' {
+                self.scans.push(child.oid);
+            }
+            self.add_check_to_partitions(&child, new, true)?;
+        }
+        Ok(())
+    }
+}

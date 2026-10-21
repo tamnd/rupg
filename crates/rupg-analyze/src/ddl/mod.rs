@@ -20,6 +20,7 @@ mod identity;
 mod index;
 mod lock;
 mod partition;
+mod partition_alter;
 mod partition_attach;
 mod partition_index;
 mod rangetype;

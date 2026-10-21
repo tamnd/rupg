@@ -56,6 +56,7 @@ impl Definer<'_, '_> {
         &mut self,
         target: &Target,
         cmd: &AlterTableCmd,
+        recursing: bool,
     ) -> Result<TypeCmd> {
         let Some(Node::ColumnDef(def)) = &cmd.def else {
             return Err(Error::internal("ALTER COLUMN ... TYPE without a column"));
@@ -84,6 +85,25 @@ impl Definer<'_, '_> {
         };
         if identity {
             self.alter_identity_type(target, number, def)?;
+        }
+        // The recursion from the parent table checked an inherited column.
+        let inherited = self.catalog.relation(target.oid).and_then(|r| r.column(number));
+        if inherited.is_some_and(|c| c.inhcount > 0) && !recursing {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                format!("cannot alter inherited column \"{column}\""),
+            )
+            .at_opt(place(def.location)));
+        }
+        if self.in_partition_key(target.oid, number)? {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                format!(
+                    "cannot alter column \"{column}\" because it is part of the partition key of relation \"{}\"",
+                    target.name
+                ),
+            )
+            .at_opt(place(def.location)));
         }
         let type_name = def.typeName.as_deref().cloned().unwrap_or_default();
         let (ty, typmod) = self.an.type_name(&type_name)?;
@@ -468,8 +488,14 @@ impl Definer<'_, '_> {
             ..Constraint::default()
         };
         self.table_scope(con.relation);
-        self.add_checks(con.relation, std::slice::from_ref(&check))
-            .map_err(|e| e.with_position(None))
+        let added = self
+            .add_checks(con.relation, std::slice::from_ref(&check))
+            .map_err(|e| e.with_position(None))?;
+        // The new constraint of a partition keeps the count of its parent table.
+        for oid in added {
+            self.catalog.set_constraint_inherited(oid, con.local, con.inhcount)?;
+        }
+        Ok(())
     }
 
     /// The equality operators of a foreign key after a change of the type of a column on either side, as the foreign key that `ATPostAlterTypeParse` makes again has them.
