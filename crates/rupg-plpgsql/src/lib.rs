@@ -91,6 +91,14 @@ pub trait Spi {
     ///
     /// `2D000` in a call that cannot end the transaction and in a subtransaction, `55000` in a loop over a query that writes, and the errors of the deferred triggers at the commit.
     fn end_transaction(&self, commit: bool, chain: bool) -> Result<()>;
+    /// `ProcessUtility` of a statement that is not a query, such as `CREATE TABLE` or `SET`, in a call that is not at the top level. It gives the number of the rows that the statement wrote, as `CREATE TABLE AS` gives it.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the statement, and `0A000` for a statement that a call cannot run yet.
+    fn utility(&self, stmt: &Node, text: &str, notices: &mut Vec<Error>) -> Result<u64>;
+    /// The number of the changes of the catalog in the calls that run. A plan made before a change is made again.
+    fn changes(&self) -> u64;
     /// `PinPortal`: a loop reads the rows of the portal `name`, or of a query when it is `None`. The end of the transaction keeps the portal, and fails when the query of the loop is not `read_only`.
     fn pin(&self, name: Option<&str>, read_only: bool);
     /// `UnpinPortal`: the loop of the last [`Spi::pin`] ends.

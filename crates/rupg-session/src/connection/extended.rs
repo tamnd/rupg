@@ -630,6 +630,7 @@ impl Connection {
                     notices: &mut notices,
                     immediate_commit: false,
                     ts_config,
+                    top_level: true,
                 };
                 let result = utility::run(node, &statement.text, &mut cx);
                 immediate_commit = cx.immediate_commit;

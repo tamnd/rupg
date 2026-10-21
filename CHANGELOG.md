@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Utility statements in PL/pgSQL, as in `CREATE TABLE`, `ALTER`, `DROP`, `CREATE TABLE AS`, `TRUNCATE` and `SET`, both as statements and with `EXECUTE`. The next statements of the call see the changes of the catalog, and a plan made before a change is made again. A block with `EXCEPTION` undoes the changes of the catalog and the settings of the statements in the block. `GET DIAGNOSTICS` gives the number of rows of `CREATE TABLE AS`. The errors of `INTO`, of the transaction commands, of `COPY` to the client and of `VACUUM` are the errors of PostgreSQL (#478).
+
 ## 0.1.56 (2026-10-21)
 
 ### Added

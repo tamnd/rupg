@@ -1,0 +1,177 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION mk(n int) RETURNS int LANGUAGE plpgsql AS $$ BEGIN CREATE TABLE ut (a int, b text); INSERT INTO ut SELECT g, 'x' || g FROM generate_series(1, n) g; RETURN (SELECT count(*) FROM ut); END $$;
+CREATE FUNCTION
+> SELECT mk(3);
+fields mk:23:4:-1
+row 3
+SELECT 1
+> SELECT * FROM ut ORDER BY a;
+fields a@ut.1:23:4:-1,b@ut.2:25:-1:-1
+row 1,x1
+row 2,x2
+row 3,x3
+SELECT 3
+> SELECT mk(2);
+fields mk:23:4:-1
+ERROR 42P07 relation "ut" already exists (SQL statement "CREATE TABLE ut (a int, b text)"
+PL/pgSQL function mk(integer) line 1 at SQL statement)
+> DROP TABLE ut;
+DROP TABLE
+> DO $$ BEGIN CREATE TABLE ut2 (a int); INSERT INTO ut2 VALUES (1), (2); ALTER TABLE ut2 ADD COLUMN c int DEFAULT 7; RAISE NOTICE 'rows %', (SELECT sum(a + c) FROM ut2); DROP TABLE ut2; END $$;
+NOTICE 00000 rows 17 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> SELECT to_regclass('ut2');
+fields to_regclass:2205:4:-1
+row NULL
+SELECT 1
+> DO $$ BEGIN CREATE TABLE IF NOT EXISTS ut3 (a int); CREATE TABLE IF NOT EXISTS ut3 (a int); DROP TABLE IF EXISTS ut4; END $$;
+NOTICE 42P07 relation "ut3" already exists, skipping (SQL statement "CREATE TABLE IF NOT EXISTS ut3 (a int)"
+PL/pgSQL function inline_code_block line 1 at SQL statement)
+NOTICE 00000 table "ut4" does not exist, skipping (SQL statement "DROP TABLE IF EXISTS ut4"
+PL/pgSQL function inline_code_block line 1 at SQL statement)
+DO
+> DO $$ DECLARE n int; BEGIN CREATE TABLE ut5 AS SELECT g AS a FROM generate_series(1, 4) g; GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'ctas %', n; END $$;
+NOTICE 00000 ctas 4 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> SELECT count(*) FROM ut5;
+fields count:20:8:-1
+row 4
+SELECT 1
+> DO $$ DECLARE n int; BEGIN EXECUTE 'CREATE TABLE ut6 AS SELECT 1 AS a UNION ALL SELECT 2'; GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'dyn %', n; EXECUTE 'DROP TABLE ut6'; END $$;
+NOTICE 00000 dyn 2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ BEGIN EXECUTE format('CREATE TABLE %I (x int)', 'ut7'); EXECUTE format('INSERT INTO %I VALUES (%s)', 'ut7', 42); END $$;
+DO
+> SELECT * FROM ut7;
+fields x@ut7.1:23:4:-1
+row 42
+SELECT 1
+> DO $$ BEGIN BEGIN CREATE TABLE ut8 (a int); RAISE EXCEPTION 'undo'; EXCEPTION WHEN raise_exception THEN RAISE NOTICE 'caught'; END; END $$;
+NOTICE 00000 caught (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> SELECT to_regclass('ut8');
+fields to_regclass:2205:4:-1
+row NULL
+SELECT 1
+> DO $$ BEGIN BEGIN CREATE TABLE ut9 (a int); PERFORM 1 / 0; EXCEPTION WHEN division_by_zero THEN NULL; END; CREATE TABLE ut9 (b int); INSERT INTO ut9 VALUES (5); END $$;
+DO
+> SELECT * FROM ut9;
+fields b@ut9.1:23:4:-1
+row 5
+SELECT 1
+> DO $$ BEGIN SET search_path = public; RESET search_path; END $$;
+DO
+> DO $$ BEGIN SET work_mem = '2MB'; RAISE NOTICE 'wm %', current_setting('work_mem'); END $$;
+NOTICE 00000 wm 2MB (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> SHOW work_mem;
+fields work_mem:25:-1:-1
+row 2MB
+SHOW
+> RESET work_mem;
+RESET
+> BEGIN;
+BEGIN
+> DO $$ BEGIN SET LOCAL work_mem = '3MB'; END $$;
+DO
+> SHOW work_mem;
+fields work_mem:25:-1:-1
+row 3MB
+SHOW
+> COMMIT;
+COMMIT
+> SHOW work_mem;
+fields work_mem:25:-1:-1
+row 4MB
+SHOW
+> DO $$ BEGIN SET LOCAL work_mem = '5MB'; RAISE NOTICE 'wm %', current_setting('work_mem'); END $$;
+NOTICE 00000 wm 5MB (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> SHOW work_mem;
+fields work_mem:25:-1:-1
+row 4MB
+SHOW
+> DO $$ BEGIN BEGIN SET work_mem = '6MB'; RAISE EXCEPTION 'x'; EXCEPTION WHEN others THEN RAISE NOTICE 'wm %', current_setting('work_mem'); END; END $$;
+NOTICE 00000 wm 4MB (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> SHOW work_mem;
+fields work_mem:25:-1:-1
+row 4MB
+SHOW
+> DO $$ BEGIN START TRANSACTION; END $$;
+ERROR 0A000 unsupported transaction command in PL/pgSQL (PL/pgSQL function inline_code_block line 1 at SQL statement)
+> DO $$ BEGIN EXECUTE 'START TRANSACTION'; END $$;
+ERROR 0A000 EXECUTE of transaction commands is not implemented (PL/pgSQL function inline_code_block line 1 at EXECUTE)
+> DO $$ BEGIN SAVEPOINT s; END $$;
+ERROR 0A000 unsupported transaction command in PL/pgSQL (PL/pgSQL function inline_code_block line 1 at SQL statement)
+> DO $$ DECLARE x int; BEGIN CREATE TABLE ut10 (a int) INTO x; END $$;
+ERROR 42601 INTO used with a command that cannot return data (PL/pgSQL function inline_code_block line 1 at SQL statement)
+> SELECT to_regclass('ut10');
+fields to_regclass:2205:4:-1
+row NULL
+SELECT 1
+> DO $$ DECLARE x int; BEGIN EXECUTE 'CREATE TABLE ut11 (a int)' INTO x; END $$;
+ERROR 42601 INTO used with a command that cannot return data (PL/pgSQL function inline_code_block line 1 at EXECUTE)
+> SELECT to_regclass('ut11');
+fields to_regclass:2205:4:-1
+row NULL
+SELECT 1
+> DO $$ BEGIN CREATE TABLE ut12 (a int primary key); INSERT INTO ut12 VALUES (1); INSERT INTO ut12 VALUES (1); END $$;
+ERROR 23505 duplicate key value violates unique constraint "ut12_pkey" (SQL statement "INSERT INTO ut12 VALUES (1)"
+PL/pgSQL function inline_code_block line 1 at SQL statement)
+DETAIL Key (a)=(1) already exists.
+> SELECT to_regclass('ut12');
+fields to_regclass:2205:4:-1
+row NULL
+SELECT 1
+> DO $$ BEGIN CREATE TABLE ut3 (a int); END $$;
+ERROR 42P07 relation "ut3" already exists (SQL statement "CREATE TABLE ut3 (a int)"
+PL/pgSQL function inline_code_block line 1 at SQL statement)
+> CREATE TABLE ut13 (a int);
+CREATE TABLE
+> INSERT INTO ut13 VALUES (1), (2);
+INSERT 0 2
+> CREATE FUNCTION tr() RETURNS int LANGUAGE plpgsql AS $$ BEGIN TRUNCATE ut13; RETURN (SELECT count(*) FROM ut13); END $$;
+CREATE FUNCTION
+> SELECT tr();
+fields tr:23:4:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM ut13;
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE PROCEDURE pc() LANGUAGE plpgsql AS $$ BEGIN CREATE TABLE ut14 (a int); INSERT INTO ut14 VALUES (1); COMMIT; INSERT INTO ut14 VALUES (2); ROLLBACK; CREATE TABLE ut15 (a int); ROLLBACK; END $$;
+CREATE PROCEDURE
+> CALL pc();
+CALL
+> SELECT * FROM ut14;
+fields a@ut14.1:23:4:-1
+row 1
+SELECT 1
+> SELECT to_regclass('ut15');
+fields to_regclass:2205:4:-1
+row NULL
+SELECT 1
+> CREATE FUNCTION mkf() RETURNS int LANGUAGE plpgsql AS $$ BEGIN CREATE FUNCTION inner1() RETURNS int LANGUAGE sql AS 'SELECT 9'; RETURN inner1(); END $$;
+CREATE FUNCTION
+> SELECT mkf();
+fields mkf:23:4:-1
+row 9
+SELECT 1
+> CREATE FUNCTION loopddl() RETURNS int LANGUAGE plpgsql AS $$ DECLARE s int := 0; BEGIN FOR i IN 1..3 LOOP EXECUTE format('CREATE TEMP TABLE lt%s (a int)', i); EXECUTE format('INSERT INTO lt%s VALUES (%s)', i, i); END LOOP; SELECT a INTO s FROM lt3; RETURN s; END $$;
+CREATE FUNCTION
+> SELECT loopddl();
+fields loopddl:23:4:-1
+row 3
+SELECT 1
+> DO $$ BEGIN CREATE TABLE ut16 (a int); INSERT INTO ut16 VALUES (1); DROP TABLE ut16; CREATE TABLE ut16 (a text); INSERT INTO ut16 VALUES ('t'); RAISE NOTICE '%', (SELECT a FROM ut16); END $$;
+NOTICE 00000 t (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ BEGIN COPY ut16 TO STDOUT; END $$;
+ERROR 0A000 cannot COPY to/from client in PL/pgSQL (PL/pgSQL function inline_code_block line 1 at SQL statement)
+> DO $$ BEGIN VACUUM ut16; END $$;
+ERROR 25001 VACUUM cannot be executed from a function or procedure (SQL statement "VACUUM ut16"
+PL/pgSQL function inline_code_block line 1 at SQL statement)

@@ -405,8 +405,8 @@ impl Connection {
         node: &Node,
         notices: &mut Vec<Notice>,
     ) -> Result<Done, Error> {
-        if self.lease.is_none() {
-            self.lease = Some(self.store.lease(self.database_oid, &self.cancel)?);
+        if self.lease.get_mut().is_none() {
+            *self.lease.get_mut() = Some(self.store.lease(self.database_oid, &self.cancel)?);
         }
         let mut work = Roles::clone(&self.roles());
         let tag = match node {
@@ -432,7 +432,7 @@ impl Connection {
             }
             _ => return Err(Error::internal("not a statement of roles")),
         };
-        if let Some(lease) = &mut self.lease {
+        if let Some(lease) = self.lease.get_mut() {
             lease.roles = Arc::new(work);
         }
         Ok(Done::Tag(tag))
@@ -440,7 +440,10 @@ impl Connection {
 
     /// `GetNewObjectId`.
     fn role_oid_new(&mut self) -> u32 {
-        self.lease.as_mut().map_or(0, |lease| Arc::make_mut(&mut lease.catalog).take_oid())
+        self.lease
+            .get_mut()
+            .as_mut()
+            .map_or(0, |lease| Arc::make_mut(&mut lease.catalog).take_oid())
     }
 
     /// `get_rolespec_oid`.
