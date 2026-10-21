@@ -13,6 +13,7 @@ use rupg_platform::Tasks;
 
 use crate::advisory::Locks;
 use crate::auth::AuthFiles;
+use crate::connection::Pending;
 use crate::heap::Heap;
 
 /// How long a session waits for the lock before it looks at its cancel flag again.
@@ -483,6 +484,43 @@ impl Store {
             let counts = relations.entry((database, relation)).or_default();
             counts.numscans += count;
             counts.lastscan = Some(counts.lastscan.map_or(time, |last| last.max(time)));
+        }
+    }
+
+    /// `AtEOXact_PgStat_Relations` and `pgstat_relation_flush_cb`: adds the rows that a transaction wrote to the counters of the relations of its database. Each write counts, also after a rollback. A commit adds the rows that the transaction inserted to the live rows and its updates and deletes to the dead rows. A rollback adds the rows that it inserted and updated to the dead rows. After a `TRUNCATE` that committed, the live and the dead rows start again from 0.
+    pub(crate) fn report_writes(
+        &self,
+        database: u32,
+        writes: &BTreeMap<u32, Pending>,
+        commit: bool,
+    ) {
+        let mut relations = self.relations.lock().unwrap_or_else(PoisonError::into_inner);
+        for (&relation, pending) in writes {
+            let counts = relations.entry((database, relation)).or_default();
+            let aborted = pending.aborted;
+            if commit {
+                let kept = pending.kept;
+                counts.written = counts.written + aborted + kept;
+                if pending.truncated {
+                    counts.live_tuples = 0;
+                    counts.dead_tuples = 0;
+                    counts.ins_since_vacuum = 0;
+                } else {
+                    counts.dead_tuples += aborted.inserted + aborted.updated;
+                }
+                counts.live_tuples += kept.inserted - kept.deleted;
+                counts.dead_tuples += kept.updated + kept.deleted;
+                counts.mod_since_analyze += kept.inserted + kept.updated + kept.deleted;
+                counts.ins_since_vacuum += aborted.inserted + kept.inserted;
+            } else {
+                // A rollback brings back the counts before the first `TRUNCATE`, as `restore_truncdrop_counters`.
+                let tried = aborted + if pending.truncated { pending.saved } else { pending.kept };
+                counts.written = counts.written + tried;
+                counts.dead_tuples += tried.inserted + tried.updated;
+                counts.ins_since_vacuum += tried.inserted;
+            }
+            counts.live_tuples = counts.live_tuples.max(0);
+            counts.dead_tuples = counts.dead_tuples.max(0);
         }
     }
 

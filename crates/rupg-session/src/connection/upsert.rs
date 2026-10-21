@@ -6,6 +6,7 @@ use rupg_analyze::{OnConflict, Write};
 use rupg_catalog::{Catalog, TRIGGER_INSERT, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
+use rupg_func::Writes;
 use rupg_types::Value;
 
 use super::Connection;
@@ -87,6 +88,7 @@ impl Connection {
                 match result {
                     Speculative::Inserted => {
                         done.count += 1;
+                        self.count_inserts(info.table, 1);
                         if info.returning.is_some() {
                             let mut written = row.clone();
                             written.resize(row.len() + conflict.carried, Value::Null);
@@ -187,6 +189,7 @@ impl Connection {
                 match result {
                     Speculative::Inserted => {
                         done.count += 1;
+                        self.count_inserts(oid, 1);
                         if info.returning.is_some() {
                             let mut written = routing.to_root(at, &checked, info.width);
                             written.push(Value::Oid(oid));
@@ -286,7 +289,10 @@ impl Connection {
             let change = vec![(tid, Some(checked.clone()))];
             match heap.change(oid, view, change, &leaf.unique, &kept, &mut applied)? {
                 Changed::Done(0) | Changed::Again => return Ok(false),
-                Changed::Done(_) => break,
+                Changed::Done(_) => {
+                    self.count_writes(oid, Writes { updated: 1, ..Writes::default() });
+                    break;
+                }
                 Changed::Wait { holder, tid } => {
                     let context = format!(
                         "while locking tuple {} in relation \"{}\"",
@@ -354,7 +360,10 @@ impl Connection {
             let change = vec![(tid, Some(new.clone()))];
             match heap.change(info.table, view, change, &info.unique, &kept, &mut applied)? {
                 Changed::Done(0) | Changed::Again => return Ok(false),
-                Changed::Done(_) => break,
+                Changed::Done(_) => {
+                    self.count_writes(info.table, Writes { updated: 1, ..Writes::default() });
+                    break;
+                }
                 Changed::Wait { holder, tid } => {
                     let context = format!(
                         "while locking tuple {} in relation \"{}\"",

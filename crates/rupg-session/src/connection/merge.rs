@@ -86,7 +86,10 @@ impl Connection {
                         &mut applied,
                     )?;
                     match changed {
-                        Changed::Done(_) => break false,
+                        Changed::Done(_) => {
+                            self.count_changes(info.table, &changes, &applied);
+                            break false;
+                        }
                         Changed::Wait { holder, tid } => {
                             let update = changes.iter().any(|c| c.0 == tid && c.1.is_some());
                             let what = if update { "updating" } else { "deleting" };
@@ -125,6 +128,7 @@ impl Connection {
                     }
                 }
             }
+            self.count_inserts(info.table, inserts.len());
         }
         // The actions that wrote a row: each insert, and each change that the heap made.
         let applied: HashSet<usize> = applied.into_iter().collect();

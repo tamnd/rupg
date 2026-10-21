@@ -1,5 +1,6 @@
-//! `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT`, as `DefineSavepoint`, `ReleaseSavepoint` and `RollbackToSavepoint` of `xact.c` run them. A subtransaction has no transaction ID of its own. Each savepoint keeps the state of the transaction at its start, and a rollback of the subtransaction brings that state back: the rows that the later commands wrote, the catalog, the settings, the queue of the deferred triggers, the modes of `SET CONSTRAINTS`, the advisory locks of the transaction level and the portals of the subtransaction.
+//! `SAVEPOINT`, `RELEASE SAVEPOINT` and `ROLLBACK TO SAVEPOINT`, as `DefineSavepoint`, `ReleaseSavepoint` and `RollbackToSavepoint` of `xact.c` run them. A subtransaction has no transaction ID of its own. Each savepoint keeps the state of the transaction at its start, and a rollback of the subtransaction brings that state back: the rows that the later commands wrote, the catalog, the settings, the queue of the deferred triggers, the modes of `SET CONSTRAINTS`, the advisory locks of the transaction level, the counts of the rows that the transaction wrote, and the portals of the subtransaction.
 
+use std::collections::BTreeMap;
 use std::sync::Arc;
 
 use rupg_catalog::Catalog;
@@ -11,7 +12,7 @@ use rupg_wire::CommandTag;
 use super::deferred::Modes;
 use super::foreign::Batch;
 use super::trigger::Event;
-use super::{Connection, Done};
+use super::{Connection, Done, Pending};
 use crate::advisory::Tag;
 use crate::guc::Savepoint;
 use crate::utility;
@@ -29,6 +30,8 @@ pub(super) struct Mark {
     modes: Modes,
     /// The counts of the advisory locks of the transaction level.
     locks: Vec<(Tag, bool, u32)>,
+    /// The rows that the transaction wrote in each relation, for the statistics.
+    writes: BTreeMap<u32, Pending>,
 }
 
 impl Connection {
@@ -78,6 +81,7 @@ impl Connection {
             deferred_events: self.deferred_events.borrow().clone(),
             modes: self.modes.borrow().clone(),
             locks: self.store.locks().xact_holds(self.pid),
+            writes: self.activity.writes(),
         }
     }
 
@@ -118,5 +122,6 @@ impl Connection {
         self.deferred_events.borrow_mut().clone_from(&mark.deferred_events);
         self.modes.borrow_mut().clone_from(&mark.modes);
         self.store.locks().release_since(self.pid, &mark.locks);
+        self.activity.roll_back_writes(&mark.writes);
     }
 }

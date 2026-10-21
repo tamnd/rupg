@@ -1,0 +1,182 @@
+> CREATE TABLE w (a int PRIMARY KEY, b int) WITH (autovacuum_enabled = off)
+CREATE TABLE
+> CREATE TABLE v (a int) WITH (autovacuum_enabled = off)
+CREATE TABLE
+> INSERT INTO w SELECT g, g FROM generate_series(1, 30) g
+INSERT 0 30
+> UPDATE w SET b = b + 1 WHERE a <= 5
+UPDATE 5
+> DELETE FROM w WHERE a > 26
+DELETE 4
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname IN ('v', 'w') ORDER BY relname
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row v,0,0,0,0,0,0,0
+row w,30,5,4,26,9,39,30
+SELECT 2
+> BEGIN
+BEGIN
+> INSERT INTO v VALUES (1), (2), (3)
+INSERT 0 3
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del FROM pg_stat_xact_user_tables WHERE relname = 'v'
+fields relname@pg_stat_xact_user_tables.3:19:64:-1,n_tup_ins@pg_stat_xact_user_tables.8:20:8:-1,n_tup_upd@pg_stat_xact_user_tables.9:20:8:-1,n_tup_del@pg_stat_xact_user_tables.10:20:8:-1
+row v,3,0,0
+SELECT 1
+> ROLLBACK
+ROLLBACK
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname = 'v'
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row v,3,0,0,0,3,0,3
+SELECT 1
+> BEGIN
+BEGIN
+> INSERT INTO v VALUES (4)
+INSERT 0 1
+> SAVEPOINT s
+SAVEPOINT
+> INSERT INTO v VALUES (5), (6)
+INSERT 0 2
+> UPDATE v SET a = a + 10 WHERE a = 4
+UPDATE 1
+> ROLLBACK TO SAVEPOINT s
+ROLLBACK
+> DELETE FROM v WHERE a = 4
+DELETE 1
+> INSERT INTO v VALUES (7)
+INSERT 0 1
+> RELEASE SAVEPOINT s
+RELEASE
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del FROM pg_stat_xact_user_tables WHERE relname = 'v'
+fields relname@pg_stat_xact_user_tables.3:19:64:-1,n_tup_ins@pg_stat_xact_user_tables.8:20:8:-1,n_tup_upd@pg_stat_xact_user_tables.9:20:8:-1,n_tup_del@pg_stat_xact_user_tables.10:20:8:-1
+row v,4,1,1
+SELECT 1
+> COMMIT
+COMMIT
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname = 'v'
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row v,7,1,1,1,7,3,7
+SELECT 1
+> BEGIN
+BEGIN
+> INSERT INTO v VALUES (8)
+INSERT 0 1
+> TRUNCATE v
+TRUNCATE TABLE
+> INSERT INTO v VALUES (9), (10)
+INSERT 0 2
+> COMMIT
+COMMIT
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname = 'v'
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row v,9,1,1,2,0,5,2
+SELECT 1
+> BEGIN
+BEGIN
+> UPDATE w SET b = 0 WHERE a = 1
+UPDATE 1
+> TRUNCATE w
+TRUNCATE TABLE
+> INSERT INTO w VALUES (100, 1)
+INSERT 0 1
+> ROLLBACK
+ROLLBACK
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname = 'w'
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row w,30,6,4,26,10,39,30
+SELECT 1
+> INSERT INTO w VALUES (1, 0), (200, 0) ON CONFLICT (a) DO UPDATE SET b = excluded.b
+INSERT 0 2
+> INSERT INTO w VALUES (1, 0), (201, 0) ON CONFLICT DO NOTHING
+INSERT 0 1
+> MERGE INTO w USING (VALUES (2), (300)) s (a) ON w.a = s.a WHEN MATCHED THEN DELETE WHEN NOT MATCHED THEN INSERT VALUES (s.a, 0)
+MERGE 2
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname = 'w'
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row w,33,7,5,28,12,44,33
+SELECT 1
+> CREATE TABLE p (a int) PARTITION BY RANGE (a)
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10) WITH (autovacuum_enabled = off)
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES FROM (10) TO (20) WITH (autovacuum_enabled = off)
+CREATE TABLE
+> INSERT INTO p VALUES (1), (2), (11)
+INSERT 0 3
+> UPDATE p SET a = a + 10 WHERE a = 1
+UPDATE 1
+> DELETE FROM p WHERE a = 2
+DELETE 1
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname LIKE 'p%' ORDER BY relname
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row p,0,0,0,0,0,0,0
+row p1,2,0,2,0,2,4,2
+row p2,2,0,0,2,0,2,2
+SELECT 3
+> ALTER TABLE v ALTER COLUMN a TYPE bigint
+ALTER TABLE
+> SET track_counts = off
+SET
+> INSERT INTO v VALUES (11)
+INSERT 0 1
+> RESET track_counts
+RESET
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname = 'v'
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row v,9,1,1,2,0,5,2
+SELECT 1
+> CREATE TABLE c AS SELECT g AS a FROM generate_series(1, 4) g
+SELECT 4
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname = 'c'
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row c,4,0,0,4,0,4,4
+SELECT 1
+> COPY c FROM STDIN
+< 5
+< 6
+< \.
+<done
+copy in 0 0
+COPY 2
+> SELECT pg_stat_force_next_flush()
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, n_tup_ins, n_tup_upd, n_tup_del, n_live_tup, n_dead_tup, n_mod_since_analyze, n_ins_since_vacuum FROM pg_stat_user_tables WHERE relname = 'c'
+fields relname@pg_stat_user_tables.3:19:64:-1,n_tup_ins@pg_stat_user_tables.10:20:8:-1,n_tup_upd@pg_stat_user_tables.11:20:8:-1,n_tup_del@pg_stat_user_tables.12:20:8:-1,n_live_tup@pg_stat_user_tables.15:20:8:-1,n_dead_tup@pg_stat_user_tables.16:20:8:-1,n_mod_since_analyze@pg_stat_user_tables.17:20:8:-1,n_ins_since_vacuum@pg_stat_user_tables.18:20:8:-1
+row c,6,0,0,6,0,6,6
+SELECT 1

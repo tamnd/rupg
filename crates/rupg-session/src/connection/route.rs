@@ -320,6 +320,7 @@ impl Connection {
                     conflict => kept = self.key_conflict(leaf_info, view, conflict)?,
                 }
             }
+            self.count_inserts(leaf.oid, rows.len());
             if copy.is_some() && leaf.fire.after_rows() {
                 let rows: Vec<RowPair> = rows.into_iter().map(|row| (None, Some(row))).collect();
                 self.leaf_after((&leaf.fire, (&[], leaf.up.len())), &rows)?;
@@ -583,6 +584,7 @@ impl Connection {
                     conflict => kept = self.key_conflict(leaf_info, view, conflict)?,
                 }
             }
+            self.count_changes(leaf.oid, &changes, &made);
             let items: Vec<Moved> = made.iter().filter_map(|&i| items.get(i).cloned()).collect();
             let fired = |item: &Moved| leaf.fire_of(item.event()).is_some_and(Triggers::after_rows);
             let olds = if keep || items.iter().any(fired) {
