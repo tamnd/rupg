@@ -867,6 +867,9 @@ fn with_subqueries(
 ) -> Result<Rc<scan::Tables>> {
     let work = |r: &rupg_analyze::Relation| r.cte.as_ref().and_then(|c| c.work);
     let write = |r: &rupg_analyze::Relation| r.cte.as_ref().and_then(|c| c.write);
+    fn transition(r: &rupg_analyze::Relation) -> Option<&rupg_analyze::CteRef> {
+        r.cte.as_ref().filter(|c| c.transition)
+    }
     if query.relations.iter().all(|r| {
         r.subquery.is_none()
             && r.function.is_none()
@@ -874,6 +877,7 @@ fn with_subqueries(
             && r.tablesample.is_none()
             && work(r).is_none()
             && write(r).is_none()
+            && transition(r).is_none()
     }) {
         return Ok(Rc::clone(base));
     }
@@ -896,6 +900,11 @@ fn with_subqueries(
                 return Err(not_yet("a statement that changes data in WITH in this place"));
             };
             tables.rows[i] = Rc::new(rows.clone());
+        }
+        if let Some(cte) = transition(relation) {
+            tables.rows[i] = session.transition_rows(&cte.name).ok_or_else(|| {
+                Error::internal(format!("the transition table \"{}\" has no rows", cte.name))
+            })?;
         }
         if let Some(sub) = &relation.subquery
             && tables.needs[i].is_empty()
@@ -1474,7 +1483,7 @@ fn backward(query: &Query) -> bool {
         return rows.len() > 1;
     }
     if let Some(cte) = &relation.cte {
-        if cte.work.is_some() {
+        if cte.work.is_some() || cte.transition {
             return false;
         }
         if cte.write.is_some() {

@@ -325,7 +325,10 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
     }
     let mut rows = Vec::with_capacity(query.relations.len());
     for (relation, used) in query.relations.iter().zip(&used) {
-        let work = relation.cte.as_ref().is_some_and(|c| c.work.is_some() || c.write.is_some());
+        let work = relation
+            .cte
+            .as_ref()
+            .is_some_and(|c| c.work.is_some() || c.write.is_some() || c.transition);
         if relation.subquery.is_some()
             || relation.function.is_some()
             || relation.values.is_some()

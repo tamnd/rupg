@@ -27,7 +27,7 @@ use rupg_wire::{
 use crate::block::{Block, Ending, Transaction};
 use crate::guc::{Action, Origin, Settings};
 use crate::heap::{Change, Changed, Snapshot, View, tid_text};
-use crate::query::{self, Column, Reader, Row};
+use crate::query::{self, Column, Reader, Row, Transition};
 use crate::store::{Lease, Store};
 use crate::utility::{self, Context, Notice, Outcome};
 use foreign::Batch;
@@ -419,6 +419,8 @@ pub struct Connection {
     events: RefCell<Vec<trigger::Event>>,
     /// The messages of `RAISE` of the triggers of the statement, for the client.
     trigger_warnings: RefCell<Vec<Error>>,
+    /// The transition tables of the trigger whose function runs, which the readers of its queries get.
+    transition: RefCell<Option<Transition>>,
 }
 
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
@@ -489,6 +491,7 @@ impl Connection {
             calls: plpgsql::Calls::default(),
             events: RefCell::new(Vec::new()),
             trigger_warnings: RefCell::new(Vec::new()),
+            transition: RefCell::new(None),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -561,6 +564,7 @@ impl Connection {
         .with_cancel(&self.cancel)
         .with_view(self.view())
         .with_connection(self)
+        .with_transition(self.transition.borrow().clone())
     }
 
     /// `GetTransactionSnapshot`: a new snapshot for each statement in `READ COMMITTED`, and the snapshot of the first statement for the whole transaction in the other levels.
@@ -4681,6 +4685,12 @@ mod tests {
     #[test]
     fn plpgsql_utility() {
         big_stack(|| script(include_str!("connection/plpgsql_utility.test")));
+    }
+
+    /// The transition tables of triggers, `REFERENCING OLD TABLE` and `REFERENCING NEW TABLE`: the rows of an `INSERT`, an `UPDATE` and a `DELETE` in triggers `FOR EACH STATEMENT` and `FOR EACH ROW`, with a join, `UNION ALL`, `EXECUTE`, an `INSERT` that reads them, the rows that a trigger `BEFORE` changed, an empty write, the columns after `ALTER COLUMN TYPE` and `DROP COLUMN`, the error of a function that is not a trigger, and the error of a write into a transition table. `connection/trigger_transition.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn trigger_transition() {
+        big_stack(|| script(include_str!("connection/trigger_transition.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -1,0 +1,165 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE tt (id int, val text);
+CREATE TABLE
+> CREATE FUNCTION tt_ins() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE r record; BEGIN RAISE NOTICE 'ins % rows, sum %', (SELECT count(*) FROM newtab), (SELECT sum(id) FROM newtab); FOR r IN SELECT * FROM newtab ORDER BY id LOOP RAISE NOTICE 'new % %', r.id, r.val; END LOOP; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER tt_ins AFTER INSERT ON tt REFERENCING NEW TABLE AS newtab FOR EACH STATEMENT EXECUTE FUNCTION tt_ins();
+CREATE TRIGGER
+> INSERT INTO tt VALUES (1, 'one'), (2, 'two'), (3, 'three');
+NOTICE 00000 ins 3 rows, sum 6 (PL/pgSQL function tt_ins() line 1 at RAISE)
+NOTICE 00000 new 1 one (PL/pgSQL function tt_ins() line 1 at RAISE)
+NOTICE 00000 new 2 two (PL/pgSQL function tt_ins() line 1 at RAISE)
+NOTICE 00000 new 3 three (PL/pgSQL function tt_ins() line 1 at RAISE)
+INSERT 0 3
+> INSERT INTO tt SELECT 4, 'four' WHERE false;
+NOTICE 00000 ins 0 rows, sum <NULL> (PL/pgSQL function tt_ins() line 1 at RAISE)
+INSERT 0 0
+> CREATE FUNCTION tt_upd() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE r record; BEGIN FOR r IN SELECT o.id, o.val AS before, n.val AS after FROM oldtab o JOIN newtab n USING (id) ORDER BY id LOOP RAISE NOTICE '% % -> %', r.id, r.before, r.after; END LOOP; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER tt_upd AFTER UPDATE ON tt REFERENCING OLD TABLE AS oldtab NEW TABLE AS newtab FOR EACH STATEMENT EXECUTE FUNCTION tt_upd();
+CREATE TRIGGER
+> UPDATE tt SET val = upper(val) WHERE id >= 2;
+NOTICE 00000 2 two -> TWO (PL/pgSQL function tt_upd() line 1 at RAISE)
+NOTICE 00000 3 three -> THREE (PL/pgSQL function tt_upd() line 1 at RAISE)
+UPDATE 2
+> UPDATE tt SET val = val WHERE id > 100;
+UPDATE 0
+> CREATE FUNCTION tt_del() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'del %', (SELECT string_agg(id::text || ':' || val, ',' ORDER BY id) FROM gone); RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER tt_del AFTER DELETE ON tt REFERENCING OLD TABLE AS gone FOR EACH STATEMENT EXECUTE FUNCTION tt_del();
+CREATE TRIGGER
+> DELETE FROM tt WHERE id = 1;
+NOTICE 00000 del 1:one (PL/pgSQL function tt_del() line 1 at RAISE)
+DELETE 1
+> CREATE FUNCTION tt_row() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'row % sees %', NEW.id, (SELECT count(*) FROM nt); RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER tt_row AFTER INSERT ON tt REFERENCING NEW TABLE AS nt FOR EACH ROW EXECUTE FUNCTION tt_row();
+CREATE TRIGGER
+> INSERT INTO tt VALUES (5, 'five'), (6, 'six');
+NOTICE 00000 row 5 sees 2 (PL/pgSQL function tt_row() line 1 at RAISE)
+NOTICE 00000 row 6 sees 2 (PL/pgSQL function tt_row() line 1 at RAISE)
+NOTICE 00000 ins 2 rows, sum 11 (PL/pgSQL function tt_ins() line 1 at RAISE)
+NOTICE 00000 new 5 five (PL/pgSQL function tt_ins() line 1 at RAISE)
+NOTICE 00000 new 6 six (PL/pgSQL function tt_ins() line 1 at RAISE)
+INSERT 0 2
+> DROP TRIGGER tt_row ON tt;
+DROP TRIGGER
+> CREATE TABLE audit (op text, id int, val text);
+CREATE TABLE
+> CREATE FUNCTION tt_audit() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO audit SELECT TG_OP, id, val FROM n2; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER tt_audit AFTER INSERT ON tt REFERENCING NEW TABLE AS n2 FOR EACH STATEMENT EXECUTE FUNCTION tt_audit();
+CREATE TRIGGER
+> INSERT INTO tt VALUES (7, 'seven');
+NOTICE 00000 ins 1 rows, sum 7 (PL/pgSQL function tt_ins() line 1 at RAISE)
+NOTICE 00000 new 7 seven (PL/pgSQL function tt_ins() line 1 at RAISE)
+INSERT 0 1
+> SELECT * FROM audit ORDER BY id;
+fields op@audit.1:25:-1:-1,id@audit.2:23:4:-1,val@audit.3:25:-1:-1
+row INSERT,7,seven
+SELECT 1
+> CREATE FUNCTION tt_dyn() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE n int; BEGIN EXECUTE 'SELECT count(*) FROM n3' INTO n; RAISE NOTICE 'dyn %', n; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER tt_dyn AFTER INSERT ON tt REFERENCING NEW TABLE AS n3 FOR EACH STATEMENT EXECUTE FUNCTION tt_dyn();
+CREATE TRIGGER
+> INSERT INTO tt VALUES (8, 'eight'), (9, 'nine');
+NOTICE 00000 dyn 2 (PL/pgSQL function tt_dyn() line 1 at RAISE)
+NOTICE 00000 ins 2 rows, sum 17 (PL/pgSQL function tt_ins() line 1 at RAISE)
+NOTICE 00000 new 8 eight (PL/pgSQL function tt_ins() line 1 at RAISE)
+NOTICE 00000 new 9 nine (PL/pgSQL function tt_ins() line 1 at RAISE)
+INSERT 0 2
+> DROP TRIGGER tt_dyn ON tt;
+DROP TRIGGER
+> DROP TRIGGER tt_audit ON tt;
+DROP TRIGGER
+> CREATE FUNCTION peek() RETURNS bigint LANGUAGE plpgsql AS $$ BEGIN RETURN (SELECT count(*) FROM newtab); END $$;
+CREATE FUNCTION
+> SELECT peek();
+fields peek:20:8:-1
+ERROR 42P01 relation "newtab" does not exist (PL/pgSQL function peek() line 1 at RETURN)
+QUERY (SELECT count(*) FROM newtab) at 23
+> CREATE TABLE multi_test (i int);
+CREATE TABLE
+> INSERT INTO multi_test VALUES (1);
+INSERT 0 1
+> CREATE FUNCTION multi_test_trig() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'count = %', (SELECT COUNT(*) FROM new_test); RAISE NOTICE 'count union = %', (SELECT COUNT(*) FROM (SELECT * FROM new_test UNION ALL SELECT * FROM new_test) ss); RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER my_trigger AFTER UPDATE ON multi_test REFERENCING NEW TABLE AS new_test OLD TABLE as old_test FOR EACH STATEMENT EXECUTE PROCEDURE multi_test_trig();
+CREATE TRIGGER
+> UPDATE multi_test SET i = i;
+NOTICE 00000 count = 1 (PL/pgSQL function multi_test_trig() line 1 at RAISE)
+NOTICE 00000 count union = 2 (PL/pgSQL function multi_test_trig() line 1 at RAISE)
+UPDATE 1
+> CREATE TABLE att (id int, name text);
+CREATE TABLE
+> CREATE FUNCTION att_func() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE r record; BEGIN FOR r IN SELECT * FROM d JOIN i USING (id) ORDER BY id LOOP RAISE NOTICE 'row %', r; END LOOP; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER att_trig AFTER UPDATE ON att REFERENCING OLD TABLE AS d NEW TABLE AS i FOR EACH STATEMENT EXECUTE PROCEDURE att_func();
+CREATE TRIGGER
+> INSERT INTO att VALUES (1, '1'), (2, '2');
+INSERT 0 2
+> UPDATE att SET name = name || name;
+NOTICE 00000 row (1,1,11) (PL/pgSQL function att_func() line 1 at RAISE)
+NOTICE 00000 row (2,2,22) (PL/pgSQL function att_func() line 1 at RAISE)
+UPDATE 2
+> ALTER TABLE att ALTER COLUMN name TYPE int USING name::integer;
+ALTER TABLE
+> UPDATE att SET name = name * 2;
+NOTICE 00000 row (1,11,22) (PL/pgSQL function att_func() line 1 at RAISE)
+NOTICE 00000 row (2,22,44) (PL/pgSQL function att_func() line 1 at RAISE)
+UPDATE 2
+> ALTER TABLE att DROP COLUMN name;
+ALTER TABLE
+> UPDATE att SET id = id;
+NOTICE 00000 row (1) (PL/pgSQL function att_func() line 1 at RAISE)
+NOTICE 00000 row (2) (PL/pgSQL function att_func() line 1 at RAISE)
+UPDATE 2
+> CREATE TABLE bt (a int, b int);
+CREATE TABLE
+> CREATE FUNCTION bt_before() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.b := NEW.a * 10; RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bt_before BEFORE INSERT ON bt FOR EACH ROW EXECUTE FUNCTION bt_before();
+CREATE TRIGGER
+> CREATE FUNCTION bt_after() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'after %', (SELECT string_agg(a || '/' || b, ' ' ORDER BY a) FROM nb); RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bt_after AFTER INSERT ON bt REFERENCING NEW TABLE AS nb FOR EACH STATEMENT EXECUTE FUNCTION bt_after();
+CREATE TRIGGER
+> INSERT INTO bt (a) VALUES (1), (2);
+NOTICE 00000 after 1/10 2/20 (PL/pgSQL function bt_after() line 1 at RAISE)
+INSERT 0 2
+> CREATE FUNCTION bt_sel() RETURNS trigger LANGUAGE plpgsql AS $$ DECLARE x int; BEGIN SELECT nb.a INTO x FROM nb WHERE nb.b = 20; RAISE NOTICE 'x %', x; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bt_sel AFTER INSERT ON bt REFERENCING NEW TABLE AS nb FOR EACH STATEMENT EXECUTE FUNCTION bt_sel();
+CREATE TRIGGER
+> INSERT INTO bt (a) VALUES (2);
+NOTICE 00000 after 2/20 (PL/pgSQL function bt_after() line 1 at RAISE)
+NOTICE 00000 x 2 (PL/pgSQL function bt_sel() line 1 at RAISE)
+INSERT 0 1
+> CREATE TABLE dt (a int);
+CREATE TABLE
+> CREATE FUNCTION dt_bad() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN INSERT INTO dx VALUES (1); RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER dt_bad AFTER DELETE ON dt REFERENCING OLD TABLE AS dx FOR EACH STATEMENT EXECUTE FUNCTION dt_bad();
+CREATE TRIGGER
+> INSERT INTO dt VALUES (1);
+INSERT 0 1
+> DELETE FROM dt;
+ERROR 0A000 relation "dx" cannot be the target of a modifying statement (SQL statement "INSERT INTO dx VALUES (1)"
+PL/pgSQL function dt_bad() line 1 at SQL statement)
+> CREATE OR REPLACE FUNCTION dt_bad() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN UPDATE dx SET a = 2; RETURN NULL; END $$;
+CREATE FUNCTION
+> DELETE FROM dt;
+ERROR 0A000 relation "dx" cannot be the target of a modifying statement (SQL statement "UPDATE dx SET a = 2"
+PL/pgSQL function dt_bad() line 1 at SQL statement)
+> CREATE OR REPLACE FUNCTION dt_bad() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN DELETE FROM dx; RETURN NULL; END $$;
+CREATE FUNCTION
+> DELETE FROM dt;
+ERROR 0A000 relation "dx" cannot be the target of a modifying statement (SQL statement "DELETE FROM dx"
+PL/pgSQL function dt_bad() line 1 at SQL statement)
+> CREATE OR REPLACE FUNCTION dt_bad() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN DELETE FROM public.dx; RETURN NULL; END $$;
+CREATE FUNCTION
+> DELETE FROM dt;
+ERROR 42P01 relation "public.dx" does not exist (PL/pgSQL function dt_bad() line 1 at SQL statement)
+QUERY DELETE FROM public.dx at 13

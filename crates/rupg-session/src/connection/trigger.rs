@@ -2,6 +2,8 @@
 //!
 //! The triggers `BEFORE ... FOR EACH STATEMENT` fire after the query of the write gives its rows. The triggers `BEFORE ... FOR EACH ROW` fire for all the rows before the first row goes into the heap, so a trigger does not see the rows that its statement wrote before. Only a trigger function in PL/pgSQL can fire yet.
 
+use std::rc::Rc;
+
 use rupg_analyze::{Expr, Query, Write, WriteKind};
 use rupg_catalog::{TRIGGER_BEFORE, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_ROW, TRIGGER_UPDATE};
 use rupg_catalog::{TRIGGER_INSTEAD, Trigger};
@@ -11,6 +13,7 @@ use rupg_pgcatalog::builtin::Named;
 use rupg_types::Value;
 
 use super::Connection;
+use crate::query::{Captured, Transition};
 use crate::utility::Notice;
 
 /// A trigger `AFTER` in the queue of the statement, `AfterTriggerEvent`.
@@ -23,6 +26,8 @@ pub(super) struct Event {
     old: Option<Vec<Value>>,
     /// The new row of a trigger `FOR EACH ROW` for an `INSERT` or an `UPDATE`.
     new: Option<Vec<Value>>,
+    /// The transition tables of a trigger with `REFERENCING`.
+    transition: Option<Transition>,
 }
 
 /// A trigger that fires for a write, with its condition of `WHEN`.
@@ -46,9 +51,12 @@ impl Triggers {
         self.list.is_empty()
     }
 
-    /// True when a trigger `AFTER ... FOR EACH ROW` gets the rows of the write.
+    /// True when a trigger `AFTER ... FOR EACH ROW` or a trigger with transition tables gets the rows of the write.
     pub(super) fn after_rows(&self) -> bool {
-        self.list.iter().any(|t| t.trigger.kind & (TRIGGER_ROW | TRIGGER_BEFORE) == TRIGGER_ROW)
+        self.list.iter().any(|t| {
+            t.trigger.kind & (TRIGGER_ROW | TRIGGER_BEFORE) == TRIGGER_ROW
+                || has_transition(&t.trigger)
+        })
     }
 
     /// The triggers with the level `level` and the time `before`.
@@ -58,6 +66,20 @@ impl Triggers {
                 && (t.trigger.kind & TRIGGER_BEFORE != 0) == before
         })
     }
+}
+
+/// True for a trigger with `REFERENCING OLD TABLE` or `REFERENCING NEW TABLE`.
+fn has_transition(trigger: &Trigger) -> bool {
+    trigger.old_table.is_some() || trigger.new_table.is_some()
+}
+
+/// The transition tables of the trigger `trigger` with the rows `rows`, or `None` for a trigger with no `REFERENCING`.
+fn transition_of(trigger: &Trigger, rows: &Rc<Captured>) -> Option<Transition> {
+    has_transition(trigger).then(|| Transition {
+        rows: Rc::clone(rows),
+        old: trigger.old_table.clone(),
+        new: trigger.new_table.clone(),
+    })
 }
 
 /// The words of `TG_OP` for the bit of an event.
@@ -137,13 +159,13 @@ impl Connection {
         rupg_exec::trigger_when(base, qual, old, new, &reader)
     }
 
-    /// A call of the trigger function of `trigger` for the event `event`. It gives the row that the function returns.
+    /// A call of the trigger function of `trigger` for the event `event`, with the transition tables `transition`. It gives the row that the function returns.
     fn call_trigger(
         &self,
         trigger: &Trigger,
         event: i16,
-        old: Option<Vec<Value>>,
-        new: Option<Vec<Value>>,
+        (old, new): (Option<Vec<Value>>, Option<Vec<Value>>),
+        transition: Option<Transition>,
     ) -> Result<Option<Vec<Value>>, Error> {
         let catalog = self.catalog();
         let function = catalog.function(trigger.function);
@@ -179,7 +201,7 @@ impl Connection {
             new,
             old,
         };
-        self.pl_trigger(&call)
+        self.pl_trigger(&call, transition)
     }
 
     /// `ExecBSInsertTriggers` and the other calls of the triggers `BEFORE ... FOR EACH STATEMENT` of a write.
@@ -190,7 +212,7 @@ impl Connection {
     pub(super) fn before_statement(&self, triggers: &Triggers, info: &Write) -> Result<(), Error> {
         for armed in triggers.of(false, true) {
             if self.enabled(armed, info, None, None)? {
-                self.call_trigger(&armed.trigger, triggers.event, None, None)?;
+                self.call_trigger(&armed.trigger, triggers.event, (None, None), None)?;
             }
         }
         Ok(())
@@ -232,7 +254,12 @@ impl Connection {
                 for armed in &before {
                     if self.enabled(armed, info, old.as_deref(), None)?
                         && self
-                            .call_trigger(&armed.trigger, triggers.event, old.clone(), None)?
+                            .call_trigger(
+                                &armed.trigger,
+                                triggers.event,
+                                (old.clone(), None),
+                                None,
+                            )?
                             .is_none()
                     {
                         continue 'rows;
@@ -252,8 +279,8 @@ impl Connection {
                 let returned = self.call_trigger(
                     &armed.trigger,
                     triggers.event,
-                    old.clone(),
-                    Some(new.clone()),
+                    (old.clone(), Some(new.clone())),
+                    None,
                 )?;
                 let Some(returned) = returned else { continue 'rows };
                 new = returned;
@@ -276,7 +303,7 @@ impl Connection {
         Ok(out)
     }
 
-    /// `ExecARInsertTriggers`, `ExecASInsertTriggers` and the other calls of the triggers `AFTER` of a write: the events of the triggers `FOR EACH ROW` for the rows `old` and `new` that the write changed, then the events of the triggers `FOR EACH STATEMENT`, at the end of the queue.
+    /// `ExecARInsertTriggers`, `ExecASInsertTriggers` and the other calls of the triggers `AFTER` of a write: the events of the triggers `FOR EACH ROW` for the rows `old` and `new` that the write changed, then the events of the triggers `FOR EACH STATEMENT`, at the end of the queue. A trigger with transition tables reads all the rows of the write in them.
     ///
     /// # Errors
     ///
@@ -289,23 +316,37 @@ impl Connection {
         new: &[Vec<Value>],
     ) -> Result<(), Error> {
         let width = self.table_width(info);
-        let rows = old.len().max(new.len());
+        let old: Vec<Vec<Value>> = old.iter().map(|row| padded(row.clone(), width)).collect();
+        let new: Vec<Vec<Value>> =
+            new.iter().map(|row| padded(row[..width.min(row.len())].to_vec(), width)).collect();
+        let captured = if triggers.list.iter().any(|t| has_transition(&t.trigger)) {
+            // The old rows of an `INSERT` and the new rows of a `DELETE` are empty tables.
+            Rc::new(Captured {
+                table: info.table,
+                old: Rc::new(old.clone()),
+                new: Rc::new(new.clone()),
+            })
+        } else {
+            Rc::default()
+        };
         let mut events = Vec::new();
-        for i in 0..rows {
-            let old = old.get(i).map(|row| padded(row.clone(), width));
-            let new = new.get(i).map(|row| padded(row[..width.min(row.len())].to_vec(), width));
+        for i in 0..old.len().max(new.len()) {
+            let (old, new) = (old.get(i), new.get(i));
             for armed in triggers.of(true, false) {
-                if self.enabled(armed, info, old.as_deref(), new.as_deref())? {
+                if self.enabled(armed, info, old.map(Vec::as_slice), new.map(Vec::as_slice))? {
                     let trigger = armed.trigger.clone();
-                    let (old, new) = (old.clone(), new.clone());
-                    events.push(Event { trigger, event: triggers.event, old, new });
+                    let transition = transition_of(&trigger, &captured);
+                    let (old, new) = (old.cloned(), new.cloned());
+                    events.push(Event { trigger, event: triggers.event, old, new, transition });
                 }
             }
         }
         for armed in triggers.of(false, false) {
             if self.enabled(armed, info, None, None)? {
                 let trigger = armed.trigger.clone();
-                events.push(Event { trigger, event: triggers.event, old: None, new: None });
+                let transition = transition_of(&trigger, &captured);
+                let (old, new) = (None, None);
+                events.push(Event { trigger, event: triggers.event, old, new, transition });
             }
         }
         self.events.borrow_mut().extend(events);
@@ -327,7 +368,8 @@ impl Connection {
                 queue.split_off(mark)
             };
             for event in events {
-                let fired = self.call_trigger(&event.trigger, event.event, event.old, event.new);
+                let rows = (event.old, event.new);
+                let fired = self.call_trigger(&event.trigger, event.event, rows, event.transition);
                 if let Err(error) = fired {
                     self.events.borrow_mut().truncate(mark);
                     return Err(error);

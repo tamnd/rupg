@@ -14,7 +14,7 @@ use rupg_sql::nodes::{DoStmt, FetchDirection, Node};
 use rupg_types::Value;
 
 use super::{Applied, Connection, Done, savepoint};
-use crate::query::Reader;
+use crate::query::{Reader, Transition};
 use crate::utility::{self, Context, Notice};
 
 /// The state at the start of a subtransaction: the state that a savepoint keeps, and the names of the open portals.
@@ -359,7 +359,11 @@ impl Connection {
         // `ExecuteCallStmt`: only a procedure that `CALL` runs can end the transaction.
         let procedure = outer.catalog.function(func).is_some_and(|f| f.kind == b'p');
         let atomic = !(procedure && self.calls.nonatomic.get());
-        rupg_plpgsql::call(&PlSpi::new(self, outer, atomic), func, types, ret, args)
+        // The queries of the function do not see the transition tables of a trigger that called it.
+        let transition = self.transition.take();
+        let result = rupg_plpgsql::call(&PlSpi::new(self, outer, atomic), func, types, ret, args);
+        self.transition.replace(transition);
+        result
     }
 
     /// `ExecuteCallStmt` at the top level: `CALL` runs `run`, and outside of a transaction block the procedure can end the transaction.
@@ -487,10 +491,15 @@ impl Connection {
     pub(super) fn pl_trigger(
         &self,
         call: &rupg_plpgsql::TriggerCall<'_>,
+        transition: Option<Transition>,
     ) -> rupg_common::Result<Option<Vec<Value>>> {
+        // `SPI_register_trigger_data`: the queries of the function read the transition tables of the trigger.
+        let outer = self.transition.replace(transition);
         let reader = self.reader();
         let result = rupg_plpgsql::trigger(&PlSpi::new(self, &reader, true), call);
         self.trigger_warnings.borrow_mut().extend(reader.take_warnings());
+        drop(reader);
+        self.transition.replace(outer);
         result
     }
 
@@ -510,7 +519,9 @@ impl Connection {
         let reader = self.reader();
         // `ExecuteDoStmt`: outside of a transaction block the code can end the transaction.
         let atomic = self.transaction.in_block();
+        let transition = self.transition.take();
         let result = rupg_plpgsql::inline(&PlSpi::new(self, &reader, atomic), &src);
+        self.transition.replace(transition);
         warnings.extend(reader.take_warnings());
         result.map_err(|error| match (error.position(), code_place(stmt, text, &src)) {
             // `function_parse_error_transpose`: an error of the compile has its place in the code, which is a part of the query.
