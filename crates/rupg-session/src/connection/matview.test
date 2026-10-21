@@ -1,0 +1,217 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'x'), (2, 'y'), (3, 'z');
+INSERT 0 3
+> CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t WHERE a > 1;
+SELECT 2
+> SELECT * FROM mv ORDER BY a;
+fields a@mv.1:23:4:-1,b@mv.2:25:-1:-1
+row 2,y
+row 3,z
+SELECT 2
+> INSERT INTO t VALUES (4, 'w');
+INSERT 0 1
+> SELECT * FROM mv ORDER BY a;
+fields a@mv.1:23:4:-1,b@mv.2:25:-1:-1
+row 2,y
+row 3,z
+SELECT 2
+> REFRESH MATERIALIZED VIEW mv;
+REFRESH MATERIALIZED VIEW
+> SELECT * FROM mv ORDER BY a;
+fields a@mv.1:23:4:-1,b@mv.2:25:-1:-1
+row 2,y
+row 3,z
+row 4,w
+SELECT 3
+> SELECT relname, relkind, relispopulated, relhasrules FROM pg_class WHERE relname = 'mv';
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relispopulated@pg_class.26:16:1:-1,relhasrules@pg_class.21:16:1:-1
+row mv,m,t,t
+SELECT 1
+> SELECT schemaname, matviewname, matviewowner = current_user AS own, hasindexes, ispopulated, definition FROM pg_matviews WHERE matviewname = 'mv';
+fields schemaname@pg_matviews.1:19:64:-1,matviewname@pg_matviews.2:19:64:-1,own:16:1:-1,hasindexes@pg_matviews.5:16:1:-1,ispopulated@pg_matviews.6:16:1:-1,definition@pg_matviews.7:25:-1:-1
+row public,mv,t,f,t, SELECT a,
+    b
+   FROM t
+  WHERE (a > 1);
+SELECT 1
+> SELECT pg_get_viewdef('mv'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    b
+   FROM t
+  WHERE (a > 1);
+SELECT 1
+> SELECT rulename, ev_type, is_instead FROM pg_rewrite WHERE ev_class = 'mv'::regclass;
+fields rulename@pg_rewrite.2:19:64:-1,ev_type@pg_rewrite.4:18:1:-1,is_instead@pg_rewrite.6:16:1:-1
+row _RETURN,1,t
+SELECT 1
+> CREATE MATERIALIZED VIEW mv2 (x, y) AS SELECT a, b FROM t WITH NO DATA;
+CREATE MATERIALIZED VIEW
+> SELECT * FROM mv2;
+ERROR 55000 materialized view "mv2" has not been populated
+HINT Use the REFRESH MATERIALIZED VIEW command.
+> SELECT relispopulated FROM pg_class WHERE relname = 'mv2';
+fields relispopulated@pg_class.26:16:1:-1
+row f
+SELECT 1
+> SELECT attname, atttypid::regtype FROM pg_attribute WHERE attrelid = 'mv2'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1
+row x,integer
+row y,text
+SELECT 2
+> REFRESH MATERIALIZED VIEW mv2;
+REFRESH MATERIALIZED VIEW
+> SELECT count(*) FROM mv2;
+fields count:20:8:-1
+row 4
+SELECT 1
+> REFRESH MATERIALIZED VIEW mv2 WITH NO DATA;
+REFRESH MATERIALIZED VIEW
+> SELECT count(*) FROM mv2;
+ERROR 55000 materialized view "mv2" has not been populated
+HINT Use the REFRESH MATERIALIZED VIEW command.
+> CREATE MATERIALIZED VIEW mv AS SELECT 1;
+ERROR 42P07 relation "mv" already exists
+> CREATE MATERIALIZED VIEW IF NOT EXISTS mv AS SELECT 1;
+NOTICE 42P07 relation "mv" already exists, skipping
+CREATE MATERIALIZED VIEW
+> CREATE MATERIALIZED VIEW mv3 AS SELECT 1 AS one, now() > '2000-01-01' AS later;
+SELECT 1
+> SELECT * FROM mv3;
+fields one@mv3.1:23:4:-1,later@mv3.2:16:1:-1
+row 1,t
+SELECT 1
+> INSERT INTO mv VALUES (9, 'q');
+ERROR 42809 cannot change materialized view "mv"
+> UPDATE mv SET a = 0;
+ERROR 42809 cannot change materialized view "mv"
+> DELETE FROM mv;
+ERROR 42809 cannot change materialized view "mv"
+> TRUNCATE mv;
+ERROR 42809 "mv" is not a table
+> COPY mv TO STDOUT;
+copy out 0 0,0
+data 2\ty\n
+data 3\tz\n
+data 4\tw\n
+copy done
+COPY 3
+> COPY mv (b) TO STDOUT;
+copy out 0 0
+data y\n
+data z\n
+data w\n
+copy done
+COPY 3
+> COPY mv FROM STDIN;
+copy in 0 0,0
+ERROR 42809 cannot copy to materialized view "mv"
+> COPY mv2 TO STDOUT;
+ERROR 0A000 cannot copy from unpopulated materialized view "mv2"
+HINT Use the REFRESH MATERIALIZED VIEW command.
+> REFRESH MATERIALIZED VIEW t;
+ERROR 0A000 "t" is not a materialized view
+> REFRESH MATERIALIZED VIEW nosuch;
+ERROR 42P01 relation "nosuch" does not exist
+> REFRESH MATERIALIZED VIEW CONCURRENTLY mv;
+ERROR 55000 cannot refresh materialized view "public.mv" concurrently
+HINT Create a unique index with no WHERE clause on one or more columns of the materialized view.
+> CREATE UNIQUE INDEX mv_a ON mv (a);
+CREATE INDEX
+> REFRESH MATERIALIZED VIEW CONCURRENTLY mv;
+REFRESH MATERIALIZED VIEW
+> SELECT * FROM mv ORDER BY a;
+fields a@mv.1:23:4:-1,b@mv.2:25:-1:-1
+row 2,y
+row 3,z
+row 4,w
+SELECT 3
+> REFRESH MATERIALIZED VIEW CONCURRENTLY mv2;
+ERROR 0A000 CONCURRENTLY cannot be used when the materialized view is not populated
+> SELECT hasindexes FROM pg_matviews WHERE matviewname = 'mv';
+fields hasindexes@pg_matviews.5:16:1:-1
+row t
+SELECT 1
+> DROP TABLE t;
+ERROR 2BP01 cannot drop table t because other objects depend on it
+DETAIL materialized view mv depends on table t
+materialized view mv2 depends on table t
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP VIEW mv;
+ERROR 42809 "mv" is not a view
+HINT Use DROP MATERIALIZED VIEW to remove a materialized view.
+> DROP TABLE mv;
+ERROR 42809 "mv" is not a table
+HINT Use DROP MATERIALIZED VIEW to remove a materialized view.
+> DROP MATERIALIZED VIEW t;
+ERROR 42809 "t" is not a materialized view
+HINT Use DROP TABLE to remove a table.
+> DROP MATERIALIZED VIEW IF EXISTS nosuch;
+NOTICE 00000 materialized view "nosuch" does not exist, skipping
+DROP MATERIALIZED VIEW
+> CREATE VIEW v AS SELECT * FROM mv;
+CREATE VIEW
+> SELECT * FROM v ORDER BY a;
+fields a@v.1:23:4:-1,b@v.2:25:-1:-1
+row 2,y
+row 3,z
+row 4,w
+SELECT 3
+> DROP MATERIALIZED VIEW mv;
+ERROR 2BP01 cannot drop materialized view mv because other objects depend on it
+DETAIL view v depends on materialized view mv
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP MATERIALIZED VIEW mv CASCADE;
+NOTICE 00000 drop cascades to view v
+DROP MATERIALIZED VIEW
+> DROP MATERIALIZED VIEW mv2, mv3;
+DROP MATERIALIZED VIEW
+> SELECT count(*) FROM pg_matviews;
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE UNLOGGED MATERIALIZED VIEW mvu AS SELECT 1;
+ERROR 0A000 materialized views cannot be unlogged
+> CREATE TEMP MATERIALIZED VIEW mvt AS SELECT 1;
+ERROR 42601 syntax error at or near "MATERIALIZED" at 13
+> CREATE MATERIALIZED VIEW mvs AS SELECT a FROM t;
+SELECT 4
+> ALTER MATERIALIZED VIEW mvs RENAME TO mvs2;
+ALTER MATERIALIZED VIEW
+> ALTER MATERIALIZED VIEW mvs2 RENAME COLUMN a TO aa;
+ALTER MATERIALIZED VIEW
+> SELECT * FROM mvs2 ORDER BY aa;
+fields aa@mvs2.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> ALTER TABLE mvs2 RENAME TO mvs3;
+ALTER TABLE
+> ALTER MATERIALIZED VIEW t RENAME TO t2;
+ERROR 42809 "t" is not a materialized view
+> CREATE MATERIALIZED VIEW mvp AS SELECT a FROM t WHERE a = $1;
+ERROR 42P02 there is no parameter $1 at 59
+> BEGIN;
+BEGIN
+> CREATE MATERIALIZED VIEW mvx AS SELECT a FROM t;
+SELECT 4
+> INSERT INTO t VALUES (5, 'v');
+INSERT 0 1
+> REFRESH MATERIALIZED VIEW mvx;
+REFRESH MATERIALIZED VIEW
+> SELECT count(*) FROM mvx;
+fields count:20:8:-1
+row 5
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM pg_matviews;
+fields count:20:8:-1
+row 1
+SELECT 1

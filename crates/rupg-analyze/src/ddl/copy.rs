@@ -77,6 +77,16 @@ pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Co
     match kind {
         b'r' => {}
         b'p' => partitions = Some(copy_partitions(env, relid, &name)?),
+        b'm' => {
+            let rel = env.catalog().and_then(|c| c.relation(relid));
+            if rel.and_then(|r| r.view.as_ref()).is_some_and(|v| !v.populated) {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    format!("cannot copy from unpopulated materialized view \"{name}\""),
+                )
+                .with_hint("Use the REFRESH MATERIALIZED VIEW command."));
+            }
+        }
         b'f' => {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,

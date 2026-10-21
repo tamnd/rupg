@@ -201,7 +201,10 @@ fn init_privs<'a>(
             }
         }
         for rel in catalog.relations() {
-            let kind = matches!(rel.kind, RelKind::Table | RelKind::View | RelKind::Sequence);
+            let kind = matches!(
+                rel.kind,
+                RelKind::Table | RelKind::View | RelKind::Sequence | RelKind::MatView
+            );
             if let (true, true, Some(acl)) = (rel.oid < limit, kind, &rel.acl) {
                 add(rel.oid, pg_class.oid, 0, text_array(acl));
             }
@@ -358,9 +361,9 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     catalog
         .relations()
         .map(|rel| {
-            let heap = matches!(rel.kind, RelKind::Table | RelKind::Toast);
+            let heap = matches!(rel.kind, RelKind::Table | RelKind::Toast | RelKind::MatView);
             let (am, pages, tuples) = match rel.kind {
-                RelKind::Table | RelKind::Toast => (HEAP, 0, -1.0),
+                RelKind::Table | RelKind::Toast | RelKind::MatView => (HEAP, 0, -1.0),
                 RelKind::Index => {
                     rel.index.as_ref().map_or((0, 1, 0.0), |i| (i.method, i.pages, 0.0))
                 }
@@ -431,11 +434,17 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 )
                 .set("relrowsecurity", Value::Bool(false))
                 .set("relforcerowsecurity", Value::Bool(false))
-                .set("relispopulated", Value::Bool(true))
+                .set("relispopulated", Value::Bool(rel.view.as_ref().is_none_or(|v| v.populated)))
                 .set(
                     "relreplident",
                     code(match rel.replica_identity {
-                        0 if matches!(rel.kind, RelKind::Table | RelKind::Partitioned) => 'd',
+                        0 if matches!(
+                            rel.kind,
+                            RelKind::Table | RelKind::Partitioned | RelKind::MatView
+                        ) =>
+                        {
+                            'd'
+                        }
                         0 => 'n',
                         c => char::from(c),
                     }),

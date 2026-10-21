@@ -1101,6 +1101,10 @@ impl Env for Reader<'_> {
         self.settings().get("allow_system_table_mods").as_deref() == Some("on")
     }
 
+    fn filling(&self) -> u32 {
+        self.conn.map_or(0, |conn| conn.filling.get())
+    }
+
     fn sequence_row(&self, file: u32) -> Option<SequenceData> {
         rupg_func::Session::sequence_row(self, file)
     }

@@ -240,7 +240,11 @@ pub(crate) fn column_name(oid: u32, number: i32, session: &dyn Session) -> Optio
                 rel.column(number)?.name.as_str()
             } else if matches!(
                 rel.kind,
-                RelKind::Table | RelKind::Partitioned | RelKind::Toast | RelKind::Sequence
+                RelKind::Table
+                    | RelKind::Partitioned
+                    | RelKind::Toast
+                    | RelKind::Sequence
+                    | RelKind::MatView
             ) {
                 SYSTEM_COLUMNS.get(usize::try_from(-i32::from(number) - 1).ok()?)?
             } else {

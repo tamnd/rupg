@@ -451,9 +451,11 @@ fn attributes_of(relid: u32, session: &dyn Session) -> Vec<Attribute<'_>> {
     }
     let Some(rel) = session.catalog().and_then(|c| c.relation(relid)) else { return Vec::new() };
     let system: &[(&str, i16)] = match rel.kind {
-        RelKind::Table | RelKind::Sequence | RelKind::Toast | RelKind::Partitioned => {
-            &SYSTEM_COLUMNS
-        }
+        RelKind::Table
+        | RelKind::Sequence
+        | RelKind::Toast
+        | RelKind::Partitioned
+        | RelKind::MatView => &SYSTEM_COLUMNS,
         RelKind::Index | RelKind::PartitionedIndex | RelKind::View | RelKind::Composite => &[],
     };
     let system =

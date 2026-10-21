@@ -2,7 +2,9 @@
 //!
 //! The catalog keeps the text of the statement and the schemas of `search_path`, and the analyzer reads the query again each time a query uses the view. The rule of the view depends on the relations and the columns that the query reads, as `recordDependencyOnExpr` records them.
 
-use rupg_catalog::{Catalog, Column, MAX_COLUMNS, NewRelation, ObjRef, PG_CLASS, PG_PROC, PG_TYPE};
+use rupg_catalog::{
+    Catalog, Column, MAX_COLUMNS, NewRelation, ObjRef, PG_CLASS, PG_PROC, PG_TYPE, RelKind,
+};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{Node, ViewCheckOption, ViewStmt};
@@ -114,7 +116,7 @@ impl Definer<'_, '_> {
                 return Err(not_a_view(&name));
             };
             let old = match self.catalog.relation(view) {
-                Some(rel) if rel.view.is_some() => rel.columns.clone(),
+                Some(rel) if rel.kind == RelKind::View => rel.columns.clone(),
                 _ => return Err(not_a_view(&name)),
             };
             check_view_columns(&columns, &old)?;

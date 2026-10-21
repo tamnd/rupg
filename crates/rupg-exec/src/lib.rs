@@ -1336,7 +1336,8 @@ impl Plan {
                 format!("cannot execute {name} in a read-only transaction"),
             ));
         }
-        check_row_marks(&self.query, session)
+        check_row_marks(&self.query, session)?;
+        scan::check_scannable(&self.query, session)
     }
 
     /// Runs the query and gives its rows. For an `INSERT`, the rows are the new rows of the table after the checks of its constraints. For an `UPDATE`, each new row ends with the ID of the version of the old row, and for a `DELETE` each row has only that ID.
@@ -1475,7 +1476,7 @@ pub fn trigger_when(
     Ok(matches!(rows.first().and_then(|row| row.first()), Some(Value::Bool(true))))
 }
 
-/// The checks of `ExecCheckXactReadOnly` and `CheckValidRowMarkRel` for the tables that `FOR UPDATE` or `FOR SHARE` locks: a read-only transaction cannot lock a row, and a sequence has no rows to lock.
+/// The checks of `ExecCheckXactReadOnly` and `CheckValidRowMarkRel` for the tables that `FOR UPDATE` or `FOR SHARE` locks: a read-only transaction cannot lock a row, and a sequence or a materialized view has no rows to lock.
 fn check_row_marks(query: &Query, session: &dyn Session) -> Result<()> {
     let mut tables = Vec::new();
     rupg_analyze::locked_tables(query, &mut tables);
@@ -1492,14 +1493,16 @@ fn check_row_marks(query: &Query, session: &dyn Session) -> Result<()> {
     }
     let catalog = session.catalog();
     for oid in tables {
-        if let Some(relation) = catalog.and_then(|c| c.relation(oid))
-            && relation.kind == rupg_catalog::RelKind::Sequence
-        {
-            return Err(Error::new(
-                SqlState::WRONG_OBJECT_TYPE,
-                format!("cannot lock rows in sequence \"{}\"", relation.name),
-            ));
-        }
+        let Some(relation) = catalog.and_then(|c| c.relation(oid)) else { continue };
+        let word = match relation.kind {
+            rupg_catalog::RelKind::Sequence => "sequence",
+            rupg_catalog::RelKind::MatView => "materialized view",
+            _ => continue,
+        };
+        return Err(Error::new(
+            SqlState::WRONG_OBJECT_TYPE,
+            format!("cannot lock rows in {word} \"{}\"", relation.name),
+        ));
     }
     Ok(())
 }

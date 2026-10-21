@@ -127,6 +127,10 @@ pub trait Env {
     fn allow_system_table_mods(&self) -> bool {
         false
     }
+    /// The OID of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. Only the `INSERT` that fills it can write it, and only there its query takes its place.
+    fn filling(&self) -> u32 {
+        0
+    }
     /// The row of the file of a sequence as the sessions changed it, or `None` when no session changed it.
     fn sequence_row(&self, file: u32) -> Option<rupg_catalog::SequenceData> {
         let _ = file;
@@ -334,9 +338,9 @@ impl<'a> Analyzer<'a> {
     }
 }
 
-/// The query of a view of the catalog, from the text of the view and the `search_path` that the view keeps, or `None` when the catalog has no view with the OID. `pg_get_viewdef` shows this query.
+/// The query of a view or of a materialized view of the catalog, from the text of the view and the `search_path` that the view keeps, or `None` when the catalog has no view with the OID. `pg_get_viewdef` shows this query.
 pub fn view_query(env: &dyn Env, oid: u32) -> Result<Option<Query>> {
-    Analyzer::new(env, &Params::default()).view_query(oid)
+    Analyzer::new(env, &Params::default()).stored_query(oid)
 }
 
 /// The foreign keys that a write of the kind `kind` of the table `table` checks, in the order of the names of their triggers. A leaf partition checks them for its rows of an `UPDATE` or a `DELETE` of its partitioned table.

@@ -31,7 +31,7 @@ struct Kind {
 }
 
 /// `dropmsgstringarray`, without the kinds that rupg does not have.
-const KINDS: [Kind; 5] = [
+const KINDS: [Kind; 6] = [
     Kind {
         code: b'r',
         missing_state: SqlState::UNDEFINED_TABLE,
@@ -66,6 +66,13 @@ const KINDS: [Kind; 5] = [
         word: "type",
         article: "a type",
         hint: "Use DROP TYPE to remove a type.",
+    },
+    Kind {
+        code: b'm',
+        missing_state: SqlState::UNDEFINED_TABLE,
+        word: "materialized view",
+        article: "a materialized view",
+        hint: "Use DROP MATERIALIZED VIEW to remove a materialized view.",
     },
 ];
 
@@ -127,6 +134,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_TYPE | ObjectType::OBJECT_DOMAIN => self.find_types(stmt)?,
             ObjectType::OBJECT_TABLE
             | ObjectType::OBJECT_VIEW
+            | ObjectType::OBJECT_MATVIEW
             | ObjectType::OBJECT_INDEX
             | ObjectType::OBJECT_SEQUENCE => self.find_relations(stmt)?,
             ObjectType::OBJECT_TSPARSER
@@ -163,6 +171,7 @@ impl Definer<'_, '_> {
             ObjectType::OBJECT_INDEX => &KINDS[3],
             ObjectType::OBJECT_SEQUENCE => &KINDS[1],
             ObjectType::OBJECT_VIEW => &KINDS[2],
+            ObjectType::OBJECT_MATVIEW => &KINDS[5],
             _ => &KINDS[0],
         };
         let mut objects = Vec::new();
@@ -516,6 +525,7 @@ impl Definer<'_, '_> {
                     RelKind::Composite => b'c',
                     RelKind::Table => b'r',
                     RelKind::Partitioned => b'p',
+                    RelKind::MatView => b'm',
                 };
                 (code, rel.namespace, rel.name.as_str())
             }
