@@ -8,6 +8,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `MERGE` into a partitioned table and into a partition. Each action goes to the leaf partitions: an update can move a row to another leaf, an insert goes to the leaf that takes the row, and the triggers of the leaves fire in the order of the join. A row that moves is in the transition tables of `DELETE` and of `INSERT`, as in PostgreSQL. `RETURNING` can read `tableoid` (#510).
 - `pg_identify_object(oid, oid, integer)`. It gives the type, the schema, the name and the identity of an object, as in PostgreSQL. The identity always has the schema, and an object that does not exist gives only its type. Liquibase calls this function to read the dependencies of the objects of a schema.
+- Partitions whose columns are in another order than the columns of the parent table, or that have dropped columns. `CREATE TABLE ... PARTITION OF` a table with a dropped column and `ATTACH PARTITION` of such a table now work. The check constraints, the not-null constraints, the indexes and the conditions of the triggers that a partition takes from its parent use the numbers of the columns of the partition. `RENAME COLUMN` of a partitioned table renames the column in its partitions too (#NNN).
 
 ### Fixed
 

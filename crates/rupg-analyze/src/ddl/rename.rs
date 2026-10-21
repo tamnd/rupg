@@ -132,11 +132,32 @@ impl Definer<'_, '_> {
         Ok(Some(Target { oid, kind, name: name.to_string(), namespace }))
     }
 
-    /// `renameatt` and `renameatt_internal`: the new name of a column of a table, a view, an index or a composite type.
+    /// `renameatt`: the new name of a column of a table, a view, an index or a composite type. The column of a partitioned table gets the new name in each of its partitions first, at each level, and with `ONLY` a table with partitions cannot rename a column.
     fn rename_column(&mut self, stmt: &RenameStmt, newname: &str) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let Some(target) = self.rename_target(&rv, stmt.missing_ok)? else { return Ok(()) };
         let column = stmt.subname.as_deref().unwrap_or_default();
+        if rv.inh {
+            for child in self.all_inheritors(target.oid) {
+                self.rename_one_column(&child, column, newname, 1)?;
+            }
+        } else if !self.catalog.partitions(target.oid).is_empty() {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                format!("inherited column \"{column}\" must be renamed in child tables too"),
+            ));
+        }
+        self.rename_one_column(&target, column, newname, 0)
+    }
+
+    /// `renameatt_internal` for one relation. A column that the relation takes from more than `parents` parent tables cannot get a new name.
+    fn rename_one_column(
+        &mut self,
+        target: &Target,
+        column: &str,
+        newname: &str,
+        parents: i16,
+    ) -> Result<()> {
         let rel = self.catalog.relation(target.oid);
         // A composite type has no system columns.
         let system = |name: &str| target.kind != b'c' && system_column(name).is_some();
@@ -152,6 +173,12 @@ impl Definer<'_, '_> {
                 format!("column \"{column}\" does not exist"),
             ));
         };
+        if rel.and_then(|r| r.column(number)).is_some_and(|c| c.inhcount > parents) {
+            return Err(Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                format!("cannot rename inherited column \"{column}\""),
+            ));
+        }
         // `check_for_column_name_collision`.
         if system(newname) {
             return Err(Error::new(

@@ -7,6 +7,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{AlterTableCmd, AlterTableType, Node, PartitionBoundSpec, RangeVar};
 
 use super::alter::Target;
+use super::attmap::AttMap;
 use super::comment::not_owner;
 use super::drop::owner_word;
 use super::partition_index::same_definition;
@@ -233,14 +234,6 @@ impl Definer<'_, '_> {
             }
             merged.push((number, parent_number, own.inhcount));
         }
-        // A partition of rupg has the columns of its parent in the same order, with no dropped columns.
-        let dropped = |r: &Relation| r.columns.iter().any(|c| c.dropped);
-        if dropped(rel) || dropped(parent) || merged.iter().any(|&(own, up, _)| own != up) {
-            return Err(not_yet(
-                "ATTACH PARTITION of a table whose columns are not in the order of the parent",
-                None,
-            ));
-        }
         for (number, up, inhcount) in merged {
             // A partition has the identity of the column of its parent.
             let identity = parent.column(up).map_or(0, |c| c.identity);
@@ -255,7 +248,7 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `MergeConstraintsIntoExisting`: each check constraint and not-null constraint of the parent, in the order of their names, must be in the partition with the same definition. The constraints of the partition then come from the parent.
+    /// `MergeConstraintsIntoExisting`: each check constraint and not-null constraint of the parent, in the order of their names, must be in the partition with the same definition, with the numbers of the columns of the partition. The constraints of the partition then come from the parent.
     fn merge_constraints(&mut self, rel: &Relation, parent: &Relation) -> Result<()> {
         let mut wanted: Vec<_> = self
             .catalog
@@ -266,6 +259,7 @@ impl Definer<'_, '_> {
         wanted.sort_by(|a, b| a.name.cmp(&b.name));
         let mut own: Vec<_> = self.catalog.constraints_of(rel.oid).cloned().collect();
         own.sort_by(|a, b| a.name.cmp(&b.name));
+        let map = AttMap::by_name(parent, rel);
         let mut merged = Vec::new();
         for con in &wanted {
             let column = con.keys.first().and_then(|&n| parent.column(n)).map(|c| c.name.as_str());
@@ -286,11 +280,12 @@ impl Definer<'_, '_> {
                     format!("child table is missing constraint \"{}\"", con.name),
                 ));
             };
+            let expr = con.expr.as_deref().map(|text| map.text(text)).transpose()?;
             if con.kind == ConKind::Check
                 && (found.deferrable != con.deferrable
                     || found.deferred != con.deferred
                     || without_locations(found.expr.as_deref())
-                        != without_locations(con.expr.as_deref()))
+                        != without_locations(expr.as_deref()))
             {
                 return Err(Error::new(
                     SqlState::DATATYPE_MISMATCH,
@@ -566,7 +561,8 @@ impl Definer<'_, '_> {
             )
             .with_detail(detail)
         };
-        if !same_definition(&info, &parent) {
+        let wanted = self.att_map(parent_table, table.oid)?.index(&parent)?;
+        if !same_definition(&info, &wanted) {
             return Err(invalid("The index definitions do not match.".into()));
         }
         let index_constraint = |table: u32, index: u32| {

@@ -37,6 +37,8 @@ struct Leaf {
     armed: Vec<(i16, Triggers)>,
     /// The name of the leaf with its schema.
     qualified: String,
+    /// The type of each column of the partitioned table of the statement, for the detail of an error.
+    root_types: Vec<u32>,
 }
 
 /// The routing of the rows of a statement into the leaf partitions of a partitioned table, and the rows of each leaf that the statement did not write yet.
@@ -98,7 +100,9 @@ impl Routing {
         let fired = conn.leaf_before((&leaf.fire, shape), rows, &leaf.qualified, &mut stays)?;
         let Some(values) = fired else { return Ok(None) };
         let checked = leaf_row(leaf, &values, reader)?;
-        router.check_row(oid, &checked, reader)?;
+        router
+            .check_row(oid, &checked, reader)
+            .map_err(|e| root_detail(leaf, &checked, e, reader))?;
         Ok(Some((at, checked)))
     }
 
@@ -511,7 +515,9 @@ impl Connection {
                 if let Some(values) = values {
                     let checked = leaf_row(target, &values, reader)?;
                     if target.fire_of(TRIGGER_INSERT).is_some_and(Triggers::before_rows) {
-                        router.check_row(target.oid, &checked, reader)?;
+                        router
+                            .check_row(target.oid, &checked, reader)
+                            .map_err(|e| root_detail(target, &checked, e, reader))?;
                     }
                     item.to = Some((to, checked));
                 }
@@ -723,8 +729,24 @@ fn leaf_row(leaf: &Leaf, values: &[Value], reader: &Reader<'_>) -> Result<Vec<Va
     let params: Vec<Value> =
         leaf.live.iter().map(|&i| values.get(i).cloned().unwrap_or(Value::Null)).collect();
     let checked = leaf.plan.run_unchecked(&params, reader)?;
-    let mut rows = leaf.plan.check(checked, reader)?;
+    let mut rows =
+        leaf.plan.check(checked, reader).map_err(|e| root_detail(leaf, values, e, reader))?;
     rows.pop().ok_or_else(|| Error::internal("a check of a row with no row"))
+}
+
+/// `ExecConstraints` and `ExecPartitionCheckEmitError` for a row of a leaf that a statement on the partitioned table writes: the detail of the error shows the row with the columns of the partitioned table, as `execute_attr_map_slot` gives it.
+fn root_detail(leaf: &Leaf, row: &[Value], error: Error, reader: &Reader<'_>) -> Error {
+    let state = error.state();
+    if !matches!(state, SqlState::CHECK_VIOLATION | SqlState::NOT_NULL_VIOLATION)
+        || !error.detail().is_some_and(|d| d.starts_with("Failing row contains"))
+    {
+        return error;
+    }
+    let shown = up(leaf, row, leaf.root_types.len());
+    match rupg_exec::failing_row(&shown, &leaf.root_types, reader) {
+        Ok(detail) => error.with_detail(detail),
+        Err(_) => error,
+    }
 }
 
 /// True when a foreign key references the table `oid` or is a constraint of it.
@@ -753,6 +775,10 @@ fn leaf(
         armed(catalog, reader, oid, event)?
     };
     let live: Vec<usize> = (0..rel.columns.len()).filter(|&i| !rel.columns[i].dropped).collect();
+    let root_types = catalog
+        .relation(root)
+        .map(|r| r.columns.iter().map(|c| c.ty).collect())
+        .unwrap_or_default();
     let up = match catalog.relation(root) {
         Some(parent) => rel
             .columns
@@ -802,6 +828,7 @@ fn leaf(
         event,
         armed: Vec::new(),
         qualified,
+        root_types,
     })
 }
 

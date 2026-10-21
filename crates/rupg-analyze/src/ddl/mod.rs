@@ -4,6 +4,7 @@ mod alter;
 mod alter_column;
 mod alter_function;
 mod alter_type;
+mod attmap;
 mod cluster;
 mod comment;
 mod copy;
