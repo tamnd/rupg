@@ -1,4 +1,4 @@
-//! The equivalence classes of the `=` conditions with a constant, as `process_equivalence`, `reconsider_outer_join_clauses` and `generate_base_implied_equalities_const` make them. A class with a constant gives each of its expressions a condition of its own with the constant, and its conditions of joins go.
+//! The equivalence classes of the `=` conditions, as `process_equivalence`, `reconsider_outer_join_clauses` and `generate_base_implied_equalities_const` make them. A class with a constant gives each of its expressions a condition of its own with the constant, and its conditions of joins go. A class with no constant and more than one condition gives each join one condition, as `generate_join_implied_equalities` makes it.
 
 use std::borrow::Cow;
 use std::collections::BTreeSet;
@@ -47,6 +47,74 @@ pub(super) struct Found<'q> {
     pub(super) joined: Vec<&'q Expr>,
     /// `ec_relids`: the relations of the members of each class.
     pub(super) spans: Vec<BTreeSet<usize>>,
+    /// The classes with no constant whose conditions the joins make again.
+    pub(super) classes: Vec<Joined<'q>>,
+}
+
+/// A class with no constant whose conditions of joins the joins make again. Each member reads one relation, and no two members read the same relation.
+#[derive(Debug)]
+pub(super) struct Joined<'q> {
+    /// The members, each with its relation.
+    members: Vec<(&'q Expr, usize)>,
+    families: Vec<u32>,
+}
+
+impl<'q> Joined<'q> {
+    /// `generate_join_implied_equalities_normal`: the condition `outer = inner` of a join when each side has a member of the class. The members are the first pair with the best score: one point for each member that is a column, and one for an operator that a hash join can use.
+    pub(super) fn condition(
+        &self,
+        outer: &BTreeSet<usize>,
+        inner: &BTreeSet<usize>,
+    ) -> Option<Qual<'q>> {
+        let side = |rels: &BTreeSet<usize>| -> Vec<(&'q Expr, usize)> {
+            self.members.iter().filter(|(_, r)| rels.contains(r)).copied().collect()
+        };
+        let (outers, inners) = (side(outer), side(inner));
+        let mut best: Option<(usize, Expr, usize, usize)> = None;
+        'outer: for &(o, ro) in &outers {
+            for &(i, ri) in &inners {
+                let Some(expr) = equality(&self.families, o, i) else { continue };
+                let hash = exprs::binary(&expr).is_some_and(|(op, _, _)| exprs::can_hash(op));
+                let score =
+                    usize::from(is_column(o)) + usize::from(is_column(i)) + usize::from(hash);
+                if best.as_ref().is_none_or(|b| score > b.0) {
+                    best = Some((score, expr, ro, ri));
+                    if score == 3 {
+                        break 'outer;
+                    }
+                }
+            }
+        }
+        let (_, expr, ro, ri) = best?;
+        Some(Qual::implied(expr, BTreeSet::from([ro, ri])))
+    }
+}
+
+/// True for a column, also with a `RelabelType` over it.
+fn is_column(expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Var(_) => true,
+        ExprKind::Relabel(arg, _) => matches!(arg.kind, ExprKind::Var(_)),
+        _ => false,
+    }
+}
+
+/// The class as a class whose conditions of joins the joins make again: a class with no constant and more than one condition, where each member reads one relation of the domain that no other member reads. A class of one condition keeps its condition.
+fn join_class<'q>(class: &Class<'q>, own: &BTreeSet<usize>) -> Option<Joined<'q>> {
+    if class.constant().is_some() || class.sources.len() < 2 {
+        return None;
+    }
+    let mut members: Vec<(&'q Expr, usize)> = Vec::new();
+    for &member in &class.members {
+        let rels = exprs::relations(member);
+        let mut each = rels.iter();
+        let (Some(&r), None) = (each.next(), each.next()) else { return None };
+        if has_sublink(member) || !own.contains(&r) || members.iter().any(|&(_, o)| o == r) {
+            return None;
+        }
+        members.push((member, r));
+    }
+    Some(Joined { members, families: class.families.clone() })
 }
 
 /// Makes the conditions of the equivalence classes with a constant of the join domain of the tree, and then of the domains below it. `top` is true for the domain of the whole query. The result is false when two constants of a class of the top domain are not equal, so that no row passes.
@@ -58,20 +126,24 @@ pub(super) fn domain<'q>(tree: &mut Tree<'q>, top: bool, out: &mut Found<'q>) ->
     for class in &classes {
         out.spans.push(class.members.iter().flat_map(|m| exprs::relations(m)).collect());
     }
-    let joined = &mut out.joined;
     let mut own = BTreeSet::new();
     own_rels(tree, &mut own);
-    reconsider(tree, &classes, joined);
+    reconsider(tree, &classes, &mut out.joined);
     for class in &classes {
         match generate(class, &own, top) {
             Some(Generated::Never) => return false,
             Some(Generated::Quals(quals)) => {
-                remove(tree, &class.sources, joined);
+                remove(tree, &class.sources, &mut out.joined);
                 for qual in quals {
                     place(tree, qual);
                 }
             }
-            None => {}
+            None => {
+                if let Some(joins) = join_class(class, &own) {
+                    remove(tree, &class.sources, &mut out.joined);
+                    out.classes.push(joins);
+                }
+            }
         }
     }
     below(tree, out);

@@ -4,6 +4,7 @@ use std::collections::{BTreeMap, BTreeSet};
 
 use rupg_analyze::JoinKind;
 
+use super::classes::{Found, Joined};
 use super::paths::Paths;
 use super::{Candidate, Qual, Rel, Stats, choose, finish, join_rels, join_rows, lateral_rels};
 use crate::{Level, exprs};
@@ -34,6 +35,8 @@ struct Problem<'a, 'q> {
     pool: &'a [Qual<'q>],
     /// The relations of each equivalence class.
     spans: &'a [BTreeSet<usize>],
+    /// The classes whose conditions of joins the joins make again.
+    classes: &'a [Joined<'q>],
     stats: &'a Stats,
     sets: Vec<Set<'q>>,
     /// The set of each group of items.
@@ -47,18 +50,20 @@ pub(super) fn search<'q>(
     level: &Level<'q>,
     items: Vec<Rel<'q>>,
     pool: &[Qual<'q>],
-    spans: &[BTreeSet<usize>],
+    found: &Found<'q>,
     stats: &Stats,
 ) -> Rel<'q> {
     let n = items.len();
+    let classes = &found.classes;
     if n >= GEQO_THRESHOLD {
-        return in_order(level, items, pool, stats);
+        return in_order(level, items, pool, classes, stats);
     }
     let domain: BTreeSet<usize> = items.iter().flat_map(|r| r.rels.iter().copied()).collect();
     let mut problem = Problem {
         level,
         pool,
-        spans,
+        spans: &found.spans,
+        classes,
         stats,
         sets: Vec::new(),
         index: BTreeMap::new(),
@@ -84,7 +89,7 @@ pub(super) fn search<'q>(
     for k in 2..=n {
         problem.one_level(k);
         if problem.levels[k].is_empty() {
-            return in_order(level, items, pool, stats);
+            return in_order(level, items, pool, classes, stats);
         }
         problem.set_cheapest(k);
     }
@@ -98,20 +103,22 @@ fn in_order<'q>(
     level: &Level<'q>,
     items: Vec<Rel<'q>>,
     pool: &[Qual<'q>],
+    classes: &[Joined<'q>],
     stats: &Stats,
 ) -> Rel<'q> {
     let mut items = items.into_iter();
     let Some(mut out) = items.next() else { unreachable!("a join domain has two items or more") };
     for next in items {
-        let quals = between(pool, &out.rels, &next.rels);
+        let quals = between(pool, classes, &out.rels, &next.rels);
         out = join_rels(level, JoinKind::Inner, out, next, quals, Vec::new(), stats);
     }
     out
 }
 
-/// The conditions that a join of two sides tests: the conditions that need the relations of both sides.
+/// The conditions that a join of two sides tests: the conditions that need the relations of both sides, and then the condition of each class with a member on each side, as `build_joinrel_restrictlist`.
 fn between<'q>(
     pool: &[Qual<'q>],
+    classes: &[Joined<'q>],
     left: &BTreeSet<usize>,
     right: &BTreeSet<usize>,
 ) -> Vec<Qual<'q>> {
@@ -124,6 +131,7 @@ fn between<'q>(
         })
         .cloned()
         .collect();
+    quals.extend(classes.iter().filter_map(|c| c.condition(left, right)));
     quals.sort_by_key(|q| exprs::calls(&q.expr));
     quals
 }
@@ -142,7 +150,7 @@ impl<'q> Problem<'_, 'q> {
                 unreachable!("each join of two sets has a nested loop")
             };
             let (l, r) = (self.rel(outer).clone(), self.rel(inner).clone());
-            let quals = between(self.pool, &l.rels, &r.rels);
+            let quals = between(self.pool, self.classes, &l.rels, &r.rels);
             let mut rel = finish(self.level, &best, l, r, &quals, &[], self.sets[s].rows);
             rel.node.cost.width = self.stats.width(&rel.rels);
             self.sets[s].rel = Some(rel);
@@ -239,7 +247,7 @@ impl<'q> Problem<'_, 'q> {
         }
         let (outer, inner) = if a_reads_b { (b, a) } else { (a, b) };
         let (l, r) = (self.rel(outer), self.rel(inner));
-        let quals = between(self.pool, &l.rels, &r.rels);
+        let quals = between(self.pool, self.classes, &l.rels, &r.rels);
         let candidates = choose(self.level, JoinKind::Inner, l, r, &quals, &[], self.stats);
         if candidates.is_empty() {
             return;

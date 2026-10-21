@@ -5309,6 +5309,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_merge_keys.test")));
     }
 
+    /// `EXPLAIN` of joins whose conditions an equivalence class with no constant makes, as `generate_join_implied_equalities`: one condition for each class at each join, of the first members of the two sides, also for two tables that the query does not compare. `connection/plan_join_classes.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_join_classes() {
+        big_stack(|| script(include_str!("connection/plan_join_classes.test")));
+    }
+
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_constraintdef() {
