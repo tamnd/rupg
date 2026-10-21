@@ -1,0 +1,665 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (a int NOT NULL, b text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES IN (1, 2);
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES IN (3, 4) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE p21 PARTITION OF p2 FOR VALUES IN (3);
+CREATE TABLE
+> CREATE TABLE pd PARTITION OF p DEFAULT;
+CREATE TABLE
+> INSERT INTO p VALUES (1, 'a'), (3, 'b'), (9, 'c');
+INSERT 0 3
+> ALTER TABLE p ADD COLUMN c int DEFAULT 7;
+ALTER TABLE
+> SELECT attrelid::regclass::text AS tab, attname, attislocal, attinhcount, attnotnull, atthasdef FROM pg_attribute WHERE attrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') AND attnum > 0 ORDER BY 1, attnum;
+fields tab:25:-1:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,attnotnull@pg_attribute.12:16:1:-1,atthasdef@pg_attribute.13:16:1:-1
+row p,a,t,0,t,f
+row p,b,t,0,f,f
+row p,c,t,0,f,t
+row p1,a,f,1,t,f
+row p1,b,f,1,f,f
+row p1,c,f,1,f,t
+row p2,a,f,1,t,f
+row p2,b,f,1,f,f
+row p2,c,f,1,f,t
+row p21,a,f,1,t,f
+row p21,b,f,1,f,f
+row p21,c,f,1,f,t
+row pd,a,f,1,t,f
+row pd,b,f,1,f,f
+row pd,c,f,1,f,t
+SELECT 15
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,1,a,7
+row p21,3,b,7
+row pd,9,c,7
+SELECT 3
+> ALTER TABLE p1 ADD COLUMN d int;
+ERROR 42809 cannot add column to a partition
+> ALTER TABLE ONLY p ADD COLUMN d int;
+ERROR 42P16 column must be added to child tables too
+> ALTER TABLE p ADD COLUMN d int NOT NULL DEFAULT 0 CHECK (d >= 0);
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row p,p_a_not_null,n,t,0
+row p,p_d_check,c,t,0
+row p,p_d_not_null,n,t,0
+row p1,p_a_not_null,n,f,1
+row p1,p_d_check,c,f,1
+row p1,p_d_not_null,n,f,1
+row p2,p_a_not_null,n,f,1
+row p2,p_d_check,c,f,1
+row p2,p_d_not_null,n,f,1
+row p21,p_a_not_null,n,f,1
+row p21,p_d_check,c,f,1
+row p21,p_d_not_null,n,f,1
+row pd,p_a_not_null,n,f,1
+row pd,p_d_check,c,f,1
+row pd,p_d_not_null,n,f,1
+SELECT 15
+> ALTER TABLE p ADD COLUMN IF NOT EXISTS d int;
+NOTICE 42701 column "d" of relation "p" already exists, skipping
+ALTER TABLE
+> ALTER TABLE p ADD COLUMN e serial;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN c SET DEFAULT 8;
+ALTER TABLE
+> ALTER TABLE p1 ALTER COLUMN c SET DEFAULT 9;
+ALTER TABLE
+> SELECT adrelid::regclass::text AS tab, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1, 2;
+fields tab:25:-1:-1,pg_get_expr:25:-1:-1
+row p,0
+row p,8
+row p,nextval('p_e_seq'::regclass)
+row p1,0
+row p1,9
+row p1,nextval('p_e_seq'::regclass)
+row p2,0
+row p2,8
+row p2,nextval('p_e_seq'::regclass)
+row p21,0
+row p21,8
+row p21,nextval('p_e_seq'::regclass)
+row pd,0
+row pd,8
+row pd,nextval('p_e_seq'::regclass)
+SELECT 15
+> ALTER TABLE ONLY p ALTER COLUMN c DROP DEFAULT;
+ALTER TABLE
+> SELECT adrelid::regclass::text AS tab, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1, 2;
+fields tab:25:-1:-1,pg_get_expr:25:-1:-1
+row p,0
+row p,nextval('p_e_seq'::regclass)
+row p1,0
+row p1,9
+row p1,nextval('p_e_seq'::regclass)
+row p2,0
+row p2,8
+row p2,nextval('p_e_seq'::regclass)
+row p21,0
+row p21,8
+row p21,nextval('p_e_seq'::regclass)
+row pd,0
+row pd,8
+row pd,nextval('p_e_seq'::regclass)
+SELECT 14
+> ALTER TABLE p ALTER COLUMN c DROP DEFAULT;
+ALTER TABLE
+> SELECT adrelid::regclass::text AS tab, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1, 2;
+fields tab:25:-1:-1,pg_get_expr:25:-1:-1
+row p,0
+row p,nextval('p_e_seq'::regclass)
+row p1,0
+row p1,nextval('p_e_seq'::regclass)
+row p2,0
+row p2,nextval('p_e_seq'::regclass)
+row p21,0
+row p21,nextval('p_e_seq'::regclass)
+row pd,0
+row pd,nextval('p_e_seq'::regclass)
+SELECT 10
+> ALTER TABLE p1 DROP COLUMN c;
+ERROR 42P16 cannot drop inherited column "c"
+> ALTER TABLE ONLY p DROP COLUMN c;
+ERROR 42P16 cannot drop column from only the partitioned table when partitions exist
+HINT Do not specify the ONLY keyword.
+> ALTER TABLE p DROP COLUMN a;
+ERROR 42P16 cannot drop column "a" because it is part of the partition key of relation "p"
+> ALTER TABLE p ALTER COLUMN a TYPE bigint;
+ERROR 42P16 cannot alter column "a" because it is part of the partition key of relation "p" at 28
+> ALTER TABLE p1 ALTER COLUMN c TYPE bigint;
+ERROR 42P16 cannot alter inherited column "c" at 29
+> ALTER TABLE ONLY p ALTER COLUMN c TYPE bigint;
+ERROR 42P16 type of inherited column "c" must be changed in child tables too
+> ALTER TABLE p ALTER COLUMN c TYPE bigint;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN c TYPE text USING c::text || 'x';
+ALTER TABLE
+> SELECT attrelid::regclass::text AS tab, attname, atttypid::regtype FROM pg_attribute WHERE attrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') AND attname = 'c' ORDER BY 1;
+fields tab:25:-1:-1,attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1
+row p,c,text
+row p1,c,text
+row p2,c,text
+row p21,c,text
+row pd,c,text
+SELECT 5
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:25:-1:-1,d@p.4:23:4:-1,e@p.5:23:4:-1
+row p1,1,a,7x,0,1
+row p21,3,b,7x,0,2
+row pd,9,c,7x,0,3
+SELECT 3
+> ALTER TABLE p DROP COLUMN c;
+ALTER TABLE
+> SELECT attrelid::regclass::text AS tab, attname FROM pg_attribute WHERE attrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') AND attnum > 0 AND NOT attisdropped ORDER BY 1, attnum;
+fields tab:25:-1:-1,attname@pg_attribute.2:19:64:-1
+row p,a
+row p,b
+row p,d
+row p,e
+row p1,a
+row p1,b
+row p1,d
+row p1,e
+row p2,a
+row p2,b
+row p2,d
+row p2,e
+row p21,a
+row p21,b
+row p21,d
+row p21,e
+row pd,a
+row pd,b
+row pd,d
+row pd,e
+SELECT 20
+> ALTER TABLE p ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row p,p_a_not_null,n,t,0
+row p,p_b_not_null,n,t,0
+row p,p_d_check,c,t,0
+row p,p_d_not_null,n,t,0
+row p,p_e_not_null,n,t,0
+row p1,p_a_not_null,n,f,1
+row p1,p_b_not_null,n,f,1
+row p1,p_d_check,c,f,1
+row p1,p_d_not_null,n,f,1
+row p1,p_e_not_null,n,f,1
+row p2,p_a_not_null,n,f,1
+row p2,p_b_not_null,n,f,1
+row p2,p_d_check,c,f,1
+row p2,p_d_not_null,n,f,1
+row p2,p_e_not_null,n,f,1
+row p21,p_a_not_null,n,f,1
+row p21,p_b_not_null,n,f,1
+row p21,p_d_check,c,f,1
+row p21,p_d_not_null,n,f,1
+row p21,p_e_not_null,n,f,1
+row pd,p_a_not_null,n,f,1
+row pd,p_b_not_null,n,f,1
+row pd,p_d_check,c,f,1
+row pd,p_d_not_null,n,f,1
+row pd,p_e_not_null,n,f,1
+SELECT 25
+> ALTER TABLE p1 ALTER COLUMN b DROP NOT NULL;
+ERROR 42P16 column "b" is marked NOT NULL in parent table
+> ALTER TABLE ONLY p ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row p,p_a_not_null,n,t,0
+row p,p_d_check,c,t,0
+row p,p_d_not_null,n,t,0
+row p,p_e_not_null,n,t,0
+row p1,p_a_not_null,n,f,1
+row p1,p_b_not_null,n,t,0
+row p1,p_d_check,c,f,1
+row p1,p_d_not_null,n,f,1
+row p1,p_e_not_null,n,f,1
+row p2,p_a_not_null,n,f,1
+row p2,p_b_not_null,n,t,0
+row p2,p_d_check,c,f,1
+row p2,p_d_not_null,n,f,1
+row p2,p_e_not_null,n,f,1
+row p21,p_a_not_null,n,f,1
+row p21,p_b_not_null,n,f,1
+row p21,p_d_check,c,f,1
+row p21,p_d_not_null,n,f,1
+row p21,p_e_not_null,n,f,1
+row pd,p_a_not_null,n,f,1
+row pd,p_b_not_null,n,t,0
+row pd,p_d_check,c,f,1
+row pd,p_d_not_null,n,f,1
+row pd,p_e_not_null,n,f,1
+SELECT 24
+> ALTER TABLE p1 ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> ALTER TABLE ONLY p ALTER COLUMN b SET NOT NULL;
+ERROR 42P16 constraint must be added to child tables too
+HINT Do not specify the ONLY keyword.
+> ALTER TABLE p ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row p,p_a_not_null,n,t,0
+row p,p_b_not_null1,n,t,0
+row p,p_d_check,c,t,0
+row p,p_d_not_null,n,t,0
+row p,p_e_not_null,n,t,0
+row p1,p_a_not_null,n,f,1
+row p1,p_b_not_null,n,t,1
+row p1,p_d_check,c,f,1
+row p1,p_d_not_null,n,f,1
+row p1,p_e_not_null,n,f,1
+row p2,p_a_not_null,n,f,1
+row p2,p_b_not_null,n,t,1
+row p2,p_d_check,c,f,1
+row p2,p_d_not_null,n,f,1
+row p2,p_e_not_null,n,f,1
+row p21,p_a_not_null,n,f,1
+row p21,p_b_not_null,n,f,1
+row p21,p_d_check,c,f,1
+row p21,p_d_not_null,n,f,1
+row p21,p_e_not_null,n,f,1
+row pd,p_a_not_null,n,f,1
+row pd,p_b_not_null,n,t,1
+row pd,p_d_check,c,f,1
+row pd,p_d_not_null,n,f,1
+row pd,p_e_not_null,n,f,1
+SELECT 25
+> ALTER TABLE p ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row p,p_a_not_null,n,t,0
+row p,p_d_check,c,t,0
+row p,p_d_not_null,n,t,0
+row p,p_e_not_null,n,t,0
+row p1,p_a_not_null,n,f,1
+row p1,p_b_not_null,n,t,0
+row p1,p_d_check,c,f,1
+row p1,p_d_not_null,n,f,1
+row p1,p_e_not_null,n,f,1
+row p2,p_a_not_null,n,f,1
+row p2,p_b_not_null,n,t,0
+row p2,p_d_check,c,f,1
+row p2,p_d_not_null,n,f,1
+row p2,p_e_not_null,n,f,1
+row p21,p_a_not_null,n,f,1
+row p21,p_b_not_null,n,f,1
+row p21,p_d_check,c,f,1
+row p21,p_d_not_null,n,f,1
+row p21,p_e_not_null,n,f,1
+row pd,p_a_not_null,n,f,1
+row pd,p_b_not_null,n,t,0
+row pd,p_d_check,c,f,1
+row pd,p_d_not_null,n,f,1
+row pd,p_e_not_null,n,f,1
+SELECT 24
+> INSERT INTO p VALUES (4, NULL, 0);
+ERROR 23514 no partition of relation "p2" found for row
+DETAIL Partition key of the failing row contains (a) = (4).
+> ALTER TABLE p ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> ALTER TABLE p ADD CONSTRAINT p_b CHECK (b <> '');
+ALTER TABLE
+> ALTER TABLE p1 ADD CONSTRAINT p1_b CHECK (length(b) < 5);
+ALTER TABLE
+> ALTER TABLE ONLY p ADD CONSTRAINT p_b2 CHECK (b <> 'z');
+ERROR 42P16 constraint must be added to child tables too
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') AND contype = 'c' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row p,p_b,c,t,0
+row p,p_d_check,c,t,0
+row p1,p1_b,c,t,0
+row p1,p_b,c,f,1
+row p1,p_d_check,c,f,1
+row p2,p_b,c,f,1
+row p2,p_d_check,c,f,1
+row p21,p_b,c,f,1
+row p21,p_d_check,c,f,1
+row pd,p_b,c,f,1
+row pd,p_d_check,c,f,1
+SELECT 11
+> ALTER TABLE p ADD CONSTRAINT p_d CHECK (d > 0);
+ERROR 23514 check constraint "p_d" of relation "p1" is violated by some row
+> ALTER TABLE p1 DROP CONSTRAINT p_b;
+ERROR 42P16 cannot drop inherited constraint "p_b" of relation "p1"
+> ALTER TABLE ONLY p DROP CONSTRAINT p_b;
+ALTER TABLE
+> ALTER TABLE p DROP CONSTRAINT p_b;
+ERROR 42704 constraint "p_b" of relation "p" does not exist
+> ALTER TABLE p1 DROP CONSTRAINT p1_b;
+ALTER TABLE
+> ALTER TABLE p DROP CONSTRAINT nosuch;
+ERROR 42704 constraint "nosuch" of relation "p" does not exist
+> ALTER TABLE p DROP CONSTRAINT IF EXISTS nosuch;
+NOTICE 00000 constraint "nosuch" of relation "p" does not exist, skipping
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') AND contype = 'c' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row p,p_d_check,c,t,0
+row p1,p_b,c,t,0
+row p1,p_d_check,c,f,1
+row p2,p_b,c,t,0
+row p2,p_d_check,c,f,1
+row p21,p_b,c,f,1
+row p21,p_d_check,c,f,1
+row pd,p_b,c,t,0
+row pd,p_d_check,c,f,1
+SELECT 9
+> ALTER TABLE p ALTER COLUMN b SET STATISTICS 50;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN b SET STORAGE EXTERNAL;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN b SET COMPRESSION pglz;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN b SET (n_distinct = 5);
+ALTER TABLE
+> SELECT attrelid::regclass::text AS tab, attstattarget, attstorage, attcompression, attoptions FROM pg_attribute WHERE attrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') AND attname = 'b' ORDER BY 1;
+fields tab:25:-1:-1,attstattarget@pg_attribute.21:21:2:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1,attoptions@pg_attribute.23:1009:-1:-1
+row p,50,e,p,{n_distinct=5}
+row p1,50,e,,NULL
+row p2,50,e,,NULL
+row p21,50,e,,NULL
+row pd,50,e,,NULL
+SELECT 5
+> ALTER TABLE p SET (fillfactor = 50);
+ERROR 42809 cannot specify storage parameters for a partitioned table
+HINT Specify storage parameters for its leaf partitions instead.
+> ALTER TABLE p RESET (fillfactor);
+ALTER TABLE
+> ALTER TABLE p1 SET (fillfactor = 50);
+ALTER TABLE
+> CREATE ROLE alt_r;
+CREATE ROLE
+> ALTER TABLE p OWNER TO alt_r;
+ALTER TABLE
+> SELECT relname, relowner::regrole FROM pg_class WHERE relname IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relowner:4096:4:-1
+row p,alt_r
+row p1,postgres
+row p2,postgres
+row p21,postgres
+row pd,postgres
+SELECT 5
+> ALTER TABLE p OWNER TO CURRENT_USER;
+ALTER TABLE
+> ALTER TABLE p ADD PRIMARY KEY (a);
+ALTER TABLE
+> ALTER TABLE p REPLICA IDENTITY FULL;
+ALTER TABLE
+> ALTER TABLE p CLUSTER ON p_pkey;
+ERROR 42809 ALTER action CLUSTER ON cannot be performed on relation "p"
+DETAIL This operation is not supported for partitioned tables.
+> ALTER TABLE p SET WITHOUT CLUSTER;
+ERROR 42809 ALTER action SET WITHOUT CLUSTER cannot be performed on relation "p"
+DETAIL This operation is not supported for partitioned tables.
+> ALTER TABLE p ADD COLUMN f int UNIQUE;
+ERROR 0A000 UNIQUE constraint on partitioned table must include all partitioning columns
+DETAIL UNIQUE constraint on table "p" lacks column "a" which is part of the partition key.
+> ALTER TABLE p ADD UNIQUE (a, d);
+ALTER TABLE
+> SELECT c.relname, i.indisvalid, i.indrelid::regclass FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1,indrelid:2205:4:-1
+row p1_a_d_key,t,p1
+row p1_pkey,t,p1
+row p21_a_d_key,t,p21
+row p21_pkey,t,p21
+row p2_a_d_key,t,p2
+row p2_pkey,t,p2
+row p_a_d_key,t,p
+row p_pkey,t,p
+row pd_a_d_key,t,pd
+row pd_pkey,t,pd
+SELECT 10
+> ALTER TABLE p DROP CONSTRAINT p_pkey;
+ALTER TABLE
+> ALTER TABLE p1 DROP CONSTRAINT p1_pkey;
+ERROR 42704 constraint "p1_pkey" of relation "p1" does not exist
+> ALTER TABLE p DROP COLUMN f;
+ERROR 42703 column "f" of relation "p" does not exist
+> SELECT c.relname, i.indisvalid, i.indrelid::regclass FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid::regclass::text IN ('p', 'p1', 'p2', 'p21', 'pd') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1,indrelid:2205:4:-1
+row p1_a_d_key,t,p1
+row p21_a_d_key,t,p21
+row p2_a_d_key,t,p2
+row p_a_d_key,t,p
+row pd_a_d_key,t,pd
+SELECT 5
+> ALTER TABLE p ENABLE TRIGGER ALL;
+ALTER TABLE
+> ALTER TABLE p DROP COLUMN d, ADD COLUMN g int DEFAULT 1;
+ALTER TABLE
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,e@p.5:23:4:-1,g@p.6:23:4:-1
+row p1,1,a,1,1
+row p21,3,b,2,1
+row pd,9,c,3,1
+SELECT 3
+> DROP TABLE p;
+DROP TABLE
+> DROP ROLE alt_r;
+DROP ROLE
+> CREATE TABLE q (a int, b int, c text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE q1 PARTITION OF q FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE q2 PARTITION OF q FOR VALUES FROM (10) TO (20) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE q21 PARTITION OF q2 FOR VALUES IN (1, 2);
+CREATE TABLE
+> INSERT INTO q VALUES (1, 1, 'x'), (11, 2, 'y');
+INSERT 0 2
+> ALTER TABLE q DROP COLUMN b;
+ERROR 42P16 cannot drop column "b" because it is part of the partition key of relation "q2"
+> ALTER TABLE q ALTER COLUMN b TYPE bigint;
+ERROR 42P16 cannot alter column "b" because it is part of the partition key of relation "q2" at 28
+> ALTER TABLE ONLY q ADD CONSTRAINT q_c_nn NOT NULL c;
+ERROR 42P16 constraint must be added to child tables too
+> ALTER TABLE q ADD CONSTRAINT q_c_nn NOT NULL c;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text LIKE 'q%' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row q,q_c_nn,n,t,0
+row q1,q_c_nn,n,f,1
+row q2,q_c_nn,n,f,1
+row q21,q_c_nn,n,f,1
+SELECT 4
+> ALTER TABLE q1 ADD CONSTRAINT q_b CHECK (b > 0);
+ALTER TABLE
+> ALTER TABLE q ADD CONSTRAINT q_b CHECK (b > 0);
+NOTICE 00000 merging constraint "q_b" with inherited definition
+ALTER TABLE
+> ALTER TABLE q ADD CONSTRAINT q_b2 CHECK (b > 0) NO INHERIT;
+ERROR 42P16 cannot add NO INHERIT constraint to partitioned table "q"
+> ALTER TABLE q1 ADD CONSTRAINT q_c CHECK (c <> '');
+ALTER TABLE
+> ALTER TABLE q ADD CONSTRAINT q_c CHECK (c <> 'z');
+ERROR 42710 constraint "q_c" for relation "q1" already exists
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid::regclass::text LIKE 'q%' AND contype = 'c' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,pg_get_constraintdef:25:-1:-1
+row q,q_b,c,t,0,CHECK ((b > 0))
+row q1,q_b,c,f,1,CHECK ((b > 0))
+row q1,q_c,c,t,0,CHECK ((c <> ''::text))
+row q2,q_b,c,f,1,CHECK ((b > 0))
+row q21,q_b,c,f,1,CHECK ((b > 0))
+SELECT 5
+> ALTER TABLE q ALTER COLUMN b TYPE numeric;
+ERROR 42P16 cannot alter column "b" because it is part of the partition key of relation "q2" at 28
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid::regclass::text LIKE 'q%' AND contype = 'c' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,pg_get_constraintdef:25:-1:-1
+row q,q_b,c,t,0,CHECK ((b > 0))
+row q1,q_b,c,f,1,CHECK ((b > 0))
+row q1,q_c,c,t,0,CHECK ((c <> ''::text))
+row q2,q_b,c,f,1,CHECK ((b > 0))
+row q21,q_b,c,f,1,CHECK ((b > 0))
+SELECT 5
+> ALTER TABLE q1 DROP CONSTRAINT q_b;
+ERROR 42P16 cannot drop inherited constraint "q_b" of relation "q1"
+> ALTER TABLE q DROP CONSTRAINT q_b;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text LIKE 'q%' AND contype = 'c' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row q1,q_c,c,t,0
+SELECT 1
+> ALTER TABLE q ADD COLUMN e text COLLATE "C" DEFAULT 'e' NOT NULL;
+ALTER TABLE
+> ALTER TABLE q ADD COLUMN f int, ADD COLUMN g int DEFAULT 5;
+ALTER TABLE
+> ALTER TABLE q ALTER COLUMN f SET DEFAULT 3;
+ALTER TABLE
+> INSERT INTO q (a, b, c) VALUES (2, 1, 'z1');
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM q ORDER BY a;
+fields tableoid:2205:4:-1,a@q.1:23:4:-1,b@q.2:23:4:-1,c@q.3:25:-1:-1,e@q.4:25:-1:-1,f@q.5:23:4:-1,g@q.6:23:4:-1
+row q1,1,1,x,e,NULL,5
+row q1,2,1,z1,e,3,5
+row q21,11,2,y,e,NULL,5
+SELECT 3
+> SELECT attrelid::regclass::text AS tab, attname, attislocal, attinhcount, attnotnull, attcollation::regcollation FROM pg_attribute WHERE attrelid::regclass::text LIKE 'q%' AND attnum > 0 AND NOT attisdropped ORDER BY 1, attnum;
+fields tab:25:-1:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,attnotnull@pg_attribute.12:16:1:-1,attcollation:4191:4:-1
+row q,a,t,0,f,-
+row q,b,t,0,f,-
+row q,c,t,0,t,"default"
+row q,e,t,0,t,"C"
+row q,f,t,0,f,-
+row q,g,t,0,f,-
+row q1,a,f,1,f,-
+row q1,b,f,1,f,-
+row q1,c,f,1,t,"default"
+row q1,e,f,1,t,"C"
+row q1,f,f,1,f,-
+row q1,g,f,1,f,-
+row q2,a,f,1,f,-
+row q2,b,f,1,f,-
+row q2,c,f,1,t,"default"
+row q2,e,f,1,t,"C"
+row q2,f,f,1,f,-
+row q2,g,f,1,f,-
+row q21,a,f,1,f,-
+row q21,b,f,1,f,-
+row q21,c,f,1,t,"default"
+row q21,e,f,1,t,"C"
+row q21,f,f,1,f,-
+row q21,g,f,1,f,-
+SELECT 24
+> ALTER TABLE q ALTER COLUMN e SET STORAGE MAIN, ALTER COLUMN e SET STATISTICS 10;
+ALTER TABLE
+> ALTER TABLE ONLY q ALTER COLUMN f SET STATISTICS 20;
+ALTER TABLE
+> SELECT attrelid::regclass::text AS tab, attname, attstattarget, attstorage FROM pg_attribute WHERE attrelid::regclass::text LIKE 'q%' AND attname IN ('e', 'f') ORDER BY 1, attnum;
+fields tab:25:-1:-1,attname@pg_attribute.2:19:64:-1,attstattarget@pg_attribute.21:21:2:-1,attstorage@pg_attribute.10:18:1:-1
+row q,e,10,m
+row q,f,20,p
+row q1,e,10,m
+row q1,f,NULL,p
+row q2,e,10,m
+row q2,f,NULL,p
+row q21,e,10,m
+row q21,f,NULL,p
+SELECT 8
+> ALTER TABLE q21 ALTER COLUMN b SET DEFAULT 1;
+ALTER TABLE
+> ALTER TABLE q2 ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE
+> ALTER TABLE q ALTER COLUMN c TYPE varchar(10);
+ALTER TABLE
+> ALTER TABLE q ADD CONSTRAINT q_uk UNIQUE (a);
+ERROR 0A000 UNIQUE constraint on partitioned table must include all partitioning columns
+DETAIL UNIQUE constraint on table "q2" lacks column "b" which is part of the partition key.
+> ALTER TABLE q ADD PRIMARY KEY (a, b);
+ALTER TABLE
+> ALTER TABLE q ALTER COLUMN b TYPE int;
+ERROR 42P16 cannot alter column "b" because it is part of the partition key of relation "q2" at 28
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text LIKE 'q%' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row q,q_a_not_null,n,t,0
+row q,q_b_not_null,n,t,0
+row q,q_c_nn,n,t,0
+row q,q_e_not_null,n,t,0
+row q,q_pkey,p,t,0
+row q1,q1_pkey,p,f,1
+row q1,q_a_not_null,n,f,1
+row q1,q_b_not_null,n,f,1
+row q1,q_c,c,t,0
+row q1,q_c_nn,n,f,1
+row q1,q_e_not_null,n,f,1
+row q2,q2_pkey,p,f,1
+row q2,q_a_not_null,n,f,1
+row q2,q_b_not_null,n,f,1
+row q2,q_c_nn,n,f,1
+row q2,q_e_not_null,n,f,1
+row q21,q21_pkey,p,f,1
+row q21,q_a_not_null,n,f,1
+row q21,q_b_not_null,n,f,1
+row q21,q_c_nn,n,f,1
+row q21,q_e_not_null,n,f,1
+SELECT 21
+> SELECT tableoid::regclass, * FROM q ORDER BY a;
+fields tableoid:2205:4:-1,a@q.1:23:4:-1,b@q.2:23:4:-1,c@q.3:1043:-1:14,e@q.4:25:-1:-1,f@q.5:23:4:-1,g@q.6:23:4:-1
+row q1,1,1,x,e,NULL,5
+row q1,2,1,z1,e,3,5
+row q21,11,2,y,e,NULL,5
+SELECT 3
+> ALTER TABLE q ALTER COLUMN b DROP NOT NULL;
+ERROR 42P16 column "b" is in a primary key
+> ALTER TABLE q DROP CONSTRAINT q_pkey;
+ALTER TABLE
+> ALTER TABLE q ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE
+> ALTER TABLE q DROP COLUMN c;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text LIKE 'q%' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row q,q_a_not_null,n,t,0
+row q,q_e_not_null,n,t,0
+row q1,q_a_not_null,n,f,1
+row q1,q_e_not_null,n,f,1
+row q2,q_a_not_null,n,f,1
+row q2,q_e_not_null,n,f,1
+row q21,q_a_not_null,n,f,1
+row q21,q_e_not_null,n,f,1
+SELECT 8
+> CREATE TABLE r (a int, b int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES IN (1);
+CREATE TABLE
+> ALTER TABLE r1 ADD CONSTRAINT r1_a_key UNIQUE (a);
+ALTER TABLE
+> ALTER TABLE r1 ADD COLUMN c int;
+ERROR 42809 cannot add column to a partition
+> ALTER TABLE r ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> ALTER TABLE r1 ALTER COLUMN b DROP NOT NULL;
+ERROR 42P16 column "b" is marked NOT NULL in parent table
+> ALTER TABLE r ALTER COLUMN b DROP NOT NULL;
+ALTER TABLE
+> ALTER TABLE r ADD CONSTRAINT r_b_not_null NOT NULL b;
+ALTER TABLE
+> ALTER TABLE r1 ADD CONSTRAINT r1_b_not_null NOT NULL b;
+ERROR 55000 cannot create not-null constraint "r1_b_not_null" on column "b" of table "r1"
+DETAIL A not-null constraint named "r_b_not_null" already exists for this column.
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text LIKE 'r%' ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row r,r_b_not_null,n,t,0
+row r1,r1_a_key,u,t,0
+row r1,r_b_not_null,n,f,1
+SELECT 3
+> ALTER TABLE r1 SET WITHOUT CLUSTER;
+ALTER TABLE
+> ALTER TABLE r OWNER TO CURRENT_USER;
+ALTER TABLE
+> DROP TABLE q, r;
+DROP TABLE
