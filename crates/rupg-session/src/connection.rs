@@ -699,7 +699,7 @@ impl Connection {
         let mut written = Vec::new();
         // The new and the old rows that the foreign keys check and that the triggers `AFTER ... FOR EACH ROW` get.
         let foreign = !info.foreign.is_empty();
-        let keep_rows = foreign || triggers.after_rows();
+        let keep_rows = (foreign && !partitioned) || triggers.after_rows();
         let (mut new_rows, mut old_rows) = (Vec::new(), Vec::new());
         // The new and the old rows of `ON CONFLICT DO UPDATE`.
         let mut updated = (Vec::new(), Vec::new());
@@ -749,6 +749,7 @@ impl Connection {
                         self.change_routed((plan, info), params, &view, rows, keep_rows)?;
                     written = changed.written;
                     view = changed.view;
+                    batches = changed.batches;
                     (old_rows, new_rows) = (changed.old, changed.new);
                     let tag = if kind == WriteKind::Update {
                         CommandTag::Update
@@ -842,7 +843,8 @@ impl Connection {
         if !triggers.is_empty() {
             self.after_write(info, &triggers, &old_rows, &new_rows)?;
         }
-        if foreign && (!new_rows.is_empty() || !old_rows.is_empty()) {
+        // A partitioned table has its batches from the leaves.
+        if foreign && !partitioned && (!new_rows.is_empty() || !old_rows.is_empty()) {
             batches.push(Batch::new(info, &info.foreign, view.command, new_rows, old_rows));
         }
         if let Some(conflict) = upsert
@@ -1014,8 +1016,10 @@ impl Connection {
             Message::Notice(error) => Notice { severity: Severity::Notice, error },
         }));
         let (transforms, fills) = (&defined.transforms, &defined.fills);
-        let rewrite =
-            defined.result.and_then(|()| self.rows_to_rewrite(node, &work, transforms, fills));
+        let rewrite = defined
+            .result
+            .and_then(|()| self.check_detached(&defined.detached))
+            .and_then(|()| self.rows_to_rewrite(node, &work, transforms, fills));
         let mut work = Arc::new(work);
         let result = rewrite
             .and_then(|tables| self.rewrite_rows(&tables, &work, transforms, fills))
@@ -4985,6 +4989,18 @@ mod tests {
     #[test]
     fn partition_identity() {
         big_stack(|| script(include_str!("connection/partition_identity.test")));
+    }
+
+    /// The foreign keys of partitioned tables and the foreign keys that refer to them: the clone of a foreign key for each partition, a new partition, `ATTACH PARTITION` of a table with and without the same foreign key, the checks of the leaves with the names of the leaves in the errors, the actions of `CASCADE` and `SET NULL` on the partitions, the clones of a foreign key for each partition of the referenced table with their names, the check of a row that moves to another partition, `DETACH PARTITION` with its check of the references, and the error for a clone of `DROP CONSTRAINT`. `connection/partition_fkeys.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_fkeys() {
+        big_stack(|| script(include_str!("connection/partition_fkeys.test")));
+    }
+
+    /// The catalog rows of the foreign keys of partitioned tables: `pg_constraint`, the triggers in `pg_trigger` with their parents, the rows of `pg_depend`, `DROP TABLE` of a referenced partition, `ATTACH PARTITION` of a table with the same foreign key, and `DETACH PARTITION`, which gives the partition its own triggers and clones. `connection/partition_fkeys_catalog.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_fkeys_catalog() {
+        big_stack(|| script(include_str!("connection/partition_fkeys_catalog.test")));
     }
 
     /// `INSERT ... ON CONFLICT` into partitioned tables: each row goes to its partition, and the arbiters are the indexes of the partition whose partitioned index the clause infers. With no inference, a unique index of the partition alone is an arbiter too. `DO UPDATE` changes the row in the partition, and a new row for another partition is an error. `connection/partition_upsert.test` is the output of PostgreSQL 19 for the same script in a new database.

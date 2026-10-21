@@ -12,7 +12,7 @@ use rupg_types::Value;
 
 use super::Connection;
 use super::foreign::Batch;
-use super::route::{AfterRow, Routing, group};
+use super::route::{self, AfterRow, Routing, group};
 use super::trigger::MergeTriggers;
 use crate::heap::{Change, Changed, View, tid_text};
 
@@ -326,6 +326,14 @@ impl Connection {
                         (&catalog, &reader),
                     )?;
                     let Some((at, mut item)) = routed else { continue };
+                    let to = item.to.as_ref().map_or(at, |(to, _)| *to);
+                    if route::has_foreign(&catalog, routing.oid(at))
+                        || route::has_foreign(&catalog, routing.oid(to))
+                    {
+                        return Err(route::not_yet(
+                            "MERGE into a partitioned table with foreign keys",
+                        ));
+                    }
                     // The new row of an update after the triggers, with the columns of the partitioned table.
                     item.shown = match &item.to {
                         Some((to, checked)) => Some(routing.to_root(*to, checked, width)),

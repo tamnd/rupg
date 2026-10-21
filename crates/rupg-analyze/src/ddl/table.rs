@@ -321,9 +321,6 @@ impl Definer<'_, '_> {
             self.check_inherits(&stmt.inhRelations)?;
             return Err(not_yet("INHERITS", at));
         }
-        if (plan.partspec.is_some() || plan.parent.is_some()) && !plan.foreign.is_empty() {
-            return Err(not_yet("a foreign key of a partitioned table or a partition", at));
-        }
         let mut table_rv = rv.clone();
         table_rv.schemaname = Some(self.schema_name(namespace).into());
         let indexes = index_constraints(&mut plan, &table_rv)?;
@@ -352,6 +349,7 @@ impl Definer<'_, '_> {
         if let Some(parent) = plan.parent {
             self.clone_partition_indexes(table, parent)?;
             self.clone_triggers(parent, table)?;
+            self.clone_foreign_keys(parent, table)?;
         }
         self.create_toast_options(table, &stmt.options)?;
         for index in &indexes {

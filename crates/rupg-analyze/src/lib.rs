@@ -339,6 +339,26 @@ pub fn view_query(env: &dyn Env, oid: u32) -> Result<Option<Query>> {
     Analyzer::new(env, &Params::default()).view_query(oid)
 }
 
+/// The foreign keys that a write of the kind `kind` of the table `table` checks, in the order of the names of their triggers. A leaf partition checks them for its rows of an `UPDATE` or a `DELETE` of its partitioned table.
+///
+/// # Errors
+///
+/// `XX000` for a trigger of a foreign key with no foreign key.
+pub fn foreign_keys(env: &dyn Env, table: u32, kind: WriteKind) -> Result<Vec<Foreign>> {
+    let Some(rel) = env.catalog().and_then(|c| c.relation(table)) else {
+        return Ok(Vec::new());
+    };
+    let columns: Vec<Column> = rel
+        .columns
+        .iter()
+        .map(|c| {
+            let (name, ty, typmod) = from::scope_column(c);
+            Column { name, ty, typmod, not_null: c.not_null }
+        })
+        .collect();
+    Analyzer::new(env, &Params::default()).foreign_keys(table, kind, &columns)
+}
+
 /// `parse_analyze`: the query tree of a raw statement, which is the `stmt` of a `RawStmt`. For a statement of the extended protocol, the [`Query`] has the type of each parameter.
 pub fn analyze(stmt: &Node, env: &dyn Env, params: &Params) -> Result<Query> {
     analyze_hooked(stmt, env, params, None)

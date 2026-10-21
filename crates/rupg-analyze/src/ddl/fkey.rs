@@ -1,7 +1,7 @@
 //! The foreign keys of `CREATE TABLE`, as `ATExecAddConstraint` and `ATAddForeignKeyConstraint` add them.
 
 use rupg_catalog::names::name_addition;
-use rupg_catalog::{ConKind, ForeignKey, NewForeignKey, RelKind};
+use rupg_catalog::{ConKind, FkSide, ForeignKey, NewForeignKey, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::Constraint;
@@ -102,10 +102,7 @@ impl Definer<'_, '_> {
             )
             .with_detail(relkind_detail(kind)));
         }
-        if kind == b'p' {
-            return Err(not_yet("a foreign key that refers to a partitioned table", None));
-        }
-        if kind != b'r' {
+        if kind != b'r' && kind != b'p' {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("referenced relation \"{pk_name}\" is not a table"),
@@ -165,7 +162,7 @@ impl Definer<'_, '_> {
             pp_eq,
             ff_eq,
         };
-        self.catalog.add_foreign_key(NewForeignKey {
+        let new = NewForeignKey {
             table,
             name: Some(name),
             keys: fk_keys,
@@ -173,8 +170,10 @@ impl Definer<'_, '_> {
             deferrable: con.deferrable,
             deferred: con.initdeferred,
             foreign,
-        })?;
-        Ok(())
+        };
+        let oid = self.catalog.add_fk_constraint(new, 0, FkSide::Both)?;
+        self.fk_recurse_referenced(oid, None)?;
+        self.fk_recurse_referencing(oid, None)
     }
 
     /// The equality operators `conpfeqop`, `conppeqop` and `conffeqop` of `ATAddForeignKeyConstraint` for the columns of a foreign key, from the operator classes of the unique index of the referenced table.
@@ -311,7 +310,7 @@ impl Definer<'_, '_> {
         let mut deferrable = false;
         for rel in self.catalog.relations() {
             let Some(info) = rel.index.as_ref() else { continue };
-            if rel.kind != RelKind::Index
+            if !matches!(rel.kind, RelKind::Index | RelKind::PartitionedIndex)
                 || info.table != table
                 || !info.unique
                 || usize::try_from(info.key_count).ok() != Some(keys.len())

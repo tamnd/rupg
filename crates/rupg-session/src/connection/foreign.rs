@@ -7,7 +7,8 @@
 use std::collections::{HashMap, VecDeque};
 use std::hash::{DefaultHasher, Hasher};
 
-use rupg_analyze::{Action, Foreign, Params, Write};
+use rupg_analyze::{Action, Foreign, Params, Write, WriteKind};
+use rupg_catalog::RelKind;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_sql::nodes::Node;
@@ -294,7 +295,7 @@ impl Connection {
             .collect();
         let keys = state.other.get_or_insert_with(|| {
             // The check sees the rows of the statement, as the command counter goes up before the triggers fire.
-            let rows = self.store.heap().rows(foreign.other, &self.view());
+            let rows = self.table_rows(foreign.other);
             Keys::of(rows, &foreign.other_columns, &foreign.types, &foreign.types)
         });
         if !keys.has(&probe, &foreign.types)? {
@@ -315,13 +316,12 @@ impl Connection {
         key: &[&Value],
         state: &mut State,
     ) -> Result<(), Error> {
-        let heap = self.store.heap();
         let restrict = foreign.action == Action::Restrict;
         let probe: Vec<Value> = key.iter().map(|&value| value.clone()).collect();
         // `ri_Check_Pk_Match`: for `NO ACTION`, another row with the old key keeps the references.
         if !restrict {
             let keys = state.own.get_or_insert_with(|| {
-                let rows = heap.rows(batch.table, &self.view());
+                let rows = self.table_rows(batch.table);
                 Keys::of(rows, &foreign.columns, &foreign.types, &foreign.types)
             });
             if keys.has(&probe, &foreign.types)? {
@@ -329,7 +329,7 @@ impl Connection {
             }
         }
         let keys = state.other.get_or_insert_with(|| {
-            let rows = heap.rows(foreign.other, &self.view());
+            let rows = self.table_rows(foreign.other);
             Keys::of(rows, &foreign.other_columns, &foreign.referencing_types, &foreign.types)
         });
         if keys.has(&probe, &foreign.types)? {
@@ -341,6 +341,98 @@ impl Connection {
             )));
         }
         Ok(())
+    }
+
+    /// `RI_PartitionRemove_Check` for the partitions of `DETACH PARTITION`: no row of a referencing table can have a key of a partition, for each foreign key that refers to the partition through its parent. The foreign keys come from the catalog before the statement.
+    ///
+    /// # Errors
+    ///
+    /// `23503` for a key of the partition that a row of a referencing table has.
+    pub(super) fn check_detached(&self, partitions: &[u32]) -> Result<(), Error> {
+        let reader = self.reader();
+        for &partition in partitions {
+            let Some(name) = self.catalog().relation(partition).map(|r| r.name.clone()) else {
+                continue;
+            };
+            let foreign = rupg_analyze::foreign_keys(&reader, partition, WriteKind::Delete)?;
+            for foreign in foreign.iter().filter(|f| !f.referencing && f.cloned) {
+                let others = Keys::of(
+                    self.table_rows(foreign.other),
+                    &foreign.other_columns,
+                    &foreign.referencing_types,
+                    &foreign.types,
+                );
+                for row in self.table_rows(partition) {
+                    let key: Vec<&Value> = foreign
+                        .columns
+                        .iter()
+                        .map(|&column| row.get(column).unwrap_or(&Value::Null))
+                        .collect();
+                    if key.iter().any(|value| value.is_null()) {
+                        continue;
+                    }
+                    let probe: Vec<Value> = key.iter().map(|&value| value.clone()).collect();
+                    if !others.has(&probe, &foreign.types)? {
+                        continue;
+                    }
+                    let shown = self.key_text(foreign, &key, &foreign.types)?;
+                    let error = Error::new(
+                        SqlState::FOREIGN_KEY_VIOLATION,
+                        format!(
+                            "removing partition \"{name}\" violates foreign key constraint \"{}\"",
+                            foreign.name
+                        ),
+                    )
+                    .with_detail(format!(
+                        "Key {shown} is still referenced from table \"{}\".",
+                        foreign.other_name
+                    ));
+                    return Err(rupg_func::with_table_constraint(
+                        error,
+                        foreign.other,
+                        &foreign.name,
+                        &reader,
+                    ));
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// The rows of the table `table` that a check of a foreign key reads. A partitioned table has the rows of its leaf partitions, with the columns of the table matched by name, as the scan of the query of `ri_PerformCheck` gives them.
+    fn table_rows(&self, table: u32) -> Vec<Vec<Value>> {
+        let heap = self.store.heap();
+        let view = self.view();
+        let catalog = self.catalog();
+        let Some(rel) = catalog.relation(table).filter(|r| r.kind == RelKind::Partitioned) else {
+            return heap.rows(table, &view);
+        };
+        let mut rows = Vec::new();
+        let mut pending: Vec<u32> = catalog.partitions(table).iter().map(|p| p.oid).collect();
+        while let Some(oid) = pending.pop() {
+            let Some(part) = catalog.relation(oid) else { continue };
+            if part.kind == RelKind::Partitioned {
+                pending.extend(catalog.partitions(oid).iter().map(|p| p.oid));
+                continue;
+            }
+            let places: Vec<Option<usize>> = rel
+                .columns
+                .iter()
+                .map(|c| {
+                    if c.dropped {
+                        return None;
+                    }
+                    part.columns.iter().position(|p| !p.dropped && p.name == c.name)
+                })
+                .collect();
+            rows.extend(heap.rows(oid, &view).into_iter().map(|row| {
+                places
+                    .iter()
+                    .map(|at| at.and_then(|at| row.get(at).cloned()).unwrap_or(Value::Null))
+                    .collect::<Vec<Value>>()
+            }));
+        }
+        rows
     }
 
     /// The action of a foreign key for an old key: its statement on the referencing table with the parameters `params`. The rows of the statement go to the end of the queue. True if the statement changed rows.

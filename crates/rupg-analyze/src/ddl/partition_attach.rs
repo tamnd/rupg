@@ -120,6 +120,7 @@ impl Definer<'_, '_> {
         self.catalog.attach_partition(child, parent, bound)?;
         self.ensure_partition_indexes(&rel, &parent_rel)?;
         self.clone_triggers(parent, child)?;
+        self.clone_foreign_keys(parent, child)?;
         // `QueuePartitionConstraintValidation` for the new partition, then for the default partition, whose bound is now smaller.
         let default = self.catalog.partitions(parent).into_iter().find(|r| {
             r.oid != child
@@ -363,6 +364,7 @@ impl Definer<'_, '_> {
             ));
         }
         let child = self.open_detached(target, rv)?;
+        self.detach_checks(child);
         self.remove_inheritance(child, target.oid)?;
         // `DetachPartitionFinalize`: the columns of the partition lose their identity. The sequence stays with the parent.
         let identities: Vec<i16> = self.catalog.relation(child).map_or_else(Vec::new, |r| {
@@ -376,6 +378,7 @@ impl Definer<'_, '_> {
             self.catalog.set_identity(child, number, 0)?;
         }
         self.drop_cloned_triggers(child)?;
+        self.detach_foreign_keys(child)?;
         // `DetachPartitionFinalize`: the indexes of the partition are no longer partitions of the indexes of the parent.
         let indexes: Vec<(u32, u32)> = self
             .catalog
@@ -635,7 +638,7 @@ impl Definer<'_, '_> {
     }
 
     /// The leaf partitions of a table, or the table when it is not partitioned: the tables whose rows a check of a partition constraint reads.
-    fn leaves(&self, table: u32) -> Vec<u32> {
+    pub(super) fn leaves(&self, table: u32) -> Vec<u32> {
         if self.catalog.relation(table).is_some_and(|r| r.kind != RelKind::Partitioned) {
             return vec![table];
         }
