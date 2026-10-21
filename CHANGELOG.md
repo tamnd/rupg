@@ -12,6 +12,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - The workflow `fuzz` now builds for `x86_64-unknown-linux-gnu`. Before, each job failed after a few seconds, because cargo-fuzz used the musl target of its own binary and the nightly toolchain does not have that target.
 - `SHOW rupg.version`, `current_setting('rupg.version')` and the other reads of a parameter give the version of rupg, as spec/05 section 5.7 says. The parameter has the context `internal`, so `SET rupg.version` gives `55P02`. Before, the server sent `rupg.version` at startup, but `SHOW rupg.version` gave `42704`. `SHOW ALL` and `pg_settings` do not show it, as for `rupg.compat_version`.
+- A `SELECT` with no sort and no aggregate now sends the rows that it made before an error in its targets, and then the error, as PostgreSQL does. Before, a division by zero in the fourth row gave the error and no rows. In the extended protocol the error comes only when `Execute` asks for the row that fails, so an `Execute` with a row limit can give `PortalSuspended` before the error. The test `pipeline_abort` of `libpq_pipeline` needs this. An error in a subquery in `FROM` or in `WHERE` still gives no rows.
 
 ## 0.1.59 (2026-10-21)
 
