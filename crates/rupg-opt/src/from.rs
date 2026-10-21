@@ -34,6 +34,10 @@ struct Stats {
     joins: Vec<[(Expr, BTreeSet<usize>); 2]>,
     /// `consider_startup`: true when the query has `LIMIT`, so that a plan with a lower start cost is a different plan.
     startup: bool,
+    /// `isunique`: the relation and the column number of each column that has a unique index of one key column and no predicate, as `has_unique_index`.
+    unique: BTreeSet<(usize, i16)>,
+    /// The key columns of each unique index of each relation that is immediate and has no predicate, which `relation_has_unique_index_for` reads.
+    distinct: BTreeMap<usize, Vec<Vec<i16>>>,
 }
 
 impl Stats {
@@ -278,7 +282,6 @@ impl<'q> Builder<'q> {
     ) -> Rel<'q> {
         let relation = &level.query.relations[r];
         let quals = order_quals(quals);
-        let selectivity: f64 = quals.iter().map(|q| cost::selectivity(&q.expr)).product();
         let mut per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| &*q.expr));
         let mut children = Vec::new();
         let (kind, startup, run, tuples) = match &relation.cte {
@@ -325,6 +328,17 @@ impl<'q> Builder<'q> {
                     if let Some(members) = members {
                         return members_scan(level, r, &quals, members, stats);
                     }
+                    for index in self.members.map(|m| m.indexes(relation.oid)).unwrap_or_default() {
+                        if let ([key], true, false) =
+                            (index.keys.as_slice(), index.unique, index.partial)
+                            && *key > 0
+                        {
+                            stats.unique.insert((r, *key));
+                        }
+                        if index.unique && index.immediate && !index.partial {
+                            stats.distinct.entry(r).or_default().push(index.keys);
+                        }
+                    }
                     let (pages, tuples) = cost::table_size(relation);
                     match &relation.tablesample {
                         Some(sample) => {
@@ -340,6 +354,19 @@ impl<'q> Builder<'q> {
                 }
             },
         };
+        // `var_eq_const` and `var_eq_non_const`: `=` of a unique column and a value that the scan knows passes one row.
+        let eq = |a: &Expr, b: &Expr| {
+            [(a, b), (b, a)].into_iter().find_map(|(column, value)| {
+                let var = plain_var(column)?;
+                (var.levels_up == 0
+                    && var.relation == r
+                    && stats.unique.contains(&(r, var.attnum))
+                    && exprs::relations(value).is_empty()
+                    && tuples >= 1.0)
+                    .then(|| 1.0 / tuples)
+            })
+        };
+        let selectivity: f64 = quals.iter().map(|q| cost::selectivity_by(&q.expr, &eq)).product();
         let rows = cost::clamp_rows(tuples * selectivity);
         stats.rows.insert(r, (tuples, rows));
         let mut node = Node::new(kind, level.scope, children);
@@ -743,14 +770,31 @@ fn clause<'q>(
     None
 }
 
-/// The number of distinct values of an expression with no statistics, as `get_variable_numdistinct`, and the tuples and the rows of the relation when the expression reads one relation. A `boolean` has 2 values, `tableoid` has 1 and the other system columns are unique. A small table has as many values as tuples, and the others have 200. The flag is true for the default.
+/// A column, or a column under a `RelabelType`, as `examine_variable` finds a `Var`.
+fn plain_var(expr: &Expr) -> Option<Var> {
+    match &expr.kind {
+        ExprKind::Var(var) => Some(*var),
+        ExprKind::Relabel(arg, _) => match arg.kind {
+            ExprKind::Var(var) => Some(var),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// The number of distinct values of an expression with no statistics, as `get_variable_numdistinct`, and the tuples and the rows of the relation when the expression reads one relation. A unique column has as many values as tuples, a `boolean` has 2 values, `tableoid` has 1 and the other system columns are unique. A small table has as many values as tuples, and the others have 200. The flag is true for the default.
 fn numdistinct(expr: &Expr, stats: &Stats) -> (f64, bool, Option<(f64, f64)>) {
     let rels = exprs::relations(expr);
     let rel = match (rels.len(), rels.first()) {
         (1, Some(r)) => stats.rows.get(r).copied(),
         _ => None,
     };
-    let known = if expr.ty == oid::BOOL {
+    let unique = plain_var(expr)
+        .is_some_and(|v| v.levels_up == 0 && stats.unique.contains(&(v.relation, v.attnum)));
+    let known = if unique {
+        // A unique column has as many values as the relation has tuples, whatever its type.
+        rel.map(|(tuples, _)| tuples)
+    } else if expr.ty == oid::BOOL {
         Some(2.0)
     } else if let ExprKind::Var(var) = expr.strip_implicit().kind
         && var.attnum < 0
@@ -984,7 +1028,16 @@ fn choose<'q>(
             (JoinKind::Left, true) => JoinKind::Right,
             (k, _) => k,
         };
-        let input = Input { outer: &outers[0], inner: &inners[0], quals, filter_cost, stats };
+        let unique = semifactors(&outers[0], &inners[0], quals, stats);
+        let input = Input {
+            outer: &outers[0],
+            inner: &inners[0],
+            quals,
+            filter_cost,
+            filtered: !filter.is_empty(),
+            unique,
+            stats,
+        };
         let nested = kind == JoinKind::Inner || !swapped && kind == JoinKind::Left;
         let mut candidates: Vec<Candidate<'q>> = sorted_merge(&input, join).into_iter().collect();
         // `match_unsorted_outer`: each plan of the outer side, with the cheapest plan of the inner side or with an inner plan in the order of the merge.
@@ -1074,7 +1127,34 @@ struct Input<'a, 'q> {
     inner: &'a Rel<'q>,
     quals: &'a [Qual<'q>],
     filter_cost: f64,
+    /// True when the join has conditions that are not conditions of the join itself, which the join tests after it joins the rows.
+    filtered: bool,
+    /// `inner_unique` and `semifactors`: for an inner side with one row at most for each outer row, the fraction of the outer rows that have a match and the number of inner rows that each of them matches.
+    unique: Option<(f64, f64)>,
     stats: &'a Stats,
+}
+
+/// `innerrel_is_unique` and `compute_semi_anti_join_factors`: when the inner side is one table with a unique index that is immediate, has no predicate and has each of its key columns in an `=` condition of the join with a value of the outer side, the fraction of the outer rows that have a match and the number of inner rows that each of them matches. A join with no other condition is a join of the inner rows with no condition, so that the fraction is the selectivity of the conditions of the join.
+fn semifactors(
+    outer: &Rel<'_>,
+    inner: &Rel<'_>,
+    quals: &[Qual<'_>],
+    stats: &Stats,
+) -> Option<(f64, f64)> {
+    let [r] = inner.rels.iter().copied().collect::<Vec<_>>()[..] else { return None };
+    let indexes = stats.distinct.get(&r)?;
+    let (clauses, _) = split(quals, &outer.rels, &inner.rels, exprs::can_merge);
+    let columns: BTreeSet<i16> = clauses
+        .iter()
+        .filter_map(|c| plain_var(&c.inner))
+        .filter(|v| v.levels_up == 0 && v.relation == r)
+        .map(|v| v.attnum)
+        .collect();
+    if !indexes.iter().any(|keys| !keys.is_empty() && keys.iter().all(|k| columns.contains(k))) {
+        return None;
+    }
+    let selectivity: f64 = quals.iter().map(|q| join_selectivity(q, stats)).product();
+    Some((selectivity, inner.node.cost.rows.max(1.0)))
 }
 
 /// A key of a merge join: the index of its clause in the clauses of `split`, and the directions of the sort.
@@ -1172,13 +1252,43 @@ fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
         (input.inner.node.cost, rescan(&input.inner.node))
     };
     let startup = o.startup + inner.startup;
-    let mut run = o.total - o.startup + inner.total - inner.startup;
+    let mut run = o.total - o.startup;
     if o.rows > 1.0 {
-        run += (o.rows - 1.0) * rescan.1;
+        run += (o.rows - 1.0) * rescan.0;
     }
+    let (inner_run, rescan_run) = (inner.total - inner.startup, rescan.1 - rescan.0);
+    let tuples = match input.unique {
+        // The scan of the inner side stops at the first match. An outer row with no match scans all the inner rows, and the first scan costs all of its run cost once.
+        Some((fraction, matches)) => {
+            let mut matched = (o.rows * fraction).round_ties_even();
+            let mut unmatched = o.rows - matched;
+            let scan_fraction = 2.0 / (matches + 1.0);
+            let tuples = matched * inner.rows * scan_fraction + unmatched * inner.rows;
+            run += inner_run;
+            if unmatched >= 1.0 {
+                unmatched -= 1.0;
+            } else {
+                matched -= 1.0;
+            }
+            if matched > 0.0 {
+                run += matched * rescan_run * scan_fraction;
+            }
+            if unmatched > 0.0 {
+                run += unmatched * rescan_run;
+            }
+            tuples
+        }
+        None => {
+            run += inner_run;
+            if o.rows > 1.0 {
+                run += (o.rows - 1.0) * rescan_run;
+            }
+            o.rows * inner.rows
+        }
+    };
     let per_tuple =
         cost::CPU_TUPLE + cost::qual_cost(input.quals.iter().map(|q| &*q.expr)) + input.filter_cost;
-    run += per_tuple * o.rows * inner.rows;
+    run += per_tuple * tuples;
     (startup, startup + run)
 }
 
@@ -1223,10 +1333,24 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
     }
     // The conditions of the hash cost as `cost_qual_eval` finds them for each row that a bucket has.
     let qual_cost = cost::qual_cost(clauses.iter().map(|c| &*c.item.expr));
-    run += qual_cost * o.rows * cost::clamp_rows(i.rows * bucket) * 0.5;
+    let tuples = match input.unique {
+        // The scan of a bucket stops at the first match. An outer row with no match scans a bucket of the average size, and most of its rows fail the hash values first.
+        Some((fraction, matches)) => {
+            let matched = (o.rows * fraction).round_ties_even();
+            let scan_fraction = 2.0 / (matches + 1.0);
+            run += qual_cost * matched * cost::clamp_rows(i.rows * bucket * scan_fraction) * 0.5;
+            run +=
+                qual_cost * (o.rows - matched) * cost::clamp_rows(i.rows / virtual_buckets) * 0.05;
+            matched
+        }
+        None => {
+            run += qual_cost * o.rows * cost::clamp_rows(i.rows * bucket) * 0.5;
+            tuple_count(input, &clauses)
+        }
+    };
     let per_tuple =
         cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
-    run += per_tuple * tuple_count(input, &clauses);
+    run += per_tuple * tuples;
     Some(Candidate {
         method: Method::Hash,
         join,
@@ -1404,7 +1528,9 @@ fn merge_join<'q>(
     let (o, i) = (side(input.outer, sort_outer), side(input.inner, sort_inner));
     let (outer_rows, inner_rows) = (input.outer.node.cost.rows, input.inner.node.cost.rows);
     let tuples = tuple_count(input, &clauses);
-    let rescanned = (tuples - inner_rows).max(0.0);
+    // `skip_mark_restore`: when the inner side is unique and the join has no other condition, the join never goes back to an inner row.
+    let skip_mark_restore = input.unique.is_some() && other.is_empty() && !input.filtered;
+    let rescanned = if skip_mark_restore { 0.0 } else { (tuples - inner_rows).max(0.0) };
     let ratio = 1.0 + rescanned / inner_rows.max(1.0);
     let inner_run = i.1 - i.0;
     let startup = o.0 + i.0;
@@ -1413,13 +1539,14 @@ fn merge_join<'q>(
     let bare = inner_run * ratio;
     // The inner side needs a `Material` node when it is cheaper, when its node cannot go back to a row that it gave, as `ExecSupportsMarkRestore`, or when its sort does not fit in `work_mem`.
     let inner_cost = input.inner.node.cost;
-    let materialize = material < bare
-        || !sort_inner
-            && !matches!(
-                input.inner.node.kind,
-                Kind::Sort(_) | Kind::Materialize | Kind::Result { .. }
-            )
-        || sort_inner && cost::byte_size(inner_cost.rows, inner_cost.width) > cost::WORK_MEM;
+    let materialize = !skip_mark_restore
+        && (material < bare
+            || !sort_inner
+                && !matches!(
+                    input.inner.node.kind,
+                    Kind::Sort(_) | Kind::Materialize | Kind::Result { .. }
+                )
+            || sort_inner && cost::byte_size(inner_cost.rows, inner_cost.width) > cost::WORK_MEM);
     run += if materialize { material } else { bare };
     run +=
         cost::qual_cost(clauses.iter().map(|c| &*c.item.expr)) * (outer_rows + inner_rows * ratio);

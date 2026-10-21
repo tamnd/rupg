@@ -5309,6 +5309,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_merge_keys.test")));
     }
 
+    /// `EXPLAIN` of conditions on a column with a unique index of one key column and no predicate, as `has_unique_index` finds it: the column has as many values as the table has rows, for `=` and `<>` with a value and for the conditions of joins. A join whose inner side is a table with a unique index that is immediate and has no predicate, with an `=` condition for each key column, costs less, as `innerrel_is_unique` finds it. `connection/plan_unique.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_unique() {
+        big_stack(|| script(include_str!("connection/plan_unique.test")));
+    }
+
     /// `EXPLAIN` of joins whose conditions an equivalence class with no constant makes, as `generate_join_implied_equalities`: one condition for each class at each join, of the first members of the two sides, also for two tables that the query does not compare. `connection/plan_join_classes.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_join_classes() {
