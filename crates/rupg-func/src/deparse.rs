@@ -4,6 +4,7 @@
 
 mod explain;
 mod function;
+mod partqual;
 mod query;
 
 pub use explain::explain;
@@ -1975,6 +1976,28 @@ fn get_partkeydef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     }
 }
 
+/// `pg_get_partition_constraintdef(oid)`: the partition constraint of a partition, as `generate_partition_qual` makes it and `deparse_expression_pretty` shows it with the columns of the partition. A table that is not a partition gives null.
+fn get_partition_constraintdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
+    let Some(catalog) = call.session.catalog() else { return Ok(Value::Null) };
+    let Some(rel) = catalog.relation(oid) else { return Ok(Value::Null) };
+    let mut qual = partqual::partition_qual(catalog, rel)?;
+    let expr = match qual.len() {
+        0 => return Ok(Value::Null),
+        1 => qual.remove(0),
+        _ => Expr {
+            kind: ExprKind::Bool(BoolOp::And, qual),
+            ty: oid::BOOL,
+            typmod: -1,
+            location: None,
+        },
+    };
+    let columns = rel.columns.iter().map(|c| c.name.clone()).collect();
+    let mut d = Deparser::for_columns(call.session, columns, false);
+    d.expr(&expr, false)?;
+    Ok(Value::text(d.buf))
+}
+
 /// `pg_get_indexdef(oid)` and `pg_get_indexdef(oid, int4, bool)`.
 fn get_indexdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
@@ -2017,8 +2040,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_ruledef" | "pg_get_ruledef_ext" => query::get_ruledef,
         "pg_get_triggerdef" | "pg_get_triggerdef_ext" => query::get_triggerdef,
         "pg_get_partkeydef" => get_partkeydef,
-        // rupg cannot show the partition constraint of a partition yet.
-        "pg_get_partition_constraintdef" => |_, _| Ok(Value::Null),
+        "pg_get_partition_constraintdef" => get_partition_constraintdef,
         _ => return None,
     })
 }
