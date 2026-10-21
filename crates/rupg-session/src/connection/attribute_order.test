@@ -1,0 +1,20 @@
+> CREATE TABLE att_t (a int PRIMARY KEY, b text);
+CREATE TABLE
+> CREATE VIEW att_v AS SELECT a FROM att_t;
+CREATE VIEW
+> SELECT array_agg(attnum) FROM pg_attribute WHERE attrelid = 'att_t'::regclass;
+fields array_agg:1005:-1:-1
+row {-6,-5,-4,-3,-2,-1,1,2}
+SELECT 1
+> SELECT array_agg(a.attnum), array_agg(a.attname) FROM pg_class t, pg_class i, pg_index ix, pg_attribute a WHERE t.oid = ix.indrelid AND i.oid = ix.indexrelid AND a.attrelid = t.oid AND t.relkind = 'r' AND t.relname = 'att_t' GROUP BY i.relname, ix.indexrelid ORDER BY i.relname;
+fields array_agg:1005:-1:-1,array_agg:1003:-1:-1
+row {-6,-5,-4,-3,-2,-1,1,2},{tableoid,cmax,xmax,cmin,xmin,ctid,a,b}
+SELECT 1
+> SELECT array_agg(attnum) FROM pg_attribute WHERE attrelid = 'att_v'::regclass;
+fields array_agg:1005:-1:-1
+row {1}
+SELECT 1
+> SELECT array_agg(attnum) FROM pg_attribute WHERE attrelid = 'att_t_pkey'::regclass;
+fields array_agg:1005:-1:-1
+row {1}
+SELECT 1

@@ -3302,6 +3302,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/field_dependency.test")));
     }
 
+    /// The order of the rows of `pg_attribute` for a relation, without `ORDER BY`. PostgreSQL reads them by the index on `attrelid` and `attnum`, so the system columns come first from `tableoid` (-6), and the user columns come last. Sequelize reads the columns of an index with `array_agg` in this order. `connection/attribute_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn attribute_order() {
+        big_stack(|| script(include_str!("connection/attribute_order.test")));
+    }
+
     /// `pg_describe_object` for the kinds of objects: relations, columns and system columns, types, functions, schemas, constraints, defaults, rules, collations, languages, access methods, operators, operator classes and families, casts, objects of text search, conversions, roles, databases, tablespaces, extensions and the members of operator families. A name has its schema when the search path does not find the object, an object that does not exist gives null, and a catalog that is not a catalog of objects gives an error. `connection/describe_object.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn describe_object() {
