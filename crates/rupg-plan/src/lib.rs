@@ -35,6 +35,9 @@ impl Plan<'_> {
         self.scopes
             .iter()
             .map(|scope| {
+                if scope.leaf.is_some() {
+                    return 1;
+                }
                 let query = scope.query;
                 let joins: usize = query.from.iter().map(join_count).sum();
                 (query.relations.len() + joins).max(1) + usize::from(scope.target)
@@ -64,6 +67,19 @@ pub struct Scope<'q> {
     pub parent: Option<usize>,
     /// True when the query gives the rows of an `INSERT`, whose target table is one more entry of the range table, [`TARGET`].
     pub target: bool,
+    /// For the scope of the scan of a member of an inheritance tree, the relation of the query that the member takes the place of. The member is one more entry of the range table, as the child relation of `expand_inherited_rtentry`.
+    pub leaf: Option<Leaf>,
+}
+
+/// The relation of the scope of a member of an inheritance tree.
+#[derive(Clone, Copy, Debug)]
+pub struct Leaf {
+    /// The scope of the query of the relation, whose names the scope has.
+    pub of: usize,
+    /// The relation of the query.
+    pub relation: usize,
+    /// True when the member has a name of its own, as `r_1`. A member that is the only scan of the relation of a `SELECT` has the name of the relation, because no node of the plan names the relation itself.
+    pub renamed: bool,
 }
 
 /// The name of the subplan of a subquery in an expression, as `SubPlan.plan_name`, such as `InitPlan expr_1` or `SubPlan any_1`.
@@ -94,6 +110,8 @@ pub struct Node<'q> {
     pub init_plans: Vec<SubPlan<'q>>,
     /// `subPlan`: the subplans that the expressions of the node run for each row.
     pub sub_plans: Vec<SubPlan<'q>>,
+    /// The OID of the table of a scan of a member of an inheritance tree, which the scan reads in place of the table of its relation.
+    pub member: Option<u32>,
 }
 
 impl<'q> Node<'q> {
@@ -108,6 +126,7 @@ impl<'q> Node<'q> {
             children,
             init_plans: Vec::new(),
             sub_plans: Vec::new(),
+            member: None,
         }
     }
 }
@@ -224,8 +243,14 @@ pub enum Kind<'q> {
     ProjectSet,
     /// `LockRows`: `FOR UPDATE` and the other locks of rows.
     LockRows,
-    /// `ModifyTable`, with the OID of the table and the relation of the scope that the table is.
-    Modify { operation: Operation, table: u32, relation: usize, conflict: Option<Conflict<'q>> },
+    /// `ModifyTable`, with the OID of the table and the relation of the scope that the table is. The scopes of `targets` are the members of an inheritance tree that the node changes, as `resultRelations`.
+    Modify {
+        operation: Operation,
+        table: u32,
+        relation: usize,
+        conflict: Option<Conflict<'q>>,
+        targets: Vec<usize>,
+    },
 }
 
 /// The relation or the node that a `Result` takes the place of, as `result_type`.

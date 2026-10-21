@@ -11,11 +11,27 @@ mod output;
 mod upper;
 
 use rupg_analyze::{Cte, Expr, ExprKind, FromItem, Query, SubLink, SubLinkKind, WriteKind};
-use rupg_plan::{Item, Kind, Label, Node, Plan, Scope, SubPlan};
+use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
 
-/// The plan of a query.
-pub fn plan(query: &Query) -> Plan<'_> {
-    let mut b = Builder::default();
+/// The tables of the inheritance trees of the relations of the queries, which the planner has no catalog for.
+pub trait Members: std::fmt::Debug {
+    /// The tables that a scan of the relation `relation` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them, or `None` for a relation that is one table.
+    fn members(&self, query: &Query, relation: usize) -> Option<Vec<Member>>;
+}
+
+/// A table of an inheritance tree that a scan reads.
+#[derive(Clone, Debug)]
+pub struct Member {
+    pub oid: u32,
+    /// The type and the type modifier of each column of the table that is not dropped.
+    pub columns: Vec<(u32, i32)>,
+    /// `relhassubclass`: the table has children, so the planner takes no pages for it when it has none.
+    pub has_children: bool,
+}
+
+/// The plan of a query, with the members of the relations that `members` gives.
+pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
+    let mut b = Builder { members: Some(members), ..Builder::default() };
     let mut root = b.query(query, None);
     let mut pending = std::mem::take(&mut b.pending);
     attach(&mut root, &mut pending);
@@ -47,6 +63,7 @@ struct Builder<'q> {
     work: Vec<(usize, f64)>,
     /// True when the next query is the subquery of `EXISTS`.
     exists: bool,
+    members: Option<&'q dyn Members>,
 }
 
 /// A query of `WITH` in the scope of the planner.
@@ -139,6 +156,7 @@ impl<'q> Builder<'q> {
             node = self.modify(&level, write, node);
         }
         output::level(&level, &mut node);
+        self.leaves(&level, &mut node, false);
         let mut init = std::mem::take(&mut level.init);
         init.append(&mut node.init_plans);
         node.init_plans = init;
@@ -148,10 +166,47 @@ impl<'q> Builder<'q> {
 
     /// A new scope in the current subplan.
     fn push_scope(&mut self, query: &'q Query, parent: Option<usize>, target: bool) -> usize {
-        self.scopes.push(Scope { query, parent, target });
+        self.scopes.push(Scope { query, parent, target, leaf: None });
         let index = self.scopes.len() - 1;
         self.current.push(index);
         index
+    }
+
+    /// The scopes of the scans of the members of the inheritance trees of a query, in the order of the nodes. A member has a name of its own when it is one of the members of an `Append` or the target of a `ModifyTable`. `append` is true for the members of an `Append`.
+    fn leaves(&mut self, level: &Level<'q>, node: &mut Node<'q>, append: bool) {
+        if node.scope != level.scope {
+            return;
+        }
+        if let (Some(_), Kind::SeqScan(r)) = (node.member, &node.kind) {
+            let write = level.query.write.as_ref();
+            let target = *r == 0
+                && write.is_some_and(|w| matches!(w.kind, WriteKind::Update | WriteKind::Delete));
+            let leaf = Leaf { of: level.scope, relation: *r, renamed: append || target };
+            let parent = self.scopes[level.scope].parent;
+            self.scopes.push(Scope { query: level.query, parent, target: false, leaf: Some(leaf) });
+            node.scope = self.scopes.len() - 1;
+            self.current.push(node.scope);
+            return;
+        }
+        let append =
+            matches!(node.kind, Kind::Append) && node.children.iter().all(|c| c.member.is_some());
+        for child in &mut node.children {
+            self.leaves(level, child, append);
+        }
+        if let Kind::Modify {
+            operation: Operation::Update | Operation::Delete,
+            relation: 0,
+            targets,
+            ..
+        } = &mut node.kind
+        {
+            let scopes = &self.scopes;
+            let mut found = Vec::new();
+            for child in &node.children {
+                member_scopes(child, scopes, &mut found);
+            }
+            *targets = found;
+        }
     }
 
     /// The plan of a subplan, whose scopes take part in the names of the relations after the scopes of the statement.
@@ -229,6 +284,20 @@ impl<'q> Builder<'q> {
         } else {
             self.pending.push((link, SubPlan { name: format!("SubPlan {name}"), plan }));
         }
+    }
+}
+
+/// The scopes of the members of the relation 0 of the query below a node, which a `ModifyTable` changes.
+fn member_scopes(node: &Node<'_>, scopes: &[Scope<'_>], out: &mut Vec<usize>) {
+    if node.member.is_some()
+        && let Some(leaf) = scopes.get(node.scope).and_then(|s| s.leaf)
+        && leaf.relation == 0
+    {
+        out.push(node.scope);
+        return;
+    }
+    for child in &node.children {
+        member_scopes(child, scopes, out);
     }
 }
 

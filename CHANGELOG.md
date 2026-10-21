@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` of a partitioned table and of a table with children of `INHERITS`. The plan has an `Append` of a scan for each leaf partition that the conditions of `WHERE` do not prune, or for the table and each of its children, with the names of PostgreSQL such as `r_1`. One leaf gives one scan with no `Append`, and no leaf gives a `Result` with `One-Time Filter: false`. `UPDATE` and `DELETE` show each target table. The estimates are the ones of PostgreSQL, also for a table with children, which has no pages. Two conditions of `=` on a partition key with no common value now prune all the partitions (#528).
 - Partition pruning. A scan of a partitioned table reads only the leaf partitions that can have rows that pass the conditions of `WHERE` on the partition key, as PostgreSQL finds them: `=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN`, `= ANY` of a constant array, `IS NULL` and `OR` of these, with constants and the parameters of `EXECUTE` and `Bind`. The default partition is pruned when the other partitions have all the values that the conditions let the key have. `pg_stat_user_tables` now counts the scans of only those leaves, as PostgreSQL does, and a query on one partition of a large table is faster (#527).
 
 ## 0.1.62 (2026-10-22)

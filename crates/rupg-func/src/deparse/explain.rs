@@ -52,6 +52,20 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
             if spaces[s].is_some() {
                 continue;
             }
+            // `expand_inherited_rtentry`: a member has the alias of its relation, which `set_rtable_names` makes unique.
+            if let Some(leaf) = scope.leaf
+                && let Some(Some(of)) = spaces.get(leaf.of)
+            {
+                let mut space = of.clone();
+                if leaf.renamed
+                    && let Some(rel) = scope.query.relations.get(leaf.relation)
+                {
+                    space.names[leaf.relation] =
+                        super::query::unique_name(d.base_name(rel), &mut used);
+                }
+                spaces[s] = Some(space);
+                continue;
+            }
             if scope.target
                 && let Some(write) = &scope.query.write
             {
