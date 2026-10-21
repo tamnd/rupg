@@ -1985,6 +1985,63 @@ impl Catalog {
         Ok(())
     }
 
+    /// Sets `attislocal` and `attinhcount` of the column `number` of a table.
+    pub fn set_column_inherited(
+        &mut self,
+        table: u32,
+        number: i16,
+        local: bool,
+        inhcount: i16,
+    ) -> Result<()> {
+        let rel = self.relation_mut(table)?;
+        let at = usize::try_from(number).ok().and_then(|n| n.checked_sub(1));
+        let Some(column) = at.and_then(|at| rel.columns.get_mut(at)) else {
+            return Err(no_object("column", u32::try_from(number).unwrap_or_default()));
+        };
+        column.local = local;
+        column.inhcount = inhcount;
+        Ok(())
+    }
+
+    /// The part of `RemoveInheritance` and `DetachPartitionFinalize` for the partition `table`: it loses its bound, its row of `pg_inherits` and its dependency on its parent.
+    pub fn detach_partition(&mut self, table: u32) -> Result<()> {
+        let Some(of) = self.relation_mut(table)?.partition_of.take() else { return Ok(()) };
+        let me = ObjRef::new(PG_CLASS, table);
+        let parent = ObjRef::new(PG_CLASS, of.parent);
+        self.depends
+            .retain(|d| d.object != me || d.referenced != parent || d.kind != DepKind::Auto);
+        Ok(())
+    }
+
+    /// `IndexSetParentIndex` with no parent: the index is no longer a partition of an index, and it loses its partition dependencies.
+    pub fn clear_index_parent(&mut self, index: u32) -> Result<()> {
+        if let Some(info) = self.relation_mut(index)?.index.as_mut() {
+            info.parent = 0;
+        }
+        self.drop_partition_depends(ObjRef::new(PG_CLASS, index));
+        Ok(())
+    }
+
+    /// `ConstraintSetParentConstraint` with no parent: the constraint is local again, with no parent constraint and no partition dependencies.
+    pub fn clear_constraint_parent(&mut self, constraint: u32) -> Result<()> {
+        let con = self
+            .constraints
+            .get_mut(&constraint)
+            .ok_or_else(|| no_object("constraint", constraint))?;
+        con.parent = 0;
+        con.local = true;
+        con.inhcount = con.inhcount.saturating_sub(1);
+        self.drop_partition_depends(ObjRef::new(PG_CONSTRAINT, constraint));
+        Ok(())
+    }
+
+    /// `deleteDependencyRecordsForClass` for the partition dependencies of an object.
+    fn drop_partition_depends(&mut self, object: ObjRef) {
+        self.depends.retain(|d| {
+            d.object != object || !matches!(d.kind, DepKind::PartitionPri | DepKind::PartitionSec)
+        });
+    }
+
     /// `heap_create_with_catalog` for a relation with a row type: the relation gets an OID, then its array type, then its row type. Each column depends on its type and its collation, as `AddNewAttributeTuples` records them.
     fn create_relation(&mut self, new: NewRelation, kind: RelKind) -> Result<u32> {
         Catalog::check_columns(&new.columns)?;

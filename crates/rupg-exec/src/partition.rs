@@ -364,7 +364,7 @@ fn rank(datum: &Datum) -> i8 {
 /// # Errors
 ///
 /// The errors of the compare of the bounds.
-pub(crate) fn leaves(oid: u32, session: &dyn Session) -> Result<Vec<u32>> {
+pub fn leaves(oid: u32, session: &dyn Session) -> Result<Vec<u32>> {
     let catalog = catalog(session)?;
     let d = Dispatch::new(relation(catalog, oid)?, session)?;
     let mut out = Vec::new();

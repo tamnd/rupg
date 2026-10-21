@@ -59,9 +59,9 @@ pub use colname::figure_colname;
 pub use constraints_set::set_constraints;
 pub use cte::{Cte, CteRef};
 pub use ddl::{
-    Allowed, Body, CopyRelation, CopyTarget, Defined, Message, RuleTree, Transform, attnums,
-    copy_filter, copy_insert, copy_relation, copy_target, define, function_body, is_definition,
-    lock_table, rewrite_insert, rule_tree, trigger_when, vacuum_relations,
+    Allowed, Body, CopyRelation, CopyTarget, Defined, Message, PartitionCheck, RuleTree, Transform,
+    attnums, copy_filter, copy_insert, copy_relation, copy_target, define, function_body,
+    is_definition, lock_table, rewrite_insert, rule_tree, trigger_when, vacuum_relations,
 };
 pub use expr::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, FieldStore, Func, FuncForm,

@@ -1,4 +1,4 @@
-//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column, and `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column, the `SET` and `RESET` of the options of the relation, `CLUSTER ON`, `SET WITHOUT CLUSTER`, `REPLICA IDENTITY`, and `SET WITHOUT OIDS`. The other subcommands give `0A000`.
+//! `ALTER TABLE` and the other forms of `AlterTableStmt`, as `AlterTable`, `ATPrepCmd` and `ATRewriteCatalogs` run them, and `ALTER SCHEMA ... OWNER TO`, as `AlterSchemaOwner` runs it. The subcommands are `ADD COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET DEFAULT`, `DROP DEFAULT`, `ADD CONSTRAINT`, `DROP CONSTRAINT`, `OWNER TO`, `ADD IDENTITY`, `SET` and `DROP IDENTITY` of an identity column, and `SET STATISTICS`, `SET STORAGE`, `SET COMPRESSION` and the `SET` and `RESET` of the options of a column, the `SET` and `RESET` of the options of the relation, `CLUSTER ON`, `SET WITHOUT CLUSTER`, `REPLICA IDENTITY`, and `SET WITHOUT OIDS`. `ATTACH PARTITION` and `DETACH PARTITION` are in `partition_attach`. The other subcommands give `0A000`.
 //!
 //! All subcommands get their checks first, in the order of the statement. Then they run in the passes of `AlterTablePass`: the drops, the changes of the types of columns, the new columns, the indexes and the constraints on the changed columns, the transform of the new constraints, the not-null constraints, the indexes, the other constraints, the defaults and the new identity columns, and last the change of the owner, the `SET` options of the identity columns and the other subcommands of `AT_PASS_MISC`, in the order of the statement.
 
@@ -201,6 +201,16 @@ impl Definer<'_, '_> {
             Err(e) => return Err(e),
         };
         let target = self.alter_target(stmt.objtype, found, relname(&rv))?;
+        if let [Some(Node::AlterTableCmd(cmd))] = stmt.cmds.as_slice()
+            && matches!(
+                cmd.subtype,
+                AlterTableType::AT_AttachPartition
+                    | AlterTableType::AT_DetachPartition
+                    | AlterTableType::AT_DetachPartitionFinalize
+            )
+        {
+            return self.partition_command(&target, cmd);
+        }
         if target.kind == b'p' {
             return Err(not_yet("ALTER TABLE of a partitioned table", None));
         }
@@ -269,7 +279,7 @@ impl Definer<'_, '_> {
     }
 
     /// `ATSimplePermissions`: the kinds of relations that the subcommand allows. The lookup checked the owner and the system catalogs before.
-    fn simple_permissions(
+    pub(super) fn simple_permissions(
         &self,
         target: &Target,
         cmd: &AlterTableCmd,

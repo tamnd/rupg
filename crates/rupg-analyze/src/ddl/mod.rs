@@ -20,6 +20,7 @@ mod identity;
 mod index;
 mod lock;
 mod partition;
+mod partition_attach;
 mod partition_index;
 mod rangetype;
 mod relation_options;
@@ -95,6 +96,17 @@ pub struct Defined {
     pub filled: Option<u32>,
     /// The views whose query reads an object that the statement renamed. The catalog keeps the text of a view, so the caller writes the text again from the query that the old names give.
     pub views: Vec<u32>,
+    /// The partitions of `ATTACH PARTITION` whose rows the caller checks against their new partition constraints after the statement, as `QueuePartitionConstraintValidation` queues them.
+    pub checks: Vec<PartitionCheck>,
+}
+
+/// A partition whose rows must satisfy its partition constraint, one entry of `tab->partition_constraint`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PartitionCheck {
+    /// The OID of the partition. The caller checks the rows of each of its leaf partitions.
+    pub table: u32,
+    /// True for the default partition, whose constraint is smaller after a new partition, with the error of `validateDefaultPartitionConstraint` for a row that violates it.
+    pub default: bool,
 }
 
 /// The expression of `USING` of `ALTER COLUMN ... TYPE` for one column, as `ATPrepAlterColumnType` keeps it in `tab->newvals`.
@@ -188,6 +200,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         truncated: Vec::new(),
         transforms: Vec::new(),
         views: Vec::new(),
+        checks: Vec::new(),
     };
     let mut filled = None;
     let result = match stmt {
@@ -238,6 +251,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         transforms: definer.transforms,
         filled,
         views: definer.views,
+        checks: definer.checks,
     }
 }
 
@@ -335,6 +349,8 @@ pub(crate) struct Definer<'a, 'c> {
     transforms: Vec<Transform>,
     /// The views of [`Defined::views`].
     views: Vec<u32>,
+    /// The partitions of [`Defined::checks`].
+    checks: Vec<PartitionCheck>,
 }
 
 /// An error for a part of a statement that rupg does not support yet.
@@ -708,7 +724,9 @@ impl Definer<'_, '_> {
 /// The detail of `errdetail_relkind_not_supported`.
 fn relkind_detail(kind: u8) -> &'static str {
     match kind {
-        b'i' | b'I' => "This operation is not supported for indexes.",
+        b'i' => "This operation is not supported for indexes.",
+        b'I' => "This operation is not supported for partitioned indexes.",
+        b'p' => "This operation is not supported for partitioned tables.",
         b'S' => "This operation is not supported for sequences.",
         b'v' => "This operation is not supported for views.",
         b'm' => "This operation is not supported for materialized views.",

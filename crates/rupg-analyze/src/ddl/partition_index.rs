@@ -1,6 +1,6 @@
 //! The indexes of partitioned tables, as `DefineIndex` makes them: the index of a partitioned table has an index in each partition, and a new partition gets an index for each index of its parent table. A partition has the columns of its parent table in the same order, so the column numbers and the expressions of the two indexes are the same.
 
-use rupg_catalog::{ConKind, NewIndex, NewIndexColumn, PartStrategy, RelKind};
+use rupg_catalog::{ConKind, IndexInfo, NewIndex, NewIndexColumn, PartStrategy, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 
@@ -84,7 +84,7 @@ impl Definer<'_, '_> {
         let children: Vec<u32> = self.catalog.partitions(table).iter().map(|r| r.oid).collect();
         let mut valid = true;
         for child in children {
-            match self.matching_index(child, index, constraint) {
+            match self.matching_index(child, index, constraint, false) {
                 Some((found, found_constraint, found_valid)) => {
                     self.catalog.set_index_parent(found, index)?;
                     if let (Some(child), Some(parent)) = (found_constraint, constraint) {
@@ -101,30 +101,25 @@ impl Definer<'_, '_> {
         Ok(valid)
     }
 
-    /// `CompareIndexInfo` of the indexes of the partition `child` with the index `parent` of its parent table: the first index in the order of the OIDs with no parent index, the same kind of uniqueness, the same access method, the same columns with the same collations and operator families, and the same expressions and predicate. The result is the index, its constraint and its `indisvalid`.
-    fn matching_index(
+    /// `CompareIndexInfo` of the indexes of the partition `child` with the index `parent` of its parent table: the first index in the order of the OIDs with no parent index, the same kind of uniqueness, the same access method, the same columns with the same collations and operator families, and the same expressions and predicate. The result is the index, its constraint and its `indisvalid`. For `attach`, as `AttachPartitionEnsureIndexes` does, an index that is not valid does not match, and the constraint of the index must be of the same kind.
+    pub(super) fn matching_index(
         &self,
         child: u32,
         parent: u32,
         constraint: Option<u32>,
+        attach: bool,
     ) -> Option<(u32, Option<u32>, bool)> {
         let wanted = self.catalog.relation(parent)?.index.as_ref()?;
+        let wanted_kind = constraint.and_then(|oid| self.catalog.constraint(oid)).map(|c| c.kind);
         for rel in self.catalog.relations() {
-            let Some(info) = rel.index.as_ref().filter(|i| i.table == child && i.parent == 0)
+            let Some(info) = rel
+                .index
+                .as_ref()
+                .filter(|i| i.table == child && i.parent == 0 && (i.valid || !attach))
             else {
                 continue;
             };
-            let same = info.unique == wanted.unique
-                && info.nulls_not_distinct == wanted.nulls_not_distinct
-                && info.method == wanted.method
-                && info.keys == wanted.keys
-                && info.key_count == wanted.key_count
-                && info.collations == wanted.collations
-                && info.classes.len() == wanted.classes.len()
-                && info.classes.iter().zip(&wanted.classes).all(|(&a, &b)| family(a) == family(b))
-                && info.exprs == wanted.exprs
-                && info.predicate == wanted.predicate;
-            if !same {
+            if !same_definition(info, wanted) {
                 continue;
             }
             let found_constraint = match constraint {
@@ -133,8 +128,8 @@ impl Definer<'_, '_> {
                         c.index == rel.oid && matches!(c.kind, ConKind::Primary | ConKind::Unique)
                     });
                     match found {
-                        Some(con) => Some(con.oid),
-                        None => continue,
+                        Some(con) if !attach || Some(con.kind) == wanted_kind => Some(con.oid),
+                        _ => continue,
                     }
                 }
                 None => None,
@@ -251,4 +246,18 @@ impl Definer<'_, '_> {
 /// The access method of the family of an operator class.
 fn family_method(class: u32) -> u32 {
     builtin::opclasses().iter().find(|c| c.oid == class).map_or(0, |c| c.method)
+}
+
+/// `CompareIndexInfo`: two indexes with the same kind of uniqueness, the same access method, the same columns with the same collations and operator families, and the same expressions and predicate.
+pub(super) fn same_definition(a: &IndexInfo, b: &IndexInfo) -> bool {
+    a.unique == b.unique
+        && a.nulls_not_distinct == b.nulls_not_distinct
+        && a.method == b.method
+        && a.keys == b.keys
+        && a.key_count == b.key_count
+        && a.collations == b.collations
+        && a.classes.len() == b.classes.len()
+        && a.classes.iter().zip(&b.classes).all(|(&x, &y)| family(x) == family(y))
+        && a.exprs == b.exprs
+        && a.predicate == b.predicate
 }
