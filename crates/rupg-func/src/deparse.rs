@@ -329,6 +329,8 @@ impl<'a> Deparser<'a> {
             }
             ExprKind::CoerceToDomain(arg, _) => self.coercion(arg, e.ty, e.typmod, e)?,
             ExprKind::DomainValue => self.buf.push_str("VALUE"),
+            // `processIndirection` shows an assignment to a field as the target of `SET`, so a `FieldStore` does not come here.
+            ExprKind::FieldStore(_) => return Err(Error::internal("unexpected FieldStore")),
             ExprKind::Subscript(sub) => {
                 // The array needs parentheses unless it is a column or a field, also when it is another subscript.
                 let parens =
@@ -1254,6 +1256,7 @@ fn is_simple(e: &Expr, parent: &Expr, paren: bool) -> bool {
         ExprKind::ScalarArrayOp { .. }
         | ExprKind::RowCompare(_)
         | ExprKind::CaseTest
+        | ExprKind::FieldStore(_)
         | ExprKind::NamedArg(_) => false,
     }
 }

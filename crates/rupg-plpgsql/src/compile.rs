@@ -96,6 +96,8 @@ struct Word {
     end: usize,
     /// `T_DATUM`: the variable that the names name, with the field of a record.
     datum: Option<(usize, Option<String>)>,
+    /// The count of the names that name the datum. A third name after a field of a record is a field of that field.
+    idents: usize,
     /// True for one word that is an unreserved keyword of PL/pgSQL.
     keyword: bool,
 }
@@ -303,6 +305,7 @@ impl Compiler<'_> {
             start: t.start,
             end: t.end,
             datum: None,
+            idents: 1,
             keyword: t.kind != token::PARAM && t.is_unreserved(),
         };
         while w.names.len() < 3 && self.sc.peek()?.is_char(b'.') && self.sc.peek_at(1)?.is_ident() {
@@ -311,6 +314,7 @@ impl Compiler<'_> {
             w.end = n.end;
             w.names.push(n.word.unwrap_or_default());
         }
+        w.idents = w.names.len();
         match w.names.len() {
             1 => {
                 let next = self.sc.peek()?;
@@ -340,6 +344,9 @@ impl Compiler<'_> {
                     let name = if used == 1 { w.names[1].clone() } else { w.names[2].clone() };
                     let field = self.recfield(d, &name);
                     w.datum = Some((d, field));
+                    if used == 1 {
+                        w.idents = 2;
+                    }
                 }
             }
         }
@@ -1488,11 +1495,11 @@ impl Compiler<'_> {
             None => Target::Datum(d),
             Some(field) => Target::Field(d, field),
         };
-        if self.sc.peek()?.is_char(b'[') {
+        if self.sc.peek()?.is_char(b'[') || w.idents < w.names.len() {
             // The parser of SQL reads the whole assignment, whose value is the new value of the target.
             // The names and the dots between them are the tokens of the word.
             self.sc.reset(self.sc.place() - (2 * w.names.len() - 1));
-            let mode = Mode::Part(w.names.len());
+            let mode = Mode::Part(w.idents);
             let (expr, _) = self.read_sql(&[";"], ";", mode, true, true)?;
             return Ok(self.finish(w.start, StmtKind::Assign { target, expr }));
         }

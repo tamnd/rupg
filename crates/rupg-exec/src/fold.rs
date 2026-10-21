@@ -1,9 +1,9 @@
 //! `eval_const_expressions` of `clauses.c`: the planner computes each part of an expression whose arguments are constants and whose function is immutable. An error of such a part, such as a division by zero, comes when the query is planned, before the server sends the description of the rows. The plan then runs the folded expressions, so a part that the fold drops does not run.
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Case, Expr, ExprKind, FromItem, Func, IsJson, Join, JoinKind, JoinRow,
-    JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation, RowCompare, SubLink, SubLinkKind,
-    Subscript, Var, XmlOp,
+    BoolOp, BoolTest, Case, Expr, ExprKind, FieldStore, FromItem, Func, IsJson, Join, JoinKind,
+    JoinRow, JsonCtor, JsonCtorKind, JsonValue, NamedArg, Query, Relation, RowCompare, SubLink,
+    SubLinkKind, Subscript, Var, XmlOp,
 };
 use rupg_common::{Error, Result};
 use rupg_func::Session;
@@ -367,6 +367,12 @@ impl<'a> Fold<'a> {
                 }
                 self.subqueries(container)
             }
+            ExprKind::FieldStore(store) => {
+                for (_, value) in &mut store.fields {
+                    self.subqueries(value)?;
+                }
+                self.subqueries(&mut store.arg)
+            }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
             | ExprKind::MinMax { args, .. }
@@ -531,7 +537,11 @@ impl<'a> Fold<'a> {
                 let upper = bounds(&sub.upper)?;
                 let lower = sub.lower.as_deref().map(&mut bounds).transpose()?;
                 let container = self.expr(&sub.container)?;
-                let assign = sub.assign.as_ref().map(|a| self.expr(a)).transpose()?;
+                // The CaseTest of an assignment to a part of the element is not the value of a CASE outside.
+                self.case.push(None);
+                let assign = sub.assign.as_ref().map(|a| self.expr(a)).transpose();
+                self.case.pop();
+                let assign = assign?;
                 let folded = Subscript { container, upper, lower, assign };
                 let all = folded
                     .bounds()
@@ -540,6 +550,16 @@ impl<'a> Fold<'a> {
                     .all(|e| value(e).is_some());
                 let kind = ExprKind::Subscript(Box::new(folded));
                 if all { self.evaluate(with(expr, kind)) } else { Ok(with(expr, kind)) }
+            }
+            ExprKind::FieldStore(store) => {
+                let arg = self.expr(&store.arg)?;
+                // The CaseTest of each new value is the old value of the field.
+                self.case.push(None);
+                let fields: Result<Vec<(usize, Expr)>> =
+                    store.fields.iter().map(|(i, v)| Ok((*i, self.expr(v)?))).collect();
+                self.case.pop();
+                let store = FieldStore { arg, fields: fields?, types: store.types.clone() };
+                Ok(with(expr, ExprKind::FieldStore(Box::new(store))))
             }
             ExprKind::Bool(BoolOp::Not, args) => {
                 let args = self.list(args)?;
