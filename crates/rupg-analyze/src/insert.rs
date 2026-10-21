@@ -506,6 +506,7 @@ impl Analyzer<'_> {
         };
         let at = place(rv.location);
         let name = rv.relname.as_deref().unwrap_or_default().to_string();
+        self.check_target(rv)?;
         let Some(oid) = self.lookup_relation(rv)? else {
             let shown = match &rv.schemaname {
                 Some(schema) => format!("{schema}.{name}"),
@@ -538,14 +539,8 @@ impl Analyzer<'_> {
             }
         }
         if let Some(catalog) = self.env.catalog() {
-            // The session fires the triggers of an `INSERT`, an `UPDATE` and a `DELETE`, but not the triggers with transition tables yet.
-            let event = trigger_event(kind);
-            let transition = |t: &rupg_catalog::Trigger| {
-                t.kind & event != 0 && (t.old_table.is_some() || t.new_table.is_some())
-            };
-            if (kind == WriteKind::Merge && self.user_triggers(oid, 0))
-                || catalog.triggers().any(|t| user_trigger(t, oid) && transition(t))
-            {
+            // The session fires the triggers of an `INSERT`, an `UPDATE` and a `DELETE`, but not the triggers of a `MERGE` yet.
+            if kind == WriteKind::Merge && self.user_triggers(oid, 0) {
                 return Err(not_yet(&format!("{what} a table with triggers")));
             }
             if catalog.rules().any(|r| r.relation == oid) {

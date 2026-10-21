@@ -303,6 +303,11 @@ pub trait Session {
     fn catalog(&self) -> Option<&rupg_catalog::Catalog> {
         None
     }
+    /// The rows of the transition table `name` of the trigger that runs, which a scan of a `NamedTuplestoreScan` reads, or `None` when the trigger has no such table.
+    fn transition_rows(&self, name: &str) -> Option<Rc<Vec<Vec<Value>>>> {
+        let _ = name;
+        None
+    }
     /// The rows of `pg_database` of the databases that `CREATE DATABASE` made, in the order of their OIDs. The rows of `initdb` are static rows. A session with no server has no other databases.
     fn databases(&self) -> Arc<[rupg_catalog::Database]> {
         Arc::from(Vec::new())

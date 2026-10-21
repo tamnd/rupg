@@ -100,6 +100,36 @@ pub(crate) fn now(clock: &dyn Clock) -> i64 {
     i64::try_from(clock.wall_us()).unwrap_or(i64::MAX).saturating_sub(EPOCH_SHIFT_US)
 }
 
+/// The old and the new rows of a write for the triggers with transition tables, as the tuplestores of `TransitionCaptureState`.
+#[derive(Debug, Default)]
+pub(crate) struct Captured {
+    /// The table of the write.
+    pub(crate) table: u32,
+    pub(crate) old: Rc<Vec<Vec<Value>>>,
+    pub(crate) new: Rc<Vec<Vec<Value>>>,
+}
+
+/// The transition tables of one trigger: the rows of the write with the names of `REFERENCING OLD TABLE` and `REFERENCING NEW TABLE`.
+#[derive(Clone, Debug)]
+pub(crate) struct Transition {
+    pub(crate) rows: Rc<Captured>,
+    pub(crate) old: Option<String>,
+    pub(crate) new: Option<String>,
+}
+
+impl Transition {
+    /// The rows of the transition table `name`.
+    fn rows(&self, name: &str) -> Option<&Rc<Vec<Vec<Value>>>> {
+        if self.old.as_deref() == Some(name) {
+            Some(&self.rows.old)
+        } else if self.new.as_deref() == Some(name) {
+            Some(&self.rows.new)
+        } else {
+            None
+        }
+    }
+}
+
 /// What a statement reads of the session, and the settings that `set_config` changes.
 #[derive(Debug)]
 pub(crate) struct Reader<'a> {
@@ -137,6 +167,8 @@ pub(crate) struct Reader<'a> {
     view: Option<View>,
     /// The session, which runs the functions in PL/pgSQL, or `None` for a reader that is not a session.
     conn: Option<&'a Connection>,
+    /// The transition tables of the trigger whose function runs, which the queries of the function read by their names.
+    transition: Option<Transition>,
 }
 
 /// The zone of a `TimeZone` value, or the value if it is not a zone.
@@ -286,6 +318,7 @@ impl<'a> Reader<'a> {
             warnings: RefCell::new(Vec::new()),
             view: None,
             conn: None,
+            transition: None,
         }
     }
 
@@ -343,6 +376,12 @@ impl<'a> Reader<'a> {
     /// The reader of the session `conn`, which can run a function in PL/pgSQL.
     pub(crate) fn with_connection(mut self, conn: &'a Connection) -> Reader<'a> {
         self.conn = Some(conn);
+        self
+    }
+
+    /// The reader of the queries of a trigger function with the transition tables `transition`.
+    pub(crate) fn with_transition(mut self, transition: Option<Transition>) -> Reader<'a> {
+        self.transition = transition;
         self
     }
 
@@ -750,6 +789,10 @@ impl rupg_func::Session for Reader<'_> {
         Some(&self.catalog)
     }
 
+    fn transition_rows(&self, name: &str) -> Option<Rc<Vec<Vec<Value>>>> {
+        self.transition.as_ref()?.rows(name).cloned()
+    }
+
     fn schemas(&self) -> Vec<String> {
         self.path().into_iter().map(|(name, _)| name).collect()
     }
@@ -1038,6 +1081,11 @@ impl Env for Reader<'_> {
 
     fn catalog(&self) -> Option<&Catalog> {
         Some(&self.catalog)
+    }
+
+    fn transition_table(&self, name: &str) -> Option<u32> {
+        let transition = self.transition.as_ref()?;
+        transition.rows(name).map(|_| transition.rows.table)
     }
 
     fn allow_system_table_mods(&self) -> bool {

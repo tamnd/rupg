@@ -95,6 +95,11 @@ impl Relation {
         }
     }
 
+    /// True when the columns of the relation are the columns of a table, with its dropped columns: a table, or a transition table of a trigger.
+    pub(crate) fn of_table(&self) -> bool {
+        self.oid != 0 || self.cte.as_ref().is_some_and(|c| c.transition)
+    }
+
     /// The call of `JSON_TABLE` when the relation is one.
     pub fn json_table(&self) -> Option<&crate::expr::JsonTable> {
         match self.function.as_ref()?.calls.as_slice() {
@@ -492,9 +497,12 @@ impl Analyzer<'_> {
         Ok(TableSample { handler, args, repeatable })
     }
 
-    /// A relation of `FROM` with a name: a query of `WITH`, or a table of the catalog.
+    /// A relation of `FROM` with a name: a query of `WITH`, a transition table of a trigger, or a table of the catalog.
     fn relation(&mut self, rv: &RangeVar) -> Result<Item> {
         if let Some(item) = self.cte_reference(rv)? {
+            return Ok(item);
+        }
+        if let Some(item) = self.transition_reference(rv)? {
             return Ok(item);
         }
         self.catalog_relation(rv)
@@ -947,7 +955,7 @@ impl Analyzer<'_> {
         let mut colnames: Vec<String> = columns.iter().map(|c| c.name.clone()).collect();
         // A dropped column of a table keeps its place in the range table, but it has no name and the alias does not name it.
         let dropped: Vec<bool> =
-            columns.iter().map(|c| relation.oid != 0 && c.is_dropped()).collect();
+            columns.iter().map(|c| relation.of_table() && c.is_dropped()).collect();
         if let Some(alias) = alias {
             let given = alias_columns(alias);
             let live = dropped.iter().filter(|&&d| !d).count();
@@ -1073,8 +1081,21 @@ impl Analyzer<'_> {
         Ok(index)
     }
 
+    /// `setTargetTable`: a transition table of a trigger cannot be the target of a write.
+    pub(crate) fn check_target(&self, rv: &RangeVar) -> Result<()> {
+        let name = rv.relname.as_deref().unwrap_or_default();
+        if rv.schemaname.is_none() && self.env.transition_table(name).is_some() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                format!("relation \"{name}\" cannot be the target of a modifying statement"),
+            ));
+        }
+        Ok(())
+    }
+
     /// `setTargetTable` for an `UPDATE` or a `DELETE`: the target table as the first part of `FROM`, in the namespace.
     pub(crate) fn target_relation(&mut self, rv: &RangeVar) -> Result<FromItem> {
+        self.check_target(rv)?;
         let item = self.catalog_relation(rv)?;
         let index = self.scope.entries[item.entry].relation.unwrap_or_default();
         self.scope.namespace.push(item);
@@ -1087,6 +1108,7 @@ impl Analyzer<'_> {
     ///
     /// `42712` when the source has the name of the target table, and the errors of the source.
     pub(crate) fn merge_from(&mut self, rv: &RangeVar, source: &Node) -> Result<FromItem> {
+        self.check_target(rv)?;
         let target = self.catalog_relation(rv)?;
         let (item, _, namespace) = self.transform_from_item(source)?;
         if namespace.iter().any(|other| other.name == target.name) {
@@ -1742,7 +1764,7 @@ impl Analyzer<'_> {
             .ok_or_else(|| Error::internal("a whole-row reference has no relation"))?;
         let mut columns = Vec::with_capacity(entry.columns.len());
         for (i, (name, column)) in entry.columns.iter().zip(&relation.columns).enumerate() {
-            if relation.oid != 0 && column.is_dropped() {
+            if relation.of_table() && column.is_dropped() {
                 continue;
             }
             let attnum = i16::try_from(i + 1).map_err(|_| Error::internal("too many columns"))?;

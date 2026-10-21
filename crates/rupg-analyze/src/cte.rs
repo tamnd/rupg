@@ -52,6 +52,8 @@ pub struct CteRef {
     pub write: Option<usize>,
     /// The table and the column of each column of the reference to a statement that changes data, from the targets of its `RETURNING`.
     pub origins: Vec<Option<(u32, i16)>>,
+    /// True for a transition table of the trigger that runs, as a `RangeTblEntry` of the kind `RTE_NAMEDTUPLESTORE`. The relation then has no subquery, and its rows are the old or the new rows of the write that fired the trigger.
+    pub transition: bool,
 }
 
 /// A query of `WITH` in the scope of a query, as an item of `p_ctenamespace`.
@@ -713,6 +715,7 @@ impl Analyzer<'_> {
                 work: None,
                 write: Some(write),
                 origins: item.origins.clone(),
+                transition: false,
             });
             let alias = rv.alias.as_deref();
             let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
@@ -731,8 +734,13 @@ impl Analyzer<'_> {
             None => Relation::new(0, columns, None, None, None),
         };
         let work = if item.query.is_none() { item.work } else { None };
-        relation.cte =
-            Some(CteRef { name: name.to_string(), work, write: None, origins: Vec::new() });
+        relation.cte = Some(CteRef {
+            name: name.to_string(),
+            work,
+            write: None,
+            origins: Vec::new(),
+            transition: false,
+        });
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
         // The alias cannot name the columns of `SEARCH` and `CYCLE`.
@@ -750,6 +758,36 @@ impl Analyzer<'_> {
         let mut item = self.add_relation(relation, refname, alias)?;
         item.hide_last(hidden);
         Ok(Some(item))
+    }
+
+    /// `scanNameSpaceForENR` and `addRangeTableEntryForENR`: a reference to a transition table of the trigger that runs, which has a name with no schema. Its columns are the columns of the table of the trigger.
+    pub(crate) fn transition_reference(&mut self, rv: &RangeVar) -> Result<Option<Item>> {
+        let Some(name) = unqualified(rv) else { return Ok(None) };
+        let Some(table) = self.env.transition_table(name) else { return Ok(None) };
+        let Some(rel) = self.env.catalog().and_then(|c| c.relation(table)) else {
+            return Ok(None);
+        };
+        let columns = rel
+            .columns
+            .iter()
+            .map(|c| Column {
+                name: if c.dropped { String::new() } else { c.name.clone() },
+                ty: if c.dropped { 0 } else { c.ty },
+                typmod: c.typmod,
+                not_null: false,
+            })
+            .collect();
+        let mut relation = Relation::new(0, columns, None, None, None);
+        relation.cte = Some(CteRef {
+            name: name.to_string(),
+            work: None,
+            write: None,
+            origins: Vec::new(),
+            transition: true,
+        });
+        let alias = rv.alias.as_deref();
+        let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
+        self.add_relation(relation, refname, alias).map(Some)
     }
 
     /// `isFutureCTE`: true when a query of `WITH` that the query cannot read yet has the name.
