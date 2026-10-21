@@ -227,7 +227,7 @@ impl<'q> Builder<'q> {
         }
         let mut stats = Stats::default();
         needed(level, &mut stats);
-        let rel = self.build(level, tree, &found.spans, &mut stats);
+        let rel = self.build(level, tree, &found, &mut stats);
         let mut node = rel.node;
         if !gating.is_empty() {
             // `create_gating_plan`: the `Result` has the costs of the node below.
@@ -242,12 +242,12 @@ impl<'q> Builder<'q> {
         (node, rel.order, found.joined)
     }
 
-    /// The plan of a part of the tree of the joins. The inner joins of a join domain are one problem of the order of the joins, with the outer joins as items of the problem. `spans` has the relations of each equivalence class.
+    /// The plan of a part of the tree of the joins. The inner joins of a join domain are one problem of the order of the joins, with the outer joins as items of the problem. `found` has the equivalence classes.
     fn build(
         &mut self,
         level: &Level<'q>,
         tree: Tree<'q>,
-        spans: &[BTreeSet<usize>],
+        found: &classes::Found<'q>,
         stats: &mut Stats,
     ) -> Rel<'q> {
         match tree {
@@ -256,13 +256,13 @@ impl<'q> Builder<'q> {
                 let (mut items, mut pool) = (Vec::new(), Vec::new());
                 flatten(Tree::Join(join), &mut items, &mut pool);
                 pool.sort_by_key(|q| q.order.unwrap_or(usize::MAX));
-                let rels = items.into_iter().map(|t| self.build(level, t, spans, stats)).collect();
-                search::search(level, rels, &pool, spans, stats)
+                let rels = items.into_iter().map(|t| self.build(level, t, found, stats)).collect();
+                search::search(level, rels, &pool, found, stats)
             }
             Tree::Join(join) => {
                 let JoinTree { kind, left, right, quals, filter, .. } = *join;
-                let left = self.build(level, left, spans, stats);
-                let right = self.build(level, right, spans, stats);
+                let left = self.build(level, left, found, stats);
+                let right = self.build(level, right, found, stats);
                 join_rels(level, kind, left, right, quals, filter, stats)
             }
         }

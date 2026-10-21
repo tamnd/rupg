@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- Conditions of joins from equivalence classes with no constant in `EXPLAIN`, as `generate_join_implied_equalities` makes them in PostgreSQL. When the `=` conditions of a query make three or more columns of different tables equal, each join gets one condition of the class, between the first column of each side, also for two tables that the query does not compare. A join of three tables on one value now has the estimate of one condition and not of two (#536).
+
 ## 0.1.64 (2026-10-22)
 
 ### Added
