@@ -1520,6 +1520,7 @@ fn constraint_def(con: &Constraint, paren: bool, session: &dyn Session) -> Resul
         }
         // The `NOT NULL` constraint of a domain has no column.
         ConKind::NotNull if con.domain != 0 => out.push_str("NOT NULL"),
+        ConKind::Trigger => out.push_str("TRIGGER"),
         ConKind::NotNull => {
             out.push_str(&format!("NOT NULL {}", column_list(relation()?, &con.keys[..1])?));
             if con.no_inherit {

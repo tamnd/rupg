@@ -407,6 +407,8 @@ pub struct Connection {
     snapshot: RefCell<Option<Snapshot>>,
     /// The rows of the deferred triggers of the foreign keys, in the order of the writes.
     deferred: RefCell<Vec<Batch>>,
+    /// The events of the deferred constraint triggers, in the order of the writes.
+    deferred_events: RefCell<Vec<trigger::Event>>,
     /// The modes that `SET CONSTRAINTS` gave in the transaction.
     modes: RefCell<deferred::Modes>,
     /// The state of the transaction at each savepoint, the outermost first, as the names of the savepoints in [`Transaction`].
@@ -487,6 +489,7 @@ impl Connection {
             command: Cell::new(0),
             snapshot: RefCell::new(None),
             deferred: RefCell::new(Vec::new()),
+            deferred_events: RefCell::new(Vec::new()),
             modes: RefCell::new(deferred::Modes::default()),
             marks: Vec::new(),
             plpgsql: rupg_plpgsql::Cache::default(),
@@ -1571,7 +1574,10 @@ impl Connection {
             }
             if last || matches!(node, Node::TransactionStmt(_)) {
                 // The deferred triggers fire before the commit. Their error ends the transaction, and the tag of the statement does not go.
-                if let Err(error) = self.pre_commit() {
+                let committed = self.pre_commit();
+                late.extend(self.trigger_notices());
+                if let Err(error) = committed {
+                    self.notices(&mut late, text, &[], out);
                     self.fail(&error, None, out);
                     return true;
                 }
@@ -4762,6 +4768,12 @@ mod tests {
     #[test]
     fn trigger_depth() {
         big_stack(|| script(include_str!("connection/trigger_depth.test")));
+    }
+
+    /// `CREATE CONSTRAINT TRIGGER`: the rows of `pg_trigger` and `pg_constraint`, `pg_get_triggerdef` and `pg_get_constraintdef`, the triggers `NOT DEFERRABLE`, `INITIALLY IMMEDIATE` and `INITIALLY DEFERRED` with `FROM` and `WHEN`, the events that fire at the commit, at `SET CONSTRAINTS ... IMMEDIATE` and after a savepoint, an error at the commit and after `SET CONSTRAINTS` in a savepoint, the errors of `CREATE`, and the drops of the trigger, of the constraint, of the table of `FROM` and of the table. `connection/constraint_triggers.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn constraint_triggers() {
+        big_stack(|| script(include_str!("connection/constraint_triggers.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

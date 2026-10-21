@@ -78,9 +78,6 @@ pub fn trigger_when(env: &dyn Env, oid: u32) -> Result<Option<(Query, Expr)>> {
 impl Definer<'_, '_> {
     /// `CreateTriggerFiringOn` for a trigger of `CREATE TRIGGER`.
     pub(super) fn create_trigger(&mut self, stmt: &CreateTrigStmt) -> Result<()> {
-        if stmt.isconstraint {
-            return Err(not_yet("CREATE CONSTRAINT TRIGGER", None));
-        }
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let found = self.lookup_relation(&rv)?;
         let name = relname(&rv).to_string();
@@ -117,6 +114,13 @@ impl Definer<'_, '_> {
                     "Foreign tables cannot have INSTEAD OF triggers.",
                 ));
             }
+            // A constraint trigger on a foreign table could defer a check of a foreign key.
+            b'f' if stmt.isconstraint => {
+                return Err(wrong(
+                    "foreign table",
+                    "Foreign tables cannot have constraint triggers.",
+                ));
+            }
             b'f' => {}
             _ => {
                 return Err(Error::new(
@@ -134,6 +138,13 @@ impl Definer<'_, '_> {
         }
         let Found::User(oid) = found else {
             return Err(not_yet("a trigger on a system catalog", None));
+        };
+        let constraint_relation = match stmt.constrrel.as_deref().filter(|_| stmt.isconstraint) {
+            Some(rv) => match self.lookup_relation(rv)? {
+                Found::User(oid) => oid,
+                Found::Builtin(row) => row.oid,
+            },
+            None => 0,
         };
         // rupg has no `GRANT`, so the privilege `TRIGGER` is the privilege of the owner.
         let owner = self.catalog.relation(oid).map_or(0, |r| r.owner);
@@ -188,6 +199,15 @@ impl Definer<'_, '_> {
                     ),
                 ));
             }
+            // The pending events of a constraint trigger and the facts of its constraint make a replace hard.
+            if existing.constraint != 0 {
+                return Err(Error::new(
+                    SqlState::DUPLICATE_OBJECT,
+                    format!(
+                        "trigger \"{trigname}\" for relation \"{name}\" is a constraint trigger"
+                    ),
+                ));
+            }
         }
         let args = stmt.args.iter().flatten().map(arg_text).collect::<Result<Vec<_>>>()?;
         if args.len() > usize::from(i16::MAX.unsigned_abs()) {
@@ -207,6 +227,10 @@ impl Definer<'_, '_> {
             old_table,
             new_table,
             qual,
+            constraint: stmt.isconstraint,
+            constraint_relation,
+            deferrable: stmt.deferrable,
+            deferred: stmt.initdeferred,
         };
         self.catalog.create_trigger(new, stmt.replace, &qual_refs)?;
         Ok(())

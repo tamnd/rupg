@@ -304,9 +304,11 @@ fn changes_rows(old: &Catalog, new: &Catalog, rel: &Relation) -> bool {
     if added {
         return true;
     }
-    let constraint = new
-        .constraints_of(rel.oid)
-        .any(|c| c.kind != ConKind::NotNull && c.validated && old.constraint(c.oid).is_none());
+    let constraint = new.constraints_of(rel.oid).any(|c| {
+        !matches!(c.kind, ConKind::NotNull | ConKind::Trigger)
+            && c.validated
+            && old.constraint(c.oid).is_none()
+    });
     let index = new.relations().any(|index| {
         old.relation(index.oid).is_none()
             && index.index.as_ref().is_some_and(|info| info.table == rel.oid && info.unique)

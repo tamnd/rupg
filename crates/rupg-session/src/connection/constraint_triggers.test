@@ -1,0 +1,234 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ct_a (i int);
+CREATE TABLE
+> CREATE TABLE ct_ref (j int);
+CREATE TABLE
+> CREATE FUNCTION ct_f() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % %: % depth %', tg_name, tg_op, tg_argv[0], coalesce(new.i, old.i), pg_trigger_depth();
+>>   IF coalesce(new.i, old.i) < 0 THEN
+>>     RAISE EXCEPTION 'bad row %', coalesce(new.i, old.i);
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE CONSTRAINT TRIGGER ct_imm AFTER INSERT ON ct_a FOR EACH ROW EXECUTE FUNCTION ct_f('imm');
+CREATE TRIGGER
+> CREATE CONSTRAINT TRIGGER ct_def AFTER INSERT OR UPDATE ON ct_a DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ct_f('def');
+CREATE TRIGGER
+> CREATE CONSTRAINT TRIGGER ct_dim AFTER DELETE ON ct_a FROM ct_ref DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW WHEN (old.i > 1) EXECUTE FUNCTION ct_f('dim');
+CREATE TRIGGER
+> SELECT tgname, tgconstrrelid::regclass, tgdeferrable, tginitdeferred, tgisinternal, tgconstraint <> 0 AS has_con FROM pg_trigger WHERE tgrelid = 'ct_a'::regclass ORDER BY tgname;
+fields tgname@pg_trigger.4:19:64:-1,tgconstrrelid:2205:4:-1,tgdeferrable@pg_trigger.12:16:1:-1,tginitdeferred@pg_trigger.13:16:1:-1,tgisinternal@pg_trigger.8:16:1:-1,has_con:16:1:-1
+row ct_def,-,t,t,f,t
+row ct_dim,ct_ref,t,f,f,t
+row ct_imm,-,f,f,f,t
+SELECT 3
+> SELECT conname, contype, condeferrable, condeferred, conrelid::regclass, conindid, confrelid, conkey, pg_get_constraintdef(oid) FROM pg_constraint WHERE conrelid = 'ct_a'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,condeferrable@pg_constraint.5:16:1:-1,condeferred@pg_constraint.6:16:1:-1,conrelid:2205:4:-1,conindid@pg_constraint.11:26:4:-1,confrelid@pg_constraint.13:26:4:-1,conkey@pg_constraint.21:1005:-1:-1,pg_get_constraintdef:25:-1:-1
+row ct_def,t,t,t,ct_a,0,0,NULL,TRIGGER DEFERRABLE INITIALLY DEFERRED
+row ct_dim,t,t,f,ct_a,0,0,NULL,TRIGGER DEFERRABLE
+row ct_imm,t,f,f,ct_a,0,0,NULL,TRIGGER
+SELECT 3
+> SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = 'ct_a'::regclass ORDER BY tgname;
+fields pg_get_triggerdef:25:-1:-1
+row CREATE CONSTRAINT TRIGGER ct_def AFTER INSERT OR UPDATE ON public.ct_a DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ct_f('def')
+row CREATE CONSTRAINT TRIGGER ct_dim AFTER DELETE ON public.ct_a FROM ct_ref DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW WHEN ((old.i > 1)) EXECUTE FUNCTION ct_f('dim')
+row CREATE CONSTRAINT TRIGGER ct_imm AFTER INSERT ON public.ct_a NOT DEFERRABLE INITIALLY IMMEDIATE FOR EACH ROW EXECUTE FUNCTION ct_f('imm')
+SELECT 3
+> INSERT INTO ct_a VALUES (1), (2);
+NOTICE 00000 ct_imm INSERT imm: 1 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_imm INSERT imm: 2 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_def INSERT def: 1 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_def INSERT def: 2 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+INSERT 0 2
+> BEGIN;
+BEGIN
+> INSERT INTO ct_a VALUES (3);
+NOTICE 00000 ct_imm INSERT imm: 3 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+INSERT 0 1
+> SELECT 'after insert';
+fields ?column?:25:-1:-1
+row after insert
+SELECT 1
+> UPDATE ct_a SET i = i + 10 WHERE i = 3;
+UPDATE 1
+> SELECT 'before commit';
+fields ?column?:25:-1:-1
+row before commit
+SELECT 1
+> COMMIT;
+NOTICE 00000 ct_def INSERT def: 3 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_def UPDATE def: 13 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+COMMIT
+> BEGIN;
+BEGIN
+> INSERT INTO ct_a VALUES (4);
+NOTICE 00000 ct_imm INSERT imm: 4 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+INSERT 0 1
+> SET CONSTRAINTS ct_def IMMEDIATE;
+NOTICE 00000 ct_def INSERT def: 4 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+SET CONSTRAINTS
+> INSERT INTO ct_a VALUES (5);
+NOTICE 00000 ct_def INSERT def: 5 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_imm INSERT imm: 5 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+INSERT 0 1
+> SET CONSTRAINTS ALL DEFERRED;
+SET CONSTRAINTS
+> DELETE FROM ct_a WHERE i = 2;
+DELETE 1
+> INSERT INTO ct_a VALUES (6);
+NOTICE 00000 ct_imm INSERT imm: 6 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+INSERT 0 1
+> SAVEPOINT s1;
+SAVEPOINT
+> INSERT INTO ct_a VALUES (7);
+NOTICE 00000 ct_imm INSERT imm: 7 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+INSERT 0 1
+> ROLLBACK TO s1;
+ROLLBACK
+> INSERT INTO ct_a VALUES (8);
+NOTICE 00000 ct_imm INSERT imm: 8 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+INSERT 0 1
+> SET CONSTRAINTS ALL IMMEDIATE;
+NOTICE 00000 ct_dim DELETE dim: 2 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_def INSERT def: 6 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_def INSERT def: 8 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+SET CONSTRAINTS
+> SELECT 'after set';
+fields ?column?:25:-1:-1
+row after set
+SELECT 1
+> COMMIT;
+COMMIT
+> BEGIN;
+BEGIN
+> INSERT INTO ct_a VALUES (-1);
+NOTICE 00000 ct_imm INSERT imm: -1 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+ERROR P0001 bad row -1 (PL/pgSQL function ct_f() line 5 at RAISE)
+> SELECT 'not yet';
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> COMMIT;
+ROLLBACK
+> SELECT count(*) FROM ct_a WHERE i = -1;
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> INSERT INTO ct_a VALUES (-2);
+NOTICE 00000 ct_imm INSERT imm: -2 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+ERROR P0001 bad row -2 (PL/pgSQL function ct_f() line 5 at RAISE)
+> SET CONSTRAINTS ct_def IMMEDIATE;
+ERROR 25P02 current transaction is aborted, commands ignored until end of transaction block
+> ROLLBACK;
+ROLLBACK
+> BEGIN;
+BEGIN
+> INSERT INTO ct_a VALUES (-3);
+NOTICE 00000 ct_imm INSERT imm: -3 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+ERROR P0001 bad row -3 (PL/pgSQL function ct_f() line 5 at RAISE)
+> ROLLBACK;
+ROLLBACK
+> SET CONSTRAINTS ct_imm DEFERRED;
+WARNING 25P01 SET CONSTRAINTS can only be used in transaction blocks
+ERROR 42809 constraint "ct_imm" is not deferrable
+> BEGIN;
+BEGIN
+> SET CONSTRAINTS ct_imm DEFERRED;
+ERROR 42809 constraint "ct_imm" is not deferrable
+> ROLLBACK;
+ROLLBACK
+> CREATE OR REPLACE TRIGGER ct_def AFTER INSERT ON ct_a FOR EACH ROW EXECUTE FUNCTION ct_f('x');
+ERROR 42710 trigger "ct_def" for relation "ct_a" is a constraint trigger
+> CREATE CONSTRAINT TRIGGER ct_def AFTER INSERT ON ct_a FOR EACH ROW EXECUTE FUNCTION ct_f('x');
+ERROR 42710 trigger "ct_def" for relation "ct_a" already exists
+> CREATE CONSTRAINT TRIGGER ct_b BEFORE INSERT ON ct_a FOR EACH ROW EXECUTE FUNCTION ct_f('x');
+ERROR 42601 syntax error at or near "BEFORE" at 32
+> CREATE CONSTRAINT TRIGGER ct_b AFTER INSERT ON ct_a FOR EACH STATEMENT EXECUTE FUNCTION ct_f('x');
+ERROR 42601 syntax error at or near "STATEMENT" at 62
+> CREATE CONSTRAINT TRIGGER ct_b AFTER INSERT ON ct_a FROM no_such FOR EACH ROW EXECUTE FUNCTION ct_f('x');
+ERROR 42P01 relation "no_such" does not exist
+> ALTER TABLE ct_a DROP CONSTRAINT ct_imm;
+ERROR 2BP01 cannot drop constraint ct_imm on table ct_a because trigger ct_imm on table ct_a requires it
+HINT You can drop trigger ct_imm on table ct_a instead.
+> DROP TRIGGER ct_imm ON ct_a;
+DROP TRIGGER
+> SELECT conname FROM pg_constraint WHERE conrelid = 'ct_a'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1
+row ct_def
+row ct_dim
+SELECT 2
+> DROP TABLE ct_ref;
+DROP TABLE
+> DROP TABLE ct_ref CASCADE;
+ERROR 42P01 table "ct_ref" does not exist
+> SELECT tgname FROM pg_trigger WHERE tgrelid = 'ct_a'::regclass ORDER BY tgname;
+fields tgname@pg_trigger.4:19:64:-1
+row ct_def
+SELECT 1
+> SELECT conname FROM pg_constraint WHERE conrelid = 'ct_a'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1
+row ct_def
+SELECT 1
+> INSERT INTO ct_a VALUES (9);
+NOTICE 00000 ct_def INSERT def: 9 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+INSERT 0 1
+> DROP TABLE ct_a;
+DROP TABLE
+> SELECT count(*) FROM pg_constraint WHERE conname LIKE 'ct\_%';
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE ct_d (i int);
+CREATE TABLE
+> CREATE CONSTRAINT TRIGGER ct_dd AFTER INSERT ON ct_d DEFERRABLE INITIALLY DEFERRED FOR EACH ROW EXECUTE FUNCTION ct_f('dd');
+CREATE TRIGGER
+> INSERT INTO ct_d VALUES (-4);
+NOTICE 00000 ct_dd INSERT dd: -4 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+ERROR P0001 bad row -4 (PL/pgSQL function ct_f() line 5 at RAISE)
+> SELECT count(*) FROM ct_d;
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> INSERT INTO ct_d VALUES (1);
+INSERT 0 1
+> INSERT INTO ct_d VALUES (-5);
+INSERT 0 1
+> SELECT 'ok';
+fields ?column?:25:-1:-1
+row ok
+SELECT 1
+> COMMIT;
+NOTICE 00000 ct_dd INSERT dd: 1 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_dd INSERT dd: -5 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+ERROR P0001 bad row -5 (PL/pgSQL function ct_f() line 5 at RAISE)
+> SELECT count(*) FROM ct_d;
+fields count:20:8:-1
+row 0
+SELECT 1
+> BEGIN;
+BEGIN
+> INSERT INTO ct_d VALUES (2);
+INSERT 0 1
+> SAVEPOINT s2;
+SAVEPOINT
+> INSERT INTO ct_d VALUES (-6);
+INSERT 0 1
+> SET CONSTRAINTS ct_dd IMMEDIATE;
+NOTICE 00000 ct_dd INSERT dd: 2 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+NOTICE 00000 ct_dd INSERT dd: -6 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+ERROR P0001 bad row -6 (PL/pgSQL function ct_f() line 5 at RAISE)
+> ROLLBACK TO s2;
+ROLLBACK
+> COMMIT;
+NOTICE 00000 ct_dd INSERT dd: 2 depth 1 (PL/pgSQL function ct_f() line 3 at RAISE)
+COMMIT
+> SELECT * FROM ct_d;
+fields i@ct_d.1:23:4:-1
+row 2
+SELECT 1
