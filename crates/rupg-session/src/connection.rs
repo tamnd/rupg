@@ -4646,6 +4646,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plpgsql_cursors.test")));
     }
 
+    /// The assignment to an element or a slice of an array variable in PL/pgSQL, as `RAW_PARSE_PLPGSQL_ASSIGNn` parses it: an array of more than one dimension, a slice that makes a one-dimensional array larger, a variable that is null, the typmod of the element, and the errors of the subscripts and of the bounds. `connection/plpgsql_array_assign.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_array_assign() {
+        big_stack(|| script(include_str!("connection/plpgsql_array_assign.test")));
+    }
+
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn array_agg_array() {

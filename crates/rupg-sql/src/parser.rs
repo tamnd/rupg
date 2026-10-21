@@ -250,6 +250,25 @@ pub fn parse_plpgsql_expr(text: &str) -> Result<crate::nodes::Node, Error> {
     }
 }
 
+/// The `PLAssignStmt` of a PL/pgSQL assignment `text`, as `raw_parser` gives it in the modes `RAW_PARSE_PLPGSQL_ASSIGN1` to `RAW_PARSE_PLPGSQL_ASSIGN3`: the target with `names` names, which is 1, 2 or 3, its indirection, `:=` and the value. An error is the first error of the lexer, the grammar or an action, at a byte offset in `text`.
+pub fn parse_plpgsql_assign(text: &str, names: usize) -> Result<crate::nodes::Node, Error> {
+    let mode = match names {
+        1 => crate::token::MODE_PLPGSQL_ASSIGN1,
+        2 => crate::token::MODE_PLPGSQL_ASSIGN2,
+        _ => crate::token::MODE_PLPGSQL_ASSIGN3,
+    };
+    let mut parser = Parser::with_mode(text, Some(mode));
+    if run(&mut parser)?.is_none() {
+        return Err(parser.yyerror("syntax error"));
+    }
+    match parser.finish().0.pop() {
+        Some(Some(crate::nodes::Node::RawStmt(raw))) => {
+            raw.stmt.ok_or_else(|| Error::internal("the mode of an assignment gave no statement"))
+        }
+        _ => Err(Error::internal("the mode of an assignment gave no RawStmt")),
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

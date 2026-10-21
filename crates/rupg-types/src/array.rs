@@ -85,7 +85,7 @@ fn binary(message: String) -> TypeError {
 }
 
 /// The number of elements of an array with these dimensions, `ArrayGetNItems`.
-fn item_count(dims: &[ArrayDim]) -> Result<usize, TypeError> {
+pub(crate) fn item_count(dims: &[ArrayDim]) -> Result<usize, TypeError> {
     let mut count = 1i32;
     for dim in dims {
         // A negative length is an upper bound that overflowed.

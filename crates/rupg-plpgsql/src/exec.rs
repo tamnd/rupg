@@ -10,7 +10,7 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
 use rupg_sql::nodes::FetchDirection;
-use rupg_types::{Array, ArrayDim, Record, Value, oid};
+use rupg_types::{Array, Record, Value, oid};
 
 use crate::ast::{
     Block, Cond, DatumKind, DiagItem, Expr, Function, Mode, Opened, RaiseOption, Returned, Source,
@@ -200,7 +200,7 @@ fn spi_error(e: &Expr, error: Error) -> Error {
 fn spi_line(mode: Mode, text: &str) -> String {
     match mode {
         Mode::Expr => format!("PL/pgSQL expression \"{text}\""),
-        Mode::Assign => format!("PL/pgSQL assignment \"{text}\""),
+        Mode::Assign | Mode::Part(_) => format!("PL/pgSQL assignment \"{text}\""),
         Mode::Statement => format!("SQL statement \"{text}\""),
     }
 }
@@ -1691,11 +1691,17 @@ impl Exec<'_> {
             Mode::Expr | Mode::Assign => {
                 rupg_sql::parse_plpgsql_expr(&e.text).map_err(sql_error)?
             }
+            Mode::Part(names) => {
+                rupg_sql::parse_plpgsql_assign(&e.text, names).map_err(sql_error)?
+            }
         };
         let resolver =
             Resolver { func: self.f, slots: &self.slots, ns: e.ns, bindings: RefCell::default() };
         let datum = e.target.map(|d| &self.f.datums[d]);
         let query = match datum.map(|d| (&d.kind, &d.name)) {
+            _ if matches!(e.mode, Mode::Part(_)) => {
+                rupg_analyze::analyze_assign_part(&node, self.env(), &resolver)?
+            }
             Some((&DatumKind::Var { ty, typmod }, name)) if ty != 0 => {
                 rupg_analyze::analyze_assign(&node, self.env(), &resolver, (ty, typmod), name)?
             }
@@ -1860,52 +1866,6 @@ impl Exec<'_> {
         match target {
             Target::Datum(d) => self.assign_datum(*d, value, ty, typmod),
             Target::Field(d, name) => self.assign_field(*d, name, value, ty, typmod),
-            Target::Element(d, subscripts) => {
-                if subscripts.len() != 1 {
-                    return Err(Error::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        "an assignment to an element of an array with more than one dimension is not supported yet",
-                    ));
-                }
-                let (sub, sty, smod) = self.eval(&subscripts[0])?;
-                let i = match self.cast(sub, (sty, smod), (oid::INT4, -1))? {
-                    Value::Int4(i) => i,
-                    _ => {
-                        return Err(Error::new(
-                            SqlState::NULL_VALUE_NOT_ALLOWED,
-                            "array subscript in assignment must not be null",
-                        ));
-                    }
-                };
-                let Slot::Var { ty: aty, .. } = &self.slots[*d] else {
-                    return Err(Error::new(
-                        SqlState::DATATYPE_MISMATCH,
-                        "subscripted object is not an array",
-                    ));
-                };
-                let aty = *aty;
-                let elem = types::element(aty);
-                if elem == 0 {
-                    return Err(Error::new(
-                        SqlState::DATATYPE_MISMATCH,
-                        format!(
-                            "cannot subscript type {} because it does not support subscripting",
-                            types::name(aty)
-                        ),
-                    ));
-                }
-                let value = self.cast(value, (ty, typmod), (elem, -1))?;
-                let Slot::Var { value: current, .. } = &mut self.slots[*d] else {
-                    return Ok(());
-                };
-                let mut array = match std::mem::replace(current, Value::Null) {
-                    Value::Array(array) => *array,
-                    _ => Array::empty(),
-                };
-                set_element(&mut array, i, value)?;
-                *current = Value::Array(Box::new(array));
-                Ok(())
-            }
         }
     }
 
@@ -2079,37 +2039,6 @@ fn cursor_query(plan: &Plan) -> Result<()> {
 /// The columns of the result of a plan: the name, the type and the typmod of each.
 fn columns(plan: &Plan) -> Vec<Field> {
     plan.columns().iter().map(|t| (t.name.clone(), t.expr.ty, t.expr.typmod)).collect()
-}
-
-/// The assignment of the element `i` of a one-dimensional array. The array grows with null elements to reach `i`.
-fn set_element(array: &mut Array<Value>, i: i32, value: Value) -> Result<()> {
-    let value = if value.is_null() { None } else { Some(value) };
-    if array.dims.is_empty() {
-        array.dims = vec![ArrayDim { len: 1, lower: i }];
-        array.values = vec![value];
-        return Ok(());
-    }
-    if array.dims.len() != 1 {
-        return Err(Error::new(
-            SqlState::ARRAY_SUBSCRIPT_ERROR,
-            "wrong number of array subscripts",
-        ));
-    }
-    let dim = array.dims[0];
-    let (lower, upper) = (i64::from(dim.lower), i64::from(dim.lower) + i64::from(dim.len) - 1);
-    let at = i64::from(i);
-    if at < lower {
-        let more = usize::try_from(lower - at).unwrap_or(0);
-        array.values.splice(0..0, std::iter::repeat_n(None, more));
-        array.dims[0] = ArrayDim { len: dim.len + i32::try_from(more).unwrap_or(0), lower: i };
-    } else if at > upper {
-        let more = usize::try_from(at - upper).unwrap_or(0);
-        array.values.extend(std::iter::repeat_n(None, more));
-        array.dims[0].len = dim.len + i32::try_from(more).unwrap_or(0);
-    }
-    let place = usize::try_from(at - i64::from(array.dims[0].lower)).unwrap_or(0);
-    array.values[place] = value;
-    Ok(())
 }
 
 /// `exception_matches_conditions`: true when the condition of a handler catches the code `state`. `OTHERS` does not catch a cancel or a failed assertion, and a code that ends with `000` catches its class.

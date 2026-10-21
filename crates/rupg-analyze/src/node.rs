@@ -163,6 +163,10 @@ fn write_expr(expr: &Expr, out: &mut String) -> Result<()> {
                 Some(lower) => write_bounds(lower, out)?,
                 None => out.push_str("<>"),
             }
+            // A fetch has no field `assign`, as before assignments had the field.
+            if let Some(assign) = &sub.assign {
+                write_field("assign", assign, out)?;
+            }
         }
         ExprKind::Bool(op, args) => {
             let op = match op {
@@ -926,6 +930,7 @@ fn expr_of(item: &Item) -> Result<Expr> {
                 Item::Atom(empty) if empty == "<>" => None,
                 item => Some(bounds_of(item)?),
             },
+            assign: f.get("assign").ok().map(expr_of).transpose()?,
         })),
         "BOOL" => {
             let op = match f.atom("op")? {

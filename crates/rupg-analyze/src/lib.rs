@@ -79,8 +79,8 @@ pub use insert::{Action, Foreign, OnConflict, Unique, Write, WriteKind};
 pub use locking::{RowMark, check_outer_joins, first_row_mark, locked_tables};
 pub use merge::{MatchKind, Merge, MergeClause, MergeCommand};
 pub use plpgsql::{
-    Variable, Variables, analyze_assign, analyze_with, column_type, plpgsql_cast,
-    relation_by_names, relation_row_type, row_type_fields,
+    Variable, Variables, analyze_assign, analyze_assign_part, analyze_with, column_type,
+    plpgsql_cast, relation_by_names, relation_row_type, row_type_fields,
 };
 pub use prepare::{execute_params, param_types};
 pub use record::{out_columns, record_fields};
@@ -216,8 +216,8 @@ pub(crate) struct Analyzer<'a> {
     writes: usize,
     /// The variables of the PL/pgSQL function whose query the analyzer reads now, or `None`.
     variables: Option<&'a dyn Variables>,
-    /// The type, the typmod and the name of the variable that an assignment of PL/pgSQL sets, for the coercion of the value in the analysis.
-    assign: Option<(u32, i32, String)>,
+    /// The target of an assignment of PL/pgSQL, for the coercion of the value in the analysis.
+    assign: Option<plpgsql::Assign>,
 }
 
 impl<'a> Analyzer<'a> {
@@ -318,14 +318,13 @@ fn analyze_hooked(
     analyze_in(Analyzer::new(env, params), stmt, variables)
 }
 
-/// [`analyze_hooked`] of the value of an assignment of PL/pgSQL to a variable with its type, its typmod and its name.
-fn analyze_assigned(
+/// [`analyze_hooked`] with `analyzer` of the value of an assignment of PL/pgSQL to the target `assign`.
+fn analyze_assigned<'a>(
+    mut analyzer: Analyzer<'a>,
     stmt: &Node,
-    env: &dyn Env,
-    variables: &dyn Variables,
-    assign: (u32, i32, String),
+    variables: &'a dyn Variables,
+    assign: plpgsql::Assign,
 ) -> Result<Query> {
-    let mut analyzer = Analyzer::new(env, &Params::default());
     analyzer.assign = Some(assign);
     analyze_in(analyzer, stmt, Some(variables))
 }

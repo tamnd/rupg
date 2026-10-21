@@ -1,0 +1,165 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> DO $$ DECLARE x int[] := '{{1,2},{3,4}}'; BEGIN x[2][1] := 30; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={{1,2},{30,4}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN x[2][3] := 7; RAISE NOTICE 'x=% dims=%', x, array_dims(x); END $$;
+NOTICE 00000 x=[2:2][3:3]={{7}} dims=[2:2][3:3] (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{{1,2},{3,4}}'; BEGIN x[3][1] := 5; END $$;
+ERROR 2202E array subscript out of range (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{{1,2},{3,4}}'; BEGIN x[1] := 5; END $$;
+ERROR 2202E wrong number of array subscripts (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2}'; BEGIN x[1][1] := 5; END $$;
+ERROR 2202E wrong number of array subscripts (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3,4,5}'; BEGIN x[2:3] := ARRAY[20,30]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1,20,30,4,5} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[5:6] := ARRAY[50,60]; RAISE NOTICE 'x=% dims=%', x, array_dims(x); END $$;
+NOTICE 00000 x={1,2,3,NULL,50,60} dims=[1:6] (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '[5:6]={5,6}'; BEGIN x[1:2] := ARRAY[1,2]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1,2,NULL,NULL,5,6} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[:2] := ARRAY[10,20]; RAISE NOTICE 'x=%', x; x[2:] := ARRAY[200,300,400]; RAISE NOTICE 'x=%', x; x[:] := ARRAY[7,8,9]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={10,20,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={10,200,300} (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={7,8,9} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1:3] := ARRAY[1,2]; END $$;
+ERROR 2202E source array too small (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1:2] := ARRAY[7,8,9]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={7,8,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[3:1] := ARRAY[1,2]; END $$;
+ERROR 2202E upper bound cannot be less than lower bound (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[]; BEGIN x[2:3] := ARRAY[1,2]; RAISE NOTICE 'x=% dims=%', x, array_dims(x); END $$;
+NOTICE 00000 x=[2:3]={1,2} dims=[2:3] (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[]; BEGIN x[:3] := ARRAY[1,2]; END $$;
+ERROR 2202E array slice subscript must provide both boundaries (PL/pgSQL function inline_code_block line 1 at assignment)
+DETAIL When assigning to a slice of an empty array value, slice boundaries must be fully specified.
+> DO $$ DECLARE x int[]; BEGIN x[1:3] := ARRAY[1,2]; END $$;
+ERROR 2202E source array too small (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[]; BEGIN x[1:2][1:2] := ARRAY[1,2,3,4,5]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={{1,2},{3,4}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{}'; BEGIN x[3:2] := ARRAY[1,2]; RAISE NOTICE 'x=% n=%', x, cardinality(x); END $$;
+NOTICE 00000 x={} n=0 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{}'; BEGIN x[3:1] := ARRAY[1,2]; RAISE NOTICE 'x=%', x; END $$;
+ERROR 54000 array size exceeds the maximum allowed (134217727) (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{{1,2,3},{4,5,6}}'; BEGIN x[1:2][2:3] := ARRAY[[20,30],[50,60]]; RAISE NOTICE 'x=%', x; x[2:2] := ARRAY[-1,-2,-3]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={{1,20,30},{4,50,60}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x={{1,20,30},{-1,-2,-3}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{{1,2,3},{4,5,6}}'; BEGIN x[1:3][1] := ARRAY[1,2,3]; END $$;
+ERROR 2202E array subscript out of range (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{{1,2,3},{4,5,6}}'; BEGIN x[1][2:3] := ARRAY[9,9]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={{1,9,9},{4,5,6}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[2:3] := NULL; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1,2,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[2] := NULL; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1,NULL,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[NULL] := 1; END $$;
+ERROR 22004 array subscript in assignment must not be null (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[NULL:2] := ARRAY[1]; END $$;
+ERROR 22004 array subscript in assignment must not be null (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1:2] := 5; END $$;
+ERROR 22P02 malformed array literal: "5" (PL/pgSQL function inline_code_block line 1 at assignment)
+DETAIL Array value must start with "{" or dimension information.
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1] := ARRAY[5]; END $$;
+ERROR 22P02 invalid input syntax for type integer: "{5}" (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1] := 'abc'; END $$;
+ERROR 22P02 invalid input syntax for type integer: "abc" (PL/pgSQL function inline_code_block line 1 at assignment)
+QUERY x[1] := 'abc' at 9
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1] := '42'; x[2] := 2.6; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={42,3,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1:2] := '{8,9}'; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={8,9,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x text[] := '{a,b}'; BEGIN x[2:3] := ARRAY['B','C']; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={a,B,C} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x varchar(2)[] := '{a,b}'; BEGIN x[2] := 'abc'; RAISE NOTICE 'x=%', x; END $$;
+ERROR 22001 value too long for type character varying(2) (PL/pgSQL assignment "x[2] := 'abc'"
+PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x numeric(4,1)[] := '{1,2}'; BEGIN x[2] := 2.66; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1.0,2.7} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[2147483647] := 1; END $$;
+ERROR 54000 array size exceeds the maximum allowed (134217727) (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '[-2147483648:-2147483646]={1,2,3}'; BEGIN x[2147483647] := 1; END $$;
+ERROR 54000 array size exceeds the maximum allowed (134217727) (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[-2147483648] := 1; END $$;
+ERROR 54000 array size exceeds the maximum allowed (134217727) (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[]; BEGIN x[2147483647] := 1; RAISE NOTICE 'x=%', array_dims(x); END $$;
+ERROR 54000 array lower bound is too large: 2147483647 (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{{1,2},{3,4}}'; BEGIN x[1:1][1:1][1:1] := ARRAY[1]; END $$;
+ERROR 2202E wrong number of array subscripts (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[]; BEGIN x[1][1][1][1][1][1][1] := 1; END $$;
+ERROR 54000 number of array dimensions (7) exceeds the maximum allowed (6) (PL/pgSQL assignment "x[1][1][1][1][1][1][1] := 1"
+PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[]; BEGIN x[1][1][1][1][1][1] := 1; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={{{{{{1}}}}}} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; i int := 2; BEGIN x[i + 1] := 30; x[i - 1 : i] := ARRAY[10, 20]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={10,20,30} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x['2'] := 20; x[2.7] := 30; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1,20,30} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[true] := 20; END $$;
+ERROR 42804 array subscript must have type integer (PL/pgSQL function inline_code_block line 1 at assignment)
+QUERY x[true] := 20 at 3
+> DO $$ DECLARE x int; BEGIN x[1] := 1; END $$;
+ERROR 42804 cannot subscript type integer because it does not support subscripting (PL/pgSQL function inline_code_block line 1 at assignment)
+QUERY x[1] := 1 at 1
+> DO $$ DECLARE x int[] NOT NULL := '{}'; BEGIN x[1] := 1; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,NULL,3}'; BEGIN x[4:5] := ARRAY[NULL,5]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1,NULL,3,NULL,5} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{{1,2},{3,4}}'; BEGIN x[1:2][1:2] := '{{5,6},{7}}'; END $$;
+ERROR 22P02 malformed array literal: "{{5,6},{7}}" (PL/pgSQL function inline_code_block line 1 at assignment)
+DETAIL Multidimensional arrays must have sub-arrays with matching dimensions.
+QUERY x[1:2][1:2] := '{{5,6},{7}}' at 16
+> DO $$ DECLARE x int[] := '{{1,2},{3,4}}'; BEGIN x[2:1][1:2] := ARRAY[1,2]; END $$;
+ERROR 2202E upper bound cannot be less than lower bound (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1:2] := ARRAY[[7,8],[9,10]]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={7,8,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{{1,2},{3,4}}'; BEGIN x[2][:] := ARRAY[8,9]; RAISE NOTICE 'x=%', x; x[:][1] := ARRAY[0,0]; RAISE NOTICE 'x=%', x; END $$;
+ERROR 2202E source array too small (PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[2] := x[1] + x[3]; x[1:1] := x[2:2]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={4,4,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> CREATE TYPE pt AS (a int, b int[]);
+CREATE TYPE
+> DO $$ DECLARE r pt; BEGIN r.b[2] := 5; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(,[2:2]={5}) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE r pt := ROW(1, '{1,2}'); BEGIN r.b[1:2] := ARRAY[7,8]; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(1,"{7,8}") (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1:2] := ARRAY[1,2]::bigint[]; RAISE NOTICE 'x=%', x; END $$;
+NOTICE 00000 x={1,2,3} (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1:2] := ARRAY['a','b']; END $$;
+ERROR 22P02 invalid input syntax for type integer: "a" (PL/pgSQL assignment "x[1:2] := ARRAY['a','b']"
+PL/pgSQL function inline_code_block line 1 at assignment)
+> DO $$ DECLARE x int[] := '{1,2,3}'; BEGIN x[1] := 2147483648; END $$;
+ERROR 22003 integer out of range (PL/pgSQL assignment "x[1] := 2147483648"
+PL/pgSQL function inline_code_block line 1 at assignment)
+> CREATE FUNCTION fa(n int) RETURNS int[] LANGUAGE plpgsql AS $$ DECLARE x int[]; BEGIN FOR i IN 1..n LOOP x[i] := i * i; END LOOP; x[n + 2:n + 3] := ARRAY[-1, -2]; RETURN x; END $$;
+CREATE FUNCTION
+> SELECT fa(3), fa(0);
+fields fa:1007:-1:-1,fa:1007:-1:-1
+row {1,4,9,NULL,-1,-2},[2:3]={-1,-2}
+SELECT 1

@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- The assignment to an element or a slice of an array in PL/pgSQL, as in `x[2][1] := 30` and `x[2:3] := ARRAY[5, 6]`, for arrays of more than one dimension. An assignment to an element or a slice out of the bounds of a one-dimensional array makes the array larger, and the errors of the subscripts and of the bounds are the errors of PostgreSQL.
+
 ## 0.1.55 (2026-10-21)
 
 ### Added

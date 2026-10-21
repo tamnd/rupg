@@ -353,6 +353,11 @@ impl<'a> Deparser<'a> {
                     }
                     self.buf.push(']');
                 }
+                // An assignment shows its new value after the subscripts.
+                if let Some(assign) = &sub.assign {
+                    self.buf.push_str(" := ");
+                    self.expr(assign, false)?;
+                }
             }
             ExprKind::Bool(op, args) => {
                 self.open();

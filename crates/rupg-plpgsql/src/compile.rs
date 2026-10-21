@@ -594,6 +594,7 @@ impl Compiler<'_> {
         let result = match mode {
             Mode::Statement => rupg_sql::parse(text).map(drop),
             Mode::Expr | Mode::Assign => rupg_sql::parse_plpgsql_expr(text).map(drop),
+            Mode::Part(names) => rupg_sql::parse_plpgsql_assign(text, names).map(drop),
         };
         result.map_err(|e| {
             let inner = e.location.unwrap_or(0);
@@ -1483,17 +1484,18 @@ impl Compiler<'_> {
     fn assign(&mut self, w: Word) -> Result<Stmt> {
         let Some((d, field)) = w.datum.clone() else { return Err(not_yet("this assignment")) };
         self.check_assignable(d, w.start)?;
-        let mut subscripts = Vec::new();
-        while self.sc.peek()?.is_char(b'[') {
-            self.sc.next()?;
-            subscripts.push(self.expr_until(&["]"], "]")?.0);
-        }
-        let target = match (field, subscripts.is_empty()) {
-            (None, true) => Target::Datum(d),
-            (None, false) => Target::Element(d, subscripts),
-            (Some(field), true) => Target::Field(d, field),
-            (Some(_), false) => return Err(not_yet("an assignment to an element of a field")),
+        let target = match field {
+            None => Target::Datum(d),
+            Some(field) => Target::Field(d, field),
         };
+        if self.sc.peek()?.is_char(b'[') {
+            // The parser of SQL reads the whole assignment, whose value is the new value of the target.
+            // The names and the dots between them are the tokens of the word.
+            self.sc.reset(self.sc.place() - (2 * w.names.len() - 1));
+            let mode = Mode::Part(w.names.len());
+            let (expr, _) = self.read_sql(&[";"], ";", mode, true, true)?;
+            return Ok(self.finish(w.start, StmtKind::Assign { target, expr }));
+        }
         let op = self.sc.next()?;
         if !is_assign(&op) {
             return Err(self.yyerror(&op, "syntax error"));
