@@ -565,6 +565,13 @@ impl Analyzer<'_> {
                     && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
             RelKind::View => return Err(not_yet(&format!("{what} a view"))),
             RelKind::Partitioned => {}
+            RelKind::MatView if self.env.filling() == oid => {}
+            RelKind::MatView => {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("cannot change materialized view \"{name}\""),
+                ));
+            }
             _ => {
                 return Err(Error::new(
                     SqlState::WRONG_OBJECT_TYPE,

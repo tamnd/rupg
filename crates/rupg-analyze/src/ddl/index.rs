@@ -140,7 +140,7 @@ impl Definer<'_, '_> {
             )
             .with_detail(relkind_detail(kind)));
         }
-        if kind != b'r' && kind != b'p' {
+        if !matches!(kind, b'r' | b'p' | b'm') {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("cannot create index on relation \"{name}\""),
@@ -289,7 +289,11 @@ impl Definer<'_, '_> {
             }
         }
         // `index_build` reads the rows of the table with a sequential scan.
-        if self.catalog.relation(table).is_some_and(|r| r.kind == RelKind::Table) {
+        if self
+            .catalog
+            .relation(table)
+            .is_some_and(|r| matches!(r.kind, RelKind::Table | RelKind::MatView))
+        {
             self.scans.push(table);
         }
         Ok(())

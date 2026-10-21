@@ -18,7 +18,8 @@ use rupg_platform::os::OsClock;
 use rupg_platform::{Clock, Io};
 use rupg_sql::Severity;
 use rupg_sql::nodes::{
-    AlterTableType, InsertStmt, LockStmt, Node, ObjectType, RangeVar, SelectStmt,
+    A_Star, AlterTableType, ColumnRef, InsertStmt, LockStmt, Node, ObjectType, RangeVar, ResTarget,
+    SelectStmt,
 };
 use rupg_types::Value;
 use rupg_wire::{
@@ -372,6 +373,8 @@ pub struct Connection {
     portals: RefCell<Portals<Portal>>,
     /// `unnamed_portal_count` of `portalmem.c`: the number of the last portal that a function in PL/pgSQL opened with no name.
     unnamed_portals: Cell<u32>,
+    /// The OID of the materialized view that `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW` fills, or 0. [`rupg_analyze::Env::filling`] gives it.
+    pub(crate) filling: Cell<u32>,
     /// `xact_started` of `postgres.c`: a statement runs in the transaction, so `finish_xact_command` must end it.
     xact_started: bool,
     /// `XACT_FLAGS_PIPELINING`: an `Execute` completed in the transaction, so the next message starts an implicit block.
@@ -476,6 +479,7 @@ impl Connection {
             statements: Statements::new(),
             portals: RefCell::new(Portals::new()),
             unnamed_portals: Cell::new(0),
+            filling: Cell::new(0),
             xact_started: false,
             pipelining: false,
             cancel: Arc::new(AtomicBool::new(false)),
@@ -1040,7 +1044,11 @@ impl Connection {
                     return self.fill(node, table, &old, notices);
                 }
                 Ok(Done::Tag(match node {
+                    Node::CreateTableAsStmt(stmt) if stmt.objtype == ObjectType::OBJECT_MATVIEW => {
+                        CommandTag::CreateMaterializedView
+                    }
                     Node::CreateTableAsStmt(_) | Node::SelectStmt(_) => CommandTag::CreateTableAs,
+                    Node::RefreshMatViewStmt(_) => CommandTag::RefreshMaterializedView,
                     Node::IndexStmt(_) => CommandTag::CreateIndex,
                     Node::CreateSchemaStmt(_) => CommandTag::CreateSchema,
                     Node::CreateDomainStmt(_) => CommandTag::CreateDomain,
@@ -1060,6 +1068,7 @@ impl Connection {
                     Node::DropStmt(stmt) => match stmt.removeType {
                         ObjectType::OBJECT_SCHEMA => CommandTag::DropSchema,
                         ObjectType::OBJECT_VIEW => CommandTag::DropView,
+                        ObjectType::OBJECT_MATVIEW => CommandTag::DropMaterializedView,
                         ObjectType::OBJECT_INDEX => CommandTag::DropIndex,
                         ObjectType::OBJECT_SEQUENCE => CommandTag::DropSequence,
                         ObjectType::OBJECT_TYPE => CommandTag::DropType,
@@ -1113,7 +1122,7 @@ impl Connection {
         }
     }
 
-    /// `intorel_receive`: the rows of the query of `CREATE TABLE AS` or `SELECT INTO` go into the new table `table`, as `INSERT ... SELECT` writes them. When the query fails, the catalog goes back to `old`, so the table is gone, and its OIDs stay used.
+    /// `intorel_receive`: the rows of the query of `CREATE TABLE AS` or `SELECT INTO` go into the new table `table`, as `INSERT ... SELECT` writes them. When the query fails, the catalog goes back to `old`, so the table is gone, and its OIDs stay used. `REFRESH MATERIALIZED VIEW` fills the materialized view with the rows of its query, as `refresh_matview_datafill` writes them, and the `INSERT` reads the materialized view, which gives its query there.
     fn fill(
         &self,
         node: &Node,
@@ -1133,6 +1142,7 @@ impl Connection {
         let Some(relation) = catalog.relation(table) else {
             return Err(Error::internal("the table of CREATE TABLE AS is gone"));
         };
+        let matview = relation.kind == rupg_catalog::RelKind::MatView;
         let relation = RangeVar {
             schemaname: catalog.schema(relation.namespace).map(|s| s.name.as_str().into()),
             relname: Some(relation.name.as_str().into()),
@@ -1141,6 +1151,20 @@ impl Connection {
             location: -1,
             ..RangeVar::default()
         };
+        let query = match node {
+            Node::RefreshMatViewStmt(_) => {
+                let star = ColumnRef { fields: vec![Some(A_Star {}.into())], location: -1 };
+                let target =
+                    ResTarget { val: Some(star.into()), location: -1, ..ResTarget::default() };
+                let select = SelectStmt {
+                    targetList: vec![Some(target.into())],
+                    fromClause: vec![Some(relation.clone().into())],
+                    ..SelectStmt::default()
+                };
+                Some(select.into())
+            }
+            _ => query,
+        };
         let insert = InsertStmt {
             relation: Some(Box::new(relation)),
             selectStmt: query,
@@ -1148,10 +1172,17 @@ impl Connection {
         };
         let mut late = Vec::new();
         let mut described = None;
+        if matview {
+            self.filling.set(table);
+        }
         let result =
             self.select(&Node::InsertStmt(Box::new(insert)), notices, &mut late, &mut described);
+        self.filling.set(0);
         notices.append(&mut late);
         match result {
+            Ok(Done::Count(..)) if matches!(node, Node::RefreshMatViewStmt(_)) => {
+                Ok(Done::Tag(CommandTag::RefreshMaterializedView))
+            }
             Ok(Done::Count(_, count)) => Ok(Done::Count(CommandTag::Select, count)),
             Ok(_) => Err(Error::internal("the INSERT of CREATE TABLE AS gave no count")),
             Err(error) => {
@@ -5216,6 +5247,18 @@ mod tests {
     #[test]
     fn inherit_attach() {
         big_stack(|| script(include_str!("connection/inherit_attach.test")));
+    }
+
+    /// `CREATE MATERIALIZED VIEW`, `REFRESH MATERIALIZED VIEW` and `DROP MATERIALIZED VIEW`: the rows stay as the query gave them until a refresh, `WITH NO DATA` and the error of a scan of a materialized view that is not populated, the rows of `pg_class`, `pg_matviews` and `pg_rewrite`, the errors of `INSERT`, `UPDATE`, `DELETE`, `TRUNCATE` and `COPY ... FROM`, `COPY ... TO`, the checks of `CONCURRENTLY`, the dependencies on the table and of a view, the errors of `DROP` of the wrong kind, a rename of the materialized view and of a column, and a materialized view in a transaction that rolls back. `connection/matview.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn matview() {
+        big_stack(|| script(include_str!("connection/matview.test")));
+    }
+
+    /// More materialized views: the errors of `CREATE OR REPLACE VIEW` of a materialized view, of a data-modifying `WITH`, of a temporary table and of too many column names, a materialized view of a materialized view, a rename of the base table and of its column, a unique index on rows that are not unique, a prepared query, a view and a sublink of a materialized view with no data, `COMMENT`, `SET SCHEMA`, `OWNER TO`, `DROP` with `CASCADE`, `EXPLAIN` and `FOR UPDATE`. `connection/matview_more.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn matview_more() {
+        big_stack(|| script(include_str!("connection/matview_more.test")));
     }
 
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.

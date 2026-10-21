@@ -144,6 +144,8 @@ pub enum RelKind {
     Partitioned,
     /// The index of a partitioned table, `I`. It has no storage. Its partitions are the indexes of the partitions of the table.
     PartitionedIndex,
+    /// A materialized view, `m`. It keeps the rows of its query in a heap as a table does, and it has a `_RETURN` rule as a view does.
+    MatView,
 }
 
 impl RelKind {
@@ -158,6 +160,7 @@ impl RelKind {
             RelKind::Composite => 'c',
             RelKind::Partitioned => 'p',
             RelKind::PartitionedIndex => 'I',
+            RelKind::MatView => 'm',
         }
     }
 }
@@ -418,6 +421,8 @@ pub struct ViewInfo {
     pub text: String,
     /// The schemas of `search_path` when that statement ran, in order. The analyzer finds the names of the query in these schemas again.
     pub path: Vec<u32>,
+    /// `relispopulated`: false for a materialized view of `WITH NO DATA` until a `REFRESH` fills it. A view is always populated.
+    pub populated: bool,
 }
 
 impl Relation {
@@ -2257,9 +2262,33 @@ impl Catalog {
     ) -> Result<u32> {
         let oid = self.create_relation(new, RelKind::View)?;
         let rule = self.new_oid();
-        self.relation_mut(oid)?.view = Some(ViewInfo { rule, text, path });
+        self.relation_mut(oid)?.view = Some(ViewInfo { rule, text, path, populated: true });
         self.depend_rule(rule, oid, refs);
         Ok(oid)
+    }
+
+    /// `StoreViewQuery` for `CREATE MATERIALIZED VIEW`: the new table `oid` of `create_ctas_internal` becomes a materialized view, and it gets its `_RETURN` rule as a view does. `populated` is false for `WITH NO DATA`.
+    pub fn make_matview(
+        &mut self,
+        oid: u32,
+        text: String,
+        path: Vec<u32>,
+        refs: &[ObjRef],
+        populated: bool,
+    ) -> Result<()> {
+        let rule = self.new_oid();
+        let rel = self.relation_mut(oid)?;
+        rel.kind = RelKind::MatView;
+        rel.view = Some(ViewInfo { rule, text, path, populated });
+        self.depend_rule(rule, oid, refs);
+        Ok(())
+    }
+
+    /// `SetMatViewPopulatedState`: the new `relispopulated` of the materialized view `oid`.
+    pub fn set_populated(&mut self, oid: u32, populated: bool) -> Result<()> {
+        let view = self.relation_mut(oid)?.view.as_mut().ok_or_else(|| no_object("view", oid))?;
+        view.populated = populated;
+        Ok(())
     }
 
     /// `CREATE OR REPLACE VIEW` of a view that exists. The columns after the old columns are new, and the rule gets the new query and new dependencies. The caller checks that the old columns did not change.

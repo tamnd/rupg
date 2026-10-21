@@ -22,6 +22,7 @@ mod function;
 mod identity;
 mod index;
 mod lock;
+mod matview;
 mod partition;
 mod partition_alter;
 mod partition_attach;
@@ -98,7 +99,7 @@ pub struct Defined {
     pub transforms: Vec<Transform>,
     /// The defaults that the new columns of `ADD COLUMN` had when the subcommand ran, for each new column whose default a later subcommand of the same statement changed. The caller writes the rows of the table again with these defaults.
     pub fills: Vec<Fill>,
-    /// The table of `CREATE TABLE AS`, which the caller fills with the rows of the query, or `None`. It is `None` also for `WITH NO DATA` and for a table that exists with `IF NOT EXISTS`.
+    /// The table of `CREATE TABLE AS` or the materialized view of `CREATE MATERIALIZED VIEW` or `REFRESH MATERIALIZED VIEW`, which the caller fills with the rows of the query, or `None`. It is `None` also for `WITH NO DATA` and for a table that exists with `IF NOT EXISTS`.
     pub filled: Option<u32>,
     /// The views whose query reads an object that the statement renamed. The catalog keeps the text of a view, so the caller writes the text again from the query that the old names give.
     pub views: Vec<u32>,
@@ -162,6 +163,7 @@ pub fn is_definition(stmt: &Node) -> bool {
             | Node::AlterSeqStmt(_)
             | Node::AlterTSConfigurationStmt(_)
             | Node::TruncateStmt(_)
+            | Node::RefreshMatViewStmt(_)
     ) || matches!(stmt, Node::DefineStmt(define) if tsearch::is_ts_kind(define.kind))
         || matches!(stmt, Node::DropStmt(drop) if is_drop_kind(drop.removeType))
         || matches!(stmt, Node::AlterTableStmt(alter) if is_alter_kind(alter.objtype) || alter.objtype == ObjectType::OBJECT_TYPE)
@@ -190,6 +192,7 @@ fn is_drop_kind(kind: ObjectType) -> bool {
         kind,
         ObjectType::OBJECT_TABLE
             | ObjectType::OBJECT_VIEW
+            | ObjectType::OBJECT_MATVIEW
             | ObjectType::OBJECT_INDEX
             | ObjectType::OBJECT_SEQUENCE
             | ObjectType::OBJECT_SCHEMA
@@ -226,8 +229,13 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
     let mut filled = None;
     let result = match stmt {
         Node::CreateStmt(create) => definer.create_table(create),
-        Node::CreateTableAsStmt(ctas) => definer.create_table_as(ctas).map(|table| filled = table),
+        Node::CreateTableAsStmt(ctas) => {
+            definer.create_table_as(ctas, text).map(|table| filled = table)
+        }
         Node::SelectStmt(select) => definer.select_into(select).map(|table| filled = table),
+        Node::RefreshMatViewStmt(stmt) => {
+            definer.refresh_matview(stmt).map(|matview| filled = matview)
+        }
         Node::IndexStmt(index) => definer.create_index(index, false),
         Node::CreateSchemaStmt(schema) => definer.create_schema(schema),
         Node::ViewStmt(view) => definer.create_view(view, text),
@@ -717,6 +725,7 @@ impl Definer<'_, '_> {
                 Some(RelKind::Composite) => b'c',
                 Some(RelKind::Partitioned) => b'p',
                 Some(RelKind::PartitionedIndex) => b'I',
+                Some(RelKind::MatView) => b'm',
                 _ => b'r',
             },
             Found::Builtin(row) => row.kind,

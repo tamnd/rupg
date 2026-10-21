@@ -1,0 +1,152 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'x'), (2, 'y'), (2, 'z');
+INSERT 0 3
+> CREATE MATERIALIZED VIEW mv AS SELECT a, b FROM t;
+SELECT 3
+> CREATE OR REPLACE VIEW mv AS SELECT 1 AS a;
+ERROR 42809 "mv" is not a view
+> CREATE MATERIALIZED VIEW mvw AS WITH d AS (DELETE FROM t RETURNING *) SELECT * FROM d;
+ERROR 0A000 materialized views must not use data-modifying statements in WITH
+> CREATE TEMP TABLE tt (x int);
+CREATE TABLE
+> CREATE MATERIALIZED VIEW mvt AS SELECT * FROM tt;
+ERROR 0A000 materialized views must not use temporary objects
+DETAIL This view depends on temporary table tt.
+> CREATE MATERIALIZED VIEW mvc (p, q, r) AS SELECT a, b FROM t;
+ERROR 42601 too many column names were specified
+> CREATE MATERIALIZED VIEW mvc (p) AS SELECT a, b FROM t;
+SELECT 3
+> SELECT * FROM mvc ORDER BY p, b;
+fields p@mvc.1:23:4:-1,b@mvc.2:25:-1:-1
+row 1,x
+row 2,y
+row 2,z
+SELECT 3
+> CREATE MATERIALIZED VIEW mm AS SELECT count(*) AS n FROM mv;
+SELECT 1
+> INSERT INTO t VALUES (3, 'w');
+INSERT 0 1
+> REFRESH MATERIALIZED VIEW mm;
+REFRESH MATERIALIZED VIEW
+> SELECT * FROM mm;
+fields n@mm.1:20:8:-1
+row 3
+SELECT 1
+> REFRESH MATERIALIZED VIEW mv;
+REFRESH MATERIALIZED VIEW
+> REFRESH MATERIALIZED VIEW mm;
+REFRESH MATERIALIZED VIEW
+> SELECT * FROM mm;
+fields n@mm.1:20:8:-1
+row 4
+SELECT 1
+> ALTER TABLE t RENAME TO t2;
+ALTER TABLE
+> ALTER TABLE t2 RENAME COLUMN b TO bb;
+ALTER TABLE
+> SELECT pg_get_viewdef('mv'::regclass);
+fields pg_get_viewdef:25:-1:-1
+row  SELECT a,
+    bb AS b
+   FROM t2;
+SELECT 1
+> INSERT INTO t2 VALUES (4, 'v');
+INSERT 0 1
+> REFRESH MATERIALIZED VIEW mv;
+REFRESH MATERIALIZED VIEW
+> SELECT * FROM mv ORDER BY a, b;
+fields a@mv.1:23:4:-1,b@mv.2:25:-1:-1
+row 1,x
+row 2,y
+row 2,z
+row 3,w
+row 4,v
+SELECT 5
+> CREATE UNIQUE INDEX mv_a ON mv (a);
+ERROR 23505 could not create unique index "mv_a"
+DETAIL Key (a)=(2) is duplicated.
+> DELETE FROM t2 WHERE bb = 'z';
+DELETE 1
+> CREATE UNIQUE INDEX mv_a ON mv (a);
+ERROR 23505 could not create unique index "mv_a"
+DETAIL Key (a)=(2) is duplicated.
+> INSERT INTO t2 VALUES (1, 'dup');
+INSERT 0 1
+> REFRESH MATERIALIZED VIEW mv;
+REFRESH MATERIALIZED VIEW
+> SELECT count(*) FROM mv;
+fields count:20:8:-1
+row 5
+SELECT 1
+> CREATE MATERIALIZED VIEW mvn AS SELECT a FROM t2 WITH NO DATA;
+CREATE MATERIALIZED VIEW
+> PREPARE p AS SELECT * FROM mvn;
+PREPARE
+> EXECUTE p;
+ERROR 55000 materialized view "mvn" has not been populated
+HINT Use the REFRESH MATERIALIZED VIEW command.
+> CREATE VIEW vn AS SELECT * FROM mvn;
+CREATE VIEW
+> SELECT * FROM vn;
+ERROR 55000 materialized view "mvn" has not been populated
+HINT Use the REFRESH MATERIALIZED VIEW command.
+> SELECT * FROM t2 WHERE a IN (SELECT a FROM mvn);
+ERROR 55000 materialized view "mvn" has not been populated
+HINT Use the REFRESH MATERIALIZED VIEW command.
+> SELECT pg_relation_is_updatable('mv'::regclass, false);
+fields pg_relation_is_updatable:23:4:-1
+row 0
+SELECT 1
+> SELECT relpersistence, relreplident, a.amname FROM pg_class c JOIN pg_am a ON a.oid = c.relam WHERE relname = 'mv';
+fields relpersistence@pg_class.17:18:1:-1,relreplident@pg_class.27:18:1:-1,amname@pg_am.2:19:64:-1
+row p,d,heap
+SELECT 1
+> COMMENT ON MATERIALIZED VIEW mv IS 'the view';
+COMMENT
+> SELECT obj_description('mv'::regclass, 'pg_class');
+fields obj_description:25:-1:-1
+row the view
+SELECT 1
+> CREATE SCHEMA s;
+CREATE SCHEMA
+> ALTER MATERIALIZED VIEW mv SET SCHEMA s;
+ALTER MATERIALIZED VIEW
+> SELECT schemaname, matviewname FROM pg_matviews ORDER BY matviewname;
+fields schemaname@pg_matviews.1:19:64:-1,matviewname@pg_matviews.2:19:64:-1
+row public,mm
+row s,mv
+row public,mvc
+row public,mvn
+SELECT 4
+> REFRESH MATERIALIZED VIEW s.mv;
+REFRESH MATERIALIZED VIEW
+> ALTER MATERIALIZED VIEW s.mv OWNER TO CURRENT_USER;
+ALTER MATERIALIZED VIEW
+> ALTER MATERIALIZED VIEW IF EXISTS nosuch RENAME TO x;
+NOTICE 00000 relation "nosuch" does not exist, skipping
+ALTER MATERIALIZED VIEW
+> DROP MATERIALIZED VIEW s.mv, vn;
+ERROR 42809 "vn" is not a materialized view
+HINT Use DROP VIEW to remove a view.
+> DROP MATERIALIZED VIEW s.mv CASCADE;
+NOTICE 00000 drop cascades to materialized view mm
+DROP MATERIALIZED VIEW
+> SELECT matviewname FROM pg_matviews ORDER BY 1;
+fields matviewname@pg_matviews.2:19:64:-1
+row mvc
+row mvn
+SELECT 2
+> EXPLAIN (COSTS OFF) SELECT * FROM mvn;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on mvn
+EXPLAIN
+> SELECT * FROM mvn FOR UPDATE;
+ERROR 42809 cannot lock rows in materialized view "mvn"
+> SELECT has_table_privilege('mvn', 'SELECT');
+fields has_table_privilege:16:1:-1
+row t
+SELECT 1

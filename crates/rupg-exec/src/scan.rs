@@ -422,6 +422,44 @@ fn row_names(relation: &rupg_analyze::Relation) -> Option<Arc<[String]>> {
 }
 
 /// The rows of a relation of the user. A table gives the rows that the snapshot of the statement sees, each with the ID of its version at the end. A partitioned table gives the rows of its leaf partitions in the order of their bounds, each with the OID of its partition after the ID of its version, or no rows after `ONLY`. Without `ONLY`, a table with children of `INHERITS` gives its rows and then the rows of the children, each with the OID of its table after the ID of its version. A sequence has its one row, the row of its file. The read of a table counts as a sequential scan, because rupg has no index scans yet.
+/// The error of a scan of a materialized view of `WITH NO DATA`, as `ExecCheckRelationsScannable` gives it.
+fn check_populated(relation: &rupg_catalog::Relation) -> Result<()> {
+    if relation.kind == rupg_catalog::RelKind::MatView
+        && relation.view.as_ref().is_some_and(|v| !v.populated)
+    {
+        return Err(Error::new(
+            SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
+            format!("materialized view \"{}\" has not been populated", relation.name),
+        )
+        .with_hint("Use the REFRESH MATERIALIZED VIEW command."));
+    }
+    Ok(())
+}
+
+/// `ExecCheckRelationsScannable`: the materialized views that the query reads, also in its subqueries, its queries of `WITH` and its sublinks, are populated. The executor checks them when it starts, before the description of the rows.
+pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()> {
+    for relation in &query.relations {
+        if let Some(sub) = relation.subquery.as_deref() {
+            check_scannable(sub, session)?;
+        } else if let Some(rel) = session.catalog().and_then(|c| c.relation(relation.oid)) {
+            check_populated(rel)?;
+        }
+    }
+    for cte in &query.ctes {
+        check_scannable(&cte.query, session)?;
+    }
+    for expr in query.exprs() {
+        let error = expr.find(0, &mut |e, _| match &e.kind {
+            ExprKind::SubLink(sub) => check_scannable(&sub.query, session).err(),
+            _ => None,
+        });
+        if let Some(error) = error {
+            return Err(error);
+        }
+    }
+    Ok(())
+}
+
 fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
     let oid = from.oid;
     let relation = session
@@ -438,7 +476,8 @@ fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec
         }
         return Ok(out);
     }
-    if relation.kind == rupg_catalog::RelKind::Table {
+    check_populated(relation)?;
+    if matches!(relation.kind, rupg_catalog::RelKind::Table | rupg_catalog::RelKind::MatView) {
         session.count_scan(oid);
         // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null. The ID of the version stays at the end of the row.
         let width = relation.columns.len();

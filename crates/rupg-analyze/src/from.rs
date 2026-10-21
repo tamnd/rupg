@@ -547,8 +547,17 @@ impl Analyzer<'_> {
         self.add_relation(relation, refname, alias)
     }
 
-    /// `ApplyRetrieveRule`: the query of a view of the user, which takes the place of the view as a subquery, or `None` for a relation that is not a view. The analyzer reads the statement that made the view again, with the schemas of `search_path` of that statement. An error in the query of the view has no position, and the warnings of the query go.
+    /// `ApplyRetrieveRule`: the query of a view of the user, which takes the place of the view as a subquery, or `None` for a relation that is not a view. A materialized view gives its rows from its heap, so its query takes its place only for the `INSERT` that fills it, as `refresh_matview_datafill` runs the query.
     pub(crate) fn view_query(&self, oid: u32) -> Result<Option<crate::Query>> {
+        let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(None) };
+        if rel.kind == RelKind::MatView && self.env.filling() != oid {
+            return Ok(None);
+        }
+        self.stored_query(oid)
+    }
+
+    /// The query of a view or of a materialized view of the user, or `None` for a relation that has no query. The analyzer reads the statement that made the view again, with the schemas of `search_path` of that statement. An error in the query of the view has no position, and the warnings of the query go.
+    pub(crate) fn stored_query(&self, oid: u32) -> Result<Option<crate::Query>> {
         let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) else { return Ok(None) };
         let Some(view) = &rel.view else { return Ok(None) };
         if self.views.contains(&oid) {
@@ -561,6 +570,7 @@ impl Analyzer<'_> {
         let query = list.iter().flatten().find_map(|node| match node {
             Node::RawStmt(raw) => match raw.stmt.as_ref() {
                 Some(Node::ViewStmt(stmt)) => stmt.query.as_ref(),
+                Some(Node::CreateTableAsStmt(stmt)) => stmt.query.as_ref(),
                 _ => None,
             },
             _ => None,

@@ -17,7 +17,7 @@ use crate::heap::{Changed, View};
 use crate::query;
 
 impl Connection {
-    /// The tables whose rows the statement `node` changes, from the catalog before the statement to `work`. A table with no rows needs no change. A table with an expression of `transforms` or a default of `fills` always gets its rows again.
+    /// The tables and the materialized views whose rows the statement `node` changes, from the catalog before the statement to `work`. A table with no rows needs no change. A table with an expression of `transforms` or a default of `fills` always gets its rows again.
     ///
     /// # Errors
     ///
@@ -34,7 +34,7 @@ impl Connection {
         let tables: Vec<&Relation> = old
             .relations()
             .filter(|rel| {
-                rel.kind == RelKind::Table
+                matches!(rel.kind, RelKind::Table | RelKind::MatView)
                     && rel.oid >= FIRST_NORMAL_OID
                     && heap.has_rows(self.database_oid, rel.oid)
             })
@@ -242,7 +242,13 @@ impl Connection {
         };
         let reader = self.reader_on(Arc::clone(work));
         let params = Params { types, variable: true };
-        let plan = query::plan(&node, &reader, &params)?.fold(None, &reader)?;
+        // A materialized view takes the `INSERT` of its own rows, as the fill of `REFRESH MATERIALIZED VIEW` does.
+        if now.kind == RelKind::MatView {
+            self.filling.set(rel.oid);
+        }
+        let plan = query::plan(&node, &reader, &params).and_then(|plan| plan.fold(None, &reader));
+        self.filling.set(0);
+        let plan = plan?;
         let Some(info) = plan.write() else {
             return Err(Error::internal("the rewrite of a table with no plan of its rows"));
         };
