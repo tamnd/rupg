@@ -142,7 +142,7 @@ fn const_count(expr: &Expr) -> Option<Option<f64>> {
 }
 
 /// The estimates of `LIMIT` and `OFFSET`, as `preprocess_limit`: 0 for no clause, -1 for an expression that is not a constant, or else the value.
-fn limit_estimates(query: &Query) -> (f64, f64) {
+pub(crate) fn limit_estimates(query: &Query) -> (f64, f64) {
     let count = query.limit.as_ref().map_or(0.0, |l| match const_count(l) {
         Some(None) => 0.0,
         Some(Some(v)) => v.max(1.0),

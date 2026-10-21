@@ -1,10 +1,11 @@
-//! `standard_join_search`: the order of the joins of a join domain, by dynamic programming over the sets of its items, as `join_search_one_level` does it. Each set of items keeps the plan with the lowest total cost.
+//! `standard_join_search`: the order of the joins of a join domain, by dynamic programming over the sets of its items, as `join_search_one_level` does it. Each set of items keeps the plans that `add_path` keeps, and when the sets of each number of items are made, each of them takes the plan with the lowest total cost, as `set_cheapest`.
 
 use std::collections::{BTreeMap, BTreeSet};
 
 use rupg_analyze::JoinKind;
 
-use super::{Qual, Rel, Stats, choose, finish, join_rels, join_rows, lateral_rels};
+use super::paths::Paths;
+use super::{Candidate, Qual, Rel, Stats, choose, finish, join_rels, join_rows, lateral_rels};
 use crate::{Level, exprs};
 
 /// `geqo_threshold`: with this many items or more, PostgreSQL finds the order of the joins with the genetic optimizer. The planner then joins the items in their order.
@@ -15,7 +16,12 @@ const GEQO_THRESHOLD: usize = 12;
 struct Set<'q> {
     /// One bit for each item of the set.
     items: u64,
-    rel: Rel<'q>,
+    rels: BTreeSet<usize>,
+    /// The plan of the set, which it gets when the sets of its number of items are all made.
+    rel: Option<Rel<'q>>,
+    /// The plans of the joins of two sets that make the set, with the outer set and the inner set of each.
+    paths: Paths<(usize, usize, Candidate<'q>)>,
+    rows: f64,
     /// `lateral_relids`: the relations of the other items that the set reads with a lateral reference.
     lateral: BTreeSet<usize>,
 }
@@ -66,16 +72,25 @@ pub(super) fn search<'q>(
         lateral.retain(|r| !rel.rels.contains(r));
         problem.index.insert(1 << i, i);
         problem.levels[1].push(i);
-        problem.sets.push(Set { items: 1 << i, rel: rel.clone(), lateral });
+        problem.sets.push(Set {
+            items: 1 << i,
+            rels: rel.rels.clone(),
+            rel: Some(rel.clone()),
+            paths: Paths::new(stats.startup),
+            rows: rel.node.cost.rows,
+            lateral,
+        });
     }
     for k in 2..=n {
         problem.one_level(k);
         if problem.levels[k].is_empty() {
             return in_order(level, items, pool, stats);
         }
+        problem.set_cheapest(k);
     }
     let best = problem.levels[n][0];
-    problem.sets.swap_remove(best).rel
+    let Some(rel) = problem.sets.swap_remove(best).rel else { unreachable!("each set has a plan") };
+    rel
 }
 
 /// The joins of the items in their order, each with the conditions that its two sides have.
@@ -114,6 +129,26 @@ fn between<'q>(
 }
 
 impl<'q> Problem<'_, 'q> {
+    fn rel(&self, s: usize) -> &Rel<'q> {
+        let Some(rel) = &self.sets[s].rel else { unreachable!("a set of fewer items has a plan") };
+        rel
+    }
+
+    /// `set_cheapest` for the sets of `k` items: the plan of each set is its plan with the lowest total cost.
+    fn set_cheapest(&mut self, k: usize) {
+        for s in self.levels[k].clone() {
+            let paths = std::mem::replace(&mut self.sets[s].paths, Paths::new(self.stats.startup));
+            let Some((outer, inner, best)) = paths.cheapest() else {
+                unreachable!("each join of two sets has a nested loop")
+            };
+            let (l, r) = (self.rel(outer).clone(), self.rel(inner).clone());
+            let quals = between(self.pool, &l.rels, &r.rels);
+            let mut rel = finish(self.level, &best, l, r, &quals, &[], self.sets[s].rows);
+            rel.node.cost.width = self.stats.width(&rel.rels);
+            self.sets[s].rel = Some(rel);
+        }
+    }
+
     /// `join_search_one_level`: the sets of `k` items. A set joins each item that it has a condition with, or each item when it has no condition with another item. Then two sets of two items or more join when they have a condition. When no set has a condition with another, each set of `k - 1` items joins each item.
     fn one_level(&mut self, k: usize) {
         let previous = self.levels[k - 1].clone();
@@ -169,7 +204,7 @@ impl<'q> Problem<'_, 'q> {
     /// True when the set has a condition with another item, a class with another item or a lateral reference with another item, as `joininfo`, `has_eclass_joins` and `has_join_restriction`.
     fn has_joins(&self, s: usize) -> bool {
         let set = &self.sets[s];
-        let rels = &set.rel.rels;
+        let rels = &set.rels;
         let crosses = |r: &BTreeSet<usize>| !r.is_disjoint(rels) && !r.is_subset(rels);
         self.pool.iter().any(|q| crosses(&q.rels))
             || self.spans.iter().any(crosses)
@@ -182,48 +217,52 @@ impl<'q> Problem<'_, 'q> {
     /// True when two sets have a condition, a class or a lateral reference, as `have_relevant_joinclause` and `have_join_order_restriction`.
     fn relevant(&self, a: usize, b: usize) -> bool {
         let (sa, sb) = (&self.sets[a], &self.sets[b]);
-        let both =
-            |r: &BTreeSet<usize>| !r.is_disjoint(&sa.rel.rels) && !r.is_disjoint(&sb.rel.rels);
+        let both = |r: &BTreeSet<usize>| !r.is_disjoint(&sa.rels) && !r.is_disjoint(&sb.rels);
         self.pool.iter().any(|q| both(&q.rels))
             || self.spans.iter().any(both)
-            || !sa.lateral.is_disjoint(&sb.rel.rels)
-            || !sb.lateral.is_disjoint(&sa.rel.rels)
+            || !sa.lateral.is_disjoint(&sb.rels)
+            || !sb.lateral.is_disjoint(&sa.rels)
     }
 
-    /// `make_join_rel`: the join of two sets, when `join_is_legal` accepts it. The plan of the set of their items is the new plan when it costs less. A set that reads the other set with a lateral reference is the inner side, and a join that leaves a lateral reference to another item is not legal.
+    /// `make_join_rel`: the join of two sets, when `join_is_legal` accepts it. The set of their items gets the plans of the join that `add_path` keeps. A set that reads the other set with a lateral reference is the inner side, and a join that leaves a lateral reference to another item is not legal.
     fn make(&mut self, a: usize, b: usize) {
         let (sa, sb) = (&self.sets[a], &self.sets[b]);
         let items = sa.items | sb.items;
-        let a_reads_b = !sa.lateral.is_disjoint(&sb.rel.rels);
-        let b_reads_a = !sb.lateral.is_disjoint(&sa.rel.rels);
-        let mut rels = sa.rel.rels.clone();
-        rels.extend(sb.rel.rels.iter().copied());
+        let a_reads_b = !sa.lateral.is_disjoint(&sb.rels);
+        let b_reads_a = !sb.lateral.is_disjoint(&sa.rels);
+        let mut rels = sa.rels.clone();
+        rels.extend(sb.rels.iter().copied());
         let lateral: BTreeSet<usize> =
             sa.lateral.union(&sb.lateral).filter(|r| !rels.contains(r)).copied().collect();
         if a_reads_b && b_reads_a || !lateral.is_empty() {
             return;
         }
-        let (l, r) = if a_reads_b { (&sb.rel, &sa.rel) } else { (&sa.rel, &sb.rel) };
+        let (outer, inner) = if a_reads_b { (b, a) } else { (a, b) };
+        let (l, r) = (self.rel(outer), self.rel(inner));
         let quals = between(self.pool, &l.rels, &r.rels);
-        let Some(best) = choose(self.level, JoinKind::Inner, l, r, &quals, &[], self.stats) else {
+        let candidates = choose(self.level, JoinKind::Inner, l, r, &quals, &[], self.stats);
+        if candidates.is_empty() {
             return;
-        };
-        let existing = self.index.get(&items).copied();
-        let rows = match existing {
-            Some(e) if self.sets[e].rel.node.cost.total <= best.total => return,
-            Some(e) => self.sets[e].rel.node.cost.rows,
-            None => join_rows(JoinKind::Inner, l, r, &quals, &[], self.stats),
-        };
-        let mut rel = finish(self.level, &best, l.clone(), r.clone(), &quals, &[], rows);
-        rel.node.cost.width = self.stats.width(&rel.rels);
-        match existing {
-            Some(e) => self.sets[e].rel = rel,
+        }
+        let at = match self.index.get(&items) {
+            Some(&e) => e,
             None => {
+                let rows = join_rows(JoinKind::Inner, l, r, &quals, &[], self.stats);
                 let at = self.sets.len();
                 self.index.insert(items, at);
                 self.levels[items.count_ones() as usize].push(at);
-                self.sets.push(Set { items, rel, lateral });
+                let paths = Paths::new(self.stats.startup);
+                self.sets.push(Set { items, rels, rel: None, paths, rows, lateral });
+                at
             }
+        };
+        for (candidate, keys) in candidates {
+            self.sets[at].paths.add(
+                candidate.startup,
+                candidate.total,
+                keys,
+                (outer, inner, candidate),
+            );
         }
     }
 }

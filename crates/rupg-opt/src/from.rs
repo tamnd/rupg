@@ -1,17 +1,21 @@
 //! The plan of `FROM` and `WHERE`: the scan of each relation, the joins and the place of each condition, as `query_planner`, `make_one_rel` and `create_scan_plan` make them.
 
 mod classes;
+mod paths;
 mod search;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Relation, Var};
+use rupg_analyze::{
+    BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Relation, SortGroup, Var,
+};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey};
 use rupg_types::{Value, oid};
 
 use crate::{Builder, Level, Member, cost, exprs, upper};
+use paths::Paths;
 
 /// The estimates of the relations of a query level for the costs of the joins.
 #[derive(Debug, Default)]
@@ -20,6 +24,14 @@ struct Stats {
     rows: BTreeMap<usize, (f64, f64)>,
     /// Each column that the query reads, with its width and the relations of the places that read it, as `attr_needed`. The target list of the query is `usize::MAX`.
     needed: Vec<(Var, i32, BTreeSet<usize>)>,
+    /// `sort_pathkeys`: the keys of `ORDER BY`, each with its directions.
+    sort: Vec<(Expr, bool, bool)>,
+    /// `group_pathkeys` and `distinct_pathkeys`: the keys of `GROUP BY` and of `DISTINCT`, in any order.
+    groups: Vec<Vec<(Expr, bool, bool)>>,
+    /// The two sides of each `=` condition of a join that a merge join can test, each with its relations.
+    joins: Vec<[(Expr, BTreeSet<usize>); 2]>,
+    /// `consider_startup`: true when the query has `LIMIT`, so that a plan with a lower start cost is a different plan.
+    startup: bool,
 }
 
 impl Stats {
@@ -46,6 +58,35 @@ impl Stats {
             .filter(|(v, _, places)| rels.contains(&v.relation) && !places.is_subset(rels))
             .map(|(_, width, _)| width)
             .sum()
+    }
+
+    /// `truncate_useless_pathkeys`: the first keys of the order of the rows of a join of relations that a node above can use. These are the first keys of `ORDER BY`, the first keys that are keys of `GROUP BY` or of `DISTINCT`, or the first keys that a merge join with another relation can use.
+    fn useful(&self, rels: &BTreeSet<usize>, order: &[OrderKey]) -> Vec<OrderKey> {
+        let has = |list: &[(Expr, bool, bool)], k: &OrderKey| {
+            list.iter().any(|(e, desc, nulls_first)| k.sorts(e, *desc, *nulls_first))
+        };
+        let ordered = order
+            .iter()
+            .zip(&self.sort)
+            .take_while(|(k, (e, desc, nulls_first))| k.sorts(e, *desc, *nulls_first))
+            .count();
+        let grouped =
+            self.groups.iter().map(|g| order.iter().take_while(|k| has(g, k)).count()).max();
+        // `pathkeys_useful_for_merging`: a merge join sorts its sides in ascending order.
+        let merging = order
+            .iter()
+            .take_while(|k| {
+                !k.desc
+                    && !k.nulls_first
+                    && self.joins.iter().any(|sides| {
+                        sides.iter().zip(sides.iter().rev()).any(|((e, _), (_, other))| {
+                            k.exprs.iter().any(|x| x.same(e)) && !other.is_subset(rels)
+                        })
+                    })
+            })
+            .count();
+        let n = ordered.max(grouped.unwrap_or(0)).max(merging);
+        order[..n].to_vec()
     }
 }
 
@@ -380,7 +421,27 @@ fn needed(level: &Level<'_>, stats: &mut Stats) {
     }
     for part in parts {
         stats.need(part, 0, &exprs::relations(part), relations);
+        if let Some((op, left, right)) = exprs::binary(part)
+            && exprs::can_merge(op)
+        {
+            let (l, r) = (exprs::relations(left), exprs::relations(right));
+            if !l.is_empty() && !r.is_empty() && l.is_disjoint(&r) {
+                stats.joins.push([(left.clone(), l), (right.clone(), r)]);
+            }
+        }
     }
+    let keys = |items: &[SortGroup]| -> Vec<(Expr, bool, bool)> {
+        items
+            .iter()
+            .map(|item| {
+                let desc = builtin::operator_by_oid(item.operator).is_some_and(|o| o.name == ">");
+                (level.target(item.target).clone(), desc, item.nulls_first)
+            })
+            .collect()
+    };
+    stats.sort = keys(&query.sort);
+    stats.groups = vec![keys(&query.group), keys(&query.distinct)];
+    stats.startup = upper::limit_estimates(query).0 != 0.0;
     for (r, relation) in relations.iter().enumerate() {
         for (expr, depth) in lateral_exprs(relation) {
             let mut at = exprs::relations_at(expr, depth);
@@ -840,7 +901,7 @@ pub(crate) fn lateral_exprs(relation: &Relation) -> Vec<(&Expr, usize)> {
     out
 }
 
-/// A join of two plans, with the costs of each kind of join for each order of the sides, as `add_paths_to_joinrel`. The plan with the lowest total cost wins.
+/// A join of two plans, with the costs of each kind of join for each order of the sides, as `add_paths_to_joinrel`. Of the plans that `add_path` keeps, the plan with the lowest total cost wins.
 fn join_rels<'q>(
     level: &Level<'q>,
     kind: JoinKind,
@@ -853,7 +914,11 @@ fn join_rels<'q>(
     let rows = join_rows(kind, &left, &right, &quals, &filter, stats);
     let mut quals = quals;
     quals.sort_by_key(|q| exprs::calls(&q.expr));
-    let mut out = match choose(level, kind, &left, &right, &quals, &filter, stats) {
+    let mut paths = Paths::new(stats.startup);
+    for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats) {
+        paths.add(candidate.startup, candidate.total, keys, candidate);
+    }
+    let mut out = match paths.cheapest() {
         Some(best) => finish(level, &best, left, right, &quals, &filter, rows),
         None => {
             let mut rels = left.rels.clone();
@@ -885,7 +950,7 @@ fn join_rows(
     cost::clamp_rows(rows * filter_selectivity)
 }
 
-/// The kind of join with the lowest total cost for the two sides in each order that the join can have, as `add_paths_to_joinrel`, or `None` for a full join that no kind of join can do.
+/// Each kind of join for the two sides in each order that the join can have, in the order that `add_paths_to_joinrel` makes them, with the part of the order of its rows that a node above can use. A full join that no kind of join can do has none.
 fn choose<'q>(
     level: &Level<'q>,
     kind: JoinKind,
@@ -894,7 +959,7 @@ fn choose<'q>(
     quals: &[Qual<'q>],
     filter: &[Qual<'q>],
     stats: &Stats,
-) -> Option<Candidate<'q>> {
+) -> Vec<(Candidate<'q>, Vec<OrderKey>)> {
     let filter_cost = cost::qual_cost(filter.iter().map(|q| &*q.expr));
     let lateral_right = lateral(level, &right.rels, &left.rels);
     // The orders of the sides: the left side first, and the right side first when the join can have the sides in the other order.
@@ -902,7 +967,9 @@ fn choose<'q>(
     if !lateral_right && kind != JoinKind::Left || kind == JoinKind::Left && !lateral_right {
         orders.push(true);
     }
-    let mut best: Option<Candidate<'q>> = None;
+    let mut rels = left.rels.clone();
+    rels.extend(right.rels.iter().copied());
+    let mut out = Vec::new();
     for swapped in orders {
         let (outer, inner) = if swapped { (right, left) } else { (left, right) };
         let join = match (kind, swapped) {
@@ -911,18 +978,17 @@ fn choose<'q>(
         };
         let input = Input { outer, inner, quals, filter_cost, stats };
         let nested = kind == JoinKind::Inner || !swapped && kind == JoinKind::Left;
-        let candidates = [
-            merge_join(&input, join),
-            if nested { Some(nested_loop(&input, join, lateral_right)) } else { None },
-            hash_join(&input, join),
-        ];
-        for candidate in candidates.into_iter().flatten() {
-            if best.as_ref().is_none_or(|b| candidate.total < b.total) {
-                best = Some(Candidate { swapped, ..candidate });
-            }
+        let mut candidates: Vec<Candidate<'q>> = merge_join(&input, join).into_iter().collect();
+        if nested {
+            candidates.extend(nested_loops(&input, join, lateral_right));
+        }
+        candidates.extend(hash_join(&input, join));
+        for candidate in candidates {
+            let keys = stats.useful(&rels, &candidate.order(outer, inner, quals));
+            out.push((Candidate { swapped, ..candidate }, keys));
         }
     }
-    best
+    out
 }
 
 /// The plan of the join of two sides with the kind of join that `choose` found.
@@ -996,6 +1062,7 @@ struct Input<'a, 'q> {
 }
 
 /// A kind of join for an order of the sides, with its cost.
+#[derive(Clone, Copy, Debug)]
 struct Candidate<'q> {
     method: Method,
     join: JoinKind,
@@ -1045,27 +1112,27 @@ fn tuple_count(input: &Input<'_, '_>, clauses: &[Clause<'_>]) -> f64 {
     cost::clamp_rows(input.outer.node.cost.rows * input.inner.node.cost.rows * selectivity)
 }
 
-/// The costs of a nested loop, as `initial_cost_nestloop` and `final_cost_nestloop`. The inner side gets a `Material` node when that costs less, as `match_unsorted_outer` tries it after the plain inner side, but not when it keeps its rows already or reads the outer side.
-fn nested_loop<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Candidate<'q> {
-    let (mut startup, mut total) = nested_cost(input, false);
-    let mut materialize = false;
+/// The nested loops of a join, with their costs as `initial_cost_nestloop` and `final_cost_nestloop`: with the plain inner side, and then with a `Material` node over the inner side, as `match_unsorted_outer` makes them. The inner side gets no `Material` node when it keeps its rows already or reads the outer side.
+fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec<Candidate<'q>> {
+    let mut out = Vec::new();
+    let mut materialize = vec![false];
     if !lateral && !keeps_rows(&input.inner.node.kind) {
-        let (s, t) = nested_cost(input, true);
-        // `add_path` keeps the first path unless the other costs less by more than the smallest fuzz.
-        if t * 1.000_000_000_1 < total {
-            (startup, total, materialize) = (s, t, true);
-        }
+        materialize.push(true);
     }
-    Candidate {
-        method: Method::Nested,
-        join,
-        swapped: false,
-        startup,
-        total,
-        materialize,
-        sort: (false, false),
-        _marker: std::marker::PhantomData,
+    for materialize in materialize {
+        let (startup, total) = nested_cost(input, materialize);
+        out.push(Candidate {
+            method: Method::Nested,
+            join,
+            swapped: false,
+            startup,
+            total,
+            materialize,
+            sort: (false, false),
+            _marker: std::marker::PhantomData,
+        });
     }
+    out
 }
 
 /// The start and the total cost of a nested loop, with a `Material` node on the inner side or with none.
@@ -1223,6 +1290,25 @@ fn merge_keys<'q>(values: Vec<Expr>) -> Vec<SortKey<'q>> {
 }
 
 impl<'q> Candidate<'q> {
+    /// The order of the rows of the join, as `build_join_pathkeys`: the order of the outer side for a nested loop, the order of the values of the conditions for a merge join that is not a full join, and no order for a hash join.
+    fn order(&self, outer: &Rel<'q>, inner: &Rel<'q>, quals: &[Qual<'q>]) -> Vec<OrderKey> {
+        match self.method {
+            Method::Nested => outer.order.clone(),
+            Method::Merge if self.join != JoinKind::Full => {
+                split(quals, &outer.rels, &inner.rels, exprs::can_merge)
+                    .0
+                    .into_iter()
+                    .map(|c| OrderKey {
+                        exprs: vec![c.outer, c.inner],
+                        desc: false,
+                        nulls_first: false,
+                    })
+                    .collect()
+            }
+            Method::Merge | Method::Hash => Vec::new(),
+        }
+    }
+
     /// The plan of the join.
     fn make(
         &self,
@@ -1232,13 +1318,12 @@ impl<'q> Candidate<'q> {
         quals: &[Qual<'q>],
         rows: f64,
     ) -> Rel<'q> {
-        let mut order = Vec::new();
+        let order = self.order(&outer, &inner, quals);
         let node = match self.method {
             Method::Nested => {
                 let inner_node =
                     if self.materialize { materialize(inner.node) } else { inner.node };
                 let join_filter = quals.iter().map(|q| q.item()).collect();
-                order = outer.order;
                 Node::new(
                     Kind::NestedLoop { join: self.join, join_filter },
                     scope,
@@ -1262,17 +1347,6 @@ impl<'q> Candidate<'q> {
                 let (clauses, other) = split(quals, &outer.rels, &inner.rels, exprs::can_merge);
                 let outer_values: Vec<Expr> = clauses.iter().map(|c| c.outer.clone()).collect();
                 let inner_values: Vec<Expr> = clauses.iter().map(|c| c.inner.clone()).collect();
-                if self.join != JoinKind::Full {
-                    order = outer_values
-                        .iter()
-                        .zip(&inner_values)
-                        .map(|(o, i)| OrderKey {
-                            exprs: vec![o.clone(), i.clone()],
-                            desc: false,
-                            nulls_first: false,
-                        })
-                        .collect();
-                }
                 let outer_node = if self.sort.0 {
                     sort(outer.node, merge_keys(outer_values), None)
                 } else {

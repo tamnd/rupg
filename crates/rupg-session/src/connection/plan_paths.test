@@ -1,0 +1,122 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int, y int);
+CREATE TABLE
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int);
+CREATE TABLE
+> CREATE TABLE t (s text, u text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM t t1, t t2 WHERE t1.s = t2.s;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=29.80..186.32 rows=3872 width=128)
+row   Hash Cond: (t1.s = t2.s)
+row   ->  Seq Scan on t t1  (cost=0.00..18.80 rows=880 width=64)
+row   ->  Hash  (cost=18.80..18.80 rows=880 width=64)
+row         ->  Seq Scan on t t2  (cost=0.00..18.80 rows=880 width=64)
+EXPLAIN
+> EXPLAIN SELECT * FROM t t1, t t2 WHERE t1.s = t2.s ORDER BY t1.s;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=123.68..186.16 rows=3872 width=128)
+row   Merge Cond: (t1.s = t2.s)
+row   ->  Sort  (cost=61.84..64.04 rows=880 width=64)
+row         Sort Key: t1.s
+row         ->  Seq Scan on t t1  (cost=0.00..18.80 rows=880 width=64)
+row   ->  Sort  (cost=61.84..64.04 rows=880 width=64)
+row         Sort Key: t2.s
+row         ->  Seq Scan on t t2  (cost=0.00..18.80 rows=880 width=64)
+EXPLAIN
+> EXPLAIN SELECT t1.s, count(*) FROM t t1, t t2 WHERE t1.s = t2.s GROUP BY t1.s;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=123.68..207.52 rows=200 width=40)
+row   Group Key: t1.s
+row   ->  Merge Join  (cost=123.68..186.16 rows=3872 width=32)
+row         Merge Cond: (t1.s = t2.s)
+row         ->  Sort  (cost=61.84..64.04 rows=880 width=32)
+row               Sort Key: t1.s
+row               ->  Seq Scan on t t1  (cost=0.00..18.80 rows=880 width=32)
+row         ->  Sort  (cost=61.84..64.04 rows=880 width=32)
+row               Sort Key: t2.s
+row               ->  Seq Scan on t t2  (cost=0.00..18.80 rows=880 width=32)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT t1.s FROM t t1, t t2 WHERE t1.s = t2.s;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=123.68..195.84 rows=200 width=32)
+row   ->  Merge Join  (cost=123.68..186.16 rows=3872 width=32)
+row         Merge Cond: (t1.s = t2.s)
+row         ->  Sort  (cost=61.84..64.04 rows=880 width=32)
+row               Sort Key: t1.s
+row               ->  Seq Scan on t t1  (cost=0.00..18.80 rows=880 width=32)
+row         ->  Sort  (cost=61.84..64.04 rows=880 width=32)
+row               Sort Key: t2.s
+row               ->  Seq Scan on t t2  (cost=0.00..18.80 rows=880 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM t t1 LEFT JOIN t t2 ON t1.s = t2.s;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=29.80..186.32 rows=3872 width=128)
+row   Hash Cond: (t1.s = t2.s)
+row   ->  Seq Scan on t t1  (cost=0.00..18.80 rows=880 width=64)
+row   ->  Hash  (cost=18.80..18.80 rows=880 width=64)
+row         ->  Seq Scan on t t2  (cost=0.00..18.80 rows=880 width=64)
+EXPLAIN
+> EXPLAIN SELECT * FROM t t1 FULL JOIN t t2 ON t1.s = t2.s;
+fields QUERY PLAN:25:-1:-1
+row Hash Full Join  (cost=29.80..186.32 rows=3872 width=128)
+row   Hash Cond: (t1.s = t2.s)
+row   ->  Seq Scan on t t1  (cost=0.00..18.80 rows=880 width=64)
+row   ->  Hash  (cost=18.80..18.80 rows=880 width=64)
+row         ->  Seq Scan on t t2  (cost=0.00..18.80 rows=880 width=64)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b WHERE a.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row   Merge Cond: (a.x = b.x)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: a.x
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c WHERE a.x = b.x AND b.y = c.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=2760.59..7657.49 rows=325610 width=20)
+row   Merge Cond: (c.x = b.y)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Sort  (cost=2580.81..2644.65 rows=25538 width=16)
+row         Sort Key: b.y
+row         ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM t t1, t t2 WHERE t1.s = t2.s AND t1.u = t2.u;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=123.68..137.07 rows=19 width=128)
+row   Merge Cond: ((t1.s = t2.s) AND (t1.u = t2.u))
+row   ->  Sort  (cost=61.84..64.04 rows=880 width=64)
+row         Sort Key: t1.s, t1.u
+row         ->  Seq Scan on t t1  (cost=0.00..18.80 rows=880 width=64)
+row   ->  Sort  (cost=61.84..64.04 rows=880 width=64)
+row         Sort Key: t2.s, t2.u
+row         ->  Seq Scan on t t2  (cost=0.00..18.80 rows=880 width=64)
+EXPLAIN
+> EXPLAIN SELECT * FROM t t1, t t2 WHERE t1.s = t2.u AND t1.u = t2.s;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=123.68..137.07 rows=19 width=128)
+row   Merge Cond: ((t1.s = t2.u) AND (t1.u = t2.s))
+row   ->  Sort  (cost=61.84..64.04 rows=880 width=64)
+row         Sort Key: t1.s, t1.u
+row         ->  Seq Scan on t t1  (cost=0.00..18.80 rows=880 width=64)
+row   ->  Sort  (cost=61.84..64.04 rows=880 width=64)
+row         Sort Key: t2.u, t2.s
+row         ->  Seq Scan on t t2  (cost=0.00..18.80 rows=880 width=64)
+EXPLAIN
