@@ -413,6 +413,8 @@ pub struct Connection {
     marks: Vec<savepoint::Mark>,
     /// The functions in PL/pgSQL that the session compiled, and the calls that run.
     plpgsql: rupg_plpgsql::Cache,
+    /// The state of the calls in PL/pgSQL that run, for `COMMIT` and `ROLLBACK` in a call.
+    calls: plpgsql::Calls,
     /// The queue of the triggers `AFTER` of the statement.
     events: RefCell<Vec<trigger::Event>>,
     /// The messages of `RAISE` of the triggers of the statement, for the client.
@@ -484,6 +486,7 @@ impl Connection {
             modes: RefCell::new(deferred::Modes::default()),
             marks: Vec::new(),
             plpgsql: rupg_plpgsql::Cache::default(),
+            calls: plpgsql::Calls::default(),
             events: RefCell::new(Vec::new()),
             trigger_warnings: RefCell::new(Vec::new()),
         };
@@ -809,6 +812,12 @@ impl Connection {
 
     /// The end of the rows of a transaction: a commit makes them visible and removes the rows of the tables that the transaction dropped, and a rollback removes them.
     fn end_rows(&mut self, commit: bool, defined: bool) {
+        self.end_heap(commit, defined);
+        self.marks.clear();
+    }
+
+    /// The part of [`Connection::end_rows`] that a call in PL/pgSQL can do, as the transaction has no savepoints there.
+    fn end_heap(&self, commit: bool, defined: bool) {
         let heap = self.store.heap();
         let xid = self.xid.replace(0);
         if xid != 0 {
@@ -825,7 +834,6 @@ impl Connection {
         self.command.set(0);
         self.snapshot.replace(None);
         self.end_deferred();
-        self.marks.clear();
         self.events.borrow_mut().clear();
     }
 
@@ -1634,7 +1642,7 @@ impl Connection {
         described: &mut Option<Vec<Column>>,
     ) -> Result<Done, Error> {
         // `ExecuteCallStmt` describes the row only when it sends the row, so an error gives no description.
-        let done = self.select(node, notices, late, described);
+        let done = self.top_call(|| self.select(node, notices, late, described));
         if done.is_err() {
             *described = None;
         }
@@ -4662,6 +4670,12 @@ mod tests {
     #[test]
     fn field_assign() {
         big_stack(|| script(include_str!("connection/field_assign.test")));
+    }
+
+    /// `COMMIT` and `ROLLBACK` in procedures and in `DO`, with `AND CHAIN`: a nested `CALL`, `SET LOCAL`, the loops over a query and over a cursor, a cursor that the commit closes, a deferred foreign key that fails at the commit, and the errors in a function, in a trigger, in a transaction block, in a block with `EXCEPTION` and in a loop over a query that writes. `connection/plpgsql_transactions.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_transactions() {
+        big_stack(|| script(include_str!("connection/plpgsql_transactions.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

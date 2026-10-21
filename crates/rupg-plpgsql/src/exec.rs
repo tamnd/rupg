@@ -735,21 +735,17 @@ impl Exec<'_> {
                 self.for_int(label.as_deref(), *var, *reverse, lower, upper, step.as_ref(), body)
             }
             StmtKind::ForQuery { label, target, source, body } => {
-                let (rows, columns) = self.source_rows(source)?;
+                let ((rows, columns), read_only) = self.source_rows(source)?;
                 self.spi.new_portal_name();
                 let found = !rows.is_empty();
                 if !found {
                     self.move_rows(*target, &columns, None)?;
                 }
-                let mut out = Flow::Normal;
-                for row in rows {
-                    self.move_rows(*target, &columns, Some(row))?;
-                    let flow = self.stmts(body)?;
-                    if let Some(flow) = after_body(flow, label.as_deref()) {
-                        out = flow;
-                        break;
-                    }
-                }
+                // `exec_for_query` pins the portal of the loop.
+                self.spi.pin(None, read_only);
+                let out = self.for_rows(label.as_deref(), *target, (&columns, rows), body);
+                self.spi.unpin();
+                let out = out?;
                 self.set_found(found);
                 Ok(out)
             }
@@ -773,7 +769,7 @@ impl Exec<'_> {
                 Ok(Flow::Normal)
             }
             StmtKind::ReturnQuery(source) => {
-                let (rows, columns) = self.source_rows(source)?;
+                let ((rows, columns), _) = self.source_rows(source)?;
                 let n = rows.len();
                 for row in rows {
                     let value = self.query_row(&columns, row)?;
@@ -855,6 +851,11 @@ impl Exec<'_> {
             }
             StmtKind::ForCursor { label, target, cursor, args, body } => {
                 self.for_cursor(label.as_deref(), *target, *cursor, args.as_ref(), body)
+            }
+            StmtKind::EndTransaction { commit, chain } => {
+                // `exec_stmt_commit` and `exec_stmt_rollback`.
+                self.spi.end_transaction(*commit, *chain)?;
+                Ok(Flow::Normal)
             }
             StmtKind::Null => Ok(Flow::Normal),
         }
@@ -1144,17 +1145,35 @@ impl Exec<'_> {
     }
 
     /// The rows of the query of a `FOR` loop or of `RETURN QUERY`, with the columns.
-    fn source_rows(&mut self, source: &Source) -> Result<Rows> {
+    fn source_rows(&mut self, source: &Source) -> Result<(Rows, bool)> {
         match source {
             Source::Query(e) => {
                 let (rows, _, p) = self.execute(e)?;
-                Ok((rows, columns(&p.plan)))
+                Ok(((rows, columns(&p.plan)), p.plan.write().is_none()))
             }
             Source::Dynamic { query, params } => {
                 let (rows, _, plan) = self.run_dynamic(query, params)?;
-                Ok((rows, columns(&plan)))
+                Ok(((rows, columns(&plan)), plan.write().is_none()))
             }
         }
+    }
+
+    /// The body of a loop over the rows of a query, for each row.
+    fn for_rows(
+        &mut self,
+        label: Option<&str>,
+        target: usize,
+        (columns, rows): (&[Field], Vec<Vec<Value>>),
+        body: &[Stmt],
+    ) -> Run<Flow> {
+        for row in rows {
+            self.move_rows(target, columns, Some(row))?;
+            let flow = self.stmts(body)?;
+            if let Some(flow) = after_body(flow, label) {
+                return Ok(flow);
+            }
+        }
+        Ok(Flow::Normal)
     }
 
     /// A row of `RETURN QUERY` as a value of the result type.
@@ -1625,6 +1644,32 @@ impl Exec<'_> {
         Ok(())
     }
 
+    /// The body of a loop over the rows of the cursor `opened`, for each row that a fetch gives. It gives true when there was a row.
+    fn cursor_rows(
+        &mut self,
+        label: Option<&str>,
+        target: usize,
+        opened: &str,
+        body: &[Stmt],
+    ) -> Run<(bool, Flow)> {
+        let mut found = false;
+        loop {
+            let fetched = self.spi.fetch_cursor(opened, FetchDirection::FETCH_FORWARD, 1, true)?;
+            let Some(row) = fetched.rows.into_iter().next() else {
+                if !found {
+                    self.move_rows(target, &fetched.columns, None)?;
+                }
+                return Ok((found, Flow::Normal));
+            };
+            found = true;
+            self.move_rows(target, &fetched.columns, Some(row))?;
+            let flow = self.stmts(body)?;
+            if let Some(flow) = after_body(flow, label) {
+                return Ok((found, flow));
+            }
+        }
+    }
+
     /// `exec_stmt_forc`: the loop over the rows of the bound cursor `d`, one row at a time, as the body can read the cursor too. The portal closes after the loop, and a variable that was null is null again.
     fn for_cursor(
         &mut self,
@@ -1639,24 +1684,10 @@ impl Exec<'_> {
         if name.is_none() {
             self.assign_datum(d, Value::Text(opened.clone()), oid::TEXT, -1)?;
         }
-        let mut found = false;
-        let mut out = Flow::Normal;
-        loop {
-            let fetched = self.spi.fetch_cursor(&opened, FetchDirection::FETCH_FORWARD, 1, true)?;
-            let Some(row) = fetched.rows.into_iter().next() else {
-                if !found {
-                    self.move_rows(target, &fetched.columns, None)?;
-                }
-                break;
-            };
-            found = true;
-            self.move_rows(target, &fetched.columns, Some(row))?;
-            let flow = self.stmts(body)?;
-            if let Some(flow) = after_body(flow, label) {
-                out = flow;
-                break;
-            }
-        }
+        self.spi.pin(Some(&opened), true);
+        let looped = self.cursor_rows(label, target, &opened, body);
+        self.spi.unpin();
+        let (found, out) = looped?;
         self.spi.close_cursor(&opened)?;
         if name.is_none() {
             self.slots[d] = Slot::Var { value: Value::Null, ty: oid::REFCURSOR, typmod: -1 };

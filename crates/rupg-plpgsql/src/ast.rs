@@ -425,6 +425,11 @@ pub(crate) enum StmtKind {
         into: Option<usize>,
     },
     Close(usize),
+    /// `COMMIT` and `ROLLBACK`, which `commit` tells apart, with `AND CHAIN` when `chain` is true.
+    EndTransaction {
+        commit: bool,
+        chain: bool,
+    },
     Null,
 }
 
@@ -461,6 +466,8 @@ impl StmtKind {
             StmtKind::Fetch { into: Some(_), .. } => "FETCH",
             StmtKind::Fetch { .. } => "MOVE",
             StmtKind::Close(_) => "CLOSE",
+            StmtKind::EndTransaction { commit: true, .. } => "COMMIT",
+            StmtKind::EndTransaction { .. } => "ROLLBACK",
             StmtKind::Null => "NULL",
         }
     }

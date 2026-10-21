@@ -1216,7 +1216,7 @@ impl Compiler<'_> {
                     self.expect_char(b';')?;
                     Ok(self.finish(t.start, StmtKind::Close(cursor)))
                 }
-                "commit" | "rollback" => Err(not_yet("transaction control in PL/pgSQL")),
+                "commit" | "rollback" => self.end_transaction(&t),
                 _ => Err(self.yyerror(&t, "syntax error")),
             };
         }
@@ -1515,6 +1515,24 @@ impl Compiler<'_> {
             expr.target = Some(d);
         }
         Ok(self.finish(w.start, StmtKind::Assign { target, expr }))
+    }
+
+    /// `stmt_commit` and `stmt_rollback`, with `opt_transaction_chain`.
+    fn end_transaction(&mut self, t: &Tok) -> Result<Stmt> {
+        let mut chain = false;
+        if self.sc.peek()?.is("and") {
+            self.sc.next()?;
+            let n = self.sc.next()?;
+            if n.is("no") {
+                self.expect("chain")?;
+            } else if n.is("chain") {
+                chain = true;
+            } else {
+                return Err(self.yyerror(&n, "syntax error"));
+            }
+        }
+        self.expect_char(b';')?;
+        Ok(self.finish(t.start, StmtKind::EndTransaction { commit: t.is("commit"), chain }))
     }
 
     /// `stmt_if`.
