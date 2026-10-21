@@ -221,13 +221,6 @@ impl Definer<'_, '_> {
             Err(e) => return Err(e),
         };
         let target = self.alter_target(stmt.objtype, found, relname(&rv))?;
-        // The recursion of `ATSimpleRecursion` and `ATPrepAlterColumnType` does not reach the children of `INHERITS` yet.
-        if target.kind == b'r' && !self.catalog.children(target.oid).is_empty() {
-            return Err(not_yet(
-                "ALTER TABLE of a table with children of INHERITS",
-                place(rv.location),
-            ));
-        }
         if let [Some(Node::AlterTableCmd(cmd))] = stmt.cmds.as_slice()
             && matches!(
                 cmd.subtype,
@@ -363,7 +356,7 @@ impl Definer<'_, '_> {
                 recurse = passes.recurse;
                 if !passes.recurse
                     && !passes.recursing
-                    && !self.catalog.partitions(target.oid).is_empty()
+                    && !self.catalog.children(target.oid).is_empty()
                 {
                     let column = cmd.name.as_deref().unwrap_or_default();
                     return Err(Error::new(
@@ -634,7 +627,7 @@ impl Definer<'_, '_> {
                 let number = rel.and_then(|r| r.column_number(name)).unwrap_or(0);
                 let identity = rel.and_then(|r| r.column(number)).is_some_and(|c| c.identity != 0);
                 let defaulted = identity || self.catalog.default_of(target.oid, number).is_some();
-                if !self.catalog.partitions(target.oid).is_empty() {
+                if !self.catalog.children(target.oid).is_empty() {
                     if !passes.recurse {
                         return Err(Error::new(
                             SqlState::INVALID_TABLE_DEFINITION,
@@ -897,7 +890,7 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `ATExecSetNotNull`, and the not-null constraint of `ATAddCheckNNConstraint` and `AddRelationNewConstraints`. A column with a not-null constraint keeps it, as `AdjustNotNullInheritance` does: the constraint counts the parent table when the recursion reaches the table, and else it becomes a constraint of the table itself. A new constraint goes on to the partitions with the same name. With `ONLY`, a table with partitions cannot get a new constraint, but the not-null constraints of a primary key always go on to the partitions. The result is true for a new constraint, which a scan of the table must check.
+    /// `ATExecSetNotNull`, and the not-null constraint of `ATAddCheckNNConstraint` and `AddRelationNewConstraints`. A column with a not-null constraint keeps it, as `AdjustNotNullInheritance` does: the constraint counts the parent table when the recursion reaches the table, and else it becomes a constraint of the table itself. A new constraint goes on to the children with the same name. With `ONLY`, a table with children cannot get a new constraint, but `SET NOT NULL` gives a table with children of `INHERITS` a constraint that is `NO INHERIT`, and the not-null constraints of a primary key always go on to the partitions. The result is true for a new constraint, which a scan of the table must check.
     fn alter_not_null(
         &mut self,
         target: &Target,
@@ -976,26 +969,27 @@ impl Definer<'_, '_> {
             return Ok(false);
         }
         let children = self.child_targets(target.oid);
+        let mut no_inherit = con.is_no_inherit;
         if !recurse && !children.is_empty() {
-            let error = Error::new(
-                SqlState::INVALID_TABLE_DEFINITION,
-                "constraint must be added to child tables too",
-            );
-            return Err(match origin {
-                Origin::SetNotNull => error.with_hint("Do not specify the ONLY keyword."),
-                _ => error,
-            });
+            if origin == Origin::SetNotNull && target.kind != b'p' {
+                no_inherit = true;
+            } else {
+                let error = Error::new(
+                    SqlState::INVALID_TABLE_DEFINITION,
+                    "constraint must be added to child tables too",
+                );
+                return Err(match origin {
+                    Origin::SetNotNull => error.with_hint("Do not specify the ONLY keyword."),
+                    _ => error,
+                });
+            }
         }
-        let oid = self.catalog.add_not_null(
-            target.oid,
-            con.conname.as_deref(),
-            column,
-            con.is_no_inherit,
-        )?;
+        let oid =
+            self.catalog.add_not_null(target.oid, con.conname.as_deref(), column, no_inherit)?;
         if recursing {
             self.catalog.set_constraint_inherited(oid, false, 1)?;
         }
-        if con.is_no_inherit {
+        if no_inherit {
             return Ok(true);
         }
         let mut inherited = con.clone();

@@ -5194,6 +5194,24 @@ mod tests {
         big_stack(|| script(include_str!("connection/inherit_merge_into.test")));
     }
 
+    /// `ALTER TABLE` of the columns of a table with children of `INHERITS`: `ADD COLUMN` that merges with a column of a child, a child with two parents, `DROP COLUMN` of an inherited column and of a column with two parents, `ALTER COLUMN TYPE`, `SET DEFAULT` and `RENAME COLUMN`, and the errors of `ONLY` and of a child. `connection/inherit_alter_column.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inherit_alter_column() {
+        big_stack(|| script(include_str!("connection/inherit_alter_column.test")));
+    }
+
+    /// `ALTER TABLE` of the constraints of a table with children of `INHERITS`: `ADD CONSTRAINT` that merges with a constraint of a child, `NO INHERIT`, `DROP CONSTRAINT` with and without `ONLY`, `SET NOT NULL` and `DROP NOT NULL`, `SET STATISTICS`, `RENAME CONSTRAINT`, and the errors of `ONLY` and of a child. `connection/inherit_alter_constraint.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inherit_alter_constraint() {
+        big_stack(|| script(include_str!("connection/inherit_alter_constraint.test")));
+    }
+
+    /// `ALTER TABLE` of a table with children of `INHERITS` for the other subcommands: `ADD COLUMN` with a not-null constraint, a check constraint and a default, `ADD PRIMARY KEY` and `ADD UNIQUE`, which give the children the not-null constraints but no index, an identity that the children do not get, `SET STORAGE`, `SET COMPRESSION`, `ALTER COLUMN TYPE` with `USING`, `SET DEFAULT` with `ONLY`, `DROP COLUMN` with a view, `ONLY` and `IF NOT EXISTS`, and `SET UNLOGGED`. `connection/inherit_alter_other.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inherit_alter_other() {
+        big_stack(|| script(include_str!("connection/inherit_alter_other.test")));
+    }
+
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_constraintdef() {

@@ -138,15 +138,7 @@ impl Definer<'_, '_> {
         let Some(target) = self.rename_target(&rv, stmt.missing_ok)? else { return Ok(()) };
         let column = stmt.subname.as_deref().unwrap_or_default();
         if rv.inh {
-            let children = self.all_inheritors(target.oid);
-            // `find_all_inheritors` with `numparents`: the number of the parents of each child in the tree of the table.
-            let mut tree: Vec<u32> = children.iter().map(|c| c.oid).collect();
-            tree.push(target.oid);
-            for child in children {
-                let inherits = self.catalog.relation(child.oid).map(|r| r.inherits.clone());
-                let found =
-                    inherits.unwrap_or_default().iter().filter(|p| tree.contains(p)).count();
-                let parents = i16::try_from(found.max(1)).unwrap_or(i16::MAX);
+            for (child, parents) in self.inheritors_with_parents(&target) {
                 self.rename_one_column(&child, column, newname, parents)?;
             }
         } else if !self.catalog.children(target.oid).is_empty() {
@@ -156,6 +148,22 @@ impl Definer<'_, '_> {
             ));
         }
         self.rename_one_column(&target, column, newname, 0)
+    }
+
+    /// `find_all_inheritors` with `numparents`: the children of the table at each level, each with the number of its parents in the tree of the table.
+    fn inheritors_with_parents(&self, target: &Target) -> Vec<(Target, i16)> {
+        let children = self.all_inheritors(target.oid);
+        let mut tree: Vec<u32> = children.iter().map(|c| c.oid).collect();
+        tree.push(target.oid);
+        children
+            .into_iter()
+            .map(|child| {
+                let inherits = self.catalog.relation(child.oid).map(|r| r.inherits.clone());
+                let found =
+                    inherits.unwrap_or_default().iter().filter(|p| tree.contains(p)).count();
+                (child, i16::try_from(found.max(1)).unwrap_or(i16::MAX))
+            })
+            .collect()
     }
 
     /// `renameatt_internal` for one relation. A column that the relation takes from more than `parents` parent tables cannot get a new name.
@@ -220,13 +228,45 @@ impl Definer<'_, '_> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let Some(target) = self.rename_target(&rv, stmt.missing_ok)? else { return Ok(()) };
         let name = stmt.subname.as_deref().unwrap_or_default();
+        self.rename_one_constraint(&target, name, newname, rv.inh, 0)
+    }
+
+    /// `rename_constraint_internal` for one table. A check constraint or a not-null constraint that the children inherit gets the new name in each of them first, and with `ONLY` a table with children cannot rename it. A constraint that the table takes from more than `parents` parent tables cannot get a new name.
+    fn rename_one_constraint(
+        &mut self,
+        target: &Target,
+        name: &str,
+        newname: &str,
+        recurse: bool,
+        parents: i16,
+    ) -> Result<()> {
         let found = self.catalog.constraints_of(target.oid).find(|c| c.name == name);
-        let Some((oid, kind, index)) = found.map(|c| (c.oid, c.kind, c.index)) else {
+        let Some((oid, kind, index, no_inherit, inhcount)) =
+            found.map(|c| (c.oid, c.kind, c.index, c.no_inherit, c.inhcount))
+        else {
             return Err(Error::new(
                 SqlState::UNDEFINED_OBJECT,
                 format!("constraint \"{name}\" for table \"{}\" does not exist", target.name),
             ));
         };
+        if matches!(kind, ConKind::Check | ConKind::NotNull) && !no_inherit {
+            if recurse {
+                for (child, parents) in self.inheritors_with_parents(target) {
+                    self.rename_one_constraint(&child, name, newname, false, parents)?;
+                }
+            } else if parents == 0 && !self.catalog.children(target.oid).is_empty() {
+                return Err(Error::new(
+                    SqlState::INVALID_TABLE_DEFINITION,
+                    format!("inherited constraint \"{name}\" must be renamed in child tables too"),
+                ));
+            }
+            if inhcount > parents {
+                return Err(Error::new(
+                    SqlState::INVALID_TABLE_DEFINITION,
+                    format!("cannot rename inherited constraint \"{name}\""),
+                ));
+            }
+        }
         if target.kind == b'r' && matches!(kind, ConKind::Primary | ConKind::Unique) && index != 0 {
             return self.catalog.rename_relation(index, newname);
         }

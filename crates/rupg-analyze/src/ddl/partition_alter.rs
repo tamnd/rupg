@@ -2,11 +2,12 @@
 //!
 //! A partition can have the columns of its parent table in another order, so a column can have another number in each table. The recursion finds the column of a partition by name, and an expression of the parent table gets the numbers of the partition.
 
-use rupg_catalog::ConKind;
+use rupg_catalog::{Column, ConKind};
 use rupg_common::{Error, Result, SqlState};
 
 use super::alter::Target;
 use super::partition_attach::without_locations;
+use super::table::collation_name;
 use super::{Definer, Fill, Found, column_numbers, references};
 use crate::expr::Expr;
 
@@ -48,7 +49,7 @@ impl Definer<'_, '_> {
         Ok(column_numbers(&exprs.iter().collect::<Vec<_>>()).contains(&column))
     }
 
-    /// The recursion of `ATExecAddColumn`: each partition of `parent` gets the new column `number` of `parent` as an inherited column, at the end of its own columns, with the default and the not-null constraint of the column, and then the partitions of a partition get the column in turn.
+    /// The recursion of `ATExecAddColumn`: each partition of `parent` gets the new column `number` of `parent` as an inherited column, at the end of its own columns, with the default and the not-null constraint of the column, and then the partitions of a partition get the column in turn. A child of `INHERITS` with a column of the same name merges the new column with its own column.
     pub(super) fn add_column_to_partitions(&mut self, parent: u32, number: i16) -> Result<()> {
         let rel = self.catalog.relation(parent).ok_or_else(|| lookup(parent))?;
         let Some(column) = rel.column(number).cloned() else {
@@ -63,6 +64,12 @@ impl Definer<'_, '_> {
             .find(|c| c.kind == ConKind::NotNull && c.keys == [number] && !c.no_inherit)
             .map(|c| c.name.clone());
         for child in self.child_targets(parent) {
+            let rel = self.catalog.relation(child.oid);
+            let own = rel.and_then(|r| r.column_number(&column.name));
+            if let Some(own) = own {
+                self.merge_child_column(&child, own, &column)?;
+                continue;
+            }
             let mut new = column.clone();
             new.not_null = false;
             new.has_default = false;
@@ -84,6 +91,52 @@ impl Definer<'_, '_> {
             self.toast_after_columns(child.oid)?;
             self.add_column_to_partitions(child.oid, own)?;
         }
+        Ok(())
+    }
+
+    /// The merge of `ATExecAddColumn` when a child of `INHERITS` has a column `own` with the name of the new column of its parent: the column must have the same type and collation, and it counts one more parent. The children of the child have the column already, so the recursion stops.
+    fn merge_child_column(&mut self, child: &Target, own: i16, column: &Column) -> Result<()> {
+        let Some(found) = self.catalog.relation(child.oid).and_then(|r| r.column(own)) else {
+            return Err(lookup(child.oid));
+        };
+        if found.ty != column.ty || found.typmod != column.typmod {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "child table \"{}\" has different type for column \"{}\"",
+                    child.name, column.name
+                ),
+            ));
+        }
+        if found.collation != column.collation {
+            return Err(Error::new(
+                SqlState::COLLATION_MISMATCH,
+                format!(
+                    "child table \"{}\" has different collation for column \"{}\"",
+                    child.name, column.name
+                ),
+            )
+            .with_detail(format!(
+                "\"{}\" versus \"{}\"",
+                collation_name(column.collation),
+                collation_name(found.collation)
+            )));
+        }
+        let Some(inhcount) = found.inhcount.checked_add(1) else {
+            return Err(Error::new(
+                SqlState::PROGRAM_LIMIT_EXCEEDED,
+                "too many inheritance parents",
+            ));
+        };
+        let local = found.local;
+        self.catalog.set_column_inherited(child.oid, own, local, inhcount)?;
+        self.notice(
+            SqlState::SUCCESSFUL_COMPLETION,
+            format!(
+                "merging definition of column \"{}\" for child \"{}\"",
+                column.name, child.name
+            ),
+        );
         Ok(())
     }
 
@@ -111,12 +164,11 @@ impl Definer<'_, '_> {
         for child in children {
             let map = self.att_map(parent.oid, child.oid)?;
             let text = map.text(&parent_text)?;
-            let existing = self
-                .catalog
-                .constraints_of(child.oid)
-                .find(|c| c.name == con.name)
-                .map(|c| (c.oid, c.kind, c.expr.clone(), c.no_inherit, c.validated));
-            if let Some((found, kind, expr, no_inherit, validated)) = existing {
+            let existing =
+                self.catalog.constraints_of(child.oid).find(|c| c.name == con.name).map(|c| {
+                    (c.oid, c.kind, c.expr.clone(), c.no_inherit, c.validated, c.local, c.inhcount)
+                });
+            if let Some((found, kind, expr, no_inherit, validated, local, inhcount)) = existing {
                 if kind != ConKind::Check
                     || without_locations(expr.as_deref()) != without_locations(Some(&text))
                 {
@@ -148,7 +200,16 @@ impl Definer<'_, '_> {
                     SqlState::SUCCESSFUL_COMPLETION,
                     format!("merging constraint \"{}\" with inherited definition", con.name),
                 );
-                self.catalog.set_constraint_inherited(found, false, 1)?;
+                // A partition has the constraint only from its parent, and a child of `INHERITS` keeps its own constraint with one more parent.
+                if self.catalog.relation(child.oid).is_some_and(|r| r.partition_of.is_some()) {
+                    self.catalog.set_constraint_inherited(found, false, 1)?;
+                } else {
+                    self.catalog.set_constraint_inherited(
+                        found,
+                        local,
+                        inhcount.saturating_add(1),
+                    )?;
+                }
                 continue;
             }
             let expr = crate::node::read(&text)?;
