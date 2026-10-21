@@ -330,6 +330,7 @@ fn join<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, parts: 
         add_columns(expr, 0, &mut needed);
     }
     let sides: Vec<_> = node.children.iter().map(from::node_rels).collect();
+    let all = from::node_rels(node);
     for (i, child) in node.children.iter_mut().enumerate() {
         let rels = &sides[i];
         let mut below: Vec<Item<'q>> = needed
@@ -337,6 +338,22 @@ fn join<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, parts: 
             .filter(|n| matches!(n.expr.kind, ExprKind::Var(v) if rels.contains(&v.relation)))
             .cloned()
             .collect();
+        // A condition of this join that an equivalence class took the place of still needs the columns of each side.
+        for clause in &level.joined {
+            let used = exprs::relations(clause);
+            if !used.is_subset(&all) || used.is_subset(rels) {
+                continue;
+            }
+            let mut columns = Vec::new();
+            add_columns(clause, 0, &mut columns);
+            for col in columns {
+                if matches!(col.expr.kind, ExprKind::Var(v) if rels.contains(&v.relation))
+                    && !below.iter().any(|b| b.expr.same(&col.expr))
+                {
+                    below.push(col);
+                }
+            }
+        }
         for (j, other) in sides.iter().enumerate() {
             if j == i {
                 continue;

@@ -1,5 +1,8 @@
 //! The plan of `FROM` and `WHERE`: the scan of each relation, the joins and the place of each condition, as `query_planner`, `make_one_rel` and `create_scan_plan` make them.
 
+mod classes;
+
+use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Relation};
@@ -15,10 +18,29 @@ type Stats = BTreeMap<usize, (f64, f64)>;
 /// A condition of `WHERE` or of `ON` with the relations that it reads, as a `RestrictInfo`.
 #[derive(Clone, Debug)]
 struct Qual<'q> {
-    expr: &'q Expr,
+    expr: Cow<'q, Expr>,
     rels: BTreeSet<usize>,
     /// True for a condition of `ON` of an outer join that goes to the nullable side, which is not an equivalence of PostgreSQL.
     outer: bool,
+    /// The place of the condition in the order of `deconstruct_jointree`, or `None` for a condition that the planner makes from an equivalence class.
+    order: Option<usize>,
+}
+
+impl<'q> Qual<'q> {
+    /// A condition of the query.
+    fn of(expr: &'q Expr, rels: BTreeSet<usize>, outer: bool) -> Qual<'q> {
+        Qual { expr: Cow::Borrowed(expr), rels, outer, order: None }
+    }
+
+    /// A condition that the planner makes from an equivalence class.
+    fn implied(expr: Expr, rels: BTreeSet<usize>) -> Qual<'q> {
+        Qual { expr: Cow::Owned(expr), rels, outer: false, order: None }
+    }
+
+    /// The condition as an expression that the node computes.
+    fn item(&self) -> Item<'q> {
+        Item { expr: self.expr.clone(), below: false }
+    }
 }
 
 /// The tree of the joins of `FROM`, as `deconstruct_jointree` sees it.
@@ -77,8 +99,8 @@ struct Rel<'q> {
 }
 
 impl<'q> Builder<'q> {
-    /// `query_planner`: the plan of the rows of `FROM` that pass `WHERE`, with the order of the rows.
-    pub(crate) fn from(&mut self, level: &Level<'q>) -> (Node<'q>, Vec<OrderKey>) {
+    /// `query_planner`: the plan of the rows of `FROM` that pass `WHERE`, with the order of the rows and the conditions of joins that the equivalence classes took the place of.
+    pub(crate) fn from(&mut self, level: &Level<'q>) -> (Node<'q>, Vec<OrderKey>, Vec<&'q Expr>) {
         let query = level.query;
         let mut parts = Vec::new();
         if let Some(filter) = &query.filter {
@@ -89,7 +111,7 @@ impl<'q> Builder<'q> {
         let Some(mut tree) =
             trees.reduce(|left, right| join_tree(JoinKind::Inner, left, right, Vec::new()))
         else {
-            return (result(level.scope, parts), Vec::new());
+            return (result(level.scope, parts), Vec::new(), Vec::new());
         };
         let all = tree.rels();
         let mut gating = Vec::new();
@@ -99,7 +121,7 @@ impl<'q> Builder<'q> {
             let volatile = exprs::volatile(part);
             if rels.is_empty() && !volatile {
                 if exprs::is_false(part) {
-                    return (dummy(level.scope, &all), Vec::new());
+                    return (dummy(level.scope, &all), Vec::new(), Vec::new());
                 }
                 if !exprs::is_true(part) {
                     gating.push(Item::of(part));
@@ -108,16 +130,23 @@ impl<'q> Builder<'q> {
             }
             // A volatile condition with no column runs once for each row of the join of all the relations, as `distribute_qual_to_rels`.
             let rels = if rels.is_empty() { all.clone() } else { rels };
-            quals.push(Qual { expr: part, rels, outer: false });
+            quals.push(Qual::of(part, rels, false));
         }
         let mut nonnullable = BTreeSet::new();
         for qual in &quals {
-            nonnullable.extend(nonnullable_rels(qual.expr, true));
+            nonnullable.extend(nonnullable_rels(&qual.expr, true));
         }
         reduce(&mut tree, &nonnullable);
-        place_on(&mut tree);
-        for qual in quals {
+        let mut next = 0;
+        place_on(&mut tree, &mut next);
+        for mut qual in quals {
+            qual.order = Some(next);
+            next += 1;
             place(&mut tree, qual);
+        }
+        let mut joined = Vec::new();
+        if !classes::domain(&mut tree, true, &mut joined) {
+            return (dummy(level.scope, &all), Vec::new(), Vec::new());
         }
         let mut stats = Stats::new();
         let rel = self.build(level, tree, &mut stats);
@@ -132,7 +161,7 @@ impl<'q> Builder<'q> {
             );
             node.cost = cost;
         }
-        (node, rel.order)
+        (node, rel.order, joined)
     }
 
     /// The plan of a part of the tree of the joins.
@@ -158,8 +187,8 @@ impl<'q> Builder<'q> {
     ) -> Rel<'q> {
         let relation = &level.query.relations[r];
         let quals = order_quals(quals);
-        let selectivity: f64 = quals.iter().map(|q| cost::selectivity(q.expr)).product();
-        let mut per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| q.expr));
+        let selectivity: f64 = quals.iter().map(|q| cost::selectivity(&q.expr)).product();
+        let mut per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| &*q.expr));
         let mut children = Vec::new();
         let (kind, startup, run, tuples) = match &relation.cte {
             Some(cte) if cte.work.is_some() => {
@@ -197,7 +226,10 @@ impl<'q> Builder<'q> {
                 (None, None, None) => {
                     let members = match &relation.tablesample {
                         Some(_) => None,
-                        None => self.members.and_then(|m| m.members(level.query, r)),
+                        None => self.members.and_then(|m| {
+                            let conds: Vec<&Expr> = quals.iter().map(|q| &*q.expr).collect();
+                            m.members(level.query, r, &conds)
+                        }),
                     };
                     if let Some(members) = members {
                         return members_scan(level, r, &quals, members, stats);
@@ -220,7 +252,7 @@ impl<'q> Builder<'q> {
         let rows = cost::clamp_rows(tuples * selectivity);
         stats.insert(r, (tuples, rows));
         let mut node = Node::new(kind, level.scope, children);
-        node.filter = quals.iter().map(|q| Item::of(q.expr)).collect();
+        node.filter = quals.iter().map(|q| q.item()).collect();
         node.cost = Cost { startup, total: startup + run + tuples * per_row, rows, width: 0 };
         Rel { node, rels: BTreeSet::from([r]), order: Vec::new() }
     }
@@ -234,15 +266,15 @@ fn members_scan<'q>(
     members: Vec<Member>,
     stats: &mut Stats,
 ) -> Rel<'q> {
-    let selectivity: f64 = quals.iter().map(|q| cost::selectivity(q.expr)).product();
-    let per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| q.expr));
+    let selectivity: f64 = quals.iter().map(|q| cost::selectivity(&q.expr)).product();
+    let per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| &*q.expr));
     let (mut tuples, mut rows) = (0.0, 0.0);
     let mut children = Vec::with_capacity(members.len());
     for member in &members {
         let (pages, count) = cost::member_size(member);
         let mut node = Node::new(Kind::SeqScan(r), level.scope, Vec::new());
         node.member = Some(member.oid);
-        node.filter = quals.iter().map(|q| Item::of(q.expr)).collect();
+        node.filter = quals.iter().map(|q| q.item()).collect();
         let n = cost::clamp_rows(count * selectivity);
         let total = pages * cost::SEQ_PAGE + count * per_row;
         node.cost = Cost { startup: 0.0, total, rows: n, width: 0 };
@@ -457,28 +489,30 @@ fn reduce(tree: &mut Tree<'_>, above: &BTreeSet<usize>) {
     reduce(&mut join.right, &right);
 }
 
-/// Gives each part of the condition of `ON` of each join its place. A part of a left join that reads only the nullable side goes to that side.
-fn place_on<'q>(tree: &mut Tree<'q>) {
+/// Gives each part of the condition of `ON` of each join its place. A part of a left join that reads only the nullable side goes to that side. `next` is the place of the next condition in the order of `deconstruct_jointree`.
+fn place_on<'q>(tree: &mut Tree<'q>, next: &mut usize) {
     let Tree::Join(join) = tree else { return };
-    place_on(&mut join.left);
-    place_on(&mut join.right);
+    place_on(&mut join.left, next);
+    place_on(&mut join.right, next);
     let right = join.right.rels();
     for part in std::mem::take(&mut join.on) {
         let rels = exprs::relations(part);
         let volatile = exprs::volatile(part);
+        let order = Some(*next);
+        *next += 1;
         if rels.is_empty() && !volatile {
             if !exprs::is_true(part) {
-                join.quals.push(Qual { expr: part, rels, outer: false });
+                join.quals.push(Qual { order, ..Qual::of(part, rels, false) });
             }
             continue;
         }
         let rels = if rels.is_empty() { join.rels.clone() } else { rels };
         match join.kind {
-            JoinKind::Inner => place_join(join, Qual { expr: part, rels, outer: false }),
+            JoinKind::Inner => place_join(join, Qual { order, ..Qual::of(part, rels, false) }),
             JoinKind::Left if rels.is_subset(&right) => {
-                place(&mut join.right, Qual { expr: part, rels, outer: true });
+                place(&mut join.right, Qual { order, ..Qual::of(part, rels, true) });
             }
-            _ => join.quals.push(Qual { expr: part, rels, outer: false }),
+            _ => join.quals.push(Qual { order, ..Qual::of(part, rels, false) }),
         }
     }
 }
@@ -504,15 +538,15 @@ fn place_join<'q>(join: &mut JoinTree<'q>, qual: Qual<'q>) {
 /// True for a condition that PostgreSQL keeps in an equivalence class: an `=` that a merge join can use, with no volatile function, that is not a condition of an outer join.
 fn equivalence(qual: &Qual<'_>) -> bool {
     !qual.outer
-        && !exprs::volatile(qual.expr)
-        && exprs::binary(qual.expr).is_some_and(|(op, _, _)| exprs::can_merge(op))
+        && !exprs::volatile(&qual.expr)
+        && exprs::binary(&qual.expr).is_some_and(|(op, _, _)| exprs::can_merge(op))
 }
 
 /// The conditions of a scan in the order of `order_qual_clauses`: the conditions that are not equivalences, then the equivalences, which the planner makes again, then by their cost for each row.
 fn order_quals(quals: Vec<Qual<'_>>) -> Vec<Qual<'_>> {
     let (mut out, classes): (Vec<_>, Vec<_>) = quals.into_iter().partition(|q| !equivalence(q));
     out.extend(classes);
-    out.sort_by_key(|q| exprs::calls(q.expr));
+    out.sort_by_key(|q| exprs::calls(&q.expr));
     out
 }
 
@@ -530,8 +564,8 @@ fn clause<'q>(
     inner: &BTreeSet<usize>,
     usable: fn(u32) -> bool,
 ) -> Option<Clause<'q>> {
-    let (op, left, right) = exprs::binary(qual.expr)?;
-    if !usable(op) || exprs::volatile(qual.expr) {
+    let (op, left, right) = exprs::binary(&qual.expr)?;
+    if !usable(op) || exprs::volatile(&qual.expr) {
         return None;
     }
     let (l, r) = (exprs::relations(left), exprs::relations(right));
@@ -539,14 +573,10 @@ fn clause<'q>(
         return None;
     }
     if l.is_subset(outer) && r.is_subset(inner) {
-        return Some(Clause {
-            item: Item::of(qual.expr),
-            outer: left.clone(),
-            inner: right.clone(),
-        });
+        return Some(Clause { item: qual.item(), outer: left.clone(), inner: right.clone() });
     }
     if l.is_subset(inner) && r.is_subset(outer) {
-        let commuted = exprs::commute(qual.expr)?;
+        let commuted = exprs::commute(&qual.expr)?;
         return Some(Clause {
             item: Item::owned(commuted),
             outer: right.clone(),
@@ -576,7 +606,7 @@ fn distinct(expr: &Expr, stats: &Stats) -> (f64, bool) {
 
 /// The selectivity of a condition of a join: `1 / max(nd1, nd2)` for an `=` of a value of each side, as `eqjoinsel` with no statistics, or else the selectivity of the condition.
 fn join_selectivity(qual: &Qual<'_>, stats: &Stats) -> f64 {
-    if let Some((op, left, right)) = exprs::binary(qual.expr)
+    if let Some((op, left, right)) = exprs::binary(&qual.expr)
         && builtin::operator_by_oid(op).is_some_and(|o| o.name == "=")
         && exprs::reads_columns(left)
         && exprs::reads_columns(right)
@@ -585,7 +615,7 @@ fn join_selectivity(qual: &Qual<'_>, stats: &Stats) -> f64 {
         let (r, _) = distinct(right, stats);
         return 1.0 / l.max(r);
     }
-    cost::selectivity(qual.expr)
+    cost::selectivity(&qual.expr)
 }
 
 /// The kinds of node that read the rows of the node below once and keep them, so that a scan again costs little, as `cost_rescan`.
@@ -714,11 +744,11 @@ fn join_rels<'q>(
         JoinKind::Full => rows = rows.max(left.node.cost.rows).max(right.node.cost.rows),
         _ => {}
     }
-    let filter_selectivity: f64 = filter.iter().map(|q| cost::selectivity(q.expr)).product();
+    let filter_selectivity: f64 = filter.iter().map(|q| cost::selectivity(&q.expr)).product();
     let rows = cost::clamp_rows(rows * filter_selectivity);
     let mut quals = quals;
-    quals.sort_by_key(|q| exprs::calls(q.expr));
-    let filter_cost = cost::qual_cost(filter.iter().map(|q| q.expr));
+    quals.sort_by_key(|q| exprs::calls(&q.expr));
+    let filter_cost = cost::qual_cost(filter.iter().map(|q| &*q.expr));
     let lateral_right = lateral(level, &right.rels, &left.rels);
     // The orders of the sides: the left side first, and the right side first when the join can have the sides in the other order.
     let mut orders = vec![false];
@@ -750,7 +780,7 @@ fn join_rels<'q>(
     };
     let (outer, inner) = if best.swapped { (right, left) } else { (left, right) };
     let mut out = best.make(level.scope, outer, inner, &quals, rows);
-    out.node.filter = filter.iter().map(|q| Item::of(q.expr)).collect();
+    out.node.filter = filter.iter().map(|q| q.item()).collect();
     out.rels = rels;
     out
 }
@@ -769,13 +799,13 @@ fn nested_join<'q>(
 ) -> Rel<'q> {
     let c = (left.node.cost, right.node.cost);
     let inner = materialize(right.node);
-    let join_filter = quals.iter().map(|q| Item::of(q.expr)).collect();
+    let join_filter = quals.iter().map(|q| q.item()).collect();
     let mut node = Node::new(
         Kind::NestedLoop { join: kind, join_filter },
         level.scope,
         vec![left.node, inner],
     );
-    node.filter = filter.iter().map(|q| Item::of(q.expr)).collect();
+    node.filter = filter.iter().map(|q| q.item()).collect();
     let total = c.0.total + c.1.total + c.0.rows * c.1.rows * cost::CPU_TUPLE;
     node.cost = Cost { startup: c.0.startup + c.1.startup, total, rows, width: 0 };
     Rel { node, rels, order: Vec::new() }
@@ -840,10 +870,32 @@ fn tuple_count(input: &Input<'_, '_>, clauses: &[Clause<'_>]) -> f64 {
     cost::clamp_rows(input.outer.node.cost.rows * input.inner.node.cost.rows * selectivity)
 }
 
-/// The costs of a nested loop, as `initial_cost_nestloop` and `final_cost_nestloop`. The inner side gets a `Material` node unless it keeps its rows already or reads the outer side.
+/// The costs of a nested loop, as `initial_cost_nestloop` and `final_cost_nestloop`. The inner side gets a `Material` node when that costs less, as `match_unsorted_outer` tries it after the plain inner side, but not when it keeps its rows already or reads the outer side.
 fn nested_loop<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Candidate<'q> {
+    let (mut startup, mut total) = nested_cost(input, false);
+    let mut materialize = false;
+    if !lateral && !keeps_rows(&input.inner.node.kind) {
+        let (s, t) = nested_cost(input, true);
+        // `add_path` keeps the first path unless the other costs less by more than the smallest fuzz.
+        if t * 1.000_000_000_1 < total {
+            (startup, total, materialize) = (s, t, true);
+        }
+    }
+    Candidate {
+        method: Method::Nested,
+        join,
+        swapped: false,
+        startup,
+        total,
+        materialize,
+        sort: (false, false),
+        _marker: std::marker::PhantomData,
+    }
+}
+
+/// The start and the total cost of a nested loop, with a `Material` node on the inner side or with none.
+fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
     let o = input.outer.node.cost;
-    let materialize = !lateral && !keeps_rows(&input.inner.node.kind);
     let (inner, rescan) = if materialize {
         let i = input.inner.node.cost;
         let total = i.total + 2.0 * cost::CPU_OPERATOR * i.rows;
@@ -857,18 +909,9 @@ fn nested_loop<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Cand
         run += (o.rows - 1.0) * rescan.1;
     }
     let per_tuple =
-        cost::CPU_TUPLE + cost::qual_cost(input.quals.iter().map(|q| q.expr)) + input.filter_cost;
+        cost::CPU_TUPLE + cost::qual_cost(input.quals.iter().map(|q| &*q.expr)) + input.filter_cost;
     run += per_tuple * o.rows * inner.rows;
-    Candidate {
-        method: Method::Nested,
-        join,
-        swapped: false,
-        startup,
-        total: startup + run,
-        materialize,
-        sort: (false, false),
-        _marker: std::marker::PhantomData,
-    }
+    (startup, startup + run)
 }
 
 /// The costs of a hash join with a hash table of the inner side, as `initial_cost_hashjoin` and `final_cost_hashjoin`.
@@ -892,7 +935,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         .fold(1.0, f64::min);
     run += cost::CPU_OPERATOR * n * o.rows * cost::clamp_rows(i.rows * bucket) * 0.5;
     let per_tuple =
-        cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| q.expr)) + input.filter_cost;
+        cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
     run += per_tuple * tuple_count(input, &clauses);
     Some(Candidate {
         method: Method::Hash,
@@ -915,7 +958,8 @@ fn ordered(order: &[OrderKey], values: &[&Expr]) -> bool {
 fn merge_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>> {
     let (clauses, other) =
         split(input.quals, &input.outer.rels, &input.inner.rels, exprs::can_merge);
-    if clauses.is_empty() {
+    // `select_mergejoin_clauses`: a full join is a merge join only when each of its clauses is a merge clause.
+    if clauses.is_empty() || join == JoinKind::Full && !other.is_empty() {
         return None;
     }
     let outer_values: Vec<&Expr> = clauses.iter().map(|c| &c.outer).collect();
@@ -947,7 +991,7 @@ fn merge_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>
     let n = clauses.len() as f64;
     run += cost::CPU_OPERATOR * n * (outer_rows + inner_rows * ratio);
     let per_tuple =
-        cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| q.expr)) + input.filter_cost;
+        cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
     run += per_tuple * tuples;
     Some(Candidate {
         method: Method::Merge,
@@ -966,7 +1010,7 @@ fn merge_keys<'q>(values: Vec<Expr>) -> Vec<SortKey<'q>> {
     values
         .into_iter()
         .map(|v| SortKey {
-            item: Item { expr: std::borrow::Cow::Owned(v), below: true },
+            item: Item { expr: Cow::Owned(v), below: true },
             desc: false,
             using: None,
             nulls_first: false,
@@ -989,7 +1033,7 @@ impl<'q> Candidate<'q> {
             Method::Nested => {
                 let inner_node =
                     if self.materialize { materialize(inner.node) } else { inner.node };
-                let join_filter = quals.iter().map(|q| Item::of(q.expr)).collect();
+                let join_filter = quals.iter().map(|q| q.item()).collect();
                 order = outer.order;
                 Node::new(
                     Kind::NestedLoop { join: self.join, join_filter },
@@ -1003,7 +1047,7 @@ impl<'q> Candidate<'q> {
                 let mut hash = Node::new(Kind::Hash, scope, vec![inner.node]);
                 hash.cost = Cost { startup: c.total, ..c };
                 let cond = clauses.into_iter().map(|c| c.item).collect();
-                let join_filter = other.iter().map(|q| Item::of(q.expr)).collect();
+                let join_filter = other.iter().map(|q| q.item()).collect();
                 Node::new(
                     Kind::HashJoin { join: self.join, cond, join_filter },
                     scope,
@@ -1039,7 +1083,7 @@ impl<'q> Candidate<'q> {
                     inner_node = materialize(inner_node);
                 }
                 let cond = clauses.into_iter().map(|c| c.item).collect();
-                let join_filter = other.iter().map(|q| Item::of(q.expr)).collect();
+                let join_filter = other.iter().map(|q| q.item()).collect();
                 Node::new(
                     Kind::MergeJoin { join: self.join, cond, join_filter },
                     scope,
