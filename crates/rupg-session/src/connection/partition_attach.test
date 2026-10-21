@@ -1,0 +1,543 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE r (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0)) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE UNIQUE INDEX r_a_b ON r (a, b);
+CREATE INDEX
+> CREATE INDEX r_b ON r (b);
+CREATE INDEX
+> CREATE TABLE r2 (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> CREATE INDEX r2_b_own ON r2 (b);
+CREATE INDEX
+> INSERT INTO r2 VALUES (10, 'x'), (11, 'y');
+INSERT 0 2
+> ALTER TABLE r ATTACH PARTITION r2 FOR VALUES FROM (10) TO (20);
+ALTER TABLE
+> SELECT inhrelid::regclass::text AS child, inhparent::regclass::text AS parent, inhseqno, inhdetachpending FROM pg_inherits ORDER BY 1, 2;
+fields child:25:-1:-1,parent:25:-1:-1,inhseqno@pg_inherits.3:23:4:-1,inhdetachpending@pg_inherits.4:16:1:-1
+row r1,r,1,f
+row r1_a_b_idx,r_a_b,1,f
+row r1_b_idx,r_b,1,f
+row r2,r,1,f
+row r2_a_b_idx,r_a_b,1,f
+row r2_b_own,r_b,1,f
+SELECT 6
+> SELECT relname, relispartition, pg_get_expr(relpartbound, oid) FROM pg_class WHERE relname IN ('r', 'r1', 'r2') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relispartition@pg_class.28:16:1:-1,pg_get_expr:25:-1:-1
+row r,f,NULL
+row r1,t,FOR VALUES FROM (0) TO (10)
+row r2,t,FOR VALUES FROM (10) TO (20)
+SELECT 3
+> SELECT attrelid::regclass::text AS tab, attname, attislocal, attinhcount, attnotnull FROM pg_attribute WHERE attrelid IN ('r1'::regclass, 'r2'::regclass) AND attnum > 0 ORDER BY 1, attnum;
+fields tab:25:-1:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,attnotnull@pg_attribute.12:16:1:-1
+row r1,a,f,1,t
+row r1,b,f,1,f
+row r2,a,f,1,t
+row r2,b,f,1,f
+SELECT 4
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount, conparentid <> 0 AS has_parent FROM pg_constraint WHERE conrelid IN ('r'::regclass, 'r1'::regclass, 'r2'::regclass) ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,has_parent:16:1:-1
+row r,r_a_not_null,n,t,0,f
+row r,r_pos,c,t,0,f
+row r1,r_a_not_null,n,f,1,f
+row r1,r_pos,c,f,1,f
+row r2,r2_a_not_null,n,f,1,f
+row r2,r_pos,c,f,1,f
+SELECT 6
+> SELECT c.relname, c.relkind, i.indisvalid, i.indrelid::regclass AS tab, c.relispartition, pg_get_indexdef(i.indexrelid) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid::regclass::text LIKE 'r%' ORDER BY c.relname;
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,indisvalid@pg_index.11:16:1:-1,tab:2205:4:-1,relispartition@pg_class.28:16:1:-1,pg_get_indexdef:25:-1:-1
+row r1_a_b_idx,i,t,r1,t,CREATE UNIQUE INDEX r1_a_b_idx ON public.r1 USING btree (a, b)
+row r1_b_idx,i,t,r1,t,CREATE INDEX r1_b_idx ON public.r1 USING btree (b)
+row r2_a_b_idx,i,t,r2,t,CREATE UNIQUE INDEX r2_a_b_idx ON public.r2 USING btree (a, b)
+row r2_b_own,i,t,r2,t,CREATE INDEX r2_b_own ON public.r2 USING btree (b)
+row r_a_b,I,t,r,f,CREATE UNIQUE INDEX r_a_b ON ONLY public.r USING btree (a, b)
+row r_b,I,t,r,f,CREATE INDEX r_b ON ONLY public.r USING btree (b)
+SELECT 6
+> SELECT tableoid::regclass, * FROM r ORDER BY a;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1
+row r2,10,x
+row r2,11,y
+SELECT 2
+> INSERT INTO r VALUES (12, 'z');
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM r WHERE a = 12;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1
+row r2,12,z
+SELECT 1
+> INSERT INTO r VALUES (12, 'z');
+ERROR 23505 duplicate key value violates unique constraint "r2_a_b_idx"
+DETAIL Key (a, b)=(12, z) already exists.
+> CREATE TABLE r3 (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> INSERT INTO r3 VALUES (25, 'a'), (35, 'b');
+INSERT 0 2
+> ALTER TABLE r ATTACH PARTITION r3 FOR VALUES FROM (20) TO (30);
+ERROR 23514 partition constraint of relation "r3" is violated by some row
+> SELECT count(*) FROM pg_inherits WHERE inhrelid = 'r3'::regclass;
+fields count:20:8:-1
+row 0
+SELECT 1
+> DELETE FROM r3 WHERE a = 35;
+DELETE 1
+> ALTER TABLE r ATTACH PARTITION r3 FOR VALUES FROM (15) TO (30);
+ERROR 42P17 partition "r3" would overlap partition "r2" at 52
+> ALTER TABLE r ATTACH PARTITION r3 FOR VALUES FROM (20) TO (30);
+ALTER TABLE
+> ALTER TABLE r ATTACH PARTITION r3 FOR VALUES FROM (30) TO (40);
+ERROR 42809 "r3" is already a partition
+> ALTER TABLE r ATTACH PARTITION r1 FOR VALUES FROM (30) TO (40);
+ERROR 42809 "r1" is already a partition
+> ALTER TABLE r ATTACH PARTITION r FOR VALUES FROM (30) TO (40);
+ERROR 42P07 circular inheritance not allowed
+DETAIL "r" is already a child of "r".
+> CREATE TABLE p (a int, b text);
+CREATE TABLE
+> ALTER TABLE p ATTACH PARTITION r3 FOR VALUES FROM (30) TO (40);
+ERROR 42809 ALTER action ATTACH PARTITION cannot be performed on relation "p"
+DETAIL This operation is not supported for tables.
+> ALTER TABLE r ATTACH PARTITION p FOR VALUES FROM (30) TO (40);
+ERROR 42804 column "a" in child table "p" must be marked NOT NULL
+> CREATE TABLE x1 (a int NOT NULL, b text, c int, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x1 FOR VALUES FROM (30) TO (40);
+ERROR 42804 table "x1" contains column "c" not found in parent "r"
+DETAIL The new partition may contain only the columns present in parent.
+> CREATE TABLE x2 (a int NOT NULL, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x2 FOR VALUES FROM (30) TO (40);
+ERROR 42804 child table is missing column "b"
+> CREATE TABLE x3 (a bigint NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x3 FOR VALUES FROM (30) TO (40);
+ERROR 42804 child table "x3" has different type for column "a"
+> CREATE TABLE x4 (a int NOT NULL, b text);
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x4 FOR VALUES FROM (30) TO (40);
+ERROR 42804 child table is missing constraint "r_pos"
+> CREATE TABLE x5 (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a > 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x5 FOR VALUES FROM (30) TO (40);
+ERROR 42804 child table "x5" has different definition for check constraint "r_pos"
+> CREATE TABLE x6 (a int, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x6 FOR VALUES FROM (30) TO (40);
+ERROR 42804 column "a" in child table "x6" must be marked NOT NULL
+> CREATE TABLE x7 (a int NOT NULL, b text COLLATE "C", CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x7 FOR VALUES FROM (30) TO (40);
+ERROR 42P21 child table "x7" has different collation for column "b"
+> CREATE TABLE x8 (a int GENERATED ALWAYS AS IDENTITY, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x8 FOR VALUES FROM (30) TO (40);
+ERROR 55000 table "x8" being attached contains an identity column "a"
+DETAIL The new partition may not contain an identity column.
+> CREATE TABLE x9 (b text, a int NOT NULL, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> CREATE TEMP TABLE xt (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION xt FOR VALUES FROM (30) TO (40);
+ERROR 42809 cannot attach a temporary relation as partition of permanent relation "r"
+> CREATE TABLE x10 (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0), CONSTRAINT x10_more CHECK (b <> ''));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION x10 FOR VALUES FROM (30) TO (40);
+ALTER TABLE
+> SELECT conname, conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'x10'::regclass ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row r_pos,f,1
+row x10_a_not_null,f,1
+row x10_more,t,0
+SELECT 3
+> ALTER TABLE r ATTACH PARTITION x10 FOR VALUES IN (1);
+ERROR 42P16 invalid bound specification for a range partition at 47
+> CREATE TABLE x11 (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> INSERT INTO x11 VALUES (45, 'a'), (45, 'a');
+INSERT 0 2
+> ALTER TABLE r ATTACH PARTITION x11 FOR VALUES FROM (40) TO (50);
+ERROR 23505 could not create unique index "x11_a_b_idx"
+DETAIL Key (a, b)=(45, a) is duplicated.
+> CREATE TABLE rd (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION rd DEFAULT;
+ALTER TABLE
+> INSERT INTO r VALUES (55, 'd'), (65, 'e');
+INSERT 0 2
+> DELETE FROM x11;
+DELETE 2
+> INSERT INTO x11 VALUES (55, 'f');
+INSERT 0 1
+> ALTER TABLE r ATTACH PARTITION x11 FOR VALUES FROM (50) TO (60);
+ERROR 23514 updated partition constraint for default partition "rd" would be violated by some row
+> DELETE FROM x11;
+DELETE 1
+> ALTER TABLE r ATTACH PARTITION x11 FOR VALUES FROM (50) TO (60);
+ERROR 23514 updated partition constraint for default partition "rd" would be violated by some row
+> DELETE FROM rd WHERE a = 55;
+DELETE 1
+> ALTER TABLE r ATTACH PARTITION x11 FOR VALUES FROM (50) TO (60);
+ALTER TABLE
+> CREATE TABLE rd2 (a int NOT NULL, b text, CONSTRAINT r_pos CHECK (a >= 0));
+CREATE TABLE
+> ALTER TABLE r ATTACH PARTITION rd2 DEFAULT;
+ERROR 42P17 partition "rd2" conflicts with existing default partition "rd" at 36
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1
+row r2,10,x
+row r2,11,y
+row r2,12,z
+row r3,25,a
+row rd,65,e
+SELECT 5
+> ALTER TABLE r DETACH PARTITION r2;
+ALTER TABLE
+> SELECT inhrelid::regclass::text AS child, inhparent::regclass::text AS parent FROM pg_inherits WHERE inhrelid = 'r2'::regclass OR inhrelid::regclass::text LIKE 'r2%';
+fields child:25:-1:-1,parent:25:-1:-1
+SELECT 0
+> SELECT relname, relispartition, pg_get_expr(relpartbound, oid) FROM pg_class WHERE relname = 'r2';
+fields relname@pg_class.2:19:64:-1,relispartition@pg_class.28:16:1:-1,pg_get_expr:25:-1:-1
+row r2,f,NULL
+SELECT 1
+> SELECT attname, attislocal, attinhcount, attnotnull FROM pg_attribute WHERE attrelid = 'r2'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,attnotnull@pg_attribute.12:16:1:-1
+row a,t,0,t
+row b,t,0,f
+SELECT 2
+> SELECT conname, contype, conislocal, coninhcount, conparentid <> 0 AS has_parent FROM pg_constraint WHERE conrelid = 'r2'::regclass ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,has_parent:16:1:-1
+row r2_a_not_null,n,t,0,f
+row r_pos,c,t,0,f
+SELECT 2
+> SELECT c.relname, c.relispartition, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'r2'::regclass ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relispartition@pg_class.28:16:1:-1,indisvalid@pg_index.11:16:1:-1
+row r2_a_b_idx,f,t
+row r2_b_own,f,t
+SELECT 2
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1
+row r3,25,a
+row rd,65,e
+SELECT 2
+> SELECT * FROM r2 ORDER BY a;
+fields a@r2.1:23:4:-1,b@r2.2:25:-1:-1
+row 10,x
+row 11,y
+row 12,z
+SELECT 3
+> DROP INDEX r2_b_own;
+DROP INDEX
+> ALTER TABLE r DETACH PARTITION r2;
+ERROR 42P01 relation "r2" is not a partition of relation "r"
+> ALTER TABLE r DETACH PARTITION p;
+ERROR 42P01 relation "p" is not a partition of relation "r"
+> ALTER TABLE p DETACH PARTITION r1;
+ERROR 42809 ALTER action DETACH PARTITION cannot be performed on relation "p"
+DETAIL This operation is not supported for tables.
+> BEGIN;
+BEGIN
+> ALTER TABLE r DETACH PARTITION r1 CONCURRENTLY;
+ERROR 25001 ALTER TABLE ... DETACH CONCURRENTLY cannot run inside a transaction block
+> ROLLBACK;
+ROLLBACK
+> ALTER TABLE r DETACH PARTITION r1 CONCURRENTLY;
+ERROR 55000 cannot detach partitions concurrently when a default partition exists
+> ALTER TABLE r DETACH PARTITION r1 FINALIZE;
+ERROR 55000 cannot complete detaching partition "r1"
+DETAIL There's no pending concurrent detach.
+> ALTER TABLE r DETACH PARTITION rd;
+ALTER TABLE
+> ALTER TABLE r DETACH PARTITION r1 CONCURRENTLY;
+ALTER TABLE
+> SELECT relname, relispartition FROM pg_class WHERE relname = 'r1';
+fields relname@pg_class.2:19:64:-1,relispartition@pg_class.28:16:1:-1
+row r1,f
+SELECT 1
+> ALTER TABLE r DETACH PARTITION r1 FINALIZE;
+ERROR 42P01 relation "r1" is not a partition of relation "r"
+> INSERT INTO r VALUES (65, 'g');
+ERROR 23514 no partition of relation "r" found for row
+DETAIL Partition key of the failing row contains (a) = (65).
+> ALTER TABLE r ATTACH PARTITION r1 FOR VALUES FROM (0) TO (10);
+ALTER TABLE
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1
+row r3,25,a
+SELECT 1
+> DROP TABLE r;
+DROP TABLE
+> SELECT relname FROM pg_class WHERE relname IN ('r1', 'r2', 'r3', 'x11', 'rd') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row r2
+row rd
+SELECT 2
+> CREATE TABLE s (a int, b int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE s1 PARTITION OF s FOR VALUES IN (1);
+CREATE TABLE
+> CREATE INDEX s_b ON ONLY s (b);
+CREATE INDEX
+> CREATE INDEX s1_b ON s1 (b);
+CREATE INDEX
+> SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 's%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1
+row s1_b,t
+row s_b,f
+SELECT 2
+> ALTER INDEX s_b ATTACH PARTITION s1_b;
+ALTER INDEX
+> SELECT c.relname, i.indisvalid, c.relispartition FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 's%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1,relispartition@pg_class.28:16:1:-1
+row s1_b,t,t
+row s_b,t,f
+SELECT 2
+> SELECT inhrelid::regclass::text AS child, inhparent::regclass::text AS parent FROM pg_inherits ORDER BY 1;
+fields child:25:-1:-1,parent:25:-1:-1
+row s1,s
+row s1_b,s_b
+SELECT 2
+> ALTER INDEX s_b ATTACH PARTITION s1_b;
+ALTER INDEX
+> CREATE INDEX s1_b2 ON s1 (b);
+CREATE INDEX
+> ALTER INDEX s_b ATTACH PARTITION s1_b2;
+ERROR 55000 cannot attach index "s1_b2" as a partition of index "s_b"
+DETAIL Another index "s1_b" is already attached for partition "s1".
+> CREATE INDEX s1_a ON s1 (a);
+CREATE INDEX
+> CREATE INDEX s_a ON ONLY s (a);
+CREATE INDEX
+> ALTER INDEX s_b ATTACH PARTITION s1_a;
+ERROR 55000 cannot attach index "s1_a" as a partition of index "s_b"
+DETAIL Another index "s1_b" is already attached for partition "s1".
+> ALTER INDEX s1_a ATTACH PARTITION s1_b2;
+ERROR 42809 ALTER action ATTACH PARTITION cannot be performed on relation "s1_a"
+DETAIL This operation is not supported for indexes.
+> ALTER INDEX s_a ATTACH PARTITION s_b;
+ERROR 55000 cannot attach index "s_b" as a partition of index "s_a"
+DETAIL Index "s_b" is not an index on any partition of table "s".
+> CREATE TABLE t (a int, b int);
+CREATE TABLE
+> CREATE INDEX t_b ON t (b);
+CREATE INDEX
+> ALTER INDEX s_a ATTACH PARTITION t_b;
+ERROR 55000 cannot attach index "t_b" as a partition of index "s_a"
+DETAIL Index "t_b" is not an index on any partition of table "s".
+> ALTER INDEX s_a ATTACH PARTITION nosuch;
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TABLE s ATTACH PARTITION s1_a;
+ERROR 42601 syntax error at or near ";" at 36
+> CREATE TABLE s2 PARTITION OF s FOR VALUES IN (2) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE s21 PARTITION OF s2 FOR VALUES IN (1);
+CREATE TABLE
+> SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 's%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1
+row s1_a,t
+row s1_b,t
+row s1_b2,t
+row s21_a_idx,t
+row s21_b_idx,t
+row s2_a_idx,t
+row s2_b_idx,t
+row s_a,f
+row s_b,t
+SELECT 9
+> CREATE INDEX s2_a ON ONLY s2 (a);
+CREATE INDEX
+> ALTER INDEX s_a ATTACH PARTITION s2_a;
+ERROR 55000 cannot attach index "s2_a" as a partition of index "s_a"
+DETAIL Another index "s2_a_idx" is already attached for partition "s2".
+> SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 's%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1
+row s1_a,t
+row s1_b,t
+row s1_b2,t
+row s21_a_idx,t
+row s21_b_idx,t
+row s2_a,f
+row s2_a_idx,t
+row s2_b_idx,t
+row s_a,f
+row s_b,t
+SELECT 10
+> ALTER INDEX s_a ATTACH PARTITION s1_a;
+ALTER INDEX
+> SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 's%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1
+row s1_a,t
+row s1_b,t
+row s1_b2,t
+row s21_a_idx,t
+row s21_b_idx,t
+row s2_a,f
+row s2_a_idx,t
+row s2_b_idx,t
+row s_a,t
+row s_b,t
+SELECT 10
+> CREATE INDEX s21_a ON s21 (a);
+CREATE INDEX
+> ALTER INDEX s2_a ATTACH PARTITION s21_a;
+ALTER INDEX
+> SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname LIKE 's%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1
+row s1_a,t
+row s1_b,t
+row s1_b2,t
+row s21_a,t
+row s21_a_idx,t
+row s21_b_idx,t
+row s2_a,t
+row s2_a_idx,t
+row s2_b_idx,t
+row s_a,t
+row s_b,t
+SELECT 11
+> ALTER TABLE t ATTACH PARTITION s1 FOR VALUES IN (1);
+ERROR 42809 ALTER action ATTACH PARTITION cannot be performed on relation "t"
+DETAIL This operation is not supported for tables.
+> ALTER INDEX t_b ATTACH PARTITION s1_b;
+ERROR 42809 ALTER action ATTACH PARTITION cannot be performed on relation "t_b"
+DETAIL This operation is not supported for indexes.
+> CREATE TABLE u1 (a int, b int);
+CREATE TABLE
+> INSERT INTO u1 VALUES (1, 1), (1, 1);
+INSERT 0 2
+> CREATE TABLE v (a int PRIMARY KEY, b int) PARTITION BY LIST (a);
+CREATE TABLE
+> ALTER TABLE v ATTACH PARTITION u1 FOR VALUES IN (1);
+ERROR 42804 column "a" in child table "u1" must be marked NOT NULL
+> ALTER TABLE u1 ALTER COLUMN a SET NOT NULL;
+ALTER TABLE
+> ALTER TABLE v ATTACH PARTITION u1 FOR VALUES IN (1);
+ERROR 23505 could not create unique index "u1_pkey"
+DETAIL Key (a)=(1) is duplicated.
+> SELECT count(*) FROM pg_inherits WHERE inhrelid = 'u1'::regclass;
+fields count:20:8:-1
+row 0
+SELECT 1
+> DELETE FROM u1;
+DELETE 2
+> INSERT INTO u1 VALUES (1, 1);
+INSERT 0 1
+> ALTER TABLE v ATTACH PARTITION u1 FOR VALUES IN (1);
+ALTER TABLE
+> CREATE TABLE u2 (a int PRIMARY KEY, b int);
+CREATE TABLE
+> ALTER TABLE v ATTACH PARTITION u2 FOR VALUES IN (2);
+ALTER TABLE
+> CREATE TABLE u3 (a int NOT NULL, b int);
+CREATE TABLE
+> CREATE UNIQUE INDEX u3_a ON u3 (a);
+CREATE INDEX
+> ALTER TABLE v ATTACH PARTITION u3 FOR VALUES IN (3);
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount, conparentid <> 0 AS has_parent FROM pg_constraint WHERE conrelid::regclass::text IN ('v', 'u1', 'u2', 'u3') ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,has_parent:16:1:-1
+row u1,u1_a_not_null,n,f,1,f
+row u1,u1_pkey,p,f,1,t
+row u2,u2_a_not_null,n,f,1,f
+row u2,u2_pkey,p,f,1,t
+row u3,u3_a_not_null,n,f,1,f
+row u3,u3_pkey,p,f,1,t
+row v,v_a_not_null,n,t,0,f
+row v,v_pkey,p,t,0,f
+SELECT 8
+> SELECT c.relname, i.indisvalid, i.indisprimary, c.relispartition FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid::regclass::text IN ('v', 'u1', 'u2', 'u3') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1,indisprimary@pg_index.7:16:1:-1,relispartition@pg_class.28:16:1:-1
+row u1_pkey,t,t,t
+row u2_pkey,t,t,t
+row u3_a,t,f,f
+row u3_pkey,t,t,t
+row v_pkey,t,t,f
+SELECT 5
+> SELECT attrelid::regclass::text AS tab, attname, attislocal, attinhcount, attnotnull FROM pg_attribute WHERE attrelid::regclass::text IN ('u1', 'u2', 'u3') AND attnum > 0 ORDER BY 1, attnum;
+fields tab:25:-1:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,attnotnull@pg_attribute.12:16:1:-1
+row u1,a,f,1,t
+row u1,b,f,1,f
+row u2,a,f,1,t
+row u2,b,f,1,f
+row u3,a,f,1,t
+row u3,b,f,1,f
+SELECT 6
+> INSERT INTO v VALUES (2, 1);
+INSERT 0 1
+> INSERT INTO v VALUES (2, 1);
+ERROR 23505 duplicate key value violates unique constraint "u2_pkey"
+DETAIL Key (a)=(2) already exists.
+> DROP INDEX u2_pkey;
+ERROR 2BP01 cannot drop index u2_pkey because index v_pkey requires it
+HINT You can drop index v_pkey instead.
+> ALTER TABLE v DETACH PARTITION u2;
+ALTER TABLE
+> SELECT conrelid::regclass::text AS tab, conname, contype, conislocal, coninhcount, conparentid <> 0 AS has_parent FROM pg_constraint WHERE conrelid::regclass::text IN ('v', 'u2') ORDER BY 1, 2;
+fields tab:25:-1:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,has_parent:16:1:-1
+row u2,u2_a_not_null,n,t,0,f
+row u2,u2_pkey,p,t,0,f
+row v,v_a_not_null,n,t,0,f
+row v,v_pkey,p,t,0,f
+SELECT 4
+> SELECT c.relname, i.indisvalid, c.relispartition FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid::regclass::text IN ('v', 'u2') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1,relispartition@pg_class.28:16:1:-1
+row u2_pkey,t,f
+row v_pkey,t,f
+SELECT 2
+> SELECT attname, attislocal, attinhcount, attnotnull FROM pg_attribute WHERE attrelid = 'u2'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,attnotnull@pg_attribute.12:16:1:-1
+row a,t,0,t
+row b,t,0,f
+SELECT 2
+> ALTER INDEX v_pkey ATTACH PARTITION u2_pkey;
+ERROR 55000 cannot attach index "u2_pkey" as a partition of index "v_pkey"
+DETAIL Index "u2_pkey" is not an index on any partition of table "v".
+> INSERT INTO u2 VALUES (2, 1);
+ERROR 23505 duplicate key value violates unique constraint "u2_pkey"
+DETAIL Key (a)=(2) already exists.
+> ALTER TABLE v ATTACH PARTITION u2 FOR VALUES IN (2);
+ALTER TABLE
+> DELETE FROM u2;
+DELETE 1
+> ALTER TABLE v ATTACH PARTITION u2 FOR VALUES IN (2);
+ERROR 42809 "u2" is already a partition
+> SELECT tableoid::regclass, * FROM v ORDER BY a;
+fields tableoid:2205:4:-1,a@v.1:23:4:-1,b@v.2:23:4:-1
+row u1,1,1
+SELECT 1
+> DROP INDEX u3_a;
+DROP INDEX
+> ALTER TABLE v DETACH PARTITION u9;
+ERROR 42P01 relation "u9" does not exist
+> ALTER TABLE v DETACH PARTITION nosuch;
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TABLE v DETACH PARTITION v_pkey;
+ERROR 42809 cannot open relation "v_pkey"
+DETAIL This operation is not supported for partitioned indexes.
+> DROP TABLE v;
+DROP TABLE
+> SELECT relname FROM pg_class WHERE relname IN ('u1', 'u2', 'u3') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+SELECT 0
+> CREATE TABLE w (a int, b int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE w1 (a int, b int) PARTITION BY RANGE (b);
+CREATE TABLE
+> CREATE TABLE w11 PARTITION OF w1 FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> INSERT INTO w1 VALUES (5, 5);
+INSERT 0 1
+> ALTER TABLE w ATTACH PARTITION w1 FOR VALUES FROM (10) TO (20);
+ERROR 23514 partition constraint of relation "w11" is violated by some row
+> ALTER TABLE w ATTACH PARTITION w1 FOR VALUES FROM (0) TO (10);
+ALTER TABLE
+> SELECT tableoid::regclass, * FROM w;
+fields tableoid:2205:4:-1,a@w.1:23:4:-1,b@w.2:23:4:-1
+row w11,5,5
+SELECT 1
+> ALTER TABLE w1 ATTACH PARTITION w FOR VALUES FROM (10) TO (20);
+ERROR 42P07 circular inheritance not allowed
+DETAIL "w1" is already a child of "w".
+> ALTER TABLE w ATTACH PARTITION w11 FOR VALUES FROM (10) TO (20);
+ERROR 42809 "w11" is already a partition

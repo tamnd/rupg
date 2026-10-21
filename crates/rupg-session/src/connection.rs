@@ -17,7 +17,9 @@ use rupg_pgcatalog::roles::Roles;
 use rupg_platform::os::OsClock;
 use rupg_platform::{Clock, Io};
 use rupg_sql::Severity;
-use rupg_sql::nodes::{InsertStmt, LockStmt, Node, ObjectType, RangeVar, SelectStmt};
+use rupg_sql::nodes::{
+    AlterTableType, InsertStmt, LockStmt, Node, ObjectType, RangeVar, SelectStmt,
+};
 use rupg_types::Value;
 use rupg_wire::{
     CancelKey, CommandTag, Field, Frontend, Level, OutBuf, Portals, ProtocolError, Session,
@@ -943,6 +945,18 @@ impl Connection {
                 "DROP INDEX CONCURRENTLY cannot run inside a transaction block",
             ));
         }
+        if let Node::AlterTableStmt(stmt) = node
+            && stmt.cmds.iter().flatten().any(|cmd| {
+                matches!(cmd, Node::AlterTableCmd(cmd) if cmd.subtype == AlterTableType::AT_DetachPartition
+                    && matches!(&cmd.def, Some(Node::PartitionCmd(part)) if part.concurrent))
+            })
+            && self.transaction.in_block()
+        {
+            return Err(Error::new(
+                SqlState::ACTIVE_SQL_TRANSACTION,
+                "ALTER TABLE ... DETACH CONCURRENTLY cannot run inside a transaction block",
+            ));
+        }
         if matches!(node, Node::TruncateStmt(_))
             && self.settings.borrow().get("transaction_read_only").as_deref() == Some("on")
         {
@@ -971,6 +985,7 @@ impl Connection {
         let mut work = Arc::new(work);
         let result = rewrite
             .and_then(|tables| self.rewrite_rows(&tables, &work, transforms))
+            .and_then(|()| self.check_partitions(&defined.checks, &work))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work))
             .and_then(|()| self.view_texts(&defined.views, &mut work));
         let mut held = self.lease.borrow_mut();
@@ -4853,6 +4868,12 @@ mod tests {
     #[test]
     fn partition_index() {
         big_stack(|| script(include_str!("connection/partition_index.test")));
+    }
+
+    /// `ALTER TABLE ... ATTACH PARTITION` and `DETACH PARTITION`, and `ALTER INDEX ... ATTACH PARTITION`: the checks of the new partition, its columns, its constraints and its indexes, the check of its rows and of the rows of the default partition, the detach of a partition with its columns, constraints and indexes, `CONCURRENTLY` and `FINALIZE`, and the indexes of partitioned tables that become valid. `connection/partition_attach.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_attach() {
+        big_stack(|| script(include_str!("connection/partition_attach.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

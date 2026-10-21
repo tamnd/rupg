@@ -1147,7 +1147,7 @@ impl Definer<'_, '_> {
             self.catalog.add_default(table, attnum, crate::node::write(&expr)?, &refs)?;
         }
         if let (Some(parent), Some(spec)) = (plan.parent, &plan.partbound) {
-            let bound = self.partition_bound(&plan.relname, parent, spec)?;
+            let bound = self.partition_bound(&plan.relname, parent, spec, true)?;
             self.catalog.attach_partition(table, parent, bound)?;
             self.inherit_checks(table, parent)?;
         }

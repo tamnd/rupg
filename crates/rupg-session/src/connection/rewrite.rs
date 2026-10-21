@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use rupg_analyze::{CopyTarget, Params, Transform};
+use rupg_analyze::{CopyTarget, Params, PartitionCheck, Transform};
 use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, Relation};
 use rupg_common::{Error, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -84,6 +84,53 @@ impl Connection {
     }
 
     /// `ATRewriteTable` for the tables: each row gets the new columns, then the checks of the new constraints. The first write of a transaction gives it a transaction ID, and the statement ends a command. When another transaction in progress changed a table, the statement waits for its end, as the lock of `ALTER TABLE` waits.
+    /// The part of `ATRewriteTable` for the partition constraints that `ATTACH PARTITION` queues: each row of each leaf partition of each partition of `checks` must be in the bounds of its partition, and of each partition above it, in the catalog `work`.
+    ///
+    /// # Errors
+    ///
+    /// `23514` for a row that is not in the bounds, and the errors of the expressions of the partition keys.
+    pub(super) fn check_partitions(
+        &self,
+        checks: &[PartitionCheck],
+        work: &Arc<Catalog>,
+    ) -> Result<(), Error> {
+        if checks.is_empty() {
+            return Ok(());
+        }
+        let heap = self.store.heap();
+        let reader = self.reader_on(Arc::clone(work));
+        let view = View { xid: self.xid.get(), ..self.view() };
+        let mut router = rupg_exec::Router::default();
+        for check in checks {
+            let partitioned =
+                work.relation(check.table).is_some_and(|r| r.kind == RelKind::Partitioned);
+            let leaves = if partitioned {
+                rupg_exec::partition_leaves(check.table, &reader)?
+            } else {
+                vec![check.table]
+            };
+            for leaf in leaves {
+                for row in heap.rows(leaf, &view) {
+                    if router.check(leaf, &row, &reader)? {
+                        continue;
+                    }
+                    let name = work.relation(leaf).map_or("", |r| r.name.as_str());
+                    let message = if check.default {
+                        format!(
+                            "updated partition constraint for default partition \"{name}\" would be violated by some row"
+                        )
+                    } else {
+                        format!(
+                            "partition constraint of relation \"{name}\" is violated by some row"
+                        )
+                    };
+                    return Err(Error::new(SqlState::CHECK_VIOLATION, message));
+                }
+            }
+        }
+        Ok(())
+    }
+
     pub(super) fn rewrite_rows(
         &self,
         tables: &[u32],

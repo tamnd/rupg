@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `ALTER TABLE ... ATTACH PARTITION`, `ALTER TABLE ... DETACH PARTITION` and `ALTER INDEX ... ATTACH PARTITION`. The new partition must have the columns of its parent with the same types and collations, the not-null constraints and the check constraints of its parent, and no identity column, and the errors are the errors of PostgreSQL. Its rows must be in its bound, and the rows of the default partition must not be in the new bound. Each index of the parent gets an index of the partition with the same definition, or a new index. `DETACH PARTITION` makes the columns, the constraints and the indexes of the partition local again. `CONCURRENTLY` runs in one transaction, so `FINALIZE` has no detach to complete. `ALTER INDEX ... ATTACH PARTITION` makes the index of a partition a partition of an index of its parent table, and the parent index becomes valid when each partition has a valid index (#NNN).
+
 ## 0.1.58 (2026-10-21)
 
 ### Added

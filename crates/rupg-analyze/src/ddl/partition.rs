@@ -525,12 +525,13 @@ impl Definer<'_, '_> {
         Ok(datums)
     }
 
-    /// `transformPartitionBound` and `check_new_partition_bound`: the bound of the new partition `relname` of the parent. The bound must fit the strategy of the partition key and must not overlap the bound of another partition.
+    /// `transformPartitionBound` and `check_new_partition_bound`: the bound of the new partition `relname` of the parent. The bound must fit the strategy of the partition key and, when `check` is true, must not overlap the bound of another partition. `ATTACH PARTITION` transforms the bound before its other checks, and it checks the overlap after them.
     pub(super) fn partition_bound(
         &mut self,
         relname: &str,
         parent: u32,
         spec: &PartitionBoundSpec,
+        check: bool,
     ) -> Result<PartitionBound> {
         let partkey =
             self.catalog.relation(parent).and_then(|r| r.partition_key.clone()).ok_or_else(
@@ -555,7 +556,9 @@ impl Definer<'_, '_> {
                     "a hash-partitioned table may not have a default partition",
                 ));
             }
-            if let Some(found) = parts.iter().find(|p| p.bound == PartitionBound::Default) {
+            if let Some(found) = parts.iter().find(|p| p.bound == PartitionBound::Default)
+                && check
+            {
                 return Err(Error::new(
                     SqlState::INVALID_OBJECT_DEFINITION,
                     format!(
@@ -584,7 +587,9 @@ impl Definer<'_, '_> {
                         "remainder for hash partition must be less than modulus",
                     ));
                 }
-                check_hash(relname, &parts, spec.modulus, spec.remainder, at)?;
+                if check {
+                    check_hash(relname, &parts, spec.modulus, spec.remainder, at)?;
+                }
                 Ok(PartitionBound::Hash { modulus: spec.modulus, remainder: spec.remainder })
             }
             PartStrategy::List => {
@@ -598,7 +603,9 @@ impl Definer<'_, '_> {
                         values.push(value);
                     }
                 }
-                self.check_list(relname, &parts, &values, columns[0].ty)?;
+                if check {
+                    self.check_list(relname, &parts, &values, columns[0].ty)?;
+                }
                 let mut stored = Vec::with_capacity(values.len());
                 for value in &values {
                     let null = matches!(value.kind, ExprKind::Const(Value::Null));
@@ -623,7 +630,9 @@ impl Definer<'_, '_> {
                 let lower = self.range_datums(&spec.lowerdatums, &columns)?;
                 let upper = self.range_datums(&spec.upperdatums, &columns)?;
                 let types: Vec<u32> = columns.iter().map(|c| c.ty).collect();
-                self.check_range(relname, &parts, &types, (&lower, &upper))?;
+                if check {
+                    self.check_range(relname, &parts, &types, (&lower, &upper))?;
+                }
                 let stored = |datums: Vec<NewDatum>| -> Vec<RangeDatum> {
                     datums
                         .into_iter()
