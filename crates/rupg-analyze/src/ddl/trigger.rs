@@ -100,7 +100,8 @@ impl Definer<'_, '_> {
                     "ROW triggers with transition tables are not supported on partitioned tables.",
                 ));
             }
-            b'r' | b'p' => {}
+            b'p' => return Err(not_yet("a trigger on a partitioned table", None)),
+            b'r' => {}
             b'v' if stmt.timing != TRIGGER_INSTEAD && stmt.row => {
                 return Err(wrong("view", "Views cannot have row-level BEFORE or AFTER triggers."));
             }

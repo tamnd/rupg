@@ -78,6 +78,9 @@ impl Definer<'_, '_> {
                 format!("\"{name}\" is not a table"),
             ));
         }
+        if self.kind_of(found) == b'p' {
+            return Err(not_yet("TRUNCATE of a partitioned table", None));
+        }
         if self.is_system(found) && !self.an.env.allow_system_table_mods() {
             return Err(Error::new(
                 SqlState::INSUFFICIENT_PRIVILEGE,

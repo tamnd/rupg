@@ -11,6 +11,7 @@ pub use query::view_statement;
 
 use std::ptr;
 
+use rupg_analyze::node::{StoredBound, StoredDatum};
 use rupg_analyze::{
     Aggref, BoolOp, BoolTest, Case, CastForm, Expr, ExprKind, Func, FuncForm, JsonBehavior,
     JsonBehaviorKind, JsonCtor, JsonCtorKind, JsonEncoding, JsonExpr, JsonExprOp, JsonFormat,
@@ -18,7 +19,7 @@ use rupg_analyze::{
     SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc, XmlExpr, XmlOp,
 };
 use rupg_analyze::{default_opclass, node, sort_operators};
-use rupg_catalog::{ConKind, Constraint, IndexInfo, Relation};
+use rupg_catalog::{ConKind, Constraint, IndexInfo, PartStrategy, PartitionKey, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_types::{Value, oid, sql_name};
@@ -1329,9 +1330,80 @@ fn column_names(relid: u32, session: &dyn Session) -> Option<Vec<String>> {
 
 /// `deparse_expression_pretty` for a stored expression or a stored list of expressions, with the columns of the relation.
 fn deparse(text: &str, columns: &[String], paren: bool, session: &dyn Session) -> Result<String> {
+    if node::is_bound(text) {
+        return partition_bound(text, session);
+    }
     let exprs = stored(text)?;
     let mut d = Deparser::for_columns(session, columns.to_vec(), paren);
     d.list(&exprs, false)?;
+    Ok(d.buf)
+}
+
+/// The text of a constant of a stored bound of a partition, as `get_const_expr` with `showtype` -1 shows it.
+fn bound_constant(d: &mut Deparser<'_>, e: &Expr) -> Result<()> {
+    match &e.kind {
+        ExprKind::Const(value) => d.constant(e, value, -1),
+        _ => Err(Error::internal("a partition bound that is not a constant")),
+    }
+}
+
+/// The `PartitionBoundSpec` part of `get_rule_expr`: the bound of a partition in `relpartbound`, as `FOR VALUES` shows it.
+fn partition_bound(text: &str, session: &dyn Session) -> Result<String> {
+    let mut d = Deparser::for_columns(session, Vec::new(), false);
+    match node::read_bound(text)? {
+        StoredBound::Default => d.buf.push_str("DEFAULT"),
+        StoredBound::Hash { modulus, remainder } => {
+            d.buf.push_str(&format!("FOR VALUES WITH (modulus {modulus}, remainder {remainder})"));
+        }
+        StoredBound::List(values) => {
+            d.buf.push_str("FOR VALUES IN (");
+            for (i, value) in values.iter().enumerate() {
+                if i > 0 {
+                    d.buf.push_str(", ");
+                }
+                match value {
+                    Some(e) => bound_constant(&mut d, e)?,
+                    None => d.buf.push_str("NULL"),
+                }
+            }
+            d.buf.push(')');
+        }
+        StoredBound::Range { lower, upper } => {
+            d.buf.push_str("FOR VALUES FROM ");
+            range_datums(&mut d, &lower)?;
+            d.buf.push_str(" TO ");
+            range_datums(&mut d, &upper)?;
+        }
+    }
+    Ok(d.buf)
+}
+
+/// `get_range_partbound_string`: the datums of a bound of a range partition in parentheses.
+fn range_datums(d: &mut Deparser<'_>, datums: &[StoredDatum]) -> Result<()> {
+    d.buf.push('(');
+    for (i, datum) in datums.iter().enumerate() {
+        if i > 0 {
+            d.buf.push_str(", ");
+        }
+        match datum {
+            StoredDatum::MinValue => d.buf.push_str("MINVALUE"),
+            StoredDatum::MaxValue => d.buf.push_str("MAXVALUE"),
+            StoredDatum::Value(e) => bound_constant(d, e)?,
+        }
+    }
+    d.buf.push(')');
+    Ok(())
+}
+
+/// The text of a stored constant, as `get_const_expr` with `showtype` -1 shows it, for the detail of an error on the bound of a partition.
+///
+/// # Errors
+///
+/// An internal error for a stored form that is not a constant, and the errors of the output function of the type.
+pub fn deparse_constant(text: &str, session: &dyn Session) -> Result<String> {
+    let e = node::read(text)?;
+    let mut d = Deparser::for_columns(session, Vec::new(), false);
+    bound_constant(&mut d, &e)?;
     Ok(d.buf)
 }
 
@@ -1818,6 +1890,68 @@ fn get_statisticsobjdef(_: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Null)
 }
 
+/// `pg_get_partkeydef_worker`: the partition key of a partitioned table, as `PARTITION BY` writes it.
+fn partkey_def(rel: &Relation, key: &PartitionKey, session: &dyn Session) -> Result<String> {
+    let columns: Vec<String> = rel.columns.iter().map(|c| c.name.clone()).collect();
+    let exprs = match &key.exprs {
+        Some(text) => node::read_list(text)?,
+        None => Vec::new(),
+    };
+    let mut exprs = exprs.iter();
+    let strategy = match key.strategy {
+        PartStrategy::Hash => "HASH",
+        PartStrategy::List => "LIST",
+        PartStrategy::Range => "RANGE",
+    };
+    let mut out = format!("{strategy} (");
+    for (keyno, &attnum) in key.attrs.iter().enumerate() {
+        if keyno > 0 {
+            out.push_str(", ");
+        }
+        let (ty, collation) = if attnum != 0 {
+            let column = rel.column(attnum).ok_or_else(|| {
+                Error::internal(format!("cache lookup failed for attribute {attnum}"))
+            })?;
+            out.push_str(&quote_identifier(&column.name));
+            (column.ty, column.collation)
+        } else {
+            let e =
+                exprs.next().ok_or_else(|| Error::internal("too few entries in partexprs list"))?;
+            let mut d = Deparser::for_columns(session, columns.clone(), false);
+            d.expr(e, false)?;
+            if looks_like_function(e) {
+                out.push_str(&d.buf);
+            } else {
+                out.push_str(&format!("({})", d.buf));
+            }
+            (e.ty, expr_collation(e, rel))
+        };
+        let collation_used = key.collations.get(keyno).copied().unwrap_or(0);
+        if collation_used != 0 && collation_used != collation {
+            out.push_str(&format!(" COLLATE {}", collation_name(collation_used, session)?));
+        }
+        if let Some(&class) = key.classes.get(keyno) {
+            out.push_str(&opclass_name(class, ty, session)?);
+        }
+    }
+    out.push(')');
+    Ok(out)
+}
+
+/// `pg_get_partkeydef(oid)`: the partition key of a partitioned table, or null for another relation.
+fn get_partkeydef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
+    let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
+    let found = call
+        .session
+        .catalog()
+        .and_then(|c| c.relation(oid))
+        .and_then(|r| Some((r, r.partition_key.as_ref()?)));
+    match found {
+        Some((rel, key)) => Ok(Value::text(partkey_def(rel, key, call.session)?)),
+        None => Ok(Value::Null),
+    }
+}
+
 /// `pg_get_indexdef(oid)` and `pg_get_indexdef(oid, int4, bool)`.
 fn get_indexdef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
     let oid = args.first().and_then(Value::as_oid).ok_or_else(bad_value)?;
@@ -1859,8 +1993,9 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "pg_get_viewdef_name" | "pg_get_viewdef_name_ext" => query::get_viewdef_name,
         "pg_get_ruledef" | "pg_get_ruledef_ext" => query::get_ruledef,
         "pg_get_triggerdef" | "pg_get_triggerdef_ext" => query::get_triggerdef,
-        // rupg has no partitioned tables and no partitions, so no relation has a partition key or a partition constraint.
-        "pg_get_partkeydef" | "pg_get_partition_constraintdef" => |_, _| Ok(Value::Null),
+        "pg_get_partkeydef" => get_partkeydef,
+        // rupg cannot show the partition constraint of a partition yet.
+        "pg_get_partition_constraintdef" => |_, _| Ok(Value::Null),
         _ => return None,
     })
 }

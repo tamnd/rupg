@@ -536,6 +536,10 @@ impl Analyzer<'_> {
             error.at_opt(at)
         })?;
         let columns = self.open_relation(oid, name, at)?;
+        let catalog = self.env.catalog();
+        if catalog.and_then(|c| c.relation(oid)).is_some_and(|r| r.kind == RelKind::Partitioned) {
+            return Err(not_yet("a query of a partitioned table", at));
+        }
         let subquery = self.view_query(oid)?.map(Box::new);
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
@@ -1562,6 +1566,13 @@ impl Analyzer<'_> {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 "cannot use column reference in DEFAULT expression",
+            )
+            .at_opt(at));
+        }
+        if self.kind == Kind::PartitionBound {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "cannot use column reference in partition bound expression",
             )
             .at_opt(at));
         }

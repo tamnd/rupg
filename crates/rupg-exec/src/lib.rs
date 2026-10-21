@@ -2786,8 +2786,12 @@ impl<'a> Eval<'a> {
     }
 }
 
-/// `evaluate_expr`: the value of an expression whose arguments are constants.
-fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
+/// `evaluate_expr`: the value of an expression whose arguments are constants, such as a value of the bound of a partition.
+///
+/// # Errors
+///
+/// The error of a function of the expression.
+pub fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
     let tables = scan::Tables::default();
     let cache = Cache::default();
     let mut eval = Eval {

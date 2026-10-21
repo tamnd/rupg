@@ -232,7 +232,10 @@ fn column_text(oid: u32, number: i32, session: &dyn Session) -> Option<String> {
             let rel = session.catalog()?.relation(oid)?;
             if number > 0 {
                 rel.column(number)?.name.as_str()
-            } else if matches!(rel.kind, RelKind::Table | RelKind::Toast | RelKind::Sequence) {
+            } else if matches!(
+                rel.kind,
+                RelKind::Table | RelKind::Partitioned | RelKind::Toast | RelKind::Sequence
+            ) {
                 SYSTEM_COLUMNS.get(usize::try_from(-i32::from(number) - 1).ok()?)?
             } else {
                 return None;

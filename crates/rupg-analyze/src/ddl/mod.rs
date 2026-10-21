@@ -19,6 +19,7 @@ mod function;
 mod identity;
 mod index;
 mod lock;
+mod partition;
 mod rangetype;
 mod relation_options;
 mod reloptions;
@@ -295,6 +296,18 @@ impl Env for SchemaEnv<'_> {
 
     fn check_function(&self, function: &rupg_catalog::Function) -> Result<()> {
         self.env.check_function(function)
+    }
+
+    fn evaluate(&self, expr: &Expr) -> Result<Value> {
+        self.env.evaluate(expr)
+    }
+
+    fn compare(&self, ty: u32, a: &Value, b: &Value) -> Result<std::cmp::Ordering> {
+        self.env.compare(ty, a, b)
+    }
+
+    fn deparse_constant(&self, text: &str) -> Result<String> {
+        self.env.deparse_constant(text)
     }
 }
 
@@ -635,6 +648,7 @@ impl Definer<'_, '_> {
                 Some(RelKind::Toast) => b't',
                 Some(RelKind::View) => b'v',
                 Some(RelKind::Composite) => b'c',
+                Some(RelKind::Partitioned) => b'p',
                 _ => b'r',
             },
             Found::Builtin(row) => row.kind,

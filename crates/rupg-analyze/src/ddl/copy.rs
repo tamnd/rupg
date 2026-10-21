@@ -8,7 +8,7 @@ use rupg_sql::nodes::{
 };
 
 use super::lock::{lookup, relkind};
-use super::relkind_detail;
+use super::{not_yet, relkind_detail};
 use crate::{Analyzer, Env, Params};
 
 /// The relation of a `COPY ... TO` and the query that reads its rows.
@@ -73,6 +73,7 @@ pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Co
     let CopyTarget { name, kind, columns, selected, .. } = copy_target(stmt, rv, env)?;
     match kind {
         b'r' => {}
+        b'p' => return Err(not_yet("COPY of a partitioned table", None)),
         b'v' => {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,

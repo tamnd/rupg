@@ -8,7 +8,8 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
     CollateClause, ColumnDef, CompositeTypeStmt, ConstrType, Constraint, CreateStmt, DefElem,
-    Equal, IndexElem, IndexStmt, Node, OnCommitAction, RangeVar, TypeName,
+    Equal, IndexElem, IndexStmt, Node, OnCommitAction, PartitionBoundSpec, PartitionSpec, RangeVar,
+    TypeName,
 };
 use rupg_types::{Value, oid};
 
@@ -33,6 +34,8 @@ enum RawDefault {
     Expr(Node),
     /// The `nextval` call of a `serial` column, with the index of its sequence.
     Serial(usize),
+    /// The stored default of the parent table of a partition.
+    Cooked(String),
 }
 
 /// A column after `transformColumnDefinition`.
@@ -50,6 +53,8 @@ struct NewColumn {
     storage: Option<String>,
     /// The name of the method of `COMPRESSION`.
     compression: Option<String>,
+    /// The column of the parent table that gives the column of a partition.
+    inherited: Option<Column>,
 }
 
 /// The name, the schema and the options of the sequence of an identity column, as `generateSerialSequence` finds them.
@@ -82,6 +87,12 @@ struct Plan {
     foreign: Vec<Constraint>,
     serials: Vec<Serial>,
     has_pkey: bool,
+    /// The partition key of `PARTITION BY`.
+    partspec: Option<PartitionSpec>,
+    /// The bound of `PARTITION OF`.
+    partbound: Option<PartitionBoundSpec>,
+    /// The parent table of `PARTITION OF`.
+    parent: Option<u32>,
 }
 
 /// `makeNotNullConstraint`: an unnamed not-null constraint on the column.
@@ -236,6 +247,12 @@ impl Definer<'_, '_> {
     pub(super) fn create_table(&mut self, stmt: &CreateStmt) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let at = place(rv.location);
+        if stmt.partspec.is_some() && rv.relpersistence == b'u' {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "partitioned tables cannot be unlogged",
+            ));
+        }
         let namespace = self.creation_namespace(&rv)?;
         let name = relname(&rv).to_string();
         if stmt.if_not_exists && self.relation_in(namespace, &name).is_some() {
@@ -248,11 +265,11 @@ impl Definer<'_, '_> {
         if stmt.ofTypename.is_some() {
             return Err(not_yet("CREATE TABLE OF", at));
         }
-        if stmt.partspec.is_some() || stmt.partbound.is_some() {
-            return Err(not_yet("a partitioned table", at));
-        }
-        if !stmt.inhRelations.is_empty() {
-            return Err(not_yet("INHERITS", at));
+        if stmt.partspec.is_some() && !stmt.inhRelations.is_empty() && stmt.partbound.is_none() {
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                "cannot create partitioned table as inheritance child",
+            ));
         }
         let mut plan = Plan {
             relname: name,
@@ -264,6 +281,9 @@ impl Definer<'_, '_> {
             foreign: Vec::new(),
             serials: Vec::new(),
             has_pkey: false,
+            partspec: stmt.partspec.as_deref().cloned(),
+            partbound: stmt.partbound.as_deref().cloned(),
+            parent: None,
         };
         for element in stmt.tableElts.iter().flatten() {
             match element {
@@ -277,6 +297,22 @@ impl Definer<'_, '_> {
             if let Some(column) = plan.columns.iter_mut().find(|c| c.name == key) {
                 column.is_not_null = true;
             }
+        }
+        if plan.partbound.is_some() {
+            let parent = self.partition_parent(&stmt.inhRelations, namespace)?;
+            self.merge_partition_columns(&mut plan, parent)?;
+            plan.parent = Some(parent);
+        } else if !stmt.inhRelations.is_empty() {
+            self.check_inherits(&stmt.inhRelations)?;
+            return Err(not_yet("INHERITS", at));
+        }
+        if (plan.partspec.is_some() || plan.parent.is_some())
+            && (!plan.indexes.is_empty() || !plan.foreign.is_empty())
+        {
+            return Err(not_yet(
+                "a key or a foreign key of a partitioned table or a partition",
+                at,
+            ));
         }
         let mut table_rv = rv.clone();
         table_rv.schemaname = Some(self.schema_name(namespace).into());
@@ -430,6 +466,7 @@ impl Definer<'_, '_> {
                 identity: 0,
                 storage: None,
                 compression: None,
+                inherited: None,
             })
             .collect();
         let plan = Plan {
@@ -442,6 +479,9 @@ impl Definer<'_, '_> {
             foreign: Vec::new(),
             serials: Vec::new(),
             has_pkey: false,
+            partspec: None,
+            partbound: None,
+            parent: None,
         };
         let table = self.define_relation(&plan)?;
         if !options.is_empty() {
@@ -478,9 +518,12 @@ impl Definer<'_, '_> {
                 }
             }
         }
-        let (ty, _) = self.an.type_name(&type_name)?;
+        // The column of a partition has no type: the parent table gives it.
+        let ty = if def.typeName.is_some() { self.an.type_name(&type_name)?.0 } else { 0 };
         let collate = def.collClause.as_deref().cloned();
-        if let Some(coll) = &collate {
+        if let Some(coll) = &collate
+            && ty != 0
+        {
             let at = place(coll.location);
             self.an.collation_oid(&coll.collname, at)?;
             if !types::collatable(ty) {
@@ -540,6 +583,7 @@ impl Definer<'_, '_> {
             identity: 0,
             storage: def.storage_name.as_deref().map(str::to_string),
             compression: def.compression.as_deref().map(str::to_string),
+            inherited: None,
         };
         let relname = plan.relname.clone();
         let conflict = |at: Option<usize>| {
@@ -576,6 +620,9 @@ impl Definer<'_, '_> {
                     saw_nullable = true;
                 }
                 ConstrType::CONSTR_NOTNULL => {
+                    if plan.partspec.is_some() && con.is_no_inherit {
+                        return Err(no_inherit_not_null());
+                    }
                     if saw_nullable && !column.is_not_null {
                         return Err(conflict(at));
                     }
@@ -622,6 +669,12 @@ impl Definer<'_, '_> {
                     });
                 }
                 ConstrType::CONSTR_IDENTITY => {
+                    if plan.partbound.is_some() {
+                        return Err(Error::new(
+                            SqlState::FEATURE_NOT_SUPPORTED,
+                            "identity columns are not supported on partitions",
+                        ));
+                    }
                     if column.identity != 0 {
                         return Err(Error::new(
                             SqlState::SYNTAX_ERROR,
@@ -819,6 +872,15 @@ impl Definer<'_, '_> {
 
     /// `BuildDescForRelation` for one column: its type, its type modifier, its collation and the number of its array dimensions.
     fn catalog_column(&mut self, column: &NewColumn) -> Result<Column> {
+        if let Some(parent) = &column.inherited {
+            let mut new =
+                Column::new(column.name.clone(), parent.ty, parent.typmod, parent.collation);
+            new.storage = parent.storage;
+            new.compression = parent.compression;
+            new.local = false;
+            new.inhcount = 1;
+            return Ok(new);
+        }
         let mut type_name = column.type_name.clone();
         type_name.location = -1;
         let (ty, typmod) = self.an.type_name(&type_name)?;
@@ -845,6 +907,55 @@ impl Definer<'_, '_> {
         Ok(new)
     }
 
+    /// The part of `MergeAttributes` for a partition: the columns of the parent table, in their order, with the defaults of the parent. A column of the statement only gives the constraints and a new default of a column of the parent.
+    fn merge_partition_columns(&mut self, plan: &mut Plan, parent: u32) -> Result<()> {
+        let rel = self
+            .catalog
+            .relation(parent)
+            .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {parent}")))?;
+        if rel.columns.iter().any(|c| c.dropped) {
+            return Err(not_yet("a partition of a table with a dropped column", None));
+        }
+        if rel.columns.iter().any(|c| c.identity != 0) {
+            return Err(not_yet("a partition of a table with an identity column", None));
+        }
+        let mut columns = Vec::with_capacity(rel.columns.len());
+        for (i, c) in rel.columns.iter().enumerate() {
+            let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
+            let default = c
+                .has_default
+                .then(|| self.catalog.default_of(parent, attnum))
+                .flatten()
+                .map(|d| RawDefault::Cooked(d.expr.clone()));
+            columns.push(NewColumn {
+                name: c.name.clone(),
+                type_name: TypeName::default(),
+                collate: None,
+                collation: c.collation,
+                is_not_null: false,
+                default,
+                identity: 0,
+                storage: None,
+                compression: None,
+                inherited: Some(c.clone()),
+            });
+        }
+        for local in std::mem::take(&mut plan.columns) {
+            let Some(column) = columns.iter_mut().find(|c| c.name == local.name) else {
+                return Err(Error::new(
+                    SqlState::UNDEFINED_COLUMN,
+                    format!("column \"{}\" does not exist", local.name),
+                ));
+            };
+            column.is_not_null |= local.is_not_null;
+            if local.default.is_some() {
+                column.default = local.default;
+            }
+        }
+        plan.columns = columns;
+        Ok(())
+    }
+
     /// `ADD COLUMN` of `ALTER TABLE`: `transformColumnDefinition` and the sequence of a `serial` column or of an identity column, then `ATExecAddColumn`. The column gets its default, its not-null constraint and the `OWNED BY` of its sequence. The result is the other constraints of the column, the unique constraints, the check constraints and the foreign keys, for the later passes, or `None` when the table has the column and the statement has `IF NOT EXISTS`.
     pub(super) fn add_column(
         &mut self,
@@ -862,6 +973,9 @@ impl Definer<'_, '_> {
             foreign: Vec::new(),
             serials: Vec::new(),
             has_pkey: false,
+            partspec: None,
+            partbound: None,
+            parent: None,
         };
         self.column_definition(&mut plan, def)?;
         let Some(column) = plan.columns.first() else {
@@ -917,7 +1031,7 @@ impl Definer<'_, '_> {
                 let refs = references(self.catalog, table, &[&expr]);
                 self.catalog.add_default(table, number, crate::node::write(&expr)?, &refs)?;
             }
-            None => {}
+            Some(RawDefault::Cooked(_)) | None => {}
         }
         self.add_not_nulls(table, &plan)?;
         for serial in &plan.serials {
@@ -988,7 +1102,11 @@ impl Definer<'_, '_> {
             owner: self.user,
             columns,
         };
-        let table = self.catalog.create_table(new)?;
+        let table = if plan.partspec.is_some() {
+            self.catalog.create_partitioned_table(new)?
+        } else {
+            self.catalog.create_table(new)?
+        };
         self.an.add_table(table, &plan.relname, &scope);
         for (i, column) in plan.columns.iter().enumerate() {
             let Some(default) = &column.default else { continue };
@@ -998,6 +1116,7 @@ impl Definer<'_, '_> {
                     self.an.with_kind(Kind::ColumnDefault, |an| an.transform(Some(node)))?
                 }
                 RawDefault::Serial(k) => nextval(plan.serials[*k].oid)?,
+                RawDefault::Cooked(text) => crate::node::read(text)?,
             };
             let from = expr.ty;
             let Some(expr) =
@@ -1021,9 +1140,21 @@ impl Definer<'_, '_> {
             let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
             self.catalog.add_default(table, attnum, crate::node::write(&expr)?, &refs)?;
         }
+        if let (Some(parent), Some(spec)) = (plan.parent, &plan.partbound) {
+            let bound = self.partition_bound(&plan.relname, parent, spec)?;
+            self.catalog.attach_partition(table, parent, bound)?;
+            self.inherit_checks(table, parent)?;
+        }
+        if let Some(spec) = &plan.partspec {
+            let partkey = self.partition_key(table, &plan.relname, spec)?;
+            self.catalog.set_partition_key(table, partkey)?;
+        }
         self.add_checks(table, &plan.checks)?;
         self.add_not_nulls(table, plan)?;
-        if needs_toast(&shapes) {
+        if let Some(parent) = plan.parent {
+            self.inherit_not_nulls(table, parent)?;
+        }
+        if plan.partspec.is_none() && needs_toast(&shapes) {
             self.catalog.create_toast(table)?;
         }
         Ok(table)
@@ -1049,6 +1180,18 @@ impl Definer<'_, '_> {
             let keys = super::column_numbers(&[&expr]);
             let refs = references(self.catalog, table, &[&expr]);
             let text = crate::node::write(&expr)?;
+            if con.is_no_inherit
+                && let Some(rel) = self.catalog.relation(table)
+                && rel.kind == RelKind::Partitioned
+            {
+                return Err(Error::new(
+                    SqlState::INVALID_TABLE_DEFINITION,
+                    format!(
+                        "cannot add NO INHERIT constraint to partitioned table \"{}\"",
+                        rel.name
+                    ),
+                ));
+            }
             let oid = self.catalog.add_check(
                 table,
                 con.conname.as_deref(),
@@ -1155,6 +1298,14 @@ fn shape(column: &Column) -> Shape {
     }
 }
 
+/// The error of a not-null constraint `NO INHERIT` of a partitioned table.
+fn no_inherit_not_null() -> Error {
+    Error::new(
+        SqlState::FEATURE_NOT_SUPPORTED,
+        "not-null constraints on partitioned tables cannot be NO INHERIT",
+    )
+}
+
 /// `transformTableConstraint`.
 fn table_constraint(plan: &mut Plan, con: &Constraint) -> Result<()> {
     let con = con.clone();
@@ -1164,7 +1315,12 @@ fn table_constraint(plan: &mut Plan, con: &Constraint) -> Result<()> {
             return Err(not_yet("an exclusion constraint", place(con.location)));
         }
         ConstrType::CONSTR_CHECK => plan.checks.push(con),
-        ConstrType::CONSTR_NOTNULL => plan.not_nulls.push(con),
+        ConstrType::CONSTR_NOTNULL => {
+            if plan.partspec.is_some() && con.is_no_inherit {
+                return Err(no_inherit_not_null());
+            }
+            plan.not_nulls.push(con);
+        }
         ConstrType::CONSTR_FOREIGN => plan.foreign.push(con),
         ConstrType(n) => {
             return Err(Error::internal(format!("invalid context for constraint type {n}")));

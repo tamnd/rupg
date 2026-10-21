@@ -121,7 +121,7 @@ impl Definer<'_, '_> {
                 if !self.holds_type(column.ty, ty, false, 0) {
                     continue;
                 }
-                if rel.kind == RelKind::Table {
+                if matches!(rel.kind, RelKind::Table | RelKind::Partitioned) {
                     return Some((rel.name.clone(), column.name.clone()));
                 }
                 if let Some(found) = self.row_type_user(rel.row_type, depth + 1) {

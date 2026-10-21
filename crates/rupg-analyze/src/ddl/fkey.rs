@@ -85,6 +85,9 @@ impl Definer<'_, '_> {
             )
             .with_detail(relkind_detail(kind)));
         }
+        if kind == b'p' {
+            return Err(not_yet("a foreign key that refers to a partitioned table", None));
+        }
         if kind != b'r' {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
