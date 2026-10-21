@@ -5188,6 +5188,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/inherit_change.test")));
     }
 
+    /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_constraintdef() {
+        big_stack(|| script(include_str!("connection/partition_constraintdef.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

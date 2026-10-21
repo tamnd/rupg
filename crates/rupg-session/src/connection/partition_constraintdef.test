@@ -1,0 +1,224 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE l (a int, b text) PARTITION BY LIST (a);
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('l'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row NULL
+SELECT 1
+> CREATE TABLE ld PARTITION OF l DEFAULT;
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('ld'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row NULL
+SELECT 1
+> CREATE TABLE l1 PARTITION OF l FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE l2 PARTITION OF l FOR VALUES IN (5, 3, 2);
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('l1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a = 1))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('l2'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a = ANY (ARRAY[5, 3, 2])))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('ld'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row (NOT ((a IS NOT NULL) AND (a = ANY (ARRAY[1, 2, 3, 5]))))
+SELECT 1
+> CREATE TABLE ln PARTITION OF l FOR VALUES IN (NULL);
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('ln'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row (a IS NULL)
+SELECT 1
+> SELECT pg_get_partition_constraintdef('ld'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row (NOT ((a IS NULL) OR (a = ANY (ARRAY[1, 2, 3, 5]))))
+SELECT 1
+> CREATE TABLE ln2 (b text, a int);
+CREATE TABLE
+> ALTER TABLE l DETACH PARTITION ln;
+ALTER TABLE
+> CREATE TABLE ln3 PARTITION OF l FOR VALUES IN (NULL, 7);
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('ln3'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NULL) OR (a = 7))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('ld'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row (NOT ((a IS NULL) OR (a = ANY (ARRAY[1, 2, 3, 5, 7]))))
+SELECT 1
+> CREATE TABLE t (a text, b varchar(5)) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE t1 PARTITION OF t FOR VALUES IN ('x');
+CREATE TABLE
+> CREATE TABLE t2 PARTITION OF t FOR VALUES IN ('y', 'z');
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('t1'::regclass), pg_get_partition_constraintdef('t2'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1,pg_get_partition_constraintdef:25:-1:-1
+row ((b IS NOT NULL) AND ((b)::text = 'x'::character varying(5))),((b IS NOT NULL) AND ((b)::text = ANY (ARRAY['y'::character varying(5), 'z'::character varying(5)])))
+SELECT 1
+> CREATE TABLE tt (a text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE tt1 PARTITION OF tt FOR VALUES IN ('x', 'y');
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('tt1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a = ANY (ARRAY['x'::text, 'y'::text])))
+SELECT 1
+> CREATE TABLE r (a int, b int, c int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (1) TO (10);
+CREATE TABLE
+> CREATE TABLE r2 PARTITION OF r FOR VALUES FROM (MINVALUE) TO (1);
+CREATE TABLE
+> CREATE TABLE r3 PARTITION OF r FOR VALUES FROM (10) TO (MAXVALUE);
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('r1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a >= 1) AND (a < 10))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('r2'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a < 1))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('r3'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a >= 10))
+SELECT 1
+> CREATE TABLE r0 (a int, b int, c int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE r0d PARTITION OF r0 DEFAULT;
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('r0d'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row NULL
+SELECT 1
+> CREATE TABLE r01 PARTITION OF r0 FOR VALUES FROM (1) TO (10);
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('r0d'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row (NOT ((a IS NOT NULL) AND ((a >= 1) AND (a < 10))))
+SELECT 1
+> CREATE TABLE r02 PARTITION OF r0 FOR VALUES FROM (20) TO (30);
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('r0d'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row (NOT ((a IS NOT NULL) AND (((a >= 1) AND (a < 10)) OR ((a >= 20) AND (a < 30)))))
+SELECT 1
+> CREATE TABLE m (a int, b int, c int) PARTITION BY RANGE (a, b, c);
+CREATE TABLE
+> CREATE TABLE m1 PARTITION OF m FOR VALUES FROM (1, 2, 3) TO (1, 5, 10);
+CREATE TABLE
+> CREATE TABLE m2 PARTITION OF m FOR VALUES FROM (2, MINVALUE, MINVALUE) TO (3, 4, MAXVALUE);
+CREATE TABLE
+> CREATE TABLE m3 PARTITION OF m FOR VALUES FROM (5, 1, 1) TO (6, 1, 1);
+CREATE TABLE
+> CREATE TABLE m4 PARTITION OF m FOR VALUES FROM (7, 7, 7) TO (7, 7, 8);
+CREATE TABLE
+> CREATE TABLE m5 PARTITION OF m FOR VALUES FROM (MINVALUE, MINVALUE, MINVALUE) TO (0, 0, 0);
+CREATE TABLE
+> CREATE TABLE md PARTITION OF m DEFAULT;
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('m1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (b IS NOT NULL) AND (c IS NOT NULL) AND (a = 1) AND ((b > 2) OR ((b = 2) AND (c >= 3))) AND ((b < 5) OR ((b = 5) AND (c < 10))))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('m2'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (b IS NOT NULL) AND (c IS NOT NULL) AND (a >= 2) AND ((a < 3) OR ((a = 3) AND (b <= 4))))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('m3'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (b IS NOT NULL) AND (c IS NOT NULL) AND ((a > 5) OR ((a = 5) AND (b > 1)) OR ((a = 5) AND (b = 1) AND (c >= 1))) AND ((a < 6) OR ((a = 6) AND (b < 1)) OR ((a = 6) AND (b = 1) AND (c < 1))))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('m4'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (b IS NOT NULL) AND (c IS NOT NULL) AND (a = 7) AND (b = 7) AND (c >= 7) AND (c < 8))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('m5'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (b IS NOT NULL) AND (c IS NOT NULL) AND ((a < 0) OR ((a = 0) AND (b < 0)) OR ((a = 0) AND (b = 0) AND (c < 0))))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('md'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row (NOT ((a IS NOT NULL) AND (b IS NOT NULL) AND (c IS NOT NULL) AND (((a < 0) OR ((a = 0) AND (b < 0)) OR ((a = 0) AND (b = 0) AND (c < 0))) OR ((a = 1) AND ((b > 2) OR ((b = 2) AND (c >= 3))) AND ((b < 5) OR ((b = 5) AND (c < 10)))) OR ((a >= 2) AND ((a < 3) OR ((a = 3) AND (b <= 4)))) OR (((a > 5) OR ((a = 5) AND (b > 1)) OR ((a = 5) AND (b = 1) AND (c >= 1))) AND ((a < 6) OR ((a = 6) AND (b < 1)) OR ((a = 6) AND (b = 1) AND (c < 1)))) OR ((a = 7) AND (b = 7) AND (c >= 7) AND (c < 8)))))
+SELECT 1
+> CREATE TABLE h (a int, b text) PARTITION BY HASH (a, b);
+CREATE TABLE
+> CREATE TABLE h1 PARTITION OF h FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+CREATE TABLE
+> SELECT replace(pg_get_partition_constraintdef('h1'::regclass), 'h'::regclass::oid::text, 'H');
+fields replace:25:-1:-1
+row satisfies_hash_partition('H'::oid, 4, 1, a, b)
+SELECT 1
+> CREATE TABLE e (a int, b text) PARTITION BY RANGE ((a + 1), lower(b));
+CREATE TABLE
+> CREATE TABLE e1 PARTITION OF e FOR VALUES FROM (1, 'a') TO (5, 'c');
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('e1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row (((a + 1) IS NOT NULL) AND (lower(b) IS NOT NULL) AND (((a + 1) > 1) OR (((a + 1) = 1) AND (lower(b) >= 'a'::text))) AND (((a + 1) < 5) OR (((a + 1) = 5) AND (lower(b) < 'c'::text))))
+SELECT 1
+> CREATE TABLE el (a int, b text) PARTITION BY LIST (lower(b));
+CREATE TABLE
+> CREATE TABLE el1 PARTITION OF el FOR VALUES IN ('a', 'b');
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('el1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((lower(b) IS NOT NULL) AND (lower(b) = ANY (ARRAY['a'::text, 'b'::text])))
+SELECT 1
+> CREATE TABLE n (a int, b int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE n1 PARTITION OF n FOR VALUES FROM (0) TO (100) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE n11 PARTITION OF n1 FOR VALUES IN (1, 2);
+CREATE TABLE
+> CREATE TABLE n12 (x int, b int, a int);
+CREATE TABLE
+> ALTER TABLE n12 DROP COLUMN x;
+ALTER TABLE
+> ALTER TABLE n1 ATTACH PARTITION n12 FOR VALUES IN (3);
+ALTER TABLE
+> SELECT pg_get_partition_constraintdef('n1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a >= 0) AND (a < 100))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('n11'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a >= 0) AND (a < 100) AND (b IS NOT NULL) AND (b = ANY (ARRAY[1, 2])))
+SELECT 1
+> SELECT pg_get_partition_constraintdef('n12'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (a >= 0) AND (a < 100) AND (b IS NOT NULL) AND (b = 3))
+SELECT 1
+> CREATE TABLE d (a date, b numeric, c float8) PARTITION BY RANGE (a, b);
+CREATE TABLE
+> CREATE TABLE d1 PARTITION OF d FOR VALUES FROM ('2020-01-01', 1.5) TO ('2021-01-01', 2);
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('d1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND (b IS NOT NULL) AND ((a > '2020-01-01'::date) OR ((a = '2020-01-01'::date) AND (b >= 1.5))) AND ((a < '2021-01-01'::date) OR ((a = '2021-01-01'::date) AND (b < '2'::numeric))))
+SELECT 1
+> CREATE TABLE ar (a int[]) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE ar1 PARTITION OF ar FOR VALUES IN ('{1}', '{2,3}');
+CREATE TABLE
+> SELECT pg_get_partition_constraintdef('ar1'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1
+row ((a IS NOT NULL) AND ((a = '{1}'::integer[]) OR (a = '{2,3}'::integer[])))
+SELECT 1
+> SELECT pg_get_partition_constraintdef(0), pg_get_partition_constraintdef('pg_class'::regclass);
+fields pg_get_partition_constraintdef:25:-1:-1,pg_get_partition_constraintdef:25:-1:-1
+row NULL,NULL
+SELECT 1
+> SELECT c.relname, pg_get_partition_constraintdef(c.oid) FROM pg_class c WHERE c.relname IN ('l1', 'r1') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,pg_get_partition_constraintdef:25:-1:-1
+row l1,((a IS NOT NULL) AND (a = 1))
+row r1,((a IS NOT NULL) AND (a >= 1) AND (a < 10))
+SELECT 2
