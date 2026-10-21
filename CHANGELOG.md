@@ -12,7 +12,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `UPDATE` and `DELETE` of a partitioned table and of a partition. Each partition changes its rows, and a new row that its partition does not take moves to the partition that its key takes, as `ExecCrossPartitionUpdate` moves it. `RETURNING` gives the partition of each row in `tableoid`. An `UPDATE` of a partition checks the partition constraint first (#492).
 
-- `COPY FROM` into a partitioned table, `COPY TO` of a partitioned table and `TRUNCATE` of a partitioned table. `COPY FROM` routes each row to its leaf partition, and an error has the line of its row. `COPY TO` sends the rows of each partition in the order of `find_all_inheritors`, as PostgreSQL 19 does. `TRUNCATE` empties the partitions too, and `TRUNCATE ONLY` of a partitioned table gives `42809` (#NNN).
+- `COPY FROM` into a partitioned table, `COPY TO` of a partitioned table and `TRUNCATE` of a partitioned table. `COPY FROM` routes each row to its leaf partition, and an error has the line of its row. `COPY TO` sends the rows of each partition in the order of `find_all_inheritors`, as PostgreSQL 19 does. `TRUNCATE` empties the partitions too, and `TRUNCATE ONLY` of a partitioned table gives `42809` (#493).
 
 ## 0.1.57 (2026-10-21)
 
