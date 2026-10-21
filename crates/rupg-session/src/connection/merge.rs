@@ -60,7 +60,8 @@ impl Connection {
         view: &View,
         rows: Vec<Vec<Value>>,
     ) -> Result<Merged, Error> {
-        if self.partitioned(info.table) {
+        // The rows of a table with children of `INHERITS` go to their tables as the rows of a partitioned table go to their leaves. An insert goes to the table of the statement.
+        if info.inherit || self.partitioned(info.table) {
             return self.merge_routed(plan, info, (merge, fire), params, view, rows);
         }
         let heap = self.store.heap();
@@ -187,8 +188,8 @@ impl Connection {
         rows: Vec<Vec<Value>>,
     ) -> Result<Vec<Action>, Error> {
         let width = info.width;
-        // A row of a partitioned table has the OID of its leaf before the ID of its version.
-        let partitioned = usize::from(self.partitioned(info.table));
+        // A row of a partitioned table, or of a table with children of `INHERITS`, has the OID of its table before the ID of its version.
+        let partitioned = usize::from(info.inherit || self.partitioned(info.table));
         // A subquery of a clause reads with the snapshot of the statement.
         let reader = self.reader().with_view(view.clone());
         let mut actions = Vec::new();

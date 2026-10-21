@@ -73,7 +73,7 @@ pub struct Write {
     pub updated: Vec<i16>,
     /// True for a write into a view with a trigger `INSTEAD OF ... FOR EACH ROW` for the event. The rows of the query go to the triggers, not to the heap, and the rows of an `UPDATE` and of a `DELETE` end with the old row of the view in place of the ID of the version.
     pub instead: bool,
-    /// True for an `UPDATE` or a `DELETE` of a table with children of `INHERITS`, with no `ONLY`, as `expand_inherited_rtentry` adds the children. Each row of the query gives the OID of its table before the ID of its version, and each table of the tree checks and changes its rows, as the leaves of a partitioned table do.
+    /// True for an `UPDATE`, a `DELETE` or a `MERGE` of a table with children of `INHERITS`, with no `ONLY`, as `expand_inherited_rtentry` adds the children. Each row of the query gives the OID of its table before the ID of its version, and each table of the tree checks and changes its rows, as the leaves of a partitioned table do.
     pub inherit: bool,
 }
 
@@ -577,14 +577,6 @@ impl Analyzer<'_> {
         {
             return Err(not_yet(&format!("{what} a table with rules")));
         }
-        // `expand_inherited_rtentry` for the target of a `MERGE`: the children of `INHERITS` change their rows too.
-        if rel.kind == RelKind::Table
-            && rv.inh
-            && kind == WriteKind::Merge
-            && self.env.catalog().is_some_and(|c| !c.children(oid).is_empty())
-        {
-            return Err(not_yet(&format!("{what} a table with children of INHERITS")));
-        }
         // A dropped column keeps its place with no name and the type 0, and each new row has a null for it.
         let columns = rel
             .columns
@@ -610,10 +602,10 @@ impl Analyzer<'_> {
         crate::ddl::relkind(self.env, table) == b'v'
     }
 
-    /// [`Write::inherit`] for the target of an `UPDATE` or a `DELETE`, the relation 0: a table with children of `INHERITS` and no `ONLY`.
+    /// [`Write::inherit`] for the target of an `UPDATE`, a `DELETE` or a `MERGE`, the relation 0: a table with children of `INHERITS` and no `ONLY`.
     pub(crate) fn inherits_target(&self, kind: WriteKind) -> bool {
         let Some(target) = self.scope.relations.first() else { return false };
-        matches!(kind, WriteKind::Update | WriteKind::Delete)
+        matches!(kind, WriteKind::Update | WriteKind::Delete | WriteKind::Merge)
             && !target.only
             && crate::ddl::relkind(self.env, target.oid) == b'r'
             && self.env.catalog().is_some_and(|c| !c.children(target.oid).is_empty())

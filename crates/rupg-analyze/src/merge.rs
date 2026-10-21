@@ -168,8 +168,9 @@ impl Analyzer<'_> {
             }
             parts.push(part);
         }
-        // The leaf partition of each row of a partitioned table checks the row after the routing.
-        let partitioned = self.is_partitioned(table);
+        // The leaf partition of each row of a partitioned table checks the row after the routing, and so does the table of each row of a table with children of `INHERITS`.
+        let inherit = self.inherits_target(WriteKind::Merge);
+        let partitioned = self.is_partitioned(table) || inherit;
         let checks = if partitioned { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         let carried_columns: Vec<Column> = carried
@@ -290,7 +291,7 @@ impl Analyzer<'_> {
                 recheck,
                 updated,
                 instead: false,
-                inherit: false,
+                inherit,
             }),
             ..Query::default()
         };
