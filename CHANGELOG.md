@@ -11,6 +11,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - A checkpoint cuts the free arenas at the end of the file, as spec/08 section 8.9.3 says. The new length goes in the slot first, and the file gets shorter after that slot is durable (#456).
 
+- The workflow `fuzz` for the long fuzz runs of spec/21 section 21.7. It runs on request and gives each target one libFuzzer worker on each CPU of the runner. With the defaults, each of the four M2 targets gets 25.3 CPU hours (#471).
+
 ## 0.1.58 (2026-10-21)
 
 ### Added
