@@ -8,6 +8,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `ALTER TABLE ... ATTACH PARTITION`, `ALTER TABLE ... DETACH PARTITION` and `ALTER INDEX ... ATTACH PARTITION`. The new partition must have the columns of its parent with the same types and collations, the not-null constraints and the check constraints of its parent, and no identity column, and the errors are the errors of PostgreSQL. Its rows must be in its bound, and the rows of the default partition must not be in the new bound. Each index of the parent gets an index of the partition with the same definition, or a new index. `DETACH PARTITION` makes the columns, the constraints and the indexes of the partition local again. `CONCURRENTLY` runs in one transaction, so `FINALIZE` has no detach to complete. `ALTER INDEX ... ATTACH PARTITION` makes the index of a partition a partition of an index of its parent table, and the parent index becomes valid when each partition has a valid index (#496).
 
+- A checkpoint cuts the free arenas at the end of the file, as spec/08 section 8.9.3 says. The new length goes in the slot first, and the file gets shorter after that slot is durable (#456).
+
 ## 0.1.58 (2026-10-21)
 
 ### Added
@@ -21,8 +23,6 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `COPY FROM` into a partitioned table, `COPY TO` of a partitioned table and `TRUNCATE` of a partitioned table. `COPY FROM` routes each row to its leaf partition, and an error has the line of its row. `COPY TO` sends the rows of each partition in the order of `find_all_inheritors`, as PostgreSQL 19 does. `TRUNCATE` empties the partitions too, and `TRUNCATE ONLY` of a partitioned table gives `42809` (#493).
 
 - Indexes, unique indexes and primary keys of partitioned tables. `CREATE INDEX` on a partitioned table makes a partitioned index, and each partition gets an index: an index of the partition with the same definition that has no parent index yet, or a new index. `CREATE INDEX ON ONLY` makes an index that is not valid when the table has partitions. A new partition gets an index for each index of its parent table. A unique index or a primary key must include all the columns of the partition key, and the errors are the errors of PostgreSQL. `INSERT`, `UPDATE` and `COPY FROM` check the unique keys in each partition. `DROP INDEX` of the index of a partition gives `2BP01`, and `DROP TABLE` of a partition drops its indexes. The catalogs show `relkind` `I`, `pg_inherits`, `relispartition`, `indisvalid` and `conparentid` (#494).
-
-- A checkpoint cuts the free arenas at the end of the file, as spec/08 section 8.9.3 says. The new length goes in the slot first, and the file gets shorter after that slot is durable (#456).
 
 ## 0.1.57 (2026-10-21)
 
