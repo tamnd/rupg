@@ -18,7 +18,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- A whole-row `old` or `new` in `RETURNING` of `MERGE` gives the row. Before, it gave one column of the row. The old row is null for an insert, and the new row is null for a delete (#NNN).
+- A whole-row `old` or `new` in `RETURNING` of `MERGE` gives the row. Before, it gave one column of the row. The old row is null for an insert, and the new row is null for a delete (#488).
 
 ## 0.1.56 (2026-10-21)
 
