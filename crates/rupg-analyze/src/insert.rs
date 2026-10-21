@@ -71,6 +71,8 @@ pub struct Write {
     pub recheck: Option<Box<Query>>,
     /// The numbers of the columns that `SET` of an `UPDATE` gives, in the order of the list, for the triggers of `UPDATE OF`.
     pub updated: Vec<i16>,
+    /// True for a write into a view with a trigger `INSTEAD OF ... FOR EACH ROW` for the event. The rows of the query go to the triggers, not to the heap, and the rows of an `UPDATE` and of a `DELETE` end with the old row of the view in place of the ID of the version.
+    pub instead: bool,
 }
 
 /// `OnConflictExpr`: what an `INSERT` does for a new row with the key of a row that the table has.
@@ -245,6 +247,9 @@ impl Item {
 /// A column that the statement gives: the index of the column in the table, the place of its name in the column list, and the subscripts after the name, which are empty when the item sets the whole column.
 pub(crate) type Given = (usize, Option<usize>, List);
 
+/// The bits in `tgtype` of a trigger `INSTEAD OF ... FOR EACH ROW`.
+const INSTEAD_ROW: i16 = rupg_catalog::TRIGGER_ROW | rupg_catalog::TRIGGER_INSTEAD;
+
 /// The error of a clause that the analyzer does not take yet.
 pub(crate) fn not_yet(what: &str) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("{what} is not supported yet"))
@@ -324,6 +329,7 @@ impl Analyzer<'_> {
             merge: None,
             recheck,
             updated: Vec::new(),
+            instead: self.is_view(table),
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -530,6 +536,10 @@ impl Analyzer<'_> {
                     format!("cannot change sequence \"{name}\""),
                 ));
             }
+            // `view_has_instead_trigger`: the triggers `INSTEAD OF` of the view do the write.
+            RelKind::View
+                if kind != WriteKind::Merge
+                    && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
             RelKind::View => return Err(not_yet(&format!("{what} a view"))),
             _ => {
                 return Err(Error::new(
@@ -565,6 +575,11 @@ impl Analyzer<'_> {
     pub(crate) fn user_triggers(&self, table: u32, bits: i16) -> bool {
         let Some(catalog) = self.env.catalog() else { return false };
         catalog.triggers().any(|t| user_trigger(t, table) && t.kind & bits == bits)
+    }
+
+    /// True when the target of the write is a view, which only a view with a trigger `INSTEAD OF` for the event can be.
+    pub(crate) fn is_view(&self, table: u32) -> bool {
+        crate::ddl::relkind(self.env, table) == b'v'
     }
 
     /// [`Write::recheck`] for a write of the table with a trigger `BEFORE ... FOR EACH ROW` for the event of `kind`, or `None`.

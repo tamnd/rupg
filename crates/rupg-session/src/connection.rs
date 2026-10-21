@@ -630,12 +630,24 @@ impl Connection {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
         };
+        let triggers = self.write_triggers(info)?;
+        if info.instead {
+            // The triggers `INSTEAD OF` of a view write the rows, and the triggers `FOR EACH STATEMENT` of the view fire before and after them.
+            self.before_statement(&triggers, info)?;
+            let (count, written) = self.instead_rows(info, &triggers, rows)?;
+            self.after_write(info, &triggers, &[], &[])?;
+            let tag = match info.kind {
+                WriteKind::Insert => CommandTag::Insert,
+                WriteKind::Update => CommandTag::Update,
+                _ => CommandTag::Delete,
+            };
+            return Ok(Applied { tag, count, written, view: view.clone(), batches: Vec::new() });
+        }
         let heap = self.store.heap();
         if self.xid.get() == 0 {
             self.xid.set(heap.begin(self.pid));
         }
         let mut view = View { xid: self.xid.get(), ..view.clone() };
-        let triggers = self.write_triggers(info)?;
         let rows = if triggers.is_empty() {
             rows
         } else {
@@ -1611,6 +1623,8 @@ impl Connection {
         let Some(view) = reader.view() else {
             return Err(Error::internal("the reader of the session has no view of the rows"));
         };
+        // `PORTAL_ONE_MOD_WITH`: `FillPortalStore` runs all of a statement with a write in `WITH` before the description of the rows, so all its notices come first.
+        let store = plan.modifying_cte();
         let (plan, writes) = self.start_writes(plan, &[], view)?;
         if plan.write().is_some() {
             let rows = plan.run(&[], &reader);
@@ -1627,6 +1641,9 @@ impl Connection {
                 let ended = self.end_writes(writes, &[], Vec::new());
                 late.extend(self.trigger_notices());
                 ended?;
+                if store {
+                    notices.append(late);
+                }
                 Ok(Done::Rows { columns, rows, tag: CommandTag::Select })
             }
             Err(error) => {
@@ -4691,6 +4708,12 @@ mod tests {
     #[test]
     fn trigger_transition() {
         big_stack(|| script(include_str!("connection/trigger_transition.test")));
+    }
+
+    /// The triggers `INSTEAD OF ... FOR EACH ROW` of a view: an `INSERT`, an `UPDATE` and a `DELETE` of the view with the triggers `FOR EACH STATEMENT` of the view, a trigger that skips a row, `RETURNING` with the row that the trigger gives, `FROM` and `USING`, two triggers in the order of their names, a default of a column of the view, a write in `WITH`, and the errors of `CREATE TRIGGER` for the wrong kind of trigger. `connection/view_instead_triggers.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn view_instead_triggers() {
+        big_stack(|| script(include_str!("connection/view_instead_triggers.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

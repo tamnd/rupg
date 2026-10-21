@@ -130,6 +130,8 @@ impl<'a> PlSpi<'a> {
             ));
         }
         let mark = self.conn.event_mark();
+        // The messages of the triggers that fired before this statement stay in the queue of the outer statement.
+        let said = self.conn.trigger_warnings.borrow().len();
         let rows = plan.run(params, &*reader);
         self.forward(&reader);
         let rows = rows?;
@@ -140,7 +142,7 @@ impl<'a> PlSpi<'a> {
         let view = reader.view().cloned().unwrap_or_default();
         drop(reader);
         let applied = self.conn.apply_write(plan, params, &view, rows);
-        self.forward_triggers();
+        self.forward_triggers(said);
         let Applied { count, written, view, batches, .. } = applied?;
         let rows = if info.returning.is_some() {
             // A subquery of `RETURNING` reads with the snapshot of the statement.
@@ -153,7 +155,7 @@ impl<'a> PlSpi<'a> {
         };
         let fired = if batches.is_empty() { Ok(()) } else { self.conn.fire(batches) };
         let fired = fired.and_then(|()| self.conn.fire_events(mark));
-        self.forward_triggers();
+        self.forward_triggers(said);
         fired?;
         Ok((rows, count))
     }
@@ -163,9 +165,11 @@ impl<'a> PlSpi<'a> {
         self.outer.add_warnings(reader.take_warnings());
     }
 
-    /// The messages of the triggers of a statement of the function go to the reader of the statement that called the function.
-    fn forward_triggers(&self) {
-        self.outer.add_warnings(self.conn.trigger_warnings.take());
+    /// The messages of the triggers of a statement of the function, after the first `said` messages of the queue, go to the reader of the statement that called the function.
+    fn forward_triggers(&self, said: usize) {
+        let mut queue = self.conn.trigger_warnings.borrow_mut();
+        let from = said.min(queue.len());
+        self.outer.add_warnings(queue.split_off(from));
     }
 }
 

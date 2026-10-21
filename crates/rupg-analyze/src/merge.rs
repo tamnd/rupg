@@ -270,6 +270,7 @@ impl Analyzer<'_> {
                 }),
                 recheck: None,
                 updated: Vec::new(),
+                instead: false,
             }),
             ..Query::default()
         };

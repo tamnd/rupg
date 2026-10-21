@@ -58,7 +58,13 @@ impl Analyzer<'_> {
             ..Query::default()
         };
         query.targets.extend(carried_targets(carried));
-        query.targets.push(tid_target());
+        let instead = self.is_view(table);
+        // The triggers `INSTEAD OF` of a view get the old row, as the junk column `wholerow` gives it.
+        if instead {
+            query.targets.extend(old_row(&columns));
+        } else {
+            query.targets.push(tid_target());
+        }
         let checks = self.checks(table)?;
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         let recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks);
@@ -81,6 +87,7 @@ impl Analyzer<'_> {
             merge: None,
             recheck,
             updated: set_columns(&s.targetList, &columns),
+            instead,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -190,7 +197,12 @@ impl Analyzer<'_> {
             targets = old_row(&columns);
             targets.extend(carried_targets(carried));
         }
-        targets.push(tid_target());
+        let instead = self.is_view(table);
+        if instead {
+            targets.extend(old_row(&columns));
+        } else {
+            targets.push(tid_target());
+        }
         let mut query = Query {
             relations: std::mem::take(&mut self.scope.relations),
             from,
@@ -209,6 +221,7 @@ impl Analyzer<'_> {
                 merge: None,
                 recheck: None,
                 updated: Vec::new(),
+                instead,
             }),
             ..Query::default()
         };
