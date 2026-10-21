@@ -364,6 +364,9 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 RelKind::Index => {
                     rel.index.as_ref().map_or((0, 1, 0.0), |i| (i.method, i.pages, 0.0))
                 }
+                RelKind::PartitionedIndex => {
+                    rel.index.as_ref().map_or((0, 0, -1.0), |i| (i.method, 0, -1.0))
+                }
                 RelKind::Sequence => (0, 1, 1.0),
                 RelKind::View | RelKind::Composite | RelKind::Partitioned => (0, 0, -1.0),
             };
@@ -380,7 +383,13 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     "relfilenode",
                     oid(match (&rel.sequence, rel.kind) {
                         (Some(info), _) => info.file,
-                        (None, RelKind::View | RelKind::Composite | RelKind::Partitioned) => 0,
+                        (
+                            None,
+                            RelKind::View
+                            | RelKind::Composite
+                            | RelKind::Partitioned
+                            | RelKind::PartitionedIndex,
+                        ) => 0,
                         (None, _) => rel.oid,
                     }),
                 )
@@ -408,9 +417,11 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("relhastriggers", Value::Bool(rel.has_triggers))
                 .set(
                     "relhassubclass",
-                    Value::Bool(
-                        rel.kind == RelKind::Partitioned && has_partitions(catalog, rel.oid),
-                    ),
+                    Value::Bool(match rel.kind {
+                        RelKind::Partitioned => has_partitions(catalog, rel.oid),
+                        RelKind::PartitionedIndex => has_index_partitions(catalog, rel.oid),
+                        _ => false,
+                    }),
                 )
                 .set("relrowsecurity", Value::Bool(false))
                 .set("relforcerowsecurity", Value::Bool(false))
@@ -423,7 +434,13 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                         c => char::from(c),
                     }),
                 )
-                .set("relispartition", Value::Bool(rel.partition_of.is_some()))
+                .set(
+                    "relispartition",
+                    Value::Bool(
+                        rel.partition_of.is_some()
+                            || rel.index.as_ref().is_some_and(|i| i.parent != 0),
+                    ),
+                )
                 .set(
                     "relpartbound",
                     rel.partition_of
@@ -597,7 +614,10 @@ fn attributes<'a>(
     }
     let mut rows = Vec::new();
     for rel in catalog.relations() {
-        if !matches!(rel.kind, RelKind::Index | RelKind::View | RelKind::Composite) {
+        if !matches!(
+            rel.kind,
+            RelKind::Index | RelKind::PartitionedIndex | RelKind::View | RelKind::Composite
+        ) {
             for &template in &system {
                 let mut row = Row::copy(table, template, session)?;
                 row.set("attrelid", oid(rel.oid));
@@ -662,6 +682,11 @@ fn has_partitions(catalog: &Catalog, parent: u32) -> bool {
     catalog.relations().any(|r| r.partition_of.as_ref().is_some_and(|p| p.parent == parent))
 }
 
+/// True for a partitioned index with a partition, as `relhassubclass` of `IndexSetParentIndex` gives it.
+fn has_index_partitions(catalog: &Catalog, parent: u32) -> bool {
+    catalog.relations().any(|r| r.index.as_ref().is_some_and(|i| i.parent == parent))
+}
+
 /// The rows of `pg_partitioned_table`: the partition key of each partitioned table and its default partition.
 fn partitioned_tables<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     catalog
@@ -692,12 +717,16 @@ fn partitioned_tables<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-/// The rows of `pg_inherits`: one row for each partition, with the sequence number 1.
+/// The rows of `pg_inherits`: one row for each partition and for each index of a partition that is a partition of an index of the parent table, with the sequence number 1.
 fn inherits<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     catalog
         .relations()
         .filter_map(|rel| {
-            let parent = rel.partition_of.as_ref()?.parent;
+            let parent = match (&rel.partition_of, &rel.index) {
+                (Some(of), _) => of.parent,
+                (None, Some(info)) if info.parent != 0 => info.parent,
+                _ => return None,
+            };
             let mut row = Row::new(table);
             row.set("inhrelid", oid(rel.oid))
                 .set("inhparent", oid(parent))
@@ -741,7 +770,7 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
         .set("conrelid", oid(con.relation))
         .set("contypid", oid(con.domain))
         .set("conindid", oid(con.index))
-        .set("conparentid", oid(0))
+        .set("conparentid", oid(con.parent))
         .set("confrelid", oid(foreign.map_or(0, |f| f.table)))
         .set("confupdtype", code(foreign.map_or(' ', |f| f.update)))
         .set("confdeltype", code(foreign.map_or(' ', |f| f.delete)))
@@ -810,7 +839,7 @@ fn indexes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("indisexclusion", Value::Bool(false))
                 .set("indimmediate", Value::Bool(info.immediate))
                 .set("indisclustered", Value::Bool(info.clustered))
-                .set("indisvalid", Value::Bool(true))
+                .set("indisvalid", Value::Bool(info.valid))
                 .set("indcheckxmin", Value::Bool(false))
                 .set("indisready", Value::Bool(true))
                 .set("indislive", Value::Bool(true))

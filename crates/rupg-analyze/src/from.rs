@@ -1293,7 +1293,7 @@ impl Analyzer<'_> {
                 .collect());
         }
         if let Some(rel) = self.env.catalog().and_then(|c| c.relation(oid)) {
-            if rel.kind == RelKind::Index {
+            if matches!(rel.kind, RelKind::Index | RelKind::PartitionedIndex) {
                 return Err(index_error());
             }
             return Ok(rel

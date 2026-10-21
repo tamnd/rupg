@@ -1,0 +1,276 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE r (a int, b text, c int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE r2 PARTITION OF r FOR VALUES FROM (10) TO (20) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE r2x PARTITION OF r2 FOR VALUES IN ('x');
+CREATE TABLE
+> CREATE INDEX r1_c_own ON r1 (c);
+CREATE INDEX
+> CREATE INDEX r1_b_desc ON r1 (b DESC);
+CREATE INDEX
+> CREATE INDEX ON r (c);
+CREATE INDEX
+> CREATE INDEX rb ON r (b);
+CREATE INDEX
+> CREATE INDEX ON r ((a + c));
+CREATE INDEX
+> SELECT c.relname, c.relkind, i.indisvalid, i.indisunique, i.indrelid::regclass AS tab, pg_get_indexdef(i.indexrelid) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid::regclass::text LIKE 'r%' ORDER BY c.relname;
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,indisvalid@pg_index.11:16:1:-1,indisunique@pg_index.5:16:1:-1,tab:2205:4:-1,pg_get_indexdef:25:-1:-1
+row r1_b_desc,i,t,f,r1,CREATE INDEX r1_b_desc ON public.r1 USING btree (b DESC)
+row r1_c_own,i,t,f,r1,CREATE INDEX r1_c_own ON public.r1 USING btree (c)
+row r1_expr_idx,i,t,f,r1,CREATE INDEX r1_expr_idx ON public.r1 USING btree (((a + c)))
+row r2_b_idx,I,t,f,r2,CREATE INDEX r2_b_idx ON ONLY public.r2 USING btree (b)
+row r2_c_idx,I,t,f,r2,CREATE INDEX r2_c_idx ON ONLY public.r2 USING btree (c)
+row r2_expr_idx,I,t,f,r2,CREATE INDEX r2_expr_idx ON ONLY public.r2 USING btree (((a + c)))
+row r2x_b_idx,i,t,f,r2x,CREATE INDEX r2x_b_idx ON public.r2x USING btree (b)
+row r2x_c_idx,i,t,f,r2x,CREATE INDEX r2x_c_idx ON public.r2x USING btree (c)
+row r2x_expr_idx,i,t,f,r2x,CREATE INDEX r2x_expr_idx ON public.r2x USING btree (((a + c)))
+row r_c_idx,I,t,f,r,CREATE INDEX r_c_idx ON ONLY public.r USING btree (c)
+row r_expr_idx,I,t,f,r,CREATE INDEX r_expr_idx ON ONLY public.r USING btree (((a + c)))
+row rb,I,t,f,r,CREATE INDEX rb ON ONLY public.r USING btree (b)
+SELECT 12
+> SELECT inhrelid::regclass::text AS child, inhparent::regclass::text AS parent, inhseqno FROM pg_inherits ORDER BY 1, 2;
+fields child:25:-1:-1,parent:25:-1:-1,inhseqno@pg_inherits.3:23:4:-1
+row r1,r,1
+row r1_b_desc,rb,1
+row r1_c_own,r_c_idx,1
+row r1_expr_idx,r_expr_idx,1
+row r2,r,1
+row r2_b_idx,rb,1
+row r2_c_idx,r_c_idx,1
+row r2_expr_idx,r_expr_idx,1
+row r2x,r2,1
+row r2x_b_idx,r2_b_idx,1
+row r2x_c_idx,r2_c_idx,1
+row r2x_expr_idx,r2_expr_idx,1
+SELECT 12
+> CREATE TABLE r3 PARTITION OF r FOR VALUES FROM (20) TO (30);
+CREATE TABLE
+> SELECT c.relname, c.relkind, pg_get_indexdef(i.indexrelid) FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE i.indrelid = 'r3'::regclass ORDER BY c.relname;
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,pg_get_indexdef:25:-1:-1
+row r3_b_idx,i,CREATE INDEX r3_b_idx ON public.r3 USING btree (b)
+row r3_c_idx,i,CREATE INDEX r3_c_idx ON public.r3 USING btree (c)
+row r3_expr_idx,i,CREATE INDEX r3_expr_idx ON public.r3 USING btree (((a + c)))
+SELECT 3
+> SELECT indexname, tablename, indexdef FROM pg_indexes WHERE tablename LIKE 'r%' ORDER BY indexname;
+fields indexname@pg_indexes.3:19:64:-1,tablename@pg_indexes.2:19:64:-1,indexdef@pg_indexes.5:25:-1:-1
+row r1_b_desc,r1,CREATE INDEX r1_b_desc ON public.r1 USING btree (b DESC)
+row r1_c_own,r1,CREATE INDEX r1_c_own ON public.r1 USING btree (c)
+row r1_expr_idx,r1,CREATE INDEX r1_expr_idx ON public.r1 USING btree (((a + c)))
+row r2_b_idx,r2,CREATE INDEX r2_b_idx ON ONLY public.r2 USING btree (b)
+row r2_c_idx,r2,CREATE INDEX r2_c_idx ON ONLY public.r2 USING btree (c)
+row r2_expr_idx,r2,CREATE INDEX r2_expr_idx ON ONLY public.r2 USING btree (((a + c)))
+row r2x_b_idx,r2x,CREATE INDEX r2x_b_idx ON public.r2x USING btree (b)
+row r2x_c_idx,r2x,CREATE INDEX r2x_c_idx ON public.r2x USING btree (c)
+row r2x_expr_idx,r2x,CREATE INDEX r2x_expr_idx ON public.r2x USING btree (((a + c)))
+row r3_b_idx,r3,CREATE INDEX r3_b_idx ON public.r3 USING btree (b)
+row r3_c_idx,r3,CREATE INDEX r3_c_idx ON public.r3 USING btree (c)
+row r3_expr_idx,r3,CREATE INDEX r3_expr_idx ON public.r3 USING btree (((a + c)))
+row r_c_idx,r,CREATE INDEX r_c_idx ON ONLY public.r USING btree (c)
+row r_expr_idx,r,CREATE INDEX r_expr_idx ON ONLY public.r USING btree (((a + c)))
+row rb,r,CREATE INDEX rb ON ONLY public.r USING btree (b)
+SELECT 15
+> CREATE UNIQUE INDEX ON r (b);
+ERROR 0A000 UNIQUE constraint on partitioned table must include all partitioning columns
+DETAIL UNIQUE constraint on table "r" lacks column "a" which is part of the partition key.
+> CREATE UNIQUE INDEX ru ON r (a, b);
+CREATE INDEX
+> CREATE UNIQUE INDEX ON r ((a + 1));
+ERROR 0A000 UNIQUE constraint on partitioned table must include all partitioning columns
+DETAIL UNIQUE constraint on table "r" lacks column "a" which is part of the partition key.
+> INSERT INTO r VALUES (1, 'a', 1), (2, 'a', 2), (15, 'x', 3), (25, 'q', 4);
+INSERT 0 4
+> INSERT INTO r VALUES (1, 'a', 5);
+ERROR 23505 duplicate key value violates unique constraint "r1_a_b_idx"
+DETAIL Key (a, b)=(1, a) already exists.
+> INSERT INTO r VALUES (15, 'x', 5);
+ERROR 23505 duplicate key value violates unique constraint "r2x_a_b_idx"
+DETAIL Key (a, b)=(15, x) already exists.
+> INSERT INTO r VALUES (1, 'b', 5), (26, 'q', 5);
+INSERT 0 2
+> UPDATE r SET a = 2 WHERE a = 1 AND b = 'a';
+ERROR 23505 duplicate key value violates unique constraint "r1_a_b_idx"
+DETAIL Key (a, b)=(2, a) already exists.
+> UPDATE r SET a = 25 WHERE a = 1 AND b = 'b';
+UPDATE 1
+> UPDATE r SET a = 26, b = 'q' WHERE a = 2;
+ERROR 23505 duplicate key value violates unique constraint "r3_a_b_idx"
+DETAIL Key (a, b)=(26, q) already exists.
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,1
+row r1,2,a,2
+row r2x,15,x,3
+row r3,25,b,5
+row r3,25,q,4
+row r3,26,q,5
+SELECT 6
+> DROP INDEX r1_c_own;
+ERROR 2BP01 cannot drop index r1_c_own because index r_c_idx requires it
+HINT You can drop index r_c_idx instead.
+> DROP INDEX r2_c_idx;
+ERROR 2BP01 cannot drop index r2_c_idx because index r_c_idx requires it
+HINT You can drop index r_c_idx instead.
+> DROP INDEX r2x_b_idx;
+ERROR 2BP01 cannot drop index r2x_b_idx because index r2_b_idx requires it
+HINT You can drop index r2_b_idx instead.
+> DROP INDEX r_c_idx;
+DROP INDEX
+> SELECT relname FROM pg_class WHERE relname LIKE 'r%' AND relkind IN ('i', 'I') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row r1_a_b_idx
+row r1_b_desc
+row r1_expr_idx
+row r2_a_b_idx
+row r2_b_idx
+row r2_expr_idx
+row r2x_a_b_idx
+row r2x_b_idx
+row r2x_expr_idx
+row r3_a_b_idx
+row r3_b_idx
+row r3_expr_idx
+row r_expr_idx
+row rb
+row ru
+SELECT 15
+> CREATE INDEX ri ON ONLY r (a);
+CREATE INDEX
+> SELECT c.relname, i.indisvalid FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid WHERE c.relname = 'ri';
+fields relname@pg_class.2:19:64:-1,indisvalid@pg_index.11:16:1:-1
+row ri,f
+SELECT 1
+> SELECT pg_get_indexdef('ri'::regclass);
+fields pg_get_indexdef:25:-1:-1
+row CREATE INDEX ri ON ONLY public.r USING btree (a)
+SELECT 1
+> CREATE TABLE r4 PARTITION OF r FOR VALUES FROM (30) TO (40);
+CREATE TABLE
+> SELECT relname FROM pg_class WHERE relname LIKE 'r4%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row r4
+row r4_a_b_idx
+row r4_a_idx
+row r4_b_idx
+row r4_expr_idx
+SELECT 5
+> DROP INDEX ri;
+DROP INDEX
+> CREATE TABLE k (id int PRIMARY KEY, v text) PARTITION BY HASH (id);
+CREATE TABLE
+> CREATE TABLE k0 PARTITION OF k FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE k1 PARTITION OF k FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+CREATE TABLE
+> SELECT conname, contype, conrelid::regclass::text AS tab, conindid::regclass::text AS idx, conparentid <> 0 AS has_parent, conislocal, coninhcount FROM pg_constraint WHERE conrelid::regclass::text LIKE 'k%' ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,tab:25:-1:-1,idx:25:-1:-1,has_parent:16:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row k0_pkey,p,k0,k0_pkey,t,f,1
+row k1_pkey,p,k1,k1_pkey,t,f,1
+row k_id_not_null,n,k,-,f,t,0
+row k_id_not_null,n,k0,-,f,f,1
+row k_id_not_null,n,k1,-,f,f,1
+row k_pkey,p,k,k_pkey,f,t,0
+SELECT 6
+> SELECT attname, attnotnull FROM pg_attribute WHERE attrelid = 'k1'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1
+row id,t
+row v,f
+SELECT 2
+> INSERT INTO k VALUES (1, 'a'), (2, 'b'), (3, 'c');
+INSERT 0 3
+> INSERT INTO k VALUES (1, 'd');
+ERROR 23505 duplicate key value violates unique constraint "k0_pkey"
+DETAIL Key (id)=(1) already exists.
+> INSERT INTO k VALUES (NULL, 'd');
+ERROR 23502 null value in column "id" of relation "k0" violates not-null constraint
+DETAIL Failing row contains (null, d).
+> COPY k FROM STDIN;
+< 4	e
+< 3	f
+< \.
+<done
+copy in 0 0,0
+ERROR 23505 duplicate key value violates unique constraint "k1_pkey" (COPY k, line 2)
+DETAIL Key (id)=(3) already exists.
+> UPDATE k SET id = 2 WHERE id = 1;
+ERROR 23505 duplicate key value violates unique constraint "k0_pkey"
+DETAIL Key (id)=(2) already exists.
+> SELECT tableoid::regclass, * FROM k ORDER BY id;
+fields tableoid:2205:4:-1,id@k.1:23:4:-1,v@k.2:25:-1:-1
+row k0,1,a
+row k0,2,b
+row k1,3,c
+SELECT 3
+> DROP INDEX k1_pkey;
+ERROR 2BP01 cannot drop index k1_pkey because index k_pkey requires it
+HINT You can drop index k_pkey instead.
+> DROP INDEX k_pkey;
+ERROR 2BP01 cannot drop index k_pkey because constraint k_pkey on table k requires it
+HINT You can drop constraint k_pkey on table k instead.
+> CREATE TABLE u (a int, b int, UNIQUE (b)) PARTITION BY RANGE (a);
+ERROR 0A000 UNIQUE constraint on partitioned table must include all partitioning columns
+DETAIL UNIQUE constraint on table "u" lacks column "a" which is part of the partition key.
+> CREATE TABLE u (a int, b int, PRIMARY KEY (b)) PARTITION BY LIST (a);
+ERROR 0A000 PRIMARY KEY constraint on partitioned table must include all partitioning columns
+DETAIL PRIMARY KEY constraint on table "u" lacks column "a" which is part of the partition key.
+> CREATE TABLE u (a int, b int, PRIMARY KEY (a)) PARTITION BY RANGE ((a + b));
+ERROR 0A000 unsupported PRIMARY KEY constraint with partition key definition
+DETAIL PRIMARY KEY constraints cannot be used when partition keys include expressions.
+> CREATE TABLE u (a int, b int, UNIQUE (a, b)) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE u1 PARTITION OF u FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> SELECT conname, contype, conrelid::regclass::text AS tab FROM pg_constraint WHERE conrelid::regclass::text LIKE 'u%' ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,tab:25:-1:-1
+row u1_a_b_key,u,u1
+row u_a_b_key,u,u
+SELECT 2
+> CREATE TABLE s (a int, b int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE s1 PARTITION OF s (PRIMARY KEY (a, b)) FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE s2 (a int, b int UNIQUE);
+CREATE TABLE
+> INSERT INTO s VALUES (1, 1);
+INSERT 0 1
+> INSERT INTO s VALUES (1, 1);
+ERROR 23505 duplicate key value violates unique constraint "s1_pkey"
+DETAIL Key (a, b)=(1, 1) already exists.
+> SELECT conname, contype, conrelid::regclass::text AS tab FROM pg_constraint WHERE conrelid::regclass::text LIKE 's%' ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,tab:25:-1:-1
+row s1_a_not_null,n,s1
+row s1_b_not_null,n,s1
+row s1_pkey,p,s1
+row s2_b_key,u,s2
+SELECT 4
+> DROP TABLE r1;
+DROP TABLE
+> SELECT relname FROM pg_class WHERE relname LIKE 'r%' AND relkind IN ('i', 'I') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+row r2_a_b_idx
+row r2_b_idx
+row r2_expr_idx
+row r2x_a_b_idx
+row r2x_b_idx
+row r2x_expr_idx
+row r3_a_b_idx
+row r3_b_idx
+row r3_expr_idx
+row r4_a_b_idx
+row r4_b_idx
+row r4_expr_idx
+row r_expr_idx
+row rb
+row ru
+SELECT 15
+> DROP TABLE r;
+DROP TABLE
+> SELECT count(*) FROM pg_class WHERE relname LIKE 'r%' AND relkind IN ('i', 'I');
+fields count:20:8:-1
+row 0
+SELECT 1

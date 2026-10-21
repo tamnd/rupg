@@ -365,7 +365,10 @@ fn owned(catalog: &Catalog, role: u32) -> Vec<ObjRef> {
         add(PG_NAMESPACE, s.oid, s.owner);
     }
     for r in catalog.relations() {
-        if !matches!(r.kind, RelKind::Index | RelKind::Toast | RelKind::Composite) {
+        if !matches!(
+            r.kind,
+            RelKind::Index | RelKind::PartitionedIndex | RelKind::Toast | RelKind::Composite
+        ) {
             add(PG_CLASS, r.oid, r.owner);
         }
     }

@@ -23,8 +23,12 @@ pub mod flag {
     pub const INTERNAL: u32 = 0x0008;
     /// `DEPFLAG_EXTENSION`: the object is a member of an extension that the walk removes.
     pub const EXTENSION: u32 = 0x0010;
+    /// `DEPFLAG_PARTITION`: a partition dependency reached the object.
+    pub const PARTITION: u32 = 0x0020;
     /// `DEPFLAG_REVERSE`: the walk came to the object from a part of it.
     pub const REVERSE: u32 = 0x0040;
+    /// `DEPFLAG_IS_PART`: the object has a partition dependency, so the walk must also remove the object that it is a partition of.
+    pub const IS_PART: u32 = 0x0080;
     /// `DEPFLAG_SUBOBJECT`: the object is a column of a relation that the walk also removes.
     pub const SUBOBJECT: u32 = 0x0100;
 }
@@ -36,7 +40,7 @@ pub struct Target {
     pub object: ObjRef,
     /// The bits of [`flag`].
     pub flags: u32,
-    /// The object that the walk came from, or `None` for an object that the statement names.
+    /// The object that the walk came from, or `None` for an object that the statement names. For an object with [`flag::IS_PART`], the object that it is a partition of.
     pub dependee: Option<ObjRef>,
 }
 
@@ -49,7 +53,7 @@ pub enum Refusal {
     Owned {
         /// The object.
         object: ObjRef,
-        /// The object that it is a part of.
+        /// The object that it is a part of, or the object that it is a partition of.
         owner: ObjRef,
     },
 }
@@ -124,11 +128,11 @@ impl Catalog {
         Ok(targets)
     }
 
-    /// `findDependentObjects`: adds the object to `targets` after the objects that depend on it.
+    /// `findDependentObjects`: adds the object to `targets` after the objects that depend on it. A partition dependency of the object on a primary object, else on a secondary object, gives the object [`flag::IS_PART`] and the object that it is a partition of.
     fn find_dependents(
         &self,
         object: ObjRef,
-        flags: u32,
+        mut flags: u32,
         stack: &mut Vec<Frame>,
         targets: &mut Vec<Target>,
         pending: &[ObjRef],
@@ -142,15 +146,27 @@ impl Catalog {
         if is_pinned(object) {
             return Err(Refusal::Pinned(object));
         }
-        let owners: Vec<ObjRef> = self
-            .depends
-            .iter()
-            .filter(|d| {
-                covers(object, d.object) && matches!(d.kind, DepKind::Internal | DepKind::Extension)
-            })
-            .map(|d| d.referenced)
-            .filter(|r| !is_self(object, *r))
-            .collect();
+        let mut owners = Vec::new();
+        let mut partition = None;
+        for d in self.depends.iter().filter(|d| covers(object, d.object)) {
+            if is_self(object, d.referenced) {
+                continue;
+            }
+            match d.kind {
+                DepKind::Internal | DepKind::Extension => owners.push(d.referenced),
+                DepKind::PartitionPri => {
+                    flags |= flag::IS_PART;
+                    partition = Some(d.referenced);
+                }
+                DepKind::PartitionSec => {
+                    if flags & flag::IS_PART == 0 {
+                        partition = Some(d.referenced);
+                    }
+                    flags |= flag::IS_PART;
+                }
+                DepKind::Normal | DepKind::Auto => {}
+            }
+        }
         let mut owner = None;
         for other in owners {
             if stack.is_empty() {
@@ -168,7 +184,7 @@ impl Catalog {
             return Ok(());
         }
         if let Some(owner) = owner {
-            return Err(Refusal::Owned { object, owner });
+            return Err(Refusal::Owned { object, owner: partition.unwrap_or(owner) });
         }
         let mut dependents: Vec<(ObjRef, u32)> = self
             .depends
@@ -180,6 +196,7 @@ impl Catalog {
                     DepKind::Auto => flag::AUTO,
                     DepKind::Internal => flag::INTERNAL,
                     DepKind::Extension => flag::EXTENSION,
+                    DepKind::PartitionPri | DepKind::PartitionSec => flag::PARTITION,
                 };
                 (d.object, flags)
             })
@@ -190,7 +207,11 @@ impl Catalog {
             self.find_dependents(dependent, flags, stack, targets, pending)?;
         }
         let frame = stack.pop().unwrap_or(Frame { object, flags });
-        let dependee = stack.last().map(|f| f.object);
+        let dependee = if frame.flags & flag::IS_PART != 0 {
+            partition
+        } else {
+            stack.last().map(|f| f.object)
+        };
         targets.push(Target { object, flags: frame.flags, dependee });
         Ok(())
     }

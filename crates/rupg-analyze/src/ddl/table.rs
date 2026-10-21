@@ -285,9 +285,14 @@ impl Definer<'_, '_> {
             partbound: stmt.partbound.as_deref().cloned(),
             parent: None,
         };
+        // The table constraints of a partition come after the columns of the parent table, as `transformIndexConstraint` finds the key columns of a partition in its parent table.
+        let mut partition_constraints = Vec::new();
         for element in stmt.tableElts.iter().flatten() {
             match element {
                 Node::ColumnDef(def) => self.column_definition(&mut plan, def)?,
+                Node::Constraint(con) if plan.partbound.is_some() => {
+                    partition_constraints.push(con)
+                }
                 Node::Constraint(con) => table_constraint(&mut plan, con)?,
                 _ => return Err(not_yet("CREATE TABLE LIKE", at)),
             }
@@ -302,17 +307,15 @@ impl Definer<'_, '_> {
             let parent = self.partition_parent(&stmt.inhRelations, namespace)?;
             self.merge_partition_columns(&mut plan, parent)?;
             plan.parent = Some(parent);
+            for con in partition_constraints {
+                table_constraint(&mut plan, con)?;
+            }
         } else if !stmt.inhRelations.is_empty() {
             self.check_inherits(&stmt.inhRelations)?;
             return Err(not_yet("INHERITS", at));
         }
-        if (plan.partspec.is_some() || plan.parent.is_some())
-            && (!plan.indexes.is_empty() || !plan.foreign.is_empty())
-        {
-            return Err(not_yet(
-                "a key or a foreign key of a partitioned table or a partition",
-                at,
-            ));
+        if (plan.partspec.is_some() || plan.parent.is_some()) && !plan.foreign.is_empty() {
+            return Err(not_yet("a foreign key of a partitioned table or a partition", at));
         }
         let mut table_rv = rv.clone();
         table_rv.schemaname = Some(self.schema_name(namespace).into());
@@ -335,6 +338,9 @@ impl Definer<'_, '_> {
         let table = self.define_relation(&plan)?;
         if !options.is_empty() {
             self.catalog.set_options(table, options)?;
+        }
+        if let Some(parent) = plan.parent {
+            self.clone_partition_indexes(table, parent)?;
         }
         self.create_toast_options(table, &stmt.options)?;
         for index in &indexes {

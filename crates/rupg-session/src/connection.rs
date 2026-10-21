@@ -4849,6 +4849,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_copy.test")));
     }
 
+    /// Indexes, unique indexes and primary keys of partitioned tables: the index of each partition with an index that matches or a new index, `ONLY`, the indexes of a new partition, the checks of the partition key, the unique keys of the partitions in `INSERT`, `UPDATE` and `COPY`, and `DROP INDEX` and `DROP TABLE` with the partition dependencies. `connection/partition_index.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_index() {
+        big_stack(|| script(include_str!("connection/partition_index.test")));
+    }
+
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn array_agg_array() {

@@ -142,6 +142,8 @@ pub enum RelKind {
     Composite,
     /// A partitioned table, `p`. It has no storage. Its rows are in its partitions.
     Partitioned,
+    /// The index of a partitioned table, `I`. It has no storage. Its partitions are the indexes of the partitions of the table.
+    PartitionedIndex,
 }
 
 impl RelKind {
@@ -155,6 +157,7 @@ impl RelKind {
             RelKind::View => 'v',
             RelKind::Composite => 'c',
             RelKind::Partitioned => 'p',
+            RelKind::PartitionedIndex => 'I',
         }
     }
 }
@@ -252,6 +255,10 @@ pub struct IndexInfo {
     pub clustered: bool,
     /// `indisreplident`: `REPLICA IDENTITY USING INDEX` chose the index.
     pub replica_identity: bool,
+    /// `indisvalid`: false for an index of a partitioned table that a partition does not have yet.
+    pub valid: bool,
+    /// The index of the parent table that the index is a partition of, from `pg_inherits`, or 0.
+    pub parent: u32,
 }
 
 /// The facts of a sequence, one row of `pg_sequence`.
@@ -687,6 +694,8 @@ pub struct Constraint {
     pub local: bool,
     /// `coninhcount`: the number of parent tables that give the constraint.
     pub inhcount: i16,
+    /// `conparentid`: the constraint of the parent table that a constraint of a partition comes from, or 0.
+    pub parent: u32,
     /// The expression of a check constraint, in the form of the analyzer.
     pub expr: Option<String>,
     /// The facts of a foreign key.
@@ -869,6 +878,10 @@ pub enum DepKind {
     Internal,
     /// `e`: the dependent object is a member of the referenced extension.
     Extension,
+    /// `P`: the dependent object is a partition of the referenced object, as an index of a partition is of the index of the partitioned table.
+    PartitionPri,
+    /// `S`: the dependent object is a partition of an object of the referenced object, as an index of a partition is of the index of the partitioned table through the partition.
+    PartitionSec,
 }
 
 impl DepKind {
@@ -879,6 +892,8 @@ impl DepKind {
             DepKind::Auto => 'a',
             DepKind::Internal => 'i',
             DepKind::Extension => 'e',
+            DepKind::PartitionPri => 'P',
+            DepKind::PartitionSec => 'S',
         }
     }
 }
@@ -1917,6 +1932,44 @@ impl Catalog {
             .collect()
     }
 
+    /// `IndexSetParentIndex`: the index becomes a partition of the index `parent` of the parent table, with the partition dependencies on `parent` and on its table.
+    pub fn set_index_parent(&mut self, index: u32, parent: u32) -> Result<()> {
+        let rel = self.relation_mut(index)?;
+        let table = rel.index.as_ref().map_or(0, |i| i.table);
+        if let Some(info) = rel.index.as_mut() {
+            info.parent = parent;
+        }
+        let me = ObjRef::new(PG_CLASS, index);
+        self.depend(me, ObjRef::new(PG_CLASS, parent), DepKind::PartitionPri);
+        self.depend(me, ObjRef::new(PG_CLASS, table), DepKind::PartitionSec);
+        Ok(())
+    }
+
+    /// `ConstraintSetParentConstraint`: the constraint of a partition comes from the constraint `parent` of the parent table, with the partition dependencies on `parent` and on the table of the constraint.
+    pub fn set_constraint_parent(&mut self, constraint: u32, parent: u32) -> Result<()> {
+        let con = self
+            .constraints
+            .get_mut(&constraint)
+            .ok_or_else(|| no_object("constraint", constraint))?;
+        con.parent = parent;
+        con.local = false;
+        con.inhcount = con.inhcount.saturating_add(1);
+        con.no_inherit = false;
+        let table = con.relation;
+        let me = ObjRef::new(PG_CONSTRAINT, constraint);
+        self.depend(me, ObjRef::new(PG_CONSTRAINT, parent), DepKind::PartitionPri);
+        self.depend(me, ObjRef::new(PG_CLASS, table), DepKind::PartitionSec);
+        Ok(())
+    }
+
+    /// Sets `indisvalid` of an index.
+    pub fn set_index_valid(&mut self, index: u32, valid: bool) -> Result<()> {
+        if let Some(info) = self.relation_mut(index)?.index.as_mut() {
+            info.valid = valid;
+        }
+        Ok(())
+    }
+
     /// Sets `conislocal` and `coninhcount` of a constraint that a parent table gives.
     pub fn set_constraint_inherited(
         &mut self,
@@ -2889,6 +2942,7 @@ impl Catalog {
             no_inherit: false,
             local: true,
             inhcount: 0,
+            parent: 0,
             expr: None,
             foreign: None,
         }
@@ -3012,8 +3066,12 @@ impl Catalog {
             pages: new.pages,
             clustered: false,
             replica_identity: false,
+            valid: true,
+            parent: 0,
         };
         let table_columns = self.relations.get(&new.table).map_or(&[][..], |r| &r.columns[..]);
+        let partitioned =
+            self.relations.get(&new.table).is_some_and(|r| r.kind == RelKind::Partitioned);
         let columns = new
             .columns
             .iter()
@@ -3035,7 +3093,7 @@ impl Catalog {
                 oid,
                 name: name.clone(),
                 namespace,
-                kind: RelKind::Index,
+                kind: if partitioned { RelKind::PartitionedIndex } else { RelKind::Index },
                 owner,
                 row_type: 0,
                 columns,
@@ -3225,6 +3283,8 @@ impl Catalog {
             pages: 1,
             clustered: false,
             replica_identity: false,
+            valid: true,
+            parent: 0,
         };
         self.relations.insert(
             index,

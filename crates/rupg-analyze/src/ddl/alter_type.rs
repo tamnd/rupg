@@ -264,7 +264,7 @@ impl Definer<'_, '_> {
                 }
                 PG_CLASS if object.sub == 0 => {
                     match self.catalog.relation(object.oid).map(|r| r.kind) {
-                        Some(RelKind::Index) => {
+                        Some(RelKind::Index | RelKind::PartitionedIndex) => {
                             changed.indexes.insert(object.oid);
                         }
                         // The sequence of a `serial` column or of an identity column needs no change.

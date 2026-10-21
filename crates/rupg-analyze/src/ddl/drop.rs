@@ -92,18 +92,16 @@ pub(super) fn owner_word(code: u8) -> &'static str {
     }
 }
 
-/// The word of `getRelationDescription` for a `relkind`.
+/// The word of `getRelationDescription` for a `relkind`. A partitioned table is a table, and a partitioned index is an index.
 fn relation_word(code: u8) -> &'static str {
     match code {
-        b'i' => "index",
+        b'i' | b'I' => "index",
         b'S' => "sequence",
         b't' => "toast table",
         b'v' => "view",
         b'm' => "materialized view",
         b'c' => "composite type",
         b'f' => "foreign table",
-        b'p' => "partitioned table",
-        b'I' => "partitioned index",
         _ => "table",
     }
 }
@@ -357,18 +355,30 @@ impl Definer<'_, '_> {
                 .with_hint(format!("You can drop {owner} instead.")));
             }
         };
+        // `reportDependentObjects`: a partition of an object goes only with the object that it is a partition of.
+        if let Some(target) =
+            targets.iter().find(|t| t.flags & flag::IS_PART != 0 && t.flags & flag::PARTITION == 0)
+        {
+            let other = target.dependee.map_or_else(String::new, |other| self.describe(other));
+            return Err(Error::new(
+                SqlState::DEPENDENT_OBJECTS_STILL_EXIST,
+                format!("cannot drop {} because {other} requires it", self.describe(target.object)),
+            )
+            .with_hint(format!("You can drop {other} instead.")));
+        }
         self.report(&targets, cascade, objects)?;
         self.catalog.remove(&targets)
     }
 
-    /// `reportDependentObjects`: the error of `RESTRICT` when other objects depend on the objects, or the notice of `CASCADE` with the objects that also go. The objects that go by an automatic, an internal or an extension dependency are not in the report.
+    /// `reportDependentObjects`: the error of `RESTRICT` when other objects depend on the objects, or the notice of `CASCADE` with the objects that also go. The objects that go by an automatic, an internal, a partition or an extension dependency are not in the report.
     fn report(&mut self, targets: &[Target], cascade: bool, objects: &[ObjRef]) -> Result<()> {
         let mut lines = Vec::new();
         let mut hidden = 0;
         let mut ok = true;
         for target in targets.iter().rev() {
             if target.flags & (flag::ORIGINAL | flag::SUBOBJECT) != 0
-                || target.flags & (flag::AUTO | flag::INTERNAL | flag::EXTENSION) != 0
+                || target.flags & (flag::AUTO | flag::INTERNAL | flag::PARTITION | flag::EXTENSION)
+                    != 0
             {
                 continue;
             }
@@ -499,7 +509,7 @@ impl Definer<'_, '_> {
         let (code, namespace, name) = match self.catalog.relation(oid) {
             Some(rel) => {
                 let code = match rel.kind {
-                    RelKind::Index => b'i',
+                    RelKind::Index | RelKind::PartitionedIndex => b'i',
                     RelKind::Sequence => b'S',
                     RelKind::Toast => b't',
                     RelKind::View => b'v',

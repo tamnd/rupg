@@ -20,6 +20,7 @@ mod identity;
 mod index;
 mod lock;
 mod partition;
+mod partition_index;
 mod rangetype;
 mod relation_options;
 mod reloptions;
@@ -649,6 +650,7 @@ impl Definer<'_, '_> {
                 Some(RelKind::View) => b'v',
                 Some(RelKind::Composite) => b'c',
                 Some(RelKind::Partitioned) => b'p',
+                Some(RelKind::PartitionedIndex) => b'I',
                 _ => b'r',
             },
             Found::Builtin(row) => row.kind,

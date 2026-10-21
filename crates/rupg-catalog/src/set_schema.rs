@@ -48,7 +48,8 @@ impl Catalog {
                     ty.namespace = namespace;
                 }
             }
-            if !matches!(rel_kind, RelKind::Index | RelKind::Composite) {
+            if !matches!(rel_kind, RelKind::Index | RelKind::PartitionedIndex | RelKind::Composite)
+            {
                 self.change_namespace_dependency(ObjRef::new(PG_CLASS, moved), old, namespace);
             }
         }
