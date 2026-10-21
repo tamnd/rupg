@@ -101,10 +101,13 @@ impl Definer<'_, '_> {
         })
     }
 
-    /// `RangeVarCallbackForRenameAttribute` and `renameatt_check`: the relation of `RENAME COLUMN` and `RENAME CONSTRAINT`. A composite type and an index can have their columns renamed.
+    /// `RangeVarCallbackForRenameAttribute` and `renameatt_check`: the relation of `RENAME COLUMN` and `RENAME CONSTRAINT`. A composite type and an index can have their columns renamed, and a typed table cannot.
     fn rename_target(&mut self, rv: &RangeVar, missing_ok: bool) -> Result<Option<Target>> {
         let Some(found) = self.rename_lookup(rv, missing_ok)? else { return Ok(None) };
         let name = relname(rv);
+        if let Found::User(oid) = found {
+            self.check_not_typed(oid, "cannot rename column of typed table")?;
+        }
         let kind = self.kind_of(found);
         if !b"rvmciIfp".contains(&kind) {
             return Err(Error::new(
@@ -133,7 +136,7 @@ impl Definer<'_, '_> {
         Ok(Some(Target { oid, kind, name: name.to_string(), namespace }))
     }
 
-    /// `renameatt`: the new name of a column of a table, a view, an index or a composite type. The column of a partitioned table gets the new name in each of its partitions first, at each level, and with `ONLY` a table with partitions cannot rename a column.
+    /// `renameatt`: the new name of a column of a table, a view, an index or a composite type. The column of a partitioned table gets the new name in each of its partitions first, at each level, and with `ONLY` a table with partitions cannot rename a column. The attribute of a composite type gets the new name in its typed tables first, which `CASCADE` allows.
     fn rename_column(&mut self, stmt: &RenameStmt, newname: &str) -> Result<()> {
         let rv = stmt.relation.as_deref().cloned().unwrap_or_default();
         let Some(target) = self.rename_target(&rv, stmt.missing_ok)? else { return Ok(()) };
@@ -147,6 +150,15 @@ impl Definer<'_, '_> {
                 SqlState::INVALID_TABLE_DEFINITION,
                 format!("inherited column \"{column}\" must be renamed in child tables too"),
             ));
+        }
+        // The typed tables of a composite type get the new name of the attribute too, with their children.
+        if target.kind == b'c' {
+            for table in self.typed_tables(&target, stmt.behavior)? {
+                for (child, parents) in self.inheritors_with_parents(&table) {
+                    self.rename_one_column(&child, column, newname, parents)?;
+                }
+                self.rename_one_column(&table, column, newname, 0)?;
+            }
         }
         self.rename_one_column(&target, column, newname, 0)
     }

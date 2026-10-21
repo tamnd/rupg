@@ -1,0 +1,265 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ttable1 OF nothing;
+ERROR 42704 type "nothing" does not exist at 25
+> CREATE TYPE person_type AS (id int, name text);
+CREATE TYPE
+> CREATE TABLE persons OF person_type;
+CREATE TABLE
+> CREATE TABLE IF NOT EXISTS persons OF person_type;
+NOTICE 42P07 relation "persons" already exists, skipping
+CREATE TABLE
+> SELECT relname, reloftype::regtype, relnatts FROM pg_class WHERE relname = 'persons';
+fields relname@pg_class.2:19:64:-1,reloftype:2206:4:-1,relnatts@pg_class.19:21:2:-1
+row persons,person_type,2
+SELECT 1
+> SELECT attname, atttypid::regtype, attnum, attislocal, attinhcount, attnotnull FROM pg_attribute WHERE attrelid = 'persons'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1,attnum@pg_attribute.5:21:2:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,attnotnull@pg_attribute.12:16:1:-1
+row id,integer,1,t,0,f
+row name,text,2,t,0,f
+SELECT 2
+> SELECT table_name, user_defined_type_name, is_typed FROM information_schema.tables WHERE table_name = 'persons';
+fields table_name@information_schema.tables.3:19:64:-1,user_defined_type_name@information_schema.tables.9:19:64:-1,is_typed@information_schema.tables.11:1043:-1:7
+row persons,person_type,YES
+SELECT 1
+> INSERT INTO persons VALUES (1, 'ann'), (2, 'bob');
+INSERT 0 2
+> SELECT * FROM persons ORDER BY id;
+fields id@persons.1:23:4:-1,name@persons.2:25:-1:-1
+row 1,ann
+row 2,bob
+SELECT 2
+> SELECT pg_typeof(p)::text, p::text FROM persons p ORDER BY id;
+fields pg_typeof:25:-1:-1,p:25:-1:-1
+row persons,(1,ann)
+row persons,(2,bob)
+SELECT 2
+> SELECT reltype = 'person_type'::regtype::oid AS same FROM pg_class WHERE relname = 'persons';
+fields same:16:1:-1
+row f
+SELECT 1
+> SELECT count(*) FROM pg_depend WHERE objid = 'persons'::regclass AND refobjid = 'person_type'::regtype AND deptype = 'n';
+fields count:20:8:-1
+row 1
+SELECT 1
+> ALTER TABLE persons ADD COLUMN comment text;
+ERROR 42809 cannot add column to typed table
+> ALTER TABLE persons DROP COLUMN name;
+ERROR 42809 cannot drop column from typed table
+> ALTER TABLE persons RENAME COLUMN id TO num;
+ERROR 42809 cannot rename column of typed table
+> ALTER TABLE persons ALTER COLUMN name TYPE varchar;
+ERROR 42809 cannot alter column type of typed table at 34
+> ALTER TABLE persons ALTER COLUMN name SET DEFAULT 'x';
+ALTER TABLE
+> ALTER TABLE persons ALTER COLUMN name SET NOT NULL;
+ALTER TABLE
+> ALTER TABLE persons ALTER COLUMN name DROP NOT NULL;
+ALTER TABLE
+> CREATE TABLE stuff (id int);
+CREATE TABLE
+> ALTER TABLE persons INHERIT stuff;
+ERROR 42809 cannot change inheritance of typed table
+> CREATE TABLE personsx OF person_type (myname WITH OPTIONS NOT NULL);
+ERROR 42703 column "myname" does not exist
+> CREATE TABLE persons2 OF person_type (id WITH OPTIONS PRIMARY KEY, UNIQUE (name));
+CREATE TABLE
+> SELECT conname, contype FROM pg_constraint WHERE conrelid = 'persons2'::regclass ORDER BY conname;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1
+row persons2_id_not_null,n
+row persons2_name_key,u
+row persons2_pkey,p
+SELECT 3
+> CREATE TABLE persons3 OF person_type (PRIMARY KEY (id), name WITH OPTIONS DEFAULT '');
+CREATE TABLE
+> INSERT INTO persons3 (id) VALUES (7);
+INSERT 0 1
+> SELECT * FROM persons3;
+fields id@persons3.1:23:4:-1,name@persons3.2:25:-1:-1
+row 7,
+SELECT 1
+> SELECT attname, atthasdef, attnotnull FROM pg_attribute WHERE attrelid = 'persons3'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,atthasdef@pg_attribute.13:16:1:-1,attnotnull@pg_attribute.12:16:1:-1
+row id,f,t
+row name,t,f
+SELECT 2
+> CREATE TABLE persons4 OF person_type (name WITH OPTIONS NOT NULL, name WITH OPTIONS DEFAULT '');
+ERROR 42701 column "name" specified more than once
+> CREATE TABLE persons5 OF stuff;
+ERROR 42809 type stuff is the row type of another table
+DETAIL A typed table must use a stand-alone composite type created with CREATE TYPE.
+> CREATE TABLE persons6 OF int4;
+ERROR 42809 type integer is not a composite type
+> CREATE TABLE persons7 (x int) INHERITS (stuff);
+CREATE TABLE
+> CREATE TABLE persons8 OF person_type (CHECK (id > 0));
+CREATE TABLE
+> INSERT INTO persons8 VALUES (0, 'z');
+ERROR 23514 new row for relation "persons8" violates check constraint "persons8_id_check"
+DETAIL Failing row contains (0, z).
+> DROP TYPE person_type RESTRICT;
+ERROR 2BP01 cannot drop type person_type because other objects depend on it
+DETAIL table persons depends on type person_type
+table persons2 depends on type person_type
+table persons3 depends on type person_type
+table persons8 depends on type person_type
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TYPE person_type ADD ATTRIBUTE comment text;
+ERROR 2BP01 cannot alter type "person_type" because it is the type of a typed table
+HINT Use ALTER ... CASCADE to alter the typed tables too.
+> ALTER TYPE person_type ADD ATTRIBUTE comment text CASCADE;
+ALTER TYPE
+> SELECT attname, atttypid::regtype FROM pg_attribute WHERE attrelid = 'persons'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1
+row id,integer
+row name,text
+row comment,text
+SELECT 3
+> SELECT * FROM persons ORDER BY id;
+fields id@persons.1:23:4:-1,name@persons.2:25:-1:-1,comment@persons.3:25:-1:-1
+row 1,ann,NULL
+row 2,bob,NULL
+SELECT 2
+> ALTER TYPE person_type RENAME ATTRIBUTE comment TO note;
+ERROR 2BP01 cannot alter type "person_type" because it is the type of a typed table
+HINT Use ALTER ... CASCADE to alter the typed tables too.
+> ALTER TYPE person_type RENAME ATTRIBUTE comment TO note CASCADE;
+ALTER TYPE
+> SELECT attname FROM pg_attribute WHERE attrelid = 'persons2'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1
+row id
+row name
+row note
+SELECT 3
+> ALTER TYPE person_type ALTER ATTRIBUTE note TYPE varchar(10) CASCADE;
+ALTER TYPE
+> SELECT attname, atttypid::regtype FROM pg_attribute WHERE attrelid = 'persons3'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,atttypid:2206:4:-1
+row id,integer
+row name,text
+row note,character varying
+SELECT 3
+> ALTER TYPE person_type DROP ATTRIBUTE note CASCADE;
+ALTER TYPE
+> SELECT * FROM persons ORDER BY id;
+fields id@persons.1:23:4:-1,name@persons.2:25:-1:-1
+row 1,ann
+row 2,bob
+SELECT 2
+> ALTER TABLE persons NOT OF;
+ALTER TABLE
+> SELECT reloftype FROM pg_class WHERE relname = 'persons';
+fields reloftype@pg_class.5:26:4:-1
+row 0
+SELECT 1
+> ALTER TABLE persons ADD COLUMN extra int;
+ALTER TABLE
+> ALTER TABLE persons OF person_type;
+ERROR 42804 table has extra column "extra"
+> ALTER TABLE persons DROP COLUMN extra;
+ALTER TABLE
+> ALTER TABLE persons OF person_type;
+ALTER TABLE
+> SELECT reloftype::regtype FROM pg_class WHERE relname = 'persons';
+fields reloftype:2206:4:-1
+row person_type
+SELECT 1
+> CREATE TABLE other (id int, name varchar);
+CREATE TABLE
+> ALTER TABLE other OF person_type;
+ERROR 42804 table "other" has different type for column "name"
+> CREATE TABLE other2 (name text, id int);
+CREATE TABLE
+> ALTER TABLE other2 OF person_type;
+ERROR 42804 table has column "name" where type requires "id"
+> CREATE TABLE other3 (id int, name text, more int);
+CREATE TABLE
+> ALTER TABLE other3 OF person_type;
+ERROR 42804 table has extra column "more"
+> CREATE TABLE other4 (id int);
+CREATE TABLE
+> ALTER TABLE other4 OF person_type;
+ERROR 42804 table is missing column "name"
+> CREATE TABLE other5 (id int, name text);
+CREATE TABLE
+> ALTER TABLE other5 OF person_type;
+ALTER TABLE
+> ALTER TABLE other5 OF person_type;
+ALTER TABLE
+> ALTER TABLE stuff OF person_type;
+ERROR 42804 table is missing column "name"
+> ALTER TABLE persons2 RENAME CONSTRAINT persons2_pkey TO p2k;
+ERROR 42809 cannot rename column of typed table
+> ALTER TABLE stuff NOT OF;
+ERROR 42809 "stuff" is not a typed table
+> ALTER TYPE person_type DROP ATTRIBUTE name;
+ERROR 2BP01 cannot alter type "person_type" because it is the type of a typed table
+HINT Use ALTER ... CASCADE to alter the typed tables too.
+> CREATE TABLE kid () INHERITS (stuff);
+CREATE TABLE
+> ALTER TABLE kid OF person_type;
+ERROR 42809 typed tables cannot inherit
+> CREATE TABLE pt (a int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TYPE one_type AS (a int);
+CREATE TYPE
+> CREATE TABLE ptyped OF one_type;
+CREATE TABLE
+> ALTER TABLE pt ATTACH PARTITION ptyped FOR VALUES IN (1);
+ERROR 42809 cannot attach a typed table as partition
+> CREATE TABLE tp OF one_type (a WITH OPTIONS NOT NULL) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE tp1 PARTITION OF tp FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> INSERT INTO tp VALUES (5);
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM tp;
+fields tableoid:2205:4:-1,a@tp.1:23:4:-1
+row tp1,5
+SELECT 1
+> CREATE TABLE tchild (b int) INHERITS (ptyped);
+CREATE TABLE
+> SELECT attname, attislocal, attinhcount FROM pg_attribute WHERE attrelid = 'tchild'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row a,f,1
+row b,t,0
+SELECT 2
+> ALTER TYPE one_type ADD ATTRIBUTE c int CASCADE;
+ALTER TYPE
+> SELECT attname FROM pg_attribute WHERE attrelid = 'tchild'::regclass AND attnum > 0 AND NOT attisdropped ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1
+row a
+row b
+row c
+SELECT 3
+> SELECT relname, reloftype::regtype FROM pg_class WHERE reloftype <> 0 ORDER BY relname;
+fields relname@pg_class.2:19:64:-1,reloftype:2206:4:-1
+row other5,person_type
+row persons,person_type
+row persons2,person_type
+row persons3,person_type
+row persons8,person_type
+row ptyped,one_type
+row tp,one_type
+SELECT 7
+> DROP TYPE person_type;
+ERROR 2BP01 cannot drop type person_type because other objects depend on it
+DETAIL table persons depends on type person_type
+table persons2 depends on type person_type
+table persons3 depends on type person_type
+table persons8 depends on type person_type
+table other5 depends on type person_type
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TYPE person_type CASCADE;
+NOTICE 00000 drop cascades to 5 other objects
+DETAIL drop cascades to table persons
+drop cascades to table persons2
+drop cascades to table persons3
+drop cascades to table persons8
+drop cascades to table other5
+DROP TYPE
+> SELECT relname FROM pg_class WHERE relname LIKE 'person%' ORDER BY relname;
+fields relname@pg_class.2:19:64:-1
+row persons7
+SELECT 1

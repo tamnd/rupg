@@ -10,7 +10,7 @@ use rupg_pgcatalog::builtin::{self, Named, Owned};
 use rupg_sql::nodes::{
     AlterOwnerStmt, AlterTableCmd, AlterTableStmt, AlterTableType, ColumnDef, ConstrType,
     Constraint, DropBehavior, IndexStmt, Node, ObjectType, RangeVar, ReplicaIdentityStmt, RoleSpec,
-    RoleSpecType,
+    RoleSpecType, TypeName,
 };
 use rupg_types::Value;
 
@@ -176,6 +176,8 @@ enum MiscCmd {
     Inherit(Box<AlterTableCmd>),
     /// `NO INHERIT` with the parent.
     NoInherit(Box<RangeVar>),
+    /// `OF` with the type, or `NOT OF` with no type.
+    Of(Option<Box<TypeName>>),
 }
 
 /// The subcommand that gives a constraint of `AT_PASS_ADD_CONSTR`.
@@ -242,14 +244,29 @@ impl Definer<'_, '_> {
         for cmd in stmt.cmds.iter().flatten() {
             let Node::AlterTableCmd(cmd) = cmd else { continue };
             let (target, passes) = &mut queue[0];
-            if !self.prep_command(target, cmd, passes)? {
-                continue;
+            let recurse = self.prep_command(target, cmd, passes)?;
+            let mut reached = Vec::new();
+            if recurse {
+                reached.extend(self.all_inheritors(queue[0].0.oid).into_iter().map(|t| (t, false)));
             }
-            for child in self.all_inheritors(queue[0].0.oid) {
+            // `ATTypedTableRecursion`: a change of the columns of a composite type goes on to its typed tables, and from them to their children.
+            if queue[0].0.kind == b'c'
+                && matches!(
+                    cmd.subtype,
+                    AlterTableType::AT_AddColumn
+                        | AlterTableType::AT_DropColumn
+                        | AlterTableType::AT_AlterColumnType
+                )
+            {
+                let typed = self.typed_tables(&queue[0].0, cmd.behavior)?;
+                reached.extend(typed.into_iter().map(|t| (t, true)));
+            }
+            for (child, typed) in reached {
                 let at = match queue.iter().position(|(t, _)| t.oid == child.oid) {
                     Some(at) => at,
                     None => {
-                        let passes = Passes { recursing: true, ..Passes::default() };
+                        let passes =
+                            Passes { recurse: typed, recursing: true, ..Passes::default() };
                         queue.push((child, passes));
                         queue.len() - 1
                     }
@@ -349,6 +366,9 @@ impl Definer<'_, '_> {
         match cmd.subtype {
             AlterTableType::AT_AddColumn => {
                 self.simple_permissions(target, cmd, TABLE_TYPE)?;
+                if !passes.recursing {
+                    self.check_not_typed(target.oid, "cannot add column to typed table")?;
+                }
                 let Some(Node::ColumnDef(def)) = &cmd.def else {
                     return Err(Error::internal("ADD COLUMN without a column"));
                 };
@@ -356,6 +376,14 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_AlterColumnType => {
                 self.simple_permissions(target, cmd, TABLE_TYPE)?;
+                if !passes.recursing {
+                    let at = match &cmd.def {
+                        Some(Node::ColumnDef(def)) => place(def.location),
+                        _ => None,
+                    };
+                    self.check_not_typed(target.oid, "cannot alter column type of typed table")
+                        .map_err(|e| e.at_opt(at))?;
+                }
                 let change = self.prep_alter_type(target, cmd, passes.recursing)?;
                 passes.types.push(change);
                 recurse = passes.recurse;
@@ -396,6 +424,9 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_DropColumn => {
                 self.simple_permissions(target, cmd, TABLE_TYPE)?;
+                if !passes.recursing {
+                    self.check_not_typed(target.oid, "cannot drop column from typed table")?;
+                }
                 let name = cmd.name.as_deref().unwrap_or_default().to_string();
                 let cascade = cmd.behavior == DropBehavior::DROP_CASCADE;
                 passes.drops.push(DropCmd::Column(name, cmd.missing_ok, cascade));
@@ -539,7 +570,7 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_AddInherit => {
                 self.simple_permissions(target, cmd, INHERIT)?;
-                self.prep_inherit(target)?;
+                self.prep_inherit(target, true)?;
                 passes.misc.push(MiscCmd::Inherit(Box::new(cmd.clone())));
             }
             AlterTableType::AT_DropInherit => {
@@ -548,6 +579,17 @@ impl Definer<'_, '_> {
                     return Err(Error::internal("NO INHERIT with no parent"));
                 };
                 passes.misc.push(MiscCmd::NoInherit(rv.clone()));
+            }
+            AlterTableType::AT_AddOf => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                let Some(Node::TypeName(name)) = &cmd.def else {
+                    return Err(Error::internal("OF with no type"));
+                };
+                passes.misc.push(MiscCmd::Of(Some(name.clone())));
+            }
+            AlterTableType::AT_DropOf => {
+                self.simple_permissions(target, cmd, TABLE)?;
+                passes.misc.push(MiscCmd::Of(None));
             }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
@@ -780,6 +822,8 @@ impl Definer<'_, '_> {
                 }
                 MiscCmd::Inherit(cmd) => self.add_inherit(target, cmd)?,
                 MiscCmd::NoInherit(rv) => self.drop_inherit(target, rv)?,
+                MiscCmd::Of(Some(name)) => self.add_of(target, name)?,
+                MiscCmd::Of(None) => self.drop_of(target)?,
             }
         }
         if let Some(unlogged) = passes.persistence {

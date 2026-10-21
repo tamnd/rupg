@@ -1,4 +1,4 @@
-//! `ALTER TABLE ... INHERIT` and `NO INHERIT`, as `ATExecAddInherit` and `ATExecDropInherit` run them. rupg has no typed tables, so the check of `ATPrepAddInherit` for a typed table has no work.
+//! `ALTER TABLE ... INHERIT` and `NO INHERIT`, as `ATExecAddInherit` and `ATExecDropInherit` run them.
 
 use rupg_catalog::RelKind;
 use rupg_common::{Error, Result, SqlState};
@@ -8,8 +8,11 @@ use super::alter::Target;
 use super::{Definer, relname};
 
 impl Definer<'_, '_> {
-    /// `ATPrepAddInherit` and the first check of `ATExecDropInherit`: a partition cannot get or lose a parent of `INHERITS`. `ATSimplePermissions` keeps out a partitioned table before this check.
-    pub(super) fn prep_inherit(&self, target: &Target) -> Result<()> {
+    /// `ATPrepAddInherit` and the first check of `ATExecDropInherit`: a typed table cannot get a parent of `INHERITS`, and a partition cannot get or lose one. `ATSimplePermissions` keeps out a partitioned table before this check.
+    pub(super) fn prep_inherit(&self, target: &Target, add: bool) -> Result<()> {
+        if add {
+            self.check_not_typed(target.oid, "cannot change inheritance of typed table")?;
+        }
         if self.catalog.relation(target.oid).is_some_and(|r| r.partition_of.is_some()) {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
@@ -68,7 +71,7 @@ impl Definer<'_, '_> {
 
     /// `ATExecDropInherit`: the table `target` is no longer a child of the table `rv`. The columns and the constraints that it has from the parent stay, and they become local when they have no other parent.
     pub(super) fn drop_inherit(&mut self, target: &Target, rv: &RangeVar) -> Result<()> {
-        self.prep_inherit(target)?;
+        self.prep_inherit(target, false)?;
         let parent = self.open_table(rv)?;
         let inherits =
             self.catalog.relation(target.oid).is_some_and(|r| r.inherits.contains(&parent));

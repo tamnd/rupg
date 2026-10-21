@@ -274,11 +274,13 @@ impl Connection {
             .collect();
         let mut new_rows = Vec::with_capacity(rows.len());
         for row in rows {
+            // A row from before an `ADD COLUMN` has no value for the new columns, which are null, and the ID of the version is at the end of the row.
+            let stored = row.len().saturating_sub(1);
             let row: Vec<Value> = live
                 .iter()
                 .zip(&reshape)
                 .map(|(&i, &reshape)| {
-                    let value = row.get(i).cloned().unwrap_or(Value::Null);
+                    let value = if i < stored { row[i].clone() } else { Value::Null };
                     if reshape {
                         reshape_value(old, work, rel.columns[i].ty, value, 0)
                     } else {

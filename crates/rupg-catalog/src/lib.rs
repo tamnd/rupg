@@ -330,6 +330,8 @@ pub struct Relation {
     pub partition_of: Option<PartitionOf>,
     /// The parent tables of `INHERITS`: the parent at index `i` has `inhseqno` `i + 1`. `NO INHERIT` leaves 0 in the place of the parent, so the other parents keep their numbers. A partition has its parent in [`Relation::partition_of`].
     pub inherits: Vec<u32>,
+    /// `reloftype`: the composite type of a typed table, or 0.
+    pub of_type: u32,
 }
 
 /// The strategy of a partition key, `partstrat`.
@@ -1991,6 +1993,22 @@ impl Catalog {
         Ok(())
     }
 
+    /// The new `reloftype` of the table, or 0 for `NOT OF`, as `ATExecAddOf` and `ATExecDropOf` set it. The table loses its dependency on the old type and gets a normal dependency on the new type, as `heap_create_with_catalog` records it for a new typed table.
+    pub fn set_of_type(&mut self, table: u32, ty: u32) -> Result<()> {
+        let rel = self.relation_mut(table)?;
+        let old = std::mem::replace(&mut rel.of_type, ty);
+        let me = ObjRef::new(PG_CLASS, table);
+        if old != 0 {
+            let old = ObjRef::new(PG_TYPE, old);
+            self.depends
+                .retain(|d| d.object != me || d.referenced != old || d.kind != DepKind::Normal);
+        }
+        if ty != 0 {
+            self.depend(me, ObjRef::new(PG_TYPE, ty), DepKind::Normal);
+        }
+        Ok(())
+    }
+
     /// The part of `RemoveInheritance` of `ALTER TABLE ... NO INHERIT`: the table loses the row of `pg_inherits` of the parent and its dependency on the parent. The next `INHERIT` takes the number after the highest number that is left.
     pub fn remove_inherit(&mut self, table: u32, parent: u32) -> Result<()> {
         let rel = self.relation_mut(table)?;
@@ -2224,6 +2242,7 @@ impl Catalog {
                 partition_key: None,
                 partition_of: None,
                 inherits: Vec::new(),
+                of_type: 0,
                 unlogged: false,
             },
         );
@@ -2933,6 +2952,7 @@ impl Catalog {
                 partition_key: None,
                 partition_of: None,
                 inherits: Vec::new(),
+                of_type: 0,
                 unlogged: false,
             },
         );
@@ -3337,6 +3357,7 @@ impl Catalog {
                 partition_key: None,
                 partition_of: None,
                 inherits: Vec::new(),
+                of_type: 0,
                 unlogged,
             },
         );
@@ -3582,6 +3603,7 @@ impl Catalog {
                 partition_key: None,
                 partition_of: None,
                 inherits: Vec::new(),
+                of_type: 0,
                 unlogged,
             },
         );
@@ -3627,6 +3649,7 @@ impl Catalog {
                 partition_key: None,
                 partition_of: None,
                 inherits: Vec::new(),
+                of_type: 0,
                 unlogged,
             },
         );
