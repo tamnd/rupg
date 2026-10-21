@@ -10,7 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `COPY FROM` and `INSERT ... ON CONFLICT` on a partitioned table with triggers. The row triggers of the partition of each row fire, and the statement triggers and the transition tables of the partitioned table get the rows of the partitions. `EXCLUDED` is the row that the triggers `BEFORE INSERT` give, and `DO UPDATE` fires the triggers `BEFORE UPDATE` of the partition. A trigger of a partition that puts a row out of the bounds of the partition gives the error of PostgreSQL (#504).
 - Row triggers on an `UPDATE` that moves a row to another partition. The triggers `BEFORE UPDATE` of the old partition fire, then `BEFORE DELETE` of the old partition and `BEFORE INSERT` of the new partition, and then `AFTER DELETE` and `AFTER INSERT`, as in PostgreSQL. Transition tables of `UPDATE` and `DELETE` on a partitioned table, with the rows that move (#508).
-- `MERGE` into a partitioned table and into a partition. Each action goes to the leaf partitions: an update can move a row to another leaf, an insert goes to the leaf that takes the row, and the triggers of the leaves fire in the order of the join. A row that moves is in the transition tables of `DELETE` and of `INSERT`, as in PostgreSQL. `RETURNING` can read `tableoid` (#NNN).
+- `MERGE` into a partitioned table and into a partition. Each action goes to the leaf partitions: an update can move a row to another leaf, an insert goes to the leaf that takes the row, and the triggers of the leaves fire in the order of the join. A row that moves is in the transition tables of `DELETE` and of `INSERT`, as in PostgreSQL. `RETURNING` can read `tableoid` (#510).
 
 ### Fixed
 
