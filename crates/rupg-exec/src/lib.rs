@@ -2367,25 +2367,32 @@ impl<'a> Eval<'a> {
     fn domain_failure(&mut self, domain: u32, value: &Value) -> Result<Option<Error>> {
         let checks = self.cache.domain_checks(domain)?;
         if checks.not_null && value.is_null() {
-            return Ok(Some(Error::new(
+            let error = Error::new(
                 SqlState::NOT_NULL_VIOLATION,
                 format!(
                     "domain {} does not allow null values",
                     rupg_func::type_message_name(domain, self.session)
                 ),
-            )));
+            );
+            return Ok(Some(rupg_func::with_datatype(error, domain, self.session)));
         }
         for (name, check) in &checks.checks {
             self.domain_value.push(value.clone());
             let result = self.eval(check);
             self.domain_value.pop();
             if result?.as_bool() == Some(false) {
-                return Ok(Some(Error::new(
+                let error = Error::new(
                     SqlState::CHECK_VIOLATION,
                     format!(
                         "value for domain {} violates check constraint \"{name}\"",
                         rupg_func::type_message_name(domain, self.session)
                     ),
+                );
+                return Ok(Some(rupg_func::with_domain_constraint(
+                    error,
+                    domain,
+                    name,
+                    self.session,
                 )));
             }
         }

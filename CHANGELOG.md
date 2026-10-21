@@ -12,6 +12,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - A comparison of an `oid` with an `int2`, such as `oid = 25::int2` or `oid = ANY($1)` with an `int2[]` parameter, now gives the result of PostgreSQL. Before, it gave the error `XX000` "a function got a value of the wrong kind", because the cast function `int4(smallint)` gave its value as an `int8`. pgAdmin 4 sends these queries.
+- An error of a constraint, of a domain or of a partition now has the names of its object in the fields `s`, `t`, `c`, `d` and `n` of `ErrorResponse`, as PostgreSQL gives them: the schema, the table, the column, the type and the constraint. A unique violation, a foreign key violation, a check violation, a not-null violation, a domain error and a row with no partition have them, also in `ALTER TABLE`, `CREATE UNIQUE INDEX` and `COPY FROM`. `RAISE ... USING SCHEMA`, `TABLE`, `COLUMN`, `DATATYPE` and `CONSTRAINT` set them, and `GET STACKED DIAGNOSTICS` reads them. Clients such as Active Record, Ecto, Prisma and npgsql read the name of the constraint from these fields.
 
 ## 0.1.60 (2026-10-21)
 

@@ -8,7 +8,7 @@ use std::sync::atomic::{AtomicBool, Ordering};
 
 use rupg_analyze::{Message, Params, Write, WriteKind};
 use rupg_catalog::{Catalog, database};
-use rupg_common::{Error, Level as ErrorLevel, SqlState};
+use rupg_common::{Error, Level as ErrorLevel, Object, SqlState};
 use rupg_exec::Plan;
 use rupg_func::{BackendState, Randomness, Sequences};
 pub use rupg_func::{Client, Ssl};
@@ -321,6 +321,11 @@ pub fn write_error(
     }
     if let Some(context) = error.context() {
         fields.push((b'W', context.as_bytes()));
+    }
+    for object in Object::ALL {
+        if let Some(name) = error.object(object) {
+            fields.push((object.code(), name.as_bytes()));
+        }
     }
     let (file, line, routine) = source_fields(error.place());
     fields.extend([(b'F', file.as_bytes()), (b'L', line.as_bytes()), (b'R', routine.as_bytes())]);
@@ -869,11 +874,17 @@ impl Connection {
                     ));
                 };
                 let values = self.index_key_text(&unique.types, &key)?;
-                Err(Error::new(
+                let error = Error::new(
                     SqlState::UNIQUE_VIOLATION,
                     format!("duplicate key value violates unique constraint \"{}\"", unique.name),
                 )
-                .with_detail(format!("Key ({})=({values}) already exists.", unique.shown)))
+                .with_detail(format!("Key ({})=({values}) already exists.", unique.shown));
+                Err(rupg_func::with_table_constraint(
+                    error,
+                    info.table,
+                    &unique.name,
+                    &self.reader(),
+                ))
             }
             _ => Err(Error::internal("a write result that is not a conflict of a key")),
         }
@@ -2074,11 +2085,21 @@ mod tests {
 
     /// One short line for each message. With `full`, a `RowDescription` is a line `fields` with the name, the table OID, the column number, the type, the size and the typmod of each column, and else a line `columns` with the names.
     fn render(out: &OutBuf, full: bool) -> Vec<String> {
-        render_details(out, full, false)
+        render_details(out, full, Details::None)
     }
 
-    /// [`render`], and with `details` a line `DETAIL` and a line `HINT` after an error or a notice that has them.
-    fn render_details(out: &OutBuf, full: bool, details: bool) -> Vec<String> {
+    /// The lines of an error or a notice that [`render_details`] adds.
+    #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+    enum Details {
+        None,
+        /// A line `DETAIL`, a line `HINT` and a line `QUERY` when the message has them.
+        Lines,
+        /// [`Details::Lines`], then a line `SCHEMA`, `TABLE`, `COLUMN`, `DATATYPE` or `CONSTRAINT` for each name of the object of the message.
+        Objects,
+    }
+
+    /// [`render`], with the lines of `details` after an error or a notice.
+    fn render_details(out: &OutBuf, full: bool, details: Details) -> Vec<String> {
         let text = |b: &[u8]| String::from_utf8_lossy(b).into_owned();
         let field = |fields: &[(u8, &[u8])], code: u8| {
             fields.iter().find(|(c, _)| *c == code).map_or(String::new(), |(_, v)| text(v))
@@ -2160,16 +2181,29 @@ mod tests {
                     }
                     for (code, word) in [(b'D', "DETAIL"), (b'H', "HINT")] {
                         let value = field(&fields, code);
-                        if details && !value.is_empty() {
+                        if details >= Details::Lines && !value.is_empty() {
                             line.push_str(&format!("\n{word} {value}"));
                         }
                     }
                     let internal = field(&fields, b'q');
-                    if details && !internal.is_empty() {
+                    if details >= Details::Lines && !internal.is_empty() {
                         line.push_str(&format!("\nQUERY {internal}"));
                         let position = field(&fields, b'p');
                         if !position.is_empty() {
                             line.push_str(&format!(" at {position}"));
+                        }
+                    }
+                    let objects = [
+                        (b's', "SCHEMA"),
+                        (b't', "TABLE"),
+                        (b'c', "COLUMN"),
+                        (b'd', "DATATYPE"),
+                        (b'n', "CONSTRAINT"),
+                    ];
+                    for (code, word) in objects {
+                        let value = field(&fields, code);
+                        if details == Details::Objects && !value.is_empty() {
+                            line.push_str(&format!("\n{word} {value}"));
                         }
                     }
                     line
@@ -2772,18 +2806,24 @@ mod tests {
         big_stack(catalog_rows_cases);
     }
 
-    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database. A line `>> text` or `>>` after a statement goes on the statement as a new line. After a line `!details`, an error or a notice also has its detail, its hint and its internal query. The lines `< text`, `<hex HEX`, `<done` and `<fail message` right after a simple query are the messages of `COPY ... FROM STDIN` that go with the query: `CopyData` of the text and a newline, `CopyData` of the bytes, `CopyDone` and `CopyFail`.
+    /// Runs a script of statements on a new connection. A line that starts with `> ` is a simple query, and the lines after it are the messages that the query must give, in the full form of `render`, without the lines of `ReadyForQuery`. The table of a column shows as its `regclass` text, because the OIDs of the oracle are not the OIDs of a new database. A line `>> text` or `>>` after a statement goes on the statement as a new line. After a line `!details`, an error or a notice also has its detail, its hint and its internal query. After a line `!objects`, it also has the names of its object. The lines `< text`, `<hex HEX`, `<done` and `<fail message` right after a simple query are the messages of `COPY ... FROM STDIN` that go with the query: `CopyData` of the text and a newline, `CopyData` of the bytes, `CopyDone` and `CopyFail`.
     fn script(text: &str) {
         let (mut c, _) = connect();
         let starts = |l: &str| {
-            l == "!details" || ["> ", "P ", "X ", "D ", "C "].iter().any(|p| l.starts_with(p))
+            l == "!details"
+                || l == "!objects"
+                || ["> ", "P ", "X ", "D ", "C "].iter().any(|p| l.starts_with(p))
         };
-        let mut details = false;
+        let mut details = Details::None;
         let mut lines = text.lines().peekable();
         while let Some(line) = lines.next() {
             assert!(starts(line), "not a statement: {line}");
             if line == "!details" {
-                details = true;
+                details = Details::Lines;
+                continue;
+            }
+            if line == "!objects" {
+                details = Details::Objects;
                 continue;
             }
             let mut statement = line.to_string();
@@ -2826,16 +2866,16 @@ mod tests {
 
     /// The lines of a statement of a script. A line `> sql` is a simple query. A line `P name|sql` is `Parse` of a statement and `Sync`, and a line `X name|value|value` is `Bind` of the statement to the unnamed portal with values in the text format, `Execute` and `Sync`. A line `D S name` or `D P name` is `Describe` of a statement or a portal and `Sync`, and a line `C S name` or `C P name` is `Close` and `Sync`.
     fn script_lines(c: &mut Connection, line: &str) -> Vec<String> {
-        script_details(c, line, false)
+        script_details(c, line, Details::None)
     }
 
-    /// [`script_lines`], with the details of [`render_details`] when `details` is true.
-    fn script_details(c: &mut Connection, line: &str, details: bool) -> Vec<String> {
+    /// [`script_lines`], with the lines of `details` of [`render_details`].
+    fn script_details(c: &mut Connection, line: &str, details: Details) -> Vec<String> {
         script_copy(c, line, &[], details)
     }
 
     /// [`script_details`], with the messages of `COPY ... FROM STDIN` of the lines `copy` after a simple query.
-    fn script_copy(c: &mut Connection, line: &str, copy: &[&str], details: bool) -> Vec<String> {
+    fn script_copy(c: &mut Connection, line: &str, copy: &[&str], details: Details) -> Vec<String> {
         let target = |rest: &str| {
             let (target, name) = rest.split_once(' ').unwrap();
             (target.chars().next().unwrap(), name.to_string())
@@ -2920,6 +2960,12 @@ mod tests {
     #[test]
     fn int2_oid_cast() {
         big_stack(|| script(include_str!("connection/int2_oid_cast.test")));
+    }
+
+    /// The names of the object of an error, in the fields `s`, `t`, `c`, `d` and `n`, for the errors of a constraint, of a domain and of a partition, and in `RAISE` and `GET STACKED DIAGNOSTICS` of PL/pgSQL. `connection/error_objects.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn error_objects() {
+        big_stack(|| script(include_str!("connection/error_objects.test")));
     }
 
     /// The extension `plpgsql` that `initdb` makes: its rows in `pg_extension`, `pg_language`, `pg_proc`, `pg_depend` and `pg_description`, and the queries of `\dx` and `\dL` of psql. `connection/extensions.test` is the output of PostgreSQL 19 for the same script in a new database.

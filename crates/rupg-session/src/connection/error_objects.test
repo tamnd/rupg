@@ -1,0 +1,159 @@
+!objects
+> CREATE SCHEMA ef
+CREATE SCHEMA
+> SET search_path = ef
+SET
+search_path=ef
+> CREATE DOMAIN pos AS int CONSTRAINT pos_check CHECK (VALUE > 0)
+CREATE DOMAIN
+> CREATE DOMAIN nn AS int NOT NULL
+CREATE DOMAIN
+> CREATE TABLE p (id int PRIMARY KEY, v text UNIQUE, n int NOT NULL DEFAULT 0, c int CONSTRAINT c_pos CHECK (c > 0))
+CREATE TABLE
+> CREATE TABLE ch (id int, pid int CONSTRAINT ch_fk REFERENCES p(id))
+CREATE TABLE
+> CREATE TABLE chr (pid int CONSTRAINT chr_fk REFERENCES p(id) ON DELETE RESTRICT)
+CREATE TABLE
+> INSERT INTO p VALUES (1, 'a', 0, 1), (2, 'b', 0, 1)
+INSERT 0 2
+> INSERT INTO p VALUES (1, 'z', 0, 1)
+ERROR 23505 duplicate key value violates unique constraint "p_pkey"
+DETAIL Key (id)=(1) already exists.
+SCHEMA ef
+TABLE p
+CONSTRAINT p_pkey
+> UPDATE p SET v = 'a' WHERE id = 2
+ERROR 23505 duplicate key value violates unique constraint "p_v_key"
+DETAIL Key (v)=(a) already exists.
+SCHEMA ef
+TABLE p
+CONSTRAINT p_v_key
+> INSERT INTO p VALUES (3, 'c', NULL, 1)
+ERROR 23502 null value in column "n" of relation "p" violates not-null constraint
+DETAIL Failing row contains (3, c, null, 1).
+SCHEMA ef
+TABLE p
+COLUMN n
+> INSERT INTO p VALUES (3, 'c', 0, -1)
+ERROR 23514 new row for relation "p" violates check constraint "c_pos"
+DETAIL Failing row contains (3, c, 0, -1).
+SCHEMA ef
+TABLE p
+CONSTRAINT c_pos
+> INSERT INTO ch VALUES (1, 9)
+ERROR 23503 insert or update on table "ch" violates foreign key constraint "ch_fk"
+DETAIL Key (pid)=(9) is not present in table "p".
+SCHEMA ef
+TABLE ch
+CONSTRAINT ch_fk
+> INSERT INTO ch VALUES (1, 1)
+INSERT 0 1
+> INSERT INTO chr VALUES (2)
+INSERT 0 1
+> DELETE FROM p WHERE id = 1
+ERROR 23503 update or delete on table "p" violates foreign key constraint "ch_fk" on table "ch"
+DETAIL Key (id)=(1) is still referenced from table "ch".
+SCHEMA ef
+TABLE ch
+CONSTRAINT ch_fk
+> DELETE FROM p WHERE id = 2
+ERROR 23001 update or delete on table "p" violates RESTRICT setting of foreign key constraint "chr_fk" on table "chr"
+DETAIL Key (id)=(2) is referenced from table "chr".
+SCHEMA ef
+TABLE chr
+CONSTRAINT chr_fk
+> SELECT (-1)::pos
+fields pos:23:4:-1
+ERROR 23514 value for domain pos violates check constraint "pos_check"
+SCHEMA ef
+DATATYPE pos
+CONSTRAINT pos_check
+> SELECT NULL::nn
+fields nn:23:4:-1
+ERROR 23502 domain nn does not allow null values
+SCHEMA ef
+DATATYPE nn
+> CREATE TABLE pt (k int, v int NOT NULL, PRIMARY KEY (k)) PARTITION BY RANGE (k)
+CREATE TABLE
+> CREATE TABLE pt1 PARTITION OF pt FOR VALUES FROM (0) TO (10)
+CREATE TABLE
+> INSERT INTO pt VALUES (1, 1)
+INSERT 0 1
+> INSERT INTO pt VALUES (1, 2)
+ERROR 23505 duplicate key value violates unique constraint "pt1_pkey"
+DETAIL Key (k)=(1) already exists.
+SCHEMA ef
+TABLE pt1
+CONSTRAINT pt1_pkey
+> INSERT INTO pt VALUES (2, NULL)
+ERROR 23502 null value in column "v" of relation "pt1" violates not-null constraint
+DETAIL Failing row contains (2, null).
+SCHEMA ef
+TABLE pt1
+COLUMN v
+> INSERT INTO pt VALUES (20, 1)
+ERROR 23514 no partition of relation "pt" found for row
+DETAIL Partition key of the failing row contains (k) = (20).
+SCHEMA ef
+TABLE pt
+> INSERT INTO pt1 VALUES (20, 1)
+ERROR 23514 new row for relation "pt1" violates partition constraint
+DETAIL Failing row contains (20, 1).
+SCHEMA ef
+TABLE pt1
+> ALTER TABLE p ADD CONSTRAINT big CHECK (id > 100)
+ERROR 23514 check constraint "big" of relation "p" is violated by some row
+SCHEMA ef
+TABLE p
+CONSTRAINT big
+> CREATE TABLE r (a int, b int)
+CREATE TABLE
+> INSERT INTO r VALUES (1, NULL), (1, 2)
+INSERT 0 2
+> ALTER TABLE r ALTER COLUMN b SET NOT NULL
+ERROR 23502 column "b" of relation "r" contains null values
+SCHEMA ef
+TABLE r
+COLUMN b
+> ALTER TABLE r ADD CONSTRAINT r_u UNIQUE (a)
+ERROR 23505 could not create unique index "r_u"
+DETAIL Key (a)=(1) is duplicated.
+SCHEMA ef
+TABLE r
+CONSTRAINT r_u
+> CREATE UNIQUE INDEX r_ui ON r (a)
+ERROR 23505 could not create unique index "r_ui"
+DETAIL Key (a)=(1) is duplicated.
+SCHEMA ef
+TABLE r
+CONSTRAINT r_ui
+> ALTER TABLE r ALTER COLUMN b TYPE bigint, ALTER COLUMN b SET NOT NULL
+ERROR 23502 column "b" of relation "r" contains null values
+SCHEMA ef
+TABLE r
+COLUMN b
+> ALTER TABLE r ADD COLUMN d pos DEFAULT -1
+ERROR 23514 value for domain pos violates check constraint "pos_check"
+SCHEMA ef
+DATATYPE pos
+CONSTRAINT pos_check
+> CREATE TABLE d (a nn)
+CREATE TABLE
+> COPY d FROM STDIN WITH (ON_ERROR set_null)
+< x
+<done
+copy in 0 0
+ERROR 23502 domain nn does not allow null values (COPY d, line 1, column a: "x")
+DETAIL ON_ERROR SET_NULL cannot be applied because column "a" (domain nn) does not accept null values.
+SCHEMA ef
+DATATYPE nn
+> DO $$ BEGIN INSERT INTO ef.p VALUES (1, 'q', 0, 1); EXCEPTION WHEN unique_violation THEN DECLARE s text; t text; c text; d text; n text; BEGIN GET STACKED DIAGNOSTICS s = SCHEMA_NAME, t = TABLE_NAME, c = COLUMN_NAME, d = PG_DATATYPE_NAME, n = CONSTRAINT_NAME; RAISE NOTICE '% % % % %', s, t, c, d, n; END; END $$
+NOTICE 00000 ef p   p_pkey (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ BEGIN RAISE EXCEPTION 'x' USING SCHEMA = 'a', TABLE = 'b', COLUMN = 'c', DATATYPE = 'd', CONSTRAINT = 'e'; END $$
+ERROR P0001 x (PL/pgSQL function inline_code_block line 1 at RAISE)
+SCHEMA a
+TABLE b
+COLUMN c
+DATATYPE d
+CONSTRAINT e

@@ -6,7 +6,7 @@ use std::rc::Rc;
 use std::sync::Arc;
 
 use rupg_analyze::{ExprKind, Params, Query, Variable, Variables, types};
-use rupg_common::{Error, Result, SqlState};
+use rupg_common::{Error, Object, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
 use rupg_sql::nodes::{FetchDirection, Node};
@@ -1324,6 +1324,7 @@ impl Exec<'_> {
             None => None,
         };
         let (mut detail, mut hint) = (None, None);
+        let mut objects = Vec::new();
         let mut seen = Vec::new();
         for (option, expr) in options {
             let (value, ty, _) = self.eval(expr)?;
@@ -1355,7 +1356,11 @@ impl Exec<'_> {
                 RaiseOption::Message => text = Some(value),
                 RaiseOption::Detail => detail = Some(value),
                 RaiseOption::Hint => hint = Some(value),
-                _ => {}
+                RaiseOption::Column => objects.push((Object::Column, value)),
+                RaiseOption::Constraint => objects.push((Object::Constraint, value)),
+                RaiseOption::Datatype => objects.push((Object::Datatype, value)),
+                RaiseOption::Table => objects.push((Object::Table, value)),
+                RaiseOption::Schema => objects.push((Object::Schema, value)),
             }
         }
         if level.is_none() && code.is_none() {
@@ -1376,6 +1381,9 @@ impl Exec<'_> {
         }
         if let Some(hint) = hint {
             error = error.with_hint(hint);
+        }
+        for (object, name) in objects {
+            error = error.with_object(object, name);
         }
         match level {
             None => Err(error.into()),
@@ -1439,11 +1447,11 @@ impl Exec<'_> {
                 DiagItem::ErrorDetail => text(error.and_then(Error::detail)),
                 DiagItem::ErrorHint => text(error.and_then(Error::hint)),
                 DiagItem::ErrorContext => text(error.and_then(Error::context)),
-                DiagItem::ColumnName
-                | DiagItem::ConstraintName
-                | DiagItem::DatatypeName
-                | DiagItem::TableName
-                | DiagItem::SchemaName => text(None),
+                DiagItem::ColumnName => text(error.and_then(|e| e.object(Object::Column))),
+                DiagItem::ConstraintName => text(error.and_then(|e| e.object(Object::Constraint))),
+                DiagItem::DatatypeName => text(error.and_then(|e| e.object(Object::Datatype))),
+                DiagItem::TableName => text(error.and_then(|e| e.object(Object::Table))),
+                DiagItem::SchemaName => text(error.and_then(|e| e.object(Object::Schema))),
             };
             self.assign_datum(d, value, ty, -1)?;
         }

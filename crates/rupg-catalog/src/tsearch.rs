@@ -1,6 +1,6 @@
 //! The objects of text search: the templates of `pg_ts_template`, the parsers of `pg_ts_parser`, the dictionaries of `pg_ts_dict`, and the configurations of `pg_ts_config` with their rows of `pg_ts_config_map`. They change as `DefineTSTemplate`, `DefineTSParser`, `DefineTSDictionary`, `DefineTSConfiguration` and `AlterTSConfiguration` of `tsearchcmds.c` change them, with the same rows of `pg_depend`.
 
-use rupg_common::{Error, Result, SqlState};
+use rupg_common::{Error, Object, Result, SqlState};
 
 use super::{Catalog, DepKind, ObjRef, PG_NAMESPACE, PG_PROC};
 
@@ -103,6 +103,9 @@ fn duplicate(catalog: &str, prefix: &str, name: &str, namespace: u32) -> Error {
     .with_detail(format!(
         "Key ({prefix}name, {prefix}namespace)=({name}, {namespace}) already exists."
     ))
+    .with_object(Object::Schema, "pg_catalog")
+    .with_object(Object::Table, catalog)
+    .with_object(Object::Constraint, format!("{catalog}_{prefix}name_index"))
 }
 
 impl Catalog {
