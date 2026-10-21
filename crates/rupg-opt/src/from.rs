@@ -921,7 +921,8 @@ fn join_rels<'q>(
     let mut quals = quals;
     quals.sort_by_key(|q| exprs::calls(&q.expr));
     let mut paths = Paths::new(stats.startup);
-    for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats) {
+    let sides = (std::slice::from_ref(&left), std::slice::from_ref(&right));
+    for (candidate, keys) in choose(level, kind, sides.0, sides.1, &quals, &filter, stats) {
         paths.add(candidate.startup, candidate.total, keys, candidate);
     }
     let mut out = match paths.cheapest() {
@@ -960,36 +961,45 @@ fn join_rows(
 fn choose<'q>(
     level: &Level<'q>,
     kind: JoinKind,
-    left: &Rel<'q>,
-    right: &Rel<'q>,
+    left: &[Rel<'q>],
+    right: &[Rel<'q>],
     quals: &[Qual<'q>],
     filter: &[Qual<'q>],
     stats: &Stats,
 ) -> Vec<(Candidate<'q>, Vec<OrderKey>)> {
     let filter_cost = cost::qual_cost(filter.iter().map(|q| &*q.expr));
-    let lateral_right = lateral(level, &right.rels, &left.rels);
+    let (left_rels, right_rels) = (&left[0].rels, &right[0].rels);
+    let lateral_right = lateral(level, right_rels, left_rels);
     // The orders of the sides: the left side first, and the right side first when the join can have the sides in the other order.
     let mut orders = vec![false];
     if !lateral_right && kind != JoinKind::Left || kind == JoinKind::Left && !lateral_right {
         orders.push(true);
     }
-    let mut rels = left.rels.clone();
-    rels.extend(right.rels.iter().copied());
+    let mut rels = left_rels.clone();
+    rels.extend(right_rels.iter().copied());
     let mut out = Vec::new();
     for swapped in orders {
-        let (outer, inner) = if swapped { (right, left) } else { (left, right) };
+        let (outers, inners) = if swapped { (right, left) } else { (left, right) };
         let join = match (kind, swapped) {
             (JoinKind::Left, true) => JoinKind::Right,
             (k, _) => k,
         };
-        let input = Input { outer, inner, quals, filter_cost, stats };
+        let input = Input { outer: &outers[0], inner: &inners[0], quals, filter_cost, stats };
         let nested = kind == JoinKind::Inner || !swapped && kind == JoinKind::Left;
-        let mut candidates = merge_joins(&input, join);
-        if nested {
-            candidates.extend(nested_loops(&input, join, lateral_right));
+        let mut candidates: Vec<Candidate<'q>> = sorted_merge(&input, join).into_iter().collect();
+        // `match_unsorted_outer`: each plan of the outer side, with the cheapest plan of the inner side or with an inner plan in the order of the merge.
+        for (p, outer) in outers.iter().enumerate() {
+            let input = Input { outer, ..input };
+            let mut each = Vec::new();
+            if nested {
+                each.extend(nested_loops(&input, join, lateral_right));
+            }
+            each.extend(presorted_merges(&input, inners, join));
+            candidates.extend(each.into_iter().map(|c| Candidate { paths: (p, c.paths.1), ..c }));
         }
         candidates.extend(hash_join(&input, join));
         for candidate in candidates {
+            let (outer, inner) = (&outers[candidate.paths.0], &inners[candidate.paths.1]);
             let keys = stats.useful(&rels, &candidate.order(outer, inner, quals));
             out.push((Candidate { swapped, ..candidate }, keys));
         }
@@ -1084,6 +1094,8 @@ struct Candidate<'q> {
     sort: (bool, bool),
     /// For a merge join, its keys.
     keys: Vec<MergeKey>,
+    /// The plans of the outer side and of the inner side that the join reads, as indexes into the plans of each side, where the plan with the lowest total cost is 0.
+    paths: (usize, usize),
     _marker: std::marker::PhantomData<&'q ()>,
 }
 
@@ -1141,6 +1153,7 @@ fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec
             materialize,
             sort: (false, false),
             keys: Vec::new(),
+            paths: (0, 0),
             _marker: std::marker::PhantomData,
         });
     }
@@ -1223,6 +1236,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         materialize: false,
         sort: (false, false),
         keys: Vec::new(),
+        paths: (0, 0),
         _marker: std::marker::PhantomData,
     })
 }
@@ -1306,18 +1320,61 @@ fn outer_order(order: &[OrderKey], clauses: &[Clause<'_>]) -> Option<Vec<MergeKe
     (out.len() == clauses.len()).then_some(out)
 }
 
-/// The merge joins of the two sides, as `sort_inner_and_outer` and then `match_unsorted_outer` make them: in the order of `merge_order`, and in the order of the rows of the outer side when that order differs.
-fn merge_joins<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Vec<Candidate<'q>> {
+/// `sort_inner_and_outer`: the merge join of the cheapest plans of the two sides in the order of `merge_order`.
+fn sorted_merge<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>> {
+    let (clauses, _) = split(input.quals, &input.outer.rels, &input.inner.rels, exprs::can_merge);
+    if clauses.is_empty() {
+        return None;
+    }
+    let keys = merge_order(input, join, &clauses);
+    merge_join(input, join, keys)
+}
+
+/// `generate_mergejoin_paths`: the merge joins of a plan of the outer side in the order of its rows, when that order has the value of each condition. The cheapest plan of the inner side gets a `Sort` when it is not in that order. When it is not, the inner plans in that order with the lowest total cost and with the lowest start cost are inner sides too.
+fn presorted_merges<'q>(
+    input: &Input<'_, 'q>,
+    inners: &[Rel<'q>],
+    join: JoinKind,
+) -> Vec<Candidate<'q>> {
     let (clauses, _) = split(input.quals, &input.outer.rels, &input.inner.rels, exprs::can_merge);
     if clauses.is_empty() {
         return Vec::new();
     }
-    let keys = merge_order(input, join, &clauses);
+    let Some(keys) = outer_order(&input.outer.order, &clauses) else { return Vec::new() };
     let mut out: Vec<Candidate<'q>> = merge_join(input, join, keys.clone()).into_iter().collect();
-    if let Some(presorted) = outer_order(&input.outer.order, &clauses)
-        && presorted != keys
+    let sorted: Vec<usize> = (0..inners.len())
+        .filter(|&j| ordered(&inners[j].order, &keys, |c| clauses[c].inner.clone()))
+        .collect();
+    let costs = |j: usize| (inners[j].node.cost.startup, inners[j].node.cost.total);
+    let by = |a: usize, b: usize, total: bool| {
+        let ((sa, ta), (sb, tb)) = (costs(a), costs(b));
+        if total {
+            ta.total_cmp(&tb).then(sa.total_cmp(&sb))
+        } else {
+            sa.total_cmp(&sb).then(ta.total_cmp(&tb))
+        }
+    };
+    // `get_cheapest_path_for_pathkeys` and `compare_path_costs`: the first plan with the lowest cost.
+    let best = |total: bool| sorted.iter().copied().min_by(|&a, &b| by(a, b, total));
+    let presorted = sorted.first() == Some(&0);
+    let mut total = None;
+    if let Some(j) = best(true)
+        && (!presorted || by(j, 0, true).is_lt())
     {
-        out.extend(merge_join(input, join, presorted));
+        total = Some(j);
+    }
+    let mut startup = None;
+    if let Some(j) = best(false)
+        && (!presorted || by(j, 0, false).is_lt())
+        && j != total.unwrap_or(0)
+    {
+        startup = Some(j);
+    }
+    for j in total.into_iter().chain(startup) {
+        let input = Input { inner: &inners[j], ..*input };
+        out.extend(
+            merge_join(&input, join, keys.clone()).map(|c| Candidate { paths: (0, j), ..c }),
+        );
     }
     out
 }
@@ -1378,6 +1435,7 @@ fn merge_join<'q>(
         materialize,
         sort: (sort_outer, sort_inner),
         keys,
+        paths: (0, 0),
         _marker: std::marker::PhantomData,
     })
 }

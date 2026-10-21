@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - Conditions of joins from equivalence classes with no constant in `EXPLAIN`, as `generate_join_implied_equalities` makes them in PostgreSQL. When the `=` conditions of a query make three or more columns of different tables equal, each join gets one condition of the class, between the first column of each side, also for two tables that the query does not compare. A join of three tables on one value now has the estimate of one condition and not of two (#536).
+- The plans of each set of tables in the join search of `EXPLAIN`, as the `pathlist` of PostgreSQL. A merge join can read a plan of a side that is not its cheapest plan when that plan is in the order of the merge, as `generate_mergejoin_paths` does it. A join that is an outer side tries each plan of the outer side. The number of rows of an estimate that ends in a half now goes to the even number, as `rint` does it in `clamp_row_est`, so a join of four tables on one value has the same plan as in PostgreSQL (#NNN).
 
 ## 0.1.64 (2026-10-22)
 

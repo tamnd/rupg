@@ -87,9 +87,14 @@ impl<T> Paths<T> {
 
     /// `set_cheapest`: the plan with the lowest total cost, then with the lowest start cost, then with the most useful order.
     pub(super) fn cheapest(self) -> Option<T> {
-        let mut best: Option<Path<T>> = None;
-        for path in self.list {
-            let better = best.as_ref().is_none_or(|b| {
+        self.kept().into_iter().next()
+    }
+
+    /// The `pathlist` after `set_cheapest`: the plan that `cheapest` chooses first, then the other plans in the order of their total cost.
+    pub(super) fn kept(self) -> Vec<T> {
+        let mut best: Option<usize> = None;
+        for (i, path) in self.list.iter().enumerate() {
+            let better = best.map(|b| &self.list[b]).is_none_or(|b| {
                 path.total < b.total
                     || path.total == b.total
                         && (path.startup < b.startup
@@ -97,10 +102,15 @@ impl<T> Paths<T> {
                                 && compare_keys(&b.keys, &path.keys) == Compare::Better2)
             });
             if better {
-                best = Some(path);
+                best = Some(i);
             }
         }
-        best.map(|p| p.plan)
+        let mut out: Vec<T> = self.list.into_iter().map(|p| p.plan).collect();
+        if let Some(b) = best {
+            let first = out.remove(b);
+            out.insert(0, first);
+        }
+        out
     }
 }
 
