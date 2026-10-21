@@ -6,7 +6,8 @@ use rupg_catalog::{ConKind, RelKind};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::{
-    InsertStmt, Node, OnConflictAction, OnConflictClause, OverridingKind, RangeVar, SelectStmt,
+    InsertStmt, List, Node, OnConflictAction, OnConflictClause, OverridingKind, RangeVar,
+    SelectStmt,
 };
 use rupg_types::{Value, oid};
 
@@ -241,8 +242,8 @@ impl Item {
     }
 }
 
-/// A column that the statement gives: the index of the column in the table and the place of its name in the column list.
-pub(crate) type Given = (usize, Option<usize>);
+/// A column that the statement gives: the index of the column in the table, the place of its name in the column list, and the subscripts after the name, which are empty when the item sets the whole column.
+pub(crate) type Given = (usize, Option<usize>, List);
 
 /// The error of a clause that the analyzer does not take yet.
 pub(crate) fn not_yet(what: &str) -> Error {
@@ -749,14 +750,14 @@ impl Analyzer<'_> {
     /// `checkInsertTargets`: the columns of the column list, or all the columns of the table when the statement has no list.
     pub(crate) fn insert_targets(
         &self,
-        cols: &rupg_sql::nodes::List,
+        cols: &List,
         name: &str,
         columns: &[Column],
     ) -> Result<Vec<Given>> {
         if cols.is_empty() {
             return Ok((0..columns.len())
                 .filter(|&i| !columns[i].is_dropped())
-                .map(|i| (i, None))
+                .map(|i| (i, None, List::new()))
                 .collect());
         }
         let mut given: Vec<Given> = Vec::with_capacity(cols.len());
@@ -773,27 +774,22 @@ impl Analyzer<'_> {
                 )
                 .at_opt(at));
             };
-            if !rt.indirection.is_empty() {
-                return Err(not_yet("assignment to a field or an element in INSERT").at_opt(at));
-            }
-            if given.iter().any(|&(i, _)| i == index) {
+            // A column can have more than one item only when each item sets a part of the column.
+            let part = !rt.indirection.is_empty();
+            if given.iter().any(|(i, _, other)| *i == index && (!part || other.is_empty())) {
                 return Err(Error::new(
                     SqlState::DUPLICATE_COLUMN,
                     format!("column \"{col_name}\" specified more than once"),
                 )
                 .at_opt(at));
             }
-            given.push((index, at));
+            given.push((index, at, rt.indirection.clone()));
         }
         Ok(given)
     }
 
     /// `transformExpressionList` for a row of `VALUES` in an `INSERT`, which keeps `DEFAULT` at the top of an item.
-    pub(crate) fn value_items(
-        &mut self,
-        list: &rupg_sql::nodes::List,
-        kind: Kind,
-    ) -> Result<Vec<Item>> {
+    pub(crate) fn value_items(&mut self, list: &List, kind: Kind) -> Result<Vec<Item>> {
         let mut items = Vec::with_capacity(list.len());
         for node in list {
             if let Some(Node::SetToDefault(d)) = node {
@@ -836,7 +832,8 @@ impl Analyzer<'_> {
             return Err(error.at_opt(given[items.len()].1));
         }
         let mut row = Vec::with_capacity(items.len());
-        for (item, &(index, _)) in items.into_iter().zip(given) {
+        for (item, (index, at, indirection)) in items.into_iter().zip(given) {
+            let (index, at) = (*index, *at);
             let column = &columns[index];
             // `rewriteTargetListIU`: the value of an identity column with `OVERRIDING`.
             let identity = self.identity(table, index);
@@ -865,11 +862,37 @@ impl Analyzer<'_> {
                 item => item,
             };
             row.push(match item {
+                Item::Default(_) if !indirection.is_empty() => {
+                    return Err(default_part(indirection, at));
+                }
                 Item::Default(_) => self.column_default(table, index, column)?,
-                Item::Expr(expr) => self.assign(expr, column)?,
+                Item::Expr(expr) if indirection.is_empty() => self.assign(expr, column)?,
+                Item::Expr(expr) => self.assign_part(column, indirection, at, expr, None)?,
             });
         }
         Ok(row)
+    }
+
+    /// `transformAssignedExpr` for a column with subscripts: the value of the column `old` with `expr` in the part that `indirection` names. With no `old`, as in `INSERT`, the old value is a null value of the type of the column.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Analyzer::assignment_indirection`].
+    pub(crate) fn assign_part(
+        &mut self,
+        column: &Column,
+        indirection: &List,
+        at: Option<usize>,
+        expr: Expr,
+        old: Option<Expr>,
+    ) -> Result<Expr> {
+        let base = old.unwrap_or_else(|| {
+            let mut null = Expr::new(ExprKind::Const(Value::Null), column.ty);
+            null.typmod = column.typmod;
+            null
+        });
+        let target = (base, &column.name[..], (column.ty, column.typmod));
+        self.assignment_indirection(target, indirection, expr, Context::Assignment, at)
     }
 
     /// `attidentity` of the column of the table with the index `index` from 0, or 0 for a column that is not an identity column.
@@ -969,8 +992,12 @@ impl Analyzer<'_> {
         exprs: Vec<Expr>,
     ) -> Result<Vec<Expr>> {
         let mut slots: Vec<Option<Expr>> = vec![None; columns.len()];
-        for (expr, &(index, _)) in exprs.into_iter().zip(given) {
-            slots[index] = Some(expr);
+        for (expr, &(index, _, _)) in exprs.into_iter().zip(given) {
+            // `process_matched_tle`: the items that set parts of the same column make one value.
+            slots[index] = Some(match slots[index].take() {
+                Some(prior) => merge_parts(prior, expr, &columns[index].name)?,
+                None => expr,
+            });
         }
         let mut row = Vec::with_capacity(columns.len());
         for (index, slot) in slots.into_iter().enumerate() {
@@ -1063,31 +1090,43 @@ impl Analyzer<'_> {
                 }
                 Some(_) => {}
             }
-            rows.push(self.insert_row(items, table, columns, given, explicit, overriding)?);
+            let row = self.insert_row(items, table, columns, given, explicit, overriding)?;
+            // `transformInsertRow` with `strip_indirection`: the row keeps the value of a part of a column, and the row of the table sets the part.
+            let row = row
+                .into_iter()
+                .zip(given)
+                .map(
+                    |(expr, (_, _, indirection))| {
+                        if indirection.is_empty() { expr } else { strip_part(expr) }
+                    },
+                )
+                .collect();
+            rows.push(row);
         }
         let width = rows.first().map_or(0, Vec::len);
         let value_columns: Vec<Column> = given
             .iter()
             .take(width)
             .enumerate()
-            .map(|(i, &(index, _))| Column {
-                name: format!("column{}", i + 1),
-                ty: columns[index].ty,
-                typmod: columns[index].typmod,
-                not_null: false,
+            .map(|(i, (index, _, indirection))| {
+                let (ty, typmod) = match rows.first().and_then(|row| row.get(i)) {
+                    Some(expr) if !indirection.is_empty() => (expr.ty, expr.typmod),
+                    _ => (columns[*index].ty, columns[*index].typmod),
+                };
+                Column { name: format!("column{}", i + 1), ty, typmod, not_null: false }
             })
             .collect();
-        let exprs: Vec<Expr> = value_columns
-            .iter()
-            .enumerate()
-            .map(|(i, c)| {
-                let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
-                let mut expr =
-                    Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), c.ty);
-                expr.typmod = c.typmod;
-                expr
-            })
-            .collect();
+        let mut exprs = Vec::with_capacity(value_columns.len());
+        for (i, (c, (index, at, indirection))) in value_columns.iter().zip(given).enumerate() {
+            let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
+            let mut expr =
+                Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), c.ty);
+            expr.typmod = c.typmod;
+            if !indirection.is_empty() {
+                expr = self.assign_part(&columns[*index], indirection, *at, expr, None)?;
+            }
+            exprs.push(expr);
+        }
         let row = self.full_row(table, columns, given, exprs)?;
         let mut relation = Relation::new(0, value_columns, None, None, Some(rows));
         relation.name = "*VALUES*".to_string();
@@ -1262,4 +1301,58 @@ pub(crate) fn with_checks(
         targets,
         ..Query::default()
     }
+}
+
+/// The error of `DEFAULT` for a part of a column, which has no default.
+pub(crate) fn default_part(indirection: &List, at: Option<usize>) -> Error {
+    let what = match indirection.first() {
+        Some(Some(Node::A_Indices(_))) => "an array element",
+        _ => "a subfield",
+    };
+    Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("cannot set {what} to DEFAULT")).at_opt(at)
+}
+
+/// The value that an assignment to a part of a column sets, without the assignment.
+fn strip_part(expr: Expr) -> Expr {
+    match expr.kind {
+        ExprKind::CoerceToDomain(arg, _) => strip_part(*arg),
+        ExprKind::Subscript(sub) if sub.assign.is_some() => {
+            sub.assign.unwrap_or_else(|| Expr::new(ExprKind::Const(Value::Null), 0))
+        }
+        _ => expr,
+    }
+}
+
+/// Whether the value is an assignment to a part of a column.
+fn is_part(expr: &Expr) -> bool {
+    matches!(&expr.kind, ExprKind::Subscript(sub) if sub.assign.is_some())
+}
+
+/// `process_matched_tle`: two assignments to parts of the same column as one assignment, in which `prior` gives the old value for `src`. When both check the same domain, the domain checks the value after both.
+///
+/// # Errors
+///
+/// `multiple assignments to same column` when one of the two sets the whole column.
+pub(crate) fn merge_parts(prior: Expr, mut src: Expr, name: &str) -> Result<Expr> {
+    let domain = |e: &Expr| matches!(e.kind, ExprKind::CoerceToDomain(..));
+    if prior.ty == src.ty && domain(&prior) && domain(&src) {
+        let (ExprKind::CoerceToDomain(prior, _), ExprKind::CoerceToDomain(arg, _)) =
+            (prior.kind, &mut src.kind)
+        else {
+            return Err(Error::internal("an assignment to a domain that is not CoerceToDomain"));
+        };
+        let inner = std::mem::replace(&mut **arg, Expr::new(ExprKind::Const(Value::Null), 0));
+        **arg = merge_parts(*prior, inner, name)?;
+        return Ok(src);
+    }
+    if prior.ty != src.ty || !is_part(&prior) || !is_part(&src) {
+        return Err(Error::new(
+            SqlState::SYNTAX_ERROR,
+            format!("multiple assignments to same column \"{name}\""),
+        ));
+    }
+    if let ExprKind::Subscript(sub) = &mut src.kind {
+        sub.container = prior;
+    }
+    Ok(src)
 }

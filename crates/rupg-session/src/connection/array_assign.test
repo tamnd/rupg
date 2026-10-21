@@ -1,0 +1,205 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE ta (id int, a int[], b text[], c int[], v varchar(3)[]);
+CREATE TABLE
+> INSERT INTO ta VALUES (1, '{1,2,3}', '{x,y}', '{{1,2},{3,4}}', '{abc}');
+INSERT 0 1
+> UPDATE ta SET a[2] = 20 WHERE id = 1;
+UPDATE 1
+> SELECT a FROM ta;
+fields a@ta.2:1007:-1:-1
+row {1,20,3}
+SELECT 1
+> UPDATE ta SET a[5] = 50, b[1] = 'z';
+UPDATE 1
+> SELECT a, b FROM ta;
+fields a@ta.2:1007:-1:-1,b@ta.3:1009:-1:-1
+row {1,20,3,NULL,50},{z,y}
+SELECT 1
+> UPDATE ta SET a[1] = 10, a[2] = 21;
+UPDATE 1
+> SELECT a FROM ta;
+fields a@ta.2:1007:-1:-1
+row {10,21,3,NULL,50}
+SELECT 1
+> UPDATE ta SET a[1:2] = ARRAY[7,8];
+UPDATE 1
+> SELECT a FROM ta;
+fields a@ta.2:1007:-1:-1
+row {7,8,3,NULL,50}
+SELECT 1
+> UPDATE ta SET c[2][1] = 30;
+UPDATE 1
+> SELECT c FROM ta;
+fields c@ta.4:1007:-1:-1
+row {{1,2},{30,4}}
+SELECT 1
+> UPDATE ta SET c[1:2][2] = ARRAY[[5],[6]];
+ERROR 2202E source array too small
+> SELECT c FROM ta;
+fields c@ta.4:1007:-1:-1
+row {{1,2},{30,4}}
+SELECT 1
+> UPDATE ta SET a[1] = 1, a = '{9}';
+ERROR 42601 multiple assignments to same column "a"
+> UPDATE ta SET a = '{9}', a[1] = 1;
+ERROR 42601 multiple assignments to same column "a"
+> UPDATE ta SET a[1] = DEFAULT;
+ERROR 0A000 cannot set an array element to DEFAULT at 15
+> UPDATE ta SET a[1] = 'abc';
+ERROR 22P02 invalid input syntax for type integer: "abc" at 22
+> UPDATE ta SET a['x'] = 1;
+ERROR 22P02 invalid input syntax for type integer: "x" at 17
+> UPDATE ta SET id[1] = 1;
+ERROR 42804 cannot subscript type integer because it does not support subscripting at 15
+> UPDATE ta SET a[NULL] = 1;
+ERROR 22004 array subscript in assignment must not be null
+> UPDATE ta SET v[2] = 'abcdef';
+ERROR 22001 value too long for type character varying(3)
+> UPDATE ta SET v[2] = 'de';
+UPDATE 1
+> SELECT v FROM ta;
+fields v@ta.5:1015:-1:7
+row {abc,de}
+SELECT 1
+> UPDATE ta SET a[1] = 100 RETURNING a, a[1];
+fields a@ta.2:1007:-1:-1,a:23:4:-1
+row {100,8,3,NULL,50},100
+UPDATE 1
+> UPDATE ta SET a[2:1] = ARRAY[1];
+ERROR 2202E upper bound cannot be less than lower bound
+> UPDATE ta SET a[1:3] = ARRAY[1];
+ERROR 2202E source array too small
+> UPDATE ta SET a[1:2] = NULL;
+UPDATE 1
+> SELECT a FROM ta;
+fields a@ta.2:1007:-1:-1
+row {100,8,3,NULL,50}
+SELECT 1
+> UPDATE ta SET a[2] = NULL;
+UPDATE 1
+> SELECT a FROM ta;
+fields a@ta.2:1007:-1:-1
+row {100,NULL,3,NULL,50}
+SELECT 1
+> UPDATE ta SET a = NULL;
+UPDATE 1
+> UPDATE ta SET a[3] = 3;
+UPDATE 1
+> SELECT a, array_dims(a) FROM ta;
+fields a@ta.2:1007:-1:-1,array_dims:25:-1:-1
+row [3:3]={3},[3:3]
+SELECT 1
+> INSERT INTO ta (id, a[2]) VALUES (2, 5);
+INSERT 0 1
+> SELECT id, a, array_dims(a) FROM ta WHERE id = 2;
+fields id@ta.1:23:4:-1,a@ta.2:1007:-1:-1,array_dims:25:-1:-1
+row 2,[2:2]={5},[2:2]
+SELECT 1
+> INSERT INTO ta (id, a[1], a[3]) VALUES (3, 1, 3);
+INSERT 0 1
+> SELECT id, a FROM ta WHERE id = 3;
+fields id@ta.1:23:4:-1,a@ta.2:1007:-1:-1
+row 3,{1,NULL,3}
+SELECT 1
+> INSERT INTO ta (id, a[1], a[2]) VALUES (4, 1, 2), (5, 3, 4);
+INSERT 0 2
+> SELECT id, a FROM ta WHERE id >= 4 ORDER BY id;
+fields id@ta.1:23:4:-1,a@ta.2:1007:-1:-1
+row 4,{1,2}
+row 5,{3,4}
+SELECT 2
+> INSERT INTO ta (id, a[1], a[2]) SELECT 6, 1, 2;
+INSERT 0 1
+> SELECT id, a FROM ta WHERE id = 6;
+fields id@ta.1:23:4:-1,a@ta.2:1007:-1:-1
+row 6,{1,2}
+SELECT 1
+> INSERT INTO ta (id, a[1]) VALUES (7, DEFAULT);
+ERROR 0A000 cannot set an array element to DEFAULT at 21
+> INSERT INTO ta (id, a, a[1]) VALUES (7, '{1}', 2);
+ERROR 42701 column "a" specified more than once at 24
+> INSERT INTO ta (id, a[1], a) VALUES (7, 2, '{1}');
+ERROR 42701 column "a" specified more than once at 27
+> INSERT INTO ta (a[1:2]) VALUES (ARRAY[1,2]);
+INSERT 0 1
+> SELECT a FROM ta WHERE id IS NULL;
+fields a@ta.2:1007:-1:-1
+row {1,2}
+SELECT 1
+> INSERT INTO ta (id, c[2][2]) VALUES (8, 4);
+INSERT 0 1
+> SELECT c, array_dims(c) FROM ta WHERE id = 8;
+fields c@ta.4:1007:-1:-1,array_dims:25:-1:-1
+row [2:2][2:2]={{4}},[2:2][2:2]
+SELECT 1
+> INSERT INTO ta (id, a[1]) VALUES (9, 'x');
+ERROR 22P02 invalid input syntax for type integer: "x" at 38
+> CREATE TABLE tb (id int PRIMARY KEY, a int[]);
+CREATE TABLE
+> INSERT INTO tb VALUES (1, '{1,2}');
+INSERT 0 1
+> INSERT INTO tb VALUES (1, '{5}') ON CONFLICT (id) DO UPDATE SET a[3] = 3;
+INSERT 0 1
+> SELECT a FROM tb;
+fields a@tb.2:1007:-1:-1
+row {1,2,3}
+SELECT 1
+> INSERT INTO tb (id, a[2]) VALUES (1, 9) ON CONFLICT (id) DO UPDATE SET a[1] = excluded.a[2];
+INSERT 0 1
+> SELECT a FROM tb;
+fields a@tb.2:1007:-1:-1
+row {9,2,3}
+SELECT 1
+> UPDATE tb SET a[1] = a[2] + 100, a[2] = a[1];
+UPDATE 1
+> SELECT a FROM tb;
+fields a@tb.2:1007:-1:-1
+row {102,9,3}
+SELECT 1
+> MERGE INTO tb USING (VALUES (1, 7), (2, 8)) AS s(id, x) ON tb.id = s.id WHEN MATCHED THEN UPDATE SET a[4] = s.x WHEN NOT MATCHED THEN INSERT (id, a[2]) VALUES (s.id, s.x);
+MERGE 2
+> SELECT id, a, array_dims(a) FROM tb ORDER BY id;
+fields id@tb.1:23:4:-1,a@tb.2:1007:-1:-1,array_dims:25:-1:-1
+row 1,{102,9,3,7},[1:4]
+row 2,[2:2]={8},[2:2]
+SELECT 2
+> CREATE DOMAIN posarr AS int[] CHECK (VALUE[1] > 0);
+CREATE DOMAIN
+> CREATE TABLE tc (id int, a posarr);
+CREATE TABLE
+> INSERT INTO tc VALUES (1, '{1,2}');
+INSERT 0 1
+> UPDATE tc SET a[2] = 5;
+UPDATE 1
+> SELECT a FROM tc;
+fields a@tc.2:1007:-1:-1
+row {1,5}
+SELECT 1
+> UPDATE tc SET a[1] = -1;
+ERROR 23514 value for domain posarr violates check constraint "posarr_check"
+> UPDATE tc SET a[1] = -1, a[1] = 3;
+UPDATE 1
+> SELECT a FROM tc;
+fields a@tc.2:1007:-1:-1
+row {3,5}
+SELECT 1
+> INSERT INTO tc (id, a[1]) VALUES (2, 4);
+INSERT 0 1
+> INSERT INTO tc (id, a[2]) VALUES (3, 4);
+INSERT 0 1
+> SELECT id, a FROM tc ORDER BY id;
+fields id@tc.1:23:4:-1,a@tc.2:1007:-1:-1
+row 1,{3,5}
+row 2,{4}
+row 3,[2:2]={4}
+SELECT 3
+> UPDATE ta SET a[1][2] = 3 WHERE id = 3;
+ERROR 2202E wrong number of array subscripts
+> UPDATE ta SET a[1] = ARRAY[1] WHERE id = 3;
+ERROR 42804 subscripted assignment to "a" requires type integer but expression is of type integer[] at 15
+HINT You will need to rewrite or cast the expression.
+> UPDATE ta SET a[1:2] = 3 WHERE id = 3;
+ERROR 42804 subscripted assignment to "a" requires type integer[] but expression is of type integer at 15
+HINT You will need to rewrite or cast the expression.
