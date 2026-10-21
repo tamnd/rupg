@@ -53,20 +53,22 @@ impl Triggers {
 
     /// True when a trigger `AFTER ... FOR EACH ROW` or a trigger with transition tables gets the rows of the write.
     pub(super) fn after_rows(&self) -> bool {
-        self.list.iter().any(|t| {
-            t.trigger.kind & (TRIGGER_ROW | TRIGGER_BEFORE) == TRIGGER_ROW
-                || has_transition(&t.trigger)
-        })
+        self.of(true, false).next().is_some()
+            || self.list.iter().any(|t| has_transition(&t.trigger))
     }
 
-    /// The triggers with the level `level` and the time `before`.
+    /// The triggers with the level `level` and the time `before`. A trigger `INSTEAD OF` is not one of them.
     fn of(&self, row: bool, before: bool) -> impl Iterator<Item = &Armed> {
         self.list.iter().filter(move |t| {
             (t.trigger.kind & TRIGGER_ROW != 0) == row
                 && (t.trigger.kind & TRIGGER_BEFORE != 0) == before
+                && t.trigger.kind & TRIGGER_INSTEAD == 0
         })
     }
 }
+
+/// The bits in `tgtype` of a trigger `INSTEAD OF ... FOR EACH ROW`.
+const INSTEAD_ROW: i16 = TRIGGER_ROW | TRIGGER_INSTEAD;
 
 /// True for a trigger with `REFERENCING OLD TABLE` or `REFERENCING NEW TABLE`.
 fn has_transition(trigger: &Trigger) -> bool {
@@ -301,6 +303,51 @@ impl Connection {
             }
         }
         Ok(out)
+    }
+
+    /// `ExecIRInsertTriggers`, `ExecIRUpdateTriggers` and `ExecIRDeleteTriggers`: the triggers `INSTEAD OF ... FOR EACH ROW` of a view for the rows of the plan, in the order of their names. A trigger that gives a null row skips the row, and the row that a trigger gives is the new row for the next trigger and for `RETURNING`. The rows of an `INSERT` and of an `UPDATE` start with the new row, and the rows of an `UPDATE` and of a `DELETE` end with the old row. It gives the number of rows that the triggers did not skip, and the rows of `RETURNING`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    pub(super) fn instead_rows(
+        &self,
+        info: &Write,
+        triggers: &Triggers,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<(u64, Vec<Vec<Value>>), Error> {
+        let instead: Vec<&Armed> =
+            triggers.list.iter().filter(|t| t.trigger.kind & INSTEAD_ROW == INSTEAD_ROW).collect();
+        let all = self.table_width(info);
+        let returning = info.returning.is_some();
+        let (mut count, mut written) = (0, Vec::new());
+        'rows: for mut row in rows {
+            let old = (info.kind != WriteKind::Insert)
+                .then(|| row.split_off(row.len().saturating_sub(all)));
+            let mut new = (info.kind != WriteKind::Delete).then(|| row[..info.width].to_vec());
+            for armed in &instead {
+                let rows = (old.clone(), new.clone());
+                let Some(returned) =
+                    self.call_trigger(&armed.trigger, triggers.event, rows, None)?
+                else {
+                    continue 'rows;
+                };
+                if new.is_some() {
+                    new = Some(returned);
+                }
+            }
+            count += 1;
+            if returning {
+                match new {
+                    Some(mut new) => {
+                        new.extend(row.drain(info.width..));
+                        written.push(new);
+                    }
+                    None => written.push(row),
+                }
+            }
+        }
+        Ok((count, written))
     }
 
     /// `ExecARInsertTriggers`, `ExecASInsertTriggers` and the other calls of the triggers `AFTER` of a write: the events of the triggers `FOR EACH ROW` for the rows `old` and `new` that the write changed, then the events of the triggers `FOR EACH STATEMENT`, at the end of the queue. A trigger with transition tables reads all the rows of the write in them.

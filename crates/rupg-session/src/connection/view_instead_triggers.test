@@ -1,0 +1,261 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE base (id int PRIMARY KEY, name text, qty int);
+CREATE TABLE
+> INSERT INTO base VALUES (1, 'a', 10), (2, 'b', 20), (3, 'c', 30);
+INSERT 0 3
+> CREATE VIEW bv AS SELECT id, name, qty * 2 AS dbl FROM base;
+CREATE VIEW
+> CREATE FUNCTION bv_ins() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % on %: new=%', TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME, NEW;
+>>   IF NEW.id < 0 THEN RETURN NULL; END IF;
+>>   INSERT INTO base VALUES (NEW.id, NEW.name, NEW.dbl / 2);
+>>   NEW.name := upper(NEW.name);
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE FUNCTION bv_upd() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % on %: old=% new=%', TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME, OLD, NEW;
+>>   IF NEW.name = 'skip' THEN RETURN NULL; END IF;
+>>   UPDATE base SET name = NEW.name, qty = NEW.dbl / 2 WHERE id = OLD.id;
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE FUNCTION bv_del() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % on %: old=%', TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME, OLD;
+>>   IF OLD.id = 2 THEN RETURN NULL; END IF;
+>>   DELETE FROM base WHERE id = OLD.id;
+>>   RETURN OLD;
+>> END $$;
+CREATE FUNCTION
+> CREATE FUNCTION bv_stmt() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % on %', TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bv_ins INSTEAD OF INSERT ON bv FOR EACH ROW EXECUTE FUNCTION bv_ins();
+CREATE TRIGGER
+> CREATE TRIGGER bv_upd INSTEAD OF UPDATE ON bv FOR EACH ROW EXECUTE FUNCTION bv_upd();
+CREATE TRIGGER
+> CREATE TRIGGER bv_del INSTEAD OF DELETE ON bv FOR EACH ROW EXECUTE FUNCTION bv_del();
+CREATE TRIGGER
+> CREATE TRIGGER bv_bs BEFORE INSERT OR UPDATE OR DELETE ON bv FOR EACH STATEMENT EXECUTE FUNCTION bv_stmt();
+CREATE TRIGGER
+> CREATE TRIGGER bv_as AFTER INSERT OR UPDATE OR DELETE ON bv FOR EACH STATEMENT EXECUTE FUNCTION bv_stmt();
+CREATE TRIGGER
+> INSERT INTO bv VALUES (4, 'd', 80);
+NOTICE 00000 BEFORE STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(4,d,80) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+INSERT 0 1
+> INSERT INTO bv VALUES (5, 'e', 100), (-1, 'neg', 0) RETURNING *;
+NOTICE 00000 BEFORE STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(5,e,100) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(-1,neg,0) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1,dbl@bv.3:23:4:-1
+row 5,E,100
+INSERT 0 1
+> INSERT INTO bv (id, name) VALUES (6, 'f') RETURNING id, name, dbl;
+NOTICE 00000 BEFORE STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(6,f,) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1,dbl@bv.3:23:4:-1
+row 6,F,NULL
+INSERT 0 1
+> INSERT INTO bv SELECT id + 10, name, dbl FROM bv WHERE id < 3;
+NOTICE 00000 BEFORE STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(11,a,20) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(12,b,40) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+INSERT 0 2
+> SELECT * FROM base ORDER BY id;
+fields id@base.1:23:4:-1,name@base.2:25:-1:-1,qty@base.3:23:4:-1
+row 1,a,10
+row 2,b,20
+row 3,c,30
+row 4,d,40
+row 5,e,50
+row 6,f,NULL
+row 11,a,10
+row 12,b,20
+SELECT 8
+> UPDATE bv SET name = 'B2' WHERE id = 2;
+NOTICE 00000 BEFORE STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(2,b,40) new=(2,B2,40) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+UPDATE 1
+> UPDATE bv SET dbl = dbl + 2 WHERE id > 10 RETURNING *;
+NOTICE 00000 BEFORE STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(11,a,20) new=(11,a,22) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(12,b,40) new=(12,b,42) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1,dbl@bv.3:23:4:-1
+row 11,a,22
+row 12,b,42
+UPDATE 2
+> UPDATE bv SET name = 'skip' WHERE id = 1;
+NOTICE 00000 BEFORE STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(1,a,20) new=(1,skip,20) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+UPDATE 0
+> UPDATE bv SET name = name || '!' RETURNING id, name;
+NOTICE 00000 BEFORE STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(1,a,20) new=(1,a!,20) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(3,c,60) new=(3,c!,60) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(4,d,80) new=(4,d!,80) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(5,e,100) new=(5,e!,100) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(6,f,) new=(6,f!,) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(2,B2,40) new=(2,B2!,40) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(11,a,22) new=(11,a!,22) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(12,b,42) new=(12,b!,42) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1
+row 1,a!
+row 3,c!
+row 4,d!
+row 5,e!
+row 6,f!
+row 2,B2!
+row 11,a!
+row 12,b!
+UPDATE 8
+> SELECT * FROM base ORDER BY id;
+fields id@base.1:23:4:-1,name@base.2:25:-1:-1,qty@base.3:23:4:-1
+row 1,a!,10
+row 2,B2!,20
+row 3,c!,30
+row 4,d!,40
+row 5,e!,50
+row 6,f!,NULL
+row 11,a!,11
+row 12,b!,21
+SELECT 8
+> DELETE FROM bv WHERE id IN (1, 2);
+NOTICE 00000 BEFORE STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW DELETE on bv: old=(1,a!,20) (PL/pgSQL function bv_del() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW DELETE on bv: old=(2,B2!,40) (PL/pgSQL function bv_del() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+DELETE 1
+> DELETE FROM bv WHERE id = 3;
+NOTICE 00000 BEFORE STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW DELETE on bv: old=(3,c!,60) (PL/pgSQL function bv_del() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+DELETE 1
+> DELETE FROM bv WHERE id > 10 RETURNING *;
+NOTICE 00000 BEFORE STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW DELETE on bv: old=(11,a!,22) (PL/pgSQL function bv_del() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW DELETE on bv: old=(12,b!,42) (PL/pgSQL function bv_del() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1,dbl@bv.3:23:4:-1
+row 11,a!,22
+row 12,b!,42
+DELETE 2
+> DELETE FROM bv WHERE id = 999;
+NOTICE 00000 BEFORE STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+DELETE 0
+> SELECT * FROM bv ORDER BY id;
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1,dbl@bv.3:23:4:-1
+row 2,B2!,40
+row 4,d!,80
+row 5,e!,100
+row 6,f!,NULL
+SELECT 4
+> CREATE TABLE other (k int, label text);
+CREATE TABLE
+> INSERT INTO other VALUES (4, 'four'), (5, 'five');
+INSERT 0 2
+> UPDATE bv SET name = o.label FROM other o WHERE bv.id = o.k RETURNING bv.*, o.label;
+NOTICE 00000 BEFORE STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(4,d!,80) new=(4,four,80) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW UPDATE on bv: old=(5,e!,100) new=(5,five,100) (PL/pgSQL function bv_upd() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT UPDATE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1,dbl@bv.3:23:4:-1,label@other.2:25:-1:-1
+row 4,four,80,four
+row 5,five,100,five
+UPDATE 2
+> DELETE FROM bv USING other o WHERE bv.id = o.k AND o.k = 4 RETURNING bv.id, o.label;
+NOTICE 00000 BEFORE STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW DELETE on bv: old=(4,four,80) (PL/pgSQL function bv_del() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT DELETE on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,label@other.2:25:-1:-1
+row 4,four
+DELETE 1
+> SELECT * FROM base ORDER BY id;
+fields id@base.1:23:4:-1,name@base.2:25:-1:-1,qty@base.3:23:4:-1
+row 2,B2!,20
+row 5,five,50
+row 6,f!,NULL
+SELECT 3
+> CREATE VIEW v2 AS SELECT id, name FROM base WHERE id > 4;
+CREATE VIEW
+> CREATE TRIGGER v2_ins INSTEAD OF INSERT ON v2 FOR EACH ROW EXECUTE FUNCTION bv_stmt();
+CREATE TRIGGER
+> INSERT INTO v2 VALUES (7, 'g');
+NOTICE 00000 INSTEAD OF ROW INSERT on v2 (PL/pgSQL function bv_stmt() line 3 at RAISE)
+INSERT 0 0
+> CREATE TRIGGER bad BEFORE INSERT ON bv FOR EACH ROW EXECUTE FUNCTION bv_ins();
+ERROR 42809 "bv" is a view
+DETAIL Views cannot have row-level BEFORE or AFTER triggers.
+> CREATE TRIGGER bad INSTEAD OF INSERT ON base FOR EACH ROW EXECUTE FUNCTION bv_ins();
+ERROR 42809 "base" is a table
+DETAIL Tables cannot have INSTEAD OF triggers.
+> CREATE TRIGGER bad INSTEAD OF INSERT ON bv FOR EACH STATEMENT EXECUTE FUNCTION bv_ins();
+ERROR 0A000 INSTEAD OF triggers must be FOR EACH ROW
+> CREATE FUNCTION two() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE 'two: %', NEW;
+>>   NEW.name := NEW.name || '2';
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER bv_ins2 INSTEAD OF INSERT ON bv FOR EACH ROW EXECUTE FUNCTION two();
+CREATE TRIGGER
+> INSERT INTO bv VALUES (8, 'h') RETURNING *;
+NOTICE 00000 BEFORE STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(8,h,) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 two: (8,H,) (PL/pgSQL function two() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1,dbl@bv.3:23:4:-1
+row 8,H2,NULL
+INSERT 0 1
+> SELECT * FROM base ORDER BY id;
+fields id@base.1:23:4:-1,name@base.2:25:-1:-1,qty@base.3:23:4:-1
+row 2,B2!,20
+row 5,five,50
+row 6,f!,NULL
+row 8,h,NULL
+SELECT 4
+> ALTER VIEW bv ALTER COLUMN name SET DEFAULT 'dflt';
+ALTER VIEW
+> INSERT INTO bv (id, dbl) VALUES (9, 18) RETURNING *;
+NOTICE 00000 BEFORE STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(9,dflt,18) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 two: (9,DFLT,18) (PL/pgSQL function two() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1,name@bv.2:25:-1:-1,dbl@bv.3:23:4:-1
+row 9,DFLT2,18
+INSERT 0 1
+> WITH w AS (INSERT INTO bv VALUES (20, 't', 40) RETURNING id) SELECT * FROM w;
+NOTICE 00000 BEFORE STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+NOTICE 00000 INSTEAD OF ROW INSERT on bv: new=(20,t,40) (PL/pgSQL function bv_ins() line 3 at RAISE)
+NOTICE 00000 two: (20,T,40) (PL/pgSQL function two() line 3 at RAISE)
+NOTICE 00000 AFTER STATEMENT INSERT on bv (PL/pgSQL function bv_stmt() line 3 at RAISE)
+fields id@bv.1:23:4:-1
+row 20
+SELECT 1
+> SELECT * FROM base ORDER BY id;
+fields id@base.1:23:4:-1,name@base.2:25:-1:-1,qty@base.3:23:4:-1
+row 2,B2!,20
+row 5,five,50
+row 6,f!,NULL
+row 8,h,NULL
+row 9,dflt,9
+row 20,t,20
+SELECT 6
