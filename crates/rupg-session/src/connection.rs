@@ -3262,6 +3262,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/describe_object.test")));
     }
 
+    /// `pg_identify_object` for the kinds of objects: the type, the schema, the name and the identity of relations, columns, types, functions, schemas, constraints, defaults, rules, triggers, collations, languages, access methods, operators, operator classes and families and their members, casts, objects of text search, conversions, roles, databases, tablespaces and extensions. The identity always has the schema, and an object that does not exist gives only its type. `connection/identify_object.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn identify_object() {
+        big_stack(|| script(include_str!("connection/identify_object.test")));
+    }
+
     /// `CREATE FUNCTION` and `DROP FUNCTION` for functions in SQL: calls in the target list, in `FROM` and in `WHERE`, a set, `OUT` parameters, `RETURNS TABLE`, the rows of `pg_proc`, the errors of a call and of a body, the dependencies of a view, of a type and of a schema, and the errors and notices of `DROP FUNCTION`. `connection/create_function.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn create_function() {
