@@ -1,0 +1,240 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE mt_t (id int PRIMARY KEY, v int CHECK (v < 1000), w text);
+CREATE TABLE
+> CREATE TABLE mt_s (id int, v int);
+CREATE TABLE
+> INSERT INTO mt_t VALUES (1, 10, 'a'), (2, 20, 'b'), (3, 30, 'c'), (4, 40, 'd');
+INSERT 0 4
+> INSERT INTO mt_s VALUES (1, 11), (2, 22), (3, 33), (5, 55), (6, 66), (7, -1);
+INSERT 0 6
+> CREATE FUNCTION mt_stmt() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % %', tg_name, tg_when, tg_level, tg_op;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE FUNCTION mt_row() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % old=% new=%', tg_name, tg_when, tg_op, old, new;
+>>   IF tg_when = 'BEFORE' AND tg_op <> 'DELETE' THEN
+>>     IF new.v = 55 THEN
+>>       RETURN NULL;
+>>     END IF;
+>>     IF new.v = 66 THEN
+>>       new.w := 'changed';
+>>     END IF;
+>>     IF new.v = 33 THEN
+>>       new.v := 333;
+>>     END IF;
+>>   END IF;
+>>   IF tg_when = 'BEFORE' AND tg_op = 'DELETE' AND old.id = 4 THEN
+>>     RETURN NULL;
+>>   END IF;
+>>   IF tg_op = 'DELETE' THEN
+>>     RETURN old;
+>>   END IF;
+>>   RETURN new;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mt_bs_i BEFORE INSERT ON mt_t FOR EACH STATEMENT EXECUTE FUNCTION mt_stmt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_bs_u BEFORE UPDATE ON mt_t FOR EACH STATEMENT EXECUTE FUNCTION mt_stmt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_bs_d BEFORE DELETE ON mt_t FOR EACH STATEMENT EXECUTE FUNCTION mt_stmt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_as_i AFTER INSERT ON mt_t FOR EACH STATEMENT EXECUTE FUNCTION mt_stmt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_as_u AFTER UPDATE ON mt_t FOR EACH STATEMENT EXECUTE FUNCTION mt_stmt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_as_d AFTER DELETE ON mt_t FOR EACH STATEMENT EXECUTE FUNCTION mt_stmt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_br BEFORE INSERT OR UPDATE OR DELETE ON mt_t FOR EACH ROW EXECUTE FUNCTION mt_row();
+CREATE TRIGGER
+> CREATE TRIGGER mt_ar AFTER INSERT OR UPDATE OR DELETE ON mt_t FOR EACH ROW EXECUTE FUNCTION mt_row();
+CREATE TRIGGER
+> MERGE INTO mt_t t USING mt_s s ON t.id = s.id WHEN MATCHED AND s.v = 22 THEN DELETE WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED AND s.v > 0 THEN INSERT VALUES (s.id, s.v, 'new') WHEN NOT MATCHED THEN DO NOTHING RETURNING merge_action(), t.*;
+NOTICE 00000 mt_bs_i BEFORE STATEMENT INSERT (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_bs_d BEFORE STATEMENT DELETE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_br BEFORE UPDATE old=(1,10,a) new=(1,11,a) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_br BEFORE DELETE old=(2,20,b) new=<NULL> (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_br BEFORE UPDATE old=(3,30,c) new=(3,33,c) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_br BEFORE INSERT old=<NULL> new=(5,55,new) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_br BEFORE INSERT old=<NULL> new=(6,66,new) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_ar AFTER UPDATE old=(1,10,a) new=(1,11,a) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_ar AFTER DELETE old=(2,20,b) new=<NULL> (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_ar AFTER UPDATE old=(3,30,c) new=(3,333,c) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_ar AFTER INSERT old=<NULL> new=(6,66,changed) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_as_d AFTER STATEMENT DELETE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_as_u AFTER STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_as_i AFTER STATEMENT INSERT (PL/pgSQL function mt_stmt() line 3 at RAISE)
+fields merge_action:25:-1:-1,id@mt_t.1:23:4:-1,v@mt_t.2:23:4:-1,w@mt_t.3:25:-1:-1
+row UPDATE,1,11,a
+row DELETE,2,20,b
+row UPDATE,3,333,c
+row INSERT,6,66,changed
+MERGE 4
+> SELECT * FROM mt_t ORDER BY id;
+fields id@mt_t.1:23:4:-1,v@mt_t.2:23:4:-1,w@mt_t.3:25:-1:-1
+row 1,11,a
+row 3,333,c
+row 4,40,d
+row 6,66,changed
+SELECT 4
+> MERGE INTO mt_t t USING mt_s s ON t.id = s.id WHEN MATCHED AND t.id = 1 THEN UPDATE SET v = t.v + 1;
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_br BEFORE UPDATE old=(1,11,a) new=(1,12,a) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_ar AFTER UPDATE old=(1,11,a) new=(1,12,a) (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_as_u AFTER STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+MERGE 1
+> MERGE INTO mt_t t USING mt_s s ON t.id = s.id WHEN NOT MATCHED BY SOURCE THEN DELETE;
+NOTICE 00000 mt_bs_d BEFORE STATEMENT DELETE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_br BEFORE DELETE old=(4,40,d) new=<NULL> (PL/pgSQL function mt_row() line 3 at RAISE)
+NOTICE 00000 mt_as_d AFTER STATEMENT DELETE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+MERGE 0
+> MERGE INTO mt_t t USING mt_s s ON t.id = s.id WHEN MATCHED THEN DO NOTHING;
+MERGE 0
+> SELECT * FROM mt_t ORDER BY id;
+fields id@mt_t.1:23:4:-1,v@mt_t.2:23:4:-1,w@mt_t.3:25:-1:-1
+row 1,12,a
+row 3,333,c
+row 4,40,d
+row 6,66,changed
+SELECT 4
+> DROP TRIGGER mt_br ON mt_t;
+DROP TRIGGER
+> DROP TRIGGER mt_ar ON mt_t;
+DROP TRIGGER
+> CREATE FUNCTION mt_big() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   new.v := new.v * 100;
+>>   RETURN new;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mt_big BEFORE UPDATE ON mt_t FOR EACH ROW WHEN (new.v > 5) EXECUTE FUNCTION mt_big();
+CREATE TRIGGER
+> MERGE INTO mt_t t USING (VALUES (1, 20)) s(id, v) ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = s.v;
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+ERROR 23514 new row for relation "mt_t" violates check constraint "mt_t_v_check"
+DETAIL Failing row contains (1, 2000, a).
+> MERGE INTO mt_t t USING (VALUES (1, 2)) s(id, v) ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = s.v;
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_as_u AFTER STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+MERGE 1
+> SELECT * FROM mt_t ORDER BY id;
+fields id@mt_t.1:23:4:-1,v@mt_t.2:23:4:-1,w@mt_t.3:25:-1:-1
+row 1,2,a
+row 3,333,c
+row 4,40,d
+row 6,66,changed
+SELECT 4
+> DROP TRIGGER mt_big ON mt_t;
+DROP TRIGGER
+> CREATE FUNCTION mt_cols() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % %', tg_name, old, new;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mt_of_w AFTER UPDATE OF w ON mt_t FOR EACH ROW EXECUTE FUNCTION mt_cols();
+CREATE TRIGGER
+> MERGE INTO mt_t t USING (VALUES (1, 3)) s(id, v) ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = s.v;
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_as_u AFTER STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+MERGE 1
+> MERGE INTO mt_t t USING (VALUES (1, 4)) s(id, v) ON t.id = s.id WHEN MATCHED AND s.v > 10 THEN UPDATE SET v = s.v WHEN MATCHED THEN UPDATE SET w = 'w';
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_of_w (1,3,a) (1,3,w) (PL/pgSQL function mt_cols() line 3 at RAISE)
+NOTICE 00000 mt_as_u AFTER STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+MERGE 1
+> MERGE INTO mt_t t USING (VALUES (1, 3)) s(id, v) ON t.id = s.id WHEN MATCHED AND s.v < 10 THEN UPDATE SET v = s.v WHEN MATCHED THEN UPDATE SET w = 'w';
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_of_w (1,3,w) (1,3,w) (PL/pgSQL function mt_cols() line 3 at RAISE)
+NOTICE 00000 mt_as_u AFTER STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+MERGE 1
+> DROP TRIGGER mt_of_w ON mt_t;
+DROP TRIGGER
+> CREATE FUNCTION mt_tt() RETURNS trigger LANGUAGE plpgsql AS $$
+>> DECLARE r record;
+>> BEGIN
+>>   IF tg_op IN ('UPDATE', 'DELETE') THEN
+>>     FOR r IN SELECT * FROM old_t ORDER BY id LOOP
+>>       RAISE NOTICE '% old %', tg_name, r;
+>>     END LOOP;
+>>   END IF;
+>>   IF tg_op IN ('UPDATE', 'INSERT') THEN
+>>     FOR r IN SELECT * FROM new_t ORDER BY id LOOP
+>>       RAISE NOTICE '% new %', tg_name, r;
+>>     END LOOP;
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mt_tt_i AFTER INSERT ON mt_t REFERENCING NEW TABLE AS new_t FOR EACH STATEMENT EXECUTE FUNCTION mt_tt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_tt_u AFTER UPDATE ON mt_t REFERENCING OLD TABLE AS old_t NEW TABLE AS new_t FOR EACH STATEMENT EXECUTE FUNCTION mt_tt();
+CREATE TRIGGER
+> CREATE TRIGGER mt_tt_d AFTER DELETE ON mt_t REFERENCING OLD TABLE AS old_t FOR EACH STATEMENT EXECUTE FUNCTION mt_tt();
+CREATE TRIGGER
+> MERGE INTO mt_t t USING (VALUES (1, 7), (3, 0), (8, 80), (9, 90)) s(id, v) ON t.id = s.id WHEN MATCHED AND s.v = 0 THEN DELETE WHEN MATCHED THEN UPDATE SET v = s.v WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+NOTICE 00000 mt_bs_i BEFORE STATEMENT INSERT (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_bs_d BEFORE STATEMENT DELETE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_as_d AFTER STATEMENT DELETE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_tt_d old (3,333,c) (PL/pgSQL function mt_tt() line 6 at RAISE)
+NOTICE 00000 mt_as_u AFTER STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_tt_u old (1,3,w) (PL/pgSQL function mt_tt() line 6 at RAISE)
+NOTICE 00000 mt_tt_u new (1,7,w) (PL/pgSQL function mt_tt() line 11 at RAISE)
+NOTICE 00000 mt_as_i AFTER STATEMENT INSERT (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_tt_i new (8,80,) (PL/pgSQL function mt_tt() line 11 at RAISE)
+NOTICE 00000 mt_tt_i new (9,90,) (PL/pgSQL function mt_tt() line 11 at RAISE)
+MERGE 4
+> SELECT * FROM mt_t ORDER BY id;
+fields id@mt_t.1:23:4:-1,v@mt_t.2:23:4:-1,w@mt_t.3:25:-1:-1
+row 1,7,w
+row 4,40,d
+row 6,66,changed
+row 8,80,NULL
+row 9,90,NULL
+SELECT 5
+> DROP TRIGGER mt_tt_i ON mt_t;
+DROP TRIGGER
+> DROP TRIGGER mt_tt_u ON mt_t;
+DROP TRIGGER
+> DROP TRIGGER mt_tt_d ON mt_t;
+DROP TRIGGER
+> CREATE FUNCTION mt_bad() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   new.v := 5000;
+>>   RETURN new;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mt_bad BEFORE INSERT ON mt_t FOR EACH ROW WHEN (new.id = 20) EXECUTE FUNCTION mt_bad();
+CREATE TRIGGER
+> MERGE INTO mt_t t USING (VALUES (20, 1)) s(id, v) ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+NOTICE 00000 mt_bs_i BEFORE STATEMENT INSERT (PL/pgSQL function mt_stmt() line 3 at RAISE)
+ERROR 23514 new row for relation "mt_t" violates check constraint "mt_t_v_check"
+DETAIL Failing row contains (20, 5000, null).
+> MERGE INTO mt_t t USING (VALUES (21, 1)) s(id, v) ON t.id = s.id WHEN NOT MATCHED THEN INSERT VALUES (s.id, s.v);
+NOTICE 00000 mt_bs_i BEFORE STATEMENT INSERT (PL/pgSQL function mt_stmt() line 3 at RAISE)
+NOTICE 00000 mt_as_i AFTER STATEMENT INSERT (PL/pgSQL function mt_stmt() line 3 at RAISE)
+MERGE 1
+> SELECT * FROM mt_t ORDER BY id;
+fields id@mt_t.1:23:4:-1,v@mt_t.2:23:4:-1,w@mt_t.3:25:-1:-1
+row 1,7,w
+row 4,40,d
+row 6,66,changed
+row 8,80,NULL
+row 9,90,NULL
+row 21,1,NULL
+SELECT 6
+> BEGIN;
+BEGIN
+> MERGE INTO mt_t t USING (VALUES (1, 2000)) s(id, v) ON t.id = s.id WHEN MATCHED THEN UPDATE SET v = s.v;
+NOTICE 00000 mt_bs_u BEFORE STATEMENT UPDATE (PL/pgSQL function mt_stmt() line 3 at RAISE)
+ERROR 23514 new row for relation "mt_t" violates check constraint "mt_t_v_check"
+DETAIL Failing row contains (1, 2000, w).
+> ROLLBACK;
+ROLLBACK

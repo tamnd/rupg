@@ -169,7 +169,7 @@ impl Connection {
         let conds = if info.recheck.is_some() { info.checks.len() } else { 0 };
         let carried = new.split_off((info.width + conds).min(new.len()));
         if info.recheck.is_some() {
-            match self.conflict_before(plan, info, &fire.update, &old, new)? {
+            match self.before_row(plan, info, &fire.update, Some(old.as_slice()), new)? {
                 Some(row) => new = row,
                 None => return Ok(true),
             }
