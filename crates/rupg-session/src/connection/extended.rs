@@ -521,7 +521,9 @@ impl Connection {
                     self.notices(&mut self.trigger_notices(), &statement.text, &[], out);
                     done?
                 } else {
-                    let rows = query::run(&plan, &params, &reader, &formats);
+                    let run = || query::run(&plan, &params, &reader, &formats);
+                    let rows =
+                        if matches!(node, Node::CallStmt(_)) { self.top_call(run) } else { run() };
                     // The warnings of the run, such as the warning of `pg_advisory_unlock`, come before the rows.
                     let mut notices: Vec<Notice> =
                         reader.take_warnings().into_iter().map(Notice::of_function).collect();

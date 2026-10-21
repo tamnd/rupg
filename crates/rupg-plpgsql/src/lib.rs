@@ -85,6 +85,16 @@ pub trait Spi {
     fn release_sub(&self, sub: usize);
     /// `RollbackAndReleaseCurrentSubTransaction`: the writes after the mark `sub` go.
     fn rollback_sub(&self, sub: usize);
+    /// `SPI_commit` and `SPI_rollback`, or `SPI_commit_and_chain` and `SPI_rollback_and_chain` when `chain` is true: the transaction ends, and a new transaction starts at once.
+    ///
+    /// # Errors
+    ///
+    /// `2D000` in a call that cannot end the transaction and in a subtransaction, `55000` in a loop over a query that writes, and the errors of the deferred triggers at the commit.
+    fn end_transaction(&self, commit: bool, chain: bool) -> Result<()>;
+    /// `PinPortal`: a loop reads the rows of the portal `name`, or of a query when it is `None`. The end of the transaction keeps the portal, and fails when the query of the loop is not `read_only`.
+    fn pin(&self, name: Option<&str>, read_only: bool);
+    /// `UnpinPortal`: the loop of the last [`Spi::pin`] ends.
+    fn unpin(&self);
     /// A message of `RAISE` below the level `ERROR`, which goes to the client.
     fn notice(&self, notice: Error);
     /// The compiled functions and the calls that run, which the session keeps.

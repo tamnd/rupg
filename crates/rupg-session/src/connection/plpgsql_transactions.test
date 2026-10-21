@@ -1,0 +1,153 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE tc (a int);
+CREATE TABLE
+> CREATE PROCEDURE p1() LANGUAGE plpgsql AS $$ BEGIN INSERT INTO tc VALUES (1); COMMIT; INSERT INTO tc VALUES (2); ROLLBACK; INSERT INTO tc VALUES (3); END $$;
+CREATE PROCEDURE
+> CALL p1();
+CALL
+> SELECT * FROM tc ORDER BY a;
+fields a@tc.1:23:4:-1
+row 1
+row 3
+SELECT 2
+> CREATE PROCEDURE p2() LANGUAGE plpgsql AS $$ BEGIN INSERT INTO tc VALUES (10); COMMIT; INSERT INTO tc VALUES (11); RAISE EXCEPTION 'boom'; END $$;
+CREATE PROCEDURE
+> CALL p2();
+ERROR P0001 boom (PL/pgSQL function p2() line 1 at RAISE)
+> SELECT * FROM tc ORDER BY a;
+fields a@tc.1:23:4:-1
+row 1
+row 3
+row 10
+SELECT 3
+> BEGIN;
+BEGIN
+> CALL p1();
+ERROR 2D000 invalid transaction termination (PL/pgSQL function p1() line 1 at COMMIT)
+> ROLLBACK;
+ROLLBACK
+> CREATE FUNCTION f1() RETURNS int LANGUAGE plpgsql AS $$ BEGIN COMMIT; RETURN 1; END $$;
+CREATE FUNCTION
+> SELECT f1();
+fields f1:23:4:-1
+ERROR 2D000 invalid transaction termination (PL/pgSQL function f1() line 1 at COMMIT)
+> DO $$ BEGIN INSERT INTO tc VALUES (20); COMMIT; INSERT INTO tc VALUES (21); ROLLBACK; END $$;
+DO
+> SELECT * FROM tc ORDER BY a;
+fields a@tc.1:23:4:-1
+row 1
+row 3
+row 10
+row 20
+SELECT 4
+> BEGIN;
+BEGIN
+> DO $$ BEGIN ROLLBACK; END $$;
+ERROR 2D000 invalid transaction termination (PL/pgSQL function inline_code_block line 1 at ROLLBACK)
+> ROLLBACK;
+ROLLBACK
+> DO $$ BEGIN BEGIN COMMIT; EXCEPTION WHEN others THEN RAISE NOTICE 'caught %', SQLERRM; END; END $$;
+NOTICE 00000 caught cannot commit while a subtransaction is active (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ BEGIN BEGIN ROLLBACK; EXCEPTION WHEN division_by_zero THEN NULL; END; END $$;
+ERROR 2D000 cannot roll back while a subtransaction is active (PL/pgSQL function inline_code_block line 1 at ROLLBACK)
+> CREATE PROCEDURE p4() LANGUAGE plpgsql AS $$ BEGIN COMMIT; INSERT INTO tc VALUES (31); ROLLBACK; END $$;
+CREATE PROCEDURE
+> CREATE PROCEDURE p3() LANGUAGE plpgsql AS $$ BEGIN INSERT INTO tc VALUES (30); CALL p4(); END $$;
+CREATE PROCEDURE
+> CALL p3();
+CALL
+> SELECT * FROM tc ORDER BY a;
+fields a@tc.1:23:4:-1
+row 1
+row 3
+row 10
+row 20
+row 30
+SELECT 5
+> CREATE FUNCTION f2() RETURNS void LANGUAGE plpgsql AS $$ BEGIN CALL p4(); END $$;
+CREATE FUNCTION
+> SELECT f2();
+fields f2:2278:4:-1
+ERROR 2D000 invalid transaction termination (PL/pgSQL function p4() line 1 at COMMIT
+SQL statement "CALL p4()"
+PL/pgSQL function f2() line 1 at CALL)
+> CREATE PROCEDURE p7() LANGUAGE plpgsql AS $$ BEGIN PERFORM set_config('transaction_read_only', 'on', true); COMMIT AND CHAIN; RAISE NOTICE 'ro %', current_setting('transaction_read_only'); COMMIT; RAISE NOTICE 'ro %', current_setting('transaction_read_only'); ROLLBACK AND CHAIN; END $$;
+CREATE PROCEDURE
+> CALL p7();
+NOTICE 00000 ro on (PL/pgSQL function p7() line 1 at RAISE)
+NOTICE 00000 ro off (PL/pgSQL function p7() line 1 at RAISE)
+CALL
+> CREATE PROCEDURE p8() LANGUAGE plpgsql AS $$ BEGIN PERFORM set_config('work_mem', '3MB', true); RAISE NOTICE 'wm %', current_setting('work_mem'); COMMIT; RAISE NOTICE 'wm %', current_setting('work_mem'); END $$;
+CREATE PROCEDURE
+> CALL p8();
+NOTICE 00000 wm 3MB (PL/pgSQL function p8() line 1 at RAISE)
+NOTICE 00000 wm 4MB (PL/pgSQL function p8() line 1 at RAISE)
+CALL
+> TRUNCATE tc;
+TRUNCATE TABLE
+> INSERT INTO tc SELECT generate_series(1, 4);
+INSERT 0 4
+> CREATE TABLE tc2 (a int);
+CREATE TABLE
+> DO $$ DECLARE r record; BEGIN FOR r IN SELECT a FROM tc ORDER BY a LOOP INSERT INTO tc2 VALUES (r.a); IF r.a % 2 = 0 THEN COMMIT; ELSE ROLLBACK; END IF; END LOOP; END $$;
+DO
+> SELECT * FROM tc2 ORDER BY a;
+fields a@tc2.1:23:4:-1
+row 2
+row 4
+SELECT 2
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM tc ORDER BY a; r record; BEGIN FOR r IN c LOOP RAISE NOTICE 'r %', r.a; COMMIT; END LOOP; END $$;
+NOTICE 00000 r 1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r 2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r 3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r 4 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor := 'cc'; r record; BEGIN OPEN c FOR SELECT a FROM tc; COMMIT; FETCH c INTO r; END $$;
+ERROR 34000 cursor "cc" does not exist (PL/pgSQL function inline_code_block line 1 at FETCH)
+> DO $$ DECLARE r record; BEGIN FOR r IN UPDATE tc SET a = a + 10 RETURNING a LOOP COMMIT; END LOOP; END $$;
+ERROR 55000 cannot perform transaction commands inside a cursor loop that is not read-only (PL/pgSQL function inline_code_block line 1 at COMMIT)
+> SELECT * FROM tc ORDER BY a;
+fields a@tc.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> CREATE TABLE tp (id int PRIMARY KEY);
+CREATE TABLE
+> CREATE TABLE tf2 (r int REFERENCES tp DEFERRABLE INITIALLY DEFERRED);
+CREATE TABLE
+> DO $$ BEGIN INSERT INTO tf2 VALUES (1); COMMIT; RAISE NOTICE 'not here'; END $$;
+ERROR 23503 insert or update on table "tf2" violates foreign key constraint "tf2_r_fkey" (PL/pgSQL function inline_code_block line 1 at COMMIT)
+DETAIL Key (r)=(1) is not present in table "tp".
+> SELECT count(*) FROM tf2;
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE FUNCTION tg() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN COMMIT; RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER tgt BEFORE INSERT ON tc2 FOR EACH ROW EXECUTE FUNCTION tg();
+CREATE TRIGGER
+> INSERT INTO tc2 VALUES (100);
+ERROR 2D000 invalid transaction termination (PL/pgSQL function tg() line 1 at COMMIT)
+> DROP TRIGGER tgt ON tc2;
+DROP TRIGGER
+> DO $$ BEGIN COMMIT AND NO CHAIN; ROLLBACK AND NO CHAIN; END $$;
+DO
+> DO $$ BEGIN COMMIT WORK; END $$;
+ERROR 42601 syntax error at or near "WORK" at 20
+> DO $$ BEGIN COMMIT AND; END $$;
+ERROR 42601 syntax error at or near ";" at 23
+> CREATE PROCEDURE p9(INOUT x int) LANGUAGE plpgsql AS $$ BEGIN x := x + 1; COMMIT; x := x * 2; END $$;
+CREATE PROCEDURE
+> CALL p9(5);
+fields x:23:4:-1
+row 12
+CALL
+> DO $$ BEGIN PERFORM 1; COMMIT; PERFORM f1(); END $$;
+ERROR 2D000 invalid transaction termination (PL/pgSQL function f1() line 1 at COMMIT
+SQL statement "SELECT f1()"
+PL/pgSQL function inline_code_block line 1 at PERFORM)

@@ -219,23 +219,23 @@ impl Connection {
     }
 
     /// `pgstat_report_xact_timestamp`: the start of the transaction, or `None` at its end.
-    fn report_transaction(&mut self, start: Option<i64>) {
+    fn report_transaction(&self, start: Option<i64>) {
         let Some(number) = self.activity.number else { return };
-        if tracked(self.settings.get_mut()) {
+        if tracked(&self.settings.borrow()) {
             self.store.report(number, |backend| backend.transaction_start = start);
         }
     }
 
     /// The start of a transaction.
-    pub(super) fn transaction_started(&mut self) {
+    pub(super) fn transaction_started(&self) {
         self.report_transaction(Some(self.transaction_start));
     }
 
     /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, `AtEOXact_PgStat` drops the snapshots, and `pgstat_report_stat` reports the scans of the transaction. A scan counts also after an abort, as in PostgreSQL.
-    pub(super) fn transaction_ended(&mut self) {
+    pub(super) fn transaction_ended(&self) {
         self.store.locks().release_all(self.pid, false);
         self.activity.clear();
-        let scans = std::mem::take(self.activity.scans.get_mut());
+        let scans = self.activity.scans.take();
         if !scans.is_empty() {
             self.store.report_scans(self.database_oid, &scans, query::now(&*self.clock));
         }
