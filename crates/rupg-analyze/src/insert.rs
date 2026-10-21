@@ -17,7 +17,7 @@ use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind, FieldStore, Func, FuncForm, Var};
 use crate::from::{Column, FromItem, Relation};
 use crate::merge::Merge;
-use crate::modify::carried_targets;
+use crate::modify::{carried_targets, set_columns};
 use crate::select::{Query, Target};
 use crate::typename::place;
 use crate::types;
@@ -69,7 +69,7 @@ pub struct Write {
     pub merge: Option<Merge>,
     /// The query of the checks of the constraints after the triggers `BEFORE ... FOR EACH ROW` of an `INSERT` or an `UPDATE`, which can change the new row. It reads one relation, the new row, and gives its columns, then the conditions of the check constraints. When the write has it, [`Write::checks`] are not checked in the run of the plan: the rows of the run keep the conditions after the columns, and the caller checks the rows after the triggers.
     pub recheck: Option<Box<Query>>,
-    /// The numbers of the columns that `SET` of an `UPDATE` gives, in the order of the list, for the triggers of `UPDATE OF`.
+    /// The numbers of the columns that `SET` of an `UPDATE` or of `ON CONFLICT DO UPDATE` gives, in the order of the list, for the triggers of `UPDATE OF`.
     pub updated: Vec<i16>,
     /// True for a write into a view with a trigger `INSTEAD OF ... FOR EACH ROW` for the event. The rows of the query go to the triggers, not to the heap, and the rows of an `UPDATE` and of a `DELETE` end with the old row of the view in place of the ID of the version.
     pub instead: bool,
@@ -297,7 +297,17 @@ impl Analyzer<'_> {
         };
         let checks = self.checks(table)?;
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
-        let recheck = self.recheck(table, WriteKind::Insert, &name, &columns, &checks);
+        let conflict_set = s
+            .onConflictClause
+            .as_deref()
+            .filter(|c| matches!(c.action, OnConflictAction::ONCONFLICT_UPDATE))
+            .map(|c| &c.targetList);
+        let mut recheck = self.recheck(table, WriteKind::Insert, &name, &columns, &checks);
+        if recheck.is_none() && conflict_set.is_some() {
+            // The triggers `BEFORE UPDATE ... FOR EACH ROW` of `DO UPDATE` also come before the checks.
+            recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks);
+        }
+        let updated = conflict_set.map_or_else(Vec::new, |list| set_columns(list, &columns));
         if !checks.is_empty() {
             query = with_checks(&name, &columns, query, checks, &[]);
         }
@@ -305,9 +315,6 @@ impl Analyzer<'_> {
         let unique = self.unique_keys(table, &columns)?;
         let foreign = self.foreign_keys(table, WriteKind::Insert, &columns)?;
         let (mut on_conflict, mut returning) = (None, None);
-        if s.onConflictClause.is_some() && self.user_triggers(table, 0) {
-            return Err(not_yet("INSERT ... ON CONFLICT into a table with triggers"));
-        }
         if s.onConflictClause.is_some() || s.returningClause.is_some() {
             let outer = std::mem::take(&mut self.scope);
             // `ON CONFLICT` and `RETURNING` can read the queries of `WITH`.
@@ -328,7 +335,7 @@ impl Analyzer<'_> {
             on_conflict,
             merge: None,
             recheck,
-            updated: Vec::new(),
+            updated,
             instead: self.is_view(table),
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
