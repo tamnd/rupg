@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `CREATE TABLE ... INHERITS`. The new table takes the columns, the defaults, the check constraints and the not-null constraints of its parents, and the columns of two parents or of the statement with the same name merge, with the notices and the errors of PostgreSQL. A `SELECT` of a parent gives the rows of its children too, `ONLY` gives the rows of the parent alone, and `tableoid` gives the table of each row. `TRUNCATE` of a parent truncates its children, `DROP TABLE` of a parent needs `CASCADE`, and `pg_inherits` and `relhassubclass` show the parents. `UPDATE`, `DELETE`, `MERGE` and `ALTER TABLE` of a table with children, and `ALTER TABLE ... INHERIT`, give `0A000` for now (#NNN).
+- `CREATE TABLE ... INHERITS`. The new table takes the columns, the defaults, the check constraints and the not-null constraints of its parents, and the columns of two parents or of the statement with the same name merge, with the notices and the errors of PostgreSQL. A `SELECT` of a parent gives the rows of its children too, `ONLY` gives the rows of the parent alone, and `tableoid` gives the table of each row. `TRUNCATE` of a parent truncates its children, `DROP TABLE` of a parent needs `CASCADE`, and `pg_inherits` and `relhassubclass` show the parents. `UPDATE`, `DELETE`, `MERGE` and `ALTER TABLE` of a table with children, and `ALTER TABLE ... INHERIT`, give `0A000` for now (#518).
 
 ## 0.1.61 (2026-10-21)
 
