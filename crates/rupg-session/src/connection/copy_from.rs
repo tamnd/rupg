@@ -4,6 +4,7 @@ use std::path::Path;
 use std::rc::Rc;
 
 use rupg_analyze::{CopyTarget, Params};
+use rupg_catalog::TRIGGER_INSERT;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_pgcatalog::builtin;
@@ -383,16 +384,13 @@ impl Connection {
         let source = (rel.is_some() && options.default.is_some())
             .then(|| (target.clone(), RangeVar::clone(rv)));
         self.start_triggers();
-        let triggers = match plan.as_deref().and_then(Plan::write) {
+        let mut triggers = match plan.as_deref().and_then(Plan::write) {
             Some(info) => self.write_triggers(info)?,
             None => Triggers::default(),
         };
-        let routing = (target.kind == b'p').then(Routing::default);
-        if routing.is_some() && !triggers.is_empty() {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "triggers on a partitioned table are not supported yet",
-            ));
+        let routing = (target.kind == b'p').then(|| Routing::of(TRIGGER_INSERT));
+        if routing.is_some() {
+            triggers.retain_statement();
         }
         let load = Load {
             plan,
@@ -552,12 +550,35 @@ impl Connection {
                 queue.extend(raised.into_iter().map(|w| w.with_context(copy.row_context(&row))));
             }
             let rows = rows.map_err(line)?;
-            if let Some(routing) = &mut routing {
-                // `ExecFindPartition` and the checks of the leaf, with the line of the row in the context of an error.
+            if let Some(leaves) = &mut routing {
+                // `ExecFindPartition`, the triggers `BEFORE ... FOR EACH ROW` and the checks of the leaf, with the line of the row in the context of an error and of the messages of the triggers.
                 let table = plan.write().map_or(0, |info| info.table);
+                let (mut single, mut inserted) = (false, Vec::new());
                 for values in rows {
-                    let at = routing.add(table, values, &catalog, &reader).map_err(line)?;
-                    routing.add_line(at, row.line);
+                    let said = self.trigger_warnings.borrow().len();
+                    let fired = leaves.route_fired(self, (table, values), &catalog, &reader);
+                    {
+                        let mut queue = self.trigger_warnings.borrow_mut();
+                        let len = queue.len();
+                        let raised = queue.split_off(said.min(len));
+                        queue.extend(
+                            raised.into_iter().map(|w| w.with_context(copy.row_context(&row))),
+                        );
+                    }
+                    let Some((at, checked)) = fired.map_err(line)? else { continue };
+                    if copy.load.triggers.after_rows() {
+                        inserted.push(leaves.to_root(at, &checked, width));
+                    }
+                    // `CopyFrom` writes a row of a leaf with triggers `BEFORE ... FOR EACH ROW` before the next row.
+                    single |= leaves.fires_before(at);
+                    leaves.push(at, checked, row.line);
+                }
+                copy.load.inserted.extend(inserted);
+                if single {
+                    let context = copy.row_context(&row);
+                    copy.load.routing = routing.take();
+                    self.flush_rows(copy, Some(context))?;
+                    routing = copy.load.routing.take();
                 }
                 continue;
             }
@@ -600,7 +621,8 @@ impl Connection {
         drop(reader);
         // `CopyMultiInsertInfoFlush` of a partitioned table: each leaf writes its rows.
         if let Some(routing) = &mut load.routing {
-            let batches = self.insert_leaves(routing, &view, Some(&copy.name))?;
+            let batches =
+                self.insert_leaves(routing, &view, Some((&copy.name, context.as_deref())))?;
             load.batches.extend(batches);
             load.count += pending as u64;
             return Ok(());

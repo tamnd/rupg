@@ -124,6 +124,18 @@ impl Router {
         Ok(true)
     }
 
+    /// `ExecPartitionCheck` with `ExecPartitionCheckEmitError`: an error when a row of the partition `table` is not in the bounds of the partition, or of a partition above it.
+    ///
+    /// # Errors
+    ///
+    /// `23514` for a row that the partition does not take, and the errors of the expressions of the keys.
+    pub fn check_row(&mut self, table: u32, row: &[Value], session: &dyn Session) -> Result<()> {
+        if self.check(table, row, session)? {
+            return Ok(());
+        }
+        Err(partition_check_error(relation(catalog(session)?, table)?, row, session)?)
+    }
+
     /// The index of the dispatch of the partitioned table `oid`.
     fn dispatch(&mut self, oid: u32, session: &dyn Session) -> Result<usize> {
         if let Some(at) = self.dispatch.iter().position(|d| d.oid == oid) {
