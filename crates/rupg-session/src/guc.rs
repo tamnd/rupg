@@ -221,15 +221,27 @@ const COMPAT_VERSIONS: [EnumOption; 6] = [
 ];
 
 /// The parameters of rupg with the prefix `rupg.` (spec/05 section 5.7). `find` finds them, so `SET`, `SHOW` and the startup packet take them. They are not in [`all`], so `SHOW ALL` and `pg_settings` give the parameters of PostgreSQL only.
-static EXTRA: [Parameter; 1] = [Parameter {
-    name: "rupg.compat_version",
-    context: Context::Backend,
-    category: "Customized Options",
-    short_desc: "Sets the PostgreSQL version that the session shows to the client.",
-    extra_desc: None,
-    flags: flag::NOT_IN_SAMPLE,
-    kind: Kind::Enum { boot: 19, options: &COMPAT_VERSIONS },
-}];
+static EXTRA: [Parameter; 2] = [
+    Parameter {
+        name: "rupg.compat_version",
+        context: Context::Backend,
+        category: "Customized Options",
+        short_desc: "Sets the PostgreSQL version that the session shows to the client.",
+        extra_desc: None,
+        flags: flag::NOT_IN_SAMPLE,
+        kind: Kind::Enum { boot: 19, options: &COMPAT_VERSIONS },
+    },
+    // The server sends it in `ParameterStatus` after the standard parameters, so it does not have the flag `REPORT`.
+    Parameter {
+        name: "rupg.version",
+        context: Context::Internal,
+        category: "Customized Options",
+        short_desc: "Shows the version of rupg.",
+        extra_desc: None,
+        flags: flag::NOT_IN_SAMPLE | flag::DISALLOW_IN_FILE,
+        kind: Kind::String { boot: Some(env!("CARGO_PKG_VERSION")) },
+    },
+];
 
 /// The parameter with this name, without regard to case, or `None` if PostgreSQL and rupg have none. An old name of a renamed parameter finds the new one.
 #[must_use]
