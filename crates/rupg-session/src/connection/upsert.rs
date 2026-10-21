@@ -1,6 +1,6 @@
 //! `INSERT ... ON CONFLICT`, as `ExecInsert` runs it with a speculative insertion and `ExecOnConflictUpdate` runs `DO UPDATE`. Each row goes in, or it meets a row of the table with its key in an arbiter index. `DO NOTHING` then skips the row, and `DO UPDATE` changes the row of the table.
 //!
-//! The query of the statement gives all the new rows before the first row goes in, so the checks of the constraints of the new rows come before the writes, and a function of the query does not see the rows that the statement wrote.
+//! The query of the statement gives all the new rows before the first row goes in, so the checks of the constraints of the new rows come before the writes, and a function of the query does not see the rows that the statement wrote. The triggers `BEFORE ... FOR EACH ROW` fire for each row in turn, as `ExecInsert` fires them: the triggers `INSERT` before the row goes in, and the triggers `UPDATE` before `DO UPDATE` changes the row of the table.
 
 use rupg_analyze::{OnConflict, Write};
 use rupg_common::{Error, SqlState};
@@ -8,6 +8,7 @@ use rupg_exec::Plan;
 use rupg_types::Value;
 
 use super::Connection;
+use super::trigger::Triggers;
 use crate::heap::{Changed, Speculative, View, tid_text};
 
 /// The rows that `INSERT ... ON CONFLICT` wrote.
@@ -23,6 +24,22 @@ pub(super) struct Upserted {
     pub(super) new: Vec<Vec<Value>>,
     /// The old rows of the rows that changed, in the same order.
     pub(super) old: Vec<Vec<Value>>,
+    /// For each row of [`Upserted::inserted`] and [`Upserted::new`] in the order of the write, true when the row went in and false when it changed, for the triggers `AFTER ... FOR EACH ROW`.
+    pub(super) steps: Vec<bool>,
+}
+
+/// The triggers of `INSERT ... ON CONFLICT`: the triggers `INSERT`, and the triggers `UPDATE` of `DO UPDATE`.
+#[derive(Default)]
+pub(super) struct Upsert {
+    pub(super) insert: Triggers,
+    pub(super) update: Triggers,
+}
+
+impl Upsert {
+    /// True when a trigger `AFTER` gets the rows of the write.
+    pub(super) fn after_rows(&self) -> bool {
+        self.insert.after_rows() || self.update.after_rows()
+    }
 }
 
 impl Connection {
@@ -34,15 +51,25 @@ impl Connection {
     pub(super) fn upsert(
         &self,
         plan: &Plan,
-        info: &Write,
-        conflict: &OnConflict,
+        (info, conflict): (&Write, &OnConflict),
         params: &[Value],
         view: &View,
         rows: Vec<Vec<Value>>,
+        fire: &Upsert,
     ) -> Result<Upserted, Error> {
         let heap = self.store.heap();
         let mut done = Upserted::default();
+        let keep = fire.after_rows();
+        let before = !fire.insert.is_empty() || info.recheck.is_some();
         for row in rows {
+            let row = if before {
+                match self.before_rows(plan, info, &fire.insert, vec![row])?.pop() {
+                    Some(row) => row,
+                    None => continue,
+                }
+            } else {
+                row
+            };
             let mut kept = None;
             loop {
                 let result = heap.speculative(
@@ -61,8 +88,11 @@ impl Connection {
                             written.resize(row.len() + conflict.carried, Value::Null);
                             done.written.push(written);
                         }
-                        if !info.foreign.is_empty() {
+                        if keep || !info.foreign.is_empty() {
                             done.inserted.push(row);
+                        }
+                        if keep {
+                            done.steps.push(true);
                         }
                         break;
                     }
@@ -97,7 +127,14 @@ impl Connection {
                             .with_hint("Ensure that no rows proposed for insertion within the same command have duplicate constrained values."));
                         }
                         let target = Target { tid, old: values, excluded: &row };
-                        if self.conflict_update(plan, info, params, view, target, &mut done)? {
+                        if self.conflict_update(
+                            plan,
+                            (info, fire),
+                            params,
+                            view,
+                            target,
+                            &mut done,
+                        )? {
                             break;
                         }
                     }
@@ -111,7 +148,7 @@ impl Connection {
     fn conflict_update(
         &self,
         plan: &Plan,
-        info: &Write,
+        (info, fire): (&Write, &Upsert),
         params: &[Value],
         view: &View,
         target: Target<'_>,
@@ -128,7 +165,15 @@ impl Connection {
         let Some(mut new) = new else {
             return Ok(true);
         };
-        let carried = new.split_off(info.width.min(new.len()));
+        // With triggers `BEFORE ... FOR EACH ROW`, the conditions of the checks follow the columns.
+        let conds = if info.recheck.is_some() { info.checks.len() } else { 0 };
+        let carried = new.split_off((info.width + conds).min(new.len()));
+        if info.recheck.is_some() {
+            match self.conflict_before(plan, info, &fire.update, &old, new)? {
+                Some(row) => new = row,
+                None => return Ok(true),
+            }
+        }
         let heap = self.store.heap();
         let mut kept = Vec::new();
         let mut applied = Vec::new();
@@ -150,7 +195,8 @@ impl Connection {
             }
         }
         done.count += 1;
-        let foreign = info.on_conflict.as_ref().is_some_and(|c| !c.foreign.is_empty());
+        let keep = fire.after_rows();
+        let foreign = keep || info.on_conflict.as_ref().is_some_and(|c| !c.foreign.is_empty());
         if info.returning.is_some() {
             let mut written = new.clone();
             written.extend(carried);
@@ -159,6 +205,9 @@ impl Connection {
         if foreign {
             done.new.push(new);
             done.old.push(old);
+        }
+        if keep {
+            done.steps.push(false);
         }
         Ok(true)
     }

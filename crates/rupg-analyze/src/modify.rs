@@ -21,7 +21,7 @@ use crate::sort::raw_location;
 use crate::typename::place;
 
 /// The numbers of the columns that the items of `SET` name, in the order of the list. The analysis of the items checks the names.
-fn set_columns(list: &rupg_sql::nodes::List, columns: &[Column]) -> Vec<i16> {
+pub(crate) fn set_columns(list: &rupg_sql::nodes::List, columns: &[Column]) -> Vec<i16> {
     let names = list.iter().filter_map(|node| match node {
         Some(Node::ResTarget(rt)) => rt.name.as_deref(),
         _ => None,

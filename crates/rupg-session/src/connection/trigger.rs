@@ -1,6 +1,6 @@
 //! The triggers of `CREATE TRIGGER` on the writes of a table, as `trigger.c` fires them: the triggers `BEFORE` before the write, and the queue of the triggers `AFTER`, which fire at the end of the statement, as `AfterTriggerEndQuery` fires them.
 //!
-//! The triggers `BEFORE ... FOR EACH STATEMENT` fire after the query of the write gives its rows. The triggers `BEFORE ... FOR EACH ROW` fire for all the rows before the first row goes into the heap, so a trigger does not see the rows that its statement wrote before. Only a trigger function in PL/pgSQL can fire yet.
+//! The triggers `BEFORE ... FOR EACH STATEMENT` fire after the query of the write gives its rows. The triggers `BEFORE ... FOR EACH ROW` fire for all the rows before the first row goes into the heap, so a trigger does not see the rows that its statement wrote before. `INSERT ... ON CONFLICT` fires them for each row in turn, as `upsert.rs` tells. Only a trigger function in PL/pgSQL can fire yet.
 
 use std::rc::Rc;
 
@@ -13,6 +13,7 @@ use rupg_pgcatalog::builtin::Named;
 use rupg_types::Value;
 
 use super::Connection;
+use super::upsert::{Upsert, Upserted};
 use crate::query::{Captured, Transition};
 use crate::utility::Notice;
 
@@ -84,6 +85,24 @@ fn transition_of(trigger: &Trigger, rows: &Rc<Captured>) -> Option<Transition> {
     })
 }
 
+/// The rows of a write that the transition tables of `triggers` read, or no rows when no trigger has `REFERENCING`. The old rows of an `INSERT` and the new rows of a `DELETE` are empty tables.
+fn captured(
+    info: &Write,
+    triggers: &Triggers,
+    old: &[Vec<Value>],
+    new: &[Vec<Value>],
+) -> Rc<Captured> {
+    if triggers.list.iter().any(|t| has_transition(&t.trigger)) {
+        Rc::new(Captured {
+            table: info.table,
+            old: Rc::new(old.to_vec()),
+            new: Rc::new(new.to_vec()),
+        })
+    } else {
+        Rc::default()
+    }
+}
+
 /// The words of `TG_OP` for the bit of an event.
 fn op_name(event: i16) -> &'static str {
     match event {
@@ -124,6 +143,24 @@ impl Connection {
             WriteKind::Delete => TRIGGER_DELETE,
             WriteKind::Merge => return Ok(Triggers::default()),
         };
+        self.triggers_of(info, event)
+    }
+
+    /// The triggers `UPDATE` that fire for `INSERT ... ON CONFLICT DO UPDATE`, or no triggers for another write.
+    ///
+    /// # Errors
+    ///
+    /// The error of the condition of `WHEN` of a trigger.
+    pub(super) fn conflict_triggers(&self, info: &Write) -> Result<Triggers, Error> {
+        if info.on_conflict.as_ref().is_some_and(|c| c.update.is_some()) {
+            self.triggers_of(info, TRIGGER_UPDATE)
+        } else {
+            Ok(Triggers::default())
+        }
+    }
+
+    /// The triggers of the table of the write for the event `event`, in the order of their names.
+    fn triggers_of(&self, info: &Write, event: i16) -> Result<Triggers, Error> {
         let catalog = self.catalog();
         let found = catalog.triggers_of(info.table);
         let mut found =
@@ -141,13 +178,13 @@ impl Connection {
     /// `TriggerEnabled`: true when the trigger fires for the rows `old` and `new`. A trigger `UPDATE OF` fires when `SET` gives one of its columns, and a trigger with `WHEN` fires when its condition is true.
     fn enabled(
         &self,
-        armed: &Armed,
+        (armed, event): (&Armed, i16),
         info: &Write,
         old: Option<&[Value]>,
         new: Option<&[Value]>,
     ) -> Result<bool, Error> {
         let t = &armed.trigger;
-        if info.kind == WriteKind::Update
+        if event == TRIGGER_UPDATE
             && !t.columns.is_empty()
             && !t.columns.iter().any(|c| info.updated.contains(c))
         {
@@ -213,7 +250,7 @@ impl Connection {
     /// The errors of the triggers.
     pub(super) fn before_statement(&self, triggers: &Triggers, info: &Write) -> Result<(), Error> {
         for armed in triggers.of(false, true) {
-            if self.enabled(armed, info, None, None)? {
+            if self.enabled((armed, triggers.event), info, None, None)? {
                 self.call_trigger(&armed.trigger, triggers.event, (None, None), None)?;
             }
         }
@@ -233,12 +270,13 @@ impl Connection {
         rows: Vec<Vec<Value>>,
     ) -> Result<Vec<Vec<Value>>, Error> {
         let before: Vec<&Armed> = triggers.of(true, true).collect();
+        let checked = info.recheck.is_some();
         if before.is_empty() {
-            return Ok(rows);
+            // The rows of an upsert with only triggers of `DO UPDATE` have the conditions of the checks.
+            return if checked { plan.check_rows(rows, &self.reader()) } else { Ok(rows) };
         }
         let width = info.width;
         let all = self.table_width(info);
-        let checked = info.recheck.is_some();
         let conds = if checked { info.checks.len() } else { 0 };
         let heap = self.store.heap();
         let mut out = Vec::with_capacity(rows.len());
@@ -254,7 +292,7 @@ impl Connection {
             };
             if info.kind == WriteKind::Delete {
                 for armed in &before {
-                    if self.enabled(armed, info, old.as_deref(), None)?
+                    if self.enabled((armed, triggers.event), info, old.as_deref(), None)?
                         && self
                             .call_trigger(
                                 &armed.trigger,
@@ -275,7 +313,7 @@ impl Connection {
             let mut new = row;
             let mut fired = false;
             for armed in &before {
-                if !self.enabled(armed, info, old.as_deref(), Some(&new))? {
+                if !self.enabled((armed, triggers.event), info, old.as_deref(), Some(&new))? {
                     continue;
                 }
                 let returned = self.call_trigger(
@@ -362,42 +400,142 @@ impl Connection {
         old: &[Vec<Value>],
         new: &[Vec<Value>],
     ) -> Result<(), Error> {
-        let width = self.table_width(info);
-        let old: Vec<Vec<Value>> = old.iter().map(|row| padded(row.clone(), width)).collect();
-        let new: Vec<Vec<Value>> =
-            new.iter().map(|row| padded(row[..width.min(row.len())].to_vec(), width)).collect();
-        let captured = if triggers.list.iter().any(|t| has_transition(&t.trigger)) {
-            // The old rows of an `INSERT` and the new rows of a `DELETE` are empty tables.
-            Rc::new(Captured {
-                table: info.table,
-                old: Rc::new(old.clone()),
-                new: Rc::new(new.clone()),
-            })
-        } else {
-            Rc::default()
-        };
+        let (old, new) = self.after_rows_of(info, old, new);
+        let captured = captured(info, triggers, &old, &new);
         let mut events = Vec::new();
         for i in 0..old.len().max(new.len()) {
-            let (old, new) = (old.get(i), new.get(i));
-            for armed in triggers.of(true, false) {
-                if self.enabled(armed, info, old.map(Vec::as_slice), new.map(Vec::as_slice))? {
-                    let trigger = armed.trigger.clone();
-                    let transition = transition_of(&trigger, &captured);
-                    let (old, new) = (old.cloned(), new.cloned());
-                    events.push(Event { trigger, event: triggers.event, old, new, transition });
-                }
+            self.row_events(info, (triggers, &captured), (old.get(i), new.get(i)), &mut events)?;
+        }
+        self.statement_events(info, triggers, &captured, &mut events)?;
+        self.events.borrow_mut().extend(events);
+        Ok(())
+    }
+
+    /// The calls of the triggers `AFTER` of `INSERT ... ON CONFLICT`, as `fireASTriggers` gives them: the events of the triggers `FOR EACH ROW` in the order of the rows, then the triggers `UPDATE ... FOR EACH STATEMENT` of `DO UPDATE`, then the triggers `INSERT ... FOR EACH STATEMENT`. The transition tables of the triggers `INSERT` have the rows that went in, and the transition tables of the triggers `UPDATE` have the rows that changed.
+    ///
+    /// # Errors
+    ///
+    /// The error of the condition of `WHEN` of a trigger.
+    pub(super) fn after_upsert(
+        &self,
+        info: &Write,
+        fire: &Upsert,
+        done: &Upserted,
+    ) -> Result<(), Error> {
+        let (_, inserted) = self.after_rows_of(info, &[], &done.inserted);
+        let (old, new) = self.after_rows_of(info, &done.old, &done.new);
+        let insert = captured(info, &fire.insert, &[], &inserted);
+        let update = captured(info, &fire.update, &old, &new);
+        let mut events = Vec::new();
+        let (mut ins, mut upd) = (inserted.iter(), old.iter().zip(&new));
+        for &went_in in &done.steps {
+            if went_in {
+                let row = (None, ins.next());
+                self.row_events(info, (&fire.insert, &insert), row, &mut events)?;
+            } else if let Some((old, new)) = upd.next() {
+                let row = (Some(old), Some(new));
+                self.row_events(info, (&fire.update, &update), row, &mut events)?;
             }
         }
-        for armed in triggers.of(false, false) {
-            if self.enabled(armed, info, None, None)? {
+        self.statement_events(info, &fire.update, &update, &mut events)?;
+        self.statement_events(info, &fire.insert, &insert, &mut events)?;
+        self.events.borrow_mut().extend(events);
+        Ok(())
+    }
+
+    /// The old and the new rows of a write with the columns of the table and the nulls of the columns that `ADD COLUMN` added after a version.
+    fn after_rows_of(
+        &self,
+        info: &Write,
+        old: &[Vec<Value>],
+        new: &[Vec<Value>],
+    ) -> (Vec<Vec<Value>>, Vec<Vec<Value>>) {
+        let width = self.table_width(info);
+        let old = old.iter().map(|row| padded(row.clone(), width)).collect();
+        let new =
+            new.iter().map(|row| padded(row[..width.min(row.len())].to_vec(), width)).collect();
+        (old, new)
+    }
+
+    /// `AfterTriggerSaveEvent` for one row: the events of the triggers `AFTER ... FOR EACH ROW` of `triggers` for the old row and the new row.
+    fn row_events(
+        &self,
+        info: &Write,
+        (triggers, captured): (&Triggers, &Rc<Captured>),
+        (old, new): (Option<&Vec<Value>>, Option<&Vec<Value>>),
+        events: &mut Vec<Event>,
+    ) -> Result<(), Error> {
+        for armed in triggers.of(true, false) {
+            if self.enabled(
+                (armed, triggers.event),
+                info,
+                old.map(Vec::as_slice),
+                new.map(Vec::as_slice),
+            )? {
                 let trigger = armed.trigger.clone();
-                let transition = transition_of(&trigger, &captured);
+                let transition = transition_of(&trigger, captured);
+                let (old, new) = (old.cloned(), new.cloned());
+                events.push(Event { trigger, event: triggers.event, old, new, transition });
+            }
+        }
+        Ok(())
+    }
+
+    /// The events of the triggers `AFTER ... FOR EACH STATEMENT` of `triggers`, at the end of the queue.
+    fn statement_events(
+        &self,
+        info: &Write,
+        triggers: &Triggers,
+        captured: &Rc<Captured>,
+        events: &mut Vec<Event>,
+    ) -> Result<(), Error> {
+        for armed in triggers.of(false, false) {
+            if self.enabled((armed, triggers.event), info, None, None)? {
+                let trigger = armed.trigger.clone();
+                let transition = transition_of(&trigger, captured);
                 let (old, new) = (None, None);
                 events.push(Event { trigger, event: triggers.event, old, new, transition });
             }
         }
-        self.events.borrow_mut().extend(events);
         Ok(())
+    }
+
+    /// `ExecBRUpdateTriggers` for the new row `new` of `ON CONFLICT DO UPDATE` and the row `old` of the table. The new row has the columns, then the conditions of the checks. A trigger that gives a null row skips the row, and then the checks of the constraints run on the new row. It gives the columns of the new row.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers and of the checks.
+    pub(super) fn conflict_before(
+        &self,
+        plan: &Plan,
+        info: &Write,
+        triggers: &Triggers,
+        old: &[Value],
+        mut new: Vec<Value>,
+    ) -> Result<Option<Vec<Value>>, Error> {
+        let old = padded(old.to_vec(), self.table_width(info));
+        let given = new.split_off(info.width.min(new.len()));
+        let mut fired = false;
+        for armed in triggers.of(true, true) {
+            if !self.enabled((armed, triggers.event), info, Some(&old), Some(&new))? {
+                continue;
+            }
+            let rows = (Some(old.clone()), Some(new.clone()));
+            let Some(returned) = self.call_trigger(&armed.trigger, triggers.event, rows, None)?
+            else {
+                return Ok(None);
+            };
+            new = returned;
+            fired = true;
+        }
+        let reader = self.reader();
+        let row = if fired {
+            plan.recheck(new, &reader)?
+        } else {
+            new.extend(given);
+            new
+        };
+        Ok(plan.check_rows(vec![row], &reader)?.into_iter().next())
     }
 
     /// `afterTriggerInvokeEvents`: fires the triggers `AFTER` of the queue from the place `mark`, in the order of the queue. The events of the statements of a trigger fire at the end of each statement. After an error the queue goes back to the place.

@@ -630,7 +630,7 @@ impl Connection {
         let Some(info) = plan.write() else {
             return Err(Error::internal("a plan that does not write"));
         };
-        let triggers = self.write_triggers(info)?;
+        let mut triggers = self.write_triggers(info)?;
         if info.instead {
             // The triggers `INSTEAD OF` of a view write the rows, and the triggers `FOR EACH STATEMENT` of the view fire before and after them.
             self.before_statement(&triggers, info)?;
@@ -648,7 +648,16 @@ impl Connection {
             self.xid.set(heap.begin(self.pid));
         }
         let mut view = View { xid: self.xid.get(), ..view.clone() };
-        let rows = if triggers.is_empty() {
+        let upsert = info.on_conflict.as_ref().filter(|conflict| !conflict.arbiters.is_empty());
+        let mut fire = upsert::Upsert::default();
+        let rows = if upsert.is_some() {
+            // `INSERT ... ON CONFLICT` fires the triggers `BEFORE ... FOR EACH ROW` for each row in turn, and the triggers `UPDATE` of `DO UPDATE` with the triggers `INSERT`.
+            let update = self.conflict_triggers(info)?;
+            fire = upsert::Upsert { insert: std::mem::take(&mut triggers), update };
+            self.before_statement(&fire.insert, info)?;
+            self.before_statement(&fire.update, info)?;
+            rows
+        } else if triggers.is_empty() {
             rows
         } else {
             self.before_statement(&triggers, info)?;
@@ -662,7 +671,6 @@ impl Connection {
         let (mut new_rows, mut old_rows) = (Vec::new(), Vec::new());
         // The new and the old rows of `ON CONFLICT DO UPDATE`.
         let mut updated = (Vec::new(), Vec::new());
-        let upsert = info.on_conflict.as_ref().filter(|conflict| !conflict.arbiters.is_empty());
         let mut batches = Vec::new();
         let (tag, count) = match (info.kind, upsert) {
             (WriteKind::Merge, _) => {
@@ -676,7 +684,10 @@ impl Connection {
                 (CommandTag::Merge, done.count)
             }
             (WriteKind::Insert, Some(conflict)) => {
-                let done = self.upsert(plan, info, conflict, params, &view, rows)?;
+                let done = self.upsert(plan, (info, conflict), params, &view, rows, &fire)?;
+                if !fire.insert.is_empty() || !fire.update.is_empty() {
+                    self.after_upsert(info, &fire, &done)?;
+                }
                 written = done.written;
                 new_rows = done.inserted;
                 updated = (done.new, done.old);
@@ -767,6 +778,7 @@ impl Connection {
             batches.push(Batch::new(info, &info.foreign, view.command, new_rows, old_rows));
         }
         if let Some(conflict) = upsert
+            && !conflict.foreign.is_empty()
             && !updated.0.is_empty()
         {
             let (new, old) = updated;
@@ -4728,6 +4740,12 @@ mod tests {
     #[test]
     fn plpgsql_record_star() {
         big_stack(|| script(include_str!("connection/plpgsql_record_star.test")));
+    }
+
+    /// Triggers on `INSERT ... ON CONFLICT`: the triggers `INSERT` and `UPDATE ... FOR EACH STATEMENT` of `DO UPDATE`, the triggers `BEFORE ... FOR EACH ROW` that change the row before the conflict and the new row of `DO UPDATE` or skip it, `UPDATE OF`, `WHEN`, the checks after the triggers, and the transition tables of the rows that went in and the rows that changed. `connection/on_conflict_triggers.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn on_conflict_triggers() {
+        big_stack(|| script(include_str!("connection/on_conflict_triggers.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
