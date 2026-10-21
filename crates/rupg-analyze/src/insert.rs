@@ -721,13 +721,14 @@ impl Analyzer<'_> {
         Ok(list)
     }
 
-    /// The unique indexes of a table in the order of their OIDs. A unique index with an expression, a predicate or a deferrable constraint is not supported yet.
+    /// The unique indexes of a table in the order of their OIDs. A unique index with an expression, a predicate or a deferrable constraint is not supported yet. The index of a partitioned table has no storage: the indexes of the partitions check the rows.
     pub(crate) fn unique_keys(&self, table: u32, columns: &[Column]) -> Result<Vec<Unique>> {
         let Some(catalog) = self.env.catalog() else {
             return Ok(Vec::new());
         };
         let mut indexes: Vec<_> = catalog
             .relations()
+            .filter(|rel| rel.kind == RelKind::Index)
             .filter_map(|rel| {
                 rel.index
                     .as_ref()

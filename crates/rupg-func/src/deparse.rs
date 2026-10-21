@@ -19,7 +19,7 @@ use rupg_analyze::{
     SortGroup, SqlValue, SubLink, SubLinkKind, Var, WindowClause, WindowFunc, XmlExpr, XmlOp,
 };
 use rupg_analyze::{default_opclass, node, sort_operators};
-use rupg_catalog::{ConKind, Constraint, IndexInfo, PartStrategy, PartitionKey, Relation};
+use rupg_catalog::{ConKind, Constraint, IndexInfo, PartStrategy, PartitionKey, RelKind, Relation};
 use rupg_common::{Error, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_types::{Value, oid, sql_name};
@@ -1802,9 +1802,10 @@ fn index_def(
             qualified_relation_name(info.table, session)?
         };
         out.push_str(&format!(
-            "CREATE {}INDEX {} ON {table} USING {method} (",
+            "CREATE {}INDEX {} ON {}{table} USING {method} (",
             if info.unique { "UNIQUE " } else { "" },
-            quote_identifier(&index.name)
+            quote_identifier(&index.name),
+            if index.kind == RelKind::PartitionedIndex { "ONLY " } else { "" }
         ));
     }
     let key_count = usize::try_from(info.key_count).unwrap_or(0);

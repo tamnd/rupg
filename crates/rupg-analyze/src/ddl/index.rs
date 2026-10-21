@@ -140,10 +140,7 @@ impl Definer<'_, '_> {
             )
             .with_detail(relkind_detail(kind)));
         }
-        if kind == b'p' {
-            return Err(not_yet("an index on a partitioned table", None));
-        }
-        if kind != b'r' {
+        if kind != b'r' && kind != b'p' {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("cannot create index on relation \"{name}\""),
@@ -224,6 +221,9 @@ impl Definer<'_, '_> {
         if stmt.primary {
             self.check_primary_key(table, &rel_name, &columns[..key_count], alter)?;
         }
+        if kind == b'p' && stmt.unique {
+            self.check_partition_key(table, &columns[..key_count], stmt.primary)?;
+        }
         let system_var = |e: &Expr| {
             e.find(0, &mut |e, _| match &e.kind {
                 ExprKind::Var(var) if var.attnum < 0 => Some(()),
@@ -257,15 +257,7 @@ impl Definer<'_, '_> {
         if exprs.is_empty() && predicate.is_none() {
             refs.clear();
         }
-        let pages = self.catalog.relation(table).map_or(1, |rel| {
-            let widths = rel
-                .columns
-                .iter()
-                .filter(|c| !c.dropped)
-                .map(|c| typavgwidth(types::row(c.ty).map_or(-1, |t| t.len), c.ty, c.typmod));
-            let fillfactor = reloptions::int_option(&rel.options, "fillfactor").unwrap_or(100);
-            empty_index_pages(method, new_table_tuples(widths, fillfactor))
-        });
+        let pages = self.index_pages(table, method);
         let new = NewIndex {
             table,
             name: stmt.idxname.as_deref().map(str::to_string),
@@ -282,9 +274,19 @@ impl Definer<'_, '_> {
             refs,
             pages,
         };
-        let (index, _) = self.catalog.create_index(new)?;
+        let (index, constraint) = self.catalog.create_index(new)?;
         if !options.is_empty() {
             self.catalog.set_options(index, options)?;
+        }
+        if kind == b'p' {
+            // With `ONLY`, the index is not valid until each partition has an index for it.
+            if !rv.inh {
+                if !self.catalog.partitions(table).is_empty() {
+                    self.catalog.set_index_valid(index, false)?;
+                }
+            } else {
+                self.index_partitions(table, index, constraint, alter)?;
+            }
         }
         // `index_build` reads the rows of the table with a sequential scan.
         if self.catalog.relation(table).is_some_and(|r| r.kind == RelKind::Table) {
@@ -293,8 +295,24 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
+    /// The pages of the main fork of a new index of the table, from [`empty_index_pages`]. The index of a partitioned table has no storage.
+    pub(super) fn index_pages(&self, table: u32, method: u32) -> i32 {
+        self.catalog.relation(table).map_or(1, |rel| {
+            if rel.kind == RelKind::Partitioned {
+                return 0;
+            }
+            let widths = rel
+                .columns
+                .iter()
+                .filter(|c| !c.dropped)
+                .map(|c| typavgwidth(types::row(c.ty).map_or(-1, |t| t.len), c.ty, c.typmod));
+            let fillfactor = reloptions::int_option(&rel.options, "fillfactor").unwrap_or(100);
+            empty_index_pages(method, new_table_tuples(widths, fillfactor))
+        })
+    }
+
     /// `index_check_primary_key`: `ALTER TABLE` cannot add a second primary key, and the columns of a primary key must be not null.
-    fn check_primary_key(
+    pub(super) fn check_primary_key(
         &self,
         table: u32,
         name: &str,

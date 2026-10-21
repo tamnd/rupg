@@ -454,7 +454,7 @@ fn attributes_of(relid: u32, session: &dyn Session) -> Vec<Attribute<'_>> {
         RelKind::Table | RelKind::Sequence | RelKind::Toast | RelKind::Partitioned => {
             &SYSTEM_COLUMNS
         }
-        RelKind::Index | RelKind::View | RelKind::Composite => &[],
+        RelKind::Index | RelKind::PartitionedIndex | RelKind::View | RelKind::Composite => &[],
     };
     let system =
         system.iter().map(|&(name, num)| Attribute { name, num, dropped: false, acl: None });
