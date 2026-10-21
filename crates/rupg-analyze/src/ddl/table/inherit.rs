@@ -207,7 +207,7 @@ impl Definer<'_, '_> {
                 }
             }
         }
-        // `newcol_attno`: the place of the column of the statement among the columns of the statement that do not merge.
+        // `newcol_attno`: the place of the column among the columns of the statement.
         let mut position = 0;
         let mut places = Vec::with_capacity(local.len());
         for column in local {
@@ -282,7 +282,6 @@ impl Definer<'_, '_> {
                 target.default = column.default;
                 bogus.retain(|b| *b != name);
             }
-            position -= 1;
             places.push(at);
         }
         if let Some(name) = columns.iter().map(|c| &c.name).find(|n| bogus.contains(n)) {

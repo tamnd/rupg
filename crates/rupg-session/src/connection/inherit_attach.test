@@ -1,0 +1,272 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (k int NOT NULL, v int, CHECK (v > 0));
+CREATE TABLE
+> CREATE TABLE q (k int, w text);
+CREATE TABLE
+> CREATE TABLE c (k int NOT NULL, v int, x text, CONSTRAINT p_v_check CHECK (v > 0));
+CREATE TABLE
+> CREATE TABLE d (k int, x text);
+CREATE TABLE
+> CREATE TABLE e (k bigint, v int);
+CREATE TABLE
+> CREATE TABLE f (k int NOT NULL, v int);
+CREATE TABLE
+> CREATE TABLE h (k int NOT NULL, v int, CONSTRAINT p_v_check CHECK (v > 1));
+CREATE TABLE
+> CREATE TABLE pt (k int) PARTITION BY RANGE (k);
+CREATE TABLE
+> INSERT INTO p VALUES (1, 1);
+INSERT 0 1
+> INSERT INTO c VALUES (2, 2, 'c');
+INSERT 0 1
+> ALTER TABLE c INHERIT p;
+ALTER TABLE
+> SELECT tableoid::regclass::text AS t, k, v FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1,v@p.2:23:4:-1
+row p,1,1
+row c,2,2
+SELECT 2
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 'c' AND a.attnum > 0 ORDER BY a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row c,k,t,1
+row c,v,t,1
+row c,x,t,0
+SELECT 3
+> SELECT c.relname, n.conname, n.contype, n.conislocal, n.coninhcount FROM pg_constraint n JOIN pg_class c ON c.oid = n.conrelid WHERE c.relname IN ('p', 'c') ORDER BY c.relname, n.conname;
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row c,c_k_not_null,n,t,1
+row c,p_v_check,c,t,1
+row p,p_k_not_null,n,t,0
+row p,p_v_check,c,t,0
+SELECT 4
+> SELECT inhrelid::regclass::text, inhparent::regclass::text, inhseqno FROM pg_inherits WHERE inhrelid = 'c'::regclass ORDER BY inhseqno;
+fields inhrelid:25:-1:-1,inhparent:25:-1:-1,inhseqno@pg_inherits.3:23:4:-1
+row c,p,1
+SELECT 1
+> ALTER TABLE c INHERIT p;
+ERROR 42P07 relation "p" would be inherited from more than once
+> ALTER TABLE p INHERIT c;
+ERROR 42P07 circular inheritance not allowed
+DETAIL "c" is already a child of "p".
+> ALTER TABLE p INHERIT p;
+ERROR 42P07 circular inheritance not allowed
+DETAIL "p" is already a child of "p".
+> ALTER TABLE d INHERIT p;
+ERROR 42804 column "k" in child table "d" must be marked NOT NULL
+> ALTER TABLE e INHERIT p;
+ERROR 42804 child table "e" has different type for column "k"
+> ALTER TABLE f INHERIT p;
+ERROR 42804 child table is missing constraint "p_v_check"
+> ALTER TABLE h INHERIT p;
+ERROR 42804 child table "h" has different definition for check constraint "p_v_check"
+> ALTER TABLE c INHERIT pt;
+ERROR 42809 cannot inherit from partitioned table "pt"
+> ALTER TABLE pt INHERIT p;
+ERROR 42809 ALTER action INHERIT cannot be performed on relation "pt"
+DETAIL This operation is not supported for partitioned tables.
+> ALTER TABLE c INHERIT q;
+ERROR 42804 child table is missing column "w"
+> ALTER TABLE c ADD COLUMN w text;
+ALTER TABLE
+> ALTER TABLE c INHERIT q;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 'c' AND a.attnum > 0 ORDER BY a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row c,k,t,2
+row c,v,t,1
+row c,x,t,0
+row c,w,t,1
+SELECT 4
+> SELECT inhrelid::regclass::text, inhparent::regclass::text, inhseqno FROM pg_inherits WHERE inhrelid = 'c'::regclass ORDER BY inhseqno;
+fields inhrelid:25:-1:-1,inhparent:25:-1:-1,inhseqno@pg_inherits.3:23:4:-1
+row c,p,1
+row c,q,2
+SELECT 2
+> ALTER TABLE c DROP COLUMN k;
+ERROR 42P16 cannot drop inherited column "k"
+> ALTER TABLE c NO INHERIT d;
+ERROR 42P01 relation "d" is not a parent of relation "c"
+> ALTER TABLE c NO INHERIT p;
+ALTER TABLE
+> SELECT tableoid::regclass::text AS t, k, v FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1,v@p.2:23:4:-1
+row p,1,1
+SELECT 1
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 'c' AND a.attnum > 0 ORDER BY a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row c,k,t,1
+row c,v,t,0
+row c,x,t,0
+row c,w,t,1
+SELECT 4
+> SELECT c.relname, n.conname, n.contype, n.conislocal, n.coninhcount FROM pg_constraint n JOIN pg_class c ON c.oid = n.conrelid WHERE c.relname IN ('p', 'c') ORDER BY c.relname, n.conname;
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row c,c_k_not_null,n,t,0
+row c,p_v_check,c,t,0
+row p,p_k_not_null,n,t,0
+row p,p_v_check,c,t,0
+SELECT 4
+> SELECT inhrelid::regclass::text, inhparent::regclass::text, inhseqno FROM pg_inherits WHERE inhrelid = 'c'::regclass ORDER BY inhseqno;
+fields inhrelid:25:-1:-1,inhparent:25:-1:-1,inhseqno@pg_inherits.3:23:4:-1
+row c,q,2
+SELECT 1
+> CREATE TABLE g (k int NOT NULL, v int, CONSTRAINT p_v_check CHECK (v > 0)) INHERITS (p);
+NOTICE 00000 merging column "k" with inherited definition
+NOTICE 00000 merging column "v" with inherited definition
+NOTICE 00000 merging constraint "p_v_check" with inherited definition
+CREATE TABLE
+> ALTER TABLE g NO INHERIT p;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 'g' AND a.attnum > 0 ORDER BY a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row g,k,t,0
+row g,v,t,0
+SELECT 2
+> CREATE TABLE r (k int, v int, CHECK (v > 0)) INHERITS (p);
+NOTICE 00000 merging column "k" with inherited definition
+NOTICE 00000 merging column "v" with inherited definition
+CREATE TABLE
+> CREATE TABLE s () INHERITS (p);
+CREATE TABLE
+> ALTER TABLE s NO INHERIT p;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 's' AND a.attnum > 0 ORDER BY a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row s,k,t,0
+row s,v,t,0
+SELECT 2
+> SELECT c.relname, n.conname, n.contype, n.conislocal, n.coninhcount FROM pg_constraint n JOIN pg_class c ON c.oid = n.conrelid WHERE c.relname = 's' ORDER BY n.conname;
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row s,p_k_not_null,n,t,0
+row s,p_v_check,c,t,0
+SELECT 2
+> ALTER TABLE r NO INHERIT p;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 'r' AND a.attnum > 0 ORDER BY a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row r,k,t,0
+row r,v,t,0
+SELECT 2
+> SELECT c.relname, n.conname, n.contype, n.conislocal, n.coninhcount FROM pg_constraint n JOIN pg_class c ON c.oid = n.conrelid WHERE c.relname = 'r' ORDER BY n.conname;
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row r,p_k_not_null,n,t,0
+row r,p_v_check,c,t,0
+row r,r_v_check,c,t,0
+SELECT 3
+> ALTER TABLE ONLY r INHERIT p;
+ALTER TABLE
+> INSERT INTO r VALUES (5, 5);
+INSERT 0 1
+> BEGIN;
+BEGIN
+> ALTER TABLE r NO INHERIT p;
+ALTER TABLE
+> SELECT tableoid::regclass::text AS t, k FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1
+row p,1
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT tableoid::regclass::text AS t, k FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1
+row p,1
+row r,5
+SELECT 2
+> CREATE TEMP TABLE tmp (k int NOT NULL, v int, CONSTRAINT p_v_check CHECK (v > 0));
+CREATE TABLE
+> ALTER TABLE tmp INHERIT p;
+ALTER TABLE
+> CREATE TEMP TABLE tp (k int NOT NULL, v int);
+CREATE TABLE
+> ALTER TABLE p INHERIT tp;
+ERROR 42809 cannot inherit from temporary relation "tp"
+> SELECT tableoid::regclass::text AS t, k FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1
+row p,1
+row r,5
+SELECT 2
+> CREATE TABLE m (k int NOT NULL, v int, CONSTRAINT p_v_check CHECK (v > 0), w text);
+CREATE TABLE
+> ALTER TABLE m INHERIT p;
+ALTER TABLE
+> ALTER TABLE m INHERIT q;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 'm' AND a.attnum > 0 ORDER BY a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row m,k,t,2
+row m,v,t,1
+row m,w,t,1
+SELECT 3
+> CREATE TABLE m2 () INHERITS (m);
+CREATE TABLE
+> ALTER TABLE m2 NO INHERIT m;
+ALTER TABLE
+> ALTER TABLE m2 INHERIT p;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname = 'm2' AND a.attnum > 0 ORDER BY a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row m2,k,t,1
+row m2,v,t,1
+row m2,w,t,0
+SELECT 3
+> SELECT c.relname, n.conname, n.contype, n.conislocal, n.coninhcount FROM pg_constraint n JOIN pg_class c ON c.oid = n.conrelid WHERE c.relname = 'm2' ORDER BY n.conname;
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row m2,m_k_not_null,n,t,1
+row m2,p_v_check,c,t,1
+SELECT 2
+> CREATE TABLE pt1 PARTITION OF pt FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> ALTER TABLE pt1 INHERIT p;
+ERROR 42809 cannot change inheritance of a partition
+> ALTER TABLE pt1 NO INHERIT pt;
+ERROR 42809 cannot change inheritance of a partition
+> ALTER TABLE c INHERIT pt1;
+ERROR 42809 cannot inherit from a partition
+> CREATE VIEW pv AS SELECT 1 AS k;
+CREATE VIEW
+> ALTER TABLE c INHERIT pv;
+ERROR 42809 ALTER action INHERIT cannot be performed on relation "pv"
+DETAIL This operation is not supported for views.
+> ALTER TABLE pv INHERIT p;
+ERROR 42809 ALTER action INHERIT cannot be performed on relation "pv"
+DETAIL This operation is not supported for views.
+> CREATE INDEX pi ON p (k);
+CREATE INDEX
+> ALTER TABLE c INHERIT pi;
+ERROR 42809 cannot open relation "pi"
+DETAIL This operation is not supported for indexes.
+> ALTER TABLE c NO INHERIT pi;
+ERROR 42809 cannot open relation "pi"
+DETAIL This operation is not supported for indexes.
+> ALTER TABLE c INHERIT nosuch;
+ERROR 42P01 relation "nosuch" does not exist
+> ALTER TABLE c NO INHERIT nosuch;
+ERROR 42P01 relation "nosuch" does not exist
+> CREATE FUNCTION trf() RETURNS trigger LANGUAGE plpgsql AS $$BEGIN RETURN NULL; END$$;
+CREATE FUNCTION
+> CREATE TABLE tr (k int NOT NULL, v int, CONSTRAINT p_v_check CHECK (v > 0));
+CREATE TABLE
+> CREATE TRIGGER trt AFTER INSERT ON tr REFERENCING NEW TABLE AS nt FOR EACH ROW EXECUTE FUNCTION trf();
+CREATE TRIGGER
+> ALTER TABLE tr INHERIT p;
+ERROR 0A000 trigger "trt" prevents table "tr" from becoming an inheritance child
+DETAIL ROW triggers with transition tables are not supported in inheritance hierarchies.
+> DROP TABLE p;
+ERROR 2BP01 cannot drop table p because other objects depend on it
+DETAIL table r depends on table p
+table tmp depends on table p
+table m depends on table p
+table m2 depends on table p
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> SELECT inhrelid::regclass::text, inhparent::regclass::text, inhseqno FROM pg_inherits ORDER BY 1, 3;
+fields inhrelid:25:-1:-1,inhparent:25:-1:-1,inhseqno@pg_inherits.3:23:4:-1
+row c,q,2
+row m,p,1
+row m,q,2
+row m2,p,1
+row pt1,pt,1
+row r,p,1
+row tmp,p,1
+SELECT 7
