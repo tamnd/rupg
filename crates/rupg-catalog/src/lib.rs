@@ -325,7 +325,7 @@ pub struct Relation {
     pub partition_key: Option<PartitionKey>,
     /// The parent table and the bound of a partition.
     pub partition_of: Option<PartitionOf>,
-    /// The parent tables of `INHERITS`, in the order of `inhseqno`. A partition has its parent in [`Relation::partition_of`].
+    /// The parent tables of `INHERITS`: the parent at index `i` has `inhseqno` `i + 1`. `NO INHERIT` leaves 0 in the place of the parent, so the other parents keep their numbers. A partition has its parent in [`Relation::partition_of`].
     pub inherits: Vec<u32>,
 }
 
@@ -1976,6 +1976,31 @@ impl Catalog {
             self.depend(me, ObjRef::new(PG_CLASS, parent), DepKind::Normal);
         }
         self.relation_mut(table)?.inherits = parents;
+        Ok(())
+    }
+
+    /// `StoreCatalogInheritance1` of `ALTER TABLE ... INHERIT`: the table gets the parent after its other parents, with the next `inhseqno`, and the normal dependency on the parent.
+    pub fn add_inherit(&mut self, table: u32, parent: u32) -> Result<()> {
+        self.depend(ObjRef::new(PG_CLASS, table), ObjRef::new(PG_CLASS, parent), DepKind::Normal);
+        self.relation_mut(table)?.inherits.push(parent);
+        Ok(())
+    }
+
+    /// The part of `RemoveInheritance` of `ALTER TABLE ... NO INHERIT`: the table loses the row of `pg_inherits` of the parent and its dependency on the parent. The next `INHERIT` takes the number after the highest number that is left.
+    pub fn remove_inherit(&mut self, table: u32, parent: u32) -> Result<()> {
+        let rel = self.relation_mut(table)?;
+        for p in &mut rel.inherits {
+            if *p == parent {
+                *p = 0;
+            }
+        }
+        while rel.inherits.last() == Some(&0) {
+            rel.inherits.pop();
+        }
+        let me = ObjRef::new(PG_CLASS, table);
+        let parent = ObjRef::new(PG_CLASS, parent);
+        self.depends
+            .retain(|d| d.object != me || d.referenced != parent || d.kind != DepKind::Normal);
         Ok(())
     }
 

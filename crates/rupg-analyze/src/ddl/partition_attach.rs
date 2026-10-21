@@ -126,7 +126,7 @@ impl Definer<'_, '_> {
                 .with_detail("The new partition may contain only the columns present in parent."));
             }
         }
-        self.check_transition_triggers(&rel)?;
+        self.check_transition_triggers(&rel, true)?;
         let bound = self.partition_bound(&rel.name, parent, spec, true)?;
         self.merge_attributes(&rel, &parent_rel)?;
         self.merge_constraints(&rel, &parent_rel)?;
@@ -149,8 +149,8 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `table_openrv` and `ATSimplePermissions` for the table that `ATTACH PARTITION` attaches.
-    fn open_attached(&self, rv: &RangeVar, cmd: &AlterTableCmd) -> Result<u32> {
+    /// `table_openrv` and `ATSimplePermissions` for the table that `ATTACH PARTITION` attaches, and for the new parent of `INHERIT`.
+    pub(super) fn open_attached(&self, rv: &RangeVar, cmd: &AlterTableCmd) -> Result<u32> {
         let found = self.lookup_relation(rv)?;
         let name = relname(rv);
         let kind = self.kind_of(found);
@@ -180,13 +180,18 @@ impl Definer<'_, '_> {
             ));
         }
         let Found::User(oid) = found else {
-            return Err(not_yet("ATTACH PARTITION of a built-in relation", None));
+            let what = if cmd.subtype == AlterTableType::AT_AddInherit {
+                "INHERIT of a built-in relation"
+            } else {
+                "ATTACH PARTITION of a built-in relation"
+            };
+            return Err(not_yet(what, None));
         };
         Ok(oid)
     }
 
-    /// `FindTriggerIncompatibleWithInheritance`: a row trigger with a transition table cannot be on a partition.
-    fn check_transition_triggers(&self, rel: &Relation) -> Result<()> {
+    /// `FindTriggerIncompatibleWithInheritance`: a row trigger with a transition table cannot be on a partition, or on a child of `INHERIT` when `partition` is false.
+    pub(super) fn check_transition_triggers(&self, rel: &Relation, partition: bool) -> Result<()> {
         let mut found: Vec<&str> = self
             .catalog
             .triggers()
@@ -196,20 +201,31 @@ impl Definer<'_, '_> {
             .collect();
         found.sort_unstable();
         if let Some(trigger) = found.first() {
+            let (becoming, detail) = if partition {
+                (
+                    "a partition",
+                    "ROW triggers with transition tables are not supported on partitions.",
+                )
+            } else {
+                (
+                    "an inheritance child",
+                    "ROW triggers with transition tables are not supported in inheritance hierarchies.",
+                )
+            };
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
                 format!(
-                    "trigger \"{trigger}\" prevents table \"{}\" from becoming a partition",
+                    "trigger \"{trigger}\" prevents table \"{}\" from becoming {becoming}",
                     rel.name
                 ),
             )
-            .with_detail("ROW triggers with transition tables are not supported on partitions."));
+            .with_detail(detail));
         }
         Ok(())
     }
 
-    /// `MergeAttributesIntoExisting`: each column of the parent must be in the partition with the same type and collation, and with a not-null constraint when the parent has one. The columns of the partition then come from the parent.
-    fn merge_attributes(&mut self, rel: &Relation, parent: &Relation) -> Result<()> {
+    /// `MergeAttributesIntoExisting`: each column of the parent must be in the child with the same type and collation, and with a not-null constraint when the parent has one. Each column then counts the parent. The columns of a partition come only from the parent and have its identity, but a child of `INHERIT` keeps its own columns local and has no identity from the parent.
+    pub(super) fn merge_attributes(&mut self, rel: &Relation, parent: &Relation) -> Result<()> {
         let mut merged = Vec::new();
         for column in parent.columns.iter().filter(|c| !c.dropped) {
             let Some(number) = rel.column_number(&column.name) else {
@@ -246,24 +262,22 @@ impl Definer<'_, '_> {
             if column.not_null && !own.not_null && inherited {
                 return Err(must_be_not_null(&column.name, &rel.name));
             }
-            merged.push((number, parent_number, own.inhcount));
+            let inhcount = own.inhcount.checked_add(1).ok_or_else(too_many_parents)?;
+            merged.push((number, parent_number, own.local, inhcount));
         }
-        for (number, up, inhcount) in merged {
-            // A partition has the identity of the column of its parent.
-            let identity = parent.column(up).map_or(0, |c| c.identity);
-            self.catalog.set_identity(rel.oid, number, identity)?;
-            self.catalog.set_column_inherited(
-                rel.oid,
-                number,
-                false,
-                inhcount.saturating_add(1),
-            )?;
+        let partition = parent.kind == RelKind::Partitioned;
+        for (number, up, local, inhcount) in merged {
+            if partition {
+                let identity = parent.column(up).map_or(0, |c| c.identity);
+                self.catalog.set_identity(rel.oid, number, identity)?;
+            }
+            self.catalog.set_column_inherited(rel.oid, number, local && !partition, inhcount)?;
         }
         Ok(())
     }
 
-    /// `MergeConstraintsIntoExisting`: each check constraint and not-null constraint of the parent, in the order of their names, must be in the partition with the same definition, with the numbers of the columns of the partition. The constraints of the partition then come from the parent.
-    fn merge_constraints(&mut self, rel: &Relation, parent: &Relation) -> Result<()> {
+    /// `MergeConstraintsIntoExisting`: each check constraint and not-null constraint of the parent, in the order of their names, must be in the child with the same definition, with the numbers of the columns of the child. Each constraint then counts the parent. The constraints of a partition come only from the parent, but a child of `INHERIT` keeps its own constraints local.
+    pub(super) fn merge_constraints(&mut self, rel: &Relation, parent: &Relation) -> Result<()> {
         let mut wanted: Vec<_> = self
             .catalog
             .constraints_of(parent.oid)
@@ -327,10 +341,12 @@ impl Definer<'_, '_> {
                     ),
                 ));
             }
-            merged.push((found.oid, found.inhcount));
+            let inhcount = found.inhcount.checked_add(1).ok_or_else(too_many_parents)?;
+            merged.push((found.oid, found.local, inhcount));
         }
-        for (oid, inhcount) in merged {
-            self.catalog.set_constraint_inherited(oid, false, inhcount.saturating_add(1))?;
+        let partition = parent.kind == RelKind::Partitioned;
+        for (oid, local, inhcount) in merged {
+            self.catalog.set_constraint_inherited(oid, local && !partition, inhcount)?;
         }
         Ok(())
     }
@@ -434,20 +450,8 @@ impl Definer<'_, '_> {
 
     /// `table_openrv` for the partition of `DETACH PARTITION`, and the check of `RemoveInheritance` that it is a partition of the parent.
     fn open_detached(&self, target: &Target, rv: &RangeVar) -> Result<u32> {
-        let found = self.lookup_relation(rv)?;
+        let child = self.open_table(rv)?;
         let name = relname(rv);
-        let kind = self.kind_of(found);
-        if matches!(kind, b'i' | b'I' | b'c') {
-            return Err(Error::new(
-                SqlState::WRONG_OBJECT_TYPE,
-                format!("cannot open relation \"{name}\""),
-            )
-            .with_detail(relkind_detail(kind)));
-        }
-        let child = match found {
-            Found::User(oid) => oid,
-            Found::Builtin(row) => row.oid,
-        };
         let parent =
             self.catalog.relation(child).and_then(|r| r.partition_of.as_ref()).map(|p| p.parent);
         if parent != Some(target.oid) {
@@ -459,8 +463,25 @@ impl Definer<'_, '_> {
         Ok(child)
     }
 
-    /// `RemoveInheritance`: the columns and the constraints that the partition `child` has from the parent become local again, and the partition loses its bound.
-    fn remove_inheritance(&mut self, child: u32, parent: u32) -> Result<()> {
+    /// `table_openrv`: the relation that a name gives, which cannot be an index or a composite type.
+    pub(super) fn open_table(&self, rv: &RangeVar) -> Result<u32> {
+        let found = self.lookup_relation(rv)?;
+        let kind = self.kind_of(found);
+        if matches!(kind, b'i' | b'I' | b'c') {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("cannot open relation \"{}\"", relname(rv)),
+            )
+            .with_detail(relkind_detail(kind)));
+        }
+        Ok(match found {
+            Found::User(oid) => oid,
+            Found::Builtin(row) => row.oid,
+        })
+    }
+
+    /// `RemoveInheritance`: the columns and the constraints that `child` has from the parent no longer count it, and they become local again when they have no other parent. A partition loses its bound, and a child of `INHERITS` loses the parent.
+    pub(super) fn remove_inheritance(&mut self, child: u32, parent: u32) -> Result<()> {
         let lookup = |oid: u32| Error::internal(format!("cache lookup failed for relation {oid}"));
         let rel = self.catalog.relation(child).cloned().ok_or_else(|| lookup(child))?;
         let parent_rel = self.catalog.relation(parent).cloned().ok_or_else(|| lookup(parent))?;
@@ -473,7 +494,12 @@ impl Definer<'_, '_> {
             }
             let number = i16::try_from(i + 1).unwrap_or_default();
             let inhcount = column.inhcount - 1;
-            self.catalog.set_column_inherited(child, number, inhcount == 0, inhcount)?;
+            self.catalog.set_column_inherited(
+                child,
+                number,
+                column.local || inhcount == 0,
+                inhcount,
+            )?;
         }
         let mut checks: Vec<String> = Vec::new();
         let mut not_nulls: Vec<i16> = Vec::new();
@@ -489,7 +515,7 @@ impl Definer<'_, '_> {
                 _ => {}
             }
         }
-        let matched: Vec<(u32, i16)> = self
+        let matched: Vec<(u32, bool, i16)> = self
             .catalog
             .constraints_of(child)
             .filter(|c| match c.kind {
@@ -497,13 +523,17 @@ impl Definer<'_, '_> {
                 ConKind::NotNull => c.keys.first().is_some_and(|n| not_nulls.contains(n)),
                 _ => false,
             })
-            .map(|c| (c.oid, c.inhcount))
+            .map(|c| (c.oid, c.local, c.inhcount))
             .collect();
-        for (oid, inhcount) in matched {
+        for (oid, local, inhcount) in matched {
             let inhcount = inhcount.saturating_sub(1);
-            self.catalog.set_constraint_inherited(oid, inhcount == 0, inhcount)?;
+            self.catalog.set_constraint_inherited(oid, local || inhcount == 0, inhcount)?;
         }
-        self.catalog.detach_partition(child)
+        if rel.partition_of.is_some() {
+            self.catalog.detach_partition(child)
+        } else {
+            self.catalog.remove_inherit(child, parent)
+        }
     }
 
     /// `ATExecAttachPartitionIdx`: the index `rv` of a partition becomes a partition of the partitioned index `target`, and `validatePartitionedIndex` then makes the index valid when each partition has a valid index.
@@ -665,6 +695,11 @@ fn must_be_not_null(column: &str, table: &str) -> Error {
         SqlState::DATATYPE_MISMATCH,
         format!("column \"{column}\" in child table \"{table}\" must be marked NOT NULL"),
     )
+}
+
+/// The error of `MergeAttributesIntoExisting` and `MergeConstraintsIntoExisting` for a count of parents that does not fit in `int2`.
+fn too_many_parents() -> Error {
+    Error::new(SqlState::PROGRAM_LIMIT_EXCEEDED, "too many inheritance parents")
 }
 
 /// The text of an expression with no locations, which `constraints_equivalent` compares as the text of `pg_get_expr`.

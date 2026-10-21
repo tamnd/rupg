@@ -36,6 +36,7 @@ const COMPRESSION: &[u8] = b"rpm";
 const REL_OPTIONS: &[u8] = b"rpvmi";
 const TABLE_MATVIEW: &[u8] = b"rpm";
 const CLUSTER: &[u8] = b"rm";
+const INHERIT: &[u8] = b"rf";
 
 /// `alter_table_type_to_string`: the words of a subcommand in its errors.
 fn action_words(subtype: AlterTableType) -> &'static str {
@@ -171,6 +172,10 @@ enum MiscCmd {
     ReplicaIdentity(ReplicaIdentityStmt),
     /// `ENABLE TRIGGER` and `DISABLE TRIGGER`: the name of the trigger or no name for `ALL` and `USER`, the new `tgenabled`, and true for `USER`, which skips the internal triggers.
     Trigger(Option<String>, u8, bool),
+    /// `INHERIT`, with the command, which names the new parent.
+    Inherit(Box<AlterTableCmd>),
+    /// `NO INHERIT` with the parent.
+    NoInherit(Box<RangeVar>),
 }
 
 /// The subcommand that gives a constraint of `AT_PASS_ADD_CONSTR`.
@@ -532,6 +537,18 @@ impl Definer<'_, '_> {
                 let name = cmd.name.as_deref().filter(|_| named).map(str::to_owned);
                 passes.misc.push(MiscCmd::Trigger(name, enabled, user));
             }
+            AlterTableType::AT_AddInherit => {
+                self.simple_permissions(target, cmd, INHERIT)?;
+                self.prep_inherit(target)?;
+                passes.misc.push(MiscCmd::Inherit(Box::new(cmd.clone())));
+            }
+            AlterTableType::AT_DropInherit => {
+                self.simple_permissions(target, cmd, INHERIT)?;
+                let Some(Node::RangeVar(rv)) = &cmd.def else {
+                    return Err(Error::internal("NO INHERIT with no parent"));
+                };
+                passes.misc.push(MiscCmd::NoInherit(rv.clone()));
+            }
             // A table has no OIDs, so `SET WITHOUT OIDS` has no work.
             AlterTableType::AT_DropOids => self.simple_permissions(target, cmd, TABLE)?,
             other => {
@@ -761,6 +778,8 @@ impl Definer<'_, '_> {
                         passes.recurse,
                     )?;
                 }
+                MiscCmd::Inherit(cmd) => self.add_inherit(target, cmd)?,
+                MiscCmd::NoInherit(rv) => self.drop_inherit(target, rv)?,
             }
         }
         if let Some(unlogged) = passes.persistence {

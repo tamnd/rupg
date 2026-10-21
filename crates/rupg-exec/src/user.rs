@@ -726,7 +726,7 @@ fn partitioned_tables<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-/// The rows of `pg_inherits`: one row for each partition and for each index of a partition that is a partition of an index of the parent table, with the sequence number 1, and one row for each parent of a table of `INHERITS`, with the sequence numbers in the order of the parents.
+/// The rows of `pg_inherits`: one row for each partition and for each index of a partition that is a partition of an index of the parent table, with the sequence number 1, and one row for each parent of a table of `INHERITS`, with the sequence numbers in the order of the parents. A parent that `NO INHERIT` removed leaves its number unused.
 fn inherits<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
     let mut rows = Vec::new();
     for rel in catalog.relations() {
@@ -736,6 +736,9 @@ fn inherits<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             _ => rel.inherits.clone(),
         };
         for (seqno, parent) in (1..).zip(parents) {
+            if parent == 0 {
+                continue;
+            }
             let mut row = Row::new(table);
             row.set("inhrelid", oid(rel.oid))
                 .set("inhparent", oid(parent))

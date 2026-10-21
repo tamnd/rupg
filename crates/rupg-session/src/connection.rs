@@ -5212,6 +5212,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/inherit_alter_other.test")));
     }
 
+    /// `ALTER TABLE ... INHERIT` and `NO INHERIT`: the columns and the constraints of the child count the new parent and stay local, the numbers of `pg_inherits`, a column with two parents, the errors for a parent that is the table, a child, a partitioned table, a partition, a temporary table, a view or an index, for a missing column or constraint, a column with a different type or no not-null constraint, a check constraint with a different definition, a table that is not a parent and a transition table, and `NO INHERIT` in a transaction that rolls back. `connection/inherit_attach.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inherit_attach() {
+        big_stack(|| script(include_str!("connection/inherit_attach.test")));
+    }
+
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_constraintdef() {
