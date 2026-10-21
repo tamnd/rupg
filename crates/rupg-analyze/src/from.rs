@@ -70,7 +70,7 @@ pub struct Relation {
     pub cte: Option<CteRef>,
     /// The `TABLESAMPLE` clause of a table.
     pub tablesample: Option<TableSample>,
-    /// True for `ONLY` before the name of a partitioned table, which then gives no rows.
+    /// True for `ONLY` before the name of a table. A partitioned table then gives no rows, and a table gives no rows of its children of `INHERITS`.
     pub only: bool,
 }
 
@@ -539,14 +539,11 @@ impl Analyzer<'_> {
             error.at_opt(at)
         })?;
         let columns = self.open_relation(oid, name, at)?;
-        let catalog = self.env.catalog();
-        let partitioned =
-            catalog.and_then(|c| c.relation(oid)).is_some_and(|r| r.kind == RelKind::Partitioned);
         let subquery = self.view_query(oid)?.map(Box::new);
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
         let mut relation = Relation::new(oid, columns, subquery, None, None);
-        relation.only = partitioned && !rv.inh;
+        relation.only = !rv.inh;
         self.add_relation(relation, refname, alias)
     }
 

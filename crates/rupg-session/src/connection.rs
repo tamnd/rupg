@@ -5168,6 +5168,18 @@ mod tests {
         big_stack(|| script(include_str!("connection/alter_add_column.test")));
     }
 
+    /// `CREATE TABLE ... INHERITS`: the columns, the defaults, the check and not-null constraints that a table takes from its parents, the errors of the parents that a table cannot inherit from, `pg_inherits`, a `SELECT` of a parent, `TRUNCATE` and `DROP TABLE`. `connection/inherit.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inherit() {
+        big_stack(|| script(include_str!("connection/inherit.test")));
+    }
+
+    /// `CREATE TABLE ... INHERITS` with two parents and with columns of the statement: the columns and the constraints that merge, the conflicts of types, collations and defaults, a `serial` column of a parent, and `tableoid` and whole rows in a `SELECT` of a parent. `connection/inherit_merge.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inherit_merge() {
+        big_stack(|| script(include_str!("connection/inherit_merge.test")));
+    }
+
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.
     #[test]
     fn fold_at_bind() {

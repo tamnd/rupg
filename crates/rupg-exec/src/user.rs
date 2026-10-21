@@ -424,7 +424,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set(
                     "relhassubclass",
                     Value::Bool(match rel.kind {
-                        RelKind::Partitioned => has_partitions(catalog, rel.oid),
+                        RelKind::Table | RelKind::Partitioned => has_children(catalog, rel.oid),
                         RelKind::PartitionedIndex => has_index_partitions(catalog, rel.oid),
                         _ => false,
                     }),
@@ -686,9 +686,9 @@ fn attribute<'a>(
     row
 }
 
-/// True for a partitioned table with a partition, as `relhassubclass` of `StoreCatalogInheritance1` gives it.
-fn has_partitions(catalog: &Catalog, parent: u32) -> bool {
-    catalog.relations().any(|r| r.partition_of.as_ref().is_some_and(|p| p.parent == parent))
+/// True for a table with a partition or a table that inherits from it, as `relhassubclass` of `StoreCatalogInheritance1` gives it.
+fn has_children(catalog: &Catalog, parent: u32) -> bool {
+    !catalog.children(parent).is_empty()
 }
 
 /// True for a partitioned index with a partition, as `relhassubclass` of `IndexSetParentIndex` gives it.
@@ -726,24 +726,25 @@ fn partitioned_tables<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
         .collect()
 }
 
-/// The rows of `pg_inherits`: one row for each partition and for each index of a partition that is a partition of an index of the parent table, with the sequence number 1.
+/// The rows of `pg_inherits`: one row for each partition and for each index of a partition that is a partition of an index of the parent table, with the sequence number 1, and one row for each parent of a table of `INHERITS`, with the sequence numbers in the order of the parents.
 fn inherits<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
-    catalog
-        .relations()
-        .filter_map(|rel| {
-            let parent = match (&rel.partition_of, &rel.index) {
-                (Some(of), _) => of.parent,
-                (None, Some(info)) if info.parent != 0 => info.parent,
-                _ => return None,
-            };
+    let mut rows = Vec::new();
+    for rel in catalog.relations() {
+        let parents = match (&rel.partition_of, &rel.index) {
+            (Some(of), _) => vec![of.parent],
+            (None, Some(info)) if info.parent != 0 => vec![info.parent],
+            _ => rel.inherits.clone(),
+        };
+        for (seqno, parent) in (1..).zip(parents) {
             let mut row = Row::new(table);
             row.set("inhrelid", oid(rel.oid))
                 .set("inhparent", oid(parent))
-                .set("inhseqno", Value::Int4(1))
+                .set("inhseqno", Value::Int4(seqno))
                 .set("inhdetachpending", Value::Bool(false));
-            Some(row)
-        })
-        .collect()
+            rows.push(row);
+        }
+    }
+    rows
 }
 
 fn defaults<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {

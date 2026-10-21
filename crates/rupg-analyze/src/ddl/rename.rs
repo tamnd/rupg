@@ -138,10 +138,18 @@ impl Definer<'_, '_> {
         let Some(target) = self.rename_target(&rv, stmt.missing_ok)? else { return Ok(()) };
         let column = stmt.subname.as_deref().unwrap_or_default();
         if rv.inh {
-            for child in self.all_inheritors(target.oid) {
-                self.rename_one_column(&child, column, newname, 1)?;
+            let children = self.all_inheritors(target.oid);
+            // `find_all_inheritors` with `numparents`: the number of the parents of each child in the tree of the table.
+            let mut tree: Vec<u32> = children.iter().map(|c| c.oid).collect();
+            tree.push(target.oid);
+            for child in children {
+                let inherits = self.catalog.relation(child.oid).map(|r| r.inherits.clone());
+                let found =
+                    inherits.unwrap_or_default().iter().filter(|p| tree.contains(p)).count();
+                let parents = i16::try_from(found.max(1)).unwrap_or(i16::MAX);
+                self.rename_one_column(&child, column, newname, parents)?;
             }
-        } else if !self.catalog.partitions(target.oid).is_empty() {
+        } else if !self.catalog.children(target.oid).is_empty() {
             return Err(Error::new(
                 SqlState::INVALID_TABLE_DEFINITION,
                 format!("inherited column \"{column}\" must be renamed in child tables too"),

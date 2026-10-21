@@ -23,22 +23,15 @@ impl Definer<'_, '_> {
         Target { oid, kind: self.kind_of(Found::User(oid)), name, namespace }
     }
 
-    /// `find_inheritance_children`: the partitions of a table, in the order of their OIDs.
+    /// `find_inheritance_children`: the partitions of a table and its children of `INHERITS`, in the order of their OIDs.
     pub(super) fn child_targets(&self, table: u32) -> Vec<Target> {
-        let children: Vec<u32> = self.catalog.partitions(table).iter().map(|r| r.oid).collect();
+        let children: Vec<u32> = self.catalog.children(table).iter().map(|r| r.oid).collect();
         children.into_iter().map(|oid| self.target_of(oid)).collect()
     }
 
-    /// `find_all_inheritors` with no table itself: the partitions of the table, then the partitions of each of them in the same order, and so on.
+    /// `find_all_inheritors` with no table itself: the children of the table, then the children of each of them in the same order, and so on.
     pub(super) fn all_inheritors(&self, table: u32) -> Vec<Target> {
-        let mut out = self.child_targets(table);
-        let mut i = 0;
-        while i < out.len() {
-            let more = self.child_targets(out[i].oid);
-            out.extend(more);
-            i += 1;
-        }
-        out
+        self.catalog.all_inheritors(table).into_iter().map(|oid| self.target_of(oid)).collect()
     }
 
     /// `has_partition_attrs` for one column: the column is a column of the partition key of the table, or an expression of the key uses it.

@@ -325,6 +325,8 @@ pub struct Relation {
     pub partition_key: Option<PartitionKey>,
     /// The parent table and the bound of a partition.
     pub partition_of: Option<PartitionOf>,
+    /// The parent tables of `INHERITS`, in the order of `inhseqno`. A partition has its parent in [`Relation::partition_of`].
+    pub inherits: Vec<u32>,
 }
 
 /// The strategy of a partition key, `partstrat`.
@@ -1967,6 +1969,43 @@ impl Catalog {
         Ok(())
     }
 
+    /// `StoreCatalogInheritance`: the rows of `pg_inherits` of a new table of `INHERITS`, in the order of its parents, and the normal dependency of the table on each parent. So `DROP TABLE` of a parent needs `CASCADE`.
+    pub fn set_inherits(&mut self, table: u32, parents: Vec<u32>) -> Result<()> {
+        let me = ObjRef::new(PG_CLASS, table);
+        for &parent in &parents {
+            self.depend(me, ObjRef::new(PG_CLASS, parent), DepKind::Normal);
+        }
+        self.relation_mut(table)?.inherits = parents;
+        Ok(())
+    }
+
+    /// `find_inheritance_children`: the partitions of a table and the tables that inherit from it, in the order of their OIDs.
+    pub fn children(&self, parent: u32) -> Vec<&Relation> {
+        let child = |r: &&Relation| {
+            r.partition_of.as_ref().is_some_and(|p| p.parent == parent)
+                || r.inherits.contains(&parent)
+        };
+        self.relations.values().filter(child).collect()
+    }
+
+    /// `find_all_inheritors` with no table itself: the children of the table, then the children of each of them in the same order, and so on. A table that inherits from two of them comes once.
+    pub fn all_inheritors(&self, table: u32) -> Vec<u32> {
+        let mut out: Vec<u32> = Vec::new();
+        let mut at = 0;
+        let mut parent = table;
+        loop {
+            for child in self.children(parent) {
+                if child.oid != table && !out.contains(&child.oid) {
+                    out.push(child.oid);
+                }
+            }
+            let Some(&next) = out.get(at) else { break };
+            parent = next;
+            at += 1;
+        }
+        out
+    }
+
     /// The partitions of a partitioned table, in the order of their OIDs.
     pub fn partitions(&self, parent: u32) -> Vec<&Relation> {
         self.relations
@@ -2154,6 +2193,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                inherits: Vec::new(),
                 unlogged: false,
             },
         );
@@ -2838,6 +2878,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                inherits: Vec::new(),
                 unlogged: false,
             },
         );
@@ -3241,6 +3282,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                inherits: Vec::new(),
                 unlogged,
             },
         );
@@ -3485,6 +3527,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                inherits: Vec::new(),
                 unlogged,
             },
         );
@@ -3529,6 +3572,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                inherits: Vec::new(),
                 unlogged,
             },
         );
