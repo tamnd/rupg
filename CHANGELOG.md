@@ -15,7 +15,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
-- When one `ALTER TABLE` adds a column and then sets the default of the column, the rows of the table get the default of `ADD COLUMN`, as in PostgreSQL. Before, they got the new default (#NNN).
+- When one `ALTER TABLE` adds a column and then sets the default of the column, the rows of the table get the default of `ADD COLUMN`, as in PostgreSQL. Before, they got the new default (#498).
 
 ## 0.1.58 (2026-10-21)
 
