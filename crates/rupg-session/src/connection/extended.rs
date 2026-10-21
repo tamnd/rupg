@@ -687,7 +687,9 @@ impl Connection {
             },
         };
         if transaction_statement || immediate_commit {
-            self.pre_commit()?;
+            let committed = self.pre_commit();
+            self.notices(&mut self.trigger_notices(), "", &[], out);
+            committed?;
             self.finish_xact();
         } else {
             self.pipelining = true;
@@ -753,7 +755,9 @@ impl Connection {
     /// The `Sync` message: the end of the implicit block of the messages before it, and the end of the transaction if no block is open. An error of a deferred trigger before the commit ends the transaction.
     pub(super) fn sync(&mut self, out: &mut OutBuf) {
         self.transaction.end_implicit();
-        if let Err(error) = self.pre_commit() {
+        let committed = self.pre_commit();
+        self.notices(&mut self.trigger_notices(), "", &[], out);
+        if let Err(error) = committed {
             self.fail(&error, None, out);
             return;
         }

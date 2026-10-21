@@ -524,6 +524,8 @@ pub enum ConKind {
     Unique,
     /// A foreign key, `f`.
     Foreign,
+    /// The constraint of a constraint trigger, `t`.
+    Trigger,
 }
 
 impl ConKind {
@@ -535,6 +537,7 @@ impl ConKind {
             ConKind::Primary => 'p',
             ConKind::Unique => 'u',
             ConKind::Foreign => 'f',
+            ConKind::Trigger => 't',
         }
     }
 }
@@ -660,6 +663,14 @@ pub struct NewTrigger {
     pub new_table: Option<String>,
     /// `tgqual`.
     pub qual: Option<String>,
+    /// True for a trigger of `CREATE CONSTRAINT TRIGGER`, which gets a row of `pg_constraint`.
+    pub constraint: bool,
+    /// `tgconstrrelid`: the table of `FROM` of a constraint trigger, else 0.
+    pub constraint_relation: u32,
+    /// `tgdeferrable`.
+    pub deferrable: bool,
+    /// `tginitdeferred`.
+    pub deferred: bool,
 }
 
 /// A rule of `CREATE RULE`, one row of `pg_rewrite`. The `_RETURN` rule of a view is part of [`ViewInfo`], not a [`Rule`].
@@ -1227,9 +1238,11 @@ impl Catalog {
 
     /// `CreateTriggerFiringOn`: a new trigger, or with `replace` new facts for the trigger of the relation with the same name. A replaced trigger keeps its OID and `tgenabled`, and gets new dependencies. The trigger depends on its function, then on its relation, then on each column of `UPDATE OF`, then on the objects that the condition of `WHEN` reads. The relation gets `relhastriggers`. The result is the OID of the trigger.
     ///
+    /// A constraint trigger first gets its constraint of the kind `t`, with the name of the trigger, as `CreateConstraintEntry` makes it. The trigger then depends on the table of `FROM`, and the constraint depends on the trigger, so that `DROP TRIGGER` drops the constraint.
+    ///
     /// # Errors
     ///
-    /// `42710` when the relation has a trigger with the name and `replace` is false, or when that trigger is internal.
+    /// `42710` when the relation has a trigger with the name and `replace` is false, or when that trigger is internal. `23505` when the relation has a constraint with the name of a new constraint trigger.
     pub fn create_trigger(
         &mut self,
         new: NewTrigger,
@@ -1237,6 +1250,32 @@ impl Catalog {
         qual: &[ObjRef],
     ) -> Result<u32> {
         let old = self.trigger_by_name(new.relation, &new.name).map(|t| (t.oid, t.internal));
+        let constraint = if new.constraint && old.is_none() {
+            if self.constraints_of(new.relation).any(|c| c.domain == 0 && c.name == new.name) {
+                return Err(Error::new(
+                    SqlState::UNIQUE_VIOLATION,
+                    "duplicate key value violates unique constraint \"pg_constraint_conrelid_contypid_conname_index\"",
+                )
+                .with_detail(format!(
+                    "Key (conrelid, contypid, conname)=({}, 0, {}) already exists.",
+                    new.relation, new.name
+                )));
+            }
+            let namespace = self.relation(new.relation).map_or(0, |r| r.namespace);
+            let mut constraint = self.new_constraint(
+                new.name.clone(),
+                namespace,
+                ConKind::Trigger,
+                new.relation,
+                Vec::new(),
+            );
+            constraint.deferrable = new.deferrable;
+            constraint.deferred = new.deferred;
+            constraint.no_inherit = true;
+            Some(constraint)
+        } else {
+            None
+        };
         let relation = self.relation(new.relation).map_or("", |r| r.name.as_str());
         let oid = match old {
             Some(_) if !replace => {
@@ -1262,6 +1301,12 @@ impl Catalog {
         self.depends.retain(|d| d.object != object);
         self.depend(object, ObjRef::new(PG_PROC, new.function), DepKind::Normal);
         self.depend(object, ObjRef::new(PG_CLASS, new.relation), DepKind::Auto);
+        if new.constraint_relation != 0 {
+            self.depend(object, ObjRef::new(PG_CLASS, new.constraint_relation), DepKind::Auto);
+        }
+        if let Some(constraint) = &constraint {
+            self.depend(ObjRef::new(PG_CONSTRAINT, constraint.oid), object, DepKind::Internal);
+        }
         for &column in &new.columns {
             self.depend(object, ObjRef::column(new.relation, column), DepKind::Normal);
         }
@@ -1276,6 +1321,10 @@ impl Catalog {
             old_table,
             new_table,
             qual,
+            constraint: _,
+            constraint_relation,
+            deferrable,
+            deferred,
         } = new;
         let trigger = Trigger {
             oid,
@@ -1289,8 +1338,15 @@ impl Catalog {
             old_table,
             new_table,
             qual,
+            constraint: constraint.as_ref().map_or(0, |c| c.oid),
+            constraint_relation,
+            deferrable,
+            deferred,
             ..Trigger::default()
         };
+        if let Some(constraint) = constraint {
+            self.insert_constraint(constraint);
+        }
         self.triggers.insert(oid, trigger);
         self.relation_mut(relation)?.has_triggers = true;
         Ok(oid)

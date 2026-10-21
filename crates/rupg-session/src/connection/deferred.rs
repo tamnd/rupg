@@ -1,8 +1,9 @@
-//! The deferred triggers of the foreign keys, as `trigger.c` keeps them. A trigger that is deferred does not fire at the end of its statement. Its rows go to the queue of the transaction, and they fire at the commit or when `SET CONSTRAINTS` makes the trigger immediate. A rollback removes the queue, and a rollback to a savepoint brings back the queue and the modes of the savepoint.
+//! The deferred triggers of the foreign keys and the deferred constraint triggers, as `trigger.c` keeps them. A trigger that is deferred does not fire at the end of its statement. Its rows go to the queue of the transaction, and they fire at the commit or when `SET CONSTRAINTS` makes the trigger immediate. A rollback removes the queue, and a rollback to a savepoint brings back the queue and the modes of the savepoint.
 
 use std::collections::HashMap;
 
 use rupg_analyze::Foreign;
+use rupg_catalog::Trigger;
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::ConstraintsSetStmt;
 use rupg_wire::CommandTag;
@@ -22,13 +23,23 @@ pub(super) struct Modes {
 impl Modes {
     /// `afterTriggerCheckState`: true when the trigger of the foreign key fires at the commit.
     pub(super) fn deferred(&self, foreign: &Foreign) -> bool {
-        if !foreign.deferrable {
+        self.state(foreign.constraint, foreign.deferrable, foreign.deferred)
+    }
+
+    /// `afterTriggerCheckState` for a constraint trigger: true when the trigger fires at the commit.
+    pub(super) fn trigger_deferred(&self, trigger: &Trigger) -> bool {
+        self.state(trigger.constraint, trigger.deferrable, trigger.deferred)
+    }
+
+    /// `afterTriggerCheckState`: the mode of the constraint with the OID `constraint`, which is `DEFERRABLE` when `deferrable` is true and `INITIALLY DEFERRED` when `deferred` is true.
+    fn state(&self, constraint: u32, deferrable: bool, deferred: bool) -> bool {
+        if !deferrable {
             return false;
         }
-        if let Some(&deferred) = self.each.get(&foreign.constraint) {
+        if let Some(&deferred) = self.each.get(&constraint) {
             return deferred;
         }
-        self.all.unwrap_or(foreign.deferred)
+        self.all.unwrap_or(deferred)
     }
 }
 
@@ -65,18 +76,20 @@ impl Connection {
             }
         }
         if !stmt.deferred {
-            self.fire_deferred()?;
+            let fired = self.fire_deferred();
+            notices.extend(self.trigger_notices());
+            fired?;
         }
         Ok(Done::Tag(CommandTag::SetConstraints))
     }
 
-    /// The rows of the queue of the transaction whose triggers are no longer deferred, as `afterTriggerMarkEvents` and `afterTriggerInvokeEvents` fire them. The other rows stay in the queue.
+    /// The rows of the queue of the transaction whose triggers are no longer deferred, as `afterTriggerMarkEvents` and `afterTriggerInvokeEvents` fire them, first the rows of the foreign keys and then the events of the constraint triggers. The other rows stay in the queue.
     fn fire_deferred(&self) -> Result<(), Error> {
         let pending = std::mem::take(&mut *self.deferred.borrow_mut());
-        if pending.is_empty() {
-            return Ok(());
+        if !pending.is_empty() {
+            self.fire(pending)?;
         }
-        self.fire(pending)
+        self.fire_deferred_events()
     }
 
     /// `AfterTriggerFireDeferred`: before a commit, all the deferred triggers fire. It does nothing when the end of the statement does not commit.
@@ -85,7 +98,9 @@ impl Connection {
     ///
     /// The errors of the triggers.
     pub(super) fn pre_commit(&self) -> Result<(), Error> {
-        if !self.transaction.commits() || self.deferred.borrow().is_empty() {
+        if !self.transaction.commits()
+            || (self.deferred.borrow().is_empty() && self.deferred_events.borrow().is_empty())
+        {
             return Ok(());
         }
         {
@@ -99,6 +114,7 @@ impl Connection {
     /// The end of a transaction: the queue and the modes go.
     pub(super) fn end_deferred(&self) {
         self.deferred.borrow_mut().clear();
+        self.deferred_events.borrow_mut().clear();
         *self.modes.borrow_mut() = Modes::default();
     }
 }

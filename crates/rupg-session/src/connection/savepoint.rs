@@ -10,6 +10,7 @@ use rupg_wire::CommandTag;
 
 use super::deferred::Modes;
 use super::foreign::Batch;
+use super::trigger::Event;
 use super::{Connection, Done};
 use crate::advisory::Tag;
 use crate::guc::Savepoint;
@@ -24,6 +25,7 @@ pub(super) struct Mark {
     catalog: Option<(Arc<Catalog>, Arc<Roles>)>,
     settings: Savepoint,
     deferred: Vec<Batch>,
+    deferred_events: Vec<Event>,
     modes: Modes,
     /// The counts of the advisory locks of the transaction level.
     locks: Vec<(Tag, bool, u32)>,
@@ -73,6 +75,7 @@ impl Connection {
                 .map(|lease| (Arc::clone(&lease.catalog), Arc::clone(&lease.roles))),
             settings: self.settings.borrow().savepoint(),
             deferred: self.deferred.borrow().clone(),
+            deferred_events: self.deferred_events.borrow().clone(),
             modes: self.modes.borrow().clone(),
             locks: self.store.locks().xact_holds(self.pid),
         }
@@ -112,6 +115,7 @@ impl Connection {
         }
         self.settings.borrow_mut().rollback_to(&mark.settings);
         self.deferred.borrow_mut().clone_from(&mark.deferred);
+        self.deferred_events.borrow_mut().clone_from(&mark.deferred_events);
         self.modes.borrow_mut().clone_from(&mark.modes);
         self.store.locks().release_since(self.pid, &mark.locks);
     }
