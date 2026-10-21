@@ -22,6 +22,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - Indexes, unique indexes and primary keys of partitioned tables. `CREATE INDEX` on a partitioned table makes a partitioned index, and each partition gets an index: an index of the partition with the same definition that has no parent index yet, or a new index. `CREATE INDEX ON ONLY` makes an index that is not valid when the table has partitions. A new partition gets an index for each index of its parent table. A unique index or a primary key must include all the columns of the partition key, and the errors are the errors of PostgreSQL. `INSERT`, `UPDATE` and `COPY FROM` check the unique keys in each partition. `DROP INDEX` of the index of a partition gives `2BP01`, and `DROP TABLE` of a partition drops its indexes. The catalogs show `relkind` `I`, `pg_inherits`, `relispartition`, `indisvalid` and `conparentid` (#494).
 
+- A checkpoint cuts the free arenas at the end of the file, as spec/08 section 8.9.3 says. The new length goes in the slot first, and the file gets shorter after that slot is durable (#456).
+
 ## 0.1.57 (2026-10-21)
 
 ### Added
@@ -82,7 +84,6 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The triggers of `CREATE TRIGGER` fire on `INSERT`, `UPDATE` and `DELETE` with a trigger function in PL/pgSQL, with `NEW`, `OLD`, the variables `TG_*`, `WHEN` and `UPDATE OF`. The notices of a statement with no rows now go to the client (#461).
 - `DO` runs in a PL/pgSQL function and in a `DO` block, with the statement as the context of the messages and the errors of its code. `DO LANGUAGE sql` gives 0A000, as in PostgreSQL (#462).
 - `SET ROLE`, `SET SESSION AUTHORIZATION` and `RESET` of them change `current_user`, `session_user` and `is_superuser`, with the checks of PostgreSQL. A new object belongs to the current user (#453).
-- A checkpoint cuts the free arenas at the end of the file, as spec/08 section 8.9.3 says. The new length goes in the slot first, and the file gets shorter after that slot is durable (#456).
 
 ### Changed
 
