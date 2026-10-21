@@ -8,6 +8,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `MERGE` into a partitioned table and into a partition. Each action goes to the leaf partitions: an update can move a row to another leaf, an insert goes to the leaf that takes the row, and the triggers of the leaves fire in the order of the join. A row that moves is in the transition tables of `DELETE` and of `INSERT`, as in PostgreSQL. `RETURNING` can read `tableoid` (#510).
 
+### Fixed
+
+- A comparison of an `oid` with an `int2`, such as `oid = 25::int2` or `oid = ANY($1)` with an `int2[]` parameter, now gives the result of PostgreSQL. Before, it gave the error `XX000` "a function got a value of the wrong kind", because the cast function `int4(smallint)` gave its value as an `int8`. pgAdmin 4 sends these queries.
+
 ## 0.1.60 (2026-10-21)
 
 ### Added
