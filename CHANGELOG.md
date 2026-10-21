@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- Partition pruning. A scan of a partitioned table reads only the leaf partitions that can have rows that pass the conditions of `WHERE` on the partition key, as PostgreSQL finds them: `=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN`, `= ANY` of a constant array, `IS NULL` and `OR` of these, with constants and the parameters of `EXECUTE` and `Bind`. The default partition is pruned when the other partitions have all the values that the conditions let the key have. `pg_stat_user_tables` now counts the scans of only those leaves, as PostgreSQL does, and a query on one partition of a large table is faster (#NNN).
+- Partition pruning. A scan of a partitioned table reads only the leaf partitions that can have rows that pass the conditions of `WHERE` on the partition key, as PostgreSQL finds them: `=`, `<`, `<=`, `>`, `>=`, `BETWEEN`, `IN`, `= ANY` of a constant array, `IS NULL` and `OR` of these, with constants and the parameters of `EXECUTE` and `Bind`. The default partition is pruned when the other partitions have all the values that the conditions let the key have. `pg_stat_user_tables` now counts the scans of only those leaves, as PostgreSQL does, and a query on one partition of a large table is faster (#527).
 
 ## 0.1.62 (2026-10-22)
 
