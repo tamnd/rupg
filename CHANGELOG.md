@@ -19,6 +19,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - When one `ALTER TABLE` adds a column and then sets the default of the column, the rows of the table get the default of `ADD COLUMN`, as in PostgreSQL. Before, they got the new default (#498).
 
+- `CREATE UNLOGGED TABLE`, `CREATE UNLOGGED SEQUENCE`, `CREATE UNLOGGED TABLE AS`, `SELECT INTO UNLOGGED`, and `ALTER TABLE` or `ALTER SEQUENCE` with `SET LOGGED` and `SET UNLOGGED`. `pg_class.relpersistence` is `u` for the table, its indexes, its TOAST table and its owned sequences. A partition can be unlogged, and `SET LOGGED` and `SET UNLOGGED` work on a partition. The errors for a temporary schema, a temporary table, a partitioned table, a materialized view and a foreign key between a permanent table and an unlogged table are the errors of PostgreSQL. The rows of an unlogged table stay in memory as for a permanent table. With this change, the `libpq_pipeline` tests `pipeline_abort` and `pipelined_insert` can run.
+
 ## 0.1.58 (2026-10-21)
 
 ### Added

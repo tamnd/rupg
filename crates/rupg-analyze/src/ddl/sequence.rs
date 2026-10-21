@@ -107,6 +107,9 @@ impl Definer<'_, '_> {
         let mut info = params.info;
         info.data = SequenceData::new(params.last_value);
         let sequence = self.catalog.create_sequence(new, info)?;
+        if rv.relpersistence == b'u' {
+            self.catalog.set_unlogged(sequence, true)?;
+        }
         if let Some(owned_by) = &params.owned_by {
             self.process_owned_by(sequence, owned_by, stmt.for_identity)?;
         }

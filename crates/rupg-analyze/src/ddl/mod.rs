@@ -562,12 +562,19 @@ impl Definer<'_, '_> {
             )
             .at_opt(at));
         }
-        if rv.relpersistence == b'u' {
-            return Err(not_yet("an unlogged table", at));
-        }
+        let unlogged = rv.relpersistence == b'u';
+        // `RangeVarAdjustRelationPersistence`: an unlogged relation cannot go to a temporary schema.
+        let only_temporary = || {
+            Error::new(
+                SqlState::INVALID_TABLE_DEFINITION,
+                "only temporary relations may be created in temporary schemas",
+            )
+            .at_opt(at)
+        };
         let temp = rv.relpersistence == b't';
         if rv.schemaname.as_deref() == Some("pg_temp") || (temp && rv.schemaname.is_none()) {
-            return self.temp_namespace();
+            let namespace = self.temp_namespace()?;
+            return if unlogged { Err(only_temporary()) } else { Ok(namespace) };
         }
         let namespace = match rv.schemaname.as_deref() {
             Some(schema) => self.an.schema(schema).ok_or_else(|| {
@@ -582,6 +589,9 @@ impl Definer<'_, '_> {
                     .at_opt(at)
             })?,
         };
+        if unlogged && self.catalog.is_temp_schema(namespace) {
+            return Err(only_temporary());
+        }
         let own = namespace == self.an.temp || self.is_own_toast_temp(namespace);
         if !own && self.catalog.is_temp_schema(namespace) {
             return Err(Error::new(

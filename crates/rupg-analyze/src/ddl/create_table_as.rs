@@ -12,6 +12,13 @@ impl Definer<'_, '_> {
     /// `ExecCreateTableAs` up to `create_ctas_internal`: a table with a column for each column of the query. The result is the OID of the new table, or `None` when the table exists and the statement has `IF NOT EXISTS`.
     pub(super) fn create_table_as(&mut self, stmt: &CreateTableAsStmt) -> Result<Option<u32>> {
         if stmt.objtype == ObjectType::OBJECT_MATVIEW {
+            let rel = stmt.into.as_deref().and_then(|i| i.rel.as_deref());
+            if rel.is_some_and(|rv| rv.relpersistence == b'u') {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "materialized views cannot be unlogged",
+                ));
+            }
             return Err(not_yet("CREATE MATERIALIZED VIEW", None));
         }
         let Some(into) = stmt.into.as_deref() else {
@@ -85,6 +92,9 @@ impl Definer<'_, '_> {
         }
         self.check_on_commit(into.onCommit, namespace)?;
         let table = self.create_query_table(namespace, &name, columns, &into.options)?;
+        if rv.relpersistence == b'u' {
+            self.catalog.set_unlogged(table, true)?;
+        }
         Ok((!into.skipData).then_some(table))
     }
 }

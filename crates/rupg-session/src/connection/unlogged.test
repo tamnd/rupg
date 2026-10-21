@@ -1,0 +1,138 @@
+> CREATE UNLOGGED TABLE u1 (id serial PRIMARY KEY, a int GENERATED ALWAYS AS IDENTITY, t text UNIQUE);
+CREATE TABLE
+> SELECT CASE WHEN c.relnamespace = 'pg_toast'::regnamespace THEN 'toast' ELSE c.relname END AS name, c.relkind, c.relpersistence FROM pg_class c WHERE c.relname LIKE 'u1%' OR c.oid = (SELECT reltoastrelid FROM pg_class WHERE relname = 'u1') OR c.oid IN (SELECT indexrelid FROM pg_index WHERE indrelid = (SELECT reltoastrelid FROM pg_class WHERE relname = 'u1')) ORDER BY 2, 1;
+fields name:19:64:-1,relkind@pg_class.18:18:1:-1,relpersistence@pg_class.17:18:1:-1
+row u1_a_seq,S,u
+row u1_id_seq,S,u
+row toast,i,u
+row u1_pkey,i,u
+row u1_t_key,i,u
+row u1,r,u
+row toast,t,u
+SELECT 7
+> CREATE UNLOGGED SEQUENCE s1;
+CREATE SEQUENCE
+> SELECT relpersistence FROM pg_class WHERE relname = 's1';
+fields relpersistence@pg_class.17:18:1:-1
+row u
+SELECT 1
+> CREATE UNLOGGED TABLE pg_temp.x (a int);
+ERROR 42P16 only temporary relations may be created in temporary schemas at 23
+> CREATE TEMP TABLE tt (a int);
+CREATE TABLE
+> ALTER TABLE tt SET LOGGED;
+ERROR 42P16 cannot change logged status of table "tt" because it is temporary
+> ALTER TABLE tt SET UNLOGGED;
+ERROR 42P16 cannot change logged status of table "tt" because it is temporary
+> CREATE UNLOGGED TABLE pt (a int) PARTITION BY RANGE (a);
+ERROR 0A000 partitioned tables cannot be unlogged
+> CREATE TABLE pt (a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE UNLOGGED TABLE pt1 PARTITION OF pt FOR VALUES FROM (1) TO (10);
+CREATE TABLE
+> SELECT relpersistence FROM pg_class WHERE relname = 'pt1';
+fields relpersistence@pg_class.17:18:1:-1
+row u
+SELECT 1
+> ALTER TABLE pt SET UNLOGGED;
+ERROR 42809 ALTER action SET UNLOGGED cannot be performed on relation "pt"
+> ALTER TABLE pt1 SET LOGGED;
+ALTER TABLE
+> SELECT relpersistence FROM pg_class WHERE relname = 'pt1';
+fields relpersistence@pg_class.17:18:1:-1
+row p
+SELECT 1
+> CREATE TABLE p (id int PRIMARY KEY);
+CREATE TABLE
+> CREATE UNLOGGED TABLE up (id int PRIMARY KEY);
+CREATE TABLE
+> CREATE TABLE f1 (r int REFERENCES up);
+ERROR 42P16 constraints on permanent tables may reference only permanent tables
+> CREATE UNLOGGED TABLE f2 (r int REFERENCES p);
+CREATE TABLE
+> CREATE UNLOGGED TABLE f3 (r int REFERENCES up);
+CREATE TABLE
+> ALTER TABLE f3 SET LOGGED;
+ERROR 42P16 could not change table "f3" to logged because it references unlogged table "up"
+> ALTER TABLE p SET UNLOGGED;
+ALTER TABLE
+> ALTER TABLE up SET LOGGED;
+ALTER TABLE
+> SELECT relname, relpersistence FROM pg_class WHERE relname LIKE 'up%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpersistence@pg_class.17:18:1:-1
+row up,p
+row up_pkey,p
+SELECT 2
+> ALTER TABLE u1 SET LOGGED;
+ALTER TABLE
+> SELECT relname, relpersistence FROM pg_class WHERE relname LIKE 'u1%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpersistence@pg_class.17:18:1:-1
+row u1,p
+row u1_a_seq,p
+row u1_id_seq,p
+row u1_pkey,p
+row u1_t_key,p
+SELECT 5
+> ALTER TABLE u1 SET UNLOGGED;
+ALTER TABLE
+> SELECT relname, relpersistence FROM pg_class WHERE relname LIKE 'u1%' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpersistence@pg_class.17:18:1:-1
+row u1,u
+row u1_a_seq,u
+row u1_id_seq,u
+row u1_pkey,u
+row u1_t_key,u
+SELECT 5
+> ALTER SEQUENCE s1 SET LOGGED;
+ALTER SEQUENCE
+> SELECT relpersistence FROM pg_class WHERE relname = 's1';
+fields relpersistence@pg_class.17:18:1:-1
+row p
+SELECT 1
+> CREATE UNLOGGED TABLE ctas AS SELECT 1 AS a;
+SELECT 1
+> SELECT relpersistence FROM pg_class WHERE relname = 'ctas';
+fields relpersistence@pg_class.17:18:1:-1
+row u
+SELECT 1
+> SELECT 1 AS a INTO UNLOGGED si;
+SELECT 1
+> SELECT relpersistence FROM pg_class WHERE relname = 'si';
+fields relpersistence@pg_class.17:18:1:-1
+row u
+SELECT 1
+> CREATE UNLOGGED MATERIALIZED VIEW mv AS SELECT 1;
+ERROR 0A000 materialized views cannot be unlogged
+> CREATE UNLOGGED VIEW v AS SELECT 1;
+ERROR 42601 views cannot be unlogged because they do not have storage
+> CREATE UNLOGGED TABLE ch (a int);
+CREATE TABLE
+> ALTER TABLE ch ADD COLUMN s serial;
+ALTER TABLE
+> CREATE INDEX ON ch (a);
+CREATE INDEX
+> SELECT relname, relpersistence FROM pg_class WHERE relname LIKE 'ch%' AND relnamespace = 'public'::regnamespace ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpersistence@pg_class.17:18:1:-1
+row ch,u
+row ch_a_idx,u
+row ch_s_seq,u
+SELECT 3
+> ALTER TABLE ch SET LOGGED;
+ALTER TABLE
+> ALTER TABLE ch SET LOGGED;
+ALTER TABLE
+> ALTER TABLE ch SET UNLOGGED, SET LOGGED;
+ERROR 0A000 cannot change persistence setting twice
+> SELECT relname, relpersistence FROM pg_class WHERE relname LIKE 'ch%' AND relnamespace = 'public'::regnamespace ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relpersistence@pg_class.17:18:1:-1
+row ch,p
+row ch_a_idx,p
+row ch_s_seq,p
+SELECT 3
+> INSERT INTO u1 (t) VALUES ('x'), ('y');
+INSERT 0 2
+> SELECT id, a, t FROM u1 ORDER BY id;
+fields id@u1.1:23:4:-1,a@u1.2:23:4:-1,t@u1.3:25:-1:-1
+row 1,1,x
+row 2,2,y
+SELECT 2
