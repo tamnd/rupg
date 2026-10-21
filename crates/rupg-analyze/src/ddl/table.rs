@@ -950,17 +950,14 @@ impl Definer<'_, '_> {
         Ok(new)
     }
 
-    /// The part of `MergeAttributes` for a partition: the columns of the parent table, in their order, with the defaults of the parent. A column of the statement only gives the constraints and a new default of a column of the parent.
+    /// The part of `MergeAttributes` for a partition: the columns of the parent table, in their order, with the defaults of the parent. A dropped column of the parent is not a column of the partition, so the later columns can have other numbers in the partition. A column of the statement only gives the constraints and a new default of a column of the parent.
     fn merge_partition_columns(&mut self, plan: &mut Plan, parent: u32) -> Result<()> {
         let rel = self
             .catalog
             .relation(parent)
             .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {parent}")))?;
-        if rel.columns.iter().any(|c| c.dropped) {
-            return Err(not_yet("a partition of a table with a dropped column", None));
-        }
         let mut columns = Vec::with_capacity(rel.columns.len());
-        for (i, c) in rel.columns.iter().enumerate() {
+        for (i, c) in rel.columns.iter().enumerate().filter(|(_, c)| !c.dropped) {
             let attnum = i16::try_from(i + 1).unwrap_or(i16::MAX);
             let default = c
                 .has_default

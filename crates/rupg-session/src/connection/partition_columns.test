@@ -1,0 +1,289 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (a int, b text, c int, d int DEFAULT 7) PARTITION BY RANGE (c);
+CREATE TABLE
+> ALTER TABLE p DROP COLUMN b;
+ALTER TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> SELECT attname, attnum, attislocal, attinhcount FROM pg_attribute WHERE attrelid = 'p1'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row a,1,f,1
+row c,2,f,1
+row d,3,f,1
+SELECT 3
+> CREATE TABLE p2 (d int DEFAULT 8, x int, c int NOT NULL, a int);
+CREATE TABLE
+> ALTER TABLE p2 DROP COLUMN x;
+ALTER TABLE
+> INSERT INTO p2 VALUES (1, 30, 1);
+INSERT 0 1
+> ALTER TABLE p ATTACH PARTITION p2 FOR VALUES FROM (10) TO (20);
+ERROR 23514 partition constraint of relation "p2" is violated by some row
+> DELETE FROM p2;
+DELETE 1
+> ALTER TABLE p ATTACH PARTITION p2 FOR VALUES FROM (10) TO (20);
+ALTER TABLE
+> SELECT attname, attnum, attislocal, attinhcount FROM pg_attribute WHERE attrelid = 'p2'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row d,1,f,1
+row ........pg.dropped.2........,2,t,0
+row c,3,f,1
+row a,4,f,1
+SELECT 4
+> ALTER TABLE p ADD CONSTRAINT p_a CHECK (a > 0);
+ALTER TABLE
+> ALTER TABLE p ADD COLUMN e text DEFAULT 'e';
+ALTER TABLE
+> SELECT attname, attnum FROM pg_attribute WHERE attrelid = 'p2'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1
+row d,1
+row ........pg.dropped.2........,2
+row c,3
+row a,4
+row e,5
+SELECT 5
+> INSERT INTO p (a, c) VALUES (1, 5), (2, 15);
+INSERT 0 2
+> INSERT INTO p VALUES (3, 6, 1, 'x'), (4, 16, 2, 'y');
+INSERT 0 2
+> INSERT INTO p2 (a, c) VALUES (5, 17);
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,c@p.3:23:4:-1,d@p.4:23:4:-1,e@p.5:25:-1:-1
+row p1,1,5,7,e
+row p2,2,15,7,e
+row p1,3,6,1,x
+row p2,4,16,2,y
+row p2,5,17,8,e
+SELECT 5
+> SELECT * FROM p2 ORDER BY a;
+fields d@p2.1:23:4:-1,c@p2.3:23:4:-1,a@p2.4:23:4:-1,e@p2.5:25:-1:-1
+row 7,15,2,e
+row 2,16,4,y
+row 8,17,5,e
+SELECT 3
+> SELECT * FROM p1 ORDER BY a;
+fields a@p1.1:23:4:-1,c@p1.2:23:4:-1,d@p1.3:23:4:-1,e@p1.4:25:-1:-1
+row 1,5,7,e
+row 3,6,1,x
+SELECT 2
+> UPDATE p SET c = c + 10 WHERE a = 1 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,c@p.3:23:4:-1,d@p.4:23:4:-1,e@p.5:25:-1:-1
+row p2,1,15,7,e
+UPDATE 1
+> UPDATE p SET d = 0 WHERE a = 4 RETURNING *;
+fields a@p.1:23:4:-1,c@p.3:23:4:-1,d@p.4:23:4:-1,e@p.5:25:-1:-1
+row 4,16,0,y
+UPDATE 1
+> UPDATE p SET c = c - 10 WHERE a = 2 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,c@p.3:23:4:-1,d@p.4:23:4:-1,e@p.5:25:-1:-1
+row p1,2,5,7,e
+UPDATE 1
+> DELETE FROM p WHERE a = 3 RETURNING *;
+fields a@p.1:23:4:-1,c@p.3:23:4:-1,d@p.4:23:4:-1,e@p.5:25:-1:-1
+row 3,6,1,x
+DELETE 1
+> INSERT INTO p VALUES (-1, 15);
+ERROR 23514 new row for relation "p2" violates check constraint "p_a"
+DETAIL Failing row contains (-1, 15, 7, e).
+> INSERT INTO p2 VALUES (1, 30, 6);
+ERROR 23514 new row for relation "p2" violates partition constraint
+DETAIL Failing row contains (1, 30, 6, e).
+> UPDATE p SET c = 99 WHERE a = 4;
+ERROR 23514 no partition of relation "p" found for row
+DETAIL Partition key of the failing row contains (c) = (99).
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,c@p.3:23:4:-1,d@p.4:23:4:-1,e@p.5:25:-1:-1
+row p2,1,15,7,e
+row p1,2,5,7,e
+row p2,4,16,0,y
+row p2,5,17,8,e
+SELECT 4
+> CREATE INDEX p_ca ON p (c, a);
+CREATE INDEX
+> CREATE UNIQUE INDEX p_cd ON p (c, d);
+CREATE INDEX
+> CREATE INDEX p_ad ON p ((a + d)) WHERE e <> 'z';
+CREATE INDEX
+> SELECT indexrelid::regclass, indkey, pg_get_indexdef(indexrelid) FROM pg_index WHERE indrelid IN ('p1'::regclass, 'p2'::regclass) ORDER BY 1::text;
+fields indexrelid:2205:4:-1,indkey@pg_index.16:22:-1:-1,pg_get_indexdef:25:-1:-1
+row p1_c_a_idx,2 1,CREATE INDEX p1_c_a_idx ON public.p1 USING btree (c, a)
+row p2_c_a_idx,3 4,CREATE INDEX p2_c_a_idx ON public.p2 USING btree (c, a)
+row p1_c_d_idx,2 3,CREATE UNIQUE INDEX p1_c_d_idx ON public.p1 USING btree (c, d)
+row p2_c_d_idx,3 1,CREATE UNIQUE INDEX p2_c_d_idx ON public.p2 USING btree (c, d)
+row p1_expr_idx,0,CREATE INDEX p1_expr_idx ON public.p1 USING btree (((a + d))) WHERE (e <> 'z'::text)
+row p2_expr_idx,0,CREATE INDEX p2_expr_idx ON public.p2 USING btree (((a + d))) WHERE (e <> 'z'::text)
+SELECT 6
+> SELECT conname, pg_get_constraintdef(oid), conkey FROM pg_constraint WHERE conrelid = 'p2'::regclass ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,pg_get_constraintdef:25:-1:-1,conkey@pg_constraint.21:1005:-1:-1
+row p2_c_not_null,NOT NULL c,{3}
+row p_a,CHECK ((a > 0)),{4}
+SELECT 2
+> CREATE TABLE p3 (e text, c int, d int, a int CONSTRAINT p_a CHECK (a > 0));
+CREATE TABLE
+> CREATE INDEX p3_x ON p3 (c, a);
+CREATE INDEX
+> ALTER TABLE p ATTACH PARTITION p3 FOR VALUES FROM (20) TO (30);
+ALTER TABLE
+> SELECT indexrelid::regclass, indkey, pg_get_indexdef(indexrelid) FROM pg_index WHERE indrelid = 'p3'::regclass ORDER BY 1::text;
+fields indexrelid:2205:4:-1,indkey@pg_index.16:22:-1:-1,pg_get_indexdef:25:-1:-1
+row p3_x,2 4,CREATE INDEX p3_x ON public.p3 USING btree (c, a)
+row p3_c_d_idx,2 3,CREATE UNIQUE INDEX p3_c_d_idx ON public.p3 USING btree (c, d)
+row p3_expr_idx,0,CREATE INDEX p3_expr_idx ON public.p3 USING btree (((a + d))) WHERE (e <> 'z'::text)
+SELECT 3
+> SELECT inhrelid::regclass, inhparent::regclass FROM pg_inherits WHERE inhrelid IN (SELECT indexrelid FROM pg_index WHERE indrelid = 'p3'::regclass) ORDER BY 1::text;
+fields inhrelid:2205:4:-1,inhparent:2205:4:-1
+row p3_x,p_ca
+row p3_c_d_idx,p_cd
+row p3_expr_idx,p_ad
+SELECT 3
+> CREATE FUNCTION trg() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % %', TG_OP, TG_TABLE_NAME, old, new;
+>>   RETURN new;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER t BEFORE UPDATE OF d ON p FOR EACH ROW WHEN (new.a > 1) EXECUTE FUNCTION trg();
+CREATE TRIGGER
+> SELECT tgrelid::regclass, tgattr, pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 't' ORDER BY 1::text;
+fields tgrelid:2205:4:-1,tgattr@pg_trigger.15:22:-1:-1,pg_get_triggerdef:25:-1:-1
+row p,4,CREATE TRIGGER t BEFORE UPDATE OF d ON public.p FOR EACH ROW WHEN ((new.a > 1)) EXECUTE FUNCTION trg()
+row p1,3,CREATE TRIGGER t BEFORE UPDATE OF d ON public.p1 FOR EACH ROW WHEN ((new.a > 1)) EXECUTE FUNCTION trg()
+row p2,1,CREATE TRIGGER t BEFORE UPDATE OF d ON public.p2 FOR EACH ROW WHEN ((new.a > 1)) EXECUTE FUNCTION trg()
+row p3,3,CREATE TRIGGER t BEFORE UPDATE OF d ON public.p3 FOR EACH ROW WHEN ((new.a > 1)) EXECUTE FUNCTION trg()
+SELECT 4
+> UPDATE p SET d = d + 1;
+NOTICE 00000 UPDATE p1 (2,5,7,e) (2,5,8,e) (PL/pgSQL function trg() line 3 at RAISE)
+NOTICE 00000 UPDATE p2 (8,17,5,e) (9,17,5,e) (PL/pgSQL function trg() line 3 at RAISE)
+NOTICE 00000 UPDATE p2 (0,16,4,y) (1,16,4,y) (PL/pgSQL function trg() line 3 at RAISE)
+UPDATE 4
+> UPDATE p SET c = c + 1;
+UPDATE 4
+> INSERT INTO p VALUES (6, 25, 9, 'p3');
+INSERT 0 1
+> COPY p TO STDOUT;
+copy out 0 0,0,0,0
+data 2\t6\t8\te\n
+data 5\t18\t9\te\n
+data 1\t16\t8\te\n
+data 4\t17\t1\ty\n
+data 6\t25\t9\tp3\n
+copy done
+COPY 5
+> COPY p2 TO STDOUT;
+copy out 0 0,0,0,0
+data 9\t18\t5\te\n
+data 8\t16\t1\te\n
+data 1\t17\t4\ty\n
+copy done
+COPY 3
+> COPY p FROM STDIN;
+< 7	8	9	copy
+< 8	21	1	copy3
+< \.
+<done
+copy in 0 0,0,0,0
+COPY 2
+> COPY (SELECT tableoid::regclass, * FROM p ORDER BY a) TO STDOUT;
+copy out 0 0,0,0,0,0
+data p2\t1\t16\t8\te\n
+data p1\t2\t6\t8\te\n
+data p2\t4\t17\t1\ty\n
+data p2\t5\t18\t9\te\n
+data p3\t6\t25\t9\tp3\n
+data p1\t7\t8\t9\tcopy\n
+data p3\t8\t21\t1\tcopy3\n
+copy done
+COPY 7
+> DROP TRIGGER t ON p;
+DROP TRIGGER
+> DROP INDEX p_ad;
+DROP INDEX
+> ALTER TABLE p ALTER COLUMN d TYPE bigint;
+ALTER TABLE
+> ALTER TABLE p RENAME COLUMN d TO dd;
+ALTER TABLE
+> ALTER TABLE p1 RENAME COLUMN a TO aa;
+ERROR 42P16 cannot rename inherited column "a"
+> ALTER TABLE ONLY p RENAME COLUMN a TO aa;
+ERROR 42P16 inherited column "a" must be renamed in child tables too
+> ALTER TABLE p RENAME COLUMN a TO c;
+ERROR 42701 column "c" of relation "p1" already exists
+> ALTER TABLE p ALTER COLUMN a SET NOT NULL;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN dd SET DEFAULT 70;
+ALTER TABLE
+> ALTER TABLE p DROP COLUMN e;
+ALTER TABLE
+> INSERT INTO p (a, c) VALUES (9, 12);
+INSERT 0 1
+> SELECT attname, attnum, atttypid::regtype, attnotnull, attisdropped FROM pg_attribute WHERE attrelid = 'p2'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,atttypid:2206:4:-1,attnotnull@pg_attribute.12:16:1:-1,attisdropped@pg_attribute.17:16:1:-1
+row dd,1,bigint,f,f
+row ........pg.dropped.2........,2,-,f,t
+row c,3,integer,t,f
+row a,4,integer,t,f
+row ........pg.dropped.5........,5,-,f,t
+SELECT 5
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,c@p.3:23:4:-1,dd@p.4:20:8:-1
+row p2,1,16,8
+row p1,2,6,8
+row p2,4,17,1
+row p2,5,18,9
+row p3,6,25,9
+row p1,7,8,9
+row p3,8,21,1
+row p2,9,12,70
+SELECT 8
+> CREATE TABLE q (x int, y int, z int) PARTITION BY LIST ((x + z));
+CREATE TABLE
+> ALTER TABLE q DROP COLUMN y;
+ALTER TABLE
+> CREATE TABLE q1 (z int, x int);
+CREATE TABLE
+> ALTER TABLE q ATTACH PARTITION q1 FOR VALUES IN (3);
+ALTER TABLE
+> CREATE TABLE q2 PARTITION OF q FOR VALUES IN (4) PARTITION BY RANGE (x);
+CREATE TABLE
+> CREATE TABLE q21 (w int, z int, x int);
+CREATE TABLE
+> ALTER TABLE q21 DROP COLUMN w;
+ALTER TABLE
+> ALTER TABLE q2 ATTACH PARTITION q21 FOR VALUES FROM (0) TO (10);
+ALTER TABLE
+> INSERT INTO q VALUES (1, 2), (2, 2), (3, 1);
+INSERT 0 3
+> INSERT INTO q VALUES (5, 5);
+ERROR 23514 no partition of relation "q" found for row
+DETAIL Partition key of the failing row contains ((x + z)) = (10).
+> SELECT tableoid::regclass, * FROM q ORDER BY x;
+fields tableoid:2205:4:-1,x@q.1:23:4:-1,z@q.3:23:4:-1
+row q1,1,2
+row q21,2,2
+row q21,3,1
+SELECT 3
+> SELECT * FROM q21;
+fields z@q21.2:23:4:-1,x@q21.3:23:4:-1
+row 2,2
+row 1,3
+SELECT 2
+> UPDATE q SET z = 2 WHERE x = 2 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,x@q.1:23:4:-1,z@q.3:23:4:-1
+row q21,2,2
+UPDATE 1
+> SELECT tableoid::regclass, * FROM q ORDER BY x;
+fields tableoid:2205:4:-1,x@q.1:23:4:-1,z@q.3:23:4:-1
+row q1,1,2
+row q21,2,2
+row q21,3,1
+SELECT 3
+> ALTER TABLE q DETACH PARTITION q1;
+ALTER TABLE
+> SELECT attname, attislocal, attinhcount FROM pg_attribute WHERE attrelid = 'q1'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row z,t,0
+row x,t,0
+SELECT 2

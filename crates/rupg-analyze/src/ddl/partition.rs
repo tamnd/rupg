@@ -350,8 +350,9 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// The check constraints that a partition takes from its parent in `MergeAttributes`, in the order of their names. Each keeps its name, and a constraint `NO INHERIT` stays with the parent.
+    /// The check constraints that a partition takes from its parent in `MergeAttributes`, in the order of their names, with the numbers of the columns of the partition. Each keeps its name, and a constraint `NO INHERIT` stays with the parent.
     pub(super) fn inherit_checks(&mut self, table: u32, parent: u32) -> Result<()> {
+        let map = self.att_map(parent, table)?;
         let mut checks: Vec<(String, String, Vec<i16>)> = self
             .catalog
             .constraints_of(parent)
@@ -360,6 +361,7 @@ impl Definer<'_, '_> {
             .collect();
         checks.sort_by(|a, b| a.0.cmp(&b.0));
         for (name, text, keys) in checks {
+            let (text, keys) = (map.text(&text)?, map.columns(&keys));
             let expr = node::read(&text)?;
             let refs = references(self.catalog, table, &[&expr]);
             let oid = self.catalog.add_check(table, Some(&name), text, keys, &refs, false)?;
@@ -370,11 +372,12 @@ impl Definer<'_, '_> {
 
     /// The part of `AddRelationNotNullConstraints` for the not-null constraints of the parent of a partition. A constraint of the partition on the same column takes the count of the parent, and another column gets a constraint with the name of the constraint of the parent, or a new name when the partition has that name.
     pub(super) fn inherit_not_nulls(&mut self, table: u32, parent: u32) -> Result<()> {
+        let map = self.att_map(parent, table)?;
         let inherited: Vec<(String, i16)> = self
             .catalog
             .constraints_of(parent)
             .filter(|c| c.kind == ConKind::NotNull && !c.no_inherit)
-            .filter_map(|c| Some((c.name.clone(), *c.keys.first()?)))
+            .filter_map(|c| Some((c.name.clone(), map.column(*c.keys.first()?))))
             .collect();
         for (name, attnum) in inherited {
             let local = self

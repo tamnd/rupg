@@ -91,7 +91,11 @@ pub(crate) fn check_rows(
 }
 
 /// `ExecBuildSlotValueDescription`: the detail `Failing row contains (...)` with the text of each value, `null` for a null value, and a value of more than 64 bytes cut with `...` after it.
-pub(crate) fn failing_row(row: &[Value], types: &[u32], session: &dyn Session) -> Result<String> {
+///
+/// # Errors
+///
+/// The errors of the output functions of the types.
+pub fn failing_row(row: &[Value], types: &[u32], session: &dyn Session) -> Result<String> {
     let mut parts = Vec::with_capacity(row.len());
     // A dropped column has the type 0, and `ExecBuildSlotValueDescription` skips it.
     for (value, &ty) in row.iter().zip(types).filter(|&(_, &ty)| ty != 0) {

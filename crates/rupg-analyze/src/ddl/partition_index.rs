@@ -1,4 +1,4 @@
-//! The indexes of partitioned tables, as `DefineIndex` makes them: the index of a partitioned table has an index in each partition, and a new partition gets an index for each index of its parent table. A partition has the columns of its parent table in the same order, so the column numbers and the expressions of the two indexes are the same.
+//! The indexes of partitioned tables, as `DefineIndex` makes them: the index of a partitioned table has an index in each partition, and a new partition gets an index for each index of its parent table. The index of a partition has the columns of the partition, which can have other numbers than the columns of the parent table, as `generateClonedIndexStmt` and `CompareIndexInfo` map them.
 
 use rupg_catalog::{ConKind, IndexInfo, NewIndex, NewIndexColumn, PartStrategy, RelKind};
 use rupg_common::{Error, Result, SqlState};
@@ -110,6 +110,7 @@ impl Definer<'_, '_> {
         attach: bool,
     ) -> Option<(u32, Option<u32>, bool)> {
         let wanted = self.catalog.relation(parent)?.index.as_ref()?;
+        let wanted = self.att_map(wanted.table, child).ok()?.index(wanted).ok()?;
         let wanted_kind = constraint.and_then(|oid| self.catalog.constraint(oid)).map(|c| c.kind);
         for rel in self.catalog.relations() {
             let Some(info) = rel
@@ -119,7 +120,7 @@ impl Definer<'_, '_> {
             else {
                 continue;
             };
-            if !same_definition(info, wanted) {
+            if !same_definition(info, &wanted) {
                 continue;
             }
             let found_constraint = match constraint {
@@ -139,7 +140,7 @@ impl Definer<'_, '_> {
         None
     }
 
-    /// `generateClonedIndexStmt` and `DefineIndex` for the partition `child` and the index `parent` of its parent table, with the constraint `constraint` of `parent`: a new index of the partition with the definition of `parent` and a name from the name of the partition, as a partition of `parent`. A partitioned partition then gets the indexes of its own partitions. The result is the `indisvalid` of the new index.
+    /// `generateClonedIndexStmt` and `DefineIndex` for the partition `child` and the index `parent` of its parent table, with the constraint `constraint` of `parent`: a new index of the partition with the definition of `parent`, with the numbers of the columns of the partition, and a name from the name of the partition, as a partition of `parent`. A partitioned partition then gets the indexes of its own partitions. The result is the `indisvalid` of the new index.
     pub(super) fn define_partition_index(
         &mut self,
         child: u32,
@@ -149,7 +150,8 @@ impl Definer<'_, '_> {
     ) -> Result<bool> {
         let lookup = || Error::internal(format!("cache lookup failed for index {parent}"));
         let source = self.catalog.relation(parent).ok_or_else(lookup)?;
-        let info = source.index.clone().ok_or_else(lookup)?;
+        let info = source.index.as_ref().ok_or_else(lookup)?;
+        let info = self.att_map(info.table, child)?.index(info)?;
         let options = source.options.clone();
         let key_count = usize::try_from(info.key_count).unwrap_or_default();
         let columns: Vec<NewIndexColumn> = source

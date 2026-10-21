@@ -250,7 +250,7 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// The part of `CreateTriggerFiringOn` that clones a row trigger of a partitioned table to a partition, and on to the partitions of a partitioned partition. The clone has the columns of `UPDATE OF` by name and the condition of `WHEN`, but no transition tables.
+    /// The part of `CreateTriggerFiringOn` that clones a row trigger of a partitioned table to a partition, and on to the partitions of a partitioned partition. The clone has the columns of `UPDATE OF` by name and the condition of `WHEN` with the numbers of the columns of the partition, as `map_partition_varattnos` gives them, but no transition tables.
     ///
     /// # Errors
     ///
@@ -258,6 +258,8 @@ impl Definer<'_, '_> {
     pub(super) fn clone_trigger(&mut self, parent: u32, child: u32, replace: bool) -> Result<()> {
         let Some(from) = self.catalog.trigger(parent).cloned() else { return Ok(()) };
         let columns = self.cloned_columns(from.relation, child, &from.columns);
+        let map = self.att_map(from.relation, child)?;
+        let qual = from.qual.as_deref().map(|text| map.text(text)).transpose()?;
         let new = NewTrigger {
             name: from.name.clone(),
             relation: child,
@@ -267,7 +269,7 @@ impl Definer<'_, '_> {
             columns,
             old_table: None,
             new_table: None,
-            qual: from.qual.clone(),
+            qual,
             constraint: from.constraint != 0,
             constraint_relation: from.constraint_relation,
             deferrable: from.deferrable,

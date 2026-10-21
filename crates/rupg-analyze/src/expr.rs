@@ -969,6 +969,20 @@ impl Expr {
         }
     }
 
+    /// `map_variable_attnos` for an expression on one relation, such as a check constraint or an index expression: each column gets the number that `map` gives for it, the number in a partition for each column of its parent table. A system column and a whole-row column keep their numbers.
+    pub fn map_attnos(&mut self, map: &[i16]) {
+        if let ExprKind::Var(var) = &mut self.kind
+            && var.levels_up == 0
+            && var.attnum > 0
+            && let Some(&to) = map.get(usize::try_from(var.attnum - 1).unwrap_or(usize::MAX))
+        {
+            var.attnum = to;
+        }
+        for child in self.children_mut() {
+            child.map_attnos(map);
+        }
+    }
+
     /// `IncrementVarSublevelsUp` with a negative delta: each column of a query outside the expression comes `levels` levels down, as the planner moves an aggregate of an outer query to that query. A column of a level that is less than `levels` levels up does not change.
     pub fn lower(&mut self, levels: usize) {
         self.lower_from(levels, 0);

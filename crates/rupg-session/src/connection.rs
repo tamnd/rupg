@@ -5003,6 +5003,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_merge.test")));
     }
 
+    /// Partitions whose columns are in another order than the columns of the parent table, or that have dropped columns: `CREATE TABLE ... PARTITION OF` a table with a dropped column, `ATTACH PARTITION` of such tables, the reads and the writes of the partitioned table and of its partitions, `COPY`, the check constraints, the indexes and the triggers that the partitions take from the parent, `ALTER TABLE` of the parent, and a partition key with an expression. `connection/partition_columns.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_columns() {
+        big_stack(|| script(include_str!("connection/partition_columns.test")));
+    }
+
     /// The rows of a table after `ADD COLUMN` and a change of the default of the new column in the same statement: the rows get the default of `ADD COLUMN`, and new rows get the new default, also for the partitions. `DROP DEFAULT`, `ALTER COLUMN ... TYPE` and `DROP COLUMN` run before `ADD COLUMN`, so they cannot find the new column. `connection/add_column_default.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn add_column_default() {

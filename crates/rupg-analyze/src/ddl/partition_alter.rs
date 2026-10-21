@@ -1,6 +1,6 @@
 //! The recursion of `ALTER TABLE` to the partitions of a partitioned table: `ATSimpleRecursion` and the recursion of `ATPrepAlterColumnType` in the checks of the subcommands, and the recursion of `ATExecAddColumn` and `ATAddCheckNNConstraint` when the subcommands run. The recursion of `ATExecSetNotNull` is in `alter`, and the recursion of `ATExecDropColumn` and `dropconstraint_internal` is in `drop_constraint`.
 //!
-//! A partition has the columns of its parent table in the same order, so a column has the same number in each table, and an expression of the parent table holds for its partitions with no change.
+//! A partition can have the columns of its parent table in another order, so a column can have another number in each table. The recursion finds the column of a partition by name, and an expression of the parent table gets the numbers of the partition.
 
 use rupg_catalog::ConKind;
 use rupg_common::{Error, Result, SqlState};
@@ -55,7 +55,7 @@ impl Definer<'_, '_> {
         Ok(column_numbers(&exprs.iter().collect::<Vec<_>>()).contains(&column))
     }
 
-    /// The recursion of `ATExecAddColumn`: each partition of `parent` gets the new column `number` of `parent` as an inherited column, with the default and the not-null constraint of the column, and then the partitions of a partition get the column in turn.
+    /// The recursion of `ATExecAddColumn`: each partition of `parent` gets the new column `number` of `parent` as an inherited column, at the end of its own columns, with the default and the not-null constraint of the column, and then the partitions of a partition get the column in turn.
     pub(super) fn add_column_to_partitions(&mut self, parent: u32, number: i16) -> Result<()> {
         let rel = self.catalog.relation(parent).ok_or_else(|| lookup(parent))?;
         let Some(column) = rel.column(number).cloned() else {
@@ -75,31 +75,26 @@ impl Definer<'_, '_> {
             new.has_default = false;
             new.local = false;
             new.inhcount = 1;
-            if self.catalog.add_column(child.oid, new)? != number {
-                return Err(Error::internal(format!(
-                    "column \"{}\" of relation \"{}\" has another number in its parent table",
-                    column.name, child.name
-                )));
-            }
+            let own = self.catalog.add_column(child.oid, new)?;
             if let Some(text) = &default {
                 let expr = crate::node::read(text)?;
                 let refs = references(self.catalog, child.oid, &[&expr]);
-                self.catalog.add_default(child.oid, number, text.clone(), &refs)?;
+                self.catalog.add_default(child.oid, own, text.clone(), &refs)?;
             }
-            self.added.push(Fill { table: child.oid, column: number, default: default.clone() });
+            self.added.push(Fill { table: child.oid, column: own, default: default.clone() });
             if let Some(name) = &not_null {
                 let used = self.catalog.constraints_of(child.oid).any(|c| c.name == *name);
                 let given = (!used).then_some(name.as_str());
-                let oid = self.catalog.add_not_null(child.oid, given, number, false)?;
+                let oid = self.catalog.add_not_null(child.oid, given, own, false)?;
                 self.catalog.set_constraint_inherited(oid, false, 1)?;
             }
             self.toast_after_columns(child.oid)?;
-            self.add_column_to_partitions(child.oid, number)?;
+            self.add_column_to_partitions(child.oid, own)?;
         }
         Ok(())
     }
 
-    /// The recursion of `ATAddCheckNNConstraint` for the new check constraint `oid` of `parent`: each partition gets a constraint with the same name and expression, or `MergeWithExistingConstraint` merges the constraint with a constraint of the partition that has the same name and expression. A partition with a new constraint passes it to its own partitions. With `ONLY`, a table with partitions cannot get the constraint.
+    /// The recursion of `ATAddCheckNNConstraint` for the new check constraint `oid` of `parent`: each partition gets a constraint with the same name and expression, with the numbers of the columns of the partition, or `MergeWithExistingConstraint` merges the constraint with a constraint of the partition that has the same name and expression. A partition with a new constraint passes it to its own partitions. With `ONLY`, a table with partitions cannot get the constraint.
     pub(super) fn add_check_to_partitions(
         &mut self,
         parent: &Target,
@@ -119,8 +114,10 @@ impl Definer<'_, '_> {
                 "constraint must be added to child tables too",
             ));
         }
-        let text = con.expr.clone().unwrap_or_default();
+        let parent_text = con.expr.clone().unwrap_or_default();
         for child in children {
+            let map = self.att_map(parent.oid, child.oid)?;
+            let text = map.text(&parent_text)?;
             let existing = self
                 .catalog
                 .constraints_of(child.oid)
@@ -167,7 +164,7 @@ impl Definer<'_, '_> {
                 child.oid,
                 Some(&con.name),
                 text.clone(),
-                con.keys.clone(),
+                map.columns(&con.keys),
                 &refs,
                 false,
             )?;
