@@ -9,7 +9,7 @@ use rupg_types::{Value, oid};
 use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
-use crate::expr::{Expr, ExprKind, Var};
+use crate::expr::{Case, CastForm, Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Relation};
 use crate::insert::WriteKind;
 use crate::merge::carry;
@@ -128,7 +128,24 @@ impl Analyzer<'_> {
             .first()
             .ok_or_else(|| Error::internal("RETURNING with no table"))?;
         let width = table.columns.len();
+        let types: Vec<(u32, i32)> = table.columns.iter().map(|c| (c.ty, c.typmod)).collect();
+        let mut relation = Relation::new(table.oid, table.columns.clone(), None, None, None);
+        relation.name.clone_from(&table.name);
+        relation.alias.clone_from(&table.alias);
         let action = self.scope.merge_action;
+        // The whole old row of a `MERGE` is null for an insert, and the whole new row is null for a delete.
+        let no_row = if kind == WriteKind::Merge {
+            let mut no_row = |name: &str| {
+                let attnum = i16::try_from(3 * width + 1).unwrap_or(i16::MAX);
+                let var = Var { relation: 0, attnum, levels_up: 0 };
+                let action = Expr::new(ExprKind::Var(var), oid::TEXT);
+                let name = Expr::new(ExprKind::Const(Value::Text(name.into())), oid::TEXT);
+                self.make_op(&["="], Some(action), name, None)
+            };
+            Some((no_row("INSERT")?, no_row("DELETE")?))
+        } else {
+            None
+        };
         let source = |relation: usize| {
             if Some(relation) == old {
                 match kind {
@@ -162,6 +179,31 @@ impl Analyzer<'_> {
             match source(var.relation) {
                 Source::Row => expr.kind = ExprKind::Var(Var { relation: 0, ..var }),
                 Source::Null => expr.kind = ExprKind::Const(Value::Null),
+                Source::Shift(by) if var.attnum == 0 => {
+                    // The planner of PostgreSQL reads the whole row as a `RowExpr` of the columns. A dropped column has no field.
+                    let fields = types.iter().enumerate().filter(|(_, (ty, _))| *ty != 0);
+                    let fields = fields
+                        .map(|(i, &(ty, typmod))| {
+                            let attnum = i16::try_from(by + i + 1).unwrap_or(i16::MAX);
+                            let var = Var { relation: 0, attnum, levels_up: depth };
+                            let mut field = Expr::new(ExprKind::Var(var), ty);
+                            field.typmod = typmod;
+                            field
+                        })
+                        .collect();
+                    let row = Expr::new(ExprKind::Row(fields, CastForm::Implicit), expr.ty);
+                    let Some((insert, delete)) = &no_row else { return };
+                    let mut when = if by == width { insert.clone() } else { delete.clone() };
+                    rewrite(&mut when, 0, &mut |e: &mut Expr, _| {
+                        if let ExprKind::Var(v) = &mut e.kind {
+                            v.levels_up = depth;
+                        }
+                    });
+                    let null = Expr::new(ExprKind::Const(Value::Null), expr.ty);
+                    let case =
+                        Case { arg: None, whens: vec![(when, null)], default: Box::new(row) };
+                    expr.kind = ExprKind::Case(case);
+                }
                 Source::Shift(by) => {
                     let attnum =
                         i16::try_from(by).map_or(i16::MAX, |by| by.saturating_add(var.attnum));
@@ -177,9 +219,6 @@ impl Analyzer<'_> {
         for target in &mut targets {
             rewrite(&mut target.expr, 0, &mut change);
         }
-        let mut relation = Relation::new(table.oid, table.columns.clone(), None, None, None);
-        relation.name.clone_from(&table.name);
-        relation.alias.clone_from(&table.alias);
         let query = Query {
             relations: vec![relation],
             from: vec![FromItem::Relation(0)],

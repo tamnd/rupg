@@ -1,0 +1,38 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE mr_t (a int, b int, c text);
+CREATE TABLE
+> ALTER TABLE mr_t DROP COLUMN b;
+ALTER TABLE
+> INSERT INTO mr_t VALUES (1, 'x'), (2, 'y');
+INSERT 0 2
+> MERGE INTO mr_t t USING (VALUES (1, 'z')) s(a, c) ON t.a = s.a WHEN MATCHED THEN UPDATE SET c = s.c RETURNING merge_action(), old::text, new::text, (old).c, new.c, t::text;
+fields merge_action:25:-1:-1,old:25:-1:-1,new:25:-1:-1,c@mr_t.3:25:-1:-1,c@mr_t.3:25:-1:-1,t:25:-1:-1
+row UPDATE,(1,x),(1,z),x,z,(1,z)
+MERGE 1
+> MERGE INTO mr_t t USING (VALUES (3, 'w')) s(a, c) ON t.a = s.a WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.c) RETURNING merge_action(), old::text, new::text, old IS NULL AS no_old, row_to_json(new);
+fields merge_action:25:-1:-1,old:25:-1:-1,new:25:-1:-1,no_old:16:1:-1,row_to_json:114:-1:-1
+row INSERT,NULL,(3,w),t,{"a":3,"c":"w"}
+MERGE 1
+> MERGE INTO mr_t t USING (VALUES (2)) s(a) ON t.a = s.a WHEN MATCHED THEN DELETE RETURNING merge_action(), old::text, new::text, new IS NULL AS no_new, (SELECT old.a + 10), (SELECT o::text FROM (SELECT old) x(o));
+fields merge_action:25:-1:-1,old:25:-1:-1,new:25:-1:-1,no_new:16:1:-1,?column?:23:4:-1,o:25:-1:-1
+row DELETE,(2,y),NULL,t,12,(2,y)
+MERGE 1
+> MERGE INTO mr_t t USING (VALUES (1, 'q')) s(a, c) ON t.a = s.a WHEN MATCHED THEN UPDATE SET c = s.c RETURNING WITH (OLD AS o, NEW AS n) o::text, n::text, o.c || n.c;
+fields o:25:-1:-1,n:25:-1:-1,?column?:25:-1:-1
+row (1,z),(1,q),zq
+MERGE 1
+> CREATE TABLE mr_n (a int, b int);
+CREATE TABLE
+> INSERT INTO mr_n VALUES (NULL, NULL);
+INSERT 0 1
+> MERGE INTO mr_n t USING (VALUES (1)) s(a) ON true WHEN MATCHED THEN UPDATE SET a = 5 RETURNING old::text, new::text, old IS NULL, old IS NOT DISTINCT FROM NULL;
+fields old:25:-1:-1,new:25:-1:-1,?column?:16:1:-1,?column?:16:1:-1
+row (,),(5,),t,f
+MERGE 1
+> SELECT * FROM mr_t ORDER BY a;
+fields a@mr_t.1:23:4:-1,c@mr_t.3:25:-1:-1
+row 1,q
+row 3,w
+SELECT 2
