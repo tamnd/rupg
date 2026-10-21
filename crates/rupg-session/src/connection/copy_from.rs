@@ -1,4 +1,4 @@
-//! `COPY ... FROM STDIN` and `COPY ... FROM` a file of the server, as `DoCopy`, `BeginCopyFrom`, `CopyFrom` and `copyfromparse.c` run it. The copy reads the fields of each line, and `NextCopyFrom` makes the values of the columns with the input functions or the receive functions of their types. The other columns get their defaults from a plan of `INSERT`, which also checks the constraints. The copy keeps up to `MAX_BUFFERED_TUPLES` rows and then writes them in the heap, as `CopyMultiInsertInfoFlush` does. The triggers of the foreign keys fire at the end of the copy.
+//! `COPY ... FROM STDIN` and `COPY ... FROM` a file of the server, as `DoCopy`, `BeginCopyFrom`, `CopyFrom` and `copyfromparse.c` run it. The copy reads the fields of each line, and `NextCopyFrom` makes the values of the columns with the input functions or the receive functions of their types. The other columns get their defaults from a plan of `INSERT`, which also checks the constraints. The copy keeps up to `MAX_BUFFERED_TUPLES` rows and then writes them in the heap, as `CopyMultiInsertInfoFlush` does. The triggers `BEFORE ... FOR EACH STATEMENT` fire before the first row, and a table with triggers `BEFORE ... FOR EACH ROW` gets one row at a time, as `CIM_SINGLE` writes them, so each trigger fires for its row after the condition `WHERE` and before the checks. The triggers `AFTER` and the triggers of the foreign keys fire at the end of the copy.
 
 use std::path::Path;
 use std::rc::Rc;
@@ -14,6 +14,7 @@ use rupg_wire::{CommandTag, OutBuf};
 
 use super::copy::{BINARY_SIGNATURE, ForceQuote, Format, OnError, Verbosity, options};
 use super::foreign::Batch;
+use super::trigger::Triggers;
 use super::{Connection, Done};
 use crate::heap::{Changed, View};
 use crate::query::{self, Reader};
@@ -106,6 +107,12 @@ struct Load {
     count: u64,
     /// The rows for the triggers of the foreign keys.
     batches: Vec<Batch>,
+    /// The triggers `INSERT` of the table.
+    triggers: Triggers,
+    /// True after the triggers `BEFORE ... FOR EACH STATEMENT` fired.
+    begun: bool,
+    /// The rows that the copy wrote, for the triggers `AFTER ... FOR EACH ROW` and the transition tables.
+    inserted: Vec<Vec<Value>>,
 }
 
 /// `EolType`: the line ending of the data, which the first line sets.
@@ -195,6 +202,7 @@ impl Connection {
         let mut copy = self.copy_from(stmt, Begin::File(name, &mut bytes))?;
         let read = self.copy_data(&mut copy, &bytes);
         let count = read.and_then(|()| self.copy_done(&mut copy));
+        copy.notices.extend(self.trigger_notices());
         notices.append(&mut copy.notices);
         Ok(Done::Count(CommandTag::Copy, count?))
     }
@@ -287,12 +295,6 @@ impl Connection {
             ));
         }
         let catalog = self.catalog();
-        if catalog.triggers_of(target.relid).iter().any(|t| !t.internal && t.fires()) {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "COPY FROM into a table with triggers is not supported yet",
-            ));
-        }
         let rel = catalog.relation(target.relid);
         // The columns of the target are the columns that are not dropped.
         let live: Vec<&rupg_catalog::Column> =
@@ -377,6 +379,11 @@ impl Connection {
             .collect();
         let source = (rel.is_some() && options.default.is_some())
             .then(|| (target.clone(), RangeVar::clone(rv)));
+        self.start_triggers();
+        let triggers = match plan.as_deref().and_then(Plan::write) {
+            Some(info) => self.write_triggers(info)?,
+            None => Triggers::default(),
+        };
         let load = Load {
             plan,
             source,
@@ -395,6 +402,9 @@ impl Connection {
             lines: Vec::new(),
             count: 0,
             batches: Vec::new(),
+            triggers,
+            begun: false,
+            inserted: Vec::new(),
         };
         let names = target.selected.iter().map(|&i| target.columns[i].clone()).collect();
         Ok(CopyIn {
@@ -433,14 +443,22 @@ impl Connection {
         let read = copy.done();
         self.load_rows(copy)?;
         read?;
-        self.flush_rows(copy)?;
+        self.flush_rows(copy, None)?;
         if copy.load.count > 0 {
             self.command.set(self.command.get() + 1);
+        }
+        let inserted = std::mem::take(&mut copy.load.inserted);
+        if !copy.load.triggers.is_empty()
+            && let Some(info) = copy.load.plan.as_deref().and_then(Plan::write)
+        {
+            self.after_write(info, &copy.load.triggers, &[], &inserted)?;
         }
         let batches = std::mem::take(&mut copy.load.batches);
         if !batches.is_empty() {
             self.fire(batches)?;
         }
+        self.fire_events(0)?;
+        copy.notices.extend(self.trigger_notices());
         let errors = copy.load.errors;
         if errors > 0 && copy.load.verbosity >= Verbosity::Default {
             let message = match (copy.load.on_error, errors) {
@@ -464,6 +482,12 @@ impl Connection {
 
     /// `NextCopyFrom` and the checks of `CopyFrom` for the lines that the copy read: the values of the columns, the defaults of the other columns, the condition `WHERE` and the constraints of the table.
     fn load_rows(&self, copy: &mut CopyIn) -> Result<(), Error> {
+        if !copy.load.begun {
+            copy.load.begun = true;
+            if let Some(info) = copy.load.plan.as_deref().and_then(Plan::write) {
+                self.before_statement(&copy.load.triggers, info)?;
+            }
+        }
         if copy.pending.is_empty() {
             return Ok(());
         }
@@ -499,19 +523,37 @@ impl Connection {
                 }
                 None => rows,
             };
-            let rows = plan.check(rows, &reader).map_err(line)?;
+            // `CIM_SINGLE`: with triggers `BEFORE ... FOR EACH ROW`, the triggers come before the checks, and the row goes in before the next row.
+            let single = plan.write().filter(|info| info.recheck.is_some());
+            let said = self.trigger_warnings.borrow().len();
+            let rows = match single {
+                Some(info) => self.before_rows(&plan, info, &copy.load.triggers, rows),
+                None => plan.check(rows, &reader),
+            };
+            // The messages of the triggers have the line of the copy in their context, as `CopyFromErrorCallback` gives it.
+            if single.is_some() {
+                let mut queue = self.trigger_warnings.borrow_mut();
+                let len = queue.len();
+                let raised = queue.split_off(said.min(len));
+                queue.extend(raised.into_iter().map(|w| w.with_context(copy.row_context(&row))));
+            }
+            let rows = rows.map_err(line)?;
             copy.load.lines.extend(rows.iter().map(|_| row.line));
             copy.load.rows.extend(rows);
+            if single.is_some() {
+                let context = copy.row_context(&row);
+                self.flush_rows(copy, Some(context))?;
+            }
         }
         drop(reader);
         if copy.load.rows.len() >= MAX_BUFFERED {
-            self.flush_rows(copy)?;
+            self.flush_rows(copy, None)?;
         }
         Ok(())
     }
 
-    /// `CopyMultiInsertBufferFlush`: the rows that the copy kept go in the heap. A duplicate key has the context of the line of its row.
-    fn flush_rows(&self, copy: &mut CopyIn) -> Result<(), Error> {
+    /// `CopyMultiInsertBufferFlush`: the rows that the copy kept go in the heap. A duplicate key has the context of the line of its row, or the context `context` of the one row of `CIM_SINGLE`.
+    fn flush_rows(&self, copy: &mut CopyIn, context: Option<String>) -> Result<(), Error> {
         let load = &mut copy.load;
         if load.rows.is_empty() {
             return Ok(());
@@ -533,6 +575,9 @@ impl Connection {
         let lines = std::mem::take(&mut load.lines);
         let count = rows.len() as u64;
         let new_rows = if info.foreign.is_empty() { Vec::new() } else { rows.clone() };
+        if load.triggers.after_rows() {
+            load.inserted.extend(rows.iter().cloned());
+        }
         if info.unique.is_empty() {
             heap.insert(info.table, &view, rows, &[], &[])?;
         } else {
@@ -547,7 +592,9 @@ impl Connection {
                             Ok(_) => Error::internal("a duplicate key with no error"),
                             Err(error) => error,
                         };
-                        return Err(error.with_context(format!("COPY {}, line {line}", copy.name)));
+                        let context =
+                            context.unwrap_or_else(|| format!("COPY {}, line {line}", copy.name));
+                        return Err(error.with_context(context));
                     }
                     conflict => kept = self.key_conflict(info, &view, conflict)?,
                 }

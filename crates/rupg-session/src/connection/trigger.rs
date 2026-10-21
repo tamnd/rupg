@@ -32,6 +32,7 @@ pub(super) struct Event {
 }
 
 /// A trigger that fires for a write, with its condition of `WHEN`.
+#[derive(Debug)]
 pub(super) struct Armed {
     trigger: Trigger,
     /// The condition and the query that has `old` and `new` as its relations.
@@ -39,7 +40,7 @@ pub(super) struct Armed {
 }
 
 /// The triggers of a write, in the order of their names.
-#[derive(Default)]
+#[derive(Debug, Default)]
 pub(super) struct Triggers {
     list: Vec<Armed>,
     /// The bit of the event of the write in `tgtype`.
