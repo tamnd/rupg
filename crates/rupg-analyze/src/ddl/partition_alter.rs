@@ -7,7 +7,7 @@ use rupg_common::{Error, Result, SqlState};
 
 use super::alter::Target;
 use super::partition_attach::without_locations;
-use super::{Definer, Found, column_numbers, references};
+use super::{Definer, Fill, Found, column_numbers, references};
 use crate::expr::Expr;
 
 /// The error of a relation that is not in the catalog.
@@ -86,6 +86,7 @@ impl Definer<'_, '_> {
                 let refs = references(self.catalog, child.oid, &[&expr]);
                 self.catalog.add_default(child.oid, number, text.clone(), &refs)?;
             }
+            self.added.push(Fill { table: child.oid, column: number, default: default.clone() });
             if let Some(name) = &not_null {
                 let used = self.catalog.constraints_of(child.oid).any(|c| c.name == *name);
                 let given = (!used).then_some(name.as_str());

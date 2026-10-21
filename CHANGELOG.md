@@ -13,6 +13,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - The workflow `fuzz` for the long fuzz runs of spec/21 section 21.7. It runs on request and gives each target one libFuzzer worker on each CPU of the runner. With the defaults, each of the four M2 targets gets 25.3 CPU hours (#471).
 
+### Fixed
+
+- When one `ALTER TABLE` adds a column and then sets the default of the column, the rows of the table get the default of `ADD COLUMN`, as in PostgreSQL. Before, they got the new default (#NNN).
+
 ## 0.1.58 (2026-10-21)
 
 ### Added

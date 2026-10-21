@@ -4,7 +4,7 @@
 
 use std::sync::Arc;
 
-use rupg_analyze::{CopyTarget, Params, PartitionCheck, Transform};
+use rupg_analyze::{CopyTarget, Fill, Params, PartitionCheck, Transform};
 use rupg_catalog::{Catalog, ConKind, FIRST_NORMAL_OID, RelKind, Relation};
 use rupg_common::{Error, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -17,7 +17,7 @@ use crate::heap::{Changed, View};
 use crate::query;
 
 impl Connection {
-    /// The tables whose rows the statement `node` changes, from the catalog before the statement to `work`. A table with no rows needs no change. A table with an expression of `transforms` always gets its rows again.
+    /// The tables whose rows the statement `node` changes, from the catalog before the statement to `work`. A table with no rows needs no change. A table with an expression of `transforms` or a default of `fills` always gets its rows again.
     ///
     /// # Errors
     ///
@@ -27,6 +27,7 @@ impl Connection {
         node: &Node,
         work: &Catalog,
         transforms: &[Transform],
+        fills: &[Fill],
     ) -> Result<Vec<u32>, Error> {
         let heap = self.store.heap();
         let old = self.catalog();
@@ -57,7 +58,10 @@ impl Connection {
                 && rel.columns.iter().any(|c| holds_row_type(&old, c.ty, &reshaped, 0))
         };
         let mut out = Vec::new();
-        let transformed = |rel: &Relation| transforms.iter().any(|t| t.table == rel.oid);
+        let transformed = |rel: &Relation| {
+            transforms.iter().any(|t| t.table == rel.oid)
+                || fills.iter().any(|f| f.table == rel.oid)
+        };
         for rel in tables
             .into_iter()
             .filter(|rel| transformed(rel) || changes_rows(&old, work, rel) || holds(rel))
@@ -136,6 +140,7 @@ impl Connection {
         tables: &[u32],
         work: &Arc<Catalog>,
         transforms: &[Transform],
+        fills: &[Fill],
     ) -> Result<(), Error> {
         if tables.is_empty() {
             return Ok(());
@@ -156,6 +161,22 @@ impl Connection {
             // The rows that the truncate deleted stay visible to the command that deleted them.
             let view = View { xid: self.xid.get(), ..self.view() };
             let rows = heap.rows(table, &view);
+            // The `INSERT` of the rows gives a new column of `fills` the default that it had when `ADD COLUMN` ran.
+            let own: Vec<&Fill> = fills.iter().filter(|f| f.table == table).collect();
+            let filled;
+            let work = if own.is_empty() {
+                work
+            } else {
+                let mut catalog = Catalog::clone(work);
+                for fill in own {
+                    catalog.remove_default(table, fill.column);
+                    if let Some(expr) = &fill.default {
+                        catalog.add_default(table, fill.column, expr.clone(), &[])?;
+                    }
+                }
+                filled = Arc::new(catalog);
+                &filled
+            };
             self.rewrite_table(&old, rel, work, &view, rows, transforms)?;
         }
         self.command.set(command + 1);

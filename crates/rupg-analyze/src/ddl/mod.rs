@@ -93,6 +93,8 @@ pub struct Defined {
     pub truncated: Vec<u32>,
     /// The expressions of `USING` of `ALTER COLUMN ... TYPE`, which give the new values of the columns when the caller writes the rows of the table again.
     pub transforms: Vec<Transform>,
+    /// The defaults that the new columns of `ADD COLUMN` had when the subcommand ran, for each new column whose default a later subcommand of the same statement changed. The caller writes the rows of the table again with these defaults.
+    pub fills: Vec<Fill>,
     /// The table of `CREATE TABLE AS`, which the caller fills with the rows of the query, or `None`. It is `None` also for `WITH NO DATA` and for a table that exists with `IF NOT EXISTS`.
     pub filled: Option<u32>,
     /// The views whose query reads an object that the statement renamed. The catalog keeps the text of a view, so the caller writes the text again from the query that the old names give.
@@ -119,6 +121,17 @@ pub struct Transform {
     pub column: String,
     /// The expression before its transform. It refers to the columns of the table by their names, and it gives the old values of the columns.
     pub expr: Node,
+}
+
+/// The default of a new column of `ALTER TABLE ... ADD COLUMN`, as `ATExecAddColumn` keeps it in `tab->newvals`. The rows of the table get this default, also when a later subcommand of the statement sets or drops the default of the column.
+#[derive(Clone, Debug)]
+pub struct Fill {
+    /// The OID of the table.
+    pub table: u32,
+    /// The number of the column.
+    pub column: i16,
+    /// The text of the default expression, or `None` for a column with no default, which gets a null.
+    pub default: Option<String>,
 }
 
 /// True for a statement that [`define`] runs.
@@ -200,6 +213,7 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         scans: Vec::new(),
         truncated: Vec::new(),
         transforms: Vec::new(),
+        added: Vec::new(),
         views: Vec::new(),
         checks: Vec::new(),
     };
@@ -244,12 +258,26 @@ pub fn define(stmt: &Node, text: &str, env: &dyn Env, catalog: &mut Catalog, use
         }
     };
     definer.flush();
+    let catalog = &*definer.catalog;
+    let fills = definer
+        .added
+        .into_iter()
+        .filter(|fill| {
+            let live = catalog
+                .relation(fill.table)
+                .and_then(|r| r.column(fill.column))
+                .is_some_and(|c| !c.dropped);
+            let now = catalog.default_of(fill.table, fill.column).map(|d| &d.expr);
+            live && now != fill.default.as_ref()
+        })
+        .collect();
     Defined {
         messages: definer.messages,
         result,
         scans: definer.scans,
         truncated: definer.truncated,
         transforms: definer.transforms,
+        fills,
         filled,
         views: definer.views,
         checks: definer.checks,
@@ -348,6 +376,8 @@ pub(crate) struct Definer<'a, 'c> {
     truncated: Vec<u32>,
     /// The expressions of [`Defined::transforms`].
     transforms: Vec<Transform>,
+    /// The defaults of the new columns, from which [`Defined::fills`] keeps the changed ones.
+    added: Vec<Fill>,
     /// The views of [`Defined::views`].
     views: Vec<u32>,
     /// The partitions of [`Defined::checks`].
