@@ -34,7 +34,15 @@ pub(crate) fn check_rows(
     let types: Vec<u32> = rel.map(|r| r.columns.iter().map(|c| c.ty).collect()).unwrap_or_default();
     let mut out = Vec::with_capacity(rows.len());
     let mut router = crate::partition::Router::default();
+    let partition = rel.filter(|r| r.partition_of.is_some());
     for mut row in rows {
+        // `ExecUpdateAct` checks the partition constraint first.
+        if info.kind == WriteKind::Update
+            && let Some(rel) = partition
+            && !router.check(rel.oid, &row[..info.width], session)?
+        {
+            return Err(crate::partition::partition_check_error(rel, &row[..info.width], session)?);
+        }
         if let Some(rel) = rel {
             for (column, value) in rel.columns.iter().zip(&row[..info.width]) {
                 if column.not_null && matches!(value, Value::Null) {
@@ -62,10 +70,9 @@ pub(crate) fn check_rows(
             }
         }
         row.drain(info.width..info.width + info.checks.len());
-        // `ExecPartitionCheck` for a row that goes in a partition with no routing.
+        // `ExecInsert` checks the partition constraint of a row that goes in a partition with no routing last.
         if info.kind == WriteKind::Insert
-            && let Some(rel) = rel
-            && rel.partition_of.is_some()
+            && let Some(rel) = partition
             && !router.check(rel.oid, &row[..info.width], session)?
         {
             return Err(crate::partition::partition_check_error(rel, &row[..info.width], session)?);

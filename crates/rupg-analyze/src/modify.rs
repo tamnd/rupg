@@ -12,7 +12,7 @@ use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
-use crate::from::{Column, FromItem};
+use crate::from::{Column, FromItem, TABLE_OID_ATTNUM};
 use crate::insert::{
     Item, Write, WriteKind, default_part, merge_parts, not_yet, targets, with_checks,
 };
@@ -60,12 +60,16 @@ impl Analyzer<'_> {
         query.targets.extend(carried_targets(carried));
         let instead = self.is_view(table);
         // The triggers `INSTEAD OF` of a view get the old row, as the junk column `wholerow` gives it.
+        let partitioned = self.is_partitioned(table);
         if instead {
             query.targets.extend(old_row(&columns));
         } else {
+            if partitioned {
+                query.targets.push(table_oid_target());
+            }
             query.targets.push(tid_target());
         }
-        let checks = self.checks(table)?;
+        let checks = if partitioned { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         let recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks);
         if !checks.is_empty() {
@@ -201,6 +205,9 @@ impl Analyzer<'_> {
         if instead {
             targets.extend(old_row(&columns));
         } else {
+            if self.is_partitioned(table) {
+                targets.push(table_oid_target());
+            }
             targets.push(tid_target());
         }
         let mut query = Query {
@@ -378,6 +385,17 @@ pub(crate) fn tid_target() -> Target {
     Target {
         name: "ctid".to_string(),
         expr: Expr::new(ExprKind::Var(var), oid::INT8),
+        origin: None,
+        junk: false,
+    }
+}
+
+/// The target that reads the OID of the partition of the row of the target table, a partitioned table.
+fn table_oid_target() -> Target {
+    let var = Var { relation: 0, attnum: TABLE_OID_ATTNUM, levels_up: 0 };
+    Target {
+        name: "tableoid".to_string(),
+        expr: Expr::new(ExprKind::Var(var), oid::OID),
         origin: None,
         junk: false,
     }

@@ -1,0 +1,325 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE r (a int, b text, c int NOT NULL DEFAULT 0) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (MINVALUE) TO (10);
+CREATE TABLE
+> CREATE TABLE r2 PARTITION OF r (CONSTRAINT r2_c CHECK (c < 100)) FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TABLE r3 PARTITION OF r FOR VALUES FROM (20) TO (30) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE r3x PARTITION OF r3 FOR VALUES IN ('x');
+CREATE TABLE
+> CREATE TABLE r3y PARTITION OF r3 FOR VALUES IN ('y', 'z');
+CREATE TABLE
+> CREATE TABLE r3d PARTITION OF r3 DEFAULT;
+CREATE TABLE
+> INSERT INTO r VALUES (1, 'a', 1), (5, 'b', 2), (15, 'c', 3), (25, 'x', 4), (26, 'y', 5), (27, 'q', 6);
+INSERT 0 6
+> UPDATE r SET c = c + 10 WHERE a < 20;
+UPDATE 3
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,11
+row r1,5,b,12
+row r2,15,c,13
+row r3x,25,x,4
+row r3y,26,y,5
+row r3d,27,q,6
+SELECT 6
+> UPDATE r SET a = a + 10 WHERE a = 5;
+UPDATE 1
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,11
+row r2,15,b,12
+row r2,15,c,13
+row r3x,25,x,4
+row r3y,26,y,5
+row r3d,27,q,6
+SELECT 6
+> UPDATE r SET b = 'z' WHERE b = 'x' RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r3y,25,z,4
+UPDATE 1
+> UPDATE r SET b = 'x' WHERE a = 27 RETURNING old.tableoid::regclass AS old_part, new.tableoid::regclass AS new_part, old.b AS old_b, new.b AS new_b;
+fields old_part:2205:4:-1,new_part:2205:4:-1,old_b@r.2:25:-1:-1,new_b@r.2:25:-1:-1
+row r3d,r3x,q,x
+UPDATE 1
+> UPDATE r SET a = 3 WHERE a = 26 RETURNING tableoid::regclass, a, b, c;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,3,y,5
+UPDATE 1
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,11
+row r1,3,y,5
+row r2,15,b,12
+row r2,15,c,13
+row r3y,25,z,4
+row r3x,27,x,6
+SELECT 6
+> UPDATE r SET a = 40 WHERE a = 1;
+ERROR 23514 no partition of relation "r" found for row
+DETAIL Partition key of the failing row contains (a) = (40).
+> UPDATE r SET c = NULL WHERE a = 15;
+ERROR 23502 null value in column "c" of relation "r2" violates not-null constraint
+DETAIL Failing row contains (15, c, null).
+> UPDATE r SET c = 200 WHERE a = 15;
+ERROR 23514 new row for relation "r2" violates check constraint "r2_c"
+DETAIL Failing row contains (15, c, 200).
+> UPDATE r SET a = 12, c = 300 WHERE a = 1;
+ERROR 23514 new row for relation "r2" violates check constraint "r2_c"
+DETAIL Failing row contains (12, a, 300).
+> UPDATE r SET a = 12, c = NULL WHERE a = 1;
+ERROR 23502 null value in column "c" of relation "r2" violates not-null constraint
+DETAIL Failing row contains (12, a, null).
+> UPDATE r SET a = 12 WHERE a = 1 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r2,12,a,11
+UPDATE 1
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,3,y,5
+row r2,12,a,11
+row r2,15,b,12
+row r2,15,c,13
+row r3y,25,z,4
+row r3x,27,x,6
+SELECT 6
+> UPDATE r1 SET a = 50;
+ERROR 23514 new row for relation "r1" violates partition constraint
+DETAIL Failing row contains (50, y, 5).
+> UPDATE r1 SET a = 2 RETURNING *;
+fields a@r1.1:23:4:-1,b@r1.2:25:-1:-1,c@r1.3:23:4:-1
+row 2,y,5
+UPDATE 1
+> UPDATE r2 SET a = 5;
+ERROR 23514 new row for relation "r2" violates partition constraint
+DETAIL Failing row contains (5, c, 13).
+> UPDATE r2 SET c = c + 1 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@r2.1:23:4:-1,b@r2.2:25:-1:-1,c@r2.3:23:4:-1
+row r2,15,c,14
+row r2,15,b,13
+row r2,12,a,12
+UPDATE 3
+> UPDATE r3 SET a = 5 WHERE b = 'x';
+ERROR 23514 new row for relation "r3" violates partition constraint
+DETAIL Failing row contains (5, x, 6).
+> UPDATE r3 SET b = 'y' WHERE b = 'x' RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@r3.1:23:4:-1,b@r3.2:25:-1:-1,c@r3.3:23:4:-1
+row r3y,27,y,6
+UPDATE 1
+> UPDATE r3x SET b = 'y';
+UPDATE 0
+> UPDATE ONLY r SET c = 0;
+UPDATE 0
+> DELETE FROM ONLY r;
+DELETE 0
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,2,y,5
+row r2,12,a,12
+row r2,15,b,13
+row r2,15,c,14
+row r3y,25,z,4
+row r3y,27,y,6
+SELECT 6
+> DELETE FROM r WHERE a = 2 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,2,y,5
+DELETE 1
+> DELETE FROM r3 WHERE b = 'y' RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@r3.1:23:4:-1,b@r3.2:25:-1:-1,c@r3.3:23:4:-1
+row r3y,27,y,6
+DELETE 1
+> DELETE FROM r2 RETURNING *;
+fields a@r2.1:23:4:-1,b@r2.2:25:-1:-1,c@r2.3:23:4:-1
+row 15,c,14
+row 15,b,13
+row 12,a,12
+DELETE 3
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r3y,25,z,4
+SELECT 1
+> INSERT INTO r VALUES (1, 'a', 1), (11, 'b', 2), (21, 'x', 3), (22, 'm', 4), (23, 'y', 5);
+INSERT 0 5
+> CREATE TABLE s (a int, d text);
+CREATE TABLE
+> INSERT INTO s VALUES (1, 'one'), (11, 'eleven'), (21, 'twenty-one');
+INSERT 0 3
+> UPDATE r SET b = s.d FROM s WHERE r.a = s.a RETURNING r.tableoid::regclass, r.*, s.d;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1,d@s.2:25:-1:-1
+row r1,1,one,1,one
+row r2,11,eleven,2,eleven
+row r3d,21,twenty-one,3,twenty-one
+UPDATE 3
+> DELETE FROM r USING s WHERE r.a = s.a + 1 RETURNING r.tableoid::regclass, r.a, s.d;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,d@s.2:25:-1:-1
+row r3d,22,twenty-one
+DELETE 1
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,one,1
+row r2,11,eleven,2
+row r3d,21,twenty-one,3
+row r3y,23,y,5
+row r3y,25,z,4
+SELECT 5
+> UPDATE r SET a = a + 1;
+UPDATE 5
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,2,one,1
+row r2,12,eleven,2
+row r3d,22,twenty-one,3
+row r3y,24,y,5
+row r3y,26,z,4
+SELECT 5
+> BEGIN;
+BEGIN
+> UPDATE r SET a = 2;
+UPDATE 5
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,2,eleven,2
+row r1,2,one,1
+row r1,2,twenty-one,3
+row r1,2,y,5
+row r1,2,z,4
+SELECT 5
+> ROLLBACK;
+ROLLBACK
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,2,one,1
+row r2,12,eleven,2
+row r3d,22,twenty-one,3
+row r3y,24,y,5
+row r3y,26,z,4
+SELECT 5
+> PREPARE u(int, int) AS UPDATE r SET a = $2 WHERE a = $1 RETURNING tableoid::regclass, *;
+PREPARE
+> EXECUTE u(2, 13);
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r2,13,one,1
+UPDATE 1
+> EXECUTE u(13, 24);
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r3d,24,one,1
+UPDATE 1
+> EXECUTE u(24, 99);
+ERROR 23514 no partition of relation "r" found for row
+DETAIL Partition key of the failing row contains (a) = (99).
+> WITH d AS (DELETE FROM r WHERE a < 15 RETURNING *) SELECT count(*) FROM d;
+fields count:20:8:-1
+row 1
+SELECT 1
+> WITH u AS (UPDATE r SET c = c * 2 RETURNING tableoid::regclass AS p, *) SELECT * FROM u ORDER BY a, b;
+fields p:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r3d,22,twenty-one,6
+row r3d,24,one,2
+row r3y,24,y,10
+row r3y,26,z,8
+SELECT 4
+> CREATE TABLE h (a int, b text) PARTITION BY HASH (a);
+CREATE TABLE
+> CREATE TABLE h0 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE h1 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 1);
+CREATE TABLE
+> CREATE TABLE h2 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 2);
+CREATE TABLE
+> INSERT INTO h SELECT g, g::text FROM generate_series(1, 12) g;
+INSERT 0 12
+> SELECT tableoid::regclass, count(*) FROM h GROUP BY 1 ORDER BY 1;
+fields tableoid:2205:4:-1,count:20:8:-1
+row h0,4
+row h1,3
+row h2,5
+SELECT 3
+> UPDATE h SET a = a + 100;
+UPDATE 12
+> SELECT tableoid::regclass, count(*) FROM h GROUP BY 1 ORDER BY 1;
+fields tableoid:2205:4:-1,count:20:8:-1
+row h0,4
+row h1,2
+row h2,6
+SELECT 3
+> SELECT tableoid::regclass, * FROM h WHERE a < 106 ORDER BY a;
+fields tableoid:2205:4:-1,a@h.1:23:4:-1,b@h.2:25:-1:-1
+row h2,101,1
+row h2,102,2
+row h2,103,3
+row h0,104,4
+row h2,105,5
+SELECT 5
+> DELETE FROM h WHERE a % 2 = 0;
+DELETE 6
+> SELECT tableoid::regclass, count(*) FROM h GROUP BY 1 ORDER BY 1;
+fields tableoid:2205:4:-1,count:20:8:-1
+row h0,1
+row h1,1
+row h2,4
+SELECT 3
+> CREATE TABLE l (a int, b text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE l1 PARTITION OF l FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE l2 PARTITION OF l FOR VALUES IN (2);
+CREATE TABLE
+> CREATE UNIQUE INDEX l1_b ON l1 (b);
+CREATE INDEX
+> INSERT INTO l VALUES (1, 'p'), (2, 'p'), (2, 'q');
+INSERT 0 3
+> UPDATE l SET a = 1 WHERE b = 'q';
+UPDATE 1
+> UPDATE l SET a = 1 WHERE b = 'p' AND a = 2;
+ERROR 23505 duplicate key value violates unique constraint "l1_b"
+DETAIL Key (b)=(p) already exists.
+> SELECT tableoid::regclass, * FROM l ORDER BY a, b;
+fields tableoid:2205:4:-1,a@l.1:23:4:-1,b@l.2:25:-1:-1
+row l1,1,p
+row l1,1,q
+row l2,2,p
+SELECT 3
+> UPDATE l SET a = 3;
+ERROR 23514 no partition of relation "l" found for row
+DETAIL Partition key of the failing row contains (a) = (3).
+> UPDATE l SET a = NULL;
+ERROR 23514 no partition of relation "l" found for row
+DETAIL Partition key of the failing row contains (a) = (null).
+> SELECT tableoid::regclass, * FROM l ORDER BY a, b;
+fields tableoid:2205:4:-1,a@l.1:23:4:-1,b@l.2:25:-1:-1
+row l1,1,p
+row l1,1,q
+row l2,2,p
+SELECT 3
+> CREATE TABLE e (a int, b int) PARTITION BY RANGE ((a + b));
+CREATE TABLE
+> CREATE TABLE e1 PARTITION OF e FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE e2 PARTITION OF e FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> INSERT INTO e VALUES (1, 1), (5, 6);
+INSERT 0 2
+> UPDATE e SET b = b + 5 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@e.1:23:4:-1,b@e.2:23:4:-1
+row e1,1,6
+row e2,5,11
+UPDATE 2
+> UPDATE e SET b = b + 50;
+ERROR 23514 no partition of relation "e" found for row
+DETAIL Partition key of the failing row contains ((a + b)) = (57).
+> DELETE FROM e WHERE a + b > 10 RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@e.1:23:4:-1,b@e.2:23:4:-1
+row e2,5,11
+DELETE 1
+> SELECT tableoid::regclass, * FROM e ORDER BY a;
+fields tableoid:2205:4:-1,a@e.1:23:4:-1,b@e.2:23:4:-1
+row e1,1,6
+SELECT 1
+> DROP TABLE r, s, h, l, e;
+DROP TABLE
