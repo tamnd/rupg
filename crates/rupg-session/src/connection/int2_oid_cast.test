@@ -1,0 +1,33 @@
+> SELECT 25::oid = 25::int2 AS eq, 25::oid < 26::int2 AS lt, 25::oid = ANY('{24,25}'::int2[]) AS anyof
+fields eq:16:1:-1,lt:16:1:-1,anyof:16:1:-1
+row t,t,t
+SELECT 1
+> SELECT relname FROM pg_class WHERE oid = 1259::int2
+fields relname@pg_class.2:19:64:-1
+row pg_class
+SELECT 1
+> SELECT relname FROM pg_class WHERE oid = ANY('{1259,1247}'::int2[]) ORDER BY 1
+fields relname@pg_class.2:19:64:-1
+row pg_class
+row pg_type
+SELECT 2
+> SELECT typname FROM pg_type WHERE oid IN (SELECT x FROM (VALUES (16::int2), (25::int2)) v(x)) ORDER BY 1
+fields typname@pg_type.2:19:64:-1
+row bool
+row text
+SELECT 2
+> PREPARE p(int2[]) AS SELECT relname FROM pg_class WHERE oid = ANY($1) ORDER BY 1
+PREPARE
+> EXECUTE p('{1259,1247}')
+fields relname@pg_class.2:19:64:-1
+row pg_class
+row pg_type
+SELECT 2
+> SELECT 1259::int2::regclass AS c, 16::int2::regtype AS t, pg_typeof(25::int2::oid) AS o
+fields c:2205:4:-1,t:2206:4:-1,o:2206:4:-1
+row pg_class,boolean,oid
+SELECT 1
+> SELECT x::oid AS o FROM (VALUES (-1::int2)) v(x)
+fields o:26:4:-1
+row 4294967295
+SELECT 1

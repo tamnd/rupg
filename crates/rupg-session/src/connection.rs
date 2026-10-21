@@ -2916,6 +2916,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/reg_names.test")));
     }
 
+    /// The implicit cast of `int2` to `oid` and to the OID alias types, whose function `int4(smallint)` gives an `int4`. `connection/int2_oid_cast.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn int2_oid_cast() {
+        big_stack(|| script(include_str!("connection/int2_oid_cast.test")));
+    }
+
     /// The extension `plpgsql` that `initdb` makes: its rows in `pg_extension`, `pg_language`, `pg_proc`, `pg_depend` and `pg_description`, and the queries of `\dx` and `\dL` of psql. `connection/extensions.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn extensions() {

@@ -11,8 +11,8 @@ use std::sync::Arc;
 
 use rupg_analyze::{
     Aggref, Body, BoolOp, BoolTest, Case, Expr, ExprKind, FieldStore, FromFunction, FromItem, Func,
-    IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp, SetTree,
-    SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, TableSample, Target, WindowFunc,
+    FuncForm, IsJson, JsonCtor, JsonCtorKind, JsonFormatKind, Query, RowCompare, SetKind, SetOp,
+    SetTree, SortGroup, SqlValue, SubLink, SubLinkKind, Subscript, TableSample, Target, WindowFunc,
 };
 use rupg_catalog::FIRST_NORMAL_OID;
 use rupg_common::{Error, Result, SqlState};
@@ -2328,6 +2328,12 @@ impl<'a> Eval<'a> {
         let exprs = rupg_analyze::expand_arguments(f)?;
         let args = exprs.iter().map(|a| self.eval(a)).collect::<Result<Vec<_>>>()?;
         let types: Vec<u32> = exprs.iter().map(|a| a.ty).collect();
+        if matches!(f.form, FuncForm::ExplicitCast | FuncForm::ImplicitCast)
+            && let Some(ret) = cast_result(f.oid, expr.ty)
+        {
+            // A cast function can give a type that is binary-compatible with the target, as `int4(smallint)` does for the cast of `int2` to `oid`. The value then takes the target type.
+            return Ok(relabel(self.call(f.oid, &types, ret, f.variadic, &args)?, expr.ty));
+        }
         self.call(f.oid, &types, expr.ty, f.variadic, &args)
     }
 
@@ -2941,6 +2947,13 @@ pub fn input_failure(ty: u32, value: &Value, session: &dyn Session) -> Result<Op
         }
     }
     Ok(None)
+}
+
+/// The result type of the cast function `func` when it is not the base type of the target `ty`, such as `int4` for the cast of `int2` to `oid`.
+fn cast_result(func: u32, ty: u32) -> Option<u32> {
+    let ret = builtin::proc_by_oid(func)?.rettype;
+    let pseudo = builtin::type_by_oid(ret).is_none_or(|t| t.kind == b'p');
+    (ret != base_type(ty) && !pseudo).then_some(ret)
 }
 
 /// A value as a binary-compatible type holds it: an `int4` as an `oid` keeps its bits, and an `oid` as an `int4` too.
