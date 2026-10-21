@@ -657,11 +657,25 @@ impl Connection {
             self.xid.set(heap.begin(self.pid));
         }
         let mut view = View { xid: self.xid.get(), ..view.clone() };
-        let upsert = info.on_conflict.as_ref().filter(|conflict| !conflict.arbiters.is_empty());
+        let partitioned = self
+            .catalog()
+            .relation(info.table)
+            .is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned);
+        // The leaves of a partitioned table can have unique keys that the table does not have.
+        let upsert = info
+            .on_conflict
+            .as_ref()
+            .filter(|conflict| partitioned || !conflict.arbiters.is_empty());
         let mut fire = upsert::Upsert::default();
         let rows = if upsert.is_some() {
             // `INSERT ... ON CONFLICT` fires the triggers `BEFORE ... FOR EACH ROW` for each row in turn, and the triggers `UPDATE` of `DO UPDATE` with the triggers `INSERT`.
             let update = self.conflict_triggers(info)?;
+            if partitioned && (!triggers.is_empty() || !update.is_empty()) {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "triggers on a partitioned table are not supported yet",
+                ));
+            }
             fire = upsert::Upsert { insert: std::mem::take(&mut triggers), update };
             self.before_statement(&fire.insert, info)?;
             self.before_statement(&fire.update, info)?;
@@ -681,10 +695,6 @@ impl Connection {
         // The new and the old rows of `ON CONFLICT DO UPDATE`.
         let mut updated = (Vec::new(), Vec::new());
         let mut batches = Vec::new();
-        let partitioned = self
-            .catalog()
-            .relation(info.table)
-            .is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned);
         let (tag, count) = match (info.kind, upsert) {
             (WriteKind::Merge, _) => {
                 let Some(merge) = info.merge.as_ref() else {
@@ -700,7 +710,11 @@ impl Connection {
                 (CommandTag::Merge, done.count)
             }
             (WriteKind::Insert, Some(conflict)) => {
-                let done = self.upsert(plan, (info, conflict), params, &view, rows, &fire)?;
+                let done = if partitioned {
+                    self.upsert_routed(plan, (info, conflict), params, &view, rows)?
+                } else {
+                    self.upsert(plan, (info, conflict), params, &view, rows, &fire)?
+                };
                 if !fire.insert.is_empty() || !fire.update.is_empty() {
                     self.after_upsert(info, &fire, &done)?;
                 }
@@ -4887,6 +4901,12 @@ mod tests {
     #[test]
     fn partition_identity() {
         big_stack(|| script(include_str!("connection/partition_identity.test")));
+    }
+
+    /// `INSERT ... ON CONFLICT` into partitioned tables: each row goes to its partition, and the arbiters are the indexes of the partition whose partitioned index the clause infers. With no inference, a unique index of the partition alone is an arbiter too. `DO UPDATE` changes the row in the partition, and a new row for another partition is an error. `connection/partition_upsert.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_upsert() {
+        big_stack(|| script(include_str!("connection/partition_upsert.test")));
     }
 
     /// The rows of a table after `ADD COLUMN` and a change of the default of the new column in the same statement: the rows get the default of `ADD COLUMN`, and new rows get the new default, also for the partitions. `DROP DEFAULT`, `ALTER COLUMN ... TYPE` and `DROP COLUMN` run before `ADD COLUMN`, so they cannot find the new column. `connection/add_column_default.test` is the output of PostgreSQL 19 for the same script in a new database.

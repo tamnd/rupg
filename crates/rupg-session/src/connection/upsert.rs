@@ -3,11 +3,13 @@
 //! The query of the statement gives all the new rows before the first row goes in, so the checks of the constraints of the new rows come before the writes, and a function of the query does not see the rows that the statement wrote. The triggers `BEFORE ... FOR EACH ROW` fire for each row in turn, as `ExecInsert` fires them: the triggers `INSERT` before the row goes in, and the triggers `UPDATE` before `DO UPDATE` changes the row of the table.
 
 use rupg_analyze::{OnConflict, Write};
+use rupg_catalog::Catalog;
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_types::Value;
 
 use super::Connection;
+use super::route::{self, Routing};
 use super::trigger::Triggers;
 use crate::heap::{Changed, Speculative, View, tid_text};
 
@@ -108,23 +110,8 @@ impl Connection {
                         kept = self.key_conflict(info, view, changed)?.last().copied();
                     }
                     Speculative::Conflict { tid, values, own, command, visible } => {
-                        // `ExecCheckTupleVisible`: in `REPEATABLE READ` the row of the table must be in the snapshot.
-                        if view.serializable && !visible && !own {
-                            return Err(Error::new(
-                                SqlState::T_R_SERIALIZATION_FAILURE,
-                                "could not serialize access due to concurrent update",
-                            ));
-                        }
-                        if conflict.update.is_none() {
+                        if !to_update(view, conflict, (own, command, visible))? {
                             break;
-                        }
-                        // `heap_lock_tuple` gives `TM_Invisible` for a version of the command.
-                        if command {
-                            return Err(Error::new(
-                                SqlState::CARDINALITY_VIOLATION,
-                                "ON CONFLICT DO UPDATE command cannot affect row a second time",
-                            )
-                            .with_hint("Ensure that no rows proposed for insertion within the same command have duplicate constrained values."));
                         }
                         let target = Target { tid, old: values, excluded: &row };
                         if self.conflict_update(
@@ -142,6 +129,155 @@ impl Connection {
             }
         }
         Ok(done)
+    }
+
+    /// `ExecInsert` with `ExecFindPartition` for `INSERT ... ON CONFLICT` into a partitioned table. Each row goes to its leaf partition, and the leaf checks it. Then the speculative insertion runs in the leaf, with the indexes of the leaf whose partitioned index is an arbiter, as `ExecInitPartitionInfo` maps them. `DO UPDATE` changes the row in the leaf.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Connection::upsert`], the errors of the routing and of the constraints of the leaves, `0A000` for a new row of `DO UPDATE` that the leaf does not take, and `0A000` for a leaf with triggers or foreign keys.
+    pub(super) fn upsert_routed(
+        &self,
+        plan: &Plan,
+        (info, conflict): (&Write, &OnConflict),
+        params: &[Value],
+        view: &View,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<Upserted, Error> {
+        let catalog = self.catalog();
+        let heap = self.store.heap();
+        let mut routing = Routing::default();
+        // The places of the arbiters in the unique keys of each leaf, at the place of the leaf.
+        let mut arbiters: Vec<Vec<usize>> = Vec::new();
+        let mut done = Upserted::default();
+        for row in rows {
+            let (at, checked) = routing.route(info.table, row.clone(), &catalog, &self.reader())?;
+            if at == arbiters.len() {
+                let oid = routing.oid(at);
+                if route::has_foreign(&catalog, oid) {
+                    return Err(route::not_yet(
+                        "ON CONFLICT on a partitioned table with foreign keys",
+                    ));
+                }
+                arbiters.push(leaf_arbiters(&catalog, (info, conflict), routing.write(at)?)?);
+            }
+            let oid = routing.oid(at);
+            let mut kept = None;
+            loop {
+                let leaf = routing.write(at)?;
+                let result = heap.speculative(
+                    oid,
+                    view,
+                    checked.clone(),
+                    &leaf.unique,
+                    &arbiters[at],
+                    kept,
+                )?;
+                match result {
+                    Speculative::Inserted => {
+                        done.count += 1;
+                        if info.returning.is_some() {
+                            let mut written = routing.to_root(at, &checked, info.width);
+                            written.push(Value::Oid(oid));
+                            written.resize(info.width + 1 + conflict.carried, Value::Null);
+                            done.written.push(written);
+                        }
+                        break;
+                    }
+                    Speculative::Wait { holder, tid } => {
+                        let context = format!(
+                            "while checking exclusion constraint on tuple {} in relation \"{}\"",
+                            tid_text(tid),
+                            routing.name(at)
+                        );
+                        self.reader().wait_xact(view.xid, holder, &context)?;
+                    }
+                    Speculative::Key(changed) => {
+                        kept = self.key_conflict(leaf, view, changed)?.last().copied();
+                    }
+                    Speculative::Conflict { tid, values, own, command, visible } => {
+                        if !to_update(view, conflict, (own, command, visible))? {
+                            break;
+                        }
+                        let target = Target { tid, old: values, excluded: &row };
+                        if self.update_routed(
+                            plan,
+                            (info, &mut routing, at),
+                            params,
+                            view,
+                            target,
+                            &mut done,
+                        )? {
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+        Ok(done)
+    }
+
+    /// `ExecOnConflictUpdate` for one row of the leaf partition at the place `at`. The query of `DO UPDATE` reads the row with the columns of the partitioned table. A new row that the leaf does not take is an error, as `ExecCrossPartitionUpdate` gives it for `ON CONFLICT`. True when the row changed or when the condition of `WHERE` skipped it, and false when another transaction changed the row first.
+    fn update_routed(
+        &self,
+        plan: &Plan,
+        (info, routing, at): (&Write, &mut Routing, usize),
+        params: &[Value],
+        view: &View,
+        target: Target<'_>,
+        done: &mut Upserted,
+    ) -> Result<bool, Error> {
+        let Target { tid, old, excluded } = target;
+        let mut existing = routing.to_root(at, &old, info.width);
+        existing.push(Value::Int8(tid.cast_signed()));
+        let (checked, carried) = {
+            let reader = self.reader().with_view(view.clone());
+            let Some(mut new) =
+                plan.conflict_update(existing, excluded.to_vec(), params, &reader)?
+            else {
+                return Ok(true);
+            };
+            let carried = new.split_off(info.width.min(new.len()));
+            let Some(checked) = routing.check(at, &new, &reader)? else {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "invalid ON UPDATE specification",
+                )
+                .with_detail(
+                    "The result tuple would appear in a different partition than the original tuple.",
+                ));
+            };
+            (checked, carried)
+        };
+        let leaf = routing.write(at)?;
+        let oid = routing.oid(at);
+        let heap = self.store.heap();
+        let (mut kept, mut applied) = (Vec::new(), Vec::new());
+        loop {
+            let change = vec![(tid, Some(checked.clone()))];
+            match heap.change(oid, view, change, &leaf.unique, &kept, &mut applied)? {
+                Changed::Done(0) | Changed::Again => return Ok(false),
+                Changed::Done(_) => break,
+                Changed::Wait { holder, tid } => {
+                    let context = format!(
+                        "while locking tuple {} in relation \"{}\"",
+                        tid_text(tid),
+                        routing.name(at)
+                    );
+                    self.reader().wait_xact(view.xid, holder, &context)?;
+                    return Ok(false);
+                }
+                changed => kept = self.key_conflict(leaf, view, changed)?,
+            }
+        }
+        done.count += 1;
+        if info.returning.is_some() {
+            let mut written = routing.to_root(at, &checked, info.width);
+            written.push(Value::Oid(oid));
+            written.extend(carried);
+            done.written.push(written);
+        }
+        Ok(true)
     }
 
     /// `ExecOnConflictUpdate` for one row of the table. True when the row changed or when the condition of `WHERE` skipped it, and false when another transaction changed the row first, so the row of the statement must try again.
@@ -211,6 +347,77 @@ impl Connection {
         }
         Ok(true)
     }
+}
+
+/// `ExecCheckTupleVisible` and the lock of `ExecOnConflictUpdate` for the row of the table that a row of the statement meets: true for `DO UPDATE`, and false for `DO NOTHING`, which skips the row. The flags tell if the version is of the transaction, if it is of the command, and if the snapshot sees it.
+///
+/// # Errors
+///
+/// `40001` in `REPEATABLE READ` for a row that the snapshot does not see, and `21000` for `DO UPDATE` of a row that the statement wrote.
+fn to_update(
+    view: &View,
+    conflict: &OnConflict,
+    (own, command, visible): (bool, bool, bool),
+) -> Result<bool, Error> {
+    // `ExecCheckTupleVisible`: in `REPEATABLE READ` the row of the table must be in the snapshot.
+    if view.serializable && !visible && !own {
+        return Err(Error::new(
+            SqlState::T_R_SERIALIZATION_FAILURE,
+            "could not serialize access due to concurrent update",
+        ));
+    }
+    if conflict.update.is_none() {
+        return Ok(false);
+    }
+    // `heap_lock_tuple` gives `TM_Invisible` for a version of the command.
+    if command {
+        return Err(Error::new(
+            SqlState::CARDINALITY_VIOLATION,
+            "ON CONFLICT DO UPDATE command cannot affect row a second time",
+        )
+        .with_hint(
+            "Ensure that no rows proposed for insertion within the same command have duplicate constrained values.",
+        ));
+    }
+    Ok(true)
+}
+
+/// `ExecInitPartitionInfo`: the places in the unique keys of the leaf partition `leaf` of its arbiter indexes. An index of the leaf is an arbiter when an arbiter index of the partitioned table is above it. With no inference, each unique index of the leaf is an arbiter.
+fn leaf_arbiters(
+    catalog: &Catalog,
+    (info, conflict): (&Write, &OnConflict),
+    leaf: &Write,
+) -> Result<Vec<usize>, Error> {
+    if conflict.all {
+        return Ok((0..leaf.unique.len()).collect());
+    }
+    let roots: Vec<u32> =
+        conflict.arbiters.iter().filter_map(|&at| info.unique.get(at)).map(|u| u.oid).collect();
+    let above = |mut index: u32| {
+        while let Some(parent) = catalog
+            .relation(index)
+            .and_then(|r| r.index.as_ref())
+            .map(|i| i.parent)
+            .filter(|&p| p != 0)
+        {
+            if roots.contains(&parent) {
+                return true;
+            }
+            index = parent;
+        }
+        false
+    };
+    let places: Vec<usize> = leaf
+        .unique
+        .iter()
+        .enumerate()
+        .filter(|(_, key)| above(key.oid))
+        .map(|(at, _)| at)
+        .collect();
+    if places.len() != roots.len() {
+        return Err(Error::internal("invalid arbiter index list"));
+    }
+    Ok(places)
 }
 
 /// The row of the table that a row of the statement meets: the ID of its version, its values, and the row of `EXCLUDED`.

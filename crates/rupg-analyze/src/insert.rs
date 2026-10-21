@@ -80,6 +80,8 @@ pub struct Write {
 pub struct OnConflict {
     /// The places in [`Write::unique`] of the arbiter indexes, which `infer_arbiter_indexes` finds. A conflict in another unique index is an error.
     pub arbiters: Vec<usize>,
+    /// True for a clause with no inference. Each unique index is then an arbiter, also an index of a partition that the partitioned table does not have.
+    pub all: bool,
     /// The query of `DO UPDATE`, or `None` for `DO NOTHING`. It reads two relations: the row that the table has, with the ID of its version at the end, and `EXCLUDED`, the row that the statement proposed. It gives the new row, then the conditions of the check constraints, then the values that `RETURNING` carries, or no row when the condition of `WHERE` is not true.
     pub update: Option<Box<Query>>,
     /// The number of values that `RETURNING` carries: the columns of the old row. A row that the statement inserts has nulls for them.
@@ -386,7 +388,8 @@ impl Analyzer<'_> {
                 .collect();
             conflict.carried = carried.len();
             query.targets.extend(carried_targets(carried));
-            let checks = self.checks(table)?;
+            // The leaf partition checks the new row of a partitioned table.
+            let checks = if self.is_partitioned(table) { Vec::new() } else { self.checks(table)? };
             if !checks.is_empty() {
                 query = Box::new(with_checks(name, columns, *query, checks, &tail));
             }
@@ -394,6 +397,7 @@ impl Analyzer<'_> {
         }
         // The planner matches the inference with the indexes after the analysis.
         if let Some(conflict) = &mut on_conflict {
+            conflict.all = matches!(inference, Inference::All);
             conflict.arbiters = arbiters(inference, unique)?;
         }
         Ok((on_conflict, returning))
@@ -414,8 +418,13 @@ impl Analyzer<'_> {
             _ => return Err(not_yet("ON CONFLICT DO SELECT")),
         };
         let inference = self.inference(clause, update, table, name, columns)?;
-        let mut on_conflict =
-            OnConflict { arbiters: Vec::new(), update: None, carried: 0, foreign: Vec::new() };
+        let mut on_conflict = OnConflict {
+            arbiters: Vec::new(),
+            all: false,
+            update: None,
+            carried: 0,
+            foreign: Vec::new(),
+        };
         if !update {
             return Ok((on_conflict, inference));
         }
@@ -721,14 +730,14 @@ impl Analyzer<'_> {
         Ok(list)
     }
 
-    /// The unique indexes of a table in the order of their OIDs. A unique index with an expression, a predicate or a deferrable constraint is not supported yet. The index of a partitioned table has no storage: the indexes of the partitions check the rows.
+    /// The unique indexes of a table in the order of their OIDs. A unique index with an expression, a predicate or a deferrable constraint is not supported yet. The index of a partitioned table has no storage: the indexes of the partitions check the rows, and it is an arbiter of `ON CONFLICT`.
     pub(crate) fn unique_keys(&self, table: u32, columns: &[Column]) -> Result<Vec<Unique>> {
         let Some(catalog) = self.env.catalog() else {
             return Ok(Vec::new());
         };
         let mut indexes: Vec<_> = catalog
             .relations()
-            .filter(|rel| rel.kind == RelKind::Index)
+            .filter(|rel| matches!(rel.kind, RelKind::Index | RelKind::PartitionedIndex))
             .filter_map(|rel| {
                 rel.index
                     .as_ref()
