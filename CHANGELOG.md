@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.63 (2026-10-22)
+
 ### Added
 
 - `EXPLAIN` of a partitioned table and of a table with children of `INHERITS`. The plan has an `Append` of a scan for each leaf partition that the conditions of `WHERE` do not prune, or for the table and each of its children, with the names of PostgreSQL such as `r_1`. One leaf gives one scan with no `Append`, and no leaf gives a `Result` with `One-Time Filter: false`. `UPDATE` and `DELETE` show each target table. The estimates are the ones of PostgreSQL, also for a table with children, which has no pages. Two conditions of `=` on a partition key with no common value now prune all the partitions (#528).
