@@ -241,7 +241,16 @@ impl Connection {
             new,
             old,
         };
-        self.pl_trigger(&call, transition)
+        // `ExecCallTriggerFunc`: the depth goes up for the call and down after it, also after an error.
+        self.trigger_depth.set(self.trigger_depth.get() + 1);
+        let result = self.pl_trigger(&call, transition);
+        self.trigger_depth.set(self.trigger_depth.get() - 1);
+        result
+    }
+
+    /// `pg_trigger_depth`: the number of the trigger functions that run, one in the other.
+    pub(crate) fn trigger_depth(&self) -> i32 {
+        self.trigger_depth.get()
     }
 
     /// `ExecBSInsertTriggers` and the other calls of the triggers `BEFORE ... FOR EACH STATEMENT` of a write.

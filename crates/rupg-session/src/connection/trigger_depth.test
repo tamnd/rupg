@@ -1,0 +1,153 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> SELECT pg_trigger_depth();
+fields pg_trigger_depth:23:4:-1
+row 0
+SELECT 1
+> CREATE TABLE td_a (i int);
+CREATE TABLE
+> CREATE TABLE td_b (i int);
+CREATE TABLE
+> CREATE FUNCTION td_a_f() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % %: depth = %', tg_name, tg_when, tg_level, pg_trigger_depth();
+>>   IF tg_level = 'ROW' AND tg_when = 'BEFORE' THEN
+>>     INSERT INTO td_b VALUES (new.i);
+>>   END IF;
+>>   RETURN new;
+>> END $$;
+CREATE FUNCTION
+> CREATE FUNCTION td_b_f() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % %: depth = %', tg_name, tg_when, tg_level, pg_trigger_depth();
+>>   IF new.i < 0 THEN
+>>     RAISE EXCEPTION 'negative %', new.i;
+>>   END IF;
+>>   RETURN new;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER td_a_bs BEFORE INSERT ON td_a FOR EACH STATEMENT EXECUTE FUNCTION td_a_f();
+CREATE TRIGGER
+> CREATE TRIGGER td_a_br BEFORE INSERT ON td_a FOR EACH ROW EXECUTE FUNCTION td_a_f();
+CREATE TRIGGER
+> CREATE TRIGGER td_a_ar AFTER INSERT ON td_a FOR EACH ROW EXECUTE FUNCTION td_a_f();
+CREATE TRIGGER
+> CREATE TRIGGER td_a_as AFTER INSERT ON td_a FOR EACH STATEMENT EXECUTE FUNCTION td_a_f();
+CREATE TRIGGER
+> CREATE TRIGGER td_b_br BEFORE INSERT ON td_b FOR EACH ROW EXECUTE FUNCTION td_b_f();
+CREATE TRIGGER
+> CREATE TRIGGER td_b_ar AFTER INSERT ON td_b FOR EACH ROW EXECUTE FUNCTION td_b_f();
+CREATE TRIGGER
+> INSERT INTO td_a VALUES (1), (2);
+NOTICE 00000 td_a_bs BEFORE STATEMENT: depth = 1 (PL/pgSQL function td_a_f() line 3 at RAISE)
+NOTICE 00000 td_a_br BEFORE ROW: depth = 1 (PL/pgSQL function td_a_f() line 3 at RAISE)
+NOTICE 00000 td_b_br BEFORE ROW: depth = 2 (PL/pgSQL function td_b_f() line 3 at RAISE
+SQL statement "INSERT INTO td_b VALUES (new.i)"
+PL/pgSQL function td_a_f() line 5 at SQL statement)
+NOTICE 00000 td_b_ar AFTER ROW: depth = 2 (PL/pgSQL function td_b_f() line 3 at RAISE
+SQL statement "INSERT INTO td_b VALUES (new.i)"
+PL/pgSQL function td_a_f() line 5 at SQL statement)
+NOTICE 00000 td_a_br BEFORE ROW: depth = 1 (PL/pgSQL function td_a_f() line 3 at RAISE)
+NOTICE 00000 td_b_br BEFORE ROW: depth = 2 (PL/pgSQL function td_b_f() line 3 at RAISE
+SQL statement "INSERT INTO td_b VALUES (new.i)"
+PL/pgSQL function td_a_f() line 5 at SQL statement)
+NOTICE 00000 td_b_ar AFTER ROW: depth = 2 (PL/pgSQL function td_b_f() line 3 at RAISE
+SQL statement "INSERT INTO td_b VALUES (new.i)"
+PL/pgSQL function td_a_f() line 5 at SQL statement)
+NOTICE 00000 td_a_ar AFTER ROW: depth = 1 (PL/pgSQL function td_a_f() line 3 at RAISE)
+NOTICE 00000 td_a_ar AFTER ROW: depth = 1 (PL/pgSQL function td_a_f() line 3 at RAISE)
+NOTICE 00000 td_a_as AFTER STATEMENT: depth = 1 (PL/pgSQL function td_a_f() line 3 at RAISE)
+INSERT 0 2
+> SELECT pg_trigger_depth();
+fields pg_trigger_depth:23:4:-1
+row 0
+SELECT 1
+> INSERT INTO td_a VALUES (-1);
+NOTICE 00000 td_a_bs BEFORE STATEMENT: depth = 1 (PL/pgSQL function td_a_f() line 3 at RAISE)
+NOTICE 00000 td_a_br BEFORE ROW: depth = 1 (PL/pgSQL function td_a_f() line 3 at RAISE)
+NOTICE 00000 td_b_br BEFORE ROW: depth = 2 (PL/pgSQL function td_b_f() line 3 at RAISE
+SQL statement "INSERT INTO td_b VALUES (new.i)"
+PL/pgSQL function td_a_f() line 5 at SQL statement)
+ERROR P0001 negative -1 (PL/pgSQL function td_b_f() line 5 at RAISE
+SQL statement "INSERT INTO td_b VALUES (new.i)"
+PL/pgSQL function td_a_f() line 5 at SQL statement)
+> SELECT pg_trigger_depth();
+fields pg_trigger_depth:23:4:-1
+row 0
+SELECT 1
+> CREATE FUNCTION td_catch() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   BEGIN
+>>     INSERT INTO td_b VALUES (-5);
+>>   EXCEPTION WHEN raise_exception THEN
+>>     RAISE NOTICE 'caught: depth = %', pg_trigger_depth();
+>>   END;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TABLE td_c (i int);
+CREATE TABLE
+> CREATE TRIGGER td_c_ar AFTER INSERT ON td_c FOR EACH ROW EXECUTE FUNCTION td_catch();
+CREATE TRIGGER
+> INSERT INTO td_c VALUES (1);
+NOTICE 00000 td_b_br BEFORE ROW: depth = 2 (PL/pgSQL function td_b_f() line 3 at RAISE
+SQL statement "INSERT INTO td_b VALUES (-5)"
+PL/pgSQL function td_catch() line 4 at SQL statement)
+NOTICE 00000 caught: depth = 1 (PL/pgSQL function td_catch() line 6 at RAISE)
+INSERT 0 1
+> SELECT pg_trigger_depth();
+fields pg_trigger_depth:23:4:-1
+row 0
+SELECT 1
+> CREATE TABLE td_r (i int);
+CREATE TABLE
+> CREATE FUNCTION td_rec() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE 'td_rec %: depth = %', new.i, pg_trigger_depth();
+>>   IF pg_trigger_depth() < 4 THEN
+>>     INSERT INTO td_r VALUES (new.i + 1);
+>>   END IF;
+>>   RETURN new;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER td_r_br BEFORE INSERT ON td_r FOR EACH ROW EXECUTE FUNCTION td_rec();
+CREATE TRIGGER
+> INSERT INTO td_r VALUES (1);
+NOTICE 00000 td_rec 1: depth = 1 (PL/pgSQL function td_rec() line 3 at RAISE)
+NOTICE 00000 td_rec 2: depth = 2 (PL/pgSQL function td_rec() line 3 at RAISE
+SQL statement "INSERT INTO td_r VALUES (new.i + 1)"
+PL/pgSQL function td_rec() line 5 at SQL statement)
+NOTICE 00000 td_rec 3: depth = 3 (PL/pgSQL function td_rec() line 3 at RAISE
+SQL statement "INSERT INTO td_r VALUES (new.i + 1)"
+PL/pgSQL function td_rec() line 5 at SQL statement
+SQL statement "INSERT INTO td_r VALUES (new.i + 1)"
+PL/pgSQL function td_rec() line 5 at SQL statement)
+NOTICE 00000 td_rec 4: depth = 4 (PL/pgSQL function td_rec() line 3 at RAISE
+SQL statement "INSERT INTO td_r VALUES (new.i + 1)"
+PL/pgSQL function td_rec() line 5 at SQL statement
+SQL statement "INSERT INTO td_r VALUES (new.i + 1)"
+PL/pgSQL function td_rec() line 5 at SQL statement
+SQL statement "INSERT INTO td_r VALUES (new.i + 1)"
+PL/pgSQL function td_rec() line 5 at SQL statement)
+INSERT 0 1
+> SELECT * FROM td_r ORDER BY i;
+fields i@td_r.1:23:4:-1
+row 1
+row 2
+row 3
+row 4
+SELECT 4
+> CREATE FUNCTION td_plain() RETURNS int LANGUAGE plpgsql AS $$ BEGIN RETURN pg_trigger_depth(); END $$;
+CREATE FUNCTION
+> SELECT td_plain();
+fields td_plain:23:4:-1
+row 0
+SELECT 1
+> UPDATE td_r SET i = i WHERE pg_trigger_depth() = 0 RETURNING i;
+fields i@td_r.1:23:4:-1
+row 4
+row 3
+row 2
+row 1
+UPDATE 4

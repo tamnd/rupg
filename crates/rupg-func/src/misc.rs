@@ -80,6 +80,11 @@ fn pg_backend_pid(call: &Call<'_>, _: &[Value]) -> Result<Value> {
     Ok(Value::Int4(call.session.backend_pid()))
 }
 
+/// `pg_trigger_depth`: the number of the trigger functions that run, one in the other, in the session.
+fn pg_trigger_depth(call: &Call<'_>, _: &[Value]) -> Result<Value> {
+    Ok(Value::Int4(call.session.trigger_depth()))
+}
+
 /// The longest wait of one call of [`crate::Session::sleep`], 10 minutes, as in `pg_sleep`.
 const LONGEST_WAIT_US: i64 = 600_000_000;
 
@@ -417,6 +422,7 @@ pub(crate) fn by_src(src: &str) -> Option<Kernel> {
         "tid_block" => tid_block,
         "tid_offset" => tid_offset,
         "pg_backend_pid" => pg_backend_pid,
+        "pg_trigger_depth" => pg_trigger_depth,
         "pg_sleep" => pg_sleep,
         "pg_client_encoding" => pg_client_encoding,
         "getdatabaseencoding" => getdatabaseencoding,

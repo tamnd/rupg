@@ -421,6 +421,8 @@ pub struct Connection {
     trigger_warnings: RefCell<Vec<Error>>,
     /// The transition tables of the trigger whose function runs, which the readers of its queries get.
     transition: RefCell<Option<Transition>>,
+    /// `MyTriggerDepth`: the number of the trigger functions that run, one in the other.
+    trigger_depth: Cell<i32>,
 }
 
 /// The changes of the rows of an `UPDATE` or a `DELETE`: the ID of the version at the end of each row, and the new row of an `UPDATE`.
@@ -492,6 +494,7 @@ impl Connection {
             events: RefCell::new(Vec::new()),
             trigger_warnings: RefCell::new(Vec::new()),
             transition: RefCell::new(None),
+            trigger_depth: Cell::new(0),
         };
         connection.session.set_utf8(connection.utf8());
         connection
@@ -4753,6 +4756,12 @@ mod tests {
     #[test]
     fn copy_from_triggers() {
         big_stack(|| script(include_str!("connection/copy_from_triggers.test")));
+    }
+
+    /// `pg_trigger_depth`: 0 outside of a trigger and in a plain function, the depth in the triggers `BEFORE` and `AFTER`, `FOR EACH ROW` and `FOR EACH STATEMENT`, in the triggers of a write in a trigger, in a trigger that calls itself, and after an error in a trigger and an error that a trigger catches. `connection/trigger_depth.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn trigger_depth() {
+        big_stack(|| script(include_str!("connection/trigger_depth.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
