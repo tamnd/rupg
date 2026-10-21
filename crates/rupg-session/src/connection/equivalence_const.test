@@ -1,0 +1,272 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int, y int);
+CREATE TABLE
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int);
+CREATE TABLE
+> CREATE TABLE t (s text, u text);
+CREATE TABLE
+> CREATE TABLE r (k int, v text) PARTITION BY RANGE (k);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (MINVALUE) TO (10);
+CREATE TABLE
+> CREATE TABLE r2 PARTITION OF r FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TABLE rd PARTITION OF r DEFAULT;
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM a JOIN b ON a.x = b.x WHERE a.x = 5;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on a
+row         Filter: (x = 5)
+row   ->  Materialize
+row         ->  Seq Scan on b
+row               Filter: (x = 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b WHERE a.x = b.x AND b.x = 5;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on a
+row         Filter: (x = 5)
+row   ->  Materialize
+row         ->  Seq Scan on b
+row               Filter: (x = 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, c WHERE a.x = b.x AND b.x = c.x AND c.x = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Nested Loop
+row         ->  Seq Scan on a
+row               Filter: (x = 1)
+row         ->  Materialize
+row               ->  Seq Scan on b
+row                     Filter: (x = 1)
+row   ->  Materialize
+row         ->  Seq Scan on c
+row               Filter: (x = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a WHERE x = y AND y = 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a
+row   Filter: ((x = 3) AND (y = 3))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a WHERE x = 1 AND x = 2;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on a
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a WHERE x = 1 AND x = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a
+row   Filter: (x = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b WHERE a.x = b.x AND a.x = 1 AND b.x = 2;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Join on a, b
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a LEFT JOIN b ON a.x = b.x WHERE a.x = 5;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   ->  Seq Scan on a
+row         Filter: (x = 5)
+row   ->  Materialize
+row         ->  Seq Scan on b
+row               Filter: (x = 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a JOIN b ON a.x = b.x WHERE a.x = 5 AND a.y > 2 AND b.y < 3;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on a
+row         Filter: ((y > 2) AND (x = 5))
+row   ->  Materialize
+row         ->  Seq Scan on b
+row               Filter: ((y < 3) AND (x = 5))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a JOIN b ON a.x = b.y WHERE a.x = 5::bigint;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on a
+row         Filter: (x = '5'::bigint)
+row   ->  Materialize
+row         ->  Seq Scan on b
+row               Filter: (y = '5'::bigint)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a JOIN b ON a.x = b.x AND a.x = 3;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on a
+row         Filter: (x = 3)
+row   ->  Materialize
+row         ->  Seq Scan on b
+row               Filter: (x = 3)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a JOIN b ON a.x = b.x AND a.y = b.y WHERE a.x = 3;
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (a.y = b.y)
+row   ->  Seq Scan on a
+row         Filter: (x = 3)
+row   ->  Hash
+row         ->  Seq Scan on b
+row               Filter: (x = 3)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b WHERE a.x = b.x AND a.x = random()::int;
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (b.x = a.x)
+row   ->  Seq Scan on b
+row   ->  Hash
+row         ->  Seq Scan on a
+row               Filter: (x = (random())::integer)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT count(*) FROM a, b WHERE a.x = b.x AND a.x = 1;
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Nested Loop
+row         ->  Seq Scan on a
+row               Filter: (x = 1)
+row         ->  Materialize
+row               ->  Seq Scan on b
+row                     Filter: (x = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM t t1, t t2 WHERE t1.s = t2.u AND t2.u = 'q';
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on t t1
+row         Filter: (s = 'q'::text)
+row   ->  Materialize
+row         ->  Seq Scan on t t2
+row               Filter: (u = 'q'::text)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a WHERE x + 1 = y AND y = 4;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a
+row   Filter: ((y = 4) AND ((x + 1) = 4))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b WHERE a.x = b.x AND a.y = b.y AND a.x = 1 AND b.y = 2;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on a
+row         Filter: ((x = 1) AND (y = 2))
+row   ->  Seq Scan on b
+row         Filter: ((x = 1) AND (y = 2))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a LEFT JOIN (b JOIN c ON b.x = c.x AND b.x = 4) ON a.y = b.y;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join
+row   Hash Cond: (a.y = b.y)
+row   ->  Seq Scan on a
+row   ->  Hash
+row         ->  Nested Loop
+row               ->  Seq Scan on c
+row                     Filter: (x = 4)
+row               ->  Materialize
+row                     ->  Seq Scan on b
+row                           Filter: (x = 4)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r JOIN a ON a.x = r.k WHERE a.x = 15;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on a
+row         Filter: (x = 15)
+row   ->  Materialize
+row         ->  Seq Scan on r2 r
+row               Filter: (k = 15)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r JOIN a ON a.x = r.k WHERE r.k = 5;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on a
+row         Filter: (x = 5)
+row   ->  Materialize
+row         ->  Seq Scan on r1 r
+row               Filter: (k = 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a WHERE x = 1 AND y = 2;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a
+row   Filter: ((x = 1) AND (y = 2))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a WHERE y = 2 AND x = 1 AND x < y;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a
+row   Filter: ((x < y) AND (y = 2) AND (x = 1))
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.x WHERE a.x = 5;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..78.04 rows=121 width=16)
+row   ->  Seq Scan on a  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (x = 5)
+row   ->  Materialize  (cost=0.00..38.30 rows=11 width=8)
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c WHERE a.x = b.x AND b.x = c.x AND c.x = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..139.61 rows=1573 width=20)
+row   ->  Nested Loop  (cost=0.00..78.04 rows=121 width=16)
+row         ->  Seq Scan on a  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (x = 1)
+row         ->  Materialize  (cost=0.00..38.30 rows=11 width=8)
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row                     Filter: (x = 1)
+row   ->  Materialize  (cost=0.00..41.94 rows=13 width=4)
+row         ->  Seq Scan on c  (cost=0.00..41.88 rows=13 width=4)
+row               Filter: (x = 1)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT a.y, b.y FROM a JOIN b ON a.x = b.x WHERE b.x = 9;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Output: a.y, b.y
+row   ->  Seq Scan on public.a
+row         Output: a.x, a.y
+row         Filter: (a.x = 9)
+row   ->  Materialize
+row         Output: b.y, b.x
+row         ->  Seq Scan on public.b
+row               Output: b.y, b.x
+row               Filter: (b.x = 9)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT a.y, b.y FROM a LEFT JOIN b ON a.x = b.x WHERE a.x = 9;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join
+row   Output: a.y, b.y
+row   ->  Seq Scan on public.a
+row         Output: a.x, a.y
+row         Filter: (a.x = 9)
+row   ->  Materialize
+row         Output: b.y, b.x
+row         ->  Seq Scan on public.b
+row               Output: b.y, b.x
+row               Filter: (b.x = 9)
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE a SET y = 1 FROM b WHERE a.x = b.x AND b.x = 3;
+fields QUERY PLAN:25:-1:-1
+row Update on a
+row   ->  Nested Loop
+row         ->  Seq Scan on a
+row               Filter: (x = 3)
+row         ->  Materialize
+row               ->  Seq Scan on b
+row                     Filter: (x = 3)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a WHERE x = 5 AND 5 = y;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a
+row   Filter: ((x = 5) AND (y = 5))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a FULL JOIN b ON a.x = b.x AND a.x = 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Full Join
+row   Hash Cond: (a.x = b.x)
+row   Join Filter: (a.x = 1)
+row   ->  Seq Scan on a
+row   ->  Hash
+row         ->  Seq Scan on b
+EXPLAIN

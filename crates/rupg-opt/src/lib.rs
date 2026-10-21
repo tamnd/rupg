@@ -15,8 +15,8 @@ use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
 
 /// The tables of the inheritance trees of the relations of the queries, which the planner has no catalog for.
 pub trait Members: std::fmt::Debug {
-    /// The tables that a scan of the relation `relation` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them, or `None` for a relation that is one table.
-    fn members(&self, query: &Query, relation: usize) -> Option<Vec<Member>>;
+    /// The tables that a scan of the relation `relation` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them with the conditions `conds` of the scan, or `None` for a relation that is one table.
+    fn members(&self, query: &Query, relation: usize, conds: &[&Expr]) -> Option<Vec<Member>>;
 }
 
 /// A table of an inheritance tree that a scan reads.
@@ -88,6 +88,8 @@ pub(crate) struct Level<'q> {
     pub(crate) init: Vec<SubPlan<'q>>,
     /// True when the query gives no targets, as `simplify_EXISTS_query` makes the subquery of `EXISTS`.
     pub(crate) no_targets: bool,
+    /// The conditions of joins that the equivalence classes took the place of. The scans below a join still give their columns, as `attr_needed` keeps them.
+    pub(crate) joined: Vec<&'q Expr>,
 }
 
 impl<'q> Level<'q> {
@@ -138,6 +140,7 @@ impl<'q> Builder<'q> {
             display_query: query,
             init: Vec::new(),
             no_targets,
+            joined: Vec::new(),
         };
         let depth = self.ctes.len();
         if !std::ptr::eq(outer, query) {
@@ -147,10 +150,11 @@ impl<'q> Builder<'q> {
         for expr in preprocess_order(query) {
             self.sublinks_in(expr, &mut level);
         }
-        let (mut node, order) = match &query.set_op {
-            Some(op) => (self.set_op(&mut level, op), Vec::new()),
+        let (mut node, order, joined) = match &query.set_op {
+            Some(op) => (self.set_op(&mut level, op), Vec::new(), Vec::new()),
             None => self.from(&level),
         };
+        level.joined = joined;
         node = self.upper(&level, node, order);
         if let Some(write) = write {
             node = self.modify(&level, write, node);

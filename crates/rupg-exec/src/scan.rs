@@ -332,12 +332,17 @@ fn relations_in(item: &FromItem, out: &mut Vec<usize>) {
     }
 }
 
-/// The tables that a scan of the relation `index` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them: the leaf partitions of a partitioned table that the conditions of `WHERE` do not prune, or a table with children of `INHERITS` and its children. `None` for a relation that is one table.
+/// The tables that a scan of the relation `index` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them: the leaf partitions of a partitioned table that the conditions `conds` of the scan do not prune, or a table with children of `INHERITS` and its children. `None` for a relation that is one table.
 ///
 /// # Errors
 ///
 /// The errors of the comparisons of the bounds of the partitions.
-pub fn members(query: &Query, index: usize, session: &dyn Session) -> Result<Option<Vec<u32>>> {
+pub fn members(
+    query: &Query,
+    index: usize,
+    conds: &[&Expr],
+    session: &dyn Session,
+) -> Result<Option<Vec<u32>>> {
     let Some(from) = query.relations.get(index) else { return Ok(None) };
     if from.subquery.is_some()
         || from.function.is_some()
@@ -354,17 +359,7 @@ pub fn members(query: &Query, index: usize, session: &dyn Session) -> Result<Opt
         if from.only {
             return Ok(Some(Vec::new()));
         }
-        let mut conds = Vec::new();
-        if let Some(filter) = &query.filter {
-            conjuncts(filter, &mut conds);
-        }
-        let mut nulls = Vec::new();
-        for item in &query.from {
-            nullable(item, &mut nulls);
-        }
-        let nullable = nulls.contains(&index);
-        return crate::partition::pruned_leaves(from.oid, index, &conds, nullable, session)
-            .map(Some);
+        return crate::partition::pruned_leaves(from.oid, index, conds, false, session).map(Some);
     }
     if from.only || relation.kind != rupg_catalog::RelKind::Table {
         return Ok(None);

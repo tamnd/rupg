@@ -2,7 +2,7 @@
 
 use std::cell::RefCell;
 
-use rupg_analyze::{Params, Query};
+use rupg_analyze::{Expr, Params, Query};
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
 use rupg_opt::Member;
@@ -25,8 +25,8 @@ struct Members<'r, 'a> {
 }
 
 impl rupg_opt::Members for Members<'_, '_> {
-    fn members(&self, query: &Query, relation: usize) -> Option<Vec<Member>> {
-        let oids = match rupg_exec::members(query, relation, self.reader) {
+    fn members(&self, query: &Query, relation: usize, conds: &[&Expr]) -> Option<Vec<Member>> {
+        let oids = match rupg_exec::members(query, relation, conds, self.reader) {
             Ok(oids) => oids?,
             Err(error) => {
                 self.error.borrow_mut().get_or_insert(error);
