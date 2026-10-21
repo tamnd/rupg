@@ -8,6 +8,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - The assignment to an element or a slice of an array in PL/pgSQL, as in `x[2][1] := 30` and `x[2:3] := ARRAY[5, 6]`, for arrays of more than one dimension. An assignment to an element or a slice out of the bounds of a one-dimensional array makes the array larger, and the errors of the subscripts and of the bounds are the errors of PostgreSQL.
 
+### Changed
+
+- The lowest allowed versions of `libc`, `ring`, `rustls` and `loom` are now the versions in `Cargo.lock`. The old bounds let Cargo pick `libc` 0.2.0, which `ring` does not accept (#455).
+
+### Fixed
+
+- A new range type no longer loses memory. The rows of the type were copied from four boxes that were not freed (#455).
+
 ## 0.1.55 (2026-10-21)
 
 ### Added
@@ -36,12 +44,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Changed
 
 - The facade takes a checkpoint when all the log rings together hold more than `Options::max_wal_size` bytes, default 1 GiB, as `max_wal_size` does in PostgreSQL. `Options::checkpoint_log` is now the limit of one ring (#454).
-- The lowest allowed versions of `libc`, `ring`, `rustls` and `loom` are now the versions in `Cargo.lock`. The old bounds let Cargo pick `libc` 0.2.0, which `ring` does not accept (#455).
 
 ### Fixed
 
 - The workspace builds again with Rust 1.88, the lowest supported version. Four match arms used `if let` guards, which need a newer Rust (#457).
-- A new range type no longer loses memory. The rows of the type were copied from four boxes that were not freed (#455).
 
 ## 0.1.53 (2026-10-20)
 
