@@ -1,8 +1,11 @@
 //! `COPY ... TO STDOUT`, as `DoCopy`, `ProcessCopyOptions`, `BeginCopyTo` and `DoCopyTo` in `copy.c` and `copyto.c` run it. The rows go to the client in the text, CSV or binary format. A file, a program and the JSON format give `0A000`. `COPY FROM` of the extended protocol gives `0A000` too.
 
+use std::collections::BTreeMap;
+
 use rupg_analyze::Params;
 use rupg_common::{Error, SqlState};
 use rupg_sql::nodes::{CopyStmt, DefElem, Node};
+use rupg_types::Value;
 use rupg_wire::{CommandTag, OutBuf};
 
 use super::{Connection, Done};
@@ -136,10 +139,12 @@ impl Connection {
         }
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
+        let mut partitions = None;
         let (options, plan, columns, selected, rel) = if let Some(rv) = &stmt.relation {
             let rel = rupg_analyze::copy_relation(stmt, rv, &reader)?;
             let options = options(&stmt.options, false)?;
             let plan = query::plan(&rel.query, &reader, &Params::default())?;
+            partitions = rel.partitions;
             (options, plan, rel.columns, rel.selected, Some(rel.name))
         } else {
             let options = options(&stmt.options, false)?;
@@ -203,13 +208,34 @@ impl Connection {
         *started = Some((binary, selected.len()));
         let view = reader.view().cloned().unwrap_or_default();
         let (plan, writes) = self.start_writes(plan, &[], &view)?;
-        let rows = query::run(&plan, &[], &reader, &formats)?;
+        let rows = match &partitions {
+            Some(order) => {
+                let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+                let rows = by_partition(plan.run(&[], &reader)?, order);
+                rows.iter().map(|values| query::encode(&types, values, &reader, &formats)).collect()
+            }
+            None => query::run(&plan, &[], &reader, &formats),
+        }?;
         self.end_writes(writes, &[], Vec::new())?;
         let names: Vec<&str> = selected.iter().map(|&i| columns[i].as_str()).collect();
         let data =
             if binary { binary_rows(&rows) } else { text_rows(&options, &names, &force, &rows) };
         Ok(Done::Copy(CopyOut { binary, columns: selected.len(), data, rows: rows.len() as u64 }))
     }
+}
+
+/// The rows of a `COPY ... TO` of a partitioned table in the order of `DoCopyTo`: the rows of each partition of `order` in turn, each partition in the order of its scan. Each row has the OID of its partition last, and the result has no OIDs.
+fn by_partition(rows: Vec<Vec<Value>>, order: &[u32]) -> Vec<Vec<Value>> {
+    let places: BTreeMap<u32, usize> =
+        order.iter().enumerate().map(|(at, &oid)| (oid, at)).collect();
+    let mut parts: Vec<Vec<Vec<Value>>> = vec![Vec::new(); order.len()];
+    for mut row in rows {
+        let Some(Value::Oid(oid)) = row.pop() else { continue };
+        if let Some(&at) = places.get(&oid) {
+            parts[at].push(row);
+        }
+    }
+    parts.into_iter().flatten().collect()
 }
 
 /// The name of a statement in the query of `COPY` that is not a `SELECT`.

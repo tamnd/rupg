@@ -8,7 +8,7 @@ use rupg_sql::nodes::{
 };
 
 use super::lock::{lookup, relkind};
-use super::{not_yet, relkind_detail};
+use super::relkind_detail;
 use crate::{Analyzer, Env, Params};
 
 /// The relation of a `COPY ... TO` and the query that reads its rows.
@@ -20,8 +20,10 @@ pub struct CopyRelation {
     pub columns: Vec<String>,
     /// The columns that `COPY` sends, as indexes into `columns`.
     pub selected: Vec<usize>,
-    /// `SELECT` of the selected columns `FROM ONLY` the relation.
+    /// `SELECT` of the selected columns `FROM ONLY` the relation. For a partitioned table, the query reads the partitions, and `tableoid` comes after the selected columns.
     pub query: Node,
+    /// The partitions of a partitioned table that have rows, in the order of `find_all_inheritors`. `DoCopyTo` sends the rows of each partition in this order.
+    pub partitions: Option<Vec<u32>>,
 }
 
 /// The table of a `COPY ... FROM`, as `DoCopy` and `BeginCopyFrom` open it.
@@ -70,10 +72,18 @@ pub fn copy_target(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Copy
 ///
 /// The errors of `RangeVarGetRelid` for the name, `42809` for an index or a relation that is not a table, `42703` and `42701` for the list of columns.
 pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<CopyRelation> {
-    let CopyTarget { name, kind, columns, selected, .. } = copy_target(stmt, rv, env)?;
+    let CopyTarget { relid, name, kind, columns, selected } = copy_target(stmt, rv, env)?;
+    let mut partitions = None;
     match kind {
         b'r' => {}
-        b'p' => return Err(not_yet("COPY of a partitioned table", None)),
+        b'p' => partitions = Some(copy_partitions(env, relid, &name)?),
+        b'f' => {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                format!("cannot copy from foreign table \"{name}\""),
+            )
+            .with_hint("Try the COPY (SELECT ...) TO variant."));
+        }
         b'v' => {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
@@ -94,22 +104,59 @@ pub fn copy_relation(stmt: &CopyStmt, rv: &RangeVar, env: &dyn Env) -> Result<Co
             ));
         }
     }
+    let tableoid = partitions.as_ref().map(|_| "tableoid");
     let targets = selected
         .iter()
-        .map(|&i| {
-            let field = Some(Node::String(columns[i].as_str().into()));
+        .map(|&i| columns[i].as_str())
+        .chain(tableoid)
+        .map(|column| {
+            let field = Some(Node::String(column.into()));
             let column = ColumnRef { fields: vec![field], location: -1 };
             let target = ResTarget { val: Some(column.into()), location: -1, ..Default::default() };
             Some(target.into())
         })
         .collect();
-    let from = RangeVar { inh: false, alias: None, location: -1, ..rv.clone() };
+    let from = RangeVar { inh: partitions.is_some(), alias: None, location: -1, ..rv.clone() };
     let select = SelectStmt {
         targetList: targets,
         fromClause: vec![Some(from.into())],
         ..Default::default()
     };
-    Ok(CopyRelation { name, columns, selected, query: select.into() })
+    Ok(CopyRelation { name, columns, selected, query: select.into(), partitions })
+}
+
+/// `find_all_inheritors` of `BeginCopyTo` for the partitioned table `root`: the partitions of each level after the level before it, each level in the order of the OIDs, with no partitioned tables, because they have no rows.
+///
+/// # Errors
+///
+/// `42809` for a foreign table in the partitions.
+fn copy_partitions(env: &dyn Env, root: u32, name: &str) -> Result<Vec<u32>> {
+    let Some(catalog) = env.catalog() else { return Ok(Vec::new()) };
+    let mut all = vec![root];
+    let mut at = 0;
+    while let Some(&oid) = all.get(at) {
+        at += 1;
+        all.extend(catalog.partitions(oid).iter().map(|rel| rel.oid));
+    }
+    let mut out = Vec::new();
+    for oid in all {
+        match relkind(env, oid) {
+            b'p' => {}
+            b'f' => {
+                let child = catalog.relation(oid).map_or("", |rel| rel.name.as_str());
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    format!("cannot copy from foreign table \"{child}\""),
+                )
+                .with_detail(format!(
+                    "Partition \"{child}\" is a foreign table in partitioned table \"{name}\"."
+                ))
+                .with_hint("Try the COPY (SELECT ...) TO variant."));
+            }
+            _ => out.push(oid),
+        }
+    }
+    Ok(out)
 }
 
 /// The `INSERT` that writes the rows of a `COPY ... FROM`, as `CopyFrom` fills a row: the parameter `$n` is the value of the selected column `n`, and the other columns get their defaults. `defaults` is true for a selected column whose field is the marker of `DEFAULT`. Such a column also gets its default, and the parameters skip it. `OVERRIDING SYSTEM VALUE` lets the data give a value to an identity column `GENERATED ALWAYS`, as `COPY` does.
