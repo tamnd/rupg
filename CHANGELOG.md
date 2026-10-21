@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `pg_get_partition_constraintdef` shows the partition constraint of a partition, as PostgreSQL makes it from the bounds of the partition and of the partitions above it. `\d+` of `psql` shows it as the partition constraint. A constant of a key with a collation that is not the collation of its column does not show `COLLATE` yet (#NNN).
+- `pg_get_partition_constraintdef` shows the partition constraint of a partition, as PostgreSQL makes it from the bounds of the partition and of the partitions above it. `\d+` of `psql` shows it as the partition constraint. A constant of a key with a collation that is not the collation of its column does not show `COLLATE` yet (#520).
 - `CREATE TABLE ... INHERITS`. The new table takes the columns, the defaults, the check constraints and the not-null constraints of its parents, and the columns of two parents or of the statement with the same name merge, with the notices and the errors of PostgreSQL. A `SELECT` of a parent gives the rows of its children too, `ONLY` gives the rows of the parent alone, and `tableoid` gives the table of each row. `TRUNCATE` of a parent truncates its children, `DROP TABLE` of a parent needs `CASCADE`, and `pg_inherits` and `relhassubclass` show the parents. `MERGE` and `ALTER TABLE` of a table with children, and `ALTER TABLE ... INHERIT`, give `0A000` for now (#518).
 - `UPDATE` and `DELETE` of a table with children of `INHERITS`. The statement changes the rows of the children too, and `ONLY` changes the rows of the parent alone. The row triggers of each child fire for its rows, the check constraints of each child apply, and `RETURNING tableoid` gives the table of each row (#519).
 
