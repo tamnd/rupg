@@ -13,7 +13,9 @@ use crate::agg::Kind;
 use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem};
-use crate::insert::{Item, Write, WriteKind, not_yet, targets, with_checks};
+use crate::insert::{
+    Item, Write, WriteKind, default_part, merge_parts, not_yet, targets, with_checks,
+};
 use crate::select::{Query, Target};
 use crate::sort::raw_location;
 use crate::typename::place;
@@ -95,7 +97,7 @@ impl Analyzer<'_> {
     ) -> Result<Vec<Expr>> {
         let items = self.set_items(list)?;
         // `transformUpdateTargetList`: the column of each item, and the expression cast to the type of the column.
-        let mut given: Vec<(usize, &ResTarget, Option<Expr>)> = Vec::with_capacity(items.len());
+        let mut given: Vec<(usize, Option<Expr>)> = Vec::with_capacity(items.len());
         for (rt, item) in items {
             let col_name = rt.name.as_deref().unwrap_or_default();
             let at = place(rt.location);
@@ -119,27 +121,36 @@ impl Analyzer<'_> {
                 }
                 return Err(error.at_opt(at));
             };
-            if !rt.indirection.is_empty() {
-                return Err(not_yet("assignment to a field or an element in UPDATE").at_opt(at));
-            }
+            let column = &columns[index];
             let expr = match item {
+                Item::Default(_) if !rt.indirection.is_empty() => {
+                    return Err(default_part(&rt.indirection, at));
+                }
                 Item::Default(_) => None,
-                Item::Expr(expr) => Some(self.assign(expr, &columns[index])?),
+                Item::Expr(expr) if rt.indirection.is_empty() => Some(self.assign(expr, column)?),
+                Item::Expr(expr) => {
+                    // The old value of the column is the column of the target table.
+                    let mut old = column_var(index, column);
+                    old.location = at;
+                    Some(self.assign_part(column, &rt.indirection, at, expr, Some(old))?)
+                }
             };
-            given.push((index, rt, expr));
+            given.push((index, expr));
         }
-        // `process_matched_tle` of `rewriteTargetListIU`: a column gets one item.
-        for (i, &(index, _, _)) in given.iter().enumerate() {
-            if given[..i].iter().any(|&(other, _, _)| other == index) {
-                return Err(Error::new(
-                    SqlState::SYNTAX_ERROR,
-                    format!("multiple assignments to same column \"{}\"", columns[index].name),
-                ));
-            }
-        }
+        // `process_matched_tle` of `rewriteTargetListIU`: a column gets one item, or the items that set parts of the column make one value.
         let mut slots: Vec<Option<Option<Expr>>> = vec![None; columns.len()];
-        for (index, _, expr) in given {
-            slots[index] = Some(expr);
+        for (index, expr) in given {
+            let name = &columns[index].name;
+            slots[index] = Some(match (slots[index].take(), expr) {
+                (None, expr) => expr,
+                (Some(Some(prior)), Some(expr)) => Some(merge_parts(prior, expr, name)?),
+                _ => {
+                    return Err(Error::new(
+                        SqlState::SYNTAX_ERROR,
+                        format!("multiple assignments to same column \"{name}\""),
+                    ));
+                }
+            });
         }
         let mut row = Vec::with_capacity(columns.len());
         for (index, slot) in slots.into_iter().enumerate() {
@@ -157,15 +168,7 @@ impl Analyzer<'_> {
                 }
                 Some(Some(expr)) => expr,
                 Some(None) => self.column_default(table, index, column)?,
-                None => {
-                    let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
-                    let mut expr = Expr::new(
-                        ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }),
-                        column.ty,
-                    );
-                    expr.typmod = column.typmod;
-                    expr
-                }
+                None => column_var(index, column),
             });
         }
         Ok(row)
@@ -365,4 +368,12 @@ pub(crate) fn tid_target() -> Target {
         origin: None,
         junk: false,
     }
+}
+
+/// The column of the target table, which is the relation 0, with the index `index` from 0.
+fn column_var(index: usize, column: &Column) -> Expr {
+    let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
+    let mut expr = Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), column.ty);
+    expr.typmod = column.typmod;
+    expr
 }

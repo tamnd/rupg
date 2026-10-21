@@ -4652,6 +4652,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plpgsql_array_assign.test")));
     }
 
+    /// Subscripts on a column in `UPDATE`, `INSERT`, `ON CONFLICT DO UPDATE` and `MERGE`: an element or a slice of the column gets the new value, more than one item can set parts of the same column, `INSERT` sets a part of a null value, and a domain over an array checks the new value. `connection/array_assign.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn array_assign() {
+        big_stack(|| script(include_str!("connection/array_assign.test")));
+    }
+
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn array_agg_array() {
