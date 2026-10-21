@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.57 (2026-10-21)
+
 ### Added
 
 - Triggers on `MERGE`. The triggers `FOR EACH STATEMENT` of the actions of the clauses fire, the triggers `BEFORE ... FOR EACH ROW` can change or skip the row of an action before the checks, and the triggers `AFTER ... FOR EACH ROW` and the transition tables get the rows of each action (#487).
@@ -16,9 +18,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - Transition tables of triggers, as in `REFERENCING OLD TABLE AS o NEW TABLE AS n`. An `INSERT`, an `UPDATE` and a `DELETE` on a table with such a trigger now run, and the queries of the trigger function read the old and the new rows of the statement by the names of the tables, also in `EXECUTE`. A write into a transition table gives the error of PostgreSQL (#479).
 - Utility statements in PL/pgSQL, as in `CREATE TABLE`, `ALTER`, `DROP`, `CREATE TABLE AS`, `TRUNCATE` and `SET`, both as statements and with `EXECUTE`. The next statements of the call see the changes of the catalog, and a plan made before a change is made again. A block with `EXCEPTION` undoes the changes of the catalog and the settings of the statements in the block. `GET DIAGNOSTICS` gives the number of rows of `CREATE TABLE AS`. The errors of `INTO`, of the transaction commands, of `COPY` to the client and of `VACUUM` are the errors of PostgreSQL (#478).
 
+### Security
+
+- `rustls-webpki` is now 0.103.16, which fixes RUSTSEC-2026-0382. The old version can accept a certificate path that has a distrusted emSign intermediate (#475).
+
 ### Fixed
 
 - A whole-row `old` or `new` in `RETURNING` of `MERGE` gives the row. Before, it gave one column of the row. The old row is null for an insert, and the new row is null for a delete (#488).
+- A new range type no longer loses memory. The rows of the type were copied from four boxes that were not freed (#455).
 
 ## 0.1.56 (2026-10-21)
 
@@ -29,17 +36,9 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The assignment to a field of a composite value, as in `UPDATE t SET p.x = 5`, `INSERT INTO t (p.x, p.y) VALUES (1, 2)` and `x.a.x := 1` in PL/pgSQL. Fields and subscripts can be mixed, as in `UPDATE t SET ps[1].x = 7` (#474).
 - `COMMIT` and `ROLLBACK` in PL/pgSQL, with `AND CHAIN`. A procedure that `CALL` runs outside of a transaction block, and the code of such a `DO`, can end the transaction, and a new transaction starts at once. A loop over a query or over a cursor goes on after the end. The errors in a function, in a trigger, in a transaction block and in a block with `EXCEPTION` are the errors of PostgreSQL (#476).
 
-### Security
-
-- `rustls-webpki` is now 0.103.16, which fixes RUSTSEC-2026-0382. The old version can accept a certificate path that has a distrusted emSign intermediate.
-
 ### Changed
 
 - The lowest allowed versions of `libc`, `ring`, `rustls` and `loom` are now the versions in `Cargo.lock`. The old bounds let Cargo pick `libc` 0.2.0, which `ring` does not accept (#455).
-
-### Fixed
-
-- A new range type no longer loses memory. The rows of the type were copied from four boxes that were not freed (#455).
 
 ## 0.1.55 (2026-10-21)
 
