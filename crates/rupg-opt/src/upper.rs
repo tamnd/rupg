@@ -95,13 +95,20 @@ fn sorted_order(keys: &[SortKey<'_>]) -> Vec<OrderKey> {
         .collect()
 }
 
-/// True when the rows are in the order of the keys, `pathkeys_contained_in`.
+/// True when the rows are in the order of the keys, `pathkeys_contained_in`. A key whose value is a value of an earlier key of the order adds nothing, as `pathkey_is_redundant`.
 fn satisfies(order: &[OrderKey], keys: &[SortKey<'_>]) -> bool {
-    keys.len() <= order.len()
-        && keys
-            .iter()
-            .zip(order)
-            .all(|(k, o)| k.using.is_none() && o.sorts(&k.item.expr, k.desc, k.nulls_first))
+    let mut at = 0;
+    keys.iter().all(|k| {
+        if k.using.is_some() {
+            return false;
+        }
+        if order[..at].iter().any(|o| o.exprs.iter().any(|e| e.same(&k.item.expr))) {
+            return true;
+        }
+        let ok = order.get(at).is_some_and(|o| o.sorts(&k.item.expr, k.desc, k.nulls_first));
+        at += 1;
+        ok
+    })
 }
 
 /// A sort of the node on the keys unless its rows are in that order already.

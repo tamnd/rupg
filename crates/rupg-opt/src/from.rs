@@ -28,6 +28,8 @@ struct Stats {
     sort: Vec<(Expr, bool, bool)>,
     /// `group_pathkeys` and `distinct_pathkeys`: the keys of `GROUP BY` and of `DISTINCT`, in any order.
     groups: Vec<Vec<(Expr, bool, bool)>>,
+    /// `query_pathkeys`: the keys of `GROUP BY`, or else of `DISTINCT`, or else of `ORDER BY`.
+    query: Vec<(Expr, bool, bool)>,
     /// The two sides of each `=` condition of a join that a merge join can test, each with its relations.
     joins: Vec<[(Expr, BTreeSet<usize>); 2]>,
     /// `consider_startup`: true when the query has `LIMIT`, so that a plan with a lower start cost is a different plan.
@@ -441,6 +443,10 @@ fn needed(level: &Level<'_>, stats: &mut Stats) {
     };
     stats.sort = keys(&query.sort);
     stats.groups = vec![keys(&query.group), keys(&query.distinct)];
+    stats.query = [&query.group, &query.distinct, &query.sort]
+        .into_iter()
+        .find(|items| !items.is_empty())
+        .map_or_else(Vec::new, |items| keys(items));
     stats.startup = upper::limit_estimates(query).0 != 0.0;
     for (r, relation) in relations.iter().enumerate() {
         for (expr, depth) in lateral_exprs(relation) {
@@ -978,7 +984,7 @@ fn choose<'q>(
         };
         let input = Input { outer, inner, quals, filter_cost, stats };
         let nested = kind == JoinKind::Inner || !swapped && kind == JoinKind::Left;
-        let mut candidates: Vec<Candidate<'q>> = merge_join(&input, join).into_iter().collect();
+        let mut candidates = merge_joins(&input, join);
         if nested {
             candidates.extend(nested_loops(&input, join, lateral_right));
         }
@@ -1061,8 +1067,11 @@ struct Input<'a, 'q> {
     stats: &'a Stats,
 }
 
+/// A key of a merge join: the index of its clause in the clauses of `split`, and the directions of the sort.
+type MergeKey = (usize, bool, bool);
+
 /// A kind of join for an order of the sides, with its cost.
-#[derive(Clone, Copy, Debug)]
+#[derive(Clone, Debug)]
 struct Candidate<'q> {
     method: Method,
     join: JoinKind,
@@ -1073,6 +1082,8 @@ struct Candidate<'q> {
     materialize: bool,
     /// For a merge join, true when each side needs a `Sort`.
     sort: (bool, bool),
+    /// For a merge join, its keys.
+    keys: Vec<MergeKey>,
     _marker: std::marker::PhantomData<&'q ()>,
 }
 
@@ -1129,6 +1140,7 @@ fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec
             total,
             materialize,
             sort: (false, false),
+            keys: Vec::new(),
             _marker: std::marker::PhantomData,
         });
     }
@@ -1210,27 +1222,120 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         total: startup + run,
         materialize: false,
         sort: (false, false),
+        keys: Vec::new(),
         _marker: std::marker::PhantomData,
     })
 }
 
-/// True when the order of the rows of a plan is the order of the values of the clauses, from the first key.
-fn ordered(order: &[OrderKey], values: &[&Expr]) -> bool {
-    values.len() <= order.len() && values.iter().zip(order).all(|(v, k)| k.sorts(v, false, false))
+/// True when the order of the rows of a plan is the order of the keys of a merge join, from the first key. `value` gives the value of the side for a clause.
+fn ordered(order: &[OrderKey], keys: &[MergeKey], value: impl Fn(usize) -> Expr) -> bool {
+    keys.len() <= order.len()
+        && keys
+            .iter()
+            .zip(order)
+            .all(|(&(c, desc, nulls_first), k)| k.sorts(&value(c), desc, nulls_first))
 }
 
-/// The costs of a merge join of the two sides in the order of the values of the `=` conditions, as `initial_cost_mergejoin` and `final_cost_mergejoin`. A side that is not in that order gets a `Sort`.
-fn merge_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>> {
+/// `select_outer_pathkeys_for_merge`: the order of the keys of a merge join that sorts its sides. The keys of the query come first, in its directions, when the conditions have all of them. The condition of an outer join has only the value of its outer side, and only when that side is not the side that gets nulls. When the conditions are all keys of the query, they are the keys. The other keys follow in ascending order, first the keys with more expressions of relations outside the join that a condition makes equal to them.
+fn merge_order(input: &Input<'_, '_>, join: JoinKind, clauses: &[Clause<'_>]) -> Vec<MergeKey> {
+    let has = |c: &Clause<'_>, e: &Expr| match join {
+        JoinKind::Inner => c.outer.same(e) || c.inner.same(e),
+        JoinKind::Left => c.outer.same(e),
+        JoinKind::Right | JoinKind::Full => false,
+    };
+    let mut used = vec![false; clauses.len()];
+    let mut out = Vec::new();
+    let query = &input.stats.query;
+    let matches = query.iter().take_while(|(e, _, _)| clauses.iter().any(|c| has(c, e))).count();
+    if !query.is_empty() && (matches == query.len() || matches == clauses.len()) {
+        for (e, desc, nulls_first) in &query[..matches] {
+            if let Some(i) = (0..clauses.len()).find(|&i| !used[i] && has(&clauses[i], e)) {
+                used[i] = true;
+                out.push((i, *desc, *nulls_first));
+            }
+        }
+        if matches < query.len() {
+            return out;
+        }
+    }
+    let mut rels = input.outer.rels.clone();
+    rels.extend(input.inner.rels.iter().copied());
+    let score = |c: &Clause<'_>| {
+        let mut partners: Vec<&Expr> = Vec::new();
+        for sides in &input.stats.joins {
+            for ((e, _), (other, other_rels)) in sides.iter().zip(sides.iter().rev()) {
+                if has(c, e)
+                    && other_rels.is_disjoint(&rels)
+                    && !partners.iter().any(|p| p.same(other))
+                {
+                    partners.push(other);
+                }
+            }
+        }
+        partners.len()
+    };
+    let scores: Vec<usize> = clauses.iter().map(score).collect();
+    while let Some(i) =
+        (0..clauses.len()).filter(|&i| !used[i]).fold(None, |best: Option<usize>, i| match best {
+            Some(b) if scores[b] >= scores[i] => Some(b),
+            _ => Some(i),
+        })
+    {
+        used[i] = true;
+        out.push((i, false, false));
+    }
+    out
+}
+
+/// `find_mergeclauses_for_outer_pathkeys`: the keys of a merge join in the order of the rows of the outer side, when that order has the value of each clause.
+fn outer_order(order: &[OrderKey], clauses: &[Clause<'_>]) -> Option<Vec<MergeKey>> {
+    let mut used = vec![false; clauses.len()];
+    let mut out = Vec::new();
+    for k in order {
+        let before = out.len();
+        for (i, c) in clauses.iter().enumerate() {
+            if !used[i] && k.sorts(&c.outer, k.desc, k.nulls_first) {
+                used[i] = true;
+                out.push((i, k.desc, k.nulls_first));
+            }
+        }
+        if out.len() == before {
+            break;
+        }
+    }
+    (out.len() == clauses.len()).then_some(out)
+}
+
+/// The merge joins of the two sides, as `sort_inner_and_outer` and then `match_unsorted_outer` make them: in the order of `merge_order`, and in the order of the rows of the outer side when that order differs.
+fn merge_joins<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Vec<Candidate<'q>> {
+    let (clauses, _) = split(input.quals, &input.outer.rels, &input.inner.rels, exprs::can_merge);
+    if clauses.is_empty() {
+        return Vec::new();
+    }
+    let keys = merge_order(input, join, &clauses);
+    let mut out: Vec<Candidate<'q>> = merge_join(input, join, keys.clone()).into_iter().collect();
+    if let Some(presorted) = outer_order(&input.outer.order, &clauses)
+        && presorted != keys
+    {
+        out.extend(merge_join(input, join, presorted));
+    }
+    out
+}
+
+/// The costs of a merge join of the two sides in the order of the keys, as `initial_cost_mergejoin` and `final_cost_mergejoin`. A side that is not in that order gets a `Sort`.
+fn merge_join<'q>(
+    input: &Input<'_, 'q>,
+    join: JoinKind,
+    keys: Vec<MergeKey>,
+) -> Option<Candidate<'q>> {
     let (clauses, other) =
         split(input.quals, &input.outer.rels, &input.inner.rels, exprs::can_merge);
     // `select_mergejoin_clauses`: a full join is a merge join only when each of its clauses is a merge clause.
     if clauses.is_empty() || join == JoinKind::Full && !other.is_empty() {
         return None;
     }
-    let outer_values: Vec<&Expr> = clauses.iter().map(|c| &c.outer).collect();
-    let inner_values: Vec<&Expr> = clauses.iter().map(|c| &c.inner).collect();
-    let sort_outer = !ordered(&input.outer.order, &outer_values);
-    let sort_inner = !ordered(&input.inner.order, &inner_values);
+    let sort_outer = !ordered(&input.outer.order, &keys, |c| clauses[c].outer.clone());
+    let sort_inner = !ordered(&input.inner.order, &keys, |c| clauses[c].inner.clone());
     let side = |rel: &Rel<'_>, sorted: bool| {
         let c = rel.node.cost;
         if sorted {
@@ -1272,20 +1377,29 @@ fn merge_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>
         total: startup + run,
         materialize,
         sort: (sort_outer, sort_inner),
+        keys,
         _marker: std::marker::PhantomData,
     })
 }
 
-/// The sort keys of the values of the clauses of a merge join, in ascending order.
-fn merge_keys<'q>(values: Vec<Expr>) -> Vec<SortKey<'q>> {
+/// The sort keys of the values of the clauses of a merge join, with the directions of the keys of the join.
+fn merge_keys<'q>(values: Vec<(Expr, bool, bool)>) -> Vec<SortKey<'q>> {
     values
         .into_iter()
-        .map(|v| SortKey {
+        .map(|(v, desc, nulls_first)| SortKey {
             item: Item { expr: Cow::Owned(v), below: true },
-            desc: false,
+            desc,
             using: None,
-            nulls_first: false,
+            nulls_first,
         })
+        .collect()
+}
+
+/// The clauses of a merge join in the order of its keys, each with the directions of its key.
+fn merge_clauses<'q>(clauses: Vec<Clause<'q>>, keys: &[MergeKey]) -> Vec<(Clause<'q>, bool, bool)> {
+    let mut slots: Vec<Option<Clause<'q>>> = clauses.into_iter().map(Some).collect();
+    keys.iter()
+        .filter_map(|&(c, desc, nulls_first)| Some((slots[c].take()?, desc, nulls_first)))
         .collect()
 }
 
@@ -1295,13 +1409,13 @@ impl<'q> Candidate<'q> {
         match self.method {
             Method::Nested => outer.order.clone(),
             Method::Merge if self.join != JoinKind::Full => {
-                split(quals, &outer.rels, &inner.rels, exprs::can_merge)
-                    .0
+                let clauses = split(quals, &outer.rels, &inner.rels, exprs::can_merge).0;
+                merge_clauses(clauses, &self.keys)
                     .into_iter()
-                    .map(|c| OrderKey {
+                    .map(|(c, desc, nulls_first)| OrderKey {
                         exprs: vec![c.outer, c.inner],
-                        desc: false,
-                        nulls_first: false,
+                        desc,
+                        nulls_first,
                     })
                     .collect()
             }
@@ -1345,8 +1459,11 @@ impl<'q> Candidate<'q> {
             }
             Method::Merge => {
                 let (clauses, other) = split(quals, &outer.rels, &inner.rels, exprs::can_merge);
-                let outer_values: Vec<Expr> = clauses.iter().map(|c| c.outer.clone()).collect();
-                let inner_values: Vec<Expr> = clauses.iter().map(|c| c.inner.clone()).collect();
+                let clauses = merge_clauses(clauses, &self.keys);
+                let outer_values =
+                    clauses.iter().map(|(c, d, n)| (c.outer.clone(), *d, *n)).collect();
+                let inner_values =
+                    clauses.iter().map(|(c, d, n)| (c.inner.clone(), *d, *n)).collect();
                 let outer_node = if self.sort.0 {
                     sort(outer.node, merge_keys(outer_values), None)
                 } else {
@@ -1360,7 +1477,7 @@ impl<'q> Candidate<'q> {
                 if self.materialize {
                     inner_node = merge_materialize(inner_node);
                 }
-                let cond = clauses.into_iter().map(|c| c.item).collect();
+                let cond = clauses.into_iter().map(|(c, _, _)| c.item).collect();
                 let join_filter = other.iter().map(|q| q.item()).collect();
                 Node::new(
                     Kind::MergeJoin { join: self.join, cond, join_filter },
