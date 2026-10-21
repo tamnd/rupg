@@ -244,10 +244,9 @@ pub fn range_send(flags: u8, lower: Option<&[u8]>, upper: Option<&[u8]>, out: &m
 mod tests {
     use super::*;
 
-    fn parse(text: &str) -> (u8, Option<&'static str>, Option<&'static str>) {
+    fn parse(text: &str) -> (u8, Option<String>, Option<String>) {
         let r = range_parse(text).unwrap();
-        let leak = |s: Option<String>| s.map(|s| &*Box::leak(s.into_boxed_str()));
-        (r.flags, leak(r.lower), leak(r.upper))
+        (r.flags, r.lower, r.upper)
     }
 
     fn detail(text: &str) -> String {
@@ -256,12 +255,12 @@ mod tests {
 
     #[test]
     fn text_forms() {
-        assert_eq!(parse("[1,10)"), (RANGE_LB_INC, Some("1"), Some("10")));
+        assert_eq!(parse("[1,10)"), (RANGE_LB_INC, Some("1".into()), Some("10".into())));
         assert_eq!(parse(" (,] "), (RANGE_LB_INF | RANGE_UB_INF | RANGE_UB_INC, None, None));
         assert_eq!(parse(" EMPTY "), (RANGE_EMPTY, None, None));
-        assert_eq!(parse(r#"["a ""b"" \c",x\,y]"#).1, Some(r#"a "b" c"#));
-        assert_eq!(parse(r#"["a ""b"" \c",x\,y]"#).2, Some("x,y"));
-        assert_eq!(parse(r#"["",)"#).1, Some(""));
+        assert_eq!(parse(r#"["a ""b"" \c",x\,y]"#).1.as_deref(), Some(r#"a "b" c"#));
+        assert_eq!(parse(r#"["a ""b"" \c",x\,y]"#).2.as_deref(), Some("x,y"));
+        assert_eq!(parse(r#"["",)"#).1.as_deref(), Some(""));
         assert_eq!(detail("emptyx"), "Junk after \"empty\" key word.");
         assert_eq!(detail(""), "Missing left parenthesis or bracket.");
         assert_eq!(detail("[1 10)"), "Missing comma after lower bound.");

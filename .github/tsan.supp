@@ -1,0 +1,4 @@
+# The races that the thread sanitizer must not report. Each one is a part of the design.
+#
+# The optimistic read of a page in the buffer pool copies the bytes while a writer can change them. The reader then checks the state word of the latch and discards a torn copy. See spec/08-the-file.md section 8.8 and crates/rupg-buffer/src/frames.rs.
+race:rupg_buffer::frames::read_racy

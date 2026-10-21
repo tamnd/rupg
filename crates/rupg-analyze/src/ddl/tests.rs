@@ -17,8 +17,11 @@ type Case = (&'static str, &'static [Note], Option<Failure>);
 /// The role `postgres`, a superuser.
 const POSTGRES: u32 = 10;
 
+/// A message that [`run`] got, as [`Note`] has it.
+type GotNote = (char, String, String, Option<usize>);
+
 /// Runs one statement on the catalog. After an error the catalog stays as it was, but the OIDs that the statement used stay used.
-fn run(catalog: &mut Catalog, sql: &str) -> (Vec<Note>, Option<rupg_common::Error>) {
+fn run(catalog: &mut Catalog, sql: &str) -> (Vec<GotNote>, Option<rupg_common::Error>) {
     let stmts = match rupg_sql::parse(sql) {
         Ok((stmts, _)) => stmts,
         Err(e) => {
@@ -38,8 +41,7 @@ fn run(catalog: &mut Catalog, sql: &str) -> (Vec<Note>, Option<rupg_common::Erro
                 Message::Warning(e) => ('W', e),
                 Message::Notice(e) => ('N', e),
             };
-            let state: &'static str = e.state().as_str().to_string().leak();
-            (kind, state, &*e.message().to_string().leak(), e.position())
+            (kind, e.state().as_str().to_string(), e.message().to_string(), e.position())
         })
         .collect();
     match defined.result {
@@ -77,6 +79,8 @@ fn postgres_cases() {
                 );
                 continue;
             }
+            let got_notes: Vec<(char, &str, &str, Option<usize>)> =
+                got_notes.iter().map(|(k, s, m, p)| (*k, s.as_str(), m.as_str(), *p)).collect();
             assert_eq!(got_notes, notes, "{sql}");
             match (error, failure) {
                 (None, None) => {}

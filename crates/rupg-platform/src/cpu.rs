@@ -186,6 +186,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "Miri does not support sysconf(_SC_PHYS_PAGES)")]
     fn memory() {
         if cfg!(unix) {
             let m = physical_memory().unwrap();

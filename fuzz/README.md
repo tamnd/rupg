@@ -35,7 +35,7 @@ The targets of the types call the input, output, receive and send functions of `
 
 | Target | Input | Also a failure |
 |---|---|---|
-| `type_input` | a type, the settings `DateStyle`, `IntervalStyle`, `extra_float_digits`, `bytea_output` and `array_nulls`, and a text | an internal error that PostgreSQL does not also give, a value that the input takes but the output refuses, an output that does not read back to the same output, or a send and receive that give a different output |
+| `type_input` | a type, the settings `DateStyle`, `IntervalStyle`, `extra_float_digits`, `bytea_output` and `array_nulls`, and a text | an internal error that PostgreSQL does not also give, a value that the input takes but the output refuses, an output that does not read back to the same output, or a send and receive that give a different output. A `timetz` with a zone 16 hours or more from UTC does not read back on the oracle either, so it is not a failure |
 | `type_recv` | a type and the bytes of a binary value | an internal error that PostgreSQL does not also give, a value that does not give the same bytes after a send and a receive, or an output that does not read back to the same output |
 
 A float output with `extra_float_digits` below 1 loses digits, so `type_input` does not read it back. An empty `int2vector` or `oidvector` does not come back from its binary form in PostgreSQL either, so `type_input` does not check its send and receive.

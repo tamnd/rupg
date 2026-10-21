@@ -2943,6 +2943,10 @@ mod tests {
 
     /// The trigonometric functions in radians and in degrees, `degrees`, `radians`, the hyperbolic functions, `erf`, `erfc`, `gamma`, `lgamma` and `width_bucket` of `float8`, with the special values and the errors. `connection/trig.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        ignore = "the C library of this platform can give a different last bit than glibc, see Q20 (#33)"
+    )]
     fn float_math() {
         big_stack(|| script(include_str!("connection/trig.test")));
     }
@@ -3285,6 +3289,10 @@ mod tests {
 
     /// The operators and functions of `path`, `polygon` and `circle`: the winding test of a point in a polygon, the containment and the overlap of polygons, the distances, the casts between the types and the errors of `polygon(integer, circle)`. `connection/geofn2.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
+    #[cfg_attr(
+        not(target_os = "linux"),
+        ignore = "the C library of this platform can give a different last bit than glibc, see Q20 (#33)"
+    )]
     fn geofn2() {
         big_stack(|| script(include_str!("connection/geofn2.test")));
     }

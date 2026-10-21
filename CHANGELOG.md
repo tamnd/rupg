@@ -23,6 +23,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `rustls-webpki` is now 0.103.16, which fixes RUSTSEC-2026-0382. The old version can accept a certificate path that has a distrusted emSign intermediate.
 
+### Changed
+
+- The lowest allowed versions of `libc`, `ring`, `rustls` and `loom` are now the versions in `Cargo.lock`. The old bounds let Cargo pick `libc` 0.2.0, which `ring` does not accept (#455).
+
+### Fixed
+
+- A new range type no longer loses memory. The rows of the type were copied from four boxes that were not freed (#455).
+
 ## 0.1.55 (2026-10-21)
 
 ### Added

@@ -190,8 +190,10 @@ mod tests {
         let pool = MemoryPool::new(1000);
         // The buffer pool holds most of the budget.
         let cache = Arc::new(Mutex::new(pool.reserve(900).unwrap()));
-        let held = Arc::clone(&cache);
+        // The reservation holds the pool, so the reclaimer holds the cache weakly. A strong reference makes a cycle that does not free.
+        let held = Arc::downgrade(&cache);
         pool.set_reclaimer(Box::new(move |need| {
+            let Some(held) = held.upgrade() else { return 0 };
             let mut r = held.lock().unwrap();
             let free = need.min(r.bytes());
             r.shrink(free);
@@ -219,6 +221,7 @@ mod tests {
     }
 
     #[test]
+    #[cfg_attr(miri, ignore = "Miri does not support sysconf(_SC_PHYS_PAGES)")]
     fn the_server_default() {
         let d = MemoryPool::server_default();
         assert!(d >= 64 << 20, "{d}");
