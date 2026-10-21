@@ -89,6 +89,13 @@ pub(super) struct MergeTriggers {
 }
 
 impl MergeTriggers {
+    /// Keeps only the triggers `FOR EACH STATEMENT` of a partitioned table, whose leaves fire the triggers `FOR EACH ROW`.
+    pub(super) fn retain_statement(&mut self) {
+        for triggers in [&mut self.insert, &mut self.update, &mut self.delete] {
+            triggers.retain_statement();
+        }
+    }
+
     /// True when the `MERGE` fires no trigger.
     pub(super) fn is_empty(&self) -> bool {
         self.insert.is_empty() && self.update.is_empty() && self.delete.is_empty()
@@ -657,7 +664,8 @@ impl Connection {
             new.extend(given);
             new
         };
-        Ok(plan.check_rows(vec![row], &reader)?.into_iter().next())
+        let kind = if old.is_some() { WriteKind::Update } else { WriteKind::Insert };
+        Ok(plan.check_rows_as(vec![row], kind, &reader)?.into_iter().next())
     }
 
     /// `ExecBRDeleteTriggers` for the row `old` of the table that an action of a `MERGE` deletes. It is false when a trigger gives a null row, which skips the row.

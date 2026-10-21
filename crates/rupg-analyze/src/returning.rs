@@ -169,14 +169,15 @@ impl Analyzer<'_> {
                 Source::Carry(relation)
             }
         };
-        // The carried values of a `MERGE` come after the row, the old row, the new row and the action. A row of a partitioned table has the OID of its partition after the columns.
+        // The carried values of a `MERGE` come after the row, the old row, the new row and the action. A row of a partitioned table has the OID of its partition after the columns, or after the action for a `MERGE`.
         let partitioned = self.is_partitioned(table_oid);
         let base = match kind {
-            WriteKind::Merge => 3 * width + 1,
+            WriteKind::Merge => 3 * width + 1 + usize::from(partitioned),
             _ if partitioned => width + 1,
             _ => width,
         };
-        let partition_attnum = i16::try_from(width + 1).unwrap_or(i16::MAX);
+        let partition_at = if kind == WriteKind::Merge { 3 * width + 2 } else { width + 1 };
+        let partition_attnum = i16::try_from(partition_at).unwrap_or(i16::MAX);
         let mut carried: Vec<Expr> = Vec::new();
         let mut change = |expr: &mut Expr, depth: usize| {
             let ExprKind::Var(var) = expr.kind else { return };

@@ -1,6 +1,6 @@
 //! `transformMergeStmt` of `parse_merge.c`, with `transformMergeSupportFunc` of `parse_expr.c` and the join of `transform_MERGE_to_join` of `prepjointree.c`.
 //!
-//! The query of a `MERGE` joins the source and the target table, which is the relation 0. Each row of the query gives the columns of the target table, the ID of the version of the row of the target table, a marker that is null when the row has no source row, and then the carried values: the columns of the source that the `WHEN` clauses and `RETURNING` read. The ID of the version is null when the row has no target row.
+//! The query of a `MERGE` joins the source and the target table, which is the relation 0. Each row of the query gives the columns of the target table, the OID of the leaf partition of the row when the target table is a partitioned table, the ID of the version of the row of the target table, a marker that is null when the row has no source row, and then the carried values: the columns of the source that the `WHEN` clauses and `RETURNING` read. The ID of the version is null when the row has no target row.
 //!
 //! Each `WHEN` clause has a small query that reads two relations: the row of the target table with the ID of its version, and the carried values. It gives the new row of an `INSERT` or an `UPDATE`, then the conditions of the check constraints, or one `true` value for a `DELETE` and `DO NOTHING`. It gives no row when its condition is not true.
 
@@ -16,7 +16,7 @@ use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Join, JoinKind, Relation};
 use crate::insert::{Foreign, Write, WriteKind, targets, with_checks};
-use crate::modify::{carried_targets, old_row, set_columns, tid_target};
+use crate::modify::{carried_targets, old_row, set_columns, table_oid_target, tid_target};
 use crate::returning::rewrite;
 use crate::select::{Query, Target};
 use crate::typename::place;
@@ -168,7 +168,9 @@ impl Analyzer<'_> {
             }
             parts.push(part);
         }
-        let checks = self.checks(table)?;
+        // The leaf partition of each row of a partitioned table checks the row after the routing.
+        let partitioned = self.is_partitioned(table);
+        let checks = if partitioned { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         let carried_columns: Vec<Column> = carried
             .iter()
@@ -238,6 +240,9 @@ impl Analyzer<'_> {
         };
         let from = join(kind, source, FromItem::Relation(0), Some(on));
         let mut query_targets = old_row(&columns);
+        if partitioned {
+            query_targets.push(table_oid_target());
+        }
         query_targets.push(tid_target());
         query_targets.push(Target {
             name: String::new(),

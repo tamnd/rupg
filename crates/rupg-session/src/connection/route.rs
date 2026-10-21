@@ -353,238 +353,273 @@ impl Connection {
         let width = rel.columns.len();
         let update = info.kind == WriteKind::Update;
         let returning = info.returning.is_some();
-        let heap = self.store.heap();
         let mut done = ChangedRows { view: view.clone(), ..ChangedRows::default() };
-        let event = if update { TRIGGER_UPDATE } else { TRIGGER_DELETE };
-        let mut routing = Routing::of(event);
-        let Routing { router, leaves, .. } = &mut routing;
+        let mut routing = Routing::of(if update { TRIGGER_UPDATE } else { TRIGGER_DELETE });
         // The new rows that move to another leaf, after the old leaf deleted the old rows, with the place of each row in the statement.
         let mut moved: Vec<(usize, usize, Vec<Value>)> = Vec::new();
         // The events of the triggers `AFTER ... FOR EACH ROW` and the rows of the transition tables, with the place of each row in the statement.
-        let mut after: Vec<(usize, usize, i16, RowPair)> = Vec::new();
+        let mut after: Vec<AfterRow> = Vec::new();
         let (mut old_rows, mut new_rows) = (Vec::new(), Vec::new());
         let mut rows = rows;
         let mut seq = 0;
-        'run: loop {
+        let mut applied = Vec::new();
+        loop {
             let reader = self.reader();
             // The changes of each old leaf, in the order of its first row, with the item of each change.
-            let mut groups: Vec<(usize, Vec<Change>, Vec<Moved>)> = Vec::new();
+            let mut groups: Vec<Group> = Vec::new();
             for mut row in std::mem::take(&mut rows) {
                 seq += 1;
                 let (Some(Value::Int8(tid)), Some(Value::Oid(old))) = (row.pop(), row.pop()) else {
                     return Err(Error::internal("a row to change with no partition or version"));
                 };
-                let at = leaf_at(leaves, &catalog, (info.table, old, event), &reader)?;
-                let tid = tid.cast_unsigned();
-                let leaf = &leaves[at];
-                // The old row of the leaf for the triggers.
-                let mut old_row = None;
-                if leaf.fire.before_rows() {
-                    let versions = heap.versions(self.database_oid, leaf.oid, &[tid]);
-                    old_row = versions.into_iter().next();
-                    let new = update.then(|| down(leaf, &row[..width]));
-                    let updated = leaf_updated(leaf, &info.updated);
-                    let shape = (&updated[..], leaf.up.len());
-                    // `ExecBRUpdateTriggers`: the new row can move to another partition after the triggers.
-                    let mut stays = |_: &[Value]| Ok(true);
-                    let rows = (old_row.clone(), new);
-                    let fire = (&leaf.fire, shape);
-                    let Some(new) = self.leaf_before(fire, rows, &leaf.qualified, &mut stays)?
-                    else {
-                        continue;
-                    };
-                    if update {
-                        row.splice(..width, up(leaf, &new, width));
-                    }
-                }
-                let mut item = Moved { seq, shown: None, to: None, new: None, moves: false };
-                let to = if update {
-                    let (to, values) = router.route(info.table, row[..width].to_vec(), &reader)?;
-                    let to = leaf_at(leaves, &catalog, (info.table, to, event), &reader)?;
-                    if to == at {
-                        item.new = Some(leaf_row(&leaves[to], &values, &reader)?);
-                    } else {
-                        item.moves = true;
-                        // `ExecCrossPartitionUpdate`: `ExecDelete` of the old row fires the triggers `BEFORE DELETE` of the old leaf, and a trigger can skip the row.
-                        leaves[at].arm(TRIGGER_DELETE, &catalog, &reader)?;
-                        leaves[to].arm(TRIGGER_INSERT, &catalog, &reader)?;
-                        let source = &leaves[at];
-                        if let Some(fire) =
-                            source.fire_of(TRIGGER_DELETE).filter(|t| t.before_rows())
-                        {
-                            let old_row = match old_row.take() {
-                                Some(row) => row,
-                                None => heap
-                                    .versions(self.database_oid, source.oid, &[tid])
-                                    .into_iter()
-                                    .next()
-                                    .unwrap_or_default(),
-                            };
-                            let mut stays = |_: &[Value]| Ok(true);
-                            let shape = (&[][..], source.up.len());
-                            let rows = (Some(old_row), None);
-                            let fired = self.leaf_before(
-                                (fire, shape),
-                                rows,
-                                &source.qualified,
-                                &mut stays,
-                            )?;
-                            if fired.is_none() {
-                                continue;
-                            }
-                        }
-                        // `ExecInsert` of the new row fires the triggers `BEFORE INSERT` of the new leaf. A trigger that skips the row leaves the row deleted.
-                        let target = &leaves[to];
-                        let values =
-                            match target.fire_of(TRIGGER_INSERT).filter(|t| t.before_rows()) {
-                                Some(fire) => {
-                                    let oid = target.oid;
-                                    let mut stays = |row: &[Value]| router.check(oid, row, &reader);
-                                    let shape = (&[][..], target.up.len());
-                                    let rows = (None, Some(values));
-                                    self.leaf_before(
-                                        (fire, shape),
-                                        rows,
-                                        &target.qualified,
-                                        &mut stays,
-                                    )?
-                                }
-                                None => Some(values),
-                            };
-                        if let Some(values) = values {
-                            let checked = leaf_row(target, &values, &reader)?;
-                            if target.fire_of(TRIGGER_INSERT).is_some_and(Triggers::before_rows) {
-                                router.check_row(target.oid, &checked, &reader)?;
-                            }
-                            item.to = Some((to, checked));
-                        }
-                    }
-                    to
-                } else {
-                    at
-                };
-                if has_foreign(&catalog, leaves[at].oid) || has_foreign(&catalog, leaves[to].oid) {
-                    return Err(not_yet(if update {
-                        "UPDATE of a partitioned table with foreign keys"
-                    } else {
-                        "DELETE from a partitioned table with foreign keys"
-                    }));
-                }
+                let place = (old, tid.cast_unsigned(), seq);
+                let shape = (info, width, update);
+                let routed =
+                    self.route_change(&mut routing, shape, place, &mut row, (&catalog, &reader))?;
+                let Some((at, mut item)) = routed else { continue };
                 if returning && (!item.moves || item.to.is_some()) {
-                    let mut shown = match &item.to {
-                        Some((to, checked)) => up(&leaves[*to], checked, width),
-                        None => row[..width].to_vec(),
+                    let (to, mut shown) = match &item.to {
+                        Some((to, checked)) => (*to, up(&routing.leaves[*to], checked, width)),
+                        None => (at, row[..width].to_vec()),
                     };
-                    shown.push(Value::Oid(leaves[to].oid));
+                    shown.push(Value::Oid(routing.oid(to)));
                     shown.extend_from_slice(&row[width..]);
                     item.shown = Some(shown);
                 }
-                let change = (tid, item.new.clone());
-                match groups.iter_mut().find(|g| g.0 == at) {
-                    Some(group) => {
-                        group.1.push(change);
-                        group.2.push(item);
-                    }
-                    None => groups.push((at, vec![change], vec![item])),
-                }
+                group(&mut groups, at, item);
             }
             drop(reader);
-            for (at, changes, items) in groups {
-                let leaf = &leaves[at];
-                let Some(leaf_info) = leaf.plan.write() else {
-                    return Err(Error::internal("a partition with no plan of its rows"));
-                };
-                let (mut kept, mut applied) = (Vec::new(), Vec::new());
-                loop {
-                    let changed = heap.change(
-                        leaf.oid,
-                        &done.view,
-                        changes.clone(),
-                        &leaf_info.unique,
-                        &kept,
-                        &mut applied,
-                    )?;
-                    match changed {
-                        Changed::Done(_) => break,
-                        Changed::Wait { holder, tid } => {
-                            let what = if update { "updating" } else { "deleting" };
-                            let context = format!(
-                                "while {what} tuple {} in relation \"{}\"",
-                                tid_text(tid),
-                                leaf.name
-                            );
-                            self.reader().wait_xact(done.view.xid, holder, &context)?;
-                        }
-                        Changed::Again => {
-                            // The rows that this command changed stay as they are in the new run.
-                            let reader = self.reader();
-                            rows = plan.run(params, &reader)?;
-                            done.view = reader.view().cloned().unwrap_or_default();
-                            continue 'run;
-                        }
-                        conflict => kept = self.key_conflict(leaf_info, &done.view, conflict)?,
-                    }
-                }
-                // The event of the triggers `AFTER` of the old leaf for each change: `UPDATE` in the leaf, or `DELETE` for a row that moves or that the statement deletes.
-                let of = |item: &Moved| {
-                    if update && !item.moves { TRIGGER_UPDATE } else { TRIGGER_DELETE }
-                };
-                let items: Vec<Moved> =
-                    applied.iter().filter_map(|&i| items.get(i).cloned()).collect();
-                let fired = |item: &Moved| leaf.fire_of(of(item)).is_some_and(Triggers::after_rows);
-                let olds = if keep || items.iter().any(&fired) {
-                    let tids: Vec<u64> =
-                        applied.iter().filter_map(|&i| changes.get(i).map(|c| c.0)).collect();
-                    heap.versions(done.view.database, leaf.oid, &tids)
-                } else {
-                    Vec::new()
-                };
-                let mut olds = olds.into_iter();
-                for item in items {
-                    let old = olds.next();
-                    if !item.moves || item.to.is_some() {
-                        done.count += 1;
-                    }
-                    done.written.extend(item.shown.clone());
-                    if keep && let Some(old) = &old {
-                        old_rows.push((item.seq, up(leaf, old, width)));
-                        if let Some(new) = &item.new {
-                            new_rows.push((item.seq, up(leaf, new, width)));
-                        }
-                    }
-                    if fired(&item) {
-                        after.push((item.seq, at, of(&item), (old, item.new.clone())));
-                    }
-                    if let Some((to, checked)) = item.to {
-                        moved.push((item.seq, to, checked));
-                    }
+            if !self.change_leaves(&routing, groups, &done.view, keep, &mut applied)? {
+                break;
+            }
+            // The rows that this command changed stay as they are in the new run.
+            let reader = self.reader();
+            rows = plan.run(params, &reader)?;
+            done.view = reader.view().cloned().unwrap_or_default();
+        }
+        for (at, item, old) in applied {
+            let leaf = &routing.leaves[at];
+            if !item.moves || item.to.is_some() {
+                done.count += 1;
+            }
+            done.written.extend(item.shown.clone());
+            if keep && let Some(old) = &old {
+                old_rows.push((item.seq, up(leaf, old, width)));
+                if let Some(new) = &item.new {
+                    new_rows.push((item.seq, up(leaf, new, width)));
                 }
             }
-            break;
-        }
-        // `ExecInsert` of the moved rows in their new leaves.
-        let mut inserted = Vec::new();
-        for (seq, to, row) in moved {
-            if keep {
-                new_rows.push((seq, up(&leaves[to], &row, width)));
+            if leaf.fire_of(item.event()).is_some_and(Triggers::after_rows) {
+                after.push((item.seq, at, item.event(), (old, item.new.clone())));
             }
-            if leaves[to].fire_of(TRIGGER_INSERT).is_some_and(Triggers::after_rows) {
-                inserted.push((seq, to, TRIGGER_INSERT, (None, Some(row.clone()))));
+            if let Some((to, checked)) = item.to {
+                if keep {
+                    new_rows.push((item.seq, up(&routing.leaves[to], &checked, width)));
+                }
+                moved.push((item.seq, to, checked));
             }
-            leaves[to].rows.push(row);
         }
-        self.insert_leaves(&mut routing, &done.view, None)?;
-        after.extend(inserted);
-        // A sort that keeps the order of the events of a row: the event of the old leaf, then the event of the new leaf.
-        after.sort_by_key(|event| event.0);
-        for (_, at, event, rows) in after {
-            routing.after_leaf(self, (at, event), &[rows], &info.updated)?;
-        }
+        self.insert_moved(&mut routing, &done.view, moved, after, &info.updated)?;
         old_rows.sort_by_key(|row| row.0);
         new_rows.sort_by_key(|row| row.0);
         done.old = old_rows.into_iter().map(|row| row.1).collect();
         done.new = new_rows.into_iter().map(|row| row.1).collect();
         Ok(done)
+    }
+
+    /// The part of `ExecUpdate` and `ExecDelete` of a partitioned table before the write of one row of the write `info`: the old row is the version `tid` in the leaf `old`, and the row `row` of the partitioned table has the new row of an `UPDATE` in its first `width` columns. The triggers `BEFORE UPDATE` or `BEFORE DELETE ... FOR EACH ROW` of the leaf fire, and the row of a trigger goes in `row`. A new row that its leaf does not take moves: the triggers `BEFORE DELETE` of the old leaf and `BEFORE INSERT` of the new leaf fire, as `ExecCrossPartitionUpdate` fires them. The result is the index of the old leaf and the change, or `None` when a trigger skips the row.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the routing, of the triggers and of the constraints of the leaves, and `0A000` for a leaf with foreign keys.
+    pub(super) fn route_change(
+        &self,
+        routing: &mut Routing,
+        (info, width, update): (&Write, usize, bool),
+        (old, tid, seq): (u32, u64, usize),
+        row: &mut Vec<Value>,
+        (catalog, reader): (&Catalog, &Reader<'_>),
+    ) -> Result<Option<(usize, Moved)>, Error> {
+        let heap = self.store.heap();
+        let table = info.table;
+        let event = if update { TRIGGER_UPDATE } else { TRIGGER_DELETE };
+        let Routing { router, leaves, event: first } = routing;
+        let at = leaf_at(leaves, catalog, (table, old, *first), reader)?;
+        leaves[at].arm(event, catalog, reader)?;
+        let leaf = &leaves[at];
+        // The old row of the leaf for the triggers.
+        let mut old_row = None;
+        if let Some(fire) = leaf.fire_of(event).filter(|t| t.before_rows()) {
+            let versions = heap.versions(self.database_oid, leaf.oid, &[tid]);
+            old_row = versions.into_iter().next();
+            let new = update.then(|| down(leaf, &row[..width]));
+            let updated = if update { leaf_updated(leaf, &info.updated) } else { Vec::new() };
+            let shape = (&updated[..], leaf.up.len());
+            // `ExecBRUpdateTriggers`: the new row can move to another partition after the triggers.
+            let mut stays = |_: &[Value]| Ok(true);
+            let rows = (old_row.clone(), new);
+            let Some(new) = self.leaf_before((fire, shape), rows, &leaf.qualified, &mut stays)?
+            else {
+                return Ok(None);
+            };
+            if update {
+                row.splice(..width, up(leaf, &new, width));
+            }
+        }
+        let mut item = Moved { seq, tid, shown: None, to: None, new: None, moves: false, update };
+        let to = if update {
+            let (to, values) = router.route(table, row[..width].to_vec(), reader)?;
+            let to = leaf_at(leaves, catalog, (table, to, *first), reader)?;
+            if to == at {
+                item.new = Some(leaf_row(&leaves[to], &values, reader)?);
+            } else {
+                item.moves = true;
+                // `ExecCrossPartitionUpdate`: `ExecDelete` of the old row fires the triggers `BEFORE DELETE` of the old leaf, and a trigger can skip the row.
+                leaves[at].arm(TRIGGER_DELETE, catalog, reader)?;
+                leaves[to].arm(TRIGGER_INSERT, catalog, reader)?;
+                let source = &leaves[at];
+                if let Some(fire) = source.fire_of(TRIGGER_DELETE).filter(|t| t.before_rows()) {
+                    let old_row = match old_row.take() {
+                        Some(row) => row,
+                        None => heap
+                            .versions(self.database_oid, source.oid, &[tid])
+                            .into_iter()
+                            .next()
+                            .unwrap_or_default(),
+                    };
+                    let mut stays = |_: &[Value]| Ok(true);
+                    let shape = (&[][..], source.up.len());
+                    let rows = (Some(old_row), None);
+                    let fired =
+                        self.leaf_before((fire, shape), rows, &source.qualified, &mut stays)?;
+                    if fired.is_none() {
+                        return Ok(None);
+                    }
+                }
+                // `ExecInsert` of the new row fires the triggers `BEFORE INSERT` of the new leaf. A trigger that skips the row leaves the row deleted.
+                let target = &leaves[to];
+                let values = match target.fire_of(TRIGGER_INSERT).filter(|t| t.before_rows()) {
+                    Some(fire) => {
+                        let oid = target.oid;
+                        let mut stays = |row: &[Value]| router.check(oid, row, reader);
+                        let shape = (&[][..], target.up.len());
+                        let rows = (None, Some(values));
+                        self.leaf_before((fire, shape), rows, &target.qualified, &mut stays)?
+                    }
+                    None => Some(values),
+                };
+                if let Some(values) = values {
+                    let checked = leaf_row(target, &values, reader)?;
+                    if target.fire_of(TRIGGER_INSERT).is_some_and(Triggers::before_rows) {
+                        router.check_row(target.oid, &checked, reader)?;
+                    }
+                    item.to = Some((to, checked));
+                }
+            }
+            to
+        } else {
+            at
+        };
+        if has_foreign(catalog, leaves[at].oid) || has_foreign(catalog, leaves[to].oid) {
+            return Err(not_yet(if update {
+                "UPDATE of a partitioned table with foreign keys"
+            } else {
+                "DELETE from a partitioned table with foreign keys"
+            }));
+        }
+        Ok(Some((at, item)))
+    }
+
+    /// `table_tuple_update` and `table_tuple_delete` of the changes of each leaf in `groups`, with the checks of the unique keys of the leaf. A row that a transaction in progress changed waits for the end of that transaction. Each change that a leaf made goes in `applied` with the index of the leaf and the old row of the leaf, when `keep` or a trigger `AFTER ... FOR EACH ROW` of the leaf needs it. The result is true when a transaction that committed after the snapshot changed a row, and the statement must run again with a new snapshot.
+    ///
+    /// # Errors
+    ///
+    /// `23505` for a duplicate key, and the error of a wait.
+    pub(super) fn change_leaves(
+        &self,
+        routing: &Routing,
+        groups: Vec<Group>,
+        view: &View,
+        keep: bool,
+        applied: &mut Vec<(usize, Moved, Option<Vec<Value>>)>,
+    ) -> Result<bool, Error> {
+        let heap = self.store.heap();
+        for (at, items) in groups {
+            let leaf = &routing.leaves[at];
+            let Some(leaf_info) = leaf.plan.write() else {
+                return Err(Error::internal("a partition with no plan of its rows"));
+            };
+            let changes: Vec<Change> =
+                items.iter().map(|item| (item.tid, item.new.clone())).collect();
+            let (mut kept, mut made) = (Vec::new(), Vec::new());
+            loop {
+                let changed = heap.change(
+                    leaf.oid,
+                    view,
+                    changes.clone(),
+                    &leaf_info.unique,
+                    &kept,
+                    &mut made,
+                )?;
+                match changed {
+                    Changed::Done(_) => break,
+                    Changed::Wait { holder, tid } => {
+                        let update = items.iter().any(|item| item.tid == tid && item.update);
+                        let what = if update { "updating" } else { "deleting" };
+                        let context = format!(
+                            "while {what} tuple {} in relation \"{}\"",
+                            tid_text(tid),
+                            leaf.name
+                        );
+                        self.reader().wait_xact(view.xid, holder, &context)?;
+                    }
+                    Changed::Again => return Ok(true),
+                    conflict => kept = self.key_conflict(leaf_info, view, conflict)?,
+                }
+            }
+            let items: Vec<Moved> = made.iter().filter_map(|&i| items.get(i).cloned()).collect();
+            let fired = |item: &Moved| leaf.fire_of(item.event()).is_some_and(Triggers::after_rows);
+            let olds = if keep || items.iter().any(fired) {
+                let tids: Vec<u64> = items.iter().map(|item| item.tid).collect();
+                heap.versions(view.database, leaf.oid, &tids)
+            } else {
+                Vec::new()
+            };
+            let mut olds = olds.into_iter();
+            applied.extend(items.into_iter().map(|item| (at, item, olds.next())));
+        }
+        Ok(false)
+    }
+
+    /// `ExecInsert` of the rows `rows` in their leaves after the changes of a statement, each with its place in the statement and the index of its leaf, with the checks of the unique keys of the leaves. Then the events `after` of the triggers `AFTER ... FOR EACH ROW` of the changes and the events of the triggers `AFTER INSERT ... FOR EACH ROW` of the new rows go in the queue in the order of the rows. The statement sets the columns `updated` of the partitioned table. The result has the new rows that the foreign keys of the leaves check.
+    ///
+    /// # Errors
+    ///
+    /// `23505` for a duplicate key, and the error of the condition of `WHEN` of a trigger.
+    pub(super) fn insert_moved(
+        &self,
+        routing: &mut Routing,
+        view: &View,
+        rows: Vec<(usize, usize, Vec<Value>)>,
+        mut after: Vec<AfterRow>,
+        updated: &[i16],
+    ) -> Result<Vec<Batch>, Error> {
+        // Each leaf writes its new rows in the order of the statement.
+        let mut rows = rows;
+        rows.sort_by_key(|row| row.0);
+        for (seq, to, row) in rows {
+            if routing.leaves[to].fire_of(TRIGGER_INSERT).is_some_and(Triggers::after_rows) {
+                after.push((seq, to, TRIGGER_INSERT, (None, Some(row.clone()))));
+            }
+            routing.leaves[to].rows.push(row);
+        }
+        let batches = self.insert_leaves(routing, view, None)?;
+        // A sort that keeps the order of the events of a row: the event of the old leaf, then the event of the new leaf.
+        after.sort_by_key(|event| event.0);
+        for (_, at, event, rows) in after {
+            routing.after_leaf(self, (at, event), &[rows], updated)?;
+        }
+        Ok(batches)
     }
 }
 
@@ -604,17 +639,42 @@ pub(super) struct ChangedRows {
 
 /// A change of a row of a partitioned table.
 #[derive(Debug, Clone)]
-struct Moved {
+pub(super) struct Moved {
     /// The place of the row in the statement.
-    seq: usize,
+    pub(super) seq: usize,
+    /// The ID of the version of the old row in its leaf.
+    tid: u64,
     /// The row for `RETURNING`: the new row of an `UPDATE` or the old row of a `DELETE`, the OID of its leaf, then the carried values.
-    shown: Option<Vec<Value>>,
+    pub(super) shown: Option<Vec<Value>>,
     /// The new leaf and the checked new row with the columns of the leaf, for a row that moves. It is `None` for a row that moves when a trigger of the new leaf skips it.
-    to: Option<(usize, Vec<Value>)>,
+    pub(super) to: Option<(usize, Vec<Value>)>,
     /// The checked new row of an `UPDATE` in the leaf.
-    new: Option<Vec<Value>>,
+    pub(super) new: Option<Vec<Value>>,
     /// True for a row that moves to another leaf.
-    moves: bool,
+    pub(super) moves: bool,
+    /// True for an `UPDATE`, and false for a `DELETE`.
+    update: bool,
+}
+
+impl Moved {
+    /// The event of the triggers `AFTER` of the old leaf for the change: `UPDATE` in the leaf, or `DELETE` for a row that moves or that the statement deletes.
+    pub(super) fn event(&self) -> i16 {
+        if self.update && !self.moves { TRIGGER_UPDATE } else { TRIGGER_DELETE }
+    }
+}
+
+/// The changes of the rows of one leaf, with the index of the leaf, in the order of the rows.
+pub(super) type Group = (usize, Vec<Moved>);
+
+/// An event of a trigger `AFTER ... FOR EACH ROW` of a leaf: the place of the row in the statement, the index of the leaf, the event and the old and the new rows of the leaf.
+pub(super) type AfterRow = (usize, usize, i16, RowPair);
+
+/// Adds the change `item` of the leaf at the place `at` to its group.
+pub(super) fn group(groups: &mut Vec<Group>, at: usize, item: Moved) {
+    match groups.iter_mut().find(|g| g.0 == at) {
+        Some(group) => group.1.push(item),
+        None => groups.push((at, vec![item])),
+    }
 }
 
 /// The index in `leaves` of the leaf partition `oid` of the partitioned table `root`, with its plan made at the first row of the leaf.

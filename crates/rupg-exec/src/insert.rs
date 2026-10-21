@@ -17,12 +17,13 @@ pub(crate) fn check(
     if matches!(info.kind, WriteKind::Delete | WriteKind::Merge) || info.recheck.is_some() {
         return Ok(rows);
     }
-    check_rows(info, rows, session)
+    check_rows(info, info.kind, rows, session)
 }
 
-/// The checks of [`check`] on new rows of the table, with the conditions of the check constraints after the columns.
+/// The checks of [`check`] on new rows of the table, with the conditions of the check constraints after the columns. `kind` is the write of the rows: `WriteKind::Insert` or `WriteKind::Update` for the action of a `MERGE`, which tells when the partition constraint of a partition checks the row.
 pub(crate) fn check_rows(
     info: &Write,
+    kind: WriteKind,
     rows: Vec<Vec<Value>>,
     session: &dyn Session,
 ) -> Result<Vec<Vec<Value>>> {
@@ -37,7 +38,7 @@ pub(crate) fn check_rows(
     let partition = rel.filter(|r| r.partition_of.is_some());
     for mut row in rows {
         // `ExecUpdateAct` checks the partition constraint first.
-        if info.kind == WriteKind::Update
+        if kind == WriteKind::Update
             && let Some(rel) = partition
             && !router.check(rel.oid, &row[..info.width], session)?
         {
@@ -71,7 +72,7 @@ pub(crate) fn check_rows(
         }
         row.drain(info.width..info.width + info.checks.len());
         // `ExecInsert` checks the partition constraint of a row that goes in a partition with no routing last.
-        if info.kind == WriteKind::Insert
+        if kind == WriteKind::Insert
             && let Some(rel) = partition
             && !router.check(rel.oid, &row[..info.width], session)?
         {

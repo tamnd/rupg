@@ -1233,10 +1233,11 @@ impl Plan {
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
         let rows = match clause.command {
-            rupg_analyze::MergeCommand::Insert | rupg_analyze::MergeCommand::Update
-                if info.recheck.is_none() =>
-            {
-                insert::check_rows(info, rows, session)?
+            rupg_analyze::MergeCommand::Insert if info.recheck.is_none() => {
+                insert::check_rows(info, rupg_analyze::WriteKind::Insert, rows, session)?
+            }
+            rupg_analyze::MergeCommand::Update if info.recheck.is_none() => {
+                insert::check_rows(info, rupg_analyze::WriteKind::Update, rows, session)?
             }
             _ => rows,
         };
@@ -1408,7 +1409,24 @@ impl Plan {
         session: &dyn Session,
     ) -> Result<Vec<Vec<Value>>> {
         match &self.query.write {
-            Some(info) => insert::check_rows(info, rows, session),
+            Some(info) => insert::check_rows(info, info.kind, rows, session),
+            None => Ok(rows),
+        }
+    }
+
+    /// [`Plan::check_rows`] for the rows of the write `kind`, which is `WriteKind::Insert` or `WriteKind::Update` for a row of `ON CONFLICT DO UPDATE` or of an action of a `MERGE`.
+    ///
+    /// # Errors
+    ///
+    /// The error of a not-null constraint, of a check constraint or of the partition constraint of a partition.
+    pub fn check_rows_as(
+        &self,
+        rows: Vec<Vec<Value>>,
+        kind: rupg_analyze::WriteKind,
+        session: &dyn Session,
+    ) -> Result<Vec<Vec<Value>>> {
+        match &self.query.write {
+            Some(info) => insert::check_rows(info, kind, rows, session),
             None => Ok(rows),
         }
     }

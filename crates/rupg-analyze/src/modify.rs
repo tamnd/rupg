@@ -391,7 +391,7 @@ pub(crate) fn tid_target() -> Target {
 }
 
 /// The target that reads the OID of the partition of the row of the target table, a partitioned table.
-fn table_oid_target() -> Target {
+pub(crate) fn table_oid_target() -> Target {
     let var = Var { relation: 0, attnum: TABLE_OID_ATTNUM, levels_up: 0 };
     Target {
         name: "tableoid".to_string(),

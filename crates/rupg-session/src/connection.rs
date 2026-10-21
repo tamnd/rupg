@@ -705,7 +705,11 @@ impl Connection {
                     return Err(Error::internal("a MERGE with no clauses"));
                 };
                 // `fireBSTriggers`: the triggers of the actions of the clauses, which fire also when no row takes the clause.
-                let fire = self.merge_triggers(info, merge)?;
+                let mut fire = self.merge_triggers(info, merge)?;
+                if partitioned {
+                    // The leaves fire the triggers `FOR EACH ROW`.
+                    fire.retain_statement();
+                }
                 self.before_merge(&fire, info)?;
                 let done = self.merge(plan, info, (merge, &fire), params, &view, rows)?;
                 written = done.written;
@@ -4927,6 +4931,12 @@ mod tests {
     #[test]
     fn partition_trigger_move() {
         big_stack(|| script(include_str!("connection/partition_trigger_move.test")));
+    }
+
+    /// `MERGE` into a partitioned table and into a partition: updates in a leaf, updates that move a row to another leaf, deletes and inserts with `RETURNING` and the leaf of each row, a row that no partition takes, the constraints and the unique keys of the leaves, a row of the target table that the command changes two times, and the partition constraint of a partition. The triggers of the leaves fire in the order of the join, and a row that moves is in the transition tables of `DELETE` and of `INSERT`. `connection/partition_merge.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_merge() {
+        big_stack(|| script(include_str!("connection/partition_merge.test")));
     }
 
     /// The rows of a table after `ADD COLUMN` and a change of the default of the new column in the same statement: the rows get the default of `ADD COLUMN`, and new rows get the new default, also for the partitions. `DROP DEFAULT`, `ALTER COLUMN ... TYPE` and `DROP COLUMN` run before `ADD COLUMN`, so they cannot find the new column. `connection/add_column_default.test` is the output of PostgreSQL 19 for the same script in a new database.
