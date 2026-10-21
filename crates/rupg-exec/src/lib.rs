@@ -2811,6 +2811,33 @@ pub fn evaluate(expr: &Expr, session: &dyn Session) -> Result<Value> {
     eval.eval(expr)
 }
 
+/// The values of expressions for one row of the relation `oid`, whose columns have the types `types`, such as the expressions of a partition key. A variable of an expression reads the column of the row.
+pub(crate) fn evaluate_row(
+    exprs: &[Expr],
+    oid: u32,
+    types: &[u32],
+    row: &[Value],
+    session: &dyn Session,
+) -> Result<Vec<Value>> {
+    let tables = scan::Tables::one_row(oid, types.to_vec(), row.to_vec());
+    let cache = Cache::default();
+    let mut eval = Eval {
+        params: &[],
+        session,
+        case: Vec::new(),
+        tables: &tables,
+        tuple: &[0],
+        group: Group::default(),
+        cache: &cache,
+        outer: &[],
+        sub: Vec::new(),
+        domain_value: Vec::new(),
+        sets: Vec::new(),
+        windows: Vec::new(),
+    };
+    exprs.iter().map(|expr| eval.eval(expr)).collect()
+}
+
 /// The checks that the input function of a domain or of an array of a domain makes: `domain_in` checks the value with the check constraints of the domain, and `array_in` checks each element in the same way. A value of another type passes.
 ///
 /// # Errors
@@ -2887,11 +2914,13 @@ mod fold;
 mod insert;
 mod jsonexpr;
 mod jsontable;
+mod partition;
 mod scan;
 mod sort;
 mod user;
 mod window;
 
+pub use partition::Router;
 pub use user::variadic_type;
 
 #[cfg(test)]

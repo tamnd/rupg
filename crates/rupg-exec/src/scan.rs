@@ -128,6 +128,19 @@ pub(crate) fn lateral(query: &Query) -> Vec<Vec<usize>> {
 }
 
 impl Tables {
+    /// One row of the relation `oid` with the column types `types`, for the expressions of [`crate::evaluate_row`].
+    pub(crate) fn one_row(oid: u32, types: Vec<u32>, row: Vec<Value>) -> Tables {
+        Tables {
+            rows: vec![Rc::new(vec![row])],
+            oids: vec![oid],
+            types: vec![types],
+            names: vec![None],
+            needs: vec![Vec::new()],
+            grown: vec![RefCell::default()],
+            indexes: RefCell::default(),
+        }
+    }
+
     /// The value of a column in a tuple.
     pub(crate) fn var(&self, tuple: &[usize], var: Var) -> Value {
         let row = tuple.get(var.relation).copied().unwrap_or(NONE);
@@ -135,6 +148,16 @@ impl Tables {
             return Value::Null;
         }
         if var.attnum == TABLE_OID_ATTNUM {
+            // A row of a partitioned table has the OID of its partition after the ID of its version.
+            let width = self.types[var.relation].len();
+            let leaf = if self.needs[var.relation].is_empty() {
+                self.rows[var.relation][row].get(width + 1).cloned()
+            } else {
+                self.grown[var.relation].borrow()[row].get(width + 1).cloned()
+            };
+            if let Some(Value::Oid(leaf)) = leaf {
+                return Value::Oid(leaf);
+            }
             return Value::Oid(self.oids[var.relation]);
         }
         // rupg has no row versions yet, so each row shows `xmin`, `cmin`, `xmax` and `cmax` of a frozen row that no transaction deleted.
@@ -338,7 +361,7 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
             continue;
         }
         let Some(catalog) = rupg_pgcatalog::catalog_by_oid(relation.oid) else {
-            rows.push(Rc::new(user_rows(relation.oid, session)?));
+            rows.push(Rc::new(user_rows(relation, session)?));
             continue;
         };
         let mut table = Vec::with_capacity(catalog.len);
@@ -398,12 +421,43 @@ fn row_names(relation: &rupg_analyze::Relation) -> Option<Arc<[String]>> {
     Some(names.map(|(i, c)| alias.get(i).unwrap_or(&c.name).clone()).collect())
 }
 
-/// The rows of a relation of the user. A table gives the rows that the snapshot of the statement sees, each with the ID of its version at the end. A sequence has its one row, the row of its file. The read of a table counts as a sequential scan, because rupg has no index scans yet.
-fn user_rows(oid: u32, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
+/// The rows of a relation of the user. A table gives the rows that the snapshot of the statement sees, each with the ID of its version at the end. A partitioned table gives the rows of its leaf partitions in the order of their bounds, each with the OID of its partition after the ID of its version, or no rows after `ONLY`. A sequence has its one row, the row of its file. The read of a table counts as a sequential scan, because rupg has no index scans yet.
+fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
+    let oid = from.oid;
     let relation = session
         .catalog()
         .and_then(|c| c.relation(oid))
         .ok_or_else(|| Error::internal(format!("no relation has the OID {oid}")))?;
+    if relation.kind == rupg_catalog::RelKind::Partitioned {
+        if from.only {
+            return Ok(Vec::new());
+        }
+        let mut out = Vec::new();
+        for leaf in crate::partition::leaves(oid, session)? {
+            let Some(part) = session.catalog().and_then(|c| c.relation(leaf)) else { continue };
+            // `build_attrmap_by_name`: the column of the partition for each column of the parent.
+            let map: Vec<Option<usize>> = relation
+                .columns
+                .iter()
+                .map(|c| {
+                    let found = part.columns.iter().position(|p| !p.dropped && p.name == c.name);
+                    found.filter(|_| !c.dropped)
+                })
+                .collect();
+            session.count_scan(leaf);
+            for mut row in session.table_rows(leaf)? {
+                let tid = row.pop().unwrap_or(Value::Null);
+                let mut values: Vec<Value> = map
+                    .iter()
+                    .map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null))
+                    .collect();
+                values.push(tid);
+                values.push(Value::Oid(leaf));
+                out.push(values);
+            }
+        }
+        return Ok(out);
+    }
     if relation.kind == rupg_catalog::RelKind::Table {
         session.count_scan(oid);
         // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null. The ID of the version stays at the end of the row.

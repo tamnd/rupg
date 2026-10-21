@@ -144,6 +144,25 @@ impl Seed {
     }
 }
 
+/// `compute_partition_hash_value`: the hash of the key of a row of a table that `PARTITION BY HASH` partitions. Each value that is not null gets the extended hash of its type with the seed `HASH_PARTITION_SEED`, and `hash_combine64` adds it to the hash. A row goes in the partition whose remainder is this hash modulo its modulus.
+///
+/// # Errors
+///
+/// `42883` for a type with no hash function.
+pub fn partition_hash(values: &[(u32, Value)]) -> Result<u64> {
+    const HASH_PARTITION_SEED: u64 = 0x7A5B_2236_7996_DCFD;
+    let mut row = 0u64;
+    for (ty, value) in values {
+        if value.is_null() {
+            continue;
+        }
+        let one = hash(crate::io::base_type(*ty), value, Seed::Extended(HASH_PARTITION_SEED))?;
+        row ^=
+            one.wrapping_add(0x49a0_f4dd_15e5_a8e3).wrapping_add(row << 54).wrapping_add(row >> 7);
+    }
+    Ok(row)
+}
+
 /// The hash of a value of the type `ty`. A plain hash has only the low 32 bits.
 fn hash(ty: u32, value: &Value, seed: Seed) -> Result<u64> {
     Ok(match (ty, value) {

@@ -1891,7 +1891,12 @@ fn get_statisticsobjdef(_: &Call<'_>, _: &[Value]) -> Result<Value> {
 }
 
 /// `pg_get_partkeydef_worker`: the partition key of a partitioned table, as `PARTITION BY` writes it.
-fn partkey_def(rel: &Relation, key: &PartitionKey, session: &dyn Session) -> Result<String> {
+fn partkey_def(
+    rel: &Relation,
+    key: &PartitionKey,
+    attrs_only: bool,
+    session: &dyn Session,
+) -> Result<String> {
     let columns: Vec<String> = rel.columns.iter().map(|c| c.name.clone()).collect();
     let exprs = match &key.exprs {
         Some(text) => node::read_list(text)?,
@@ -1903,7 +1908,7 @@ fn partkey_def(rel: &Relation, key: &PartitionKey, session: &dyn Session) -> Res
         PartStrategy::List => "LIST",
         PartStrategy::Range => "RANGE",
     };
-    let mut out = format!("{strategy} (");
+    let mut out = if attrs_only { String::new() } else { format!("{strategy} (") };
     for (keyno, &attnum) in key.attrs.iter().enumerate() {
         if keyno > 0 {
             out.push_str(", ");
@@ -1917,7 +1922,7 @@ fn partkey_def(rel: &Relation, key: &PartitionKey, session: &dyn Session) -> Res
         } else {
             let e =
                 exprs.next().ok_or_else(|| Error::internal("too few entries in partexprs list"))?;
-            let mut d = Deparser::for_columns(session, columns.clone(), false);
+            let mut d = Deparser::for_columns(session, columns.clone(), attrs_only);
             d.expr(e, false)?;
             if looks_like_function(e) {
                 out.push_str(&d.buf);
@@ -1926,6 +1931,9 @@ fn partkey_def(rel: &Relation, key: &PartitionKey, session: &dyn Session) -> Res
             }
             (e.ty, expr_collation(e, rel))
         };
+        if attrs_only {
+            continue;
+        }
         let collation_used = key.collations.get(keyno).copied().unwrap_or(0);
         if collation_used != 0 && collation_used != collation {
             out.push_str(&format!(" COLLATE {}", collation_name(collation_used, session)?));
@@ -1934,8 +1942,22 @@ fn partkey_def(rel: &Relation, key: &PartitionKey, session: &dyn Session) -> Res
             out.push_str(&opclass_name(class, ty, session)?);
         }
     }
-    out.push(')');
+    if !attrs_only {
+        out.push(')');
+    }
     Ok(out)
+}
+
+/// `pg_get_partkeydef_columns(oid, true)`: the columns and the expressions of the partition key of a partitioned table, with no strategy, collations or operator classes, as the detail of an error of tuple routing shows them.
+///
+/// # Errors
+///
+/// The error of the deparse of an expression of the key.
+pub fn partition_key_columns(rel: &Relation, session: &dyn Session) -> Result<String> {
+    match &rel.partition_key {
+        Some(key) => partkey_def(rel, key, true, session),
+        None => Err(Error::internal(format!("relation {} is not partitioned", rel.oid))),
+    }
 }
 
 /// `pg_get_partkeydef(oid)`: the partition key of a partitioned table, or null for another relation.
@@ -1947,7 +1969,7 @@ fn get_partkeydef(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         .and_then(|c| c.relation(oid))
         .and_then(|r| Some((r, r.partition_key.as_ref()?)));
     match found {
-        Some((rel, key)) => Ok(Value::text(partkey_def(rel, key, call.session)?)),
+        Some((rel, key)) => Ok(Value::text(partkey_def(rel, key, false, call.session)?)),
         None => Ok(Value::Null),
     }
 }

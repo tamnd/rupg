@@ -70,6 +70,8 @@ pub struct Relation {
     pub cte: Option<CteRef>,
     /// The `TABLESAMPLE` clause of a table.
     pub tablesample: Option<TableSample>,
+    /// True for `ONLY` before the name of a partitioned table, which then gives no rows.
+    pub only: bool,
 }
 
 impl Relation {
@@ -92,6 +94,7 @@ impl Relation {
             lateral: false,
             cte: None,
             tablesample: None,
+            only: false,
         }
     }
 
@@ -537,13 +540,14 @@ impl Analyzer<'_> {
         })?;
         let columns = self.open_relation(oid, name, at)?;
         let catalog = self.env.catalog();
-        if catalog.and_then(|c| c.relation(oid)).is_some_and(|r| r.kind == RelKind::Partitioned) {
-            return Err(not_yet("a query of a partitioned table", at));
-        }
+        let partitioned =
+            catalog.and_then(|c| c.relation(oid)).is_some_and(|r| r.kind == RelKind::Partitioned);
         let subquery = self.view_query(oid)?.map(Box::new);
         let alias = rv.alias.as_deref();
         let refname = alias.and_then(|a| a.aliasname.as_deref()).unwrap_or(name).to_string();
-        self.add_relation(Relation::new(oid, columns, subquery, None, None), refname, alias)
+        let mut relation = Relation::new(oid, columns, subquery, None, None);
+        relation.only = partitioned && !rv.inh;
+        self.add_relation(relation, refname, alias)
     }
 
     /// `ApplyRetrieveRule`: the query of a view of the user, which takes the place of the view as a subquery, or `None` for a relation that is not a view. The analyzer reads the statement that made the view again, with the schemas of `search_path` of that statement. An error in the query of the view has no position, and the warnings of the query go.

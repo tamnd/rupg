@@ -295,7 +295,13 @@ impl Analyzer<'_> {
                 row_query(&columns, row)
             }
         };
-        let checks = self.checks(table)?;
+        // `ExecFindPartition` routes each row, and the partition then checks it.
+        let partitioned = self
+            .env
+            .catalog()
+            .and_then(|c| c.relation(table))
+            .is_some_and(|r| r.kind == RelKind::Partitioned);
+        let checks = if partitioned { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         let conflict_set = s
             .onConflictClause
@@ -536,7 +542,7 @@ impl Analyzer<'_> {
             return Err(not_yet(&format!("{what} a system catalog")));
         };
         match rel.kind {
-            RelKind::Table if rel.partition_of.is_some() => {
+            RelKind::Table if rel.partition_of.is_some() && kind != WriteKind::Insert => {
                 return Err(not_yet(&format!("{what} a partition")));
             }
             RelKind::Table => {}
@@ -551,6 +557,7 @@ impl Analyzer<'_> {
                 if kind != WriteKind::Merge
                     && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
             RelKind::View => return Err(not_yet(&format!("{what} a view"))),
+            RelKind::Partitioned if kind == WriteKind::Insert => {}
             RelKind::Partitioned => return Err(not_yet(&format!("{what} a partitioned table"))),
             _ => {
                 return Err(Error::new(

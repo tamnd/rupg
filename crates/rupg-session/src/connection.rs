@@ -46,6 +46,7 @@ mod plpgsql;
 mod prepare;
 mod rewrite;
 mod roles;
+mod route;
 mod savepoint;
 mod trigger;
 mod upsert;
@@ -678,6 +679,10 @@ impl Connection {
         // The new and the old rows of `ON CONFLICT DO UPDATE`.
         let mut updated = (Vec::new(), Vec::new());
         let mut batches = Vec::new();
+        let partitioned = self
+            .catalog()
+            .relation(info.table)
+            .is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned);
         let (tag, count) = match (info.kind, upsert) {
             (WriteKind::Merge, _) => {
                 let Some(merge) = info.merge.as_ref() else {
@@ -701,6 +706,19 @@ impl Connection {
                 new_rows = done.inserted;
                 updated = (done.new, done.old);
                 (CommandTag::Insert, done.count)
+            }
+            (WriteKind::Insert, None) if partitioned => {
+                if !triggers.is_empty() {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "triggers on a partitioned table are not supported yet",
+                    ));
+                }
+                let count = rows.len() as u64;
+                let routed = self.insert_routed(info, &view, rows)?;
+                written = routed.written;
+                batches = routed.batches;
+                (CommandTag::Insert, count)
             }
             (WriteKind::Insert, None) => {
                 let count = rows.len() as u64;
@@ -4791,13 +4809,16 @@ mod tests {
         big_stack(|| script(include_str!("connection/merge_returning_rows.test")));
     }
 
-    /// `CREATE TABLE ... PARTITION BY` and `CREATE TABLE ... PARTITION OF`:
-    /// the partition key, the bounds and their checks, the merged columns and
-    /// constraints, and the catalog rows. `connection/partition_create.test` is
-    /// the output of PostgreSQL 19 for the same script in a new database.
+    /// `CREATE TABLE ... PARTITION BY` and `CREATE TABLE ... PARTITION OF`: the partition key, the bounds and their checks, the merged columns and constraints, and the catalog rows. `connection/partition_create.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_create() {
         big_stack(|| script(include_str!("connection/partition_create.test")));
+    }
+
+    /// `INSERT` into and `SELECT` from partitioned tables: the routing of rows by range, list and hash keys, sub-partitions, default partitions, keys with expressions and several columns, `ONLY`, `RETURNING tableoid`, the checks of the leaves, an insert into a partition, and the errors for a row that no partition takes. `connection/partition_dml.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_dml() {
+        big_stack(|| script(include_str!("connection/partition_dml.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
