@@ -10,7 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `INSERT` into a partitioned table and into a partition, and `SELECT` from a partitioned table. Each row goes to the leaf partition that its range, list or hash key takes, through the sub-partitions and the default partitions, and the constraints of the leaf check it. A row that no partition takes gives `23514` with the values of its key. `ONLY` gives no rows, and `tableoid` gives the leaf of each row. `MERGE`, `COPY` and triggers on partitioned tables are not supported yet (#491).
 
-- `UPDATE` and `DELETE` of a partitioned table and of a partition. Each partition changes its rows, and a new row that its partition does not take moves to the partition that its key takes, as `ExecCrossPartitionUpdate` moves it. `RETURNING` gives the partition of each row in `tableoid`. An `UPDATE` of a partition checks the partition constraint first (#NNN).
+- `UPDATE` and `DELETE` of a partitioned table and of a partition. Each partition changes its rows, and a new row that its partition does not take moves to the partition that its key takes, as `ExecCrossPartitionUpdate` moves it. `RETURNING` gives the partition of each row in `tableoid`. An `UPDATE` of a partition checks the partition constraint first (#492).
 
 ## 0.1.57 (2026-10-21)
 
