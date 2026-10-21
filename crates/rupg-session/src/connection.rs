@@ -4925,7 +4925,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/temp_tables.test")));
     }
 
-    /// Unlogged tables and sequences: `relpersistence` `u` on the table, its indexes, its TOAST table and its owned sequences, `SET LOGGED` and `SET UNLOGGED`, and the errors of a temporary schema, a partitioned table, a materialized view, a view and a foreign key between a permanent and an unlogged table. The rows stay in memory as for a permanent table. `connection/unlogged.test` is the output of PostgreSQL 19 for the same script in a new database, with the names of the TOAST relations hidden.
+    /// Unlogged tables and sequences: `relpersistence` `u` on the table, its indexes, its TOAST table and its owned sequences, `SET LOGGED` and `SET UNLOGGED` also on a partition, and the errors of a temporary schema, a partitioned table, a materialized view, a view and a foreign key between a permanent and an unlogged table. The rows stay in memory as for a permanent table. `connection/unlogged.test` is the output of PostgreSQL 19 for the same script in a new database, with the names of the TOAST relations hidden.
     #[test]
     fn unlogged() {
         big_stack(|| script(include_str!("connection/unlogged.test")));

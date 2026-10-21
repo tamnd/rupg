@@ -33,6 +33,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - Indexes, unique indexes and primary keys of partitioned tables. `CREATE INDEX` on a partitioned table makes a partitioned index, and each partition gets an index: an index of the partition with the same definition that has no parent index yet, or a new index. `CREATE INDEX ON ONLY` makes an index that is not valid when the table has partitions. A new partition gets an index for each index of its parent table. A unique index or a primary key must include all the columns of the partition key, and the errors are the errors of PostgreSQL. `INSERT`, `UPDATE` and `COPY FROM` check the unique keys in each partition. `DROP INDEX` of the index of a partition gives `2BP01`, and `DROP TABLE` of a partition drops its indexes. The catalogs show `relkind` `I`, `pg_inherits`, `relispartition`, `indisvalid` and `conparentid` (#494).
 
+- `CREATE UNLOGGED TABLE`, `CREATE UNLOGGED SEQUENCE`, `CREATE UNLOGGED TABLE AS`, `SELECT INTO UNLOGGED`, and `ALTER TABLE` or `ALTER SEQUENCE` with `SET LOGGED` and `SET UNLOGGED`. `pg_class.relpersistence` is `u` for the table, its indexes, its TOAST table and its owned sequences. A partition can be unlogged, and `SET LOGGED` and `SET UNLOGGED` work on a partition. The errors for a temporary schema, a temporary table, a partitioned table, a materialized view and a foreign key between a permanent table and an unlogged table are the errors of PostgreSQL. The rows of an unlogged table stay in memory as for a permanent table. With this change, the `libpq_pipeline` tests `pipeline_abort` and `pipelined_insert` can run.
+
 ## 0.1.57 (2026-10-21)
 
 ### Added
