@@ -4,6 +4,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.64 (2026-10-22)
+
 ### Added
 
 - Join search in `EXPLAIN`, as PostgreSQL finds the order of the joins. The tables of a `FROM` list and of inner joins join in the order with the lowest cost, first by the conditions of the joins and by the equivalence classes, then a table with no condition, and a function with a lateral reference joins after the tables that it reads. A left join or a full join is one item of the search (#531).
