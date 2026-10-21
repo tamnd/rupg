@@ -10,6 +10,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - Subscripts on a column in `UPDATE`, `INSERT`, `ON CONFLICT DO UPDATE` and `MERGE`, as in `UPDATE t SET a[2] = 5` and `INSERT INTO t (a[1], a[3]) VALUES (1, 3)`. More than one item can set parts of the same column, and a domain over an array checks the new value after all of the items.
 - The assignment to a field of a composite value, as in `UPDATE t SET p.x = 5`, `INSERT INTO t (p.x, p.y) VALUES (1, 2)` and `x.a.x := 1` in PL/pgSQL. Fields and subscripts can be mixed, as in `UPDATE t SET ps[1].x = 7`.
 
+### Security
+
+- `rustls-webpki` is now 0.103.16, which fixes RUSTSEC-2026-0382. The old version can accept a certificate path that has a distrusted emSign intermediate.
+
 ## 0.1.55 (2026-10-21)
 
 ### Added
