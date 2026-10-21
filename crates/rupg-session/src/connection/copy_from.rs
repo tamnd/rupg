@@ -629,7 +629,8 @@ impl Connection {
         }
         let rows = std::mem::take(&mut load.rows);
         let lines = std::mem::take(&mut load.lines);
-        let count = rows.len() as u64;
+        let inserted = rows.len();
+        let count = inserted as u64;
         let new_rows = if info.foreign.is_empty() { Vec::new() } else { rows.clone() };
         if load.triggers.after_rows() {
             load.inserted.extend(rows.iter().cloned());
@@ -657,6 +658,7 @@ impl Connection {
             }
         }
         load.count += count;
+        self.count_inserts(info.table, inserted);
         if !new_rows.is_empty() {
             load.batches.push(Batch::new(info, &info.foreign, view.command, new_rows, Vec::new()));
         }

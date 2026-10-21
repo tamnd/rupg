@@ -6,16 +6,32 @@ use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
 
-use rupg_func::{Backend, BackendState, Client, RelationCounts, Ssl};
+use rupg_func::{Backend, BackendState, Client, RelationCounts, Ssl, Writes};
 use rupg_wire::TransactionStatus;
 
 use super::Connection;
 use crate::guc::{self, Setting, Settings};
+use crate::heap::Change;
 use crate::query;
 use crate::store::Store;
 
 /// `NAMEDATALEN - 1`, the most bytes of `application_name` and of the texts of the TLS status in the table.
 const NAME_BYTES: usize = 63;
+
+/// The rows that a transaction wrote in one relation, `PgStat_TableXactStatus` and the counts of `PgStat_TableStatus` that the subtransactions that rolled back left.
+#[derive(Clone, Copy, Debug, Default)]
+pub(crate) struct Pending {
+    /// The writes since the last `TRUNCATE`, or since the start of the transaction.
+    pub(crate) kept: Writes,
+    /// The writes before the first `TRUNCATE`, which a rollback brings back.
+    pub(crate) saved: Writes,
+    /// True after a `TRUNCATE` of the relation.
+    pub(crate) truncated: bool,
+    /// The writes of the subtransactions that rolled back. They count, but leave only dead rows.
+    pub(crate) aborted: Writes,
+    /// All the writes that did not roll back, which tell the writes of a subtransaction from the writes before it.
+    all: Writes,
+}
 
 /// What a session knows of the table of the sessions.
 #[derive(Debug, Default)]
@@ -33,6 +49,8 @@ pub(crate) struct Activity {
     database: u32,
     /// The sequential scans of each relation that the transaction counted. The end of the transaction reports them to the store.
     scans: RefCell<BTreeMap<u32, i64>>,
+    /// The rows that the transaction wrote in each relation. The end of the transaction reports them to the store.
+    writes: RefCell<BTreeMap<u32, Pending>>,
     /// The snapshot of the counters of the relations that the transaction reads, after its first read.
     relations: RefCell<Option<Arc<HashMap<u32, RelationCounts>>>>,
     /// `debug_query_string`: the text of the message that runs, in full. It is `None` while the session waits for the client.
@@ -79,6 +97,49 @@ impl Activity {
         self.scans.borrow().get(&relation).copied().unwrap_or(0)
     }
 
+    /// `pgstat_count_heap_insert`, `pgstat_count_heap_update` and `pgstat_count_heap_delete`: counts the rows that a statement wrote in a relation.
+    pub(crate) fn count_writes(&self, relation: u32, writes: Writes) {
+        let mut all = self.writes.borrow_mut();
+        let pending = all.entry(relation).or_default();
+        pending.kept = pending.kept + writes;
+        pending.all = pending.all + writes;
+    }
+
+    /// `pgstat_count_truncate`: the writes before a `TRUNCATE` of a relation do not count after a commit. The first `TRUNCATE` keeps them for a rollback.
+    pub(crate) fn count_truncate(&self, relation: u32) {
+        let mut all = self.writes.borrow_mut();
+        let pending = all.entry(relation).or_default();
+        if !pending.truncated {
+            pending.saved = pending.kept;
+            pending.truncated = true;
+        }
+        pending.kept = Writes::default();
+    }
+
+    /// The rows that the transaction wrote in a relation, as the functions `pg_stat_get_xact_tuples_*` count them.
+    pub(crate) fn pending_writes(&self, relation: u32) -> Writes {
+        self.writes.borrow().get(&relation).map_or_else(Writes::default, |p| p.aborted + p.kept)
+    }
+
+    /// A copy of the writes of the transaction for a savepoint.
+    pub(crate) fn writes(&self) -> BTreeMap<u32, Pending> {
+        self.writes.borrow().clone()
+    }
+
+    /// `AtEOSubXact_PgStat_Relations` at the rollback of a subtransaction: the writes go back to `before`, the writes at the savepoint, and the writes after the savepoint count as rolled back.
+    pub(crate) fn roll_back_writes(&self, before: &BTreeMap<u32, Pending>) {
+        for (relation, pending) in self.writes.borrow_mut().iter_mut() {
+            let old = before.get(relation).copied().unwrap_or_default();
+            let aborted = pending.aborted + (pending.all - old.all);
+            *pending = Pending { aborted, ..old };
+        }
+    }
+
+    /// The writes of the transaction, which its end reports.
+    pub(crate) fn take_writes(&self) -> BTreeMap<u32, Pending> {
+        self.writes.take()
+    }
+
     /// The counters of a relation from the snapshot of the transaction. The first read takes the snapshot.
     pub(crate) fn relation_counts(&self, store: &Store, relation: u32) -> Option<RelationCounts> {
         let mut snapshot = self.relations.borrow_mut();
@@ -91,6 +152,11 @@ impl Activity {
         self.snapshot.borrow_mut().take();
         self.relations.borrow_mut().take();
     }
+}
+
+/// A count of rows as a counter.
+fn count(rows: usize) -> i64 {
+    i64::try_from(rows).unwrap_or(i64::MAX)
 }
 
 /// The value of `application_name`, cut to the bytes that the table keeps.
@@ -229,6 +295,41 @@ impl Connection {
     /// The start of a transaction.
     pub(super) fn transaction_started(&self) {
         self.report_transaction(Some(self.transaction_start));
+    }
+
+    /// Counts the rows that a statement wrote in a relation, when `track_counts` is on.
+    pub(super) fn count_writes(&self, relation: u32, writes: Writes) {
+        if writes != Writes::default() && self.counts_tracked() {
+            self.activity.count_writes(relation, writes);
+        }
+    }
+
+    /// Counts the rows that a statement changed in a relation: each change in `applied` with a new version is an update, and each change with no new version is a delete.
+    pub(super) fn count_changes(&self, relation: u32, changes: &[Change], applied: &[usize]) {
+        let updated =
+            applied.iter().filter(|&&at| changes.get(at).is_some_and(|c| c.1.is_some())).count();
+        let deleted = applied.len() - updated;
+        self.count_writes(
+            relation,
+            Writes { inserted: 0, updated: count(updated), deleted: count(deleted) },
+        );
+    }
+
+    /// Counts the rows that a statement inserted in a relation.
+    pub(super) fn count_inserts(&self, relation: u32, inserted: usize) {
+        self.count_writes(relation, Writes { inserted: count(inserted), ..Writes::default() });
+    }
+
+    /// `pgstat_count_truncate` for a `TRUNCATE` of a relation.
+    pub(super) fn count_truncate(&self, relation: u32) {
+        if self.counts_tracked() {
+            self.activity.count_truncate(relation);
+        }
+    }
+
+    /// `pgstat_track_counts`.
+    fn counts_tracked(&self) -> bool {
+        self.settings.borrow().get("track_counts").as_deref() != Some("off")
     }
 
     /// The end of a transaction at a commit or at an abort: the session releases its advisory locks of the transaction level, `AtEOXact_PgStat` drops the snapshots, and `pgstat_report_stat` reports the scans of the transaction. A scan counts also after an abort, as in PostgreSQL.

@@ -55,7 +55,7 @@ mod upsert;
 mod vacuum;
 mod writes;
 
-pub(crate) use activity::Activity;
+pub(crate) use activity::{Activity, Pending};
 use copy_from::Begin;
 use extended::Failed;
 pub(crate) use extended::{Portal, Prepared};
@@ -766,6 +766,7 @@ impl Connection {
                 if keep_rows {
                     new_rows.clone_from(&rows);
                 }
+                let inserted = rows.len();
                 if info.unique.is_empty() {
                     heap.insert(info.table, &view, rows, &[], &[])?;
                 } else {
@@ -777,6 +778,7 @@ impl Connection {
                         }
                     }
                 }
+                self.count_inserts(info.table, inserted);
                 (CommandTag::Insert, count)
             }
             (kind, _) => {
@@ -815,6 +817,7 @@ impl Connection {
                         conflict => kept = self.key_conflict(info, &view, conflict)?,
                     }
                 };
+                self.count_changes(info.table, &changes, &applied);
                 if keep_rows {
                     let tids: Vec<u64> =
                         applied.iter().filter_map(|&at| changes.get(at).map(|c| c.0)).collect();
@@ -925,6 +928,10 @@ impl Connection {
             } else {
                 heap.abort(xid);
             }
+        }
+        let writes = self.activity.take_writes();
+        if !writes.is_empty() {
+            self.store.report_writes(self.database_oid, &writes, commit);
         }
         if commit && defined {
             let catalog = self.store.committed(self.database_oid);
@@ -1204,6 +1211,7 @@ impl Connection {
                 let context = format!("while truncating relation \"{name}\"");
                 self.reader().wait_xact(view.xid, holder, &context)?;
             }
+            self.count_truncate(table);
         }
         self.command.set(view.command + 1);
         Ok(())
@@ -4453,6 +4461,12 @@ mod tests {
     #[test]
     fn scans() {
         big_stack(|| script(include_str!("connection/scans.test")));
+    }
+
+    /// The counts of the rows that the transactions wrote in `pg_stat_user_tables` and `pg_stat_xact_user_tables`: `INSERT`, `UPDATE`, `DELETE`, a rollback, a rollback to a savepoint, `TRUNCATE` with a commit and with a rollback, `ON CONFLICT`, `MERGE`, the partitions, a rewrite of the table, `track_counts`, `CREATE TABLE AS` and `COPY FROM`. `connection/table_counts.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn table_counts() {
+        big_stack(|| script(include_str!("connection/table_counts.test")));
     }
 
     /// `SELECT` from the tables and sequences of the user, with the types of the columns. `connection/user_select.test` is the output of PostgreSQL 19 for the same script in a new database.

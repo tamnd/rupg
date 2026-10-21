@@ -108,7 +108,7 @@ pub use reg::ts_config_setting;
 pub use regex::{AuthMatch, auth_compile, auth_search};
 pub use sequence::Sequences;
 pub use srf::{SetKernel, set_kernel};
-pub use stat::RelationCounts;
+pub use stat::{RelationCounts, Writes};
 pub use text::quote_identifier;
 pub use tsm::sample_rows;
 pub use xml::{xml_expr, xml_value};
@@ -398,6 +398,11 @@ pub trait Session {
     fn pending_scans(&self, relation: u32) -> i64 {
         let _ = relation;
         0
+    }
+    /// `find_tabstat_entry`: the rows that the transaction wrote in a relation and did not report yet, with the rows of the subtransactions that rolled back.
+    fn pending_writes(&self, relation: u32) -> Writes {
+        let _ = relation;
+        Writes::default()
     }
     /// The time of the last reset of the statistics of the whole server in microseconds since 2000-01-01 UTC, or 0 when the session has no server.
     fn stats_reset(&self) -> i64 {

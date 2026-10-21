@@ -860,6 +860,11 @@ impl rupg_func::Session for Reader<'_> {
         self.activity.map_or(0, |(activity, _)| activity.pending_scans(relation))
     }
 
+    fn pending_writes(&self, relation: u32) -> rupg_func::Writes {
+        self.activity
+            .map_or_else(Default::default, |(activity, _)| activity.pending_writes(relation))
+    }
+
     fn hba_rules(&self) -> Result<Vec<Vec<Value>>> {
         match self.activity.and_then(|(_, store)| store.auth()) {
             Some(auth) => Ok(auth.hba_rules()?.into_iter().map(crate::auth::hba_values).collect()),
