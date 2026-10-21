@@ -1,0 +1,155 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (k int, v int);
+CREATE TABLE
+> CREATE TABLE q (k int, w text);
+CREATE TABLE
+> CREATE TABLE c1 (x text) INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 (k int, z int) INHERITS (p, q);
+NOTICE 00000 merging multiple inherited definitions of column "k"
+NOTICE 00000 merging column "k" with inherited definition
+CREATE TABLE
+> CREATE TABLE g1 () INHERITS (c1);
+CREATE TABLE
+> INSERT INTO p VALUES (1, 10);
+INSERT 0 1
+> INSERT INTO c1 VALUES (2, 20, 'a');
+INSERT 0 1
+> INSERT INTO c2 VALUES (3, 30, 'w', 5);
+INSERT 0 1
+> INSERT INTO g1 VALUES (4, 40, 'g');
+INSERT 0 1
+> ALTER TABLE p ADD COLUMN n int DEFAULT 5;
+ALTER TABLE
+> ALTER TABLE c2 ADD COLUMN m int;
+ALTER TABLE
+> ALTER TABLE p ADD COLUMN m int;
+NOTICE 00000 merging definition of column "m" for child "c2"
+ALTER TABLE
+> ALTER TABLE c1 ADD COLUMN m2 text;
+ALTER TABLE
+> ALTER TABLE p ADD COLUMN m2 int;
+ERROR 42804 child table "c1" has different type for column "m2"
+> SELECT c.relname, a.attname, a.attnum, a.atttypid::regtype::text, a.attislocal, a.attinhcount, a.attnotnull FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'q', 'c1', 'c2', 'g1') AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,atttypid:25:-1:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,attnotnull@pg_attribute.12:16:1:-1
+row c1,k,1,integer,f,1,f
+row c1,v,2,integer,f,1,f
+row c1,x,3,text,t,0,f
+row c1,n,4,integer,f,1,f
+row c1,m,5,integer,f,1,f
+row c1,m2,6,text,t,0,f
+row c2,k,1,integer,t,2,f
+row c2,v,2,integer,f,1,f
+row c2,w,3,text,f,1,f
+row c2,z,4,integer,t,0,f
+row c2,n,5,integer,f,1,f
+row c2,m,6,integer,t,1,f
+row g1,k,1,integer,f,1,f
+row g1,v,2,integer,f,1,f
+row g1,x,3,text,f,1,f
+row g1,n,4,integer,f,1,f
+row g1,m,5,integer,f,1,f
+row g1,m2,6,text,f,1,f
+row p,k,1,integer,t,0,f
+row p,v,2,integer,t,0,f
+row p,n,3,integer,t,0,f
+row p,m,4,integer,t,0,f
+row q,k,1,integer,t,0,f
+row q,w,2,text,t,0,f
+SELECT 24
+> SELECT tableoid::regclass::text AS t, k, v, n, m FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1,v@p.2:23:4:-1,n@p.3:23:4:-1,m@p.4:23:4:-1
+row p,1,10,5,NULL
+row c1,2,20,5,NULL
+row c2,3,30,5,NULL
+row g1,4,40,5,NULL
+SELECT 4
+> ALTER TABLE ONLY p ADD COLUMN o int;
+ERROR 42P16 column must be added to child tables too
+> ALTER TABLE c1 DROP COLUMN k;
+ERROR 42P16 cannot drop inherited column "k"
+> ALTER TABLE c1 DROP COLUMN x;
+ALTER TABLE
+> ALTER TABLE p DROP COLUMN n;
+ALTER TABLE
+> ALTER TABLE q DROP COLUMN k;
+ALTER TABLE
+> ALTER TABLE p DROP COLUMN k;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attnum, a.atttypid::regtype::text, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'q', 'c1', 'c2', 'g1') AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,atttypid:25:-1:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row c1,v,2,integer,f,1
+row c1,m,5,integer,f,1
+row c1,m2,6,text,t,0
+row c2,k,1,integer,t,0
+row c2,v,2,integer,f,1
+row c2,w,3,text,f,1
+row c2,z,4,integer,t,0
+row c2,m,6,integer,t,1
+row g1,v,2,integer,f,1
+row g1,m,5,integer,f,1
+row g1,m2,6,text,f,1
+row p,v,2,integer,t,0
+row p,m,4,integer,t,0
+row q,w,2,text,t,0
+SELECT 14
+> ALTER TABLE ONLY p ALTER COLUMN v TYPE bigint;
+ERROR 42P16 type of inherited column "v" must be changed in child tables too
+> ALTER TABLE p ALTER COLUMN v TYPE bigint;
+ALTER TABLE
+> ALTER TABLE c1 ALTER COLUMN v TYPE int;
+ERROR 42P16 cannot alter inherited column "v" at 29
+> SELECT c.relname, a.attname, a.atttypid::regtype::text FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'c1', 'c2', 'g1') AND a.attname = 'v' ORDER BY c.relname;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,atttypid:25:-1:-1
+row c1,v,bigint
+row c2,v,bigint
+row g1,v,bigint
+row p,v,bigint
+SELECT 4
+> ALTER TABLE p ALTER COLUMN v SET DEFAULT 99;
+ALTER TABLE
+> ALTER TABLE ONLY p ALTER COLUMN m SET DEFAULT 7;
+ALTER TABLE
+> INSERT INTO c1 (m) VALUES (1);
+INSERT 0 1
+> INSERT INTO p (m) VALUES (2);
+INSERT 0 1
+> SELECT tableoid::regclass::text AS t, v, m FROM p WHERE v = 99 ORDER BY m;
+fields t:25:-1:-1,v@p.2:20:8:-1,m@p.4:23:4:-1
+row c1,99,1
+row p,99,2
+SELECT 2
+> SELECT c.relname, a.attname, pg_get_expr(d.adbin, d.adrelid) FROM pg_attrdef d JOIN pg_class c ON c.oid = d.adrelid JOIN pg_attribute a ON a.attrelid = d.adrelid AND a.attnum = d.adnum WHERE c.relname IN ('p', 'c1', 'c2', 'g1') ORDER BY c.relname, a.attname;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,pg_get_expr:25:-1:-1
+row c1,v,99
+row c2,v,99
+row g1,v,99
+row p,m,7
+row p,v,99
+SELECT 5
+> ALTER TABLE p ALTER COLUMN v DROP DEFAULT;
+ALTER TABLE
+> ALTER TABLE p RENAME COLUMN m TO mm;
+ALTER TABLE
+> ALTER TABLE c1 RENAME COLUMN mm TO m3;
+ERROR 42P16 cannot rename inherited column "mm"
+> ALTER TABLE ONLY p RENAME COLUMN mm TO m4;
+ERROR 42P16 inherited column "mm" must be renamed in child tables too
+> SELECT c.relname, a.attname, a.attnum FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'c1', 'c2', 'g1') AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1
+row c1,v,2
+row c1,mm,5
+row c1,m2,6
+row c2,k,1
+row c2,v,2
+row c2,w,3
+row c2,z,4
+row c2,mm,6
+row g1,v,2
+row g1,mm,5
+row g1,m2,6
+row p,v,2
+row p,mm,4
+SELECT 13

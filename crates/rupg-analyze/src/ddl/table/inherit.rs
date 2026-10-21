@@ -33,7 +33,7 @@ fn compression_name(compression: u8) -> &'static str {
 }
 
 /// `get_collation_name`.
-fn collation_name(collation: u32) -> &'static str {
+pub(in crate::ddl) fn collation_name(collation: u32) -> &'static str {
     builtin::named_by_oid(Named::Collation, collation).map_or("???", |n| n.name)
 }
 

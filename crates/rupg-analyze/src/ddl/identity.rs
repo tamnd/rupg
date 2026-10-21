@@ -65,9 +65,12 @@ impl Definer<'_, '_> {
         self.catalog.relation(target.oid).is_some_and(|r| r.partition_of.is_some())
     }
 
-    /// The number of the column `column` of each partition of the partitioned table `target`, at each level, as the recursion of `ATExecAddIdentity`, `ATExecSetIdentity` and `ATExecDropIdentity` finds them.
+    /// The number of the column `column` of each partition of the partitioned table `target`, at each level, as the recursion of `ATExecAddIdentity`, `ATExecSetIdentity` and `ATExecDropIdentity` finds them. The children of `INHERITS` do not inherit the identity, so a table that is not partitioned gives no columns.
     fn partition_columns(&self, target: &Target, column: &str) -> Result<Vec<(Target, i16)>> {
         let mut out = Vec::new();
+        if target.kind != b'p' {
+            return Ok(out);
+        }
         for child in self.all_inheritors(target.oid) {
             let number = self.catalog.relation(child.oid).and_then(|r| r.column_number(column));
             let Some(number) = number else { return Err(no_column(column, &child.name)) };

@@ -1,0 +1,178 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (k int, v int);
+CREATE TABLE
+> CREATE TABLE c1 (x text) INHERITS (p);
+CREATE TABLE
+> CREATE TABLE g1 () INHERITS (c1);
+CREATE TABLE
+> INSERT INTO p VALUES (1, 10);
+INSERT 0 1
+> INSERT INTO c1 VALUES (2, 20, 'a');
+INSERT 0 1
+> INSERT INTO g1 VALUES (3, 30, 'b');
+INSERT 0 1
+> ALTER TABLE p ADD COLUMN n int NOT NULL DEFAULT 4;
+ALTER TABLE
+> ALTER TABLE p ADD COLUMN ck int DEFAULT 1 CHECK (ck > 0);
+ALTER TABLE
+> ALTER TABLE p ADD COLUMN bad int NOT NULL;
+ERROR 23502 column "bad" of relation "p" contains null values
+> SELECT c.relname, n.conname, n.contype, n.conislocal, n.coninhcount, pg_get_constraintdef(n.oid) FROM pg_constraint n JOIN pg_class c ON c.oid = n.conrelid WHERE c.relname IN ('p', 'c1', 'g1') ORDER BY c.relname, n.conname;
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,pg_get_constraintdef:25:-1:-1
+row c1,p_ck_check,c,f,1,CHECK ((ck > 0))
+row c1,p_n_not_null,n,f,1,NOT NULL n
+row g1,p_ck_check,c,f,1,CHECK ((ck > 0))
+row g1,p_n_not_null,n,f,1,NOT NULL n
+row p,p_ck_check,c,t,0,CHECK ((ck > 0))
+row p,p_n_not_null,n,t,0,NOT NULL n
+SELECT 6
+> SELECT tableoid::regclass::text AS t, k, v, n, ck FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1,v@p.2:23:4:-1,n@p.3:23:4:-1,ck@p.4:23:4:-1
+row p,1,10,4,1
+row c1,2,20,4,1
+row g1,3,30,4,1
+SELECT 3
+> ALTER TABLE p ADD PRIMARY KEY (k);
+ALTER TABLE
+> SELECT c.relname, n.conname, n.contype, n.conislocal, n.coninhcount FROM pg_constraint n JOIN pg_class c ON c.oid = n.conrelid WHERE c.relname IN ('p', 'c1', 'g1') AND n.contype IN ('p', 'n') ORDER BY c.relname, n.conname;
+fields relname@pg_class.2:19:64:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row c1,p_k_not_null,n,f,1
+row c1,p_n_not_null,n,f,1
+row g1,p_k_not_null,n,f,1
+row g1,p_n_not_null,n,f,1
+row p,p_k_not_null,n,t,0
+row p,p_n_not_null,n,t,0
+row p,p_pkey,p,t,0
+SELECT 7
+> SELECT c.relname, a.attname, a.attnotnull FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'c1', 'g1') AND a.attname = 'k' ORDER BY c.relname;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1
+row c1,k,t
+row g1,k,t
+row p,k,t
+SELECT 3
+> SELECT indexrelid::regclass::text FROM pg_index WHERE indrelid IN ('p'::regclass, 'c1'::regclass, 'g1'::regclass) ORDER BY 1;
+fields indexrelid:25:-1:-1
+row p_pkey
+SELECT 1
+> ALTER TABLE p ADD UNIQUE (v);
+ALTER TABLE
+> SELECT indexrelid::regclass::text FROM pg_index WHERE indrelid IN ('p'::regclass, 'c1'::regclass, 'g1'::regclass) ORDER BY 1;
+fields indexrelid:25:-1:-1
+row p_pkey
+row p_v_key
+SELECT 2
+> ALTER TABLE p ALTER COLUMN k ADD GENERATED ALWAYS AS IDENTITY;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attidentity FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'c1', 'g1') AND a.attname = 'k' ORDER BY c.relname;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attidentity@pg_attribute.15:18:1:-1
+row c1,k,
+row g1,k,
+row p,k,a
+SELECT 3
+> ALTER TABLE p ALTER COLUMN k DROP IDENTITY;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN x SET STORAGE MAIN;
+ERROR 42703 column "x" of relation "p" does not exist
+> ALTER TABLE c1 ALTER COLUMN x SET STORAGE MAIN;
+ALTER TABLE
+> ALTER TABLE p ADD COLUMN t text;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN t SET STORAGE EXTERNAL;
+ALTER TABLE
+> ALTER TABLE p ALTER COLUMN t SET COMPRESSION pglz;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attstorage, a.attcompression FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'c1', 'g1') AND a.attname IN ('t', 'x') ORDER BY c.relname, a.attname;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attstorage@pg_attribute.10:18:1:-1,attcompression@pg_attribute.11:18:1:-1
+row c1,t,e,
+row c1,x,m,
+row g1,t,e,
+row g1,x,m,
+row p,t,e,p
+SELECT 5
+> ALTER TABLE p ALTER COLUMN n TYPE text USING (n * 2)::text;
+ALTER TABLE
+> SELECT tableoid::regclass::text AS t, k, n FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1,n@p.3:25:-1:-1
+row p,1,8
+row c1,2,8
+row g1,3,8
+SELECT 3
+> ALTER TABLE ONLY p ALTER COLUMN n SET DEFAULT 'z';
+ALTER TABLE
+> ALTER TABLE ONLY c1 ALTER COLUMN n SET DEFAULT 'y';
+ALTER TABLE
+> INSERT INTO p (k) VALUES (4);
+INSERT 0 1
+> INSERT INTO c1 (k) VALUES (5);
+INSERT 0 1
+> INSERT INTO g1 (k) VALUES (6);
+INSERT 0 1
+> SELECT tableoid::regclass::text AS t, k, n FROM p ORDER BY k;
+fields t:25:-1:-1,k@p.1:23:4:-1,n@p.3:25:-1:-1
+row p,1,8
+row c1,2,8
+row g1,3,8
+row p,4,z
+row c1,5,y
+row g1,6,4
+SELECT 6
+> CREATE VIEW pv AS SELECT k, ck FROM p;
+CREATE VIEW
+> ALTER TABLE p DROP COLUMN ck;
+ERROR 2BP01 cannot drop desired object(s) because other objects depend on them
+DETAIL view pv depends on column ck of table p
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> ALTER TABLE p DROP COLUMN ck CASCADE;
+NOTICE 00000 drop cascades to view pv
+ALTER TABLE
+> SELECT c.relname, a.attname FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'c1', 'g1') AND a.attnum > 0 AND NOT a.attisdropped ORDER BY c.relname, a.attnum;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1
+row c1,k
+row c1,v
+row c1,x
+row c1,n
+row c1,t
+row g1,k
+row g1,v
+row g1,x
+row g1,n
+row g1,t
+row p,k
+row p,v
+row p,n
+row p,t
+SELECT 14
+> SELECT count(*) FROM pg_class WHERE relname = 'pv';
+fields count:20:8:-1
+row 0
+SELECT 1
+> ALTER TABLE p ADD COLUMN IF NOT EXISTS k int;
+NOTICE 42701 column "k" of relation "p" already exists, skipping
+ALTER TABLE
+> ALTER TABLE ONLY c1 DROP COLUMN t;
+ERROR 42P16 cannot drop inherited column "t"
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'c1', 'g1') AND a.attname = 't' ORDER BY c.relname;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row c1,t,f,1
+row g1,t,f,1
+row p,t,t,0
+SELECT 3
+> ALTER TABLE ONLY p DROP COLUMN t;
+ALTER TABLE
+> SELECT c.relname, a.attname, a.attislocal, a.attinhcount FROM pg_attribute a JOIN pg_class c ON c.oid = a.attrelid WHERE c.relname IN ('p', 'c1', 'g1') AND a.attname = 't' ORDER BY c.relname;
+fields relname@pg_class.2:19:64:-1,attname@pg_attribute.2:19:64:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row c1,t,t,0
+row g1,t,f,1
+SELECT 2
+> ALTER TABLE p DROP COLUMN x;
+ERROR 42703 column "x" of relation "p" does not exist
+> ALTER TABLE p SET UNLOGGED;
+ALTER TABLE
+> SELECT relname, relpersistence FROM pg_class WHERE relname IN ('p', 'c1', 'g1') ORDER BY relname;
+fields relname@pg_class.2:19:64:-1,relpersistence@pg_class.17:18:1:-1
+row c1,p
+row g1,p
+row p,u
+SELECT 3

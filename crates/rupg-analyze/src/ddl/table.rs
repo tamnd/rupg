@@ -28,6 +28,8 @@ use crate::types;
 
 mod inherit;
 
+pub(super) use inherit::collation_name;
+
 /// The names of the system columns.
 pub(super) const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "cmax", "xmax", "cmin", "xmin", "ctid"];
 
