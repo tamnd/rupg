@@ -1,0 +1,243 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int, y int);
+CREATE TABLE
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int);
+CREATE TABLE
+> CREATE TABLE d (x int, y int);
+CREATE TABLE
+> CREATE TABLE t (s text, u text);
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, c WHERE a.x = b.x AND a.y = c.x AND a.x = 7;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Hash Join
+row         Hash Cond: (c.x = a.y)
+row         ->  Seq Scan on c
+row         ->  Hash
+row               ->  Seq Scan on a
+row                     Filter: (x = 7)
+row   ->  Materialize
+row         ->  Seq Scan on b
+row               Filter: (x = 7)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a JOIN b ON a.x = b.x JOIN c ON c.x = a.y WHERE b.x = 4;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Hash Join
+row         Hash Cond: (c.x = a.y)
+row         ->  Seq Scan on c
+row         ->  Hash
+row               ->  Seq Scan on a
+row                     Filter: (x = 4)
+row   ->  Materialize
+row         ->  Seq Scan on b
+row               Filter: (x = 4)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, c WHERE a.x = b.x AND b.y = c.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (c.x = b.y)
+row   ->  Sort
+row         Sort Key: c.x
+row         ->  Seq Scan on c
+row   ->  Sort
+row         Sort Key: b.y
+row         ->  Merge Join
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a
+row               ->  Sort
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, c WHERE a.x = c.x AND b.x = a.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (c.x = a.x)
+row   ->  Sort
+row         Sort Key: c.x
+row         ->  Seq Scan on c
+row   ->  Sort
+row         Sort Key: a.x
+row         ->  Merge Join
+row               Merge Cond: (a.y = b.x)
+row               ->  Sort
+row                     Sort Key: a.y
+row                     ->  Seq Scan on a
+row               ->  Sort
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, c WHERE a.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Merge Join
+row         Merge Cond: (a.x = b.x)
+row         ->  Sort
+row               Sort Key: a.x
+row               ->  Seq Scan on a
+row         ->  Sort
+row               Sort Key: b.x
+row               ->  Seq Scan on b
+row   ->  Materialize
+row         ->  Seq Scan on c
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM c, a, b WHERE a.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Merge Join
+row         Merge Cond: (a.x = b.x)
+row         ->  Sort
+row               Sort Key: a.x
+row               ->  Seq Scan on a
+row         ->  Sort
+row               Sort Key: b.x
+row               ->  Seq Scan on b
+row   ->  Materialize
+row         ->  Seq Scan on c
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, t, b WHERE a.y = b.y AND t.s = 'q';
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Merge Join
+row         Merge Cond: (a.y = b.y)
+row         ->  Sort
+row               Sort Key: a.y
+row               ->  Seq Scan on a
+row         ->  Sort
+row               Sort Key: b.y
+row               ->  Seq Scan on b
+row   ->  Materialize
+row         ->  Seq Scan on t
+row               Filter: (s = 'q'::text)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, generate_series(1, 3) g WHERE a.x = b.x AND b.y = g;
+fields QUERY PLAN:25:-1:-1
+row Hash Join
+row   Hash Cond: (a.x = b.x)
+row   ->  Seq Scan on a
+row   ->  Hash
+row         ->  Hash Join
+row               Hash Cond: (b.y = g.g)
+row               ->  Seq Scan on b
+row               ->  Hash
+row                     ->  Function Scan on generate_series g
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a LEFT JOIN b ON a.x = b.x, c WHERE c.x = a.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (c.x = a.y)
+row   ->  Sort
+row         Sort Key: c.x
+row         ->  Seq Scan on c
+row   ->  Sort
+row         Sort Key: a.y
+row         ->  Merge Left Join
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a
+row               ->  Sort
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a JOIN (b JOIN c ON b.y = c.x) ON a.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (c.x = b.y)
+row   ->  Sort
+row         Sort Key: c.x
+row         ->  Seq Scan on c
+row   ->  Sort
+row         Sort Key: b.y
+row         ->  Merge Join
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a
+row               ->  Sort
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT count(*) FROM a, b, c WHERE a.x = b.x AND b.y = c.x AND a.y > 3;
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Merge Join
+row         Merge Cond: (c.x = b.y)
+row         ->  Sort
+row               Sort Key: c.x
+row               ->  Seq Scan on c
+row         ->  Sort
+row               Sort Key: b.y
+row               ->  Merge Join
+row                     Merge Cond: (a.x = b.x)
+row                     ->  Sort
+row                           Sort Key: a.x
+row                           ->  Seq Scan on a
+row                                 Filter: (y > 3)
+row                     ->  Sort
+row                           Sort Key: b.x
+row                           ->  Seq Scan on b
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c WHERE a.x = b.x AND b.y = c.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=2760.59..7657.49 rows=325610 width=20)
+row   Merge Cond: (c.x = b.y)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Sort  (cost=2580.81..2644.65 rows=25538 width=16)
+row         Sort Key: b.y
+row         ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, c, d WHERE a.x = b.x AND b.y = c.x AND c.x = d.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (c.x = b.y)
+row   ->  Merge Join
+row         Merge Cond: (d.x = c.x)
+row         ->  Sort
+row               Sort Key: d.x
+row               ->  Seq Scan on d
+row         ->  Sort
+row               Sort Key: c.x
+row               ->  Seq Scan on c
+row   ->  Sort
+row         Sort Key: b.y
+row         ->  Merge Join
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a
+row               ->  Sort
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM d, c, b, a WHERE a.x = b.x AND b.y = c.x AND a.y = 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   ->  Seq Scan on d
+row   ->  Materialize
+row         ->  Hash Join
+row               Hash Cond: (c.x = b.y)
+row               ->  Seq Scan on c
+row               ->  Hash
+row                     ->  Hash Join
+row                           Hash Cond: (b.x = a.x)
+row                           ->  Seq Scan on b
+row                           ->  Hash
+row                                 ->  Seq Scan on a
+row                                       Filter: (y = 1)
+EXPLAIN

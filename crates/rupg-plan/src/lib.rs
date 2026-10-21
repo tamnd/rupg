@@ -94,7 +94,7 @@ pub struct Label<'q> {
 }
 
 /// A node of the plan.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Node<'q> {
     pub kind: Kind<'q>,
     /// The index of the query of the expressions of the node in [`Plan::scopes`].
@@ -132,7 +132,7 @@ impl<'q> Node<'q> {
 }
 
 /// A subplan with its name, such as `InitPlan expr_1`, `SubPlan any_1` or `CTE w`.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct SubPlan<'q> {
     pub name: String,
     pub plan: Node<'q>,
@@ -193,7 +193,7 @@ pub struct SortKey<'q> {
 }
 
 /// The kinds of node, with the parts that each kind shows.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub enum Kind<'q> {
     /// `Result`: a row with no relation, or the rows of the node below when a condition with no column, `resconstantqual`, is true.
     Result { replaces: Option<Replaced>, one_time: Vec<Item<'q>> },
@@ -297,7 +297,7 @@ impl Operation {
 }
 
 /// The `ON CONFLICT` clause of an `INSERT`.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 pub struct Conflict<'q> {
     /// True for `DO UPDATE`, false for `DO NOTHING`.
     pub update: bool,

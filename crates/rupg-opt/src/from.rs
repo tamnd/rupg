@@ -1,6 +1,7 @@
 //! The plan of `FROM` and `WHERE`: the scan of each relation, the joins and the place of each condition, as `query_planner`, `make_one_rel` and `create_scan_plan` make them.
 
 mod classes;
+mod search;
 
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
@@ -91,7 +92,7 @@ impl OrderKey {
 }
 
 /// The plan of a part of `FROM`, with the relations that it reads and the order of its rows.
-#[derive(Debug)]
+#[derive(Clone, Debug)]
 struct Rel<'q> {
     node: Node<'q>,
     rels: BTreeSet<usize>,
@@ -144,12 +145,12 @@ impl<'q> Builder<'q> {
             next += 1;
             place(&mut tree, qual);
         }
-        let mut joined = Vec::new();
-        if !classes::domain(&mut tree, true, &mut joined) {
+        let mut found = classes::Found::default();
+        if !classes::domain(&mut tree, true, &mut found) {
             return (dummy(level.scope, &all), Vec::new(), Vec::new());
         }
         let mut stats = Stats::new();
-        let rel = self.build(level, tree, &mut stats);
+        let rel = self.build(level, tree, &found.spans, &mut stats);
         let mut node = rel.node;
         if !gating.is_empty() {
             // `create_gating_plan`: the `Result` has the costs of the node below.
@@ -161,17 +162,30 @@ impl<'q> Builder<'q> {
             );
             node.cost = cost;
         }
-        (node, rel.order, joined)
+        (node, rel.order, found.joined)
     }
 
-    /// The plan of a part of the tree of the joins.
-    fn build(&mut self, level: &Level<'q>, tree: Tree<'q>, stats: &mut Stats) -> Rel<'q> {
+    /// The plan of a part of the tree of the joins. The inner joins of a join domain are one problem of the order of the joins, with the outer joins as items of the problem. `spans` has the relations of each equivalence class.
+    fn build(
+        &mut self,
+        level: &Level<'q>,
+        tree: Tree<'q>,
+        spans: &[BTreeSet<usize>],
+        stats: &mut Stats,
+    ) -> Rel<'q> {
         match tree {
             Tree::Base { relation, quals } => self.scan(level, relation, quals, stats),
+            Tree::Join(join) if join.kind == JoinKind::Inner => {
+                let (mut items, mut pool) = (Vec::new(), Vec::new());
+                flatten(Tree::Join(join), &mut items, &mut pool);
+                pool.sort_by_key(|q| q.order.unwrap_or(usize::MAX));
+                let rels = items.into_iter().map(|t| self.build(level, t, spans, stats)).collect();
+                search::search(level, rels, &pool, spans, stats)
+            }
             Tree::Join(join) => {
                 let JoinTree { kind, left, right, quals, filter, .. } = *join;
-                let left = self.build(level, left, stats);
-                let right = self.build(level, right, stats);
+                let left = self.build(level, left, spans, stats);
+                let right = self.build(level, right, spans, stats);
                 join_rels(level, kind, left, right, quals, filter, stats)
             }
         }
@@ -735,8 +749,26 @@ fn join_rels<'q>(
     filter: Vec<Qual<'q>>,
     stats: &Stats,
 ) -> Rel<'q> {
-    let mut rels = left.rels.clone();
-    rels.extend(right.rels.iter().copied());
+    let rows = join_rows(kind, &left, &right, &quals, &filter, stats);
+    let mut quals = quals;
+    quals.sort_by_key(|q| exprs::calls(&q.expr));
+    let Some(best) = choose(level, kind, &left, &right, &quals, &filter, stats) else {
+        let mut rels = left.rels.clone();
+        rels.extend(right.rels.iter().copied());
+        return nested_join(level, kind, left, right, quals, filter, rows, rels);
+    };
+    finish(level, &best, left, right, &quals, &filter, rows)
+}
+
+/// The rows of a join of two sides, as `calc_joinrel_size_estimate`.
+fn join_rows(
+    kind: JoinKind,
+    left: &Rel<'_>,
+    right: &Rel<'_>,
+    quals: &[Qual<'_>],
+    filter: &[Qual<'_>],
+    stats: &Stats,
+) -> f64 {
     let selectivity: f64 = quals.iter().map(|q| join_selectivity(q, stats)).product();
     let mut rows = left.node.cost.rows * right.node.cost.rows * selectivity;
     match kind {
@@ -745,9 +777,19 @@ fn join_rels<'q>(
         _ => {}
     }
     let filter_selectivity: f64 = filter.iter().map(|q| cost::selectivity(&q.expr)).product();
-    let rows = cost::clamp_rows(rows * filter_selectivity);
-    let mut quals = quals;
-    quals.sort_by_key(|q| exprs::calls(&q.expr));
+    cost::clamp_rows(rows * filter_selectivity)
+}
+
+/// The kind of join with the lowest total cost for the two sides in each order that the join can have, as `add_paths_to_joinrel`, or `None` for a full join that no kind of join can do.
+fn choose<'q>(
+    level: &Level<'q>,
+    kind: JoinKind,
+    left: &Rel<'q>,
+    right: &Rel<'q>,
+    quals: &[Qual<'q>],
+    filter: &[Qual<'q>],
+    stats: &Stats,
+) -> Option<Candidate<'q>> {
     let filter_cost = cost::qual_cost(filter.iter().map(|q| &*q.expr));
     let lateral_right = lateral(level, &right.rels, &left.rels);
     // The orders of the sides: the left side first, and the right side first when the join can have the sides in the other order.
@@ -757,12 +799,12 @@ fn join_rels<'q>(
     }
     let mut best: Option<Candidate<'q>> = None;
     for swapped in orders {
-        let (outer, inner) = if swapped { (&right, &left) } else { (&left, &right) };
+        let (outer, inner) = if swapped { (right, left) } else { (left, right) };
         let join = match (kind, swapped) {
             (JoinKind::Left, true) => JoinKind::Right,
             (k, _) => k,
         };
-        let input = Input { outer, inner, quals: &quals, filter_cost, stats };
+        let input = Input { outer, inner, quals, filter_cost, stats };
         let nested = kind == JoinKind::Inner || !swapped && kind == JoinKind::Left;
         let candidates = [
             merge_join(&input, join),
@@ -775,14 +817,42 @@ fn join_rels<'q>(
             }
         }
     }
-    let Some(best) = best else {
-        return nested_join(level, kind, left, right, quals, filter, rows, rels);
-    };
+    best
+}
+
+/// The plan of the join of two sides with the kind of join that `choose` found.
+fn finish<'q>(
+    level: &Level<'q>,
+    best: &Candidate<'q>,
+    left: Rel<'q>,
+    right: Rel<'q>,
+    quals: &[Qual<'q>],
+    filter: &[Qual<'q>],
+    rows: f64,
+) -> Rel<'q> {
+    let mut rels = left.rels.clone();
+    rels.extend(right.rels.iter().copied());
     let (outer, inner) = if best.swapped { (right, left) } else { (left, right) };
-    let mut out = best.make(level.scope, outer, inner, &quals, rows);
+    let mut out = best.make(level.scope, outer, inner, quals, rows);
     out.node.filter = filter.iter().map(|q| q.item()).collect();
     out.rels = rels;
     out
+}
+
+/// The items of the problem of the order of the joins of a join domain, as the list of `deconstruct_jointree`, and the conditions of its inner joins. A condition with no column has the relations of its join.
+fn flatten<'q>(tree: Tree<'q>, items: &mut Vec<Tree<'q>>, pool: &mut Vec<Qual<'q>>) {
+    match tree {
+        Tree::Join(join) if join.kind == JoinKind::Inner => {
+            let JoinTree { left, right, quals, filter, rels, .. } = *join;
+            flatten(left, items, pool);
+            flatten(right, items, pool);
+            for qual in quals.into_iter().chain(filter) {
+                let rels = if qual.rels.is_empty() { rels.clone() } else { qual.rels.clone() };
+                pool.push(Qual { rels, ..qual });
+            }
+        }
+        other => items.push(other),
+    }
 }
 
 /// A full join with no condition that a merge join or a hash join can use, which PostgreSQL cannot plan. The plan is a nested loop.
