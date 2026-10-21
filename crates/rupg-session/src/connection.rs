@@ -390,7 +390,7 @@ pub struct Connection {
     /// The file system of the server, which `COPY ... FROM` a file reads. A session with no server has none.
     io: Option<Arc<dyn Io>>,
     /// The lock of the store and the copy of the catalog, while the transaction changes the catalog.
-    lease: Option<Lease>,
+    lease: RefCell<Option<Lease>>,
     /// The row of the session in the table of the sessions of the store.
     activity: Activity,
     /// The cache of the sequences of the session, with the state of `currval` and `lastval`.
@@ -474,7 +474,7 @@ impl Connection {
             session_role: role_oid(start),
             store: Arc::new(Store::new()),
             io: None,
-            lease: None,
+            lease: RefCell::new(None),
             activity: Activity::default(),
             sequences: RefCell::new(Sequences::default()),
             randomness: RefCell::new(Randomness::default()),
@@ -847,7 +847,7 @@ impl Connection {
 
     /// The catalog that a statement sees: the copy of the transaction when it changed the catalog, or the catalog of the last commit.
     fn catalog(&self) -> Arc<Catalog> {
-        match &self.lease {
+        match &*self.lease.borrow() {
             Some(lease) => Arc::clone(&lease.catalog),
             None => self.store.committed(self.database_oid),
         }
@@ -855,19 +855,14 @@ impl Connection {
 
     /// The roles that a statement sees: the copy of the transaction when it holds the lock of the catalog, or the roles of the last commit.
     fn roles(&self) -> Arc<Roles> {
-        match &self.lease {
+        match &*self.lease.borrow() {
             Some(lease) => Arc::clone(&lease.roles),
             None => self.store.roles(),
         }
     }
 
     /// Runs a statement that defines an object. The statement takes the lock of the store, which the transaction holds until it ends. After an error the changes of the statement go, but its OIDs stay used.
-    fn define(
-        &mut self,
-        node: &Node,
-        text: &str,
-        notices: &mut Vec<Notice>,
-    ) -> Result<Done, Error> {
+    fn define(&self, node: &Node, text: &str, notices: &mut Vec<Notice>) -> Result<Done, Error> {
         if let Node::DropStmt(stmt) = node
             && stmt.concurrent
             && self.transaction.in_block()
@@ -885,12 +880,13 @@ impl Connection {
                 "cannot execute TRUNCATE TABLE in a read-only transaction",
             ));
         }
-        if self.lease.is_none() {
-            self.lease = Some(self.store.lease(self.database_oid, &self.cancel)?);
+        if self.lease.borrow().is_none() {
+            let lease = self.store.lease(self.database_oid, &self.cancel)?;
+            *self.lease.borrow_mut() = Some(lease);
         }
         let mut work = Catalog::clone(&self.catalog());
         let defined = rupg_analyze::define(node, text, &self.reader(), &mut work, self.role);
-        if self.settings.get_mut().get("track_counts").as_deref() != Some("off") {
+        if self.settings.borrow().get("track_counts").as_deref() != Some("off") {
             for &table in &defined.scans {
                 self.activity.count_scan(table);
             }
@@ -906,13 +902,15 @@ impl Connection {
             .and_then(|tables| self.rewrite_rows(&tables, &work, transforms))
             .and_then(|()| self.truncate_rows(&defined.truncated, &work))
             .and_then(|()| self.view_texts(&defined.views, &mut work));
-        let Some(lease) = self.lease.as_mut() else {
+        let mut held = self.lease.borrow_mut();
+        let Some(lease) = held.as_mut() else {
             return Err(Error::internal("the lock of the catalog is gone"));
         };
         match result {
             Ok(()) => {
                 let old = std::mem::replace(&mut lease.catalog, work);
                 if let Some(table) = defined.filled {
+                    drop(held);
                     return self.fill(node, table, &old, notices);
                 }
                 Ok(Done::Tag(match node {
@@ -991,7 +989,7 @@ impl Connection {
 
     /// `intorel_receive`: the rows of the query of `CREATE TABLE AS` or `SELECT INTO` go into the new table `table`, as `INSERT ... SELECT` writes them. When the query fails, the catalog goes back to `old`, so the table is gone, and its OIDs stay used.
     fn fill(
-        &mut self,
+        &self,
         node: &Node,
         table: u32,
         old: &Arc<Catalog>,
@@ -1031,7 +1029,7 @@ impl Connection {
             Ok(Done::Count(_, count)) => Ok(Done::Count(CommandTag::Select, count)),
             Ok(_) => Err(Error::internal("the INSERT of CREATE TABLE AS gave no count")),
             Err(error) => {
-                if let Some(lease) = self.lease.as_mut() {
+                if let Some(lease) = self.lease.borrow_mut().as_mut() {
                     let next = lease.catalog.next_oid();
                     lease.catalog = Arc::clone(old);
                     Arc::make_mut(&mut lease.catalog).advance_oid(next);
@@ -1503,6 +1501,7 @@ impl Connection {
                             notices: &mut notices,
                             immediate_commit: false,
                             ts_config,
+                            top_level: true,
                         };
                         utility::run(node, statement, &mut cx).map(Done::from)
                     }
@@ -1681,8 +1680,8 @@ impl Connection {
         let kept = chained.then(|| self.settings.get_mut().characteristics());
         if ending != Ending::None {
             self.settings.get_mut().end(ending == Ending::Commit);
-            let defined = self.lease.is_some();
-            if let Some(lease) = self.lease.take()
+            let defined = self.lease.get_mut().is_some();
+            if let Some(lease) = self.lease.get_mut().take()
                 && ending == Ending::Commit
             {
                 lease.commit();
@@ -1727,7 +1726,7 @@ impl Connection {
             ending => {
                 if ending == Ending::Rollback {
                     self.settings.get_mut().end(false);
-                    self.lease = None;
+                    *self.lease.get_mut() = None;
                     self.end_rows(false, false);
                 }
                 self.transaction_ended();
@@ -1751,7 +1750,7 @@ impl Drop for Connection {
     /// `ShutdownPostgres` and `RemoveTempRelationsCallback`: the open transaction rolls back, then the temporary schemas of the session go with all their objects.
     fn drop(&mut self) {
         self.settings.get_mut().end(false);
-        self.lease = None;
+        *self.lease.get_mut() = None;
         self.end_rows(false, false);
         self.xact_started = false;
         self.transaction = Transaction::default();
@@ -4676,6 +4675,12 @@ mod tests {
     #[test]
     fn plpgsql_transactions() {
         big_stack(|| script(include_str!("connection/plpgsql_transactions.test")));
+    }
+
+    /// The statements that are not queries in PL/pgSQL, in a statement and in `EXECUTE`: `CREATE TABLE`, `CREATE TABLE AS` with its count of rows, `ALTER TABLE`, `DROP TABLE`, `TRUNCATE` and `CREATE FUNCTION`, the queries after them that read the new catalog, a block with `EXCEPTION` that undoes them and `SET`, `COMMIT` and `ROLLBACK` after them in a procedure, `SET` and `SET LOCAL`, and the errors of `INTO`, of the transaction commands, of `COPY` to the client and of `VACUUM`. `connection/plpgsql_utility.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plpgsql_utility() {
+        big_stack(|| script(include_str!("connection/plpgsql_utility.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

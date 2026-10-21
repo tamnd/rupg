@@ -39,6 +39,14 @@ impl Notice {
         };
         Notice { severity, error }
     }
+
+    /// The message of the notice for the messages of a function, which [`Notice::of_function`] gives back.
+    pub(crate) fn into_message(self) -> Error {
+        match self.severity {
+            Severity::Notice => self.error.as_notice(),
+            Severity::Warning => self.error,
+        }
+    }
 }
 
 /// The result of a statement.
@@ -62,6 +70,8 @@ pub struct Context<'a> {
     pub immediate_commit: bool,
     /// The value of `default_text_search_config` that the check hook gave for a `SET` of it, from `ts_config`.
     pub ts_config: Option<String>,
+    /// `isTopLevel`: false for a statement of a function, where `SET LOCAL` outside of a transaction block gives no warning.
+    pub top_level: bool,
 }
 
 /// `IsTransactionExitStmt`: the statements that run in a failed transaction block.
@@ -146,7 +156,7 @@ pub(crate) fn not_supported(text: &str) -> Error {
 
 /// `WarnNoTransactionBlock`.
 fn warn_no_block(cx: &mut Context<'_>, statement: &str) {
-    if !cx.transaction.in_block() {
+    if cx.top_level && !cx.transaction.in_block() {
         cx.notices.push(Notice::warning(Error::new(
             SqlState::NO_ACTIVE_SQL_TRANSACTION,
             format!("{statement} can only be used in transaction blocks"),
@@ -564,6 +574,7 @@ mod tests {
                 notices: &mut self.notices,
                 immediate_commit: false,
                 ts_config: None,
+                top_level: true,
             };
             let outcome = run(node, text, &mut cx);
             match &outcome {

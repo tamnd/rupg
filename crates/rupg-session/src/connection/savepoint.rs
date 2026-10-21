@@ -44,7 +44,7 @@ impl Connection {
             }
             CommandTag::Release => {
                 if let Some(mark) = self.marks.get(depth) {
-                    self.settings.get_mut().release(&mark.settings);
+                    self.release(mark);
                 }
                 self.marks.truncate(depth);
                 self.portals.get_mut().retain(|_, portal| {
@@ -63,11 +63,12 @@ impl Connection {
     }
 
     /// The state of the transaction for a new savepoint.
-    fn mark(&self) -> Mark {
+    pub(super) fn mark(&self) -> Mark {
         Mark {
             command: self.command.get(),
             catalog: self
                 .lease
+                .borrow()
                 .as_ref()
                 .map(|lease| (Arc::clone(&lease.catalog), Arc::clone(&lease.roles))),
             settings: self.settings.borrow().savepoint(),
@@ -77,16 +78,27 @@ impl Connection {
         }
     }
 
+    /// `CommitSubTransaction`: the settings of the subtransaction that ends at the mark `mark` go to the level that stays.
+    pub(super) fn release(&self, mark: &Mark) {
+        self.settings.borrow_mut().release(&mark.settings);
+    }
+
     /// `AbortSubTransaction`: the transaction goes back to its state at the innermost savepoint. The OIDs that the subtransaction used stay used. When the transaction did not hold the lock of the catalog at the savepoint, it releases the lock.
     pub(super) fn roll_back_subtransaction(&mut self) {
-        let Some(mark) = self.marks.last() else { return };
+        if let Some(mark) = self.marks.last() {
+            self.restore(mark);
+        }
+    }
+
+    /// The part of [`Connection::roll_back_subtransaction`] that brings back the state of the transaction at the mark `mark`. A block with `EXCEPTION` of PL/pgSQL uses it too.
+    pub(super) fn restore(&self, mark: &Mark) {
         let xid = self.xid.get();
         if xid != 0 {
             self.store.heap().rollback_to(xid, mark.command);
         }
         match &mark.catalog {
             Some((catalog, roles)) => {
-                if let Some(lease) = self.lease.as_mut() {
+                if let Some(lease) = self.lease.borrow_mut().as_mut() {
                     lease.roles = Arc::clone(roles);
                     let next = lease.catalog.next_oid();
                     let mut catalog = Arc::clone(catalog);
@@ -96,11 +108,11 @@ impl Connection {
                     lease.catalog = catalog;
                 }
             }
-            None => self.lease = None,
+            None => *self.lease.borrow_mut() = None,
         }
-        self.settings.get_mut().rollback_to(&mark.settings);
-        self.deferred.get_mut().clone_from(&mark.deferred);
-        self.modes.get_mut().clone_from(&mark.modes);
+        self.settings.borrow_mut().rollback_to(&mark.settings);
+        self.deferred.borrow_mut().clone_from(&mark.deferred);
+        self.modes.borrow_mut().clone_from(&mark.modes);
         self.store.locks().release_since(self.pid, &mark.locks);
     }
 }

@@ -9,7 +9,7 @@ use rupg_analyze::{ExprKind, Params, Query, Variable, Variables, types};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
-use rupg_sql::nodes::FetchDirection;
+use rupg_sql::nodes::{FetchDirection, Node};
 use rupg_types::{Array, Record, Value, oid};
 
 use crate::ast::{
@@ -42,6 +42,8 @@ pub(crate) struct Compiled {
     plans: RefCell<Vec<Option<Rc<Prepared>>>>,
     /// The plans of the casts of the assignments, `cast_hash`.
     casts: RefCell<BTreeMap<CastKey, Rc<Plan>>>,
+    /// The parse tree of each statement of SQL that is not a query, by the number of its expression, and `None` for a query.
+    utilities: RefCell<BTreeMap<usize, Option<Rc<Node>>>>,
 }
 
 impl Compiled {
@@ -53,6 +55,7 @@ impl Compiled {
             oid,
             plans: RefCell::new(plans),
             casts: RefCell::default(),
+            utilities: RefCell::default(),
         }
     }
 }
@@ -159,6 +162,8 @@ enum Binding {
 struct Prepared {
     plan: Plan,
     bindings: Vec<(Binding, u32, i32)>,
+    /// The value of [`Spi::changes`] when the plan was made.
+    changes: u64,
     /// `expr_simple_expr`: an expression with no table and no subquery, whose errors have no context of the query when it runs.
     simple: bool,
 }
@@ -212,15 +217,34 @@ fn sql_error(error: rupg_sql::Error) -> Error {
 }
 
 /// The statement of a text of SQL, the first one when there are several.
-fn parse_statement(text: &str) -> Result<rupg_sql::nodes::Node> {
+fn parse_statement(text: &str) -> Result<Node> {
     let (list, _) = rupg_sql::parse(text).map_err(sql_error)?;
     list.into_iter()
         .flatten()
         .find_map(|node| match node {
-            rupg_sql::nodes::Node::RawStmt(raw) => raw.stmt,
+            Node::RawStmt(raw) => raw.stmt,
             _ => None,
         })
         .ok_or_else(|| Error::new(SqlState::SYNTAX_ERROR, "the query has no statement"))
+}
+
+/// True for a statement that has no plan, which SPI runs with `ProcessUtility`.
+fn is_utility(node: &Node) -> bool {
+    !matches!(
+        node,
+        Node::SelectStmt(_)
+            | Node::InsertStmt(_)
+            | Node::UpdateStmt(_)
+            | Node::DeleteStmt(_)
+            | Node::MergeStmt(_)
+            | Node::CallStmt(_)
+    )
+}
+
+/// The plan of a query, or the parse tree of a statement that has no plan.
+enum Planned {
+    Query(Box<Plan>),
+    Utility(Node),
 }
 
 /// The fields of a row type with no dropped column.
@@ -919,7 +943,7 @@ impl Exec<'_> {
     /// `exec_stmt_call` for `DO`: the code runs as `ExecuteDoStmt` runs it, with the statement as the context of its errors and messages. `FOUND` and the row count do not change.
     fn do_block(&mut self, e: &Expr) -> Result<()> {
         let node = parse_statement(&e.text).map_err(|error| spi_error(e, error))?;
-        let rupg_sql::nodes::Node::DoStmt(stmt) = &node else {
+        let Node::DoStmt(stmt) = &node else {
             return Err(Error::internal("a DO statement"));
         };
         let src = crate::do_code(stmt).map_err(|error| spi_error(e, error))?;
@@ -1424,6 +1448,12 @@ impl Exec<'_> {
 
     /// `exec_stmt_execsql`: a statement of SQL, with the rows into the target of `INTO`.
     fn exec_sql(&mut self, sql: &Expr, into: Option<usize>, strict: bool) -> Result<()> {
+        if let Some(node) = self.utility(sql)? {
+            check_utility(&node, "unsupported transaction command in PL/pgSQL")?;
+            let result = self.run_utility(&node, &sql.text, spi_line(sql.mode, &sql.shown));
+            self.row_count = result.map_err(|error| spi_error(sql, error))?;
+            return no_into(into);
+        }
         let (rows, n, p) = self.execute(sql)?;
         let write = p.plan.write().is_some();
         let Some(target) = into else {
@@ -1447,6 +1477,33 @@ impl Exec<'_> {
         self.row_count = processed;
         self.set_found(processed > 0);
         Ok(())
+    }
+
+    /// The statement `node` with no plan. Its notices get the context line `line` and the lines of the calls.
+    fn run_utility(&mut self, node: &Node, text: &str, line: String) -> Result<u64> {
+        self.set_spi(Some(line));
+        let mut notices = Vec::new();
+        let result = self.spi.utility(node, text, &mut notices);
+        let stack = self.stack();
+        for notice in notices {
+            self.spi.notice(notice.with_context(stack.clone()));
+        }
+        self.set_spi(None);
+        result
+    }
+
+    /// The parse tree of the statement `e` when it is not a query, which the function keeps.
+    fn utility(&self, e: &Expr) -> Result<Option<Rc<Node>>> {
+        if !matches!(e.mode, Mode::Statement) {
+            return Ok(None);
+        }
+        if let Some(known) = self.c.utilities.borrow().get(&e.id) {
+            return Ok(known.clone());
+        }
+        let node = parse_statement(&e.text).map_err(|error| spi_error(e, error))?;
+        let node = is_utility(&node).then(|| Rc::new(node));
+        self.c.utilities.borrow_mut().insert(e.id, node.clone());
+        Ok(node)
     }
 
     /// The first row of `rows` into the target of `INTO`. With `strict`, no row and more than one row are errors. For a `write` with `RETURNING`, more than one row is an error, and no row sets the target to nulls.
@@ -1476,7 +1533,20 @@ impl Exec<'_> {
         strict: bool,
         params: &[Expr],
     ) -> Result<()> {
-        let (rows, n, plan) = self.run_dynamic(query, params)?;
+        let (planned, values, text, line) = self.dynamic_planned(query, params)?;
+        let plan = match planned {
+            Planned::Query(plan) => *plan,
+            Planned::Utility(node) => {
+                check_utility(&node, "EXECUTE of transaction commands is not implemented")?;
+                let result = self.run_utility(&node, &text, line.clone());
+                self.row_count = result.map_err(|error| error.with_context(line))?;
+                return no_into(into);
+            }
+        };
+        self.set_spi(Some(line.clone()));
+        let result = self.spi.execute(&plan, &values);
+        self.set_spi(None);
+        let (rows, n) = result.map_err(|error| error.with_context(line))?;
         if let Some(target) = into {
             if rows.is_empty() && strict {
                 return Err(Error::new(SqlState::NO_DATA_FOUND, "query returned no rows"));
@@ -1507,12 +1577,29 @@ impl Exec<'_> {
         Ok((rows, n, plan))
     }
 
-    /// The plan of the query of `EXECUTE` with the values of `USING`, the text of the query and the line of the context of its errors.
+    /// The plan of the query of `EXECUTE` with the values of `USING`, the text of the query and the line of the context of its errors. A statement that is not a query is not supported here yet.
     fn dynamic_plan(
         &mut self,
         query: &Expr,
         params: &[Expr],
     ) -> Result<(Plan, Vec<Value>, String, String)> {
+        let (planned, values, text, line) = self.dynamic_planned(query, params)?;
+        match planned {
+            Planned::Query(plan) => Ok((*plan, values, text, line)),
+            Planned::Utility(_) => Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "this statement is not supported yet",
+            )
+            .with_context(line)),
+        }
+    }
+
+    /// [`Exec::dynamic_plan`] that gives the parse tree of a statement that is not a query.
+    fn dynamic_planned(
+        &mut self,
+        query: &Expr,
+        params: &[Expr],
+    ) -> Result<(Planned, Vec<Value>, String, String)> {
         let (value, ty, _) = self.eval(query)?;
         if value.is_null() {
             return Err(Error::new(
@@ -1529,17 +1616,22 @@ impl Exec<'_> {
             types.push(if ty == oid::UNKNOWN { oid::TEXT } else { ty });
         }
         let line = spi_line(Mode::Statement, &text);
-        let plan = (|| {
+        let planned = (|| {
             let node = parse_statement(&text)?;
+            if is_utility(&node) {
+                return Ok(Planned::Utility(node));
+            }
             let query =
                 rupg_analyze::analyze(&node, self.env(), &Params { types, variable: false })?;
-            rupg_exec::prepare(query)?.fold(None, self.session())
+            rupg_exec::prepare(query)?
+                .fold(None, self.session())
+                .map(|plan| Planned::Query(Box::new(plan)))
         })()
         .map_err(|error| match error.position() {
             Some(at) => error.with_position(None).with_internal(text.clone(), Some(at)),
             None => error.with_context(line.clone()),
         })?;
-        Ok((plan, values, text, line))
+        Ok((planned, values, text, line))
     }
 
     /// The name of the portal in the cursor variable `d`, which must not be null.
@@ -1700,6 +1792,7 @@ impl Exec<'_> {
     fn plan(&self, e: &Expr) -> Result<Rc<Prepared>> {
         let cached = self.c.plans.borrow().get(e.id).cloned().flatten();
         if let Some(p) = cached
+            && p.changes == self.spi.changes()
             && p.bindings.iter().all(|(b, ty, typmod)| {
                 binding_type(self.f, &self.slots, b).ok() == Some((*ty, *typmod))
             })
@@ -1740,7 +1833,8 @@ impl Exec<'_> {
         };
         let simple = e.mode != Mode::Statement && is_simple(&query);
         let plan = rupg_exec::prepare(query)?.fold(None, self.session())?;
-        Ok(Prepared { plan, bindings: resolver.bindings.into_inner(), simple })
+        let changes = self.spi.changes();
+        Ok(Prepared { plan, bindings: resolver.bindings.into_inner(), changes, simple })
     }
 
     /// The rows of the expression or statement `e`, the count of the rows that it read or wrote, and its plan.
@@ -2065,6 +2159,31 @@ fn cursor_query(plan: &Plan) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+/// `_SPI_execute_plan`: a transaction command and `COPY` to the client or from the client cannot run in a function. `transaction` is the error for a transaction command.
+fn check_utility(node: &Node, transaction: &str) -> Result<()> {
+    match node {
+        Node::TransactionStmt(_) => {
+            Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, transaction.to_owned()))
+        }
+        Node::CopyStmt(copy) if copy.filename.is_none() => Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "cannot COPY to/from client in PL/pgSQL",
+        )),
+        _ => Ok(()),
+    }
+}
+
+/// The error of `INTO` after a statement that gives no rows.
+fn no_into(into: Option<usize>) -> Result<()> {
+    match into {
+        Some(_) => Err(Error::new(
+            SqlState::SYNTAX_ERROR,
+            "INTO used with a command that cannot return data",
+        )),
+        None => Ok(()),
+    }
 }
 
 /// The columns of the result of a plan: the name, the type and the typmod of each.

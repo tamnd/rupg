@@ -1,6 +1,6 @@
 //! The functions in PL/pgSQL and `DO`, as SPI runs their queries: each query runs as a command of the statement that called the function, and a block with `EXCEPTION` runs in a subtransaction. A procedure that `CALL` runs outside of a transaction block can end the transaction with `COMMIT` and `ROLLBACK`.
 
-use std::cell::{Cell, RefCell};
+use std::cell::{Cell, OnceCell, RefCell};
 use std::rc::Rc;
 use std::sync::Arc;
 
@@ -13,12 +13,12 @@ use rupg_plpgsql::{Cache, Fetched, Spi};
 use rupg_sql::nodes::{DoStmt, FetchDirection, Node};
 use rupg_types::Value;
 
-use super::foreign::Batch;
-use super::{Applied, Connection};
+use super::{Applied, Connection, Done, savepoint};
 use crate::query::Reader;
+use crate::utility::{self, Context, Notice};
 
-/// The state at the start of a subtransaction: the command, the deferred triggers and the names of the open portals.
-type Mark = (u32, Vec<Batch>, Vec<Vec<u8>>);
+/// The state at the start of a subtransaction: the state that a savepoint keeps, and the names of the open portals.
+type Mark = (savepoint::Mark, Vec<Vec<u8>>);
 
 /// The state of the calls in PL/pgSQL that run, for `COMMIT` and `ROLLBACK` in a call.
 #[derive(Debug, Default)]
@@ -29,12 +29,20 @@ pub(super) struct Calls {
     subs: Cell<usize>,
     /// The loops that run, with the name of the portal of a loop over a cursor and true for a query that does not write.
     pinned: RefCell<Vec<(Option<String>, bool)>>,
-    /// The number of the transactions that ended in a call, so that a call takes a new reader after an end.
-    ends: Cell<u64>,
+    /// The number of the changes of the catalog and of the ends of the transactions in calls, so that a call takes a new reader and makes its plans again after a change.
+    changes: Cell<u64>,
 }
 
-/// A reader with the number of the ends of the transactions and the command that it reads.
+/// A reader with the number of the changes in calls and the command that it reads.
 type Cached<'a> = ((u64, u32), Rc<Reader<'a>>);
+
+/// A reader with the catalog after a change of the catalog in a call, which the analysis of the next queries of the call reads, and the reader after the next change.
+struct Layer<'a> {
+    reader: Reader<'a>,
+    /// The value of [`Calls::changes`] when the reader was last checked.
+    seen: Cell<u64>,
+    next: OnceCell<Box<Layer<'a>>>,
+}
 
 /// The SPI of one call: the reader of the statement that called the function, and the reader of the current command of the transaction.
 struct PlSpi<'a> {
@@ -49,6 +57,10 @@ struct PlSpi<'a> {
     marks: RefCell<Vec<Mark>>,
     /// The number of the loops of the call in [`Calls::pinned`].
     pins: Cell<usize>,
+    /// The value of [`Calls::changes`] when `outer` was last checked.
+    seen: Cell<u64>,
+    /// The readers after the changes of the catalog in the call, the first one first.
+    layers: OnceCell<Box<Layer<'a>>>,
 }
 
 impl<'a> PlSpi<'a> {
@@ -60,12 +72,37 @@ impl<'a> PlSpi<'a> {
             reader: RefCell::new(None),
             marks: RefCell::new(Vec::new()),
             pins: Cell::new(0),
+            seen: Cell::new(conn.calls.changes.get()),
+            layers: OnceCell::new(),
         }
+    }
+
+    /// The reader that the analysis of a query reads: `outer`, or a reader with the catalog of the transaction after a change of the catalog in a call.
+    fn current(&self) -> &Reader<'a> {
+        let changes = self.conn.calls.changes.get();
+        let (mut reader, mut seen, mut next) = (self.outer, &self.seen, &self.layers);
+        while let Some(layer) = next.get() {
+            (reader, seen, next) = (&layer.reader, &layer.seen, &layer.next);
+        }
+        if seen.get() == changes {
+            return reader;
+        }
+        seen.set(changes);
+        let catalog = self.conn.catalog();
+        if Arc::ptr_eq(&catalog, &reader.catalog) {
+            return reader;
+        }
+        let reader = self.conn.reader_on(catalog);
+        &next
+            .get_or_init(|| {
+                Box::new(Layer { reader, seen: Cell::new(changes), next: OnceCell::new() })
+            })
+            .reader
     }
 
     /// The reader of the current command.
     fn reader(&self) -> Rc<Reader<'a>> {
-        let command = (self.conn.calls.ends.get(), self.conn.command.get());
+        let command = (self.conn.calls.changes.get(), self.conn.command.get());
         if let Some((at, reader)) = &*self.reader.borrow()
             && *at == command
         {
@@ -134,15 +171,15 @@ impl<'a> PlSpi<'a> {
 
 impl Spi for PlSpi<'_> {
     fn env(&self) -> &dyn Env {
-        self.outer
+        self.current()
     }
 
     fn session(&self) -> &dyn Session {
-        self.outer
+        self.current()
     }
 
     fn catalog(&self) -> Arc<Catalog> {
-        Arc::clone(&self.outer.catalog)
+        Arc::clone(&self.current().catalog)
     }
 
     fn execute(
@@ -210,26 +247,31 @@ impl Spi for PlSpi<'_> {
 
     fn begin_sub(&self) -> usize {
         self.conn.calls.subs.set(self.conn.calls.subs.get() + 1);
-        let mut marks = self.marks.borrow_mut();
+        let mark = self.conn.mark();
         let portals = self.conn.portals.borrow().iter().map(|(name, _)| name.to_vec()).collect();
-        marks.push((self.conn.command.get(), self.conn.deferred.borrow().clone(), portals));
+        let mut marks = self.marks.borrow_mut();
+        marks.push((mark, portals));
         marks.len() - 1
     }
 
     fn release_sub(&self, sub: usize) {
         self.end_subs(sub);
-        self.marks.borrow_mut().truncate(sub);
+        let mut marks = self.marks.borrow_mut();
+        if let Some((mark, _)) = marks.get(sub) {
+            self.conn.release(mark);
+        }
+        marks.truncate(sub);
     }
 
     fn rollback_sub(&self, sub: usize) {
         self.end_subs(sub);
         let mark = self.marks.borrow_mut().drain(sub..).next();
-        let Some((command, deferred, portals)) = mark else { return };
-        let xid = self.conn.xid.get();
-        if xid != 0 {
-            self.conn.store.heap().rollback_to(xid, command);
+        let Some((mark, portals)) = mark else { return };
+        let catalog = self.conn.catalog();
+        self.conn.restore(&mark);
+        if !Arc::ptr_eq(&catalog, &self.conn.catalog()) {
+            self.conn.calls.changes.set(self.conn.calls.changes.get() + 1);
         }
-        *self.conn.deferred.borrow_mut() = deferred;
         // `AtSubAbort_Portals`: the portals that the subtransaction opened close.
         self.conn.portals.borrow_mut().retain(|name, _| portals.iter().any(|p| p == name));
     }
@@ -249,6 +291,21 @@ impl Spi for PlSpi<'_> {
             }));
         }
         self.conn.end_in_call(commit, chain)
+    }
+
+    fn utility(
+        &self,
+        stmt: &Node,
+        text: &str,
+        notices: &mut Vec<Error>,
+    ) -> rupg_common::Result<u64> {
+        let result = self.conn.call_utility(stmt, text, notices);
+        self.conn.calls.changes.set(self.conn.calls.changes.get() + 1);
+        result
+    }
+
+    fn changes(&self) -> u64 {
+        self.conn.calls.changes.get()
     }
 
     fn pin(&self, name: Option<&str>, read_only: bool) {
@@ -273,6 +330,11 @@ impl Spi for PlSpi<'_> {
 impl Drop for PlSpi<'_> {
     /// The subtransactions and the loops of a call that failed end with the call.
     fn drop(&mut self) {
+        let mut next = &self.layers;
+        while let Some(layer) = next.get() {
+            self.outer.add_warnings(layer.reader.take_warnings());
+            next = &layer.next;
+        }
         self.end_subs(0);
         let mut pinned = self.conn.calls.pinned.borrow_mut();
         let left = pinned.len().saturating_sub(self.pins.get());
@@ -314,12 +376,6 @@ impl Connection {
     ///
     /// `55000` in a loop over a query that writes, and the errors of the deferred triggers at the commit.
     fn end_in_call(&self, commit: bool, chain: bool) -> rupg_common::Result<()> {
-        if self.lease.is_some() {
-            return Err(Error::new(
-                SqlState::FEATURE_NOT_SUPPORTED,
-                "COMMIT and ROLLBACK after a change of the catalog in the transaction are not supported yet",
-            ));
-        }
         let kept = chain.then(|| self.settings.borrow().characteristics());
         let result = if self.calls.pinned.borrow().iter().any(|(_, read_only)| !read_only) {
             Err(Error::new(
@@ -333,13 +389,78 @@ impl Connection {
         };
         let commit = commit && result.is_ok();
         self.settings.borrow_mut().end(commit);
-        self.end_heap(commit, false);
+        let lease = self.lease.borrow_mut().take();
+        let defined = lease.is_some();
+        if let Some(lease) = lease
+            && commit
+        {
+            lease.commit();
+        }
+        self.end_heap(commit, defined);
         self.end_portals(commit);
         self.transaction_ended();
         self.settings.borrow_mut().start_transaction(kept);
         self.transaction_started();
-        self.calls.ends.set(self.calls.ends.get() + 1);
+        self.calls.changes.set(self.calls.changes.get() + 1);
         result
+    }
+
+    /// `ProcessUtility` of a statement of a call, which is not at the top level. The notices of the statement go to `out`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the statement, and `0A000` for a statement that a call cannot run yet.
+    fn call_utility(
+        &self,
+        node: &Node,
+        text: &str,
+        out: &mut Vec<Error>,
+    ) -> rupg_common::Result<u64> {
+        let mut notices = Vec::new();
+        let result = if rupg_analyze::is_definition(node) {
+            self.define(node, text, &mut notices)
+                .map(|done| if let Done::Count(_, count) = done { count } else { 0 })
+        } else if let Node::VariableSetStmt(_) = node {
+            self.ts_config(node).and_then(|ts_config| {
+                // The statement cannot end the transaction, so its state does not change.
+                let mut transaction = self.transaction.clone();
+                let mut settings = self.settings.borrow_mut();
+                let mut cx = Context {
+                    settings: &mut settings,
+                    transaction: &mut transaction,
+                    user: &self.user,
+                    notices: &mut notices,
+                    immediate_commit: false,
+                    ts_config,
+                    top_level: false,
+                };
+                utility::run(node, text, &mut cx).map(|_| 0)
+            })
+        } else if let Node::VacuumStmt(stmt) = node
+            && stmt.is_vacuumcmd
+        {
+            Err(self.prevent_in_call("VACUUM"))
+        } else if let Node::CreatedbStmt(_) = node {
+            Err(self.prevent_in_call("CREATE DATABASE"))
+        } else if let Node::DropdbStmt(_) = node {
+            Err(self.prevent_in_call("DROP DATABASE"))
+        } else {
+            Err(utility::not_supported(text))
+        };
+        out.extend(notices.into_iter().map(Notice::into_message));
+        result
+    }
+
+    /// `PreventInTransactionBlock` for the statement `statement` in a call, which is not at the top level.
+    fn prevent_in_call(&self, statement: &str) -> Error {
+        let place = if self.transaction.in_block() {
+            "cannot run inside a transaction block"
+        } else if self.calls.subs.get() > 0 {
+            "cannot run inside a subtransaction"
+        } else {
+            "cannot be executed from a function or procedure"
+        };
+        Error::new(SqlState::ACTIVE_SQL_TRANSACTION, format!("{statement} {place}"))
     }
 
     /// The part of [`Connection::ended`] for the end of a transaction in a call: the portals of the loops that run and the portal of the statement that runs the call stay.

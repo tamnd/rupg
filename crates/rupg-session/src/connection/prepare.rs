@@ -154,6 +154,7 @@ impl Connection {
                 notices,
                 immediate_commit: false,
                 ts_config: None,
+                top_level: true,
             };
             utility::run(node, text, &mut cx).map(Done::from)
         }
