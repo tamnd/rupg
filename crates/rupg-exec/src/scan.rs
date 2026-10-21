@@ -307,6 +307,20 @@ fn relations_of(expr: &Expr) -> Vec<usize> {
     relations
 }
 
+/// Adds to `out` the relations of a part of `FROM` that an outer join can give as nulls.
+fn nullable(item: &FromItem, out: &mut Vec<usize>) {
+    if let FromItem::Join(join) = item {
+        nullable(&join.left, out);
+        nullable(&join.right, out);
+        if matches!(join.kind, JoinKind::Left | JoinKind::Full) {
+            relations_in(&join.right, out);
+        }
+        if matches!(join.kind, JoinKind::Right | JoinKind::Full) {
+            relations_in(&join.left, out);
+        }
+    }
+}
+
 /// The relations of a part of `FROM`.
 fn relations_in(item: &FromItem, out: &mut Vec<usize>) {
     match item {
@@ -346,8 +360,16 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
             None::<()>
         });
     }
+    let mut conds = Vec::new();
+    if let Some(filter) = &query.filter {
+        conjuncts(filter, &mut conds);
+    }
+    let mut nulls = Vec::new();
+    for item in &query.from {
+        nullable(item, &mut nulls);
+    }
     let mut rows = Vec::with_capacity(query.relations.len());
-    for (relation, used) in query.relations.iter().zip(&used) {
+    for (index, (relation, used)) in query.relations.iter().zip(&used).enumerate() {
         let work = relation
             .cte
             .as_ref()
@@ -361,7 +383,8 @@ pub(crate) fn read(query: &Query, session: &dyn Session) -> Result<Tables> {
             continue;
         }
         let Some(catalog) = rupg_pgcatalog::catalog_by_oid(relation.oid) else {
-            rows.push(Rc::new(user_rows(relation, session)?));
+            let nullable = nulls.contains(&index);
+            rows.push(Rc::new(user_rows(relation, (index, nullable), &conds, session)?));
             continue;
         };
         let mut table = Vec::with_capacity(catalog.len);
@@ -460,7 +483,13 @@ pub(crate) fn check_scannable(query: &Query, session: &dyn Session) -> Result<()
     Ok(())
 }
 
-fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
+/// The rows of the relation `from` of the user, which is the relation `index` of the query, with true when an outer join can give it as nulls. A partitioned table gives the rows of the leaf partitions that the conditions `conds` of `WHERE` do not prune.
+fn user_rows(
+    from: &rupg_analyze::Relation,
+    (index, nullable): (usize, bool),
+    conds: &[&Expr],
+    session: &dyn Session,
+) -> Result<Vec<Vec<Value>>> {
     let oid = from.oid;
     let relation = session
         .catalog()
@@ -471,7 +500,7 @@ fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec
             return Ok(Vec::new());
         }
         let mut out = Vec::new();
-        for leaf in crate::partition::leaves(oid, session)? {
+        for leaf in crate::partition::pruned_leaves(oid, index, conds, nullable, session)? {
             child_rows(relation, leaf, session, &mut out)?;
         }
         return Ok(out);
