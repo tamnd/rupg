@@ -5303,6 +5303,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_paths.test")));
     }
 
+    /// `EXPLAIN` of merge joins whose sides the planner sorts in the order of `ORDER BY`, `GROUP BY` or `DISTINCT`, with their directions, when the merge conditions have the keys of the query, as `select_outer_pathkeys_for_merge`. `connection/plan_merge_keys.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_merge_keys() {
+        big_stack(|| script(include_str!("connection/plan_merge_keys.test")));
+    }
+
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_constraintdef() {
