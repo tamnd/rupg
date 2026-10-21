@@ -4883,6 +4883,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_alter.test")));
     }
 
+    /// Identity columns of partitioned tables: the partitions get the identity of the column with no sequence of their own, and an `INSERT` into a partition takes the values of the sequence of the parent. `ADD`, `SET` and `DROP IDENTITY` and `ADD COLUMN` go on to the partitions, and give the errors of PostgreSQL with `ONLY` and on a partition. `ATTACH PARTITION` gives the identity to the new partition, and `DETACH PARTITION` takes it away. `connection/partition_identity.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_identity() {
+        big_stack(|| script(include_str!("connection/partition_identity.test")));
+    }
+
     /// The rows of a table after `ADD COLUMN` and a change of the default of the new column in the same statement: the rows get the default of `ADD COLUMN`, and new rows get the new default, also for the partitions. `DROP DEFAULT`, `ALTER COLUMN ... TYPE` and `DROP COLUMN` run before `ADD COLUMN`, so they cannot find the new column. `connection/add_column_default.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn add_column_default() {

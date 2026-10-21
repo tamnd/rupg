@@ -883,6 +883,8 @@ impl Definer<'_, '_> {
                 Column::new(column.name.clone(), parent.ty, parent.typmod, parent.collation);
             new.storage = parent.storage;
             new.compression = parent.compression;
+            // A partition has the identity of the column of its parent, as `MergeAttributes` gives it.
+            new.identity = parent.identity;
             new.local = false;
             new.inhcount = 1;
             return Ok(new);
@@ -921,9 +923,6 @@ impl Definer<'_, '_> {
             .ok_or_else(|| Error::internal(format!("cache lookup failed for relation {parent}")))?;
         if rel.columns.iter().any(|c| c.dropped) {
             return Err(not_yet("a partition of a table with a dropped column", None));
-        }
-        if rel.columns.iter().any(|c| c.identity != 0) {
-            return Err(not_yet("a partition of a table with an identity column", None));
         }
         let mut columns = Vec::with_capacity(rel.columns.len());
         for (i, c) in rel.columns.iter().enumerate() {
