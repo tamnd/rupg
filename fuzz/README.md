@@ -76,4 +76,4 @@ To run a failing input again:
 cargo +nightly fuzz run -O -s none file_open artifacts/file_open/crash-<hash>
 ```
 
-`cargo test` in this directory builds the base file and applies 200 random inputs to each target of the file, and 2000 random inputs to `type_input` and `type_recv`. The nightly workflow runs each target for 20 minutes.
+`cargo test` in this directory builds the base file and applies 200 random inputs to each target of the file, and 2000 random inputs to `type_input` and `type_recv`. The nightly workflow runs each target for 20 minutes. The workflow `fuzz` runs the long runs of section 21.7 on request. Each job runs one target with one worker on each of the 4 CPUs of the runner, and a target gets more than one job because a job has a limit of 6 hours. The defaults give each M2 target 2 jobs of 11400 seconds, which is 25.3 CPU hours. The summary of each job gives the first and the last status lines of the fuzzer.

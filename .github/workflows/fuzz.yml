@@ -1,0 +1,84 @@
+# The long fuzz runs of spec/21 section 21.7. A milestone closes only when each of its targets has its CPU hours with no open find. This workflow runs on request only.
+#
+# Each job runs one target with one libFuzzer worker on each of the 4 CPUs of the runner. A job has a limit of 6 hours, so a target gets more than one job. The CPU hours of a target are the jobs times 4 times the time of one job. With the defaults, each target gets 2 jobs of 3 hours and 10 minutes, which is 25.3 CPU hours.
+
+name: fuzz
+
+on:
+  workflow_dispatch:
+    inputs:
+      targets:
+        description: "The targets, as a JSON list"
+        default: '["wire_frontend", "wire_startup", "type_input", "type_recv"]'
+      jobs:
+        description: "The jobs for each target, as a JSON list of numbers"
+        default: "[1, 2]"
+      seconds:
+        description: "The time of one job in seconds, at most 20000"
+        default: "11400"
+
+permissions:
+  contents: read
+
+env:
+  CARGO_TERM_COLOR: always
+  CARGO_INCREMENTAL: 0
+
+jobs:
+  fuzz:
+    name: fuzz ${{ matrix.target }} ${{ matrix.job }}
+    runs-on: ubuntu-24.04
+    timeout-minutes: 350
+    strategy:
+      fail-fast: false
+      matrix:
+        target: ${{ fromJSON(inputs.targets) }}
+        job: ${{ fromJSON(inputs.jobs) }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: install nightly
+        run: rustup toolchain install nightly --profile minimal
+      - uses: taiki-e/install-action@f7e5d7c961414b23f5b25b2da9294395d08513ad # v2.87.26
+        with:
+          tool: cargo-fuzz
+      # The options are the options of the nightly job: a panic, a hang over 1 second or memory over 2 GiB is a failure. The fork mode runs one worker on each CPU and stops at the first find.
+      - name: cargo fuzz run
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+          SECONDS_OF_JOB: ${{ inputs.seconds }}
+        run: |
+          set -euo pipefail
+          if [ "$SECONDS_OF_JOB" -gt 20000 ]; then echo "the time of one job is over 20000 seconds"; exit 1; fi
+          cargo +nightly fuzz build -O -s none "$TARGET"
+          mkdir -p "corpus/$TARGET"
+          set -- "corpus/$TARGET"
+          if [ -d "seeds/$TARGET" ]; then set -- "$@" "seeds/$TARGET"; fi
+          workers=$(nproc)
+          echo "workers: $workers" | tee "$TARGET.log"
+          cargo +nightly fuzz run -O -s none "$TARGET" "$@" -- -fork="$workers" -max_total_time="$SECONDS_OF_JOB" -timeout=1 -rss_limit_mb=2048 2>&1 | tee -a "$TARGET.log"
+      # The summary gives the first and the last status lines of the fuzzer, with the inputs run, the coverage, the corpus and the count of finds.
+      - name: summary
+        if: always()
+        working-directory: fuzz
+        env:
+          TARGET: ${{ matrix.target }}
+        run: |
+          {
+            echo "### ${TARGET}"
+            echo '```'
+            head -n 1 "$TARGET.log" || true
+            grep -E '^#[0-9]+: cov:' "$TARGET.log" | sed -n '1p;$p' || true
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
+      - name: upload the log and the failing input
+        if: always()
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: fuzz-${{ matrix.target }}-${{ matrix.job }}
+          path: |
+            fuzz/${{ matrix.target }}.log
+            fuzz/artifacts/
+          if-no-files-found: ignore
