@@ -1,0 +1,452 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE SCHEMA pr;
+CREATE SCHEMA
+> SET search_path = pr;
+SET
+search_path=pr
+> CREATE TABLE r (k int, v text) PARTITION BY RANGE (k);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (MINVALUE) TO (10);
+CREATE TABLE
+> CREATE TABLE r2 PARTITION OF r FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TABLE r3 PARTITION OF r FOR VALUES FROM (20) TO (30);
+CREATE TABLE
+> CREATE TABLE rd PARTITION OF r DEFAULT;
+CREATE TABLE
+> INSERT INTO r SELECT g, 'v' || g FROM generate_series(0, 40, 5) g;
+INSERT 0 9
+> INSERT INTO r VALUES (NULL, 'null');
+INSERT 0 1
+> CREATE TABLE l (c text, n int) PARTITION BY LIST (c);
+CREATE TABLE
+> CREATE TABLE la PARTITION OF l FOR VALUES IN ('a', 'b');
+CREATE TABLE
+> CREATE TABLE lc PARTITION OF l FOR VALUES IN ('c');
+CREATE TABLE
+> CREATE TABLE ln PARTITION OF l FOR VALUES IN (NULL);
+CREATE TABLE
+> CREATE TABLE ld PARTITION OF l DEFAULT;
+CREATE TABLE
+> INSERT INTO l VALUES ('a', 1), ('b', 2), ('c', 3), (NULL, 4), ('z', 5);
+INSERT 0 5
+> CREATE TABLE h (id int8, s text) PARTITION BY HASH (id);
+CREATE TABLE
+> CREATE TABLE h0 PARTITION OF h FOR VALUES WITH (MODULUS 4, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE h1 PARTITION OF h FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+CREATE TABLE
+> CREATE TABLE h2 PARTITION OF h FOR VALUES WITH (MODULUS 4, REMAINDER 2);
+CREATE TABLE
+> CREATE TABLE h3 PARTITION OF h FOR VALUES WITH (MODULUS 4, REMAINDER 3);
+CREATE TABLE
+> INSERT INTO h SELECT g, 's' || g FROM generate_series(1, 20) g;
+INSERT 0 20
+> CREATE TABLE m (a int, b int) PARTITION BY RANGE (a, b);
+CREATE TABLE
+> CREATE TABLE m1 PARTITION OF m FOR VALUES FROM (0, 0) TO (10, 0);
+CREATE TABLE
+> CREATE TABLE m2 PARTITION OF m FOR VALUES FROM (10, 0) TO (10, 10);
+CREATE TABLE
+> CREATE TABLE m3 PARTITION OF m FOR VALUES FROM (10, 10) TO (20, 0);
+CREATE TABLE
+> INSERT INTO m VALUES (1, 1), (10, 5), (10, 15), (15, 0);
+INSERT 0 4
+> CREATE TABLE s (y int, q int) PARTITION BY RANGE (y);
+CREATE TABLE
+> CREATE TABLE s1 PARTITION OF s FOR VALUES FROM (2000) TO (2010) PARTITION BY LIST (q);
+CREATE TABLE
+> CREATE TABLE s1a PARTITION OF s1 FOR VALUES IN (1, 2);
+CREATE TABLE
+> CREATE TABLE s1b PARTITION OF s1 FOR VALUES IN (3, 4);
+CREATE TABLE
+> CREATE TABLE s2 PARTITION OF s FOR VALUES FROM (2010) TO (2020);
+CREATE TABLE
+> INSERT INTO s VALUES (2001, 1), (2002, 3), (2015, 2);
+INSERT 0 3
+> SELECT * FROM r WHERE k = 15;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 15,v15
+SELECT 1
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row r2,1
+SELECT 1
+> SELECT * FROM r WHERE k < 10 ORDER BY k;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 0,v0
+row 5,v5
+SELECT 2
+> SELECT * FROM r WHERE 25 <= k ORDER BY k;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 25,v25
+row 30,v30
+row 35,v35
+row 40,v40
+SELECT 4
+> SELECT * FROM r WHERE k >= 10 AND k < 20 ORDER BY k;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 10,v10
+row 15,v15
+SELECT 2
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row r1,1
+row r2,2
+row r3,1
+row rd,1
+SELECT 4
+> SELECT * FROM r WHERE k BETWEEN 12 AND 22 ORDER BY k;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 15,v15
+row 20,v20
+SELECT 2
+> SELECT * FROM r WHERE k = 35;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 35,v35
+SELECT 1
+> SELECT * FROM r WHERE k IN (5, 25) ORDER BY k;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 5,v5
+row 25,v25
+SELECT 2
+> SELECT * FROM r WHERE k = ANY ('{15,16}') ORDER BY k;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 15,v15
+SELECT 1
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row r1,2
+row r2,4
+row r3,3
+row rd,2
+SELECT 4
+> SELECT * FROM r WHERE k IS NULL;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row NULL,null
+SELECT 1
+> SELECT * FROM r WHERE v = 'v5';
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 5,v5
+SELECT 1
+> SELECT * FROM r WHERE k = 5 OR k = 25 ORDER BY k;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 5,v5
+row 25,v25
+SELECT 2
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row r1,4
+row r2,5
+row r3,5
+row rd,4
+SELECT 4
+> SELECT * FROM l WHERE c = 'c';
+fields c@l.1:25:-1:-1,n@l.2:23:4:-1
+row c,3
+SELECT 1
+> SELECT * FROM l WHERE c = 'q';
+fields c@l.1:25:-1:-1,n@l.2:23:4:-1
+SELECT 0
+> SELECT * FROM l WHERE c IN ('a', 'z') ORDER BY c;
+fields c@l.1:25:-1:-1,n@l.2:23:4:-1
+row a,1
+row z,5
+SELECT 2
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row la,1
+row lc,1
+row ld,2
+row r1,4
+row r2,5
+row r3,5
+row rd,4
+SELECT 7
+> SELECT * FROM h WHERE id = 7;
+fields id@h.1:20:8:-1,s@h.2:25:-1:-1
+row 7,s7
+SELECT 1
+> SELECT * FROM h WHERE id = 7::int4;
+fields id@h.1:20:8:-1,s@h.2:25:-1:-1
+row 7,s7
+SELECT 1
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row h3,2
+row la,1
+row lc,1
+row ld,2
+row r1,4
+row r2,5
+row r3,5
+row rd,4
+SELECT 8
+> SELECT * FROM h WHERE id IN (1, 2, 3) ORDER BY id;
+fields id@h.1:20:8:-1,s@h.2:25:-1:-1
+row 1,s1
+row 2,s2
+row 3,s3
+SELECT 3
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row h0,1
+row h1,1
+row h2,1
+row h3,2
+row la,1
+row lc,1
+row ld,2
+row r1,4
+row r2,5
+row r3,5
+row rd,4
+SELECT 11
+> SELECT * FROM m WHERE a = 10 AND b = 5;
+fields a@m.1:23:4:-1,b@m.2:23:4:-1
+row 10,5
+SELECT 1
+> SELECT * FROM m WHERE a = 10 ORDER BY b;
+fields a@m.1:23:4:-1,b@m.2:23:4:-1
+row 10,5
+row 10,15
+SELECT 2
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row h0,1
+row h1,1
+row h2,1
+row h3,2
+row la,1
+row lc,1
+row ld,2
+row m1,1
+row m2,2
+row m3,1
+row r1,4
+row r2,5
+row r3,5
+row rd,4
+SELECT 14
+> SELECT * FROM m WHERE a > 12;
+fields a@m.1:23:4:-1,b@m.2:23:4:-1
+row 15,0
+SELECT 1
+> SELECT * FROM s WHERE y = 2001 AND q = 3;
+fields y@s.1:23:4:-1,q@s.2:23:4:-1
+SELECT 0
+> SELECT * FROM s WHERE q = 2 ORDER BY y;
+fields y@s.1:23:4:-1,q@s.2:23:4:-1
+row 2015,2
+SELECT 1
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row h0,1
+row h1,1
+row h2,1
+row h3,2
+row la,1
+row lc,1
+row ld,2
+row m1,1
+row m2,2
+row m3,2
+row r1,4
+row r2,5
+row r3,5
+row rd,4
+row s1a,1
+row s1b,1
+row s2,1
+SELECT 17
+> SELECT * FROM r JOIN l ON l.n = r.k WHERE r.k = 5;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1,c@l.1:25:-1:-1,n@l.2:23:4:-1
+row 5,v5,z,5
+SELECT 1
+> SELECT r.k, l.c FROM l LEFT JOIN r ON r.k = l.n AND r.k > 3 WHERE l.n > 3 ORDER BY 1, 2;
+fields k@r.1:23:4:-1,c@l.1:25:-1:-1
+row 5,z
+row NULL,NULL
+SELECT 2
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row h0,1
+row h1,1
+row h2,1
+row h3,2
+row la,3
+row lc,3
+row ld,4
+row ln,2
+row m1,1
+row m2,2
+row m3,2
+row r1,6
+row r2,6
+row r3,6
+row rd,5
+row s1a,1
+row s1b,1
+row s2,1
+SELECT 18
+> SELECT count(*) FROM r WHERE k = 15 AND (SELECT count(*) FROM s WHERE s.y = 2015 AND s.q = r.k) = 0;
+fields count:20:8:-1
+row 1
+SELECT 1
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row h0,1
+row h1,1
+row h2,1
+row h3,2
+row la,3
+row lc,3
+row ld,4
+row ln,2
+row m1,1
+row m2,2
+row m3,2
+row r1,6
+row r2,7
+row r3,6
+row rd,5
+row s1a,1
+row s1b,1
+row s2,2
+SELECT 18
+> PREPARE q(int) AS SELECT * FROM r WHERE k = $1;
+PREPARE
+> EXECUTE q(25);
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 25,v25
+SELECT 1
+> SELECT * FROM r WHERE k = 10 + 5;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 15,v15
+SELECT 1
+> SELECT l.c, r.k FROM l LEFT JOIN r ON r.k = l.n WHERE r.k IS NULL ORDER BY 1;
+fields c@l.1:25:-1:-1,k@r.1:23:4:-1
+row a,NULL
+row b,NULL
+row c,NULL
+row NULL,NULL
+SELECT 4
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row h0,1
+row h1,1
+row h2,1
+row h3,2
+row la,4
+row lc,4
+row ld,5
+row ln,3
+row m1,1
+row m2,2
+row m3,2
+row r1,7
+row r2,9
+row r3,8
+row rd,6
+row s1a,1
+row s1b,1
+row s2,2
+SELECT 18
+> UPDATE r SET v = 'u' WHERE k = 20;
+UPDATE 1
+> DELETE FROM l WHERE c = 'z';
+DELETE 1
+> UPDATE h SET s = 'x' WHERE id = 7 RETURNING *;
+fields id@h.1:20:8:-1,s@h.2:25:-1:-1
+row 7,x
+UPDATE 1
+> SELECT pg_stat_force_next_flush();
+fields pg_stat_force_next_flush:2278:4:-1
+row 
+SELECT 1
+> SELECT relname, seq_scan FROM pg_stat_user_tables WHERE schemaname = 'pr' AND seq_scan > 0 ORDER BY relname;
+fields relname@pg_stat_user_tables.3:19:64:-1,seq_scan@pg_stat_user_tables.4:20:8:-1
+row h0,1
+row h1,1
+row h2,1
+row h3,3
+row la,4
+row lc,4
+row ld,6
+row ln,3
+row m1,1
+row m2,2
+row m3,2
+row r1,7
+row r2,9
+row r3,9
+row rd,6
+row s1a,1
+row s1b,1
+row s2,2
+SELECT 18
+> SELECT * FROM r WHERE k >= 20 ORDER BY k;
+fields k@r.1:23:4:-1,v@r.2:25:-1:-1
+row 20,u
+row 25,v25
+row 30,v30
+row 35,v35
+row 40,v40
+SELECT 5
+> SELECT * FROM l ORDER BY n;
+fields c@l.1:25:-1:-1,n@l.2:23:4:-1
+row a,1
+row b,2
+row c,3
+row NULL,4
+SELECT 4

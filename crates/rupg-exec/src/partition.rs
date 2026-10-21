@@ -8,6 +8,10 @@ use rupg_common::{Error, Result, SqlState};
 use rupg_func::Session;
 use rupg_types::Value;
 
+mod prune;
+
+pub(crate) use prune::pruned_leaves;
+
 /// The most bytes of a value in the detail of an error, as `ExecBuildSlotPartitionKeyDescription` cuts it.
 const MAX_FIELD_LEN: usize = 64;
 
@@ -50,6 +54,10 @@ struct Dispatch {
     types: Vec<u32>,
     /// The types of the columns of the table.
     columns: Vec<u32>,
+    /// The operator family of each key column, from its operator class, or 0 for a class that is not built in.
+    families: Vec<u32>,
+    /// True for each key column with a collation.
+    collated: Vec<bool>,
     parts: Vec<Part>,
 }
 
@@ -198,6 +206,15 @@ impl Dispatch {
             exprs: key_exprs,
             types,
             columns: rel.columns.iter().map(|c| c.ty).collect(),
+            families: key
+                .classes
+                .iter()
+                .map(|&class| {
+                    let classes = rupg_pgcatalog::builtin::opclasses();
+                    classes.iter().find(|c| c.oid == class).map_or(0, |c| c.family)
+                })
+                .collect(),
+            collated: key.collations.iter().map(|&c| c != 0).collect(),
             parts,
         };
         d.sort()?;

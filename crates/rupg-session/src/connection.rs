@@ -5267,6 +5267,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/typed_table.test")));
     }
 
+    /// Partition pruning: the leaves that a scan of a range, a list, a hash and a multi-level partitioned table reads for `=`, `<`, `BETWEEN`, `IN`, `= ANY`, `IS NULL` and `OR` of the key, with a key of two columns, a constant of another integer type, a parameter of `EXECUTE`, `UPDATE` and `DELETE`, and `IS NULL` of a table that a left join can make null, as `pg_stat_user_tables` counts the scans. `connection/partition_pruning.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_pruning() {
+        big_stack(|| script(include_str!("connection/partition_pruning.test")));
+    }
+
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_constraintdef() {
