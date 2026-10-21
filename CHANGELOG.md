@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `pg_trigger_depth()`. It gives the number of the trigger functions that run, one in the other, and 0 outside of a trigger (#485).
 - Triggers on `COPY FROM`. The triggers `INSERT ... FOR EACH STATEMENT` fire before the first row and at the end. A table with triggers `BEFORE ... FOR EACH ROW` gets one row at a time, after the condition `WHERE` and before the checks, and the messages of such a trigger have the line of the copy in their context. The triggers `AFTER ... FOR EACH ROW` and the transition tables get the rows of the copy (#484).
 - Triggers on `INSERT ... ON CONFLICT`. The statement fires its triggers `INSERT`, and with `DO UPDATE` also its triggers `UPDATE`. The triggers `BEFORE ... FOR EACH ROW` fire for each row in turn, so a trigger can change or skip a row before the conflict check, and the triggers `UPDATE` can change or skip the new row of `DO UPDATE`. The transition tables have the rows that went in and the rows that changed (#483).
 - `r.*` of a variable in PL/pgSQL. A query in a function can now use `r.*` and `row(r.*)` for a variable of a row type, and `OLD` and `NEW` in a trigger have the row type of the table, so `row(OLD.*)`, `OLD.*::text` and `OLD IS DISTINCT FROM NEW` work. The context line of an error or a notice now shows the name of a table row type in the arguments of the function (#482).

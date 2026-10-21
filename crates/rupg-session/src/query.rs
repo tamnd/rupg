@@ -805,6 +805,10 @@ impl rupg_func::Session for Reader<'_> {
         self.pid
     }
 
+    fn trigger_depth(&self) -> i32 {
+        self.conn.map_or(0, Connection::trigger_depth)
+    }
+
     fn databases(&self) -> Arc<[rupg_catalog::Database]> {
         match self.activity {
             Some((_, store)) => store.created(),

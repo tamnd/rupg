@@ -178,6 +178,10 @@ pub trait Session {
     }
     /// The process ID of the session.
     fn backend_pid(&self) -> i32;
+    /// `MyTriggerDepth`: the number of the trigger functions that run, one in the other. It is 0 outside of a trigger.
+    fn trigger_depth(&self) -> i32 {
+        0
+    }
     /// The text of `version()`.
     fn version(&self) -> String;
     /// The value of a setting as `SHOW` gives it, or `None` for a name that is not a setting.
