@@ -124,7 +124,7 @@ pub(crate) struct Reader<'a> {
     /// The prepared statements of the session, or `None` for a reader that is not a session.
     statements: Option<&'a Statements<Arc<Prepared>>>,
     /// The portals of the session, or `None` for a reader that is not a session.
-    portals: Option<&'a Portals<Portal>>,
+    portals: Option<&'a RefCell<Portals<Portal>>>,
     /// The flag that a `CancelRequest` sets, or `None` for a reader that is not a session.
     cancel: Option<&'a AtomicBool>,
     /// The cache of the sequences of the session, or `None` for a reader that is not a session.
@@ -335,7 +335,7 @@ impl<'a> Reader<'a> {
     }
 
     /// The reader of a session with portals.
-    pub(crate) fn with_portals(mut self, portals: &'a Portals<Portal>) -> Reader<'a> {
+    pub(crate) fn with_portals(mut self, portals: &'a RefCell<Portals<Portal>>) -> Reader<'a> {
         self.portals = Some(portals);
         self
     }
@@ -938,7 +938,7 @@ impl rupg_func::Session for Reader<'_> {
 
     fn cursors(&self) -> Vec<Vec<Value>> {
         self.portals.map_or_else(Vec::new, |portals| {
-            portals.iter().filter_map(|(name, portal)| portal.cursor_row(name)).collect()
+            portals.borrow().iter().filter_map(|(name, portal)| portal.cursor_row(name)).collect()
         })
     }
 

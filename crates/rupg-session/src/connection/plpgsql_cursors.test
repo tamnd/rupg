@@ -1,0 +1,228 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'one'), (2, 'two'), (3, 'three');
+INSERT 0 3
+> DO $$ DECLARE c CURSOR FOR SELECT a, b FROM t ORDER BY a; r record; BEGIN OPEN c; LOOP FETCH c INTO r; EXIT WHEN NOT FOUND; RAISE NOTICE 'r=%', r; END LOOP; CLOSE c; END $$;
+NOTICE 00000 r=(1,one) (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(2,two) (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(3,three) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; BEGIN RAISE NOTICE 'c=%', c; OPEN c; RAISE NOTICE 'c=%', c; CLOSE c; RAISE NOTICE 'c=%', c; END $$;
+NOTICE 00000 c=<NULL> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 c=<unnamed portal 2> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 c=<unnamed portal 2> (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor; n int; BEGIN OPEN c FOR SELECT a FROM t ORDER BY a; RAISE NOTICE 'c=%', c; FETCH c INTO n; RAISE NOTICE 'n=%', n; CLOSE c; END $$;
+NOTICE 00000 c=<unnamed portal 3> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 n=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor := 'mine'; n int; BEGIN OPEN c FOR SELECT a FROM t ORDER BY a DESC; FETCH c INTO n; RAISE NOTICE 'c=% n=%', c, n; END $$;
+NOTICE 00000 c=mine n=3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR (lo int, hi int) FOR SELECT a FROM t WHERE a BETWEEN lo AND hi ORDER BY a; n int; BEGIN OPEN c(2, 3); LOOP FETCH c INTO n; EXIT WHEN NOT FOUND; RAISE NOTICE 'n=%', n; END LOOP; CLOSE c; OPEN c(hi := 1, lo := 1); FETCH c INTO n; RAISE NOTICE 'n=%', n; END $$;
+NOTICE 00000 n=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 n=3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 n=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR (k int) FOR SELECT b FROM t WHERE a = k; BEGIN FOR r IN c(2) LOOP RAISE NOTICE 'r=%', r; END LOOP; FOR r IN c(k => 3) LOOP RAISE NOTICE 'r=% c=%', r, c; END LOOP; END $$;
+NOTICE 00000 r=(two) (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(three) c=<unnamed portal 6> (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c SCROLL CURSOR FOR SELECT a FROM t ORDER BY a; n int; BEGIN OPEN c; FETCH LAST FROM c INTO n; RAISE NOTICE 'last=%', n; FETCH PRIOR FROM c INTO n; RAISE NOTICE 'prior=%', n; FETCH FIRST FROM c INTO n; RAISE NOTICE 'first=%', n; FETCH ABSOLUTE 3 FROM c INTO n; RAISE NOTICE 'abs=%', n; FETCH RELATIVE -2 FROM c INTO n; RAISE NOTICE 'rel=%', n; FETCH NEXT IN c INTO n; RAISE NOTICE 'next=%', n; MOVE BACKWARD ALL FROM c; FETCH c INTO n; RAISE NOTICE 'after move=%', n; MOVE FORWARD 2 FROM c; GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'moved=% found=%', n, found; MOVE c; RAISE NOTICE 'found=%', found; END $$;
+NOTICE 00000 last=3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 prior=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 first=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 abs=3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 rel=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 next=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 after move=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 moved=2 found=t (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 found=f (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; n int; BEGIN OPEN c; FETCH c INTO n; FETCH PRIOR FROM c INTO n; END $$;
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t; BEGIN OPEN c; OPEN c; END $$;
+ERROR 42P03 cursor "<unnamed portal 9>" already in use (PL/pgSQL function inline_code_block line 1 at OPEN)
+> DO $$ DECLARE c refcursor; n int; BEGIN FETCH c INTO n; END $$;
+ERROR 22004 cursor variable "c" is null (PL/pgSQL function inline_code_block line 1 at FETCH)
+> DO $$ DECLARE c refcursor := 'nope'; n int; BEGIN FETCH c INTO n; END $$;
+ERROR 34000 cursor "nope" does not exist (PL/pgSQL function inline_code_block line 1 at FETCH)
+> DO $$ DECLARE c refcursor := 'nope'; BEGIN CLOSE c; END $$;
+ERROR 34000 cursor "nope" does not exist (PL/pgSQL function inline_code_block line 1 at CLOSE)
+> DO $$ DECLARE c CURSOR (k int) FOR SELECT k; BEGIN OPEN c; END $$;
+ERROR 42601 cursor "c" has arguments at 58
+> DO $$ DECLARE c CURSOR FOR SELECT 1; BEGIN OPEN c(1); END $$;
+ERROR 42601 cursor "c" has no arguments at 50
+> DO $$ DECLARE c CURSOR (k int) FOR SELECT k; BEGIN OPEN c(1, 2); END $$;
+ERROR 42601 too many arguments for cursor "c" at 60
+> DO $$ DECLARE c CURSOR (k int, j int) FOR SELECT k; BEGIN OPEN c(1); END $$;
+ERROR 42601 not enough arguments for cursor "c" at 67
+> DO $$ DECLARE c CURSOR (k int) FOR SELECT k; BEGIN OPEN c(j := 1); END $$;
+ERROR 42601 cursor "c" has no argument named "j" at 59
+> DO $$ DECLARE c CURSOR (k int) FOR SELECT k; BEGIN OPEN c(k := 1, k := 2); END $$;
+ERROR 42601 too many arguments for cursor "c" at 65
+> DO $$ DECLARE c CURSOR FOR SELECT 1; n int; BEGIN OPEN c; FETCH ALL FROM c INTO n; END $$;
+ERROR 0A000 FETCH statement cannot return multiple rows at 59
+> DO $$ DECLARE c CURSOR FOR SELECT 1; n int; BEGIN OPEN c; FETCH FORWARD 2 FROM c INTO n; END $$;
+ERROR 0A000 FETCH statement cannot return multiple rows at 59
+> DO $$ DECLARE c refcursor; BEGIN FOR r IN c LOOP END LOOP; END $$;
+ERROR 42601 cursor FOR loop must use a bound cursor variable at 43
+> DO $$ DECLARE n int; BEGIN OPEN n FOR SELECT 1; END $$;
+ERROR 42804 variable "n" must be of type cursor or refcursor at 33
+> DO $$ DECLARE c refcursor; BEGIN OPEN c SCROLL FOR SELECT 1; END $$;
+DO
+> DO $$ DECLARE c refcursor; n int; BEGIN OPEN c SCROLL FOR SELECT a FROM t ORDER BY a; FETCH LAST FROM c INTO n; RAISE NOTICE 'n=%', n; END $$;
+NOTICE 00000 n=3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor; n int; BEGIN OPEN c FOR EXECUTE 'SELECT a FROM t WHERE a > $1 ORDER BY a' USING 1; FETCH c INTO n; RAISE NOTICE 'n=%', n; CLOSE c; END $$;
+NOTICE 00000 n=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor; x int; y text; BEGIN OPEN c FOR SELECT a, b FROM t ORDER BY a; FETCH c INTO x, y; RAISE NOTICE 'x=% y=%', x, y; FETCH RELATIVE 0 FROM c INTO x, y; RAISE NOTICE 'x=% y=%', x, y; END $$;
+NOTICE 00000 x=1 y=one (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 x=1 y=one (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; n int; BEGIN OPEN c; MOVE LAST FROM c; FETCH c INTO n; RAISE NOTICE 'n=% found=%', n, found; END $$;
+NOTICE 00000 n=<NULL> found=f (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> CREATE FUNCTION f_open(c refcursor) RETURNS refcursor LANGUAGE plpgsql AS $$ BEGIN OPEN c FOR SELECT a, b FROM t ORDER BY a; RETURN c; END $$;
+CREATE FUNCTION
+> BEGIN;
+BEGIN
+> SELECT f_open('cx');
+fields f_open:1790:-1:-1
+row cx
+SELECT 1
+> FETCH 2 FROM cx;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 1,one
+row 2,two
+FETCH 2
+> FETCH ALL FROM cx;
+fields a@t.1:23:4:-1,b@t.2:25:-1:-1
+row 3,three
+FETCH 1
+> CLOSE cx;
+CLOSE CURSOR
+> COMMIT;
+COMMIT
+> CREATE FUNCTION f_anon() RETURNS refcursor LANGUAGE plpgsql AS $$ DECLARE c refcursor; BEGIN OPEN c FOR SELECT 42; RETURN c; END $$;
+CREATE FUNCTION
+> BEGIN;
+BEGIN
+> SELECT f_anon();
+fields f_anon:1790:-1:-1
+row <unnamed portal 15>
+SELECT 1
+> FETCH ALL FROM "<unnamed portal 15>";
+fields ?column?:23:4:-1
+row 42
+FETCH 1
+> SELECT name, statement, is_holdable, is_binary, is_scrollable FROM pg_cursors ORDER BY name;
+fields name@pg_cursors.1:25:-1:-1,statement@pg_cursors.2:25:-1:-1,is_holdable@pg_cursors.3:16:1:-1,is_binary@pg_cursors.4:16:1:-1,is_scrollable@pg_cursors.5:16:1:-1
+row <unnamed portal 15>,SELECT 42,f,f,f
+SELECT 1
+> COMMIT;
+COMMIT
+> BEGIN;
+BEGIN
+> DECLARE sq CURSOR FOR SELECT a FROM t ORDER BY a;
+DECLARE CURSOR
+> DO $$ DECLARE c refcursor := 'sq'; n int; BEGIN FETCH c INTO n; RAISE NOTICE 'n=%', n; MOVE c; FETCH c INTO n; RAISE NOTICE 'n=%', n; CLOSE c; END $$;
+NOTICE 00000 n=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 n=3 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> FETCH sq;
+ERROR 34000 cursor "sq" does not exist
+> ROLLBACK;
+ROLLBACK
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; BEGIN FOR r IN c LOOP RAISE NOTICE 'r=% c=%', r, c; END LOOP; RAISE NOTICE 'after c=%', c; END $$;
+NOTICE 00000 r=(1) c=<unnamed portal 16> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(2) c=<unnamed portal 16> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(3) c=<unnamed portal 16> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 after c=<NULL> (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; n int; BEGIN OPEN c; FOR r IN c LOOP END LOOP; END $$;
+ERROR 42P03 cursor "<unnamed portal 17>" already in use (PL/pgSQL function inline_code_block line 1 at FOR over cursor)
+> DO $$ DECLARE c NO SCROLL CURSOR FOR SELECT a FROM t ORDER BY a; n int; BEGIN OPEN c; FETCH LAST FROM c INTO n; RAISE NOTICE 'n=%', n; FETCH PRIOR FROM c INTO n; END $$;
+ERROR 55000 cursor can only scan forward (PL/pgSQL function inline_code_block line 1 at FETCH)
+HINT Declare it with SCROLL option to enable backward scan.
+> DO $$ DECLARE c CURSOR IS SELECT a FROM t ORDER BY a; n int; BEGIN OPEN c; FETCH c INTO n; RAISE NOTICE 'n=%', n; END $$;
+NOTICE 00000 n=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; n int; BEGIN OPEN c; FETCH 1 FROM c INTO n; END $$;
+ERROR 0A000 FETCH statement cannot return multiple rows at 77
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; n int; k int := 2; BEGIN OPEN c; FETCH ABSOLUTE k FROM c INTO n; RAISE NOTICE 'n=%', n; FETCH ABSOLUTE NULL FROM c INTO n; END $$;
+NOTICE 00000 n=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+ERROR 22004 relative or absolute cursor position is null (PL/pgSQL function inline_code_block line 1 at FETCH)
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; BEGIN OPEN c; CLOSE c; CLOSE c; END $$;
+ERROR 34000 cursor "<unnamed portal 21>" does not exist (PL/pgSQL function inline_code_block line 1 at CLOSE)
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; r t; BEGIN OPEN c; FETCH c INTO r; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 r=(1,) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT 1/0; n int; BEGIN OPEN c; RAISE NOTICE 'opened'; FETCH c INTO n; END $$;
+ERROR 22012 division by zero (SQL statement "SELECT 1/0"
+PL/pgSQL function inline_code_block line 1 at OPEN)
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; BEGIN FOR r IN c LOOP RAISE NOTICE 'r=%', r; EXIT; END LOOP; OPEN c; CLOSE c; END $$;
+NOTICE 00000 r=(1) (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR (k int) FOR SELECT k; n int; BEGIN PERFORM 1 WHERE false; OPEN c(5); GET DIAGNOSTICS n = ROW_COUNT; RAISE NOTICE 'found=% n=%', found, n; FETCH c INTO n; RAISE NOTICE 'n=%', n; END $$;
+NOTICE 00000 found=t n=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 n=5 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor := 'sub'; BEGIN BEGIN OPEN c FOR SELECT 1; RAISE EXCEPTION 'x'; EXCEPTION WHEN others THEN RAISE NOTICE 'caught'; END; OPEN c FOR SELECT 2; RAISE NOTICE 'reopened'; CLOSE c; END $$;
+NOTICE 00000 caught (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 reopened (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor; r record; BEGIN FOR r IN SELECT 1 LOOP END LOOP; OPEN c FOR SELECT 1; RAISE NOTICE 'c=%', c; CLOSE c; c := NULL; FOR r IN EXECUTE 'SELECT 1' LOOP END LOOP; OPEN c FOR SELECT 1; RAISE NOTICE 'c=%', c; CLOSE c; c := NULL; FOR r IN SELECT 1 WHERE false LOOP END LOOP; OPEN c FOR SELECT 1; RAISE NOTICE 'c=%', c; END $$;
+NOTICE 00000 c=<unnamed portal 27> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 c=<unnamed portal 29> (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 c=<unnamed portal 31> (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor; BEGIN OPEN c FOR INSERT INTO t VALUES (9); END $$;
+ERROR 42P11 cannot open INSERT query as cursor (PL/pgSQL function inline_code_block line 1 at OPEN)
+> DO $$ DECLARE c refcursor; r record; BEGIN OPEN c FOR SELECT a FROM t WHERE false; FETCH c INTO r; RAISE NOTICE 'r=% found=%', r, found; MOVE c; RAISE NOTICE 'found=%', found; END $$;
+NOTICE 00000 r=() found=f (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 found=f (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE k int := 2; c CURSOR FOR SELECT a FROM t WHERE a > k ORDER BY a; n int; BEGIN k := 0; OPEN c; FETCH c INTO n; RAISE NOTICE 'n=%', n; k := 5; FETCH c INTO n; RAISE NOTICE 'n=%', n; END $$;
+NOTICE 00000 n=1 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 n=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; n int; BEGIN OPEN c; FETCH LAST FROM c INTO n; FETCH BACKWARD FROM c INTO n; RAISE NOTICE 'n=%', n; MOVE BACKWARD FROM c; RAISE NOTICE 'found=%', found; END $$;
+NOTICE 00000 n=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 found=t (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; BEGIN FOR r IN c LOOP IF r.a = 2 THEN RAISE EXCEPTION 'boom %', r.a; END IF; END LOOP; END $$;
+ERROR P0001 boom 2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+> DO $$ DECLARE c CURSOR FOR SELECT a, 10 / (a - 2) AS q FROM t ORDER BY a; r record; BEGIN OPEN c; RAISE NOTICE 'opened'; FETCH c INTO r; RAISE NOTICE 'r=%', r; END $$;
+NOTICE 00000 opened (PL/pgSQL function inline_code_block line 1 at RAISE)
+ERROR 22012 division by zero (PL/pgSQL function inline_code_block line 1 at FETCH)
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t ORDER BY a; n int; BEGIN FOR r IN c LOOP FETCH c INTO n; RAISE NOTICE 'r=% n=%', r, n; END LOOP; END $$;
+NOTICE 00000 r=(1) n=2 (PL/pgSQL function inline_code_block line 1 at RAISE)
+NOTICE 00000 r=(3) n=<NULL> (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c refcursor; BEGIN OPEN c NO SCROLL FOR SELECT a FROM t ORDER BY a; MOVE LAST FROM c; MOVE PRIOR FROM c; END $$;
+ERROR 55000 cursor can only scan forward (PL/pgSQL function inline_code_block line 1 at MOVE)
+HINT Declare it with SCROLL option to enable backward scan.
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t; n int; BEGIN OPEN c; FETCH c INTO n, n; END $$;
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t; BEGIN OPEN c; MOVE FORWARD ALL FROM c; RAISE NOTICE 'found=%', found; END $$;
+NOTICE 00000 found=t (PL/pgSQL function inline_code_block line 1 at RAISE)
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t; BEGIN OPEN c; MOVE FORWARD ALL IN c; END $$;
+DO
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t; n int; BEGIN OPEN c; FETCH c n; END $$;
+ERROR 42601 syntax error at or near "n" at 74
+> DO $$ DECLARE c CURSOR FOR SELECT a FROM t; n int; BEGIN OPEN c; FETCH ABSOLUTE 1 c INTO n; END $$;
+ERROR 42601 missing "FROM or IN" at end of SQL expression at 91
+> DO $$ DECLARE c refcursor; BEGIN OPEN c FOR SELECT 1 FOR; END $$;
+ERROR 42601 syntax error at end of input at 57
+> DO $$ DECLARE c refcursor; BEGIN OPEN c SELECT 1; END $$;
+ERROR 42601 syntax error, expected "FOR" at or near "SELECT" at 41
+> DO $$ DECLARE c int[]; BEGIN CLOSE c[1]; END $$;
+ERROR 42804 cursor variable must be a simple variable at 36
+> DO $$ BEGIN CLOSE nosuch; END $$;
+ERROR 42601 "nosuch" is not a known variable at 19

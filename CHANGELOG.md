@@ -10,6 +10,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - `CALL` in PL/pgSQL and in the extended protocol. In PL/pgSQL, the values of the `INOUT` and `OUT` arguments go back to the variables of the call, and an argument that is not a variable gives the error of PostgreSQL (#465).
 - `FOREACH ... SLICE` in PL/pgSQL, with the checks of PostgreSQL for the slice and for the type of the loop variable (#466).
 - A field of a record as a target of `INTO`, of `GET DIAGNOSTICS` and of the loops in PL/pgSQL (#467).
+- Cursors in PL/pgSQL: bound and unbound cursor variables, `OPEN` with arguments, `OPEN FOR EXECUTE`, `FETCH`, `MOVE`, `CLOSE` and the `FOR` loop over a cursor. A cursor that a function opens is a portal of the session, so SQL can fetch from a `refcursor` that a function gives (#468).
 
 ### Fixed
 

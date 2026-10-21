@@ -334,7 +334,7 @@ impl Connection {
         if statement.plan.is_some() || !statement.params.is_empty() {
             self.settings.borrow_mut().take_snapshot();
         }
-        self.portals.make_room(bind.portal)?;
+        self.portals.get_mut().make_room(bind.portal)?;
         let formats = values.formats;
         let mut params = Vec::new();
         let reader = self.reader();
@@ -389,7 +389,7 @@ impl Connection {
         let level = self.transaction.depth();
         let portal =
             Portal { statement, plan, formats, params, run: Run::Ready, failed: false, level };
-        self.portals.insert(bind.portal, portal);
+        self.portals.get_mut().insert(bind.portal, portal);
         out.bind_complete();
         Ok(())
     }
@@ -450,7 +450,7 @@ impl Connection {
                 describe_rows(statement.columns.as_deref(), &[], out);
             }
             Target::Portal => {
-                let portal = self.portals.get(name)?;
+                let portal = self.portals.get_mut().get(name)?;
                 if failed && portal.statement.columns.is_some() {
                     return Err(aborted().into());
                 }
@@ -467,7 +467,7 @@ impl Connection {
         max_rows: i32,
         out: &mut OutBuf,
     ) -> Result<(), Failed> {
-        let statement = Arc::clone(&self.portals.get(name)?.statement);
+        let statement = Arc::clone(&self.portals.get_mut().get(name)?.statement);
         let Some(node) = &statement.stmt else {
             out.empty_query_response();
             return Ok(());
@@ -479,7 +479,7 @@ impl Connection {
             return Err(aborted().into());
         }
         self.interrupted()?;
-        let portal = self.portals.get_mut(name)?;
+        let portal = self.portals.get_mut().get_mut(name)?;
         if portal.failed || matches!(portal.run, Run::Done) {
             return Err(Error::new(
                 SqlState::OBJECT_NOT_IN_PREREQUISITE_STATE,
@@ -641,30 +641,30 @@ impl Connection {
                     }
                     if done == CommandTag::DiscardAll {
                         self.statements.deallocate_all();
-                        self.portals.clear();
-                    } else if let Some(portal) = self.portals.find_mut(name) {
+                        self.portals.get_mut().clear();
+                    } else if let Some(portal) = self.portals.get_mut().find_mut(name) {
                         portal.run = Run::Done;
                     }
                     tag = Some((done, 0));
                 }
                 Done::Rows { rows, tag, .. } => {
-                    if let Some(portal) = self.portals.find_mut(name) {
+                    if let Some(portal) = self.portals.get_mut().find_mut(name) {
                         portal.run = Run::Rows { rows, at: 0, tag };
                     }
                 }
                 Done::Fetch { rows, .. } => {
-                    if let Some(portal) = self.portals.find_mut(name) {
+                    if let Some(portal) = self.portals.get_mut().find_mut(name) {
                         portal.run = Run::Rows { rows, at: 0, tag: CommandTag::Fetch };
                     }
                 }
                 Done::Count(done, count) => {
-                    if let Some(portal) = self.portals.find_mut(name) {
+                    if let Some(portal) = self.portals.get_mut().find_mut(name) {
                         portal.run = Run::Done;
                     }
                     tag = Some((done, count));
                 }
                 Done::Copy(copy) => {
-                    if let Some(portal) = self.portals.find_mut(name) {
+                    if let Some(portal) = self.portals.get_mut().find_mut(name) {
                         portal.run = Run::Done;
                     }
                     copy.send_data(out);
@@ -700,7 +700,7 @@ impl Connection {
         max_rows: i32,
         out: &mut OutBuf,
     ) -> Result<(CommandTag, u64, bool), Failed> {
-        let portal = self.portals.get_mut(name)?;
+        let portal = self.portals.get_mut().get_mut(name)?;
         // `PortalRunSelect` forward on a cursor, with the tag of its query.
         if let Run::Cursor(cursor) = &mut portal.run {
             let (values, end) = cursor.forward(max_rows)?;
@@ -742,7 +742,7 @@ impl Connection {
     pub(super) fn close(&mut self, target: Target, name: &[u8], out: &mut OutBuf) {
         match target {
             Target::Statement => drop(self.statements.close(name)),
-            Target::Portal => drop(self.portals.close(name)),
+            Target::Portal => drop(self.portals.get_mut().close(name)),
         }
         out.close_complete();
     }

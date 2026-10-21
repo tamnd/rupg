@@ -1,6 +1,7 @@
 //! The tree of a compiled function, as `plpgsql.h` defines it: the variables of the function, the names that each block can see, and the statements.
 
 use rupg_common::{Level, SqlState};
+use rupg_sql::nodes::FetchDirection;
 
 /// A compiled function, `PLpgSQL_function`.
 #[derive(Debug)]
@@ -39,6 +40,18 @@ pub(crate) struct Datum {
     pub(crate) default: Option<Expr>,
     /// The line of the declaration, for the context of an error in the default.
     pub(crate) line: u32,
+    /// The query of a bound cursor.
+    pub(crate) cursor: Option<Box<Bound>>,
+}
+
+/// The query of a bound cursor, `cursor_explicit_expr` of `PLpgSQL_var`.
+#[derive(Debug)]
+pub(crate) struct Bound {
+    pub(crate) query: Expr,
+    /// `cursor_explicit_argrow`: the row of the arguments of the cursor, or `None` for a cursor with no arguments.
+    pub(crate) args: Option<usize>,
+    /// `cursor_options`: `CURSOR_OPT_SCROLL` or `CURSOR_OPT_NO_SCROLL`, or 0.
+    pub(crate) options: i32,
 }
 
 /// `plpgsql_ns_lookup`: from the item `top`, the variable of the first name, of `label.name` with two names, or of a qualified name with three, with the number of names that it used. A name with more names after it only matches a record. With `local`, the lookup stops at the start of the last block.
@@ -116,6 +129,8 @@ pub(crate) enum NsEntry {
 pub(crate) enum LabelKind {
     Block,
     Loop,
+    /// The names of the arguments of a cursor, which only the query of the cursor sees.
+    Other,
 }
 
 /// The form of the text of an expression for the parser of SQL.
@@ -209,6 +224,17 @@ pub(crate) enum Source {
     /// A query in the text of the function.
     Query(Expr),
     /// `EXECUTE expr USING params`.
+    Dynamic { query: Expr, params: Vec<Expr> },
+}
+
+/// The query of `OPEN`.
+#[derive(Debug)]
+pub(crate) enum Opened {
+    /// The query of a bound cursor, with the query that gives the values of its arguments.
+    Bound(Option<Expr>),
+    /// `OPEN c FOR query`.
+    Query(Expr),
+    /// `OPEN c FOR EXECUTE query USING params`.
     Dynamic { query: Expr, params: Vec<Expr> },
 }
 
@@ -324,6 +350,14 @@ pub(crate) enum StmtKind {
         source: Source,
         body: Vec<Stmt>,
     },
+    /// `FOR target IN cursor(args)`: a loop over the rows of a bound cursor.
+    ForCursor {
+        label: Option<String>,
+        target: usize,
+        cursor: usize,
+        args: Option<Expr>,
+        body: Vec<Stmt>,
+    },
     ForEach {
         label: Option<String>,
         target: usize,
@@ -376,6 +410,21 @@ pub(crate) enum StmtKind {
         stacked: bool,
         items: Vec<(usize, DiagItem)>,
     },
+    /// `OPEN`, with the options of `SCROLL` of an unbound cursor.
+    Open {
+        cursor: usize,
+        query: Opened,
+        options: i32,
+    },
+    /// `FETCH` into the target `into`, or `MOVE` when it is `None`. `expr` gives the count when it is there.
+    Fetch {
+        cursor: usize,
+        direction: FetchDirection,
+        count: i64,
+        expr: Option<Expr>,
+        into: Option<usize>,
+    },
+    Close(usize),
     Null,
 }
 
@@ -392,6 +441,7 @@ impl StmtKind {
             StmtKind::ForInt { .. } => "FOR with integer loop variable",
             StmtKind::ForQuery { source: Source::Query(_), .. } => "FOR over SELECT rows",
             StmtKind::ForQuery { .. } => "FOR over EXECUTE statement",
+            StmtKind::ForCursor { .. } => "FOR over cursor",
             StmtKind::ForEach { .. } => "FOREACH over array",
             StmtKind::Exit { exit: true, .. } => "EXIT",
             StmtKind::Exit { .. } => "CONTINUE",
@@ -407,6 +457,10 @@ impl StmtKind {
             StmtKind::Call { .. } => "DO",
             StmtKind::GetDiag { stacked: true, .. } => "GET STACKED DIAGNOSTICS",
             StmtKind::GetDiag { .. } => "GET DIAGNOSTICS",
+            StmtKind::Open { .. } => "OPEN",
+            StmtKind::Fetch { into: Some(_), .. } => "FETCH",
+            StmtKind::Fetch { .. } => "MOVE",
+            StmtKind::Close(_) => "CLOSE",
             StmtKind::Null => "NULL",
         }
     }

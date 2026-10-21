@@ -9,11 +9,12 @@ use rupg_analyze::{ExprKind, Params, Query, Variable, Variables, types};
 use rupg_common::{Error, Result, SqlState};
 use rupg_exec::Plan;
 use rupg_func::Session;
+use rupg_sql::nodes::FetchDirection;
 use rupg_types::{Array, ArrayDim, Record, Value, oid};
 
 use crate::ast::{
-    Block, Cond, DatumKind, DiagItem, Expr, Function, Mode, RaiseOption, Returned, Source, Stmt,
-    StmtKind, Target, ns_lookup,
+    Block, Cond, DatumKind, DiagItem, Expr, Function, Mode, Opened, RaiseOption, Returned, Source,
+    Stmt, StmtKind, Target, ns_lookup,
 };
 use crate::{Spi, TriggerCall};
 
@@ -735,6 +736,7 @@ impl Exec<'_> {
             }
             StmtKind::ForQuery { label, target, source, body } => {
                 let (rows, columns) = self.source_rows(source)?;
+                self.spi.new_portal_name();
                 let found = !rows.is_empty();
                 if !found {
                     self.move_rows(*target, &columns, None)?;
@@ -836,6 +838,23 @@ impl Exec<'_> {
             StmtKind::GetDiag { stacked, items } => {
                 self.getdiag(*stacked, items)?;
                 Ok(Flow::Normal)
+            }
+            StmtKind::Open { cursor, query, options } => {
+                self.open(*cursor, query, *options)?;
+                Ok(Flow::Normal)
+            }
+            StmtKind::Fetch { cursor, direction, count, expr, into } => {
+                self.fetch(*cursor, *direction, *count, expr.as_ref(), *into)?;
+                Ok(Flow::Normal)
+            }
+            StmtKind::Close(cursor) => {
+                // `exec_stmt_close`.
+                let name = self.cursor_name(*cursor)?;
+                self.spi.close_cursor(&name)?;
+                Ok(Flow::Normal)
+            }
+            StmtKind::ForCursor { label, target, cursor, args, body } => {
+                self.for_cursor(label.as_deref(), *target, *cursor, args.as_ref(), body)
             }
             StmtKind::Null => Ok(Flow::Normal),
         }
@@ -1461,6 +1480,20 @@ impl Exec<'_> {
         query: &Expr,
         params: &[Expr],
     ) -> Result<(Vec<Vec<Value>>, u64, Plan)> {
+        let (plan, values, _, line) = self.dynamic_plan(query, params)?;
+        self.set_spi(Some(line.clone()));
+        let result = self.spi.execute(&plan, &values);
+        self.set_spi(None);
+        let (rows, n) = result.map_err(|error| error.with_context(line))?;
+        Ok((rows, n, plan))
+    }
+
+    /// The plan of the query of `EXECUTE` with the values of `USING`, the text of the query and the line of the context of its errors.
+    fn dynamic_plan(
+        &mut self,
+        query: &Expr,
+        params: &[Expr],
+    ) -> Result<(Plan, Vec<Value>, String, String)> {
         let (value, ty, _) = self.eval(query)?;
         if value.is_null() {
             return Err(Error::new(
@@ -1487,11 +1520,149 @@ impl Exec<'_> {
             Some(at) => error.with_position(None).with_internal(text.clone(), Some(at)),
             None => error.with_context(line.clone()),
         })?;
-        self.set_spi(Some(line.clone()));
-        let result = self.spi.execute(&plan, &values);
+        Ok((plan, values, text, line))
+    }
+
+    /// The name of the portal in the cursor variable `d`, which must not be null.
+    fn cursor_name(&self, d: usize) -> Result<String> {
+        let (value, ty, _) = self.datum_value(d);
+        if value.is_null() {
+            return Err(Error::new(
+                SqlState::NULL_VALUE_NOT_ALLOWED,
+                format!("cursor variable \"{}\" is null", self.f.datums[d].name),
+            ));
+        }
+        self.text(&value, ty)
+    }
+
+    /// The name in the cursor variable `d` for a new portal, or `None` for a null variable. A portal with the name must not be open.
+    fn free_cursor(&self, d: usize) -> Result<Option<String>> {
+        if self.datum_value(d).0.is_null() {
+            return Ok(None);
+        }
+        let name = self.cursor_name(d)?;
+        if self.spi.cursor_exists(&name) {
+            return Err(Error::new(
+                SqlState::DUPLICATE_CURSOR,
+                format!("cursor \"{name}\" already in use"),
+            ));
+        }
+        Ok(Some(name))
+    }
+
+    /// The portal of the query `e` with the name `name`, or with a new name for `None`.
+    fn open_query(&mut self, name: Option<&str>, e: &Expr, options: i32) -> Result<String> {
+        let p = self.plan(e)?;
+        cursor_query(&p.plan)?;
+        let params =
+            p.bindings.iter().map(|(b, ..)| self.binding_value(b)).collect::<Result<Vec<_>>>()?;
+        self.set_spi(Some(spi_line(e.mode, &e.shown)));
+        let result = self.spi.open_cursor(name, &p.plan, &params, &e.text, options);
         self.set_spi(None);
-        let (rows, n) = result.map_err(|error| error.with_context(line))?;
-        Ok((rows, n, plan))
+        result.map_err(|error| spi_error(e, error))
+    }
+
+    /// The portal of the bound cursor `d`. The values of the arguments `args` go to the variables of the arguments first.
+    fn open_bound(&mut self, d: usize, name: Option<&str>, args: Option<&Expr>) -> Result<String> {
+        let f = self.f;
+        let Some(bound) = f.datums[d].cursor.as_deref() else {
+            return Err(Error::internal("the cursor variable has no query"));
+        };
+        if let (Some(args), Some(row)) = (args, bound.args) {
+            self.exec_sql(args, Some(row), false)?;
+        }
+        self.open_query(name, &bound.query, bound.options)
+    }
+
+    /// `exec_stmt_open`.
+    fn open(&mut self, d: usize, query: &Opened, options: i32) -> Result<()> {
+        let name = self.free_cursor(d)?;
+        let opened = match query {
+            Opened::Bound(args) => self.open_bound(d, name.as_deref(), args.as_ref())?,
+            Opened::Query(e) => self.open_query(name.as_deref(), e, options)?,
+            Opened::Dynamic { query, params } => {
+                let (plan, values, text, line) = self.dynamic_plan(query, params)?;
+                cursor_query(&plan)?;
+                self.set_spi(Some(line.clone()));
+                let result = self.spi.open_cursor(name.as_deref(), &plan, &values, &text, options);
+                self.set_spi(None);
+                result.map_err(|error| error.with_context(line))?
+            }
+        };
+        // A null variable gets the name of the new portal.
+        if name.is_none() {
+            self.assign_datum(d, Value::Text(opened), oid::TEXT, -1)?;
+        }
+        Ok(())
+    }
+
+    /// `exec_stmt_fetch`: `FETCH` into the target `into`, or `MOVE` for `None`.
+    fn fetch(
+        &mut self,
+        d: usize,
+        direction: FetchDirection,
+        count: i64,
+        expr: Option<&Expr>,
+        into: Option<usize>,
+    ) -> Result<()> {
+        let name = self.cursor_name(d)?;
+        if !self.spi.cursor_exists(&name) {
+            return Err(Error::new(
+                SqlState::UNDEFINED_CURSOR,
+                format!("cursor \"{name}\" does not exist"),
+            ));
+        }
+        let count = match expr {
+            Some(e) => i64::from(self.eval_int(e, "relative or absolute cursor position is null")?),
+            None => count,
+        };
+        let fetched = self.spi.fetch_cursor(&name, direction, count, into.is_some())?;
+        if let Some(target) = into {
+            self.move_rows(target, &fetched.columns, fetched.rows.into_iter().next())?;
+        }
+        self.row_count = fetched.count;
+        self.set_found(fetched.count != 0);
+        Ok(())
+    }
+
+    /// `exec_stmt_forc`: the loop over the rows of the bound cursor `d`, one row at a time, as the body can read the cursor too. The portal closes after the loop, and a variable that was null is null again.
+    fn for_cursor(
+        &mut self,
+        label: Option<&str>,
+        target: usize,
+        d: usize,
+        args: Option<&Expr>,
+        body: &[Stmt],
+    ) -> Run<Flow> {
+        let name = self.free_cursor(d)?;
+        let opened = self.open_bound(d, name.as_deref(), args)?;
+        if name.is_none() {
+            self.assign_datum(d, Value::Text(opened.clone()), oid::TEXT, -1)?;
+        }
+        let mut found = false;
+        let mut out = Flow::Normal;
+        loop {
+            let fetched = self.spi.fetch_cursor(&opened, FetchDirection::FETCH_FORWARD, 1, true)?;
+            let Some(row) = fetched.rows.into_iter().next() else {
+                if !found {
+                    self.move_rows(target, &fetched.columns, None)?;
+                }
+                break;
+            };
+            found = true;
+            self.move_rows(target, &fetched.columns, Some(row))?;
+            let flow = self.stmts(body)?;
+            if let Some(flow) = after_body(flow, label) {
+                out = flow;
+                break;
+            }
+        }
+        self.spi.close_cursor(&opened)?;
+        if name.is_none() {
+            self.slots[d] = Slot::Var { value: Value::Null, ty: oid::REFCURSOR, typmod: -1 };
+        }
+        self.set_found(found);
+        Ok(out)
     }
 
     /// The plan of the expression `e`, made again when the type of a variable that it reads changed.
@@ -1880,6 +2051,29 @@ impl Exec<'_> {
             }
         }
     }
+}
+
+/// `SPI_cursor_open_internal`: only a query that gives rows can be the query of a cursor.
+fn cursor_query(plan: &Plan) -> Result<()> {
+    if let Some(write) = plan.write() {
+        if write.returning.is_none() {
+            return Err(Error::new(
+                SqlState::INVALID_CURSOR_DEFINITION,
+                format!("cannot open {} query as cursor", write.kind.name()),
+            ));
+        }
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "a cursor over a statement that changes data is not supported yet",
+        ));
+    }
+    if plan.modifying_cte() {
+        return Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "a statement of WITH that changes data in PL/pgSQL is not supported yet",
+        ));
+    }
+    Ok(())
 }
 
 /// The columns of the result of a plan: the name, the type and the typmod of each.
