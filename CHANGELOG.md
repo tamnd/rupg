@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `MERGE` into a partitioned table and into a partition. Each action goes to the leaf partitions: an update can move a row to another leaf, an insert goes to the leaf that takes the row, and the triggers of the leaves fire in the order of the join. A row that moves is in the transition tables of `DELETE` and of `INSERT`, as in PostgreSQL. `RETURNING` can read `tableoid` (#510).
+
 ## 0.1.60 (2026-10-21)
 
 ### Added

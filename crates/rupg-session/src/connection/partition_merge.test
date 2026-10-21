@@ -1,0 +1,231 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (a int PRIMARY KEY, b text, c int DEFAULT 0) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TABLE p3 PARTITION OF p (CHECK (c >= 0)) FOR VALUES FROM (20) TO (30);
+CREATE TABLE
+> INSERT INTO p VALUES (1, 'one'), (2, 'two'), (11, 'eleven'), (12, 'twelve'), (21, 'twenty-one');
+INSERT 0 5
+> CREATE TABLE s (a int, b text);
+CREATE TABLE
+> INSERT INTO s VALUES (1, 'one x'), (11, 'move'), (3, 'three'), (22, 'twenty-two'), (2, 'gone');
+INSERT 0 5
+> MERGE INTO p USING s ON p.a = s.a
+>>   WHEN MATCHED AND s.b = 'move' THEN UPDATE SET a = p.a + 13, b = s.b
+>>   WHEN MATCHED AND s.b = 'gone' THEN DELETE
+>>   WHEN MATCHED THEN UPDATE SET b = s.b
+>>   WHEN NOT MATCHED THEN INSERT VALUES (s.a, s.b)
+>>   RETURNING merge_action(), p.tableoid::regclass, p.*;
+fields merge_action:25:-1:-1,tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row UPDATE,p1,1,one x,0
+row UPDATE,p3,24,move,0
+row INSERT,p1,3,three,0
+row INSERT,p3,22,twenty-two,0
+row DELETE,p1,2,two,0
+MERGE 5
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,1,one x,0
+row p1,3,three,0
+row p2,12,twelve,0
+row p3,21,twenty-one,0
+row p3,22,twenty-two,0
+row p3,24,move,0
+SELECT 6
+> MERGE INTO p USING (VALUES (5, 'five'), (12, 'dup')) v(a, b) ON p.a = v.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a, v.b);
+MERGE 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,1,one x,0
+row p1,3,three,0
+row p1,5,five,0
+row p2,12,twelve,0
+row p3,21,twenty-one,0
+row p3,22,twenty-two,0
+row p3,24,move,0
+SELECT 7
+> MERGE INTO p USING (VALUES (40, 'forty')) v(a, b) ON p.a = v.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a, v.b);
+ERROR 23514 no partition of relation "p" found for row
+DETAIL Partition key of the failing row contains (a) = (40).
+> MERGE INTO p USING (VALUES (21, 'x')) v(a, b) ON p.a = v.a
+>>   WHEN MATCHED THEN UPDATE SET c = -1;
+ERROR 23514 new row for relation "p3" violates check constraint "p3_c_check"
+DETAIL Failing row contains (21, twenty-one, -1).
+> MERGE INTO p USING (VALUES (21, 'x')) v(a, b) ON p.a = v.a
+>>   WHEN MATCHED THEN UPDATE SET a = 1;
+ERROR 23505 duplicate key value violates unique constraint "p1_pkey"
+DETAIL Key (a)=(1) already exists.
+> MERGE INTO p USING (VALUES (1), (1)) v(a) ON p.a = v.a
+>>   WHEN MATCHED THEN UPDATE SET b = 'twice';
+ERROR 21000 MERGE command cannot affect row a second time
+HINT Ensure that not more than one source row matches any one target row.
+> MERGE INTO p USING (SELECT 1 AS a) v ON p.a = v.a
+>>   WHEN NOT MATCHED BY SOURCE AND p.a >= 20 THEN DELETE
+>>   WHEN MATCHED THEN DO NOTHING
+>>   RETURNING merge_action(), old.a, new.a;
+fields merge_action:25:-1:-1,a@p.1:23:4:-1,a@p.1:23:4:-1
+row DELETE,21,NULL
+row DELETE,24,NULL
+row DELETE,22,NULL
+MERGE 3
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,1,one x,0
+row p1,3,three,0
+row p1,5,five,0
+row p2,12,twelve,0
+SELECT 4
+> MERGE INTO p1 USING (VALUES (1, 'in p1'), (7, 'seven')) v(a, b) ON p1.a = v.a
+>>   WHEN MATCHED THEN UPDATE SET b = v.b
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a, v.b)
+>>   RETURNING merge_action(), p1.*;
+fields merge_action:25:-1:-1,a@p1.1:23:4:-1,b@p1.2:25:-1:-1,c@p1.3:23:4:-1
+row UPDATE,1,in p1,0
+row INSERT,7,seven,0
+MERGE 2
+> MERGE INTO p1 USING (VALUES (1)) v(a) ON p1.a = v.a
+>>   WHEN MATCHED THEN UPDATE SET a = 15;
+ERROR 23514 new row for relation "p1" violates partition constraint
+DETAIL Failing row contains (15, in p1, 0).
+> MERGE INTO p1 USING (VALUES (16)) v(a) ON p1.a = v.a
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a, 'wrong');
+ERROR 23514 new row for relation "p1" violates partition constraint
+DETAIL Failing row contains (16, wrong, 0).
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,1,in p1,0
+row p1,3,three,0
+row p1,5,five,0
+row p1,7,seven,0
+row p2,12,twelve,0
+SELECT 5
+> CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % % on %', TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME;
+>>   IF TG_LEVEL = 'ROW' AND TG_OP <> 'DELETE' THEN
+>>     RAISE NOTICE 'new %', NEW;
+>>     IF NEW.b = 'skip' THEN RETURN NULL; END IF;
+>>     IF TG_WHEN = 'BEFORE' AND NEW.b = 'bump' THEN NEW.c := NEW.c + 100; END IF;
+>>     RETURN NEW;
+>>   END IF;
+>>   IF TG_LEVEL = 'ROW' THEN
+>>     RAISE NOTICE 'old %', OLD;
+>>     RETURN OLD;
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER br BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER ar AFTER INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER bs BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER as_ AFTER INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> MERGE INTO p USING (VALUES (1, 'bump'), (2, 'new'), (11, 'move'), (12, 'gone'), (8, 'skip')) v(a, b) ON p.a = v.a
+>>   WHEN MATCHED AND v.b = 'move' THEN UPDATE SET a = 25, b = v.b
+>>   WHEN MATCHED AND v.b = 'gone' THEN DELETE
+>>   WHEN MATCHED THEN UPDATE SET b = v.b
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a, v.b)
+>>   RETURNING merge_action(), p.tableoid::regclass, p.*;
+NOTICE 00000 bs BEFORE STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 bs BEFORE STATEMENT DELETE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,bump,0) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,new,0) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (11,move,0) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW DELETE on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (12,twelve,0) (PL/pgSQL function tf() line 11 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (8,skip,0) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,bump,100) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,new,0) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (11,move,0) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW DELETE on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (12,twelve,0) (PL/pgSQL function tf() line 11 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT DELETE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+fields merge_action:25:-1:-1,tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row UPDATE,p1,1,bump,100
+row INSERT,p1,2,new,0
+row INSERT,p2,11,move,0
+row DELETE,p2,12,twelve,0
+MERGE 4
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,1,bump,100
+row p1,2,new,0
+row p1,3,three,0
+row p1,5,five,0
+row p1,7,seven,0
+row p2,11,move,0
+SELECT 6
+> MERGE INTO p1 USING (VALUES (2, 'in p1')) v(a, b) ON p1.a = v.a
+>>   WHEN MATCHED THEN UPDATE SET b = v.b;
+NOTICE 00000 br BEFORE ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,"in p1",0) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,"in p1",0) (PL/pgSQL function tf() line 5 at RAISE)
+MERGE 1
+> DROP TRIGGER br ON p;
+DROP TRIGGER
+> DROP TRIGGER ar ON p;
+DROP TRIGGER
+> DROP TRIGGER bs ON p;
+DROP TRIGGER
+> DROP TRIGGER as_ ON p;
+DROP TRIGGER
+> CREATE FUNCTION tt() RETURNS trigger LANGUAGE plpgsql AS $$
+>> DECLARE r record;
+>> BEGIN
+>>   IF TG_OP IN ('INSERT', 'UPDATE') THEN
+>>     FOR r IN SELECT * FROM newt ORDER BY a LOOP RAISE NOTICE '% new %', TG_OP, r; END LOOP;
+>>   END IF;
+>>   IF TG_OP IN ('UPDATE', 'DELETE') THEN
+>>     FOR r IN SELECT * FROM oldt ORDER BY a LOOP RAISE NOTICE '% old %', TG_OP, r; END LOOP;
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER ti AFTER INSERT ON p REFERENCING NEW TABLE AS newt FOR EACH STATEMENT EXECUTE FUNCTION tt();
+CREATE TRIGGER
+> CREATE TRIGGER tu AFTER UPDATE ON p REFERENCING OLD TABLE AS oldt NEW TABLE AS newt FOR EACH STATEMENT EXECUTE FUNCTION tt();
+CREATE TRIGGER
+> CREATE TRIGGER td AFTER DELETE ON p REFERENCING OLD TABLE AS oldt FOR EACH STATEMENT EXECUTE FUNCTION tt();
+CREATE TRIGGER
+> MERGE INTO p USING (VALUES (1, 'x'), (25, 'back'), (3, 'gone'), (9, 'nine')) v(a, b) ON p.a = v.a
+>>   WHEN MATCHED AND v.b = 'back' THEN UPDATE SET a = 4
+>>   WHEN MATCHED AND v.b = 'gone' THEN DELETE
+>>   WHEN MATCHED THEN UPDATE SET b = v.b
+>>   WHEN NOT MATCHED THEN INSERT VALUES (v.a, v.b);
+NOTICE 00000 DELETE old (3,three,0) (PL/pgSQL function tt() line 8 at RAISE)
+NOTICE 00000 UPDATE new (1,x,100) (PL/pgSQL function tt() line 5 at RAISE)
+NOTICE 00000 UPDATE old (1,bump,100) (PL/pgSQL function tt() line 8 at RAISE)
+NOTICE 00000 INSERT new (9,nine,0) (PL/pgSQL function tt() line 5 at RAISE)
+NOTICE 00000 INSERT new (25,back,0) (PL/pgSQL function tt() line 5 at RAISE)
+MERGE 4
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,1,x,100
+row p1,2,in p1,0
+row p1,5,five,0
+row p1,7,seven,0
+row p1,9,nine,0
+row p2,11,move,0
+row p3,25,back,0
+SELECT 7
