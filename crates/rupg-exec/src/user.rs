@@ -807,7 +807,7 @@ fn triggers<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
             let mut row = Row::new(table);
             row.set("oid", oid(trigger.oid))
                 .set("tgrelid", oid(trigger.relation))
-                .set("tgparentid", oid(0))
+                .set("tgparentid", oid(trigger.parent))
                 .set("tgname", Value::text(trigger.name.clone()))
                 .set("tgfoid", oid(trigger.function))
                 .set("tgtype", Value::Int2(trigger.kind))

@@ -118,6 +118,7 @@ impl Definer<'_, '_> {
         self.merge_constraints(&rel, &parent_rel)?;
         self.catalog.attach_partition(child, parent, bound)?;
         self.ensure_partition_indexes(&rel, &parent_rel)?;
+        self.clone_triggers(parent, child)?;
         // `QueuePartitionConstraintValidation` for the new partition, then for the default partition, whose bound is now smaller.
         let default = self.catalog.partitions(parent).into_iter().find(|r| {
             r.oid != child
@@ -379,6 +380,7 @@ impl Definer<'_, '_> {
         for number in identities {
             self.catalog.set_identity(child, number, 0)?;
         }
+        self.drop_cloned_triggers(child)?;
         // `DetachPartitionFinalize`: the indexes of the partition are no longer partitions of the indexes of the parent.
         let indexes: Vec<(u32, u32)> = self
             .catalog

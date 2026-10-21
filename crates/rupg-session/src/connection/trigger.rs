@@ -5,8 +5,8 @@
 use std::rc::Rc;
 
 use rupg_analyze::{Expr, Merge, MergeCommand, Query, Write, WriteKind};
+use rupg_catalog::{Catalog, TRIGGER_INSTEAD, Trigger};
 use rupg_catalog::{TRIGGER_BEFORE, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_ROW, TRIGGER_UPDATE};
-use rupg_catalog::{TRIGGER_INSTEAD, Trigger};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_pgcatalog::builtin::Named;
@@ -15,7 +15,7 @@ use rupg_types::Value;
 use super::Connection;
 use super::merge::Action;
 use super::upsert::{Upsert, Upserted};
-use crate::query::{Captured, Transition};
+use crate::query::{Captured, Reader, Transition};
 use crate::utility::Notice;
 
 /// A trigger `AFTER` in the queue of the statement, `AfterTriggerEvent`.
@@ -58,6 +58,16 @@ impl Triggers {
     pub(super) fn after_rows(&self) -> bool {
         self.of(true, false).next().is_some()
             || self.list.iter().any(|t| has_transition(&t.trigger))
+    }
+
+    /// True when the write fires a trigger `BEFORE ... FOR EACH ROW`.
+    pub(super) fn before_rows(&self) -> bool {
+        self.of(true, true).next().is_some()
+    }
+
+    /// Keeps only the triggers `FOR EACH STATEMENT`. The triggers `FOR EACH ROW` of a partitioned table do not fire, as their clones in the leaf partitions fire.
+    pub(super) fn retain_statement(&mut self) {
+        self.list.retain(|t| t.trigger.kind & TRIGGER_ROW == 0);
     }
 
     /// The triggers with the level `level` and the time `before`. A trigger `INSTEAD OF` is not one of them.
@@ -157,6 +167,33 @@ fn padded(mut row: Vec<Value>, width: usize) -> Vec<Value> {
     row
 }
 
+/// The triggers of `CREATE TRIGGER` of the table `table` that fire for the event `event`, in the order of their names.
+///
+/// # Errors
+///
+/// The error of the condition of `WHEN` of a trigger.
+pub(super) fn armed(
+    catalog: &Catalog,
+    reader: &Reader<'_>,
+    table: u32,
+    event: i16,
+) -> Result<Triggers, Error> {
+    let found = catalog.triggers_of(table);
+    let found = found.into_iter().filter(|t| !t.internal && t.fires() && t.kind & event != 0);
+    let mut list = Vec::new();
+    for trigger in found {
+        let when = rupg_analyze::trigger_when(reader, trigger.oid)?;
+        list.push(Armed { trigger: trigger.clone(), when });
+    }
+    Ok(Triggers { list, event })
+}
+
+/// The old and the new row of a change, as a trigger `FOR EACH ROW` gets them.
+pub(super) type RowPair = (Option<Vec<Value>>, Option<Vec<Value>>);
+
+/// The columns that an `UPDATE` sets and the number of the columns of the table with the dropped columns, which `TriggerEnabled` reads.
+pub(super) type Shape<'a> = (&'a [i16], usize);
+
 impl Connection {
     /// The triggers of `CREATE TRIGGER` that fire for the write `info`, in the order of their names.
     ///
@@ -213,36 +250,38 @@ impl Connection {
     /// The triggers of the table of the write for the event `event`, in the order of their names.
     fn triggers_of(&self, info: &Write, event: i16) -> Result<Triggers, Error> {
         let catalog = self.catalog();
-        let found = catalog.triggers_of(info.table);
-        let mut found =
-            found.into_iter().filter(|t| !t.internal && t.fires() && t.kind & event != 0);
-        let Some(first) = found.next() else { return Ok(Triggers::default()) };
         let reader = self.reader();
-        let mut list = Vec::new();
-        for trigger in std::iter::once(first).chain(found) {
-            let when = rupg_analyze::trigger_when(&reader, trigger.oid)?;
-            list.push(Armed { trigger: trigger.clone(), when });
-        }
-        Ok(Triggers { list, event })
+        armed(&catalog, &reader, info.table, event)
     }
 
     /// `TriggerEnabled`: true when the trigger fires for the rows `old` and `new`. A trigger `UPDATE OF` fires when `SET` gives one of its columns, and a trigger with `WHEN` fires when its condition is true.
     fn enabled(
         &self,
-        (armed, event): (&Armed, i16),
+        armed: (&Armed, i16),
         info: &Write,
+        old: Option<&[Value]>,
+        new: Option<&[Value]>,
+    ) -> Result<bool, Error> {
+        self.enabled_in(armed, (&info.updated, self.table_width(info)), old, new)
+    }
+
+    /// `TriggerEnabled` for a table of the shape `shape`.
+    fn enabled_in(
+        &self,
+        (armed, event): (&Armed, i16),
+        (updated, width): Shape<'_>,
         old: Option<&[Value]>,
         new: Option<&[Value]>,
     ) -> Result<bool, Error> {
         let t = &armed.trigger;
         if event == TRIGGER_UPDATE
             && !t.columns.is_empty()
-            && !t.columns.iter().any(|c| info.updated.contains(c))
+            && !t.columns.iter().any(|c| updated.contains(c))
         {
             return Ok(false);
         }
         let Some((base, qual)) = &armed.when else { return Ok(true) };
-        let nulls = || vec![Value::Null; self.table_width(info)];
+        let nulls = || vec![Value::Null; width];
         let old = old.map_or_else(nulls, <[Value]>::to_vec);
         let new = new.map_or_else(nulls, <[Value]>::to_vec);
         let reader = self.reader();
@@ -533,14 +572,25 @@ impl Connection {
     fn row_events(
         &self,
         info: &Write,
+        fire: (&Triggers, &Rc<Captured>),
+        rows: (Option<&Vec<Value>>, Option<&Vec<Value>>),
+        events: &mut Vec<Event>,
+    ) -> Result<(), Error> {
+        self.row_events_in((&info.updated, self.table_width(info)), fire, rows, events)
+    }
+
+    /// `AfterTriggerSaveEvent` for one row of a table of the shape `shape`.
+    fn row_events_in(
+        &self,
+        shape: Shape<'_>,
         (triggers, captured): (&Triggers, &Rc<Captured>),
         (old, new): (Option<&Vec<Value>>, Option<&Vec<Value>>),
         events: &mut Vec<Event>,
     ) -> Result<(), Error> {
         for armed in triggers.of(true, false) {
-            if self.enabled(
+            if self.enabled_in(
                 (armed, triggers.event),
-                info,
+                shape,
                 old.map(Vec::as_slice),
                 new.map(Vec::as_slice),
             )? {
@@ -672,6 +722,72 @@ impl Connection {
         self.statement_events(info, &fire.delete, &delete, &mut events)?;
         self.statement_events(info, &fire.update, &update, &mut events)?;
         self.statement_events(info, &fire.insert, &insert, &mut events)?;
+        self.events.borrow_mut().extend(events);
+        Ok(())
+    }
+
+    /// `ExecBRInsertTriggers`, `ExecBRUpdateTriggers` and `ExecBRDeleteTriggers` for a row of a leaf partition of the shape `shape`, with all the columns of the leaf. A trigger that gives a null row skips the row, and the row that a trigger gives is the new row for the next trigger. After each clone of a trigger of a partitioned table, `stays` must be true for the new row: a row cannot move to another partition. The result is the new row, or the old row for a `DELETE`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers and of `stays`, and `0A000` for a row that a trigger moves to another partition. `leaf` is the name of the leaf with its schema for the error.
+    pub(super) fn leaf_before(
+        &self,
+        (triggers, shape): (&Triggers, Shape<'_>),
+        (old, mut new): (Option<Vec<Value>>, Option<Vec<Value>>),
+        leaf: &str,
+        stays: &mut dyn FnMut(&[Value]) -> Result<bool, Error>,
+    ) -> Result<Option<Vec<Value>>, Error> {
+        let width = shape.1;
+        let old = old.map(|row| padded(row, width));
+        for armed in triggers.of(true, true) {
+            if !self.enabled_in((armed, triggers.event), shape, old.as_deref(), new.as_deref())? {
+                continue;
+            }
+            let rows = (old.clone(), new.clone());
+            let Some(returned) = self.call_trigger(&armed.trigger, triggers.event, rows, None)?
+            else {
+                return Ok(None);
+            };
+            let Some(_) = new else { continue };
+            if armed.trigger.parent != 0 && !stays(&returned)? {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "moving row to another partition during a BEFORE FOR EACH ROW trigger is not supported",
+                )
+                .with_detail(format!(
+                    "Before executing trigger \"{}\", the row was to be in partition \"{leaf}\".",
+                    armed.trigger.name
+                )));
+            }
+            new = Some(returned);
+        }
+        Ok(new.or(old))
+    }
+
+    /// The events of the triggers `AFTER ... FOR EACH ROW` of a leaf partition of the shape `shape` for its rows `rows`, the old and the new row of each change, at the end of the queue.
+    ///
+    /// # Errors
+    ///
+    /// The error of the condition of `WHEN` of a trigger.
+    pub(super) fn leaf_after(
+        &self,
+        (triggers, shape): (&Triggers, Shape<'_>),
+        rows: &[RowPair],
+    ) -> Result<(), Error> {
+        let width = shape.1;
+        let mut events = Vec::new();
+        let none = Rc::default();
+        for (old, new) in rows {
+            let old = old.clone().map(|row| padded(row, width));
+            let new = new.as_ref().map(|row| padded(row[..width.min(row.len())].to_vec(), width));
+            self.row_events_in(
+                shape,
+                (triggers, &none),
+                (old.as_ref(), new.as_ref()),
+                &mut events,
+            )?;
+        }
         self.events.borrow_mut().extend(events);
         Ok(())
     }
