@@ -29,6 +29,7 @@ mod formatting;
 mod generated;
 mod geo;
 mod hash;
+mod identify;
 mod inrange;
 mod io;
 mod json;
@@ -530,6 +531,7 @@ fn by_src(src: &str) -> Option<Kernel> {
         .or_else(|| reg::by_src(src))
         .or_else(|| catinfo::by_src(src))
         .or_else(|| describe::by_src(src))
+        .or_else(|| identify::by_src(src))
         .or_else(|| acl::by_src(src))
         .or_else(|| updatable::by_src(src))
         .or_else(|| deparse::by_src(src))

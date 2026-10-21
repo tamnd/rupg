@@ -1,0 +1,418 @@
+> SET TimeZone = 'UTC';
+SET
+> CREATE SCHEMA s;
+CREATE SCHEMA
+> CREATE TABLE t (a int PRIMARY KEY, b text DEFAULT 'x' CHECK (b <> ''), "Weird Col" int);
+CREATE TABLE
+> CREATE TABLE s.u (a int);
+CREATE TABLE
+> CREATE VIEW v AS SELECT a FROM t;
+CREATE VIEW
+> CREATE SEQUENCE sq;
+CREATE SEQUENCE
+> CREATE INDEX ti ON t (b);
+CREATE INDEX
+> CREATE TYPE ct AS (x int, y text);
+CREATE TYPE
+> CREATE TYPE en AS ENUM ('a', 'b');
+CREATE TYPE
+> CREATE DOMAIN dm AS int CONSTRAINT dpos CHECK (VALUE > 0);
+CREATE DOMAIN
+> CREATE RULE r1 AS ON INSERT TO s.u DO INSTEAD NOTHING;
+CREATE RULE
+> CREATE TABLE "Mixed" (a int);
+CREATE TABLE
+> CREATE TABLE s.w (id int REFERENCES t);
+CREATE TABLE
+> CREATE FUNCTION s.f(int, text) RETURNS int LANGUAGE sql AS 'SELECT 1';
+CREATE FUNCTION
+> CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS 'BEGIN RETURN NEW; END';
+CREATE FUNCTION
+> CREATE TRIGGER trg BEFORE INSERT ON t FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> ALTER TABLE t DROP COLUMN "Weird Col";
+ALTER TABLE
+> CREATE TEXT SEARCH CONFIGURATION s.cfg (COPY = english);
+CREATE TEXT SEARCH CONFIGURATION
+> SELECT pg_identify_object('pg_class'::regclass, 't'::regclass, 0);
+fields pg_identify_object:2249:-1:-1
+row (table,public,t,public.t)
+SELECT 1
+> SELECT pg_identify_object('pg_class'::regclass, 't'::regclass, 2);
+fields pg_identify_object:2249:-1:-1
+row ("table column",public,t,public.t.b)
+SELECT 1
+> SELECT pg_identify_object('pg_class'::regclass, 't'::regclass, 3);
+fields pg_identify_object:2249:-1:-1
+row ("table column",public,t,"public.t.""........pg.dropped.3........""")
+SELECT 1
+> SELECT pg_identify_object('pg_class'::regclass, 't'::regclass, 9);
+fields pg_identify_object:2249:-1:-1
+row ("table column",,,)
+SELECT 1
+> SELECT pg_identify_object('pg_class'::regclass, 't'::regclass, -1);
+fields pg_identify_object:2249:-1:-1
+row ("table column",public,t,public.t.ctid)
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 's.u'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row table,s,u,s.u
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'v'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row view,public,v,public.v
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'sq'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row sequence,public,sq,public.sq
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'ti'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row index,public,ti,public.ti
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'ct'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row composite type,public,ct,public.ct
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'ct'::regclass, 1);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row composite type column,public,ct,public.ct.x
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, '"Mixed"'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row table,public,"Mixed",public."Mixed"
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'pg_class'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row table,pg_catalog,pg_class,pg_catalog.pg_class
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'pg_class'::regclass, 1);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row table column,pg_catalog,pg_class,pg_catalog.pg_class.oid
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'information_schema.tables'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row view,information_schema,tables,information_schema.tables
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row relation,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'int4'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,pg_catalog,int4,integer
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, '_int4'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,pg_catalog,_int4,integer[]
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'varchar'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,pg_catalog,"varchar",character varying
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'ct'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,public,ct,public.ct
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'en'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,public,en,public.en
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'dm'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,public,dm,public.dm
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 's.u'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,s,u,s.u
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, '"Mixed"'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,public,"Mixed",public."Mixed"
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 'now'::regproc, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function,pg_catalog,NULL,pg_catalog.now()
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 'count()'::regprocedure, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row aggregate,pg_catalog,NULL,pg_catalog.count()
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 'sum(int4)'::regprocedure, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row aggregate,pg_catalog,NULL,pg_catalog.sum(integer)
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 'row_number()'::regprocedure, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function,pg_catalog,NULL,pg_catalog.row_number()
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 's.f'::regproc, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function,s,NULL,s.f(integer,pg_catalog.text)
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 'tf'::regproc, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function,public,NULL,public.tf()
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row routine,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_namespace'::regclass, 's'::regnamespace, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row schema,NULL,s,s
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_namespace'::regclass, 'pg_catalog'::regnamespace, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row schema,NULL,pg_catalog,pg_catalog
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_namespace'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row schema,NULL,NULL,NULL
+SELECT 1
+> SELECT (pg_identify_object('pg_constraint'::regclass, oid, 0)).* FROM pg_constraint WHERE conname IN ('t_pkey', 't_b_check', 'dpos', 'w_id_fkey') ORDER BY 4;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row domain constraint,public,NULL,dpos on public.dm
+row table constraint,public,NULL,t_b_check on public.t
+row table constraint,public,NULL,t_pkey on public.t
+row table constraint,s,NULL,w_id_fkey on s.w
+SELECT 4
+> SELECT (pg_identify_object('pg_attrdef'::regclass, oid, 0)).* FROM pg_attrdef ORDER BY 4;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row default value,NULL,NULL,for public.t.b
+SELECT 1
+> SELECT (pg_identify_object('pg_rewrite'::regclass, oid, 0)).* FROM pg_rewrite WHERE ev_class IN ('v'::regclass, 's.u'::regclass) ORDER BY 4;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row rule,NULL,NULL,"_RETURN" on public.v
+row rule,NULL,NULL,r1 on s.u
+SELECT 2
+> SELECT (pg_identify_object('pg_trigger'::regclass, oid, 0)).* FROM pg_trigger WHERE tgname = 'trg';
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row trigger,NULL,NULL,trg on public.t
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_collation'::regclass, 100, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row collation,pg_catalog,"default",pg_catalog."default"
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_collation'::regclass, 950, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row collation,pg_catalog,"C",pg_catalog."C"
+SELECT 1
+> SELECT (pg_identify_object('pg_language'::regclass, oid, 0)).* FROM pg_language ORDER BY oid;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row language,NULL,internal,internal
+row language,NULL,c,c
+row language,NULL,sql,sql
+row language,NULL,plpgsql,plpgsql
+SELECT 4
+> SELECT (pg_identify_object('pg_am'::regclass, oid, 0)).* FROM pg_am ORDER BY oid LIMIT 3;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row access method,NULL,heap,heap
+row access method,NULL,btree,btree
+row access method,NULL,hash,hash
+SELECT 3
+> SELECT * FROM pg_identify_object('pg_operator'::regclass, '+(int4,int4)'::regoperator, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row operator,pg_catalog,NULL,pg_catalog.+(integer,integer)
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_operator'::regclass, '-(NONE,int4)'::regoperator, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row operator,pg_catalog,NULL,pg_catalog.-(NONE,integer)
+SELECT 1
+> SELECT (pg_identify_object('pg_opclass'::regclass, oid, 0)).* FROM pg_opclass WHERE opcname IN ('int4_ops', 'text_ops') ORDER BY 4;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row operator class,pg_catalog,int4_ops,pg_catalog.int4_ops USING btree
+row operator class,pg_catalog,int4_ops,pg_catalog.int4_ops USING hash
+row operator class,pg_catalog,text_ops,pg_catalog.text_ops USING btree
+row operator class,pg_catalog,text_ops,pg_catalog.text_ops USING hash
+row operator class,pg_catalog,text_ops,pg_catalog.text_ops USING spgist
+SELECT 5
+> SELECT (pg_identify_object('pg_opfamily'::regclass, oid, 0)).* FROM pg_opfamily WHERE opfname IN ('integer_ops', 'text_ops') ORDER BY 4;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row operator family,pg_catalog,integer_ops,pg_catalog.integer_ops USING btree
+row operator family,pg_catalog,integer_ops,pg_catalog.integer_ops USING hash
+row operator family,pg_catalog,text_ops,pg_catalog.text_ops USING btree
+row operator family,pg_catalog,text_ops,pg_catalog.text_ops USING hash
+row operator family,pg_catalog,text_ops,pg_catalog.text_ops USING spgist
+SELECT 5
+> SELECT (pg_identify_object('pg_cast'::regclass, oid, 0)).* FROM pg_cast WHERE castsource = 'int4'::regtype AND casttarget IN ('int8'::regtype, 'text'::regtype, 'bool'::regtype) ORDER BY 4;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row cast,NULL,NULL,(integer AS bigint)
+row cast,NULL,NULL,(integer AS boolean)
+SELECT 2
+> SELECT * FROM pg_identify_object('pg_ts_config'::regclass, 'english'::regconfig, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row text search configuration,pg_catalog,english,pg_catalog.english
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_ts_dict'::regclass, 'simple'::regdictionary, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row text search dictionary,pg_catalog,simple,pg_catalog.simple
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_ts_config'::regclass, 's.cfg'::regconfig, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row text search configuration,s,cfg,s.cfg
+SELECT 1
+> SELECT (pg_identify_object('pg_ts_parser'::regclass, oid, 0)).* FROM pg_ts_parser;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row text search parser,pg_catalog,"default",pg_catalog."default"
+SELECT 1
+> SELECT (pg_identify_object('pg_ts_template'::regclass, oid, 0)).* FROM pg_ts_template ORDER BY oid LIMIT 2;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row text search template,pg_catalog,simple,pg_catalog.simple
+row text search template,pg_catalog,synonym,pg_catalog.synonym
+SELECT 2
+> SELECT (pg_identify_object('pg_conversion'::regclass, oid, 0)).* FROM pg_conversion ORDER BY oid LIMIT 2;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row conversion,pg_catalog,koi8_r_to_windows_1251,pg_catalog.koi8_r_to_windows_1251
+row conversion,pg_catalog,windows_1251_to_koi8_r,pg_catalog.windows_1251_to_koi8_r
+SELECT 2
+> SELECT * FROM pg_identify_object('pg_authid'::regclass, 10, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row role,NULL,postgres,postgres
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_authid'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row role,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_database'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row database,NULL,template1,template1
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_tablespace'::regclass, 1663, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row tablespace,NULL,pg_default,pg_default
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_tablespace'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row tablespace,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object(0, 0, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+ERROR XX000 unsupported object class: 0
+> SELECT * FROM pg_identify_object(0, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+ERROR XX000 unsupported object class: 0
+> SELECT * FROM pg_identify_object('pg_statistic'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+ERROR XX000 unsupported object class: 2619
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'json'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,pg_catalog,"json",json
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'timestamptz'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,pg_catalog,timestamptz,timestamp with time zone
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'bpchar'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,pg_catalog,bpchar,character
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'oidvector'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,pg_catalog,oidvector,pg_catalog.oidvector
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_type'::regclass, 'interval'::regtype, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row type,pg_catalog,"interval",interval
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 1, 2);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row relation,NULL,NULL,NULL
+SELECT 1
+> SELECT (pg_identify_object('pg_amop'::regclass, oid, 0)).* FROM pg_amop ORDER BY oid LIMIT 2;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row operator of access method,NULL,NULL,operator 1 (smallint, smallint) of pg_catalog.integer_ops USING btree
+row operator of access method,NULL,NULL,operator 2 (smallint, smallint) of pg_catalog.integer_ops USING btree
+SELECT 2
+> SELECT (pg_identify_object('pg_amproc'::regclass, oid, 0)).* FROM pg_amproc ORDER BY oid LIMIT 2;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function of access method,NULL,NULL,function 1 (pg_catalog.anyarray, pg_catalog.anyarray) of pg_catalog.array_ops USING btree
+row function of access method,NULL,NULL,function 1 (bit, bit) of pg_catalog.bit_ops USING btree
+SELECT 2
+> SELECT (pg_identify_object('pg_extension'::regclass, oid, 0)).* FROM pg_extension;
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row extension,NULL,plpgsql,plpgsql
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_constraint'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row constraint,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_attrdef'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row default value,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_largeobject'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row large object,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_cast'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row cast,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_operator'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row operator,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 'pg_catalog.date_part(text,date)'::regprocedure, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function,pg_catalog,NULL,pg_catalog.date_part(pg_catalog.text,pg_catalog.date)
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 'array_cat'::regproc, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function,pg_catalog,NULL,pg_catalog.array_cat(pg_catalog.anycompatiblearray,pg_catalog.anycompatiblearray)
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 'make_interval'::regproc, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function,pg_catalog,NULL,pg_catalog.make_interval(integer,integer,integer,integer,integer,integer,double precision)
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_operator'::regclass, '||(anycompatiblearray,anycompatiblearray)'::regoperator, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row operator,pg_catalog,NULL,pg_catalog.||(pg_catalog.anycompatiblearray,pg_catalog.anycompatiblearray)
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_policy'::regclass, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row policy,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'pg_toast.pg_toast_1255'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row toast table,pg_toast,pg_toast_1255,pg_toast.pg_toast_1255
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'pg_class_oid_index'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row index,pg_catalog,pg_class_oid_index,pg_catalog.pg_class_oid_index
+SELECT 1
+> SELECT pg_identify_object('pg_proc'::regclass, 'now'::regproc, 0) IS NULL;
+fields ?column?:16:1:-1
+row f
+SELECT 1
+> SELECT * FROM pg_identify_object(NULL, 1, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'pg_class'::regclass, NULL);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row NULL,NULL,NULL,NULL
+SELECT 1
+> SELECT pg_identify_object('pg_class'::regclass, 's.u'::regclass, 0)::text;
+fields pg_identify_object:25:-1:-1
+row (table,s,u,s.u)
+SELECT 1
+> SELECT substring(pg_identify_object(classid, objid, 0)::text, E'(\\w+?)\\.') FROM pg_depend WHERE refobjid = 's.w'::regclass AND classid = 'pg_constraint'::regclass;
+fields substring:25:-1:-1
+row s
+SELECT 1
+> SET search_path = s;
+SET
+search_path=s
+> SELECT * FROM pg_identify_object('pg_class'::regclass, 'public.t'::regclass, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row table,public,t,public.t
+SELECT 1
+> SELECT * FROM pg_identify_object('pg_proc'::regclass, 's.f'::regproc, 0);
+fields type:25:-1:-1,schema:25:-1:-1,name:25:-1:-1,identity:25:-1:-1
+row function,s,NULL,s.f(integer,pg_catalog.text)
+SELECT 1

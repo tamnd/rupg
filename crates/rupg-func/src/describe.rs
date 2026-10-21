@@ -10,69 +10,69 @@ use rupg_types::{RegKind, Value};
 use crate::{Call, Kernel, Session, bad_value, reg};
 
 /// `pg_class`.
-const PG_CLASS: u32 = 1259;
+pub(crate) const PG_CLASS: u32 = 1259;
 /// `pg_proc`.
-const PG_PROC: u32 = 1255;
+pub(crate) const PG_PROC: u32 = 1255;
 /// `pg_type`.
-const PG_TYPE: u32 = 1247;
+pub(crate) const PG_TYPE: u32 = 1247;
 /// `pg_cast`.
-const PG_CAST: u32 = 2605;
+pub(crate) const PG_CAST: u32 = 2605;
 /// `pg_collation`.
-const PG_COLLATION: u32 = 3456;
+pub(crate) const PG_COLLATION: u32 = 3456;
 /// `pg_constraint`.
-const PG_CONSTRAINT: u32 = 2606;
+pub(crate) const PG_CONSTRAINT: u32 = 2606;
 /// `pg_conversion`.
-const PG_CONVERSION: u32 = 2607;
+pub(crate) const PG_CONVERSION: u32 = 2607;
 /// `pg_attrdef`.
-const PG_ATTRDEF: u32 = 2604;
+pub(crate) const PG_ATTRDEF: u32 = 2604;
 /// `pg_language`.
-const PG_LANGUAGE: u32 = 2612;
+pub(crate) const PG_LANGUAGE: u32 = 2612;
 /// `pg_largeobject`.
-const PG_LARGEOBJECT: u32 = 2613;
+pub(crate) const PG_LARGEOBJECT: u32 = 2613;
 /// `pg_operator`.
-const PG_OPERATOR: u32 = 2617;
+pub(crate) const PG_OPERATOR: u32 = 2617;
 /// `pg_opclass`.
-const PG_OPCLASS: u32 = 2616;
+pub(crate) const PG_OPCLASS: u32 = 2616;
 /// `pg_opfamily`.
-const PG_OPFAMILY: u32 = 2753;
+pub(crate) const PG_OPFAMILY: u32 = 2753;
 /// `pg_am`.
-const PG_AM: u32 = 2601;
+pub(crate) const PG_AM: u32 = 2601;
 /// `pg_amop`.
-const PG_AMOP: u32 = 2602;
+pub(crate) const PG_AMOP: u32 = 2602;
 /// `pg_amproc`.
-const PG_AMPROC: u32 = 2603;
+pub(crate) const PG_AMPROC: u32 = 2603;
 /// `pg_rewrite`.
-const PG_REWRITE: u32 = 2618;
+pub(crate) const PG_REWRITE: u32 = 2618;
 /// `pg_trigger`.
-const PG_TRIGGER: u32 = 2620;
+pub(crate) const PG_TRIGGER: u32 = 2620;
 /// `pg_namespace`.
-const PG_NAMESPACE: u32 = 2615;
+pub(crate) const PG_NAMESPACE: u32 = 2615;
 /// `pg_ts_parser`.
-const PG_TS_PARSER: u32 = 3601;
+pub(crate) const PG_TS_PARSER: u32 = 3601;
 /// `pg_ts_dict`.
-const PG_TS_DICT: u32 = 3600;
+pub(crate) const PG_TS_DICT: u32 = 3600;
 /// `pg_ts_template`.
-const PG_TS_TEMPLATE: u32 = 3764;
+pub(crate) const PG_TS_TEMPLATE: u32 = 3764;
 /// `pg_ts_config`.
-const PG_TS_CONFIG: u32 = 3602;
+pub(crate) const PG_TS_CONFIG: u32 = 3602;
 /// `pg_authid`.
-const PG_AUTHID: u32 = 1260;
+pub(crate) const PG_AUTHID: u32 = 1260;
 /// `pg_database`.
-const PG_DATABASE: u32 = 1262;
+pub(crate) const PG_DATABASE: u32 = 1262;
 /// `pg_tablespace`.
-const PG_TABLESPACE: u32 = 1213;
+pub(crate) const PG_TABLESPACE: u32 = 1213;
 /// `pg_extension`.
-const PG_EXTENSION: u32 = 3079;
+pub(crate) const PG_EXTENSION: u32 = 3079;
 
 /// The catalogs of the kinds of objects that rupg does not have: `pg_statistic_ext`, `pg_auth_members`, `pg_foreign_data_wrapper`, `pg_foreign_server`, `pg_user_mapping`, `pg_default_acl`, `pg_event_trigger`, `pg_parameter_acl`, `pg_policy`, `pg_publication`, `pg_publication_namespace`, `pg_publication_rel`, `pg_subscription` and `pg_transform`.
-const NO_OBJECTS: [u32; 14] =
+pub(crate) const NO_OBJECTS: [u32; 14] =
     [3381, 1261, 2328, 1417, 1418, 826, 3466, 6243, 3256, 6104, 6237, 6106, 6100, 3576];
 
 /// The names of the system columns, from `ctid` with the number -1.
-const SYSTEM_COLUMNS: [&str; 6] = ["ctid", "xmin", "cmin", "xmax", "cmax", "tableoid"];
+pub(crate) const SYSTEM_COLUMNS: [&str; 6] = ["ctid", "xmin", "cmin", "xmax", "cmax", "tableoid"];
 
 /// The OID argument at `index`.
-fn oid_arg(args: &[Value], index: usize) -> Result<u32> {
+pub(crate) fn oid_arg(args: &[Value], index: usize) -> Result<u32> {
     args.get(index).and_then(Value::as_oid).ok_or_else(bad_value)
 }
 
@@ -225,6 +225,12 @@ fn relation_text(oid: u32, session: &dyn Session) -> Option<String> {
 
 /// The description of a column of a relation, also of a system column of a relation that has them.
 fn column_text(oid: u32, number: i32, session: &dyn Session) -> Option<String> {
+    let name = column_name(oid, number, session)?;
+    Some(format!("column {name} of {}", relation_text(oid, session)?))
+}
+
+/// The name of a column of a relation, also of a system column of a relation that has them, or `None` when the relation has no column with the number.
+pub(crate) fn column_name(oid: u32, number: i32, session: &dyn Session) -> Option<&str> {
     let number = i16::try_from(number).ok()?;
     let name = match builtin::class_by_oid(oid) {
         Some(_) => builtin::attributes(oid).iter().find(|a| a.num == number)?.name,
@@ -242,7 +248,7 @@ fn column_text(oid: u32, number: i32, session: &dyn Session) -> Option<String> {
             }
         }
     };
-    Some(format!("column {name} of {}", relation_text(oid, session)?))
+    Some(name)
 }
 
 /// `format_procedure` with the kind of the function.

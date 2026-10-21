@@ -184,7 +184,7 @@ pub(crate) fn visible(kind: Named, row: &NamedRow, session: &dyn Session) -> boo
 }
 
 /// The name and the schema of a collation or an object of text search, built in or of the catalog.
-fn catalog_name(kind: Named, oid: u32, session: &dyn Session) -> Option<(String, u32)> {
+pub(crate) fn catalog_name(kind: Named, oid: u32, session: &dyn Session) -> Option<(String, u32)> {
     if let Some(row) = builtin::named_by_oid(kind, oid) {
         return Some((row.name.to_string(), row.namespace));
     }
@@ -379,6 +379,22 @@ pub(crate) fn type_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> 
     if ty == 0 {
         return Ok("-".to_string());
     }
+    format_type(ty, typmod, false, session)
+}
+
+/// `format_type_be_qualified` with `FORMAT_TYPE_INVALID_AS_NULL`: the name of a type with its schema, also when the name is visible, or `None` when no type has the OID. A type with a special name of SQL, such as `integer`, has no schema.
+pub(crate) fn type_text_qualified(ty: u32, session: &dyn Session) -> Option<String> {
+    type_name(ty, session)?;
+    format_type(ty, None, true, session).ok().filter(|text| !text.starts_with("???"))
+}
+
+/// `format_type_extended`: the name of a type, with its schema when `qualify` is true or when the name alone does not find it.
+fn format_type(
+    ty: u32,
+    typmod: Option<i32>,
+    qualify: bool,
+    session: &dyn Session,
+) -> Result<String> {
     // A true array type shows the name of its element type with `[]`, and a plain array type such as `oidvector` shows its own name.
     let element = match builtin::type_by_oid(ty) {
         Some(row) if row.elem != 0 && row.subscript == ARRAY_SUBSCRIPT_HANDLER => {
@@ -393,13 +409,13 @@ pub(crate) fn type_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> 
     };
     match element {
         Some(element) if type_name(element, session).is_none() => Ok("???[]".to_string()),
-        Some(element) => Ok(format!("{}[]", base_text(element, typmod, session)?)),
-        None => base_text(ty, typmod, session),
+        Some(element) => Ok(format!("{}[]", base_text(element, typmod, qualify, session)?)),
+        None => base_text(ty, typmod, qualify, session),
     }
 }
 
 /// The part of `format_type_extended` after the array test: the name of a type that is not a true array type.
-fn base_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> Result<String> {
+fn base_text(ty: u32, typmod: Option<i32>, qualify: bool, session: &dyn Session) -> Result<String> {
     let given = typmod.is_some();
     let with = typmod.filter(|m| *m >= 0);
     let special = match (ty, with) {
@@ -434,7 +450,7 @@ fn base_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> Result<Stri
         return Ok(text);
     }
     let Some((name, namespace)) = type_name(ty, session) else { return Ok("???".to_string()) };
-    let schema = if type_visible(ty, session) == Some(true) {
+    let schema = if !qualify && type_visible(ty, session) == Some(true) {
         None
     } else {
         namespace_name(namespace, session)
