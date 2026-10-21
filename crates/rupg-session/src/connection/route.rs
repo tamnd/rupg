@@ -10,7 +10,7 @@ use rupg_types::Value;
 
 use super::Connection;
 use super::foreign::Batch;
-use super::trigger::{Triggers, armed};
+use super::trigger::{RowPair, Triggers, armed};
 use crate::heap::{Change, Changed, View, tid_text};
 use crate::query::{self, Reader};
 
@@ -31,6 +31,10 @@ struct Leaf {
     lines: Vec<u64>,
     /// The triggers `FOR EACH ROW` of the leaf for the event of the statement.
     fire: Triggers,
+    /// The event of `fire`.
+    event: i16,
+    /// The triggers of the leaf for the other events of the statement, with each event.
+    armed: Vec<(i16, Triggers)>,
     /// The name of the leaf with its schema.
     qualified: String,
 }
@@ -44,48 +48,36 @@ pub(super) struct Routing {
     event: i16,
 }
 
+impl Leaf {
+    /// The triggers of the leaf for the event `event`, after [`Leaf::arm`] for an event that is not the event of the statement.
+    fn fire_of(&self, event: i16) -> Option<&Triggers> {
+        if event == self.event {
+            return Some(&self.fire);
+        }
+        self.armed.iter().find(|(e, _)| *e == event).map(|(_, triggers)| triggers)
+    }
+
+    /// Reads the triggers of the leaf for the event `event` from the catalog, at the first call for the event.
+    fn arm(&mut self, event: i16, catalog: &Catalog, reader: &Reader<'_>) -> Result<(), Error> {
+        if self.fire_of(event).is_none() {
+            self.armed.push((event, armed(catalog, reader, self.oid, event)?));
+        }
+        Ok(())
+    }
+}
+
 impl Routing {
-    /// `ExecFindPartition` and `ExecConstraints` for a new row of the partitioned table `root`. The leaf keeps the checked row, and the result is the OID of the leaf.
-    ///
-    /// # Errors
-    ///
-    /// `23514` for a row that no partition takes, the errors of the constraints of the leaf, and `0A000` for a leaf with triggers.
-    pub(super) fn add(
-        &mut self,
-        root: u32,
-        row: Vec<Value>,
-        catalog: &Catalog,
-        reader: &Reader<'_>,
-    ) -> Result<usize, Error> {
-        let (at, checked) = self.route(root, row, catalog, reader)?;
-        self.leaves[at].rows.push(checked);
-        Ok(at)
+    /// A routing whose leaves fire their triggers for the event `event`, a bit of `tgtype`.
+    pub(super) fn of(event: i16) -> Routing {
+        Routing { event, ..Routing::default() }
     }
 
-    /// `ExecFindPartition` and `ExecConstraints` for a new row of the partitioned table `root`. The result is the index of the leaf and the checked row with the columns of the leaf.
+    /// `ExecFindPartition` for a new row of the partitioned table `root`, then the triggers `BEFORE INSERT ... FOR EACH ROW` of the leaf, which fire before `ExecConstraints` checks the row with the constraints of the leaf. After the triggers, `ExecInsert` also checks the partition constraint of the leaf. The result is the index of the leaf and the checked row with the columns of the leaf, or `None` when a trigger skips the row.
     ///
     /// # Errors
     ///
-    /// `23514` for a row that no partition takes, the errors of the constraints of the leaf, and `0A000` for a leaf with triggers.
-    pub(super) fn route(
-        &mut self,
-        root: u32,
-        row: Vec<Value>,
-        catalog: &Catalog,
-        reader: &Reader<'_>,
-    ) -> Result<(usize, Vec<Value>), Error> {
-        let (oid, values) = self.router.route(root, row, reader)?;
-        let at = leaf_at(&mut self.leaves, catalog, (root, oid, self.event), reader)?;
-        let checked = leaf_row(&self.leaves[at], &values, reader)?;
-        Ok((at, checked))
-    }
-
-    /// [`Routing::route`] with the triggers `BEFORE INSERT ... FOR EACH ROW` of the leaf, which fire before the constraints of the leaf check the row. The result is `None` when a trigger skips the row.
-    ///
-    /// # Errors
-    ///
-    /// The errors of [`Routing::route`] and of the triggers.
-    fn route_fired(
+    /// `23514` for a row that no partition takes or that a trigger takes out of the bounds of the leaf, and the errors of the triggers and of the constraints of the leaf.
+    pub(super) fn route_fired(
         &mut self,
         conn: &Connection,
         (root, row): (u32, Vec<Value>),
@@ -96,18 +88,72 @@ impl Routing {
         let at = leaf_at(&mut self.leaves, catalog, (root, oid, self.event), reader)?;
         let Self { router, leaves, .. } = self;
         let leaf = &leaves[at];
-        let values = if leaf.fire.before_rows() {
-            let shape = (&[][..], leaf.up.len());
-            let mut stays = |row: &[Value]| router.check(oid, row, reader);
-            let rows = (None, Some(values));
-            let fired = conn.leaf_before((&leaf.fire, shape), rows, &leaf.qualified, &mut stays)?;
-            let Some(values) = fired else { return Ok(None) };
-            values
-        } else {
-            values
-        };
+        if !leaf.fire.before_rows() {
+            let checked = leaf_row(leaf, &values, reader)?;
+            return Ok(Some((at, checked)));
+        }
+        let shape = (&[][..], leaf.up.len());
+        let mut stays = |row: &[Value]| router.check(oid, row, reader);
+        let rows = (None, Some(values));
+        let fired = conn.leaf_before((&leaf.fire, shape), rows, &leaf.qualified, &mut stays)?;
+        let Some(values) = fired else { return Ok(None) };
         let checked = leaf_row(leaf, &values, reader)?;
+        router.check_row(oid, &checked, reader)?;
         Ok(Some((at, checked)))
+    }
+
+    /// True when the leaf at the place `at` fires triggers `BEFORE ... FOR EACH ROW` for the event of the statement.
+    pub(super) fn fires_before(&self, at: usize) -> bool {
+        self.leaves.get(at).is_some_and(|leaf| leaf.fire.before_rows())
+    }
+
+    /// True when the leaf at the place `at` fires triggers `AFTER ... FOR EACH ROW` for the event `event`, after [`Routing::before_update`] for `UPDATE`.
+    pub(super) fn fires_after(&self, at: usize, event: i16) -> bool {
+        self.leaves.get(at).and_then(|leaf| leaf.fire_of(event)).is_some_and(Triggers::after_rows)
+    }
+
+    /// `ExecBRUpdateTriggers` of the leaf at the place `at` for `ON CONFLICT DO UPDATE`: the old row `old` of the leaf and the new row `new` of the partitioned table, which sets the columns `updated`. The result is the new row of the partitioned table that the triggers give, or `None` when a trigger skips the row.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    pub(super) fn before_update(
+        &mut self,
+        conn: &Connection,
+        (at, updated): (usize, &[i16]),
+        (old, new): (&[Value], Vec<Value>),
+        (catalog, reader): (&Catalog, &Reader<'_>),
+    ) -> Result<Option<Vec<Value>>, Error> {
+        let Some(leaf) = self.leaves.get_mut(at) else { return Ok(Some(new)) };
+        leaf.arm(TRIGGER_UPDATE, catalog, reader)?;
+        let leaf = &*leaf;
+        let Some(fire) = leaf.fire_of(TRIGGER_UPDATE).filter(|t| t.before_rows()) else {
+            return Ok(Some(new));
+        };
+        let updated = leaf_updated(leaf, updated);
+        let shape = (&updated[..], leaf.up.len());
+        let mut stays = |_: &[Value]| Ok(true);
+        let rows = (Some(old.to_vec()), Some(down(leaf, &new)));
+        let fired = conn.leaf_before((fire, shape), rows, &leaf.qualified, &mut stays)?;
+        Ok(fired.map(|row| up(leaf, &row, new.len())))
+    }
+
+    /// `ExecARInsertTriggers` and `ExecARUpdateTriggers` of the leaf at the place `at` for the event `event`: the events of its triggers `AFTER ... FOR EACH ROW` for the rows `rows` of the leaf, at the end of the queue. An `UPDATE` sets the columns `updated` of the partitioned table.
+    ///
+    /// # Errors
+    ///
+    /// The error of the condition of `WHEN` of a trigger.
+    pub(super) fn after_leaf(
+        &self,
+        conn: &Connection,
+        (at, event): (usize, i16),
+        rows: &[RowPair],
+        updated: &[i16],
+    ) -> Result<(), Error> {
+        let Some(leaf) = self.leaves.get(at) else { return Ok(()) };
+        let Some(fire) = leaf.fire_of(event) else { return Ok(()) };
+        let updated = leaf_updated(leaf, updated);
+        conn.leaf_after((fire, (&updated, leaf.up.len())), rows)
     }
 
     /// `ExecPartitionCheck` and `ExecConstraints` for a new row of the partitioned table that changes a row of the leaf at the place `at`. The result is the checked row with the columns of the leaf, or `None` when the leaf does not take the row.
@@ -155,9 +201,10 @@ impl Routing {
         self.leaves.get(at).map_or(0, |leaf| leaf.oid)
     }
 
-    /// Keeps the line of the copy for the last row of the leaf at the place `at`.
-    pub(super) fn add_line(&mut self, at: usize, line: u64) {
+    /// Keeps the checked row `row` of a `COPY FROM` in the leaf at the place `at`, with the line of the copy.
+    pub(super) fn push(&mut self, at: usize, row: Vec<Value>, line: u64) {
         if let Some(leaf) = self.leaves.get_mut(at) {
+            leaf.rows.push(row);
             leaf.lines.push(line);
         }
     }
@@ -195,7 +242,7 @@ impl Connection {
     ) -> Result<Routed, Error> {
         let catalog = self.catalog();
         let reader = self.reader();
-        let mut routing = Routing { event: TRIGGER_INSERT, ..Routing::default() };
+        let mut routing = Routing::of(TRIGGER_INSERT);
         let (mut written, mut inserted) = (Vec::new(), Vec::new());
         // The new rows of the leaves with triggers `AFTER ... FOR EACH ROW`.
         let mut after = Vec::new();
@@ -228,12 +275,12 @@ impl Connection {
         Ok(Routed { count, written, inserted, batches })
     }
 
-    /// `table_tuple_insert` of the checked rows that each leaf keeps, with the checks of its unique keys. It gives the rows that the foreign keys of the leaves check. For a `COPY FROM` of the table `copy`, a duplicate key has the context of the line of its row.
+    /// `table_tuple_insert` of the checked rows that each leaf keeps, with the checks of its unique keys. It gives the rows that the foreign keys of the leaves check. For a `COPY FROM` of the table `copy`, a duplicate key has the context of the line of its row, or the context of the one row of `CIM_SINGLE`, and the events of the triggers `AFTER ... FOR EACH ROW` of each leaf go in the queue after the leaf writes its rows, as `CopyMultiInsertBufferFlush` queues them.
     pub(super) fn insert_leaves(
         &self,
         routing: &mut Routing,
         view: &View,
-        copy: Option<&str>,
+        copy: Option<(&str, Option<&str>)>,
     ) -> Result<Vec<Batch>, Error> {
         let heap = self.store.heap();
         let mut batches = Vec::new();
@@ -259,11 +306,19 @@ impl Connection {
                             Ok(_) => Error::internal("a duplicate key with no error"),
                             Err(error) => error,
                         };
-                        let name = copy.unwrap_or_default();
-                        return Err(error.with_context(format!("COPY {name}, line {line}")));
+                        let context = match copy {
+                            Some((_, Some(context))) => context.to_string(),
+                            Some((name, None)) => format!("COPY {name}, line {line}"),
+                            None => String::new(),
+                        };
+                        return Err(error.with_context(context));
                     }
                     conflict => kept = self.key_conflict(leaf_info, view, conflict)?,
                 }
+            }
+            if copy.is_some() && leaf.fire.after_rows() {
+                let rows: Vec<RowPair> = rows.into_iter().map(|row| (None, Some(row))).collect();
+                self.leaf_after((&leaf.fire, (&[], leaf.up.len())), &rows)?;
             }
             if !checked.is_empty() {
                 batches.push(Batch::new(
@@ -300,7 +355,7 @@ impl Connection {
         let heap = self.store.heap();
         let mut view = view.clone();
         let event = if update { TRIGGER_UPDATE } else { TRIGGER_DELETE };
-        let mut routing = Routing { event, ..Routing::default() };
+        let mut routing = Routing::of(event);
         let Routing { router, leaves, .. } = &mut routing;
         let (mut count, mut written) = (0, Vec::new());
         // The new rows that move to another leaf, after the old leaf deleted the old rows.
@@ -586,6 +641,8 @@ fn leaf(
         rows: Vec::new(),
         lines: Vec::new(),
         fire,
+        event,
+        armed: Vec::new(),
         qualified,
     })
 }

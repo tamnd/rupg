@@ -615,7 +615,8 @@ impl Analyzer<'_> {
         checks: &[(String, Expr)],
     ) -> Option<Box<Query>> {
         let bits = rupg_catalog::TRIGGER_ROW | rupg_catalog::TRIGGER_BEFORE | trigger_event(kind);
-        if !self.user_triggers(table, bits) {
+        // The triggers of a partitioned table fire as their clones in the leaf partitions, which check the rows.
+        if self.is_partitioned(table) || !self.user_triggers(table, bits) {
             return None;
         }
         let mut query = with_checks(name, columns, Query::default(), checks.to_vec(), &[]);

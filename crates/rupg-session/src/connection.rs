@@ -676,12 +676,6 @@ impl Connection {
             if partitioned {
                 update.retain_statement();
             }
-            if partitioned && (!triggers.is_empty() || !update.is_empty()) {
-                return Err(Error::new(
-                    SqlState::FEATURE_NOT_SUPPORTED,
-                    "triggers on a partitioned table are not supported yet",
-                ));
-            }
             fire = upsert::Upsert { insert: std::mem::take(&mut triggers), update };
             self.before_statement(&fire.insert, info)?;
             self.before_statement(&fire.update, info)?;
@@ -721,7 +715,7 @@ impl Connection {
             }
             (WriteKind::Insert, Some(conflict)) => {
                 let done = if partitioned {
-                    self.upsert_routed(plan, (info, conflict), params, &view, rows)?
+                    self.upsert_routed(plan, (info, conflict, &fire), params, &view, rows)?
                 } else {
                     self.upsert(plan, (info, conflict), params, &view, rows, &fire)?
                 };
@@ -4923,6 +4917,12 @@ mod tests {
     #[test]
     fn partition_triggers() {
         big_stack(|| script(include_str!("connection/partition_triggers.test")));
+    }
+
+    /// The triggers of the leaves of a partitioned table for `COPY FROM` and `INSERT ... ON CONFLICT`: the triggers `BEFORE ... FOR EACH ROW` of the leaf fire for each row, with the line of the copy in the context of their messages, and `EXCLUDED` is the row that they give. The triggers `AFTER ... FOR EACH ROW` fire in the order of the rows, and the transition tables of the partitioned table get the rows of the leaves. A trigger of a leaf that takes the row out of the bounds of the leaf gives an error. `connection/partition_trigger_copy.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_trigger_copy() {
+        big_stack(|| script(include_str!("connection/partition_trigger_copy.test")));
     }
 
     /// The rows of a table after `ADD COLUMN` and a change of the default of the new column in the same statement: the rows get the default of `ADD COLUMN`, and new rows get the new default, also for the partitions. `DROP DEFAULT`, `ALTER COLUMN ... TYPE` and `DROP COLUMN` run before `ADD COLUMN`, so they cannot find the new column. `connection/add_column_default.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -3,14 +3,14 @@
 //! The query of the statement gives all the new rows before the first row goes in, so the checks of the constraints of the new rows come before the writes, and a function of the query does not see the rows that the statement wrote. The triggers `BEFORE ... FOR EACH ROW` fire for each row in turn, as `ExecInsert` fires them: the triggers `INSERT` before the row goes in, and the triggers `UPDATE` before `DO UPDATE` changes the row of the table.
 
 use rupg_analyze::{OnConflict, Write};
-use rupg_catalog::Catalog;
+use rupg_catalog::{Catalog, TRIGGER_INSERT, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::Plan;
 use rupg_types::Value;
 
 use super::Connection;
 use super::route::{self, Routing};
-use super::trigger::Triggers;
+use super::trigger::{RowPair, Triggers};
 use crate::heap::{Changed, Speculative, View, tid_text};
 
 /// The rows that `INSERT ... ON CONFLICT` wrote.
@@ -28,6 +28,8 @@ pub(super) struct Upserted {
     pub(super) old: Vec<Vec<Value>>,
     /// For each row of [`Upserted::inserted`] and [`Upserted::new`] in the order of the write, true when the row went in and false when it changed, for the triggers `AFTER ... FOR EACH ROW`.
     pub(super) steps: Vec<bool>,
+    /// The rows of the leaf partitions for their triggers `AFTER ... FOR EACH ROW`, in the order of the write: the place of the leaf, the event, and the old and the new row of the leaf.
+    leaves: Vec<(usize, i16, RowPair)>,
 }
 
 /// The triggers of `INSERT ... ON CONFLICT`: the triggers `INSERT`, and the triggers `UPDATE` of `DO UPDATE`.
@@ -131,27 +133,36 @@ impl Connection {
         Ok(done)
     }
 
-    /// `ExecInsert` with `ExecFindPartition` for `INSERT ... ON CONFLICT` into a partitioned table. Each row goes to its leaf partition, and the leaf checks it. Then the speculative insertion runs in the leaf, with the indexes of the leaf whose partitioned index is an arbiter, as `ExecInitPartitionInfo` maps them. `DO UPDATE` changes the row in the leaf.
+    /// `ExecInsert` with `ExecFindPartition` for `INSERT ... ON CONFLICT` into a partitioned table. Each row goes to its leaf partition, the triggers `BEFORE INSERT ... FOR EACH ROW` of the leaf fire, and the leaf checks the row. Then the speculative insertion runs in the leaf, with the indexes of the leaf whose partitioned index is an arbiter, as `ExecInitPartitionInfo` maps them. `DO UPDATE` changes the row in the leaf. The events of the triggers `AFTER ... FOR EACH ROW` of the leaves go in the queue in the order of the rows, and the result has the rows for the transition tables of the partitioned table when `fire` needs them.
     ///
     /// # Errors
     ///
-    /// The errors of [`Connection::upsert`], the errors of the routing and of the constraints of the leaves, `0A000` for a new row of `DO UPDATE` that the leaf does not take, and `0A000` for a leaf with triggers or foreign keys.
+    /// The errors of [`Connection::upsert`], the errors of the routing, of the triggers and of the constraints of the leaves, `0A000` for a new row of `DO UPDATE` that the leaf does not take, and `0A000` for a leaf with foreign keys.
     pub(super) fn upsert_routed(
         &self,
         plan: &Plan,
-        (info, conflict): (&Write, &OnConflict),
+        (info, conflict, fire): (&Write, &OnConflict, &Upsert),
         params: &[Value],
         view: &View,
         rows: Vec<Vec<Value>>,
     ) -> Result<Upserted, Error> {
         let catalog = self.catalog();
         let heap = self.store.heap();
-        let mut routing = Routing::default();
+        let mut routing = Routing::of(TRIGGER_INSERT);
         // The places of the arbiters in the unique keys of each leaf, at the place of the leaf.
         let mut arbiters: Vec<Vec<usize>> = Vec::new();
         let mut done = Upserted::default();
+        let keep = fire.after_rows();
         for row in rows {
-            let (at, checked) = routing.route(info.table, row.clone(), &catalog, &self.reader())?;
+            let fired =
+                routing.route_fired(self, (info.table, row.clone()), &catalog, &self.reader())?;
+            let Some((at, checked)) = fired else { continue };
+            // `EXCLUDED` is the row that the triggers gave.
+            let row = if routing.fires_before(at) {
+                routing.to_root(at, &checked, info.width)
+            } else {
+                row
+            };
             if at == arbiters.len() {
                 let oid = routing.oid(at);
                 if route::has_foreign(&catalog, oid) {
@@ -182,6 +193,13 @@ impl Connection {
                             written.resize(info.width + 1 + conflict.carried, Value::Null);
                             done.written.push(written);
                         }
+                        if keep {
+                            done.inserted.push(routing.to_root(at, &checked, info.width));
+                            done.steps.push(true);
+                        }
+                        if routing.fires_after(at, TRIGGER_INSERT) {
+                            done.leaves.push((at, TRIGGER_INSERT, (None, Some(checked.clone()))));
+                        }
                         break;
                     }
                     Speculative::Wait { holder, tid } => {
@@ -202,7 +220,7 @@ impl Connection {
                         let target = Target { tid, old: values, excluded: &row };
                         if self.update_routed(
                             plan,
-                            (info, &mut routing, at),
+                            (info, keep, &mut routing, at),
                             params,
                             view,
                             target,
@@ -214,14 +232,17 @@ impl Connection {
                 }
             }
         }
+        for (at, event, rows) in std::mem::take(&mut done.leaves) {
+            routing.after_leaf(self, (at, event), &[rows], &info.updated)?;
+        }
         Ok(done)
     }
 
-    /// `ExecOnConflictUpdate` for one row of the leaf partition at the place `at`. The query of `DO UPDATE` reads the row with the columns of the partitioned table. A new row that the leaf does not take is an error, as `ExecCrossPartitionUpdate` gives it for `ON CONFLICT`. True when the row changed or when the condition of `WHERE` skipped it, and false when another transaction changed the row first.
+    /// `ExecOnConflictUpdate` for one row of the leaf partition at the place `at`. The query of `DO UPDATE` reads the row with the columns of the partitioned table, and then the triggers `BEFORE UPDATE ... FOR EACH ROW` of the leaf fire. A new row that the leaf does not take is an error, as `ExecCrossPartitionUpdate` gives it for `ON CONFLICT`. With `keep`, the result has the rows for the transition tables. True when the row changed or when the condition of `WHERE` or a trigger skipped it, and false when another transaction changed the row first.
     fn update_routed(
         &self,
         plan: &Plan,
-        (info, routing, at): (&Write, &mut Routing, usize),
+        (info, keep, routing, at): (&Write, bool, &mut Routing, usize),
         params: &[Value],
         view: &View,
         target: Target<'_>,
@@ -238,6 +259,14 @@ impl Connection {
                 return Ok(true);
             };
             let carried = new.split_off(info.width.min(new.len()));
+            let catalog = self.catalog();
+            let fired = routing.before_update(
+                self,
+                (at, &info.updated),
+                (&old, new),
+                (&catalog, &reader),
+            )?;
+            let Some(new) = fired else { return Ok(true) };
             let Some(checked) = routing.check(at, &new, &reader)? else {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
@@ -276,6 +305,14 @@ impl Connection {
             written.push(Value::Oid(oid));
             written.extend(carried);
             done.written.push(written);
+        }
+        if keep {
+            done.new.push(routing.to_root(at, &checked, info.width));
+            done.old.push(routing.to_root(at, &old, info.width));
+            done.steps.push(false);
+        }
+        if routing.fires_after(at, TRIGGER_UPDATE) {
+            done.leaves.push((at, TRIGGER_UPDATE, (Some(old), Some(checked))));
         }
         Ok(true)
     }

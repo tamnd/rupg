@@ -1,0 +1,220 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % % on %', TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME;
+>>   IF TG_LEVEL = 'ROW' AND TG_OP <> 'DELETE' THEN
+>>     RAISE NOTICE 'new %', NEW;
+>>     IF NEW.b = 'skip' THEN RETURN NULL; END IF;
+>>     RETURN NEW;
+>>   END IF;
+>>   IF TG_LEVEL = 'ROW' THEN
+>>     RAISE NOTICE 'old %', OLD;
+>>     RETURN OLD;
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TABLE p (a int PRIMARY KEY, b text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TRIGGER br BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER ar AFTER INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER bs BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER as_ AFTER INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> COPY p FROM STDIN;
+< 1	one
+< 11	eleven
+< 2	skip
+< 3	three
+< \.
+<done
+copy in 0 0,0
+NOTICE 00000 bs BEFORE STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE
+COPY p, line 1: "1	one")
+NOTICE 00000 new (1,one) (PL/pgSQL function tf() line 5 at RAISE
+COPY p, line 1: "1	one")
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE
+COPY p, line 2: "11	eleven")
+NOTICE 00000 new (11,eleven) (PL/pgSQL function tf() line 5 at RAISE
+COPY p, line 2: "11	eleven")
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE
+COPY p, line 3: "2	skip")
+NOTICE 00000 new (2,skip) (PL/pgSQL function tf() line 5 at RAISE
+COPY p, line 3: "2	skip")
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE
+COPY p, line 4: "3	three")
+NOTICE 00000 new (3,three) (PL/pgSQL function tf() line 5 at RAISE
+COPY p, line 4: "3	three")
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,one) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (11,eleven) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,three) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+COPY 3
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,1,one
+row p1,3,three
+row p2,11,eleven
+SELECT 3
+> INSERT INTO p VALUES (1, 'uno'), (12, 'twelve') ON CONFLICT (a) DO UPDATE SET b = excluded.b;
+NOTICE 00000 bs BEFORE STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,uno) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,uno) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (12,twelve) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,uno) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (12,twelve) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+INSERT 0 2
+> INSERT INTO p VALUES (3, 'tres'), (13, 'thirteen') ON CONFLICT DO NOTHING;
+NOTICE 00000 bs BEFORE STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,tres) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (13,thirteen) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (13,thirteen) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,1,uno
+row p1,3,three
+row p2,11,eleven
+row p2,12,twelve
+row p2,13,thirteen
+SELECT 5
+> DROP TRIGGER br ON p;
+DROP TRIGGER
+> DROP TRIGGER ar ON p;
+DROP TRIGGER
+> DROP TRIGGER bs ON p;
+DROP TRIGGER
+> DROP TRIGGER as_ ON p;
+DROP TRIGGER
+> CREATE FUNCTION cnt() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   IF TG_OP = 'INSERT' THEN
+>>     RAISE NOTICE '% new %', TG_NAME, (SELECT string_agg(a || ':' || b, ',' ORDER BY a) FROM newt);
+>>   ELSIF TG_OP = 'UPDATE' THEN
+>>     RAISE NOTICE '% old % new %', TG_NAME, (SELECT string_agg(a || ':' || b, ',' ORDER BY a) FROM oldt), (SELECT string_agg(a || ':' || b, ',' ORDER BY a) FROM newt);
+>>   ELSE
+>>     RAISE NOTICE '% old %', TG_NAME, (SELECT string_agg(a || ':' || b, ',' ORDER BY a) FROM oldt);
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER ti AFTER INSERT ON p REFERENCING NEW TABLE AS newt FOR EACH STATEMENT EXECUTE FUNCTION cnt();
+CREATE TRIGGER
+> CREATE TRIGGER tu AFTER UPDATE ON p REFERENCING OLD TABLE AS oldt NEW TABLE AS newt FOR EACH STATEMENT EXECUTE FUNCTION cnt();
+CREATE TRIGGER
+> CREATE TRIGGER td AFTER DELETE ON p REFERENCING OLD TABLE AS oldt FOR EACH STATEMENT EXECUTE FUNCTION cnt();
+CREATE TRIGGER
+> COPY p FROM STDIN;
+< 7	seven
+< 17	seventeen
+< \.
+<done
+copy in 0 0,0
+NOTICE 00000 ti new 7:seven,17:seventeen (PL/pgSQL function cnt() line 4 at RAISE)
+COPY 2
+> INSERT INTO p VALUES (7, 'x'), (8, 'eight') ON CONFLICT (a) DO UPDATE SET b = excluded.b;
+NOTICE 00000 tu old 7:seven new 7:x (PL/pgSQL function cnt() line 6 at RAISE)
+NOTICE 00000 ti new 8:eight (PL/pgSQL function cnt() line 4 at RAISE)
+INSERT 0 2
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,1,uno
+row p1,3,three
+row p1,7,x
+row p1,8,eight
+row p2,11,eleven
+row p2,12,twelve
+row p2,13,thirteen
+row p2,17,seventeen
+SELECT 8
+> CREATE FUNCTION mv() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   NEW.a := NEW.a + 10;
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mv BEFORE INSERT ON p1 FOR EACH ROW EXECUTE FUNCTION mv();
+CREATE TRIGGER
+> COPY p FROM STDIN;
+< 4	four
+< \.
+<done
+copy in 0 0,0
+ERROR 23514 new row for relation "p1" violates partition constraint (COPY p, line 1: "4	four")
+DETAIL Failing row contains (14, four).
+> INSERT INTO p VALUES (4, 'four') ON CONFLICT DO NOTHING;
+ERROR 23514 new row for relation "p1" violates partition constraint
+DETAIL Failing row contains (14, four).
+> DROP TRIGGER mv ON p1;
+DROP TRIGGER
+> CREATE FUNCTION up() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   NEW.b := upper(NEW.b);
+>>   RETURN NEW;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER up BEFORE INSERT OR UPDATE ON p FOR EACH ROW EXECUTE FUNCTION up();
+CREATE TRIGGER
+> INSERT INTO p VALUES (8, 'acht'), (9, 'nine') ON CONFLICT (a) DO UPDATE SET b = excluded.b || '+' RETURNING tableoid::regclass, *;
+NOTICE 00000 tu old 8:eight new 8:ACHT+ (PL/pgSQL function cnt() line 6 at RAISE)
+NOTICE 00000 ti new 9:NINE (PL/pgSQL function cnt() line 4 at RAISE)
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,8,ACHT+
+row p1,9,NINE
+INSERT 0 2
+> COPY p FROM STDIN;
+< 6	six
+< 16	sixteen
+< \.
+<done
+copy in 0 0,0
+NOTICE 00000 ti new 6:SIX,16:SIXTEEN (PL/pgSQL function cnt() line 4 at RAISE)
+COPY 2
+> COPY p FROM STDIN;
+< 16	again
+< \.
+<done
+copy in 0 0,0
+ERROR 23505 duplicate key value violates unique constraint "p2_pkey" (COPY p, line 1: "16	again")
+DETAIL Key (a)=(16) already exists.
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,1,uno
+row p1,3,three
+row p1,6,SIX
+row p1,7,x
+row p1,8,ACHT+
+row p1,9,NINE
+row p2,11,eleven
+row p2,12,twelve
+row p2,13,thirteen
+row p2,16,SIXTEEN
+row p2,17,seventeen
+SELECT 11
+> DROP TABLE p;
+DROP TABLE

@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+### Added
+
+- `COPY FROM` and `INSERT ... ON CONFLICT` on a partitioned table with triggers. The row triggers of the partition of each row fire, and the statement triggers and the transition tables of the partitioned table get the rows of the partitions. `EXCLUDED` is the row that the triggers `BEFORE INSERT` give, and `DO UPDATE` fires the triggers `BEFORE UPDATE` of the partition. A trigger of a partition that puts a row out of the bounds of the partition gives the error of PostgreSQL (#504).
+
 ## 0.1.59 (2026-10-21)
 
 ### Added
