@@ -19,6 +19,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - The assignment to a field of a composite value, as in `UPDATE t SET p.x = 5`, `INSERT INTO t (p.x, p.y) VALUES (1, 2)` and `x.a.x := 1` in PL/pgSQL. Fields and subscripts can be mixed, as in `UPDATE t SET ps[1].x = 7` (#474).
 - `COMMIT` and `ROLLBACK` in PL/pgSQL, with `AND CHAIN`. A procedure that `CALL` runs outside of a transaction block, and the code of such a `DO`, can end the transaction, and a new transaction starts at once. A loop over a query or over a cursor goes on after the end. The errors in a function, in a trigger, in a transaction block and in a block with `EXCEPTION` are the errors of PostgreSQL (#476).
 
+### Security
+
+- `rustls-webpki` is now 0.103.16, which fixes RUSTSEC-2026-0382. The old version can accept a certificate path that has a distrusted emSign intermediate.
+
 ## 0.1.55 (2026-10-21)
 
 ### Added
