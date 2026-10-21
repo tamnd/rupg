@@ -1,0 +1,121 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE q1 (a int CONSTRAINT q_chk CHECK (a > 0), b int NOT NULL DEFAULT 1);
+CREATE TABLE
+> CREATE TABLE q2 (a int CONSTRAINT q_chk CHECK (a > 0), b int NOT NULL DEFAULT 2);
+CREATE TABLE
+> CREATE TABLE qbad () INHERITS (q1, q2);
+NOTICE 00000 merging multiple inherited definitions of column "a"
+NOTICE 00000 merging multiple inherited definitions of column "b"
+ERROR 42611 column "b" inherits conflicting default values
+HINT To resolve the conflict, specify a default explicitly.
+> CREATE TABLE qok (b int DEFAULT 3) INHERITS (q1, q2);
+NOTICE 00000 merging multiple inherited definitions of column "a"
+NOTICE 00000 merging multiple inherited definitions of column "b"
+NOTICE 00000 moving and merging column "b" with inherited definition
+DETAIL User-specified column moved to the position of the inherited column.
+CREATE TABLE
+> SELECT conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'qok'::regclass ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row q1_b_not_null,n,f,2
+row q_chk,c,f,2
+SELECT 2
+> SELECT attname, attnotnull, attislocal, attinhcount, pg_get_expr(adbin, adrelid) FROM pg_attribute LEFT JOIN pg_attrdef ON adrelid = attrelid AND adnum = attnum WHERE attrelid = 'qok'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnotnull@pg_attribute.12:16:1:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,pg_get_expr:25:-1:-1
+row a,f,f,2,NULL
+row b,t,t,2,3
+SELECT 2
+> CREATE TABLE q3 (a int CONSTRAINT q_chk CHECK (a > 1));
+CREATE TABLE
+> CREATE TABLE qbad2 () INHERITS (q1, q3);
+NOTICE 00000 merging multiple inherited definitions of column "a"
+ERROR 42710 check constraint name "q_chk" appears multiple times but with different expressions
+> CREATE TABLE qloc (a int CONSTRAINT q_chk CHECK (a > 0)) INHERITS (q1);
+NOTICE 00000 merging column "a" with inherited definition
+NOTICE 00000 merging constraint "q_chk" with inherited definition
+CREATE TABLE
+> SELECT conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'qloc'::regclass ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row q1_b_not_null,n,f,1
+row q_chk,c,t,1
+SELECT 2
+> CREATE TABLE qloc2 (CONSTRAINT q_chk CHECK (a > 5)) INHERITS (q1);
+ERROR 42710 constraint "q_chk" for relation "qloc2" already exists
+> CREATE TABLE qtype (a text) INHERITS (q1);
+NOTICE 00000 merging column "a" with inherited definition
+ERROR 42804 column "a" has a type conflict
+DETAIL integer versus text
+> CREATE TABLE qnn (a int NOT NULL) INHERITS (q1);
+NOTICE 00000 merging column "a" with inherited definition
+CREATE TABLE
+> SELECT conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'qnn'::regclass ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row q1_b_not_null,n,f,1
+row q_chk,c,f,1
+row qnn_a_not_null,n,t,0
+SELECT 3
+> CREATE TABLE r1 (x text COLLATE "C");
+CREATE TABLE
+> CREATE TABLE r2 (x text COLLATE "POSIX");
+CREATE TABLE
+> CREATE TABLE rbad () INHERITS (r1, r2);
+NOTICE 00000 merging multiple inherited definitions of column "x"
+ERROR 42P21 inherited column "x" has a collation conflict
+DETAIL "C" versus "POSIX"
+> CREATE TABLE rloc (x text COLLATE "POSIX") INHERITS (r1);
+NOTICE 00000 merging column "x" with inherited definition
+ERROR 42P21 column "x" has a collation conflict
+DETAIL "C" versus "POSIX"
+> CREATE TABLE s1 (id serial, v int);
+CREATE TABLE
+> CREATE TABLE s2 () INHERITS (s1);
+CREATE TABLE
+> INSERT INTO s2 (v) VALUES (1);
+INSERT 0 1
+> INSERT INTO s1 (v) VALUES (2);
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM s1 ORDER BY id;
+fields tableoid:2205:4:-1,id@s1.1:23:4:-1,v@s1.2:23:4:-1
+row s2,1,1
+row s1,2,2
+SELECT 2
+> TRUNCATE s1;
+TRUNCATE TABLE
+> SELECT count(*) FROM s2;
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE ab (a int, b int);
+CREATE TABLE
+> CREATE TABLE ab_c (c int) INHERITS (ab);
+CREATE TABLE
+> INSERT INTO ab VALUES (1, 2);
+INSERT 0 1
+> INSERT INTO ab_c VALUES (3, 4, 5);
+INSERT 0 1
+> SELECT * FROM ab ORDER BY a;
+fields a@ab.1:23:4:-1,b@ab.2:23:4:-1
+row 1,2
+row 3,4
+SELECT 2
+> SELECT ab::text AS ab FROM ab ORDER BY a;
+fields ab:25:-1:-1
+row (1,2)
+row (3,4)
+SELECT 2
+> SELECT * FROM ab WHERE tableoid = 'ab_c'::regclass;
+fields a@ab.1:23:4:-1,b@ab.2:23:4:-1
+row 3,4
+SELECT 1
+> SELECT * FROM ab UNION ALL SELECT a, c FROM ab_c ORDER BY 1, 2;
+fields a:23:4:-1,b:23:4:-1
+row 1,2
+row 3,4
+row 3,5
+SELECT 3
+> SELECT x.a FROM ab x, LATERAL (SELECT x.b) y ORDER BY 1;
+fields a@ab.1:23:4:-1
+row 1
+row 3
+SELECT 2

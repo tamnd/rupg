@@ -2,7 +2,7 @@
 
 use rupg_catalog::toast::{Shape, needs_toast};
 use rupg_catalog::{
-    Column, DepKind, MAX_COLUMNS, NewRelation, RelKind, SequenceData, SequenceInfo,
+    Column, ConKind, DepKind, MAX_COLUMNS, NewRelation, RelKind, SequenceData, SequenceInfo,
 };
 use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin;
@@ -16,6 +16,7 @@ use rupg_types::{Value, oid};
 use super::alter::Target;
 use super::alter_column::{attribute_compression, attribute_storage};
 use super::comment::range_var;
+use super::partition_attach::without_locations;
 use super::sequence::conflicting;
 use super::{Definer, Fill, is_system_namespace, not_yet, references, relkind_detail, relname};
 use crate::agg::Kind;
@@ -24,6 +25,8 @@ use crate::expr::ExprKind;
 use crate::insert::nextval;
 use crate::typename::{names, place};
 use crate::types;
+
+mod inherit;
 
 /// The names of the system columns.
 pub(super) const SYSTEM_COLUMNS: [&str; 6] = ["tableoid", "cmax", "xmax", "cmin", "xmin", "ctid"];
@@ -93,6 +96,8 @@ struct Plan {
     partbound: Option<PartitionBoundSpec>,
     /// The parent table of `PARTITION OF`.
     parent: Option<u32>,
+    /// The parent tables of `INHERITS`, in order.
+    inherits: Vec<u32>,
 }
 
 /// `makeNotNullConstraint`: an unnamed not-null constraint on the column.
@@ -291,6 +296,7 @@ impl Definer<'_, '_> {
             partspec: stmt.partspec.as_deref().cloned(),
             partbound: stmt.partbound.as_deref().cloned(),
             parent: None,
+            inherits: Vec::new(),
         };
         // The table constraints of a partition come after the columns of the parent table, as `transformIndexConstraint` finds the key columns of a partition in its parent table.
         let mut partition_constraints = Vec::new();
@@ -318,8 +324,9 @@ impl Definer<'_, '_> {
                 table_constraint(&mut plan, con)?;
             }
         } else if !stmt.inhRelations.is_empty() {
-            self.check_inherits(&stmt.inhRelations)?;
-            return Err(not_yet("INHERITS", at));
+            let parents = self.inherit_parents(&stmt.inhRelations)?;
+            self.merge_inherited_columns(&mut plan, &parents, namespace)?;
+            plan.inherits = parents;
         }
         let mut table_rv = rv.clone();
         table_rv.schemaname = Some(self.schema_name(namespace).into());
@@ -521,6 +528,7 @@ impl Definer<'_, '_> {
             partspec: None,
             partbound: None,
             parent: None,
+            inherits: Vec::new(),
         };
         let table = self.define_relation(&plan)?;
         if !options.is_empty() {
@@ -918,8 +926,8 @@ impl Definer<'_, '_> {
             new.compression = parent.compression;
             // A partition has the identity of the column of its parent, as `MergeAttributes` gives it.
             new.identity = parent.identity;
-            new.local = false;
-            new.inhcount = 1;
+            new.local = parent.local;
+            new.inhcount = parent.inhcount;
             return Ok(new);
         }
         let mut type_name = column.type_name.clone();
@@ -962,6 +970,9 @@ impl Definer<'_, '_> {
                 .then(|| self.catalog.default_of(parent, attnum))
                 .flatten()
                 .map(|d| RawDefault::Cooked(d.expr.clone()));
+            let mut inherited = c.clone();
+            inherited.local = false;
+            inherited.inhcount = 1;
             columns.push(NewColumn {
                 name: c.name.clone(),
                 type_name: TypeName::default(),
@@ -972,7 +983,7 @@ impl Definer<'_, '_> {
                 identity: 0,
                 storage: None,
                 compression: None,
-                inherited: Some(c.clone()),
+                inherited: Some(inherited),
             });
         }
         for local in std::mem::take(&mut plan.columns) {
@@ -1011,6 +1022,7 @@ impl Definer<'_, '_> {
             partspec: None,
             partbound: None,
             parent: None,
+            inherits: Vec::new(),
         };
         self.column_definition(&mut plan, def)?;
         let Some(column) = plan.columns.first() else {
@@ -1181,7 +1193,11 @@ impl Definer<'_, '_> {
         if let (Some(parent), Some(spec)) = (plan.parent, &plan.partbound) {
             let bound = self.partition_bound(&plan.relname, parent, spec, true)?;
             self.catalog.attach_partition(table, parent, bound)?;
-            self.inherit_checks(table, parent)?;
+            self.inherit_checks(table, &[parent])?;
+        }
+        if !plan.inherits.is_empty() {
+            self.catalog.set_inherits(table, plan.inherits.clone())?;
+            self.inherit_checks(table, &plan.inherits)?;
         }
         if let Some(spec) = &plan.partspec {
             let partkey = self.partition_key(table, &plan.relname, spec)?;
@@ -1190,8 +1206,9 @@ impl Definer<'_, '_> {
         self.add_checks(table, &plan.checks)?;
         self.add_not_nulls(table, plan)?;
         if let Some(parent) = plan.parent {
-            self.inherit_not_nulls(table, parent)?;
+            self.inherit_not_nulls(table, &[parent])?;
         }
+        self.inherit_not_nulls(table, &plan.inherits)?;
         if plan.partspec.is_none() && needs_toast(&shapes) {
             self.catalog.create_toast(table)?;
         }
@@ -1219,6 +1236,13 @@ impl Definer<'_, '_> {
             let keys = super::column_numbers(&[&expr]);
             let refs = references(self.catalog, table, &[&expr]);
             let text = crate::node::write(&expr)?;
+            if let Some(name) = con.conname.as_deref()
+                && let Some(oid) = self.merge_check(table, name, &text, con.is_no_inherit)?
+            {
+                names.push(name.to_string());
+                added.push(oid);
+                continue;
+            }
             if con.is_no_inherit
                 && let Some(rel) = self.catalog.relation(table)
                 && rel.kind == RelKind::Partitioned
@@ -1245,6 +1269,43 @@ impl Definer<'_, '_> {
             added.push(oid);
         }
         Ok(added)
+    }
+
+    /// `MergeWithExistingConstraint`: a check constraint of the statement with the name of a constraint that the table takes from a parent is that constraint when the expressions are the same. The result is the OID of the constraint, or `None` when the table has no such constraint.
+    fn merge_check(
+        &mut self,
+        table: u32,
+        name: &str,
+        text: &str,
+        no_inherit: bool,
+    ) -> Result<Option<u32>> {
+        let Some(con) = self
+            .catalog
+            .constraints_of(table)
+            .find(|c| c.kind == ConKind::Check && c.name == name && !c.local)
+        else {
+            return Ok(None);
+        };
+        let expr = con.expr.as_deref();
+        if without_locations(expr) != without_locations(Some(text)) {
+            return Ok(None);
+        }
+        let (oid, inhcount) = (con.oid, con.inhcount);
+        if no_inherit {
+            let relation = self.catalog.relation(table).map(|r| r.name.clone()).unwrap_or_default();
+            return Err(Error::new(
+                SqlState::INVALID_OBJECT_DEFINITION,
+                format!(
+                    "constraint \"{name}\" conflicts with inherited constraint on relation \"{relation}\""
+                ),
+            ));
+        }
+        self.notice(
+            SqlState::SUCCESSFUL_COMPLETION,
+            format!("merging constraint \"{name}\" with inherited definition"),
+        );
+        self.catalog.set_constraint_inherited(oid, true, inhcount)?;
+        Ok(Some(oid))
     }
 
     /// `AddRelationNotNullConstraints`.

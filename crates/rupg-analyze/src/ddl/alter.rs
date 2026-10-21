@@ -221,6 +221,13 @@ impl Definer<'_, '_> {
             Err(e) => return Err(e),
         };
         let target = self.alter_target(stmt.objtype, found, relname(&rv))?;
+        // The recursion of `ATSimpleRecursion` and `ATPrepAlterColumnType` does not reach the children of `INHERITS` yet.
+        if target.kind == b'r' && !self.catalog.children(target.oid).is_empty() {
+            return Err(not_yet(
+                "ALTER TABLE of a table with children of INHERITS",
+                place(rv.location),
+            ));
+        }
         if let [Some(Node::AlterTableCmd(cmd))] = stmt.cmds.as_slice()
             && matches!(
                 cmd.subtype,

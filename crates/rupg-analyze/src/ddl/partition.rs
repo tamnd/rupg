@@ -2,12 +2,13 @@
 
 use std::cmp::Ordering;
 
-use rupg_catalog::{ConKind, PartStrategy, PartitionBound, PartitionKey, RangeDatum, RelKind};
+use rupg_catalog::{ConKind, PartStrategy, PartitionBound, PartitionKey, RangeDatum};
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{Node, PartitionBoundSpec, PartitionElem, PartitionSpec, PartitionStrategy};
 use rupg_types::Value;
 
 use super::index::{BTREE, HASH, system_column};
+use super::partition_attach::without_locations;
 use super::{Definer, Found, is_mutable, references, relname};
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
@@ -327,59 +328,64 @@ impl Definer<'_, '_> {
         Ok(parent)
     }
 
-    /// The checks of `MergeAttributes` on the parents of `INHERITS`: a partitioned table and a partition cannot be a parent of a table of inheritance.
-    pub(super) fn check_inherits(&self, inh: &[Option<Node>]) -> Result<()> {
-        for node in inh.iter().flatten() {
-            let Node::RangeVar(rv) = node else { continue };
-            let Found::User(oid) = self.lookup_relation(rv)? else { continue };
-            let Some(rel) = self.catalog.relation(oid) else { continue };
-            let name = relname(rv);
-            if rel.kind == RelKind::Partitioned {
-                return Err(Error::new(
-                    SqlState::WRONG_OBJECT_TYPE,
-                    format!("cannot inherit from partitioned table \"{name}\""),
-                ));
-            }
-            if rel.partition_of.is_some() {
-                return Err(Error::new(
-                    SqlState::WRONG_OBJECT_TYPE,
-                    format!("cannot inherit from partition \"{name}\""),
-                ));
+    /// The check constraints that a table takes from its parents in `MergeAttributes`, from each parent in the order of their names, with the numbers of the columns of the table. Each keeps its name, and a constraint `NO INHERIT` stays with the parent. Two parents can give a constraint with one name only when the expressions are the same, and then it is one constraint that counts both.
+    pub(super) fn inherit_checks(&mut self, table: u32, parents: &[u32]) -> Result<()> {
+        // The name, the expression and the number of the parents that give it.
+        let mut merged: Vec<(String, String, Vec<i16>, i16)> = Vec::new();
+        for &parent in parents {
+            let map = self.att_map(parent, table)?;
+            let mut checks: Vec<(String, String, Vec<i16>)> = self
+                .catalog
+                .constraints_of(parent)
+                .filter(|c| c.kind == ConKind::Check && !c.no_inherit)
+                .map(|c| (c.name.clone(), c.expr.clone().unwrap_or_default(), c.keys.clone()))
+                .collect();
+            checks.sort_by(|a, b| a.0.cmp(&b.0));
+            for (name, text, keys) in checks {
+                let (text, keys) = (map.text(&text)?, map.columns(&keys));
+                let Some(prev) = merged.iter_mut().find(|m| m.0 == name) else {
+                    merged.push((name, text, keys, 1));
+                    continue;
+                };
+                if without_locations(Some(&prev.1)) != without_locations(Some(&text)) {
+                    return Err(Error::new(
+                        SqlState::DUPLICATE_OBJECT,
+                        format!(
+                            "check constraint name \"{name}\" appears multiple times but with different expressions"
+                        ),
+                    ));
+                }
+                prev.3 = prev.3.saturating_add(1);
             }
         }
-        Ok(())
-    }
-
-    /// The check constraints that a partition takes from its parent in `MergeAttributes`, in the order of their names, with the numbers of the columns of the partition. Each keeps its name, and a constraint `NO INHERIT` stays with the parent.
-    pub(super) fn inherit_checks(&mut self, table: u32, parent: u32) -> Result<()> {
-        let map = self.att_map(parent, table)?;
-        let mut checks: Vec<(String, String, Vec<i16>)> = self
-            .catalog
-            .constraints_of(parent)
-            .filter(|c| c.kind == ConKind::Check && !c.no_inherit)
-            .map(|c| (c.name.clone(), c.expr.clone().unwrap_or_default(), c.keys.clone()))
-            .collect();
-        checks.sort_by(|a, b| a.0.cmp(&b.0));
-        for (name, text, keys) in checks {
-            let (text, keys) = (map.text(&text)?, map.columns(&keys));
+        for (name, text, keys, count) in merged {
             let expr = node::read(&text)?;
             let refs = references(self.catalog, table, &[&expr]);
             let oid = self.catalog.add_check(table, Some(&name), text, keys, &refs, false)?;
-            self.catalog.set_constraint_inherited(oid, false, 1)?;
+            self.catalog.set_constraint_inherited(oid, false, count)?;
         }
         Ok(())
     }
 
-    /// The part of `AddRelationNotNullConstraints` for the not-null constraints of the parent of a partition. A constraint of the partition on the same column takes the count of the parent, and another column gets a constraint with the name of the constraint of the parent, or a new name when the partition has that name.
-    pub(super) fn inherit_not_nulls(&mut self, table: u32, parent: u32) -> Result<()> {
-        let map = self.att_map(parent, table)?;
-        let inherited: Vec<(String, i16)> = self
-            .catalog
-            .constraints_of(parent)
-            .filter(|c| c.kind == ConKind::NotNull && !c.no_inherit)
-            .filter_map(|c| Some((c.name.clone(), map.column(*c.keys.first()?))))
-            .collect();
-        for (name, attnum) in inherited {
+    /// The part of `AddRelationNotNullConstraints` for the not-null constraints of the parents of a table. The constraints of the parents on one column are one constraint, with the name of the first parent and a count of all of them. A constraint of the table on the same column takes that count, and another column gets a constraint with the name of the constraint of the parent, or a new name when the table has that name.
+    pub(super) fn inherit_not_nulls(&mut self, table: u32, parents: &[u32]) -> Result<()> {
+        let mut inherited: Vec<(String, i16, i16)> = Vec::new();
+        for &parent in parents {
+            let map = self.att_map(parent, table)?;
+            let columns: Vec<(String, i16)> = self
+                .catalog
+                .constraints_of(parent)
+                .filter(|c| c.kind == ConKind::NotNull && !c.no_inherit)
+                .filter_map(|c| Some((c.name.clone(), map.column(*c.keys.first()?))))
+                .collect();
+            for (name, attnum) in columns {
+                match inherited.iter_mut().find(|i| i.1 == attnum) {
+                    Some(prev) => prev.2 = prev.2.saturating_add(1),
+                    None => inherited.push((name, attnum, 1)),
+                }
+            }
+        }
+        for (name, attnum, count) in inherited {
             let local = self
                 .catalog
                 .constraints_of(table)
@@ -399,13 +405,13 @@ impl Definer<'_, '_> {
                     )
                     .with_detail("The column has an inherited not-null constraint."));
                 }
-                self.catalog.set_constraint_inherited(oid, true, 1)?;
+                self.catalog.set_constraint_inherited(oid, true, count)?;
                 continue;
             }
             let used = self.catalog.constraints_of(table).any(|c| c.name == name);
             let given = (!used).then_some(name.as_str());
             let oid = self.catalog.add_not_null(table, given, attnum, false)?;
-            self.catalog.set_constraint_inherited(oid, false, 1)?;
+            self.catalog.set_constraint_inherited(oid, false, count)?;
         }
         Ok(())
     }

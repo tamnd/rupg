@@ -1,0 +1,209 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (a int NOT NULL, b text DEFAULT 'x', c int CHECK (c > 0));
+CREATE TABLE
+> CREATE TABLE c1 (d int) INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 (b text, e int DEFAULT 5) INHERITS (p);
+NOTICE 00000 moving and merging column "b" with inherited definition
+DETAIL User-specified column moved to the position of the inherited column.
+CREATE TABLE
+> CREATE TABLE g1 () INHERITS (c1);
+CREATE TABLE
+> SELECT attname, attnum, attnotnull, attislocal, attinhcount, atthasdef FROM pg_attribute WHERE attrelid = 'c2'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attnotnull@pg_attribute.12:16:1:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1,atthasdef@pg_attribute.13:16:1:-1
+row a,1,t,f,1,f
+row b,2,f,t,1,t
+row c,3,f,f,1,f
+row e,4,f,t,0,t
+SELECT 4
+> SELECT attname, attnum, attislocal, attinhcount FROM pg_attribute WHERE attrelid = 'g1'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row a,1,f,1
+row b,2,f,1
+row c,3,f,1
+row d,4,f,1
+SELECT 4
+> SELECT conrelid::regclass, conname, contype, conislocal, coninhcount, connoinherit FROM pg_constraint WHERE conrelid IN ('p'::regclass, 'c1'::regclass, 'c2'::regclass, 'g1'::regclass) ORDER BY 1, 2;
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1
+row p,p_a_not_null,n,t,0,f
+row p,p_c_check,c,t,0,f
+row c1,p_a_not_null,n,f,1,f
+row c1,p_c_check,c,f,1,f
+row c2,p_a_not_null,n,f,1,f
+row c2,p_c_check,c,f,1,f
+row g1,p_a_not_null,n,f,1,f
+row g1,p_c_check,c,f,1,f
+SELECT 8
+> SELECT inhrelid::regclass, inhparent::regclass, inhseqno, inhdetachpending FROM pg_inherits ORDER BY 1, 2;
+fields inhrelid:2205:4:-1,inhparent:2205:4:-1,inhseqno@pg_inherits.3:23:4:-1,inhdetachpending@pg_inherits.4:16:1:-1
+row c1,p,1,f
+row c2,p,1,f
+row g1,c1,1,f
+SELECT 3
+> SELECT relname, relhassubclass FROM pg_class WHERE relname IN ('p', 'c1', 'c2', 'g1') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relhassubclass@pg_class.23:16:1:-1
+row c1,t
+row c2,f
+row g1,f
+row p,t
+SELECT 4
+> INSERT INTO p VALUES (1, 'p1', 1);
+INSERT 0 1
+> INSERT INTO c1 VALUES (2, 'c1', 2, 20);
+INSERT 0 1
+> INSERT INTO c2 (a, c) VALUES (3, 3);
+INSERT 0 1
+> INSERT INTO g1 VALUES (4, 'g1', 4, 40);
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p,1,p1,1
+row c1,2,c1,2
+row c2,3,x,3
+row g1,4,g1,4
+SELECT 4
+> SELECT tableoid::regclass, * FROM ONLY p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p,1,p1,1
+SELECT 1
+> SELECT tableoid::regclass, * FROM c1 ORDER BY a;
+fields tableoid:2205:4:-1,a@c1.1:23:4:-1,b@c1.2:25:-1:-1,c@c1.3:23:4:-1,d@c1.4:23:4:-1
+row c1,2,c1,2,20
+row g1,4,g1,4,40
+SELECT 2
+> SELECT * FROM c2;
+fields a@c2.1:23:4:-1,b@c2.2:25:-1:-1,c@c2.3:23:4:-1,e@c2.4:23:4:-1
+row 3,x,3,5
+SELECT 1
+> SELECT count(*) FROM p WHERE c > 1;
+fields count:20:8:-1
+row 3
+SELECT 1
+> SELECT p.a, x.a FROM p JOIN c1 x ON x.a = p.a ORDER BY 1;
+fields a@p.1:23:4:-1,a@c1.1:23:4:-1
+row 2,2
+row 4,4
+SELECT 2
+> INSERT INTO c1 VALUES (5, 'bad', 0, 1);
+ERROR 23514 new row for relation "c1" violates check constraint "p_c_check"
+DETAIL Failing row contains (5, bad, 0, 1).
+> INSERT INTO c1 (b) VALUES ('null');
+ERROR 23502 null value in column "a" of relation "c1" violates not-null constraint
+DETAIL Failing row contains (null, null, null, null).
+> CREATE TABLE m1 (a int, b text);
+CREATE TABLE
+> CREATE TABLE m2 (a bigint, z int);
+CREATE TABLE
+> CREATE TABLE bad () INHERITS (m1, m2);
+NOTICE 00000 merging multiple inherited definitions of column "a"
+ERROR 42804 inherited column "a" has a type conflict
+DETAIL integer versus bigint
+> CREATE TABLE m3 (a int, b text, y int);
+CREATE TABLE
+> CREATE TABLE mm (y int NOT NULL, w int) INHERITS (m1, m3);
+NOTICE 00000 merging multiple inherited definitions of column "a"
+NOTICE 00000 merging multiple inherited definitions of column "b"
+NOTICE 00000 moving and merging column "y" with inherited definition
+DETAIL User-specified column moved to the position of the inherited column.
+CREATE TABLE
+> SELECT attname, attnum, attnotnull, attislocal, attinhcount FROM pg_attribute WHERE attrelid = 'mm'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attnotnull@pg_attribute.12:16:1:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row a,1,f,f,2
+row b,2,f,f,2
+row y,3,t,t,1
+row w,4,f,t,0
+SELECT 4
+> SELECT inhrelid::regclass, inhparent::regclass, inhseqno FROM pg_inherits WHERE inhrelid = 'mm'::regclass ORDER BY 3;
+fields inhrelid:2205:4:-1,inhparent:2205:4:-1,inhseqno@pg_inherits.3:23:4:-1
+row mm,m1,1
+row mm,m3,2
+SELECT 2
+> CREATE TABLE dup () INHERITS (m1, m1);
+ERROR 42P07 relation "m1" would be inherited from more than once
+> CREATE TABLE ct (a int CHECK (a > 10)) INHERITS (p);
+NOTICE 00000 merging column "a" with inherited definition
+CREATE TABLE
+> CREATE TABLE nn (c int CHECK (c > 0)) INHERITS (p);
+NOTICE 00000 moving and merging column "c" with inherited definition
+DETAIL User-specified column moved to the position of the inherited column.
+CREATE TABLE
+> SELECT conname, conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'nn'::regclass ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row nn_c_check,t,0
+row p_a_not_null,f,1
+row p_c_check,f,1
+SELECT 3
+> CREATE TABLE ni (a int, CONSTRAINT ni_a CHECK (a > 0) NO INHERIT);
+CREATE TABLE
+> CREATE TABLE nic () INHERITS (ni);
+CREATE TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 'nic'::regclass;
+fields conname@pg_constraint.2:19:64:-1
+SELECT 0
+> CREATE TEMP TABLE tt (a int);
+CREATE TABLE
+> CREATE TABLE perm () INHERITS (tt);
+ERROR 42809 cannot inherit from temporary relation "tt"
+> CREATE TABLE pp (a int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE ip () INHERITS (pp);
+ERROR 42809 cannot inherit from partitioned table "pp"
+> CREATE VIEW v AS SELECT 1 AS a;
+CREATE VIEW
+> CREATE TABLE iv () INHERITS (v);
+ERROR 42809 inherited relation "v" is not a table or foreign table
+> CREATE TABLE ux (a int UNIQUE, b int REFERENCES p);
+ERROR 42704 there is no primary key for referenced table "p"
+> CREATE TABLE ux (a int PRIMARY KEY);
+CREATE TABLE
+> CREATE TABLE uc () INHERITS (ux);
+CREATE TABLE
+> SELECT conname FROM pg_constraint WHERE conrelid = 'uc'::regclass;
+fields conname@pg_constraint.2:19:64:-1
+row ux_a_not_null
+SELECT 1
+> DROP TABLE p;
+ERROR 2BP01 cannot drop table p because other objects depend on it
+DETAIL table c1 depends on table p
+table g1 depends on table c1
+table c2 depends on table p
+table ct depends on table p
+table nn depends on table p
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE c1;
+ERROR 2BP01 cannot drop table c1 because other objects depend on it
+DETAIL table g1 depends on table c1
+HINT Use DROP ... CASCADE to drop the dependent objects too.
+> DROP TABLE g1;
+DROP TABLE
+> SELECT tableoid::regclass, a FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1
+row p,1
+row c1,2
+row c2,3
+SELECT 3
+> DROP TABLE p CASCADE;
+NOTICE 00000 drop cascades to 4 other objects
+DETAIL drop cascades to table c1
+drop cascades to table c2
+drop cascades to table ct
+drop cascades to table nn
+DROP TABLE
+> SELECT relname FROM pg_class WHERE relname IN ('p', 'c1', 'c2', 'g1', 'nn');
+fields relname@pg_class.2:19:64:-1
+SELECT 0
+> SELECT count(*) FROM pg_inherits;
+fields count:20:8:-1
+row 4
+SELECT 1
+> DROP TABLE m1, m3, mm;
+DROP TABLE
+> DROP TABLE ni CASCADE;
+NOTICE 00000 drop cascades to table nic
+DROP TABLE
+> SELECT count(*) FROM pg_inherits;
+fields count:20:8:-1
+row 1
+SELECT 1

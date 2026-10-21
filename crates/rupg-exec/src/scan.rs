@@ -148,7 +148,7 @@ impl Tables {
             return Value::Null;
         }
         if var.attnum == TABLE_OID_ATTNUM {
-            // A row of a partitioned table has the OID of its partition after the ID of its version.
+            // A row of a partitioned table, or of a table with children of `INHERITS`, has the OID of its table after the ID of its version.
             let width = self.types[var.relation].len();
             let leaf = if self.needs[var.relation].is_empty() {
                 self.rows[var.relation][row].get(width + 1).cloned()
@@ -421,7 +421,7 @@ fn row_names(relation: &rupg_analyze::Relation) -> Option<Arc<[String]>> {
     Some(names.map(|(i, c)| alias.get(i).unwrap_or(&c.name).clone()).collect())
 }
 
-/// The rows of a relation of the user. A table gives the rows that the snapshot of the statement sees, each with the ID of its version at the end. A partitioned table gives the rows of its leaf partitions in the order of their bounds, each with the OID of its partition after the ID of its version, or no rows after `ONLY`. A sequence has its one row, the row of its file. The read of a table counts as a sequential scan, because rupg has no index scans yet.
+/// The rows of a relation of the user. A table gives the rows that the snapshot of the statement sees, each with the ID of its version at the end. A partitioned table gives the rows of its leaf partitions in the order of their bounds, each with the OID of its partition after the ID of its version, or no rows after `ONLY`. Without `ONLY`, a table with children of `INHERITS` gives its rows and then the rows of the children, each with the OID of its table after the ID of its version. A sequence has its one row, the row of its file. The read of a table counts as a sequential scan, because rupg has no index scans yet.
 fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec<Vec<Value>>> {
     let oid = from.oid;
     let relation = session
@@ -434,27 +434,7 @@ fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec
         }
         let mut out = Vec::new();
         for leaf in crate::partition::leaves(oid, session)? {
-            let Some(part) = session.catalog().and_then(|c| c.relation(leaf)) else { continue };
-            // `build_attrmap_by_name`: the column of the partition for each column of the parent.
-            let map: Vec<Option<usize>> = relation
-                .columns
-                .iter()
-                .map(|c| {
-                    let found = part.columns.iter().position(|p| !p.dropped && p.name == c.name);
-                    found.filter(|_| !c.dropped)
-                })
-                .collect();
-            session.count_scan(leaf);
-            for mut row in session.table_rows(leaf)? {
-                let tid = row.pop().unwrap_or(Value::Null);
-                let mut values: Vec<Value> = map
-                    .iter()
-                    .map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null))
-                    .collect();
-                values.push(tid);
-                values.push(Value::Oid(leaf));
-                out.push(values);
-            }
+            child_rows(relation, leaf, session, &mut out)?;
         }
         return Ok(out);
     }
@@ -463,10 +443,21 @@ fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec
         // A row from before an `ALTER TABLE ... ADD COLUMN` has no value for the new columns, which are null. The ID of the version stays at the end of the row.
         let width = relation.columns.len();
         let mut rows = session.table_rows(oid)?;
+        let children = match session.catalog() {
+            Some(catalog) if !from.only => catalog.all_inheritors(oid),
+            _ => Vec::new(),
+        };
         for row in &mut rows {
             let tid = row.pop().unwrap_or(Value::Null);
             row.resize(width, Value::Null);
             row.push(tid);
+            if !children.is_empty() {
+                row.push(Value::Oid(oid));
+            }
+        }
+        // `expand_inherited_rtentry`: the rows of the tables that inherit from the table come after its own rows.
+        for child in children {
+            child_rows(relation, child, session, &mut rows)?;
         }
         return Ok(rows);
     }
@@ -481,6 +472,37 @@ fn user_rows(from: &rupg_analyze::Relation, session: &dyn Session) -> Result<Vec
         }
         None => Vec::new(),
     })
+}
+
+/// The rows of the table `child`, a leaf partition of the partitioned table `relation` or a table that inherits from the table `relation`, with the columns of `relation`. Each row has the ID of its version and then the OID of `child` at the end.
+fn child_rows(
+    relation: &rupg_catalog::Relation,
+    child: u32,
+    session: &dyn Session,
+    out: &mut Vec<Vec<Value>>,
+) -> Result<()> {
+    let Some(part) = session.catalog().and_then(|c| c.relation(child)) else { return Ok(()) };
+    // `build_attrmap_by_name`: the column of the child for each column of the parent.
+    let map: Vec<Option<usize>> = relation
+        .columns
+        .iter()
+        .map(|c| {
+            let found = part.columns.iter().position(|p| !p.dropped && p.name == c.name);
+            found.filter(|_| !c.dropped)
+        })
+        .collect();
+    session.count_scan(child);
+    for mut row in session.table_rows(child)? {
+        let tid = row.pop().unwrap_or(Value::Null);
+        let mut values: Vec<Value> = map
+            .iter()
+            .map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null))
+            .collect();
+        values.push(tid);
+        values.push(Value::Oid(child));
+        out.push(values);
+    }
+    Ok(())
 }
 
 /// The value of a row of a column of the catalog. The elements of an array that the catalog keeps as text, such as `conkey`, get the element type of the column.

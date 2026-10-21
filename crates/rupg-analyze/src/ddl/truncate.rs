@@ -20,10 +20,10 @@ impl Definer<'_, '_> {
             }
             tables.push(table);
             if rv.inh {
-                // `find_all_inheritors`: the partitions, level by level. The parent checks the privileges for them.
+                // `find_all_inheritors`: the partitions and the children of `INHERITS`, level by level. The parent checks the privileges for them.
                 let mut at = tables.len() - 1;
                 while at < tables.len() {
-                    for child in self.catalog.partitions(tables[at]) {
+                    for child in self.catalog.children(tables[at]) {
                         if !tables.contains(&child.oid) {
                             self.truncate_check_rel(Found::User(child.oid), &child.name)?;
                             tables.push(child.oid);

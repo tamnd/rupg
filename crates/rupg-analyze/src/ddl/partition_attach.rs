@@ -69,6 +69,19 @@ impl Definer<'_, '_> {
                 format!("\"{}\" is already a partition", rel.name),
             ));
         }
+        // A table of `INHERITS` cannot be a partition, and a table with children of `INHERITS` cannot either.
+        if !rel.inherits.is_empty() {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                "cannot attach inheritance child as partition",
+            ));
+        }
+        if rel.kind == RelKind::Table && !self.catalog.children(child).is_empty() {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                "cannot attach inheritance parent as partition",
+            ));
+        }
         if child == parent || self.descendants(child).contains(&parent) {
             return Err(Error::new(SqlState::DUPLICATE_TABLE, "circular inheritance not allowed")
                 .with_detail(format!(

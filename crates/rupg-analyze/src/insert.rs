@@ -574,6 +574,14 @@ impl Analyzer<'_> {
         {
             return Err(not_yet(&format!("{what} a table with rules")));
         }
+        // `expand_inherited_rtentry` for the target of an `UPDATE`, a `DELETE` or a `MERGE`: the children of `INHERITS` change their rows too.
+        if rel.kind == RelKind::Table
+            && rv.inh
+            && kind != WriteKind::Insert
+            && self.env.catalog().is_some_and(|c| !c.children(oid).is_empty())
+        {
+            return Err(not_yet(&format!("{what} a table with children of INHERITS")));
+        }
         // A dropped column keeps its place with no name and the type 0, and each new row has a null for it.
         let columns = rel
             .columns
