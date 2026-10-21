@@ -624,6 +624,10 @@ struct Cache {
     json_flags: RefCell<Vec<(*const rupg_analyze::JsonExpr, jsonexpr::Flags)>>,
     /// The number of rows that the next run of a recursive query of `WITH` must give, when the query that reads it needs no more, as the `ExecProcNode` calls of a `Limit` above a `CteScan` read them. The run takes it.
     want: Cell<Option<usize>>,
+    /// The query whose rows go to the client as the run makes them, as `PortalRunSelect` sends them, from [`Plan::run_select`].
+    top: Cell<Option<*const Query>>,
+    /// The rows of the query `top` that the run made before an error.
+    sent: RefCell<Rows>,
 }
 
 impl Cache {
@@ -1105,7 +1109,20 @@ fn run_query(
             if let Some(values) = values.get_mut(i) {
                 eval.windows = std::mem::take(values);
             }
-            eval.project(&query.targets, &levels, &mut rows)?;
+            if let Err(error) = eval.project(&query.targets, &levels, &mut rows) {
+                // With no sort, each row went to the client before the target of the next row failed.
+                if !ordered && cache.top.get() == Some(&raw const *query) {
+                    let width = query.targets.iter().take_while(|t| !t.junk).count();
+                    let sent = rows.into_iter().skip(offset).take(count.unwrap_or(usize::MAX));
+                    *cache.sent.borrow_mut() = sent
+                        .map(|mut row| {
+                            row.truncate(width);
+                            row
+                        })
+                        .collect();
+                }
+                return Err(error);
+            }
         }
         rows
     };
@@ -1329,6 +1346,26 @@ impl Plan {
     pub fn run(&self, params: &[Value], session: &dyn Session) -> Result<Vec<Vec<Value>>> {
         let rows = self.run_unchecked(params, session)?;
         self.check(rows, session)
+    }
+
+    /// `PortalRunSelect`: [`Plan::run`] for a query that sends its rows to the client. PostgreSQL sends each row of a query with no sort and no aggregate when it makes it, so when a target of a row fails, the rows before that row are already at the client. The error gives these rows with the error. A query with a sort, an aggregate or a write makes no row before the error, so its rows are empty.
+    ///
+    /// # Errors
+    ///
+    /// The rows before the error and the error of a function, such as a division by zero.
+    pub fn run_select(
+        &self,
+        params: &[Value],
+        session: &dyn Session,
+    ) -> std::result::Result<Rows, (Rows, Error)> {
+        let cache = self.cache();
+        if self.query.write.is_none() && !self.modifying_cte() {
+            cache.top.set(Some(&raw const self.query));
+        }
+        self.start(session)
+            .and_then(|()| run_query(&self.query, params, session, &cache, &[], false))
+            .and_then(|rows| self.check(rows, session))
+            .map_err(|error| (cache.sent.take(), error))
     }
 
     /// [`Plan::run`] with no checks of the constraints of the table. The rows of an `INSERT` have the values of the conditions of the check constraints after the columns of the table. `COPY ... FROM` drops the rows that its condition `WHERE` rejects before [`Plan::check`], as `CopyFrom` does.

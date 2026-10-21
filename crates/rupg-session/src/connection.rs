@@ -1504,7 +1504,7 @@ impl Connection {
                     self.transaction.begin_implicit();
                 }
             }
-            // The columns of a query that failed at run time. PostgreSQL sends `RowDescription` when the executor starts, so the error comes after it.
+            // The columns of a query that failed at run time, and the rows that it made before the error. PostgreSQL sends `RowDescription` when the executor starts and each row when it makes it, so the error comes after them.
             let mut described = None;
             // The format and the number of columns of a `COPY` that failed at run time.
             let mut copying = None;
@@ -1618,12 +1618,17 @@ impl Connection {
             let outcome = match result {
                 Ok(outcome) => outcome,
                 Err(error) => {
-                    if let Some(columns) = described {
+                    let sent = described.map(|(columns, rows)| {
                         let fields: Vec<Field<'_>> =
                             columns.iter().map(|column| column.field(0)).collect();
                         out.row_description(&fields);
-                    }
+                        rows
+                    });
                     self.notices(&mut late, text, &[], out);
+                    for row in sent.iter().flatten() {
+                        let values: Vec<Option<&[u8]>> = row.iter().map(Option::as_deref).collect();
+                        out.data_row(&values);
+                    }
                     if let Some((binary, columns)) = copying {
                         copy::copy_out_response(out, binary, columns);
                     }
@@ -1695,13 +1700,13 @@ impl Connection {
         false
     }
 
-    /// Plans and runs a query of a `Query` message. The warnings of the analysis and of the plan go to `notices`, and the warnings of the run go to `late`. When the run fails after the plan, the columns of the plan go to `described`.
+    /// Plans and runs a query of a `Query` message. The warnings of the analysis and of the plan go to `notices`, and the warnings of the run go to `late`. When the run fails after the plan, the columns of the plan and the rows before the error go to `described`.
     fn select(
         &self,
         node: &Node,
         notices: &mut Vec<Notice>,
         late: &mut Vec<Notice>,
-        described: &mut Option<Vec<Column>>,
+        described: &mut Option<(Vec<Column>, Vec<Row>)>,
     ) -> Result<Done, Error> {
         self.settings.borrow_mut().take_snapshot();
         let reader = self.reader();
@@ -1727,7 +1732,7 @@ impl Connection {
             return done;
         }
         let columns = query::columns(&plan);
-        let rows = query::run(&plan, &[], &reader, &[]);
+        let rows = query::run_select(&plan, &[], &reader, &[]);
         late.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         match rows {
             Ok(rows) => {
@@ -1739,8 +1744,8 @@ impl Connection {
                 }
                 Ok(Done::Rows { columns, rows, tag: CommandTag::Select })
             }
-            Err(error) => {
-                *described = Some(columns);
+            Err((rows, error)) => {
+                *described = Some((columns, rows));
                 Err(error)
             }
         }
@@ -1752,7 +1757,7 @@ impl Connection {
         node: &Node,
         notices: &mut Vec<Notice>,
         late: &mut Vec<Notice>,
-        described: &mut Option<Vec<Column>>,
+        described: &mut Option<(Vec<Column>, Vec<Row>)>,
     ) -> Result<Done, Error> {
         // `ExecuteCallStmt` describes the row only when it sends the row, so an error gives no description.
         let done = self.top_call(|| self.select(node, notices, late, described));
@@ -5077,6 +5082,62 @@ mod tests {
             let input = [bind("", "", &[], &[], &[]), run];
             assert_eq!(send(&mut c, &input.concat()), ["ERROR 22012 division by zero", "ready I"]);
         });
+    }
+
+    /// `PortalRunSelect` sends each row when the executor makes it, so the rows before a row whose target fails reach the client before the error. A query with a sort makes all its rows first, so it sends none. In the extended protocol the error comes only when the client wants the row that fails, so `Execute` with a limit of 3 rows gives `PortalSuspended`. PostgreSQL 18 gives the same messages.
+    #[test]
+    fn rows_before_an_error() {
+        big_stack(rows_before_an_error_cases);
+    }
+
+    fn rows_before_an_error_cases() {
+        let (mut c, _) = connect();
+        let sql = "SELECT 6 / g AS n FROM generate_series(3, -1, -1) g";
+        let rows = ["row 2", "row 3", "row 6"];
+        let error = "ERROR 22012 division by zero";
+        assert_eq!(
+            send(&mut c, &query(sql)),
+            [&["columns n"][..], &rows, &[error, "ready I"]].concat()
+        );
+        assert_eq!(
+            send(&mut c, &query(&format!("{sql} ORDER BY n"))),
+            ["columns n", error, "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query(&format!("{sql} LIMIT 2 OFFSET 1"))),
+            ["columns n", "row 3", "row 6", "SELECT 2", "ready I"]
+        );
+        assert_eq!(
+            send(&mut c, &query("SELECT g, 1 / (g - 1) AS n FROM generate_series(3, 0, -1) g")),
+            ["columns g,n", "row 3,0", "row 2,1", error, "ready I"]
+        );
+        assert_eq!(send(&mut c, &parse("s", sql, &[])), ["ParseComplete"]);
+        let mut run = |maxes: &[i32]| {
+            let mut input = bind("", "s", &[], &[], &[]);
+            for &max in maxes {
+                input.extend(execute("", max));
+            }
+            input.extend(sync());
+            send(&mut c, &input)
+        };
+        assert_eq!(run(&[0]), [&["BindComplete"][..], &rows, &[error, "ready I"]].concat());
+        assert_eq!(
+            run(&[2, 2]),
+            ["BindComplete", "row 2", "row 3", "PortalSuspended", "row 6", error, "ready I"]
+        );
+        assert_eq!(
+            run(&[3]),
+            [&["BindComplete"][..], &rows, &["PortalSuspended", "ready I"]].concat()
+        );
+        assert_eq!(
+            run(&[3, 1]),
+            [&["BindComplete"][..], &rows, &["PortalSuspended", error, "ready I"]].concat()
+        );
+        assert_eq!(run(&[4]), [&["BindComplete"][..], &rows, &[error, "ready I"]].concat());
+        assert_eq!(
+            send(&mut c, &query("SELECT 1 AS n")),
+            ["columns n", "row 1", "SELECT 1", "ready I"]
+        );
     }
 
     #[test]

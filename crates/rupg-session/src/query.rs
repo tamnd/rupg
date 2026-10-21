@@ -1215,6 +1215,36 @@ pub(crate) fn run(
     plan.run(params, reader)?.iter().map(|values| encode(&types, values, reader, formats)).collect()
 }
 
+/// [`run`] for a query that sends its rows to the client, as `PortalRunSelect` sends them. When the run fails, the error gives the rows that PostgreSQL sends before the error. See [`Plan::run_select`].
+///
+/// # Errors
+///
+/// The rows before the error, and the errors of the functions of the plan and of the output functions.
+pub(crate) fn run_select(
+    plan: &Plan,
+    params: &[Value],
+    reader: &Reader<'_>,
+    formats: &[i16],
+) -> std::result::Result<Vec<Row>, (Vec<Row>, Error)> {
+    let types: Vec<u32> = plan.columns().iter().map(|target| target.expr.ty).collect();
+    let (values, failed) = match plan.run_select(params, reader) {
+        Ok(values) => (values, None),
+        Err((values, error)) => (values, Some(error)),
+    };
+    let mut rows = Vec::with_capacity(values.len());
+    for values in &values {
+        // The output function of a row runs before the next row is made, so its error comes first.
+        match encode(&types, values, reader, formats) {
+            Ok(row) => rows.push(row),
+            Err(error) => return Err((rows, error)),
+        }
+    }
+    match failed {
+        None => Ok(rows),
+        Some(error) => Err((rows, error)),
+    }
+}
+
 /// The bytes of the values of a row of the types `types` in the result format of each column: 1 is binary and any other code is text.
 ///
 /// # Errors

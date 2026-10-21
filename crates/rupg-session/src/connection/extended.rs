@@ -111,8 +111,8 @@ impl Prepared {
 pub(super) enum Run {
     /// The statement did not run yet.
     Ready,
-    /// The statement ran and gave rows. `at` is the first row that the client did not fetch, and `tag` is the tag of `CommandComplete`.
-    Rows { rows: Vec<Row>, at: usize, tag: CommandTag },
+    /// The statement ran and gave rows. `at` is the first row that the client did not fetch, and `tag` is the tag of `CommandComplete`. `error` is the error of the run after the last row, which the client gets when it fetches past that row.
+    Rows { rows: Vec<Row>, at: usize, tag: CommandTag, error: Option<Error> },
     /// The statement ran and gave no rows, so it cannot run again.
     Done,
     /// The portal is a cursor of `DECLARE`.
@@ -493,6 +493,8 @@ impl Connection {
         let formats = portal.formats.clone();
         let mut immediate_commit = false;
         let mut tag = None;
+        // The error of a query that made rows before it failed.
+        let mut pending = None;
         if ready {
             let done = if let Node::DeclareCursorStmt(stmt) = node {
                 let mut notices = Vec::new();
@@ -521,9 +523,18 @@ impl Connection {
                     self.notices(&mut self.trigger_notices(), &statement.text, &[], out);
                     done?
                 } else {
-                    let run = || query::run(&plan, &params, &reader, &formats);
-                    let rows =
-                        if matches!(node, Node::CallStmt(_)) { self.top_call(run) } else { run() };
+                    let rows = if matches!(node, Node::CallStmt(_)) {
+                        self.top_call(|| query::run(&plan, &params, &reader, &formats))
+                    } else {
+                        match query::run_select(&plan, &params, &reader, &formats) {
+                            Ok(rows) => Ok(rows),
+                            Err((rows, error)) if rows.is_empty() => Err(error),
+                            Err((rows, error)) => {
+                                pending = Some(error);
+                                Ok(rows)
+                            }
+                        }
+                    };
                     // The warnings of the run, such as the warning of `pg_advisory_unlock`, come before the rows.
                     let mut notices: Vec<Notice> =
                         reader.take_warnings().into_iter().map(Notice::of_function).collect();
@@ -652,12 +663,12 @@ impl Connection {
                 }
                 Done::Rows { rows, tag, .. } => {
                     if let Some(portal) = self.portals.get_mut().find_mut(name) {
-                        portal.run = Run::Rows { rows, at: 0, tag };
+                        portal.run = Run::Rows { rows, at: 0, tag, error: pending.take() };
                     }
                 }
                 Done::Fetch { rows, .. } => {
                     if let Some(portal) = self.portals.get_mut().find_mut(name) {
-                        portal.run = Run::Rows { rows, at: 0, tag: CommandTag::Fetch };
+                        portal.run = Run::Rows { rows, at: 0, tag: CommandTag::Fetch, error: None };
                     }
                 }
                 Done::Count(done, count) => {
@@ -718,7 +729,7 @@ impl Connection {
             }
             return Ok((CommandTag::Select, values.len() as u64, end));
         }
-        let Run::Rows { rows, at, tag } = &mut portal.run else {
+        let Run::Rows { rows, at, tag, error } = &mut portal.run else {
             return Err(Error::internal("a portal with no rows to fetch").into());
         };
         let left = rows.len() - *at;
@@ -740,7 +751,12 @@ impl Connection {
             out.data_row(&values);
         }
         *at += count;
-        Ok((*tag, count as u64, max.is_none_or(|max| count < max)))
+        let end = max.is_none_or(|max| count < max);
+        // The executor makes the row that fails only when the client wants more rows than the rows before it.
+        if end && let Some(error) = error.take() {
+            return Err(error.into());
+        }
+        Ok((*tag, count as u64, end))
     }
 
     /// The `Close` message. A name that is not there is not an error.
