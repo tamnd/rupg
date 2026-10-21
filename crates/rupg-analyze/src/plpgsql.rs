@@ -2,11 +2,12 @@
 
 use rupg_common::{Error, Result, SqlState};
 use rupg_sql::nodes::{ColumnRef, List, Node, RangeVar};
+use rupg_types::oid;
 
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind};
 use crate::select::{Query, Target};
-use crate::{Analyzer, Env, Params};
+use crate::{Analyzer, Env, Params, types};
 
 /// The target of an assignment of PL/pgSQL, whose type the value takes in the analysis.
 pub(crate) struct Assign {
@@ -116,7 +117,7 @@ impl Analyzer<'_> {
             return Ok(());
         }
         let source = target.expr.ty;
-        let composite = |t: u32| t == rupg_types::oid::RECORD || crate::types::is_complex(t);
+        let composite = |t: u32| t == oid::RECORD || types::is_complex(t);
         if ty != source && composite(ty) && composite(source) {
             return Ok(());
         }
@@ -127,8 +128,8 @@ impl Analyzer<'_> {
                 SqlState::DATATYPE_MISMATCH,
                 format!(
                     "variable \"{name}\" is of type {} but expression is of type {}",
-                    crate::types::name(ty),
-                    crate::types::name(source)
+                    types::name(ty),
+                    types::name(source)
                 ),
             )
             .with_hint("You will need to rewrite or cast the expression.")
@@ -151,11 +152,7 @@ pub fn plpgsql_cast(env: &dyn Env, source: (u32, i32), target: u32, typmod: i32)
     else {
         return Err(Error::new(
             SqlState::CANNOT_COERCE,
-            format!(
-                "cannot cast type {} to {}",
-                crate::types::name(source.0),
-                crate::types::name(target)
-            ),
+            format!("cannot cast type {} to {}", types::name(source.0), types::name(target)),
         ));
     };
     let target = Target { name: "?column?".into(), expr, origin: None, junk: false };
@@ -234,9 +231,29 @@ impl Analyzer<'_> {
             })
             .collect();
         let core = self.column_ref(c);
-        let Some(names) = names else { return core };
         let missing =
             |e: &Error| matches!(e.state(), SqlState::UNDEFINED_COLUMN | SqlState::UNDEFINED_TABLE);
+        let Some(names) = names else {
+            // `resolve_column_ref` for `r.*`: the whole value of a variable of a composite type.
+            if let Some((Some(Node::A_Star(_)), prefix)) = c.fields.split_last()
+                && let Err(error) = &core
+                && missing(error)
+            {
+                let prefix: Option<Vec<&str>> = prefix
+                    .iter()
+                    .map(|f| match f {
+                        Some(Node::String(s)) => Some(&**s),
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(prefix) = prefix.filter(|p| !p.is_empty())
+                    && let Some(variable) = self.composite_variable(&prefix, at)?
+                {
+                    return Ok(self.variable_param(variable, at));
+                }
+            }
+            return core;
+        };
         match core {
             Ok(expr) => match variables.column(&names, at)? {
                 Some(_) => Err(Error::new(
@@ -253,6 +270,19 @@ impl Analyzer<'_> {
             },
             Err(error) => Err(error),
         }
+    }
+
+    /// The variable of the PL/pgSQL function with the names `names` when its type is composite or `record`, as `resolve_column_ref` takes a row or a record for `r.*`, or `None`.
+    pub(crate) fn composite_variable(
+        &self,
+        names: &[&str],
+        at: Option<usize>,
+    ) -> Result<Option<Variable>> {
+        let Some(variables) = self.variables else { return Ok(None) };
+        let Some(variable) = variables.column(names, at)? else { return Ok(None) };
+        let composite =
+            variable.ty == oid::RECORD || self.row_columns(types::base(variable.ty)).is_some();
+        Ok(composite.then_some(variable))
     }
 
     /// The parameter of a variable. The parameters of the query grow to its number, and it gets the type of the variable.

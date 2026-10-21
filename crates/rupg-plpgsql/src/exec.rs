@@ -530,9 +530,13 @@ impl Exec<'_> {
                 columns.filter(|(_, c)| c.1 != 0).map(|(v, _)| v.clone()).collect()
             })
         };
+        // The rows of the trigger have the row type of the relation, as `ExecFetchSlotHeapTuple` gives them, so `new.*` has the fields of the relation.
+        let catalog = self.env().catalog();
+        let rel = catalog.and_then(|c| c.relation(call.trigger.relation));
+        let ty = rel.map(|r| r.row_type).filter(|&ty| ty != 0).unwrap_or(oid::RECORD);
         for (d, row) in [(new, &call.new), (new + 1, &call.old)] {
             let fields = Some(Rc::clone(&fields));
-            self.slots[d] = Slot::Rec { ty: oid::RECORD, fields, values: live(row) };
+            self.slots[d] = Slot::Rec { ty, fields, values: live(row) };
         }
         let t = call.trigger;
         let argv = if t.args.is_empty() {
