@@ -379,7 +379,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("relname", Value::text(rel.name.clone()))
                 .set("relnamespace", oid(rel.namespace))
                 .set("reltype", oid(rel.row_type))
-                .set("reloftype", oid(0))
+                .set("reloftype", oid(rel.of_type))
                 .set("relowner", oid(rel.owner))
                 .set("relam", oid(am))
                 .set(

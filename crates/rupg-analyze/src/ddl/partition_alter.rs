@@ -18,7 +18,7 @@ fn lookup(oid: u32) -> Error {
 
 impl Definer<'_, '_> {
     /// The target of a partition that the recursion reaches.
-    fn target_of(&self, oid: u32) -> Target {
+    pub(super) fn target_of(&self, oid: u32) -> Target {
         let (name, namespace) =
             self.catalog.relation(oid).map(|r| (r.name.clone(), r.namespace)).unwrap_or_default();
         Target { oid, kind: self.kind_of(Found::User(oid)), name, namespace }

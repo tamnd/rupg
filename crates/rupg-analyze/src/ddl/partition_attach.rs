@@ -69,6 +69,12 @@ impl Definer<'_, '_> {
                 format!("\"{}\" is already a partition", rel.name),
             ));
         }
+        if rel.of_type != 0 {
+            return Err(Error::new(
+                SqlState::WRONG_OBJECT_TYPE,
+                "cannot attach a typed table as partition",
+            ));
+        }
         // A table of `INHERITS` cannot be a partition, and a table with children of `INHERITS` cannot either.
         if !rel.inherits.is_empty() {
             return Err(Error::new(

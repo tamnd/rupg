@@ -27,6 +27,7 @@ use crate::typename::{names, place};
 use crate::types;
 
 mod inherit;
+mod typed;
 
 pub(super) use inherit::collation_name;
 
@@ -270,9 +271,7 @@ impl Definer<'_, '_> {
             );
             return Ok(());
         }
-        if stmt.ofTypename.is_some() {
-            return Err(not_yet("CREATE TABLE OF", at));
-        }
+        let of_type = stmt.ofTypename.as_deref().map(|name| self.of_type(name)).transpose()?;
         if stmt.partspec.is_some() && unlogged {
             return Err(Error::new(
                 SqlState::FEATURE_NOT_SUPPORTED,
@@ -312,6 +311,9 @@ impl Definer<'_, '_> {
                 _ => return Err(not_yet("CREATE TABLE LIKE", at)),
             }
         }
+        if let Some(ty) = of_type {
+            self.merge_type_columns(&mut plan, ty)?;
+        }
         for nn in &plan.not_nulls {
             let key = not_null_column(nn);
             if let Some(column) = plan.columns.iter_mut().find(|c| c.name == key) {
@@ -349,6 +351,9 @@ impl Definer<'_, '_> {
         }
         self.check_on_commit(stmt.oncommit, namespace)?;
         let table = self.define_relation(&plan)?;
+        if let Some(ty) = of_type {
+            self.catalog.set_of_type(table, ty)?;
+        }
         if unlogged {
             self.catalog.set_unlogged(table, true)?;
         }
