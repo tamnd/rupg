@@ -7,6 +7,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - Join search in `EXPLAIN`, as PostgreSQL finds the order of the joins. The tables of a `FROM` list and of inner joins join in the order with the lowest cost, first by the conditions of the joins and by the equivalence classes, then a table with no condition, and a function with a lateral reference joins after the tables that it reads. A left join or a full join is one item of the search (#531).
+- The width of the rows when `EXPLAIN` makes the plan, as PostgreSQL finds it from the columns that the nodes above each scan and each join read. A sort that does not fit in `work_mem` now has the cost of a merge sort on disk, a `Materialize` that does not fit writes its rows to disk, a merge join puts a `Materialize` over a sorted inner side that does not fit, and a hash join with a large inner side runs in batches. The conditions of a merge join and of a hash join now cost as much as their expressions, and the `Materialize` of a merge join costs one `cpu_operator_cost` for each row, as in PostgreSQL. A hash join whose inner side has no statistics and does not fit in `hash_mem` costs `disable_cost` more, an I/O cast costs 2 function calls, and an expression of one small relation has as many distinct values as the relation has tuples (#532).
 
 ## 0.1.63 (2026-10-22)
 

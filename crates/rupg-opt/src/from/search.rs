@@ -214,7 +214,8 @@ impl<'q> Problem<'_, 'q> {
             Some(e) => self.sets[e].rel.node.cost.rows,
             None => join_rows(JoinKind::Inner, l, r, &quals, &[], self.stats),
         };
-        let rel = finish(self.level, &best, l.clone(), r.clone(), &quals, &[], rows);
+        let mut rel = finish(self.level, &best, l.clone(), r.clone(), &quals, &[], rows);
+        rel.node.cost.width = self.stats.width(&rel.rels);
         match existing {
             Some(e) => self.sets[e].rel = rel,
             None => {
