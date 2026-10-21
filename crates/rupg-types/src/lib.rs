@@ -51,6 +51,7 @@
 #![forbid(unsafe_code)]
 
 mod array;
+mod arrayset;
 mod binary;
 mod bit;
 mod datetime;

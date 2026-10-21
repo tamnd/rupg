@@ -226,8 +226,77 @@ impl Analyzer<'_> {
             container,
             upper,
             lower: slice.then_some(lower),
+            assign: None,
         }));
         Ok(Expr { kind, ty: result, typmod, location: None })
+    }
+
+    /// `transformAssignmentIndirection` and `transformAssignmentSubscripts`: the assignment of `rhs` to the part of `base` that the subscripts of `indirection` name, as an expression whose value is the array with the new value. `name` is the name of the target in the errors, and the type and the typmod are the type of `base`. The value takes the type of the element, or the type of the array for a slice. A field in the indirection is not supported yet.
+    pub(crate) fn assignment_indirection(
+        &mut self,
+        (base, name, (ty, typmod)): (Expr, &str, (u32, i32)),
+        indirection: &[Option<Node>],
+        rhs: Expr,
+        context: Context,
+        at: Option<usize>,
+    ) -> Result<Expr> {
+        let mut subscripts: Vec<&A_Indices> = Vec::new();
+        for item in indirection {
+            match item {
+                Some(Node::A_Indices(indices)) => subscripts.push(indices),
+                Some(Node::A_Star(_)) => {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "row expansion via \"*\" is not supported here",
+                    )
+                    .at_opt(at));
+                }
+                Some(Node::String(_)) => {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "an assignment to a field of a composite value is not supported yet",
+                    )
+                    .at_opt(at));
+                }
+                _ => return Err(Error::internal("unrecognized indirection")),
+            }
+        }
+        if subscripts.is_empty() {
+            return Err(Error::internal("an assignment to a part of a value has no subscripts"));
+        }
+        let (container, container_mod) = container_type(ty, typmod);
+        let mut result = self.container_subscripts(base, &subscripts)?;
+        let (needed, needed_mod, source) = (result.ty, result.typmod, rhs.ty);
+        let Some(rhs) = self.coerce_to_target(rhs, needed, needed_mod, context, None)? else {
+            return Err(Error::new(
+                SqlState::DATATYPE_MISMATCH,
+                format!(
+                    "subscripted assignment to \"{name}\" requires type {} but expression is of type {}",
+                    types::name(needed),
+                    types::name(source)
+                ),
+            )
+            .with_hint("You will need to rewrite or cast the expression.")
+            .at_opt(at));
+        };
+        let ExprKind::Subscript(sub) = &mut result.kind else {
+            return Err(Error::internal(
+                "the subscripts of an assignment are not a SubscriptingRef",
+            ));
+        };
+        sub.assign = Some(rhs);
+        (result.ty, result.typmod) = (container, container_mod);
+        if container == ty {
+            return Ok(result);
+        }
+        // A domain over an array checks the new array.
+        self.coerce_to_target(result, ty, typmod, context, None)?.ok_or_else(|| {
+            Error::new(
+                SqlState::CANNOT_COERCE,
+                format!("cannot cast type {} to {}", types::name(container), types::name(ty)),
+            )
+            .at_opt(at)
+        })
     }
 
     /// A subscript, cast to `int4` as an assignment cast.

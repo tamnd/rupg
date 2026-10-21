@@ -1,12 +1,22 @@
 //! The hooks of PL/pgSQL in the analysis: the variables of a function that a query names, as `plpgsql_post_column_ref` and `plpgsql_param_ref` of `pl_comp.c` find them, and the casts of the values of the variables, as `exec_cast_value` of `pl_exec.c` makes them.
 
 use rupg_common::{Error, Result, SqlState};
-use rupg_sql::nodes::{Node, RangeVar};
+use rupg_sql::nodes::{ColumnRef, List, Node, RangeVar};
 
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Expr, ExprKind};
 use crate::select::{Query, Target};
 use crate::{Analyzer, Env, Params};
+
+/// The target of an assignment of PL/pgSQL, whose type the value takes in the analysis.
+pub(crate) struct Assign {
+    pub(crate) ty: u32,
+    pub(crate) typmod: i32,
+    /// The name of the variable, for the errors.
+    pub(crate) name: String,
+    /// The variable and the subscripts after it, for an assignment to a part of the variable, as `x[1] := 5`.
+    pub(crate) indirect: Option<(Expr, List)>,
+}
 
 /// A variable of a function that a query reads as a parameter.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -55,16 +65,40 @@ pub fn analyze_assign(
     (ty, typmod): (u32, i32),
     name: &str,
 ) -> Result<Query> {
-    crate::analyze_assigned(stmt, env, variables, (ty, typmod, name.to_owned()))
+    let assign = Assign { ty, typmod, name: name.to_owned(), indirect: None };
+    crate::analyze_assigned(Analyzer::new(env, &Params::default()), stmt, variables, assign)
+}
+
+/// `transformPLAssignStmt` of an assignment to a part of a variable, as `x[i] := 5` and `r.f[1:2] := a`: [`analyze_with`] of the `PLAssignStmt` that [`rupg_sql::parse_plpgsql_assign`] gives. The value of the query is the new value of the variable, which is the array with the new value of the element or of the slice.
+///
+/// # Errors
+///
+/// The errors of [`analyze_with`], `42601` for a value that is not one column, and `42804` for a target that has no subscripts and for a value that has no cast to the type of the element or of the slice.
+pub fn analyze_assign_part(stmt: &Node, env: &dyn Env, variables: &dyn Variables) -> Result<Query> {
+    let Node::PLAssignStmt(s) = stmt else {
+        return Err(Error::internal("an assignment is not a PLAssignStmt"));
+    };
+    let Some(val) = &s.val else { return Err(Error::internal("an assignment has no value")) };
+    let name = s.name.as_deref().unwrap_or_default();
+    // The names after the first name of the target are at the start of the indirection.
+    let split = usize::try_from(s.nnames).unwrap_or(1).saturating_sub(1).min(s.indirection.len());
+    let (names, indirection) = s.indirection.split_at(split);
+    let mut fields = vec![Some(Node::String(name.into()))];
+    fields.extend(names.iter().cloned());
+    let cref = Node::ColumnRef(Box::new(ColumnRef { fields, location: s.location }));
+    let mut analyzer = Analyzer::new(env, &Params::default());
+    analyzer.variables = Some(variables);
+    let target = analyzer.transform(Some(&cref))?;
+    let (ty, typmod) = (target.ty, target.typmod);
+    let indirect = Some((target, indirection.to_vec()));
+    let assign = Assign { ty, typmod, name: name.to_owned(), indirect };
+    crate::analyze_assigned(analyzer, &Node::SelectStmt(val.clone()), variables, assign)
 }
 
 impl Analyzer<'_> {
     /// `transformPLAssignStmtTarget`: the value of an assignment, coerced to the type of the variable. A row value for a row variable of another row type stays as it is, and the executor converts it.
-    pub(crate) fn assign_target(
-        &mut self,
-        targets: &mut [Target],
-        (ty, typmod, name): (u32, i32, String),
-    ) -> Result<()> {
+    pub(crate) fn assign_target(&mut self, targets: &mut [Target], assign: Assign) -> Result<()> {
+        let Assign { ty, typmod, name, indirect } = assign;
         let [target] = targets else {
             let n = targets.len();
             let word = if n == 1 { "column" } else { "columns" };
@@ -73,6 +107,14 @@ impl Analyzer<'_> {
                 format!("assignment source returned {n} {word}"),
             ));
         };
+        if let Some((base, indirection)) = indirect {
+            let rhs = std::mem::replace(&mut target.expr, Expr::new(ExprKind::CaseTest, 0));
+            let at = base.place();
+            let parts = (base, &name[..], (ty, typmod));
+            target.expr =
+                self.assignment_indirection(parts, &indirection, rhs, Context::Plpgsql, at)?;
+            return Ok(());
+        }
         let source = target.expr.ty;
         let composite = |t: u32| t == rupg_types::oid::RECORD || crate::types::is_complex(t);
         if ty != source && composite(ty) && composite(source) {
@@ -179,7 +221,7 @@ impl Analyzer<'_> {
     /// `plpgsql_post_column_ref` around `transformColumnRef`: the column, or the variable when no column has the name. A name that is both is an error.
     pub(crate) fn column_or_variable(
         &mut self,
-        c: &rupg_sql::nodes::ColumnRef,
+        c: &ColumnRef,
         variables: &dyn Variables,
     ) -> Result<Expr> {
         let at = crate::typename::place(c.location);

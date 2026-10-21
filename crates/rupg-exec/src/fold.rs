@@ -358,9 +358,12 @@ impl<'a> Fold<'a> {
                 self.subqueries(element)
             }
             ExprKind::Subscript(sub) => {
-                let Subscript { container, upper, lower } = &mut **sub;
+                let Subscript { container, upper, lower, assign } = &mut **sub;
                 for bound in upper.iter_mut().chain(lower.iter_mut().flatten()).flatten() {
                     self.subqueries(bound)?;
+                }
+                if let Some(assign) = assign {
+                    self.subqueries(assign)?;
                 }
                 self.subqueries(container)
             }
@@ -528,8 +531,13 @@ impl<'a> Fold<'a> {
                 let upper = bounds(&sub.upper)?;
                 let lower = sub.lower.as_deref().map(&mut bounds).transpose()?;
                 let container = self.expr(&sub.container)?;
-                let folded = Subscript { container, upper, lower };
-                let all = folded.bounds().chain([&folded.container]).all(|e| value(e).is_some());
+                let assign = sub.assign.as_ref().map(|a| self.expr(a)).transpose()?;
+                let folded = Subscript { container, upper, lower, assign };
+                let all = folded
+                    .bounds()
+                    .chain([&folded.container])
+                    .chain(&folded.assign)
+                    .all(|e| value(e).is_some());
                 let kind = ExprKind::Subscript(Box::new(folded));
                 if all { self.evaluate(with(expr, kind)) } else { Ok(with(expr, kind)) }
             }

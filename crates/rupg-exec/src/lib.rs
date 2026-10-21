@@ -180,7 +180,7 @@ fn check(expr: &Expr) -> Result<()> {
         }
         ExprKind::Subscript(sub) => {
             check(&sub.container)?;
-            sub.bounds().try_for_each(check)?;
+            sub.bounds().chain(&sub.assign).try_for_each(check)?;
         }
         ExprKind::Bool(_, args) | ExprKind::Coalesce(args) => args.iter().try_for_each(check)?,
         ExprKind::Case(case) => {
@@ -2335,6 +2335,9 @@ impl<'a> Eval<'a> {
 
     /// `ExecEvalSubscriptingRef` for a fetch from an array. A null array gives null before the subscripts run, and a null subscript gives null.
     fn subscript(&mut self, sub: &Subscript) -> Result<Value> {
+        if let Some(assign) = &sub.assign {
+            return self.subscript_assign(sub, assign);
+        }
         let array = match self.eval(&sub.container)? {
             Value::Null => return Ok(Value::Null),
             Value::Array(array) => array,
@@ -2354,6 +2357,60 @@ impl<'a> Eval<'a> {
         } else {
             array_element(&array, &upper)
         })
+    }
+
+    /// `ExecEvalSubscriptingRef` for an assignment to an element or a slice of an array: the array with the new value. A null array is the empty array, and a null subscript is an error. A null value for a slice leaves the array as it is.
+    fn subscript_assign(&mut self, sub: &Subscript, assign: &Expr) -> Result<Value> {
+        let array = match self.eval(&sub.container)? {
+            Value::Null => Array::empty(),
+            Value::Array(array) => *array,
+            Value::Text(_) => {
+                return Err(Error::new(
+                    SqlState::FEATURE_NOT_SUPPORTED,
+                    "an assignment to an element of a fixed-length array is not supported yet",
+                ));
+            }
+            _ => return Err(Error::internal("the container of a SubscriptingRef is not an array")),
+        };
+        let upper = self.assign_subscripts(&sub.upper)?;
+        let lower = match &sub.lower {
+            Some(lower) => Some(self.assign_subscripts(lower)?),
+            None => None,
+        };
+        let value = self.eval(assign)?;
+        let array = match lower {
+            Some(lower) => match value {
+                Value::Null => array,
+                Value::Array(source) => array.set_slice(&lower, &upper, *source)?,
+                _ => return Err(Error::internal("the source of a slice is not an array")),
+            },
+            None => {
+                let upper: Vec<i32> = upper.into_iter().flatten().collect();
+                array.set_element(&upper, (!value.is_null()).then_some(value))?
+            }
+        };
+        Ok(Value::Array(Box::new(array)))
+    }
+
+    /// `array_subscript_check_subscripts` for an assignment: the values of the subscripts of one bound, with `None` for a bound that the query does not give.
+    fn assign_subscripts(&mut self, list: &[Option<Expr>]) -> Result<Vec<Option<i32>>> {
+        let mut out = Vec::with_capacity(list.len());
+        for item in list {
+            out.push(match item {
+                Some(expr) => match self.eval(expr)? {
+                    Value::Int4(n) => Some(n),
+                    Value::Null => {
+                        return Err(Error::new(
+                            SqlState::NULL_VALUE_NOT_ALLOWED,
+                            "array subscript in assignment must not be null",
+                        ));
+                    }
+                    _ => return Err(Error::internal("a subscript is not an int4")),
+                },
+                None => None,
+            });
+        }
+        Ok(out)
     }
 
     /// A fetch from a `name`, which `raw_array_subscript_handler` reads as a fixed-length array of 64 `"char"` elements from 0. The bytes after the name are zero. A subscript out of the array or more than one subscript gives null. A slice is an error after its subscripts, as in `array_get_slice`.

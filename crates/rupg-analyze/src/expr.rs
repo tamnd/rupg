@@ -108,7 +108,7 @@ pub struct JoinRow {
     pub fields: Vec<Expr>,
 }
 
-/// The parts of a fetch from an array, as `SubscriptingRef`.
+/// The parts of a fetch from an array or of an assignment to a part of an array, as `SubscriptingRef`.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Subscript {
     /// `refexpr`: the array.
@@ -117,6 +117,8 @@ pub struct Subscript {
     pub upper: Vec<Option<Expr>>,
     /// `reflowerindexpr`: the lower bound of each dimension of a slice, or `None` for one element.
     pub lower: Option<Vec<Option<Expr>>>,
+    /// `refassgnexpr`: the new value of the element or of the slice in an assignment, as `a[1] := 5` of PL/pgSQL makes it. The result of an assignment is the array with the new value.
+    pub assign: Option<Expr>,
 }
 
 impl Subscript {
@@ -784,7 +786,9 @@ impl Expr {
             | ExprKind::BooleanTest(arg, _)
             | ExprKind::FieldSelect(arg, _) => vec![&**arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&**arg, &**element],
-            ExprKind::Subscript(sub) => sub.bounds().chain([&sub.container]).collect(),
+            ExprKind::Subscript(sub) => {
+                sub.bounds().chain([&sub.container]).chain(&sub.assign).collect()
+            }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)
             | ExprKind::Row(args, _)
@@ -842,9 +846,9 @@ impl Expr {
             | ExprKind::FieldSelect(arg, _) => vec![&mut **arg],
             ExprKind::ArrayCoerce { arg, element, .. } => vec![&mut **arg, &mut **element],
             ExprKind::Subscript(sub) => {
-                let Subscript { container, upper, lower } = &mut **sub;
+                let Subscript { container, upper, lower, assign } = &mut **sub;
                 let bounds = upper.iter_mut().chain(lower.iter_mut().flatten()).flatten();
-                bounds.chain([container]).collect()
+                bounds.chain([container]).chain(assign).collect()
             }
             ExprKind::Bool(_, args)
             | ExprKind::Coalesce(args)

@@ -142,6 +142,8 @@ pub(crate) enum Mode {
     Statement,
     /// The value of an assignment, whose context shows the whole assignment.
     Assign,
+    /// `RAW_PARSE_PLPGSQL_ASSIGNn`: the whole assignment to a part of a variable, as `x[1] := 5`, with the number of the names of the target. The value of the query is the new value of the variable.
+    Part(usize),
 }
 
 /// An expression or a statement of SQL in the function, `PLpgSQL_expr`.
@@ -214,8 +216,6 @@ pub(crate) enum Target {
     Datum(usize),
     /// A field of a record.
     Field(usize, String),
-    /// An element of an array, with a subscript for each dimension.
-    Element(usize, Vec<Expr>),
 }
 
 /// The query of a `FOR` loop over rows and of `RETURN QUERY`.
