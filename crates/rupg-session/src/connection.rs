@@ -5291,6 +5291,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/join_search.test")));
     }
 
+    /// `EXPLAIN` of plans whose rows do not fit in `work_mem`: a sort on disk, a `Materialize` that writes its rows to disk, a merge join whose sorted inner side gets a `Materialize`, and a hash join in batches. The width of each side is the width of the columns that the nodes above it read. `connection/plan_widths.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_widths() {
+        big_stack(|| script(include_str!("connection/plan_widths.test")));
+    }
+
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_constraintdef() {

@@ -393,7 +393,8 @@ impl<'q> Builder<'q> {
                 let hashable = op.groups.iter().all(|g| g.hashable);
                 let hash_startup = c.total + cost::CPU_OPERATOR * c.rows * columns as f64;
                 let hash_total = hash_startup + cost::CPU_TUPLE * rows;
-                let (sort_startup, sort_total) = cost::sort((c.startup, c.total), c.rows, None);
+                let (sort_startup, sort_total) =
+                    cost::sort((c.startup, c.total), c.rows, c.width, None);
                 let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * columns as f64;
                 let keys = self.leaf_items(level, op);
                 // The keys show with the names of the leftmost `SELECT`.
@@ -529,7 +530,7 @@ fn aggregate<'q>(level: &Level<'q>, input: Node<'q>, order: &mut Vec<OrderKey>) 
     let (sorted_input, sorted_order) = if satisfies(order, &sort_keys) {
         (c, order.clone())
     } else {
-        let (startup, total) = cost::sort((c.startup, c.total), n, None);
+        let (startup, total) = cost::sort((c.startup, c.total), n, c.width, None);
         (Cost { startup, total, ..c }, sorted_order(&sort_keys))
     };
     let sorted_total = sorted_input.total
@@ -853,7 +854,7 @@ fn distinct<'q>(level: &Level<'q>, input: Node<'q>, order: &mut Vec<OrderKey>) -
     let (sort_startup, sort_total) = if presorted {
         (c.startup, c.total)
     } else {
-        cost::sort((c.startup, c.total), c.rows, None)
+        cost::sort((c.startup, c.total), c.rows, c.width, None)
     };
     let unique_total = sort_total + cost::CPU_OPERATOR * c.rows * ncols as f64;
     let hashable = !query.distinct_on && query.distinct.iter().all(|d| d.hashable);
@@ -863,7 +864,7 @@ fn distinct<'q>(level: &Level<'q>, input: Node<'q>, order: &mut Vec<OrderKey>) -
     let hash_after = if query.sort.is_empty() {
         hash_total
     } else {
-        cost::sort((hash_startup, hash_total), groups, None).1
+        cost::sort((hash_startup, hash_total), groups, c.width, None).1
     };
     if hashable && hash_after < unique_total {
         let items = query.distinct.iter().map(|d| Item::below(level.target(d.target))).collect();

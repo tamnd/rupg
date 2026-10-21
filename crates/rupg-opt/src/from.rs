@@ -6,15 +6,48 @@ mod search;
 use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
-use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Relation};
+use rupg_analyze::{BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Relation, Var};
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey};
 use rupg_types::{Value, oid};
 
 use crate::{Builder, Level, Member, cost, exprs, upper};
 
-/// The rows of each relation of the query before and after its conditions, as `tuples` and `rows` of its `RelOptInfo`.
-type Stats = BTreeMap<usize, (f64, f64)>;
+/// The estimates of the relations of a query level for the costs of the joins.
+#[derive(Debug, Default)]
+struct Stats {
+    /// The rows of each relation before and after its conditions, as `tuples` and `rows` of its `RelOptInfo`.
+    rows: BTreeMap<usize, (f64, f64)>,
+    /// Each column that the query reads, with its width and the relations of the places that read it, as `attr_needed`. The target list of the query is `usize::MAX`.
+    needed: Vec<(Var, i32, BTreeSet<usize>)>,
+}
+
+impl Stats {
+    /// Adds the columns of an expression that a place with these relations reads.
+    fn need(&mut self, expr: &Expr, depth: usize, at: &BTreeSet<usize>, relations: &[Relation]) {
+        let mut columns = Vec::new();
+        exprs::columns_at(expr, depth, &mut columns);
+        for column in columns {
+            let ExprKind::Var(var) = column.kind else { continue };
+            match self.needed.iter_mut().find(|(v, _, _)| *v == var) {
+                Some((_, _, places)) => places.extend(at.iter().copied()),
+                None => {
+                    let width = cost::expr_width(&column, relations);
+                    self.needed.push((var, width, at.clone()));
+                }
+            }
+        }
+    }
+
+    /// The width of the rows of a join of relations, as `build_joinrel_tlist` and `set_rel_width` find it: the columns of the relations that a place outside the join reads.
+    fn width(&self, rels: &BTreeSet<usize>) -> i32 {
+        self.needed
+            .iter()
+            .filter(|(v, _, places)| rels.contains(&v.relation) && !places.is_subset(rels))
+            .map(|(_, width, _)| width)
+            .sum()
+    }
+}
 
 /// A condition of `WHERE` or of `ON` with the relations that it reads, as a `RestrictInfo`.
 #[derive(Clone, Debug)]
@@ -149,7 +182,8 @@ impl<'q> Builder<'q> {
         if !classes::domain(&mut tree, true, &mut found) {
             return (dummy(level.scope, &all), Vec::new(), Vec::new());
         }
-        let mut stats = Stats::new();
+        let mut stats = Stats::default();
+        needed(level, &mut stats);
         let rel = self.build(level, tree, &found.spans, &mut stats);
         let mut node = rel.node;
         if !gating.is_empty() {
@@ -264,10 +298,11 @@ impl<'q> Builder<'q> {
             },
         };
         let rows = cost::clamp_rows(tuples * selectivity);
-        stats.insert(r, (tuples, rows));
+        stats.rows.insert(r, (tuples, rows));
         let mut node = Node::new(kind, level.scope, children);
         node.filter = quals.iter().map(|q| q.item()).collect();
-        node.cost = Cost { startup, total: startup + run + tuples * per_row, rows, width: 0 };
+        let width = stats.width(&BTreeSet::from([r]));
+        node.cost = Cost { startup, total: startup + run + tuples * per_row, rows, width };
         Rel { node, rels: BTreeSet::from([r]), order: Vec::new() }
     }
 }
@@ -296,8 +331,12 @@ fn members_scan<'q>(
         rows += n;
         children.push(node);
     }
-    stats.insert(r, (tuples, rows));
+    stats.rows.insert(r, (tuples, rows));
     let rels = BTreeSet::from([r]);
+    let width = stats.width(&rels);
+    for child in &mut children {
+        child.cost.width = width;
+    }
     let node = match children.len() {
         0 => dummy(level.scope, &rels),
         1 => children.remove(0),
@@ -307,11 +346,48 @@ fn members_scan<'q>(
             let total: f64 = children.iter().map(|c| c.cost.total).sum::<f64>()
                 + cost::CPU_TUPLE * cost::APPEND_CPU * rows;
             let mut node = Node::new(Kind::Append, level.scope, children);
-            node.cost = Cost { startup, total, rows, width: 0 };
+            node.cost = Cost { startup, total, rows, width };
             node
         }
     };
     Rel { node, rels, order: Vec::new() }
+}
+
+/// The columns that each place of a query level reads, as `build_base_rel_tlists`, `distribute_qual_to_rels` and `find_lateral_references` set `attr_needed`: the target list, the conditions of `WHERE` and of `ON`, and the lateral references.
+fn needed(level: &Level<'_>, stats: &mut Stats) {
+    let query = level.query;
+    let relations = &query.relations;
+    let top = BTreeSet::from([usize::MAX]);
+    for target in &query.targets {
+        stats.need(&target.expr, 0, &top, relations);
+    }
+    let (to_where, keep) = upper::having_split(query);
+    for part in keep {
+        stats.need(part, 0, &top, relations);
+    }
+    let mut parts = to_where;
+    if let Some(filter) = &query.filter {
+        exprs::and_parts(filter, &mut parts);
+    }
+    let mut items: Vec<&FromItem> = query.from.iter().collect();
+    while let Some(item) = items.pop() {
+        if let FromItem::Join(join) = item {
+            if let Some(on) = &join.on {
+                exprs::and_parts(on, &mut parts);
+            }
+            items.extend([&join.left, &join.right]);
+        }
+    }
+    for part in parts {
+        stats.need(part, 0, &exprs::relations(part), relations);
+    }
+    for (r, relation) in relations.iter().enumerate() {
+        for (expr, depth) in lateral_exprs(relation) {
+            let mut at = exprs::relations_at(expr, depth);
+            at.insert(r);
+            stats.need(expr, depth, &at, relations);
+        }
+    }
 }
 
 /// The tree of a part of `FROM`. A right join is a left join with the sides in the other order.
@@ -600,22 +676,37 @@ fn clause<'q>(
     None
 }
 
-/// The number of distinct values of an expression with no statistics, as `get_variable_numdistinct`: the rows of a small table, or else 200, and at most the rows of the relation after its conditions. The flag is true for the default.
-fn distinct(expr: &Expr, stats: &Stats) -> (f64, bool) {
-    if let ExprKind::Var(var) = expr.strip_implicit().kind
-        && var.levels_up == 0
-        && let Some(&(tuples, rows)) = stats.get(&var.relation)
+/// The number of distinct values of an expression with no statistics, as `get_variable_numdistinct`, and the tuples and the rows of the relation when the expression reads one relation. A `boolean` has 2 values, `tableoid` has 1 and the other system columns are unique. A small table has as many values as tuples, and the others have 200. The flag is true for the default.
+fn numdistinct(expr: &Expr, stats: &Stats) -> (f64, bool, Option<(f64, f64)>) {
+    let rels = exprs::relations(expr);
+    let rel = match (rels.len(), rels.first()) {
+        (1, Some(r)) => stats.rows.get(r).copied(),
+        _ => None,
+    };
+    let known = if expr.ty == oid::BOOL {
+        Some(2.0)
+    } else if let ExprKind::Var(var) = expr.strip_implicit().kind
+        && var.attnum < 0
     {
-        if var.attnum < 0 && var.attnum != -6 {
-            // A system column other than `tableoid` is unique.
-            return (rows, false);
+        // `tableoid` has one value in a relation, and the other system columns are unique.
+        if var.attnum == -6 { Some(1.0) } else { rel.map(|(tuples, _)| tuples) }
+    } else {
+        None
+    };
+    let nd = match (known, rel) {
+        (Some(nd), _) => (cost::clamp_rows(nd), false),
+        (None, Some((tuples, _))) if tuples > 0.0 && tuples < cost::NUM_DISTINCT => {
+            (cost::clamp_rows(tuples), false)
         }
-        if tuples < cost::NUM_DISTINCT {
-            return (cost::clamp_rows(tuples).min(rows.max(1.0)), false);
-        }
-        return (cost::NUM_DISTINCT.min(rows.max(1.0)), true);
-    }
-    (cost::NUM_DISTINCT, true)
+        _ => (cost::NUM_DISTINCT, true),
+    };
+    (nd.0, nd.1, rel)
+}
+
+/// The number of distinct values of an expression with no statistics, at most the rows of its relation after the conditions. The flag is true for the default.
+fn distinct(expr: &Expr, stats: &Stats) -> (f64, bool) {
+    let (nd, default, rel) = numdistinct(expr, stats);
+    (rel.map_or(nd, |(_, rows)| nd.min(rows.max(1.0))), default)
 }
 
 /// The selectivity of a condition of a join: `1 / max(nd1, nd2)` for an `=` of a value of each side, as `eqjoinsel` with no statistics, or else the selectivity of the condition.
@@ -649,7 +740,9 @@ fn keeps_rows(kind: &Kind<'_>) -> bool {
 fn rescan(node: &Node<'_>) -> (f64, f64) {
     let c = node.cost;
     match node.kind {
-        Kind::Materialize | Kind::Sort(_) => (0.0, cost::CPU_OPERATOR * c.rows),
+        Kind::Materialize | Kind::Sort(_) => {
+            (0.0, cost::CPU_OPERATOR * c.rows + cost::spill(c.rows, c.width))
+        }
         Kind::FunctionScan(_)
         | Kind::TableFunctionScan(_)
         | Kind::CteScan(_)
@@ -658,19 +751,27 @@ fn rescan(node: &Node<'_>) -> (f64, f64) {
     }
 }
 
-/// A `Material` node over a node, as `cost_material`.
+/// A `Material` node over a node, as `cost_material`. The rows go to disk when they do not fit in `work_mem`.
 pub(crate) fn materialize(child: Node<'_>) -> Node<'_> {
     let c = child.cost;
+    let total = c.total + 2.0 * cost::CPU_OPERATOR * c.rows + cost::spill(c.rows, c.width);
     let mut node = Node::new(Kind::Materialize, child.scope, vec![child]);
-    node.cost =
-        Cost { startup: c.startup, total: c.total + 2.0 * cost::CPU_OPERATOR * c.rows, ..c };
+    node.cost = Cost { startup: c.startup, total, ..c };
+    node
+}
+
+/// The `Material` node over the inner side of a merge join, as `create_mergejoin_plan` makes it: one `cpu_operator_cost` for each row.
+fn merge_materialize(child: Node<'_>) -> Node<'_> {
+    let c = child.cost;
+    let mut node = Node::new(Kind::Materialize, child.scope, vec![child]);
+    node.cost = Cost { total: c.total + cost::CPU_OPERATOR * c.rows, ..c };
     node
 }
 
 /// A `Sort` of a node on keys, as `cost_sort`.
 pub(crate) fn sort<'q>(child: Node<'q>, keys: Vec<SortKey<'q>>, bound: Option<f64>) -> Node<'q> {
     let c = child.cost;
-    let (startup, total) = cost::sort((c.startup, c.total), c.rows, bound);
+    let (startup, total) = cost::sort((c.startup, c.total), c.rows, c.width, bound);
     let mut node = Node::new(Kind::Sort(keys), child.scope, vec![child]);
     node.cost = Cost { startup, total, ..c };
     node
@@ -752,12 +853,16 @@ fn join_rels<'q>(
     let rows = join_rows(kind, &left, &right, &quals, &filter, stats);
     let mut quals = quals;
     quals.sort_by_key(|q| exprs::calls(&q.expr));
-    let Some(best) = choose(level, kind, &left, &right, &quals, &filter, stats) else {
-        let mut rels = left.rels.clone();
-        rels.extend(right.rels.iter().copied());
-        return nested_join(level, kind, left, right, quals, filter, rows, rels);
+    let mut out = match choose(level, kind, &left, &right, &quals, &filter, stats) {
+        Some(best) => finish(level, &best, left, right, &quals, &filter, rows),
+        None => {
+            let mut rels = left.rels.clone();
+            rels.extend(right.rels.iter().copied());
+            nested_join(level, kind, left, right, quals, filter, rows, rels)
+        }
     };
-    finish(level, &best, left, right, &quals, &filter, rows)
+    out.node.cost.width = stats.width(&out.rels);
+    out
 }
 
 /// The rows of a join of two sides, as `calc_joinrel_size_estimate`.
@@ -968,8 +1073,9 @@ fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
     let o = input.outer.node.cost;
     let (inner, rescan) = if materialize {
         let i = input.inner.node.cost;
-        let total = i.total + 2.0 * cost::CPU_OPERATOR * i.rows;
-        (Cost { total, ..i }, (0.0, cost::CPU_OPERATOR * i.rows))
+        let spill = cost::spill(i.rows, i.width);
+        let total = i.total + 2.0 * cost::CPU_OPERATOR * i.rows + spill;
+        (Cost { total, ..i }, (0.0, cost::CPU_OPERATOR * i.rows + spill))
     } else {
         (input.inner.node.cost, rescan(&input.inner.node))
     };
@@ -993,17 +1099,39 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
     }
     let (o, i) = (input.outer.node.cost, input.inner.node.cost);
     let n = clauses.len() as f64;
-    let startup = o.startup + i.total + (cost::CPU_OPERATOR * n + cost::CPU_TUPLE) * i.rows;
+    let mut startup = o.startup + i.total + (cost::CPU_OPERATOR * n + cost::CPU_TUPLE) * i.rows;
     let mut run = o.total - o.startup + cost::CPU_OPERATOR * n * o.rows;
-    // `estimate_hash_bucket_stats`: the fraction of the inner rows in a bucket, 0.1 with no statistics.
+    let (buckets, batches) = cost::hash_table(i.rows, i.width);
+    if batches > 1.0 {
+        // A join in batches writes the inner rows to disk and reads them again, and writes and reads the outer rows of the later batches.
+        let (outer_pages, inner_pages) =
+            (cost::page_count(o.rows, o.width), cost::page_count(i.rows, i.width));
+        startup += cost::SEQ_PAGE * inner_pages;
+        run += cost::SEQ_PAGE * (inner_pages + 2.0 * outer_pages);
+    }
+    // `estimate_hash_bucket_stats`: the fraction of the inner rows in a bucket of all the batches, 0.1 with no statistics.
+    let virtual_buckets = buckets * batches;
     let bucket = clauses
         .iter()
-        .map(|c| match distinct(&c.inner, input.stats) {
-            (_, true) => 0.1,
-            (nd, false) => 1.0 / nd.clamp(1.0, 1024.0).max(1.0),
+        .map(|c| match numdistinct(&c.inner, input.stats) {
+            (_, true, _) => 0.1,
+            (nd, false, rel) => {
+                // The conditions of the relation take away values in the same fraction as rows.
+                let nd = match rel {
+                    Some((tuples, rows)) if tuples > 0.0 => cost::clamp_rows(nd * rows / tuples),
+                    _ => nd,
+                };
+                (1.0 / nd.clamp(1.0, virtual_buckets)).max(1.0e-6)
+            }
         })
         .fold(1.0, f64::min);
-    run += cost::CPU_OPERATOR * n * o.rows * cost::clamp_rows(i.rows * bucket) * 0.5;
+    // With no statistics, the most common value of the inner side can be all of its rows. The bucket of that value must fit in `hash_mem`, because more batches cannot split it. A hash join that does not fit costs `disable_cost` more, so that the planner uses it only when it has no other plan.
+    if cost::byte_size(i.rows, i.width) > cost::HASH_MEM {
+        startup += cost::DISABLE;
+    }
+    // The conditions of the hash cost as `cost_qual_eval` finds them for each row that a bucket has.
+    let qual_cost = cost::qual_cost(clauses.iter().map(|c| &*c.item.expr));
+    run += qual_cost * o.rows * cost::clamp_rows(i.rows * bucket) * 0.5;
     let per_tuple =
         cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
     run += per_tuple * tuple_count(input, &clauses);
@@ -1038,7 +1166,11 @@ fn merge_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>
     let sort_inner = !ordered(&input.inner.order, &inner_values);
     let side = |rel: &Rel<'_>, sorted: bool| {
         let c = rel.node.cost;
-        if sorted { cost::sort((c.startup, c.total), c.rows, None) } else { (c.startup, c.total) }
+        if sorted {
+            cost::sort((c.startup, c.total), c.rows, c.width, None)
+        } else {
+            (c.startup, c.total)
+        }
     };
     let (o, i) = (side(input.outer, sort_outer), side(input.inner, sort_inner));
     let (outer_rows, inner_rows) = (input.outer.node.cost.rows, input.inner.node.cost.rows);
@@ -1050,16 +1182,18 @@ fn merge_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>
     let mut run = o.1 - o.0;
     let material = inner_run + cost::CPU_OPERATOR * inner_rows * ratio;
     let bare = inner_run * ratio;
-    // The inner side needs a `Material` node when it is cheaper, or when its node cannot go back to a row that it gave, as `ExecSupportsMarkRestore`.
+    // The inner side needs a `Material` node when it is cheaper, when its node cannot go back to a row that it gave, as `ExecSupportsMarkRestore`, or when its sort does not fit in `work_mem`.
+    let inner_cost = input.inner.node.cost;
     let materialize = material < bare
         || !sort_inner
             && !matches!(
                 input.inner.node.kind,
                 Kind::Sort(_) | Kind::Materialize | Kind::Result { .. }
-            );
+            )
+        || sort_inner && cost::byte_size(inner_cost.rows, inner_cost.width) > cost::WORK_MEM;
     run += if materialize { material } else { bare };
-    let n = clauses.len() as f64;
-    run += cost::CPU_OPERATOR * n * (outer_rows + inner_rows * ratio);
+    run +=
+        cost::qual_cost(clauses.iter().map(|c| &*c.item.expr)) * (outer_rows + inner_rows * ratio);
     let per_tuple =
         cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
     run += per_tuple * tuples;
@@ -1150,7 +1284,7 @@ impl<'q> Candidate<'q> {
                     inner.node
                 };
                 if self.materialize {
-                    inner_node = materialize(inner_node);
+                    inner_node = merge_materialize(inner_node);
                 }
                 let cond = clauses.into_iter().map(|c| c.item).collect();
                 let join_filter = other.iter().map(|q| q.item()).collect();

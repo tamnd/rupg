@@ -26,6 +26,22 @@ pub(crate) const EQ_SEL: f64 = 0.005;
 const INEQ_SEL: f64 = 1.0 / 3.0;
 /// `DEFAULT_NUM_DISTINCT`.
 pub(crate) const NUM_DISTINCT: f64 = 200.0;
+/// `disable_cost`: the cost that a plan gets when the planner should use it only when it has no other plan.
+pub(crate) const DISABLE: f64 = 1.0e10;
+/// `random_page_cost`.
+const RANDOM_PAGE: f64 = 4.0;
+/// `work_mem`, in bytes.
+pub(crate) const WORK_MEM: f64 = 4.0 * 1024.0 * 1024.0;
+/// `get_hash_memory_limit`: `work_mem` times `hash_mem_multiplier`, in bytes.
+pub(crate) const HASH_MEM: f64 = 2.0 * WORK_MEM;
+/// `BLCKSZ`.
+const BLOCK: f64 = 8192.0;
+/// `MAXALIGN(SizeofHeapTupleHeader)`.
+const TUPLE_HEADER: i32 = 24;
+/// `sizeof(HashJoinTuple)`.
+const POINTER: f64 = 8.0;
+/// `tuplesort_merge_order(work_mem)`: the number of runs that a pass of a merge sort reads.
+const MERGE_ORDER: f64 = 15.0;
 
 /// `get_typavgwidth`: the average width of a value of a type with a typmod.
 pub(crate) fn type_width(ty: u32, typmod: i32) -> i32 {
@@ -137,17 +153,82 @@ pub(crate) fn qual_cost<'a>(quals: impl IntoIterator<Item = &'a Expr>) -> f64 {
     quals.into_iter().map(|q| CPU_OPERATOR * exprs::calls(q) as f64).sum()
 }
 
-/// `cost_sort`: the costs of a sort of `rows` rows that has the input costs `input`, with the number of rows of `LIMIT` when it has one.
-pub(crate) fn sort(input: (f64, f64), rows: f64, bound: Option<f64>) -> (f64, f64) {
+/// `relation_byte_size`: the bytes of rows of a width, with the header of each row.
+pub(crate) fn byte_size(rows: f64, width: i32) -> f64 {
+    rows * f64::from(maxalign(width) + TUPLE_HEADER)
+}
+
+/// `page_size`: the pages of rows of a width.
+pub(crate) fn page_count(rows: f64, width: i32) -> f64 {
+    (byte_size(rows, width) / BLOCK).ceil()
+}
+
+/// `MAXALIGN`.
+fn maxalign(n: i32) -> i32 {
+    (n + 7) & !7
+}
+
+/// The cost to write rows of a width to disk and to read them again when they do not fit in `work_mem`, as `cost_material` and `cost_rescan` find it.
+pub(crate) fn spill(rows: f64, width: i32) -> f64 {
+    if byte_size(rows, width) > WORK_MEM { SEQ_PAGE * page_count(rows, width) } else { 0.0 }
+}
+
+/// `cost_sort` and `cost_tuplesort`: the costs of a sort of `rows` rows of a width that has the input costs `input`, with the number of rows of `LIMIT` when it has one. A sort that does not fit in `work_mem` is a merge sort on disk.
+pub(crate) fn sort(input: (f64, f64), rows: f64, width: i32, bound: Option<f64>) -> (f64, f64) {
+    let input_bytes = byte_size(rows, width);
     let tuples = rows.max(2.0);
     let comparison = 2.0 * CPU_OPERATOR;
-    let startup = match bound {
-        Some(bound) if bound > 0.0 && tuples > 2.0 * bound => {
-            input.1 + comparison * tuples * (2.0 * bound).log2()
-        }
-        _ => input.1 + comparison * tuples * tuples.log2(),
+    let (output, output_bytes) = match bound {
+        Some(bound) if bound > 0.0 && bound < tuples => (bound, byte_size(bound, width)),
+        _ => (tuples, input_bytes),
     };
+    let startup = if output_bytes > WORK_MEM {
+        let pages = (input_bytes / BLOCK).ceil();
+        let runs = input_bytes / WORK_MEM;
+        let log_runs = if runs > MERGE_ORDER { (runs.ln() / MERGE_ORDER.ln()).ceil() } else { 1.0 };
+        // Each pass reads and writes each page, and a quarter of the reads are random.
+        let accesses = 2.0 * pages * log_runs;
+        comparison * tuples * tuples.log2() + accesses * (SEQ_PAGE * 0.75 + RANDOM_PAGE * 0.25)
+    } else if tuples > 2.0 * output || input_bytes > WORK_MEM {
+        comparison * tuples * (2.0 * output).log2()
+    } else {
+        comparison * tuples * tuples.log2()
+    };
+    let startup = input.1 + startup;
     (startup, startup + CPU_OPERATOR * tuples)
+}
+
+/// `ExecChooseHashTableSize`: the number of buckets and of batches of the hash table of a hash join on rows of a width, with the space for the buckets of the most common values.
+pub(crate) fn hash_table(rows: f64, width: i32) -> (f64, f64) {
+    let rows = if rows <= 0.0 { 1000.0 } else { rows };
+    // `HJTUPLE_OVERHEAD` and `MAXALIGN(SizeofMinimalTupleHeader)`.
+    let tuple = 32.0 + f64::from(maxalign(width));
+    let bytes = rows * tuple;
+    let mut space = HASH_MEM;
+    // The skew buckets take two percent of the space: a tuple, eight pointers, an `int` and the `HashSkewBucket` for each.
+    let per_value = tuple + 64.0 + 4.0 + 16.0;
+    space -= ((space / per_value).floor() * 2.0 / 100.0).floor() * per_value;
+    let max_pointers = prev_power2((space / POINTER).floor());
+    let mut buckets = next_power2(rows.ceil().min(max_pointers).max(1024.0));
+    let mut batches = 1.0;
+    if bytes + POINTER * buckets > space {
+        let bucket = tuple + POINTER;
+        let fit = if space <= bucket { 1.0 } else { next_power2((space / bucket).floor()) };
+        buckets = next_power2(fit.min(max_pointers));
+        let needed = (bytes / (space - POINTER * buckets)).ceil().min(max_pointers);
+        batches = next_power2(needed.max(2.0));
+    }
+    (buckets, batches)
+}
+
+/// The smallest power of two that is at least a number.
+fn next_power2(n: f64) -> f64 {
+    2f64.powf(n.log2().ceil())
+}
+
+/// The largest power of two that is at most a number.
+fn prev_power2(n: f64) -> f64 {
+    2f64.powf(n.log2().floor())
 }
 
 /// `estimate_num_groups` with no statistics: the number of groups of the rows for a number of keys.

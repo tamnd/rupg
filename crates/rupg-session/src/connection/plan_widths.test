@@ -1,0 +1,521 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int, y int);
+CREATE TABLE
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int);
+CREATE TABLE
+> CREATE TABLE d (x int, y int);
+CREATE TABLE
+> CREATE TABLE t (s text, u text);
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, c, d WHERE a.x = b.x AND c.x = d.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (c.x = d.x)
+row   ->  Sort
+row         Sort Key: c.x
+row         ->  Seq Scan on c
+row   ->  Materialize
+row         ->  Sort
+row               Sort Key: d.x
+row               ->  Nested Loop
+row                     ->  Merge Join
+row                           Merge Cond: (a.x = b.x)
+row                           ->  Sort
+row                                 Sort Key: a.x
+row                                 ->  Seq Scan on a
+row                           ->  Sort
+row                                 Sort Key: b.x
+row                                 ->  Seq Scan on b
+row                     ->  Materialize
+row                           ->  Seq Scan on d
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c, d WHERE a.x = b.x AND c.x = d.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=11713545.69..22896010.19 rows=735877470 width=28)
+row   Merge Cond: (c.x = d.x)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Materialize  (cost=11713365.91..12001945.31 rows=57715880 width=24)
+row         ->  Sort  (cost=11713365.91..11857655.61 rows=57715880 width=24)
+row               Sort Key: d.x
+row               ->  Nested Loop  (cost=317.01..722198.13 rows=57715880 width=24)
+row                     ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row                           Merge Cond: (a.x = b.x)
+row                           ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                                 Sort Key: a.x
+row                                 ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row                           ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                                 Sort Key: b.x
+row                                 ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row                     ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row                           ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM a, b, generate_series(1, a.x) g WHERE b.x = g;
+fields QUERY PLAN:25:-1:-1
+row Merge Join
+row   Merge Cond: (b.x = g.g)
+row   ->  Sort
+row         Sort Key: b.x
+row         ->  Seq Scan on b
+row   ->  Materialize
+row         ->  Sort
+row               Sort Key: g.g
+row               ->  Nested Loop
+row                     ->  Seq Scan on a
+row                     ->  Function Scan on generate_series g
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, generate_series(1, a.x) g WHERE b.x = g;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=361162.28..749893.58 rows=25538000 width=20)
+row   Merge Cond: (b.x = g.g)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=361003.77..372303.77 rows=2260000 width=12)
+row         ->  Sort  (cost=361003.77..366653.77 rows=2260000 width=12)
+row               Sort Key: g.g
+row               ->  Nested Loop  (cost=0.00..45232.60 rows=2260000 width=12)
+row                     ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row                     ->  Function Scan on generate_series g  (cost=0.00..10.00 rows=1000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b ORDER BY a.x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=807590.11..820359.11 rows=5107600 width=16)
+row   Sort Key: a.x
+row   ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=16)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT a.x FROM a, b ORDER BY a.x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=772674.11..785443.11 rows=5107600 width=4)
+row   Sort Key: a.x
+row   ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=4)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=0)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b ORDER BY a.x LIMIT 10;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=174289.25..174289.27 rows=10 width=16)
+row   ->  Sort  (cost=174289.25..187058.25 rows=5107600 width=16)
+row         Sort Key: a.x
+row         ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=16)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b ORDER BY a.x LIMIT 100000;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=513630.85..513880.85 rows=100000 width=16)
+row   ->  Sort  (cost=513630.85..526399.85 rows=5107600 width=16)
+row         Sort Key: a.x
+row         ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=16)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b ORDER BY a.x LIMIT 200000;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=807590.11..808090.11 rows=200000 width=16)
+row   ->  Sort  (cost=807590.11..820359.11 rows=5107600 width=16)
+row         Sort Key: a.x
+row         ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=16)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..162868707.72 rows=13024380000 width=20)
+row   ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=16)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..48.25 rows=2550 width=4)
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.x FROM a, b, c;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..162868707.72 rows=13024380000 width=4)
+row   ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=4)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=0)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=0)
+row   ->  Materialize  (cost=0.00..48.25 rows=2550 width=0)
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, t;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..24913.60 rows=1988800 width=72)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..23.20 rows=880 width=64)
+row         ->  Seq Scan on t  (cost=0.00..18.80 rows=880 width=64)
+EXPLAIN
+> EXPLAIN SELECT * FROM t, a, b WHERE t.s = 'q';
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..255584.86 rows=20430400 width=80)
+row   ->  Nested Loop  (cost=0.00..166.61 rows=9040 width=72)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Materialize  (cost=0.00..21.02 rows=4 width=64)
+row               ->  Seq Scan on t  (cost=0.00..21.00 rows=4 width=64)
+row                     Filter: (s = 'q'::text)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, 1000000) g1 JOIN generate_series(1, 2000000) g2 ON g1 = g2;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=407339.03..150417339.03 rows=10000000000 width=8)
+row   Merge Cond: (g1.g1 = g2.g2)
+row   ->  Sort  (cost=123332.35..125832.35 rows=1000000 width=4)
+row         Sort Key: g1.g1
+row         ->  Function Scan on generate_series g1  (cost=0.00..10000.00 rows=1000000 width=4)
+row   ->  Materialize  (cost=284006.69..294006.69 rows=2000000 width=4)
+row         ->  Sort  (cost=284006.69..289006.69 rows=2000000 width=4)
+row               Sort Key: g2.g2
+row               ->  Function Scan on generate_series g2  (cost=0.00..20000.00 rows=2000000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, 300000) g1 JOIN generate_series(1, 2000000) g2 ON g1 = g2;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=318400.60..45324900.60 rows=3000000000 width=8)
+row   Merge Cond: (g1.g1 = g2.g2)
+row   ->  Sort  (cost=34393.91..35143.91 rows=300000 width=4)
+row         Sort Key: g1.g1
+row         ->  Function Scan on generate_series g1  (cost=0.00..3000.00 rows=300000 width=4)
+row   ->  Materialize  (cost=284006.69..294006.69 rows=2000000 width=4)
+row         ->  Sort  (cost=284006.69..289006.69 rows=2000000 width=4)
+row               Sort Key: g2.g2
+row               ->  Function Scan on generate_series g2  (cost=0.00..20000.00 rows=2000000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c WHERE a.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=317.01..814777.01 rows=65121900 width=20)
+row   ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row         Merge Cond: (a.x = b.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: a.x
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..48.25 rows=2550 width=4)
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN b ON a.x = b.x, c, d WHERE c.x = d.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=11713545.69..22896010.19 rows=735877470 width=28)
+row   Merge Cond: (c.x = d.y)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Materialize  (cost=11713365.91..12001945.31 rows=57715880 width=24)
+row         ->  Sort  (cost=11713365.91..11857655.61 rows=57715880 width=24)
+row               Sort Key: d.y
+row               ->  Nested Loop  (cost=317.01..722198.13 rows=57715880 width=24)
+row                     ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row                           Merge Cond: (a.x = b.x)
+row                           ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                                 Sort Key: a.x
+row                                 ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row                           ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                                 Sort Key: b.x
+row                                 ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row                     ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row                           ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a FULL JOIN b ON a.x = b.x, c;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=317.01..814777.01 rows=65121900 width=20)
+row   ->  Merge Full Join  (cost=317.01..711.38 rows=25538 width=16)
+row         Merge Cond: (a.x = b.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: a.x
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..48.25 rows=2550 width=4)
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.x, b.x FROM a, b GROUP BY 1, 2;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=89453.85..89853.85 rows=40000 width=8)
+row   Group Key: a.x, b.x
+row   ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=4)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT a.x, b.x FROM a, b;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=89453.85..89853.85 rows=40000 width=8)
+row   Group Key: a.x, b.x
+row   ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=4)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM generate_series(1, 1000000) g1 JOIN generate_series(1, 2000000) g2 ON g1 = g2;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=175417339.03..175417339.04 rows=1 width=8)
+row   ->  Merge Join  (cost=407339.03..150417339.03 rows=10000000000 width=0)
+row         Merge Cond: (g1.g1 = g2.g2)
+row         ->  Sort  (cost=123332.35..125832.35 rows=1000000 width=4)
+row               Sort Key: g1.g1
+row               ->  Function Scan on generate_series g1  (cost=0.00..10000.00 rows=1000000 width=4)
+row         ->  Materialize  (cost=284006.69..294006.69 rows=2000000 width=4)
+row               ->  Sort  (cost=284006.69..289006.69 rows=2000000 width=4)
+row                     Sort Key: g2.g2
+row                     ->  Function Scan on generate_series g2  (cost=0.00..20000.00 rows=2000000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, generate_series(1, 1000000) g WHERE a.x = g;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=123490.85..295502.15 rows=11300000 width=12)
+row   Merge Cond: (a.x = g.g)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: a.x
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=123332.35..128332.35 rows=1000000 width=4)
+row         ->  Sort  (cost=123332.35..125832.35 rows=1000000 width=4)
+row               Sort Key: g.g
+row               ->  Function Scan on generate_series g  (cost=0.00..10000.00 rows=1000000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c, d WHERE a.x = b.x AND c.x = d.x AND a.y = d.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=5497.03..60815.52 rows=3679382 width=28)
+row   Merge Cond: (a.y = d.y)
+row   ->  Sort  (cost=2580.81..2644.65 rows=25538 width=16)
+row         Sort Key: a.y
+row         ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=2916.22..2988.25 rows=28815 width=12)
+row         Sort Key: d.y
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row               Merge Cond: (d.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: d.x
+row                     ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.x FROM a, b, c, d WHERE a.x = b.x AND c.x = d.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=10529922.69..21712387.19 rows=735877470 width=4)
+row   Merge Cond: (c.x = d.x)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Materialize  (cost=10529742.91..10818322.31 rows=57715880 width=8)
+row         ->  Sort  (cost=10529742.91..10674032.61 rows=57715880 width=8)
+row               Sort Key: d.x
+row               ->  Nested Loop  (cost=317.01..722198.13 rows=57715880 width=8)
+row                     ->  Merge Join  (cost=317.01..711.38 rows=25538 width=4)
+row                           Merge Cond: (a.x = b.x)
+row                           ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row                                 Sort Key: a.x
+row                                 ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row                           ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row                                 Sort Key: b.x
+row                                 ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row                     ->  Materialize  (cost=0.00..43.90 rows=2260 width=4)
+row                           ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c WHERE a.x = b.x ORDER BY c.x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=13273032.40..13435837.15 rows=65121900 width=20)
+row   Sort Key: c.x
+row   ->  Nested Loop  (cost=317.01..814777.01 rows=65121900 width=20)
+row         ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Materialize  (cost=0.00..48.25 rows=2550 width=4)
+row               ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT a.y, b.y FROM a, b, c, d WHERE a.x = b.x AND c.x = d.x AND a.y < 5;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=3224825.66..6950716.78 rows=245186835 width=8)
+row   Merge Cond: (c.x = d.x)
+row   ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row         Sort Key: c.x
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row   ->  Materialize  (cost=3224645.87..3320797.57 rows=19230340 width=12)
+row         ->  Sort  (cost=3224645.87..3272721.72 rows=19230340 width=12)
+row               Sort Key: d.x
+row               ->  Nested Loop  (cost=232.74..240781.64 rows=19230340 width=12)
+row                     ->  Merge Join  (cost=232.74..364.14 rows=8509 width=8)
+row                           Merge Cond: (a.x = b.x)
+row                           ->  Sort  (cost=74.23..76.11 rows=753 width=8)
+row                                 Sort Key: a.x
+row                                 ->  Seq Scan on a  (cost=0.00..38.25 rows=753 width=8)
+row                                       Filter: (y < 5)
+row                           ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                                 Sort Key: b.x
+row                                 ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row                     ->  Materialize  (cost=0.00..43.90 rows=2260 width=4)
+row                           ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c, t WHERE a.x = b.x AND t.s = 'q';
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=317.01..3258146.17 rows=260487600 width=84)
+row   ->  Nested Loop  (cost=317.01..2009.29 rows=102152 width=80)
+row         ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row               Merge Cond: (a.x = b.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: a.x
+row                     ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Materialize  (cost=0.00..21.02 rows=4 width=64)
+row               ->  Seq Scan on t  (cost=0.00..21.00 rows=4 width=64)
+row                     Filter: (s = 'q'::text)
+row   ->  Materialize  (cost=0.00..48.25 rows=2550 width=4)
+row         ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> CREATE TABLE h (x xid, y int);
+CREATE TABLE
+> CREATE TABLE k (x xid, y int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM h, k WHERE h.x = k.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=37.00..549.85 rows=13560 width=48)
+row   Hash Cond: (h.x = k.x)
+row   ->  Seq Scan on h  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=22.00..22.00 rows=1200 width=40)
+row         ->  Seq Scan on k  (cost=0.00..22.00 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, h WHERE a.y = h.y AND h.x = b.x::text::xid;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=5574.66..9914.65 rows=288579 width=24)
+row   Merge Cond: (a.y = h.y)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: a.y
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=5416.16..5480.00 rows=25538 width=16)
+row         Sort Key: h.y
+row         ->  Hash Join  (cost=60.85..3546.73 rows=25538 width=16)
+row               Hash Cond: (((b.x)::text)::xid = h.x)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row                     ->  Seq Scan on h  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, h WHERE h.x = (a.x + b.x)::text::xid;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..9311286.50 rows=57715880 width=24)
+row   Hash Cond: ((((a.x + b.x))::text)::xid = h.x)
+row   ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=16)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on h  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, h, k WHERE h.x = k.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=37.00..866121896.35 rows=69259056000 width=64)
+row   ->  Nested Loop  (cost=37.00..383658.10 rows=30645600 width=56)
+row         ->  Hash Join  (cost=37.00..549.85 rows=13560 width=48)
+row               Hash Cond: (h.x = k.x)
+row               ->  Seq Scan on h  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=22.00..22.00 rows=1200 width=40)
+row                     ->  Seq Scan on k  (cost=0.00..22.00 rows=1200 width=40)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, h WHERE h.x = a.x::text::xid;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=60.85..725033.48 rows=57715880 width=24)
+row   ->  Hash Join  (cost=60.85..3546.73 rows=25538 width=16)
+row         Hash Cond: (((a.x)::text)::xid = h.x)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row               ->  Seq Scan on h  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..43.90 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT h.y FROM a, b, h WHERE h.x = (a.x + b.x)::text::xid;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..9311286.50 rows=57715880 width=4)
+row   Hash Cond: ((((a.x + b.x))::text)::xid = h.x)
+row   ->  Nested Loop  (cost=0.00..63915.85 rows=5107600 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Materialize  (cost=0.00..43.90 rows=2260 width=4)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on h  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, 1000000) g1 JOIN generate_series(1, 2000000) g2 ON g1::text::xid = g2::text::xid;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=10000026407.00..12350070940.00 rows=10000000000 width=8)
+row   Hash Cond: (((g2.g2)::text)::xid = ((g1.g1)::text)::xid)
+row   ->  Function Scan on generate_series g2  (cost=0.00..20000.00 rows=2000000 width=4)
+row   ->  Hash  (cost=10000.00..10000.00 rows=1000000 width=4)
+row         ->  Function Scan on generate_series g1  (cost=0.00..10000.00 rows=1000000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, 100) g1 JOIN generate_series(1, 2000000) g2 ON g1::text::xid = g2::text::xid;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=2.25..57502.25 rows=1000000 width=8)
+row   Hash Cond: (((g2.g2)::text)::xid = ((g1.g1)::text)::xid)
+row   ->  Function Scan on generate_series g2  (cost=0.00..20000.00 rows=2000000 width=4)
+row   ->  Hash  (cost=1.00..1.00 rows=100 width=4)
+row         ->  Function Scan on generate_series g1  (cost=0.00..1.00 rows=100 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, 300000) g1 JOIN generate_series(1, 2000000) g2 ON g1::text::xid = g2::text::xid;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=10000007922.00..10705049720.00 rows=3000000000 width=8)
+row   Hash Cond: (((g2.g2)::text)::xid = ((g1.g1)::text)::xid)
+row   ->  Function Scan on generate_series g2  (cost=0.00..20000.00 rows=2000000 width=4)
+row   ->  Hash  (cost=3000.00..3000.00 rows=300000 width=4)
+row         ->  Function Scan on generate_series g1  (cost=0.00..3000.00 rows=300000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, 30000) g1 JOIN generate_series(1, 30000) g2 ON g1::text::xid = g2::text::xid;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=675.00..1058550.00 rows=4500000 width=8)
+row   Hash Cond: (((g1.g1)::text)::xid = ((g2.g2)::text)::xid)
+row   ->  Function Scan on generate_series g1  (cost=0.00..300.00 rows=30000 width=4)
+row   ->  Hash  (cost=300.00..300.00 rows=30000 width=4)
+row         ->  Function Scan on generate_series g2  (cost=0.00..300.00 rows=30000 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM generate_series(1, 300000) g1 JOIN h ON g1::text::xid = h.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..461460.85 rows=3390000 width=12)
+row   Hash Cond: (((g1.g1)::text)::xid = h.x)
+row   ->  Function Scan on generate_series g1  (cost=0.00..3000.00 rows=300000 width=4)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on h  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, b, h WHERE h.x = a.x::text::xid AND h.y = b.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=5574.66..9914.65 rows=288579 width=24)
+row   Merge Cond: (b.y = h.y)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=5416.16..5480.00 rows=25538 width=16)
+row         Sort Key: h.y
+row         ->  Hash Join  (cost=60.85..3546.73 rows=25538 width=16)
+row               Hash Cond: (((a.x)::text)::xid = h.x)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row                     ->  Seq Scan on h  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN

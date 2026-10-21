@@ -90,7 +90,10 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             node.output = want.iter().map(Item::passed).collect();
             if let Some(child) = node.children.first_mut() {
+                // `prepare_sort_from_pathkeys`: a key that the node below computes for the sort does not count in its width.
+                let added = width(level, child.scope, &below[want.len()..]);
                 set(level, child, below, false);
+                child.cost.width -= added;
                 node.cost.width = child.cost.width;
             }
         }
