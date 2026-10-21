@@ -6,7 +6,7 @@ use rupg_catalog::{
     FIRST_NORMAL_OID, ObjRef, PG_TS_CONFIG, PG_TS_DICT, PG_TS_PARSER, PG_TS_TEMPLATE, TsConfig,
     TsDictionary, TsMapping, TsParser, TsTemplate, is_pinned,
 };
-use rupg_common::{Error, Result, SqlState};
+use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin::{self, Named};
 use rupg_sql::nodes::ObjectType;
 use rupg_sql::nodes::{
@@ -538,7 +538,10 @@ impl Definer<'_, '_> {
                     )
                     .with_detail(format!(
                         "Key (mapcfg, maptokentype, mapseqno)=({config}, {token}, {seqno}) already exists."
-                    )));
+                    ))
+                    .with_object(Object::Schema, "pg_catalog")
+                    .with_object(Object::Table, "pg_ts_config_map")
+                    .with_object(Object::Constraint, "pg_ts_config_map_index"));
                 }
             }
         }

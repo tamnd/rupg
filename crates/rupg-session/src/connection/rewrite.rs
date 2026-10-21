@@ -128,7 +128,8 @@ impl Connection {
                             "partition constraint of relation \"{name}\" is violated by some row"
                         )
                     };
-                    return Err(Error::new(SqlState::CHECK_VIOLATION, message));
+                    let error = Error::new(SqlState::CHECK_VIOLATION, message);
+                    return Err(rupg_func::with_table(error, leaf, &self.reader()));
                 }
             }
         }
@@ -282,23 +283,32 @@ impl Connection {
             for mut values in plan.run_unchecked(&row, &reader)? {
                 for (column, value) in now.columns.iter().zip(&values) {
                     if column.not_null && value.is_null() {
-                        return Err(Error::new(
+                        let error = Error::new(
                             SqlState::NOT_NULL_VIOLATION,
                             format!(
                                 "column \"{}\" of relation \"{}\" contains null values",
                                 column.name, now.name
                             ),
+                        );
+                        return Err(rupg_func::with_table_column(
+                            error,
+                            now.oid,
+                            &column.name,
+                            &reader,
                         ));
                     }
                 }
                 for &(at, name) in &checks {
                     if matches!(values.get(info.width + at), Some(Value::Bool(false))) {
-                        return Err(Error::new(
+                        let error = Error::new(
                             SqlState::CHECK_VIOLATION,
                             format!(
                                 "check constraint \"{name}\" of relation \"{}\" is violated by some row",
                                 now.name
                             ),
+                        );
+                        return Err(rupg_func::with_table_constraint(
+                            error, now.oid, name, &reader,
                         ));
                     }
                 }
@@ -326,11 +336,17 @@ impl Connection {
                         ));
                     };
                     let values = self.index_key_text(&unique.types, &key)?;
-                    return Err(Error::new(
+                    let error = Error::new(
                         SqlState::UNIQUE_VIOLATION,
                         format!("could not create unique index \"{}\"", unique.name),
                     )
-                    .with_detail(format!("Key ({})=({values}) is duplicated.", unique.shown)));
+                    .with_detail(format!("Key ({})=({values}) is duplicated.", unique.shown));
+                    return Err(rupg_func::with_table_constraint(
+                        error,
+                        rel.oid,
+                        &unique.name,
+                        &self.reader(),
+                    ));
                 }
                 conflict => kept = self.key_conflict(info, view, conflict)?,
             }

@@ -4,7 +4,7 @@ use rupg_catalog::toast::{Shape, needs_toast};
 use rupg_catalog::{
     Column, DepKind, MAX_COLUMNS, NewRelation, RelKind, SequenceData, SequenceInfo,
 };
-use rupg_common::{Error, Result, SqlState};
+use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_sql::nodes::{
     CollateClause, ColumnDef, CompositeTypeStmt, ConstrType, Constraint, CreateStmt, DefElem,
@@ -1321,7 +1321,10 @@ impl Definer<'_, '_> {
                     )
                     .with_detail(format!(
                         "Key (conrelid, contypid, conname)=({table}, 0, {name}) already exists."
-                    )));
+                    ))
+                    .with_object(Object::Schema, "pg_catalog")
+                    .with_object(Object::Table, "pg_constraint")
+                    .with_object(Object::Constraint, "pg_constraint_conrelid_contypid_conname_index"));
                 }
             }
             self.catalog.add_not_null(table, name.as_deref(), attnum, list[i].is_no_inherit)?;

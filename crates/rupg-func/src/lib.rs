@@ -75,7 +75,7 @@ use std::collections::BTreeMap;
 use std::rc::Rc;
 use std::sync::{Arc, OnceLock};
 
-use rupg_common::{Error, Result, SqlState};
+use rupg_common::{Error, Object, Result, SqlState};
 use rupg_pgcatalog::builtin;
 use rupg_types::{ByteaOutput, DateFormat, IntervalStyle, TimeZone, TypeError, Value};
 
@@ -115,6 +115,51 @@ pub use xml::{xml_expr, xml_value};
 /// `format_type_be`: the name of a type for a message, with its schema when the search path does not find it.
 pub fn type_message_name(ty: u32, session: &dyn Session) -> String {
     reg::type_text(ty, None, session).unwrap_or_else(|_| "???".to_string())
+}
+
+/// `errtable`: the error with the schema and the name of the relation `rel` as the names of its object. An error for a relation that is not in the catalog does not change.
+pub fn with_table(error: Error, rel: u32, session: &dyn Session) -> Error {
+    let Some((name, namespace)) = reg::class_name(rel, session) else { return error };
+    let error = error.with_object(Object::Table, name);
+    match reg::namespace_name(namespace, session) {
+        Some(schema) => error.with_object(Object::Schema, schema),
+        None => error,
+    }
+}
+
+/// `errtablecol`: [`with_table`] and the name of the column.
+pub fn with_table_column(error: Error, rel: u32, column: &str, session: &dyn Session) -> Error {
+    with_table(error, rel, session).with_object(Object::Column, column)
+}
+
+/// `errtableconstraint`: [`with_table`] and the name of the constraint.
+pub fn with_table_constraint(
+    error: Error,
+    rel: u32,
+    constraint: &str,
+    session: &dyn Session,
+) -> Error {
+    with_table(error, rel, session).with_object(Object::Constraint, constraint)
+}
+
+/// `errdatatype`: the error with the schema and the name of the type `ty` as the names of its object.
+pub fn with_datatype(error: Error, ty: u32, session: &dyn Session) -> Error {
+    let Some((name, namespace)) = reg::type_name(ty, session) else { return error };
+    let error = error.with_object(Object::Datatype, name);
+    match reg::namespace_name(namespace, session) {
+        Some(schema) => error.with_object(Object::Schema, schema),
+        None => error,
+    }
+}
+
+/// `errdomainconstraint`: [`with_datatype`] for the domain and the name of the constraint.
+pub fn with_domain_constraint(
+    error: Error,
+    domain: u32,
+    constraint: &str,
+    session: &dyn Session,
+) -> Error {
+    with_datatype(error, domain, session).with_object(Object::Constraint, constraint)
 }
 
 /// The OID of `internal`, the language of the functions in C.

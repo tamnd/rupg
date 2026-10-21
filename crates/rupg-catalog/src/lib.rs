@@ -32,7 +32,7 @@ pub use tsearch::{
 use std::collections::BTreeMap;
 use std::sync::Arc;
 
-use rupg_common::{Error, Result, SqlState};
+use rupg_common::{Error, Object, Result, SqlState};
 
 pub use database::Database;
 use names::{index_column_names, make_object_name, name_addition};
@@ -1381,7 +1381,10 @@ impl Catalog {
                 .with_detail(format!(
                     "Key (conrelid, contypid, conname)=({}, 0, {}) already exists.",
                     new.relation, new.name
-                )));
+                ))
+                .with_object(Object::Schema, "pg_catalog")
+                .with_object(Object::Table, "pg_constraint")
+                .with_object(Object::Constraint, "pg_constraint_conrelid_contypid_conname_index"));
             }
             let namespace = self.relation(new.relation).map_or(0, |r| r.namespace);
             let mut constraint = self.new_constraint(

@@ -266,7 +266,7 @@ impl Connection {
         }
         if nulls > 0 {
             if foreign.full {
-                return Err(violation(batch, foreign).with_detail(
+                return Err(violation(batch, foreign, &self.reader()).with_detail(
                     "MATCH FULL does not allow mixing of null and nonnull key values.",
                 ));
             }
@@ -299,7 +299,7 @@ impl Connection {
         });
         if !keys.has(&probe, &foreign.types)? {
             let shown = self.key_text(foreign, key, &foreign.referencing_types)?;
-            return Err(violation(batch, foreign).with_detail(format!(
+            return Err(violation(batch, foreign, &self.reader()).with_detail(format!(
                 "Key {shown} is not present in table \"{}\".",
                 foreign.other_name
             )));
@@ -335,7 +335,7 @@ impl Connection {
         if keys.has(&probe, &foreign.types)? {
             let shown = self.key_text(foreign, key, &foreign.types)?;
             let still = if restrict { "" } else { "still " };
-            return Err(violation(batch, foreign).with_detail(format!(
+            return Err(violation(batch, foreign, &self.reader()).with_detail(format!(
                 "Key {shown} is {still}referenced from table \"{}\".",
                 foreign.other_name
             )));
@@ -408,24 +408,38 @@ impl Connection {
     }
 }
 
-/// The error of `ri_ReportViolation` with no detail, or of `ri_restrict` for `RESTRICT`.
-fn violation(batch: &Batch, foreign: &Foreign) -> Error {
-    let message = if foreign.referencing {
-        format!(
-            "insert or update on table \"{}\" violates foreign key constraint \"{}\"",
-            batch.name, foreign.name
+/// The error of `ri_ReportViolation` with no detail, or of `ri_restrict` for `RESTRICT`. The object of the error is the constraint on the referencing table.
+fn violation(batch: &Batch, foreign: &Foreign, session: &dyn rupg_func::Session) -> Error {
+    let referencing = if foreign.referencing { batch.table } else { foreign.other };
+    let (state, message) = if foreign.referencing {
+        (
+            SqlState::FOREIGN_KEY_VIOLATION,
+            format!(
+                "insert or update on table \"{}\" violates foreign key constraint \"{}\"",
+                batch.name, foreign.name
+            ),
         )
     } else if foreign.action == Action::Restrict {
-        let message = format!(
-            "update or delete on table \"{}\" violates RESTRICT setting of foreign key constraint \"{}\" on table \"{}\"",
-            batch.name, foreign.name, foreign.other_name
-        );
-        return Error::new(SqlState::RESTRICT_VIOLATION, message);
+        (
+            SqlState::RESTRICT_VIOLATION,
+            format!(
+                "update or delete on table \"{}\" violates RESTRICT setting of foreign key constraint \"{}\" on table \"{}\"",
+                batch.name, foreign.name, foreign.other_name
+            ),
+        )
     } else {
-        format!(
-            "update or delete on table \"{}\" violates foreign key constraint \"{}\" on table \"{}\"",
-            batch.name, foreign.name, foreign.other_name
+        (
+            SqlState::FOREIGN_KEY_VIOLATION,
+            format!(
+                "update or delete on table \"{}\" violates foreign key constraint \"{}\" on table \"{}\"",
+                batch.name, foreign.name, foreign.other_name
+            ),
         )
     };
-    Error::new(SqlState::FOREIGN_KEY_VIOLATION, message)
+    rupg_func::with_table_constraint(
+        Error::new(state, message),
+        referencing,
+        &foreign.name,
+        session,
+    )
 }

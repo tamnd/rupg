@@ -30,6 +30,35 @@ struct More {
     level: Option<Level>,
     /// The text of an internal query and the byte offset in it where the error starts, as `internalerrquery` and `internalerrposition` give them.
     internal: Option<(String, Option<usize>)>,
+    /// The names of the object of the error, in the order of [`Object::ALL`].
+    objects: [Option<String>; 5],
+}
+
+/// A name of the object of an error, as `errtable`, `errtablecol`, `errdatatype` and `errconstraint` give it. A client reads it from the field with the code of [`Object::code`].
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Object {
+    Schema,
+    Table,
+    Column,
+    Datatype,
+    Constraint,
+}
+
+impl Object {
+    /// The names in the order of the fields of a message.
+    pub const ALL: [Object; 5] =
+        [Object::Schema, Object::Table, Object::Column, Object::Datatype, Object::Constraint];
+
+    /// The code of the field of a message: `s`, `t`, `c`, `d` or `n`.
+    pub fn code(self) -> u8 {
+        match self {
+            Object::Schema => b's',
+            Object::Table => b't',
+            Object::Column => b'c',
+            Object::Datatype => b'd',
+            Object::Constraint => b'n',
+        }
+    }
 }
 
 /// The level of a message that is not an error, from the lowest to the highest.
@@ -162,6 +191,18 @@ impl Error {
         Some((query, *position))
     }
 
+    /// Sets a name of the object of the error, such as the table of a constraint that the error violates.
+    #[must_use]
+    pub fn with_object(mut self, object: Object, name: impl Into<String>) -> Error {
+        self.more().objects[object as usize] = Some(name.into());
+        self
+    }
+
+    /// The name that [`Error::with_object`] set, if any.
+    pub fn object(&self, object: Object) -> Option<&str> {
+        self.more.as_ref()?.objects[object as usize].as_deref()
+    }
+
     fn more(&mut self) -> &mut More {
         self.more.get_or_insert_with(Box::default)
     }
@@ -232,7 +273,7 @@ pub type Result<T, E = Error> = std::result::Result<T, E>;
 
 #[cfg(test)]
 mod tests {
-    use super::Error;
+    use super::{Error, Object};
 
     #[test]
     fn display() {
@@ -246,5 +287,14 @@ mod tests {
         let (e, line) = (Error::internal("bad state"), line!());
         assert_eq!((e.place().file(), e.place().line()), (file!(), line));
         assert_eq!(e, Error::internal("bad state"));
+    }
+
+    #[test]
+    fn the_names_of_the_object() {
+        let e =
+            Error::internal("x").with_object(Object::Table, "t").with_object(Object::Schema, "s");
+        let names: Vec<_> = Object::ALL.iter().map(|&o| e.object(o)).collect();
+        assert_eq!(names, [Some("s"), Some("t"), None, None, None]);
+        assert_ne!(e, Error::internal("x"));
     }
 }

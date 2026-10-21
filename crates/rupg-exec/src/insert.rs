@@ -47,27 +47,34 @@ pub(crate) fn check_rows(
         if let Some(rel) = rel {
             for (column, value) in rel.columns.iter().zip(&row[..info.width]) {
                 if column.not_null && matches!(value, Value::Null) {
-                    return Err(Error::new(
+                    let error = Error::new(
                         SqlState::NOT_NULL_VIOLATION,
                         format!(
                             "null value in column \"{}\" of relation \"{}\" violates not-null constraint",
                             column.name, info.name
                         ),
                     )
-                    .with_detail(failing_row(&row[..info.width], &types, session)?));
+                    .with_detail(failing_row(&row[..info.width], &types, session)?);
+                    return Err(rupg_func::with_table_column(
+                        error,
+                        rel.oid,
+                        &column.name,
+                        session,
+                    ));
                 }
             }
         }
         for (i, name) in info.checks.iter().enumerate() {
             if matches!(row.get(info.width + i), Some(Value::Bool(false))) {
-                return Err(Error::new(
+                let error = Error::new(
                     SqlState::CHECK_VIOLATION,
                     format!(
                         "new row for relation \"{}\" violates check constraint \"{name}\"",
                         info.name
                     ),
                 )
-                .with_detail(failing_row(&row[..info.width], &types, session)?));
+                .with_detail(failing_row(&row[..info.width], &types, session)?);
+                return Err(rupg_func::with_table_constraint(error, info.table, name, session));
             }
         }
         row.drain(info.width..info.width + info.checks.len());

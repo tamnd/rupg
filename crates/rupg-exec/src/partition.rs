@@ -450,14 +450,15 @@ fn no_partition(
         shown.push(crate::insert::shown(ty, value, MAX_FIELD_LEN, session)?);
     }
     let columns = rupg_func::partition_key_columns(rel, session)?;
-    Ok(Error::new(
+    let error = Error::new(
         SqlState::CHECK_VIOLATION,
         format!("no partition of relation \"{}\" found for row", d.name),
     )
     .with_detail(format!(
         "Partition key of the failing row contains ({columns}) = ({}).",
         shown.join(", ")
-    )))
+    ));
+    Ok(rupg_func::with_table(error, rel.oid, session))
 }
 
 /// `ExecPartitionCheckEmitError`: the error for a row that is not in the bounds of the partition `rel`.
@@ -467,9 +468,10 @@ pub(crate) fn partition_check_error(
     session: &dyn Session,
 ) -> Result<Error> {
     let types: Vec<u32> = rel.columns.iter().map(|c| c.ty).collect();
-    Ok(Error::new(
+    let error = Error::new(
         SqlState::CHECK_VIOLATION,
         format!("new row for relation \"{}\" violates partition constraint", rel.name),
     )
-    .with_detail(crate::insert::failing_row(row, &types, session)?))
+    .with_detail(crate::insert::failing_row(row, &types, session)?);
+    Ok(rupg_func::with_table(error, rel.oid, session))
 }

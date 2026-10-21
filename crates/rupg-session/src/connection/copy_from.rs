@@ -861,15 +861,14 @@ impl CopyIn {
                             .is_some()
                     {
                         let domain = rupg_func::type_message_name(ty, reader);
-                        return Err(hard(
-                            Error::new(
-                                SqlState::NOT_NULL_VIOLATION,
-                                format!("domain {domain} does not allow null values"),
-                            )
-                            .with_detail(format!(
-                                "ON_ERROR SET_NULL cannot be applied because column \"{name}\" (domain {domain}) does not accept null values."
-                            )),
+                        let error = Error::new(
+                            SqlState::NOT_NULL_VIOLATION,
+                            format!("domain {domain} does not allow null values"),
+                        )
+                        .with_detail(format!(
+                            "ON_ERROR SET_NULL cannot be applied because column \"{name}\" (domain {domain}) does not accept null values."
                         ));
+                        return Err(hard(rupg_func::with_datatype(error, ty, reader)));
                     }
                     failed.push((i, field.map(<[u8]>::to_vec)));
                     values.push(Value::Null);
