@@ -1,0 +1,227 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (a int, b text, c int DEFAULT 0, PRIMARY KEY (a)) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE p2 (a int NOT NULL, b text, c int DEFAULT 0);
+CREATE TABLE
+> ALTER TABLE p ATTACH PARTITION p2 FOR VALUES FROM (10) TO (20);
+ALTER TABLE
+> CREATE TABLE p3 PARTITION OF p FOR VALUES FROM (20) TO (40) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE p31 PARTITION OF p3 FOR VALUES FROM (20) TO (30);
+CREATE TABLE
+> CREATE TABLE p32 PARTITION OF p3 FOR VALUES FROM (30) TO (40);
+CREATE TABLE
+> INSERT INTO p VALUES (1, 'one'), (11, 'eleven'), (21, 'twenty-one'), (31, 'thirty-one');
+INSERT 0 4
+> INSERT INTO p VALUES (1, 'uno'), (2, 'two') ON CONFLICT DO NOTHING;
+INSERT 0 1
+> INSERT INTO p VALUES (11, 'once'), (12, 'twelve') ON CONFLICT (a) DO NOTHING RETURNING *, tableoid::regclass;
+fields a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1,tableoid:2205:4:-1
+row 12,twelve,0,p2
+INSERT 0 1
+> INSERT INTO p VALUES (21, 'veintiuno', 5), (31, 'treinta', 6), (35, 'new', 7) ON CONFLICT (a) DO UPDATE SET b = excluded.b, c = p.c + excluded.c RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p31,21,veintiuno,5
+row p32,31,treinta,6
+row p32,35,new,7
+INSERT 0 3
+> INSERT INTO p VALUES (11, 'x', 1) ON CONFLICT ON CONSTRAINT p_pkey DO UPDATE SET c = excluded.c + 100 WHERE p.b = 'eleven' RETURNING *;
+fields a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row 11,eleven,101
+INSERT 0 1
+> INSERT INTO p VALUES (11, 'x', 1) ON CONFLICT ON CONSTRAINT p_pkey DO UPDATE SET c = excluded.c + 100 WHERE p.b = 'eleven' RETURNING *;
+fields a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row 11,eleven,101
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,1,one,0
+row p1,2,two,0
+row p2,11,eleven,101
+row p2,12,twelve,0
+row p31,21,veintiuno,5
+row p32,31,treinta,6
+row p32,35,new,7
+SELECT 7
+> INSERT INTO p VALUES (1, 'a'), (1, 'b') ON CONFLICT (a) DO UPDATE SET b = excluded.b;
+ERROR 21000 ON CONFLICT DO UPDATE command cannot affect row a second time
+HINT Ensure that no rows proposed for insertion within the same command have duplicate constrained values.
+> INSERT INTO p VALUES (1, 'a') ON CONFLICT (a) DO UPDATE SET a = 15;
+ERROR 0A000 invalid ON UPDATE specification
+DETAIL The result tuple would appear in a different partition than the original tuple.
+> INSERT INTO p VALUES (1, 'a') ON CONFLICT (a) DO UPDATE SET a = 3, b = 'moved';
+INSERT 0 1
+> INSERT INTO p VALUES (21, 'a') ON CONFLICT (a) DO UPDATE SET a = 33;
+ERROR 0A000 invalid ON UPDATE specification
+DETAIL The result tuple would appear in a different partition than the original tuple.
+> INSERT INTO p VALUES (21, 'a') ON CONFLICT (a) DO UPDATE SET a = 100;
+ERROR 0A000 invalid ON UPDATE specification
+DETAIL The result tuple would appear in a different partition than the original tuple.
+> INSERT INTO p VALUES (50, 'a') ON CONFLICT (a) DO NOTHING;
+ERROR 23514 no partition of relation "p" found for row
+DETAIL Partition key of the failing row contains (a) = (50).
+> INSERT INTO p VALUES (4, 'a') ON CONFLICT (b) DO NOTHING;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,2,two,0
+row p1,3,moved,0
+row p2,11,eleven,101
+row p2,12,twelve,0
+row p31,21,veintiuno,5
+row p32,31,treinta,6
+row p32,35,new,7
+SELECT 7
+> CREATE UNIQUE INDEX p2_b ON p2 (b);
+CREATE INDEX
+> INSERT INTO p VALUES (13, 'once') ON CONFLICT DO NOTHING;
+INSERT 0 1
+> INSERT INTO p VALUES (14, 'once'), (15, 'fifteen') ON CONFLICT DO NOTHING RETURNING *;
+fields a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row 15,fifteen,0
+INSERT 0 1
+> INSERT INTO p VALUES (14, 'once') ON CONFLICT (a) DO NOTHING;
+ERROR 23505 duplicate key value violates unique constraint "p2_b"
+DETAIL Key (b)=(once) already exists.
+> INSERT INTO p VALUES (14, 'once') ON CONFLICT (a) DO UPDATE SET c = 7;
+ERROR 23505 duplicate key value violates unique constraint "p2_b"
+DETAIL Key (b)=(once) already exists.
+> INSERT INTO p VALUES (13, 'once') ON CONFLICT (a) DO UPDATE SET c = 7;
+INSERT 0 1
+> INSERT INTO p VALUES (12, 'twelve') ON CONFLICT (a) DO UPDATE SET b = 'once';
+ERROR 23505 duplicate key value violates unique constraint "p2_b"
+DETAIL Key (b)=(once) already exists.
+> ALTER TABLE p31 ADD CONSTRAINT p31_c CHECK (c < 50);
+ALTER TABLE
+> INSERT INTO p VALUES (21, 'z', 60) ON CONFLICT (a) DO UPDATE SET c = excluded.c;
+ERROR 23514 new row for relation "p31" violates check constraint "p31_c"
+DETAIL Failing row contains (21, z, 60).
+> INSERT INTO p VALUES (21, 'z', 60) ON CONFLICT (a) DO UPDATE SET b = NULL, c = 7 RETURNING *;
+ERROR 23514 new row for relation "p31" violates check constraint "p31_c"
+DETAIL Failing row contains (21, z, 60).
+> ALTER TABLE p ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> UPDATE p SET b = 'null' WHERE b IS NULL;
+UPDATE 0
+> ALTER TABLE p ALTER COLUMN b SET NOT NULL;
+ALTER TABLE
+> INSERT INTO p VALUES (12, 'z') ON CONFLICT (a) DO UPDATE SET b = NULL;
+ERROR 23502 null value in column "b" of relation "p2" violates not-null constraint
+DETAIL Failing row contains (12, null, 0).
+> INSERT INTO p VALUES (16, NULL) ON CONFLICT (a) DO NOTHING;
+ERROR 23502 null value in column "b" of relation "p2" violates not-null constraint
+DETAIL Failing row contains (16, null, 0).
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,2,two,0
+row p1,3,moved,0
+row p2,11,eleven,101
+row p2,12,twelve,0
+row p2,13,once,7
+row p2,15,fifteen,0
+row p31,21,veintiuno,5
+row p32,31,treinta,6
+row p32,35,new,7
+SELECT 9
+> CREATE TABLE q (a int, b int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE q1 PARTITION OF q FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE qd PARTITION OF q DEFAULT;
+CREATE TABLE
+> INSERT INTO q VALUES (1, 1), (1, 1) ON CONFLICT DO NOTHING;
+INSERT 0 2
+> INSERT INTO q VALUES (1, 1) ON CONFLICT (a) DO NOTHING;
+ERROR 42P10 there is no unique or exclusion constraint matching the ON CONFLICT specification
+> DELETE FROM q;
+DELETE 2
+> CREATE UNIQUE INDEX q1_b ON q1 (b);
+CREATE INDEX
+> INSERT INTO q VALUES (1, 1), (1, 2), (2, 1), (2, 1) ON CONFLICT DO NOTHING RETURNING tableoid::regclass, *;
+fields tableoid:2205:4:-1,a@q.1:23:4:-1,b@q.2:23:4:-1
+row q1,1,1
+row q1,1,2
+row qd,2,1
+row qd,2,1
+INSERT 0 4
+> SELECT tableoid::regclass, * FROM q ORDER BY a, b;
+fields tableoid:2205:4:-1,a@q.1:23:4:-1,b@q.2:23:4:-1
+row q1,1,1
+row q1,1,2
+row qd,2,1
+row qd,2,1
+SELECT 4
+> CREATE TABLE r (a int, b int, UNIQUE (a, b)) PARTITION BY HASH (a);
+CREATE TABLE
+> CREATE TABLE r0 PARTITION OF r FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+CREATE TABLE
+> INSERT INTO r SELECT g % 5, g % 3 FROM generate_series(1, 20) g ON CONFLICT (b, a) DO NOTHING;
+INSERT 0 15
+> INSERT INTO r SELECT g % 5, g % 3 FROM generate_series(1, 4) g ON CONFLICT (a, b) DO UPDATE SET b = r.b + 10 RETURNING *;
+fields a@r.1:23:4:-1,b@r.2:23:4:-1
+row 1,11
+row 2,12
+row 3,10
+row 4,11
+INSERT 0 4
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:23:4:-1
+row r0,0,0
+row r0,0,1
+row r0,0,2
+row r0,1,0
+row r0,1,2
+row r0,1,11
+row r0,2,0
+row r0,2,1
+row r0,2,12
+row r1,3,1
+row r1,3,2
+row r1,3,10
+row r1,4,0
+row r1,4,2
+row r1,4,11
+SELECT 15
+> BEGIN;
+BEGIN
+> INSERT INTO p VALUES (2, 'deux') ON CONFLICT (a) DO UPDATE SET b = excluded.b || p.b;
+INSERT 0 1
+> SELECT * FROM p WHERE a = 2;
+fields a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row 2,deuxtwo,0
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> PREPARE up (int, text) AS INSERT INTO p VALUES ($1, $2) ON CONFLICT (a) DO UPDATE SET b = excluded.b RETURNING tableoid::regclass, a, b;
+PREPARE
+> EXECUTE up (2, 'zwei');
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,2,zwei
+INSERT 0 1
+> EXECUTE up (5, 'five');
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,5,five
+INSERT 0 1
+> EXECUTE up (5, 'fuenf');
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,5,fuenf
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1,c@p.3:23:4:-1
+row p1,2,zwei,0
+row p1,3,moved,0
+row p1,5,fuenf,0
+row p2,11,eleven,101
+row p2,12,twelve,0
+row p2,13,once,7
+row p2,15,fifteen,0
+row p31,21,veintiuno,5
+row p32,31,treinta,6
+row p32,35,new,7
+SELECT 10
