@@ -254,6 +254,7 @@ impl Definer<'_, '_> {
             ));
         }
         let namespace = self.creation_namespace(&rv)?;
+        let unlogged = rv.relpersistence == b'u';
         let name = relname(&rv).to_string();
         if stmt.if_not_exists && self.relation_in(namespace, &name).is_some() {
             self.notice(
@@ -264,6 +265,12 @@ impl Definer<'_, '_> {
         }
         if stmt.ofTypename.is_some() {
             return Err(not_yet("CREATE TABLE OF", at));
+        }
+        if stmt.partspec.is_some() && unlogged {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "partitioned tables cannot be unlogged",
+            ));
         }
         if stmt.partspec.is_some() && !stmt.inhRelations.is_empty() && stmt.partbound.is_none() {
             return Err(Error::new(
@@ -332,10 +339,13 @@ impl Definer<'_, '_> {
                 Some(options) => self.identity_sequence_info(options)?,
                 None => serial_info(serial.ty),
             };
-            serial.oid = self.new_sequence(serial.namespace, &serial.name, info)?;
+            serial.oid = self.new_sequence(serial.namespace, &serial.name, info, unlogged)?;
         }
         self.check_on_commit(stmt.oncommit, namespace)?;
         let table = self.define_relation(&plan)?;
+        if unlogged {
+            self.catalog.set_unlogged(table, true)?;
+        }
         if !options.is_empty() {
             self.catalog.set_options(table, options)?;
         }
@@ -361,12 +371,13 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `DefineSequence` for the sequence of a `serial` column or of an identity column: a relation with the columns of a sequence and the row of `pg_sequence`.
+    /// `DefineSequence` for the sequence of a `serial` column or of an identity column: a relation with the columns of a sequence and the row of `pg_sequence`. The sequence is unlogged when its table is unlogged, as `generateSerialExtraStmts` gives it the persistence of the table.
     pub(super) fn new_sequence(
         &mut self,
         namespace: u32,
         name: &str,
         info: SequenceInfo,
+        unlogged: bool,
     ) -> Result<u32> {
         let columns = vec![
             Column::new("last_value", oid::INT8, -1, 0),
@@ -374,7 +385,30 @@ impl Definer<'_, '_> {
             Column::new("is_called", oid::BOOL, -1, 0),
         ];
         let new = NewRelation { namespace, name: name.to_string(), owner: self.user, columns };
-        self.catalog.create_sequence(new, info)
+        let oid = self.catalog.create_sequence(new, info)?;
+        if unlogged {
+            self.catalog.set_unlogged(oid, true)?;
+        }
+        Ok(oid)
+    }
+
+    /// True when the relation is unlogged.
+    pub(super) fn is_unlogged(&self, oid: u32) -> bool {
+        self.catalog.relation(oid).is_some_and(|r| r.unlogged)
+    }
+
+    /// `relpersistence` of the relation: `t` in a temporary schema, `u` for an unlogged relation, else `p`.
+    pub(super) fn persistence(&self, oid: u32) -> u8 {
+        match self.catalog.relation(oid) {
+            Some(rel) if self.catalog.is_temp_schema(rel.namespace) => b't',
+            Some(rel) if rel.unlogged => b'u',
+            _ => b'p',
+        }
+    }
+
+    /// `rd_islocaltemp`: true for a relation in the temporary schema of the session.
+    pub(super) fn is_own_temp(&self, oid: u32) -> bool {
+        self.catalog.relation(oid).is_some_and(|r| r.namespace != 0 && r.namespace == self.an.temp)
     }
 
     /// The `OWNED BY` of the sequence of an identity column, with an internal dependency on the column. `table` is the OID, the schema and the name of the table. `generateSerialSequence` names the table for `OWNED BY` with the schema of the sequence, so a sequence in another schema does not find the table.
@@ -1013,12 +1047,13 @@ impl Definer<'_, '_> {
             }
             return Err(Error::new(SqlState::DUPLICATE_COLUMN, message));
         }
+        let unlogged = self.is_unlogged(target.oid);
         for serial in &mut plan.serials {
             let info = match &serial.identity {
                 Some(options) => self.identity_sequence_info(options)?,
                 None => serial_info(serial.ty),
             };
-            serial.oid = self.new_sequence(serial.namespace, &serial.name, info)?;
+            serial.oid = self.new_sequence(serial.namespace, &serial.name, info, unlogged)?;
         }
         let new = self.catalog_column(column)?;
         check_attribute_type(&new.name, new.ty, self.an.env.allow_system_table_mods())?;

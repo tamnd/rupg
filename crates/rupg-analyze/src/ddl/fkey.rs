@@ -36,6 +36,23 @@ pub(super) struct Keys<'a> {
 }
 
 impl Definer<'_, '_> {
+    /// The check of `ATAddForeignKeyConstraint` that a permanent table refers only to a permanent table, an unlogged table only to a permanent or an unlogged table, and a temporary table only to a temporary table of the same session.
+    fn check_fk_persistence(&self, table: u32, pk: u32) -> Result<()> {
+        let message = match (self.persistence(table), self.persistence(pk)) {
+            (b'p', b'p') | (b'u', b'p' | b'u') => return Ok(()),
+            (b'p', _) => "constraints on permanent tables may reference only permanent tables",
+            (b'u', _) => {
+                "constraints on unlogged tables may reference only permanent or unlogged tables"
+            }
+            (_, b't') if self.is_own_temp(table) && self.is_own_temp(pk) => return Ok(()),
+            (_, b't') => {
+                "constraints on temporary tables must involve temporary tables of this session"
+            }
+            _ => "constraints on temporary tables may reference only temporary tables",
+        };
+        Err(Error::new(SqlState::INVALID_TABLE_DEFINITION, message))
+    }
+
     /// Adds the foreign key `con` to the table.
     pub(super) fn add_foreign_key(&mut self, table: u32, con: &Constraint) -> Result<()> {
         let (table_name, namespace) = match self.catalog.relation(table) {
@@ -103,6 +120,7 @@ impl Definer<'_, '_> {
         let Found::User(pk) = found else {
             return Err(not_yet("a foreign key to a built-in table", at));
         };
+        self.check_fk_persistence(table, pk)?;
         let fk_keys = self.column_list(table, &fk_names)?;
         let mut pk_names: Vec<String> =
             names(&con.pk_attrs).iter().map(|s| s.to_string()).collect();

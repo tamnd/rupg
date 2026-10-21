@@ -319,6 +319,8 @@ pub struct Relation {
     pub acl: Option<Vec<String>>,
     /// `relreplident`: `d`, `n`, `f` or `i`, or 0 for the default of the kind of the relation.
     pub replica_identity: u8,
+    /// True when `relpersistence` is `u`. The rows of an unlogged table are kept as the rows of the other tables. A temporary relation has `t` because of its schema.
+    pub unlogged: bool,
     /// The partition key of a partitioned table, one row of `pg_partitioned_table`.
     pub partition_key: Option<PartitionKey>,
     /// The parent table and the bound of a partition.
@@ -2111,6 +2113,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                unlogged: false,
             },
         );
         let (class, ty) = (ObjRef::new(PG_CLASS, oid), ObjRef::new(PG_TYPE, row_type));
@@ -2794,6 +2797,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                unlogged: false,
             },
         );
         self.depend(
@@ -2807,6 +2811,36 @@ impl Catalog {
     /// `OWNED BY`: the sequence goes with the column of the table.
     pub fn set_sequence_owner(&mut self, sequence: u32, table: u32, column: i16) {
         self.depend(ObjRef::new(PG_CLASS, sequence), ObjRef::column(table, column), DepKind::Auto);
+    }
+
+    /// `ATExecSetRelOptions` of `SET LOGGED` and `SET UNLOGGED`: the persistence of the relation changes. For a table, its indexes, its TOAST table with the index of the TOAST table, and the sequences that it owns change with it.
+    ///
+    /// # Errors
+    ///
+    /// The relation does not exist.
+    pub fn set_unlogged(&mut self, oid: u32, unlogged: bool) -> Result<()> {
+        let rel = self.relation(oid).ok_or_else(|| no_object("relation", oid))?;
+        let mut change = vec![oid];
+        if rel.sequence.is_none() {
+            let toast = rel.toast;
+            change.extend(self.owned_sequences(oid));
+            for (&index, rel) in &self.relations {
+                if rel
+                    .index
+                    .as_ref()
+                    .is_some_and(|i| i.table == oid || (toast != 0 && i.table == toast))
+                {
+                    change.push(index);
+                }
+            }
+            if toast != 0 {
+                change.push(toast);
+            }
+        }
+        for oid in change {
+            self.relation_mut(oid)?.unlogged = unlogged;
+        }
+        Ok(())
     }
 
     fn relation_mut(&mut self, oid: u32) -> Result<&mut Relation> {
@@ -3077,6 +3111,7 @@ impl Catalog {
     pub fn create_index(&mut self, new: NewIndex) -> Result<(u32, Option<u32>)> {
         let (relname, namespace) = self.relation_facts(new.table)?;
         let owner = self.relations.get(&new.table).map_or(0, |r| r.owner);
+        let unlogged = self.relations.get(&new.table).is_some_and(|r| r.unlogged);
         let column_names = index_column_names(new.columns.iter().map(|c| c.name.as_str()));
         let name = match &new.name {
             Some(name) => name.clone(),
@@ -3165,6 +3200,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                unlogged,
             },
         );
         let me = ObjRef::new(PG_CLASS, oid);
@@ -3292,7 +3328,7 @@ impl Catalog {
     /// `create_toast_table`: the TOAST table of a table and its index, in the schema `pg_toast`, or in `pg_toast_temp_N` for a table of the temporary schema `pg_temp_N`. The TOAST table gets an OID, then its index. They have no row type.
     pub fn create_toast(&mut self, table: u32) -> Result<u32> {
         let rel = self.relations.get(&table).ok_or_else(|| no_object("relation", table))?;
-        let owner = rel.owner;
+        let (owner, unlogged) = (rel.owner, rel.unlogged);
         let namespace = self.toast_namespace(rel.namespace);
         let oid = self.new_oid();
         let index = self.new_oid();
@@ -3321,6 +3357,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                unlogged,
             },
         );
         let info = IndexInfo {
@@ -3364,6 +3401,7 @@ impl Catalog {
                 replica_identity: 0,
                 partition_key: None,
                 partition_of: None,
+                unlogged,
             },
         );
         self.relation_mut(table)?.toast = oid;

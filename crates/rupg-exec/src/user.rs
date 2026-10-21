@@ -403,7 +403,13 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                 .set("relisshared", Value::Bool(false))
                 .set(
                     "relpersistence",
-                    code(if catalog.is_temp_schema(rel.namespace) { 't' } else { 'p' }),
+                    code(if catalog.is_temp_schema(rel.namespace) {
+                        't'
+                    } else if rel.unlogged {
+                        'u'
+                    } else {
+                        'p'
+                    }),
                 )
                 .set("relkind", code(rel.kind.code()))
                 .set("relnatts", Value::Int2(number(rel.columns.len()) - 1))

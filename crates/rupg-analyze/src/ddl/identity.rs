@@ -90,7 +90,8 @@ impl Definer<'_, '_> {
         let sequence =
             self.identity_sequence(&target.name, target.namespace, column, ty, &con.options)?;
         let info = self.identity_sequence_info(&sequence.options)?;
-        let oid = self.new_sequence(sequence.namespace, &sequence.name, info)?;
+        let unlogged = self.is_unlogged(target.oid);
+        let oid = self.new_sequence(sequence.namespace, &sequence.name, info, unlogged)?;
         let table = (target.oid, target.namespace, target.name.as_str());
         self.own_identity_sequence(oid, sequence.namespace, table, number)?;
         self.check_add_identity(target, number, column)?;

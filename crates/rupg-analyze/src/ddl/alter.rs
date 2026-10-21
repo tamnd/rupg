@@ -129,6 +129,8 @@ struct Passes {
     defaults: Vec<AddCmd>,
     /// `AT_PASS_MISC`: `OWNER TO`, the `SET` options of an identity column, the subcommands that change the statistics, the storage and the options of a column, and the `SET` and `RESET` of the options of the relation, in the order of the statement.
     misc: Vec<MiscCmd>,
+    /// `chgPersistence` of `SET LOGGED` and `SET UNLOGGED`: true when the relation becomes unlogged. A subcommand that does not change the persistence leaves it `None`.
+    persistence: Option<bool>,
 }
 
 /// A subcommand of `AT_PASS_DROP`.
@@ -411,6 +413,19 @@ impl Definer<'_, '_> {
                     self.prep_primary_key(target, con, passes)?;
                 }
                 passes.constraints.push(((**con).clone(), Origin::Command));
+            }
+            AlterTableType::AT_SetLogged | AlterTableType::AT_SetUnLogged => {
+                self.simple_permissions(target, cmd, b"rS")?;
+                if passes.persistence.is_some() {
+                    return Err(Error::new(
+                        SqlState::FEATURE_NOT_SUPPORTED,
+                        "cannot change persistence setting twice",
+                    ));
+                }
+                let unlogged = cmd.subtype == AlterTableType::AT_SetUnLogged;
+                if self.prep_persistence(target, unlogged)? {
+                    passes.persistence = Some(unlogged);
+                }
             }
             AlterTableType::AT_ChangeOwner => {
                 let role = cmd.newowner.as_deref().cloned().unwrap_or_default();
@@ -737,7 +752,52 @@ impl Definer<'_, '_> {
                 }
             }
         }
+        if let Some(unlogged) = passes.persistence {
+            self.catalog.set_unlogged(target.oid, unlogged)?;
+        }
         Ok(())
+    }
+
+    /// `ATPrepChangePersistence`: false when the relation has the persistence already. A table that becomes logged cannot refer to an unlogged table, and a table that becomes unlogged cannot have a logged table that refers to it.
+    fn prep_persistence(&self, target: &Target, unlogged: bool) -> Result<bool> {
+        match self.persistence(target.oid) {
+            b't' => {
+                return Err(Error::new(
+                    SqlState::INVALID_TABLE_DEFINITION,
+                    format!(
+                        "cannot change logged status of table \"{}\" because it is temporary",
+                        target.name
+                    ),
+                ));
+            }
+            b'u' if unlogged => return Ok(false),
+            b'p' if !unlogged => return Ok(false),
+            _ => {}
+        }
+        for con in self.catalog.constraints() {
+            let Some(fk) = &con.foreign else { continue };
+            if con.relation == target.oid && fk.table == target.oid {
+                continue;
+            }
+            let (other, bad) = if unlogged {
+                (con.relation, fk.table == target.oid && self.persistence(con.relation) == b'p')
+            } else {
+                (fk.table, con.relation == target.oid && self.persistence(fk.table) != b'p')
+            };
+            if bad {
+                let other = self.catalog.relation(other).map_or("", |r| r.name.as_str());
+                let (to, what) =
+                    if unlogged { ("unlogged", "logged") } else { ("logged", "unlogged") };
+                return Err(Error::new(
+                    SqlState::INVALID_TABLE_DEFINITION,
+                    format!(
+                        "could not change table \"{}\" to {to} because it references {what} table \"{other}\"",
+                        target.name
+                    ),
+                ));
+            }
+        }
+        Ok(true)
     }
 
     /// The scope of the analyzer with the columns of the table, for the expressions of a default or a check constraint.
