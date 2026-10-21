@@ -418,7 +418,6 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_AddIdentity => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
-                self.identity_of_partitions(target)?;
                 let Some(Node::Constraint(con)) = &cmd.def else {
                     return Err(Error::internal("ADD IDENTITY without a constraint"));
                 };
@@ -427,7 +426,6 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_SetIdentity => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
-                self.identity_of_partitions(target)?;
                 let options = match &cmd.def {
                     Some(Node::List(list)) => list.clone(),
                     _ => Vec::new(),
@@ -437,7 +435,6 @@ impl Definer<'_, '_> {
             }
             AlterTableType::AT_DropIdentity => {
                 self.simple_permissions(target, cmd, TABLE_VIEW)?;
-                self.identity_of_partitions(target)?;
                 let column = cmd.name.as_deref().unwrap_or_default().to_string();
                 passes.drops.push(DropCmd::Identity(column, cmd.missing_ok));
             }
@@ -531,18 +528,6 @@ impl Definer<'_, '_> {
         Ok(recurse)
     }
 
-    /// rupg has no identity columns of partitioned tables and of partitions yet.
-    fn identity_of_partitions(&self, target: &Target) -> Result<()> {
-        let partition = self.catalog.relation(target.oid).is_some_and(|r| r.partition_of.is_some());
-        if target.kind == b'p' || partition {
-            return Err(not_yet(
-                "an identity column of a partitioned table or of a partition",
-                None,
-            ));
-        }
-        Ok(())
-    }
-
     /// `ATPrepAddPrimaryKey`: a not-null constraint for each column of the key that has none. A column with a not-null constraint that is `NO INHERIT` or `NOT VALID` cannot be in a primary key.
     fn prep_primary_key(
         &self,
@@ -593,7 +578,7 @@ impl Definer<'_, '_> {
             match cmd {
                 DropCmd::Default(column) => self.column_default(target, column, None)?,
                 DropCmd::Identity(column, missing_ok) => {
-                    self.drop_identity(target, column, *missing_ok)?;
+                    self.drop_identity(target, column, *missing_ok, passes.recurse)?;
                 }
                 DropCmd::NotNull(column) => self.drop_not_null(target, column, passes.recurse)?,
                 DropCmd::Constraint(name, missing_ok, cascade) => {
@@ -628,9 +613,6 @@ impl Definer<'_, '_> {
                 let identity = rel.and_then(|r| r.column(number)).is_some_and(|c| c.identity != 0);
                 let defaulted = identity || self.catalog.default_of(target.oid, number).is_some();
                 if !self.catalog.partitions(target.oid).is_empty() {
-                    if identity {
-                        return Err(not_yet("an identity column of a partitioned table", None));
-                    }
                     if !passes.recurse {
                         return Err(Error::new(
                             SqlState::INVALID_TABLE_DEFINITION,
@@ -693,7 +675,9 @@ impl Definer<'_, '_> {
         for cmd in &passes.defaults {
             match cmd {
                 AddCmd::Default(column, def) => self.column_default(target, column, Some(def))?,
-                AddCmd::Identity(column, con) => self.add_identity(target, column, con)?,
+                AddCmd::Identity(column, con) => {
+                    self.add_identity(target, column, con, passes.recurse)?;
+                }
             }
         }
         for other in others {
@@ -741,7 +725,7 @@ impl Definer<'_, '_> {
                     self.change_owner(target.oid, owner, false)?;
                 }
                 MiscCmd::Identity(column, options) => {
-                    self.set_identity(target, column, options)?;
+                    self.set_identity(target, column, options, passes.recurse)?;
                 }
                 MiscCmd::Column(cmd) => self.alter_column_facts(target, cmd)?,
                 MiscCmd::Options(defs, reset) => self.set_rel_options(target, defs, *reset)?,

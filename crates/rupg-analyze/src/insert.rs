@@ -958,7 +958,7 @@ impl Analyzer<'_> {
             return Ok(Expr::new(ExprKind::Const(Value::Null), 0));
         }
         let attnum = i16::try_from(index + 1).unwrap_or(i16::MAX);
-        let sequence = self.env.catalog().and_then(|c| c.identity_sequence(table, attnum));
+        let sequence = self.env.catalog().and_then(|c| c.root_identity_sequence(table, attnum));
         if self.identity(table, index) != 0
             && let Some(sequence) = sequence
         {

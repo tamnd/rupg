@@ -240,10 +240,10 @@ impl Definer<'_, '_> {
                 None,
             ));
         }
-        if parent.columns.iter().any(|c| c.identity != 0) {
-            return Err(not_yet("ATTACH PARTITION to a table with an identity column", None));
-        }
-        for (number, _, inhcount) in merged {
+        for (number, up, inhcount) in merged {
+            // A partition has the identity of the column of its parent.
+            let identity = parent.column(up).map_or(0, |c| c.identity);
+            self.catalog.set_identity(rel.oid, number, identity)?;
             self.catalog.set_column_inherited(
                 rel.oid,
                 number,
@@ -368,6 +368,17 @@ impl Definer<'_, '_> {
         }
         let child = self.open_detached(target, rv)?;
         self.remove_inheritance(child, target.oid)?;
+        // `DetachPartitionFinalize`: the columns of the partition lose their identity. The sequence stays with the parent.
+        let identities: Vec<i16> = self.catalog.relation(child).map_or_else(Vec::new, |r| {
+            (1..)
+                .zip(&r.columns)
+                .filter(|(_, c)| !c.dropped && c.identity != 0)
+                .map(|(number, _)| number)
+                .collect()
+        });
+        for number in identities {
+            self.catalog.set_identity(child, number, 0)?;
+        }
         // `DetachPartitionFinalize`: the indexes of the partition are no longer partitions of the indexes of the parent.
         let indexes: Vec<(u32, u32)> = self
             .catalog

@@ -1,4 +1,6 @@
 //! `ALTER TABLE ... ALTER COLUMN` with `ADD GENERATED ... AS IDENTITY`, `SET GENERATED`, the `SET` options of the sequence and `DROP IDENTITY`, as `ATExecAddIdentity`, `ATExecSetIdentity` and `ATExecDropIdentity` run them after the transform of `transformAlterTableStmt`.
+//!
+//! A partition has the identity of the column of its parent table, but no sequence of its own. The subcommands on a partitioned table go on to its partitions, and they cannot run on a partition or with `ONLY` on a partitioned table.
 
 use rupg_catalog::{DepKind, ObjRef, PG_CLASS};
 use rupg_common::{Error, Result, SqlState};
@@ -21,6 +23,24 @@ fn system(column: &str) -> Error {
     Error::new(SqlState::FEATURE_NOT_SUPPORTED, format!("cannot alter system column \"{column}\""))
 }
 
+/// The errors of `ATExecAddIdentity`, `ATExecSetIdentity` and `ATExecDropIdentity` for a partitioned table with `ONLY` and for a partition that the recursion did not reach. `action` is the part of the message after "cannot".
+fn check_partitions(target: &Target, partition: bool, recurse: bool, action: &str) -> Result<()> {
+    if target.kind == b'p' && !recurse {
+        return Err(Error::new(
+            SqlState::INVALID_TABLE_DEFINITION,
+            format!("cannot {action} only the partitioned table"),
+        )
+        .with_hint("Do not specify the ONLY keyword."));
+    }
+    if partition {
+        return Err(Error::new(
+            SqlState::INVALID_TABLE_DEFINITION,
+            format!("cannot {action} a partition"),
+        ));
+    }
+    Ok(())
+}
+
 /// The error for a column that has no identity.
 fn not_identity(column: &str, table: &str) -> Error {
     Error::new(
@@ -40,13 +60,32 @@ impl Definer<'_, '_> {
         system_column(column).ok_or_else(|| no_column(column, &target.name))
     }
 
-    /// `ADD GENERATED ... AS IDENTITY`. The transform makes the sequence with the type of the column and gives it to the column at once. Then `ATExecAddIdentity` checks the column.
+    /// True for a partition.
+    fn is_partition(&self, target: &Target) -> bool {
+        self.catalog.relation(target.oid).is_some_and(|r| r.partition_of.is_some())
+    }
+
+    /// The number of the column `column` of each partition of the partitioned table `target`, at each level, as the recursion of `ATExecAddIdentity`, `ATExecSetIdentity` and `ATExecDropIdentity` finds them.
+    fn partition_columns(&self, target: &Target, column: &str) -> Result<Vec<(Target, i16)>> {
+        let mut out = Vec::new();
+        for child in self.all_inheritors(target.oid) {
+            let number = self.catalog.relation(child.oid).and_then(|r| r.column_number(column));
+            let Some(number) = number else { return Err(no_column(column, &child.name)) };
+            out.push((child, number));
+        }
+        Ok(out)
+    }
+
+    /// `ADD GENERATED ... AS IDENTITY`. The transform makes the sequence with the type of the column and gives it to the column at once. Then `ATExecAddIdentity` checks the column, and the column of each partition gets the identity with no sequence.
     pub(super) fn add_identity(
         &mut self,
         target: &Target,
         column: &str,
         con: &Constraint,
+        recurse: bool,
     ) -> Result<()> {
+        let partition = self.is_partition(target);
+        check_partitions(target, partition, recurse, "add identity to a column of")?;
         let (number, ty) = self.identity_column(target, column)?;
         let sequence =
             self.identity_sequence(&target.name, target.namespace, column, ty, &con.options)?;
@@ -54,6 +93,17 @@ impl Definer<'_, '_> {
         let oid = self.new_sequence(sequence.namespace, &sequence.name, info)?;
         let table = (target.oid, target.namespace, target.name.as_str());
         self.own_identity_sequence(oid, sequence.namespace, table, number)?;
+        self.check_add_identity(target, number, column)?;
+        self.catalog.set_identity(target.oid, number, con.generated_when)?;
+        for (child, number) in self.partition_columns(target, column)? {
+            self.check_add_identity(&child, number, column)?;
+            self.catalog.set_identity(child.oid, number, con.generated_when)?;
+        }
+        Ok(())
+    }
+
+    /// The checks of `ATExecAddIdentity` for the column `number` of the table: it must have a not-null constraint, and no identity or default.
+    fn check_add_identity(&self, target: &Target, number: i16, column: &str) -> Result<()> {
         let Some(attr) = self.catalog.relation(target.oid).and_then(|r| r.column(number)) else {
             return Err(system(column));
         };
@@ -74,16 +124,19 @@ impl Definer<'_, '_> {
         if attr.has_default {
             return Err(prerequisite("already has a default value".into()));
         }
-        self.catalog.set_identity(target.oid, number, con.generated_when)
+        Ok(())
     }
 
-    /// The `SET` options of an identity column. The transform gives the options of the sequence to `ALTER SEQUENCE` first. Then `ATExecSetIdentity` checks the column and changes `SET GENERATED`.
+    /// The `SET` options of an identity column. The transform gives the options of the sequence to `ALTER SEQUENCE` first. Then `ATExecSetIdentity` checks the column and changes `SET GENERATED`, also in the partitions.
     pub(super) fn set_identity(
         &mut self,
         target: &Target,
         column: &str,
         options: &[Option<Node>],
+        recurse: bool,
     ) -> Result<()> {
+        let partition = self.is_partition(target);
+        check_partitions(target, partition, recurse, "change identity column of")?;
         let (generated, rest): (Vec<_>, Vec<_>) = options.iter().cloned().partition(|option| {
             matches!(option, Some(Node::DefElem(def)) if def.defname.as_deref() == Some("generated"))
         });
@@ -137,17 +190,23 @@ impl Definer<'_, '_> {
                 _ => identity,
             };
             self.catalog.set_identity(target.oid, number, value)?;
+            for (child, number) in self.partition_columns(target, column)? {
+                self.catalog.set_identity(child.oid, number, value)?;
+            }
         }
         Ok(())
     }
 
-    /// `ATExecDropIdentity`: the column loses its identity, and its sequence goes. The column keeps its not-null constraint.
+    /// `ATExecDropIdentity`: the column loses its identity, also in the partitions, and its sequence goes. The column keeps its not-null constraint.
     pub(super) fn drop_identity(
         &mut self,
         target: &Target,
         column: &str,
         missing_ok: bool,
+        recurse: bool,
     ) -> Result<()> {
+        let partition = self.is_partition(target);
+        check_partitions(target, partition, recurse, "drop identity from a column of")?;
         let (number, _) = self.identity_column(target, column)?;
         if number <= 0 {
             return Err(system(column));
@@ -166,6 +225,9 @@ impl Definer<'_, '_> {
             return Ok(());
         }
         self.catalog.set_identity(target.oid, number, 0)?;
+        for (child, number) in self.partition_columns(target, column)? {
+            self.catalog.set_identity(child.oid, number, 0)?;
+        }
         let Some(sequence) = self.catalog.identity_sequence(target.oid, number) else {
             return Ok(());
         };

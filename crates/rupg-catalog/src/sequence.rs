@@ -46,7 +46,21 @@ impl Catalog {
         Ok(())
     }
 
-    /// `getIdentitySequence`: the sequence of an identity column, which has an internal dependency on the column.
+    /// `getIdentitySequence`: the sequence of an identity column. A partition has no sequence of its own, so its column uses the sequence of the column with the same name in the topmost partitioned table.
+    pub fn root_identity_sequence(&self, table: u32, column: i16) -> Option<u32> {
+        let mut root = table;
+        while let Some(parent) = self.relation(root).and_then(|r| r.partition_of.as_ref()) {
+            root = parent.parent;
+        }
+        if root == table {
+            return self.identity_sequence(table, column);
+        }
+        let name = &self.relation(table)?.column(column)?.name;
+        let number = self.relation(root)?.column_number(name)?;
+        self.identity_sequence(root, number)
+    }
+
+    /// The sequence that an identity column owns, which has an internal dependency on the column. The column of a partition owns no sequence.
     pub fn identity_sequence(&self, table: u32, column: i16) -> Option<u32> {
         let target = ObjRef::column(table, column);
         self.depends
