@@ -1,0 +1,214 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE p (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE q (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE r (x int, y int);
+CREATE TABLE
+> CREATE UNIQUE INDEX r_x ON r (x) WHERE y > 0;
+CREATE INDEX
+> CREATE TABLE s (s text UNIQUE, u text);
+CREATE TABLE
+> CREATE TABLE t (s text, u text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM p, q WHERE p.x = q.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row   Hash Cond: (p.x = q.x)
+row   ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on q  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, b WHERE p.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row   Hash Cond: (b.x = p.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b, p WHERE b.y = p.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row   Hash Cond: (b.y = p.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, q WHERE p.y = q.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row   Hash Cond: (p.y = q.x)
+row   ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on q  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, q WHERE p.y = q.y;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row   Merge Cond: (p.y = q.y)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: p.y
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: q.y
+row         ->  Seq Scan on q  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE x <> 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..38.25 rows=2259 width=8)
+row   Filter: (x <> 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE y = 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..38.25 rows=11 width=8)
+row   Filter: (y = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE x = 5 OR y = 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..43.90 rows=12 width=8)
+row   Filter: ((x = 5) OR (y = 3))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE x + 0 = 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..43.90 rows=11 width=8)
+row   Filter: ((x + 0) = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM r, b WHERE r.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row   Merge Cond: (r.x = b.x)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: r.x
+row         ->  Seq Scan on r  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM s, t WHERE s.s = t.s;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=29.80..50.92 rows=880 width=128)
+row   Hash Cond: (t.s = s.s)
+row   ->  Seq Scan on t  (cost=0.00..18.80 rows=880 width=64)
+row   ->  Hash  (cost=18.80..18.80 rows=880 width=64)
+row         ->  Seq Scan on s  (cost=0.00..18.80 rows=880 width=64)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE s <> 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on s  (cost=0.00..21.00 rows=879 width=64)
+row   Filter: (s <> 'a'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, q, b WHERE p.x = q.x AND q.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=121.70..166.19 rows=2260 width=24)
+row   Hash Cond: (p.x = q.x)
+row   ->  Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row         Hash Cond: (b.x = p.x)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row               ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on q  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p LEFT JOIN b ON p.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Right Join  (cost=60.85..99.39 rows=2260 width=16)
+row   Hash Cond: (b.x = p.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE x <> y;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..38.25 rows=2249 width=8)
+row   Filter: (x <> y)
+EXPLAIN
+> CREATE TABLE d (x int UNIQUE DEFERRABLE, y int);
+CREATE TABLE
+> CREATE TABLE g (x bigint, y int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM d, b WHERE d.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..124.53 rows=2260 width=16)
+row   Hash Cond: (b.x = d.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, b WHERE p.x = b.x AND p.y < b.y;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.38 rows=753 width=16)
+row   Hash Cond: (b.x = p.x)
+row   Join Filter: (p.y < b.y)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, b WHERE p.x = b.x AND p.y + b.y = 3;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.38 rows=11 width=16)
+row   Hash Cond: (b.x = p.x)
+row   Join Filter: ((p.y + b.y) = 3)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, g WHERE p.x = g.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..96.62 rows=2040 width=20)
+row   Hash Cond: (g.x = p.x)
+row   ->  Seq Scan on g  (cost=0.00..30.40 rows=2040 width=12)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b LEFT JOIN p ON p.x = b.x WHERE p.y IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Hash Left Join  (cost=60.85..99.39 rows=11 width=16)
+row   Hash Cond: (b.x = p.x)
+row   Filter: (p.y IS NULL)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b FULL JOIN p ON p.x = b.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Full Join  (cost=60.85..99.39 rows=2260 width=16)
+row   Hash Cond: (b.x = p.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, b WHERE p.x = b.x + 1;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..99.68 rows=2260 width=16)
+row   Hash Cond: ((b.x + 1) = p.x)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p, b WHERE p.x = b.x ORDER BY p.y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=225.30..230.95 rows=2260 width=16)
+row   Sort Key: p.y
+row   ->  Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row         Hash Cond: (b.x = p.x)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row               ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM p JOIN b ON p.x = b.x JOIN b c ON c.y = p.x;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=127.64..191.32 rows=2260 width=24)
+row   Hash Cond: (c.y = p.x)
+row   ->  Seq Scan on b c  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=99.39..99.39 rows=2260 width=16)
+row         ->  Hash Join  (cost=60.85..99.39 rows=2260 width=16)
+row               Hash Cond: (b.x = p.x)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row                     ->  Seq Scan on p  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN

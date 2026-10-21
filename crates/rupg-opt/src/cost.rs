@@ -119,18 +119,31 @@ pub(crate) fn clamp_rows(rows: f64) -> f64 {
 
 /// `clause_selectivity` with no statistics: the fraction of the rows that pass a condition.
 pub(crate) fn selectivity(expr: &Expr) -> f64 {
+    selectivity_by(expr, &|_, _| None)
+}
+
+/// `clause_selectivity` with no statistics, where `eq` can give the selectivity of `=` of two values, as `eqsel` finds it for a unique column. `<>` is the rest of the rows, as `neqsel`.
+pub(crate) fn selectivity_by(expr: &Expr, eq: &dyn Fn(&Expr, &Expr) -> Option<f64>) -> f64 {
+    let each = |e: &Expr| selectivity_by(e, eq);
     match &expr.kind {
-        ExprKind::Bool(BoolOp::And, args) => args.iter().map(selectivity).product(),
+        ExprKind::Bool(BoolOp::And, args) => args.iter().map(each).product(),
         ExprKind::Bool(BoolOp::Or, args) => {
-            args.iter().map(selectivity).fold(0.0, |s1, s2| s1 + s2 - s1 * s2)
+            args.iter().map(each).fold(0.0, |s1, s2| s1 + s2 - s1 * s2)
         }
-        ExprKind::Bool(BoolOp::Not, args) => 1.0 - args.first().map_or(0.5, selectivity),
+        ExprKind::Bool(BoolOp::Not, args) => 1.0 - args.first().map_or(0.5, each),
         ExprKind::NullTest(_, true) => EQ_SEL,
         ExprKind::NullTest(_, false) => 1.0 - EQ_SEL,
         ExprKind::Const(_) if exprs::is_true(expr) => 1.0,
         ExprKind::Const(_) => 0.0,
         _ => match exprs::binary(expr) {
-            Some((op, _, _)) => operator_selectivity(op),
+            Some((op, left, right)) => {
+                let name = builtin::operator_by_oid(op).map(|o| o.name);
+                match (name, eq(left, right)) {
+                    (Some("="), Some(sel)) => sel,
+                    (Some("<>"), Some(sel)) => 1.0 - sel,
+                    _ => operator_selectivity(op),
+                }
+            }
             None => INEQ_SEL,
         },
     }

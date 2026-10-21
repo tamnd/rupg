@@ -5,7 +5,7 @@ use std::cell::RefCell;
 use rupg_analyze::{Expr, Params, Query};
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
-use rupg_opt::Member;
+use rupg_opt::{Index, Member};
 use rupg_plan::{Format, Options};
 use rupg_sql::nodes::{DefElem, ExplainStmt, Node};
 use rupg_types::oid;
@@ -45,6 +45,26 @@ impl rupg_opt::Members for Members<'_, '_> {
             })
             .collect();
         Some(members)
+    }
+
+    fn indexes(&self, table: u32) -> Vec<Index> {
+        let Some(catalog) = self.reader.catalog() else { return Vec::new() };
+        let mut out: Vec<Index> = catalog
+            .relations()
+            .filter_map(|rel| {
+                let info = rel.index.as_ref().filter(|i| i.table == table && i.valid)?;
+                let count = usize::try_from(info.key_count).unwrap_or(0);
+                Some(Index {
+                    oid: rel.oid,
+                    keys: info.keys.iter().take(count).copied().collect(),
+                    unique: info.unique,
+                    immediate: info.immediate,
+                    partial: info.predicate.is_some(),
+                })
+            })
+            .collect();
+        out.sort_by_key(|i| i.oid);
+        out
     }
 }
 

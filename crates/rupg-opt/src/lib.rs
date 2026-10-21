@@ -1,6 +1,6 @@
 //! The planner: the plan of a query, as `planner.c` and `createplan.c` make it (document 15 section 15.9).
 //!
-//! [`plan`] turns the query tree of the analyzer into a [`Plan`] of `rupg-plan`. The planner has no statistics and no indexes yet, so it chooses its nodes as PostgreSQL does for tables that `ANALYZE` has not seen: a sequential scan of each table, the join of the lowest cost of a merge join, a hash join and a nested loop, and the estimates of `costsize.c` with the defaults of `selfuncs.c`.
+//! [`plan`] turns the query tree of the analyzer into a [`Plan`] of `rupg-plan`. The planner has no statistics and no index scans yet, so it chooses its nodes as PostgreSQL does for tables that `ANALYZE` has not seen: a sequential scan of each table, the join of the lowest cost of a merge join, a hash join and a nested loop, and the estimates of `costsize.c` with the defaults of `selfuncs.c`. The unique indexes of a table change the estimates of the `=` conditions of its columns and the costs of its joins, as `has_unique_index` and `innerrel_is_unique` use them.
 
 #![forbid(unsafe_code)]
 
@@ -17,6 +17,23 @@ use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
 pub trait Members: std::fmt::Debug {
     /// The tables that a scan of the relation `relation` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them with the conditions `conds` of the scan, or `None` for a relation that is one table.
     fn members(&self, query: &Query, relation: usize, conds: &[&Expr]) -> Option<Vec<Member>>;
+
+    /// The valid indexes of the table with the OID `table`, in the order of their OIDs, as `get_relation_info` reads them from `RelationGetIndexList`.
+    fn indexes(&self, table: u32) -> Vec<Index>;
+}
+
+/// An index of a table, with the facts of `IndexOptInfo` that the planner uses.
+#[derive(Clone, Debug)]
+pub struct Index {
+    pub oid: u32,
+    /// `indexkeys`: the column number of each key column in the table, or 0 for an expression.
+    pub keys: Vec<i16>,
+    /// `indisunique`.
+    pub unique: bool,
+    /// `indimmediate`: false for the index of a deferrable constraint.
+    pub immediate: bool,
+    /// True for a partial index, which has a predicate.
+    pub partial: bool,
 }
 
 /// A table of an inheritance tree that a scan reads.
