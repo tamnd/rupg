@@ -1,0 +1,122 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE p (k int, v int, CHECK (v < 1000));
+CREATE TABLE
+> CREATE TABLE c1 (x text) INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 (y int DEFAULT 7, CHECK (v > 0)) INHERITS (p);
+CREATE TABLE
+> CREATE TABLE g1 () INHERITS (c1);
+CREATE TABLE
+> INSERT INTO p VALUES (1, 10);
+INSERT 0 1
+> INSERT INTO c1 VALUES (2, 20, 'a');
+INSERT 0 1
+> INSERT INTO c2 VALUES (3, 30, 5);
+INSERT 0 1
+> INSERT INTO g1 VALUES (4, 40, 'g');
+INSERT 0 1
+> CREATE TABLE s (k int, v int);
+CREATE TABLE
+> INSERT INTO s VALUES (1, 1), (2, 2), (3, 3), (5, 5);
+INSERT 0 4
+> MERGE INTO p USING s ON p.k = s.k WHEN MATCHED THEN UPDATE SET v = p.v + s.v WHEN NOT MATCHED THEN INSERT VALUES (s.k, s.v);
+MERGE 4
+> SELECT tableoid::regclass AS t, * FROM p ORDER BY k;
+fields t:2205:4:-1,k@p.1:23:4:-1,v@p.2:23:4:-1
+row p,1,11
+row c1,2,22
+row c2,3,33
+row g1,4,40
+row p,5,5
+SELECT 5
+> SELECT * FROM c1 ORDER BY k;
+fields k@c1.1:23:4:-1,v@c1.2:23:4:-1,x@c1.3:25:-1:-1
+row 2,22,a
+row 4,40,g
+SELECT 2
+> SELECT * FROM c2 ORDER BY k;
+fields k@c2.1:23:4:-1,v@c2.2:23:4:-1,y@c2.3:23:4:-1
+row 3,33,5
+SELECT 1
+> MERGE INTO p USING s ON p.k = s.k WHEN MATCHED AND s.k = 2 THEN DELETE WHEN MATCHED THEN UPDATE SET k = p.k * 10 RETURNING merge_action(), p.tableoid::regclass, p.*;
+fields merge_action:25:-1:-1,tableoid:2205:4:-1,k@p.1:23:4:-1,v@p.2:23:4:-1
+row UPDATE,p,10,11
+row DELETE,c1,2,22
+row UPDATE,c2,30,33
+row UPDATE,p,50,5
+MERGE 4
+> SELECT tableoid::regclass AS t, * FROM p ORDER BY k;
+fields t:2205:4:-1,k@p.1:23:4:-1,v@p.2:23:4:-1
+row g1,4,40
+row p,10,11
+row c2,30,33
+row p,50,5
+SELECT 4
+> MERGE INTO ONLY p USING (VALUES (10), (4)) AS v(k) ON p.k = v.k WHEN MATCHED THEN UPDATE SET v = 0 WHEN NOT MATCHED THEN INSERT VALUES (v.k + 100, 1);
+MERGE 2
+> SELECT tableoid::regclass AS t, * FROM p ORDER BY k;
+fields t:2205:4:-1,k@p.1:23:4:-1,v@p.2:23:4:-1
+row g1,4,40
+row p,10,0
+row c2,30,33
+row p,50,5
+row p,104,1
+SELECT 5
+> MERGE INTO p USING (VALUES (30, -5)) AS v(k, d) ON p.k = v.k WHEN MATCHED THEN UPDATE SET v = v.d;
+ERROR 23514 new row for relation "c2" violates check constraint "c2_v_check"
+DETAIL Failing row contains (30, -5).
+> MERGE INTO p USING (VALUES (4, 2000)) AS v(k, d) ON p.k = v.k WHEN MATCHED THEN UPDATE SET v = v.d;
+ERROR 23514 new row for relation "g1" violates check constraint "p_v_check"
+DETAIL Failing row contains (4, 2000).
+> MERGE INTO p USING (VALUES (9, 2000)) AS v(k, d) ON p.k = v.k WHEN NOT MATCHED THEN INSERT VALUES (v.k, v.d);
+ERROR 23514 new row for relation "p" violates check constraint "p_v_check"
+DETAIL Failing row contains (9, 2000).
+> MERGE INTO p USING (VALUES (4), (4)) AS v(k) ON p.k = v.k WHEN MATCHED THEN UPDATE SET v = p.v + 1;
+ERROR 21000 MERGE command cannot affect row a second time
+HINT Ensure that not more than one source row matches any one target row.
+> CREATE FUNCTION tr() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE '% % % on %', TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME; IF TG_LEVEL = 'ROW' AND TG_OP <> 'DELETE' THEN RETURN NEW; ELSIF TG_LEVEL = 'ROW' THEN RETURN OLD; END IF; RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER ps BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tr();
+CREATE TRIGGER
+> CREATE TRIGGER pr BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tr();
+CREATE TRIGGER
+> CREATE TRIGGER c1r AFTER UPDATE OR DELETE ON c1 FOR EACH ROW EXECUTE FUNCTION tr();
+CREATE TRIGGER
+> CREATE TRIGGER g1r BEFORE UPDATE ON g1 FOR EACH ROW EXECUTE FUNCTION tr();
+CREATE TRIGGER
+> MERGE INTO p USING (VALUES (50), (30), (4), (1)) AS v(k) ON p.k = v.k WHEN MATCHED AND p.k = 30 THEN DELETE WHEN MATCHED THEN UPDATE SET v = p.v + 1 WHEN NOT MATCHED THEN INSERT VALUES (v.k, 0);
+NOTICE 00000 BEFORE STATEMENT INSERT on p (PL/pgSQL function tr() line 1 at RAISE)
+NOTICE 00000 BEFORE STATEMENT UPDATE on p (PL/pgSQL function tr() line 1 at RAISE)
+NOTICE 00000 BEFORE STATEMENT DELETE on p (PL/pgSQL function tr() line 1 at RAISE)
+NOTICE 00000 BEFORE ROW UPDATE on p (PL/pgSQL function tr() line 1 at RAISE)
+NOTICE 00000 BEFORE ROW UPDATE on g1 (PL/pgSQL function tr() line 1 at RAISE)
+NOTICE 00000 BEFORE ROW INSERT on p (PL/pgSQL function tr() line 1 at RAISE)
+MERGE 4
+> SELECT tableoid::regclass AS t, * FROM p ORDER BY k;
+fields t:2205:4:-1,k@p.1:23:4:-1,v@p.2:23:4:-1
+row p,1,0
+row g1,4,41
+row p,10,0
+row p,50,6
+row p,104,1
+SELECT 5
+> BEGIN;
+BEGIN
+> MERGE INTO p USING (VALUES (1)) AS v(k) ON p.k = v.k WHEN NOT MATCHED BY SOURCE THEN DELETE;
+NOTICE 00000 BEFORE STATEMENT DELETE on p (PL/pgSQL function tr() line 1 at RAISE)
+NOTICE 00000 BEFORE ROW DELETE on p (PL/pgSQL function tr() line 1 at RAISE)
+NOTICE 00000 BEFORE ROW DELETE on p (PL/pgSQL function tr() line 1 at RAISE)
+NOTICE 00000 BEFORE ROW DELETE on p (PL/pgSQL function tr() line 1 at RAISE)
+MERGE 4
+> SELECT tableoid::regclass AS t, * FROM p ORDER BY k;
+fields t:2205:4:-1,k@p.1:23:4:-1,v@p.2:23:4:-1
+row p,1,0
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM p;
+fields count:20:8:-1
+row 5
+SELECT 1
