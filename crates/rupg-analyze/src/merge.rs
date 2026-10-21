@@ -290,6 +290,7 @@ impl Analyzer<'_> {
                 recheck,
                 updated,
                 instead: false,
+                inherit: false,
             }),
             ..Query::default()
         };

@@ -50,6 +50,7 @@ impl Analyzer<'_> {
         let (returning, carried) =
             self.write_returning(s.returningClause.as_deref(), WriteKind::Update)?;
         let tail = tail_columns(&carried);
+        let inherit = self.inherits_target(WriteKind::Update);
         let mut query = Query {
             relations: std::mem::take(&mut self.scope.relations),
             from,
@@ -60,7 +61,7 @@ impl Analyzer<'_> {
         query.targets.extend(carried_targets(carried));
         let instead = self.is_view(table);
         // The triggers `INSTEAD OF` of a view get the old row, as the junk column `wholerow` gives it.
-        let partitioned = self.is_partitioned(table);
+        let partitioned = self.is_partitioned(table) || inherit;
         if instead {
             query.targets.extend(old_row(&columns));
         } else {
@@ -71,13 +72,23 @@ impl Analyzer<'_> {
         }
         let checks = if partitioned { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
-        let recheck = self.recheck(table, WriteKind::Update, &name, &columns, &checks);
+        // Each table of the tree of `INHERITS` checks its rows after its triggers.
+        let recheck = if inherit {
+            None
+        } else {
+            self.recheck(table, WriteKind::Update, &name, &columns, &checks)
+        };
         if !checks.is_empty() {
             query = with_checks(&name, &columns, query, checks, &tail);
         }
         let width = columns.len();
         let unique = self.unique_keys(table, &columns)?;
-        let foreign = self.foreign_keys(table, WriteKind::Update, &columns)?;
+        // Each table of the tree of `INHERITS` fires its foreign keys.
+        let foreign = if inherit {
+            Vec::new()
+        } else {
+            self.foreign_keys(table, WriteKind::Update, &columns)?
+        };
         query.write = Some(Write {
             kind: WriteKind::Update,
             table,
@@ -92,6 +103,7 @@ impl Analyzer<'_> {
             recheck,
             updated: set_columns(&s.targetList, &columns),
             instead,
+            inherit,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -190,8 +202,14 @@ impl Analyzer<'_> {
         self.write_with(s.withClause.as_deref())?;
         let rv = s.relation.as_deref().ok_or_else(|| Error::internal("a DELETE with no table"))?;
         let (table, name, columns) = self.target_table(rv, WriteKind::Delete)?;
-        let foreign = self.foreign_keys(table, WriteKind::Delete, &columns)?;
         let from = self.target_from(rv, &s.usingClause)?;
+        let inherit = self.inherits_target(WriteKind::Delete);
+        // Each table of the tree of `INHERITS` fires its foreign keys.
+        let foreign = if inherit {
+            Vec::new()
+        } else {
+            self.foreign_keys(table, WriteKind::Delete, &columns)?
+        };
         let filter = self.target_where(s.whereClause.as_ref())?;
         let (returning, carried) =
             self.write_returning(s.returningClause.as_deref(), WriteKind::Delete)?;
@@ -205,7 +223,7 @@ impl Analyzer<'_> {
         if instead {
             targets.extend(old_row(&columns));
         } else {
-            if self.is_partitioned(table) {
+            if self.is_partitioned(table) || inherit {
                 targets.push(table_oid_target());
             }
             targets.push(tid_target());
@@ -229,6 +247,7 @@ impl Analyzer<'_> {
                 recheck: None,
                 updated: Vec::new(),
                 instead,
+                inherit,
             }),
             ..Query::default()
         };

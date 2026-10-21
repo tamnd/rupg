@@ -662,10 +662,12 @@ impl Connection {
             self.xid.set(heap.begin(self.pid));
         }
         let mut view = View { xid: self.xid.get(), ..view.clone() };
-        let partitioned = self
-            .catalog()
-            .relation(info.table)
-            .is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned);
+        // The tables of the tree of `INHERITS` change their rows as the leaves of a partitioned table.
+        let partitioned = info.inherit
+            || self
+                .catalog()
+                .relation(info.table)
+                .is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned);
         if partitioned {
             triggers.retain_statement();
         }
@@ -5178,6 +5180,12 @@ mod tests {
     #[test]
     fn inherit_merge() {
         big_stack(|| script(include_str!("connection/inherit_merge.test")));
+    }
+
+    /// `UPDATE` and `DELETE` of a table with children of `INHERITS`: the rows of the children change in their tables and keep the values of their own columns, `ONLY`, `RETURNING` with `tableoid`, `FROM` and `USING`, the check constraints and the unique keys of the children, the triggers of the parent and of the children, a child of two parents, and a rollback. `connection/inherit_change.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn inherit_change() {
+        big_stack(|| script(include_str!("connection/inherit_change.test")));
     }
 
     /// The planner takes the parameters of `Bind` as constants, so an error of the fold comes at `Bind` and not at `Parse`. The messages are the messages of PostgreSQL 19 for the same input.

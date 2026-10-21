@@ -169,8 +169,8 @@ impl Analyzer<'_> {
                 Source::Carry(relation)
             }
         };
-        // The carried values of a `MERGE` come after the row, the old row, the new row and the action. A row of a partitioned table has the OID of its partition after the columns, or after the action for a `MERGE`.
-        let partitioned = self.is_partitioned(table_oid);
+        // The carried values of a `MERGE` come after the row, the old row, the new row and the action. A row of a partitioned table has the OID of its partition after the columns, or after the action for a `MERGE`, and a row of a table with children of `INHERITS` has the OID of its table after the columns.
+        let partitioned = self.is_partitioned(table_oid) || self.inherits_target(kind);
         let base = match kind {
             WriteKind::Merge => 3 * width + 1 + usize::from(partitioned),
             _ if partitioned => width + 1,

@@ -73,6 +73,8 @@ pub struct Write {
     pub updated: Vec<i16>,
     /// True for a write into a view with a trigger `INSTEAD OF ... FOR EACH ROW` for the event. The rows of the query go to the triggers, not to the heap, and the rows of an `UPDATE` and of a `DELETE` end with the old row of the view in place of the ID of the version.
     pub instead: bool,
+    /// True for an `UPDATE` or a `DELETE` of a table with children of `INHERITS`, with no `ONLY`, as `expand_inherited_rtentry` adds the children. Each row of the query gives the OID of its table before the ID of its version, and each table of the tree checks and changes its rows, as the leaves of a partitioned table do.
+    pub inherit: bool,
 }
 
 /// `OnConflictExpr`: what an `INSERT` does for a new row with the key of a row that the table has.
@@ -343,6 +345,7 @@ impl Analyzer<'_> {
             recheck,
             updated,
             instead: self.is_view(table),
+            inherit: false,
         });
         self.end_write_with(&mut query, s.withClause.as_deref())?;
         Ok(query)
@@ -574,10 +577,10 @@ impl Analyzer<'_> {
         {
             return Err(not_yet(&format!("{what} a table with rules")));
         }
-        // `expand_inherited_rtentry` for the target of an `UPDATE`, a `DELETE` or a `MERGE`: the children of `INHERITS` change their rows too.
+        // `expand_inherited_rtentry` for the target of a `MERGE`: the children of `INHERITS` change their rows too.
         if rel.kind == RelKind::Table
             && rv.inh
-            && kind != WriteKind::Insert
+            && kind == WriteKind::Merge
             && self.env.catalog().is_some_and(|c| !c.children(oid).is_empty())
         {
             return Err(not_yet(&format!("{what} a table with children of INHERITS")));
@@ -605,6 +608,15 @@ impl Analyzer<'_> {
     /// True when the target of the write is a view, which only a view with a trigger `INSTEAD OF` for the event can be.
     pub(crate) fn is_view(&self, table: u32) -> bool {
         crate::ddl::relkind(self.env, table) == b'v'
+    }
+
+    /// [`Write::inherit`] for the target of an `UPDATE` or a `DELETE`, the relation 0: a table with children of `INHERITS` and no `ONLY`.
+    pub(crate) fn inherits_target(&self, kind: WriteKind) -> bool {
+        let Some(target) = self.scope.relations.first() else { return false };
+        matches!(kind, WriteKind::Update | WriteKind::Delete)
+            && !target.only
+            && crate::ddl::relkind(self.env, target.oid) == b'r'
+            && self.env.catalog().is_some_and(|c| !c.children(target.oid).is_empty())
     }
 
     /// True for a partitioned table. Its partitions check the rows of a write, and each row of the query of an `UPDATE` or a `DELETE` gives the OID of its partition before the ID of its version.
