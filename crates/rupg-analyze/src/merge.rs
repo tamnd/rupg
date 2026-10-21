@@ -16,7 +16,7 @@ use crate::coerce::AtOpt;
 use crate::expr::{Expr, ExprKind, Var};
 use crate::from::{Column, FromItem, Join, JoinKind, Relation};
 use crate::insert::{Foreign, Write, WriteKind, targets, with_checks};
-use crate::modify::{carried_targets, old_row, tid_target};
+use crate::modify::{carried_targets, old_row, set_columns, tid_target};
 use crate::returning::rewrite;
 use crate::select::{Query, Target};
 use crate::typename::place;
@@ -136,8 +136,16 @@ impl Analyzer<'_> {
             }
         };
         let mut parts = Vec::with_capacity(clauses.len());
+        let mut updated = Vec::new();
         for clause in &clauses {
             let kind = match_kind(clause);
+            if matches!(clause.commandType, CmdType::CMD_UPDATE) {
+                for column in set_columns(&clause.targetList, &columns) {
+                    if !updated.contains(&column) {
+                        updated.push(column);
+                    }
+                }
+            }
             let full = self.merge_namespace(
                 kind != MatchKind::NotMatchedByTarget,
                 kind != MatchKind::NotMatchedBySource,
@@ -247,6 +255,12 @@ impl Analyzer<'_> {
         let update_foreign = foreign(self, MergeCommand::Update, WriteKind::Update)?;
         let delete_foreign = foreign(self, MergeCommand::Delete, WriteKind::Delete)?;
         let unique = self.unique_keys(table, &columns)?;
+        // The triggers `BEFORE ... FOR EACH ROW` of the inserts and of the updates come before the checks of the constraints.
+        let recheck =
+            [(MergeCommand::Insert, WriteKind::Insert), (MergeCommand::Update, WriteKind::Update)]
+                .into_iter()
+                .filter(|&(command, _)| uses(command))
+                .find_map(|(_, kind)| self.recheck(table, kind, &name, &columns, &checks));
         let mut query = Query {
             relations: std::mem::take(&mut self.scope.relations),
             from: vec![from],
@@ -268,8 +282,8 @@ impl Analyzer<'_> {
                     update_foreign,
                     delete_foreign,
                 }),
-                recheck: None,
-                updated: Vec::new(),
+                recheck,
+                updated,
                 instead: false,
             }),
             ..Query::default()

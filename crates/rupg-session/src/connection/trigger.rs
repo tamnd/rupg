@@ -1,10 +1,10 @@
 //! The triggers of `CREATE TRIGGER` on the writes of a table, as `trigger.c` fires them: the triggers `BEFORE` before the write, and the queue of the triggers `AFTER`, which fire at the end of the statement, as `AfterTriggerEndQuery` fires them.
 //!
-//! The triggers `BEFORE ... FOR EACH STATEMENT` fire after the query of the write gives its rows. The triggers `BEFORE ... FOR EACH ROW` fire for all the rows before the first row goes into the heap, so a trigger does not see the rows that its statement wrote before. `INSERT ... ON CONFLICT` fires them for each row in turn, as `upsert.rs` tells. Only a trigger function in PL/pgSQL can fire yet.
+//! The triggers `BEFORE ... FOR EACH STATEMENT` fire after the query of the write gives its rows. The triggers `BEFORE ... FOR EACH ROW` fire for all the rows before the first row goes into the heap, so a trigger does not see the rows that its statement wrote before. `INSERT ... ON CONFLICT` fires them for each row in turn, as `upsert.rs` tells, and `MERGE` fires them for each action, as `merge.rs` tells. Only a trigger function in PL/pgSQL can fire yet.
 
 use std::rc::Rc;
 
-use rupg_analyze::{Expr, Query, Write, WriteKind};
+use rupg_analyze::{Expr, Merge, MergeCommand, Query, Write, WriteKind};
 use rupg_catalog::{TRIGGER_BEFORE, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_ROW, TRIGGER_UPDATE};
 use rupg_catalog::{TRIGGER_INSTEAD, Trigger};
 use rupg_common::{Error, SqlState};
@@ -13,6 +13,7 @@ use rupg_pgcatalog::builtin::Named;
 use rupg_types::Value;
 
 use super::Connection;
+use super::merge::Action;
 use super::upsert::{Upsert, Upserted};
 use crate::query::{Captured, Transition};
 use crate::utility::Notice;
@@ -66,6 +67,31 @@ impl Triggers {
                 && (t.trigger.kind & TRIGGER_BEFORE != 0) == before
                 && t.trigger.kind & TRIGGER_INSTEAD == 0
         })
+    }
+}
+
+/// The triggers of a `MERGE`, for each action of its `WHEN` clauses. An action that no clause takes has no triggers.
+#[derive(Debug, Default)]
+pub(super) struct MergeTriggers {
+    insert: Triggers,
+    update: Triggers,
+    delete: Triggers,
+}
+
+impl MergeTriggers {
+    /// True when the `MERGE` fires no trigger.
+    pub(super) fn is_empty(&self) -> bool {
+        self.insert.is_empty() && self.update.is_empty() && self.delete.is_empty()
+    }
+
+    /// The triggers of the action `command`. `DO NOTHING` fires no trigger.
+    pub(super) fn of(&self, command: MergeCommand) -> Option<&Triggers> {
+        match command {
+            MergeCommand::Insert => Some(&self.insert),
+            MergeCommand::Update => Some(&self.update),
+            MergeCommand::Delete => Some(&self.delete),
+            MergeCommand::Nothing => None,
+        }
     }
 }
 
@@ -145,6 +171,30 @@ impl Connection {
             WriteKind::Merge => return Ok(Triggers::default()),
         };
         self.triggers_of(info, event)
+    }
+
+    /// The triggers of a `MERGE` for the actions of its `WHEN` clauses, as `ExecInitMerge` gives `mt_merge_subcommands`.
+    ///
+    /// # Errors
+    ///
+    /// The error of the condition of `WHEN` of a trigger.
+    pub(super) fn merge_triggers(
+        &self,
+        info: &Write,
+        merge: &Merge,
+    ) -> Result<MergeTriggers, Error> {
+        let of = |command: MergeCommand, event: i16| {
+            if merge.clauses.iter().any(|c| c.command == command) {
+                self.triggers_of(info, event)
+            } else {
+                Ok(Triggers::default())
+            }
+        };
+        Ok(MergeTriggers {
+            insert: of(MergeCommand::Insert, TRIGGER_INSERT)?,
+            update: of(MergeCommand::Update, TRIGGER_UPDATE)?,
+            delete: of(MergeCommand::Delete, TRIGGER_DELETE)?,
+        })
     }
 
     /// The triggers `UPDATE` that fire for `INSERT ... ON CONFLICT DO UPDATE`, or no triggers for another write.
@@ -263,6 +313,18 @@ impl Connection {
             if self.enabled((armed, triggers.event), info, None, None)? {
                 self.call_trigger(&armed.trigger, triggers.event, (None, None), None)?;
             }
+        }
+        Ok(())
+    }
+
+    /// `fireBSTriggers` for a `MERGE`: the triggers `BEFORE ... FOR EACH STATEMENT` of `INSERT`, then of `UPDATE`, then of `DELETE`.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    pub(super) fn before_merge(&self, fire: &MergeTriggers, info: &Write) -> Result<(), Error> {
+        for triggers in [&fire.insert, &fire.update, &fire.delete] {
+            self.before_statement(triggers, info)?;
         }
         Ok(())
     }
@@ -510,27 +572,27 @@ impl Connection {
         Ok(())
     }
 
-    /// `ExecBRUpdateTriggers` for the new row `new` of `ON CONFLICT DO UPDATE` and the row `old` of the table. The new row has the columns, then the conditions of the checks. A trigger that gives a null row skips the row, and then the checks of the constraints run on the new row. It gives the columns of the new row.
+    /// `ExecBRInsertTriggers` or `ExecBRUpdateTriggers` for one new row `new`: a row of `ON CONFLICT DO UPDATE` or of an action of a `MERGE`, with the row `old` of the table for an update. The new row has the columns, then the conditions of the checks. A trigger that gives a null row skips the row, and then the checks of the constraints run on the new row. It gives the columns of the new row.
     ///
     /// # Errors
     ///
     /// The errors of the triggers and of the checks.
-    pub(super) fn conflict_before(
+    pub(super) fn before_row(
         &self,
         plan: &Plan,
         info: &Write,
         triggers: &Triggers,
-        old: &[Value],
+        old: Option<&[Value]>,
         mut new: Vec<Value>,
     ) -> Result<Option<Vec<Value>>, Error> {
-        let old = padded(old.to_vec(), self.table_width(info));
+        let old = old.map(|old| padded(old.to_vec(), self.table_width(info)));
         let given = new.split_off(info.width.min(new.len()));
         let mut fired = false;
         for armed in triggers.of(true, true) {
-            if !self.enabled((armed, triggers.event), info, Some(&old), Some(&new))? {
+            if !self.enabled((armed, triggers.event), info, old.as_deref(), Some(&new))? {
                 continue;
             }
-            let rows = (Some(old.clone()), Some(new.clone()));
+            let rows = (old.clone(), Some(new.clone()));
             let Some(returned) = self.call_trigger(&armed.trigger, triggers.event, rows, None)?
             else {
                 return Ok(None);
@@ -546,6 +608,72 @@ impl Connection {
             new
         };
         Ok(plan.check_rows(vec![row], &reader)?.into_iter().next())
+    }
+
+    /// `ExecBRDeleteTriggers` for the row `old` of the table that an action of a `MERGE` deletes. It is false when a trigger gives a null row, which skips the row.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the triggers.
+    pub(super) fn before_delete(
+        &self,
+        info: &Write,
+        triggers: &Triggers,
+        old: &[Value],
+    ) -> Result<bool, Error> {
+        let old = padded(old.to_vec(), self.table_width(info));
+        for armed in triggers.of(true, true) {
+            if self.enabled((armed, triggers.event), info, Some(&old), None)?
+                && self
+                    .call_trigger(&armed.trigger, triggers.event, (Some(old.clone()), None), None)?
+                    .is_none()
+            {
+                return Ok(false);
+            }
+        }
+        Ok(true)
+    }
+
+    /// `fireASTriggers` for a `MERGE` and the calls of its triggers `AFTER ... FOR EACH ROW`: the events of the triggers `FOR EACH ROW` in the order of the actions, then the triggers `FOR EACH STATEMENT` of `DELETE`, then of `UPDATE`, then of `INSERT`. The transition tables of the triggers of each event have the rows of the actions of that event.
+    ///
+    /// # Errors
+    ///
+    /// The error of the condition of `WHEN` of a trigger.
+    pub(super) fn after_merge(
+        &self,
+        info: &Write,
+        fire: &MergeTriggers,
+        done: &[Action],
+    ) -> Result<(), Error> {
+        let width = self.table_width(info);
+        let pad = |row: &[Value]| padded(row[..width.min(row.len())].to_vec(), width);
+        let of = |command: MergeCommand| done.iter().filter(move |a| a.command == command);
+        let news = |command| of(command).filter_map(|a| a.new.as_deref().map(pad)).collect();
+        let olds = |command| of(command).map(|a| pad(&a.old)).collect::<Vec<_>>();
+        let inserted: Vec<_> = news(MergeCommand::Insert);
+        let (old, new) = (olds(MergeCommand::Update), news(MergeCommand::Update));
+        let deleted = olds(MergeCommand::Delete);
+        let insert = captured(info, &fire.insert, &[], &inserted);
+        let update = captured(info, &fire.update, &old, &new);
+        let delete = captured(info, &fire.delete, &deleted, &[]);
+        let mut events = Vec::new();
+        for action in done {
+            let (triggers, captured) = match action.command {
+                MergeCommand::Insert => (&fire.insert, &insert),
+                MergeCommand::Update => (&fire.update, &update),
+                MergeCommand::Delete => (&fire.delete, &delete),
+                MergeCommand::Nothing => continue,
+            };
+            let old = (action.command != MergeCommand::Insert).then(|| pad(&action.old));
+            let new = action.new.as_deref().map(pad);
+            let rows = (old.as_ref(), new.as_ref());
+            self.row_events(info, (triggers, captured), rows, &mut events)?;
+        }
+        self.statement_events(info, &fire.delete, &delete, &mut events)?;
+        self.statement_events(info, &fire.update, &update, &mut events)?;
+        self.statement_events(info, &fire.insert, &insert, &mut events)?;
+        self.events.borrow_mut().extend(events);
+        Ok(())
     }
 
     /// `afterTriggerInvokeEvents`: fires the triggers `AFTER` of the queue from the place `mark`, in the order of the queue. The events of the statements of a trigger fire at the end of each statement. After an error the queue goes back to the place.

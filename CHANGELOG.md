@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- Triggers on `MERGE`. The triggers `FOR EACH STATEMENT` of the actions of the clauses fire, the triggers `BEFORE ... FOR EACH ROW` can change or skip the row of an action before the checks, and the triggers `AFTER ... FOR EACH ROW` and the transition tables get the rows of each action (#NNN).
 - `CREATE CONSTRAINT TRIGGER`. The trigger gets a constraint of the kind `t` with its name, and `DROP TRIGGER` drops the constraint. A trigger `DEFERRABLE` and `INITIALLY DEFERRED` fires at the commit, and `SET CONSTRAINTS` changes when it fires. A rollback to a savepoint gives back the deferred events of the savepoint (#486).
 - `pg_trigger_depth()`. It gives the number of the trigger functions that run, one in the other, and 0 outside of a trigger (#485).
 - Triggers on `COPY FROM`. The triggers `INSERT ... FOR EACH STATEMENT` fire before the first row and at the end. A table with triggers `BEFORE ... FOR EACH ROW` gets one row at a time, after the condition `WHERE` and before the checks, and the messages of such a trigger have the line of the copy in their context. The triggers `AFTER ... FOR EACH ROW` and the transition tables get the rows of the copy (#484).

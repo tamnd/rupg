@@ -1187,7 +1187,7 @@ impl Plan {
         Ok(insert::check(info, rows, session)?.into_iter().next())
     }
 
-    /// `ExecMergeMatched` and `ExecMergeNotMatched` for one clause of a `MERGE`: the row that the clause gives for the row `target` of the table, which ends with the ID of its version, and the carried values of the row of the join. It is `None` when the condition of the clause is not true. The new row of an `INSERT` or an `UPDATE` has the columns of the table, after the checks of the constraints.
+    /// `ExecMergeMatched` and `ExecMergeNotMatched` for one clause of a `MERGE`: the row that the clause gives for the row `target` of the table, which ends with the ID of its version, and the carried values of the row of the join. It is `None` when the condition of the clause is not true. The new row of an `INSERT` or an `UPDATE` has the columns of the table, after the checks of the constraints. With [`rupg_analyze::Write::recheck`] it has the conditions of the checks after the columns, because the triggers `BEFORE ... FOR EACH ROW` come before the checks.
     ///
     /// # Errors
     ///
@@ -1216,7 +1216,9 @@ impl Plan {
         cache.tables.borrow_mut().push((base, Rc::new(tables)));
         let rows = run_query(query, params, session, &cache, &[], false)?;
         let rows = match clause.command {
-            rupg_analyze::MergeCommand::Insert | rupg_analyze::MergeCommand::Update => {
+            rupg_analyze::MergeCommand::Insert | rupg_analyze::MergeCommand::Update
+                if info.recheck.is_none() =>
+            {
                 insert::check_rows(info, rows, session)?
             }
             _ => rows,

@@ -69,7 +69,7 @@ pub struct Write {
     pub merge: Option<Merge>,
     /// The query of the checks of the constraints after the triggers `BEFORE ... FOR EACH ROW` of an `INSERT` or an `UPDATE`, which can change the new row. It reads one relation, the new row, and gives its columns, then the conditions of the check constraints. When the write has it, [`Write::checks`] are not checked in the run of the plan: the rows of the run keep the conditions after the columns, and the caller checks the rows after the triggers.
     pub recheck: Option<Box<Query>>,
-    /// The numbers of the columns that `SET` of an `UPDATE` or of `ON CONFLICT DO UPDATE` gives, in the order of the list, for the triggers of `UPDATE OF`.
+    /// The numbers of the columns that `SET` of an `UPDATE` or of `ON CONFLICT DO UPDATE` gives, in the order of the list, for the triggers of `UPDATE OF`. For a `MERGE` they are the columns of the `SET` of all its clauses `UPDATE`, as `transformMergeStmt` puts them in `updatedCols`.
     pub updated: Vec<i16>,
     /// True for a write into a view with a trigger `INSTEAD OF ... FOR EACH ROW` for the event. The rows of the query go to the triggers, not to the heap, and the rows of an `UPDATE` and of a `DELETE` end with the old row of the view in place of the ID of the version.
     pub instead: bool,
@@ -555,14 +555,10 @@ impl Analyzer<'_> {
                 ));
             }
         }
-        if let Some(catalog) = self.env.catalog() {
-            // The session fires the triggers of an `INSERT`, an `UPDATE` and a `DELETE`, but not the triggers of a `MERGE` yet.
-            if kind == WriteKind::Merge && self.user_triggers(oid, 0) {
-                return Err(not_yet(&format!("{what} a table with triggers")));
-            }
-            if catalog.rules().any(|r| r.relation == oid) {
-                return Err(not_yet(&format!("{what} a table with rules")));
-            }
+        if let Some(catalog) = self.env.catalog()
+            && catalog.rules().any(|r| r.relation == oid)
+        {
+            return Err(not_yet(&format!("{what} a table with rules")));
         }
         // A dropped column keeps its place with no name and the type 0, and each new row has a null for it.
         let columns = rel

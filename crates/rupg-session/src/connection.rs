@@ -683,7 +683,10 @@ impl Connection {
                 let Some(merge) = info.merge.as_ref() else {
                     return Err(Error::internal("a MERGE with no clauses"));
                 };
-                let done = self.merge(plan, info, merge, params, &view, rows)?;
+                // `fireBSTriggers`: the triggers of the actions of the clauses, which fire also when no row takes the clause.
+                let fire = self.merge_triggers(info, merge)?;
+                self.before_merge(&fire, info)?;
+                let done = self.merge(plan, info, (merge, &fire), params, &view, rows)?;
                 written = done.written;
                 batches = done.batches;
                 view = done.view;
@@ -4774,6 +4777,12 @@ mod tests {
     #[test]
     fn constraint_triggers() {
         big_stack(|| script(include_str!("connection/constraint_triggers.test")));
+    }
+
+    /// The triggers of `MERGE`: the triggers `FOR EACH STATEMENT` of the actions of the clauses, the triggers `BEFORE ... FOR EACH ROW` that change or skip a row before the checks, the triggers `AFTER ... FOR EACH ROW` in the order of the actions, `UPDATE OF` with the columns of all the clauses `UPDATE`, a condition of `WHEN`, the transition tables of each event and `RETURNING` with the row of a trigger. `connection/merge_triggers.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn merge_triggers() {
+        big_stack(|| script(include_str!("connection/merge_triggers.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

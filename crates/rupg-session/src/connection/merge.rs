@@ -1,6 +1,6 @@
 //! `MERGE`, as `ExecMerge` runs it: each row of the join of the source and the target table takes the first `WHEN` clause of its kind whose condition is true, and the action of that clause inserts a row, updates or deletes the row of the target table, or does nothing.
 //!
-//! The query of the statement gives all the rows of the join before the first write, and the clauses run on all the rows before the first write. The updates and the deletes then go in one change of the heap, and the inserts come after them.
+//! The query of the statement gives all the rows of the join before the first write, and the clauses run on all the rows before the first write. The triggers `BEFORE ... FOR EACH ROW` of an action fire when its clause takes the row, before the checks of the constraints, so a trigger does not see the rows that its statement wrote before. The updates and the deletes then go in one change of the heap, and the inserts come after them. The events of the triggers `AFTER` go in the queue in the order of the actions.
 
 use std::collections::HashSet;
 
@@ -11,6 +11,7 @@ use rupg_types::Value;
 
 use super::Connection;
 use super::foreign::Batch;
+use super::trigger::MergeTriggers;
 use crate::heap::{Change, Changed, View, tid_text};
 
 /// The rows that a `MERGE` wrote.
@@ -28,14 +29,14 @@ pub(super) struct Merged {
 
 /// The action that a `WHEN` clause took for a row of the join.
 #[derive(Debug)]
-struct Action {
-    command: MergeCommand,
+pub(super) struct Action {
+    pub(super) command: MergeCommand,
     /// The ID of the version of the row of the target table, or 0 for an insert.
     tid: u64,
     /// The row of the target table, with nulls for an insert.
-    old: Vec<Value>,
+    pub(super) old: Vec<Value>,
     /// The new row of an insert or an update.
-    new: Option<Vec<Value>>,
+    pub(super) new: Option<Vec<Value>>,
     /// The carried values of the row of the join.
     carried: Vec<Value>,
 }
@@ -45,12 +46,12 @@ impl Connection {
     ///
     /// # Errors
     ///
-    /// `21000` when two rows of the join update or delete the same row of the target table, `23505` for a duplicate key, and the errors of the clauses and of the constraints of the new rows.
+    /// `21000` when two rows of the join update or delete the same row of the target table, `23505` for a duplicate key, and the errors of the clauses, of the triggers and of the constraints of the new rows.
     pub(super) fn merge(
         &self,
         plan: &Plan,
         info: &Write,
-        merge: &Merge,
+        (merge, fire): (&Merge, &MergeTriggers),
         params: &[Value],
         view: &View,
         rows: Vec<Vec<Value>>,
@@ -59,7 +60,7 @@ impl Connection {
         let mut view = view.clone();
         let mut rows = rows;
         let (actions, applied) = loop {
-            let actions = self.merge_actions(plan, info, merge, params, &view, rows)?;
+            let actions = self.merge_actions(plan, info, (merge, fire), params, &view, rows)?;
             let changes: Vec<Change> = actions
                 .iter()
                 .filter(|a| a.command != MergeCommand::Insert)
@@ -131,6 +132,9 @@ impl Connection {
             }
             done.push(action);
         }
+        if !fire.is_empty() {
+            self.after_merge(info, fire, &done)?;
+        }
         let width = info.width;
         let mut written = Vec::new();
         if info.returning.is_some() {
@@ -176,12 +180,12 @@ impl Connection {
         Ok(Merged { count: done.len() as u64, written, batches, view })
     }
 
-    /// The action of each row of the join: the first clause of the kind of the row whose condition is true. Each row of the join has the columns of the target table, the ID of the version of the row of the target table, the marker of the source row and the carried values.
+    /// The action of each row of the join: the first clause of the kind of the row whose condition is true. Each row of the join has the columns of the target table, the ID of the version of the row of the target table, the marker of the source row and the carried values. The triggers `BEFORE ... FOR EACH ROW` of the action fire for the row, as `ExecMergeMatched` and `ExecMergeNotMatched` fire them, and a trigger that gives a null row skips the action.
     fn merge_actions(
         &self,
         plan: &Plan,
         info: &Write,
-        merge: &Merge,
+        (merge, fire): (&Merge, &MergeTriggers),
         params: &[Value],
         view: &View,
         rows: Vec<Vec<Value>>,
@@ -213,20 +217,8 @@ impl Connection {
                 let mut old = row.clone();
                 old.truncate(width);
                 let tid = tid.unwrap_or_default();
-                let new = match clause.command {
-                    MergeCommand::Nothing => break,
-                    MergeCommand::Insert => {
-                        old = vec![Value::Null; width];
-                        out.truncate(width);
-                        Some(out)
-                    }
-                    MergeCommand::Update => {
-                        out.truncate(width);
-                        Some(out)
-                    }
-                    MergeCommand::Delete => None,
-                };
-                if clause.command != MergeCommand::Insert && !seen.insert(tid) {
+                let Some(triggers) = fire.of(clause.command) else { break };
+                if clause.command != MergeCommand::Insert && seen.contains(&tid) {
                     return Err(Error::new(
                         SqlState::CARDINALITY_VIOLATION,
                         "MERGE command cannot affect row a second time",
@@ -234,6 +226,31 @@ impl Connection {
                     .with_hint(
                         "Ensure that not more than one source row matches any one target row.",
                     ));
+                }
+                let new = match clause.command {
+                    MergeCommand::Delete => {
+                        if !self.before_delete(info, triggers, &old)? {
+                            break;
+                        }
+                        None
+                    }
+                    command => {
+                        if command == MergeCommand::Insert {
+                            old = vec![Value::Null; width];
+                        }
+                        if info.recheck.is_some() {
+                            let given = (command == MergeCommand::Update).then_some(old.as_slice());
+                            match self.before_row(plan, info, triggers, given, out)? {
+                                Some(new) => out = new,
+                                None => break,
+                            }
+                        }
+                        out.truncate(width);
+                        Some(out)
+                    }
+                };
+                if clause.command != MergeCommand::Insert {
+                    seen.insert(tid);
                 }
                 actions.push(Action {
                     command: clause.command,
