@@ -3,7 +3,7 @@
 //! The analyzer runs the checks of `CreateTriggerFiringOn` in their order and reads the condition of `WHEN` with the relation of the trigger as `old` and as `new`. The catalog keeps the condition in its stored form, as `tgqual` does, and [`trigger_when`] reads it back for `pg_get_triggerdef`. The executor does not fire the triggers yet, so a write to a table with a trigger that fires gives `0A000`.
 
 use rupg_catalog::{
-    NewTrigger, ObjRef, PG_TRIGGER, TRIGGER_BEFORE, TRIGGER_DELETE, TRIGGER_INSERT,
+    NewTrigger, ObjRef, PG_TRIGGER, RelKind, TRIGGER_BEFORE, TRIGGER_DELETE, TRIGGER_INSERT,
     TRIGGER_INSTEAD, TRIGGER_ROW, TRIGGER_TRUNCATE, TRIGGER_UPDATE,
 };
 use rupg_common::{Error, Result, SqlState};
@@ -100,8 +100,7 @@ impl Definer<'_, '_> {
                     "ROW triggers with transition tables are not supported on partitioned tables.",
                 ));
             }
-            b'p' => return Err(not_yet("a trigger on a partitioned table", None)),
-            b'r' => {}
+            b'r' | b'p' => {}
             b'v' if stmt.timing != TRIGGER_INSTEAD && stmt.row => {
                 return Err(wrong("view", "Views cannot have row-level BEFORE or AFTER triggers."));
             }
@@ -171,6 +170,12 @@ impl Definer<'_, '_> {
                 return Err(unsupported("INSTEAD OF triggers cannot have column lists"));
             }
         }
+        let partition = self.catalog.relation(oid).is_some_and(|r| r.partition_of.is_some());
+        if row && partition && !stmt.transitionRels.is_empty() {
+            return Err(unsupported(
+                "ROW triggers with transition tables are not supported on partitions",
+            ));
+        }
         let (old_table, new_table) = self.transition_tables(stmt, kind, code, &name)?;
         let mut qual = None;
         let mut qual_refs = Vec::new();
@@ -192,7 +197,7 @@ impl Definer<'_, '_> {
                     format!("trigger \"{trigname}\" for relation \"{name}\" already exists"),
                 ));
             }
-            if existing.internal {
+            if existing.internal || existing.parent != 0 {
                 return Err(Error::new(
                     SqlState::DUPLICATE_OBJECT,
                     format!(
@@ -232,9 +237,94 @@ impl Definer<'_, '_> {
             constraint_relation,
             deferrable: stmt.deferrable,
             deferred: stmt.initdeferred,
+            parent: 0,
+            enabled: 0,
         };
-        self.catalog.create_trigger(new, stmt.replace, &qual_refs)?;
+        let trigger = self.catalog.create_trigger(new, stmt.replace, &qual_refs)?;
+        if code == b'p' && row {
+            let children: Vec<u32> = self.catalog.partitions(oid).iter().map(|r| r.oid).collect();
+            for child in children {
+                self.clone_trigger(trigger, child, stmt.replace)?;
+            }
+        }
         Ok(())
+    }
+
+    /// The part of `CreateTriggerFiringOn` that clones a row trigger of a partitioned table to a partition, and on to the partitions of a partitioned partition. The clone has the columns of `UPDATE OF` by name and the condition of `WHEN`, but no transition tables.
+    ///
+    /// # Errors
+    ///
+    /// `42710` when the partition has a trigger with the name and `replace` is false.
+    pub(super) fn clone_trigger(&mut self, parent: u32, child: u32, replace: bool) -> Result<()> {
+        let Some(from) = self.catalog.trigger(parent).cloned() else { return Ok(()) };
+        let columns = self.cloned_columns(from.relation, child, &from.columns);
+        let new = NewTrigger {
+            name: from.name.clone(),
+            relation: child,
+            function: from.function,
+            kind: from.kind,
+            args: from.args.clone(),
+            columns,
+            old_table: None,
+            new_table: None,
+            qual: from.qual.clone(),
+            constraint: from.constraint != 0,
+            constraint_relation: from.constraint_relation,
+            deferrable: from.deferrable,
+            deferred: from.deferred,
+            parent,
+            enabled: from.enabled,
+        };
+        let trigger = self.catalog.create_trigger(new, replace, &[])?;
+        if self.catalog.relation(child).is_some_and(|r| r.kind == RelKind::Partitioned) {
+            let children: Vec<u32> = self.catalog.partitions(child).iter().map(|r| r.oid).collect();
+            for grandchild in children {
+                self.clone_trigger(trigger, grandchild, replace)?;
+            }
+        }
+        Ok(())
+    }
+
+    /// `CloneRowTriggersToPartition`: clones each row trigger of `parent` that is not internal to the new partition `child`.
+    pub(super) fn clone_triggers(&mut self, parent: u32, child: u32) -> Result<()> {
+        let mut triggers: Vec<(String, u32)> = self
+            .catalog
+            .triggers_of(parent)
+            .into_iter()
+            .filter(|t| t.kind & TRIGGER_ROW != 0 && !t.internal)
+            .map(|t| (t.name.clone(), t.oid))
+            .collect();
+        triggers.sort();
+        for (_, trigger) in triggers {
+            self.clone_trigger(trigger, child, false)?;
+        }
+        Ok(())
+    }
+
+    /// `DropClonedTriggersFromPartition`: drops the clones in a partition that `DETACH PARTITION` leaves, and with them the clones in its partitions.
+    pub(super) fn drop_cloned_triggers(&mut self, partition: u32) -> Result<()> {
+        let clones: Vec<u32> = self
+            .catalog
+            .triggers_of(partition)
+            .into_iter()
+            .filter(|t| t.parent != 0 && t.constraint_relation == 0)
+            .map(|t| t.oid)
+            .collect();
+        for &trigger in &clones {
+            self.catalog.clear_trigger_parent(trigger);
+        }
+        let objects: Vec<ObjRef> = clones.iter().map(|&t| ObjRef::new(PG_TRIGGER, t)).collect();
+        self.perform(&objects, false)
+    }
+
+    /// The attribute numbers in `child` of the columns of `UPDATE OF` in `parent`, matched by name.
+    fn cloned_columns(&self, parent: u32, child: u32, columns: &[i16]) -> Vec<i16> {
+        let (Some(parent), Some(child)) =
+            (self.catalog.relation(parent), self.catalog.relation(child))
+        else {
+            return Vec::new();
+        };
+        columns.iter().filter_map(|&num| child.column_number(&parent.column(num)?.name)).collect()
     }
 
     /// The checks of `REFERENCING` of `CreateTriggerFiringOn`: the names of the transition tables `OLD TABLE` and `NEW TABLE`.
@@ -497,20 +587,58 @@ impl Definer<'_, '_> {
         }
         let subname = stmt.subname.as_deref().unwrap_or_default();
         let Found::User(relation) = found else { return Err(no_trigger(subname, &name)) };
-        let Some(oid) = self.catalog.trigger_by_name(relation, subname).map(|t| t.oid) else {
+        let Some((oid, parent)) =
+            self.catalog.trigger_by_name(relation, subname).map(|t| (t.oid, t.parent))
+        else {
             return Err(no_trigger(subname, &name));
         };
-        self.catalog.rename_trigger(oid, newname)
+        if parent != 0 {
+            let table = self.catalog.relation(relation).and_then(|r| r.partition_of.as_ref());
+            let table = table.and_then(|p| self.catalog.relation(p.parent));
+            return Err(unsupported(&format!(
+                "cannot rename trigger \"{subname}\" on table \"{name}\""
+            ))
+            .with_hint(format!(
+                "Rename the trigger on the partitioned table \"{}\" instead.",
+                table.map_or("", |r| r.name.as_str())
+            )));
+        }
+        self.rename_trigger_tree(oid, newname)
     }
 
-    /// `EnableDisableTrigger`: sets `tgenabled` of the trigger with the name, or of all the triggers of the table with no name. With `skip_system`, the internal triggers keep their state; without it, only a superuser can change an internal trigger.
+    /// `renametrig_internal` for a trigger, then `renametrig_partition` for its clones in the partitions.
+    fn rename_trigger_tree(&mut self, oid: u32, newname: &str) -> Result<()> {
+        if self.catalog.trigger(oid).is_some_and(|t| t.name != newname) {
+            self.catalog.rename_trigger(oid, newname)?;
+        }
+        for child in self.clones_of(oid) {
+            self.rename_trigger_tree(child, newname)?;
+        }
+        Ok(())
+    }
+
+    /// The triggers of the partitions that are clones of the trigger.
+    fn clones_of(&self, oid: u32) -> Vec<u32> {
+        let mut clones: Vec<(u32, u32)> = self
+            .catalog
+            .triggers()
+            .filter(|t| t.parent == oid)
+            .map(|t| (t.relation, t.oid))
+            .collect();
+        clones.sort_unstable();
+        clones.into_iter().map(|(_, t)| t).collect()
+    }
+
+    /// `EnableDisableTrigger`: sets `tgenabled` of the trigger with the name, or of all the triggers of the table with no name. With `skip_system`, the internal triggers keep their state; without it, only a superuser can change an internal trigger. With `recurse`, a row trigger of a partitioned table gives its state to its clones.
     pub(super) fn enable_trigger(
         &mut self,
         table: u32,
         trigger: Option<&str>,
-        enabled: u8,
-        skip_system: bool,
+        (enabled, skip_system): (u8, bool),
+        recurse: bool,
     ) -> Result<()> {
+        let partitioned =
+            self.catalog.relation(table).is_some_and(|r| r.kind == RelKind::Partitioned);
         let list: Vec<(u32, bool, String)> = self
             .catalog
             .triggers_of(table)
@@ -533,12 +661,31 @@ impl Definer<'_, '_> {
             }
             found = true;
             self.catalog.set_trigger_enabled(oid, enabled);
+            let row = self.catalog.trigger(oid).is_some_and(|t| t.kind & TRIGGER_ROW != 0);
+            if recurse && partitioned && row {
+                self.enable_clones(oid, (enabled, skip_system))?;
+            }
         }
         if let Some(trigger) = trigger
             && !found
         {
             let name = self.catalog.relation(table).map_or("", |r| r.name.as_str());
             return Err(no_trigger(trigger, name));
+        }
+        Ok(())
+    }
+}
+
+impl Definer<'_, '_> {
+    /// The recursion of `EnableDisableTrigger` into the partitions, which finds the clones by `tgparentid` and not by name.
+    fn enable_clones(&mut self, parent: u32, (enabled, skip_system): (u8, bool)) -> Result<()> {
+        for child in self.clones_of(parent) {
+            let Some(trigger) = self.catalog.trigger(child) else { continue };
+            if trigger.internal && skip_system {
+                continue;
+            }
+            self.catalog.set_trigger_enabled(child, enabled);
+            self.enable_clones(child, (enabled, skip_system))?;
         }
         Ok(())
     }

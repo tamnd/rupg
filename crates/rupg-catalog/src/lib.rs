@@ -741,6 +741,8 @@ pub struct Trigger {
     pub new_table: Option<String>,
     /// `tgqual`: the stored form of the condition of `WHEN`, in which the relation 0 is `old` and the relation 1 is `new`.
     pub qual: Option<String>,
+    /// `tgparentid`: the trigger of the parent table that the trigger of a partition is a clone of, or 0.
+    pub parent: u32,
 }
 
 impl Trigger {
@@ -779,6 +781,10 @@ pub struct NewTrigger {
     pub deferrable: bool,
     /// `tginitdeferred`.
     pub deferred: bool,
+    /// `tgparentid`: the trigger of the parent table for a clone in a partition, else 0.
+    pub parent: u32,
+    /// `tgenabled` of a clone, which is the state of the trigger of the parent table, or 0 for `O`.
+    pub enabled: u8,
 }
 
 /// A rule of `CREATE RULE`, one row of `pg_rewrite`. The `_RETURN` rule of a view is part of [`ViewInfo`], not a [`Rule`].
@@ -1350,20 +1356,22 @@ impl Catalog {
         self.triggers.values().find(|t| t.relation == relation && t.name == name)
     }
 
-    /// `CreateTriggerFiringOn`: a new trigger, or with `replace` new facts for the trigger of the relation with the same name. A replaced trigger keeps its OID and `tgenabled`, and gets new dependencies. The trigger depends on its function, then on its relation, then on each column of `UPDATE OF`, then on the objects that the condition of `WHEN` reads. The relation gets `relhastriggers`. The result is the OID of the trigger.
+    /// `CreateTriggerFiringOn`: a new trigger, or with `replace` new facts for the trigger of the relation with the same name. A replaced trigger keeps its OID and `tgenabled`, and gets new dependencies. The trigger depends on its function, then on its relation, then on each column of `UPDATE OF`, then on the objects that the condition of `WHEN` reads. A clone in a partition then has the partition dependencies on the trigger of the parent table and on its relation. The relation gets `relhastriggers`. The result is the OID of the trigger.
     ///
     /// A constraint trigger first gets its constraint of the kind `t`, with the name of the trigger, as `CreateConstraintEntry` makes it. The trigger then depends on the table of `FROM`, and the constraint depends on the trigger, so that `DROP TRIGGER` drops the constraint.
     ///
     /// # Errors
     ///
-    /// `42710` when the relation has a trigger with the name and `replace` is false, or when that trigger is internal. `23505` when the relation has a constraint with the name of a new constraint trigger.
+    /// `42710` when the relation has a trigger with the name and `replace` is false, or when that trigger is internal, or when it is a clone and the new trigger is not. `23505` when the relation has a constraint with the name of a new constraint trigger.
     pub fn create_trigger(
         &mut self,
         new: NewTrigger,
         replace: bool,
         qual: &[ObjRef],
     ) -> Result<u32> {
-        let old = self.trigger_by_name(new.relation, &new.name).map(|t| (t.oid, t.internal));
+        let old = self
+            .trigger_by_name(new.relation, &new.name)
+            .map(|t| (t.oid, t.internal || (t.parent != 0 && new.parent == 0)));
         let constraint = if new.constraint && old.is_none() {
             if self.constraints_of(new.relation).any(|c| c.domain == 0 && c.name == new.name) {
                 return Err(Error::new(
@@ -1410,7 +1418,11 @@ impl Catalog {
             Some((oid, false)) => oid,
             None => self.new_oid(),
         };
-        let enabled = self.triggers.get(&oid).map_or(b'O', |t| t.enabled);
+        let enabled = match self.triggers.get(&oid) {
+            Some(t) => t.enabled,
+            None if new.enabled == 0 => b'O',
+            None => new.enabled,
+        };
         let object = ObjRef::new(PG_TRIGGER, oid);
         self.depends.retain(|d| d.object != object);
         self.depend(object, ObjRef::new(PG_PROC, new.function), DepKind::Normal);
@@ -1425,6 +1437,10 @@ impl Catalog {
             self.depend(object, ObjRef::column(new.relation, column), DepKind::Normal);
         }
         self.depend_refs(object, qual);
+        if new.parent != 0 {
+            self.depend(object, ObjRef::new(PG_TRIGGER, new.parent), DepKind::PartitionPri);
+            self.depend(object, ObjRef::new(PG_CLASS, new.relation), DepKind::PartitionSec);
+        }
         let NewTrigger {
             name,
             relation,
@@ -1439,6 +1455,8 @@ impl Catalog {
             constraint_relation,
             deferrable,
             deferred,
+            parent,
+            enabled: _,
         } = new;
         let trigger = Trigger {
             oid,
@@ -1456,6 +1474,7 @@ impl Catalog {
             constraint_relation,
             deferrable,
             deferred,
+            parent,
             ..Trigger::default()
         };
         if let Some(constraint) = constraint {
@@ -1486,6 +1505,14 @@ impl Catalog {
             trigger.name = name.to_string();
         }
         Ok(())
+    }
+
+    /// The part of `DropClonedTriggersFromPartition` that removes the partition dependencies of a clone, so that the clone can go.
+    pub fn clear_trigger_parent(&mut self, oid: u32) {
+        if let Some(trigger) = self.triggers.get_mut(&oid) {
+            trigger.parent = 0;
+        }
+        self.drop_partition_depends(ObjRef::new(PG_TRIGGER, oid));
     }
 
     /// `EnableDisableTrigger`: sets `tgenabled` of a trigger.

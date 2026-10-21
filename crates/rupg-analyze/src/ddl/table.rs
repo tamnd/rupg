@@ -351,6 +351,7 @@ impl Definer<'_, '_> {
         }
         if let Some(parent) = plan.parent {
             self.clone_partition_indexes(table, parent)?;
+            self.clone_triggers(parent, table)?;
         }
         self.create_toast_options(table, &stmt.options)?;
         for index in &indexes {

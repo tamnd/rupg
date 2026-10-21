@@ -748,7 +748,13 @@ impl Definer<'_, '_> {
                 MiscCmd::Cluster(None) => self.drop_cluster(target),
                 MiscCmd::ReplicaIdentity(stmt) => self.replica_identity(target, stmt)?,
                 MiscCmd::Trigger(name, enabled, user) => {
-                    self.enable_trigger(target.oid, name.as_deref(), *enabled, *user)?;
+                    let (enabled, user) = (*enabled, *user);
+                    self.enable_trigger(
+                        target.oid,
+                        name.as_deref(),
+                        (enabled, user),
+                        passes.recurse,
+                    )?;
                 }
             }
         }

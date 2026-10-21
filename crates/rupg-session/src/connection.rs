@@ -661,6 +661,9 @@ impl Connection {
             .catalog()
             .relation(info.table)
             .is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned);
+        if partitioned {
+            triggers.retain_statement();
+        }
         // The leaves of a partitioned table can have unique keys that the table does not have.
         let upsert = info
             .on_conflict
@@ -669,7 +672,10 @@ impl Connection {
         let mut fire = upsert::Upsert::default();
         let rows = if upsert.is_some() {
             // `INSERT ... ON CONFLICT` fires the triggers `BEFORE ... FOR EACH ROW` for each row in turn, and the triggers `UPDATE` of `DO UPDATE` with the triggers `INSERT`.
-            let update = self.conflict_triggers(info)?;
+            let mut update = self.conflict_triggers(info)?;
+            if partitioned {
+                update.retain_statement();
+            }
             if partitioned && (!triggers.is_empty() || !update.is_empty()) {
                 return Err(Error::new(
                     SqlState::FEATURE_NOT_SUPPORTED,
@@ -681,6 +687,10 @@ impl Connection {
             self.before_statement(&fire.update, info)?;
             rows
         } else if triggers.is_empty() {
+            rows
+        } else if partitioned {
+            // The triggers `FOR EACH ROW` of the leaves fire when the rows go to the leaves.
+            self.before_statement(&triggers, info)?;
             rows
         } else {
             self.before_statement(&triggers, info)?;
@@ -724,19 +734,19 @@ impl Connection {
                 (CommandTag::Insert, done.count)
             }
             (kind, None) if partitioned => {
-                if !triggers.is_empty() {
+                if kind != WriteKind::Insert && triggers.after_rows() {
                     return Err(Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
-                        "triggers on a partitioned table are not supported yet",
+                        "transition tables of UPDATE or DELETE on a partitioned table are not supported yet",
                     ));
                 }
                 match kind {
                     WriteKind::Insert => {
-                        let count = rows.len() as u64;
-                        let routed = self.insert_routed(info, &view, rows)?;
+                        let routed = self.insert_routed(info, &view, rows, keep_rows)?;
                         written = routed.written;
                         batches = routed.batches;
-                        (CommandTag::Insert, count)
+                        new_rows = routed.inserted;
+                        (CommandTag::Insert, routed.count)
                     }
                     _ => {
                         let (count, shown, last) =
@@ -4907,6 +4917,12 @@ mod tests {
     #[test]
     fn partition_upsert() {
         big_stack(|| script(include_str!("connection/partition_upsert.test")));
+    }
+
+    /// The triggers of partitioned tables: a row trigger has a clone in each partition, also in a new or an attached partition, and `DETACH PARTITION` drops the clones. A clone cannot be dropped or renamed alone, and `ALTER TABLE ... DISABLE TRIGGER` changes the clones too. A row of a partitioned table fires the statement triggers of the table and the row triggers of its leaf, and a trigger `BEFORE` cannot move the row to another partition. `connection/partition_triggers.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_triggers() {
+        big_stack(|| script(include_str!("connection/partition_triggers.test")));
     }
 
     /// The rows of a table after `ADD COLUMN` and a change of the default of the new column in the same statement: the rows get the default of `ADD COLUMN`, and new rows get the new default, also for the partitions. `DROP DEFAULT`, `ALTER COLUMN ... TYPE` and `DROP COLUMN` run before `ADD COLUMN`, so they cannot find the new column. `connection/add_column_default.test` is the output of PostgreSQL 19 for the same script in a new database.

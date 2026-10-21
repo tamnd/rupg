@@ -1,7 +1,7 @@
 //! `INSERT` into a partitioned table: `ExecFindPartition` routes each row to the leaf partition that takes it, and the leaf checks and writes the row.
 
 use rupg_analyze::{CopyTarget, Params, Write, WriteKind};
-use rupg_catalog::{Catalog, ConKind};
+use rupg_catalog::{Catalog, ConKind, TRIGGER_DELETE, TRIGGER_INSERT, TRIGGER_ROW, TRIGGER_UPDATE};
 use rupg_common::{Error, SqlState};
 use rupg_exec::{Plan, Router};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -10,6 +10,7 @@ use rupg_types::Value;
 
 use super::Connection;
 use super::foreign::Batch;
+use super::trigger::{Triggers, armed};
 use crate::heap::{Change, Changed, View, tid_text};
 use crate::query::{self, Reader};
 
@@ -28,6 +29,10 @@ struct Leaf {
     rows: Vec<Vec<Value>>,
     /// The line of each row of a `COPY FROM`.
     lines: Vec<u64>,
+    /// The triggers `FOR EACH ROW` of the leaf for the event of the statement.
+    fire: Triggers,
+    /// The name of the leaf with its schema.
+    qualified: String,
 }
 
 /// The routing of the rows of a statement into the leaf partitions of a partitioned table, and the rows of each leaf that the statement did not write yet.
@@ -35,6 +40,8 @@ struct Leaf {
 pub(super) struct Routing {
     router: Router,
     leaves: Vec<Leaf>,
+    /// The bit in `tgtype` of the event whose triggers of the leaves fire, or 0 when a leaf with triggers gives an error.
+    event: i16,
 }
 
 impl Routing {
@@ -68,9 +75,39 @@ impl Routing {
         reader: &Reader<'_>,
     ) -> Result<(usize, Vec<Value>), Error> {
         let (oid, values) = self.router.route(root, row, reader)?;
-        let at = leaf_at(&mut self.leaves, catalog, root, oid, reader)?;
+        let at = leaf_at(&mut self.leaves, catalog, (root, oid, self.event), reader)?;
         let checked = leaf_row(&self.leaves[at], &values, reader)?;
         Ok((at, checked))
+    }
+
+    /// [`Routing::route`] with the triggers `BEFORE INSERT ... FOR EACH ROW` of the leaf, which fire before the constraints of the leaf check the row. The result is `None` when a trigger skips the row.
+    ///
+    /// # Errors
+    ///
+    /// The errors of [`Routing::route`] and of the triggers.
+    fn route_fired(
+        &mut self,
+        conn: &Connection,
+        (root, row): (u32, Vec<Value>),
+        catalog: &Catalog,
+        reader: &Reader<'_>,
+    ) -> Result<Option<(usize, Vec<Value>)>, Error> {
+        let (oid, values) = self.router.route(root, row, reader)?;
+        let at = leaf_at(&mut self.leaves, catalog, (root, oid, self.event), reader)?;
+        let Self { router, leaves, .. } = self;
+        let leaf = &leaves[at];
+        let values = if leaf.fire.before_rows() {
+            let shape = (&[][..], leaf.up.len());
+            let mut stays = |row: &[Value]| router.check(oid, row, reader);
+            let rows = (None, Some(values));
+            let fired = conn.leaf_before((&leaf.fire, shape), rows, &leaf.qualified, &mut stays)?;
+            let Some(values) = fired else { return Ok(None) };
+            values
+        } else {
+            values
+        };
+        let checked = leaf_row(leaf, &values, reader)?;
+        Ok(Some((at, checked)))
     }
 
     /// `ExecPartitionCheck` and `ExecConstraints` for a new row of the partitioned table that changes a row of the leaf at the place `at`. The result is the checked row with the columns of the leaf, or `None` when the leaf does not take the row.
@@ -85,11 +122,7 @@ impl Routing {
         reader: &Reader<'_>,
     ) -> Result<Option<Vec<Value>>, Error> {
         let leaf = &self.leaves[at];
-        let values: Vec<Value> = leaf
-            .up
-            .iter()
-            .map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null))
-            .collect();
+        let values = down(leaf, row);
         if !self.router.check(leaf.oid, &values, reader)? {
             return Ok(None);
         }
@@ -98,15 +131,10 @@ impl Routing {
 
     /// A row of the leaf at the place `at` with the `width` columns of the partitioned table, as `execute_attr_map_slot` gives it.
     pub(super) fn to_root(&self, at: usize, row: &[Value], width: usize) -> Vec<Value> {
-        let mut up = vec![Value::Null; width];
-        if let Some(leaf) = self.leaves.get(at) {
-            for (value, &to) in row.iter().zip(&leaf.up) {
-                if let Some(slot) = to.and_then(|to| up.get_mut(to)) {
-                    *slot = value.clone();
-                }
-            }
+        match self.leaves.get(at) {
+            Some(leaf) => up(leaf, row, width),
+            None => vec![Value::Null; width],
         }
-        up
     }
 
     /// The name of the leaf at the place `at`.
@@ -142,39 +170,62 @@ impl Routing {
 
 /// The rows of an `INSERT` into a partitioned table that the leaves wrote.
 pub(super) struct Routed {
+    /// The number of the rows that the leaves wrote.
+    pub(super) count: u64,
     /// The rows for `RETURNING`: the columns of the partitioned table, then the OID of the leaf.
     pub(super) written: Vec<Vec<Value>>,
+    /// The new rows with the columns of the partitioned table, for its transition tables.
+    pub(super) inserted: Vec<Vec<Value>>,
     /// The new rows that the foreign keys of the leaves check.
     pub(super) batches: Vec<Batch>,
 }
 
 impl Connection {
-    /// `ExecInsert` with `ExecFindPartition`: each row goes to its leaf partition, and the not-null and check constraints of the leaf check it, in the order of the rows. Then each leaf writes its rows and checks its unique keys.
+    /// `ExecInsert` with `ExecFindPartition`: each row goes to its leaf partition, the triggers `BEFORE ... FOR EACH ROW` of the leaf fire, and the not-null and check constraints of the leaf check the row, in the order of the rows. Then each leaf writes its rows and checks its unique keys, and the events of the triggers `AFTER ... FOR EACH ROW` of the leaves go in the queue in the order of the rows. With `keep`, the result has the new rows for the transition tables of the partitioned table.
     ///
     /// # Errors
     ///
-    /// `23514` for a row that no partition takes, the errors of the constraints of the leaves, and `0A000` for a leaf with triggers.
+    /// `23514` for a row that no partition takes, the errors of the triggers and of the constraints of the leaves.
     pub(super) fn insert_routed(
         &self,
         info: &Write,
         view: &View,
         rows: Vec<Vec<Value>>,
+        keep: bool,
     ) -> Result<Routed, Error> {
         let catalog = self.catalog();
         let reader = self.reader();
-        let mut routing = Routing::default();
-        let mut written = Vec::new();
+        let mut routing = Routing { event: TRIGGER_INSERT, ..Routing::default() };
+        let (mut written, mut inserted) = (Vec::new(), Vec::new());
+        // The new rows of the leaves with triggers `AFTER ... FOR EACH ROW`.
+        let mut after = Vec::new();
+        let mut count = 0;
         for row in rows {
-            let shown = info.returning.is_some().then(|| row[..info.width].to_vec());
-            let at = routing.add(info.table, row, &catalog, &reader)?;
-            if let Some(mut shown) = shown {
-                shown.push(Value::Oid(routing.oid(at)));
-                written.push(shown);
+            let fired = routing.route_fired(self, (info.table, row), &catalog, &reader)?;
+            let Some((at, checked)) = fired else { continue };
+            count += 1;
+            if info.returning.is_some() || keep {
+                let mut shown = routing.to_root(at, &checked, info.width);
+                if keep {
+                    inserted.push(shown.clone());
+                }
+                if info.returning.is_some() {
+                    shown.push(Value::Oid(routing.oid(at)));
+                    written.push(shown);
+                }
             }
+            if routing.leaves[at].fire.after_rows() {
+                after.push((at, checked.clone()));
+            }
+            routing.leaves[at].rows.push(checked);
         }
         drop(reader);
         let batches = self.insert_leaves(&mut routing, view, None)?;
-        Ok(Routed { written, batches })
+        for (at, row) in after {
+            let leaf = &routing.leaves[at];
+            self.leaf_after((&leaf.fire, (&[], leaf.up.len())), &[(None, Some(row))])?;
+        }
+        Ok(Routed { count, written, inserted, batches })
     }
 
     /// `table_tuple_insert` of the checked rows that each leaf keeps, with the checks of its unique keys. It gives the rows that the foreign keys of the leaves check. For a `COPY FROM` of the table `copy`, a duplicate key has the context of the line of its row.
@@ -248,8 +299,9 @@ impl Connection {
         let returning = info.returning.is_some();
         let heap = self.store.heap();
         let mut view = view.clone();
-        let mut routing = Routing::default();
-        let Routing { router, leaves } = &mut routing;
+        let event = if update { TRIGGER_UPDATE } else { TRIGGER_DELETE };
+        let mut routing = Routing { event, ..Routing::default() };
+        let Routing { router, leaves, .. } = &mut routing;
         let (mut count, mut written) = (0, Vec::new());
         // The new rows that move to another leaf, after the old leaf deleted the old rows.
         let mut moved: Vec<(usize, Vec<Value>)> = Vec::new();
@@ -262,15 +314,43 @@ impl Connection {
                 let (Some(Value::Int8(tid)), Some(Value::Oid(old))) = (row.pop(), row.pop()) else {
                     return Err(Error::internal("a row to change with no partition or version"));
                 };
-                let at = leaf_at(leaves, &catalog, info.table, old, &reader)?;
+                let at = leaf_at(leaves, &catalog, (info.table, old, event), &reader)?;
                 let tid = tid.cast_unsigned();
+                let leaf = &leaves[at];
+                let fired = leaf.fire.before_rows();
+                if fired {
+                    let versions = heap.versions(self.database_oid, leaf.oid, &[tid]);
+                    let old_row = versions.into_iter().next().unwrap_or_default();
+                    let new = update.then(|| down(leaf, &row[..width]));
+                    let updated = leaf_updated(leaf, &info.updated);
+                    let shape = (&updated[..], leaf.up.len());
+                    // `ExecBRUpdateTriggers`: the new row can move to another partition after the triggers.
+                    let mut stays = |_: &[Value]| Ok(true);
+                    let rows = (Some(old_row), new);
+                    let fire = (&leaf.fire, shape);
+                    let Some(new) = self.leaf_before(fire, rows, &leaf.qualified, &mut stays)?
+                    else {
+                        continue;
+                    };
+                    if update {
+                        row.splice(..width, up(leaf, &new, width));
+                    }
+                }
                 let (to, change, item) = if update {
                     let (to, values) = router.route(info.table, row[..width].to_vec(), &reader)?;
-                    let to = leaf_at(leaves, &catalog, info.table, to, &reader)?;
+                    let to = leaf_at(leaves, &catalog, (info.table, to, event), &reader)?;
                     let checked = leaf_row(&leaves[to], &values, &reader)?;
                     if to == at {
                         (to, (tid, Some(checked)), None)
                     } else {
+                        let source = leaves[at].oid;
+                        if has_row_triggers(&catalog, source)
+                            || has_row_triggers(&catalog, leaves[to].oid)
+                        {
+                            return Err(not_yet(
+                                "moving a row to another partition of a partitioned table with row triggers",
+                            ));
+                        }
                         (to, (tid, None), Some((to, checked)))
                     }
                 } else {
@@ -289,7 +369,8 @@ impl Connection {
                     shown.extend_from_slice(&row[width..]);
                     shown
                 });
-                let item = Moved { shown, to: item };
+                let after = leaves[at].fire.after_rows() && to == at;
+                let item = Moved { shown, to: item, after: after.then(|| change.clone()) };
                 match groups.iter_mut().find(|g| g.0 == at) {
                     Some(group) => {
                         group.1.push(change);
@@ -338,10 +419,23 @@ impl Connection {
                         conflict => kept = self.key_conflict(leaf_info, &view, conflict)?,
                     }
                 }
+                let mut after = Vec::new();
                 for &i in &applied {
                     let Some(item) = items.get(i) else { continue };
                     written.extend(item.shown.clone());
                     moved.extend(item.to.clone());
+                    after.extend(item.after.clone());
+                }
+                if !after.is_empty() {
+                    let tids: Vec<u64> = after.iter().map(|change| change.0).collect();
+                    let olds = heap.versions(view.database, leaf.oid, &tids);
+                    let rows: Vec<_> = olds
+                        .into_iter()
+                        .zip(after)
+                        .map(|(old, (_, new))| (Some(old), new))
+                        .collect();
+                    let updated = leaf_updated(leaf, &info.updated);
+                    self.leaf_after((&leaf.fire, (&updated, leaf.up.len())), &rows)?;
                 }
             }
             break;
@@ -361,21 +455,54 @@ struct Moved {
     shown: Option<Vec<Value>>,
     /// The new leaf and the checked new row with the columns of the leaf, for a row that moves.
     to: Option<(usize, Vec<Value>)>,
+    /// The change for the triggers `AFTER ... FOR EACH ROW` of the leaf.
+    after: Option<Change>,
 }
 
 /// The index in `leaves` of the leaf partition `oid` of the partitioned table `root`, with its plan made at the first row of the leaf.
 fn leaf_at(
     leaves: &mut Vec<Leaf>,
     catalog: &Catalog,
-    root: u32,
-    oid: u32,
+    (root, oid, event): (u32, u32, i16),
     reader: &Reader<'_>,
 ) -> Result<usize, Error> {
     if let Some(at) = leaves.iter().position(|leaf| leaf.oid == oid) {
         return Ok(at);
     }
-    leaves.push(leaf(catalog, root, oid, reader)?);
+    leaves.push(leaf(catalog, (root, oid, event), reader)?);
     Ok(leaves.len() - 1)
+}
+
+/// A row of the partitioned table with the columns of the leaf `leaf`, as `execute_attr_map_slot` gives it.
+fn down(leaf: &Leaf, row: &[Value]) -> Vec<Value> {
+    leaf.up.iter().map(|i| i.and_then(|i| row.get(i).cloned()).unwrap_or(Value::Null)).collect()
+}
+
+/// A row of the leaf `leaf` with the `width` columns of the partitioned table.
+fn up(leaf: &Leaf, row: &[Value], width: usize) -> Vec<Value> {
+    let mut up = vec![Value::Null; width];
+    for (value, &to) in row.iter().zip(&leaf.up) {
+        if let Some(slot) = to.and_then(|to| up.get_mut(to)) {
+            *slot = value.clone();
+        }
+    }
+    up
+}
+
+/// The numbers of the columns of the leaf `leaf` that an `UPDATE` of the partitioned table sets in its columns `updated`.
+fn leaf_updated(leaf: &Leaf, updated: &[i16]) -> Vec<i16> {
+    (1..)
+        .zip(&leaf.up)
+        .filter(|(_, to)| {
+            to.and_then(|to| i16::try_from(to + 1).ok()).is_some_and(|n| updated.contains(&n))
+        })
+        .map(|(number, _)| number)
+        .collect()
+}
+
+/// True when the leaf partition has a trigger `FOR EACH ROW` of `CREATE TRIGGER`.
+fn has_row_triggers(catalog: &Catalog, oid: u32) -> bool {
+    catalog.triggers_of(oid).iter().any(|t| !t.internal && t.kind & TRIGGER_ROW != 0)
 }
 
 /// The new row of the leaf partition `leaf` after the not-null and check constraints of the leaf, as `ExecConstraints` checks it.
@@ -395,14 +522,23 @@ pub(super) fn has_foreign(catalog: &Catalog, oid: u32) -> bool {
     })
 }
 
-/// The plan of the `INSERT` of the rows of the leaf partition `oid` of the partitioned table `root`.
-fn leaf(catalog: &Catalog, root: u32, oid: u32, reader: &Reader<'_>) -> Result<Leaf, Error> {
+/// The plan of the `INSERT` of the rows of the leaf partition `oid` of the partitioned table `root`, with the triggers of the leaf for the event `event`.
+fn leaf(
+    catalog: &Catalog,
+    (root, oid, event): (u32, u32, i16),
+    reader: &Reader<'_>,
+) -> Result<Leaf, Error> {
     let Some(rel) = catalog.relation(oid) else {
         return Err(Error::internal(format!("partition {oid} is not in the catalog")));
     };
-    if catalog.triggers_of(oid).iter().any(|t| !t.internal) {
-        return Err(not_yet("INSERT into a partitioned table whose partitions have triggers"));
-    }
+    let fire = if event == 0 {
+        if catalog.triggers_of(oid).iter().any(|t| !t.internal) {
+            return Err(not_yet("INSERT into a partitioned table whose partitions have triggers"));
+        }
+        Triggers::default()
+    } else {
+        armed(catalog, reader, oid, event)?
+    };
     let live: Vec<usize> = (0..rel.columns.len()).filter(|&i| !rel.columns[i].dropped).collect();
     let up = match catalog.relation(root) {
         Some(parent) => rel
@@ -440,7 +576,18 @@ fn leaf(catalog: &Catalog, root: u32, oid: u32, reader: &Reader<'_>) -> Result<L
     let params =
         Params { types: live.iter().map(|&i| rel.columns[i].ty).collect(), variable: true };
     let plan = query::plan(&node, reader, &params)?.fold(None, reader)?;
-    Ok(Leaf { oid, name: rel.name.clone(), plan, live, up, rows: Vec::new(), lines: Vec::new() })
+    let qualified = format!("{schemaname}.{}", rel.name);
+    Ok(Leaf {
+        oid,
+        name: rel.name.clone(),
+        plan,
+        live,
+        up,
+        rows: Vec::new(),
+        lines: Vec::new(),
+        fire,
+        qualified,
+    })
 }
 
 /// The error of a feature of partitioned tables that the engine does not have yet.

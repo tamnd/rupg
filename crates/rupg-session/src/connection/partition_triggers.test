@@ -1,0 +1,255 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % % on %', TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME;
+>>   IF TG_LEVEL = 'ROW' AND TG_OP <> 'DELETE' THEN
+>>     RAISE NOTICE 'new %', NEW;
+>>     RETURN NEW;
+>>   END IF;
+>>   IF TG_LEVEL = 'ROW' THEN
+>>     RAISE NOTICE 'old %', OLD;
+>>     RETURN OLD;
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TABLE p (a int, b text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES IN (1);
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES IN (2, 3) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE p21 PARTITION OF p2 FOR VALUES IN (2);
+CREATE TABLE
+> CREATE TRIGGER br BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER ar AFTER INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER bs BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER as_ AFTER INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TABLE p22 PARTITION OF p2 FOR VALUES IN (3);
+CREATE TABLE
+> SELECT tgrelid::regclass::text AS tab, tgname, tgparentid <> 0 AS child, tgisinternal, tgenabled, tgtype FROM pg_trigger WHERE tgrelid::regclass::text ~ '^p[0-9]*$' ORDER BY 1, 2;
+fields tab:25:-1:-1,tgname@pg_trigger.4:19:64:-1,child:16:1:-1,tgisinternal@pg_trigger.8:16:1:-1,tgenabled@pg_trigger.7:18:1:-1,tgtype@pg_trigger.6:21:2:-1
+row p,ar,f,f,O,29
+row p,as_,f,f,O,28
+row p,br,f,f,O,31
+row p,bs,f,f,O,30
+row p1,ar,t,f,O,29
+row p1,br,t,f,O,31
+row p2,ar,t,f,O,29
+row p2,br,t,f,O,31
+row p21,ar,t,f,O,29
+row p21,br,t,f,O,31
+row p22,ar,t,f,O,29
+row p22,br,t,f,O,31
+SELECT 12
+> SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgrelid = 'p21'::regclass ORDER BY tgname;
+fields pg_get_triggerdef:25:-1:-1
+row CREATE TRIGGER ar AFTER INSERT OR DELETE OR UPDATE ON public.p21 FOR EACH ROW EXECUTE FUNCTION tf()
+row CREATE TRIGGER br BEFORE INSERT OR DELETE OR UPDATE ON public.p21 FOR EACH ROW EXECUTE FUNCTION tf()
+SELECT 2
+> INSERT INTO p VALUES (1, 'one'), (2, 'two'), (3, 'three');
+NOTICE 00000 bs BEFORE STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,one) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p21 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,two) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p22 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,three) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,one) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p21 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,two) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p22 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,three) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+INSERT 0 3
+> INSERT INTO p1 VALUES (1, 'uno');
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,uno) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,uno) (PL/pgSQL function tf() line 5 at RAISE)
+INSERT 0 1
+> INSERT INTO p2 VALUES (2, 'dos');
+NOTICE 00000 br BEFORE ROW INSERT on p21 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,dos) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p21 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,dos) (PL/pgSQL function tf() line 5 at RAISE)
+INSERT 0 1
+> UPDATE p SET b = b || '!' WHERE a = 2;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p21 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,two!) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p21 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,dos!) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW UPDATE on p21 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,two!) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW UPDATE on p21 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,dos!) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+UPDATE 2
+> DELETE FROM p WHERE a = 3;
+NOTICE 00000 bs BEFORE STATEMENT DELETE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW DELETE on p22 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (3,three) (PL/pgSQL function tf() line 9 at RAISE)
+NOTICE 00000 ar AFTER ROW DELETE on p22 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (3,three) (PL/pgSQL function tf() line 9 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT DELETE on p (PL/pgSQL function tf() line 3 at RAISE)
+DELETE 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a, b;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,1,one
+row p1,1,uno
+row p21,2,dos!
+row p21,2,two!
+SELECT 4
+> DROP TRIGGER br ON p1;
+ERROR 2BP01 cannot drop trigger br on table p1 because trigger br on table p requires it
+HINT You can drop trigger br on table p instead.
+> ALTER TRIGGER br ON p1 RENAME TO br2;
+ERROR 0A000 cannot rename trigger "br" on table "p1"
+HINT Rename the trigger on the partitioned table "p" instead.
+> ALTER TRIGGER br ON p RENAME TO bx;
+ALTER TRIGGER
+> ALTER TABLE p DISABLE TRIGGER ar;
+ALTER TABLE
+> ALTER TABLE ONLY p ENABLE TRIGGER ar;
+ALTER TABLE
+> ALTER TABLE p21 ENABLE ALWAYS TRIGGER ar;
+ALTER TABLE
+> SELECT tgrelid::regclass::text AS tab, tgname, tgenabled FROM pg_trigger WHERE tgrelid::regclass::text ~ '^p[0-9]*$' ORDER BY 1, 2;
+fields tab:25:-1:-1,tgname@pg_trigger.4:19:64:-1,tgenabled@pg_trigger.7:18:1:-1
+row p,ar,O
+row p,as_,O
+row p,bs,O
+row p,bx,O
+row p1,ar,D
+row p1,bx,O
+row p2,ar,D
+row p2,bx,O
+row p21,ar,A
+row p21,bx,O
+row p22,ar,D
+row p22,bx,O
+SELECT 12
+> CREATE TABLE p3 (a int, b text);
+CREATE TABLE
+> CREATE TRIGGER bx BEFORE INSERT ON p3 FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> ALTER TABLE p ATTACH PARTITION p3 FOR VALUES IN (4);
+ERROR 42710 trigger "bx" for relation "p3" already exists
+> DROP TRIGGER bx ON p3;
+DROP TRIGGER
+> CREATE TRIGGER own BEFORE INSERT ON p3 FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> ALTER TABLE p ATTACH PARTITION p3 FOR VALUES IN (4);
+ALTER TABLE
+> SELECT tgrelid::regclass::text AS tab, tgname, tgparentid <> 0 AS child, tgenabled FROM pg_trigger WHERE tgrelid::regclass::text ~ '^p[0-9]*$' ORDER BY 1, 2;
+fields tab:25:-1:-1,tgname@pg_trigger.4:19:64:-1,child:16:1:-1,tgenabled@pg_trigger.7:18:1:-1
+row p,ar,f,O
+row p,as_,f,O
+row p,bs,f,O
+row p,bx,f,O
+row p1,ar,t,D
+row p1,bx,t,O
+row p2,ar,t,D
+row p2,bx,t,O
+row p21,ar,t,A
+row p21,bx,t,O
+row p22,ar,t,D
+row p22,bx,t,O
+row p3,ar,t,O
+row p3,bx,t,O
+row p3,own,f,O
+SELECT 15
+> INSERT INTO p VALUES (4, 'four');
+NOTICE 00000 bs BEFORE STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 bx BEFORE ROW INSERT on p3 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (4,four) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 own BEFORE ROW INSERT on p3 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (4,four) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p3 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (4,four) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+INSERT 0 1
+> ALTER TABLE p DETACH PARTITION p3;
+ALTER TABLE
+> SELECT tgrelid::regclass::text AS tab, tgname, tgparentid <> 0 AS child FROM pg_trigger WHERE tgrelid = 'p3'::regclass ORDER BY 1, 2;
+fields tab:25:-1:-1,tgname@pg_trigger.4:19:64:-1,child:16:1:-1
+row p3,own,f
+SELECT 1
+> DROP TRIGGER bx ON p;
+DROP TRIGGER
+> SELECT tgrelid::regclass::text AS tab, tgname FROM pg_trigger WHERE tgrelid::regclass::text ~ '^p[0-9]*$' ORDER BY 1, 2;
+fields tab:25:-1:-1,tgname@pg_trigger.4:19:64:-1
+row p,ar
+row p,as_
+row p,bs
+row p1,ar
+row p2,ar
+row p21,ar
+row p22,ar
+row p3,own
+SELECT 8
+> CREATE TRIGGER w BEFORE UPDATE OF b ON p FOR EACH ROW WHEN (OLD.b IS DISTINCT FROM NEW.b) EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> UPDATE p SET b = b WHERE a = 1;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+UPDATE 2
+> UPDATE p SET b = 'x' WHERE a = 1 AND b = 'one';
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 w BEFORE ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,x) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+UPDATE 1
+> CREATE OR REPLACE TRIGGER w BEFORE UPDATE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> SELECT pg_get_triggerdef(oid) FROM pg_trigger WHERE tgname = 'w' ORDER BY tgrelid::regclass::text;
+fields pg_get_triggerdef:25:-1:-1
+row CREATE TRIGGER w BEFORE UPDATE ON public.p FOR EACH ROW EXECUTE FUNCTION tf()
+row CREATE TRIGGER w BEFORE UPDATE ON public.p1 FOR EACH ROW EXECUTE FUNCTION tf()
+row CREATE TRIGGER w BEFORE UPDATE ON public.p2 FOR EACH ROW EXECUTE FUNCTION tf()
+row CREATE TRIGGER w BEFORE UPDATE ON public.p21 FOR EACH ROW EXECUTE FUNCTION tf()
+row CREATE TRIGGER w BEFORE UPDATE ON public.p22 FOR EACH ROW EXECUTE FUNCTION tf()
+SELECT 5
+> DROP TRIGGER w ON p;
+DROP TRIGGER
+> DROP TRIGGER ar ON p;
+DROP TRIGGER
+> DROP TRIGGER as_ ON p;
+DROP TRIGGER
+> DROP TRIGGER bs ON p;
+DROP TRIGGER
+> CREATE FUNCTION mv() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN NEW.a := 2; RETURN NEW; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER mv BEFORE INSERT ON p FOR EACH ROW EXECUTE FUNCTION mv();
+CREATE TRIGGER
+> INSERT INTO p VALUES (1, 'moved');
+ERROR 0A000 moving row to another partition during a BEFORE FOR EACH ROW trigger is not supported
+DETAIL Before executing trigger "mv", the row was to be in partition "public.p1".
+> DROP TRIGGER mv ON p;
+DROP TRIGGER
+> CREATE TRIGGER tt AFTER INSERT ON p REFERENCING NEW TABLE AS nt FOR EACH ROW EXECUTE FUNCTION tf();
+ERROR 0A000 "p" is a partitioned table
+DETAIL ROW triggers with transition tables are not supported on partitioned tables.
+> CREATE FUNCTION cnt() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN RAISE NOTICE 'rows %', (SELECT count(*) FROM nt); RETURN NULL; END $$;
+CREATE FUNCTION
+> CREATE TRIGGER tt AFTER INSERT ON p REFERENCING NEW TABLE AS nt FOR EACH STATEMENT EXECUTE FUNCTION cnt();
+CREATE TRIGGER
+> INSERT INTO p VALUES (1, 'a'), (2, 'b'), (3, 'c');
+NOTICE 00000 rows 3 (PL/pgSQL function cnt() line 1 at RAISE)
+INSERT 0 3
+> CREATE TRIGGER tt2 AFTER INSERT ON p1 REFERENCING NEW TABLE AS nt FOR EACH ROW EXECUTE FUNCTION tf();
+ERROR 0A000 ROW triggers with transition tables are not supported on partitions
+> DROP TABLE p;
+DROP TABLE
+> SELECT count(*) FROM pg_trigger WHERE tgrelid::regclass::text ~ '^p[0-9]*$';
+fields count:20:8:-1
+row 1
+SELECT 1
