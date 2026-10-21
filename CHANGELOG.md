@@ -4,26 +4,22 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.59 (2026-10-21)
+
 ### Added
 
 - `ALTER TABLE ... ATTACH PARTITION`, `ALTER TABLE ... DETACH PARTITION` and `ALTER INDEX ... ATTACH PARTITION`. The new partition must have the columns of its parent with the same types and collations, the not-null constraints and the check constraints of its parent, and no identity column, and the errors are the errors of PostgreSQL. Its rows must be in its bound, and the rows of the default partition must not be in the new bound. Each index of the parent gets an index of the partition with the same definition, or a new index. `DETACH PARTITION` makes the columns, the constraints and the indexes of the partition local again. `CONCURRENTLY` runs in one transaction, so `FINALIZE` has no detach to complete. `ALTER INDEX ... ATTACH PARTITION` makes the index of a partition a partition of an index of its parent table, and the parent index becomes valid when each partition has a valid index (#496).
 - `ALTER TABLE` of partitioned tables and of partitions. `ADD COLUMN`, `SET DEFAULT`, `DROP COLUMN`, `ALTER COLUMN ... TYPE`, `SET NOT NULL`, `DROP NOT NULL`, `SET STATISTICS`, `SET STORAGE`, `ADD CONSTRAINT` and `DROP CONSTRAINT` go on to the partitions, and the partitions get the counts of the inherited columns and constraints of PostgreSQL. A check constraint of a partition with the same name and expression merges with the new constraint. `ONLY`, a column of a partition key, and an inherited column or constraint of a partition give the errors of PostgreSQL. An identity column and a foreign key of a partitioned table are not supported yet (#497).
-
 - A checkpoint cuts the free arenas at the end of the file, as spec/08 section 8.9.3 says. The new length goes in the slot first, and the file gets shorter after that slot is durable (#456).
-
 - The workflow `fuzz` for the long fuzz runs of spec/21 section 21.7. It runs on request and gives each target one libFuzzer worker on each CPU of the runner. With the defaults, each of the four M2 targets gets 25.3 CPU hours (#471).
-
 - Identity columns of partitioned tables. Each partition gets the identity of the column of its parent table, with no sequence of its own, and an `INSERT` into a partition takes the next value of the sequence of the topmost parent, as `getIdentitySequence` finds it. `ADD COLUMN`, `ADD GENERATED ... AS IDENTITY`, `SET GENERATED`, the `SET` options of the sequence and `DROP IDENTITY` go on to the partitions, and give the errors of PostgreSQL with `ONLY` and on a partition. `CREATE TABLE ... PARTITION OF` and `ATTACH PARTITION` give the identity to the new partition, and `DETACH PARTITION` takes it away (#499).
-
 - `INSERT ... ON CONFLICT` into partitioned tables. Each row goes to its partition, and the arbiters are the indexes of the partition whose partitioned index the clause infers. `DO UPDATE` changes the row in the partition, and a new row for another partition gives the error of PostgreSQL (#502).
-
 - Triggers on partitioned tables. A row trigger gets a clone in each partition, also in a partition that `PARTITION OF` or `ATTACH PARTITION` makes later, and `DETACH PARTITION` drops the clones. `pg_trigger.tgparentid` names the trigger of the parent. A clone cannot be dropped or renamed alone, and `ALTER TRIGGER ... RENAME` and `ALTER TABLE ... ENABLE TRIGGER` on the parent change the clones too. `INSERT`, `UPDATE` and `DELETE` on a partitioned table fire its statement triggers and the row triggers of the partition of each row. A trigger `BEFORE` that moves a new row to another partition gives the error of PostgreSQL. `COPY FROM`, `ON CONFLICT`, an `UPDATE` that moves a row with row triggers, and transition tables of `UPDATE` and `DELETE` are not supported yet (#503).
+- `CREATE UNLOGGED TABLE`, `CREATE UNLOGGED SEQUENCE`, `CREATE UNLOGGED TABLE AS`, `SELECT INTO UNLOGGED`, and `ALTER TABLE` or `ALTER SEQUENCE` with `SET LOGGED` and `SET UNLOGGED`. `pg_class.relpersistence` is `u` for the table, its indexes, its TOAST table and its owned sequences. A partition can be unlogged, and `SET LOGGED` and `SET UNLOGGED` work on a partition. The errors for a temporary schema, a temporary table, a partitioned table, a materialized view and a foreign key between a permanent table and an unlogged table are the errors of PostgreSQL. The rows of an unlogged table stay in memory as for a permanent table. With this change, the `libpq_pipeline` tests `pipeline_abort` and `pipelined_insert` can run.
 
 ### Fixed
 
 - When one `ALTER TABLE` adds a column and then sets the default of the column, the rows of the table get the default of `ADD COLUMN`, as in PostgreSQL. Before, they got the new default (#498).
-
-- `CREATE UNLOGGED TABLE`, `CREATE UNLOGGED SEQUENCE`, `CREATE UNLOGGED TABLE AS`, `SELECT INTO UNLOGGED`, and `ALTER TABLE` or `ALTER SEQUENCE` with `SET LOGGED` and `SET UNLOGGED`. `pg_class.relpersistence` is `u` for the table, its indexes, its TOAST table and its owned sequences. A partition can be unlogged, and `SET LOGGED` and `SET UNLOGGED` work on a partition. The errors for a temporary schema, a temporary table, a partitioned table, a materialized view and a foreign key between a permanent table and an unlogged table are the errors of PostgreSQL. The rows of an unlogged table stay in memory as for a permanent table. With this change, the `libpq_pipeline` tests `pipeline_abort` and `pipelined_insert` can run.
 
 ## 0.1.58 (2026-10-21)
 
