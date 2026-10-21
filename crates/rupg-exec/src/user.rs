@@ -613,11 +613,14 @@ fn attributes<'a>(
     let mut system = Vec::new();
     for row in 0..table.len {
         if cell(table, row, "attrelid", session)? == Value::Oid(pg_class)
-            && cell(table, row, "attnum", session)?.as_i64().is_some_and(|n| n < 0)
+            && let Some(number) = cell(table, row, "attnum", session)?.as_i64().filter(|&n| n < 0)
         {
-            system.push(row);
+            system.push((number, row));
         }
     }
+    // PostgreSQL reads the rows of a relation by the index on `attrelid` and `attnum`, so a query without `ORDER BY` gets `tableoid` (-6) first and the user columns last.
+    system.sort_unstable();
+    let system: Vec<usize> = system.into_iter().map(|(_, row)| row).collect();
     let mut rows = Vec::new();
     for rel in catalog.relations() {
         if !matches!(
