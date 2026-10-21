@@ -10,7 +10,7 @@ use crate::Analyzer;
 use crate::agg::Kind;
 use crate::coerce::{AtOpt, Context};
 use crate::expr::{Case, CastForm, Expr, ExprKind, Var};
-use crate::from::{Column, FromItem, Relation};
+use crate::from::{Column, FromItem, Relation, TABLE_OID_ATTNUM};
 use crate::insert::WriteKind;
 use crate::merge::carry;
 use crate::select::Query;
@@ -128,6 +128,7 @@ impl Analyzer<'_> {
             .first()
             .ok_or_else(|| Error::internal("RETURNING with no table"))?;
         let width = table.columns.len();
+        let table_oid = table.oid;
         let types: Vec<(u32, i32)> = table.columns.iter().map(|c| (c.ty, c.typmod)).collect();
         let mut relation = Relation::new(table.oid, table.columns.clone(), None, None, None);
         relation.name.clone_from(&table.name);
@@ -168,8 +169,14 @@ impl Analyzer<'_> {
                 Source::Carry(relation)
             }
         };
-        // The carried values of a `MERGE` come after the row, the old row, the new row and the action.
-        let base = if kind == WriteKind::Merge { 3 * width + 1 } else { width };
+        // The carried values of a `MERGE` come after the row, the old row, the new row and the action. A row of a partitioned table has the OID of its partition after the columns.
+        let partitioned = self.is_partitioned(table_oid);
+        let base = match kind {
+            WriteKind::Merge => 3 * width + 1,
+            _ if partitioned => width + 1,
+            _ => width,
+        };
+        let partition_attnum = i16::try_from(width + 1).unwrap_or(i16::MAX);
         let mut carried: Vec<Expr> = Vec::new();
         let mut change = |expr: &mut Expr, depth: usize| {
             let ExprKind::Var(var) = expr.kind else { return };
@@ -177,6 +184,13 @@ impl Analyzer<'_> {
                 return;
             }
             match source(var.relation) {
+                Source::Row if partitioned && var.attnum == TABLE_OID_ATTNUM => {
+                    expr.kind = ExprKind::Var(Var {
+                        relation: 0,
+                        attnum: partition_attnum,
+                        levels_up: depth,
+                    });
+                }
                 Source::Row => expr.kind = ExprKind::Var(Var { relation: 0, ..var }),
                 Source::Null => expr.kind = ExprKind::Const(Value::Null),
                 Source::Shift(by) if var.attnum == 0 => {

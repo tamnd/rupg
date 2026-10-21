@@ -1,7 +1,7 @@
 //! `INSERT` into a partitioned table: `ExecFindPartition` routes each row to the leaf partition that takes it, and the leaf checks and writes the row.
 
-use rupg_analyze::{CopyTarget, Params, Write};
-use rupg_catalog::Catalog;
+use rupg_analyze::{CopyTarget, Params, Write, WriteKind};
+use rupg_catalog::{Catalog, ConKind};
 use rupg_common::{Error, SqlState};
 use rupg_exec::{Plan, Router};
 use rupg_pgcatalog::builtin::{self, Named};
@@ -10,12 +10,13 @@ use rupg_types::Value;
 
 use super::Connection;
 use super::foreign::Batch;
-use crate::heap::{Changed, View};
+use crate::heap::{Change, Changed, View, tid_text};
 use crate::query::{self, Reader};
 
 /// A leaf partition of the rows of a statement, as `ExecInitPartitionInfo` gives its `ResultRelInfo`.
 struct Leaf {
     oid: u32,
+    name: String,
     /// The `INSERT` into the leaf, from [`rupg_analyze::copy_insert`], with a parameter for each column that is not dropped.
     plan: Plan,
     /// The columns of the leaf that are not dropped.
@@ -26,7 +27,7 @@ struct Leaf {
 
 /// The rows of an `INSERT` into a partitioned table that the leaves wrote.
 pub(super) struct Routed {
-    /// The rows for `RETURNING`: the columns of the partitioned table, a null `ctid` and the OID of the leaf as `tableoid`.
+    /// The rows for `RETURNING`: the columns of the partitioned table, then the OID of the leaf.
     pub(super) written: Vec<Vec<Value>>,
     /// The new rows that the foreign keys of the leaves check.
     pub(super) batches: Vec<Batch>,
@@ -51,35 +52,37 @@ impl Connection {
         let mut written = Vec::new();
         for row in rows {
             let (oid, values) = router.route(info.table, row.clone(), &reader)?;
-            let at = match leaves.iter().position(|leaf| leaf.oid == oid) {
-                Some(at) => at,
-                None => {
-                    leaves.push(leaf(&catalog, oid, &reader)?);
-                    leaves.len() - 1
-                }
-            };
-            let leaf = &mut leaves[at];
-            let params: Vec<Value> =
-                leaf.live.iter().map(|&i| values.get(i).cloned().unwrap_or(Value::Null)).collect();
-            let checked = leaf.plan.run_unchecked(&params, &reader)?;
-            leaf.rows.extend(leaf.plan.check(checked, &reader)?);
+            let at = leaf_at(&mut leaves, &catalog, oid, &reader)?;
+            let checked = leaf_row(&leaves[at], &values, &reader)?;
+            leaves[at].rows.push(checked);
             if info.returning.is_some() {
                 let mut row = row;
                 row.truncate(info.width);
-                row.extend([Value::Null, Value::Oid(oid)]);
+                row.push(Value::Oid(oid));
                 written.push(row);
             }
         }
         drop(reader);
+        if info.on_conflict.is_some()
+            && leaves.iter().any(|leaf| leaf.plan.write().is_some_and(|w| !w.unique.is_empty()))
+        {
+            return Err(not_yet("ON CONFLICT on a partitioned table with unique keys"));
+        }
+        let batches = self.insert_leaves(leaves, view)?;
+        Ok(Routed { written, batches })
+    }
+
+    /// `table_tuple_insert` of the checked rows of each leaf, with the checks of its unique keys. It gives the rows that the foreign keys of the leaves check.
+    fn insert_leaves(&self, leaves: Vec<Leaf>, view: &View) -> Result<Vec<Batch>, Error> {
         let heap = self.store.heap();
         let mut batches = Vec::new();
         for leaf in leaves {
+            if leaf.rows.is_empty() {
+                continue;
+            }
             let Some(leaf_info) = leaf.plan.write() else {
                 return Err(Error::internal("a partition with no plan of its rows"));
             };
-            if info.on_conflict.is_some() && !leaf_info.unique.is_empty() {
-                return Err(not_yet("ON CONFLICT on a partitioned table with unique keys"));
-            }
             let checked = if leaf_info.foreign.is_empty() { Vec::new() } else { leaf.rows.clone() };
             let mut kept = Vec::new();
             loop {
@@ -98,8 +101,174 @@ impl Connection {
                 ));
             }
         }
-        Ok(Routed { written, batches })
+        Ok(batches)
     }
+
+    /// `ExecUpdate` and `ExecDelete` for a partitioned table: each row of the query gives the OID of its leaf and the ID of its version, and each leaf changes its rows. A new row that its leaf does not take moves, as `ExecCrossPartitionUpdate` moves it: the old leaf deletes the old row, and the row goes in the leaf that `ExecFindPartition` gives. It gives the count of the rows, the rows for `RETURNING` and the view of the last run of the query.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the routing and of the constraints of the leaves, and `0A000` for a leaf with triggers or foreign keys.
+    pub(super) fn change_routed(
+        &self,
+        (plan, info): (&Plan, &Write),
+        params: &[Value],
+        view: &View,
+        rows: Vec<Vec<Value>>,
+    ) -> Result<(u64, Vec<Vec<Value>>, View), Error> {
+        let catalog = self.catalog();
+        let Some(rel) = catalog.relation(info.table) else {
+            return Err(Error::internal(format!("relation {} is not in the catalog", info.table)));
+        };
+        let width = rel.columns.len();
+        let update = info.kind == WriteKind::Update;
+        let returning = info.returning.is_some();
+        let heap = self.store.heap();
+        let mut view = view.clone();
+        let mut router = Router::default();
+        let mut leaves: Vec<Leaf> = Vec::new();
+        let (mut count, mut written) = (0, Vec::new());
+        // The new rows that move to another leaf, after the old leaf deleted the old rows.
+        let mut moved: Vec<(usize, Vec<Value>)> = Vec::new();
+        let mut rows = rows;
+        'run: loop {
+            let reader = self.reader();
+            // The changes of each old leaf, in the order of its first row, with the row for `RETURNING` and the moved row of each change.
+            let mut groups: Vec<(usize, Vec<Change>, Vec<Moved>)> = Vec::new();
+            for mut row in std::mem::take(&mut rows) {
+                let (Some(Value::Int8(tid)), Some(Value::Oid(old))) = (row.pop(), row.pop()) else {
+                    return Err(Error::internal("a row to change with no partition or version"));
+                };
+                let at = leaf_at(&mut leaves, &catalog, old, &reader)?;
+                let tid = tid.cast_unsigned();
+                let (to, change, item) = if update {
+                    let (to, values) = router.route(info.table, row[..width].to_vec(), &reader)?;
+                    let to = leaf_at(&mut leaves, &catalog, to, &reader)?;
+                    let checked = leaf_row(&leaves[to], &values, &reader)?;
+                    if to == at {
+                        (to, (tid, Some(checked)), None)
+                    } else {
+                        (to, (tid, None), Some((to, checked)))
+                    }
+                } else {
+                    (at, (tid, None), None)
+                };
+                if has_foreign(&catalog, leaves[at].oid) || has_foreign(&catalog, leaves[to].oid) {
+                    return Err(not_yet(if update {
+                        "UPDATE of a partitioned table with foreign keys"
+                    } else {
+                        "DELETE from a partitioned table with foreign keys"
+                    }));
+                }
+                let shown = returning.then(|| {
+                    let mut shown = row[..width].to_vec();
+                    shown.push(Value::Oid(leaves[to].oid));
+                    shown.extend_from_slice(&row[width..]);
+                    shown
+                });
+                let item = Moved { shown, to: item };
+                match groups.iter_mut().find(|g| g.0 == at) {
+                    Some(group) => {
+                        group.1.push(change);
+                        group.2.push(item);
+                    }
+                    None => groups.push((at, vec![change], vec![item])),
+                }
+            }
+            drop(reader);
+            for (at, changes, items) in groups {
+                let leaf = &leaves[at];
+                let Some(leaf_info) = leaf.plan.write() else {
+                    return Err(Error::internal("a partition with no plan of its rows"));
+                };
+                let (mut kept, mut applied) = (Vec::new(), Vec::new());
+                loop {
+                    let changed = heap.change(
+                        leaf.oid,
+                        &view,
+                        changes.clone(),
+                        &leaf_info.unique,
+                        &kept,
+                        &mut applied,
+                    )?;
+                    match changed {
+                        Changed::Done(n) => {
+                            count += n;
+                            break;
+                        }
+                        Changed::Wait { holder, tid } => {
+                            let what = if update { "updating" } else { "deleting" };
+                            let context = format!(
+                                "while {what} tuple {} in relation \"{}\"",
+                                tid_text(tid),
+                                leaf.name
+                            );
+                            self.reader().wait_xact(view.xid, holder, &context)?;
+                        }
+                        Changed::Again => {
+                            // The rows that this command changed stay as they are in the new run.
+                            let reader = self.reader();
+                            rows = plan.run(params, &reader)?;
+                            view = reader.view().cloned().unwrap_or_default();
+                            continue 'run;
+                        }
+                        conflict => kept = self.key_conflict(leaf_info, &view, conflict)?,
+                    }
+                }
+                for &i in &applied {
+                    let Some(item) = items.get(i) else { continue };
+                    written.extend(item.shown.clone());
+                    moved.extend(item.to.clone());
+                }
+            }
+            break;
+        }
+        // `ExecInsert` of the moved rows in their new leaves.
+        for (to, row) in moved {
+            leaves[to].rows.push(row);
+        }
+        self.insert_leaves(leaves, &view)?;
+        Ok((count, written, view))
+    }
+}
+
+/// A change of a row of a partitioned table.
+struct Moved {
+    /// The row for `RETURNING`: the new row of an `UPDATE` or the old row of a `DELETE`, the OID of its leaf, then the carried values.
+    shown: Option<Vec<Value>>,
+    /// The new leaf and the checked new row with the columns of the leaf, for a row that moves.
+    to: Option<(usize, Vec<Value>)>,
+}
+
+/// The index in `leaves` of the leaf partition `oid`, with its plan made at the first row of the leaf.
+fn leaf_at(
+    leaves: &mut Vec<Leaf>,
+    catalog: &Catalog,
+    oid: u32,
+    reader: &Reader<'_>,
+) -> Result<usize, Error> {
+    if let Some(at) = leaves.iter().position(|leaf| leaf.oid == oid) {
+        return Ok(at);
+    }
+    leaves.push(leaf(catalog, oid, reader)?);
+    Ok(leaves.len() - 1)
+}
+
+/// The new row of the leaf partition `leaf` after the not-null and check constraints of the leaf, as `ExecConstraints` checks it.
+fn leaf_row(leaf: &Leaf, values: &[Value], reader: &Reader<'_>) -> Result<Vec<Value>, Error> {
+    let params: Vec<Value> =
+        leaf.live.iter().map(|&i| values.get(i).cloned().unwrap_or(Value::Null)).collect();
+    let checked = leaf.plan.run_unchecked(&params, reader)?;
+    let mut rows = leaf.plan.check(checked, reader)?;
+    rows.pop().ok_or_else(|| Error::internal("a check of a row with no row"))
+}
+
+/// True when a foreign key references the table `oid` or is a constraint of it.
+fn has_foreign(catalog: &Catalog, oid: u32) -> bool {
+    catalog.constraints().any(|c| {
+        (c.relation == oid && c.kind == ConKind::Foreign)
+            || c.foreign.as_ref().is_some_and(|f| f.table == oid)
+    })
 }
 
 /// The plan of the `INSERT` of the rows of the leaf partition `oid`.
@@ -134,7 +303,7 @@ fn leaf(catalog: &Catalog, oid: u32, reader: &Reader<'_>) -> Result<Leaf, Error>
     let params =
         Params { types: live.iter().map(|&i| rel.columns[i].ty).collect(), variable: true };
     let plan = query::plan(&node, reader, &params)?.fold(None, reader)?;
-    Ok(Leaf { oid, plan, live, rows: Vec::new() })
+    Ok(Leaf { oid, name: rel.name.clone(), plan, live, rows: Vec::new() })
 }
 
 /// The error of a feature of partitioned tables that the engine does not have yet.

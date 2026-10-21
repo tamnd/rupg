@@ -707,18 +707,34 @@ impl Connection {
                 updated = (done.new, done.old);
                 (CommandTag::Insert, done.count)
             }
-            (WriteKind::Insert, None) if partitioned => {
+            (kind, None) if partitioned => {
                 if !triggers.is_empty() {
                     return Err(Error::new(
                         SqlState::FEATURE_NOT_SUPPORTED,
                         "triggers on a partitioned table are not supported yet",
                     ));
                 }
-                let count = rows.len() as u64;
-                let routed = self.insert_routed(info, &view, rows)?;
-                written = routed.written;
-                batches = routed.batches;
-                (CommandTag::Insert, count)
+                match kind {
+                    WriteKind::Insert => {
+                        let count = rows.len() as u64;
+                        let routed = self.insert_routed(info, &view, rows)?;
+                        written = routed.written;
+                        batches = routed.batches;
+                        (CommandTag::Insert, count)
+                    }
+                    _ => {
+                        let (count, shown, last) =
+                            self.change_routed((plan, info), params, &view, rows)?;
+                        written = shown;
+                        view = last;
+                        let tag = if kind == WriteKind::Update {
+                            CommandTag::Update
+                        } else {
+                            CommandTag::Delete
+                        };
+                        (tag, count)
+                    }
+                }
             }
             (WriteKind::Insert, None) => {
                 let count = rows.len() as u64;
@@ -4819,6 +4835,12 @@ mod tests {
     #[test]
     fn partition_dml() {
         big_stack(|| script(include_str!("connection/partition_dml.test")));
+    }
+
+    /// `UPDATE` and `DELETE` of partitioned tables and partitions: changes in place, rows that move to another partition, sub-partitions and defaults, `ONLY`, `RETURNING` with `tableoid` and the old and new rows, `FROM` and `USING`, unique keys of a partition, a rollback, prepared statements, CTEs, and the errors for a row that no partition takes and for the constraints of the partitions. `connection/partition_change.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_change() {
+        big_stack(|| script(include_str!("connection/partition_change.test")));
     }
 
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.

@@ -296,12 +296,7 @@ impl Analyzer<'_> {
             }
         };
         // `ExecFindPartition` routes each row, and the partition then checks it.
-        let partitioned = self
-            .env
-            .catalog()
-            .and_then(|c| c.relation(table))
-            .is_some_and(|r| r.kind == RelKind::Partitioned);
-        let checks = if partitioned { Vec::new() } else { self.checks(table)? };
+        let checks = if self.is_partitioned(table) { Vec::new() } else { self.checks(table)? };
         let names = checks.iter().map(|(n, _)| n.clone()).collect();
         let conflict_set = s
             .onConflictClause
@@ -542,7 +537,7 @@ impl Analyzer<'_> {
             return Err(not_yet(&format!("{what} a system catalog")));
         };
         match rel.kind {
-            RelKind::Table if rel.partition_of.is_some() && kind != WriteKind::Insert => {
+            RelKind::Table if rel.partition_of.is_some() && kind == WriteKind::Merge => {
                 return Err(not_yet(&format!("{what} a partition")));
             }
             RelKind::Table => {}
@@ -557,7 +552,7 @@ impl Analyzer<'_> {
                 if kind != WriteKind::Merge
                     && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
             RelKind::View => return Err(not_yet(&format!("{what} a view"))),
-            RelKind::Partitioned if kind == WriteKind::Insert => {}
+            RelKind::Partitioned if kind != WriteKind::Merge => {}
             RelKind::Partitioned => return Err(not_yet(&format!("{what} a partitioned table"))),
             _ => {
                 return Err(Error::new(
@@ -594,6 +589,11 @@ impl Analyzer<'_> {
     /// True when the target of the write is a view, which only a view with a trigger `INSTEAD OF` for the event can be.
     pub(crate) fn is_view(&self, table: u32) -> bool {
         crate::ddl::relkind(self.env, table) == b'v'
+    }
+
+    /// True for a partitioned table. Its partitions check the rows of a write, and each row of the query of an `UPDATE` or a `DELETE` gives the OID of its partition before the ID of its version.
+    pub(crate) fn is_partitioned(&self, table: u32) -> bool {
+        crate::ddl::relkind(self.env, table) == b'p'
     }
 
     /// [`Write::recheck`] for a write of the table with a trigger `BEFORE ... FOR EACH ROW` for the event of `kind`, or `None`.
