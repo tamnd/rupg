@@ -1,0 +1,226 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE FUNCTION tf() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE '% % % % on %', TG_NAME, TG_WHEN, TG_LEVEL, TG_OP, TG_TABLE_NAME;
+>>   IF TG_LEVEL = 'ROW' AND TG_OP <> 'DELETE' THEN
+>>     RAISE NOTICE 'new %', NEW;
+>>     IF NEW.b = 'skip' THEN RETURN NULL; END IF;
+>>     RETURN NEW;
+>>   END IF;
+>>   IF TG_LEVEL = 'ROW' THEN
+>>     RAISE NOTICE 'old %', OLD;
+>>     RETURN OLD;
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TABLE p (a int PRIMARY KEY, b text) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES FROM (0) TO (10);
+CREATE TABLE
+> CREATE TABLE p2 PARTITION OF p FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TRIGGER br BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER ar AFTER INSERT OR UPDATE OR DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER bs BEFORE INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> CREATE TRIGGER as_ AFTER INSERT OR UPDATE OR DELETE ON p FOR EACH STATEMENT EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> INSERT INTO p VALUES (1, 'one'), (3, 'three'), (11, 'eleven'), (12, 'twelve');
+NOTICE 00000 bs BEFORE STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,one) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,three) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (11,eleven) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (12,twelve) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (1,one) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,three) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (11,eleven) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (12,twelve) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+INSERT 0 4
+> UPDATE p SET a = a + 10 WHERE a = 1;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (11,one) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW DELETE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (1,one) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (11,one) (PL/pgSQL function tf() line 5 at RAISE)
+ERROR 23505 duplicate key value violates unique constraint "p2_pkey"
+DETAIL Key (a)=(11) already exists.
+> UPDATE p SET a = 5, b = 'five' WHERE a = 12 RETURNING tableoid::regclass, *;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (5,five) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW DELETE on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (12,twelve) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (5,five) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW DELETE on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (12,twelve) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (5,five) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,5,five
+UPDATE 1
+> UPDATE p SET b = 'x' WHERE a = 3;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,x) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,x) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+UPDATE 1
+> DELETE FROM p WHERE a = 3 RETURNING *;
+NOTICE 00000 bs BEFORE STATEMENT DELETE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW DELETE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (3,x) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 ar AFTER ROW DELETE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (3,x) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT DELETE on p (PL/pgSQL function tf() line 3 at RAISE)
+fields a@p.1:23:4:-1,b@p.2:25:-1:-1
+row 3,x
+DELETE 1
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,1,one
+row p1,5,five
+row p2,11,eleven
+SELECT 3
+> CREATE FUNCTION skiprow() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   RAISE NOTICE 'skiprow % on %', TG_OP, TG_TABLE_NAME;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER skiprow BEFORE DELETE ON p2 FOR EACH ROW EXECUTE FUNCTION skiprow();
+CREATE TRIGGER
+> UPDATE p SET a = 2 WHERE a = 11;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (2,eleven) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW DELETE on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (11,eleven) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 skiprow DELETE on p2 (PL/pgSQL function skiprow() line 3 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+UPDATE 0
+> DROP TRIGGER skiprow ON p2;
+DROP TRIGGER
+> CREATE TRIGGER noins BEFORE INSERT ON p2 FOR EACH ROW EXECUTE FUNCTION skiprow();
+CREATE TRIGGER
+> UPDATE p SET a = 15 WHERE a = 5 RETURNING *;
+NOTICE 00000 bs BEFORE STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (15,five) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW DELETE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (5,five) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (15,five) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 skiprow INSERT on p2 (PL/pgSQL function skiprow() line 3 at RAISE)
+NOTICE 00000 ar AFTER ROW DELETE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (5,five) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT UPDATE on p (PL/pgSQL function tf() line 3 at RAISE)
+fields a@p.1:23:4:-1,b@p.2:25:-1:-1
+UPDATE 0
+> DROP TRIGGER noins ON p2;
+DROP TRIGGER
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,1,one
+row p2,11,eleven
+SELECT 2
+> INSERT INTO p VALUES (3, 'three'), (12, 'twelve');
+NOTICE 00000 bs BEFORE STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,three) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 br BEFORE ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (12,twelve) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (3,three) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 ar AFTER ROW INSERT on p2 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (12,twelve) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 as_ AFTER STATEMENT INSERT on p (PL/pgSQL function tf() line 3 at RAISE)
+INSERT 0 2
+> DROP TRIGGER br ON p;
+DROP TRIGGER
+> DROP TRIGGER ar ON p;
+DROP TRIGGER
+> DROP TRIGGER bs ON p;
+DROP TRIGGER
+> DROP TRIGGER as_ ON p;
+DROP TRIGGER
+> CREATE FUNCTION cnt() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   IF TG_OP = 'INSERT' THEN
+>>     RAISE NOTICE '% new %', TG_NAME, (SELECT string_agg(a || ':' || b, ',' ORDER BY a) FROM newt);
+>>   ELSIF TG_OP = 'UPDATE' THEN
+>>     RAISE NOTICE '% old % new %', TG_NAME, (SELECT string_agg(a || ':' || b, ',' ORDER BY a) FROM oldt), (SELECT string_agg(a || ':' || b, ',' ORDER BY a) FROM newt);
+>>   ELSE
+>>     RAISE NOTICE '% old %', TG_NAME, (SELECT string_agg(a || ':' || b, ',' ORDER BY a) FROM oldt);
+>>   END IF;
+>>   RETURN NULL;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER ti AFTER INSERT ON p REFERENCING NEW TABLE AS newt FOR EACH STATEMENT EXECUTE FUNCTION cnt();
+CREATE TRIGGER
+> CREATE TRIGGER tu AFTER UPDATE ON p REFERENCING OLD TABLE AS oldt NEW TABLE AS newt FOR EACH STATEMENT EXECUTE FUNCTION cnt();
+CREATE TRIGGER
+> CREATE TRIGGER td AFTER DELETE ON p REFERENCING OLD TABLE AS oldt FOR EACH STATEMENT EXECUTE FUNCTION cnt();
+CREATE TRIGGER
+> UPDATE p SET b = b || '!';
+NOTICE 00000 tu old 1:one,3:three,11:eleven,12:twelve new 1:one!,3:three!,11:eleven!,12:twelve! (PL/pgSQL function cnt() line 6 at RAISE)
+UPDATE 4
+> UPDATE p SET a = a + 14 WHERE a < 4;
+NOTICE 00000 tu old 1:one!,3:three! new 15:one!,17:three! (PL/pgSQL function cnt() line 6 at RAISE)
+UPDATE 2
+> DELETE FROM p WHERE a > 14;
+NOTICE 00000 td old 15:one!,17:three! (PL/pgSQL function cnt() line 8 at RAISE)
+DELETE 2
+> UPDATE p SET a = a WHERE a > 100;
+NOTICE 00000 tu old <NULL> new <NULL> (PL/pgSQL function cnt() line 6 at RAISE)
+UPDATE 0
+> DELETE FROM p WHERE a > 100;
+NOTICE 00000 td old <NULL> (PL/pgSQL function cnt() line 8 at RAISE)
+DELETE 0
+> CREATE TRIGGER ar AFTER UPDATE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> UPDATE p SET a = 20 - a WHERE a IN (3, 12) RETURNING tableoid::regclass, *;
+NOTICE 00000 tu old 12:twelve! new 8:twelve! (PL/pgSQL function cnt() line 6 at RAISE)
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,8,twelve!
+UPDATE 1
+> UPDATE p SET b = b || '?', a = CASE WHEN a = 11 THEN 4 ELSE a END RETURNING tableoid::regclass, *;
+NOTICE 00000 ar AFTER ROW UPDATE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 new (8,twelve!?) (PL/pgSQL function tf() line 5 at RAISE)
+NOTICE 00000 tu old 8:twelve!,11:eleven! new 4:eleven!?,8:twelve!? (PL/pgSQL function cnt() line 6 at RAISE)
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+row p1,8,twelve!?
+row p1,4,eleven!?
+UPDATE 2
+> CREATE TRIGGER ad AFTER DELETE ON p FOR EACH ROW EXECUTE FUNCTION tf();
+CREATE TRIGGER
+> DELETE FROM p WHERE a < 10;
+NOTICE 00000 ad AFTER ROW DELETE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (8,twelve!?) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 ad AFTER ROW DELETE on p1 (PL/pgSQL function tf() line 3 at RAISE)
+NOTICE 00000 old (4,eleven!?) (PL/pgSQL function tf() line 10 at RAISE)
+NOTICE 00000 td old 4:eleven!?,8:twelve!? (PL/pgSQL function cnt() line 8 at RAISE)
+DELETE 2
+> SELECT tableoid::regclass, * FROM p ORDER BY a;
+fields tableoid:2205:4:-1,a@p.1:23:4:-1,b@p.2:25:-1:-1
+SELECT 0
+> DROP TABLE p;
+DROP TABLE

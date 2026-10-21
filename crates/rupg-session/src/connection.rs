@@ -727,35 +727,28 @@ impl Connection {
                 updated = (done.new, done.old);
                 (CommandTag::Insert, done.count)
             }
-            (kind, None) if partitioned => {
-                if kind != WriteKind::Insert && triggers.after_rows() {
-                    return Err(Error::new(
-                        SqlState::FEATURE_NOT_SUPPORTED,
-                        "transition tables of UPDATE or DELETE on a partitioned table are not supported yet",
-                    ));
+            (kind, None) if partitioned => match kind {
+                WriteKind::Insert => {
+                    let routed = self.insert_routed(info, &view, rows, keep_rows)?;
+                    written = routed.written;
+                    batches = routed.batches;
+                    new_rows = routed.inserted;
+                    (CommandTag::Insert, routed.count)
                 }
-                match kind {
-                    WriteKind::Insert => {
-                        let routed = self.insert_routed(info, &view, rows, keep_rows)?;
-                        written = routed.written;
-                        batches = routed.batches;
-                        new_rows = routed.inserted;
-                        (CommandTag::Insert, routed.count)
-                    }
-                    _ => {
-                        let (count, shown, last) =
-                            self.change_routed((plan, info), params, &view, rows)?;
-                        written = shown;
-                        view = last;
-                        let tag = if kind == WriteKind::Update {
-                            CommandTag::Update
-                        } else {
-                            CommandTag::Delete
-                        };
-                        (tag, count)
-                    }
+                _ => {
+                    let changed =
+                        self.change_routed((plan, info), params, &view, rows, keep_rows)?;
+                    written = changed.written;
+                    view = changed.view;
+                    (old_rows, new_rows) = (changed.old, changed.new);
+                    let tag = if kind == WriteKind::Update {
+                        CommandTag::Update
+                    } else {
+                        CommandTag::Delete
+                    };
+                    (tag, changed.count)
                 }
-            }
+            },
             (WriteKind::Insert, None) => {
                 let count = rows.len() as u64;
                 if info.returning.is_some() {
@@ -4928,6 +4921,12 @@ mod tests {
     #[test]
     fn partition_trigger_copy() {
         big_stack(|| script(include_str!("connection/partition_trigger_copy.test")));
+    }
+
+    /// The triggers of the leaves of a partitioned table for an `UPDATE` that moves a row: the triggers `BEFORE UPDATE` of the old leaf fire, then `BEFORE DELETE` of the old leaf and `BEFORE INSERT` of the new leaf, and then the triggers `AFTER DELETE` and `AFTER INSERT`. A trigger `BEFORE DELETE` that skips the row keeps the row, and a trigger `BEFORE INSERT` that skips it leaves the row deleted. The transition tables of `UPDATE` and `DELETE` on the partitioned table have the rows of the leaves and the rows that move. `connection/partition_trigger_move.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_trigger_move() {
+        big_stack(|| script(include_str!("connection/partition_trigger_move.test")));
     }
 
     /// The rows of a table after `ADD COLUMN` and a change of the default of the new column in the same statement: the rows get the default of `ADD COLUMN`, and new rows get the new default, also for the partitions. `DROP DEFAULT`, `ALTER COLUMN ... TYPE` and `DROP COLUMN` run before `ADD COLUMN`, so they cannot find the new column. `connection/add_column_default.test` is the output of PostgreSQL 19 for the same script in a new database.
