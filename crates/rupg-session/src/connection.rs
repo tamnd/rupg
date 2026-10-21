@@ -4843,6 +4843,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_change.test")));
     }
 
+    /// `COPY FROM` into partitioned tables and partitions, `COPY TO` of a partitioned table, and `TRUNCATE` of partitioned tables and partitions: the routing of each row with the line of the row in the errors, the constraints and unique keys of the partitions, `WHERE`, CSV, a rollback, `ONLY`, and `CASCADE` with a foreign key. `connection/partition_copy.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn partition_copy() {
+        big_stack(|| script(include_str!("connection/partition_copy.test")));
+    }
+
     /// `array_agg` of arrays: arrays of one and of more dimensions, lower bounds that are not 1, null elements, `ORDER BY`, `DISTINCT` and `FILTER`, groups, the errors for a null array, an empty array, arrays of different dimensions and too many dimensions, and the view `pg_stats_ext_exprs`. `connection/array_agg_array.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn array_agg_array() {

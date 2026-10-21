@@ -14,6 +14,7 @@ use rupg_wire::{CommandTag, OutBuf};
 
 use super::copy::{BINARY_SIGNATURE, ForceQuote, Format, OnError, Verbosity, options};
 use super::foreign::Batch;
+use super::route::Routing;
 use super::trigger::Triggers;
 use super::{Connection, Done};
 use crate::heap::{Changed, View};
@@ -113,6 +114,8 @@ struct Load {
     begun: bool,
     /// The rows that the copy wrote, for the triggers `AFTER ... FOR EACH ROW` and the transition tables.
     inserted: Vec<Vec<Value>>,
+    /// The routing of the rows of a partitioned table into its leaves, which keep the rows instead of `rows`.
+    routing: Option<Routing>,
 }
 
 /// `EolType`: the line ending of the data, which the first line sets.
@@ -384,6 +387,13 @@ impl Connection {
             Some(info) => self.write_triggers(info)?,
             None => Triggers::default(),
         };
+        let routing = (target.kind == b'p').then(Routing::default);
+        if routing.is_some() && !triggers.is_empty() {
+            return Err(Error::new(
+                SqlState::FEATURE_NOT_SUPPORTED,
+                "triggers on a partitioned table are not supported yet",
+            ));
+        }
         let load = Load {
             plan,
             source,
@@ -405,6 +415,7 @@ impl Connection {
             triggers,
             begun: false,
             inserted: Vec::new(),
+            routing,
         };
         let names = target.selected.iter().map(|&i| target.columns[i].clone()).collect();
         Ok(CopyIn {
@@ -498,7 +509,10 @@ impl Connection {
                 "COPY FROM with rows is not supported yet",
             )));
         }
+        let catalog = self.catalog();
         let reader = self.reader();
+        // The routing leaves `copy.load` while the rows of `pending` go to the leaves, because the context of an error borrows `copy`.
+        let mut routing = copy.load.routing.take();
         for row in pending {
             let made = copy.values(&row, &reader)?;
             copy.count_failed(&row, &made)?;
@@ -538,6 +552,15 @@ impl Connection {
                 queue.extend(raised.into_iter().map(|w| w.with_context(copy.row_context(&row))));
             }
             let rows = rows.map_err(line)?;
+            if let Some(routing) = &mut routing {
+                // `ExecFindPartition` and the checks of the leaf, with the line of the row in the context of an error.
+                let table = plan.write().map_or(0, |info| info.table);
+                for values in rows {
+                    let at = routing.add(table, values, &catalog, &reader).map_err(line)?;
+                    routing.add_line(at, row.line);
+                }
+                continue;
+            }
             copy.load.lines.extend(rows.iter().map(|_| row.line));
             copy.load.rows.extend(rows);
             if single.is_some() {
@@ -546,7 +569,10 @@ impl Connection {
             }
         }
         drop(reader);
-        if copy.load.rows.len() >= MAX_BUFFERED {
+        copy.load.routing = routing;
+        if copy.load.rows.len() + copy.load.routing.as_ref().map_or(0, Routing::pending)
+            >= MAX_BUFFERED
+        {
             self.flush_rows(copy, None)?;
         }
         Ok(())
@@ -555,7 +581,8 @@ impl Connection {
     /// `CopyMultiInsertBufferFlush`: the rows that the copy kept go in the heap. A duplicate key has the context of the line of its row, or the context `context` of the one row of `CIM_SINGLE`.
     fn flush_rows(&self, copy: &mut CopyIn, context: Option<String>) -> Result<(), Error> {
         let load = &mut copy.load;
-        if load.rows.is_empty() {
+        let pending = load.routing.as_ref().map_or(load.rows.len(), Routing::pending);
+        if pending == 0 {
             return Ok(());
         }
         let Some(info) = load.plan.as_deref().and_then(Plan::write) else {
@@ -571,6 +598,13 @@ impl Connection {
         };
         let view = View { xid: self.xid.get(), ..view.clone() };
         drop(reader);
+        // `CopyMultiInsertInfoFlush` of a partitioned table: each leaf writes its rows.
+        if let Some(routing) = &mut load.routing {
+            let batches = self.insert_leaves(routing, &view, Some(&copy.name))?;
+            load.batches.extend(batches);
+            load.count += pending as u64;
+            return Ok(());
+        }
         let rows = std::mem::take(&mut load.rows);
         let lines = std::mem::take(&mut load.lines);
         let count = rows.len() as u64;
@@ -642,7 +676,7 @@ impl Load {
 }
 
 /// The line of the row whose key is a duplicate. The first row with the key can conflict only with a row that was in the table, and a later row with the key conflicts with the first row.
-fn duplicate_line(
+pub(super) fn duplicate_line(
     info: &rupg_analyze::Write,
     index: usize,
     key: &[Value],

@@ -1,0 +1,321 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE r (a int, b text, c int NOT NULL DEFAULT 0) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (MINVALUE) TO (10);
+CREATE TABLE
+> CREATE TABLE r2 PARTITION OF r (CONSTRAINT r2_c CHECK (c < 100)) FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE UNIQUE INDEX r2_a ON r2 (a);
+CREATE INDEX
+> CREATE TABLE r3 PARTITION OF r FOR VALUES FROM (20) TO (30) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE r3x PARTITION OF r3 FOR VALUES IN ('x');
+CREATE TABLE
+> CREATE TABLE r3d PARTITION OF r3 DEFAULT;
+CREATE TABLE
+> COPY r FROM STDIN;
+< 1	a	1
+< 15	c	3
+< 25	x	4
+< 26	q	5
+< 2	b	2
+< \.
+<done
+copy in 0 0,0,0
+COPY 5
+> COPY r FROM STDIN;
+< 1	a	1
+< 15	c	3
+< 25	x	4
+< 2	b	\N
+< \.
+<done
+copy in 0 0,0,0
+ERROR 23502 null value in column "c" of relation "r1" violates not-null constraint (COPY r, line 4: "2	b	\N")
+DETAIL Failing row contains (2, b, null).
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,1
+row r1,2,b,2
+row r2,15,c,3
+row r3x,25,x,4
+row r3d,26,q,5
+SELECT 5
+> COPY r (a, b) FROM STDIN;
+< 3	d
+< 16	e
+< 27	x
+< \.
+<done
+copy in 0 0,0
+COPY 3
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,1
+row r1,2,b,2
+row r1,3,d,0
+row r2,15,c,3
+row r2,16,e,0
+row r3x,25,x,4
+row r3d,26,q,5
+row r3x,27,x,0
+SELECT 8
+> COPY r FROM STDIN;
+< 4	f	1
+< 40	g	1
+< \.
+<done
+copy in 0 0,0,0
+ERROR 23514 no partition of relation "r" found for row (COPY r, line 2: "40	g	1")
+DETAIL Partition key of the failing row contains (a) = (40).
+> COPY r FROM STDIN;
+< 5	f	1
+< 17	g	200
+< \.
+<done
+copy in 0 0,0,0
+ERROR 23514 new row for relation "r2" violates check constraint "r2_c" (COPY r, line 2: "17	g	200")
+DETAIL Failing row contains (17, g, 200).
+> COPY r FROM STDIN;
+< 6	f	1
+< 18	g	1
+< 15	h	1
+< \.
+<done
+copy in 0 0,0,0
+ERROR 23505 duplicate key value violates unique constraint "r2_a" (COPY r, line 3)
+DETAIL Key (a)=(15) already exists.
+> COPY r FROM STDIN (FORMAT csv);
+< 7,i,1
+< 8,j,
+< \.
+<done
+copy in 0 0,0,0
+ERROR 23502 null value in column "c" of relation "r1" violates not-null constraint (COPY r, line 2: "8,j,")
+DETAIL Failing row contains (8, j, null).
+> COPY r FROM STDIN WHERE a > 20;
+< 9	k	1
+< 28	x	1
+< 29	y	1
+< \.
+<done
+copy in 0 0,0,0
+COPY 2
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,1
+row r1,2,b,2
+row r1,3,d,0
+row r2,15,c,3
+row r2,16,e,0
+row r3x,25,x,4
+row r3d,26,q,5
+row r3x,27,x,0
+row r3x,28,x,1
+row r3d,29,y,1
+SELECT 10
+> COPY r1 FROM STDIN;
+< 11	k	1
+< \.
+<done
+copy in 0 0,0,0
+ERROR 23514 new row for relation "r1" violates partition constraint (COPY r1, line 1: "11	k	1")
+DETAIL Failing row contains (11, k, 1).
+> COPY r3x FROM STDIN;
+< 21	y	1
+< \.
+<done
+copy in 0 0,0,0
+ERROR 23514 new row for relation "r3x" violates partition constraint (COPY r3x, line 1: "21	y	1")
+DETAIL Failing row contains (21, y, 1).
+> COPY r3 FROM STDIN;
+< 22	x	1
+< 23	z	1
+< \.
+<done
+copy in 0 0,0,0
+COPY 2
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,1
+row r1,2,b,2
+row r1,3,d,0
+row r2,15,c,3
+row r2,16,e,0
+row r3x,22,x,1
+row r3d,23,z,1
+row r3x,25,x,4
+row r3d,26,q,5
+row r3x,27,x,0
+row r3x,28,x,1
+row r3d,29,y,1
+SELECT 12
+> BEGIN;
+BEGIN
+> COPY r FROM STDIN;
+< 0	m	1
+< \.
+<done
+copy in 0 0,0,0
+COPY 1
+> SELECT count(*) FROM r;
+fields count:20:8:-1
+row 13
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM r;
+fields count:20:8:-1
+row 12
+SELECT 1
+> CREATE TABLE h (k int, v text) PARTITION BY HASH (k);
+CREATE TABLE
+> CREATE TABLE h0 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE h1 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 1);
+CREATE TABLE
+> CREATE TABLE h2 PARTITION OF h FOR VALUES WITH (MODULUS 3, REMAINDER 2);
+CREATE TABLE
+> COPY h FROM STDIN;
+< 1	a
+< 2	b
+< 3	c
+< 4	d
+< 5	e
+< 6	f
+< \N	g
+< \.
+<done
+copy in 0 0,0
+COPY 7
+> SELECT tableoid::regclass, k, v FROM h ORDER BY k NULLS LAST;
+fields tableoid:2205:4:-1,k@h.1:23:4:-1,v@h.2:25:-1:-1
+row h2,1,a
+row h0,2,b
+row h1,3,c
+row h0,4,d
+row h2,5,e
+row h0,6,f
+row h0,NULL,g
+SELECT 7
+> COPY r TO STDOUT;
+copy out 0 0,0,0
+data 1\ta\t1\n
+data 2\tb\t2\n
+data 3\td\t0\n
+data 15\tc\t3\n
+data 16\te\t0\n
+data 25\tx\t4\n
+data 27\tx\t0\n
+data 28\tx\t1\n
+data 22\tx\t1\n
+data 26\tq\t5\n
+data 29\ty\t1\n
+data 23\tz\t1\n
+copy done
+COPY 12
+> COPY (SELECT * FROM r ORDER BY a) TO STDOUT;
+copy out 0 0,0,0
+data 1\ta\t1\n
+data 2\tb\t2\n
+data 3\td\t0\n
+data 15\tc\t3\n
+data 16\te\t0\n
+data 22\tx\t1\n
+data 23\tz\t1\n
+data 25\tx\t4\n
+data 26\tq\t5\n
+data 27\tx\t0\n
+data 28\tx\t1\n
+data 29\ty\t1\n
+copy done
+COPY 12
+> COPY r1 TO STDOUT;
+copy out 0 0,0,0
+data 1\ta\t1\n
+data 2\tb\t2\n
+data 3\td\t0\n
+copy done
+COPY 3
+> TRUNCATE ONLY r;
+ERROR 42809 cannot truncate only a partitioned table
+HINT Do not specify the ONLY keyword, or use TRUNCATE ONLY on the partitions directly.
+> TRUNCATE ONLY r3;
+ERROR 42809 cannot truncate only a partitioned table
+HINT Do not specify the ONLY keyword, or use TRUNCATE ONLY on the partitions directly.
+> TRUNCATE r3;
+TRUNCATE TABLE
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,1
+row r1,2,b,2
+row r1,3,d,0
+row r2,15,c,3
+row r2,16,e,0
+SELECT 5
+> TRUNCATE r1;
+TRUNCATE TABLE
+> SELECT tableoid::regclass, * FROM r ORDER BY a, b;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r2,15,c,3
+row r2,16,e,0
+SELECT 2
+> BEGIN;
+BEGIN
+> TRUNCATE r, h;
+TRUNCATE TABLE
+> SELECT count(*) FROM r;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM h;
+fields count:20:8:-1
+row 0
+SELECT 1
+> ROLLBACK;
+ROLLBACK
+> SELECT count(*) FROM r;
+fields count:20:8:-1
+row 2
+SELECT 1
+> TRUNCATE r;
+TRUNCATE TABLE
+> SELECT count(*) FROM r;
+fields count:20:8:-1
+row 0
+SELECT 1
+> SELECT count(*) FROM r2;
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TABLE p (id int) PARTITION BY LIST (id);
+CREATE TABLE
+> CREATE TABLE p1 PARTITION OF p FOR VALUES IN (1);
+CREATE TABLE
+> CREATE UNIQUE INDEX p1_id ON p1 (id);
+CREATE INDEX
+> CREATE TABLE q (id int REFERENCES p1 (id));
+CREATE TABLE
+> INSERT INTO p VALUES (1);
+INSERT 0 1
+> INSERT INTO q VALUES (1);
+INSERT 0 1
+> TRUNCATE p;
+ERROR 0A000 cannot truncate a table referenced in a foreign key constraint
+DETAIL Table "q" references "p1".
+HINT Truncate table "q" at the same time, or use TRUNCATE ... CASCADE.
+> TRUNCATE p, q;
+TRUNCATE TABLE
+> INSERT INTO p VALUES (1);
+INSERT 0 1
+> INSERT INTO q VALUES (1);
+INSERT 0 1
+> TRUNCATE p CASCADE;
+NOTICE 00000 truncate cascades to table "q"
+TRUNCATE TABLE
+> SELECT count(*) FROM q;
+fields count:20:8:-1
+row 0
+SELECT 1

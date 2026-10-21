@@ -15,8 +15,30 @@ impl Definer<'_, '_> {
             let Node::RangeVar(rv) = node else { continue };
             let found = self.lookup_relation(rv)?;
             let table = self.truncate_check(found, relname(rv))?;
-            if !tables.contains(&table) {
-                tables.push(table);
+            if tables.contains(&table) {
+                continue;
+            }
+            tables.push(table);
+            if rv.inh {
+                // `find_all_inheritors`: the partitions, level by level. The parent checks the privileges for them.
+                let mut at = tables.len() - 1;
+                while at < tables.len() {
+                    for child in self.catalog.partitions(tables[at]) {
+                        if !tables.contains(&child.oid) {
+                            self.truncate_check_rel(Found::User(child.oid), &child.name)?;
+                            tables.push(child.oid);
+                        }
+                    }
+                    at += 1;
+                }
+            } else if self.kind_of(found) == b'p' {
+                return Err(Error::new(
+                    SqlState::WRONG_OBJECT_TYPE,
+                    "cannot truncate only a partitioned table",
+                )
+                .with_hint(
+                    "Do not specify the ONLY keyword, or use TRUNCATE ONLY on the partitions directly.",
+                ));
             }
         }
         if stmt.behavior == DropBehavior::DROP_CASCADE {
@@ -70,16 +92,13 @@ impl Definer<'_, '_> {
         Ok(())
     }
 
-    /// `truncate_check_rel` and `truncate_check_perms`: the relation must be a table that is not a system catalog, and the role must own it. rupg has no `GRANT`, so the privilege `TRUNCATE` is the privilege of the owner.
-    fn truncate_check(&self, found: Found, name: &str) -> Result<u32> {
+    /// `truncate_check_rel`: the relation must be a table that is not a system catalog.
+    fn truncate_check_rel(&self, found: Found, name: &str) -> Result<()> {
         if !matches!(self.kind_of(found), b'r' | b'p') {
             return Err(Error::new(
                 SqlState::WRONG_OBJECT_TYPE,
                 format!("\"{name}\" is not a table"),
             ));
-        }
-        if self.kind_of(found) == b'p' {
-            return Err(not_yet("TRUNCATE of a partitioned table", None));
         }
         if self.is_system(found) && !self.an.env.allow_system_table_mods() {
             return Err(Error::new(
@@ -87,6 +106,12 @@ impl Definer<'_, '_> {
                 format!("permission denied: \"{name}\" is a system catalog"),
             ));
         }
+        Ok(())
+    }
+
+    /// `truncate_check_rel` and `truncate_check_perms`: the relation must be a table that is not a system catalog, and the role must own it. rupg has no `GRANT`, so the privilege `TRUNCATE` is the privilege of the owner.
+    fn truncate_check(&self, found: Found, name: &str) -> Result<u32> {
+        self.truncate_check_rel(found, name)?;
         let owner = match found {
             Found::User(oid) => self.catalog.relation(oid).map_or(0, |r| r.owner),
             Found::Builtin(row) => row.owner,
