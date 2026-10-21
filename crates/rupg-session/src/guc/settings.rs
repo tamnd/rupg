@@ -1166,6 +1166,21 @@ mod tests {
     }
 
     #[test]
+    fn the_version_of_rupg_is_internal() {
+        let mut s = startup();
+        let version = env!("CARGO_PKG_VERSION");
+        assert_eq!(
+            s.show("RUPG.VERSION").unwrap(),
+            ("rupg.version".to_owned(), version.to_owned())
+        );
+        let e = set(&mut s, "rupg.version", "1.0.0").unwrap_err();
+        assert_eq!(e.state().as_str(), "55P02");
+        assert_eq!(e.message(), "parameter \"rupg.version\" cannot be changed");
+        assert_eq!(s.show("rupg.version").unwrap().1, version);
+        assert!(s.show_all().all(|p| p.0 != "rupg.version"));
+    }
+
+    #[test]
     fn placeholders_and_errors() {
         let mut s = startup();
         set(&mut s, "myapp.user_id", "42").unwrap();

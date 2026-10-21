@@ -11,6 +11,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Fixed
 
 - The workflow `fuzz` now builds for `x86_64-unknown-linux-gnu`. Before, each job failed after a few seconds, because cargo-fuzz used the musl target of its own binary and the nightly toolchain does not have that target.
+- `SHOW rupg.version`, `current_setting('rupg.version')` and the other reads of a parameter give the version of rupg, as spec/05 section 5.7 says. The parameter has the context `internal`, so `SET rupg.version` gives `55P02`. Before, the server sent `rupg.version` at startup, but `SHOW rupg.version` gave `42704`. `SHOW ALL` and `pg_settings` do not show it, as for `rupg.compat_version`.
 
 ## 0.1.59 (2026-10-21)
 
