@@ -2118,6 +2118,14 @@ impl Analyzer<'_> {
                         }
                         vec![item]
                     }
+                    None if schema.is_none() && qualifier.len() == 1 => {
+                        // `plpgsql_post_column_ref`: `r.*` of a variable of a composite type gives the fields of the variable.
+                        if let Some(variable) = self.composite_variable(&[*table], at)? {
+                            let expr = self.variable_param(variable, at);
+                            return self.composite_fields(expr).map(Some);
+                        }
+                        return Err(self.missing_entry(schema, table, at));
+                    }
                     None => return Err(self.missing_entry(schema, table, at)),
                 }
             }

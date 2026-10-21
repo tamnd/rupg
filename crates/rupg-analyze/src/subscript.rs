@@ -44,6 +44,15 @@ impl Analyzer<'_> {
         {
             return Ok(Some(row.names.iter().cloned().zip(row.fields.iter().cloned()).collect()));
         }
+        self.composite_fields(expr).map(Some)
+    }
+
+    /// The fields of the composite value `expr`, each as a field selection of its own copy of `expr`.
+    ///
+    /// # Errors
+    ///
+    /// `42809` for an expression of a type that is not composite, or of type `record` with fields that the analyzer cannot find.
+    pub(crate) fn composite_fields(&mut self, expr: Expr) -> Result<Vec<(String, Expr)>> {
         let ty = expr.ty;
         // `lookup_rowtype_tupdesc_domain`: a domain over a composite type has the fields of the type.
         let columns = if ty == oid::RECORD {
@@ -69,7 +78,7 @@ impl Analyzer<'_> {
                 (column.name, field)
             })
             .collect();
-        Ok(Some(fields))
+        Ok(fields)
     }
 
     /// The subscripts and the field selections of the items after the expression `arg`.

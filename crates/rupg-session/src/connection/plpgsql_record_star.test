@@ -1,0 +1,82 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (a int, b text);
+CREATE TABLE
+> INSERT INTO t VALUES (1, 'x'), (2, 'y');
+INSERT 0 2
+> CREATE FUNCTION trg() RETURNS trigger LANGUAGE plpgsql AS $$
+>> BEGIN
+>>   IF row(old.*) = row(new.*) THEN
+>>     RAISE NOTICE 'row % not changed', new.a;
+>>   ELSE
+>>     RAISE NOTICE 'row % changed: % -> %', new.a, old.*::text, new.*::text;
+>>   END IF;
+>>   IF row(old.*) IS DISTINCT FROM row(new.*) THEN
+>>     RAISE NOTICE 'distinct';
+>>   END IF;
+>>   RETURN new;
+>> END $$;
+CREATE FUNCTION
+> CREATE TRIGGER trg BEFORE UPDATE ON t FOR EACH ROW EXECUTE FUNCTION trg();
+CREATE TRIGGER
+> UPDATE t SET b = CASE WHEN a = 1 THEN b ELSE 'z' END;
+NOTICE 00000 row 1 not changed (PL/pgSQL function trg() line 4 at RAISE)
+NOTICE 00000 row 2 changed: (2,y) -> (2,z) (PL/pgSQL function trg() line 6 at RAISE)
+NOTICE 00000 distinct (PL/pgSQL function trg() line 9 at RAISE)
+UPDATE 2
+> CREATE FUNCTION f(r t) RETURNS text LANGUAGE plpgsql AS $$
+>> DECLARE
+>>   s text;
+>>   n int;
+>> BEGIN
+>>   SELECT r.* INTO n, s;
+>>   RAISE NOTICE 'n=% s=%', n, s;
+>>   RETURN (SELECT string_agg(x::text, ',') FROM (SELECT r.*) x);
+>> END $$;
+CREATE FUNCTION
+> SELECT f(row(5, 'five')::t);
+fields f:25:-1:-1
+NOTICE 00000 n=5 s=five (PL/pgSQL function f(t) line 7 at RAISE)
+row (5,five)
+SELECT 1
+> CREATE FUNCTION g() RETURNS SETOF t LANGUAGE plpgsql AS $$
+>> DECLARE
+>>   r t;
+>>   rec record;
+>> BEGIN
+>>   r := row(7, 'seven');
+>>   RETURN QUERY SELECT r.*;
+>>   SELECT 8 AS a, 'eight'::text AS b INTO rec;
+>>   RAISE NOTICE 'rec=% r=%', rec.*::text, row(r.*);
+>>   RETURN QUERY SELECT (rec.*).*;
+>> END $$;
+CREATE FUNCTION
+> SELECT * FROM g();
+fields a:23:4:-1,b:25:-1:-1
+NOTICE 00000 rec=(8,eight) r=(7,seven) (PL/pgSQL function g() line 9 at RAISE)
+ERROR 42809 record type has not been registered (SQL statement "SELECT (rec.*).*"
+PL/pgSQL function g() line 10 at RETURN QUERY)
+> CREATE FUNCTION g2() RETURNS SETOF t LANGUAGE plpgsql AS $$
+>> DECLARE
+>>   rec record;
+>> BEGIN
+>>   SELECT 8 AS a, 'eight'::text AS b INTO rec;
+>>   RETURN QUERY SELECT rec.*;
+>> END $$;
+CREATE FUNCTION
+> SELECT * FROM g2();
+fields a:23:4:-1,b:25:-1:-1
+ERROR 42809 record type has not been registered (SQL statement "SELECT rec.*"
+PL/pgSQL function g2() line 6 at RETURN QUERY)
+> CREATE FUNCTION h() RETURNS void LANGUAGE plpgsql AS $$
+>> DECLARE
+>>   n int := 3;
+>> BEGIN
+>>   RAISE NOTICE '%', row(n.*);
+>> END $$;
+CREATE FUNCTION
+> SELECT h();
+fields h:2278:4:-1
+ERROR 42P01 missing FROM-clause entry for table "n" (PL/pgSQL function h() line 5 at RAISE)
+QUERY row(n.*) at 5

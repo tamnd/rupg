@@ -299,6 +299,12 @@ pub(crate) fn type_name(oid: u32, session: &dyn Session) -> Option<(&str, u32)> 
     builtin::type_by_oid(oid)
         .map(|row| (row.name, row.namespace))
         .or_else(|| session.catalog()?.type_by_oid(oid).map(|t| (t.name.as_str(), t.namespace)))
+        .or_else(|| row_type_relation(oid, session).map(|r| (r.name.as_str(), r.namespace)))
+}
+
+/// The relation of the user whose row type is `ty`, which has the name and the schema of the relation.
+fn row_type_relation(ty: u32, session: &dyn Session) -> Option<&rupg_catalog::Relation> {
+    session.catalog()?.relations().find(|r| ty != 0 && r.row_type == ty)
 }
 
 /// `RelationIsVisible`, or `None` when no relation has the OID.
@@ -381,6 +387,7 @@ pub(crate) fn type_text(ty: u32, typmod: Option<i32>, session: &dyn Session) -> 
         Some(_) => None,
         None => match session.catalog().and_then(|c| c.type_by_oid(ty)) {
             Some(user) => (user.element != 0).then_some(user.element),
+            None if row_type_relation(ty, session).is_some() => None,
             None => return Ok("???".to_string()),
         },
     };
@@ -538,7 +545,11 @@ pub(crate) fn name_of(kind: RegKind, oid: u32, session: &dyn Session) -> Option<
             } else {
                 namespace_name(proc.namespace, session)
             };
-            let args: Vec<_> = proc.argtypes.iter().map(|&ty| types::format_type(ty)).collect();
+            let args: Vec<_> = proc
+                .argtypes
+                .iter()
+                .map(|&ty| type_text(ty, None, session).unwrap_or_else(|_| "???".to_string()))
+                .collect();
             Some(format!("{}({})", qualified(schema, proc.name), args.join(",")))
         }
         RegKind::Oper => {
