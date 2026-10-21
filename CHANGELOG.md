@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `CREATE TABLE ... PARTITION BY` and `CREATE TABLE ... PARTITION OF`. A partitioned table gets its partition key with columns, expressions, collations and operator classes, and a partition gets its bound `FOR VALUES IN`, `FOR VALUES FROM ... TO`, `FOR VALUES WITH` or `DEFAULT`. The bounds are checked against the bounds of the other partitions, and the errors are the errors of PostgreSQL. A partition gets the columns, the defaults, the check constraints and the not-null constraints of its parent. `pg_partitioned_table`, `pg_inherits`, `relpartbound`, `pg_get_partkeydef()` and `pg_get_expr()` of a bound show the new tables. Queries and writes on partitioned tables are not supported yet (#NNN).
+- `CREATE TABLE ... PARTITION BY` and `CREATE TABLE ... PARTITION OF`. A partitioned table gets its partition key with columns, expressions, collations and operator classes, and a partition gets its bound `FOR VALUES IN`, `FOR VALUES FROM ... TO`, `FOR VALUES WITH` or `DEFAULT`. The bounds are checked against the bounds of the other partitions, and the errors are the errors of PostgreSQL. A partition gets the columns, the defaults, the check constraints and the not-null constraints of its parent. `pg_partitioned_table`, `pg_inherits`, `relpartbound`, `pg_get_partkeydef()` and `pg_get_expr()` of a bound show the new tables. Queries and writes on partitioned tables are not supported yet (#490).
 
 ## 0.1.57 (2026-10-21)
 
