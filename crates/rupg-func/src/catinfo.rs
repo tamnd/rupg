@@ -169,7 +169,7 @@ fn relation_is_publishable(call: &Call<'_>, args: &[Value]) -> Result<Value> {
         return Ok(Value::Null);
     }
     let kind = call.session.catalog().and_then(|c| c.relation(relid)).map(|r| r.kind);
-    Ok(Value::Bool(matches!(kind, Some(RelKind::Table | RelKind::Sequence))))
+    Ok(Value::Bool(matches!(kind, Some(RelKind::Table | RelKind::Partitioned | RelKind::Sequence))))
 }
 
 /// `pg_get_serial_sequence(text, text)`: the sequence of a serial or identity column, with its schema. The table is a name that `search_path` finds, and the column is a name as it is. A sequence of a serial column has an automatic dependency on the column, and a sequence of an identity column has an internal one. The result is null for a column without a sequence.

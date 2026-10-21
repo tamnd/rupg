@@ -234,6 +234,8 @@ impl Catalog {
                         storage: column.storage,
                         compression: column.compression,
                         options: Vec::new(),
+                        local: column.local,
+                        inhcount: column.inhcount,
                     };
                 }
             }

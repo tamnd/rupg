@@ -156,6 +156,36 @@ pub trait Env {
         let _ = function;
         Ok(())
     }
+    /// `evaluate_expr`: the value of an expression that reads no column, such as a value of the bound of a partition.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` when the session cannot run an expression, and the errors of the functions of the expression.
+    fn evaluate(&self, expr: &Expr) -> Result<Value> {
+        let _ = expr;
+        Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "an expression is not supported here"))
+    }
+    /// `get_const_expr` with `showtype` -1 of a stored constant, as the detail of an error on the bound of a partition shows it.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` when the session cannot show a constant, and the errors of the output function of the type.
+    fn deparse_constant(&self, text: &str) -> Result<String> {
+        let _ = text;
+        Err(Error::new(
+            SqlState::FEATURE_NOT_SUPPORTED,
+            "the text of a constant is not supported here",
+        ))
+    }
+    /// The order of two values of the type, as the default operator class of `btree` of the type gives it.
+    ///
+    /// # Errors
+    ///
+    /// `0A000` when the session cannot compare values, and the error of a type with no order.
+    fn compare(&self, ty: u32, a: &Value, b: &Value) -> Result<std::cmp::Ordering> {
+        let _ = (ty, a, b);
+        Err(Error::new(SqlState::FEATURE_NOT_SUPPORTED, "a comparison is not supported here"))
+    }
 }
 
 /// `myTempNamespace`: the OID of the temporary schema of the session in the catalog, or 0 when the session has none yet.

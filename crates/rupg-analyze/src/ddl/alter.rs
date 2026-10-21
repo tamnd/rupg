@@ -201,6 +201,12 @@ impl Definer<'_, '_> {
             Err(e) => return Err(e),
         };
         let target = self.alter_target(stmt.objtype, found, relname(&rv))?;
+        if target.kind == b'p' {
+            return Err(not_yet("ALTER TABLE of a partitioned table", None));
+        }
+        if self.catalog.relation(target.oid).is_some_and(|r| r.partition_of.is_some()) {
+            return Err(not_yet("ALTER TABLE of a partition", None));
+        }
         let mut passes = Passes::default();
         for cmd in stmt.cmds.iter().flatten() {
             let Node::AlterTableCmd(cmd) = cmd else { continue };

@@ -934,7 +934,9 @@ impl Analyzer<'_> {
             | Kind::ExecuteParameter
             | Kind::Transform
             | Kind::TriggerWhen
-            | Kind::CallArgument => {
+            | Kind::CallArgument
+            | Kind::PartitionBound
+            | Kind::PartitionExpression => {
                 format!("set-returning functions are not allowed in {}", self.kind.name())
             }
             Kind::ValuesSingle | Kind::Other => {

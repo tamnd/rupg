@@ -2,7 +2,10 @@
 //!
 //! The columns of `pg_node_tree` hold the expressions in the form of the analyzer, not in the form of `nodeToString`.
 
-use rupg_catalog::{Catalog, ConKind, Constraint, Function, RangePart, RelKind, Relation, Type};
+use rupg_analyze::node;
+use rupg_catalog::{
+    Catalog, ConKind, Constraint, Function, PartitionBound, RangePart, RelKind, Relation, Type,
+};
 use rupg_common::{Error, Result};
 use rupg_func::Session;
 use rupg_pgcatalog::{Catalog as Table, builtin};
@@ -158,6 +161,8 @@ pub(crate) fn rows(
         "pg_enum" => enum_labels(table, catalog),
         "pg_range" => ranges(table, catalog),
         "pg_cast" => casts(table, catalog),
+        "pg_partitioned_table" => partitioned_tables(table, catalog),
+        "pg_inherits" => inherits(table, catalog),
         _ => Vec::new(),
     };
     Ok(rows.into_iter().map(|row| row.values).collect())
@@ -360,7 +365,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     rel.index.as_ref().map_or((0, 1, 0.0), |i| (i.method, i.pages, 0.0))
                 }
                 RelKind::Sequence => (0, 1, 1.0),
-                RelKind::View | RelKind::Composite => (0, 0, -1.0),
+                RelKind::View | RelKind::Composite | RelKind::Partitioned => (0, 0, -1.0),
             };
             let checks = catalog.constraints_of(rel.oid).filter(|c| c.kind == ConKind::Check);
             let mut row = Row::new(table);
@@ -375,7 +380,7 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     "relfilenode",
                     oid(match (&rel.sequence, rel.kind) {
                         (Some(info), _) => info.file,
-                        (None, RelKind::View | RelKind::Composite) => 0,
+                        (None, RelKind::View | RelKind::Composite | RelKind::Partitioned) => 0,
                         (None, _) => rel.oid,
                     }),
                 )
@@ -401,19 +406,30 @@ fn classes<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
                     ),
                 )
                 .set("relhastriggers", Value::Bool(rel.has_triggers))
-                .set("relhassubclass", Value::Bool(false))
+                .set(
+                    "relhassubclass",
+                    Value::Bool(
+                        rel.kind == RelKind::Partitioned && has_partitions(catalog, rel.oid),
+                    ),
+                )
                 .set("relrowsecurity", Value::Bool(false))
                 .set("relforcerowsecurity", Value::Bool(false))
                 .set("relispopulated", Value::Bool(true))
                 .set(
                     "relreplident",
                     code(match rel.replica_identity {
-                        0 if rel.kind == RelKind::Table => 'd',
+                        0 if matches!(rel.kind, RelKind::Table | RelKind::Partitioned) => 'd',
                         0 => 'n',
                         c => char::from(c),
                     }),
                 )
-                .set("relispartition", Value::Bool(false))
+                .set("relispartition", Value::Bool(rel.partition_of.is_some()))
+                .set(
+                    "relpartbound",
+                    rel.partition_of
+                        .as_ref()
+                        .map_or(Value::Null, |p| Value::text(node::write_bound(&p.bound))),
+                )
                 .set("relrewrite", oid(0))
                 .set("relfrozenxid", oid(if heap { FIRST_NORMAL_XID } else { 0 }))
                 .set("relminmxid", oid(u32::from(heap)))
@@ -630,8 +646,8 @@ fn attribute<'a>(
         .set("attidentity", Value::Char(column.identity))
         .set("attgenerated", Value::Char(0))
         .set("attisdropped", Value::Bool(column.dropped))
-        .set("attislocal", Value::Bool(true))
-        .set("attinhcount", Value::Int2(0))
+        .set("attislocal", Value::Bool(column.local))
+        .set("attinhcount", Value::Int2(column.inhcount))
         .set("attcollation", oid(column.collation))
         .set("attstattarget", column.stat_target.map_or(Value::Null, Value::Int2))
         .set(
@@ -639,6 +655,57 @@ fn attribute<'a>(
             if column.options.is_empty() { Value::Null } else { text_array(&column.options) },
         );
     row
+}
+
+/// True for a partitioned table with a partition, as `relhassubclass` of `StoreCatalogInheritance1` gives it.
+fn has_partitions(catalog: &Catalog, parent: u32) -> bool {
+    catalog.relations().any(|r| r.partition_of.as_ref().is_some_and(|p| p.parent == parent))
+}
+
+/// The rows of `pg_partitioned_table`: the partition key of each partitioned table and its default partition.
+fn partitioned_tables<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .relations()
+        .filter_map(|rel| {
+            let partkey = rel.partition_key.as_ref()?;
+            let default = catalog
+                .partitions(rel.oid)
+                .into_iter()
+                .find(|p| {
+                    p.partition_of.as_ref().is_some_and(|o| o.bound == PartitionBound::Default)
+                })
+                .map_or(0, |p| p.oid);
+            let mut row = Row::new(table);
+            row.set("partrelid", oid(rel.oid))
+                .set("partstrat", code(partkey.strategy.code()))
+                .set(
+                    "partnatts",
+                    Value::Int2(i16::try_from(partkey.attrs.len()).unwrap_or(i16::MAX)),
+                )
+                .set("partdefid", oid(default))
+                .set("partattrs", int2_vector(&partkey.attrs))
+                .set("partclass", oid_vector(&partkey.classes))
+                .set("partcollation", oid_vector(&partkey.collations))
+                .set("partexprs", tree(partkey.exprs.as_ref()));
+            Some(row)
+        })
+        .collect()
+}
+
+/// The rows of `pg_inherits`: one row for each partition, with the sequence number 1.
+fn inherits<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
+    catalog
+        .relations()
+        .filter_map(|rel| {
+            let parent = rel.partition_of.as_ref()?.parent;
+            let mut row = Row::new(table);
+            row.set("inhrelid", oid(rel.oid))
+                .set("inhparent", oid(parent))
+                .set("inhseqno", Value::Int4(1))
+                .set("inhdetachpending", Value::Bool(false));
+            Some(row)
+        })
+        .collect()
 }
 
 fn defaults<'a>(table: &'a Table, catalog: &Catalog) -> Vec<Row<'a>> {
@@ -679,8 +746,8 @@ fn constraint<'a>(table: &'a Table, con: &Constraint) -> Row<'a> {
         .set("confupdtype", code(foreign.map_or(' ', |f| f.update)))
         .set("confdeltype", code(foreign.map_or(' ', |f| f.delete)))
         .set("confmatchtype", code(foreign.map_or(' ', |f| f.match_type)))
-        .set("conislocal", Value::Bool(true))
-        .set("coninhcount", Value::Int2(0))
+        .set("conislocal", Value::Bool(con.local))
+        .set("coninhcount", Value::Int2(con.inhcount))
         .set("connoinherit", Value::Bool(con.no_inherit))
         .set("conperiod", Value::Bool(false))
         .set("conkey", int2_array(&con.keys))

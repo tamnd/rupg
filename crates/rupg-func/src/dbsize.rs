@@ -223,7 +223,7 @@ fn storage(relid: u32, call: &Call<'_>) -> Option<Storage> {
         };
         let filenode = match (&rel.sequence, rel.kind) {
             (Some(info), _) => info.file,
-            (None, RelKind::View | RelKind::Composite) => 0,
+            (None, RelKind::View | RelKind::Composite | RelKind::Partitioned) => 0,
             (None, _) => rel.oid,
         };
         return Some(Storage {

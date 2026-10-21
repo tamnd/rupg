@@ -1,0 +1,290 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE m (a int NOT NULL, b text DEFAULT 'x', c date, CHECK (a > 0)) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE m1 PARTITION OF m FOR VALUES FROM (1) TO (10);
+CREATE TABLE
+> CREATE TABLE m2 PARTITION OF m (b DEFAULT 'y', CONSTRAINT m2_c CHECK (c IS NOT NULL)) FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TABLE m3 PARTITION OF m FOR VALUES FROM (20) TO (MAXVALUE);
+CREATE TABLE
+> CREATE TABLE m0 PARTITION OF m FOR VALUES FROM (MINVALUE) TO (1);
+CREATE TABLE
+> CREATE TABLE mx PARTITION OF m FOR VALUES FROM (5) TO (15);
+ERROR 42P17 partition "mx" would overlap partition "m1" at 49
+> CREATE TABLE mx PARTITION OF m FOR VALUES FROM (30) TO (40);
+ERROR 42P17 partition "mx" would overlap partition "m3" at 49
+> CREATE TABLE mx PARTITION OF m FOR VALUES FROM (40) TO (30);
+ERROR 42P17 empty range bound specified for partition "mx" at 49
+DETAIL Specified lower bound (40) is greater than or equal to upper bound (30).
+> CREATE TABLE mx PARTITION OF m FOR VALUES FROM (1) TO (1);
+ERROR 42P17 empty range bound specified for partition "mx" at 49
+DETAIL Specified lower bound (1) is greater than or equal to upper bound (1).
+> CREATE TABLE mx PARTITION OF m FOR VALUES FROM (1, 2) TO (3);
+ERROR 42P16 FROM must specify exactly one value per partitioning column
+> CREATE TABLE mx PARTITION OF m FOR VALUES IN (1);
+ERROR 42P16 invalid bound specification for a range partition at 43
+> CREATE TABLE mx PARTITION OF m FOR VALUES WITH (modulus 2, remainder 0);
+ERROR 42P16 invalid bound specification for a range partition at 43
+> CREATE TABLE mx PARTITION OF m FOR VALUES FROM ('a') TO ('b');
+ERROR 22P02 invalid input syntax for type integer: "a" at 49
+> CREATE TABLE mx PARTITION OF m FOR VALUES FROM (NULL) TO (2);
+ERROR 42P17 cannot specify NULL in range bound
+> CREATE TABLE md PARTITION OF m DEFAULT;
+CREATE TABLE
+> CREATE TABLE mx PARTITION OF m DEFAULT;
+ERROR 42P17 partition "mx" conflicts with existing default partition "md" at 32
+> SELECT c.relname, c.relkind, c.relispartition, c.relhassubclass, pg_get_expr(c.relpartbound, c.oid) FROM pg_class c WHERE c.relname ~ '^m' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relispartition@pg_class.28:16:1:-1,relhassubclass@pg_class.23:16:1:-1,pg_get_expr:25:-1:-1
+row m,p,f,t,NULL
+row m0,r,t,f,FOR VALUES FROM (MINVALUE) TO (1)
+row m1,r,t,f,FOR VALUES FROM (1) TO (10)
+row m2,r,t,f,FOR VALUES FROM (10) TO (20)
+row m3,r,t,f,FOR VALUES FROM (20) TO (MAXVALUE)
+row md,r,t,f,DEFAULT
+SELECT 6
+> SELECT pg_get_partkeydef('m'::regclass), pg_get_partkeydef('m1'::regclass);
+fields pg_get_partkeydef:25:-1:-1,pg_get_partkeydef:25:-1:-1
+row RANGE (a),NULL
+SELECT 1
+> SELECT c.relname, p.partstrat, p.partnatts, p.partattrs, p.partdefid = 'md'::regclass AS def FROM pg_partitioned_table p JOIN pg_class c ON c.oid = p.partrelid;
+fields relname@pg_class.2:19:64:-1,partstrat@pg_partitioned_table.2:18:1:-1,partnatts@pg_partitioned_table.3:21:2:-1,partattrs@pg_partitioned_table.5:22:-1:-1,def:16:1:-1
+row m,r,1,1,t
+SELECT 1
+> SELECT inhrelid::regclass, inhparent::regclass, inhseqno, inhdetachpending FROM pg_inherits ORDER BY inhrelid::regclass::text;
+fields inhrelid:2205:4:-1,inhparent:2205:4:-1,inhseqno@pg_inherits.3:23:4:-1,inhdetachpending@pg_inherits.4:16:1:-1
+row m0,m,1,f
+row m1,m,1,f
+row m2,m,1,f
+row m3,m,1,f
+row md,m,1,f
+SELECT 5
+> SELECT attrelid::regclass, attname, attnum, attnotnull, atthasdef, attislocal, attinhcount FROM pg_attribute WHERE attrelid IN ('m'::regclass, 'm2'::regclass) AND attnum > 0 ORDER BY attrelid::regclass::text, 3;
+fields attrelid:2205:4:-1,attname@pg_attribute.2:19:64:-1,attnum@pg_attribute.5:21:2:-1,attnotnull@pg_attribute.12:16:1:-1,atthasdef@pg_attribute.13:16:1:-1,attislocal@pg_attribute.18:16:1:-1,attinhcount@pg_attribute.19:21:2:-1
+row m,a,1,t,f,t,0
+row m,b,2,f,t,t,0
+row m,c,3,f,f,t,0
+row m2,a,1,t,f,f,1
+row m2,b,2,f,t,f,1
+row m2,c,3,f,f,f,1
+SELECT 6
+> SELECT conrelid::regclass, conname, contype, conislocal, coninhcount, connoinherit FROM pg_constraint WHERE conrelid IN ('m'::regclass, 'm1'::regclass, 'm2'::regclass) ORDER BY conrelid::regclass::text, 2;
+fields conrelid:2205:4:-1,conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1,connoinherit@pg_constraint.19:16:1:-1
+row m,m_a_check,c,t,0,f
+row m,m_a_not_null,n,t,0,f
+row m1,m_a_check,c,f,1,f
+row m1,m_a_not_null,n,f,1,f
+row m2,m2_c,c,t,0,f
+row m2,m_a_check,c,f,1,f
+row m2,m_a_not_null,n,f,1,f
+SELECT 7
+> SELECT adrelid::regclass, pg_get_expr(adbin, adrelid) FROM pg_attrdef WHERE adrelid IN ('m'::regclass, 'm1'::regclass, 'm2'::regclass) ORDER BY adrelid::regclass::text;
+fields adrelid:2205:4:-1,pg_get_expr:25:-1:-1
+row m,'x'::text
+row m1,'x'::text
+row m2,'y'::text
+SELECT 3
+> SELECT relname, relam, relfilenode = 0 AS nofile, relreplident, reltoastrelid = 0 AS notoast, relpages, reltuples, relnatts, relchecks FROM pg_class WHERE relname IN ('m', 'm1', 'm2') ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relam@pg_class.7:26:4:-1,nofile:16:1:-1,relreplident@pg_class.27:18:1:-1,notoast:16:1:-1,relpages@pg_class.10:23:4:-1,reltuples@pg_class.11:700:4:-1,relnatts@pg_class.19:21:2:-1,relchecks@pg_class.20:21:2:-1
+row m,0,t,d,t,0,-1,3,1
+row m1,2,f,d,f,0,-1,3,1
+row m2,2,f,d,f,0,-1,3,2
+SELECT 3
+> SELECT pg_get_partkeydef('m1'::regclass) IS NULL, pg_get_partkeydef(0) IS NULL;
+fields ?column?:16:1:-1,?column?:16:1:-1
+row t,t
+SELECT 1
+> CREATE TABLE l (a text, b int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE l1 PARTITION OF l FOR VALUES IN ('a', 'b', 'a');
+CREATE TABLE
+> CREATE TABLE l2 PARTITION OF l FOR VALUES IN (NULL, 'c');
+CREATE TABLE
+> CREATE TABLE lx PARTITION OF l FOR VALUES IN ('d', 'b');
+ERROR 42P17 partition "lx" would overlap partition "l1" at 52
+> CREATE TABLE lx PARTITION OF l FOR VALUES IN (NULL);
+ERROR 42P17 partition "lx" would overlap partition "l2" at 47
+> CREATE TABLE lx PARTITION OF l FOR VALUES FROM ('a') TO ('b');
+ERROR 42P16 invalid bound specification for a list partition at 43
+> CREATE TABLE l3 PARTITION OF l FOR VALUES IN (1, -2);
+CREATE TABLE
+> SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) FROM pg_class c WHERE c.relname ~ '^l' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,pg_get_expr:25:-1:-1
+row l,NULL
+row l1,FOR VALUES IN ('a', 'b')
+row l2,FOR VALUES IN (NULL, 'c')
+row l3,FOR VALUES IN ('1', '-2')
+SELECT 4
+> SELECT pg_get_partkeydef('l'::regclass);
+fields pg_get_partkeydef:25:-1:-1
+row LIST (a)
+SELECT 1
+> CREATE TABLE h (a int, b text) PARTITION BY HASH (a, b);
+CREATE TABLE
+> CREATE TABLE h1 PARTITION OF h FOR VALUES WITH (modulus 4, remainder 0);
+CREATE TABLE
+> CREATE TABLE hx PARTITION OF h FOR VALUES WITH (modulus 4, remainder 4);
+ERROR 42P16 remainder for hash partition must be less than modulus
+> CREATE TABLE hx PARTITION OF h FOR VALUES WITH (modulus 0, remainder 0);
+ERROR 42P16 modulus for hash partition must be an integer value greater than zero
+> CREATE TABLE hx PARTITION OF h FOR VALUES WITH (modulus 3, remainder 0);
+ERROR 42P17 every hash partition modulus must be a factor of the next larger modulus
+DETAIL The new modulus 3 is not a factor of 4, the modulus of existing partition "h1".
+> CREATE TABLE hx PARTITION OF h FOR VALUES WITH (modulus 8, remainder 4);
+ERROR 42P17 partition "hx" would overlap partition "h1" at 43
+> CREATE TABLE h2 PARTITION OF h FOR VALUES WITH (modulus 8, remainder 1);
+CREATE TABLE
+> CREATE TABLE hx PARTITION OF h FOR VALUES WITH (modulus 2, remainder 1);
+ERROR 42P17 partition "hx" would overlap partition "h2" at 43
+> CREATE TABLE hx PARTITION OF h DEFAULT;
+ERROR 42P16 a hash-partitioned table may not have a default partition
+> SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) FROM pg_class c WHERE c.relname ~ '^h' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,pg_get_expr:25:-1:-1
+row h,NULL
+row h1,FOR VALUES WITH (modulus 4, remainder 0)
+row h2,FOR VALUES WITH (modulus 8, remainder 1)
+SELECT 3
+> SELECT pg_get_partkeydef('h'::regclass);
+fields pg_get_partkeydef:25:-1:-1
+row HASH (a, b)
+SELECT 1
+> CREATE TABLE e (a int, b text) PARTITION BY RANGE ((a + 1), lower(b), b COLLATE "C");
+CREATE TABLE
+> SELECT pg_get_partkeydef('e'::regclass);
+fields pg_get_partkeydef:25:-1:-1
+row RANGE (((a + 1)), lower(b), b COLLATE "C")
+SELECT 1
+> SELECT partattrs, pg_get_expr(partexprs, partrelid) FROM pg_partitioned_table WHERE partrelid = 'e'::regclass;
+fields partattrs@pg_partitioned_table.5:22:-1:-1,pg_get_expr:25:-1:-1
+row 0 0 2,(a + 1), lower(b)
+SELECT 1
+> CREATE TABLE e1 PARTITION OF e FOR VALUES FROM (1, 'a', 'b') TO (MAXVALUE, MAXVALUE, MAXVALUE);
+CREATE TABLE
+> CREATE TABLE ex PARTITION OF e FOR VALUES FROM (1, MAXVALUE, 'b') TO (MAXVALUE, MAXVALUE, MAXVALUE);
+ERROR 42804 every bound following MAXVALUE must also be MAXVALUE at 62
+> SELECT pg_get_expr(relpartbound, oid) FROM pg_class WHERE relname = 'e1';
+fields pg_get_expr:25:-1:-1
+row FOR VALUES FROM (1, 'a', 'b') TO (MAXVALUE, MAXVALUE, MAXVALUE)
+SELECT 1
+> CREATE TABLE x (a int) PARTITION BY LIST (a, a);
+ERROR 42P17 cannot use "list" partition strategy with more than one column
+> CREATE TABLE x (a int) PARTITION BY RANGE (z);
+ERROR 42703 column "z" named in partition key does not exist at 44
+> CREATE TABLE x (a int) PARTITION BY RANGE (xmin);
+ERROR 42P17 cannot use system column "xmin" in partition key at 44
+> CREATE TABLE x (a int) PARTITION BY RANGE (random());
+ERROR 42P17 functions in partition key expression must be marked IMMUTABLE
+> CREATE TABLE x (a int) PARTITION BY RANGE ((1));
+ERROR 42P17 cannot use constant expression as partition key
+> CREATE TABLE x (a point) PARTITION BY RANGE (a);
+ERROR 42704 data type point has no default operator class for access method "btree"
+HINT You must specify a btree operator class or define a default btree operator class for the data type.
+> CREATE UNLOGGED TABLE x (a int) PARTITION BY RANGE (a);
+ERROR 0A000 partitioned tables cannot be unlogged
+> CREATE TABLE xx (a int) PARTITION BY RANGE (a, a);
+CREATE TABLE
+> CREATE TABLE x PARTITION OF l1 FOR VALUES IN ('a');
+ERROR 42P17 "l1" is not partitioned
+> CREATE TABLE xl PARTITION OF l1 FOR VALUES IN ('a');
+ERROR 42P17 "l1" is not partitioned
+> CREATE TABLE xl PARTITION OF pg_class FOR VALUES IN ('a');
+ERROR 42P17 "pg_class" is not partitioned
+> CREATE TABLE xl PARTITION OF pg_class_oid_index FOR VALUES IN ('a');
+ERROR 42809 cannot open relation "pg_class_oid_index"
+DETAIL This operation is not supported for indexes.
+> CREATE TABLE x PARTITION OF nope FOR VALUES IN ('a');
+ERROR 42P01 relation "nope" does not exist
+> CREATE TABLE x (a int) INHERITS (m);
+ERROR 42809 cannot inherit from partitioned table "m"
+> CREATE TABLE x PARTITION OF m (z DEFAULT 1) FOR VALUES FROM (50) TO (60);
+ERROR 42703 column "z" does not exist
+> CREATE TABLE x (a int, b int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE x1 PARTITION OF x (b GENERATED ALWAYS AS IDENTITY) FOR VALUES FROM (1) TO (2);
+ERROR 0A000 identity columns are not supported on partitions
+> CREATE TABLE s (a int, b int) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE s1 PARTITION OF s FOR VALUES FROM (1) TO (100) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE s11 PARTITION OF s1 FOR VALUES IN (1, 2);
+CREATE TABLE
+> SELECT c.relname, c.relkind, c.relispartition, c.relhassubclass, pg_get_expr(c.relpartbound, c.oid) FROM pg_class c WHERE c.relname ~ '^s[0-9]*$' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,relkind@pg_class.18:18:1:-1,relispartition@pg_class.28:16:1:-1,relhassubclass@pg_class.23:16:1:-1,pg_get_expr:25:-1:-1
+row s,p,f,t,NULL
+row s1,p,t,t,FOR VALUES FROM (1) TO (100)
+row s11,r,t,f,FOR VALUES IN (1, 2)
+SELECT 3
+> CREATE TABLE d (a date, t timestamptz, n numeric, v varchar(5)) PARTITION BY RANGE (a, t, n, v);
+CREATE TABLE
+> CREATE TABLE d1 PARTITION OF d FOR VALUES FROM ('2020-01-01', '2020-01-01 10:00+02', 1.5, 'abc') TO ('2021-01-01', MAXVALUE, MAXVALUE, MAXVALUE);
+CREATE TABLE
+> CREATE TABLE d2 PARTITION OF d FOR VALUES FROM ('2021-01-01', MINVALUE, MINVALUE, MINVALUE) TO (now(), MAXVALUE, MAXVALUE, MAXVALUE);
+ERROR 42P17 partition "d2" would overlap partition "d1" at 63
+> CREATE TABLE d3 PARTITION OF d FOR VALUES FROM (MINVALUE, 1, 2, 3) TO ('2000-01-01', MAXVALUE, MAXVALUE, MAXVALUE);
+ERROR 42804 specified value cannot be cast to type timestamp with time zone for column "t" at 59
+> CREATE TABLE d3 PARTITION OF d FOR VALUES FROM (MINVALUE, MINVALUE, MINVALUE, MINVALUE) TO ('2000-01-01', MAXVALUE, MAXVALUE, MAXVALUE);
+CREATE TABLE
+> SELECT c.relname, pg_get_expr(c.relpartbound, c.oid) FROM pg_class c WHERE c.relname ~ '^d[0-9]' AND c.relname <> 'd2' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1,pg_get_expr:25:-1:-1
+row d1,FOR VALUES FROM ('2020-01-01', '2020-01-01 08:00:00+00', 1.5, 'abc') TO ('2021-01-01', MAXVALUE, MAXVALUE, MAXVALUE)
+row d3,FOR VALUES FROM (MINVALUE, MINVALUE, MINVALUE, MINVALUE) TO ('2000-01-01', MAXVALUE, MAXVALUE, MAXVALUE)
+SELECT 2
+> DROP TABLE m1;
+DROP TABLE
+> DROP TABLE m;
+DROP TABLE
+> SELECT relname FROM pg_class WHERE relname ~ '^m' ORDER BY 1;
+fields relname@pg_class.2:19:64:-1
+SELECT 0
+> DROP TABLE s;
+DROP TABLE
+> SELECT count(*) FROM pg_inherits;
+fields count:20:8:-1
+row 8
+SELECT 1
+> CREATE TABLE n (a int, b text COLLATE "C", c int[]) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE n1 PARTITION OF n FOR VALUES IN ('x');
+CREATE TABLE
+> SELECT attname, attcollation = 950 AS c, attndims, attstorage FROM pg_attribute WHERE attrelid = 'n1'::regclass AND attnum > 0 ORDER BY attnum;
+fields attname@pg_attribute.2:19:64:-1,c:16:1:-1,attndims@pg_attribute.7:21:2:-1,attstorage@pg_attribute.10:18:1:-1
+row a,f,0,p
+row b,t,0,x
+row c,f,0,x
+SELECT 3
+> CREATE TABLE n2 PARTITION OF n (a NOT NULL, CHECK (a > 1)) FOR VALUES IN ('y');
+CREATE TABLE
+> SELECT conname, contype, conislocal, coninhcount FROM pg_constraint WHERE conrelid = 'n2'::regclass ORDER BY 1;
+fields conname@pg_constraint.2:19:64:-1,contype@pg_constraint.4:18:1:-1,conislocal@pg_constraint.17:16:1:-1,coninhcount@pg_constraint.18:21:2:-1
+row n2_a_check,c,t,0
+row n2_a_not_null,n,t,0
+SELECT 2
+> CREATE TABLE n3 PARTITION OF n FOR VALUES IN ('x');
+ERROR 42P17 partition "n3" would overlap partition "n1" at 47
+> CREATE TABLE n3 PARTITION OF n FOR VALUES IN (1 + 1);
+CREATE TABLE
+> CREATE TABLE n4 PARTITION OF n FOR VALUES IN ((SELECT 'z'));
+ERROR 0A000 cannot use subquery in partition bound at 47
+> CREATE TABLE n4 PARTITION OF n FOR VALUES IN (a);
+ERROR 0A000 cannot use column reference in partition bound expression at 47
+> CREATE TABLE n4 PARTITION OF n FOR VALUES IN (sum(1));
+ERROR 42803 aggregate functions are not allowed in partition bound at 47
+> CREATE TABLE n4 PARTITION OF n FOR VALUES IN ('a' COLLATE "C");
+CREATE TABLE
+> SELECT pg_get_expr(relpartbound, oid) FROM pg_class WHERE relname = 'n3';
+fields pg_get_expr:25:-1:-1
+row FOR VALUES IN ('2')
+SELECT 1
+> CREATE TABLE y (a int) PARTITION BY RANGE (a int4_ops);
+CREATE TABLE
+> CREATE TABLE y2 (a int) PARTITION BY HASH (a text_ops);
+ERROR 42804 operator class "text_ops" does not accept data type integer
+> CREATE TABLE y3 (a int NOT NULL NO INHERIT) PARTITION BY RANGE (a);
+ERROR 0A000 not-null constraints on partitioned tables cannot be NO INHERIT
+> CREATE TABLE y4 (a int, CHECK (a > 0) NO INHERIT) PARTITION BY RANGE (a);
+ERROR 42P16 cannot add NO INHERIT constraint to partitioned table "y4"
+> SELECT pg_get_partkeydef('y'::regclass);
+fields pg_get_partkeydef:25:-1:-1
+row RANGE (a)
+SELECT 1

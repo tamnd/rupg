@@ -67,6 +67,10 @@ pub(crate) enum Kind {
     TriggerWhen,
     /// `EXPR_KIND_CALL_ARGUMENT`: an argument of `CALL`.
     CallArgument,
+    /// `EXPR_KIND_PARTITION_BOUND`: a value of `FOR VALUES` of a partition.
+    PartitionBound,
+    /// `EXPR_KIND_PARTITION_EXPRESSION`: an expression of `PARTITION BY` of a table.
+    PartitionExpression,
 }
 
 impl Kind {
@@ -102,6 +106,8 @@ impl Kind {
             Kind::Transform => "transform expressions",
             Kind::TriggerWhen => "trigger WHEN conditions",
             Kind::CallArgument => "CALL arguments",
+            Kind::PartitionBound => "partition bound",
+            Kind::PartitionExpression => "partition key expressions",
         }
     }
 
@@ -118,6 +124,8 @@ impl Kind {
                 | Kind::Transform
                 | Kind::TriggerWhen
                 | Kind::CallArgument
+                | Kind::PartitionBound
+                | Kind::PartitionExpression
         )
     }
 
@@ -131,6 +139,8 @@ impl Kind {
             Kind::Transform => "transform expression",
             Kind::TriggerWhen => "trigger WHEN condition",
             Kind::CallArgument => "CALL argument",
+            Kind::PartitionBound => "partition bound",
+            Kind::PartitionExpression => "partition key expression",
             _ => "index predicate",
         }
     }
@@ -401,7 +411,9 @@ impl Analyzer<'_> {
             | Kind::Returning
             | Kind::Transform
             | Kind::TriggerWhen
-            | Kind::CallArgument => {
+            | Kind::CallArgument
+            | Kind::PartitionBound
+            | Kind::PartitionExpression => {
                 return Err(grouping_error(
                     format!("{what} are not allowed in {}", place.name()),
                     at,

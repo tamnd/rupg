@@ -68,6 +68,134 @@ pub fn read_list(text: &str) -> Result<Vec<Expr>> {
     list(&item)?.iter().map(expr_of).collect()
 }
 
+/// A datum of the stored bound of a range partition.
+#[derive(Debug)]
+pub enum StoredDatum {
+    /// `MINVALUE`.
+    MinValue,
+    /// `MAXVALUE`.
+    MaxValue,
+    /// A constant.
+    Value(Expr),
+}
+
+/// The stored bound of a partition, as `relpartbound` keeps a `PartitionBoundSpec`.
+#[derive(Debug)]
+pub enum StoredBound {
+    /// `DEFAULT`.
+    Default,
+    /// `FOR VALUES WITH (MODULUS m, REMAINDER r)`.
+    Hash {
+        /// The modulus.
+        modulus: i32,
+        /// The remainder.
+        remainder: i32,
+    },
+    /// `FOR VALUES IN (...)`: each constant, or `None` for `NULL`.
+    List(Vec<Option<Expr>>),
+    /// `FOR VALUES FROM (...) TO (...)`.
+    Range {
+        /// The lower bound.
+        lower: Vec<StoredDatum>,
+        /// The upper bound.
+        upper: Vec<StoredDatum>,
+    },
+}
+
+/// The name of the node of a stored bound.
+const BOUND: &str = "PARTITIONBOUNDSPEC";
+
+/// True for the stored form of the bound of a partition, which [`write_bound`] made.
+pub fn is_bound(text: &str) -> bool {
+    text.trim_start().strip_prefix('{').is_some_and(|rest| rest.starts_with(BOUND))
+}
+
+/// The stored form of the bound of a partition, `relpartbound`. Each constant of the bound is already in the stored form of [`write()`].
+pub fn write_bound(bound: &rupg_catalog::PartitionBound) -> String {
+    use rupg_catalog::{PartitionBound, RangeDatum};
+    let datums = |list: &[RangeDatum]| {
+        let items: Vec<String> = list
+            .iter()
+            .map(|d| match d {
+                RangeDatum::MinValue => "{PARTITIONRANGEDATUM :kind -1 :value <>}".to_string(),
+                RangeDatum::MaxValue => "{PARTITIONRANGEDATUM :kind 1 :value <>}".to_string(),
+                RangeDatum::Value(text) => format!("{{PARTITIONRANGEDATUM :kind 0 :value {text}}}"),
+            })
+            .collect();
+        format!("({})", items.join(" "))
+    };
+    match bound {
+        PartitionBound::Default => format!("{{{BOUND} :strategy <> :is_default true}}"),
+        PartitionBound::Hash { modulus, remainder } => format!(
+            "{{{BOUND} :strategy h :is_default false :modulus {modulus} :remainder {remainder}}}"
+        ),
+        PartitionBound::List(values) => {
+            let items: Vec<&str> = values.iter().map(|v| v.as_deref().unwrap_or("<>")).collect();
+            format!("{{{BOUND} :strategy l :is_default false :listdatums ({})}}", items.join(" "))
+        }
+        PartitionBound::Range { lower, upper } => format!(
+            "{{{BOUND} :strategy r :is_default false :lowerdatums {} :upperdatums {}}}",
+            datums(lower),
+            datums(upper)
+        ),
+    }
+}
+
+/// The bound of a stored form that [`write_bound`] made.
+///
+/// # Errors
+///
+/// An internal error when the text is not a stored bound.
+pub fn read_bound(text: &str) -> Result<StoredBound> {
+    let mut tokens = Tokens { text, at: 0 };
+    let item = tokens.item()?;
+    if tokens.next()?.is_some() {
+        return Err(bad("text after the end"));
+    }
+    let Item::Node(name, fields) = &item else { return Err(bad("no node")) };
+    if name != BOUND {
+        return Err(bad("no partition bound"));
+    }
+    let f = Fields { fields };
+    if f.flag("is_default")? {
+        return Ok(StoredBound::Default);
+    }
+    let datums = |name: &str| -> Result<Vec<StoredDatum>> {
+        list(f.get(name)?)?
+            .iter()
+            .map(|item| {
+                let Item::Node(_, fields) = item else { return Err(bad("no range datum")) };
+                let d = Fields { fields };
+                Ok(match d.number::<i32>("kind")? {
+                    -1 => StoredDatum::MinValue,
+                    1 => StoredDatum::MaxValue,
+                    _ => StoredDatum::Value(expr_of(d.get("value")?)?),
+                })
+            })
+            .collect()
+    };
+    match f.atom("strategy")? {
+        "h" => Ok(StoredBound::Hash {
+            modulus: f.number("modulus")?,
+            remainder: f.number("remainder")?,
+        }),
+        "l" => {
+            let values = list(f.get("listdatums")?)?
+                .iter()
+                .map(|item| match item {
+                    Item::Atom(empty) if empty == "<>" => Ok(None),
+                    item => expr_of(item).map(Some),
+                })
+                .collect::<Result<Vec<_>>>()?;
+            Ok(StoredBound::List(values))
+        }
+        "r" => {
+            Ok(StoredBound::Range { lower: datums("lowerdatums")?, upper: datums("upperdatums")? })
+        }
+        other => Err(bad(&format!("partition strategy {other}"))),
+    }
+}
+
 /// The error of a bad stored form.
 fn bad(what: &str) -> Error {
     Error::internal(format!("bad stored expression: {what}"))

@@ -18,9 +18,9 @@ use crate::typename::{names, place};
 use crate::types;
 
 /// The OID of the access method `btree`.
-const BTREE: u32 = 403;
+pub(super) const BTREE: u32 = 403;
 /// The OID of the access method `hash`.
-const HASH: u32 = 405;
+pub(super) const HASH: u32 = 405;
 /// The most columns of an index, `INDEX_MAX_KEYS`.
 const INDEX_MAX_KEYS: usize = 32;
 /// The OID of the collation `default`.
@@ -139,6 +139,9 @@ impl Definer<'_, '_> {
                 format!("cannot open relation \"{name}\""),
             )
             .with_detail(relkind_detail(kind)));
+        }
+        if kind == b'p' {
+            return Err(not_yet("an index on a partitioned table", None));
         }
         if kind != b'r' {
             return Err(Error::new(
@@ -463,7 +466,12 @@ impl Definer<'_, '_> {
     }
 
     /// `exprCollation` of an index expression. An explicit `COLLATE` at the top gives its collation. Else the collation of the columns in the expression wins over the default collation, two different collations of columns give no collation, and an expression without columns has the default collation.
-    fn expr_collation(&self, table: u32, raw: Option<&Node>, expr: &Expr) -> Result<u32> {
+    pub(super) fn expr_collation(
+        &self,
+        table: u32,
+        raw: Option<&Node>,
+        expr: &Expr,
+    ) -> Result<u32> {
         if !types::collatable(expr.ty) {
             return Ok(0);
         }
@@ -496,7 +504,12 @@ impl Definer<'_, '_> {
     }
 
     /// `ResolveOpClass`.
-    fn resolve_opclass(&self, opclass: &[Option<Node>], ty: u32, method: u32) -> Result<u32> {
+    pub(super) fn resolve_opclass(
+        &self,
+        opclass: &[Option<Node>],
+        ty: u32,
+        method: u32,
+    ) -> Result<u32> {
         let method_name = if method == HASH { "hash" } else { "btree" };
         let parts = names(opclass);
         let legacy = parts.len() == 1 && LEGACY_OPCLASSES.contains(&parts[0]);

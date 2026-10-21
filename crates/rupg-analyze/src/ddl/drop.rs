@@ -505,6 +505,7 @@ impl Definer<'_, '_> {
                     RelKind::View => b'v',
                     RelKind::Composite => b'c',
                     RelKind::Table => b'r',
+                    RelKind::Partitioned => b'p',
                 };
                 (code, rel.namespace, rel.name.as_str())
             }

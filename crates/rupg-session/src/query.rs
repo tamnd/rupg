@@ -1103,6 +1103,18 @@ impl Env for Reader<'_> {
     fn deparse(&self, text: &str, relation: u32) -> Result<String> {
         rupg_func::deparse_relation_expression(text, relation, self)
     }
+
+    fn evaluate(&self, expr: &rupg_analyze::Expr) -> Result<Value> {
+        rupg_exec::evaluate(expr, self)
+    }
+
+    fn compare(&self, ty: u32, a: &Value, b: &Value) -> Result<std::cmp::Ordering> {
+        rupg_func::compare(ty, a, ty, b)
+    }
+
+    fn deparse_constant(&self, text: &str) -> Result<String> {
+        rupg_func::deparse_constant(text, self)
+    }
 }
 
 /// `parse_analyze` and the plan of a statement.

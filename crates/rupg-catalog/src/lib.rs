@@ -140,6 +140,8 @@ pub enum RelKind {
     View,
     /// The relation of a composite type that `CREATE TYPE ... AS` makes, `c`.
     Composite,
+    /// A partitioned table, `p`. It has no storage. Its rows are in its partitions.
+    Partitioned,
 }
 
 impl RelKind {
@@ -152,6 +154,7 @@ impl RelKind {
             RelKind::Toast => 't',
             RelKind::View => 'v',
             RelKind::Composite => 'c',
+            RelKind::Partitioned => 'p',
         }
     }
 }
@@ -185,6 +188,10 @@ pub struct Column {
     pub compression: u8,
     /// `attoptions`: each option as `name=value`.
     pub options: Vec<String>,
+    /// `attislocal`: false for a column that only a parent table gives.
+    pub local: bool,
+    /// `attinhcount`: the number of parent tables that give the column.
+    pub inhcount: i16,
 }
 
 impl Column {
@@ -204,6 +211,8 @@ impl Column {
             storage: 0,
             compression: 0,
             options: Vec::new(),
+            local: true,
+            inhcount: 0,
         }
     }
 }
@@ -303,6 +312,90 @@ pub struct Relation {
     pub acl: Option<Vec<String>>,
     /// `relreplident`: `d`, `n`, `f` or `i`, or 0 for the default of the kind of the relation.
     pub replica_identity: u8,
+    /// The partition key of a partitioned table, one row of `pg_partitioned_table`.
+    pub partition_key: Option<PartitionKey>,
+    /// The parent table and the bound of a partition.
+    pub partition_of: Option<PartitionOf>,
+}
+
+/// The strategy of a partition key, `partstrat`.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PartStrategy {
+    /// `HASH`, `h`.
+    Hash,
+    /// `LIST`, `l`.
+    List,
+    /// `RANGE`, `r`.
+    Range,
+}
+
+impl PartStrategy {
+    /// The `partstrat` letter.
+    pub fn code(self) -> char {
+        match self {
+            PartStrategy::Hash => 'h',
+            PartStrategy::List => 'l',
+            PartStrategy::Range => 'r',
+        }
+    }
+}
+
+/// The partition key of a partitioned table, one row of `pg_partitioned_table`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartitionKey {
+    /// The strategy.
+    pub strategy: PartStrategy,
+    /// `partattrs`: the column number of each key column, or 0 for an expression.
+    pub attrs: Vec<i16>,
+    /// `partclass`: the operator class of each key column.
+    pub classes: Vec<u32>,
+    /// `partcollation`: the collation of each key column, or 0.
+    pub collations: Vec<u32>,
+    /// `partexprs`: the expressions of the key columns with number 0, in the form of the analyzer.
+    pub exprs: Option<String>,
+}
+
+/// A datum of the bound of a range partition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum RangeDatum {
+    /// `MINVALUE`.
+    MinValue,
+    /// `MAXVALUE`.
+    MaxValue,
+    /// A constant, in the form of the analyzer.
+    Value(String),
+}
+
+/// The bound of a partition, `relpartbound`.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum PartitionBound {
+    /// `DEFAULT`.
+    Default,
+    /// `FOR VALUES WITH (MODULUS m, REMAINDER r)`.
+    Hash {
+        /// The modulus.
+        modulus: i32,
+        /// The remainder.
+        remainder: i32,
+    },
+    /// `FOR VALUES IN (...)`: each constant in the form of the analyzer, or `None` for `NULL`.
+    List(Vec<Option<String>>),
+    /// `FOR VALUES FROM (...) TO (...)`.
+    Range {
+        /// The lower bound, one datum for each key column.
+        lower: Vec<RangeDatum>,
+        /// The upper bound, one datum for each key column.
+        upper: Vec<RangeDatum>,
+    },
+}
+
+/// The parent table and the bound of a partition.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct PartitionOf {
+    /// The OID of the parent table, `inhparent`.
+    pub parent: u32,
+    /// The bound.
+    pub bound: PartitionBound,
 }
 
 /// The query of a view and its `_RETURN` rule.
@@ -590,6 +683,10 @@ pub struct Constraint {
     pub validated: bool,
     /// `connoinherit`.
     pub no_inherit: bool,
+    /// `conislocal`: false for a constraint that only a parent table gives.
+    pub local: bool,
+    /// `coninhcount`: the number of parent tables that give the constraint.
+    pub inhcount: i16,
     /// The expression of a check constraint, in the form of the analyzer.
     pub expr: Option<String>,
     /// The facts of a foreign key.
@@ -1770,6 +1867,71 @@ impl Catalog {
         self.create_relation(new, RelKind::Table)
     }
 
+    /// `heap_create_with_catalog` for a partitioned table. [`Catalog::set_partition_key`] then gives the key.
+    pub fn create_partitioned_table(&mut self, new: NewRelation) -> Result<u32> {
+        self.create_relation(new, RelKind::Partitioned)
+    }
+
+    /// `StorePartitionKey`: the row of `pg_partitioned_table`. The table depends on the operator class and the collation of each key column.
+    pub fn set_partition_key(&mut self, table: u32, key: PartitionKey) -> Result<()> {
+        // `DEFAULT_COLLATION_OID`: the table does not depend on it.
+        const DEFAULT_COLLATION: u32 = 100;
+        let class = ObjRef::new(PG_CLASS, table);
+        let classes = key.classes.iter().map(|&c| ObjRef::new(PG_OPCLASS, c));
+        let collations = key
+            .collations
+            .iter()
+            .filter(|&&c| c != 0 && c != DEFAULT_COLLATION)
+            .map(|&c| ObjRef::new(PG_COLLATION, c));
+        let refs: Vec<ObjRef> = classes.chain(collations).collect();
+        let Some(rel) = self.relations.get_mut(&table) else {
+            return Err(no_object("relation", table));
+        };
+        rel.partition_key = Some(key);
+        for found in refs {
+            self.depend(class, found, DepKind::Normal);
+        }
+        Ok(())
+    }
+
+    /// `StorePartitionBound` and `StoreCatalogInheritance1` for a partition: the bound, the row of `pg_inherits`, and the dependency of the partition on its parent. The dependency is automatic, so `DROP TABLE` of the parent drops the partition too.
+    pub fn attach_partition(
+        &mut self,
+        table: u32,
+        parent: u32,
+        bound: PartitionBound,
+    ) -> Result<()> {
+        let Some(rel) = self.relations.get_mut(&table) else {
+            return Err(no_object("relation", table));
+        };
+        rel.partition_of = Some(PartitionOf { parent, bound });
+        self.depend(ObjRef::new(PG_CLASS, table), ObjRef::new(PG_CLASS, parent), DepKind::Auto);
+        Ok(())
+    }
+
+    /// The partitions of a partitioned table, in the order of their OIDs.
+    pub fn partitions(&self, parent: u32) -> Vec<&Relation> {
+        self.relations
+            .values()
+            .filter(|r| r.partition_of.as_ref().is_some_and(|p| p.parent == parent))
+            .collect()
+    }
+
+    /// Sets `conislocal` and `coninhcount` of a constraint that a parent table gives.
+    pub fn set_constraint_inherited(
+        &mut self,
+        constraint: u32,
+        local: bool,
+        inhcount: i16,
+    ) -> Result<()> {
+        let Some(con) = self.constraints.get_mut(&constraint) else {
+            return Err(no_object("constraint", constraint));
+        };
+        con.local = local;
+        con.inhcount = inhcount;
+        Ok(())
+    }
+
     /// `heap_create_with_catalog` for a relation with a row type: the relation gets an OID, then its array type, then its row type. Each column depends on its type and its collation, as `AddNewAttributeTuples` records them.
     fn create_relation(&mut self, new: NewRelation, kind: RelKind) -> Result<u32> {
         Catalog::check_columns(&new.columns)?;
@@ -1837,6 +1999,8 @@ impl Catalog {
                 options: Vec::new(),
                 acl: None,
                 replica_identity: 0,
+                partition_key: None,
+                partition_of: None,
             },
         );
         let (class, ty) = (ObjRef::new(PG_CLASS, oid), ObjRef::new(PG_TYPE, row_type));
@@ -2518,6 +2682,8 @@ impl Catalog {
                 options: Vec::new(),
                 acl: None,
                 replica_identity: 0,
+                partition_key: None,
+                partition_of: None,
             },
         );
         self.depend(
@@ -2721,6 +2887,8 @@ impl Catalog {
             deferred: false,
             validated: true,
             no_inherit: false,
+            local: true,
+            inhcount: 0,
             expr: None,
             foreign: None,
         }
@@ -2880,6 +3048,8 @@ impl Catalog {
                 options: Vec::new(),
                 acl: None,
                 replica_identity: 0,
+                partition_key: None,
+                partition_of: None,
             },
         );
         let me = ObjRef::new(PG_CLASS, oid);
@@ -3034,6 +3204,8 @@ impl Catalog {
                 options: Vec::new(),
                 acl: None,
                 replica_identity: 0,
+                partition_key: None,
+                partition_of: None,
             },
         );
         let info = IndexInfo {
@@ -3073,6 +3245,8 @@ impl Catalog {
                 options: Vec::new(),
                 acl: None,
                 replica_identity: 0,
+                partition_key: None,
+                partition_of: None,
             },
         );
         self.relation_mut(table)?.toast = oid;

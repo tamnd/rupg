@@ -536,6 +536,9 @@ impl Analyzer<'_> {
             return Err(not_yet(&format!("{what} a system catalog")));
         };
         match rel.kind {
+            RelKind::Table if rel.partition_of.is_some() => {
+                return Err(not_yet(&format!("{what} a partition")));
+            }
             RelKind::Table => {}
             RelKind::Sequence => {
                 return Err(Error::new(
@@ -548,6 +551,7 @@ impl Analyzer<'_> {
                 if kind != WriteKind::Merge
                     && self.user_triggers(oid, INSTEAD_ROW | trigger_event(kind)) => {}
             RelKind::View => return Err(not_yet(&format!("{what} a view"))),
+            RelKind::Partitioned => return Err(not_yet(&format!("{what} a partitioned table"))),
             _ => {
                 return Err(Error::new(
                     SqlState::WRONG_OBJECT_TYPE,
