@@ -27,8 +27,13 @@ pub(crate) fn check_rows(
     session: &dyn Session,
 ) -> Result<Vec<Vec<Value>>> {
     let rel = session.catalog().and_then(|c| c.relation(info.table));
+    // The partition of each row of a partitioned table checks the row after the routing.
+    if rel.is_some_and(|r| r.kind == rupg_catalog::RelKind::Partitioned) {
+        return Ok(rows);
+    }
     let types: Vec<u32> = rel.map(|r| r.columns.iter().map(|c| c.ty).collect()).unwrap_or_default();
     let mut out = Vec::with_capacity(rows.len());
+    let mut router = crate::partition::Router::default();
     for mut row in rows {
         if let Some(rel) = rel {
             for (column, value) in rel.columns.iter().zip(&row[..info.width]) {
@@ -57,32 +62,44 @@ pub(crate) fn check_rows(
             }
         }
         row.drain(info.width..info.width + info.checks.len());
+        // `ExecPartitionCheck` for a row that goes in a partition with no routing.
+        if info.kind == WriteKind::Insert
+            && let Some(rel) = rel
+            && rel.partition_of.is_some()
+            && !router.check(rel.oid, &row[..info.width], session)?
+        {
+            return Err(crate::partition::partition_check_error(rel, &row[..info.width], session)?);
+        }
         out.push(row);
     }
     Ok(out)
 }
 
 /// `ExecBuildSlotValueDescription`: the detail `Failing row contains (...)` with the text of each value, `null` for a null value, and a value of more than 64 bytes cut with `...` after it.
-fn failing_row(row: &[Value], types: &[u32], session: &dyn Session) -> Result<String> {
+pub(crate) fn failing_row(row: &[Value], types: &[u32], session: &dyn Session) -> Result<String> {
     let mut parts = Vec::with_capacity(row.len());
     // A dropped column has the type 0, and `ExecBuildSlotValueDescription` skips it.
     for (value, &ty) in row.iter().zip(types).filter(|&(_, &ty)| ty != 0) {
-        if matches!(value, Value::Null) {
-            parts.push("null".to_string());
-            continue;
-        }
-        let mut text = Vec::new();
-        rupg_func::output(ty, value, session, &mut text)?;
-        let mut text = String::from_utf8_lossy(&text).into_owned();
-        if text.len() > MAX_FIELD_LEN {
-            let mut end = MAX_FIELD_LEN;
-            while !text.is_char_boundary(end) {
-                end -= 1;
-            }
-            text.truncate(end);
-            text.push_str("...");
-        }
-        parts.push(text);
+        parts.push(shown(ty, value, MAX_FIELD_LEN, session)?);
     }
     Ok(format!("Failing row contains ({}).", parts.join(", ")))
+}
+
+/// The text of a value in the detail of an error: `null` for a null value, and a value of more than `max` bytes cut with `...` after it, as `pg_mbcliplen` cuts it.
+pub(crate) fn shown(ty: u32, value: &Value, max: usize, session: &dyn Session) -> Result<String> {
+    if matches!(value, Value::Null) {
+        return Ok("null".to_string());
+    }
+    let mut text = Vec::new();
+    rupg_func::output(ty, value, session, &mut text)?;
+    let mut text = String::from_utf8_lossy(&text).into_owned();
+    if text.len() > max {
+        let mut end = max;
+        while !text.is_char_boundary(end) {
+            end -= 1;
+        }
+        text.truncate(end);
+        text.push_str("...");
+    }
+    Ok(text)
 }

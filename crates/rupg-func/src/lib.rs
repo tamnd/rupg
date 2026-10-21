@@ -86,10 +86,12 @@ pub use cast::local_time;
 pub use compare::{compare, equal};
 pub use datetime::{IntervalSum, interval_lerp};
 pub use deparse::{
-    deparse_constant, deparse_expression, deparse_relation_expression, explain, view_statement,
+    deparse_constant, deparse_expression, deparse_relation_expression, explain,
+    partition_key_columns, view_statement,
 };
 pub use describe::describe;
 pub use encoding::{char_to_encoding, encoding, encoding_to_char};
+pub use hash::partition_hash;
 pub use io::{
     base_type, input, input_soft, input_supported, is_row_type, output, output_supported, receive,
     send, to_text,

@@ -1,0 +1,391 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE r (a int, b text, c int DEFAULT 7) PARTITION BY RANGE (a);
+CREATE TABLE
+> CREATE TABLE r2 PARTITION OF r FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (MINVALUE) TO (10);
+CREATE TABLE
+> CREATE TABLE r3 PARTITION OF r FOR VALUES FROM (20) TO (30) PARTITION BY LIST (b);
+CREATE TABLE
+> CREATE TABLE r3x PARTITION OF r3 FOR VALUES IN ('x', NULL);
+CREATE TABLE
+> CREATE TABLE r3y PARTITION OF r3 FOR VALUES IN ('y');
+CREATE TABLE
+> CREATE TABLE r3d PARTITION OF r3 DEFAULT;
+CREATE TABLE
+> INSERT INTO r VALUES (1, 'a', DEFAULT), (15, 'b', 1), (25, 'x', 2), (25, NULL, 3), (26, 'y', 4), (27, 'z', 5), (-5, 'm', 6);
+INSERT 0 7
+> SELECT tableoid::regclass, * FROM r;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row r1,1,a,7
+row r1,-5,m,6
+row r2,15,b,1
+row r3x,25,x,2
+row r3x,25,NULL,3
+row r3y,26,y,4
+row r3d,27,z,5
+SELECT 7
+> SELECT tableoid::regclass, * FROM r3;
+fields tableoid:2205:4:-1,a@r3.1:23:4:-1,b@r3.2:25:-1:-1,c@r3.3:23:4:-1
+row r3x,25,x,2
+row r3x,25,NULL,3
+row r3y,26,y,4
+row r3d,27,z,5
+SELECT 4
+> SELECT * FROM ONLY r;
+fields a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+SELECT 0
+> SELECT * FROM ONLY r3;
+fields a@r3.1:23:4:-1,b@r3.2:25:-1:-1,c@r3.3:23:4:-1
+SELECT 0
+> SELECT * FROM ONLY r1;
+fields a@r1.1:23:4:-1,b@r1.2:25:-1:-1,c@r1.3:23:4:-1
+row 1,a,7
+row -5,m,6
+SELECT 2
+> SELECT count(*) FROM r WHERE a > 10;
+fields count:20:8:-1
+row 5
+SELECT 1
+> SELECT * FROM r ORDER BY a, b;
+fields a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row -5,m,6
+row 1,a,7
+row 15,b,1
+row 25,x,2
+row 25,NULL,3
+row 26,y,4
+row 27,z,5
+SELECT 7
+> SELECT r::text AS r FROM r ORDER BY a, b;
+fields r:25:-1:-1
+row (-5,m,6)
+row (1,a,7)
+row (15,b,1)
+row (25,x,2)
+row (25,,3)
+row (26,y,4)
+row (27,z,5)
+SELECT 7
+> INSERT INTO r VALUES (30, 'q');
+ERROR 23514 no partition of relation "r" found for row
+DETAIL Partition key of the failing row contains (a) = (30).
+> INSERT INTO r VALUES (NULL, 'q');
+ERROR 23514 no partition of relation "r" found for row
+DETAIL Partition key of the failing row contains (a) = (null).
+> INSERT INTO r3 VALUES (5, 'x');
+ERROR 23514 new row for relation "r3" violates partition constraint
+DETAIL Failing row contains (5, x, 7).
+> INSERT INTO r3 VALUES (21, 'y');
+INSERT 0 1
+> INSERT INTO r1 VALUES (10);
+ERROR 23514 new row for relation "r1" violates partition constraint
+DETAIL Failing row contains (10, null, 7).
+> INSERT INTO r1 VALUES (9) RETURNING *;
+fields a@r1.1:23:4:-1,b@r1.2:25:-1:-1,c@r1.3:23:4:-1
+row 9,NULL,7
+INSERT 0 1
+> INSERT INTO r VALUES (12, 'w') RETURNING *;
+fields a@r.1:23:4:-1,b@r.2:25:-1:-1,c@r.3:23:4:-1
+row 12,w,7
+INSERT 0 1
+> INSERT INTO r VALUES (13, 'w') RETURNING tableoid::regclass, a;
+fields tableoid:2205:4:-1,a@r.1:23:4:-1
+row r2,13
+INSERT 0 1
+> INSERT INTO r (a) SELECT g FROM generate_series(16, 18) g;
+INSERT 0 3
+> SELECT tableoid::regclass, * FROM r2;
+fields tableoid:2205:4:-1,a@r2.1:23:4:-1,b@r2.2:25:-1:-1,c@r2.3:23:4:-1
+row r2,15,b,1
+row r2,12,w,7
+row r2,13,w,7
+row r2,16,NULL,7
+row r2,17,NULL,7
+row r2,18,NULL,7
+SELECT 6
+> CREATE TABLE k (a int NOT NULL, b int CHECK (b > 0)) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE k1 PARTITION OF k (CONSTRAINT k1_b CHECK (b < 100)) FOR VALUES IN (1, 2);
+CREATE TABLE
+> CREATE TABLE k2 PARTITION OF k FOR VALUES IN (3);
+CREATE TABLE
+> INSERT INTO k VALUES (1, 0);
+ERROR 23514 new row for relation "k1" violates check constraint "k_b_check"
+DETAIL Failing row contains (1, 0).
+> INSERT INTO k VALUES (1, 200);
+ERROR 23514 new row for relation "k1" violates check constraint "k1_b"
+DETAIL Failing row contains (1, 200).
+> INSERT INTO k VALUES (NULL, 1);
+ERROR 23514 no partition of relation "k" found for row
+DETAIL Partition key of the failing row contains (a) = (null).
+> INSERT INTO k VALUES (3, 200);
+INSERT 0 1
+> INSERT INTO k VALUES (3, NULL), (4, 1);
+ERROR 23514 no partition of relation "k" found for row
+DETAIL Partition key of the failing row contains (a) = (4).
+> INSERT INTO k2 VALUES (1, 1);
+ERROR 23514 new row for relation "k2" violates partition constraint
+DETAIL Failing row contains (1, 1).
+> INSERT INTO k2 VALUES (3, -1);
+ERROR 23514 new row for relation "k2" violates check constraint "k_b_check"
+DETAIL Failing row contains (3, -1).
+> INSERT INTO k1 VALUES (2, 50);
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM k;
+fields tableoid:2205:4:-1,a@k.1:23:4:-1,b@k.2:23:4:-1
+row k1,2,50
+row k2,3,200
+SELECT 2
+> PREPARE p(int) AS INSERT INTO k VALUES ($1, 5);
+PREPARE
+> EXECUTE p(2);
+INSERT 0 1
+> EXECUTE p(4);
+ERROR 23514 no partition of relation "k" found for row
+DETAIL Partition key of the failing row contains (a) = (4).
+> INSERT INTO k VALUES (3, 7) ON CONFLICT DO NOTHING;
+INSERT 0 1
+> SELECT k::text AS k FROM k ORDER BY 1;
+fields k:25:-1:-1
+row (2,5)
+row (2,50)
+row (3,200)
+row (3,7)
+SELECT 4
+> CREATE TABLE e (a int, b text) PARTITION BY RANGE ((a % 10), lower(b));
+CREATE TABLE
+> CREATE TABLE e1 PARTITION OF e FOR VALUES FROM (0, 'a') TO (5, 'm');
+CREATE TABLE
+> CREATE TABLE e2 PARTITION OF e FOR VALUES FROM (5, 'm') TO (MAXVALUE, MAXVALUE);
+CREATE TABLE
+> INSERT INTO e VALUES (13, 'Bob'), (27, 'zed'), (5, 'Mary'), (0, 'A');
+INSERT 0 4
+> INSERT INTO e VALUES (-1, 'x');
+ERROR 23514 no partition of relation "e" found for row
+DETAIL Partition key of the failing row contains ((a % 10), lower(b)) = (-1, x).
+> INSERT INTO e VALUES (4, 'zz');
+INSERT 0 1
+> SELECT tableoid::regclass, * FROM e ORDER BY a;
+fields tableoid:2205:4:-1,a@e.1:23:4:-1,b@e.2:25:-1:-1
+row e1,0,A
+row e1,4,zz
+row e2,5,Mary
+row e1,13,Bob
+row e2,27,zed
+SELECT 5
+> CREATE TABLE h (a int, b text) PARTITION BY HASH (a, b);
+CREATE TABLE
+> CREATE TABLE h0 PARTITION OF h FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE h1 PARTITION OF h FOR VALUES WITH (MODULUS 4, REMAINDER 1);
+CREATE TABLE
+> CREATE TABLE h3 PARTITION OF h FOR VALUES WITH (MODULUS 4, REMAINDER 3);
+CREATE TABLE
+> INSERT INTO h SELECT g, g::text FROM generate_series(1, 30) g;
+INSERT 0 30
+> INSERT INTO h VALUES (NULL, NULL), (1, NULL), (NULL, 'a');
+INSERT 0 3
+> SELECT tableoid::regclass, count(*) FROM h GROUP BY 1 ORDER BY 1;
+fields tableoid:2205:4:-1,count:20:8:-1
+row h0,17
+row h1,10
+row h3,6
+SELECT 3
+> SELECT tableoid::regclass, * FROM h WHERE a < 9 OR a IS NULL ORDER BY a, b;
+fields tableoid:2205:4:-1,a@h.1:23:4:-1,b@h.2:25:-1:-1
+row h0,1,1
+row h0,1,NULL
+row h0,2,2
+row h3,3,3
+row h0,4,4
+row h1,5,5
+row h1,6,6
+row h1,7,7
+row h0,8,8
+row h0,NULL,a
+row h0,NULL,NULL
+SELECT 11
+> CREATE TABLE hp (a int) PARTITION BY HASH (a);
+CREATE TABLE
+> CREATE TABLE hp0 PARTITION OF hp FOR VALUES WITH (MODULUS 3, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE hp2 PARTITION OF hp FOR VALUES WITH (MODULUS 3, REMAINDER 2);
+CREATE TABLE
+> INSERT INTO hp SELECT generate_series(1, 6);
+ERROR 23514 no partition of relation "hp" found for row
+DETAIL Partition key of the failing row contains (a) = (3).
+> CREATE TABLE ht (a text, b bigint, c date, d numeric, e bool, f float8, g varchar(5), i int2, j uuid, k timestamptz) PARTITION BY HASH (a, b, c, d, e, f, g, i, j, k);
+CREATE TABLE
+> CREATE TABLE ht0 PARTITION OF ht FOR VALUES WITH (MODULUS 3, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE ht1 PARTITION OF ht FOR VALUES WITH (MODULUS 3, REMAINDER 1);
+CREATE TABLE
+> CREATE TABLE ht2 PARTITION OF ht FOR VALUES WITH (MODULUS 3, REMAINDER 2);
+CREATE TABLE
+> INSERT INTO ht SELECT 'w' || g, g::bigint * 1000000007, date '2020-01-01' + g, g / 7.0, g % 2 = 0, g * 1.5, 'v' || g, g, ('00000000-0000-0000-0000-' || lpad(g::text, 12, '0'))::uuid, timestamptz '2020-01-01 00:00:00+00' + g * interval '1 hour' FROM generate_series(1, 30) g;
+INSERT 0 30
+> SELECT tableoid::regclass, string_agg(a, ',' ORDER BY b) FROM ht GROUP BY 1 ORDER BY 1;
+fields tableoid:2205:4:-1,string_agg:25:-1:-1
+row ht0,w1,w2,w4,w7,w11,w12,w13,w14,w15,w16,w27,w30
+row ht1,w5,w6,w10,w18,w20,w21,w29
+row ht2,w3,w8,w9,w17,w19,w22,w23,w24,w25,w26,w28
+SELECT 3
+> CREATE TABLE hs (a text) PARTITION BY HASH (a);
+CREATE TABLE
+> CREATE TABLE hs0 PARTITION OF hs FOR VALUES WITH (MODULUS 2, REMAINDER 0);
+CREATE TABLE
+> CREATE TABLE hs1 PARTITION OF hs FOR VALUES WITH (MODULUS 2, REMAINDER 1);
+CREATE TABLE
+> INSERT INTO hs VALUES ('apple'), ('banana'), ('cherry'), (''), ('a longer string of more than twelve bytes');
+INSERT 0 5
+> SELECT tableoid::regclass, * FROM hs ORDER BY 2;
+fields tableoid:2205:4:-1,a@hs.1:25:-1:-1
+row hs0,
+row hs0,a longer string of more than twelve bytes
+row hs0,apple
+row hs1,banana
+row hs0,cherry
+SELECT 5
+> CREATE TABLE l (a text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE ld PARTITION OF l DEFAULT;
+CREATE TABLE
+> CREATE TABLE ln PARTITION OF l FOR VALUES IN (NULL);
+CREATE TABLE
+> CREATE TABLE lb PARTITION OF l FOR VALUES IN ('b', 'c');
+CREATE TABLE
+> CREATE TABLE la PARTITION OF l FOR VALUES IN ('a', 'd');
+CREATE TABLE
+> INSERT INTO l VALUES ('d'), ('z'), (NULL), ('c'), ('a');
+INSERT 0 5
+> SELECT tableoid::regclass, * FROM l;
+fields tableoid:2205:4:-1,a@l.1:25:-1:-1
+row la,d
+row la,a
+row lb,c
+row ln,NULL
+row ld,z
+SELECT 5
+> INSERT INTO ld VALUES ('a');
+ERROR 23514 new row for relation "ld" violates partition constraint
+DETAIL Failing row contains (a).
+> INSERT INTO ld VALUES (NULL);
+ERROR 23514 new row for relation "ld" violates partition constraint
+DETAIL Failing row contains (null).
+> INSERT INTO ld VALUES ('q');
+INSERT 0 1
+> INSERT INTO ln VALUES ('q');
+ERROR 23514 new row for relation "ln" violates partition constraint
+DETAIL Failing row contains (q).
+> CREATE TABLE z (a int) PARTITION BY LIST (a);
+CREATE TABLE
+> INSERT INTO z VALUES (1);
+ERROR 23514 no partition of relation "z" found for row
+DETAIL Partition key of the failing row contains (a) = (1).
+> SELECT * FROM z;
+fields a@z.1:23:4:-1
+SELECT 0
+> CREATE TABLE lt (a text) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE lt1 PARTITION OF lt FOR VALUES IN ('a');
+CREATE TABLE
+> INSERT INTO lt VALUES (repeat('x', 100));
+ERROR 23514 no partition of relation "lt" found for row
+DETAIL Partition key of the failing row contains (a) = (xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx...).
+> INSERT INTO lt1 VALUES (repeat('y', 70));
+ERROR 23514 new row for relation "lt1" violates partition constraint
+DETAIL Failing row contains (yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy...).
+> CREATE TABLE dd (a int, b int DEFAULT 1) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE dd1 PARTITION OF dd (b DEFAULT 2) FOR VALUES IN (1);
+CREATE TABLE
+> INSERT INTO dd (a) VALUES (1);
+INSERT 0 1
+> INSERT INTO dd1 (a) VALUES (1);
+INSERT 0 1
+> SELECT * FROM dd;
+fields a@dd.1:23:4:-1,b@dd.2:23:4:-1
+row 1,1
+row 1,2
+SELECT 2
+> CREATE TABLE dt (d date, v int) PARTITION BY RANGE (d);
+CREATE TABLE
+> CREATE TABLE dt1 PARTITION OF dt FOR VALUES FROM ('2020-01-01') TO ('2021-01-01');
+CREATE TABLE
+> INSERT INTO dt VALUES ('2020-06-01', 1);
+INSERT 0 1
+> INSERT INTO dt VALUES ('2021-01-01', 1);
+ERROR 23514 no partition of relation "dt" found for row
+DETAIL Partition key of the failing row contains (d) = (2021-01-01).
+> CREATE TABLE m2 (a int, b int) PARTITION BY RANGE (a, b);
+CREATE TABLE
+> CREATE TABLE m21 PARTITION OF m2 FOR VALUES FROM (1, 1) TO (1, 10);
+CREATE TABLE
+> CREATE TABLE m22 PARTITION OF m2 FOR VALUES FROM (1, 10) TO (2, MINVALUE);
+CREATE TABLE
+> CREATE TABLE m23 PARTITION OF m2 FOR VALUES FROM (2, MINVALUE) TO (3, 5);
+CREATE TABLE
+> INSERT INTO m2 VALUES (1, 1), (1, 9), (1, 10), (1, 1000), (2, -5), (3, 4);
+INSERT 0 6
+> INSERT INTO m2 VALUES (1, 0);
+ERROR 23514 no partition of relation "m2" found for row
+DETAIL Partition key of the failing row contains (a, b) = (1, 0).
+> INSERT INTO m2 VALUES (3, 5);
+ERROR 23514 no partition of relation "m2" found for row
+DETAIL Partition key of the failing row contains (a, b) = (3, 5).
+> INSERT INTO m2 VALUES (2, NULL);
+ERROR 23514 no partition of relation "m2" found for row
+DETAIL Partition key of the failing row contains (a, b) = (2, null).
+> SELECT tableoid::regclass, * FROM m2;
+fields tableoid:2205:4:-1,a@m2.1:23:4:-1,b@m2.2:23:4:-1
+row m21,1,1
+row m21,1,9
+row m22,1,10
+row m22,1,1000
+row m23,2,-5
+row m23,3,4
+SELECT 6
+> SELECT r.a, k.b FROM r JOIN k ON r.a = k.a ORDER BY 1, 2;
+fields a@r.1:23:4:-1,b@k.2:23:4:-1
+SELECT 0
+> SELECT (SELECT count(*) FROM r) AS n, (SELECT max(a) FROM r3) AS x;
+fields n:20:8:-1,x:23:4:-1
+row 14,27
+SELECT 1
+> WITH w AS (INSERT INTO k VALUES (3, 9) RETURNING *) SELECT * FROM w;
+fields a@k.1:23:4:-1,b@k.2:23:4:-1
+row 3,9
+SELECT 1
+> CREATE TABLE kc (a int, b int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TABLE kc1 PARTITION OF kc FOR VALUES IN (1, 2, 3);
+CREATE TABLE
+> INSERT INTO kc SELECT * FROM k;
+INSERT 0 5
+> SELECT * FROM kc ORDER BY 1, 2;
+fields a@kc.1:23:4:-1,b@kc.2:23:4:-1
+row 2,5
+row 2,50
+row 3,7
+row 3,9
+row 3,200
+SELECT 5
+> DROP TABLE r;
+DROP TABLE
+> SELECT count(*) FROM pg_class WHERE relname ~ '^r[0-9]';
+fields count:20:8:-1
+row 0
+SELECT 1
+> CREATE TEMP TABLE tp (a int) PARTITION BY LIST (a);
+CREATE TABLE
+> CREATE TEMP TABLE tp1 PARTITION OF tp FOR VALUES IN (1);
+CREATE TABLE
+> INSERT INTO tp VALUES (1);
+INSERT 0 1
+> SELECT * FROM tp;
+fields a@tp.1:23:4:-1
+row 1
+SELECT 1
