@@ -30,6 +30,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - `rustls-webpki` is now 0.103.16, which fixes RUSTSEC-2026-0382. The old version can accept a certificate path that has a distrusted emSign intermediate (#475).
 
+### Changed
+
+- The lowest allowed versions of `libc`, `ring`, `rustls` and `loom` are now the versions in `Cargo.lock`. The old bounds let Cargo pick `libc` 0.2.0, which `ring` does not accept (#455).
+
 ### Fixed
 
 - A whole-row `old` or `new` in `RETURNING` of `MERGE` gives the row. Before, it gave one column of the row. The old row is null for an insert, and the new row is null for a delete (#488).
@@ -43,10 +47,6 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 - Subscripts on a column in `UPDATE`, `INSERT`, `ON CONFLICT DO UPDATE` and `MERGE`, as in `UPDATE t SET a[2] = 5` and `INSERT INTO t (a[1], a[3]) VALUES (1, 3)`. More than one item can set parts of the same column, and a domain over an array checks the new value after all of the items (#472).
 - The assignment to a field of a composite value, as in `UPDATE t SET p.x = 5`, `INSERT INTO t (p.x, p.y) VALUES (1, 2)` and `x.a.x := 1` in PL/pgSQL. Fields and subscripts can be mixed, as in `UPDATE t SET ps[1].x = 7` (#474).
 - `COMMIT` and `ROLLBACK` in PL/pgSQL, with `AND CHAIN`. A procedure that `CALL` runs outside of a transaction block, and the code of such a `DO`, can end the transaction, and a new transaction starts at once. A loop over a query or over a cursor goes on after the end. The errors in a function, in a trigger, in a transaction block and in a block with `EXCEPTION` are the errors of PostgreSQL (#476).
-
-### Changed
-
-- The lowest allowed versions of `libc`, `ring`, `rustls` and `loom` are now the versions in `Cargo.lock`. The old bounds let Cargo pick `libc` 0.2.0, which `ring` does not accept (#455).
 
 ## 0.1.55 (2026-10-21)
 
