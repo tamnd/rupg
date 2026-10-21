@@ -13,7 +13,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - The workflow `fuzz` for the long fuzz runs of spec/21 section 21.7. It runs on request and gives each target one libFuzzer worker on each CPU of the runner. With the defaults, each of the four M2 targets gets 25.3 CPU hours (#471).
 
-- Identity columns of partitioned tables. Each partition gets the identity of the column of its parent table, with no sequence of its own, and an `INSERT` into a partition takes the next value of the sequence of the topmost parent, as `getIdentitySequence` finds it. `ADD COLUMN`, `ADD GENERATED ... AS IDENTITY`, `SET GENERATED`, the `SET` options of the sequence and `DROP IDENTITY` go on to the partitions, and give the errors of PostgreSQL with `ONLY` and on a partition. `CREATE TABLE ... PARTITION OF` and `ATTACH PARTITION` give the identity to the new partition, and `DETACH PARTITION` takes it away (#NNN).
+- Identity columns of partitioned tables. Each partition gets the identity of the column of its parent table, with no sequence of its own, and an `INSERT` into a partition takes the next value of the sequence of the topmost parent, as `getIdentitySequence` finds it. `ADD COLUMN`, `ADD GENERATED ... AS IDENTITY`, `SET GENERATED`, the `SET` options of the sequence and `DROP IDENTITY` go on to the partitions, and give the errors of PostgreSQL with `ONLY` and on a partition. `CREATE TABLE ... PARTITION OF` and `ATTACH PARTITION` give the identity to the new partition, and `DETACH PARTITION` takes it away (#499).
 
 ### Fixed
 
