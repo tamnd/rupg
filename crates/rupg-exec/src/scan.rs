@@ -332,6 +332,50 @@ fn relations_in(item: &FromItem, out: &mut Vec<usize>) {
     }
 }
 
+/// The tables that a scan of the relation `index` of the query reads, as `expand_inherited_rtentry` and `prune_append_rel_partitions` choose them: the leaf partitions of a partitioned table that the conditions of `WHERE` do not prune, or a table with children of `INHERITS` and its children. `None` for a relation that is one table.
+///
+/// # Errors
+///
+/// The errors of the comparisons of the bounds of the partitions.
+pub fn members(query: &Query, index: usize, session: &dyn Session) -> Result<Option<Vec<u32>>> {
+    let Some(from) = query.relations.get(index) else { return Ok(None) };
+    if from.subquery.is_some()
+        || from.function.is_some()
+        || from.values.is_some()
+        || from.cte.is_some()
+        || rupg_pgcatalog::catalog_by_oid(from.oid).is_some()
+    {
+        return Ok(None);
+    }
+    let Some(relation) = session.catalog().and_then(|c| c.relation(from.oid)) else {
+        return Ok(None);
+    };
+    if relation.kind == rupg_catalog::RelKind::Partitioned {
+        if from.only {
+            return Ok(Some(Vec::new()));
+        }
+        let mut conds = Vec::new();
+        if let Some(filter) = &query.filter {
+            conjuncts(filter, &mut conds);
+        }
+        let mut nulls = Vec::new();
+        for item in &query.from {
+            nullable(item, &mut nulls);
+        }
+        let nullable = nulls.contains(&index);
+        return crate::partition::pruned_leaves(from.oid, index, &conds, nullable, session)
+            .map(Some);
+    }
+    if from.only || relation.kind != rupg_catalog::RelKind::Table {
+        return Ok(None);
+    }
+    let children = session.catalog().map(|c| c.all_inheritors(from.oid)).unwrap_or_default();
+    if children.is_empty() {
+        return Ok(None);
+    }
+    Ok(Some(std::iter::once(from.oid).chain(children).collect()))
+}
+
 /// Reads the rows of the relations of a query.
 ///
 /// # Errors

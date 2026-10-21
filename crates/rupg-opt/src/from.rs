@@ -7,7 +7,7 @@ use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey};
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Level, cost, exprs, upper};
+use crate::{Builder, Level, Member, cost, exprs, upper};
 
 /// The rows of each relation of the query before and after its conditions, as `tuples` and `rows` of its `RelOptInfo`.
 type Stats = BTreeMap<usize, (f64, f64)>;
@@ -195,6 +195,13 @@ impl<'q> Builder<'q> {
                     (Kind::ValuesScan(r), 0.0, 0.0, values.len() as f64)
                 }
                 (None, None, None) => {
+                    let members = match &relation.tablesample {
+                        Some(_) => None,
+                        None => self.members.and_then(|m| m.members(level.query, r)),
+                    };
+                    if let Some(members) = members {
+                        return members_scan(level, r, &quals, members, stats);
+                    }
                     let (pages, tuples) = cost::table_size(relation);
                     match &relation.tablesample {
                         Some(sample) => {
@@ -217,6 +224,48 @@ impl<'q> Builder<'q> {
         node.cost = Cost { startup, total: startup + run + tuples * per_row, rows, width: 0 };
         Rel { node, rels: BTreeSet::from([r]), order: Vec::new() }
     }
+}
+
+/// `set_append_rel_size` and `create_append_plan`: the scans of the members of the inheritance tree of the relation `r`, under an `Append` when there are two or more, each with the conditions of the relation. With no member the relation is a `Result` with no rows, as `set_dummy_rel_pathlist`.
+fn members_scan<'q>(
+    level: &Level<'q>,
+    r: usize,
+    quals: &[Qual<'q>],
+    members: Vec<Member>,
+    stats: &mut Stats,
+) -> Rel<'q> {
+    let selectivity: f64 = quals.iter().map(|q| cost::selectivity(q.expr)).product();
+    let per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| q.expr));
+    let (mut tuples, mut rows) = (0.0, 0.0);
+    let mut children = Vec::with_capacity(members.len());
+    for member in &members {
+        let (pages, count) = cost::member_size(member);
+        let mut node = Node::new(Kind::SeqScan(r), level.scope, Vec::new());
+        node.member = Some(member.oid);
+        node.filter = quals.iter().map(|q| Item::of(q.expr)).collect();
+        let n = cost::clamp_rows(count * selectivity);
+        let total = pages * cost::SEQ_PAGE + count * per_row;
+        node.cost = Cost { startup: 0.0, total, rows: n, width: 0 };
+        tuples += count;
+        rows += n;
+        children.push(node);
+    }
+    stats.insert(r, (tuples, rows));
+    let rels = BTreeSet::from([r]);
+    let node = match children.len() {
+        0 => dummy(level.scope, &rels),
+        1 => children.remove(0),
+        _ => {
+            // `cost_append`: the start of the first member, and the costs of all the members with half of `cpu_tuple_cost` for each row.
+            let startup = children[0].cost.startup;
+            let total: f64 = children.iter().map(|c| c.cost.total).sum::<f64>()
+                + cost::CPU_TUPLE * cost::APPEND_CPU * rows;
+            let mut node = Node::new(Kind::Append, level.scope, children);
+            node.cost = Cost { startup, total, rows, width: 0 };
+            node
+        }
+    };
+    Rel { node, rels, order: Vec::new() }
 }
 
 /// The tree of a part of `FROM`. A right join is a left join with the sides in the other order.

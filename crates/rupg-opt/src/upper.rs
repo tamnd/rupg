@@ -276,6 +276,7 @@ impl<'q> Builder<'q> {
                     query: update,
                     parent: Some(level.scope),
                     target: false,
+                    leaf: None,
                 });
                 let mut parts = Vec::new();
                 if let Some(cond) = &update.filter {
@@ -298,7 +299,7 @@ impl<'q> Builder<'q> {
         let relation = if operation == Operation::Insert { TARGET } else { 0 };
         let c = node.cost;
         let mut out = Node::new(
-            Kind::Modify { operation, table: write.table, relation, conflict },
+            Kind::Modify { operation, table: write.table, relation, conflict, targets: Vec::new() },
             level.scope,
             vec![node],
         );

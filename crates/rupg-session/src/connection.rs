@@ -5273,6 +5273,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/partition_pruning.test")));
     }
 
+    /// `EXPLAIN` of a partitioned table and of a table with children of `INHERITS`: an `Append` of the scans of the leaves that the conditions do not prune, one scan with no `Append` for one leaf, a `Result` for no leaf, and the target tables of `UPDATE` and `DELETE`. `connection/explain_append.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn explain_append() {
+        big_stack(|| script(include_str!("connection/explain_append.test")));
+    }
+
     /// `pg_get_partition_constraintdef` for list, range and hash partitions, default partitions before and after other partitions, a key of more than one column with `MINVALUE` and `MAXVALUE`, a key of expressions, a key column whose type is not the one of the operator class, a partition of a partition with its columns in another order, and a table that is not a partition. `connection/partition_constraintdef.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn partition_constraintdef() {

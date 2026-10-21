@@ -51,6 +51,13 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
     }
     let set_op = level.query.set_op.is_some();
     match &node.kind {
+        // `create_append_plan`: the members of an inheritance tree give the items that the node above reads, and the `Append` gives the rows of its members as they are.
+        Kind::Append if node.children.iter().all(|c| c.member.is_some()) => {
+            for child in &mut node.children {
+                set(level, child, want.clone(), false);
+            }
+            node.cost.width = node.children.first().map_or(0, |c| c.cost.width);
+        }
         Kind::Append | Kind::SetOp { .. } | Kind::RecursiveUnion => {}
         Kind::Aggregate { .. } if set_op => {
             node.output = want.iter().map(Item::passed).collect();
@@ -153,6 +160,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             let plain =
                 want.iter().all(|w| matches!(w.expr.kind, ExprKind::Var(v) if v.attnum > 0));
+            let physical = physical && node.member.is_none();
             node.output = if physical && plain { all_columns(level, r) } else { want };
             if matches!(node.kind, Kind::SubqueryScan(_)) && trivial(level, node, r) {
                 let child = node.children.pop();

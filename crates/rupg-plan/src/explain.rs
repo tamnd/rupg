@@ -137,6 +137,14 @@ fn names(kind: &Kind<'_>) -> Names {
     }
 }
 
+/// The table of the scan of a member below a node that has the scope `scope`.
+fn find_member(node: &Node<'_>, scope: usize) -> Option<u32> {
+    if node.scope == scope && node.member.is_some() {
+        return node.member;
+    }
+    node.children.iter().find_map(|child| find_member(child, scope))
+}
+
 /// The name of a kind of join.
 fn join_type(kind: JoinKind) -> &'static str {
     match kind {
@@ -307,7 +315,8 @@ impl Explainer<'_, '_> {
             .kind
         {
             Kind::SeqScan(r) | Kind::SampleScan(r) => {
-                (r, Some("Relation Name"), Some((relation_of(r).oid, false)))
+                let table = node.member.unwrap_or(relation_of(r).oid);
+                (r, Some("Relation Name"), Some((table, false)))
             }
             Kind::FunctionScan(r) => {
                 let function = relation_of(r).function.as_ref();
@@ -477,7 +486,9 @@ impl Explainer<'_, '_> {
                 let spec = self.texts.window(scope, *window, *rows_frame, upper)?;
                 self.w.text("Window", &format!("{} AS {spec}", self.texts.quote(name)));
             }
-            Kind::Modify { conflict: Some(conflict), .. } => {
+            Kind::Modify { operation, targets, conflict, .. } => {
+                self.modify_targets(node, operation.name(), targets);
+                let Some(conflict) = conflict else { return Ok(()) };
                 self.w.text(
                     "Conflict Resolution",
                     if conflict.update { "UPDATE" } else { "NOTHING" },
@@ -497,6 +508,38 @@ impl Explainer<'_, '_> {
             _ => {}
         }
         Ok(())
+    }
+
+    /// The tables of the members of an inheritance tree that a `ModifyTable` changes, as `show_modifytable_info` labels them: a line for each in text, as `Update on r1 r_1`, and a group `Target Tables` in the other forms.
+    fn modify_targets(&mut self, node: &Node<'_>, operation: &str, targets: &[usize]) {
+        if targets.is_empty() {
+            return;
+        }
+        let text = self.w.format == Format::Text;
+        self.w.open_group("Target Tables", Some("Target Tables"), false);
+        for &scope in targets {
+            let Some(leaf) = self.plan.scopes.get(scope).and_then(|s| s.leaf) else { continue };
+            let member = find_member(node, scope).unwrap_or_default();
+            let (name, schema) = self.texts.object(member, false);
+            let refname = self.texts.refname(scope, leaf.relation);
+            let target = Target {
+                tag: Some("Relation Name"),
+                object: Some(name),
+                schema: self.options.verbose.then_some(schema),
+                refname,
+            };
+            self.w.open_group("Target Table", None, true);
+            if text {
+                self.w.indent_text();
+                self.w.buf.push_str(operation);
+            }
+            self.write_target(&target);
+            if text {
+                self.w.buf.push('\n');
+            }
+            self.w.close_group("Target Table", true);
+        }
+        self.w.close_group("Target Tables", false);
     }
 
     /// `show_qual`: the conditions of a node, with `AND` between them, or nothing for no condition.

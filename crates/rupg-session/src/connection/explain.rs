@@ -1,7 +1,11 @@
 //! `EXPLAIN`, as `ExplainQuery` of `explain.c` runs it: the options, the plan of the query and the rows of its output. `EXPLAIN ANALYZE` is not supported yet.
 
-use rupg_analyze::Params;
+use std::cell::RefCell;
+
+use rupg_analyze::{Params, Query};
 use rupg_common::{Error, SqlState};
+use rupg_func::Session;
+use rupg_opt::Member;
 use rupg_plan::{Format, Options};
 use rupg_sql::nodes::{DefElem, ExplainStmt, Node};
 use rupg_types::oid;
@@ -10,8 +14,39 @@ use rupg_wire::CommandTag;
 use super::copy::{def_boolean, def_string};
 use super::extended::protocol_error;
 use super::{Connection, Done};
-use crate::query::{self, Column};
+use crate::query::{self, Column, Reader};
 use crate::utility::Notice;
+
+/// The members of the inheritance trees of the relations of a plan, from the catalog of the statement. The first error of the pruning of the partitions is the error of the statement.
+#[derive(Debug)]
+struct Members<'r, 'a> {
+    reader: &'r Reader<'a>,
+    error: RefCell<Option<Error>>,
+}
+
+impl rupg_opt::Members for Members<'_, '_> {
+    fn members(&self, query: &Query, relation: usize) -> Option<Vec<Member>> {
+        let oids = match rupg_exec::members(query, relation, self.reader) {
+            Ok(oids) => oids?,
+            Err(error) => {
+                self.error.borrow_mut().get_or_insert(error);
+                return None;
+            }
+        };
+        let catalog = self.reader.catalog()?;
+        let members = oids
+            .into_iter()
+            .filter_map(|oid| {
+                let table = catalog.relation(oid)?;
+                let columns =
+                    table.columns.iter().filter(|c| !c.dropped).map(|c| (c.ty, c.typmod)).collect();
+                let has_children = !catalog.all_inheritors(oid).is_empty();
+                Some(Member { oid, columns, has_children })
+            })
+            .collect();
+        Some(members)
+    }
+}
 
 /// The options of `EXPLAIN`, as `ParseExplainOptionList` reads them.
 #[derive(Debug, Default)]
@@ -157,7 +192,11 @@ impl Connection {
         let plan = plan.fold(None, &reader);
         notices.extend(reader.take_warnings().into_iter().map(Notice::of_function));
         let plan = plan?;
-        let tree = rupg_opt::plan(plan.query());
+        let members = Members { reader: &reader, error: RefCell::new(None) };
+        let tree = rupg_opt::plan(plan.query(), &members);
+        if let Some(error) = members.error.take() {
+            return Err(error);
+        }
         let planning_time = parsed.summary.unwrap_or(false).then(|| {
             let spent = self.clock.monotonic().saturating_sub(started);
             spent.as_secs_f64() * 1000.0

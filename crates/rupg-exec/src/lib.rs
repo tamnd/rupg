@@ -3000,6 +3000,7 @@ mod window;
 
 pub use insert::failing_row;
 pub use partition::{Router, leaves as partition_leaves};
+pub use scan::members;
 pub use user::variadic_type;
 
 #[cfg(test)]

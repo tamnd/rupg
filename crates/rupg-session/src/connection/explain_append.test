@@ -1,0 +1,211 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE r (k int, v text) PARTITION BY RANGE (k);
+CREATE TABLE
+> CREATE TABLE r1 PARTITION OF r FOR VALUES FROM (MINVALUE) TO (10);
+CREATE TABLE
+> CREATE TABLE r2 PARTITION OF r FOR VALUES FROM (10) TO (20);
+CREATE TABLE
+> CREATE TABLE r3 PARTITION OF r FOR VALUES FROM (20) TO (30) PARTITION BY LIST (v);
+CREATE TABLE
+> CREATE TABLE r3a PARTITION OF r3 FOR VALUES IN ('a');
+CREATE TABLE
+> CREATE TABLE r3b PARTITION OF r3 FOR VALUES IN ('b');
+CREATE TABLE
+> CREATE TABLE rd PARTITION OF r DEFAULT;
+CREATE TABLE
+> CREATE TABLE p (a int, b text);
+CREATE TABLE
+> CREATE TABLE c1 (x int) INHERITS (p);
+CREATE TABLE
+> CREATE TABLE c2 () INHERITS (p);
+CREATE TABLE
+> CREATE TABLE e (k int) PARTITION BY LIST (k);
+CREATE TABLE
+> EXPLAIN (COSTS OFF) SELECT * FROM r;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on r1 r_1
+row   ->  Seq Scan on r2 r_2
+row   ->  Seq Scan on r3a r_3
+row   ->  Seq Scan on r3b r_4
+row   ->  Seq Scan on rd r_5
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE k = 15;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on r2 r
+row   Filter: (k = 15)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE k < 15;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on r1 r_1
+row         Filter: (k < 15)
+row   ->  Seq Scan on r2 r_2
+row         Filter: (k < 15)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE k = 25 AND v = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on r3a r
+row   Filter: ((k = 25) AND (v = 'a'::text))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE k > 20;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on r3a r_1
+row         Filter: (k > 20)
+row   ->  Seq Scan on r3b r_2
+row         Filter: (k > 20)
+row   ->  Seq Scan on rd r_3
+row         Filter: (k > 20)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ONLY r;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on r
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE k = 15 AND k = 25;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on r
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT count(*) FROM r;
+fields QUERY PLAN:25:-1:-1
+row Aggregate
+row   ->  Append
+row         ->  Seq Scan on r1 r_1
+row         ->  Seq Scan on r2 r_2
+row         ->  Seq Scan on r3a r_3
+row         ->  Seq Scan on r3b r_4
+row         ->  Seq Scan on rd r_5
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r x WHERE x.k IN (1, 15) ORDER BY k;
+fields QUERY PLAN:25:-1:-1
+row Sort
+row   Sort Key: x.k
+row   ->  Append
+row         ->  Seq Scan on r1 x_1
+row               Filter: (k = ANY ('{1,15}'::integer[]))
+row         ->  Seq Scan on r2 x_2
+row               Filter: (k = ANY ('{1,15}'::integer[]))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM p;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on p p_1
+row   ->  Seq Scan on c1 p_2
+row   ->  Seq Scan on c2 p_3
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM ONLY p;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM p WHERE a = 1;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on p p_1
+row         Filter: (a = 1)
+row   ->  Seq Scan on c1 p_2
+row         Filter: (a = 1)
+row   ->  Seq Scan on c2 p_3
+row         Filter: (a = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM c1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c1
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM e;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on e
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r JOIN p ON p.a < r.k WHERE r.k = 5;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop
+row   Join Filter: (p.a < r.k)
+row   ->  Append
+row         ->  Seq Scan on p p_1
+row         ->  Seq Scan on c1 p_2
+row         ->  Seq Scan on c2 p_3
+row   ->  Materialize
+row         ->  Seq Scan on r1 r
+row               Filter: (k = 5)
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE r SET v = 'x' WHERE k = 15;
+fields QUERY PLAN:25:-1:-1
+row Update on r
+row   Update on r2 r_1
+row   ->  Seq Scan on r2 r_1
+row         Filter: (k = 15)
+EXPLAIN
+> EXPLAIN (COSTS OFF) DELETE FROM p WHERE a = 1;
+fields QUERY PLAN:25:-1:-1
+row Delete on p
+row   Delete on p p_1
+row   Delete on c1 p_2
+row   Delete on c2 p_3
+row   ->  Append
+row         ->  Seq Scan on p p_1
+row               Filter: (a = 1)
+row         ->  Seq Scan on c1 p_2
+row               Filter: (a = 1)
+row         ->  Seq Scan on c2 p_3
+row               Filter: (a = 1)
+EXPLAIN
+> EXPLAIN (COSTS OFF) UPDATE r SET v = 'x' WHERE k < 15;
+fields QUERY PLAN:25:-1:-1
+row Update on r
+row   Update on r1 r_1
+row   Update on r2 r_2
+row   ->  Append
+row         ->  Seq Scan on r1 r_1
+row               Filter: (k < 15)
+row         ->  Seq Scan on r2 r_2
+row               Filter: (k < 15)
+EXPLAIN
+> EXPLAIN SELECT * FROM r WHERE k = 15;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on r2 r  (cost=0.00..25.88 rows=6 width=36)
+row   Filter: (k = 15)
+EXPLAIN
+> EXPLAIN SELECT * FROM r;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..145.25 rows=6350 width=36)
+row   ->  Seq Scan on r1 r_1  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Seq Scan on r2 r_2  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Seq Scan on r3a r_3  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Seq Scan on r3b r_4  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Seq Scan on rd r_5  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT * FROM r WHERE k < 15;
+fields QUERY PLAN:25:-1:-1
+row Append
+row   ->  Seq Scan on public.r1 r_1
+row         Output: r_1.k, r_1.v
+row         Filter: (r_1.k < 15)
+row   ->  Seq Scan on public.r2 r_2
+row         Output: r_2.k, r_2.v
+row         Filter: (r_2.k < 15)
+EXPLAIN
+> EXPLAIN SELECT * FROM p;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..57.06 rows=2471 width=36)
+row   ->  Seq Scan on p p_1  (cost=0.00..0.00 rows=1 width=36)
+row   ->  Seq Scan on c1 p_2  (cost=0.00..22.00 rows=1200 width=36)
+row   ->  Seq Scan on c2 p_3  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE k IN (1, 15) AND k = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on r1 r
+row   Filter: ((k = ANY ('{1,15}'::integer[])) AND (k = 1))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM r WHERE k IS NULL AND k = 1;
+fields QUERY PLAN:25:-1:-1
+row Result
+row   Replaces: Scan on r
+row   One-Time Filter: false
+EXPLAIN

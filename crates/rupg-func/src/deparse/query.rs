@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use rupg_analyze::{
     Column, Cte, FRAMEOPTION_END_OFFSET, FRAMEOPTION_END_UNBOUNDED_FOLLOWING,
     FRAMEOPTION_START_OFFSET, Frame, FromFunction, FromItem, GroupingSet, Join, JoinKind, JoinRow,
-    NullTreatment, Query, SetKind, SetOp, SetTree, TableSample,
+    NullTreatment, Query, Relation, SetKind, SetOp, SetTree, TableSample,
 };
 use rupg_sql::nodes::{
     FRAMEOPTION_BETWEEN, FRAMEOPTION_END_CURRENT_ROW, FRAMEOPTION_END_OFFSET_PRECEDING,
@@ -93,6 +93,14 @@ impl Deparser<'_> {
         self.namespace_in(query, &mut used, false)
     }
 
+    /// The name of a relation before `set_rtable_names` makes it unique: the alias, or else the name of the table.
+    pub(super) fn base_name(&self, rel: &Relation) -> String {
+        match reg::class_name(rel.oid, self.session) {
+            Some((name, _)) if rel.alias.is_none() && rel.oid != 0 => name.to_string(),
+            _ => rel.name.clone(),
+        }
+    }
+
     /// [`Deparser::namespace`] with the names that are in use. For `EXPLAIN`, as `select_rtable_names_for_explain`, a join has no name, because no node of the plan reads a join, and a column of `USING` shows as its value.
     pub(super) fn namespace_in(
         &self,
@@ -120,11 +128,7 @@ impl Deparser<'_> {
             match *slot {
                 Slot::Relation(i) => {
                     let Some(rel) = query.relations.get(i) else { continue };
-                    let base = match reg::class_name(rel.oid, self.session) {
-                        Some((name, _)) if rel.alias.is_none() && rel.oid != 0 => name.to_string(),
-                        _ => rel.name.clone(),
-                    };
-                    space.names[i] = unique_name(base, used);
+                    space.names[i] = unique_name(self.base_name(rel), used);
                 }
                 Slot::Join(k) => {
                     if let Some(alias) = &joins[k].join.alias

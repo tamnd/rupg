@@ -240,7 +240,10 @@ impl Dispatch {
             let ty = self.types[i];
             for clause in clauses.iter().filter(|c| c.attnum == attnum) {
                 if clause.operator == 0 {
-                    allowed.equal.get_or_insert_with(|| vec![Value::Null]);
+                    match &mut allowed.equal {
+                        Some(old) => old.retain(Value::is_null),
+                        None => allowed.equal = Some(vec![Value::Null]),
+                    }
                     continue;
                 }
                 let Some(strategy) = self.strategy_of(i, clause) else { continue };
@@ -248,7 +251,17 @@ impl Dispatch {
                     clause.values.iter().map(|v| fit(v, clause.ty, ty)).collect();
                 let Some(values) = values else { continue };
                 if strategy == EQUAL {
-                    allowed.equal.get_or_insert(values);
+                    // Two conditions of `=` on the column leave the values that both allow.
+                    let merged = match allowed.equal.take() {
+                        None => values,
+                        Some(old) => old
+                            .into_iter()
+                            .filter(|o| {
+                                values.iter().any(|v| self.cmp(i, o, v) == Some(Ordering::Equal))
+                            })
+                            .collect(),
+                    };
+                    allowed.equal = Some(merged);
                     continue;
                 }
                 // A collation can give another order than the order of the bounds.
@@ -300,6 +313,10 @@ impl Dispatch {
     /// For each partition, true when it can have rows that pass the conditions.
     fn kept(&self, allowed: &[Allowed]) -> Vec<bool> {
         let all = vec![true; self.parts.len()];
+        // Conditions that no value passes, as `k = 1 AND k = 2`, leave no partition.
+        if allowed.iter().any(|a| a.equal.as_ref().is_some_and(Vec::is_empty)) {
+            return vec![false; self.parts.len()];
+        }
         if !allowed.is_empty() && allowed.iter().all(|a| a.equal.is_some()) {
             return self.kept_equal(allowed).unwrap_or(all);
         }

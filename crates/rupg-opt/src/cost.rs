@@ -4,12 +4,14 @@ use rupg_analyze::{BoolOp, Expr, ExprKind, Relation};
 use rupg_pgcatalog::builtin;
 use rupg_types::oid;
 
-use crate::exprs;
+use crate::{Member, exprs};
 
 /// `seq_page_cost`.
 pub(crate) const SEQ_PAGE: f64 = 1.0;
 /// `cpu_tuple_cost`.
 pub(crate) const CPU_TUPLE: f64 = 0.01;
+/// `APPEND_CPU_COST_MULTIPLIER`: the part of `cpu_tuple_cost` that an `Append` costs for each row.
+pub(crate) const APPEND_CPU: f64 = 0.5;
 /// `cpu_operator_cost`.
 pub(crate) const CPU_OPERATOR: f64 = 0.0025;
 /// The number of pages that the planner takes for a table that `VACUUM` and `ANALYZE` have not seen, as `estimate_rel_size`.
@@ -81,6 +83,16 @@ pub(crate) fn expr_width(expr: &Expr, relations: &[Relation]) -> i32 {
 /// `estimate_rel_size` for a table that has no pages yet: the pages and the rows.
 pub(crate) fn table_size(relation: &Relation) -> (f64, f64) {
     let density = (PAGE_SPACE / (row_width(relation) + TUPLE_OVERHEAD)).max(1);
+    (DEFAULT_PAGES, DEFAULT_PAGES * f64::from(density))
+}
+
+/// `estimate_rel_size` for a member of an inheritance tree that has no pages yet. A table with children has no pages, because `relhassubclass` keeps the planner from taking ten pages for it.
+pub(crate) fn member_size(member: &Member) -> (f64, f64) {
+    if member.has_children {
+        return (0.0, 0.0);
+    }
+    let width: i32 = member.columns.iter().map(|&(ty, typmod)| type_width(ty, typmod)).sum();
+    let density = (PAGE_SPACE / (width + TUPLE_OVERHEAD)).max(1);
     (DEFAULT_PAGES, DEFAULT_PAGES * f64::from(density))
 }
 
