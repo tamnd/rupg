@@ -96,6 +96,28 @@ row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
 row                     Sort Key: b.x
 row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
 EXPLAIN
+> EXPLAIN SELECT * FROM a, b, c, d WHERE a.x = b.x AND b.x = c.x AND c.x = d.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=676.58..63907.08 rows=4151528 width=24)
+row   Merge Cond: (a.x = c.x)
+row   ->  Merge Join  (cost=317.01..711.38 rows=25538 width=16)
+row         Merge Cond: (a.x = b.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: a.x
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=359.57..941.28 rows=32512 width=8)
+row         ->  Merge Join  (cost=359.57..860.00 rows=32512 width=8)
+row               Merge Cond: (c.x = d.x)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: d.x
+row                     ->  Seq Scan on d  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
 > EXPLAIN SELECT * FROM a, c, e WHERE a.x = e.x AND e.x = c.x;
 fields QUERY PLAN:25:-1:-1
 row Merge Join  (cost=496.79..5788.06 rows=325610 width=20)

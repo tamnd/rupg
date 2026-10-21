@@ -1,4 +1,4 @@
-//! `standard_join_search`: the order of the joins of a join domain, by dynamic programming over the sets of its items, as `join_search_one_level` does it. Each set of items keeps the plans that `add_path` keeps, and when the sets of each number of items are made, each of them takes the plan with the lowest total cost, as `set_cheapest`.
+//! `standard_join_search`: the order of the joins of a join domain, by dynamic programming over the sets of its items, as `join_search_one_level` does it. Each set of items keeps the plans that `add_path` keeps. When the sets of each number of items are made, each of them makes these plans, with the plan with the lowest total cost first, as `set_cheapest`. A join of two sets reads the cheapest plan of each side, and a merge join can also read another plan of a side that is in the order of the merge.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -18,8 +18,8 @@ struct Set<'q> {
     /// One bit for each item of the set.
     items: u64,
     rels: BTreeSet<usize>,
-    /// The plan of the set, which it gets when the sets of its number of items are all made.
-    rel: Option<Rel<'q>>,
+    /// The plans of the set, the plan with the lowest total cost first, which it gets when the sets of its number of items are all made.
+    plans: Vec<Rel<'q>>,
     /// The plans of the joins of two sets that make the set, with the outer set and the inner set of each.
     paths: Paths<(usize, usize, Candidate<'q>)>,
     rows: f64,
@@ -80,7 +80,7 @@ pub(super) fn search<'q>(
         problem.sets.push(Set {
             items: 1 << i,
             rels: rel.rels.clone(),
-            rel: Some(rel.clone()),
+            plans: vec![rel.clone()],
             paths: Paths::new(stats.startup),
             rows: rel.node.cost.rows,
             lateral,
@@ -94,7 +94,9 @@ pub(super) fn search<'q>(
         problem.set_cheapest(k);
     }
     let best = problem.levels[n][0];
-    let Some(rel) = problem.sets.swap_remove(best).rel else { unreachable!("each set has a plan") };
+    let Some(rel) = problem.sets.swap_remove(best).plans.into_iter().next() else {
+        unreachable!("each set has a plan")
+    };
     rel
 }
 
@@ -137,23 +139,21 @@ fn between<'q>(
 }
 
 impl<'q> Problem<'_, 'q> {
-    fn rel(&self, s: usize) -> &Rel<'q> {
-        let Some(rel) = &self.sets[s].rel else { unreachable!("a set of fewer items has a plan") };
-        rel
-    }
-
-    /// `set_cheapest` for the sets of `k` items: the plan of each set is its plan with the lowest total cost.
+    /// `set_cheapest` for the sets of `k` items: each set makes the plans that it keeps, with the plan with the lowest total cost first.
     fn set_cheapest(&mut self, k: usize) {
         for s in self.levels[k].clone() {
             let paths = std::mem::replace(&mut self.sets[s].paths, Paths::new(self.stats.startup));
-            let Some((outer, inner, best)) = paths.cheapest() else {
-                unreachable!("each join of two sets has a nested loop")
-            };
-            let (l, r) = (self.rel(outer).clone(), self.rel(inner).clone());
-            let quals = between(self.pool, self.classes, &l.rels, &r.rels);
-            let mut rel = finish(self.level, &best, l, r, &quals, &[], self.sets[s].rows);
-            rel.node.cost.width = self.stats.width(&rel.rels);
-            self.sets[s].rel = Some(rel);
+            let mut plans = Vec::new();
+            for (outer, inner, best) in paths.kept() {
+                let (l, r) = if best.swapped { (best.paths.1, best.paths.0) } else { best.paths };
+                let (l, r) = (self.sets[outer].plans[l].clone(), self.sets[inner].plans[r].clone());
+                let quals = between(self.pool, self.classes, &l.rels, &r.rels);
+                let mut rel = finish(self.level, &best, l, r, &quals, &[], self.sets[s].rows);
+                rel.node.cost.width = self.stats.width(&rel.rels);
+                plans.push(rel);
+            }
+            assert!(!plans.is_empty(), "each join of two sets has a nested loop");
+            self.sets[s].plans = plans;
         }
     }
 
@@ -246,8 +246,9 @@ impl<'q> Problem<'_, 'q> {
             return;
         }
         let (outer, inner) = if a_reads_b { (b, a) } else { (a, b) };
-        let (l, r) = (self.rel(outer), self.rel(inner));
-        let quals = between(self.pool, self.classes, &l.rels, &r.rels);
+        let (l, r) = (&self.sets[outer].plans, &self.sets[inner].plans);
+        let quals =
+            between(self.pool, self.classes, &self.sets[outer].rels, &self.sets[inner].rels);
         let candidates = choose(self.level, JoinKind::Inner, l, r, &quals, &[], self.stats);
         if candidates.is_empty() {
             return;
@@ -255,12 +256,12 @@ impl<'q> Problem<'_, 'q> {
         let at = match self.index.get(&items) {
             Some(&e) => e,
             None => {
-                let rows = join_rows(JoinKind::Inner, l, r, &quals, &[], self.stats);
+                let rows = join_rows(JoinKind::Inner, &l[0], &r[0], &quals, &[], self.stats);
                 let at = self.sets.len();
                 self.index.insert(items, at);
                 self.levels[items.count_ones() as usize].push(at);
                 let paths = Paths::new(self.stats.startup);
-                self.sets.push(Set { items, rels, rel: None, paths, rows, lateral });
+                self.sets.push(Set { items, rels, plans: Vec::new(), paths, rows, lateral });
                 at
             }
         };

@@ -112,9 +112,9 @@ pub(crate) fn member_size(member: &Member) -> (f64, f64) {
     (DEFAULT_PAGES, DEFAULT_PAGES * f64::from(density))
 }
 
-/// `clamp_row_est`: a number of rows that is a whole number and at least 1.
+/// `clamp_row_est`: a number of rows that is a whole number and at least 1. As `rint`, a half goes to the even number.
 pub(crate) fn clamp_rows(rows: f64) -> f64 {
-    if rows <= 1.0 { 1.0 } else { rows.round() }
+    if rows <= 1.0 { 1.0 } else { rows.round_ties_even() }
 }
 
 /// `clause_selectivity` with no statistics: the fraction of the rows that pass a condition.
