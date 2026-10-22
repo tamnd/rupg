@@ -239,8 +239,8 @@ pub enum Kind<'q> {
     SetOp { except: bool, all: bool },
     /// `RecursiveUnion`.
     RecursiveUnion,
-    /// `WindowAgg`, with the name of the window and its index in the windows of the query.
-    WindowAgg { name: String, window: usize, rows_frame: bool },
+    /// `WindowAgg`, with the name of the window, its index in the windows of the query, and the places of the items of its `PARTITION BY` that are not redundant, as `make_pathkeys_for_window` keeps them.
+    WindowAgg { name: String, window: usize, rows_frame: bool, partition: Vec<usize> },
     /// `ProjectSet`: a target list with functions that give sets.
     ProjectSet,
     /// `LockRows`: `FOR UPDATE` and the other locks of rows.
@@ -329,7 +329,7 @@ pub trait Texts {
     /// The name and the schema of a relation or of a function.
     fn object(&mut self, oid: u32, function: bool) -> (String, String);
 
-    /// The text of the definition of a window of the query of a scope, as `(PARTITION BY ...)`. With `rows_frame` the frame is `ROWS UNBOUNDED PRECEDING`, which the planner gives to the windows of `row_number` and the other functions of ranks.
+    /// The text of the definition of a window of the query of a scope, as `(PARTITION BY ...)`. With `rows_frame` the frame is `ROWS UNBOUNDED PRECEDING`, which the planner gives to the windows of `row_number` and the other functions of ranks. `PARTITION BY` shows the items at the places `partition`.
     ///
     /// # Errors
     ///
@@ -339,6 +339,7 @@ pub trait Texts {
         scope: usize,
         window: usize,
         rows_frame: bool,
+        partition: &[usize],
         prefix: bool,
     ) -> Result<String>;
 }

@@ -5321,7 +5321,7 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_groups.test")));
     }
 
-    /// `EXPLAIN` of the keys of `GROUP BY`, `DISTINCT` and `ORDER BY` without the keys that add nothing: a key whose equivalence class has a constant, a key in the class of an earlier key, as `pathkey_is_redundant` finds them, and a column of `GROUP BY` that a unique index of the other columns of its table gives, as `remove_useless_groupby_columns` finds it. A `DISTINCT` with no keys left takes the first row. `connection/plan_redundant_keys.test` is the output of PostgreSQL 19 for the same script in a new database.
+    /// `EXPLAIN` of the keys of `GROUP BY`, `DISTINCT` and `ORDER BY` without the keys that add nothing: a key whose equivalence class has a constant, a key in the class of an earlier key, as `pathkey_is_redundant` finds them, and a column of `GROUP BY` that a unique index of the other columns of its table gives, as `remove_useless_groupby_columns` finds it. A `DISTINCT` with no keys left takes the first row, and a window shows only the items of `PARTITION BY` that are not redundant. `connection/plan_redundant_keys.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_redundant_keys() {
         big_stack(|| script(include_str!("connection/plan_redundant_keys.test")));

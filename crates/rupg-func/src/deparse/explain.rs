@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::ptr;
 
-use rupg_analyze::{Expr, SubLink, SubLinkKind};
+use rupg_analyze::{Expr, SortGroup, SubLink, SubLinkKind};
 use rupg_plan::{Kind, Node, Plan, TARGET, Texts};
 use rupg_sql::nodes::FRAMEOPTION_NONDEFAULT;
 
@@ -178,6 +178,7 @@ impl Texts for PlanTexts<'_, '_> {
         scope: usize,
         window: usize,
         rows_frame: bool,
+        partition: &[usize],
         prefix: bool,
     ) -> Result<String> {
         let query = self.plan.scopes[scope].query;
@@ -194,9 +195,11 @@ impl Texts for PlanTexts<'_, '_> {
         };
         let mut d = self.deparser(scope, prefix)?;
         d.buf.push('(');
-        if !clause.partition.is_empty() {
+        let items: Vec<&SortGroup> =
+            partition.iter().filter_map(|&i| clause.partition.get(i)).collect();
+        if !items.is_empty() {
             d.buf.push_str("PARTITION BY ");
-            for (i, item) in clause.partition.iter().enumerate() {
+            for (i, item) in items.iter().enumerate() {
                 if i > 0 {
                     d.buf.push_str(", ");
                 }
@@ -204,7 +207,7 @@ impl Texts for PlanTexts<'_, '_> {
             }
         }
         if !clause.order.is_empty() {
-            if !clause.partition.is_empty() {
+            if !items.is_empty() {
                 d.buf.push(' ');
             }
             d.buf.push_str("ORDER BY ");
@@ -231,7 +234,7 @@ impl Texts for PlanTexts<'_, '_> {
                 }
             }
         }
-        let space = !clause.partition.is_empty() || !clause.order.is_empty();
+        let space = !items.is_empty() || !clause.order.is_empty();
         if rows_frame {
             if space {
                 d.buf.push(' ');

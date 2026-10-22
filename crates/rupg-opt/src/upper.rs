@@ -757,34 +757,43 @@ fn window_calls(query: &Query) -> Vec<Vec<&WindowFunc>> {
     out
 }
 
-/// The keys of the sort of a window: the items of `PARTITION BY`, then the items of `ORDER BY`.
-fn window_keys<'q>(level: &Level<'q>, window: usize) -> Vec<SortKey<'q>> {
+/// The places of the items of `PARTITION BY` of a window whose keys are not redundant, as `make_pathkeys_for_window` keeps them.
+fn window_partition(level: &Level<'_>, window: usize) -> Vec<usize> {
     let clause = &level.query.windows[window];
-    let mut keys: Vec<SortKey<'q>> = Vec::new();
-    for item in clause.partition.iter().chain(&clause.order) {
-        let key = sort_key(level.target(item.target), item);
-        if !keys.iter().any(|k| k.item.expr.same(&key.item.expr)) {
-            keys.push(key);
-        }
-    }
-    keys
+    let items = clause.partition.iter().enumerate().collect();
+    let items = level.stats.canonical(items, |(_, item)| level.target(item.target));
+    items.into_iter().map(|(i, _)| i).collect()
+}
+
+/// The keys of the sort of a window: the items of `PARTITION BY` at the places `partition`, then the items of `ORDER BY`, without the keys that are redundant, as `make_pathkeys_for_window`.
+fn window_keys<'q>(level: &Level<'q>, window: usize, partition: &[usize]) -> Vec<SortKey<'q>> {
+    let clause = &level.query.windows[window];
+    let items = partition.iter().map(|&i| &clause.partition[i]).chain(&clause.order);
+    let keys = items.map(|item| sort_key(level.target(item.target), item)).collect();
+    level.stats.canonical(keys, |k| &*k.item.expr)
 }
 
 /// `get_windowclause_startup_tuples`: the rows that a window reads before its first row, for the options of its frame after `optimize_window_clauses`.
-fn startup_tuples(level: &Level<'_>, window: usize, rows: f64, options: i32) -> f64 {
+fn startup_tuples(
+    level: &Level<'_>,
+    window: usize,
+    partition: &[usize],
+    rows: f64,
+    options: i32,
+) -> f64 {
     let clause = &level.query.windows[window];
-    let exprs = |items: &[SortGroup]| -> Vec<&Expr> {
-        items.iter().map(|i| level.target(i.target)).collect()
-    };
-    let partition_rows = if clause.partition.is_empty() {
+    let partition_rows = if partition.is_empty() {
         rows
     } else {
-        rows / level.stats.groups(&exprs(&clause.partition), rows)
+        let exprs: Vec<&Expr> =
+            partition.iter().map(|&i| level.target(clause.partition[i].target)).collect();
+        rows / level.stats.groups(&exprs, rows)
     };
     let peer_rows = if clause.order.is_empty() {
         1.0
     } else {
-        partition_rows / level.stats.groups(&exprs(&clause.order), partition_rows)
+        let exprs: Vec<&Expr> = clause.order.iter().map(|i| level.target(i.target)).collect();
+        partition_rows / level.stats.groups(&exprs, partition_rows)
     };
     let out = if options & FRAME_END_UNBOUNDED_FOLLOWING != 0 {
         partition_rows
@@ -807,7 +816,7 @@ fn startup_tuples(level: &Level<'_>, window: usize, rows: f64, options: i32) -> 
         1.0
     };
     // The window reads one more row to know that the row before it is the last of its frame.
-    let out = if clause.partition.is_empty() && clause.order.is_empty() {
+    let out = if partition.is_empty() && clause.order.is_empty() {
         out.min(partition_rows)
     } else {
         (out + 1.0).min(partition_rows)
@@ -819,7 +828,8 @@ fn startup_tuples(level: &Level<'_>, window: usize, rows: f64, options: i32) -> 
 fn sort_refs(query: &Query) -> Vec<u32> {
     let mut refs = vec![0; query.targets.len()];
     let mut next = 0;
-    let windows = query.windows.iter().flat_map(|w| w.partition.iter().chain(&w.order));
+    // `transformWindowDefinitions` takes the items of `ORDER BY` of a window before its items of `PARTITION BY`.
+    let windows = query.windows.iter().flat_map(|w| w.order.iter().chain(&w.partition));
     for item in query.sort.iter().chain(&query.group).chain(&query.distinct).chain(windows) {
         if let Some(slot) = refs.get_mut(item.target)
             && *slot == 0
@@ -876,7 +886,8 @@ fn windows<'q>(
     let mut number = 0;
     for window in active {
         let clause = &level.query.windows[window];
-        node = sort_if(level, node, window_keys(level, window), order, None, only)?;
+        let partition = window_partition(level, window);
+        node = sort_if(level, node, window_keys(level, window, &partition), order, None, only)?;
         let c = node.cost;
         let mut total = c.total;
         for call in &calls[window] {
@@ -884,7 +895,7 @@ fn windows<'q>(
             let filter = call.filter.as_deref().map_or(0, exprs::calls);
             total += cost::CPU_OPERATOR * (1 + args + filter) as f64 * c.rows;
         }
-        let nkeys = (clause.partition.len() + clause.order.len()) as f64;
+        let nkeys = (partition.len() + clause.order.len()) as f64;
         total += cost::CPU_OPERATOR * nkeys * c.rows + cost::CPU_TUPLE * c.rows;
         let rows_frame = clause.frame.options == FRAME_DEFAULTS
             && calls[window].iter().all(|f| {
@@ -903,7 +914,7 @@ fn windows<'q>(
         // `optimize_window_clauses`: the support functions of these calls give the frame `ROWS UNBOUNDED PRECEDING`.
         let options = if rows_frame { FRAME_ROWS_CURRENT } else { clause.frame.options };
         let mut startup = c.startup;
-        let tuples = startup_tuples(level, window, c.rows, options);
+        let tuples = startup_tuples(level, window, &partition, c.rows, options);
         if tuples > 1.0 && c.rows > 0.0 {
             startup += (total - startup) / c.rows * (tuples - 1.0);
         }
@@ -916,7 +927,8 @@ fn windows<'q>(
                 }
             }
         });
-        node = Node::new(Kind::WindowAgg { name, window, rows_frame }, level.scope, vec![node]);
+        let kind = Kind::WindowAgg { name, window, rows_frame, partition };
+        node = Node::new(kind, level.scope, vec![node]);
         node.cost = Cost { startup, total, ..c };
     }
     Some(node)
