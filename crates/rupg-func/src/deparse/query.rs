@@ -124,7 +124,15 @@ impl Deparser<'_> {
         let mut space =
             Namespace { names: vec![String::new(); query.relations.len()], ..Default::default() };
         let mut join_names: Vec<Option<String>> = vec![None; joins.len()];
-        for slot in &order {
+        // `select_rtable_names_for_explain` names the relations in the order of the range table, where the relations of a subquery that `pull_up_subqueries` merged into the query come last.
+        let mut naming = order.clone();
+        if explain {
+            naming.sort_by_key(|slot| match *slot {
+                Slot::Relation(i) => (!seen[i], i),
+                Slot::Join(_) => (true, usize::MAX),
+            });
+        }
+        for slot in &naming {
             match *slot {
                 Slot::Relation(i) => {
                     let Some(rel) = query.relations.get(i) else { continue };

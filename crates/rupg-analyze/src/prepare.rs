@@ -75,5 +75,6 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         row_marks: Vec::new(),
         write: None,
         out_args: Vec::new(),
+        pulled: 0,
     })
 }

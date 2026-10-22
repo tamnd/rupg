@@ -114,6 +114,7 @@ impl Analyzer<'_> {
             row_marks: Vec::new(),
             write: None,
             out_args: Vec::new(),
+            pulled: 0,
         })
     }
 }

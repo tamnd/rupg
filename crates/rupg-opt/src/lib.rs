@@ -8,6 +8,7 @@ mod cost;
 mod exprs;
 mod from;
 mod output;
+mod pullup;
 mod upper;
 
 use rupg_analyze::{
@@ -16,6 +17,8 @@ use rupg_analyze::{
 };
 use rupg_plan::{Item, Kind, Label, Leaf, Node, Operation, Plan, Scope, SubPlan};
 use rupg_types::oid;
+
+pub use pullup::pull_up;
 
 /// The tables of the inheritance trees of the relations of the queries, which the planner has no catalog for.
 pub trait Members: std::fmt::Debug {

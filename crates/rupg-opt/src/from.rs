@@ -997,10 +997,10 @@ fn numdistinct(expr: &Expr, stats: &Stats) -> (f64, bool, Option<(f64, f64)>) {
     (nd.0, nd.1, rel)
 }
 
-/// The number of distinct values of an expression with no statistics, at most the rows of its relation after the conditions. The flag is true for the default.
+/// The number of distinct values of an expression with no statistics for `eqjoinsel_inner`, which does not clamp it to the rows of its relation after the conditions. The flag is true for the default.
 fn distinct(expr: &Expr, stats: &Stats) -> (f64, bool) {
-    let (nd, default, rel) = numdistinct(expr, stats);
-    (rel.map_or(nd, |(_, rows)| nd.min(rows.max(1.0))), default)
+    let (nd, default, _) = numdistinct(expr, stats);
+    (nd, default)
 }
 
 /// The selectivity of a condition of a join: `1 / max(nd1, nd2)` for an `=` of a value of each side, as `eqjoinsel` with no statistics, or else the selectivity of the condition.
