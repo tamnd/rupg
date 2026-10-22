@@ -454,6 +454,8 @@ impl<'q> Builder<'q> {
         let mut children = Vec::new();
         let (kind, startup, run, tuples) = match &relation.cte {
             Some(cte) if cte.work.is_some() => {
+                // `cost_ctescan`: one more `cpu_tuple_cost` for each row of the tuplestore.
+                per_row += cost::CPU_TUPLE;
                 let rows = self.work.iter().rev().find(|(w, _)| Some(*w) == cte.work);
                 (Kind::WorkTableScan(r), 0.0, 0.0, rows.map_or(10.0, |(_, rows)| rows * 10.0))
             }
@@ -462,6 +464,7 @@ impl<'q> Builder<'q> {
                     || cte.write.is_some()
                     || self.cte(&cte.name).is_some_and(|c| !c.inline) =>
             {
+                per_row += cost::CPU_TUPLE;
                 let rows = self.cte(&cte.name).map_or(1000.0, |c| c.rows);
                 (Kind::CteScan(r), 0.0, 0.0, rows)
             }

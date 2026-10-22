@@ -1,0 +1,145 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> EXPLAIN SELECT (SELECT max(x) FROM c) FROM b;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=25.89..58.49 rows=2260 width=4)
+row   InitPlan expr_1
+row     ->  Aggregate  (cost=25.88..25.89 rows=1 width=4)
+row           ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT (SELECT max(s.x) FROM (SELECT x FROM c) s) FROM b;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=25.89..58.49 rows=2260 width=4)
+row   InitPlan expr_1
+row     ->  Aggregate  (cost=25.88..25.89 rows=1 width=4)
+row           ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x = (SELECT max(x) FROM c);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=25.89..64.14 rows=11 width=8)
+row   Filter: (x = (InitPlan expr_1).col1)
+row   InitPlan expr_1
+row     ->  Aggregate  (cost=25.88..25.89 rows=1 width=4)
+row           ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE EXISTS (SELECT 1 FROM c WHERE z = 'a') OR x = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=4.31..42.56 rows=1136 width=8)
+row   Filter: ((InitPlan exists_1).col1 OR (x = 1))
+row   InitPlan exists_1
+row     ->  Seq Scan on c  (cost=0.00..25.88 rows=6 width=0)
+row           Filter: (z = 'a'::text)
+EXPLAIN
+> EXPLAIN SELECT ARRAY(SELECT x FROM c) FROM b;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=22.70..55.30 rows=2260 width=32)
+row   InitPlan array_1
+row     ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE (x, y) = (SELECT x, 1 FROM c LIMIT 1);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.02..43.92 rows=1 width=8)
+row   Filter: ((x = (InitPlan rowcompare_1).col1) AND (y = (InitPlan rowcompare_1).col2))
+row   InitPlan rowcompare_1
+row     ->  Limit  (cost=0.00..0.02 rows=1 width=8)
+row           ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x = (SELECT max(x) FROM c) ORDER BY y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=64.33..64.35 rows=11 width=8)
+row   Sort Key: b.y
+row   InitPlan expr_1
+row     ->  Aggregate  (cost=25.88..25.89 rows=1 width=4)
+row           ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (x = (InitPlan expr_1).col1)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM b WHERE x = (SELECT max(x) FROM c);
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=64.16..64.17 rows=1 width=8)
+row   InitPlan expr_1
+row     ->  Aggregate  (cost=25.88..25.89 rows=1 width=4)
+row           ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row         Filter: (x = (InitPlan expr_1).col1)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE x = (SELECT max(x) FROM c) LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=25.89..36.32 rows=3 width=8)
+row   InitPlan expr_1
+row     ->  Aggregate  (cost=25.88..25.89 rows=1 width=4)
+row           ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (x = (InitPlan expr_1).col1)
+EXPLAIN
+> EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM c) SELECT * FROM w;
+fields QUERY PLAN:25:-1:-1
+row CTE Scan on w  (cost=22.70..48.10 rows=1270 width=36)
+row   CTE w
+row     ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+EXPLAIN
+> EXPLAIN WITH w AS MATERIALIZED (SELECT * FROM c) SELECT * FROM b JOIN w ON b.x = w.x;
+fields QUERY PLAN:25:-1:-1
+row Merge Join  (cost=272.08..493.69 rows=14351 width=44)
+row   Merge Cond: (w.x = b.x)
+row   CTE w
+row     ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Sort  (cost=90.87..94.05 rows=1270 width=36)
+row         Sort Key: w.x
+row         ->  CTE Scan on w  (cost=0.00..25.40 rows=1270 width=36)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, (SELECT max(x) FROM c) AS m FROM b ORDER BY y) s;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=184.39..212.64 rows=2260 width=8)
+row   ->  Sort  (cost=184.39..190.04 rows=2260 width=12)
+row         Sort Key: b.y
+row         InitPlan expr_1
+row           ->  Aggregate  (cost=25.88..25.89 rows=1 width=4)
+row                 ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=12)
+EXPLAIN
+> EXPLAIN SELECT (SELECT 1), (SELECT 2);
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.02..0.03 rows=1 width=8)
+row   InitPlan expr_1
+row     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row   InitPlan expr_2
+row     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x FROM b ORDER BY y) s;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=158.51..186.76 rows=2260 width=4)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: b.y
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN WITH RECURSIVE r(n) AS (SELECT 1 UNION ALL SELECT n FROM r WHERE n < 5) SELECT * FROM r;
+fields QUERY PLAN:25:-1:-1
+row CTE Scan on r  (cost=2.57..3.19 rows=31 width=4)
+row   CTE r
+row     ->  Recursive Union  (cost=0.00..2.57 rows=31 width=4)
+row           ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row           ->  WorkTable Scan on r r_1  (cost=0.00..0.22 rows=3 width=4)
+row                 Filter: (n < 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE (x, y) < (SELECT x, 1 FROM c LIMIT 1);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.02..43.92 rows=753 width=8)
+row   Filter: (ROW(x, y) < ROW((InitPlan rowcompare_1).col1, (InitPlan rowcompare_1).col2))
+row   InitPlan rowcompare_1
+row     ->  Limit  (cost=0.00..0.02 rows=1 width=8)
+row           ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b WHERE ROW(x, y) < ROW(1, 2);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on b  (cost=0.00..43.90 rows=753 width=8)
+row   Filter: (ROW(x, y) < ROW(1, 2))
+EXPLAIN

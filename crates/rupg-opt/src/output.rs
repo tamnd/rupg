@@ -259,10 +259,13 @@ fn all_columns<'q>(level: &Level<'q>, r: usize) -> Vec<Item<'q>> {
         .collect()
 }
 
-/// True when a `SubqueryScan` gives the rows of its subquery as they are, so that `trivial_subqueryscan` takes it out of the plan.
+/// True when a `SubqueryScan` gives the rows of its subquery as they are, so that `trivial_subqueryscan` takes it out of the plan. The subquery gives only the columns of the scan.
 fn trivial(level: &Level<'_>, node: &Node<'_>, r: usize) -> bool {
     let columns = level.query.relations[r].columns.len();
+    // A junk column of the subquery, such as a key of its `ORDER BY`, makes its target list longer than the target list of the scan.
+    let child = node.children.first().map(|c| c.output.len());
     node.filter.is_empty()
+        && child.is_none_or(|n| n == columns)
         && node.output.len() == columns
         && node.output.iter().enumerate().all(|(i, o)| {
             matches!(o.expr.kind, ExprKind::Var(v) if v.relation == r && usize::try_from(v.attnum).ok() == Some(i + 1))
