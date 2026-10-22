@@ -1,6 +1,6 @@
 //! The estimates of `costsize.c` and `selfuncs.c` with no statistics: the number of rows of a table, the widths of the values, the selectivity of the conditions and the costs of the nodes.
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, Relation, SubLinkKind};
+use rupg_analyze::{BoolOp, Expr, ExprKind, Relation, SubLink, SubLinkKind};
 use rupg_pgcatalog::builtin;
 use rupg_types::oid;
 
@@ -248,6 +248,42 @@ fn operator_selectivity(op: u32) -> f64 {
 /// The cost of the conditions for each row, as `cost_qual_eval`.
 pub(crate) fn qual_cost<'a>(quals: impl IntoIterator<Item = &'a Expr>) -> f64 {
     quals.into_iter().map(|q| CPU_OPERATOR * exprs::calls(q) as f64).sum()
+}
+
+/// A subquery of an expression that runs as a `SubPlan` for each row, with the costs of `cost_subplan`: the start cost, and the cost of each call with its test.
+#[derive(Clone, Copy, Debug)]
+pub(crate) struct SubCost {
+    pub(crate) link: *const SubLink,
+    pub(crate) startup: f64,
+    pub(crate) per_call: f64,
+}
+
+/// `cost_qual_eval`: the start cost and the cost for each row of the conditions. A subquery that runs as a `SubPlan` costs its subplan, which has the cost of its test, as `cost_qual_eval_walker` adds `startup_cost` and `per_call_cost`.
+pub(crate) fn qual_costs<'a>(
+    quals: impl IntoIterator<Item = &'a Expr>,
+    subplans: &[SubCost],
+) -> (f64, f64) {
+    fn walk(expr: &Expr, subplans: &[SubCost], calls: &mut usize, out: &mut (f64, f64)) {
+        if let ExprKind::SubLink(link) = &expr.kind
+            && let Some(sub) = subplans.iter().find(|s| std::ptr::eq(s.link, &**link))
+        {
+            out.0 += sub.startup;
+            out.1 += sub.per_call;
+            return;
+        }
+        *calls += exprs::own_calls(expr);
+        for child in expr.children() {
+            walk(child, subplans, calls, out);
+        }
+    }
+    let (mut startup, mut per_row) = (0.0, 0.0);
+    for qual in quals {
+        let (mut calls, mut sub) = (0, (0.0, 0.0));
+        walk(qual, subplans, &mut calls, &mut sub);
+        startup += sub.0;
+        per_row += CPU_OPERATOR * calls as f64 + sub.1;
+    }
+    (startup, per_row)
 }
 
 /// `relation_byte_size`: the bytes of rows of a width, with the header of each row.

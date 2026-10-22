@@ -560,7 +560,7 @@ fn aggregate<'q>(
     let finals = cost::CPU_OPERATOR * final_units(&aggs);
     let ordered = ordered_keys(&aggs);
     let selectivity = cost::list_selectivity(having.iter().copied());
-    let having_cost = cost::qual_cost(having.iter().copied());
+    let (having_startup, having_cost) = level.stats.qual_costs(having.iter().copied());
     let filter: Vec<Item<'q>> = having.iter().map(|h| Item::of(h)).collect();
     let c = input.cost;
     let n = c.rows;
@@ -576,7 +576,7 @@ fn aggregate<'q>(
         let c = input.cost;
         // `cost_agg` adds the costs in this order, which the rounding of the sums follows.
         let startup = c.total + cost::CPU_OPERATOR * units * n + finals;
-        let total = startup + cost::CPU_TUPLE + having_cost;
+        let total = startup + cost::CPU_TUPLE + having_startup + having_cost;
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Plain, keys: Vec::new(), sets: Vec::new() },
             scope,
@@ -614,11 +614,25 @@ fn aggregate<'q>(
         + cost::CPU_OPERATOR * nkeys * n
         + finals * groups
         + cost::CPU_TUPLE * groups
+        + having_startup
         + having_cost * groups;
     let hash_startup = c.total + cost::CPU_OPERATOR * units * n + cost::CPU_OPERATOR * nkeys * n;
-    let hash_total =
-        hash_startup + finals * groups + cost::CPU_TUPLE * groups + having_cost * groups;
-    if !only && hashable && hash_total * 1.01 < sorted_total {
+    let hash_total = hash_startup
+        + finals * groups
+        + cost::CPU_TUPLE * groups
+        + having_startup
+        + having_cost * groups;
+    // The hash table loses the order of the groups, so the sort of `ORDER BY` counts for it when the groups have the order of `ORDER BY`.
+    let in_order = query.sort.iter().all(|s| query.group.iter().any(|g| g.target == s.target));
+    let hash_after = if query.sort.is_empty() || !in_order {
+        hash_total
+    } else {
+        cost::sort((hash_startup, hash_total), rows, c.width, None).1
+    };
+    // `add_path` keeps the hash table only when its total cost or its start cost is lower by more than the fuzz factor, as the sorted groups have the order of their keys.
+    let kept = hash_total * 1.01 < sorted_total
+        || hash_total <= sorted_total * 1.01 && hash_startup * 1.01 < sorted_input.startup;
+    if !only && hashable && kept && hash_after < sorted_total {
         let mut node = Node::new(
             Kind::Aggregate { strategy: Strategy::Hashed, keys, sets: Vec::new() },
             scope,

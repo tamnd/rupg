@@ -5333,6 +5333,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_removed_scan.test")));
     }
 
+    /// `EXPLAIN` of the conditions with a subquery that runs as a `SubPlan` for each row, as `cost_subplan`: a hashed subplan costs its plan once when the node starts, and a correlated subplan costs its plan for each call, half of it for `ANY` and `ALL`. The plan of a subplan with no parameters that keeps its rows, as a `Materialize`, costs its start once. The conditions of a scan are in the order of their cost, so a condition with a subplan comes last, as `order_qual_clauses`. A `HAVING` and the filter of a join cost their subplans in the same way. `connection/plan_subplan_cost.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_subplan_cost() {
+        big_stack(|| script(include_str!("connection/plan_subplan_cost.test")));
+    }
+
     /// `EXPLAIN` of the conditions of `WHERE` on a subquery of `FROM` that the planner moves into the subquery, as `set_subquery_pathlist` and `subquery_push_qual`: a condition joins the `WHERE` of the subquery, or its `HAVING` when the subquery makes groups. A condition stays outside a subquery with `LIMIT`, a condition on a column of a window function, on a column that is not an item of `DISTINCT ON` or of `PARTITION BY`, on a column that calls a volatile function or a function that gives a set, and a condition with a volatile function on a subquery with `DISTINCT`. An outer join that a condition makes an inner join is an inner join before the condition moves, as `reduce_outer_joins`, and a `Subquery Scan` with no condition that gives each column of its subquery costs its subquery, as `cost_subqueryscan`. `connection/plan_subquery_pushdown.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_subquery_pushdown() {

@@ -115,6 +115,8 @@ pub(crate) struct Level<'q> {
     pub(crate) init: Vec<SubPlan<'q>>,
     /// The cost of the subplans of `init`, which each run once when the top node starts, as `SS_compute_initplan_cost` adds them.
     pub(crate) init_cost: f64,
+    /// The costs of the subqueries of the expressions of the query that run as a `SubPlan` for each row.
+    pub(crate) subplans: Vec<cost::SubCost>,
     /// True when the query gives no targets, as `simplify_EXISTS_query` makes the subquery of `EXISTS`.
     pub(crate) no_targets: bool,
     /// The conditions of joins that the equivalence classes took the place of. The scans below a join still give their columns, as `attr_needed` keeps them.
@@ -174,6 +176,7 @@ impl<'q> Builder<'q> {
             display_query: query,
             init: Vec::new(),
             init_cost: 0.0,
+            subplans: Vec::new(),
             no_targets,
             joined: Vec::new(),
             stats: from::Stats::default(),
@@ -388,9 +391,41 @@ impl<'q> Builder<'q> {
             level.init_cost += init_cost(link, &plan);
             level.init.push(SubPlan { name: format!("InitPlan {name}"), plan });
         } else {
+            let (startup, per_call) = subplan_cost(link, &plan, correlated, hashed);
+            level.subplans.push(cost::SubCost {
+                link: std::ptr::from_ref(link),
+                startup,
+                per_call,
+            });
             self.pending.push((link, SubPlan { name: format!("SubPlan {name}"), plan }));
         }
     }
+}
+
+/// `cost_subplan` of a subplan that runs for each row: the start cost and the cost of each call, which has the cost of the test. A hashed subplan runs its plan once and charges one `cpu_operator_cost` for each row that it puts in the hash table. Each call of another subplan costs the rows that it reads: the first row for `EXISTS`, half of the rows for `ANY` and `ALL` with one `cpu_operator_cost` for each, and all the rows for the others. It pays the start cost of its plan for each call, or once when it reads no column of the query and its top node keeps its rows, as `ExecMaterializesOutput`.
+fn subplan_cost(link: &SubLink, plan: &Node<'_>, correlated: bool, hashed: bool) -> (f64, f64) {
+    let c = plan.cost;
+    let test = cost::qual_cost(&link.test);
+    if hashed {
+        return (c.total + cost::CPU_OPERATOR * c.rows, test);
+    }
+    let run = c.total - c.startup;
+    let mut per_call = test;
+    per_call += match link.kind {
+        SubLinkKind::Exists => run / cost::clamp_rows(c.rows),
+        SubLinkKind::Any | SubLinkKind::All => 0.5 * run + 0.5 * c.rows * cost::CPU_OPERATOR,
+        _ => run,
+    };
+    let materializes = matches!(
+        plan.kind,
+        Kind::Materialize
+            | Kind::Sort(_)
+            | Kind::FunctionScan(_)
+            | Kind::TableFunctionScan(_)
+            | Kind::CteScan(_)
+            | Kind::WorkTableScan(_)
+    );
+    if !correlated && materializes { (c.startup, per_call) } else { (0.0, per_call + c.startup) }
 }
 
 /// `cost_subplan` of a subplan that runs once: the start cost and the cost of each call of the subplan. It is the cost of the plan, and for `EXISTS` the cost of its first row. A subplan that runs once has no test, because the test goes into the expression of the query.

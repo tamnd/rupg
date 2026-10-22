@@ -46,9 +46,26 @@ pub(crate) struct Stats {
     functional: BTreeMap<usize, Vec<Vec<i16>>>,
     /// The members of each equivalence class of the query level, each class with true when it has a constant.
     equal: Vec<(Vec<Expr>, bool)>,
+    /// The costs of the subqueries of the expressions of the level that run as a `SubPlan` for each row.
+    subplans: Vec<cost::SubCost>,
 }
 
 impl Stats {
+    /// `cost_qual_eval` of the conditions with the costs of the subplans of the level: the start cost and the cost for each row.
+    pub(crate) fn qual_costs<'a>(&self, quals: impl IntoIterator<Item = &'a Expr>) -> (f64, f64) {
+        cost::qual_costs(quals, &self.subplans)
+    }
+
+    /// The cost for each row of [`Stats::qual_costs`].
+    pub(crate) fn qual_cost<'a>(&self, quals: impl IntoIterator<Item = &'a Expr>) -> f64 {
+        self.qual_costs(quals).1
+    }
+
+    /// `order_qual_clauses`: the conditions in the order of their cost for each row, and in their order for the same cost.
+    fn sort_quals(&self, quals: &mut [Qual<'_>]) {
+        quals.sort_by(|a, b| self.qual_cost([&*a.expr]).total_cmp(&self.qual_cost([&*b.expr])));
+    }
+
     /// `estimate_num_groups` with no statistics: the number of groups of rows by the values of the expressions. A `boolean` expression has 2 values, and each other expression has the values of its columns. Two columns that are equal or that an equivalence class makes equal count once. The columns of each relation have the product of their numbers of distinct values, at most a tenth of the tuples of the relation, or the largest number of one column when it is more. A relation with fewer rows after its conditions than its tuples has fewer values, as the formula of Yao. A column of a relation that the level does not know has 200 values.
     pub(crate) fn groups(&self, exprs: &[&Expr], input_rows: f64) -> f64 {
         let input_rows = cost::clamp_rows(input_rows);
@@ -392,7 +409,7 @@ impl<'q> Builder<'q> {
             .iter()
             .map(|(c, constant)| (c.iter().map(|&m| m.clone()).collect(), *constant))
             .collect();
-        let mut stats = Stats { equal, ..Stats::default() };
+        let mut stats = Stats { equal, subplans: level.subplans.clone(), ..Stats::default() };
         needed(level, &mut stats);
         let rels = self.build(level, tree, &found, &mut stats);
         let plans = rels
@@ -450,8 +467,10 @@ impl<'q> Builder<'q> {
         stats: &mut Stats,
     ) -> Rel<'q> {
         let relation = &level.query.relations[r];
-        let quals = order_quals(quals);
-        let mut per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| &*q.expr));
+        let quals = order_quals(quals, stats);
+        // `cost_seqscan` and the other scans: the start cost of the conditions, and their cost for each row.
+        let (qual_startup, qual_cost) = stats.qual_costs(quals.iter().map(|q| &*q.expr));
+        let mut per_row = cost::CPU_TUPLE + qual_cost;
         let mut children = Vec::new();
         // `cost_subqueryscan`: the cost of the subquery as it is, to which the scan adds its own cost.
         let mut sub_total = None;
@@ -573,7 +592,8 @@ impl<'q> Builder<'q> {
         let mut node = Node::new(kind, level.scope, children);
         node.filter = quals.iter().map(|q| q.item()).collect();
         let width = stats.width(&BTreeSet::from([r]));
-        let total = sub_total.unwrap_or(startup + run) + tuples * per_row;
+        let startup = startup + qual_startup;
+        let total = sub_total.map_or(startup + run, |t| t + qual_startup) + tuples * per_row;
         node.cost = Cost { startup, total, rows, width };
         Rel { node, rels: BTreeSet::from([r]), order: Vec::new() }
     }
@@ -660,7 +680,7 @@ fn members_scan<'q>(
     stats: &mut Stats,
 ) -> Rel<'q> {
     let selectivity = cost::list_selectivity(quals.iter().map(|q| &*q.expr));
-    let per_row = cost::CPU_TUPLE + cost::qual_cost(quals.iter().map(|q| &*q.expr));
+    let per_row = cost::CPU_TUPLE + stats.qual_cost(quals.iter().map(|q| &*q.expr));
     let (mut tuples, mut rows) = (0.0, 0.0);
     let mut children = Vec::with_capacity(members.len());
     for member in &members {
@@ -1007,10 +1027,10 @@ fn equivalence(qual: &Qual<'_>) -> bool {
 }
 
 /// The conditions of a scan in the order of `order_qual_clauses`: the conditions that are not equivalences, then the equivalences, which the planner makes again, then by their cost for each row.
-fn order_quals(quals: Vec<Qual<'_>>) -> Vec<Qual<'_>> {
+fn order_quals<'q>(quals: Vec<Qual<'q>>, stats: &Stats) -> Vec<Qual<'q>> {
     let (mut out, classes): (Vec<_>, Vec<_>) = quals.into_iter().partition(|q| !equivalence(q));
     out.extend(classes);
-    out.sort_by_key(|q| exprs::calls(&q.expr));
+    stats.sort_quals(&mut out);
     out
 }
 
@@ -1243,7 +1263,7 @@ fn join_rels<'q>(
 ) -> Vec<Rel<'q>> {
     let rows = join_rows(kind, &left[0], &right[0], &quals, &filter, stats);
     let mut quals = quals;
-    quals.sort_by_key(|q| exprs::calls(&q.expr));
+    stats.sort_quals(&mut quals);
     let mut paths = Paths::new(stats.startup);
     for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats) {
         paths.add(candidate.startup, candidate.total, keys, candidate);
@@ -1299,7 +1319,7 @@ fn choose<'q>(
     filter: &[Qual<'q>],
     stats: &Stats,
 ) -> Vec<(Candidate<'q>, Vec<OrderKey>)> {
-    let filter_cost = cost::qual_cost(filter.iter().map(|q| &*q.expr));
+    let filter_cost = stats.qual_cost(filter.iter().map(|q| &*q.expr));
     let (left_rels, right_rels) = (&left[0].rels, &right[0].rels);
     let lateral_right = lateral(level, right_rels, left_rels);
     // The orders of the sides: the left side first, and the right side first when the join can have the sides in the other order.
@@ -1580,8 +1600,9 @@ fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
             o.rows * inner.rows
         }
     };
-    let per_tuple =
-        cost::CPU_TUPLE + cost::qual_cost(input.quals.iter().map(|q| &*q.expr)) + input.filter_cost;
+    let per_tuple = cost::CPU_TUPLE
+        + input.stats.qual_cost(input.quals.iter().map(|q| &*q.expr))
+        + input.filter_cost;
     run += per_tuple * tuples;
     (startup, startup + run)
 }
@@ -1643,7 +1664,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         }
     };
     let per_tuple =
-        cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
+        cost::CPU_TUPLE + input.stats.qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
     run += per_tuple * tuples;
     Some(Candidate {
         method: Method::Hash,
@@ -1846,7 +1867,7 @@ fn merge_join<'q>(
     run +=
         cost::qual_cost(clauses.iter().map(|c| &*c.item.expr)) * (outer_rows + inner_rows * ratio);
     let per_tuple =
-        cost::CPU_TUPLE + cost::qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
+        cost::CPU_TUPLE + input.stats.qual_cost(other.iter().map(|q| &*q.expr)) + input.filter_cost;
     run += per_tuple * tuples;
     Some(Candidate {
         method: Method::Merge,

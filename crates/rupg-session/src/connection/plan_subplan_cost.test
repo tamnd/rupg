@@ -1,0 +1,79 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM c WHERE x > (SELECT max(y) FROM b WHERE b.x = c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..48651.00 rows=423 width=36)
+row   Filter: (x > (SubPlan expr_1))
+row   SubPlan expr_1
+row     ->  Aggregate  (cost=38.28..38.29 rows=1 width=4)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row                 Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 OR x IN (SELECT y FROM b WHERE b.x = c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..24335.26 rows=638 width=36)
+row   Filter: ((x = 1) OR (ANY (x = (SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row           Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x > ALL (SELECT y FROM b);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..31490.13 rows=635 width=36)
+row   Filter: (ALL (x > (SubPlan all_1).col1))
+row   SubPlan all_1
+row     ->  Materialize  (cost=0.00..43.90 rows=2260 width=4)
+row           ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x NOT IN (SELECT y FROM b);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=38.25..64.12 rows=635 width=36)
+row   Filter: (NOT (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 OR x IN (SELECT y FROM b);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=38.25..67.30 rows=638 width=36)
+row   Filter: ((x = 1) OR (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM c GROUP BY x HAVING count(*) > (SELECT count(*) FROM b WHERE b.x = c.x);
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=29.05..7689.05 rows=67 width=12)
+row   Group Key: c.x
+row   Filter: (count(*) > (SubPlan expr_1))
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=4)
+row   SubPlan expr_1
+row     ->  Aggregate  (cost=38.28..38.29 rows=1 width=8)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row                 Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c JOIN b ON c.x = b.x WHERE c.x > (SELECT max(y) FROM b b2 WHERE b2.x = b.y);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=38.58..550078.90 rows=4784 width=44)
+row   Hash Cond: (b.x = c.x)
+row   Join Filter: (c.x > (SubPlan expr_1))
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=22.70..22.70 rows=1270 width=36)
+row         ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   SubPlan expr_1
+row     ->  Aggregate  (cost=38.28..38.29 rows=1 width=4)
+row           ->  Seq Scan on b b2  (cost=0.00..38.25 rows=11 width=4)
+row                 Filter: (x = b.y)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x > (SELECT max(y) FROM b WHERE b.x = c.x) AND z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..48654.17 rows=2 width=36)
+row   Filter: ((z = 'a'::text) AND (x > (SubPlan expr_1)))
+row   SubPlan expr_1
+row     ->  Aggregate  (cost=38.28..38.29 rows=1 width=4)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row                 Filter: (x = c.x)
+EXPLAIN
