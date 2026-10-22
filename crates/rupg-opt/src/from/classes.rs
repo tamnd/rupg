@@ -49,8 +49,8 @@ pub(super) struct Found<'q> {
     pub(super) spans: Vec<BTreeSet<usize>>,
     /// The classes with no constant whose conditions the joins make again.
     pub(super) classes: Vec<Joined<'q>>,
-    /// The members of each class of the domain of the whole query, which `exprs_known_equal` reads.
-    pub(super) equal: Vec<Vec<&'q Expr>>,
+    /// The members of each class of the domain of the whole query, which `exprs_known_equal` reads, each class with `ec_has_const`: true when it has a constant.
+    pub(super) equal: Vec<(Vec<&'q Expr>, bool)>,
 }
 
 /// A class with no constant whose conditions of joins the joins make again. Each member reads one relation, and no two members read the same relation.
@@ -129,7 +129,7 @@ pub(super) fn domain<'q>(tree: &mut Tree<'q>, top: bool, out: &mut Found<'q>) ->
         out.spans.push(class.members.iter().flat_map(|m| exprs::relations(m)).collect());
         // A column above an outer join has the join in its `varnullingrels`, so it is not a member of a class of a domain below the join.
         if top {
-            out.equal.push(class.members.clone());
+            out.equal.push((class.members.clone(), class.constant().is_some()));
         }
     }
     let mut own = BTreeSet::new();

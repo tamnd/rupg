@@ -30,6 +30,8 @@ pub struct Index {
     pub keys: Vec<i16>,
     /// `indisunique`.
     pub unique: bool,
+    /// `indnullsnotdistinct`: the index has one null at most in a key column.
+    pub nulls_not_distinct: bool,
     /// `indimmediate`: false for the index of a deferrable constraint.
     pub immediate: bool,
     /// True for a partial index, which has a predicate.
