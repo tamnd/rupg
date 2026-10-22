@@ -151,7 +151,9 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         | Kind::Unique
         | Kind::LockRows
         | Kind::Materialize
-        | Kind::Hash => {}
+        | Kind::Hash
+        | Kind::BitmapIndexScan { .. }
+        | Kind::BitmapAnd => {}
         Kind::Aggregate { keys, .. } => {
             let keys: Vec<Expr> = keys.iter().map(|k| k.expr.as_ref().clone()).collect();
             let vars = keys.iter().all(is_var)
@@ -205,6 +207,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
         }
         Kind::SeqScan(r)
         | Kind::IndexScan { relation: r, .. }
+        | Kind::BitmapHeapScan { relation: r, .. }
         | Kind::SampleScan(r)
         | Kind::FunctionScan(r)
         | Kind::TableFunctionScan(r)

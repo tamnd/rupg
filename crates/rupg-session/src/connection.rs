@@ -5453,6 +5453,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_sort_late.test")));
     }
 
+    /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_bitmap_scan() {
+        big_stack(|| script(include_str!("connection/plan_bitmap_scan.test")));
+    }
+
     /// `EXPLAIN` of the scans of a table by its btree indexes, as `create_index_paths` makes them with the costs of `btcostestimate` and `cost_index`. A condition on a key column is an `Index Cond`, and the other conditions are the filter. A scan in the order of the index, forward or backward, takes the place of a sort for `ORDER BY`, and an index that has each column that the query reads gives an `Index Only Scan`. `connection/plan_index_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_index_scan() {

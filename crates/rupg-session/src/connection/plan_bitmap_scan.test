@@ -1,0 +1,370 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE s (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE m (a int, b int, c text);
+CREATE TABLE
+> CREATE INDEX m_ab ON m (a, b);
+CREATE INDEX
+> CREATE INDEX m_c ON m (c);
+CREATE INDEX
+> CREATE TABLE u (k int, v text, w int);
+CREATE TABLE
+> CREATE UNIQUE INDEX u_k ON u (k) INCLUDE (v);
+CREATE INDEX
+> CREATE INDEX u_wd ON u (w DESC NULLS LAST);
+CREATE INDEX
+> CREATE INDEX u_w2 ON u (w);
+CREATE INDEX
+> CREATE TABLE t (p int, q int, r int);
+CREATE TABLE
+> CREATE INDEX t_p ON t (p);
+CREATE INDEX
+> CREATE INDEX t_q ON t (q);
+CREATE INDEX
+> CREATE INDEX t_pq ON t (p, q);
+CREATE INDEX
+> EXPLAIN SELECT * FROM s WHERE x > 10;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=9.99..29.40 rows=753 width=8)
+row   Recheck Cond: (x > 10)
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..9.80 rows=753 width=0)
+row         Index Cond: (x > 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x < 10;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=9.99..29.40 rows=753 width=8)
+row   Recheck Cond: (x < 10)
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..9.80 rows=753 width=0)
+row         Index Cond: (x < 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x > 10 AND x < 20;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=4.27..14.97 rows=11 width=8)
+row   Recheck Cond: ((x > 10) AND (x < 20))
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..4.27 rows=11 width=0)
+row         Index Cond: ((x > 10) AND (x < 20))
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE 10 < x;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=9.99..29.40 rows=753 width=8)
+row   Recheck Cond: (10 < x)
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..9.80 rows=753 width=0)
+row         Index Cond: (x > 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x > 10 AND y = 3;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=9.80..31.10 rows=4 width=8)
+row   Recheck Cond: (x > 10)
+row   Filter: (y = 3)
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..9.80 rows=753 width=0)
+row         Index Cond: (x > 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = ANY ('{1,2,3}');
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=4.18..11.29 rows=3 width=8)
+row   Recheck Cond: (x = ANY ('{1,2,3}'::integer[]))
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..4.18 rows=3 width=0)
+row         Index Cond: (x = ANY ('{1,2,3}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x IN (1, 2, 3);
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=4.18..11.29 rows=3 width=8)
+row   Recheck Cond: (x = ANY ('{1,2,3}'::integer[]))
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..4.18 rows=3 width=0)
+row         Index Cond: (x = ANY ('{1,2,3}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x IN (1, 2, 3) AND y > 0;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=4.18..11.30 rows=1 width=8)
+row   Recheck Cond: (x = ANY ('{1,2,3}'::integer[]))
+row   Filter: (y > 0)
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..4.18 rows=3 width=0)
+row         Index Cond: (x = ANY ('{1,2,3}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT x FROM s WHERE x > 10;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on s  (cost=9.99..29.40 rows=753 width=4)
+row   Recheck Cond: (x > 10)
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..9.80 rows=753 width=0)
+row         Index Cond: (x > 10)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM s WHERE x > 10;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=31.29..31.30 rows=1 width=8)
+row   ->  Bitmap Heap Scan on s  (cost=9.99..29.40 rows=753 width=0)
+row         Recheck Cond: (x > 10)
+row         ->  Bitmap Index Scan on s_pkey  (cost=0.00..9.80 rows=753 width=0)
+row               Index Cond: (x > 10)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.20..13.67 rows=6 width=40)
+row   Recheck Cond: (a = 1)
+row   ->  Bitmap Index Scan on m_ab  (cost=0.00..4.20 rows=6 width=0)
+row         Index Cond: (a = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE b = 2;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=13.15..22.62 rows=6 width=40)
+row   Recheck Cond: (b = 2)
+row   ->  Bitmap Index Scan on m_ab  (cost=0.00..13.15 rows=6 width=0)
+row         Index Cond: (b = 2)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a > 1 AND b = 2;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=8.15..13.50 rows=2 width=40)
+row   Recheck Cond: ((a > 1) AND (b = 2))
+row   ->  Bitmap Index Scan on m_ab  (cost=0.00..8.15 rows=2 width=0)
+row         Index Cond: ((a > 1) AND (b = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a = 1 AND b = 2;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using m_ab on m  (cost=0.15..8.17 rows=1 width=40)
+row   Index Cond: ((a = 1) AND (b = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c = 'x';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.20..13.67 rows=6 width=40)
+row   Recheck Cond: (c = 'x'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.20 rows=6 width=0)
+row         Index Cond: (c = 'x'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a = 1 AND c = 'x';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=8.65..12.66 rows=1 width=40)
+row   Recheck Cond: ((c = 'x'::text) AND (a = 1))
+row   ->  BitmapAnd  (cost=8.65..8.65 rows=1 width=0)
+row         ->  Bitmap Index Scan on m_c  (cost=0.00..4.20 rows=6 width=0)
+row               Index Cond: (c = 'x'::text)
+row         ->  Bitmap Index Scan on m_ab  (cost=0.00..4.20 rows=6 width=0)
+row               Index Cond: (a = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a > 1 AND c = 'x';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.20..13.68 rows=2 width=40)
+row   Recheck Cond: (c = 'x'::text)
+row   Filter: (a > 1)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.20 rows=6 width=0)
+row         Index Cond: (c = 'x'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a > 1 AND c > 'x';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=7.19..23.19 rows=133 width=40)
+row   Recheck Cond: (c > 'x'::text)
+row   Filter: (a > 1)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..7.15 rows=400 width=0)
+row         Index Cond: (c > 'x'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.20..13.65 rows=6 width=40)
+row   Recheck Cond: (a IS NULL)
+row   ->  Bitmap Index Scan on m_ab  (cost=0.00..4.20 rows=6 width=0)
+row         Index Cond: (a IS NULL)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on m  (cost=0.00..22.00 rows=1194 width=40)
+row   Filter: (c IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT * FROM u WHERE w = 3;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on u  (cost=4.20..13.67 rows=6 width=40)
+row   Recheck Cond: (w = 3)
+row   ->  Bitmap Index Scan on u_w2  (cost=0.00..4.20 rows=6 width=0)
+row         Index Cond: (w = 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM u WHERE w > 3;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on u  (cost=7.25..22.25 rows=400 width=40)
+row   Recheck Cond: (w > 3)
+row   ->  Bitmap Index Scan on u_w2  (cost=0.00..7.15 rows=400 width=0)
+row         Index Cond: (w > 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM u WHERE k > 3;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on u  (cost=7.25..22.25 rows=400 width=40)
+row   Recheck Cond: (k > 3)
+row   ->  Bitmap Index Scan on u_k  (cost=0.00..7.15 rows=400 width=0)
+row         Index Cond: (k > 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE p = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=4.23..14.79 rows=10 width=12)
+row   Recheck Cond: (p = 1)
+row   ->  Bitmap Index Scan on t_pq  (cost=0.00..4.23 rows=10 width=0)
+row         Index Cond: (p = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE q = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=4.23..14.79 rows=10 width=12)
+row   Recheck Cond: (q = 1)
+row   ->  Bitmap Index Scan on t_q  (cost=0.00..4.23 rows=10 width=0)
+row         Index Cond: (q = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE p = 1 AND q = 2;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using t_pq on t  (cost=0.15..8.17 rows=1 width=12)
+row   Index Cond: ((p = 1) AND (q = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE p > 1 AND q > 2;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=11.01..24.41 rows=227 width=12)
+row   Recheck Cond: ((p > 1) AND (q > 2))
+row   ->  Bitmap Index Scan on t_pq  (cost=0.00..10.95 rows=227 width=0)
+row         Index Cond: ((p > 1) AND (q > 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE p > 1 AND q = 2;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=4.23..14.81 rows=3 width=12)
+row   Recheck Cond: (q = 2)
+row   Filter: (p > 1)
+row   ->  Bitmap Index Scan on t_q  (cost=0.00..4.23 rows=10 width=0)
+row         Index Cond: (q = 2)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE p = 1 AND r = 2;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=4.23..14.81 rows=1 width=12)
+row   Recheck Cond: (p = 1)
+row   Filter: (r = 2)
+row   ->  Bitmap Index Scan on t_pq  (cost=0.00..4.23 rows=10 width=0)
+row         Index Cond: (p = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE p > 1 AND q > 2 AND r > 3;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=10.97..24.94 rows=76 width=12)
+row   Recheck Cond: ((p > 1) AND (q > 2))
+row   Filter: (r > 3)
+row   ->  Bitmap Index Scan on t_pq  (cost=0.00..10.95 rows=227 width=0)
+row         Index Cond: ((p > 1) AND (q > 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE p IN (1, 2) AND q = 3;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using t_pq on t  (cost=0.15..8.17 rows=1 width=12)
+row   Index Cond: ((p = ANY ('{1,2}'::integer[])) AND (q = 3))
+EXPLAIN
+> EXPLAIN SELECT r FROM t WHERE p > 1 ORDER BY r;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=59.91..61.61 rows=680 width=4)
+row   Sort Key: r
+row   ->  Bitmap Heap Scan on t  (cost=9.42..27.92 rows=680 width=4)
+row         Recheck Cond: (p > 1)
+row         ->  Bitmap Index Scan on t_pq  (cost=0.00..9.25 rows=680 width=0)
+row               Index Cond: (p > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE p > (SELECT 1);
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on t  (cost=9.43..27.93 rows=680 width=12)
+row   Recheck Cond: (p > (InitPlan expr_1).col1)
+row   InitPlan expr_1
+row     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row   ->  Bitmap Index Scan on t_pq  (cost=0.00..9.25 rows=680 width=0)
+row         Index Cond: (p > (InitPlan expr_1).col1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t a JOIN s ON a.p = s.x WHERE a.q > 5;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=70.27..90.56 rows=680 width=20)
+row   Hash Cond: (a.p = s.x)
+row   ->  Bitmap Heap Scan on t a  (cost=9.42..27.92 rows=680 width=12)
+row         Recheck Cond: (q > 5)
+row         ->  Bitmap Index Scan on t_q  (cost=0.00..9.25 rows=680 width=0)
+row               Index Cond: (q > 5)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT * FROM s WHERE x > 10 AND y = 3;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on public.s  (cost=9.80..31.10 rows=4 width=8)
+row   Output: x, y
+row   Recheck Cond: (s.x > 10)
+row   Filter: (s.y = 3)
+row   ->  Bitmap Index Scan on s_pkey  (cost=0.00..9.80 rows=753 width=0)
+row         Index Cond: (s.x > 10)
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT * FROM s WHERE x > 10 AND y = 3;
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Bitmap Heap Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "s",
+      "Alias": "s",
+      "Startup Cost": 9.80,
+      "Total Cost": 31.10,
+      "Plan Rows": 4,
+      "Plan Width": 8,
+      "Disabled": false,
+      "Recheck Cond": "(x > 10)",
+      "Filter": "(y = 3)",
+      "Plans": [
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Index Name": "s_pkey",
+          "Startup Cost": 0.00,
+          "Total Cost": 9.80,
+          "Plan Rows": 753,
+          "Plan Width": 0,
+          "Disabled": false,
+          "Index Cond": "(x > 10)"
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT * FROM t WHERE p > 1 AND q > 2;
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Bitmap Heap Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "t",
+      "Alias": "t",
+      "Startup Cost": 11.01,
+      "Total Cost": 24.41,
+      "Plan Rows": 227,
+      "Plan Width": 12,
+      "Disabled": false,
+      "Recheck Cond": "((p > 1) AND (q > 2))",
+      "Plans": [
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Index Name": "t_pq",
+          "Startup Cost": 0.00,
+          "Total Cost": 10.95,
+          "Plan Rows": 227,
+          "Plan Width": 0,
+          "Disabled": false,
+          "Index Cond": "((p > 1) AND (q > 2))"
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN UPDATE s SET y = 1 WHERE x > 5;
+fields QUERY PLAN:25:-1:-1
+row Update on s  (cost=9.99..29.40 rows=0 width=0)
+row   ->  Bitmap Heap Scan on s  (cost=9.99..29.40 rows=753 width=10)
+row         Recheck Cond: (x > 5)
+row         ->  Bitmap Index Scan on s_pkey  (cost=0.00..9.80 rows=753 width=0)
+row               Index Cond: (x > 5)
+EXPLAIN
+> EXPLAIN DELETE FROM t WHERE p = 1 AND q = 2;
+fields QUERY PLAN:25:-1:-1
+row Delete on t  (cost=0.15..8.17 rows=0 width=0)
+row   ->  Index Scan using t_pq on t  (cost=0.15..8.17 rows=1 width=6)
+row         Index Cond: ((p = 1) AND (q = 2))
+EXPLAIN

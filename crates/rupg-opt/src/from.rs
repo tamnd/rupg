@@ -1565,6 +1565,7 @@ pub(crate) fn node_rels(node: &Node<'_>) -> BTreeSet<usize> {
     match &node.kind {
         Kind::SeqScan(r)
         | Kind::IndexScan { relation: r, .. }
+        | Kind::BitmapHeapScan { relation: r, .. }
         | Kind::SampleScan(r)
         | Kind::FunctionScan(r)
         | Kind::TableFunctionScan(r)
