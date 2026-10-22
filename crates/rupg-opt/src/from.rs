@@ -615,6 +615,8 @@ impl<'q> Builder<'q> {
         // `cost_subqueryscan`: the cost of the subquery as it is, to which the scan adds its own cost.
         let mut sub_total = None;
         let mut appended = None;
+        let mut sub_paths = None;
+        let mut cte_order = None;
         let (kind, startup, run, tuples) = match &relation.cte {
             Some(cte) if cte.work.is_some() => {
                 // `cost_ctescan`: one more `cpu_tuple_cost` for each row of the tuplestore.
@@ -629,6 +631,7 @@ impl<'q> Builder<'q> {
             {
                 per_row += cost::CPU_TUPLE;
                 let rows = self.cte(&cte.name).map_or(1000.0, |c| c.rows);
+                cte_order = self.cte(&cte.name).map(|c| c.order.clone());
                 (Kind::CteScan(r), 0.0, 0.0, rows)
             }
             _ => match (&relation.subquery, &relation.function, &relation.values) {
@@ -644,9 +647,11 @@ impl<'q> Builder<'q> {
                         keys,
                         plans: Vec::new(),
                     });
+                    self.paths = rel.is_none();
                     let outer = std::mem::replace(&mut self.append, rel);
                     let child = self.query(sub, Some(level.scope));
                     appended = std::mem::replace(&mut self.append, outer);
+                    sub_paths = self.sub_paths.take();
                     let c = child.cost;
                     children.push(child);
                     // `cost_subqueryscan`: a scan with no condition that gives the columns of its subquery as they are costs its subquery, because `setrefs.c` takes it out of the plan.
@@ -749,9 +754,41 @@ impl<'q> Builder<'q> {
         };
         node.cost = Cost { startup, total, rows, width };
         node.disabled = matches!(node.kind, Kind::SeqScan(_)) && !crate::enable().seqscan;
-        let seq = Rel { node, rels: BTreeSet::from([r]), order: Vec::new() };
+        let mut seq = Rel { node, rels: BTreeSet::from([r]), order: Vec::new() };
         if let Some(append) = appended {
             return append.plans(level, r, seq, stats);
+        }
+        // `set_cte_pathlist`: the scan of a query of `WITH` has the order of the rows of its plan.
+        if let Some(columns) = cte_order {
+            seq.order = sub_order(relation, r, &columns, stats);
+            return vec![seq];
+        }
+        // `set_subquery_pathlist`: a `Subquery Scan` of each plan of the subquery, with the order of its rows in the columns of the scan.
+        if let Some(paths) = sub_paths {
+            let order = |columns: &[(usize, bool, bool)]| sub_order(relation, r, columns, stats);
+            seq.order = order(&paths.order);
+            let mut kept = Paths::new(stats.startup);
+            let others: Vec<Rel<'q>> = paths
+                .others
+                .iter()
+                .filter_map(|(plan, columns)| {
+                    let order = order(columns);
+                    if order.is_empty() {
+                        return None;
+                    }
+                    let mut node = seq.node.clone();
+                    let c = plan.cost;
+                    node.cost.startup = c.startup + qual_startup;
+                    node.cost.total = c.total + qual_startup + c.rows * per_row;
+                    node.children = vec![plan.clone()];
+                    Some(Rel { node, rels: seq.rels.clone(), order })
+                })
+                .collect();
+            kept.add(costs(&seq.node), seq.order.clone(), seq);
+            for rel in others {
+                kept.add(costs(&rel.node), rel.order.clone(), rel);
+            }
+            return kept.kept();
         }
         if indexes.is_empty() || !matches!(seq.node.kind, Kind::SeqScan(_)) {
             return vec![seq];
@@ -769,6 +806,26 @@ impl<'q> Builder<'q> {
         }
         paths.kept()
     }
+}
+
+/// `convert_subquery_pathkeys`: the order of the rows of a subquery or a query of `WITH`, as the places of its columns, in the columns of the relation `r`, with the first keys that a node above can use, as `truncate_useless_pathkeys`.
+fn sub_order(
+    relation: &Relation,
+    r: usize,
+    columns: &[(usize, bool, bool)],
+    stats: &Stats,
+) -> Vec<OrderKey> {
+    let keys: Vec<OrderKey> = columns
+        .iter()
+        .map_while(|&(at, desc, nulls_first)| {
+            let column = relation.columns.get(at)?;
+            let var = Var { relation: r, attnum: i16::try_from(at + 1).ok()?, levels_up: 0 };
+            let mut expr = Expr::new(ExprKind::Var(var), column.ty);
+            expr.typmod = column.typmod;
+            Some(OrderKey { exprs: vec![expr], desc, nulls_first })
+        })
+        .collect();
+    stats.useful(&BTreeSet::from([r]), &keys)
 }
 
 /// `var_eq_const` and `var_eq_non_const`: `=` of a unique column of the table `r` of `tuples` rows and a value that reads no column of the table passes one row.
@@ -803,6 +860,10 @@ pub(crate) struct Base<'q> {
 
 /// `trivial_pathtarget` of `set_subquery_pathlist`: the columns of the relation `r` that the plan reads above the scan are each column of the subquery in order. The plan reads them in the order that they first come in the targets and in `HAVING`, as `build_base_rel_tlists` adds them, then in the conditions of the joins.
 fn trivial_target(query: &Query, r: usize, sub: &Query) -> bool {
+    // `preprocess_targetlist` of a subquery with a lock adds the junk columns of its row marks.
+    if !sub.row_marks.is_empty() {
+        return false;
+    }
     let mut columns = Vec::new();
     for target in &query.targets {
         exprs::columns_at(&target.expr, 0, &mut columns);

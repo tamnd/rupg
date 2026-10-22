@@ -193,6 +193,22 @@ struct Builder<'q> {
     append: Option<from::append::AppendRel<'q>>,
     /// The `SELECT` of a side of `INTERSECT` or `EXCEPT` that the planner plans now, which keeps the facts of its plans that the set operation reads.
     setop: Option<setop::Leaf<'q>>,
+    /// True when the next query is a subquery of `FROM`, whose scan reads each plan of the subquery that `add_path` keeps, as `set_subquery_pathlist`.
+    paths: bool,
+    /// The plans of the last query with `paths`.
+    sub_paths: Option<SubPaths<'q>>,
+}
+
+/// An order of the rows of a query as the places of its columns, each with the direction and the place of the nulls.
+type ColumnOrder = Vec<(usize, bool, bool)>;
+
+/// The plans of a subquery of `FROM` with the order of their rows, as `set_subquery_pathlist` reads the `pathlist` of the final relation of the subquery. Each key of an order is the place of a column of the subquery with the direction and the place of the nulls.
+#[derive(Debug, Default)]
+struct SubPaths<'q> {
+    /// The order of the rows of the plan that the query gives.
+    order: ColumnOrder,
+    /// The other plans, which the query gives only with no subplan and no member of an inheritance tree. One of them can be the plan that the query gives.
+    others: Vec<(Node<'q>, ColumnOrder)>,
 }
 
 /// A subplan that runs for each row, which waits for the node that holds its subquery.
@@ -226,6 +242,8 @@ struct CteUse<'q> {
     inline: bool,
     /// The rows of the plan of a query that is not inline.
     rows: f64,
+    /// The order of the rows of the plan of a query that is not inline, as the places of its columns, which `set_cte_pathlist` gives each `CteScan` of the query.
+    order: ColumnOrder,
 }
 
 /// A query that the planner plans, as `PlannerInfo`.
@@ -261,6 +279,24 @@ impl<'q> Level<'q> {
     pub(crate) fn target(&self, index: usize) -> &'q Expr {
         &self.display_query.targets[index].expr
     }
+}
+
+/// `convert_subquery_pathkeys`: the first keys of an order that are columns of the query, as the places of the columns. A key that is a column that an earlier key has adds nothing, as `pathkey_is_redundant`.
+fn columns(level: &Level<'_>, order: &[from::OrderKey]) -> ColumnOrder {
+    let mut out: ColumnOrder = Vec::new();
+    for key in order {
+        let found = level
+            .display_query
+            .targets
+            .iter()
+            .enumerate()
+            .find(|(_, t)| !t.junk && key.exprs.iter().any(|e| e.same(&t.expr)));
+        let Some((at, _)) = found else { break };
+        if !out.iter().any(|&(c, _, _)| c == at) {
+            out.push((at, key.desc, key.nulls_first));
+        }
+    }
+    out
 }
 
 /// The query of the rows of a statement with the conditions of check constraints, which `with_checks` of the analyzer puts around the query of the rows.
@@ -299,6 +335,7 @@ impl<'q> Builder<'q> {
         let no_targets = std::mem::take(&mut self.exists) && simple_exists(query);
         let caller = std::mem::take(&mut self.fraction);
         let presorted = std::mem::take(&mut self.presorted);
+        let want_paths = std::mem::take(&mut self.paths);
         let marks = self.marks(query, write);
         let leaf = self.setop.as_ref().filter(|s| parent == Some(s.scope)).map(|s| s.op);
         let mut level = Level {
@@ -358,7 +395,9 @@ impl<'q> Builder<'q> {
                 append.plans.push(kept);
             }
         }
-        let mut node = self.upper(&level, plans, caller);
+        let others =
+            (want_paths && query.minmax.is_none() && write.is_none()).then(|| plans.clone());
+        let (mut node, order) = self.upper(&level, plans, caller);
         if let Some(minmax) = &query.minmax {
             node = self.minmax(&level, minmax, node);
         }
@@ -405,6 +444,28 @@ impl<'q> Builder<'q> {
             if let Some(s) = &mut self.setop {
                 s.groups = groups;
             }
+        }
+        if want_paths {
+            // `create_modifytable_path` and `create_minmaxagg_path` give the rows in no order.
+            let order = if write.is_none() && query.minmax.is_none() {
+                columns(&level, &order)
+            } else {
+                Vec::new()
+            };
+            let mut paths = SubPaths { order, others: Vec::new() };
+            if let Some(plans) = others
+                && level.init_cost == 0.0
+                && level.subplans.is_empty()
+                && node.init_plans.is_empty()
+            {
+                for (mut plan, order) in self.final_paths(&level, plans) {
+                    output::level(&level, &mut plan);
+                    if !setop::has_member(&plan) {
+                        paths.others.push((plan, columns(&level, &order)));
+                    }
+                }
+            }
+            self.sub_paths = Some(paths);
         }
         self.ctes.truncate(depth);
         node
@@ -540,14 +601,17 @@ impl<'q> Builder<'q> {
                 && (refs == 1 || cte.materialized == Some(false))
                 && !exprs::query_volatile(&cte.query);
             let mut rows = 1000.0;
+            let mut order = Vec::new();
             if !inline {
                 let scope = level.scope;
+                self.paths = true;
                 let plan = self.subplan(|b| b.query(&cte.query, Some(scope)));
+                order = self.sub_paths.take().map(|p| p.order).unwrap_or_default();
                 rows = plan.cost.rows;
                 level.init_cost += plan.cost.total;
                 level.init.push(SubPlan { name: format!("CTE {}", cte.name), plan });
             }
-            self.ctes.push(CteUse { cte, inline, rows });
+            self.ctes.push(CteUse { cte, inline, rows, order });
         }
     }
 

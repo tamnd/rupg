@@ -462,26 +462,42 @@ impl<'q> Builder<'q> {
         level: &Level<'q>,
         plans: Vec<(Node<'q>, Vec<OrderKey>)>,
         fraction: f64,
-    ) -> Node<'q> {
+    ) -> (Node<'q>, Vec<OrderKey>) {
         let mut paths = Paths::new(level.fraction > 0.0);
         for (i, (node, order)) in plans.into_iter().enumerate() {
-            if let Some(node) = self.upper_one(level, node, order, i > 0 || level.presorted) {
-                paths.add(costs(&node), Vec::new(), node);
+            if let Some(found) = self.upper_order(level, node, order, i > 0 || level.presorted) {
+                paths.add(costs(&found.0), Vec::new(), found);
             }
         }
-        match paths.fractional(fraction, |n| n.cost.rows) {
-            Some(node) => node,
+        match paths.fractional(fraction, |(n, _)| n.cost.rows) {
+            Some(found) => found,
             // `build_minmax_path`: no plan of `FROM` gives the rows in the order of the subquery, so the query has no plan.
             None if level.presorted => {
                 self.failed = true;
-                Node::new(
+                let node = Node::new(
                     Kind::Result { replaces: None, one_time: Vec::new() },
                     level.scope,
                     Vec::new(),
-                )
+                );
+                (node, Vec::new())
             }
             None => unreachable!("the cheapest plan gets a result"),
         }
+    }
+
+    /// The `pathlist` of the final relation of a query: each plan of the query that `add_path` keeps, with the order of its rows.
+    pub(crate) fn final_paths(
+        &mut self,
+        level: &Level<'q>,
+        plans: from::Plans<'q>,
+    ) -> Vec<(Node<'q>, Vec<OrderKey>)> {
+        let mut paths = Paths::new(level.fraction > 0.0);
+        for (i, (node, order)) in plans.into_iter().enumerate() {
+            if let Some((node, order)) = self.upper_order(level, node, order, i > 0) {
+                paths.add(costs(&node), order.clone(), (node, order));
+            }
+        }
+        paths.kept()
     }
 
     /// `preprocess_minmax_aggregates` and `create_minmaxagg_plan`: the `Result` of a query with [`Query::minmax`], which reads the value of each aggregate call from an `InitPlan` that reads the first row of its subquery, when it costs less than `normal`, the plan with an `Agg` node. Each subquery tries the first order of the nulls, then the other order, and each try takes a name. When a call has no plan in either order, or the `Result` costs more, the query keeps `normal`, and the subplans take no place in the plan.
@@ -572,10 +588,21 @@ impl<'q> Builder<'q> {
     pub(crate) fn upper_one(
         &mut self,
         level: &Level<'q>,
+        node: Node<'q>,
+        order: Vec<OrderKey>,
+        only: bool,
+    ) -> Option<Node<'q>> {
+        self.upper_order(level, node, order, only).map(|(node, _)| node)
+    }
+
+    /// [`Self::upper_one`] with the order of the rows of the plan.
+    fn upper_order(
+        &mut self,
+        level: &Level<'q>,
         mut node: Node<'q>,
         mut order: Vec<OrderKey>,
         only: bool,
-    ) -> Option<Node<'q>> {
+    ) -> Option<(Node<'q>, Vec<OrderKey>)> {
         let query = level.query;
         let scope = level.display;
         let costs = target_costs(level).unwrap_or_default();
@@ -636,13 +663,15 @@ impl<'q> Builder<'q> {
             let c = node.cost;
             node = Node::new(Kind::LockRows, scope, vec![node]);
             node.cost = Cost { total: c.total + cost::CPU_TUPLE * c.rows, ..c };
+            // `create_lockrows_path`: a lock can fetch a new version of a row, so the rows have no order.
+            order.clear();
         }
         if limit_needed(query) {
             let c = node.cost;
             node = Node::new(Kind::Limit, scope, vec![node]);
             node.cost = limit_cost(c, count, offset);
         }
-        Some(node)
+        Some((node, order))
     }
 
     /// The `ModifyTable` node of a statement that writes a table, as `create_modifytable_path`.

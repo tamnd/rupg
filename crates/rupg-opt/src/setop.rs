@@ -177,7 +177,7 @@ pub(crate) fn is_const(expr: &Expr) -> bool {
 }
 
 /// True when a node or a node below it scans a member of an inheritance tree, which takes a name of its own in the plan.
-fn has_member(node: &Node<'_>) -> bool {
+pub(crate) fn has_member(node: &Node<'_>) -> bool {
     node.member.is_some() || node.children.iter().any(has_member)
 }
 
