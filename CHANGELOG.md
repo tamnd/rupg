@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- A constant of a `SELECT` of a set operation with another type than the operation keeps its cast above the `SELECT`, so the plan has the `Subquery Scan` of PostgreSQL, and a sorted `SetOp` does not sort the constant (#NNN).
+- A constant of a `SELECT` of a set operation with another type than the operation keeps its cast above the `SELECT`, so the plan has the `Subquery Scan` of PostgreSQL, and a sorted `SetOp` does not sort the constant (#587).
 
 ## 0.1.69 (2026-10-23)
 
