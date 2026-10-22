@@ -5405,6 +5405,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_left_anti.test")));
     }
 
+    /// `EXPLAIN` of semi joins and anti joins in the order of the joins of a join domain, as `join_is_legal` lets the planner make it: the inner side of each one is one item of the domain, the outer side is the relations that its conditions read, and a semi join can also be an inner join with the unique rows of its inner side in any place of the order. `connection/plan_join_order.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_join_order() {
+        big_stack(|| script(include_str!("connection/plan_join_order.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {
