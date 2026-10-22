@@ -6,7 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
-- `UNION` without `ALL` also plans a `Unique` above a `Merge Append` of its `SELECT`s in the order of the columns, as PostgreSQL does. A `Unique` of a sort or of a `Merge Append` gives the rows in the order of the columns, so `ORDER BY` of the columns needs no other sort, also when a `SELECT` casts a column. (#NNN)
+- `UNION` without `ALL` also plans a `Unique` above a `Merge Append` of its `SELECT`s in the order of the columns, as PostgreSQL does. A `Unique` of a sort or of a `Merge Append` gives the rows in the order of the columns, so `ORDER BY` of the columns needs no other sort, also when a `SELECT` casts a column. (#588)
 - A constant of a `SELECT` of a set operation with another type than the operation keeps its cast above the `SELECT`, so the plan has the `Subquery Scan` of PostgreSQL, and a sorted `SetOp` does not sort the constant (#587).
 
 ## 0.1.69 (2026-10-23)
