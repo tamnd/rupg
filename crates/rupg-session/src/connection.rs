@@ -5453,6 +5453,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_sort_late.test")));
     }
 
+    /// `EXPLAIN` of the scans of a table by its btree indexes, as `create_index_paths` makes them with the costs of `btcostestimate` and `cost_index`. A condition on a key column is an `Index Cond`, and the other conditions are the filter. A scan in the order of the index, forward or backward, takes the place of a sort for `ORDER BY`, and an index that has each column that the query reads gives an `Index Only Scan`. `connection/plan_index_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_index_scan() {
+        big_stack(|| script(include_str!("connection/plan_index_scan.test")));
+    }
+
     /// `EXPLAIN` of targets that call functions, as `set_pathtarget_cost_width` finds their costs. The plan of `FROM` computes the targets before the sort, or the keys of `GROUP BY` with groups, or the keys of the windows with windows, and each scan of a partitioned table computes them. The `Agg` node, the last `WindowAgg` node and the `HashAggregate` of `DISTINCT` add the cost of their targets, in which an aggregate call costs nothing. `connection/plan_target_cost.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_target_cost() {

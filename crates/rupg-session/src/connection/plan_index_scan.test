@@ -1,0 +1,332 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE s (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE m (a int, b int, c text);
+CREATE TABLE
+> CREATE INDEX m_ab ON m (a, b);
+CREATE INDEX
+> CREATE INDEX m_c ON m (c);
+CREATE INDEX
+> CREATE TABLE u (k int, v text, w int);
+CREATE TABLE
+> CREATE UNIQUE INDEX u_k ON u (k) INCLUDE (v);
+CREATE INDEX
+> CREATE INDEX u_wd ON u (w DESC NULLS LAST);
+CREATE INDEX
+> EXPLAIN SELECT * FROM s WHERE x = 5;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=8)
+row   Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT x FROM s WHERE x = 5;
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=4)
+row   Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM s ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT x FROM s ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using s_pkey on s  (cost=0.15..78.06 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM s ORDER BY x DESC;
+fields QUERY PLAN:25:-1:-1
+row Index Scan Backward using s_pkey on s  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM s ORDER BY x LIMIT 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.19 rows=1 width=8)
+row   ->  Index Scan using s_pkey on s  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM s ORDER BY x DESC LIMIT 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.19 rows=1 width=8)
+row   ->  Index Scan Backward using s_pkey on s  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5 AND y = 3;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=8)
+row   Index Cond: (x = 5)
+row   Filter: (y = 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE y = 3;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on s  (cost=0.00..38.25 rows=11 width=8)
+row   Filter: (y = 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on s
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE 5 = x;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=8)
+row   Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5::bigint;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=8)
+row   Index Cond: (x = '5'::bigint)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5.0;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on s  (cost=0.00..43.90 rows=11 width=8)
+row   Filter: ((x)::numeric = 5.0)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x + 0 = 5;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on s  (cost=0.00..43.90 rows=11 width=8)
+row   Filter: ((x + 0) = 5)
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM s;
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=38.25..38.26 rows=1 width=8)
+row   ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM m ORDER BY a, b;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using m_ab on m  (cost=0.15..62.15 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM m ORDER BY a;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using m_ab on m  (cost=0.15..62.15 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM m ORDER BY a, b LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.31 rows=3 width=40)
+row   ->  Index Scan using m_ab on m  (cost=0.15..62.15 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a = 1 ORDER BY b LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..12.21 rows=3 width=40)
+row   ->  Index Scan using m_ab on m  (cost=0.15..24.26 rows=6 width=40)
+row         Index Cond: (a = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM m ORDER BY c LIMIT 2;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.26 rows=2 width=40)
+row   ->  Index Scan using m_c on m  (cost=0.15..62.15 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM u WHERE k = 1;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using u_k on u  (cost=0.15..8.17 rows=1 width=40)
+row   Index Cond: (k = 1)
+EXPLAIN
+> EXPLAIN SELECT k, v FROM u WHERE k = 1;
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using u_k on u  (cost=0.15..8.17 rows=1 width=36)
+row   Index Cond: (k = 1)
+EXPLAIN
+> EXPLAIN SELECT k, v FROM u ORDER BY k;
+fields QUERY PLAN:25:-1:-1
+row Index Only Scan using u_k on u  (cost=0.15..62.15 rows=1200 width=36)
+EXPLAIN
+> EXPLAIN SELECT * FROM u ORDER BY w DESC NULLS LAST LIMIT 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.20 rows=1 width=40)
+row   ->  Index Scan using u_wd on u  (cost=0.15..62.15 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM u ORDER BY w LIMIT 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=28.00..28.00 rows=1 width=40)
+row   ->  Sort  (cost=28.00..31.00 rows=1200 width=40)
+row         Sort Key: w
+row         ->  Seq Scan on u  (cost=0.00..22.00 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT * FROM u ORDER BY w DESC LIMIT 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=28.00..28.00 rows=1 width=40)
+row   ->  Sort  (cost=28.00..31.00 rows=1200 width=40)
+row         Sort Key: w DESC
+row         ->  Seq Scan on u  (cost=0.00..22.00 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT * FROM s WHERE x = 5;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on public.s  (cost=0.15..8.17 rows=1 width=8)
+row   Output: x, y
+row   Index Cond: (s.x = 5)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT x FROM s ORDER BY x DESC LIMIT 2;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.22 rows=2 width=4)
+row   Output: x
+row   ->  Index Only Scan Backward using s_pkey on public.s  (cost=0.15..78.06 rows=2260 width=4)
+row         Output: x
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5 FOR UPDATE;
+fields QUERY PLAN:25:-1:-1
+row LockRows  (cost=0.15..8.18 rows=1 width=14)
+row   ->  Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=14)
+row         Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN UPDATE s SET y = 1 WHERE x = 5;
+fields QUERY PLAN:25:-1:-1
+row Update on s  (cost=0.15..8.17 rows=0 width=0)
+row   ->  Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=10)
+row         Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN DELETE FROM s WHERE x = 5;
+fields QUERY PLAN:25:-1:-1
+row Delete on s  (cost=0.15..8.17 rows=0 width=0)
+row   ->  Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=6)
+row         Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT a FROM m ORDER BY a, b DESC LIMIT 1;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.49..0.56 rows=1 width=8)
+row   ->  Incremental Sort  (cost=0.49..87.15 rows=1200 width=8)
+row         Sort Key: a, b DESC
+row         Presorted Key: a
+row         ->  Index Only Scan using m_ab on m  (cost=0.15..62.15 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5 AND y > 1 ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=8)
+row   Index Cond: (x = 5)
+row   Filter: (y > 1)
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT * FROM s WHERE x = 5;
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Index Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Scan Direction": "Forward",
+      "Index Name": "s_pkey",
+      "Relation Name": "s",
+      "Alias": "s",
+      "Startup Cost": 0.15,
+      "Total Cost": 8.17,
+      "Plan Rows": 1,
+      "Plan Width": 8,
+      "Disabled": false,
+      "Index Cond": "(x = 5)"
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT x FROM s ORDER BY x DESC LIMIT 1;
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Limit",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Startup Cost": 0.15,
+      "Total Cost": 0.19,
+      "Plan Rows": 1,
+      "Plan Width": 4,
+      "Disabled": false,
+      "Plans": [
+        {
+          "Node Type": "Index Only Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Scan Direction": "Backward",
+          "Index Name": "s_pkey",
+          "Relation Name": "s",
+          "Alias": "s",
+          "Startup Cost": 0.15,
+          "Total Cost": 78.06,
+          "Plan Rows": 2260,
+          "Plan Width": 4,
+          "Disabled": false
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5 AND random() > 0.5;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..8.18 rows=1 width=8)
+row   Index Cond: (x = 5)
+row   Filter: (random() > '0.5'::double precision)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5 AND (SELECT true);
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.17..8.18 rows=1 width=8)
+row   One-Time Filter: (InitPlan expr_1).col1
+row   InitPlan expr_1
+row     ->  Result  (cost=0.00..0.01 rows=1 width=1)
+row   ->  Index Scan using s_pkey on s  (cost=0.17..8.18 rows=1 width=8)
+row         Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM s s1 JOIN s s2 ON s1.x = s2.x WHERE s1.x = 5;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.31..16.36 rows=1 width=16)
+row   ->  Index Scan using s_pkey on s s1  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (x = 5)
+row   ->  Index Scan using s_pkey on s s2  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5 UNION ALL SELECT * FROM s WHERE x = 6;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.15..16.36 rows=2 width=8)
+row   ->  Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (x = 5)
+row   ->  Index Scan using s_pkey on s s_1  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (x = 6)
+EXPLAIN
+> EXPLAIN SELECT s FROM s WHERE x = 5;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=32)
+row   Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5 AND x = 6;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on s
+row   One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE a = 1 AND a = b;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using m_ab on m  (cost=0.15..8.17 rows=1 width=40)
+row   Index Cond: ((a = 1) AND (b = 1))
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x IS NOT NULL ORDER BY x LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..0.33 rows=5 width=8)
+row   ->  Index Scan using s_pkey on s  (cost=0.15..78.06 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT * FROM s WHERE x = 5) t;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=8)
+row   Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT y FROM s WHERE x = (SELECT 5);
+fields QUERY PLAN:25:-1:-1
+row Index Scan using s_pkey on s  (cost=0.17..8.18 rows=1 width=4)
+row   Index Cond: (x = (InitPlan expr_1).col1)
+row   InitPlan expr_1
+row     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM s WHERE x = 5 ORDER BY y;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=8.18..8.19 rows=1 width=8)
+row   Sort Key: y
+row   ->  Index Scan using s_pkey on s  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x FROM s;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=38.25..60.85 rows=2260 width=4)
+row   Group Key: x
+row   ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, count(*) FROM s GROUP BY x;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..66.50 rows=2260 width=12)
+row   Group Key: x
+row   ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN

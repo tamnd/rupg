@@ -47,6 +47,20 @@ pub struct Index {
     pub immediate: bool,
     /// True for a partial index, which has a predicate.
     pub partial: bool,
+    /// `relam`: the OID of the access method.
+    pub method: u32,
+    /// The column number of each column of the index in the table, the key columns then the `INCLUDE` columns, or 0 for an expression.
+    pub columns: Vec<i16>,
+    /// `opfamily` of each key column, or 0 for an operator class that the planner does not know.
+    pub families: Vec<u32>,
+    /// True for each key column whose operator class is the default class of its type, so that the order of the index is the order of `ORDER BY` of the column.
+    pub default_class: Vec<bool>,
+    /// `indoption` of each key column: 1 for `DESC` and 2 for `NULLS FIRST`.
+    pub options: Vec<i16>,
+    /// `indexcollations`: the collation of each key column, or 0 for a type that has no collation.
+    pub collations: Vec<u32>,
+    /// `pages`: the pages of the index.
+    pub pages: f64,
 }
 
 /// A table of an inheritance tree that a scan reads.

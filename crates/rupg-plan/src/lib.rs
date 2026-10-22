@@ -204,6 +204,15 @@ pub enum Kind<'q> {
     Result { replaces: Option<Replaced>, one_time: Vec<Item<'q>> },
     /// `SeqScan` of a relation of the scope.
     SeqScan(usize),
+    /// `IndexScan`, or `IndexOnlyScan` when `only`: a relation of the scope by its index `index`, in the order of the index or, when `backward`, in the other order, with the conditions of the index, `indexqualorig`. `columns` are the columns of the relation that the index has, which an index only scan gives.
+    IndexScan {
+        relation: usize,
+        index: u32,
+        only: bool,
+        backward: bool,
+        cond: Vec<Item<'q>>,
+        columns: Vec<i16>,
+    },
     /// `SampleScan`: a table with `TABLESAMPLE`.
     SampleScan(usize),
     /// `FunctionScan`: a function in `FROM`.

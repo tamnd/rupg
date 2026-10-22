@@ -204,6 +204,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.output = want;
         }
         Kind::SeqScan(r)
+        | Kind::IndexScan { relation: r, .. }
         | Kind::SampleScan(r)
         | Kind::FunctionScan(r)
         | Kind::TableFunctionScan(r)
@@ -223,7 +224,14 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             let plain =
                 want.iter().all(|w| matches!(w.expr.kind, ExprKind::Var(v) if v.attnum > 0));
             let physical = physical && node.member.is_none();
-            node.output = if physical && plain { all_columns(level, r) } else { want };
+            // `create_scan_plan`: the physical target list of an index only scan is the columns of the index.
+            node.output = match &node.kind {
+                _ if !(physical && plain) => want,
+                Kind::IndexScan { only: true, columns, .. } => {
+                    index_columns(level, r, columns).unwrap_or(want)
+                }
+                _ => all_columns(level, r),
+            };
             if matches!(node.kind, Kind::SubqueryScan(_)) && trivial(level, node, r) {
                 let child = node.children.pop();
                 if let Some(child) = child {
@@ -303,6 +311,21 @@ fn all_columns<'q>(level: &Level<'q>, r: usize) -> Vec<Item<'q>> {
         .filter(|(_, c)| c.ty != 0)
         .filter_map(|(i, c)| {
             let attnum = i16::try_from(i + 1).ok()?;
+            let mut expr =
+                Expr::new(ExprKind::Var(Var { relation: r, attnum, levels_up: 0 }), c.ty);
+            expr.typmod = c.typmod;
+            Some(item(expr))
+        })
+        .collect()
+}
+
+/// The columns of the relation that an index has, as `indextlist`, or `None` when a column of the index is an expression.
+fn index_columns<'q>(level: &Level<'q>, r: usize, columns: &[i16]) -> Option<Vec<Item<'q>>> {
+    let relation = &level.query.relations[r];
+    columns
+        .iter()
+        .map(|&attnum| {
+            let c = relation.columns.get(usize::try_from(attnum - 1).ok()?)?;
             let mut expr =
                 Expr::new(ExprKind::Var(Var { relation: r, attnum, levels_up: 0 }), c.ty);
             expr.typmod = c.typmod;

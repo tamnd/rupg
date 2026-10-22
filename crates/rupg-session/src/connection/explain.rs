@@ -6,6 +6,7 @@ use rupg_analyze::{Expr, Params, Query};
 use rupg_common::{Error, SqlState};
 use rupg_func::Session;
 use rupg_opt::{Index, Member};
+use rupg_pgcatalog::builtin;
 use rupg_plan::{Format, Options};
 use rupg_sql::nodes::{DefElem, ExplainStmt, Node};
 use rupg_types::oid;
@@ -54,6 +55,7 @@ impl rupg_opt::Members for Members<'_, '_> {
             .filter_map(|rel| {
                 let info = rel.index.as_ref().filter(|i| i.table == table && i.valid)?;
                 let count = usize::try_from(info.key_count).unwrap_or(0);
+                let class = |oid: &u32| builtin::opclasses().iter().find(|c| c.oid == *oid);
                 Some(Index {
                     oid: rel.oid,
                     keys: info.keys.iter().take(count).copied().collect(),
@@ -61,6 +63,21 @@ impl rupg_opt::Members for Members<'_, '_> {
                     nulls_not_distinct: info.nulls_not_distinct,
                     immediate: info.immediate,
                     partial: info.predicate.is_some(),
+                    method: info.method,
+                    columns: info.keys.clone(),
+                    families: info
+                        .classes
+                        .iter()
+                        .map(|c| class(c).map_or(0, |c| c.family))
+                        .collect(),
+                    default_class: info
+                        .classes
+                        .iter()
+                        .map(|c| class(c).is_some_and(|c| c.default))
+                        .collect(),
+                    options: info.options.clone(),
+                    collations: info.collations.clone(),
+                    pages: f64::from(info.pages.max(1)),
                 })
             })
             .collect();
