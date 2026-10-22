@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.68 (2026-10-23)
+
+A patch release on the way to M3. `EXPLAIN` now plans a `Merge Append` for a `UNION ALL` in `FROM` that the query reads in order, plans `INTERSECT` and `EXCEPT` with the hashed and the sorted `SetOp`, and shows the `Subquery Scan` and the `Result` that add the casts of the columns of a set operation.
+
 ### Added
 
 - `EXPLAIN` of a set operation whose `SELECT` needs a cast to the column types of the operation shows the `Subquery Scan` that adds the casts, with its cost, as PostgreSQL plans it. A set operation below another one with other column types gets a `Result` that adds the casts, and the width of an `Append` is the average width of its members. (#581)
