@@ -1,0 +1,167 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (x int, y int, z text);
+CREATE TABLE
+> CREATE TABLE s (x int PRIMARY KEY, y int);
+CREATE TABLE
+> EXPLAIN SELECT x, random() FROM a ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=83.37..101.37 rows=1200 width=12)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=4)
+row         Sort Key: x
+row         ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT random() FROM a ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=83.37..101.37 rows=1200 width=12)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=4)
+row         Sort Key: x
+row         ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, random() FROM a ORDER BY x LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=41.93..42.01 rows=5 width=12)
+row   ->  Result  (cost=41.93..59.93 rows=1200 width=12)
+row         ->  Sort  (cost=41.93..44.93 rows=1200 width=4)
+row               Sort Key: x
+row               ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, x+1+1+1+1+1+1+1+1+1+1+1 FROM a ORDER BY x LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=41.93..42.13 rows=5 width=8)
+row   ->  Result  (cost=41.93..89.93 rows=1200 width=8)
+row         ->  Sort  (cost=41.93..44.93 rows=1200 width=4)
+row               Sort Key: x
+row               ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, x+1+1+1+1+1+1+1+1+1+1+1 FROM a ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=116.37..119.37 rows=1200 width=8)
+row   Sort Key: x
+row   ->  Seq Scan on a  (cost=0.00..55.00 rows=1200 width=8)
+EXPLAIN
+> EXPLAIN SELECT x, count(*), random() FROM a GROUP BY x ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=37.64..40.64 rows=200 width=20)
+row   ->  Sort  (cost=37.64..38.14 rows=200 width=12)
+row         Sort Key: x
+row         ->  HashAggregate  (cost=28.00..30.00 rows=200 width=12)
+row               Group Key: x
+row               ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, random() FROM a ORDER BY x DESC OFFSET 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=83.42..101.37 rows=1197 width=12)
+row   ->  Result  (cost=83.37..101.37 rows=1200 width=12)
+row         ->  Sort  (cost=83.37..86.37 rows=1200 width=4)
+row               Sort Key: x DESC
+row               ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, random() FROM a ORDER BY 2;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=86.37..89.37 rows=1200 width=12)
+row   Sort Key: (random())
+row   ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=12)
+EXPLAIN
+> EXPLAIN SELECT x, row_number() OVER (), random() FROM a ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=98.37..116.37 rows=1200 width=20)
+row   ->  Sort  (cost=98.37..101.37 rows=1200 width=12)
+row         Sort Key: x
+row         ->  WindowAgg  (cost=0.00..37.00 rows=1200 width=12)
+row               Window: w1 AS (ROWS UNBOUNDED PRECEDING)
+row               ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=4)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT x, random() FROM a ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=83.37..101.37 rows=1200 width=12)
+row   Output: x, random()
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=4)
+row         Output: x
+row         Sort Key: a.x
+row         ->  Seq Scan on public.a  (cost=0.00..22.00 rows=1200 width=4)
+row               Output: x
+EXPLAIN
+> EXPLAIN VERBOSE SELECT x, y + random() FROM a ORDER BY x LIMIT 2;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=34.00..34.04 rows=2 width=12)
+row   Output: x, (((y)::double precision + random()))
+row   ->  Result  (cost=34.00..58.00 rows=1200 width=12)
+row         Output: x, ((y)::double precision + random())
+row         ->  Sort  (cost=34.00..37.00 rows=1200 width=8)
+row               Output: x, y
+row               Sort Key: a.x
+row               ->  Seq Scan on public.a  (cost=0.00..22.00 rows=1200 width=8)
+row                     Output: x, y
+EXPLAIN
+> EXPLAIN VERBOSE SELECT random(), x + 1, y FROM a ORDER BY y;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=86.37..107.37 rows=1200 width=16)
+row   Output: random(), ((x + 1)), y
+row   ->  Sort  (cost=86.37..89.37 rows=1200 width=8)
+row         Output: ((x + 1)), y
+row         Sort Key: a.y
+row         ->  Seq Scan on public.a  (cost=0.00..25.00 rows=1200 width=8)
+row               Output: (x + 1), y
+EXPLAIN
+> EXPLAIN SELECT z, random() FROM a ORDER BY x, y;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=83.37..101.37 rows=1200 width=48)
+row   ->  Sort  (cost=83.37..86.37 rows=1200 width=40)
+row         Sort Key: x, y
+row         ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=40)
+EXPLAIN
+> EXPLAIN SELECT a.x, random() FROM a JOIN s ON s.x = a.x ORDER BY a.y;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=147.38..165.38 rows=1200 width=16)
+row   ->  Sort  (cost=147.38..150.38 rows=1200 width=8)
+row         Sort Key: a.y
+row         ->  Hash Join  (cost=60.85..86.01 rows=1200 width=8)
+row               Hash Cond: (a.x = s.x)
+row               ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=8)
+row               ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row                     ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, random() FROM a ORDER BY x FOR UPDATE;
+fields QUERY PLAN:25:-1:-1
+row LockRows  (cost=83.37..113.37 rows=1200 width=18)
+row   ->  Result  (cost=83.37..101.37 rows=1200 width=18)
+row         ->  Sort  (cost=83.37..86.37 rows=1200 width=10)
+row               Sort Key: x
+row               ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=10)
+EXPLAIN
+> EXPLAIN SELECT x, random() FROM a WHERE false ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.01..0.02 rows=0 width=12)
+row   ->  Sort  (cost=0.01..0.02 rows=0 width=0)
+row         Sort Key: x
+row         ->  Result  (cost=0.00..0.00 rows=0 width=0)
+row               Replaces: Scan on a
+row               One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT x, x + 1 FROM a WHERE false ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=0.01..0.02 rows=0 width=8)
+row   Sort Key: x
+row   ->  Result  (cost=0.00..0.00 rows=0 width=8)
+row         Replaces: Scan on a
+row         One-Time Filter: false
+EXPLAIN
+> EXPLAIN SELECT DISTINCT x, y, random() FROM a ORDER BY x;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=86.37..98.37 rows=1200 width=16)
+row   ->  Sort  (cost=86.37..89.37 rows=1200 width=16)
+row         Sort Key: x, y, (random())
+row         ->  Seq Scan on a  (cost=0.00..25.00 rows=1200 width=16)
+EXPLAIN
+> EXPLAIN SELECT x, sum(y) + random() FROM a GROUP BY x ORDER BY x LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=32.58..32.64 rows=3 width=12)
+row   ->  Result  (cost=32.58..36.58 rows=200 width=12)
+row         ->  Sort  (cost=32.58..33.08 rows=200 width=12)
+row               Sort Key: x
+row               ->  HashAggregate  (cost=28.00..30.00 rows=200 width=12)
+row                     Group Key: x
+row                     ->  Seq Scan on a  (cost=0.00..22.00 rows=1200 width=8)
+EXPLAIN

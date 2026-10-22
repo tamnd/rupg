@@ -275,6 +275,10 @@ struct TargetCosts {
     window: (f64, f64),
     /// The targets before the sort, which the last `WindowAgg` node and a `HashAggregate` of `DISTINCT` compute.
     last: (f64, f64),
+    /// All the targets.
+    full: (f64, f64),
+    /// True when a target comes after the sort, as [`postponed`] finds it.
+    late: bool,
 }
 
 /// The costs of the targets of [`TargetCosts`], or `None` for a query with a function that gives a set in the targets. With `ORDER BY`, a target that is not a key of the query and calls a volatile function, or costs more than 10 times `cpu_operator_cost` with `LIMIT`, comes after the sort, as `make_sort_input_target` postpones it. A write computes only the columns of the table.
@@ -296,28 +300,9 @@ fn target_costs(level: &Level<'_>) -> Option<TargetCosts> {
         .map(|s| s.target)
         .collect();
     let group_keys: Vec<usize> = query.group.iter().map(|s| s.target).collect();
-    let keys: Vec<usize> = query
-        .sort
-        .iter()
-        .chain(&query.distinct)
-        .map(|s| s.target)
-        .chain(group_keys.iter().copied())
-        .chain(window_keys.iter().copied())
-        .collect();
     let costs: Vec<(f64, f64)> =
         targets.iter().map(|t| level.stats.qual_costs([&t.expr])).collect();
-    // A target that is not a key and is volatile or costs more than 10 times `cpu_operator_cost` can come after the sort. They all do when one of them is volatile, or when the query has `LIMIT` or reads a part of its rows.
-    let late: Vec<(bool, bool)> = targets
-        .iter()
-        .zip(&costs)
-        .enumerate()
-        .map(|(at, (t, cost))| {
-            let can = !query.sort.is_empty() && !keys.contains(&at);
-            (can && exprs::volatile(&t.expr), can && cost.1 > 10.0 * cost::CPU_OPERATOR)
-        })
-        .collect();
-    let postpone = late.iter().any(|l| l.0)
-        || late.iter().any(|l| l.1) && (query.limit.is_some() || level.fraction > 0.0);
+    let late = postponed(level);
     let sum = |keep: &dyn Fn(usize) -> bool| {
         costs
             .iter()
@@ -325,7 +310,8 @@ fn target_costs(level: &Level<'_>) -> Option<TargetCosts> {
             .filter(|&(at, _)| keep(at))
             .fold((0.0, 0.0), |out, (_, c)| (out.0 + c.0, out.1 + c.1))
     };
-    let last = sum(&|at| !(postpone && (late[at].0 || late[at].1)));
+    let last = sum(&|at| !late.get(at).copied().unwrap_or(false));
+    let full = sum(&|_| true);
     let window = sum(&|at| window_keys.contains(&at));
     let group = if windows.is_empty() { last } else { window };
     let scan = if query.grouped {
@@ -335,7 +321,79 @@ fn target_costs(level: &Level<'_>) -> Option<TargetCosts> {
     } else {
         window
     };
-    Some(TargetCosts { scan, group, window, last })
+    Some(TargetCosts { scan, group, window, last, full, late: late.contains(&true) })
+}
+
+/// `make_sort_input_target`: for each target of the query, true when it comes after the sort, or an empty list when none does. With `ORDER BY`, a target that is not a key of the query and calls a volatile function, or costs more than 10 times `cpu_operator_cost`, can come after the sort. They all do when one of them is volatile, or when the query has `LIMIT` or reads a part of its rows.
+pub(crate) fn postponed(level: &Level<'_>) -> Vec<bool> {
+    let query = level.query;
+    if query.sort.is_empty()
+        || level.no_targets
+        || query.set_op.is_some()
+        || query.write.is_some()
+        || query.has_target_srfs()
+    {
+        return Vec::new();
+    }
+    let calls = window_calls(query);
+    let keys: Vec<usize> = (0..calls.len())
+        .filter(|&w| !calls[w].is_empty())
+        .flat_map(|w| query.windows[w].partition.iter().chain(&query.windows[w].order))
+        .chain(&query.sort)
+        .chain(&query.distinct)
+        .chain(&query.group)
+        .map(|s| s.target)
+        .collect();
+    let late: Vec<(bool, bool)> = query
+        .targets
+        .iter()
+        .enumerate()
+        .map(|(at, t)| {
+            let can = !keys.contains(&at);
+            let cost = level.stats.qual_costs([&t.expr]).1;
+            (can && exprs::volatile(&t.expr), can && cost > 10.0 * cost::CPU_OPERATOR)
+        })
+        .collect();
+    let postpone = late.iter().any(|l| l.0)
+        || late.iter().any(|l| l.1) && (query.limit.is_some() || level.fraction > 0.0);
+    if !postpone {
+        return Vec::new();
+    }
+    late.into_iter().map(|(volatile, expensive)| volatile || expensive).collect()
+}
+
+/// The node above the sort that computes the targets that come after it, as `apply_projection_to_path` in `create_ordered_paths`. A node that can compute its targets adds their costs, and a `Result` above the other nodes costs the targets and `cpu_tuple_cost` for each row, as `create_projection_path`.
+fn project_late<'q>(level: &Level<'q>, mut node: Node<'q>, targets: TargetCosts) -> Node<'q> {
+    let (startup, per_row) = targets.full;
+    if !matches!(
+        node.kind,
+        Kind::Sort(_)
+            | Kind::IncrementalSort { .. }
+            | Kind::Unique
+            | Kind::Limit
+            | Kind::LockRows
+            | Kind::Materialize
+            | Kind::Hash
+            | Kind::Append
+            | Kind::SetOp { .. }
+            | Kind::RecursiveUnion
+            | Kind::ProjectSet
+            | Kind::Modify { .. }
+    ) {
+        let (last_startup, last_per_row) = targets.last;
+        node.cost.startup += startup - last_startup;
+        node.cost.total += startup - last_startup + (per_row - last_per_row) * node.cost.rows;
+        return node;
+    }
+    let c = node.cost;
+    let mut out =
+        Node::new(Kind::Result { replaces: None, one_time: Vec::new() }, level.display, vec![node]);
+    out.cost = Cost {
+        startup: c.startup + startup,
+        total: c.total + startup + (cost::CPU_TUPLE + per_row) * c.rows,
+        ..c
+    };
+    out
 }
 
 /// The node computes the targets, with their costs, as `create_projection_path` on the plan of `FROM` and as `create_agg_path` and `create_windowagg_path` add them. The scans of the members of a table with children each compute them, as `apply_scanjoin_target_to_paths` gives the target to each child of a partitioned table.
@@ -430,6 +488,9 @@ impl<'q> Builder<'q> {
             let keys = level.stats.canonical(keys, |k| &*k.item.expr);
             let bound = (count > 0.0 && offset >= 0.0).then_some(count + offset);
             node = sort_if(level, node, keys, &mut order, bound, only)?;
+            if costs.late {
+                node = project_late(level, node, costs);
+            }
         }
         if !query.row_marks.is_empty() {
             let c = node.cost;
