@@ -5441,6 +5441,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_dummy_join.test")));
     }
 
+    /// `EXPLAIN` of `ANY` and `IN` on a list of `VALUES`, as `convert_VALUES_to_ANY` makes `x IN (VALUES (1), (2))` the condition `x = ANY ('{1,2}')` when the list has two rows at least and each value folds to a constant. A list with a volatile function, a column of the query, `LIMIT` or `ORDER BY`, a subquery that reads the list, `NOT IN`, and `IN` in an `OR` or in the `ON` of a full join stay a subquery. `connection/plan_values_any.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_values_any() {
+        big_stack(|| script(include_str!("connection/plan_values_any.test")));
+    }
+
     /// `EXPLAIN` of an `OR` of a join whose arms each have a part for one relation, as `extract_restriction_or_clauses` makes an `OR` of those parts a condition of the scan of the relation when it passes 0.9 of the rows at most. The `OR` stays a condition of the join, and its selectivity for an inner join is divided by the selectivity of the new condition, so that the rows of the join stay the same. `connection/plan_or_extract.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_or_extract() {
