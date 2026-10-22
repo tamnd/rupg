@@ -76,6 +76,7 @@ pub fn execute_params(exprs: &List, types: &[u32], env: &dyn Env) -> Result<Quer
         write: None,
         out_args: Vec::new(),
         pulled: 0,
+        pushed: false,
         minmax: None,
     })
 }

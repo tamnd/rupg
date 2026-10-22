@@ -17,7 +17,7 @@ use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey, Strategy};
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Index, Level, Member, cost, exprs, upper};
+use crate::{Builder, Index, Level, Member, cost, exprs, pullup, upper};
 use index::Param;
 use paths::Paths;
 
@@ -489,7 +489,10 @@ impl<'q> Builder<'q> {
             self.append.as_ref().filter(|a| self.scopes[level.scope].parent == Some(a.scope));
         let keys = member.map(|a| a.keys.clone());
         needed(level, &mut stats, keys.as_ref().map(append::ChildKeys::used));
-        if let Some(keys) = &keys {
+        // A `SELECT` that is not a member of the append relation is a subquery, whose plan asks for no order.
+        if let Some(keys) = &keys
+            && pullup::member(level.query)
+        {
             keys.apply(level, &mut stats);
         }
         // `standard_qp_callback`: a `SELECT` of a side of `INTERSECT` or `EXCEPT` with no other order to ask for asks for its rows in the order of its columns, as `setop_pathkeys`.

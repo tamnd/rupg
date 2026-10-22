@@ -18,12 +18,72 @@ use crate::{exists, exprs, minmax, pushdown, setcast};
 /// The query with each simple subquery in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`.
 pub fn pull_up(query: &Query) -> Query {
     let mut query = query.clone();
+    flatten(&mut query);
     pull_all(&mut query);
     pushdown::push_all(&mut query);
     setcast::wrap_all(&mut query);
     exists::fill_all(&mut query);
     minmax::fill_all(&mut query);
     query
+}
+
+/// `flatten_simple_union_all`: a query that is a `UNION ALL` of `SELECT`s with the types of its columns becomes a query that reads the `UNION ALL` as its one relation, so that the planner plans an append relation. Only a query with `ORDER BY` changes, as the plan of the append relation is the same as the plan of the set operation when no order is necessary. With `ORDER BY`, the planner can then use a `Merge Append` of the plans of the `SELECT`s in the order.
+fn flatten(query: &mut Query) {
+    if query.sort.is_empty()
+        || query.recursive
+        || !query.ctes.is_empty()
+        || !query.row_marks.is_empty()
+        || query.targets.iter().any(|t| t.junk)
+    {
+        return;
+    }
+    let mut inner = Query {
+        sort: Vec::new(),
+        limit: None,
+        offset: None,
+        with_ties: false,
+        relations: std::mem::take(&mut query.relations),
+        set_op: query.set_op.take(),
+        targets: query.targets.clone(),
+        ..Query::default()
+    };
+    if !crate::from::simple_union_all(&inner) {
+        query.relations = std::mem::take(&mut inner.relations);
+        query.set_op = inner.set_op.take();
+        return;
+    }
+    let columns = inner
+        .targets
+        .iter()
+        .map(|t| Column {
+            name: t.name.clone(),
+            ty: t.expr.ty,
+            typmod: t.expr.typmod,
+            not_null: false,
+        })
+        .collect();
+    for (at, target) in query.targets.iter_mut().enumerate() {
+        let attnum = i16::try_from(at + 1).unwrap_or(i16::MAX);
+        let mut var =
+            Expr::new(ExprKind::Var(Var { relation: 0, attnum, levels_up: 0 }), target.expr.ty);
+        var.typmod = target.expr.typmod;
+        target.expr = var;
+    }
+    let name = inner.relations.first().map(|r| r.name.clone()).unwrap_or_default();
+    query.relations = vec![Relation {
+        oid: 0,
+        columns,
+        subquery: Some(Box::new(inner)),
+        function: None,
+        values: None,
+        name,
+        alias: None,
+        lateral: false,
+        cte: None,
+        tablesample: None,
+        only: false,
+    }];
+    query.from = vec![FromItem::Relation(0)];
 }
 
 /// Merges the simple subqueries of the query and of its subqueries, the inner subqueries first, as `pull_up_simple_subquery` merges the subqueries of a subquery before the subquery.
@@ -373,6 +433,13 @@ fn move_up(sub: &mut Query, base: usize) {
     sub.each_expr_mut(0, &mut |e, depth| e.each_mut(depth, &mut inner));
     join_columns(&mut sub.from, &mut |e| e.each_mut(0, &mut inner));
     renumber(&mut sub.from, &|j| j + base);
+}
+
+/// `is_safe_append_member`: a `SELECT` of a `UNION ALL` that the planner makes a member of the append relation. It is a simple subquery of one relation with no `WHERE` of its own. The planner plans another `SELECT` as a subquery, with no order of its rows.
+pub(crate) fn member(leaf: &Query) -> bool {
+    simple(leaf)
+        && (leaf.filter.is_none() || leaf.pushed)
+        && matches!(leaf.from.as_slice(), [FromItem::Relation(_)])
 }
 
 /// `is_simple_subquery`: a subquery that the planner can merge into the query above it. It has no set operation, no aggregate, no window, no function that gives a set in its targets, no `ORDER BY`, no `DISTINCT`, no `LIMIT`, no `OFFSET`, no row lock, no `WITH` and no volatile function in its targets. A subquery with no `FROM` is an `RTE_RESULT` that [`merge`] drops, as `remove_useless_result_rtes` drops it.
