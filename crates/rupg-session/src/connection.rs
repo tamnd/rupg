@@ -5327,6 +5327,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_redundant_keys.test")));
     }
 
+    /// `EXPLAIN` of the conditions of `WHERE` on a subquery of `FROM` that the planner moves into the subquery, as `set_subquery_pathlist` and `subquery_push_qual`: a condition joins the `WHERE` of the subquery, or its `HAVING` when the subquery makes groups. A condition stays outside a subquery with `LIMIT`, a condition on a column of a window function, on a column that is not an item of `DISTINCT ON` or of `PARTITION BY`, on a column that calls a volatile function or a function that gives a set, and a condition with a volatile function on a subquery with `DISTINCT`. An outer join that a condition makes an inner join is an inner join before the condition moves, as `reduce_outer_joins`, and a `Subquery Scan` with no condition that gives each column of its subquery costs its subquery, as `cost_subqueryscan`. `connection/plan_subquery_pushdown.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_subquery_pushdown() {
+        big_stack(|| script(include_str!("connection/plan_subquery_pushdown.test")));
+    }
+
     /// `EXPLAIN` of the cost of the subplans that run once, as `SS_charge_for_initplans` adds it to the start cost and the total cost of the top node of the query: each `InitPlan` and each `CTE` costs its plan, and an `InitPlan` of `EXISTS` costs its first row, as `cost_subplan` finds it. A `CTE Scan` and a `WorkTable Scan` cost two `cpu_tuple_cost` for each row, as `cost_ctescan`. The value of an `InitPlan` of `EXISTS` passes half of the rows, as `boolvarsel` finds it with no statistics, and a row comparison with `=` is the comparisons of its columns. `connection/plan_initplan_cost.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_initplan_cost() {

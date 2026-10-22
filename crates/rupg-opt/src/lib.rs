@@ -9,6 +9,7 @@ mod exprs;
 mod from;
 mod output;
 mod pullup;
+mod pushdown;
 mod upper;
 
 use rupg_analyze::{

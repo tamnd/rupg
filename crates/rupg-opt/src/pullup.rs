@@ -7,10 +7,11 @@ use rupg_types::oid;
 
 use crate::exprs;
 
-/// The query with each simple subquery in `FROM` merged into the query above it, also in the subqueries of the query.
+/// The query with each simple subquery in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`.
 pub fn pull_up(query: &Query) -> Query {
     let mut query = query.clone();
     pull_all(&mut query);
+    crate::pushdown::push_all(&mut query);
     query
 }
 
@@ -104,7 +105,7 @@ fn candidate(query: &Query) -> Option<(usize, bool)> {
 }
 
 /// The relations of `FROM` that an outer join can give nulls for.
-fn nullable_places(item: &FromItem, nullable: bool, out: &mut Vec<usize>) {
+pub(crate) fn nullable_places(item: &FromItem, nullable: bool, out: &mut Vec<usize>) {
     match item {
         FromItem::Relation(r) if nullable => out.push(*r),
         FromItem::Relation(_) => {}
@@ -124,7 +125,7 @@ fn pullable(relation: &Relation) -> Option<&Query> {
 }
 
 /// The numbers of the columns of the relation `r` that the query reads, with 0 for the whole row. The columns of a join do not count, because the expressions of the query read the columns of the relations.
-fn used(query: &Query, r: usize) -> Vec<i16> {
+pub(crate) fn used(query: &Query, r: usize) -> Vec<i16> {
     let mut out = Vec::new();
     let mut add = |e: &Expr, depth: usize| {
         if let ExprKind::Var(v) = e.kind
@@ -249,7 +250,7 @@ fn merge(query: &mut Query, r: usize, top: bool) {
 }
 
 /// The condition `first AND then`.
-fn and(first: Expr, then: Option<Expr>) -> Expr {
+pub(crate) fn and(first: Expr, then: Option<Expr>) -> Expr {
     match then {
         None => first,
         Some(then) => Expr::new(ExprKind::Bool(BoolOp::And, vec![first, then]), oid::BOOL),

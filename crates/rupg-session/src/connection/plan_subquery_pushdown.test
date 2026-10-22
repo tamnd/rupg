@@ -1,0 +1,148 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM (SELECT x FROM b ORDER BY x) s WHERE x > 1;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=74.23..76.11 rows=753 width=4)
+row   Sort Key: b.x
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row         Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT x FROM b) s WHERE x > 1;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=40.13..42.11 rows=198 width=4)
+row   Group Key: b.x
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row         Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, count(*) AS n FROM b GROUP BY x) s WHERE x > 1;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=42.02..43.99 rows=198 width=12)
+row   Group Key: b.x
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row         Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, count(*) AS n FROM b GROUP BY x) s WHERE n > 1;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=43.90..46.40 rows=67 width=12)
+row   Group Key: b.x
+row   Filter: (count(*) > 1)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, count(*) AS n FROM b GROUP BY x) s WHERE x > 1 AND n > 1;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=42.02..44.49 rows=66 width=12)
+row   Group Key: b.x
+row   Filter: (count(*) > 1)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row         Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x FROM b LIMIT 5) s WHERE x > 1;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=0.00..0.13 rows=2 width=4)
+row   Filter: (s.x > 1)
+row   ->  Limit  (cost=0.00..0.07 rows=5 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, y, sum(y) OVER (PARTITION BY x) AS t FROM b) s WHERE x > 1;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=74.28..87.41 rows=753 width=16)
+row   Window: w1 AS (PARTITION BY b.x)
+row   ->  Sort  (cost=74.23..76.11 rows=753 width=8)
+row         Sort Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row               Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, y, sum(y) OVER (PARTITION BY x) AS t FROM b) s WHERE y > 1;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=158.68..226.31 rows=753 width=16)
+row   Filter: (s.y > 1)
+row   ->  WindowAgg  (cost=158.68..198.06 rows=2260 width=16)
+row         Window: w1 AS (PARTITION BY b.x)
+row         ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row               Sort Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT ON (x) x, y FROM b ORDER BY x, y) s WHERE x > 1 AND y > 1;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=74.23..80.47 rows=66 width=8)
+row   Filter: (s.y > 1)
+row   ->  Unique  (cost=74.23..78.00 rows=198 width=8)
+row         ->  Sort  (cost=74.23..76.11 rows=753 width=8)
+row               Sort Key: b.x, b.y
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row                     Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, generate_series(1, y) AS g FROM b) s WHERE x > 1 AND g > 1;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=0.00..13221.40 rows=251000 width=8)
+row   Filter: (s.g > 1)
+row   ->  ProjectSet  (cost=0.00..3808.90 rows=753000 width=8)
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row               Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT x FROM b) s WHERE x > random();
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on s  (cost=38.25..43.75 rows=67 width=4)
+row   Filter: ((s.x)::double precision > random())
+row   ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row         Group Key: b.x
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c LEFT JOIN (SELECT DISTINCT x FROM b) s ON true WHERE s.x > 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=40.13..3208.56 rows=251460 width=40)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Materialize  (cost=40.13..43.10 rows=198 width=4)
+row         ->  HashAggregate  (cost=40.13..42.11 rows=198 width=4)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                     Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT x FROM b) s RIGHT JOIN c ON true WHERE s.x > 1;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=40.13..3208.56 rows=251460 width=40)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Materialize  (cost=40.13..43.10 rows=198 width=4)
+row         ->  HashAggregate  (cost=40.13..42.11 rows=198 width=4)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row                     Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM c, (SELECT DISTINCT x FROM b) s;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=38.25..3238.45 rows=254000 width=40)
+row   ->  Seq Scan on c  (cost=0.00..22.70 rows=1270 width=36)
+row   ->  Materialize  (cost=38.25..41.25 rows=200 width=4)
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Group Key: b.x
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT x, sum(y) AS t FROM b GROUP BY x HAVING sum(y) > 0) s WHERE x > 1;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=42.02..44.49 rows=66 width=12)
+row   Group Key: b.x
+row   Filter: (sum(b.y) > 0)
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=8)
+row         Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT DISTINCT x FROM b) s WHERE x > 1 OR x IS NULL;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=40.15..42.13 rows=198 width=4)
+row   Group Key: b.x
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=761 width=4)
+row         Filter: ((x > 1) OR (x IS NULL))
+EXPLAIN
+> EXPLAIN VERBOSE SELECT * FROM (SELECT DISTINCT x, y FROM b) s WHERE y * 2 > 4;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=47.66..49.88 rows=222 width=8)
+row   Output: b.x, b.y
+row   Group Key: b.x, b.y
+row   ->  Seq Scan on public.b  (cost=0.00..43.90 rows=753 width=8)
+row         Output: b.x, b.y
+row         Filter: ((b.y * 2) > 4)
+EXPLAIN

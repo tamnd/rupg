@@ -7,9 +7,11 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 ### Added
 
 - The subqueries of `FROM` that the planner merges into the query above them in `EXPLAIN`, as `pull_up_subqueries` of PostgreSQL does it. A subquery with no aggregate, window, `ORDER BY`, `DISTINCT`, `LIMIT` or row lock becomes the relations of its `FROM`, in the list of `FROM` and in a side of a join, and its `WHERE` joins the `WHERE` of the query or the `ON` of the join. `SELECT * FROM (SELECT x FROM b) s` is a `Seq Scan on b` with no `Subquery Scan`, and `EXPLAIN VERBOSE` names its columns as `b.x` (#547).
+- The conditions of `WHERE` that the planner moves into a subquery of `FROM` in `EXPLAIN`, as `set_subquery_pathlist` and `subquery_push_qual` of PostgreSQL do it. A condition that reads only the subquery joins the `WHERE` of the subquery, or its `HAVING` when the subquery makes groups, and the scan of the subquery does not test it again. A condition stays outside a subquery with `LIMIT` or `OFFSET`, and a condition stays outside when it reads a column of a window function, a column that is not an item of `DISTINCT ON` or of each `PARTITION BY`, or a column that calls a volatile function or a function that gives a set. The planner makes an outer join an inner join before it moves the conditions, as `reduce_outer_joins` (#550).
 
 ### Fixed
 
+- The cost of a `Subquery Scan` that has no condition and gives each column of its subquery in `EXPLAIN`. `cost_subqueryscan` of PostgreSQL gives it the cost of its subquery, because the plan does not keep the node (#550).
 - The cost of the subplans that run once in `EXPLAIN`, as `SS_charge_for_initplans` of PostgreSQL adds it to the start cost and the total cost of the top node of the query. Each `InitPlan` and each `CTE` costs its plan, and an `InitPlan` of `EXISTS` costs its first row (#549).
 - The cost of a `CTE Scan` and of a `WorkTable Scan` in `EXPLAIN`. `cost_ctescan` of PostgreSQL charges two `cpu_tuple_cost` for each row (#549).
 - The selectivity of a condition that is a column, a parameter or a subplan in `EXPLAIN`, such as `(InitPlan exists_1).col1`. `boolvarsel` of PostgreSQL gives half of the rows with no statistics. A row comparison with `=` and a subquery that runs once is the comparisons of its columns (#549).
