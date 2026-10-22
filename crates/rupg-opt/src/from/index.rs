@@ -38,7 +38,13 @@ pub(super) struct Table<'a, 'q> {
     pub(super) eq: &'a dyn Fn(&Expr, &Expr) -> Option<f64>,
 }
 
+/// The cost of an item of a bitmap in units of `cpu_operator_cost`, which `cost_bitmap_tree_node` charges for each row of an index scan.
+const BITMAP_ROW_CPU: f64 = 0.1;
+/// The cost of a `BitmapAnd` for each bitmap after the first, in units of `cpu_operator_cost`, as `cost_bitmap_and_node` charges it.
+const BITMAP_AND_CPU: f64 = 100.0;
+
 /// A condition that a column of an index can test, as an `IndexClause`: the condition with the column on the left, the key column of the index, and the place of the condition in the conditions of the scan.
+#[derive(Clone)]
 struct Clause<'q> {
     expr: Cow<'q, Expr>,
     column: usize,
@@ -67,7 +73,16 @@ enum ClauseKind {
     Null(bool),
 }
 
-/// `build_index_paths` for each btree index of the table with no predicate, the newest index first: a scan in the order of the index, and a scan in the other order when its order is useful. A scan is an index only scan when the index has each column of the table that the query reads, as `check_index_only`. Each scan has the order of its rows that a node above can use, as `truncate_useless_pathkeys` finds it.
+/// A scan of an index that a bitmap can use, as an `IndexPath` that `get_index_paths` puts in `bitindexpaths`: the index, its clauses, the total cost of the scan of the index, `indextotalcost`, and the selectivity of the clauses, `indexselectivity`.
+#[derive(Clone)]
+struct BitmapIndex<'q> {
+    index: u32,
+    clauses: Vec<Clause<'q>>,
+    total: f64,
+    selectivity: f64,
+}
+
+/// `build_index_paths` for each btree index of the table with no predicate, the newest index first: a scan in the order of the index, and a scan in the other order when its order is useful. A scan is an index only scan when the index has each column of the table that the query reads, as `check_index_only`. Each scan has the order of its rows that a node above can use, as `truncate_useless_pathkeys` finds it. The forward scans that test a condition or that give no useful order are the scans that a bitmap can use, and the end of `create_index_paths` makes the bitmap heap scan of the best of them.
 pub(super) fn paths<'q>(
     level: &Level<'q>,
     table: &Table<'_, 'q>,
@@ -75,6 +90,7 @@ pub(super) fn paths<'q>(
     stats: &Stats,
 ) -> Vec<Rel<'q>> {
     let mut out = Vec::new();
+    let mut bitmaps = Vec::new();
     let read = read_columns(table, stats);
     // `get_relation_info` puts each index first in `indexlist`, so the newest index comes first.
     for index in indexes.iter().rev() {
@@ -82,17 +98,32 @@ pub(super) fn paths<'q>(
             continue;
         }
         let clauses = match_clauses(table, index);
+        let costs = btree_cost(table, index, &clauses, stats);
         let only = read.iter().all(|a| *a > 0 && index.columns.contains(a));
         let forward = order(level, table.r, index, false, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &forward);
         if !clauses.is_empty() || !useful.is_empty() || only {
-            out.push(scan(level, table, index, &clauses, only, false, useful, stats));
+            // A backward scan has the clauses and the costs of the forward scan, so `choose_bitmap_and` keeps the forward scan.
+            if useful.is_empty() || costs.2 < 1.0 {
+                let (_, total, selectivity) = costs;
+                bitmaps.push(BitmapIndex {
+                    index: index.oid,
+                    clauses: clauses.clone(),
+                    total,
+                    selectivity,
+                });
+            }
+            out.push(scan(level, table, index, &clauses, costs, only, false, useful, stats));
         }
         let backward = order(level, table.r, index, true, stats);
         let useful = stats.useful(&BTreeSet::from([table.r]), &backward);
         if !useful.is_empty() {
-            out.push(scan(level, table, index, &clauses, only, true, useful, stats));
+            out.push(scan(level, table, index, &clauses, costs, only, true, useful, stats));
         }
+    }
+    if !bitmaps.is_empty() {
+        let chosen = choose_bitmap_and(table, bitmaps, stats);
+        out.push(bitmap_heap_scan(level, table, &chosen, stats));
     }
     out
 }
@@ -232,6 +263,7 @@ fn scan<'q>(
     table: &Table<'_, 'q>,
     index: &Index,
     clauses: &[Clause<'q>],
+    costs: (f64, f64, f64),
     only: bool,
     backward: bool,
     order: Vec<OrderKey>,
@@ -245,7 +277,7 @@ fn scan<'q>(
         .map(|(_, q)| q.clone())
         .collect();
     stats.sort_quals(&mut filter);
-    let (index_startup, index_total, selectivity) = btree_cost(table, index, clauses, stats);
+    let (index_startup, index_total, selectivity) = costs;
     // `cost_index`: with no correlation, each row costs a random page of the table, as `index_pages_fetched` finds the pages.
     let mut startup = index_startup;
     let mut run = index_total - index_startup;
@@ -269,6 +301,163 @@ fn scan<'q>(
     let width = stats.width(&BTreeSet::from([table.r]));
     node.cost = Cost { startup, total: startup + run, rows: table.rows, width };
     Rel { node, rels: BTreeSet::from([table.r]), order }
+}
+
+/// `cost_bitmap_tree_node`: the cost of the bitmap of the scans and the selectivity of their conditions. One scan costs its index and a little for each row. More scans make a `BitmapAnd`, as `cost_bitmap_and_node`.
+fn bitmap_tree_cost(table: &Table<'_, '_>, scans: &[BitmapIndex<'_>]) -> (f64, f64) {
+    let one = |b: &BitmapIndex<'_>| b.total + BITMAP_ROW_CPU * cost::CPU_OPERATOR * table.rows;
+    match scans {
+        [b] => (one(b), b.selectivity),
+        _ => {
+            let mut total = 0.0;
+            let mut selectivity = 1.0;
+            for (i, b) in scans.iter().enumerate() {
+                selectivity *= b.selectivity;
+                total += one(b);
+                if i > 0 {
+                    total += BITMAP_AND_CPU * cost::CPU_OPERATOR;
+                }
+            }
+            (total, selectivity)
+        }
+    }
+}
+
+/// `choose_bitmap_and`: the scans of the best bitmap. Of the scans with the same conditions, the cheapest stays. In the order of the cost of their bitmaps, each scan starts a list, and each scan after it whose conditions are new goes in the list when the `BitmapAnd` makes the heap scan cheaper. The cheapest list wins.
+fn choose_bitmap_and<'q>(
+    table: &Table<'_, 'q>,
+    scans: Vec<BitmapIndex<'q>>,
+    stats: &Stats,
+) -> Vec<BitmapIndex<'q>> {
+    if scans.len() == 1 {
+        return scans;
+    }
+    let ids = |b: &BitmapIndex<'_>| b.clauses.iter().map(|c| c.at).collect::<BTreeSet<usize>>();
+    let tree = |b: &BitmapIndex<'q>| bitmap_tree_cost(table, std::slice::from_ref(b));
+    let mut kept: Vec<(BitmapIndex<'q>, BTreeSet<usize>)> = Vec::new();
+    for scan in scans {
+        let these = ids(&scan);
+        match kept.iter().position(|(_, k)| *k == these) {
+            Some(i) => {
+                if tree(&scan).0 < tree(&kept[i].0).0 {
+                    kept[i] = (scan, these);
+                }
+            }
+            None => kept.push((scan, these)),
+        }
+    }
+    if kept.len() == 1 {
+        return kept.into_iter().map(|(b, _)| b).collect();
+    }
+    // `path_usage_comparator`: by cost, then by selectivity. The sort keeps the order of equal scans, as the insertion sort of `qsort` does for a short list.
+    kept.sort_by(|(a, _), (b, _)| {
+        let (a, b) = (tree(a), tree(b));
+        a.0.total_cmp(&b.0).then(a.1.total_cmp(&b.1))
+    });
+    let (startup, per_row) = stats.qual_costs(table.quals.iter().map(|q| &*q.expr));
+    let heap = |list: &[BitmapIndex<'q>]| {
+        let (tree, selectivity) = bitmap_tree_cost(table, list);
+        heap_cost(table, tree, selectivity, startup, per_row).1
+    };
+    let mut best: Vec<BitmapIndex<'q>> = Vec::new();
+    let mut best_cost = 0.0;
+    for (i, (first, first_ids)) in kept.iter().enumerate() {
+        let mut list = vec![first.clone()];
+        let mut so_far = heap(&list);
+        let mut ids_so_far = first_ids.clone();
+        for (scan, these) in &kept[i + 1..] {
+            if !these.is_disjoint(&ids_so_far) {
+                continue;
+            }
+            list.push(scan.clone());
+            let cost = heap(&list);
+            if cost < so_far {
+                so_far = cost;
+                ids_so_far.extend(these);
+            } else {
+                list.pop();
+            }
+        }
+        if i == 0 || so_far < best_cost {
+            best = list;
+            best_cost = so_far;
+        }
+    }
+    best
+}
+
+/// `cost_bitmap_heap_scan` with the pages of `compute_bitmap_pages`: the start cost and the total cost of the heap scan of a bitmap that costs `tree` and passes the rows of `selectivity`, when the conditions of the table cost `startup` to start and `per_row` for each row. The pages cost a random page each when the scan reads few of them and less when it reads more. A bitmap of the 4 MB of `work_mem` holds the places of the pages of each table that the planner sees, so no page is lossy.
+fn heap_cost(
+    table: &Table<'_, '_>,
+    tree: f64,
+    selectivity: f64,
+    startup: f64,
+    per_row: f64,
+) -> (f64, f64) {
+    let fetched = cost::clamp_rows(selectivity * table.tuples);
+    let t = if table.pages > 1.0 { table.pages } else { 1.0 };
+    let pages = 2.0 * t * fetched / (2.0 * t + fetched);
+    let pages = if pages >= t { t } else { pages.ceil() };
+    let per_page = if pages >= 2.0 {
+        cost::RANDOM_PAGE - (cost::RANDOM_PAGE - cost::SEQ_PAGE) * (pages / t).sqrt()
+    } else {
+        cost::RANDOM_PAGE
+    };
+    let startup = tree + startup;
+    let run = pages * per_page + (cost::CPU_TUPLE + per_row) * fetched;
+    (startup, startup + run)
+}
+
+/// `create_bitmap_heap_path` and `create_bitmap_scan_plan`: the heap scan of the bitmap of the scans. Its recheck conditions are the conditions of the scans as the query has them, and its filter is each other condition of the table, in the order of `order_qual_clauses`. The bitmap of one scan is a `BitmapIndexScan`, and the bitmap of more scans is a `BitmapAnd` of them.
+fn bitmap_heap_scan<'q>(
+    level: &Level<'q>,
+    table: &Table<'_, 'q>,
+    scans: &[BitmapIndex<'q>],
+    stats: &Stats,
+) -> Rel<'q> {
+    let used: BTreeSet<usize> = scans.iter().flat_map(|b| b.clauses.iter().map(|c| c.at)).collect();
+    let mut recheck: Vec<usize> = Vec::new();
+    for at in scans.iter().flat_map(|b| b.clauses.iter().map(|c| c.at)) {
+        if !recheck.contains(&at) {
+            recheck.push(at);
+        }
+    }
+    let mut filter: Vec<Qual<'q>> = table
+        .quals
+        .iter()
+        .enumerate()
+        .filter(|(at, _)| !used.contains(at))
+        .map(|(_, q)| q.clone())
+        .collect();
+    stats.sort_quals(&mut filter);
+    let index_scan = |b: &BitmapIndex<'q>| {
+        let cond = b.clauses.iter().map(|c| Item { expr: c.expr.clone(), below: false }).collect();
+        let kind = Kind::BitmapIndexScan { relation: table.r, index: b.index, cond };
+        let mut node = Node::new(kind, level.scope, Vec::new());
+        let rows = cost::clamp_rows(b.selectivity * table.tuples);
+        node.cost = Cost { startup: 0.0, total: b.total, rows, width: 0 };
+        node
+    };
+    let (tree, selectivity) = bitmap_tree_cost(table, scans);
+    let child = match scans {
+        [b] => index_scan(b),
+        _ => {
+            let mut node =
+                Node::new(Kind::BitmapAnd, level.scope, scans.iter().map(index_scan).collect());
+            let rows = cost::clamp_rows(selectivity * table.tuples);
+            node.cost = Cost { startup: tree, total: tree, rows, width: 0 };
+            node
+        }
+    };
+    let (qual_startup, per_row) = stats.qual_costs(table.quals.iter().map(|q| &*q.expr));
+    let (startup, total) = heap_cost(table, tree, selectivity, qual_startup, per_row);
+    let recheck = recheck.into_iter().map(|at| table.quals[at].item()).collect();
+    let kind = Kind::BitmapHeapScan { relation: table.r, recheck };
+    let mut node = Node::new(kind, level.scope, vec![child]);
+    node.filter = filter.iter().map(|q| q.item()).collect();
+    let width = stats.width(&BTreeSet::from([table.r]));
+    node.cost = Cost { startup, total, rows: table.rows, width };
+    Rel { node, rels: BTreeSet::from([table.r]), order: Vec::new() }
 }
 
 /// `btcostestimate` and `genericcostestimate`: the start cost and the total cost of the scan of the index, and the selectivity of its clauses. The rows of the index that the scan reads come from the clauses of the first columns: the clauses of each column up to the first column with no `=` clause, and the clauses of that column. A unique index with `=` on each key column reads one row. Each item of `ANY` is one more descent of the tree.

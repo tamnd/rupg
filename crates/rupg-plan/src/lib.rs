@@ -213,6 +213,12 @@ pub enum Kind<'q> {
         cond: Vec<Item<'q>>,
         columns: Vec<i16>,
     },
+    /// `BitmapHeapScan`: the rows of a relation of the scope at the places that the bitmap of the child gives, with the conditions of the indexes of the bitmap, `bitmapqualorig`, which the node tests again.
+    BitmapHeapScan { relation: usize, recheck: Vec<Item<'q>> },
+    /// `BitmapIndexScan`: the bitmap of the places of the rows of a relation of the scope that its index `index` finds with the conditions of the index.
+    BitmapIndexScan { relation: usize, index: u32, cond: Vec<Item<'q>> },
+    /// `BitmapAnd`: the places that are in each bitmap of the children.
+    BitmapAnd,
     /// `SampleScan`: a table with `TABLESAMPLE`.
     SampleScan(usize),
     /// `FunctionScan`: a function in `FROM`.

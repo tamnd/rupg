@@ -93,6 +93,9 @@ fn names(kind: &Kind<'_>) -> Names {
         Kind::SeqScan(_) => simple("Seq Scan"),
         Kind::IndexScan { only: false, .. } => simple("Index Scan"),
         Kind::IndexScan { only: true, .. } => simple("Index Only Scan"),
+        Kind::BitmapHeapScan { .. } => simple("Bitmap Heap Scan"),
+        Kind::BitmapIndexScan { .. } => simple("Bitmap Index Scan"),
+        Kind::BitmapAnd => simple("BitmapAnd"),
         Kind::SampleScan(_) => simple("Sample Scan"),
         Kind::FunctionScan(_) => simple("Function Scan"),
         Kind::TableFunctionScan(_) => simple("Table Function Scan"),
@@ -220,8 +223,17 @@ impl Explainer<'_, '_> {
             self.w.boolean("Parallel Aware", false);
             self.w.boolean("Async Capable", false);
         }
-        if let Kind::IndexScan { index, backward, .. } = node.kind {
-            self.index_details(index, backward);
+        match node.kind {
+            Kind::IndexScan { index, backward, .. } => self.index_details(index, backward),
+            Kind::BitmapIndexScan { index, .. } => {
+                let name = self.texts.object(index, false).0;
+                if self.w.format == Format::Text {
+                    self.w.buf.push_str(&format!(" on {}", self.texts.quote(&name)));
+                } else {
+                    self.w.text("Index Name", &name);
+                }
+            }
+            _ => {}
         }
         if let Some(target) = self.target(node) {
             self.write_target(&target);
@@ -296,7 +308,7 @@ impl Explainer<'_, '_> {
         }
         for (i, child) in node.children.iter().enumerate() {
             let relationship = match node.kind {
-                Kind::Append => "Member",
+                Kind::Append | Kind::BitmapAnd => "Member",
                 Kind::SubqueryScan(_) => "Subquery",
                 _ if i == 0 => "Outer",
                 _ => "Inner",
@@ -338,7 +350,10 @@ impl Explainer<'_, '_> {
         let (index, tag, object): (usize, Option<&'static str>, Option<(u32, bool)>) = match node
             .kind
         {
-            Kind::SeqScan(r) | Kind::SampleScan(r) | Kind::IndexScan { relation: r, .. } => {
+            Kind::SeqScan(r)
+            | Kind::SampleScan(r)
+            | Kind::IndexScan { relation: r, .. }
+            | Kind::BitmapHeapScan { relation: r, .. } => {
                 let table = node.member.unwrap_or(relation_of(r).oid);
                 (r, Some("Relation Name"), Some((table, false)))
             }
@@ -446,6 +461,13 @@ impl Explainer<'_, '_> {
             }
             Kind::IndexScan { cond, .. } => {
                 self.qual("Index Cond", scope, cond, self.options.verbose)?;
+                self.qual("Filter", scope, &node.filter, self.options.verbose)?;
+            }
+            Kind::BitmapIndexScan { cond, .. } => {
+                self.qual("Index Cond", scope, cond, self.options.verbose)?;
+            }
+            Kind::BitmapHeapScan { recheck, .. } => {
+                self.qual("Recheck Cond", scope, recheck, self.options.verbose)?;
                 self.qual("Filter", scope, &node.filter, self.options.verbose)?;
             }
             Kind::SampleScan(r) => {
