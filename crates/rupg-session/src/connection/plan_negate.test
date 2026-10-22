@@ -1,0 +1,143 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE t (x int, y int, b bool, r int[], z text);
+CREATE TABLE
+> CREATE TABLE s (x int PRIMARY KEY, y int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM t WHERE NOT (x = 1);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..20.00 rows=796 width=73)
+row   Filter: (x <> 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x < 1 OR y >= 2);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..22.00 rows=89 width=73)
+row   Filter: ((x >= 1) AND (y < 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x = 1 AND y <> 2);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..22.00 rows=796 width=73)
+row   Filter: ((x <> 1) OR (y = 2))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x IS NULL);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..18.00 rows=796 width=73)
+row   Filter: (x IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (y IS NOT NULL OR b);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..18.00 rows=2 width=73)
+row   Filter: ((y IS NULL) AND (NOT b))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (b IS TRUE);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..18.00 rows=400 width=73)
+row   Filter: (b IS NOT TRUE)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (b IS NOT UNKNOWN);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..18.00 rows=4 width=73)
+row   Filter: (b IS UNKNOWN)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT NOT b;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..18.00 rows=400 width=73)
+row   Filter: b
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x = ANY (r));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..28.00 rows=761 width=73)
+row   Filter: (x <> ALL (r))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x <> ALL ('{1,2}'));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..20.00 rows=8 width=73)
+row   Filter: (x = ANY ('{1,2}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x IN (1, 2, 3));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..21.00 rows=788 width=73)
+row   Filter: (x <> ALL ('{1,2,3}'::integer[]))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (z LIKE 'a%');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..20.00 rows=796 width=73)
+row   Filter: (z !~~ 'a%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x IS DISTINCT FROM y);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..20.00 rows=4 width=73)
+row   Filter: (NOT (x IS DISTINCT FROM y))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE x IS NOT DISTINCT FROM y;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..20.00 rows=4 width=73)
+row   Filter: (NOT (x IS DISTINCT FROM y))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (ROW(x, y) IS NULL);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   Filter: ((x IS NOT NULL) OR (y IS NOT NULL))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x = 1 OR (y = 2 AND NOT b));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..22.00 rows=794 width=73)
+row   Filter: ((x <> 1) AND ((y <> 2) OR b))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (z || 'a' = 'b');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..22.00 rows=796 width=73)
+row   Filter: ((z || 'a'::text) <> 'b'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x + 1 > y * 2);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..24.00 rows=267 width=73)
+row   Filter: ((x + 1) <= (y * 2))
+EXPLAIN
+> EXPLAIN (VERBOSE, COSTS OFF) SELECT NOT (x = y), NOT (b OR x > 1) FROM t;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on public.t
+row   Output: (x <> y), ((NOT b) AND (x <= 1))
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x = 1 AND (y = 2 OR y = 3));
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on t  (cost=0.00..24.00 rows=800 width=73)
+row   Filter: ((x <> 1) OR ((y <> 2) AND (y <> 3)))
+EXPLAIN
+> EXPLAIN SELECT * FROM s JOIN t ON NOT (t.x <> s.x);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..80.95 rows=800 width=81)
+row   Hash Cond: (t.x = s.x)
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM s JOIN t ON NOT (t.x = s.x OR t.y = 1);
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.00..27038.99 rows=1798164 width=81)
+row   Join Filter: (t.x <> s.x)
+row   ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Materialize  (cost=0.00..23.98 rows=796 width=73)
+row         ->  Seq Scan on t  (cost=0.00..20.00 rows=796 width=73)
+row               Filter: (y <> 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT EXISTS (SELECT 1 FROM s WHERE s.x = t.x);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..85.40 rows=400 width=73)
+row   Hash Cond: (t.x = s.x)
+row   ->  Seq Scan on t  (cost=0.00..18.00 rows=800 width=73)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on s  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM t WHERE NOT (x = 1 OR NULL);
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.00 rows=0 width=0)
+row   Replaces: Scan on t
+row   One-Time Filter: false
+EXPLAIN
+> SELECT NOT (1 = 1 OR x = 2), NOT (x IS NULL) FROM (VALUES (1), (NULL)) v(x);
+fields ?column?:16:1:-1,?column?:16:1:-1
+row f,t
+row f,f
+SELECT 2
