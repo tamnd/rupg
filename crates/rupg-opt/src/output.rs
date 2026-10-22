@@ -5,7 +5,7 @@
 use rupg_analyze::{Expr, ExprKind, Var};
 use rupg_plan::{Item, Kind, Node, Operation, Replaced};
 
-use crate::{Level, cost, exprs, from};
+use crate::{Level, cost, exprs, from, upper};
 
 /// Sets the target lists and the widths of the nodes of the plan of a query level.
 pub(crate) fn level<'q>(level: &Level<'q>, node: &mut Node<'q>) {
@@ -31,6 +31,25 @@ fn add_columns<'q>(expr: &Expr, levels: usize, out: &mut Vec<Item<'q>>) {
         if !out.iter().any(|o| o.expr.same(&column)) {
             out.push(item(column));
         }
+    }
+}
+
+/// Adds the columns, the aggregate calls and the window calls of the expression that are not in the list, in the order of the expression, as `pull_var_clause` finds them.
+fn add_inputs<'q>(expr: &Expr, out: &mut Vec<Item<'q>>) {
+    match &expr.kind {
+        ExprKind::Agg(agg) if agg.levels_up == 0 => {}
+        ExprKind::Window(_) => {}
+        ExprKind::Var(v) if v.levels_up == 0 => {}
+        ExprKind::SubLink(_) => return add_columns(expr, 0, out),
+        _ => {
+            for child in expr.children() {
+                add_inputs(child, out);
+            }
+            return;
+        }
+    }
+    if !out.iter().any(|o| o.expr.same(expr)) {
+        out.push(item(expr.clone()));
     }
 }
 
@@ -71,6 +90,33 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
             node.output.clear();
             node.cost.width = 0;
+        }
+        // `make_sort_input_target`: a `Result` above the sort computes the targets that come after the sort from the other targets and from the columns, the aggregate calls and the window calls of those targets, which the sort gives.
+        Kind::Result { replaces: None, one_time }
+            if one_time.is_empty() && !node.children.is_empty() =>
+        {
+            let late = upper::postponed(level);
+            let is_late = |at: usize| late.get(at).copied().unwrap_or(false);
+            let mut below: Vec<Item<'q>> = want
+                .iter()
+                .enumerate()
+                .filter(|&(at, _)| !is_late(at))
+                .map(|(_, w)| w.clone())
+                .collect();
+            for (at, w) in want.iter().enumerate() {
+                if is_late(at) {
+                    add_inputs(&w.expr, &mut below);
+                }
+            }
+            node.output = want
+                .iter()
+                .enumerate()
+                .map(|(at, w)| if is_late(at) { w.clone() } else { w.passed() })
+                .collect();
+            if let Some(child) = node.children.first_mut() {
+                set(level, child, below, false);
+            }
+            node.cost.width = width(level, node.scope, &want);
         }
         Kind::Sort(_)
         | Kind::IncrementalSort { .. }
@@ -147,9 +193,10 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
                 cond.iter().chain(join_filter).map(|i| i.expr.as_ref().clone()).collect();
             join(level, node, want, &parts);
         }
-        // `set_rel_size` marks a relation with a condition that is never true as dummy before `set_rel_width`, so its `Result` has a width of 0. A join with no rows and an inner side that a join marks dummy keep the width of their columns.
+        // `set_rel_size` marks a relation with a condition that is never true as dummy before `set_rel_width`, so its `Result` has a width of 0. A join with no rows and an inner side that a join marks dummy keep the width of their columns. A target that is not a column makes `apply_scanjoin_target_to_paths` give the node a new target, whose width `set_pathtarget_cost_width` finds.
         Kind::Result { replaces: Some(Replaced::Scan(_, false)), .. } => {
-            node.cost.width = 0;
+            let plain = want.iter().all(|w| is_var(&w.expr));
+            node.cost.width = if plain { 0 } else { width(level, node.scope, &want) };
             node.output = want;
         }
         Kind::Result { .. } => {

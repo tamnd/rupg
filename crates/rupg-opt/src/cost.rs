@@ -882,6 +882,12 @@ pub(crate) fn incremental_sort(
     (startup, startup + run)
 }
 
+/// The `LOG2` of `costsize.c`, which divides by a constant that is a little less than the logarithm of 2, so that the result is a little more than the exact logarithm.
+#[allow(clippy::approx_constant)]
+fn log2(x: f64) -> f64 {
+    x.ln() / 0.693147180559945
+}
+
 /// `cost_tuplesort`: the start cost and the run cost of a sort of `rows` rows of a width, with the number of rows of `LIMIT` when it has one. A sort that does not fit in `work_mem` is a merge sort on disk.
 fn tuplesort(rows: f64, width: i32, bound: Option<f64>) -> (f64, f64) {
     let input_bytes = byte_size(rows, width);
@@ -897,11 +903,11 @@ fn tuplesort(rows: f64, width: i32, bound: Option<f64>) -> (f64, f64) {
         let log_runs = if runs > MERGE_ORDER { (runs.ln() / MERGE_ORDER.ln()).ceil() } else { 1.0 };
         // Each pass reads and writes each page, and a quarter of the reads are random.
         let accesses = 2.0 * pages * log_runs;
-        comparison * tuples * tuples.log2() + accesses * (SEQ_PAGE * 0.75 + RANDOM_PAGE * 0.25)
+        comparison * tuples * log2(tuples) + accesses * (SEQ_PAGE * 0.75 + RANDOM_PAGE * 0.25)
     } else if tuples > 2.0 * output || input_bytes > WORK_MEM {
-        comparison * tuples * (2.0 * output).log2()
+        comparison * tuples * log2(2.0 * output)
     } else {
-        comparison * tuples * tuples.log2()
+        comparison * tuples * log2(tuples)
     };
     (startup, CPU_OPERATOR * tuples)
 }
