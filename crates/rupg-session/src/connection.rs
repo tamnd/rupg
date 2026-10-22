@@ -5441,6 +5441,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_dummy_join.test")));
     }
 
+    /// `EXPLAIN` of `LIKE`, `ILIKE`, regular expressions and `^@` of a column and a constant pattern, as `patternsel` estimates them with no statistics: a pattern that is its fixed prefix is `=` of the prefix, and the other patterns take `DEFAULT_MATCH_SEL` for a fixed prefix times the selectivity of the rest of the pattern. `connection/plan_pattern.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_pattern() {
+        big_stack(|| script(include_str!("connection/plan_pattern.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {
