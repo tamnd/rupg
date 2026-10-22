@@ -5,12 +5,15 @@
 #![forbid(unsafe_code)]
 
 mod cost;
+mod exists;
 mod exprs;
 mod from;
 mod output;
 mod pullup;
 mod pushdown;
 mod upper;
+
+use std::ops::Range;
 
 use rupg_analyze::{
     Cte, Expr, ExprKind, FromItem, Query, SubLink, SubLinkKind, TABLE_OID_ATTNUM, Var, Write,
@@ -61,9 +64,18 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
     let mut b = Builder { members: Some(members), ..Builder::default() };
     let mut root = b.query(query, None);
     let mut pending = std::mem::take(&mut b.pending);
-    attach(&mut root, &mut pending);
+    let mut chosen = Chosen { labels: &mut b.labels, dropped: Vec::new() };
+    attach(&mut root, &mut pending, &mut chosen);
     // A subplan that no node holds, such as one in an expression that the planner made again, goes to the top node.
-    root.sub_plans.extend(pending.into_iter().map(|(_, sub)| sub));
+    let rows = root.cost.rows;
+    while !pending.is_empty() {
+        let item = pending.remove(0);
+        let sub = choose(item, rows, &mut pending, &mut chosen);
+        root.sub_plans.push(sub);
+    }
+    for range in std::mem::take(&mut chosen.dropped) {
+        b.groups[range].iter_mut().for_each(Vec::clear);
+    }
     let mut order = std::mem::take(&mut b.current);
     for group in b.groups {
         order.extend(group);
@@ -76,14 +88,14 @@ pub fn plan<'q>(query: &'q Query, members: &'q dyn Members) -> Plan<'q> {
 struct Builder<'q> {
     scopes: Vec<Scope<'q>>,
     labels: Vec<Label<'q>>,
-    /// The number of subplans of each kind of subquery so far, for their names, as `choose_plan_name`.
-    counts: [usize; 6],
+    /// The number of subplans of each kind of subquery so far, for their names, as `choose_plan_name`. The last one counts the subplans of [`SubLink::alternative`].
+    counts: [usize; 7],
     /// The scopes of the subplan that the planner makes now, in the order of the range table.
     current: Vec<usize>,
     /// The scopes of each subplan that is done, in the order that the subplans end.
     groups: Vec<Vec<usize>>,
     /// The subplans that run for each row, which go to the node that holds their subquery.
-    pending: Vec<(&'q SubLink, SubPlan<'q>)>,
+    pending: Vec<Pending<'q>>,
     /// The queries of `WITH` that the query and the queries outside it give.
     ctes: Vec<CteUse<'q>>,
     /// The rows of the part of each recursive query that is not recursive, by the number of its work table, for the estimate of a `WorkTableScan`.
@@ -91,6 +103,29 @@ struct Builder<'q> {
     /// True when the next query is the subquery of `EXISTS`.
     exists: bool,
     members: Option<&'q dyn Members>,
+}
+
+/// A subplan that runs for each row, which waits for the node that holds its subquery.
+#[derive(Debug)]
+struct Pending<'q> {
+    link: &'q SubLink,
+    sub: SubPlan<'q>,
+    /// The subplan of [`SubLink::alternative`], of which the plan keeps one with `sub`.
+    alternative: Option<Alternative<'q>>,
+}
+
+/// The subplan of the `ANY` of a correlated `EXISTS`, which `make_subplan` puts with the subplan of `EXISTS` in an `AlternativeSubPlan`.
+#[derive(Debug)]
+struct Alternative<'q> {
+    sub: SubPlan<'q>,
+    /// The name of the subplan, such as `exists_to_any_1`.
+    name: String,
+    /// The index of the label of the subquery in [`Builder::labels`].
+    label: usize,
+    /// The start cost and the cost of each call of the subplan of `EXISTS`, then of this subplan.
+    costs: [(f64, f64); 2],
+    /// The groups of scopes of each of the two subplans in [`Builder::groups`], with the groups of their own subplans.
+    groups: [Range<usize>; 2],
 }
 
 /// A query of `WITH` in the scope of the planner.
@@ -380,13 +415,15 @@ impl<'q> Builder<'q> {
         let correlated = exprs::correlated(&link.query, 1);
         let scope = level.scope;
         self.exists = link.kind == SubLinkKind::Exists;
+        let first = self.groups.len();
         let mut plan = self.subplan(|b| b.query(&link.query, Some(scope)));
+        let groups = first..self.groups.len();
         let init = !correlated && !matches!(link.kind, SubLinkKind::Any | SubLinkKind::All);
         let hashed = !correlated && link.kind == SubLinkKind::Any && hashable_test(link);
         if !correlated && !init && !hashed {
             plan = upper::materialize(plan);
         }
-        self.labels.push(Label { link, name: name.clone(), init, hashed });
+        self.labels.push(Label { link, name: name.clone(), init, hashed, alternative: false });
         if init {
             level.init_cost += init_cost(link, &plan);
             level.init.push(SubPlan { name: format!("InitPlan {name}"), plan });
@@ -397,9 +434,71 @@ impl<'q> Builder<'q> {
                 startup,
                 per_call,
             });
-            self.pending.push((link, SubPlan { name: format!("SubPlan {name}"), plan }));
+            let sub = SubPlan { name: format!("SubPlan {name}"), plan };
+            let alternative = match &link.alternative {
+                Some(any) if correlated => {
+                    self.alternative(any, scope, (startup, per_call), groups)
+                }
+                _ => None,
+            };
+            self.pending.push(Pending { link, sub, alternative });
         }
     }
+
+    /// `make_subplan` for the `ANY` of [`SubLink::alternative`]: its subplan, which reads all the rows of its subquery into a hash table. It is none when the hash table does not fit in `hash_mem`, as `subpath_is_hashable`. `exists` is the cost of the subplan of `EXISTS` and `groups` are its groups of scopes.
+    fn alternative(
+        &mut self,
+        any: &'q SubLink,
+        scope: usize,
+        exists: (f64, f64),
+        groups: Range<usize>,
+    ) -> Option<Alternative<'q>> {
+        self.counts[6] += 1;
+        let name = format!("exists_to_any_{}", self.counts[6]);
+        let label = self.labels.len() - 1;
+        let (first, waiting) = (self.groups.len(), self.pending.len());
+        let plan = self.subplan(|b| b.query(&any.query, Some(scope)));
+        let own = first..self.groups.len();
+        if cost::subplan_hash_space(plan.cost.rows, plan.cost.width) >= cost::HASH_MEM {
+            self.groups[own].iter_mut().for_each(Vec::clear);
+            self.pending.truncate(waiting);
+            return None;
+        }
+        let costs = [exists, subplan_cost(any, &plan, false, true)];
+        let sub = SubPlan { name: format!("SubPlan {name}"), plan };
+        Some(Alternative { sub, name, label, costs, groups: [groups, own] })
+    }
+}
+
+/// The choices of `fix_alternative_subplan` so far: the labels of the subqueries, which take the names of the subplans that the plan keeps, and the groups of scopes of the subplans that it does not keep.
+struct Chosen<'a, 'q> {
+    labels: &'a mut Vec<Label<'q>>,
+    dropped: Vec<Range<usize>>,
+}
+
+/// `fix_alternative_subplan`: the subplan of a subquery that the plan keeps, for a node that runs it `num_exec` times. Of the subplan of `EXISTS` and the subplan of its `ANY`, the plan keeps the one with the lower cost, the `ANY` when they are equal. The subplans of the other one take no place in the plan.
+fn choose<'q>(
+    item: Pending<'q>,
+    num_exec: f64,
+    pending: &mut Vec<Pending<'q>>,
+    chosen: &mut Chosen<'_, 'q>,
+) -> SubPlan<'q> {
+    let Some(alt) = item.alternative else { return item.sub };
+    let cost = |(startup, per_call): (f64, f64)| startup + num_exec * per_call;
+    let (kept, mut dropped, range) = if cost(alt.costs[1]) <= cost(alt.costs[0]) {
+        let label = &mut chosen.labels[alt.label];
+        label.name = alt.name;
+        label.hashed = true;
+        label.alternative = true;
+        let [exists, _] = alt.groups;
+        (alt.sub, item.sub, exists)
+    } else {
+        let [_, own] = alt.groups;
+        (item.sub, alt.sub, own)
+    };
+    chosen.dropped.push(range);
+    attach(&mut dropped.plan, pending, chosen);
+    kept
 }
 
 /// `cost_subplan` of a subplan that runs for each row: the start cost and the cost of each call, which has the cost of the test. A hashed subplan runs its plan once and charges one `cpu_operator_cost` for each row that it puts in the hash table. Each call of another subplan costs the rows that it reads: the first row for `EXISTS`, half of the rows for `ANY` and `ALL` with one `cpu_operator_cost` for each, and all the rows for the others. It pays the start cost of its plan for each call, or once when it reads no column of the query and its top node keeps its rows, as `ExecMaterializesOutput`.
@@ -497,25 +596,27 @@ fn preprocess_order(query: &Query) -> Vec<&Expr> {
 }
 
 /// Moves each subplan that runs for each row to the node with the expression that holds its subquery, as `SS_finalize_plan` sees it.
-fn attach<'q>(node: &mut Node<'q>, pending: &mut Vec<(&'q SubLink, SubPlan<'q>)>) {
+fn attach<'q>(node: &mut Node<'q>, pending: &mut Vec<Pending<'q>>, chosen: &mut Chosen<'_, 'q>) {
     if !pending.is_empty() {
-        let mut links = Vec::new();
-        for item in own_items(node) {
+        let mut found: Vec<(*const SubLink, f64)> = Vec::new();
+        for (item, num_exec) in own_items(node) {
+            let mut links = Vec::new();
             sublinks(&item.expr, &mut links);
+            found.extend(links.into_iter().map(|l| (std::ptr::from_ref(l), num_exec)));
         }
-        let found: Vec<*const SubLink> = links.into_iter().map(std::ptr::from_ref).collect();
-        for link in found {
-            if let Some(at) = pending.iter().position(|(l, _)| std::ptr::eq(*l, link)) {
-                let (_, sub) = pending.remove(at);
+        for (link, num_exec) in found {
+            if let Some(at) = pending.iter().position(|p| std::ptr::eq(p.link, link)) {
+                let item = pending.remove(at);
+                let sub = choose(item, num_exec, pending, chosen);
                 node.sub_plans.push(sub);
             }
         }
     }
     for child in &mut node.children {
-        attach(child, pending);
+        attach(child, pending, chosen);
     }
     for sub in node.init_plans.iter_mut().chain(&mut node.sub_plans) {
-        attach(&mut sub.plan, pending);
+        attach(&mut sub.plan, pending, chosen);
     }
 }
 
@@ -529,17 +630,20 @@ fn sublinks<'e>(expr: &'e Expr, out: &mut Vec<&'e SubLink>) {
     }
 }
 
-/// The expressions that a node computes: its target list apart from the values that it reads from below, its conditions and the other expressions of its kind.
-fn own_items<'n, 'q>(node: &'n Node<'q>) -> Vec<&'n Item<'q>> {
-    let mut out: Vec<&Item<'q>> = node.output.iter().filter(|i| !i.below).collect();
+/// The expressions that a node computes: its target list apart from the values that it reads from below, its conditions and the other expressions of its kind. Each one comes with the number of times that the node runs it, as `NUM_EXEC_TLIST` and `NUM_EXEC_QUAL` give them: once for each row of the node for a target, twice for a condition and once in all for a condition of a `Result` that runs once.
+fn own_items<'n, 'q>(node: &'n Node<'q>) -> Vec<(&'n Item<'q>, f64)> {
+    let rows = node.cost.rows;
+    let mut out: Vec<(&Item<'q>, f64)> =
+        node.output.iter().filter(|i| !i.below).map(|i| (i, rows)).collect();
+    let quals = |items: &'n [Item<'q>]| items.iter().map(move |i| (i, rows * 2.0));
     match &node.kind {
-        Kind::Result { one_time, .. } => out.extend(one_time),
-        Kind::NestedLoop { join_filter, .. } => out.extend(join_filter),
+        Kind::Result { one_time, .. } => out.extend(one_time.iter().map(|i| (i, 1.0))),
+        Kind::NestedLoop { join_filter, .. } => out.extend(quals(join_filter)),
         Kind::MergeJoin { cond, join_filter, .. } | Kind::HashJoin { cond, join_filter, .. } => {
-            out.extend(cond.iter().chain(join_filter));
+            out.extend(quals(cond).chain(quals(join_filter)));
         }
         _ => {}
     }
-    out.extend(&node.filter);
+    out.extend(quals(&node.filter));
     out
 }

@@ -1,0 +1,233 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x AND b.y > 1) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..13964.12 rows=638 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row           Filter: (y > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE NOT EXISTS (SELECT 1 FROM b WHERE b.x = c.x) OR x = 2;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4442.01 rows=638 width=36)
+row   Filter: ((NOT (ANY (x = (hashed SubPlan exists_to_any_1).col1))) OR (x = 2))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND (EXISTS (SELECT 1 FROM b WHERE b.x = c.x) OR z = 'a');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4445.19 rows=3 width=36)
+row   Filter: ((x = 1) AND (EXISTS(SubPlan exists_1) OR (z = 'a'::text)))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row           Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x < c.x) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..90.39 rows=638 width=36)
+row   Filter: (EXISTS(SubPlan exists_1) OR (z = 'a'::text))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=0)
+row           Filter: (x < c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE c.x = b.x) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4442.01 rows=638 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x AND b.y = c.x + 1) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..62954.38 rows=638 width=36)
+row   Filter: ((ANY ((x = (hashed SubPlan exists_to_any_1).col1) AND ((x + 1) = (hashed SubPlan exists_to_any_1).col2))) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.y = c.x + 1) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..5094.33 rows=638 width=36)
+row   Filter: ((ANY ((x + 1) = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x LIMIT 1) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4442.01 rows=638 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x + b.y) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..5094.33 rows=638 width=36)
+row   Filter: (EXISTS(SubPlan exists_1) OR (z = 'a'::text))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..43.90 rows=11 width=0)
+row           Filter: (x = (c.x + y))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x HAVING count(*) > 0) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..48654.17 rows=638 width=36)
+row   Filter: (EXISTS(SubPlan exists_1) OR (z = 'a'::text))
+row   SubPlan exists_1
+row     ->  Aggregate  (cost=38.28..38.29 rows=1 width=4)
+row           Filter: (count(*) > 0)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row                 Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM c c2 WHERE c2.z = c.z) OR c.x = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..5502.75 rows=638 width=36)
+row   Filter: ((ANY (z = (hashed SubPlan exists_to_any_1).col1)) OR (x = 1))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on c c2  (cost=0.00..22.70 rows=1270 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x AND random() > 0.5) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..15758.00 rows=638 width=36)
+row   Filter: (EXISTS(SubPlan exists_1) OR (z = 'a'::text))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..49.55 rows=4 width=0)
+row           Filter: ((x = c.x) AND (random() > '0.5'::double precision))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x AND b.y = 3) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..55778.87 rows=638 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row           Filter: (y = 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT y FROM b WHERE b.x = c.x ORDER BY y) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4442.01 rows=638 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x OR b.y = c.x) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..2449.92 rows=638 width=36)
+row   Filter: (EXISTS(SubPlan exists_1) OR (z = 'a'::text))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..43.90 rows=23 width=0)
+row           Filter: ((x = c.x) OR (y = c.x))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = 7 AND c.x = 7) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4445.19 rows=638 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row           Filter: (x = 7)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND EXISTS (SELECT 1 FROM b WHERE b.x = c.x) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4445.19 rows=10 width=36)
+row   Filter: (((x = 1) AND (ANY (x = (hashed SubPlan exists_to_any_1).col1))) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND (EXISTS (SELECT 1 FROM b WHERE b.x = 7 AND c.x = 7) OR z = 'a');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4448.36 rows=3 width=36)
+row   Filter: ((x = 1) AND (EXISTS(SubPlan exists_1) OR (z = 'a'::text)))
+row   SubPlan exists_1
+row     ->  Result  (cost=0.00..38.25 rows=11 width=0)
+row           One-Time Filter: (c.x = 7)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row                 Filter: (x = 7)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND (EXISTS (SELECT y FROM b WHERE b.x = c.x ORDER BY y) OR z = 'a');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4445.19 rows=3 width=36)
+row   Filter: ((x = 1) AND (EXISTS(SubPlan exists_1) OR (z = 'a'::text)))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row           Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND (EXISTS (SELECT DISTINCT y FROM b WHERE b.x = c.x) OR z = 'a');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4445.19 rows=3 width=36)
+row   Filter: ((x = 1) AND (EXISTS(SubPlan exists_1) OR (z = 'a'::text)))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row           Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND (EXISTS (SELECT y FROM b WHERE b.x = c.x GROUP BY y) OR z = 'a');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4445.19 rows=3 width=36)
+row   Filter: ((x = 1) AND (EXISTS(SubPlan exists_1) OR (z = 'a'::text)))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row           Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND (EXISTS (SELECT y FROM b WHERE b.x = c.x LIMIT 1) OR z = 'a');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4445.19 rows=3 width=36)
+row   Filter: ((x = 1) AND (EXISTS(SubPlan exists_1) OR (z = 'a'::text)))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=0)
+row           Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x = 1 AND (EXISTS (SELECT y FROM b WHERE b.x = c.x LIMIT 0) OR z = 'a');
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4445.19 rows=3 width=36)
+row   Filter: ((x = 1) AND (EXISTS(SubPlan exists_1) OR (z = 'a'::text)))
+row   SubPlan exists_1
+row     ->  Limit  (cost=0.00..3.48 rows=1 width=4)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row                 Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT y FROM b WHERE b.x = c.x LIMIT 0) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4442.01 rows=638 width=36)
+row   Filter: (EXISTS(SubPlan exists_1) OR (z = 'a'::text))
+row   SubPlan exists_1
+row     ->  Limit  (cost=0.00..3.48 rows=1 width=4)
+row           ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=4)
+row                 Filter: (x = c.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT y FROM b WHERE b.x = c.x GROUP BY y) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..4442.01 rows=638 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (z = 'a'::text))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x) OR EXISTS (SELECT 1 FROM b WHERE b.y = c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..8854.97 rows=952 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR (ANY (x = (hashed SubPlan exists_to_any_2).col1)))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   SubPlan exists_to_any_2
+row     ->  Seq Scan on b b_1  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x AND b.y < c.x) OR z = 'a';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..13964.12 rows=638 width=36)
+row   Filter: (EXISTS(SubPlan exists_1) OR (z = 'a'::text))
+row   SubPlan exists_1
+row     ->  Seq Scan on b  (cost=0.00..43.90 rows=4 width=0)
+row           Filter: ((y < c.x) AND (x = c.x))
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE EXISTS (SELECT 1 FROM b WHERE b.x = c.x) OR EXISTS (SELECT 1 FROM b WHERE b.y < c.x) OR EXISTS (SELECT 1 FROM b WHERE b.y = c.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=0.00..8919.48 rows=1111 width=36)
+row   Filter: ((ANY (x = (hashed SubPlan exists_to_any_1).col1)) OR EXISTS(SubPlan exists_2) OR (ANY (x = (hashed SubPlan exists_to_any_2).col1)))
+row   SubPlan exists_to_any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   SubPlan exists_2
+row     ->  Seq Scan on b b_1  (cost=0.00..38.25 rows=753 width=0)
+row           Filter: (y < c.x)
+row   SubPlan exists_to_any_2
+row     ->  Seq Scan on b b_2  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN

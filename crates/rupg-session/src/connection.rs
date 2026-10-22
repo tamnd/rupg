@@ -5345,6 +5345,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_array_cost.test")));
     }
 
+    /// `EXPLAIN` of a correlated `EXISTS` that can run as `ANY` on a hash table, as `convert_EXISTS_to_ANY` makes it. Each condition of the subquery that compares a column of the query with an operator that can hash becomes a column of the subquery, and the plan keeps the subplan of `EXISTS` or of `ANY` with the lower cost for the rows of its node, as `fix_alternative_subplan`. The cost of the node is the cost of `EXISTS`. `connection/plan_exists_to_any.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_exists_to_any() {
+        big_stack(|| script(include_str!("connection/plan_exists_to_any.test")));
+    }
+
     /// `EXPLAIN` of the conditions of `WHERE` on a subquery of `FROM` that the planner moves into the subquery, as `set_subquery_pathlist` and `subquery_push_qual`: a condition joins the `WHERE` of the subquery, or its `HAVING` when the subquery makes groups. A condition stays outside a subquery with `LIMIT`, a condition on a column of a window function, on a column that is not an item of `DISTINCT ON` or of `PARTITION BY`, on a column that calls a volatile function or a function that gives a set, and a condition with a volatile function on a subquery with `DISTINCT`. An outer join that a condition makes an inner join is an inner join before the condition moves, as `reduce_outer_joins`, and a `Subquery Scan` with no condition that gives each column of its subquery costs its subquery, as `cost_subqueryscan`. `connection/plan_subquery_pushdown.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_subquery_pushdown() {

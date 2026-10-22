@@ -11,6 +11,8 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Fixed
 
+- `EXPLAIN` of a correlated `EXISTS` that PostgreSQL runs as `ANY` on a hash table, such as `(ANY (x = (hashed SubPlan exists_to_any_1).col1))`. As `convert_EXISTS_to_ANY`, each condition of the subquery that compares a column of the query with an operator that can hash becomes a column of the subquery. The plan keeps the subplan of `EXISTS` or of `ANY` with the lower cost for the rows of its node, as `fix_alternative_subplan`. The subquery of `EXISTS` also loses its `ORDER BY`, `DISTINCT`, `GROUP BY` and `LIMIT`, as `simplify_EXISTS_query` (#NNN).
+- The cost of a condition that reads no column of its query in `EXISTS`, such as `c.x = 7`, in `EXPLAIN`. PostgreSQL runs it once in the `One-Time Filter`, and charges it to the start cost of the node below (#NNN).
 - The rows and the cost of `x op ANY (array)` and `x op ALL (array)` in `EXPLAIN`, such as `x IN (1, 2, 3)`. `scalararraysel` of PostgreSQL finds the selectivity of the operator for each item, and adds them for `= ANY` and `<> ALL`. An array that is not a constant or a list has 10 items. The operator runs for half of the items for each row, and a constant array of 9 items or more is a hash table that costs one hash for each item when the scan starts, as `convert_saop_to_hashed_saop` makes it (#553).
 - The start cost of the conditions of an aggregate with `HAVING` and of the filter of a join in `EXPLAIN`. `cost_agg` and the costs of the joins of PostgreSQL add it to the start cost of the node (#553).
 - The total cost of a `Seq Scan` with a start cost in `EXPLAIN`. `cost_seqscan` of PostgreSQL adds the cost of the pages last, which the rounding of the sum follows (#553).

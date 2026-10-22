@@ -139,6 +139,8 @@ struct SubName {
     init: bool,
     /// The subplan keeps its rows in a hash table.
     hashed: bool,
+    /// The subplan is the `ANY` that runs in the place of `EXISTS`, which shows in its place.
+    alternative: bool,
 }
 
 impl<'a> Deparser<'a> {
