@@ -491,8 +491,8 @@ impl Explainer<'_, '_> {
                     self.w.integer("Subplans Removed", None, 0);
                 }
             }
-            Kind::WindowAgg { name, window, rows_frame } => {
-                let spec = self.texts.window(scope, *window, *rows_frame, upper)?;
+            Kind::WindowAgg { name, window, rows_frame, partition } => {
+                let spec = self.texts.window(scope, *window, *rows_frame, partition, upper)?;
                 self.w.text("Window", &format!("{} AS {spec}", self.texts.quote(name)));
             }
             Kind::Modify { operation, targets, conflict, .. } => {

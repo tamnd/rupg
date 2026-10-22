@@ -261,3 +261,67 @@ row Limit  (cost=0.00..17.39 rows=5 width=8)
 row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
 row         Filter: (y = 1)
 EXPLAIN
+> EXPLAIN SELECT x, y, row_number() OVER (PARTITION BY x, y ORDER BY y) FROM b WHERE x = 1;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=38.44..38.66 rows=11 width=16)
+row   Window: w1 AS (PARTITION BY y ORDER BY y ROWS UNBOUNDED PRECEDING)
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: y
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (x = 1)
+EXPLAIN
+> EXPLAIN SELECT x, y, rank() OVER (PARTITION BY y ORDER BY x) FROM b WHERE y = 1;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=38.46..38.63 rows=11 width=16)
+row   Window: w1 AS (ORDER BY x ROWS UNBOUNDED PRECEDING)
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Sort Key: x
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row               Filter: (y = 1)
+EXPLAIN
+> EXPLAIN SELECT x, sum(y) OVER (PARTITION BY x) FROM b WHERE x = 1;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=34.90..38.39 rows=11 width=12)
+row   Window: w1 AS ()
+row   ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (x = 1)
+EXPLAIN
+> EXPLAIN SELECT b.x, c.x, sum(b.y) OVER (PARTITION BY b.x, c.x ORDER BY b.y) FROM b, c WHERE b.x = c.x;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=345.75..2683.38 rows=28815 width=20)
+row   Window: w1 AS (PARTITION BY b.x ORDER BY b.y)
+row   ->  Incremental Sort  (cost=345.67..2179.12 rows=28815 width=12)
+row         Sort Key: b.x, b.y
+row         Presorted Key: b.x
+row         ->  Merge Join  (cost=338.29..781.81 rows=28815 width=12)
+row               Merge Cond: (b.x = c.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+row               ->  Sort  (cost=179.78..186.16 rows=2550 width=4)
+row                     Sort Key: c.x
+row                     ->  Seq Scan on c  (cost=0.00..35.50 rows=2550 width=4)
+EXPLAIN
+> EXPLAIN SELECT x, sum(y) OVER (PARTITION BY y ORDER BY x), avg(y) OVER (PARTITION BY x, y) FROM b WHERE y = 2;
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=38.46..38.80 rows=11 width=48)
+row   Window: w2 AS (PARTITION BY x)
+row   ->  WindowAgg  (cost=38.46..38.63 rows=11 width=16)
+row         Window: w1 AS (ORDER BY x)
+row         ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row               Sort Key: x
+row               ->  Seq Scan on b  (cost=0.00..38.25 rows=11 width=8)
+row                     Filter: (y = 2)
+EXPLAIN
+> EXPLAIN VERBOSE SELECT x, sum(y) OVER w FROM b WHERE y = 3 WINDOW w AS (PARTITION BY y, x ORDER BY y);
+fields QUERY PLAN:25:-1:-1
+row WindowAgg  (cost=38.44..38.66 rows=11 width=16)
+row   Output: x, sum(y) OVER w, y
+row   Window: w AS (PARTITION BY b.x ORDER BY b.y)
+row   ->  Sort  (cost=38.44..38.47 rows=11 width=8)
+row         Output: x, y
+row         Sort Key: b.x
+row         ->  Seq Scan on public.b  (cost=0.00..38.25 rows=11 width=8)
+row               Output: x, y
+row               Filter: (b.y = 3)
+EXPLAIN

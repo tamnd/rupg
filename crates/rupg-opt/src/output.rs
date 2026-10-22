@@ -112,14 +112,18 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             grouped(level, node, want, &keys, vars);
             keys_below(node);
         }
-        Kind::WindowAgg { window, .. } => {
-            let clause = &level.query.windows[*window];
-            let keys: Vec<Expr> = clause
-                .partition
+        Kind::WindowAgg { .. } => {
+            // `make_window_input_target`: the targets that an item of a window names come first, in the order of the target list.
+            let mut targets: Vec<usize> = level
+                .query
+                .windows
                 .iter()
-                .chain(&clause.order)
-                .map(|s| level.target(s.target).clone())
+                .flat_map(|w| w.partition.iter().chain(&w.order))
+                .map(|s| s.target)
                 .collect();
+            targets.sort_unstable();
+            targets.dedup();
+            let keys: Vec<Expr> = targets.into_iter().map(|t| level.target(t).clone()).collect();
             grouped(level, node, want, &keys, false);
         }
         Kind::ProjectSet => {
