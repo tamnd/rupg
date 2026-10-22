@@ -412,7 +412,12 @@ fn append_rel<'q>(level: &Level<'q>, node: &mut Node<'q>, r: usize, want: &[Item
 fn trivial(level: &Level<'_>, node: &Node<'_>, r: usize) -> bool {
     let columns = level.query.relations[r].columns.len();
     // A junk column of the subquery, such as a key of its `ORDER BY`, makes its target list longer than the target list of the scan.
-    let child = node.children.first().map(|c| c.output.len());
+    let set_op = level.query.relations[r].subquery.as_deref().is_some_and(|s| s.set_op.is_some());
+    // The `Append` of a set operation gives the columns of the operation.
+    let child = node.children.first().map(|c| match c.kind {
+        Kind::Append | Kind::MergeAppend(_) if set_op && c.output.is_empty() => columns,
+        _ => c.output.len(),
+    });
     node.filter.is_empty()
         && child.is_none_or(|n| n == columns)
         && node.output.len() == columns

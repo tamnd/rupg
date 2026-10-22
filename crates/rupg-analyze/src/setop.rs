@@ -46,6 +46,8 @@ pub struct SetOp {
     pub groups: Vec<SortGroup>,
     /// For the `UNION` of a recursive query of `WITH`, as `RecursiveUnion`, the number of the work table that the reference of the recursive term reads. The right side runs again with the rows of the last step in the work table until it gives no new rows.
     pub work: Option<usize>,
+    /// The casts of the columns of the operation to the types of the operation above it, which the planner fills for `EXPLAIN`: a `Result` above the plan of the operation computes them, as `recurse_set_operations` adds it. Each cast reads the column of the leftmost `SELECT`. Empty when the types are the same.
+    pub project: Vec<Expr>,
 }
 
 impl SetTree {
@@ -280,7 +282,8 @@ impl Analyzer<'_> {
             exprs.push(Expr { kind: ExprKind::CaseTest, ty, typmod, location: at });
         }
         let work = if top { self.work_table(parent) } else { None };
-        let op = SetOp { kind, all: s.all, left, right, columns, groups, work };
+        let op =
+            SetOp { kind, all: s.all, left, right, columns, groups, work, project: Vec::new() };
         Ok((SetTree::Op(Box::new(op)), exprs))
     }
 

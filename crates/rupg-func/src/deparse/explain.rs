@@ -206,6 +206,12 @@ impl Texts for PlanTexts<'_, '_> {
         Ok(d.buf)
     }
 
+    fn below_expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String> {
+        let mut d = self.deparser(scope, prefix)?;
+        d.expr(expr, true)?;
+        Ok(d.buf)
+    }
+
     fn scan_expr(&mut self, scope: usize, expr: &Expr, prefix: bool, own: usize) -> Result<String> {
         let mut d = self.deparser(scope, prefix)?;
         d.own = Some(own);

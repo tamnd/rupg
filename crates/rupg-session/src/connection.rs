@@ -5507,6 +5507,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_setop.test")));
     }
 
+    /// A `SELECT` of a set operation whose columns need a cast to the types of the operation gets a `Subquery Scan` above its plan that adds the casts, as `generate_setop_tlist` and `recurse_set_operations` make it. An operation below another one with other types gets a `Result` that adds the casts, and the width of an `Append` is the average width of its members, as `create_setop_pathtarget`. `connection/plan_setop_cast.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_setop_cast() {
+        big_stack(|| script(include_str!("connection/plan_setop_cast.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {

@@ -12,6 +12,7 @@ mod minmax;
 mod output;
 mod pullup;
 mod pushdown;
+mod setcast;
 mod setop;
 mod upper;
 
@@ -325,9 +326,21 @@ impl<'q> Builder<'q> {
             let others = level.init_cost == 0.0 && node.init_plans.is_empty();
             let sorted = setop::sorted(query, op, &level.stats, &node, finals, others);
             let groups = setop::groups(query, &level.stats, node.cost.rows);
+            let wrapper = self.wrapper(scope);
+            if let Some(s) = &mut self.setop {
+                // The groups of a `SELECT` with casts are the groups of the subquery of the `SELECT`, which comes first.
+                if !wrapper {
+                    s.groups = groups;
+                }
+                s.sorted = sorted;
+            }
+        } else if let Some(p) = parent
+            && self.wrapper(p)
+            && self.setop.as_ref().is_some_and(|s| self.scopes[p].parent == Some(s.scope))
+        {
+            let groups = setop::groups(query, &level.stats, node.cost.rows);
             if let Some(s) = &mut self.setop {
                 s.groups = groups;
-                s.sorted = sorted;
             }
         }
         self.ctes.truncate(depth);
@@ -390,6 +403,13 @@ impl<'q> Builder<'q> {
     }
 
     /// A new scope in the current subplan.
+    /// True when the query of a scope is a `SELECT` of a set operation in the query that adds its casts, as [`setcast::wrap_all`] makes it.
+    fn wrapper(&self, scope: usize) -> bool {
+        let found = &self.scopes[scope];
+        setcast::is_wrapper(found.query)
+            && found.parent.is_some_and(|p| self.scopes[p].query.set_op.is_some())
+    }
+
     fn push_scope(&mut self, query: &'q Query, parent: Option<usize>, target: bool) -> usize {
         self.scopes.push(Scope { query, parent, target, leaf: None });
         let index = self.scopes.len() - 1;

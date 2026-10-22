@@ -658,15 +658,13 @@ impl Explainer<'_, '_> {
         items
             .iter()
             .map(|item| {
+                let below = item.below && !matches!(item.expr.kind, ExprKind::Var(_));
                 let text = match own {
                     Some(own) => self.texts.scan_expr(scope, &item.expr, prefix, own)?,
+                    None if below => self.texts.below_expr(scope, &item.expr, prefix)?,
                     None => self.texts.expr(scope, &item.expr, prefix)?,
                 };
-                Ok(if item.below && !matches!(item.expr.kind, ExprKind::Var(_)) {
-                    format!("({text})")
-                } else {
-                    text
-                })
+                Ok(if below { format!("({text})") } else { text })
             })
             .collect()
     }
