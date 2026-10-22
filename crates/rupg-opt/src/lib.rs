@@ -167,12 +167,12 @@ impl<'q> Builder<'q> {
         for expr in preprocess_order(query) {
             self.sublinks_in(expr, &mut level);
         }
-        let (mut node, order, joined) = match &query.set_op {
-            Some(op) => (self.set_op(&mut level, op), Vec::new(), Vec::new()),
+        let (plans, joined) = match &query.set_op {
+            Some(op) => (vec![(self.set_op(&mut level, op), Vec::new())], Vec::new()),
             None => self.from(&level),
         };
         level.joined = joined;
-        node = self.upper(&level, node, order);
+        let mut node = self.upper(&level, plans);
         if let Some(write) = write {
             node = self.modify(&level, write, node);
         }

@@ -23,7 +23,7 @@ const TUPLE_OVERHEAD: i32 = 28;
 /// `DEFAULT_EQ_SEL`.
 pub(crate) const EQ_SEL: f64 = 0.005;
 /// `DEFAULT_INEQ_SEL`.
-const INEQ_SEL: f64 = 1.0 / 3.0;
+pub(crate) const INEQ_SEL: f64 = 1.0 / 3.0;
 /// `DEFAULT_NUM_DISTINCT`.
 pub(crate) const NUM_DISTINCT: f64 = 200.0;
 /// `disable_cost`: the cost that a plan gets when the planner should use it only when it has no other plan.

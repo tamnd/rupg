@@ -45,20 +45,20 @@ struct Problem<'a, 'q> {
     levels: Vec<Vec<usize>>,
 }
 
-/// The plan of the joins of the items with the lowest total cost. `pool` has the conditions of the inner joins of the items, each with the relations that it needs.
+/// The plans of the joins of the items that `add_path` keeps, with the plan with the lowest total cost first. Each item has its plans in the same order. `pool` has the conditions of the inner joins of the items, each with the relations that it needs.
 pub(super) fn search<'q>(
     level: &Level<'q>,
-    items: Vec<Rel<'q>>,
+    items: Vec<Vec<Rel<'q>>>,
     pool: &[Qual<'q>],
     found: &Found<'q>,
     stats: &Stats,
-) -> Rel<'q> {
+) -> Vec<Rel<'q>> {
     let n = items.len();
     let classes = &found.classes;
     if n >= GEQO_THRESHOLD {
         return in_order(level, items, pool, classes, stats);
     }
-    let domain: BTreeSet<usize> = items.iter().flat_map(|r| r.rels.iter().copied()).collect();
+    let domain: BTreeSet<usize> = items.iter().flat_map(|r| r[0].rels.iter().copied()).collect();
     let mut problem = Problem {
         level,
         pool,
@@ -69,7 +69,8 @@ pub(super) fn search<'q>(
         index: BTreeMap::new(),
         levels: vec![Vec::new(); n + 1],
     };
-    for (i, rel) in items.iter().enumerate() {
+    for (i, plans) in items.iter().enumerate() {
+        let rel = &plans[0];
         let mut lateral = BTreeSet::new();
         for &r in &rel.rels {
             lateral.extend(lateral_rels(level, r).intersection(&domain).copied());
@@ -80,7 +81,7 @@ pub(super) fn search<'q>(
         problem.sets.push(Set {
             items: 1 << i,
             rels: rel.rels.clone(),
-            plans: vec![rel.clone()],
+            plans: plans.clone(),
             paths: Paths::new(stats.startup),
             rows: rel.node.cost.rows,
             lateral,
@@ -94,24 +95,21 @@ pub(super) fn search<'q>(
         problem.set_cheapest(k);
     }
     let best = problem.levels[n][0];
-    let Some(rel) = problem.sets.swap_remove(best).plans.into_iter().next() else {
-        unreachable!("each set has a plan")
-    };
-    rel
+    problem.sets.swap_remove(best).plans
 }
 
 /// The joins of the items in their order, each with the conditions that its two sides have.
 fn in_order<'q>(
     level: &Level<'q>,
-    items: Vec<Rel<'q>>,
+    items: Vec<Vec<Rel<'q>>>,
     pool: &[Qual<'q>],
     classes: &[Joined<'q>],
     stats: &Stats,
-) -> Rel<'q> {
+) -> Vec<Rel<'q>> {
     let mut items = items.into_iter();
     let Some(mut out) = items.next() else { unreachable!("a join domain has two items or more") };
     for next in items {
-        let quals = between(pool, classes, &out.rels, &next.rels);
+        let quals = between(pool, classes, &out[0].rels, &next[0].rels);
         out = join_rels(level, JoinKind::Inner, out, next, quals, Vec::new(), stats);
     }
     out
