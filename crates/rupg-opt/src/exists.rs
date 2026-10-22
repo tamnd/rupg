@@ -97,7 +97,7 @@ fn alternative(query: &Query) -> Option<SubLink> {
 }
 
 /// `simplify_EXISTS_query`: the subquery of `EXISTS` with no targets, `GROUP BY`, window, `DISTINCT`, `ORDER BY` or `LIMIT`, which do not change whether the subquery gives a row. It is none for a subquery with a set operation, an aggregate, grouping sets, a window function, a function that gives a set in its targets, a query of `WITH` that writes, `HAVING`, `OFFSET`, a row lock or a `LIMIT` that is not a positive constant or null.
-fn simplify(query: &Query) -> Option<Query> {
+pub(crate) fn simplify(query: &Query) -> Option<Query> {
     let aggs = query.targets.iter().any(|t| t.expr.first_agg().is_some());
     let windows = query.targets.iter().any(|t| t.expr.first_window().is_some());
     let sets = query.targets.iter().any(|t| t.expr.first_set_call().is_some());

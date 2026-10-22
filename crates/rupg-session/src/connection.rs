@@ -5387,6 +5387,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_subquery_pullup.test")));
     }
 
+    /// `EXPLAIN` of the parts of `WHERE` that are `EXISTS`, `NOT EXISTS` or `IN` on a subquery, which the planner makes semi joins and anti joins, as `pull_up_sublinks`. A semi join is a semi join of the two sides, or an inner join with the unique rows of the inner side, from a `HashAggregate` or from a `Unique` over a `Sort`, as `create_unique_paths` makes them. A semi join with a primary key on the inner side is an inner join, as `reduce_unique_semijoins`. `NOT IN` and an `EXISTS` with no column of the query above stay subplans. `connection/plan_semi_join.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_semi_join() {
+        big_stack(|| script(include_str!("connection/plan_semi_join.test")));
+    }
+
     /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_incremental_sort() {

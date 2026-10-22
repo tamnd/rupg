@@ -153,6 +153,10 @@ fn join_type(kind: JoinKind) -> &'static str {
         JoinKind::Left => "Left",
         JoinKind::Right => "Right",
         JoinKind::Full => "Full",
+        JoinKind::Semi => "Semi",
+        JoinKind::Anti => "Anti",
+        JoinKind::RightSemi => "Right Semi",
+        JoinKind::RightAnti => "Right Anti",
     }
 }
 

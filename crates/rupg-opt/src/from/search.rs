@@ -6,7 +6,9 @@ use rupg_analyze::JoinKind;
 
 use super::classes::{Found, Joined};
 use super::paths::Paths;
-use super::{Candidate, Qual, Rel, Stats, choose, finish, join_rels, join_rows, lateral_rels};
+use super::{
+    Candidate, Part, Qual, Rel, Stats, choose, finish, join_rels, join_rows, lateral_rels,
+};
 use crate::{Level, exprs};
 
 /// `geqo_threshold`: with this many items or more, PostgreSQL finds the order of the joins with the genetic optimizer. The planner then joins the items in their order.
@@ -247,7 +249,8 @@ impl<'q> Problem<'_, 'q> {
         let (l, r) = (&self.sets[outer].plans, &self.sets[inner].plans);
         let quals =
             between(self.pool, self.classes, &self.sets[outer].rels, &self.sets[inner].rels);
-        let candidates = choose(self.level, JoinKind::Inner, l, r, &quals, &[], self.stats);
+        let candidates =
+            choose(self.level, JoinKind::Inner, l, r, &quals, &[], self.stats, Part::Plain);
         if candidates.is_empty() {
             return;
         }

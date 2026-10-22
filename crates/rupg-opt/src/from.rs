@@ -12,7 +12,7 @@ use rupg_analyze::{
     expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
-use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey};
+use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey, Strategy};
 use rupg_types::{Value, oid};
 
 use crate::{Builder, Level, Member, cost, exprs, upper};
@@ -330,6 +330,16 @@ struct JoinTree<'q> {
     /// The conditions above an outer join, which the join tests on its rows with the nulls.
     filter: Vec<Qual<'q>>,
     rels: BTreeSet<usize>,
+    /// For a semi join, the values of the inner side that make its rows unique, as `compute_semijoin_info` finds them.
+    semi: Option<Semi<'q>>,
+}
+
+/// The values of the inner side of a semi join that its condition compares with the outer side, each with its operator with the outer value on the left, as `semi_rhs_exprs` and `semi_operators`. A sort makes the rows unique on them when each operator can test a merge join, as `semi_can_btree`, and a hash table does when each operator can test a hash join, as `semi_can_hash`.
+#[derive(Debug)]
+struct Semi<'q> {
+    values: Vec<(&'q Expr, u32)>,
+    sort: bool,
+    hash: bool,
 }
 
 impl Tree<'_> {
@@ -481,10 +491,33 @@ impl<'q> Builder<'q> {
                 search::search(level, rels, &pool, found, stats)
             }
             Tree::Join(join) => {
-                let JoinTree { kind, left, right, quals, filter, .. } = *join;
+                let JoinTree { kind, left, right, mut quals, filter, semi, .. } = *join;
                 let left = self.build(level, left, found, stats);
                 let right = self.build(level, right, found, stats);
-                join_rels(level, kind, left, right, quals, filter, stats)
+                match kind {
+                    JoinKind::Semi | JoinKind::Anti => {
+                        // A semi join is in the join domain of its parent, so its conditions of the classes come back as the conditions of an inner join do.
+                        if kind == JoinKind::Semi {
+                            let (l, r) = (&left[0].rels, &right[0].rels);
+                            quals.extend(found.classes.iter().filter_map(|c| c.condition(l, r)));
+                            // `reduce_unique_semijoins`: a semi join whose inner side is one table that the conditions make unique is an inner join.
+                            if semifactors(&left[0], &right[0], &quals, stats).is_some() {
+                                return join_rels(
+                                    level,
+                                    JoinKind::Inner,
+                                    left,
+                                    right,
+                                    quals,
+                                    filter,
+                                    stats,
+                                );
+                            }
+                        }
+                        let semi = semi.as_ref();
+                        semi_rels(level, kind, semi, left, right, quals, filter, stats)
+                    }
+                    _ => join_rels(level, kind, left, right, quals, filter, stats),
+                }
             }
         }
     }
@@ -843,6 +876,7 @@ fn tree(item: &FromItem) -> Tree<'_> {
 fn join_tree<'q>(kind: JoinKind, left: Tree<'q>, right: Tree<'q>, on: Vec<&'q Expr>) -> Tree<'q> {
     let mut rels = left.rels();
     rels.extend(right.rels());
+    let semi = if kind == JoinKind::Semi { semi_info(&on, &right.rels()) } else { None };
     Tree::Join(Box::new(JoinTree {
         kind,
         left,
@@ -851,7 +885,42 @@ fn join_tree<'q>(kind: JoinKind, left: Tree<'q>, right: Tree<'q>, on: Vec<&'q Ex
         quals: Vec::new(),
         filter: Vec::new(),
         rels,
+        semi,
     }))
+}
+
+/// `compute_semijoin_info`: the values of the inner side `inner` of a semi join that the parts of its condition compare with the outer side. A part that reads one side only adds no value. Each other part must compare a value of the outer side with a value of the inner side, with an operator that has a commutator when the inner value is on the left. The result is `None` when a part does not, when no operator can make the rows unique, when no part adds a value, or when a part of one side or a value calls a volatile function.
+fn semi_info<'q>(on: &[&'q Expr], inner: &BTreeSet<usize>) -> Option<Semi<'q>> {
+    let mut semi = Semi { values: Vec::new(), sort: true, hash: true };
+    for &part in on {
+        let all = exprs::relations(part);
+        if all.is_disjoint(inner) || all.is_subset(inner) {
+            if exprs::volatile(part) {
+                return None;
+            }
+            continue;
+        }
+        let (op, left, right) = exprs::binary(part)?;
+        let (l, r) = (exprs::relations(left), exprs::relations(right));
+        let (op, value) = if !r.is_empty() && r.is_subset(inner) && l.is_disjoint(inner) {
+            (op, right)
+        } else if !l.is_empty() && l.is_subset(inner) && r.is_disjoint(inner) {
+            let commutator = builtin::operator_by_oid(op)?.commutator;
+            (Some(commutator).filter(|&c| c != 0)?, left)
+        } else {
+            return None;
+        };
+        semi.sort &= exprs::can_merge(op);
+        semi.hash &= exprs::can_hash(op);
+        if !semi.sort && !semi.hash {
+            return None;
+        }
+        semi.values.push((value, op));
+    }
+    if semi.values.is_empty() || semi.values.iter().any(|(v, _)| exprs::volatile(v)) {
+        return None;
+    }
+    Some(semi)
 }
 
 /// The `Result` of a query with no `FROM`, with the conditions of `WHERE` as its `One-Time Filter`.
@@ -998,11 +1067,11 @@ fn reduce(tree: &mut Tree<'_>, above: &BTreeSet<usize>) {
         }
     }
     let (left, right) = match join.kind {
-        JoinKind::Inner => {
+        JoinKind::Inner | JoinKind::Semi => {
             local.extend(above.iter().copied());
             (local.clone(), local)
         }
-        JoinKind::Left => (above.clone(), local),
+        JoinKind::Left | JoinKind::Anti => (above.clone(), local),
         _ => (BTreeSet::new(), BTreeSet::new()),
     };
     reduce(&mut join.left, &left);
@@ -1028,8 +1097,10 @@ fn place_on<'q>(tree: &mut Tree<'q>, next: &mut usize) {
         }
         let rels = if rels.is_empty() { join.rels.clone() } else { rels };
         match join.kind {
-            JoinKind::Inner => place_join(join, Qual { order, ..Qual::of(part, rels, false) }),
-            JoinKind::Left if rels.is_subset(&right) => {
+            JoinKind::Inner | JoinKind::Semi => {
+                place_join(join, Qual { order, ..Qual::of(part, rels, false) });
+            }
+            JoinKind::Left | JoinKind::Anti if rels.is_subset(&right) => {
                 place(&mut join.right, Qual { order, ..Qual::of(part, rels, true) });
             }
             _ => join.quals.push(Qual { order, ..Qual::of(part, rels, false) }),
@@ -1047,10 +1118,16 @@ fn place<'q>(tree: &mut Tree<'q>, qual: Qual<'q>) {
 
 fn place_join<'q>(join: &mut JoinTree<'q>, qual: Qual<'q>) {
     match join.kind {
-        JoinKind::Inner if qual.rels.is_subset(&join.left.rels()) => place(&mut join.left, qual),
-        JoinKind::Inner if qual.rels.is_subset(&join.right.rels()) => place(&mut join.right, qual),
-        JoinKind::Inner => join.quals.push(qual),
-        JoinKind::Left if qual.rels.is_subset(&join.left.rels()) => place(&mut join.left, qual),
+        JoinKind::Inner | JoinKind::Semi if qual.rels.is_subset(&join.left.rels()) => {
+            place(&mut join.left, qual);
+        }
+        JoinKind::Inner | JoinKind::Semi if qual.rels.is_subset(&join.right.rels()) => {
+            place(&mut join.right, qual);
+        }
+        JoinKind::Inner | JoinKind::Semi => join.quals.push(qual),
+        JoinKind::Left | JoinKind::Anti if qual.rels.is_subset(&join.left.rels()) => {
+            place(&mut join.left, qual);
+        }
         _ => join.filter.push(qual),
     }
 }
@@ -1301,7 +1378,8 @@ fn join_rels<'q>(
     let mut quals = quals;
     stats.sort_quals(&mut quals);
     let mut paths = Paths::new(stats.startup);
-    for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats) {
+    for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats, Part::Plain)
+    {
         paths.add(candidate.startup, candidate.total, keys, candidate);
     }
     let kept = paths.kept();
@@ -1325,6 +1403,210 @@ fn join_rels<'q>(
     out
 }
 
+/// A semi join or an anti join of two sides, as `populate_joinrel_with_paths` makes it: the join with each order of the sides, and for a semi join an inner join with the unique rows of the inner side, as `create_unique_paths` makes them, with that side as the inner side and as the outer side. The rows are the rows of the semi join or the anti join with the left side as the outer side, as `calc_joinrel_size_estimate` finds them once for the joins of the same relations.
+#[allow(clippy::too_many_arguments)]
+fn semi_rels<'q>(
+    level: &Level<'q>,
+    kind: JoinKind,
+    semi: Option<&Semi<'q>>,
+    left: Vec<Rel<'q>>,
+    right: Vec<Rel<'q>>,
+    quals: Vec<Qual<'q>>,
+    filter: Vec<Qual<'q>>,
+    stats: &Stats,
+) -> Vec<Rel<'q>> {
+    let fraction = semi_selectivity(&quals, &right[0], stats);
+    let outer_rows = left[0].node.cost.rows;
+    let rows = if kind == JoinKind::Anti {
+        let pushed = cost::list_selectivity(filter.iter().map(|q| &*q.expr));
+        outer_rows * (1.0 - fraction) * pushed
+    } else {
+        outer_rows * fraction
+    };
+    let rows = cost::clamp_rows(rows);
+    let mut quals = quals;
+    stats.sort_quals(&mut quals);
+    let unique =
+        semi.filter(|_| kind == JoinKind::Semi).and_then(|s| unique_rels(s, &right, stats));
+    let mut paths = Paths::new(stats.startup);
+    let part = Part::Semi(fraction);
+    for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats, part) {
+        paths.add(candidate.startup, candidate.total, keys, (candidate, false));
+    }
+    if let Some(unique) = &unique {
+        let part = Part::Unique(fraction);
+        let inner = JoinKind::Inner;
+        for (candidate, keys) in choose(level, inner, &left, unique, &quals, &filter, stats, part) {
+            paths.add(candidate.startup, candidate.total, keys, (candidate, true));
+        }
+    }
+    let kept = paths.kept();
+    let mut out: Vec<Rel<'q>> = if kept.is_empty() {
+        let (left, right) = (left.into_iter().next(), right.into_iter().next());
+        let (Some(left), Some(right)) = (left, right) else { unreachable!("each side has a plan") };
+        let mut rels = left.rels.clone();
+        rels.extend(right.rels.iter().copied());
+        vec![nested_join(level, kind, left, right, quals, filter, rows, rels)]
+    } else {
+        kept.iter()
+            .map(|(best, made)| {
+                let side = match &unique {
+                    Some(unique) if *made => unique,
+                    _ => &right,
+                };
+                let (l, r) = if best.swapped { (best.paths.1, best.paths.0) } else { best.paths };
+                finish(level, best, left[l].clone(), side[r].clone(), &quals, &filter, rows)
+            })
+            .collect()
+    };
+    for rel in &mut out {
+        rel.node.cost.width = stats.width(&rel.rels);
+    }
+    out
+}
+
+/// `create_final_unique_paths`: the plans of the unique rows of the inner side of a semi join on its values, with the plan with the lowest total cost first. When a sort can make them unique, a `Unique` reads each plan of the side in the order of the values, and the cheapest plan with a `Sort`. When a hash table can, a `HashAggregate` reads the cheapest plan. A value that the values before it make redundant is not a key, as `make_pathkeys_for_sortclauses` finds it. The rows are the groups of all the values. The result is `None` when no value is a key.
+fn unique_rels<'q>(semi: &Semi<'q>, side: &[Rel<'q>], stats: &Stats) -> Option<Vec<Rel<'q>>> {
+    let mut keys: Vec<&'q Expr> = Vec::new();
+    for &(value, op) in &semi.values {
+        // A value whose operator has no order is a key of the hash table only, and no sort makes it redundant.
+        if exprs::can_merge(op) && stats.redundant(value, &keys) {
+            continue;
+        }
+        keys.push(value);
+    }
+    if keys.is_empty() || !semi.sort && !semi.hash {
+        return None;
+    }
+    let values: Vec<&Expr> = semi.values.iter().map(|&(v, _)| v).collect();
+    // `create_projection_path`: a key that is not a column of the side is a new item of the target of the side, with its cost and its width.
+    let mut extra: Vec<&Expr> = Vec::new();
+    for &k in &keys {
+        if !matches!(k.kind, ExprKind::Var(_)) && !extra.iter().any(|e| e.same(k)) {
+            extra.push(k);
+        }
+    }
+    let (extra_startup, extra_cost) = stats.qual_costs(extra.iter().copied());
+    let extra_width: i32 = extra.iter().map(|e| cost::type_width(e.ty, e.typmod)).sum();
+    let project = |mut node: Node<'q>| -> Node<'q> {
+        node.cost.startup += extra_startup;
+        node.cost.total += extra_startup + extra_cost * node.cost.rows;
+        node.cost.width += extra_width;
+        node
+    };
+    let cheapest = &side[0];
+    let groups = stats.groups(&values, cheapest.node.cost.rows);
+    let n = keys.len() as f64;
+    let order: Vec<OrderKey> = keys
+        .iter()
+        .map(|&k| OrderKey { exprs: vec![k.clone()], desc: false, nulls_first: false })
+        .collect();
+    let mut paths = Paths::new(stats.startup);
+    if semi.sort {
+        for (at, rel) in side.iter().enumerate() {
+            let sorted = keys.len() <= rel.order.len()
+                && keys.iter().zip(&rel.order).all(|(k, o)| o.sorts(k, false, false));
+            if !sorted && at != 0 {
+                continue;
+            }
+            let mut input = project(rel.node.clone());
+            if !sorted {
+                let sort_keys = keys
+                    .iter()
+                    .map(|&k| SortKey {
+                        item: Item::below(k),
+                        desc: false,
+                        using: None,
+                        nulls_first: false,
+                    })
+                    .collect();
+                input = sort(input, sort_keys, None);
+            }
+            let c = input.cost;
+            let mut node = Node::new(Kind::Unique, input.scope, vec![input]);
+            let total = c.total + cost::CPU_OPERATOR * c.rows * n;
+            node.cost = Cost { startup: c.startup, total, rows: groups, width: c.width };
+            let rel = Rel { node, rels: rel.rels.clone(), order: order.clone() };
+            paths.add(c.startup, total, order.clone(), rel);
+        }
+    }
+    if semi.hash {
+        let input = project(cheapest.node.clone());
+        let c = input.cost;
+        let startup = c.total + cost::CPU_OPERATOR * n * c.rows;
+        let total = startup + cost::CPU_TUPLE * groups;
+        let items = keys.iter().map(|&k| Item::below(k)).collect();
+        let kind = Kind::Aggregate { strategy: Strategy::Hashed, keys: items, sets: Vec::new() };
+        // The target of the `Agg` is the target of the side without the new items, as `create_final_unique_paths` gives it.
+        let width = cheapest.node.cost.width;
+        let mut node = Node::new(kind, input.scope, vec![input]);
+        node.cost = Cost { startup, total, rows: groups, width };
+        let rel = Rel { node, rels: cheapest.rels.clone(), order: Vec::new() };
+        paths.add(startup, total, Vec::new(), rel);
+    }
+    Some(paths.kept())
+}
+
+/// `clauselist_selectivity` for `JOIN_SEMI`: the fraction of the outer rows of a semi join or an anti join that have a match on the inner side. An `=` of a value of each side has the selectivity of `eqjoinsel_semi` with no statistics: 0.5 when a number of distinct values is the default, or else 1 when the inner side has as many values as the outer side, or the fraction of the outer values that it has. The number of the inner values is at most the rows of its relation and the rows of the inner side, and the selectivity is at most the rows of the inner side times the selectivity of the `=` for an inner join. Each other condition has its own selectivity.
+fn semi_selectivity(quals: &[Qual<'_>], inner: &Rel<'_>, stats: &Stats) -> f64 {
+    let inner_rows = inner.node.cost.rows;
+    let one = |qual: &Qual<'_>| {
+        let Some((op, left, right)) = exprs::binary(&qual.expr) else {
+            return cost::selectivity(&qual.expr);
+        };
+        let equal = builtin::operator_by_oid(op).is_some_and(|o| o.name == "=");
+        if !equal || !exprs::reads_columns(left) || !exprs::reads_columns(right) {
+            return cost::selectivity(&qual.expr);
+        }
+        let (l, r) = (exprs::relations(left), exprs::relations(right));
+        let (outer_value, inner_value) = if l.is_subset(&inner.rels) && r.is_disjoint(&inner.rels) {
+            (right, left)
+        } else {
+            (left, right)
+        };
+        let (nd1, default1) = distinct(outer_value, stats);
+        let (mut nd2, mut default2, rel) = numdistinct(inner_value, stats);
+        let inner_selectivity = 1.0 / nd1.max(nd2);
+        if let Some((_, rows)) = rel
+            && nd2 >= rows
+        {
+            (nd2, default2) = (rows, false);
+        }
+        if nd2 >= inner_rows {
+            (nd2, default2) = (inner_rows, false);
+        }
+        let selectivity = if default1 || default2 {
+            0.5
+        } else if nd1 <= nd2 {
+            1.0
+        } else {
+            nd2 / nd1
+        };
+        selectivity.min(inner_rows * inner_selectivity)
+    };
+    quals.iter().map(one).product()
+}
+
+/// `compute_semi_anti_join_factors` for a join of a semi join or an anti join: the fraction of the outer rows that have a match, which is the selectivity of the semi join, and the number of inner rows that each of them matches, which comes from the selectivity of the conditions for an inner join. Each outer row with a match matches one inner row at least.
+fn semi_factors(fraction: f64, inner: &Rel<'_>, quals: &[Qual<'_>], stats: &Stats) -> (f64, f64) {
+    let selectivity: f64 = quals.iter().map(|q| join_selectivity(q, stats)).product();
+    if fraction <= 0.0 {
+        return (fraction, 1.0);
+    }
+    (fraction, (selectivity * inner.node.cost.rows / fraction).max(1.0))
+}
+
+/// What a join of `choose` does for a semi join, as the `jointype` of `add_paths_to_joinrel`.
+#[derive(Clone, Copy, Debug)]
+enum Part {
+    /// A join that is not a part of a semi join.
+    Plain,
+    /// The semi join or the anti join itself, with the fraction of the outer rows that have a match.
+    Semi(f64),
+    /// An inner join with the unique rows of the inner side of a semi join, as `JOIN_UNIQUE_INNER` and `JOIN_UNIQUE_OUTER`, with the fraction of the semi join.
+    Unique(f64),
+}
+
 /// The rows of a join of two sides, as `calc_joinrel_size_estimate`.
 fn join_rows(
     kind: JoinKind,
@@ -1345,7 +1627,8 @@ fn join_rows(
     cost::clamp_rows(rows * filter_selectivity)
 }
 
-/// Each kind of join for the two sides in each order that the join can have, in the order that `add_paths_to_joinrel` makes them, with the part of the order of its rows that a node above can use. A full join that no kind of join can do has none.
+/// Each kind of join for the two sides in each order that the join can have, in the order that `add_paths_to_joinrel` makes them, with the part of the order of its rows that a node above can use. A full join that no kind of join can do has none. A semi join with the sides in the other order is a right semi join, which only a hash join does, and an anti join is a right anti join.
+#[allow(clippy::too_many_arguments)]
 fn choose<'q>(
     level: &Level<'q>,
     kind: JoinKind,
@@ -1354,6 +1637,7 @@ fn choose<'q>(
     quals: &[Qual<'q>],
     filter: &[Qual<'q>],
     stats: &Stats,
+    part: Part,
 ) -> Vec<(Candidate<'q>, Vec<OrderKey>)> {
     let (filter_startup, filter_cost) = stats.qual_costs(filter.iter().map(|q| &*q.expr));
     let (left_rels, right_rels) = (&left[0].rels, &right[0].rels);
@@ -1370,9 +1654,29 @@ fn choose<'q>(
         let (outers, inners) = if swapped { (right, left) } else { (left, right) };
         let join = match (kind, swapped) {
             (JoinKind::Left, true) => JoinKind::Right,
+            (JoinKind::Semi, true) => JoinKind::RightSemi,
+            (JoinKind::Anti, true) => JoinKind::RightAnti,
             (k, _) => k,
         };
-        let unique = semifactors(&outers[0], &inners[0], quals, stats);
+        let index = semifactors(&outers[0], &inners[0], quals, stats);
+        // `inner_unique`: a semi join does not prove it, and the unique rows of the inner side of a semi join have it. The factors are for a semi join, an anti join and a join whose inner side is unique.
+        let (inner_unique, unique) = match part {
+            Part::Plain => (index.is_some(), index),
+            Part::Semi(fraction) | Part::Unique(fraction) => {
+                let inner_unique = match join {
+                    JoinKind::Semi => false,
+                    JoinKind::Inner if !swapped => true,
+                    _ => index.is_some(),
+                };
+                let semi = matches!(join, JoinKind::Semi | JoinKind::Anti);
+                let factors = semi_factors(fraction, &inners[0], quals, stats);
+                (inner_unique, (inner_unique || semi).then_some(factors))
+            }
+        };
+        let made = match part {
+            Part::Unique(_) => (swapped, !swapped),
+            _ => (false, false),
+        };
         let input = Input {
             outer: &outers[0],
             inner: &inners[0],
@@ -1381,10 +1685,16 @@ fn choose<'q>(
             filter_cost,
             filtered: !filter.is_empty(),
             unique,
+            made,
             stats,
         };
-        let nested = kind == JoinKind::Inner || !swapped && kind == JoinKind::Left;
-        let mut candidates: Vec<Candidate<'q>> = sorted_merge(&input, join).into_iter().collect();
+        let nested =
+            matches!(join, JoinKind::Inner | JoinKind::Left | JoinKind::Semi | JoinKind::Anti);
+        let merge = join != JoinKind::RightSemi;
+        let mut candidates: Vec<Candidate<'q>> = Vec::new();
+        if merge {
+            candidates.extend(sorted_merge(&input, join));
+        }
         // `match_unsorted_outer`: each plan of the outer side, with the cheapest plan of the inner side or with an inner plan in the order of the merge.
         for (p, outer) in outers.iter().enumerate() {
             let input = Input { outer, ..input };
@@ -1392,14 +1702,16 @@ fn choose<'q>(
             if nested {
                 each.extend(nested_loops(&input, join, lateral_right));
             }
-            each.extend(presorted_merges(&input, inners, join));
+            if merge {
+                each.extend(presorted_merges(&input, inners, join));
+            }
             candidates.extend(each.into_iter().map(|c| Candidate { paths: (p, c.paths.1), ..c }));
         }
         candidates.extend(hash_join(&input, join));
         for candidate in candidates {
             let (outer, inner) = (&outers[candidate.paths.0], &inners[candidate.paths.1]);
             let keys = stats.useful(&rels, &candidate.order(outer, inner, quals));
-            out.push((Candidate { swapped, unique: unique.is_some(), ..candidate }, keys));
+            out.push((Candidate { swapped, unique: inner_unique, ..candidate }, keys));
         }
     }
     out
@@ -1476,8 +1788,10 @@ struct Input<'a, 'q> {
     filter_cost: f64,
     /// True when the join has conditions that are not conditions of the join itself, which the join tests after it joins the rows.
     filtered: bool,
-    /// `inner_unique` and `semifactors`: for an inner side with one row at most for each outer row, the fraction of the outer rows that have a match and the number of inner rows that each of them matches.
+    /// `semifactors`: for a semi join, an anti join or an inner side with one row at most for each outer row, the fraction of the outer rows that have a match and the number of inner rows that each of them matches.
     unique: Option<(f64, f64)>,
+    /// True for the outer side and for the inner side when it is the unique rows of the inner side of a semi join, as `RELATION_WAS_MADE_UNIQUE`.
+    made: (bool, bool),
     stats: &'a Stats,
 }
 
@@ -1668,22 +1982,29 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
     }
     // `estimate_hash_bucket_stats`: the fraction of the inner rows in a bucket of all the batches, 0.1 with no statistics.
     let virtual_buckets = buckets * batches;
-    let bucket = clauses
-        .iter()
-        .map(|c| match numdistinct(&c.inner, input.stats) {
-            (_, true, _) => 0.1,
-            (nd, false, rel) => {
-                // The conditions of the relation take away values in the same fraction as rows.
-                let nd = match rel {
-                    Some((tuples, rows)) if tuples > 0.0 => cost::clamp_rows(nd * rows / tuples),
-                    _ => nd,
-                };
-                (1.0 / nd.clamp(1.0, virtual_buckets)).max(1.0e-6)
-            }
-        })
-        .fold(1.0, f64::min);
+    // The unique rows of the inner side of a semi join fill the buckets evenly, and no value has more than one row.
+    let bucket = if input.made.1 {
+        1.0 / virtual_buckets
+    } else {
+        clauses
+            .iter()
+            .map(|c| match numdistinct(&c.inner, input.stats) {
+                (_, true, _) => 0.1,
+                (nd, false, rel) => {
+                    // The conditions of the relation take away values in the same fraction as rows.
+                    let nd = match rel {
+                        Some((tuples, rows)) if tuples > 0.0 => {
+                            cost::clamp_rows(nd * rows / tuples)
+                        }
+                        _ => nd,
+                    };
+                    (1.0 / nd.clamp(1.0, virtual_buckets)).max(1.0e-6)
+                }
+            })
+            .fold(1.0, f64::min)
+    };
     // With no statistics, the most common value of the inner side can be all of its rows. The bucket of that value must fit in `hash_mem`, because more batches cannot split it. A hash join that does not fit costs `disable_cost` more, so that the planner uses it only when it has no other plan.
-    if cost::byte_size(i.rows, i.width) > cost::HASH_MEM {
+    if !input.made.1 && cost::byte_size(i.rows, i.width) > cost::HASH_MEM {
         startup += cost::DISABLE;
     }
     // The conditions of the hash cost as `cost_qual_eval` finds them for each row that a bucket has.
@@ -1696,7 +2017,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
             run += qual_cost * matched * cost::clamp_rows(i.rows * bucket * scan_fraction) * 0.5;
             run +=
                 qual_cost * (o.rows - matched) * cost::clamp_rows(i.rows / virtual_buckets) * 0.05;
-            matched
+            if join == JoinKind::Anti { o.rows - matched } else { matched }
         }
         None => {
             run += qual_cost * o.rows * cost::clamp_rows(i.rows * bucket) * 0.5;
@@ -1735,9 +2056,9 @@ fn ordered(order: &[OrderKey], keys: &[MergeKey], value: impl Fn(usize) -> Expr)
 /// `select_outer_pathkeys_for_merge`: the order of the keys of a merge join that sorts its sides. The keys of the query come first, in its directions, when the conditions have all of them. The condition of an outer join has only the value of its outer side, and only when that side is not the side that gets nulls. When the conditions are all keys of the query, they are the keys. The other keys follow in ascending order, first the keys with more expressions of relations outside the join that a condition makes equal to them.
 fn merge_order(input: &Input<'_, '_>, join: JoinKind, clauses: &[Clause<'_>]) -> Vec<MergeKey> {
     let has = |c: &Clause<'_>, e: &Expr| match join {
-        JoinKind::Inner => c.outer.same(e) || c.inner.same(e),
-        JoinKind::Left => c.outer.same(e),
-        JoinKind::Right | JoinKind::Full => false,
+        JoinKind::Inner | JoinKind::Semi => c.outer.same(e) || c.inner.same(e),
+        JoinKind::Left | JoinKind::Anti => c.outer.same(e),
+        JoinKind::Right | JoinKind::Full | JoinKind::RightSemi | JoinKind::RightAnti => false,
     };
     let mut used = vec![false; clauses.len()];
     let mut out = Vec::new();
@@ -1869,8 +2190,9 @@ fn merge_join<'q>(
 ) -> Option<Candidate<'q>> {
     let (clauses, other) =
         split(input.quals, &input.outer.rels, &input.inner.rels, exprs::can_merge);
-    // `select_mergejoin_clauses`: a full join is a merge join only when each of its clauses is a merge clause.
-    if clauses.is_empty() || join == JoinKind::Full && !other.is_empty() {
+    // `select_mergejoin_clauses`: a right join, a right anti join and a full join are merge joins only when each of their clauses is a merge clause.
+    let all = matches!(join, JoinKind::Right | JoinKind::RightAnti | JoinKind::Full);
+    if clauses.is_empty() || all && !other.is_empty() {
         return None;
     }
     let sort_outer = !ordered(&input.outer.order, &keys, |c| clauses[c].outer.clone());
@@ -1886,9 +2208,10 @@ fn merge_join<'q>(
     let (o, i) = (side(input.outer, sort_outer), side(input.inner, sort_inner));
     let (outer_rows, inner_rows) = (input.outer.node.cost.rows, input.inner.node.cost.rows);
     let tuples = tuple_count(input, &clauses);
-    // `skip_mark_restore`: when the inner side is unique and the join has no other condition, the join never goes back to an inner row.
+    // `skip_mark_restore`: when the inner side is unique and the join has no other condition, the join never goes back to an inner row. With the unique rows of a semi join as the outer side, no outer row has the value of the row before it.
     let skip_mark_restore = input.unique.is_some() && other.is_empty() && !input.filtered;
-    let rescanned = if skip_mark_restore { 0.0 } else { (tuples - inner_rows).max(0.0) };
+    let rescanned =
+        if skip_mark_restore || input.made.0 { 0.0 } else { (tuples - inner_rows).max(0.0) };
     let ratio = 1.0 + rescanned / inner_rows.max(1.0);
     let inner_run = i.1 - i.0;
     let startup = o.0 + i.0;
@@ -1950,11 +2273,13 @@ fn merge_clauses<'q>(clauses: Vec<Clause<'q>>, keys: &[MergeKey]) -> Vec<(Clause
 }
 
 impl<'q> Candidate<'q> {
-    /// The order of the rows of the join, as `build_join_pathkeys`: the order of the outer side for a nested loop, the order of the values of the conditions for a merge join that is not a full join, and no order for a hash join.
+    /// The order of the rows of the join, as `build_join_pathkeys`: the order of the outer side for a nested loop, the order of the values of the conditions for a merge join that is not a right join, a right anti join or a full join, and no order for a hash join.
     fn order(&self, outer: &Rel<'q>, inner: &Rel<'q>, quals: &[Qual<'q>]) -> Vec<OrderKey> {
         match self.method {
             Method::Nested => outer.order.clone(),
-            Method::Merge if self.join != JoinKind::Full => {
+            Method::Merge
+                if !matches!(self.join, JoinKind::Right | JoinKind::RightAnti | JoinKind::Full) =>
+            {
                 let clauses = split(quals, &outer.rels, &inner.rels, exprs::can_merge).0;
                 merge_clauses(clauses, &self.keys)
                     .into_iter()

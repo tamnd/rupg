@@ -1,18 +1,23 @@
 //! `pull_up_subqueries`: the subqueries in `FROM` that the planner merges into the query above them before it plans the query, as `pull_up_simple_subquery` merges them.
 //!
 //! The relations of a merged subquery come after the relations of the query, as the range table of the subquery comes after the range table of the query in PostgreSQL. The subquery takes its place in `FROM`, its `WHERE` joins the `WHERE` of the query or the `ON` of its join, and each column of the subquery becomes the expression of its target.
+//!
+//! Before that, each part of `WHERE` that is `EXISTS`, `NOT EXISTS` or `ANY` on a subquery that can be a join becomes a semi join or an anti join, as `pull_up_sublinks` makes it.
 
-use rupg_analyze::{BoolOp, Expr, ExprKind, FromItem, JoinKind, Query, Relation};
+use rupg_analyze::{
+    BoolOp, Column, Expr, ExprKind, FromItem, Join, JoinKind, Query, Relation, SubLink,
+    SubLinkKind, Var,
+};
 use rupg_types::oid;
 
-use crate::exprs;
+use crate::{exists, exprs, pushdown};
 
 /// The query with each simple subquery in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`.
 pub fn pull_up(query: &Query) -> Query {
     let mut query = query.clone();
     pull_all(&mut query);
-    crate::pushdown::push_all(&mut query);
-    crate::exists::fill_all(&mut query);
+    pushdown::push_all(&mut query);
+    exists::fill_all(&mut query);
     query
 }
 
@@ -36,6 +41,185 @@ fn pull_all(query: &mut Query) {
     while let Some((r, top)) = candidate(query) {
         merge(query, r, top);
     }
+    // PostgreSQL pulls up the subqueries of `WHERE` before the subqueries of `FROM`. Here the subqueries of `FROM` merge first, so that they keep their places in the list of `FROM`, and the subquery of an `ANY` then merges as the inner side of its semi join.
+    if pull_sublinks(query) {
+        while let Some((r, top)) = candidate(query) {
+            merge(query, r, top);
+        }
+    }
+}
+
+/// `pull_up_sublinks`: each part of `WHERE` that is `EXISTS`, `NOT EXISTS` or `ANY` on a subquery becomes a semi join or an anti join of the items of `FROM` with the relations of the subquery. The joins come in the order of the parts, and each join has the join before it as its left side. True when a part became a join. The planner does not convert a part of `ON`, a `NOT IN` or an `ANY` on a correlated subquery yet.
+fn pull_sublinks(query: &mut Query) -> bool {
+    if query.set_op.is_some()
+        || query.write.is_some()
+        || !query.row_marks.is_empty()
+        || query.from.is_empty()
+    {
+        return false;
+    }
+    let Some(filter) = query.filter.take() else { return false };
+    let mut parts = Vec::new();
+    pushdown::owned_parts(filter, &mut parts);
+    let (mut keep, mut joins) = (Vec::new(), Vec::new());
+    for part in parts {
+        match sublink_join(query, &part) {
+            Some(join) => joins.push(join),
+            None => keep.push(part),
+        }
+    }
+    query.filter = match keep.len() {
+        0 => None,
+        1 => keep.pop(),
+        _ => Some(Expr::new(ExprKind::Bool(BoolOp::And, keep), oid::BOOL)),
+    };
+    if joins.is_empty() {
+        return false;
+    }
+    let items = std::mem::take(&mut query.from).into_iter();
+    let Some(left) = items.reduce(|l, r| join_item(JoinKind::Inner, l, r, None)) else {
+        return false;
+    };
+    let item = joins
+        .into_iter()
+        .fold(left, |left, (kind, right, on)| join_item(kind, left, right, Some(on)));
+    query.from = vec![item];
+    true
+}
+
+/// The semi join or the anti join of a part of `WHERE`: its kind, its inner side and its condition.
+fn sublink_join(query: &mut Query, part: &Expr) -> Option<(JoinKind, FromItem, Expr)> {
+    match &part.kind {
+        ExprKind::SubLink(link) if link.kind == SubLinkKind::Exists => {
+            exists_join(query, &link.query, JoinKind::Semi)
+        }
+        ExprKind::SubLink(link) if link.kind == SubLinkKind::Any => any_join(query, link),
+        ExprKind::Bool(BoolOp::Not, args) => match args.as_slice() {
+            [Expr { kind: ExprKind::SubLink(link), .. }] if link.kind == SubLinkKind::Exists => {
+                exists_join(query, &link.query, JoinKind::Anti)
+            }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// `convert_EXISTS_sublink_to_join`: the relations of the subquery that [`exists::simplify`] makes join the relations of the query, and the `WHERE` of the subquery is the condition of the join. The rest of the subquery reads no column of the query. The `WHERE` reads a column of the query and calls no volatile function. The subquery has no `WITH` and has items in `FROM`.
+fn exists_join(
+    query: &mut Query,
+    sub: &Query,
+    kind: JoinKind,
+) -> Option<(JoinKind, FromItem, Expr)> {
+    if !sub.ctes.is_empty() {
+        return None;
+    }
+    let mut sub = exists::simplify(sub)?;
+    let mut filter = sub.filter.take()?;
+    if sub.from.is_empty()
+        || exprs::correlated(&sub, 1)
+        || exprs::relations_at(&filter, 1).is_empty()
+        || exprs::volatile(&filter)
+    {
+        return None;
+    }
+    let base = query.relations.len();
+    move_up(&mut sub, base);
+    filter.each_mut(0, &mut moved(base));
+    let items = std::mem::take(&mut sub.from).into_iter();
+    let right = items.reduce(|l, r| join_item(JoinKind::Inner, l, r, None))?;
+    query.relations.append(&mut sub.relations);
+    query.pulled += sub.pulled;
+    Some((kind, right, filter))
+}
+
+/// `convert_ANY_sublink_to_join`: the subquery of `ANY` is a relation of the query, and the test of `ANY` on the columns of the relation is the condition of the join. The subquery reads no column of the query. The test reads a column of the query, calls no volatile function and has no subquery.
+fn any_join(query: &mut Query, link: &SubLink) -> Option<(JoinKind, FromItem, Expr)> {
+    let test = link.test.as_ref()?;
+    let sub = &link.query;
+    let sublink = test.find(0, &mut |e, _| matches!(e.kind, ExprKind::SubLink(_)).then_some(()));
+    if exprs::correlated(sub, 1)
+        || exprs::relations(test).is_empty()
+        || exprs::volatile(test)
+        || sublink.is_some()
+        || sub.targets.iter().any(|t| t.junk)
+    {
+        return None;
+    }
+    let r = query.relations.len();
+    let mut on = test.clone();
+    on.each_mut(0, &mut |e, depth| {
+        if let ExprKind::SubColumn(at) = e.kind
+            && depth == 0
+        {
+            let attnum = i16::try_from(at + 1).unwrap_or(i16::MAX);
+            e.kind = ExprKind::Var(Var { relation: r, attnum, levels_up: 0 });
+        }
+        false
+    });
+    let columns = sub
+        .targets
+        .iter()
+        .map(|t| Column {
+            name: t.name.clone(),
+            ty: t.expr.ty,
+            typmod: t.expr.typmod,
+            not_null: false,
+        })
+        .collect();
+    query.relations.push(Relation {
+        oid: 0,
+        columns,
+        subquery: Some(Box::new(sub.clone())),
+        function: None,
+        values: None,
+        name: "unnamed_subquery".to_string(),
+        alias: None,
+        lateral: false,
+        cte: None,
+        tablesample: None,
+        only: false,
+    });
+    Some((JoinKind::Semi, FromItem::Relation(r), on))
+}
+
+/// A join of two items of `FROM` that the planner makes, with no `USING` and no alias.
+fn join_item(kind: JoinKind, left: FromItem, right: FromItem, on: Option<Expr>) -> FromItem {
+    FromItem::Join(Box::new(Join {
+        kind,
+        left,
+        right,
+        on,
+        using: Vec::new(),
+        plain_using: false,
+        alias: None,
+        using_alias: None,
+        merged: Vec::new(),
+        columns: Vec::new(),
+        aliases: Vec::new(),
+        sources: Vec::new(),
+    }))
+}
+
+/// A column of a subquery as a column of the query above it, where the relations of the subquery come after the `base` relations of that query, and a column of a query outside the subquery is one level nearer.
+fn moved(base: usize) -> impl FnMut(&mut Expr, usize) -> bool {
+    move |e: &mut Expr, depth: usize| {
+        match &mut e.kind {
+            ExprKind::Var(v) if v.levels_up == depth => v.relation += base,
+            ExprKind::Var(v) if v.levels_up > depth => v.levels_up -= 1,
+            ExprKind::Agg(agg) if agg.levels_up > depth => agg.levels_up -= 1,
+            ExprKind::Grouping(g) if g.levels_up > depth => g.levels_up -= 1,
+            _ => {}
+        }
+        false
+    }
+}
+
+/// The expressions and the items of `FROM` of a subquery as [`moved`] makes them.
+fn move_up(sub: &mut Query, base: usize) {
+    let mut inner = moved(base);
+    sub.each_expr_mut(0, &mut |e, depth| e.each_mut(depth, &mut inner));
+    join_columns(&mut sub.from, &mut |e| e.each_mut(0, &mut inner));
+    renumber(&mut sub.from, &|j| j + base);
 }
 
 /// `is_simple_subquery`: a subquery that the planner can merge into the query above it. It has no set operation, no aggregate, no window, no function that gives a set in its targets, no `ORDER BY`, no `DISTINCT`, no `LIMIT`, no `OFFSET`, no row lock, no `WITH` and no volatile function in its targets.
@@ -63,9 +247,9 @@ fn places(item: &FromItem, top: bool, on: bool, out: &mut Vec<(usize, bool, bool
         FromItem::Relation(r) => out.push((*r, top, on)),
         FromItem::Join(join) => {
             let (left, right) = match join.kind {
-                JoinKind::Inner => (true, true),
-                JoinKind::Left => (on, true),
-                JoinKind::Right => (true, on),
+                JoinKind::Inner | JoinKind::Semi | JoinKind::RightSemi => (true, true),
+                JoinKind::Left | JoinKind::Anti => (on, true),
+                JoinKind::Right | JoinKind::RightAnti => (true, on),
                 JoinKind::Full => (false, false),
             };
             places(&join.left, false, left, out);
@@ -192,21 +376,7 @@ fn take_place(items: &mut [FromItem], r: usize, with: &mut Option<FromItem>) {
 fn merge(query: &mut Query, r: usize, top: bool) {
     let Some(sub) = query.relations.remove(r).subquery else { return };
     let mut sub = *sub;
-    let base = query.relations.len();
-    // The relations of the subquery come after the relations of the query, and a column of a query outside the subquery is one level nearer.
-    let mut inner = |e: &mut Expr, depth: usize| {
-        match &mut e.kind {
-            ExprKind::Var(v) if v.levels_up == depth => v.relation += base,
-            ExprKind::Var(v) if v.levels_up > depth => v.levels_up -= 1,
-            ExprKind::Agg(agg) if agg.levels_up > depth => agg.levels_up -= 1,
-            ExprKind::Grouping(g) if g.levels_up > depth => g.levels_up -= 1,
-            _ => {}
-        }
-        false
-    };
-    sub.each_expr_mut(0, &mut |e, depth| e.each_mut(depth, &mut inner));
-    join_columns(&mut sub.from, &mut |e| e.each_mut(0, &mut inner));
-    renumber(&mut sub.from, &|j| j + base);
+    move_up(&mut sub, query.relations.len());
     // `pullup_replace_vars`: a column of the subquery becomes the expression of its target, and the relations after the subquery move down one place.
     let targets: Vec<Expr> = sub.targets.iter().map(|t| t.expr.clone()).collect();
     let mut outer = |e: &mut Expr, depth: usize| {
@@ -274,9 +444,11 @@ fn lift(item: &mut FromItem, r: usize, filter: &mut Option<Expr>) -> bool {
     };
     let join = &mut **join;
     let (on, here) = if lift(&mut join.left, r, filter) {
-        (matches!(join.kind, JoinKind::Inner | JoinKind::Right), true)
+        let keeps = matches!(join.kind, JoinKind::Left | JoinKind::Anti | JoinKind::Full);
+        (!keeps, true)
     } else if lift(&mut join.right, r, filter) {
-        (matches!(join.kind, JoinKind::Inner | JoinKind::Left), true)
+        let keeps = matches!(join.kind, JoinKind::Right | JoinKind::RightAnti | JoinKind::Full);
+        (!keeps, true)
     } else {
         (false, false)
     };

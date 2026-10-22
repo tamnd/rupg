@@ -193,13 +193,21 @@ pub struct Join {
     pub sources: Vec<(usize, usize)>,
 }
 
-/// The kinds of join.
+/// The kinds of join. Only the planner makes a semi join or an anti join, as `pull_up_sublinks` makes them from `EXISTS` and `IN`.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum JoinKind {
     Inner,
     Left,
     Right,
     Full,
+    /// Each row of the left side that has a row of the right side that matches, once, as `JOIN_SEMI`.
+    Semi,
+    /// Each row of the left side that has no row of the right side that matches, as `JOIN_ANTI`.
+    Anti,
+    /// A semi join with the sides swapped, as `JOIN_RIGHT_SEMI`.
+    RightSemi,
+    /// An anti join with the sides swapped, as `JOIN_RIGHT_ANTI`.
+    RightAnti,
 }
 
 /// An entry of the range table, as `RangeTblEntry`: a relation or a join. The errors search all the entries, also the entries that a name cannot see.
@@ -1562,8 +1570,8 @@ impl Analyzer<'_> {
         let is_var = |e: &Expr| matches!(e.kind, ExprKind::Var(_));
         Ok(match kind {
             JoinKind::Inner if !is_var(&l) && is_var(&r) => r,
-            JoinKind::Inner | JoinKind::Left => l,
-            JoinKind::Right => r,
+            JoinKind::Inner | JoinKind::Left | JoinKind::Semi | JoinKind::Anti => l,
+            JoinKind::Right | JoinKind::RightSemi | JoinKind::RightAnti => r,
             JoinKind::Full => {
                 Expr { kind: ExprKind::Coalesce(vec![l, r]), ty, typmod: -1, location: None }
             }

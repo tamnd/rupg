@@ -106,22 +106,27 @@ fn is_column(expr: &Expr) -> bool {
     }
 }
 
-/// The class as a class whose conditions of joins the joins make again: a class with no constant, where each member reads one relation of the domain that no other member reads. The joins also make the condition of a class of one condition, with the sides in the order of the join.
-fn join_class<'q>(class: &Class<'q>, own: &BTreeSet<usize>) -> Option<Joined<'q>> {
+/// The class as a class whose conditions of joins the joins make again: a class with no constant, where each member reads one relation of the domain. The joins also make the condition of a class of one condition, with the sides in the order of the join. Two members of one relation give the condition `previous = member` to the scan of the relation, as `generate_base_implied_equalities_no_const` makes it.
+fn join_class<'q>(class: &Class<'q>, own: &BTreeSet<usize>) -> Option<(Joined<'q>, Vec<Qual<'q>>)> {
     if class.constant().is_some() || class.sources.is_empty() {
         return None;
     }
     let mut members: Vec<(&'q Expr, usize)> = Vec::new();
+    let mut quals = Vec::new();
     for &member in &class.members {
         let rels = exprs::relations(member);
         let mut each = rels.iter();
         let (Some(&r), None) = (each.next(), each.next()) else { return None };
-        if has_sublink(member) || !own.contains(&r) || members.iter().any(|&(_, o)| o == r) {
+        if has_sublink(member) || !own.contains(&r) {
             return None;
+        }
+        if let Some(&(previous, _)) = members.iter().rev().find(|&&(_, o)| o == r) {
+            let expr = equality(&class.families, previous, member)?;
+            quals.push(Qual::implied(expr, rels));
         }
         members.push((member, r));
     }
-    Some(Joined { members, families: class.families.clone() })
+    Some((Joined { members, families: class.families.clone() }, quals))
 }
 
 /// Makes the conditions of the equivalence classes with a constant of the join domain of the tree, and then of the domains below it. `top` is true for the domain of the whole query. The result is false when two constants of a class of the top domain are not equal, so that no row passes.
@@ -150,8 +155,11 @@ pub(super) fn domain<'q>(tree: &mut Tree<'q>, top: bool, out: &mut Found<'q>) ->
                 }
             }
             None => {
-                if let Some(joins) = join_class(class, &own) {
+                if let Some((joins, quals)) = join_class(class, &own) {
                     remove(tree, &class.sources, &mut out.joined);
+                    for qual in quals {
+                        place(tree, qual);
+                    }
                     out.classes.push(joins);
                 }
             }
@@ -161,20 +169,20 @@ pub(super) fn domain<'q>(tree: &mut Tree<'q>, top: bool, out: &mut Found<'q>) ->
     true
 }
 
-/// The conditions of a join domain that can make an equivalence class, with their places: the conditions of the scans and of the inner joins of the domain. The nullable side of an outer join is a domain of its own, and the conditions of an outer join are not in a class.
+/// The conditions of a join domain that can make an equivalence class, with their places: the conditions of the scans and of the inner joins and the semi joins of the domain, as a semi join is in the domain of its parent in `deconstruct_recurse`. The nullable side of an outer join is a domain of its own, and the conditions of an outer join are not in a class.
 fn sources<'q>(tree: &Tree<'q>, out: &mut Vec<(usize, &'q Expr)>) {
     let quals = match tree {
         Tree::Base { quals, .. } => quals,
         Tree::Join(join) => {
             match join.kind {
-                JoinKind::Inner => {
+                JoinKind::Inner | JoinKind::Semi => {
                     sources(&join.left, out);
                     sources(&join.right, out);
                 }
-                JoinKind::Left => sources(&join.left, out),
+                JoinKind::Left | JoinKind::Anti => sources(&join.left, out),
                 _ => {}
             }
-            if join.kind != JoinKind::Inner {
+            if !matches!(join.kind, JoinKind::Inner | JoinKind::Semi) {
                 return;
             }
             &join.quals
@@ -196,11 +204,11 @@ fn own_rels(tree: &Tree<'_>, out: &mut BTreeSet<usize>) {
             out.insert(*relation);
         }
         Tree::Join(join) => match join.kind {
-            JoinKind::Inner => {
+            JoinKind::Inner | JoinKind::Semi => {
                 own_rels(&join.left, out);
                 own_rels(&join.right, out);
             }
-            JoinKind::Left => own_rels(&join.left, out),
+            JoinKind::Left | JoinKind::Anti => own_rels(&join.left, out),
             _ => {}
         },
     }
@@ -327,11 +335,11 @@ fn equality(families: &[u32], left: &Expr, right: &Expr) -> Option<Expr> {
 fn reconsider<'q>(tree: &mut Tree<'q>, classes: &[Class<'q>], joined: &mut Vec<&'q Expr>) {
     let Tree::Join(join) = tree else { return };
     match join.kind {
-        JoinKind::Inner => {
+        JoinKind::Inner | JoinKind::Semi => {
             reconsider(&mut join.left, classes, joined);
             reconsider(&mut join.right, classes, joined);
         }
-        JoinKind::Left => {
+        JoinKind::Left | JoinKind::Anti => {
             reconsider(&mut join.left, classes, joined);
             reconsider_join(join, classes, joined);
         }
@@ -402,14 +410,14 @@ fn remove<'q>(tree: &mut Tree<'q>, orders: &[usize], joined: &mut Vec<&'q Expr>)
         Tree::Base { quals, .. } => quals,
         Tree::Join(join) => {
             match join.kind {
-                JoinKind::Inner => {
+                JoinKind::Inner | JoinKind::Semi => {
                     remove(&mut join.left, orders, joined);
                     remove(&mut join.right, orders, joined);
                 }
-                JoinKind::Left => remove(&mut join.left, orders, joined),
+                JoinKind::Left | JoinKind::Anti => remove(&mut join.left, orders, joined),
                 _ => {}
             }
-            if join.kind != JoinKind::Inner {
+            if !matches!(join.kind, JoinKind::Inner | JoinKind::Semi) {
                 return;
             }
             for qual in &join.quals {
@@ -429,11 +437,11 @@ fn remove<'q>(tree: &mut Tree<'q>, orders: &[usize], joined: &mut Vec<&'q Expr>)
 fn below<'q>(tree: &mut Tree<'q>, out: &mut Found<'q>) {
     let Tree::Join(join) = tree else { return };
     match join.kind {
-        JoinKind::Inner => {
+        JoinKind::Inner | JoinKind::Semi => {
             below(&mut join.left, out);
             below(&mut join.right, out);
         }
-        JoinKind::Left => {
+        JoinKind::Left | JoinKind::Anti => {
             below(&mut join.left, out);
             domain(&mut join.right, false, out);
         }

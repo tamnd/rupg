@@ -102,12 +102,12 @@ fn reduce(item: &mut FromItem, above: &BTreeSet<usize>) {
         local = from::nonnullable_rels(on, true);
     }
     let (left, right) = match join.kind {
-        JoinKind::Inner => {
+        JoinKind::Inner | JoinKind::Semi | JoinKind::RightSemi => {
             local.extend(above.iter().copied());
             (local.clone(), local)
         }
-        JoinKind::Left => (above.clone(), local),
-        JoinKind::Right => (local, above.clone()),
+        JoinKind::Left | JoinKind::Anti => (above.clone(), local),
+        JoinKind::Right | JoinKind::RightAnti => (local, above.clone()),
         JoinKind::Full => (BTreeSet::new(), BTreeSet::new()),
     };
     reduce(&mut join.left, &left);
@@ -126,7 +126,7 @@ fn rels(item: &FromItem, out: &mut Vec<usize>) {
 }
 
 /// The parts of a condition that `AND` joins, as [`exprs::and_parts`] finds them.
-fn owned_parts(expr: Expr, out: &mut Vec<Expr>) {
+pub(crate) fn owned_parts(expr: Expr, out: &mut Vec<Expr>) {
     match expr.kind {
         ExprKind::Bool(BoolOp::And, args) => args.into_iter().for_each(|a| owned_parts(a, out)),
         kind => out.push(Expr { kind, ..expr }),
