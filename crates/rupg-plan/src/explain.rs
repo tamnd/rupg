@@ -447,6 +447,7 @@ impl Explainer<'_, '_> {
                                 rs.iter().map(|r| self.texts.refname(scope, *r)).collect();
                             format!("Join on {}", names.join(", "))
                         }
+                        Replaced::MinMax => "MinMaxAggregate".to_string(),
                     };
                     self.w.text("Replaces", &text);
                 }

@@ -13,7 +13,7 @@ use rupg_analyze::{
 use rupg_pgcatalog::builtin;
 use rupg_types::{Value, oid};
 
-use crate::{exists, exprs, pushdown};
+use crate::{exists, exprs, minmax, pushdown};
 
 /// The query with each simple subquery in `FROM` merged into the query above it, also in the subqueries of the query, and with the conditions of `WHERE` that the planner moves into the other subqueries of `FROM`.
 pub fn pull_up(query: &Query) -> Query {
@@ -21,6 +21,7 @@ pub fn pull_up(query: &Query) -> Query {
     pull_all(&mut query);
     pushdown::push_all(&mut query);
     exists::fill_all(&mut query);
+    minmax::fill_all(&mut query);
     query
 }
 

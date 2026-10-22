@@ -1,11 +1,14 @@
 //! The nodes above the join of `FROM`, as `grouping_planner` makes them: the aggregates, the windows, the functions that give sets, `DISTINCT`, `ORDER BY`, the locks of rows and `LIMIT`. Also the plan of a set operation and the node of a statement that writes a table.
 
 use rupg_analyze::{
-    Aggref, Expr, ExprKind, Query, SetKind, SetOp, SetTree, SortGroup, WindowFunc, Write,
-    WriteKind, expand_grouping_sets,
+    Aggref, Expr, ExprKind, MinMax, Query, SetKind, SetOp, SetTree, SortGroup, SubLink, WindowFunc,
+    Write, WriteKind, expand_grouping_sets,
 };
 use rupg_pgcatalog::builtin;
-use rupg_plan::{Conflict, Cost, Item, Kind, Node, Operation, SortKey, Strategy, TARGET};
+use rupg_plan::{
+    Conflict, Cost, Item, Kind, Label, Node, Operation, Replaced, SortKey, Strategy, SubPlan,
+    TARGET,
+};
 
 use crate::from::paths::Paths;
 use crate::from::{self, OrderKey, sort};
@@ -127,6 +130,22 @@ fn sort_cost(
         let groups = level.stats.groups(&exprs, c.rows.max(2.0));
         cost::incremental_sort((c.startup, c.total), c.rows, c.width, groups, bound)
     }
+}
+
+/// The subqueries in the expressions that are not in a subquery, in the order of the expressions.
+fn sublinks<'q>(exprs: impl IntoIterator<Item = &'q Expr>) -> Vec<&'q SubLink> {
+    let mut out: Vec<&'q SubLink> = Vec::new();
+    for expr in exprs {
+        expr.find(0, &mut |e, depth| {
+            if let ExprKind::SubLink(link) = &e.kind
+                && depth == 0
+            {
+                out.push(link);
+            }
+            None::<()>
+        });
+    }
+    out
 }
 
 /// `make_ordered_path`: the node in the order of the keys. A node whose rows are in the order already stays as it is. A node whose rows are in the order of the first keys gets an `Incremental Sort`, and another node gets a `Sort`. With `only`, the node is a plan that is not the cheapest, which the planner uses only when its rows are in the order of one key or more, so the result is `None` when it needs a `Sort`.
@@ -434,13 +453,106 @@ impl<'q> Builder<'q> {
     ) -> Node<'q> {
         let mut paths = Paths::new(level.fraction > 0.0);
         for (i, (node, order)) in plans.into_iter().enumerate() {
-            if let Some(node) = self.upper_one(level, node, order, i > 0) {
+            if let Some(node) = self.upper_one(level, node, order, i > 0 || level.presorted) {
                 paths.add(node.cost.startup, node.cost.total, Vec::new(), node);
             }
         }
-        let Some(node) = paths.fractional(fraction, |n| n.cost.rows) else {
-            unreachable!("the cheapest plan gets a result")
-        };
+        match paths.fractional(fraction, |n| n.cost.rows) {
+            Some(node) => node,
+            // `build_minmax_path`: no plan of `FROM` gives the rows in the order of the subquery, so the query has no plan.
+            None if level.presorted => {
+                self.failed = true;
+                Node::new(
+                    Kind::Result { replaces: None, one_time: Vec::new() },
+                    level.scope,
+                    Vec::new(),
+                )
+            }
+            None => unreachable!("the cheapest plan gets a result"),
+        }
+    }
+
+    /// `preprocess_minmax_aggregates` and `create_minmaxagg_plan`: the `Result` of a query with [`Query::minmax`], which reads the value of each aggregate call from an `InitPlan` that reads the first row of its subquery, when it costs less than `normal`, the plan with an `Agg` node. Each subquery tries the first order of the nulls, then the other order, and each try takes a name. When a call has no plan in either order, or the `Result` costs more, the query keeps `normal`, and the subplans take no place in the plan.
+    pub(crate) fn minmax(
+        &mut self,
+        level: &Level<'q>,
+        minmax: &'q MinMax,
+        normal: Node<'q>,
+    ) -> Node<'q> {
+        let scope = level.scope;
+        let first = self.groups.len();
+        let mut plans = Vec::new();
+        for tries in &minmax.aggs {
+            let mut found = None;
+            for query in tries {
+                self.counts[7] += 1;
+                let name = format!("minmax_{}", self.counts[7]);
+                let start = self.groups.len();
+                self.presorted = true;
+                let plan = self.subplan(|b| b.query(query, Some(scope)));
+                if std::mem::take(&mut self.failed) {
+                    self.groups[start..].iter_mut().for_each(Vec::clear);
+                    continue;
+                }
+                found = Some((name, plan));
+                break;
+            }
+            let Some(found) = found else {
+                self.groups[first..].iter_mut().for_each(Vec::clear);
+                return normal;
+            };
+            plans.push(found);
+        }
+        // `create_minmaxagg_path`: each subplan costs the cost of its first row, which its `Limit` has.
+        let costs = target_costs(level).unwrap_or_default();
+        let startup = plans.iter().map(|(_, plan)| plan.cost.total).sum::<f64>() + costs.full.0;
+        let mut c =
+            Cost { startup, total: startup + costs.full.1 + cost::CPU_TUPLE, rows: 1.0, width: 0 };
+        if let Some(having) = &level.query.having {
+            let (start, per_row) = level.stats.qual_costs([having]);
+            c.startup += start;
+            c.total += start + per_row;
+        }
+        if c.total >= normal.cost.total {
+            self.groups[first..].iter_mut().for_each(Vec::clear);
+            return normal;
+        }
+        // Each subquery of the new targets takes the name of its subplan. A subquery that the query had is a copy of it, which takes the label of the subquery of the query.
+        let query = level.query;
+        let mut own =
+            sublinks(query.targets.iter().map(|t| &t.expr).chain(&query.having)).into_iter();
+        for link in sublinks(minmax.targets.iter().chain(&minmax.having)) {
+            if let Some(at) = minmax.aggs.iter().position(|tries| tries[0] == link.query) {
+                let name = plans[at].0.clone();
+                self.labels.push(Label {
+                    link,
+                    name,
+                    init: true,
+                    hashed: false,
+                    alternative: false,
+                });
+            } else if let Some(orig) = own.next()
+                && let Some(label) = self.labels.iter().find(|l| std::ptr::eq(l.link, orig))
+            {
+                let (name, init, hashed) = (label.name.clone(), label.init, label.hashed);
+                self.labels.push(Label { link, name, init, hashed, alternative: false });
+            }
+        }
+        let mut one_time = Vec::new();
+        if let Some(having) = &minmax.having {
+            let mut parts = Vec::new();
+            exprs::and_parts(having, &mut parts);
+            one_time.extend(parts.into_iter().map(Item::of));
+        }
+        let replaces = Some(Replaced::MinMax);
+        let mut node = Node::new(Kind::Result { replaces, one_time }, level.display, Vec::new());
+        node.cost = c;
+        node.init_plans = plans
+            .into_iter()
+            .map(|(name, plan)| SubPlan { name: format!("InitPlan {name}"), plan })
+            .collect();
+        // `set_rtable_names`: the relation of the query has no scan in the plan, so it takes no name.
+        self.current.retain(|&s| s != scope);
         node
     }
 

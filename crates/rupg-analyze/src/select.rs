@@ -66,6 +66,19 @@ pub struct Query {
     pub out_args: Vec<crate::OutArg>,
     /// The number of subqueries of `FROM` that the planner merged into the query, which stay in the range table of PostgreSQL with no plan.
     pub pulled: usize,
+    /// The queries of `preprocess_minmax_aggregates` for a query whose aggregate calls are each `min` or `max` of one table, which the planner can run as an `InitPlan` that reads the first row of an index.
+    pub minmax: Option<Box<MinMax>>,
+}
+
+/// `MinMaxAggInfo`: the form of a query whose aggregate calls are each `min` or `max`, with a subquery for each aggregate call that reads the first value in the order of its sort operator.
+#[derive(Clone, Debug, PartialEq)]
+pub struct MinMax {
+    /// The two subqueries of each aggregate call that is not the same as an earlier one: the first one has the nulls first for `max` and last for `min`, as `build_minmax_path` tries it first, and the second one has the other order of the nulls.
+    pub aggs: Vec<[Query; 2]>,
+    /// The targets of the query, with a subquery of `aggs` in the place of each aggregate call. A subquery is the first subquery of its aggregate call.
+    pub targets: Vec<Expr>,
+    /// The `HAVING` condition of the query with the same subqueries.
+    pub having: Option<Expr>,
 }
 
 /// A column of the result.
@@ -369,6 +382,7 @@ impl Analyzer<'_> {
             write: None,
             out_args: Vec::new(),
             pulled: 0,
+            minmax: None,
         };
         for clause in s.lockingClause.iter().flatten() {
             if let Node::LockingClause(clause) = clause {
