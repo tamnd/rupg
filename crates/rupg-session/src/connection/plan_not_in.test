@@ -1,0 +1,197 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE b (x int, y int);
+CREATE TABLE
+> CREATE TABLE c (x int, z text);
+CREATE TABLE
+> CREATE TABLE d (x int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE n (x int NOT NULL, y int NOT NULL);
+CREATE TABLE
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT x FROM d);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..111.95 rows=1130 width=8)
+row   Hash Cond: (n.x = d.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT y FROM n n2);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..137.38 rows=1130 width=8)
+row   Hash Cond: (n.x = n2.y)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on n n2  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM c WHERE x NOT IN (SELECT x FROM d);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on c  (cost=38.25..64.12 rows=635 width=36)
+row   Filter: (NOT (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT x FROM b);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=38.25..76.50 rows=1130 width=8)
+row   Filter: (NOT (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT x FROM b WHERE x IS NOT NULL);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.71..137.24 rows=1130 width=8)
+row   Hash Cond: (n.x = b.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2249 width=4)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2249 width=4)
+row               Filter: (x IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT x FROM b WHERE x > 0);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=47.66..122.78 rows=1130 width=8)
+row   Hash Cond: (n.x = b.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=38.25..38.25 rows=753 width=4)
+row         ->  Seq Scan on b  (cost=0.00..38.25 rows=753 width=4)
+row               Filter: (x > 0)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT x FROM b WHERE x > 0 OR x < -5);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=59.60..136.13 rows=1130 width=8)
+row   Hash Cond: (n.x = b.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=43.90..43.90 rows=1256 width=4)
+row         ->  Seq Scan on b  (cost=0.00..43.90 rows=1256 width=4)
+row               Filter: ((x > 0) OR (x < '-5'::integer))
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE (x, y) NOT IN (SELECT x, y FROM d WHERE y IS NOT NULL);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=66.34..129.02 rows=1695 width=8)
+row   Hash Cond: ((n.x = d.x) AND (n.y = d.y))
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2249 width=8)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2249 width=8)
+row               Filter: (y IS NOT NULL)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE (x, y) NOT IN (SELECT x, y FROM d);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=38.25..82.15 rows=1130 width=8)
+row   Filter: (NOT (ANY ((x = (hashed SubPlan any_1).col1) AND (y = (hashed SubPlan any_1).col2))))
+row   SubPlan any_1
+row     ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE coalesce(x, 0) NOT IN (SELECT x FROM d);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..111.95 rows=1130 width=8)
+row   Hash Cond: (n.x = d.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x + 1 NOT IN (SELECT x FROM d);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=38.25..82.15 rows=1130 width=8)
+row   Filter: (NOT (ANY ((x + 1) = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n LEFT JOIN n m ON m.y = n.y WHERE m.x NOT IN (SELECT x FROM d);
+fields QUERY PLAN:25:-1:-1
+row Merge Left Join  (cost=355.26..813.48 rows=12769 width=16)
+row   Merge Cond: (n.y = m.y)
+row   Filter: (NOT (ANY (m.x = (hashed SubPlan any_1).col1)))
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: n.y
+row         ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Sort  (cost=158.51..164.16 rows=2260 width=8)
+row         Sort Key: m.y
+row         ->  Seq Scan on n m  (cost=0.00..32.60 rows=2260 width=8)
+row   SubPlan any_1
+row     ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT count(*) FROM b);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=38.26..76.51 rows=1130 width=8)
+row   Filter: (NOT (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Aggregate  (cost=38.25..38.26 rows=1 width=8)
+row           ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT n2.x FROM n n2 LEFT JOIN b ON b.x = n2.x);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=1030.61..1108.55 rows=1130 width=8)
+row   Hash Cond: (n.x = n2.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=711.38..711.38 rows=25538 width=4)
+row         ->  Merge Left Join  (cost=317.01..711.38 rows=25538 width=4)
+row               Merge Cond: (n2.x = b.x)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row                     Sort Key: n2.x
+row                     ->  Seq Scan on n n2  (cost=0.00..32.60 rows=2260 width=4)
+row               ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row                     Sort Key: b.x
+row                     ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT b.x FROM n n2 LEFT JOIN b ON b.x = n2.x);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=775.23..813.48 rows=1130 width=8)
+row   Filter: (NOT (ANY (x = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Merge Left Join  (cost=317.01..711.38 rows=25538 width=4)
+row           Merge Cond: (n2.x = b.x)
+row           ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row                 Sort Key: n2.x
+row                 ->  Seq Scan on n n2  (cost=0.00..32.60 rows=2260 width=4)
+row           ->  Sort  (cost=158.51..164.16 rows=2260 width=4)
+row                 Sort Key: b.x
+row                 ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT x FROM d) AND y IN (SELECT y FROM b);
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=103.60..163.96 rows=565 width=8)
+row   Hash Cond: (n.y = b.y)
+row   ->  Hash Anti Join  (cost=60.85..111.95 rows=1130 width=8)
+row         Hash Cond: (n.x = d.x)
+row         ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row         ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row               ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Hash  (cost=40.25..40.25 rows=200 width=4)
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Group Key: b.y
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x::bigint NOT IN (SELECT x FROM d);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=38.25..82.15 rows=1130 width=8)
+row   Filter: (NOT (ANY ((x)::bigint = (hashed SubPlan any_1).col1)))
+row   SubPlan any_1
+row     ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x NOT IN (SELECT x FROM d GROUP BY x);
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=89.10..140.20 rows=1130 width=8)
+row   Hash Cond: (n.x = d.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=60.85..60.85 rows=2260 width=4)
+row         ->  HashAggregate  (cost=38.25..60.85 rows=2260 width=4)
+row               Group Key: d.x
+row               ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE x <> ALL (SELECT x FROM d);
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on n  (cost=0.00..56029.75 rows=1130 width=8)
+row   Filter: (ALL (x <> (SubPlan all_1).col1))
+row   SubPlan all_1
+row     ->  Materialize  (cost=0.00..43.90 rows=2260 width=4)
+row           ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM n WHERE NOT (x = ANY (SELECT x FROM d));
+fields QUERY PLAN:25:-1:-1
+row Hash Anti Join  (cost=60.85..111.95 rows=1130 width=8)
+row   Hash Cond: (n.x = d.x)
+row   ->  Seq Scan on n  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=4)
+row         ->  Seq Scan on d  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN

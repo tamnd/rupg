@@ -4,11 +4,14 @@
 //!
 //! Before that, each part of `WHERE` that is `EXISTS`, `NOT EXISTS` or `ANY` on a subquery that can be a join becomes a semi join or an anti join, as `pull_up_sublinks` makes it.
 
+use std::collections::BTreeSet;
+
 use rupg_analyze::{
-    BoolOp, Column, Expr, ExprKind, FromItem, Join, JoinKind, Query, Relation, SubLink,
-    SubLinkKind, Var,
+    BoolOp, BoolTest, Column, Expr, ExprKind, FromItem, Func, FuncForm, Join, JoinKind, Query,
+    Relation, SubLink, SubLinkKind, Var,
 };
-use rupg_types::oid;
+use rupg_pgcatalog::builtin;
+use rupg_types::{Value, oid};
 
 use crate::{exists, exprs, pushdown};
 
@@ -49,7 +52,7 @@ fn pull_all(query: &mut Query) {
     }
 }
 
-/// `pull_up_sublinks`: each part of `WHERE` that is `EXISTS`, `NOT EXISTS` or `ANY` on a subquery becomes a semi join or an anti join of the items of `FROM` with the relations of the subquery. The joins come in the order of the parts, and each join has the join before it as its left side. True when a part became a join. The planner does not convert a part of `ON`, a `NOT IN` or an `ANY` on a correlated subquery yet.
+/// `pull_up_sublinks`: each part of `WHERE` that is `EXISTS`, `NOT EXISTS` or `ANY` on a subquery becomes a semi join or an anti join of the items of `FROM` with the relations of the subquery. The joins come in the order of the parts, and each join has the join before it as its left side. True when a part became a join. `NOT IN` is an anti join only when no value of the test can be null. The planner does not convert a part of `ON` or an `ANY` on a correlated subquery yet.
 fn pull_sublinks(query: &mut Query) -> bool {
     if query.set_op.is_some()
         || query.write.is_some()
@@ -97,6 +100,9 @@ fn sublink_join(query: &mut Query, part: &Expr) -> Option<(JoinKind, FromItem, E
         ExprKind::Bool(BoolOp::Not, args) => match args.as_slice() {
             [Expr { kind: ExprKind::SubLink(link), .. }] if link.kind == SubLinkKind::Exists => {
                 exists_join(query, &link.query, JoinKind::Anti)
+            }
+            [Expr { kind: ExprKind::SubLink(link), .. }] if link.kind == SubLinkKind::Any => {
+                not_any_join(query, link)
             }
             _ => None,
         },
@@ -180,6 +186,147 @@ fn any_join(query: &mut Query, link: &SubLink) -> Option<(JoinKind, FromItem, Ex
         only: false,
     });
     Some((JoinKind::Semi, FromItem::Relation(r), on))
+}
+
+/// `convert_ANY_sublink_to_join` under `NOT`: `NOT (x op ANY (subquery))` is the anti join of [`any_join`] when the test is not null for each row, so that the rows with no match are the rows that pass. Each operator of the test is in a btree or a hash family, each value of the query that it compares is not null, and each column of the subquery is not null, as `sublink_testexpr_is_not_nullable` and `query_outputs_are_not_nullable` prove it.
+fn not_any_join(query: &mut Query, link: &SubLink) -> Option<(JoinKind, FromItem, Expr)> {
+    let test = link.test.as_ref()?;
+    if !test_not_null(query, test) || !outputs_not_null(&link.query) {
+        return None;
+    }
+    let (_, right, on) = any_join(query, link)?;
+    Some((JoinKind::Anti, right, on))
+}
+
+/// `sublink_testexpr_is_not_nullable`: true when the test of `ANY` is one operator, the operators of an `AND` or an `OR`, or a row comparison, where each operator is in a btree or a hash family, as `op_is_safe_index_member`, and each value of the query on the left side is not null.
+fn test_not_null(query: &Query, test: &Expr) -> bool {
+    let ops: Vec<&Expr> = match &test.kind {
+        ExprKind::Func(_) => vec![test],
+        ExprKind::Bool(BoolOp::And | BoolOp::Or, args) => args.iter().collect(),
+        ExprKind::RowCompare(rc) => rc.ops.iter().collect(),
+        _ => return false,
+    };
+    let mut nullable = Vec::new();
+    for item in &query.from {
+        nullable_places(item, false, &mut nullable);
+    }
+    ops.into_iter().all(|op| {
+        let ExprKind::Func(Func { form: FuncForm::Operator(operator), args, .. }) = &op.kind else {
+            return false;
+        };
+        let safe = builtin::amops_of_operator(*operator).any(|a| matches!(a.method, 403 | 405));
+        matches!(args.as_slice(), [outer, _] if safe && not_null(query, &nullable, outer))
+    })
+}
+
+/// `query_outputs_are_not_nullable`: true when no column of the query can be null. The query has no set operation and no grouping sets. A column is an expression that [`not_null`] proves, or a column of a relation that a condition of `WHERE` or of an inner join is false or null for when the column is null, as `find_nonnullable_vars` finds it.
+fn outputs_not_null(sub: &Query) -> bool {
+    if sub.set_op.is_some() || !sub.grouping_sets.is_empty() {
+        return false;
+    }
+    let mut nullable = Vec::new();
+    for item in &sub.from {
+        nullable_places(item, false, &mut nullable);
+    }
+    let mut safe: Option<BTreeSet<(usize, i16)>> = None;
+    sub.targets.iter().filter(|t| !t.junk).all(|t| {
+        let mut expr = &t.expr;
+        while let ExprKind::Relabel(arg, _) = &expr.kind {
+            expr = arg;
+        }
+        if not_null(sub, &nullable, expr) {
+            return true;
+        }
+        let ExprKind::Var(var) = expr.kind else { return false };
+        let safe = safe.get_or_insert_with(|| {
+            let mut quals = Vec::new();
+            for item in &sub.from {
+                safe_quals(item, &mut quals);
+            }
+            quals.extend(&sub.filter);
+            quals.into_iter().flat_map(|q| nonnullable_vars(q, true)).collect()
+        });
+        var.levels_up == 0 && safe.contains(&(var.relation, var.attnum))
+    })
+}
+
+/// `find_subquery_safe_quals`: the conditions of `ON` that the rows of the relations outside the nullable sides of the outer joins pass.
+fn safe_quals<'q>(item: &'q FromItem, out: &mut Vec<&'q Expr>) {
+    let FromItem::Join(join) = item else { return };
+    match join.kind {
+        JoinKind::Inner => {
+            safe_quals(&join.left, out);
+            safe_quals(&join.right, out);
+            out.extend(&join.on);
+        }
+        JoinKind::Left | JoinKind::Semi | JoinKind::Anti => safe_quals(&join.left, out),
+        JoinKind::Right | JoinKind::RightSemi | JoinKind::RightAnti => {
+            safe_quals(&join.right, out);
+        }
+        JoinKind::Full => {}
+    }
+}
+
+/// `expr_is_nonnullable`: true when the expression cannot be null. A column is a column of a table with `NOT NULL`, outside the nullable side of an outer join of `FROM`, which `nullable` has, or a system column. A constant is not null, `COALESCE`, `GREATEST` and `LEAST` have an argument that is not null, and `CASE` has an `ELSE` and results that are not null. An array, `IS NULL`, a boolean test and `IS DISTINCT FROM` are never null.
+fn not_null(query: &Query, nullable: &[usize], expr: &Expr) -> bool {
+    match &expr.kind {
+        ExprKind::Var(var) => {
+            if var.levels_up != 0 || nullable.contains(&var.relation) || var.attnum == 0 {
+                return false;
+            }
+            let Some(relation) = query.relations.get(var.relation) else { return false };
+            let table = relation.oid != 0
+                && relation.subquery.is_none()
+                && relation.function.is_none()
+                && relation.values.is_none()
+                && relation.cte.is_none();
+            let column =
+                usize::try_from(var.attnum - 1).ok().and_then(|at| relation.columns.get(at));
+            table && (var.attnum < 0 || column.is_some_and(|c| c.not_null))
+        }
+        ExprKind::Const(value) => !matches!(value, Value::Null),
+        ExprKind::Coalesce(args) | ExprKind::MinMax { args, .. } => {
+            args.iter().any(|a| not_null(query, nullable, a))
+        }
+        ExprKind::Case(case) => {
+            not_null(query, nullable, &case.default)
+                && case.whens.iter().all(|(_, result)| not_null(query, nullable, result))
+        }
+        ExprKind::Array { .. }
+        | ExprKind::NullTest(..)
+        | ExprKind::BooleanTest(..)
+        | ExprKind::Distinct { .. } => true,
+        ExprKind::Relabel(arg, _) => not_null(query, nullable, arg),
+        _ => false,
+    }
+}
+
+/// `find_nonnullable_vars`: the columns that cannot be null in a row that passes the condition. At the top of the condition, `IS NOT NULL` and the other tests that are false for a null count too, and each part of an `AND` counts. Below the top, an `AND` and an `OR` give the columns of each of their parts.
+fn nonnullable_vars(expr: &Expr, top: bool) -> BTreeSet<(usize, i16)> {
+    let strict = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.strict);
+    let union = |args: &[Expr], top: bool| {
+        args.iter().flat_map(|a| nonnullable_vars(a, top)).collect::<BTreeSet<_>>()
+    };
+    match &expr.kind {
+        ExprKind::Var(var) if var.levels_up == 0 => BTreeSet::from([(var.relation, var.attnum)]),
+        ExprKind::Bool(BoolOp::And, args) if top => union(args, top),
+        ExprKind::Bool(BoolOp::And | BoolOp::Or, args) => {
+            let mut sets = args.iter().map(|a| nonnullable_vars(a, top));
+            let first = sets.next().unwrap_or_default();
+            sets.fold(first, |acc, s| acc.intersection(&s).copied().collect())
+        }
+        ExprKind::Bool(BoolOp::Not, args) => union(args, false),
+        ExprKind::Func(f) if strict(f.oid) => union(&f.args, false),
+        ExprKind::ScalarArrayOp { func, args, .. } if strict(*func) => union(args, false),
+        ExprKind::Relabel(arg, _) | ExprKind::ArrayCoerce { arg, .. } => nonnullable_vars(arg, top),
+        ExprKind::CoerceViaIo(arg, _) => nonnullable_vars(arg, false),
+        ExprKind::NullTest(arg, false) if top => nonnullable_vars(arg, false),
+        ExprKind::BooleanTest(
+            arg,
+            BoolTest::IsTrue | BoolTest::IsFalse | BoolTest::IsNotUnknown,
+        ) if top => nonnullable_vars(arg, false),
+        _ => BTreeSet::new(),
+    }
 }
 
 /// A join of two items of `FROM` that the planner makes, with no `USING` and no alias.
