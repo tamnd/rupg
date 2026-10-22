@@ -1,0 +1,188 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> CREATE TABLE c (id bigint PRIMARY KEY, z int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION ALL SELECT id FROM c) u WHERE id = 1;
+fields QUERY PLAN:25:-1:-1
+row Subquery Scan on u  (cost=0.00..166.50 rows=22 width=8)
+row   Filter: (u.id = 1)
+row   ->  Append  (cost=0.00..112.75 rows=4300 width=8)
+row         ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT id FROM a UNION ALL SELECT id FROM c;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..112.75 rows=4300 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT id FROM a UNION ALL SELECT id FROM c;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..112.75 rows=4300 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         Output: unnamed_subquery.id
+row         ->  Seq Scan on public.a  (cost=0.00..32.60 rows=2260 width=4)
+row               Output: a.id
+row   ->  Seq Scan on public.c  (cost=0.00..30.40 rows=2040 width=8)
+row         Output: c.id
+EXPLAIN
+> EXPLAIN SELECT id FROM c UNION ALL SELECT id FROM a;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..112.75 rows=4300 width=8)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+row   ->  Subquery Scan on unnamed_subquery_1  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT id FROM a UNION SELECT id FROM c;
+fields QUERY PLAN:25:-1:-1
+row HashAggregate  (cost=123.50..166.50 rows=4300 width=8)
+row   Group Key: ((unnamed_subquery.id)::bigint)
+row   ->  Append  (cost=0.00..112.75 rows=4300 width=8)
+row         ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT id FROM a INTERSECT SELECT id FROM c;
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Intersect  (cost=102.00..107.10 rows=2040 width=8)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT id FROM a EXCEPT SELECT id FROM c;
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Except  (cost=102.00..107.65 rows=2260 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT id FROM a EXCEPT SELECT id FROM c;
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Except  (cost=102.00..107.65 rows=2260 width=8)
+row   Output: ((unnamed_subquery.id)::bigint)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         Output: unnamed_subquery.id
+row         ->  Seq Scan on public.a  (cost=0.00..32.60 rows=2260 width=4)
+row               Output: a.id
+row   ->  Seq Scan on public.c  (cost=0.00..30.40 rows=2040 width=8)
+row         Output: c.id
+EXPLAIN
+> EXPLAIN SELECT id, x FROM a UNION ALL SELECT id, z FROM c;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..112.75 rows=4300 width=12)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=12)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=12)
+EXPLAIN
+> EXPLAIN SELECT x FROM a GROUP BY x UNION ALL SELECT id FROM c;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=38.25..84.35 rows=2240 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=38.25..42.75 rows=200 width=8)
+row         ->  HashAggregate  (cost=38.25..40.25 rows=200 width=4)
+row               Group Key: a.x
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT id FROM a UNION ALL SELECT id FROM c ORDER BY 1 LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=168.33..168.33 rows=3 width=8)
+row   ->  Sort  (cost=168.33..179.08 rows=4300 width=8)
+row         Sort Key: ((unnamed_subquery.id)::bigint)
+row         ->  Append  (cost=0.00..112.75 rows=4300 width=8)
+row               ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row                     ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row               ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT x FROM a UNION ALL SELECT z::numeric FROM c;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..117.85 rows=4300 width=32)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=32)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on c  (cost=0.00..35.50 rows=2040 width=32)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT id FROM a UNION ALL SELECT id FROM c) u;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..112.75 rows=4300 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN (SELECT id FROM a UNION ALL SELECT id FROM c) u ON u.id = b.id;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=60.85..184.91 rows=4300 width=16)
+row   Hash Cond: (((unnamed_subquery.id)::bigint) = b.id)
+row   ->  Append  (cost=0.00..112.75 rows=4300 width=8)
+row         ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row         ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+row   ->  Hash  (cost=32.60..32.60 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=8)
+EXPLAIN
+> EXPLAIN SELECT id FROM a UNION ALL SELECT id FROM b UNION ALL SELECT id FROM c;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..207.50 rows=6560 width=5)
+row   ->  Result  (cost=0.00..144.30 rows=4520 width=8)
+row         ->  Append  (cost=0.00..87.80 rows=4520 width=4)
+row               ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row               ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT id FROM a UNION ALL SELECT id FROM c ORDER BY 1;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=372.26..383.01 rows=4300 width=8)
+row   Output: ((unnamed_subquery.id)::bigint)
+row   Sort Key: ((unnamed_subquery.id)::bigint)
+row   ->  Append  (cost=0.00..112.75 rows=4300 width=8)
+row         ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row               Output: unnamed_subquery.id
+row               ->  Seq Scan on public.a  (cost=0.00..32.60 rows=2260 width=4)
+row                     Output: a.id
+row         ->  Seq Scan on public.c  (cost=0.00..30.40 rows=2040 width=8)
+row               Output: c.id
+EXPLAIN
+> EXPLAIN SELECT x FROM a UNION ALL SELECT 2::bigint;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..72.16 rows=2261 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Result  (cost=0.00..0.01 rows=1 width=8)
+EXPLAIN
+> EXPLAIN SELECT id FROM c UNION ALL SELECT id FROM a UNION ALL SELECT id FROM b;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..184.90 rows=6560 width=8)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+row   ->  Subquery Scan on unnamed_subquery_1  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Subquery Scan on unnamed_subquery_2  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT id FROM a UNION ALL SELECT id FROM c UNION ALL SELECT id FROM a;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..184.90 rows=6560 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=8)
+row   ->  Subquery Scan on unnamed_subquery_2  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a a_1  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN
+> EXPLAIN SELECT id, 'x' FROM a UNION ALL SELECT id, 'y'::text FROM c;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..112.75 rows=4300 width=40)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=40)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=36)
+row   ->  Seq Scan on c  (cost=0.00..30.40 rows=2040 width=40)
+EXPLAIN
+> EXPLAIN SELECT x FROM a INTERSECT ALL SELECT z::bigint FROM c;
+fields QUERY PLAN:25:-1:-1
+row HashSetOp Intersect All  (cost=107.10..112.20 rows=2040 width=8)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=8)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+row   ->  Seq Scan on c  (cost=0.00..35.50 rows=2040 width=8)
+EXPLAIN

@@ -647,7 +647,9 @@ impl<'q> Builder<'q> {
                     let c = child.cost;
                     children.push(child);
                     // `cost_subqueryscan`: a scan with no condition that gives the columns of its subquery as they are costs its subquery, because `setrefs.c` takes it out of the plan.
+                    // The `Subquery Scan` that casts the columns of a `SELECT` of a set operation stays.
                     if quals.is_empty()
+                        && !self.wrapper(level.scope)
                         && (simple_union_all(sub) || trivial_target(level.query, r, sub))
                     {
                         per_row = 0.0;

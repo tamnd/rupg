@@ -165,12 +165,15 @@ fn sort_if<'q>(
         return None;
     }
     *order = sorted_order(&keys);
+    // The keys of a set operation show with the names of its leftmost `SELECT`.
+    let scope = if level.query.set_op.is_some() { level.display } else { node.scope };
     if count == 0 {
-        return Some(sort(node, keys, bound));
+        let mut out = sort(node, keys, bound);
+        out.scope = scope;
+        return Some(out);
     }
     let c = node.cost;
     let (startup, total) = sort_cost(level, c, &keys, count, bound);
-    let scope = node.scope;
     let mut out = Node::new(Kind::IncrementalSort { keys, presorted: count }, scope, vec![node]);
     out.cost = Cost { startup, total, ..c };
     Some(out)
@@ -727,7 +730,23 @@ impl<'q> Builder<'q> {
                     ),
                 }
             }
-            SetTree::Op(op) => self.set_node(level, op),
+            SetTree::Op(op) if op.project.is_empty() => self.set_node(level, op),
+            SetTree::Op(op) => {
+                // `recurse_set_operations`: a `Result` above the plan casts the columns to the types of the operation above it.
+                let child = self.set_node(level, op);
+                let c = child.cost;
+                let width = op.project.iter().map(|e| cost::type_width(e.ty, e.typmod)).sum();
+                let total =
+                    c.total + c.rows * (cost::CPU_TUPLE + cost::qual_cost(op.project.iter()));
+                let mut node = Node::new(
+                    Kind::Result { replaces: None, one_time: Vec::new() },
+                    level.scope,
+                    vec![child],
+                );
+                node.output = op.project.iter().map(Item::of).collect();
+                node.cost = Cost { startup: c.startup, total, rows: c.rows, width };
+                node
+            }
         }
     }
 
@@ -777,8 +796,19 @@ impl<'q> Builder<'q> {
                 self.union_members(level, op, &op.left, &mut members);
                 self.union_members(level, op, &op.right, &mut members);
                 let startup = members.first().map_or(0.0, |m| m.cost.startup);
-                let width = members.first().map_or(0, |m| m.cost.width);
                 let rows: f64 = members.iter().map(|m| m.cost.rows).sum();
+                // `create_setop_pathtarget`: the average width of the members, with the width of the rows of a member below the `Result` that casts its columns.
+                let size: f64 = members
+                    .iter()
+                    .map(|m| {
+                        let below = match (&m.kind, m.children.as_slice()) {
+                            (Kind::Result { .. }, [child]) if !m.output.is_empty() => child,
+                            _ => m,
+                        };
+                        f64::from(below.cost.width) * m.cost.rows
+                    })
+                    .sum();
+                let width = if rows > 0.0 { (size / rows).round_ties_even() as i32 } else { 0 };
                 let total: f64 = members.iter().map(|m| m.cost.total).sum::<f64>()
                     + 0.5 * cost::CPU_TUPLE * rows;
                 let mut append = Node::new(Kind::Append, scope, members);

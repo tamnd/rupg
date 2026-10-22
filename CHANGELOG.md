@@ -6,6 +6,7 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ### Added
 
+- `EXPLAIN` of a set operation whose `SELECT` needs a cast to the column types of the operation shows the `Subquery Scan` that adds the casts, with its cost, as PostgreSQL plans it. A set operation below another one with other column types gets a `Result` that adds the casts, and the width of an `Append` is the average width of its members. (#NNN)
 - `EXPLAIN` now plans `INTERSECT` and `EXCEPT` as PostgreSQL does. The planner makes a `HashSetOp` and a `SetOp` with `Strategy: Sorted`, which reads its sides in the order of their columns, and keeps the plan that costs less. Each `SELECT` of a side is planned in that order, so an index scan can take the place of a sort. `INTERSECT` reads first the side with fewer groups, the number of groups of a side comes from the statistics of its columns, and a hash table that does not fit in `hash_mem` is not a choice. The rows of the sorted `SetOp` take the place of a sort for `ORDER BY`, and with `LIMIT` the planner can use the sorted `SetOp`, which gives its first rows sooner (#580).
 - `EXPLAIN` plans a `Merge Append` for a `UNION ALL` in `FROM` when the query reads its rows in an order and that costs less than a sort of the `Append`, as `generate_orderedappend_paths` does. The planner keeps the plans of each `SELECT` in the orders that the query can use, a `SELECT` with no plan in the order gets a sort, and each `SELECT` reads only the columns that the query reads, so that an index only scan can give them (#579).
 

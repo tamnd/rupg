@@ -346,6 +346,15 @@ pub trait Texts {
     /// The errors of the deparse.
     fn expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String>;
 
+    /// [`Self::expr`] for an expression that a node reads from the node below, which shows the casts that the analyzer added at its top, as `get_special_variable` writes it.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the deparse.
+    fn below_expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String> {
+        self.expr(scope, expr, prefix)
+    }
+
     /// [`Self::expr`] for a condition of a scan of the relation `own`, in which a column of another relation of the scope shows the name of its relation.
     ///
     /// # Errors
