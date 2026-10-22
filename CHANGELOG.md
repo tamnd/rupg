@@ -8,14 +8,14 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 - The plans of the join of `FROM` in the nodes above it in `EXPLAIN`, as `grouping_planner` reads the `pathlist` of PostgreSQL. `ORDER BY`, `GROUP BY`, `DISTINCT`, the windows and `LIMIT` go on each plan of the join that the planner keeps, and the result with the lowest total cost wins. So a merge join whose rows are in the order of `ORDER BY` has no sort above it when that costs less than the cheapest join with a sort. A plan that is not the cheapest is used only when its rows are in the order of each node above it, as `create_ordered_paths` does it. (#540)
 - `Incremental Sort` in `EXPLAIN`, as `create_ordered_paths` and `make_ordered_path` of PostgreSQL use it. When the rows of a plan are in the order of the first keys of `ORDER BY`, `GROUP BY`, `DISTINCT` or a window, the node sorts only each group of rows with the same values of these keys. The cost is the cost of `cost_incremental_sort`, and the node shows the `Sort Key` and the `Presorted Key` in each format. (#541)
-- The number of groups of `GROUP BY`, `DISTINCT`, the windows and `Incremental Sort` in `EXPLAIN`, as `estimate_num_groups` of PostgreSQL finds it with no statistics. Two or more columns of one table have at most a tenth of the rows of the table as groups, or the most values of one of the columns when that is more. A table whose conditions pass fewer rows than it has gives fewer groups. Two columns that an equivalence class makes equal count once, and a `boolean` expression has 2 groups. (#NNN)
+- The number of groups of `GROUP BY`, `DISTINCT`, the windows and `Incremental Sort` in `EXPLAIN`, as `estimate_num_groups` of PostgreSQL finds it with no statistics. Two or more columns of one table have at most a tenth of the rows of the table as groups, or the most values of one of the columns when that is more. A table whose conditions pass fewer rows than it has gives fewer groups. Two columns that an equivalence class makes equal count once, and a `boolean` expression has 2 groups. (#542)
 
 ### Fixed
 
 - The start cost of a `WindowAgg` in `EXPLAIN`, as `get_windowclause_startup_tuples` and `cost_windowagg` of PostgreSQL 19 find it. The window reads one more row than its frame before its first row, and `row_number`, `rank` and the other functions of the rank of a row use the frame `ROWS UNBOUNDED PRECEDING`, as `optimize_window_clauses` gives it. (#540)
 - The cost of the final function of an aggregate call in `EXPLAIN`, as `get_agg_clause_costs` adds it for each group. (#541)
 - The limit of the rows of a sort for `FETCH FIRST ... WITH TIES` in `EXPLAIN`. PostgreSQL uses the count and the offset as the bound of the sort also with `WITH TIES`. (#541)
-- The cost of an aggregate call that a query has two times, such as `count(*)` in the targets and in `HAVING`, in `EXPLAIN`. PostgreSQL computes the two calls as one call. (#NNN)
+- The cost of an aggregate call that a query has two times, such as `count(*)` in the targets and in `HAVING`, in `EXPLAIN`. PostgreSQL computes the two calls as one call. (#542)
 
 ## 0.1.65 (2026-10-22)
 
