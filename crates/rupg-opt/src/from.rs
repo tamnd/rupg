@@ -1246,18 +1246,25 @@ fn distinct(expr: &Expr, stats: &Stats) -> (f64, bool) {
     (nd, default)
 }
 
-/// The selectivity of a condition of a join: `1 / max(nd1, nd2)` for an `=` of a value of each side, as `eqjoinsel` with no statistics, or else the selectivity of the condition.
+/// The selectivity of a condition of a join, as `clause_selectivity` finds it for each part of the condition. An `=` of a value of each side is `1 / max(nd1, nd2)`, as `eqjoinsel` with no statistics. An `=` of a unique column and a value that reads no relation, in a part of an `OR`, passes one tuple of the relation, as `var_eq_const`.
 fn join_selectivity(qual: &Qual<'_>, stats: &Stats) -> f64 {
-    if let Some((op, left, right)) = exprs::binary(&qual.expr)
-        && builtin::operator_by_oid(op).is_some_and(|o| o.name == "=")
-        && exprs::reads_columns(left)
-        && exprs::reads_columns(right)
-    {
-        let (l, _) = distinct(left, stats);
-        let (r, _) = distinct(right, stats);
-        return 1.0 / l.max(r);
-    }
-    cost::selectivity(&qual.expr)
+    let eq = |left: &Expr, right: &Expr| {
+        if exprs::reads_columns(left) && exprs::reads_columns(right) {
+            let (l, _) = distinct(left, stats);
+            let (r, _) = distinct(right, stats);
+            return Some(1.0 / l.max(r));
+        }
+        [(left, right), (right, left)].into_iter().find_map(|(column, value)| {
+            let var = plain_var(column)?;
+            let (tuples, _) = *stats.rows.get(&var.relation)?;
+            (var.levels_up == 0
+                && stats.unique.contains(&(var.relation, var.attnum))
+                && exprs::relations(value).is_empty()
+                && tuples >= 1.0)
+                .then(|| 1.0 / tuples)
+        })
+    };
+    cost::selectivity_by(&qual.expr, &eq)
 }
 
 /// The kinds of node that read the rows of the node below once and keep them, so that a scan again costs little, as `cost_rescan`.
