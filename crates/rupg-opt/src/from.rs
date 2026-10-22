@@ -16,7 +16,8 @@ use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey, Strategy};
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Level, Member, cost, exprs, upper};
+use crate::{Builder, Index, Level, Member, cost, exprs, upper};
+use index::Param;
 use paths::Paths;
 
 /// The plans of the rows of `FROM` that `add_path` keeps, each with the order of its rows.
@@ -295,17 +296,21 @@ struct Qual<'q> {
     order: Option<usize>,
     /// The selectivities of the conditions that `extract_restriction_or_clauses` made from the parts of this `OR` for one relation each. A join that tests the condition with `JOIN_INNER` divides the selectivity of the condition by each of them, as `consider_new_or_clause` changes `norm_selec`.
     divisors: Vec<f64>,
+    /// `parent_ec`: the place of the equivalence class that made the condition of a join, or `None`.
+    class: Option<usize>,
 }
 
 impl<'q> Qual<'q> {
     /// A condition of the query.
     fn of(expr: &'q Expr, rels: BTreeSet<usize>, outer: bool) -> Qual<'q> {
-        Qual { expr: Cow::Borrowed(expr), rels, outer, order: None, divisors: Vec::new() }
+        let divisors = Vec::new();
+        Qual { expr: Cow::Borrowed(expr), rels, outer, order: None, divisors, class: None }
     }
 
     /// A condition that the planner makes from an equivalence class.
     fn implied(expr: Expr, rels: BTreeSet<usize>) -> Qual<'q> {
-        Qual { expr: Cow::Owned(expr), rels, outer: false, order: None, divisors: Vec::new() }
+        let divisors = Vec::new();
+        Qual { expr: Cow::Owned(expr), rels, outer: false, order: None, divisors, class: None }
     }
 
     /// The condition as an expression that the node computes.
@@ -546,7 +551,14 @@ impl<'q> Builder<'q> {
                 if let Some(rel) = dummy_domain(level, &mut rels, &pool, &specials, stats) {
                     return vec![rel];
                 }
-                search::search(level, rels, &pool, specials, found, stats)
+                let bases: Vec<Option<&Base<'q>>> = rels
+                    .iter()
+                    .map(|plans| match plans[0].rels.iter().collect::<Vec<_>>()[..] {
+                        [&r] => self.bases.get(&(level.scope, r)),
+                        _ => None,
+                    })
+                    .collect();
+                search::search(level, rels, &pool, specials, found, &bases, stats)
             }
             Tree::Join(join) => {
                 let JoinTree { kind, left, right, quals, filter, .. } = *join;
@@ -679,18 +691,7 @@ impl<'q> Builder<'q> {
                 }
             },
         };
-        // `var_eq_const` and `var_eq_non_const`: `=` of a unique column and a value that the scan knows passes one row.
-        let eq = |a: &Expr, b: &Expr| {
-            [(a, b), (b, a)].into_iter().find_map(|(column, value)| {
-                let var = plain_var(column)?;
-                (var.levels_up == 0
-                    && var.relation == r
-                    && stats.unique.contains(&(r, var.attnum))
-                    && exprs::relations(value).is_empty()
-                    && tuples >= 1.0)
-                    .then(|| 1.0 / tuples)
-            })
-        };
+        let eq = eq_unique(r, tuples, &stats.unique);
         let selectivity = cost::list_selectivity_by(quals.iter().map(|q| &*q.expr), &eq);
         let rows = cost::clamp_rows(tuples * selectivity);
         stats.rows.insert(r, (tuples, rows));
@@ -710,7 +711,11 @@ impl<'q> Builder<'q> {
             return vec![seq];
         }
         let (pages, _) = cost::table_size(relation);
-        let table = index::Table { r, pages, tuples, rows, quals: &base, eq: &eq };
+        let quals = base.clone();
+        let outer = BTreeSet::new();
+        let table = index::Table { r, pages, tuples, rows, quals, eq: &eq, outer, loops: 1.0 };
+        let stored = Base { pages, tuples, rows, quals: base, indexes: indexes.clone() };
+        self.bases.insert((level.scope, r), stored);
         let mut paths = Paths::new(stats.startup);
         paths.add(startup, total, Vec::new(), seq);
         for rel in index::paths(level, &table, &indexes, stats) {
@@ -718,6 +723,36 @@ impl<'q> Builder<'q> {
         }
         paths.kept()
     }
+}
+
+/// `var_eq_const` and `var_eq_non_const`: `=` of a unique column of the table `r` of `tuples` rows and a value that reads no column of the table passes one row.
+fn eq_unique(
+    r: usize,
+    tuples: f64,
+    unique: &BTreeSet<(usize, i16)>,
+) -> impl Fn(&Expr, &Expr) -> Option<f64> + '_ {
+    move |a, b| {
+        [(a, b), (b, a)].into_iter().find_map(|(column, value)| {
+            let var = plain_var(column)?;
+            (var.levels_up == 0
+                && var.relation == r
+                && unique.contains(&(r, var.attnum))
+                && !exprs::relations(value).contains(&r)
+                && tuples >= 1.0)
+                .then(|| 1.0 / tuples)
+        })
+    }
+}
+
+/// A table that a scan reads, with its estimates, its conditions and its indexes, which the parameterized scans of the table read, as the `RelOptInfo` of the table.
+#[derive(Debug)]
+pub(crate) struct Base<'q> {
+    pages: f64,
+    tuples: f64,
+    rows: f64,
+    /// `baserestrictinfo`.
+    quals: Vec<Qual<'q>>,
+    indexes: Vec<Index>,
 }
 
 /// `trivial_pathtarget` of `set_subquery_pathlist`: the columns of the relation `r` that the plan reads above the scan are each column of the subquery in order. The plan reads them in the order that they first come in the targets and in `HAVING`, as `build_base_rel_tlists` adds them, then in the conditions of the joins.
@@ -1623,8 +1658,8 @@ fn join_rels<'q>(
     let mut quals = quals;
     stats.sort_quals(&mut quals);
     let mut paths = Paths::new(stats.startup);
-    for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats, Part::Plain)
-    {
+    let found = choose(level, kind, &left, &right, &quals, &filter, stats, Part::Plain, (&[], &[]));
+    for (candidate, keys) in found {
         paths.add(candidate.startup, candidate.total, keys, candidate);
     }
     let kept = paths.kept();
@@ -1675,13 +1710,15 @@ fn semi_rels<'q>(
         semi.filter(|_| kind == JoinKind::Semi).and_then(|s| unique_rels(s, &right, stats));
     let mut paths = Paths::new(stats.startup);
     let part = Part::Semi(fraction);
-    for (candidate, keys) in choose(level, kind, &left, &right, &quals, &filter, stats, part) {
+    let found = choose(level, kind, &left, &right, &quals, &filter, stats, part, (&[], &[]));
+    for (candidate, keys) in found {
         paths.add(candidate.startup, candidate.total, keys, (candidate, false));
     }
     if let Some(unique) = &unique {
         let part = Part::Unique(fraction, true);
         let inner = JoinKind::Inner;
-        for (candidate, keys) in choose(level, inner, &left, unique, &quals, &filter, stats, part) {
+        let found = choose(level, inner, &left, unique, &quals, &filter, stats, part, (&[], &[]));
+        for (candidate, keys) in found {
             paths.add(candidate.startup, candidate.total, keys, (candidate, true));
         }
     }
@@ -1891,6 +1928,7 @@ fn choose<'q>(
     filter: &[Qual<'q>],
     stats: &Stats,
     part: Part,
+    params: (&[Param<'q>], &[Param<'q>]),
 ) -> Vec<(Candidate<'q>, Vec<OrderKey>)> {
     let (filter_startup, filter_cost) = stats.qual_costs(filter.iter().map(|q| &*q.expr));
     let (left_rels, right_rels) = (&left[0].rels, &right[0].rels);
@@ -1939,10 +1977,16 @@ fn choose<'q>(
             filtered: !filter.is_empty(),
             unique,
             made,
+            indexed: false,
             stats,
         };
         let nested =
             matches!(join, JoinKind::Inner | JoinKind::Left | JoinKind::Semi | JoinKind::Anti);
+        let inner_params = match swapped {
+            _ if !nested || made.1 => &[][..],
+            true => params.0,
+            false => params.1,
+        };
         let merge = join != JoinKind::RightSemi;
         let mut candidates: Vec<Candidate<'q>> = Vec::new();
         if merge {
@@ -1953,7 +1997,15 @@ fn choose<'q>(
             let input = Input { outer, ..input };
             let mut each = Vec::new();
             if nested {
-                each.extend(nested_loops(&input, join, lateral_right));
+                let mut loops = nested_loops(&input, join, lateral_right);
+                let material = (loops.len() > 1).then(|| loops.remove(1));
+                each.extend(loops);
+                for (i, param) in inner_params.iter().enumerate() {
+                    if param.outer.is_subset(&outer.rels) {
+                        each.push(param_loop(&input, join, param, i, (quals, filter)));
+                    }
+                }
+                each.extend(material);
             }
             if merge {
                 each.extend(presorted_merges(&input, inners, join));
@@ -2102,6 +2154,8 @@ struct Input<'a, 'q> {
     unique: Option<(f64, f64)>,
     /// True for the outer side and for the inner side when it is the unique rows of the inner side of a semi join, as `RELATION_WAS_MADE_UNIQUE`.
     made: (bool, bool),
+    /// `has_indexed_join_quals`: true when the inner side is a parameterized scan whose index tests each condition of the join.
+    indexed: bool,
     stats: &'a Stats,
 }
 
@@ -2152,6 +2206,8 @@ struct Candidate<'q> {
     paths: (usize, usize),
     /// `inner_unique`: each outer row matches one inner row at most.
     unique: bool,
+    /// For a nested loop with a parameterized scan as its inner side, the place of the scan in the parameterized scans of the inner side.
+    param: Option<usize>,
     _marker: std::marker::PhantomData<&'q ()>,
 }
 
@@ -2211,10 +2267,52 @@ fn nested_loops<'q>(input: &Input<'_, 'q>, join: JoinKind, lateral: bool) -> Vec
             keys: Vec::new(),
             paths: (0, 0),
             unique: false,
+            param: None,
             _marker: std::marker::PhantomData,
         });
     }
     out
+}
+
+/// The nested loop with the parameterized scan `param` as its inner side, as `match_unsorted_outer` makes it with each plan of `cheapest_parameterized_paths`. The join does not test the conditions that the scan tests, as `create_nestloop_path`.
+fn param_loop<'q>(
+    input: &Input<'_, 'q>,
+    join: JoinKind,
+    param: &Param<'q>,
+    i: usize,
+    (quals, filter): (&[Qual<'q>], &[Qual<'q>]),
+) -> Candidate<'q> {
+    let left = |list: &[Qual<'q>]| -> Vec<Qual<'q>> {
+        let enforced = |q: &Qual<'q>| param.enforced.iter().any(|e| e.expr.same(&q.expr));
+        list.iter().filter(|q| !enforced(q)).cloned().collect()
+    };
+    let (quals, filter) = (left(quals), left(filter));
+    let (filter_startup, filter_cost) = input.stats.qual_costs(filter.iter().map(|q| &*q.expr));
+    let indexed = param.indexed && quals.is_empty() && filter.is_empty();
+    let input = Input {
+        inner: &param.rel,
+        quals: &quals,
+        filter_startup,
+        filter_cost,
+        filtered: !filter.is_empty(),
+        indexed,
+        ..*input
+    };
+    let (startup, total) = nested_cost(&input, false);
+    Candidate {
+        method: Method::Nested,
+        join,
+        swapped: false,
+        startup,
+        total,
+        materialize: false,
+        sort: (false, false),
+        keys: Vec::new(),
+        paths: (0, 0),
+        unique: false,
+        param: Some(i),
+        _marker: std::marker::PhantomData,
+    }
 }
 
 /// The start and the total cost of a nested loop, with a `Material` node on the inner side or with none.
@@ -2238,6 +2336,18 @@ fn nested_cost(input: &Input<'_, '_>, materialize: bool) -> (f64, f64) {
     let (outer_rows, inner_rows) = (nonzero(o.rows), nonzero(inner.rows));
     let tuples = match input.unique {
         // The scan of the inner side stops at the first match. An outer row with no match scans all the inner rows, and the first scan costs all of its run cost once.
+        // With an index that tests each condition of the join, an outer row with no match costs a scan of one inner row.
+        Some((fraction, matches)) if input.indexed => {
+            let matched = (outer_rows * fraction).round_ties_even();
+            let unmatched = outer_rows - matched;
+            let scan_fraction = 2.0 / (matches + 1.0);
+            run += inner_run * scan_fraction;
+            if matched > 1.0 {
+                run += (matched - 1.0) * rescan_run * scan_fraction;
+            }
+            run += unmatched * rescan_run / inner_rows;
+            matched * inner_rows * scan_fraction
+        }
         Some((fraction, matches)) => {
             let mut matched = (outer_rows * fraction).round_ties_even();
             let mut unmatched = outer_rows - matched;
@@ -2357,6 +2467,7 @@ fn hash_join<'q>(input: &Input<'_, 'q>, join: JoinKind) -> Option<Candidate<'q>>
         keys: Vec::new(),
         paths: (0, 0),
         unique: false,
+        param: None,
         _marker: std::marker::PhantomData,
     })
 }
@@ -2565,6 +2676,7 @@ fn merge_join<'q>(
         keys,
         paths: (0, 0),
         unique: false,
+        param: None,
         _marker: std::marker::PhantomData,
     })
 }

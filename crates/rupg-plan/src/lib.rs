@@ -342,6 +342,16 @@ pub trait Texts {
     /// The errors of the deparse.
     fn expr(&mut self, scope: usize, expr: &Expr, prefix: bool) -> Result<String>;
 
+    /// [`Self::expr`] for a condition of a scan of the relation `own`, in which a column of another relation of the scope shows the name of its relation.
+    ///
+    /// # Errors
+    ///
+    /// The errors of the deparse.
+    fn scan_expr(&mut self, scope: usize, expr: &Expr, prefix: bool, own: usize) -> Result<String> {
+        let _ = own;
+        self.expr(scope, expr, prefix)
+    }
+
     /// The name of a relation of a scope in the plan, `refname`, which is unique in the plan. [`TARGET`] is the target table of an `INSERT`.
     fn refname(&mut self, scope: usize, relation: usize) -> String;
 

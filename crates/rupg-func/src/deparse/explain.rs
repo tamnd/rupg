@@ -199,6 +199,13 @@ impl Texts for PlanTexts<'_, '_> {
         Ok(d.buf)
     }
 
+    fn scan_expr(&mut self, scope: usize, expr: &Expr, prefix: bool, own: usize) -> Result<String> {
+        let mut d = self.deparser(scope, prefix)?;
+        d.own = Some(own);
+        d.expr(expr, false)?;
+        Ok(d.buf)
+    }
+
     fn refname(&mut self, scope: usize, relation: usize) -> String {
         if relation == TARGET {
             return self.targets.get(scope).cloned().flatten().unwrap_or_default();
