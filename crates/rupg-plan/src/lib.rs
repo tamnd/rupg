@@ -91,6 +91,8 @@ pub struct Label<'q> {
     pub init: bool,
     /// `useHashTable`: the subplan keeps its rows in a hash table, which the test of `ANY` reads.
     pub hashed: bool,
+    /// True when the subplan is the `ANY` of [`SubLink::alternative`], which runs in the place of `EXISTS`, as `fix_alternative_subplan` chooses it.
+    pub alternative: bool,
 }
 
 /// A node of the plan.

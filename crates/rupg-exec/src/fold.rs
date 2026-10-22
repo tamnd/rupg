@@ -762,7 +762,8 @@ impl<'a> Fold<'a> {
             }
             ExprKind::SubLink(sub) => {
                 let test = sub.test.as_ref().map(|t| self.expr(t)).transpose()?;
-                let sub = SubLink { kind: sub.kind, test, query: sub.query.clone() };
+                let sub =
+                    SubLink { kind: sub.kind, test, query: sub.query.clone(), alternative: None };
                 Ok(with(expr, ExprKind::SubLink(Box::new(sub))))
             }
         }

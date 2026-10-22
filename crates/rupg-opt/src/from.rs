@@ -412,11 +412,16 @@ impl<'q> Builder<'q> {
         let mut stats = Stats { equal, subplans: level.subplans.clone(), ..Stats::default() };
         needed(level, &mut stats);
         let rels = self.build(level, tree, &found, &mut stats);
+        // `cost_qual_eval` of a condition that is `pseudoconstant`: it runs once, when the node of all the relations starts.
+        let (startup, per_row) = stats.qual_costs(gating.iter().map(|i| &*i.expr));
+        let once = startup + per_row;
         let plans = rels
             .into_iter()
             .map(|rel| {
                 let mut node = rel.node;
                 if !gating.is_empty() {
+                    node.cost.startup += once;
+                    node.cost.total += once;
                     // `create_gating_plan`: the `Result` has the costs of the node below.
                     let cost = node.cost;
                     node = Node::new(

@@ -117,7 +117,7 @@ impl Analyzer<'_> {
                 (oid::BOOL, -1, Some(test))
             }
         };
-        let sub = SubLink { kind, test, query };
+        let sub = SubLink { kind, test, query, alternative: None };
         Ok(Expr { kind: ExprKind::SubLink(Box::new(sub)), ty, typmod, location: at })
     }
 }

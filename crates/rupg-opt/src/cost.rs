@@ -520,6 +520,12 @@ pub(crate) fn hash_table(rows: f64, width: i32) -> (f64, f64) {
     (buckets, batches)
 }
 
+/// `EstimateSubplanHashTableSpace` with `unknownEqFalse`: the bytes of the hash table of a subplan with rows of a width. `tuplehash_estimate_space` gives a bucket of 16 bytes for each row over the fill factor of 0.9, as a power of two, with 48 bytes for the table, and each row is a `MinimalTuple`.
+pub(crate) fn subplan_hash_space(rows: f64, width: i32) -> f64 {
+    let buckets = next_power2((rows / 0.9).floor().max(2.0));
+    16.0 * buckets + 48.0 + rows * f64::from(16 + maxalign(width))
+}
+
 /// The smallest power of two that is at least a number.
 fn next_power2(n: f64) -> f64 {
     2f64.powf(n.log2().ceil())

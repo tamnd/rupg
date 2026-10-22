@@ -98,6 +98,7 @@ impl<'a, 'q> PlanTexts<'a, 'q> {
                 name: l.name.clone(),
                 init: l.init,
                 hashed: l.hashed,
+                alternative: l.alternative,
             })
             .collect();
         PlanTexts { session, plan, spaces, targets, windows, subplans }
@@ -304,8 +305,12 @@ impl Texts for PlanTexts<'_, '_> {
 }
 
 impl Deparser<'_> {
-    /// `get_rule_expr` for a `SubPlan`: the name of the subplan of a subquery, with the test of `ANY`, `ALL` or a comparison of rows, where each column of the subquery shows as `(SubPlan any_1).col1`. The value of an `InitPlan` shows as `(InitPlan expr_1).col1`, as `get_parameter` shows the parameter that the `InitPlan` sets.
+    /// `get_rule_expr` for a `SubPlan`: the name of the subplan of a subquery, or of the `ANY` that runs in the place of `EXISTS`, with the test of `ANY`, `ALL` or a comparison of rows, where each column of the subquery shows as `(SubPlan any_1).col1`. The value of an `InitPlan` shows as `(InitPlan expr_1).col1`, as `get_parameter` shows the parameter that the `InitPlan` sets.
     pub(super) fn subplan_link(&mut self, sub: &SubLink, name: &SubName) -> Result<()> {
+        let sub = match &sub.alternative {
+            Some(any) if name.alternative => &**any,
+            _ => sub,
+        };
         let plan = match (name.init, name.hashed) {
             (true, _) => format!("InitPlan {}", name.name),
             (false, true) => format!("hashed SubPlan {}", name.name),

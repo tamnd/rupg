@@ -12,6 +12,7 @@ pub fn pull_up(query: &Query) -> Query {
     let mut query = query.clone();
     pull_all(&mut query);
     crate::pushdown::push_all(&mut query);
+    crate::exists::fill_all(&mut query);
     query
 }
 

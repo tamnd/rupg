@@ -148,6 +148,8 @@ pub struct SubLink {
     /// `testexpr`: for `ANY`, `ALL` and a row comparison, the test of each row of the subquery. It compares the left side with [`ExprKind::SubColumn`].
     pub test: Option<Expr>,
     pub query: Query,
+    /// For a correlated `EXISTS`, the same test as `ANY` on a subquery that reads no column of the query, as `convert_EXISTS_to_ANY` makes it. The planner fills it and runs the subquery that costs less, as an `AlternativeSubPlan`.
+    pub alternative: Option<Box<SubLink>>,
 }
 
 /// The comparison of two rows with an ordering operator, as `RowCompareExpr`.
