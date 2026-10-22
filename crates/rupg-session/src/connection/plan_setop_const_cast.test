@@ -1,0 +1,136 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> INSERT INTO a VALUES (1, 10), (2, 20);
+INSERT 0 2
+> INSERT INTO b VALUES (1, 15), (3, 30);
+INSERT 0 2
+> EXPLAIN SELECT 1 UNION SELECT 2.5;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=0.05..0.06 rows=2 width=32)
+row   ->  Sort  (cost=0.05..0.06 rows=2 width=32)
+row         Sort Key: ((1)::numeric)
+row         ->  Append  (cost=0.00..0.04 rows=2 width=32)
+row               ->  Subquery Scan on unnamed_subquery  (cost=0.00..0.02 rows=1 width=32)
+row                     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row               ->  Result  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT 1 UNION SELECT 2.5;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=0.05..0.06 rows=2 width=32)
+row   Output: ((1)::numeric)
+row   ->  Sort  (cost=0.05..0.06 rows=2 width=32)
+row         Output: ((1)::numeric)
+row         Sort Key: ((1)::numeric)
+row         ->  Append  (cost=0.00..0.04 rows=2 width=32)
+row               ->  Subquery Scan on unnamed_subquery  (cost=0.00..0.02 rows=1 width=32)
+row                     Output: 1
+row                     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row                           Output: 1
+row               ->  Result  (cost=0.00..0.01 rows=1 width=32)
+row                     Output: 2.5
+EXPLAIN
+> EXPLAIN SELECT 1 UNION ALL SELECT 2.5;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..0.04 rows=2 width=32)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..0.02 rows=1 width=32)
+row         ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row   ->  Result  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT 1 + 1 UNION ALL SELECT 2.5;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..0.04 rows=2 width=32)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..0.02 rows=1 width=32)
+row         Output: 2
+row         ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row               Output: 2
+row   ->  Result  (cost=0.00..0.01 rows=1 width=32)
+row         Output: 2.5
+EXPLAIN
+> EXPLAIN SELECT x, 1 FROM a UNION ALL SELECT y, 2.0 FROM b;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..116.05 rows=4520 width=36)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=36)
+row         ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Seq Scan on b  (cost=0.00..32.60 rows=2260 width=36)
+EXPLAIN
+> EXPLAIN (VERBOSE) SELECT x, 1 FROM a UNION ALL SELECT y, 2.0 FROM b;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..116.05 rows=4520 width=36)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..60.85 rows=2260 width=36)
+row         Output: unnamed_subquery.x, 1
+row         ->  Seq Scan on public.a  (cost=0.00..32.60 rows=2260 width=8)
+row               Output: a.x, 1
+row   ->  Seq Scan on public.b  (cost=0.00..32.60 rows=2260 width=36)
+row         Output: b.y, 2.0
+EXPLAIN
+> EXPLAIN SELECT NULL::int UNION SELECT 2.5;
+fields QUERY PLAN:25:-1:-1
+row Unique  (cost=0.05..0.06 rows=2 width=32)
+row   ->  Sort  (cost=0.05..0.06 rows=2 width=32)
+row         Sort Key: ((NULL::integer)::numeric)
+row         ->  Append  (cost=0.00..0.04 rows=2 width=32)
+row               ->  Subquery Scan on unnamed_subquery  (cost=0.00..0.02 rows=1 width=32)
+row                     ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row               ->  Result  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> EXPLAIN SELECT 1 INTERSECT SELECT 1.0;
+fields QUERY PLAN:25:-1:-1
+row SetOp Intersect  (cost=0.00..0.04 rows=1 width=32)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..0.02 rows=1 width=32)
+row         ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row   ->  Result  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> EXPLAIN SELECT 1 EXCEPT SELECT 2.5;
+fields QUERY PLAN:25:-1:-1
+row SetOp Except  (cost=0.00..0.04 rows=1 width=32)
+row   ->  Subquery Scan on unnamed_subquery  (cost=0.00..0.02 rows=1 width=32)
+row         ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row   ->  Result  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> EXPLAIN SELECT 1::int2 UNION ALL SELECT 2 UNION ALL SELECT 3.5;
+fields QUERY PLAN:25:-1:-1
+row Append  (cost=0.00..0.09 rows=3 width=13)
+row   ->  Result  (cost=0.00..0.07 rows=2 width=32)
+row         ->  Append  (cost=0.00..0.04 rows=2 width=4)
+row               ->  Subquery Scan on unnamed_subquery  (cost=0.00..0.02 rows=1 width=4)
+row                     ->  Result  (cost=0.00..0.01 rows=1 width=2)
+row               ->  Result  (cost=0.00..0.01 rows=1 width=4)
+row   ->  Result  (cost=0.00..0.01 rows=1 width=32)
+EXPLAIN
+> SELECT 1 UNION SELECT 2.5 ORDER BY 1;
+fields ?column?:1700:-1:-1
+row 1
+row 2.5
+SELECT 2
+> SELECT 1 + 1 UNION ALL SELECT 2.5 ORDER BY 1;
+fields ?column?:1700:-1:-1
+row 2
+row 2.5
+SELECT 2
+> SELECT x, 1 FROM a UNION ALL SELECT y, 2.0 FROM b ORDER BY 1;
+fields x:23:4:-1,?column?:1700:-1:-1
+row 10,1
+row 15,2.0
+row 20,1
+row 30,2.0
+SELECT 4
+> SELECT NULL::int UNION SELECT 2.5 ORDER BY 1;
+fields int4:1700:-1:-1
+row 2.5
+row NULL
+SELECT 2
+> SELECT 1 INTERSECT SELECT 1.0;
+fields ?column?:1700:-1:-1
+row 1
+SELECT 1
+> SELECT 1::int2 UNION ALL SELECT 2 UNION ALL SELECT 3.5 ORDER BY 1;
+fields int2:1700:-1:-1
+row 1
+row 2
+row 3.5
+SELECT 3

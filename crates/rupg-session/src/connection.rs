@@ -5525,6 +5525,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_enable_material.test")));
     }
 
+    /// A constant of a `SELECT` of a set operation with another type than the operation keeps its cast to the type above the `SELECT`, as `generate_setop_tlist` adds the cast after `subquery_planner` folds the `SELECT`. So the plan has a `Subquery Scan` above the `Result` of the constant, also in an operation below another one, and a sorted `SetOp` needs no sort of the constant. `connection/plan_setop_const_cast.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_setop_const_cast() {
+        big_stack(|| script(include_str!("connection/plan_setop_const_cast.test")));
+    }
+
     /// A query that is a `UNION ALL` of `SELECT`s with the types of its columns and has `ORDER BY` becomes an append relation, as `flatten_simple_union_all` makes it, so the planner can plan a `Merge Append` of the plans of the `SELECT`s in the order. A `SELECT` with its own `WHERE` is not a member of the append relation, as `is_safe_append_member`, and its plan gets a sort. `connection/plan_union_all_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_union_all_order() {
