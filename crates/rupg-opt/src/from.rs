@@ -8,13 +8,13 @@ use std::borrow::Cow;
 use std::collections::{BTreeMap, BTreeSet};
 
 use rupg_analyze::{
-    BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Relation, SortGroup, Var,
+    BoolOp, BoolTest, Expr, ExprKind, FromItem, JoinKind, Query, Relation, SortGroup, Var,
 };
 use rupg_pgcatalog::builtin;
 use rupg_plan::{Cost, Item, Kind, Node, Replaced, SortKey};
 use rupg_types::{Value, oid};
 
-use crate::{Builder, Level, Member, cost, exprs, upper};
+use crate::{Builder, Level, Member, cost, exprs, pullup, upper};
 use paths::Paths;
 
 /// The plans of the rows of `FROM` that `add_path` keeps, each with the order of its rows.
@@ -473,6 +473,10 @@ impl<'q> Builder<'q> {
                     let child = self.query(sub, Some(level.scope));
                     let c = child.cost;
                     children.push(child);
+                    // `cost_subqueryscan`: a scan with no condition that gives the columns of its subquery as they are costs its subquery, because `setrefs.c` takes it out of the plan.
+                    if quals.is_empty() && trivial_target(level.query, r, sub) {
+                        per_row = 0.0;
+                    }
                     (Kind::SubqueryScan(r), c.startup, c.total - c.startup, c.rows)
                 }
                 (None, Some(function), _) => {
@@ -555,6 +559,15 @@ impl<'q> Builder<'q> {
         node.cost = Cost { startup, total: startup + run + tuples * per_row, rows, width };
         Rel { node, rels: BTreeSet::from([r]), order: Vec::new() }
     }
+}
+
+/// `trivial_pathtarget` of `set_subquery_pathlist`: the query reads each column of the subquery of the relation `r` and not its whole row, and the subquery has no junk column.
+fn trivial_target(query: &Query, r: usize, sub: &Query) -> bool {
+    let used = pullup::used(query, r);
+    let columns = query.relations[r].columns.len();
+    sub.targets.len() == columns
+        && !used.contains(&0)
+        && (1..=columns).all(|at| used.iter().any(|u| usize::try_from(*u).ok() == Some(at)))
 }
 
 /// `set_append_rel_size` and `create_append_plan`: the scans of the members of the inheritance tree of the relation `r`, under an `Append` when there are two or more, each with the conditions of the relation. With no member the relation is a `Result` with no rows, as `set_dummy_rel_pathlist`.
@@ -794,7 +807,7 @@ pub(crate) fn function_rows(call: &Expr) -> f64 {
 }
 
 /// `find_nonnullable_rels`: the relations whose columns cannot be null in a row that passes the condition. At the top of the condition, `IS NOT NULL` and the other tests that are false for a null count too.
-fn nonnullable_rels(expr: &Expr, top: bool) -> BTreeSet<usize> {
+pub(crate) fn nonnullable_rels(expr: &Expr, top: bool) -> BTreeSet<usize> {
     let strict = |func: u32| builtin::proc_by_oid(func).is_some_and(|p| p.strict);
     let union = |args: &[Expr], top: bool| {
         let mut out = BTreeSet::new();
