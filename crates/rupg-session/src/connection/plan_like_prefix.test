@@ -1,0 +1,425 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE m (a int, b int, c text);
+CREATE TABLE
+> CREATE INDEX m_ab ON m (a, b);
+CREATE INDEX
+> CREATE INDEX m_c ON m (c);
+CREATE INDEX
+> CREATE TABLE v (id int, s varchar(20), f char(8), n name, by bytea);
+CREATE TABLE
+> CREATE INDEX v_s ON v (s);
+CREATE INDEX
+> CREATE INDEX v_f ON v (f);
+CREATE INDEX
+> CREATE INDEX v_n ON v (n);
+CREATE INDEX
+> CREATE INDEX v_by ON v (by);
+CREATE INDEX
+> CREATE TABLE p (k int, t text, b char(4));
+CREATE TABLE
+> CREATE INDEX p_t ON p (t text_pattern_ops);
+CREATE INDEX
+> CREATE INDEX p_b ON p (b bpchar_pattern_ops);
+CREATE INDEX
+> CREATE TABLE q (k int, t text);
+CREATE TABLE
+> CREATE UNIQUE INDEX q_t ON q (t);
+CREATE INDEX
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'x%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ~~ 'x%'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'x'::text) AND (c < 'y'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.20..13.67 rows=6 width=40)
+row   Filter: (c ~~ 'abc'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.20 rows=6 width=0)
+row         Index Cond: (c = 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'a_c';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=1 width=40)
+row   Filter: (c ~~ 'a_c'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'a'::text) AND (c < 'b'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'ab%cd';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=1 width=40)
+row   Filter: (c ~~ 'ab%cd'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'ab'::text) AND (c < 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE '%x';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on m  (cost=0.00..25.00 rows=240 width=40)
+row   Filter: (c ~~ '%x'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'a\%b%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ~~ 'a\%b%'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'a%b'::text) AND (c < 'a%c'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c ILIKE 'x%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on m  (cost=0.00..25.00 rows=1200 width=40)
+row   Filter: (c ~~* 'x%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c ILIKE '12%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ~~* '12%'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= '12'::text) AND (c < '13'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c ~ '^ab';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ~ '^ab'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'ab'::text) AND (c < 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c ~ '^abc$';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.20..13.67 rows=6 width=40)
+row   Filter: (c ~ '^abc$'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.20 rows=6 width=0)
+row         Index Cond: (c = 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c ~ 'ab';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on m  (cost=0.00..25.00 rows=240 width=40)
+row   Filter: (c ~ 'ab'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c ~* '^12';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ~* '^12'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= '12'::text) AND (c < '13'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c ^@ 'ab';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ^@ 'ab'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'ab'::text) AND (c < 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c NOT LIKE 'x%';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on m  (cost=0.00..25.00 rows=1194 width=40)
+row   Filter: (c !~~ 'x%'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'z%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ~~ 'z%'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'z'::text) AND (c < '{'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'a~%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ~~ 'a~%'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'a~'::text) AND (c < 'a'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'é%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row   Filter: (c ~~ 'é%'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'é'::text) AND (c < 'ê'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'x%' AND a = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=8.66..12.68 rows=1 width=40)
+row   Recheck Cond: (a = 1)
+row   Filter: (c ~~ 'x%'::text)
+row   ->  BitmapAnd  (cost=8.66..8.66 rows=1 width=0)
+row         ->  Bitmap Index Scan on m_ab  (cost=0.00..4.20 rows=6 width=0)
+row               Index Cond: (a = 1)
+row         ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row               Index Cond: ((c >= 'x'::text) AND (c < 'y'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'x%' AND a > 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.70 rows=2 width=40)
+row   Filter: ((c ~~ 'x%'::text) AND (a > 1))
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'x'::text) AND (c < 'y'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'x%' AND c > 'xa';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.23..13.71 rows=2 width=40)
+row   Recheck Cond: (c > 'xa'::text)
+row   Filter: (c ~~ 'x%'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.23 rows=6 width=0)
+row         Index Cond: ((c >= 'x'::text) AND (c < 'y'::text) AND (c > 'xa'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'abc' AND a = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=8.65..12.66 rows=1 width=40)
+row   Recheck Cond: (a = 1)
+row   Filter: (c ~~ 'abc'::text)
+row   ->  BitmapAnd  (cost=8.65..8.65 rows=1 width=0)
+row         ->  Bitmap Index Scan on m_c  (cost=0.00..4.20 rows=6 width=0)
+row               Index Cond: (c = 'abc'::text)
+row         ->  Bitmap Index Scan on m_ab  (cost=0.00..4.20 rows=6 width=0)
+row               Index Cond: (a = 1)
+EXPLAIN
+> EXPLAIN SELECT c FROM m WHERE c LIKE 'x%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=32)
+row   Filter: (c ~~ 'x%'::text)
+row   ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((c >= 'x'::text) AND (c < 'y'::text))
+EXPLAIN
+> EXPLAIN SELECT count(*) FROM m WHERE c LIKE 'x%';
+fields QUERY PLAN:25:-1:-1
+row Aggregate  (cost=13.70..13.71 rows=1 width=8)
+row   ->  Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=0)
+row         Filter: (c ~~ 'x%'::text)
+row         ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row               Index Cond: ((c >= 'x'::text) AND (c < 'y'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'x%' ORDER BY c;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=13.76..13.77 rows=6 width=40)
+row   Sort Key: c
+row   ->  Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row         Filter: (c ~~ 'x%'::text)
+row         ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row               Index Cond: ((c >= 'x'::text) AND (c < 'y'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'x%' ORDER BY c LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=13.76..13.77 rows=5 width=40)
+row   ->  Sort  (cost=13.76..13.77 rows=6 width=40)
+row         Sort Key: c
+row         ->  Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row               Filter: (c ~~ 'x%'::text)
+row               ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row                     Index Cond: ((c >= 'x'::text) AND (c < 'y'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM m WHERE c LIKE 'x%' ORDER BY c DESC LIMIT 5;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=13.76..13.77 rows=5 width=40)
+row   ->  Sort  (cost=13.76..13.77 rows=6 width=40)
+row         Sort Key: c DESC
+row         ->  Bitmap Heap Scan on m  (cost=4.21..13.68 rows=6 width=40)
+row               Filter: (c ~~ 'x%'::text)
+row               ->  Bitmap Index Scan on m_c  (cost=0.00..4.21 rows=6 width=0)
+row                     Index Cond: ((c >= 'x'::text) AND (c < 'y'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE s LIKE 'ab%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.17..9.51 rows=2 width=194)
+row   Filter: ((s)::text ~~ 'ab%'::text)
+row   ->  Bitmap Index Scan on v_s  (cost=0.00..4.17 rows=2 width=0)
+row         Index Cond: (((s)::text >= 'ab'::text) AND ((s)::text < 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE s LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.16..9.50 rows=2 width=194)
+row   Filter: ((s)::text ~~ 'abc'::text)
+row   ->  Bitmap Index Scan on v_s  (cost=0.00..4.16 rows=2 width=0)
+row         Index Cond: ((s)::text = 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE f LIKE 'ab%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.17..9.51 rows=2 width=194)
+row   Filter: (f ~~ 'ab%'::text)
+row   ->  Bitmap Index Scan on v_f  (cost=0.00..4.17 rows=2 width=0)
+row         Index Cond: ((f >= 'ab'::bpchar) AND (f < 'ac'::bpchar))
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE f LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.16..9.50 rows=2 width=194)
+row   Filter: (f ~~ 'abc'::text)
+row   ->  Bitmap Index Scan on v_f  (cost=0.00..4.16 rows=2 width=0)
+row         Index Cond: (f = 'abc'::bpchar)
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE n LIKE 'ab%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.17..9.51 rows=2 width=194)
+row   Filter: (n ~~ 'ab%'::text)
+row   ->  Bitmap Index Scan on v_n  (cost=0.00..4.17 rows=2 width=0)
+row         Index Cond: ((n >= 'ab'::text) AND (n < 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE n LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.16..9.50 rows=2 width=194)
+row   Filter: (n ~~ 'abc'::text)
+row   ->  Bitmap Index Scan on v_n  (cost=0.00..4.16 rows=2 width=0)
+row         Index Cond: (n = 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE by LIKE 'ab%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.17..9.51 rows=2 width=194)
+row   Filter: (by ~~ '\x616225'::bytea)
+row   ->  Bitmap Index Scan on v_by  (cost=0.00..4.17 rows=2 width=0)
+row         Index Cond: ((by >= '\x6162'::bytea) AND (by < '\x6163'::bytea))
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE by LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.16..9.50 rows=2 width=194)
+row   Filter: (by ~~ '\x616263'::bytea)
+row   ->  Bitmap Index Scan on v_by  (cost=0.00..4.16 rows=2 width=0)
+row         Index Cond: (by = '\x616263'::bytea)
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE s ~ '^ab';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.17..9.51 rows=2 width=194)
+row   Filter: ((s)::text ~ '^ab'::text)
+row   ->  Bitmap Index Scan on v_s  (cost=0.00..4.17 rows=2 width=0)
+row         Index Cond: (((s)::text >= 'ab'::text) AND ((s)::text < 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE f ~ '^ab';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.17..9.51 rows=2 width=194)
+row   Filter: (f ~ '^ab'::text)
+row   ->  Bitmap Index Scan on v_f  (cost=0.00..4.17 rows=2 width=0)
+row         Index Cond: ((f >= 'ab'::bpchar) AND (f < 'ac'::bpchar))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE t LIKE 'ab%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on p  (cost=4.20..12.67 rows=5 width=56)
+row   Filter: (t ~~ 'ab%'::text)
+row   ->  Bitmap Index Scan on p_t  (cost=0.00..4.20 rows=5 width=0)
+row         Index Cond: ((t ~>=~ 'ab'::text) AND (t ~<~ 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE t LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on p  (cost=4.19..12.66 rows=5 width=56)
+row   Filter: (t ~~ 'abc'::text)
+row   ->  Bitmap Index Scan on p_t  (cost=0.00..4.19 rows=5 width=0)
+row         Index Cond: (t = 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE t = 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on p  (cost=4.19..12.66 rows=5 width=56)
+row   Recheck Cond: (t = 'abc'::text)
+row   ->  Bitmap Index Scan on p_t  (cost=0.00..4.19 rows=5 width=0)
+row         Index Cond: (t = 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE t < 'abc';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on p  (cost=0.00..22.12 rows=323 width=56)
+row   Filter: (t < 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE b LIKE 'ab%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on p  (cost=4.20..12.67 rows=5 width=56)
+row   Filter: (b ~~ 'ab%'::text)
+row   ->  Bitmap Index Scan on p_b  (cost=0.00..4.20 rows=5 width=0)
+row         Index Cond: ((b ~>=~ 'ab'::bpchar) AND (b ~<~ 'ac'::bpchar))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE b LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on p  (cost=4.19..12.66 rows=5 width=56)
+row   Filter: (b ~~ 'abc'::text)
+row   ->  Bitmap Index Scan on p_b  (cost=0.00..4.19 rows=5 width=0)
+row         Index Cond: (b = 'abc'::bpchar)
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE t ^@ 'ab';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on p  (cost=4.20..12.67 rows=5 width=56)
+row   Filter: (t ^@ 'ab'::text)
+row   ->  Bitmap Index Scan on p_t  (cost=0.00..4.20 rows=5 width=0)
+row         Index Cond: ((t ~>=~ 'ab'::text) AND (t ~<~ 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM p WHERE t ~ '^ab';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on p  (cost=4.20..12.67 rows=5 width=56)
+row   Filter: (t ~ '^ab'::text)
+row   ->  Bitmap Index Scan on p_t  (cost=0.00..4.20 rows=5 width=0)
+row         Index Cond: ((t ~>=~ 'ab'::text) AND (t ~<~ 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM q WHERE t LIKE 'abc';
+fields QUERY PLAN:25:-1:-1
+row Index Scan using q_t on q  (cost=0.15..8.17 rows=1 width=36)
+row   Index Cond: (t = 'abc'::text)
+row   Filter: (t ~~ 'abc'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM q WHERE t LIKE 'ab%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on q  (cost=4.21..13.68 rows=6 width=36)
+row   Filter: (t ~~ 'ab%'::text)
+row   ->  Bitmap Index Scan on q_t  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((t >= 'ab'::text) AND (t < 'ac'::text))
+EXPLAIN
+> EXPLAIN SELECT * FROM q WHERE t LIKE 'ab%' AND k = 1;
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on q  (cost=4.21..13.70 rows=1 width=36)
+row   Filter: ((t ~~ 'ab%'::text) AND (k = 1))
+row   ->  Bitmap Index Scan on q_t  (cost=0.00..4.21 rows=6 width=0)
+row         Index Cond: ((t >= 'ab'::text) AND (t < 'ac'::text))
+EXPLAIN
+> EXPLAIN (COSTS OFF) SELECT * FROM m WHERE c LIKE 'x%' AND c LIKE 'xy%';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on m
+row   Filter: ((c ~~ 'x%'::text) AND (c ~~ 'xy%'::text))
+row   ->  Bitmap Index Scan on m_c
+row         Index Cond: ((c >= 'x'::text) AND (c < 'y'::text) AND (c >= 'xy'::text) AND (c < 'xz'::text))
+EXPLAIN
+> EXPLAIN (FORMAT JSON) SELECT * FROM m WHERE c LIKE 'x%';
+fields QUERY PLAN:114:-1:-1
+row [
+  {
+    "Plan": {
+      "Node Type": "Bitmap Heap Scan",
+      "Parallel Aware": false,
+      "Async Capable": false,
+      "Relation Name": "m",
+      "Alias": "m",
+      "Startup Cost": 4.21,
+      "Total Cost": 13.68,
+      "Plan Rows": 6,
+      "Plan Width": 40,
+      "Disabled": false,
+      "Filter": "(c ~~ 'x%'::text)",
+      "Plans": [
+        {
+          "Node Type": "Bitmap Index Scan",
+          "Parent Relationship": "Outer",
+          "Parallel Aware": false,
+          "Async Capable": false,
+          "Index Name": "m_c",
+          "Startup Cost": 0.00,
+          "Total Cost": 4.21,
+          "Plan Rows": 6,
+          "Plan Width": 0,
+          "Disabled": false,
+          "Index Cond": "((c >= 'x'::text) AND (c < 'y'::text))"
+        }
+      ]
+    }
+  }
+]
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE n = 'abc';
+fields QUERY PLAN:25:-1:-1
+row Bitmap Heap Scan on v  (cost=4.16..9.50 rows=2 width=194)
+row   Recheck Cond: (n = 'abc'::name)
+row   ->  Bitmap Index Scan on v_n  (cost=0.00..4.16 rows=2 width=0)
+row         Index Cond: (n = 'abc'::name)
+EXPLAIN
+> EXPLAIN SELECT * FROM v WHERE n < 'b';
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on v  (cost=0.00..14.50 rows=120 width=194)
+row   Filter: (n < 'b'::name)
+EXPLAIN
+> EXPLAIN SELECT n FROM v WHERE n > 'b' ORDER BY n LIMIT 3;
+fields QUERY PLAN:25:-1:-1
+row Limit  (cost=0.15..1.30 rows=3 width=64)
+row   ->  Index Only Scan using v_n on v  (cost=0.15..46.25 rows=120 width=64)
+row         Index Cond: (n > 'b'::name)
+EXPLAIN

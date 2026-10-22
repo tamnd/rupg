@@ -303,7 +303,7 @@ pub(crate) fn list_selectivity_by<'a>(
     s1
 }
 
-/// The value of a condition that `clauselist_selectivity` puts in a range, with true when the condition is a low bound of the value: an operator `<`, `<=`, `>` or `>=` with the estimator `scalarltsel`, `scalarlesel`, `scalargtsel` or `scalargesel`, a value of one relation on one side and a value that reads no relation and calls no volatile function on the other side.
+/// The value of a condition that `clauselist_selectivity` puts in a range, with true when the condition is a low bound of the value: an operator `<`, `<=`, `>` or `>=`, or one of the pattern operators such as `~<~`, with the estimator `scalarltsel`, `scalarlesel`, `scalargtsel` or `scalargesel`, a value of one relation on one side and a value that reads no relation and calls no volatile function on the other side.
 fn range_bound(expr: &Expr) -> Option<(&Expr, bool)> {
     // The geometric types, the ranges and the multiranges have other estimators for these operators.
     const OTHER: [u32; 6] =
@@ -311,8 +311,8 @@ fn range_bound(expr: &Expr) -> Option<(&Expr, bool)> {
     let (op, left, right) = exprs::binary(expr)?;
     let row = builtin::operator_by_oid(op).filter(|row| !OTHER.contains(&row.left))?;
     let less = match row.name {
-        "<" | "<=" => true,
-        ">" | ">=" => false,
+        "<" | "<=" | "~<~" | "~<=~" => true,
+        ">" | ">=" | "~>~" | "~>=~" => false,
         _ => return None,
     };
     if exprs::relations(expr).len() != 1 {
@@ -399,6 +399,25 @@ fn pattern_selectivity(
         (prefix_sel * rest).clamp(0.0001, 0.9999)
     };
     Some(if negate { 1.0 - sel } else { sel }.clamp(0.0, 1.0))
+}
+
+/// `pattern_fixed_prefix` for `match_pattern_prefix`: the fixed prefix of the pattern of a positive `LIKE`, `ILIKE`, regular expression or `^@`, and true when the pattern is all prefix. The pattern must be a constant that is not null. The result is `None` for another operator or pattern, and for a pattern with no fixed prefix.
+pub(crate) fn operator_prefix(op: u32, pattern: &Expr) -> Option<(Vec<u8>, bool)> {
+    let kind = match builtin::operator_by_oid(op)?.name {
+        "~~" => Pattern::Like,
+        "~~*" => Pattern::LikeIc,
+        "~" => Pattern::Regex,
+        "~*" => Pattern::RegexIc,
+        "^@" => Pattern::Prefix,
+        _ => return None,
+    };
+    let text = match &pattern.kind {
+        ExprKind::Const(Value::Text(t)) => t.as_bytes(),
+        ExprKind::Const(Value::Bytea(b)) => b.as_slice(),
+        _ => return None,
+    };
+    let (prefix, status, _) = fixed_prefix(text, kind);
+    (status != Prefix::None).then_some((prefix, status == Prefix::Exact))
 }
 
 /// `Pattern_Prefix_Status`: whether a pattern has no fixed prefix, a fixed prefix and more, or a fixed prefix only.
