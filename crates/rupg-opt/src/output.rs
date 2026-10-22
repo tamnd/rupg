@@ -72,6 +72,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             node.cost.width = 0;
         }
         Kind::Sort(_)
+        | Kind::IncrementalSort { .. }
         | Kind::Limit
         | Kind::Unique
         | Kind::LockRows
@@ -81,7 +82,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             if !node.children.is_empty() =>
         {
             let mut below = want.clone();
-            if let Kind::Sort(keys) = &node.kind {
+            if let Kind::Sort(keys) | Kind::IncrementalSort { keys, .. } = &node.kind {
                 for key in keys {
                     if !below.iter().any(|w| w.expr.same(&key.item.expr)) {
                         below.push(Item { expr: key.item.expr.clone(), below: false });
@@ -98,6 +99,7 @@ fn set<'q>(level: &Level<'q>, node: &mut Node<'q>, want: Vec<Item<'q>>, physical
             }
         }
         Kind::Sort(_)
+        | Kind::IncrementalSort { .. }
         | Kind::Limit
         | Kind::Unique
         | Kind::LockRows

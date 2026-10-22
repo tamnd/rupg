@@ -227,6 +227,8 @@ pub enum Kind<'q> {
     Aggregate { strategy: Strategy, keys: Vec<Item<'q>>, sets: Vec<(bool, Vec<Item<'q>>)> },
     /// `Sort`.
     Sort(Vec<SortKey<'q>>),
+    /// `IncrementalSort`: a sort of rows whose first `presorted` keys are in order already.
+    IncrementalSort { keys: Vec<SortKey<'q>>, presorted: usize },
     /// `Limit`: `LIMIT` and `OFFSET`.
     Limit,
     /// `Unique`: the first row of each run of equal rows of a sorted input.

@@ -5315,6 +5315,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_unique.test")));
     }
 
+    /// `EXPLAIN` of an `Incremental Sort`: the planner sorts rows whose first keys are in order already, as `make_ordered_path` and `create_ordered_paths` choose it, with the costs of `cost_incremental_sort`. `connection/plan_incremental_sort.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_incremental_sort() {
+        big_stack(|| script(include_str!("connection/plan_incremental_sort.test")));
+    }
+
     /// `EXPLAIN` of `ORDER BY`, `GROUP BY`, `DISTINCT`, windows and `LIMIT` over a join. The planner reads each plan of the join that `add_path` keeps, so a merge join whose rows are in the order of the query can cost less in total than the cheapest join with a sort above it, as `create_ordered_paths` finds it. `connection/plan_upper_order.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_upper_order() {
