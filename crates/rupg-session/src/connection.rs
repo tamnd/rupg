@@ -5483,6 +5483,12 @@ mod tests {
         big_stack(|| script(include_str!("connection/plan_minmax.test")));
     }
 
+    /// A subquery with no `FROM` in `FROM` merges into the query, and its place in `FROM` goes away, as `remove_useless_result_rtes` drops an `RTE_RESULT`: the constants take the place of its columns, and its `WHERE` runs once in a `Result` above the plan. `connection/plan_result_pullup.test` is the output of PostgreSQL 19 for the same script in a new database.
+    #[test]
+    fn plan_result_pullup() {
+        big_stack(|| script(include_str!("connection/plan_result_pullup.test")));
+    }
+
     /// `EXPLAIN` of the bitmap heap scans of a table by its btree indexes, as `create_index_paths` makes them with `choose_bitmap_and` and the costs of `cost_bitmap_heap_scan`. `connection/plan_bitmap_scan.test` is the output of PostgreSQL 19 for the same script in a new database.
     #[test]
     fn plan_bitmap_scan() {

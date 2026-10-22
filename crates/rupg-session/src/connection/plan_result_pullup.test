@@ -1,0 +1,160 @@
+!details
+> SET TimeZone = 'UTC'
+SET
+> CREATE TABLE a (id int PRIMARY KEY, x int);
+CREATE TABLE
+> CREATE TABLE b (id int PRIMARY KEY, y int);
+CREATE TABLE
+> EXPLAIN SELECT * FROM (SELECT 1 AS k) s, a WHERE a.id = s.k;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=12)
+row   Index Cond: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT 1 AS k) s;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT 1 AS k) s WHERE s.k > 0;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT 1 AS k, 2 AS j) s, a ORDER BY a.x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=158.51..164.16 rows=2260 width=16)
+row   Sort Key: a.x
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=16)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT 1 AS k) s ORDER BY k;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.01 rows=1 width=4)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT * FROM (SELECT 1 AS k) x) s, a WHERE a.id = s.k ORDER BY a.x;
+fields QUERY PLAN:25:-1:-1
+row Sort  (cost=8.18..8.19 rows=1 width=12)
+row   Sort Key: a.x
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=12)
+row         Index Cond: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, (SELECT 5 AS k WHERE now() IS NOT NULL) s WHERE a.x = s.k;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..38.25 rows=11 width=12)
+row   One-Time Filter: (now() IS NOT NULL)
+row   ->  Seq Scan on a  (cost=0.00..38.25 rows=11 width=8)
+row         Filter: (x = 5)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, (SELECT random() AS k) s WHERE a.x = s.k;
+fields QUERY PLAN:25:-1:-1
+row Hash Join  (cost=0.03..44.03 rows=11 width=16)
+row   Hash Cond: ((a.x)::double precision = (random()))
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=8)
+row   ->  Hash  (cost=0.01..0.01 rows=1 width=8)
+row         ->  Result  (cost=0.00..0.01 rows=1 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT 1 AS k) s, a, b WHERE a.id = s.k AND b.id = a.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.31..16.35 rows=1 width=20)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT s.k, count(*) FROM (SELECT 1 AS k) s, a GROUP BY s.k;
+fields QUERY PLAN:25:-1:-1
+row GroupAggregate  (cost=0.00..38.26 rows=1 width=12)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=0)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT 1 AS k) s JOIN a ON a.id = s.k;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=12)
+row   Index Cond: (id = 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT 1 AS k) s, (SELECT 2 AS j) t;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..0.01 rows=1 width=8)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT $$x$$::text AS k) s, a WHERE a.x::text = s.k;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..49.55 rows=11 width=40)
+row   Filter: ((x)::text = 'x'::text)
+EXPLAIN
+> EXPLAIN SELECT * FROM (SELECT 1 AS k) s, a WHERE s.k = 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..32.60 rows=2260 width=12)
+EXPLAIN
+> EXPLAIN SELECT * FROM b JOIN ((SELECT 1 AS k) s JOIN a ON a.id = s.k) ON b.id = a.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop  (cost=0.31..16.35 rows=1 width=20)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM (a JOIN (SELECT 1 AS k WHERE now() IS NOT NULL) s ON a.id = s.k) LEFT JOIN b ON b.id = a.x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.31..16.36 rows=1 width=20)
+row   One-Time Filter: (now() IS NOT NULL)
+row   ->  Nested Loop Left Join  (cost=0.31..16.36 rows=1 width=16)
+row         ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = 1)
+row         ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN (SELECT 3 AS k) s ON true WHERE a.x > 1;
+fields QUERY PLAN:25:-1:-1
+row Seq Scan on a  (cost=0.00..38.25 rows=753 width=12)
+row   Filter: (x > 1)
+EXPLAIN
+> EXPLAIN SELECT * FROM a JOIN (SELECT 3 AS id) s USING (id);
+fields QUERY PLAN:25:-1:-1
+row Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row   Index Cond: (id = 3)
+EXPLAIN
+> EXPLAIN SELECT a.x FROM (SELECT 1 AS k) s, a, (SELECT 2 AS j) t WHERE a.id = s.k + t.j;
+fields QUERY PLAN:25:-1:-1
+row Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=4)
+row   Index Cond: (id = 3)
+EXPLAIN
+> EXPLAIN SELECT * FROM (a JOIN (SELECT 1 AS k) s ON a.id = s.k) LEFT JOIN b ON b.id = a.x;
+fields QUERY PLAN:25:-1:-1
+row Nested Loop Left Join  (cost=0.31..16.35 rows=1 width=20)
+row   ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = 1)
+row   ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row         Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM a, (SELECT 1 AS k WHERE now() IS NOT NULL) s, b WHERE a.id = s.k AND b.id = a.x;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.31..16.36 rows=1 width=20)
+row   One-Time Filter: (now() IS NOT NULL)
+row   ->  Nested Loop  (cost=0.31..16.36 rows=1 width=16)
+row         ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = 1)
+row         ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT * FROM a LEFT JOIN b ON b.id = a.x WHERE a.id = 1 AND now() IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.31..16.36 rows=1 width=16)
+row   One-Time Filter: (now() IS NOT NULL)
+row   ->  Nested Loop Left Join  (cost=0.31..16.36 rows=1 width=16)
+row         ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = 1)
+row         ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT *, 5 FROM a LEFT JOIN b ON b.id = a.x WHERE a.id = 1 AND now() IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.31..16.36 rows=1 width=20)
+row   One-Time Filter: (now() IS NOT NULL)
+row   ->  Nested Loop Left Join  (cost=0.31..16.36 rows=1 width=16)
+row         ->  Index Scan using a_pkey on a  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = 1)
+row         ->  Index Scan using b_pkey on b  (cost=0.15..8.17 rows=1 width=8)
+row               Index Cond: (id = a.x)
+EXPLAIN
+> EXPLAIN SELECT x + 1 FROM a WHERE now() IS NOT NULL;
+fields QUERY PLAN:25:-1:-1
+row Result  (cost=0.00..38.25 rows=2260 width=4)
+row   One-Time Filter: (now() IS NOT NULL)
+row   ->  Seq Scan on a  (cost=0.00..32.60 rows=2260 width=4)
+EXPLAIN

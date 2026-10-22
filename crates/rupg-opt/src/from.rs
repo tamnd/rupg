@@ -52,6 +52,8 @@ pub(crate) struct Stats {
     spans: Vec<(Expr, BTreeSet<usize>)>,
     /// The costs of the subqueries of the expressions of the level that run as a `SubPlan` for each row.
     subplans: Vec<cost::SubCost>,
+    /// The relations of the join that tests the conditions that run once, which is the join of all the relations, or none when there is no such condition.
+    gated: BTreeSet<usize>,
 }
 
 impl Stats {
@@ -479,7 +481,9 @@ impl<'q> Builder<'q> {
             .iter()
             .map(|(c, constant)| (c.iter().map(|&m| m.clone()).collect(), *constant))
             .collect();
-        let mut stats = Stats { equal, subplans: level.subplans.clone(), ..Stats::default() };
+        let gated = if gating.is_empty() { BTreeSet::new() } else { all.clone() };
+        let mut stats =
+            Stats { equal, subplans: level.subplans.clone(), gated, ..Stats::default() };
         needed(level, &mut stats);
         // `generate_base_implied_equalities_no_const`: each join of the relations of a class gives the members of the class, because a join above can test any two of them.
         for class in &found.classes {
@@ -2288,7 +2292,10 @@ fn param_loop<'q>(
     };
     let (quals, filter) = (left(quals), left(filter));
     let (filter_startup, filter_cost) = input.stats.qual_costs(filter.iter().map(|q| &*q.expr));
-    let indexed = param.indexed && quals.is_empty() && filter.is_empty();
+    // `has_indexed_join_quals`: a condition that runs once is a condition of the join of all the relations, which the index does not test.
+    let gated = !input.stats.gated.is_empty()
+        && input.outer.rels.union(&param.rel.rels).count() == input.stats.gated.len();
+    let indexed = param.indexed && quals.is_empty() && filter.is_empty() && !gated;
     let input = Input {
         inner: &param.rel,
         quals: &quals,

@@ -374,7 +374,7 @@ fn move_up(sub: &mut Query, base: usize) {
     renumber(&mut sub.from, &|j| j + base);
 }
 
-/// `is_simple_subquery`: a subquery that the planner can merge into the query above it. It has no set operation, no aggregate, no window, no function that gives a set in its targets, no `ORDER BY`, no `DISTINCT`, no `LIMIT`, no `OFFSET`, no row lock, no `WITH` and no volatile function in its targets.
+/// `is_simple_subquery`: a subquery that the planner can merge into the query above it. It has no set operation, no aggregate, no window, no function that gives a set in its targets, no `ORDER BY`, no `DISTINCT`, no `LIMIT`, no `OFFSET`, no row lock, no `WITH` and no volatile function in its targets. A subquery with no `FROM` is an `RTE_RESULT` that [`merge`] drops, as `remove_useless_result_rtes` drops it.
 fn simple(sub: &Query) -> bool {
     sub.set_op.is_none()
         && sub.write.is_none()
@@ -389,7 +389,6 @@ fn simple(sub: &Query) -> bool {
         && sub.offset.is_none()
         && sub.row_marks.is_empty()
         && sub.ctes.is_empty()
-        && !sub.from.is_empty()
         && !sub.targets.iter().any(|t| t.junk || exprs::volatile(&t.expr))
 }
 
@@ -436,7 +435,9 @@ fn candidate(query: &Query) -> Option<(usize, bool)> {
             target.is_some_and(|t| matches!(t.expr.kind, ExprKind::Var(v) if v.levels_up == 0))
         };
         let columns = !nullable.contains(&r) || used.iter().all(column);
-        let fits = top || sub.from.len() == 1 && (sub.filter.is_none() || on);
+        let fits = top
+            || sub.from.len() == 1 && (sub.filter.is_none() || on)
+            || sub.from.is_empty() && query.from.iter().any(|item| removable(item, r));
         (simple(sub) && columns && fits && !used.contains(&0)).then_some((r, top))
     })
 }
@@ -528,6 +529,8 @@ fn take_place(items: &mut [FromItem], r: usize, with: &mut Option<FromItem>) {
 fn merge(query: &mut Query, r: usize, top: bool) {
     let Some(sub) = query.relations.remove(r).subquery else { return };
     let mut sub = *sub;
+    // `replace_empty_jointree`: a subquery with no `FROM` has an `RTE_RESULT` in its range table.
+    let result = usize::from(sub.from.is_empty() && sub.pulled == 0);
     move_up(&mut sub, query.relations.len());
     // `pullup_replace_vars`: a column of the subquery becomes the expression of its target, and the relations after the subquery move down one place.
     let targets: Vec<Expr> = sub.targets.iter().map(|t| t.expr.clone()).collect();
@@ -561,12 +564,20 @@ fn merge(query: &mut Query, r: usize, top: bool) {
         if let Some(at) = at {
             query.from.splice(at..=at, std::mem::take(&mut sub.from));
         }
+    } else if sub.from.is_empty() {
+        // The join stays in the range table of PostgreSQL.
+        query.pulled += 1;
+        for item in &mut query.from {
+            if lift(item, &mut |item, quals| drop_result(item, gone, quals), &mut sub.filter) {
+                break;
+            }
+        }
     } else {
         add_on(&mut query.from, gone, &mut sub.filter);
         take_place(&mut query.from, gone, &mut sub.from.pop());
     }
     query.relations.append(&mut sub.relations);
-    query.pulled += 1 + sub.pulled;
+    query.pulled += 1 + sub.pulled + result;
     if let Some(filter) = sub.filter {
         query.filter = Some(and(filter, query.filter.take()));
     }
@@ -582,23 +593,29 @@ pub(crate) fn and(first: Expr, then: Option<Expr>) -> Expr {
 
 /// The condition of the relation `r` joins the `ON` of a join above it, as [`places`] finds the join, or stays in `filter` for the `WHERE` of the query.
 fn add_on(items: &mut [FromItem], r: usize, filter: &mut Option<Expr>) {
+    let mut found = |item: &mut FromItem, _: &mut Option<Expr>| matches!(item, FromItem::Relation(at) if *at == r);
     for item in items {
-        if lift(item, r, filter) {
+        if lift(item, &mut found, filter) {
             return;
         }
     }
 }
 
-/// True when the item has the relation `r`. The condition stays in `filter` when it goes past the item.
-fn lift(item: &mut FromItem, r: usize, filter: &mut Option<Expr>) -> bool {
-    let FromItem::Join(join) = item else {
-        return matches!(item, FromItem::Relation(at) if *at == r);
-    };
+/// True when `found` takes the item or a part of it. The condition stays in `filter` when it goes past the item.
+fn lift(
+    item: &mut FromItem,
+    found: &mut impl FnMut(&mut FromItem, &mut Option<Expr>) -> bool,
+    filter: &mut Option<Expr>,
+) -> bool {
+    if found(item, filter) {
+        return true;
+    }
+    let FromItem::Join(join) = item else { return false };
     let join = &mut **join;
-    let (on, here) = if lift(&mut join.left, r, filter) {
+    let (on, here) = if lift(&mut join.left, found, filter) {
         let keeps = matches!(join.kind, JoinKind::Left | JoinKind::Anti | JoinKind::Full);
         (!keeps, true)
-    } else if lift(&mut join.right, r, filter) {
+    } else if lift(&mut join.right, found, filter) {
         let keeps = matches!(join.kind, JoinKind::Right | JoinKind::RightAnti | JoinKind::Full);
         (!keeps, true)
     } else {
@@ -608,4 +625,37 @@ fn lift(item: &mut FromItem, r: usize, filter: &mut Option<Expr>) -> bool {
         join.on = Some(and(filter, join.on.take()));
     }
     here
+}
+
+/// `remove_useless_results_recurse`: true when the relation `r` is a side of an inner join that the planner drops, as it drops an inner join with an `RTE_RESULT` on a side. The conditions of the join go to the join above it or to `WHERE`, so that no join above it is a full join, a semi join or an anti join.
+fn removable(item: &FromItem, r: usize) -> bool {
+    let FromItem::Join(join) = item else { return false };
+    let side = |item: &FromItem| matches!(item, FromItem::Relation(at) if *at == r);
+    match join.kind {
+        JoinKind::Inner if side(&join.left) || side(&join.right) => true,
+        JoinKind::Inner | JoinKind::Left | JoinKind::Right => {
+            removable(&join.left, r) || removable(&join.right, r)
+        }
+        _ => false,
+    }
+}
+
+/// `remove_useless_results_recurse`: when the item is the inner join that [`removable`] finds, the other side of the join takes its place, and the condition of the join comes after `quals`.
+fn drop_result(item: &mut FromItem, r: usize, quals: &mut Option<Expr>) -> bool {
+    let FromItem::Join(join) = item else { return false };
+    let side = |item: &FromItem| matches!(item, FromItem::Relation(at) if *at == r);
+    if join.kind != JoinKind::Inner || !side(&join.left) && !side(&join.right) {
+        return false;
+    }
+    let join = &mut **join;
+    let other = if side(&join.left) { &mut join.right } else { &mut join.left };
+    let other = std::mem::replace(other, FromItem::Relation(r));
+    if let Some(on) = join.on.take() {
+        *quals = Some(match quals.take() {
+            Some(quals) => and(quals, Some(on)),
+            None => on,
+        });
+    }
+    *item = other;
+    true
 }
