@@ -4,6 +4,10 @@ All changes that a user can see are in this file. The version is 0.M.patch, wher
 
 ## Unreleased
 
+## 0.1.69 (2026-10-23)
+
+This release plans a Merge Append for a UNION ALL with ORDER BY, and follows the enable_* planner settings of PostgreSQL 19 with disabled nodes, as EXPLAIN shows them.
+
 ### Added
 
 - `EXPLAIN` now follows `enable_material` and `enable_presorted_aggregate`. An aggregate call with `ORDER BY` in a query with no `GROUP BY` now reads an index in the order of the call when that costs less than a sort, as PostgreSQL plans it. (#585)
