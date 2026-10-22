@@ -53,6 +53,8 @@ pub struct Enable {
     pub sort: bool,
     pub incremental_sort: bool,
     pub hashagg: bool,
+    pub material: bool,
+    pub presorted_aggregate: bool,
     pub nestloop: bool,
     pub mergejoin: bool,
     pub hashjoin: bool,
@@ -68,6 +70,8 @@ impl Default for Enable {
             sort: true,
             incremental_sort: true,
             hashagg: true,
+            material: true,
+            presorted_aggregate: true,
             nestloop: true,
             mergejoin: true,
             hashjoin: true,
@@ -585,7 +589,7 @@ impl<'q> Builder<'q> {
         let groups = first..self.groups.len();
         let init = !correlated && !matches!(link.kind, SubLinkKind::Any | SubLinkKind::All);
         let hashed = !correlated && link.kind == SubLinkKind::Any && hashable_test(link);
-        if !correlated && !init && !hashed {
+        if !correlated && !init && !hashed && enable().material {
             plan = upper::materialize(plan);
         }
         self.labels.push(Label { link, name: name.clone(), init, hashed, alternative: false });
